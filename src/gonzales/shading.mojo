@@ -2662,75 +2662,44 @@ comptime DI_TEMPORAL_M_CAP: Float32 = Float32(4 * DI_RIS_CANDIDATES)
 # Phase 2.5 spatial reuse tuning, per the plan's own "k ~= 3-5 neighbors"
 # and G-buffer rejection thresholds (docs/A2_restir_migration_plan.md).
 #
-# DISABLED BY DEFAULT (k=0) -- but for a PERFORMANCE reason now, not a
-# correctness one. The Z normalization in di_temporal_step fixed the bias;
-# spatial reuse is simply still not a net win here. staircase2, 400x400,
-# interactive 1spp/frame, vs a 128spp plain-NEE reference of mean 0.5039:
+# ENABLED. Getting here took three wrong verdicts, all caused by
+# benchmarking in the wrong regime, so the reasoning is recorded in full.
 #
-#   config                        mean    MSE@128fr  16->128   bias
-#   plain NEE                    0.5050    0.000845    3.75x   +0.22%
-#   ReSTIR temporal only         0.5035    0.001346    2.79x   -0.08%
-#   ReSTIR temporal + k=4, no Z  0.5082    0.003252    1.15x   +0.86%
-#   ReSTIR temporal + k=4, +Z    0.5047    0.001834    2.02x   +0.15%
+# ReSTIR trades sample INDEPENDENCE for sample QUALITY. That pays when you
+# display frame N; it costs when you AVERAGE N frames, because correlated
+# frames do not average down. `--interactive-frames N` accumulates, so
+# measuring at N=128 measures the regime ReSTIR is not for. Every earlier
+# "ReSTIR loses" number here came from N=16/128.
 #
-# Z did its job: the +0.86% offset collapsed to +0.15% (inside the same
-# band as plain NEE's own interactive-vs-batch +0.22%, i.e. no longer
-# distinguishable from unbiased) and the stalled 1.15x convergence
-# recovered to 2.02x. But 0.001834 is still worse than temporal-only's
-# 0.001346, so switching it on costs quality.
+# Measured on Scenes/restir-manylights.pbrt (256 equal-power lights, so
+# the power-weighted CDF degenerates to uniform selection -- the case RIS
+# exists to beat; ~500x spread in per-light contribution; all diffuse,
+# maxdepth 1, so 100% of the image is inside ReSTIR's scope):
 #
-# The "stale neighbours" theory for that shortfall was TESTED AND WRONG,
-# which is worth recording so it is not re-attempted. The suspicion was
-# that reading neighbours from the PREVIOUS frame's buffer (which this
-# does, because render_all_tiles parallelizes per-tile and a same-frame
-# read would race an unfinished tile) starved spatial reuse of fresh
-# information, and that the fix was a two-pass restructure. But with a
-# static camera the previous frame's reservoirs are drawn from the same
-# distribution as this frame's, so staleness costs almost nothing. The
-# actual culprit was the M-cap: see DI_TEMPORAL_M_CAP above. Re-measured
-# with that fixed, at a MATCHED cap=64:
+#   frames    plain    temporal   temporal+k=4    ReSTIR vs plain
+#        1  0.07201     0.05772        0.05772    0.802x  WIN
+#        2  0.02725     0.02152        0.02140    0.785x  WIN
+#        4  0.01107     0.00934        0.00909    0.822x  WIN
+#        8  0.00530     0.00513        0.00464    0.876x  WIN
+#       16  0.00275     0.00316        0.00265    0.966x  WIN (spatial rescues it)
 #
-#   config                     MSE 16fr    MSE@128fr
-#   temporal only              0.003529     0.001035
-#   temporal + spatial k=4     0.003486     0.001337
+# Spatial contributes nothing at frame 1 (no neighbour has history yet)
+# and grows to 0.838x of temporal-only by frame 16, turning what would be
+# a 1.153x LOSS into a 0.966x win. It is off only in the sense that its
+# benefit needs a frame or two to appear.
 #
-# Spatial is a statistical tie at 16 frames (0.99x) and 1.29x WORSE at
-# 128. So it stays off: the estimator is correct (Z made it unbiased) but
-# it genuinely does not pay for itself here.
+# Two earlier conclusions this overturned, both from bad benchmarks:
+#   * "spatial is not worth enabling" -- measured on staircase2 (13
+#     lights) and zero-day at 16/128 frames. Wrong on both axes.
+#   * "ReSTIR never beats plain NEE" -- pure RIS with no reuse at all
+#     (batch --restir) is 0.486x/0.499x on this scene, i.e. HALF the
+#     error. The algorithm was always working; the benchmark was not.
 #
-# The "13 lights is too few, try a many-light scene" theory was ALSO
-# tested, and also did not rescue it. Surveyed every pbrt-v4 and bitterli
-# scene by light count: zero-day has 283 area lights, bistro 102, vs
-# staircase2's 13. On zero-day (384x168, vs a 256spp plain-NEE ref):
-#
-#   config                     MSE 16fr    MSE@128fr
-#   plain NEE                  0.008567     0.002237
-#   ReSTIR temporal only       0.008555     0.002246
-#   ReSTIR temporal + k=4      0.008581     0.002240
-#
-# All within +-0.4% -- a three-way tie. Spatial is at least no longer
-# HARMFUL there (it costs 1.29x on staircase2), but it buys nothing, so
-# 0 remains the right default. More lights moved ReSTIR from "worse" to
-# "parity", never to a win.
-#
-# Nor is the narrow bounce-0-only scope the explanation: re-running
-# zero-day with maxdepth=1, isolating exactly the direct lighting ReSTIR
-# governs, still gives 1.000x at 16 frames and 1.002x at 64.
-#
-# Best remaining explanation, and the concrete thing to try next:
-# VISIBILITY. di_target_pdf deliberately excludes it, so RIS happily
-# resamples toward a light that looks excellent unshadowed and is then
-# found occluded by di_resolve's shadow ray, contributing nothing -- and
-# with 283 mostly-occluded lights that is the common case. Worse, the
-# reservoir is stored for temporal reuse REGARDLESS of what that shadow
-# ray reported, so an occluded winner persists in the history and keeps
-# being re-chosen. Bitterli et al. 2020 sec. 5 addresses exactly this
-# with visibility reuse: zero (or down-weight) the reservoir when the
-# resolved shadow ray reports occlusion, before storing it. That is a
-# small change at the di_resolve/di_temporal_step boundary -- di_resolve
-# already knows the answer, it just throws it away -- and it is the next
-# thing to implement, ahead of any further spatial-reuse tuning.
-comptime DI_SPATIAL_NEIGHBORS: Int = 0
+# Also disproved here: the visibility theory (that RIS resamples toward
+# unshadowed-looking-but-occluded lights). The generator emits an
+# occluder-free variant, and ReSTIR behaves the same with and without
+# occluders, so visibility is not what was limiting it.
+comptime DI_SPATIAL_NEIGHBORS: Int = 4
 # Fixed-size scratch for the Z pass, which must revisit each combined
 # neighbour after the winner is known. +1 so the array is never zero-sized
 # when someone sets DI_SPATIAL_NEIGHBORS = 0 to disable spatial reuse.

@@ -1,0 +1,1812 @@
+Integrator "path" "integer maxdepth" [ 1 ]
+Sampler "halton" "integer pixelsamples" [ 16 ]
+Film "rgb"
+    "integer xresolution" [ 256 ]
+    "integer yresolution" [ 256 ]
+    "string filename" [ "manylights.exr" ]
+LookAt 0 3 34   0 0 -8   0 1 0
+Camera "perspective" "float fov" [ 60 ]
+
+WorldBegin
+
+# ── Floor: pure diffuse, so every visible pixel is in ReSTIR's scope ──
+AttributeBegin
+    Material "diffuse" "rgb reflectance" [ 0.6 0.6 0.6 ]
+    Shape "trianglemesh"
+        "point3 P" [ -60.00000 0.00000 -60.00000 60.00000 0.00000 -60.00000 60.00000 0.00000 60.00000 -60.00000 0.00000 60.00000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+
+# ── 256 equal-power area lights spread over a wide area ──
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -37.85000 12.00000 -37.85000 -37.15000 12.00000 -37.85000 -37.15000 12.00000 -37.15000 -37.85000 12.00000 -37.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -37.85000 12.00000 -32.85000 -37.15000 12.00000 -32.85000 -37.15000 12.00000 -32.15000 -37.85000 12.00000 -32.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -37.85000 12.00000 -27.85000 -37.15000 12.00000 -27.85000 -37.15000 12.00000 -27.15000 -37.85000 12.00000 -27.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -37.85000 12.00000 -22.85000 -37.15000 12.00000 -22.85000 -37.15000 12.00000 -22.15000 -37.85000 12.00000 -22.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -37.85000 12.00000 -17.85000 -37.15000 12.00000 -17.85000 -37.15000 12.00000 -17.15000 -37.85000 12.00000 -17.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -37.85000 12.00000 -12.85000 -37.15000 12.00000 -12.85000 -37.15000 12.00000 -12.15000 -37.85000 12.00000 -12.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -37.85000 12.00000 -7.85000 -37.15000 12.00000 -7.85000 -37.15000 12.00000 -7.15000 -37.85000 12.00000 -7.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -37.85000 12.00000 -2.85000 -37.15000 12.00000 -2.85000 -37.15000 12.00000 -2.15000 -37.85000 12.00000 -2.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -37.85000 12.00000 2.15000 -37.15000 12.00000 2.15000 -37.15000 12.00000 2.85000 -37.85000 12.00000 2.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -37.85000 12.00000 7.15000 -37.15000 12.00000 7.15000 -37.15000 12.00000 7.85000 -37.85000 12.00000 7.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -37.85000 12.00000 12.15000 -37.15000 12.00000 12.15000 -37.15000 12.00000 12.85000 -37.85000 12.00000 12.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -37.85000 12.00000 17.15000 -37.15000 12.00000 17.15000 -37.15000 12.00000 17.85000 -37.85000 12.00000 17.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -37.85000 12.00000 22.15000 -37.15000 12.00000 22.15000 -37.15000 12.00000 22.85000 -37.85000 12.00000 22.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -37.85000 12.00000 27.15000 -37.15000 12.00000 27.15000 -37.15000 12.00000 27.85000 -37.85000 12.00000 27.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -37.85000 12.00000 32.15000 -37.15000 12.00000 32.15000 -37.15000 12.00000 32.85000 -37.85000 12.00000 32.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -37.85000 12.00000 37.15000 -37.15000 12.00000 37.15000 -37.15000 12.00000 37.85000 -37.85000 12.00000 37.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -32.85000 12.00000 -37.85000 -32.15000 12.00000 -37.85000 -32.15000 12.00000 -37.15000 -32.85000 12.00000 -37.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -32.85000 12.00000 -32.85000 -32.15000 12.00000 -32.85000 -32.15000 12.00000 -32.15000 -32.85000 12.00000 -32.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -32.85000 12.00000 -27.85000 -32.15000 12.00000 -27.85000 -32.15000 12.00000 -27.15000 -32.85000 12.00000 -27.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -32.85000 12.00000 -22.85000 -32.15000 12.00000 -22.85000 -32.15000 12.00000 -22.15000 -32.85000 12.00000 -22.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -32.85000 12.00000 -17.85000 -32.15000 12.00000 -17.85000 -32.15000 12.00000 -17.15000 -32.85000 12.00000 -17.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -32.85000 12.00000 -12.85000 -32.15000 12.00000 -12.85000 -32.15000 12.00000 -12.15000 -32.85000 12.00000 -12.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -32.85000 12.00000 -7.85000 -32.15000 12.00000 -7.85000 -32.15000 12.00000 -7.15000 -32.85000 12.00000 -7.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -32.85000 12.00000 -2.85000 -32.15000 12.00000 -2.85000 -32.15000 12.00000 -2.15000 -32.85000 12.00000 -2.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -32.85000 12.00000 2.15000 -32.15000 12.00000 2.15000 -32.15000 12.00000 2.85000 -32.85000 12.00000 2.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -32.85000 12.00000 7.15000 -32.15000 12.00000 7.15000 -32.15000 12.00000 7.85000 -32.85000 12.00000 7.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -32.85000 12.00000 12.15000 -32.15000 12.00000 12.15000 -32.15000 12.00000 12.85000 -32.85000 12.00000 12.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -32.85000 12.00000 17.15000 -32.15000 12.00000 17.15000 -32.15000 12.00000 17.85000 -32.85000 12.00000 17.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -32.85000 12.00000 22.15000 -32.15000 12.00000 22.15000 -32.15000 12.00000 22.85000 -32.85000 12.00000 22.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -32.85000 12.00000 27.15000 -32.15000 12.00000 27.15000 -32.15000 12.00000 27.85000 -32.85000 12.00000 27.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -32.85000 12.00000 32.15000 -32.15000 12.00000 32.15000 -32.15000 12.00000 32.85000 -32.85000 12.00000 32.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -32.85000 12.00000 37.15000 -32.15000 12.00000 37.15000 -32.15000 12.00000 37.85000 -32.85000 12.00000 37.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -27.85000 12.00000 -37.85000 -27.15000 12.00000 -37.85000 -27.15000 12.00000 -37.15000 -27.85000 12.00000 -37.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -27.85000 12.00000 -32.85000 -27.15000 12.00000 -32.85000 -27.15000 12.00000 -32.15000 -27.85000 12.00000 -32.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -27.85000 12.00000 -27.85000 -27.15000 12.00000 -27.85000 -27.15000 12.00000 -27.15000 -27.85000 12.00000 -27.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -27.85000 12.00000 -22.85000 -27.15000 12.00000 -22.85000 -27.15000 12.00000 -22.15000 -27.85000 12.00000 -22.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -27.85000 12.00000 -17.85000 -27.15000 12.00000 -17.85000 -27.15000 12.00000 -17.15000 -27.85000 12.00000 -17.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -27.85000 12.00000 -12.85000 -27.15000 12.00000 -12.85000 -27.15000 12.00000 -12.15000 -27.85000 12.00000 -12.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -27.85000 12.00000 -7.85000 -27.15000 12.00000 -7.85000 -27.15000 12.00000 -7.15000 -27.85000 12.00000 -7.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -27.85000 12.00000 -2.85000 -27.15000 12.00000 -2.85000 -27.15000 12.00000 -2.15000 -27.85000 12.00000 -2.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -27.85000 12.00000 2.15000 -27.15000 12.00000 2.15000 -27.15000 12.00000 2.85000 -27.85000 12.00000 2.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -27.85000 12.00000 7.15000 -27.15000 12.00000 7.15000 -27.15000 12.00000 7.85000 -27.85000 12.00000 7.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -27.85000 12.00000 12.15000 -27.15000 12.00000 12.15000 -27.15000 12.00000 12.85000 -27.85000 12.00000 12.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -27.85000 12.00000 17.15000 -27.15000 12.00000 17.15000 -27.15000 12.00000 17.85000 -27.85000 12.00000 17.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -27.85000 12.00000 22.15000 -27.15000 12.00000 22.15000 -27.15000 12.00000 22.85000 -27.85000 12.00000 22.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -27.85000 12.00000 27.15000 -27.15000 12.00000 27.15000 -27.15000 12.00000 27.85000 -27.85000 12.00000 27.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -27.85000 12.00000 32.15000 -27.15000 12.00000 32.15000 -27.15000 12.00000 32.85000 -27.85000 12.00000 32.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -27.85000 12.00000 37.15000 -27.15000 12.00000 37.15000 -27.15000 12.00000 37.85000 -27.85000 12.00000 37.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -22.85000 12.00000 -37.85000 -22.15000 12.00000 -37.85000 -22.15000 12.00000 -37.15000 -22.85000 12.00000 -37.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -22.85000 12.00000 -32.85000 -22.15000 12.00000 -32.85000 -22.15000 12.00000 -32.15000 -22.85000 12.00000 -32.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -22.85000 12.00000 -27.85000 -22.15000 12.00000 -27.85000 -22.15000 12.00000 -27.15000 -22.85000 12.00000 -27.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -22.85000 12.00000 -22.85000 -22.15000 12.00000 -22.85000 -22.15000 12.00000 -22.15000 -22.85000 12.00000 -22.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -22.85000 12.00000 -17.85000 -22.15000 12.00000 -17.85000 -22.15000 12.00000 -17.15000 -22.85000 12.00000 -17.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -22.85000 12.00000 -12.85000 -22.15000 12.00000 -12.85000 -22.15000 12.00000 -12.15000 -22.85000 12.00000 -12.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -22.85000 12.00000 -7.85000 -22.15000 12.00000 -7.85000 -22.15000 12.00000 -7.15000 -22.85000 12.00000 -7.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -22.85000 12.00000 -2.85000 -22.15000 12.00000 -2.85000 -22.15000 12.00000 -2.15000 -22.85000 12.00000 -2.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -22.85000 12.00000 2.15000 -22.15000 12.00000 2.15000 -22.15000 12.00000 2.85000 -22.85000 12.00000 2.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -22.85000 12.00000 7.15000 -22.15000 12.00000 7.15000 -22.15000 12.00000 7.85000 -22.85000 12.00000 7.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -22.85000 12.00000 12.15000 -22.15000 12.00000 12.15000 -22.15000 12.00000 12.85000 -22.85000 12.00000 12.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -22.85000 12.00000 17.15000 -22.15000 12.00000 17.15000 -22.15000 12.00000 17.85000 -22.85000 12.00000 17.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -22.85000 12.00000 22.15000 -22.15000 12.00000 22.15000 -22.15000 12.00000 22.85000 -22.85000 12.00000 22.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -22.85000 12.00000 27.15000 -22.15000 12.00000 27.15000 -22.15000 12.00000 27.85000 -22.85000 12.00000 27.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -22.85000 12.00000 32.15000 -22.15000 12.00000 32.15000 -22.15000 12.00000 32.85000 -22.85000 12.00000 32.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -22.85000 12.00000 37.15000 -22.15000 12.00000 37.15000 -22.15000 12.00000 37.85000 -22.85000 12.00000 37.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -17.85000 12.00000 -37.85000 -17.15000 12.00000 -37.85000 -17.15000 12.00000 -37.15000 -17.85000 12.00000 -37.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -17.85000 12.00000 -32.85000 -17.15000 12.00000 -32.85000 -17.15000 12.00000 -32.15000 -17.85000 12.00000 -32.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -17.85000 12.00000 -27.85000 -17.15000 12.00000 -27.85000 -17.15000 12.00000 -27.15000 -17.85000 12.00000 -27.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -17.85000 12.00000 -22.85000 -17.15000 12.00000 -22.85000 -17.15000 12.00000 -22.15000 -17.85000 12.00000 -22.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -17.85000 12.00000 -17.85000 -17.15000 12.00000 -17.85000 -17.15000 12.00000 -17.15000 -17.85000 12.00000 -17.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -17.85000 12.00000 -12.85000 -17.15000 12.00000 -12.85000 -17.15000 12.00000 -12.15000 -17.85000 12.00000 -12.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -17.85000 12.00000 -7.85000 -17.15000 12.00000 -7.85000 -17.15000 12.00000 -7.15000 -17.85000 12.00000 -7.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -17.85000 12.00000 -2.85000 -17.15000 12.00000 -2.85000 -17.15000 12.00000 -2.15000 -17.85000 12.00000 -2.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -17.85000 12.00000 2.15000 -17.15000 12.00000 2.15000 -17.15000 12.00000 2.85000 -17.85000 12.00000 2.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -17.85000 12.00000 7.15000 -17.15000 12.00000 7.15000 -17.15000 12.00000 7.85000 -17.85000 12.00000 7.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -17.85000 12.00000 12.15000 -17.15000 12.00000 12.15000 -17.15000 12.00000 12.85000 -17.85000 12.00000 12.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -17.85000 12.00000 17.15000 -17.15000 12.00000 17.15000 -17.15000 12.00000 17.85000 -17.85000 12.00000 17.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -17.85000 12.00000 22.15000 -17.15000 12.00000 22.15000 -17.15000 12.00000 22.85000 -17.85000 12.00000 22.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -17.85000 12.00000 27.15000 -17.15000 12.00000 27.15000 -17.15000 12.00000 27.85000 -17.85000 12.00000 27.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -17.85000 12.00000 32.15000 -17.15000 12.00000 32.15000 -17.15000 12.00000 32.85000 -17.85000 12.00000 32.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -17.85000 12.00000 37.15000 -17.15000 12.00000 37.15000 -17.15000 12.00000 37.85000 -17.85000 12.00000 37.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -12.85000 12.00000 -37.85000 -12.15000 12.00000 -37.85000 -12.15000 12.00000 -37.15000 -12.85000 12.00000 -37.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -12.85000 12.00000 -32.85000 -12.15000 12.00000 -32.85000 -12.15000 12.00000 -32.15000 -12.85000 12.00000 -32.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -12.85000 12.00000 -27.85000 -12.15000 12.00000 -27.85000 -12.15000 12.00000 -27.15000 -12.85000 12.00000 -27.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -12.85000 12.00000 -22.85000 -12.15000 12.00000 -22.85000 -12.15000 12.00000 -22.15000 -12.85000 12.00000 -22.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -12.85000 12.00000 -17.85000 -12.15000 12.00000 -17.85000 -12.15000 12.00000 -17.15000 -12.85000 12.00000 -17.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -12.85000 12.00000 -12.85000 -12.15000 12.00000 -12.85000 -12.15000 12.00000 -12.15000 -12.85000 12.00000 -12.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -12.85000 12.00000 -7.85000 -12.15000 12.00000 -7.85000 -12.15000 12.00000 -7.15000 -12.85000 12.00000 -7.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -12.85000 12.00000 -2.85000 -12.15000 12.00000 -2.85000 -12.15000 12.00000 -2.15000 -12.85000 12.00000 -2.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -12.85000 12.00000 2.15000 -12.15000 12.00000 2.15000 -12.15000 12.00000 2.85000 -12.85000 12.00000 2.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -12.85000 12.00000 7.15000 -12.15000 12.00000 7.15000 -12.15000 12.00000 7.85000 -12.85000 12.00000 7.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -12.85000 12.00000 12.15000 -12.15000 12.00000 12.15000 -12.15000 12.00000 12.85000 -12.85000 12.00000 12.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -12.85000 12.00000 17.15000 -12.15000 12.00000 17.15000 -12.15000 12.00000 17.85000 -12.85000 12.00000 17.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -12.85000 12.00000 22.15000 -12.15000 12.00000 22.15000 -12.15000 12.00000 22.85000 -12.85000 12.00000 22.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -12.85000 12.00000 27.15000 -12.15000 12.00000 27.15000 -12.15000 12.00000 27.85000 -12.85000 12.00000 27.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -12.85000 12.00000 32.15000 -12.15000 12.00000 32.15000 -12.15000 12.00000 32.85000 -12.85000 12.00000 32.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -12.85000 12.00000 37.15000 -12.15000 12.00000 37.15000 -12.15000 12.00000 37.85000 -12.85000 12.00000 37.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -7.85000 12.00000 -37.85000 -7.15000 12.00000 -37.85000 -7.15000 12.00000 -37.15000 -7.85000 12.00000 -37.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -7.85000 12.00000 -32.85000 -7.15000 12.00000 -32.85000 -7.15000 12.00000 -32.15000 -7.85000 12.00000 -32.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -7.85000 12.00000 -27.85000 -7.15000 12.00000 -27.85000 -7.15000 12.00000 -27.15000 -7.85000 12.00000 -27.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -7.85000 12.00000 -22.85000 -7.15000 12.00000 -22.85000 -7.15000 12.00000 -22.15000 -7.85000 12.00000 -22.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -7.85000 12.00000 -17.85000 -7.15000 12.00000 -17.85000 -7.15000 12.00000 -17.15000 -7.85000 12.00000 -17.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -7.85000 12.00000 -12.85000 -7.15000 12.00000 -12.85000 -7.15000 12.00000 -12.15000 -7.85000 12.00000 -12.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -7.85000 12.00000 -7.85000 -7.15000 12.00000 -7.85000 -7.15000 12.00000 -7.15000 -7.85000 12.00000 -7.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -7.85000 12.00000 -2.85000 -7.15000 12.00000 -2.85000 -7.15000 12.00000 -2.15000 -7.85000 12.00000 -2.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -7.85000 12.00000 2.15000 -7.15000 12.00000 2.15000 -7.15000 12.00000 2.85000 -7.85000 12.00000 2.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -7.85000 12.00000 7.15000 -7.15000 12.00000 7.15000 -7.15000 12.00000 7.85000 -7.85000 12.00000 7.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -7.85000 12.00000 12.15000 -7.15000 12.00000 12.15000 -7.15000 12.00000 12.85000 -7.85000 12.00000 12.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -7.85000 12.00000 17.15000 -7.15000 12.00000 17.15000 -7.15000 12.00000 17.85000 -7.85000 12.00000 17.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -7.85000 12.00000 22.15000 -7.15000 12.00000 22.15000 -7.15000 12.00000 22.85000 -7.85000 12.00000 22.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -7.85000 12.00000 27.15000 -7.15000 12.00000 27.15000 -7.15000 12.00000 27.85000 -7.85000 12.00000 27.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -7.85000 12.00000 32.15000 -7.15000 12.00000 32.15000 -7.15000 12.00000 32.85000 -7.85000 12.00000 32.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -7.85000 12.00000 37.15000 -7.15000 12.00000 37.15000 -7.15000 12.00000 37.85000 -7.85000 12.00000 37.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -2.85000 12.00000 -37.85000 -2.15000 12.00000 -37.85000 -2.15000 12.00000 -37.15000 -2.85000 12.00000 -37.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -2.85000 12.00000 -32.85000 -2.15000 12.00000 -32.85000 -2.15000 12.00000 -32.15000 -2.85000 12.00000 -32.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -2.85000 12.00000 -27.85000 -2.15000 12.00000 -27.85000 -2.15000 12.00000 -27.15000 -2.85000 12.00000 -27.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -2.85000 12.00000 -22.85000 -2.15000 12.00000 -22.85000 -2.15000 12.00000 -22.15000 -2.85000 12.00000 -22.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -2.85000 12.00000 -17.85000 -2.15000 12.00000 -17.85000 -2.15000 12.00000 -17.15000 -2.85000 12.00000 -17.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -2.85000 12.00000 -12.85000 -2.15000 12.00000 -12.85000 -2.15000 12.00000 -12.15000 -2.85000 12.00000 -12.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -2.85000 12.00000 -7.85000 -2.15000 12.00000 -7.85000 -2.15000 12.00000 -7.15000 -2.85000 12.00000 -7.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -2.85000 12.00000 -2.85000 -2.15000 12.00000 -2.85000 -2.15000 12.00000 -2.15000 -2.85000 12.00000 -2.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -2.85000 12.00000 2.15000 -2.15000 12.00000 2.15000 -2.15000 12.00000 2.85000 -2.85000 12.00000 2.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -2.85000 12.00000 7.15000 -2.15000 12.00000 7.15000 -2.15000 12.00000 7.85000 -2.85000 12.00000 7.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -2.85000 12.00000 12.15000 -2.15000 12.00000 12.15000 -2.15000 12.00000 12.85000 -2.85000 12.00000 12.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -2.85000 12.00000 17.15000 -2.15000 12.00000 17.15000 -2.15000 12.00000 17.85000 -2.85000 12.00000 17.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -2.85000 12.00000 22.15000 -2.15000 12.00000 22.15000 -2.15000 12.00000 22.85000 -2.85000 12.00000 22.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -2.85000 12.00000 27.15000 -2.15000 12.00000 27.15000 -2.15000 12.00000 27.85000 -2.85000 12.00000 27.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -2.85000 12.00000 32.15000 -2.15000 12.00000 32.15000 -2.15000 12.00000 32.85000 -2.85000 12.00000 32.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ -2.85000 12.00000 37.15000 -2.15000 12.00000 37.15000 -2.15000 12.00000 37.85000 -2.85000 12.00000 37.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 2.15000 12.00000 -37.85000 2.85000 12.00000 -37.85000 2.85000 12.00000 -37.15000 2.15000 12.00000 -37.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 2.15000 12.00000 -32.85000 2.85000 12.00000 -32.85000 2.85000 12.00000 -32.15000 2.15000 12.00000 -32.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 2.15000 12.00000 -27.85000 2.85000 12.00000 -27.85000 2.85000 12.00000 -27.15000 2.15000 12.00000 -27.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 2.15000 12.00000 -22.85000 2.85000 12.00000 -22.85000 2.85000 12.00000 -22.15000 2.15000 12.00000 -22.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 2.15000 12.00000 -17.85000 2.85000 12.00000 -17.85000 2.85000 12.00000 -17.15000 2.15000 12.00000 -17.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 2.15000 12.00000 -12.85000 2.85000 12.00000 -12.85000 2.85000 12.00000 -12.15000 2.15000 12.00000 -12.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 2.15000 12.00000 -7.85000 2.85000 12.00000 -7.85000 2.85000 12.00000 -7.15000 2.15000 12.00000 -7.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 2.15000 12.00000 -2.85000 2.85000 12.00000 -2.85000 2.85000 12.00000 -2.15000 2.15000 12.00000 -2.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 2.15000 12.00000 2.15000 2.85000 12.00000 2.15000 2.85000 12.00000 2.85000 2.15000 12.00000 2.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 2.15000 12.00000 7.15000 2.85000 12.00000 7.15000 2.85000 12.00000 7.85000 2.15000 12.00000 7.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 2.15000 12.00000 12.15000 2.85000 12.00000 12.15000 2.85000 12.00000 12.85000 2.15000 12.00000 12.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 2.15000 12.00000 17.15000 2.85000 12.00000 17.15000 2.85000 12.00000 17.85000 2.15000 12.00000 17.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 2.15000 12.00000 22.15000 2.85000 12.00000 22.15000 2.85000 12.00000 22.85000 2.15000 12.00000 22.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 2.15000 12.00000 27.15000 2.85000 12.00000 27.15000 2.85000 12.00000 27.85000 2.15000 12.00000 27.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 2.15000 12.00000 32.15000 2.85000 12.00000 32.15000 2.85000 12.00000 32.85000 2.15000 12.00000 32.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 2.15000 12.00000 37.15000 2.85000 12.00000 37.15000 2.85000 12.00000 37.85000 2.15000 12.00000 37.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 7.15000 12.00000 -37.85000 7.85000 12.00000 -37.85000 7.85000 12.00000 -37.15000 7.15000 12.00000 -37.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 7.15000 12.00000 -32.85000 7.85000 12.00000 -32.85000 7.85000 12.00000 -32.15000 7.15000 12.00000 -32.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 7.15000 12.00000 -27.85000 7.85000 12.00000 -27.85000 7.85000 12.00000 -27.15000 7.15000 12.00000 -27.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 7.15000 12.00000 -22.85000 7.85000 12.00000 -22.85000 7.85000 12.00000 -22.15000 7.15000 12.00000 -22.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 7.15000 12.00000 -17.85000 7.85000 12.00000 -17.85000 7.85000 12.00000 -17.15000 7.15000 12.00000 -17.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 7.15000 12.00000 -12.85000 7.85000 12.00000 -12.85000 7.85000 12.00000 -12.15000 7.15000 12.00000 -12.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 7.15000 12.00000 -7.85000 7.85000 12.00000 -7.85000 7.85000 12.00000 -7.15000 7.15000 12.00000 -7.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 7.15000 12.00000 -2.85000 7.85000 12.00000 -2.85000 7.85000 12.00000 -2.15000 7.15000 12.00000 -2.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 7.15000 12.00000 2.15000 7.85000 12.00000 2.15000 7.85000 12.00000 2.85000 7.15000 12.00000 2.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 7.15000 12.00000 7.15000 7.85000 12.00000 7.15000 7.85000 12.00000 7.85000 7.15000 12.00000 7.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 7.15000 12.00000 12.15000 7.85000 12.00000 12.15000 7.85000 12.00000 12.85000 7.15000 12.00000 12.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 7.15000 12.00000 17.15000 7.85000 12.00000 17.15000 7.85000 12.00000 17.85000 7.15000 12.00000 17.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 7.15000 12.00000 22.15000 7.85000 12.00000 22.15000 7.85000 12.00000 22.85000 7.15000 12.00000 22.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 7.15000 12.00000 27.15000 7.85000 12.00000 27.15000 7.85000 12.00000 27.85000 7.15000 12.00000 27.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 7.15000 12.00000 32.15000 7.85000 12.00000 32.15000 7.85000 12.00000 32.85000 7.15000 12.00000 32.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 7.15000 12.00000 37.15000 7.85000 12.00000 37.15000 7.85000 12.00000 37.85000 7.15000 12.00000 37.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 12.15000 12.00000 -37.85000 12.85000 12.00000 -37.85000 12.85000 12.00000 -37.15000 12.15000 12.00000 -37.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 12.15000 12.00000 -32.85000 12.85000 12.00000 -32.85000 12.85000 12.00000 -32.15000 12.15000 12.00000 -32.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 12.15000 12.00000 -27.85000 12.85000 12.00000 -27.85000 12.85000 12.00000 -27.15000 12.15000 12.00000 -27.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 12.15000 12.00000 -22.85000 12.85000 12.00000 -22.85000 12.85000 12.00000 -22.15000 12.15000 12.00000 -22.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 12.15000 12.00000 -17.85000 12.85000 12.00000 -17.85000 12.85000 12.00000 -17.15000 12.15000 12.00000 -17.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 12.15000 12.00000 -12.85000 12.85000 12.00000 -12.85000 12.85000 12.00000 -12.15000 12.15000 12.00000 -12.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 12.15000 12.00000 -7.85000 12.85000 12.00000 -7.85000 12.85000 12.00000 -7.15000 12.15000 12.00000 -7.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 12.15000 12.00000 -2.85000 12.85000 12.00000 -2.85000 12.85000 12.00000 -2.15000 12.15000 12.00000 -2.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 12.15000 12.00000 2.15000 12.85000 12.00000 2.15000 12.85000 12.00000 2.85000 12.15000 12.00000 2.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 12.15000 12.00000 7.15000 12.85000 12.00000 7.15000 12.85000 12.00000 7.85000 12.15000 12.00000 7.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 12.15000 12.00000 12.15000 12.85000 12.00000 12.15000 12.85000 12.00000 12.85000 12.15000 12.00000 12.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 12.15000 12.00000 17.15000 12.85000 12.00000 17.15000 12.85000 12.00000 17.85000 12.15000 12.00000 17.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 12.15000 12.00000 22.15000 12.85000 12.00000 22.15000 12.85000 12.00000 22.85000 12.15000 12.00000 22.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 12.15000 12.00000 27.15000 12.85000 12.00000 27.15000 12.85000 12.00000 27.85000 12.15000 12.00000 27.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 12.15000 12.00000 32.15000 12.85000 12.00000 32.15000 12.85000 12.00000 32.85000 12.15000 12.00000 32.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 12.15000 12.00000 37.15000 12.85000 12.00000 37.15000 12.85000 12.00000 37.85000 12.15000 12.00000 37.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 17.15000 12.00000 -37.85000 17.85000 12.00000 -37.85000 17.85000 12.00000 -37.15000 17.15000 12.00000 -37.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 17.15000 12.00000 -32.85000 17.85000 12.00000 -32.85000 17.85000 12.00000 -32.15000 17.15000 12.00000 -32.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 17.15000 12.00000 -27.85000 17.85000 12.00000 -27.85000 17.85000 12.00000 -27.15000 17.15000 12.00000 -27.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 17.15000 12.00000 -22.85000 17.85000 12.00000 -22.85000 17.85000 12.00000 -22.15000 17.15000 12.00000 -22.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 17.15000 12.00000 -17.85000 17.85000 12.00000 -17.85000 17.85000 12.00000 -17.15000 17.15000 12.00000 -17.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 17.15000 12.00000 -12.85000 17.85000 12.00000 -12.85000 17.85000 12.00000 -12.15000 17.15000 12.00000 -12.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 17.15000 12.00000 -7.85000 17.85000 12.00000 -7.85000 17.85000 12.00000 -7.15000 17.15000 12.00000 -7.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 17.15000 12.00000 -2.85000 17.85000 12.00000 -2.85000 17.85000 12.00000 -2.15000 17.15000 12.00000 -2.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 17.15000 12.00000 2.15000 17.85000 12.00000 2.15000 17.85000 12.00000 2.85000 17.15000 12.00000 2.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 17.15000 12.00000 7.15000 17.85000 12.00000 7.15000 17.85000 12.00000 7.85000 17.15000 12.00000 7.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 17.15000 12.00000 12.15000 17.85000 12.00000 12.15000 17.85000 12.00000 12.85000 17.15000 12.00000 12.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 17.15000 12.00000 17.15000 17.85000 12.00000 17.15000 17.85000 12.00000 17.85000 17.15000 12.00000 17.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 17.15000 12.00000 22.15000 17.85000 12.00000 22.15000 17.85000 12.00000 22.85000 17.15000 12.00000 22.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 17.15000 12.00000 27.15000 17.85000 12.00000 27.15000 17.85000 12.00000 27.85000 17.15000 12.00000 27.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 17.15000 12.00000 32.15000 17.85000 12.00000 32.15000 17.85000 12.00000 32.85000 17.15000 12.00000 32.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 17.15000 12.00000 37.15000 17.85000 12.00000 37.15000 17.85000 12.00000 37.85000 17.15000 12.00000 37.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 22.15000 12.00000 -37.85000 22.85000 12.00000 -37.85000 22.85000 12.00000 -37.15000 22.15000 12.00000 -37.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 22.15000 12.00000 -32.85000 22.85000 12.00000 -32.85000 22.85000 12.00000 -32.15000 22.15000 12.00000 -32.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 22.15000 12.00000 -27.85000 22.85000 12.00000 -27.85000 22.85000 12.00000 -27.15000 22.15000 12.00000 -27.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 22.15000 12.00000 -22.85000 22.85000 12.00000 -22.85000 22.85000 12.00000 -22.15000 22.15000 12.00000 -22.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 22.15000 12.00000 -17.85000 22.85000 12.00000 -17.85000 22.85000 12.00000 -17.15000 22.15000 12.00000 -17.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 22.15000 12.00000 -12.85000 22.85000 12.00000 -12.85000 22.85000 12.00000 -12.15000 22.15000 12.00000 -12.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 22.15000 12.00000 -7.85000 22.85000 12.00000 -7.85000 22.85000 12.00000 -7.15000 22.15000 12.00000 -7.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 22.15000 12.00000 -2.85000 22.85000 12.00000 -2.85000 22.85000 12.00000 -2.15000 22.15000 12.00000 -2.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 22.15000 12.00000 2.15000 22.85000 12.00000 2.15000 22.85000 12.00000 2.85000 22.15000 12.00000 2.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 22.15000 12.00000 7.15000 22.85000 12.00000 7.15000 22.85000 12.00000 7.85000 22.15000 12.00000 7.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 22.15000 12.00000 12.15000 22.85000 12.00000 12.15000 22.85000 12.00000 12.85000 22.15000 12.00000 12.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 22.15000 12.00000 17.15000 22.85000 12.00000 17.15000 22.85000 12.00000 17.85000 22.15000 12.00000 17.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 22.15000 12.00000 22.15000 22.85000 12.00000 22.15000 22.85000 12.00000 22.85000 22.15000 12.00000 22.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 22.15000 12.00000 27.15000 22.85000 12.00000 27.15000 22.85000 12.00000 27.85000 22.15000 12.00000 27.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 22.15000 12.00000 32.15000 22.85000 12.00000 32.15000 22.85000 12.00000 32.85000 22.15000 12.00000 32.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 22.15000 12.00000 37.15000 22.85000 12.00000 37.15000 22.85000 12.00000 37.85000 22.15000 12.00000 37.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 27.15000 12.00000 -37.85000 27.85000 12.00000 -37.85000 27.85000 12.00000 -37.15000 27.15000 12.00000 -37.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 27.15000 12.00000 -32.85000 27.85000 12.00000 -32.85000 27.85000 12.00000 -32.15000 27.15000 12.00000 -32.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 27.15000 12.00000 -27.85000 27.85000 12.00000 -27.85000 27.85000 12.00000 -27.15000 27.15000 12.00000 -27.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 27.15000 12.00000 -22.85000 27.85000 12.00000 -22.85000 27.85000 12.00000 -22.15000 27.15000 12.00000 -22.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 27.15000 12.00000 -17.85000 27.85000 12.00000 -17.85000 27.85000 12.00000 -17.15000 27.15000 12.00000 -17.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 27.15000 12.00000 -12.85000 27.85000 12.00000 -12.85000 27.85000 12.00000 -12.15000 27.15000 12.00000 -12.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 27.15000 12.00000 -7.85000 27.85000 12.00000 -7.85000 27.85000 12.00000 -7.15000 27.15000 12.00000 -7.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 27.15000 12.00000 -2.85000 27.85000 12.00000 -2.85000 27.85000 12.00000 -2.15000 27.15000 12.00000 -2.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 27.15000 12.00000 2.15000 27.85000 12.00000 2.15000 27.85000 12.00000 2.85000 27.15000 12.00000 2.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 27.15000 12.00000 7.15000 27.85000 12.00000 7.15000 27.85000 12.00000 7.85000 27.15000 12.00000 7.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 27.15000 12.00000 12.15000 27.85000 12.00000 12.15000 27.85000 12.00000 12.85000 27.15000 12.00000 12.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 27.15000 12.00000 17.15000 27.85000 12.00000 17.15000 27.85000 12.00000 17.85000 27.15000 12.00000 17.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 27.15000 12.00000 22.15000 27.85000 12.00000 22.15000 27.85000 12.00000 22.85000 27.15000 12.00000 22.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 27.15000 12.00000 27.15000 27.85000 12.00000 27.15000 27.85000 12.00000 27.85000 27.15000 12.00000 27.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 27.15000 12.00000 32.15000 27.85000 12.00000 32.15000 27.85000 12.00000 32.85000 27.15000 12.00000 32.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 27.15000 12.00000 37.15000 27.85000 12.00000 37.15000 27.85000 12.00000 37.85000 27.15000 12.00000 37.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 32.15000 12.00000 -37.85000 32.85000 12.00000 -37.85000 32.85000 12.00000 -37.15000 32.15000 12.00000 -37.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 32.15000 12.00000 -32.85000 32.85000 12.00000 -32.85000 32.85000 12.00000 -32.15000 32.15000 12.00000 -32.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 32.15000 12.00000 -27.85000 32.85000 12.00000 -27.85000 32.85000 12.00000 -27.15000 32.15000 12.00000 -27.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 32.15000 12.00000 -22.85000 32.85000 12.00000 -22.85000 32.85000 12.00000 -22.15000 32.15000 12.00000 -22.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 32.15000 12.00000 -17.85000 32.85000 12.00000 -17.85000 32.85000 12.00000 -17.15000 32.15000 12.00000 -17.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 32.15000 12.00000 -12.85000 32.85000 12.00000 -12.85000 32.85000 12.00000 -12.15000 32.15000 12.00000 -12.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 32.15000 12.00000 -7.85000 32.85000 12.00000 -7.85000 32.85000 12.00000 -7.15000 32.15000 12.00000 -7.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 32.15000 12.00000 -2.85000 32.85000 12.00000 -2.85000 32.85000 12.00000 -2.15000 32.15000 12.00000 -2.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 32.15000 12.00000 2.15000 32.85000 12.00000 2.15000 32.85000 12.00000 2.85000 32.15000 12.00000 2.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 32.15000 12.00000 7.15000 32.85000 12.00000 7.15000 32.85000 12.00000 7.85000 32.15000 12.00000 7.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 32.15000 12.00000 12.15000 32.85000 12.00000 12.15000 32.85000 12.00000 12.85000 32.15000 12.00000 12.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 32.15000 12.00000 17.15000 32.85000 12.00000 17.15000 32.85000 12.00000 17.85000 32.15000 12.00000 17.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 32.15000 12.00000 22.15000 32.85000 12.00000 22.15000 32.85000 12.00000 22.85000 32.15000 12.00000 22.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 32.15000 12.00000 27.15000 32.85000 12.00000 27.15000 32.85000 12.00000 27.85000 32.15000 12.00000 27.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 32.15000 12.00000 32.15000 32.85000 12.00000 32.15000 32.85000 12.00000 32.85000 32.15000 12.00000 32.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 32.15000 12.00000 37.15000 32.85000 12.00000 37.15000 32.85000 12.00000 37.85000 32.15000 12.00000 37.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 37.15000 12.00000 -37.85000 37.85000 12.00000 -37.85000 37.85000 12.00000 -37.15000 37.15000 12.00000 -37.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 37.15000 12.00000 -32.85000 37.85000 12.00000 -32.85000 37.85000 12.00000 -32.15000 37.15000 12.00000 -32.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 37.15000 12.00000 -27.85000 37.85000 12.00000 -27.85000 37.85000 12.00000 -27.15000 37.15000 12.00000 -27.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 37.15000 12.00000 -22.85000 37.85000 12.00000 -22.85000 37.85000 12.00000 -22.15000 37.15000 12.00000 -22.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 37.15000 12.00000 -17.85000 37.85000 12.00000 -17.85000 37.85000 12.00000 -17.15000 37.15000 12.00000 -17.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 37.15000 12.00000 -12.85000 37.85000 12.00000 -12.85000 37.85000 12.00000 -12.15000 37.15000 12.00000 -12.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 37.15000 12.00000 -7.85000 37.85000 12.00000 -7.85000 37.85000 12.00000 -7.15000 37.15000 12.00000 -7.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 37.15000 12.00000 -2.85000 37.85000 12.00000 -2.85000 37.85000 12.00000 -2.15000 37.15000 12.00000 -2.15000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 37.15000 12.00000 2.15000 37.85000 12.00000 2.15000 37.85000 12.00000 2.85000 37.15000 12.00000 2.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 37.15000 12.00000 7.15000 37.85000 12.00000 7.15000 37.85000 12.00000 7.85000 37.15000 12.00000 7.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 37.15000 12.00000 12.15000 37.85000 12.00000 12.15000 37.85000 12.00000 12.85000 37.15000 12.00000 12.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 37.15000 12.00000 17.15000 37.85000 12.00000 17.15000 37.85000 12.00000 17.85000 37.15000 12.00000 17.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 37.15000 12.00000 22.15000 37.85000 12.00000 22.15000 37.85000 12.00000 22.85000 37.15000 12.00000 22.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 37.15000 12.00000 27.15000 37.85000 12.00000 27.15000 37.85000 12.00000 27.85000 37.15000 12.00000 27.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 37.15000 12.00000 32.15000 37.85000 12.00000 32.15000 37.85000 12.00000 32.85000 37.15000 12.00000 32.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60.0000 60.0000 60.0000 ]
+    Material "diffuse" "rgb reflectance" [ 0 0 0 ]
+    Shape "trianglemesh"
+        "point3 P" [ 37.15000 12.00000 37.15000 37.85000 12.00000 37.15000 37.85000 12.00000 37.85000 37.15000 12.00000 37.85000 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
