@@ -2454,6 +2454,20 @@ def di_generate_reservoir(
     for _ in range(DI_RIS_CANDIDATES):
         var (valid, light_idx, sample_point, light_normal, le, gen_pdf) = _di_sample_candidate(ctx, hit_point, pcg)
         if not valid:
+            # A rejected candidate is still a REAL draw from q -- it just
+            # landed where the target function is zero (light facing away,
+            # cos_l <= 0, degenerate distance). RIS's W = w_sum / (M * p_hat)
+            # needs M = the number of candidates DRAWN, not the number that
+            # happened to be non-zero, so its zero weight must still be
+            # streamed. Skipping this (an early `continue`) silently divides
+            # by too small an M and inflates every W: on staircase2 roughly
+            # 40% of candidates are backfacing, so m came out ~9 instead of
+            # 16 and W was ~1.8x too large. reservoir_update with weight 0
+            # returns before touching w_sum (and before reading `u`, hence
+            # the dummy -- deliberately NOT a pcg draw, so the RNG stream is
+            # identical to before this fix), but still does the m += 1 that
+            # is the entire point here.
+            _ = reservoir_update(res.state, Float32(0.0), Float32(0.0))
             continue
         var p_hat = di_target_pdf(hit_point, normal, alb, sample_point, light_normal, le)
         var weight = p_hat / gen_pdf
