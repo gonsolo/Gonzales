@@ -24,10 +24,24 @@ from .reservoir import ReservoirState, reservoir_state_init
 struct DIReservoir(TrivialRegisterPassable):
     """ReSTIR DI's reservoir payload: the current best light candidate
     (light_idx < 0 means none found yet) plus its RIS bookkeeping
-    (reservoir.mojo's ReservoirState -- w_sum/m/w)."""
+    (reservoir.mojo's ReservoirState -- w_sum/m/w).
+
+    `ldp_du`/`ldp_dv` are the LIGHT surface's own tangent vectors at the
+    sampled point (for a mesh light, the two edge vectors of the sampled
+    triangle, exactly as `_sample_light_point_and_normal` returns them).
+    They exist solely so MNEE can run on a ReSTIR-resampled winner --
+    the manifold walk needs the light's parameterization to push a
+    derivative through to the light, and unlike the sample point itself
+    that can't be recovered after the fact without knowing WHICH triangle
+    of the light mesh was picked. They're a property of the light geometry
+    at y, not of the shading point, so they stay valid verbatim under both
+    temporal and spatial reuse (which move a sample to a different pixel,
+    not to a different light point)."""
     var light_idx:     Int32
     var sample_point:  SIMD[DType.float32, 3]
     var light_normal:  SIMD[DType.float32, 3]
+    var ldp_du:        SIMD[DType.float32, 3]
+    var ldp_dv:        SIMD[DType.float32, 3]
     var le:            RGB
     var state:         ReservoirState
 
@@ -37,6 +51,8 @@ def di_reservoir_init() -> DIReservoir:
         light_idx=Int32(-1),
         sample_point=SIMD[DType.float32, 3](Float32(0)),
         light_normal=SIMD[DType.float32, 3](Float32(0)),
+        ldp_du=SIMD[DType.float32, 3](Float32(0)),
+        ldp_dv=SIMD[DType.float32, 3](Float32(0)),
         le=RGB(Float32(0)),
         state=reservoir_state_init(),
     )

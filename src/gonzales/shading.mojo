@@ -2204,6 +2204,218 @@ def _sample_area_light_nee(
     return LightSample(wi, al.emission, pdf, dist, False, True)
 
 @always_inline
+def _mnee_area_light_contribute(
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    ctx: ShadeContext,
+    normal: SIMD[DType.float32, 3],
+    hit_point: SIMD[DType.float32, 3],
+    alb: RGB,
+    shadow_dir: SIMD[DType.float32, 3],
+    dist: Float32,
+    light_point: SIMD[DType.float32, 3],
+    ldp_du_v: SIMD[DType.float32, 3],
+    ldp_dv_v: SIMD[DType.float32, 3],
+    al: AreaLight_C,
+    inv_pdf_area: Float32,
+    lobe_w: Float32,
+) -> Bool:
+    """MNEE glass-caustic probing for one already-chosen area-light sample,
+    factored out of `_nee_area_lights` so ReSTIR's `di_resolve` can use the
+    identical transport (it previously could not, which lost ALL light
+    reaching a surface through a dielectric on the ReSTIR path -- ~9% of
+    staircase2, concentrated behind its glass railing).
+
+    Probes for up to 2 glass surfaces between `hit_point` and `light_point`;
+    on a hit, runs the 1- or 2-vertex manifold walk, adds the refracted
+    contribution directly to `path_ptr[].estimate`, and returns True. The
+    caller MUST then skip its own straight shadow ray -- MNEE REPLACES it
+    (that ray is occluded by the glass by construction, so tracing it would
+    contribute nothing anyway, but the `used_mnee` bookkeeping is what keeps
+    the two strategies from being double-counted if that ever stops holding).
+    Returns False when no dielectric intervenes, leaving the caller to do
+    ordinary shadow-ray NEE.
+
+    `inv_pdf_area` is 1/p_A(y), the reciprocal AREA-measure density of the
+    light sample -- the one quantity that legitimately differs between the
+    two callers, hence a parameter rather than a recomputation:
+      * plain NEE  passes `al.total_area / light_sel_pdf` (the sample really
+        was drawn with that area density);
+      * ReSTIR DI  passes `W * dist^2 / cos_l`, converting its RIS weight
+        (which estimates 1/q in SOLID-ANGLE measure, since
+        `_di_sample_candidate`'s gen_pdf carries the dist^2/cos_l factor)
+        back into area measure via q_sa = q_A * dist^2/cos_l. Getting this
+        conversion wrong is silent: it only shows up as a scene-dependent
+        brightness error on glass, exactly the class of bug this whole
+        area is prone to.
+
+    No MIS weight is applied here, matching the pre-existing plain-NEE
+    behaviour: the refracted path is a specular chain that BSDF sampling
+    effectively never reproduces, so there is no competing strategy to
+    balance against."""
+    # MNEE's glass-refraction focusing needs the light's own surface
+    # tangents (ldp_du_v/ldp_dv_v) — well-defined for a flat mesh triangle,
+    # not for a curve's swept tube. Curve lights (kind==1) fall back to
+    # plain (non-MNEE) shadow-ray NEE through glass.
+    if al.kind != Int8(0):
+        return False
+
+    # MNEE: probe for up to 2 glass surfaces between hit_point and light.
+    # For each probe hit we detect entering/exiting from dot(n_raw, probe_dir).
+    var probe_org = hit_point + shadow_dir * Float32(0.0002)
+    var probe_ray = Ray_C(
+        Point3f(probe_org[0], probe_org[1], probe_org[2]),
+        Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+    var probe_tmax = dist * Float32(0.9995)
+    var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var dummy_inter = Intersection_C(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+    var probe_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
+    traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr(),
+                       ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances)
+    var probe_inter = probe_store[0]
+    if probe_inter.hit == Int8(0) or probe_inter.primId.type != Int8(0):
+        return False
+    var probe_mat = ctx.materials[Int(probe_inter.primId.materialIndex)]
+    if probe_mat.type != MatKind.dielectric and probe_mat.type != MatKind.thin_dielectric:
+        return False
+
+    # --- Extract x1 geometry ---
+    var (pmesh, pv0, pv1, pv2, _) = _get_tri_verts(probe_inter, ctx.meshes)
+    var pp0 = SIMD[DType.float32, 3](pmesh.points[pv0*4], pmesh.points[pv0*4+1], pmesh.points[pv0*4+2])
+    var pp1 = SIMD[DType.float32, 3](pmesh.points[pv1*4], pmesh.points[pv1*4+1], pmesh.points[pv1*4+2])
+    var pp2 = SIMD[DType.float32, 3](pmesh.points[pv2*4], pmesh.points[pv2*4+1], pmesh.points[pv2*4+2])
+    var pdp_du = pp1 - pp0
+    var pdp_dv = pp2 - pp0
+    var pgeo_n3 = cross(pdp_du, pdp_dv)
+    var pgeo_n_len = sqrt(dot(pgeo_n3, pgeo_n3))
+    if pgeo_n_len <= Float32(1e-10):
+        # Degenerate glass triangle: a dielectric IS in the way (so the
+        # straight shadow ray is blocked regardless) but no usable manifold
+        # geometry — report handled, same as the original nested-if did by
+        # having already set used_mnee before this check.
+        return True
+    var pgeo_n_raw = pgeo_n3 * (Float32(1.0) / pgeo_n_len)
+    # eta1: entering if probe goes against raw normal
+    var ior1 = probe_mat.albedo.r
+    var eta1 = ior1 if dot(pgeo_n_raw, shadow_dir) <= Float32(0) else (Float32(1.0)/ior1)
+    var pgeo_n = pgeo_n_raw
+    if dot(pgeo_n, shadow_dir) > Float32(0.0):
+        pgeo_n = -pgeo_n
+    var pu = probe_inter.u; var pvb = probe_inter.v
+    var x1_init = pp0*(Float32(1.0)-pu-pvb) + pp1*pu + pp2*pvb
+    # --- Probe for second glass surface beyond x1 ---
+    var probe2_t0 = probe_inter.tHit
+    var probe2_rem = (dist - probe2_t0) * Float32(0.9995)
+    var probe2_org = x1_init + shadow_dir * Float32(0.0005)
+    var probe2_inter = dummy_inter
+    if probe2_rem > Float32(0.001):
+        var probe2_ray = Ray_C(
+            Point3f(probe2_org[0], probe2_org[1], probe2_org[2]),
+            Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+        var probe2_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
+        traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr(),
+                   ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances)
+        probe2_inter = probe2_store[0]
+    var has_second_glass = False
+    if probe2_inter.hit != Int8(0) and probe2_inter.primId.type == Int8(0):
+        var probe2_mat_c = ctx.materials[Int(probe2_inter.primId.materialIndex)]
+        has_second_glass = (probe2_mat_c.type == MatKind.dielectric or probe2_mat_c.type == MatKind.thin_dielectric)
+
+    if has_second_glass:
+        # --- 2-vertex MNEE ---
+        var probe2_mat = ctx.materials[Int(probe2_inter.primId.materialIndex)]
+        var (p2mesh, p2v0, p2v1, p2v2, _) = _get_tri_verts(probe2_inter, ctx.meshes)
+        var p2p0 = SIMD[DType.float32, 3](p2mesh.points[p2v0*4], p2mesh.points[p2v0*4+1], p2mesh.points[p2v0*4+2])
+        var p2p1 = SIMD[DType.float32, 3](p2mesh.points[p2v1*4], p2mesh.points[p2v1*4+1], p2mesh.points[p2v1*4+2])
+        var p2p2 = SIMD[DType.float32, 3](p2mesh.points[p2v2*4], p2mesh.points[p2v2*4+1], p2mesh.points[p2v2*4+2])
+        var pdp_du2 = p2p1 - p2p0; var pdp_dv2 = p2p2 - p2p0
+        var pgeo_n3_2 = cross(pdp_du2, pdp_dv2)
+        var pgeo_n_len2 = sqrt(dot(pgeo_n3_2, pgeo_n3_2))
+        if pgeo_n_len2 > Float32(1e-10):
+            var pgeo_n2_raw = pgeo_n3_2 * (Float32(1.0)/pgeo_n_len2)
+            var ior2 = probe2_mat.albedo.r
+            var eta2 = ior2 if dot(pgeo_n2_raw, shadow_dir) <= Float32(0) else (Float32(1.0)/ior2)
+            var pgeo_n2 = pgeo_n2_raw
+            if dot(pgeo_n2, shadow_dir) > Float32(0.0):
+                pgeo_n2 = -pgeo_n2
+            var pu2 = probe2_inter.u; var pvb2 = probe2_inter.v
+            var x2_init = p2p0*(Float32(1.0)-pu2-pvb2) + p2p1*pu2 + p2p2*pvb2
+            var (ok2, x1_f2, x2_f2, bsdf_prod, dx1_dxl2) = _mnee_walk2(
+                hit_point, light_point,
+                x1_init, pgeo_n, pdp_du, pdp_dv, eta1,
+                x2_init, pgeo_n2, pdp_du2, pdp_dv2, eta2,
+                ldp_du_v, ldp_dv_v)
+            if ok2:
+                var wi2f = hit_point - x1_f2
+                var wi2fl = sqrt(dot(wi2f,wi2f))
+                if wi2fl > Float32(1e-8):
+                    var wi2fn = wi2f*(Float32(1)/wi2fl)
+                    var cos_s_x0 = dot(normal, -wi2fn)
+                    if cos_s_x0 > Float32(0):
+                        var G2 = min(abs(dot(wi2fn,pgeo_n))/(wi2fl*wi2fl)*dx1_dxl2, Float32(2.0))
+                        var wo2f = light_point - x2_f2
+                        var wo2fl = sqrt(dot(wo2f,wo2f))
+                        if wo2fl > Float32(1e-8):
+                            var wo2fn = wo2f*(Float32(1)/wo2fl)
+                            var vis2_org = x2_f2 + wo2fn*Float32(0.001)
+                            var vis2_ray = Ray_C(Point3f(vis2_org[0],vis2_org[1],vis2_org[2]), Vec3f(wo2fn[0],wo2fn[1],wo2fn[2]))
+                            if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis2_ray, wo2fl*Float32(0.999),
+                                          ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances):
+                                var mnee_wt2 = bxdf_eval_diffuse(alb) * al.emission * (cos_s_x0 * G2 * bsdf_prod * lobe_w * inv_pdf_area)
+                                path_ptr[].estimate += path_ptr[].throughput * mnee_wt2
+    else:
+        # --- 1-vertex MNEE ---
+        var (mnee_ok, x1_f, det_b, eta_f) = _mnee_walk(
+            hit_point, light_point, x1_init, pgeo_n, pdp_du, pdp_dv, eta1)
+        if mnee_ok:
+            var wi_f = hit_point - x1_f
+            var wi_len2_f = dot(wi_f, wi_f)
+            var wo_f = light_point - x1_f
+            var wo_len2_f = dot(wo_f, wo_f)
+            if wi_len2_f > Float32(1e-8) and wo_len2_f > Float32(1e-8):
+                var wi_len_f = sqrt(wi_len2_f)
+                var wo_len_f = sqrt(wo_len2_f)
+                var wi_fn = wi_f * (Float32(1.0) / wi_len_f)
+                var wo_fn = wo_f * (Float32(1.0) / wo_len_f)
+                var cos_s_x0 = dot(normal, -wi_fn)
+                if cos_s_x0 > Float32(0.0):
+                    var H3_f = -(wi_fn + wo_fn * eta_f)
+                    var H_len2_f = dot(H3_f, H3_f)
+                    if H_len2_f > Float32(1e-10):
+                        var H_len_f = sqrt(H_len2_f)
+                        var H_f = H3_f * (Float32(1.0) / H_len_f)
+                        var dp_du_dot_n = dot(pdp_du, pgeo_n)
+                        var s3_f = pdp_du - pgeo_n * dp_du_dot_n
+                        var s_len2_f = dot(s3_f, s3_f)
+                        if s_len2_f > Float32(1e-10):
+                            var s_f = s3_f * (Float32(1.0) / sqrt(s_len2_f))
+                            var t_f = cross(pgeo_n, s_f)
+                            var ilo_l = eta_f / (H_len_f * wo_len_f)
+                            var dHdu_l = (ldp_du_v - wo_fn * dot(wo_fn, ldp_du_v)) * ilo_l
+                            var dHdv_l = (ldp_dv_v - wo_fn * dot(wo_fn, ldp_dv_v)) * ilo_l
+                            dHdu_l -= H_f * dot(dHdu_l, H_f); dHdu_l = -dHdu_l
+                            dHdv_l -= H_f * dot(dHdv_l, H_f); dHdv_l = -dHdv_l
+                            var dc00 = dot(dHdu_l, s_f); var dc01 = dot(dHdv_l, s_f)
+                            var dc10 = dot(dHdu_l, t_f); var dc11 = dot(dHdv_l, t_f)
+                            var det_dc = dc00*dc11 - dc01*dc10
+                            var dx1_dxl = abs(det_dc) / max(abs(det_b), Float32(1e-8))
+                            var dw0_dx1 = abs(dot(wi_fn, pgeo_n)) / (wi_len2_f)
+                            var G = min(dw0_dx1 * dx1_dxl, Float32(2.0))
+                            var cosNI = abs(dot(pgeo_n, wi_fn))
+                            var cosHI = abs(dot(H_f, wi_fn))
+                            var cosTM = abs(dot(pgeo_n, H_f))
+                            var F_r = fr_dielectric(cosNI, eta_f)
+                            var T_f = Float32(1.0) - F_r
+                            var bsdf_s = T_f * cosHI / max(cosNI * cosTM * cosTM, Float32(1e-6))
+                            var vis_org = x1_f + wo_fn * Float32(0.001)
+                            var vis_ray = Ray_C(
+                                Point3f(vis_org[0], vis_org[1], vis_org[2]),
+                                Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
+                            if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis_ray, wo_len_f * Float32(0.999),
+                                          ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances):
+                                var mnee_wt = bxdf_eval_diffuse(alb) * al.emission * (cos_s_x0 * G * bsdf_s * lobe_w * inv_pdf_area)
+                                path_ptr[].estimate += path_ptr[].throughput * mnee_wt
+    return True
+
 def _nee_area_lights[enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     ctx: ShadeContext,
@@ -2242,157 +2454,16 @@ def _nee_area_lights[enqueue_shadow: Bool](
             var weight = bxdf_eval_diffuse(alb) * al.emission * (cos_s * w_nee * lobe_w / pdf_light)
             var contrib = path_ptr[].throughput * weight
 
-            # MNEE: probe for up to 2 glass surfaces between hit_point and light.
-            # For each probe hit we detect entering/exiting from dot(n_raw, probe_dir).
-            var probe_org = hit_point + shadow_dir * Float32(0.0002)
-            var probe_ray = Ray_C(
-                Point3f(probe_org[0], probe_org[1], probe_org[2]),
-                Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-            var probe_tmax = dist * Float32(0.9995)
-            var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-            var dummy_inter = Intersection_C(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
-            var probe_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
-            traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr(),
-                               ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances)
-            var probe_inter = probe_store[0]
-            var used_mnee = False
-            # MNEE's glass-refraction focusing needs the light's own surface
-            # tangents (ldp_du_v/ldp_dv_v below) — well-defined for a flat
-            # mesh triangle, not for a curve's swept tube. Curve lights fall
-            # back to plain (non-MNEE) shadow-ray NEE through glass.
-            if al.kind == Int8(0) and probe_inter.hit != Int8(0) and probe_inter.primId.type == Int8(0):
-                var probe_mat = ctx.materials[Int(probe_inter.primId.materialIndex)]
-                if probe_mat.type == MatKind.dielectric or probe_mat.type == MatKind.thin_dielectric:
-                    # --- Extract x1 geometry ---
-                    var (pmesh, pv0, pv1, pv2, _) = _get_tri_verts(probe_inter, ctx.meshes)
-                    used_mnee = True
-                    var pp0 = SIMD[DType.float32, 3](pmesh.points[pv0*4], pmesh.points[pv0*4+1], pmesh.points[pv0*4+2])
-                    var pp1 = SIMD[DType.float32, 3](pmesh.points[pv1*4], pmesh.points[pv1*4+1], pmesh.points[pv1*4+2])
-                    var pp2 = SIMD[DType.float32, 3](pmesh.points[pv2*4], pmesh.points[pv2*4+1], pmesh.points[pv2*4+2])
-                    var pdp_du = pp1 - pp0
-                    var pdp_dv = pp2 - pp0
-                    var pgeo_n3 = cross(pdp_du, pdp_dv)
-                    var pgeo_n_len = sqrt(dot(pgeo_n3, pgeo_n3))
-                    if pgeo_n_len > Float32(1e-10):
-                        var pgeo_n_raw = pgeo_n3 * (Float32(1.0) / pgeo_n_len)
-                        # eta1: entering if probe goes against raw normal
-                        var ior1 = probe_mat.albedo.r
-                        var eta1 = ior1 if dot(pgeo_n_raw, shadow_dir) <= Float32(0) else (Float32(1.0)/ior1)
-                        var pgeo_n = pgeo_n_raw
-                        if dot(pgeo_n, shadow_dir) > Float32(0.0):
-                            pgeo_n = -pgeo_n
-                        var pu = probe_inter.u; var pvb = probe_inter.v
-                        var x1_init = pp0*(Float32(1.0)-pu-pvb) + pp1*pu + pp2*pvb
-                        # --- Probe for second glass surface beyond x1 ---
-                        var probe2_t0 = probe_inter.tHit
-                        var probe2_rem = (dist - probe2_t0) * Float32(0.9995)
-                        var probe2_org = x1_init + shadow_dir * Float32(0.0005)
-                        var probe2_inter = dummy_inter
-                        if probe2_rem > Float32(0.001):
-                            var probe2_ray = Ray_C(
-                                Point3f(probe2_org[0], probe2_org[1], probe2_org[2]),
-                                Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-                            var probe2_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
-                            traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr(),
-                                       ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances)
-                            probe2_inter = probe2_store[0]
-                        if probe2_inter.hit != Int8(0) and probe2_inter.primId.type == Int8(0):
-                            var probe2_mat = ctx.materials[Int(probe2_inter.primId.materialIndex)]
-                            if probe2_mat.type == MatKind.dielectric or probe2_mat.type == MatKind.thin_dielectric:
-                                # --- 2-vertex MNEE ---
-                                var (p2mesh, p2v0, p2v1, p2v2, _) = _get_tri_verts(probe2_inter, ctx.meshes)
-                                var p2p0 = SIMD[DType.float32, 3](p2mesh.points[p2v0*4], p2mesh.points[p2v0*4+1], p2mesh.points[p2v0*4+2])
-                                var p2p1 = SIMD[DType.float32, 3](p2mesh.points[p2v1*4], p2mesh.points[p2v1*4+1], p2mesh.points[p2v1*4+2])
-                                var p2p2 = SIMD[DType.float32, 3](p2mesh.points[p2v2*4], p2mesh.points[p2v2*4+1], p2mesh.points[p2v2*4+2])
-                                var pdp_du2 = p2p1 - p2p0; var pdp_dv2 = p2p2 - p2p0
-                                var pgeo_n3_2 = cross(pdp_du2, pdp_dv2)
-                                var pgeo_n_len2 = sqrt(dot(pgeo_n3_2, pgeo_n3_2))
-                                if pgeo_n_len2 > Float32(1e-10):
-                                    var pgeo_n2_raw = pgeo_n3_2 * (Float32(1.0)/pgeo_n_len2)
-                                    var ior2 = probe2_mat.albedo.r
-                                    var eta2 = ior2 if dot(pgeo_n2_raw, shadow_dir) <= Float32(0) else (Float32(1.0)/ior2)
-                                    var pgeo_n2 = pgeo_n2_raw
-                                    if dot(pgeo_n2, shadow_dir) > Float32(0.0):
-                                        pgeo_n2 = -pgeo_n2
-                                    var pu2 = probe2_inter.u; var pvb2 = probe2_inter.v
-                                    var x2_init = p2p0*(Float32(1.0)-pu2-pvb2) + p2p1*pu2 + p2p2*pvb2
-                                    var (ok2, x1_f2, x2_f2, bsdf_prod, dx1_dxl2) = _mnee_walk2(
-                                        hit_point, light_point,
-                                        x1_init, pgeo_n, pdp_du, pdp_dv, eta1,
-                                        x2_init, pgeo_n2, pdp_du2, pdp_dv2, eta2,
-                                        ldp_du_v, ldp_dv_v)
-                                    if ok2:
-                                        var wi2f = hit_point - x1_f2
-                                        var wi2fl = sqrt(dot(wi2f,wi2f))
-                                        if wi2fl > Float32(1e-8):
-                                            var wi2fn = wi2f*(Float32(1)/wi2fl)
-                                            var cos_s_x0 = dot(normal, -wi2fn)
-                                            if cos_s_x0 > Float32(0):
-                                                var G2 = min(abs(dot(wi2fn,pgeo_n))/(wi2fl*wi2fl)*dx1_dxl2, Float32(2.0))
-                                                var pdf_area2 = light_sel_pdf_nee / al.total_area
-                                                var wo2f = light_point - x2_f2
-                                                var wo2fl = sqrt(dot(wo2f,wo2f))
-                                                if wo2fl > Float32(1e-8):
-                                                    var wo2fn = wo2f*(Float32(1)/wo2fl)
-                                                    var vis2_org = x2_f2 + wo2fn*Float32(0.001)
-                                                    var vis2_ray = Ray_C(Point3f(vis2_org[0],vis2_org[1],vis2_org[2]), Vec3f(wo2fn[0],wo2fn[1],wo2fn[2]))
-                                                    if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis2_ray, wo2fl*Float32(0.999),
-                                                                  ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances):
-                                                        var mnee_wt2 = bxdf_eval_diffuse(alb) * al.emission * (cos_s_x0 * G2 * bsdf_prod * lobe_w / pdf_area2)
-                                                        path_ptr[].estimate += path_ptr[].throughput * mnee_wt2
-                        else:
-                            # --- 1-vertex MNEE ---
-                            var (mnee_ok, x1_f, det_b, eta_f) = _mnee_walk(
-                                hit_point, light_point, x1_init, pgeo_n, pdp_du, pdp_dv, eta1)
-                            if mnee_ok:
-                                var wi_f = hit_point - x1_f
-                                var wi_len2_f = dot(wi_f, wi_f)
-                                var wo_f = light_point - x1_f
-                                var wo_len2_f = dot(wo_f, wo_f)
-                                if wi_len2_f > Float32(1e-8) and wo_len2_f > Float32(1e-8):
-                                    var wi_len_f = sqrt(wi_len2_f)
-                                    var wo_len_f = sqrt(wo_len2_f)
-                                    var wi_fn = wi_f * (Float32(1.0) / wi_len_f)
-                                    var wo_fn = wo_f * (Float32(1.0) / wo_len_f)
-                                    var cos_s_x0 = dot(normal, -wi_fn)
-                                    if cos_s_x0 > Float32(0.0):
-                                        var H3_f = -(wi_fn + wo_fn * eta_f)
-                                        var H_len2_f = dot(H3_f, H3_f)
-                                        if H_len2_f > Float32(1e-10):
-                                            var H_len_f = sqrt(H_len2_f)
-                                            var H_f = H3_f * (Float32(1.0) / H_len_f)
-                                            var dp_du_dot_n = dot(pdp_du, pgeo_n)
-                                            var s3_f = pdp_du - pgeo_n * dp_du_dot_n
-                                            var s_len2_f = dot(s3_f, s3_f)
-                                            if s_len2_f > Float32(1e-10):
-                                                var s_f = s3_f * (Float32(1.0) / sqrt(s_len2_f))
-                                                var t_f = cross(pgeo_n, s_f)
-                                                var ilo_l = eta_f / (H_len_f * wo_len_f)
-                                                var dHdu_l = (ldp_du_v - wo_fn * dot(wo_fn, ldp_du_v)) * ilo_l
-                                                var dHdv_l = (ldp_dv_v - wo_fn * dot(wo_fn, ldp_dv_v)) * ilo_l
-                                                dHdu_l -= H_f * dot(dHdu_l, H_f); dHdu_l = -dHdu_l
-                                                dHdv_l -= H_f * dot(dHdv_l, H_f); dHdv_l = -dHdv_l
-                                                var dc00 = dot(dHdu_l, s_f); var dc01 = dot(dHdv_l, s_f)
-                                                var dc10 = dot(dHdu_l, t_f); var dc11 = dot(dHdv_l, t_f)
-                                                var det_dc = dc00*dc11 - dc01*dc10
-                                                var dx1_dxl = abs(det_dc) / max(abs(det_b), Float32(1e-8))
-                                                var dw0_dx1 = abs(dot(wi_fn, pgeo_n)) / (wi_len2_f)
-                                                var G = min(dw0_dx1 * dx1_dxl, Float32(2.0))
-                                                var cosNI = abs(dot(pgeo_n, wi_fn))
-                                                var cosHI = abs(dot(H_f, wi_fn))
-                                                var cosTM = abs(dot(pgeo_n, H_f))
-                                                var F_r = fr_dielectric(cosNI, eta_f)
-                                                var T_f = Float32(1.0) - F_r
-                                                var bsdf_s = T_f * cosHI / max(cosNI * cosTM * cosTM, Float32(1e-6))
-                                                var pdf_area_x2 = light_sel_pdf_nee / al.total_area
-                                                var vis_org = x1_f + wo_fn * Float32(0.001)
-                                                var vis_ray = Ray_C(
-                                                    Point3f(vis_org[0], vis_org[1], vis_org[2]),
-                                                    Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
-                                                if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis_ray, wo_len_f * Float32(0.999),
-                                                              ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances):
-                                                    var mnee_wt = bxdf_eval_diffuse(alb) * al.emission * (cos_s_x0 * G * bsdf_s * lobe_w / pdf_area_x2)
-                                                    path_ptr[].estimate += path_ptr[].throughput * mnee_wt
+            # MNEE glass-caustic probing, shared verbatim with ReSTIR DI's
+            # di_resolve via _mnee_area_light_contribute above. Returns True
+            # when a dielectric intervened and it has already added the
+            # refracted contribution -- in that case the straight shadow ray
+            # below is deliberately skipped (MNEE replaces it, it does not
+            # supplement it).
+            var used_mnee = _mnee_area_light_contribute(
+                path_ptr, ctx, normal, hit_point, alb, shadow_dir, dist,
+                light_point, ldp_du_v, ldp_dv_v, al,
+                al.total_area / light_sel_pdf_nee, lobe_w)
             if not used_mnee:
                 _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)
 
@@ -2412,12 +2483,18 @@ comptime DI_RIS_CANDIDATES: Int = 16
 
 def _di_sample_candidate(
     ctx: ShadeContext, hit_point: SIMD[DType.float32, 3], mut pcg: PCG32,
-) -> Tuple[Bool, Int32, SIMD[DType.float32, 3], SIMD[DType.float32, 3], RGB, Float32]:
+) -> Tuple[Bool, Int32, SIMD[DType.float32, 3], SIMD[DType.float32, 3], RGB, Float32,
+           SIMD[DType.float32, 3], SIMD[DType.float32, 3]]:
     """One RIS candidate draw: (valid, light_idx, sample_point,
-    light_normal, Le, generation_pdf). Mirrors _sample_area_light_nee's
-    math but keeps the sampled point/normal the reservoir payload needs --
-    that function only returns the derived wi/dist, not the point itself."""
-    var invalid = (False, Int32(-1), SIMD[DType.float32, 3](Float32(0)), SIMD[DType.float32, 3](Float32(0)), RGB(Float32(0)), Float32(0))
+    light_normal, Le, generation_pdf, ldp_du, ldp_dv). Mirrors
+    _sample_area_light_nee's math but keeps the sampled point/normal the
+    reservoir payload needs -- that function only returns the derived
+    wi/dist, not the point itself. The trailing tangent pair is the light
+    surface's own parameterization at the sampled point, kept (rather than
+    discarded as `_, _`) so a resampled winner can still run MNEE in
+    di_resolve -- see DIReservoir's ldp_du/ldp_dv docs."""
+    var zero3 = SIMD[DType.float32, 3](Float32(0))
+    var invalid = (False, Int32(-1), zero3, zero3, RGB(Float32(0)), Float32(0), zero3, zero3)
     if ctx.lights.area_light_count == 0:
         return invalid
     var u_light = pcg.next_float()
@@ -2427,7 +2504,7 @@ def _di_sample_candidate(
     var al = ctx.lights.area_lights[light_idx]
     var r1 = pcg.next_float()
     var r2 = pcg.next_float()
-    var (light_point, light_normal, _, _) = _sample_light_point_and_normal(ctx, al, r1, r2, pcg)
+    var (light_point, light_normal, ldp_du_v, ldp_dv_v) = _sample_light_point_and_normal(ctx, al, r1, r2, pcg)
     var to_light = light_point - hit_point
     var dist_sq = dot(to_light, to_light)
     if dist_sq <= Float32(1e-8) or al.total_area <= Float32(0.0):
@@ -2440,7 +2517,7 @@ def _di_sample_candidate(
     var pdf = dist_sq * light_sel_pdf / (cos_l * al.total_area)
     if pdf <= Float32(0.0):
         return invalid
-    return (True, Int32(light_idx), light_point, light_normal, al.emission, pdf)
+    return (True, Int32(light_idx), light_point, light_normal, al.emission, pdf, ldp_du_v, ldp_dv_v)
 
 def di_generate_reservoir(
     ctx: ShadeContext, hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3],
@@ -2452,7 +2529,7 @@ def di_generate_reservoir(
     by di_resolve."""
     var res = di_reservoir_init()
     for _ in range(DI_RIS_CANDIDATES):
-        var (valid, light_idx, sample_point, light_normal, le, gen_pdf) = _di_sample_candidate(ctx, hit_point, pcg)
+        var (valid, light_idx, sample_point, light_normal, le, gen_pdf, ldp_du_v, ldp_dv_v) = _di_sample_candidate(ctx, hit_point, pcg)
         if not valid:
             # A rejected candidate is still a REAL draw from q -- it just
             # landed where the target function is zero (light facing away,
@@ -2476,6 +2553,8 @@ def di_generate_reservoir(
             res.light_idx = light_idx
             res.sample_point = sample_point
             res.light_normal = light_normal
+            res.ldp_du = ldp_du_v
+            res.ldp_dv = ldp_dv_v
             res.le = le
     return res
 
@@ -2530,7 +2609,27 @@ def di_resolve(
     # brightness bias into a ~28% one on staircase2 (400x400, vs a 128spp
     # plain-NEE reference).
     var contrib = path_ptr[].throughput * bxdf_eval_diffuse(alb) * res.le * (cos_s * res.state.w * mis_w)
-    _shadow_contribute[False](path_ptr, ctx, hit_point, wi, dist * Float32(0.9999), contrib)
+
+    # MNEE, shared verbatim with _nee_area_lights. Without this the ReSTIR
+    # path lost every bit of light reaching a surface THROUGH glass (the
+    # straight shadow ray below is simply occluded by the dielectric), which
+    # measured ~9% of staircase2's mean, spatially concentrated on the wall
+    # and treads behind its glass railing.
+    #
+    # Measure conversion is the one thing that differs from the plain-NEE
+    # caller: MNEE divides by an AREA-measure light pdf, but res.state.w
+    # estimates 1/q in SOLID-ANGLE measure (_di_sample_candidate's gen_pdf
+    # carries the dist^2/cos_l factor). Since q_sa = q_A * dist^2/cos_l,
+    # 1/q_A = w * dist^2/cos_l, using the STRAIGHT-LINE dist/cos_l that
+    # gen_pdf itself was built from (NOT the refracted path's geometry --
+    # the manifold walk supplies its own G, and this factor is only undoing
+    # the sampling measure, not describing the transport).
+    var used_mnee = _mnee_area_light_contribute(
+        path_ptr, ctx, normal, hit_point, alb, wi, dist,
+        res.sample_point, res.ldp_du, res.ldp_dv, al,
+        res.state.w * dist_sq / cos_l, Float32(1.0))
+    if not used_mnee:
+        _shadow_contribute[False](path_ptr, ctx, hit_point, wi, dist * Float32(0.9999), contrib)
 
 comptime DI_TEMPORAL_M_CAP: Float32 = Float32(20 * DI_RIS_CANDIDATES)
 # Phase 2.5 spatial reuse tuning, per the plan's own "k ~= 3-5 neighbors"
@@ -2578,6 +2677,8 @@ def di_temporal_step(
                 res.light_idx = prev.light_idx
                 res.sample_point = prev.sample_point
                 res.light_normal = prev.light_normal
+                res.ldp_du = prev.ldp_du
+                res.ldp_dv = prev.ldp_dv
                 res.le = prev.le
 
         if _is_real_ptr(restir_io.gbuf_normal) and restir_io.frame_w > Int32(0) and restir_io.frame_h > Int32(0):
@@ -2614,6 +2715,8 @@ def di_temporal_step(
                     res.light_idx = nb.light_idx
                     res.sample_point = nb.sample_point
                     res.light_normal = nb.light_normal
+                    res.ldp_du = nb.ldp_du
+                    res.ldp_dv = nb.ldp_dv
                     res.le = nb.le
 
     di_resolve(path_ptr, ctx, hit_point, normal, alb, res)
