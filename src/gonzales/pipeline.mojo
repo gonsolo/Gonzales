@@ -971,8 +971,8 @@ def parse_and_render(
         var n_meshes_vk = 0
         var max_rays_vk = Int64(n_pixels) * Int64(WAVEFRONT_BATCH)
         if use_vk:
-            if psc[0].curve_count > Int32(0) or psc[0].sphere_count > Int32(0):
-                print("WARNING: --vulkan-rt-shade requested but scene uses curves/spheres (unsupported) -- falling back to CUDA intersection")
+            if psc[0].curve_count > Int32(0):
+                print("WARNING: --vulkan-rt-shade requested but scene uses curves (unsupported) -- falling back to CUDA intersection")
                 use_vk = False
             else:
                 n_meshes_vk = Int(psc[0].mesh_count)

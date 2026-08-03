@@ -2450,6 +2450,30 @@ def vulkaninterop_unpack_results_kernel(
     else:
         inter[tid].hit = Int8(0)
 
+# Analytic sphere test as a SEPARATE pass after the Vulkan-RT-traced mesh/
+# instance hit above -- exactly mirrors how traverse_paths_gpu (the pure-
+# CUDA path) composes traverse_bvh2_core_defer_curves + test_spheres
+# already: test_spheres itself keeps whichever hit is closer (it reads
+# result[0].tHit as its starting max-distance when result[0].hit != 0), so
+# calling it here with whatever vulkaninterop_unpack_results_kernel just
+# wrote is correct without any extra "closest of two" logic on this side.
+# Spheres stay purely analytic (exact intersection/normals) rather than
+# tessellated into the Vulkan BLAS/TLAS -- simpler, and free of any
+# tessellation-precision tradeoff.
+def vulkaninterop_test_spheres_gpu(
+    paths: UnsafePointer[PathState_C, MutAnyOrigin],
+    inter: UnsafePointer[Intersection_C, MutAnyOrigin],
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    n_spheres: Int,
+    count: Int,
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    if paths[tid].active == 0:
+        return
+    test_spheres(spheres, n_spheres, paths[tid].ray, inter + tid)
+
 # Host driver: enqueues pack -> interop ray-query dispatch -> unpack, ALL
 # on ctx.stream() in strict program order, with NO ctx.synchronize()
 # anywhere -- vulkaninterop_rt_trace's internal CUDA-signal/Vulkan-submit/
@@ -2459,9 +2483,10 @@ def vulkaninterop_unpack_results_kernel(
 # fast where the retired host-round-trip version was ~94x slower: no CPU
 # stall, no host-memory copy, anywhere in this function.
 #
-# Scope: triangle geometry only, matching vulkaninterop_rt_create_scene --
-# caller must only invoke this for scenes with no curves/spheres/object
-# instancing (mirrors debug_render_vulkanrt's own scope boundary).
+# Scope: triangle/instance geometry via Vulkan RT, PLUS an analytic sphere
+# pass (see vulkaninterop_test_spheres_gpu) -- caller must only invoke this
+# for scenes with no curves (mirrors debug_render_vulkanrt's own scope
+# boundary; spheres and object instancing are both supported now).
 def vulkaninterop_rt_traverse_paths_gpu(
     ctx: DeviceContext,
     path_buf: DeviceBuffer[DType.uint8],
@@ -2474,6 +2499,8 @@ def vulkaninterop_rt_traverse_paths_gpu(
     n_meshes: Int,
     n_total: Int,
     instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]] = None,
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin] = UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(),
+    n_spheres: Int = 0,
 ) raises:
     comptime block_size = 256
     var grid = ceildiv(n_total, block_size)
@@ -2502,6 +2529,16 @@ def vulkaninterop_rt_traverse_paths_gpu(
         instance_base_mesh_ptr,
         grid_dim=grid, block_dim=block_size,
     )
+
+    if n_spheres > 0:
+        ctx.enqueue_function[vulkaninterop_test_spheres_gpu](
+            path_buf.unsafe_ptr().bitcast[PathState_C](),
+            inter_buf.unsafe_ptr().bitcast[Intersection_C](),
+            spheres,
+            n_spheres,
+            n_total,
+            grid_dim=grid, block_dim=block_size,
+        )
 
 
 # ── Curve-divergence-mitigation kernels (companions to traverse_paths_gpu) ────
@@ -2884,6 +2921,8 @@ def _gpu_bounce_kernels(
             n_meshes_vk,
             n,
             instance_base_mesh_buf,
+            handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+            handle[].n_spheres,
         )
     else:
         handle[].ctx.enqueue_function[traverse_paths_gpu](
