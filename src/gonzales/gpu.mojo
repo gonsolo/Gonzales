@@ -2463,16 +2463,33 @@ def vulkaninterop_unpack_results_kernel(
                          Int8(0), Int8(0), Int8(0), Int8(0)),
                 hitT, u, v, Int8(1), Int8(0), Int8(0), Int8(0),
             )
+    elif hitFlag == Int32(2):
+        # Curve hit, resolved directly by intersect_batch.comp itself (real
+        # ray-vs-curve narrow-phase test + rayQueryGenerateIntersectionEXT
+        # on a valid hit) -- no candidate buffer, no separate CUDA resolve
+        # pass. hitMesh/hitTriangle/geometryIndex already carry PrimId_C's
+        # id1 (curve index)/id2 (packed piece info)/materialIndex directly
+        # (see vulkaninterop_rt_create_scene's docstring), so this is a
+        # straight repack, no lookups needed. u/v here are intersect_curve's
+        # own (h, v) outputs, not barycentrics.
+        var curve_idx = Int64(iresults[idx + 4])
+        var piece_info = Int64(iresults[idx + 5])
+        var mat_idx = Int64(iresults[idx + 7])
+        var hitT = results[idx + 0]
+        var h = results[idx + 1]
+        var v = results[idx + 2]
+        inter[tid] = Intersection_C(
+            PrimId_C(curve_idx, piece_info, mat_idx, Int32(-1), Int8(5), Int8(0), Int8(0), Int8(0)),
+            hitT, h, v, Int8(1), Int8(0), Int8(0), Int8(0),
+        )
     else:
         # tHit must be reset to the "no hit yet" sentinel (matching
         # traverse_bvh2_core_defer_curves's convention), not just hit=0 --
-        # resolve_curve_candidates_gpu uses results[pathId].tHit as the
-        # max-distance bound when testing curve candidates against a prior
-        # mesh/instance hit. Leaving it at whatever inter_buf held from an
-        # earlier bounce silently rejects every real curve hit as "farther
-        # than the (stale) current best". Never observed before curves-only
-        # (mesh_count==0) scenes existed for Vulkan RT to actually render --
-        # every earlier scene had a real triangle hit supplying a real tHit.
+        # vulkaninterop_test_spheres_gpu (called right after this kernel)
+        # uses result[0].tHit as its starting max-distance. Leaving it at
+        # whatever inter_buf held from an earlier bounce would silently
+        # reject a real closer sphere hit as "farther than the (stale)
+        # current best".
         var dummy_id = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
         inter[tid] = Intersection_C(dummy_id, Float32(1.0e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
 
@@ -2556,12 +2573,10 @@ def vulkaninterop_rt_traverse_paths_gpu(
         grid_dim=grid, block_dim=block_size,
     )
 
-    # Curve candidates (if any) are left entirely in the Vulkan-interop
-    # buffers -- no copy into a same-sized CUDA-side duplicate. The caller
-    # (_gpu_bounce_kernels) reads their CUDA pointers DIRECTLY for
-    # compact_curve_paths_gpu/resolve_curve_candidates_gpu, halving the
-    # memory cost per unit of pool capacity versus copying (see
-    # vulkaninterop.cpp's InteropRtScene::curveCandBuffer comment).
+    # Curves need no further handling here at all -- intersect_batch.comp
+    # already resolved them (real narrow-phase test + generate on a valid
+    # hit) as part of the SAME dispatch, and vulkaninterop_unpack_results_
+    # kernel above already decoded a curve hit (hitFlag==2) into inter_buf.
 
     if n_spheres > 0:
         ctx.enqueue_function[vulkaninterop_test_spheres_gpu](
@@ -2594,11 +2609,13 @@ def reset_curve_counter_gpu(counter: UnsafePointer[Int32, MutAnyOrigin]):
 
 # The CUDA-native path (traverse_bvh2_core_defer_curves) always writes
 # curve candidates at tid*CURVE_DEFER_K -- this reproduces that formula once
-# at buffer-creation time so curve_cand_offset_buf is valid immediately for
-# CUDA-only rendering (never touched again there). The Vulkan RT path
-# overwrites every entry every bounce with its own uncapped pool offsets
-# (see vulkaninterop_copy_curve_candidates_gpu) -- this initializer never
-# runs again once that happens, but is harmless to have run first.
+# at buffer-creation time so curve_cand_offset_buf is valid immediately.
+# Vulkan RT rendering never touches curve_cand_prim_buf/curve_cand_count_buf/
+# curve_cand_offset_buf at all anymore -- intersect_batch.comp resolves
+# curve hits itself and writes them straight into the ordinary results
+# buffer (see vulkaninterop_unpack_results_kernel's hitFlag==2 branch), so
+# compact_curve_paths_gpu/resolve_curve_candidates_gpu never run for a
+# Vulkan-RT render (see _gpu_bounce_kernels).
 def init_curve_cand_offset_gpu(offset_buf: UnsafePointer[Int32, MutAnyOrigin], n: Int):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= n:
@@ -2954,13 +2971,6 @@ def _gpu_bounce_kernels(
     # vulkaninterop_unpack_results_kernel) -- None for scenes with no
     # instancing, matching every other Optional buffer above.
     instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]] = None,
-    # Curve candidates for Vulkan RT hits: their Vulkan-interop CUDA
-    # pointers are read DIRECTLY below (no copy into a same-sized CUDA-side
-    # duplicate -- see vulkaninterop.cpp's InteropRtScene::curveCandBuffer
-    # comment) -- None for scenes with no curves.
-    interop_curve_cand_buf: Optional[DeviceBuffer[DType.uint8]] = None,
-    interop_curve_cand_count_buf: Optional[DeviceBuffer[DType.uint8]] = None,
-    interop_curve_cand_offset_buf: Optional[DeviceBuffer[DType.uint8]] = None,
 ) raises:
     comptime block_size = 256
     if use_vulkan_rt:
@@ -2998,28 +3008,21 @@ def _gpu_bounce_kernels(
             grid_dim=grid_dim,
             block_dim=block_size,
         )
-    if handle[].n_curves > 0:
-        # CUDA-native rendering owns/writes handle[]'s own small curve_cand_*
-        # buffers directly (traverse_paths_gpu above). Vulkan RT rendering
-        # never touches them at all -- its shader writes candidates into
-        # its own, independently (and much more generously) sized interop
-        # pool, whose CUDA pointers are read HERE directly, unconditionally
-        # for every bounce of a Vulkan-RT render (use_vulkan_rt is fixed for
-        # the whole render, not chosen per bounce).
-        var cand_prim_ptr = handle[].curve_cand_prim_buf.unsafe_ptr().bitcast[Int32]()
-        var cand_count_ptr = handle[].curve_cand_count_buf.unsafe_ptr().bitcast[Int32]()
-        var cand_offset_ptr = handle[].curve_cand_offset_buf.unsafe_ptr().bitcast[Int32]()
-        if use_vulkan_rt and interop_curve_cand_buf and interop_curve_cand_count_buf and interop_curve_cand_offset_buf:
-            cand_prim_ptr = interop_curve_cand_buf.value().unsafe_ptr().bitcast[Int32]()
-            cand_count_ptr = interop_curve_cand_count_buf.value().unsafe_ptr().bitcast[Int32]()
-            cand_offset_ptr = interop_curve_cand_offset_buf.value().unsafe_ptr().bitcast[Int32]()
-
+    # Deferred-candidate curve resolution only applies to the CUDA-native
+    # intersection path (traverse_paths_gpu above, which defers candidates
+    # into handle[]'s own curve_cand_* buffers). A Vulkan-RT render never
+    # populates those buffers at all -- intersect_batch.comp resolves curve
+    # hits itself, inline, as part of the SAME dispatch that traces meshes
+    # (see vulkaninterop_rt_traverse_paths_gpu / vulkaninterop_unpack_
+    # results_kernel's hitFlag==2 branch) -- so this whole compact+resolve
+    # pass is CUDA-native-only.
+    if handle[].n_curves > 0 and not use_vulkan_rt:
         handle[].ctx.enqueue_function[reset_curve_counter_gpu](
             handle[].curve_compact_counter_buf.unsafe_ptr().bitcast[Int32](),
             grid_dim=1, block_dim=1,
         )
         handle[].ctx.enqueue_function[compact_curve_paths_gpu](
-            cand_count_ptr,
+            handle[].curve_cand_count_buf.unsafe_ptr().bitcast[Int32](),
             n,
             handle[].curve_compact_path_buf.unsafe_ptr().bitcast[Int32](),
             handle[].curve_compact_counter_buf.unsafe_ptr().bitcast[Int32](),
@@ -3028,9 +3031,9 @@ def _gpu_bounce_kernels(
         handle[].ctx.enqueue_function[resolve_curve_candidates_gpu](
             handle[].curve_compact_path_buf.unsafe_ptr().bitcast[Int32](),
             handle[].curve_compact_counter_buf.unsafe_ptr().bitcast[Int32](),
-            cand_prim_ptr,
-            cand_count_ptr,
-            cand_offset_ptr,
+            handle[].curve_cand_prim_buf.unsafe_ptr().bitcast[Int32](),
+            handle[].curve_cand_count_buf.unsafe_ptr().bitcast[Int32](),
+            handle[].curve_cand_offset_buf.unsafe_ptr().bitcast[Int32](),
             handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
             handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
             handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
@@ -3564,9 +3567,6 @@ def gpu_render_wavefront(
     mesh_al_idx_buf: Optional[DeviceBuffer[DType.uint8]] = None,
     n_meshes_vk: Int = 0,
     instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]] = None,
-    interop_curve_cand_buf: Optional[DeviceBuffer[DType.uint8]] = None,
-    interop_curve_cand_count_buf: Optional[DeviceBuffer[DType.uint8]] = None,
-    interop_curve_cand_offset_buf: Optional[DeviceBuffer[DType.uint8]] = None,
 ):
     # --restir batch rendering does not go through this function at all
     # (docs/A2_restir_migration_plan.md, pipeline.mojo's batch GPU branch):
@@ -3613,9 +3613,6 @@ def gpu_render_wavefront(
                     use_vulkan_rt, interop_scene, interop_rays_buf, interop_results_buf,
                     mesh_material_idx_buf, mesh_al_idx_buf, n_meshes_vk,
                     instance_base_mesh_buf=instance_base_mesh_buf,
-                    interop_curve_cand_buf=interop_curve_cand_buf,
-                    interop_curve_cand_count_buf=interop_curve_cand_count_buf,
-                    interop_curve_cand_offset_buf=interop_curve_cand_offset_buf,
                 )
             handle[].ctx.enqueue_function[accumulate_film_wavefront_gpu](
                 handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),

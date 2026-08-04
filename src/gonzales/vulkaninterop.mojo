@@ -69,15 +69,21 @@ comptime VulkanInteropRtSceneHandle = UnsafePointer[UInt8, MutAnyOrigin]
 # CUDA-importable buffers sized for up to `max_rays` rays/results at once.
 # Pass template_count=0/instance_count=0 (arrays may then be a
 # `.unsafe_dangling()` placeholder) for a scene with no instancing --
-# byte-identical to the pre-instancing behavior. Curves (n_curve_leaves,
-# curve_leaf_aabbs, curve_leaf_prim_idx): NOT tessellated -- one procedural-
-# AABB BLAS carrying each curve BVH leaf's bounding box, resolved via
-# gonzales's existing deferred-candidate scheme (see this function's own
-# docstring in vulkaninterop.h for the exact per-ray candidate mechanism).
-# Pass n_curve_leaves=0 for a scene with no curves -- byte-identical to
-# before curve support existed. Returns a null handle on failure. See
-# vulkaninterop.h's own docstring for the full instancing/curve rationale
-# and the hit-decode convention.
+# byte-identical to the pre-instancing behavior. Curves are NOT tessellated
+# -- one procedural-AABB BLAS carrying each curve BVH leaf's bounding box.
+# Unlike earlier designs (a deferred-candidate buffer of some kind, always
+# finitely capped), intersect_batch.comp now does the real ray-vs-curve
+# narrow-phase test itself and commits a valid hit inline (rayQueryGenerate
+# IntersectionEXT), so no candidate buffer of any kind is needed -- just the
+# curve geometry itself (curve_data/curve_n_pieces, one entry per curve) and
+# 3 parallel per-leaf arrays (curve_leaf_curve_idx/piece_info/mat_idx) the
+# shader uses to test a candidate and, on a hit, report enough for gpu.
+# mojo's vulkaninterop_unpack_results_kernel to reconstruct a full PrimId_C
+# with no further lookups. See vulkaninterop.h's own docstring for the
+# exact per-leaf/per-curve encoding (matches pbrt_parser.mojo's finalize_
+# scene exactly) and the hit-decode convention (hitFlag==2). Pass
+# n_curve_leaves=0/n_curves=0 for a scene with no curves -- byte-identical
+# to before curve support existed. Returns a null handle on failure.
 def vulkaninterop_rt_create_scene(
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     mesh_count: Int64,
@@ -91,7 +97,12 @@ def vulkaninterop_rt_create_scene(
     instance_template_idx: UnsafePointer[Int32, MutAnyOrigin],
     n_curve_leaves: Int64,
     curve_leaf_aabbs: UnsafePointer[Float32, MutAnyOrigin],
-    curve_leaf_prim_idx: UnsafePointer[Int64, MutAnyOrigin],
+    curve_leaf_curve_idx: UnsafePointer[Int32, MutAnyOrigin],
+    curve_leaf_piece_info: UnsafePointer[Int32, MutAnyOrigin],
+    curve_leaf_mat_idx: UnsafePointer[Int32, MutAnyOrigin],
+    n_curves: Int64,
+    curve_data: UnsafePointer[Float32, MutAnyOrigin],
+    curve_n_pieces: UnsafePointer[Int32, MutAnyOrigin],
     max_rays: Int64,
 ) -> VulkanInteropRtSceneHandle:
     return external_call["vulkaninterop_rt_create_scene", VulkanInteropRtSceneHandle,
@@ -99,39 +110,17 @@ def vulkaninterop_rt_create_scene(
         UnsafePointer[Int64, MutAnyOrigin], UnsafePointer[Int64, MutAnyOrigin],
         Int64, UnsafePointer[Int64, MutAnyOrigin], UnsafePointer[Int64, MutAnyOrigin],
         Int64, UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Int32, MutAnyOrigin],
-        Int64, UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Int64, MutAnyOrigin],
+        Int64, UnsafePointer[Float32, MutAnyOrigin],
+        UnsafePointer[Int32, MutAnyOrigin], UnsafePointer[Int32, MutAnyOrigin], UnsafePointer[Int32, MutAnyOrigin],
+        Int64, UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Int32, MutAnyOrigin],
         Int64](
         meshes, mesh_count, point_counts, vertex_index_counts,
         template_count, template_mesh_start, template_mesh_end,
         instance_count, instance_obj_to_world, instance_template_idx,
-        n_curve_leaves, curve_leaf_aabbs, curve_leaf_prim_idx,
+        n_curve_leaves, curve_leaf_aabbs,
+        curve_leaf_curve_idx, curve_leaf_piece_info, curve_leaf_mat_idx,
+        n_curves, curve_data, curve_n_pieces,
         max_rays)
-
-# CUDA device pointer for the shared curve-candidate buffer (max_rays *
-# CURVE_DEFER_K int32s, row-major per ray -- same layout as gpu.mojo's
-# curve_cand_prim_buf). A Mojo copy kernel moves this into
-# curve_cand_prim_buf after the ray-query dispatch (see
-# vulkaninterop_rt_traverse_paths_gpu, gpu.mojo). Always a real (if
-# possibly minimal/unused) pointer, even for scenes with no curves.
-def vulkaninterop_rt_get_curve_cand_ptr(scene: VulkanInteropRtSceneHandle) -> UnsafePointer[Int32, MutAnyOrigin]:
-    return external_call["vulkaninterop_rt_get_curve_cand_ptr", UnsafePointer[Int32, MutAnyOrigin],
-        VulkanInteropRtSceneHandle](scene)
-
-# CUDA device pointer for the shared curve-candidate COUNT buffer (max_rays
-# int32s, one per ray -- same layout as gpu.mojo's curve_cand_count_buf).
-# This is now each ray's REAL, uncapped candidate count (see intersect_
-# batch.comp's "count then place" design), not capped at CURVE_DEFER_K.
-def vulkaninterop_rt_get_curve_cand_count_ptr(scene: VulkanInteropRtSceneHandle) -> UnsafePointer[Int32, MutAnyOrigin]:
-    return external_call["vulkaninterop_rt_get_curve_cand_count_ptr", UnsafePointer[Int32, MutAnyOrigin],
-        VulkanInteropRtSceneHandle](scene)
-
-# CUDA device pointer for the shared curve-candidate OFFSET buffer
-# (max_rays int32s, one per ray): this ray's start offset into the flat
-# curve-candidate pool (vulkaninterop_rt_get_curve_cand_ptr) -- same layout
-# as gpu.mojo's curve_cand_offset_buf.
-def vulkaninterop_rt_get_curve_cand_offset_ptr(scene: VulkanInteropRtSceneHandle) -> UnsafePointer[Int32, MutAnyOrigin]:
-    return external_call["vulkaninterop_rt_get_curve_cand_offset_ptr", UnsafePointer[Int32, MutAnyOrigin],
-        VulkanInteropRtSceneHandle](scene)
 
 # CUDA device pointer for the shared rays buffer (max_rays * 8 floats, same
 # (ox,oy,oz,tmin,dx,dy,dz,tmax) layout vulkanrt_trace_rays takes). Wrap with
@@ -148,7 +137,9 @@ def vulkaninterop_rt_get_rays_ptr(scene: VulkanInteropRtSceneHandle) -> UnsafePo
 # owning=False) and bitcast to read hitMesh/hitTriangle/hitFlag/
 # geometryIndex as Int32/UInt32 (same raw-buffer-bitcast convention
 # gpu.mojo already uses throughout) -- see
-# vulkaninterop_unpack_results_kernel (gpu.mojo) for the instancing decode.
+# vulkaninterop_unpack_results_kernel (gpu.mojo) for the instancing decode
+# and the curve decode (hitFlag==2 -- fields mean something different there,
+# see that kernel's own comment).
 def vulkaninterop_rt_get_results_ptr(scene: VulkanInteropRtSceneHandle) -> UnsafePointer[Float32, MutAnyOrigin]:
     return external_call["vulkaninterop_rt_get_results_ptr", UnsafePointer[Float32, MutAnyOrigin],
         VulkanInteropRtSceneHandle](scene)

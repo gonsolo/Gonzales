@@ -65,12 +65,15 @@ def test_vulkaninterop_rt_trace_matches_known_geometry() raises:
     var no_instances = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
     var no_instance_tmpl = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling()
     var no_curve_aabbs = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
-    var no_curve_prim_idx = UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling()
+    var no_curve_i32 = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling()
+    var no_curve_data = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
     var scene = vulkaninterop_rt_create_scene(
         meshes, Int64(2), point_counts, idx_counts,
         Int64(0), no_templates, no_templates,
         Int64(0), no_instances, no_instance_tmpl,
-        Int64(0), no_curve_aabbs, no_curve_prim_idx,
+        Int64(0), no_curve_aabbs,
+        no_curve_i32, no_curve_i32, no_curve_i32,
+        Int64(0), no_curve_data, no_curve_i32,
         Int64(maxRays))
     assert_true(Int(scene) != 0)
 
@@ -166,12 +169,15 @@ def test_vulkaninterop_rt_instancing_places_template_correctly() raises:
 
     comptime maxRays = 16
     var no_curve_aabbs = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
-    var no_curve_prim_idx = UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling()
+    var no_curve_i32 = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling()
+    var no_curve_data = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
     var scene = vulkaninterop_rt_create_scene(
         meshes, Int64(1), point_counts, idx_counts,
         Int64(1), template_start, template_end,
         Int64(2), o2w, inst_tmpl_idx,
-        Int64(0), no_curve_aabbs, no_curve_prim_idx,
+        Int64(0), no_curve_aabbs,
+        no_curve_i32, no_curve_i32, no_curve_i32,
+        Int64(0), no_curve_data, no_curve_i32,
         Int64(maxRays))
     assert_true(Int(scene) != 0)
 

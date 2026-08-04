@@ -6,7 +6,7 @@ from std.gpu.host import DeviceBuffer
 from .pbrt_parser import ParsedScene_Mojo, mojo_parse_scene, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film, mojo_apply_overrides
 from .rendering import render_all_tiles, normalize_film, fmt_time, progress_str
 from std.time import perf_counter_ns
-from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, Ray_C, dot, TriangleMesh_C, _is_real_ptr, Curve_C, curve_piece_bounds, CURVE_DEFER_K
+from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, Ray_C, dot, TriangleMesh_C, _is_real_ptr, Curve_C, curve_piece_bounds
 from .postprocess import denoise, write_image, write_image_cropped
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 from .bvh import BVH2Node, SceneDescriptor2_C, render_aux_buffers
@@ -21,8 +21,6 @@ from .vulkanrt import VulkanRtSceneHandle, vulkanrt_build_scene, vulkanrt_destro
 from .vulkaninterop import (
     VulkanInteropRtSceneHandle, vulkaninterop_rt_create_scene,
     vulkaninterop_rt_get_rays_ptr, vulkaninterop_rt_get_results_ptr,
-    vulkaninterop_rt_get_curve_cand_ptr, vulkaninterop_rt_get_curve_cand_count_ptr,
-    vulkaninterop_rt_get_curve_cand_offset_ptr,
     vulkaninterop_rt_destroy_scene,
 )
 
@@ -893,12 +891,15 @@ def parse_and_render(
                     var no_instances_vcm = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
                     var no_instance_tmpl_vcm = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling()
                     var no_curve_aabbs_vcm = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
-                    var no_curve_prim_idx_vcm = UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling()
+                    var no_curve_i32_vcm = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling()
+                    var no_curve_data_vcm = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
                     interop_scene_vcm = vulkaninterop_rt_create_scene(
                         vmeshes_vcm, Int64(n_meshes_vk_vcm), point_counts_vcm, vidx_counts_vcm,
                         Int64(0), no_templates_vcm, no_templates_vcm,
                         Int64(0), no_instances_vcm, no_instance_tmpl_vcm,
-                        Int64(0), no_curve_aabbs_vcm, no_curve_prim_idx_vcm,
+                        Int64(0), no_curve_aabbs_vcm,
+                        no_curve_i32_vcm, no_curve_i32_vcm, no_curve_i32_vcm,
+                        Int64(0), no_curve_data_vcm, no_curve_i32_vcm,
                         Int64(max_rays_vk_vcm))
                     vmeshes_vcm.free(); point_counts_vcm.free(); vidx_counts_vcm.free()
                     if Int(interop_scene_vcm) == 0:
@@ -974,9 +975,6 @@ def parse_and_render(
         var mesh_material_idx_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
         var mesh_al_idx_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
         var instance_base_mesh_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
-        var interop_curve_cand_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
-        var interop_curve_cand_count_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
-        var interop_curve_cand_offset_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
         var n_meshes_vk = 0
         var max_rays_vk = Int64(n_pixels) * Int64(WAVEFRONT_BATCH)
         if use_vk:
@@ -1020,20 +1018,29 @@ def parse_and_render(
                 instance_tmpl_idx_vk[k] = Int32(inst.blasIdx)
                 instance_base_mesh_host[k] = psc[0].template_mesh_start[Int(inst.blasIdx)]
 
-            # Curves (item 3 of the plan, the last remaining gap): NOT
-            # tessellated. Scan the ordinary top-level prim_ids for type==5
-            # (curve) leaf entries -- each becomes one procedural AABB (the
-            # union of its piece-group's bounds, same computation
-            # finalize_scene already does for the CPU BVH's own leaf
-            # bounds) tagged with ITS OWN index `i` in `prim_ids`, exactly
-            # the `primIdx` resolve_curve_candidates_gpu (gpu.mojo) expects
-            # -- see vulkaninterop_rt_create_scene's docstring.
+            # Curves: NOT tessellated. Scan the ordinary top-level prim_ids
+            # for type==5 (curve) leaf entries -- each becomes one
+            # procedural AABB (the union of its piece-group's bounds, same
+            # computation finalize_scene already does for the CPU BVH's own
+            # leaf bounds). Unlike earlier designs, intersect_batch.comp
+            # resolves curve hits itself (real narrow-phase test + commit --
+            # see vulkaninterop_rt_create_scene's docstring), so per leaf we
+            # upload exactly what it needs to test a candidate and report a
+            # hit with no further lookups: curve_idx (p.id1), piece_info
+            # (p.id2, already packed first_piece*8+piece_count), and
+            # mat_idx (p.materialIndex, which already resolves curve-area-
+            # light emissive material selection -- see finalize_scene,
+            # pbrt_parser.mojo). curve_data/curve_n_pieces hold each curve's
+            # own control points/widths/piece count once (independent of
+            # how many leaves reference it).
             var n_curve_leaves_vk = 0
             for i in range(Int(psc[0].prim_count)):
                 if psc[0].prim_ids[i].type == Int8(5):
                     n_curve_leaves_vk += 1
             var curve_leaf_aabbs_vk = alloc[Float32](max(n_curve_leaves_vk, 1) * 6)
-            var curve_leaf_prim_idx_vk = alloc[Int64](max(n_curve_leaves_vk, 1))
+            var curve_leaf_curve_idx_vk = alloc[Int32](max(n_curve_leaves_vk, 1))
+            var curve_leaf_piece_info_vk = alloc[Int32](max(n_curve_leaves_vk, 1))
+            var curve_leaf_mat_idx_vk = alloc[Int32](max(n_curve_leaves_vk, 1))
             var curve_leaf_write = 0
             for i in range(Int(psc[0].prim_count)):
                 var p = psc[0].prim_ids[i]
@@ -1050,19 +1057,38 @@ def parse_and_render(
                 var b = curve_leaf_write * 6
                 curve_leaf_aabbs_vk[b+0] = xmin; curve_leaf_aabbs_vk[b+1] = ymin; curve_leaf_aabbs_vk[b+2] = zmin
                 curve_leaf_aabbs_vk[b+3] = xmax; curve_leaf_aabbs_vk[b+4] = ymax; curve_leaf_aabbs_vk[b+5] = zmax
-                curve_leaf_prim_idx_vk[curve_leaf_write] = Int64(i)
+                curve_leaf_curve_idx_vk[curve_leaf_write] = Int32(p.id1)
+                curve_leaf_piece_info_vk[curve_leaf_write] = Int32(p.id2)
+                curve_leaf_mat_idx_vk[curve_leaf_write] = Int32(p.materialIndex)
                 curve_leaf_write += 1
+
+            var n_curves_vk = Int(psc[0].curve_count)
+            var curve_data_vk = alloc[Float32](max(n_curves_vk, 1) * 14)
+            var curve_n_pieces_vk = alloc[Int32](max(n_curves_vk, 1))
+            for ci in range(n_curves_vk):
+                var c = psc[0].curves[ci]
+                var cb = ci * 14
+                curve_data_vk[cb+0] = c.cp0.x; curve_data_vk[cb+1] = c.cp0.y; curve_data_vk[cb+2] = c.cp0.z
+                curve_data_vk[cb+3] = c.cp1.x; curve_data_vk[cb+4] = c.cp1.y; curve_data_vk[cb+5] = c.cp1.z
+                curve_data_vk[cb+6] = c.cp2.x; curve_data_vk[cb+7] = c.cp2.y; curve_data_vk[cb+8] = c.cp2.z
+                curve_data_vk[cb+9] = c.cp3.x; curve_data_vk[cb+10] = c.cp3.y; curve_data_vk[cb+11] = c.cp3.z
+                curve_data_vk[cb+12] = c.width0; curve_data_vk[cb+13] = c.width1
+                curve_n_pieces_vk[ci] = c.n_pieces
 
             interop_scene = vulkaninterop_rt_create_scene(
                 vmeshes, Int64(n_meshes_vk), point_counts, vidx_counts,
                 Int64(n_templates_vk), template_mesh_start_vk, template_mesh_end_vk,
                 Int64(n_instances_vk), instance_o2w_vk, instance_tmpl_idx_vk,
-                Int64(n_curve_leaves_vk), curve_leaf_aabbs_vk, curve_leaf_prim_idx_vk,
+                Int64(n_curve_leaves_vk), curve_leaf_aabbs_vk,
+                curve_leaf_curve_idx_vk, curve_leaf_piece_info_vk, curve_leaf_mat_idx_vk,
+                Int64(n_curves_vk), curve_data_vk, curve_n_pieces_vk,
                 max_rays_vk)
             vmeshes.free(); point_counts.free(); vidx_counts.free()
             template_mesh_start_vk.free(); template_mesh_end_vk.free()
             instance_o2w_vk.free(); instance_tmpl_idx_vk.free()
-            curve_leaf_aabbs_vk.free(); curve_leaf_prim_idx_vk.free()
+            curve_leaf_aabbs_vk.free()
+            curve_leaf_curve_idx_vk.free(); curve_leaf_piece_info_vk.free(); curve_leaf_mat_idx_vk.free()
+            curve_data_vk.free(); curve_n_pieces_vk.free()
             if Int(interop_scene) == 0:
                 print("WARNING: vulkaninterop_rt_create_scene FAILED -- falling back to CUDA intersection")
                 use_vk = False
@@ -1103,20 +1129,6 @@ def parse_and_render(
                             dst3[k] = instance_base_mesh_host[k]
                     instance_base_mesh_buf_opt = ibm_buf^
                 instance_base_mesh_host.free()
-
-                if n_curve_leaves_vk > 0:
-                    var curveCandPtr = vulkaninterop_rt_get_curve_cand_ptr(interop_scene)
-                    var curveCandCountPtr = vulkaninterop_rt_get_curve_cand_count_ptr(interop_scene)
-                    var curveCandOffsetPtr = vulkaninterop_rt_get_curve_cand_offset_ptr(interop_scene)
-                    interop_curve_cand_buf_opt = DeviceBuffer[DType.uint8](
-                        handle[].ctx, curveCandPtr.bitcast[UInt8](),
-                        Int(max_rays_vk) * Int(CURVE_DEFER_K) * 4, owning=False)
-                    interop_curve_cand_count_buf_opt = DeviceBuffer[DType.uint8](
-                        handle[].ctx, curveCandCountPtr.bitcast[UInt8](),
-                        Int(max_rays_vk) * 4, owning=False)
-                    interop_curve_cand_offset_buf_opt = DeviceBuffer[DType.uint8](
-                        handle[].ctx, curveCandOffsetPtr.bitcast[UInt8](),
-                        Int(max_rays_vk) * 4, owning=False)
 
         var hash_bits = UInt64(mix_bits_u64(UInt64(0)))
         var seed_dim0 = UInt32(hash_bits & UInt64(0xFFFFFFFF))
@@ -1173,8 +1185,6 @@ def parse_and_render(
                     use_vk, interop_scene, interop_rays_buf_opt, interop_results_buf_opt,
                     mesh_material_idx_buf_opt, mesh_al_idx_buf_opt, n_meshes_vk,
                     instance_base_mesh_buf_opt,
-                    interop_curve_cand_buf_opt, interop_curve_cand_count_buf_opt,
-                    interop_curve_cand_offset_buf_opt,
                 )
                 si += actual_batch
                 var elapsed = Float64(perf_counter_ns() - t0_gpu) / 1.0e9

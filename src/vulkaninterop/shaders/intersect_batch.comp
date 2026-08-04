@@ -5,8 +5,7 @@
 // instead of step 2's one-ray-per-dispatch vulkanrt_trace_ray -- one queue
 // submit + wait per ray is far too slow to ever back a real renderer.
 // Every invocation independently traces its own ray against the same TLAS
-// used by trace_ray.comp/smoke.comp; no cross-invocation communication
-// except the workgroup-local curve-candidate pool reservation below.
+// used by trace_ray.comp/smoke.comp; no cross-invocation communication.
 
 layout(local_size_x = 64) in;
 
@@ -22,13 +21,20 @@ struct Result {
     float _pad0;
     int hitMesh;       // instanceCustomIndex: mesh index if < mesh_count, else
                         // (mesh_count + instance index) -- see
-                        // vulkaninterop_rt_create_scene's docstring
-    int hitTriangle;    // primitiveIndex: LOCAL to whichever geometry was hit
-    uint hitFlag;
+                        // vulkaninterop_rt_create_scene's docstring. For a
+                        // CURVE hit (hitFlag==2), this is instead the hit
+                        // curve's index (PrimId_C.id1).
+    int hitTriangle;    // primitiveIndex: LOCAL to whichever geometry was hit.
+                        // For a curve hit, this is the packed first_piece/
+                        // piece_count value (PrimId_C.id2).
+    uint hitFlag;       // 0 = miss, 1 = triangle/instance, 2 = curve (resolved
+                        // by this shader itself, see below).
     int geometryIndex;  // which geometry within the hit BLAS -- always 0 for
                         // an ordinary (single-geometry) mesh BLAS; for an
                         // instance hit, the real mesh index is
-                        // template_mesh_start[template] + geometryIndex
+                        // template_mesh_start[template] + geometryIndex. For
+                        // a curve hit, this is instead the resolved material
+                        // index (PrimId_C.materialIndex).
 };
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelAS;
@@ -40,180 +46,244 @@ layout(set = 0, binding = 2, std430) writeonly buffer ResultsBuffer {
 };
 // Curve support (see vulkaninterop_rt_create_scene's docstring): curve BVH
 // leaves are procedural AABB geometry in the SAME TLAS, distinguished from
-// triangle candidates by intersection TYPE, never confirmed/generated --
-// they never affect the committed triangle/instance hit above.
-//
-// Candidate placement is a two-pass "count then place into a shared pool"
-// scheme (replaces an earlier fixed-per-ray-K-slots design that silently
-// dropped real candidates once a ray exceeded K, and a "keep the K nearest
-// by AABB distance" fix that was correct but regressed dense-hair render
-// time by 2+ orders of magnitude from the extra per-candidate AABB-buffer
-// reads -- see geometry.mojo's CURVE_DEFER_K comment for that history):
-//   Pass 1 (below, in main): trace once, counting this ray's REAL AABB-
-//     candidate total (no cap) while also resolving the committed
-//     triangle/instance hit exactly as before.
-//   Reservation: each 64-ray workgroup computes an exclusive prefix sum of
-//     its 64 rays' counts in `shared` memory (cheap, no global-memory
-//     traffic), then ONE thread does ONE atomicAdd to reserve the whole
-//     workgroup's total in the flat global pool (CurveCandBuffer) --
-//     amortizing atomic contention across 64 rays instead of one atomic
-//     per candidate or per ray.
-//   Pass 2: re-trace the IDENTICAL ray (deterministic against a static
-//     acceleration structure) to place its candidates at their now-known
-//     exact offsets. Must replicate pass 1's triangle-confirming behavior
-//     exactly -- confirming a triangle intersection shrinks the effective
-//     traversal bound, so any divergence between the two passes' commit
-//     behavior would enumerate a different AABB-candidate set than pass 1
-//     already committed `myCount` to, corrupting the next ray's region of
-//     the flat pool.
-// This costs a second ray-query trace per ray (not free) but touches NO
-// extra global memory buffers beyond what pass 1 already reads/writes --
-// the AABB-distance approach's fatal cost was the extra per-candidate
-// global reads, not retracing itself.
-layout(set = 0, binding = 3, std430) readonly buffer CurveLeafPrimIdxBuffer {
-    int curveLeafPrimIdx[];
+// triangle candidates by intersection TYPE. Unlike earlier designs (a
+// fixed-per-ray candidate cap, then a capacity-bounded shared pool -- both
+// eventually dropped or under-counted real candidates on the densest hair
+// once some finite buffer ran out), this version does the REAL ray-vs-curve
+// narrow-phase test (a GLSL port of geometry.mojo's intersect_curve) the
+// moment it sees an AABB candidate, and calls rayQueryGenerateIntersectionEXT
+// to COMMIT a valid hit immediately -- exactly how procedural geometry is
+// meant to work with VK_KHR_ray_query. Committing narrows the ray's
+// effective traversal bound in hardware just like confirming a triangle
+// does, so there is no capacity limit of any kind: correctness no longer
+// depends on any buffer's size, matching the CUDA path's own always-correct
+// guarantee (traverse_bvh2_core_defer_curves). The real cost is doing this
+// math inline for every candidate -- the same class of cost the CUDA path
+// already pays for curves, not a free lunch.
+layout(set = 0, binding = 3, std430) readonly buffer CurveDataBuffer {
+    float curveData[];  // per curve, 14 floats: cp0.xyz,cp1.xyz,cp2.xyz,cp3.xyz,width0,width1
 };
-layout(set = 0, binding = 4, std430) writeonly buffer CurveCandBuffer {
-    int curveCand[];  // flat global pool, indexed by reserved offset, NOT by ray*K
+layout(set = 0, binding = 4, std430) readonly buffer CurveNPiecesBuffer {
+    int curveNPieces[];  // per curve
 };
-layout(set = 0, binding = 5, std430) writeonly buffer CurveCandCountBuffer {
-    int curveCandCount[];  // this ray's REAL candidate count, uncapped
+layout(set = 0, binding = 5, std430) readonly buffer CurveLeafCurveIdxBuffer {
+    int curveLeafCurveIdx[];  // per leaf: index into curveData/curveNPieces
 };
-// Read-write (atomicAdd target) -- reset to 0 every dispatch via
-// vkCmdFillBuffer baked into the same command buffer (see
-// vulkaninterop_rt_trace), so never carries state across dispatches.
-layout(set = 0, binding = 6, std430) buffer GlobalCandCounterBuffer {
-    uint globalCandCounter;
+layout(set = 0, binding = 6, std430) readonly buffer CurveLeafPieceInfoBuffer {
+    int curveLeafPieceInfo[];  // per leaf: packed first_piece*8+piece_count
 };
-layout(set = 0, binding = 7, std430) writeonly buffer CurveCandOffsetBuffer {
-    int curveCandOffset[];  // this ray's start offset into CurveCandBuffer
+layout(set = 0, binding = 7, std430) readonly buffer CurveLeafMatIdxBuffer {
+    int curveLeafMatIdx[];  // per leaf: already-resolved material index
 };
 
 layout(push_constant) uniform PushConstants {
     uint rayCount;
-    uint candPoolCapacity;  // CurveCandBuffer's total element count
 } pc;
 
-shared uint wgCounts[64];
-shared uint wgOffsets[64];
-shared uint wgBase;
+// ---- GLSL port of geometry.mojo's curve_bspline_point/_curve_perp_axis/
+// intersect_curve. Must stay numerically faithful to that implementation --
+// see intersect_curve's own docstring (geometry.mojo) for why it only tests
+// the near root of the ray/cylinder quadratic and relies on adjacent pieces
+// overlapping at their shared endpoint, rather than a textbook capsule test.
+
+vec3 curveBsplinePoint(vec3 cp0, vec3 cp1, vec3 cp2, vec3 cp3, float t) {
+    float t2 = t * t;
+    float t3 = t2 * t;
+    float b0 = (1.0 - 3.0*t + 3.0*t2 - t3) / 6.0;
+    float b1 = (4.0 - 6.0*t2 + 3.0*t3) / 6.0;
+    float b2 = (1.0 + 3.0*t + 3.0*t2 - 3.0*t3) / 6.0;
+    float b3 = t3 / 6.0;
+    return cp0*b0 + cp1*b1 + cp2*b2 + cp3*b3;
+}
+
+vec3 curvePerpAxis(vec3 t) {
+    float ux, uy, uz;
+    if (abs(t.y) < 0.9) {
+        ux = -t.z; uy = 0.0; uz = t.x;
+    } else {
+        ux = 0.0; uy = t.z; uz = -t.y;
+    }
+    vec3 v = vec3(ux, uy, uz);
+    float l = sqrt(dot(v, v));
+    if (l > 1e-12) {
+        return v * (1.0 / l);
+    }
+    return vec3(1.0, 0.0, 0.0);
+}
+
+// Ray vs. a small contiguous run of locally-linear pieces (fixed-radius
+// cylinders) of one curve segment: [firstPiece, firstPiece+pieceCount).
+// Returns true on a valid hit closer than tMaxIn, with outT/outH/outV set
+// (h = signed fiber cross-section position in [-1,1], v = position along
+// this curve's own [0,1] parameter range) -- see geometry.mojo's
+// intersect_curve for the full derivation, ported here field-for-field.
+bool intersectCurve(
+    vec3 rayOrg, vec3 rayDir,
+    vec3 cp0, vec3 cp1, vec3 cp2, vec3 cp3,
+    float width0, float width1, int nPieces,
+    int firstPiece, int pieceCount, float tMaxIn,
+    out float outT, out float outH, out float outV
+) {
+    float nPiecesF = float(nPieces);
+    bool bestHit = false;
+    float bestT = tMaxIn;
+    float bestH = 0.0;
+    float bestV = 0.0;
+
+    for (int piece = firstPiece; piece < firstPiece + pieceCount; piece++) {
+        float t0 = float(piece) / nPiecesF;
+        float t1 = float(piece + 1) / nPiecesF;
+        vec3 q0 = curveBsplinePoint(cp0, cp1, cp2, cp3, t0);
+        vec3 q1 = curveBsplinePoint(cp0, cp1, cp2, cp3, t1);
+        float r0 = (width0 + (width1 - width0) * t0) * 0.5;
+        float r1 = (width0 + (width1 - width0) * t1) * 0.5;
+        float r = (r0 + r1) * 0.5;
+        if (r < 1e-8) continue;
+        vec3 axis = q1 - q0;
+        float axisLenSq = dot(axis, axis);
+        if (axisLenSq < 1e-16) continue;
+
+        // Ray-vs-infinite-cylinder-around-`axis` via cross products -- see
+        // geometry.mojo's intersect_curve for why this avoids normalizing
+        // axis in the common (this-piece-not-hit) case.
+        vec3 oc = rayOrg - q0;
+        vec3 A = cross(axis, rayDir);
+        vec3 B = cross(axis, oc);
+        float a = dot(A, A);
+        if (a < 1e-12) continue;
+        float b = 2.0 * dot(A, B);
+        float c = dot(B, B) - r*r*axisLenSq;
+        float disc = b*b - 4.0*a*c;
+        if (disc < 0.0) continue;
+
+        float tc = (-b - sqrt(disc)) / (2.0 * a);
+        if (tc <= 1e-4 || tc >= bestT) continue;
+
+        float axisLen = sqrt(axisLenSq);
+        vec3 axisDir = axis * (1.0 / axisLen);
+        vec3 hitPos = (rayOrg + tc*rayDir) - q0;
+        float s = dot(hitPos, axisDir);
+        if (s < 0.0 || s > axisLen) continue;
+
+        vec3 offsetPerp = hitPos - s * axisDir;
+        vec3 uAxis = curvePerpAxis(axisDir);
+        bestHit = true;
+        bestT = tc;
+        bestH = clamp(dot(offsetPerp, uAxis) / r, -1.0, 1.0);
+        bestV = (float(piece) + s/axisLen) / nPiecesF;
+    }
+
+    outT = bestT; outH = bestH; outV = bestV;
+    return bestHit;
+}
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
-    uint localId = gl_LocalInvocationID.x;
-    bool valid = i < pc.rayCount;
+    if (i >= pc.rayCount) return;
 
-    vec3 origin = vec3(0.0);
-    vec3 direction = vec3(0.0, 0.0, 1.0);
-    float tMin = 0.0;
-    float tMax = 0.0;
-    if (valid) {
-        origin = rays[i].originAndTMin.xyz;
-        tMin = rays[i].originAndTMin.w;
-        direction = rays[i].dirAndTMax.xyz;
-        tMax = rays[i].dirAndTMax.w;
-    }
+    vec3 origin = rays[i].originAndTMin.xyz;
+    float tMin = rays[i].originAndTMin.w;
+    vec3 direction = rays[i].dirAndTMax.xyz;
+    float tMax = rays[i].dirAndTMax.w;
 
-    // ---- Pass 1: resolve the committed triangle/instance hit (unchanged
-    // logic) AND count this ray's real AABB-candidate total. ----
-    uint myCount = 0u;
-    if (valid) {
-        rayQueryEXT rq;
-        rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF,
-                               origin, tMin, direction, tMax);
-        while (rayQueryProceedEXT(rq)) {
-            uint candType = rayQueryGetIntersectionTypeEXT(rq, false);
-            if (candType == gl_RayQueryCandidateIntersectionTriangleEXT) {
-                rayQueryConfirmIntersectionEXT(rq);
-            } else if (candType == gl_RayQueryCandidateIntersectionAABBEXT) {
-                myCount++;
-            }
-        }
-
-        Result r;
-        if (rayQueryGetIntersectionTypeEXT(rq, true) ==
-            gl_RayQueryCommittedIntersectionTriangleEXT) {
-            vec2 bary = rayQueryGetIntersectionBarycentricsEXT(rq, true);
-            r.hitT = rayQueryGetIntersectionTEXT(rq, true);
-            r.u = bary.x;
-            r.v = bary.y;
-            r._pad0 = 0.0;
-            r.hitMesh = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
-            r.hitTriangle = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
-            r.hitFlag = 1u;
-            r.geometryIndex = rayQueryGetIntersectionGeometryIndexEXT(rq, true);
-        } else {
-            r.hitT = -1.0;
-            r.u = 0.0;
-            r.v = 0.0;
-            r._pad0 = 0.0;
-            r.hitMesh = -1;
-            r.hitTriangle = -1;
-            r.hitFlag = 0u;
-            r.geometryIndex = -1;
-        }
-        results[i] = r;
-    }
-
-    // ---- Workgroup-local exclusive prefix sum + one shared reservation. ----
-    wgCounts[localId] = myCount;
-    barrier();
-    if (localId == 0u) {
-        uint running = 0u;
-        for (uint k = 0u; k < 64u; k++) {
-            uint c = wgCounts[k];
-            wgOffsets[k] = running;
-            running += c;
-        }
-        wgBase = (running > 0u) ? atomicAdd(globalCandCounter, running) : 0u;
-    }
-    barrier();
-
-    if (!valid) {
-        return;
-    }
-    uint myBase = wgBase + wgOffsets[localId];
-    // Clamp what gets REPORTED to the true number of slots this ray
-    // actually has room for, not just what pass 2 below is individually
-    // bounds-checked to WRITE -- if the whole dispatch's real candidate
-    // total exceeds candPoolCapacity, a late workgroup's reservation
-    // (myBase) can itself already be past capacity. Reporting the
-    // unclamped myCount there would tell resolve_curve_candidates_gpu
-    // (gpu.mojo) to read curve_cand_prim[myBase .. myBase+myCount) far
-    // outside the pool's actual allocated size -- a real out-of-bounds
-    // read (CUDA_ERROR_ILLEGAL_ADDRESS), not just quietly-wrong data.
-    uint availableForThisRay = (myBase < pc.candPoolCapacity)
-        ? min(myCount, pc.candPoolCapacity - myBase) : 0u;
-    curveCandCount[i] = int(availableForThisRay);
-    curveCandOffset[i] = int(myBase);
-    if (availableForThisRay == 0u) {
-        return;
-    }
-
-    // ---- Pass 2: re-trace to place candidates at their reserved offsets. ----
-    rayQueryEXT rq2;
-    rayQueryInitializeEXT(rq2, topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF,
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF,
                            origin, tMin, direction, tMax);
-    uint w = 0u;
-    while (rayQueryProceedEXT(rq2)) {
-        uint candType = rayQueryGetIntersectionTypeEXT(rq2, false);
+
+    // Tracked locally rather than re-queried from the ray query, since T is
+    // only well-defined for the CURRENT candidate (triangle) or the
+    // COMMITTED intersection -- not for "the current bound" in general.
+    // Every triangle confirm or curve generate updates this, so it always
+    // reflects the true current traversal bound regardless of how the two
+    // candidate kinds interleave.
+    float currentBound = tMax;
+    int bestCurveIdx = -1;
+    int bestPieceInfo = 0;
+    int bestMatIdx = -1;
+    float bestCurveH = 0.0;
+    float bestCurveV = 0.0;
+
+    while (rayQueryProceedEXT(rq)) {
+        uint candType = rayQueryGetIntersectionTypeEXT(rq, false);
         if (candType == gl_RayQueryCandidateIntersectionTriangleEXT) {
-            rayQueryConfirmIntersectionEXT(rq2);
+            float triT = rayQueryGetIntersectionTEXT(rq, false);
+            rayQueryConfirmIntersectionEXT(rq);
+            currentBound = triT;
         } else if (candType == gl_RayQueryCandidateIntersectionAABBEXT) {
             // Curves are built as several BLAS chunks (see vulkaninterop.
             // cpp's InteropRtScene::curveBlas comment), each its own TLAS
             // instance. primitiveIndex is local to that chunk's own AABB
             // geometry; instanceCustomIndex carries the chunk's leaf
-            // offset so this reconstructs the GLOBAL index into
-            // curveLeafPrimIdx (one buffer spanning every chunk).
-            int localIdx = rayQueryGetIntersectionPrimitiveIndexEXT(rq2, false);
-            int chunkOffset = int(rayQueryGetIntersectionInstanceCustomIndexEXT(rq2, false));
+            // offset so this reconstructs the GLOBAL leaf index.
+            int localIdx = rayQueryGetIntersectionPrimitiveIndexEXT(rq, false);
+            int chunkOffset = int(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
             int leafIdx = chunkOffset + localIdx;
-            uint slot = myBase + w;
-            if (slot < pc.candPoolCapacity) {
-                curveCand[slot] = curveLeafPrimIdx[leafIdx];
+
+            int curveIdx = curveLeafCurveIdx[leafIdx];
+            int pieceInfo = curveLeafPieceInfo[leafIdx];
+            int firstPiece = pieceInfo / 8;
+            int pieceCount = pieceInfo % 8;
+
+            int base = curveIdx * 14;
+            vec3 cp0 = vec3(curveData[base+0], curveData[base+1], curveData[base+2]);
+            vec3 cp1 = vec3(curveData[base+3], curveData[base+4], curveData[base+5]);
+            vec3 cp2 = vec3(curveData[base+6], curveData[base+7], curveData[base+8]);
+            vec3 cp3 = vec3(curveData[base+9], curveData[base+10], curveData[base+11]);
+            float width0 = curveData[base+12];
+            float width1 = curveData[base+13];
+            int nPieces = curveNPieces[curveIdx];
+
+            float outT, outH, outV;
+            bool hit = intersectCurve(origin, direction, cp0, cp1, cp2, cp3,
+                                       width0, width1, nPieces,
+                                       firstPiece, pieceCount, currentBound,
+                                       outT, outH, outV);
+            if (hit) {
+                rayQueryGenerateIntersectionEXT(rq, outT);
+                currentBound = outT;
+                bestCurveIdx = curveIdx;
+                bestPieceInfo = pieceInfo;
+                bestMatIdx = curveLeafMatIdx[leafIdx];
+                bestCurveH = outH;
+                bestCurveV = outV;
             }
-            w++;
         }
     }
+
+    Result r;
+    uint committedType = rayQueryGetIntersectionTypeEXT(rq, true);
+    if (committedType == gl_RayQueryCommittedIntersectionTriangleEXT) {
+        vec2 bary = rayQueryGetIntersectionBarycentricsEXT(rq, true);
+        r.hitT = rayQueryGetIntersectionTEXT(rq, true);
+        r.u = bary.x;
+        r.v = bary.y;
+        r._pad0 = 0.0;
+        r.hitMesh = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+        r.hitTriangle = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
+        r.hitFlag = 1u;
+        r.geometryIndex = rayQueryGetIntersectionGeometryIndexEXT(rq, true);
+    } else if (committedType == gl_RayQueryCommittedIntersectionGeneratedEXT) {
+        // Our own curve hit -- bestCurveIdx/etc are guaranteed set by
+        // whichever rayQueryGenerateIntersectionEXT call produced this
+        // committed intersection (the last one to succeed, since each only
+        // fires when strictly closer than the current bound at the time).
+        r.hitT = rayQueryGetIntersectionTEXT(rq, true);
+        r.u = bestCurveH;
+        r.v = bestCurveV;
+        r._pad0 = 0.0;
+        r.hitMesh = bestCurveIdx;
+        r.hitTriangle = bestPieceInfo;
+        r.hitFlag = 2u;
+        r.geometryIndex = bestMatIdx;
+    } else {
+        r.hitT = -1.0;
+        r.u = 0.0;
+        r.v = 0.0;
+        r._pad0 = 0.0;
+        r.hitMesh = -1;
+        r.hitTriangle = -1;
+        r.hitFlag = 0u;
+        r.geometryIndex = -1;
+    }
+    results[i] = r;
 }

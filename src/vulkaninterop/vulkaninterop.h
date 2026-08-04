@@ -88,7 +88,15 @@ typedef struct {
 // (ox,oy,oz,tmin,dx,dy,dz,tmax) layout vulkanrt_trace_rays takes) and a
 // results buffer (max_rays * 32 bytes, matching intersect_batch.comp's
 // Result struct: float hitT,u,v,pad; int32 hitMesh,hitTriangle,geometryIndex;
-// uint32 hitFlag). Returns NULL on failure.
+// uint32 hitFlag). hitFlag is 0 (miss), 1 (triangle/instance hit -- hitMesh/
+// hitTriangle/geometryIndex mean what the comment on that struct says), or
+// 2 (curve hit, resolved directly by the shader -- see below): for hitFlag
+// ==2, hitMesh/hitTriangle/geometryIndex instead carry the hit curve's
+// index/packed-piece-info/material-index directly (PrimId_C's id1/id2/
+// materialIndex, so vulkaninterop_unpack_results_kernel, gpu.mojo, can
+// reconstruct a type==5 PrimId_C with no further lookups), and u/v carry
+// intersect_curve's own (h, v) outputs, not barycentrics. Returns NULL on
+// failure.
 //
 // Object instancing (mirrors gonzales's own two-level BVH, see
 // geometry.mojo's Instance_C / pbrt_parser.mojo's ObjectBegin/ObjectEnd/
@@ -108,26 +116,52 @@ typedef struct {
 // see intersect_batch.comp / vulkaninterop_unpack_results_kernel (gpu.mojo)
 // for the decode.
 //
-// Curves (gonzales's deferred-candidate scheme, see bvh.mojo's
-// traverse_bvh2_core_defer_curves / gpu.mojo's resolve_curve_candidates_gpu):
-// curves are NOT tessellated into triangle geometry. Instead
-// `curve_leaf_aabbs` (n_curve_leaves * 6 floats: xmin,ymin,zmin,xmax,ymax,
-// zmax, one box per curve BVH leaf -- a leaf may cover several
-// locally-linear curve pieces, see pbrt_parser.mojo's curve-group bounds)
-// becomes ONE procedural-AABB BLAS + TLAS instance, distinguishable from
-// ordinary triangle geometry by intersection TYPE
-// (gl_RayQueryCandidateIntersectionAABBEXT), not by instanceCustomIndex.
-// `curve_leaf_prim_idx[i]` is leaf i's index into gonzales's own top-level
-// `prim_ids` array (exactly the `primIdx` resolve_curve_candidates_gpu
-// expects) -- uploaded as a plain read-only storage buffer the shader
-// indexes by `rayQueryGetIntersectionPrimitiveIndexEXT`. Every ray's AABB
-// candidates (up to CURVE_DEFER_K, matching geometry.mojo's constant) are
-// recorded into the two curve-candidate buffers below by the shader itself,
-// during the SAME dispatch that resolves the committed triangle/instance
-// hit -- they never affect that committed hit (AABB candidates are never
-// confirmed/generated), so the ordinary hit-decode path is unaffected.
-// Pass n_curve_leaves=0 (arrays may then be NULL) for a scene with no
-// curves -- byte-identical to before curve support existed.
+// Curves are NOT tessellated into triangle geometry, and (as of the design
+// below) are NOT resolved via a deferred-candidate buffer of any kind
+// either -- earlier versions of this API had the shader defer AABB
+// candidates into a CUDA-read buffer for a separate Mojo/CUDA narrow-phase
+// pass (first a fixed-per-ray cap, then a capacity-bounded shared pool);
+// both were fundamentally limited by SOME finite buffer size, which on the
+// densest real hair scenes either dropped real candidates (bald patches)
+// or silently under-counted them (uniform darkening) once VRAM ran out.
+//
+// This version instead resolves curves the way procedural geometry is
+// MEANT to work with VK_KHR_ray_query: `curve_leaf_aabbs` (n_curve_leaves *
+// 6 floats: xmin,ymin,zmin,xmax,ymax,zmax, one box per curve BVH leaf --
+// see pbrt_parser.mojo's curve-group bounds) becomes ONE procedural-AABB
+// BLAS + TLAS instance as before, but now intersect_batch.comp does the
+// REAL ray-vs-curve narrow-phase test itself (a GLSL port of geometry.
+// mojo's intersect_curve) the moment it sees an AABB candidate, and calls
+// rayQueryGenerateIntersectionEXT to COMMIT a valid hit immediately -- this
+// narrows the ray's effective traversal bound in hardware exactly like
+// confirming a triangle does, so there is no capacity limit of any kind:
+// correctness no longer depends on any buffer's size, matching the CUDA
+// path's own always-correct guarantee. The tradeoff is real per-candidate
+// GPU cost (the same class of cost the CUDA path already pays for curves),
+// not a free lunch -- see geometry.mojo's CURVE_DEFER_K comment for the
+// history of what was tried before this.
+//
+// Per-leaf arrays (parallel, one entry per curve BVH leaf, matching
+// curve_leaf_aabbs's own indexing): `curve_leaf_curve_idx[i]` is the
+// leaf's curve index into `curve_data`/`curve_n_pieces` (== PrimId_C.id1
+// for that leaf in gonzales's own top-level prim_ids, see pbrt_parser.
+// mojo's finalize_scene); `curve_leaf_piece_info[i]` is the leaf's packed
+// first_piece/piece_count (== PrimId_C.id2, decoded as first_piece =
+// id2/8, piece_count = id2%8, matching geometry.mojo's intersect_curve
+// convention exactly); `curve_leaf_mat_idx[i]` is the leaf's already-
+// resolved material index (== PrimId_C.materialIndex, which already
+// folds in curve-area-light emissive material selection at parse time --
+// no separate area-light-index encoding needed for curves, unlike
+// triangles' type==3 special case).
+//
+// `curve_data` is n_curves * 14 floats per curve (cp0.xyz, cp1.xyz,
+// cp2.xyz, cp3.xyz, width0, width1 -- geometry.mojo's Curve_C fields,
+// flattened; materialIndex is NOT included here, it travels per-leaf
+// above since one Curve_C can be shared by several leaves with the same
+// material). `curve_n_pieces` is n_curves int32s (Curve_C.n_pieces).
+//
+// Pass n_curve_leaves=0/n_curves=0 (arrays may then be NULL) for a scene
+// with no curves -- byte-identical to before curve support existed.
 void* vulkaninterop_rt_create_scene(
     const VulkanInteropMesh* meshes,
     int64_t mesh_count,
@@ -141,33 +175,13 @@ void* vulkaninterop_rt_create_scene(
     const int32_t* instance_template_idx,
     int64_t n_curve_leaves,
     const float* curve_leaf_aabbs,
-    const int64_t* curve_leaf_prim_idx,
+    const int32_t* curve_leaf_curve_idx,
+    const int32_t* curve_leaf_piece_info,
+    const int32_t* curve_leaf_mat_idx,
+    int64_t n_curves,
+    const float* curve_data,
+    const int32_t* curve_n_pieces,
     int64_t max_rays);
-
-// CUDA device pointer for the shared curve-candidate buffer (max_rays *
-// CURVE_DEFER_K int32s, row-major per ray -- same layout as gpu.mojo's
-// curve_cand_prim_buf) -- a Mojo kernel copies this into
-// curve_cand_prim_buf after the ray-query dispatch (see
-// vulkaninterop_rt_traverse_paths_gpu). NULL if the scene has no curves.
-void* vulkaninterop_rt_get_curve_cand_ptr(void* scene);
-
-// CUDA device pointer for the shared curve-candidate COUNT buffer
-// (max_rays int32s, one per ray -- same layout as gpu.mojo's
-// curve_cand_count_buf). NULL if the scene has no curves. Curve candidates
-// are no longer capped per-ray at CURVE_DEFER_K: the shader traces each ray
-// twice (count, then place into a shared pool via a workgroup-local
-// prefix sum + one atomicAdd per 64-ray workgroup) so a ray in a dense
-// curl can use far more than the per-ray average by borrowing capacity
-// left unused by sparse/missing rays. This count is now that ray's real,
-// uncapped total (bounded only by the whole scene's shared pool capacity).
-void* vulkaninterop_rt_get_curve_cand_count_ptr(void* scene);
-
-// CUDA device pointer for the shared curve-candidate OFFSET buffer
-// (max_rays int32s, one per ray): this ray's start offset into the flat
-// curve-candidate pool (vulkaninterop_rt_get_curve_cand_ptr) -- read
-// alongside curveCandCount to know exactly which slice of the pool belongs
-// to this ray. NULL if the scene has no curves.
-void* vulkaninterop_rt_get_curve_cand_offset_ptr(void* scene);
 
 // CUDA device pointer for the shared rays buffer -- a Mojo kernel writes
 // ray data directly into this (no host copy) before calling
