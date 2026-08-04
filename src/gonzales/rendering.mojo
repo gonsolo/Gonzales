@@ -27,14 +27,22 @@ def render_tile(
     use_restir: Bool = False,
     frame_w: Int32 = Int32(0),
     restir_io: ReservoirIO = reservoir_io_null(),
-    # Phase 4 (docs/A2_restir_migration_plan.md): frame-wide, caller-owned
-    # read/write reservoir buffers + shared G-buffer (same role as
-    # restir_io above, indexed by the same global pixel_idx), consumed by
-    # gi_temporal_spatial_combine/gi_resolve whenever a diffuse-x1/
-    # diffuse-x2 path generates a fresh GI candidate. Null by default --
-    # every existing call site is completely unaffected until a future
-    # caller opts in; see shading.mojo's _gi_generate_recon_candidate for
-    # what's generated and its documented scope limits.
+    # Phase 4 (docs/A2_restir_migration_plan.md), INDEPENDENT of use_restir
+    # on purpose: `use_restir` alone must keep meaning exactly what it
+    # already means to every existing --restir (DI-only) render. Below,
+    # the per-path-slot GIPendingX1 scratch buffer is only allocated (a
+    # real, non-dangling pointer) when `use_gi=True` -- it used to be
+    # allocated unconditionally, which silently activated
+    # _shade_diffuse_nee's GI generate/combine/resolve block (gated only
+    # on that pointer being real, not on any flag) for every ordinary
+    # --restir CPU render. Caught by A/B rendering cornell-box (mean error
+    # 0.0054, far above the ~0.0005 noise floor) before it shipped any
+    # further -- see project_restir_migration memory. `gi_io` is the
+    # frame-wide, caller-owned read/write reservoir buffers + shared
+    # G-buffer (same role as restir_io above); harmless if non-null with
+    # use_gi=False, since the dangling gi_pending buffer already gates the
+    # whole GI block off regardless.
+    use_gi: Bool = False,
     gi_io: GIReservoirIO = gi_reservoir_io_null(),
 ):
     var sp = samplerParamsPtr[0]
@@ -68,9 +76,11 @@ def render_tile(
     # init; otherwise a path that never reaches bounce 1 (miss, RR kill, or
     # a non-diffuse x2) would leave garbage that a later stray read could
     # misinterpret as a real pending snapshot.
-    var gi_pending_buf = alloc[GIPendingX1](n)
-    for gi_i in range(n):
-        gi_pending_buf[gi_i] = gi_pending_x1_init()
+    var gi_pending_buf = UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling()
+    if use_gi:
+        gi_pending_buf = alloc[GIPendingX1](n)
+        for gi_i in range(n):
+            gi_pending_buf[gi_i] = gi_pending_x1_init()
 
     # Generate primary rays from Sobol film samples
     var idx = 0
@@ -229,7 +239,8 @@ def render_tile(
     intersections.free()
     paths.free()
     pixel_idx_buf.free()
-    gi_pending_buf.free()
+    if use_gi:
+        gi_pending_buf.free()
 
 
 
@@ -276,6 +287,7 @@ def render_all_tiles(
     use_restir: Bool = False,
     frame_w: Int32 = Int32(0),
     restir_io: ReservoirIO = reservoir_io_null(),
+    use_gi: Bool = False,
     gi_io: GIReservoirIO = gi_reservoir_io_null(),
 ):
     var res_x = Int(max_x - min_x)
@@ -320,7 +332,7 @@ def render_all_tiles(
             raster_to_camera, camera_to_world,
             Int32(tx), Int32(ty), tx_max, ty_max,
             sampler_params, scene, tile_buf, max_depth, guide_read, gw, use_restir,
-            frame_w, restir_io, gi_io)
+            frame_w, restir_io, use_gi, gi_io)
         for iy in range(th_actual):
             for ix in range(tw_actual):
                 var src = iy * tw_actual + ix
