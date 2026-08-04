@@ -4,13 +4,14 @@ from std.algorithm import parallelize
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, PathState_C, TileResult_C, Sphere_C, AreaLight_C, LightSampler_C, light_sampler_sample, dot, cross, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, INV_FOUR_PI, curve_piece_endpoints, _curve_perp_axis
 from .bvh import SceneDescriptor2_C, traverse_bvh2_core, test_spheres, any_hit_bvh2_core
-from .shading import shade_core_cpu_nee
+from .shading import shade_core_cpu_nee, GIPendingX1, gi_pending_x1_init
 from .rng import PCG32
 from .sampling import TileSamplerParams_C, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gaussian_norm, mix_bits_u64, gen_primary_ray_state
 from .guide import GuideGrid, guide_merge, null_guide
 from .spectrum import SampledWavelengths
 from .gpu import _sample_medium_core
 from .restir_di import ReservoirIO, reservoir_io_null
+from .restir_gi import GIReservoir
 
 
 def render_tile(
@@ -26,6 +27,14 @@ def render_tile(
     use_restir: Bool = False,
     frame_w: Int32 = Int32(0),
     restir_io: ReservoirIO = reservoir_io_null(),
+    # Phase 4 (docs/A2_restir_migration_plan.md): frame-wide, caller-owned
+    # output buffer (indexed by the same global pixel_idx restir_io uses),
+    # written by _shade_diffuse_nee whenever a diffuse-x1/diffuse-x2 path
+    # generates a fresh GI candidate. Dangling by default -- every existing
+    # call site is completely unaffected until a future caller opts in;
+    # see shading.mojo's _gi_generate_recon_candidate for what's generated
+    # and its documented scope limits.
+    gi_fresh_write: UnsafePointer[GIReservoir, MutAnyOrigin] = UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling(),
 ):
     var sp = samplerParamsPtr[0]
     var scene = scenePtr[0]
@@ -51,6 +60,16 @@ def render_tile(
     # valid buffer index) whenever frame_w wasn't supplied -- matches
     # di_temporal_step's own "no temporal reuse" fallback.
     var pixel_idx_buf = alloc[Int](n)
+
+    # Phase 4's per-path-slot scratch (GIPendingX1), tile-call-local like
+    # `paths`/`intersections` above -- NOT frame-wide like gi_fresh_write.
+    # alloc() doesn't zero memory, so every slot needs an explicit inactive
+    # init; otherwise a path that never reaches bounce 1 (miss, RR kill, or
+    # a non-diffuse x2) would leave garbage that a later stray read could
+    # misinterpret as a real pending snapshot.
+    var gi_pending_buf = alloc[GIPendingX1](n)
+    for gi_i in range(n):
+        gi_pending_buf[gi_i] = gi_pending_x1_init()
 
     # Generate primary rays from Sobol film samples
     var idx = 0
@@ -140,7 +159,8 @@ def render_tile(
                                blasNodesArr=scene.blasNodesArr, blasPrimIdsArr=scene.blasPrimIdsArr,
                                instances=scene.instances, guide_write=guide_write, spectral=scene.spectral,
                                measured_brdfs=scene.measuredBrdfs, use_restir=use_restir,
-                               restir_io=restir_io, pixel_idx=pixel_idx_buf[i])
+                               restir_io=restir_io, pixel_idx=pixel_idx_buf[i],
+                               gi_pending=gi_pending_buf, gi_fresh_write=gi_fresh_write)
         # ── Medium interface transitions ──────────────────────────
         for i in range(n):
             if paths[i].active == 0:
@@ -208,6 +228,7 @@ def render_tile(
     intersections.free()
     paths.free()
     pixel_idx_buf.free()
+    gi_pending_buf.free()
 
 
 
@@ -254,6 +275,7 @@ def render_all_tiles(
     use_restir: Bool = False,
     frame_w: Int32 = Int32(0),
     restir_io: ReservoirIO = reservoir_io_null(),
+    gi_fresh_write: UnsafePointer[GIReservoir, MutAnyOrigin] = UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling(),
 ):
     var res_x = Int(max_x - min_x)
     var tw = Int(tile_w)
@@ -297,7 +319,7 @@ def render_all_tiles(
             raster_to_camera, camera_to_world,
             Int32(tx), Int32(ty), tx_max, ty_max,
             sampler_params, scene, tile_buf, max_depth, guide_read, gw, use_restir,
-            frame_w, restir_io)
+            frame_w, restir_io, gi_fresh_write)
         for iy in range(th_actual):
             for ix in range(tw_actual):
                 var src = iy * tw_actual + ix

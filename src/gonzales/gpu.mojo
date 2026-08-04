@@ -11,9 +11,10 @@ from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2
 from .transform import transform_normal_by_instance
 from std.atomic import Atomic
 from .rng import PCG32
-from .shading import shade_core, shade_nee_core, ShadeContext, LightContext, shade_diffuse, shade_coated_diffuse, shade_diffuse_transmission, shade_mix, shade_conductor, shade_dielectric, shade_thin_dielectric, shade_coated_conductor, shade_hair, shade_interface, shade_measured
+from .shading import shade_core, shade_nee_core, ShadeContext, LightContext, shade_diffuse, shade_coated_diffuse, shade_diffuse_transmission, shade_mix, shade_conductor, shade_dielectric, shade_thin_dielectric, shade_coated_conductor, shade_hair, shade_interface, shade_measured, GIPendingX1
 from .guide import null_guide
 from .restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io_null
+from .restir_gi import GIReservoir
 from .postprocess import _firefly_clamp_pixel, _atrous_tap_weight, _atrous_spatial_weight
 from .sampling import encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gen_primary_ray_state
 from .spectrum import SampledWavelengths, SpectralSample, SpectralHandle, null_spectral_handle, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb
@@ -1151,6 +1152,7 @@ def shade_nee_preamble_gpu(
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         measured_brdfs=UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+        gi_pending=UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling(), gi_fresh_write=UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling(),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1236,6 +1238,7 @@ def shade_diffuse_gpu(
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         measured_brdfs=UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+        gi_pending=UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling(), gi_fresh_write=UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling(),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1313,6 +1316,7 @@ def shade_coated_diffuse_gpu(
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         measured_brdfs=UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+        gi_pending=UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling(), gi_fresh_write=UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling(),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1376,6 +1380,7 @@ def shade_diffuse_transmit_gpu(
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         measured_brdfs=UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+        gi_pending=UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling(), gi_fresh_write=UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling(),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1499,6 +1504,7 @@ def shade_conductor_gpu(
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         measured_brdfs=UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+        gi_pending=UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling(), gi_fresh_write=UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling(),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1564,6 +1570,7 @@ def shade_measured_gpu(
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         measured_brdfs=measured_brdfs,
+        gi_pending=UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling(), gi_fresh_write=UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling(),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -1666,6 +1673,7 @@ def shade_coated_conductor_gpu(
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         measured_brdfs=UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+        gi_pending=UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling(), gi_fresh_write=UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling(),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -2121,6 +2129,7 @@ def shade_hair_gpu(
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         measured_brdfs=UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+        gi_pending=UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling(), gi_fresh_write=UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling(),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=n_distant_lights,
@@ -2176,6 +2185,7 @@ def shade_enqueue_shadow_gpu(
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         measured_brdfs=UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+        gi_pending=UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling(), gi_fresh_write=UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling(),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=UnsafePointer[DistantLight_C, MutAnyOrigin](), distant_count=0,
