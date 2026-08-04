@@ -4,6 +4,7 @@
 #include <vulkan/vulkan.h>
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <utility>
@@ -669,16 +670,28 @@ struct InteropRtScene {
     VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
     Buffer tlasBuf{};
 
-    // Curves: ONE procedural-AABB BLAS (one geometry, n_curve_leaves boxes,
-    // see vulkaninterop_rt_create_scene's docstring), plus one extra TLAS
-    // instance referencing it. curveAabbBuf/curveLeafPrimIdxBuf are plain
-    // device-local buffers (not CUDA-interop) -- curveLeafPrimIdxBuf is
-    // read by the shader (binding 3), indexed by primitiveIndex. Always
+    // Curves: a procedural-AABB BLAS PER CHUNK of up to CURVE_BLAS_CHUNK_
+    // LEAVES leaves (see vulkaninterop_rt_create_scene's docstring), one
+    // extra TLAS instance per chunk. Chunked (rather than one BLAS for all
+    // n_curve_leaves) because the AS-build scratch buffer is a transient
+    // DEVICE_LOCAL allocation sized to the WHOLE geometry being built in one
+    // call -- on a dense hair scene (e.g. curly-hair's 11.87M leaves) that
+    // scratch buffer alone is ~860MB on top of the ~425MB final AS buffer,
+    // and by the time this runs the CUDA-side software BVH for the same
+    // scene has typically already consumed most of the card's VRAM. Chunking
+    // keeps each transient scratch allocation to one chunk's size, so peak
+    // VRAM use during the build is roughly (AS bytes built so far) + (one
+    // chunk's scratch bytes) instead of (full AS) + (full scratch).
+    // curveAabbBuf/curveLeafPrimIdxBuf are plain device-local buffers (not
+    // CUDA-interop) -- curveLeafPrimIdxBuf is read by the shader (binding
+    // 3), indexed by a GLOBAL leaf index reconstructed from instanceCustom-
+    // Index (= chunk's leaf offset) + the per-geometry primitiveIndex the
+    // shader gets from rayQueryGetIntersectionPrimitiveIndexEXT. Always
     // allocated (min size 1) even with zero curves, since the shader's
     // descriptor layout is static and always declares these bindings --
     // see hasCurves/n_curve_leaves for whether they hold anything real.
-    VkAccelerationStructureKHR curveBlas = VK_NULL_HANDLE;
-    Buffer curveBlasBuf{};
+    std::vector<VkAccelerationStructureKHR> curveBlas;
+    std::vector<Buffer> curveBlasBufs;
     Buffer curveAabbBuf{};
     Buffer curveLeafPrimIdxBuf{};
     bool hasCurves = false;
@@ -1218,8 +1231,12 @@ extern "C" void vulkaninterop_rt_destroy_scene(void* handle) {
         if (sc->templateBlas[t]) sc->rtFns.destroy(sc->device, sc->templateBlas[t], nullptr);
         destroyBuffer(sc->device, &sc->templateBlasBufs[t]);
     }
-    if (sc->curveBlas) sc->rtFns.destroy(sc->device, sc->curveBlas, nullptr);
-    destroyBuffer(sc->device, &sc->curveBlasBuf);
+    for (auto as : sc->curveBlas) {
+        if (as) sc->rtFns.destroy(sc->device, as, nullptr);
+    }
+    for (auto& buf : sc->curveBlasBufs) {
+        destroyBuffer(sc->device, &buf);
+    }
     destroyBuffer(sc->device, &sc->curveAabbBuf);
     destroyBuffer(sc->device, &sc->curveLeafPrimIdxBuf);
 
@@ -1439,9 +1456,19 @@ extern "C" void* vulkaninterop_rt_create_scene(
 
         // VkAabbPositionsKHR is {float minX,minY,minZ,maxX,maxY,maxZ} --
         // exactly curve_leaf_aabbs's own per-entry layout, no repacking.
+        // ALSO bound as an ordinary SSBO (binding 6, see the descriptor set
+        // below): tried having intersect_batch.comp read it per-candidate to
+        // keep the K nearest-by-distance candidates instead of the first K
+        // encountered (see CURVE_DEFER_K's comment, geometry.mojo, for why
+        // "first K" silently drops real hits on dense hair) -- reverted, the
+        // per-candidate buffer reads regressed dense-hair render time by 2+
+        // orders of magnitude. Binding kept (harmless, buffer already exists
+        // for the BLAS build) for a future cheaper attempt; shader currently
+        // doesn't read it.
         VkDeviceSize aabbBytes = (VkDeviceSize)n_curve_leaves * sizeof(VkAabbPositionsKHR);
         if (!createBuffer(sc->device, sc->physicalDevice, aabbBytes,
-                           VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                           VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                            true, &sc->curveAabbBuf)) {
             vulkaninterop_rt_destroy_scene(sc);
@@ -1452,39 +1479,63 @@ extern "C" void* vulkaninterop_rt_create_scene(
             return nullptr;
         }
 
-        VkAccelerationStructureGeometryKHR curveGeom{};
-        curveGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-        curveGeom.geometryType = VK_GEOMETRY_TYPE_AABBS_KHR;
-        curveGeom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
-        curveGeom.geometry.aabbs.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR;
-        curveGeom.geometry.aabbs.data.deviceAddress = sc->curveAabbBuf.address;
-        curveGeom.geometry.aabbs.stride = sizeof(VkAabbPositionsKHR);
+        // Built in chunks of up to CURVE_BLAS_CHUNK_LEAVES leaves rather than
+        // one BLAS for all n_curve_leaves -- see the InteropRtScene::
+        // curveBlas comment for why (transient scratch-buffer size on dense
+        // hair scenes). Each chunk gets its own BLAS + TLAS instance;
+        // instanceCustomIndex carries that chunk's leaf offset so the shader
+        // can reconstruct the GLOBAL leaf index (curveLeafPrimIdx is one
+        // buffer spanning all chunks, not re-chunked).
+        constexpr int64_t CURVE_BLAS_CHUNK_LEAVES = 1000000;
+        for (int64_t chunkStart = 0; chunkStart < n_curve_leaves; chunkStart += CURVE_BLAS_CHUNK_LEAVES) {
+            int64_t chunkCount = std::min(CURVE_BLAS_CHUNK_LEAVES, n_curve_leaves - chunkStart);
 
-        VkDeviceAddress curveBlasAddress;
-        if (!buildAccelerationStructure(sc->device, sc->physicalDevice, sc->cmdPool,
-                                         sc->queue, sc->rtFns,
-                                         VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
-                                         curveGeom, (uint32_t)n_curve_leaves,
-                                         &sc->curveBlas, &sc->curveBlasBuf, &curveBlasAddress)) {
-            vulkaninterop_rt_destroy_scene(sc);
-            return nullptr;
+            VkAccelerationStructureGeometryKHR curveGeom{};
+            curveGeom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+            curveGeom.geometryType = VK_GEOMETRY_TYPE_AABBS_KHR;
+            curveGeom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+            curveGeom.geometry.aabbs.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR;
+            curveGeom.geometry.aabbs.data.deviceAddress =
+                sc->curveAabbBuf.address + (VkDeviceSize)chunkStart * sizeof(VkAabbPositionsKHR);
+            curveGeom.geometry.aabbs.stride = sizeof(VkAabbPositionsKHR);
+
+            VkAccelerationStructureKHR chunkBlas;
+            Buffer chunkBlasBuf{};
+            VkDeviceAddress curveBlasAddress;
+            if (!buildAccelerationStructure(sc->device, sc->physicalDevice, sc->cmdPool,
+                                             sc->queue, sc->rtFns,
+                                             VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
+                                             curveGeom, (uint32_t)chunkCount,
+                                             &chunkBlas, &chunkBlasBuf, &curveBlasAddress)) {
+                vulkaninterop_rt_destroy_scene(sc);
+                return nullptr;
+            }
+            sc->curveBlas.push_back(chunkBlas);
+            sc->curveBlasBufs.push_back(chunkBlasBuf);
+
+            VkAccelerationStructureInstanceKHR curveInst{};
+            curveInst.transform.matrix[0][0] = 1; curveInst.transform.matrix[1][1] = 1; curveInst.transform.matrix[2][2] = 1;
+            curveInst.instanceCustomIndex = (uint32_t)chunkStart;
+            curveInst.mask = 0xFF;
+            curveInst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+            curveInst.accelerationStructureReference = curveBlasAddress;
+            instances.push_back(curveInst);
         }
-
-        VkAccelerationStructureInstanceKHR curveInst{};
-        curveInst.transform.matrix[0][0] = 1; curveInst.transform.matrix[1][1] = 1; curveInst.transform.matrix[2][2] = 1;
-        curveInst.instanceCustomIndex = 0;
-        curveInst.mask = 0xFF;
-        curveInst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
-        curveInst.accelerationStructureReference = curveBlasAddress;
-        instances.push_back(curveInst);
     } else {
         // Shader descriptor layout is static and always declares bindings
-        // 3 (curveLeafPrimIdxBuf), so give it a harmless minimal buffer
-        // even when this scene has no curves at all.
+        // 3 (curveLeafPrimIdxBuf) and 6 (curveAabbBuf), so give both a
+        // harmless minimal buffer even when this scene has no curves at all.
         if (!createBuffer(sc->device, sc->physicalDevice, sizeof(int32_t),
                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                            true, &sc->curveLeafPrimIdxBuf)) {
+            vulkaninterop_rt_destroy_scene(sc);
+            return nullptr;
+        }
+        if (!createBuffer(sc->device, sc->physicalDevice, sizeof(VkAabbPositionsKHR),
+                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           true, &sc->curveAabbBuf)) {
             vulkaninterop_rt_destroy_scene(sc);
             return nullptr;
         }
@@ -1536,10 +1587,10 @@ extern "C" void* vulkaninterop_rt_create_scene(
         vulkaninterop_rt_destroy_scene(sc);
         return nullptr;
     }
-    // Curve-candidate output -- 4 must match geometry.mojo's CURVE_DEFER_K
+    // Curve-candidate output -- 16 must match geometry.mojo's CURVE_DEFER_K
     // (not shared across the Mojo/C++ boundary, same as every other
     // cross-language constant in this file).
-    sc->curveCandBytes = (VkDeviceSize)max_rays * 4 * sizeof(int32_t);
+    sc->curveCandBytes = (VkDeviceSize)max_rays * 16 * sizeof(int32_t);
     if (!createInteropBuffer(sc->device, sc->physicalDevice, sc->extFns, sc->curveCandBytes,
                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                               &sc->curveCandBuffer, &sc->curveCandMemory, &sc->curveCandCudaExtMem, &sc->curveCandCudaPtr)) {
@@ -1577,7 +1628,7 @@ extern "C" void* vulkaninterop_rt_create_scene(
         return nullptr;
     }
 
-    VkDescriptorSetLayoutBinding bindings[6]{};
+    VkDescriptorSetLayoutBinding bindings[7]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     bindings[0].descriptorCount = 1;
@@ -1606,10 +1657,20 @@ extern "C" void* vulkaninterop_rt_create_scene(
     bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[5].descriptorCount = 1;
     bindings[5].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    // 6 = curve leaf AABB bounds (world space, same layout curveAabbBuf
+    // already holds for the BLAS build). Not currently read by the shader
+    // -- see curveAabbBuf's creation comment above for why (a nearest-K
+    // eviction scheme using this was tried and reverted for performance).
+    // Kept bound so a future, cheaper attempt doesn't need to redo the
+    // descriptor-set plumbing.
+    bindings[6].binding = 6;
+    bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[6].descriptorCount = 1;
+    bindings[6].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
     VkDescriptorSetLayoutCreateInfo dslci{};
     dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    dslci.bindingCount = 6;
+    dslci.bindingCount = 7;
     dslci.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(sc->device, &dslci, nullptr, &sc->dsLayout) != VK_SUCCESS) {
         fprintf(stderr, "vulkaninterop: vkCreateDescriptorSetLayout (rt) failed\n");
@@ -1654,7 +1715,7 @@ extern "C" void* vulkaninterop_rt_create_scene(
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     poolSizes[0].descriptorCount = 1;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSizes[1].descriptorCount = 5;
+    poolSizes[1].descriptorCount = 6;
     VkDescriptorPoolCreateInfo dpci{};
     dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     dpci.maxSets = 1;
@@ -1697,8 +1758,11 @@ extern "C" void* vulkaninterop_rt_create_scene(
     VkDescriptorBufferInfo curveCandCountInfo{};
     curveCandCountInfo.buffer = sc->curveCandCountBuffer;
     curveCandCountInfo.range = sc->curveCandCountBytes;
+    VkDescriptorBufferInfo curveAabbInfo{};
+    curveAabbInfo.buffer = sc->curveAabbBuf.buffer;
+    curveAabbInfo.range = VK_WHOLE_SIZE;
 
-    VkWriteDescriptorSet writes[6]{};
+    VkWriteDescriptorSet writes[7]{};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].pNext = &asWrite;
     writes[0].dstSet = sc->descSet;
@@ -1735,7 +1799,13 @@ extern "C" void* vulkaninterop_rt_create_scene(
     writes[5].descriptorCount = 1;
     writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[5].pBufferInfo = &curveCandCountInfo;
-    vkUpdateDescriptorSets(sc->device, 6, writes, 0, nullptr);
+    writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[6].dstSet = sc->descSet;
+    writes[6].dstBinding = 6;
+    writes[6].descriptorCount = 1;
+    writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[6].pBufferInfo = &curveAabbInfo;
+    vkUpdateDescriptorSets(sc->device, 7, writes, 0, nullptr);
 
     return sc;
 }

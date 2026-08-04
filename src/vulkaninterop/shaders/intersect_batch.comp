@@ -11,7 +11,13 @@ layout(local_size_x = 64) in;
 
 // Must match geometry.mojo's CURVE_DEFER_K (not shared across the Mojo/C++/
 // GLSL boundary, same as every other cross-language constant in this repo).
-const uint CURVE_DEFER_K = 4;
+// Unlike the CUDA path (traverse_bvh2_core_defer_curves), this shader has no
+// narrow-phase fallback for candidates beyond K -- they are silently
+// dropped (first-K-encountered-in-traversal-order, not nearest-K), not
+// deferred -- see geometry.mojo's CURVE_DEFER_K comment for the known
+// consequence (visible gaps on the very densest hair) and why a
+// nearest-K-by-AABB-distance version was tried and reverted.
+const uint CURVE_DEFER_K = 16;
 
 struct Ray {
     vec4 originAndTMin;  // xyz = origin, w = tMin
@@ -58,6 +64,13 @@ layout(set = 0, binding = 4, std430) writeonly buffer CurveCandBuffer {
 layout(set = 0, binding = 5, std430) writeonly buffer CurveCandCountBuffer {
     int curveCandCount[];
 };
+// binding 6 = CurveAabbBuffer (world-space leaf bounds) was tried here to
+// support keeping the K NEAREST candidates instead of the first K
+// encountered, but reading it per-candidate regressed dense-hair render
+// time by 2+ orders of magnitude (256x256/8spp alone exceeded the time the
+// unmodified path took for a full 512x512/32spp render) -- reverted. The
+// binding/buffer still exist C++-side (vulkaninterop.cpp) since removing
+// them isn't necessary for correctness, but this shader no longer reads it.
 
 layout(push_constant) uniform PushConstants {
     uint rayCount;
@@ -87,8 +100,15 @@ void main() {
             // later, exactly mirroring how the software BVH walk defers
             // curve leaves instead of testing them inline.
             if (curveCandN < CURVE_DEFER_K) {
-                int leafIdx = rayQueryGetIntersectionPrimitiveIndexEXT(rq, false);
-                curveCand[i * CURVE_DEFER_K + curveCandN] = curveLeafPrimIdx[leafIdx];
+                // Curves are built as several BLAS chunks (see vulkaninterop.
+                // cpp's InteropRtScene::curveBlas comment), each its own TLAS
+                // instance. primitiveIndex is local to that chunk's own AABB
+                // geometry; instanceCustomIndex carries the chunk's leaf
+                // offset so this reconstructs the GLOBAL index into
+                // curveLeafPrimIdx (one buffer spanning every chunk).
+                int localIdx = rayQueryGetIntersectionPrimitiveIndexEXT(rq, false);
+                int chunkOffset = int(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
+                curveCand[i * CURVE_DEFER_K + curveCandN] = curveLeafPrimIdx[chunkOffset + localIdx];
                 curveCandN++;
             }
         }

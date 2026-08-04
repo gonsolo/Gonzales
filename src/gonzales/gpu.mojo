@@ -2448,7 +2448,17 @@ def vulkaninterop_unpack_results_kernel(
                 hitT, u, v, Int8(1), Int8(0), Int8(0), Int8(0),
             )
     else:
-        inter[tid].hit = Int8(0)
+        # tHit must be reset to the "no hit yet" sentinel (matching
+        # traverse_bvh2_core_defer_curves's convention), not just hit=0 --
+        # resolve_curve_candidates_gpu uses results[pathId].tHit as the
+        # max-distance bound when testing curve candidates against a prior
+        # mesh/instance hit. Leaving it at whatever inter_buf held from an
+        # earlier bounce silently rejects every real curve hit as "farther
+        # than the (stale) current best". Never observed before curves-only
+        # (mesh_count==0) scenes existed for Vulkan RT to actually render --
+        # every earlier scene had a real triangle hit supplying a real tHit.
+        var dummy_id = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+        inter[tid] = Intersection_C(dummy_id, Float32(1.0e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
 
 # Analytic sphere test as a SEPARATE pass after the Vulkan-RT-traced mesh/
 # instance hit above -- exactly mirrors how traverse_paths_gpu (the pure-

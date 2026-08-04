@@ -523,7 +523,14 @@ comptime CURVE_N_PIECES: Int = 7   # max locally-linear pieces per segment (8 sa
 
 # Divergence experiment (traverse_paths_gpu): max curve-leaf candidates recorded
 # per ray before falling back to immediate intersection. See traverse_bvh2_core_defer_curves.
-comptime CURVE_DEFER_K: Int = 4
+# NOTE: the CUDA path's fallback (intersect_curve inline once over K) makes
+# correctness independent of K there. intersect_batch.comp's Vulkan-RT path
+# has NO such fallback (the shader has no access to curve geometry data to
+# test against) -- candidates beyond K are silently dropped, so K there is a
+# real (if generous) correctness ceiling, not just a perf knob. Must match
+# intersect_batch.comp's own CURVE_DEFER_K constant (not shared across the
+# Mojo/GLSL boundary).
+comptime CURVE_DEFER_K: Int = 16
 
 @always_inline
 def _curve_perp_axis(t: SIMD[DType.float32, 3]) -> SIMD[DType.float32, 3]:
