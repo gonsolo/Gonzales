@@ -777,6 +777,16 @@ def parse_and_render(
     # --vcm/--guide (see the warnings just below) -- Phase 2 only touches
     # the plain path tracer's diffuse-material NEE.
     use_restir: Bool = False,
+    # Phase 4: ReSTIR GI, one-bounce reconnection scoped to diffuse x1 AND
+    # diffuse x2 (shading.mojo's _gi_generate_recon_candidate). CPU-only,
+    # batch mode only, no temporal/spatial reuse yet -- matches --restir's
+    # own batch-mode scope (single-frame RIS, no persistence). No effect
+    # without --restir (see the warning below); this flag exists so
+    # --restir's existing, already-shipped DI-only meaning never changes
+    # just because GI machinery happens to be linked in -- see
+    # project_restir_migration memory for why that separation is load-
+    # bearing (a real bug slipped through when it wasn't kept explicit).
+    use_restir_gi: Bool = False,
 ) raises -> Int32:
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
@@ -813,6 +823,10 @@ def parse_and_render(
         print("--restir: no effect combined with --vcm (Phase 2 only touches the plain path tracer's diffuse-material NEE)")
     if use_restir and use_guide:
         print("--restir: no effect combined with --guide (Phase 2 only wired into the plain, non-guided CPU render path so far)")
+    if use_restir_gi and not use_restir:
+        print("--restir-gi: no effect without --restir")
+    if use_restir_gi and use_gpu:
+        print("--restir-gi: CPU batch only so far, no effect combined with --gpu")
 
     if use_gpu and use_sppm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
@@ -1376,7 +1390,7 @@ def parse_and_render(
                 sp_ptr.unsafe_ptr(), sd, results.unsafe_ptr(), psc[0].max_depth,
                 quiet=False, guide_read=null_guide(),
                 write_guides=UnsafePointer[GuideGrid, MutAnyOrigin].unsafe_dangling(), n_write_guides=0,
-                use_restir=use_restir)
+                use_restir=use_restir, use_gi=use_restir and use_restir_gi)
             # sp_ptr freed automatically
 
         # Unjittered normals and depth for edge-preserving denoising.
