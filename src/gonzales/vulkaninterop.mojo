@@ -119,8 +119,18 @@ def vulkaninterop_rt_get_curve_cand_ptr(scene: VulkanInteropRtSceneHandle) -> Un
 
 # CUDA device pointer for the shared curve-candidate COUNT buffer (max_rays
 # int32s, one per ray -- same layout as gpu.mojo's curve_cand_count_buf).
+# This is now each ray's REAL, uncapped candidate count (see intersect_
+# batch.comp's "count then place" design), not capped at CURVE_DEFER_K.
 def vulkaninterop_rt_get_curve_cand_count_ptr(scene: VulkanInteropRtSceneHandle) -> UnsafePointer[Int32, MutAnyOrigin]:
     return external_call["vulkaninterop_rt_get_curve_cand_count_ptr", UnsafePointer[Int32, MutAnyOrigin],
+        VulkanInteropRtSceneHandle](scene)
+
+# CUDA device pointer for the shared curve-candidate OFFSET buffer
+# (max_rays int32s, one per ray): this ray's start offset into the flat
+# curve-candidate pool (vulkaninterop_rt_get_curve_cand_ptr) -- same layout
+# as gpu.mojo's curve_cand_offset_buf.
+def vulkaninterop_rt_get_curve_cand_offset_ptr(scene: VulkanInteropRtSceneHandle) -> UnsafePointer[Int32, MutAnyOrigin]:
+    return external_call["vulkaninterop_rt_get_curve_cand_offset_ptr", UnsafePointer[Int32, MutAnyOrigin],
         VulkanInteropRtSceneHandle](scene)
 
 # CUDA device pointer for the shared rays buffer (max_rays * 8 floats, same

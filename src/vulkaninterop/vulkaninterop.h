@@ -153,8 +153,21 @@ void* vulkaninterop_rt_get_curve_cand_ptr(void* scene);
 
 // CUDA device pointer for the shared curve-candidate COUNT buffer
 // (max_rays int32s, one per ray -- same layout as gpu.mojo's
-// curve_cand_count_buf). NULL if the scene has no curves.
+// curve_cand_count_buf). NULL if the scene has no curves. Curve candidates
+// are no longer capped per-ray at CURVE_DEFER_K: the shader traces each ray
+// twice (count, then place into a shared pool via a workgroup-local
+// prefix sum + one atomicAdd per 64-ray workgroup) so a ray in a dense
+// curl can use far more than the per-ray average by borrowing capacity
+// left unused by sparse/missing rays. This count is now that ray's real,
+// uncapped total (bounded only by the whole scene's shared pool capacity).
 void* vulkaninterop_rt_get_curve_cand_count_ptr(void* scene);
+
+// CUDA device pointer for the shared curve-candidate OFFSET buffer
+// (max_rays int32s, one per ray): this ray's start offset into the flat
+// curve-candidate pool (vulkaninterop_rt_get_curve_cand_ptr) -- read
+// alongside curveCandCount to know exactly which slice of the pool belongs
+// to this ray. NULL if the scene has no curves.
+void* vulkaninterop_rt_get_curve_cand_offset_ptr(void* scene);
 
 // CUDA device pointer for the shared rays buffer -- a Mojo kernel writes
 // ray data directly into this (no host copy) before calling

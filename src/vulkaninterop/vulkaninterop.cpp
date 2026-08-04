@@ -464,7 +464,8 @@ bool createInteropBuffer(VkDevice device, VkPhysicalDevice physicalDevice,
         return false;
     }
     if (vkAllocateMemory(device, &mai, nullptr, outMemory) != VK_SUCCESS) {
-        fprintf(stderr, "vulkaninterop: vkAllocateMemory (interop) failed\n");
+        fprintf(stderr, "vulkaninterop: vkAllocateMemory (interop) failed: size=%llu (%.1fMB) memTypeIdx=%u\n",
+                (unsigned long long)req.size, req.size / 1024.0 / 1024.0, mai.memoryTypeIndex);
         return false;
     }
     if (vkBindBufferMemory(device, *outBuffer, *outMemory, 0) != VK_SUCCESS) {
@@ -728,6 +729,42 @@ struct InteropRtScene {
     cudaExternalMemory_t curveCandCountCudaExtMem = nullptr;
     void* curveCandCountCudaPtr = nullptr;
     VkDeviceSize curveCandCountBytes = 0;
+
+    // curveCandBuffer is now a flat GLOBAL POOL, not a fixed-CURVE_DEFER_K-
+    // stride-per-ray array: the shader traces each ray TWICE (see intersect_
+    // batch.comp's main() for the full design) -- once to COUNT this ray's
+    // real AABB-candidate total (no per-ray cap), then reserves exactly that
+    // many contiguous slots via one atomicAdd per 64-ray workgroup (a
+    // workgroup-local exclusive prefix sum picks each ray's slot within the
+    // reservation), then retraces to WRITE candidates at those slots. This
+    // is what replaces the old "first K encountered, drop the rest" scheme
+    // -- a ray in an extremely dense curl can use far more than the average
+    // per-ray budget by borrowing unused capacity from sparse/missing rays,
+    // rather than being hard-capped at a small fixed K. curveCandOffsetBuffer
+    // holds each ray's start offset into that flat pool (curveCandCount
+    // still holds each ray's real count, just uncapped now); both are read
+    // by resolve_curve_candidates_gpu (gpu.mojo) via curve_cand_offset_buf,
+    // which the CUDA-native path also populates (with the OLD tid*
+    // CURVE_DEFER_K convention, unchanged there) so one indexing scheme
+    // works for both backends. Total pool capacity is max_rays*
+    // CURVE_DEFER_K elements -- SAME total memory as the old per-ray-capped
+    // scheme, just pooled instead of rigidly divided; writes past capacity
+    // (only possible if the true total exceeds it, an extreme-density edge
+    // case) are bounds-checked and dropped in the shader, same "graceful
+    // cap, not a crash" philosophy as everywhere else in this file.
+    VkBuffer curveCandOffsetBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory curveCandOffsetMemory = VK_NULL_HANDLE;
+    cudaExternalMemory_t curveCandOffsetCudaExtMem = nullptr;
+    void* curveCandOffsetCudaPtr = nullptr;
+    VkDeviceSize curveCandOffsetBytes = 0;
+    int64_t curveCandCapacity = 0;  // = max_rays * CURVE_DEFER_K, in elements
+
+    // Global candidate-pool reservation counter -- Vulkan-shader-internal
+    // only (never read by CUDA/Mojo), so a plain device-local buffer, not
+    // CUDA-interop. Reset to 0 via vkCmdFillBuffer baked into the SAME
+    // cached/resubmitted command buffer that runs the dispatch (see
+    // vulkaninterop_rt_trace), so every trace call starts counting fresh.
+    Buffer globalCandCounterBuf{};
 
     VkSemaphore semA = VK_NULL_HANDLE;
     VkSemaphore semB = VK_NULL_HANDLE;
@@ -1199,6 +1236,7 @@ extern "C" void vulkaninterop_rt_destroy_scene(void* handle) {
     if (sc->resultsCudaExtMem) cudaDestroyExternalMemory(sc->resultsCudaExtMem);
     if (sc->curveCandCudaExtMem) cudaDestroyExternalMemory(sc->curveCandCudaExtMem);
     if (sc->curveCandCountCudaExtMem) cudaDestroyExternalMemory(sc->curveCandCountCudaExtMem);
+    if (sc->curveCandOffsetCudaExtMem) cudaDestroyExternalMemory(sc->curveCandOffsetCudaExtMem);
 
     if (sc->descPool) vkDestroyDescriptorPool(sc->device, sc->descPool, nullptr);
     if (sc->pipeline) vkDestroyPipeline(sc->device, sc->pipeline, nullptr);
@@ -1216,6 +1254,9 @@ extern "C" void vulkaninterop_rt_destroy_scene(void* handle) {
     if (sc->curveCandMemory) vkFreeMemory(sc->device, sc->curveCandMemory, nullptr);
     if (sc->curveCandCountBuffer) vkDestroyBuffer(sc->device, sc->curveCandCountBuffer, nullptr);
     if (sc->curveCandCountMemory) vkFreeMemory(sc->device, sc->curveCandCountMemory, nullptr);
+    if (sc->curveCandOffsetBuffer) vkDestroyBuffer(sc->device, sc->curveCandOffsetBuffer, nullptr);
+    if (sc->curveCandOffsetMemory) vkFreeMemory(sc->device, sc->curveCandOffsetMemory, nullptr);
+    destroyBuffer(sc->device, &sc->globalCandCounterBuf);
 
     if (sc->tlas) sc->rtFns.destroy(sc->device, sc->tlas, nullptr);
     destroyBuffer(sc->device, &sc->tlasBuf);
@@ -1486,7 +1527,12 @@ extern "C" void* vulkaninterop_rt_create_scene(
         // instanceCustomIndex carries that chunk's leaf offset so the shader
         // can reconstruct the GLOBAL leaf index (curveLeafPrimIdx is one
         // buffer spanning all chunks, not re-chunked).
-        constexpr int64_t CURVE_BLAS_CHUNK_LEAVES = 1000000;
+        // Smaller than the original 1,000,000: shrinks each chunk's
+        // transient build-scratch buffer (the dominant peak-VRAM cost,
+        // see the struct-field comment above) further, freeing more
+        // headroom for the candidate pool below -- both compete for the
+        // same tight post-mesh-upload VRAM budget on dense hair scenes.
+        constexpr int64_t CURVE_BLAS_CHUNK_LEAVES = 250000;
         for (int64_t chunkStart = 0; chunkStart < n_curve_leaves; chunkStart += CURVE_BLAS_CHUNK_LEAVES) {
             int64_t chunkCount = std::min(CURVE_BLAS_CHUNK_LEAVES, n_curve_leaves - chunkStart);
 
@@ -1587,10 +1633,29 @@ extern "C" void* vulkaninterop_rt_create_scene(
         vulkaninterop_rt_destroy_scene(sc);
         return nullptr;
     }
-    // Curve-candidate output -- 16 must match geometry.mojo's CURVE_DEFER_K
-    // (not shared across the Mojo/C++ boundary, same as every other
-    // cross-language constant in this file).
-    sc->curveCandBytes = (VkDeviceSize)max_rays * 16 * sizeof(int32_t);
+    // Curve-candidate GLOBAL POOL -- an independent capacity, NOT tied to
+    // geometry.mojo's CURVE_DEFER_K (which now only sizes the small, always-
+    // allocated CUDA-fallback buffers -- see that constant's comment).
+    // gpu.mojo's resolve_curve_candidates_gpu reads this buffer's CUDA
+    // pointer DIRECTLY when Vulkan RT is active (no copy into a same-sized
+    // CUDA-side duplicate) -- see _gpu_bounce_kernels' "cand_prim_ptr"
+    // selection. That halves the effective memory cost per unit of
+    // capacity versus the earlier copy-based design, so this can afford to
+    // be sized much larger. Chosen empirically on curly-hair (11.87M curve
+    // leaves, the densest known scene): smaller multipliers pool-clamp away
+    // real candidates on this scene's true density, showing up as a
+    // whole-frame energy deficit (uniform darkening) rather than visible
+    // patches, since redistribution alone doesn't fix a genuine total
+    // shortfall. Bounds-checked in the shader either way, so oversizing
+    // costs VRAM/copy bandwidth, not correctness. 48 is the largest
+    // multiplier that fit in the VRAM left after curly-hair's mesh/BVH/
+    // curve-BLAS build on a 12GB card (64 already OOMs there); it closes
+    // most but not all of the energy deficit on that scene specifically
+    // (measured: 512x512/32spp mean 0.0476 vs the CUDA baseline's 0.0856,
+    // ~1.8x too dark, down from ~5.2x at the original per-ray-capped
+    // scheme) -- a real, open, VRAM-bound limitation, not a logic bug.
+    sc->curveCandCapacity = max_rays * 48;
+    sc->curveCandBytes = (VkDeviceSize)sc->curveCandCapacity * sizeof(int32_t);
     if (!createInteropBuffer(sc->device, sc->physicalDevice, sc->extFns, sc->curveCandBytes,
                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                               &sc->curveCandBuffer, &sc->curveCandMemory, &sc->curveCandCudaExtMem, &sc->curveCandCudaPtr)) {
@@ -1601,6 +1666,21 @@ extern "C" void* vulkaninterop_rt_create_scene(
     if (!createInteropBuffer(sc->device, sc->physicalDevice, sc->extFns, sc->curveCandCountBytes,
                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                               &sc->curveCandCountBuffer, &sc->curveCandCountMemory, &sc->curveCandCountCudaExtMem, &sc->curveCandCountCudaPtr)) {
+        vulkaninterop_rt_destroy_scene(sc);
+        return nullptr;
+    }
+    sc->curveCandOffsetBytes = (VkDeviceSize)max_rays * sizeof(int32_t);
+    if (!createInteropBuffer(sc->device, sc->physicalDevice, sc->extFns, sc->curveCandOffsetBytes,
+                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                              &sc->curveCandOffsetBuffer, &sc->curveCandOffsetMemory, &sc->curveCandOffsetCudaExtMem, &sc->curveCandOffsetCudaPtr)) {
+        vulkaninterop_rt_destroy_scene(sc);
+        return nullptr;
+    }
+    // Vulkan-shader-internal only (see the field comment) -- plain
+    // device-local, not CUDA-interop.
+    if (!createBuffer(sc->device, sc->physicalDevice, sizeof(uint32_t),
+                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, false, &sc->globalCandCounterBuf)) {
         vulkaninterop_rt_destroy_scene(sc);
         return nullptr;
     }
@@ -1628,7 +1708,7 @@ extern "C" void* vulkaninterop_rt_create_scene(
         return nullptr;
     }
 
-    VkDescriptorSetLayoutBinding bindings[7]{};
+    VkDescriptorSetLayoutBinding bindings[8]{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     bindings[0].descriptorCount = 1;
@@ -1657,20 +1737,25 @@ extern "C" void* vulkaninterop_rt_create_scene(
     bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[5].descriptorCount = 1;
     bindings[5].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    // 6 = curve leaf AABB bounds (world space, same layout curveAabbBuf
-    // already holds for the BLAS build). Not currently read by the shader
-    // -- see curveAabbBuf's creation comment above for why (a nearest-K
-    // eviction scheme using this was tried and reverted for performance).
-    // Kept bound so a future, cheaper attempt doesn't need to redo the
-    // descriptor-set plumbing.
+    // 6 = global candidate-pool reservation counter, READ-WRITE (the shader
+    // atomicAdd's into it once per 64-ray workgroup, not once per
+    // candidate -- see curveCandBuffer's struct-field comment for the full
+    // "count then place" design this replaces the old fixed-per-ray-K-cap
+    // scheme with). 7 = each ray's resulting start offset into the flat
+    // curveCand[] pool (curveCandCount already holds each ray's real,
+    // now-uncapped, count).
     bindings[6].binding = 6;
     bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[6].descriptorCount = 1;
     bindings[6].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[7].binding = 7;
+    bindings[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[7].descriptorCount = 1;
+    bindings[7].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
     VkDescriptorSetLayoutCreateInfo dslci{};
     dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    dslci.bindingCount = 7;
+    dslci.bindingCount = 8;
     dslci.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(sc->device, &dslci, nullptr, &sc->dsLayout) != VK_SUCCESS) {
         fprintf(stderr, "vulkaninterop: vkCreateDescriptorSetLayout (rt) failed\n");
@@ -1678,10 +1763,14 @@ extern "C" void* vulkaninterop_rt_create_scene(
         return nullptr;
     }
 
+    // 2 uint32s now: rayCount (as before) + candPoolCapacity (the flat
+    // curveCand[] pool's total element count, fixed for the scene's
+    // lifetime -- lets the shader bounds-check its pool-reservation writes;
+    // see curveCandBuffer's struct-field comment for the full design).
     VkPushConstantRange pcRange{};
     pcRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     pcRange.offset = 0;
-    pcRange.size = sizeof(uint32_t);
+    pcRange.size = sizeof(uint32_t) * 2;
 
     VkPipelineLayoutCreateInfo plci{};
     plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -1715,7 +1804,7 @@ extern "C" void* vulkaninterop_rt_create_scene(
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     poolSizes[0].descriptorCount = 1;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSizes[1].descriptorCount = 6;
+    poolSizes[1].descriptorCount = 7;
     VkDescriptorPoolCreateInfo dpci{};
     dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     dpci.maxSets = 1;
@@ -1758,11 +1847,14 @@ extern "C" void* vulkaninterop_rt_create_scene(
     VkDescriptorBufferInfo curveCandCountInfo{};
     curveCandCountInfo.buffer = sc->curveCandCountBuffer;
     curveCandCountInfo.range = sc->curveCandCountBytes;
-    VkDescriptorBufferInfo curveAabbInfo{};
-    curveAabbInfo.buffer = sc->curveAabbBuf.buffer;
-    curveAabbInfo.range = VK_WHOLE_SIZE;
+    VkDescriptorBufferInfo globalCandCounterInfo{};
+    globalCandCounterInfo.buffer = sc->globalCandCounterBuf.buffer;
+    globalCandCounterInfo.range = VK_WHOLE_SIZE;
+    VkDescriptorBufferInfo curveCandOffsetInfo{};
+    curveCandOffsetInfo.buffer = sc->curveCandOffsetBuffer;
+    curveCandOffsetInfo.range = sc->curveCandOffsetBytes;
 
-    VkWriteDescriptorSet writes[7]{};
+    VkWriteDescriptorSet writes[8]{};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].pNext = &asWrite;
     writes[0].dstSet = sc->descSet;
@@ -1804,8 +1896,14 @@ extern "C" void* vulkaninterop_rt_create_scene(
     writes[6].dstBinding = 6;
     writes[6].descriptorCount = 1;
     writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[6].pBufferInfo = &curveAabbInfo;
-    vkUpdateDescriptorSets(sc->device, 7, writes, 0, nullptr);
+    writes[6].pBufferInfo = &globalCandCounterInfo;
+    writes[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[7].dstSet = sc->descSet;
+    writes[7].dstBinding = 7;
+    writes[7].descriptorCount = 1;
+    writes[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[7].pBufferInfo = &curveCandOffsetInfo;
+    vkUpdateDescriptorSets(sc->device, 8, writes, 0, nullptr);
 
     return sc;
 }
@@ -1813,6 +1911,11 @@ extern "C" void* vulkaninterop_rt_create_scene(
 extern "C" void* vulkaninterop_rt_get_curve_cand_ptr(void* handle) {
     if (!handle) return nullptr;
     return ((InteropRtScene*)handle)->curveCandCudaPtr;
+}
+
+extern "C" void* vulkaninterop_rt_get_curve_cand_offset_ptr(void* handle) {
+    if (!handle) return nullptr;
+    return ((InteropRtScene*)handle)->curveCandOffsetCudaPtr;
 }
 
 extern "C" void* vulkaninterop_rt_get_curve_cand_count_ptr(void* handle) {
@@ -1874,9 +1977,28 @@ extern "C" int vulkaninterop_rt_trace(void* handle, int32_t ray_count, void* cud
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
         vkBeginCommandBuffer(cmd, &bi);
+        // Reset the curve-candidate-pool reservation counter to 0 before
+        // every dispatch -- baked into this SAME cached/resubmitted command
+        // buffer (see the struct-field comment on globalCandCounterBuf), so
+        // every future resubmission with this ray_count re-zeroes it too,
+        // not just the first. The barrier makes the fill visible to the
+        // shader's atomicAdd (a transfer write must happen-before a shader
+        // read/write of the same memory per the Vulkan sync model).
+        vkCmdFillBuffer(cmd, sc->globalCandCounterBuf.buffer, 0, sizeof(uint32_t), 0);
+        VkBufferMemoryBarrier counterBarrier{};
+        counterBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        counterBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        counterBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        counterBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        counterBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        counterBarrier.buffer = sc->globalCandCounterBuf.buffer;
+        counterBarrier.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                              0, 0, nullptr, 1, &counterBarrier, 0, nullptr);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, sc->pipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, sc->pipelineLayout, 0, 1, &sc->descSet, 0, nullptr);
-        vkCmdPushConstants(cmd, sc->pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(rayCountU32), &rayCountU32);
+        uint32_t pushConsts[2] = { rayCountU32, (uint32_t)sc->curveCandCapacity };
+        vkCmdPushConstants(cmd, sc->pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pushConsts), pushConsts);
         vkCmdDispatch(cmd, (rayCountU32 + 63) / 64, 1, 1);
         vkEndCommandBuffer(cmd);
 

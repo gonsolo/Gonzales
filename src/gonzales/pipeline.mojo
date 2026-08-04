@@ -22,6 +22,7 @@ from .vulkaninterop import (
     VulkanInteropRtSceneHandle, vulkaninterop_rt_create_scene,
     vulkaninterop_rt_get_rays_ptr, vulkaninterop_rt_get_results_ptr,
     vulkaninterop_rt_get_curve_cand_ptr, vulkaninterop_rt_get_curve_cand_count_ptr,
+    vulkaninterop_rt_get_curve_cand_offset_ptr,
     vulkaninterop_rt_destroy_scene,
 )
 
@@ -975,6 +976,7 @@ def parse_and_render(
         var instance_base_mesh_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
         var interop_curve_cand_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
         var interop_curve_cand_count_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
+        var interop_curve_cand_offset_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
         var n_meshes_vk = 0
         var max_rays_vk = Int64(n_pixels) * Int64(WAVEFRONT_BATCH)
         if use_vk:
@@ -1105,11 +1107,15 @@ def parse_and_render(
                 if n_curve_leaves_vk > 0:
                     var curveCandPtr = vulkaninterop_rt_get_curve_cand_ptr(interop_scene)
                     var curveCandCountPtr = vulkaninterop_rt_get_curve_cand_count_ptr(interop_scene)
+                    var curveCandOffsetPtr = vulkaninterop_rt_get_curve_cand_offset_ptr(interop_scene)
                     interop_curve_cand_buf_opt = DeviceBuffer[DType.uint8](
                         handle[].ctx, curveCandPtr.bitcast[UInt8](),
                         Int(max_rays_vk) * Int(CURVE_DEFER_K) * 4, owning=False)
                     interop_curve_cand_count_buf_opt = DeviceBuffer[DType.uint8](
                         handle[].ctx, curveCandCountPtr.bitcast[UInt8](),
+                        Int(max_rays_vk) * 4, owning=False)
+                    interop_curve_cand_offset_buf_opt = DeviceBuffer[DType.uint8](
+                        handle[].ctx, curveCandOffsetPtr.bitcast[UInt8](),
                         Int(max_rays_vk) * 4, owning=False)
 
         var hash_bits = UInt64(mix_bits_u64(UInt64(0)))
@@ -1168,6 +1174,7 @@ def parse_and_render(
                     mesh_material_idx_buf_opt, mesh_al_idx_buf_opt, n_meshes_vk,
                     instance_base_mesh_buf_opt,
                     interop_curve_cand_buf_opt, interop_curve_cand_count_buf_opt,
+                    interop_curve_cand_offset_buf_opt,
                 )
                 si += actual_batch
                 var elapsed = Float64(perf_counter_ns() - t0_gpu) / 1.0e9

@@ -5,19 +5,10 @@
 // instead of step 2's one-ray-per-dispatch vulkanrt_trace_ray -- one queue
 // submit + wait per ray is far too slow to ever back a real renderer.
 // Every invocation independently traces its own ray against the same TLAS
-// used by trace_ray.comp/smoke.comp; no cross-invocation communication.
+// used by trace_ray.comp/smoke.comp; no cross-invocation communication
+// except the workgroup-local curve-candidate pool reservation below.
 
 layout(local_size_x = 64) in;
-
-// Must match geometry.mojo's CURVE_DEFER_K (not shared across the Mojo/C++/
-// GLSL boundary, same as every other cross-language constant in this repo).
-// Unlike the CUDA path (traverse_bvh2_core_defer_curves), this shader has no
-// narrow-phase fallback for candidates beyond K -- they are silently
-// dropped (first-K-encountered-in-traversal-order, not nearest-K), not
-// deferred -- see geometry.mojo's CURVE_DEFER_K comment for the known
-// consequence (visible gaps on the very densest hair) and why a
-// nearest-K-by-AABB-distance version was tried and reverted.
-const uint CURVE_DEFER_K = 16;
 
 struct Ray {
     vec4 originAndTMin;  // xyz = origin, w = tMin
@@ -50,92 +41,179 @@ layout(set = 0, binding = 2, std430) writeonly buffer ResultsBuffer {
 // Curve support (see vulkaninterop_rt_create_scene's docstring): curve BVH
 // leaves are procedural AABB geometry in the SAME TLAS, distinguished from
 // triangle candidates by intersection TYPE, never confirmed/generated --
-// they never affect the committed triangle/instance hit above. Every AABB
-// candidate this ray encounters gets recorded (up to CURVE_DEFER_K) into
-// CurveCandBuffer/CurveCandCountBuffer, which a Mojo copy kernel feeds
-// straight into gonzales's existing curve_cand_prim_buf/curve_cand_count_buf
-// (gpu.mojo's compact_curve_paths_gpu/resolve_curve_candidates_gpu, unchanged).
+// they never affect the committed triangle/instance hit above.
+//
+// Candidate placement is a two-pass "count then place into a shared pool"
+// scheme (replaces an earlier fixed-per-ray-K-slots design that silently
+// dropped real candidates once a ray exceeded K, and a "keep the K nearest
+// by AABB distance" fix that was correct but regressed dense-hair render
+// time by 2+ orders of magnitude from the extra per-candidate AABB-buffer
+// reads -- see geometry.mojo's CURVE_DEFER_K comment for that history):
+//   Pass 1 (below, in main): trace once, counting this ray's REAL AABB-
+//     candidate total (no cap) while also resolving the committed
+//     triangle/instance hit exactly as before.
+//   Reservation: each 64-ray workgroup computes an exclusive prefix sum of
+//     its 64 rays' counts in `shared` memory (cheap, no global-memory
+//     traffic), then ONE thread does ONE atomicAdd to reserve the whole
+//     workgroup's total in the flat global pool (CurveCandBuffer) --
+//     amortizing atomic contention across 64 rays instead of one atomic
+//     per candidate or per ray.
+//   Pass 2: re-trace the IDENTICAL ray (deterministic against a static
+//     acceleration structure) to place its candidates at their now-known
+//     exact offsets. Must replicate pass 1's triangle-confirming behavior
+//     exactly -- confirming a triangle intersection shrinks the effective
+//     traversal bound, so any divergence between the two passes' commit
+//     behavior would enumerate a different AABB-candidate set than pass 1
+//     already committed `myCount` to, corrupting the next ray's region of
+//     the flat pool.
+// This costs a second ray-query trace per ray (not free) but touches NO
+// extra global memory buffers beyond what pass 1 already reads/writes --
+// the AABB-distance approach's fatal cost was the extra per-candidate
+// global reads, not retracing itself.
 layout(set = 0, binding = 3, std430) readonly buffer CurveLeafPrimIdxBuffer {
     int curveLeafPrimIdx[];
 };
 layout(set = 0, binding = 4, std430) writeonly buffer CurveCandBuffer {
-    int curveCand[];  // row-major per ray: curveCand[ray*CURVE_DEFER_K + slot]
+    int curveCand[];  // flat global pool, indexed by reserved offset, NOT by ray*K
 };
 layout(set = 0, binding = 5, std430) writeonly buffer CurveCandCountBuffer {
-    int curveCandCount[];
+    int curveCandCount[];  // this ray's REAL candidate count, uncapped
 };
-// binding 6 = CurveAabbBuffer (world-space leaf bounds) was tried here to
-// support keeping the K NEAREST candidates instead of the first K
-// encountered, but reading it per-candidate regressed dense-hair render
-// time by 2+ orders of magnitude (256x256/8spp alone exceeded the time the
-// unmodified path took for a full 512x512/32spp render) -- reverted. The
-// binding/buffer still exist C++-side (vulkaninterop.cpp) since removing
-// them isn't necessary for correctness, but this shader no longer reads it.
+// Read-write (atomicAdd target) -- reset to 0 every dispatch via
+// vkCmdFillBuffer baked into the same command buffer (see
+// vulkaninterop_rt_trace), so never carries state across dispatches.
+layout(set = 0, binding = 6, std430) buffer GlobalCandCounterBuffer {
+    uint globalCandCounter;
+};
+layout(set = 0, binding = 7, std430) writeonly buffer CurveCandOffsetBuffer {
+    int curveCandOffset[];  // this ray's start offset into CurveCandBuffer
+};
 
 layout(push_constant) uniform PushConstants {
     uint rayCount;
+    uint candPoolCapacity;  // CurveCandBuffer's total element count
 } pc;
+
+shared uint wgCounts[64];
+shared uint wgOffsets[64];
+shared uint wgBase;
 
 void main() {
     uint i = gl_GlobalInvocationID.x;
-    if (i >= pc.rayCount) return;
+    uint localId = gl_LocalInvocationID.x;
+    bool valid = i < pc.rayCount;
 
-    vec3 origin = rays[i].originAndTMin.xyz;
-    float tMin = rays[i].originAndTMin.w;
-    vec3 direction = rays[i].dirAndTMax.xyz;
-    float tMax = rays[i].dirAndTMax.w;
+    vec3 origin = vec3(0.0);
+    vec3 direction = vec3(0.0, 0.0, 1.0);
+    float tMin = 0.0;
+    float tMax = 0.0;
+    if (valid) {
+        origin = rays[i].originAndTMin.xyz;
+        tMin = rays[i].originAndTMin.w;
+        direction = rays[i].dirAndTMax.xyz;
+        tMax = rays[i].dirAndTMax.w;
+    }
 
-    rayQueryEXT rq;
-    rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF,
-                           origin, tMin, direction, tMax);
-
-    uint curveCandN = 0u;
-    while (rayQueryProceedEXT(rq)) {
-        uint candType = rayQueryGetIntersectionTypeEXT(rq, false);
-        if (candType == gl_RayQueryCandidateIntersectionTriangleEXT) {
-            rayQueryConfirmIntersectionEXT(rq);
-        } else if (candType == gl_RayQueryCandidateIntersectionAABBEXT) {
-            // Never confirmed/generated -- purely informational, recorded
-            // for the narrow-phase (CPU/CUDA-side) curve math to resolve
-            // later, exactly mirroring how the software BVH walk defers
-            // curve leaves instead of testing them inline.
-            if (curveCandN < CURVE_DEFER_K) {
-                // Curves are built as several BLAS chunks (see vulkaninterop.
-                // cpp's InteropRtScene::curveBlas comment), each its own TLAS
-                // instance. primitiveIndex is local to that chunk's own AABB
-                // geometry; instanceCustomIndex carries the chunk's leaf
-                // offset so this reconstructs the GLOBAL index into
-                // curveLeafPrimIdx (one buffer spanning every chunk).
-                int localIdx = rayQueryGetIntersectionPrimitiveIndexEXT(rq, false);
-                int chunkOffset = int(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
-                curveCand[i * CURVE_DEFER_K + curveCandN] = curveLeafPrimIdx[chunkOffset + localIdx];
-                curveCandN++;
+    // ---- Pass 1: resolve the committed triangle/instance hit (unchanged
+    // logic) AND count this ray's real AABB-candidate total. ----
+    uint myCount = 0u;
+    if (valid) {
+        rayQueryEXT rq;
+        rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF,
+                               origin, tMin, direction, tMax);
+        while (rayQueryProceedEXT(rq)) {
+            uint candType = rayQueryGetIntersectionTypeEXT(rq, false);
+            if (candType == gl_RayQueryCandidateIntersectionTriangleEXT) {
+                rayQueryConfirmIntersectionEXT(rq);
+            } else if (candType == gl_RayQueryCandidateIntersectionAABBEXT) {
+                myCount++;
             }
         }
-    }
-    curveCandCount[i] = int(curveCandN);
 
-    Result r;
-    if (rayQueryGetIntersectionTypeEXT(rq, true) ==
-        gl_RayQueryCommittedIntersectionTriangleEXT) {
-        vec2 bary = rayQueryGetIntersectionBarycentricsEXT(rq, true);
-        r.hitT = rayQueryGetIntersectionTEXT(rq, true);
-        r.u = bary.x;
-        r.v = bary.y;
-        r._pad0 = 0.0;
-        r.hitMesh = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
-        r.hitTriangle = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
-        r.hitFlag = 1u;
-        r.geometryIndex = rayQueryGetIntersectionGeometryIndexEXT(rq, true);
-    } else {
-        r.hitT = -1.0;
-        r.u = 0.0;
-        r.v = 0.0;
-        r._pad0 = 0.0;
-        r.hitMesh = -1;
-        r.hitTriangle = -1;
-        r.hitFlag = 0u;
-        r.geometryIndex = -1;
+        Result r;
+        if (rayQueryGetIntersectionTypeEXT(rq, true) ==
+            gl_RayQueryCommittedIntersectionTriangleEXT) {
+            vec2 bary = rayQueryGetIntersectionBarycentricsEXT(rq, true);
+            r.hitT = rayQueryGetIntersectionTEXT(rq, true);
+            r.u = bary.x;
+            r.v = bary.y;
+            r._pad0 = 0.0;
+            r.hitMesh = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+            r.hitTriangle = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
+            r.hitFlag = 1u;
+            r.geometryIndex = rayQueryGetIntersectionGeometryIndexEXT(rq, true);
+        } else {
+            r.hitT = -1.0;
+            r.u = 0.0;
+            r.v = 0.0;
+            r._pad0 = 0.0;
+            r.hitMesh = -1;
+            r.hitTriangle = -1;
+            r.hitFlag = 0u;
+            r.geometryIndex = -1;
+        }
+        results[i] = r;
     }
-    results[i] = r;
+
+    // ---- Workgroup-local exclusive prefix sum + one shared reservation. ----
+    wgCounts[localId] = myCount;
+    barrier();
+    if (localId == 0u) {
+        uint running = 0u;
+        for (uint k = 0u; k < 64u; k++) {
+            uint c = wgCounts[k];
+            wgOffsets[k] = running;
+            running += c;
+        }
+        wgBase = (running > 0u) ? atomicAdd(globalCandCounter, running) : 0u;
+    }
+    barrier();
+
+    if (!valid) {
+        return;
+    }
+    uint myBase = wgBase + wgOffsets[localId];
+    // Clamp what gets REPORTED to the true number of slots this ray
+    // actually has room for, not just what pass 2 below is individually
+    // bounds-checked to WRITE -- if the whole dispatch's real candidate
+    // total exceeds candPoolCapacity, a late workgroup's reservation
+    // (myBase) can itself already be past capacity. Reporting the
+    // unclamped myCount there would tell resolve_curve_candidates_gpu
+    // (gpu.mojo) to read curve_cand_prim[myBase .. myBase+myCount) far
+    // outside the pool's actual allocated size -- a real out-of-bounds
+    // read (CUDA_ERROR_ILLEGAL_ADDRESS), not just quietly-wrong data.
+    uint availableForThisRay = (myBase < pc.candPoolCapacity)
+        ? min(myCount, pc.candPoolCapacity - myBase) : 0u;
+    curveCandCount[i] = int(availableForThisRay);
+    curveCandOffset[i] = int(myBase);
+    if (availableForThisRay == 0u) {
+        return;
+    }
+
+    // ---- Pass 2: re-trace to place candidates at their reserved offsets. ----
+    rayQueryEXT rq2;
+    rayQueryInitializeEXT(rq2, topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF,
+                           origin, tMin, direction, tMax);
+    uint w = 0u;
+    while (rayQueryProceedEXT(rq2)) {
+        uint candType = rayQueryGetIntersectionTypeEXT(rq2, false);
+        if (candType == gl_RayQueryCandidateIntersectionTriangleEXT) {
+            rayQueryConfirmIntersectionEXT(rq2);
+        } else if (candType == gl_RayQueryCandidateIntersectionAABBEXT) {
+            // Curves are built as several BLAS chunks (see vulkaninterop.
+            // cpp's InteropRtScene::curveBlas comment), each its own TLAS
+            // instance. primitiveIndex is local to that chunk's own AABB
+            // geometry; instanceCustomIndex carries the chunk's leaf
+            // offset so this reconstructs the GLOBAL index into
+            // curveLeafPrimIdx (one buffer spanning every chunk).
+            int localIdx = rayQueryGetIntersectionPrimitiveIndexEXT(rq2, false);
+            int chunkOffset = int(rayQueryGetIntersectionInstanceCustomIndexEXT(rq2, false));
+            int leafIdx = chunkOffset + localIdx;
+            uint slot = myBase + w;
+            if (slot < pc.candPoolCapacity) {
+                curveCand[slot] = curveLeafPrimIdx[leafIdx];
+            }
+            w++;
+        }
+    }
 }
