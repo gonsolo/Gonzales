@@ -1,8 +1,12 @@
 from std.math import abs
 from std.testing import assert_true, assert_false, TestSuite
 from gonzales.geometry import RGB, INV_PI
-from gonzales.reservoir import ReservoirState
-from gonzales.restir_gi import GIReservoir, gi_reservoir_init, gi_target_pdf
+from gonzales.reservoir import ReservoirState, reservoir_update
+from gonzales.restir_gi import (
+    GIReservoir, gi_reservoir_init, gi_target_pdf,
+    GIReservoirIO, gi_reservoir_io_null, gi_temporal_spatial_combine,
+)
+from gonzales.rng import PCG32
 
 comptime EPS: Float32 = 1e-4
 
@@ -84,6 +88,163 @@ def test_gi_target_pdf_closer_recon_point_gives_higher_value() raises:
     var far = gi_target_pdf(hit_point, normal, alb, SIMD[DType.float32, 3](Float32(0), Float32(4), Float32(0)), recon_normal, lo)
     var near = gi_target_pdf(hit_point, normal, alb, SIMD[DType.float32, 3](Float32(0), Float32(2), Float32(0)), recon_normal, lo)
     assert_true(near > far * Float32(3.9) and near < far * Float32(4.1))
+
+# ── gi_temporal_spatial_combine ──────────────────────────────────────────────
+# ctx-free by design (see restir_gi.mojo's module header), so unlike
+# shading.mojo's di_temporal_step this is directly unit-testable with
+# synthetic reservoirs -- no rendering involved. Tests focus on invariants
+# that hold regardless of the PCG stream (reservoir_combine's m-accumulation
+# is unconditional; delta/invalid neighbors must never be folded in at all)
+# rather than exact RIS-acceptance outcomes, which are legitimately
+# probabilistic.
+
+def _make_valid(recon_point: SIMD[DType.float32, 3], recon_normal: SIMD[DType.float32, 3], lo: RGB, w: Float32, m: Float32, is_delta: Int8 = Int8(0)) -> GIReservoir:
+    var res = gi_reservoir_init()
+    res.recon_point = recon_point
+    res.recon_normal = recon_normal
+    res.lo = lo
+    res.valid = Int8(1)
+    res.recon_is_delta = is_delta
+    res.state.w = w
+    res.state.m = m
+    return res
+
+def test_gi_combine_no_temporal_finalizes_plain_single_candidate() raises:
+    """`pixel_idx < 0` (batch/no-history mode): must behave as a plain
+    single-candidate RIS finalize -- no crash touching gi_reservoir_io_null()'s
+    dangling pointers, m unchanged, W = w_sum / (m * p_hat)."""
+    var hit_point = SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
+    var normal = SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0))
+    var alb = RGB(Float32(0.8))
+    var recon_point = SIMD[DType.float32, 3](Float32(0), Float32(2), Float32(0))
+    var recon_normal = SIMD[DType.float32, 3](Float32(0), Float32(-1), Float32(0))
+    var lo = RGB(Float32(10.0))
+
+    var res = gi_reservoir_init()
+    _ = reservoir_update(res.state, Float32(5.0), Float32(0.0))
+    res.recon_point = recon_point
+    res.recon_normal = recon_normal
+    res.lo = lo
+    res.valid = Int8(1)
+
+    var pcg = PCG32(UInt64(1), UInt64(1))
+    gi_temporal_spatial_combine(res, hit_point, normal, alb, pcg, gi_reservoir_io_null(), pixel_idx=-1)
+
+    var expected_p_hat = gi_target_pdf(hit_point, normal, alb, recon_point, recon_normal, lo)
+    assert_true(_close(res.state.m, Float32(1.0)))
+    assert_true(_close(res.state.w, Float32(5.0) / expected_p_hat))
+
+def test_gi_combine_temporal_accumulates_confidence_regardless_of_winner() raises:
+    """`reservoir_combine`'s m += src.m is unconditional (reservoir.mojo's own
+    documented contract) -- a valid, non-delta previous-frame reservoir must
+    add its full m to this pixel's, whether or not it ends up winning."""
+    var hit_point = SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
+    var normal = SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0))
+    var alb = RGB(Float32(0.8))
+    var fresh = _make_valid(
+        SIMD[DType.float32, 3](Float32(0), Float32(2), Float32(0)),
+        SIMD[DType.float32, 3](Float32(0), Float32(-1), Float32(0)),
+        RGB(Float32(10.0)), Float32(5.0), Float32(1.0))
+    var prev = _make_valid(
+        SIMD[DType.float32, 3](Float32(0), Float32(3), Float32(0)),
+        SIMD[DType.float32, 3](Float32(0), Float32(-1), Float32(0)),
+        RGB(Float32(20.0)), Float32(2.0), Float32(3.0))
+
+    var prev_buf = List[GIReservoir]()
+    prev_buf.append(prev)
+    var write_buf = List[GIReservoir]()
+    write_buf.append(gi_reservoir_init())
+    var io = GIReservoirIO(
+        read=prev_buf.unsafe_ptr(), write=write_buf.unsafe_ptr(),
+        gbuf_normal=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        gbuf_depth=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        gbuf_material_id=UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling(),
+        gbuf_world_pos=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        frame_w=Int32(0), frame_h=Int32(0),  # spatial disabled -- isolates temporal-only behavior
+    )
+    var pcg = PCG32(UInt64(12345), UInt64(1))
+    var res = fresh
+    gi_temporal_spatial_combine(res, hit_point, normal, alb, pcg, io, pixel_idx=0)
+    assert_true(_close(res.state.m, Float32(1.0) + Float32(3.0)))
+
+def test_gi_combine_rejects_delta_flagged_previous_reservoir_entirely() raises:
+    """Phase 4.3: a reconnection vertex flagged recon_is_delta must never be
+    folded in at all (not just never win) -- m must stay exactly this
+    pixel's own fresh m, as if no temporal history existed."""
+    var hit_point = SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
+    var normal = SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0))
+    var alb = RGB(Float32(0.8))
+    var fresh = _make_valid(
+        SIMD[DType.float32, 3](Float32(0), Float32(2), Float32(0)),
+        SIMD[DType.float32, 3](Float32(0), Float32(-1), Float32(0)),
+        RGB(Float32(10.0)), Float32(5.0), Float32(1.0))
+    var prev = _make_valid(
+        SIMD[DType.float32, 3](Float32(0), Float32(3), Float32(0)),
+        SIMD[DType.float32, 3](Float32(0), Float32(-1), Float32(0)),
+        RGB(Float32(20.0)), Float32(2.0), Float32(3.0), is_delta=Int8(1))
+
+    var prev_buf = List[GIReservoir]()
+    prev_buf.append(prev)
+    var write_buf = List[GIReservoir]()
+    write_buf.append(gi_reservoir_init())
+    var io = GIReservoirIO(
+        read=prev_buf.unsafe_ptr(), write=write_buf.unsafe_ptr(),
+        gbuf_normal=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        gbuf_depth=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        gbuf_material_id=UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling(),
+        gbuf_world_pos=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        frame_w=Int32(0), frame_h=Int32(0),
+    )
+    var pcg = PCG32(UInt64(12345), UInt64(1))
+    var res = fresh
+    gi_temporal_spatial_combine(res, hit_point, normal, alb, pcg, io, pixel_idx=0)
+    assert_true(_close(res.state.m, Float32(1.0)))
+
+def test_gi_combine_rejects_invalid_previous_reservoir() raises:
+    """A previous-frame slot with no real candidate yet (valid=0, e.g. a
+    pixel just uncovered by camera motion) must be excluded the same way,
+    not treated as a real zero-weight candidate."""
+    var hit_point = SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
+    var normal = SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0))
+    var alb = RGB(Float32(0.8))
+    var fresh = _make_valid(
+        SIMD[DType.float32, 3](Float32(0), Float32(2), Float32(0)),
+        SIMD[DType.float32, 3](Float32(0), Float32(-1), Float32(0)),
+        RGB(Float32(10.0)), Float32(5.0), Float32(1.0))
+    var prev = gi_reservoir_init()  # valid == 0
+    prev.state.m = Float32(3.0)     # if this leaked in despite valid==0, m would jump
+
+    var prev_buf = List[GIReservoir]()
+    prev_buf.append(prev)
+    var write_buf = List[GIReservoir]()
+    write_buf.append(gi_reservoir_init())
+    var io = GIReservoirIO(
+        read=prev_buf.unsafe_ptr(), write=write_buf.unsafe_ptr(),
+        gbuf_normal=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        gbuf_depth=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        gbuf_material_id=UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling(),
+        gbuf_world_pos=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        frame_w=Int32(0), frame_h=Int32(0),
+    )
+    var pcg = PCG32(UInt64(12345), UInt64(1))
+    var res = fresh
+    gi_temporal_spatial_combine(res, hit_point, normal, alb, pcg, io, pixel_idx=0)
+    assert_true(_close(res.state.m, Float32(1.0)))
+
+def test_gi_combine_zero_target_pdf_at_winner_gives_zero_weight() raises:
+    """`reservoir_finalize`'s documented degenerate case: a winning candidate
+    whose target pdf evaluates to 0 AT THIS PIXEL (here: the reconnection
+    point sits below x1's horizon) must finalize to W=0, not NaN/Inf."""
+    var hit_point = SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
+    var normal = SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0))
+    var alb = RGB(Float32(0.8))
+    var res = _make_valid(
+        SIMD[DType.float32, 3](Float32(0), Float32(-2), Float32(0)),  # below horizon
+        SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0)),
+        RGB(Float32(10.0)), Float32(5.0), Float32(1.0))
+    var pcg = PCG32(UInt64(1), UInt64(1))
+    gi_temporal_spatial_combine(res, hit_point, normal, alb, pcg, gi_reservoir_io_null(), pixel_idx=-1)
+    assert_true(_close(res.state.w, Float32(0.0)))
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()
