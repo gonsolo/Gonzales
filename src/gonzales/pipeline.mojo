@@ -770,9 +770,12 @@ def parse_and_render(
     # exercises the staging itself, a prerequisite for a future Vulkan RT
     # swap, not yet a speed win. See vcm_render_gpu_wavefront's docstring.
     use_vcm_wavefront: Bool = False,
-    # Phase 0.5 (docs/A2_restir_migration_plan.md): plumbed through but
-    # not yet wired to any dispatch branch -- prints a notice and falls
-    # through to whichever integrator the other flags select.
+    # docs/A2_restir_migration_plan.md Phase 2/3: ReSTIR DI, wired into both
+    # the CPU path and the plain --gpu path (batch mode renders 1 sample/
+    # pixel per dispatch via gpu_render_sample for full reservoir reuse --
+    # see the use_restir branch below). No effect combined with --sppm/
+    # --vcm/--guide (see the warnings just below) -- Phase 2 only touches
+    # the plain path tracer's diffuse-material NEE.
     use_restir: Bool = False,
 ) raises -> Int32:
     if use_gpu and not gpu_available():
@@ -804,8 +807,6 @@ def parse_and_render(
     var crop_w = crop_x1px - crop_x0px
     var crop_h = crop_y1px - crop_y0px
 
-    if use_restir and use_gpu:
-        print("--restir: GPU not yet implemented (docs/A2_restir_migration_plan.md Phase 2 is CPU-only so far), falling back to the standard GPU renderer")
     if use_restir and use_sppm:
         print("--restir: no effect combined with --sppm (Phase 2 only touches the plain path tracer's diffuse-material NEE)")
     if use_restir and use_vcm:
