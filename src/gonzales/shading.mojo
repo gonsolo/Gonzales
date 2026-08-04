@@ -12,7 +12,7 @@ from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_
 from .spectrum import SpectralHandle, null_spectral_handle
 from .reservoir import ReservoirState, reservoir_update, reservoir_finalize, reservoir_combine, reservoir_cap_confidence
 from .restir_di import DIReservoir, di_reservoir_init, di_target_pdf, ReservoirIO, reservoir_io_null
-from .restir_gi import GIReservoir, gi_reservoir_init, gi_target_pdf
+from .restir_gi import GIReservoir, gi_reservoir_init, gi_target_pdf, GIReservoirIO, gi_reservoir_io_null, gi_temporal_spatial_combine
 
 @fieldwise_init
 struct GIPendingX1(TrivialRegisterPassable):
@@ -103,19 +103,22 @@ struct ShadeContext:
     # these as device buffers.
     var measured_brdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin]
     # Phase 4 (docs/A2_restir_migration_plan.md), CPU-only, dead/unwired
-    # (dangling on every call site except shade_core_cpu_nee's, which is
-    # itself not called with real buffers by any render path yet -- see
+    # (dangling/null on every call site except shade_core_cpu_nee's, which
+    # is itself not called with real buffers by any render path yet -- see
     # render_tile/pipeline.mojo). `gi_pending` is per-PATH-SLOT scratch
     # (indexed by ctx.path_idx, lifetime = one render_tile call): whether
     # bounce 0 landed on a diffuse x1 with restir active, plus x1's own
     # hit_point/normal/alb needed to weight the fresh candidate once bounce
-    # 1 resolves it (see GIPendingX1's docstring). `gi_fresh_write` is
-    # per-PIXEL output (indexed by `pixel_idx`, frame-wide, caller-owned):
-    # where _shade_diffuse_nee stores the resulting GIReservoir candidate
-    # once bounce 1 lands on a diffuse x2 too (this scope's restriction,
-    # see _gi_generate_recon_candidate's docstring for why).
-    var gi_pending:     UnsafePointer[GIPendingX1, MutAnyOrigin]
-    var gi_fresh_write: UnsafePointer[GIReservoir, MutAnyOrigin]
+    # 1 resolves it (see GIPendingX1's docstring). `gi_io` is the frame-
+    # wide, caller-owned read/write reservoir buffers + shared G-buffer
+    # (same shape as restir_di.mojo's ReservoirIO, reused as-is for spatial
+    # rejection since G-buffer data is a property of the pixel's primary
+    # hit, not of which reservoir type is being reused) that
+    # gi_temporal_spatial_combine/gi_resolve consume once bounce 1 lands on
+    # a diffuse x2 too (this scope's restriction, see
+    # _gi_generate_recon_candidate's docstring for why).
+    var gi_pending: UnsafePointer[GIPendingX1, MutAnyOrigin]
+    var gi_io:      GIReservoirIO
 
 @always_inline
 def _shading_normal(
@@ -2743,6 +2746,48 @@ def _gi_generate_recon_candidate(
     res.valid = Int8(1)
     return res
 
+def gi_resolve(
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin], ctx: ShadeContext,
+    hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3], alb: RGB,
+    res: GIReservoir,
+):
+    """Phase 4's resolution step, mirrors di_resolve: trace ONE shadow ray
+    between x1 (hit_point/normal/alb -- x1's OWN data, passed in explicitly
+    since this runs at bounce 1's shading call where x1 is long out of
+    scope, see GIPendingX1) and the reservoir's finalized winning
+    reconnection vertex, adding its RIS-weighted contribution to
+    path_ptr[].estimate if visible. Assumes gi_temporal_spatial_combine has
+    ALREADY been called on `res` -- state.w is a finalized RIS correction
+    weight (reservoir_finalize's output), not a raw stream sum.
+
+    No MIS against BSDF sampling, unlike di_resolve: the complementary
+    "reach x2 anyway by continuing the path" contribution is exactly what
+    THIS reservoir sample already represents (there is no separate,
+    parallel BSDF-sampling estimate of the same x1->x2 connection to weigh
+    against here) -- same reasoning as _gi_generate_recon_candidate's own
+    no-MIS choice, applied one level up.
+
+    Formula derivation is identical to di_resolve's own (verified there via
+    the M=1 degenerate case): contrib = throughput * f(x1) * res.lo *
+    (cos_s * state.w), NOT cos_s*cos_x2/dist_sq*state.w -- gi_target_pdf's
+    p_hat already bakes in the full G=cos_x1*cos_x2/dist_sq term, and
+    state.w carries a 1/p_hat(winner) factor that would double-count G if
+    multiplied in again here."""
+    if res.valid == Int8(0) or res.state.w <= Float32(0.0):
+        return
+    var to_recon = res.recon_point - hit_point
+    var dist_sq = dot(to_recon, to_recon)
+    if dist_sq <= Float32(1e-8):
+        return
+    var dist = sqrt(dist_sq)
+    var wi = to_recon * (Float32(1.0) / dist)
+    var cos_s = dot(normal, wi)
+    var cos_x2 = -dot(res.recon_normal, wi)
+    if cos_s <= Float32(0.0) or cos_x2 <= Float32(0.0):
+        return
+    var contrib = path_ptr[].throughput * bxdf_eval_diffuse(alb) * res.lo * (cos_s * res.state.w)
+    _shadow_contribute[False](path_ptr, ctx, hit_point, wi, dist * Float32(0.9999), contrib)
+
 # Temporal history clamp. The migration plan (and Bitterli et al. 2020)
 # suggest ~20x the per-frame candidate count; measured here, 4x is better,
 # so this deliberately departs from that guideline. staircase2 400x400,
@@ -3020,12 +3065,17 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
         # -- harmless, see GIPendingX1's own docstring.
         var snap = ctx.gi_pending[ctx.path_idx]
         ctx.gi_pending[ctx.path_idx].active = Int8(0)
-        if _is_real_ptr(ctx.gi_fresh_write) and pixel_idx >= 0:
-            var raw = _gi_generate_recon_candidate(ctx, hit_point, normal, alb, pcg)
-            if raw.valid != Int8(0):
-                var w = gi_target_pdf(snap.hit_point, snap.normal, snap.alb, raw.recon_point, raw.recon_normal, raw.lo)
-                _ = reservoir_update(raw.state, w, pcg.next_float())
-            ctx.gi_fresh_write[pixel_idx] = raw
+        var raw = _gi_generate_recon_candidate(ctx, hit_point, normal, alb, pcg)
+        if raw.valid != Int8(0):
+            var w = gi_target_pdf(snap.hit_point, snap.normal, snap.alb, raw.recon_point, raw.recon_normal, raw.lo)
+            _ = reservoir_update(raw.state, w, pcg.next_float())
+        # Combine with history/neighbors (Phase 4.2 -- a no-op fallback to a
+        # plain single-candidate finalize when ctx.gi_io/pixel_idx aren't
+        # real, matching di_temporal_step's own null-safety contract) then
+        # resolve: one shadow ray between x1 (snap's own data) and the
+        # combined winner, injected into path_ptr[].estimate if visible.
+        gi_temporal_spatial_combine(raw, snap.hit_point, snap.normal, snap.alb, pcg, ctx.gi_io, pixel_idx)
+        gi_resolve(path_ptr, ctx, snap.hit_point, snap.normal, snap.alb, raw)
 
     # ── Distant/point/sphere light NEE, via the shared Light interface
     # (bvh.mojo's LightSample samplers) + BxDF interface (bxdf.mojo's
@@ -3493,7 +3543,7 @@ def shade_core_cpu_nee(
     restir_io: ReservoirIO = reservoir_io_null(),
     pixel_idx: Int = -1,
     gi_pending: UnsafePointer[GIPendingX1, MutAnyOrigin] = UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling(),
-    gi_fresh_write: UnsafePointer[GIReservoir, MutAnyOrigin] = UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling(),
+    gi_io: GIReservoirIO = gi_reservoir_io_null(),
 ):
     var path_ptr = paths + tid
     if path_ptr[].active == 0:
@@ -3507,7 +3557,7 @@ def shade_core_cpu_nee(
         px_scale=Float32(0.0), sobol_matrices=sobol_matrices, guide=guide, use_restir=use_restir,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=spectral, measured_brdfs=measured_brdfs,
-        gi_pending=gi_pending, gi_fresh_write=gi_fresh_write,
+        gi_pending=gi_pending, gi_io=gi_io,
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
             distant_lights=distantLights, distant_count=distantLightCount,

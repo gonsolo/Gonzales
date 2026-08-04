@@ -10,15 +10,17 @@ from std.math import abs
 from std.memory import alloc
 from std.testing import assert_true, assert_false, TestSuite
 from gonzales.geometry import (
-    RGB, Point3f, Vec3f, PrimId_C, TriangleMesh_C, Material_C, Curve_C,
+    RGB, Point3f, Vec3f, Ray_C, PrimId_C, TriangleMesh_C, Material_C, Curve_C,
     GpuTexture_C, ShadowTask_C, LightSampler_C, Instance_C, AreaLight_C,
     DistantLight_C, PointLight_C, InfiniteLight_C, Sphere_C, MeasuredBRDF_C,
+    PathState_C,
 )
-from gonzales.spectrum import null_spectral_handle
+from gonzales.spectrum import null_spectral_handle, SampledWavelengths
 from gonzales.bvh import BVH2Node
 from gonzales.guide import null_guide
-from gonzales.shading import ShadeContext, LightContext, GIPendingX1, _gi_generate_recon_candidate
-from gonzales.restir_gi import GIReservoir
+from gonzales.shading import ShadeContext, LightContext, GIPendingX1, gi_pending_x1_init, _gi_generate_recon_candidate, _shade_diffuse_nee
+from gonzales.restir_gi import gi_reservoir_io_null
+from gonzales.restir_di import reservoir_io_null
 from gonzales.rng import PCG32
 
 comptime EPS: Float32 = 1e-4
@@ -50,12 +52,16 @@ def _make_ctx_with_light(
     area_lights: UnsafePointer[AreaLight_C, MutAnyOrigin],
     area_light_count: Int,
     light_sampler_cdf: UnsafePointer[Float32, MutAnyOrigin],
+    use_restir: Bool = False,
+    gi_pending: UnsafePointer[GIPendingX1, MutAnyOrigin] = UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling(),
 ) -> ShadeContext:
     """A ShadeContext with a real BVH + area-light setup (everything
     _gi_generate_recon_candidate touches) and dangling sentinels for
-    everything it doesn't (materials/textures/spectral/measured/GI-tracking
-    buffers -- this function takes alb directly, never dereferences
-    ctx.materials)."""
+    everything it doesn't (materials/textures/spectral/measured -- this
+    function takes alb directly, never dereferences ctx.materials).
+    use_restir/gi_pending default to off/dangling, matching every real
+    non-restir call site; the end-to-end wiring tests below pass real
+    values to exercise the full generate/combine/resolve chain."""
     return ShadeContext(
         0, bvh2Nodes, primIds, meshes,
         UnsafePointer[Curve_C, MutAnyOrigin].unsafe_dangling(),
@@ -66,7 +72,7 @@ def _make_ctx_with_light(
         Float32(0.0),
         UnsafePointer[UInt32, MutAnyOrigin].unsafe_dangling(),
         null_guide(),
-        False,
+        use_restir,
         LightContext(
             area_lights, area_light_count,
             UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling(), 0,
@@ -79,8 +85,8 @@ def _make_ctx_with_light(
         UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
         null_spectral_handle(),
         UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling(),
+        gi_pending,
+        gi_reservoir_io_null(),
     )
 
 # ── Shared fixture: a small light triangle near (0,10,0) facing straight
@@ -214,6 +220,120 @@ def test_gi_generate_occluded_light_gives_valid_zero_lo() raises:
     meshes[1].points.free(); meshes[1].vertexIndices.free()
     meshes.free()
     area_lights.free(); primIds.free(); bvh.free(); cdf.free()
+
+# ── End-to-end wiring: _shade_diffuse_nee's bounce-0-mark / bounce-1-
+# generate+combine+resolve chain (Phase 4.1, full path) ─────────────────────
+# Drives _shade_diffuse_nee twice against one shared PathState_C (x1 at
+# bounce 0, x2 at bounce 1), mirroring how the real per-bounce loop
+# (rendering.mojo) reuses one path slot across bounces. x1's own context
+# (ctx0) has ZERO area lights, so its bounce-0 di_temporal_step branch
+# contributes nothing -- isolates path_ptr[].estimate to whatever bounce 1
+# adds. Geometry is chosen so gi_target_pdf's own cos terms are exact,
+# round numbers: x1=(0,3,-4) with normal=(0,-0.6,0.8) pointing exactly at
+# x2=(0,0,0) (cos_x1=1, dist=5), x2's normal=(0,1,0) giving cos_x2=0.6.
+
+def _make_path(org: SIMD[DType.float32, 3], dir: SIMD[DType.float32, 3]) -> PathState_C:
+    return PathState_C(
+        Ray_C(Point3f(org[0], org[1], org[2]), Vec3f(dir[0], dir[1], dir[2])),
+        RGB(Float32(1.0)), RGB(Float32(0.0)), RGB(Float32(0.0)),
+        Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0),
+        Float32(0.0), Int32(-1), Int32(0), UInt64(0),
+        SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
+    )
+
+def _run_two_bounce(gi_active: Bool) -> RGB:
+    var cdf = alloc[Float32](2)
+    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    var bvh = alloc[BVH2Node](1)
+    bvh[0] = _make_one_leaf_bvh(SIMD[DType.float32, 3](1000.0, 1000.0, 1000.0), SIMD[DType.float32, 3](1001.0, 1001.0, 1001.0))
+    var primIds = alloc[PrimId_C](1)
+    primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var meshes = alloc[TriangleMesh_C](1)
+    meshes[0] = _make_light_mesh()
+    var area_lights = alloc[AreaLight_C](1)
+    area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+
+    var gi_pending_buf = alloc[GIPendingX1](1)
+    gi_pending_buf[0] = gi_pending_x1_init()
+    var real_gi_pending = gi_pending_buf if gi_active else UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling()
+
+    # ctx0 (bounce 0, x1): zero area lights -- di_temporal_step's own RIS
+    # loop draws nothing and di_resolve returns immediately (res.light_idx
+    # stays < 0), so it never touches path_ptr[].estimate.
+    var no_lights_cdf = alloc[Float32](1)
+    no_lights_cdf[0] = Float32(0.0)
+    var ctx0 = _make_ctx_with_light(
+        UnsafePointer[BVH2Node, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[PrimId_C, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[TriangleMesh_C, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[AreaLight_C, MutAnyOrigin].unsafe_dangling(), 0, no_lights_cdf,
+        use_restir=True, gi_pending=real_gi_pending)
+    # ctx1 (bounce 1, x2): the real reconnection light, real BVH for both
+    # GI's own shadow ray and _nee_area_lights' ordinary NEE (which also
+    # fires at bounce 1 regardless of GI -- ctx.use_restir only replaces
+    # bounce 0's area-light NEE with the DI reservoir).
+    var ctx1 = _make_ctx_with_light(bvh, primIds, meshes, area_lights, 1, cdf,
+        use_restir=True, gi_pending=real_gi_pending)
+
+    var path_arr = alloc[PathState_C](1)
+    path_arr[0] = _make_path(SIMD[DType.float32, 3](0.0, 0.0, 0.0), SIMD[DType.float32, 3](0.0, 0.0, -1.0))
+
+    var x1_hit = SIMD[DType.float32, 3](0.0, 3.0, -4.0)
+    var x1_normal = SIMD[DType.float32, 3](0.0, -0.6, 0.8)
+    var x1_alb = RGB(Float32(0.5))
+    var pcg0 = PCG32(UInt64(1), UInt64(1))
+    _shade_diffuse_nee[False, False](path_arr, ctx0, x1_normal, x1_hit, x1_alb,
+        SIMD[DType.float32, 3](0.0, 0.0, 1.0),
+        Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5),
+        pcg0, null_guide(), reservoir_io_null(), -1)
+
+    path_arr[0].bounce = Int32(1)
+    var x2_hit = SIMD[DType.float32, 3](0.0, 0.0, 0.0)
+    var x2_normal = SIMD[DType.float32, 3](0.0, 1.0, 0.0)
+    var x2_alb = RGB(Float32(0.8))
+    var pcg1 = PCG32(UInt64(2), UInt64(1))
+    _shade_diffuse_nee[False, False](path_arr, ctx1, x2_normal, x2_hit, x2_alb,
+        SIMD[DType.float32, 3](0.0, 0.0, 1.0),
+        Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5),
+        pcg1, null_guide(), reservoir_io_null(), -1)
+
+    var result = path_arr[0].estimate
+
+    meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
+    area_lights.free(); primIds.free(); bvh.free(); cdf.free(); no_lights_cdf.free()
+    gi_pending_buf.free(); path_arr.free()
+    return result
+
+def test_shade_diffuse_nee_gi_wiring_adds_positive_reconnection_contribution() raises:
+    """A/B: identical two-bounce setup, differing only in whether
+    ctx.gi_pending is a real (active) buffer or the production default
+    (dangling). Bounce 0's own pcg draws and bounce 1's ordinary
+    _nee_area_lights draws are IDENTICAL between both runs (nothing before
+    the GI block depends on gi_pending), so the delta isolates exactly
+    GI's own generate+combine+resolve contribution. Must be strictly
+    positive in every channel -- the reconnection light is real, unoccluded,
+    and both cos terms are positive by construction (see module docstring
+    for the exact geometry)."""
+    var enabled = _run_two_bounce(gi_active=True)
+    var disabled = _run_two_bounce(gi_active=False)
+    assert_true(enabled.r > disabled.r + Float32(1e-12))
+    assert_true(enabled.g > disabled.g + Float32(1e-12))
+    assert_true(enabled.b > disabled.b + Float32(1e-12))
+
+def test_shade_diffuse_nee_gi_wiring_delta_channel_ratio_matches_light_emission() raises:
+    """The GI-attributable delta's only source of chromatic variation is
+    the reconnection light's own emission (200,80,20 = 10:4:1) -- every
+    other factor in the resolve formula (throughput/albedo/cosines/state.w)
+    is a channel-independent scalar. A wrong channel wired in anywhere
+    along generate/combine/resolve would break this ratio."""
+    var enabled = _run_two_bounce(gi_active=True)
+    var disabled = _run_two_bounce(gi_active=False)
+    var delta = enabled - disabled
+    assert_true(delta.r > Float32(0.0) and delta.g > Float32(0.0) and delta.b > Float32(0.0))
+    var rg = delta.r / delta.g
+    var rb = delta.r / delta.b
+    assert_true(_close(rg, Float32(200.0) / Float32(80.0)))
+    assert_true(_close(rb, Float32(200.0) / Float32(20.0)))
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

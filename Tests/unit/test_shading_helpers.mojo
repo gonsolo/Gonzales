@@ -24,7 +24,7 @@ from gonzales.shading import (
     ShadeContext, LightContext, _get_tri_verts, _apply_normal_map,
     _build_geom_context_full, _shadow_contribute, GIPendingX1,
 )
-from gonzales.restir_gi import GIReservoir
+from gonzales.restir_gi import gi_reservoir_io_null
 
 comptime EPS: Float32 = 1e-3
 
@@ -101,7 +101,7 @@ def _make_ctx(
         null_spectral_handle(),
         UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
         UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling(),
+        gi_reservoir_io_null(),
     )
 
 def _make_path(org: SIMD[DType.float32, 3], dir: SIMD[DType.float32, 3]) -> PathState_C:
