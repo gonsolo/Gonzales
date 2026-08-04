@@ -280,12 +280,28 @@ def _run_two_bounce(gi_active: Bool) -> RGB:
 
     var x1_hit = SIMD[DType.float32, 3](0.0, 3.0, -4.0)
     var x1_normal = SIMD[DType.float32, 3](0.0, -0.6, 0.8)
-    var x1_alb = RGB(Float32(0.5))
+    # Deliberately NON-uniform across channels: a uniform albedo here would
+    # hide the real "used path_ptr[].throughput at bounce 1 instead of a
+    # bounce-0 snapshot" bug this test now specifically guards against --
+    # multiplying by a uniform scalar doesn't change the delta's channel
+    # ratio, so the earlier version of this test (x1_alb=RGB(0.5)) could
+    # not have caught it. See GIPendingX1's own docstring for the full story.
+    var x1_alb = RGB(Float32(0.5), Float32(0.3), Float32(0.7))
     var pcg0 = PCG32(UInt64(1), UInt64(1))
     _shade_diffuse_nee[False, False](path_arr, ctx0, x1_normal, x1_hit, x1_alb,
         SIMD[DType.float32, 3](0.0, 0.0, 1.0),
         Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5),
         pcg0, null_guide(), reservoir_io_null(), -1)
+
+    # Mimics shade_diffuse's own continuation-sampling epilogue
+    # (path_ptr[].throughput *= alb * cos_theta/(pi*pdf_mix)), which for a
+    # plain cosine-weighted sample with no guide reduces to *= alb exactly
+    # (cos_theta/(pi*pdf_mix) == 1 when pdf_mix == cos_theta/pi). Real
+    # renders ALWAYS run this between bounce 0 and bounce 1 -- omitting it
+    # here (as the original version of this test did) leaves
+    # path_ptr[].throughput == T_0 at bounce 1 by coincidence, which is
+    # exactly the state gi_resolve's bug silently relied on.
+    path_arr[0].throughput = path_arr[0].throughput * x1_alb
 
     path_arr[0].bounce = Int32(1)
     var x2_hit = SIMD[DType.float32, 3](0.0, 0.0, 0.0)
@@ -320,20 +336,29 @@ def test_shade_diffuse_nee_gi_wiring_adds_positive_reconnection_contribution() r
     assert_true(enabled.g > disabled.g + Float32(1e-12))
     assert_true(enabled.b > disabled.b + Float32(1e-12))
 
-def test_shade_diffuse_nee_gi_wiring_delta_channel_ratio_matches_light_emission() raises:
-    """The GI-attributable delta's only source of chromatic variation is
-    the reconnection light's own emission (200,80,20 = 10:4:1) -- every
-    other factor in the resolve formula (throughput/albedo/cosines/state.w)
-    is a channel-independent scalar. A wrong channel wired in anywhere
-    along generate/combine/resolve would break this ratio."""
+def test_shade_diffuse_nee_gi_wiring_delta_channel_ratio_matches_expected_formula() raises:
+    """The GI-attributable delta's chromatic variation comes from exactly
+    two per-channel sources: the reconnection light's own emission
+    (200,80,20) AND x1's own albedo (0.5,0.3,0.7 -- gi_resolve's
+    bxdf_eval_diffuse(alb) term, x1's BSDF response toward the
+    reconnection direction, deliberately non-uniform here so a bug using
+    the WRONG throughput/albedo at the wrong bounce shows up as a ratio
+    mismatch rather than being hidden by a uniform multiplier -- this is
+    exactly how the real throughput bug (see GIPendingX1's docstring) was
+    confirmed fixed: the naive "ratio == light emission ratio" expectation
+    from an earlier, uniform-x1_alb version of this test could NOT have
+    caught it. throughput/cosines/state.w are channel-independent scalars
+    and drop out of the ratio; x2's own albedo (0.8, uniform) does too."""
     var enabled = _run_two_bounce(gi_active=True)
     var disabled = _run_two_bounce(gi_active=False)
     var delta = enabled - disabled
     assert_true(delta.r > Float32(0.0) and delta.g > Float32(0.0) and delta.b > Float32(0.0))
     var rg = delta.r / delta.g
     var rb = delta.r / delta.b
-    assert_true(_close(rg, Float32(200.0) / Float32(80.0)))
-    assert_true(_close(rb, Float32(200.0) / Float32(20.0)))
+    var expected_rg = (Float32(0.5) * Float32(200.0)) / (Float32(0.3) * Float32(80.0))
+    var expected_rb = (Float32(0.5) * Float32(200.0)) / (Float32(0.7) * Float32(20.0))
+    assert_true(_close(rg, expected_rg))
+    assert_true(_close(rb, expected_rb))
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

@@ -229,7 +229,7 @@ def main() raises:
     elif use_vulkan_rt:
         debug_render_vulkanrt(path_cstr, verbose)
     elif interactive:
-        render_interactive(path_cstr, sobol, use_gpu, spectral=spectral, fullscreen=fullscreen, override_w=override_w, override_h=override_h, spp_override=spp_override, verbose=verbose, use_restir=use_restir, headless_frames=headless_frames)
+        render_interactive(path_cstr, sobol, use_gpu, spectral=spectral, fullscreen=fullscreen, override_w=override_w, override_h=override_h, spp_override=spp_override, verbose=verbose, use_restir=use_restir, use_restir_gi=use_restir_gi, headless_frames=headless_frames)
     else:
         var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons, use_vulkan_rt_shade=use_vulkan_rt_shade, use_vcm_wavefront=use_vcm_wavefront, use_restir=use_restir, use_restir_gi=use_restir_gi)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0

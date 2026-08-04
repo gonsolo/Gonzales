@@ -26,11 +26,24 @@ struct GIPendingX1(TrivialRegisterPassable):
     back to 0 once bounce 1 consumes it (or left at 1 forever, harmlessly,
     if the path terminates/misses/hits non-diffuse before bounce 1, since
     this buffer's lifetime is exactly one render_tile call and is never
-    reused across samples -- see rendering.mojo's allocation site)."""
-    var active:    Int8
-    var hit_point: SIMD[DType.float32, 3]
-    var normal:    SIMD[DType.float32, 3]
-    var alb:       RGB
+    reused across samples -- see rendering.mojo's allocation site).
+
+    `throughput` MUST be captured here (path_ptr[].throughput at bounce 0,
+    BEFORE shade_diffuse's own continuation-sampling epilogue multiplies it
+    by x1's OWN real BSDF sample) -- reading path_ptr[].throughput fresh at
+    bounce 1 instead would pick up x1's ORIGINAL sampled direction's
+    f/cos/pdf factors, which have nothing to do with the RESAMPLED
+    reconnection direction gi_resolve actually connects along. This was a
+    real, shipped bug (~10x energy inflation, caught only once interactive
+    mode's real per-bounce throughput evolution was exercised -- the
+    earlier end-to-end unit test used a synthetic throughput=1 and never
+    called the real shade_diffuse epilogue between bounces, so it couldn't
+    have caught this)."""
+    var active:     Int8
+    var hit_point:  SIMD[DType.float32, 3]
+    var normal:     SIMD[DType.float32, 3]
+    var alb:        RGB
+    var throughput: RGB
 
 @always_inline
 def gi_pending_x1_init() -> GIPendingX1:
@@ -39,6 +52,7 @@ def gi_pending_x1_init() -> GIPendingX1:
         hit_point=SIMD[DType.float32, 3](Float32(0)),
         normal=SIMD[DType.float32, 3](Float32(0)),
         alb=RGB(Float32(0)),
+        throughput=RGB(Float32(0)),
     )
 
 @fieldwise_init
@@ -2749,6 +2763,7 @@ def _gi_generate_recon_candidate(
 def gi_resolve(
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin], ctx: ShadeContext,
     hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3], alb: RGB,
+    throughput: RGB,
     res: GIReservoir,
 ):
     """Phase 4's resolution step, mirrors di_resolve: trace ONE shadow ray
@@ -2759,6 +2774,17 @@ def gi_resolve(
     path_ptr[].estimate if visible. Assumes gi_temporal_spatial_combine has
     ALREADY been called on `res` -- state.w is a finalized RIS correction
     weight (reservoir_finalize's output), not a raw stream sum.
+
+    `throughput` MUST be the path's throughput as it EXISTED ENTERING x1
+    (before x1's own BSDF sample was applied) -- NOT path_ptr[].throughput
+    read fresh here, which by bounce 1 already has x1's ORIGINAL sampled
+    continuation direction's f/cos/pdf baked in. That original direction is
+    irrelevant to the RESAMPLED reconnection direction this function
+    connects along; using it caused a real, shipped ~10x energy inflation,
+    caught only once interactive mode's temporal reuse was render-tested
+    for the first time (see GIPendingX1's own docstring for the full story
+    and why the earlier unit-level tests couldn't have caught it). Callers
+    must pass the GIPendingX1 snapshot's own `throughput` field.
 
     No MIS against BSDF sampling, unlike di_resolve: the complementary
     "reach x2 anyway by continuing the path" contribution is exactly what
@@ -2785,7 +2811,7 @@ def gi_resolve(
     var cos_x2 = -dot(res.recon_normal, wi)
     if cos_s <= Float32(0.0) or cos_x2 <= Float32(0.0):
         return
-    var contrib = path_ptr[].throughput * bxdf_eval_diffuse(alb) * res.lo * (cos_s * res.state.w)
+    var contrib = throughput * bxdf_eval_diffuse(alb) * res.lo * (cos_s * res.state.w)
     _shadow_contribute[False](path_ptr, ctx, hit_point, wi, dist * Float32(0.9999), contrib)
 
 # Temporal history clamp. The migration plan (and Bitterli et al. 2020)
@@ -3054,7 +3080,7 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
     # site except shade_core_cpu_nee's, so this is a no-op everywhere else,
     # including every GPU kernel and every non-restir CPU render.
     if ctx.use_restir and path_ptr[].bounce == Int32(0) and _is_real_ptr(ctx.gi_pending):
-        ctx.gi_pending[ctx.path_idx] = GIPendingX1(active=Int8(1), hit_point=hit_point, normal=normal, alb=alb)
+        ctx.gi_pending[ctx.path_idx] = GIPendingX1(active=Int8(1), hit_point=hit_point, normal=normal, alb=alb, throughput=path_ptr[].throughput)
     elif (ctx.use_restir and path_ptr[].bounce == Int32(1) and _is_real_ptr(ctx.gi_pending)
           and ctx.gi_pending[ctx.path_idx].active == Int8(1)):
         # x2 is ALSO diffuse (same reasoning: this function only runs for
@@ -3075,7 +3101,7 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
         # resolve: one shadow ray between x1 (snap's own data) and the
         # combined winner, injected into path_ptr[].estimate if visible.
         gi_temporal_spatial_combine(raw, snap.hit_point, snap.normal, snap.alb, pcg, ctx.gi_io, pixel_idx)
-        gi_resolve(path_ptr, ctx, snap.hit_point, snap.normal, snap.alb, raw)
+        gi_resolve(path_ptr, ctx, snap.hit_point, snap.normal, snap.alb, snap.throughput, raw)
 
     # ── Distant/point/sphere light NEE, via the shared Light interface
     # (bvh.mojo's LightSample samplers) + BxDF interface (bxdf.mojo's

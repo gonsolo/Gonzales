@@ -14,6 +14,7 @@ from .sppm import sppm_render, sppm_render_gpu
 from .bdpt import vcm_render, vcm_render_gpu, vcm_render_gpu_wavefront, _BDPT_MAX_VERTS
 from .guide import GuideGrid, guide_create, guide_free, guide_clone_empty, guide_refine, null_guide, guide_merge, guide_cell_has_data
 from .restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io_null
+from .restir_gi import gi_reservoir_io_null
 from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 from .spectrum import SpectralHandle, null_spectral_handle
@@ -1444,11 +1445,22 @@ def render_interactive(
     spp_override: Int32 = Int32(0),
     verbose: Bool = False,
     use_restir: Bool = False,
+    # Phase 4: ReSTIR GI, CPU only (matches use_restir's own use_gpu scope
+    # here), requires use_restir (no effect alone -- see parse_and_render's
+    # own warning for the batch path). No temporal/spatial reservoir reuse
+    # here -- see the comment above restir_buf_a/b's declaration for why
+    # (a real energy-bias bug found and reverted). use_gi still enables
+    # per-frame generate+resolve with no reuse, same as batch mode.
+    use_restir_gi: Bool = False,
     headless_frames: Int32 = Int32(0),
 ):
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
         return
+    if use_restir_gi and not use_restir:
+        print("--restir-gi: no effect without --restir")
+    if use_restir_gi and use_gpu:
+        print("--restir-gi: CPU only so far, no effect combined with --gpu")
 
     var psc = mojo_parse_scene(path, verbose)
     if Int(psc) == 0:
@@ -1539,6 +1551,24 @@ def render_interactive(
     var restir_buf_b = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling()
     var restir_read  = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling()
     var restir_write = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling()
+    # Phase 4: NO persistent GIReservoir buffers here on purpose (unlike
+    # restir_buf_a/b above) -- an attempted ping-ponged temporal+spatial
+    # implementation was tried and reverted after a real render (cornell-box,
+    # --restir --restir-gi --interactive-frames) showed energy growing
+    # without bound over successive frames. Root cause: unlike DI's
+    # di_target_pdf (built from `le`, an exact scene property), GI's
+    # gi_target_pdf is built from `lo`, a NOISY single-sample Monte Carlo
+    # estimate (_gi_generate_recon_candidate draws exactly one light sample).
+    # RIS resampling against a noisy target function preferentially selects
+    # and then PERSISTS lucky overestimates once they win a reservoir slot,
+    # amplifying sampling noise into a lasting bias every frame it survives
+    # -- fundamentally different from DI's reuse, which is safe because its
+    # target function has no such noise to amplify. See
+    # project_restir_migration memory for the full diagnosis. Until that's
+    # solved, --restir-gi in interactive mode only ever gets the plain
+    # single-candidate finalize (gi_io stays null below), same as batch
+    # mode -- generate + resolve every frame, no reuse, safe and unbiased,
+    # averaged only by render_interactive's own outer per-frame accumulator.
     var accum        = List[Float32]()
     var albedo_acc   = List[Float32]()
     var normals_int  = List[Float32]()
@@ -1696,13 +1726,18 @@ def render_interactive(
                     gbuf_world_pos=world_pos_int.unsafe_ptr(),
                     frame_w=fw, frame_h=fh,
                 )
+            # gi_io intentionally always null -- see the module comment above
+            # restir_buf_a/b's declaration for why real temporal/spatial
+            # reuse is disabled here for now. use_gi alone still enables
+            # per-frame generate+resolve (no reuse), matching batch mode.
             render_all_tiles(
                 psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
                 Int32(0), Int32(0), fw, fh,
                 Int32(32), Int32(32),
                 sp_int.unsafe_ptr(), sd, results.unsafe_ptr(), psc[0].max_depth, True,
                 guide_read=null_guide(), write_guides=UnsafePointer[GuideGrid, MutAnyOrigin].unsafe_dangling(),
-                n_write_guides=0, use_restir=use_restir, frame_w=fw, restir_io=restir_io)
+                n_write_guides=0, use_restir=use_restir, frame_w=fw, restir_io=restir_io,
+                use_gi=use_restir_gi, gi_io=gi_reservoir_io_null())
             if use_restir:
                 # render_all_tiles above is synchronous (parallelize joins
                 # before returning), so restir_write is now fully resolved
