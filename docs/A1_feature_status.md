@@ -1,6 +1,6 @@
 # Appendix 2: Feature Status & Remaining Gaps
 
-> **Last updated: 2026-08-03**
+> **Last updated: 2026-08-05**
 
 This document records which renderer features are implemented and which are still
 missing, in priority order. It is kept as a living document — check commits for
@@ -23,7 +23,9 @@ this doc is the quick-scan summary.
 | Env-map MIS — importance sampling | `aec8cc4` | 2D marginal/conditional CDF at load time; NEE + correct BSDF-side pdf |
 | Path guiding (SD-tree) | — | Adaptive kd-tree/quadtree, replaces earlier fixed grid |
 | ReSTIR DI | `0966a85`+ | RIS + temporal + spatial reservoir reuse; primary bounce, area lights, diffuse material only; CPU interactive/batch + GPU interactive; GPU batch renders 1 spp/dispatch for full reuse (see `f529ca7`) |
+| ReSTIR GI | `f2294eab`+ | One-bounce reconnection path reuse (diffuse x1 and x2 only), real temporal+spatial reservoir combine, interactive mode; both DI and GI's temporal reservoirs had a real energy-explosion bug (`reservoir_combine` feedback), fixed via `*_MAX_FINALIZED_WEIGHT` clamps |
 | MNEE (manifold caustics) | `46789d4`+ | Glass/coateddiffuse-base caustics; also wired into ReSTIR's resolve step |
+| SMS (specular manifold sampling) | — | Generalizes MNEE's 1-/2-vertex manifold walk to N specular vertices (`sms.mojo`), block-tridiagonal Newton solve, random seeding + Bernoulli-trial reciprocal estimator for chains where the manifold solution isn't unique; 1-/2-vertex cases stay on MNEE's original fast path unchanged |
 | VCM (connect + merge) | — | `bdpt.mojo`; real Georgiev MIS, verified vs SmallVCM; CPU/GPU/wavefront/Vulkan-RT-assisted |
 | SPPM | — | Progressive photon mapping, CPU+GPU, water-caustic scenes |
 | Volumetric media (uniformgrid) | — | Delta/ratio tracking heterogeneous media |
@@ -78,7 +80,7 @@ this doc is the quick-scan summary.
 | # | Feature | Why it matters |
 |---|---|---|
 | 4 | **Random-walk SSS** | Skin, marble, wax, candles — current "subsurface" is a coateddiffuse approximation, not real volumetric random-walk transport |
-| 5 | **ReSTIR beyond primary-bounce direct lighting** | ReSTIR DI only covers bounce 0, area lights, diffuse material. Phases 4-8 of `docs/A2_restir_migration_plan.md` (ReSTIR GI, SMS-ReSTIR, volumetric ReSTIR, BDPT-ReSTIR) would extend its reach — mostly not started. Phase 9 (unifying ReSTIR's reservoir formalism with VCM's connect/merge into one joint structure) is explicitly marked **open research** in the plan doc itself, not a scoped deliverable |
+| 5 | **ReSTIR beyond one-bounce direct+indirect lighting** | ReSTIR DI (bounce 0) and ReSTIR GI (one-bounce reconnection) are both done, area lights + diffuse material only. Phases 6-8 of `docs/A2_restir_migration_plan.md` (SMS-ReSTIR, volumetric ReSTIR, BDPT-ReSTIR) would extend reach further — not started (Phase 5, SMS itself, is done — see Implemented Features). Phase 9 (unifying ReSTIR's reservoir formalism with VCM's connect/merge into one joint structure) is explicitly marked **open research** in the plan doc itself, not a scoped deliverable |
 | 6 | **VCM's Vulkan RT wiring lacks instancing/spheres/curves** | Its primary/bounce interop (`vulkaninterop_rt_traverse_light_paths_gpu`/`_camera_gpu`, bdpt.mojo) is separate from the plain wavefront path's, and none of the 2026-08-03/04 Vulkan RT coverage fixes were ported there — still falls back to CUDA for any instanced/sphere/curve scene |
 
 ### High Effort

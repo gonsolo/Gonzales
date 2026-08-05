@@ -13,6 +13,10 @@ from .spectrum import SpectralHandle, null_spectral_handle
 from .reservoir import ReservoirState, reservoir_update, reservoir_finalize, reservoir_combine, reservoir_cap_confidence
 from .restir_di import DIReservoir, di_reservoir_init, di_target_pdf, ReservoirIO, reservoir_io_null
 from .restir_gi import GIReservoir, gi_reservoir_init, gi_target_pdf, GIReservoirIO, gi_reservoir_io_null, gi_temporal_spatial_combine
+from .sms import (
+    MAX_SMS_VERTICES, SMSVertex, sms_vertex_init, sms_vertex_mats,
+    mat22_mul, mat22_mul_v, mat22_inv, sms_solve_bernoulli,
+)
 
 @fieldwise_init
 struct GIPendingX1(TrivialRegisterPassable):
@@ -1868,55 +1872,6 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     _apply_russian_roulette(path_ptr, pcg, u_rr_hair)
 
 
-@always_inline
-def _mnee_vertex_mats(
-    wi: SIMD[DType.float32, 3], wo: SIMD[DType.float32, 3],
-    H: SIMD[DType.float32, 3], s: SIMD[DType.float32, 3], t: SIMD[DType.float32, 3],
-    dp_du: SIMD[DType.float32, 3], dp_dv: SIMD[DType.float32, 3],
-    ili: Float32, ilo: Float32,
-    dp_du_prev: SIMD[DType.float32, 3], dp_dv_prev: SIMD[DType.float32, 3],
-    dp_du_next: SIMD[DType.float32, 3], dp_dv_next: SIMD[DType.float32, 3],
-    has_prev: Bool, has_next: Bool,
-) -> Tuple[SIMD[DType.float32, 4], SIMD[DType.float32, 4], SIMD[DType.float32, 4], SIMD[DType.float32, 2]]:
-    # Computes (a, b, c, constraint) matrices at a specular vertex.
-    # a=coupling to prev, b=self, c=coupling to next; uses Cycles mnee.h formulas.
-    var b_du = -(dp_du*(ili+ilo)) + wi*(dot(wi,dp_du)*ili) + wo*(dot(wo,dp_du)*ilo)
-    var b_dv = -(dp_dv*(ili+ilo)) + wi*(dot(wi,dp_dv)*ili) + wo*(dot(wo,dp_dv)*ilo)
-    b_du -= H*dot(b_du,H); b_du = -b_du
-    b_dv -= H*dot(b_dv,H); b_dv = -b_dv
-    var b = SIMD[DType.float32, 4](dot(b_du,s), dot(b_dv,s), dot(b_du,t), dot(b_dv,t))
-    var a = SIMD[DType.float32, 4](Float32(0))
-    if has_prev:
-        var a_du = (dp_du_prev - wi*dot(wi,dp_du_prev)) * ili
-        var a_dv = (dp_dv_prev - wi*dot(wi,dp_dv_prev)) * ili
-        a_du -= H*dot(a_du,H); a_du = -a_du
-        a_dv -= H*dot(a_dv,H); a_dv = -a_dv
-        a = SIMD[DType.float32, 4](dot(a_du,s), dot(a_dv,s), dot(a_du,t), dot(a_dv,t))
-    var c = SIMD[DType.float32, 4](Float32(0))
-    if has_next:
-        var c_du = (dp_du_next - wo*dot(wo,dp_du_next)) * ilo
-        var c_dv = (dp_dv_next - wo*dot(wo,dp_dv_next)) * ilo
-        c_du -= H*dot(c_du,H); c_du = -c_du
-        c_dv -= H*dot(c_dv,H); c_dv = -c_dv
-        c = SIMD[DType.float32, 4](dot(c_du,s), dot(c_dv,s), dot(c_du,t), dot(c_dv,t))
-    var constraint = SIMD[DType.float32, 2](dot(H,s), dot(H,t))
-    return (a, b, c, constraint)
-
-@always_inline
-def _mat22_mul(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:
-    return SIMD[DType.float32, 4](a[0]*b[0]+a[1]*b[2], a[0]*b[1]+a[1]*b[3], a[2]*b[0]+a[3]*b[2], a[2]*b[1]+a[3]*b[3])
-
-@always_inline
-def _mat22_mul_v(m: SIMD[DType.float32, 4], v: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:
-    return SIMD[DType.float32, 2](m[0]*v[0]+m[1]*v[1], m[2]*v[0]+m[3]*v[1])
-
-@always_inline
-def _mat22_inv(m: SIMD[DType.float32, 4]) -> Tuple[SIMD[DType.float32, 4], Float32]:
-    var det = m[0]*m[3] - m[1]*m[2]
-    if abs(det) < Float32(1e-5):
-        return (SIMD[DType.float32, 4](Float32(0)), Float32(0))
-    return (SIMD[DType.float32, 4](m[3], -m[1], -m[2], m[0]) * (Float32(1.0)/det), det)
-
 # 2-vertex MNEE: Newton walk for x0→x1(glass1)→x2(glass2)→x3.
 # etas must be pre-computed: eta = ior if entering glass, 1/ior if exiting.
 # Returns (converged, x1_f, x2_f, bsdf_product, dx1_dxlight).
@@ -1946,7 +1901,7 @@ def _mnee_walk2(
         if s1l < Float32(1e-10): break
         s1 = s1*(Float32(1)/s1l); var t1 = cross(n1,s1)
         var ili1 = Float32(1)/(H1l*wi1l); var ilo1 = eta1/(H1l*wo1l)
-        var (a0,b0,c0,cv0) = _mnee_vertex_mats(wi1,wo1,H1,s1,t1,dp_du1,dp_dv1,ili1,ilo1,
+        var (a0,b0,c0,cv0) = sms_vertex_mats(wi1,wo1,H1,s1,t1,dp_du1,dp_dv1,ili1,ilo1,
             SIMD[DType.float32,3](0),SIMD[DType.float32,3](0),dp_du2,dp_dv2,False,True)
         # ── Vertex 1 (x2): wi from x1, wo to x3 ────────────────────────────
         var wi2v = x1 - x2; var wi2l = sqrt(dot(wi2v,wi2v))
@@ -1961,7 +1916,7 @@ def _mnee_walk2(
         if s2l < Float32(1e-10): break
         s2 = s2*(Float32(1)/s2l); var t2 = cross(n2,s2)
         var ili2 = Float32(1)/(H2l*wi2l); var ilo2 = eta2/(H2l*wo2l)
-        var (a1,b1,c1,cv1) = _mnee_vertex_mats(wi2,wo2,H2,s2,t2,dp_du2,dp_dv2,ili2,ilo2,
+        var (a1,b1,c1,cv1) = sms_vertex_mats(wi2,wo2,H2,s2,t2,dp_du2,dp_dv2,ili2,ilo2,
             dp_du1,dp_dv1,SIMD[DType.float32,3](0),SIMD[DType.float32,3](0),True,False)
         _ = a0; _ = c1
         # ── Convergence ──────────────────────────────────────────────────────
@@ -1969,15 +1924,15 @@ def _mnee_walk2(
         if err < Float32(1e-3):
             converged = True; break
         # ── Block tridiagonal solve: [b0 c0; a1 b1]*[dx0;dx1]=[cv0;cv1] ────
-        var (Li0, det0) = _mat22_inv(b0)
+        var (Li0, det0) = mat22_inv(b0)
         if det0 == Float32(0): break
-        var A1 = _mat22_mul(a1, Li0)
-        var Lk1 = b1 - _mat22_mul(A1, c0)
-        var (Li1, det1) = _mat22_inv(Lk1)
+        var A1 = mat22_mul(a1, Li0)
+        var Lk1 = b1 - mat22_mul(A1, c0)
+        var (Li1, det1) = mat22_inv(Lk1)
         if det1 == Float32(0): break
-        var C1_red = cv1 - _mat22_mul_v(A1, cv0)
-        var dx1 = _mat22_mul_v(Li1, C1_red)
-        var dx0 = _mat22_mul_v(Li0, cv0 - _mat22_mul_v(c0, dx1))
+        var C1_red = cv1 - mat22_mul_v(A1, cv0)
+        var dx1 = mat22_mul_v(Li1, C1_red)
+        var dx0 = mat22_mul_v(Li0, cv0 - mat22_mul_v(c0, dx1))
         # ── Step clamp ──────────────────────────────────────────────────────
         var step0 = sqrt(dx0[0]*dx0[0]+dx0[1]*dx0[1]); var ms0 = wo1l*Float32(0.5)
         if step0 > ms0: dx0 = dx0*(ms0/step0)
@@ -2005,17 +1960,17 @@ def _mnee_walk2(
     var s2 = dp_du2-n2*dot(dp_du2,n2); s2 = s2*(Float32(1)/sqrt(dot(s2,s2))); var t2 = cross(n2,s2)
     var ili1 = Float32(1)/(H1l*wi1l); var ilo1 = eta1/(H1l*wo1l)
     var ili2 = Float32(1)/(H2l*wi2l); var ilo2 = eta2/(H2l*wo2l)
-    var (a0f,b0f,c0f,cv0f) = _mnee_vertex_mats(wi1,wo1,H1,s1,t1,dp_du1,dp_dv1,ili1,ilo1,
+    var (a0f,b0f,c0f,cv0f) = sms_vertex_mats(wi1,wo1,H1,s1,t1,dp_du1,dp_dv1,ili1,ilo1,
         SIMD[DType.float32,3](0),SIMD[DType.float32,3](0),dp_du2,dp_dv2,False,True)
-    var (a1f,b1f,c1f,cv1f) = _mnee_vertex_mats(wi2,wo2,H2,s2,t2,dp_du2,dp_dv2,ili2,ilo2,
+    var (a1f,b1f,c1f,cv1f) = sms_vertex_mats(wi2,wo2,H2,s2,t2,dp_du2,dp_dv2,ili2,ilo2,
         dp_du1,dp_dv1,SIMD[DType.float32,3](0),SIMD[DType.float32,3](0),True,False)
     _ = a0f; _ = c1f; _ = cv0f; _ = cv1f
     # ── Block tridiagonal LU factorization for transfer matrix ───────────────
-    var (Li0f, det0f) = _mat22_inv(b0f)
+    var (Li0f, det0f) = mat22_inv(b0f)
     if det0f == Float32(0): return (False, x1_init, x2_init, Float32(0), Float32(0))
-    var U0 = _mat22_mul(Li0f, c0f)
-    var Lk1f = b1f - _mat22_mul(a1f, U0)
-    var (Li1f, det1f) = _mat22_inv(Lk1f)
+    var U0 = mat22_mul(Li0f, c0f)
+    var Lk1f = b1f - mat22_mul(a1f, U0)
+    var (Li1f, det1f) = mat22_inv(Lk1f)
     if det1f == Float32(0): return (False, x1_init, x2_init, Float32(0), Float32(0))
     # ── dc_dlight at x2 (wrt x3 position) ───────────────────────────────────
     var dc_du = (ldp_du - wo2*dot(wo2,ldp_du)) * ilo2
@@ -2263,6 +2218,55 @@ def _sample_area_light_nee(
     return LightSample(wi, al.emission, pdf, dist, False, True)
 
 @always_inline
+def _sms_probe_glass_chain(
+    ctx: ShadeContext,
+    start_point: SIMD[DType.float32, 3],
+    shadow_dir: SIMD[DType.float32, 3],
+    start_remaining: Float32,
+    max_count: Int,
+) -> Tuple[Int, InlineArray[Intersection_C, MAX_SMS_VERTICES]]:
+    """Probes forward from `start_point` along `shadow_dir` for up to
+    `max_count` MORE consecutive dielectric surfaces (Phase 5.1's
+    generalization of _mnee_area_light_contribute's own hardcoded
+    probe/probe2 pair), stopping at the first non-glass hit or miss.
+    Returns (count, hits) -- `hits[0..count)` are valid Intersection_C
+    values from ctx's own BVH, same approximate remaining-distance
+    bookkeeping the existing probe2 step already uses (each hit's tHit is
+    measured from its own segment origin, not the original hit_point)."""
+    var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var dummy_inter = Intersection_C(dummy_prim, Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+    var hits = InlineArray[Intersection_C, MAX_SMS_VERTICES](fill=dummy_inter)
+    var count = 0
+    var seg_org = start_point
+    var seg_remaining = start_remaining
+    for _k in range(max_count):
+        var pk_tmax = seg_remaining * Float32(0.9995)
+        if pk_tmax <= Float32(0.001):
+            break
+        var pk_org = seg_org + shadow_dir * Float32(0.0005)
+        var pk_ray = Ray_C(Point3f(pk_org[0], pk_org[1], pk_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+        var pk_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
+        traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, pk_ray, pk_tmax, pk_store.unsafe_ptr(),
+                           ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances)
+        var pk_inter = pk_store[0]
+        if pk_inter.hit == Int8(0) or pk_inter.primId.type != Int8(0):
+            break
+        var pk_mat = ctx.materials[Int(pk_inter.primId.materialIndex)]
+        if pk_mat.type != MatKind.dielectric and pk_mat.type != MatKind.thin_dielectric:
+            break
+        hits[count] = pk_inter
+        count += 1
+        var (gk_mesh, gk_v0, gk_v1, gk_v2, _) = _get_tri_verts(pk_inter, ctx.meshes)
+        var gk_p0 = SIMD[DType.float32, 3](gk_mesh.points[gk_v0*4], gk_mesh.points[gk_v0*4+1], gk_mesh.points[gk_v0*4+2])
+        var gk_p1 = SIMD[DType.float32, 3](gk_mesh.points[gk_v1*4], gk_mesh.points[gk_v1*4+1], gk_mesh.points[gk_v1*4+2])
+        var gk_p2 = SIMD[DType.float32, 3](gk_mesh.points[gk_v2*4], gk_mesh.points[gk_v2*4+1], gk_mesh.points[gk_v2*4+2])
+        var gk_u = pk_inter.u; var gk_v = pk_inter.v
+        var gk_point = gk_p0*(Float32(1.0)-gk_u-gk_v) + gk_p1*gk_u + gk_p2*gk_v
+        seg_remaining = seg_remaining - pk_inter.tHit
+        seg_org = gk_point
+    return (count, hits)
+
+@always_inline
 def _mnee_area_light_contribute(
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
     ctx: ShadeContext,
@@ -2284,10 +2288,13 @@ def _mnee_area_light_contribute(
     reaching a surface through a dielectric on the ReSTIR path -- ~9% of
     staircase2, concentrated behind its glass railing).
 
-    Probes for up to 2 glass surfaces between `hit_point` and `light_point`;
-    on a hit, runs the 1- or 2-vertex manifold walk, adds the refracted
-    contribution directly to `path_ptr[].estimate`, and returns True. The
-    caller MUST then skip its own straight shadow ray -- MNEE REPLACES it
+    Probes for up to MAX_SMS_VERTICES glass surfaces between `hit_point` and
+    `light_point`; on a hit, runs the 1-/2-vertex MNEE fast path (Phase
+    5.4) or, for a genuinely longer chain, sms.mojo's general N-vertex
+    manifold walk with random seeding and the Bernoulli-trial reciprocal
+    estimator (Phase 5.1-5.3), adds the refracted contribution directly to
+    `path_ptr[].estimate`, and returns True. The caller MUST then skip its
+    own straight shadow ray -- MNEE/SMS REPLACES it
     (that ray is occluded by the glass by construction, so tracing it would
     contribute nothing anyway, but the `used_mnee` bookkeeping is what keeps
     the two strategies from being double-counted if that ever stops holding).
@@ -2380,7 +2387,6 @@ def _mnee_area_light_contribute(
         has_second_glass = (probe2_mat_c.type == MatKind.dielectric or probe2_mat_c.type == MatKind.thin_dielectric)
 
     if has_second_glass:
-        # --- 2-vertex MNEE ---
         var probe2_mat = ctx.materials[Int(probe2_inter.primId.materialIndex)]
         var (p2mesh, p2v0, p2v1, p2v2, _) = _get_tri_verts(probe2_inter, ctx.meshes)
         var p2p0 = SIMD[DType.float32, 3](p2mesh.points[p2v0*4], p2mesh.points[p2v0*4+1], p2mesh.points[p2v0*4+2])
@@ -2398,29 +2404,109 @@ def _mnee_area_light_contribute(
                 pgeo_n2 = -pgeo_n2
             var pu2 = probe2_inter.u; var pvb2 = probe2_inter.v
             var x2_init = p2p0*(Float32(1.0)-pu2-pvb2) + p2p1*pu2 + p2p2*pvb2
-            var (ok2, x1_f2, x2_f2, bsdf_prod, dx1_dxl2) = _mnee_walk2(
-                hit_point, light_point,
-                x1_init, pgeo_n, pdp_du, pdp_dv, eta1,
-                x2_init, pgeo_n2, pdp_du2, pdp_dv2, eta2,
-                ldp_du_v, ldp_dv_v)
-            if ok2:
-                var wi2f = hit_point - x1_f2
-                var wi2fl = sqrt(dot(wi2f,wi2f))
-                if wi2fl > Float32(1e-8):
-                    var wi2fn = wi2f*(Float32(1)/wi2fl)
-                    var cos_s_x0 = dot(normal, -wi2fn)
-                    if cos_s_x0 > Float32(0):
-                        var G2 = min(abs(dot(wi2fn,pgeo_n))/(wi2fl*wi2fl)*dx1_dxl2, Float32(2.0))
-                        var wo2f = light_point - x2_f2
-                        var wo2fl = sqrt(dot(wo2f,wo2f))
-                        if wo2fl > Float32(1e-8):
-                            var wo2fn = wo2f*(Float32(1)/wo2fl)
-                            var vis2_org = x2_f2 + wo2fn*Float32(0.001)
-                            var vis2_ray = Ray_C(Point3f(vis2_org[0],vis2_org[1],vis2_org[2]), Vec3f(wo2fn[0],wo2fn[1],wo2fn[2]))
-                            if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis2_ray, wo2fl*Float32(0.999),
-                                          ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances):
-                                var mnee_wt2 = bxdf_eval_diffuse(alb) * al.emission * (cos_s_x0 * G2 * bsdf_prod * lobe_w * inv_pdf_area)
-                                path_ptr[].estimate += path_ptr[].throughput * mnee_wt2
+
+            # ── Phase 5.1: probe past x2 for a 3rd+ glass surface. Only
+            # entered when the chain is genuinely longer than MNEE's own
+            # 1-/2-vertex scope (5.4) -- an ordinary 2-surface pane (the
+            # overwhelming majority of real glass) never reaches this, so
+            # this branch adds no cost there.
+            var (extra_count, extra_hits) = _sms_probe_glass_chain(
+                ctx, x2_init, shadow_dir, dist - probe2_inter.tHit - probe2_t0,
+                MAX_SMS_VERTICES - 2)
+
+            if extra_count == 0:
+                # --- 2-vertex MNEE (unchanged fast path, Phase 5.4) ---
+                var (ok2, x1_f2, x2_f2, bsdf_prod, dx1_dxl2) = _mnee_walk2(
+                    hit_point, light_point,
+                    x1_init, pgeo_n, pdp_du, pdp_dv, eta1,
+                    x2_init, pgeo_n2, pdp_du2, pdp_dv2, eta2,
+                    ldp_du_v, ldp_dv_v)
+                if ok2:
+                    var wi2f = hit_point - x1_f2
+                    var wi2fl = sqrt(dot(wi2f,wi2f))
+                    if wi2fl > Float32(1e-8):
+                        var wi2fn = wi2f*(Float32(1)/wi2fl)
+                        var cos_s_x0 = dot(normal, -wi2fn)
+                        if cos_s_x0 > Float32(0):
+                            var G2 = min(abs(dot(wi2fn,pgeo_n))/(wi2fl*wi2fl)*dx1_dxl2, Float32(2.0))
+                            var wo2f = light_point - x2_f2
+                            var wo2fl = sqrt(dot(wo2f,wo2f))
+                            if wo2fl > Float32(1e-8):
+                                var wo2fn = wo2f*(Float32(1)/wo2fl)
+                                var vis2_org = x2_f2 + wo2fn*Float32(0.001)
+                                var vis2_ray = Ray_C(Point3f(vis2_org[0],vis2_org[1],vis2_org[2]), Vec3f(wo2fn[0],wo2fn[1],wo2fn[2]))
+                                if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis2_ray, wo2fl*Float32(0.999),
+                                              ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances):
+                                    var mnee_wt2 = bxdf_eval_diffuse(alb) * al.emission * (cos_s_x0 * G2 * bsdf_prod * lobe_w * inv_pdf_area)
+                                    path_ptr[].estimate += path_ptr[].throughput * mnee_wt2
+            else:
+                # --- N-vertex SMS (Phase 5.1/5.2/5.3, sms.mojo) ---
+                var pcg_sms = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+                var n_total = 2 + extra_count
+                var verts = InlineArray[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
+                verts[0] = SMSVertex(x1_init, pgeo_n, pdp_du, pdp_dv, eta1)
+                verts[1] = SMSVertex(x2_init, pgeo_n2, pdp_du2, pdp_dv2, eta2)
+                var chain_ok = True
+                var prev_point = x2_init
+                for k in range(extra_count):
+                    var ek_inter = extra_hits[k]
+                    var ek_mat = ctx.materials[Int(ek_inter.primId.materialIndex)]
+                    var (ekmesh, ekv0, ekv1, ekv2, _) = _get_tri_verts(ek_inter, ctx.meshes)
+                    var ekp0 = SIMD[DType.float32, 3](ekmesh.points[ekv0*4], ekmesh.points[ekv0*4+1], ekmesh.points[ekv0*4+2])
+                    var ekp1 = SIMD[DType.float32, 3](ekmesh.points[ekv1*4], ekmesh.points[ekv1*4+1], ekmesh.points[ekv1*4+2])
+                    var ekp2 = SIMD[DType.float32, 3](ekmesh.points[ekv2*4], ekmesh.points[ekv2*4+1], ekmesh.points[ekv2*4+2])
+                    var ek_du = ekp1 - ekp0; var ek_dv = ekp2 - ekp0
+                    var ek_n3 = cross(ek_du, ek_dv)
+                    var ek_nlen = sqrt(dot(ek_n3, ek_n3))
+                    if ek_nlen <= Float32(1e-10):
+                        chain_ok = False; break
+                    var ek_n_raw = ek_n3 * (Float32(1.0)/ek_nlen)
+                    var ek_ior = ek_mat.albedo.r
+                    var ek_eta = ek_ior if dot(ek_n_raw, shadow_dir) <= Float32(0) else (Float32(1.0)/ek_ior)
+                    var ek_n = ek_n_raw
+                    if dot(ek_n, shadow_dir) > Float32(0.0):
+                        ek_n = -ek_n
+                    var ek_u = ek_inter.u; var ek_v = ek_inter.v
+                    var ek_point = ekp0*(Float32(1.0)-ek_u-ek_v) + ekp1*ek_u + ekp2*ek_v
+                    verts[2+k] = SMSVertex(ek_point, ek_n, ek_du, ek_dv, ek_eta)
+                    prev_point = ek_point
+                _ = prev_point
+                if chain_ok:
+                    # Jitter scale (5.2): a small fraction of the average
+                    # spacing between adjacent probed vertices -- keeps the
+                    # re-seed within the flat-triangle validity radius each
+                    # vertex's own straight-line probe already established.
+                    var span = light_point - hit_point
+                    var span_len = sqrt(dot(span, span))
+                    var jitter_scale = Float32(0.05) * (span_len / Float32(max(n_total, 1)))
+                    var (sms_ok, sms_pos, sms_bsdf, sms_jac, sms_trials) = sms_solve_bernoulli(
+                        hit_point, light_point, verts, n_total, ldp_du_v, ldp_dv_v, jitter_scale, pcg_sms)
+                    path_ptr[].pcgState = pcg_sms.state
+                    if sms_ok:
+                        var wiNf = hit_point - sms_pos[0]
+                        var wiNfl = sqrt(dot(wiNf,wiNf))
+                        if wiNfl > Float32(1e-8):
+                            var wiNfn = wiNf*(Float32(1)/wiNfl)
+                            var cos_s_x0N = dot(normal, -wiNfn)
+                            if cos_s_x0N > Float32(0):
+                                var GN = min(abs(dot(wiNfn, pgeo_n))/(wiNfl*wiNfl)*sms_jac, Float32(2.0))
+                                var last_idx = n_total - 1
+                                var woNf = light_point - sms_pos[last_idx]
+                                var woNfl = sqrt(dot(woNf,woNf))
+                                if woNfl > Float32(1e-8):
+                                    var woNfn = woNf*(Float32(1)/woNfl)
+                                    var visN_org = sms_pos[last_idx] + woNfn*Float32(0.001)
+                                    var visN_ray = Ray_C(Point3f(visN_org[0],visN_org[1],visN_org[2]), Vec3f(woNfn[0],woNfn[1],woNfn[2]))
+                                    if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, visN_ray, woNfl*Float32(0.999),
+                                                  ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances):
+                                        # Phase 5.5: no MIS weight, same reasoning as the
+                                        # 1-/2-vertex paths above -- an N>=3-vertex specular
+                                        # chain is exactly as unreachable by ordinary BSDF
+                                        # sampling as a 1-/2-vertex one, so this is still the
+                                        # sole technique for this transport, not a competing
+                                        # one needing balance against BSDF sampling.
+                                        var mnee_wtN = bxdf_eval_diffuse(alb) * al.emission * (cos_s_x0N * GN * sms_bsdf * lobe_w * inv_pdf_area * sms_trials)
+                                        path_ptr[].estimate += path_ptr[].throughput * mnee_wtN
     else:
         # --- 1-vertex MNEE ---
         var (mnee_ok, x1_f, det_b, eta_f) = _mnee_walk(

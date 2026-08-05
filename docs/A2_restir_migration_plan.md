@@ -1,8 +1,9 @@
 # A2: ReSTIR / SMS Migration Plan
 
 Plan for moving gonzales from VCM + SPPM + lightweight guiding to a
-GRIS/ReSTIR-based sampling framework. **Status: plan only, nothing
-implemented.**
+GRIS/ReSTIR-based sampling framework. **Status (2026-08-05): Phases 0-5
+done (see §4's phase table and `docs/A1_feature_status.md`'s Implemented
+Features); Phases 6-10 not started.**
 
 Theory (MIS, RIS/GRIS, shift mappings, VCM's weight derivation, the
 "common currency" problem) lives in a companion document,
@@ -123,20 +124,20 @@ carries that load — most likely Phase 6, not a retained merge term.
 
 Phases 1-8 each deliver standalone value and do **not** depend on Phase 9.
 
-| # | Goal | Depends on | Kind |
-|---|---|---|---|
-| 0 | Reservoir + G-buffer infrastructure | — | Engineering |
-| 1 | Path guiding upgrade (SD-tree) | — (parallel) | Engineering |
-| 2 | ReSTIR DI, interactive | 0 | Engineering |
-| 3 | ReSTIR DI, offline (no temporal input) | 2 | Engineering |
-| 3.5 | Host-supplied temporal data | 3 | Optional, deferred |
-| 4 | ReSTIR GI (path reuse) | 3 | Engineering |
-| 5 | SMS (generalize MNEE) | — (parallel from 0) | Eng. + some research |
-| 6 | SMS-ReSTIR (manifold shift reservoir) | 4, 5 | Research-flavored |
-| 7 | Volumetric ReSTIR → retire SPPM | 4 | Research-flavored |
-| 8 | ReSTIR BDPT → retire VCM | 4 | Hard |
-| 9 | Common currency: joint reservoir | 6, 7, 8 | **Open research** |
-| 10 | Cost-aware weights + throttling | 9 | **Open research** |
+| # | Goal | Depends on | Kind | Status |
+|---|---|---|---|---|
+| 0 | Reservoir + G-buffer infrastructure | — | Engineering | Done |
+| 1 | Path guiding upgrade (SD-tree) | — (parallel) | Engineering | Done (`guide.mojo`) |
+| 2 | ReSTIR DI, interactive | 0 | Engineering | Done |
+| 3 | ReSTIR DI, offline (no temporal input) | 2 | Engineering | Done |
+| 3.5 | Host-supplied temporal data | 3 | Optional, deferred | Not started |
+| 4 | ReSTIR GI (path reuse) | 3 | Engineering | Done (diffuse x1/x2 only) |
+| 5 | SMS (generalize MNEE) | — (parallel from 0) | Eng. + some research | Done (`sms.mojo`) |
+| 6 | SMS-ReSTIR (manifold shift reservoir) | 4, 5 | Research-flavored | Not started |
+| 7 | Volumetric ReSTIR → retire SPPM | 4 | Research-flavored | Not started |
+| 8 | ReSTIR BDPT → retire VCM | 4 | Hard | Not started |
+| 9 | Common currency: joint reservoir | 6, 7, 8 | **Open research** | Investigated, not implemented |
+| 10 | Cost-aware weights + throttling | 9 | **Open research** | Investigated, not implemented |
 
 ### Phase 0 — Infrastructure
 

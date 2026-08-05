@@ -1,0 +1,202 @@
+from std.math import abs, sqrt
+from std.testing import assert_true, TestSuite
+from gonzales.geometry import dot, cross
+from gonzales.shading import _mnee_walk2
+from gonzales.sms import (
+    sms_walk, sms_solve_bernoulli, SMSVertex, MAX_SMS_VERTICES,
+    sms_seed_jitter, sms_same_solution,
+)
+from gonzales.rng import PCG32
+
+comptime EPS: Float32 = 1e-4
+
+def _flat_vert(pos: SIMD[DType.float32, 3], eta: Float32) -> SMSVertex:
+    return SMSVertex(
+        pos,
+        SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(1.0)),
+        SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0)),
+        SIMD[DType.float32, 3](Float32(0.0), Float32(1.0), Float32(0.0)),
+        eta,
+    )
+
+def _empty_verts() -> InlineArray[SMSVertex, MAX_SMS_VERTICES]:
+    return InlineArray[SMSVertex, MAX_SMS_VERTICES](fill=SMSVertex(
+        SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)),
+        SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)), Float32(1.0)))
+
+def _snell_residual(
+    x0: SIMD[DType.float32, 3], xL: SIMD[DType.float32, 3],
+    verts: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int,
+) -> Float32:
+    """Max |tangential component of the generalized half-vector| across all
+    n vertices -- zero iff every vertex exactly satisfies Snell's law.
+    Independent re-derivation of the same constraint sms_walk's own Newton
+    loop converges on, used here purely to VERIFY convergence rather than
+    to compute it."""
+    var worst = Float32(0.0)
+    for i in range(n):
+        var prev_pos = x0 if i == 0 else verts[i-1].pos
+        var next_pos = xL if i == n-1 else verts[i+1].pos
+        var wiv = prev_pos - verts[i].pos; var wil = sqrt(dot(wiv,wiv))
+        var wov = next_pos - verts[i].pos; var wol = sqrt(dot(wov,wov))
+        var wi = wiv*(Float32(1)/wil); var wo = wov*(Float32(1)/wol)
+        var Hv = -(wi + wo*verts[i].eta); var Hl = sqrt(dot(Hv,Hv))
+        var H = Hv*(Float32(1)/Hl)
+        var s3 = verts[i].dp_du - verts[i].normal*dot(verts[i].dp_du, verts[i].normal)
+        var s = s3*(Float32(1)/sqrt(dot(s3,s3)))
+        var t = cross(verts[i].normal, s)
+        var res = sqrt(dot(H,s)*dot(H,s) + dot(H,t)*dot(H,t))
+        if res > worst:
+            worst = res
+    return worst
+
+# ── sms_walk(n=2) must reduce EXACTLY to _mnee_walk2 ────────────────────────
+# The block-tridiagonal Thomas-algorithm generalization was hand-derived to
+# collapse to _mnee_walk2's own formulas at n=2 -- this is the load-bearing
+# regression check for that derivation, not just a smoke test.
+
+def test_sms_walk_n2_matches_mnee_walk2() raises:
+    var x0 = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
+    var x3 = SIMD[DType.float32, 3](Float32(0.2), Float32(-0.1), Float32(3.0))
+    var n1 = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(1.0))
+    var du = SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0))
+    var dv = SIMD[DType.float32, 3](Float32(0.0), Float32(1.0), Float32(0.0))
+    var x1_init = SIMD[DType.float32, 3](Float32(0.1), Float32(0.1), Float32(1.0))
+    var eta1 = Float32(1.5)
+    var x2_init = SIMD[DType.float32, 3](Float32(0.15), Float32(0.05), Float32(2.0))
+    var eta2 = Float32(1.0) / Float32(1.5)
+
+    var (ok2, x1_f2, x2_f2, bsdf2, jac2) = _mnee_walk2(
+        x0, x3, x1_init, n1, du, dv, eta1, x2_init, n1, du, dv, eta2, du, dv)
+
+    var verts = _empty_verts()
+    verts[0] = _flat_vert(x1_init, eta1)
+    verts[1] = _flat_vert(x2_init, eta2)
+    var (okn, posn, bsdfn, jacn) = sms_walk(x0, x3, verts, 2, du, dv)
+
+    assert_true(ok2 == okn)
+    assert_true(ok2)
+    assert_true(abs(bsdf2 - bsdfn) < EPS)
+    assert_true(abs(jac2 - jacn) < EPS)
+    var d0 = x1_f2 - posn[0]
+    var d1 = x2_f2 - posn[1]
+    assert_true(dot(d0, d0) < Float32(1e-8))
+    assert_true(dot(d1, d1) < Float32(1e-8))
+
+# ── n=1/3/4 converge to a real Snell's-law solution ─────────────────────────
+# No pre-existing N>=3 reference to regress against (MNEE only ever
+# special-cased 1 and 2), so these verify convergence via an independently
+# re-derived constraint check plus plausible-range asserts on the physical
+# outputs, rather than a golden numeric comparison.
+
+def test_sms_walk_n1_converges() raises:
+    var x0 = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
+    var xL = SIMD[DType.float32, 3](Float32(0.3), Float32(-0.2), Float32(4.0))
+    var du = SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0))
+    var dv = SIMD[DType.float32, 3](Float32(0.0), Float32(1.0), Float32(0.0))
+    var verts = _empty_verts()
+    verts[0] = _flat_vert(SIMD[DType.float32, 3](Float32(0.1), Float32(0.1), Float32(1.0)), Float32(1.5))
+    var (ok, pos, bsdf, jac) = sms_walk(x0, xL, verts, 1, du, dv)
+    assert_true(ok)
+    verts[0].pos = pos[0]
+    assert_true(_snell_residual(x0, xL, verts, 1) < Float32(1e-3))
+    assert_true(bsdf > Float32(0.0) and bsdf <= Float32(1.0))
+    assert_true(jac >= Float32(0.0))
+
+def test_sms_walk_n3_converges() raises:
+    var x0 = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
+    var xL = SIMD[DType.float32, 3](Float32(0.3), Float32(-0.2), Float32(4.0))
+    var du = SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0))
+    var dv = SIMD[DType.float32, 3](Float32(0.0), Float32(1.0), Float32(0.0))
+    var verts = _empty_verts()
+    verts[0] = _flat_vert(SIMD[DType.float32, 3](Float32(0.08), Float32(0.05), Float32(1.0)), Float32(1.5))
+    verts[1] = _flat_vert(SIMD[DType.float32, 3](Float32(0.14), Float32(0.02), Float32(2.0)), Float32(1.0)/Float32(1.5))
+    verts[2] = _flat_vert(SIMD[DType.float32, 3](Float32(0.20), Float32(-0.05), Float32(3.0)), Float32(1.33))
+    var (ok, pos, bsdf, jac) = sms_walk(x0, xL, verts, 3, du, dv)
+    assert_true(ok)
+    for i in range(3):
+        verts[i].pos = pos[i]
+    assert_true(_snell_residual(x0, xL, verts, 3) < Float32(1e-3))
+    assert_true(bsdf > Float32(0.0) and bsdf <= Float32(1.0))
+    assert_true(jac >= Float32(0.0))
+
+def test_sms_walk_n4_converges() raises:
+    var x0 = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
+    var xL = SIMD[DType.float32, 3](Float32(0.3), Float32(-0.15), Float32(4.0))
+    var du = SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0))
+    var dv = SIMD[DType.float32, 3](Float32(0.0), Float32(1.0), Float32(0.0))
+    var verts = _empty_verts()
+    verts[0] = _flat_vert(SIMD[DType.float32, 3](Float32(0.05), Float32(0.03), Float32(0.8)), Float32(1.5))
+    verts[1] = _flat_vert(SIMD[DType.float32, 3](Float32(0.10), Float32(0.01), Float32(1.6)), Float32(1.0)/Float32(1.5))
+    verts[2] = _flat_vert(SIMD[DType.float32, 3](Float32(0.16), Float32(-0.02), Float32(2.4)), Float32(1.33))
+    verts[3] = _flat_vert(SIMD[DType.float32, 3](Float32(0.22), Float32(-0.06), Float32(3.2)), Float32(1.0)/Float32(1.33))
+    var (ok, pos, bsdf, jac) = sms_walk(x0, xL, verts, 4, du, dv)
+    assert_true(ok)
+    for i in range(4):
+        verts[i].pos = pos[i]
+    assert_true(_snell_residual(x0, xL, verts, 4) < Float32(1e-3))
+    assert_true(bsdf > Float32(0.0) and bsdf <= Float32(1.0))
+    assert_true(jac >= Float32(0.0))
+
+# ── Degenerate input handling ────────────────────────────────────────────────
+
+def test_sms_walk_fails_on_coincident_points() raises:
+    var x0 = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
+    var xL = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(1.0))
+    var du = SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0))
+    var dv = SIMD[DType.float32, 3](Float32(0.0), Float32(1.0), Float32(0.0))
+    var verts = _empty_verts()
+    # Vertex coincides with x0 -- wi length is zero, must fail cleanly, not NaN.
+    verts[0] = _flat_vert(SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0)), Float32(1.5))
+    var (ok, _pos, _bsdf, _jac) = sms_walk(x0, xL, verts, 1, du, dv)
+    assert_true(not ok)
+
+# ── Random seeding + Bernoulli-trial estimator (5.2/5.3) ────────────────────
+
+def test_sms_seed_jitter_stays_in_tangent_plane() raises:
+    """Jittering must only move a vertex within its own (dp_du, dp_dv)
+    plane -- never off the flat triangle's normal direction, since the
+    walk assumes a single flat surface throughout (no reprojection)."""
+    var verts = _empty_verts()
+    var orig_pos = SIMD[DType.float32, 3](Float32(0.1), Float32(0.1), Float32(1.0))
+    verts[0] = _flat_vert(orig_pos, Float32(1.5))
+    var pcg = PCG32(UInt64(12345), UInt64(1))
+    sms_seed_jitter(verts, 1, pcg, Float32(0.05))
+    var normal = verts[0].normal
+    var delta = verts[0].pos - orig_pos
+    assert_true(abs(dot(delta, normal)) < Float32(1e-6))
+
+def test_sms_solve_bernoulli_converges_on_unique_solution() raises:
+    """For an ordinary (non-degenerate) flat-glass chain the manifold
+    solution is essentially unique, so the very first re-seeded trial
+    should almost always rediscover it -- trial_count should stay small,
+    not run to the SMS_BERNOULLI_MAX_TRIALS bound."""
+    var x0 = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
+    var xL = SIMD[DType.float32, 3](Float32(0.3), Float32(-0.2), Float32(4.0))
+    var du = SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0))
+    var dv = SIMD[DType.float32, 3](Float32(0.0), Float32(1.0), Float32(0.0))
+    var verts = _empty_verts()
+    verts[0] = _flat_vert(SIMD[DType.float32, 3](Float32(0.08), Float32(0.05), Float32(1.0)), Float32(1.5))
+    verts[1] = _flat_vert(SIMD[DType.float32, 3](Float32(0.14), Float32(0.02), Float32(2.0)), Float32(1.0)/Float32(1.5))
+    verts[2] = _flat_vert(SIMD[DType.float32, 3](Float32(0.20), Float32(-0.05), Float32(3.0)), Float32(1.33))
+    var pcg = PCG32(UInt64(777), UInt64(1))
+    var (ok, pos, bsdf, jac, trials) = sms_solve_bernoulli(x0, xL, verts, 3, du, dv, Float32(0.01), pcg)
+    assert_true(ok)
+    assert_true(bsdf > Float32(0.0))
+    assert_true(jac >= Float32(0.0))
+    assert_true(trials >= Float32(1.0))
+    _ = pos
+
+def test_sms_same_solution_detects_match_and_mismatch() raises:
+    var verts = _empty_verts()
+    var a = InlineArray[SIMD[DType.float32, 3], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 3](Float32(0.0)))
+    var b = InlineArray[SIMD[DType.float32, 3], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 3](Float32(0.0)))
+    a[0] = SIMD[DType.float32, 3](Float32(1.0), Float32(2.0), Float32(3.0))
+    b[0] = SIMD[DType.float32, 3](Float32(1.0), Float32(2.0), Float32(3.0))
+    assert_true(sms_same_solution(a, b, 1))
+    b[0] = SIMD[DType.float32, 3](Float32(1.0), Float32(2.0), Float32(3.1))
+    assert_true(not sms_same_solution(a, b, 1))
+    _ = verts
+
+def main() raises:
+    TestSuite.discover_tests[__functions_in_module()]().run()
