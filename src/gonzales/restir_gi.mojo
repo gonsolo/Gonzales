@@ -81,13 +81,33 @@ def gi_target_pdf(
 ) -> Float32:
     """RIS target function p̂(candidate) for a one-bounce-reconnection GI
     sample: luminance of the UNSHADOWED Lambertian-at-x1 contribution
-    f(x1) x G(x1,x2) x Lo(x2), where f(x1) = alb/pi (matching Phase 2's own
-    diffuse-only-at-x1 scope -- x1's BSDF re-evaluation for non-diffuse
-    materials is future work, same restriction Phase 2 started with). Same
-    shape as di_target_pdf, with the reconnection vertex's position/normal/
-    Lo standing in for a light sample's point/normal/Le -- visibility
-    between x1 and x2 deliberately excluded here, to be resolved once for
-    the reservoir's eventual winner, same as Phase 2.1."""
+    f(x1) x cos(x1) x Lo(x2), where f(x1) = alb/pi (matching Phase 2's own
+    diffuse-only-at-x1 scope). Deliberately NOT cos_x1*cos_x2/dist_sq --
+    unlike di_target_pdf's `le` (a light's own EMITTED radiance, an
+    area-measure quantity that genuinely needs the full geometric term to
+    become incident radiance at x1), `lo` is already OUTGOING RADIANCE
+    from x2 toward x1 under the reconnection-shift's view-independence
+    assumption (see module header) -- radiance is invariant along a ray in
+    vacuum, so transporting it to x1 needs only x1's own cos(x1)*BSDF, the
+    same shape gi_resolve (shading.mojo) actually computes. Including
+    cos_x2/dist_sq here was a real, shipped bug: for a SINGLE unstreamed
+    candidate (state.m=1) the mismatch is invisible (state.w=1 regardless
+    of p_hat's exact formula, by construction of the RIS finalize math),
+    but once real reuse combines candidates with genuinely different
+    cos_x2/dist_sq values, state.w = w_sum/(m*p_hat) over/under-compensates
+    for a falloff gi_resolve's own contribution never had, and explodes
+    whenever a reused candidate's cos_x2 happens to be small as seen from
+    THIS pixel's x1 (even though gi_resolve's actual contribution doesn't
+    depend on that cos_x2 at all) -- measured on cornell-box as a single-
+    pixel resolve delta spiking past 16000 (vs. a normal ~0.001-0.6 range).
+    cos_x2 is STILL checked for backface REJECTION (x1 can't see x2's back
+    face) -- it's just not multiplied into the weight's magnitude.
+
+    Same overall shape as di_target_pdf otherwise, with the reconnection
+    vertex's position/normal/Lo standing in for a light sample's point/
+    normal/Le -- visibility between x1 and x2 deliberately excluded here,
+    to be resolved once for the reservoir's eventual winner, same as
+    Phase 2.1."""
     var to_recon = recon_point - hit_point
     var dist_sq = dot(to_recon, to_recon)
     if dist_sq <= Float32(1e-8):
@@ -98,8 +118,7 @@ def gi_target_pdf(
     var cos_x2 = -dot(recon_normal, wi)
     if cos_x1 <= Float32(0.0) or cos_x2 <= Float32(0.0):
         return Float32(0.0)
-    var g = cos_x1 * cos_x2 / dist_sq
-    var contrib = alb * lo * (INV_PI * g)
+    var contrib = alb * lo * (INV_PI * cos_x1)
     return contrib.r * Float32(0.2126) + contrib.g * Float32(0.7152) + contrib.b * Float32(0.0722)
 
 # ── ReSTIR GI reuse (Phase 4.2, partial: combine only) ──────────────────────
@@ -151,6 +170,14 @@ comptime GI_SPATIAL_SLOTS: Int = GI_SPATIAL_NEIGHBORS + 1
 comptime GI_SPATIAL_RADIUS_PX: Float32 = Float32(20.0)
 comptime GI_SPATIAL_NORMAL_DOT_MIN: Float32 = Float32(0.9)
 comptime GI_SPATIAL_DEPTH_REL_MAX: Float32 = Float32(0.1)
+# Defensive cap on a finalized reservoir's own state.w -- see
+# gi_temporal_spatial_combine's use of this constant for the full
+# reasoning (reservoir_combine's own weight formula feeds a source
+# reservoir's state.w back into future combines, so one anomalous value
+# compounds into unbounded growth rather than staying a one-frame
+# outlier; measured on cornell-box reaching >1,000,000 within ~20 frames
+# without this clamp, versus ~1-10 for every healthy frame observed).
+comptime GI_MAX_FINALIZED_WEIGHT: Float32 = Float32(10.0)
 
 def gi_temporal_spatial_combine(
     mut res: GIReservoir, hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3], alb: RGB,
@@ -264,6 +291,20 @@ def gi_temporal_spatial_combine(
     if res.valid != Int8(0):
         p_hat_final = gi_target_pdf(hit_point, normal, alb, res.recon_point, res.recon_normal, res.lo)
     reservoir_finalize(res.state, p_hat_final, z_norm)
+
+    # Defensive weight clamp -- NOT a complete fix, an honest safety valve.
+    # reservoir_combine's own weight formula (reservoir.mojo) multiplies in
+    # the SOURCE's own already-finalized state.w; without this clamp, one
+    # anomalous value (measured cause: a winning candidate evaluated at
+    # near-degenerate geometry relative to a DIFFERENT pixel's own x1,
+    # e.g. near a scene corner/edge, not fully caught by this design's
+    # G-buffer rejection heuristics) gets stored and FED BACK into every
+    # future combine that reuses it, compounding into unbounded growth
+    # instead of staying a one-frame outlier. DI does not need this same
+    # clamp -- its target function (`le`, an exact scene property) doesn't
+    # have GI's near-degenerate-geometry sensitivity in the first place.
+    if res.state.w > GI_MAX_FINALIZED_WEIGHT:
+        res.state.w = GI_MAX_FINALIZED_WEIGHT
 
     if has_temporal:
         # state.m still holds the TRUE accumulated confidence here (z_norm

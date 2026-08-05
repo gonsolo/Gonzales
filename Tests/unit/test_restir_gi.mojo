@@ -30,7 +30,11 @@ def test_gi_reservoir_init_has_no_winner() raises:
 def test_gi_target_pdf_recon_directly_above_matches_hand_computation() raises:
     """Flat surface at origin (normal +Y), reconnection vertex 2 units
     straight up with its normal facing straight down at x1 -- cos_x1=1,
-    cos_x2=1, G=1/dist^2=0.25. p_hat = luminance(alb * lo * (1/pi) * G)."""
+    cos_x2=1 (checked for backface rejection only, not multiplied into the
+    weight -- see gi_target_pdf's own docstring for why: `lo` is already
+    outgoing radiance toward x1, not an area-measure emission needing the
+    full G=cos_x1*cos_x2/dist^2 conversion). p_hat = luminance(alb * lo *
+    (1/pi) * cos_x1)."""
     var hit_point = SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
     var normal = SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0))
     var alb = RGB(Float32(0.8), Float32(0.8), Float32(0.8))
@@ -38,8 +42,8 @@ def test_gi_target_pdf_recon_directly_above_matches_hand_computation() raises:
     var recon_normal = SIMD[DType.float32, 3](Float32(0), Float32(-1), Float32(0))
     var lo = RGB(Float32(10.0), Float32(10.0), Float32(10.0))
     var p_hat = gi_target_pdf(hit_point, normal, alb, recon_point, recon_normal, lo)
-    var g = Float32(1.0) / Float32(4.0)  # dist=2 -> dist^2=4
-    var expected_channel = Float32(0.8) * Float32(10.0) * INV_PI * g
+    var cos_x1 = Float32(1.0)  # recon_point is straight up from hit_point
+    var expected_channel = Float32(0.8) * Float32(10.0) * INV_PI * cos_x1
     assert_true(_close(p_hat, expected_channel))
 
 def test_gi_target_pdf_zero_when_recon_below_surface_horizon() raises:
@@ -77,9 +81,16 @@ def test_gi_target_pdf_zero_at_degenerate_distance() raises:
     var p_hat = gi_target_pdf(hit_point, normal, alb, recon_point, recon_normal, lo)
     assert_true(_close(p_hat, Float32(0.0)))
 
-def test_gi_target_pdf_closer_recon_point_gives_higher_value() raises:
-    """Inverse-square falloff: halving the distance should roughly
-    quadruple p_hat (same angles, only G's 1/dist^2 term changes)."""
+def test_gi_target_pdf_independent_of_distance_at_fixed_angles() raises:
+    """Deliberately NOT inverse-square falloff, unlike di_target_pdf: `lo`
+    is already outgoing radiance toward x1 (radiance is invariant along a
+    ray), so with cos_x1/cos_x2 held fixed (straight up in both cases),
+    p_hat must be IDENTICAL regardless of distance -- this is the exact
+    property whose absence was a real, shipped bug (see gi_target_pdf's
+    docstring): including a spurious 1/dist^2 term caused state.w to
+    explode whenever spatial/temporal reuse combined candidates at
+    different distances, since gi_resolve's own contribution never had
+    that distance dependence to begin with."""
     var hit_point = SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
     var normal = SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0))
     var alb = RGB(Float32(0.8))
@@ -87,7 +98,7 @@ def test_gi_target_pdf_closer_recon_point_gives_higher_value() raises:
     var lo = RGB(Float32(10.0))
     var far = gi_target_pdf(hit_point, normal, alb, SIMD[DType.float32, 3](Float32(0), Float32(4), Float32(0)), recon_normal, lo)
     var near = gi_target_pdf(hit_point, normal, alb, SIMD[DType.float32, 3](Float32(0), Float32(2), Float32(0)), recon_normal, lo)
-    assert_true(near > far * Float32(3.9) and near < far * Float32(4.1))
+    assert_true(_close(near, far))
 
 # ── gi_temporal_spatial_combine ──────────────────────────────────────────────
 # ctx-free by design (see restir_gi.mojo's module header), so unlike
