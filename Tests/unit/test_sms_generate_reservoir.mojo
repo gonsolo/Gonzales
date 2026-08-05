@@ -17,8 +17,9 @@ from gonzales.geometry import (
 from gonzales.spectrum import null_spectral_handle, SampledWavelengths
 from gonzales.bvh import BVH2Node
 from gonzales.guide import null_guide
-from gonzales.shading import ShadeContext, LightContext, GIPendingX1, sms_generate_reservoir, sms_resolve, sms_temporal_step
+from gonzales.shading import ShadeContext, LightContext, GIPendingX1, sms_generate_reservoir, sms_resolve, sms_temporal_step, _shade_diffuse_nee
 from gonzales.restir_gi import gi_reservoir_io_null
+from gonzales.restir_di import reservoir_io_null
 from gonzales.restir_sms import SMSReservoir, SMSReservoirIO, sms_reservoir_io_null
 from gonzales.rng import PCG32
 
@@ -96,10 +97,18 @@ def _make_ctx(
 # of it. ──────────────────────────────────────────────────────────────────
 
 def _make_light_mesh() -> TriangleMesh_C:
+    # Winding chosen so cross(p1-p0, p2-p0) points -Z (roughly toward the
+    # origin, where every fixture's hit_point sits) -- _nee_area_lights'
+    # own cos_l = -dot(light_normal, shadow_dir) gate needs the light's
+    # normal facing back toward the shading point to accept the sample.
+    # (Standalone sms_generate_reservoir/sms_resolve calls elsewhere in
+    # this file bypass that gate entirely by passing light_point directly,
+    # so they don't care about this winding -- only the _nee_area_lights-
+    # routed wiring tests do.)
     return _make_triangle_mesh(
         SIMD[DType.float32, 3](Float32(0.299), Float32(-0.201), Float32(4.0)),
-        SIMD[DType.float32, 3](Float32(0.301), Float32(-0.201), Float32(4.0)),
-        SIMD[DType.float32, 3](Float32(0.299), Float32(-0.199), Float32(4.0)))
+        SIMD[DType.float32, 3](Float32(0.299), Float32(-0.199), Float32(4.0)),
+        SIMD[DType.float32, 3](Float32(0.301), Float32(-0.201), Float32(4.0)))
 
 def _make_glass_mesh() -> TriangleMesh_C:
     # A right triangle with generous legs (20 units) so the ray's crossing
@@ -409,6 +418,148 @@ def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
     assert_true(path_arr[0].estimate.r > Float32(0.0))
 
     meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
+    materials.free(); area_lights.free(); primIds.free(); bvh.free(); cdf.free()
+    path_arr.free(); buf_a.free(); buf_b.free()
+
+# ── End-to-end wiring: _shade_diffuse_nee -> _nee_area_lights -> ───────────
+# sms_temporal_step, mirroring test_restir_gi_generation.mojo's own
+# end-to-end GI wiring tests. Confirms the ACTUAL integration point (not
+# just the standalone functions already covered above): a real sms_io
+# passed into _shade_diffuse_nee at bounce 0, with ctx.use_restir=False
+# so _nee_area_lights (not di_temporal_step) handles this bounce.
+
+def test_shade_diffuse_nee_sms_wiring_accumulates_confidence_across_frames() raises:
+    var cdf = alloc[Float32](2)
+    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    var bvh = alloc[BVH2Node](1)
+    bvh[0] = _make_one_leaf_bvh(SIMD[DType.float32, 3](-5.0, -5.0, Float32(0.9)), SIMD[DType.float32, 3](15.0, 15.0, Float32(1.1)))
+    # primId references mesh index 1 (the glass) -- mesh index 0 is the
+    # light, sampled directly via ctx.meshes[al.meshIdx], never through
+    # the BVH at all.
+    var primIds = alloc[PrimId_C](1)
+    primIds[0] = PrimId_C(Int64(1), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var meshes = alloc[TriangleMesh_C](2)
+    meshes[0] = _make_light_mesh()
+    meshes[1] = _make_glass_mesh()
+    var materials = alloc[Material_C](1)
+    materials[0] = _make_dielectric(Float32(1.5))
+    var area_lights = alloc[AreaLight_C](1)
+    area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    var ctx = _make_ctx(bvh, primIds, meshes, materials, area_lights, 1, cdf)
+
+    var hit_point = SIMD[DType.float32, 3](0.0, 0.0, 0.0)
+    var normal = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var alb = RGB(Float32(0.8))
+
+    var buf_a = alloc[SMSReservoir](1)
+    var buf_b = alloc[SMSReservoir](1)
+    var pcg_seed = PCG32(UInt64(99), UInt64(1))
+    var shadow_dir_v = SIMD[DType.float32, 3](0.3, -0.2, 4.0) - hit_point
+    var shadow_dist = sqrt(shadow_dir_v[0]*shadow_dir_v[0] + shadow_dir_v[1]*shadow_dir_v[1] + shadow_dir_v[2]*shadow_dir_v[2])
+    var shadow_dir = shadow_dir_v * (Float32(1.0) / shadow_dist)
+    var res_empty = sms_generate_reservoir(
+        ctx, hit_point, normal, alb, shadow_dir, shadow_dist, SIMD[DType.float32, 3](0.3, -0.2, 4.0),
+        SIMD[DType.float32, 3](1.0, 0.0, 0.0), SIMD[DType.float32, 3](0.0, 1.0, 0.0),
+        AreaLight_C(Int32(0), Int32(1), RGB(Float32(0.0)), Float32(0.0), Int8(0), Int8(0), Int8(0), Int8(0)),
+        Float32(1.0), pcg_seed)
+    buf_a[0] = res_empty[1].copy()
+    buf_b[0] = res_empty[1].copy()
+
+    var path_arr = alloc[PathState_C](1)
+
+    # Frame 0, through the real _shade_diffuse_nee entry point.
+    var io0 = SMSReservoirIO(read=buf_a, write=buf_b)
+    path_arr[0] = _make_path()
+    var pcg0 = PCG32(UInt64(1), UInt64(1))
+    _shade_diffuse_nee[False, False](
+        path_arr, ctx, normal, hit_point, alb, SIMD[DType.float32, 3](0.0, 0.0, -1.0),
+        Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5),
+        pcg0, null_guide(), reservoir_io_null(), 0, io0)
+    var m_after_frame0 = buf_b[0].state.m
+    assert_true(buf_b[0].n_vertices == Int32(1))
+    assert_true(m_after_frame0 > Float32(0.0))
+    assert_true(path_arr[0].estimate.r > Float32(0.0))
+
+    # Frame 1: read=buf_b (frame 0's result), write=buf_a.
+    var io1 = SMSReservoirIO(read=buf_b, write=buf_a)
+    path_arr[0] = _make_path()
+    var pcg1 = PCG32(UInt64(2), UInt64(1))
+    _shade_diffuse_nee[False, False](
+        path_arr, ctx, normal, hit_point, alb, SIMD[DType.float32, 3](0.0, 0.0, -1.0),
+        Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5),
+        pcg1, null_guide(), reservoir_io_null(), 0, io1)
+    var m_after_frame1 = buf_a[0].state.m
+
+    assert_true(buf_a[0].n_vertices == Int32(1))
+    assert_true(m_after_frame1 > m_after_frame0)
+    assert_true(path_arr[0].estimate.r > Float32(0.0))
+
+    meshes[0].points.free(); meshes[0].vertexIndices.free()
+    meshes[1].points.free(); meshes[1].vertexIndices.free()
+    meshes.free()
+    materials.free(); area_lights.free(); primIds.free(); bvh.free(); cdf.free()
+    path_arr.free(); buf_a.free(); buf_b.free()
+
+def test_shade_diffuse_nee_sms_io_inactive_at_bounce_1_uses_plain_mnee() raises:
+    """Sms_io is only threaded through at bounce 0 -- at bounce 1 it must
+    fall back to plain per-frame MNEE (sms_io_this_bounce forced to the
+    null sentinel), even though a real buffer was passed in. Confirms the
+    bounce-0-only gate actually gates, not just that it compiles."""
+    var cdf = alloc[Float32](2)
+    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    var bvh = alloc[BVH2Node](1)
+    bvh[0] = _make_one_leaf_bvh(SIMD[DType.float32, 3](-5.0, -5.0, Float32(0.9)), SIMD[DType.float32, 3](15.0, 15.0, Float32(1.1)))
+    var primIds = alloc[PrimId_C](1)
+    primIds[0] = PrimId_C(Int64(1), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var meshes = alloc[TriangleMesh_C](2)
+    meshes[0] = _make_light_mesh()
+    meshes[1] = _make_glass_mesh()
+    var materials = alloc[Material_C](1)
+    materials[0] = _make_dielectric(Float32(1.5))
+    var area_lights = alloc[AreaLight_C](1)
+    area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    var ctx = _make_ctx(bvh, primIds, meshes, materials, area_lights, 1, cdf)
+
+    var hit_point = SIMD[DType.float32, 3](0.0, 0.0, 0.0)
+    var normal = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var alb = RGB(Float32(0.8))
+
+    var buf_a = alloc[SMSReservoir](1)
+    var buf_b = alloc[SMSReservoir](1)
+    var pcg_seed = PCG32(UInt64(99), UInt64(1))
+    var shadow_dir_v = SIMD[DType.float32, 3](0.3, -0.2, 4.0) - hit_point
+    var shadow_dist = sqrt(shadow_dir_v[0]*shadow_dir_v[0] + shadow_dir_v[1]*shadow_dir_v[1] + shadow_dir_v[2]*shadow_dir_v[2])
+    var shadow_dir = shadow_dir_v * (Float32(1.0) / shadow_dist)
+    var res_empty = sms_generate_reservoir(
+        ctx, hit_point, normal, alb, shadow_dir, shadow_dist, SIMD[DType.float32, 3](0.3, -0.2, 4.0),
+        SIMD[DType.float32, 3](1.0, 0.0, 0.0), SIMD[DType.float32, 3](0.0, 1.0, 0.0),
+        AreaLight_C(Int32(0), Int32(1), RGB(Float32(0.0)), Float32(0.0), Int8(0), Int8(0), Int8(0), Int8(0)),
+        Float32(1.0), pcg_seed)
+    # reservoir_update always increments state.m by 1 whether the candidate
+    # was accepted or not (Le=0 here forces rejection, but m still moves to
+    # 1.0) -- the seed reservoir's m is 1.0, not 0.0.
+    var seed_m = res_empty[1].state.m
+    buf_a[0] = res_empty[1].copy()
+    buf_b[0] = res_empty[1].copy()
+
+    var path_arr = alloc[PathState_C](1)
+    path_arr[0] = _make_path()
+    path_arr[0].bounce = Int32(1)
+    var io0 = SMSReservoirIO(read=buf_a, write=buf_b)
+    var pcg0 = PCG32(UInt64(1), UInt64(1))
+    _shade_diffuse_nee[False, False](
+        path_arr, ctx, normal, hit_point, alb, SIMD[DType.float32, 3](0.0, 0.0, -1.0),
+        Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5),
+        pcg0, null_guide(), reservoir_io_null(), 0, io0)
+    # buf_b was never written to (sms_io_this_bounce forced null at bounce 1) --
+    # still holds exactly its seeded value, unchanged.
+    assert_true(_close(buf_b[0].state.m, seed_m))
+    # The refracted contribution should still appear via plain MNEE.
+    assert_true(path_arr[0].estimate.r > Float32(0.0))
+
+    meshes[0].points.free(); meshes[0].vertexIndices.free()
+    meshes[1].points.free(); meshes[1].vertexIndices.free()
+    meshes.free()
     materials.free(); area_lights.free(); primIds.free(); bvh.free(); cdf.free()
     path_arr.free(); buf_a.free(); buf_b.free()
 

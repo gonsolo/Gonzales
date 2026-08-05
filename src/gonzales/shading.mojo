@@ -2796,6 +2796,16 @@ def _nee_area_lights[enqueue_shadow: Bool](
     # lobe (e.g. diffuse_transmit's reflect/transmit split) — see bxdf_sample_
     # diffuse_transmit. 1.0 for a plain single-lobe Lambertian surface.
     lobe_w: Float32 = Float32(1.0),
+    # Phase 6 (ReSTIR SMS): real only from _shade_diffuse_nee's bounce-0
+    # call site when --sms-restir is active -- every other call site
+    # (diffuse_transmit's own NEE, deeper bounces) leaves this at the
+    # dangling default, getting exactly today's plain-MNEE-every-bounce
+    # behavior. sms_temporal_step has no lobe_w parameter (assumes 1.0,
+    # single-lobe diffuse only) -- fine today since no compound-BxDF call
+    # site ever passes a real sms_io, but would need extending before one
+    # could.
+    sms_io: SMSReservoirIO = sms_reservoir_io_null(),
+    pixel_idx: Int = -1,
 ):
     if ctx.lights.area_light_count == 0:
         return
@@ -2819,18 +2829,29 @@ def _nee_area_lights[enqueue_shadow: Bool](
             var weight = bxdf_eval_diffuse(alb) * al.emission * (cos_s * w_nee * lobe_w / pdf_light)
             var contrib = path_ptr[].throughput * weight
 
-            # MNEE glass-caustic probing, shared verbatim with ReSTIR DI's
-            # di_resolve via _mnee_area_light_contribute above. Returns True
-            # when a dielectric intervened and it has already added the
-            # refracted contribution -- in that case the straight shadow ray
-            # below is deliberately skipped (MNEE replaces it, it does not
-            # supplement it).
-            var used_mnee = _mnee_area_light_contribute(
-                path_ptr, ctx, normal, hit_point, alb, shadow_dir, dist,
-                light_point, ldp_du_v, ldp_dv_v, al,
-                al.total_area / light_sel_pdf_nee, lobe_w)
-            if not used_mnee:
-                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)
+            if pixel_idx >= 0 and _is_real_ptr(sms_io.read):
+                # ReSTIR SMS (Phase 6): temporal-reused glass-caustic probing
+                # in place of plain per-frame MNEE. Same used/skip-shadow-ray
+                # convention as the plain-MNEE branch below.
+                var used_sms = sms_temporal_step(
+                    path_ptr, ctx, hit_point, normal, alb, shadow_dir, dist,
+                    light_point, ldp_du_v, ldp_dv_v, al,
+                    al.total_area / light_sel_pdf_nee, pcg, sms_io, pixel_idx)
+                if not used_sms:
+                    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)
+            else:
+                # MNEE glass-caustic probing, shared verbatim with ReSTIR DI's
+                # di_resolve via _mnee_area_light_contribute above. Returns True
+                # when a dielectric intervened and it has already added the
+                # refracted contribution -- in that case the straight shadow ray
+                # below is deliberately skipped (MNEE replaces it, it does not
+                # supplement it).
+                var used_mnee = _mnee_area_light_contribute(
+                    path_ptr, ctx, normal, hit_point, alb, shadow_dir, dist,
+                    light_point, ldp_du_v, ldp_dv_v, al,
+                    al.total_area / light_sel_pdf_nee, lobe_w)
+                if not used_mnee:
+                    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)
 
 # ── ReSTIR DI (Phase 2, restir_di.mojo's DIReservoir/di_target_pdf) ─────────
 # Plain RIS: M candidates from the existing light sampler, weighted p̂/q,
@@ -3381,6 +3402,7 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
     guide_write: GuideGrid = null_guide(),
     restir_io: ReservoirIO = reservoir_io_null(),
     pixel_idx: Int = -1,
+    sms_io: SMSReservoirIO = sms_reservoir_io_null(),
 ):
     # NEE sampling asymmetry: area lights use CDF-weighted selection (one light per
     # bounce, weight = power), while infinite/env lights are ALL sampled every bounce.
@@ -3399,10 +3421,26 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
     # _nee_area_lights below has -- restir_di.mojo's target function assumes
     # an unoccluded straight shadow ray, same simplifying assumption as
     # every other non-diffuse material's NEE in this file.
+    #
+    # ReSTIR SMS (Phase 6) is threaded into _nee_area_lights below, scoped
+    # to bounce 0 ONLY (sms_io is only passed through when bounce==0) --
+    # same screen-space-G-buffer reasoning as ReSTIR DI's own bounce-0
+    # scope: sms_temporal_step's per-pixel reservoir reuse only makes sense
+    # where hit_point is deterministic per pixel under a static camera,
+    # true at the primary hit and NOT at deeper bounces (whose hit points
+    # vary sample to sample even with a fixed camera). Known, documented
+    # gap: when ctx.use_restir is ALSO active, di_temporal_step handles
+    # bounce 0 instead of _nee_area_lights, so ReSTIR SMS's bounce-0 reuse
+    # does not run in that combination yet -- same class of gap as MNEE's
+    # own pre-existing "no glass probing under ReSTIR DI's bounce 0"
+    # limitation noted above, not a new one. --sms-restir without --restir
+    # is unaffected.
+    var sms_io_this_bounce = sms_io if path_ptr[].bounce == Int32(0) else sms_reservoir_io_null()
     if ctx.use_restir and path_ptr[].bounce == Int32(0):
         di_temporal_step(path_ptr, ctx, hit_point, normal, alb, pcg, restir_io, pixel_idx)
     else:
-        _nee_area_lights[enqueue_shadow](path_ptr, ctx, normal, hit_point, alb, u_light, u_bary1, u_bary2, pcg, guide_write)
+        _nee_area_lights[enqueue_shadow](path_ptr, ctx, normal, hit_point, alb, u_light, u_bary1, u_bary2, pcg, guide_write,
+            sms_io=sms_io_this_bounce, pixel_idx=pixel_idx)
 
     # ── ReSTIR GI (Phase 4.1's remaining half) ───────────────────────────────
     # x1 is diffuse (this function only runs for diffuse hits) and bounce 0:

@@ -191,7 +191,7 @@ def sms_shift(
     return (True, fwd_pos, fwd_bsdf, fwd_jac)
 
 @fieldwise_init
-struct SMSReservoirIO(Copyable, Movable):
+struct SMSReservoirIO(TrivialRegisterPassable):
     """Per-pixel persistent reservoir buffers for temporal-only reuse
     (Phase 6's first driver -- no spatial reuse yet, so unlike
     restir_di.mojo's ReservoirIO/restir_gi.mojo's GIReservoirIO this
