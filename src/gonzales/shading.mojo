@@ -2638,6 +2638,14 @@ def di_resolve(
         return
     var p_hat = di_target_pdf(hit_point, normal, alb, res.sample_point, res.light_normal, res.le)
     reservoir_finalize(res.state, p_hat, z_norm)
+    # Defensive weight clamp -- see DI_MAX_FINALIZED_WEIGHT's own comment
+    # for the full mechanism (a real, live-traced bug: unbounded growth via
+    # reservoir_combine's own feedback of a source's finalized state.w).
+    # Must happen BEFORE the res.state.w <= 0 check below (clamping a
+    # positive value can never make it <= 0) and BEFORE this frame's
+    # result is stored for the next frame/neighbor to reuse.
+    if res.state.w > DI_MAX_FINALIZED_WEIGHT:
+        res.state.w = DI_MAX_FINALIZED_WEIGHT
     if res.state.w <= Float32(0.0):
         return
     var to_light = res.sample_point - hit_point
@@ -2884,6 +2892,25 @@ comptime DI_SPATIAL_SLOTS: Int = DI_SPATIAL_NEIGHBORS + 1
 comptime DI_SPATIAL_RADIUS_PX: Float32 = Float32(20.0)
 comptime DI_SPATIAL_NORMAL_DOT_MIN: Float32 = Float32(0.9)
 comptime DI_SPATIAL_DEPTH_REL_MAX: Float32 = Float32(0.1)
+# Defensive cap on a finalized reservoir's own state.w -- same fix, same
+# root cause, as restir_gi.mojo's GI_MAX_FINALIZED_WEIGHT (see that
+# constant's own comment for the full mechanism). reservoir_combine's
+# weight formula (reservoir.mojo) multiplies in a SOURCE reservoir's own
+# already-finalized state.w; without a bound, one anomalous value (root
+# cause here: a stored light sample near-degenerate relative to a
+# DIFFERENT pixel's own shading point -- e.g. a light sample point near
+# the light mesh's own edge, viewed at grazing incidence from some pixel,
+# not fully caught by the existing G-buffer rejection heuristics) gets
+# fed back into every future combine that reuses it, compounding into
+# unbounded growth. Confirmed via live tracing on cornell-box
+# (--restir alone, no GI): w_sum grew ~1.3-1.7x per frame, reaching
+# >600 billion within 30-40 frames while z_norm stayed roughly constant
+# (~80) -- textbook exponential compounding, not a one-shot magnitude
+# issue (this is why DI, unlike GI, WASN'T caught by this project's
+# earlier extensive Phase 2 validation: that validation used interactive
+# runs of a bounded frame count, per the plan's own noise-floor
+# methodology, that happened to stay short enough to not yet manifest).
+comptime DI_MAX_FINALIZED_WEIGHT: Float32 = Float32(10.0)
 
 def di_temporal_step(
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin], ctx: ShadeContext,
