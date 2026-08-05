@@ -17,7 +17,7 @@ from .sms import (
     MAX_SMS_VERTICES, SMSVertex, sms_vertex_init, sms_vertex_mats,
     mat22_mul, mat22_mul_v, mat22_inv, sms_solve_bernoulli,
 )
-from .restir_sms import SMSReservoir, sms_reservoir_init, sms_target_pdf
+from .restir_sms import SMSReservoir, sms_reservoir_init, sms_target_pdf, SMSReservoirIO, sms_reservoir_io_null
 
 @fieldwise_init
 struct GIPendingX1(TrivialRegisterPassable):
@@ -2626,7 +2626,7 @@ def sms_generate_reservoir(
     shadow_dir: SIMD[DType.float32, 3], dist: Float32, light_point: SIMD[DType.float32, 3],
     ldp_du_v: SIMD[DType.float32, 3], ldp_dv_v: SIMD[DType.float32, 3],
     al: AreaLight_C, inv_pdf_area: Float32, mut pcg: PCG32,
-) -> SMSReservoir:
+) -> Tuple[Bool, SMSReservoir]:
     """Phase 6's candidate generation: probe+solve for an admissible
     specular chain toward the given area-light sample (same scope
     restriction as _mnee_area_light_contribute -- mesh lights only, kind
@@ -2636,19 +2636,27 @@ def sms_generate_reservoir(
     in the light's own area-measure generation density (`inv_pdf_area`
     is 1/q, matching _mnee_area_light_contribute's own parameter of the
     same name) and the Bernoulli-trial reciprocal estimator (`trials`,
-    1.0 for the 1-/2-vertex fast path). Returns an empty reservoir
-    (n_vertices=0) when no dielectric intervenes, the solve fails to
-    converge, or the target function evaluates to zero (degenerate/
-    backfacing geometry) -- all treated identically to "no candidate
-    this frame", exactly like di_generate_reservoir's own zero-weight
-    handling."""
+    1.0 for the 1-/2-vertex fast path).
+
+    Returns (dielectric_found, reservoir) -- mirrors
+    _sms_probe_and_solve's own split: `dielectric_found` alone tells the
+    caller whether to skip its own straight shadow ray (the light IS
+    occluded by glass either way), separate from whether the reservoir
+    actually holds a candidate (n_vertices=0 covers "no dielectric",
+    "solve failed to converge", and "target function evaluates to zero"
+    identically -- all "no candidate this frame", matching
+    di_generate_reservoir's own zero-weight handling). Conflating the two
+    would be a real bug: reporting `dielectric_found=True` whenever
+    `al.kind==0` (i.e. for every mesh light, glass or not) would make a
+    temporal-reuse caller skip ordinary shadow-ray NEE for every mesh
+    light in every scene, not just ones with glass in the way."""
     var res = sms_reservoir_init()
     if al.kind != Int8(0):
-        return res^
+        return (False, res^)
     var (dielectric_found, solve_ok, n, verts, bsdf_product, dx1_dxlight, trials) = _sms_probe_and_solve(
         ctx, hit_point, shadow_dir, dist, light_point, ldp_du_v, ldp_dv_v, pcg)
     if not dielectric_found or not solve_ok:
-        return res^
+        return (dielectric_found, res^)
     var p_hat = sms_target_pdf(hit_point, normal, alb, verts[0].pos, verts[0].normal, al.emission, bsdf_product, dx1_dxlight)
     var weight = p_hat * inv_pdf_area * trials
     var accept = reservoir_update(res.state, weight, pcg.next_float())
@@ -2659,7 +2667,119 @@ def sms_generate_reservoir(
         res.ldp_du = ldp_du_v
         res.ldp_dv = ldp_dv_v
         res.le = al.emission
-    return res^
+        res.bsdf_product = bsdf_product
+        res.dx1_dxlight = dx1_dxlight
+    return (dielectric_found, res^)
+
+# Defensive cap on a finalized SMS reservoir's own state.w -- same fix,
+# same root cause, as DI_MAX_FINALIZED_WEIGHT/GI_MAX_FINALIZED_WEIGHT
+# (see DI_MAX_FINALIZED_WEIGHT's own comment for the full mechanism):
+# reservoir_combine's weight formula multiplies in a source reservoir's
+# own already-finalized state.w, so one anomalous value compounds into
+# unbounded growth across many frames of temporal reuse without a bound.
+# Applied proactively here, not discovered via a live bug this time --
+# both DI and GI needed this fix independently before it was understood
+# to be a structural property of reservoir_combine itself, not a
+# payload-specific quirk (see project_restir_migration.md memory).
+comptime SMS_MAX_FINALIZED_WEIGHT: Float32 = Float32(10.0)
+comptime SMS_TEMPORAL_M_CAP: Float32 = Float32(64.0)
+
+def sms_resolve(
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin], ctx: ShadeContext,
+    hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3], alb: RGB,
+    mut res: SMSReservoir,
+):
+    """Finalizes the reservoir's RIS weight (Bitterli et al. 2020 Eq. 6,
+    via reservoir_finalize), then traces one shadow ray for the winning
+    chain's last vertex -> light segment and adds its weighted
+    contribution -- mirrors di_resolve/_mnee_area_light_contribute's own
+    "use the result" step (same wi/cos_s_x0/visibility-ray pattern), the
+    one piece sms_target_pdf itself doesn't cover since it only computes
+    the scalar magnitude, not the per-channel Le-weighted contribution
+    or the occlusion test. No MIS weight, same reasoning as
+    _mnee_area_light_contribute's own (module docstring there): an SMS
+    chain is a specular path BSDF sampling effectively never reproduces."""
+    if res.n_vertices <= Int32(0):
+        return
+    var p_hat = sms_target_pdf(hit_point, normal, alb, res.verts[0].pos, res.verts[0].normal, res.le, res.bsdf_product, res.dx1_dxlight)
+    reservoir_finalize(res.state, p_hat)
+    if res.state.w > SMS_MAX_FINALIZED_WEIGHT:
+        res.state.w = SMS_MAX_FINALIZED_WEIGHT
+    if res.state.w <= Float32(0.0):
+        return
+    var n = Int(res.n_vertices)
+    var first_vertex = res.verts[0].pos
+    var last_vertex = res.verts[n - 1].pos
+    var wi_f = hit_point - first_vertex
+    var wi_len = sqrt(dot(wi_f, wi_f))
+    if wi_len <= Float32(1e-8):
+        return
+    var wi_fn = wi_f * (Float32(1.0) / wi_len)
+    var cos_s_x0 = dot(normal, -wi_fn)
+    if cos_s_x0 <= Float32(0.0):
+        return
+    var wo_f = res.light_point - last_vertex
+    var wo_len = sqrt(dot(wo_f, wo_f))
+    if wo_len <= Float32(1e-8):
+        return
+    var wo_fn = wo_f * (Float32(1.0) / wo_len)
+    var vis_org = last_vertex + wo_fn * Float32(0.001)
+    var vis_ray = Ray_C(Point3f(vis_org[0], vis_org[1], vis_org[2]), Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
+    if any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis_ray, wo_len * Float32(0.999),
+                          ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances):
+        return
+    var contrib = bxdf_eval_diffuse(alb) * res.le * (cos_s_x0 * res.state.w)
+    path_ptr[].estimate += path_ptr[].throughput * contrib
+
+def sms_temporal_step(
+    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin], ctx: ShadeContext,
+    hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3], alb: RGB,
+    shadow_dir: SIMD[DType.float32, 3], dist: Float32, light_point: SIMD[DType.float32, 3],
+    ldp_du_v: SIMD[DType.float32, 3], ldp_dv_v: SIMD[DType.float32, 3],
+    al: AreaLight_C, inv_pdf_area: Float32, mut pcg: PCG32,
+    sms_io: SMSReservoirIO = sms_reservoir_io_null(),
+    pixel_idx: Int = -1,
+) -> Bool:
+    """Phase 6's temporal-only driver (no spatial reuse yet -- see
+    project_sms_restir_phase6.md memory for the remaining scope):
+    generate this frame's fresh candidate (sms_generate_reservoir),
+    temporally combine with the previous frame's stored reservoir at the
+    SAME pixel via IDENTITY reprojection (gonzales has no motion support,
+    so x0/light_point are unchanged frame to frame -- no shift/Jacobian
+    needed, matching di_temporal_step's own reasoning for the DI case),
+    resolve one shadow ray for the combined winner, then M-cap and store
+    for the next frame. Returns True iff a dielectric was found this
+    frame (mirrors _mnee_area_light_contribute's own return convention --
+    the caller must skip its ordinary shadow ray in that case, regardless
+    of whether resolve produced a visible contribution). Falls back to
+    plain single-frame candidate generation + resolve (no persistence)
+    when sms_io isn't real -- matches di_temporal_step's own fallback for
+    the batch (non-interactive) path."""
+    var gen_result = sms_generate_reservoir(ctx, hit_point, normal, alb, shadow_dir, dist, light_point, ldp_du_v, ldp_dv_v, al, inv_pdf_area, pcg)
+    var dielectric_found = gen_result[0]
+    var res = gen_result[1].copy()
+    var has_temporal = pixel_idx >= 0 and _is_real_ptr(sms_io.read)
+    if has_temporal:
+        var prev = sms_io.read[pixel_idx].copy()
+        if prev.n_vertices > Int32(0):
+            dielectric_found = True
+            var p_hat_prev_here = sms_target_pdf(hit_point, normal, alb, prev.verts[0].pos, prev.verts[0].normal, prev.le, prev.bsdf_product, prev.dx1_dxlight)
+            var accept = reservoir_combine(res.state, prev.state, p_hat_prev_here, pcg.next_float())
+            if accept:
+                res.n_vertices = prev.n_vertices
+                res.verts = prev.verts
+                res.light_point = prev.light_point
+                res.ldp_du = prev.ldp_du
+                res.ldp_dv = prev.ldp_dv
+                res.le = prev.le
+                res.bsdf_product = prev.bsdf_product
+                res.dx1_dxlight = prev.dx1_dxlight
+
+    sms_resolve(path_ptr, ctx, hit_point, normal, alb, res)
+    if has_temporal:
+        reservoir_cap_confidence(res.state, SMS_TEMPORAL_M_CAP)
+        sms_io.write[pixel_idx] = res^
+    return dielectric_found
 
 def _nee_area_lights[enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],

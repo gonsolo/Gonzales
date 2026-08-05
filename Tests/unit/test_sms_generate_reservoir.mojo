@@ -12,13 +12,14 @@ from gonzales.geometry import (
     RGB, Point3f, Vec3f, Ray_C, PrimId_C, TriangleMesh_C, Material_C, MatKind,
     Curve_C, GpuTexture_C, ShadowTask_C, LightSampler_C, Instance_C,
     AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, Sphere_C,
-    MeasuredBRDF_C,
+    MeasuredBRDF_C, PathState_C,
 )
-from gonzales.spectrum import null_spectral_handle
+from gonzales.spectrum import null_spectral_handle, SampledWavelengths
 from gonzales.bvh import BVH2Node
 from gonzales.guide import null_guide
-from gonzales.shading import ShadeContext, LightContext, GIPendingX1, sms_generate_reservoir
+from gonzales.shading import ShadeContext, LightContext, GIPendingX1, sms_generate_reservoir, sms_resolve, sms_temporal_step
 from gonzales.restir_gi import gi_reservoir_io_null
+from gonzales.restir_sms import SMSReservoir, SMSReservoirIO, sms_reservoir_io_null
 from gonzales.rng import PCG32
 
 comptime EPS: Float32 = 1e-4
@@ -127,12 +128,13 @@ def test_sms_generate_curve_light_returns_empty() raises:
         area_lights, 1, cdf)
 
     var pcg = PCG32(UInt64(1), UInt64(1))
-    var res = sms_generate_reservoir(
+    var gen_result = sms_generate_reservoir(
         ctx, SIMD[DType.float32, 3](0.0, 0.0, 0.0), SIMD[DType.float32, 3](0.0, 0.0, 1.0), RGB(Float32(0.8)),
         SIMD[DType.float32, 3](0.0, 0.0, 1.0), Float32(4.0), SIMD[DType.float32, 3](0.3, -0.2, 4.0),
         SIMD[DType.float32, 3](1.0, 0.0, 0.0), SIMD[DType.float32, 3](0.0, 1.0, 0.0),
         area_lights[0], Float32(1.0), pcg)
-    assert_true(res.n_vertices == Int32(0))
+    assert_true(gen_result[0] == False)
+    assert_true(gen_result[1].n_vertices == Int32(0))
     area_lights.free(); cdf.free()
 
 def test_sms_generate_no_glass_in_the_way_returns_empty() raises:
@@ -154,12 +156,13 @@ def test_sms_generate_no_glass_in_the_way_returns_empty() raises:
         area_lights, 1, cdf)
 
     var pcg = PCG32(UInt64(1), UInt64(1))
-    var res = sms_generate_reservoir(
+    var gen_result = sms_generate_reservoir(
         ctx, SIMD[DType.float32, 3](0.0, 0.0, 0.0), SIMD[DType.float32, 3](0.0, 0.0, 1.0), RGB(Float32(0.8)),
         SIMD[DType.float32, 3](0.0, 0.0, 1.0), Float32(4.0), SIMD[DType.float32, 3](0.3, -0.2, 4.0),
         SIMD[DType.float32, 3](1.0, 0.0, 0.0), SIMD[DType.float32, 3](0.0, 1.0, 0.0),
         area_lights[0], Float32(1.0), pcg)
-    assert_true(res.n_vertices == Int32(0))
+    assert_true(gen_result[0] == False)
+    assert_true(gen_result[1].n_vertices == Int32(0))
 
     meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
     area_lights.free(); primIds.free(); bvh.free(); cdf.free()
@@ -192,12 +195,14 @@ def test_sms_generate_real_glass_produces_a_streamed_candidate() raises:
     var shadow_dir = shadow_dir_v * (Float32(1.0) / shadow_dist)
 
     var pcg = PCG32(UInt64(1), UInt64(1))
-    var res = sms_generate_reservoir(
+    var gen_result = sms_generate_reservoir(
         ctx, hit_point, normal, RGB(Float32(0.8)),
         shadow_dir, shadow_dist, light_point,
         SIMD[DType.float32, 3](1.0, 0.0, 0.0), SIMD[DType.float32, 3](0.0, 1.0, 0.0),
         area_lights[0], Float32(1.0), pcg)
+    var res = gen_result[1].copy()
 
+    assert_true(gen_result[0] == True)
     assert_true(res.n_vertices == Int32(1))
     assert_true(res.state.m > Float32(0.0))
     assert_true(res.state.w_sum > Float32(0.0))
@@ -206,6 +211,206 @@ def test_sms_generate_real_glass_produces_a_streamed_candidate() raises:
 
     meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
     materials.free(); area_lights.free(); primIds.free(); bvh.free(); cdf.free()
+
+# ── sms_resolve ──────────────────────────────────────────────────────────────
+
+def _make_path() -> PathState_C:
+    return PathState_C(
+        Ray_C(Point3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0)),
+        RGB(Float32(1.0)), RGB(Float32(0.0)), RGB(Float32(0.0)),
+        Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0),
+        Float32(0.0), Int32(-1), Int32(0), UInt64(0),
+        SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
+    )
+
+def test_sms_resolve_on_empty_reservoir_is_a_noop() raises:
+    """N_vertices=0 must return immediately without touching estimate or
+    crashing on the dangling glass-chain data."""
+    var bvh = alloc[BVH2Node](1)
+    bvh[0] = _make_one_leaf_bvh(SIMD[DType.float32, 3](1000.0, 1000.0, 1000.0), SIMD[DType.float32, 3](1001.0, 1001.0, 1001.0))
+    var primIds = alloc[PrimId_C](1)
+    primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var meshes = alloc[TriangleMesh_C](1)
+    meshes[0] = _make_light_mesh()
+    var cdf = alloc[Float32](1)
+    cdf[0] = Float32(0.0)
+    var ctx = _make_ctx(bvh, primIds, meshes,
+        UnsafePointer[Material_C, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[AreaLight_C, MutAnyOrigin].unsafe_dangling(), 0, cdf)
+
+    var path_arr = alloc[PathState_C](1)
+    path_arr[0] = _make_path()
+    var pcg_gen0 = PCG32(UInt64(1), UInt64(1))
+    var gen_result0 = sms_generate_reservoir(
+        ctx, SIMD[DType.float32, 3](0.0, 0.0, 0.0), SIMD[DType.float32, 3](0.0, 0.0, 1.0), RGB(Float32(0.8)),
+        SIMD[DType.float32, 3](0.0, 0.0, 1.0), Float32(4.0), SIMD[DType.float32, 3](0.3, -0.2, 4.0),
+        SIMD[DType.float32, 3](1.0, 0.0, 0.0), SIMD[DType.float32, 3](0.0, 1.0, 0.0),
+        AreaLight_C(Int32(0), Int32(1), RGB(Float32(0.0)), Float32(0.0), Int8(0), Int8(0), Int8(0), Int8(0)),
+        Float32(1.0), pcg_gen0)
+    var res = gen_result0[1].copy()
+    assert_true(res.n_vertices == Int32(0))
+
+    sms_resolve(path_arr, ctx, SIMD[DType.float32, 3](0.0, 0.0, 0.0), SIMD[DType.float32, 3](0.0, 0.0, 1.0), RGB(Float32(0.8)), res)
+    assert_true(_close(path_arr[0].estimate.r, Float32(0.0)))
+
+    meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
+    primIds.free(); bvh.free(); cdf.free(); path_arr.free()
+
+def test_sms_resolve_on_real_glass_adds_positive_contribution() raises:
+    """A real, unshadowed streamed candidate must finalize to state.w > 0
+    and add a strictly positive contribution to path_ptr[].estimate."""
+    var cdf = alloc[Float32](2)
+    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    var bvh = alloc[BVH2Node](1)
+    bvh[0] = _make_one_leaf_bvh(SIMD[DType.float32, 3](-5.0, -5.0, Float32(0.9)), SIMD[DType.float32, 3](15.0, 15.0, Float32(1.1)))
+    var primIds = alloc[PrimId_C](1)
+    primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var meshes = alloc[TriangleMesh_C](1)
+    meshes[0] = _make_glass_mesh()
+    var materials = alloc[Material_C](1)
+    materials[0] = _make_dielectric(Float32(1.5))
+    var area_lights = alloc[AreaLight_C](1)
+    area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    var ctx = _make_ctx(bvh, primIds, meshes, materials, area_lights, 1, cdf)
+
+    var hit_point = SIMD[DType.float32, 3](0.0, 0.0, 0.0)
+    var normal = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var light_point = SIMD[DType.float32, 3](0.3, -0.2, 4.0)
+    var shadow_dir_v = light_point - hit_point
+    var shadow_dist = sqrt(shadow_dir_v[0]*shadow_dir_v[0] + shadow_dir_v[1]*shadow_dir_v[1] + shadow_dir_v[2]*shadow_dir_v[2])
+    var shadow_dir = shadow_dir_v * (Float32(1.0) / shadow_dist)
+    var alb = RGB(Float32(0.8))
+
+    var pcg_gen = PCG32(UInt64(1), UInt64(1))
+    var gen_result = sms_generate_reservoir(
+        ctx, hit_point, normal, alb, shadow_dir, shadow_dist, light_point,
+        SIMD[DType.float32, 3](1.0, 0.0, 0.0), SIMD[DType.float32, 3](0.0, 1.0, 0.0),
+        area_lights[0], Float32(1.0), pcg_gen)
+    var res = gen_result[1].copy()
+    assert_true(res.n_vertices == Int32(1))
+
+    var path_arr = alloc[PathState_C](1)
+    path_arr[0] = _make_path()
+    sms_resolve(path_arr, ctx, hit_point, normal, alb, res)
+    assert_true(res.state.w > Float32(0.0))
+    assert_true(path_arr[0].estimate.r > Float32(0.0))
+    assert_true(path_arr[0].estimate.g > Float32(0.0))
+    assert_true(path_arr[0].estimate.b > Float32(0.0))
+
+    meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
+    materials.free(); area_lights.free(); primIds.free(); bvh.free(); cdf.free(); path_arr.free()
+
+# ── sms_temporal_step ────────────────────────────────────────────────────────
+
+def test_sms_temporal_step_without_io_still_resolves_like_batch_mode() raises:
+    """Pixel_idx=-1 / no real SMSReservoirIO -- must still generate+resolve
+    a single-frame candidate (the batch/non-interactive fallback), matching
+    di_temporal_step's own documented fallback behavior."""
+    var cdf = alloc[Float32](2)
+    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    var bvh = alloc[BVH2Node](1)
+    bvh[0] = _make_one_leaf_bvh(SIMD[DType.float32, 3](-5.0, -5.0, Float32(0.9)), SIMD[DType.float32, 3](15.0, 15.0, Float32(1.1)))
+    var primIds = alloc[PrimId_C](1)
+    primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var meshes = alloc[TriangleMesh_C](1)
+    meshes[0] = _make_glass_mesh()
+    var materials = alloc[Material_C](1)
+    materials[0] = _make_dielectric(Float32(1.5))
+    var area_lights = alloc[AreaLight_C](1)
+    area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    var ctx = _make_ctx(bvh, primIds, meshes, materials, area_lights, 1, cdf)
+
+    var hit_point = SIMD[DType.float32, 3](0.0, 0.0, 0.0)
+    var normal = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var light_point = SIMD[DType.float32, 3](0.3, -0.2, 4.0)
+    var shadow_dir_v = light_point - hit_point
+    var shadow_dist = sqrt(shadow_dir_v[0]*shadow_dir_v[0] + shadow_dir_v[1]*shadow_dir_v[1] + shadow_dir_v[2]*shadow_dir_v[2])
+    var shadow_dir = shadow_dir_v * (Float32(1.0) / shadow_dist)
+    var alb = RGB(Float32(0.8))
+    var pcg = PCG32(UInt64(1), UInt64(1))
+
+    var path_arr = alloc[PathState_C](1)
+    path_arr[0] = _make_path()
+    var found = sms_temporal_step(
+        path_arr, ctx, hit_point, normal, alb, shadow_dir, shadow_dist, light_point,
+        SIMD[DType.float32, 3](1.0, 0.0, 0.0), SIMD[DType.float32, 3](0.0, 1.0, 0.0),
+        area_lights[0], Float32(1.0), pcg)
+    assert_true(found == True)
+    assert_true(path_arr[0].estimate.r > Float32(0.0))
+
+    meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
+    materials.free(); area_lights.free(); primIds.free(); bvh.free(); cdf.free(); path_arr.free()
+
+def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
+    """Two consecutive frames at the SAME pixel with a real SMSReservoirIO
+    buffer -- the second frame's stored reservoir must end up with HIGHER
+    confidence (state.m) than a single frame alone, confirming temporal
+    reservoir_combine actually ran (not just independent per-frame solves)."""
+    var cdf = alloc[Float32](2)
+    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    var bvh = alloc[BVH2Node](1)
+    bvh[0] = _make_one_leaf_bvh(SIMD[DType.float32, 3](-5.0, -5.0, Float32(0.9)), SIMD[DType.float32, 3](15.0, 15.0, Float32(1.1)))
+    var primIds = alloc[PrimId_C](1)
+    primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var meshes = alloc[TriangleMesh_C](1)
+    meshes[0] = _make_glass_mesh()
+    var materials = alloc[Material_C](1)
+    materials[0] = _make_dielectric(Float32(1.5))
+    var area_lights = alloc[AreaLight_C](1)
+    area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    var ctx = _make_ctx(bvh, primIds, meshes, materials, area_lights, 1, cdf)
+
+    var hit_point = SIMD[DType.float32, 3](0.0, 0.0, 0.0)
+    var normal = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var light_point = SIMD[DType.float32, 3](0.3, -0.2, 4.0)
+    var shadow_dir_v = light_point - hit_point
+    var shadow_dist = sqrt(shadow_dir_v[0]*shadow_dir_v[0] + shadow_dir_v[1]*shadow_dir_v[1] + shadow_dir_v[2]*shadow_dir_v[2])
+    var shadow_dir = shadow_dir_v * (Float32(1.0) / shadow_dist)
+    var alb = RGB(Float32(0.8))
+
+    var buf_a = alloc[SMSReservoir](1)
+    var buf_b = alloc[SMSReservoir](1)
+    var pcg_seed = PCG32(UInt64(99), UInt64(1))
+    var res_empty = sms_generate_reservoir(
+        ctx, hit_point, normal, alb, shadow_dir, shadow_dist, light_point,
+        SIMD[DType.float32, 3](1.0, 0.0, 0.0), SIMD[DType.float32, 3](0.0, 1.0, 0.0),
+        AreaLight_C(Int32(0), Int32(1), RGB(Float32(0.0)), Float32(0.0), Int8(0), Int8(0), Int8(0), Int8(0)),
+        Float32(1.0), pcg_seed)
+    buf_a[0] = res_empty[1].copy()
+    buf_b[0] = res_empty[1].copy()
+
+    var path_arr = alloc[PathState_C](1)
+
+    # Frame 0: read=buf_a (empty), write=buf_b.
+    var io0 = SMSReservoirIO(read=buf_a, write=buf_b)
+    path_arr[0] = _make_path()
+    var pcg0 = PCG32(UInt64(1), UInt64(1))
+    _ = sms_temporal_step(
+        path_arr, ctx, hit_point, normal, alb, shadow_dir, shadow_dist, light_point,
+        SIMD[DType.float32, 3](1.0, 0.0, 0.0), SIMD[DType.float32, 3](0.0, 1.0, 0.0),
+        area_lights[0], Float32(1.0), pcg0, io0, 0)
+    var m_after_frame0 = buf_b[0].state.m
+    assert_true(buf_b[0].n_vertices == Int32(1))
+    assert_true(m_after_frame0 > Float32(0.0))
+
+    # Frame 1: read=buf_b (frame 0's result), write=buf_a -- mirrors
+    # pipeline.mojo's own ping-pong swap between frames.
+    var io1 = SMSReservoirIO(read=buf_b, write=buf_a)
+    path_arr[0] = _make_path()
+    var pcg1 = PCG32(UInt64(2), UInt64(1))
+    _ = sms_temporal_step(
+        path_arr, ctx, hit_point, normal, alb, shadow_dir, shadow_dist, light_point,
+        SIMD[DType.float32, 3](1.0, 0.0, 0.0), SIMD[DType.float32, 3](0.0, 1.0, 0.0),
+        area_lights[0], Float32(1.0), pcg1, io1, 0)
+    var m_after_frame1 = buf_a[0].state.m
+
+    assert_true(buf_a[0].n_vertices == Int32(1))
+    assert_true(m_after_frame1 > m_after_frame0)
+    assert_true(path_arr[0].estimate.r > Float32(0.0))
+
+    meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
+    materials.free(); area_lights.free(); primIds.free(); bvh.free(); cdf.free()
+    path_arr.free(); buf_a.free(); buf_b.free()
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

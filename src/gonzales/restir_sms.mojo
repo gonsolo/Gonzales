@@ -60,13 +60,27 @@ struct SMSReservoir(Copyable, Movable):
     cos_l term -- SMS's light-side geometry is already folded into
     `bsdf_product`/`dx1_dxlight` by the manifold walk itself, matching
     shading.mojo's pre-existing `mnee_wtN` formula, which also has no
-    separate cos_l factor."""
+    separate cos_l factor.
+
+    `bsdf_product`/`dx1_dxlight` ARE stored (unlike DIReservoir, which
+    recomputes everything di_target_pdf needs on demand): sms_target_pdf
+    is a pure function of already-solved-chain quantities, not something
+    that re-derives them from geometry alone, so a temporally-reused
+    winner needs these carried forward to be re-evaluated without
+    re-running the Newton solve. Under gonzales's identity-reprojection-
+    only reuse (fact #2, docs/A2_restir_migration_plan.md -- no motion
+    support, so x0/light_point are literally unchanged frame to frame at
+    a given pixel), the stored values remain exactly valid: both
+    quantities are properties of the chain's own vertices relative to
+    ITS x0/light_point endpoints, which haven't moved."""
     var n_vertices:   Int32
     var verts:        InlineArray[SMSVertex, MAX_SMS_VERTICES]
     var light_point:  SIMD[DType.float32, 3]
     var ldp_du:       SIMD[DType.float32, 3]
     var ldp_dv:       SIMD[DType.float32, 3]
     var le:           RGB
+    var bsdf_product: Float32
+    var dx1_dxlight:  Float32
     var state:        ReservoirState
 
 @always_inline
@@ -77,6 +91,7 @@ def sms_reservoir_init() -> SMSReservoir:
         verts=InlineArray[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init()),
         light_point=z3, ldp_du=z3, ldp_dv=z3,
         le=RGB(Float32(0.0)),
+        bsdf_product=Float32(0.0), dx1_dxlight=Float32(0.0),
         state=reservoir_state_init(),
     )
 
@@ -174,3 +189,23 @@ def sms_shift(
         return (False, zero_positions, Float32(0.0), Float32(0.0))
 
     return (True, fwd_pos, fwd_bsdf, fwd_jac)
+
+@fieldwise_init
+struct SMSReservoirIO(Copyable, Movable):
+    """Per-pixel persistent reservoir buffers for temporal-only reuse
+    (Phase 6's first driver -- no spatial reuse yet, so unlike
+    restir_di.mojo's ReservoirIO/restir_gi.mojo's GIReservoirIO this
+    carries no G-buffer pointers; add them alongside spatial reuse when
+    that lands, not before). `read` is the previous frame's fully-
+    resolved reservoirs; `write` is this frame's target -- pipeline.mojo's
+    render_interactive swaps which physical buffer is which each frame
+    rather than copying, same convention as the DI/GI buffers."""
+    var read:  UnsafePointer[SMSReservoir, MutAnyOrigin]
+    var write: UnsafePointer[SMSReservoir, MutAnyOrigin]
+
+@always_inline
+def sms_reservoir_io_null() -> SMSReservoirIO:
+    return SMSReservoirIO(
+        read=UnsafePointer[SMSReservoir, MutAnyOrigin].unsafe_dangling(),
+        write=UnsafePointer[SMSReservoir, MutAnyOrigin].unsafe_dangling(),
+    )
