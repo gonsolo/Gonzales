@@ -12,6 +12,7 @@ from .spectrum import SampledWavelengths
 from .gpu import _sample_medium_core
 from .restir_di import ReservoirIO, reservoir_io_null
 from .restir_gi import GIReservoirIO, gi_reservoir_io_null
+from .restir_sms import SMSReservoirIO, sms_reservoir_io_null
 
 
 def render_tile(
@@ -44,6 +45,16 @@ def render_tile(
     # whole GI block off regardless.
     use_gi: Bool = False,
     gi_io: GIReservoirIO = gi_reservoir_io_null(),
+    # Phase 6 (docs/A2_restir_migration_plan.md): ReSTIR SMS temporal reuse
+    # for glass-caustic MNEE probing, INDEPENDENT of use_restir (unlike
+    # use_gi, which requires it) -- SMS-ReSTIR only ever touches
+    # _nee_area_lights' own glass-probing branch, which runs whenever
+    # ReSTIR DI ISN'T handling bounce 0 (see _shade_diffuse_nee's own
+    # docstring for the known use_restir-combination gap). sms_io is the
+    # frame-wide, caller-owned read/write SMSReservoir buffer (no G-buffer
+    # fields yet -- temporal-only, no spatial reuse).
+    use_sms_restir: Bool = False,
+    sms_io: SMSReservoirIO = sms_reservoir_io_null(),
 ):
     var sp = samplerParamsPtr[0]
     var scene = scenePtr[0]
@@ -171,7 +182,7 @@ def render_tile(
                                instances=scene.instances, guide_write=guide_write, spectral=scene.spectral,
                                measured_brdfs=scene.measuredBrdfs, use_restir=use_restir,
                                restir_io=restir_io, pixel_idx=pixel_idx_buf[i],
-                               gi_pending=gi_pending_buf, gi_io=gi_io)
+                               gi_pending=gi_pending_buf, gi_io=gi_io, sms_io=sms_io)
         # ── Medium interface transitions ──────────────────────────
         for i in range(n):
             if paths[i].active == 0:
@@ -289,6 +300,8 @@ def render_all_tiles(
     restir_io: ReservoirIO = reservoir_io_null(),
     use_gi: Bool = False,
     gi_io: GIReservoirIO = gi_reservoir_io_null(),
+    use_sms_restir: Bool = False,
+    sms_io: SMSReservoirIO = sms_reservoir_io_null(),
 ):
     var res_x = Int(max_x - min_x)
     var tw = Int(tile_w)
@@ -332,7 +345,7 @@ def render_all_tiles(
             raster_to_camera, camera_to_world,
             Int32(tx), Int32(ty), tx_max, ty_max,
             sampler_params, scene, tile_buf, max_depth, guide_read, gw, use_restir,
-            frame_w, restir_io, use_gi, gi_io)
+            frame_w, restir_io, use_gi, gi_io, use_sms_restir, sms_io)
         for iy in range(th_actual):
             for ix in range(tw_actual):
                 var src = iy * tw_actual + ix

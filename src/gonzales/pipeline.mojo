@@ -15,6 +15,7 @@ from .bdpt import vcm_render, vcm_render_gpu, vcm_render_gpu_wavefront, _BDPT_MA
 from .guide import GuideGrid, guide_create, guide_free, guide_clone_empty, guide_refine, null_guide, guide_merge, guide_cell_has_data
 from .restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io_null
 from .restir_gi import GIReservoir, gi_reservoir_init, GIReservoirIO, gi_reservoir_io_null
+from .restir_sms import SMSReservoir, sms_reservoir_init, SMSReservoirIO, sms_reservoir_io_null
 from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 from .spectrum import SpectralHandle, null_spectral_handle
@@ -788,6 +789,17 @@ def parse_and_render(
     # project_restir_migration memory for why that separation is load-
     # bearing (a real bug slipped through when it wasn't kept explicit).
     use_restir_gi: Bool = False,
+    # Phase 6: ReSTIR SMS temporal reuse for glass-caustic MNEE probing
+    # (shading.mojo's sms_temporal_step). Batch mode has no cross-frame
+    # concept (frame_w is never passed to render_all_tiles here, so
+    # pixel_idx stays -1 throughout, same as --restir's own batch scope) --
+    # and unlike DI/GI, a single SMS candidate with no reservoir combine is
+    # mathematically identical to plain per-frame MNEE (W collapses to
+    # exactly inv_pdf_area*trials for a lone accepted candidate), so there
+    # is no "generate-only, no reuse" batch-mode value to offer: this flag
+    # genuinely has no effect at all without --interactive, unlike
+    # --restir-gi's own batch-mode fallback.
+    use_sms_restir: Bool = False,
 ) raises -> Int32:
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
@@ -828,6 +840,8 @@ def parse_and_render(
         print("--restir-gi: no effect without --restir")
     if use_restir_gi and use_gpu:
         print("--restir-gi: CPU batch only so far, no effect combined with --gpu")
+    if use_sms_restir:
+        print("--sms-restir: no effect without --interactive (batch mode has no cross-frame reservoir persistence to reuse)")
 
     if use_gpu and use_sppm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
@@ -1452,6 +1466,16 @@ def render_interactive(
     # (a real energy-bias bug found and reverted). use_gi still enables
     # per-frame generate+resolve with no reuse, same as batch mode.
     use_restir_gi: Bool = False,
+    # Phase 6: ReSTIR SMS temporal reuse for glass-caustic MNEE probing
+    # (shading.mojo's sms_temporal_step), CPU only, INDEPENDENT of
+    # use_restir (unlike use_restir_gi, which requires it) -- see
+    # _shade_diffuse_nee's own docstring for the known use_restir-
+    # combination gap (bounce 0 goes through di_temporal_step instead of
+    # _nee_area_lights when both are active, so SMS-ReSTIR's bounce-0
+    # reuse doesn't run in that combination yet). Real, working
+    # temporal-only reservoir reuse (no spatial yet) -- see
+    # project_sms_restir_phase6 memory.
+    use_sms_restir: Bool = False,
     headless_frames: Int32 = Int32(0),
 ):
     if use_gpu and not gpu_available():
@@ -1461,6 +1485,8 @@ def render_interactive(
         print("--restir-gi: no effect without --restir")
     if use_restir_gi and use_gpu:
         print("--restir-gi: CPU only so far, no effect combined with --gpu")
+    if use_sms_restir and use_gpu:
+        print("--sms-restir: CPU only so far, no effect combined with --gpu")
 
     var psc = mojo_parse_scene(path, verbose)
     if Int(psc) == 0:
@@ -1555,6 +1581,15 @@ def render_interactive(
     var gi_buf_b = UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling()
     var gi_read  = UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling()
     var gi_write = UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling()
+    # Phase 6: ping-ponged SMSReservoir buffers, same race-free scheme as
+    # restir_buf_a/b and gi_buf_a/b above -- SMS_MAX_FINALIZED_WEIGHT
+    # (shading.mojo) was applied proactively from the start (not
+    # discovered via a live bug this time, unlike DI/GI's own history),
+    # so no separate bug-fix narrative applies here.
+    var sms_buf_a = UnsafePointer[SMSReservoir, MutAnyOrigin].unsafe_dangling()
+    var sms_buf_b = UnsafePointer[SMSReservoir, MutAnyOrigin].unsafe_dangling()
+    var sms_read  = UnsafePointer[SMSReservoir, MutAnyOrigin].unsafe_dangling()
+    var sms_write = UnsafePointer[SMSReservoir, MutAnyOrigin].unsafe_dangling()
     # Phase 4: ping-ponged GIReservoir buffers, same scheme as
     # restir_buf_a/b above (race-free for the same reason: read only from
     # `gi_read`, write only to `gi_write`, swapped after each frame).
@@ -1636,6 +1671,17 @@ def render_interactive(
                     gi_buf_b[i] = gi_reservoir_init()
                 gi_read = gi_buf_a
                 gi_write = gi_buf_b
+        if use_sms_restir:
+            # Independent of use_restir (unlike use_restir_gi above) --
+            # SMS-ReSTIR only ever touches _nee_area_lights' own glass-
+            # probing branch, not ReSTIR DI's reservoir path.
+            sms_buf_a = alloc[SMSReservoir](n_pixels)
+            sms_buf_b = alloc[SMSReservoir](n_pixels)
+            for i in range(n_pixels):
+                sms_buf_a[i] = sms_reservoir_init()
+                sms_buf_b[i] = sms_reservoir_init()
+            sms_read = sms_buf_a
+            sms_write = sms_buf_b
 
     var zero = TileResult_C(
         estimate=RGB(Float32(0)),
@@ -1677,6 +1723,12 @@ def render_interactive(
                             for i in range(n_pixels):
                                 gi_buf_a[i] = gi_reservoir_init()
                                 gi_buf_b[i] = gi_reservoir_init()
+                    if use_sms_restir:
+                        # Same identity-reprojection invalidation rule,
+                        # independent of use_restir.
+                        for i in range(n_pixels):
+                            sms_buf_a[i] = sms_reservoir_init()
+                            sms_buf_b[i] = sms_reservoir_init()
         # headless: camera is never polled, so it never "changes" -- every
         # frame accumulates onto the same static view, exactly the
         # steady-state case temporal reuse (Phase 2.3) needs to be verified
@@ -1756,6 +1808,9 @@ def render_interactive(
                     gbuf_world_pos=world_pos_int.unsafe_ptr(),
                     frame_w=fw, frame_h=fh,
                 )
+            var sms_io = sms_reservoir_io_null()
+            if use_sms_restir:
+                sms_io = SMSReservoirIO(read=sms_read, write=sms_write)
             render_all_tiles(
                 psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
                 Int32(0), Int32(0), fw, fh,
@@ -1763,11 +1818,20 @@ def render_interactive(
                 sp_int.unsafe_ptr(), sd, results.unsafe_ptr(), psc[0].max_depth, True,
                 guide_read=null_guide(), write_guides=UnsafePointer[GuideGrid, MutAnyOrigin].unsafe_dangling(),
                 n_write_guides=0, use_restir=use_restir, frame_w=fw, restir_io=restir_io,
-                use_gi=use_restir_gi, gi_io=gi_io)
+                use_gi=use_restir_gi, gi_io=gi_io,
+                use_sms_restir=use_sms_restir, sms_io=sms_io)
             if use_restir_gi:
                 var gi_tmp = gi_read
                 gi_read = gi_write
                 gi_write = gi_tmp
+            if use_sms_restir:
+                # render_all_tiles above is synchronous, so sms_write is now
+                # fully resolved for every pixel -- safe to become next
+                # frame's read buffer, same reasoning as restir_read/write
+                # below.
+                var sms_tmp = sms_read
+                sms_read = sms_write
+                sms_write = sms_tmp
             if use_restir:
                 # render_all_tiles above is synchronous (parallelize joins
                 # before returning), so restir_write is now fully resolved
@@ -1818,5 +1882,8 @@ def render_interactive(
             if use_restir_gi:
                 gi_buf_a.free()
                 gi_buf_b.free()
+        if use_sms_restir:
+            sms_buf_a.free()
+            sms_buf_b.free()
     mojo_parsed_free(psc)
     viewer_destroy(v)

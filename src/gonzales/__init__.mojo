@@ -85,6 +85,12 @@ def main() raises:
                              # _gi_generate_recon_candidate). CPU batch only so far, no
                              # temporal/spatial reuse yet (matches --restir's own batch-
                              # mode scope) -- requires --restir, no effect alone.
+    var use_sms_restir = False  # Phase 6: ReSTIR SMS, temporal reuse for glass-caustic
+                             # MNEE probing (shading.mojo's sms_temporal_step). CPU +
+                             # --interactive only, INDEPENDENT of --restir (unlike
+                             # --restir-gi) -- no effect in batch mode, since a single
+                             # SMS candidate with no reservoir combine is mathematically
+                             # identical to plain per-frame MNEE.
     var headless_frames = Int32(0)  # --interactive-frames: run render_interactive's
                              # per-frame loop N times with no window/camera polling,
                              # then write the result like a normal batch render --
@@ -147,6 +153,8 @@ def main() raises:
             use_restir = True
         elif arg == "--restir-gi":
             use_restir_gi = True
+        elif arg == "--sms-restir":
+            use_sms_restir = True
         elif arg == "--interactive-frames" and i + 1 < len(args):
             i += 1
             headless_frames = _parse_int32(String(args[i]), 0)
@@ -229,9 +237,9 @@ def main() raises:
     elif use_vulkan_rt:
         debug_render_vulkanrt(path_cstr, verbose)
     elif interactive:
-        render_interactive(path_cstr, sobol, use_gpu, spectral=spectral, fullscreen=fullscreen, override_w=override_w, override_h=override_h, spp_override=spp_override, verbose=verbose, use_restir=use_restir, use_restir_gi=use_restir_gi, headless_frames=headless_frames)
+        render_interactive(path_cstr, sobol, use_gpu, spectral=spectral, fullscreen=fullscreen, override_w=override_w, override_h=override_h, spp_override=spp_override, verbose=verbose, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, headless_frames=headless_frames)
     else:
-        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons, use_vulkan_rt_shade=use_vulkan_rt_shade, use_vcm_wavefront=use_vcm_wavefront, use_restir=use_restir, use_restir_gi=use_restir_gi)
+        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons, use_vulkan_rt_shade=use_vulkan_rt_shade, use_vcm_wavefront=use_vcm_wavefront, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
         if rc != Int32(0):

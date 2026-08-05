@@ -3501,6 +3501,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     guide_write: GuideGrid = null_guide(),
     restir_io: ReservoirIO = reservoir_io_null(),
     pixel_idx: Int = -1,
+    sms_io: SMSReservoirIO = sms_reservoir_io_null(),
 ):
     var (gc, ok) = _build_geom_context_full[use_gpu](path_ptr, inter, mat, ctx)
     if not ok:
@@ -3544,7 +3545,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     var u_rr    = ss.rr
 
     _shade_diffuse_nee[use_gpu, enqueue_shadow](path_ptr, ctx, normal, hit_point, alb, gc.wo,
-        u_light, u_bary1, u_bary2, u_env1, u_env2, pcg, guide_write, restir_io, pixel_idx)
+        u_light, u_bary1, u_bary2, u_env1, u_env2, pcg, guide_write, restir_io, pixel_idx, sms_io)
 
     # ── Scatter direction: 50/50 mixture of guide and cosine-weighted BSDF ──────
     # The guide is active when its energy pointer is a real allocation (Int > 1).
@@ -3638,9 +3639,10 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     guide_write: GuideGrid = null_guide(),
     restir_io: ReservoirIO = reservoir_io_null(),
     pixel_idx: Int = -1,
+    sms_io: SMSReservoirIO = sms_reservoir_io_null(),
 ):
     if mat.type == MatKind.diffuse:
-        shade_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat, guide_write, restir_io, pixel_idx)
+        shade_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat, guide_write, restir_io, pixel_idx, sms_io)
     # Delta BSDFs (dielectric variants) need only triangle geometry — no NEE,
     # textures, or Sobol. Passing ctx.meshes directly keeps GPU kernel
     # argument counts minimal. Conductor/coated_conductor CAN be rough (not
@@ -3681,6 +3683,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     guide_write: GuideGrid = null_guide(),
     restir_io: ReservoirIO = reservoir_io_null(),
     pixel_idx: Int = -1,
+    sms_io: SMSReservoirIO = sms_reservoir_io_null(),
 ):
     # ── Miss handler: ray escaped — add infinite light and deactivate ──────────
     if inter.hit == 0:
@@ -3903,7 +3906,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         # GPU: mark material for its dedicated per-material kernel
         path_ptr[].pending_mat = mat.type
     else:
-        _shade_dispatch[False, enqueue_shadow](mat, path_ptr, inter, ctx, guide_write, restir_io, pixel_idx)
+        _shade_dispatch[False, enqueue_shadow](mat, path_ptr, inter, ctx, guide_write, restir_io, pixel_idx, sms_io)
 
 
 @always_inline
@@ -3941,6 +3944,7 @@ def shade_core_cpu_nee(
     pixel_idx: Int = -1,
     gi_pending: UnsafePointer[GIPendingX1, MutAnyOrigin] = UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling(),
     gi_io: GIReservoirIO = gi_reservoir_io_null(),
+    sms_io: SMSReservoirIO = sms_reservoir_io_null(),
 ):
     var path_ptr = paths + tid
     if path_ptr[].active == 0:
@@ -3961,4 +3965,4 @@ def shade_core_cpu_nee(
             point_lights=pointLights, point_count=pointLightCount,
             infinite_lights=infiniteLights, infinite_count=infiniteLightCount,
             spheres=spheres, sphere_count=sphereCount, light_sampler=light_sampler))
-    shade_nee_core[False, False](path_ptr, inter, ctx, guide_write, restir_io, pixel_idx)
+    shade_nee_core[False, False](path_ptr, inter, ctx, guide_write, restir_io, pixel_idx, sms_io)
