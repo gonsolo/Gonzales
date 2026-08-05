@@ -54,11 +54,16 @@ struct SMSReservoir(Copyable, Movable):
     TrivialRegisterPassable regardless of element type (verified
     empirically: even InlineArray[SIMD[...], N] fails the same check),
     so a struct embedding one must fall back to plain Copyable/Movable.
-    Copies need explicit `.copy()`."""
+    Copies need explicit `.copy()`.
+
+    No `light_normal` field (unlike DIReservoir): sms_target_pdf has no
+    cos_l term -- SMS's light-side geometry is already folded into
+    `bsdf_product`/`dx1_dxlight` by the manifold walk itself, matching
+    shading.mojo's pre-existing `mnee_wtN` formula, which also has no
+    separate cos_l factor."""
     var n_vertices:   Int32
     var verts:        InlineArray[SMSVertex, MAX_SMS_VERTICES]
     var light_point:  SIMD[DType.float32, 3]
-    var light_normal: SIMD[DType.float32, 3]
     var ldp_du:       SIMD[DType.float32, 3]
     var ldp_dv:       SIMD[DType.float32, 3]
     var le:           RGB
@@ -70,7 +75,7 @@ def sms_reservoir_init() -> SMSReservoir:
     return SMSReservoir(
         n_vertices=Int32(0),
         verts=InlineArray[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init()),
-        light_point=z3, light_normal=z3, ldp_du=z3, ldp_dv=z3,
+        light_point=z3, ldp_du=z3, ldp_dv=z3,
         le=RGB(Float32(0.0)),
         state=reservoir_state_init(),
     )

@@ -17,6 +17,7 @@ from .sms import (
     MAX_SMS_VERTICES, SMSVertex, sms_vertex_init, sms_vertex_mats,
     mat22_mul, mat22_mul_v, mat22_inv, sms_solve_bernoulli,
 )
+from .restir_sms import SMSReservoir, sms_reservoir_init, sms_target_pdf
 
 @fieldwise_init
 struct GIPendingX1(TrivialRegisterPassable):
@@ -2599,6 +2600,66 @@ def _mnee_area_light_contribute(
     var mnee_wt = bxdf_eval_diffuse(alb) * al.emission * (cos_s_x0 * g * bsdf_product * lobe_w * inv_pdf_area * trials)
     path_ptr[].estimate += path_ptr[].throughput * mnee_wt
     return True
+
+# ── ReSTIR SMS (Phase 6's remaining first piece: candidate generation) ──────
+# Reuses _sms_probe_and_solve for the identical probe+Newton-solve logic
+# _mnee_area_light_contribute's direct-contribution path already uses --
+# see that function's docstring and project_sms_restir_phase6 memory for
+# why this is a SEPARATE function rather than a third calling convention
+# threaded through the already-validated direct-contribution one.
+#
+# Unlike ReSTIR DI's di_generate_reservoir (M=16 cheap light-sampler
+# draws streamed via RIS), SMS has effectively M=1 per pixel per frame --
+# generating even ONE admissible chain is the expensive part (a full
+# Newton solve, possibly Bernoulli trials for N>=3). ReSTIR's value here
+# is almost entirely about reusing that one expensive solve across frames
+# (temporal) and pixels (spatial) via sms_shift, not about resampling
+# among many cheap candidates. Unlike ReSTIR GI's candidate generation
+# (split across two bounces, target pdf deferred to a later call because
+# it needs data unavailable until then), SMS has every quantity
+# sms_target_pdf needs available immediately at generation time -- so,
+# like di_generate_reservoir, this returns an ALREADY-STREAMED reservoir,
+# not an unstreamed candidate.
+def sms_generate_reservoir(
+    ctx: ShadeContext,
+    hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3], alb: RGB,
+    shadow_dir: SIMD[DType.float32, 3], dist: Float32, light_point: SIMD[DType.float32, 3],
+    ldp_du_v: SIMD[DType.float32, 3], ldp_dv_v: SIMD[DType.float32, 3],
+    al: AreaLight_C, inv_pdf_area: Float32, mut pcg: PCG32,
+) -> SMSReservoir:
+    """Phase 6's candidate generation: probe+solve for an admissible
+    specular chain toward the given area-light sample (same scope
+    restriction as _mnee_area_light_contribute -- mesh lights only, kind
+    0; curve lights fall back to ordinary shadow-ray NEE, no SMS
+    candidate generated) and, on success, stream it into a fresh
+    reservoir with RIS weight p̂/q where p̂ is sms_target_pdf and q folds
+    in the light's own area-measure generation density (`inv_pdf_area`
+    is 1/q, matching _mnee_area_light_contribute's own parameter of the
+    same name) and the Bernoulli-trial reciprocal estimator (`trials`,
+    1.0 for the 1-/2-vertex fast path). Returns an empty reservoir
+    (n_vertices=0) when no dielectric intervenes, the solve fails to
+    converge, or the target function evaluates to zero (degenerate/
+    backfacing geometry) -- all treated identically to "no candidate
+    this frame", exactly like di_generate_reservoir's own zero-weight
+    handling."""
+    var res = sms_reservoir_init()
+    if al.kind != Int8(0):
+        return res^
+    var (dielectric_found, solve_ok, n, verts, bsdf_product, dx1_dxlight, trials) = _sms_probe_and_solve(
+        ctx, hit_point, shadow_dir, dist, light_point, ldp_du_v, ldp_dv_v, pcg)
+    if not dielectric_found or not solve_ok:
+        return res^
+    var p_hat = sms_target_pdf(hit_point, normal, alb, verts[0].pos, verts[0].normal, al.emission, bsdf_product, dx1_dxlight)
+    var weight = p_hat * inv_pdf_area * trials
+    var accept = reservoir_update(res.state, weight, pcg.next_float())
+    if accept:
+        res.n_vertices = Int32(n)
+        res.verts = verts
+        res.light_point = light_point
+        res.ldp_du = ldp_du_v
+        res.ldp_dv = ldp_dv_v
+        res.le = al.emission
+    return res^
 
 def _nee_area_lights[enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
