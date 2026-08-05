@@ -26,6 +26,7 @@ this doc is the quick-scan summary.
 | ReSTIR GI | `f2294eab`+ | One-bounce reconnection path reuse (diffuse x1 and x2 only), real temporal+spatial reservoir combine, interactive mode; both DI and GI's temporal reservoirs had a real energy-explosion bug (`reservoir_combine` feedback), fixed via `*_MAX_FINALIZED_WEIGHT` clamps |
 | MNEE (manifold caustics) | `46789d4`+ | Glass/coateddiffuse-base caustics; also wired into ReSTIR's resolve step |
 | SMS (specular manifold sampling) | — | Generalizes MNEE's 1-/2-vertex manifold walk to N specular vertices (`sms.mojo`), block-tridiagonal Newton solve, random seeding + Bernoulli-trial reciprocal estimator for chains where the manifold solution isn't unique; 1-/2-vertex cases stay on MNEE's original fast path unchanged |
+| SMS-ReSTIR (`--sms-restir`) | `2f3455e4`+ | Temporal-only reservoir reuse for glass-caustic MNEE probing (manifold shift + bijectivity check, `restir_sms.mojo`); interactive mode only, independent of `--restir`; validated stable at 256 frames (no energy explosion); no spatial reuse yet |
 | VCM (connect + merge) | — | `bdpt.mojo`; real Georgiev MIS, verified vs SmallVCM; CPU/GPU/wavefront/Vulkan-RT-assisted |
 | SPPM | — | Progressive photon mapping, CPU+GPU, water-caustic scenes |
 | Volumetric media (uniformgrid) | — | Delta/ratio tracking heterogeneous media |
@@ -80,7 +81,7 @@ this doc is the quick-scan summary.
 | # | Feature | Why it matters |
 |---|---|---|
 | 4 | **Random-walk SSS** | Skin, marble, wax, candles — current "subsurface" is a coateddiffuse approximation, not real volumetric random-walk transport |
-| 5 | **ReSTIR beyond one-bounce direct+indirect lighting** | ReSTIR DI (bounce 0) and ReSTIR GI (one-bounce reconnection) are both done, area lights + diffuse material only. Phases 6-8 of `docs/A2_restir_migration_plan.md` (SMS-ReSTIR, volumetric ReSTIR, BDPT-ReSTIR) would extend reach further — not started (Phase 5, SMS itself, is done — see Implemented Features). Phase 9 (unifying ReSTIR's reservoir formalism with VCM's connect/merge into one joint structure) is explicitly marked **open research** in the plan doc itself, not a scoped deliverable |
+| 5 | **ReSTIR beyond one-bounce direct+indirect lighting** | ReSTIR DI (bounce 0), ReSTIR GI (one-bounce reconnection), and SMS-ReSTIR (temporal-only glass-caustic reuse) are all done. Phases 7-8 of `docs/A2_restir_migration_plan.md` (volumetric ReSTIR, BDPT-ReSTIR) would extend reach further — not started. SMS-ReSTIR's own spatial reuse also remains. Phase 9 (unifying ReSTIR's reservoir formalism with VCM's connect/merge into one joint structure) is explicitly marked **open research** in the plan doc itself, not a scoped deliverable |
 | 6 | **VCM's Vulkan RT wiring lacks instancing/spheres/curves** | Its primary/bounce interop (`vulkaninterop_rt_traverse_light_paths_gpu`/`_camera_gpu`, bdpt.mojo) is separate from the plain wavefront path's, and none of the 2026-08-03/04 Vulkan RT coverage fixes were ported there — still falls back to CUDA for any instanced/sphere/curve scene |
 
 ### High Effort
