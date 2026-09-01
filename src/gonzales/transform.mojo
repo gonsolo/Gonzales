@@ -143,13 +143,19 @@ def transform_normals(
     normals_out: UnsafePointer[Float32, MutAnyOrigin],
 ):
     # Normals transform by the transpose of the inverse 3×3.
-    # result[i] = sum_j inv[j*4+i] * n[j]  for i,j in 0..2
+    # result[i] = sum_j inv[i*4+j] * n[j]  for i,j in 0..2 -- i.e. row i of
+    # the (column-major) inv_matrix dotted with n, which is (inv_matrix^T)·n
+    # since inv_matrix's row i is inv_matrix^T's column i. The previous
+    # grouping (i0,i4,i8 / i1,i5,i9 / i2,i6,i10) computed inv_matrix·n
+    # directly with no transpose -- a no-op difference for symmetric inputs
+    # (identity, uniform scale) but wrong for any real rotation, silently
+    # applying the inverse rotation instead of the forward one.
     var i0 = inv_matrix[0]; var i1 = inv_matrix[1]; var i2 = inv_matrix[2]
     var i4 = inv_matrix[4]; var i5 = inv_matrix[5]; var i6 = inv_matrix[6]
     var i8 = inv_matrix[8]; var i9 = inv_matrix[9]; var i10 = inv_matrix[10]
     for i in range(Int(count)):
         var b = i * 3
         var nx = normals_in[b];  var ny = normals_in[b+1];  var nz = normals_in[b+2]
-        normals_out[b]   = i0*nx + i4*ny + i8*nz
-        normals_out[b+1] = i1*nx + i5*ny + i9*nz
-        normals_out[b+2] = i2*nx + i6*ny + i10*nz
+        normals_out[b]   = i0*nx + i1*ny + i2*nz
+        normals_out[b+1] = i4*nx + i5*ny + i6*nz
+        normals_out[b+2] = i8*nx + i9*ny + i10*nz

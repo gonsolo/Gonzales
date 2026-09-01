@@ -249,36 +249,84 @@ def test_build_geom_context_full_matches_closed_form_for_axis_aligned_hit() rais
     materials.free()
     path_arr.free()
 
-def test_build_geom_context_full_non_triangle_prim_returns_not_ok() raises:
-    """Sphere hit (primId.type==4): must return ok=False, matching
-    _get_tri_verts' own not-ok signal, so shade_diffuse-style callers know
-    to bail out rather than use the zeroed placeholder GeomContext."""
+def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() raises:
+    """Sphere hit (primId.type==4) must return ok=True with the exact
+    analytic outward normal (hit - center)/radius, face-forwarded against
+    the ray, and the material's flat albedo (no UV space exists for a
+    sphere). This used to unconditionally return ok=False, causing every
+    non-emissive material on an analytic sphere to render solid black --
+    a real, pre-existing, non-Mitsuba-specific gonzales bug (see
+    project_mitsuba_parser memory). Sphere at (0,0,-1) radius 1, ray from
+    (0,0,5) along -z hits the front pole (0,0,0) with outward normal
+    (0,0,1), pointed straight back at the camera."""
     var mesh = _make_triangle_mesh(
         SIMD[DType.float32, 3](0.0, 0.0, 0.0),
         SIMD[DType.float32, 3](1.0, 0.0, 0.0),
         SIMD[DType.float32, 3](0.0, 1.0, 0.0))
     var meshes = alloc[TriangleMesh_C](1)
     meshes[0] = mesh
-    var mat = _make_material(RGB(Float32(0.5)), Int32(-1))
+    var albedo = RGB(Float32(0.5), Float32(0.3), Float32(0.1))
+    var mat = _make_material(albedo, Int32(-1))
     var materials = alloc[Material_C](1)
     materials[0] = mat
-    var ctx = _make_ctx(
-        UnsafePointer[BVH2Node, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[PrimId_C, MutAnyOrigin].unsafe_dangling(),
-        meshes, materials, Float32(0.0))
-    var path = _make_path(SIMD[DType.float32, 3](0.0, 0.0, 5.0), SIMD[DType.float32, 3](0.0, 0.0, -1.0))
+
+    var spheres = alloc[Sphere_C](1)
+    spheres[0] = Sphere_C(Point3f(0.0, 0.0, -1.0), Float32(1.0), Int32(-1),
+        Int8(0), Int8(0), Int8(0), Int8(0), RGB(Float32(0.0)))
+    var lights = LightContext(
+        UnsafePointer[AreaLight_C, MutAnyOrigin].unsafe_dangling(), 0,
+        UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling(), 0,
+        UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(), 0,
+        UnsafePointer[InfiniteLight_C, MutAnyOrigin].unsafe_dangling(), 0,
+        spheres, 1,
+        LightSampler_C(UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(), Int32(0), Int32(0)),
+    )
+    var ctx = ShadeContext(
+        0, UnsafePointer[BVH2Node, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[PrimId_C, MutAnyOrigin].unsafe_dangling(), meshes,
+        UnsafePointer[Curve_C, MutAnyOrigin].unsafe_dangling(),
+        materials,
+        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(), 0,
+        UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        Float32(0.0),
+        UnsafePointer[UInt32, MutAnyOrigin].unsafe_dangling(),
+        null_guide(),
+        False,
+        lights^,
+        UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
+        null_spectral_handle(),
+        UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling(),
+        gi_reservoir_io_null(),
+    )
+
+    var org = SIMD[DType.float32, 3](0.0, 0.0, 5.0)
+    var dir = SIMD[DType.float32, 3](0.0, 0.0, -1.0)
+    var path = _make_path(org, dir)
     var path_arr = alloc[PathState_C](1)
     path_arr[0] = path
 
     var pid = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(4), Int8(0), Int8(0), Int8(0))
     var inter = Intersection_C(pid, Float32(5.0), Float32(0.0), Float32(0.0), Int8(1), Int8(0), Int8(0), Int8(0))
-    var (_, ok) = _build_geom_context_full[False](path_arr, inter, mat, ctx)
-    assert_false(ok)
+    var (gc, ok) = _build_geom_context_full[False](path_arr, inter, mat, ctx)
+    assert_true(ok)
+    var expected_n = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    assert_true(_simd_close(gc.normal, expected_n))
+    assert_true(_simd_close(gc.geo_normal, expected_n))
+    var expected_hit = org + dir * Float32(5.0) + expected_n * Float32(0.0001)
+    assert_true(_simd_close(gc.hit_point, expected_hit))
+    assert_true(_close(gc.alb.r, albedo.r))
+    assert_true(_close(gc.alb.g, albedo.g))
+    assert_true(_close(gc.alb.b, albedo.b))
 
     meshes[0].points.free()
     meshes[0].vertexIndices.free()
     meshes.free()
     materials.free()
+    spheres.free()
     path_arr.free()
 
 # ── _shadow_contribute[enqueue_shadow=False] ─────────────────────────────────

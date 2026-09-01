@@ -28,6 +28,14 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     var tex_idx:        Int32
     var normal_tex_idx: Int32
     var rough_tex_idx:  Int32
+    # UV scale applied to an imagemap `tex_idx` texture's mesh UVs at parse
+    # time (Mitsuba's `<transform name="to_uv"><scale .../></transform>`,
+    # e.g. a tiled floor texture) -- NOT the same field as checker_uscale/
+    # vscale below (those are read at shading time for the procedural
+    # checkerboard pattern generator; this pair is only consulted once, by
+    # whichever shape-building code populates a mesh's raw UV list).
+    var tex_uscale:     Float32
+    var tex_vscale:     Float32
     var mix_name1:      String
     var mix_name2:      String
     var mix_amount:     Float32
@@ -55,6 +63,8 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
         self.tex_idx        = Int32(-1)
         self.normal_tex_idx = Int32(-1)
         self.rough_tex_idx  = Int32(-1)
+        self.tex_uscale     = Float32(1)
+        self.tex_vscale     = Float32(1)
         self.mix_name1      = String("")
         self.mix_name2      = String("")
         self.mix_amount     = Float32(0.5)

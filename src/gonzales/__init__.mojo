@@ -203,8 +203,8 @@ def main() raises:
         print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--verbose] [--spp N] [--resolution WxH] [--width W] [--height H] scene.pbrt")
         return
 
-    if not scene_path.endswith(".pbrt"):
-        print("Error: expected a .pbrt scene file, got:", scene_path)
+    if not scene_path.endswith(".pbrt") and not scene_path.endswith(".xml"):
+        print("Error: expected a .pbrt or .xml (Mitsuba) scene file, got:", scene_path)
         return
 
     var data_dir = getenv("GONZALES_DATA_DIR", "src/gonzales/data")

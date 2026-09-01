@@ -3,7 +3,8 @@ from std.collections import List
 from std.math import sqrt, tan, ceil
 from std.sys.info import size_of
 from std.gpu.host import DeviceBuffer
-from .pbrt_parser import ParsedScene_Mojo, mojo_parse_scene, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film, mojo_apply_overrides
+from .pbrt_parser import ParsedScene_Mojo, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film, mojo_apply_overrides
+from .scene_loader import mojo_parse_scene_any
 from .rendering import render_all_tiles, normalize_film, fmt_time, progress_str
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, Ray_C, dot, TriangleMesh_C, _is_real_ptr, Curve_C, curve_piece_bounds
@@ -337,7 +338,7 @@ def debug_trace_pixel(
     from .bvh import traverse_bvh2_core, test_spheres, any_hit_bvh2_core, _equal_area_sphere_to_square
     from .geometry import Intersection_C, Material_C, cross, fr_dielectric
 
-    var psc = mojo_parse_scene(path)
+    var psc = mojo_parse_scene_any(path)
     if Int(psc) == 0:
         print("parse failed"); return
 
@@ -533,7 +534,8 @@ def debug_trace_pixel(
                 var cos_s = gnx*ldx + gny*ldy + gnz*ldz
                 var sray = Ray_C(Point3f(ox1, oy1, oz1), Vec3f(ldx, ldy, ldz))
                 var occluded = any_hit_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, sray, Float32(2000.0),
-                                                  psc[0].blas_nodes_arr, psc[0].blas_primids_arr, psc[0].instances)
+                                                  psc[0].blas_nodes_arr, psc[0].blas_primids_arr, psc[0].instances,
+                                                  psc[0].spheres, Int(psc[0].sphere_count))
                 print("        DISTANT", dli, "dir", ldx, ldy, ldz, "cos_s", cos_s, "occluded", Int(occluded))
             for ali in range(Int(psc[0].area_light_count)):
                 var al = psc[0].area_lights[ali]
@@ -551,7 +553,8 @@ def debug_trace_pixel(
                 var cos_sa = gnx*tlx + gny*tly + gnz*tlz
                 var sray2 = Ray_C(Point3f(ox1, oy1, oz1), Vec3f(tlx, tly, tlz))
                 var occluded2 = any_hit_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, sray2, tdist * Float32(0.999),
-                                                   psc[0].blas_nodes_arr, psc[0].blas_primids_arr, psc[0].instances)
+                                                   psc[0].blas_nodes_arr, psc[0].blas_primids_arr, psc[0].instances,
+                                                   psc[0].spheres, Int(psc[0].sphere_count))
                 print("        AREA", ali, "centroid", lcx, lcy, lcz, "dist", tdist, "cos_s", cos_sa, "occluded", Int(occluded2))
             print("        STOP (diffuse probe only, not following further)")
             break
@@ -587,7 +590,7 @@ def debug_render_vulkanrt(
     from .vulkanrt import vulkanrt_build_scene, vulkanrt_trace_rays, vulkanrt_destroy_scene
     from std.math import abs
 
-    var psc = mojo_parse_scene(path, verbose)
+    var psc = mojo_parse_scene_any(path, verbose)
     if Int(psc) == 0:
         print("parse failed"); return
 
@@ -805,7 +808,7 @@ def parse_and_render(
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
         return Int32(-1)
 
-    var psc = mojo_parse_scene(path, verbose)
+    var psc = mojo_parse_scene_any(path, verbose)
     if Int(psc) == 0:
         return Int32(-1)
     if override_w > 0 and override_h > 0:
@@ -1488,7 +1491,7 @@ def render_interactive(
     if use_sms_restir and use_gpu:
         print("--sms-restir: CPU only so far, no effect combined with --gpu")
 
-    var psc = mojo_parse_scene(path, verbose)
+    var psc = mojo_parse_scene_any(path, verbose)
     if Int(psc) == 0:
         print("Failed to parse scene")
         return

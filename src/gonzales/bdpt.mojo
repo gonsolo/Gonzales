@@ -519,7 +519,8 @@ def _bdpt_mnee_diffuse_area_light(
             var vis2_org = x2_f2 + wo2fn * Float32(0.001)
             var vis2_ray = Ray_C(Point3f(vis2_org[0], vis2_org[1], vis2_org[2]), Vec3f(wo2fn[0], wo2fn[1], wo2fn[2]))
             if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis2_ray, wo2fl * Float32(0.999),
-                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
+                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
+                                  sd.spheres, Int(sd.sphereCount)):
                 return RGB(Float32(0))
             var coat_t2 = Float32(1.0) - fr_dielectric(cos_s_x0, ior)
             return beta * bxdf_eval_diffuse(eff_alb) * coat_t2 * al.emission * (cos_s_x0 * G2 * bsdf_prod / pdf_area2)
@@ -576,7 +577,8 @@ def _bdpt_mnee_diffuse_area_light(
         var vis_org = x1_f + wo_fn * Float32(0.001)
         var vis_ray = Ray_C(Point3f(vis_org[0], vis_org[1], vis_org[2]), Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
         if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis_ray, wo_len_f * Float32(0.999),
-                              sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
+                              sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
+                              sd.spheres, Int(sd.sphereCount)):
             return RGB(Float32(0))
         var coat_t1 = Float32(1.0) - fr_dielectric(cos_s_x0, ior)
         return beta * bxdf_eval_diffuse(eff_alb) * coat_t1 * al.emission * (cos_s_x0 * G * bsdf_s / pdf_area_x2)
@@ -787,7 +789,8 @@ def _bdpt_mnee_sphere_light(
             var vis2_org = x2_f2 + wo2fn * Float32(0.001)
             var vis2_ray = Ray_C(Point3f(vis2_org[0], vis2_org[1], vis2_org[2]), Vec3f(wo2fn[0], wo2fn[1], wo2fn[2]))
             if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis2_ray, wo2fl * Float32(0.999),
-                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
+                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
+                                  sd.spheres, Int(sd.sphereCount)):
                 return RGB(Float32(0))
             # coat_t (coateddiffuse coat-transmittance, mirrors
             # _bdpt_mnee_diffuse_area_light's `ior` handling) is DELIBERATELY
@@ -853,7 +856,8 @@ def _bdpt_mnee_sphere_light(
         var vis_org = x1_f + wo_fn * Float32(0.001)
         var vis_ray = Ray_C(Point3f(vis_org[0], vis_org[1], vis_org[2]), Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
         if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis_ray, wo_len_f * Float32(0.999),
-                              sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
+                              sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
+                              sd.spheres, Int(sd.sphereCount)):
             return RGB(Float32(0))
         # coat_t deliberately not applied -- see the 2-vertex branch's
         # identical comment above (this function's docstring has the full

@@ -1502,7 +1502,8 @@ def _sppm_nee_one(
                 var shadow_ray = Ray_C(shadow_org, vec3f(wi))
                 var t_max = dist * Float32(0.999)
                 if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, t_max,
-                                      sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
+                                      sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
+                                      sd.spheres, Int(sd.sphereCount)):
                     # pdf_area = 1/(n_area * total_area) — uniform-over-all-lights
                     # assumption, same as the emission-sampling flux scale factor.
                     var inv_pdf_area = Float32(n_area) * al.total_area
@@ -1544,7 +1545,8 @@ def _sppm_nee_one(
             var shadow_org_d = vp.pos + vp.normal * shadow_eps
             var shadow_ray_d = Ray_C(shadow_org_d, vec3f(ls_d.wi))
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_d, ls_d.dist,
-                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
+                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
+                                  sd.spheres, Int(sd.sphereCount)):
                 vps[i].ld += w_d
 
     for pl_i in range(Int(sd.pointLightCount)):
@@ -1554,7 +1556,8 @@ def _sppm_nee_one(
             var shadow_org_p = vp.pos + vp.normal * shadow_eps
             var shadow_ray_p = Ray_C(shadow_org_p, vec3f(ls_p.wi))
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_p, ls_p.dist * Float32(0.9999),
-                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
+                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
+                                  sd.spheres, Int(sd.sphereCount)):
                 vps[i].ld += w_p
 
     # Sphere-light NEE (solid-angle cone sampling). Loops ALL analytic
@@ -1568,7 +1571,8 @@ def _sppm_nee_one(
             var shadow_org_sph = vp.pos + vp.normal * shadow_eps
             var shadow_ray_sph = Ray_C(shadow_org_sph, vec3f(ls_sph.wi))
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_sph, ls_sph.dist * Float32(0.9999),
-                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
+                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
+                                  sd.spheres, Int(sd.sphereCount)):
                 vps[i].ld += w_sph
 
     for inf_i in range(Int(sd.infiniteLightCount)):
@@ -1578,7 +1582,8 @@ def _sppm_nee_one(
             var shadow_org_e = vp.pos + vp.normal * shadow_eps
             var shadow_ray_e = Ray_C(shadow_org_e, vec3f(ls_e.wi))
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_e, ls_e.dist,
-                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances):
+                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
+                                  sd.spheres, Int(sd.sphereCount)):
                 vps[i].ld += w_e
 
 

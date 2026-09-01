@@ -1194,11 +1194,22 @@ def traverse_bvh2_core(
     blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
     blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
     instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin] = UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(),
+    n_spheres: Int = 0,
 ):
     # Callers that never populate any PrimId_C.type==6 leaf (GPU kernels, which
     # upload their own device-side scene copy with no instance data at all) can
     # omit blasNodesArr/blasPrimIdsArr/instances entirely — the dangling
     # defaults above are never dereferenced since no such leaf will exist.
+    # Same for spheres/n_spheres (default n_spheres=0 never dereferences the
+    # dangling pointer) — see any_hit_bvh2_core's own sphere test for why
+    # this is baked directly into the traversal rather than left as a
+    # separate test_spheres() call callers must remember to make (that
+    # exact "caller forgets the second call" pattern is what let analytic
+    # spheres go untested by every closest-hit caller that didn't already
+    # know to call test_spheres itself — see _sms_probe_and_solve's own
+    # probe rays in shading.mojo, which found glass spheres via neither
+    # this function nor any_hit_bvh2_core until both were fixed).
 
     var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
     var org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
@@ -1341,7 +1352,19 @@ def traverse_bvh2_core(
                 toVisit -= 1
                 current = Int(stack_ptr[toVisit])
 
-    if instHit:
+    var sphereHit = False
+    var sphereIdx = -1
+    for i in range(n_spheres):
+        var t = ray_sphere_hit(spheres[i].center, spheres[i].radius, ray, Float32(1e-4), localTHit)
+        if t > Float32(0.0):
+            localTHit = t
+            sphereHit = True
+            sphereIdx = i
+
+    if sphereHit:
+        var spId = PrimId_C(Int64(sphereIdx), Int64(-1), Int64(spheres[sphereIdx].materialIndex), Int32(-1), Int8(4), Int8(0), Int8(0), Int8(0))
+        resultPtr[0] = Intersection_C(spId, localTHit, Float32(0), Float32(0), Int8(1), 0, 0, 0)
+    elif instHit:
         resultPtr[0] = Intersection_C(instHitPrim, localTHit, bestU, bestV, Int8(1), 0, 0, 0)
     elif hitIndex != -1:
         resultPtr[0] = Intersection_C(primIds[hitIndex], localTHit, bestU, bestV, Int8(1), 0, 0, 0)
@@ -1546,7 +1569,22 @@ def any_hit_bvh2_core(
     blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
     blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
     instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin] = UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(),
+    n_spheres: Int = 0,
 ) -> Bool:
+    # Analytic spheres live in their own flat array, not the mesh/curve BVH
+    # this function walks, so they need their own (cheap, since n_spheres
+    # is typically single digits) any-hit test -- baked in HERE rather than
+    # left as a second call the caller must remember to also make: that's
+    # exactly the shape of bug that let every analytic sphere in gonzales
+    # silently cast no shadow via NEE, in any render mode, until this was
+    # found (see project_sms_restir_phase6/project_mitsuba_parser memory).
+    # Order doesn't matter for a pure any-hit query (we only need ONE
+    # blocker, not the closest), so check spheres first as a cheap
+    # rejection before the heavier BVH walk.
+    for i in range(n_spheres):
+        if ray_sphere_hit(spheres[i].center, spheres[i].radius, ray, Float32(1e-4), tMax) > Float32(0.0):
+            return True
     var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
     var org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
     var nearXIsMin = rdir.x >= Float32(0.0)

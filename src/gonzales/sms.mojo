@@ -32,9 +32,10 @@
 # _mnee_walk2's own formulas at n=2 (see test_sms.mojo's regression tests
 # against _mnee_walk/_mnee_walk2 output).
 
-from std.math import sqrt, abs, max
-from .geometry import RGB, dot, cross, fr_dielectric
+from std.math import sqrt, abs, max, min
+from .geometry import RGB, dot, cross, fr_dielectric, Frame, Vec3f, Point3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Curve_C, Instance_C, Sphere_C
 from .rng import PCG32
+from .bvh import ray_sphere_hit, traverse_bvh2_core, BVH2Node
 
 comptime MAX_SMS_VERTICES: Int = 6
 comptime SMS_BERNOULLI_MAX_TRIALS: Int = 16
@@ -101,22 +102,221 @@ def sms_vertex_mats(
 @fieldwise_init
 struct SMSVertex(TrivialRegisterPassable):
     """One specular vertex of the chain. `pos` is the Newton-walk variable;
-    normal/dp_du/dp_dv/eta are fixed properties of the vertex's flat
-    triangle (same no-reprojection limitation as _mnee_walk/_mnee_walk2 --
-    valid as long as the true manifold solution stays within that
-    triangle). `eta` is the relative IOR crossing this vertex (ior if
-    entering, 1/ior if exiting), precomputed by the caller from probe
-    geometry exactly like _mnee_walk2's eta1/eta2."""
+    normal/dp_du/dp_dv are the vertex's LOCAL tangent-plane linearization,
+    re-derived every iteration for a curved vertex (see `is_sphere` below)
+    but otherwise a fixed property of a flat triangle (valid as long as the
+    true manifold solution stays within that triangle -- unchanged from
+    the original flat-only design). `eta` is the relative IOR crossing
+    this vertex (ior if entering, 1/ior if exiting), precomputed by the
+    caller from probe geometry exactly like _mnee_walk2's eta1/eta2.
+
+    `is_sphere`/`sphere_center`/`sphere_radius`: when set, this vertex
+    lies on an analytic Sphere_C rather than a flat triangle. A flat
+    triangle's tangent plane IS its surface everywhere, so the ordinary
+    Newton step (move within the fixed tangent plane) is exact; a
+    sphere's tangent plane only agrees with the true surface at the point
+    of tangency, so `sms_walk` reprojects this vertex's position back onto
+    the sphere and re-derives normal/dp_du/dp_dv after every step (see
+    `_sms_reproject_onto_sphere`) -- the rest of the Newton machinery
+    (`sms_vertex_mats`, the block-tridiagonal solve) is completely generic
+    in dp_du/dp_dv/normal and needs no other change to support this."""
     var pos:    SIMD[DType.float32, 3]
     var normal: SIMD[DType.float32, 3]
     var dp_du:  SIMD[DType.float32, 3]
     var dp_dv:  SIMD[DType.float32, 3]
     var eta:    Float32
+    var is_sphere:     Int8
+    var sphere_center: SIMD[DType.float32, 3]
+    var sphere_radius: Float32
 
 @always_inline
 def sms_vertex_init() -> SMSVertex:
     var z = SIMD[DType.float32, 3](Float32(0.0))
-    return SMSVertex(z, z, z, z, Float32(1.0))
+    return SMSVertex(z, z, z, z, Float32(1.0), Int8(0), z, Float32(0.0))
+
+@always_inline
+def sms_vertex_flat(
+    pos: SIMD[DType.float32, 3],
+    normal: SIMD[DType.float32, 3],
+    dp_du: SIMD[DType.float32, 3],
+    dp_dv: SIMD[DType.float32, 3],
+    eta: Float32,
+) -> SMSVertex:
+    """Constructs a flat-triangle SMSVertex (is_sphere=False) -- the
+    original SMSVertex shape before sphere support was added, kept as a
+    named constructor so call sites don't each spell out the dummy
+    sphere_center/sphere_radius padding a flat vertex never uses."""
+    var z = SIMD[DType.float32, 3](Float32(0.0))
+    return SMSVertex(pos, normal, dp_du, dp_dv, eta, Int8(0), z, Float32(0.0))
+
+@always_inline
+def sms_vertex_sphere(
+    pos: SIMD[DType.float32, 3],
+    center: SIMD[DType.float32, 3],
+    radius: Float32,
+    eta: Float32,
+) -> SMSVertex:
+    """Constructs a sphere-caster SMSVertex from a probe hit's world-space
+    position (assumed already ON the sphere, e.g. from a real intersection)
+    -- snaps it exactly onto the sphere and derives an initial tangent
+    frame via `_sms_reproject_onto_sphere`, matching what `sms_walk` itself
+    will re-derive on every subsequent iteration."""
+    var r = _sms_reproject_onto_sphere(pos, center, radius)
+    return SMSVertex(r[0], r[1], r[2], r[3], eta, Int8(1), center, radius)
+
+@always_inline
+def _sms_reproject_onto_sphere(
+    x_raw: SIMD[DType.float32, 3],
+    center: SIMD[DType.float32, 3],
+    radius: Float32,
+) -> Tuple[SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3]]:
+    """Projects a tangent-plane Newton step back onto the true (curved)
+    sphere surface, and re-derives the local normal/tangent frame there.
+    A flat triangle's tangent plane IS its surface everywhere, so
+    _mnee_walk/_mnee_walk2 never needed this; a sphere's tangent plane
+    only agrees with the true surface at the point of tangency, so every
+    Newton step must be corrected back onto the curved surface before the
+    next iteration's linearization -- this is the standard manifold-Newton
+    technique (project, don't just linearize), not an approximation: it
+    keeps the walk exactly ON the sphere at every iteration instead of
+    silently drifting into the tangent plane and away from the actual
+    specular constraint.
+
+    Returns (x_on_sphere, normal, dp_du, dp_dv). dp_du/dp_dv are an
+    arbitrary (Frisvad/Duff) orthonormal tangent basis, not a true (u,v)
+    sphere parameterization -- sms_vertex_mats's own math re-derives its
+    working (s,t) frame from dp_du/dp_dv+normal via Gram-Schmidt every
+    iteration regardless (see sms_vertex_mats/_sms_eval_vertex), so any
+    non-degenerate tangent basis is equally valid; no phi/theta
+    parameterization (and its pole singularity) is needed."""
+    var to_x = x_raw - center
+    var to_x_len = sqrt(dot(to_x, to_x))
+    var normal = to_x
+    var x_on_sphere = x_raw
+    if to_x_len > Float32(1e-8):
+        normal = to_x * (Float32(1.0) / to_x_len)
+        x_on_sphere = center + normal * radius
+    return _sms_sphere_frame_at(x_on_sphere, normal)
+
+@always_inline
+def _sms_sphere_frame_at(
+    x_on_sphere: SIMD[DType.float32, 3],
+    normal: SIMD[DType.float32, 3],
+) -> Tuple[SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3]]:
+    var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
+    var dp_du = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
+    var dp_dv = SIMD[DType.float32, 3](frame.y.x, frame.y.y, frame.y.z)
+    return (x_on_sphere, normal, dp_du, dp_dv)
+
+@always_inline
+def _sms_reproject_onto_sphere_anchored(
+    anchor: SIMD[DType.float32, 3],
+    x_raw: SIMD[DType.float32, 3],
+    center: SIMD[DType.float32, 3],
+    radius: Float32,
+    anchor_on_surface: Bool,
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin] = UnsafePointer[BVH2Node, MutAnyOrigin].unsafe_dangling(),
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin] = UnsafePointer[PrimId_C, MutAnyOrigin].unsafe_dangling(),
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin] = UnsafePointer[TriangleMesh_C, MutAnyOrigin].unsafe_dangling(),
+    curves: UnsafePointer[Curve_C, MutAnyOrigin] = UnsafePointer[Curve_C, MutAnyOrigin].unsafe_dangling(),
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin] = UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(),
+    n_spheres: Int = 0,
+) -> Tuple[SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3], Bool]:
+    """Reprojects a raw Newton-step proposal onto the sphere by actually
+    RAY-CASTING from a fixed anchor through the proposal, instead of
+    `_sms_reproject_onto_sphere`'s closed-form `normalize(x_raw-center)*
+    radius` snap -- ports the real SMS reference renderer's own reprojection
+    strategy (`SpecularManifoldSingleScatter::newton_solver`,
+    manifold_ss.cpp: re-intersects a ray from the ORIGINAL shading point
+    through the proposed point with the actual scene every iteration,
+    rejecting/shrinking the step if it misses or lands on a different
+    shape).
+
+    This matters because the closed-form snap has no notion of WHICH side
+    of the sphere is reachable from the rest of the chain: it accepts
+    whatever point is nearest to `x_raw` in ANY direction from the sphere's
+    center, including the far/hidden hemisphere. Root-caused via a
+    real-scene diagnostic on `sphere_sms.xml`: the coupled 2-vertex
+    (entry+exit) Newton solve was converging "successfully" (small
+    residual, plausible-looking BSDF/Jacobian) to entry points on the
+    UNDERSIDE of the sphere -- physically unreachable, embedded below the
+    scene's own floor -- 100% of the time, silently discarded by the
+    caller's downstream visibility check. A ray cast from the anchor can
+    only ever hit the surface actually visible/reachable from that anchor,
+    which structurally forecloses that failure mode.
+
+    `anchor` is the fixed reference point to cast from: `x0` (the shading
+    point) for the first vertex in a chain, or the PREVIOUS vertex's
+    (already reprojected) position for any later vertex -- mirroring how
+    `_sms_probe_and_solve`'s own initial straight-line probe sequentially
+    marches from one hit to the next. `anchor_on_surface` distinguishes the
+    two cases: False (anchor is off-sphere, e.g. x0) takes the ray's FIRST
+    crossing (t_min close to 0) -- the near/visible hemisphere from that
+    anchor; True (anchor is itself already ON this same sphere, e.g. the
+    previous vertex) skips a small epsilon past the anchor's own surface so
+    the ray finds the FAR crossing -- the point reached by continuing
+    through the sphere's interior, exactly the entry-to-exit relationship a
+    solid glass sphere needs.
+
+    Returns (pos, normal, dp_du, dp_dv, ok) -- `ok=False` when the proposal
+    direction is degenerate, the ray misses the sphere entirely (should
+    only happen for a wildly oversized step), or (when `n_spheres > 0`
+    opts into it) the anchor-to-sphere ray is blocked by OTHER scene
+    geometry first. That last check matters just as much as the ray-cast
+    itself: `ray_sphere_hit` alone only knows about this one analytic
+    sphere, so on its own it can still "successfully" reproject onto a
+    sphere point that a real ray from the anchor could never actually
+    reach because something else (a floor, in the scene that exposed this)
+    sits in the way first -- exactly mirroring the reference
+    implementation's own `vtx.shape != si_current.shape` rejection
+    (manifold_ss.cpp), which re-intersects the FULL scene each iteration,
+    not just the specular shape in isolation. The caller falls back to the
+    closed-form snap when `ok=False`, matching the reference's own
+    "missed/blocked, shrink the step" recovery."""
+    var dir_raw = x_raw - anchor
+    var dir_len = sqrt(dot(dir_raw, dir_raw))
+    if dir_len <= Float32(1e-9):
+        return (x_raw, SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)), False)
+    var dir = dir_raw * (Float32(1.0) / dir_len)
+    var t_min = radius * Float32(1e-4) if anchor_on_surface else Float32(1e-5)
+    var t_max = radius * Float32(8.0) + dir_len
+    var ray = Ray_C(Point3f(anchor[0], anchor[1], anchor[2]), Vec3f(dir[0], dir[1], dir[2]))
+    var t = ray_sphere_hit(Point3f(center[0], center[1], center[2]), radius, ray, t_min, t_max)
+    if t <= Float32(0.0):
+        return (x_raw, SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)), False)
+    if n_spheres > 0:
+        # Offset the occlusion ray's ORIGIN forward along `dir` by a small
+        # epsilon before re-tracing the full scene -- `anchor` can sit
+        # essentially ON another surface (x0 is a shading point epsilon
+        # above its own floor/mesh; a previous chain vertex sits exactly on
+        # its sphere), so tracing from `anchor` itself would immediately
+        # self-intersect that surface at (near-)zero t and report a false
+        # "occluded" on every single call. Same shadow-acne fix
+        # `_sms_probe_and_solve`'s own probes already use
+        # (`hit_point + shadow_dir * 0.0002`), just applied here too.
+        var occl_eps = Float32(0.001)
+        var occl_org = anchor + dir * occl_eps
+        var occl_tmax = (t - occl_eps) + radius * Float32(1e-3)
+        if occl_tmax > Float32(0.0):
+            var occl_ray = Ray_C(Point3f(occl_org[0], occl_org[1], occl_org[2]), Vec3f(dir[0], dir[1], dir[2]))
+            var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+            var dummy_inter = Intersection_C(dummy_prim, occl_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+            var store = InlineArray[Intersection_C, 1](fill=dummy_inter)
+            traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, occl_ray, occl_tmax, store.unsafe_ptr(),
+                                blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
+            if store[0].hit != Int8(0) and store[0].tHit < (t - occl_eps) - radius * Float32(1e-4):
+                return (x_raw, SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)), False)
+    var pos = anchor + dir * t
+    var normal_raw = pos - center
+    var normal_len = sqrt(dot(normal_raw, normal_raw))
+    if normal_len <= Float32(1e-8):
+        return (x_raw, SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)), False)
+    var normal = normal_raw * (Float32(1.0) / normal_len)
+    var r = _sms_sphere_frame_at(pos, normal)
+    return (r[0], r[1], r[2], r[3], True)
 
 @fieldwise_init
 struct SMSVertexEval(TrivialRegisterPassable):
@@ -176,12 +376,44 @@ def _sms_eval_vertex(
     var dpv_next = verts[i+1].dp_dv if has_next else z3
     var (ai, bi, ci, cvi) = sms_vertex_mats(wi, wo, H, s, t, verts[i].dp_du, verts[i].dp_dv, ili, ilo,
         dpu_prev, dpv_prev, dpu_next, dpv_next, has_prev, has_next)
+    if verts[i].is_sphere != Int8(0):
+        # Curvature correction to the SELF ("b") Jacobian, missing from
+        # sms_vertex_mats because that formula was derived assuming a FLAT
+        # vertex, where the local frame (normal, s, t) never changes as the
+        # vertex moves. For a sphere it does: moving distance du along s
+        # rotates the true local normal by du/radius TOWARD s (curvature),
+        # which drags s itself by -normal/radius and t by 0 (and
+        # symmetrically for v/t) -- a real first-order effect a flat
+        # vertex's fixed frame never has. Differentiating cv_s=dot(H,s)
+        # therefore needs a `dot(H, ds/du)` term beyond sms_vertex_mats's
+        # `dot(dH/du, s)`; working through ds/du=-normal/radius, dt/du=0,
+        # ds/dv=0, dt/dv=-normal/radius (derived by hand, verified against
+        # a full finite-difference reprojected-perturbation probe -- see
+        # project_sms_restir_phase6 memory) gives a simple diagonal
+        # correction: subtract dot(H, normal)/radius from BOTH diagonal
+        # entries of b. Without this, the "b" Jacobian is measurably wrong
+        # (by up to ~1/radius, comparable to its own diagonal magnitude for
+        # a modestly-curved sphere) and the Newton direction it produces is
+        # not even a local descent direction -- confirmed empirically: a
+        # coupled 2-curved-vertex chain diverged even under backtracking
+        # line search until this term was added.
+        var curv = dot(H, verts[i].normal) / verts[i].sphere_radius
+        bi = SIMD[DType.float32, 4](bi[0] - curv, bi[1], bi[2], bi[3] - curv)
     return SMSVertexEval(ai, bi, ci, cvi, wi, wo, H, wol, ili, ilo, Int8(1))
 
 def sms_walk(
     x0: SIMD[DType.float32, 3], xL: SIMD[DType.float32, 3],
     verts_init: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int,
     ldp_du: SIMD[DType.float32, 3], ldp_dv: SIMD[DType.float32, 3],
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin] = UnsafePointer[BVH2Node, MutAnyOrigin].unsafe_dangling(),
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin] = UnsafePointer[PrimId_C, MutAnyOrigin].unsafe_dangling(),
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin] = UnsafePointer[TriangleMesh_C, MutAnyOrigin].unsafe_dangling(),
+    curves: UnsafePointer[Curve_C, MutAnyOrigin] = UnsafePointer[Curve_C, MutAnyOrigin].unsafe_dangling(),
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin] = UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(),
+    n_spheres: Int = 0,
 ) -> Tuple[Bool, InlineArray[SIMD[DType.float32, 3], MAX_SMS_VERTICES], Float32, Float32]:
     """N-vertex generalization of _mnee_walk/_mnee_walk2 (kept in
     shading.mojo as fast paths for n=1/2 -- Phase 5.4). Newton iteration on
@@ -197,6 +429,15 @@ def sms_walk(
     `dx1_dxlight` is the Jacobian |d(vertex_0 position)/d(light uv)| --
     exactly _mnee_walk's/_mnee_walk2's own quantity of the same name."""
     var verts = verts_init
+    # A jittered seed (sms_seed_jitter moves .pos within the tangent plane)
+    # can land slightly off a curved vertex's true surface -- snap it back
+    # on before the first iteration reads normal/dp_du/dp_dv from it.
+    var has_curved = False
+    for i0 in range(n):
+        if verts[i0].is_sphere != Int8(0):
+            has_curved = True
+            var r0 = _sms_reproject_onto_sphere(verts[i0].pos, verts[i0].sphere_center, verts[i0].sphere_radius)
+            verts[i0].pos = r0[0]; verts[i0].normal = r0[1]; verts[i0].dp_du = r0[2]; verts[i0].dp_dv = r0[3]
     var converged = False
     for _iter in range(20):
         var ev = InlineArray[SMSVertexEval, MAX_SMS_VERTICES](fill=_sms_eval_bad())
@@ -207,9 +448,19 @@ def sms_walk(
                 bad = True; break
         if bad:
             break
+        # L2 norm of each vertex's tangential-constraint residual, not
+        # max-norm: max-norm is basis-dependent, and a curved vertex's
+        # (s,t) basis is a FRESH, arbitrarily-ROTATED Frisvad frame every
+        # iteration (see _sms_reproject_onto_sphere) -- the same physical
+        # residual can land disproportionately on one axis before a
+        # reprojection and the other axis after, making max-norm compare
+        # apples to oranges across iterations for a curved chain (a flat
+        # vertex's frame never rotates, so this never mattered before).
+        # L2 norm is the tangential-H-vector's actual magnitude and is
+        # invariant to which orthonormal basis happens to span the plane.
         var err = Float32(0.0)
         for i in range(n):
-            err = max(err, max(abs(ev[i].cv[0]), abs(ev[i].cv[1])))
+            err = max(err, sqrt(ev[i].cv[0]*ev[i].cv[0] + ev[i].cv[1]*ev[i].cv[1]))
         if err < Float32(1e-3):
             converged = True; break
         # ── Block tridiagonal forward sweep ────────────────────────────────
@@ -237,13 +488,99 @@ def sms_walk(
             var i = n-2-ridx
             dx[i] = dprime[i] - mat22_mul_v(cprime[i], dx[i+1])
         # ── Step clamp + position update ────────────────────────────────────
-        for i in range(n):
-            var step_len = sqrt(dx[i][0]*dx[i][0] + dx[i][1]*dx[i][1])
-            var max_step = ev[i].wol * Float32(0.5)
-            var dxi = dx[i]
-            if step_len > max_step and step_len > Float32(1e-12):
-                dxi = dxi * (max_step/step_len)
-            verts[i].pos = verts[i].pos - (verts[i].dp_du*dxi[0] + verts[i].dp_dv*dxi[1])
+        if not has_curved:
+            # Flat-only chain: unchanged from before sphere support existed --
+            # one full (clamped) Newton step, no line search needed (a flat
+            # vertex's tangent plane IS its surface, so the linearization
+            # used to compute `dx` is exact everywhere, not just locally).
+            for i in range(n):
+                var step_len = sqrt(dx[i][0]*dx[i][0] + dx[i][1]*dx[i][1])
+                var max_step = ev[i].wol * Float32(0.5)
+                var dxi = dx[i]
+                if step_len > max_step and step_len > Float32(1e-12):
+                    dxi = dxi * (max_step/step_len)
+                verts[i].pos = verts[i].pos - (verts[i].dp_du*dxi[0] + verts[i].dp_dv*dxi[1])
+        else:
+            # A curved vertex's tangent plane only agrees with the true
+            # surface AT the current point -- moving even the exact Newton
+            # direction too far still overshoots once reprojected onto real
+            # curvature, and with TWO simultaneously-curved coupled vertices
+            # (e.g. the entry+exit points of one solid glass sphere) this
+            # overshoot can compound and diverge outright rather than merely
+            # converge slowly (confirmed empirically: a full step from a
+            # seed just 1% of the sphere's radius from the exact answer grew
+            # the residual every iteration). The Newton DIRECTION `dx` above
+            # is still correct -- it comes from the same Jacobian formula
+            # already proven exact for a flat chain (test_sms_walk_n2_
+            # matches_mnee_walk2) -- what's missing for a curved chain is a
+            # STEP-LENGTH safeguard. Backtracking line search (Numerical
+            # Recipes §9.7's standard remedy for Newton overshoot): try the
+            # full clamped step; if it doesn't actually reduce the residual,
+            # halve it and retry, holding the search direction fixed.
+            var scale = Float32(1.0)
+            var applied = False
+            for _bt in range(8):
+                var trial = verts
+                var reproj_failed = False
+                for i in range(n):
+                    var step_len = sqrt(dx[i][0]*dx[i][0] + dx[i][1]*dx[i][1]) * scale
+                    var max_step = ev[i].wol * Float32(0.5)
+                    if trial[i].is_sphere != Int8(0):
+                        max_step = min(max_step, trial[i].sphere_radius * Float32(0.3))
+                    var dxi = dx[i] * scale
+                    if step_len > max_step and step_len > Float32(1e-12):
+                        dxi = dxi * (max_step/step_len)
+                    trial[i].pos = trial[i].pos - (trial[i].dp_du*dxi[0] + trial[i].dp_dv*dxi[1])
+                    if trial[i].is_sphere != Int8(0):
+                        # Anchor: x0 for the first vertex, else the PREVIOUS
+                        # vertex's own (already reprojected, this same trial)
+                        # position -- see _sms_reproject_onto_sphere_anchored's
+                        # docstring for why this is the real fix for the
+                        # wrong-hemisphere convergence bug (ray-cast from a
+                        # fixed anchor can't land on a hemisphere invisible
+                        # from that anchor, unlike the closed-form snap).
+                        var anchor = x0
+                        var anchor_on_surface = False
+                        if i > 0 and trial[i-1].is_sphere != Int8(0):
+                            var dc = trial[i-1].sphere_center - trial[i].sphere_center
+                            if dot(dc, dc) < Float32(1e-6) and abs(trial[i-1].sphere_radius - trial[i].sphere_radius) < Float32(1e-4):
+                                anchor = trial[i-1].pos
+                                anchor_on_surface = True
+                        elif i > 0:
+                            anchor = trial[i-1].pos
+                        var ra = _sms_reproject_onto_sphere_anchored(anchor, trial[i].pos, trial[i].sphere_center, trial[i].sphere_radius, anchor_on_surface,
+                            bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
+                        if ra[4]:
+                            trial[i].pos = ra[0]; trial[i].normal = ra[1]; trial[i].dp_du = ra[2]; trial[i].dp_dv = ra[3]
+                        else:
+                            # Anchor ray missed the sphere or was blocked by
+                            # other scene geometry first -- this step is
+                            # invalid (NOT "fall back to the unconstrained
+                            # closed-form snap", which is exactly how the
+                            # wrong-hemisphere bug happened in the first
+                            # place). Mirrors the reference implementation's
+                            # own recovery: treat like a failed step and
+                            # shrink `scale` on the next backtracking attempt.
+                            reproj_failed = True
+                var ev2 = InlineArray[SMSVertexEval, MAX_SMS_VERTICES](fill=_sms_eval_bad())
+                var bad2 = reproj_failed
+                for i in range(n):
+                    if bad2:
+                        break
+                    ev2[i] = _sms_eval_vertex(x0, xL, trial, n, i)
+                    if ev2[i].ok == Int8(0):
+                        bad2 = True; break
+                if not bad2:
+                    var err2 = Float32(0.0)
+                    for i in range(n):
+                        err2 = max(err2, sqrt(ev2[i].cv[0]*ev2[i].cv[0] + ev2[i].cv[1]*ev2[i].cv[1]))
+                    if err2 < err or _bt == 7:
+                        verts = trial
+                        applied = True
+                        break
+                scale *= Float32(0.5)
+            if not applied:
+                break
     var zero_positions = InlineArray[SIMD[DType.float32, 3], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 3](Float32(0.0)))
     if not converged:
         return (False, zero_positions, Float32(0.0), Float32(0.0))
@@ -290,7 +627,9 @@ def sms_walk(
         var cosHI = abs(dot(evf[i].H, evf[i].wi))
         var cosTM = abs(dot(verts[i].normal, evf[i].H))
         var F = fr_dielectric(cosNI, verts[i].eta)
-        bsdf_product *= (Float32(1.0)-F)*cosHI/max(cosNI*cosTM*cosTM, Float32(1e-6))
+        # eta*eta: see shading.mojo's _mnee_walk2 for the full derivation/
+        # reference citation (same formula family, same missing factor).
+        bsdf_product *= (Float32(1.0)-F)*cosHI/max(cosNI*cosTM*cosTM, Float32(1e-6)) * verts[i].eta*verts[i].eta
     var out_positions = InlineArray[SIMD[DType.float32, 3], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 3](Float32(0.0)))
     for i in range(n):
         out_positions[i] = verts[i].pos
@@ -326,6 +665,15 @@ def sms_solve_bernoulli(
     verts_seed: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int,
     ldp_du: SIMD[DType.float32, 3], ldp_dv: SIMD[DType.float32, 3],
     jitter_scale: Float32, mut pcg: PCG32,
+    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin] = UnsafePointer[BVH2Node, MutAnyOrigin].unsafe_dangling(),
+    primIds: UnsafePointer[PrimId_C, MutAnyOrigin] = UnsafePointer[PrimId_C, MutAnyOrigin].unsafe_dangling(),
+    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin] = UnsafePointer[TriangleMesh_C, MutAnyOrigin].unsafe_dangling(),
+    curves: UnsafePointer[Curve_C, MutAnyOrigin] = UnsafePointer[Curve_C, MutAnyOrigin].unsafe_dangling(),
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin] = UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(),
+    n_spheres: Int = 0,
 ) -> Tuple[Bool, InlineArray[SIMD[DType.float32, 3], MAX_SMS_VERTICES], Float32, Float32, Float32]:
     """5.3: Zeltner et al. 2020's Bernoulli-trial reciprocal estimator.
     Solves once from a randomly-jittered seed to fix the primary candidate
@@ -348,7 +696,8 @@ def sms_solve_bernoulli(
     i.e. plain single-solve behavior -- with negligible overhead."""
     var seed0 = verts_seed
     sms_seed_jitter(seed0, n, pcg, jitter_scale)
-    var (ok0, pos0, bsdf0, jac0) = sms_walk(x0, xL, seed0, n, ldp_du, ldp_dv)
+    var (ok0, pos0, bsdf0, jac0) = sms_walk(x0, xL, seed0, n, ldp_du, ldp_dv,
+        bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
     if not ok0:
         var zero_positions = InlineArray[SIMD[DType.float32, 3], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 3](Float32(0.0)))
         return (False, zero_positions, Float32(0.0), Float32(0.0), Float32(0.0))
@@ -358,7 +707,8 @@ def sms_solve_bernoulli(
         trials += Float32(1.0)
         var seed_k = verts_seed
         sms_seed_jitter(seed_k, n, pcg, jitter_scale)
-        var (okk, posk, _bsdfk, _jack) = sms_walk(x0, xL, seed_k, n, ldp_du, ldp_dv)
+        var (okk, posk, _bsdfk, _jack) = sms_walk(x0, xL, seed_k, n, ldp_du, ldp_dv,
+            bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
         if okk and sms_same_solution(posk, pos0, n):
             matched = True; break
     _ = matched

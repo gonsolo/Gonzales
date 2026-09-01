@@ -4,14 +4,15 @@ from gonzales.geometry import dot, cross
 from gonzales.shading import _mnee_walk2
 from gonzales.sms import (
     sms_walk, sms_solve_bernoulli, SMSVertex, MAX_SMS_VERTICES,
-    sms_seed_jitter, sms_same_solution,
+    sms_seed_jitter, sms_same_solution, sms_vertex_flat, sms_vertex_init,
+    sms_vertex_sphere, _sms_reproject_onto_sphere, _sms_eval_vertex,
 )
 from gonzales.rng import PCG32
 
 comptime EPS: Float32 = 1e-4
 
 def _flat_vert(pos: SIMD[DType.float32, 3], eta: Float32) -> SMSVertex:
-    return SMSVertex(
+    return sms_vertex_flat(
         pos,
         SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(1.0)),
         SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0)),
@@ -20,9 +21,7 @@ def _flat_vert(pos: SIMD[DType.float32, 3], eta: Float32) -> SMSVertex:
     )
 
 def _empty_verts() -> InlineArray[SMSVertex, MAX_SMS_VERTICES]:
-    return InlineArray[SMSVertex, MAX_SMS_VERTICES](fill=SMSVertex(
-        SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)),
-        SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)), Float32(1.0)))
+    return InlineArray[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
 
 def _snell_residual(
     x0: SIMD[DType.float32, 3], xL: SIMD[DType.float32, 3],
@@ -100,7 +99,13 @@ def test_sms_walk_n1_converges() raises:
     assert_true(ok)
     verts[0].pos = pos[0]
     assert_true(_snell_residual(x0, xL, verts, 1) < Float32(1e-3))
-    assert_true(bsdf > Float32(0.0) and bsdf <= Float32(1.0))
+    # Upper bound is eta^2 (~2.25 here), not 1.0 -- a single, unpaired
+    # refraction genuinely scales radiance by the solid-angle-compression
+    # factor eta^2 (see sms.mojo's bsdf_product comment / the
+    # project_dielectric_radiance_transmission_bug memory); only a chain
+    # whose etas pair up entry/exit (like test_sms_walk_n4 below) cancels
+    # back to <=1.
+    assert_true(bsdf > Float32(0.0) and bsdf <= Float32(2.5))
     assert_true(jac >= Float32(0.0))
 
 def test_sms_walk_n3_converges() raises:
@@ -117,7 +122,9 @@ def test_sms_walk_n3_converges() raises:
     for i in range(3):
         verts[i].pos = pos[i]
     assert_true(_snell_residual(x0, xL, verts, 3) < Float32(1e-3))
-    assert_true(bsdf > Float32(0.0) and bsdf <= Float32(1.0))
+    # eta 1.5 and 1/1.5 cancel; eta 1.33 is unpaired -> net upper bound is
+    # ~1.33^2 (~1.77), not 1.0 -- see test_sms_walk_n1's comment above.
+    assert_true(bsdf > Float32(0.0) and bsdf <= Float32(2.0))
     assert_true(jac >= Float32(0.0))
 
 def test_sms_walk_n4_converges() raises:
@@ -136,6 +143,170 @@ def test_sms_walk_n4_converges() raises:
         verts[i].pos = pos[i]
     assert_true(_snell_residual(x0, xL, verts, 4) < Float32(1e-3))
     assert_true(bsdf > Float32(0.0) and bsdf <= Float32(1.0))
+    assert_true(jac >= Float32(0.0))
+
+# ── Sphere (curved-surface) support ─────────────────────────────────────────
+# A flat triangle's tangent plane IS its surface everywhere, so _mnee_walk/
+# _mnee_walk2/the tests above never needed reprojection. A sphere's tangent
+# plane only agrees with the true surface at the point of tangency, so
+# sms_walk reprojects a sphere vertex back onto the sphere (and re-derives
+# its local frame) after every Newton step -- these tests exercise that
+# machinery specifically, independently of the flat-triangle fast paths.
+
+def test_sms_reproject_onto_sphere_snaps_exactly_and_frame_is_orthonormal() raises:
+    var center = SIMD[DType.float32, 3](Float32(1.0), Float32(2.0), Float32(-3.0))
+    var radius = Float32(2.5)
+    # A point well off the sphere -- reprojection must snap it exactly onto
+    # the surface, not just nudge it.
+    var raw = center + SIMD[DType.float32, 3](Float32(5.0), Float32(0.0), Float32(0.0))
+    var r = _sms_reproject_onto_sphere(raw, center, radius)
+    var pos = r[0]; var normal = r[1]; var dp_du = r[2]; var dp_dv = r[3]
+    var to_pos = pos - center
+    var dist = sqrt(dot(to_pos, to_pos))
+    assert_true(abs(dist - radius) < Float32(1e-4))
+    var expected_n = to_pos * (Float32(1.0) / dist)
+    var dn = normal - expected_n
+    assert_true(dot(dn, dn) < Float32(1e-8))
+    # dp_du/dp_dv must be an orthonormal basis of the tangent plane.
+    assert_true(abs(dot(dp_du, normal)) < Float32(1e-4))
+    assert_true(abs(dot(dp_dv, normal)) < Float32(1e-4))
+    assert_true(abs(dot(dp_du, dp_dv)) < Float32(1e-4))
+    assert_true(abs(sqrt(dot(dp_du, dp_du)) - Float32(1.0)) < Float32(1e-4))
+    assert_true(abs(sqrt(dot(dp_dv, dp_dv)) - Float32(1.0)) < Float32(1e-4))
+
+def test_sms_walk_sphere_n1_converges_and_stays_on_sphere() raises:
+    """Single glass-sphere vertex (e.g. a thin spherical shell, one
+    refractive interface). The solved position must lie EXACTLY on the
+    sphere -- the entire point of reprojection is that a curved vertex's
+    Newton walk never drifts into the tangent plane the way it would
+    without it. Radius/distance proportions are chosen to be comfortably
+    inside the local Newton solve's basin of convergence (see the
+    n=2 comment below for the case that ISN'T)."""
+    var center = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(3.5))
+    var radius = Float32(2.0)
+    var x0 = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
+    var xL = SIMD[DType.float32, 3](Float32(0.3), Float32(-0.2), Float32(8.0))
+    var du = SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0))
+    var dv = SIMD[DType.float32, 3](Float32(0.0), Float32(1.0), Float32(0.0))
+    var seed_pos = center - SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), radius)
+    var verts = _empty_verts()
+    verts[0] = sms_vertex_sphere(seed_pos, center, radius, Float32(1.5))
+    var (ok, pos, bsdf, jac) = sms_walk(x0, xL, verts, 1, du, dv)
+    assert_true(ok)
+    var to_center = pos[0] - center
+    var dist = sqrt(dot(to_center, to_center))
+    assert_true(abs(dist - radius) < Float32(1e-3))
+    # sms_walk only returns positions, not its internal per-iteration
+    # frame -- re-derive the frame AT the solution to independently verify
+    # Snell's law via the same _snell_residual check the flat tests use.
+    # Tolerance is looser than the flat tests' 1e-3: sms_walk's OWN
+    # convergence check is a max-norm over (dot(H,s), dot(H,t)) < 1e-3,
+    # but _snell_residual reports the L2 norm of the same pair, which can
+    # be up to sqrt(2)x larger for the same underlying convergence.
+    var r = _sms_reproject_onto_sphere(pos[0], center, radius)
+    verts[0].pos = r[0]; verts[0].normal = r[1]; verts[0].dp_du = r[2]; verts[0].dp_dv = r[3]
+    assert_true(_snell_residual(x0, xL, verts, 1) < Float32(2e-3))
+    assert_true(bsdf > Float32(0.0))
+    assert_true(jac >= Float32(0.0))
+
+def test_sms_eval_vertex_sphere_self_jacobian_matches_finite_difference() raises:
+    """Regression test for the curvature-correction term in
+    _sms_eval_vertex's "b" (self) Jacobian for a sphere vertex. A flat
+    vertex's local frame (normal, s, t) never changes as it moves, so
+    sms_vertex_mats's plain dH/du projection is exact; a sphere vertex's
+    frame ROTATES as it moves (curvature), which drags the projection
+    basis itself and needs an extra dot(H,normal)/radius term on both
+    diagonal entries (see _sms_eval_vertex's own derivation comment).
+    Validated here against a TRUE finite difference that reprojects the
+    perturbed point onto the sphere and re-derives its frame there
+    (sms_vertex_sphere), not a flat tangent-plane probe -- the whole bug
+    this term fixes was invisible to a flat-plane FD check (that only
+    validates the OLD, uncorrected formula) and only showed up as the
+    n=2 solid-sphere case diverging under an otherwise-exact Newton
+    direction; see project_sms_restir_phase6 memory for the full
+    derivation and the empirical trail that found it."""
+    var center = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
+    var radius = Float32(1.5)
+    var x0 = SIMD[DType.float32, 3](Float32(-6.0), Float32(0.0), Float32(0.0))
+    var xL = SIMD[DType.float32, 3](Float32(6.0), Float32(0.0), Float32(0.0))
+    var ior = Float32(1.5)
+    var seed1 = SIMD[DType.float32, 3](Float32(-1.5), Float32(0.075), Float32(0.075))
+    var seed2 = SIMD[DType.float32, 3](Float32(1.5), Float32(0.075), Float32(0.075))
+    var verts = _empty_verts()
+    verts[0] = sms_vertex_sphere(seed1, center, radius, ior)
+    verts[1] = sms_vertex_sphere(seed2, center, radius, Float32(1.0) / ior)
+    var ev0 = _sms_eval_vertex(x0, xL, verts, 2, 0)
+
+    var eps = Float32(1e-3)
+    var vp = verts
+    vp[0] = sms_vertex_sphere(verts[0].pos + verts[0].dp_du * eps, center, radius, verts[0].eta)
+    var evp = _sms_eval_vertex(x0, xL, vp, 2, 0)
+    var vm = verts
+    vm[0] = sms_vertex_sphere(verts[0].pos - verts[0].dp_du * eps, center, radius, verts[0].eta)
+    var evm = _sms_eval_vertex(x0, xL, vm, 2, 0)
+    var fd_du = (evp.cv - evm.cv) * (Float32(1.0) / (Float32(2.0) * eps))
+    assert_true(abs(fd_du[0] - ev0.b[0]) < Float32(0.05))
+    assert_true(abs(fd_du[1] - ev0.b[2]) < Float32(0.05))
+
+    vp = verts
+    vp[0] = sms_vertex_sphere(verts[0].pos + verts[0].dp_dv * eps, center, radius, verts[0].eta)
+    evp = _sms_eval_vertex(x0, xL, vp, 2, 0)
+    vm = verts
+    vm[0] = sms_vertex_sphere(verts[0].pos - verts[0].dp_dv * eps, center, radius, verts[0].eta)
+    evm = _sms_eval_vertex(x0, xL, vm, 2, 0)
+    var fd_dv = (evp.cv - evm.cv) * (Float32(1.0) / (Float32(2.0) * eps))
+    assert_true(abs(fd_dv[0] - ev0.b[1]) < Float32(0.05))
+    assert_true(abs(fd_dv[1] - ev0.b[3]) < Float32(0.05))
+
+def test_sms_walk_sphere_n2_solid_sphere_symmetric_case() raises:
+    """Entry+exit through the SAME solid glass sphere -- the real caustic
+    scenario a glass sphere sitting on a table produces: a straight probe
+    ray that enters the sphere must also exit it before reaching the
+    light, so this (not the 1-vertex case above) is the common real-world
+    configuration.
+
+    Before the curvature-correction term in _sms_eval_vertex's "b" self-
+    Jacobian (see its own derivation comment, and
+    test_sms_eval_vertex_sphere_self_jacobian_matches_finite_difference),
+    this reliably DIVERGED regardless of step size -- a seed just 1% of
+    the sphere's radius from the exact answer grew the residual on every
+    iteration, even under backtracking line search all the way down to a
+    ~1e-4-sized step. That ruled out "overshoot" as the cause (a correct
+    descent direction shrinks the residual at ANY sufficiently small step)
+    and pointed at the Jacobian itself: sms_vertex_mats's formula
+    (originally derived for a flat vertex, whose local tangent frame never
+    changes as it moves) doesn't account for a curved vertex's frame
+    ROTATING as it moves, missing a real dot(H,normal)/radius term. With
+    that term added, this converges in 1-2 full (undamped) Newton
+    iterations -- the backtracking line search sms_walk still does for
+    curved chains is now a defensive no-op here, not the fix.
+
+    Mirror-symmetric setup (x0/xL and the two seed points are reflections
+    of each other through the sphere's own x=0 symmetry plane) has a
+    solution that MUST be symmetric too -- an independent check that
+    doesn't require deriving the closed-form answer."""
+    var center = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
+    var radius = Float32(1.5)
+    var x0 = SIMD[DType.float32, 3](Float32(-6.0), Float32(0.0), Float32(0.0))
+    var xL = SIMD[DType.float32, 3](Float32(6.0), Float32(0.0), Float32(0.0))
+    var du = SIMD[DType.float32, 3](Float32(0.0), Float32(1.0), Float32(0.0))
+    var dv = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(1.0))
+    var ior = Float32(1.5)
+    var seed1 = SIMD[DType.float32, 3](Float32(-1.5), Float32(0.075), Float32(0.075))
+    var seed2 = SIMD[DType.float32, 3](Float32(1.5), Float32(0.075), Float32(0.075))
+    var verts = _empty_verts()
+    verts[0] = sms_vertex_sphere(seed1, center, radius, ior)
+    verts[1] = sms_vertex_sphere(seed2, center, radius, Float32(1.0) / ior)
+    var (ok, pos, bsdf, jac) = sms_walk(x0, xL, verts, 2, du, dv)
+    assert_true(ok)
+    var d0 = pos[0] - center; var dist0 = sqrt(dot(d0, d0))
+    var d1 = pos[1] - center; var dist1 = sqrt(dot(d1, d1))
+    assert_true(abs(dist0 - radius) < Float32(1e-3))
+    assert_true(abs(dist1 - radius) < Float32(1e-3))
+    assert_true(abs(pos[0][0] + pos[1][0]) < Float32(1e-2))
+    assert_true(abs(pos[0][1] - pos[1][1]) < Float32(1e-2))
+    assert_true(abs(pos[0][2] - pos[1][2]) < Float32(1e-2))
+    assert_true(bsdf > Float32(0.0))
     assert_true(jac >= Float32(0.0))
 
 # ── Degenerate input handling ────────────────────────────────────────────────

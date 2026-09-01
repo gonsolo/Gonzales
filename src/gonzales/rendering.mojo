@@ -163,6 +163,7 @@ def render_tile(
                 scene.blasNodesArr, scene.blasPrimIdsArr, scene.instances,
                 scene.areaLights, Int(scene.areaLightCount),
                 scene.lightSampler.cdf, Int(scene.lightSampler.n),
+                scene.spheres, Int(scene.sphereCount),
                 scene.spectral.coeffs, scene.spectral.res,
                 scene.spectral.cie_x, scene.spectral.cie_y, scene.spectral.cie_z, scene.spectral.d65,
             )

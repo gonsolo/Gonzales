@@ -1585,6 +1585,7 @@ def shade_dielectric_gpu(
     intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     materials: UnsafePointer[Material_C, MutAnyOrigin],
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
     count: Int,
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -1596,7 +1597,7 @@ def shade_dielectric_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[tid]
     var mat = materials[Int(inter.primId.materialIndex)]
-    shade_dielectric(path_ptr, inter, meshes, mat)
+    shade_dielectric[True](path_ptr, inter, meshes, mat, spheres)
 
 
 def shade_thin_dielectric_gpu(
@@ -1604,6 +1605,7 @@ def shade_thin_dielectric_gpu(
     intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
     materials: UnsafePointer[Material_C, MutAnyOrigin],
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
     count: Int,
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -1615,7 +1617,7 @@ def shade_thin_dielectric_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[tid]
     var mat = materials[Int(inter.primId.materialIndex)]
-    shade_thin_dielectric(path_ptr, inter, meshes, mat)
+    shade_thin_dielectric(path_ptr, inter, meshes, mat, spheres)
 
 
 def shade_coated_conductor_gpu(
@@ -1814,6 +1816,8 @@ def _sample_medium_core(
     n_area_lights: Int,
     lightSamplerCdf: UnsafePointer[Float32, MutAnyOrigin],
     n_light_sampler: Int,
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin] = UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(),
+    n_spheres: Int = 0,
     spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     spectral_res: Int = 0,
     spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
@@ -1983,7 +1987,7 @@ def _sample_medium_core(
                     var shad_org = point3f(scatter_pt_s + shadow_dir * Float32(0.0002))
                     var shad_ray = Ray_C(shad_org, vec3f(shadow_dir))
                     var shad_tmax = dist * Float32(0.9995)
-                    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shad_ray, shad_tmax, blasNodesArr, blasPrimIdsArr, instances):
+                    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shad_ray, shad_tmax, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres):
                         var T: RGB
                         if med.grid_idx >= Int32(0):
                             # Ratio-tracking transmittance through the grid (see
@@ -2053,6 +2057,8 @@ def sample_medium_gpu(
     lightSamplerCdf: UnsafePointer[Float32, MutAnyOrigin],
     n_light_sampler: Int,
     count: Int,
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin] = UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(),
+    n_spheres: Int = 0,
     spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
     spectral_res: Int = 0,
     spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
@@ -2070,6 +2076,7 @@ def sample_medium_gpu(
         bvh2Nodes, primIds, meshes, curves,
         blasNodesArr, blasPrimIdsArr, instances,
         areaLights, n_area_lights, lightSamplerCdf, n_light_sampler,
+        spheres, n_spheres,
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
     )
 
@@ -2238,6 +2245,8 @@ def traverse_shadow_rays_gpu(
     paths: UnsafePointer[PathState_C, MutAnyOrigin],
     shadow_tasks: UnsafePointer[ShadowTask_C, MutAnyOrigin],
     count: Int,
+    spheres: UnsafePointer[Sphere_C, MutAnyOrigin] = UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(),
+    n_spheres: Int = 0,
 ):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -2246,7 +2255,7 @@ def traverse_shadow_rays_gpu(
     if task.active == 0:
         return
     var shadow_ray = Ray_C(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
-    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shadow_ray, task.tmax, blasNodesArr, blasPrimIdsArr, instances):
+    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shadow_ray, task.tmax, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres):
         paths[tid].estimate += RGB(task.contrib.r, task.contrib.g, task.contrib.b)
 
 
@@ -3069,6 +3078,8 @@ def _gpu_bounce_kernels(
         handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
         handle[].n_light_sampler,
         n,
+        handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+        handle[].n_spheres,
         handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
         handle[].spectral_res,
         handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
@@ -3349,6 +3360,7 @@ def _gpu_bounce_kernels(
         handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
         handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
         handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+        handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
         n,
         grid_dim=grid_dim, block_dim=block_size,
     )
@@ -3357,6 +3369,7 @@ def _gpu_bounce_kernels(
         handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C](),
         handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
         handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+        handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
         n,
         grid_dim=grid_dim, block_dim=block_size,
     )
@@ -3472,6 +3485,8 @@ def _gpu_bounce_kernels(
         handle[].path_buf.unsafe_ptr().bitcast[PathState_C](),
         handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
         n,
+        handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+        handle[].n_spheres,
         grid_dim=grid_dim, block_dim=block_size,
     )
 

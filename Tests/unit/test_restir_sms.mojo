@@ -1,7 +1,7 @@
 from std.math import abs, sqrt
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, dot, cross
-from gonzales.sms import sms_walk, SMSVertex, MAX_SMS_VERTICES
+from gonzales.sms import sms_walk, SMSVertex, MAX_SMS_VERTICES, sms_vertex_flat, sms_vertex_init
 from gonzales.restir_sms import (
     SMSReservoir, sms_reservoir_init, sms_target_pdf, sms_shift,
 )
@@ -9,7 +9,7 @@ from gonzales.restir_sms import (
 comptime EPS: Float32 = 1e-4
 
 def _flat_vert(pos: SIMD[DType.float32, 3], eta: Float32) -> SMSVertex:
-    return SMSVertex(
+    return sms_vertex_flat(
         pos,
         SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(1.0)),
         SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0)),
@@ -18,9 +18,7 @@ def _flat_vert(pos: SIMD[DType.float32, 3], eta: Float32) -> SMSVertex:
     )
 
 def _empty_verts() -> InlineArray[SMSVertex, MAX_SMS_VERTICES]:
-    return InlineArray[SMSVertex, MAX_SMS_VERTICES](fill=SMSVertex(
-        SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)),
-        SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)), Float32(1.0)))
+    return InlineArray[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
 
 def _snell_residual(
     x0: SIMD[DType.float32, 3], xL: SIMD[DType.float32, 3],

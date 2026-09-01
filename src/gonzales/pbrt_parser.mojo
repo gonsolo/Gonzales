@@ -24,6 +24,7 @@ from .ply import load_ply
 from .material_builder import _psc_handle_make_named_material, _psc_handle_named_material
 from .measured_bsdf import load_measured_brdf_full
 from .light_builder import _psc_handle_area_light_source, handle_light_source
+from .scene_builder import store_mesh
 
 # ── Output struct ─────────────────────────────────────────────────────────────
 
@@ -512,49 +513,6 @@ def _loopsubdiv_tessellate(
         p_in = next_level[0].copy()
         i_in = next_level[1].copy()
     return (p_in^, i_in^)
-
-# ── Mesh accumulation ─────────────────────────────────────────────────────────
-
-def store_mesh(
-    s:       UnsafePointer[SceneParseState, MutAnyOrigin],
-    tmp_f:   UnsafePointer[Float32, MutAnyOrigin],
-    tmp_i:   UnsafePointer[Int32, MutAnyOrigin],
-    n_verts: Int32,
-    n_tris:  Int32,
-):
-    var raw_pts = alloc[Float32](Int(n_verts) * 4)
-    for v in range(Int(n_verts)):
-        raw_pts[v*4+0] = tmp_f[v*3+0]
-        raw_pts[v*4+1] = tmp_f[v*3+1]
-        raw_pts[v*4+2] = tmp_f[v*3+2]
-        raw_pts[v*4+3] = Float32(1)
-    var fin_pts = alloc[Float32](Int(n_verts) * 4)
-    transform_points(s[0].ctm.unsafe_ptr(), raw_pts, n_verts, fin_pts)
-    raw_pts.free()
-    var ma = MeshAccum(
-        s[0].cur_attr.mat_idx,
-        s[0].cur_attr.inside_medium,
-        s[0].cur_attr.outside_medium,
-    )
-    ma.is_area_light = s[0].cur_attr.is_alight
-    ma.al_rgb = s[0].cur_attr.al_rgb
-    ma.points.reserve(Int(n_verts) * 4)
-    for v in range(Int(n_verts) * 4):
-        ma.points.append(fin_pts[v])
-    fin_pts.free()
-    ma.vert_idxs.reserve(Int(n_tris) * 3)
-    ma.face_idxs.reserve(Int(n_tris))
-    var rev = s[0].cur_attr.reverse_orient
-    for t in range(Int(n_tris)):
-        ma.vert_idxs.append(Int64(tmp_i[t*3+0]))
-        if rev:
-            ma.vert_idxs.append(Int64(tmp_i[t*3+2]))
-            ma.vert_idxs.append(Int64(tmp_i[t*3+1]))
-        else:
-            ma.vert_idxs.append(Int64(tmp_i[t*3+1]))
-            ma.vert_idxs.append(Int64(tmp_i[t*3+2]))
-        ma.face_idxs.append(Int64(3))
-    s[0].meshes.append(ma^)
 
 # ── Hair curve helpers ────────────────────────────────────────────────────────
 
