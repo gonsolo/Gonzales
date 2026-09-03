@@ -63,12 +63,12 @@ def mat22_inv(m: SIMD[DType.float32, 4]) -> Tuple[SIMD[DType.float32, 4], Float3
 
 @always_inline
 def sms_vertex_mats(
-    wi: SIMD[DType.float32, 3], wo: SIMD[DType.float32, 3],
-    H: SIMD[DType.float32, 3], s: SIMD[DType.float32, 3], t: SIMD[DType.float32, 3],
-    dp_du: SIMD[DType.float32, 3], dp_dv: SIMD[DType.float32, 3],
+    wi: Vec3f, wo: Vec3f,
+    H: Vec3f, s: Vec3f, t: Vec3f,
+    dp_du: Vec3f, dp_dv: Vec3f,
     ili: Float32, ilo: Float32,
-    dp_du_prev: SIMD[DType.float32, 3], dp_dv_prev: SIMD[DType.float32, 3],
-    dp_du_next: SIMD[DType.float32, 3], dp_dv_next: SIMD[DType.float32, 3],
+    dp_du_prev: Vec3f, dp_dv_prev: Vec3f,
+    dp_du_next: Vec3f, dp_dv_next: Vec3f,
     has_prev: Bool, has_next: Bool,
 ) -> Tuple[SIMD[DType.float32, 4], SIMD[DType.float32, 4], SIMD[DType.float32, 4], SIMD[DType.float32, 2]]:
     """Computes (a, b, c, constraint) at one specular vertex -- a=coupling to
@@ -120,39 +120,39 @@ struct SMSVertex(TrivialRegisterPassable):
     `_sms_reproject_onto_sphere`) -- the rest of the Newton machinery
     (`sms_vertex_mats`, the block-tridiagonal solve) is completely generic
     in dp_du/dp_dv/normal and needs no other change to support this."""
-    var pos:    SIMD[DType.float32, 3]
-    var normal: SIMD[DType.float32, 3]
-    var dp_du:  SIMD[DType.float32, 3]
-    var dp_dv:  SIMD[DType.float32, 3]
+    var pos:    Vec3f
+    var normal: Vec3f
+    var dp_du:  Vec3f
+    var dp_dv:  Vec3f
     var eta:    Float32
     var is_sphere:     Int8
-    var sphere_center: SIMD[DType.float32, 3]
+    var sphere_center: Vec3f
     var sphere_radius: Float32
 
 @always_inline
 def sms_vertex_init() -> SMSVertex:
-    var z = SIMD[DType.float32, 3](Float32(0.0))
+    var z = Vec3f(Float32(0.0))
     return SMSVertex(z, z, z, z, Float32(1.0), Int8(0), z, Float32(0.0))
 
 @always_inline
 def sms_vertex_flat(
-    pos: SIMD[DType.float32, 3],
-    normal: SIMD[DType.float32, 3],
-    dp_du: SIMD[DType.float32, 3],
-    dp_dv: SIMD[DType.float32, 3],
+    pos: Vec3f,
+    normal: Vec3f,
+    dp_du: Vec3f,
+    dp_dv: Vec3f,
     eta: Float32,
 ) -> SMSVertex:
     """Constructs a flat-triangle SMSVertex (is_sphere=False) -- the
     original SMSVertex shape before sphere support was added, kept as a
     named constructor so call sites don't each spell out the dummy
     sphere_center/sphere_radius padding a flat vertex never uses."""
-    var z = SIMD[DType.float32, 3](Float32(0.0))
+    var z = Vec3f(Float32(0.0))
     return SMSVertex(pos, normal, dp_du, dp_dv, eta, Int8(0), z, Float32(0.0))
 
 @always_inline
 def sms_vertex_sphere(
-    pos: SIMD[DType.float32, 3],
-    center: SIMD[DType.float32, 3],
+    pos: Vec3f,
+    center: Vec3f,
     radius: Float32,
     eta: Float32,
 ) -> SMSVertex:
@@ -166,10 +166,10 @@ def sms_vertex_sphere(
 
 @always_inline
 def _sms_reproject_onto_sphere(
-    x_raw: SIMD[DType.float32, 3],
-    center: SIMD[DType.float32, 3],
+    x_raw: Vec3f,
+    center: Vec3f,
     radius: Float32,
-) -> Tuple[SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3]]:
+) -> Tuple[Vec3f, Vec3f, Vec3f, Vec3f]:
     """Projects a tangent-plane Newton step back onto the true (curved)
     sphere surface, and re-derives the local normal/tangent frame there.
     A flat triangle's tangent plane IS its surface everywhere, so
@@ -200,31 +200,31 @@ def _sms_reproject_onto_sphere(
 
 @always_inline
 def _sms_sphere_frame_at(
-    x_on_sphere: SIMD[DType.float32, 3],
-    normal: SIMD[DType.float32, 3],
-) -> Tuple[SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3]]:
+    x_on_sphere: Vec3f,
+    normal: Vec3f,
+) -> Tuple[Vec3f, Vec3f, Vec3f, Vec3f]:
     var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
-    var dp_du = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
-    var dp_dv = SIMD[DType.float32, 3](frame.y.x, frame.y.y, frame.y.z)
+    var dp_du = Vec3f(frame.x.x, frame.x.y, frame.x.z)
+    var dp_dv = Vec3f(frame.y.x, frame.y.y, frame.y.z)
     return (x_on_sphere, normal, dp_du, dp_dv)
 
 @always_inline
 def _sms_reproject_onto_sphere_anchored(
-    anchor: SIMD[DType.float32, 3],
-    x_raw: SIMD[DType.float32, 3],
-    center: SIMD[DType.float32, 3],
+    anchor: Vec3f,
+    x_raw: Vec3f,
+    center: Vec3f,
     radius: Float32,
     anchor_on_surface: Bool,
-    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin] = UnsafePointer[BVH2Node, MutAnyOrigin].unsafe_dangling(),
-    primIds: UnsafePointer[PrimId_C, MutAnyOrigin] = UnsafePointer[PrimId_C, MutAnyOrigin].unsafe_dangling(),
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin] = UnsafePointer[TriangleMesh_C, MutAnyOrigin].unsafe_dangling(),
-    curves: UnsafePointer[Curve_C, MutAnyOrigin] = UnsafePointer[Curve_C, MutAnyOrigin].unsafe_dangling(),
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
-    spheres: UnsafePointer[Sphere_C, MutAnyOrigin] = UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(),
+    bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin] = UnsafePointer[BVH2Node, MutExternalOrigin].unsafe_dangling(),
+    primIds: UnsafePointer[PrimId_C, MutExternalOrigin] = UnsafePointer[PrimId_C, MutExternalOrigin].unsafe_dangling(),
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin] = UnsafePointer[TriangleMesh_C, MutExternalOrigin].unsafe_dangling(),
+    curves: UnsafePointer[Curve_C, MutExternalOrigin] = UnsafePointer[Curve_C, MutExternalOrigin].unsafe_dangling(),
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+    instances: UnsafePointer[Instance_C, MutExternalOrigin] = UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
+    spheres: UnsafePointer[Sphere_C, MutExternalOrigin] = UnsafePointer[Sphere_C, MutExternalOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
-) -> Tuple[SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3], Bool]:
+) -> Tuple[Vec3f, Vec3f, Vec3f, Vec3f, Bool]:
     """Reprojects a raw Newton-step proposal onto the sphere by actually
     RAY-CASTING from a fixed anchor through the proposal, instead of
     `_sms_reproject_onto_sphere`'s closed-form `normalize(x_raw-center)*
@@ -279,14 +279,14 @@ def _sms_reproject_onto_sphere_anchored(
     var dir_raw = x_raw - anchor
     var dir_len = sqrt(dot(dir_raw, dir_raw))
     if dir_len <= Float32(1e-9):
-        return (x_raw, SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)), False)
+        return (x_raw, Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), False)
     var dir = dir_raw * (Float32(1.0) / dir_len)
     var t_min = radius * Float32(1e-4) if anchor_on_surface else Float32(1e-5)
     var t_max = radius * Float32(8.0) + dir_len
     var ray = Ray_C(Point3f(anchor[0], anchor[1], anchor[2]), Vec3f(dir[0], dir[1], dir[2]))
     var t = ray_sphere_hit(Point3f(center[0], center[1], center[2]), radius, ray, t_min, t_max)
     if t <= Float32(0.0):
-        return (x_raw, SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)), False)
+        return (x_raw, Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), False)
     if n_spheres > 0:
         # Offset the occlusion ray's ORIGIN forward along `dir` by a small
         # epsilon before re-tracing the full scene -- `anchor` can sit
@@ -308,12 +308,12 @@ def _sms_reproject_onto_sphere_anchored(
             traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, occl_ray, occl_tmax, store.unsafe_ptr(),
                                 blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
             if store[0].hit != Int8(0) and store[0].tHit < (t - occl_eps) - radius * Float32(1e-4):
-                return (x_raw, SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)), False)
+                return (x_raw, Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), False)
     var pos = anchor + dir * t
     var normal_raw = pos - center
     var normal_len = sqrt(dot(normal_raw, normal_raw))
     if normal_len <= Float32(1e-8):
-        return (x_raw, SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)), SIMD[DType.float32, 3](Float32(0.0)), False)
+        return (x_raw, Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), False)
     var normal = normal_raw * (Float32(1.0) / normal_len)
     var r = _sms_sphere_frame_at(pos, normal)
     return (r[0], r[1], r[2], r[3], True)
@@ -328,9 +328,9 @@ struct SMSVertexEval(TrivialRegisterPassable):
     var b:   SIMD[DType.float32, 4]
     var c:   SIMD[DType.float32, 4]
     var cv:  SIMD[DType.float32, 2]
-    var wi:  SIMD[DType.float32, 3]
-    var wo:  SIMD[DType.float32, 3]
-    var H:   SIMD[DType.float32, 3]
+    var wi:  Vec3f
+    var wo:  Vec3f
+    var H:   Vec3f
     var wol: Float32
     var ili: Float32
     var ilo: Float32
@@ -339,13 +339,13 @@ struct SMSVertexEval(TrivialRegisterPassable):
 @always_inline
 def _sms_eval_bad() -> SMSVertexEval:
     var z4 = SIMD[DType.float32, 4](Float32(0.0))
-    var z3 = SIMD[DType.float32, 3](Float32(0.0))
+    var z3 = Vec3f(Float32(0.0))
     var z2 = SIMD[DType.float32, 2](Float32(0.0))
     return SMSVertexEval(z4, z4, z4, z2, z3, z3, z3, Float32(0.0), Float32(0.0), Float32(0.0), Int8(0))
 
 @always_inline
 def _sms_eval_vertex(
-    x0: SIMD[DType.float32, 3], xL: SIMD[DType.float32, 3],
+    x0: Vec3f, xL: Vec3f,
     verts: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int, i: Int,
 ) -> SMSVertexEval:
     var prev_pos = x0 if i == 0 else verts[i-1].pos
@@ -369,7 +369,7 @@ def _sms_eval_vertex(
     var ili = Float32(1)/(Hl*wil); var ilo = verts[i].eta/(Hl*wol)
     var has_prev = i > 0
     var has_next = i < n-1
-    var z3 = SIMD[DType.float32, 3](Float32(0.0))
+    var z3 = Vec3f(Float32(0.0))
     var dpu_prev = verts[i-1].dp_du if has_prev else z3
     var dpv_prev = verts[i-1].dp_dv if has_prev else z3
     var dpu_next = verts[i+1].dp_du if has_next else z3
@@ -402,19 +402,19 @@ def _sms_eval_vertex(
     return SMSVertexEval(ai, bi, ci, cvi, wi, wo, H, wol, ili, ilo, Int8(1))
 
 def sms_walk(
-    x0: SIMD[DType.float32, 3], xL: SIMD[DType.float32, 3],
+    x0: Vec3f, xL: Vec3f,
     verts_init: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int,
-    ldp_du: SIMD[DType.float32, 3], ldp_dv: SIMD[DType.float32, 3],
-    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin] = UnsafePointer[BVH2Node, MutAnyOrigin].unsafe_dangling(),
-    primIds: UnsafePointer[PrimId_C, MutAnyOrigin] = UnsafePointer[PrimId_C, MutAnyOrigin].unsafe_dangling(),
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin] = UnsafePointer[TriangleMesh_C, MutAnyOrigin].unsafe_dangling(),
-    curves: UnsafePointer[Curve_C, MutAnyOrigin] = UnsafePointer[Curve_C, MutAnyOrigin].unsafe_dangling(),
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
-    spheres: UnsafePointer[Sphere_C, MutAnyOrigin] = UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(),
+    ldp_du: Vec3f, ldp_dv: Vec3f,
+    bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin] = UnsafePointer[BVH2Node, MutExternalOrigin].unsafe_dangling(),
+    primIds: UnsafePointer[PrimId_C, MutExternalOrigin] = UnsafePointer[PrimId_C, MutExternalOrigin].unsafe_dangling(),
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin] = UnsafePointer[TriangleMesh_C, MutExternalOrigin].unsafe_dangling(),
+    curves: UnsafePointer[Curve_C, MutExternalOrigin] = UnsafePointer[Curve_C, MutExternalOrigin].unsafe_dangling(),
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+    instances: UnsafePointer[Instance_C, MutExternalOrigin] = UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
+    spheres: UnsafePointer[Sphere_C, MutExternalOrigin] = UnsafePointer[Sphere_C, MutExternalOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
-) -> Tuple[Bool, InlineArray[SIMD[DType.float32, 3], MAX_SMS_VERTICES], Float32, Float32]:
+) -> Tuple[Bool, InlineArray[Vec3f, MAX_SMS_VERTICES], Float32, Float32]:
     """N-vertex generalization of _mnee_walk/_mnee_walk2 (kept in
     shading.mojo as fast paths for n=1/2 -- Phase 5.4). Newton iteration on
     a chain of `n` specular vertices via a block-tridiagonal solve of the
@@ -428,7 +428,7 @@ def sms_walk(
     perfect mirror lobe, same formula _mnee_walk/_mnee_walk2 already use);
     `dx1_dxlight` is the Jacobian |d(vertex_0 position)/d(light uv)| --
     exactly _mnee_walk's/_mnee_walk2's own quantity of the same name."""
-    var verts = verts_init
+    var verts = verts_init.copy()
     # A jittered seed (sms_seed_jitter moves .pos within the tangent plane)
     # can land slightly off a curved vertex's true surface -- snap it back
     # on before the first iteration reads normal/dp_du/dp_dv from it.
@@ -520,7 +520,7 @@ def sms_walk(
             var scale = Float32(1.0)
             var applied = False
             for _bt in range(8):
-                var trial = verts
+                var trial = verts.copy()
                 var reproj_failed = False
                 for i in range(n):
                     var step_len = sqrt(dx[i][0]*dx[i][0] + dx[i][1]*dx[i][1]) * scale
@@ -575,32 +575,32 @@ def sms_walk(
                     for i in range(n):
                         err2 = max(err2, sqrt(ev2[i].cv[0]*ev2[i].cv[0] + ev2[i].cv[1]*ev2[i].cv[1]))
                     if err2 < err or _bt == 7:
-                        verts = trial
+                        verts = trial.copy()
                         applied = True
                         break
                 scale *= Float32(0.5)
             if not applied:
                 break
-    var zero_positions = InlineArray[SIMD[DType.float32, 3], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 3](Float32(0.0)))
+    var zero_positions = InlineArray[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
     if not converged:
-        return (False, zero_positions, Float32(0.0), Float32(0.0))
+        return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
     # ── Final recompute: BSDF product + light-Jacobian chain ────────────────
     var evf = InlineArray[SMSVertexEval, MAX_SMS_VERTICES](fill=_sms_eval_bad())
     for i in range(n):
         evf[i] = _sms_eval_vertex(x0, xL, verts, n, i)
         if evf[i].ok == Int8(0):
-            return (False, zero_positions, Float32(0.0), Float32(0.0))
+            return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
     var cprimef = InlineArray[SIMD[DType.float32, 4], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 4](Float32(0.0)))
     var (Li0f, det0f) = mat22_inv(evf[0].b)
     if det0f == Float32(0.0):
-        return (False, zero_positions, Float32(0.0), Float32(0.0))
+        return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
     cprimef[0] = mat22_mul(Li0f, evf[0].c)
     var last_Li = Li0f  # overwritten below when n > 1; stays Li0f when n == 1
     for i in range(1, n):
         var pivot = evf[i].b - mat22_mul(evf[i].a, cprimef[i-1])
         var (Lii, deti) = mat22_inv(pivot)
         if deti == Float32(0.0):
-            return (False, zero_positions, Float32(0.0), Float32(0.0))
+            return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
         cprimef[i] = mat22_mul(Lii, evf[i].c)
         last_Li = Lii
     # dc_dlight: coupling of the LAST vertex's constraint to the light's own
@@ -630,10 +630,10 @@ def sms_walk(
         # eta*eta: see shading.mojo's _mnee_walk2 for the full derivation/
         # reference citation (same formula family, same missing factor).
         bsdf_product *= (Float32(1.0)-F)*cosHI/max(cosNI*cosTM*cosTM, Float32(1e-6)) * verts[i].eta*verts[i].eta
-    var out_positions = InlineArray[SIMD[DType.float32, 3], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 3](Float32(0.0)))
+    var out_positions = InlineArray[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
     for i in range(n):
         out_positions[i] = verts[i].pos
-    return (True, out_positions, bsdf_product, dx1_dxlight)
+    return (True, out_positions.copy(), bsdf_product, dx1_dxlight)
 
 # ── Random seeding + Bernoulli-trial reciprocal estimator (5.2/5.3) ─────────
 
@@ -651,8 +651,8 @@ def sms_seed_jitter(mut verts: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int,
 
 @always_inline
 def sms_same_solution(
-    a: InlineArray[SIMD[DType.float32, 3], MAX_SMS_VERTICES],
-    b: InlineArray[SIMD[DType.float32, 3], MAX_SMS_VERTICES], n: Int,
+    a: InlineArray[Vec3f, MAX_SMS_VERTICES],
+    b: InlineArray[Vec3f, MAX_SMS_VERTICES], n: Int,
 ) -> Bool:
     for i in range(n):
         var d = a[i] - b[i]
@@ -661,20 +661,20 @@ def sms_same_solution(
     return True
 
 def sms_solve_bernoulli(
-    x0: SIMD[DType.float32, 3], xL: SIMD[DType.float32, 3],
+    x0: Vec3f, xL: Vec3f,
     verts_seed: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int,
-    ldp_du: SIMD[DType.float32, 3], ldp_dv: SIMD[DType.float32, 3],
+    ldp_du: Vec3f, ldp_dv: Vec3f,
     jitter_scale: Float32, mut pcg: PCG32,
-    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin] = UnsafePointer[BVH2Node, MutAnyOrigin].unsafe_dangling(),
-    primIds: UnsafePointer[PrimId_C, MutAnyOrigin] = UnsafePointer[PrimId_C, MutAnyOrigin].unsafe_dangling(),
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin] = UnsafePointer[TriangleMesh_C, MutAnyOrigin].unsafe_dangling(),
-    curves: UnsafePointer[Curve_C, MutAnyOrigin] = UnsafePointer[Curve_C, MutAnyOrigin].unsafe_dangling(),
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
-    spheres: UnsafePointer[Sphere_C, MutAnyOrigin] = UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(),
+    bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin] = UnsafePointer[BVH2Node, MutExternalOrigin].unsafe_dangling(),
+    primIds: UnsafePointer[PrimId_C, MutExternalOrigin] = UnsafePointer[PrimId_C, MutExternalOrigin].unsafe_dangling(),
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin] = UnsafePointer[TriangleMesh_C, MutExternalOrigin].unsafe_dangling(),
+    curves: UnsafePointer[Curve_C, MutExternalOrigin] = UnsafePointer[Curve_C, MutExternalOrigin].unsafe_dangling(),
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+    instances: UnsafePointer[Instance_C, MutExternalOrigin] = UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
+    spheres: UnsafePointer[Sphere_C, MutExternalOrigin] = UnsafePointer[Sphere_C, MutExternalOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
-) -> Tuple[Bool, InlineArray[SIMD[DType.float32, 3], MAX_SMS_VERTICES], Float32, Float32, Float32]:
+) -> Tuple[Bool, InlineArray[Vec3f, MAX_SMS_VERTICES], Float32, Float32, Float32]:
     """5.3: Zeltner et al. 2020's Bernoulli-trial reciprocal estimator.
     Solves once from a randomly-jittered seed to fix the primary candidate
     solution X* (the one whose contribution this call reports), then draws
@@ -694,22 +694,28 @@ def sms_solve_bernoulli(
     case of an essentially-unique manifold solution, q is close to 1 and
     the very first trial matches, so this degenerates to trial_count~1 --
     i.e. plain single-solve behavior -- with negligible overhead."""
-    var seed0 = verts_seed
+    var seed0 = verts_seed.copy()
     sms_seed_jitter(seed0, n, pcg, jitter_scale)
-    var (ok0, pos0, bsdf0, jac0) = sms_walk(x0, xL, seed0, n, ldp_du, ldp_dv,
+    var _walk0 = sms_walk(x0, xL, seed0, n, ldp_du, ldp_dv,
         bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
+    var ok0 = _walk0[0]
+    var pos0 = _walk0[1].copy()
+    var bsdf0 = _walk0[2]
+    var jac0 = _walk0[3]
     if not ok0:
-        var zero_positions = InlineArray[SIMD[DType.float32, 3], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 3](Float32(0.0)))
-        return (False, zero_positions, Float32(0.0), Float32(0.0), Float32(0.0))
+        var zero_positions = InlineArray[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
+        return (False, zero_positions.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
     var trials = Float32(0.0)
     var matched = False
     for _t in range(SMS_BERNOULLI_MAX_TRIALS):
         trials += Float32(1.0)
-        var seed_k = verts_seed
+        var seed_k = verts_seed.copy()
         sms_seed_jitter(seed_k, n, pcg, jitter_scale)
-        var (okk, posk, _bsdfk, _jack) = sms_walk(x0, xL, seed_k, n, ldp_du, ldp_dv,
+        var _walkk = sms_walk(x0, xL, seed_k, n, ldp_du, ldp_dv,
             bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
+        var okk = _walkk[0]
+        var posk = _walkk[1].copy()
         if okk and sms_same_solution(posk, pos0, n):
             matched = True; break
     _ = matched
-    return (True, pos0, bsdf0, jac0, trials)
+    return (True, pos0.copy(), bsdf0, jac0, trials)

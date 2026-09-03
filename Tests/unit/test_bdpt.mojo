@@ -33,7 +33,7 @@ comptime EPS: Float32 = 1e-3
 def _close(a: Float32, b: Float32) -> Bool:
     return abs(a - b) < EPS
 
-def _simd_close(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> Bool:
+def _simd_close(a: Vec3f, b: Vec3f) -> Bool:
     return _close(a[0], b[0]) and _close(a[1], b[1]) and _close(a[2], b[2])
 
 # ── shared fixture ────────────────────────────────────────────────────────────
@@ -60,24 +60,24 @@ def _dummy_sd() -> SceneDescriptor2_C:
     return SceneDescriptor2_C(
         fixture.bvh_nodes, fixture.prim_ids, fixture.meshes, Int64(1),
         fixture.materials, Int64(1),
-        UnsafePointer[AreaLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[InfiniteLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[AreaLight_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[DistantLight_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[PointLight_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[InfiniteLight_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Sphere_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
         fixture.curves, Int64(0),
-        UnsafePointer[Medium_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[MediumInterface_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[Grid_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        LightSampler_C(UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(), Int32(0), Int32(0)),
-        UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[Medium_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[MediumInterface_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        LightSampler_C(UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), Int32(0), Int32(0)),
+        UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
         Int64(0),
-        UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[MeasuredBRDF_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
         null_spectral_handle(),
-        UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
     )
 
 # ── _pdf_solid_to_area ────────────────────────────────────────────────────────
@@ -139,8 +139,8 @@ def test_eval_vertex_delta_vertex_is_always_zero() raises:
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
-    var result = _eval_vertex(v, SIMD[DType.float32, 3](0.0, 0.0, 1.0), _dummy_sd())
-    assert_true(_simd_close(result, SIMD[DType.float32, 3](0.0, 0.0, 0.0)))
+    var result = _eval_vertex(v, Vec3f(0.0, 0.0, 1.0), _dummy_sd())
+    assert_true(_simd_close(result, Vec3f(0.0, 0.0, 0.0)))
 
 def test_eval_vertex_volume_scatter_matches_isotropic_phase_function() raises:
     """A volume-scatter vertex (is_surface=0) uses the isotropic phase
@@ -155,9 +155,9 @@ def test_eval_vertex_volume_scatter_matches_isotropic_phase_function() raises:
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
-    var dir = SIMD[DType.float32, 3](0.267261, 0.534522, 0.801784)  # arbitrary; ignored by volume path
+    var dir = Vec3f(0.267261, 0.534522, 0.801784)  # arbitrary; ignored by volume path
     var result = _eval_vertex(v, dir, _dummy_sd())
-    assert_true(_simd_close(result, SIMD[DType.float32, 3](
+    assert_true(_simd_close(result, Vec3f(
         Float32(0.3) * INV_FOUR_PI, Float32(0.4) * INV_FOUR_PI, Float32(0.5) * INV_FOUR_PI)))
 
 def test_eval_vertex_lambertian_matches_closed_form() raises:
@@ -172,10 +172,10 @@ def test_eval_vertex_lambertian_matches_closed_form() raises:
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
-    var dir = SIMD[DType.float32, 3](0.7071068, 0.0, 0.7071068)  # 45 degrees off the normal
+    var dir = Vec3f(0.7071068, 0.0, 0.7071068)  # 45 degrees off the normal
     var result = _eval_vertex(v, dir, _dummy_sd())
     var cos_o = Float32(0.7071068)
-    assert_true(_simd_close(result, SIMD[DType.float32, 3](
+    assert_true(_simd_close(result, Vec3f(
         Float32(0.2) * INV_PI * cos_o, Float32(0.4) * INV_PI * cos_o, Float32(0.6) * INV_PI * cos_o)))
 
 def test_eval_vertex_conductor_dispatches_to_eval_conductor_ggx_with_own_fields() raises:
@@ -184,9 +184,9 @@ def test_eval_vertex_conductor_dispatches_to_eval_conductor_ggx_with_own_fields(
     comparing against a direct call to _eval_conductor_ggx with those same
     values, which pins down the field-to-argument wiring (not just the GGX
     math itself, which is covered by the dedicated test below)."""
-    var n = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var wo = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var wi = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var n = Vec3f(0.0, 0.0, 1.0)
+    var wo = Vec3f(0.0, 0.0, 1.0)
+    var wi = Vec3f(0.0, 0.0, 1.0)
     var alpha = Float32(0.2)
     var f0 = RGB(Float32(0.5), Float32(0.6), Float32(0.7))
     var v = BDPTVertex(
@@ -206,18 +206,18 @@ def test_eval_vertex_conductor_dispatches_to_eval_conductor_ggx_with_own_fields(
 # ── _eval_conductor_ggx ───────────────────────────────────────────────────────
 
 def test_eval_conductor_ggx_grazing_wo_returns_zero() raises:
-    var n  = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var wo = SIMD[DType.float32, 3](1.0, 0.0, 0.0)  # perpendicular to n -> cos_o = 0
-    var wi = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var n  = Vec3f(0.0, 0.0, 1.0)
+    var wo = Vec3f(1.0, 0.0, 0.0)  # perpendicular to n -> cos_o = 0
+    var wi = Vec3f(0.0, 0.0, 1.0)
     var result = _eval_conductor_ggx(n, wo, wi, Float32(0.2), RGB(Float32(1.0)))
-    assert_true(_simd_close(result, SIMD[DType.float32, 3](0.0, 0.0, 0.0)))
+    assert_true(_simd_close(result, Vec3f(0.0, 0.0, 0.0)))
 
 def test_eval_conductor_ggx_grazing_wi_returns_zero() raises:
-    var n  = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var wo = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var wi = SIMD[DType.float32, 3](1.0, 0.0, 0.0)  # perpendicular to n -> cos_i = 0
+    var n  = Vec3f(0.0, 0.0, 1.0)
+    var wo = Vec3f(0.0, 0.0, 1.0)
+    var wi = Vec3f(1.0, 0.0, 0.0)  # perpendicular to n -> cos_i = 0
     var result = _eval_conductor_ggx(n, wo, wi, Float32(0.2), RGB(Float32(1.0)))
-    assert_true(_simd_close(result, SIMD[DType.float32, 3](0.0, 0.0, 0.0)))
+    assert_true(_simd_close(result, Vec3f(0.0, 0.0, 0.0)))
 
 def test_eval_conductor_ggx_normal_incidence_matches_closed_form() raises:
     """At wo=wi=n (normal incidence, half-vector = n exactly), cos_wo_h=1 so
@@ -226,13 +226,13 @@ def test_eval_conductor_ggx_normal_incidence_matches_closed_form() raises:
     by calling the same ggx_D/ggx_G2 primitives (already independently unit-
     tested in test_bxdf.mojo) and combining them exactly as
     _eval_conductor_ggx's k/fr formula does."""
-    var n = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var n = Vec3f(0.0, 0.0, 1.0)
     var alpha = Float32(0.2)
     var f0 = RGB(Float32(0.5), Float32(0.6), Float32(0.7))
     var d = ggx_D(Float32(1.0), alpha)
     var g = ggx_G2(Float32(1.0), Float32(1.0), alpha)
     var k = d * g / Float32(4.0)
-    var expected = SIMD[DType.float32, 3](k * f0.r, k * f0.g, k * f0.b)
+    var expected = Vec3f(k * f0.r, k * f0.g, k * f0.b)
     var result = _eval_conductor_ggx(n, n, n, alpha, f0)
     assert_true(_simd_close(result, expected))
 
@@ -260,24 +260,24 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
     var sd = SceneDescriptor2_C(
         fixture.bvh_nodes, fixture.prim_ids, fixture.meshes, Int64(1),
         fixture.materials, Int64(1),
-        UnsafePointer[AreaLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[InfiniteLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[AreaLight_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[DistantLight_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[PointLight_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[InfiniteLight_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Sphere_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
         fixture.curves, Int64(0),
-        UnsafePointer[Medium_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[MediumInterface_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[Grid_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        LightSampler_C(UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(), Int32(0), Int32(0)),
-        UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[Medium_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[MediumInterface_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        LightSampler_C(UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), Int32(0), Int32(0)),
+        UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
         Int64(0),
-        UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[MeasuredBRDF_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
         null_spectral_handle(),
-        UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
     )
 
     var cv = BDPTVertex(
@@ -309,9 +309,9 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
     # Independently compute the single-connection value _connect would
     # produce, then verify the exhaustive-sum-over-the-path wrapper against
     # it directly.
-    var dir_to_light = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var dir_to_light = Vec3f(0.0, 0.0, 1.0)
     var f_cam = _eval_vertex(cv, dir_to_light, sd)  # Lambertian: alb/pi * cos
-    var f_lgt = SIMD[DType.float32, 3](lv.alb.r, lv.alb.g, lv.alb.b)  # is_light: Le, no cosine
+    var f_lgt = Vec3f(lv.alb.r, lv.alb.g, lv.alb.b)  # is_light: Le, no cosine
     var g = _geom_term(cv, lv)  # 1*1/10^2
     var beta_prod = Float32(3.0) * Float32(2.0)
     var expected = f_cam[0] * f_lgt[0] * g * beta_prod  # unoccluded, Tr=1; all channels equal here
@@ -319,6 +319,13 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
     assert_true(_close(result.r, expected))
     assert_true(_close(result.g, expected))
     assert_true(_close(result.b, expected))
+    # `sd` holds raw pointers borrowed from `fixture` (bvh_nodes/prim_ids/
+    # meshes/materials/curves) with no other owner -- `fixture` has no
+    # syntactic use after constructing `sd` above, so Mojo's ASAP
+    # destruction would otherwise free it (and everything `sd` points into)
+    # before `_bdpt_connect_to_cache`'s internal BVH traversal ever runs.
+    # Keep it alive through the whole test, not a style nicety.
+    _ = fixture^
 
     lvc.free(); scratch.free()
 

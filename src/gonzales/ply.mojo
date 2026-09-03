@@ -12,10 +12,10 @@ comptime PLY_NZ   = 8
 comptime PLY_MAX_PROPS = 32
 
 def _ply_read_line(
-    buf:      UnsafePointer[UInt8, MutAnyOrigin],
+    buf:      UnsafePointer[UInt8, MutExternalOrigin],
     size:     Int,
     pos:      Int,
-    line_buf: UnsafePointer[UInt8, MutAnyOrigin],
+    line_buf: UnsafePointer[UInt8, MutExternalOrigin],
     max:      Int,
 ) -> Int:
     var p = pos
@@ -30,7 +30,7 @@ def _ply_read_line(
         p += 1
     return p
 
-def _ply_word_start(line: UnsafePointer[UInt8, MutAnyOrigin], n: Int) -> Int:
+def _ply_word_start(line: UnsafePointer[UInt8, MutExternalOrigin], n: Int) -> Int:
     var i = 0
     var w = 0
     while line[i] != UInt8(0):
@@ -45,7 +45,7 @@ def _ply_word_start(line: UnsafePointer[UInt8, MutAnyOrigin], n: Int) -> Int:
         w += 1
     return -1
 
-def _ply_word_eq(line: UnsafePointer[UInt8, MutAnyOrigin], n: Int, literal: StringLiteral) -> Bool:
+def _ply_word_eq(line: UnsafePointer[UInt8, MutExternalOrigin], n: Int, literal: StringLiteral) -> Bool:
     var si = _ply_word_start(line, n)
     if si < 0:
         return False
@@ -58,7 +58,7 @@ def _ply_word_eq(line: UnsafePointer[UInt8, MutAnyOrigin], n: Int, literal: Stri
     var next = line[si + j]
     return next == UInt8(0) or next == UInt8(32) or next == UInt8(9)
 
-def _ply_word_to_int(line: UnsafePointer[UInt8, MutAnyOrigin], n: Int) -> Int:
+def _ply_word_to_int(line: UnsafePointer[UInt8, MutExternalOrigin], n: Int) -> Int:
     var si = _ply_word_start(line, n)
     if si < 0:
         return -1
@@ -73,7 +73,7 @@ def _ply_word_to_int(line: UnsafePointer[UInt8, MutAnyOrigin], n: Int) -> Int:
 # line as a float (sign, integer part, optional fraction, optional exponent).
 # Self-contained (no lexer.mojo dependency) to match this file's existing
 # hand-rolled word-parsing style.
-def _ply_word_to_float(line: UnsafePointer[UInt8, MutAnyOrigin], n: Int) -> Float32:
+def _ply_word_to_float(line: UnsafePointer[UInt8, MutExternalOrigin], n: Int) -> Float32:
     var si = _ply_word_start(line, n)
     if si < 0:
         return Float32(0.0)
@@ -116,7 +116,7 @@ def _ply_word_to_float(line: UnsafePointer[UInt8, MutAnyOrigin], n: Int) -> Floa
 
 # Returns byte size of a PLY scalar type name (e.g. "float", "double", "uchar", "int").
 # Returns 4 for unknown types (safe default for float/int).
-def _ply_type_size(line: UnsafePointer[UInt8, MutAnyOrigin], word_n: Int) -> Int:
+def _ply_type_size(line: UnsafePointer[UInt8, MutExternalOrigin], word_n: Int) -> Int:
     if _ply_word_eq(line, word_n, "float64") or _ply_word_eq(line, word_n, "double"):
         return 8
     if _ply_word_eq(line, word_n, "int8")   or _ply_word_eq(line, word_n, "char"):
@@ -130,18 +130,18 @@ def _ply_type_size(line: UnsafePointer[UInt8, MutAnyOrigin], word_n: Int) -> Int
     return 4  # float32, float, int32, int, uint32, uint
 
 @always_inline
-def _ply_f32_le(buf: UnsafePointer[UInt8, MutAnyOrigin], pos: Int) -> Float32:
+def _ply_f32_le(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float32:
     return (buf + pos).bitcast[Float32]()[0]
 
 @always_inline
-def _ply_i32_le(buf: UnsafePointer[UInt8, MutAnyOrigin], pos: Int) -> Int32:
+def _ply_i32_le(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int32:
     return (buf + pos).bitcast[Int32]()[0]
 
 @always_inline
-def _ply_u8_at(buf: UnsafePointer[UInt8, MutAnyOrigin], pos: Int) -> Int:
+def _ply_u8_at(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int:
     return Int(buf[pos])
 
-def _ply_f32_be(buf: UnsafePointer[UInt8, MutAnyOrigin], pos: Int) -> Float32:
+def _ply_f32_be(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float32:
     var tmp = alloc[UInt8](4)
     tmp[0] = buf[pos + 3]; tmp[1] = buf[pos + 2]
     tmp[2] = buf[pos + 1]; tmp[3] = buf[pos + 0]
@@ -149,7 +149,7 @@ def _ply_f32_be(buf: UnsafePointer[UInt8, MutAnyOrigin], pos: Int) -> Float32:
     tmp.free()
     return v
 
-def _ply_i32_be(buf: UnsafePointer[UInt8, MutAnyOrigin], pos: Int) -> Int32:
+def _ply_i32_be(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int32:
     var tmp = alloc[UInt8](4)
     tmp[0] = buf[pos + 3]; tmp[1] = buf[pos + 2]
     tmp[2] = buf[pos + 1]; tmp[3] = buf[pos + 0]
@@ -158,7 +158,7 @@ def _ply_i32_be(buf: UnsafePointer[UInt8, MutAnyOrigin], pos: Int) -> Int32:
     return v
 
 # Read a 64-bit double and return as Float32 (for double-precision PLY positions).
-def _ply_f64_le(buf: UnsafePointer[UInt8, MutAnyOrigin], pos: Int) -> Float32:
+def _ply_f64_le(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float32:
     var tmp = alloc[UInt8](8)
     for k in range(8):
         tmp[k] = buf[pos + k]
@@ -166,7 +166,7 @@ def _ply_f64_le(buf: UnsafePointer[UInt8, MutAnyOrigin], pos: Int) -> Float32:
     tmp.free()
     return Float32(d)
 
-def _ply_f64_be(buf: UnsafePointer[UInt8, MutAnyOrigin], pos: Int) -> Float32:
+def _ply_f64_be(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float32:
     var tmp = alloc[UInt8](8)
     for k in range(8):
         tmp[k] = buf[pos + 7 - k]
@@ -175,7 +175,7 @@ def _ply_f64_be(buf: UnsafePointer[UInt8, MutAnyOrigin], pos: Int) -> Float32:
     return Float32(d)
 
 # Read a count from a face list field. type_size is 1, 2, or 4.
-def _ply_read_count(buf: UnsafePointer[UInt8, MutAnyOrigin], pos: Int, type_size: Int, le: Bool) -> Int:
+def _ply_read_count(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int, type_size: Int, le: Bool) -> Int:
     if type_size == 1:
         return Int(buf[pos])
     if type_size == 2:
@@ -190,18 +190,18 @@ def _ply_read_count(buf: UnsafePointer[UInt8, MutAnyOrigin], pos: Int, type_size
         return Int(_ply_i32_be(buf, pos))
 
 def load_ply(
-    path_cstr:   UnsafePointer[UInt8, MutAnyOrigin],
-    out_pts:     UnsafePointer[UnsafePointer[Float32, MutAnyOrigin], MutAnyOrigin],
-    out_n_verts: UnsafePointer[Int32, MutAnyOrigin],
-    out_idx:     UnsafePointer[UnsafePointer[Int32, MutAnyOrigin], MutAnyOrigin],
-    out_n_tris:  UnsafePointer[Int32, MutAnyOrigin],
-    out_uvs:     UnsafePointer[UnsafePointer[Float32, MutAnyOrigin], MutAnyOrigin],
-    out_has_uvs: UnsafePointer[Int32, MutAnyOrigin],
-    out_normals: UnsafePointer[UnsafePointer[Float32, MutAnyOrigin], MutAnyOrigin],
-    out_has_normals: UnsafePointer[Int32, MutAnyOrigin],
+    path_cstr:   UnsafePointer[UInt8, MutExternalOrigin],
+    out_pts:     UnsafePointer[UnsafePointer[Float32, MutExternalOrigin], MutExternalOrigin],
+    out_n_verts: UnsafePointer[Int32, MutExternalOrigin],
+    out_idx:     UnsafePointer[UnsafePointer[Int32, MutExternalOrigin], MutExternalOrigin],
+    out_n_tris:  UnsafePointer[Int32, MutExternalOrigin],
+    out_uvs:     UnsafePointer[UnsafePointer[Float32, MutExternalOrigin], MutExternalOrigin],
+    out_has_uvs: UnsafePointer[Int32, MutExternalOrigin],
+    out_normals: UnsafePointer[UnsafePointer[Float32, MutExternalOrigin], MutExternalOrigin],
+    out_has_normals: UnsafePointer[Int32, MutExternalOrigin],
 ) -> Int32:
     var path_str = String(unsafe_from_utf8_ptr=path_cstr.as_immutable())
-    var file_buf: UnsafePointer[UInt8, MutAnyOrigin]
+    var file_buf: UnsafePointer[UInt8, MutExternalOrigin]
     var file_size: Int
     try:
         var f = open(path_str, "r")
@@ -394,7 +394,7 @@ def load_ply(
         out_has_uvs[0] = Int32(1)
     else:
         uvs_buf.free()
-        out_uvs[0]     = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
+        out_uvs[0]     = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
         out_has_uvs[0] = Int32(0)
 
     if found_normals:
@@ -402,7 +402,7 @@ def load_ply(
         out_has_normals[0] = Int32(1)
     else:
         nrm_buf.free()
-        out_normals[0]     = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
+        out_normals[0]     = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
         out_has_normals[0] = Int32(0)
 
     return Int32(1)

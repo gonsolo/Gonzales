@@ -1,7 +1,7 @@
 from std.memory import alloc
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext, DeviceBuffer
-from std.gpu.host._nvidia_cuda import CUDA
+from max.gpu.host import DeviceContext, DeviceBuffer
+from max.gpu.host._nvidia_cuda import CUDA
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import TriangleMesh_C
 from gonzales.vulkaninterop import (
@@ -45,14 +45,14 @@ def test_vulkaninterop_rt_trace_matches_known_geometry() raises:
 
     var meshes = alloc[TriangleMesh_C](2)
     meshes[0] = TriangleMesh_C(
-        pts0, UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling(), idx0,
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        pts0, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), idx0,
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     )
     meshes[1] = TriangleMesh_C(
-        pts1, UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling(), idx1,
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        pts1, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), idx1,
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     )
 
     var point_counts = alloc[Int64](2)
@@ -61,12 +61,12 @@ def test_vulkaninterop_rt_trace_matches_known_geometry() raises:
     idx_counts[0] = 3; idx_counts[1] = 3
 
     comptime maxRays = 16
-    var no_templates = UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling()
-    var no_instances = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
-    var no_instance_tmpl = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling()
-    var no_curve_aabbs = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
-    var no_curve_i32 = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling()
-    var no_curve_data = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
+    var no_templates = UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling()
+    var no_instances = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
+    var no_instance_tmpl = UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling()
+    var no_curve_aabbs = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
+    var no_curve_i32 = UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling()
+    var no_curve_data = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
     var scene = vulkaninterop_rt_create_scene(
         meshes, Int64(2), point_counts, idx_counts,
         Int64(0), no_templates, no_templates,
@@ -146,9 +146,9 @@ def test_vulkaninterop_rt_instancing_places_template_correctly() raises:
 
     var meshes = alloc[TriangleMesh_C](1)
     meshes[0] = TriangleMesh_C(
-        pts0, UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling(), idx0,
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        pts0, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), idx0,
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     )
     var point_counts = alloc[Int64](1)
     point_counts[0] = 3
@@ -168,9 +168,9 @@ def test_vulkaninterop_rt_instancing_places_template_correctly() raises:
     inst_tmpl_idx[0] = 0; inst_tmpl_idx[1] = 0
 
     comptime maxRays = 16
-    var no_curve_aabbs = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
-    var no_curve_i32 = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling()
-    var no_curve_data = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
+    var no_curve_aabbs = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
+    var no_curve_i32 = UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling()
+    var no_curve_data = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
     var scene = vulkaninterop_rt_create_scene(
         meshes, Int64(1), point_counts, idx_counts,
         Int64(1), template_start, template_end,

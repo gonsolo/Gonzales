@@ -15,7 +15,7 @@ comptime EPS: Float32 = 1e-5
 def _close(a: Float32, b: Float32) -> Bool:
     return abs(a - b) < EPS
 
-def _buf(s: String) -> UnsafePointer[UInt8, MutAnyOrigin]:
+def _buf(s: String) -> UnsafePointer[UInt8, MutExternalOrigin]:
     """Copies a Mojo string literal into a fresh UInt8 buffer — mirrors the
     same String->buffer pattern __init__.mojo uses for argv, just for tests
     against the byte-level scan_* primitives directly (no PbrtScanner/file
@@ -26,7 +26,7 @@ def _buf(s: String) -> UnsafePointer[UInt8, MutAnyOrigin]:
         b[i] = s.as_bytes()[i]
     return b
 
-def _buf0(s: String) -> UnsafePointer[UInt8, MutAnyOrigin]:
+def _buf0(s: String) -> UnsafePointer[UInt8, MutExternalOrigin]:
     """Like _buf, but null-terminated — needed by the _psc_streq/_psc_strncpy/
     _psc_type_is_* helpers, which (unlike scan_int/scan_float/...) take no
     explicit length and instead scan/index until a 0 byte or a fixed offset."""
@@ -37,7 +37,7 @@ def _buf0(s: String) -> UnsafePointer[UInt8, MutAnyOrigin]:
     b[n] = UInt8(0)
     return b
 
-def _scanner_from_string(s: String) -> UnsafePointer[PbrtScanner, MutAnyOrigin]:
+def _scanner_from_string(s: String) -> UnsafePointer[PbrtScanner, MutExternalOrigin]:
     """Builds a PbrtScanner directly over an in-memory buffer, mirroring the
     helper of the same name in test_parser_integration.mojo — needed to drive
     ParamScanner, which is only ever handed a PbrtScanner handle, never raw

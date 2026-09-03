@@ -1,6 +1,6 @@
 from std.math import ceildiv, sqrt, log, exp, cos, sin, max
 from std.memory import alloc
-from std.algorithm import parallelize
+from max.algorithm import parallelize
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, PathState_C, TileResult_C, Sphere_C, AreaLight_C, LightSampler_C, light_sampler_sample, dot, cross, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, INV_FOUR_PI, curve_piece_endpoints, _curve_perp_axis
 from .bvh import SceneDescriptor2_C, traverse_bvh2_core, test_spheres, any_hit_bvh2_core
@@ -15,13 +15,13 @@ from .restir_gi import GIReservoirIO, gi_reservoir_io_null
 from .restir_sms import SMSReservoirIO, sms_reservoir_io_null
 
 
-def render_tile(
-    rasterToCamera: UnsafePointer[Float32, MutAnyOrigin],
-    cameraToWorld: UnsafePointer[Float32, MutAnyOrigin],
+def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
+    rasterToCamera: UnsafePointer[Float32, MutExternalOrigin],
+    cameraToWorld: UnsafePointer[Float32, Oc2w],
     tileMinX: Int32, tileMinY: Int32, tileMaxX: Int32, tileMaxY: Int32,
-    samplerParamsPtr: UnsafePointer[TileSamplerParams_C, MutAnyOrigin],
-    scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin],
-    resultsPtr: UnsafePointer[TileResult_C, MutAnyOrigin],
+    samplerParamsPtr: UnsafePointer[TileSamplerParams_C, Osp],
+    scenePtr: UnsafePointer[SceneDescriptor2_C, MutExternalOrigin],
+    resultsPtr: UnsafePointer[TileResult_C, MutExternalOrigin],
     maxDepth: Int32,
     guide_read: GuideGrid,
     guide_write: GuideGrid,
@@ -87,7 +87,7 @@ def render_tile(
     # init; otherwise a path that never reaches bounce 1 (miss, RR kill, or
     # a non-diffuse x2) would leave garbage that a later stray read could
     # misinterpret as a real pending snapshot.
-    var gi_pending_buf = UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling()
+    var gi_pending_buf = UnsafePointer[GIPendingX1, MutExternalOrigin].unsafe_dangling()
     if use_gi:
         gi_pending_buf = alloc[GIPendingX1](n)
         for gi_i in range(n):
@@ -283,18 +283,18 @@ def progress_str(done: Int, total: Int, elapsed: Float64, unit: String) -> Strin
         + " | Total Est.: " + fmt_time(est) + "                ")
 
 
-def render_all_tiles(
-    raster_to_camera: UnsafePointer[Float32, MutAnyOrigin],
-    camera_to_world: UnsafePointer[Float32, MutAnyOrigin],
+def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin[mut=True]](
+    raster_to_camera: UnsafePointer[Float32, MutExternalOrigin],
+    camera_to_world: UnsafePointer[Float32, Oc2w],
     min_x: Int32, min_y: Int32, max_x: Int32, max_y: Int32,
     tile_w: Int32, tile_h: Int32,
-    sampler_params: UnsafePointer[TileSamplerParams_C, MutAnyOrigin],
-    scene: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin],
-    results: UnsafePointer[TileResult_C, MutAnyOrigin],
+    sampler_params: UnsafePointer[TileSamplerParams_C, Osp],
+    scene: UnsafePointer[SceneDescriptor2_C, MutExternalOrigin],
+    results: UnsafePointer[TileResult_C, Ores],
     max_depth: Int32,
     quiet: Bool = False,
     guide_read: GuideGrid = null_guide(),
-    write_guides: UnsafePointer[GuideGrid, MutAnyOrigin] = UnsafePointer[GuideGrid, MutAnyOrigin].unsafe_dangling(),
+    write_guides: UnsafePointer[GuideGrid, MutExternalOrigin] = UnsafePointer[GuideGrid, MutExternalOrigin].unsafe_dangling(),
     n_write_guides: Int = 0,
     use_restir: Bool = False,
     frame_w: Int32 = Int32(0),
@@ -375,13 +375,13 @@ def render_all_tiles(
 # normals_out: n_pixels*3 floats (Nx,Ny,Nz unit vectors; background = (0,0,1)).
 # depth_out:   n_pixels floats (first-hit tHit; background = 1e38).
 # Normalize TileResult_C[] → per-pixel float RGB arrays.
-def normalize_film(
-    results: UnsafePointer[TileResult_C, MutAnyOrigin],
+def normalize_film[Ores: Origin[mut=True], Obo: Origin[mut=True], Oao: Origin[mut=True]](
+    results: UnsafePointer[TileResult_C, Ores],
     count: Int32,
     iso: Float32,
     max_component_value: Float32,
-    beauty_out: UnsafePointer[Float32, MutAnyOrigin],
-    albedo_out: UnsafePointer[Float32, MutAnyOrigin],
+    beauty_out: UnsafePointer[Float32, Obo],
+    albedo_out: UnsafePointer[Float32, Oao],
 ):
     var scale = iso / Float32(100)
     for i in range(Int(count)):

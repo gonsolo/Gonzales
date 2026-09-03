@@ -28,7 +28,7 @@ comptime EPS: Float32 = 1e-4
 def _close(a: Float32, b: Float32) -> Bool:
     return abs(a - b) < EPS
 
-def _make_triangle_mesh(p0: SIMD[DType.float32, 3], p1: SIMD[DType.float32, 3], p2: SIMD[DType.float32, 3]) -> TriangleMesh_C:
+def _make_triangle_mesh(p0: Vec3f, p1: Vec3f, p2: Vec3f) -> TriangleMesh_C:
     var points = alloc[Float32](4 * 3)
     points[0*4+0] = p0[0]; points[0*4+1] = p0[1]; points[0*4+2] = p0[2]; points[0*4+3] = Float32(0.0)
     points[1*4+0] = p1[0]; points[1*4+1] = p1[1]; points[1*4+2] = p1[2]; points[1*4+3] = Float32(0.0)
@@ -36,24 +36,24 @@ def _make_triangle_mesh(p0: SIMD[DType.float32, 3], p1: SIMD[DType.float32, 3], 
     var vidx = alloc[Int64](3)
     vidx[0] = 0; vidx[1] = 1; vidx[2] = 2
     return TriangleMesh_C(
-        points, UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling(), vidx,
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        points, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), vidx,
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     )
 
-def _make_one_leaf_bvh(tri_min: SIMD[DType.float32, 3], tri_max: SIMD[DType.float32, 3]) -> BVH2Node:
+def _make_one_leaf_bvh(tri_min: Vec3f, tri_max: Vec3f) -> BVH2Node:
     return BVH2Node(Point3f(tri_min[0], tri_min[1], tri_min[2]),
         Point3f(tri_max[0], tri_max[1], tri_max[2]), Int32(0), Int32(1))
 
 def _make_ctx_with_light(
-    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
-    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    area_lights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
+    primIds: UnsafePointer[PrimId_C, MutExternalOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
+    area_lights: UnsafePointer[AreaLight_C, MutExternalOrigin],
     area_light_count: Int,
-    light_sampler_cdf: UnsafePointer[Float32, MutAnyOrigin],
+    light_sampler_cdf: UnsafePointer[Float32, MutExternalOrigin],
     use_restir: Bool = False,
-    gi_pending: UnsafePointer[GIPendingX1, MutAnyOrigin] = UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling(),
+    gi_pending: UnsafePointer[GIPendingX1, MutExternalOrigin] = UnsafePointer[GIPendingX1, MutExternalOrigin].unsafe_dangling(),
 ) -> ShadeContext:
     """A ShadeContext with a real BVH + area-light setup (everything
     _gi_generate_recon_candidate touches) and dangling sentinels for
@@ -64,27 +64,27 @@ def _make_ctx_with_light(
     values to exercise the full generate/combine/resolve chain."""
     return ShadeContext(
         0, bvh2Nodes, primIds, meshes,
-        UnsafePointer[Curve_C, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Material_C, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(), 0,
-        UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[Curve_C, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Material_C, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(), 0,
+        UnsafePointer[ShadowTask_C, MutExternalOrigin].unsafe_dangling(),
         Float32(0.0),
-        UnsafePointer[UInt32, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[UInt32, MutExternalOrigin].unsafe_dangling(),
         null_guide(),
         use_restir,
         LightContext(
             area_lights, area_light_count,
-            UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling(), 0,
-            UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(), 0,
-            UnsafePointer[InfiniteLight_C, MutAnyOrigin].unsafe_dangling(), 0,
-            UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(), 0,
+            UnsafePointer[DistantLight_C, MutExternalOrigin].unsafe_dangling(), 0,
+            UnsafePointer[PointLight_C, MutExternalOrigin].unsafe_dangling(), 0,
+            UnsafePointer[InfiniteLight_C, MutExternalOrigin].unsafe_dangling(), 0,
+            UnsafePointer[Sphere_C, MutExternalOrigin].unsafe_dangling(), 0,
             LightSampler_C(light_sampler_cdf, Int32(area_light_count), Int32(0))),
-        UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
         null_spectral_handle(),
-        UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[MeasuredBRDF_C, MutExternalOrigin].unsafe_dangling(),
         gi_pending,
         gi_reservoir_io_null(),
     )
@@ -100,25 +100,25 @@ def _make_light_mesh() -> TriangleMesh_C:
     # making the sampled shadow-ray direction effectively deterministic
     # (straight up) without needing to predict the PCG draw exactly.
     return _make_triangle_mesh(
-        SIMD[DType.float32, 3](-0.001, 10.0, -0.001),
-        SIMD[DType.float32, 3](0.001, 10.0, -0.001),
-        SIMD[DType.float32, 3](-0.001, 10.0, 0.001))
+        Vec3f(-0.001, 10.0, -0.001),
+        Vec3f(0.001, 10.0, -0.001),
+        Vec3f(-0.001, 10.0, 0.001))
 
 def test_gi_generate_no_area_lights_returns_invalid() raises:
     var cdf = alloc[Float32](2)
     cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
     var bvh = alloc[BVH2Node](1)
-    bvh[0] = _make_one_leaf_bvh(SIMD[DType.float32, 3](1000.0, 1000.0, 1000.0), SIMD[DType.float32, 3](1001.0, 1001.0, 1001.0))
+    bvh[0] = _make_one_leaf_bvh(Vec3f(1000.0, 1000.0, 1000.0), Vec3f(1001.0, 1001.0, 1001.0))
     var primIds = alloc[PrimId_C](1)
     primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = alloc[TriangleMesh_C](1)
     meshes[0] = _make_light_mesh()
     var ctx = _make_ctx_with_light(bvh, primIds, meshes,
-        UnsafePointer[AreaLight_C, MutAnyOrigin].unsafe_dangling(), 0, cdf)
+        UnsafePointer[AreaLight_C, MutExternalOrigin].unsafe_dangling(), 0, cdf)
 
     var pcg = PCG32(UInt64(1), UInt64(1))
-    var res = _gi_generate_recon_candidate(ctx, SIMD[DType.float32, 3](0.0, 0.0, 0.0),
-        SIMD[DType.float32, 3](0.0, 1.0, 0.0), RGB(Float32(0.8)), pcg)
+    var res = _gi_generate_recon_candidate(ctx, Vec3f(0.0, 0.0, 0.0),
+        Vec3f(0.0, 1.0, 0.0), RGB(Float32(0.8)), pcg)
     assert_true(res.valid == Int8(0))
 
     meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
@@ -130,7 +130,7 @@ def test_gi_generate_surface_facing_away_from_light_returns_invalid() raises:
     var cdf = alloc[Float32](2)
     cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
     var bvh = alloc[BVH2Node](1)
-    bvh[0] = _make_one_leaf_bvh(SIMD[DType.float32, 3](1000.0, 1000.0, 1000.0), SIMD[DType.float32, 3](1001.0, 1001.0, 1001.0))
+    bvh[0] = _make_one_leaf_bvh(Vec3f(1000.0, 1000.0, 1000.0), Vec3f(1001.0, 1001.0, 1001.0))
     var primIds = alloc[PrimId_C](1)
     primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = alloc[TriangleMesh_C](1)
@@ -140,8 +140,8 @@ def test_gi_generate_surface_facing_away_from_light_returns_invalid() raises:
     var ctx = _make_ctx_with_light(bvh, primIds, meshes, area_lights, 1, cdf)
 
     var pcg = PCG32(UInt64(1), UInt64(1))
-    var res = _gi_generate_recon_candidate(ctx, SIMD[DType.float32, 3](0.0, 0.0, 0.0),
-        SIMD[DType.float32, 3](0.0, -1.0, 0.0), RGB(Float32(0.8)), pcg)
+    var res = _gi_generate_recon_candidate(ctx, Vec3f(0.0, 0.0, 0.0),
+        Vec3f(0.0, -1.0, 0.0), RGB(Float32(0.8)), pcg)
     assert_true(res.valid == Int8(0))
 
     meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
@@ -156,7 +156,7 @@ def test_gi_generate_unoccluded_light_gives_valid_positive_lo() raises:
     var cdf = alloc[Float32](2)
     cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
     var bvh = alloc[BVH2Node](1)
-    bvh[0] = _make_one_leaf_bvh(SIMD[DType.float32, 3](1000.0, 1000.0, 1000.0), SIMD[DType.float32, 3](1001.0, 1001.0, 1001.0))
+    bvh[0] = _make_one_leaf_bvh(Vec3f(1000.0, 1000.0, 1000.0), Vec3f(1001.0, 1001.0, 1001.0))
     var primIds = alloc[PrimId_C](1)
     primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = alloc[TriangleMesh_C](1)
@@ -165,8 +165,8 @@ def test_gi_generate_unoccluded_light_gives_valid_positive_lo() raises:
     area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx_with_light(bvh, primIds, meshes, area_lights, 1, cdf)
 
-    var hit_point = SIMD[DType.float32, 3](0.0, 0.0, 0.0)
-    var normal = SIMD[DType.float32, 3](0.0, 1.0, 0.0)
+    var hit_point = Vec3f(0.0, 0.0, 0.0)
+    var normal = Vec3f(0.0, 1.0, 0.0)
     var pcg = PCG32(UInt64(1), UInt64(1))
     var res = _gi_generate_recon_candidate(ctx, hit_point, normal, RGB(Float32(0.8)), pcg)
     assert_true(res.valid == Int8(1))
@@ -191,7 +191,7 @@ def test_gi_generate_occluded_light_gives_valid_zero_lo() raises:
     var cdf = alloc[Float32](2)
     cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
     var bvh = alloc[BVH2Node](1)
-    bvh[0] = _make_one_leaf_bvh(SIMD[DType.float32, 3](-1.0, 4.9, -1.0), SIMD[DType.float32, 3](2.0, 5.1, 2.0))
+    bvh[0] = _make_one_leaf_bvh(Vec3f(-1.0, 4.9, -1.0), Vec3f(2.0, 5.1, 2.0))
     var primIds = alloc[PrimId_C](1)
     primIds[0] = PrimId_C(Int64(1), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = alloc[TriangleMesh_C](2)
@@ -201,16 +201,16 @@ def test_gi_generate_occluded_light_gives_valid_zero_lo() raises:
     # s=t=1/3, s+t=2/3<=1), which is exactly where the ~straight-up shadow
     # ray crosses y=5.
     meshes[1] = _make_triangle_mesh(
-        SIMD[DType.float32, 3](-1.0, 5.0, -1.0),
-        SIMD[DType.float32, 3](2.0, 5.0, -1.0),
-        SIMD[DType.float32, 3](-1.0, 5.0, 2.0))
+        Vec3f(-1.0, 5.0, -1.0),
+        Vec3f(2.0, 5.0, -1.0),
+        Vec3f(-1.0, 5.0, 2.0))
     var area_lights = alloc[AreaLight_C](1)
     area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx_with_light(bvh, primIds, meshes, area_lights, 1, cdf)
 
     var pcg = PCG32(UInt64(1), UInt64(1))
-    var res = _gi_generate_recon_candidate(ctx, SIMD[DType.float32, 3](0.0, 0.0, 0.0),
-        SIMD[DType.float32, 3](0.0, 1.0, 0.0), RGB(Float32(0.8)), pcg)
+    var res = _gi_generate_recon_candidate(ctx, Vec3f(0.0, 0.0, 0.0),
+        Vec3f(0.0, 1.0, 0.0), RGB(Float32(0.8)), pcg)
     assert_true(res.valid == Int8(1))
     assert_true(_close(res.lo.r, Float32(0.0)))
     assert_true(_close(res.lo.g, Float32(0.0)))
@@ -232,7 +232,7 @@ def test_gi_generate_occluded_light_gives_valid_zero_lo() raises:
 # round numbers: x1=(0,3,-4) with normal=(0,-0.6,0.8) pointing exactly at
 # x2=(0,0,0) (cos_x1=1, dist=5), x2's normal=(0,1,0) giving cos_x2=0.6.
 
-def _make_path(org: SIMD[DType.float32, 3], dir: SIMD[DType.float32, 3]) -> PathState_C:
+def _make_path(org: Vec3f, dir: Vec3f) -> PathState_C:
     return PathState_C(
         Ray_C(Point3f(org[0], org[1], org[2]), Vec3f(dir[0], dir[1], dir[2])),
         RGB(Float32(1.0)), RGB(Float32(0.0)), RGB(Float32(0.0)),
@@ -245,7 +245,7 @@ def _run_two_bounce(gi_active: Bool) -> RGB:
     var cdf = alloc[Float32](2)
     cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
     var bvh = alloc[BVH2Node](1)
-    bvh[0] = _make_one_leaf_bvh(SIMD[DType.float32, 3](1000.0, 1000.0, 1000.0), SIMD[DType.float32, 3](1001.0, 1001.0, 1001.0))
+    bvh[0] = _make_one_leaf_bvh(Vec3f(1000.0, 1000.0, 1000.0), Vec3f(1001.0, 1001.0, 1001.0))
     var primIds = alloc[PrimId_C](1)
     primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = alloc[TriangleMesh_C](1)
@@ -255,7 +255,7 @@ def _run_two_bounce(gi_active: Bool) -> RGB:
 
     var gi_pending_buf = alloc[GIPendingX1](1)
     gi_pending_buf[0] = gi_pending_x1_init()
-    var real_gi_pending = gi_pending_buf if gi_active else UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling()
+    var real_gi_pending = gi_pending_buf if gi_active else UnsafePointer[GIPendingX1, MutExternalOrigin].unsafe_dangling()
 
     # ctx0 (bounce 0, x1): zero area lights -- di_temporal_step's own RIS
     # loop draws nothing and di_resolve returns immediately (res.light_idx
@@ -263,10 +263,10 @@ def _run_two_bounce(gi_active: Bool) -> RGB:
     var no_lights_cdf = alloc[Float32](1)
     no_lights_cdf[0] = Float32(0.0)
     var ctx0 = _make_ctx_with_light(
-        UnsafePointer[BVH2Node, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[PrimId_C, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[TriangleMesh_C, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[AreaLight_C, MutAnyOrigin].unsafe_dangling(), 0, no_lights_cdf,
+        UnsafePointer[BVH2Node, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[PrimId_C, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[TriangleMesh_C, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[AreaLight_C, MutExternalOrigin].unsafe_dangling(), 0, no_lights_cdf,
         use_restir=True, gi_pending=real_gi_pending)
     # ctx1 (bounce 1, x2): the real reconnection light, real BVH for both
     # GI's own shadow ray and _nee_area_lights' ordinary NEE (which also
@@ -276,10 +276,10 @@ def _run_two_bounce(gi_active: Bool) -> RGB:
         use_restir=True, gi_pending=real_gi_pending)
 
     var path_arr = alloc[PathState_C](1)
-    path_arr[0] = _make_path(SIMD[DType.float32, 3](0.0, 0.0, 0.0), SIMD[DType.float32, 3](0.0, 0.0, -1.0))
+    path_arr[0] = _make_path(Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, -1.0))
 
-    var x1_hit = SIMD[DType.float32, 3](0.0, 3.0, -4.0)
-    var x1_normal = SIMD[DType.float32, 3](0.0, -0.6, 0.8)
+    var x1_hit = Vec3f(0.0, 3.0, -4.0)
+    var x1_normal = Vec3f(0.0, -0.6, 0.8)
     # Deliberately NON-uniform across channels: a uniform albedo here would
     # hide the real "used path_ptr[].throughput at bounce 1 instead of a
     # bounce-0 snapshot" bug this test now specifically guards against --
@@ -289,7 +289,7 @@ def _run_two_bounce(gi_active: Bool) -> RGB:
     var x1_alb = RGB(Float32(0.5), Float32(0.3), Float32(0.7))
     var pcg0 = PCG32(UInt64(1), UInt64(1))
     _shade_diffuse_nee[False, False](path_arr, ctx0, x1_normal, x1_hit, x1_alb,
-        SIMD[DType.float32, 3](0.0, 0.0, 1.0),
+        Vec3f(0.0, 0.0, 1.0),
         Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5),
         pcg0, null_guide(), reservoir_io_null(), -1)
 
@@ -304,12 +304,12 @@ def _run_two_bounce(gi_active: Bool) -> RGB:
     path_arr[0].throughput = path_arr[0].throughput * x1_alb
 
     path_arr[0].bounce = Int32(1)
-    var x2_hit = SIMD[DType.float32, 3](0.0, 0.0, 0.0)
-    var x2_normal = SIMD[DType.float32, 3](0.0, 1.0, 0.0)
+    var x2_hit = Vec3f(0.0, 0.0, 0.0)
+    var x2_normal = Vec3f(0.0, 1.0, 0.0)
     var x2_alb = RGB(Float32(0.8))
     var pcg1 = PCG32(UInt64(2), UInt64(1))
     _shade_diffuse_nee[False, False](path_arr, ctx1, x2_normal, x2_hit, x2_alb,
-        SIMD[DType.float32, 3](0.0, 0.0, 1.0),
+        Vec3f(0.0, 0.0, 1.0),
         Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5),
         pcg1, null_guide(), reservoir_io_null(), -1)
 

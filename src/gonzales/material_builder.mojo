@@ -5,8 +5,8 @@ from .parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX
 from .geometry import RGB, MatKind
 from .measured_bsdf import load_measured_bsdf_reflectance
 
-def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
-                                   s: UnsafePointer[SceneParseState, MutAnyOrigin],
+def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
+                                   s: UnsafePointer[SceneParseState, MutExternalOrigin],
                                    inline_type: Bool = False):
     """Builds a NamedMaterial from a `Material`/`MakeNamedMaterial` directive.
     Scans every parameter ONCE, generically, into a ParameterDictionary
@@ -377,8 +377,8 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOri
 
     mat_name.free()
 
-def _psc_handle_named_material(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
-                               s: UnsafePointer[SceneParseState, MutAnyOrigin]):
+def _psc_handle_named_material(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
+                               s: UnsafePointer[SceneParseState, MutExternalOrigin]):
     var mat_name = alloc[UInt8](PSC_NAME_MAX)
     _ = scanner_parse_quoted_string(handle, mat_name, PSC_NAME_MAX)
     s[0].cur_attr.mat_idx = Int32(-1)

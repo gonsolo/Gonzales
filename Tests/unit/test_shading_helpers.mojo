@@ -31,15 +31,15 @@ comptime EPS: Float32 = 1e-3
 def _close(a: Float32, b: Float32) -> Bool:
     return abs(a - b) < EPS
 
-def _simd_close(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> Bool:
+def _simd_close(a: Vec3f, b: Vec3f) -> Bool:
     return _close(a[0], b[0]) and _close(a[1], b[1]) and _close(a[2], b[2])
 
-def _simd_len(v: SIMD[DType.float32, 3]) -> Float32:
+def _simd_len(v: Vec3f) -> Float32:
     return sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
 
 # ── shared fixture builders ──────────────────────────────────────────────────
 
-def _make_triangle_mesh(p0: SIMD[DType.float32, 3], p1: SIMD[DType.float32, 3], p2: SIMD[DType.float32, 3]) -> TriangleMesh_C:
+def _make_triangle_mesh(p0: Vec3f, p1: Vec3f, p2: Vec3f) -> TriangleMesh_C:
     """Mirrors test_sppm_helpers.mojo's fixture: a single-triangle mesh with
     no UVs/normals (sentinel dangling pointers -> fallback paths)."""
     var points = alloc[Float32](4 * 3)
@@ -49,9 +49,9 @@ def _make_triangle_mesh(p0: SIMD[DType.float32, 3], p1: SIMD[DType.float32, 3], 
     var vidx = alloc[Int64](3)
     vidx[0] = 0; vidx[1] = 1; vidx[2] = 2
     return TriangleMesh_C(
-        points, UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling(), vidx,
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        points, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), vidx,
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     )
 
 def _make_material(albedo: RGB, normal_tex_idx: Int32) -> Material_C:
@@ -64,19 +64,19 @@ def _null_light_context() -> LightContext:
     touch ctx.lights at all (NEE light-sampling lives in the shade_* callers,
     not in these lower-level helpers)."""
     return LightContext(
-        UnsafePointer[AreaLight_C, MutAnyOrigin].unsafe_dangling(), 0,
-        UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling(), 0,
-        UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(), 0,
-        UnsafePointer[InfiniteLight_C, MutAnyOrigin].unsafe_dangling(), 0,
-        UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(), 0,
-        LightSampler_C(UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(), Int32(0), Int32(0)),
+        UnsafePointer[AreaLight_C, MutExternalOrigin].unsafe_dangling(), 0,
+        UnsafePointer[DistantLight_C, MutExternalOrigin].unsafe_dangling(), 0,
+        UnsafePointer[PointLight_C, MutExternalOrigin].unsafe_dangling(), 0,
+        UnsafePointer[InfiniteLight_C, MutExternalOrigin].unsafe_dangling(), 0,
+        UnsafePointer[Sphere_C, MutExternalOrigin].unsafe_dangling(), 0,
+        LightSampler_C(UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), Int32(0), Int32(0)),
     )
 
 def _make_ctx(
-    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
-    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
+    primIds: UnsafePointer[PrimId_C, MutExternalOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
+    materials: UnsafePointer[Material_C, MutExternalOrigin],
     px_scale: Float32,
 ) -> ShadeContext:
     """A ShadeContext with every field the functions under test don't touch
@@ -85,26 +85,26 @@ def _make_ctx(
     normal_tex_idx=-1 mean the texture/normal-map branches never run)."""
     return ShadeContext(
         0, bvh2Nodes, primIds, meshes,
-        UnsafePointer[Curve_C, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[Curve_C, MutExternalOrigin].unsafe_dangling(),
         materials,
-        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(), 0,
-        UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(), 0,
+        UnsafePointer[ShadowTask_C, MutExternalOrigin].unsafe_dangling(),
         px_scale,
-        UnsafePointer[UInt32, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[UInt32, MutExternalOrigin].unsafe_dangling(),
         null_guide(),
         False,
         _null_light_context(),
-        UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
         null_spectral_handle(),
-        UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[MeasuredBRDF_C, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[GIPendingX1, MutExternalOrigin].unsafe_dangling(),
         gi_reservoir_io_null(),
     )
 
-def _make_path(org: SIMD[DType.float32, 3], dir: SIMD[DType.float32, 3]) -> PathState_C:
+def _make_path(org: Vec3f, dir: Vec3f) -> PathState_C:
     return PathState_C(
         Ray_C(Point3f(org[0], org[1], org[2]), Vec3f(dir[0], dir[1], dir[2])),
         RGB(Float32(1.0)), RGB(Float32(0.0)), RGB(Float32(0.0)),
@@ -123,10 +123,10 @@ def _make_two_tri_mesh() -> TriangleMesh_C:
     vidx[0] = 10; vidx[1] = 11; vidx[2] = 12
     vidx[3] = 20; vidx[4] = 21; vidx[5] = 22
     return TriangleMesh_C(
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling(), vidx,
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), vidx,
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     )
 
 def test_get_tri_verts_type0_decodes_second_triangle_correctly() raises:
@@ -173,22 +173,22 @@ def test_get_tri_verts_non_triangle_prim_returns_not_ok() raises:
 def test_apply_normal_map_returns_geom_normal_unchanged_when_no_normal_map() raises:
     var mat = _make_material(RGB(Float32(0.5)), Int32(-1))
     var mesh = TriangleMesh_C(
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     )
     var pid = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var inter = Intersection_C(pid, Float32(1.0), Float32(0.25), Float32(0.25), Int8(1), Int8(0), Int8(0), Int8(0))
-    var geom_normal = SIMD[DType.float32, 3](0.267261, 0.534522, 0.801784)  # normalize(1,2,3)
-    var p0 = SIMD[DType.float32, 3](0.0, 0.0, 0.0)
-    var p1 = SIMD[DType.float32, 3](1.0, 0.0, 0.0)
-    var p2 = SIMD[DType.float32, 3](0.0, 1.0, 0.0)
+    var geom_normal = Vec3f(0.267261, 0.534522, 0.801784)  # normalize(1,2,3)
+    var p0 = Vec3f(0.0, 0.0, 0.0)
+    var p1 = Vec3f(1.0, 0.0, 0.0)
+    var p2 = Vec3f(0.0, 1.0, 0.0)
 
     var result = _apply_normal_map[False](mat, 0, 1, 2, mesh, inter, geom_normal, p0, p1, p2,
-        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(), 0)
+        UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(), 0)
     assert_true(_simd_close(result, geom_normal))
 
 # ── _build_geom_context_full ──────────────────────────────────────────────────
@@ -202,9 +202,9 @@ def test_build_geom_context_full_matches_closed_form_for_axis_aligned_hit() rais
     hit_point = ray_org + ray_dir*tHit + normal*1e-4, wo = -ray_dir, and
     (since n=(0,0,1) is the fixed point of Duff's from_z construction) the
     tangent/bitangent come out to exactly (1,0,0)/(0,1,0)."""
-    var p0 = SIMD[DType.float32, 3](0.0, 0.0, 0.0)
-    var p1 = SIMD[DType.float32, 3](1.0, 0.0, 0.0)
-    var p2 = SIMD[DType.float32, 3](0.0, 1.0, 0.0)
+    var p0 = Vec3f(0.0, 0.0, 0.0)
+    var p1 = Vec3f(1.0, 0.0, 0.0)
+    var p2 = Vec3f(0.0, 1.0, 0.0)
     var mesh = _make_triangle_mesh(p0, p1, p2)
     var meshes = alloc[TriangleMesh_C](1)
     meshes[0] = mesh
@@ -215,12 +215,12 @@ def test_build_geom_context_full_matches_closed_form_for_axis_aligned_hit() rais
     materials[0] = mat
 
     var ctx = _make_ctx(
-        UnsafePointer[BVH2Node, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[PrimId_C, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[BVH2Node, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[PrimId_C, MutExternalOrigin].unsafe_dangling(),
         meshes, materials, Float32(0.0))
 
-    var org = SIMD[DType.float32, 3](0.0, 0.0, 5.0)
-    var dir = SIMD[DType.float32, 3](0.0, 0.0, -1.0)
+    var org = Vec3f(0.0, 0.0, 5.0)
+    var dir = Vec3f(0.0, 0.0, -1.0)
     var path = _make_path(org, dir)
     var path_arr = alloc[PathState_C](1)
     path_arr[0] = path
@@ -231,17 +231,17 @@ def test_build_geom_context_full_matches_closed_form_for_axis_aligned_hit() rais
 
     var (gc, ok) = _build_geom_context_full[False](path_arr, inter, mat, ctx)
     assert_true(ok)
-    assert_true(_simd_close(gc.normal, SIMD[DType.float32, 3](0.0, 0.0, 1.0)))
-    assert_true(_simd_close(gc.geo_normal, SIMD[DType.float32, 3](0.0, 0.0, 1.0)))
-    assert_true(_simd_close(gc.wo, SIMD[DType.float32, 3](0.0, 0.0, 1.0)))
-    var expected_hit = org + dir * t_hit + SIMD[DType.float32, 3](0.0, 0.0, 1.0) * Float32(0.0001)
+    assert_true(_simd_close(gc.normal, Vec3f(0.0, 0.0, 1.0)))
+    assert_true(_simd_close(gc.geo_normal, Vec3f(0.0, 0.0, 1.0)))
+    assert_true(_simd_close(gc.wo, Vec3f(0.0, 0.0, 1.0)))
+    var expected_hit = org + dir * t_hit + Vec3f(0.0, 0.0, 1.0) * Float32(0.0001)
     assert_true(_simd_close(gc.hit_point, expected_hit))
     assert_true(_close(gc.alb.r, albedo.r))
     assert_true(_close(gc.alb.g, albedo.g))
     assert_true(_close(gc.alb.b, albedo.b))
     # Duff et al.'s from_z(0,0,1) fixed point: tangent=(1,0,0), bitangent=(0,1,0).
-    assert_true(_simd_close(gc.tangent, SIMD[DType.float32, 3](1.0, 0.0, 0.0)))
-    assert_true(_simd_close(gc.bitangent, SIMD[DType.float32, 3](0.0, 1.0, 0.0)))
+    assert_true(_simd_close(gc.tangent, Vec3f(1.0, 0.0, 0.0)))
+    assert_true(_simd_close(gc.bitangent, Vec3f(0.0, 1.0, 0.0)))
 
     meshes[0].points.free()
     meshes[0].vertexIndices.free()
@@ -260,9 +260,9 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
     (0,0,5) along -z hits the front pole (0,0,0) with outward normal
     (0,0,1), pointed straight back at the camera."""
     var mesh = _make_triangle_mesh(
-        SIMD[DType.float32, 3](0.0, 0.0, 0.0),
-        SIMD[DType.float32, 3](1.0, 0.0, 0.0),
-        SIMD[DType.float32, 3](0.0, 1.0, 0.0))
+        Vec3f(0.0, 0.0, 0.0),
+        Vec3f(1.0, 0.0, 0.0),
+        Vec3f(0.0, 1.0, 0.0))
     var meshes = alloc[TriangleMesh_C](1)
     meshes[0] = mesh
     var albedo = RGB(Float32(0.5), Float32(0.3), Float32(0.1))
@@ -274,37 +274,37 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
     spheres[0] = Sphere_C(Point3f(0.0, 0.0, -1.0), Float32(1.0), Int32(-1),
         Int8(0), Int8(0), Int8(0), Int8(0), RGB(Float32(0.0)))
     var lights = LightContext(
-        UnsafePointer[AreaLight_C, MutAnyOrigin].unsafe_dangling(), 0,
-        UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling(), 0,
-        UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(), 0,
-        UnsafePointer[InfiniteLight_C, MutAnyOrigin].unsafe_dangling(), 0,
+        UnsafePointer[AreaLight_C, MutExternalOrigin].unsafe_dangling(), 0,
+        UnsafePointer[DistantLight_C, MutExternalOrigin].unsafe_dangling(), 0,
+        UnsafePointer[PointLight_C, MutExternalOrigin].unsafe_dangling(), 0,
+        UnsafePointer[InfiniteLight_C, MutExternalOrigin].unsafe_dangling(), 0,
         spheres, 1,
-        LightSampler_C(UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(), Int32(0), Int32(0)),
+        LightSampler_C(UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), Int32(0), Int32(0)),
     )
     var ctx = ShadeContext(
-        0, UnsafePointer[BVH2Node, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[PrimId_C, MutAnyOrigin].unsafe_dangling(), meshes,
-        UnsafePointer[Curve_C, MutAnyOrigin].unsafe_dangling(),
+        0, UnsafePointer[BVH2Node, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[PrimId_C, MutExternalOrigin].unsafe_dangling(), meshes,
+        UnsafePointer[Curve_C, MutExternalOrigin].unsafe_dangling(),
         materials,
-        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(), 0,
-        UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(), 0,
+        UnsafePointer[ShadowTask_C, MutExternalOrigin].unsafe_dangling(),
         Float32(0.0),
-        UnsafePointer[UInt32, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[UInt32, MutExternalOrigin].unsafe_dangling(),
         null_guide(),
         False,
         lights^,
-        UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
         null_spectral_handle(),
-        UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[MeasuredBRDF_C, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[GIPendingX1, MutExternalOrigin].unsafe_dangling(),
         gi_reservoir_io_null(),
     )
 
-    var org = SIMD[DType.float32, 3](0.0, 0.0, 5.0)
-    var dir = SIMD[DType.float32, 3](0.0, 0.0, -1.0)
+    var org = Vec3f(0.0, 0.0, 5.0)
+    var dir = Vec3f(0.0, 0.0, -1.0)
     var path = _make_path(org, dir)
     var path_arr = alloc[PathState_C](1)
     path_arr[0] = path
@@ -313,7 +313,7 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
     var inter = Intersection_C(pid, Float32(5.0), Float32(0.0), Float32(0.0), Int8(1), Int8(0), Int8(0), Int8(0))
     var (gc, ok) = _build_geom_context_full[False](path_arr, inter, mat, ctx)
     assert_true(ok)
-    var expected_n = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var expected_n = Vec3f(0.0, 0.0, 1.0)
     assert_true(_simd_close(gc.normal, expected_n))
     assert_true(_simd_close(gc.geo_normal, expected_n))
     var expected_hit = org + dir * Float32(5.0) + expected_n * Float32(0.0001)
@@ -336,7 +336,7 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
 # a ShadowTask_C record and needs a real GPU queue, so it's not covered here.
 
 def _make_one_leaf_bvh(
-    tri_min: SIMD[DType.float32, 3], tri_max: SIMD[DType.float32, 3],
+    tri_min: Vec3f, tri_max: Vec3f,
 ) -> BVH2Node:
     return BVH2Node(Point3f(tri_min[0], tri_min[1], tri_min[2]),
         Point3f(tri_max[0], tri_max[1], tri_max[2]), Int32(0), Int32(1))
@@ -346,26 +346,26 @@ def test_shadow_contribute_direct_adds_contribution_when_unoccluded() raises:
     (away from it) must find no hit, so the full `contrib` is added to
     path_ptr[].estimate exactly (estimate started at zero)."""
     var mesh = _make_triangle_mesh(
-        SIMD[DType.float32, 3](-1.0, -1.0, 5.0),
-        SIMD[DType.float32, 3](1.0, -1.0, 5.0),
-        SIMD[DType.float32, 3](0.0, 1.0, 5.0))
+        Vec3f(-1.0, -1.0, 5.0),
+        Vec3f(1.0, -1.0, 5.0),
+        Vec3f(0.0, 1.0, 5.0))
     var meshes = alloc[TriangleMesh_C](1)
     meshes[0] = mesh
     var primIds = alloc[PrimId_C](1)
     primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var bvh = alloc[BVH2Node](1)
-    bvh[0] = _make_one_leaf_bvh(SIMD[DType.float32, 3](-1.0, -1.0, 4.9), SIMD[DType.float32, 3](1.0, 1.0, 5.1))
+    bvh[0] = _make_one_leaf_bvh(Vec3f(-1.0, -1.0, 4.9), Vec3f(1.0, 1.0, 5.1))
 
     var materials = alloc[Material_C](1)
     materials[0] = _make_material(RGB(Float32(0.5)), Int32(-1))
     var ctx = _make_ctx(bvh, primIds, meshes, materials, Float32(0.0))
-    var path = _make_path(SIMD[DType.float32, 3](0.0, 0.0, 0.0), SIMD[DType.float32, 3](0.0, 0.0, 1.0))
+    var path = _make_path(Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0))
     var path_arr = alloc[PathState_C](1)
     path_arr[0] = path
 
     var contrib = RGB(Float32(1.0), Float32(2.0), Float32(3.0))
-    _shadow_contribute[False](path_arr, ctx, SIMD[DType.float32, 3](0.0, 0.0, 0.0),
-        SIMD[DType.float32, 3](0.0, 0.0, -1.0), Float32(10.0), contrib)
+    _shadow_contribute[False](path_arr, ctx, Vec3f(0.0, 0.0, 0.0),
+        Vec3f(0.0, 0.0, -1.0), Float32(10.0), contrib)
     assert_true(_close(path_arr[0].estimate.r, contrib.r))
     assert_true(_close(path_arr[0].estimate.g, contrib.g))
     assert_true(_close(path_arr[0].estimate.b, contrib.b))
@@ -382,26 +382,26 @@ def test_shadow_contribute_direct_skips_when_occluded() raises:
     """Same scene, but the shadow ray is fired straight at the occluder: the
     any-hit test must find it, so `estimate` stays exactly zero."""
     var mesh = _make_triangle_mesh(
-        SIMD[DType.float32, 3](-1.0, -1.0, 5.0),
-        SIMD[DType.float32, 3](1.0, -1.0, 5.0),
-        SIMD[DType.float32, 3](0.0, 1.0, 5.0))
+        Vec3f(-1.0, -1.0, 5.0),
+        Vec3f(1.0, -1.0, 5.0),
+        Vec3f(0.0, 1.0, 5.0))
     var meshes = alloc[TriangleMesh_C](1)
     meshes[0] = mesh
     var primIds = alloc[PrimId_C](1)
     primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var bvh = alloc[BVH2Node](1)
-    bvh[0] = _make_one_leaf_bvh(SIMD[DType.float32, 3](-1.0, -1.0, 4.9), SIMD[DType.float32, 3](1.0, 1.0, 5.1))
+    bvh[0] = _make_one_leaf_bvh(Vec3f(-1.0, -1.0, 4.9), Vec3f(1.0, 1.0, 5.1))
 
     var materials = alloc[Material_C](1)
     materials[0] = _make_material(RGB(Float32(0.5)), Int32(-1))
     var ctx = _make_ctx(bvh, primIds, meshes, materials, Float32(0.0))
-    var path = _make_path(SIMD[DType.float32, 3](0.0, 0.0, 0.0), SIMD[DType.float32, 3](0.0, 0.0, -1.0))
+    var path = _make_path(Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, -1.0))
     var path_arr = alloc[PathState_C](1)
     path_arr[0] = path
 
     var contrib = RGB(Float32(1.0), Float32(2.0), Float32(3.0))
-    _shadow_contribute[False](path_arr, ctx, SIMD[DType.float32, 3](0.0, 0.0, 0.0),
-        SIMD[DType.float32, 3](0.0, 0.0, 1.0), Float32(10.0), contrib)
+    _shadow_contribute[False](path_arr, ctx, Vec3f(0.0, 0.0, 0.0),
+        Vec3f(0.0, 0.0, 1.0), Float32(10.0), contrib)
     assert_true(_close(path_arr[0].estimate.r, Float32(0.0)))
     assert_true(_close(path_arr[0].estimate.g, Float32(0.0)))
     assert_true(_close(path_arr[0].estimate.b, Float32(0.0)))

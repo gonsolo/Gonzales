@@ -33,10 +33,11 @@
 # inlined) calls carries none of the by-value TrivialRegisterPassable-struct
 # corruption risk documented elsewhere (modular/modular#6759).
 from std.math import sqrt, sin, cos, acos, abs, min, max, floor
-from .geometry import RGB, MeasuredBRDF_C, safe_sqrt, PI, dot
+from .geometry import RGB, MeasuredBRDF_C, safe_sqrt, PI, dot, Vec3f
 from .spectrum import SampledWavelengths, SpectralSample, spectral_sample_to_rgb, rgb_illuminant_to_spectral_sample
 from .rgb2spec import cie_d65_runtime
-from .bvh import LightSample, _atan2f
+from .bvh import LightSample
+from .geometry import _atan2f
 from .sampling import power_heuristic
 
 # ── Local-frame warps (bxdfs.h:1058-1065) ────────────────────────────────────
@@ -59,7 +60,7 @@ def _measured_u2phi(u: Float32) -> Float32:
 
 # ── FindInterval (util/math.h:507-519) — clamped binary search ──────────────
 
-def _pl_find_interval_array(vals: UnsafePointer[Float32, MutAnyOrigin], sz: Int, x: Float32) -> Int:
+def _pl_find_interval_array(vals: UnsafePointer[Float32, MutExternalOrigin], sz: Int, x: Float32) -> Int:
     """FindInterval specialized to the predicate `vals[idx] <= x` (parameter-
     axis lookup: phi_i/theta_i/wavelengths)."""
     var size = sz - 2
@@ -77,7 +78,7 @@ def _pl_find_interval_array(vals: UnsafePointer[Float32, MutAnyOrigin], sz: Int,
     if result > sz - 2: result = sz - 2
     return result
 
-def _pl_param_wt(vals: UnsafePointer[Float32, MutAnyOrigin], size: Int, x: Float32) -> Tuple[Int, Float32]:
+def _pl_param_wt(vals: UnsafePointer[Float32, MutExternalOrigin], size: Int, x: Float32) -> Tuple[Int, Float32]:
     """Per-axis (index, weight-of-upper-sample) for the multilinear param
     blend -- mirrors Sample/Invert/Evaluate's shared `if (m_param_size[dim]
     == 1) { w0=1,w1=0 }` fast path plus the general FindInterval+lerp case
@@ -95,7 +96,7 @@ def _pl_param_wt(vals: UnsafePointer[Float32, MutAnyOrigin], size: Int, x: Float
 # ── Per-param-axis multilinear blend (pbrt's `lookup<Dim>`, sampling.h:1711-1728) ──
 
 def _pl_lookup2(
-    data: UnsafePointer[Float32, MutAnyOrigin], i0: Int, size: Int,
+    data: UnsafePointer[Float32, MutExternalOrigin], i0: Int, size: Int,
     stride_phi: Int, stride_theta: Int,
     w_phi0: Float32, w_phi1: Float32, w_theta0: Float32, w_theta1: Float32,
 ) -> Float32:
@@ -108,7 +109,7 @@ def _pl_lookup2(
     return v_t0 * w_theta0 + v_t1 * w_theta1
 
 def _pl_lookup3(
-    data: UnsafePointer[Float32, MutAnyOrigin], i0: Int, size: Int,
+    data: UnsafePointer[Float32, MutExternalOrigin], i0: Int, size: Int,
     stride_phi: Int, stride_theta: Int, stride_lambda: Int,
     w_phi0: Float32, w_phi1: Float32, w_theta0: Float32, w_theta1: Float32,
     w_lam0: Float32, w_lam1: Float32,
@@ -124,7 +125,7 @@ def _pl_lookup3(
 # ── Evaluate (util/sampling.h:1644-1700) ─────────────────────────────────────
 
 def _pl2d_eval0(
-    data: UnsafePointer[Float32, MutAnyOrigin], xs: Int, ys: Int,
+    data: UnsafePointer[Float32, MutExternalOrigin], xs: Int, ys: Int,
     px: Float32, py: Float32,
 ) -> Float32:
     """PiecewiseLinear2D<0>::Evaluate — no param axes (ndf/sigma)."""
@@ -147,10 +148,10 @@ def _pl2d_eval0(
     return (w0y * (w0x * v00 + w1x * v10) + w1y * (w0x * v01 + w1x * v11)) * inv_px * inv_py
 
 def _pl2d_eval2(
-    data: UnsafePointer[Float32, MutAnyOrigin], xs: Int, ys: Int,
+    data: UnsafePointer[Float32, MutExternalOrigin], xs: Int, ys: Int,
     stride_phi: Int, stride_theta: Int,
-    phi_i: UnsafePointer[Float32, MutAnyOrigin], n_phi: Int,
-    theta_i: UnsafePointer[Float32, MutAnyOrigin], n_theta: Int,
+    phi_i: UnsafePointer[Float32, MutExternalOrigin], n_phi: Int,
+    theta_i: UnsafePointer[Float32, MutExternalOrigin], n_theta: Int,
     px: Float32, py: Float32, phi_o: Float32, theta_o: Float32,
 ) -> Float32:
     """PiecewiseLinear2D<2>::Evaluate (luminance, in this port)."""
@@ -183,11 +184,11 @@ def _pl2d_eval2(
     return (w0y * (w0x * v00 + w1x * v10) + w1y * (w0x * v01 + w1x * v11)) * inv_px * inv_py
 
 def _pl2d_eval3(
-    data: UnsafePointer[Float32, MutAnyOrigin], xs: Int, ys: Int,
+    data: UnsafePointer[Float32, MutExternalOrigin], xs: Int, ys: Int,
     stride_phi: Int, stride_theta: Int, stride_lambda: Int,
-    phi_i: UnsafePointer[Float32, MutAnyOrigin], n_phi: Int,
-    theta_i: UnsafePointer[Float32, MutAnyOrigin], n_theta: Int,
-    wavelengths: UnsafePointer[Float32, MutAnyOrigin], n_lambda: Int,
+    phi_i: UnsafePointer[Float32, MutExternalOrigin], n_phi: Int,
+    theta_i: UnsafePointer[Float32, MutExternalOrigin], n_theta: Int,
+    wavelengths: UnsafePointer[Float32, MutExternalOrigin], n_lambda: Int,
     px: Float32, py: Float32, phi_o: Float32, theta_o: Float32, lam: Float32,
 ) -> Float32:
     """PiecewiseLinear2D<3>::Evaluate (spectra)."""
@@ -224,12 +225,12 @@ def _pl2d_eval3(
 # ── Sample (util/sampling.h:1446-1548) ───────────────────────────────────────
 
 def _pl2d_sample2(
-    data: UnsafePointer[Float32, MutAnyOrigin],
-    marg: UnsafePointer[Float32, MutAnyOrigin],
-    cond: UnsafePointer[Float32, MutAnyOrigin],
+    data: UnsafePointer[Float32, MutExternalOrigin],
+    marg: UnsafePointer[Float32, MutExternalOrigin],
+    cond: UnsafePointer[Float32, MutExternalOrigin],
     xs: Int, ys: Int, stride_phi: Int, stride_theta: Int,
-    phi_i: UnsafePointer[Float32, MutAnyOrigin], n_phi: Int,
-    theta_i: UnsafePointer[Float32, MutAnyOrigin], n_theta: Int,
+    phi_i: UnsafePointer[Float32, MutExternalOrigin], n_phi: Int,
+    theta_i: UnsafePointer[Float32, MutExternalOrigin], n_theta: Int,
     u0: Float32, u1: Float32, phi_o: Float32, theta_o: Float32,
 ) -> Tuple[Float32, Float32, Float32]:
     """PiecewiseLinear2D<2>::Sample -- returns (px, py, pdf). Used for vndf
@@ -338,12 +339,12 @@ def _pl2d_sample2(
 # ── Invert (util/sampling.h:1551-1638) ───────────────────────────────────────
 
 def _pl2d_invert2(
-    data: UnsafePointer[Float32, MutAnyOrigin],
-    marg: UnsafePointer[Float32, MutAnyOrigin],
-    cond: UnsafePointer[Float32, MutAnyOrigin],
+    data: UnsafePointer[Float32, MutExternalOrigin],
+    marg: UnsafePointer[Float32, MutExternalOrigin],
+    cond: UnsafePointer[Float32, MutExternalOrigin],
     xs: Int, ys: Int, stride_phi: Int, stride_theta: Int,
-    phi_i: UnsafePointer[Float32, MutAnyOrigin], n_phi: Int,
-    theta_i: UnsafePointer[Float32, MutAnyOrigin], n_theta: Int,
+    phi_i: UnsafePointer[Float32, MutExternalOrigin], n_phi: Int,
+    theta_i: UnsafePointer[Float32, MutExternalOrigin], n_theta: Int,
     px_in: Float32, py_in: Float32, phi_o: Float32, theta_o: Float32,
 ) -> Tuple[Float32, Float32, Float32]:
     """PiecewiseLinear2D<2>::Invert -- returns (ix, iy, pdf), the exact
@@ -404,7 +405,7 @@ def _pl2d_invert2(
 # formulas assume a z-up frame throughout (wo.z, SphericalTheta, etc).
 
 @always_inline
-def _measured_spherical_theta(w: SIMD[DType.float32, 3]) -> Float32:
+def _measured_spherical_theta(w: Vec3f) -> Float32:
     var cz = w[2]
     if cz < Float32(-1.0): cz = Float32(-1.0)
     if cz > Float32(1.0): cz = Float32(1.0)
@@ -412,17 +413,17 @@ def _measured_spherical_theta(w: SIMD[DType.float32, 3]) -> Float32:
 
 def _bxdf_eval_measured_core(
     isotropic: Int32,
-    vndf_data: UnsafePointer[Float32, MutAnyOrigin], vndf_marg: UnsafePointer[Float32, MutAnyOrigin], vndf_cond: UnsafePointer[Float32, MutAnyOrigin], vndf_xs: Int32, vndf_ys: Int32,
-    lum_data: UnsafePointer[Float32, MutAnyOrigin], lum_xs: Int32, lum_ys: Int32,
+    vndf_data: UnsafePointer[Float32, MutExternalOrigin], vndf_marg: UnsafePointer[Float32, MutExternalOrigin], vndf_cond: UnsafePointer[Float32, MutExternalOrigin], vndf_xs: Int32, vndf_ys: Int32,
+    lum_data: UnsafePointer[Float32, MutExternalOrigin], lum_xs: Int32, lum_ys: Int32,
     stride2_phi: Int32, stride2_theta: Int32,
-    spectra_data: UnsafePointer[Float32, MutAnyOrigin], spectra_xs: Int32, spectra_ys: Int32,
+    spectra_data: UnsafePointer[Float32, MutExternalOrigin], spectra_xs: Int32, spectra_ys: Int32,
     stride3_phi: Int32, stride3_theta: Int32, stride3_lambda: Int32,
-    ndf_data: UnsafePointer[Float32, MutAnyOrigin], ndf_xs: Int32, ndf_ys: Int32,
-    sigma_data: UnsafePointer[Float32, MutAnyOrigin], sigma_xs: Int32, sigma_ys: Int32,
-    phi_i: UnsafePointer[Float32, MutAnyOrigin], n_phi_i: Int32,
-    theta_i: UnsafePointer[Float32, MutAnyOrigin], n_theta_i: Int32,
-    wavelengths_tab: UnsafePointer[Float32, MutAnyOrigin], n_wavelengths: Int32,
-    wo_l: SIMD[DType.float32, 3], wi_l: SIMD[DType.float32, 3],
+    ndf_data: UnsafePointer[Float32, MutExternalOrigin], ndf_xs: Int32, ndf_ys: Int32,
+    sigma_data: UnsafePointer[Float32, MutExternalOrigin], sigma_xs: Int32, sigma_ys: Int32,
+    phi_i: UnsafePointer[Float32, MutExternalOrigin], n_phi_i: Int32,
+    theta_i: UnsafePointer[Float32, MutExternalOrigin], n_theta_i: Int32,
+    wavelengths_tab: UnsafePointer[Float32, MutExternalOrigin], n_wavelengths: Int32,
+    wo_l: Vec3f, wi_l: Vec3f,
     wavelengths: SampledWavelengths,
 ) -> Tuple[SpectralSample, Float32]:
     """MeasuredBxDF::f + PDF combined (bxdfs.cpp:999-1034, :1087-1120) —
@@ -535,13 +536,13 @@ def _bxdf_eval_measured_core(
 @always_inline
 def bxdf_eval_measured(
     mb: MeasuredBRDF_C,
-    wo_l: SIMD[DType.float32, 3], wi_l: SIMD[DType.float32, 3],
+    wo_l: Vec3f, wi_l: Vec3f,
     wavelengths: SampledWavelengths,
-    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin], spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin],
-    spectral_d65: UnsafePointer[Float32, MutAnyOrigin],
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
 ) -> Tuple[SpectralSample, Float32]:
     """Thin @always_inline wrapper: unpacks `mb`'s fields (a plain local
     read, never a by-value cross-call pass -- safe under inlining, per the
@@ -573,7 +574,7 @@ def bxdf_eval_measured(
 @always_inline
 def bxdf_pdf_measured(
     mb: MeasuredBRDF_C,
-    wo_l: SIMD[DType.float32, 3], wi_l: SIMD[DType.float32, 3],
+    wo_l: Vec3f, wi_l: Vec3f,
 ) -> Float32:
     """MeasuredBxDF::PDF alone (bxdfs.cpp:1087-1120), for MIS call sites that
     already have f from elsewhere and just need the competing pdf (NEE)."""
@@ -614,15 +615,15 @@ def bxdf_pdf_measured(
 @always_inline
 def bxdf_sample_measured(
     mb: MeasuredBRDF_C,
-    wo_l: SIMD[DType.float32, 3],
+    wo_l: Vec3f,
     u0: Float32, u1: Float32,
     wavelengths: SampledWavelengths,
-    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin], spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin],
-    spectral_d65: UnsafePointer[Float32, MutAnyOrigin],
-) -> Tuple[SIMD[DType.float32, 3], RGB, Float32, Bool]:
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
+) -> Tuple[Vec3f, RGB, Float32, Bool]:
     """MeasuredBxDF::Sample_f (bxdfs.cpp:1036-1085) — returns (wi_l, f, pdf,
     valid). wo_l is LOCAL-frame; wi_l is returned in the SAME local frame
     (caller transforms back to world, matching bxdf_sample_conductor's own
@@ -655,7 +656,7 @@ def bxdf_sample_measured(
         phi_m += phi_o
     var sin_theta_m = sin(theta_m)
     var cos_theta_m = cos(theta_m)
-    var wm = SIMD[DType.float32, 3](sin_theta_m * cos(phi_m), sin_theta_m * sin(phi_m), cos_theta_m)
+    var wm = Vec3f(sin_theta_m * cos(phi_m), sin_theta_m * sin(phi_m), cos_theta_m)
 
     var wo_dot_wm = dot(wo, wm)
     var wi = wm * (Float32(2.0) * wo_dot_wm) - wo
@@ -731,14 +732,14 @@ def bxdf_sample_measured(
 def _nee_weight_measured(
     ls: LightSample,
     mb: MeasuredBRDF_C,
-    tangent: SIMD[DType.float32, 3], bitangent: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3],
-    wo: SIMD[DType.float32, 3],
+    tangent: Vec3f, bitangent: Vec3f, normal: Vec3f,
+    wo: Vec3f,
     wavelengths: SampledWavelengths,
-    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin], spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin],
-    spectral_d65: UnsafePointer[Float32, MutAnyOrigin],
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
 ) -> RGB:
     """Measured's own version of _nee_weight_simple (bxdf.mojo) — can't share
     that function's flat (mat_kind, alb, alpha) signature since it needs the
@@ -758,8 +759,8 @@ def _nee_weight_measured(
     var cos_s = dot(normal, ls.wi)
     if cos_s <= Float32(0.0):
         return RGB(Float32(0.0))
-    var wo_l = SIMD[DType.float32, 3](dot(wo, tangent), dot(wo, bitangent), dot(wo, normal))
-    var wi_l = SIMD[DType.float32, 3](dot(ls.wi, tangent), dot(ls.wi, bitangent), dot(ls.wi, normal))
+    var wo_l = Vec3f(dot(wo, tangent), dot(wo, bitangent), dot(wo, normal))
+    var wi_l = Vec3f(dot(ls.wi, tangent), dot(ls.wi, bitangent), dot(ls.wi, normal))
     var (fr_spectral, pdf_bsdf) = bxdf_eval_measured(mb, wo_l, wi_l, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
     if fr_spectral.v0 <= Float32(0.0) and fr_spectral.v1 <= Float32(0.0) and fr_spectral.v2 <= Float32(0.0) and fr_spectral.v3 <= Float32(0.0):
         return RGB(Float32(0.0))

@@ -14,10 +14,10 @@ from .transform import transform_points
 # file exists for the pieces with real transform/construction logic worth
 # not reimplementing per format.
 
-def store_mesh(
-    s:       UnsafePointer[SceneParseState, MutAnyOrigin],
-    tmp_f:   UnsafePointer[Float32, MutAnyOrigin],
-    tmp_i:   UnsafePointer[Int32, MutAnyOrigin],
+def store_mesh[Of: Origin[mut=True], Oi: Origin[mut=True]](
+    s:       UnsafePointer[SceneParseState, MutExternalOrigin],
+    tmp_f:   UnsafePointer[Float32, Of],
+    tmp_i:   UnsafePointer[Int32, Oi],
     n_verts: Int32,
     n_tris:  Int32,
 ):

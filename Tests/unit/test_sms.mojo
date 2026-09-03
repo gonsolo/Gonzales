@@ -1,6 +1,6 @@
 from std.math import abs, sqrt
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import dot, cross
+from gonzales.geometry import dot, cross, Vec3f
 from gonzales.shading import _mnee_walk2
 from gonzales.sms import (
     sms_walk, sms_solve_bernoulli, SMSVertex, MAX_SMS_VERTICES,
@@ -11,12 +11,12 @@ from gonzales.rng import PCG32
 
 comptime EPS: Float32 = 1e-4
 
-def _flat_vert(pos: SIMD[DType.float32, 3], eta: Float32) -> SMSVertex:
+def _flat_vert(pos: Vec3f, eta: Float32) -> SMSVertex:
     return sms_vertex_flat(
         pos,
-        SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(1.0)),
-        SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0)),
-        SIMD[DType.float32, 3](Float32(0.0), Float32(1.0), Float32(0.0)),
+        Vec3f(Float32(0.0), Float32(0.0), Float32(1.0)),
+        Vec3f(Float32(1.0), Float32(0.0), Float32(0.0)),
+        Vec3f(Float32(0.0), Float32(1.0), Float32(0.0)),
         eta,
     )
 
@@ -24,7 +24,7 @@ def _empty_verts() -> InlineArray[SMSVertex, MAX_SMS_VERTICES]:
     return InlineArray[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
 
 def _snell_residual(
-    x0: SIMD[DType.float32, 3], xL: SIMD[DType.float32, 3],
+    x0: Vec3f, xL: Vec3f,
     verts: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int,
 ) -> Float32:
     """Max |tangential component of the generalized half-vector| across all
@@ -55,14 +55,14 @@ def _snell_residual(
 # regression check for that derivation, not just a smoke test.
 
 def test_sms_walk_n2_matches_mnee_walk2() raises:
-    var x0 = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
-    var x3 = SIMD[DType.float32, 3](Float32(0.2), Float32(-0.1), Float32(3.0))
-    var n1 = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(1.0))
-    var du = SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0))
-    var dv = SIMD[DType.float32, 3](Float32(0.0), Float32(1.0), Float32(0.0))
-    var x1_init = SIMD[DType.float32, 3](Float32(0.1), Float32(0.1), Float32(1.0))
+    var x0 = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
+    var x3 = Vec3f(Float32(0.2), Float32(-0.1), Float32(3.0))
+    var n1 = Vec3f(Float32(0.0), Float32(0.0), Float32(1.0))
+    var du = Vec3f(Float32(1.0), Float32(0.0), Float32(0.0))
+    var dv = Vec3f(Float32(0.0), Float32(1.0), Float32(0.0))
+    var x1_init = Vec3f(Float32(0.1), Float32(0.1), Float32(1.0))
     var eta1 = Float32(1.5)
-    var x2_init = SIMD[DType.float32, 3](Float32(0.15), Float32(0.05), Float32(2.0))
+    var x2_init = Vec3f(Float32(0.15), Float32(0.05), Float32(2.0))
     var eta2 = Float32(1.0) / Float32(1.5)
 
     var (ok2, x1_f2, x2_f2, bsdf2, jac2) = _mnee_walk2(
@@ -71,7 +71,8 @@ def test_sms_walk_n2_matches_mnee_walk2() raises:
     var verts = _empty_verts()
     verts[0] = _flat_vert(x1_init, eta1)
     verts[1] = _flat_vert(x2_init, eta2)
-    var (okn, posn, bsdfn, jacn) = sms_walk(x0, x3, verts, 2, du, dv)
+    var _r74 = sms_walk(x0, x3, verts, 2, du, dv)
+    var okn = _r74[0]; var posn = _r74[1].copy(); var bsdfn = _r74[2]; var jacn = _r74[3]
 
     assert_true(ok2 == okn)
     assert_true(ok2)
@@ -89,13 +90,14 @@ def test_sms_walk_n2_matches_mnee_walk2() raises:
 # outputs, rather than a golden numeric comparison.
 
 def test_sms_walk_n1_converges() raises:
-    var x0 = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
-    var xL = SIMD[DType.float32, 3](Float32(0.3), Float32(-0.2), Float32(4.0))
-    var du = SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0))
-    var dv = SIMD[DType.float32, 3](Float32(0.0), Float32(1.0), Float32(0.0))
+    var x0 = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
+    var xL = Vec3f(Float32(0.3), Float32(-0.2), Float32(4.0))
+    var du = Vec3f(Float32(1.0), Float32(0.0), Float32(0.0))
+    var dv = Vec3f(Float32(0.0), Float32(1.0), Float32(0.0))
     var verts = _empty_verts()
-    verts[0] = _flat_vert(SIMD[DType.float32, 3](Float32(0.1), Float32(0.1), Float32(1.0)), Float32(1.5))
-    var (ok, pos, bsdf, jac) = sms_walk(x0, xL, verts, 1, du, dv)
+    verts[0] = _flat_vert(Vec3f(Float32(0.1), Float32(0.1), Float32(1.0)), Float32(1.5))
+    var _r98 = sms_walk(x0, xL, verts, 1, du, dv)
+    var ok = _r98[0]; var pos = _r98[1].copy(); var bsdf = _r98[2]; var jac = _r98[3]
     assert_true(ok)
     verts[0].pos = pos[0]
     assert_true(_snell_residual(x0, xL, verts, 1) < Float32(1e-3))
@@ -109,15 +111,16 @@ def test_sms_walk_n1_converges() raises:
     assert_true(jac >= Float32(0.0))
 
 def test_sms_walk_n3_converges() raises:
-    var x0 = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
-    var xL = SIMD[DType.float32, 3](Float32(0.3), Float32(-0.2), Float32(4.0))
-    var du = SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0))
-    var dv = SIMD[DType.float32, 3](Float32(0.0), Float32(1.0), Float32(0.0))
+    var x0 = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
+    var xL = Vec3f(Float32(0.3), Float32(-0.2), Float32(4.0))
+    var du = Vec3f(Float32(1.0), Float32(0.0), Float32(0.0))
+    var dv = Vec3f(Float32(0.0), Float32(1.0), Float32(0.0))
     var verts = _empty_verts()
-    verts[0] = _flat_vert(SIMD[DType.float32, 3](Float32(0.08), Float32(0.05), Float32(1.0)), Float32(1.5))
-    verts[1] = _flat_vert(SIMD[DType.float32, 3](Float32(0.14), Float32(0.02), Float32(2.0)), Float32(1.0)/Float32(1.5))
-    verts[2] = _flat_vert(SIMD[DType.float32, 3](Float32(0.20), Float32(-0.05), Float32(3.0)), Float32(1.33))
-    var (ok, pos, bsdf, jac) = sms_walk(x0, xL, verts, 3, du, dv)
+    verts[0] = _flat_vert(Vec3f(Float32(0.08), Float32(0.05), Float32(1.0)), Float32(1.5))
+    verts[1] = _flat_vert(Vec3f(Float32(0.14), Float32(0.02), Float32(2.0)), Float32(1.0)/Float32(1.5))
+    verts[2] = _flat_vert(Vec3f(Float32(0.20), Float32(-0.05), Float32(3.0)), Float32(1.33))
+    var _r120 = sms_walk(x0, xL, verts, 3, du, dv)
+    var ok = _r120[0]; var pos = _r120[1].copy(); var bsdf = _r120[2]; var jac = _r120[3]
     assert_true(ok)
     for i in range(3):
         verts[i].pos = pos[i]
@@ -128,16 +131,17 @@ def test_sms_walk_n3_converges() raises:
     assert_true(jac >= Float32(0.0))
 
 def test_sms_walk_n4_converges() raises:
-    var x0 = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
-    var xL = SIMD[DType.float32, 3](Float32(0.3), Float32(-0.15), Float32(4.0))
-    var du = SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0))
-    var dv = SIMD[DType.float32, 3](Float32(0.0), Float32(1.0), Float32(0.0))
+    var x0 = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
+    var xL = Vec3f(Float32(0.3), Float32(-0.15), Float32(4.0))
+    var du = Vec3f(Float32(1.0), Float32(0.0), Float32(0.0))
+    var dv = Vec3f(Float32(0.0), Float32(1.0), Float32(0.0))
     var verts = _empty_verts()
-    verts[0] = _flat_vert(SIMD[DType.float32, 3](Float32(0.05), Float32(0.03), Float32(0.8)), Float32(1.5))
-    verts[1] = _flat_vert(SIMD[DType.float32, 3](Float32(0.10), Float32(0.01), Float32(1.6)), Float32(1.0)/Float32(1.5))
-    verts[2] = _flat_vert(SIMD[DType.float32, 3](Float32(0.16), Float32(-0.02), Float32(2.4)), Float32(1.33))
-    verts[3] = _flat_vert(SIMD[DType.float32, 3](Float32(0.22), Float32(-0.06), Float32(3.2)), Float32(1.0)/Float32(1.33))
-    var (ok, pos, bsdf, jac) = sms_walk(x0, xL, verts, 4, du, dv)
+    verts[0] = _flat_vert(Vec3f(Float32(0.05), Float32(0.03), Float32(0.8)), Float32(1.5))
+    verts[1] = _flat_vert(Vec3f(Float32(0.10), Float32(0.01), Float32(1.6)), Float32(1.0)/Float32(1.5))
+    verts[2] = _flat_vert(Vec3f(Float32(0.16), Float32(-0.02), Float32(2.4)), Float32(1.33))
+    verts[3] = _flat_vert(Vec3f(Float32(0.22), Float32(-0.06), Float32(3.2)), Float32(1.0)/Float32(1.33))
+    var _r140 = sms_walk(x0, xL, verts, 4, du, dv)
+    var ok = _r140[0]; var pos = _r140[1].copy(); var bsdf = _r140[2]; var jac = _r140[3]
     assert_true(ok)
     for i in range(4):
         verts[i].pos = pos[i]
@@ -154,11 +158,11 @@ def test_sms_walk_n4_converges() raises:
 # machinery specifically, independently of the flat-triangle fast paths.
 
 def test_sms_reproject_onto_sphere_snaps_exactly_and_frame_is_orthonormal() raises:
-    var center = SIMD[DType.float32, 3](Float32(1.0), Float32(2.0), Float32(-3.0))
+    var center = Vec3f(Float32(1.0), Float32(2.0), Float32(-3.0))
     var radius = Float32(2.5)
     # A point well off the sphere -- reprojection must snap it exactly onto
     # the surface, not just nudge it.
-    var raw = center + SIMD[DType.float32, 3](Float32(5.0), Float32(0.0), Float32(0.0))
+    var raw = center + Vec3f(Float32(5.0), Float32(0.0), Float32(0.0))
     var r = _sms_reproject_onto_sphere(raw, center, radius)
     var pos = r[0]; var normal = r[1]; var dp_du = r[2]; var dp_dv = r[3]
     var to_pos = pos - center
@@ -182,16 +186,17 @@ def test_sms_walk_sphere_n1_converges_and_stays_on_sphere() raises:
     without it. Radius/distance proportions are chosen to be comfortably
     inside the local Newton solve's basin of convergence (see the
     n=2 comment below for the case that ISN'T)."""
-    var center = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(3.5))
+    var center = Vec3f(Float32(0.0), Float32(0.0), Float32(3.5))
     var radius = Float32(2.0)
-    var x0 = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
-    var xL = SIMD[DType.float32, 3](Float32(0.3), Float32(-0.2), Float32(8.0))
-    var du = SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0))
-    var dv = SIMD[DType.float32, 3](Float32(0.0), Float32(1.0), Float32(0.0))
-    var seed_pos = center - SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), radius)
+    var x0 = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
+    var xL = Vec3f(Float32(0.3), Float32(-0.2), Float32(8.0))
+    var du = Vec3f(Float32(1.0), Float32(0.0), Float32(0.0))
+    var dv = Vec3f(Float32(0.0), Float32(1.0), Float32(0.0))
+    var seed_pos = center - Vec3f(Float32(0.0), Float32(0.0), radius)
     var verts = _empty_verts()
     verts[0] = sms_vertex_sphere(seed_pos, center, radius, Float32(1.5))
-    var (ok, pos, bsdf, jac) = sms_walk(x0, xL, verts, 1, du, dv)
+    var _r194 = sms_walk(x0, xL, verts, 1, du, dv)
+    var ok = _r194[0]; var pos = _r194[1].copy(); var bsdf = _r194[2]; var jac = _r194[3]
     assert_true(ok)
     var to_center = pos[0] - center
     var dist = sqrt(dot(to_center, to_center))
@@ -225,33 +230,33 @@ def test_sms_eval_vertex_sphere_self_jacobian_matches_finite_difference() raises
     n=2 solid-sphere case diverging under an otherwise-exact Newton
     direction; see project_sms_restir_phase6 memory for the full
     derivation and the empirical trail that found it."""
-    var center = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
+    var center = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
     var radius = Float32(1.5)
-    var x0 = SIMD[DType.float32, 3](Float32(-6.0), Float32(0.0), Float32(0.0))
-    var xL = SIMD[DType.float32, 3](Float32(6.0), Float32(0.0), Float32(0.0))
+    var x0 = Vec3f(Float32(-6.0), Float32(0.0), Float32(0.0))
+    var xL = Vec3f(Float32(6.0), Float32(0.0), Float32(0.0))
     var ior = Float32(1.5)
-    var seed1 = SIMD[DType.float32, 3](Float32(-1.5), Float32(0.075), Float32(0.075))
-    var seed2 = SIMD[DType.float32, 3](Float32(1.5), Float32(0.075), Float32(0.075))
+    var seed1 = Vec3f(Float32(-1.5), Float32(0.075), Float32(0.075))
+    var seed2 = Vec3f(Float32(1.5), Float32(0.075), Float32(0.075))
     var verts = _empty_verts()
     verts[0] = sms_vertex_sphere(seed1, center, radius, ior)
     verts[1] = sms_vertex_sphere(seed2, center, radius, Float32(1.0) / ior)
     var ev0 = _sms_eval_vertex(x0, xL, verts, 2, 0)
 
     var eps = Float32(1e-3)
-    var vp = verts
+    var vp = verts.copy()
     vp[0] = sms_vertex_sphere(verts[0].pos + verts[0].dp_du * eps, center, radius, verts[0].eta)
     var evp = _sms_eval_vertex(x0, xL, vp, 2, 0)
-    var vm = verts
+    var vm = verts.copy()
     vm[0] = sms_vertex_sphere(verts[0].pos - verts[0].dp_du * eps, center, radius, verts[0].eta)
     var evm = _sms_eval_vertex(x0, xL, vm, 2, 0)
     var fd_du = (evp.cv - evm.cv) * (Float32(1.0) / (Float32(2.0) * eps))
     assert_true(abs(fd_du[0] - ev0.b[0]) < Float32(0.05))
     assert_true(abs(fd_du[1] - ev0.b[2]) < Float32(0.05))
 
-    vp = verts
+    vp = verts.copy()
     vp[0] = sms_vertex_sphere(verts[0].pos + verts[0].dp_dv * eps, center, radius, verts[0].eta)
     evp = _sms_eval_vertex(x0, xL, vp, 2, 0)
-    vm = verts
+    vm = verts.copy()
     vm[0] = sms_vertex_sphere(verts[0].pos - verts[0].dp_dv * eps, center, radius, verts[0].eta)
     evm = _sms_eval_vertex(x0, xL, vm, 2, 0)
     var fd_dv = (evp.cv - evm.cv) * (Float32(1.0) / (Float32(2.0) * eps))
@@ -285,19 +290,20 @@ def test_sms_walk_sphere_n2_solid_sphere_symmetric_case() raises:
     of each other through the sphere's own x=0 symmetry plane) has a
     solution that MUST be symmetric too -- an independent check that
     doesn't require deriving the closed-form answer."""
-    var center = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
+    var center = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
     var radius = Float32(1.5)
-    var x0 = SIMD[DType.float32, 3](Float32(-6.0), Float32(0.0), Float32(0.0))
-    var xL = SIMD[DType.float32, 3](Float32(6.0), Float32(0.0), Float32(0.0))
-    var du = SIMD[DType.float32, 3](Float32(0.0), Float32(1.0), Float32(0.0))
-    var dv = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(1.0))
+    var x0 = Vec3f(Float32(-6.0), Float32(0.0), Float32(0.0))
+    var xL = Vec3f(Float32(6.0), Float32(0.0), Float32(0.0))
+    var du = Vec3f(Float32(0.0), Float32(1.0), Float32(0.0))
+    var dv = Vec3f(Float32(0.0), Float32(0.0), Float32(1.0))
     var ior = Float32(1.5)
-    var seed1 = SIMD[DType.float32, 3](Float32(-1.5), Float32(0.075), Float32(0.075))
-    var seed2 = SIMD[DType.float32, 3](Float32(1.5), Float32(0.075), Float32(0.075))
+    var seed1 = Vec3f(Float32(-1.5), Float32(0.075), Float32(0.075))
+    var seed2 = Vec3f(Float32(1.5), Float32(0.075), Float32(0.075))
     var verts = _empty_verts()
     verts[0] = sms_vertex_sphere(seed1, center, radius, ior)
     verts[1] = sms_vertex_sphere(seed2, center, radius, Float32(1.0) / ior)
-    var (ok, pos, bsdf, jac) = sms_walk(x0, xL, verts, 2, du, dv)
+    var _r300 = sms_walk(x0, xL, verts, 2, du, dv)
+    var ok = _r300[0]; var pos = _r300[1].copy(); var bsdf = _r300[2]; var jac = _r300[3]
     assert_true(ok)
     var d0 = pos[0] - center; var dist0 = sqrt(dot(d0, d0))
     var d1 = pos[1] - center; var dist1 = sqrt(dot(d1, d1))
@@ -312,14 +318,15 @@ def test_sms_walk_sphere_n2_solid_sphere_symmetric_case() raises:
 # ── Degenerate input handling ────────────────────────────────────────────────
 
 def test_sms_walk_fails_on_coincident_points() raises:
-    var x0 = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
-    var xL = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(1.0))
-    var du = SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0))
-    var dv = SIMD[DType.float32, 3](Float32(0.0), Float32(1.0), Float32(0.0))
+    var x0 = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
+    var xL = Vec3f(Float32(0.0), Float32(0.0), Float32(1.0))
+    var du = Vec3f(Float32(1.0), Float32(0.0), Float32(0.0))
+    var dv = Vec3f(Float32(0.0), Float32(1.0), Float32(0.0))
     var verts = _empty_verts()
     # Vertex coincides with x0 -- wi length is zero, must fail cleanly, not NaN.
-    verts[0] = _flat_vert(SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0)), Float32(1.5))
-    var (ok, _pos, _bsdf, _jac) = sms_walk(x0, xL, verts, 1, du, dv)
+    verts[0] = _flat_vert(Vec3f(Float32(0.0), Float32(0.0), Float32(0.0)), Float32(1.5))
+    var _r322 = sms_walk(x0, xL, verts, 1, du, dv)
+    var ok = _r322[0]
     assert_true(not ok)
 
 # ── Random seeding + Bernoulli-trial estimator (5.2/5.3) ────────────────────
@@ -329,7 +336,7 @@ def test_sms_seed_jitter_stays_in_tangent_plane() raises:
     plane -- never off the flat triangle's normal direction, since the
     walk assumes a single flat surface throughout (no reprojection)."""
     var verts = _empty_verts()
-    var orig_pos = SIMD[DType.float32, 3](Float32(0.1), Float32(0.1), Float32(1.0))
+    var orig_pos = Vec3f(Float32(0.1), Float32(0.1), Float32(1.0))
     verts[0] = _flat_vert(orig_pos, Float32(1.5))
     var pcg = PCG32(UInt64(12345), UInt64(1))
     sms_seed_jitter(verts, 1, pcg, Float32(0.05))
@@ -342,16 +349,17 @@ def test_sms_solve_bernoulli_converges_on_unique_solution() raises:
     solution is essentially unique, so the very first re-seeded trial
     should almost always rediscover it -- trial_count should stay small,
     not run to the SMS_BERNOULLI_MAX_TRIALS bound."""
-    var x0 = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
-    var xL = SIMD[DType.float32, 3](Float32(0.3), Float32(-0.2), Float32(4.0))
-    var du = SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0))
-    var dv = SIMD[DType.float32, 3](Float32(0.0), Float32(1.0), Float32(0.0))
+    var x0 = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
+    var xL = Vec3f(Float32(0.3), Float32(-0.2), Float32(4.0))
+    var du = Vec3f(Float32(1.0), Float32(0.0), Float32(0.0))
+    var dv = Vec3f(Float32(0.0), Float32(1.0), Float32(0.0))
     var verts = _empty_verts()
-    verts[0] = _flat_vert(SIMD[DType.float32, 3](Float32(0.08), Float32(0.05), Float32(1.0)), Float32(1.5))
-    verts[1] = _flat_vert(SIMD[DType.float32, 3](Float32(0.14), Float32(0.02), Float32(2.0)), Float32(1.0)/Float32(1.5))
-    verts[2] = _flat_vert(SIMD[DType.float32, 3](Float32(0.20), Float32(-0.05), Float32(3.0)), Float32(1.33))
+    verts[0] = _flat_vert(Vec3f(Float32(0.08), Float32(0.05), Float32(1.0)), Float32(1.5))
+    verts[1] = _flat_vert(Vec3f(Float32(0.14), Float32(0.02), Float32(2.0)), Float32(1.0)/Float32(1.5))
+    verts[2] = _flat_vert(Vec3f(Float32(0.20), Float32(-0.05), Float32(3.0)), Float32(1.33))
     var pcg = PCG32(UInt64(777), UInt64(1))
-    var (ok, pos, bsdf, jac, trials) = sms_solve_bernoulli(x0, xL, verts, 3, du, dv, Float32(0.01), pcg)
+    var _r354 = sms_solve_bernoulli(x0, xL, verts, 3, du, dv, Float32(0.01), pcg)
+    var ok = _r354[0]; var pos = _r354[1].copy(); var bsdf = _r354[2]; var jac = _r354[3]; var trials = _r354[4]
     assert_true(ok)
     assert_true(bsdf > Float32(0.0))
     assert_true(jac >= Float32(0.0))
@@ -360,12 +368,12 @@ def test_sms_solve_bernoulli_converges_on_unique_solution() raises:
 
 def test_sms_same_solution_detects_match_and_mismatch() raises:
     var verts = _empty_verts()
-    var a = InlineArray[SIMD[DType.float32, 3], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 3](Float32(0.0)))
-    var b = InlineArray[SIMD[DType.float32, 3], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 3](Float32(0.0)))
-    a[0] = SIMD[DType.float32, 3](Float32(1.0), Float32(2.0), Float32(3.0))
-    b[0] = SIMD[DType.float32, 3](Float32(1.0), Float32(2.0), Float32(3.0))
+    var a = InlineArray[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
+    var b = InlineArray[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
+    a[0] = Vec3f(Float32(1.0), Float32(2.0), Float32(3.0))
+    b[0] = Vec3f(Float32(1.0), Float32(2.0), Float32(3.0))
     assert_true(sms_same_solution(a, b, 1))
-    b[0] = SIMD[DType.float32, 3](Float32(1.0), Float32(2.0), Float32(3.1))
+    b[0] = Vec3f(Float32(1.0), Float32(2.0), Float32(3.1))
     assert_true(not sms_same_solution(a, b, 1))
     _ = verts
 

@@ -36,7 +36,7 @@
 # scale-invariant between near/far solutions).
 
 from std.math import sqrt, abs
-from .geometry import RGB, dot, INV_PI
+from .geometry import RGB, dot, INV_PI, Vec3f
 from .reservoir import ReservoirState, reservoir_state_init
 from .sms import SMSVertex, MAX_SMS_VERTICES, sms_vertex_init, sms_walk
 
@@ -75,9 +75,9 @@ struct SMSReservoir(Copyable, Movable):
     ITS x0/light_point endpoints, which haven't moved."""
     var n_vertices:   Int32
     var verts:        InlineArray[SMSVertex, MAX_SMS_VERTICES]
-    var light_point:  SIMD[DType.float32, 3]
-    var ldp_du:       SIMD[DType.float32, 3]
-    var ldp_dv:       SIMD[DType.float32, 3]
+    var light_point:  Vec3f
+    var ldp_du:       Vec3f
+    var ldp_dv:       Vec3f
     var le:           RGB
     var bsdf_product: Float32
     var dx1_dxlight:  Float32
@@ -85,7 +85,7 @@ struct SMSReservoir(Copyable, Movable):
 
 @always_inline
 def sms_reservoir_init() -> SMSReservoir:
-    var z3 = SIMD[DType.float32, 3](Float32(0.0))
+    var z3 = Vec3f(Float32(0.0))
     return SMSReservoir(
         n_vertices=Int32(0),
         verts=InlineArray[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init()),
@@ -97,8 +97,8 @@ def sms_reservoir_init() -> SMSReservoir:
 
 @always_inline
 def sms_target_pdf(
-    hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3], alb: RGB,
-    first_vertex: SIMD[DType.float32, 3], first_normal: SIMD[DType.float32, 3],
+    hit_point: Vec3f, normal: Vec3f, alb: RGB,
+    first_vertex: Vec3f, first_normal: Vec3f,
     le: RGB, bsdf_product: Float32, dx1_dxlight: Float32,
 ) -> Float32:
     """GRIS target function p̂(x̂) for an SMS candidate (Hong et al. 2025
@@ -131,12 +131,12 @@ def sms_target_pdf(
 
 @always_inline
 def sms_shift(
-    dst_x0: SIMD[DType.float32, 3], dst_light_point: SIMD[DType.float32, 3],
-    dst_ldp_du: SIMD[DType.float32, 3], dst_ldp_dv: SIMD[DType.float32, 3],
-    src_x0: SIMD[DType.float32, 3], src_light_point: SIMD[DType.float32, 3],
-    src_ldp_du: SIMD[DType.float32, 3], src_ldp_dv: SIMD[DType.float32, 3],
+    dst_x0: Vec3f, dst_light_point: Vec3f,
+    dst_ldp_du: Vec3f, dst_ldp_dv: Vec3f,
+    src_x0: Vec3f, src_light_point: Vec3f,
+    src_ldp_du: Vec3f, src_ldp_dv: Vec3f,
     src_verts: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int,
-) -> Tuple[Bool, InlineArray[SIMD[DType.float32, 3], MAX_SMS_VERTICES], Float32, Float32]:
+) -> Tuple[Bool, InlineArray[Vec3f, MAX_SMS_VERTICES], Float32, Float32]:
     """Manifold shift (Hong et al. 2025 Section 5.2): reuse a neighbor's
     (`src`) admissible specular chain at the current pixel (`dst`) by
     re-walking it seeded from the neighbor's own solution, then verifying
@@ -156,39 +156,41 @@ def sms_shift(
     abs(dot(original_dir, base_dir) - 1.0) <= SMS_UNIQUENESS_THRESHOLD.
     Direction-based (not raw position distance) so the check is scale-
     invariant between near and far solutions."""
-    var zero_positions = InlineArray[SIMD[DType.float32, 3], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 3](Float32(0.0)))
+    var zero_positions = InlineArray[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
     var src_first = src_verts[0].pos
     var orig_dir_v = src_first - src_x0
     var orig_dir_len = sqrt(dot(orig_dir_v, orig_dir_v))
     if orig_dir_len < Float32(1e-8):
-        return (False, zero_positions, Float32(0.0), Float32(0.0))
+        return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
     var original_dir = orig_dir_v * (Float32(1.0) / orig_dir_len)
 
     # ── Forward shift: walk seeded from src's chain, into dst's domain ──
-    var (fwd_ok, fwd_pos, fwd_bsdf, fwd_jac) = sms_walk(
+    var _fwd = sms_walk(
         dst_x0, dst_light_point, src_verts, n, dst_ldp_du, dst_ldp_dv)
+    var fwd_ok = _fwd[0]; var fwd_pos = _fwd[1].copy(); var fwd_bsdf = _fwd[2]; var fwd_jac = _fwd[3]
     if not fwd_ok:
-        return (False, zero_positions, Float32(0.0), Float32(0.0))
+        return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
 
     # ── Backward verification: walk the shifted chain back into src's domain ──
-    var back_seed = src_verts
+    var back_seed = src_verts.copy()
     for i in range(n):
         back_seed[i].pos = fwd_pos[i]
-    var (back_ok, back_pos, _back_bsdf, _back_jac) = sms_walk(
+    var _back = sms_walk(
         src_x0, src_light_point, back_seed, n, src_ldp_du, src_ldp_dv)
+    var back_ok = _back[0]; var back_pos = _back[1].copy()
     if not back_ok:
-        return (False, zero_positions, Float32(0.0), Float32(0.0))
+        return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
 
     var base_dir_v = back_pos[0] - src_x0
     var base_dir_len = sqrt(dot(base_dir_v, base_dir_v))
     if base_dir_len < Float32(1e-8):
-        return (False, zero_positions, Float32(0.0), Float32(0.0))
+        return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
     var base_dir = base_dir_v * (Float32(1.0) / base_dir_len)
 
     if abs(dot(original_dir, base_dir) - Float32(1.0)) > SMS_UNIQUENESS_THRESHOLD:
-        return (False, zero_positions, Float32(0.0), Float32(0.0))
+        return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
 
-    return (True, fwd_pos, fwd_bsdf, fwd_jac)
+    return (True, fwd_pos^, fwd_bsdf, fwd_jac)
 
 @fieldwise_init
 struct SMSReservoirIO(TrivialRegisterPassable):
@@ -200,12 +202,12 @@ struct SMSReservoirIO(TrivialRegisterPassable):
     resolved reservoirs; `write` is this frame's target -- pipeline.mojo's
     render_interactive swaps which physical buffer is which each frame
     rather than copying, same convention as the DI/GI buffers."""
-    var read:  UnsafePointer[SMSReservoir, MutAnyOrigin]
-    var write: UnsafePointer[SMSReservoir, MutAnyOrigin]
+    var read:  UnsafePointer[SMSReservoir, MutExternalOrigin]
+    var write: UnsafePointer[SMSReservoir, MutExternalOrigin]
 
 @always_inline
 def sms_reservoir_io_null() -> SMSReservoirIO:
     return SMSReservoirIO(
-        read=UnsafePointer[SMSReservoir, MutAnyOrigin].unsafe_dangling(),
-        write=UnsafePointer[SMSReservoir, MutAnyOrigin].unsafe_dangling(),
+        read=UnsafePointer[SMSReservoir, MutExternalOrigin].unsafe_dangling(),
+        write=UnsafePointer[SMSReservoir, MutExternalOrigin].unsafe_dangling(),
     )

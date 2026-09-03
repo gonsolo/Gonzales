@@ -140,7 +140,7 @@ struct Scene(Movable):
             if Int(il.cdf_ptr) != 0:
                 il.cdf_ptr.free()
             _ = external_call["free_texture_rgb", Int32,
-                UnsafePointer[Float32, MutAnyOrigin]](il.pixels_ptr)
+                UnsafePointer[Float32, MutExternalOrigin]](il.pixels_ptr)
         # All List[T] fields are freed automatically after __del__ body.
 
     fn n_pixels(self) -> Int:
@@ -160,7 +160,7 @@ struct Scene(Movable):
             materialCount     = Int64(len(self.materials)),
             areaLights        = self.area_lights.unsafe_ptr(),
             areaLightCount    = Int64(len(self.area_lights)),
-            textures          = UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+            textures          = UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
             textureCount      = Int64(len(self.tex_filenames)),
             distantLights     = self.distant_lights.unsafe_ptr(),
             distantLightCount = Int64(len(self.distant_lights)),

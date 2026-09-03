@@ -1,6 +1,6 @@
 from std.math import abs
 from std.testing import assert_true, assert_false, TestSuite
-from gonzales.geometry import Point3f, Bounds3f
+from gonzales.geometry import Point3f, Bounds3f, Vec3f
 from gonzales.bvh import _equal_area_square_to_sphere
 from gonzales.guide import (
     guide_create, guide_free, guide_clone_empty, guide_merge, guide_refine,
@@ -21,10 +21,10 @@ def _bounds16() -> Bounds3f:
 # equal-area octahedral square, and one guaranteed to fall in quadrant 3
 # (u>=0.5, v>=0.5) — built by going through the square->sphere map directly
 # rather than guessing which raw (x,y,z) lands where.
-def _dir_q0() -> SIMD[DType.float32, 3]:
+def _dir_q0() -> Vec3f:
     return _equal_area_square_to_sphere(Float32(0.25), Float32(0.25))
 
-def _dir_q3() -> SIMD[DType.float32, 3]:
+def _dir_q3() -> Vec3f:
     return _equal_area_square_to_sphere(Float32(0.75), Float32(0.75))
 
 # ── null_guide / guide_is_active ─────────────────────────────────────────────

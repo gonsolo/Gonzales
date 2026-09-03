@@ -51,9 +51,9 @@ def ggx_vndf_pdf(cos_o: Float32, cos_wm: Float32, d: Float32, alpha: Float32) ->
 
 @always_inline
 def bxdf_eval_conductor_ggx(
-    n:     SIMD[DType.float32, 3],
-    wo:    SIMD[DType.float32, 3],
-    wi:    SIMD[DType.float32, 3],
+    n:     Vec3f,
+    wo:    Vec3f,
+    wi:    Vec3f,
     alpha: Float32,
     f0:    RGB,
 ) -> RGB:
@@ -73,9 +73,9 @@ def bxdf_eval_conductor_ggx(
 
 @always_inline
 def _ggx_conductor_shape_terms(
-    n:     SIMD[DType.float32, 3],
-    wo:    SIMD[DType.float32, 3],
-    wi:    SIMD[DType.float32, 3],
+    n:     Vec3f,
+    wo:    Vec3f,
+    wi:    Vec3f,
     alpha: Float32,
 ) -> Tuple[Bool, Float32, Float32]:
     """The wavelength-independent half of bxdf_eval_conductor_ggx's formula
@@ -107,9 +107,9 @@ def _ggx_conductor_shape_terms(
 
 @always_inline
 def bxdf_pdf_conductor_ggx(
-    n:     SIMD[DType.float32, 3],
-    wo:    SIMD[DType.float32, 3],
-    wi:    SIMD[DType.float32, 3],
+    n:     Vec3f,
+    wo:    Vec3f,
+    wi:    Vec3f,
     alpha: Float32,
 ) -> Float32:
     """Solid-angle PDF of VNDF-sampled GGX reflection landing at an arbitrary
@@ -152,7 +152,7 @@ def bxdf_is_delta(flags: Int8) -> Bool:
 #                    integrator does: throughput *= f * cos_wi / pdf
 @fieldwise_init
 struct BxDFSample(TrivialRegisterPassable):
-    var wi:       SIMD[DType.float32, 3]  # sampled incident direction (world-space)
+    var wi:       Vec3f  # sampled incident direction (world-space)
     var f:        RGB                      # BxDF value or throughput multiplier
     var pdf:      Float32                  # sampling PDF; 1.0 for delta BSDFs
     var flags:    Int8                     # BxDFFlags bitmask
@@ -168,12 +168,12 @@ struct BxDFSample(TrivialRegisterPassable):
 # eliminates the struct when all fields are inlined at @always_inline call sites.
 @fieldwise_init
 struct GeomContext(TrivialRegisterPassable):
-    var normal:     SIMD[DType.float32, 3]  # shading normal, faceforward to geo_normal
-    var geo_normal: SIMD[DType.float32, 3]  # geometric normal, faceforward to wo
-    var hit_point:  SIMD[DType.float32, 3]  # world-space surface hit point
-    var wo:         SIMD[DType.float32, 3]  # outgoing direction = -ray.direction
-    var tangent:    SIMD[DType.float32, 3]  # shading tangent (Frisvad frame)
-    var bitangent:  SIMD[DType.float32, 3]  # shading bitangent
+    var normal:     Vec3f  # shading normal, faceforward to geo_normal
+    var geo_normal: Vec3f  # geometric normal, faceforward to wo
+    var hit_point:  Vec3f  # world-space surface hit point
+    var wo:         Vec3f  # outgoing direction = -ray.direction
+    var tangent:    Vec3f  # shading tangent (Frisvad frame)
+    var bitangent:  Vec3f  # shading bitangent
     var alb:        RGB                      # surface albedo (texture or mat.albedo)
     var pixel_uv:   Float32                  # mip LOD footprint (0 on CPU path)
 
@@ -303,12 +303,12 @@ def bxdf_sample_coated_conductor(
 # (+normal for reflect, -normal for transmit; BxDFSample.flags says which).
 @always_inline
 def bxdf_sample_dielectric(
-    geom_normal: SIMD[DType.float32, 3],
-    ray_dir: SIMD[DType.float32, 3],
+    geom_normal: Vec3f,
+    ray_dir: Vec3f,
     ior: Float32,
     force_entering: Bool,   # bounce==0: trust physics (camera ray always from air)
     u_reflect: Float32,
-) -> Tuple[BxDFSample, SIMD[DType.float32, 3]]:
+) -> Tuple[BxDFSample, Vec3f]:
     var facing = dot(ray_dir, geom_normal) < Float32(0.0)
     var entering = facing or force_entering
     var normal = geom_normal if facing else -geom_normal
@@ -367,11 +367,11 @@ def bxdf_sample_dielectric(
 # slab interfaces: R' = 2R/(1+R) (PBRT thin-glass formula).
 @always_inline
 def bxdf_sample_thin_dielectric(
-    geom_normal: SIMD[DType.float32, 3],
-    ray_dir: SIMD[DType.float32, 3],
+    geom_normal: Vec3f,
+    ray_dir: Vec3f,
     ior: Float32,
     u_reflect: Float32,
-) -> Tuple[BxDFSample, SIMD[DType.float32, 3]]:
+) -> Tuple[BxDFSample, Vec3f]:
     var entering = dot(ray_dir, geom_normal) < Float32(0.0)
     var normal = geom_normal if entering else -geom_normal
     var cos_i = max(Float32(0.0), -dot(ray_dir, normal))
@@ -423,15 +423,15 @@ def bxdf_sample_diffuse(
 # so this returns them alongside the sample instead of folding NEE in here.
 @always_inline
 def bxdf_sample_diffuse_transmit(
-    normal: SIMD[DType.float32, 3],   # faceforward shading normal (to the ray)
+    normal: Vec3f,   # faceforward shading normal (to the ray)
     refl: RGB, trans: RGB,
     u_lobe: Float32, u1: Float32, u2: Float32,
-) -> Tuple[BxDFSample, SIMD[DType.float32, 3], RGB, Float32, Bool]:
+) -> Tuple[BxDFSample, Vec3f, RGB, Float32, Bool]:
     var pr = refl.luma()
     var pt = trans.luma()
     var total = pr + pt
     if total <= Float32(0.0):
-        var z = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
+        var z = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
         return (BxDFSample(z, RGB(Float32(0.0)), Float32(0.0), BxDFFlags.diffuse, Int8(0), Int8(0), Int8(0)),
             normal, RGB(Float32(0.0)), Float32(0.0), True)
 
@@ -465,9 +465,9 @@ def bxdf_eval_any(
     mat_kind: Int32,
     alb:      RGB,             # diffuse albedo, or conductor f0
     alpha:    Float32,         # conductor GGX roughness; unused for diffuse
-    n:        SIMD[DType.float32, 3],
-    wo:       SIMD[DType.float32, 3],
-    wi:       SIMD[DType.float32, 3],
+    n:        Vec3f,
+    wo:       Vec3f,
+    wi:       Vec3f,
 ) -> Tuple[RGB, Float32]:
     if mat_kind == Int32(1):
         return (bxdf_eval_conductor_ggx(n, wo, wi, alpha, alb), bxdf_pdf_conductor_ggx(n, wo, wi, alpha))
@@ -480,8 +480,8 @@ def _nee_weight_simple(
     mat_kind: Int32,
     alb:   RGB,
     alpha: Float32,
-    n:     SIMD[DType.float32, 3],
-    wo:    SIMD[DType.float32, 3],
+    n:     Vec3f,
+    wo:    Vec3f,
 ) -> RGB:
     """NEE contribution weight (throughput NOT yet applied — caller does
     `throughput * result`) for one LightSample against a diffuse or
@@ -510,8 +510,8 @@ def _nee_weight_coated_coat_lobe(
     ls:         LightSample,
     ior:        Float32,
     coat_alpha: Float32,
-    n:          SIMD[DType.float32, 3],
-    wo:         SIMD[DType.float32, 3],
+    n:          Vec3f,
+    wo:         Vec3f,
 ) -> RGB:
     """NEE contribution weight (throughput NOT applied) for ONE LightSample
     against a coateddiffuse/coated_conductor coat's own glossy dielectric
@@ -555,7 +555,7 @@ def _nee_weight_coated_diffuse_base(
     ls:  LightSample,
     alb: RGB,
     ior: Float32,
-    n:   SIMD[DType.float32, 3],
+    n:   Vec3f,
 ) -> RGB:
     """NEE contribution weight (throughput AND the walk's `beta` NOT
     applied — caller multiplies by both) for ONE LightSample against a
@@ -606,14 +606,14 @@ def bxdf_eval_any_spectral(
     mat_kind: Int32,
     alb:      RGB,             # diffuse albedo, or conductor f0
     alpha:    Float32,         # conductor GGX roughness; unused for diffuse
-    n:        SIMD[DType.float32, 3],
-    wo:       SIMD[DType.float32, 3],
-    wi:       SIMD[DType.float32, 3],
-    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin], spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin],
-    spectral_d65: UnsafePointer[Float32, MutAnyOrigin],
+    n:        Vec3f,
+    wo:       Vec3f,
+    wi:       Vec3f,
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
     wavelengths: SampledWavelengths,
 ) -> Tuple[SpectralSample, Float32]:
     var alb_spectral = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, alb.r, alb.g, alb.b, wavelengths)
@@ -634,13 +634,13 @@ def _nee_weight_simple_spectral(
     mat_kind: Int32,
     alb:   RGB,
     alpha: Float32,
-    n:     SIMD[DType.float32, 3],
-    wo:    SIMD[DType.float32, 3],
-    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin], spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin],
-    spectral_d65: UnsafePointer[Float32, MutAnyOrigin],
+    n:     Vec3f,
+    wo:    Vec3f,
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
     wavelengths: SampledWavelengths,
 ) -> SpectralSample:
     """Spectral counterpart of _nee_weight_simple — same formula, but the
@@ -669,13 +669,13 @@ def _nee_weight_simple_via_spectral(
     mat_kind: Int32,
     alb:   RGB,
     alpha: Float32,
-    n:     SIMD[DType.float32, 3],
-    wo:    SIMD[DType.float32, 3],
-    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin], spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin],
-    spectral_d65: UnsafePointer[Float32, MutAnyOrigin],
+    n:     Vec3f,
+    wo:    Vec3f,
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
     wavelengths: SampledWavelengths,
 ) -> RGB:
     """Stage 2c-3's actual behavior-changing entry point: evaluates the NEE

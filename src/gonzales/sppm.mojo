@@ -6,8 +6,8 @@
 from std.sys import has_accelerator
 from std.sys.info import size_of
 from std.gpu import block_idx, thread_idx, block_dim
-from std.gpu.host import DeviceContext, DeviceBuffer
-from std.algorithm import parallelize
+from max.gpu.host import DeviceContext, DeviceBuffer
+from max.algorithm import parallelize
 from std.math import sqrt, cos, sin, floor, log, exp, max, min, ceildiv
 from std.memory import alloc
 from std.atomic import Atomic
@@ -147,9 +147,9 @@ struct SPPMPhoton(TrivialRegisterPassable):
 @always_inline
 def _geom_normal(
     inter: Intersection_C,
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
-) -> SIMD[DType.float32, 3]:
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
+    instances: UnsafePointer[Instance_C, MutExternalOrigin] = UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
+) -> Vec3f:
     """Normalized geometric normal from triangle cross product. If this hit
     came from inside an instanced BLAS (primId.instanceIdx >= 0 — see
     bvh.mojo's traverse_bvh2_core type==6 branch), the mesh data is in that
@@ -163,14 +163,14 @@ def _geom_normal(
     elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
         mi = Int(inter.primId.id2 >> 32); bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
     else:
-        return SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0))
+        return Vec3f(Float32(0), Float32(1), Float32(0))
     var m = meshes[mi]
     var v0 = Int(m.vertexIndices[bv])
     var v1 = Int(m.vertexIndices[bv + 1])
     var v2 = Int(m.vertexIndices[bv + 2])
-    var p0 = SIMD[DType.float32, 3](m.points[v0*4], m.points[v0*4+1], m.points[v0*4+2])
-    var p1 = SIMD[DType.float32, 3](m.points[v1*4], m.points[v1*4+1], m.points[v1*4+2])
-    var p2 = SIMD[DType.float32, 3](m.points[v2*4], m.points[v2*4+1], m.points[v2*4+2])
+    var p0 = Vec3f(m.points[v0*4], m.points[v0*4+1], m.points[v0*4+2])
+    var p1 = Vec3f(m.points[v1*4], m.points[v1*4+1], m.points[v1*4+2])
+    var p2 = Vec3f(m.points[v2*4], m.points[v2*4+1], m.points[v2*4+2])
     var n = cross(p1 - p0, p2 - p0)
     if inter.primId.instanceIdx >= Int32(0):
         n = transform_normal_by_instance(instances[Int(inter.primId.instanceIdx)].worldToObj, n)
@@ -182,9 +182,9 @@ def _geom_normal(
 @always_inline
 def _shading_normal_at(
     inter: Intersection_C,
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
-) -> SIMD[DType.float32, 3]:
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
+    instances: UnsafePointer[Instance_C, MutExternalOrigin] = UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
+) -> Vec3f:
     """Barycentrically-interpolated SMOOTH shading normal at a triangle hit,
     falling back to the flat geometric normal when the mesh has no per-vertex
     normals. Refraction through a finely-tessellated curved surface (e.g. the
@@ -200,14 +200,14 @@ def _shading_normal_at(
     elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
         mi = Int(inter.primId.id2 >> 32); bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
     else:
-        return SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0))
+        return Vec3f(Float32(0), Float32(1), Float32(0))
     var m = meshes[mi]
     var v0 = Int(m.vertexIndices[bv])
     var v1 = Int(m.vertexIndices[bv + 1])
     var v2 = Int(m.vertexIndices[bv + 2])
-    var p0 = SIMD[DType.float32, 3](m.points[v0*4], m.points[v0*4+1], m.points[v0*4+2])
-    var p1 = SIMD[DType.float32, 3](m.points[v1*4], m.points[v1*4+1], m.points[v1*4+2])
-    var p2 = SIMD[DType.float32, 3](m.points[v2*4], m.points[v2*4+1], m.points[v2*4+2])
+    var p0 = Vec3f(m.points[v0*4], m.points[v0*4+1], m.points[v0*4+2])
+    var p1 = Vec3f(m.points[v1*4], m.points[v1*4+1], m.points[v1*4+2])
+    var p2 = Vec3f(m.points[v2*4], m.points[v2*4+1], m.points[v2*4+2])
     var gn = cross(p1 - p0, p2 - p0)
     if inter.primId.instanceIdx >= Int32(0):
         gn = transform_normal_by_instance(instances[Int(inter.primId.instanceIdx)].worldToObj, gn)
@@ -217,9 +217,9 @@ def _shading_normal_at(
     if Int(m.normals) <= 4:
         return gn
     var w0 = Float32(1.0) - inter.u - inter.v
-    var n0 = SIMD[DType.float32, 3](m.normals[v0*3], m.normals[v0*3+1], m.normals[v0*3+2])
-    var n1 = SIMD[DType.float32, 3](m.normals[v1*3], m.normals[v1*3+1], m.normals[v1*3+2])
-    var n2 = SIMD[DType.float32, 3](m.normals[v2*3], m.normals[v2*3+1], m.normals[v2*3+2])
+    var n0 = Vec3f(m.normals[v0*3], m.normals[v0*3+1], m.normals[v0*3+2])
+    var n1 = Vec3f(m.normals[v1*3], m.normals[v1*3+1], m.normals[v1*3+2])
+    var n2 = Vec3f(m.normals[v2*3], m.normals[v2*3+1], m.normals[v2*3+2])
     var sn = n0 * w0 + n1 * inter.u + n2 * inter.v
     if inter.primId.instanceIdx >= Int32(0):
         sn = transform_normal_by_instance(instances[Int(inter.primId.instanceIdx)].worldToObj, sn)
@@ -238,7 +238,7 @@ def _hash_cell(ix: Int, iy: Int, iz: Int) -> Int:
 
 
 @always_inline
-def _cosine_hemisphere_sample(n: SIMD[DType.float32, 3], u1: Float32, u2: Float32) -> SIMD[DType.float32, 3]:
+def _cosine_hemisphere_sample(n: Vec3f, u1: Float32, u2: Float32) -> Vec3f:
     """Cosine-weighted random direction in the hemisphere around normal n
     (Frisvad tangent frame, same construction used for area-light emission
     sampling in _sppm_photon_pass)."""
@@ -250,8 +250,8 @@ def _cosine_hemisphere_sample(n: SIMD[DType.float32, 3], u1: Float32, u2: Float3
     var sgn = Float32(1.0) if n[2] >= Float32(0.0) else Float32(-1.0)
     var a_tf = Float32(-1.0) / (sgn + n[2])
     var b_tf = n[0] * n[1] * a_tf
-    var tangent   = SIMD[DType.float32, 3](Float32(1.0) + sgn*n[0]*n[0]*a_tf, sgn*b_tf, -sgn*n[0])
-    var bitangent = SIMD[DType.float32, 3](b_tf, sgn + n[1]*n[1]*a_tf, -n[1])
+    var tangent   = Vec3f(Float32(1.0) + sgn*n[0]*n[0]*a_tf, sgn*b_tf, -sgn*n[0])
+    var bitangent = Vec3f(b_tf, sgn + n[1]*n[1]*a_tf, -n[1])
     var d = tangent * lx + bitangent * lz_loc + n * ly
     var dl = dot(d, d)
     if dl > Float32(0.0): d = d * (Float32(1.0) / sqrt(dl))
@@ -274,13 +274,13 @@ def _cosine_hemisphere_sample(n: SIMD[DType.float32, 3], u1: Float32, u2: Float3
 # differs, entirely at the call site.
 @always_inline
 def _dielectric_bounce(
-    ray_dir: SIMD[DType.float32, 3],
-    hit_point: SIMD[DType.float32, 3],
-    geom_normal: SIMD[DType.float32, 3],
+    ray_dir: Vec3f,
+    hit_point: Vec3f,
+    geom_normal: Vec3f,
     ior: Float32,
     bounce: Int,
     mut pcg: PCG32,
-) -> Tuple[SIMD[DType.float32, 3], SIMD[DType.float32, 3], Float32]:
+) -> Tuple[Vec3f, Vec3f, Float32]:
     var facing = dot(ray_dir, geom_normal) < Float32(0.0)
     var entering = facing
     if bounce == 0:
@@ -350,16 +350,16 @@ def sample_homogeneous_free_flight(med: Medium_C, t_surf: Float32, mut pcg: PCG3
 @fieldwise_init
 struct AreaLightSample(TrivialRegisterPassable):
     var light:  AreaLight_C
-    var point:  SIMD[DType.float32, 3]
-    var normal: SIMD[DType.float32, 3]
+    var point:  Vec3f
+    var normal: Vec3f
 
 @always_inline
 def sample_area_light_uniform(
-    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
-    meshes:     UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    areaLights: UnsafePointer[AreaLight_C, MutExternalOrigin],
+    meshes:     UnsafePointer[TriangleMesh_C, MutExternalOrigin],
     n_lights:   Int,
     mut pcg:    PCG32,
-    curves:     UnsafePointer[Curve_C, MutAnyOrigin] = UnsafePointer[Curve_C, MutAnyOrigin].unsafe_dangling(),
+    curves:     UnsafePointer[Curve_C, MutExternalOrigin] = UnsafePointer[Curve_C, MutExternalOrigin].unsafe_dangling(),
 ) -> AreaLightSample:
     """Uniformly picks one area light, then a point + geometric normal on
     it: a random triangle + barycentric point on a mesh light (kind==0,
@@ -376,7 +376,7 @@ def sample_area_light_uniform(
         var (q0, q1, r0, r1) = curve_piece_endpoints(curve, piece)
         var axis = q1 - q0
         var axis_len = sqrt(dot(axis, axis))
-        var axis_dir = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(1.0))
+        var axis_dir = Vec3f(Float32(0.0), Float32(0.0), Float32(1.0))
         if axis_len > Float32(1e-8):
             axis_dir = axis * (Float32(1.0) / axis_len)
         var ru1 = pcg.next_float(); var ru2 = pcg.next_float()
@@ -392,9 +392,9 @@ def sample_area_light_uniform(
     var ti = Int(pcg.next_uint() % UInt32(n_tris))
     var lb = ti * 3
     var lv0 = Int(lmesh.vertexIndices[lb]); var lv1 = Int(lmesh.vertexIndices[lb+1]); var lv2 = Int(lmesh.vertexIndices[lb+2])
-    var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
-    var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
-    var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
+    var lp0 = Vec3f(lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
+    var lp1 = Vec3f(lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
+    var lp2 = Vec3f(lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
     var ru1 = pcg.next_float(); var ru2 = pcg.next_float(); var sr1 = sqrt(ru1)
     var lp  = lp0*(Float32(1)-sr1) + lp1*(sr1*(Float32(1)-ru2)) + lp2*(sr1*ru2)
     var ln  = cross(lp1-lp0, lp2-lp0)
@@ -415,9 +415,9 @@ def sample_area_light_uniform(
 
 @always_inline
 def _sppm_update_medium(
-    ray_dir: SIMD[DType.float32, 3],
+    ray_dir: Vec3f,
     inter: Intersection_C,
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
     mat: Material_C,
     sd: SceneDescriptor2_C,
     hit: Point3f = Point3f(Float32(0)),
@@ -451,12 +451,12 @@ def _sppm_update_medium(
 def _sppm_trace_visible_point[use_gpu: Bool](
     sd:       SceneDescriptor2_C,
     mut pcg:  PCG32,
-    r2c:      UnsafePointer[Float32, MutAnyOrigin],
-    c2w:      UnsafePointer[Float32, MutAnyOrigin],
+    r2c:      UnsafePointer[Float32, MutExternalOrigin],
+    c2w:      UnsafePointer[Float32, MutExternalOrigin],
     px: Int, py: Int,
     pidx:     Int32,
     init_r2:  Float32,
-    scratch:  UnsafePointer[Intersection_C, MutAnyOrigin],
+    scratch:  UnsafePointer[Intersection_C, MutExternalOrigin],
 ) -> SPPMPixel:
     """Trace one primary ray for pixel (px,py), returning its visible point.
     Shared verbatim between the CPU driver (_sppm_camera_pass, [False]) and
@@ -634,7 +634,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # nothing to gather against and the ray must continue to find a
             # real (non-delta) VP downstream — same reasoning dielectric
             # bounces already use.
-            var gn_c: SIMD[DType.float32, 3]
+            var gn_c: Vec3f
             if inter.primId.type == Int8(4):
                 var sph_c = sd.spheres[Int(inter.primId.id1)]
                 gn_c = sphere_outward_normal(hit, sph_c.center).to_simd()
@@ -646,8 +646,8 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
             var gc_c = GeomContext(
                 normal=gn_c, geo_normal=gn_c, hit_point=hit.to_simd(), wo=wo_c,
-                tangent=SIMD[DType.float32, 3](frm_c.x.x, frm_c.x.y, frm_c.x.z),
-                bitangent=SIMD[DType.float32, 3](frm_c.y.x, frm_c.y.y, frm_c.y.z),
+                tangent=Vec3f(frm_c.x.x, frm_c.x.y, frm_c.x.z),
+                bitangent=Vec3f(frm_c.y.x, frm_c.y.y, frm_c.y.z),
                 alb=mat.albedo, pixel_uv=Float32(0),
             )
             var uc1 = pcg.next_float(); var uc2 = pcg.next_float()
@@ -702,7 +702,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # single-terminal-surface convention as diffuse/hair, via the
             # shared bxdf.mojo/measured_bxdf_eval.mojo interface
             # shading.mojo/bdpt.mojo already use.
-            var gn_m: SIMD[DType.float32, 3]
+            var gn_m: Vec3f
             if inter.primId.type == Int8(4):
                 var sph_m = sd.spheres[Int(inter.primId.id1)]
                 gn_m = sphere_outward_normal(hit, sph_m.center).to_simd()
@@ -738,12 +738,12 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     return vp
 
 def _sppm_camera_pass(
-    vps:        UnsafePointer[SPPMPixel, MutAnyOrigin],
+    vps:        UnsafePointer[SPPMPixel, MutExternalOrigin],
     n_pix:      Int,
     vp_samples: Int,
     fw:       Int32,
-    r2c:      UnsafePointer[Float32, MutAnyOrigin],
-    c2w:      UnsafePointer[Float32, MutAnyOrigin],
+    r2c:      UnsafePointer[Float32, MutExternalOrigin],
+    c2w:      UnsafePointer[Float32, MutExternalOrigin],
     sd:       SceneDescriptor2_C,
     init_r2:  Float32,
     seed:     UInt64,
@@ -782,9 +782,9 @@ def _sppm_camera_pass(
 
 def _sppm_store_photon[use_gpu: Bool](
     ph:          SPPMPhoton,
-    photons:     UnsafePointer[SPPMPhoton, MutAnyOrigin],
+    photons:     UnsafePointer[SPPMPhoton, MutExternalOrigin],
     max_photons: Int,
-    counter:     UnsafePointer[Int32, MutAnyOrigin],
+    counter:     UnsafePointer[Int32, MutExternalOrigin],
 ):
     """Reserve the next photon slot and store `ph` there, dropping it if the
     buffer is already full. Comptime-branches only on the slot-reservation
@@ -805,11 +805,11 @@ def _sppm_store_photon[use_gpu: Bool](
 def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     sd:               SceneDescriptor2_C,
     mut pcg:          PCG32,
-    scratch:          UnsafePointer[Intersection_C, MutAnyOrigin],
+    scratch:          UnsafePointer[Intersection_C, MutExternalOrigin],
     n_emit:           Int,
-    photons:          UnsafePointer[SPPMPhoton, MutAnyOrigin],
+    photons:          UnsafePointer[SPPMPhoton, MutExternalOrigin],
     max_photons:      Int,
-    counter:          UnsafePointer[Int32, MutAnyOrigin],
+    counter:          UnsafePointer[Int32, MutExternalOrigin],
     default_emit_med: Int32,
 ):
     """Emit one photon path from a random light (area, distant, or
@@ -1037,7 +1037,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             # (same bounce > 0 depth-0 double-count guard as diffuse) unless
             # the sampled lobe is a perfect-mirror delta, which just
             # continues the path — mirrors bdpt.mojo's light-path treatment.
-            var gn_c: SIMD[DType.float32, 3]
+            var gn_c: Vec3f
             if inter.primId.type == Int8(4):
                 var sph_c = sd.spheres[Int(inter.primId.id1)]
                 gn_c = sphere_outward_normal(hit, sph_c.center).to_simd()
@@ -1049,8 +1049,8 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
             var gc_c = GeomContext(
                 normal=gn_c, geo_normal=gn_c, hit_point=hit.to_simd(), wo=wo_c,
-                tangent=SIMD[DType.float32, 3](frm_c.x.x, frm_c.x.y, frm_c.x.z),
-                bitangent=SIMD[DType.float32, 3](frm_c.y.x, frm_c.y.y, frm_c.y.z),
+                tangent=Vec3f(frm_c.x.x, frm_c.x.y, frm_c.x.z),
+                bitangent=Vec3f(frm_c.y.x, frm_c.y.y, frm_c.y.z),
                 alb=mat.albedo, pixel_uv=Float32(0),
             )
             var uc1 = pcg.next_float(); var uc2 = pcg.next_float()
@@ -1094,7 +1094,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             # direction -- mirrors bdpt.mojo's light-path measured
             # treatment, via the same shared bxdf.mojo/measured_bxdf_eval.mojo
             # interface.
-            var gn_m: SIMD[DType.float32, 3]
+            var gn_m: Vec3f
             if inter.primId.type == Int8(4):
                 var sph_m = sd.spheres[Int(inter.primId.id1)]
                 gn_m = sphere_outward_normal(hit, sph_m.center).to_simd()
@@ -1106,10 +1106,10 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 break
             var wo_m = (-rd).to_simd()
             var frm_m = Frame.from_z(Vec3f(gn_m[0], gn_m[1], gn_m[2]))
-            var tangent_m = SIMD[DType.float32, 3](frm_m.x.x, frm_m.x.y, frm_m.x.z)
-            var bitangent_m = SIMD[DType.float32, 3](frm_m.y.x, frm_m.y.y, frm_m.y.z)
+            var tangent_m = Vec3f(frm_m.x.x, frm_m.x.y, frm_m.x.z)
+            var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
             var mb_m = sd.measuredBrdfs[Int(mat.measured_idx)]
-            var wo_l_m = SIMD[DType.float32, 3](dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, gn_m))
+            var wo_l_m = Vec3f(dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, gn_m))
             var uml1 = pcg.next_float(); var uml2 = pcg.next_float()
             var (wi_l_m, f_m, pdf_m, valid_m) = bxdf_sample_measured(mb_m, wo_l_m, uml1, uml2, ph_wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
             if not valid_m or pdf_m <= Float32(0):
@@ -1159,7 +1159,7 @@ def _sppm_has_sphere_lights(sd: SceneDescriptor2_C) -> Bool:
     return False
 
 def _sppm_photon_pass(
-    photons:      UnsafePointer[SPPMPhoton, MutAnyOrigin],
+    photons:      UnsafePointer[SPPMPhoton, MutExternalOrigin],
     n_emit:       Int,
     max_photons:  Int,
     sd:           SceneDescriptor2_C,
@@ -1211,14 +1211,14 @@ def _sppm_photon_pass(
 
 # ── Hash grid ─────────────────────────────────────────────────────────────────
 
-def _sppm_reset_grid_cell(heads: UnsafePointer[Int32, MutAnyOrigin], h: Int):
+def _sppm_reset_grid_cell(heads: UnsafePointer[Int32, MutExternalOrigin], h: Int):
     heads[h] = Int32(-1)
 
 
 def _sppm_insert_photon[use_gpu: Bool](
     k:        Int,
-    photons:  UnsafePointer[SPPMPhoton, MutAnyOrigin],
-    heads:    UnsafePointer[Int32, MutAnyOrigin],
+    photons:  UnsafePointer[SPPMPhoton, MutExternalOrigin],
+    heads:    UnsafePointer[Int32, MutExternalOrigin],
     inv_cell: Float32,
 ):
     """Insert stored photon `k` into the hash grid. Comptime-branches only on
@@ -1237,9 +1237,9 @@ def _sppm_insert_photon[use_gpu: Bool](
 
 
 def _build_grid(
-    photons:  UnsafePointer[SPPMPhoton, MutAnyOrigin],
+    photons:  UnsafePointer[SPPMPhoton, MutExternalOrigin],
     n_phot:   Int,
-    heads:    UnsafePointer[Int32, MutAnyOrigin],
+    heads:    UnsafePointer[Int32, MutExternalOrigin],
     inv_cell: Float32,
 ):
     @parameter
@@ -1260,10 +1260,10 @@ def _build_grid(
 # ── Gather + SPPM update ──────────────────────────────────────────────────────
 
 def _sppm_gather_one(
-    vps:      UnsafePointer[SPPMPixel, MutAnyOrigin],
+    vps:      UnsafePointer[SPPMPixel, MutExternalOrigin],
     i:        Int,
-    photons:  UnsafePointer[SPPMPhoton, MutAnyOrigin],
-    heads:    UnsafePointer[Int32, MutAnyOrigin],
+    photons:  UnsafePointer[SPPMPhoton, MutExternalOrigin],
+    heads:    UnsafePointer[Int32, MutExternalOrigin],
     inv_cell: Float32,
     sd:       SceneDescriptor2_C,
 ):
@@ -1344,10 +1344,10 @@ def _sppm_gather_one(
 
 
 def _gather_update(
-    vps:      UnsafePointer[SPPMPixel, MutAnyOrigin],
+    vps:      UnsafePointer[SPPMPixel, MutExternalOrigin],
     n_pix:    Int,
-    photons:  UnsafePointer[SPPMPhoton, MutAnyOrigin],
-    heads:    UnsafePointer[Int32, MutAnyOrigin],
+    photons:  UnsafePointer[SPPMPhoton, MutExternalOrigin],
+    heads:    UnsafePointer[Int32, MutExternalOrigin],
     inv_cell: Float32,
     sd:       SceneDescriptor2_C,
 ):
@@ -1372,8 +1372,8 @@ def _gather_update(
 def _sppm_vp_brdf(
     vp: SPPMPixel,
     sd: SceneDescriptor2_C,
-    vn: SIMD[DType.float32, 3],
-    wi: SIMD[DType.float32, 3],
+    vn: Vec3f,
+    wi: Vec3f,
 ) -> RGB:
     """Raw f_r(wo,wi) at a surface VP for NEE — dispatches on mat_kind, same
     "raw BRDF, cosine supplied externally via the caller's geom/cos_s/
@@ -1400,11 +1400,11 @@ def _sppm_vp_brdf(
         var mat_m = sd.materials[Int(vp.mat_idx)]
         var mb_m = sd.measuredBrdfs[Int(mat_m.measured_idx)]
         var frm_m = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
-        var tangent_m = SIMD[DType.float32, 3](frm_m.x.x, frm_m.x.y, frm_m.x.z)
-        var bitangent_m = SIMD[DType.float32, 3](frm_m.y.x, frm_m.y.y, frm_m.y.z)
+        var tangent_m = Vec3f(frm_m.x.x, frm_m.x.y, frm_m.x.z)
+        var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
         var wo_m = vp.wo.to_simd()
-        var wo_l_m = SIMD[DType.float32, 3](dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, vn))
-        var wi_l_m = SIMD[DType.float32, 3](dot(wi, tangent_m), dot(wi, bitangent_m), dot(wi, vn))
+        var wo_l_m = Vec3f(dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, vn))
+        var wi_l_m = Vec3f(dot(wi, tangent_m), dot(wi, bitangent_m), dot(wi, vn))
         var (fr_spec_m, _) = bxdf_eval_measured(mb_m, wo_l_m, wi_l_m, vp.wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
         var (r_m, g_m, b_m) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, fr_spec_m, vp.wavelengths)
         return RGB(r_m, g_m, b_m)
@@ -1414,8 +1414,8 @@ def _sppm_vp_brdf(
 def _sppm_nee_weight(
     vp: SPPMPixel,
     sd: SceneDescriptor2_C,
-    vn: SIMD[DType.float32, 3],
-    wo: SIMD[DType.float32, 3],
+    vn: Vec3f,
+    wo: Vec3f,
     ls: LightSample,
 ) -> RGB:
     """Dispatches one LightSample (bvh.mojo's shared distant/point/sphere/
@@ -1434,14 +1434,14 @@ def _sppm_nee_weight(
         var mat_m = sd.materials[Int(vp.mat_idx)]
         var mb_m = sd.measuredBrdfs[Int(mat_m.measured_idx)]
         var frm_m = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
-        var tangent_m = SIMD[DType.float32, 3](frm_m.x.x, frm_m.x.y, frm_m.x.z)
-        var bitangent_m = SIMD[DType.float32, 3](frm_m.y.x, frm_m.y.y, frm_m.y.z)
+        var tangent_m = Vec3f(frm_m.x.x, frm_m.x.y, frm_m.x.z)
+        var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
         return _nee_weight_measured(ls, mb_m, tangent_m, bitangent_m, vn, wo, vp.wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
     var mat_kind_simple = Int32(1) if vp.mat_kind == Int32(1) else Int32(0)
     return _nee_weight_simple_via_spectral(ls, mat_kind_simple, vp.alb, vp.alpha, vn, wo, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths)
 
 @always_inline
-def _sppm_vp_shadow_eps(vp: SPPMPixel, sd: SceneDescriptor2_C, wo: SIMD[DType.float32, 3]) -> Float32:
+def _sppm_vp_shadow_eps(vp: SPPMPixel, sd: SceneDescriptor2_C, wo: Vec3f) -> Float32:
     """Shadow-ray self-intersection offset for a stored SPPM visible point.
     Hair vertices need the same curve-radius-scaled epsilon as the ray-bounce
     offsets in shading.mojo/bdpt.mojo/sppm.mojo's own photon pass (see
@@ -1455,7 +1455,7 @@ def _sppm_vp_shadow_eps(vp: SPPMPixel, sd: SceneDescriptor2_C, wo: SIMD[DType.fl
     return Float32(0.0001)
 
 def _sppm_nee_one(
-    vps:     UnsafePointer[SPPMPixel, MutAnyOrigin],
+    vps:     UnsafePointer[SPPMPixel, MutExternalOrigin],
     i:       Int,
     sd:      SceneDescriptor2_C,
     mut pcg: PCG32,
@@ -1588,7 +1588,7 @@ def _sppm_nee_one(
 
 
 def _sppm_nee_update(
-    vps:     UnsafePointer[SPPMPixel, MutAnyOrigin],
+    vps:     UnsafePointer[SPPMPixel, MutExternalOrigin],
     n_vps:   Int,
     sd:      SceneDescriptor2_C,
     seed:    UInt64,
@@ -1610,7 +1610,7 @@ def _sppm_nee_update(
 
 @always_inline
 def _sppm_finalize_albedo_one_pixel(
-    vps:        UnsafePointer[SPPMPixel, MutAnyOrigin],
+    vps:        UnsafePointer[SPPMPixel, MutExternalOrigin],
     i:          Int,
     vp_samples: Int,
 ) -> RGB:
@@ -1630,7 +1630,7 @@ def _sppm_finalize_albedo_one_pixel(
     return acc / Float32(vp_samples)
 
 def _sppm_finalize_one_pixel(
-    vps:        UnsafePointer[SPPMPixel, MutAnyOrigin],
+    vps:        UnsafePointer[SPPMPixel, MutExternalOrigin],
     i:          Int,
     vp_samples: Int,
     n_passes:   Int32,
@@ -1682,13 +1682,13 @@ def _sppm_finalize_one_pixel(
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def _sppm_render_core(
-    psc:      UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
+    psc:      UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
     sd:       SceneDescriptor2_C,
     n_passes: Int,
     n_photons_per_pass: Int,
     initial_radius: Float32,
     verbose:  Bool,
-) -> Tuple[Bool, UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Float32, MutAnyOrigin]]:
+) -> Tuple[Bool, UnsafePointer[Float32, MutExternalOrigin], UnsafePointer[Float32, MutExternalOrigin]]:
     """Stochastic Progressive Photon Mapping main loop, factored out of
     `sppm_render` so the CPU driver's aux-buffer/denoise/write tail is a
     separate, reusable step. Returns (ok, pixels, albedo_pixels) --
@@ -1704,8 +1704,8 @@ def _sppm_render_core(
 
     if Int(sd.areaLightCount) + Int(sd.distantLightCount) + Int(sd.infiniteLightCount) + Int(sd.pointLightCount) == 0 and not _sppm_has_sphere_lights(sd):
         print("SPPM: no lights in scene, cannot emit photons")
-        return Tuple[Bool, UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Float32, MutAnyOrigin]](
-            False, UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(), UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling())
+        return Tuple[Bool, UnsafePointer[Float32, MutExternalOrigin], UnsafePointer[Float32, MutExternalOrigin]](
+            False, UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling())
 
     print("SPPM: " + String(fw) + "x" + String(fh)
           + " " + String(n_passes) + " passes x "
@@ -1785,11 +1785,11 @@ def _sppm_render_core(
     heads.free()
     photons.free()
     vps.free()
-    return Tuple[Bool, UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Float32, MutAnyOrigin]](
+    return Tuple[Bool, UnsafePointer[Float32, MutExternalOrigin], UnsafePointer[Float32, MutExternalOrigin]](
         True, out_pixels, albedo_pixels)
 
 def sppm_render(
-    psc:      UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
+    psc:      UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
     sd:       SceneDescriptor2_C,
     n_passes: Int,
     n_photons_per_pass: Int,
@@ -1826,563 +1826,3 @@ def sppm_render(
     out_pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
     return Int32(0)
 
-
-# ── GPU kernels ───────────────────────────────────────────────────────────────
-# Each kernel is a thin wrapper: compute this thread's index, build a complete
-# SceneDescriptor2_C via _mk_sd_full (bvh.mojo), then call the EXACT SAME
-# shared function the CPU driver above calls (comptime[use_gpu]-branching
-# only at the two genuine concurrency-primitive divergence points: photon-
-# slot reservation and hash-grid bucket insertion) — mirrors bdpt.mojo's
-# GPU kernels, deliberately unlike the old gpu_sppm.mojo (a full duplicate
-# reimplementation).
-
-def sppm_reset_i32_gpu(counter: UnsafePointer[Int32, MutAnyOrigin]):
-    if block_idx.x == 0 and thread_idx.x == 0:
-        counter[0] = Int32(0)
-
-
-def sppm_gen_vp_gpu(
-    vps: UnsafePointer[SPPMPixel, MutAnyOrigin],
-    inter_scratch: UnsafePointer[Intersection_C, MutAnyOrigin],
-    n_pix: Int,
-    vp_samples: Int,
-    fw: Int32,
-    r2c: UnsafePointer[Float32, MutAnyOrigin],
-    c2w: UnsafePointer[Float32, MutAnyOrigin],
-    init_r2: Float32,
-    seed: UInt64,
-    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
-    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    materials: UnsafePointer[Material_C, MutAnyOrigin],
-    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
-    areaLightCount: Int64,
-    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
-    sphereCount: Int64,
-    curves: UnsafePointer[Curve_C, MutAnyOrigin],
-    curveCount: Int64,
-    mediums: UnsafePointer[Medium_C, MutAnyOrigin],
-    mediumCount: Int64,
-    mediumInterfaces: UnsafePointer[MediumInterface_C, MutAnyOrigin],
-    mediumIfaceCount: Int64,
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
-    blasCount: Int64,
-    instances: UnsafePointer[Instance_C, MutAnyOrigin],
-    instanceCount: Int64,
-    distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin],
-    distantLightCount: Int64,
-    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
-    infiniteLightCount: Int64,
-    gpuTextures: UnsafePointer[GpuTexture_C, MutAnyOrigin] = UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(),
-    gpuTextureCount: Int64 = Int64(0),
-):
-    """One thread per (pixel, vp_sample). Calls the SAME
-    _sppm_trace_visible_point the CPU driver (_sppm_camera_pass) calls,
-    with use_gpu=True (task #151: real image-texture reflectance)."""
-    var combined = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if combined >= n_pix * vp_samples:
-        return
-    var pix = combined // vp_samples
-    var px = pix % Int(fw)
-    var py = pix // Int(fw)
-    var sd = _mk_sd_full(
-        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
-        areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
-        mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
-        blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
-        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
-        gpuTextures=gpuTextures, gpuTextureCount=gpuTextureCount,
-    )
-    var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
-    vps[combined] = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch + combined)
-
-
-def sppm_emit_photons_gpu(
-    photons: UnsafePointer[SPPMPhoton, MutAnyOrigin],
-    n_emit: Int,
-    max_photons: Int,
-    inter_scratch: UnsafePointer[Intersection_C, MutAnyOrigin],
-    stored_counter: UnsafePointer[Int32, MutAnyOrigin],
-    default_emit_med: Int32,
-    seed: UInt64,
-    pass_idx: Int,
-    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
-    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    materials: UnsafePointer[Material_C, MutAnyOrigin],
-    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
-    areaLightCount: Int64,
-    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
-    sphereCount: Int64,
-    curves: UnsafePointer[Curve_C, MutAnyOrigin],
-    curveCount: Int64,
-    mediums: UnsafePointer[Medium_C, MutAnyOrigin],
-    mediumCount: Int64,
-    mediumInterfaces: UnsafePointer[MediumInterface_C, MutAnyOrigin],
-    mediumIfaceCount: Int64,
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
-    blasCount: Int64,
-    instances: UnsafePointer[Instance_C, MutAnyOrigin],
-    instanceCount: Int64,
-    distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin],
-    distantLightCount: Int64,
-    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
-    infiniteLightCount: Int64,
-    pointLights: UnsafePointer[PointLight_C, MutAnyOrigin],
-    pointLightCount: Int64,
-    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    spectral_res: Int = 0,
-    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
-    measuredBrdfCount: Int64 = Int64(0),
-    gpuTextures: UnsafePointer[GpuTexture_C, MutAnyOrigin] = UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(),
-    gpuTextureCount: Int64 = Int64(0),
-):
-    """One thread per emitted photon path. Calls the SAME _sppm_trace_photon
-    the CPU driver (_sppm_photon_pass) calls, with use_gpu=True so
-    _sppm_store_photon reserves its slot via an atomic fetch-add (CPU uses a
-    plain counter increment instead — no other difference), and tex_gpu=True
-    since this kernel genuinely runs on the GPU (task #151 -- see
-    _sppm_trace_photon's docstring for why these are separate params). The
-    spectral/measured params are new (measured BxDF support, see
-    project_measured_bxdf memory): _sppm_trace_photon's measured branch
-    calls bxdf_sample_measured, which needs both a valid spectral table
-    (for the RGB conversion) and the measured-BRDF array -- unlike this
-    kernel's other materials, which only draw a wavelength via PCG and
-    never dereference sd.spectral."""
-    var k = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if k >= n_emit or (areaLightCount == Int64(0) and distantLightCount == Int64(0) and infiniteLightCount == Int64(0) and pointLightCount == Int64(0)):
-        return
-    var sd = _mk_sd_full(
-        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
-        areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
-        mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
-        blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
-        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
-        pointLights, pointLightCount,
-        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-        measuredBrdfs, measuredBrdfCount,
-        gpuTextures, gpuTextureCount,
-    )
-    var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
-    _sppm_trace_photon[True, True](sd, pcg, inter_scratch + k, n_emit, photons, max_photons, stored_counter, default_emit_med)
-
-
-def sppm_grid_reset_gpu(heads: UnsafePointer[Int32, MutAnyOrigin], hsize: Int):
-    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= hsize:
-        return
-    _sppm_reset_grid_cell(heads, tid)
-
-
-def sppm_grid_insert_gpu(
-    photons:  UnsafePointer[SPPMPhoton, MutAnyOrigin],
-    n_stored: Int,
-    heads:    UnsafePointer[Int32, MutAnyOrigin],
-    inv_cell: Float32,
-):
-    var k = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if k >= n_stored:
-        return
-    _sppm_insert_photon[True](k, photons, heads, inv_cell)
-
-
-def sppm_gather_gpu(
-    vps:      UnsafePointer[SPPMPixel, MutAnyOrigin],
-    n_pix:    Int,
-    photons:  UnsafePointer[SPPMPhoton, MutAnyOrigin],
-    heads:    UnsafePointer[Int32, MutAnyOrigin],
-    inv_cell: Float32,
-    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
-    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    materials: UnsafePointer[Material_C, MutAnyOrigin],
-    curves: UnsafePointer[Curve_C, MutAnyOrigin],
-    curveCount: Int64,
-    instances: UnsafePointer[Instance_C, MutAnyOrigin],
-    instanceCount: Int64,
-    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    spectral_res: Int = 0,
-    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
-    measuredBrdfCount: Int64 = Int64(0),
-):
-    """One thread per visible point. `sd` here only needs to be complete
-    enough for _sppm_gather_one's hair branch (sd.materials/sd.curves) —
-    plus, since measured BxDF support was added (see project_measured_bxdf
-    memory), its mat_kind=3 branch too (sd.measuredBrdfs + sd.spectral,
-    via _sppm_vp_brdf). Other SceneDescriptor2_C fields it builds are still
-    unused by gather, so stay zeroed/dangling exactly like sppm_nee_gpu's
-    own _mk_sd_full call."""
-    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if i >= n_pix:
-        return
-    var sd = _mk_sd_full(
-        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
-        UnsafePointer[AreaLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(), Int64(0), curves, curveCount,
-        UnsafePointer[Medium_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[MediumInterface_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(), Int64(0),
-        instances, instanceCount,
-        UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[InfiniteLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-        measuredBrdfs, measuredBrdfCount,
-    )
-    _sppm_gather_one(vps, i, photons, heads, inv_cell, sd)
-
-
-def sppm_nee_gpu(
-    vps:    UnsafePointer[SPPMPixel, MutAnyOrigin],
-    n_vps:  Int,
-    seed:   UInt64,
-    pass_idx: Int,
-    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
-    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    materials: UnsafePointer[Material_C, MutAnyOrigin],
-    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
-    areaLightCount: Int64,
-    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
-    sphereCount: Int64,
-    curves: UnsafePointer[Curve_C, MutAnyOrigin],
-    curveCount: Int64,
-    mediums: UnsafePointer[Medium_C, MutAnyOrigin],
-    mediumCount: Int64,
-    mediumInterfaces: UnsafePointer[MediumInterface_C, MutAnyOrigin],
-    mediumIfaceCount: Int64,
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
-    blasCount: Int64,
-    instances: UnsafePointer[Instance_C, MutAnyOrigin],
-    instanceCount: Int64,
-    distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin],
-    distantLightCount: Int64,
-    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
-    infiniteLightCount: Int64,
-    pointLights: UnsafePointer[PointLight_C, MutAnyOrigin],
-    pointLightCount: Int64,
-    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    spectral_res: Int = 0,
-    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
-    measuredBrdfCount: Int64 = Int64(0),
-):
-    """One thread per visible point. Calls the SAME _sppm_nee_one the CPU
-    driver (_sppm_nee_update) calls. The only one of SPPM's 4 GPU kernels
-    that needs the spectral device buffers (staged spectral rendering
-    rollout, Stage 4 -- see project_spectral_rendering memory): VP
-    generation and the photon pass sample their own wavelengths via PCG
-    only (no table lookup needed to draw a wavelength), and the gather pass
-    stays RGB by design (see _sppm_gather_one's docstring) -- only this
-    NEE pass's direct-lighting term actually dereferences sd.spectral."""
-    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if i >= n_vps:
-        return
-    var sd = _mk_sd_full(
-        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
-        areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
-        mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
-        blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
-        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
-        pointLights, pointLightCount,
-        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-        measuredBrdfs, measuredBrdfCount,
-    )
-    var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + i), UInt64(11))
-    _sppm_nee_one(vps, i, sd, pcg)
-
-
-def sppm_finalize_gpu(
-    vps:        UnsafePointer[SPPMPixel, MutAnyOrigin],
-    n_pix:      Int,
-    vp_samples: Int,
-    n_passes:   Int32,
-    iso_scale:  Float32,
-    max_comp:   Float32,
-    out_pixels: UnsafePointer[Float32, MutAnyOrigin],
-    albedo_out: UnsafePointer[Float32, MutAnyOrigin],
-):
-    """One thread per pixel. Calls the SAME _sppm_finalize_one_pixel the CPU
-    driver (sppm_render's tail loop) calls, plus the matching albedo AOV
-    average for the denoiser (staged along with the rest of Stage 4-adjacent
-    denoiser wiring — see project_spectral_rendering memory)."""
-    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if i >= n_pix:
-        return
-    var acc = _sppm_finalize_one_pixel(vps, i, vp_samples, n_passes, iso_scale, max_comp)
-    out_pixels[i * 3 + 0] = acc.r
-    out_pixels[i * 3 + 1] = acc.g
-    out_pixels[i * 3 + 2] = acc.b
-    var alb = _sppm_finalize_albedo_one_pixel(vps, i, vp_samples)
-    albedo_out[i * 3 + 0] = alb.r
-    albedo_out[i * 3 + 1] = alb.g
-    albedo_out[i * 3 + 2] = alb.b
-
-
-# ── GPU host driver ───────────────────────────────────────────────────────────
-
-def sppm_render_gpu(
-    handlePtr: UnsafePointer[GpuSceneHandle, MutAnyOrigin],
-    psc:      UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
-    sd:       SceneDescriptor2_C,
-    n_passes: Int,
-    n_photons_per_pass: Int,
-    initial_radius: Float32,
-    no_denoise: Bool,
-    verbose:  Bool,
-) -> Int32:
-    """GPU-accelerated Stochastic Progressive Photon Mapping — same algorithm
-    as sppm_render, parallelized: one thread per visible-point sample for the
-    camera pass/gather/NEE/finalize, one thread per emitted photon for the
-    photon pass, atomic-exchange hash-grid build (classic parallel linked-list
-    insertion). Mirrors vcm_render_gpu's per-pass reset-counter -> emit ->
-    sync+readback+clamp -> consume shape."""
-    if Int(sd.areaLightCount) + Int(sd.distantLightCount) + Int(sd.infiniteLightCount) + Int(sd.pointLightCount) == 0 and not _sppm_has_sphere_lights(sd):
-        print("SPPM: no lights in scene, cannot emit photons")
-        return Int32(-1)
-
-    var fw = Int(psc[0].film_w)
-    var fh = Int(psc[0].film_h)
-    var n_pix = fw * fh
-    var iso_scale = psc[0].film_iso / Float32(100)
-    var max_comp = psc[0].film_max_comp
-
-    print("SPPM (GPU): " + String(fw) + "x" + String(fh)
-          + " " + String(n_passes) + " passes x "
-          + String(n_photons_per_pass) + " photons  r=" + String(initial_radius))
-
-    var default_emit_med = Int32(-1)
-    if Int(sd.mediumCount) > 0 and Int(sd.mediumIfaceCount) > 0:
-        for mi in range(Int(sd.mediumIfaceCount)):
-            var iface = sd.mediumInterfaces[mi]
-            if Int(iface.outside_medium_idx) >= 0:
-                default_emit_med = iface.outside_medium_idx
-                break
-
-    var init_r2 = initial_radius * initial_radius
-    var inv_cell = Float32(1.0) / initial_radius
-
-    var ret = Int32(0)
-    comptime if has_accelerator():
-        try:
-            var handle = handlePtr
-            comptime block_size = 256
-
-            var n_vps = n_pix * _VP_SAMPLES
-            # max_photons intentionally equals n_photons_per_pass — see
-            # sppm_render's docstring for why a larger buffer (letting every
-            # Russian-roulette diffuse-continuation event store
-            # unconditionally) was tried and measurably over-brightened
-            # the render instead of helping.
-            var max_photons = n_photons_per_pass
-            var vps_buf     = handle[].ctx.enqueue_create_buffer[DType.uint8](n_vps * size_of[SPPMPixel]())
-            var photons_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(max_photons, 1) * size_of[SPPMPhoton]())
-            var heads_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](_HSIZE * size_of[Int32]())
-            var inter_cam_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_vps * size_of[Intersection_C]())
-            var inter_ph_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_photons_per_pass, 1) * size_of[Intersection_C]())
-            var counter_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](size_of[Int32]())
-            var out_buf     = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
-            var albedo_out_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
-
-            var r2c_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
-            with r2c_buf.map_to_host() as host_buf:
-                var dst = host_buf.unsafe_ptr()
-                var src = psc[0].raster_to_camera.bitcast[UInt8]()
-                for i in range(16 * size_of[Float32]()):
-                    dst[i] = src[i]
-            var c2w_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
-            with c2w_buf.map_to_host() as host_buf:
-                var dst = host_buf.unsafe_ptr()
-                var src = psc[0].camera_to_world.bitcast[UInt8]()
-                for i in range(16 * size_of[Float32]()):
-                    dst[i] = src[i]
-
-            var vps_ptr    = vps_buf.unsafe_ptr().bitcast[SPPMPixel]()
-            var photons_ptr = photons_buf.unsafe_ptr().bitcast[SPPMPhoton]()
-            var heads_ptr  = heads_buf.unsafe_ptr().bitcast[Int32]()
-            var inter_cam_ptr = inter_cam_buf.unsafe_ptr().bitcast[Intersection_C]()
-            var inter_ph_ptr  = inter_ph_buf.unsafe_ptr().bitcast[Intersection_C]()
-            var counter_ptr = counter_buf.unsafe_ptr().bitcast[Int32]()
-            var out_ptr     = out_buf.unsafe_ptr().bitcast[Float32]()
-            var albedo_out_ptr = albedo_out_buf.unsafe_ptr().bitcast[Float32]()
-            var r2c_ptr = r2c_buf.unsafe_ptr().bitcast[Float32]()
-            var c2w_ptr = c2w_buf.unsafe_ptr().bitcast[Float32]()
-
-            var bvh2Nodes = handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node]()
-            var primIds = handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C]()
-            var meshes = handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C]()
-            var curves = handle[].curves_buf.unsafe_ptr().bitcast[Curve_C]()
-            var blasNodesArr = handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutAnyOrigin]]()
-            var blasPrimIdsArr = handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutAnyOrigin]]()
-            var instances = handle[].instances_buf.unsafe_ptr().bitcast[Instance_C]()
-            var materials = handle[].materials_buf.unsafe_ptr().bitcast[Material_C]()
-            var mediums = handle[].mediums_buf.unsafe_ptr().bitcast[Medium_C]()
-            var mediumInterfaces = handle[].medium_ifaces_buf.unsafe_ptr().bitcast[MediumInterface_C]()
-            var spheres = handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C]()
-            var areaLights = handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C]()
-            var distantLights = handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C]()
-            var infiniteLights = handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C]()
-            var pointLights = handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C]()
-            var n_mediums = Int64(handle[].n_mediums)
-            var n_medium_ifaces = Int64(handle[].n_medium_ifaces)
-            var n_spheres = Int64(handle[].n_spheres)
-            var n_curves = Int64(handle[].n_curves)
-            var n_area_lights = Int64(handle[].n_area_lights)
-            var n_distant_lights = Int64(handle[].n_distant_lights)
-            var n_infinite_lights = Int64(handle[].n_infinite_lights)
-            var n_point_lights = Int64(handle[].n_point_lights)
-            var n_blas = Int64(handle[].n_blas)
-            var n_instances = Int64(handle[].n_instances)
-            var spectral_coeffs = handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32]()
-            var spectral_cie_x = handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32]()
-            var spectral_cie_y = handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32]()
-            var spectral_cie_z = handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32]()
-            var spectral_d65 = handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32]()
-            var spectral_res = handle[].spectral_res
-            var measured_brdfs = handle[].measured_brdfs_buf.unsafe_ptr().bitcast[MeasuredBRDF_C]()
-            var n_measured_brdfs = Int64(handle[].n_measured_brdfs)
-            var gpu_textures = handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C]()
-            var n_gpu_textures = Int64(handle[].n_textures)
-
-            var grid_pix = ceildiv(n_pix, block_size)
-            var grid_vps = ceildiv(n_vps, block_size)
-            var grid_hsize = ceildiv(_HSIZE, block_size)
-
-            # Camera/visible-point samples are traced ONCE for the whole
-            # render, not per SPPM pass — see _sppm_trace_visible_point's
-            # docstring for why a per-pass re-trace breaks SPPM's
-            # convergence guarantee.
-            var cam_seed = psc[0].rng_seed ^ UInt64(0x9E3779B97F4A7C15 + 7)
-            handle[].ctx.enqueue_function[sppm_gen_vp_gpu](
-                vps_ptr, inter_cam_ptr, n_pix, _VP_SAMPLES, psc[0].film_w, r2c_ptr, c2w_ptr,
-                init_r2, cam_seed,
-                bvh2Nodes, primIds, meshes, materials,
-                areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
-                mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
-                blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
-                distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
-                gpu_textures, n_gpu_textures,
-                grid_dim=grid_vps, block_dim=block_size)
-
-            for pass_idx in range(n_passes):
-                handle[].ctx.enqueue_function[sppm_reset_i32_gpu](
-                    counter_ptr, grid_dim=1, block_dim=1)
-
-                var pass_seed = psc[0].rng_seed ^ UInt64(pass_idx * 2654435761 + 1)
-                var grid_emit = ceildiv(max(n_photons_per_pass, 1), block_size)
-                handle[].ctx.enqueue_function[sppm_emit_photons_gpu](
-                    photons_ptr, n_photons_per_pass, max_photons, inter_ph_ptr, counter_ptr,
-                    default_emit_med, pass_seed, pass_idx,
-                    bvh2Nodes, primIds, meshes, materials,
-                    areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
-                    mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
-                    blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
-                    distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
-                    pointLights, n_point_lights,
-                    spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-                    measured_brdfs, n_measured_brdfs,
-                    gpu_textures, n_gpu_textures,
-                    grid_dim=grid_emit, block_dim=block_size)
-
-                handle[].ctx.synchronize()
-                var n_stored_raw: Int32
-                with counter_buf.map_to_host() as host_buf:
-                    var src = host_buf.unsafe_ptr().bitcast[Int32]()
-                    n_stored_raw = src[0]
-                var n_stored = min(Int(n_stored_raw), max_photons)
-
-                if n_stored > 0:
-                    handle[].ctx.enqueue_function[sppm_grid_reset_gpu](
-                        heads_ptr, _HSIZE, grid_dim=grid_hsize, block_dim=block_size)
-                    var grid_ins = ceildiv(n_stored, block_size)
-                    handle[].ctx.enqueue_function[sppm_grid_insert_gpu](
-                        photons_ptr, n_stored, heads_ptr, inv_cell,
-                        grid_dim=grid_ins, block_dim=block_size)
-                    handle[].ctx.enqueue_function[sppm_gather_gpu](
-                        vps_ptr, n_vps, photons_ptr, heads_ptr, inv_cell,
-                        bvh2Nodes, primIds, meshes, materials, curves, n_curves, instances, n_instances,
-                        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-                        measured_brdfs, n_measured_brdfs,
-                        grid_dim=grid_vps, block_dim=block_size)
-
-                var nee_seed = psc[0].rng_seed ^ UInt64(pass_idx * 0xBF58476D1CE4E5B9 + 3)
-                handle[].ctx.enqueue_function[sppm_nee_gpu](
-                    vps_ptr, n_vps, nee_seed, pass_idx,
-                    bvh2Nodes, primIds, meshes, materials,
-                    areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
-                    mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
-                    blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
-                    distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
-                    pointLights, n_point_lights,
-                    spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-                    measured_brdfs, n_measured_brdfs,
-                    grid_dim=grid_vps, block_dim=block_size)
-
-                if verbose or (pass_idx + 1) % 10 == 0:
-                    print("SPPM (GPU): pass " + String(pass_idx + 1) + "/" + String(n_passes)
-                          + " stored=" + String(n_stored), end="\r")
-
-            print("")
-
-            handle[].ctx.enqueue_function[sppm_finalize_gpu](
-                vps_ptr, n_pix, _VP_SAMPLES, Int32(n_passes), iso_scale, max_comp, out_ptr, albedo_out_ptr,
-                grid_dim=grid_pix, block_dim=block_size)
-            handle[].ctx.synchronize()
-
-            var out_pixels = alloc[Float32](n_pix * 3)
-            with out_buf.map_to_host() as host_buf:
-                var src = host_buf.unsafe_ptr()
-                var dst = out_pixels.bitcast[UInt8]()
-                for i in range(n_pix * 3 * size_of[Float32]()):
-                    dst[i] = src[i]
-
-            # Denoise (never wired up before -- no_denoise was a dead
-            # parameter): read back the albedo AOV finalized above, run a
-            # fresh normals/depth pass via the host-side sd (same
-            # render_aux_buffers the CPU path/plain tracer use), then the
-            # same CPU denoise() the CPU SPPM path uses.
-            var albedo_pixels = alloc[Float32](n_pix * 3)
-            with albedo_out_buf.map_to_host() as host_buf:
-                var src = host_buf.unsafe_ptr()
-                var dst = albedo_pixels.bitcast[UInt8]()
-                for i in range(n_pix * 3 * size_of[Float32]()):
-                    dst[i] = src[i]
-
-            var normals = alloc[Float32](n_pix * 3)
-            var depth = alloc[Float32](n_pix)
-            var sd_local = sd
-            render_aux_buffers(psc[0].raster_to_camera, psc[0].camera_to_world, Int32(0), Int32(0),
-                                psc[0].film_w, psc[0].film_h, UnsafePointer(to=sd_local), normals, depth)
-
-            var denoised = alloc[Float32](n_pix * 3)
-            if no_denoise:
-                for i in range(n_pix * 3): denoised[i] = out_pixels[i]
-            else:
-                denoise(out_pixels, albedo_pixels, normals, depth, psc[0].film_w, psc[0].film_h,
-                        denoised, Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
-
-            _ = write_image(denoised, psc[0].film_w, psc[0].film_h,
-                            psc[0].film_filename, Int32(32), Int32(32))
-            out_pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
-        except e:
-            print("SPPM GPU render failed: " + String(e))
-            ret = Int32(-1)
-    else:
-        print("SPPM GPU: no accelerator")
-        ret = Int32(-1)
-    return ret

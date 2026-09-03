@@ -11,7 +11,7 @@ comptime EPS: Float32 = 1e-4
 def _close(a: Float32, b: Float32) -> Bool:
     return abs(a - b) < EPS
 
-def _scanner_from_string(s: String) -> UnsafePointer[PbrtScanner, MutAnyOrigin]:
+def _scanner_from_string(s: String) -> UnsafePointer[PbrtScanner, MutExternalOrigin]:
     """Builds a PbrtScanner directly over an in-memory buffer — no temp file
     needed. Handlers are called mid-stream, exactly as parse_scene_file's
     directive dispatch does: the leading keyword (e.g. "MakeNamedMedium") is

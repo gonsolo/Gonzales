@@ -2,7 +2,7 @@ from std.math import abs
 from std.sys.info import size_of
 from std.testing import assert_true, TestSuite
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext
+from max.gpu.host import DeviceContext
 from gonzales.gpu import clear_film_gpu, accumulate_film_gpu
 from gonzales.geometry import RGB, Point3f, Vec3f, Ray_C, PathState_C
 from gonzales.spectrum import SampledWavelengths
@@ -46,7 +46,7 @@ def test_clear_film_gpu_zeroes_a_dirty_buffer() raises:
     ctx.synchronize()
 
     ctx.enqueue_function[clear_film_gpu](
-        buf.unsafe_ptr(), n_pixels,
+        buf.unsafe_ptr(), Int64(n_pixels),
         grid_dim=1, block_dim=n_pixels,
     )
     ctx.synchronize()
@@ -86,7 +86,7 @@ def test_accumulate_film_gpu_adds_path_estimates_onto_existing_film() raises:
 
     ctx.enqueue_function[accumulate_film_gpu](
         path_buf.unsafe_ptr().bitcast[PathState_C](),
-        film_buf.unsafe_ptr(), albedo_buf.unsafe_ptr(), n,
+        film_buf.unsafe_ptr(), albedo_buf.unsafe_ptr(), Int64(n),
         grid_dim=1, block_dim=n,
     )
     ctx.synchronize()

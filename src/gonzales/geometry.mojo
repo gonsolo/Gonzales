@@ -11,7 +11,7 @@ from gonzales.spectrum import SampledWavelengths
 # struct, ...). Use this helper instead of a hand-picked magic-number
 # threshold at each call site.
 @always_inline
-def _is_real_ptr[T: AnyType](ptr: UnsafePointer[T, MutAnyOrigin]) -> Bool:
+def _is_real_ptr[T: AnyType, O: Origin[mut=True]](ptr: UnsafePointer[T, O]) -> Bool:
     return Int(ptr) > align_of[T]()
 
 # ── Math constants ─────────────────────────────────────────────────────────────
@@ -58,8 +58,26 @@ struct Point3f(TrivialRegisterPassable):
         return Vec3f(self.x - o.x, self.y - o.y, self.z - o.z)
 
     @always_inline
-    def to_simd(self) -> SIMD[DType.float32, 3]:
-        return SIMD[DType.float32, 3](self.x, self.y, self.z)
+    def to_simd(self) -> Vec3f:
+        return Vec3f(self.x, self.y, self.z)
+
+    @always_inline
+    def __getitem__(self, i: Int) -> Float32:
+        if i == 0:
+            return self.x
+        elif i == 1:
+            return self.y
+        else:
+            return self.z
+
+    @always_inline
+    def __setitem__(mut self, i: Int, v: Float32):
+        if i == 0:
+            self.x = v
+        elif i == 1:
+            self.y = v
+        else:
+            self.z = v
 
 @fieldwise_init
 # <</listing>>
@@ -92,9 +110,30 @@ struct Vec3f(TrivialRegisterPassable):
         return Vec3f(self.x * s, self.y * s, self.z * s)
 
     @always_inline
+    def __rmul__(self, s: Float32) -> Vec3f:
+        return Vec3f(self.x * s, self.y * s, self.z * s)
+
+    @always_inline
     def __truediv__(self, s: Float32) -> Vec3f:
         var inv = Float32(1.0) / s
         return Vec3f(self.x * inv, self.y * inv, self.z * inv)
+
+    @always_inline
+    def __iadd__(mut self, b: Vec3f):
+        self.x += b.x; self.y += b.y; self.z += b.z
+
+    @always_inline
+    def __isub__(mut self, b: Vec3f):
+        self.x -= b.x; self.y -= b.y; self.z -= b.z
+
+    @always_inline
+    def __imul__(mut self, s: Float32):
+        self.x *= s; self.y *= s; self.z *= s
+
+    @always_inline
+    def __itruediv__(mut self, s: Float32):
+        var inv = Float32(1.0) / s
+        self.x *= inv; self.y *= inv; self.z *= inv
 
     @always_inline
     def length_sq(self) -> Float32:
@@ -115,21 +154,44 @@ struct Vec3f(TrivialRegisterPassable):
         return self.x * b.x + self.y * b.y + self.z * b.z
 
     @always_inline
-    def to_simd(self) -> SIMD[DType.float32, 3]:
-        return SIMD[DType.float32, 3](self.x, self.y, self.z)
+    def to_simd(self) -> Vec3f:
+        return Vec3f(self.x, self.y, self.z)
+
+    @always_inline
+    def __getitem__(self, i: Int) -> Float32:
+        if i == 0:
+            return self.x
+        elif i == 1:
+            return self.y
+        else:
+            return self.z
+
+    @always_inline
+    def __setitem__(mut self, i: Int, v: Float32):
+        if i == 0:
+            self.x = v
+        elif i == 1:
+            self.y = v
+        else:
+            self.z = v
+
+    @always_inline
+    def __mul__(self, b: Vec3f) -> Vec3f:
+        """Elementwise (Hadamard) product -- matches SIMD[f32,3]'s own `*`."""
+        return Vec3f(self.x * b.x, self.y * b.y, self.z * b.z)
 
 @always_inline
-def vec3f(s: SIMD[DType.float32, 3]) -> Vec3f:
+def vec3f(s: Vec3f) -> Vec3f:
     """Convert a SIMD[f32,3] to a Vec3f."""
     return Vec3f(s[0], s[1], s[2])
 
 @always_inline
-def point3f(s: SIMD[DType.float32, 3]) -> Point3f:
+def point3f(s: Vec3f) -> Point3f:
     """Convert a SIMD[f32,3] to a Point3f."""
     return Point3f(s[0], s[1], s[2])
 
 @always_inline
-def store_vec3(dst: UnsafePointer[Float32, MutAnyOrigin], slot: Int, v: SIMD[DType.float32, 3]):
+def store_vec3[O: Origin[mut=True]](dst: UnsafePointer[Float32, O], slot: Int, v: Vec3f):
     """Write a Point3f/Vec3f (pass `.to_simd()`) into a flat, stride-3
     Float32 buffer at `slot` -- i.e. dst[slot*3 : slot*3+3] -- replacing the
     dst[slot*3+0]=v.x; dst[slot*3+1]=v.y; dst[slot*3+2]=v.z pattern repeated
@@ -342,29 +404,29 @@ struct MeasuredBRDF_C(TrivialRegisterPassable):
     var n_theta_i:     Int32
     var n_phi_i:       Int32
     var n_wavelengths: Int32
-    var theta_i:     UnsafePointer[Float32, MutAnyOrigin]  # [n_theta_i]
-    var phi_i:       UnsafePointer[Float32, MutAnyOrigin]  # [n_phi_i]
-    var wavelengths: UnsafePointer[Float32, MutAnyOrigin]  # [n_wavelengths]
+    var theta_i:     UnsafePointer[Float32, MutExternalOrigin]  # [n_theta_i]
+    var phi_i:       UnsafePointer[Float32, MutExternalOrigin]  # [n_phi_i]
+    var wavelengths: UnsafePointer[Float32, MutExternalOrigin]  # [n_wavelengths]
 
     # ndf / sigma: PiecewiseLinear2D<0> — Evaluate-only, no param axes, no CDF.
-    var ndf_data:   UnsafePointer[Float32, MutAnyOrigin]  # [ndf_ys * ndf_xs]
+    var ndf_data:   UnsafePointer[Float32, MutExternalOrigin]  # [ndf_ys * ndf_xs]
     var ndf_xs:     Int32
     var ndf_ys:     Int32
-    var sigma_data: UnsafePointer[Float32, MutAnyOrigin]  # [sigma_ys * sigma_xs]
+    var sigma_data: UnsafePointer[Float32, MutExternalOrigin]  # [sigma_ys * sigma_xs]
     var sigma_xs:   Int32
     var sigma_ys:   Int32
 
     # vndf / luminance: PiecewiseLinear2D<2>, param axes (phi_i, theta_i),
     # both Sample+Evaluate-capable (marginal/conditional CDFs built). Both
     # share the same param resolution, hence the same stride2_* pair below.
-    var vndf_data: UnsafePointer[Float32, MutAnyOrigin]  # [slices2 * vndf_ys * vndf_xs]
-    var vndf_marg: UnsafePointer[Float32, MutAnyOrigin]  # [slices2 * vndf_ys]
-    var vndf_cond: UnsafePointer[Float32, MutAnyOrigin]  # [slices2 * vndf_ys * vndf_xs]
+    var vndf_data: UnsafePointer[Float32, MutExternalOrigin]  # [slices2 * vndf_ys * vndf_xs]
+    var vndf_marg: UnsafePointer[Float32, MutExternalOrigin]  # [slices2 * vndf_ys]
+    var vndf_cond: UnsafePointer[Float32, MutExternalOrigin]  # [slices2 * vndf_ys * vndf_xs]
     var vndf_xs:   Int32
     var vndf_ys:   Int32
-    var lum_data: UnsafePointer[Float32, MutAnyOrigin]   # [slices2 * lum_ys * lum_xs]
-    var lum_marg: UnsafePointer[Float32, MutAnyOrigin]   # [slices2 * lum_ys]
-    var lum_cond: UnsafePointer[Float32, MutAnyOrigin]   # [slices2 * lum_ys * lum_xs]
+    var lum_data: UnsafePointer[Float32, MutExternalOrigin]   # [slices2 * lum_ys * lum_xs]
+    var lum_marg: UnsafePointer[Float32, MutExternalOrigin]   # [slices2 * lum_ys]
+    var lum_cond: UnsafePointer[Float32, MutExternalOrigin]   # [slices2 * lum_ys * lum_xs]
     var lum_xs:   Int32
     var lum_ys:   Int32
     var stride2_phi:   Int32  # PiecewiseLinear2D<2>'s per-param-axis stride
@@ -374,7 +436,7 @@ struct MeasuredBRDF_C(TrivialRegisterPassable):
     # Evaluate-only (no CDF) — its own stride triple (different Dimension
     # than vndf/luminance's, so the strides differ even though phi_i/theta_i
     # are shared).
-    var spectra_data: UnsafePointer[Float32, MutAnyOrigin]  # [slices3 * spectra_ys * spectra_xs]
+    var spectra_data: UnsafePointer[Float32, MutExternalOrigin]  # [slices3 * spectra_ys * spectra_xs]
     var spectra_xs: Int32
     var spectra_ys: Int32
     var stride3_phi:    Int32
@@ -383,11 +445,11 @@ struct MeasuredBRDF_C(TrivialRegisterPassable):
 
 @fieldwise_init
 struct TriangleMesh_C(TrivialRegisterPassable):
-    var points: UnsafePointer[Float32, MutAnyOrigin]
-    var faceIndices: UnsafePointer[Int64, MutAnyOrigin]
-    var vertexIndices: UnsafePointer[Int64, MutAnyOrigin]
-    var uvs: UnsafePointer[Float32, MutAnyOrigin]   # nullable; stride 2 floats per vertex
-    var normals: UnsafePointer[Float32, MutAnyOrigin]  # nullable; stride 3 floats per vertex (shading normals)
+    var points: UnsafePointer[Float32, MutExternalOrigin]
+    var faceIndices: UnsafePointer[Int64, MutExternalOrigin]
+    var vertexIndices: UnsafePointer[Int64, MutExternalOrigin]
+    var uvs: UnsafePointer[Float32, MutExternalOrigin]   # nullable; stride 2 floats per vertex
+    var normals: UnsafePointer[Float32, MutExternalOrigin]  # nullable; stride 3 floats per vertex (shading normals)
 
 # ── Ray ───────────────────────────────────────────────────────────────────────
 # See: docs/03_shapes_and_acceleration.md
@@ -535,7 +597,7 @@ comptime CURVE_N_PIECES: Int = 7   # max locally-linear pieces per segment (8 sa
 comptime CURVE_DEFER_K: Int = 4
 
 @always_inline
-def _curve_perp_axis(t: SIMD[DType.float32, 3]) -> SIMD[DType.float32, 3]:
+def _curve_perp_axis(t: Vec3f) -> Vec3f:
     """Deterministic unit vector perpendicular to t, built from t alone (no
     stored per-vertex data needed — reproducible at both intersect and shade time)."""
     var ux: Float32; var uy: Float32; var uz: Float32
@@ -543,14 +605,14 @@ def _curve_perp_axis(t: SIMD[DType.float32, 3]) -> SIMD[DType.float32, 3]:
         ux = -t[2]; uy = Float32(0.0); uz = t[0]
     else:
         ux = Float32(0.0); uy = t[2]; uz = -t[1]
-    var v = SIMD[DType.float32, 3](ux, uy, uz)
+    var v = Vec3f(ux, uy, uz)
     var l = sqrt(dot(v, v))
     if l > Float32(1e-12):
         return v * (Float32(1.0) / l)
-    return SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0))
+    return Vec3f(Float32(1.0), Float32(0.0), Float32(0.0))
 
 @always_inline
-def curve_bspline_point(curve: Curve_C, t: Float32) -> SIMD[DType.float32, 3]:
+def curve_bspline_point(curve: Curve_C, t: Float32) -> Vec3f:
     """Evaluate the uniform cubic B-spline segment at local parameter t in [0,1]."""
     var t2 = t * t
     var t3 = t2 * t
@@ -563,7 +625,7 @@ def curve_bspline_point(curve: Curve_C, t: Float32) -> SIMD[DType.float32, 3]:
     return p0*b0 + p1*b1 + p2*b2 + p3*b3
 
 @always_inline
-def curve_piece_endpoints(curve: Curve_C, piece: Int) -> Tuple[SIMD[DType.float32, 3], SIMD[DType.float32, 3], Float32, Float32]:
+def curve_piece_endpoints(curve: Curve_C, piece: Int) -> Tuple[Vec3f, Vec3f, Float32, Float32]:
     """Sample points + radii bounding one of this curve's n_pieces locally-linear pieces."""
     var n = Float32(curve.n_pieces)
     var t0 = Float32(piece) / n
@@ -576,8 +638,8 @@ def curve_piece_endpoints(curve: Curve_C, piece: Int) -> Tuple[SIMD[DType.float3
 
 @always_inline
 def intersect_curve(
-    ray_org: SIMD[DType.float32, 3],
-    ray_dir: SIMD[DType.float32, 3],
+    ray_org: Vec3f,
+    ray_dir: Vec3f,
     curve: Curve_C,
     first_piece: Int,
     piece_count: Int,
@@ -724,7 +786,7 @@ struct Grid_C(TrivialRegisterPassable):
     as transform.mojo's transform_points: m[0],m[4],m[8],m[12] combine for x).
     max_density is the majorant used for delta-tracking free-flight sampling.
     """
-    var density: UnsafePointer[Float32, MutAnyOrigin]  # flat, nz-major: idx = (z*ny + y)*nx + x
+    var density: UnsafePointer[Float32, MutExternalOrigin]  # flat, nz-major: idx = (z*ny + y)*nx + x
     var nx: Int32
     var ny: Int32
     var nz: Int32
@@ -741,7 +803,7 @@ def _grid_density_at(grid: Grid_C, xi: Int, yi: Int, zi: Int) -> Float32:
     return grid.density[(cz * Int(grid.ny) + cy) * Int(grid.nx) + cx]
 
 @always_inline
-def grid_sample_density(grid: Grid_C, p_world: SIMD[DType.float32, 3]) -> Float32:
+def grid_sample_density(grid: Grid_C, p_world: Vec3f) -> Float32:
     """Trilinearly-interpolated density at a world-space point; 0 outside
     the grid's local bounds [p0,p1]."""
     var m = grid.world_to_medium
@@ -813,15 +875,15 @@ struct InfiniteLight_C(TrivialRegisterPassable):
     var tex_idx: Int32   # -1 = solid colour, >= 0 = texture
     var cdf_w: Int32     # env-map pixel width (also CDF width; 0 = no texture)
     var cdf_h: Int32     # env-map pixel height
-    var cdf_ptr: UnsafePointer[Float32, MutAnyOrigin]   # flat 2D CDF (marginal + conditional)
-    var pixels_ptr: UnsafePointer[Float32, MutAnyOrigin] # raw HDR pixels, 3 floats/pixel (CPU only)
-    var world_to_light: UnsafePointer[Float32, MutAnyOrigin]  # 16-float col-major inverse of light CTM
+    var cdf_ptr: UnsafePointer[Float32, MutExternalOrigin]   # flat 2D CDF (marginal + conditional)
+    var pixels_ptr: UnsafePointer[Float32, MutExternalOrigin] # raw HDR pixels, 3 floats/pixel (CPU only)
+    var world_to_light: UnsafePointer[Float32, MutExternalOrigin]  # 16-float col-major inverse of light CTM
 
 # ── GPU / render pipeline helpers ─────────────────────────────────────────────
 
 @fieldwise_init
 struct GpuTexture_C(TrivialRegisterPassable):
-    var data: UnsafePointer[Float32, MutAnyOrigin]  # device pointer: full mip pyramid, contiguous, pre-linearised float RGB
+    var data: UnsafePointer[Float32, MutExternalOrigin]  # device pointer: full mip pyramid, contiguous, pre-linearised float RGB
     var width: Int32                                 # level-0 width
     var height: Int32                                # level-0 height
     var n_levels: Int32                              # number of mip levels stored in `data` (>=1)
@@ -842,7 +904,7 @@ struct LightSampler_C(TrivialRegisterPassable):
     cdf[0]=0, cdf[n]=1; pdf[i] = cdf[i+1] - cdf[i] = power_i / total_power.
     Built at parse time; on GPU the cdf pointer is patched to device memory.
     """
-    var cdf: UnsafePointer[Float32, MutAnyOrigin]  # n+1 entries
+    var cdf: UnsafePointer[Float32, MutExternalOrigin]  # n+1 entries
     var n: Int32
     var _pad: Int32
 
@@ -1015,33 +1077,50 @@ def spherical_theta(v: Vec3f) -> Float32:
     return acos(max(Float32(-1.0), min(Float32(1.0), v.y)))
 
 @always_inline
+def _atan2f(y: Float32, x: Float32) -> Float32:
+    """atan2 via minimax polynomial — avoids an unresolved CUDA libdevice
+    extern this toolchain can't resolve for std.math.atan2 on GPU (see
+    project_gpu_ptx_environment_break memory)."""
+    var ax = abs(x); var ay = abs(y)
+    var mn = min(ax, ay)
+    var mx = max(ax, ay)
+    var a = mn / (mx if mx > Float32(1e-10) else Float32(1e-10))
+    var s = a * a
+    var r = (Float32(-0.0464964749) * s + Float32(0.15931422)) * s
+    r = (r - Float32(0.327622764)) * s * a + a
+    if ay > ax: r = Float32(1.5707963267948966) - r
+    if x < Float32(0.0): r = Float32(3.14159265358979323846) - r
+    if y < Float32(0.0): r = -r
+    return r
+
+@always_inline
 def spherical_phi(v: Vec3f) -> Float32:
     """Azimuthal angle φ ∈ [0, 2π] of a unit vector (y = up convention)."""
-    var p = atan2(v.z, v.x)
+    var p = _atan2f(v.z, v.x)
     return p if p >= Float32(0.0) else p + TWO_PI
 
 # ── SIMD math helpers (used in BVH and shading hot paths) ────────────────────
 
 @always_inline
-def cross(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> SIMD[DType.float32, 3]:
-    var a_yzx = SIMD[DType.float32, 3](a[1], a[2], a[0])
-    var b_zxy = SIMD[DType.float32, 3](b[2], b[0], b[1])
-    var a_zxy = SIMD[DType.float32, 3](a[2], a[0], a[1])
-    var b_yzx = SIMD[DType.float32, 3](b[1], b[2], b[0])
+def cross(a: Vec3f, b: Vec3f) -> Vec3f:
+    var a_yzx = Vec3f(a[1], a[2], a[0])
+    var b_zxy = Vec3f(b[2], b[0], b[1])
+    var a_zxy = Vec3f(a[2], a[0], a[1])
+    var b_yzx = Vec3f(b[1], b[2], b[0])
     return a_yzx * b_zxy - a_zxy * b_yzx
 
 @always_inline
-def dot(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> Float32:
+def dot(a: Vec3f, b: Vec3f) -> Float32:
     var prod = a * b
     return prod[0] + prod[1] + prod[2]
 
 @always_inline
 def intersect_triangle(
-    ray_org: SIMD[DType.float32, 3],
-    ray_dir: SIMD[DType.float32, 3],
-    p0: SIMD[DType.float32, 3],
-    p1: SIMD[DType.float32, 3],
-    p2: SIMD[DType.float32, 3],
+    ray_org: Vec3f,
+    ray_dir: Vec3f,
+    p0: Vec3f,
+    p1: Vec3f,
+    p2: Vec3f,
     tMax: Float32
 ) -> Tuple[Bool, Float32, Float32, Float32]:
     """Möller–Trumbore ray-triangle intersection.

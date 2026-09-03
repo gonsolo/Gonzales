@@ -19,22 +19,22 @@ from std.memory import alloc
 from .geometry import MeasuredBRDF_C
 
 @always_inline
-def _mbsdf_u16(buf: UnsafePointer[UInt8, MutAnyOrigin], pos: Int) -> Int:
+def _mbsdf_u16(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int:
     return Int((buf + pos).bitcast[UInt16]()[0])
 
 @always_inline
-def _mbsdf_u32(buf: UnsafePointer[UInt8, MutAnyOrigin], pos: Int) -> Int:
+def _mbsdf_u32(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int:
     return Int((buf + pos).bitcast[UInt32]()[0])
 
 @always_inline
-def _mbsdf_u64(buf: UnsafePointer[UInt8, MutAnyOrigin], pos: Int) -> Int:
+def _mbsdf_u64(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int:
     return Int((buf + pos).bitcast[UInt64]()[0])
 
 @always_inline
-def _mbsdf_f32(buf: UnsafePointer[UInt8, MutAnyOrigin], pos: Int) -> Float32:
+def _mbsdf_f32(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float32:
     return (buf + pos).bitcast[Float32]()[0]
 
-def _mbsdf_field_eq(buf: UnsafePointer[UInt8, MutAnyOrigin], pos: Int, length: Int, literal: StringLiteral) -> Bool:
+def _mbsdf_field_eq(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int, length: Int, literal: StringLiteral) -> Bool:
     var lp = literal.unsafe_ptr()
     var j = 0
     while lp[j] != UInt8(0):
@@ -49,7 +49,7 @@ comptime MEASURED_BSDF_DTYPE_FLOAT32 = 10
 def load_measured_bsdf_reflectance(path: String) -> Tuple[Bool, Float32]:
     """Returns (ok, mean_luminance) — ok=False on any parse/format failure,
     in which case the caller should keep its existing diffuse fallback."""
-    var file_buf: UnsafePointer[UInt8, MutAnyOrigin]
+    var file_buf: UnsafePointer[UInt8, MutExternalOrigin]
     var file_size: Int
     try:
         var f = open(path, "r")
@@ -158,7 +158,7 @@ struct _MbsdfFields(Movable):
         self.spectra = _MbsdfFieldInfo()
         self.jacobian = _MbsdfFieldInfo()
 
-def _mbsdf_scan_fields(file_buf: UnsafePointer[UInt8, MutAnyOrigin], file_size: Int) -> _MbsdfFields:
+def _mbsdf_scan_fields(file_buf: UnsafePointer[UInt8, MutExternalOrigin], file_size: Int) -> _MbsdfFields:
     var out = _MbsdfFields()
     var n_fields = _mbsdf_u32(file_buf, 14)
     var pos = 18
@@ -210,7 +210,7 @@ def _mbsdf_scan_fields(file_buf: UnsafePointer[UInt8, MutAnyOrigin], file_size: 
             out.jacobian = info.copy()
     return out^
 
-def _mbsdf_copy_f32(file_buf: UnsafePointer[UInt8, MutAnyOrigin], offset: Int, count: Int) -> UnsafePointer[Float32, MutAnyOrigin]:
+def _mbsdf_copy_f32(file_buf: UnsafePointer[UInt8, MutExternalOrigin], offset: Int, count: Int) -> UnsafePointer[Float32, MutExternalOrigin]:
     var out = alloc[Float32](max(count, 1))
     for i in range(count):
         out[i] = _mbsdf_f32(file_buf, offset + i * 4)
@@ -225,8 +225,8 @@ def _mbsdf_copy_f32(file_buf: UnsafePointer[UInt8, MutAnyOrigin], offset: Int, c
 # util/sampling.h:1412-1436 directly if this looks surprising.
 
 def _pl2d_build_cdf(
-    raw: UnsafePointer[Float32, MutAnyOrigin], xs: Int, ys: Int, slices: Int
-) -> Tuple[UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Float32, MutAnyOrigin], UnsafePointer[Float32, MutAnyOrigin]]:
+    raw: UnsafePointer[Float32, MutExternalOrigin], xs: Int, ys: Int, slices: Int
+) -> Tuple[UnsafePointer[Float32, MutExternalOrigin], UnsafePointer[Float32, MutExternalOrigin], UnsafePointer[Float32, MutExternalOrigin]]:
     """Returns (data_out, marginal_cdf, conditional_cdf) for a
     build_cdf=true,normalize=true PiecewiseLinear2D (vndf/luminance).
     Per-slice: conditional CDF is a running trapezoidal integral across x for
@@ -265,8 +265,8 @@ def _pl2d_build_cdf(
     return (data_out, marginal, conditional)
 
 def _pl2d_build_scaled_verbatim(
-    raw: UnsafePointer[Float32, MutAnyOrigin], xs: Int, ys: Int, slices: Int
-) -> UnsafePointer[Float32, MutAnyOrigin]:
+    raw: UnsafePointer[Float32, MutExternalOrigin], xs: Int, ys: Int, slices: Int
+) -> UnsafePointer[Float32, MutExternalOrigin]:
     """build_cdf=false,normalize=false PiecewiseLinear2D data (ndf/sigma/
     spectra): scaled by 1/((xs-1)*(ys-1)), not a verbatim copy -- see the
     module-level note above."""
@@ -312,7 +312,7 @@ def load_measured_brdf_full(path: String) -> Tuple[Bool, MeasuredBRDF_C]:
     when ok=False."""
 
     def _fail() -> Tuple[Bool, MeasuredBRDF_C]:
-        var dangling = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
+        var dangling = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
         return (False, MeasuredBRDF_C(
             Int32(0), Int32(0), Int32(0), Int32(0),
             dangling, dangling, dangling,
@@ -325,7 +325,7 @@ def load_measured_brdf_full(path: String) -> Tuple[Bool, MeasuredBRDF_C]:
             Int32(0), Int32(0), Int32(0),
         ))
 
-    var file_buf: UnsafePointer[UInt8, MutAnyOrigin]
+    var file_buf: UnsafePointer[UInt8, MutExternalOrigin]
     var file_size: Int
     try:
         var f = open(path, "r")

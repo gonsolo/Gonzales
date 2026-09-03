@@ -3,7 +3,7 @@ from std.math import tan, atan2, sqrt, cos, sin
 from std.ffi import external_call
 from .lexer import is_whitespace
 from .parse_types import SceneParseState, NamedMaterial
-from .geometry import RGB, MatKind, PI
+from .geometry import RGB, MatKind, PI, Vec3f
 from .transform import matrix_invert, transform_normals
 from .scene_builder import store_mesh
 from .mitsuba_serialized import load_mitsuba_serialized, MitsubaMesh
@@ -56,7 +56,7 @@ struct MitsubaTag(Copyable, Movable):
         self.is_close = is_close
         self.is_self_close = is_self_close
 
-def _mxml_make_string(buf: UnsafePointer[UInt8, MutAnyOrigin], start: Int, end: Int) -> String:
+def _mxml_make_string(buf: UnsafePointer[UInt8, MutExternalOrigin], start: Int, end: Int) -> String:
     var n = end - start
     var tmp = alloc[UInt8](n + 1)
     for i in range(n):
@@ -126,7 +126,7 @@ def _mit_find_value_tag(tags: List[MitsubaTag], start: Int, end: Int, param_name
         return idx
     return _mit_find_child_by_attr(tags, start, end, "spectrum", "name", param_name)
 
-def tokenize_mitsuba_xml(buf: UnsafePointer[UInt8, MutAnyOrigin], length: Int) -> List[MitsubaTag]:
+def tokenize_mitsuba_xml(buf: UnsafePointer[UInt8, MutExternalOrigin], length: Int) -> List[MitsubaTag]:
     var tags = List[MitsubaTag]()
     var pos = 0
     while pos < length:
@@ -329,7 +329,7 @@ def _mit_apply_defaults(mut tags: List[MitsubaTag]):
 def _mit_identity_ctm() -> InlineArray[Float32, 16]:
     var m = InlineArray[Float32, 16](fill=Float32(0))
     m[0] = Float32(1); m[5] = Float32(1); m[10] = Float32(1); m[15] = Float32(1)
-    return m
+    return m^
 
 def _mit_matrix_rowmajor_to_ctm(vals: List[Float32]) -> InlineArray[Float32, 16]:
     """Mitsuba XML <matrix value="..."> is row-major 16 floats
@@ -343,15 +343,15 @@ def _mit_matrix_rowmajor_to_ctm(vals: List[Float32]) -> InlineArray[Float32, 16]
     for r in range(4):
         for c in range(4):
             m[c * 4 + r] = vals[r * 4 + c]
-    return m
+    return m^
 
-def dot3(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> Float32:
+def dot3(a: Vec3f, b: Vec3f) -> Float32:
     return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]
 
-def cross3(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> SIMD[DType.float32, 3]:
-    return SIMD[DType.float32, 3](a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0])
+def cross3(a: Vec3f, b: Vec3f) -> Vec3f:
+    return Vec3f(a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0])
 
-def _mit_parse_vec3_attr(tag: MitsubaTag, name: String) -> SIMD[DType.float32, 3]:
+def _mit_parse_vec3_attr(tag: MitsubaTag, name: String) -> Vec3f:
     """A vector given either as three separate x/y/z attributes
     (`<translate x="1" y="2" z="3"/>`) or one comma-separated attribute
     (`<lookat origin="1, 2, 3" .../>`)."""
@@ -359,14 +359,14 @@ def _mit_parse_vec3_attr(tag: MitsubaTag, name: String) -> SIMD[DType.float32, 3
     if combo != String(""):
         var vals = _mit_parse_floats(combo)
         if len(vals) >= 3:
-            return SIMD[DType.float32, 3](vals[0], vals[1], vals[2])
+            return Vec3f(vals[0], vals[1], vals[2])
     var xs = _mxml_find_attr(tag, "x")
     var ys = _mxml_find_attr(tag, "y")
     var zs = _mxml_find_attr(tag, "z")
     var x = _mit_parse_float(xs) if xs != String("") else Float32(0)
     var y = _mit_parse_float(ys) if ys != String("") else Float32(0)
     var z = _mit_parse_float(zs) if zs != String("") else Float32(0)
-    return SIMD[DType.float32, 3](x, y, z)
+    return Vec3f(x, y, z)
 
 def _mit_rm_identity() -> List[Float32]:
     var m = List[Float32]()
@@ -401,7 +401,7 @@ def _mit_rm_scale(x: Float32, y: Float32, z: Float32) -> List[Float32]:
     m[0] = x; m[5] = y; m[10] = z; m[15] = Float32(1)
     return m^
 
-def _mit_rm_rotate(axis: SIMD[DType.float32, 3], angle_deg: Float32) -> List[Float32]:
+def _mit_rm_rotate(axis: Vec3f, angle_deg: Float32) -> List[Float32]:
     var alen = sqrt(axis[0]*axis[0] + axis[1]*axis[1] + axis[2]*axis[2])
     var m = _mit_rm_identity()
     if alen < Float32(1e-12):
@@ -415,7 +415,7 @@ def _mit_rm_rotate(axis: SIMD[DType.float32, 3], angle_deg: Float32) -> List[Flo
     m[8]  = t*x*z - s*y;  m[9]  = t*y*z + s*x;  m[10] = t*z*z + c
     return m^
 
-def _mit_rm_lookat(origin: SIMD[DType.float32, 3], target: SIMD[DType.float32, 3], up: SIMD[DType.float32, 3]) -> List[Float32]:
+def _mit_rm_lookat(origin: Vec3f, target: Vec3f, up: Vec3f) -> List[Float32]:
     """Mitsuba's own camera convention: forward = +Z, right-handed
     (X x Y = Z) -- confirmed empirically against ori_torus.xml's own sensor
     matrix (see project_mitsuba_parser memory). Produces a camera-to-world
@@ -468,14 +468,14 @@ def _mit_parse_transform_block(tags: List[MitsubaTag], tf_idx: Int, tf_end: Int)
             acc = _mit_rm_mul(_mit_rm_translate(v[0], v[1], v[2]), acc)
         elif t.name == "scale":
             var sval = _mxml_find_attr(t, "value")
-            var v: SIMD[DType.float32, 3]
+            var v: Vec3f
             if sval != String(""):
                 var sv = _mit_parse_float(sval)
-                v = SIMD[DType.float32, 3](sv, sv, sv)
+                v = Vec3f(sv, sv, sv)
             else:
                 v = _mit_parse_vec3_attr(t, "value")
                 if v[0] == Float32(0) and v[1] == Float32(0) and v[2] == Float32(0):
-                    v = SIMD[DType.float32, 3](Float32(1), Float32(1), Float32(1))
+                    v = Vec3f(Float32(1), Float32(1), Float32(1))
             acc = _mit_rm_mul(_mit_rm_scale(v[0], v[1], v[2]), acc)
         elif t.name == "rotate":
             var axis = _mit_parse_vec3_attr(t, "axis")
@@ -522,7 +522,7 @@ def _mit_shorter_axis_fov(fov_deg: Float32, fov_axis: String, film_w: Int32, fil
 # ── Sensor (camera/film/sampler) ─────────────────────────────────────────────
 
 def _mit_process_sensor(tags: List[MitsubaTag], start: Int, end: Int,
-                        s_ptr: UnsafePointer[SceneParseState, MutAnyOrigin]):
+                        s_ptr: UnsafePointer[SceneParseState, MutExternalOrigin]):
     var tf_idx = _mit_find_transform(tags, start, end)
     if tf_idx >= 0:
         var tf_end = _mit_block_end(tags, tf_idx)
@@ -609,7 +609,7 @@ def _mit_process_sensor(tags: List[MitsubaTag], start: Int, end: Int,
 
 def _mit_build_named_material(tags: List[MitsubaTag], open_idx: Int, end: Int,
                               name: String, mtype: String,
-                              s_ptr: UnsafePointer[SceneParseState, MutAnyOrigin]) -> NamedMaterial:
+                              s_ptr: UnsafePointer[SceneParseState, MutExternalOrigin]) -> NamedMaterial:
     # Wrapper bsdfs (normalmap/bumpmap/twosided) carry the real material as
     # one nested <bsdf> child -- unwrap to it and use ITS type/params.
     # Two-sidedness itself still isn't modeled (v1 scope), same
@@ -695,7 +695,7 @@ def _mit_build_named_material(tags: List[MitsubaTag], open_idx: Int, end: Int,
 # ── Shape (serialized / rectangle) ──────────────────────────────────────────
 
 def _mit_resolve_material_idx(tags: List[MitsubaTag], shape_idx: Int, end: Int,
-                              s_ptr: UnsafePointer[SceneParseState, MutAnyOrigin]) -> Int32:
+                              s_ptr: UnsafePointer[SceneParseState, MutExternalOrigin]) -> Int32:
     var mat_idx_result = Int32(-1)
     var inline_bsdf_idx = _mit_find_child(tags, shape_idx, end, "bsdf")
     if inline_bsdf_idx >= 0:
@@ -730,7 +730,7 @@ def _mit_resolve_emitter(tags: List[MitsubaTag], shape_idx: Int, end: Int) -> Tu
     return (True, rad)
 
 def _mit_process_sphere(tags: List[MitsubaTag], shape_idx: Int, end: Int,
-                        s_ptr: UnsafePointer[SceneParseState, MutAnyOrigin]):
+                        s_ptr: UnsafePointer[SceneParseState, MutExternalOrigin]):
     """Native analytic Sphere_C for Mitsuba's built-in `sphere` shape --
     exact intersection and exact shading (see shading.mojo's
     primId.type==4 branches in shade_dielectric/shade_thin_dielectric/
@@ -747,7 +747,7 @@ def _mit_process_sphere(tags: List[MitsubaTag], shape_idx: Int, end: Int,
     radius. Non-uniform scale would turn a sphere into an ellipsoid, which
     Sphere_C can't represent -- out of scope, not used by any scene seen
     so far."""
-    var s_center_obj = SIMD[DType.float32, 3](Float32(0), Float32(0), Float32(0))
+    var s_center_obj = Vec3f(Float32(0), Float32(0), Float32(0))
     var center_idx = _mit_find_child_by_attr(tags, shape_idx, end, "point", "name", "center")
     if center_idx >= 0:
         s_center_obj = _mit_parse_vec3_attr(tags[center_idx], "value")
@@ -756,7 +756,7 @@ def _mit_process_sphere(tags: List[MitsubaTag], shape_idx: Int, end: Int,
     if radius_idx >= 0:
         s_radius = _mit_parse_float(_mxml_find_attr(tags[radius_idx], "value"))
 
-    var ctm = s_ptr[0].ctm
+    var ctm = s_ptr[0].ctm.copy()
     var cx = ctm[0]*s_center_obj[0] + ctm[4]*s_center_obj[1] + ctm[8]*s_center_obj[2]  + ctm[12]
     var cy = ctm[1]*s_center_obj[0] + ctm[5]*s_center_obj[1] + ctm[9]*s_center_obj[2]  + ctm[13]
     var cz = ctm[2]*s_center_obj[0] + ctm[6]*s_center_obj[1] + ctm[10]*s_center_obj[2] + ctm[14]
@@ -779,7 +779,7 @@ def _mit_process_sphere(tags: List[MitsubaTag], shape_idx: Int, end: Int,
     s_ptr[0].spheres_rgb.append(em[1])
 
 def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
-                       s_ptr: UnsafePointer[SceneParseState, MutAnyOrigin]):
+                       s_ptr: UnsafePointer[SceneParseState, MutExternalOrigin]):
     var shape_type = _mxml_find_attr(tags[shape_idx], "type")
 
     var tf_idx = _mit_find_transform(tags, shape_idx, end)
@@ -798,8 +798,8 @@ def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
         _mit_process_sphere(tags, shape_idx, end, s_ptr)
         return
 
-    var tmp_f: UnsafePointer[Float32, MutAnyOrigin]
-    var tmp_i: UnsafePointer[Int32, MutAnyOrigin]
+    var tmp_f: UnsafePointer[Float32, MutExternalOrigin]
+    var tmp_i: UnsafePointer[Int32, MutExternalOrigin]
     var nv: Int32
     var nt: Int32
     var uvs = List[Float32]()
@@ -896,9 +896,9 @@ def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
 
 # ── Top-level entry point ────────────────────────────────────────────────────
 
-def mojo_parse_mitsuba_scene(path: UnsafePointer[UInt8, MutAnyOrigin],
+def mojo_parse_mitsuba_scene(path: UnsafePointer[UInt8, MutExternalOrigin],
                              verbose: Bool = False,
-                            ) -> UnsafePointer[ParsedScene_Mojo, MutAnyOrigin]:
+                            ) -> UnsafePointer[ParsedScene_Mojo, MutExternalOrigin]:
     # mojo_parse_scene (pbrt_parser.mojo) does this at its own entry --
     # needed once, globally, before any OIIO `texture()` bridge call
     # (shading.mojo's sample_texture CPU branch) or every lookup
@@ -931,7 +931,7 @@ def mojo_parse_mitsuba_scene(path: UnsafePointer[UInt8, MutAnyOrigin],
         fh.close()
     except:
         print("Error: cannot open scene file:", path_str)
-        return UnsafePointer[ParsedScene_Mojo, MutAnyOrigin].unsafe_dangling()
+        return UnsafePointer[ParsedScene_Mojo, MutExternalOrigin].unsafe_dangling()
 
     var n = len(byte_list)
     var buf = alloc[UInt8](n)
@@ -948,7 +948,7 @@ def mojo_parse_mitsuba_scene(path: UnsafePointer[UInt8, MutAnyOrigin],
             break
     if scene_idx < 0:
         print("Error: no <scene> element found in", path_str)
-        return UnsafePointer[ParsedScene_Mojo, MutAnyOrigin].unsafe_dangling()
+        return UnsafePointer[ParsedScene_Mojo, MutExternalOrigin].unsafe_dangling()
 
     var s_ptr = alloc[SceneParseState](1)
     s_ptr.init_pointee_move(SceneParseState())

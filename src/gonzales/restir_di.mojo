@@ -17,7 +17,7 @@
 # verifiable without a real window.
 
 from std.math import sqrt
-from .geometry import RGB, dot, INV_PI
+from .geometry import RGB, dot, INV_PI, Vec3f
 from .reservoir import ReservoirState, reservoir_state_init
 
 @fieldwise_init
@@ -38,10 +38,10 @@ struct DIReservoir(TrivialRegisterPassable):
     temporal and spatial reuse (which move a sample to a different pixel,
     not to a different light point)."""
     var light_idx:     Int32
-    var sample_point:  SIMD[DType.float32, 3]
-    var light_normal:  SIMD[DType.float32, 3]
-    var ldp_du:        SIMD[DType.float32, 3]
-    var ldp_dv:        SIMD[DType.float32, 3]
+    var sample_point:  Vec3f
+    var light_normal:  Vec3f
+    var ldp_du:        Vec3f
+    var ldp_dv:        Vec3f
     var le:            RGB
     var state:         ReservoirState
 
@@ -49,18 +49,18 @@ struct DIReservoir(TrivialRegisterPassable):
 def di_reservoir_init() -> DIReservoir:
     return DIReservoir(
         light_idx=Int32(-1),
-        sample_point=SIMD[DType.float32, 3](Float32(0)),
-        light_normal=SIMD[DType.float32, 3](Float32(0)),
-        ldp_du=SIMD[DType.float32, 3](Float32(0)),
-        ldp_dv=SIMD[DType.float32, 3](Float32(0)),
+        sample_point=Vec3f(Float32(0)),
+        light_normal=Vec3f(Float32(0)),
+        ldp_du=Vec3f(Float32(0)),
+        ldp_dv=Vec3f(Float32(0)),
         le=RGB(Float32(0)),
         state=reservoir_state_init(),
     )
 
 @always_inline
 def di_target_pdf(
-    hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3], alb: RGB,
-    sample_point: SIMD[DType.float32, 3], light_normal: SIMD[DType.float32, 3], le: RGB,
+    hit_point: Vec3f, normal: Vec3f, alb: RGB,
+    sample_point: Vec3f, light_normal: Vec3f, le: RGB,
 ) -> Float32:
     """RIS target function p̂(candidate): luminance of the UNSHADOWED
     Lambertian contribution BSDF x G x Le (2.1 -- visibility deliberately
@@ -102,28 +102,28 @@ struct ReservoirIO(TrivialRegisterPassable):
     di_temporal_step checks `_is_real_ptr`/`> 0` before ever touching them,
     so callers that don't pass a real ReservoirIO (the batch --restir path)
     get exactly the old "no temporal, no spatial reuse" behavior for free."""
-    var read:  UnsafePointer[DIReservoir, MutAnyOrigin]
-    var write: UnsafePointer[DIReservoir, MutAnyOrigin]
-    var gbuf_normal:      UnsafePointer[Float32, MutAnyOrigin]
-    var gbuf_depth:       UnsafePointer[Float32, MutAnyOrigin]
-    var gbuf_material_id: UnsafePointer[Int32, MutAnyOrigin]
+    var read:  UnsafePointer[DIReservoir, MutExternalOrigin]
+    var write: UnsafePointer[DIReservoir, MutExternalOrigin]
+    var gbuf_normal:      UnsafePointer[Float32, MutExternalOrigin]
+    var gbuf_depth:       UnsafePointer[Float32, MutExternalOrigin]
+    var gbuf_material_id: UnsafePointer[Int32, MutExternalOrigin]
     # World position per pixel (Phase 0.3's other G-buffer output). Needed
     # for spatial reuse's Z normalization: deciding whether a NEIGHBOUR's
     # integration domain could have produced the chosen sample means
     # re-evaluating the target function at THAT neighbour's shading point,
     # which needs its position, not just its normal.
-    var gbuf_world_pos:   UnsafePointer[Float32, MutAnyOrigin]
+    var gbuf_world_pos:   UnsafePointer[Float32, MutExternalOrigin]
     var frame_w: Int32
     var frame_h: Int32
 
 @always_inline
 def reservoir_io_null() -> ReservoirIO:
     return ReservoirIO(
-        read=UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling(),
-        write=UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling(),
-        gbuf_normal=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        gbuf_depth=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        gbuf_material_id=UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling(),
-        gbuf_world_pos=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        read=UnsafePointer[DIReservoir, MutExternalOrigin].unsafe_dangling(),
+        write=UnsafePointer[DIReservoir, MutExternalOrigin].unsafe_dangling(),
+        gbuf_normal=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_depth=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_material_id=UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_world_pos=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0),
     )

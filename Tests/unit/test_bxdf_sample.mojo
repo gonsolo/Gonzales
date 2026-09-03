@@ -12,10 +12,10 @@ comptime EPS: Float32 = 1e-3
 def _close(a: Float32, b: Float32) -> Bool:
     return abs(a - b) < EPS
 
-def _simd_close(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> Bool:
+def _simd_close(a: Vec3f, b: Vec3f) -> Bool:
     return _close(a[0], b[0]) and _close(a[1], b[1]) and _close(a[2], b[2])
 
-def _simd_len(v: SIMD[DType.float32, 3]) -> Float32:
+def _simd_len(v: Vec3f) -> Float32:
     return sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
 
 def _make_material(albedo: RGB, roughU: Float32, roughV: Float32) -> Material_C:
@@ -24,20 +24,20 @@ def _make_material(albedo: RGB, roughU: Float32, roughV: Float32) -> Material_C:
         RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0), Int32(-1))
 
 def _make_gc(
-    normal: SIMD[DType.float32, 3], wo: SIMD[DType.float32, 3],
-    tangent: SIMD[DType.float32, 3], bitangent: SIMD[DType.float32, 3],
+    normal: Vec3f, wo: Vec3f,
+    tangent: Vec3f, bitangent: Vec3f,
 ) -> GeomContext:
-    return GeomContext(normal, normal, SIMD[DType.float32, 3](0.0, 0.0, 0.0), wo,
+    return GeomContext(normal, normal, Vec3f(0.0, 0.0, 0.0), wo,
         tangent, bitangent, RGB(Float32(0.0)), Float32(0.0))
 
-def NORMAL_Z() -> SIMD[DType.float32, 3]:
-    return SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+def NORMAL_Z() -> Vec3f:
+    return Vec3f(0.0, 0.0, 1.0)
 
-def TANGENT_X() -> SIMD[DType.float32, 3]:
-    return SIMD[DType.float32, 3](1.0, 0.0, 0.0)
+def TANGENT_X() -> Vec3f:
+    return Vec3f(1.0, 0.0, 0.0)
 
-def BITANGENT_Y() -> SIMD[DType.float32, 3]:
-    return SIMD[DType.float32, 3](0.0, 1.0, 0.0)
+def BITANGENT_Y() -> Vec3f:
+    return Vec3f(0.0, 1.0, 0.0)
 
 # ── bxdf_sample_conductor ────────────────────────────────────────────────────
 
@@ -96,7 +96,7 @@ def test_dielectric_normal_incidence_transmits_straight_through() raises:
     """At normal incidence with u_reflect forced past the (small) Fresnel
     reflectance, the ray must transmit essentially undeviated."""
     var geom_normal = NORMAL_Z()
-    var ray_dir = SIMD[DType.float32, 3](0.0, 0.0, -1.0)  # straight in, entering
+    var ray_dir = Vec3f(0.0, 0.0, -1.0)  # straight in, entering
     var (bs, _) = bxdf_sample_dielectric(geom_normal, ray_dir, Float32(1.5), True, Float32(0.999))
     assert_true((Int(bs.flags) & Int(BxDFFlags.transmit)) != 0)
     assert_true(_simd_close(bs.wi, ray_dir))

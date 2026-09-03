@@ -1,7 +1,7 @@
 from std.memory import alloc
 from std.sys import has_accelerator
-from std.gpu.host import DeviceContext, DeviceBuffer
-from std.gpu.host._nvidia_cuda import CUDA
+from max.gpu.host import DeviceContext, DeviceBuffer
+from max.gpu.host._nvidia_cuda import CUDA
 from std.testing import assert_true, TestSuite
 from gonzales.vulkaninterop import (
     vulkaninterop_create, vulkaninterop_get_cuda_ptr,

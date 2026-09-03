@@ -1,7 +1,7 @@
 from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory import alloc
-from .geometry import RGB, SampledSpectrum, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, light_sampler_pdf, Instance_C, MeasuredBRDF_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr
+from .geometry import RGB, SampledSpectrum, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, light_sampler_pdf, Instance_C, MeasuredBRDF_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
 from .rng import PCG32
@@ -45,8 +45,8 @@ struct GIPendingX1(TrivialRegisterPassable):
     called the real shade_diffuse epilogue between bounces, so it couldn't
     have caught this)."""
     var active:     Int8
-    var hit_point:  SIMD[DType.float32, 3]
-    var normal:     SIMD[DType.float32, 3]
+    var hit_point:  Vec3f
+    var normal:     Vec3f
     var alb:        RGB
     var throughput: RGB
 
@@ -54,8 +54,8 @@ struct GIPendingX1(TrivialRegisterPassable):
 def gi_pending_x1_init() -> GIPendingX1:
     return GIPendingX1(
         active=Int8(0),
-        hit_point=SIMD[DType.float32, 3](Float32(0)),
-        normal=SIMD[DType.float32, 3](Float32(0)),
+        hit_point=Vec3f(Float32(0)),
+        normal=Vec3f(Float32(0)),
         alb=RGB(Float32(0)),
         throughput=RGB(Float32(0)),
     )
@@ -68,15 +68,15 @@ struct LightContext(Copyable, Movable):
     fields — construction call sites build this with keyword args precisely
     because several fields share the same Int/pointer type and a positional
     transposition wouldn't be caught by the type checker."""
-    var area_lights:      UnsafePointer[AreaLight_C, MutAnyOrigin]
+    var area_lights:      UnsafePointer[AreaLight_C, MutExternalOrigin]
     var area_light_count: Int
-    var distant_lights:   UnsafePointer[DistantLight_C, MutAnyOrigin]
+    var distant_lights:   UnsafePointer[DistantLight_C, MutExternalOrigin]
     var distant_count:    Int
-    var point_lights:     UnsafePointer[PointLight_C, MutAnyOrigin]
+    var point_lights:     UnsafePointer[PointLight_C, MutExternalOrigin]
     var point_count:      Int
-    var infinite_lights:  UnsafePointer[InfiniteLight_C, MutAnyOrigin]
+    var infinite_lights:  UnsafePointer[InfiniteLight_C, MutExternalOrigin]
     var infinite_count:   Int
-    var spheres:          UnsafePointer[Sphere_C, MutAnyOrigin]
+    var spheres:          UnsafePointer[Sphere_C, MutExternalOrigin]
     var sphere_count:     Int
     var light_sampler:    LightSampler_C
 
@@ -86,17 +86,17 @@ struct ShadeContext:
     and material shaders. Light-source data lives in the nested `lights`
     LightContext (step 7)."""
     var path_idx:         Int
-    var bvh2Nodes:        UnsafePointer[BVH2Node, MutAnyOrigin]
-    var primIds:          UnsafePointer[PrimId_C, MutAnyOrigin]
-    var meshes:           UnsafePointer[TriangleMesh_C, MutAnyOrigin]
-    var curves:           UnsafePointer[Curve_C, MutAnyOrigin]
-    var materials:        UnsafePointer[Material_C, MutAnyOrigin]
-    var tex_filenames:    UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin]
-    var textures:         UnsafePointer[GpuTexture_C, MutAnyOrigin]
+    var bvh2Nodes:        UnsafePointer[BVH2Node, MutExternalOrigin]
+    var primIds:          UnsafePointer[PrimId_C, MutExternalOrigin]
+    var meshes:           UnsafePointer[TriangleMesh_C, MutExternalOrigin]
+    var curves:           UnsafePointer[Curve_C, MutExternalOrigin]
+    var materials:        UnsafePointer[Material_C, MutExternalOrigin]
+    var tex_filenames:    UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin]
+    var textures:         UnsafePointer[GpuTexture_C, MutExternalOrigin]
     var n_textures:       Int
-    var shadow_tasks:     UnsafePointer[ShadowTask_C, MutAnyOrigin]
+    var shadow_tasks:     UnsafePointer[ShadowTask_C, MutExternalOrigin]
     var px_scale:         Float32
-    var sobol_matrices:   UnsafePointer[UInt32, MutAnyOrigin]
+    var sobol_matrices:   UnsafePointer[UInt32, MutExternalOrigin]
     var guide:            GuideGrid
     # Phase 2 (docs/A2_restir_migration_plan.md): CPU-only today, like
     # `guide` above -- every GPU ShadeContext construction site passes
@@ -109,9 +109,9 @@ struct ShadeContext:
     # pass dangling/zero-count values — GPU's own device-side scene upload
     # never populates instance data, so no PrimId_C.type==6 leaf can appear
     # there and these are never dereferenced on that path.
-    var blasNodesArr:   UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin]
-    var blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin]
-    var instances:      UnsafePointer[Instance_C, MutAnyOrigin]
+    var blasNodesArr:   UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin]
+    var blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin]
+    var instances:      UnsafePointer[Instance_C, MutExternalOrigin]
     # Staged spectral rendering rollout (Stage 2c, see project_spectral_rendering
     # memory) — host pointers on CPU, device pointers on GPU (see gpu.mojo's
     # ShadeContext construction sites).
@@ -120,7 +120,7 @@ struct ShadeContext:
     # indexed by Material_C.measured_idx (see measured_bsdf.mojo's loader).
     # Host pointer on CPU; dangling on GPU call sites until Stage 3 uploads
     # these as device buffers.
-    var measured_brdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin]
+    var measured_brdfs: UnsafePointer[MeasuredBRDF_C, MutExternalOrigin]
     # Phase 4 (docs/A2_restir_migration_plan.md), CPU-only, dead/unwired
     # (dangling/null on every call site except shade_core_cpu_nee's, which
     # is itself not called with real buffers by any render path yet -- see
@@ -136,7 +136,7 @@ struct ShadeContext:
     # gi_temporal_spatial_combine/gi_resolve consume once bounce 1 lands on
     # a diffuse x2 too (this scope's restriction, see
     # _gi_generate_recon_candidate's docstring for why).
-    var gi_pending: UnsafePointer[GIPendingX1, MutAnyOrigin]
+    var gi_pending: UnsafePointer[GIPendingX1, MutExternalOrigin]
     var gi_io:      GIReservoirIO
 
 @always_inline
@@ -144,10 +144,10 @@ def _shading_normal(
     mesh: TriangleMesh_C,
     v0: Int, v1: Int, v2: Int,
     bu: Float32, bv: Float32,
-    geo_normal: SIMD[DType.float32, 3],
+    geo_normal: Vec3f,
     instance_idx: Int32 = Int32(-1),
-    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
-) -> SIMD[DType.float32, 3]:
+    instances: UnsafePointer[Instance_C, MutExternalOrigin] = UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
+) -> Vec3f:
     """Interpolate per-vertex shading normals with barycentric (bu, bv).
     Falls back to the geometric normal if the mesh has no shading normals.
     The result is aligned to the same hemisphere as geo_normal, which the
@@ -158,9 +158,9 @@ def _shading_normal(
     if Int(mesh.normals) <= 4:
         return geo_normal
     var w0 = Float32(1.0) - bu - bv
-    var n0 = SIMD[DType.float32, 3](mesh.normals[v0*3], mesh.normals[v0*3+1], mesh.normals[v0*3+2])
-    var n1 = SIMD[DType.float32, 3](mesh.normals[v1*3], mesh.normals[v1*3+1], mesh.normals[v1*3+2])
-    var n2 = SIMD[DType.float32, 3](mesh.normals[v2*3], mesh.normals[v2*3+1], mesh.normals[v2*3+2])
+    var n0 = Vec3f(mesh.normals[v0*3], mesh.normals[v0*3+1], mesh.normals[v0*3+2])
+    var n1 = Vec3f(mesh.normals[v1*3], mesh.normals[v1*3+1], mesh.normals[v1*3+2])
+    var n2 = Vec3f(mesh.normals[v2*3], mesh.normals[v2*3+1], mesh.normals[v2*3+2])
     var sn = n0 * w0 + n1 * bu + n2 * bv
     if instance_idx >= Int32(0):
         sn = transform_normal_by_instance(instances[Int(instance_idx)].worldToObj, sn)
@@ -183,7 +183,7 @@ def _srgb_to_linear(c: Float32) -> Float32:
 # Bilinear sample of ONE mip level: `off` = float offset of the level in
 # tex.data, (lw, lh) = that level's dimensions. Pixel centres at +0.5, wrap.
 @always_inline
-def _sample_level(data: UnsafePointer[Float32, MutAnyOrigin], off: Int, lw: Int, lh: Int, u: Float32, v: Float32) -> RGB:
+def _sample_level(data: UnsafePointer[Float32, MutExternalOrigin], off: Int, lw: Int, lh: Int, u: Float32, v: Float32) -> RGB:
     var s = u - Float32(Int(u))
     if s < Float32(0.0): s += Float32(1.0)
     var t = v - Float32(Int(v))
@@ -247,8 +247,8 @@ def sample_texture[use_gpu: Bool](
     u: Float32, v: Float32,
     raw: Bool,
     pixel_uv: Float32,   # texture-space footprint of one pixel (uv units); <=0 => LOD 0
-    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
-    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
+    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin],
+    textures: UnsafePointer[GpuTexture_C, MutExternalOrigin],
     n_textures: Int,
     mut found: Bool,
 ) -> RGB:
@@ -280,8 +280,8 @@ def sample_texture[use_gpu: Bool](
                 var tr = alloc[Float32](3)
                 tr[0] = Float32(0.0); tr[1] = Float32(0.0); tr[2] = Float32(0.0)
                 _ = external_call["texture", Bool,
-                    UnsafePointer[UInt8, MutAnyOrigin], Float32, Float32,
-                    UnsafePointer[Float32, MutAnyOrigin]](filename, su, tv, tr)
+                    UnsafePointer[UInt8, MutExternalOrigin], Float32, Float32,
+                    UnsafePointer[Float32, MutExternalOrigin]](filename, su, tv, tr)
                 var rr = tr[0]; var gg = tr[1]; var bb = tr[2]
                 tr.free()
                 found = True
@@ -296,8 +296,8 @@ def _tex_lookup[use_gpu: Bool](
     inter: Intersection_C,
     v0: Int, v1: Int, v2: Int,
     mesh: TriangleMesh_C,
-    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
-    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
+    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin],
+    textures: UnsafePointer[GpuTexture_C, MutExternalOrigin],
     n_textures: Int,
     pixel_uv: Float32 = Float32(0.0),
 ) -> RGB:
@@ -345,8 +345,8 @@ def _tex_lookup[use_gpu: Bool](
                 var tr = alloc[Float32](3)
                 tr[0] = Float32(0.0); tr[1] = Float32(0.0); tr[2] = Float32(0.0)
                 _ = external_call["texture", Bool,
-                    UnsafePointer[UInt8, MutAnyOrigin], Float32, Float32,
-                    UnsafePointer[Float32, MutAnyOrigin]](filename, su, tv, tr)
+                    UnsafePointer[UInt8, MutExternalOrigin], Float32, Float32,
+                    UnsafePointer[Float32, MutExternalOrigin]](filename, su, tv, tr)
                 var result = RGB(_srgb_to_linear(tr[0]), _srgb_to_linear(tr[1]), _srgb_to_linear(tr[2]))
                 tr.free()
                 return result
@@ -355,10 +355,10 @@ def _tex_lookup[use_gpu: Bool](
 
 @always_inline
 def shade_core(
-    paths: UnsafePointer[PathState_C, MutAnyOrigin],
-    intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    paths: UnsafePointer[PathState_C, MutExternalOrigin],
+    intersections: UnsafePointer[Intersection_C, MutExternalOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
+    materials: UnsafePointer[Material_C, MutExternalOrigin],
     tid: Int,
 ):
     var path_ptr = paths + tid
@@ -385,9 +385,9 @@ def shade_core(
             path_ptr[].active = 0
             return
 
-        var p0 = SIMD[DType.float32, 3](mesh.points[v0 * 4], mesh.points[v0 * 4 + 1], mesh.points[v0 * 4 + 2])
-        var p1 = SIMD[DType.float32, 3](mesh.points[v1 * 4], mesh.points[v1 * 4 + 1], mesh.points[v1 * 4 + 2])
-        var p2 = SIMD[DType.float32, 3](mesh.points[v2 * 4], mesh.points[v2 * 4 + 1], mesh.points[v2 * 4 + 2])
+        var p0 = Vec3f(mesh.points[v0 * 4], mesh.points[v0 * 4 + 1], mesh.points[v0 * 4 + 2])
+        var p1 = Vec3f(mesh.points[v1 * 4], mesh.points[v1 * 4 + 1], mesh.points[v1 * 4 + 2])
+        var p2 = Vec3f(mesh.points[v2 * 4], mesh.points[v2 * 4 + 1], mesh.points[v2 * 4 + 2])
 
         var (normal, ray_dir, _) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
 
@@ -406,8 +406,8 @@ def shade_core(
 
         # Build tangent basis
         var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
-        var tangent = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
-        var bitangent = SIMD[DType.float32, 3](frame.y.x, frame.y.y, frame.y.z)
+        var tangent = Vec3f(frame.x.x, frame.x.y, frame.x.z)
+        var bitangent = Vec3f(frame.y.x, frame.y.y, frame.y.z)
 
         var dir = tangent * x + bitangent * y + normal * z
         var dlen = dot(dir, dir)
@@ -415,7 +415,7 @@ def shade_core(
             dir = dir * (1.0 / sqrt(dlen))
 
         # Update Ray
-        var org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z) + ray_dir * inter.tHit + normal * 0.0001
+        var org = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z) + ray_dir * inter.tHit + normal * 0.0001
         path_ptr[].ray = Ray_C(Point3f(org[0], org[1], org[2]), Vec3f(dir[0], dir[1], dir[2]))
 
         # Update Throughput (albedo)
@@ -431,7 +431,7 @@ def shade_core(
 @always_inline
 def _get_tri_verts(
     inter: Intersection_C,
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
 ) -> Tuple[TriangleMesh_C, Int, Int, Int, Bool]:
     var mi: Int
     var bv: Int
@@ -453,13 +453,13 @@ def _get_tri_verts(
 # Returns (geom_normal_ff, ray_dir, ray_org).
 @always_inline
 def _geom_normal_and_ray(
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
-    p0: SIMD[DType.float32, 3],
-    p1: SIMD[DType.float32, 3],
-    p2: SIMD[DType.float32, 3],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
+    p0: Vec3f,
+    p1: Vec3f,
+    p2: Vec3f,
     instance_idx: Int32 = Int32(-1),
-    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
-) -> Tuple[SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3]]:
+    instances: UnsafePointer[Instance_C, MutExternalOrigin] = UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
+) -> Tuple[Vec3f, Vec3f, Vec3f]:
     """p0/p1/p2 come straight from `mesh.points` — object-space if this hit
     came from an instanced BLAS (instance_idx >= 0), so the resulting normal
     is transformed to world space before face-forwarding against the ray
@@ -473,10 +473,10 @@ def _geom_normal_and_ray(
     var nlen = dot(gn, gn)
     if nlen > Float32(0.0):
         gn = gn * (Float32(1.0) / sqrt(nlen))
-    var rd = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+    var rd = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
     if dot(gn, rd) > Float32(0.0):
         gn = -gn
-    var ro = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
+    var ro = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
     return (gn, rd, ro)
 
 
@@ -486,15 +486,15 @@ def _geom_normal_and_ray(
 # unlike the triangle path there is no object/world transform to apply.
 @always_inline
 def _sphere_geom_normal_and_ray(
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     inter: Intersection_C,
-    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
-) -> Tuple[SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3]]:
+    spheres: UnsafePointer[Sphere_C, MutExternalOrigin],
+) -> Tuple[Vec3f, Vec3f, Vec3f]:
     var sph = spheres[Int(inter.primId.id1)]
-    var rd = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-    var ro = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
+    var rd = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+    var ro = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
     var hit = ro + rd * inter.tHit
-    var c = SIMD[DType.float32, 3](sph.center.x, sph.center.y, sph.center.z)
+    var c = Vec3f(sph.center.x, sph.center.y, sph.center.z)
     var gn = hit - c
     var nlen = dot(gn, gn)
     if nlen > Float32(0.0):
@@ -518,34 +518,34 @@ def _sphere_geom_normal_and_ray(
 # False the caller must deactivate the path without reading anything else.
 @always_inline
 def _hit_geom(
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     inter: Intersection_C,
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
+    spheres: UnsafePointer[Sphere_C, MutExternalOrigin],
     instance_idx: Int32 = Int32(-1),
-    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
-) -> Tuple[Bool, Bool, SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3], TriangleMesh_C, Int, Int, Int]:
+    instances: UnsafePointer[Instance_C, MutExternalOrigin] = UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
+) -> Tuple[Bool, Bool, Vec3f, Vec3f, Vec3f, TriangleMesh_C, Int, Int, Int]:
     """Returns (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2)."""
     if inter.primId.type == Int8(4):
         var sph_r = _sphere_geom_normal_and_ray(path_ptr, inter, spheres)
         return (True, True, sph_r[0], sph_r[1], sph_r[2], meshes[0], 0, 0, 0)
     var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
     if not ok:
-        var z = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
+        var z = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
         return (False, False, z, z, z, mesh, 0, 0, 0)
-    var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
-    var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
-    var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+    var p0 = Vec3f(mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+    var p1 = Vec3f(mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+    var p2 = Vec3f(mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
     var gnr = _geom_normal_and_ray(path_ptr, p0, p1, p2, instance_idx, instances)
     return (True, False, gnr[0], gnr[1], gnr[2], mesh, v0, v1, v2)
 
 
 @always_inline
 def _shadow_contribute[enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     ctx: ShadeContext,
-    origin: SIMD[DType.float32, 3],
-    dir: SIMD[DType.float32, 3],
+    origin: Vec3f,
+    dir: Vec3f,
     tmax: Float32,
     contrib: RGB,
     guide_write: GuideGrid = null_guide(),
@@ -583,7 +583,7 @@ def _shadow_contribute[enqueue_shadow: Bool](
 # ── DiffuseTransmission branch ────────────────────────────────────────────────
 @always_inline
 def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
 ):
@@ -705,7 +705,7 @@ def _albedo_highlight_boost(albedo: RGB, contrib: RGB) -> RGB:
 
 @always_inline
 def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
     mat: Material_C,
@@ -717,7 +717,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         return
 
     var alb: RGB
-    var normal: SIMD[DType.float32, 3]
+    var normal: Vec3f
     if is_sphere:
         # Analytic sphere: exact normal IS the shading normal, no UV space
         # so alb falls back to the material's flat albedo.
@@ -749,12 +749,12 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     # larger ⇒ soft sheen (e.g. tyres 0.4).
     var coat_alpha = max(mat.roughU, mat.roughV)
     var is_rough_coat = coat_alpha > Float32(0.001)
-    var wo = SIMD[DType.float32, 3](-ray_dir[0], -ray_dir[1], -ray_dir[2])  # toward viewer
+    var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])  # toward viewer
 
     # Tangent frame (Frisvad) around the shading normal for hemisphere sampling.
     var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
-    var tangent = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
-    var bitangent = SIMD[DType.float32, 3](frame.y.x, frame.y.y, frame.y.z)
+    var tangent = Vec3f(frame.x.x, frame.x.y, frame.x.z)
+    var bitangent = Vec3f(frame.y.x, frame.y.y, frame.y.z)
 
     # Microfacet normal at the coat's air interface: the surface normal when
     # smooth, else a GGX visible-normal sample (Heitz VNDF). Fresnel is taken
@@ -869,7 +869,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     # Transmitted into the coat: random-walk the base/coat-underside layers.
     var beta = RGB(Float32(1.0))
     var exited = False
-    var exit_dir = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
+    var exit_dir = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
 
     comptime MAX_COAT_DEPTH = 10
     for depth in range(MAX_COAT_DEPTH):
@@ -941,7 +941,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         if ctx.lights.infinite_count > 0:
             for inf_i in range(ctx.lights.infinite_count):
                 var ilight = ctx.lights.infinite_lights[inf_i]
-                var env_dir: SIMD[DType.float32, 3]
+                var env_dir: Vec3f
                 var env_rgb: RGB
                 var pdf_light: Float32
                 if ilight.tex_idx >= Int32(0) and _is_real_ptr(ilight.pixels_ptr) and _is_real_ptr(ilight.cdf_ptr) and ilight.cdf_w > Int32(0):
@@ -1022,7 +1022,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                              Vec3f(-wm_e[0], -wm_e[1], -wm_e[2]), ior)
             if rr[0]:
                 var wt = rr[1]
-                exit_dir = SIMD[DType.float32, 3](wt.x, wt.y, wt.z)
+                exit_dir = Vec3f(wt.x, wt.y, wt.z)
                 var elen = dot(exit_dir, exit_dir)
                 if elen > Float32(0.0):
                     exit_dir = exit_dir * (Float32(1.0) / sqrt(elen))
@@ -1077,7 +1077,7 @@ comptime RR_THROUGHPUT_CLAMP: Float32 = 32.0
 # the same bounce for other purposes and must not draw a second one.
 @always_inline
 def _apply_russian_roulette(
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     pcg: PCG32,
     u_rr: Float32,
 ):
@@ -1102,10 +1102,10 @@ def _apply_russian_roulette(
 # variants, so the early-return there is a harmless no-op for them.
 @always_inline
 def _finish_delta_bounce(
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     mut pcg: PCG32,
     bs: BxDFSample,
-    hit_point: SIMD[DType.float32, 3],
+    hit_point: Vec3f,
     default_albedo: RGB,
 ):
     if bs.is_valid == Int8(0):
@@ -1128,13 +1128,13 @@ def _finish_delta_bounce(
 # ── Dielectric (glass) branch ─────────────────────────────────────────────────
 @always_inline
 def shade_dielectric[use_gpu: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     inter: Intersection_C,
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
     mat: Material_C,
-    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
-    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin] = UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(),
+    spheres: UnsafePointer[Sphere_C, MutExternalOrigin],
+    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin] = UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+    textures: UnsafePointer[GpuTexture_C, MutExternalOrigin] = UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(),
     n_textures: Int = 0,
 ):
     var (ok, is_sphere, geom_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, meshes, spheres)
@@ -1147,21 +1147,41 @@ def shade_dielectric[use_gpu: Bool](
         # ReverseOrientation — is the authoritative outside direction the dielectric
         # uses to pick entering vs exiting. (Using the raw vertex normal instead
         # breaks meshes whose vertex normals point inward, causing spurious TIR.)
-        # An analytic sphere's exact outward normal IS the shading normal already
-        # -- no interpolation needed.
         geom_normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geom_normal)
-    elif mat.normal_tex_idx >= Int32(0):
-        # Mitsuba "normalmap" wrapping a dielectric (e.g. the SMS paper's own
-        # sphere_sms.xml bumpy glass sphere): perturb the shading normal used
-        # for refraction itself, not just NEE shading -- this is what turns a
-        # smooth-lens refraction into the swirly caustic pattern the reference
-        # renderer shows. See _apply_normal_map_sphere's own docstring for the
-        # analytic sphere UV parameterization this needs (Sphere_C has none
-        # built in).
+    else:
+        # `_hit_geom`/`_sphere_geom_normal_and_ray` returns a FACE-FORWARDED
+        # normal (always flipped to oppose the incoming ray) -- correct for
+        # diffuse/conductor shading, but it destroys the entering/exiting
+        # distinction dielectric needs: `bxdf_sample_dielectric`'s `facing`
+        # check against a normal that's ALWAYS pre-flipped toward the ray is
+        # tautologically always true, so every hit (both the true entry AND
+        # the true exit on the far side of a solid sphere) got read as an
+        # "entering" event -- eta=1/ior applied TWICE instead of 1/ior then
+        # ior, losing (1/ior)^2/ior^2 = 1/ior^4 of the transmitted radiance
+        # for a full traversal instead of the correct factor of 1. Recompute
+        # the TRUE, un-flipped outward normal (mirrors the mesh branch's own
+        # "dielectric needs the raw pre-faceforward normal" rule, see the
+        # GeomContext-builders comment a few hundred lines down) before any
+        # normal-map perturbation, which itself also needs the true outward
+        # direction as its base frame.
         var sph = spheres[Int(inter.primId.id1)]
-        var center = SIMD[DType.float32, 3](sph.center.x, sph.center.y, sph.center.z)
+        var center = Vec3f(sph.center.x, sph.center.y, sph.center.z)
         var hit_point_raw = ray_org + ray_dir * inter.tHit
-        geom_normal = _apply_normal_map_sphere[use_gpu](mat, center, hit_point_raw, geom_normal, tex_filenames, textures, n_textures)
+        var true_normal = hit_point_raw - center
+        var tn_len2 = dot(true_normal, true_normal)
+        if tn_len2 > Float32(0.0):
+            true_normal = true_normal * (Float32(1.0) / sqrt(tn_len2))
+        geom_normal = true_normal
+        if mat.normal_tex_idx >= Int32(0):
+            # Mitsuba "normalmap" wrapping a dielectric (e.g. the SMS paper's
+            # own sphere_sms.xml bumpy glass sphere): perturb the shading
+            # normal used for refraction itself, not just NEE shading --
+            # this is what turns a smooth-lens refraction into the swirly
+            # caustic pattern the reference renderer shows. See
+            # _apply_normal_map_sphere's own docstring for the analytic
+            # sphere UV parameterization this needs (Sphere_C has none
+            # built in).
+            geom_normal = _apply_normal_map_sphere[use_gpu](mat, center, hit_point_raw, geom_normal, tex_filenames, textures, n_textures)
 
     var ior = mat.albedo.r
     # A camera/primary ray (bounce 0) from an exterior camera always enters the
@@ -1183,11 +1203,11 @@ def shade_dielectric[use_gpu: Bool](
 # soap bubbles, thin films. IOR stored in mat.albedo.r like regular dielectric.
 @always_inline
 def shade_thin_dielectric(
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     inter: Intersection_C,
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
     mat: Material_C,
-    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    spheres: UnsafePointer[Sphere_C, MutExternalOrigin],
 ):
     var (ok, is_sphere, geom_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, meshes, spheres)
     if not ok:
@@ -1209,14 +1229,14 @@ def shade_thin_dielectric(
 
 @always_inline
 def _nee_loop_simple[enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     ctx: ShadeContext,
-    normal: SIMD[DType.float32, 3],
-    hit_point: SIMD[DType.float32, 3],
+    normal: Vec3f,
+    hit_point: Vec3f,
     alb: RGB,
     alpha: Float32,
     mat_kind: Int32,
-    wo: SIMD[DType.float32, 3],
+    wo: Vec3f,
     mut pcg: PCG32,
     guide_write: GuideGrid = null_guide(),
 ):
@@ -1257,11 +1277,11 @@ def _nee_loop_simple[enqueue_shadow: Bool](
 
 @always_inline
 def _shade_conductor_nee[enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     ctx: ShadeContext,
-    n: SIMD[DType.float32, 3],
-    wo: SIMD[DType.float32, 3],
-    hit_point: SIMD[DType.float32, 3],
+    n: Vec3f,
+    wo: Vec3f,
+    hit_point: Vec3f,
     f0: RGB,
     alpha: Float32,
     mut pcg: PCG32,
@@ -1304,7 +1324,7 @@ def _shade_conductor_nee[enqueue_shadow: Bool](
 
 @always_inline
 def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
     mat: Material_C,
@@ -1321,9 +1341,9 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].active = 0
         return
 
-    var normal: SIMD[DType.float32, 3]
-    var tangent: SIMD[DType.float32, 3]
-    var bitangent: SIMD[DType.float32, 3]
+    var normal: Vec3f
+    var tangent: Vec3f
+    var bitangent: Vec3f
     var alpha_x: Float32
     var alpha_y: Float32
 
@@ -1336,8 +1356,8 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         alpha_x = max(mat_eff.roughU, Float32(0.0001))
         alpha_y = max(mat_eff.roughV, Float32(0.0001))
         var frame0 = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
-        tangent = SIMD[DType.float32, 3](frame0.x.x, frame0.x.y, frame0.x.z)
-        bitangent = SIMD[DType.float32, 3](frame0.y.x, frame0.y.y, frame0.y.z)
+        tangent = Vec3f(frame0.x.x, frame0.x.y, frame0.x.z)
+        bitangent = Vec3f(frame0.y.x, frame0.y.y, frame0.y.z)
     else:
         if mat_eff.rough_tex_idx >= Int32(0) and Int(mesh.uvs) > 4:
             var bw0 = Float32(1.0) - inter.u - inter.v
@@ -1356,9 +1376,9 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
                 mat_eff.roughU = r
                 mat_eff.roughV = r
 
-        var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
-        var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
-        var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+        var p0 = Vec3f(mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+        var p1 = Vec3f(mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+        var p2 = Vec3f(mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
 
         # Use interpolated shading normal for smooth specular reflections
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
@@ -1388,15 +1408,15 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
                 if blen > Float32(0.0): bitangent = bitangent * (Float32(1.0) / sqrt(blen))
             else:
                 var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
-                tangent = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
-                bitangent = SIMD[DType.float32, 3](frame.y.x, frame.y.y, frame.y.z)
+                tangent = Vec3f(frame.x.x, frame.x.y, frame.x.z)
+                bitangent = Vec3f(frame.y.x, frame.y.y, frame.y.z)
         else:
             var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
-            tangent = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
-            bitangent = SIMD[DType.float32, 3](frame.y.x, frame.y.y, frame.y.z)
+            tangent = Vec3f(frame.x.x, frame.x.y, frame.x.z)
+            bitangent = Vec3f(frame.y.x, frame.y.y, frame.y.z)
 
     var hit_point = ray_org + ray_dir * inter.tHit + geo_normal * Float32(0.0001)
-    var wo = SIMD[DType.float32, 3](-ray_dir[0], -ray_dir[1], -ray_dir[2])
+    var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])
     var gc = GeomContext(normal, geo_normal, hit_point, wo, tangent, bitangent,
         RGB(Float32(0.0)), Float32(0.0))
 
@@ -1452,13 +1472,13 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
 # bisection trail, including the earlier wrong kernel-size and by-value-struct
 # hypotheses.
 def _shade_measured_nee[enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     ctx: ShadeContext,
-    measured_brdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin],
+    measured_brdfs: UnsafePointer[MeasuredBRDF_C, MutExternalOrigin],
     measured_idx: Int32,
-    tangent: SIMD[DType.float32, 3], bitangent: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3],
-    wo: SIMD[DType.float32, 3],
-    hit_point: SIMD[DType.float32, 3],
+    tangent: Vec3f, bitangent: Vec3f, normal: Vec3f,
+    wo: Vec3f,
+    hit_point: Vec3f,
     mut pcg: PCG32,
 ):
     """Distant + point + sphere + area + infinite-light NEE for a measured
@@ -1502,7 +1522,7 @@ def _shade_measured_nee[enqueue_shadow: Bool](
 
 @always_inline
 def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
     mat: Material_C,
@@ -1512,7 +1532,7 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].active = 0
         return
 
-    var normal: SIMD[DType.float32, 3]
+    var normal: Vec3f
     var hit_normal = geo_normal
 
     if is_sphere:
@@ -1543,11 +1563,11 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
             normal = geo_normal
 
     var hit_point = ray_org + ray_dir * inter.tHit + hit_normal * Float32(0.0001)
-    var wo = SIMD[DType.float32, 3](-ray_dir[0], -ray_dir[1], -ray_dir[2])
+    var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])
 
     var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
-    var tangent = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
-    var bitangent = SIMD[DType.float32, 3](frame.y.x, frame.y.y, frame.y.z)
+    var tangent = Vec3f(frame.x.x, frame.x.y, frame.x.z)
+    var bitangent = Vec3f(frame.y.x, frame.y.y, frame.y.z)
 
     if mat.measured_idx < Int32(0):
         # Load failure fallback (see material_builder.mojo) -- render as flat
@@ -1569,7 +1589,7 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
     # against the pbrt reference showing they should stay lit, not black.
     _shade_measured_nee[enqueue_shadow](path_ptr, ctx, ctx.measured_brdfs, mat.measured_idx, tangent, bitangent, normal, wo, hit_point, pcg)
 
-    var wo_l = SIMD[DType.float32, 3](dot(wo, tangent), dot(wo, bitangent), dot(wo, normal))
+    var wo_l = Vec3f(dot(wo, tangent), dot(wo, bitangent), dot(wo, normal))
     var (wi_l, f, pdf, valid) = bxdf_sample_measured(mb, wo_l, pcg.next_float(), pcg.next_float(), path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
     path_ptr[].pcgState = pcg.state
 
@@ -1608,7 +1628,7 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
 # This is an energy-conserving two-lobe approximation of pbrt's LayeredBxDF.
 @always_inline
 def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
     mat: Material_C,
@@ -1623,11 +1643,11 @@ def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
 
     var ior = mat.emission.r if mat.emission.r > Float32(1.0) else Float32(1.5)
-    var wo = SIMD[DType.float32, 3](-ray_dir[0], -ray_dir[1], -ray_dir[2])
+    var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])
     # Frisvad frame — isotropic GGX only (single alpha), no anisotropy alignment needed.
     var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
-    var tangent   = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
-    var bitangent = SIMD[DType.float32, 3](frame.y.x, frame.y.y, frame.y.z)
+    var tangent   = Vec3f(frame.x.x, frame.x.y, frame.x.z)
+    var bitangent = Vec3f(frame.y.x, frame.y.y, frame.y.z)
     var gc = GeomContext(normal, normal, hit_point, wo, tangent, bitangent,
         RGB(Float32(0.0)), Float32(0.0))
 
@@ -1660,7 +1680,7 @@ def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
 # mat.roughU = blend amount (probability of picking mat2).
 # Not @always_inline: shade_mix ↔ _shade_dispatch would form an always_inline recursion.
 def shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
     mat: Material_C,
@@ -1686,15 +1706,15 @@ def _apply_normal_map[use_gpu: Bool](
     v0: Int, v1: Int, v2: Int,
     mesh: TriangleMesh_C,
     inter: Intersection_C,
-    geom_normal: SIMD[DType.float32, 3],
-    p0: SIMD[DType.float32, 3],
-    p1: SIMD[DType.float32, 3],
-    p2: SIMD[DType.float32, 3],
-    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
-    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
+    geom_normal: Vec3f,
+    p0: Vec3f,
+    p1: Vec3f,
+    p2: Vec3f,
+    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin],
+    textures: UnsafePointer[GpuTexture_C, MutExternalOrigin],
     n_textures: Int,
     pixel_uv: Float32 = Float32(0.0),
-) -> SIMD[DType.float32, 3]:
+) -> Vec3f:
     if mat.normal_tex_idx < Int32(0) or Int(mesh.uvs) <= 4:
         return geom_normal
     # Compute barycentric UV coordinates
@@ -1746,13 +1766,13 @@ def _apply_normal_map[use_gpu: Bool](
 @always_inline
 def _apply_normal_map_sphere[use_gpu: Bool](
     mat: Material_C,
-    center: SIMD[DType.float32, 3],
-    hit_point: SIMD[DType.float32, 3],
-    geom_normal: SIMD[DType.float32, 3],
-    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
-    textures: UnsafePointer[GpuTexture_C, MutAnyOrigin],
+    center: Vec3f,
+    hit_point: Vec3f,
+    geom_normal: Vec3f,
+    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin],
+    textures: UnsafePointer[GpuTexture_C, MutExternalOrigin],
     n_textures: Int,
-) -> SIMD[DType.float32, 3]:
+) -> Vec3f:
     """Analytic-sphere counterpart to `_apply_normal_map` -- no mesh/UVs
     exist for a `Sphere_C`, so u/v and the tangent frame are derived from
     the standard spherical parameterization instead of barycentrics.
@@ -1781,28 +1801,28 @@ def _apply_normal_map_sphere[use_gpu: Bool](
     var local = hit_point - center
     var rd2 = local[0]*local[0] + local[1]*local[1]
     var rd = sqrt(rd2)
-    var theta = atan2(rd, local[2])
-    var phi = atan2(local[1], local[0])
+    var theta = _atan2f(rd, local[2])
+    var phi = _atan2f(local[1], local[0])
     if phi < Float32(0.0):
         phi += Float32(2.0) * Float32(3.14159265358979)
     var u = phi / (Float32(2.0) * Float32(3.14159265358979))
     var v = theta / Float32(3.14159265358979)
-    var dp_du = SIMD[DType.float32, 3](-local[1], local[0], Float32(0.0)) * (Float32(2.0) * Float32(3.14159265358979))
-    var dp_dv: SIMD[DType.float32, 3]
+    var dp_du = Vec3f(-local[1], local[0], Float32(0.0)) * (Float32(2.0) * Float32(3.14159265358979))
+    var dp_dv: Vec3f
     if rd > Float32(1e-8):
         var inv_rd = Float32(1.0) / rd
         var cos_phi = local[0] * inv_rd
         var sin_phi = local[1] * inv_rd
-        dp_dv = SIMD[DType.float32, 3](local[2] * cos_phi, local[2] * sin_phi, -rd) * Float32(3.14159265358979)
+        dp_dv = Vec3f(local[2] * cos_phi, local[2] * sin_phi, -rd) * Float32(3.14159265358979)
     else:
-        dp_dv = SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0)) * Float32(3.14159265358979)
-    var tangent: SIMD[DType.float32, 3]
+        dp_dv = Vec3f(Float32(1.0), Float32(0.0), Float32(0.0)) * Float32(3.14159265358979)
+    var tangent: Vec3f
     var du_len2 = dot(dp_du, dp_du)
     if du_len2 > Float32(1e-12):
         tangent = dp_du * (Float32(1.0) / sqrt(du_len2))
     else:
         var frame = Frame.from_z(Vec3f(geom_normal[0], geom_normal[1], geom_normal[2]))
-        tangent = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
+        tangent = Vec3f(frame.x.x, frame.x.y, frame.x.z)
     var bitangent = cross(geom_normal, tangent)
     var b_len2 = dot(bitangent, bitangent)
     if b_len2 <= Float32(1e-12):
@@ -1836,7 +1856,7 @@ def _apply_normal_map_sphere[use_gpu: Bool](
 # Does NOT perform the backface check — caller must check dot(gc.normal, gc.wo) > 0.
 @always_inline
 def _build_geom_context_full[use_gpu: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     inter: Intersection_C,
     mat: Material_C,
     ctx: ShadeContext,
@@ -1844,7 +1864,7 @@ def _build_geom_context_full[use_gpu: Bool](
     var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(
         path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances)
     if not ok:
-        var z = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
+        var z = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
         return (GeomContext(z, z, z, z, z, z, RGB(Float32(0.0)), Float32(0.0)), False)
 
     if is_sphere:
@@ -1852,16 +1872,16 @@ def _build_geom_context_full[use_gpu: Bool](
         # -- alb falls back to the material's flat albedo (see project_mitsuba_parser
         # memory: no sphere UV parameterization exists in this codebase yet).
         var hit_point = ray_org + ray_dir * inter.tHit + geo_normal * Float32(0.0001)
-        var wo = SIMD[DType.float32, 3](-ray_dir[0], -ray_dir[1], -ray_dir[2])
+        var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])
         var frame = Frame.from_z(Vec3f(geo_normal[0], geo_normal[1], geo_normal[2]))
-        var tangent = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
-        var bitangent = SIMD[DType.float32, 3](frame.y.x, frame.y.y, frame.y.z)
+        var tangent = Vec3f(frame.x.x, frame.x.y, frame.x.z)
+        var bitangent = Vec3f(frame.y.x, frame.y.y, frame.y.z)
         return (GeomContext(geo_normal, geo_normal, hit_point, wo, tangent, bitangent, mat.albedo, Float32(0.0)), True)
 
     var ng_ff = geo_normal
-    var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
-    var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
-    var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+    var p0 = Vec3f(mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+    var p1 = Vec3f(mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+    var p2 = Vec3f(mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
 
     var pixel_uv = Float32(0.0)
     if ctx.px_scale > Float32(0.0) and Int(mesh.uvs) > 1:
@@ -1886,18 +1906,18 @@ def _build_geom_context_full[use_gpu: Bool](
 
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
     var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
-    var wo = SIMD[DType.float32, 3](-ray_dir[0], -ray_dir[1], -ray_dir[2])
+    var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])
     var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
-    var tangent   = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
-    var bitangent = SIMD[DType.float32, 3](frame.y.x, frame.y.y, frame.y.z)
+    var tangent   = Vec3f(frame.x.x, frame.x.y, frame.x.z)
+    var bitangent = Vec3f(frame.y.x, frame.y.y, frame.y.z)
     return (GeomContext(normal, ng_ff, hit_point, wo, tangent, bitangent, alb, pixel_uv), True)
 
 # Extract 8 consecutive Sobol dimensions for one non-delta bounce and advance
 # the path's sampler_dim counter.
 @always_inline
 def _draw_sobol_8(
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
-    sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
+    sobol_matrices: UnsafePointer[UInt32, MutExternalOrigin],
 ) -> SobolSamples8:
     var _sidx = Int(path_ptr[].sobol_idx)
     var _sdim = Int(path_ptr[].sampler_dim)
@@ -1923,7 +1943,7 @@ def _draw_sobol_8(
 
 # ── Marschner/Chiang hair BSDF (3-lobe: R, TT, TRT) ─────────────────────────
 def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
     mat: Material_C,
@@ -1946,7 +1966,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     var curve_idx = Int(inter.primId.id1)
     var h = max(Float32(-0.99), min(Float32(0.99), inter.u))
     var v_global = inter.v
-    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+    var ray_dir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
     var wo = -ray_dir
     var hc = _hair_precompute(mat, ctx.curves, curve_idx, v_global, h, wo)
     # NEE (all light types) and indirect sampling now go through hc directly
@@ -1955,7 +1975,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     var geo_normal = hc.geo_normal
 
     # ── Hit point for shadow rays (always offset toward incoming side) ────────
-    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
+    var ray_org = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
     var hit_base = ray_org + ray_dir * inter.tHit
     var curve_eps = curve_offset_eps(hc.radius)
     var hit_point = hit_base + geo_normal * curve_eps
@@ -2043,13 +2063,13 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
 # Returns (converged, x1_f, x2_f, bsdf_product, dx1_dxlight).
 @always_inline
 def _mnee_walk2(
-    x0: SIMD[DType.float32, 3], x3: SIMD[DType.float32, 3],
-    x1_init: SIMD[DType.float32, 3], n1: SIMD[DType.float32, 3],
-    dp_du1: SIMD[DType.float32, 3], dp_dv1: SIMD[DType.float32, 3], eta1: Float32,
-    x2_init: SIMD[DType.float32, 3], n2: SIMD[DType.float32, 3],
-    dp_du2: SIMD[DType.float32, 3], dp_dv2: SIMD[DType.float32, 3], eta2: Float32,
-    ldp_du: SIMD[DType.float32, 3], ldp_dv: SIMD[DType.float32, 3],
-) -> Tuple[Bool, SIMD[DType.float32, 3], SIMD[DType.float32, 3], Float32, Float32]:
+    x0: Vec3f, x3: Vec3f,
+    x1_init: Vec3f, n1: Vec3f,
+    dp_du1: Vec3f, dp_dv1: Vec3f, eta1: Float32,
+    x2_init: Vec3f, n2: Vec3f,
+    dp_du2: Vec3f, dp_dv2: Vec3f, eta2: Float32,
+    ldp_du: Vec3f, ldp_dv: Vec3f,
+) -> Tuple[Bool, Vec3f, Vec3f, Float32, Float32]:
     var x1 = x1_init
     var x2 = x2_init
     var converged = False
@@ -2068,7 +2088,7 @@ def _mnee_walk2(
         s1 = s1*(Float32(1)/s1l); var t1 = cross(n1,s1)
         var ili1 = Float32(1)/(H1l*wi1l); var ilo1 = eta1/(H1l*wo1l)
         var (a0,b0,c0,cv0) = sms_vertex_mats(wi1,wo1,H1,s1,t1,dp_du1,dp_dv1,ili1,ilo1,
-            SIMD[DType.float32,3](0),SIMD[DType.float32,3](0),dp_du2,dp_dv2,False,True)
+            Vec3f(0),Vec3f(0),dp_du2,dp_dv2,False,True)
         # ── Vertex 1 (x2): wi from x1, wo to x3 ────────────────────────────
         var wi2v = x1 - x2; var wi2l = sqrt(dot(wi2v,wi2v))
         var wo2v = x3 - x2; var wo2l = sqrt(dot(wo2v,wo2v))
@@ -2083,7 +2103,7 @@ def _mnee_walk2(
         s2 = s2*(Float32(1)/s2l); var t2 = cross(n2,s2)
         var ili2 = Float32(1)/(H2l*wi2l); var ilo2 = eta2/(H2l*wo2l)
         var (a1,b1,c1,cv1) = sms_vertex_mats(wi2,wo2,H2,s2,t2,dp_du2,dp_dv2,ili2,ilo2,
-            dp_du1,dp_dv1,SIMD[DType.float32,3](0),SIMD[DType.float32,3](0),True,False)
+            dp_du1,dp_dv1,Vec3f(0),Vec3f(0),True,False)
         _ = a0; _ = c1
         # ── Convergence ──────────────────────────────────────────────────────
         var err = max(max(abs(cv0[0]),abs(cv0[1])), max(abs(cv1[0]),abs(cv1[1])))
@@ -2127,9 +2147,9 @@ def _mnee_walk2(
     var ili1 = Float32(1)/(H1l*wi1l); var ilo1 = eta1/(H1l*wo1l)
     var ili2 = Float32(1)/(H2l*wi2l); var ilo2 = eta2/(H2l*wo2l)
     var (a0f,b0f,c0f,cv0f) = sms_vertex_mats(wi1,wo1,H1,s1,t1,dp_du1,dp_dv1,ili1,ilo1,
-        SIMD[DType.float32,3](0),SIMD[DType.float32,3](0),dp_du2,dp_dv2,False,True)
+        Vec3f(0),Vec3f(0),dp_du2,dp_dv2,False,True)
     var (a1f,b1f,c1f,cv1f) = sms_vertex_mats(wi2,wo2,H2,s2,t2,dp_du2,dp_dv2,ili2,ilo2,
-        dp_du1,dp_dv1,SIMD[DType.float32,3](0),SIMD[DType.float32,3](0),True,False)
+        dp_du1,dp_dv1,Vec3f(0),Vec3f(0),True,False)
     _ = a0f; _ = c1f; _ = cv0f; _ = cv1f
     # ── Block tridiagonal LU factorization for transfer matrix ───────────────
     var (Li0f, det0f) = mat22_inv(b0f)
@@ -2174,14 +2194,14 @@ def _mnee_walk2(
 # det_b is the 2x2 constraint Jacobian determinant needed for the transfer matrix.
 @always_inline
 def _mnee_walk(
-    x0: SIMD[DType.float32, 3],
-    x2: SIMD[DType.float32, 3],
-    x1_init: SIMD[DType.float32, 3],
-    n_in: SIMD[DType.float32, 3],
-    dp_du: SIMD[DType.float32, 3],
-    dp_dv: SIMD[DType.float32, 3],
+    x0: Vec3f,
+    x2: Vec3f,
+    x1_init: Vec3f,
+    n_in: Vec3f,
+    dp_du: Vec3f,
+    dp_dv: Vec3f,
     eta_in: Float32,
-) -> Tuple[Bool, SIMD[DType.float32, 3], Float32, Float32]:
+) -> Tuple[Bool, Vec3f, Float32, Float32]:
     var x1 = x1_init
     var n = n_in
     for _iter in range(20):
@@ -2252,18 +2272,18 @@ def _mnee_walk(
 
 @always_inline
 def _nee_infinite_light[enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     ctx: ShadeContext,
     ilight: InfiniteLight_C,
-    normal: SIMD[DType.float32, 3],
-    hit_point: SIMD[DType.float32, 3],
+    normal: Vec3f,
+    hit_point: Vec3f,
     alb: RGB,
     u_env1: Float32,
     u_env2: Float32,
     mut pcg: PCG32,
     guide_write: GuideGrid,
 ):
-    var env_dir: SIMD[DType.float32, 3]
+    var env_dir: Vec3f
     var env_rgb: RGB
     var pdf_light: Float32
 
@@ -2302,7 +2322,7 @@ def _nee_infinite_light[enqueue_shadow: Bool](
 @always_inline
 def _sample_light_point_and_normal(
     ctx: ShadeContext, al: AreaLight_C, u1: Float32, u2: Float32, mut pcg: PCG32,
-) -> Tuple[SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3], SIMD[DType.float32, 3]]:
+) -> Tuple[Vec3f, Vec3f, Vec3f, Vec3f]:
     """Point + outward normal on an area light's surface for NEE, plus the
     surface's own (dp_du, dp_dv) tangent basis (used only by
     _nee_area_lights' MNEE glass-refraction focusing — meaningless for a
@@ -2319,7 +2339,7 @@ def _sample_light_point_and_normal(
         var (q0, q1, r0, r1) = curve_piece_endpoints(curve, piece)
         var axis = q1 - q0
         var axis_len = sqrt(dot(axis, axis))
-        var axis_dir = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(1.0))
+        var axis_dir = Vec3f(Float32(0.0), Float32(0.0), Float32(1.0))
         if axis_len > Float32(1e-8):
             axis_dir = axis * (Float32(1.0) / axis_len)
         var r = r0 + (r1 - r0) * u1
@@ -2328,7 +2348,7 @@ def _sample_light_point_and_normal(
         var theta = u2 * TWO_PI
         var radial = u_perp * cos(theta) + v_perp * sin(theta)
         var point = q0 + axis_dir * (axis_len * u1) + radial * r
-        var zero3 = SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0))
+        var zero3 = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
         return (point, radial, zero3, zero3)
     else:
         var lmesh = ctx.meshes[Int(al.meshIdx)]
@@ -2337,9 +2357,9 @@ def _sample_light_point_and_normal(
         var lv0 = Int(lmesh.vertexIndices[lb])
         var lv1 = Int(lmesh.vertexIndices[lb + 1])
         var lv2 = Int(lmesh.vertexIndices[lb + 2])
-        var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
-        var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
-        var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
+        var lp0 = Vec3f(lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
+        var lp1 = Vec3f(lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
+        var lp2 = Vec3f(lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
         var sqrt_r1 = sqrt(u1)
         var point = lp0 * (Float32(1.0) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1.0) - u2)) + lp2 * (sqrt_r1 * u2)
         var lcross = cross(lp1 - lp0, lp2 - lp0)
@@ -2352,7 +2372,7 @@ def _sample_light_point_and_normal(
 @always_inline
 def _sample_area_light_nee(
     ctx: ShadeContext,
-    hit_point: SIMD[DType.float32, 3],
+    hit_point: Vec3f,
     mut pcg: PCG32,
 ) -> LightSample:
     """Uniform LightSample wrapper around the mesh/curve area-light picking
@@ -2365,7 +2385,7 @@ def _sample_area_light_nee(
     pdf every other light type already uses). valid=False when there are no
     area lights or the sampled point is degenerate (zero distance/area, or
     facing away from the shading point)."""
-    var invalid = LightSample(SIMD[DType.float32, 3](Float32(0.0), Float32(0.0), Float32(0.0)),
+    var invalid = LightSample(Vec3f(Float32(0.0), Float32(0.0), Float32(0.0)),
                                RGB(Float32(0.0)), Float32(0.0), Float32(0.0), False, False)
     if ctx.lights.area_light_count == 0:
         return invalid.copy()
@@ -2396,8 +2416,8 @@ def _sample_area_light_nee(
 def _sms_vertex_from_hit(
     ctx: ShadeContext,
     inter: Intersection_C,
-    ray_org: SIMD[DType.float32, 3],
-    shadow_dir: SIMD[DType.float32, 3],
+    ray_org: Vec3f,
+    shadow_dir: Vec3f,
 ) -> Tuple[SMSVertex, Bool]:
     """Builds an SMSVertex (flat triangle or curved analytic sphere) from a
     probe intersection along a shadow ray -- the ONE place that decides how
@@ -2418,7 +2438,7 @@ def _sms_vertex_from_hit(
     if inter.primId.type == Int8(4):
         var sph = ctx.lights.spheres[Int(inter.primId.id1)]
         var hit_pt = ray_org + shadow_dir * inter.tHit
-        var center = SIMD[DType.float32, 3](sph.center.x, sph.center.y, sph.center.z)
+        var center = Vec3f(sph.center.x, sph.center.y, sph.center.z)
         var to_hit = hit_pt - center
         var to_hit_len = sqrt(dot(to_hit, to_hit))
         if to_hit_len <= Float32(1e-10):
@@ -2428,9 +2448,9 @@ def _sms_vertex_from_hit(
         return (sms_vertex_sphere(hit_pt, center, sph.radius, eta), True)
     elif inter.primId.type == Int8(0):
         var (mesh, v0, v1, v2, _) = _get_tri_verts(inter, ctx.meshes)
-        var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
-        var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
-        var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+        var p0 = Vec3f(mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+        var p1 = Vec3f(mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+        var p2 = Vec3f(mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
         var dp_du = p1 - p0
         var dp_dv = p2 - p0
         var n3 = cross(dp_du, dp_dv)
@@ -2450,11 +2470,11 @@ def _sms_vertex_from_hit(
 
 def _sms_probe_glass_chain(
     ctx: ShadeContext,
-    start_point: SIMD[DType.float32, 3],
-    shadow_dir: SIMD[DType.float32, 3],
+    start_point: Vec3f,
+    shadow_dir: Vec3f,
     start_remaining: Float32,
     max_count: Int,
-) -> Tuple[Int, InlineArray[Intersection_C, MAX_SMS_VERTICES], InlineArray[SIMD[DType.float32, 3], MAX_SMS_VERTICES]]:
+) -> Tuple[Int, InlineArray[Intersection_C, MAX_SMS_VERTICES], InlineArray[Vec3f, MAX_SMS_VERTICES]]:
     """Probes forward from `start_point` along `shadow_dir` for up to
     `max_count` MORE consecutive dielectric surfaces (Phase 5.1's
     generalization of _mnee_area_light_contribute's own hardcoded
@@ -2471,7 +2491,7 @@ def _sms_probe_glass_chain(
     var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var dummy_inter = Intersection_C(dummy_prim, Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
     var hits = InlineArray[Intersection_C, MAX_SMS_VERTICES](fill=dummy_inter)
-    var origins = InlineArray[SIMD[DType.float32, 3], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 3](Float32(0.0)))
+    var origins = InlineArray[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
     var count = 0
     var seg_org = start_point
     var seg_remaining = start_remaining
@@ -2494,29 +2514,29 @@ def _sms_probe_glass_chain(
         hits[count] = pk_inter
         origins[count] = pk_org
         count += 1
-        var gk_point: SIMD[DType.float32, 3]
+        var gk_point: Vec3f
         if pk_inter.primId.type == Int8(4):
             gk_point = pk_org + shadow_dir * pk_inter.tHit
         else:
             var (gk_mesh, gk_v0, gk_v1, gk_v2, _) = _get_tri_verts(pk_inter, ctx.meshes)
-            var gk_p0 = SIMD[DType.float32, 3](gk_mesh.points[gk_v0*4], gk_mesh.points[gk_v0*4+1], gk_mesh.points[gk_v0*4+2])
-            var gk_p1 = SIMD[DType.float32, 3](gk_mesh.points[gk_v1*4], gk_mesh.points[gk_v1*4+1], gk_mesh.points[gk_v1*4+2])
-            var gk_p2 = SIMD[DType.float32, 3](gk_mesh.points[gk_v2*4], gk_mesh.points[gk_v2*4+1], gk_mesh.points[gk_v2*4+2])
+            var gk_p0 = Vec3f(gk_mesh.points[gk_v0*4], gk_mesh.points[gk_v0*4+1], gk_mesh.points[gk_v0*4+2])
+            var gk_p1 = Vec3f(gk_mesh.points[gk_v1*4], gk_mesh.points[gk_v1*4+1], gk_mesh.points[gk_v1*4+2])
+            var gk_p2 = Vec3f(gk_mesh.points[gk_v2*4], gk_mesh.points[gk_v2*4+1], gk_mesh.points[gk_v2*4+2])
             var gk_u = pk_inter.u; var gk_v = pk_inter.v
             gk_point = gk_p0*(Float32(1.0)-gk_u-gk_v) + gk_p1*gk_u + gk_p2*gk_v
         seg_remaining = seg_remaining - pk_inter.tHit
         seg_org = gk_point
-    return (count, hits, origins)
+    return (count, hits^, origins^)
 
 @always_inline
 def _sms_probe_and_solve(
     ctx: ShadeContext,
-    hit_point: SIMD[DType.float32, 3],
-    shadow_dir: SIMD[DType.float32, 3],
+    hit_point: Vec3f,
+    shadow_dir: Vec3f,
     dist: Float32,
-    light_point: SIMD[DType.float32, 3],
-    ldp_du_v: SIMD[DType.float32, 3],
-    ldp_dv_v: SIMD[DType.float32, 3],
+    light_point: Vec3f,
+    ldp_du_v: Vec3f,
+    ldp_dv_v: Vec3f,
     mut pcg: PCG32,
 ) -> Tuple[Bool, Bool, Int, InlineArray[SMSVertex, MAX_SMS_VERTICES], Float32, Float32, Float32]:
     """Probe for up to MAX_SMS_VERTICES glass surfaces between `hit_point`
@@ -2557,10 +2577,10 @@ def _sms_probe_and_solve(
                        ctx.lights.spheres, ctx.lights.sphere_count)
     var probe_inter = probe_store[0]
     if probe_inter.hit == Int8(0) or (probe_inter.primId.type != Int8(0) and probe_inter.primId.type != Int8(4)):
-        return (False, False, 0, zero_verts, Float32(0.0), Float32(0.0), Float32(0.0))
+        return (False, False, 0, zero_verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
     var probe_mat = ctx.materials[Int(probe_inter.primId.materialIndex)]
     if probe_mat.type != MatKind.dielectric and probe_mat.type != MatKind.thin_dielectric:
-        return (False, False, 0, zero_verts, Float32(0.0), Float32(0.0), Float32(0.0))
+        return (False, False, 0, zero_verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
 
     # --- Extract x1 geometry (triangle or analytic sphere) ---
     var (v1, v1_ok) = _sms_vertex_from_hit(ctx, probe_inter, probe_org, shadow_dir)
@@ -2568,7 +2588,7 @@ def _sms_probe_and_solve(
         # Degenerate glass surface: a dielectric IS in the way (so the
         # straight shadow ray is blocked regardless) but no usable manifold
         # geometry.
-        return (True, False, 0, zero_verts, Float32(0.0), Float32(0.0), Float32(0.0))
+        return (True, False, 0, zero_verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
     var is_sphere1 = v1.is_sphere != Int8(0)
     var pgeo_n = v1.normal
     var pdp_du = v1.dp_du
@@ -2625,9 +2645,13 @@ def _sms_probe_and_solve(
             # A curved caster needs sms_walk's general (curvature-aware)
             # Newton solve -- _mnee_walk assumes a flat tangent plane IS
             # the surface, which only holds for a triangle.
-            var (ok1, pos1, bsdf1, jac1) = sms_walk(hit_point, light_point, verts1, 1, ldp_du_v, ldp_dv_v,
+            var _walk1 = sms_walk(hit_point, light_point, verts1.copy(), 1, ldp_du_v, ldp_dv_v,
                 ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                 ctx.lights.spheres, ctx.lights.sphere_count)
+            var ok1 = _walk1[0]
+            var pos1 = _walk1[1].copy()
+            var bsdf1 = _walk1[2]
+            var jac1 = _walk1[3]
             # Same refraction/reflection consistency check the real SMS
             # reference renderer applies after every solve
             # (manifold_ss.cpp, SpecularManifoldSingleScatter::
@@ -2655,20 +2679,20 @@ def _sms_probe_and_solve(
                     if cos_x * cos_y >= Float32(0.0):
                         ok1 = False
             if not ok1:
-                return (True, False, 1, verts1, Float32(0.0), Float32(0.0), Float32(0.0))
+                return (True, False, 1, verts1.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
             verts1[0].pos = pos1[0]
-            return (True, True, 1, verts1, bsdf1, jac1, Float32(1.0))
+            return (True, True, 1, verts1.copy(), bsdf1, jac1, Float32(1.0))
         # --- 1-vertex MNEE fast path (flat triangle only, unchanged) ---
         var (mnee_ok, x1_f, det_b, eta_f) = _mnee_walk(
             hit_point, light_point, x1_init, pgeo_n, pdp_du, pdp_dv, eta1)
         if not mnee_ok:
-            return (True, False, 1, verts1, Float32(0.0), Float32(0.0), Float32(0.0))
+            return (True, False, 1, verts1.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
         var wi_f = hit_point - x1_f
         var wi_len2_f = dot(wi_f, wi_f)
         var wo_f = light_point - x1_f
         var wo_len2_f = dot(wo_f, wo_f)
         if wi_len2_f <= Float32(1e-8) or wo_len2_f <= Float32(1e-8):
-            return (True, False, 1, verts1, Float32(0.0), Float32(0.0), Float32(0.0))
+            return (True, False, 1, verts1.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
         var wi_len_f = sqrt(wi_len2_f)
         var wo_len_f = sqrt(wo_len2_f)
         var wi_fn = wi_f * (Float32(1.0) / wi_len_f)
@@ -2676,14 +2700,14 @@ def _sms_probe_and_solve(
         var H3_f = -(wi_fn + wo_fn * eta_f)
         var H_len2_f = dot(H3_f, H3_f)
         if H_len2_f <= Float32(1e-10):
-            return (True, False, 1, verts1, Float32(0.0), Float32(0.0), Float32(0.0))
+            return (True, False, 1, verts1.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
         var H_len_f = sqrt(H_len2_f)
         var H_f = H3_f * (Float32(1.0) / H_len_f)
         var dp_du_dot_n = dot(pdp_du, pgeo_n)
         var s3_f = pdp_du - pgeo_n * dp_du_dot_n
         var s_len2_f = dot(s3_f, s3_f)
         if s_len2_f <= Float32(1e-10):
-            return (True, False, 1, verts1, Float32(0.0), Float32(0.0), Float32(0.0))
+            return (True, False, 1, verts1.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
         var s_f = s3_f * (Float32(1.0) / sqrt(s_len2_f))
         var t_f = cross(pgeo_n, s_f)
         var ilo_l = eta_f / (H_len_f * wo_len_f)
@@ -2704,11 +2728,11 @@ def _sms_probe_and_solve(
         # the full derivation/reference citation.
         var bsdf_s = T_f * cosHI / max(cosNI * cosTM * cosTM, Float32(1e-6)) * eta_f*eta_f
         verts1[0].pos = x1_f
-        return (True, True, 1, verts1, bsdf_s, dx1_dxl, Float32(1.0))
+        return (True, True, 1, verts1.copy(), bsdf_s, dx1_dxl, Float32(1.0))
 
     var (v2, v2_ok) = _sms_vertex_from_hit(ctx, probe2_inter, probe2_org, shadow_dir)
     if not v2_ok:
-        return (True, False, 0, zero_verts, Float32(0.0), Float32(0.0), Float32(0.0))
+        return (True, False, 0, zero_verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
     var is_sphere2 = v2.is_sphere != Int8(0)
     var pgeo_n2 = v2.normal
     var pdp_du2 = v2.dp_du
@@ -2720,9 +2744,12 @@ def _sms_probe_and_solve(
     # when the chain is genuinely longer than MNEE's own 1-/2-vertex scope
     # (5.4) -- an ordinary 2-surface pane (the overwhelming majority of
     # real glass) never reaches this, so this branch adds no cost there.
-    var (extra_count, extra_hits, extra_origins) = _sms_probe_glass_chain(
+    var _chain_res = _sms_probe_glass_chain(
         ctx, x2_init, shadow_dir, dist - probe2_inter.tHit - probe2_t0,
         MAX_SMS_VERTICES - 2)
+    var extra_count = _chain_res[0]
+    var extra_hits = _chain_res[1].copy()
+    var extra_origins = _chain_res[2].copy()
 
     if extra_count == 0 and not is_sphere1 and not is_sphere2:
         # --- 2-vertex MNEE (unchanged fast path, Phase 5.4) ---
@@ -2735,10 +2762,10 @@ def _sms_probe_and_solve(
             x2_init, pgeo_n2, pdp_du2, pdp_dv2, eta2,
             ldp_du_v, ldp_dv_v)
         if not ok2:
-            return (True, False, 2, verts2, Float32(0.0), Float32(0.0), Float32(0.0))
+            return (True, False, 2, verts2.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
         verts2[0].pos = x1_f2
         verts2[1].pos = x2_f2
-        return (True, True, 2, verts2, bsdf_prod, dx1_dxl2, Float32(1.0))
+        return (True, True, 2, verts2.copy(), bsdf_prod, dx1_dxl2, Float32(1.0))
 
     if extra_count == 0:
         # --- 2-vertex chain with at least one curved (sphere) caster:
@@ -2747,9 +2774,13 @@ def _sms_probe_and_solve(
         var verts2c = InlineArray[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
         verts2c[0] = v1
         verts2c[1] = v2
-        var (ok2c, pos2c, bsdf2c, jac2c) = sms_walk(hit_point, light_point, verts2c, 2, ldp_du_v, ldp_dv_v,
+        var _walk2c = sms_walk(hit_point, light_point, verts2c.copy(), 2, ldp_du_v, ldp_dv_v,
             ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
             ctx.lights.spheres, ctx.lights.sphere_count)
+        var ok2c = _walk2c[0]
+        var pos2c = _walk2c[1].copy()
+        var bsdf2c = _walk2c[2]
+        var jac2c = _walk2c[3]
         # A sphere (unlike a flat pane, where the fast path's single Newton
         # solve is provably the unique stationary point) can have more than
         # one mathematically valid specular chain -- the straight-line probe
@@ -2787,10 +2818,10 @@ def _sms_probe_and_solve(
             if denom1 <= Float32(1e-12) or dot(seed1, sol1) / denom1 < Float32(0.5):
                 ok2c = False
         if not ok2c:
-            return (True, False, 2, verts2c, Float32(0.0), Float32(0.0), Float32(0.0))
+            return (True, False, 2, verts2c.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
         verts2c[0].pos = pos2c[0]
         verts2c[1].pos = pos2c[1]
-        return (True, True, 2, verts2c, bsdf2c, jac2c, Float32(1.0))
+        return (True, True, 2, verts2c.copy(), bsdf2c, jac2c, Float32(1.0))
 
     # --- N-vertex SMS (Phase 5.1/5.2/5.3, sms.mojo) ---
     var n_total = 2 + extra_count
@@ -2804,7 +2835,7 @@ def _sms_probe_and_solve(
             chain_ok = False; break
         verts[2+k] = ek_vert
     if not chain_ok:
-        return (True, False, n_total, verts, Float32(0.0), Float32(0.0), Float32(0.0))
+        return (True, False, n_total, verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
     # Jitter scale (5.2): a small fraction of the average spacing between
     # adjacent probed vertices -- keeps the re-seed within the flat-
     # triangle validity radius each vertex's own straight-line probe
@@ -2812,28 +2843,33 @@ def _sms_probe_and_solve(
     var span = light_point - hit_point
     var span_len = sqrt(dot(span, span))
     var jitter_scale = Float32(0.05) * (span_len / Float32(max(n_total, 1)))
-    var (sms_ok, sms_pos, sms_bsdf, sms_jac, sms_trials) = sms_solve_bernoulli(
+    var _bern_res = sms_solve_bernoulli(
         hit_point, light_point, verts, n_total, ldp_du_v, ldp_dv_v, jitter_scale, pcg,
         ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
         ctx.lights.spheres, ctx.lights.sphere_count)
+    var sms_ok = _bern_res[0]
+    var sms_pos = _bern_res[1].copy()
+    var sms_bsdf = _bern_res[2]
+    var sms_jac = _bern_res[3]
+    var sms_trials = _bern_res[4]
     if not sms_ok:
-        return (True, False, n_total, verts, Float32(0.0), Float32(0.0), Float32(0.0))
+        return (True, False, n_total, verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
     for i in range(n_total):
         verts[i].pos = sms_pos[i]
-    return (True, True, n_total, verts, sms_bsdf, sms_jac, sms_trials)
+    return (True, True, n_total, verts.copy(), sms_bsdf, sms_jac, sms_trials)
 
 @always_inline
 def _mnee_area_light_contribute(
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     ctx: ShadeContext,
-    normal: SIMD[DType.float32, 3],
-    hit_point: SIMD[DType.float32, 3],
+    normal: Vec3f,
+    hit_point: Vec3f,
     alb: RGB,
-    shadow_dir: SIMD[DType.float32, 3],
+    shadow_dir: Vec3f,
     dist: Float32,
-    light_point: SIMD[DType.float32, 3],
-    ldp_du_v: SIMD[DType.float32, 3],
-    ldp_dv_v: SIMD[DType.float32, 3],
+    light_point: Vec3f,
+    ldp_du_v: Vec3f,
+    ldp_dv_v: Vec3f,
     al: AreaLight_C,
     inv_pdf_area: Float32,
     lobe_w: Float32,
@@ -2882,8 +2918,15 @@ def _mnee_area_light_contribute(
         return False
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
-    var (dielectric_found, solve_ok, n, verts, bsdf_product, dx1_dxlight, trials) = _sms_probe_and_solve(
+    var _probe_res = _sms_probe_and_solve(
         ctx, hit_point, shadow_dir, dist, light_point, ldp_du_v, ldp_dv_v, pcg)
+    var dielectric_found = _probe_res[0]
+    var solve_ok = _probe_res[1]
+    var n = _probe_res[2]
+    var verts = _probe_res[3].copy()
+    var bsdf_product = _probe_res[4]
+    var dx1_dxlight = _probe_res[5]
+    var trials = _probe_res[6]
     path_ptr[].pcgState = pcg.state
     if not dielectric_found:
         return False
@@ -2914,9 +2957,19 @@ def _mnee_area_light_contribute(
     var wo_fn = wo_f * (Float32(1.0) / wo_len)
     var vis_org = last_vertex + wo_fn * Float32(0.001)
     var vis_ray = Ray_C(Point3f(vis_org[0], vis_org[1], vis_org[2]), Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
+    # A sphere caustic caster's outgoing leg necessarily re-crosses its OWN
+    # far side (the unmodeled exit refraction of the single-vertex model,
+    # see any_hit_bvh2_core's own docstring) -- exclude just that one
+    # sphere from this occlusion test, not a real distinct occluder.
+    var ign_center = Vec3f(Float32(0.0))
+    var ign_radius = Float32(-1.0)
+    if verts[n-1].is_sphere != Int8(0):
+        ign_center = verts[n-1].sphere_center
+        ign_radius = verts[n-1].sphere_radius
     if any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis_ray, wo_len * Float32(0.999),
                           ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
-                          ctx.lights.spheres, ctx.lights.sphere_count):
+                          ctx.lights.spheres, ctx.lights.sphere_count,
+                          ign_center, ign_radius):
         return True
     # Phase 5.5: no MIS weight -- the refracted path is a specular chain
     # that BSDF sampling effectively never reproduces, so there is no
@@ -2948,9 +3001,9 @@ def _mnee_area_light_contribute(
 # not an unstreamed candidate.
 def sms_generate_reservoir(
     ctx: ShadeContext,
-    hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3], alb: RGB,
-    shadow_dir: SIMD[DType.float32, 3], dist: Float32, light_point: SIMD[DType.float32, 3],
-    ldp_du_v: SIMD[DType.float32, 3], ldp_dv_v: SIMD[DType.float32, 3],
+    hit_point: Vec3f, normal: Vec3f, alb: RGB,
+    shadow_dir: Vec3f, dist: Float32, light_point: Vec3f,
+    ldp_du_v: Vec3f, ldp_dv_v: Vec3f,
     al: AreaLight_C, inv_pdf_area: Float32, mut pcg: PCG32,
 ) -> Tuple[Bool, SMSReservoir]:
     """Phase 6's candidate generation: probe+solve for an admissible
@@ -2979,8 +3032,15 @@ def sms_generate_reservoir(
     var res = sms_reservoir_init()
     if al.kind != Int8(0):
         return (False, res^)
-    var (dielectric_found, solve_ok, n, verts, bsdf_product, dx1_dxlight, trials) = _sms_probe_and_solve(
+    var _probe_res2 = _sms_probe_and_solve(
         ctx, hit_point, shadow_dir, dist, light_point, ldp_du_v, ldp_dv_v, pcg)
+    var dielectric_found = _probe_res2[0]
+    var solve_ok = _probe_res2[1]
+    var n = _probe_res2[2]
+    var verts = _probe_res2[3].copy()
+    var bsdf_product = _probe_res2[4]
+    var dx1_dxlight = _probe_res2[5]
+    var trials = _probe_res2[6]
     if not dielectric_found or not solve_ok:
         return (dielectric_found, res^)
     var p_hat = sms_target_pdf(hit_point, normal, alb, verts[0].pos, verts[0].normal, al.emission, bsdf_product, dx1_dxlight)
@@ -2988,7 +3048,7 @@ def sms_generate_reservoir(
     var accept = reservoir_update(res.state, weight, pcg.next_float())
     if accept:
         res.n_vertices = Int32(n)
-        res.verts = verts
+        res.verts = verts.copy()
         res.light_point = light_point
         res.ldp_du = ldp_du_v
         res.ldp_dv = ldp_dv_v
@@ -3011,8 +3071,8 @@ comptime SMS_MAX_FINALIZED_WEIGHT: Float32 = Float32(10.0)
 comptime SMS_TEMPORAL_M_CAP: Float32 = Float32(64.0)
 
 def sms_resolve(
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin], ctx: ShadeContext,
-    hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3], alb: RGB,
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin], ctx: ShadeContext,
+    hit_point: Vec3f, normal: Vec3f, alb: RGB,
     mut res: SMSReservoir,
 ):
     """Finalizes the reservoir's RIS weight (Bitterli et al. 2020 Eq. 6,
@@ -3051,18 +3111,27 @@ def sms_resolve(
     var wo_fn = wo_f * (Float32(1.0) / wo_len)
     var vis_org = last_vertex + wo_fn * Float32(0.001)
     var vis_ray = Ray_C(Point3f(vis_org[0], vis_org[1], vis_org[2]), Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
+    # See _mnee_area_light_contribute's identical fix: a sphere caustic
+    # caster's outgoing leg necessarily re-crosses its OWN far side, so
+    # exclude just that one sphere from this occlusion test.
+    var ign_center = Vec3f(Float32(0.0))
+    var ign_radius = Float32(-1.0)
+    if res.verts[n-1].is_sphere != Int8(0):
+        ign_center = res.verts[n-1].sphere_center
+        ign_radius = res.verts[n-1].sphere_radius
     if any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis_ray, wo_len * Float32(0.999),
                           ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
-                          ctx.lights.spheres, ctx.lights.sphere_count):
+                          ctx.lights.spheres, ctx.lights.sphere_count,
+                          ign_center, ign_radius):
         return
     var contrib = bxdf_eval_diffuse(alb) * res.le * (cos_s_x0 * res.state.w)
     path_ptr[].estimate += path_ptr[].throughput * contrib
 
 def sms_temporal_step(
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin], ctx: ShadeContext,
-    hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3], alb: RGB,
-    shadow_dir: SIMD[DType.float32, 3], dist: Float32, light_point: SIMD[DType.float32, 3],
-    ldp_du_v: SIMD[DType.float32, 3], ldp_dv_v: SIMD[DType.float32, 3],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin], ctx: ShadeContext,
+    hit_point: Vec3f, normal: Vec3f, alb: RGB,
+    shadow_dir: Vec3f, dist: Float32, light_point: Vec3f,
+    ldp_du_v: Vec3f, ldp_dv_v: Vec3f,
     al: AreaLight_C, inv_pdf_area: Float32, mut pcg: PCG32,
     sms_io: SMSReservoirIO = sms_reservoir_io_null(),
     pixel_idx: Int = -1,
@@ -3094,7 +3163,7 @@ def sms_temporal_step(
             var accept = reservoir_combine(res.state, prev.state, p_hat_prev_here, pcg.next_float())
             if accept:
                 res.n_vertices = prev.n_vertices
-                res.verts = prev.verts
+                res.verts = prev.verts.copy()
                 res.light_point = prev.light_point
                 res.ldp_du = prev.ldp_du
                 res.ldp_dv = prev.ldp_dv
@@ -3109,10 +3178,10 @@ def sms_temporal_step(
     return dielectric_found
 
 def _nee_area_lights[enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     ctx: ShadeContext,
-    normal: SIMD[DType.float32, 3],
-    hit_point: SIMD[DType.float32, 3],
+    normal: Vec3f,
+    hit_point: Vec3f,
     alb: RGB,
     u_light: Float32,
     u_bary1: Float32,
@@ -3195,9 +3264,9 @@ def _nee_area_lights[enqueue_shadow: Bool](
 comptime DI_RIS_CANDIDATES: Int = 16
 
 def _di_sample_candidate(
-    ctx: ShadeContext, hit_point: SIMD[DType.float32, 3], mut pcg: PCG32,
-) -> Tuple[Bool, Int32, SIMD[DType.float32, 3], SIMD[DType.float32, 3], RGB, Float32,
-           SIMD[DType.float32, 3], SIMD[DType.float32, 3]]:
+    ctx: ShadeContext, hit_point: Vec3f, mut pcg: PCG32,
+) -> Tuple[Bool, Int32, Vec3f, Vec3f, RGB, Float32,
+           Vec3f, Vec3f]:
     """One RIS candidate draw: (valid, light_idx, sample_point,
     light_normal, Le, generation_pdf, ldp_du, ldp_dv). Mirrors
     _sample_area_light_nee's math but keeps the sampled point/normal the
@@ -3206,7 +3275,7 @@ def _di_sample_candidate(
     surface's own parameterization at the sampled point, kept (rather than
     discarded as `_, _`) so a resampled winner can still run MNEE in
     di_resolve -- see DIReservoir's ldp_du/ldp_dv docs."""
-    var zero3 = SIMD[DType.float32, 3](Float32(0))
+    var zero3 = Vec3f(Float32(0))
     var invalid = (False, Int32(-1), zero3, zero3, RGB(Float32(0)), Float32(0), zero3, zero3)
     if ctx.lights.area_light_count == 0:
         return invalid
@@ -3233,7 +3302,7 @@ def _di_sample_candidate(
     return (True, Int32(light_idx), light_point, light_normal, al.emission, pdf, ldp_du_v, ldp_dv_v)
 
 def di_generate_reservoir(
-    ctx: ShadeContext, hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3],
+    ctx: ShadeContext, hit_point: Vec3f, normal: Vec3f,
     alb: RGB, mut pcg: PCG32,
 ) -> DIReservoir:
     """Phase 2.1+2.2: stream DI_RIS_CANDIDATES area-light samples through
@@ -3272,8 +3341,8 @@ def di_generate_reservoir(
     return res
 
 def di_resolve(
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin], ctx: ShadeContext,
-    hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3], alb: RGB,
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin], ctx: ShadeContext,
+    hit_point: Vec3f, normal: Vec3f, alb: RGB,
     mut res: DIReservoir,
     z_norm: Float32 = Float32(-1.0),
 ):
@@ -3367,7 +3436,7 @@ def di_resolve(
 # project_restir_migration memory for why a fully general version (any
 # material at x2) is real, separate, deferred work.
 def _gi_generate_recon_candidate(
-    ctx: ShadeContext, hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3], alb: RGB,
+    ctx: ShadeContext, hit_point: Vec3f, normal: Vec3f, alb: RGB,
     mut pcg: PCG32,
 ) -> GIReservoir:
     """Generates x2's own contribution to Lo(x2): ONE area-light NEE sample
@@ -3424,8 +3493,8 @@ def _gi_generate_recon_candidate(
     return res
 
 def gi_resolve(
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin], ctx: ShadeContext,
-    hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3], alb: RGB,
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin], ctx: ShadeContext,
+    hit_point: Vec3f, normal: Vec3f, alb: RGB,
     throughput: RGB,
     res: GIReservoir,
 ):
@@ -3568,8 +3637,8 @@ comptime DI_SPATIAL_DEPTH_REL_MAX: Float32 = Float32(0.1)
 comptime DI_MAX_FINALIZED_WEIGHT: Float32 = Float32(10.0)
 
 def di_temporal_step(
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin], ctx: ShadeContext,
-    hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3], alb: RGB,
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin], ctx: ShadeContext,
+    hit_point: Vec3f, normal: Vec3f, alb: RGB,
     mut pcg: PCG32,
     restir_io: ReservoirIO = reservoir_io_null(),
     pixel_idx: Int = -1,
@@ -3641,7 +3710,7 @@ def di_temporal_step(
                 if n_idx == pixel_idx:
                     continue
                 var n_off = n_idx * 3
-                var n_normal = SIMD[DType.float32, 3](
+                var n_normal = Vec3f(
                     restir_io.gbuf_normal[n_off], restir_io.gbuf_normal[n_off + 1], restir_io.gbuf_normal[n_off + 2])
                 if dot(n_normal, normal) < DI_SPATIAL_NORMAL_DOT_MIN:
                     continue
@@ -3694,11 +3763,11 @@ def di_temporal_step(
         var z = m_same_domain
         for i in range(nb_seen):
             var np_off = Int(nb_px_seen[i]) * 3
-            var n_hit = SIMD[DType.float32, 3](
+            var n_hit = Vec3f(
                 restir_io.gbuf_world_pos[np_off],
                 restir_io.gbuf_world_pos[np_off + 1],
                 restir_io.gbuf_world_pos[np_off + 2])
-            var n_nrm = SIMD[DType.float32, 3](
+            var n_nrm = Vec3f(
                 restir_io.gbuf_normal[np_off],
                 restir_io.gbuf_normal[np_off + 1],
                 restir_io.gbuf_normal[np_off + 2])
@@ -3715,12 +3784,12 @@ def di_temporal_step(
         restir_io.write[pixel_idx] = res
 
 def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     ctx: ShadeContext,
-    normal: SIMD[DType.float32, 3],
-    hit_point: SIMD[DType.float32, 3],
+    normal: Vec3f,
+    hit_point: Vec3f,
     alb: RGB,
-    wo: SIMD[DType.float32, 3],
+    wo: Vec3f,
     u_light: Float32,
     u_bary1: Float32,
     u_bary2: Float32,
@@ -3822,7 +3891,7 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
 # Texture lookup uses OIIO external_call on CPU and device-resident GpuTexture_C on GPU.
 @always_inline
 def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
     mat: Material_C,
@@ -3879,7 +3948,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     # The guide is active when its energy pointer is a real allocation (Int > 1).
     # MIS balance heuristic: weight = f·cosθ / pdf_mix, where
     #   pdf_mix = 0.5·pdf_guide + 0.5·pdf_bsdf  and  f = alb/π (Lambertian).
-    var dir: SIMD[DType.float32, 3]
+    var dir: Vec3f
     var cos_theta: Float32
     var pdf_mix: Float32
 
@@ -3901,7 +3970,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
             var (gdx, gdy, gdz, pdf_g, guide_ok) = guide_sample(ctx.guide, cell, pcg.next_float(), pcg.next_float())
             var cos_g = gdx*normal[0] + gdy*normal[1] + gdz*normal[2]
             if guide_ok and cos_g > Float32(0.001):
-                dir = SIMD[DType.float32, 3](gdx, gdy, gdz)
+                dir = Vec3f(gdx, gdy, gdz)
                 cos_theta = cos_g
                 pdf_mix = GUIDE_ALPHA*pdf_g + GUIDE_BETA*(cos_g / PI)
             else:
@@ -3944,14 +4013,14 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
 
 @always_inline
 def shade_interface(
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     inter: Intersection_C,
 ):
     """Interface (null/passthrough) material: advance the ray through the surface.
     No scattering, no throughput change. Medium transition is handled externally:
     on CPU by rendering.mojo's medium-interface loop; on GPU by shade_interface_gpu."""
-    var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-    var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
+    var ray_dir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+    var ray_org = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
     var hit_point = ray_org + ray_dir * inter.tHit + ray_dir * Float32(0.0002)
     path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), path_ptr[].ray.direction)
     path_ptr[].specularBounce = Int8(1)
@@ -3961,7 +4030,7 @@ def shade_interface(
 @always_inline
 def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     mat: Material_C,
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
     guide_write: GuideGrid = null_guide(),
@@ -4005,7 +4074,7 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
 # Texture lookup uses OIIO external_call on CPU and device-resident GpuTexture_C on GPU.
 @always_inline
 def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutAnyOrigin],
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
     guide_write: GuideGrid = null_guide(),
@@ -4019,7 +4088,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         if path_ptr[].volume_scattered == Int8(1):
             path_ptr[].volume_scattered = Int8(0)
             return
-        var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+        var ray_dir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
         var miss_albedo = RGB(Float32(0.0))
         for inf_i in range(ctx.lights.infinite_count):
             var ilight = ctx.lights.infinite_lights[inf_i]
@@ -4028,7 +4097,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             var ld_x = w2l[0]*ray_dir[0] + w2l[4]*ray_dir[1] + w2l[8]*ray_dir[2]
             var ld_y = w2l[1]*ray_dir[0] + w2l[5]*ray_dir[1] + w2l[9]*ray_dir[2]
             var ld_z = w2l[2]*ray_dir[0] + w2l[6]*ray_dir[1] + w2l[10]*ray_dir[2]
-            var local_dir = SIMD[DType.float32, 3](ld_x, ld_y, ld_z)
+            var local_dir = Vec3f(ld_x, ld_y, ld_z)
             var env_rgb: RGB
             if ilight.tex_idx >= Int32(0) and _is_real_ptr(ilight.pixels_ptr) and ilight.cdf_w > Int32(0):
                 # Bilinear lookup in GPU/CPU-resident pixels (cdf_w × cdf_h, 3 floats/pixel)
@@ -4059,8 +4128,8 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                         var tr = alloc[Float32](3)
                         tr[0] = Float32(0.0); tr[1] = Float32(0.0); tr[2] = Float32(0.0)
                         _ = external_call["texture", Bool,
-                            UnsafePointer[UInt8, MutAnyOrigin], Float32, Float32,
-                            UnsafePointer[Float32, MutAnyOrigin]](fname, u, v, tr)
+                            UnsafePointer[UInt8, MutExternalOrigin], Float32, Float32,
+                            UnsafePointer[Float32, MutExternalOrigin]](fname, u, v, tr)
                         env_rgb = RGB(tr[0], tr[1], tr[2]) * ilight.scale
                         tr.free()
                     else:
@@ -4130,7 +4199,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             else:
                 # MIS: BSDF pdf vs sphere solid-angle pdf from previous shading point
                 var pdf_bsdf = path_ptr[].lastBsdfPdf
-                var ray_org = SIMD[DType.float32, 3](path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
+                var ray_org = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
                 var to_c_x = sph.center.x - ray_org[0]
                 var to_c_y = sph.center.y - ray_org[1]
                 var to_c_z = sph.center.z - ray_org[2]
@@ -4157,14 +4226,14 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             var pdf_bsdf = path_ptr[].lastBsdfPdf
             if pdf_bsdf > Float32(0.0):
                 var (lmesh, lv0, lv1, lv2, _) = _get_tri_verts(inter, ctx.meshes)
-                var lp0 = SIMD[DType.float32, 3](lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
-                var lp1 = SIMD[DType.float32, 3](lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
-                var lp2 = SIMD[DType.float32, 3](lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
+                var lp0 = Vec3f(lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
+                var lp1 = Vec3f(lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
+                var lp2 = Vec3f(lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
                 var lnorm = cross(lp1 - lp0, lp2 - lp0)
                 var lnlen = dot(lnorm, lnorm)
                 if lnlen > Float32(0.0):
                     lnorm = lnorm * (Float32(1.0) / sqrt(lnlen))
-                var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+                var ray_dir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
                 var cos_l = -dot(lnorm, ray_dir)
                 var dist  = inter.tHit
                 var dist2 = dist * dist
@@ -4212,13 +4281,13 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                         var (q0, q1, _, _) = curve_piece_endpoints(curve, piece)
                         var seg_axis = q1 - q0
                         var seg_len = sqrt(dot(seg_axis, seg_axis))
-                        var tangent = SIMD[DType.float32, 3](Float32(1.0), Float32(0.0), Float32(0.0))
+                        var tangent = Vec3f(Float32(1.0), Float32(0.0), Float32(0.0))
                         if seg_len > Float32(1e-8):
                             tangent = seg_axis * (Float32(1.0) / seg_len)
                         var n_perp = _curve_perp_axis(tangent)
                         var b_perp0 = cross(tangent, n_perp)
                         var geo_normal = n_perp * h + b_perp0 * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
-                        var ray_dir = SIMD[DType.float32, 3](path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+                        var ray_dir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
                         var cos_l = -dot(geo_normal, ray_dir)
                         var dist2 = inter.tHit * inter.tHit
                         if cos_l > Float32(0.0):
@@ -4239,38 +4308,38 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
 
 @always_inline
 def shade_core_cpu_nee(
-    paths: UnsafePointer[PathState_C, MutAnyOrigin],
-    intersections: UnsafePointer[Intersection_C, MutAnyOrigin],
-    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
-    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    curves: UnsafePointer[Curve_C, MutAnyOrigin],
-    materials: UnsafePointer[Material_C, MutAnyOrigin],
-    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    paths: UnsafePointer[PathState_C, MutExternalOrigin],
+    intersections: UnsafePointer[Intersection_C, MutExternalOrigin],
+    bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
+    primIds: UnsafePointer[PrimId_C, MutExternalOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
+    curves: UnsafePointer[Curve_C, MutExternalOrigin],
+    materials: UnsafePointer[Material_C, MutExternalOrigin],
+    areaLights: UnsafePointer[AreaLight_C, MutExternalOrigin],
     areaLightCount: Int,
-    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin],
+    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin],
     tid: Int,
-    distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin],
+    distantLights: UnsafePointer[DistantLight_C, MutExternalOrigin],
     distantLightCount: Int,
-    pointLights: UnsafePointer[PointLight_C, MutAnyOrigin],
+    pointLights: UnsafePointer[PointLight_C, MutExternalOrigin],
     pointLightCount: Int,
-    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin],
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutExternalOrigin],
     infiniteLightCount: Int,
-    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    spheres: UnsafePointer[Sphere_C, MutExternalOrigin],
     sphereCount: Int,
     light_sampler: LightSampler_C,
-    sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
+    sobol_matrices: UnsafePointer[UInt32, MutExternalOrigin],
     guide: GuideGrid,
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+    instances: UnsafePointer[Instance_C, MutExternalOrigin] = UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
     guide_write: GuideGrid = null_guide(),
     spectral: SpectralHandle = null_spectral_handle(),
-    measured_brdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+    measured_brdfs: UnsafePointer[MeasuredBRDF_C, MutExternalOrigin] = UnsafePointer[MeasuredBRDF_C, MutExternalOrigin].unsafe_dangling(),
     use_restir: Bool = False,
     restir_io: ReservoirIO = reservoir_io_null(),
     pixel_idx: Int = -1,
-    gi_pending: UnsafePointer[GIPendingX1, MutAnyOrigin] = UnsafePointer[GIPendingX1, MutAnyOrigin].unsafe_dangling(),
+    gi_pending: UnsafePointer[GIPendingX1, MutExternalOrigin] = UnsafePointer[GIPendingX1, MutExternalOrigin].unsafe_dangling(),
     gi_io: GIReservoirIO = gi_reservoir_io_null(),
     sms_io: SMSReservoirIO = sms_reservoir_io_null(),
 ):
@@ -4281,8 +4350,8 @@ def shade_core_cpu_nee(
     var ctx = ShadeContext(
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=tex_filenames,
-        textures=UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(), n_textures=0,
-        shadow_tasks=UnsafePointer[ShadowTask_C, MutAnyOrigin].unsafe_dangling(),
+        textures=UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(), n_textures=0,
+        shadow_tasks=UnsafePointer[ShadowTask_C, MutExternalOrigin].unsafe_dangling(),
         px_scale=Float32(0.0), sobol_matrices=sobol_matrices, guide=guide, use_restir=use_restir,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=spectral, measured_brdfs=measured_brdfs,

@@ -10,7 +10,7 @@ def is_whitespace(b: UInt8) -> Bool:
 
 # Skip whitespace and pbrt line comments (# … \n).
 @always_inline
-def skip_whitespace_and_comments(bytes: UnsafePointer[UInt8, MutAnyOrigin], length: Int, pos: Int) -> Int:
+def skip_whitespace_and_comments(bytes: UnsafePointer[UInt8, MutExternalOrigin], length: Int, pos: Int) -> Int:
     var cur = pos
     while cur < length:
         var b = bytes[cur]
@@ -28,10 +28,10 @@ def is_digit(b: UInt8) -> Bool:
     return b >= UInt8(48) and b <= UInt8(57)
 
 def scan_int(
-    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+    bytes: UnsafePointer[UInt8, MutExternalOrigin],
     length: Int32,
-    cursor: UnsafePointer[Int32, MutAnyOrigin],
-    result: UnsafePointer[Int32, MutAnyOrigin],
+    cursor: UnsafePointer[Int32, MutExternalOrigin],
+    result: UnsafePointer[Int32, MutExternalOrigin],
 ) -> Int32:
     var cur = Int(cursor[0])
     var len = Int(length)
@@ -57,10 +57,10 @@ def scan_int(
     return Int32(1)
 
 def scan_float(
-    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+    bytes: UnsafePointer[UInt8, MutExternalOrigin],
     length: Int32,
-    cursor: UnsafePointer[Int32, MutAnyOrigin],
-    result: UnsafePointer[Float32, MutAnyOrigin],
+    cursor: UnsafePointer[Int32, MutExternalOrigin],
+    result: UnsafePointer[Float32, MutExternalOrigin],
 ) -> Int32:
     var cur = Int(cursor[0])
     var len = Int(length)
@@ -132,7 +132,7 @@ def scan_float(
     return Int32(1)
 
 def count_floats(
-    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+    bytes: UnsafePointer[UInt8, MutExternalOrigin],
     length: Int32,
     cursor: Int32,
 ) -> Int32:
@@ -165,11 +165,11 @@ def count_floats(
         count += Int32(1)
     return count
 
-def scan_floats(
-    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+def scan_floats[Or: Origin[mut=True]](
+    bytes: UnsafePointer[UInt8, MutExternalOrigin],
     length: Int32,
-    cursor: UnsafePointer[Int32, MutAnyOrigin],
-    result: UnsafePointer[Float32, MutAnyOrigin],
+    cursor: UnsafePointer[Int32, MutExternalOrigin],
+    result: UnsafePointer[Float32, Or],
     max_count: Int32,
 ) -> Int32:
     var cur = Int(cursor[0])
@@ -238,7 +238,7 @@ def scan_floats(
     return count
 
 def count_ints(
-    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+    bytes: UnsafePointer[UInt8, MutExternalOrigin],
     length: Int32,
     cursor: Int32,
 ) -> Int32:
@@ -259,11 +259,11 @@ def count_ints(
         count += Int32(1)
     return count
 
-def scan_ints(
-    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+def scan_ints[Or: Origin[mut=True]](
+    bytes: UnsafePointer[UInt8, MutExternalOrigin],
     length: Int32,
-    cursor: UnsafePointer[Int32, MutAnyOrigin],
-    result: UnsafePointer[Int32, MutAnyOrigin],
+    cursor: UnsafePointer[Int32, MutExternalOrigin],
+    result: UnsafePointer[Int32, Or],
     max_count: Int32,
 ) -> Int32:
     var cur = Int(cursor[0])
@@ -292,9 +292,9 @@ def scan_ints(
     return count
 
 def scan_char(
-    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+    bytes: UnsafePointer[UInt8, MutExternalOrigin],
     length: Int32,
-    cursor: UnsafePointer[Int32, MutAnyOrigin],
+    cursor: UnsafePointer[Int32, MutExternalOrigin],
     expected: UInt8,
 ) -> Int32:
     var cur = Int(cursor[0])
@@ -308,12 +308,12 @@ def scan_char(
     return Int32(1)
 
 def scan_token(
-    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+    bytes: UnsafePointer[UInt8, MutExternalOrigin],
     length: Int32,
-    cursor: UnsafePointer[Int32, MutAnyOrigin],
-    delims: UnsafePointer[UInt8, MutAnyOrigin],
+    cursor: UnsafePointer[Int32, MutExternalOrigin],
+    delims: UnsafePointer[UInt8, MutExternalOrigin],
     n_delims: Int32,
-    buf: UnsafePointer[UInt8, MutAnyOrigin],
+    buf: UnsafePointer[UInt8, MutExternalOrigin],
     max_buf: Int32,
 ) -> Int32:
     var cur = Int(cursor[0])
@@ -346,10 +346,10 @@ def scan_token(
     return written
 
 def parse_quoted_string(
-    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+    bytes: UnsafePointer[UInt8, MutExternalOrigin],
     length: Int32,
-    cursor: UnsafePointer[Int32, MutAnyOrigin],
-    buf: UnsafePointer[UInt8, MutAnyOrigin],
+    cursor: UnsafePointer[Int32, MutExternalOrigin],
+    buf: UnsafePointer[UInt8, MutExternalOrigin],
     max_buf: Int32,
 ) -> Int32:
     var cur = Int(cursor[0])
@@ -375,14 +375,14 @@ def parse_quoted_string(
     return written
 
 def parse_param_header(
-    bytes: UnsafePointer[UInt8, MutAnyOrigin],
+    bytes: UnsafePointer[UInt8, MutExternalOrigin],
     length: Int32,
-    cursor: UnsafePointer[Int32, MutAnyOrigin],
-    type_buf: UnsafePointer[UInt8, MutAnyOrigin],
+    cursor: UnsafePointer[Int32, MutExternalOrigin],
+    type_buf: UnsafePointer[UInt8, MutExternalOrigin],
     type_max: Int32,
-    name_buf: UnsafePointer[UInt8, MutAnyOrigin],
+    name_buf: UnsafePointer[UInt8, MutExternalOrigin],
     name_max: Int32,
-    is_array: UnsafePointer[Int32, MutAnyOrigin],
+    is_array: UnsafePointer[Int32, MutExternalOrigin],
 ) -> Int32:
     var cur = Int(cursor[0])
     var len = Int(length)
@@ -431,14 +431,14 @@ def parse_param_header(
 # ── PbrtScanner ──────────────────────────────────────────────────────────
 
 struct PbrtScanner:
-    var buffer: UnsafePointer[UInt8, MutAnyOrigin]
+    var buffer: UnsafePointer[UInt8, MutExternalOrigin]
     var total_bytes: Int32
     var cursor: Int32
     var is_at_end: Int32
 
 
 @always_inline
-def scanner_call_int(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], result: UnsafePointer[Int32, MutAnyOrigin]) -> Int32:
+def scanner_call_int(handle: UnsafePointer[PbrtScanner, MutExternalOrigin], result: UnsafePointer[Int32, MutExternalOrigin]) -> Int32:
     var cur = alloc[Int32](1)
     cur[0] = handle[0].cursor
     var ret = scan_int(handle[0].buffer, handle[0].total_bytes, cur, result)
@@ -448,7 +448,7 @@ def scanner_call_int(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], result: U
 
 
 @always_inline
-def scanner_call_float(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], result: UnsafePointer[Float32, MutAnyOrigin]) -> Int32:
+def scanner_call_float(handle: UnsafePointer[PbrtScanner, MutExternalOrigin], result: UnsafePointer[Float32, MutExternalOrigin]) -> Int32:
     var cur = alloc[Int32](1)
     cur[0] = handle[0].cursor
     var ret = scan_float(handle[0].buffer, handle[0].total_bytes, cur, result)
@@ -457,7 +457,7 @@ def scanner_call_float(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], result:
     return ret
 
 
-def scanner_open(path: UnsafePointer[UInt8, MutAnyOrigin]) -> UnsafePointer[PbrtScanner, MutAnyOrigin]:
+def scanner_open(path: UnsafePointer[UInt8, MutExternalOrigin]) -> UnsafePointer[PbrtScanner, MutExternalOrigin]:
     var handle = alloc[PbrtScanner](1)
     var path_str = String(unsafe_from_utf8_ptr=path.as_immutable())
     try:
@@ -474,24 +474,24 @@ def scanner_open(path: UnsafePointer[UInt8, MutAnyOrigin]) -> UnsafePointer[Pbrt
         handle[0].cursor = Int32(0)
         handle[0].is_at_end = Int32(0)
     except:
-        handle[0].buffer = UnsafePointer[UInt8, MutAnyOrigin].unsafe_dangling()
+        handle[0].buffer = UnsafePointer[UInt8, MutExternalOrigin].unsafe_dangling()
         handle[0].total_bytes = Int32(0)
         handle[0].cursor = Int32(0)
         handle[0].is_at_end = Int32(1)
     return handle
 
 
-def scanner_free(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]):
+def scanner_free(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]):
     if _is_real_ptr(handle[0].buffer):
         handle[0].buffer.free()
     handle.free()
 
 
-def scanner_is_at_end(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]) -> Int32:
+def scanner_is_at_end(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]) -> Int32:
     return handle[0].is_at_end
 
 
-def scanner_scan_char(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], expected: UInt8) -> Int32:
+def scanner_scan_char(handle: UnsafePointer[PbrtScanner, MutExternalOrigin], expected: UInt8) -> Int32:
     var cur = alloc[Int32](1)
     cur[0] = handle[0].cursor
     var ret = scan_char(handle[0].buffer, handle[0].total_bytes, cur, expected)
@@ -500,19 +500,19 @@ def scanner_scan_char(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], expected
     return ret
 
 
-def scanner_scan_int(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], result: UnsafePointer[Int32, MutAnyOrigin]) -> Int32:
+def scanner_scan_int(handle: UnsafePointer[PbrtScanner, MutExternalOrigin], result: UnsafePointer[Int32, MutExternalOrigin]) -> Int32:
     return scanner_call_int(handle, result)
 
 
-def scanner_scan_float(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], result: UnsafePointer[Float32, MutAnyOrigin]) -> Int32:
+def scanner_scan_float(handle: UnsafePointer[PbrtScanner, MutExternalOrigin], result: UnsafePointer[Float32, MutExternalOrigin]) -> Int32:
     return scanner_call_float(handle, result)
 
 
-def scanner_count_floats(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]) -> Int32:
+def scanner_count_floats(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]) -> Int32:
     return count_floats(handle[0].buffer, handle[0].total_bytes, handle[0].cursor)
 
 
-def scanner_scan_floats(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], dst: UnsafePointer[Float32, MutAnyOrigin], max_count: Int32) -> Int32:
+def scanner_scan_floats[Or: Origin[mut=True]](handle: UnsafePointer[PbrtScanner, MutExternalOrigin], dst: UnsafePointer[Float32, Or], max_count: Int32) -> Int32:
     var cur = alloc[Int32](1)
     cur[0] = handle[0].cursor
     var ret = scan_floats(handle[0].buffer, handle[0].total_bytes, cur, dst, max_count)
@@ -521,11 +521,11 @@ def scanner_scan_floats(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], dst: U
     return ret
 
 
-def scanner_count_ints(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]) -> Int32:
+def scanner_count_ints(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]) -> Int32:
     return count_ints(handle[0].buffer, handle[0].total_bytes, handle[0].cursor)
 
 
-def scanner_scan_ints(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], dst: UnsafePointer[Int32, MutAnyOrigin], max_count: Int32) -> Int32:
+def scanner_scan_ints[Or: Origin[mut=True]](handle: UnsafePointer[PbrtScanner, MutExternalOrigin], dst: UnsafePointer[Int32, Or], max_count: Int32) -> Int32:
     var cur = alloc[Int32](1)
     cur[0] = handle[0].cursor
     var ret = scan_ints(handle[0].buffer, handle[0].total_bytes, cur, dst, max_count)
@@ -534,7 +534,7 @@ def scanner_scan_ints(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], dst: Uns
     return ret
 
 
-def scanner_parse_quoted_string(handle: UnsafePointer[PbrtScanner, MutAnyOrigin], buf: UnsafePointer[UInt8, MutAnyOrigin], max_buf: Int32) -> Int32:
+def scanner_parse_quoted_string(handle: UnsafePointer[PbrtScanner, MutExternalOrigin], buf: UnsafePointer[UInt8, MutExternalOrigin], max_buf: Int32) -> Int32:
     var cur = alloc[Int32](1)
     cur[0] = handle[0].cursor
     var ret = parse_quoted_string(handle[0].buffer, handle[0].total_bytes, cur, buf, max_buf)
@@ -544,10 +544,10 @@ def scanner_parse_quoted_string(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]
 
 
 def scanner_parse_param_header(
-    handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
-    type_buf: UnsafePointer[UInt8, MutAnyOrigin], type_max: Int32,
-    name_buf: UnsafePointer[UInt8, MutAnyOrigin], name_max: Int32,
-    is_array: UnsafePointer[Int32, MutAnyOrigin],
+    handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
+    type_buf: UnsafePointer[UInt8, MutExternalOrigin], type_max: Int32,
+    name_buf: UnsafePointer[UInt8, MutExternalOrigin], name_max: Int32,
+    is_array: UnsafePointer[Int32, MutExternalOrigin],
 ) -> Int32:
     var cur = alloc[Int32](1)
     cur[0] = handle[0].cursor
@@ -559,9 +559,9 @@ def scanner_parse_param_header(
 
 
 def scanner_scan_token(
-    handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
-    delims: UnsafePointer[UInt8, MutAnyOrigin], n_delims: Int32,
-    buf: UnsafePointer[UInt8, MutAnyOrigin], max_buf: Int32,
+    handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
+    delims: UnsafePointer[UInt8, MutExternalOrigin], n_delims: Int32,
+    buf: UnsafePointer[UInt8, MutExternalOrigin], max_buf: Int32,
 ) -> Int32:
     var cur = alloc[Int32](1)
     cur[0] = handle[0].cursor
@@ -576,7 +576,7 @@ def scanner_scan_token(
 
 # ── String / type utilities (shared by material_builder and light_builder) ────
 
-def _psc_streq(a: UnsafePointer[UInt8, MutAnyOrigin], b: StringLiteral) -> Bool:
+def _psc_streq(a: UnsafePointer[UInt8, MutExternalOrigin], b: StringLiteral) -> Bool:
     var bp = b.unsafe_ptr()
     var i = 0
     while True:
@@ -589,15 +589,15 @@ def _psc_streq(a: UnsafePointer[UInt8, MutAnyOrigin], b: StringLiteral) -> Bool:
         i += 1
     # unreachable — loop always returns via the ai==0 or ai!=bi branches above
 
-def _psc_strncpy(dst: UnsafePointer[UInt8, MutAnyOrigin],
-                src: UnsafePointer[UInt8, MutAnyOrigin], n: Int32):
+def _psc_strncpy(dst: UnsafePointer[UInt8, MutExternalOrigin],
+                src: UnsafePointer[UInt8, MutExternalOrigin], n: Int32):
     var i = Int32(0)
     while i < n - Int32(1) and src[Int(i)] != UInt8(0):
         dst[Int(i)] = src[Int(i)]
         i += 1
     dst[Int(i)] = UInt8(0)
 
-def _psc_strncmp(a: UnsafePointer[UInt8, MutAnyOrigin], b: StringLiteral, n: Int) -> Int:
+def _psc_strncmp(a: UnsafePointer[UInt8, MutExternalOrigin], b: StringLiteral, n: Int) -> Int:
     """Compare first n bytes of a against literal b. Returns 0 if equal."""
     for i in range(n):
         var ca = Int(a[i])
@@ -608,7 +608,7 @@ def _psc_strncmp(a: UnsafePointer[UInt8, MutAnyOrigin], b: StringLiteral, n: Int
             return 0
     return 0
 
-def _psc_type_is_float(t: UnsafePointer[UInt8, MutAnyOrigin]) -> Bool:
+def _psc_type_is_float(t: UnsafePointer[UInt8, MutExternalOrigin]) -> Bool:
     var c = t[0]
     if c == UInt8(102): return True  # 'f' float
     if c == UInt8(114): return True  # 'r' rgb
@@ -621,13 +621,13 @@ def _psc_type_is_float(t: UnsafePointer[UInt8, MutAnyOrigin]) -> Bool:
     # not 3 floats, so _psc_scan_rgb must NOT be called for it.
     return False
 
-def _psc_type_is_blackbody(t: UnsafePointer[UInt8, MutAnyOrigin]) -> Bool:
+def _psc_type_is_blackbody(t: UnsafePointer[UInt8, MutExternalOrigin]) -> Bool:
     return t[0] == UInt8(98) and t[1] == UInt8(108)  # 'b','l'
 
 # Mitchell-Charity blackbody colour approximation (normalised, max=1).
 # Reference: http://www.tannerhelland.com/4435/
 @always_inline
-def _psc_blackbody_to_rgb(temp: Float32, rgb: UnsafePointer[Float32, MutAnyOrigin]):
+def _psc_blackbody_to_rgb(temp: Float32, rgb: UnsafePointer[Float32, MutExternalOrigin]):
     var t100 = temp / Float32(100.0)
     var r: Float32; var g: Float32; var b: Float32
     # Red channel
@@ -657,16 +657,16 @@ def _psc_blackbody_to_rgb(temp: Float32, rgb: UnsafePointer[Float32, MutAnyOrigi
         r /= mx; g /= mx; b /= mx
     rgb[0] = r; rgb[1] = g; rgb[2] = b
 
-def _psc_type_is_int(t: UnsafePointer[UInt8, MutAnyOrigin]) -> Bool:
+def _psc_type_is_int(t: UnsafePointer[UInt8, MutExternalOrigin]) -> Bool:
     return t[0] == UInt8(105)  # 'i' integer
 
-def _psc_type_is_str(t: UnsafePointer[UInt8, MutAnyOrigin]) -> Bool:
+def _psc_type_is_str(t: UnsafePointer[UInt8, MutExternalOrigin]) -> Bool:
     if t[0] == UInt8(116): return True  # 't' texture
     if t[0] == UInt8(115) and t[1] == UInt8(116): return True  # "string"
     return False
 
-def _psc_skip_value(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
-                   type_buf: UnsafePointer[UInt8, MutAnyOrigin],
+def _psc_skip_value(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
+                   type_buf: UnsafePointer[UInt8, MutExternalOrigin],
                    is_array: Int32):
     var tmp_s = alloc[UInt8](1024)
     if _psc_type_is_float(type_buf):
@@ -709,9 +709,9 @@ struct ParamScanner(Movable):
     by every PBRT directive's parameter loop. Construct once per directive,
     then `while ps.next(handle): ...`; ps.type_buf/ps.name_buf/ps.is_array
     refresh each call. Unrecognized params: `ps.skip(handle)`."""
-    var type_buf: UnsafePointer[UInt8, MutAnyOrigin]
-    var name_buf: UnsafePointer[UInt8, MutAnyOrigin]
-    var ia: UnsafePointer[Int32, MutAnyOrigin]
+    var type_buf: UnsafePointer[UInt8, MutExternalOrigin]
+    var name_buf: UnsafePointer[UInt8, MutExternalOrigin]
+    var ia: UnsafePointer[Int32, MutExternalOrigin]
     var type_cap: Int32
     var name_cap: Int32
     var is_array: Int32
@@ -724,7 +724,7 @@ struct ParamScanner(Movable):
         self.ia = alloc[Int32](1)
         self.is_array = Int32(0)
 
-    def next(mut self, handle: UnsafePointer[PbrtScanner, MutAnyOrigin]) -> Bool:
+    def next(mut self, handle: UnsafePointer[PbrtScanner, MutExternalOrigin]) -> Bool:
         self.ia[0] = Int32(0)
         var found = scanner_parse_param_header(handle, self.type_buf, self.type_cap,
                                                 self.name_buf, self.name_cap, self.ia)
@@ -743,7 +743,7 @@ struct ParamScanner(Movable):
     def is_str(self) -> Bool:
         return _psc_type_is_str(self.type_buf)
 
-    def skip(self, handle: UnsafePointer[PbrtScanner, MutAnyOrigin]):
+    def skip(self, handle: UnsafePointer[PbrtScanner, MutExternalOrigin]):
         _psc_skip_value(handle, self.type_buf, self.is_array)
         if self.is_array:
             _ = scanner_scan_char(handle, UInt8(93))  # ']'
@@ -753,12 +753,12 @@ struct ParamScanner(Movable):
         self.name_buf.free()
         self.ia.free()
 
-def _psc_skip_params(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]):
+def _psc_skip_params(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]):
     var ps = ParamScanner()
     while ps.next(handle):
         ps.skip(handle)
 
-def _psc_skip_line(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]):
+def _psc_skip_line(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]):
     var nl_buf = alloc[UInt8](1)
     nl_buf[0] = UInt8(10)
     var buf = alloc[UInt8](4096)
@@ -769,9 +769,9 @@ def _psc_skip_line(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]):
 comptime SPECTRUM_SCAN_SCRATCH_MAX: Int = 256  # generous bound for wavelength/value pairs
 
 def _psc_scan_spectrum_scalar(
-    handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
+    handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     is_array: Int32,
-    name_dst: UnsafePointer[UInt8, MutAnyOrigin],
+    name_dst: UnsafePointer[UInt8, MutExternalOrigin],
     name_max: Int32,
 ) -> Tuple[Float32, Bool]:
     """Robustly scan a "spectrum"-typed parameter's value into a single
@@ -1004,7 +1004,7 @@ struct ParameterDictionary(Movable):
                     return (default, p.value.strs[0])
         return (default, String(""))
 
-def _psc_collect_params(handle: UnsafePointer[PbrtScanner, MutAnyOrigin]) -> ParameterDictionary:
+def _psc_collect_params(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]) -> ParameterDictionary:
     """Generic, type-driven (not name-driven) scan of every parameter in the
     current directive into a ParameterDictionary. Reuses the same type
     classification (_psc_type_is_float/_psc_type_is_int/_psc_type_is_str)

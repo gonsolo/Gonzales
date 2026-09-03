@@ -174,13 +174,13 @@ def test_sphere_outward_normal_is_unit_independent_of_radius() raises:
 # ── dot / cross (SIMD triples) ──────────────────────────────────────────────
 
 def test_dot_simd() raises:
-    var a = SIMD[DType.float32, 3](1.0, 2.0, 3.0)
-    var b = SIMD[DType.float32, 3](4.0, 5.0, 6.0)
+    var a = Vec3f(1.0, 2.0, 3.0)
+    var b = Vec3f(4.0, 5.0, 6.0)
     assert_true(_close(dot(a, b), Float32(32.0)))
 
 def test_cross_simd_right_handed() raises:
-    var x = SIMD[DType.float32, 3](1.0, 0.0, 0.0)
-    var y = SIMD[DType.float32, 3](0.0, 1.0, 0.0)
+    var x = Vec3f(1.0, 0.0, 0.0)
+    var y = Vec3f(0.0, 1.0, 0.0)
     var z = cross(x, y)
     assert_true(_close(z[0], Float32(0.0)) and _close(z[1], Float32(0.0)) and _close(z[2], Float32(1.0)))
 
@@ -221,14 +221,14 @@ def test_vec3f_length_sq() raises:
     assert_true(_close(Vec3f(3.0, 4.0, 0.0).length_sq(), Float32(25.0)))
 
 def test_vec3f_simd_round_trip() raises:
-    var s = SIMD[DType.float32, 3](1.5, -2.5, 3.5)
+    var s = Vec3f(1.5, -2.5, 3.5)
     var v = vec3f(s)
     assert_true(_vclose(v, Vec3f(1.5, -2.5, 3.5)))
     var back = v.to_simd()
     assert_true(_close(back[0], s[0]) and _close(back[1], s[1]) and _close(back[2], s[2]))
 
 def test_point3f_simd_round_trip() raises:
-    var s = SIMD[DType.float32, 3](1.5, -2.5, 3.5)
+    var s = Vec3f(1.5, -2.5, 3.5)
     var p = point3f(s)
     var back = p.to_simd()
     assert_true(_close(back[0], s[0]) and _close(back[1], s[1]) and _close(back[2], s[2]))

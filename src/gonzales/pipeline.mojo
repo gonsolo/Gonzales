@@ -2,7 +2,7 @@ from std.memory import alloc, OwnedPointer
 from std.collections import List
 from std.math import sqrt, tan, ceil
 from std.sys.info import size_of
-from std.gpu.host import DeviceBuffer
+from max.gpu.host import DeviceBuffer
 from .pbrt_parser import ParsedScene_Mojo, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film, mojo_apply_overrides
 from .scene_loader import mojo_parse_scene_any
 from .rendering import render_all_tiles, normalize_film, fmt_time, progress_str
@@ -11,8 +11,8 @@ from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, 
 from .postprocess import denoise, write_image, write_image_cropped
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 from .bvh import BVH2Node, SceneDescriptor2_C, render_aux_buffers
-from .sppm import sppm_render, sppm_render_gpu
-from .bdpt import vcm_render, vcm_render_gpu, vcm_render_gpu_wavefront, _BDPT_MAX_VERTS
+from .sppm import sppm_render
+from .bdpt import vcm_render, vcm_render_gpu, vcm_render_gpu_wavefront, _BDPT_MAX_VERTS, sppm_render_gpu
 from .guide import GuideGrid, guide_create, guide_free, guide_clone_empty, guide_refine, null_guide, guide_merge, guide_cell_has_data
 from .restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io_null
 from .restir_gi import GIReservoir, gi_reservoir_init, GIReservoirIO, gi_reservoir_io_null
@@ -34,7 +34,7 @@ from .vulkaninterop import (
 # own SPPM integrator default of "one photon per pixel" when
 # photonsperiteration is unspecified).
 def _resolve_sppm_params(
-    psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
+    psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
     sppm_photons_cli: Int32,
     sppm_radius_cli: Float32,
 ) -> Tuple[Int32, Float32]:
@@ -74,8 +74,8 @@ def _resolve_vcm_spp(vcm_spp_cli: Int32, scene_spp: Int32) -> Int:
 
 # Generate Sobol matrices from the Joe-Kuo data file.
 # Returns a heap-allocated pointer to 21201*52 UInt32 values, or null on error.
-def _generate_sobol_matrices(path: String) -> Optional[UnsafePointer[UInt32, MutAnyOrigin]]:
-    var file_buf: UnsafePointer[UInt8, MutAnyOrigin]
+def _generate_sobol_matrices(path: String) -> Optional[UnsafePointer[UInt32, MutExternalOrigin]]:
+    var file_buf: UnsafePointer[UInt8, MutExternalOrigin]
     var file_size: Int
     try:
         var f = open(path, "r")
@@ -189,20 +189,20 @@ def _generate_sobol_matrices(path: String) -> Optional[UnsafePointer[UInt32, Mut
 
 
 def _gpu_upload_scene(
-    psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
-    sobol: UnsafePointer[UInt32, MutAnyOrigin],
+    psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
+    sobol: UnsafePointer[UInt32, MutExternalOrigin],
     n_pixels: Int,
     # Decomposed, NOT a single by-value `spectral: SpectralHandle` param --
     # see spectrum.mojo's long comment on the confirmed by-value SpectralHandle
     # miscompilation; this GPU-upload path reproduced the same corruption
     # class (see project_priority_backlog memory item 3).
-    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     spectral_res: Int = 0,
-    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-) -> UnsafePointer[GpuSceneHandle, MutAnyOrigin]:
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+) -> UnsafePointer[GpuSceneHandle, MutExternalOrigin]:
     var fw = psc[0].film_w
     var fh = psc[0].film_h
     var n_meshes = Int(psc[0].mesh_count)
@@ -286,8 +286,8 @@ def _dbg_vlen(x: Float32, y: Float32, z: Float32) -> Float32:
 # representative. Returns (mesh_material_idx, mesh_al_idx); the latter is
 # -1 for ordinary (non-light) meshes.
 def _build_mesh_light_info(
-    psc: UnsafePointer[ParsedScene_Mojo, MutAnyOrigin],
-) -> Tuple[UnsafePointer[Int64, MutAnyOrigin], UnsafePointer[Int32, MutAnyOrigin]]:
+    psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
+) -> Tuple[UnsafePointer[Int64, MutExternalOrigin], UnsafePointer[Int32, MutExternalOrigin]]:
     var n_meshes = Int(psc[0].mesh_count)
     var mat_idx = alloc[Int64](max(n_meshes, 1))
     var al_idx = alloc[Int32](max(n_meshes, 1))
@@ -329,7 +329,7 @@ def _build_mesh_light_info(
     return (mat_idx, al_idx)
 
 def debug_trace_pixel(
-    path: UnsafePointer[UInt8, MutAnyOrigin],
+    path: UnsafePointer[UInt8, MutExternalOrigin],
     px: Int32, py: Int32,
 ):
     """Trace the centre ray of one pixel and print the path bounce-by-bounce
@@ -566,7 +566,7 @@ def debug_trace_pixel(
 
 
 def debug_render_vulkanrt(
-    path: UnsafePointer[UInt8, MutAnyOrigin],
+    path: UnsafePointer[UInt8, MutExternalOrigin],
     verbose: Bool = False,
 ):
     """Task #162 step 4: build a real Vulkan RT scene from the parsed
@@ -744,8 +744,8 @@ def debug_render_vulkanrt(
 
 
 def parse_and_render(
-    path: UnsafePointer[UInt8, MutAnyOrigin],
-    sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
+    path: UnsafePointer[UInt8, MutExternalOrigin],
+    sobol_matrices: UnsafePointer[UInt32, MutExternalOrigin],
     use_gpu: Bool,
     spectral: SpectralHandle = null_spectral_handle(),
     override_w: Int32 = Int32(0), override_h: Int32 = Int32(0),
@@ -881,7 +881,7 @@ def parse_and_render(
             # camera pass every sample (n_light_paths_merge is always
             # >= n_pix, so one scene sized for it covers both).
             var use_vk_vcm = use_vulkan_rt_shade
-            var interop_scene_vcm = UnsafePointer[UInt8, MutAnyOrigin].unsafe_dangling()
+            var interop_scene_vcm = UnsafePointer[UInt8, MutExternalOrigin].unsafe_dangling()
             var interop_rays_buf_vcm: Optional[DeviceBuffer[DType.float32]] = None
             var interop_results_buf_vcm: Optional[DeviceBuffer[DType.float32]] = None
             var mesh_material_idx_buf_vcm: Optional[DeviceBuffer[DType.uint8]] = None
@@ -920,12 +920,12 @@ def parse_and_render(
                     # already keeps instanced/curve/sphere scenes off this
                     # path entirely, so template_count/instance_count/
                     # n_curve_leaves are always 0 here.
-                    var no_templates_vcm = UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling()
-                    var no_instances_vcm = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
-                    var no_instance_tmpl_vcm = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling()
-                    var no_curve_aabbs_vcm = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
-                    var no_curve_i32_vcm = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling()
-                    var no_curve_data_vcm = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling()
+                    var no_templates_vcm = UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling()
+                    var no_instances_vcm = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
+                    var no_instance_tmpl_vcm = UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling()
+                    var no_curve_aabbs_vcm = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
+                    var no_curve_i32_vcm = UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling()
+                    var no_curve_data_vcm = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
                     interop_scene_vcm = vulkaninterop_rt_create_scene(
                         vmeshes_vcm, Int64(n_meshes_vk_vcm), point_counts_vcm, vidx_counts_vcm,
                         Int64(0), no_templates_vcm, no_templates_vcm,
@@ -1002,7 +1002,7 @@ def parse_and_render(
         if use_vulkan_rt_shade and use_restir:
             print("Note: --restir batch mode does not support --vulkan-rt-shade yet "
                   "(gpu_render_sample has no Vulkan RT interop path) -- using CUDA intersection.")
-        var interop_scene = UnsafePointer[UInt8, MutAnyOrigin].unsafe_dangling()
+        var interop_scene = UnsafePointer[UInt8, MutExternalOrigin].unsafe_dangling()
         var interop_rays_buf_opt: Optional[DeviceBuffer[DType.float32]] = None
         var interop_results_buf_opt: Optional[DeviceBuffer[DType.float32]] = None
         var mesh_material_idx_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
@@ -1241,14 +1241,14 @@ def parse_and_render(
         gpu_free_scene(handle)
         _ = write_image_cropped(denoised_gpu.unsafe_ptr(), fw, fh, crop_x0px, crop_y0px, crop_w, crop_h,
                                  psc[0].film_filename, Int32(32), Int32(32))
-        var albedo_name_buf = List[UInt8](capacity=11)
+        var albedo_name_buf = alloc[UInt8](11)
         var albedo_name_str = "albedo.exr"
         var anp = albedo_name_str.unsafe_ptr()
-        for i in range(10): albedo_name_buf.append(anp[i])
-        albedo_name_buf.append(UInt8(0))
+        for i in range(10): albedo_name_buf[i] = anp[i]
+        albedo_name_buf[10] = UInt8(0)
         _ = write_image_cropped(albedo_gpu.unsafe_ptr(), fw, fh, crop_x0px, crop_y0px, crop_w, crop_h,
-                                 albedo_name_buf.unsafe_ptr(), Int32(32), Int32(32))
-        # albedo_name_buf freed automatically
+                                 albedo_name_buf.unsafe_origin_cast[MutExternalOrigin](), Int32(32), Int32(32))
+        albedo_name_buf.free()
         # denoised_gpu, albedo_gpu, and results freed automatically
         mojo_parsed_free(psc)
         return Int32(0)
@@ -1407,7 +1407,7 @@ def parse_and_render(
                 Int32(32), Int32(32),
                 sp_ptr.unsafe_ptr(), sd, results.unsafe_ptr(), psc[0].max_depth,
                 quiet=False, guide_read=null_guide(),
-                write_guides=UnsafePointer[GuideGrid, MutAnyOrigin].unsafe_dangling(), n_write_guides=0,
+                write_guides=UnsafePointer[GuideGrid, MutExternalOrigin].unsafe_dangling(), n_write_guides=0,
                 use_restir=use_restir, use_gi=use_restir and use_restir_gi)
             # sp_ptr freed automatically
 
@@ -1440,21 +1440,22 @@ def parse_and_render(
                     Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
         _ = write_image_cropped(denoised.unsafe_ptr(), fw, fh, crop_x0px, crop_y0px, crop_w, crop_h,
                                  psc[0].film_filename, Int32(32), Int32(32))
-        var albedo_name_buf = List[UInt8](capacity=11)
+        var albedo_name_buf = alloc[UInt8](11)
         var albedo_name_str = "albedo.exr"
         var anp2 = albedo_name_str.unsafe_ptr()
-        for i in range(10): albedo_name_buf.append(anp2[i])
-        albedo_name_buf.append(UInt8(0))
+        for i in range(10): albedo_name_buf[i] = anp2[i]
+        albedo_name_buf[10] = UInt8(0)
         _ = write_image_cropped(albedo.unsafe_ptr(), fw, fh, crop_x0px, crop_y0px, crop_w, crop_h,
-                                 albedo_name_buf.unsafe_ptr(), Int32(32), Int32(32))
-        # albedo_name_buf, beauty, albedo, denoised, normals, dept freed automatically
+                                 albedo_name_buf.unsafe_origin_cast[MutExternalOrigin](), Int32(32), Int32(32))
+        albedo_name_buf.free()
+        # beauty, albedo, denoised, normals, dept freed automatically
     mojo_parsed_free(psc)
     return Int32(0)
 
 
 def render_interactive(
-    path: UnsafePointer[UInt8, MutAnyOrigin],
-    sobol: UnsafePointer[UInt32, MutAnyOrigin],
+    path: UnsafePointer[UInt8, MutExternalOrigin],
+    sobol: UnsafePointer[UInt32, MutExternalOrigin],
     use_gpu: Bool,
     spectral: SpectralHandle = null_spectral_handle(),
     fullscreen: Bool = False,
@@ -1504,7 +1505,7 @@ def render_interactive(
     var fh = psc[0].film_h
     var n_pixels = Int(fw) * Int(fh)
 
-    var handle = UnsafePointer[GpuSceneHandle, MutAnyOrigin].unsafe_dangling()
+    var handle = UnsafePointer[GpuSceneHandle, MutExternalOrigin].unsafe_dangling()
     if use_gpu:
         handle = _gpu_upload_scene(psc, sobol, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
         if not _is_real_ptr(handle):
@@ -1519,13 +1520,13 @@ def render_interactive(
     else:
         title_str = "gonzales"
         title_len = 8
-    var title_buf = List[UInt8](capacity=title_len + 1)
+    var title_buf = alloc[UInt8](title_len + 1)
     var ts = title_str.unsafe_ptr()
     for i in range(title_len):
-        title_buf.append(ts[i])
-    title_buf.append(UInt8(0))
-    var v = viewer_create(fw, fh, title_buf.unsafe_ptr(), Int32(1) if fullscreen else Int32(0))
-    # title_buf freed automatically
+        title_buf[i] = ts[i]
+    title_buf[title_len] = UInt8(0)
+    var v = viewer_create(fw, fh, title_buf, Int32(1) if fullscreen else Int32(0))
+    title_buf.free()
     if Int(v) == 0:
         print("Failed to create viewer window")
         if use_gpu:
@@ -1563,7 +1564,7 @@ def render_interactive(
     var frame_count = 0
 
     # Mode-specific buffers — dangling until allocated below
-    var sd           = UnsafePointer[SceneDescriptor2_C, MutAnyOrigin].unsafe_dangling()
+    var sd           = UnsafePointer[SceneDescriptor2_C, MutExternalOrigin].unsafe_dangling()
     # Phase 2.3+2.5 (docs/A2_restir_migration_plan.md): two persistent
     # DIReservoir buffers per pixel, ping-ponged each frame -- CPU-only
     # (--restir has no GPU wiring yet, see restir_di.mojo's header).
@@ -1576,23 +1577,23 @@ def render_interactive(
     # pixel written by exactly one thread, at 1 spp/frame) makes both
     # race-free without any locking. Swapped after each frame completes,
     # below.
-    var restir_buf_a = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling()
-    var restir_buf_b = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling()
-    var restir_read  = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling()
-    var restir_write = UnsafePointer[DIReservoir, MutAnyOrigin].unsafe_dangling()
-    var gi_buf_a = UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling()
-    var gi_buf_b = UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling()
-    var gi_read  = UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling()
-    var gi_write = UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling()
+    var restir_buf_a = UnsafePointer[DIReservoir, MutExternalOrigin].unsafe_dangling()
+    var restir_buf_b = UnsafePointer[DIReservoir, MutExternalOrigin].unsafe_dangling()
+    var restir_read  = UnsafePointer[DIReservoir, MutExternalOrigin].unsafe_dangling()
+    var restir_write = UnsafePointer[DIReservoir, MutExternalOrigin].unsafe_dangling()
+    var gi_buf_a = UnsafePointer[GIReservoir, MutExternalOrigin].unsafe_dangling()
+    var gi_buf_b = UnsafePointer[GIReservoir, MutExternalOrigin].unsafe_dangling()
+    var gi_read  = UnsafePointer[GIReservoir, MutExternalOrigin].unsafe_dangling()
+    var gi_write = UnsafePointer[GIReservoir, MutExternalOrigin].unsafe_dangling()
     # Phase 6: ping-ponged SMSReservoir buffers, same race-free scheme as
     # restir_buf_a/b and gi_buf_a/b above -- SMS_MAX_FINALIZED_WEIGHT
     # (shading.mojo) was applied proactively from the start (not
     # discovered via a live bug this time, unlike DI/GI's own history),
     # so no separate bug-fix narrative applies here.
-    var sms_buf_a = UnsafePointer[SMSReservoir, MutAnyOrigin].unsafe_dangling()
-    var sms_buf_b = UnsafePointer[SMSReservoir, MutAnyOrigin].unsafe_dangling()
-    var sms_read  = UnsafePointer[SMSReservoir, MutAnyOrigin].unsafe_dangling()
-    var sms_write = UnsafePointer[SMSReservoir, MutAnyOrigin].unsafe_dangling()
+    var sms_buf_a = UnsafePointer[SMSReservoir, MutExternalOrigin].unsafe_dangling()
+    var sms_buf_b = UnsafePointer[SMSReservoir, MutExternalOrigin].unsafe_dangling()
+    var sms_read  = UnsafePointer[SMSReservoir, MutExternalOrigin].unsafe_dangling()
+    var sms_write = UnsafePointer[SMSReservoir, MutExternalOrigin].unsafe_dangling()
     # Phase 4: ping-ponged GIReservoir buffers, same scheme as
     # restir_buf_a/b above (race-free for the same reason: read only from
     # `gi_read`, write only to `gi_write`, swapped after each frame).
@@ -1795,20 +1796,20 @@ def render_interactive(
             if use_restir:
                 restir_io = ReservoirIO(
                     read=restir_read, write=restir_write,
-                    gbuf_normal=normals_int.unsafe_ptr(),
-                    gbuf_depth=depth_int.unsafe_ptr(),
-                    gbuf_material_id=material_id_int.unsafe_ptr(),
-                    gbuf_world_pos=world_pos_int.unsafe_ptr(),
+                    gbuf_normal=normals_int.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](),
+                    gbuf_depth=depth_int.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](),
+                    gbuf_material_id=material_id_int.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](),
+                    gbuf_world_pos=world_pos_int.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](),
                     frame_w=fw, frame_h=fh,
                 )
             var gi_io = gi_reservoir_io_null()
             if use_restir_gi:
                 gi_io = GIReservoirIO(
                     read=gi_read, write=gi_write,
-                    gbuf_normal=normals_int.unsafe_ptr(),
-                    gbuf_depth=depth_int.unsafe_ptr(),
-                    gbuf_material_id=material_id_int.unsafe_ptr(),
-                    gbuf_world_pos=world_pos_int.unsafe_ptr(),
+                    gbuf_normal=normals_int.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](),
+                    gbuf_depth=depth_int.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](),
+                    gbuf_material_id=material_id_int.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](),
+                    gbuf_world_pos=world_pos_int.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](),
                     frame_w=fw, frame_h=fh,
                 )
             var sms_io = sms_reservoir_io_null()
@@ -1819,7 +1820,7 @@ def render_interactive(
                 Int32(0), Int32(0), fw, fh,
                 Int32(32), Int32(32),
                 sp_int.unsafe_ptr(), sd, results.unsafe_ptr(), psc[0].max_depth, True,
-                guide_read=null_guide(), write_guides=UnsafePointer[GuideGrid, MutAnyOrigin].unsafe_dangling(),
+                guide_read=null_guide(), write_guides=UnsafePointer[GuideGrid, MutExternalOrigin].unsafe_dangling(),
                 n_write_guides=0, use_restir=use_restir, frame_w=fw, restir_io=restir_io,
                 use_gi=use_restir_gi, gi_io=gi_io,
                 use_sms_restir=use_sms_restir, sms_io=sms_io)

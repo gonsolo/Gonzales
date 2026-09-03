@@ -30,7 +30,7 @@
 # BSDF toward a fixed light point while reusing the light's own Le verbatim.
 
 from std.math import sqrt, cos, sin, abs
-from .geometry import RGB, dot, INV_PI, _is_real_ptr
+from .geometry import RGB, dot, INV_PI, _is_real_ptr, Vec3f
 from .reservoir import ReservoirState, reservoir_state_init, reservoir_combine, reservoir_finalize, reservoir_cap_confidence
 from .rng import PCG32
 
@@ -52,8 +52,8 @@ struct GIReservoir(TrivialRegisterPassable):
     geometry function can't know a material's BSDF kind.
     `valid` mirrors DIReservoir's `light_idx < 0` sentinel (0 = no winner
     yet; every other field is meaningless until a candidate is streamed)."""
-    var recon_point:   SIMD[DType.float32, 3]
-    var recon_normal:  SIMD[DType.float32, 3]
+    var recon_point:   Vec3f
+    var recon_normal:  Vec3f
     var lo:            RGB
     var recon_is_delta: Int8
     var valid:          Int8
@@ -64,8 +64,8 @@ struct GIReservoir(TrivialRegisterPassable):
 @always_inline
 def gi_reservoir_init() -> GIReservoir:
     return GIReservoir(
-        recon_point=SIMD[DType.float32, 3](Float32(0)),
-        recon_normal=SIMD[DType.float32, 3](Float32(0)),
+        recon_point=Vec3f(Float32(0)),
+        recon_normal=Vec3f(Float32(0)),
         lo=RGB(Float32(0)),
         recon_is_delta=Int8(0),
         valid=Int8(0),
@@ -76,8 +76,8 @@ def gi_reservoir_init() -> GIReservoir:
 
 @always_inline
 def gi_target_pdf(
-    hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3], alb: RGB,
-    recon_point: SIMD[DType.float32, 3], recon_normal: SIMD[DType.float32, 3], lo: RGB,
+    hit_point: Vec3f, normal: Vec3f, alb: RGB,
+    recon_point: Vec3f, recon_normal: Vec3f, lo: RGB,
 ) -> Float32:
     """RIS target function p̂(candidate) for a one-bounce-reconnection GI
     sample: luminance of the UNSHADOWED Lambertian-at-x1 contribution
@@ -134,24 +134,24 @@ struct GIReservoirIO(TrivialRegisterPassable):
     pointers default to `.unsafe_dangling()` and frame_w/frame_h to 0;
     gi_temporal_spatial_combine checks `_is_real_ptr`/`> 0` before ever
     touching them, matching ReservoirIO's own null-safety contract."""
-    var read:  UnsafePointer[GIReservoir, MutAnyOrigin]
-    var write: UnsafePointer[GIReservoir, MutAnyOrigin]
-    var gbuf_normal:      UnsafePointer[Float32, MutAnyOrigin]
-    var gbuf_depth:       UnsafePointer[Float32, MutAnyOrigin]
-    var gbuf_material_id: UnsafePointer[Int32, MutAnyOrigin]
-    var gbuf_world_pos:   UnsafePointer[Float32, MutAnyOrigin]
+    var read:  UnsafePointer[GIReservoir, MutExternalOrigin]
+    var write: UnsafePointer[GIReservoir, MutExternalOrigin]
+    var gbuf_normal:      UnsafePointer[Float32, MutExternalOrigin]
+    var gbuf_depth:       UnsafePointer[Float32, MutExternalOrigin]
+    var gbuf_material_id: UnsafePointer[Int32, MutExternalOrigin]
+    var gbuf_world_pos:   UnsafePointer[Float32, MutExternalOrigin]
     var frame_w: Int32
     var frame_h: Int32
 
 @always_inline
 def gi_reservoir_io_null() -> GIReservoirIO:
     return GIReservoirIO(
-        read=UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling(),
-        write=UnsafePointer[GIReservoir, MutAnyOrigin].unsafe_dangling(),
-        gbuf_normal=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        gbuf_depth=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        gbuf_material_id=UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling(),
-        gbuf_world_pos=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        read=UnsafePointer[GIReservoir, MutExternalOrigin].unsafe_dangling(),
+        write=UnsafePointer[GIReservoir, MutExternalOrigin].unsafe_dangling(),
+        gbuf_normal=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_depth=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_material_id=UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_world_pos=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0),
     )
 
@@ -180,7 +180,7 @@ comptime GI_SPATIAL_DEPTH_REL_MAX: Float32 = Float32(0.1)
 comptime GI_MAX_FINALIZED_WEIGHT: Float32 = Float32(10.0)
 
 def gi_temporal_spatial_combine(
-    mut res: GIReservoir, hit_point: SIMD[DType.float32, 3], normal: SIMD[DType.float32, 3], alb: RGB,
+    mut res: GIReservoir, hit_point: Vec3f, normal: Vec3f, alb: RGB,
     mut pcg: PCG32,
     gi_io: GIReservoirIO = gi_reservoir_io_null(),
     pixel_idx: Int = -1,
@@ -244,7 +244,7 @@ def gi_temporal_spatial_combine(
                 if n_idx == pixel_idx:
                     continue
                 var n_off = n_idx * 3
-                var n_normal = SIMD[DType.float32, 3](
+                var n_normal = Vec3f(
                     gi_io.gbuf_normal[n_off], gi_io.gbuf_normal[n_off + 1], gi_io.gbuf_normal[n_off + 2])
                 if dot(n_normal, normal) < GI_SPATIAL_NORMAL_DOT_MIN:
                     continue
@@ -279,9 +279,9 @@ def gi_temporal_spatial_combine(
         var z = m_same_domain
         for i in range(nb_seen):
             var np_off = Int(nb_px_seen[i]) * 3
-            var n_hit = SIMD[DType.float32, 3](
+            var n_hit = Vec3f(
                 gi_io.gbuf_world_pos[np_off], gi_io.gbuf_world_pos[np_off + 1], gi_io.gbuf_world_pos[np_off + 2])
-            var n_nrm = SIMD[DType.float32, 3](
+            var n_nrm = Vec3f(
                 gi_io.gbuf_normal[np_off], gi_io.gbuf_normal[np_off + 1], gi_io.gbuf_normal[np_off + 2])
             if gi_target_pdf(n_hit, n_nrm, alb, res.recon_point, res.recon_normal, res.lo) > Float32(0.0):
                 z += nb_m_seen[i]

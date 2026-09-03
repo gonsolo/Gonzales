@@ -21,13 +21,13 @@ from gonzales.bvh import BVH2Node, build_bvh2, traverse_bvh2_core
 
 @fieldwise_init
 struct TriangleSceneFixture(Movable):
-    var points:         UnsafePointer[Float32, MutAnyOrigin]
-    var vertex_indices: UnsafePointer[Int64, MutAnyOrigin]
-    var meshes:         UnsafePointer[TriangleMesh_C, MutAnyOrigin]
-    var bvh_nodes:      UnsafePointer[BVH2Node, MutAnyOrigin]
-    var prim_ids:       UnsafePointer[PrimId_C, MutAnyOrigin]
-    var curves:         UnsafePointer[Curve_C, MutAnyOrigin]
-    var materials:      UnsafePointer[Material_C, MutAnyOrigin]
+    var points:         UnsafePointer[Float32, MutExternalOrigin]
+    var vertex_indices: UnsafePointer[Int64, MutExternalOrigin]
+    var meshes:         UnsafePointer[TriangleMesh_C, MutExternalOrigin]
+    var bvh_nodes:      UnsafePointer[BVH2Node, MutExternalOrigin]
+    var prim_ids:       UnsafePointer[PrimId_C, MutExternalOrigin]
+    var curves:         UnsafePointer[Curve_C, MutExternalOrigin]
+    var materials:      UnsafePointer[Material_C, MutExternalOrigin]
     var n_tris:          Int32
 
     def intersect(self, ray: Ray_C, tMax: Float32) -> Intersection_C:
@@ -64,10 +64,10 @@ def make_triangle_scene(verts: List[Point3f]) -> TriangleSceneFixture:
     var meshes = alloc[TriangleMesh_C](1)
     meshes[0] = TriangleMesh_C(
         points,
-        UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling(),  # faceIndices, unused
+        UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(),  # faceIndices, unused
         vertex_indices,
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),  # uvs
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),  # normals
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),  # uvs
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),  # normals
     )
 
     var bounds = alloc[Float32](Int(n_tris) * 6)
@@ -109,6 +109,6 @@ def make_triangle_scene(verts: List[Point3f]) -> TriangleSceneFixture:
 
     return TriangleSceneFixture(
         points, vertex_indices, meshes, bvh_nodes, prim_ids,
-        UnsafePointer[Curve_C, MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[Curve_C, MutExternalOrigin].unsafe_dangling(),
         materials, n_tris,
     )

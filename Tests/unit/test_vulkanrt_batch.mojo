@@ -2,7 +2,7 @@ from std.memory import alloc
 from std.sys import has_accelerator
 from std.testing import assert_true, TestSuite
 from std.math import abs
-from gonzales.geometry import TriangleMesh_C, intersect_triangle
+from gonzales.geometry import TriangleMesh_C, intersect_triangle, Vec3f
 from gonzales.vulkanrt import (
     vulkanrt_build_scene, vulkanrt_trace_rays, vulkanrt_destroy_scene,
 )
@@ -40,14 +40,14 @@ def test_vulkanrt_trace_rays_batches_and_matches_cpu_barycentrics() raises:
 
     var meshes = alloc[TriangleMesh_C](2)
     meshes[0] = TriangleMesh_C(
-        pts0, UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling(), idx0,
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        pts0, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), idx0,
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     )
     meshes[1] = TriangleMesh_C(
-        pts1, UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling(), idx1,
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        pts1, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), idx1,
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     )
 
     var point_counts = alloc[Int64](2)
@@ -103,11 +103,11 @@ def test_vulkanrt_trace_rays_batches_and_matches_cpu_barycentrics() raises:
     # Moller-Trumbore for the exact same ray/triangle -- must agree, not
     # merely "a hit happened".
     var cpu0 = intersect_triangle(
-        SIMD[DType.float32, 3](0.25, 0.25, -1.0),
-        SIMD[DType.float32, 3](0.0, 0.0, 1.0),
-        SIMD[DType.float32, 3](0.0, 0.0, 0.0),
-        SIMD[DType.float32, 3](1.0, 0.0, 0.0),
-        SIMD[DType.float32, 3](0.0, 1.0, 0.0),
+        Vec3f(0.25, 0.25, -1.0),
+        Vec3f(0.0, 0.0, 1.0),
+        Vec3f(0.0, 0.0, 0.0),
+        Vec3f(1.0, 0.0, 0.0),
+        Vec3f(0.0, 1.0, 0.0),
         Float32(10.0),
     )
     assert_true(cpu0[0])
@@ -116,11 +116,11 @@ def test_vulkanrt_trace_rays_batches_and_matches_cpu_barycentrics() raises:
     assert_true(abs(out_v[0] - cpu0[3]) < EPS)
 
     var cpu3 = intersect_triangle(
-        SIMD[DType.float32, 3](0.1, 0.1, -1.0),
-        SIMD[DType.float32, 3](0.0, 0.0, 1.0),
-        SIMD[DType.float32, 3](0.0, 0.0, 0.0),
-        SIMD[DType.float32, 3](1.0, 0.0, 0.0),
-        SIMD[DType.float32, 3](0.0, 1.0, 0.0),
+        Vec3f(0.1, 0.1, -1.0),
+        Vec3f(0.0, 0.0, 1.0),
+        Vec3f(0.0, 0.0, 0.0),
+        Vec3f(1.0, 0.0, 0.0),
+        Vec3f(0.0, 1.0, 0.0),
         Float32(10.0),
     )
     assert_true(cpu3[0])

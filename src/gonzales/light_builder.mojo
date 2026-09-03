@@ -6,8 +6,8 @@ from .parse_types import SceneParseState
 from .geometry import RGB
 from .transform import transform_points
 
-def _psc_handle_area_light_source(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
-                                 s: UnsafePointer[SceneParseState, MutAnyOrigin]):
+def _psc_handle_area_light_source(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
+                                 s: UnsafePointer[SceneParseState, MutExternalOrigin]):
     var sbuf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
     sbuf.free()
@@ -17,8 +17,8 @@ def _psc_handle_area_light_source(handle: UnsafePointer[PbrtScanner, MutAnyOrigi
     var scale = params.get_float("scale", Float32(1.0))
     s[0].cur_attr.al_rgb = rgb * scale
 
-def handle_light_source(handle: UnsafePointer[PbrtScanner, MutAnyOrigin],
-                             s: UnsafePointer[SceneParseState, MutAnyOrigin]):
+def handle_light_source(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
+                             s: UnsafePointer[SceneParseState, MutExternalOrigin]):
     var ltype = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, ltype, 64)
     var params = _psc_collect_params(handle)

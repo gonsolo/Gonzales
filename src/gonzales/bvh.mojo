@@ -1,7 +1,7 @@
 from std.memory import alloc
 from std.math import sqrt, cos, sin, max, min, exp, floor, log
-from std.algorithm import parallelize
-from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C, _is_real_ptr, store_vec3
+from max.algorithm import parallelize
+from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C, _is_real_ptr, store_vec3, _atan2f
 from .rng import PCG32
 from .spectrum import SpectralHandle
 
@@ -63,31 +63,31 @@ def intersect_aabb(
 
 @fieldwise_init
 struct SceneDescriptor2_C(TrivialRegisterPassable):
-    var bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin]
-    var primIds: UnsafePointer[PrimId_C, MutAnyOrigin]
-    var meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin]
+    var bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin]
+    var primIds: UnsafePointer[PrimId_C, MutExternalOrigin]
+    var meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin]
     var meshCount: Int64
-    var materials: UnsafePointer[Material_C, MutAnyOrigin]
+    var materials: UnsafePointer[Material_C, MutExternalOrigin]
     var materialCount: Int64
-    var areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin]
+    var areaLights: UnsafePointer[AreaLight_C, MutExternalOrigin]
     var areaLightCount: Int64
-    var textures: UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin]
+    var textures: UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin]
     var textureCount: Int64
-    var distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin]
+    var distantLights: UnsafePointer[DistantLight_C, MutExternalOrigin]
     var distantLightCount: Int64
-    var pointLights: UnsafePointer[PointLight_C, MutAnyOrigin]
+    var pointLights: UnsafePointer[PointLight_C, MutExternalOrigin]
     var pointLightCount: Int64
-    var infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin]
+    var infiniteLights: UnsafePointer[InfiniteLight_C, MutExternalOrigin]
     var infiniteLightCount: Int64
-    var spheres: UnsafePointer[Sphere_C, MutAnyOrigin]
+    var spheres: UnsafePointer[Sphere_C, MutExternalOrigin]
     var sphereCount: Int64
-    var curves: UnsafePointer[Curve_C, MutAnyOrigin]
+    var curves: UnsafePointer[Curve_C, MutExternalOrigin]
     var curveCount: Int64
-    var mediums: UnsafePointer[Medium_C, MutAnyOrigin]
+    var mediums: UnsafePointer[Medium_C, MutExternalOrigin]
     var mediumCount: Int64
-    var mediumInterfaces: UnsafePointer[MediumInterface_C, MutAnyOrigin]
+    var mediumInterfaces: UnsafePointer[MediumInterface_C, MutExternalOrigin]
     var mediumIfaceCount: Int64
-    var grids: UnsafePointer[Grid_C, MutAnyOrigin]
+    var grids: UnsafePointer[Grid_C, MutExternalOrigin]
     var gridCount: Int64
     var lightSampler: LightSampler_C
 
@@ -97,16 +97,16 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
     # scenes with no ObjectInstance usage (the blas*/instances pointers may
     # then be dangling — never dereferenced since no PrimId_C.type==6 leaf
     # exists in that case).
-    var blasNodesArr:   UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin]
-    var blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin]
+    var blasNodesArr:   UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin]
+    var blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin]
     var blasCount:      Int64
-    var instances:      UnsafePointer[Instance_C, MutAnyOrigin]
+    var instances:      UnsafePointer[Instance_C, MutExternalOrigin]
     var instanceCount:  Int64
 
     # "measured" materials: one MeasuredBRDF_C per distinct .bsdf file
     # (deduped at scene-build time), referenced by Material_C.measured_idx.
     # See measured_bsdf.mojo's loader / pbrt_parser.mojo's finalize_scene.
-    var measuredBrdfs:      UnsafePointer[MeasuredBRDF_C, MutAnyOrigin]
+    var measuredBrdfs:      UnsafePointer[MeasuredBRDF_C, MutExternalOrigin]
     var measuredBrdfCount:  Int64
 
     # Staged spectral rendering rollout (see project_spectral_rendering memory
@@ -126,37 +126,37 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
     # Dangling/0 for BDPT/SPPM CPU callers (scene.mojo's scene_descriptor(),
     # which has no GPU buffers to offer) and any caller that never reaches a
     # material with an image-texture reflectance.
-    var gpuTextures: UnsafePointer[GpuTexture_C, MutAnyOrigin]
+    var gpuTextures: UnsafePointer[GpuTexture_C, MutExternalOrigin]
     var gpuTextureCount: Int64
 
 @always_inline
 def _mk_sd_full(
-    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
-    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
+    bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
+    primIds: UnsafePointer[PrimId_C, MutExternalOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
     meshCount: Int64,
-    materials: UnsafePointer[Material_C, MutAnyOrigin],
+    materials: UnsafePointer[Material_C, MutExternalOrigin],
     materialCount: Int64,
-    areaLights: UnsafePointer[AreaLight_C, MutAnyOrigin],
+    areaLights: UnsafePointer[AreaLight_C, MutExternalOrigin],
     areaLightCount: Int64,
-    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    spheres: UnsafePointer[Sphere_C, MutExternalOrigin],
     sphereCount: Int64,
-    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutExternalOrigin],
     curveCount: Int64,
-    mediums: UnsafePointer[Medium_C, MutAnyOrigin],
+    mediums: UnsafePointer[Medium_C, MutExternalOrigin],
     mediumCount: Int64,
-    mediumInterfaces: UnsafePointer[MediumInterface_C, MutAnyOrigin],
+    mediumInterfaces: UnsafePointer[MediumInterface_C, MutExternalOrigin],
     mediumIfaceCount: Int64,
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin],
     blasCount: Int64,
-    instances: UnsafePointer[Instance_C, MutAnyOrigin],
+    instances: UnsafePointer[Instance_C, MutExternalOrigin],
     instanceCount: Int64,
-    distantLights: UnsafePointer[DistantLight_C, MutAnyOrigin] = UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling(),
+    distantLights: UnsafePointer[DistantLight_C, MutExternalOrigin] = UnsafePointer[DistantLight_C, MutExternalOrigin].unsafe_dangling(),
     distantLightCount: Int64 = Int64(0),
-    infiniteLights: UnsafePointer[InfiniteLight_C, MutAnyOrigin] = UnsafePointer[InfiniteLight_C, MutAnyOrigin].unsafe_dangling(),
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutExternalOrigin] = UnsafePointer[InfiniteLight_C, MutExternalOrigin].unsafe_dangling(),
     infiniteLightCount: Int64 = Int64(0),
-    pointLights: UnsafePointer[PointLight_C, MutAnyOrigin] = UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(),
+    pointLights: UnsafePointer[PointLight_C, MutExternalOrigin] = UnsafePointer[PointLight_C, MutExternalOrigin].unsafe_dangling(),
     pointLightCount: Int64 = Int64(0),
     # Staged spectral rendering rollout, Stage 3 (BDPT). Decomposed into
     # individual pointer/int params -- NOT a single `spectral: SpectralHandle`
@@ -164,15 +164,15 @@ def _mk_sd_full(
     # miscompilation (see spectrum.mojo's comment above rgb_to_spectral_sample
     # / project_spectral_rendering memory). Defaults match null_spectral_handle()
     # so existing (SPPM, Stage 4) callers that don't pass these are unaffected.
-    spectral_coeffs: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     spectral_res: Int = 0,
-    spectral_cie_x: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    spectral_cie_y: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    spectral_cie_z: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    spectral_d65: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutAnyOrigin] = UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(),
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutExternalOrigin] = UnsafePointer[MeasuredBRDF_C, MutExternalOrigin].unsafe_dangling(),
     measuredBrdfCount: Int64 = Int64(0),
-    gpuTextures: UnsafePointer[GpuTexture_C, MutAnyOrigin] = UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(),
+    gpuTextures: UnsafePointer[GpuTexture_C, MutExternalOrigin] = UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(),
     gpuTextureCount: Int64 = Int64(0),
 ) -> SceneDescriptor2_C:
     """Builds a complete SceneDescriptor2_C from raw GPU device pointers so
@@ -204,7 +204,7 @@ def _mk_sd_full(
         meshes=meshes, meshCount=meshCount,
         materials=materials, materialCount=materialCount,
         areaLights=areaLights, areaLightCount=areaLightCount,
-        textures=UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        textures=UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
         textureCount=Int64(0),
         distantLights=distantLights,
         distantLightCount=distantLightCount,
@@ -216,9 +216,9 @@ def _mk_sd_full(
         curves=curves, curveCount=curveCount,
         mediums=mediums, mediumCount=mediumCount,
         mediumInterfaces=mediumInterfaces, mediumIfaceCount=mediumIfaceCount,
-        grids=UnsafePointer[Grid_C, MutAnyOrigin].unsafe_dangling(),
+        grids=UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling(),
         gridCount=Int64(0),
-        lightSampler=LightSampler_C(cdf=UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(), n=Int32(0), _pad=Int32(0)),
+        lightSampler=LightSampler_C(cdf=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), n=Int32(0), _pad=Int32(0)),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, blasCount=blasCount,
         instances=instances, instanceCount=instanceCount,
         measuredBrdfs=measuredBrdfs, measuredBrdfCount=measuredBrdfCount,
@@ -270,7 +270,7 @@ def _sample_disk_perpendicular(
     return disk_center + (frame.x * dx + frame.y * dy)
 
 @always_inline
-def _equal_area_square_to_sphere(u: Float32, v: Float32) -> SIMD[DType.float32, 3]:
+def _equal_area_square_to_sphere(u: Float32, v: Float32) -> Vec3f:
     """PBRT v4's equal-area octahedral mapping (Clarberg 2008): [0,1]^2 UV ->
     unit sphere direction. THE single shared implementation — bvh.mojo is
     the only one of {shading.mojo, guide.mojo, bvh.mojo} with no import-
@@ -307,10 +307,10 @@ def _equal_area_square_to_sphere(u: Float32, v: Float32) -> SIMD[DType.float32, 
     if uu < Float32(0): cp = -cp
     if vv < Float32(0): sp = -sp
     var xy_scale = r * sqrt(max(Float32(0), Float32(2) - r2))
-    return SIMD[DType.float32, 3](cp * xy_scale, sp * xy_scale, z)
+    return Vec3f(cp * xy_scale, sp * xy_scale, z)
 
 @always_inline
-def _lower_bound_bvh(arr: UnsafePointer[Float32, MutAnyOrigin], lo: Int, hi: Int, val: Float32) -> Int:
+def _lower_bound_bvh(arr: UnsafePointer[Float32, MutExternalOrigin], lo: Int, hi: Int, val: Float32) -> Int:
     """Binary search: first index i in [lo, hi) s.t. arr[i] >= val; returns
     hi if all < val. Used only by _sample_infinite_light_textured below —
     the sole remaining copy after unifying the 3 duplicate CDF-walk sites
@@ -413,7 +413,7 @@ struct LightSample(Copyable, Movable):
     lights are NOT covered here — their NEE is entangled with MNEE glass-
     refraction probing (see shading.mojo's _nee_area_lights) and stays a
     separate, diffuse-specific path."""
-    var wi:       SIMD[DType.float32, 3]
+    var wi:       Vec3f
     var Li:       RGB
     var pdf:      Float32
     var dist:     Float32
@@ -422,7 +422,7 @@ struct LightSample(Copyable, Movable):
 
 @always_inline
 def _invalid_light_sample() -> LightSample:
-    return LightSample(SIMD[DType.float32, 3](0, 0, 0), RGB(0.0), Float32(1.0), Float32(0.0), True, False)
+    return LightSample(Vec3f(0, 0, 0), RGB(0.0), Float32(1.0), Float32(0.0), True, False)
 
 @always_inline
 def _sample_distant_light_nee(dl: DistantLight_C) -> LightSample:
@@ -430,18 +430,18 @@ def _sample_distant_light_nee(dl: DistantLight_C) -> LightSample:
     Li) everywhere in the scene. pdf=1 by convention (is_delta=True tells
     the caller to skip MIS entirely, so the value of pdf itself never
     matters beyond being nonzero)."""
-    var ldir = SIMD[DType.float32, 3](dl.direction.x, dl.direction.y, dl.direction.z)
+    var ldir = Vec3f(dl.direction.x, dl.direction.y, dl.direction.z)
     var wi = -ldir
     return LightSample(wi, dl.emission, Float32(1.0), Float32(2000.0), True, True)
 
 @always_inline
 def _sample_point_light_nee(
     pl: PointLight_C,
-    hit_point: SIMD[DType.float32, 3],
+    hit_point: Vec3f,
 ) -> LightSample:
     """Point light: delta position, 1/dist² falloff folded into Li so
     callers never need dist² separately."""
-    var lpos = SIMD[DType.float32, 3](pl.position.x, pl.position.y, pl.position.z)
+    var lpos = Vec3f(pl.position.x, pl.position.y, pl.position.z)
     var to_light = lpos - hit_point
     var dist_sq = dot(to_light, to_light)
     var dist = sqrt(dist_sq)
@@ -455,7 +455,7 @@ def _sample_point_light_nee(
 def _sample_sphere_light_nee(
     sph: Sphere_C,
     n_sphere_lights: Int,
-    hit_point: SIMD[DType.float32, 3],
+    hit_point: Vec3f,
     mut pcg: PCG32,
 ) -> LightSample:
     """Analytic sphere area light: uniform cone sampling over the visible
@@ -475,12 +475,12 @@ def _sample_sphere_light_nee(
     if sin2_max >= Float32(1.0):
         return _invalid_light_sample()
     var cos_max = sqrt(Float32(1.0) - sin2_max)
-    var zc = SIMD[DType.float32, 3](to_cx / dc, to_cy / dc, to_cz / dc)
-    var xc: SIMD[DType.float32, 3]
+    var zc = Vec3f(to_cx / dc, to_cy / dc, to_cz / dc)
+    var xc: Vec3f
     if (zc[0] if zc[0] >= Float32(0.0) else -zc[0]) < Float32(0.9):
-        xc = cross(zc, SIMD[DType.float32, 3](Float32(1), Float32(0), Float32(0)))
+        xc = cross(zc, Vec3f(Float32(1), Float32(0), Float32(0)))
     else:
-        xc = cross(zc, SIMD[DType.float32, 3](Float32(0), Float32(1), Float32(0)))
+        xc = cross(zc, Vec3f(Float32(0), Float32(1), Float32(0)))
     var xlen = dot(xc, xc)
     if xlen > Float32(0.0):
         xc = xc * (Float32(1.0) / sqrt(xlen))
@@ -639,26 +639,11 @@ def _hair_Mp(cos_ti: Float32, cos_to: Float32, sin_ti: Float32, sin_to: Float32,
     return mp_c * _hair_I0_poly(a * a * Float32(0.25)) * exp(-b)
 
 @always_inline
-def _atan2f(y: Float32, x: Float32) -> Float32:
-    """atan2 via minimax polynomial — avoids the unresolved libdevice extern on GPU."""
-    var ax = abs(x); var ay = abs(y)
-    var mn = min(ax, ay)
-    var mx = max(ax, ay)
-    var a = mn / (mx if mx > Float32(1e-10) else Float32(1e-10))
-    var s = a * a
-    var r = (Float32(-0.0464964749) * s + Float32(0.15931422)) * s
-    r = (r - Float32(0.327622764)) * s * a + a
-    if ay > ax: r = Float32(1.5707963267948966) - r
-    if x < Float32(0.0): r = Float32(3.14159265358979323846) - r
-    if y < Float32(0.0): r = -r
-    return r
-
-@always_inline
 def _hair_eval_lobes(
-    wi: SIMD[DType.float32, 3],
-    tangent: SIMD[DType.float32, 3],
-    b_perp: SIMD[DType.float32, 3],
-    n_perp: SIMD[DType.float32, 3],
+    wi: Vec3f,
+    tangent: Vec3f,
+    b_perp: Vec3f,
+    n_perp: Vec3f,
     phi_o: Float32,
     dphi0: Float32, dphi1: Float32, dphi2: Float32,
     cos_tp0_o: Float32, sin_tp0_o: Float32,
@@ -705,10 +690,10 @@ struct HairLobeConstants(TrivialRegisterPassable):
     stored inline in BDPTVertex/SPPMPixel — those structs stay small, and
     this recompute is the same cost class as bdpt.mojo's own
     _eval_conductor_ggx per-call GGX evaluation."""
-    var tangent: SIMD[DType.float32, 3]
-    var b_perp:  SIMD[DType.float32, 3]
-    var n_perp:  SIMD[DType.float32, 3]
-    var geo_normal: SIMD[DType.float32, 3]
+    var tangent: Vec3f
+    var b_perp:  Vec3f
+    var n_perp:  Vec3f
+    var geo_normal: Vec3f
     var phi_o: Float32
     var dphi0: Float32
     var dphi1: Float32
@@ -748,11 +733,11 @@ struct HairLobeConstants(TrivialRegisterPassable):
 @always_inline
 def _hair_precompute(
     mat: Material_C,
-    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    curves: UnsafePointer[Curve_C, MutExternalOrigin],
     curve_idx: Int,
     v_global: Float32,
     h_raw: Float32,
-    wo: SIMD[DType.float32, 3],
+    wo: Vec3f,
 ) -> HairLobeConstants:
     """Recomputes shading.mojo's shade_hair Steps 1-10 (fiber frame, optical
     quantities, per-lobe attenuation/variance/azimuthal-peak precompute) from
@@ -769,11 +754,11 @@ def _hair_precompute(
     var radius = (r0 + r1) * Float32(0.5)
     var seg_axis = q1 - q0
     var seg_len = sqrt(dot(seg_axis, seg_axis))
-    var tangent: SIMD[DType.float32, 3]
+    var tangent: Vec3f
     if seg_len > Float32(1e-8):
         tangent = seg_axis * (Float32(1.0) / seg_len)
     else:
-        tangent = SIMD[DType.float32, 3](Float32(1), Float32(0), Float32(0))
+        tangent = Vec3f(Float32(1), Float32(0), Float32(0))
     var n_perp = _curve_perp_axis(tangent)
     var b_perp = cross(tangent, n_perp)
     var geo_normal = n_perp * h + b_perp * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
@@ -903,7 +888,7 @@ def curve_offset_eps(radius: Float32) -> Float32:
 def _hair_sample_dir(
     hc: HairLobeConstants,
     mut pcg: PCG32,
-) -> Tuple[SIMD[DType.float32, 3], RGB, Float32, Float32]:
+) -> Tuple[Vec3f, RGB, Float32, Float32]:
     """Importance-samples a continuation direction from the 3-lobe hair BSDF
     (lobe picked proportional to luminance, vMF longitudinal + logistic
     azimuthal sampling) — extracted from shading.mojo's shade_hair Step 15
@@ -995,10 +980,10 @@ def ray_sphere_hit(center: Point3f, radius: Float32,
 
 @always_inline
 def test_spheres(
-    spheres: UnsafePointer[Sphere_C, MutAnyOrigin],
+    spheres: UnsafePointer[Sphere_C, MutExternalOrigin],
     n_spheres: Int,
     ray: Ray_C,
-    result: UnsafePointer[Intersection_C, MutAnyOrigin],
+    result: UnsafePointer[Intersection_C, MutExternalOrigin],
 ):
     """Test all analytical spheres against the ray, updating result if closer.
     Sets primId.type = 4 and primId.id1 = sphere_index on a sphere hit.
@@ -1027,11 +1012,11 @@ def test_spheres(
 
 @always_inline
 def _traverse_blas_triangles(
-    blasNodes: UnsafePointer[BVH2Node, MutAnyOrigin],
-    blasPrimIds: UnsafePointer[PrimId_C, MutAnyOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    ray_org: SIMD[DType.float32, 3],
-    ray_dir: SIMD[DType.float32, 3],
+    blasNodes: UnsafePointer[BVH2Node, MutExternalOrigin],
+    blasPrimIds: UnsafePointer[PrimId_C, MutExternalOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
+    ray_org: Vec3f,
+    ray_dir: Vec3f,
     tMax: Float32,
 ) -> Tuple[Bool, Float32, Float32, Float32, PrimId_C]:
     """Returns (hit, tHit, u, v, primId) — primId is the winning BLAS-local
@@ -1070,9 +1055,9 @@ def _traverse_blas_triangles(
                 var v0 = Int(mesh.vertexIndices[base_vidx])
                 var v1 = Int(mesh.vertexIndices[base_vidx + 1])
                 var v2 = Int(mesh.vertexIndices[base_vidx + 2])
-                var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
-                var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
-                var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+                var p0 = Vec3f(mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+                var p1 = Vec3f(mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+                var p2 = Vec3f(mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
                 var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
                 if hit_res[0]:
                     localTHit = hit_res[1]
@@ -1125,12 +1110,12 @@ def _traverse_blas_triangles(
 @always_inline
 def _traverse_instance_leaf(
     prim: PrimId_C,
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin],
-    instances: UnsafePointer[Instance_C, MutAnyOrigin],
-    ray_org: SIMD[DType.float32, 3],
-    ray_dir: SIMD[DType.float32, 3],
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin],
+    instances: UnsafePointer[Instance_C, MutExternalOrigin],
+    ray_org: Vec3f,
+    ray_dir: Vec3f,
     tMax: Float32,
 ) -> Tuple[Bool, Float32, Float32, Float32, PrimId_C]:
     """Handle one PrimId_C.type==6 (instance) leaf: transform the ray into the
@@ -1162,9 +1147,9 @@ def _traverse_instance_leaf(
 @always_inline
 def _transform_ray_to_instance_space(
     worldToObj: SIMD[DType.float32, 16],
-    ray_org: SIMD[DType.float32, 3],
-    ray_dir: SIMD[DType.float32, 3],
-) -> Tuple[SIMD[DType.float32, 3], SIMD[DType.float32, 3]]:
+    ray_org: Vec3f,
+    ray_dir: Vec3f,
+) -> Tuple[Vec3f, Vec3f]:
     """Transform a world-space ray into an instance's object space. The
     direction is rotated/scaled but NOT renormalized and the origin is NOT
     re-based on it — this preserves the ray parameterization so a `tHit` found
@@ -1177,24 +1162,24 @@ def _transform_ray_to_instance_space(
     var dx = m[0]*ray_dir[0] + m[4]*ray_dir[1] + m[8]*ray_dir[2]
     var dy = m[1]*ray_dir[0] + m[5]*ray_dir[1] + m[9]*ray_dir[2]
     var dz = m[2]*ray_dir[0] + m[6]*ray_dir[1] + m[10]*ray_dir[2]
-    return (SIMD[DType.float32, 3](ox, oy, oz), SIMD[DType.float32, 3](dx, dy, dz))
+    return (Vec3f(ox, oy, oz), Vec3f(dx, dy, dz))
 
 
 # ── Unified traversal core (CPU + GPU) ────────────────────────────────────────
 
 @always_inline
-def traverse_bvh2_core(
-    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
-    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+def traverse_bvh2_core[Or: Origin[mut=True]](
+    bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
+    primIds: UnsafePointer[PrimId_C, MutExternalOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
+    curves: UnsafePointer[Curve_C, MutExternalOrigin],
     ray: Ray_C,
     tMax: Float32,
-    resultPtr: UnsafePointer[Intersection_C, MutAnyOrigin],
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
-    spheres: UnsafePointer[Sphere_C, MutAnyOrigin] = UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(),
+    resultPtr: UnsafePointer[Intersection_C, Or],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+    instances: UnsafePointer[Instance_C, MutExternalOrigin] = UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
+    spheres: UnsafePointer[Sphere_C, MutExternalOrigin] = UnsafePointer[Sphere_C, MutExternalOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
 ):
     # Callers that never populate any PrimId_C.type==6 leaf (GPU kernels, which
@@ -1229,8 +1214,8 @@ def traverse_bvh2_core(
     var toVisit = 0
     var current = 0
 
-    var ray_org = SIMD[DType.float32, 3](ray.origin.x, ray.origin.y, ray.origin.z)
-    var ray_dir = SIMD[DType.float32, 3](ray.direction.x, ray.direction.y, ray.direction.z)
+    var ray_org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
+    var ray_dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
 
     while True:
         var node = bvh2Nodes[current]
@@ -1279,17 +1264,17 @@ def traverse_bvh2_core(
                 var v1_idx = Int(mesh.vertexIndices[base_vidx + 1])
                 var v2_idx = Int(mesh.vertexIndices[base_vidx + 2])
 
-                var p0 = SIMD[DType.float32, 3](
+                var p0 = Vec3f(
                     mesh.points[v0_idx * 4],
                     mesh.points[v0_idx * 4 + 1],
                     mesh.points[v0_idx * 4 + 2]
                 )
-                var p1 = SIMD[DType.float32, 3](
+                var p1 = Vec3f(
                     mesh.points[v1_idx * 4],
                     mesh.points[v1_idx * 4 + 1],
                     mesh.points[v1_idx * 4 + 2]
                 )
-                var p2 = SIMD[DType.float32, 3](
+                var p2 = Vec3f(
                     mesh.points[v2_idx * 4],
                     mesh.points[v2_idx * 4 + 1],
                     mesh.points[v2_idx * 4 + 2]
@@ -1388,18 +1373,18 @@ def traverse_bvh2_core(
 # enough — it only affects how many rays get the compaction benefit.
 @always_inline
 def traverse_bvh2_core_defer_curves(
-    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
-    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
+    primIds: UnsafePointer[PrimId_C, MutExternalOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
+    curves: UnsafePointer[Curve_C, MutExternalOrigin],
     ray: Ray_C,
     tMax: Float32,
-    resultPtr: UnsafePointer[Intersection_C, MutAnyOrigin],
-    curve_cand_prim: UnsafePointer[Int32, MutAnyOrigin],
-    curve_cand_count: UnsafePointer[Int32, MutAnyOrigin],
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
+    resultPtr: UnsafePointer[Intersection_C, MutExternalOrigin],
+    curve_cand_prim: UnsafePointer[Int32, MutExternalOrigin],
+    curve_cand_count: UnsafePointer[Int32, MutExternalOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+    instances: UnsafePointer[Instance_C, MutExternalOrigin] = UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
 ):
 
     var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
@@ -1420,8 +1405,8 @@ def traverse_bvh2_core_defer_curves(
     var toVisit = 0
     var current = 0
 
-    var ray_org = SIMD[DType.float32, 3](ray.origin.x, ray.origin.y, ray.origin.z)
-    var ray_dir = SIMD[DType.float32, 3](ray.direction.x, ray.direction.y, ray.direction.z)
+    var ray_org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
+    var ray_dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
 
     while True:
         var node = bvh2Nodes[current]
@@ -1475,17 +1460,17 @@ def traverse_bvh2_core_defer_curves(
                 var v1_idx = Int(mesh.vertexIndices[base_vidx + 1])
                 var v2_idx = Int(mesh.vertexIndices[base_vidx + 2])
 
-                var p0 = SIMD[DType.float32, 3](
+                var p0 = Vec3f(
                     mesh.points[v0_idx * 4],
                     mesh.points[v0_idx * 4 + 1],
                     mesh.points[v0_idx * 4 + 2]
                 )
-                var p1 = SIMD[DType.float32, 3](
+                var p1 = Vec3f(
                     mesh.points[v1_idx * 4],
                     mesh.points[v1_idx * 4 + 1],
                     mesh.points[v1_idx * 4 + 2]
                 )
-                var p2 = SIMD[DType.float32, 3](
+                var p2 = Vec3f(
                     mesh.points[v2_idx * 4],
                     mesh.points[v2_idx * 4 + 1],
                     mesh.points[v2_idx * 4 + 2]
@@ -1560,17 +1545,19 @@ def traverse_bvh2_core_defer_curves(
 # Shadow-ray traversal: returns True if anything is hit within tMax (early exit).
 @always_inline
 def any_hit_bvh2_core(
-    bvh2Nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
-    primIds: UnsafePointer[PrimId_C, MutAnyOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutAnyOrigin],
-    curves: UnsafePointer[Curve_C, MutAnyOrigin],
+    bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
+    primIds: UnsafePointer[PrimId_C, MutExternalOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
+    curves: UnsafePointer[Curve_C, MutExternalOrigin],
     ray: Ray_C,
     tMax: Float32,
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-    instances: UnsafePointer[Instance_C, MutAnyOrigin] = UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(),
-    spheres: UnsafePointer[Sphere_C, MutAnyOrigin] = UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(),
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+    instances: UnsafePointer[Instance_C, MutExternalOrigin] = UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
+    spheres: UnsafePointer[Sphere_C, MutExternalOrigin] = UnsafePointer[Sphere_C, MutExternalOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
+    ignore_sphere_center: Vec3f = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0)),
+    ignore_sphere_radius: Float32 = Float32(-1.0),
 ) -> Bool:
     # Analytic spheres live in their own flat array, not the mesh/curve BVH
     # this function walks, so they need their own (cheap, since n_spheres
@@ -1582,7 +1569,24 @@ def any_hit_bvh2_core(
     # Order doesn't matter for a pure any-hit query (we only need ONE
     # blocker, not the closest), so check spheres first as a cheap
     # rejection before the heavier BVH walk.
+    #
+    # `ignore_sphere_radius >= 0.0` opts in to skipping ONE specific sphere
+    # (matched by center+radius) -- used by SMS's single-vertex sphere-
+    # caustic model (shading.mojo's `_mnee_area_light_contribute`/
+    # `sms_resolve`): that model solves exactly ONE refraction event at a
+    # point on the caustic caster's OWN sphere, so the straight segment
+    # from that solved vertex onward to the light necessarily re-crosses
+    # the SAME sphere's far side (the unmodeled exit refraction) -- a real
+    # geometric fact, not an occluder distinct from the one already
+    # accounted for at the solved vertex. Without this, that self-crossing
+    # was silently rejecting essentially every solved caustic path in
+    # `sphere_sms.xml` (see project_sms_restir_phase6 memory).
     for i in range(n_spheres):
+        if ignore_sphere_radius >= Float32(0.0):
+            var sc = Vec3f(spheres[i].center.x, spheres[i].center.y, spheres[i].center.z)
+            var dc = sc - ignore_sphere_center
+            if abs(spheres[i].radius - ignore_sphere_radius) < Float32(1e-4) and dot(dc, dc) < Float32(1e-4):
+                continue
         if ray_sphere_hit(spheres[i].center, spheres[i].radius, ray, Float32(1e-4), tMax) > Float32(0.0):
             return True
     var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
@@ -1594,8 +1598,8 @@ def any_hit_bvh2_core(
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
     var current = 0
-    var ray_org = SIMD[DType.float32, 3](ray.origin.x, ray.origin.y, ray.origin.z)
-    var ray_dir = SIMD[DType.float32, 3](ray.direction.x, ray.direction.y, ray.direction.z)
+    var ray_org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
+    var ray_dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
     while True:
         var node = bvh2Nodes[current]
         if node.count > 0:
@@ -1628,9 +1632,9 @@ def any_hit_bvh2_core(
                 var v0 = Int(mesh.vertexIndices[base_vidx])
                 var v1 = Int(mesh.vertexIndices[base_vidx + 1])
                 var v2 = Int(mesh.vertexIndices[base_vidx + 2])
-                var p0 = SIMD[DType.float32, 3](mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
-                var p1 = SIMD[DType.float32, 3](mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
-                var p2 = SIMD[DType.float32, 3](mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+                var p0 = Vec3f(mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+                var p1 = Vec3f(mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+                var p2 = Vec3f(mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
                 if intersect_triangle(ray_org, ray_dir, p0, p1, p2, tMax)[0]:
                     return True
             if toVisit == 0:
@@ -1674,7 +1678,7 @@ def any_hit_bvh2_core(
 
 # ── CPU entry point ─────────────────────────────────────────────────────────
 
-def traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin], rayPtr: UnsafePointer[Ray_C, MutAnyOrigin], tMax: Float32, resultPtr: UnsafePointer[Intersection_C, MutAnyOrigin]):
+def traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutExternalOrigin], rayPtr: UnsafePointer[Ray_C, MutExternalOrigin], tMax: Float32, resultPtr: UnsafePointer[Intersection_C, MutExternalOrigin]):
     var scene = scenePtr[0]
     var ray = rayPtr[0]
     traverse_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves, ray, tMax, resultPtr,
@@ -1685,9 +1689,9 @@ def traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin], ray
 
 @always_inline
 def _bvh_swap(
-    widx: UnsafePointer[Int32, MutAnyOrigin],
-    wmin: UnsafePointer[Float32, MutAnyOrigin],
-    wmax: UnsafePointer[Float32, MutAnyOrigin],
+    widx: UnsafePointer[Int32, MutExternalOrigin],
+    wmin: UnsafePointer[Float32, MutExternalOrigin],
+    wmax: UnsafePointer[Float32, MutExternalOrigin],
     i: Int, j: Int,
 ):
     var ti = widx[i]; widx[i] = widx[j]; widx[j] = ti
@@ -1696,12 +1700,12 @@ def _bvh_swap(
         var mx = wmax[i*3+a]; wmax[i*3+a] = wmax[j*3+a]; wmax[j*3+a] = mx
 
 def build_bvh2_node(
-    widx: UnsafePointer[Int32, MutAnyOrigin],
-    wmin: UnsafePointer[Float32, MutAnyOrigin],
-    wmax: UnsafePointer[Float32, MutAnyOrigin],
+    widx: UnsafePointer[Int32, MutExternalOrigin],
+    wmin: UnsafePointer[Float32, MutExternalOrigin],
+    wmax: UnsafePointer[Float32, MutExternalOrigin],
     start: Int, end: Int,
-    out_nodes: UnsafePointer[BVH2Node, MutAnyOrigin],
-    node_count: UnsafePointer[Int32, MutAnyOrigin],
+    out_nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
+    node_count: UnsafePointer[Int32, MutExternalOrigin],
     prims_per_node: Int,
 ) -> Int32:
     var my = Int(node_count[0])
@@ -1853,10 +1857,10 @@ def build_bvh2_node(
 
 
 def build_bvh2(
-    primBounds: UnsafePointer[Float32, MutAnyOrigin],   # 6 floats per prim
+    primBounds: UnsafePointer[Float32, MutExternalOrigin],   # 6 floats per prim
     primCount: Int32,
-    outNodes: UnsafePointer[BVH2Node, MutAnyOrigin],     # capacity >= 2*n
-    outOrder: UnsafePointer[Int32, MutAnyOrigin],        # capacity >= n
+    outNodes: UnsafePointer[BVH2Node, MutExternalOrigin],     # capacity >= 2*n
+    outOrder: UnsafePointer[Int32, MutExternalOrigin],        # capacity >= n
 ) -> Int32:
     var n = Int(primCount)
     if n <= 0:
@@ -1895,19 +1899,19 @@ def build_bvh2(
 # regardless of the cycle -- rendering.mojo re-exposes it via its own import
 # so pipeline.mojo's existing `from .rendering import render_aux_buffers`
 # still resolves.
-def render_aux_buffers(
-    rasterToCamera: UnsafePointer[Float32, MutAnyOrigin],
-    cameraToWorld:  UnsafePointer[Float32, MutAnyOrigin],
+def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origin[mut=True], Odp: Origin[mut=True], Owp: Origin[mut=True] = MutExternalOrigin, Omi: Origin[mut=True] = MutExternalOrigin](
+    rasterToCamera: UnsafePointer[Float32, MutExternalOrigin],
+    cameraToWorld:  UnsafePointer[Float32, Oc2w],
     min_x: Int32, min_y: Int32, max_x: Int32, max_y: Int32,
-    scene: UnsafePointer[SceneDescriptor2_C, MutAnyOrigin],
-    normals_out: UnsafePointer[Float32, MutAnyOrigin],
-    depth_out:   UnsafePointer[Float32, MutAnyOrigin],
+    scene: UnsafePointer[SceneDescriptor2_C, Osc],
+    normals_out: UnsafePointer[Float32, Onm],
+    depth_out:   UnsafePointer[Float32, Odp],
     # G-buffer extension (Phase 0.3, docs/A2_restir_migration_plan.md), CPU
     # counterpart of gpu.mojo's gen_aux_buffers_gpu. Optional/unused by every
     # current caller -- default to the .unsafe_dangling() sentinel and skip
     # the write, guarded by _is_real_ptr, so existing call sites are unaffected.
-    world_pos_out: UnsafePointer[Float32, MutAnyOrigin] = UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-    material_id_out: UnsafePointer[Int32, MutAnyOrigin] = UnsafePointer[Int32, MutAnyOrigin].unsafe_dangling(),
+    world_pos_out: UnsafePointer[Float32, Owp] = UnsafePointer[Float32, Owp].unsafe_dangling(),
+    material_id_out: UnsafePointer[Int32, Omi] = UnsafePointer[Int32, Omi].unsafe_dangling(),
 ):
     var w  = Int(max_x - min_x)
     var h  = Int(max_y - min_y)
@@ -1968,11 +1972,11 @@ def render_aux_buffers(
                 var (q0, q1, _, _) = curve_piece_endpoints(curve, piece)
                 var seg_axis = q1 - q0
                 var seg_len = sqrt(dot(seg_axis, seg_axis))
-                var tangent: SIMD[DType.float32, 3]
+                var tangent: Vec3f
                 if seg_len > Float32(1e-8):
                     tangent = seg_axis * (Float32(1.0) / seg_len)
                 else:
-                    tangent = SIMD[DType.float32, 3](Float32(1), Float32(0), Float32(0))
+                    tangent = Vec3f(Float32(1), Float32(0), Float32(0))
                 var n_perp = _curve_perp_axis(tangent)
                 var b_perp0 = cross(tangent, n_perp)
                 var geo = n_perp * h + b_perp0 * sqrt(max(Float32(0.0), Float32(1.0) - h*h))

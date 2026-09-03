@@ -45,8 +45,8 @@ def sample_cosine_hemisphere(u1: Float32, u2: Float32) -> Vec3f:
 @always_inline
 def sample_cosine_hemisphere_world(
     u1: Float32, u2: Float32,
-    normal: SIMD[DType.float32, 3],
-) -> Tuple[SIMD[DType.float32, 3], Float32]:
+    normal: Vec3f,
+) -> Tuple[Vec3f, Float32]:
     """Cosine-weighted hemisphere sample in world space, coupled with its pdf.
     Returns (direction, pdf) where pdf = cos(θ)/π — they cannot drift apart.
     Uses a Duff et al. (2017) orthonormal frame from `normal`.
@@ -61,14 +61,14 @@ def sample_cosine_hemisphere_world(
 
     # Duff et al. 2017 orthonormal frame
     var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
-    var tangent   = SIMD[DType.float32, 3](frame.x.x, frame.x.y, frame.x.z)
-    var bitangent = SIMD[DType.float32, 3](frame.y.x, frame.y.y, frame.y.z)
+    var tangent   = Vec3f(frame.x.x, frame.x.y, frame.x.z)
+    var bitangent = Vec3f(frame.y.x, frame.y.y, frame.y.z)
 
     var dir  = tangent * x + bitangent * y + normal * z
     var dlen = dot(dir, dir)
     if dlen > Float32(0.0):
         dir = dir * (Float32(1.0) / sqrt(dlen))
-    return Tuple[SIMD[DType.float32, 3], Float32](dir, pdf)
+    return Tuple[Vec3f, Float32](dir, pdf)
 
 @always_inline
 # <<listing: sample_ggx_vndf>>
@@ -118,7 +118,7 @@ def sample_ggx_vndf(
 
 @fieldwise_init
 struct TileSamplerParams_C(TrivialRegisterPassable):
-    var sobolMatrices: UnsafePointer[UInt32, MutAnyOrigin]
+    var sobolMatrices: UnsafePointer[UInt32, MutExternalOrigin]
     var rngSeed: UInt64
     var sobolSeed: Int32
     var log2SamplesPerPixel: Int32
@@ -216,7 +216,7 @@ def sobol_get_sample_index(
 @always_inline
 def sobol_sample(
     index: Int, dim: Int, seed: UInt32,
-    matrices: UnsafePointer[UInt32, MutAnyOrigin],
+    matrices: UnsafePointer[UInt32, MutExternalOrigin],
 ) -> Float32:
     var acc: UInt32 = 0
     var cur = index
@@ -302,14 +302,14 @@ def triangle_sample_1d(u: Float32, radius: Float32) -> Float32:
 # Returns the world-space Ray_C and the PCG seed pair for the path.
 # px/py are integer pixel coords; si is the sample index (Int32).
 @always_inline
-def gen_primary_ray_state(
+def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutExternalOrigin](
     px: Int32, py: Int32, si: Int32,
     log2spp: Int, n_base4: Int,
     seed_dim0: UInt32, seed_dim1: UInt32,
     rng_seed: UInt64,
-    sobol_matrices: UnsafePointer[UInt32, MutAnyOrigin],
-    r2c: UnsafePointer[Float32, MutAnyOrigin],   # rasterToCamera  (16 Float32, col-major)
-    c2w: UnsafePointer[Float32, MutAnyOrigin],   # cameraToWorld   (16 Float32, col-major)
+    sobol_matrices: UnsafePointer[UInt32, MutExternalOrigin],
+    r2c: UnsafePointer[Float32, MutExternalOrigin],   # rasterToCamera  (16 Float32, col-major)
+    c2w: UnsafePointer[Float32, Oc2w],   # cameraToWorld   (16 Float32, col-major)
     filter_norm_x: Float32, filter_sigma: Float32, filter_support_x: Float32,
     filter_norm_y: Float32, filter_support_y: Float32,
     filter_type: Int32 = Int32(0),

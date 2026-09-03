@@ -36,14 +36,14 @@ def test_vulkanrt_build_scene_traces_correct_mesh_and_triangle() raises:
 
     var meshes = alloc[TriangleMesh_C](2)
     meshes[0] = TriangleMesh_C(
-        pts0, UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling(), idx0,
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        pts0, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), idx0,
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     )
     meshes[1] = TriangleMesh_C(
-        pts1, UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling(), idx1,
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        pts1, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), idx1,
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     )
 
     var point_counts = alloc[Int64](2)

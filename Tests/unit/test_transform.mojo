@@ -8,7 +8,7 @@ comptime EPS: Float32 = 1e-4
 def _close(a: Float32, b: Float32) -> Bool:
     return abs(a - b) < EPS
 
-def _identity(m: UnsafePointer[Float32, MutAnyOrigin]):
+def _identity(m: UnsafePointer[Float32, MutExternalOrigin]):
     for i in range(16):
         m[i] = Float32(0)
     m[0] = Float32(1)
@@ -16,17 +16,17 @@ def _identity(m: UnsafePointer[Float32, MutAnyOrigin]):
     m[10] = Float32(1)
     m[15] = Float32(1)
 
-def _translation(m: UnsafePointer[Float32, MutAnyOrigin], tx: Float32, ty: Float32, tz: Float32):
+def _translation(m: UnsafePointer[Float32, MutExternalOrigin], tx: Float32, ty: Float32, tz: Float32):
     # Column-major: flat[col*4+row] = matrix[row,col]. Translation lives in
     # column 3 (indices 12,13,14) — matches _psc_handle_translate in pbrt_parser.mojo.
     _identity(m)
     m[12] = tx; m[13] = ty; m[14] = tz
 
-def _scale(m: UnsafePointer[Float32, MutAnyOrigin], sx: Float32, sy: Float32, sz: Float32):
+def _scale(m: UnsafePointer[Float32, MutExternalOrigin], sx: Float32, sy: Float32, sz: Float32):
     _identity(m)
     m[0] = sx; m[5] = sy; m[10] = sz
 
-def _mat_close(a: UnsafePointer[Float32, MutAnyOrigin], b: UnsafePointer[Float32, MutAnyOrigin]) -> Bool:
+def _mat_close(a: UnsafePointer[Float32, MutExternalOrigin], b: UnsafePointer[Float32, MutExternalOrigin]) -> Bool:
     for i in range(16):
         if not _close(a[i], b[i]):
             return False

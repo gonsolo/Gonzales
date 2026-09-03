@@ -23,10 +23,10 @@ comptime EPS: Float32 = 1e-3
 def _close(a: Float32, b: Float32) -> Bool:
     return abs(a - b) < EPS
 
-def _simd_close(a: SIMD[DType.float32, 3], b: SIMD[DType.float32, 3]) -> Bool:
+def _simd_close(a: Vec3f, b: Vec3f) -> Bool:
     return _close(a[0], b[0]) and _close(a[1], b[1]) and _close(a[2], b[2])
 
-def _simd_len(v: SIMD[DType.float32, 3]) -> Float32:
+def _simd_len(v: Vec3f) -> Float32:
     return sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
 
 # ── _hash_cell ────────────────────────────────────────────────────────────────
@@ -68,10 +68,10 @@ def test_hash_cell_always_in_range() raises:
 
 def test_cosine_hemisphere_sample_cos_theta_matches_sqrt_one_minus_u1() raises:
     for n in [
-        SIMD[DType.float32, 3](0.0, 0.0, 1.0),
-        SIMD[DType.float32, 3](0.0, 0.0, -1.0),
-        SIMD[DType.float32, 3](0.0, 1.0, 0.0),
-        SIMD[DType.float32, 3](0.267261, 0.534522, 0.801784),  # normalize(1,2,3)
+        Vec3f(0.0, 0.0, 1.0),
+        Vec3f(0.0, 0.0, -1.0),
+        Vec3f(0.0, 1.0, 0.0),
+        Vec3f(0.267261, 0.534522, 0.801784),  # normalize(1,2,3)
     ]:
         for u1 in [Float32(0.0), Float32(0.3), Float32(0.7), Float32(0.999)]:
             var d = _cosine_hemisphere_sample(n, u1, Float32(0.42))
@@ -82,20 +82,20 @@ def test_cosine_hemisphere_sample_u1_zero_returns_the_normal_itself() raises:
     """At u1=0, lx=lz=0 and ly=1, so the formula collapses to d == n exactly
     — regardless of u2 (the azimuthal angle is undefined when there's no
     in-plane component)."""
-    var n = SIMD[DType.float32, 3](0.0, 1.0, 0.0)
+    var n = Vec3f(0.0, 1.0, 0.0)
     for u2 in [Float32(0.0), Float32(0.37), Float32(0.9)]:
         var d = _cosine_hemisphere_sample(n, Float32(0.0), u2)
         assert_true(_simd_close(d, n))
 
 def test_cosine_hemisphere_sample_is_always_unit_length() raises:
-    var n = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var n = Vec3f(0.0, 0.0, 1.0)
     for u1 in [Float32(0.01), Float32(0.5), Float32(0.99)]:
         for u2 in [Float32(0.05), Float32(0.5), Float32(0.95)]:
             var d = _cosine_hemisphere_sample(n, u1, u2)
             assert_true(_close(_simd_len(d), Float32(1.0)))
 
 def test_cosine_hemisphere_sample_stays_in_hemisphere() raises:
-    var n = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var n = Vec3f(0.0, 0.0, 1.0)
     for u1 in [Float32(0.0), Float32(0.2), Float32(0.6), Float32(0.999)]:
         for u2 in [Float32(0.1), Float32(0.5), Float32(0.9)]:
             var d = _cosine_hemisphere_sample(n, u1, u2)
@@ -169,7 +169,7 @@ def test_free_flight_no_collision_gives_per_channel_beer_lambert_transmittance()
 
 # ── sample_area_light_uniform ────────────────────────────────────────────────
 
-def _make_triangle_mesh(p0: SIMD[DType.float32, 3], p1: SIMD[DType.float32, 3], p2: SIMD[DType.float32, 3]) -> TriangleMesh_C:
+def _make_triangle_mesh(p0: Vec3f, p1: Vec3f, p2: Vec3f) -> TriangleMesh_C:
     # Stride 4 floats/vertex: x,y,z,pad.
     var points = alloc[Float32](4 * 3)
     points[0*4+0] = p0[0]; points[0*4+1] = p0[1]; points[0*4+2] = p0[2]; points[0*4+3] = Float32(0.0)
@@ -178,9 +178,9 @@ def _make_triangle_mesh(p0: SIMD[DType.float32, 3], p1: SIMD[DType.float32, 3], 
     var vidx = alloc[Int64](3)
     vidx[0] = 0; vidx[1] = 1; vidx[2] = 2
     return TriangleMesh_C(
-        points, UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling(), vidx,
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        points, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), vidx,
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     )
 
 def test_sample_area_light_uniform_point_is_a_convex_combination_of_vertices() raises:
@@ -190,9 +190,9 @@ def test_sample_area_light_uniform_point_is_a_convex_combination_of_vertices() r
     closed-form barycentric formula the code uses, by peeking the same two
     draws (after the li/ti draws it also consumes) from an identically
     seeded generator."""
-    var p0 = SIMD[DType.float32, 3](0.0, 0.0, 0.0)
-    var p1 = SIMD[DType.float32, 3](2.0, 0.0, 0.0)
-    var p2 = SIMD[DType.float32, 3](0.0, 3.0, 0.0)
+    var p0 = Vec3f(0.0, 0.0, 0.0)
+    var p1 = Vec3f(2.0, 0.0, 0.0)
+    var p2 = Vec3f(0.0, 3.0, 0.0)
     var mesh = _make_triangle_mesh(p0, p1, p2)
     var meshes = alloc[TriangleMesh_C](1)
     meshes[0] = mesh
@@ -224,9 +224,9 @@ def test_sample_area_light_uniform_normal_matches_geometric_normal_when_no_shadi
     """With no per-vertex normals on the light mesh (sentinel pointer), the
     returned normal must be exactly the normalized geometric triangle
     normal cross(p1-p0, p2-p0) — no shading-normal averaging applies."""
-    var p0 = SIMD[DType.float32, 3](0.0, 0.0, 0.0)
-    var p1 = SIMD[DType.float32, 3](1.0, 0.0, 0.0)
-    var p2 = SIMD[DType.float32, 3](0.0, 1.0, 0.0)
+    var p0 = Vec3f(0.0, 0.0, 0.0)
+    var p1 = Vec3f(1.0, 0.0, 0.0)
+    var p2 = Vec3f(0.0, 1.0, 0.0)
     var mesh = _make_triangle_mesh(p0, p1, p2)
     var meshes = alloc[TriangleMesh_C](1)
     meshes[0] = mesh
@@ -236,7 +236,7 @@ def test_sample_area_light_uniform_normal_matches_geometric_normal_when_no_shadi
 
     var pcg = PCG32(UInt64(88), UInt64(2))
     var s = sample_area_light_uniform(lights, meshes, 1, pcg)
-    assert_true(_simd_close(s.normal, SIMD[DType.float32, 3](0.0, 0.0, 1.0)))
+    assert_true(_simd_close(s.normal, Vec3f(0.0, 0.0, 1.0)))
 
     meshes[0].points.free()
     meshes[0].vertexIndices.free()
@@ -253,32 +253,32 @@ def test_geom_normal_matches_cross_product_of_the_triangle_edges() raises:
     """A right triangle at the origin: cross((1,0,0),(0,1,0)) = (0,0,1),
     already unit length — this is the flat per-triangle normal with no
     barycentric dependence at all."""
-    var p0 = SIMD[DType.float32, 3](0.0, 0.0, 0.0)
-    var p1 = SIMD[DType.float32, 3](1.0, 0.0, 0.0)
-    var p2 = SIMD[DType.float32, 3](0.0, 1.0, 0.0)
+    var p0 = Vec3f(0.0, 0.0, 0.0)
+    var p1 = Vec3f(1.0, 0.0, 0.0)
+    var p2 = Vec3f(0.0, 1.0, 0.0)
     var mesh = _make_triangle_mesh(p0, p1, p2)
     var meshes = alloc[TriangleMesh_C](1)
     meshes[0] = mesh
 
     var inter = _make_hit(Float32(0.25), Float32(0.25))
     var n = _geom_normal(inter, meshes)
-    assert_true(_simd_close(n, SIMD[DType.float32, 3](0.0, 0.0, 1.0)))
+    assert_true(_simd_close(n, Vec3f(0.0, 0.0, 1.0)))
 
     meshes[0].points.free()
     meshes[0].vertexIndices.free()
     meshes.free()
 
 def test_shading_normal_at_falls_back_to_geometric_when_no_vertex_normals() raises:
-    var p0 = SIMD[DType.float32, 3](0.0, 0.0, 0.0)
-    var p1 = SIMD[DType.float32, 3](1.0, 0.0, 0.0)
-    var p2 = SIMD[DType.float32, 3](0.0, 1.0, 0.0)
+    var p0 = Vec3f(0.0, 0.0, 0.0)
+    var p1 = Vec3f(1.0, 0.0, 0.0)
+    var p2 = Vec3f(0.0, 1.0, 0.0)
     var mesh = _make_triangle_mesh(p0, p1, p2)
     var meshes = alloc[TriangleMesh_C](1)
     meshes[0] = mesh
 
     var inter = _make_hit(Float32(0.3), Float32(0.3))
     var sn = _shading_normal_at(inter, meshes)
-    assert_true(_simd_close(sn, SIMD[DType.float32, 3](0.0, 0.0, 1.0)))
+    assert_true(_simd_close(sn, Vec3f(0.0, 0.0, 1.0)))
 
     meshes[0].points.free()
     meshes[0].vertexIndices.free()
@@ -289,14 +289,14 @@ def test_shading_normal_at_interpolates_per_vertex_normals_barycentrically() rai
     normalized barycentric blend n0*(1-u-v) + n1*u + n2*v (matching the
     intersection's own (u,v), which here are chosen so the flat geometric
     normal (0,0,1) and the blend agree in sign, so no flip is triggered)."""
-    var p0 = SIMD[DType.float32, 3](0.0, 0.0, 0.0)
-    var p1 = SIMD[DType.float32, 3](1.0, 0.0, 0.0)
-    var p2 = SIMD[DType.float32, 3](0.0, 1.0, 0.0)
+    var p0 = Vec3f(0.0, 0.0, 0.0)
+    var p1 = Vec3f(1.0, 0.0, 0.0)
+    var p2 = Vec3f(0.0, 1.0, 0.0)
     var mesh = _make_triangle_mesh(p0, p1, p2)
 
-    var n0 = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var n1 = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var n2 = SIMD[DType.float32, 3](0.267261, 0.534522, 0.801784)  # normalize(1,2,3), tilted but same hemisphere
+    var n0 = Vec3f(0.0, 0.0, 1.0)
+    var n1 = Vec3f(0.0, 0.0, 1.0)
+    var n2 = Vec3f(0.267261, 0.534522, 0.801784)  # normalize(1,2,3), tilted but same hemisphere
     var normals = alloc[Float32](3 * 3)
     normals[0] = n0[0]; normals[1] = n0[1]; normals[2] = n0[2]
     normals[3] = n1[0]; normals[4] = n1[1]; normals[5] = n1[2]
@@ -329,9 +329,9 @@ def test_dielectric_bounce_normal_incidence_output_is_always_colinear() raises:
     reflected, straight through if refracted). This holds regardless of
     which branch pcg's Fresnel draw happens to pick, so it is a genuine
     invariant of the function, not a tautology tied to one branch."""
-    var ray_dir = SIMD[DType.float32, 3](0.0, 0.0, -1.0)
-    var hit_point = SIMD[DType.float32, 3](0.0, 0.0, 0.0)
-    var geom_normal = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var ray_dir = Vec3f(0.0, 0.0, -1.0)
+    var hit_point = Vec3f(0.0, 0.0, 0.0)
+    var geom_normal = Vec3f(0.0, 0.0, 1.0)
     var pcg = PCG32(UInt64(1), UInt64(1))
     var (new_dir, _, _) = _dielectric_bounce(ray_dir, hit_point, geom_normal, Float32(1.5), 0, pcg)
     assert_true(_close(_simd_len(new_dir), Float32(1.0)))
@@ -344,10 +344,10 @@ def test_dielectric_bounce_total_internal_reflection_obeys_reflection_law() rais
     take the mirror-reflection branch: refl = ray_dir - 2*dot(ray_dir,n)*n,
     i.e. reflect(-ray_dir, n) in the wo/n convention used by geometry.reflect
     (wo must point away from the surface, so it's the negated ray direction)."""
-    var geom_normal = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var geom_normal = Vec3f(0.0, 0.0, 1.0)
     var ray_dir = Vec3f(0.99, 0.0, 0.1411).normalize().to_simd()  # exiting (dot(ray,n) > 0)
     var pcg = PCG32(UInt64(1), UInt64(1))
-    var (new_dir, _, _) = _dielectric_bounce(ray_dir, SIMD[DType.float32, 3](0.0), geom_normal, Float32(1.5), 1, pcg)
+    var (new_dir, _, _) = _dielectric_bounce(ray_dir, Vec3f(0.0), geom_normal, Float32(1.5), 1, pcg)
     var wo = -Vec3f(ray_dir[0], ray_dir[1], ray_dir[2])
     var expected = reflect(wo, Vec3f(0.0, 0.0, 1.0)).to_simd()
     assert_true(_simd_close(new_dir, expected))
@@ -359,10 +359,10 @@ def test_dielectric_bounce_tir_radiance_scale_is_exactly_one() raises:
     solid-angle compression/expansion happens on a reflect. Reuses the same
     guaranteed-TIR setup as the reflection-law test above, so the branch
     taken is deterministic (not pcg-dependent)."""
-    var geom_normal = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var geom_normal = Vec3f(0.0, 0.0, 1.0)
     var ray_dir = Vec3f(0.99, 0.0, 0.1411).normalize().to_simd()
     var pcg = PCG32(UInt64(1), UInt64(1))
-    var (_, _, radiance_scale) = _dielectric_bounce(ray_dir, SIMD[DType.float32, 3](0.0), geom_normal, Float32(1.5), 1, pcg)
+    var (_, _, radiance_scale) = _dielectric_bounce(ray_dir, Vec3f(0.0), geom_normal, Float32(1.5), 1, pcg)
     assert_true(_close(radiance_scale, Float32(1.0)))
 
 def test_dielectric_bounce_transmit_radiance_scale_matches_inverse_eta_squared() raises:
@@ -372,10 +372,10 @@ def test_dielectric_bounce_transmit_radiance_scale_matches_inverse_eta_squared()
     branch pcg actually picks (reflect vs. transmit) is checked via new_dir's
     z-sign (transmit continues in roughly the same direction as ray_dir;
     reflect flips it), so this test is not tied to one specific pcg draw."""
-    var geom_normal = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var ray_dir = SIMD[DType.float32, 3](0.0, 0.0, -1.0)  # normal incidence, entering
+    var geom_normal = Vec3f(0.0, 0.0, 1.0)
+    var ray_dir = Vec3f(0.0, 0.0, -1.0)  # normal incidence, entering
     var pcg = PCG32(UInt64(1), UInt64(1))
-    var (new_dir, _, radiance_scale) = _dielectric_bounce(ray_dir, SIMD[DType.float32, 3](0.0), geom_normal, Float32(1.5), 0, pcg)
+    var (new_dir, _, radiance_scale) = _dielectric_bounce(ray_dir, Vec3f(0.0), geom_normal, Float32(1.5), 0, pcg)
     var transmitted = new_dir[2] < Float32(0.0)  # continued downward == transmit; flipped upward == reflect
     if transmitted:
         assert_true(_close(radiance_scale, Float32(2.25)))

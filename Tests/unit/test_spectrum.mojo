@@ -32,9 +32,9 @@ comptime N_TRIALS = 2000
 # fields are unpacked at each call site: handle.coeffs, handle.res,
 # handle.cie_x, handle.cie_y, handle.cie_z, handle.d65.
 def _roundtrip(
-    coeffs: UnsafePointer[Float32, MutAnyOrigin], res: Int,
-    cie_x: UnsafePointer[Float32, MutAnyOrigin], cie_y: UnsafePointer[Float32, MutAnyOrigin],
-    cie_z: UnsafePointer[Float32, MutAnyOrigin], d65: UnsafePointer[Float32, MutAnyOrigin],
+    coeffs: UnsafePointer[Float32, MutExternalOrigin], res: Int,
+    cie_x: UnsafePointer[Float32, MutExternalOrigin], cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    cie_z: UnsafePointer[Float32, MutExternalOrigin], d65: UnsafePointer[Float32, MutExternalOrigin],
     r: Float32, g: Float32, b: Float32,
 ) -> Tuple[Float32, Float32, Float32]:
     """A bare reflectance spectrum is fit assuming it's viewed under a D65

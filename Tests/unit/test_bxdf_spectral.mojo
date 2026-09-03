@@ -4,7 +4,7 @@
 # rendering rollout, see project_spectral_rendering memory.
 from std.math import abs
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import RGB, INV_PI
+from gonzales.geometry import RGB, INV_PI, Vec3f
 from gonzales.bxdf import (
     bxdf_eval_conductor_ggx, bxdf_eval_any, bxdf_eval_any_spectral,
     _nee_weight_simple, _nee_weight_simple_spectral,
@@ -34,9 +34,9 @@ def test_conductor_ggx_refactor_matches_hand_computed_case() raises:
     """Regression check for the _ggx_conductor_shape_terms extraction --
     bxdf_eval_conductor_ggx's output must be unchanged from before the
     refactor for a simple normal-incidence case."""
-    var n = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var wo = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var wi = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var n = Vec3f(0.0, 0.0, 1.0)
+    var wo = Vec3f(0.0, 0.0, 1.0)
+    var wi = Vec3f(0.0, 0.0, 1.0)
     var f0 = RGB(Float32(0.9), Float32(0.6), Float32(0.2))
     var result = bxdf_eval_conductor_ggx(n, wo, wi, Float32(0.3), f0)
     # At normal incidence wo=wi=wh=n, so cos_wo_h=1, schlick=(1-1)^5=0 -> fr=f0 exactly.
@@ -46,9 +46,9 @@ def test_conductor_ggx_refactor_matches_hand_computed_case() raises:
     assert_true(_close(result.g / result.b, f0.g / f0.b, Float32(0.01)))
 
 def test_conductor_ggx_grazing_still_zero_after_refactor() raises:
-    var n = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var wo = SIMD[DType.float32, 3](1.0, 0.0, 0.0)  # grazing (cos_o = 0)
-    var wi = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var n = Vec3f(0.0, 0.0, 1.0)
+    var wo = Vec3f(1.0, 0.0, 0.0)  # grazing (cos_o = 0)
+    var wi = Vec3f(0.0, 0.0, 1.0)
     var f0 = RGB(Float32(0.9), Float32(0.6), Float32(0.2))
     var result = bxdf_eval_conductor_ggx(n, wo, wi, Float32(0.3), f0)
     assert_true(_close(result.r, Float32(0.0)) and _close(result.g, Float32(0.0)) and _close(result.b, Float32(0.0)))
@@ -62,9 +62,9 @@ def test_bxdf_eval_any_spectral_diffuse_matches_rgb_after_roundtrip() raises:
     var ctx = _test_ctx()
     var handle = spectral_handle(ctx)
     var alb = RGB(Float32(0.6), Float32(0.3), Float32(0.1))
-    var n = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var wo = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var wi = SIMD[DType.float32, 3](0.267261, 0.534522, 0.801784)
+    var n = Vec3f(0.0, 0.0, 1.0)
+    var wo = Vec3f(0.0, 0.0, 1.0)
+    var wi = Vec3f(0.267261, 0.534522, 0.801784)
 
     var (f_rgb, pdf_rgb) = bxdf_eval_any(Int32(0), alb, Float32(0.0), n, wo, wi)
 
@@ -91,9 +91,9 @@ def test_bxdf_eval_any_spectral_conductor_pdf_matches_rgb() raises:
     var ctx = _test_ctx()
     var handle = spectral_handle(ctx)
     var f0 = RGB(Float32(0.9), Float32(0.6), Float32(0.2))
-    var n = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var wo = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var wi = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var n = Vec3f(0.0, 0.0, 1.0)
+    var wo = Vec3f(0.0, 0.0, 1.0)
+    var wi = Vec3f(0.0, 0.0, 1.0)
     var wl = sample_wavelengths_uniform(Float32(0.5))
     var (_, pdf_rgb) = bxdf_eval_any(Int32(1), f0, Float32(0.3), n, wo, wi)
     var (_, pdf_spec) = bxdf_eval_any_spectral(Int32(1), f0, Float32(0.3), n, wo, wi, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl)
@@ -103,9 +103,9 @@ def test_bxdf_eval_any_spectral_values_nonnegative() raises:
     var ctx = _test_ctx()
     var handle = spectral_handle(ctx)
     var alb = RGB(Float32(0.8), Float32(0.05), Float32(0.05))
-    var n = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var wo = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var wi = SIMD[DType.float32, 3](0.267261, 0.534522, 0.801784)
+    var n = Vec3f(0.0, 0.0, 1.0)
+    var wo = Vec3f(0.0, 0.0, 1.0)
+    var wi = Vec3f(0.267261, 0.534522, 0.801784)
     var wl = sample_wavelengths_uniform(Float32(0.3))
     var (f, _) = bxdf_eval_any_spectral(Int32(0), alb, Float32(0.0), n, wo, wi, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl)
     assert_true(f.v0 >= Float32(0.0) and f.v1 >= Float32(0.0) and f.v2 >= Float32(0.0) and f.v3 >= Float32(0.0))
@@ -116,9 +116,9 @@ def test_nee_weight_simple_spectral_invalid_sample_is_zero() raises:
     var ctx = _test_ctx()
     var handle = spectral_handle(ctx)
     var wl = sample_wavelengths_uniform(Float32(0.5))
-    var ls = LightSample(SIMD[DType.float32, 3](0.0, 0.0, 1.0), RGB(Float32(5.0)), Float32(1.0), Float32(1.0), False, False)
-    var n = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var wo = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var ls = LightSample(Vec3f(0.0, 0.0, 1.0), RGB(Float32(5.0)), Float32(1.0), Float32(1.0), False, False)
+    var n = Vec3f(0.0, 0.0, 1.0)
+    var wo = Vec3f(0.0, 0.0, 1.0)
     var result = _nee_weight_simple_spectral(ls, Int32(0), RGB(Float32(0.5)), Float32(0.0), n, wo, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl)
     assert_true(_close(result.v0, Float32(0.0)) and _close(result.v1, Float32(0.0)))
 
@@ -127,9 +127,9 @@ def test_nee_weight_simple_spectral_backfacing_is_zero() raises:
     var handle = spectral_handle(ctx)
     var wl = sample_wavelengths_uniform(Float32(0.5))
     # Light direction opposite the normal -- cos_s <= 0.
-    var ls = LightSample(SIMD[DType.float32, 3](0.0, 0.0, -1.0), RGB(Float32(5.0)), Float32(1.0), Float32(1.0), True, True)
-    var n = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var wo = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
+    var ls = LightSample(Vec3f(0.0, 0.0, -1.0), RGB(Float32(5.0)), Float32(1.0), Float32(1.0), True, True)
+    var n = Vec3f(0.0, 0.0, 1.0)
+    var wo = Vec3f(0.0, 0.0, 1.0)
     var result = _nee_weight_simple_spectral(ls, Int32(0), RGB(Float32(0.5)), Float32(0.0), n, wo, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl)
     assert_true(_close(result.v0, Float32(0.0)) and _close(result.v1, Float32(0.0)))
 
@@ -144,9 +144,9 @@ def test_nee_weight_simple_spectral_delta_light_matches_rgb_after_roundtrip() ra
     var handle = spectral_handle(ctx)
     var alb = RGB(Float32(0.63), Float32(0.065), Float32(0.05))
     var emission = RGB(Float32(10.0), Float32(10.0), Float32(10.0))
-    var n = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var wo = SIMD[DType.float32, 3](0.0, 0.0, 1.0)
-    var ls_rgb = LightSample(SIMD[DType.float32, 3](0.267261, 0.534522, 0.801784), emission, Float32(1.0), Float32(1.0), True, True)
+    var n = Vec3f(0.0, 0.0, 1.0)
+    var wo = Vec3f(0.0, 0.0, 1.0)
+    var ls_rgb = LightSample(Vec3f(0.267261, 0.534522, 0.801784), emission, Float32(1.0), Float32(1.0), True, True)
     var rgb_result = _nee_weight_simple(ls_rgb, Int32(0), alb, Float32(0.0), n, wo)
 
     var accR = Float32(0.0); var accG = Float32(0.0); var accB = Float32(0.0)

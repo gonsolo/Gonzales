@@ -67,10 +67,10 @@ def _firefly_clamp_pixel(
             b = _FIREFLY_CLAMP_K * max_n_b
     return RGB(r, g, b)
 
-def _clamp_fireflies(
-    beauty: UnsafePointer[Float32, MutAnyOrigin],
+def _clamp_fireflies[Ob: Origin[mut=True]](
+    beauty: UnsafePointer[Float32, Ob],
     width: Int32, height: Int32,
-) -> UnsafePointer[Float32, MutAnyOrigin]:
+) -> UnsafePointer[Float32, MutExternalOrigin]:
     var w = Int(width)
     var h = Int(height)
     var out = alloc[Float32](w * h * 3)
@@ -176,13 +176,13 @@ def _atrous_spatial_weight(dx: Int, dy: Int) -> Float32:
 # curve_mask hair passthrough (hair/fur was never specially handled on the
 # CPU path either before or after this change -- not a regression, just an
 # still-open gap, see the memory file).
-def denoise(
-    beauty:  UnsafePointer[Float32, MutAnyOrigin],
-    albedo:  UnsafePointer[Float32, MutAnyOrigin],
-    normals: UnsafePointer[Float32, MutAnyOrigin],
-    depth:   UnsafePointer[Float32, MutAnyOrigin],
+def denoise[Ob: Origin[mut=True], Oa: Origin[mut=True], On: Origin[mut=True], Od: Origin[mut=True], Oo: Origin[mut=True]](
+    beauty:  UnsafePointer[Float32, Ob],
+    albedo:  UnsafePointer[Float32, Oa],
+    normals: UnsafePointer[Float32, On],
+    depth:   UnsafePointer[Float32, Od],
     width: Int32, height: Int32,
-    output: UnsafePointer[Float32, MutAnyOrigin],
+    output: UnsafePointer[Float32, Oo],
     n_passes: Int32,
     sigma_l: Float32,
     sigma_a: Float32,
@@ -279,17 +279,17 @@ def denoise(
 # pixels: width*height*3 floats, R,G,B interleaved, row-major.
 # filename: null-terminated UTF-8 string.
 # Returns 1 on success, 0 on failure.
-def write_image(
-    pixels: UnsafePointer[Float32, MutAnyOrigin],
+def write_image[Opx: Origin[mut=True]](
+    pixels: UnsafePointer[Float32, Opx],
     width: Int32, height: Int32,
-    filename: UnsafePointer[UInt8, MutAnyOrigin],
+    filename: UnsafePointer[UInt8, MutExternalOrigin],
     tile_w: Int32, tile_h: Int32,
 ) -> Int32:
     return external_call["write_image_rgb", Int32,
-        UnsafePointer[UInt8, MutAnyOrigin],
-        UnsafePointer[Float32, MutAnyOrigin],
+        UnsafePointer[UInt8, MutExternalOrigin],
+        UnsafePointer[Float32, MutExternalOrigin],
         Int32, Int32, Int32, Int32,
-    ](filename, pixels, width, height, tile_w, tile_h)
+    ](filename, pixels.unsafe_origin_cast[MutExternalOrigin](), width, height, tile_w, tile_h)
 
 # Same as write_image, but tags the output with an OpenEXR dataWindow/
 # displayWindow pair: `pixels` holds only the (width x height) data-window
@@ -300,16 +300,16 @@ def write_image(
 # etc. have no data/display-window concept, so the C++ bridge only applies
 # the windowing for EXR/HDR output.
 def write_image_windowed(
-    pixels: UnsafePointer[Float32, MutAnyOrigin],
+    pixels: UnsafePointer[Float32, MutExternalOrigin],
     width: Int32, height: Int32,
     full_width: Int32, full_height: Int32,
     x: Int32, y: Int32,
-    filename: UnsafePointer[UInt8, MutAnyOrigin],
+    filename: UnsafePointer[UInt8, MutExternalOrigin],
     tile_w: Int32, tile_h: Int32,
 ) -> Int32:
     return external_call["write_image_rgb_windowed", Int32,
-        UnsafePointer[UInt8, MutAnyOrigin],
-        UnsafePointer[Float32, MutAnyOrigin],
+        UnsafePointer[UInt8, MutExternalOrigin],
+        UnsafePointer[Float32, MutExternalOrigin],
         Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32,
     ](filename, pixels, width, height, full_width, full_height, x, y, tile_w, tile_h)
 
@@ -320,11 +320,11 @@ def write_image_windowed(
 # convention exactly. No-op passthrough (zero extra allocation, no windowing
 # metadata) when the crop rectangle is the full frame — the overwhelmingly
 # common case (scenes without a cropwindow).
-def write_image_cropped(
-    pixels: UnsafePointer[Float32, MutAnyOrigin],
+def write_image_cropped[Opx: Origin[mut=True]](
+    pixels: UnsafePointer[Float32, Opx],
     full_w: Int32, full_h: Int32,
     crop_x0: Int32, crop_y0: Int32, crop_w: Int32, crop_h: Int32,
-    filename: UnsafePointer[UInt8, MutAnyOrigin],
+    filename: UnsafePointer[UInt8, MutExternalOrigin],
     tile_w: Int32, tile_h: Int32,
 ) -> Int32:
     if crop_x0 == Int32(0) and crop_y0 == Int32(0) and crop_w == full_w and crop_h == full_h:

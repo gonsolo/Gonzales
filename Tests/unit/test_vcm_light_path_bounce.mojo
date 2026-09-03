@@ -71,9 +71,9 @@ def _build_scene() -> SceneDescriptor2_C:
         vertex_indices[i] = Int64(i)
     var meshes = alloc[TriangleMesh_C](1)
     meshes[0] = TriangleMesh_C(
-        points, UnsafePointer[Int64, MutAnyOrigin].unsafe_dangling(), vertex_indices,
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(),
+        points, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), vertex_indices,
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     )
 
     var n_tris = 2
@@ -109,23 +109,23 @@ def _build_scene() -> SceneDescriptor2_C:
         bvh_nodes, prim_ids, meshes, Int64(1),
         materials, Int64(1),
         area_lights, Int64(1),
-        UnsafePointer[UnsafePointer[UInt8, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[DistantLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[PointLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[InfiniteLight_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[Sphere_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[Curve_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[Medium_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[MediumInterface_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[Grid_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        LightSampler_C(UnsafePointer[Float32, MutAnyOrigin].unsafe_dangling(), Int32(0), Int32(0)),
-        UnsafePointer[UnsafePointer[BVH2Node, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
-        UnsafePointer[UnsafePointer[PrimId_C, MutAnyOrigin], MutAnyOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[DistantLight_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[PointLight_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[InfiniteLight_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Sphere_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Curve_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Medium_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[MediumInterface_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        LightSampler_C(UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), Int32(0), Int32(0)),
+        UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
         Int64(0),
-        UnsafePointer[Instance_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[MeasuredBRDF_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[MeasuredBRDF_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
         null_spectral_handle(),
-        UnsafePointer[GpuTexture_C, MutAnyOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
     )
 
 def test_wavefront_split_matches_original_light_path_exactly() raises:

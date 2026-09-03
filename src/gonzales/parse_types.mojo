@@ -343,12 +343,11 @@ struct SceneParseState(Movable):
 # ── CTM stack helpers (operate on SceneParseState only) ──────────────────────
 
 def ctm_push(mut s: SceneParseState):
-    s.ctm_stack.append(s.ctm)
+    s.ctm_stack.append(s.ctm.copy())
 
 def ctm_pop(mut s: SceneParseState):
     if len(s.ctm_stack) > 0:
-        s.ctm = s.ctm_stack[len(s.ctm_stack) - 1]
-        _ = s.ctm_stack.pop()
+        s.ctm = s.ctm_stack.pop()
 
 def scene_parse_state_new() -> SceneParseState:
     return SceneParseState()
