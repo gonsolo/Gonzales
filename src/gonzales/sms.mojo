@@ -39,7 +39,20 @@ from .bvh import ray_sphere_hit, traverse_bvh2_core, BVH2Node
 
 comptime MAX_SMS_VERTICES: Int = 6
 comptime SMS_BERNOULLI_MAX_TRIALS: Int = 16
-comptime SMS_SOLUTION_EPS: Float32 = Float32(1e-4)
+# Two Newton solves count as the SAME root when the directions x0->x_i agree
+# to within this much of cos=1 -- ported verbatim from the reference SMS
+# renderer's own uniqueness test (manifold_ss.cpp:
+# `abs(dot(direction, direction_trial) - 1.f) < m_config.uniqueness_threshold`,
+# whose scenes default to 1e-5). Comparing DIRECTIONS rather than world
+# POSITIONS is what makes this consistent with the solver that produced them:
+# sms_walk stops at a RESIDUAL below 1e-3, so two seeds landing in the same
+# basin routinely differ by far more than the 1e-4 position epsilon this
+# replaced -- scoring
+# those as distinct roots inflates the Bernoulli trial count T, and since the
+# estimator multiplies the contribution by T, that inflation shows up
+# directly as too much caustic energy (measured 1.57x too bright against the
+# reference on sphere_sms.xml before this was aligned).
+comptime SMS_UNIQUENESS_COS_EPS: Float32 = Float32(1e-5)
 
 # ── 2x2 matrix helpers ───────────────────────────────────────────────────────
 # Shared with shading.mojo's _mnee_walk2, which imports these from here
@@ -651,12 +664,22 @@ def sms_seed_jitter(mut verts: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int,
 
 @always_inline
 def sms_same_solution(
+    x0: Vec3f,
     a: InlineArray[Vec3f, MAX_SMS_VERTICES],
     b: InlineArray[Vec3f, MAX_SMS_VERTICES], n: Int,
 ) -> Bool:
+    """Do two solved chains represent the SAME specular root? Compares the
+    directions x0->x_i (see SMS_UNIQUENESS_COS_EPS for why direction rather
+    than position), mirroring the reference implementation's own test."""
     for i in range(n):
-        var d = a[i] - b[i]
-        if dot(d,d) > SMS_SOLUTION_EPS*SMS_SOLUTION_EPS:
+        var da = a[i] - x0
+        var db = b[i] - x0
+        var la2 = dot(da, da)
+        var lb2 = dot(db, db)
+        if la2 <= Float32(1e-16) or lb2 <= Float32(1e-16):
+            return False
+        var c = dot(da, db) / sqrt(la2 * lb2)
+        if abs(c - Float32(1.0)) > SMS_UNIQUENESS_COS_EPS:
             return False
     return True
 
@@ -715,7 +738,7 @@ def sms_solve_bernoulli(
             bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
         var okk = _walkk[0]
         var posk = _walkk[1].copy()
-        if okk and sms_same_solution(posk, pos0, n):
+        if okk and sms_same_solution(x0, posk, pos0, n):
             matched = True; break
     _ = matched
     return (True, pos0.copy(), bsdf0, jac0, trials)

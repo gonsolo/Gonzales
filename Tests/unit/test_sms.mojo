@@ -367,14 +367,24 @@ def test_sms_solve_bernoulli_converges_on_unique_solution() raises:
     _ = pos
 
 def test_sms_same_solution_detects_match_and_mismatch() raises:
+    """Uniqueness is judged on the DIRECTION x0->x (mirroring the reference
+    SMS renderer), so the test fixes an x0 and moves the candidate both
+    along the view direction (same root, must still match -- this is the
+    case a position-epsilon test used to get wrong, inflating the Bernoulli
+    trial count) and across it (a genuinely different root)."""
     var verts = _empty_verts()
+    var x0 = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
     var a = InlineArray[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
     var b = InlineArray[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
-    a[0] = Vec3f(Float32(1.0), Float32(2.0), Float32(3.0))
-    b[0] = Vec3f(Float32(1.0), Float32(2.0), Float32(3.0))
-    assert_true(sms_same_solution(a, b, 1))
-    b[0] = Vec3f(Float32(1.0), Float32(2.0), Float32(3.1))
-    assert_true(not sms_same_solution(a, b, 1))
+    a[0] = Vec3f(Float32(0.0), Float32(0.0), Float32(10.0))
+    b[0] = Vec3f(Float32(0.0), Float32(0.0), Float32(10.0))
+    assert_true(sms_same_solution(x0, a, b, 1))
+    # Same direction from x0, different distance -> same root.
+    b[0] = Vec3f(Float32(0.0), Float32(0.0), Float32(10.02))
+    assert_true(sms_same_solution(x0, a, b, 1))
+    # Sideways displacement -> different direction -> different root.
+    b[0] = Vec3f(Float32(0.5), Float32(0.0), Float32(10.0))
+    assert_true(not sms_same_solution(x0, a, b, 1))
     _ = verts
 
 def main() raises:
