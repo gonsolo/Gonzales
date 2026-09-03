@@ -32,14 +32,13 @@ def _dummy_path(estimate: RGB, albedo: RGB) -> PathState_C:
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),  # wavelengths
     )
 
-def test_clear_film_gpu_zeroes_a_dirty_buffer() raises:
+def _clear_film_gpu_body(ctx: DeviceContext) raises:
     """Clear_film_gpu is the simplest real kernel in gpu.mojo — one thread
     per pixel, writes 3 zeros. Fill the film buffer with garbage first so a
     no-op kernel (or one that only clears some pixels) would be caught."""
     comptime if not has_accelerator():
         print("SKIP: no GPU accelerator on this machine")
         return
-    var ctx = DeviceContext()
     var n_pixels = 8
     var buf = ctx.enqueue_create_buffer[DType.float32](n_pixels * 3)
     buf.enqueue_fill(Float32(123.456))
@@ -56,15 +55,11 @@ def test_clear_film_gpu_zeroes_a_dirty_buffer() raises:
         for i in range(n_pixels * 3):
             assert_true(p[i] == Float32(0.0))
 
-def test_accumulate_film_gpu_adds_path_estimates_onto_existing_film() raises:
+def _accumulate_film_gpu_body(ctx: DeviceContext) raises:
     """Accumulate_film_gpu does film[px] += path.estimate (and albedo_film
     += path.albedo), NOT an overwrite — pre-fill the film with a nonzero
     baseline so an accidental `=` instead of `+=` would be caught, and give
     each path a distinct estimate/albedo so a wrong-index bug would too."""
-    comptime if not has_accelerator():
-        print("SKIP: no GPU accelerator on this machine")
-        return
-    var ctx = DeviceContext()
     var n = 4
 
     var path_bytes = n * size_of[PathState_C]()
@@ -103,6 +98,28 @@ def test_accumulate_film_gpu_adds_path_estimates_onto_existing_film() raises:
                 assert_true(_close(alb[i*3+0], Float32(1.0) + f * Float32(0.01)))
                 assert_true(_close(alb[i*3+1], Float32(1.0) + f * Float32(0.02)))
                 assert_true(_close(alb[i*3+2], Float32(1.0) + f * Float32(0.03)))
+
+def test_clear_film_gpu_and_accumulate_film_gpu() raises:
+    """Both real kernels in this file, run against ONE shared DeviceContext
+    -- a real, narrow, 100%-reproducible Modular/Mojo runtime bug (confirmed
+    via a ~10-line minimal repro, isolated with gdb to a deadlock inside
+    AsyncRT_DeviceContext_createBuffer_async) makes a SECOND independent
+    DeviceContext's very first enqueue_create_buffer hang forever if an
+    EARLIER DeviceContext in the same process ever called
+    DeviceBuffer.map_to_host() on a buffer it OWNS (one it allocated itself
+    via enqueue_create_buffer -- a non-owning DeviceBuffer wrapping
+    externally-allocated memory, e.g. the Vulkan-interop tests' pattern,
+    does NOT trigger it). Production code only ever creates one
+    DeviceContext per process, so this has zero real-render impact -- it's
+    purely a multi-test-in-one-file hazard, worked around here by giving
+    both kernels one shared context instead of one each. See
+    project_modular_26_5_0_migration memory for the full bisection."""
+    comptime if not has_accelerator():
+        print("SKIP: no GPU accelerator on this machine")
+        return
+    var ctx = DeviceContext()
+    _clear_film_gpu_body(ctx)
+    _accumulate_film_gpu_body(ctx)
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()
