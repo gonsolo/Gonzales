@@ -688,6 +688,23 @@ def _nee_weight_simple_via_spectral(
     just re-expressed in RGB before accumulation, exactly the approach
     validated by this session's product-of-spectra tests
     (test_bxdf_spectral.mojo's _nee_weight_simple_spectral round-trip test)."""
+    # An INVALID LightSample (bvh.mojo's _invalid_light_sample / a
+    # non-emissive analytic sphere picked up by _nee_loop_simple's
+    # sphere-light loop) must short-circuit BEFORE the spectral round-trip
+    # below: `_nee_weight_simple_spectral` itself returns black for it, but
+    # `spectral_sample_to_rgb` is still evaluated on that black sample, and
+    # the RATIO_CAP clamp at the bottom is deliberately bypassed whenever
+    # `plain` is black -- so any non-finite value the round-trip produces
+    # (a null/dangling SpectralHandle is a documented "never dereferenced"
+    # sentinel, and the zero-wavelength non-spectral case divides 0/0) is
+    # returned RAW. A NaN then defeats the caller's `is_black()` guard (NaN
+    # != 0), reaching _shadow_contribute as a NaN contribution on a
+    # zero-length shadow ray, and one such sample poisons its whole pixel
+    # (NaN + anything = NaN). normalize_film's NaN guard then rewrites the
+    # pixel to 0, so the symptom is a SILENT, nondeterministic all-black
+    # render rather than any error -- see the sphere_sms.xml diagnosis.
+    if not ls.valid:
+        return RGB(Float32(0.0))
     var spec = _nee_weight_simple_spectral(ls, mat_kind, alb, alpha, n, wo, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
     var (r, g, b) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, spec, wavelengths)
 
@@ -712,6 +729,11 @@ def _nee_weight_simple_via_spectral(
     var cr = min(r, plain.r * RATIO_CAP) if plain.r > Float32(0.0) else r
     var cg = min(g, plain.g * RATIO_CAP) if plain.g > Float32(0.0) else g
     var cb = min(b, plain.b * RATIO_CAP) if plain.b > Float32(0.0) else b
+    # Belt-and-braces: never hand a non-finite weight back to a caller that
+    # gates only on is_black() -- see the invalid-sample comment above for
+    # why a single NaN here silently blacks out the entire render.
+    if not (cr == cr and cg == cg and cb == cb):
+        return plain
     return RGB(cr, cg, cb)
 
 @always_inline
