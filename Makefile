@@ -84,7 +84,8 @@ PFM = $(IMAGE:.exr=.pfm)
 OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(USE_GONZALES)
 
 .PHONY: all c ca clean clean_all e edit es editScene em editMakefile lldb p perf tags t test \
-	test_debug test_release v view wc book book-html book-watch ut unittest
+	test_debug test_release v view wc book book-html book-watch ut unittest \
+	sms_mitsuba_ref
 
 PBRT_OPTIONS = #--quiet # --stats #--gpu #--nthreads 1 #--quiet --v 2
 
@@ -177,6 +178,13 @@ MOJO_SRCS := $(wildcard src/gonzales/*.mojo)
 $(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB)
 	@mkdir -p $(BUILD_DIR)
 	uv run mojo build src/gonzales/__init__.mojo -I src -o $(GONZALES) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
+
+# Standalone clean-room port of the reference renderer's single-scatter SMS
+# estimator (Tools/sms_mitsuba_ref.mojo) -- a self-contained cross-check for
+# gonzales's own SMS, not part of the renderer. See that file's header.
+sms_mitsuba_ref: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) Tools/sms_mitsuba_ref.mojo
+	@mkdir -p $(BUILD_DIR)
+	uv run mojo build Tools/sms_mitsuba_ref.mojo -I src -o $(BUILD_DIR)/sms_mitsuba_ref $(MOJO_LINK_FLAGS)
 
 r: release
 release: $(GONZALES)
