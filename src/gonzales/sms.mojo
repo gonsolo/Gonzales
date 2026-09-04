@@ -141,11 +141,24 @@ struct SMSVertex(TrivialRegisterPassable):
     var is_sphere:     Int8
     var sphere_center: Vec3f
     var sphere_radius: Float32
+    # d(normal)/d(arc length) along dp_du / dp_dv -- how the SHADING normal
+    # turns as the vertex slides across the surface. This is the quantity
+    # the frame-derivative term of the Newton Jacobian needs (see
+    # _sms_eval_vertex); keeping it as explicit per-vertex state rather
+    # than re-deriving it from `sphere_radius` is what lets a vertex whose
+    # normal comes from a NORMAL MAP contribute its texture gradient here,
+    # exactly as the reference renderer's ManifoldVertex carries dn_du/
+    # dn_dv straight from `BSDF::frame_derivative`. Zero for a flat
+    # triangle (fixed frame); dp_du/radius, dp_dv/radius for a smooth
+    # sphere, which reproduces the analytic 1/radius curvature term this
+    # generalizes.
+    var dn_du:  Vec3f
+    var dn_dv:  Vec3f
 
 @always_inline
 def sms_vertex_init() -> SMSVertex:
     var z = Vec3f(Float32(0.0))
-    return SMSVertex(z, z, z, z, Float32(1.0), Int8(0), z, Float32(0.0))
+    return SMSVertex(z, z, z, z, Float32(1.0), Int8(0), z, Float32(0.0), z, z)
 
 @always_inline
 def sms_vertex_flat(
@@ -160,7 +173,7 @@ def sms_vertex_flat(
     named constructor so call sites don't each spell out the dummy
     sphere_center/sphere_radius padding a flat vertex never uses."""
     var z = Vec3f(Float32(0.0))
-    return SMSVertex(pos, normal, dp_du, dp_dv, eta, Int8(0), z, Float32(0.0))
+    return SMSVertex(pos, normal, dp_du, dp_dv, eta, Int8(0), z, Float32(0.0), z, z)
 
 @always_inline
 def sms_vertex_sphere(
@@ -175,7 +188,9 @@ def sms_vertex_sphere(
     frame via `_sms_reproject_onto_sphere`, matching what `sms_walk` itself
     will re-derive on every subsequent iteration."""
     var r = _sms_reproject_onto_sphere(pos, center, radius)
-    return SMSVertex(r[0], r[1], r[2], r[3], eta, Int8(1), center, radius)
+    var inv_r = Float32(1.0) / radius if radius > Float32(1e-8) else Float32(0.0)
+    return SMSVertex(r[0], r[1], r[2], r[3], eta, Int8(1), center, radius,
+                     r[2] * inv_r, r[3] * inv_r)
 
 @always_inline
 def _sms_reproject_onto_sphere(
@@ -410,8 +425,25 @@ def _sms_eval_vertex(
         # not even a local descent direction -- confirmed empirically: a
         # coupled 2-curved-vertex chain diverged even under backtracking
         # line search until this term was added.
-        var curv = dot(H, verts[i].normal) / verts[i].sphere_radius
-        bi = SIMD[DType.float32, 4](bi[0] - curv, bi[1], bi[2], bi[3] - curv)
+        # Generalized from the sphere-only `dot(H,n)/radius` diagonal term
+        # to an arbitrary varying normal, so a normal-mapped vertex can
+        # contribute its texture gradient through dn_du/dn_dv. Since s and
+        # t stay unit and perpendicular to n, differentiating them gives
+        # ds/du = -n*dot(dn_du, s), dt/du = -n*dot(dn_du, t) (and likewise
+        # for v), so the `dot(H, ds/du)` term this adds to each entry of b
+        # is -dot(H,n) * dot(dn_d{u,v}, {s,t}). For a smooth sphere
+        # dn_du = dp_du/radius (~s/radius) and dn_dv = dp_dv/radius (~t/
+        # radius), which collapses to exactly the old diagonal-only
+        # -dot(H,n)/radius; a normal map breaks that alignment and lights
+        # up the off-diagonals too.
+        var hn = dot(H, verts[i].normal)
+        var dnu = verts[i].dn_du
+        var dnv = verts[i].dn_dv
+        bi = SIMD[DType.float32, 4](
+            bi[0] - hn * dot(dnu, s),
+            bi[1] - hn * dot(dnv, s),
+            bi[2] - hn * dot(dnu, t),
+            bi[3] - hn * dot(dnv, t))
     return SMSVertexEval(ai, bi, ci, cvi, wi, wo, H, wol, ili, ilo, Int8(1))
 
 def sms_walk(
@@ -451,6 +483,8 @@ def sms_walk(
             has_curved = True
             var r0 = _sms_reproject_onto_sphere(verts[i0].pos, verts[i0].sphere_center, verts[i0].sphere_radius)
             verts[i0].pos = r0[0]; verts[i0].normal = r0[1]; verts[i0].dp_du = r0[2]; verts[i0].dp_dv = r0[3]
+            var inv_r0 = Float32(1.0) / verts[i0].sphere_radius if verts[i0].sphere_radius > Float32(1e-8) else Float32(0.0)
+            verts[i0].dn_du = r0[2] * inv_r0; verts[i0].dn_dv = r0[3] * inv_r0
     var converged = False
     for _iter in range(20):
         var ev = InlineArray[SMSVertexEval, MAX_SMS_VERTICES](fill=_sms_eval_bad())
@@ -565,6 +599,8 @@ def sms_walk(
                             bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
                         if ra[4]:
                             trial[i].pos = ra[0]; trial[i].normal = ra[1]; trial[i].dp_du = ra[2]; trial[i].dp_dv = ra[3]
+                            var inv_ra = Float32(1.0) / trial[i].sphere_radius if trial[i].sphere_radius > Float32(1e-8) else Float32(0.0)
+                            trial[i].dn_du = ra[2] * inv_ra; trial[i].dn_dv = ra[3] * inv_ra
                         else:
                             # Anchor ray missed the sphere or was blocked by
                             # other scene geometry first -- this step is

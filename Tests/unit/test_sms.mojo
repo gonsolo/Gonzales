@@ -387,5 +387,51 @@ def test_sms_same_solution_detects_match_and_mismatch() raises:
     assert_true(not sms_same_solution(x0, a, b, 1))
     _ = verts
 
+def test_sphere_frame_derivative_reduces_to_analytic_curvature() raises:
+    """The frame-derivative term of the Newton Jacobian is written
+    generally, as -dot(H,n)*dot(dn_d{u,v},{s,t}), so a normal-mapped vertex
+    can feed its texture gradient in. For a SMOOTH sphere it must collapse
+    to exactly the analytic diagonal-only -dot(H,n)/radius it replaced --
+    that reduction is what makes the generalization safe, and it is pinned
+    here rather than inferred from renders (the renderer is stochastic:
+    run-to-run image means wander by several tenths of a percent, which is
+    the same size as the effect, so renders cannot settle this).
+
+    A sphere vertex carries dn_du = dp_du/r and dn_dv = dp_dv/r with an
+    orthonormal (dp_du, dp_dv, n), and _sms_eval_vertex builds
+    s = normalize(dp_du - n*dot(dp_du,n)) = dp_du and t = cross(n,s) =
+    dp_dv, so the four dot products must be exactly (1/r, 0, 0, 1/r)."""
+    var radius = Float32(6.5)
+    var center = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
+    var v = sms_vertex_sphere(
+        Vec3f(Float32(0.0), Float32(0.0), radius), center, radius, Float32(1.5))
+
+    # dn is the frame scaled by curvature 1/r.
+    var inv_r = Float32(1.0) / radius
+    for k in range(3):
+        assert_true(abs(v.dn_du[k] - v.dp_du[k] * inv_r) < EPS)
+        assert_true(abs(v.dn_dv[k] - v.dp_dv[k] * inv_r) < EPS)
+
+    # s/t exactly as _sms_eval_vertex derives them.
+    var s3 = v.dp_du - v.normal * dot(v.dp_du, v.normal)
+    var s = s3 * (Float32(1.0) / sqrt(dot(s3, s3)))
+    var t = cross(v.normal, s)
+
+    # Diagonal entries reproduce 1/radius; off-diagonals stay exactly zero,
+    # which is what makes the generalized 4-term form equal the old 2-term one.
+    assert_true(abs(dot(v.dn_du, s) - inv_r) < EPS)
+    assert_true(abs(dot(v.dn_dv, t) - inv_r) < EPS)
+    assert_true(abs(dot(v.dn_dv, s)) < EPS)
+    assert_true(abs(dot(v.dn_du, t)) < EPS)
+
+def test_flat_vertex_has_no_frame_derivative() raises:
+    """A flat triangle's frame is fixed as the vertex slides, so its dn is
+    zero and the generalized correction contributes nothing -- matching the
+    old code, which applied the curvature term only when is_sphere was set."""
+    var v = _flat_vert(Vec3f(Float32(0.0), Float32(0.0), Float32(0.0)), Float32(1.5))
+    for k in range(3):
+        assert_true(abs(v.dn_du[k]) < EPS)
+        assert_true(abs(v.dn_dv[k]) < EPS)
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()
