@@ -442,6 +442,12 @@ struct Scene(Movable):
     var nmap: Normalmap
     var floor_tex: ColorTexture
     var floor_uv_scale: Float32
+    # Experiment switch (--smooth-sms): build the solver's ManifoldVertex
+    # from the SMOOTH analytic sphere (geometric normal + 1/radius
+    # curvature) instead of the normal-mapped frame -- which is what
+    # gonzales's `_sms_vertex_from_hit` -> `sms_vertex_sphere` does. The
+    # camera-ray refraction still uses the normal map either way.
+    var smooth_sms: Bool
     # Experiment switch (--halfvector): solve the generalized half-vector
     # constraint (what sms.mojo does) instead of the angle-difference one
     # this scene actually selects.
@@ -473,6 +479,7 @@ struct Scene(Movable):
         self.floor_uv_scale = 10.0
         self.mnee_seed = False
         self.halfvector = False
+        self.smooth_sms = False
 
     # shapes/sphere.cpp::compute_surface_interaction, with an identity
     # rotation and to_world = translate(center) * scale(radius).
@@ -619,12 +626,19 @@ def normalmap_frames(nmap: Normalmap, h: Hit) -> Tuple[Frm, Frm, Frm]:
     var frame = Frm(s, cross(world_n, s), world_n)
     return (frame, Frm(du_s, du_t, du_n), Frm(dv_s, dv_t, dv_n))
 
-def manifold_vertex(nmap: Normalmap, h: Hit) -> MVertex:
+def manifold_vertex(nmap: Normalmap, h: Hit, smooth: Bool = False) -> MVertex:
     var frame: Frm
     var dfu: Frm
     var dfv: Frm
     var eta: Float32
-    if h.shape == SHAPE_SPHERE:
+    if h.shape == SHAPE_SPHERE and smooth:
+        # Smooth analytic sphere: normal_derivative = dp_d{u,v} / radius.
+        var inv_r = Float32(1.0) / SPHERE_RADIUS_G
+        frame = compute_shading_frame(h.n, h.dp_du)
+        var d = compute_shading_frame_derivative(h.n, h.dp_du, h.dp_du * inv_r, h.dp_dv * inv_r)
+        dfu = d[0]; dfv = d[1]
+        eta = SPHERE_ETA
+    elif h.shape == SHAPE_SPHERE:
         var f = normalmap_frames(nmap, h)
         frame = f[0]; dfu = f[1]; dfv = f[2]
         eta = SPHERE_ETA
@@ -885,7 +899,7 @@ def newton_solver(
             continue
         beta = min(Float32(1.0), Float32(2.0) * beta)
         si_current = hit
-        vtx = manifold_vertex(scene.nmap, hit)
+        vtx = manifold_vertex(scene.nmap, hit, scene.smooth_sms)
         iterations += 1
 
     if not success:
@@ -921,7 +935,7 @@ def sample_path(
     if si_init.shape != SHAPE_SPHERE:
         return (False, Hit.miss())
 
-    var vtx_init = manifold_vertex(scene.nmap, si_init)
+    var vtx_init = manifold_vertex(scene.nmap, si_init, scene.smooth_sms)
     return newton_solver(scene, si_p, vtx_init, light_p)
 
 # ── Fresnel (core/fresnel.h::fresnel), unpolarized dielectric ───────────────
@@ -1029,7 +1043,7 @@ def geometric_term(v0: MVertex, v1: MVertex, v2: MVertex) -> Float32:
 def evaluate_path_contribution(
     scene: Scene, si_hit: Hit, ei_p: Vec3f, ei_weight: Float32, si_final: Hit
 ) -> Float32:
-    var vtx = manifold_vertex(scene.nmap, si_final)
+    var vtx = manifold_vertex(scene.nmap, si_final, scene.smooth_sms)
     vtx.make_orthonormal()
 
     # SpecularManifold::emitter_interaction_to_vertex, area-emitter branch:
@@ -1039,10 +1053,10 @@ def evaluate_path_contribution(
                                Float32(0.0), Float32(1e30))
     if si_y.shape == SHAPE_NONE:
         return Float32(0.0)
-    var vy = manifold_vertex(scene.nmap, si_y)
+    var vy = manifold_vertex(scene.nmap, si_y, scene.smooth_sms)
     vy.make_orthonormal()
 
-    var vx = manifold_vertex(scene.nmap, si_hit)
+    var vx = manifold_vertex(scene.nmap, si_hit, scene.smooth_sms)
     vx.make_orthonormal()
 
     var refl = specular_reflectance(scene, si_final, normalize3(ei_p - si_final.p))
@@ -1073,7 +1087,7 @@ def specular_manifold_sampling(
         var hstr = scene.intersect(si_hit.p, dstr, RAY_EPSILON * Float32(1000.0), Float32(1e30))
         if hstr.shape != SHAPE_SPHERE:
             return black
-        sp = newton_solver(scene, si_hit.p, manifold_vertex(scene.nmap, hstr), ei_p)
+        sp = newton_solver(scene, si_hit.p, manifold_vertex(scene.nmap, hstr, scene.smooth_sms), ei_p)
     else:
         sp = sample_path(scene, si_hit.p, ei_p, rng)
     if not sp[0]:
@@ -1149,6 +1163,7 @@ def main() raises:
     var sms_only = False
     var mnee_seed = False
     var halfvector = False
+    var smooth_sms = False
     var i = 1
     var positional = 0
     while i < len(args):
@@ -1159,6 +1174,8 @@ def main() raises:
             mnee_seed = True
         elif a == "--halfvector":
             halfvector = True
+        elif a == "--smooth-sms":
+            smooth_sms = True
         elif positional == 0:
             out_path = a; positional += 1
         elif positional == 1:
@@ -1171,6 +1188,7 @@ def main() raises:
     var scene = Scene(scene_dir)
     scene.mnee_seed = mnee_seed
     scene.halfvector = halfvector
+    scene.smooth_sms = smooth_sms
     var height = width
 
     # <sensor type="perspective">: lookat(10,12,10 -> 0,0,0, up=+Y),
@@ -1221,7 +1239,7 @@ def main() raises:
             var hstr = scene.intersect(pt, dstr, Float32(1e-3), Float32(1e30))
             var det_ok = False
             if hstr.shape == SHAPE_SPHERE:
-                var rr = newton_solver(scene, pt, manifold_vertex(scene.nmap, hstr), ep)
+                var rr = newton_solver(scene, pt, manifold_vertex(scene.nmap, hstr, scene.smooth_sms), ep)
                 det_ok = rr[0] and rr[1].shape == SHAPE_SPHERE
             print("pt(", pt.x, ",", pt.z, "): uniform-seed converged", nok, "/", ntry,
                   " distinct basins", nbasin, " mean T =", Float64(ntry) / Float64(max(nok, 1)),
