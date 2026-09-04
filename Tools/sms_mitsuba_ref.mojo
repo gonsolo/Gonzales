@@ -442,6 +442,15 @@ struct Scene(Movable):
     var nmap: Normalmap
     var floor_tex: ColorTexture
     var floor_uv_scale: Float32
+    # Experiment switch (--halfvector): solve the generalized half-vector
+    # constraint (what sms.mojo does) instead of the angle-difference one
+    # this scene actually selects.
+    var halfvector: Bool
+    # Experiment switch (--mnee-seed): replace SMS's uniform-random seeding
+    # + Bernoulli-trial reciprocal estimator with gonzales's own scheme --
+    # ONE deterministic seed obtained by probing straight at the light, and
+    # an unweighted contribution (T fixed at 1). Everything else identical.
+    var mnee_seed: Bool
 
     def __init__(out self, scene_dir: String) raises:
         self.sphere_c = v3(0.0, 0.0, 0.0)
@@ -462,6 +471,8 @@ struct Scene(Movable):
         self.nmap = Normalmap(scene_dir + "/textures/normalmap_gaussian.exr")
         self.floor_tex = ColorTexture(scene_dir + "/textures/[2K]Tiles71/Tiles71_col.jpg")
         self.floor_uv_scale = 10.0
+        self.mnee_seed = False
+        self.halfvector = False
 
     # shapes/sphere.cpp::compute_surface_interaction, with an identity
     # rotation and to_world = translate(center) * scale(radius).
@@ -786,6 +797,60 @@ def compute_step_anglediff(
         return fail
     return (success, C, m2mulv(m2inv(dC_dX), C))
 
+# ── manifold_ss.cpp::compute_step_halfvector ────────────────────────────────
+# The OTHER constraint formulation (`halfvector_constraints = true`), which
+# sphere_sms.xml does NOT select but which gonzales's own sms.mojo uses:
+# require the generalized half-vector to align with the shading normal,
+# rather than requiring the refracted direction to match the direction to
+# the emitter. Included only so `--halfvector` can measure what that choice
+# costs on this scene.
+def compute_step_halfvector(
+    v0p: Vec3f, v1: MVertex, light_p: Vec3f
+) -> Tuple[Bool, SIMD[DType.float32, 2], SIMD[DType.float32, 2]]:
+    var fail = (False, SIMD[DType.float32, 2](Float32(1e30), Float32(1e30)),
+                SIMD[DType.float32, 2](Float32(0.0), Float32(0.0)))
+    var wo = light_p - v1.p
+    var ilo = norm3(wo)
+    if ilo < Float32(1e-3):
+        return fail
+    ilo = Float32(1.0) / ilo
+    wo = wo * ilo
+
+    var wi = v0p - v1.p
+    var ili = norm3(wi)
+    if ili < Float32(1e-3):
+        return fail
+    ili = Float32(1.0) / ili
+    wi = wi * ili
+
+    var eta = v1.eta
+    if dot(wi, v1.gn) < Float32(0.0):
+        eta = Float32(1.0) / eta
+    var h = wi + wo * eta
+    if eta != Float32(1.0):
+        h = -h
+    var ilh = Float32(1.0) / norm3(h)
+    h = h * ilh
+    ilo *= eta * ilh
+    ili *= ilh
+
+    var dh_du = v1.dp_du * (-(ili + ilo)) + wi * (dot(wi, v1.dp_du) * ili) + wo * (dot(wo, v1.dp_du) * ilo)
+    var dh_dv = v1.dp_dv * (-(ili + ilo)) + wi * (dot(wi, v1.dp_dv) * ili) + wo * (dot(wo, v1.dp_dv) * ilo)
+    dh_du = dh_du - h * dot(dh_du, h)
+    dh_dv = dh_dv - h * dot(dh_dv, h)
+    if eta != Float32(1.0):
+        dh_du = -dh_du
+        dh_dv = -dh_dv
+
+    var dH_dX = SIMD[DType.float32, 4](
+        dot(v1.ds_du, h) + dot(v1.s, dh_du), dot(v1.ds_dv, h) + dot(v1.s, dh_dv),
+        dot(v1.dt_du, h) + dot(v1.t, dh_du), dot(v1.dt_dv, h) + dot(v1.t, dh_dv))
+    if abs(m2det(dH_dX)) < Float32(1e-6):
+        return fail
+    # n_offset = (0,0,1), so the target is H == 0.
+    var dH = SIMD[DType.float32, 2](dot(v1.s, h), dot(v1.t, h))
+    return (True, dH, m2mulv(m2inv(dH_dX), dH))
+
 # ── manifold_ss.cpp::newton_solver ──────────────────────────────────────────
 # Returns (success, si_final). Note the reference's own quirk, reproduced
 # here: `si_current` is only assigned inside the loop, so a solve that
@@ -801,7 +866,8 @@ def newton_solver(
     var si_current = Hit.miss()
 
     while iterations < MAX_ITERATIONS:
-        var step = compute_step_anglediff(si_p, vtx, light_p)
+        var step = compute_step_halfvector(si_p, vtx, light_p) if scene.halfvector \
+                   else compute_step_anglediff(si_p, vtx, light_p)
         if not step[0]:
             break
         var C = step[1]
@@ -1001,7 +1067,15 @@ def specular_manifold_sampling(
     # full radiance divided by the AREA density.
     var ei_weight = scene.light_radiance * lr.area
 
-    var sp = sample_path(scene, si_hit.p, ei_p, rng)
+    var sp: Tuple[Bool, Hit]
+    if scene.mnee_seed:
+        var dstr = normalize3(ei_p - si_hit.p)
+        var hstr = scene.intersect(si_hit.p, dstr, RAY_EPSILON * Float32(1000.0), Float32(1e30))
+        if hstr.shape != SHAPE_SPHERE:
+            return black
+        sp = newton_solver(scene, si_hit.p, manifold_vertex(scene.nmap, hstr), ei_p)
+    else:
+        sp = sample_path(scene, si_hit.p, ei_p, rng)
     if not sp[0]:
         return black
     var si_final = sp[1]
@@ -1028,6 +1102,9 @@ def specular_manifold_sampling(
     # Bernoulli-trial estimate of the reciprocal solution probability.
     var inv_prob = Float32(1.0)
     var iterations = 1
+    if scene.mnee_seed:
+        stat_trials += 1
+        return bsdf_val * (specular_val * inv_prob)
     while True:
         var tr = sample_path(scene, si_hit.p, ei_p, rng)
         if tr[0]:
@@ -1070,12 +1147,18 @@ def main() raises:
     var spp = 16
     var width = 540
     var sms_only = False
+    var mnee_seed = False
+    var halfvector = False
     var i = 1
     var positional = 0
     while i < len(args):
         var a = String(args[i])
         if a == "--sms-only":
             sms_only = True
+        elif a == "--mnee-seed":
+            mnee_seed = True
+        elif a == "--halfvector":
+            halfvector = True
         elif positional == 0:
             out_path = a; positional += 1
         elif positional == 1:
@@ -1086,6 +1169,8 @@ def main() raises:
 
     var scene_dir = String("/home/gonsolo/src/specular-manifold-sampling/results/Figure_6_Sequence")
     var scene = Scene(scene_dir)
+    scene.mnee_seed = mnee_seed
+    scene.halfvector = halfvector
     var height = width
 
     # <sensor type="perspective">: lookat(10,12,10 -> 0,0,0, up=+Y),
@@ -1096,6 +1181,57 @@ def main() raises:
     var cam_left = normalize3(cross(v3(0.0, 1.0, 0.0), cam_dir))
     var cam_up = cross(cam_dir, cam_left)
     var tan_half = Float32(0.44522868530853616)   # tan(24 deg)
+
+    if spp == 0:
+        # --diag: at a few buried floor points, measure the solution
+        # structure the estimator actually faces -- how often a uniformly
+        # seeded solve converges, how many DISTINCT basins exist, and what
+        # a single deterministic straight-to-the-light (MNEE-style) seed
+        # finds instead.
+        var lr0 = scene.light_rect
+        var rngd = PCG32(UInt64(12345), UInt64(67))
+        for k in range(5):
+            var pt = v3(Float32(k) * 0.4 - 0.8, Float32(0.0), Float32(0.3))
+            var ep = lr0.o
+            var ntry = 4000
+            var nok = 0
+            var dirs = InlineArray[Vec3f, 64](fill=v3(0.0, 0.0, 0.0))
+            var counts = InlineArray[Int, 64](fill=0)
+            var nbasin = 0
+            for _ in range(ntry):
+                var r = sample_path(scene, pt, ep, rngd)
+                if not r[0] or r[1].shape != SHAPE_SPHERE:
+                    continue
+                nok += 1
+                var d = normalize3(r[1].p - pt)
+                var found = -1
+                for b in range(nbasin):
+                    if abs(dot(d, dirs[b]) - Float32(1.0)) < UNIQUENESS_THRESHOLD:
+                        found = b
+                        break
+                if found < 0:
+                    if nbasin < 64:
+                        dirs[nbasin] = d
+                        counts[nbasin] = 1
+                        nbasin += 1
+                else:
+                    counts[found] += 1
+            # Deterministic MNEE-style seed: straight at the light.
+            var dstr = normalize3(ep - pt)
+            var hstr = scene.intersect(pt, dstr, Float32(1e-3), Float32(1e30))
+            var det_ok = False
+            if hstr.shape == SHAPE_SPHERE:
+                var rr = newton_solver(scene, pt, manifold_vertex(scene.nmap, hstr), ep)
+                det_ok = rr[0] and rr[1].shape == SHAPE_SPHERE
+            print("pt(", pt.x, ",", pt.z, "): uniform-seed converged", nok, "/", ntry,
+                  " distinct basins", nbasin, " mean T =", Float64(ntry) / Float64(max(nok, 1)),
+                  " deterministic-seed solve:", det_ok)
+            var shown = 0
+            for b in range(nbasin):
+                if counts[b] * 40 > nok and shown < 6:
+                    print("      basin", b, "hit", counts[b], "times -> 1/p =", Float64(nok) / Float64(counts[b]))
+                    shown += 1
+        return
 
     var pixels = alloc[Float32](3 * width * height)
     var n_pixels = width * height
