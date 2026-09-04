@@ -1829,7 +1829,21 @@ def _apply_normal_map_sphere[use_gpu: Bool](
         return geom_normal
     bitangent = bitangent * (Float32(1.0) / sqrt(b_len2))
     var found = False
-    var ns = sample_texture[use_gpu](Int(mat.normal_tex_idx), u, v, True, Float32(0.0), tex_filenames, textures, n_textures, found)
+    # `sample_texture` applies pbrt's V-flip (tv = 1 - v) because a pbrt mesh
+    # puts V=0 at the TOP of the image. This sphere's (u, v) are built in
+    # MITSUBA's convention instead (see this function's own docstring), so
+    # that flip is wrong here and has to be pre-cancelled -- otherwise the
+    # normal map is read vertically MIRRORED, which tilts the shading normal
+    # by ~11 degrees everywhere and bends every refracted ray.
+    #
+    # Verified against the reference renderer directly, at a matched hit
+    # point (its own `normalmap.cpp::frame()` instrumented to dump
+    # p/uv/n_local): our (u, v) already reproduce its uv to 5 decimals, and
+    # sampling the map at v matches its shading normal to 0.00 degrees while
+    # sampling at 1 - v is off by 11.53 degrees. Only the analytic-sphere
+    # path is affected -- a pbrt trianglemesh normal map goes through
+    # `_apply_normal_map`, which genuinely wants pbrt's flip.
+    var ns = sample_texture[use_gpu](Int(mat.normal_tex_idx), u, Float32(1.0) - v, True, Float32(0.0), tex_filenames, textures, n_textures, found)
     if not found:
         return geom_normal
     var nx = ns.r * Float32(2.0) - Float32(1.0)
