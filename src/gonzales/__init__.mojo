@@ -253,5 +253,21 @@ def main() raises:
             sobol.free()
             exit(Int(rc))
 
+    # Keep the owning SpectralContext alive until every render path above
+    # has finished. The comment at its declaration says exactly this, but
+    # nothing enforced it: `spectral_ctx` is not mentioned again after
+    # `spectral_handle(spectral_ctx)`, and that handle is only raw
+    # MutExternalOrigin pointers INTO it, so the origin erasure hides the
+    # dependency and ASAP destruction was free to drop the tables before
+    # rendering ever read them.
+    #
+    # Symptom: --vcm rendered all-NaN in 6 of 8 runs of one binary with a
+    # pinned --seed (and the plain path tracer did not, because spectral
+    # evaluation is only wired into some paths so far -- the staged
+    # rollout). Whether it showed depended on whether the freed pages had
+    # been reused, which is why it looked like flakiness rather than a bug.
+    # Same pattern, in the tests, was fixed in 06a08d1f.
+    _ = spectral_ctx^
+
     path_cstr.free()
     sobol.free()
