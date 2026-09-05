@@ -219,6 +219,22 @@ test_release: release
 # scene-render smoke tests above. Each file under Tests/unit/ is its own
 # `mojo run` invocation (TestSuite.discover_tests[__functions_in_module()]).
 UNIT_TEST_SRCS := $(filter-out Tests/unit/_%,$(wildcard Tests/unit/*.mojo))
+
+# These three instantiate GPU kernels at COMPILE time (DeviceContext /
+# vulkaninterop entry points), so on a machine without the CUDA toolkit they
+# fail with "function instantiation failed" before any of their own
+# has_accelerator() runtime guards can print "SKIP: no GPU". That is a
+# build-environment limit, not a test failure -- the same one that made the
+# renderer itself unbuildable without CUDA (see HAVE_CUDA above) -- so drop
+# them from the suite when there is no toolkit to build them against. Every
+# other GPU-touching test (test_vulkanrt_*, test_gpu_scene_upload) compiles
+# fine and skips at runtime, so they stay in.
+GPU_ONLY_TEST_SRCS := Tests/unit/test_gpu.mojo \
+                      Tests/unit/test_vulkaninterop.mojo \
+                      Tests/unit/test_vulkaninterop_rt.mojo
+ifeq ($(HAVE_CUDA),)
+UNIT_TEST_SRCS := $(filter-out $(GPU_ONLY_TEST_SRCS),$(UNIT_TEST_SRCS))
+endif
 ut: unittest
 # Depends on the OIIO/viewer bridge libs (not the full $(GONZALES) binary)
 # because a few tests (e.g. test_gpu_scene_upload.mojo) compile real code
