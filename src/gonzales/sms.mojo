@@ -81,6 +81,40 @@ comptime SMS_UNIQUENESS_COS_EPS: Float32 = Float32(1e-5)
 # cost roughly a third of the sphere caustic's energy that way.
 comptime SMS_SOLVER_THRESHOLD: Float32 = Float32(1e-5)
 
+@always_inline
+def mnee_orthonormal_basis(du: Vec3f, dv: Vec3f) -> Tuple[Vec3f, Vec3f]:
+    """Gram-Schmidt a surface's tangent pair into an orthonormal one.
+
+    A manifold walk's |dx1/dxL| is only an AREA-to-area Jacobian when both
+    the specular vertex's basis and the light's are orthonormal -- otherwise
+    it comes out per-parametric-unit and no longer pairs with the
+    area-measure light density the estimator divides by. The reference
+    renderer makes the same call (ManifoldVertex::make_orthonormal, applied
+    to its specular AND emitter vertices before building the geometric
+    term).
+
+    The bases actually handed in are neither unit nor perpendicular -- a
+    triangle's raw edges (lp1-lp0, lp2-lp0) or a sphere's radius-scaled
+    dp/dphi, dp/dtheta -- so this is not optional bookkeeping: getting it
+    wrong scaled gonzales's sphere caustic by 0.61x until it was fixed.
+    It lives here, rather than in each caller, precisely because it is an
+    invariant of the walk and every caller was getting it wrong the same
+    way.
+
+    Degenerate input (zero-length or parallel) is returned unchanged, which
+    leaves the caller in exactly the state it was in before -- the walk's
+    own degeneracy checks reject it downstream."""
+    var e1 = du
+    var e1_len = sqrt(dot(e1, e1))
+    if e1_len <= Float32(1e-12):
+        return (du, dv)
+    e1 = e1 * (Float32(1.0) / e1_len)
+    var e2 = dv - e1 * dot(e1, dv)
+    var e2_len = sqrt(dot(e2, e2))
+    if e2_len <= Float32(1e-12):
+        return (du, dv)
+    return (e1, e2 * (Float32(1.0) / e2_len))
+
 # ── 2x2 matrix helpers ───────────────────────────────────────────────────────
 # Shared with shading.mojo's _mnee_walk2, which imports these from here
 # rather than keeping its own private copies (Phase 5.1: one source of

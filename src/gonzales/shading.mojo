@@ -16,6 +16,7 @@ from .restir_gi import GIReservoir, gi_reservoir_init, gi_target_pdf, GIReservoi
 from .sms import (
     MAX_SMS_VERTICES, SMSVertex, sms_vertex_init, sms_vertex_flat, sms_vertex_sphere, sms_vertex_mats,
     mat22_mul, mat22_mul_v, mat22_inv, sms_solve_bernoulli, sms_walk, SMS_SOLVER_THRESHOLD,
+    mnee_orthonormal_basis,
     sms_refresh_solved_frames,
 )
 from .restir_sms import SMSReservoir, sms_reservoir_init, sms_target_pdf, SMSReservoirIO, sms_reservoir_io_null
@@ -2513,15 +2514,7 @@ def _sms_vertex_from_hit(
         # |dx1/dxL| to actually be an area-to-area ratio; a sphere vertex
         # already is (its Frisvad frame), which is why only the triangle
         # needed this.
-        var e1 = dp_du
-        var e1_len = sqrt(dot(e1, e1))
-        var e2 = dp_dv
-        if e1_len > Float32(1e-12):
-            e1 = e1 * (Float32(1.0) / e1_len)
-            e2 = e2 - e1 * dot(e1, e2)
-            var e2_len = sqrt(dot(e2, e2))
-            if e2_len > Float32(1e-12):
-                e2 = e2 * (Float32(1.0) / e2_len)
+        var (e1, e2) = mnee_orthonormal_basis(dp_du, dp_dv)
         return (sms_vertex_flat(point, n, e1, e2, eta), True)
     else:
         return (sms_vertex_init(), False)
@@ -2982,15 +2975,7 @@ def _mnee_area_light_contribute(
     # density. The two only pair up when the light basis is orthonormal, and
     # the reference makes exactly this call (`vy.make_orthonormal()` on the
     # emitter vertex inside geometric_term) for the same reason.
-    var l_du = ldp_du_v
-    var l_du_len = sqrt(dot(l_du, l_du))
-    var l_dv = ldp_dv_v
-    if l_du_len > Float32(1e-12):
-        l_du = l_du * (Float32(1.0) / l_du_len)
-        l_dv = l_dv - l_du * dot(l_du, l_dv)
-        var l_dv_len = sqrt(dot(l_dv, l_dv))
-        if l_dv_len > Float32(1e-12):
-            l_dv = l_dv * (Float32(1.0) / l_dv_len)
+    var (l_du, l_dv) = mnee_orthonormal_basis(ldp_du_v, ldp_dv_v)
     var _probe_res = _sms_probe_and_solve(
         ctx, hit_point, shadow_dir, dist, light_point, l_du, l_dv, pcg)
     var dielectric_found = _probe_res[0]
