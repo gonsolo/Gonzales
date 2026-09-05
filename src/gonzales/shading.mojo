@@ -19,7 +19,7 @@ from .sms import (
     mnee_orthonormal_basis,
     sms_refresh_solved_frames,
 )
-from .restir_sms import SMSReservoir, sms_reservoir_init, sms_target_pdf, SMSReservoirIO, sms_reservoir_io_null
+from .restir_sms import SMSReservoir, sms_reservoir_init, sms_target_pdf, SMSReservoirIO, sms_reservoir_io_null, sms_spatial_combine
 
 @fieldwise_init
 struct GIPendingX1(TrivialRegisterPassable):
@@ -3238,6 +3238,16 @@ def sms_temporal_step(
                 res.le = prev.le
                 res.bsdf_product = prev.bsdf_product
                 res.dx1_dxlight = prev.dx1_dxlight
+
+    # Spatial reuse (Phase 6's second driver). Runs after the temporal
+    # combine and before resolve, matching gi_temporal_spatial_combine's
+    # ordering: every neighbour's chain is carried across by the manifold
+    # shift, so a tap that cannot be shifted into this pixel's domain
+    # contributes nothing rather than a wrong chain. No-op unless the
+    # caller supplied a real G-buffer.
+    sms_spatial_combine(
+        res, hit_point, normal, alb, light_point, ldp_du_v, ldp_dv_v,
+        pcg, sms_io, pixel_idx)
 
     sms_resolve(path_ptr, ctx, hit_point, normal, alb, res)
     if has_temporal:

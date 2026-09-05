@@ -1657,11 +1657,18 @@ def render_interactive(
             normals_int.append(Float32(0))
         for _ in range(n_pixels):
             depth_int.append(Float32(0))
-        if use_restir:
+        # World position + material id are the half of the G-buffer that only
+        # a SPATIAL-reuse driver needs, and DI is no longer the only one --
+        # GI and SMS both take neighbour taps now. Sizing these under
+        # `use_restir` alone left the other two holding a dangling pointer,
+        # which their own null-safety checks then read as "no G-buffer" and
+        # skipped spatial reuse entirely, silently.
+        if use_restir or use_restir_gi or use_sms_restir:
             for _ in range(n_pixels):
                 material_id_int.append(Int32(-1))
             for _ in range(n_pixels * 3):
                 world_pos_int.append(Float32(0))
+        if use_restir:
             restir_buf_a = alloc[DIReservoir](n_pixels)
             restir_buf_b = alloc[DIReservoir](n_pixels)
             for i in range(n_pixels):
@@ -1782,7 +1789,13 @@ def render_interactive(
             # need to already be populated, not still zero-initialized from
             # this function's own List() setup above.
             if frame_count == 0:
-                if use_restir:
+                # The FULL G-buffer (world position + material id, not just
+                # normal/depth) is what any spatial-reuse driver needs, and
+                # there are three of them now -- DI, GI and SMS. Gating it on
+                # `use_restir` alone left --sms-restir with a zero depth
+                # buffer, which its neighbour test reads as "degenerate" and
+                # rejects, so spatial reuse silently did nothing.
+                if use_restir or use_restir_gi or use_sms_restir:
                     render_aux_buffers(
                         psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
                         Int32(0), Int32(0), fw, fh, sd,
@@ -1816,7 +1829,14 @@ def render_interactive(
                 )
             var sms_io = sms_reservoir_io_null()
             if use_sms_restir:
-                sms_io = SMSReservoirIO(read=sms_read, write=sms_write)
+                sms_io = SMSReservoirIO(
+                    read=sms_read, write=sms_write,
+                    gbuf_normal=normals_int.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](),
+                    gbuf_depth=depth_int.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](),
+                    gbuf_material_id=material_id_int.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](),
+                    gbuf_world_pos=world_pos_int.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](),
+                    frame_w=fw, frame_h=fh,
+                )
             render_all_tiles(
                 psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
                 Int32(0), Int32(0), fw, fh,

@@ -392,7 +392,12 @@ def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
     var path_arr = alloc[PathState_C](1)
 
     # Frame 0: read=buf_a (empty), write=buf_b.
-    var io0 = SMSReservoirIO(read=buf_a, write=buf_b)
+    var io0 = SMSReservoirIO(read=buf_a, write=buf_b,
+        gbuf_normal=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_depth=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_material_id=UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_world_pos=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        frame_w=Int32(0), frame_h=Int32(0))
     path_arr[0] = _make_path()
     var pcg0 = PCG32(UInt64(1), UInt64(1))
     _ = sms_temporal_step(
@@ -405,7 +410,12 @@ def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
 
     # Frame 1: read=buf_b (frame 0's result), write=buf_a -- mirrors
     # pipeline.mojo's own ping-pong swap between frames.
-    var io1 = SMSReservoirIO(read=buf_b, write=buf_a)
+    var io1 = SMSReservoirIO(read=buf_b, write=buf_a,
+        gbuf_normal=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_depth=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_material_id=UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_world_pos=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        frame_w=Int32(0), frame_h=Int32(0))
     path_arr[0] = _make_path()
     var pcg1 = PCG32(UInt64(2), UInt64(1))
     _ = sms_temporal_step(
@@ -469,7 +479,12 @@ def test_shade_diffuse_nee_sms_wiring_accumulates_confidence_across_frames() rai
     var path_arr = alloc[PathState_C](1)
 
     # Frame 0, through the real _shade_diffuse_nee entry point.
-    var io0 = SMSReservoirIO(read=buf_a, write=buf_b)
+    var io0 = SMSReservoirIO(read=buf_a, write=buf_b,
+        gbuf_normal=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_depth=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_material_id=UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_world_pos=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        frame_w=Int32(0), frame_h=Int32(0))
     path_arr[0] = _make_path()
     var pcg0 = PCG32(UInt64(1), UInt64(1))
     _shade_diffuse_nee[False, False](
@@ -482,7 +497,12 @@ def test_shade_diffuse_nee_sms_wiring_accumulates_confidence_across_frames() rai
     assert_true(path_arr[0].estimate.r > Float32(0.0))
 
     # Frame 1: read=buf_b (frame 0's result), write=buf_a.
-    var io1 = SMSReservoirIO(read=buf_b, write=buf_a)
+    var io1 = SMSReservoirIO(read=buf_b, write=buf_a,
+        gbuf_normal=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_depth=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_material_id=UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_world_pos=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        frame_w=Int32(0), frame_h=Int32(0))
     path_arr[0] = _make_path()
     var pcg1 = PCG32(UInt64(2), UInt64(1))
     _shade_diffuse_nee[False, False](
@@ -546,7 +566,12 @@ def test_shade_diffuse_nee_sms_io_inactive_at_bounce_1_uses_plain_mnee() raises:
     var path_arr = alloc[PathState_C](1)
     path_arr[0] = _make_path()
     path_arr[0].bounce = Int32(1)
-    var io0 = SMSReservoirIO(read=buf_a, write=buf_b)
+    var io0 = SMSReservoirIO(read=buf_a, write=buf_b,
+        gbuf_normal=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_depth=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_material_id=UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_world_pos=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        frame_w=Int32(0), frame_h=Int32(0))
     var pcg0 = PCG32(UInt64(1), UInt64(1))
     _shade_diffuse_nee[False, False](
         path_arr, ctx, normal, hit_point, alb, Vec3f(0.0, 0.0, -1.0),
