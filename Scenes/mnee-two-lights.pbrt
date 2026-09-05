@@ -1,0 +1,115 @@
+Integrator "path" "integer maxdepth" [ 6 ]
+Transform [ 1 -0 -0 -0 -0 1 -0 -0 -0 -0 -1 -0 -0 -1 6.8 1  ]
+Sampler "sobol" "integer pixelsamples" [ 16 ]
+
+PixelFilter "gaussian" "float xradius" [ 5 ] "float yradius" [ 5 ] "float sigma" [2.5]
+
+Accelerator "bvh"
+
+Film "rgb"
+    "string filename" [ "mnee-two-lights.exr" ]
+    "integer xresolution" [ 256 ] "integer yresolution" [ 256 ]
+
+Camera "perspective" "float fov" [ 19.5 ]
+
+WorldBegin
+
+MakeNamedMaterial "LeftWall"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0.63 0.065 0.05 ]
+MakeNamedMaterial "RightWall"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0.14 0.45 0.091 ]
+MakeNamedMaterial "Floor"
+    "string type" [ "diffusetransmission" ]
+    "rgb reflectance" [ 0.5 0.5 0.5 ]
+    "rgb transmittance" [ 0.3 0.3 0.3 ]
+MakeNamedMaterial "Ceiling"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0.725 0.71 0.68 ]
+MakeNamedMaterial "BackWall"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0.725 0.71 0.68 ]
+MakeNamedMaterial "Light"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0 0 0 ]
+
+MakeNamedMaterial "Glass"
+    "string type" [ "dielectric" ]
+    "float eta" [ 1.5 ]
+
+NamedMaterial "Floor"
+Shape "trianglemesh"
+    "point2 uv" [ 0 0 1 0 1 1 0 1
+        ]
+    "normal N" [ 4.37114e-8 1 1.91069e-15 4.37114e-8 1 1.91069e-15 4.37114e-8 1 1.91069e-15
+                 4.37114e-8 1 1.91069e-15 ]
+    "point3 P" [ -1 1.74846e-7 -1 -1 1.74846e-7 1 1 -1.74846e-7 1 1 -1.74846e-7 -1 ]
+    "integer indices" [ 0 1 2 0 2 3 ]
+NamedMaterial "Ceiling"
+Shape "trianglemesh"
+    "point2 uv" [ 0 0 1 0 1 1 0 1
+        ]
+    "normal N" [ -8.74228e-8 -1 -4.37114e-8 -8.74228e-8 -1 -4.37114e-8 -8.74228e-8
+                 -1 -4.37114e-8 -8.74228e-8 -1 -4.37114e-8 ]
+    "point3 P" [ 1 2 1 -1 2 1 -1 2 -1 1 2 -1 ]
+    "integer indices" [ 0 1 2 0 2 3 ]
+NamedMaterial "BackWall"
+Shape "trianglemesh"
+    "point2 uv" [ 0 0 1 0 1 1 0 1
+        ]
+    "normal N" [ 8.74228e-8 -4.37114e-8 -1 8.74228e-8 -4.37114e-8 -1 8.74228e-8 -4.37114e-8
+                 -1 8.74228e-8 -4.37114e-8 -1 ]
+    "point3 P" [ -1 0 -1 -1 2 -1 1 2 -1 1 0 -1 ]
+    "integer indices" [ 0 1 2 0 2 3 ]
+NamedMaterial "RightWall"
+Shape "trianglemesh"
+    "point2 uv" [ 0 0 1 0 1 1 0 1
+        ]
+    "normal N" [ 1 -4.37114e-8 1.31134e-7 1 -4.37114e-8 1.31134e-7 1 -4.37114e-8
+                 1.31134e-7 1 -4.37114e-8 1.31134e-7 ]
+    "point3 P" [ 1 0 -1 1 2 -1 1 2 1 1 0 1 ]
+    "integer indices" [ 0 1 2 0 2 3 ]
+NamedMaterial "LeftWall"
+Shape "trianglemesh"
+    "point2 uv" [ 0 0 1 0 1 1 0 1
+        ]
+    "normal N" [ -1 -4.37114e-8 -4.37114e-8 -1 -4.37114e-8 -4.37114e-8 -1 -4.37114e-8
+                 -4.37114e-8 -1 -4.37114e-8 -4.37114e-8 ]
+    "point3 P" [ -1 0 1 -1 2 1 -1 2 -1 -1 0 -1 ]
+    "integer indices" [ 0 1 2 0 2 3 ]
+
+AttributeBegin
+    Translate 0 0.28 0
+    NamedMaterial "Glass"
+    Shape "sphere" "float radius" [ 0.28 ]
+AttributeEnd
+
+AttributeBegin
+    AreaLightSource "diffuse"
+        "rgb L" [ 17 12 4 ]
+    NamedMaterial "Light"
+    Shape "trianglemesh"
+        "point2 uv" [ 0 0 1 0 1 1 0 1
+            ]
+        "normal N" [ -8.74228e-8 -1 1.86006e-7 -8.74228e-8 -1 1.86006e-7 -8.74228e-8
+                     -1 1.86006e-7 -8.74228e-8 -1 1.86006e-7 ]
+        "point3 P" [ -0.24 1.98 -0.22 0.23 1.98 -0.22 0.23 1.98 0.16 -0.24 1.98 0.16 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+
+# Second area light, offset to one side. With two lights the NEE light CHOICE
+# at a shading point is independent of where a BSDF-sampled ray happens to
+# land, which is exactly the situation a single "this vertex was covered by
+# MNEE" flag cannot distinguish.
+AttributeBegin
+    AreaLightSource "diffuse"
+        "rgb L" [ 4 8 17 ]
+    NamedMaterial "Light"
+    Shape "trianglemesh"
+        "point2 uv" [ 0 0 1 0 1 1 0 1 ]
+        "normal N" [ -8.74228e-8 -1 1.86006e-7 -8.74228e-8 -1 1.86006e-7 -8.74228e-8
+                     -1 1.86006e-7 -8.74228e-8 -1 1.86006e-7 ]
+        "point3 P" [ -0.24 1.98 0.30 0.23 1.98 0.30 0.23 1.98 0.68 -0.24 1.98 0.68 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd

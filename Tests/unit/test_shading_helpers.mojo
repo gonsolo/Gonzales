@@ -55,7 +55,7 @@ def _make_triangle_mesh(p0: Vec3f, p1: Vec3f, p2: Vec3f) -> TriangleMesh_C:
     )
 
 def _make_material(albedo: RGB, normal_tex_idx: Int32) -> Material_C:
-    return Material_C(Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), albedo, RGB(Float32(0.0)),
+    return Material_C(Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)), albedo, RGB(Float32(0.0)),
         Int32(-1), Float32(0.0), Float32(0.0), normal_tex_idx, Int32(-1), Int32(-1),
         RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0), Int32(-1))
 
@@ -109,7 +109,7 @@ def _make_path(org: Vec3f, dir: Vec3f) -> PathState_C:
     return PathState_C(
         Ray_C(Point3f(org[0], org[1], org[2]), Vec3f(dir[0], dir[1], dir[2])),
         RGB(Float32(1.0)), RGB(Float32(0.0)), RGB(Float32(0.0)),
-        Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0), Int8(0),
+        Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
         Float32(0.0), Int32(-1), Int32(0), UInt64(0),
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )

@@ -3334,7 +3334,17 @@ def _nee_area_lights[enqueue_shadow: Bool](
                     path_ptr, ctx, normal, hit_point, alb, shadow_dir, dist,
                     light_point, ldp_du_v, ldp_dv_v, al,
                     al.total_area / light_sel_pdf_nee, lobe_w)
-                path_ptr[].sms_covered = Int8(1) if used_mnee else Int8(0)
+                # Record the vertex, not the outcome. Whether MNEE covers a
+                # given emitter point is a property of that POINT (is there
+                # glass on the segment?), not of which light this sample
+                # happened to pick -- so the decision is deferred to the
+                # emitter-hit site, which knows the point actually reached.
+                # Keying it on `used_mnee` instead makes the suppression
+                # depend on the NEE light draw, which is independent of where
+                # the BSDF ray goes, and that IS biased whenever a vertex has
+                # glass toward some lights and not others.
+                path_ptr[].sms_covered = Int8(1)
+                path_ptr[].last_ns_p = hit_point
                 if not used_mnee:
                     _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)
 
@@ -4310,10 +4320,36 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         var al = ctx.lights.area_lights[al_idx]
         var emission = al.emission
         if path_ptr[].specularBounce == Int8(1) and path_ptr[].sms_covered == Int8(1):
-            # Already counted: the last non-specular vertex sampled exactly
-            # this path family with MNEE/SMS (see PathState_C.sms_covered).
-            path_ptr[].active = 0
-            return
+            # This arrived through a specular chain from a vertex that
+            # delegates such paths to MNEE/SMS. MNEE covers the segment to a
+            # given emitter point exactly when a dielectric intervenes on it,
+            # so ask that same question here, for the point actually hit: if
+            # glass is in the way, MNEE already sampled this path family and
+            # counting it again double-counts (see PathState_C.sms_covered).
+            # If not, MNEE never had it and BSDF sampling is the only
+            # strategy that does -- keep it.
+            var hp = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z) \
+                     + Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z) * inter.tHit
+            var seg = hp - path_ptr[].last_ns_p
+            var seg_len = sqrt(dot(seg, seg))
+            if seg_len > Float32(1e-6):
+                var seg_dir = seg * (Float32(1.0) / seg_len)
+                var pr_org = path_ptr[].last_ns_p + seg_dir * Float32(0.0001)
+                var pr_ray = Ray_C(Point3f(pr_org[0], pr_org[1], pr_org[2]),
+                                   Vec3f(seg_dir[0], seg_dir[1], seg_dir[2]))
+                var pr_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+                var pr_store = InlineArray[Intersection_C, 1](fill=Intersection_C(
+                    pr_prim, Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
+                traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, pr_ray,
+                                   seg_len * Float32(0.999), pr_store.unsafe_ptr(),
+                                   ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
+                                   ctx.lights.spheres, ctx.lights.sphere_count)
+                var pr = pr_store[0]
+                if pr.hit != Int8(0):
+                    var pr_mat = ctx.materials[Int(pr.primId.materialIndex)]
+                    if pr_mat.type == MatKind.dielectric or pr_mat.type == MatKind.thin_dielectric:
+                        path_ptr[].active = 0
+                        return
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
             path_ptr[].estimate += path_ptr[].throughput * emission
         else:
