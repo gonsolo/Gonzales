@@ -11,7 +11,7 @@ from std.memory import alloc
 from std.testing import assert_true, assert_false, TestSuite
 from gonzales.geometry import (
     RGB, Point3f, Vec3f, Ray_C, PrimId_C, TriangleMesh_C, Material_C, Curve_C,
-    GpuTexture_C, ShadowTask_C, LightSampler_C, Instance_C, AreaLight_C,
+    GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, Instance_C, AreaLight_C,
     DistantLight_C, PointLight_C, InfiniteLight_C, Sphere_C, MeasuredBRDF_C,
     PathState_C,
 )
@@ -68,6 +68,7 @@ def _make_ctx_with_light(
         UnsafePointer[Material_C, MutExternalOrigin].unsafe_dangling(),
         UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
         UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(), 0,
+        UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling(),
         UnsafePointer[ShadowTask_C, MutExternalOrigin].unsafe_dangling(),
         Float32(0.0),
         UnsafePointer[UInt32, MutExternalOrigin].unsafe_dangling(),

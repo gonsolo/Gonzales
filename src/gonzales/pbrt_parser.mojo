@@ -15,7 +15,7 @@ from .parse_types import (SceneParseState, MeshAccum, NamedMaterial,
 from .geometry import (RGB, SampledSpectrum, Point3f, Vec3f, Material_C, MatKind, AreaLight_C,
                         Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area, dot, DistantLight_C, PointLight_C, InfiniteLight_C,
                         TriangleMesh_C, PrimId_C, Medium_C, MediumInterface_C, Grid_C, PI,
-                        LightSampler_C, Instance_C, MeasuredBRDF_C, GpuTexture_C, _is_real_ptr)
+                        LightSampler_C, Instance_C, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, _is_real_ptr)
 from .transform import matrix_multiply, matrix_invert, transform_points, transform_normals
 from .bvh import BVH2Node, SceneDescriptor2_C, build_bvh2
 from .spectrum import SpectralHandle
@@ -87,6 +87,11 @@ struct ParsedScene_Mojo:
     var sppm_photons_per_iter:  Int32    # -1 = not specified by scene; pbrt itself defaults to film_w*film_h
     var tex_filenames:    UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin]
     var tex_count:        Int32
+    # Parallel to `tex_filenames`: the slope-space form of every texture some
+    # material uses as a NORMAL map, for the SMS/MNEE manifold walk (see
+    # geometry.mojo's NormalSlopeMap_C). Entries for other textures have
+    # res == 0.
+    var nmaps:            UnsafePointer[NormalSlopeMap_C, MutExternalOrigin]
     var distant_lights:   UnsafePointer[DistantLight_C, MutExternalOrigin]
     var distant_count:    Int32
     var point_lights:     UnsafePointer[PointLight_C, MutExternalOrigin]
@@ -2181,6 +2186,64 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
     psc[0].tex_filenames    = tex_ptrs
     psc[0].tex_count        = Int32(n_tex)
 
+    # ---- Normal maps, converted once into LEAN slope space ----
+    # Only the SMS/MNEE manifold walk reads these; ordinary shading samples
+    # the same file through the usual texture path. The walk additionally
+    # needs the normal's analytic derivatives, which bilinear interpolation
+    # of the raw RGB does not give consistently with the reference -- see
+    # geometry.mojo's NormalSlopeMap_C for the representation and
+    # sms.mojo's nmap_eval/nmap_eval_derivs for the evaluation.
+    psc[0].nmaps = UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling()
+    if n_tex > 0:
+        var nmaps = alloc[NormalSlopeMap_C](n_tex)
+        for ti in range(n_tex):
+            nmaps[ti] = normal_slope_map_none()
+        for mi in range(n_mats):
+            var nti = Int(mats[mi].normal_tex_idx)
+            if nti < 0 or nti >= n_tex:
+                continue
+            if nmaps[nti].res > Int32(0):
+                continue   # already converted for an earlier material
+            var np_ptr = alloc[UnsafePointer[Float32, MutExternalOrigin]](1)
+            var nw_out = alloc[Int32](1); var nh_out = alloc[Int32](1)
+            nw_out[0] = Int32(0); nh_out[0] = Int32(0)
+            var nm_ok = external_call["load_texture_rgb", Int32,
+                UnsafePointer[UInt8, MutExternalOrigin],
+                UnsafePointer[UnsafePointer[Float32, MutExternalOrigin], MutExternalOrigin],
+                UnsafePointer[Int32, MutExternalOrigin], UnsafePointer[Int32, MutExternalOrigin],
+                Int32](
+                tex_ptrs[nti], np_ptr, nw_out, nh_out, Int32(1))   # raw=1: no sRGB decode
+            var nw = Int(nw_out[0]); var nh = Int(nh_out[0])
+            nw_out.free(); nh_out.free()
+            if nm_ok != Int32(0) and nw > 0 and nw == nh:
+                var src = np_ptr[0]
+                var slopes = alloc[Float32](2 * nw * nh)
+                for i in range(nw * nh):
+                    var nx = Float32(2.0)*src[i*3+0] - Float32(1.0)
+                    var ny = Float32(2.0)*src[i*3+1] - Float32(1.0)
+                    var nz = Float32(2.0)*src[i*3+2] - Float32(1.0)
+                    var ln = sqrt(nx*nx + ny*ny + nz*nz)
+                    if ln > Float32(1e-8) and abs(nz) > Float32(1e-6):
+                        slopes[i*2+0] = -nx / nz
+                        slopes[i*2+1] = -ny / nz
+                    else:
+                        slopes[i*2+0] = Float32(0.0)
+                        slopes[i*2+1] = Float32(0.0)
+                nmaps[nti] = NormalSlopeMap_C(slopes, Int32(nw))
+                _ = external_call["free_texture_rgb", Int32,
+                    UnsafePointer[Float32, MutExternalOrigin]](src)
+            elif nm_ok != Int32(0) and nw > 0:
+                # Non-square: the slope-map addressing (and the reference it
+                # mirrors) assumes square, power-of-two maps. Leave res == 0
+                # so the walk falls back to the smooth surface rather than
+                # reading the map with the wrong stride.
+                print("warning: normal map is not square (", nw, "x", nh,
+                      "), SMS manifold walk will treat this surface as smooth")
+                _ = external_call["free_texture_rgb", Int32,
+                    UnsafePointer[Float32, MutExternalOrigin]](np_ptr[0])
+            np_ptr.free()
+        psc[0].nmaps = nmaps
+
     # ---- Non-area lights ----
     var nd = len(s[0].distant_dirs) // 3
     if nd > 0:
@@ -2534,6 +2597,10 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin]):
         var nt = Int(psc[0].tex_count)
         for ti in range(nt):
             psc[0].tex_filenames[ti].free()
+        for ti in range(nt):
+            if psc[0].nmaps[ti].res > Int32(0):
+                psc[0].nmaps[ti].slopes.free()
+        psc[0].nmaps.free()
         psc[0].tex_filenames.free()
     if psc[0].distant_count > 0:
         psc[0].distant_lights.free()
@@ -2667,6 +2734,7 @@ def mojo_parsed_scene_descriptor(
     sd[0].areaLightCount   = Int64(psc[0].area_light_count)
     sd[0].textures         = psc[0].tex_filenames
     sd[0].textureCount     = Int64(psc[0].tex_count)
+    sd[0].normalSlopeMaps  = psc[0].nmaps
     sd[0].distantLights    = psc[0].distant_lights
     sd[0].distantLightCount = Int64(psc[0].distant_count)
     sd[0].pointLights      = psc[0].point_lights

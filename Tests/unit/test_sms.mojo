@@ -4,7 +4,7 @@ from gonzales.geometry import dot, cross, Vec3f
 from gonzales.shading import _mnee_walk2
 from gonzales.sms import (
     sms_walk, sms_solve_bernoulli, SMSVertex, MAX_SMS_VERTICES,
-    sms_seed_jitter, sms_same_solution, sms_vertex_flat, sms_vertex_init,
+    sms_seed_randomize, sms_same_solution, sms_vertex_flat, sms_vertex_init,
     sms_vertex_sphere, _sms_reproject_onto_sphere, _sms_eval_vertex,
 )
 from gonzales.rng import PCG32
@@ -331,7 +331,7 @@ def test_sms_walk_fails_on_coincident_points() raises:
 
 # ── Random seeding + Bernoulli-trial estimator (5.2/5.3) ────────────────────
 
-def test_sms_seed_jitter_stays_in_tangent_plane() raises:
+def test_sms_seed_randomize_stays_in_tangent_plane() raises:
     """Jittering must only move a vertex within its own (dp_du, dp_dv)
     plane -- never off the flat triangle's normal direction, since the
     walk assumes a single flat surface throughout (no reprojection)."""
@@ -339,7 +339,7 @@ def test_sms_seed_jitter_stays_in_tangent_plane() raises:
     var orig_pos = Vec3f(Float32(0.1), Float32(0.1), Float32(1.0))
     verts[0] = _flat_vert(orig_pos, Float32(1.5))
     var pcg = PCG32(UInt64(12345), UInt64(1))
-    sms_seed_jitter(verts, 1, pcg, Float32(0.05))
+    sms_seed_randomize(Vec3f(Float32(0.0), Float32(0.0), Float32(-1.0)), verts, 1, pcg, Float32(0.05))
     var normal = verts[0].normal
     var delta = verts[0].pos - orig_pos
     assert_true(abs(dot(delta, normal)) < Float32(1e-6))

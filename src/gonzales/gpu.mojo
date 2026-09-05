@@ -5,7 +5,7 @@ from max.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc, memcpy
-from .geometry import RGB, Point3f, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr
+from .geometry import RGB, Point3f, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres
 from .transform import transform_normal_by_instance
@@ -1158,6 +1158,7 @@ def shade_nee_preamble_gpu(
         path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
+        nmaps=UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling(),
         shadow_tasks=UnsafePointer[ShadowTask_C, MutExternalOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(), use_restir=False,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
@@ -1253,6 +1254,7 @@ def shade_diffuse_gpu(
         path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
+        nmaps=UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling(),
         shadow_tasks=UnsafePointer[ShadowTask_C, MutExternalOrigin].unsafe_dangling(),
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(), use_restir=restir_on,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
@@ -1340,6 +1342,7 @@ def shade_coated_diffuse_gpu(
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
+        nmaps=UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling(),
         shadow_tasks=shadow_tasks,
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(), use_restir=False,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
@@ -1413,6 +1416,7 @@ def shade_diffuse_transmit_gpu(
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
+        nmaps=UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling(),
         shadow_tasks=shadow_tasks,
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(), use_restir=False,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
@@ -1547,6 +1551,7 @@ def shade_conductor_gpu(
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
+        nmaps=UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling(),
         shadow_tasks=shadow_tasks,
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(), use_restir=False,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
@@ -1622,6 +1627,7 @@ def shade_measured_gpu(
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
+        nmaps=UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling(),
         shadow_tasks=shadow_tasks,
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(), use_restir=False,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
@@ -1738,6 +1744,7 @@ def shade_coated_conductor_gpu(
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
+        nmaps=UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling(),
         shadow_tasks=shadow_tasks,
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(), use_restir=False,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
@@ -2216,6 +2223,7 @@ def shade_hair_gpu(
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
         textures=textures, n_textures=n_textures,
+        nmaps=UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling(),
         shadow_tasks=shadow_tasks,
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(), use_restir=False,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
@@ -2272,7 +2280,9 @@ def shade_enqueue_shadow_gpu(
     var ctx_shadow = ShadeContext(
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin](),
-        textures=textures, n_textures=n_textures, shadow_tasks=shadow_tasks,
+        textures=textures, n_textures=n_textures,
+        nmaps=UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling(),
+        shadow_tasks=shadow_tasks,
         px_scale=Float32(0.0), sobol_matrices=UnsafePointer[UInt32, MutExternalOrigin].unsafe_dangling(), guide=null_guide(), use_restir=False,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),

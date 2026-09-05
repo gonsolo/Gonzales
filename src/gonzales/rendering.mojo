@@ -183,7 +183,8 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                                instances=scene.instances, guide_write=guide_write, spectral=scene.spectral,
                                measured_brdfs=scene.measuredBrdfs, use_restir=use_restir,
                                restir_io=restir_io, pixel_idx=pixel_idx_buf[i],
-                               gi_pending=gi_pending_buf, gi_io=gi_io, sms_io=sms_io)
+                               gi_pending=gi_pending_buf, gi_io=gi_io, sms_io=sms_io,
+                               nmaps=scene.normalSlopeMaps)
         # ── Medium interface transitions ──────────────────────────
         for i in range(n):
             if paths[i].active == 0:

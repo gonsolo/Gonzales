@@ -32,13 +32,24 @@
 # _mnee_walk2's own formulas at n=2 (see test_sms.mojo's regression tests
 # against _mnee_walk/_mnee_walk2 output).
 
-from std.math import sqrt, abs, max, min
-from .geometry import RGB, dot, cross, fr_dielectric, Frame, Vec3f, Point3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Curve_C, Instance_C, Sphere_C
+from std.math import sqrt, abs, max, min, cos, sin
+from .geometry import RGB, dot, cross, fr_dielectric, Frame, Vec3f, Point3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Curve_C, Instance_C, Sphere_C, NormalSlopeMap_C, normal_slope_map_none, _atan2f, PI
 from .rng import PCG32
 from .bvh import ray_sphere_hit, traverse_bvh2_core, BVH2Node
 
 comptime MAX_SMS_VERTICES: Int = 6
-comptime SMS_BERNOULLI_MAX_TRIALS: Int = 16
+# Cap on the Bernoulli estimator's trial count. For a chain whose manifold
+# solution is essentially unique the very first trial matches and this is
+# never approached. It has to be generous for a NORMAL-MAPPED caster, where
+# the whole point is that there are many solutions and each individual one is
+# found by only a small fraction of seeds: the estimator's T is a sample from
+# Geometric(q) with q = P(a random seed finds THIS root), so a 20-root
+# surface whose seeds converge at all a third of the time needs a cap well
+# past 1/q ~ 60 before truncation starts eating energy. Truncating biases
+# DOWNWARD (the tail is never counted), so the cap is a cost/darkness
+# trade-off, not a correctness switch; the reference renderer's own scenes
+# set it to 10^7 and simply rely on the loop breaking early.
+comptime SMS_BERNOULLI_MAX_TRIALS: Int = 512
 # Two Newton solves count as the SAME root when the directions x0->x_i agree
 # to within this much of cos=1 -- ported verbatim from the reference SMS
 # renderer's own uniqueness test (manifold_ss.cpp:
@@ -53,6 +64,22 @@ comptime SMS_BERNOULLI_MAX_TRIALS: Int = 16
 # directly as too much caustic energy (measured 1.57x too bright against the
 # reference on sphere_sms.xml before this was aligned).
 comptime SMS_UNIQUENESS_COS_EPS: Float32 = Float32(1e-5)
+
+# Newton convergence: the walk stops once the L2 norm of the tangential
+# constraint residual falls below this, matching the reference renderer's
+# own `caustics_solver_threshold` (1e-5 in every scene that ships with it).
+#
+# This has to be tight for a reason beyond just solution accuracy: the
+# Bernoulli estimator asks whether two independent solves found the SAME
+# root, with a tolerance of SMS_UNIQUENESS_COS_EPS on the DIRECTION to the
+# vertex. A loose stopping criterion lets two seeds in the same basin halt
+# far enough apart to fail that test, which makes the estimator hunt for a
+# root it has effectively already found -- running the trial count up to its
+# cap and, through the cap's downward truncation, DARKENING the caustic. The
+# 1e-3 used here before (a leftover from the flat 1-/2-vertex walks, where
+# essentially every seed lands in one basin and the question never arises)
+# cost roughly a third of the sphere caustic's energy that way.
+comptime SMS_SOLVER_THRESHOLD: Float32 = Float32(1e-5)
 
 # ── 2x2 matrix helpers ───────────────────────────────────────────────────────
 # Shared with shading.mojo's _mnee_walk2, which imports these from here
@@ -154,11 +181,19 @@ struct SMSVertex(TrivialRegisterPassable):
     # generalizes.
     var dn_du:  Vec3f
     var dn_dv:  Vec3f
+    # This vertex's normal map, in slope space, or `res == 0` for none.
+    # Carried per-vertex rather than passed down through sms_walk because
+    # the walk RE-EVALUATES it: every Newton iteration moves the vertex to
+    # a new point on the sphere, which is a new texel, which is a new
+    # normal and a new pair of normal derivatives. A seed-time-only lookup
+    # would solve the smooth surface's constraint while reporting the
+    # perturbed surface's Jacobian.
+    var nmap:   NormalSlopeMap_C
 
 @always_inline
 def sms_vertex_init() -> SMSVertex:
     var z = Vec3f(Float32(0.0))
-    return SMSVertex(z, z, z, z, Float32(1.0), Int8(0), z, Float32(0.0), z, z)
+    return SMSVertex(z, z, z, z, Float32(1.0), Int8(0), z, Float32(0.0), z, z, normal_slope_map_none())
 
 @always_inline
 def sms_vertex_flat(
@@ -173,7 +208,7 @@ def sms_vertex_flat(
     named constructor so call sites don't each spell out the dummy
     sphere_center/sphere_radius padding a flat vertex never uses."""
     var z = Vec3f(Float32(0.0))
-    return SMSVertex(pos, normal, dp_du, dp_dv, eta, Int8(0), z, Float32(0.0), z, z)
+    return SMSVertex(pos, normal, dp_du, dp_dv, eta, Int8(0), z, Float32(0.0), z, z, normal_slope_map_none())
 
 @always_inline
 def sms_vertex_sphere(
@@ -181,16 +216,19 @@ def sms_vertex_sphere(
     center: Vec3f,
     radius: Float32,
     eta: Float32,
+    nmap: NormalSlopeMap_C = normal_slope_map_none(),
 ) -> SMSVertex:
     """Constructs a sphere-caster SMSVertex from a probe hit's world-space
     position (assumed already ON the sphere, e.g. from a real intersection)
     -- snaps it exactly onto the sphere and derives an initial tangent
     frame via `_sms_reproject_onto_sphere`, matching what `sms_walk` itself
-    will re-derive on every subsequent iteration."""
-    var r = _sms_reproject_onto_sphere(pos, center, radius)
-    var inv_r = Float32(1.0) / radius if radius > Float32(1e-8) else Float32(0.0)
-    return SMSVertex(r[0], r[1], r[2], r[3], eta, Int8(1), center, radius,
-                     r[2] * inv_r, r[3] * inv_r)
+    will re-derive on every subsequent iteration. `nmap`, when present,
+    perturbs the shading normal and its derivatives on top of that (see
+    `_sms_apply_sphere_frame`)."""
+    var z = Vec3f(Float32(0.0))
+    var vtx = SMSVertex(pos, z, z, z, eta, Int8(1), center, radius, z, z, nmap)
+    _sms_apply_sphere_frame(vtx, _sms_reproject_onto_sphere(pos, center, radius))
+    return vtx
 
 @always_inline
 def _sms_reproject_onto_sphere(
@@ -235,6 +273,187 @@ def _sms_sphere_frame_at(
     var dp_du = Vec3f(frame.x.x, frame.x.y, frame.x.z)
     var dp_dv = Vec3f(frame.y.x, frame.y.y, frame.y.z)
     return (x_on_sphere, normal, dp_du, dp_dv)
+
+# ── Normal-mapped specular vertices ──────────────────────────────────────────
+# A manifold walk over a normal-mapped surface needs three things the smooth
+# analytic surface does not provide: the PERTURBED shading normal (the
+# specular constraint is stated in terms of it), and its two first
+# derivatives (the constraint Jacobian's frame-derivative term -- see
+# _sms_eval_vertex -- is built from them). Ordinary shading only ever needs
+# the first, which is why `_apply_normal_map_sphere` in shading.mojo, the
+# camera-ray path's own normal-map lookup, stops there.
+#
+# All three come out of the same four texels of the LEAN slope map
+# (NormalSlopeMap_C), interpolated analytically, exactly as the reference
+# does it (render/normalmap.h, `use_slopes=true`).
+
+@always_inline
+def _nmap_addr(res: Int, u: Float32, v: Float32) -> Tuple[Int, Int, Int, Int, Float32, Float32]:
+    """The shared bilinear addressing of the reference's eval_normal and
+    eval_normal_derivatives: half-texel offset, CLAMP (not wrap), and no
+    V flip. Returns (x0, y0, x1, y1, wx, wy)."""
+    var resf = Float32(res)
+    var duv = Float32(1.0) / resf
+    var px = (u - Float32(0.5)*duv) * resf
+    var py = (v - Float32(0.5)*duv) * resf
+    px = min(max(px, Float32(0.0)), resf - Float32(1.0))
+    py = min(max(py, Float32(0.0)), resf - Float32(1.0))
+    var x0 = Int(px); var y0 = Int(py)
+    if x0 > res - 1: x0 = res - 1
+    if y0 > res - 1: y0 = res - 1
+    var x1 = x0 + 1; var y1 = y0 + 1
+    if x1 > res - 1: x1 = res - 1
+    if y1 > res - 1: y1 = res - 1
+    return (x0, y0, x1, y1, px - Float32(x0), py - Float32(y0))
+
+@always_inline
+def _nmap_slope(m: NormalSlopeMap_C, x: Int, y: Int) -> SIMD[DType.float32, 2]:
+    var i = (y * Int(m.res) + x) * 2
+    return SIMD[DType.float32, 2](m.slopes[i], m.slopes[i + 1])
+
+@always_inline
+def nmap_eval(m: NormalSlopeMap_C, u: Float32, v: Float32) -> Vec3f:
+    """Bilinearly interpolated slope, returned as the UNNORMALIZED local
+    (tangent-space) normal `(-sx, -sy, 1)`."""
+    var a = _nmap_addr(Int(m.res), u, v)
+    var w1x = a[4]; var w1y = a[5]
+    var w0x = Float32(1.0) - w1x; var w0y = Float32(1.0) - w1y
+    var v00 = _nmap_slope(m, a[0], a[1]); var v10 = _nmap_slope(m, a[2], a[1])
+    var v01 = _nmap_slope(m, a[0], a[3]); var v11 = _nmap_slope(m, a[2], a[3])
+    var r0 = v00 * w0x + v10 * w1x
+    var r1 = v01 * w0x + v11 * w1x
+    var sl = r0 * w0y + r1 * w1y
+    return Vec3f(-sl[0], -sl[1], Float32(1.0))
+
+@always_inline
+def nmap_eval_derivs(m: NormalSlopeMap_C, u: Float32, v: Float32) -> Tuple[Vec3f, Vec3f]:
+    """d(local normal)/du and /dv -- the exact analytic derivative of
+    `nmap_eval`'s bilinear interpolant, from the same four texels."""
+    var a = _nmap_addr(Int(m.res), u, v)
+    var wx = a[4]; var wy = a[5]
+    var v00 = _nmap_slope(m, a[0], a[1]); var v10 = _nmap_slope(m, a[2], a[1])
+    var v01 = _nmap_slope(m, a[0], a[3]); var v11 = _nmap_slope(m, a[2], a[3])
+    var resf = Float32(Int(m.res))
+    var tmp = v01 + v10 - v11
+    var tu = (v10 + v00 * (wy - Float32(1.0)) - tmp * wy) * resf
+    var tv = (v01 + v00 * (wx - Float32(1.0)) - tmp * wx) * resf
+    return (Vec3f(-tu[0], -tu[1], Float32(0.0)), Vec3f(-tv[0], -tv[1], Float32(0.0)))
+
+@always_inline
+def _sms_sphere_nmap_frame(
+    m: NormalSlopeMap_C,
+    x_on_sphere: Vec3f,
+    center: Vec3f,
+    radius: Float32,
+    n_geo: Vec3f,
+    dp_du: Vec3f,
+    dp_dv: Vec3f,
+) -> Tuple[Vec3f, Vec3f, Vec3f, Bool]:
+    """The normal-mapped counterpart of `_sms_sphere_frame_at`'s smooth
+    normal: returns (shading_normal, dn_du, dn_dv, ok).
+
+    (u, v) come from the same spherical parameterization the camera-ray
+    path uses (`_apply_normal_map_sphere` -- Mitsuba's own convention:
+    polar angle from +Z, phi = atan2(y, x)), so the walk and the shading
+    that follows it see the SAME perturbed surface.
+
+    `dn_du`/`dn_dv` are returned differentiated with respect to
+    `dp_du`/`dp_dv` -- the caller's own (arbitrary, Frisvad) tangent basis,
+    NOT the sphere's (u, v). The normal map's derivatives are naturally
+    per-texture-coordinate, so they are first assembled into the linear map
+    "world tangential displacement -> change in normal" and then applied to
+    the caller's basis vectors; that map is basis-independent, which is
+    what lets the walk keep using the pole-free Frisvad frame it already
+    reprojects onto. As a check on the construction: with a flat normal map
+    this collapses to dn_du = dp_du/radius, dn_dv = dp_dv/radius -- exactly
+    the smooth-sphere values `_sms_reproject_onto_sphere`'s caller sets.
+
+    ok=False at the parameterization's poles (where the u tangent vanishes
+    and no meaningful texture frame exists); the caller falls back to the
+    smooth sphere there, as the camera-ray path already does."""
+    var local = x_on_sphere - center
+    var rd2 = local[0]*local[0] + local[1]*local[1]
+    var rd = sqrt(rd2)
+    if rd <= Float32(1e-6) or radius <= Float32(1e-8):
+        return (n_geo, Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), False)
+    var theta = _atan2f(rd, local[2])
+    var phi = _atan2f(local[1], local[0])
+    if phi < Float32(0.0):
+        phi += Float32(2.0) * PI
+    var u = phi / (Float32(2.0) * PI)
+    var v = theta / PI
+    # Sphere::compute_surface_interaction's parametric tangents.
+    var e_u = Vec3f(-local[1], local[0], Float32(0.0)) * (Float32(2.0) * PI)
+    var inv_rd = Float32(1.0) / rd
+    var e_v = Vec3f(local[2] * local[0] * inv_rd, local[2] * local[1] * inv_rd, -rd) * PI
+    var eu2 = dot(e_u, e_u)
+    var ev2 = dot(e_v, e_v)
+    if eu2 <= Float32(1e-12) or ev2 <= Float32(1e-12):
+        return (n_geo, Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), False)
+    # Base (geometric) shading frame and its derivative, core/frame.h's
+    # compute_shading_frame / compute_shading_frame_derivative. The smooth
+    # sphere's own normal derivatives are dp_d{u,v}/radius.
+    var inv_r = Float32(1.0) / radius
+    var dnu_geo = e_u * inv_r
+    var dnv_geo = e_v * inv_r
+    var s_un = e_u - n_geo * dot(n_geo, e_u)
+    var s_len2 = dot(s_un, s_un)
+    if s_len2 <= Float32(1e-12):
+        return (n_geo, Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), False)
+    var inv_len_s = Float32(1.0) / sqrt(s_len2)
+    var bs = s_un * inv_len_s
+    var bt = cross(n_geo, bs)
+    var dot_n_dpdu = dot(n_geo, e_u)
+    var du_s = (dnu_geo * (-dot_n_dpdu) - n_geo * dot(dnu_geo, e_u)) * inv_len_s
+    var dv_s = (dnv_geo * (-dot_n_dpdu) - n_geo * dot(dnv_geo, e_u)) * inv_len_s
+    du_s = du_s - bs * dot(du_s, bs)
+    dv_s = dv_s - bs * dot(dv_s, bs)
+    var du_t = cross(dnu_geo, bs) + cross(n_geo, du_s)
+    var dv_t = cross(dnv_geo, bs) + cross(n_geo, dv_s)
+    # Perturbed normal and its (u, v) derivatives, bsdfs/normalmap.cpp's
+    # frame() / frame_derivative().
+    var nl = nmap_eval(m, u, v)
+    var dnl = nmap_eval_derivs(m, u, v)
+    var world_n = bs * nl[0] + bt * nl[1] + n_geo * nl[2]
+    var wn_len2 = dot(world_n, world_n)
+    if wn_len2 <= Float32(1e-12):
+        return (n_geo, Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), False)
+    var inv_len_n = Float32(1.0) / sqrt(wn_len2)
+    world_n = world_n * inv_len_n
+    var du_n = (bs * dnl[0][0] + bt * dnl[0][1] + n_geo * dnl[0][2]
+                + du_s * nl[0] + du_t * nl[1] + dnu_geo * nl[2]) * inv_len_n
+    var dv_n = (bs * dnl[1][0] + bt * dnl[1][1] + n_geo * dnl[1][2]
+                + dv_s * nl[0] + dv_t * nl[1] + dnv_geo * nl[2]) * inv_len_n
+    du_n = du_n - world_n * dot(du_n, world_n)
+    dv_n = dv_n - world_n * dot(dv_n, world_n)
+    # Re-express in the caller's tangent basis. e_u and e_v are orthogonal
+    # on a sphere, so the displacement -> (du, dv) inverse is just two
+    # projections.
+    var iu = Float32(1.0) / eu2
+    var iv = Float32(1.0) / ev2
+    var dn_du = du_n * (dot(dp_du, e_u) * iu) + dv_n * (dot(dp_du, e_v) * iv)
+    var dn_dv = du_n * (dot(dp_dv, e_u) * iu) + dv_n * (dot(dp_dv, e_v) * iv)
+    return (world_n, dn_du, dn_dv, True)
+
+@always_inline
+def _sms_apply_sphere_frame(mut vtx: SMSVertex, r: Tuple[Vec3f, Vec3f, Vec3f, Vec3f]):
+    """Writes a freshly reprojected sphere frame into `vtx`, applying the
+    vertex's normal map (if it has one) on top of the smooth frame. The one
+    place that decides what a curved vertex's shading normal and normal
+    derivatives are, shared by the seed constructor and every Newton
+    iteration -- they MUST agree, or the walk converges to the root of a
+    different surface than the one whose Jacobian it reports."""
+    vtx.pos = r[0]; vtx.dp_du = r[2]; vtx.dp_dv = r[3]
+    var inv_r = Float32(1.0) / vtx.sphere_radius if vtx.sphere_radius > Float32(1e-8) else Float32(0.0)
+    if vtx.nmap.res > Int32(0):
+        var nm = _sms_sphere_nmap_frame(vtx.nmap, r[0], vtx.sphere_center, vtx.sphere_radius,
+                                        r[1], r[2], r[3])
+        if nm[3]:
+            vtx.normal = nm[0]; vtx.dn_du = nm[1]; vtx.dn_dv = nm[2]
+            return
+    vtx.normal = r[1]
+    vtx.dn_du = r[2] * inv_r
+    vtx.dn_dv = r[3] * inv_r
 
 @always_inline
 def _sms_reproject_onto_sphere_anchored(
@@ -474,17 +693,15 @@ def sms_walk(
     `dx1_dxlight` is the Jacobian |d(vertex_0 position)/d(light uv)| --
     exactly _mnee_walk's/_mnee_walk2's own quantity of the same name."""
     var verts = verts_init.copy()
-    # A jittered seed (sms_seed_jitter moves .pos within the tangent plane)
+    # A randomized seed (sms_seed_randomize moves .pos over the surface)
     # can land slightly off a curved vertex's true surface -- snap it back
     # on before the first iteration reads normal/dp_du/dp_dv from it.
     var has_curved = False
     for i0 in range(n):
         if verts[i0].is_sphere != Int8(0):
             has_curved = True
-            var r0 = _sms_reproject_onto_sphere(verts[i0].pos, verts[i0].sphere_center, verts[i0].sphere_radius)
-            verts[i0].pos = r0[0]; verts[i0].normal = r0[1]; verts[i0].dp_du = r0[2]; verts[i0].dp_dv = r0[3]
-            var inv_r0 = Float32(1.0) / verts[i0].sphere_radius if verts[i0].sphere_radius > Float32(1e-8) else Float32(0.0)
-            verts[i0].dn_du = r0[2] * inv_r0; verts[i0].dn_dv = r0[3] * inv_r0
+            _sms_apply_sphere_frame(verts[i0],
+                _sms_reproject_onto_sphere(verts[i0].pos, verts[i0].sphere_center, verts[i0].sphere_radius))
     var converged = False
     for _iter in range(20):
         var ev = InlineArray[SMSVertexEval, MAX_SMS_VERTICES](fill=_sms_eval_bad())
@@ -508,7 +725,7 @@ def sms_walk(
         var err = Float32(0.0)
         for i in range(n):
             err = max(err, sqrt(ev[i].cv[0]*ev[i].cv[0] + ev[i].cv[1]*ev[i].cv[1]))
-        if err < Float32(1e-3):
+        if err < SMS_SOLVER_THRESHOLD:
             converged = True; break
         # ── Block tridiagonal forward sweep ────────────────────────────────
         var cprime = InlineArray[SIMD[DType.float32, 4], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 4](Float32(0.0)))
@@ -598,9 +815,7 @@ def sms_walk(
                         var ra = _sms_reproject_onto_sphere_anchored(anchor, trial[i].pos, trial[i].sphere_center, trial[i].sphere_radius, anchor_on_surface,
                             bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
                         if ra[4]:
-                            trial[i].pos = ra[0]; trial[i].normal = ra[1]; trial[i].dp_du = ra[2]; trial[i].dp_dv = ra[3]
-                            var inv_ra = Float32(1.0) / trial[i].sphere_radius if trial[i].sphere_radius > Float32(1e-8) else Float32(0.0)
-                            trial[i].dn_du = ra[2] * inv_ra; trial[i].dn_dv = ra[3] * inv_ra
+                            _sms_apply_sphere_frame(trial[i], (ra[0], ra[1], ra[2], ra[3]))
                         else:
                             # Anchor ray missed the sphere or was blocked by
                             # other scene geometry first -- this step is
@@ -633,6 +848,32 @@ def sms_walk(
     var zero_positions = InlineArray[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
     if not converged:
         return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
+    # Post-solve validity check, straight from the reference
+    # (manifold_ss.cpp's newton_solver: "the half-vector formulation of
+    # manifold walks will often converge to invalid solutions that are
+    # actually reflections -- here we need to reject those"). A refractive
+    # vertex must have its two neighbours on OPPOSITE sides of the surface.
+    #
+    # It has to be the GEOMETRIC normal: on a normal-mapped vertex the
+    # shading normal -- the one _sms_eval_vertex's own sign test uses,
+    # correctly, since the constraint is stated in it -- can be tilted far
+    # enough that a path physically entering and leaving on the same side
+    # still passes. Cheap, and it is the check that keeps a randomly-seeded
+    # walk from reporting the sphere's far side as a solution.
+    for i in range(n):
+        if verts[i].eta == Float32(1.0):
+            continue
+        var gn = verts[i].normal
+        if verts[i].is_sphere != Int8(0):
+            var gnv = verts[i].pos - verts[i].sphere_center
+            var gnl = sqrt(dot(gnv, gnv))
+            if gnl <= Float32(1e-8):
+                return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
+            gn = gnv * (Float32(1.0) / gnl)
+        var wx = (x0 if i == 0 else verts[i-1].pos) - verts[i].pos
+        var wy = (xL if i == n-1 else verts[i+1].pos) - verts[i].pos
+        if dot(gn, wx) * dot(gn, wy) >= Float32(0.0):
+            return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
     # ── Final recompute: BSDF product + light-Jacobian chain ────────────────
     var evf = InlineArray[SMSVertexEval, MAX_SMS_VERTICES](fill=_sms_eval_bad())
     for i in range(n):
@@ -710,16 +951,59 @@ def sms_walk(
 # ── Random seeding + Bernoulli-trial reciprocal estimator (5.2/5.3) ─────────
 
 @always_inline
-def sms_seed_jitter(mut verts: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int, mut pcg: PCG32, jitter_scale: Float32):
-    """5.2: perturb each vertex's initial position within its own flat
-    triangle's tangent plane by a uniform random offset. `jitter_scale`
-    should be small relative to the flat-triangle assumption's own
-    validity radius -- the caller derives it from inter-vertex probe
-    spacing (see _mnee_area_light_contribute)."""
+def sms_seed_randomize(x0: Vec3f, mut verts: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int, mut pcg: PCG32, jitter_scale: Float32):
+    """5.2: draw a fresh random Newton seed for each vertex of the chain.
+
+    A FLAT vertex is perturbed within its own triangle's tangent plane by a
+    uniform random offset of at most `jitter_scale`, which the caller
+    derives from inter-vertex probe spacing -- the straight-line probe
+    already established that the solution is near that triangle, and the
+    flat-tangent-plane assumption is only valid nearby anyway.
+
+    A CURVED (sphere) vertex is instead seeded UNIFORMLY OVER THE WHOLE
+    SPHERE, which is what the reference renderer does (its `sample_path`
+    draws the seed with `square_to_uniform_sphere`). Local jitter is the
+    wrong proposal there for two separate reasons. The estimator's own
+    correctness is one: `sms_solve_bernoulli` weights its result by the
+    reciprocal probability of REDISCOVERING the solution it found, which is
+    only an unbiased estimate of the sum over ALL solutions if every
+    solution is reachable from the seed distribution. The other is that on a
+    normal-mapped sphere there genuinely are many solutions, spread right
+    across the surface -- jittering around one probe hit would find the same
+    root every time and silently drop the rest of the caustic.
+
+    The uniform sphere point is not used as the seed directly: as in the
+    reference, a ray is cast from the shading point `x0` TOWARDS it and the
+    first surface hit becomes the seed. That is what makes every seed a
+    point actually reachable from x0 along a straight line, instead of
+    (half the time) a point on the far side that the Newton walk has to
+    escape from first. Both are valid proposal distributions -- the
+    estimator's reciprocal weighting makes it unbiased either way -- but
+    this one wastes far fewer solves, which for a fixed trial budget is the
+    difference between resolving a root and never seeing it."""
     for i in range(n):
-        var ju = (pcg.next_float()*Float32(2.0) - Float32(1.0)) * jitter_scale
-        var jv = (pcg.next_float()*Float32(2.0) - Float32(1.0)) * jitter_scale
-        verts[i].pos = verts[i].pos + verts[i].dp_du*ju + verts[i].dp_dv*jv
+        if verts[i].is_sphere != Int8(0):
+            var z = Float32(1.0) - Float32(2.0)*pcg.next_float()
+            var r = sqrt(max(Float32(0.0), Float32(1.0) - z*z))
+            var phi = Float32(2.0) * PI * pcg.next_float()
+            var dir = Vec3f(r*cos(phi), r*sin(phi), z)
+            var target = verts[i].sphere_center + dir * verts[i].sphere_radius
+            verts[i].pos = target
+            var toward = target - x0
+            var tl2 = dot(toward, toward)
+            if tl2 > Float32(1e-12):
+                var d = toward * (Float32(1.0) / sqrt(tl2))
+                var ctr = verts[i].sphere_center
+                var t_hit = ray_sphere_hit(
+                    Point3f(ctr[0], ctr[1], ctr[2]), verts[i].sphere_radius,
+                    Ray_C(Point3f(x0[0], x0[1], x0[2]), Vec3f(d[0], d[1], d[2])),
+                    Float32(1e-4), Float32(1e30))
+                if t_hit > Float32(0.0):
+                    verts[i].pos = x0 + d * t_hit
+        else:
+            var ju = (pcg.next_float()*Float32(2.0) - Float32(1.0)) * jitter_scale
+            var jv = (pcg.next_float()*Float32(2.0) - Float32(1.0)) * jitter_scale
+            verts[i].pos = verts[i].pos + verts[i].dp_du*ju + verts[i].dp_dv*jv
 
 @always_inline
 def sms_same_solution(
@@ -777,7 +1061,7 @@ def sms_solve_bernoulli(
     the very first trial matches, so this degenerates to trial_count~1 --
     i.e. plain single-solve behavior -- with negligible overhead."""
     var seed0 = verts_seed.copy()
-    sms_seed_jitter(seed0, n, pcg, jitter_scale)
+    sms_seed_randomize(x0, seed0, n, pcg, jitter_scale)
     var _walk0 = sms_walk(x0, xL, seed0, n, ldp_du, ldp_dv,
         bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
     var ok0 = _walk0[0]
@@ -792,7 +1076,7 @@ def sms_solve_bernoulli(
     for _t in range(SMS_BERNOULLI_MAX_TRIALS):
         trials += Float32(1.0)
         var seed_k = verts_seed.copy()
-        sms_seed_jitter(seed_k, n, pcg, jitter_scale)
+        sms_seed_randomize(x0, seed_k, n, pcg, jitter_scale)
         var _walkk = sms_walk(x0, xL, seed_k, n, ldp_du, ldp_dv,
             bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
         var okk = _walkk[0]

@@ -1,7 +1,7 @@
 from std.memory import alloc
 from std.math import sqrt, cos, sin, max, min, exp, floor, log
 from max.algorithm import parallelize
-from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C, _is_real_ptr, store_vec3, _atan2f
+from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, _is_real_ptr, store_vec3, _atan2f
 from .rng import PCG32
 from .spectrum import SpectralHandle
 
@@ -129,6 +129,18 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
     var gpuTextures: UnsafePointer[GpuTexture_C, MutExternalOrigin]
     var gpuTextureCount: Int64
 
+    # One NormalSlopeMap_C per entry of `textures` (same indices, so a
+    # material's `normal_tex_idx` addresses both), built once at scene-build
+    # time for every texture some material uses as a NORMAL map. Only the
+    # SMS/MNEE manifold walk reads these -- ordinary shading samples the
+    # normal map through the usual texture path; the walk additionally needs
+    # the normal's analytic DERIVATIVES, which only the slope-space form
+    # provides (see geometry.mojo's NormalSlopeMap_C). Entries for textures
+    # that are not normal maps have `res == 0`; the whole array is dangling
+    # for callers that never built one, which every reader tolerates by
+    # checking `res` first.
+    var normalSlopeMaps: UnsafePointer[NormalSlopeMap_C, MutExternalOrigin]
+
 @always_inline
 def _mk_sd_full(
     bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
@@ -224,6 +236,7 @@ def _mk_sd_full(
         measuredBrdfs=measuredBrdfs, measuredBrdfCount=measuredBrdfCount,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         gpuTextures=gpuTextures, gpuTextureCount=gpuTextureCount,
+        normalSlopeMaps=UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling(),
     )
 
 # ── Infinite/distant-light emission + NEE sampling (shared by bdpt.mojo and

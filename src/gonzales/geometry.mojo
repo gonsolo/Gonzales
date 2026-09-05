@@ -889,6 +889,37 @@ struct GpuTexture_C(TrivialRegisterPassable):
     var n_levels: Int32                              # number of mip levels stored in `data` (>=1)
 
 @fieldwise_init
+struct NormalSlopeMap_C(TrivialRegisterPassable):
+    """A normal map in LEAN SLOPE space, level 0 only -- the representation
+    the reference SMS renderer's manifold walk reads (render/normalmap.h
+    `eval_normal`/`eval_normal_derivatives` with `use_slopes=true`).
+
+    Ordinary shading samples a normal map through `sample_texture`, which is
+    enough when only the normal itself is needed. A manifold walk needs the
+    normal's DERIVATIVES too (they are what the specular constraint's
+    Jacobian is built from), and bilinear interpolation of the raw RGB gives
+    a derivative that disagrees with the reference's. So the map is stored a
+    second time, converted once at scene-build time:
+
+        n = normalize(2*rgb - 1);  slope = (-n.x/n.z, -n.y/n.z)
+
+    with the local normal recovered as the (unnormalized) `(-sx, -sy, 1)`.
+    Interpolating in slope space is what makes the derivative analytic and
+    exactly matches the reference; it is also invariant to the RGB
+    normalization, so both spellings agree texel-for-texel and differ only
+    BETWEEN texels.
+
+    Square, power-of-two maps only (the reference assumes the same).
+    `res <= 0` means "this texture has no slope map" -- always test that
+    before touching `slopes`, which is dangling in that case."""
+    var slopes: UnsafePointer[Float32, MutExternalOrigin]  # 2 floats/texel, row-major
+    var res:    Int32                                      # 0 => absent
+
+@always_inline
+def normal_slope_map_none() -> NormalSlopeMap_C:
+    return NormalSlopeMap_C(UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), Int32(0))
+
+@fieldwise_init
 struct ShadowTask_C(TrivialRegisterPassable):
     """A deferred shadow ray with its pre-computed radiance contribution."""
     var origin: Point3f

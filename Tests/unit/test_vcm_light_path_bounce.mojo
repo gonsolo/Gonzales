@@ -23,7 +23,7 @@ from gonzales.geometry import (
     RGB, Point3f, Vec3f, Ray_C, Intersection_C, LightSampler_C, PrimId_C,
     AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, Sphere_C,
     Medium_C, MediumInterface_C, Grid_C, Instance_C, MeasuredBRDF_C,
-    GpuTexture_C, TriangleMesh_C, Material_C, MatKind, Curve_C,
+    GpuTexture_C, NormalSlopeMap_C, TriangleMesh_C, Material_C, MatKind, Curve_C,
 )
 from gonzales.bvh import SceneDescriptor2_C, BVH2Node, build_bvh2, traverse_bvh2_core
 from gonzales.rng import PCG32
@@ -126,6 +126,7 @@ def _build_scene() -> SceneDescriptor2_C:
         UnsafePointer[MeasuredBRDF_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
         null_spectral_handle(),
         UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling(),
     )
 
 def test_wavefront_split_matches_original_light_path_exactly() raises:

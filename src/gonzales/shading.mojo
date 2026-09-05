@@ -1,7 +1,7 @@
 from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory import alloc
-from .geometry import RGB, SampledSpectrum, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, ShadowTask_C, LightSampler_C, light_sampler_sample, light_sampler_pdf, Instance_C, MeasuredBRDF_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
+from .geometry import RGB, SampledSpectrum, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, ShadowTask_C, LightSampler_C, light_sampler_sample, light_sampler_pdf, Instance_C, MeasuredBRDF_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
 from .rng import PCG32
@@ -15,7 +15,7 @@ from .restir_di import DIReservoir, di_reservoir_init, di_target_pdf, ReservoirI
 from .restir_gi import GIReservoir, gi_reservoir_init, gi_target_pdf, GIReservoirIO, gi_reservoir_io_null, gi_temporal_spatial_combine
 from .sms import (
     MAX_SMS_VERTICES, SMSVertex, sms_vertex_init, sms_vertex_flat, sms_vertex_sphere, sms_vertex_mats,
-    mat22_mul, mat22_mul_v, mat22_inv, sms_solve_bernoulli, sms_walk,
+    mat22_mul, mat22_mul_v, mat22_inv, sms_solve_bernoulli, sms_walk, SMS_SOLVER_THRESHOLD,
 )
 from .restir_sms import SMSReservoir, sms_reservoir_init, sms_target_pdf, SMSReservoirIO, sms_reservoir_io_null
 
@@ -94,6 +94,15 @@ struct ShadeContext:
     var tex_filenames:    UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin]
     var textures:         UnsafePointer[GpuTexture_C, MutExternalOrigin]
     var n_textures:       Int
+    # Slope-space copies of the normal maps, indexed exactly like
+    # `tex_filenames`/`textures` (so a Material_C's `normal_tex_idx`
+    # addresses all three). Read ONLY by the SMS/MNEE manifold walk, which
+    # needs the normal's derivatives and not just the normal -- see
+    # geometry.mojo's NormalSlopeMap_C. Dangling on the GPU call sites (the
+    # device-side scene upload has no slope maps yet, so a normal-mapped
+    # caustic caster falls back to its smooth surface there, exactly as it
+    # did before these existed).
+    var nmaps:            UnsafePointer[NormalSlopeMap_C, MutExternalOrigin]
     var shadow_tasks:     UnsafePointer[ShadowTask_C, MutExternalOrigin]
     var px_scale:         Float32
     var sobol_matrices:   UnsafePointer[UInt32, MutExternalOrigin]
@@ -2121,7 +2130,7 @@ def _mnee_walk2(
         _ = a0; _ = c1
         # ── Convergence ──────────────────────────────────────────────────────
         var err = max(max(abs(cv0[0]),abs(cv0[1])), max(abs(cv1[0]),abs(cv1[1])))
-        if err < Float32(1e-3):
+        if err < SMS_SOLVER_THRESHOLD:
             converged = True; break
         # ── Block tridiagonal solve: [b0 c0; a1 b1]*[dx0;dx1]=[cv0;cv1] ────
         var (Li0, det0) = mat22_inv(b0)
@@ -2272,7 +2281,7 @@ def _mnee_walk(
         var b10 = dot(dH_du, tv); var b11 = dot(dH_dv, tv)
         var det_b = b00 * b11 - b01 * b10
         # Convergence check
-        if max(abs(cs), abs(ct)) < Float32(1e-3):
+        if max(abs(cs), abs(ct)) < SMS_SOLVER_THRESHOLD:
             return (True, x1, det_b, eta)
         # Newton step: solve b * [du, dv] = [cs, ct]
         if abs(det_b) < Float32(1e-5):
@@ -2464,7 +2473,18 @@ def _sms_vertex_from_hit(
             return (sms_vertex_init(), False)
         var n_raw = to_hit * (Float32(1.0) / to_hit_len)
         var eta = ior if dot(n_raw, shadow_dir) <= Float32(0.0) else (Float32(1.0) / ior)
-        return (sms_vertex_sphere(hit_pt, center, sph.radius, eta), True)
+        # A normal-mapped caster is a genuinely different manifold: the
+        # perturbed normal is what the specular constraint is stated in,
+        # and the walk has to re-read the map at every position it visits,
+        # so the map travels ON the vertex (see sms.mojo's SMSVertex.nmap).
+        # Without this the walk solves the SMOOTH sphere -- one broad root
+        # per shading point instead of the many sharp ones a normal map
+        # creates, which is the difference between a smooth wash and actual
+        # caustic filaments.
+        var nmap = normal_slope_map_none()
+        if mat.normal_tex_idx >= Int32(0) and _is_real_ptr(ctx.nmaps):
+            nmap = ctx.nmaps[Int(mat.normal_tex_idx)]
+        return (sms_vertex_sphere(hit_pt, center, sph.radius, eta, nmap), True)
     elif inter.primId.type == Int8(0):
         var (mesh, v0, v1, v2, _) = _get_tri_verts(inter, ctx.meshes)
         var p0 = Vec3f(mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
@@ -2662,45 +2682,36 @@ def _sms_probe_and_solve(
         verts1[0] = v1
         if is_sphere1:
             # A curved caster needs sms_walk's general (curvature-aware)
-            # Newton solve -- _mnee_walk assumes a flat tangent plane IS
-            # the surface, which only holds for a triangle.
-            var _walk1 = sms_walk(hit_point, light_point, verts1.copy(), 1, ldp_du_v, ldp_dv_v,
+            # Newton solve -- _mnee_walk assumes a flat tangent plane IS the
+            # surface, which only holds for a triangle -- and it needs the
+            # FULL SMS estimator around that solve rather than one
+            # deterministic probe-seeded shot.
+            #
+            # MNEE's single-seed shortcut is justified by uniqueness: for a
+            # flat refractor the solution given a probe is essentially the
+            # only one, so finding it once is finding all of it. A sphere
+            # already strains that, and a NORMAL-MAPPED sphere breaks it
+            # outright -- the perturbed surface has many specular solutions
+            # per shading point, and they are exactly what the caustic's
+            # filament structure is made of. One deterministic seed reports
+            # a single root with weight 1 and drops the rest, which renders
+            # as the right pattern at a fraction of the right brightness.
+            # sms_solve_bernoulli draws its seeds at random over the sphere
+            # instead and weights by the reciprocal probability of
+            # rediscovering the root it found (Zeltner et al. 2020), which
+            # is an unbiased estimate of the sum over all of them. The
+            # reflection/validity rejection the reference applies after each
+            # solve now lives inside sms_walk itself, so it covers every
+            # trial rather than just this call site's own.
+            var _bern1 = sms_solve_bernoulli(
+                hit_point, light_point, verts1, 1, ldp_du_v, ldp_dv_v,
+                Float32(0.0), pcg,
                 ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                 ctx.lights.spheres, ctx.lights.sphere_count)
-            var ok1 = _walk1[0]
-            var pos1 = _walk1[1].copy()
-            var bsdf1 = _walk1[2]
-            var jac1 = _walk1[3]
-            # Same refraction/reflection consistency check the real SMS
-            # reference renderer applies after every solve
-            # (manifold_ss.cpp, SpecularManifoldSingleScatter::
-            # newton_solver: "the half-vector formulation of manifold walks
-            # will often converge to invalid solutions that are actually
-            # reflections -- here we need to reject those"). A single-
-            # vertex idealized refraction (see the has_second_glass comment
-            # above for why a sphere is modeled this way at all) must have
-            # x0 and the light on OPPOSITE sides of the sphere's local
-            # tangent plane at the solved point; the coupled seed-distance
-            # heuristic this replaced was specific to the old 2-vertex
-            # entry+exit model and doesn't apply to a single idealized
-            # bend.
-            if ok1:
-                var solved_normal = pos1[0] - verts1[0].sphere_center
-                var sn_len = sqrt(dot(solved_normal, solved_normal))
-                if sn_len <= Float32(1e-8):
-                    ok1 = False
-                else:
-                    solved_normal = solved_normal * (Float32(1.0) / sn_len)
-                    var wx = hit_point - pos1[0]
-                    var wy = light_point - pos1[0]
-                    var cos_x = dot(solved_normal, wx)
-                    var cos_y = dot(solved_normal, wy)
-                    if cos_x * cos_y >= Float32(0.0):
-                        ok1 = False
-            if not ok1:
+            if not _bern1[0]:
                 return (True, False, 1, verts1.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
-            verts1[0].pos = pos1[0]
-            return (True, True, 1, verts1.copy(), bsdf1, jac1, Float32(1.0))
+            verts1[0].pos = _bern1[1][0]
+            return (True, True, 1, verts1.copy(), _bern1[2], _bern1[3], _bern1[4])
         # --- 1-vertex MNEE fast path (flat triangle only, unchanged) ---
         var (mnee_ok, x1_f, det_b, eta_f) = _mnee_walk(
             hit_point, light_point, x1_init, pgeo_n, pdp_du, pdp_dv, eta1)
@@ -4365,6 +4376,7 @@ def shade_core_cpu_nee(
     gi_pending: UnsafePointer[GIPendingX1, MutExternalOrigin] = UnsafePointer[GIPendingX1, MutExternalOrigin].unsafe_dangling(),
     gi_io: GIReservoirIO = gi_reservoir_io_null(),
     sms_io: SMSReservoirIO = sms_reservoir_io_null(),
+    nmaps: UnsafePointer[NormalSlopeMap_C, MutExternalOrigin] = UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling(),
 ):
     var path_ptr = paths + tid
     if path_ptr[].active == 0:
@@ -4374,6 +4386,7 @@ def shade_core_cpu_nee(
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=tex_filenames,
         textures=UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(), n_textures=0,
+        nmaps=nmaps,
         shadow_tasks=UnsafePointer[ShadowTask_C, MutExternalOrigin].unsafe_dangling(),
         px_scale=Float32(0.0), sobol_matrices=sobol_matrices, guide=guide, use_restir=use_restir,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
