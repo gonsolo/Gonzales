@@ -3325,10 +3325,16 @@ def _nee_area_lights[enqueue_shadow: Bool](
                 # refracted contribution -- in that case the straight shadow ray
                 # below is deliberately skipped (MNEE replaces it, it does not
                 # supplement it).
+                # Record whether MNEE/SMS took over the direct lighting here,
+                # so a later BSDF-sampled arrival at the emitter through a
+                # specular chain -- the SAME path family this strategy just
+                # sampled -- is not counted a second time. See
+                # PathState_C.sms_covered.
                 var used_mnee = _mnee_area_light_contribute(
                     path_ptr, ctx, normal, hit_point, alb, shadow_dir, dist,
                     light_point, ldp_du_v, ldp_dv_v, al,
                     al.total_area / light_sel_pdf_nee, lobe_w)
+                path_ptr[].sms_covered = Int8(1) if used_mnee else Int8(0)
                 if not used_mnee:
                     _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)
 
@@ -4303,6 +4309,11 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         var al_idx = Int(inter.primId.id1)
         var al = ctx.lights.area_lights[al_idx]
         var emission = al.emission
+        if path_ptr[].specularBounce == Int8(1) and path_ptr[].sms_covered == Int8(1):
+            # Already counted: the last non-specular vertex sampled exactly
+            # this path family with MNEE/SMS (see PathState_C.sms_covered).
+            path_ptr[].active = 0
+            return
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
             path_ptr[].estimate += path_ptr[].throughput * emission
         else:

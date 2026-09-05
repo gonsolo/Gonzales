@@ -492,6 +492,17 @@ struct PathState_C(TrivialRegisterPassable):
     var specularBounce: Int8   # 1 if previous scatter was a delta BSDF (mirror/glass)
     var pending_mat: Int8      # GPU only: MatKind of material awaiting per-material kernel (0 = none)
     var volume_scattered: Int8 # 1 if this bounce was a volume scatter; shade_nee_core skips miss handling
+    # 1 if the last NON-specular vertex already accounted for this light via
+    # MNEE/SMS. That strategy samples exactly the paths
+    # diffuse -> (specular chain) -> emitter, so when the path then REACHES
+    # an emitter through a specular chain, the BSDF-sampling strategy is
+    # reproducing a path already counted and its emission must be dropped.
+    # Without this the two are simply summed: on the SMS caustic scene that
+    # doubled the caustic (0.44 against a path-traced 0.234, with each
+    # strategy contributing ~0.23 on its own). The reference integrator does
+    # the same thing (path_sms_ss.cpp: it suppresses the emitter hit when
+    # the previous vertex was a caustic receiver).
+    var sms_covered: Int8
     # lastBsdfPdf: cosine-hemisphere PDF from the previous scatter (cos_theta / pi).
     # Used for MIS weighting when the next bounce hits an emitter.
     var lastBsdfPdf: Float32

@@ -119,7 +119,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     RGB(Float32(0.0)),
                     RGB(Float32(0.0)),
                     Int32(0), pcg_state, pcg_inc,
-                    Int8(1), Int8(0), Int8(0), Int8(0),
+                    Int8(1), Int8(0), Int8(0), Int8(0), Int8(0),
                     Float32(0.0),
                     Int32(-1),
                     Int32(3), sobol_idx,
