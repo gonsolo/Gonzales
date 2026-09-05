@@ -951,6 +951,131 @@ def _bdpt_world_to_raster(
         return (False, Float32(0), Float32(0), Float32(0))
     return (True, fx, fy, cos_theta)
 
+def _bdpt_connect_to_camera(
+    lv: BDPTVertex,
+    sd: SceneDescriptor2_C,
+    scratch: UnsafePointer[Intersection_C, MutExternalOrigin],
+    cam_pos: Vec3f,
+    w2c: UnsafePointer[Float32, MutExternalOrigin],
+    c2r: UnsafePointer[Float32, MutExternalOrigin],
+    fw: Int32, fh: Int32,
+    px_scale: Float32,
+    n_light_paths_f: Float32,
+    mis_vm_weight_factor: Float32,
+) -> Tuple[Bool, Int32, RGB]:
+    """The t=1 strategy: connect a LIGHT-subpath vertex directly to the
+    camera and return the film pixel it lands on plus its contribution.
+    Ported from SmallVCM's `ConnectToCamera` (vertexcm.hxx), the same
+    reference the rest of this file's MIS quantities came from.
+
+    This strategy did not exist here before, and measurement says it is
+    20.8% of a cornell-box image (pbrt's own per-strategy BDPT output).
+    Since `_connect`'s MIS weight already RESERVES its share through the
+    dVC/dVCM recursion, leaving it out did not merely omit those paths --
+    it under-weighted every other strategy by that share, which is what
+    made --vcm come out at 0.774 of gonzales's own path tracer.
+
+    Radiometry, following SmallVCM exactly:
+
+        imagePlaneDist       = 1 / px_scale        (pixels per world unit
+                                                    at unit distance -- the
+                                                    same convention the
+                                                    camera-path dVCM's
+                                                    cameraPdfW already uses)
+        imageToSolidAngle    = (imagePlaneDist/cosAtCamera)^2 / cosAtCamera
+        imageToSurface       = imageToSolidAngle * |cosToCamera| / dist^2
+        contrib              = beta * f * imageToSurface / lightSubPathCount
+
+    with one deliberate difference in bookkeeping: SmallVCM's
+    `BSDF::Evaluate` returns the BSDF WITHOUT the outgoing cosine and picks
+    it up again inside imageToSurface, whereas this file's `_eval_vertex`
+    returns BSDF x cos. So the cosine is taken from `_eval_vertex` and
+    imageToSolidAngle is used here WITHOUT it -- multiplying both would
+    square the cosine and darken grazing geometry.
+
+    Only MIS-scoped (or light-source) vertices are connected. An unscoped
+    vertex gets `weight = 1` from `_connect`, which that function documents
+    as already being the complete estimate for its kind; splatting such a
+    vertex too would double-count it.
+
+    Returns (ok, pixel_index, contribution)."""
+    if lv.is_delta != Int32(0) or lv.is_surface == Int32(0):
+        return (False, Int32(-1), RGB(Float32(0)))
+    if not (lv.is_light == Int32(1) or _bdpt_vertex_mis_scoped(lv)):
+        return (False, Int32(-1), RGB(Float32(0)))
+
+    var lp = lv.pos.to_simd()
+    var d3 = cam_pos - lp
+    var dist2 = dot(d3, d3)
+    if dist2 < Float32(1e-8):
+        return (False, Int32(-1), RGB(Float32(0)))
+    var dist = sqrt(dist2)
+    var dir_to_cam = d3 * (Float32(1) / dist)
+
+    var pr = _bdpt_world_to_raster(lp, w2c, c2r, fw, fh)
+    if not pr[0]:
+        return (False, Int32(-1), RGB(Float32(0)))
+    var cos_at_camera = pr[3]
+    if cos_at_camera <= Float32(1e-6):
+        return (False, Int32(-1), RGB(Float32(0)))
+
+    # A light-source vertex is evaluated the way `_connect` evaluates one:
+    # f = Le, with NO cosine and no 1/pi -- its cosine is supplied by the
+    # geometry factor, and emission only leaves the front face. Routing it
+    # through `_eval_vertex` instead would apply a diffuse BSDF to an
+    # emitter and silently lose that vertex's share.
+    var cos_signed = dot(lv.normal.to_simd(), dir_to_cam)
+    var f: Vec3f
+    var cos_to_camera: Float32
+    if lv.is_light == Int32(1):
+        if cos_signed <= Float32(0):
+            return (False, Int32(-1), RGB(Float32(0)))
+        cos_to_camera = cos_signed
+        f = Vec3f(lv.alb.r, lv.alb.g, lv.alb.b) * cos_to_camera
+    else:
+        cos_to_camera = abs(cos_signed)
+        f = _eval_vertex(lv, Vec3f(dir_to_cam[0], dir_to_cam[1], dir_to_cam[2]), sd)
+    if f[0] <= Float32(0) and f[1] <= Float32(0) and f[2] <= Float32(0):
+        return (False, Int32(-1), RGB(Float32(0)))
+    if cos_to_camera <= Float32(1e-8):
+        return (False, Int32(-1), RGB(Float32(0)))
+
+    var Tr = _visible_transmittance(
+        lv.pos, Point3f(cam_pos[0], cam_pos[1], cam_pos[2]), lv.med_idx, sd, scratch)
+    if Tr[0] < Float32(1e-7) and Tr[1] < Float32(1e-7) and Tr[2] < Float32(1e-7):
+        return (False, Int32(-1), RGB(Float32(0)))
+
+    var image_plane_dist = Float32(1) / max(px_scale, Float32(1e-12))
+    var ipcd = image_plane_dist / cos_at_camera
+    var image_to_solid_angle = (ipcd * ipcd) / cos_at_camera
+    # `_eval_vertex` already carries |cos| at the light vertex, so it is
+    # deliberately NOT reapplied here (see the docstring).
+    var geom = image_to_solid_angle / dist2
+    var image_to_surface = image_to_solid_angle * cos_to_camera / dist2
+
+    var inv_n = Float32(1) / max(n_light_paths_f, Float32(1))
+    var contrib = Vec3f(
+        lv.beta.r * f[0] * Tr[0], lv.beta.g * f[1] * Tr[1], lv.beta.b * f[2] * Tr[2]
+    ) * (geom * inv_n)
+
+    # MIS, SmallVCM ConnectToCamera:
+    #   wLight = (cameraPdfA / lightSubPathCount)
+    #            * (misVmWeightFactor + dVCM + dVC * bsdfRevPdfW)
+    #   weight = 1 / (wLight + 1)
+    var rev_pdf_w: Float32
+    if lv.is_light == Int32(1):
+        rev_pdf_w = cos_to_camera * INV_PI
+    else:
+        var (_dp, _rp) = _bdpt_vertex_pdfs(lv, Vec3f(dir_to_cam[0], dir_to_cam[1], dir_to_cam[2]), sd)
+        rev_pdf_w = _rp
+    var camera_pdf_a = image_to_surface
+    var w_light = (camera_pdf_a * inv_n) * (mis_vm_weight_factor + lv.dVCM + lv.dVC * rev_pdf_w)
+    var mis_weight = Float32(1) / (w_light + Float32(1))
+    contrib = contrib * mis_weight
+
+    var pix = Int32(Int(pr[2]) * Int(fw) + Int(pr[1]))
+    return (True, pix, RGB(contrib[0], contrib[1], contrib[2]))
+
 def _bdpt_connect_to_cache(
     cv: BDPTVertex,
     sd: SceneDescriptor2_C,
@@ -5400,6 +5525,10 @@ def _bdpt_render_core(
     comptime _VCM_RADIUS_ALPHA = Float32(2.0) / Float32(3.0)  # Georgiev 2012's typical choice
     var merge_heads = alloc[Int32](_HSIZE)
     var merge_next = alloc[Int32](max(lvc_cap, 1))
+    # t=1 splat records: one slot per potential light vertex.
+    var splat_pix = alloc[Int32](max(n_light_paths_merge * _BDPT_MAX_VERTS, 1))
+    var splat_val = alloc[RGB](max(n_light_paths_merge * _BDPT_MAX_VERTS, 1))
+    var cam_pos = Vec3f(c2w[12], c2w[13], c2w[14])
 
     for si in range(n_spp):
         # Stage 2c progressive radius: r_i = r_1 / (i+1)^(0.5*(1-alpha))
@@ -5443,6 +5572,35 @@ def _bdpt_render_core(
         parallelize[emit_light_path](n_light_paths_merge)
 
         _bdpt_build_merge_grid(lvc, lvc_path_len, n_light_paths_merge, merge_next, merge_heads, merge_inv_cell)
+
+        # ── Phase 1.5: t=1 light tracing (splat) ─────────────────────────
+        # A light vertex lands on an ARBITRARY pixel, not the one being
+        # shaded, so this cannot be folded into Phase 2's per-pixel
+        # accumulation the way every other strategy is. Rather than add
+        # float atomics on the film, the connections (which do the
+        # expensive part -- a visibility ray each) run in parallel into a
+        # per-slot record array, and the cheap accumulation is then a
+        # serial pass. That also keeps the result deterministic, which
+        # atomics on floats would not.
+        @parameter
+        def splat_light_path(lp_idx: Int):
+            var base = lp_idx * _BDPT_MAX_VERTS
+            for local in range(Int(lvc_path_len[lp_idx])):
+                var r = _bdpt_connect_to_camera(
+                    lvc[base + local], sd, scratch_light + lp_idx, cam_pos,
+                    w2c, c2r, Int32(fw), Int32(fh), px_scale,
+                    Float32(n_light_paths_merge), mis_vm_weight_factor)
+                splat_pix[base + local] = r[1] if r[0] else Int32(-1)
+                splat_val[base + local] = r[2]
+            for local in range(Int(lvc_path_len[lp_idx]), _BDPT_MAX_VERTS):
+                splat_pix[base + local] = Int32(-1)
+
+        parallelize[splat_light_path](n_light_paths_merge)
+
+        for k in range(n_light_paths_merge * _BDPT_MAX_VERTS):
+            var sp = splat_pix[k]
+            if sp >= Int32(0):
+                buf[Int(sp)] += splat_val[k]
 
         # ── Phase 2: trace each pixel's camera path and connect ──────────────
         # Each worker only ever writes its own buf[pix] slot and only reads
