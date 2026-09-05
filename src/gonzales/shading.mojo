@@ -16,6 +16,7 @@ from .restir_gi import GIReservoir, gi_reservoir_init, gi_target_pdf, GIReservoi
 from .sms import (
     MAX_SMS_VERTICES, SMSVertex, sms_vertex_init, sms_vertex_flat, sms_vertex_sphere, sms_vertex_mats,
     mat22_mul, mat22_mul_v, mat22_inv, sms_solve_bernoulli, sms_walk, SMS_SOLVER_THRESHOLD,
+    sms_refresh_solved_frames,
 )
 from .restir_sms import SMSReservoir, sms_reservoir_init, sms_target_pdf, SMSReservoirIO, sms_reservoir_io_null
 
@@ -2711,6 +2712,7 @@ def _sms_probe_and_solve(
             if not _bern1[0]:
                 return (True, False, 1, verts1.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
             verts1[0].pos = _bern1[1][0]
+            sms_refresh_solved_frames(verts1, 1)
             return (True, True, 1, verts1.copy(), _bern1[2], _bern1[3], _bern1[4])
         # --- 1-vertex MNEE fast path (flat triangle only, unchanged) ---
         var (mnee_ok, x1_f, det_b, eta_f) = _mnee_walk(
@@ -2855,6 +2857,7 @@ def _sms_probe_and_solve(
             return (True, False, 2, verts2c.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
         verts2c[0].pos = pos2c[0]
         verts2c[1].pos = pos2c[1]
+        sms_refresh_solved_frames(verts2c, 2)
         return (True, True, 2, verts2c.copy(), bsdf2c, jac2c, Float32(1.0))
 
     # --- N-vertex SMS (Phase 5.1/5.2/5.3, sms.mojo) ---
@@ -2890,6 +2893,7 @@ def _sms_probe_and_solve(
         return (True, False, n_total, verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
     for i in range(n_total):
         verts[i].pos = sms_pos[i]
+    sms_refresh_solved_frames(verts, n_total)
     return (True, True, n_total, verts.copy(), sms_bsdf, sms_jac, sms_trials)
 
 @always_inline
@@ -2972,7 +2976,17 @@ def _mnee_area_light_contribute(
     # general N-vertex walk (Phase 5.1's own module docstring explains why
     # the two are physically the same quantity, just chain-length-general).
     var first_vertex = verts[0].pos
+    # GEOMETRIC normal, matching the reference's own geometric term
+    # (`dw0_dx1 = abs_dot(d, v1.gn) * inv_r2` -- v1.gn, not the shading
+    # normal). They differ on a normal-mapped caster, where `normal` carries
+    # the map's perturbation; a solid-angle-to-area conversion is a property
+    # of the SURFACE, not of the normal the BSDF is shaded with.
     var first_normal = verts[0].normal
+    if verts[0].is_sphere != Int8(0):
+        var gnv = verts[0].pos - verts[0].sphere_center
+        var gnl = sqrt(dot(gnv, gnv))
+        if gnl > Float32(1e-8):
+            first_normal = gnv * (Float32(1.0) / gnl)
     var last_vertex = verts[n-1].pos
     var wi_f = hit_point - first_vertex
     var wi_len = sqrt(dot(wi_f, wi_f))

@@ -1179,6 +1179,31 @@ def sms_walk(
 # ── Random seeding + Bernoulli-trial reciprocal estimator (5.2/5.3) ─────────
 
 @always_inline
+def sms_refresh_solved_frames(mut verts: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int):
+    """Re-derive each curved vertex's frame at its SOLVED position.
+
+    `sms_walk` returns only the solved POSITIONS -- its own updated vertex
+    frames are local to it -- so a caller that writes those positions back
+    into its seed array is left holding the SEED's normal, tangents and
+    normal derivatives. Anything the caller then computes from
+    `verts[i].normal` is evaluated at the wrong point on the surface.
+
+    That was invisible while the seed was MNEE's deterministic probe hit,
+    because the solution lands essentially on top of it. It stops being
+    invisible the moment seeds are drawn at random across the caster (see
+    sms_seed_randomize): the solved point is then unrelated to the seed, and
+    `_mnee_area_light_contribute`'s geometric term -- which needs
+    |dot(wi, n)| at the solved vertex, the reference's
+    `dw0_dx1 = abs_dot(d, v1.gn) / r^2` -- was reading a normal from a
+    random other place on the sphere. Wrong on average, and occasionally
+    wrong by a lot, which is exactly the sample the Bernoulli estimator then
+    multiplies by a large trial count."""
+    for i in range(n):
+        if verts[i].is_sphere != Int8(0):
+            _sms_apply_sphere_frame(verts[i], _sms_reproject_onto_sphere(
+                verts[i].pos, verts[i].sphere_center, verts[i].sphere_radius))
+
+@always_inline
 def sms_seed_randomize(x0: Vec3f, mut verts: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int, mut pcg: PCG32, jitter_scale: Float32):
     """5.2: draw a fresh random Newton seed for each vertex of the chain.
 
