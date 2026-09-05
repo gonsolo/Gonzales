@@ -122,7 +122,36 @@ def _generate_sobol_matrices(path: String) -> Optional[UnsafePointer[UInt32, Mut
                 pos += 1
             continue
 
-        # Parse: s a m1 m2 ... ms
+        # The new-joe-kuo file opens with a COLUMN-NAME HEADER line
+        # ("d s a m_i"). It isn't a '#' comment, so it used to fall through
+        # to the number parser below, which read s=0/a=0 from the letters,
+        # wrote no direction numbers, ran the recurrence over zeros -- and
+        # then still did `dim += 1`. That silently consumed dimension 1 and
+        # left its whole 52-entry matrix zero, so sobol_sample(.., 1, ..)
+        # returned exactly 0.0 for EVERY sample: the y pixel-filter offset
+        # was pinned at -yradius, shifting every path-traced image down by
+        # the filter's y radius (5px on cornell-box) with zero vertical
+        # antialiasing, and shifting every higher dimension by one as well.
+        # Skip any line that doesn't start with a digit, WITHOUT consuming
+        # a dimension.
+        if not (file_buf[pos] >= UInt8(48) and file_buf[pos] <= UInt8(57)):
+            while pos < flen and file_buf[pos] != UInt8(10):
+                pos += 1
+            continue
+
+        # Each data line is "d s a m1 m2 ... ms" -- FOUR leading columns, not
+        # three. The `d` (dimension) column was previously not read at all,
+        # so every field landed one column to the left: d was taken as s, s
+        # as a, and a as the first m value. Read d explicitly and index by
+        # it (file d=2 is 0-indexed dimension 1, matching dimension 0's
+        # hardcoded identity matrix above).
+        var d_col = Int32(0)
+        while pos < flen and file_buf[pos] >= UInt8(48) and file_buf[pos] <= UInt8(57):
+            d_col = d_col * Int32(10) + Int32(file_buf[pos]) - Int32(48)
+            pos += 1
+        while pos < flen and (file_buf[pos] == UInt8(32) or file_buf[pos] == UInt8(9)):
+            pos += 1
+
         # s = number of direction numbers
         var s = Int32(0)
         while pos < flen and file_buf[pos] >= UInt8(48) and file_buf[pos] <= UInt8(57):
@@ -160,6 +189,9 @@ def _generate_sobol_matrices(path: String) -> Optional[UnsafePointer[UInt32, Mut
             pos += 1
 
         # Compute direction numbers v[i] = m[i] << (32 - i - 1)
+        dim = Int(d_col) - 1
+        if dim < 1 or dim >= N_DIMS:
+            continue
         var base = dim * N_BITS
         for i in range(Int(s)):
             if i >= N_BITS:
@@ -1166,7 +1198,8 @@ def parse_and_render(
 
         var hash_bits = UInt64(mix_bits_u64(UInt64(0)))
         var seed_dim0 = UInt32(hash_bits & UInt64(0xFFFFFFFF))
-        var seed_dim1 = UInt32(0)
+        # See rendering.mojo's matching comment: was a hardcoded 0.
+        var seed_dim1 = UInt32(UInt64(mix_bits_u64(UInt64(1))) & UInt64(0xFFFFFFFF))
         if use_restir:
             # Architecture change (docs/A2_restir_migration_plan.md, replaces
             # the Phase 3.1 wavefront-persistence attempt, reverted): rather

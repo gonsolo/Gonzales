@@ -71,7 +71,12 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
 
     var hash_bits = UInt64(mix_bits_u64(UInt64(0) ^ UInt64(sp.sobolSeed)))
     var seed_dim0 = UInt32(hash_bits & UInt64(0xFFFFFFFF))
-    var seed_dim1 = UInt32(0)
+    # Per-dimension Owen-scramble seed, same shape as dimension 0's above.
+    # This was a hardcoded 0, which left dimension 1's scramble independent
+    # of sobolSeed -- so --seed decorrelated the x filter offset but never
+    # the y one, leaving two "independent" runs partially correlated.
+    var hash_bits1 = UInt64(mix_bits_u64(UInt64(1) ^ UInt64(sp.sobolSeed)))
+    var seed_dim1 = UInt32(hash_bits1 & UInt64(0xFFFFFFFF))
 
     var paths = alloc[PathState_C](n)
     var intersections = alloc[Intersection_C](n)
