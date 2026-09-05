@@ -2187,18 +2187,23 @@ def _mnee_walk2(
         Float32(0)-U0[2]*Tp[0]-U0[3]*Tp[2], Float32(0)-U0[2]*Tp[1]-U0[3]*Tp[3])
     var dx1_dxlight = abs(Tp[0]*Tp[3]-Tp[1]*Tp[2])
     # ── BSDF product at x1 and x2 ────────────────────────────────────────────
-    # eta*eta: solid-angle-compression factor for refraction through a
-    # smooth (delta) dielectric interface -- confirmed against the original
-    # SMS paper's reference implementation (specular-manifold-sampling's
-    # manifold_ms.cpp specular_reflectance, delta-BSDF branch: `f = 1-F;
-    # f *= sqr(eta);`). Missing here before this fix -- verified by hand at
-    # normal incidence, where cosHI/cosTM/cosNI all collapse to 1 and the
-    # two formulas must agree up to exactly this factor. See
-    # project_dielectric_radiance_transmission_bug memory.
+    # Solid-angle-compression factor for refraction through a smooth
+    # (delta) dielectric interface -- confirmed against the original SMS
+    # paper's reference implementation (specular-manifold-sampling's
+    # manifold_ss.cpp specular_reflectance, delta-BSDF branch: `f = 1-F;
+    # f *= sqr(eta);`). Verified by hand at normal incidence, where
+    # cosHI/cosTM/cosNI all collapse to 1 and the two formulas must agree
+    # up to exactly this factor. See
+    # project_dielectric_radiance_transmission_bug memory. The eta used is
+    # the EMITTER-side orientation (see sms.mojo's sms_walk for the full
+    # argument); for this symmetric enter+exit pair eta2 = 1/eta1, so the
+    # product is 1 either way and this spelling changes no pixel here --
+    # it is the single-refraction chains that actually depend on it.
+    var eta1_o = Float32(1)/eta1; var eta2_o = Float32(1)/eta2
     var cosNI1 = abs(dot(n1,wi1)); var cosHI1 = abs(dot(H1,wi1)); var cosTM1 = abs(dot(n1,H1))
-    var F1 = fr_dielectric(cosNI1, eta1); var bsdf1 = (Float32(1)-F1)*cosHI1/max(cosNI1*cosTM1*cosTM1,Float32(1e-6)) * eta1*eta1
+    var F1 = fr_dielectric(cosNI1, eta1); var bsdf1 = (Float32(1)-F1)*cosHI1/max(cosNI1*cosTM1*cosTM1,Float32(1e-6)) * eta1_o*eta1_o
     var cosNI2 = abs(dot(n2,wi2)); var cosHI2 = abs(dot(H2,wi2)); var cosTM2 = abs(dot(n2,H2))
-    var F2 = fr_dielectric(cosNI2, eta2); var bsdf2 = (Float32(1)-F2)*cosHI2/max(cosNI2*cosTM2*cosTM2,Float32(1e-6)) * eta2*eta2
+    var F2 = fr_dielectric(cosNI2, eta2); var bsdf2 = (Float32(1)-F2)*cosHI2/max(cosNI2*cosTM2*cosTM2,Float32(1e-6)) * eta2_o*eta2_o
     return (True, x1, x2, bsdf1*bsdf2, dx1_dxlight)
 
 @always_inline
@@ -2738,9 +2743,13 @@ def _sms_probe_and_solve(
         var cosTM = abs(dot(pgeo_n, H_f))
         var F_r = fr_dielectric(cosNI, eta_f)
         var T_f = Float32(1.0) - F_r
-        # eta*eta: see _mnee_walk2's identical fix a few hundred lines up for
-        # the full derivation/reference citation.
-        var bsdf_s = T_f * cosHI / max(cosNI * cosTM * cosTM, Float32(1e-6)) * eta_f*eta_f
+        # 1/(eta*eta): see sms.mojo's sms_walk for why the compression
+        # factor takes the EMITTER-side orientation of eta while `eta_f`
+        # carries the constraint-side one. Unlike the 2-vertex slab above,
+        # a single refraction has nothing to cancel against, so getting
+        # this backwards here really is an eta^4 error.
+        var eta_f_o = Float32(1.0) / eta_f
+        var bsdf_s = T_f * cosHI / max(cosNI * cosTM * cosTM, Float32(1e-6)) * eta_f_o*eta_f_o
         verts1[0].pos = x1_f
         return (True, True, 1, verts1.copy(), bsdf_s, dx1_dxl, Float32(1.0))
 

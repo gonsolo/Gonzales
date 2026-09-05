@@ -676,9 +676,32 @@ def sms_walk(
         var cosHI = abs(dot(evf[i].H, evf[i].wi))
         var cosTM = abs(dot(verts[i].normal, evf[i].H))
         var F = fr_dielectric(cosNI, verts[i].eta)
-        # eta*eta: see shading.mojo's _mnee_walk2 for the full derivation/
-        # reference citation (same formula family, same missing factor).
-        bsdf_product *= (Float32(1.0)-F)*cosHI/max(cosNI*cosTM*cosTM, Float32(1e-6)) * verts[i].eta*verts[i].eta
+        # Solid-angle compression across a delta refraction (reference:
+        # manifold_ss.cpp `specular_reflectance`, delta branch --
+        # `bsdf_val = 1 - F; bsdf_val *= sqr(eta)`).
+        #
+        # The reference stores the RAW material eta on its manifold vertex
+        # and re-orients it separately at each of the two places it is
+        # used, and those two places look at the interface from OPPOSITE
+        # sides: the generalized half-vector constraint tests
+        # `dot(wi, gn)` (the SHADING-POINT side, wi pointing back toward
+        # x0), while this compression factor tests `dot(n, wo)` (the
+        # EMITTER side). `verts[i].eta` here carries the constraint
+        # orientation -- that is how _sms_vertex_from_hit derives it, and
+        # it is what _sms_eval_vertex above consumes -- so this use needs
+        # the other one. _sms_eval_vertex has already rejected every
+        # vertex whose wi and wo do NOT straddle the surface, so for any
+        # vertex that reaches here the emitter-side orientation is exactly
+        # the reciprocal.
+        #
+        # Squaring the constraint eta directly (what this line did before)
+        # is therefore off by eta^4 -- ~5x for glass. It cancels silently
+        # in the common 2-vertex enter+exit chain, where eta_2 = 1/eta_1
+        # makes the product 1 either way, which is why it survived: only a
+        # SINGLE-refraction chain (an analytic sphere caster, modeled as
+        # one idealized bend -- see _sms_probe_and_solve) exposes it.
+        var eta_o = Float32(1.0) / verts[i].eta
+        bsdf_product *= (Float32(1.0)-F)*cosHI/max(cosNI*cosTM*cosTM, Float32(1e-6)) * eta_o*eta_o
     var out_positions = InlineArray[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
     for i in range(n):
         out_positions[i] = verts[i].pos
