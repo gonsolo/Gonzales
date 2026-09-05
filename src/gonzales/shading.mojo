@@ -2484,7 +2484,7 @@ def _sms_vertex_from_hit(
         var nmap = normal_slope_map_none()
         if mat.normal_tex_idx >= Int32(0) and _is_real_ptr(ctx.nmaps):
             nmap = ctx.nmaps[Int(mat.normal_tex_idx)]
-        return (sms_vertex_sphere(hit_pt, center, sph.radius, eta, nmap), True)
+        return (sms_vertex_sphere(hit_pt, center, sph.radius, eta, nmap, ior), True)
     elif inter.primId.type == Int8(0):
         var (mesh, v0, v1, v2, _) = _get_tri_verts(inter, ctx.meshes)
         var p0 = Vec3f(mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])

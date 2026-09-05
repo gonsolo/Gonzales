@@ -32,8 +32,8 @@
 # _mnee_walk2's own formulas at n=2 (see test_sms.mojo's regression tests
 # against _mnee_walk/_mnee_walk2 output).
 
-from std.math import sqrt, abs, max, min, cos, sin
-from .geometry import RGB, dot, cross, fr_dielectric, Frame, Vec3f, Point3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Curve_C, Instance_C, Sphere_C, NormalSlopeMap_C, normal_slope_map_none, _atan2f, PI
+from std.math import sqrt, abs, max, min, cos, sin, acos
+from .geometry import RGB, dot, cross, fr_dielectric, Frame, Vec3f, Point3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Curve_C, Instance_C, Sphere_C, NormalSlopeMap_C, normal_slope_map_none, _atan2f, PI, TWO_PI
 from .rng import PCG32
 from .bvh import ray_sphere_hit, traverse_bvh2_core, BVH2Node
 
@@ -189,11 +189,21 @@ struct SMSVertex(TrivialRegisterPassable):
     # would solve the smooth surface's constraint while reporting the
     # perturbed surface's Jacobian.
     var nmap:   NormalSlopeMap_C
+    # The material's OWN relative IOR, unoriented. `eta` above is already
+    # oriented for the half-vector constraint (see _sms_vertex_from_hit),
+    # which is what that formulation and the BSDF product want, but the
+    # angle-difference formulation orients eta for itself inside its
+    # refract() -- so it needs the raw value, and reconstructing it from
+    # `eta` would mean re-deriving the very sign test whose two conflicting
+    # readings caused the eta^4 bug in the first place. Cheaper and far
+    # less error-prone to carry both. Equal to `eta` for a flat vertex,
+    # which never reaches the angle-difference path.
+    var eta_raw: Float32
 
 @always_inline
 def sms_vertex_init() -> SMSVertex:
     var z = Vec3f(Float32(0.0))
-    return SMSVertex(z, z, z, z, Float32(1.0), Int8(0), z, Float32(0.0), z, z, normal_slope_map_none())
+    return SMSVertex(z, z, z, z, Float32(1.0), Int8(0), z, Float32(0.0), z, z, normal_slope_map_none(), Float32(1.0))
 
 @always_inline
 def sms_vertex_flat(
@@ -208,7 +218,7 @@ def sms_vertex_flat(
     named constructor so call sites don't each spell out the dummy
     sphere_center/sphere_radius padding a flat vertex never uses."""
     var z = Vec3f(Float32(0.0))
-    return SMSVertex(pos, normal, dp_du, dp_dv, eta, Int8(0), z, Float32(0.0), z, z, normal_slope_map_none())
+    return SMSVertex(pos, normal, dp_du, dp_dv, eta, Int8(0), z, Float32(0.0), z, z, normal_slope_map_none(), eta)
 
 @always_inline
 def sms_vertex_sphere(
@@ -217,6 +227,7 @@ def sms_vertex_sphere(
     radius: Float32,
     eta: Float32,
     nmap: NormalSlopeMap_C = normal_slope_map_none(),
+    eta_raw: Float32 = Float32(1.0),
 ) -> SMSVertex:
     """Constructs a sphere-caster SMSVertex from a probe hit's world-space
     position (assumed already ON the sphere, e.g. from a real intersection)
@@ -226,7 +237,7 @@ def sms_vertex_sphere(
     perturbs the shading normal and its derivatives on top of that (see
     `_sms_apply_sphere_frame`)."""
     var z = Vec3f(Float32(0.0))
-    var vtx = SMSVertex(pos, z, z, z, eta, Int8(1), center, radius, z, z, nmap)
+    var vtx = SMSVertex(pos, z, z, z, eta, Int8(1), center, radius, z, z, nmap, eta_raw)
     _sms_apply_sphere_frame(vtx, _sms_reproject_onto_sphere(pos, center, radius))
     return vtx
 
@@ -565,6 +576,181 @@ def _sms_reproject_onto_sphere_anchored(
     var r = _sms_sphere_frame_at(pos, normal)
     return (r[0], r[1], r[2], r[3], True)
 
+# ── Angle-difference constraint (manifold_ss.cpp) ────────────────────────────
+# The OTHER of the reference's two constraint formulations, and the one its
+# own scenes select by default (`caustics_halfvector_constraints = false`).
+#
+# The half-vector formulation below asks the generalized half-vector to line
+# up with the shading normal. This one instead REFRACTS the direction to the
+# shading point through the vertex and asks the result to match the direction
+# to the light, measured as a difference of spherical angles (theta, phi).
+# The two have the same roots, but not the same Newton behaviour: the
+# half-vector constraint degenerates as the half-vector approaches the
+# surface's tangent plane, and it happily converges to REFLECTIONS that then
+# have to be rejected after the fact. The paper introduces the angle-
+# difference form precisely because it is better conditioned on strongly
+# curved and normal-mapped surfaces -- which is exactly the case a caustic
+# from a normal-mapped sphere is made of.
+#
+# Used for a single curved vertex only (see sms_walk): the reference defines
+# it for one specular vertex, and it does not generalize to the coupled
+# block-tridiagonal system the N-vertex chain solves.
+
+@always_inline
+def _sm_refract(w: Vec3f, n_in: Vec3f, eta_in: Float32) -> Tuple[Bool, Vec3f]:
+    """render/manifold.h's `refract`. Self-orienting: `eta_in` is the RAW
+    material eta and the side is decided here from dot(w, n). Returns
+    ok=False on total internal reflection."""
+    var n = n_in
+    var eta = Float32(1.0) / eta_in
+    if dot(w, n) < Float32(0.0):
+        eta = Float32(1.0) / eta
+        n = -n
+    var dot_w_n = dot(w, n)
+    var root_term = Float32(1.0) - eta*eta * (Float32(1.0) - dot_w_n*dot_w_n)
+    if root_term < Float32(0.0):
+        return (False, Vec3f(Float32(0.0)))
+    return (True, (w - n * dot_w_n) * (-eta) - n * sqrt(root_term))
+
+@always_inline
+def _sm_d_refract(
+    w: Vec3f, dw_du: Vec3f, dw_dv: Vec3f,
+    n_in: Vec3f, dn_du_in: Vec3f, dn_dv_in: Vec3f, eta_in: Float32,
+) -> Tuple[Vec3f, Vec3f]:
+    """render/manifold.h's `d_refract` -- the (u, v) derivatives of
+    `_sm_refract`, with the same self-orienting convention."""
+    var n = n_in
+    var dn_du = dn_du_in
+    var dn_dv = dn_dv_in
+    var eta = Float32(1.0) / eta_in
+    if dot(w, n) < Float32(0.0):
+        eta = Float32(1.0) / eta
+        n = -n
+        dn_du = -dn_du
+        dn_dv = -dn_dv
+    var dot_w_n = dot(w, n)
+    var dot_dwdu_n = dot(dw_du, n)
+    var dot_dwdv_n = dot(dw_dv, n)
+    var dot_w_dndu = dot(w, dn_du)
+    var dot_w_dndv = dot(w, dn_dv)
+    var rt = Float32(1.0) - eta*eta * (Float32(1.0) - dot_w_n*dot_w_n)
+    if rt < Float32(1e-12):
+        return (Vec3f(Float32(0.0)), Vec3f(Float32(0.0)))
+    var root = sqrt(rt)
+    var inv_2root = Float32(1.0) / (Float32(2.0) * root)
+    var a_u = (dw_du - (n * (dot_dwdu_n + dot_w_dndu) + dn_du * dot_w_n)) * (-eta)
+    var b1_u = dn_du * root
+    var b2_u = n * (inv_2root * (-eta*eta*(Float32(-2.0)*dot_w_n*(dot_dwdu_n + dot_w_dndu))))
+    var a_v = (dw_dv - (n * (dot_dwdv_n + dot_w_dndv) + dn_dv * dot_w_n)) * (-eta)
+    var b1_v = dn_dv * root
+    var b2_v = n * (inv_2root * (-eta*eta*(Float32(-2.0)*dot_w_n*(dot_dwdv_n + dot_w_dndv))))
+    return (a_u - (b1_u + b2_u), a_v - (b1_v + b2_v))
+
+@always_inline
+def _sm_sphcoords(w: Vec3f) -> SIMD[DType.float32, 2]:
+    """(theta, phi) of a unit direction, phi wrapped to [0, 2pi)."""
+    var z = min(max(w[2], Float32(-1.0)), Float32(1.0))
+    var theta = acos(z)
+    var phi = _atan2f(w[1], w[0])
+    if phi < Float32(0.0):
+        phi += TWO_PI
+    return SIMD[DType.float32, 2](theta, phi)
+
+@always_inline
+def _sm_d_sphcoords(w: Vec3f, dw_du: Vec3f, dw_dv: Vec3f) -> SIMD[DType.float32, 4]:
+    """(dtheta_du, dphi_du, dtheta_dv, dphi_dv)."""
+    var s2 = Float32(1.0) - w[2]*w[2]
+    var d_acos = Float32(0.0)
+    if s2 > Float32(1e-12):
+        d_acos = -Float32(1.0) / sqrt(s2)
+    var dt_du = d_acos * dw_du[2]
+    var dt_dv = d_acos * dw_dv[2]
+    var dp_du = Float32(0.0)
+    var dp_dv = Float32(0.0)
+    if abs(w[0]) > Float32(1e-12):
+        var yx = w[1] / w[0]
+        var d_atan = Float32(1.0) / (Float32(1.0) + yx*yx)
+        var inv_x2 = Float32(1.0) / (w[0] * w[0])
+        dp_du = d_atan * (w[0]*dw_du[1] - w[1]*dw_du[0]) * inv_x2
+        dp_dv = d_atan * (w[0]*dw_dv[1] - w[1]*dw_dv[0]) * inv_x2
+    return SIMD[DType.float32, 4](dt_du, dp_du, dt_dv, dp_dv)
+
+@always_inline
+def _sms_step_anglediff(
+    x0: Vec3f, xL: Vec3f, v: SMSVertex,
+) -> Tuple[Bool, SIMD[DType.float32, 2], SIMD[DType.float32, 2]]:
+    """manifold_ss.cpp's `compute_step_anglediff`, for one specular vertex.
+    Returns (ok, C, dX): the constraint residual and the Newton step in the
+    vertex's own (dp_du, dp_dv) parameterization, to be applied as
+    `pos -= dp_du*dX[0] + dp_dv*dX[1]` exactly like the half-vector step.
+
+    The offset-normal terms of the reference are omitted: they are no-ops
+    for a smooth (zero-roughness) dielectric, which is the only kind of
+    caster this reaches -- a rough one would need the microfacet normal
+    sampled in the vertex's shading frame, and gonzales does not sample one
+    for SMS at all."""
+    var fail = (False, SIMD[DType.float32, 2](Float32(1e30), Float32(1e30)),
+                SIMD[DType.float32, 2](Float32(0.0), Float32(0.0)))
+    var wiv = x0 - v.pos
+    var ili = sqrt(dot(wiv, wiv))
+    if ili < Float32(1e-3):
+        return fail
+    ili = Float32(1.0) / ili
+    var wi = wiv * ili
+    var dwi_du = (v.dp_du - wi * dot(wi, v.dp_du)) * (-ili)
+    var dwi_dv = (v.dp_dv - wi * dot(wi, v.dp_dv)) * (-ili)
+
+    var wov = xL - v.pos
+    var ilo = sqrt(dot(wov, wov))
+    if ilo < Float32(1e-3):
+        return fail
+    ilo = Float32(1.0) / ilo
+    var wo = wov * ilo
+    var dwo_du = (v.dp_du - wo * dot(wo, v.dp_du)) * (-ilo)
+    var dwo_dv = (v.dp_dv - wo * dot(wo, v.dp_dv)) * (-ilo)
+
+    var n = v.normal
+    var C = SIMD[DType.float32, 2](Float32(0.0), Float32(0.0))
+    var dC = SIMD[DType.float32, 4](Float32(0.0))
+    var ok = False
+
+    # Refract the direction to the shading point and compare against the
+    # direction to the light; if that side is in total internal reflection,
+    # do it the other way round instead (both express the same constraint).
+    var ri = _sm_refract(wi, n, v.eta_raw)
+    if ri[0]:
+        var d = _sm_d_refract(wi, dwi_du, dwi_dv, n, v.dn_du, v.dn_dv, v.eta_raw)
+        var so = _sm_sphcoords(wo)
+        var sio = _sm_sphcoords(ri[1])
+        var dp = so[1] - sio[1]
+        if dp < -PI: dp += TWO_PI
+        elif dp > PI: dp -= TWO_PI
+        C = SIMD[DType.float32, 2](so[0] - sio[0], dp)
+        var a = _sm_d_sphcoords(wo, dwo_du, dwo_dv)
+        var b = _sm_d_sphcoords(ri[1], d[0], d[1])
+        dC = SIMD[DType.float32, 4](a[0]-b[0], a[2]-b[2], a[1]-b[1], a[3]-b[3])
+        ok = True
+    else:
+        var ro = _sm_refract(wo, n, v.eta_raw)
+        if ro[0]:
+            var d = _sm_d_refract(wo, dwo_du, dwo_dv, n, v.dn_du, v.dn_dv, v.eta_raw)
+            var si = _sm_sphcoords(wi)
+            var soi = _sm_sphcoords(ro[1])
+            var dp = si[1] - soi[1]
+            if dp < -PI: dp += TWO_PI
+            elif dp > PI: dp -= TWO_PI
+            C = SIMD[DType.float32, 2](si[0] - soi[0], dp)
+            var a = _sm_d_sphcoords(wi, dwi_du, dwi_dv)
+            var b = _sm_d_sphcoords(ro[1], d[0], d[1])
+            dC = SIMD[DType.float32, 4](a[0]-b[0], a[2]-b[2], a[1]-b[1], a[3]-b[3])
+            ok = True
+    if not ok:
+        return fail
+    var (Li, det) = mat22_inv(dC)
+    if abs(det) < Float32(1e-6):
+        return fail
+    return (True, C, mat22_mul_v(Li, C))
+
 @fieldwise_init
 struct SMSVertexEval(TrivialRegisterPassable):
     """Per-vertex quantities recomputed every Newton iteration (and once
@@ -702,55 +888,84 @@ def sms_walk(
             has_curved = True
             _sms_apply_sphere_frame(verts[i0],
                 _sms_reproject_onto_sphere(verts[i0].pos, verts[i0].sphere_center, verts[i0].sphere_radius))
+    # The reference solves a single specular vertex with the angle-difference
+    # constraint by default and only offers the half-vector one as an option;
+    # a longer chain has no angle-difference form at all. Reflective (eta==1)
+    # vertices are excluded because _sms_step_anglediff only implements the
+    # refractive branch -- SMS in gonzales is reached from dielectrics only.
+    var use_anglediff = (n == 1 and verts[0].is_sphere != Int8(0)
+                         and verts[0].eta_raw != Float32(1.0))
     var converged = False
     for _iter in range(20):
-        var ev = InlineArray[SMSVertexEval, MAX_SMS_VERTICES](fill=_sms_eval_bad())
-        var bad = False
-        for i in range(n):
-            ev[i] = _sms_eval_vertex(x0, xL, verts, n, i)
-            if ev[i].ok == Int8(0):
-                bad = True; break
-        if bad:
-            break
-        # L2 norm of each vertex's tangential-constraint residual, not
-        # max-norm: max-norm is basis-dependent, and a curved vertex's
-        # (s,t) basis is a FRESH, arbitrarily-ROTATED Frisvad frame every
-        # iteration (see _sms_reproject_onto_sphere) -- the same physical
-        # residual can land disproportionately on one axis before a
-        # reprojection and the other axis after, making max-norm compare
-        # apples to oranges across iterations for a curved chain (a flat
-        # vertex's frame never rotates, so this never mattered before).
-        # L2 norm is the tangential-H-vector's actual magnitude and is
-        # invariant to which orthonormal basis happens to span the plane.
-        var err = Float32(0.0)
-        for i in range(n):
-            err = max(err, sqrt(ev[i].cv[0]*ev[i].cv[0] + ev[i].cv[1]*ev[i].cv[1]))
-        if err < SMS_SOLVER_THRESHOLD:
-            converged = True; break
-        # ── Block tridiagonal forward sweep ────────────────────────────────
-        var cprime = InlineArray[SIMD[DType.float32, 4], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 4](Float32(0.0)))
-        var dprime = InlineArray[SIMD[DType.float32, 2], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 2](Float32(0.0)))
-        var (Li0, det0) = mat22_inv(ev[0].b)
-        if det0 == Float32(0.0):
-            break
-        cprime[0] = mat22_mul(Li0, ev[0].c)
-        dprime[0] = mat22_mul_v(Li0, ev[0].cv)
-        var solve_failed = False
-        for i in range(1, n):
-            var pivot = ev[i].b - mat22_mul(ev[i].a, cprime[i-1])
-            var (Lii, deti) = mat22_inv(pivot)
-            if deti == Float32(0.0):
-                solve_failed = True; break
-            cprime[i] = mat22_mul(Lii, ev[i].c)
-            dprime[i] = mat22_mul_v(Lii, ev[i].cv - mat22_mul_v(ev[i].a, dprime[i-1]))
-        if solve_failed:
-            break
-        # ── Back substitution ───────────────────────────────────────────────
+        # Constraint formulation. A single CURVED vertex uses the reference's
+        # angle-difference form (better conditioned exactly where a caustic
+        # caster lives -- see _sms_step_anglediff); everything else keeps the
+        # generalized half-vector constraint, which is what the coupled
+        # N-vertex block-tridiagonal system is built on and the only form
+        # that generalizes to it.
         var dx = InlineArray[SIMD[DType.float32, 2], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 2](Float32(0.0)))
-        dx[n-1] = dprime[n-1]
-        for ridx in range(n-1):
-            var i = n-2-ridx
-            dx[i] = dprime[i] - mat22_mul_v(cprime[i], dx[i+1])
+        var wol = InlineArray[Float32, MAX_SMS_VERTICES](fill=Float32(0.0))
+        var err = Float32(0.0)
+        if use_anglediff:
+            var st = _sms_step_anglediff(x0, xL, verts[0])
+            if not st[0]:
+                break
+            err = sqrt(st[1][0]*st[1][0] + st[1][1]*st[1][1])
+            if err < SMS_SOLVER_THRESHOLD:
+                converged = True; break
+            dx[0] = st[2]
+            var wv = xL - verts[0].pos
+            wol[0] = sqrt(dot(wv, wv))
+        else:
+            var ev = InlineArray[SMSVertexEval, MAX_SMS_VERTICES](fill=_sms_eval_bad())
+            var bad = False
+            for i in range(n):
+                ev[i] = _sms_eval_vertex(x0, xL, verts, n, i)
+                if ev[i].ok == Int8(0):
+                    bad = True; break
+            if bad:
+                break
+            for i in range(n):
+                wol[i] = ev[i].wol
+            # L2 norm of each vertex's tangential-constraint residual, not
+            # max-norm: max-norm is basis-dependent, and a curved vertex's
+            # (s,t) basis is a FRESH, arbitrarily-ROTATED Frisvad frame every
+            # iteration (see _sms_reproject_onto_sphere) -- the same physical
+            # residual can land disproportionately on one axis before a
+            # reprojection and the other axis after, making max-norm compare
+            # apples to oranges across iterations for a curved chain (a flat
+            # vertex's frame never rotates, so this never mattered before).
+            # L2 norm is the tangential-H-vector's actual magnitude and is
+            # invariant to which orthonormal basis happens to span the plane.
+            err = Float32(0.0)
+            for i in range(n):
+                err = max(err, sqrt(ev[i].cv[0]*ev[i].cv[0] + ev[i].cv[1]*ev[i].cv[1]))
+            if err < SMS_SOLVER_THRESHOLD:
+                converged = True; break
+            # ── Block tridiagonal forward sweep ────────────────────────────────
+            var cprime = InlineArray[SIMD[DType.float32, 4], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 4](Float32(0.0)))
+            var dprime = InlineArray[SIMD[DType.float32, 2], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 2](Float32(0.0)))
+            var (Li0, det0) = mat22_inv(ev[0].b)
+            if det0 == Float32(0.0):
+                break
+            cprime[0] = mat22_mul(Li0, ev[0].c)
+            dprime[0] = mat22_mul_v(Li0, ev[0].cv)
+            var solve_failed = False
+            for i in range(1, n):
+                var pivot = ev[i].b - mat22_mul(ev[i].a, cprime[i-1])
+                var (Lii, deti) = mat22_inv(pivot)
+                if deti == Float32(0.0):
+                    solve_failed = True; break
+                cprime[i] = mat22_mul(Lii, ev[i].c)
+                dprime[i] = mat22_mul_v(Lii, ev[i].cv - mat22_mul_v(ev[i].a, dprime[i-1]))
+            if solve_failed:
+                break
+            # ── Back substitution ───────────────────────────────────────────────
+            dx = InlineArray[SIMD[DType.float32, 2], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 2](Float32(0.0)))
+            dx[n-1] = dprime[n-1]
+            for ridx in range(n-1):
+                var i = n-2-ridx
+                dx[i] = dprime[i] - mat22_mul_v(cprime[i], dx[i+1])
         # ── Step clamp + position update ────────────────────────────────────
         if not has_curved:
             # Flat-only chain: unchanged from before sphere support existed --
@@ -759,7 +974,7 @@ def sms_walk(
             # used to compute `dx` is exact everywhere, not just locally).
             for i in range(n):
                 var step_len = sqrt(dx[i][0]*dx[i][0] + dx[i][1]*dx[i][1])
-                var max_step = ev[i].wol * Float32(0.5)
+                var max_step = wol[i] * Float32(0.5)
                 var dxi = dx[i]
                 if step_len > max_step and step_len > Float32(1e-12):
                     dxi = dxi * (max_step/step_len)
@@ -788,7 +1003,7 @@ def sms_walk(
                 var reproj_failed = False
                 for i in range(n):
                     var step_len = sqrt(dx[i][0]*dx[i][0] + dx[i][1]*dx[i][1]) * scale
-                    var max_step = ev[i].wol * Float32(0.5)
+                    var max_step = wol[i] * Float32(0.5)
                     if trial[i].is_sphere != Int8(0):
                         max_step = min(max_step, trial[i].sphere_radius * Float32(0.3))
                     var dxi = dx[i] * scale
@@ -826,18 +1041,31 @@ def sms_walk(
                             # own recovery: treat like a failed step and
                             # shrink `scale` on the next backtracking attempt.
                             reproj_failed = True
-                var ev2 = InlineArray[SMSVertexEval, MAX_SMS_VERTICES](fill=_sms_eval_bad())
+                # The line search has to score the trial with the SAME
+                # constraint the step came from -- comparing an
+                # angle-difference step against a half-vector residual would
+                # backtrack on a quantity the step was never reducing.
                 var bad2 = reproj_failed
-                for i in range(n):
-                    if bad2:
-                        break
-                    ev2[i] = _sms_eval_vertex(x0, xL, trial, n, i)
-                    if ev2[i].ok == Int8(0):
-                        bad2 = True; break
-                if not bad2:
-                    var err2 = Float32(0.0)
+                var err2 = Float32(0.0)
+                if use_anglediff:
+                    if not bad2:
+                        var st2 = _sms_step_anglediff(x0, xL, trial[0])
+                        if st2[0]:
+                            err2 = sqrt(st2[1][0]*st2[1][0] + st2[1][1]*st2[1][1])
+                        else:
+                            bad2 = True
+                else:
+                    var ev2 = InlineArray[SMSVertexEval, MAX_SMS_VERTICES](fill=_sms_eval_bad())
                     for i in range(n):
-                        err2 = max(err2, sqrt(ev2[i].cv[0]*ev2[i].cv[0] + ev2[i].cv[1]*ev2[i].cv[1]))
+                        if bad2:
+                            break
+                        ev2[i] = _sms_eval_vertex(x0, xL, trial, n, i)
+                        if ev2[i].ok == Int8(0):
+                            bad2 = True; break
+                    if not bad2:
+                        for i in range(n):
+                            err2 = max(err2, sqrt(ev2[i].cv[0]*ev2[i].cv[0] + ev2[i].cv[1]*ev2[i].cv[1]))
+                if not bad2:
                     if err2 < err or _bt == 7:
                         verts = trial.copy()
                         applied = True
