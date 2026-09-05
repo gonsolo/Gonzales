@@ -751,6 +751,7 @@ def parse_and_render(
     override_w: Int32 = Int32(0), override_h: Int32 = Int32(0),
     no_denoise: Bool = False,
     spp_override: Int32 = Int32(0),
+    seed_override: Int64 = Int64(-1),
     verbose: Bool = False,
     use_sppm: Bool = False,
     sppm_passes: Int32 = Int32(64),
@@ -813,7 +814,7 @@ def parse_and_render(
         return Int32(-1)
     if override_w > 0 and override_h > 0:
         resize_film(psc, override_w, override_h)
-    mojo_apply_overrides(psc, spp_override, Int32(0), Int32(0))
+    mojo_apply_overrides(psc, spp_override, Int32(0), Int32(0), seed_override)
 
     var fw = psc[0].film_w
     var fh = psc[0].film_h
@@ -1461,6 +1462,7 @@ def render_interactive(
     fullscreen: Bool = False,
     override_w: Int32 = Int32(0), override_h: Int32 = Int32(0),
     spp_override: Int32 = Int32(0),
+    seed_override: Int64 = Int64(-1),
     verbose: Bool = False,
     use_restir: Bool = False,
     # Phase 4: ReSTIR GI, CPU only (matches use_restir's own use_gpu scope
@@ -1499,7 +1501,7 @@ def render_interactive(
     if override_w > 0 and override_h > 0:
         resize_film(psc, override_w, override_h)
 
-    mojo_apply_overrides(psc, spp_override, Int32(0), Int32(0))
+    mojo_apply_overrides(psc, spp_override, Int32(0), Int32(0), seed_override)
 
     var fw = psc[0].film_w
     var fh = psc[0].film_h

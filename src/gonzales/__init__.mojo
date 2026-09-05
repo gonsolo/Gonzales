@@ -67,6 +67,7 @@ def main() raises:
     var no_denoise = False
     var verbose = False
     var spp_override = Int32(0)
+    var seed_override = Int64(-1)
     var use_sppm = False
     var sppm_passes = Int32(64)
     var sppm_photons = Int32(-1)   # -1 = not passed on CLI; fall back to scene/pbrt-matching default
@@ -101,7 +102,7 @@ def main() raises:
     while i < len(args):
         var arg = String(args[i])
         if arg == "--help" or arg == "-h":
-            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--verbose] [--spp N] [--resolution WxH] [--width W] [--height H] [--pixel X Y] [--vulkan-rt] scene.pbrt")
+            print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--verbose] [--spp N] [--seed N] [--resolution WxH] [--width W] [--height H] [--pixel X Y] [--vulkan-rt] scene.pbrt")
             return
         elif arg == "--interactive":
             interactive = True
@@ -119,6 +120,11 @@ def main() raises:
             spp_override = _parse_int32(String(args[i]), 0)
         elif arg.startswith("--spp="):
             spp_override = _parse_int32(arg, 6)
+        elif arg == "--seed" and i + 1 < len(args):
+            i += 1
+            seed_override = Int64(_parse_int32(String(args[i]), 0))
+        elif arg.startswith("--seed="):
+            seed_override = Int64(_parse_int32(arg, 7))
         elif arg == "--resolution" and i + 1 < len(args):
             i += 1
             var wh = _parse_res(String(args[i]), 0)
@@ -200,7 +206,7 @@ def main() raises:
         i += 1
 
     if scene_path.byte_length() == 0:
-        print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--verbose] [--spp N] [--resolution WxH] [--width W] [--height H] scene.pbrt")
+        print("Usage: gonzales [--interactive] [--gpu] [--fullscreen] [--no-denoise] [--verbose] [--spp N] [--seed N] [--resolution WxH] [--width W] [--height H] scene.pbrt")
         return
 
     if not scene_path.endswith(".pbrt") and not scene_path.endswith(".xml"):
@@ -237,9 +243,9 @@ def main() raises:
     elif use_vulkan_rt:
         debug_render_vulkanrt(path_cstr, verbose)
     elif interactive:
-        render_interactive(path_cstr, sobol, use_gpu, spectral=spectral, fullscreen=fullscreen, override_w=override_w, override_h=override_h, spp_override=spp_override, verbose=verbose, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, headless_frames=headless_frames)
+        render_interactive(path_cstr, sobol, use_gpu, spectral=spectral, fullscreen=fullscreen, override_w=override_w, override_h=override_h, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, headless_frames=headless_frames)
     else:
-        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons, use_vulkan_rt_shade=use_vulkan_rt_shade, use_vcm_wavefront=use_vcm_wavefront, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir)
+        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons, use_vulkan_rt_shade=use_vulkan_rt_shade, use_vcm_wavefront=use_vcm_wavefront, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
         if rc != Int32(0):

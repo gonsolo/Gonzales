@@ -1,6 +1,8 @@
 from std.math import ceildiv, sqrt, log, exp, cos, sin, max
 from std.memory import alloc
 from max.algorithm import parallelize
+from std.atomic import Atomic
+from std.sys.info import num_performance_cores
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, PathState_C, TileResult_C, Sphere_C, AreaLight_C, LightSampler_C, light_sampler_sample, dot, cross, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, INV_FOUR_PI, curve_piece_endpoints, _curve_perp_axis
 from .bvh import SceneDescriptor2_C, traverse_bvh2_core, test_spheres, any_hit_bvh2_core
@@ -359,7 +361,44 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
             var elapsed = Float64(perf_counter_ns() - t0) / 1.0e9
             print(progress_str(d, n_tiles, elapsed, "tiles"), end="\r")
 
-    parallelize[render_one](n_tiles)
+    # Tile scheduling. `parallelize` splits its range STATICALLY, so worker k
+    # gets one contiguous run of tile indices -- i.e. a horizontal band of the
+    # image. That is fine when every pixel costs about the same, and terrible
+    # here: an SMS caustic concentrates almost all of the work into whichever
+    # tiles contain the caustic caster, so a couple of workers render the
+    # sphere while the rest finish their sky and idle. Measured on
+    # sphere_sms.xml at 270x270: 30m36 of CPU time in 319s of wall time, i.e.
+    # 5.75 of 24 cores busy, against the reference renderer's 18.4 -- most of
+    # that frame's wall-clock gap was this, not the algorithm.
+    #
+    # So hand out tiles from a shared atomic cursor instead: every worker
+    # takes the next unclaimed tile the moment it is free, and the frame ends
+    # when the last tile ends rather than when the unluckiest band does.
+    #
+    # Guided rendering keeps the static split. Its per-tile-group guide shards
+    # are assigned by tile INDEX RANGE precisely so that concurrently-running
+    # tiles never touch the same shard (see the shard_idx comment above), and
+    # dynamic claiming would break that invariant and race. Fixing it properly
+    # means sharding per WORKER, which needs at least as many shards as
+    # workers -- worth doing, but it belongs with --guide, not here.
+    if n_write_guides > 0:
+        parallelize[render_one](n_tiles)
+    else:
+        var next_tile = alloc[Int32](1)
+        next_tile[0] = Int32(0)
+
+        @parameter
+        def tile_worker(_worker_idx: Int):
+            while True:
+                var idx = Int(Atomic.fetch_add(next_tile, Int32(1)))
+                if idx >= n_tiles:
+                    break
+                render_one(idx)
+
+        # One worker per core; each drains the queue, so the count only needs
+        # to be enough to saturate the machine, not to match the tile count.
+        parallelize[tile_worker](min(num_performance_cores(), n_tiles))
+        next_tile.free()
     # Merge per-tile-group write guides into [0] so caller gets unified result.
     if n_write_guides > 1:
         for i in range(1, n_write_guides):

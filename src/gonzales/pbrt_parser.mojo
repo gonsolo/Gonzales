@@ -2667,7 +2667,17 @@ def mojo_apply_overrides(
     spp_override: Int32,
     w_override: Int32,
     h_override: Int32,
+    seed_override: Int64 = Int64(-1),
 ):
+    # The RNG seed is taken from the clock (see finalize_scene), so two runs
+    # of the same build never produce the same image. That is the right
+    # default for interactive/progressive rendering, but it makes A/B
+    # measurement impossible: on a scene with a heavy-tailed estimator -- an
+    # SMS caustic, say -- the whole-image mean swings by ~20% run to run, so
+    # any comparison of two builds is measuring noise unless the seed is
+    # pinned. `--seed` pins it.
+    if seed_override >= Int64(0):
+        psc[0].rng_seed = UInt64(seed_override)
     if spp_override > Int32(0):
         var spp = spp_override
         var log2_spp = Int32(0)
