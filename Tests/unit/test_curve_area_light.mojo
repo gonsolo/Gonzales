@@ -20,7 +20,7 @@ def _close(a: Float32, b: Float32) -> Bool:
 def _dummy_path(ray: Ray_C, throughput: RGB) -> PathState_C:
     return PathState_C(
         ray, throughput, RGB(Float32(0.0)), RGB(Float32(0.0)),
-        Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0),
+        Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
         Float32(0.0), Int32(-1), Int32(0), UInt64(0),
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
@@ -154,7 +154,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
         ray, RGB(Float32(0.5)), RGB(Float32(0.0)), RGB(Float32(0.0)),
         Int32(1),  # bounce > 0: NOT the "camera sees light directly" shortcut
         UInt64(1), UInt64(1), Int8(1), Int8(0),  # specularBounce = 0
-        Int8(0), Int8(0), pdf_bsdf, Int32(-1), Int32(0), UInt64(0),
+        Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)), pdf_bsdf, Int32(-1), Int32(0), UInt64(0),
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
     intersections[0] = inter

@@ -30,3 +30,12 @@ jobs:
         run: |
           uv sync
           make test_release
+
+      # `make test_release` only renders a scene -- it never ran the unit
+      # tests, so CI was green while four test files did not even COMPILE
+      # (a struct gained fields and three call sites were missed) and seven
+      # more failed intermittently. Both were invisible until this step
+      # existed.
+      - name: Unit tests
+        run: |
+          make unittest

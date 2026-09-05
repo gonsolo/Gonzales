@@ -86,6 +86,11 @@ def test_bxdf_eval_any_spectral_diffuse_matches_rgb_after_roundtrip() raises:
     assert_true(_close(accR, f_rgb.r, Float32(0.02)))
     assert_true(_close(accG, f_rgb.g, Float32(0.02)))
     assert_true(_close(accB, f_rgb.b, Float32(0.02)))
+    # Keep `ctx` alive: `handle` holds raw MutExternalOrigin pointers INTO
+    # ctx's own Lists, and that origin erasure hides the dependency, so ASAP
+    # destruction may drop ctx while the handle is still being read. Same
+    # use-after-free that made test_spectrum.mojo flaky.
+    _ = ctx^
 
 def test_bxdf_eval_any_spectral_conductor_pdf_matches_rgb() raises:
     var ctx = _test_ctx()
@@ -98,6 +103,11 @@ def test_bxdf_eval_any_spectral_conductor_pdf_matches_rgb() raises:
     var (_, pdf_rgb) = bxdf_eval_any(Int32(1), f0, Float32(0.3), n, wo, wi)
     var (_, pdf_spec) = bxdf_eval_any_spectral(Int32(1), f0, Float32(0.3), n, wo, wi, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl)
     assert_true(_close(pdf_spec, pdf_rgb))
+    # Keep `ctx` alive: `handle` holds raw MutExternalOrigin pointers INTO
+    # ctx's own Lists, and that origin erasure hides the dependency, so ASAP
+    # destruction may drop ctx while the handle is still being read. Same
+    # use-after-free that made test_spectrum.mojo flaky.
+    _ = ctx^
 
 def test_bxdf_eval_any_spectral_values_nonnegative() raises:
     var ctx = _test_ctx()
@@ -111,6 +121,11 @@ def test_bxdf_eval_any_spectral_values_nonnegative() raises:
     assert_true(f.v0 >= Float32(0.0) and f.v1 >= Float32(0.0) and f.v2 >= Float32(0.0) and f.v3 >= Float32(0.0))
 
 # ── _nee_weight_simple_spectral ──────────────────────────────────────────────
+    # Keep `ctx` alive: `handle` holds raw MutExternalOrigin pointers INTO
+    # ctx's own Lists, and that origin erasure hides the dependency, so ASAP
+    # destruction may drop ctx while the handle is still being read. Same
+    # use-after-free that made test_spectrum.mojo flaky.
+    _ = ctx^
 
 def test_nee_weight_simple_spectral_invalid_sample_is_zero() raises:
     var ctx = _test_ctx()
@@ -121,6 +136,11 @@ def test_nee_weight_simple_spectral_invalid_sample_is_zero() raises:
     var wo = Vec3f(0.0, 0.0, 1.0)
     var result = _nee_weight_simple_spectral(ls, Int32(0), RGB(Float32(0.5)), Float32(0.0), n, wo, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl)
     assert_true(_close(result.v0, Float32(0.0)) and _close(result.v1, Float32(0.0)))
+    # Keep `ctx` alive: `handle` holds raw MutExternalOrigin pointers INTO
+    # ctx's own Lists, and that origin erasure hides the dependency, so ASAP
+    # destruction may drop ctx while the handle is still being read. Same
+    # use-after-free that made test_spectrum.mojo flaky.
+    _ = ctx^
 
 def test_nee_weight_simple_spectral_backfacing_is_zero() raises:
     var ctx = _test_ctx()
@@ -132,6 +152,11 @@ def test_nee_weight_simple_spectral_backfacing_is_zero() raises:
     var wo = Vec3f(0.0, 0.0, 1.0)
     var result = _nee_weight_simple_spectral(ls, Int32(0), RGB(Float32(0.5)), Float32(0.0), n, wo, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl)
     assert_true(_close(result.v0, Float32(0.0)) and _close(result.v1, Float32(0.0)))
+    # Keep `ctx` alive: `handle` holds raw MutExternalOrigin pointers INTO
+    # ctx's own Lists, and that origin erasure hides the dependency, so ASAP
+    # destruction may drop ctx while the handle is still being read. Same
+    # use-after-free that made test_spectrum.mojo flaky.
+    _ = ctx^
 
 def test_nee_weight_simple_spectral_delta_light_matches_rgb_after_roundtrip() raises:
     """A delta (distant/point) light NEE term computed spectrally, averaged
@@ -161,6 +186,11 @@ def test_nee_weight_simple_spectral_delta_light_matches_rgb_after_roundtrip() ra
     assert_true(_close(accR, rgb_result.r, Float32(0.05)))
     assert_true(_close(accG, rgb_result.g, Float32(0.05)))
     assert_true(_close(accB, rgb_result.b, Float32(0.05)))
+    # Keep `ctx` alive: `handle` holds raw MutExternalOrigin pointers INTO
+    # ctx's own Lists, and that origin erasure hides the dependency, so ASAP
+    # destruction may drop ctx while the handle is still being read. Same
+    # use-after-free that made test_spectrum.mojo flaky.
+    _ = ctx^
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

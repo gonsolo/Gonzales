@@ -228,7 +228,7 @@ def _make_path() -> PathState_C:
     return PathState_C(
         Ray_C(Point3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0)),
         RGB(Float32(1.0)), RGB(Float32(0.0)), RGB(Float32(0.0)),
-        Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0),
+        Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
         Float32(0.0), Int32(-1), Int32(0), UInt64(0),
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
