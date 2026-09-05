@@ -160,10 +160,27 @@ VULKANINTEROP_INC = src/vulkaninterop
 VULKANINTEROP_GEN = src/vulkaninterop/generated
 VULKANINTEROP_LIB = $(BUILD_DIR)/libvulkaninterop.so
 
+# The interop bridge is the one component that hard-requires the CUDA
+# toolkit. Without it the whole build used to fail -- the Mojo link line
+# always pulls in -lvulkaninterop, so a missing cuda_runtime.h took down the
+# CPU renderer too (this is what had CI red: its container has no CUDA).
+# Detect the toolkit and fall back to vulkaninterop_stub.cpp, which exports
+# the same symbols and reports "unavailable" the way callers already expect
+# from a driver lacking the interop extensions.
+HAVE_CUDA := $(wildcard $(CUDA_HOME)/include/cuda_runtime.h)
+
+ifeq ($(HAVE_CUDA),)
+$(VULKANINTEROP_LIB): $(VULKANINTEROP_INC)/vulkaninterop_stub.cpp $(VULKANINTEROP_INC)/vulkaninterop.h
+	@mkdir -p $(BUILD_DIR)
+	@echo "note: no CUDA at $(CUDA_HOME) -- building vulkaninterop stub (CUDA/Vulkan interop disabled)"
+	g++ -fPIC -shared -std=c++20 -I$(VULKANINTEROP_INC) \
+		$(VULKANINTEROP_INC)/vulkaninterop_stub.cpp -o $(VULKANINTEROP_LIB)
+else
 $(VULKANINTEROP_LIB): $(VULKANINTEROP_SRC) $(VULKANINTEROP_INC)/vulkaninterop.h $(VULKANINTEROP_GEN)/interop_double_comp_spv.h $(VULKANINTEROP_GEN)/intersect_batch_comp_spv.h
 	@mkdir -p $(BUILD_DIR)
 	g++ -fPIC -shared -std=c++20 -I$(VULKANINTEROP_INC) -I$(VULKANINTEROP_GEN) -I$(CUDA_HOME)/include \
 		$(VULKANINTEROP_SRC) -lvulkan -L$(CUDA_HOME)/lib64 -lcudart -o $(VULKANINTEROP_LIB)
+endif
 
 ifdef GITHUB_ACTIONS
 MOJO_BUILD_FLAGS = --target-accelerator sm_89 --target-cpu x86-64-v3
