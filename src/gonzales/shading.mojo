@@ -2504,7 +2504,25 @@ def _sms_vertex_from_hit(
             n = -n
         var bu = inter.u; var bv = inter.v
         var point = p0 * (Float32(1.0) - bu - bv) + p1 * bu + p2 * bv
-        return (sms_vertex_flat(point, n, dp_du, dp_dv, eta), True)
+        # Orthonormalize the tangent basis (the reference's
+        # ManifoldVertex::make_orthonormal). The triangle's raw edge vectors
+        # span the right plane but are neither unit nor perpendicular, so a
+        # Jacobian expressed in them is per-PARAMETRIC-unit -- while the
+        # estimator pairs it with an AREA-measure light density. Both the
+        # specular vertex's basis and the light's have to be orthonormal for
+        # |dx1/dxL| to actually be an area-to-area ratio; a sphere vertex
+        # already is (its Frisvad frame), which is why only the triangle
+        # needed this.
+        var e1 = dp_du
+        var e1_len = sqrt(dot(e1, e1))
+        var e2 = dp_dv
+        if e1_len > Float32(1e-12):
+            e1 = e1 * (Float32(1.0) / e1_len)
+            e2 = e2 - e1 * dot(e1, e2)
+            var e2_len = sqrt(dot(e2, e2))
+            if e2_len > Float32(1e-12):
+                e2 = e2 * (Float32(1.0) / e2_len)
+        return (sms_vertex_flat(point, n, e1, e2, eta), True)
     else:
         return (sms_vertex_init(), False)
 
@@ -2956,8 +2974,25 @@ def _mnee_area_light_contribute(
         return False
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+    # ORTHONORMALIZE the light's tangent basis before handing it to the
+    # manifold walk. `_sample_light_point_and_normal` returns raw triangle
+    # EDGES (lp1-lp0, lp2-lp0), which are neither unit-length nor
+    # perpendicular, so d(constraint)/d(light) comes out in that triangle's
+    # own parametric units -- while `inv_pdf_area` is an AREA-measure
+    # density. The two only pair up when the light basis is orthonormal, and
+    # the reference makes exactly this call (`vy.make_orthonormal()` on the
+    # emitter vertex inside geometric_term) for the same reason.
+    var l_du = ldp_du_v
+    var l_du_len = sqrt(dot(l_du, l_du))
+    var l_dv = ldp_dv_v
+    if l_du_len > Float32(1e-12):
+        l_du = l_du * (Float32(1.0) / l_du_len)
+        l_dv = l_dv - l_du * dot(l_du, l_dv)
+        var l_dv_len = sqrt(dot(l_dv, l_dv))
+        if l_dv_len > Float32(1e-12):
+            l_dv = l_dv * (Float32(1.0) / l_dv_len)
     var _probe_res = _sms_probe_and_solve(
-        ctx, hit_point, shadow_dir, dist, light_point, ldp_du_v, ldp_dv_v, pcg)
+        ctx, hit_point, shadow_dir, dist, light_point, l_du, l_dv, pcg)
     var dielectric_found = _probe_res[0]
     var solve_ok = _probe_res[1]
     var n = _probe_res[2]
