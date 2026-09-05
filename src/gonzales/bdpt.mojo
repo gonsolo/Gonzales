@@ -27,6 +27,7 @@ from .bvh import (
 )
 from .sampling import power_heuristic, sample_ggx_vndf, sample_cosine_hemisphere_world
 from .rng import PCG32
+from .transform import matrix_invert
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, denoise
 from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_homogeneous_free_flight, sample_area_light_uniform, _HSIZE, _hash_cell, _sppm_render_core
@@ -907,6 +908,49 @@ def _bdpt_store_lvc_vertex(
 # ── LVC connection scale factor ──────────────────────────────────────────────
 
 @always_inline
+@always_inline
+def _bdpt_world_to_raster(
+    p_world: Vec3f,
+    w2c: UnsafePointer[Float32, MutExternalOrigin],     # inverse(cameraToWorld), col-major
+    c2r: UnsafePointer[Float32, MutExternalOrigin],     # inverse of the 3x3 raster->camera map, row-major
+    fw: Int32, fh: Int32,
+) -> Tuple[Bool, Float32, Float32, Float32]:
+    """Project a world point onto the film. Returns (ok, filmX, filmY,
+    cos_theta), where cos_theta is the angle between the camera's forward
+    axis and the direction to the point.
+
+    This is the inverse of sampling.mojo's `gen_primary_ray_state` camera
+    transform, which builds a ray direction as `M . (filmX, filmY, 1)` with
+    M the 3x3 taken from rasterToCamera's columns 0, 1 and 3 (its z column
+    is unused because the film sits at z=0). Inverting that map and
+    dividing through by the third component recovers (filmX, filmY) for any
+    camera-space direction, which is exactly what the t=1 light-tracing
+    strategy needs and what nothing in this renderer could do before.
+
+    ok=False when the point is behind the camera or lands off-film."""
+    # world -> camera
+    var px = p_world[0]; var py = p_world[1]; var pz = p_world[2]
+    var cx = w2c[0]*px + w2c[4]*py + w2c[8]*pz  + w2c[12]
+    var cy = w2c[1]*px + w2c[5]*py + w2c[9]*pz  + w2c[13]
+    var cz = w2c[2]*px + w2c[6]*py + w2c[10]*pz + w2c[14]
+    if cz <= Float32(1e-6):
+        return (False, Float32(0), Float32(0), Float32(0))   # behind the lens
+    var clen = sqrt(cx*cx + cy*cy + cz*cz)
+    if clen <= Float32(1e-12):
+        return (False, Float32(0), Float32(0), Float32(0))
+    var cos_theta = cz / clen                                # forward axis is +z
+    # camera-space direction -> (filmX, filmY): q = C2R . c, then divide
+    var q0 = c2r[0]*cx + c2r[1]*cy + c2r[2]*cz
+    var q1 = c2r[3]*cx + c2r[4]*cy + c2r[5]*cz
+    var q2 = c2r[6]*cx + c2r[7]*cy + c2r[8]*cz
+    if abs(q2) <= Float32(1e-12):
+        return (False, Float32(0), Float32(0), Float32(0))
+    var fx = q0 / q2
+    var fy = q1 / q2
+    if fx < Float32(0) or fy < Float32(0) or fx >= Float32(fw) or fy >= Float32(fh):
+        return (False, Float32(0), Float32(0), Float32(0))
+    return (True, fx, fy, cos_theta)
+
 def _bdpt_connect_to_cache(
     cv: BDPTVertex,
     sd: SceneDescriptor2_C,
@@ -5302,6 +5346,26 @@ def _bdpt_render_core(
     var r2c = psc[0].raster_to_camera
     var c2w = psc[0].camera_to_world
     var base_seed = psc[0].rng_seed
+
+    # ── t=1 light tracing: camera-projection matrices ────────────────────
+    # w2c = inverse(cameraToWorld). c2r inverts the 3x3 that
+    # gen_primary_ray_state uses to turn (filmX, filmY, 1) into a
+    # camera-space direction -- rasterToCamera's columns 0, 1 and 3.
+    var w2c = alloc[Float32](16)
+    _ = matrix_invert(c2w, w2c)
+    var a0 = r2c[0]; var a1 = r2c[4]; var a2 = r2c[12]
+    var b0 = r2c[1]; var b1 = r2c[5]; var b2 = r2c[13]
+    var g0 = r2c[2]; var g1 = r2c[6]; var g2 = r2c[14]
+    var d0 = b1*g2 - b2*g1
+    var d1 = b0*g2 - b2*g0
+    var d2 = b0*g1 - b1*g0
+    var det = a0*d0 - a1*d1 + a2*d2
+    var idet = Float32(1) / det if abs(det) > Float32(1e-20) else Float32(0)
+    var c2r = alloc[Float32](9)
+    c2r[0] =  d0*idet;                 c2r[1] = -(a1*g2 - a2*g1)*idet; c2r[2] =  (a1*b2 - a2*b1)*idet
+    c2r[3] = -d1*idet;                 c2r[4] =  (a0*g2 - a2*g0)*idet; c2r[5] = -(a0*b2 - a2*b0)*idet
+    c2r[6] =  d2*idet;                 c2r[7] = -(a0*g1 - a1*g0)*idet; c2r[8] =  (a0*b1 - a1*b0)*idet
+
 
     # The first n_pix light paths are DETERMINISTICALLY paired with that
     # pixel's eye subpath, standard Veach BDPT pairing -- see
