@@ -173,6 +173,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                 scene.spheres, Int(scene.sphereCount),
                 scene.spectral.coeffs, scene.spectral.res,
                 scene.spectral.cie_x, scene.spectral.cie_y, scene.spectral.cie_z, scene.spectral.d65,
+                scene.materials, scene.infiniteLights, Int(scene.infiniteLightCount),
             )
         for i in range(n):
             if paths[i].active == 0:
@@ -212,7 +213,22 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                 # smoke-plume's MediumInterface .. Shape sphere), so this
                 # case matters even though spheres rarely carry real shading.
                 var mi_sph = scene.spheres[Int(intersections[i].primId.id1)]
-                var mi_hit = paths[i].ray.origin + paths[i].ray.direction * intersections[i].tHit
+                # paths[i].ray.origin is ALREADY the hit point: this loop runs
+                # AFTER the material shaders, and every shader (shade_interface
+                # included) rewrites path.ray to the outgoing ray whose origin
+                # sits on the surface it just hit. Advancing it by tHit again
+                # here walked a SECOND full hit distance past the sphere,
+                # landing outside it on the far side, so sphere_outward_normal
+                # returned a normal for the wrong point and the dot test below
+                # read almost every ENTRY into the medium as an EXIT out of it
+                # (measured on bunny-cloud: 1968 "exit" vs 18 "enter" for a
+                # camera that is entirely outside the sphere). The medium was
+                # therefore almost never entered and the volume rendered as
+                # near-vacuum. Triangles were unaffected -- their normal comes
+                # from the vertices, not from a reconstructed hit point --
+                # which is why only sphere-bounded media (the common case for
+                # a "MediumInterface .. Shape sphere" volume) showed it.
+                var mi_hit = paths[i].ray.origin
                 mi_n = sphere_outward_normal(mi_hit, mi_sph.center)
             else:
                 var mi_mesh_idx: Int

@@ -570,7 +570,8 @@ def _shadow_contribute[enqueue_shadow: Bool](
         var shadow_ray = Ray_C(Point3f(origin[0], origin[1], origin[2]), Vec3f(dir[0], dir[1], dir[2]))
         if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, tmax,
                                   ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
-                                  ctx.lights.spheres, ctx.lights.sphere_count):
+                                  ctx.lights.spheres, ctx.lights.sphere_count,
+                                  materials=ctx.materials):
             path_ptr[].estimate += contrib
             # Record in the guide at the PARENT surface (one bounce back):
             # "scatter direction ray.dir from parent_cell leads to illumination W here."
@@ -3037,7 +3038,7 @@ def _mnee_area_light_contribute(
     if any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis_ray, wo_len * Float32(0.999),
                           ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                           ctx.lights.spheres, ctx.lights.sphere_count,
-                          ign_center, ign_radius):
+                          ign_center, ign_radius, materials=ctx.materials):
         return True
     # Phase 5.5: no MIS weight -- the refracted path is a specular chain
     # that BSDF sampling effectively never reproduces, so there is no
@@ -3190,7 +3191,7 @@ def sms_resolve(
     if any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis_ray, wo_len * Float32(0.999),
                           ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                           ctx.lights.spheres, ctx.lights.sphere_count,
-                          ign_center, ign_radius):
+                          ign_center, ign_radius, materials=ctx.materials):
         return
     var contrib = bxdf_eval_diffuse(alb) * res.le * (cos_s_x0 * res.state.w)
     path_ptr[].estimate += path_ptr[].throughput * contrib
@@ -3576,7 +3577,8 @@ def _gi_generate_recon_candidate(
     var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(wi[0], wi[1], wi[2]))
     if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, dist * Float32(0.9999),
                               ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
-                              ctx.lights.spheres, ctx.lights.sphere_count):
+                              ctx.lights.spheres, ctx.lights.sphere_count,
+                              materials=ctx.materials):
         lo = bxdf_eval_diffuse(alb) * le * (cos_s / gen_pdf)
     var res = gi_reservoir_init()
     res.recon_point = hit_point

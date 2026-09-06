@@ -928,6 +928,77 @@ def nvdb_sample_density(grid: NvdbGrid_C, p_world: Vec3f) -> Float32:
     if k < Int32(grid.index_min.z) or k > Int32(grid.index_max.z): return Float32(0.0)
     return nvdb_sample_index(grid.blob, i, j, k)
 
+@always_inline
+def _slab_range(o: Vec3f, d: Vec3f, bmin: Vec3f, bmax: Vec3f) -> SIMD[DType.float32, 2]:
+    """Ray/AABB slab test returning (t_enter, t_exit); t_exit < t_enter means
+    "misses the box". The ray is NOT normalized here on purpose: `d` is passed
+    in the SAME space as the box, transformed by the same affine map as `o`,
+    so the returned t values stay in the caller's original (world) parameter
+    units and can be compared directly against a world-space distance."""
+    var t0 = Float32(-1.0e30)
+    var t1 = Float32(1.0e30)
+    for a in range(3):
+        var di = d[a]
+        var oi = o[a]
+        var lo = bmin[a]
+        var hi = bmax[a]
+        if abs(di) < Float32(1e-12):
+            if oi < lo or oi > hi:
+                return SIMD[DType.float32, 2](Float32(1.0), Float32(-1.0))  # miss
+        else:
+            var inv = Float32(1.0) / di
+            var ta = (lo - oi) * inv
+            var tb = (hi - oi) * inv
+            var tmin_a = ta if ta < tb else tb
+            var tmax_a = tb if ta < tb else ta
+            if tmin_a > t0: t0 = tmin_a
+            if tmax_a < t1: t1 = tmax_a
+    return SIMD[DType.float32, 2](t0, t1)
+
+@always_inline
+def nvdb_ray_range(grid: NvdbGrid_C, org: Vec3f, dir: Vec3f) -> SIMD[DType.float32, 2]:
+    """(t_enter, t_exit) of the ray against this grid's index bbox, in WORLD t
+    units. Needed because an infinite (environment) light's shadow ray has no
+    finite distance to march: ratio-tracking it at the majorant step rate to a
+    nominal "infinity" would burn millions of iterations through empty space
+    for a transmittance that stops changing the moment the ray leaves the grid.
+    Both transforms are affine, so t is preserved and the range can be
+    intersected directly with the world-space shadow-ray length."""
+    var m = grid.world_to_medium
+    var ox = m[0]*org[0] + m[4]*org[1] + m[8]*org[2] + m[12]
+    var oy = m[1]*org[0] + m[5]*org[1] + m[9]*org[2] + m[13]
+    var oz = m[2]*org[0] + m[6]*org[1] + m[10]*org[2] + m[14]
+    var dx = m[0]*dir[0] + m[4]*dir[1] + m[8]*dir[2]
+    var dy = m[1]*dir[0] + m[5]*dir[1] + m[9]*dir[2]
+    var dz = m[2]*dir[0] + m[6]*dir[1] + m[10]*dir[2]
+    var im = grid.inv_map
+    var sx = ox - grid.map_vec.x
+    var sy = oy - grid.map_vec.y
+    var sz = oz - grid.map_vec.z
+    var oi = Vec3f(sx*im[0] + sy*im[1] + sz*im[2],
+                   sx*im[3] + sy*im[4] + sz*im[5],
+                   sx*im[6] + sy*im[7] + sz*im[8])
+    var di = Vec3f(dx*im[0] + dy*im[1] + dz*im[2],
+                   dx*im[3] + dy*im[4] + dz*im[5],
+                   dx*im[6] + dy*im[7] + dz*im[8])
+    return _slab_range(oi, di,
+        Vec3f(grid.index_min.x, grid.index_min.y, grid.index_min.z),
+        Vec3f(grid.index_max.x + Float32(1), grid.index_max.y + Float32(1), grid.index_max.z + Float32(1)))
+
+@always_inline
+def grid_ray_range(grid: Grid_C, org: Vec3f, dir: Vec3f) -> SIMD[DType.float32, 2]:
+    """(t_enter, t_exit) of the ray against a dense grid's [p0,p1] box, in
+    WORLD t units. Same purpose as nvdb_ray_range -- see that docstring."""
+    var m = grid.world_to_medium
+    var o = Vec3f(m[0]*org[0] + m[4]*org[1] + m[8]*org[2] + m[12],
+                  m[1]*org[0] + m[5]*org[1] + m[9]*org[2] + m[13],
+                  m[2]*org[0] + m[6]*org[1] + m[10]*org[2] + m[14])
+    var d = Vec3f(m[0]*dir[0] + m[4]*dir[1] + m[8]*dir[2],
+                  m[1]*dir[0] + m[5]*dir[1] + m[9]*dir[2],
+                  m[2]*dir[0] + m[6]*dir[1] + m[10]*dir[2])
+    return _slab_range(o, d,
+        Vec3f(grid.p0.x, grid.p0.y, grid.p0.z), Vec3f(grid.p1.x, grid.p1.y, grid.p1.z))
+
 @fieldwise_init
 struct MediumInterface_C(TrivialRegisterPassable):
     """Binds inside/outside media to a surface. -1 = vacuum."""

@@ -1,7 +1,7 @@
 from std.memory import alloc
 from std.math import sqrt, cos, sin, max, min, exp, floor, log
 from max.algorithm import parallelize
-from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, _is_real_ptr, store_vec3, _atan2f
+from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, MatKind, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, _is_real_ptr, store_vec3, _atan2f
 from .rng import PCG32
 from .spectrum import SpectralHandle
 
@@ -1575,6 +1575,28 @@ def traverse_bvh2_core_defer_curves(
 
 # Shadow-ray traversal: returns True if anything is hit within tMax (early exit).
 @always_inline
+@always_inline
+def _shadow_is_null_material(
+    materials: UnsafePointer[Material_C, MutExternalOrigin], mat_idx: Int64
+) -> Bool:
+    """True if this primitive carries pbrt's "interface" (null) material, which
+    has NO BSDF: it exists only to mark a medium boundary and must be invisible
+    to shadow rays. Without this, the big invisible sphere that bounds a
+    volumetric medium ("MediumInterface .. Shape sphere", the standard pbrt
+    idiom used by bunny-cloud/explosion/disney-cloud) cast a hard opaque
+    circular shadow onto everything below it AND blocked every NEE ray leaving
+    the medium, so the volume lit only via rare BSDF-sampled escapes -- which
+    is what produced the sparse-bright-dot fireflies on those scenes.
+
+    `materials` is optional: callers that don't have the array pass nothing and
+    get the old material-blind behavior, so this is opt-in per call site rather
+    than a signature change rippling through all 17 callers."""
+    if not _is_real_ptr[Material_C](materials):
+        return False
+    if mat_idx < Int64(0):
+        return False
+    return materials[Int(mat_idx)].type == MatKind.interface
+
 def any_hit_bvh2_core(
     bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
     primIds: UnsafePointer[PrimId_C, MutExternalOrigin],
@@ -1589,6 +1611,7 @@ def any_hit_bvh2_core(
     n_spheres: Int = 0,
     ignore_sphere_center: Vec3f = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0)),
     ignore_sphere_radius: Float32 = Float32(-1.0),
+    materials: UnsafePointer[Material_C, MutExternalOrigin] = UnsafePointer[Material_C, MutExternalOrigin].unsafe_dangling(),
 ) -> Bool:
     # Analytic spheres live in their own flat array, not the mesh/curve BVH
     # this function walks, so they need their own (cheap, since n_spheres
@@ -1618,6 +1641,8 @@ def any_hit_bvh2_core(
             var dc = sc - ignore_sphere_center
             if abs(spheres[i].radius - ignore_sphere_radius) < Float32(1e-4) and dot(dc, dc) < Float32(1e-4):
                 continue
+        if _shadow_is_null_material(materials, Int64(spheres[i].materialIndex)):
+            continue
         if ray_sphere_hit(spheres[i].center, spheres[i].radius, ray, Float32(1e-4), tMax) > Float32(0.0):
             return True
     var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
@@ -1638,6 +1663,10 @@ def any_hit_bvh2_core(
             var count = Int(node.count)
             for j in range(count):
                 var prim = primIds[offset + j]
+                # pbrt "interface" (null) material: no BSDF, medium boundary
+                # only -- must not occlude. See _shadow_is_null_material.
+                if _shadow_is_null_material(materials, prim.materialIndex):
+                    continue
                 var mesh_idx: Int
                 var base_vidx: Int
                 if prim.type == 0:
