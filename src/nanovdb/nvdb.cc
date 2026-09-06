@@ -102,6 +102,63 @@ void nvdb_grid_name(void* handle, char* out, int cap) {
     out[cap - 1] = '\0';
 }
 
+float nvdb_get_value(void* handle, int i, int j, int k) {
+    auto* g = float_grid(static_cast<Handle*>(handle));
+    if (!g) return 0.0f;
+    return g->tree().getValue(nanovdb::Coord(i, j, k));
+}
+
+unsigned long nvdb_active_count(void* handle) {
+    auto* g = float_grid(static_cast<Handle*>(handle));
+    if (!g) return 0ul;
+    // Deliberately NOT grid->activeVoxelCount(): that also counts voxels
+    // represented by active TILES at the upper levels (this file has 2),
+    // which nvdb_active_coord's leaf walk cannot enumerate. Returning the
+    // larger number would hand the differential test indices it resolves to
+    // (0,0,0) -- background on both sides, so a stub accessor that always
+    // returns background would "agree" and the test would pass vacuously.
+    // Count exactly what the walk below can reach.
+    const auto& tree = g->tree();
+    const uint32_t leafCount = tree.nodeCount(0);
+    unsigned long total = 0;
+    for (uint32_t li = 0; li < leafCount; ++li) {
+        total += (unsigned long)(tree.getFirstNode<0>() + li)->valueMask().countOn();
+    }
+    return total;
+}
+
+void nvdb_active_coord(void* handle, unsigned long n, int* out3) {
+    auto* g = float_grid(static_cast<Handle*>(handle));
+    if (!g || !out3) return;
+    // Walk leaves and pick the n-th active voxel (mod total). Leaf order is
+    // deterministic for a given blob, so this is reproducible across runs
+    // and across the two accessors being compared.
+    const auto& tree = g->tree();
+    const uint32_t leafCount = tree.nodeCount(0);
+    if (leafCount == 0) { out3[0] = out3[1] = out3[2] = 0; return; }
+    unsigned long idx = n;
+    for (uint32_t li = 0; li < leafCount; ++li) {
+        const auto* leaf = tree.getFirstNode<0>() + li;
+        const uint64_t act = leaf->valueMask().countOn();
+        if (act == 0) continue;
+        if (idx < act) {
+            uint64_t seen = 0;
+            for (uint32_t o = 0; o < 512u; ++o) {
+                if (leaf->valueMask().isOn(o)) {
+                    if (seen == idx) {
+                        auto c = leaf->offsetToGlobalCoord(o);
+                        out3[0] = c[0]; out3[1] = c[1]; out3[2] = c[2];
+                        return;
+                    }
+                    ++seen;
+                }
+            }
+        }
+        idx -= act;
+    }
+    out3[0] = out3[1] = out3[2] = 0;
+}
+
 void nvdb_free(void* handle) {
     delete static_cast<Handle*>(handle);
 }

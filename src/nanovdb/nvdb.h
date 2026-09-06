@@ -40,6 +40,20 @@ void nvdb_value_range(void* handle, float* out_min, float* out_max);
 // Grid name, copied into `out` (NUL-terminated, truncated to cap).
 void nvdb_grid_name(void* handle, char* out, int cap);
 
+// Reference single-voxel lookup through NanoVDB's own C++ accessor, in
+// index space. This exists purely so the Mojo accessor can be diffed
+// against it in-process on the same blob -- offset/bitmask errors in a
+// tree traversal are SILENT (wrong densities, not crashes), so a
+// mechanical oracle is what makes that port checkable at all.
+float nvdb_get_value(void* handle, int i, int j, int k);
+
+// Active-voxel coordinate at sequence position `n` (wraps). Lets a test
+// hit voxels that actually carry data -- uniform random sampling of the
+// index bbox mostly lands in empty space on a sparse grid, which would
+// pass trivially against a stub that always returns background.
+void nvdb_active_coord(void* handle, unsigned long n, int* out3);
+unsigned long nvdb_active_count(void* handle);
+
 void nvdb_free(void* handle);
 
 #ifdef __cplusplus
