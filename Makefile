@@ -83,7 +83,7 @@ PFM = $(IMAGE:.exr=.pfm)
 
 OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(USE_GONZALES)
 
-.PHONY: all c ca clean clean_all e edit es editScene em editMakefile lldb p perf tags t test \
+.PHONY: all c ca clean clean_all e edit es editScene em editMakefile lldb p perf tags t test smoke smoketest \
 	test_debug test_release v view wc book book-html book-watch ut unittest \
 	sms_mitsuba_ref
 
@@ -235,6 +235,37 @@ GPU_ONLY_TEST_SRCS := Tests/unit/test_gpu.mojo \
 ifeq ($(HAVE_CUDA),)
 UNIT_TEST_SRCS := $(filter-out $(GPU_ONLY_TEST_SRCS),$(UNIT_TEST_SRCS))
 endif
+# Integration smoke test: render one tiny image per integrator/backend and
+# assert each is openable, finite and non-black. Unit tests cover pure
+# functions and cannot notice that a whole MODE has stopped working --
+# --gpu --vcm crashed with CUDA_ERROR_ILLEGAL_ADDRESS from the Modular
+# 26.5.0 upgrade until it was found months later, with every unit test
+# passing throughout. The --gpu --vcm fix is also a codegen perturbation
+# rather than a root-cause fix, so it specifically needs a guard.
+# GPU rows only run where there is a CUDA toolkit to build them.
+SMOKE_SCENE := Scenes/cornell-box.pbrt
+SMOKE_ARGS  := --no-denoise --spp 4 --resolution 32x32 --seed 1
+SMOKE_MODES := cpu-pt:  cpu-vcm:--vcm
+ifneq ($(HAVE_CUDA),)
+SMOKE_MODES += gpu-pt:--gpu gpu-vcm:--gpu\ --vcm
+endif
+smoke: smoketest
+smoketest: release
+	@rc=0; \
+	for entry in $(SMOKE_MODES); do \
+		label=$${entry%%:*}; flags=$$(echo "$${entry#*:}" | tr '\\' ' '); \
+		rm -f cornell-box.exr; \
+		if ! ./build/gonzales $(SMOKE_ARGS) $$flags $(SMOKE_SCENE) > build/smoke-$$label.log 2>&1; then \
+			echo "FAIL $$label: renderer exited non-zero"; \
+			tail -3 build/smoke-$$label.log | sed 's/^/       /'; \
+			rc=1; continue; \
+		fi; \
+		python3 Scripts/check_render.py "$$label" cornell-box.exr || rc=1; \
+	done; \
+	rm -f cornell-box.exr; \
+	if [ $$rc -ne 0 ]; then echo "smoketest FAILED"; else echo "smoketest passed"; fi; \
+	exit $$rc
+
 ut: unittest
 # Depends on the OIIO/viewer bridge libs (not the full $(GONZALES) binary)
 # because a few tests (e.g. test_gpu_scene_upload.mojo) compile real code
