@@ -204,6 +204,9 @@ struct SceneParseState(Movable):
     var film_w:           Int32
     var film_h:           Int32
     var film_iso:         Float32
+    var film_exposuretime: Float32
+    var film_whitebalance: Float32   # colour temperature in K; 0 = disabled (pbrt default)
+    var film_sensor:      String     # pbrt "sensor"; only "cie1931" is modelled
     var film_max_comp:    Float32
     var film_filename:    String
     # Film "float cropwindow" [x0 x1 y0 y1] — normalized fractional bounds
@@ -329,6 +332,9 @@ struct SceneParseState(Movable):
         self.film_w           = Int32(512)
         self.film_h           = Int32(512)
         self.film_iso         = Float32(100)
+        self.film_exposuretime = Float32(1.0)
+        self.film_whitebalance = Float32(0.0)
+        self.film_sensor = String("cie1931")
         self.film_max_comp    = Float32(0)
         self.film_filename    = String("gonzales.exr")
         self.crop_x0 = Float32(0.0)

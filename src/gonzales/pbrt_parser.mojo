@@ -70,6 +70,8 @@ struct ParsedScene_Mojo:
     var crop_y1: Float32
     var camera_fov:       Float32
     var film_iso:         Float32
+    var film_exposuretime: Float32
+    var film_wb:          SIMD[DType.float32, 16]  # 3x3 row-major in lanes 0..8; sensor white balance
     var film_max_comp:    Float32
     var film_filename:    UnsafePointer[UInt8, MutExternalOrigin]      # null-terminated
     var filter_sigma:     Float32
@@ -306,6 +308,18 @@ def _psc_handle_film(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     s[0].film_h = params.get_int("yresolution", s[0].film_h)
     s[0].film_filename = params.get_string("filename", s[0].film_filename)
     s[0].film_iso = params.get_float("iso", s[0].film_iso)
+    s[0].film_exposuretime = params.get_float("exposuretime", s[0].film_exposuretime)
+    s[0].film_whitebalance = params.get_float("whitebalance", s[0].film_whitebalance)
+    var sensor_str = params.get_string("sensor", "cie1931")
+    if sensor_str != "cie1931" and sensor_str != "":
+        # pbrt models a named sensor with its MEASURED per-wavelength r/g/b
+        # response curves, fitted to XYZ through 24 Macbeth swatch spectra.
+        # Those tables are not ported, so fall back to pbrt's own default
+        # sensor ("cie1931", i.e. the XYZ matching functions). Exposure and
+        # white balance below are still applied exactly, so this differs from
+        # pbrt only by the sensor's colour-response shape.
+        print("Warning: film sensor '" + sensor_str + "' not modelled — using cie1931 response (exposure and whitebalance still applied).")
+    s[0].film_sensor = sensor_str
     s[0].film_max_comp = params.get_float("maxcomponentvalue", s[0].film_max_comp)
     var cw = params.get_floats("cropwindow")
     if len(cw) >= 4:
@@ -1430,6 +1444,86 @@ def _curve_greedy_groups(
         start = end
     return n_groups
 
+# ── Film sensor: white balance ────────────────────────────────────────────────
+# pbrt's PixelSensor applies a von Kries (Bradford) chromatic adaptation from
+# the illuminant named by the film's "whitebalance" colour temperature to the
+# output colour space's white (D65 for sRGB), then scales by an imaging ratio
+# of exposuretime * iso / 100. Both are reproduced exactly here for pbrt's
+# DEFAULT sensor; a named sensor's measured response curves are not ported
+# (see the warning in the Film handler). Returns a 3x3 row-major RGB->RGB
+# matrix in lanes 0..8 -- identity when whitebalance is 0 (pbrt's default,
+# meaning "no white balancing").
+
+def _film_white_balance_matrix(temp_k: Float32) -> SIMD[DType.float32, 16]:
+    var m = SIMD[DType.float32, 16](0)
+    m[0] = Float32(1); m[4] = Float32(1); m[8] = Float32(1)
+    if temp_k <= Float32(0):
+        return m
+    # CIE D-illuminant chromaticity locus for the requested temperature.
+    var t = Float64(temp_k)
+    var x: Float64
+    if t <= 7000.0:
+        x = -4.6070e9/(t*t*t) + 2.9678e6/(t*t) + 0.09911e3/t + 0.244063
+    else:
+        x = -2.0064e9/(t*t*t) + 1.9018e6/(t*t) + 0.24748e3/t + 0.237040
+    var y = -3.000*x*x + 2.870*x - 0.275
+
+    var src = InlineArray[Float64, 3](fill=0.0)
+    src[0] = x/y; src[1] = 1.0; src[2] = (1.0 - x - y)/y
+    var dst = InlineArray[Float64, 3](fill=0.0)
+    var dx = 0.3127; var dy = 0.3290          # sRGB white (D65)
+    dst[0] = dx/dy; dst[1] = 1.0; dst[2] = (1.0 - dx - dy)/dy
+
+    # Bradford LMS<->XYZ, the same matrices pbrt uses.
+    var L = InlineArray[Float64, 9](fill=0.0)
+    L[0]= 0.8951; L[1]= 0.2664; L[2]=-0.1614
+    L[3]=-0.7502; L[4]= 1.7135; L[5]= 0.0367
+    L[6]= 0.0389; L[7]=-0.0685; L[8]= 1.0296
+    var Li = InlineArray[Float64, 9](fill=0.0)
+    Li[0]= 0.986993;   Li[1]=-0.147054;  Li[2]= 0.159963
+    Li[3]= 0.432305;   Li[4]= 0.51836;   Li[5]= 0.0492912
+    Li[6]=-0.00852866; Li[7]= 0.0400428; Li[8]= 0.968487
+    # sRGB primaries.
+    var XR = InlineArray[Float64, 9](fill=0.0)
+    XR[0]=0.4124564; XR[1]=0.3575761; XR[2]=0.1804375
+    XR[3]=0.2126729; XR[4]=0.7151522; XR[5]=0.0721750
+    XR[6]=0.0193339; XR[7]=0.1191920; XR[8]=0.9503041
+    var RX = InlineArray[Float64, 9](fill=0.0)
+    RX[0]= 3.2404542; RX[1]=-1.5371385; RX[2]=-0.4985314
+    RX[3]=-0.9692660; RX[4]= 1.8760108; RX[5]= 0.0415560
+    RX[6]= 0.0556434; RX[7]=-0.2040259; RX[8]= 1.0572252
+
+    var sl = InlineArray[Float64, 3](fill=0.0)
+    var dl = InlineArray[Float64, 3](fill=0.0)
+    for r in range(3):
+        sl[r] = L[r*3]*src[0] + L[r*3+1]*src[1] + L[r*3+2]*src[2]
+        dl[r] = L[r*3]*dst[0] + L[r*3+1]*dst[1] + L[r*3+2]*dst[2]
+
+    # M = RGBfromXYZ * (XYZfromLMS * diag(dl/sl) * LMSfromXYZ) * XYZfromRGB
+    var A = InlineArray[Float64, 9](fill=0.0)     # XYZfromLMS * diag
+    for r in range(3):
+        for c in range(3):
+            var g = dl[c] / sl[c] if sl[c] != 0.0 else 1.0
+            A[r*3+c] = Li[r*3+c] * g
+    var B = InlineArray[Float64, 9](fill=0.0)     # A * LMSfromXYZ
+    for r in range(3):
+        for c in range(3):
+            var acc = 0.0
+            for k in range(3): acc += A[r*3+k] * L[k*3+c]
+            B[r*3+c] = acc
+    var C = InlineArray[Float64, 9](fill=0.0)     # B * XYZfromRGB
+    for r in range(3):
+        for c in range(3):
+            var acc = 0.0
+            for k in range(3): acc += B[r*3+k] * XR[k*3+c]
+            C[r*3+c] = acc
+    for r in range(3):
+        for c in range(3):
+            var acc = 0.0
+            for k in range(3): acc += RX[r*3+k] * C[k*3+c]
+            m[r*3+c] = Float32(acc)
+    return m
+
 # ── Scene finalization ────────────────────────────────────────────────────────
 
 def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
@@ -2222,6 +2316,8 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
     psc[0].crop_y1          = s[0].crop_y1
     psc[0].camera_fov       = s[0].camera_fov
     psc[0].film_iso         = s[0].film_iso
+    psc[0].film_exposuretime = s[0].film_exposuretime
+    psc[0].film_wb          = _film_white_balance_matrix(s[0].film_whitebalance)
     psc[0].film_max_comp    = s[0].film_max_comp
     psc[0].film_filename    = fname
     psc[0].filter_sigma     = s[0].filter_sigma

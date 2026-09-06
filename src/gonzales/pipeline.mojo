@@ -5,7 +5,7 @@ from std.sys.info import size_of
 from max.gpu.host import DeviceBuffer
 from .pbrt_parser import ParsedScene_Mojo, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film, mojo_apply_overrides
 from .scene_loader import mojo_parse_scene_any
-from .rendering import render_all_tiles, normalize_film, fmt_time, progress_str
+from .rendering import render_all_tiles, normalize_film, apply_film_sensor, fmt_time, progress_str
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, Ray_C, dot, TriangleMesh_C, _is_real_ptr, Curve_C, curve_piece_bounds
 from .postprocess import denoise, write_image, write_image_cropped
@@ -1269,6 +1269,7 @@ def parse_and_render(
         gpu_atrous_denoise(handle, denoised_gpu.unsafe_ptr(), Int64(n_pixels),
                                 Int32(spp), psc[0].film_iso, psc[0].film_max_comp,
                                 apply_denoise=not no_denoise)
+        apply_film_sensor(denoised_gpu.unsafe_ptr(), n_pixels, psc[0].film_exposuretime, psc[0].film_wb)
         gpu_download_albedo(handle, albedo_gpu.unsafe_ptr(), Int64(n_pixels))
         var inv_spp = Float32(1.0) / Float32(spp)
         for i in range(n_pixels * 3):
@@ -1465,6 +1466,7 @@ def parse_and_render(
         normalize_film(results.unsafe_ptr(), Int32(n_pixels),
                             psc[0].film_iso, psc[0].film_max_comp,
                             beauty.unsafe_ptr(), albedo.unsafe_ptr())
+        apply_film_sensor(beauty.unsafe_ptr(), n_pixels, psc[0].film_exposuretime, psc[0].film_wb)
         if no_denoise:
             # --no-denoise: write the normalized beauty directly (raw render).
             for i in range(n_pixels * 3): denoised[i] = beauty[i]
@@ -1797,6 +1799,7 @@ def render_interactive(
             gpu_atrous_denoise(handle, denoised.unsafe_ptr(), Int64(n_pixels),
                                     Int32(frame_count),
                                     psc[0].film_iso, psc[0].film_max_comp)
+            apply_film_sensor(denoised.unsafe_ptr(), n_pixels, psc[0].film_exposuretime, psc[0].film_wb)
         else:
             sp_int[] = TileSamplerParams_C(
                 sobolMatrices=sobol,
@@ -1905,6 +1908,7 @@ def render_interactive(
             normalize_film(results.unsafe_ptr(), Int32(n_pixels),
                                 psc[0].film_iso, psc[0].film_max_comp,
                                 beauty_frame.unsafe_ptr(), albedo_frame.unsafe_ptr())
+            apply_film_sensor(beauty_frame.unsafe_ptr(), n_pixels, psc[0].film_exposuretime, psc[0].film_wb)
             frame_count += 1
             var w = Float32(1) / Float32(frame_count)
             if frame_count == 1:
