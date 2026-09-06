@@ -5804,6 +5804,113 @@ def _bdpt_emit_light_paths_gpu(
     _bdpt_trace_light_path[True](sd, pcg, has_med, default_emit_med, scratch, lvc, k, lvc_path_len,
                                  mis_vc_weight_factor, mis_vm_weight_factor)
 
+def _bdpt_splat_light_paths_gpu(
+    accum: UnsafePointer[Float32, MutExternalOrigin],
+    lvc: UnsafePointer[BDPTVertex, MutExternalOrigin],
+    lvc_path_len: UnsafePointer[Int32, MutExternalOrigin],
+    n_light_paths_dp: Int64,
+    inter_scratch: UnsafePointer[Intersection_C, MutExternalOrigin],
+    w2c: UnsafePointer[Float32, MutExternalOrigin],
+    c2r: UnsafePointer[Float32, MutExternalOrigin],
+    c2w: UnsafePointer[Float32, MutExternalOrigin],
+    fw_dp: Int64, fh_dp: Int64,
+    px_scale: Float32,
+    mis_vm_weight_factor: Float32,
+    bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
+    primIds: UnsafePointer[PrimId_C, MutExternalOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
+    materials: UnsafePointer[Material_C, MutExternalOrigin],
+    areaLights: UnsafePointer[AreaLight_C, MutExternalOrigin],
+    areaLightCount: Int64,
+    spheres: UnsafePointer[Sphere_C, MutExternalOrigin],
+    sphereCount: Int64,
+    curves: UnsafePointer[Curve_C, MutExternalOrigin],
+    curveCount: Int64,
+    mediums: UnsafePointer[Medium_C, MutExternalOrigin],
+    mediumCount: Int64,
+    mediumInterfaces: UnsafePointer[MediumInterface_C, MutExternalOrigin],
+    mediumIfaceCount: Int64,
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin],
+    blasCount: Int64,
+    instances: UnsafePointer[Instance_C, MutExternalOrigin],
+    instanceCount: Int64,
+    distantLights: UnsafePointer[DistantLight_C, MutExternalOrigin],
+    distantLightCount: Int64,
+    infiniteLights: UnsafePointer[InfiniteLight_C, MutExternalOrigin],
+    infiniteLightCount: Int64,
+    pointLights: UnsafePointer[PointLight_C, MutExternalOrigin],
+    pointLightCount: Int64,
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_res_dp: Int64 = Int64(0),
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutExternalOrigin] = UnsafePointer[MeasuredBRDF_C, MutExternalOrigin].unsafe_dangling(),
+    measuredBrdfCount: Int64 = Int64(0),
+    gpuTextures: UnsafePointer[GpuTexture_C, MutExternalOrigin] = UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(),
+    gpuTextureCount: Int64 = Int64(0),
+):
+    """GPU t=1 light tracing: one thread per light path, splatting each of
+    its vertices onto the film through the same `_bdpt_connect_to_camera`
+    the CPU path uses, so the two backends share the estimator exactly.
+
+    One deliberate difference from vcm_render's CPU Phase 1.5: the film is
+    accumulated with float atomics here. The CPU version avoids them --
+    connections are recorded into a per-slot array in parallel and summed
+    in a serial pass, which keeps its film bitwise deterministic. That does
+    not carry over: a light vertex lands on an ARBITRARY pixel, so unlike
+    every other kernel here (each of which owns its output slot) collisions
+    between threads are the normal case, and resolving them without atomics
+    would need either a host readback of tens of MB per pass or a second
+    scatter kernel that needs atomics anyway.
+
+    The cost is that --gpu --vcm's film is not bitwise reproducible across
+    runs, since float addition is not associative and the atomic order is
+    arbitrary. Use CPU --vcm when bitwise determinism matters, e.g. when
+    A/B-testing an estimator change.
+
+    Launched on the same stream AFTER _bdpt_camera_connect_gpu so that
+    kernel's non-atomic per-pixel `accum[pix*3] += ...` (race-free only
+    because each of its threads owns one pixel) can never overlap these
+    atomic adds."""
+    var n_light_paths = Int(n_light_paths_dp)
+    var k = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if k >= n_light_paths:
+        return
+    var sd = _mk_sd_full(
+        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
+        areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
+        mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
+        blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
+        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
+        pointLights, pointLightCount,
+        spectral_coeffs, Int(spectral_res_dp), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+        measuredBrdfs, measuredBrdfCount,
+        gpuTextures, gpuTextureCount,
+    )
+    var cam_pos = Vec3f(c2w[12], c2w[13], c2w[14])
+    var scratch = inter_scratch + k
+    var base = k * _BDPT_MAX_VERTS
+    var n_pix_k = Int(fw_dp) * Int(fh_dp)
+    var n_verts = Int(lvc_path_len[k])
+    for local in range(min(n_verts, _BDPT_MAX_VERTS)):
+        var r = _bdpt_connect_to_camera(
+            lvc[base + local], sd, scratch, cam_pos,
+            w2c, c2r, Int32(Int(fw_dp)), Int32(Int(fh_dp)), px_scale,
+            Float32(n_light_paths), mis_vm_weight_factor)
+        if r[0]:
+            var pix = Int(r[1])
+            # _bdpt_world_to_raster already rejects off-film rasters, so this
+            # is belt-and-braces -- but an out-of-range pix here would be an
+            # unbounded scatter into device memory, not a wrong pixel.
+            if pix >= 0 and pix < n_pix_k:
+                var c = r[2]
+                _ = Atomic[DType.float32].fetch_add(accum + (pix * 3 + 0), c.r)
+                _ = Atomic[DType.float32].fetch_add(accum + (pix * 3 + 1), c.g)
+                _ = Atomic[DType.float32].fetch_add(accum + (pix * 3 + 2), c.b)
+
 def _bdpt_camera_connect_gpu(
     accum: UnsafePointer[Float32, MutExternalOrigin],
     albedo_accum: UnsafePointer[Float32, MutExternalOrigin],
@@ -6651,6 +6758,42 @@ def vcm_render_gpu(
                 for i in range(16 * size_of[Float32]()):
                     dst[i] = src[i]
 
+            # t=1 light tracing needs the same two camera-projection
+            # matrices vcm_render builds on the CPU (see its matching
+            # comment): w2c = inverse(cameraToWorld), and c2r inverting the
+            # 3x3 that turns (filmX, filmY, 1) into a camera-space direction.
+            var w2c_host = alloc[Float32](16)
+            _ = matrix_invert(psc[0].camera_to_world, w2c_host)
+            var _r2c_h = psc[0].raster_to_camera
+            var a0 = _r2c_h[0]; var a1 = _r2c_h[4]; var a2 = _r2c_h[12]
+            var b0 = _r2c_h[1]; var b1 = _r2c_h[5]; var b2 = _r2c_h[13]
+            var g0 = _r2c_h[2]; var g1 = _r2c_h[6]; var g2 = _r2c_h[14]
+            var d0 = b1*g2 - b2*g1
+            var d1 = b0*g2 - b2*g0
+            var d2 = b0*g1 - b1*g0
+            var det = a0*d0 - a1*d1 + a2*d2
+            var idet = Float32(1) / det if abs(det) > Float32(1e-20) else Float32(0)
+            var c2r_host = alloc[Float32](9)
+            c2r_host[0] =  d0*idet; c2r_host[1] = -(a1*g2 - a2*g1)*idet; c2r_host[2] =  (a1*b2 - a2*b1)*idet
+            c2r_host[3] = -d1*idet; c2r_host[4] =  (a0*g2 - a2*g0)*idet; c2r_host[5] = -(a0*b2 - a2*b0)*idet
+            c2r_host[6] =  d2*idet; c2r_host[7] = -(a0*g1 - a1*g0)*idet; c2r_host[8] =  (a0*b1 - a1*b0)*idet
+            var w2c_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
+            with w2c_buf.map_to_host() as host_buf:
+                var dst = host_buf.unsafe_ptr()
+                var src = w2c_host.bitcast[UInt8]()
+                for i in range(16 * size_of[Float32]()):
+                    dst[i] = src[i]
+            var c2r_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](9 * size_of[Float32]())
+            with c2r_buf.map_to_host() as host_buf:
+                var dst = host_buf.unsafe_ptr()
+                var src = c2r_host.bitcast[UInt8]()
+                for i in range(9 * size_of[Float32]()):
+                    dst[i] = src[i]
+            w2c_host.free()
+            c2r_host.free()
+            var w2c_ptr = w2c_buf.unsafe_ptr().bitcast[Float32]()
+            var c2r_ptr = c2r_buf.unsafe_ptr().bitcast[Float32]()
+
             var lvc_ptr     = lvc_buf.unsafe_ptr().bitcast[BDPTVertex]()
             var path_len_ptr = path_len_buf.unsafe_ptr().bitcast[Int32]()
             var merge_heads_ptr = merge_heads_buf.unsafe_ptr().bitcast[Int32]()
@@ -6765,6 +6908,26 @@ def vcm_render_gpu(
                     measured_brdfs, n_measured_brdfs,
                     gpu_textures, n_gpu_textures,
                     grid_dim=grid_pix, block_dim=block_size)
+
+                # Phase 1.5: t=1 light tracing, the GPU counterpart of
+                # vcm_render's splat pass. Same stream, launched AFTER the
+                # camera connect -- see the kernel's docstring for why the
+                # ordering matters and why this one uses atomics where the
+                # CPU path deliberately does not.
+                handle[].ctx.enqueue_function[_bdpt_splat_light_paths_gpu](
+                    accum_ptr, lvc_ptr, path_len_ptr, Int64(n_light_paths_merge),
+                    inter_light_ptr, w2c_ptr, c2r_ptr, c2w_ptr,
+                    Int64(fw), Int64(fh), px_scale, mis_vm_weight_factor,
+                    bvh2Nodes, primIds, meshes, materials,
+                    areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
+                    mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
+                    blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
+                    distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
+                    pointLights, n_point_lights,
+                    spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+                    measured_brdfs, n_measured_brdfs,
+                    gpu_textures, n_gpu_textures,
+                    grid_dim=grid_light, block_dim=block_size)
 
                 if verbose:
                     print("VCM (GPU): sample " + String(si + 1) + "/" + String(n_spp))
