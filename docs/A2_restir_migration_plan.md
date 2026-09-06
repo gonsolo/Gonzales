@@ -1,7 +1,7 @@
 # A2: ReSTIR / SMS Migration Plan
 
 Plan for moving gonzales from VCM + SPPM + lightweight guiding to a
-GRIS/ReSTIR-based sampling framework. **Status (2026-08-05): Phases 0-5
+GRIS/ReSTIR-based sampling framework. **Status (2026-09-06): Phases 0-5
 done; Phase 6 core done (`--sms-restir`, temporal-only reuse, no spatial
 yet -- see §4's phase table and `docs/A1_feature_status.md`'s Implemented
 Features); Phases 7-10 not started.**
@@ -298,11 +298,42 @@ partitioning, which is what makes it interactive-viable.
 
 ### Phase 7 — Volumetric ReSTIR → retire SPPM
 
-Check whether **Ghost ReSTIR** (null-scattering primary sample space,
-"ghost vertices" for variable null-vertex counts, targeting SIGGRAPH 2026)
-has published in full before implementing the older Volumetric ReSTIR
-formulation — it specifically fixes reconnection validity under variable
-null-vertex counts. Gonzales already has homogeneous media (`Medium_C`,
+**Ghost ReSTIR check RESOLVED (2026-09-06): it published, but only as a
+SIGGRAPH 2026 *Poster* — a two-page extended abstract, no full paper, no
+supplemental, no code.** "Ghost ReSTIR: Volumetric Resampling with Ghost
+Vertices in Null-Scattering Space", Zhang, Lin, Hong, Kettunen, Yuksel and
+Wyman, presented 19 July 2026 (ACM DL 10.1145/3799825.3818719; Chris
+Wyman's own publication page categorises it as Poster with only a PDF
+abstract). The gate below said "published in full", and it has not been —
+so **implement the older, fully-published Volumetric ReSTIR formulation**,
+but architect for ghost vertices, because the abstract already gives the
+shape of the fix even without the derivation:
+
+- formulated in **null-scattering primary sample space**;
+- **target function containing no intermediate transmittance**, so it
+  evaluates consistently across all resampling stages (the older
+  formulation's inconsistent-transmittance problem is precisely what this
+  fixes, along with poor scaling in volume resolution);
+- **ghost vertices** = auxiliary infinite tails appended to each path
+  segment, giving a well-defined **bijection for reconnection shifts
+  regardless of null-vertex count or density change**.
+
+Concretely that means: keep transmittance evaluation behind one seam so the
+target function can later drop intermediate transmittance, and keep the
+reconnection shift's domain mapping pluggable rather than assuming a fixed
+null-vertex count. Expect a full paper to follow — that author list is the
+core GRIS/ReSTIR group — so treat the older formulation as scaffold rather
+than sinking effort into its internals.
+
+**Sequencing note:** Volumetric ReSTIR's payoff is largest on heterogeneous
+and sparse volumes, but gonzales has homogeneous media plus `uniformgrid`
+only; NanoVDB/OpenVDB is Gap 7 in `A1_feature_status.md`. So VDB support
+partly gates this phase's *validation surface* — `volumetric-caustic` still
+works as a test case, but `disney-cloud`-class scenes cannot be used to
+exercise it until VDB lands. Consider pulling VDB earlier than its priority
+suggests if Phase 7 is to be properly validated.
+
+Gonzales already has homogeneous media (`Medium_C`,
 `sample_homogeneous_free_flight`, `sample_medium_gpu`). Retire `sppm.mojo`
 only after parity on `volumetric-caustic`.
 
