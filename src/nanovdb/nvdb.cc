@@ -159,6 +159,20 @@ void nvdb_active_coord(void* handle, unsigned long n, int* out3) {
     out3[0] = out3[1] = out3[2] = 0;
 }
 
+void* nvdb_load_named(const char* path, const char* grid_name) {
+    if (!path || !grid_name) return nullptr;
+    try {
+        auto gh = nanovdb::io::readGrid<nanovdb::HostBuffer>(std::string(path), std::string(grid_name));
+        if (!gh.gridData()) return nullptr;
+        auto* h = new Handle();
+        h->h = std::move(gh);
+        if (!float_grid(h)) { delete h; return nullptr; }
+        return h;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
 void nvdb_map_matf(void* handle, float* out9) {
     auto* g = float_grid(static_cast<Handle*>(handle));
     if (!g || !out9) return;

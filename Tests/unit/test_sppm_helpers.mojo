@@ -104,7 +104,7 @@ def test_cosine_hemisphere_sample_stays_in_hemisphere() raises:
 # ── sample_homogeneous_free_flight ───────────────────────────────────────────
 
 def _medium(sigma_a: RGB, sigma_s: RGB) -> Medium_C:
-    return Medium_C(sigma_a, sigma_s, Float32(0.0), Int32(-1), Int32(-1), Float32(0.0))
+    return Medium_C(sigma_a, sigma_s, Float32(0.0), Int32(-1), Int32(-1), Int32(-1), Float32(0.0), Float32(0.0), Float32(1.0))
 
 def test_free_flight_zero_extinction_never_collides_and_keeps_t_surf() raises:
     """Sigma_t <= 0 is the medium's early-out branch: no collision is

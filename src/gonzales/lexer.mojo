@@ -35,8 +35,7 @@ def scan_int(
 ) -> Int32:
     var cur = Int(cursor[0])
     var len = Int(length)
-    while cur < len and is_whitespace(bytes[cur]):
-        cur += 1
+    cur = skip_whitespace_and_comments(bytes, len, cur)
     if cur >= len:
         return Int32(0)
 
@@ -64,8 +63,7 @@ def scan_float(
 ) -> Int32:
     var cur = Int(cursor[0])
     var len = Int(length)
-    while cur < len and is_whitespace(bytes[cur]):
-        cur += 1
+    cur = skip_whitespace_and_comments(bytes, len, cur)
     if cur >= len:
         return Int32(0)
 
@@ -102,8 +100,7 @@ def scan_float(
 
     if cur < len and bytes[cur] == UInt8(101):  # 'e'
         cur += 1
-        while cur < len and is_whitespace(bytes[cur]):
-            cur += 1
+        cur = skip_whitespace_and_comments(bytes, len, cur)
         var exp_negative = False
         if cur < len and bytes[cur] == UInt8(45):
             exp_negative = True
@@ -140,8 +137,7 @@ def count_floats(
     var len = Int(length)
     var count = Int32(0)
     while True:
-        while cur < len and is_whitespace(bytes[cur]):
-            cur += 1
+        cur = skip_whitespace_and_comments(bytes, len, cur)
         if cur >= len:
             break
         if cur < len and bytes[cur] == UInt8(45):   # optional '-'
@@ -176,8 +172,7 @@ def scan_floats[Or: Origin[mut=True]](
     var len = Int(length)
     var count = Int32(0)
     while count < max_count:
-        while cur < len and is_whitespace(bytes[cur]):
-            cur += 1
+        cur = skip_whitespace_and_comments(bytes, len, cur)
         if cur >= len:
             break
         var leading_negative = bytes[cur] == UInt8(45)
@@ -209,8 +204,7 @@ def scan_floats[Or: Origin[mut=True]](
             break
         if cur < len and bytes[cur] == UInt8(101):
             cur += 1
-            while cur < len and is_whitespace(bytes[cur]):
-                cur += 1
+            cur = skip_whitespace_and_comments(bytes, len, cur)
             var exp_negative = False
             if cur < len and bytes[cur] == UInt8(45):
                 exp_negative = True
@@ -246,8 +240,7 @@ def count_ints(
     var len = Int(length)
     var count = Int32(0)
     while True:
-        while cur < len and is_whitespace(bytes[cur]):
-            cur += 1
+        cur = skip_whitespace_and_comments(bytes, len, cur)
         if cur >= len:
             break
         if cur < len and bytes[cur] == UInt8(45):
@@ -270,8 +263,7 @@ def scan_ints[Or: Origin[mut=True]](
     var len = Int(length)
     var count = Int32(0)
     while count < max_count:
-        while cur < len and is_whitespace(bytes[cur]):
-            cur += 1
+        cur = skip_whitespace_and_comments(bytes, len, cur)
         if cur >= len:
             break
         var negative = False
@@ -299,8 +291,7 @@ def scan_char(
 ) -> Int32:
     var cur = Int(cursor[0])
     var len = Int(length)
-    while cur < len and is_whitespace(bytes[cur]):
-        cur += 1
+    cur = skip_whitespace_and_comments(bytes, len, cur)
     cursor[0] = Int32(cur)
     if cur >= len or bytes[cur] != expected:
         return Int32(0)
@@ -354,8 +345,7 @@ def parse_quoted_string(
 ) -> Int32:
     var cur = Int(cursor[0])
     var len = Int(length)
-    while cur < len and is_whitespace(bytes[cur]):
-        cur += 1
+    cur = skip_whitespace_and_comments(bytes, len, cur)
     cursor[0] = Int32(cur)
     if cur >= len or bytes[cur] != UInt8(34):   # '"' = 34
         return Int32(-1)
@@ -402,8 +392,7 @@ def parse_param_header(
         var cap = Int(t) if Int(t) < Int(type_max) - 1 else Int(type_max) - 1
         type_buf[cap] = UInt8(0)
     # skip separator whitespace
-    while cur < len and is_whitespace(bytes[cur]):
-        cur += 1
+    cur = skip_whitespace_and_comments(bytes, len, cur)
     # name: read until '"'
     var n = Int32(0)
     while cur < len and bytes[cur] != UInt8(34):
@@ -417,8 +406,7 @@ def parse_param_header(
     if cur < len and bytes[cur] == UInt8(34):
         cur += 1  # closing '"'
     # skip ws, check for '['
-    while cur < len and is_whitespace(bytes[cur]):
-        cur += 1
+    cur = skip_whitespace_and_comments(bytes, len, cur)
     if cur < len and bytes[cur] == UInt8(91):   # '[' = 91
         cur += 1
         is_array[0] = Int32(1)

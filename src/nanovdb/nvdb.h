@@ -58,6 +58,12 @@ unsigned long nvdb_active_count(void* handle);
 // world_to_index(x) = invmatf*(x-vecf). matf/invmatf are row-major 3x3 (9
 // floats); vecf is the translation (3 floats). Single precision only (the
 // grids in this project's scene corpus don't need double).
+// Load a grid BY NAME from a multi-grid .nvdb (pbrt's NanoVDBMedium reads a
+// "density" grid and, for emissive volumes, a separate "temperature" grid from
+// the SAME file). Returns NULL if the file has no such grid, which callers
+// already treat as "not emissive".
+void* nvdb_load_named(const char* path, const char* grid_name);
+
 void nvdb_map_matf(void* handle, float* out9);
 void nvdb_map_invmatf(void* handle, float* out9);
 void nvdb_map_vecf(void* handle, float* out3);

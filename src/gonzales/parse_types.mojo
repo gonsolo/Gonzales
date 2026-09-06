@@ -161,6 +161,10 @@ struct SceneParseState(Movable):
     var med_g:       List[Float32]   # 1 per medium
     var med_grid_idx: List[Int32]    # 1 per medium; -1 = homogeneous, else index into grid_* below
     var med_nvdb_idx: List[Int32]    # 1 per medium; -1 = none, else index into nvdb_* below
+    var med_nvdb_temp_idx: List[Int32]  # 1 per medium; -1 = not emissive, else index into nvdb_*
+    var med_le_scale: List[Float32]     # 1 per medium (pbrt "Lescale")
+    var med_temp_offset: List[Float32]  # 1 per medium ("temperatureoffset"/"temperaturecutoff")
+    var med_temp_scale: List[Float32]   # 1 per medium ("temperaturescale")
 
     # Heterogeneous density grids ("uniformgrid" media). One record per grid;
     # med_grid_idx above points into these by index.
@@ -178,6 +182,7 @@ struct SceneParseState(Movable):
     # not here -- only the filename and CTM are captured during parsing.
     # med_nvdb_idx above points into these by index.
     var nvdb_filenames: List[String]
+    var nvdb_gridnames: List[String] # grid to read from that file ("" = first grid by index)
     var nvdb_ctm: List[Float32]      # 16 floats per grid (world_to_medium built from this at finalize)
 
     # Textures
@@ -293,6 +298,10 @@ struct SceneParseState(Movable):
         self.med_g        = List[Float32]()
         self.med_grid_idx = List[Int32]()
         self.med_nvdb_idx = List[Int32]()
+        self.med_nvdb_temp_idx = List[Int32]()
+        self.med_le_scale = List[Float32]()
+        self.med_temp_offset = List[Float32]()
+        self.med_temp_scale = List[Float32]()
 
         self.grid_nx = List[Int32]()
         self.grid_ny = List[Int32]()
@@ -304,6 +313,7 @@ struct SceneParseState(Movable):
         self.grid_density_base = List[Int32]()
 
         self.nvdb_filenames = List[String]()
+        self.nvdb_gridnames = List[String]()
         self.nvdb_ctm = List[Float32]()
 
         self.tex_names = List[String]()

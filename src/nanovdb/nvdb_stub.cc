@@ -22,6 +22,7 @@
 extern "C" {
 
 void* nvdb_load(const char*, int) { return nullptr; }
+void* nvdb_load_named(const char*, const char*) { return nullptr; }
 const void* nvdb_data(void*) { return nullptr; }
 unsigned long nvdb_size(void*) { return 0ul; }
 

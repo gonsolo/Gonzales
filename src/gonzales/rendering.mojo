@@ -174,6 +174,8 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                 scene.spectral.coeffs, scene.spectral.res,
                 scene.spectral.cie_x, scene.spectral.cie_y, scene.spectral.cie_z, scene.spectral.d65,
                 scene.materials, scene.infiniteLights, Int(scene.infiniteLightCount),
+                scene.distantLights, Int(scene.distantLightCount),
+                scene.pointLights, Int(scene.pointLightCount),
             )
         for i in range(n):
             if paths[i].active == 0:

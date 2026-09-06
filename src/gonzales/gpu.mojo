@@ -5,9 +5,9 @@ from max.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc, memcpy
-from .geometry import RGB, Point3f, Point2f, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, NvdbGrid_C, nvdb_sample_density, nvdb_ray_range, grid_ray_range, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr
+from .geometry import RGB, Point3f, Point2f, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, NvdbGrid_C, nvdb_sample_density, nvdb_ray_range, grid_ray_range, hg_phase, hg_sample, blackbody_rgb, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr
 from std.ffi import external_call
-from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres, _sample_infinite_light_nee
+from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres, LightSample, _sample_infinite_light_nee, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee
 from .transform import transform_normal_by_instance
 from std.atomic import Atomic
 from .rng import PCG32
@@ -16,7 +16,7 @@ from .guide import null_guide
 from .restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io_null
 from .restir_gi import gi_reservoir_io_null
 from .postprocess import _firefly_clamp_pixel, _atrous_tap_weight, _atrous_spatial_weight
-from .sampling import encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gen_primary_ray_state
+from .sampling import power_heuristic, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gen_primary_ray_state
 from .spectrum import SampledWavelengths, SpectralSample, SpectralHandle, null_spectral_handle, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
 from max.gpu.host._nvidia_cuda import CUDA
@@ -1921,6 +1921,79 @@ def _spectral_beer_lambert_rgb(
     var (tr, tg, tb) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, trans_spec, wl)
     return RGB(tr, tg, tb)
 
+@always_inline
+def _volume_nee_light(
+    path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
+    ls: LightSample,
+    scatter_pt_w: Vec3f,
+    wo: Vec3f,
+    g: Float32,
+    mut pcg: PCG32,
+    use_nvdb: Bool,
+    grid: Grid_C,
+    nvdb_grid: NvdbGrid_C,
+    sigma_maj: Float32,
+    sigma_t_r: Float32,
+    bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
+    primIds: UnsafePointer[PrimId_C, MutExternalOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
+    curves: UnsafePointer[Curve_C, MutExternalOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin],
+    instances: UnsafePointer[Instance_C, MutExternalOrigin],
+    spheres: UnsafePointer[Sphere_C, MutExternalOrigin],
+    n_spheres: Int,
+    materials: UnsafePointer[Material_C, MutExternalOrigin],
+):
+    """One NEE sample from ONE non-area light toward a volume scatter point.
+
+    A phase function has no cosine factor, so the BSDF-shaped part of the
+    estimator is just the Henyey-Greenstein value for the angle between wo and
+    the light direction -- which is why this can consume the same LightSample
+    interface the surface shaders use (bvh.mojo's _sample_*_light_nee) without
+    a phase-specific weight function. Delta lights (distant/point) carry pdf=1 with any falloff
+    already folded into Li, and take MIS weight 1 because no competing
+    phase-sampling strategy can hit them; the others are MIS-weighted against
+    phase sampling, which shade_core's miss handler weights from the other
+    side."""
+    if not ls.valid or ls.pdf <= Float32(0.0):
+        return
+    var edir = Vec3f(ls.wi[0], ls.wi[1], ls.wi[2])
+    var e_org = point3f(scatter_pt_w + edir * Float32(0.0002))
+    var e_ray = Ray_C(e_org, vec3f(edir))
+    if any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, e_ray, ls.dist,
+                         blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres,
+                         materials=materials):
+        return
+    # Ratio-track transmittance, but only across the span the ray actually
+    # spends inside the density grid -- see nvdb_ray_range's docstring for why
+    # an unbounded march is not an option for a light with no finite distance.
+    var rng = nvdb_ray_range(nvdb_grid, scatter_pt_w, edir) if use_nvdb else grid_ray_range(grid, scatter_pt_w, edir)
+    var t_lo = max(rng[0], Float32(0.0))
+    var t_hi = min(rng[1], ls.dist)
+    var Te = Float32(1.0)
+    if t_hi > t_lo and sigma_maj > Float32(0.0):
+        var te = t_lo
+        var eiters = 0
+        while eiters < MEDIUM_TRACK_MAX_ITERS:
+            eiters += 1
+            var ue = pcg.next_float()
+            te += -log(max(ue, Float32(1e-7))) / sigma_maj
+            if te >= t_hi:
+                break
+            var pe = scatter_pt_w + edir * te
+            var de = nvdb_sample_density(nvdb_grid, pe) if use_nvdb else grid_sample_density(grid, pe)
+            Te *= Float32(1.0) - (de * sigma_t_r) / sigma_maj
+            if Te < Float32(1e-4):
+                Te = Float32(0.0)
+                break
+    if Te <= Float32(0.0):
+        return
+    var ph = hg_phase(dot(wo, edir), g)
+    var mis = Float32(1.0) if ls.is_delta else power_heuristic(ls.pdf, ph)
+    path_ptr[].estimate += path_ptr[].throughput * ls.Li * (Te * ph * mis / ls.pdf)
+
+
 def _sample_medium_core(
     paths: UnsafePointer[PathState_C, MutExternalOrigin],
     intersections: UnsafePointer[Intersection_C, MutExternalOrigin],
@@ -1951,6 +2024,10 @@ def _sample_medium_core(
     materials: UnsafePointer[Material_C, MutExternalOrigin] = UnsafePointer[Material_C, MutExternalOrigin].unsafe_dangling(),
     infiniteLights: UnsafePointer[InfiniteLight_C, MutExternalOrigin] = UnsafePointer[InfiniteLight_C, MutExternalOrigin].unsafe_dangling(),
     n_infinite_lights: Int = 0,
+    distantLights: UnsafePointer[DistantLight_C, MutExternalOrigin] = UnsafePointer[DistantLight_C, MutExternalOrigin].unsafe_dangling(),
+    n_distant_lights: Int = 0,
+    pointLights: UnsafePointer[PointLight_C, MutExternalOrigin] = UnsafePointer[PointLight_C, MutExternalOrigin].unsafe_dangling(),
+    n_point_lights: Int = 0,
 ):
     """Apply medium transmittance along the ray segment and possibly scatter
     or absorb inside the medium. On scatter, performs direct area-light NEE
@@ -2062,6 +2139,23 @@ def _sample_medium_core(
                 break
             var p_world = ray_org + t * ray_dir
             var density = nvdb_sample_density(nvdb_grid, p_world) if use_nvdb else grid_sample_density(grid, p_world)
+            # ── Volumetric emission (pbrt NanoVDBMedium) ─────────────────
+            # Accumulated at EVERY majorant candidate, weighted by the local
+            # absorption fraction sigma_a/sigma_maj: that is the standard
+            # unbiased estimator of the emitted-radiance integral along the
+            # segment when distances are drawn against the majorant, and it
+            # must happen before the collision test below (which breaks out
+            # of the loop) so emission from the pass-through candidates is
+            # not silently dropped. Temperature comes from a SECOND nanovdb
+            # grid stored as an ordinary entry in the same array, so this
+            # reuses nvdb_sample_density unchanged. Non-emissive media take
+            # the nvdb_temp_idx < 0 branch and pay nothing.
+            if med.nvdb_temp_idx >= Int32(0) and med.le_scale > Float32(0.0):
+                var tgrid = nvdb_grids[Int(med.nvdb_temp_idx)]
+                var tk = (nvdb_sample_density(tgrid, p_world) - med.temp_offset) * med.temp_scale
+                if tk > Float32(100.0):
+                    var sigma_a_real = density * med.sigma_a.r
+                    path_ptr[].estimate += path_ptr[].throughput * blackbody_rgb(tk) * (med.le_scale * sigma_a_real / sigma_maj)
             var sigma_t_real = density * sigma_t.r
             var u2 = pcg.next_float()
             if u2 < sigma_t_real / sigma_maj:
@@ -2087,7 +2181,7 @@ def _sample_medium_core(
         if t_free >= t_surf:
             path_ptr[].pcgState = pcg.state
             return
-        albedo_r = med.sigma_s.r / sigma_maj
+        albedo_r = med.sigma_s.r / max(sigma_t.r, Float32(1e-7))
 
     # Both branches above already `return` early for the "no real collision"
     # case (homogeneous: t_free >= t_surf; heterogeneous: not collided) — so
@@ -2176,7 +2270,8 @@ def _sample_medium_core(
                         else:
                             T = RGB(exp(-sigma_t.r * dist), exp(-sigma_t.g * dist), exp(-sigma_t.b * dist))
                         var geom = al.total_area * cos_l / (dist_sq * light_sel_pdf)
-                        path_ptr[].estimate += path_ptr[].throughput * al.emission * T * (geom * INV_FOUR_PI)
+                        var ph_a = hg_phase(dot(-ray_dir, shadow_dir), med.g)
+                        path_ptr[].estimate += path_ptr[].throughput * al.emission * T * (geom * ph_a)
 
         # ── Volume scatter NEE — INFINITE (environment) light ────────────
         # Without this a medium lit ONLY by a sky dome -- which is every
@@ -2191,78 +2286,64 @@ def _sample_medium_core(
         # ~1.0-1.8x, and a 0.952-albedo medium must be roughly sky-bright)
         # and extremely high variance -- that is where the sparse bright
         # "firefly" dots on those renders came from.
-        # Heterogeneous only: the ratio-track below needs real grid bounds to
+        # ── Volume scatter NEE — distant / point / sphere / infinite ─────
+        # The block above samples triangle AREA lights only, and is gated on
+        # n_area_lights > 0. Every other light type contributed nothing at a
+        # volume scatter point, so a medium lit by a sky dome and/or a sun --
+        # which is every nanovdb cloud scene in the pbrt-v4 corpus
+        # (bunny-cloud, explosion, disney-cloud), none of which has an area
+        # light -- received NO direct lighting at all. It was lit purely by
+        # phase-sampled paths that random-walk back out and happen to escape,
+        # which is both far too dark and extremely high variance: that is
+        # where the sparse bright "firefly" dots on those renders came from.
+        # Mirrors the same four-light-type sweep the surface shaders already
+        # do via the shared LightSample interface.
+        #
+        # Heterogeneous only: the ratio-track inside needs real grid bounds to
         # terminate (see nvdb_ray_range). A HOMOGENEOUS medium has no density
         # grid to bound the march and its extent is the bounding shape, which
         # this function does not know -- so it keeps its previous behavior
-        # (no env NEE) rather than getting a subtly wrong transmittance. That
-        # remains a real, pre-existing gap for homogeneous media lit only by
-        # a sky dome.
-        if (use_dense or use_nvdb) and n_infinite_lights > 0:
-            var u_e1 = pcg.next_float()
-            var u_e2 = pcg.next_float()
-            var ilight = infiniteLights[Int(u_e1 * Float32(n_infinite_lights)) % n_infinite_lights]
-            var els = _sample_infinite_light_nee(ilight, Point2f(pcg.next_float(), u_e2))
-            if els.valid and els.pdf > Float32(0.0):
-                var edir = Vec3f(els.wi[0], els.wi[1], els.wi[2])
-                var scatter_e = scatter_pt.to_simd()
-                var e_org = point3f(scatter_e + edir * Float32(0.0002))
-                var e_ray = Ray_C(e_org, vec3f(edir))
-                # Shadow ray to an infinite light has no finite endpoint; the
-                # interface shell that bounds the medium is transparent to it
-                # (materials= below), so only real geometry occludes.
-                if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, e_ray, Float32(1.0e30),
-                                         blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres,
-                                         materials=materials):
-                    # Ratio-track transmittance, but only across the span the
-                    # ray actually spends inside the density grid -- see
-                    # nvdb_ray_range's docstring for why an unbounded march is
-                    # not an option here.
-                    var rng = nvdb_ray_range(nvdb_grid, scatter_e, edir) if use_nvdb else grid_ray_range(grid, scatter_e, edir)
-                    var t_lo = max(rng[0], Float32(0.0))
-                    var t_hi = rng[1]
-                    var Te = Float32(1.0)
-                    if t_hi > t_lo and sigma_maj > Float32(0.0):
-                        var te = t_lo
-                        var eiters = 0
-                        while eiters < MEDIUM_TRACK_MAX_ITERS:
-                            eiters += 1
-                            var ue = pcg.next_float()
-                            te += -log(max(ue, Float32(1e-7))) / sigma_maj
-                            if te >= t_hi:
-                                break
-                            var pe = scatter_e + edir * te
-                            var de = nvdb_sample_density(nvdb_grid, pe) if use_nvdb else grid_sample_density(grid, pe)
-                            Te *= Float32(1.0) - (de * sigma_t.r) / sigma_maj
-                            if Te < Float32(1e-4):
-                                Te = Float32(0.0)
-                                break
-                    if Te > Float32(0.0):
-                        # MIS (power heuristic) against the competing strategy:
-                        # the isotropic phase sample below can also escape and
-                        # collect this same env light, and shade_core's miss
-                        # handler already weights THAT hit by
-                        # power_heuristic(lastBsdfPdf, pdf_light). Taking this
-                        # NEE term at full weight as well would double-count
-                        # the sky. pdf_phase is INV_FOUR_PI (isotropic), the
-                        # same value stored into lastBsdfPdf just below.
-                        var pdf_ph = INV_FOUR_PI
-                        var pl2 = els.pdf * els.pdf
-                        var pp2 = pdf_ph * pdf_ph
-                        var mis_e = pl2 / max(pl2 + pp2, Float32(1e-12))
-                        path_ptr[].estimate += path_ptr[].throughput * els.Li * (Te * pdf_ph * mis_e / els.pdf)
-        # Sample isotropic scatter direction
+        # rather than getting a subtly wrong transmittance. That remains a
+        # real, pre-existing gap for homogeneous media.
+        if use_dense or use_nvdb:
+            var scatter_w = scatter_pt.to_simd()
+            var wo_v = -ray_dir
+            for dl_i in range(n_distant_lights):
+                _volume_nee_light(path_ptr, _sample_distant_light_nee(distantLights[dl_i]),
+                    scatter_w, wo_v, med.g, pcg, use_nvdb, grid, nvdb_grid, sigma_maj, sigma_t.r,
+                    bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
+                    instances, spheres, n_spheres, materials)
+            for pl_i in range(n_point_lights):
+                _volume_nee_light(path_ptr, _sample_point_light_nee(pointLights[pl_i], scatter_w),
+                    scatter_w, wo_v, med.g, pcg, use_nvdb, grid, nvdb_grid, sigma_maj, sigma_t.r,
+                    bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
+                    instances, spheres, n_spheres, materials)
+            for sph_i in range(n_spheres):
+                if spheres[sph_i].isAreaLight == Int8(1):
+                    _volume_nee_light(path_ptr, _sample_sphere_light_nee(spheres[sph_i], n_spheres, scatter_w, pcg),
+                        scatter_w, wo_v, med.g, pcg, use_nvdb, grid, nvdb_grid, sigma_maj, sigma_t.r,
+                        bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
+                        instances, spheres, n_spheres, materials)
+            for inf_i in range(n_infinite_lights):
+                _volume_nee_light(path_ptr,
+                    _sample_infinite_light_nee(infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float())),
+                    scatter_w, wo_v, med.g, pcg, use_nvdb, grid, nvdb_grid, sigma_maj, sigma_t.r,
+                    bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
+                    instances, spheres, n_spheres, materials)
+        # Sample the scatter direction from the medium's Henyey-Greenstein
+        # phase function. `g` was parsed into Medium_C all along but never
+        # used: scattering was hardcoded isotropic (uniform sphere), so a
+        # strongly forward-scattering medium -- disney-cloud sets g=0.877 --
+        # diffused light instead of forwarding it and rendered far too dark.
+        # hg_sample falls back to the uniform sphere for |g| < 1e-3, so
+        # isotropic media (bunny-cloud, explosion) are bit-for-bit unchanged.
         var u1 = pcg.next_float()
         var u2 = pcg.next_float()
         path_ptr[].pcgState = pcg.state
-        var cos_theta = Float32(2.0) * u1 - Float32(1.0)
-        var sin_theta = sqrt(max(Float32(0.0), Float32(1.0) - cos_theta * cos_theta))
-        var phi = Float32(6.28318530718) * u2
-        path_ptr[].ray = Ray_C(
-            scatter_pt,
-            Vec3f(sin_theta * cos(phi), sin_theta * sin(phi), cos_theta))
+        var hs = hg_sample(-ray_dir, med.g, u1, u2)
+        path_ptr[].ray = Ray_C(scatter_pt, Vec3f(hs[0], hs[1], hs[2]))
         path_ptr[].specularBounce = Int8(0)
-        path_ptr[].lastBsdfPdf = INV_FOUR_PI
+        path_ptr[].lastBsdfPdf = hs[3]
         path_ptr[].volume_scattered = Int8(1)
         path_ptr[].bounce += 1
         intersections[i].hit = Int8(0)  # no surface hit this bounce
@@ -2301,6 +2382,10 @@ def sample_medium_gpu(
     materials: UnsafePointer[Material_C, MutExternalOrigin] = UnsafePointer[Material_C, MutExternalOrigin].unsafe_dangling(),
     infiniteLights: UnsafePointer[InfiniteLight_C, MutExternalOrigin] = UnsafePointer[InfiniteLight_C, MutExternalOrigin].unsafe_dangling(),
     n_infinite_lights_dp: Int64 = Int64(0),
+    distantLights: UnsafePointer[DistantLight_C, MutExternalOrigin] = UnsafePointer[DistantLight_C, MutExternalOrigin].unsafe_dangling(),
+    n_distant_lights_dp: Int64 = Int64(0),
+    pointLights: UnsafePointer[PointLight_C, MutExternalOrigin] = UnsafePointer[PointLight_C, MutExternalOrigin].unsafe_dangling(),
+    n_point_lights_dp: Int64 = Int64(0),
 ):
     var n_spheres = Int(n_spheres_dp)
     var spectral_res = Int(spectral_res_dp)
@@ -2321,6 +2406,7 @@ def sample_medium_gpu(
         spheres, n_spheres,
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
         materials, infiniteLights, Int(n_infinite_lights_dp),
+        distantLights, Int(n_distant_lights_dp), pointLights, Int(n_point_lights_dp),
     )
 
 
@@ -3374,6 +3460,10 @@ def _gpu_bounce_kernels(
                 handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                 handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
         Int64(handle[].n_infinite_lights),
+                handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C](),
+        Int64(handle[].n_distant_lights),
+        handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
+        Int64(handle[].n_point_lights),
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_nee_preamble_gpu](

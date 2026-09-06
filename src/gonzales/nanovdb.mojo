@@ -99,6 +99,13 @@ def nvdb_active_coord(handle: UnsafePointer[UInt8, MutExternalOrigin], n: Int64,
 
 # ── Metadata needed to plug an .nvdb grid into a Medium_C (host only) ────
 
+def nvdb_load_named(path: UnsafePointer[UInt8, MutExternalOrigin],
+                    grid_name: UnsafePointer[UInt8, MutExternalOrigin]) -> UnsafePointer[UInt8, MutExternalOrigin]:
+    """Load one named grid from a multi-grid .nvdb. Null (0) if absent -- an
+    emissive-volume caller treats that as "this medium has no temperature
+    grid" rather than an error."""
+    return external_call["nvdb_load_named", UnsafePointer[UInt8, MutExternalOrigin]](path, grid_name)
+
 def nvdb_index_bbox(handle: UnsafePointer[UInt8, MutExternalOrigin],
                     out_min3: UnsafePointer[Int32, MutExternalOrigin],
                     out_max3: UnsafePointer[Int32, MutExternalOrigin]):

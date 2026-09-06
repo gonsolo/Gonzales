@@ -16,7 +16,7 @@ from .geometry import (RGB, SampledSpectrum, Point3f, Vec3f, Material_C, MatKind
                         Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area, dot, DistantLight_C, PointLight_C, InfiniteLight_C,
                         TriangleMesh_C, PrimId_C, Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, PI,
                         LightSampler_C, Instance_C, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, _is_real_ptr)
-from .nanovdb import nvdb_load, nvdb_data, nvdb_size, nvdb_free, nvdb_index_bbox, nvdb_value_range, nvdb_map_invmatf, nvdb_map_vecf
+from .nanovdb import nvdb_load, nvdb_load_named, nvdb_data, nvdb_size, nvdb_free, nvdb_index_bbox, nvdb_value_range, nvdb_map_invmatf, nvdb_map_vecf
 from .transform import matrix_multiply, matrix_invert, transform_points, transform_normals
 from .bvh import BVH2Node, SceneDescriptor2_C, build_bvh2
 from .spectrum import SpectralHandle
@@ -623,6 +623,8 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         s[0].med_g.append(g_val)
         s[0].med_grid_idx.append(Int32(-1))
         s[0].med_nvdb_idx.append(Int32(-1))
+        s[0].med_nvdb_temp_idx.append(Int32(-1))
+        s[0].med_le_scale.append(Float32(0)); s[0].med_temp_offset.append(Float32(0)); s[0].med_temp_scale.append(Float32(1))
     elif is_grid:
         # PBRT-v4 default for GridMedium sigma_a/sigma_s when unspecified is
         # ConstantSpectrum(1) (see media.cpp) — unlike gonzales's existing
@@ -637,6 +639,8 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         s[0].med_g.append(g_val)
         s[0].med_grid_idx.append(Int32(len(s[0].grid_nx)))
         s[0].med_nvdb_idx.append(Int32(-1))
+        s[0].med_nvdb_temp_idx.append(Int32(-1))
+        s[0].med_le_scale.append(Float32(0)); s[0].med_temp_offset.append(Float32(0)); s[0].med_temp_scale.append(Float32(1))
 
         s[0].grid_nx.append(g_nx); s[0].grid_ny.append(g_ny); s[0].grid_nz.append(g_nz)
         s[0].grid_p0.append(g_p0.r); s[0].grid_p0.append(g_p0.g); s[0].grid_p0.append(g_p0.b)
@@ -672,7 +676,30 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         # -- do that resolution here, at parse time, same as every other
         # filename param, but defer the actual load).
         var nvdb_rel = params.get_string("filename", "")
-        s[0].nvdb_filenames.append(s[0].scene_dir + nvdb_rel)
+        var nvdb_full = s[0].scene_dir + nvdb_rel
+        var density_name = params.get_string("densityname", "density")
+        s[0].nvdb_filenames.append(nvdb_full)
+        s[0].nvdb_gridnames.append(density_name)
+        for ci in range(16):
+            s[0].nvdb_ctm.append(s[0].ctm[ci])
+
+        # Emissive volume (pbrt NanoVDBMedium): a SECOND grid, "temperature",
+        # in the SAME file. Always registered -- if the file has no such grid
+        # the load simply yields an empty grid whose index bbox rejects every
+        # lookup, so Le evaluates to 0 and the medium is non-emissive with no
+        # special-casing anywhere downstream. "temperatureoffset" falls back to
+        # "temperaturecutoff", matching pbrt's own parameter aliasing.
+        var le_scale = params.get_float("Lescale", Float32(1))
+        var temp_cut = params.get_float("temperaturecutoff", Float32(0))
+        var temp_off = params.get_float("temperatureoffset", temp_cut)
+        var temp_scl = params.get_float("temperaturescale", Float32(1))
+        var temp_name = params.get_string("temperaturename", "temperature")
+        s[0].med_nvdb_temp_idx.append(Int32(len(s[0].nvdb_filenames)))
+        s[0].med_le_scale.append(le_scale)
+        s[0].med_temp_offset.append(temp_off)
+        s[0].med_temp_scale.append(temp_scl)
+        s[0].nvdb_filenames.append(nvdb_full)
+        s[0].nvdb_gridnames.append(temp_name)
         for ci in range(16):
             s[0].nvdb_ctm.append(s[0].ctm[ci])
     name_buf.free()
@@ -2505,7 +2532,19 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             for ci in range(plen):
                 cpath[ci] = path_str.unsafe_ptr()[ci]
             cpath[plen] = UInt8(0)
-            var handle = nvdb_load(cpath, Int32(0))
+            var gname = s[0].nvdb_gridnames[i]
+            var glen = gname.byte_length()
+            var cname = alloc[UInt8](glen + 1)
+            for ci in range(glen):
+                cname[ci] = gname.unsafe_ptr()[ci]
+            cname[glen] = UInt8(0)
+            var handle = nvdb_load_named(cpath, cname) if glen > 0 else nvdb_load(cpath, Int32(0))
+            # A named lookup that misses is normal for the density grid too:
+            # some .nvdb files carry a single UNNAMED grid, so fall back to
+            # "first grid by index" rather than failing the whole medium.
+            if Int(handle) == 0 and glen > 0 and gname == "density":
+                handle = nvdb_load(cpath, Int32(0))
+            cname.free()
             cpath.free()
 
             var blob: UnsafePointer[UInt8, MutExternalOrigin]
@@ -2516,7 +2555,11 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             var imat = SIMD[DType.float32, 16](0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
             var mvec = Vec3f(Float32(0), Float32(0), Float32(0))
             if Int(handle) == 0:
-                print("Warning: could not load nanovdb medium file:", path_str)
+                # Expected and silent for a "temperature" grid the file does
+                # not contain (a non-emissive volume); only a missing DENSITY
+                # grid is worth warning about.
+                if s[0].nvdb_gridnames[i] != "temperature":
+                    print("Warning: could not load nanovdb grid '" + s[0].nvdb_gridnames[i] + "' from:", path_str)
                 blob = UnsafePointer[UInt8, MutExternalOrigin].unsafe_dangling()
             else:
                 var blob_size = Int(nvdb_size(handle))
@@ -2571,7 +2614,9 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             var sa = SampledSpectrum(s[0].med_sa[i*3], s[0].med_sa[i*3+1], s[0].med_sa[i*3+2])
             var ss = SampledSpectrum(s[0].med_ss[i*3], s[0].med_ss[i*3+1], s[0].med_ss[i*3+2])
             med_buf[i] = Medium_C(sa, ss, s[0].med_g[i],
-                                  s[0].med_grid_idx[i], s[0].med_nvdb_idx[i], Float32(0))
+                                  s[0].med_grid_idx[i], s[0].med_nvdb_idx[i],
+                                  s[0].med_nvdb_temp_idx[i], s[0].med_le_scale[i],
+                                  s[0].med_temp_offset[i], s[0].med_temp_scale[i])
         psc[0].mediums = med_buf
     else:
         psc[0].mediums = UnsafePointer[Medium_C, MutExternalOrigin].unsafe_dangling()

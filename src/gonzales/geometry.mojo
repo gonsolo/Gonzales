@@ -1,6 +1,6 @@
 from std.ffi import external_call
 from std.memory import alloc
-from std.math import sqrt, acos, atan2, cos, min, max, abs, floor
+from std.math import sqrt, acos, atan2, cos, sin, min, max, abs, floor, log
 from std.sys.info import align_of
 from gonzales.spectrum import SampledWavelengths
 from gonzales.nanovdb import nvdb_sample_index
@@ -790,7 +790,17 @@ struct Medium_C(TrivialRegisterPassable):
     var g:       Float32           # HG anisotropy
     var grid_idx: Int32            # -1 = homogeneous; >=0 = index into scene.grids (dense "uniformgrid")
     var nvdb_idx: Int32            # -1 = none; >=0 = index into scene.nvdb_grids (sparse "nanovdb")
-    var _pad2:   Float32
+    # Emissive volumes (pbrt NanoVDBMedium): a SECOND nanovdb grid, named
+    # "temperature", read from the same file and stored as an ordinary entry in
+    # the same scene.nvdb_grids array -- so it reuses NvdbGrid_C, its upload,
+    # and nvdb_sample_density unchanged. -1 = not emissive. Emitted radiance at
+    # a point follows pbrt exactly: temp = (grid(p) - temp_offset) *
+    # temp_scale, no emission at or below 100 K, then
+    # Le = le_scale * blackbody(temp).
+    var nvdb_temp_idx: Int32
+    var le_scale:    Float32
+    var temp_offset: Float32
+    var temp_scale:  Float32
 
 @fieldwise_init
 struct Grid_C(TrivialRegisterPassable):
@@ -998,6 +1008,70 @@ def grid_ray_range(grid: Grid_C, org: Vec3f, dir: Vec3f) -> SIMD[DType.float32, 
                   m[2]*dir[0] + m[6]*dir[1] + m[10]*dir[2])
     return _slab_range(o, d,
         Vec3f(grid.p0.x, grid.p0.y, grid.p0.z), Vec3f(grid.p1.x, grid.p1.y, grid.p1.z))
+
+@always_inline
+def blackbody_rgb(temp: Float32) -> RGB:
+    """Blackbody colour at `temp` Kelvin, normalized so the brightest channel
+    is 1 -- matching pbrt's BlackbodySpectrum, which likewise normalizes to a
+    peak of 1 (via Wien's law) so that "Lescale" alone sets the magnitude.
+    Mitchell-Charity approximation, the same one lexer.mojo already uses for
+    `blackbody` light specs; duplicated here in an allocation-free,
+    RGB-returning form because this one runs inside the GPU medium kernel."""
+    var t100 = temp / Float32(100.0)
+    var r: Float32; var g: Float32; var b: Float32
+    if temp <= Float32(6600):
+        r = Float32(1.0)
+    else:
+        r = Float32(329.698727446) * ((t100 - Float32(60)) ** Float32(-0.1332047592)) / Float32(255)
+        r = max(Float32(0), min(Float32(1), r))
+    if temp <= Float32(6600):
+        g = (Float32(99.4708025861) * log(max(t100, Float32(1e-6))) - Float32(161.1195681661)) / Float32(255)
+    else:
+        g = Float32(288.1221695283) * ((t100 - Float32(60)) ** Float32(-0.0755148492)) / Float32(255)
+    g = max(Float32(0), min(Float32(1), g))
+    if temp >= Float32(6600):
+        b = Float32(1.0)
+    elif temp <= Float32(1900):
+        b = Float32(0.0)
+    else:
+        b = (Float32(138.5177312231) * log(max(t100 - Float32(10), Float32(1e-6))) - Float32(305.0447927307)) / Float32(255)
+        b = max(Float32(0), min(Float32(1), b))
+    return RGB(r, g, b)
+
+@always_inline
+def hg_phase(cos_theta: Float32, g: Float32) -> Float32:
+    """Henyey-Greenstein phase function, pbrt's exact form and convention:
+    with `cos_theta = dot(wo, wi)` and wo pointing BACK along the incoming ray,
+    g > 0 peaks at cos_theta = -1, i.e. wi continuing forward. Integrates to 1
+    over the sphere, so it doubles as its own sampling pdf."""
+    var gg = g * g
+    var denom = Float32(1.0) + gg + Float32(2.0) * g * cos_theta
+    if denom < Float32(1e-7):
+        denom = Float32(1e-7)
+    return INV_FOUR_PI * (Float32(1.0) - gg) / (denom * sqrt(denom))
+
+@always_inline
+def hg_sample(wo: Vec3f, g: Float32, u1: Float32, u2: Float32) -> SIMD[DType.float32, 4]:
+    """Sample the HG phase function about `wo`; returns (wi.x, wi.y, wi.z, pdf).
+    Falls back to the uniform-sphere sampler for |g| < 1e-3, both because the
+    closed form is numerically unstable there and because that IS the isotropic
+    case. Same inversion pbrt uses."""
+    var cos_theta: Float32
+    if abs(g) < Float32(1e-3):
+        cos_theta = Float32(1.0) - Float32(2.0) * u1
+    else:
+        var gg = g * g
+        var sq = (Float32(1.0) - gg) / (Float32(1.0) + g - Float32(2.0) * g * u1)
+        cos_theta = -(Float32(1.0) + gg - sq * sq) / (Float32(2.0) * g)
+    if cos_theta < Float32(-1.0): cos_theta = Float32(-1.0)
+    if cos_theta > Float32(1.0): cos_theta = Float32(1.0)
+    var sin_theta = sqrt(max(Float32(0.0), Float32(1.0) - cos_theta * cos_theta))
+    var phi = TWO_PI * u2
+    var f = Frame.from_z(wo)
+    var lx = sin_theta * cos(phi)
+    var ly = sin_theta * sin(phi)
+    var wi = f.x * lx + f.y * ly + f.z * cos_theta
+    return SIMD[DType.float32, 4](wi[0], wi[1], wi[2], hg_phase(cos_theta, g))
 
 @fieldwise_init
 struct MediumInterface_C(TrivialRegisterPassable):
