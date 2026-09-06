@@ -247,7 +247,7 @@ SMOKE_SCENE := Scenes/cornell-box.pbrt
 SMOKE_ARGS  := --no-denoise --spp 4 --resolution 32x32 --seed 1
 SMOKE_MODES := cpu-pt:  cpu-vcm:--vcm
 ifneq ($(HAVE_CUDA),)
-SMOKE_MODES += gpu-pt:--gpu gpu-vcm:--gpu\ --vcm
+SMOKE_MODES += gpu-pt:--gpu gpu-vcm:--gpu\ --vcm gpu-vcm-wf:--gpu\ --vcm\ --vcm-wavefront
 endif
 smoke: smoketest
 smoketest: release

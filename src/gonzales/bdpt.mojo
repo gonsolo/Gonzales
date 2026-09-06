@@ -5870,6 +5870,41 @@ def vcm_render_gpu_wavefront(
             var albedo_accum_ptr = albedo_accum_buf.unsafe_ptr().bitcast[Float32]()
             var r2c_ptr = r2c_buf.unsafe_ptr().bitcast[Float32]()
             var c2w_ptr = c2w_buf.unsafe_ptr().bitcast[Float32]()
+            # t=1 light tracing needs the same two camera-projection
+            # matrices vcm_render / vcm_render_gpu build (see vcm_render's
+            # comment): w2c = inverse(cameraToWorld), and c2r inverting the
+            # 3x3 that turns (filmX, filmY, 1) into a camera-space direction.
+            var w2c_host = alloc[Float32](16)
+            _ = matrix_invert(psc[0].camera_to_world, w2c_host)
+            var _r2c_h = psc[0].raster_to_camera
+            var a0 = _r2c_h[0]; var a1 = _r2c_h[4]; var a2 = _r2c_h[12]
+            var b0 = _r2c_h[1]; var b1 = _r2c_h[5]; var b2 = _r2c_h[13]
+            var g0 = _r2c_h[2]; var g1 = _r2c_h[6]; var g2 = _r2c_h[14]
+            var d0 = b1*g2 - b2*g1
+            var d1 = b0*g2 - b2*g0
+            var d2 = b0*g1 - b1*g0
+            var det = a0*d0 - a1*d1 + a2*d2
+            var idet = Float32(1) / det if abs(det) > Float32(1e-20) else Float32(0)
+            var c2r_host = alloc[Float32](9)
+            c2r_host[0] =  d0*idet; c2r_host[1] = -(a1*g2 - a2*g1)*idet; c2r_host[2] =  (a1*b2 - a2*b1)*idet
+            c2r_host[3] = -d1*idet; c2r_host[4] =  (a0*g2 - a2*g0)*idet; c2r_host[5] = -(a0*b2 - a2*b0)*idet
+            c2r_host[6] =  d2*idet; c2r_host[7] = -(a0*g1 - a1*g0)*idet; c2r_host[8] =  (a0*b1 - a1*b0)*idet
+            var w2c_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
+            with w2c_buf.map_to_host() as host_buf:
+                var dst = host_buf.unsafe_ptr()
+                var src = w2c_host.bitcast[UInt8]()
+                for i in range(16 * size_of[Float32]()):
+                    dst[i] = src[i]
+            var c2r_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](9 * size_of[Float32]())
+            with c2r_buf.map_to_host() as host_buf:
+                var dst = host_buf.unsafe_ptr()
+                var src = c2r_host.bitcast[UInt8]()
+                for i in range(9 * size_of[Float32]()):
+                    dst[i] = src[i]
+            w2c_host.free()
+            c2r_host.free()
+            var w2c_ptr = w2c_buf.unsafe_ptr().bitcast[Float32]()
+            var c2r_ptr = c2r_buf.unsafe_ptr().bitcast[Float32]()
 
             var bvh2Nodes = handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node]()
             var primIds = handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C]()
@@ -6113,6 +6148,26 @@ def vcm_render_gpu_wavefront(
                 handle[].ctx.enqueue_function[_bdpt_camera_path_accumulate_gpu](
                     cam_states_ptr, accum_ptr, albedo_accum_ptr, Int64(n_pix),
                     grid_dim=grid_pix, block_dim=block_size)
+
+                # Phase 1.5: t=1 light tracing -- the SAME kernel the
+                # megakernel driver launches, reading the same fully-built
+                # LVC. Launched after the camera accumulate on the same
+                # stream so that kernel's non-atomic per-pixel writes can
+                # never overlap these atomic adds.
+                handle[].ctx.enqueue_function[_bdpt_splat_light_paths_gpu](
+                    accum_ptr, lvc_ptr, path_len_ptr, Int64(n_light_paths_merge),
+                    inter_light_ptr, w2c_ptr, c2r_ptr, c2w_ptr,
+                    Int64(fw), Int64(fh), px_scale, mis_vm_weight_factor,
+                    bvh2Nodes, primIds, meshes, materials,
+                    areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
+                    mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
+                    blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
+                    distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
+                    pointLights, n_point_lights,
+                    spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+                    measured_brdfs, n_measured_brdfs,
+                    gpu_textures, n_gpu_textures,
+                    grid_dim=grid_light, block_dim=block_size)
 
                 if verbose:
                     print("VCM (GPU wavefront): sample " + String(si + 1) + "/" + String(n_spp))
