@@ -249,7 +249,13 @@ def _visible_transmittance(
     var remaining = dist_total - Float32(0.0002)
     var cur_med = med_idx
 
-    var inter_mem = scratch
+    # Private local slot instead of the caller's `scratch`. The caller's slot
+    # is simultaneously live in the enclosing traversal that called us, and
+    # writing through both aliases is what the GPU build faults on.
+    var _local_inter = InlineArray[Intersection_C, 1](fill=Intersection_C(
+        PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
+        Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
+    var inter_mem = _local_inter.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin]()
     for _ in range(8):
         if remaining < Float32(1e-4): break
         var ray = Ray_C(org, Vec3f(dir[0], dir[1], dir[2]))
