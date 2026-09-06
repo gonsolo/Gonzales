@@ -1,7 +1,7 @@
 from std.memory import alloc
 from std.math import sqrt, cos, sin, max, min, exp, floor, log
 from max.algorithm import parallelize
-from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, _is_real_ptr, store_vec3, _atan2f
+from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, _is_real_ptr, store_vec3, _atan2f
 from .rng import PCG32
 from .spectrum import SpectralHandle
 
@@ -89,6 +89,8 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
     var mediumIfaceCount: Int64
     var grids: UnsafePointer[Grid_C, MutExternalOrigin]
     var gridCount: Int64
+    var nvdbGrids: UnsafePointer[NvdbGrid_C, MutExternalOrigin]
+    var nvdbGridCount: Int64
     var lightSampler: LightSampler_C
 
     # Object instancing: one private BVH2 ("BLAS") per template, each a
@@ -230,6 +232,8 @@ def _mk_sd_full(
         mediumInterfaces=mediumInterfaces, mediumIfaceCount=mediumIfaceCount,
         grids=UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling(),
         gridCount=Int64(0),
+        nvdbGrids=UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling(),
+        nvdbGridCount=Int64(0),
         lightSampler=LightSampler_C(cdf=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), n=Int32(0), _pad=Int32(0)),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, blasCount=blasCount,
         instances=instances, instanceCount=instanceCount,

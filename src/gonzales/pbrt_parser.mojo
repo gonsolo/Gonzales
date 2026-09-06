@@ -1,6 +1,6 @@
 from std.ffi import external_call
 from std.time import perf_counter_ns
-from std.memory import alloc
+from std.memory import alloc, memcpy
 from std.math import tan, sqrt, abs
 from std.subprocess import run
 from std.os.path import exists
@@ -14,8 +14,9 @@ from .parse_types import (SceneParseState, MeshAccum, NamedMaterial,
                            ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX)
 from .geometry import (RGB, SampledSpectrum, Point3f, Vec3f, Material_C, MatKind, AreaLight_C,
                         Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area, dot, DistantLight_C, PointLight_C, InfiniteLight_C,
-                        TriangleMesh_C, PrimId_C, Medium_C, MediumInterface_C, Grid_C, PI,
+                        TriangleMesh_C, PrimId_C, Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, PI,
                         LightSampler_C, Instance_C, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, _is_real_ptr)
+from .nanovdb import nvdb_load, nvdb_data, nvdb_size, nvdb_free, nvdb_index_bbox, nvdb_value_range, nvdb_map_invmatf, nvdb_map_vecf
 from .transform import matrix_multiply, matrix_invert, transform_points, transform_normals
 from .bvh import BVH2Node, SceneDescriptor2_C, build_bvh2
 from .spectrum import SpectralHandle
@@ -108,6 +109,8 @@ struct ParsedScene_Mojo:
     var medium_iface_count: Int32
     var grids:            UnsafePointer[Grid_C, MutExternalOrigin]
     var grid_count:       Int32
+    var nvdb_grids:       UnsafePointer[NvdbGrid_C, MutExternalOrigin]
+    var nvdb_grid_count:  Int32
     var light_sampler:    LightSampler_C
     # Object instancing: one BLAS (private BVH2, over `meshes` above) per
     # ObjectBegin/ObjectEnd template, referenced by Instance_C.blasIdx.
@@ -587,6 +590,7 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     var type_str = params.get_string("type", "")
     var is_hom = type_str == "homogeneous"
     var is_grid = type_str == "uniformgrid"
+    var is_nvdb = type_str == "nanovdb"
 
     # sigma_a/sigma_s: rgb triple, OR inline numeric spectrum array (mean of
     # samples, replicated to all 3 channels) via the same float-or-rgb
@@ -618,6 +622,7 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         s[0].med_ss.append(ss.b * scale)
         s[0].med_g.append(g_val)
         s[0].med_grid_idx.append(Int32(-1))
+        s[0].med_nvdb_idx.append(Int32(-1))
     elif is_grid:
         # PBRT-v4 default for GridMedium sigma_a/sigma_s when unspecified is
         # ConstantSpectrum(1) (see media.cpp) — unlike gonzales's existing
@@ -631,6 +636,7 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         s[0].med_ss.append(ss_eff.r * scale); s[0].med_ss.append(ss_eff.g * scale); s[0].med_ss.append(ss_eff.b * scale)
         s[0].med_g.append(g_val)
         s[0].med_grid_idx.append(Int32(len(s[0].grid_nx)))
+        s[0].med_nvdb_idx.append(Int32(-1))
 
         s[0].grid_nx.append(g_nx); s[0].grid_ny.append(g_ny); s[0].grid_nz.append(g_nz)
         s[0].grid_p0.append(g_p0.r); s[0].grid_p0.append(g_p0.g); s[0].grid_p0.append(g_p0.b)
@@ -646,6 +652,29 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         # (shouldn't happen for well-formed scenes, but keeps indexing safe).
         for _ in range(copy_n, expected_n):
             s[0].grid_density.append(Float32(0))
+    elif is_nvdb:
+        # PBRT-v4's NanoVDBMedium ALSO defaults sigma_a/sigma_s to
+        # ConstantSpectrum(1) when unspecified (media.cpp), same as
+        # GridMedium above -- see that branch's comment.
+        var sa_eff_v = sa if sa_set else RGB(Float32(1))
+        var ss_eff_v = ss if ss_set else RGB(Float32(1))
+        var name_str = String(unsafe_from_utf8_ptr=name_buf.as_immutable())
+        s[0].med_names.append(name_str)
+        s[0].med_sa.append(sa_eff_v.r * scale); s[0].med_sa.append(sa_eff_v.g * scale); s[0].med_sa.append(sa_eff_v.b * scale)
+        s[0].med_ss.append(ss_eff_v.r * scale); s[0].med_ss.append(ss_eff_v.g * scale); s[0].med_ss.append(ss_eff_v.b * scale)
+        s[0].med_g.append(g_val)
+        s[0].med_grid_idx.append(Int32(-1))
+        s[0].med_nvdb_idx.append(Int32(len(s[0].nvdb_filenames)))
+
+        # The actual .nvdb file is loaded later, at finalize_scene time (the
+        # C bridge call needs a real file path, and this is the only place
+        # that already resolves scene-relative paths against s[0].scene_dir
+        # -- do that resolution here, at parse time, same as every other
+        # filename param, but defer the actual load).
+        var nvdb_rel = params.get_string("filename", "")
+        s[0].nvdb_filenames.append(s[0].scene_dir + nvdb_rel)
+        for ci in range(16):
+            s[0].nvdb_ctm.append(s[0].ctm[ci])
     name_buf.free()
 
 def lookup_medium(s: UnsafePointer[SceneParseState, MutExternalOrigin],
@@ -2455,6 +2484,85 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
         psc[0].grids = UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling()
     psc[0].grid_count = Int32(ng)
 
+    # ---- Sparse density grids ("nanovdb" media) ----
+    # The .nvdb files themselves are loaded HERE, not at parse time (see
+    # SceneParseState.nvdb_filenames's own comment) -- one C-bridge call per
+    # grid, decompressing the whole blob (ZIP, for every real asset this
+    # project has seen: bunny_cloud packs 146.6MB of grid into 76MB on
+    # disk). A failed load (bad path, unsupported grid type -- the bridge
+    # already refuses non-Float grids) leaves that medium with an empty
+    # blob and a zero majorant, which nvdb_sample_density's index-bounds
+    # check turns into "always returns background" rather than a crash --
+    # silently wrong-looking (a missing cloud renders as empty air) but
+    # never unsafe, and `print`ed so it isn't silent in the log.
+    var nvg = len(s[0].nvdb_filenames)
+    if nvg > 0:
+        var nvdb_buf = alloc[NvdbGrid_C](nvg)
+        for i in range(nvg):
+            var path_str = s[0].nvdb_filenames[i]
+            var plen = path_str.byte_length()
+            var cpath = alloc[UInt8](plen + 1)
+            for ci in range(plen):
+                cpath[ci] = path_str.unsafe_ptr()[ci]
+            cpath[plen] = UInt8(0)
+            var handle = nvdb_load(cpath, Int32(0))
+            cpath.free()
+
+            var blob: UnsafePointer[UInt8, MutExternalOrigin]
+            var blob_size_v = Int64(0)
+            var idx_min = Point3f(Float32(0), Float32(0), Float32(0))
+            var idx_max = Point3f(Float32(-1), Float32(-1), Float32(-1))  # empty range: min > max
+            var max_d = Float32(0.0)
+            var imat = SIMD[DType.float32, 16](0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+            var mvec = Vec3f(Float32(0), Float32(0), Float32(0))
+            if Int(handle) == 0:
+                print("Warning: could not load nanovdb medium file:", path_str)
+                blob = UnsafePointer[UInt8, MutExternalOrigin].unsafe_dangling()
+            else:
+                var blob_size = Int(nvdb_size(handle))
+                blob_size_v = Int64(blob_size)
+                blob = alloc[UInt8](max(blob_size, 1))
+                var src = nvdb_data(handle)
+                # memcpy, not a per-byte Mojo loop: bunny_cloud alone is
+                # 146.6MB decompressed, and a scalar byte-index loop over
+                # that is orders of magnitude slower than a real memcpy --
+                # slow enough it looked like a hang/crash during bring-up.
+                memcpy(dest=blob, src=src, count=blob_size)
+                var ibbmin = alloc[Int32](3); var ibbmax = alloc[Int32](3)
+                nvdb_index_bbox(handle, ibbmin, ibbmax)
+                idx_min = Point3f(Float32(ibbmin[0]), Float32(ibbmin[1]), Float32(ibbmin[2]))
+                idx_max = Point3f(Float32(ibbmax[0]), Float32(ibbmax[1]), Float32(ibbmax[2]))
+                ibbmin.free(); ibbmax.free()
+                var lo = alloc[Float32](1); var hi = alloc[Float32](1)
+                lo[0] = Float32(0); hi[0] = Float32(0)
+                nvdb_value_range(handle, lo, hi)
+                max_d = hi[0]
+                lo.free(); hi.free()
+                var im9 = alloc[Float32](9); var v3 = alloc[Float32](3)
+                nvdb_map_invmatf(handle, im9); nvdb_map_vecf(handle, v3)
+                imat = SIMD[DType.float32, 16](
+                    im9[0], im9[1], im9[2], im9[3], im9[4], im9[5], im9[6], im9[7], im9[8],
+                    Float32(0), Float32(0), Float32(0), Float32(0), Float32(0), Float32(0), Float32(0))
+                mvec = Vec3f(v3[0], v3[1], v3[2])
+                im9.free(); v3.free()
+                nvdb_free(handle)
+
+            var ctm_tmp2 = alloc[Float32](16)
+            var w2m2 = alloc[Float32](16)
+            for ci in range(16):
+                ctm_tmp2[ci] = s[0].nvdb_ctm[i*16 + ci]
+            _ = matrix_invert(ctm_tmp2, w2m2)
+            var w2m2_simd = SIMD[DType.float32, 16](
+                w2m2[0], w2m2[1], w2m2[2], w2m2[3], w2m2[4], w2m2[5], w2m2[6], w2m2[7],
+                w2m2[8], w2m2[9], w2m2[10], w2m2[11], w2m2[12], w2m2[13], w2m2[14], w2m2[15])
+            ctm_tmp2.free(); w2m2.free()
+
+            nvdb_buf[i] = NvdbGrid_C(blob, blob_size_v, w2m2_simd, imat, mvec, idx_min, idx_max, max_d)
+        psc[0].nvdb_grids = nvdb_buf
+    else:
+        psc[0].nvdb_grids = UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling()
+    psc[0].nvdb_grid_count = Int32(nvg)
+
     # ---- Media ----
     var nm = len(s[0].med_g)
     if nm > 0:
@@ -2463,7 +2571,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             var sa = SampledSpectrum(s[0].med_sa[i*3], s[0].med_sa[i*3+1], s[0].med_sa[i*3+2])
             var ss = SampledSpectrum(s[0].med_ss[i*3], s[0].med_ss[i*3+1], s[0].med_ss[i*3+2])
             med_buf[i] = Medium_C(sa, ss, s[0].med_g[i],
-                                  s[0].med_grid_idx[i], Float32(0), Float32(0))
+                                  s[0].med_grid_idx[i], s[0].med_nvdb_idx[i], Float32(0))
         psc[0].mediums = med_buf
     else:
         psc[0].mediums = UnsafePointer[Medium_C, MutExternalOrigin].unsafe_dangling()
@@ -2646,6 +2754,11 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin]):
         for gi in range(Int(psc[0].grid_count)):
             psc[0].grids[gi].density.free()
         psc[0].grids.free()
+    if psc[0].nvdb_grid_count > 0:
+        for gi in range(Int(psc[0].nvdb_grid_count)):
+            if Int(psc[0].nvdb_grids[gi].blob) > 4:
+                psc[0].nvdb_grids[gi].blob.free()
+        psc[0].nvdb_grids.free()
     if Int(psc[0].light_sampler.cdf) > 4:
         psc[0].light_sampler.cdf.free()
     # blas_nodes_arr/blas_primids_arr/instances are always real allocations
@@ -2761,6 +2874,8 @@ def mojo_parsed_scene_descriptor(
     sd[0].mediumIfaceCount = Int64(psc[0].medium_iface_count)
     sd[0].grids            = psc[0].grids
     sd[0].gridCount        = Int64(psc[0].grid_count)
+    sd[0].nvdbGrids        = psc[0].nvdb_grids
+    sd[0].nvdbGridCount    = Int64(psc[0].nvdb_grid_count)
     sd[0].lightSampler    = psc[0].light_sampler
     sd[0].blasNodesArr    = psc[0].blas_nodes_arr
     sd[0].blasPrimIdsArr  = psc[0].blas_primids_arr

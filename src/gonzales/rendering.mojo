@@ -165,7 +165,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
             # intentional per-backend differences.
             _sample_medium_core(
                 paths, intersections, i,
-                scene.mediums, Int(scene.mediumCount), scene.grids,
+                scene.mediums, Int(scene.mediumCount), scene.grids, scene.nvdbGrids,
                 scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves,
                 scene.blasNodesArr, scene.blasPrimIdsArr, scene.instances,
                 scene.areaLights, Int(scene.areaLightCount),

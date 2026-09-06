@@ -123,25 +123,32 @@ $(OIIO_BRIDGE_LIB): $(OIIO_BRIDGE_SRC) $(OIIO_BRIDGE_INC)/oiio.h
 	@mkdir -p $(BUILD_DIR)
 	g++ -fPIC -shared -std=c++20 -I$(OIIO_BRIDGE_INC) $(OIIO_BRIDGE_SRC) -lOpenImageIO -o $(OIIO_BRIDGE_LIB)
 
-# NanoVDB bridge. Gated on the headers being present, exactly like
-# HAVE_CUDA above: CI has no NanoVDB, and a missing header must not break
-# the build of everything else. When absent, .nvdb media are unsupported at
-# runtime rather than a compile error.
+# NanoVDB bridge. nanovdb.mojo (the loader FFI, not the pure-Mojo accessor)
+# is imported by the core renderer now (geometry.mojo, "nanovdb" pbrt
+# medium type), not just the opt-in Tools/nvdb_diff.mojo harness -- so the
+# Mojo link line always pulls in -lnvdbbridge, and the library must always
+# exist and always link. Same fix as HAVE_CUDA/vulkaninterop_stub.cpp
+# above, same shape: fall back to nvdb_stub.cc (reports "no grid" from
+# every symbol, which is already the documented "load failed" contract
+# every caller handles) when the headers aren't present, rather than
+# gating the library's existence on them.
 HAVE_NANOVDB := $(wildcard /usr/include/nanovdb/NanoVDB.h)
-NVDB_BRIDGE_SRC = src/nanovdb/nvdb.cc
 NVDB_BRIDGE_INC = src/nanovdb
-ifneq ($(HAVE_NANOVDB),)
 NVDB_BRIDGE_LIB = $(BUILD_DIR)/libnvdbbridge.so
-else
-NVDB_BRIDGE_LIB =
-endif
 
+ifeq ($(HAVE_NANOVDB),)
+$(NVDB_BRIDGE_LIB): $(NVDB_BRIDGE_INC)/nvdb_stub.cc $(NVDB_BRIDGE_INC)/nvdb.h
+	@mkdir -p $(BUILD_DIR)
+	@echo "note: no NanoVDB headers -- building nvdb bridge stub (.nvdb media disabled)"
+	g++ -fPIC -shared -std=c++20 -I$(NVDB_BRIDGE_INC) $(NVDB_BRIDGE_INC)/nvdb_stub.cc -o $(NVDB_BRIDGE_LIB)
+else
 # -DNANOVDB_USE_ZIP + -lz are required, not optional: the grid blob inside a
 # .nvdb is codec-compressed (all three scene assets here are ZIP), and
 # without it readGrid fails at runtime on every real file.
-$(BUILD_DIR)/libnvdbbridge.so: $(NVDB_BRIDGE_SRC) $(NVDB_BRIDGE_INC)/nvdb.h
+$(NVDB_BRIDGE_LIB): $(NVDB_BRIDGE_INC)/nvdb.cc $(NVDB_BRIDGE_INC)/nvdb.h
 	@mkdir -p $(BUILD_DIR)
-	g++ -fPIC -shared -std=c++20 -DNANOVDB_USE_ZIP -I$(NVDB_BRIDGE_INC) $(NVDB_BRIDGE_SRC) -lz -o $@
+	g++ -fPIC -shared -std=c++20 -DNANOVDB_USE_ZIP -I$(NVDB_BRIDGE_INC) $(NVDB_BRIDGE_INC)/nvdb.cc -lz -o $(NVDB_BRIDGE_LIB)
+endif
 
 VIEWER_SRC = src/viewer/viewer.cpp
 VIEWER_INC = src/viewer
@@ -208,7 +215,7 @@ else
 MOJO_BUILD_FLAGS = --target-accelerator sm_86
 endif
 MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIR) -Xlinker -loiiobridge -Xlinker -lvulkanviewer \
-                  -Xlinker -lvulkanrt -Xlinker -lvulkaninterop \
+                  -Xlinker -lvulkanrt -Xlinker -lvulkaninterop -Xlinker -lnvdbbridge \
                   -Xlinker -rpath -Xlinker $(BUILD_DIR) -Xlinker -lm
 
 MOJO_SRCS := $(wildcard src/gonzales/*.mojo)
@@ -222,7 +229,7 @@ $(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULK
 # Differential harness for the NanoVDB accessor port: runs the Mojo
 # accessor and NanoVDB's own C++ one over the same blob and compares.
 nvdb_diff: $(MOJO_SRCS) $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(NVDB_BRIDGE_LIB) Tools/nvdb_diff.mojo
-	uv run mojo build Tools/nvdb_diff.mojo -I src -o $(BUILD_DIR)/nvdb_diff $(MOJO_LINK_FLAGS) -Xlinker -lnvdbbridge
+	uv run mojo build Tools/nvdb_diff.mojo -I src -o $(BUILD_DIR)/nvdb_diff $(MOJO_LINK_FLAGS)
 
 sms_mitsuba_ref: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) Tools/sms_mitsuba_ref.mojo
 	@mkdir -p $(BUILD_DIR)

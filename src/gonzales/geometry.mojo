@@ -1,8 +1,9 @@
 from std.ffi import external_call
 from std.memory import alloc
-from std.math import sqrt, acos, atan2, cos, min, max, abs
+from std.math import sqrt, acos, atan2, cos, min, max, abs, floor
 from std.sys.info import align_of
 from gonzales.spectrum import SampledWavelengths
+from gonzales.nanovdb import nvdb_sample_index
 
 # Value structs shared with GPU code can't hold Optional[UnsafePointer], so an
 # "unset" pointer field is instead left at its `.unsafe_dangling()` sentinel --
@@ -787,8 +788,8 @@ struct Medium_C(TrivialRegisterPassable):
     var sigma_a: SampledSpectrum   # absorption coefficient (1/m), per unit density if grid_idx >= 0
     var sigma_s: SampledSpectrum   # scattering coefficient (1/m), per unit density if grid_idx >= 0
     var g:       Float32           # HG anisotropy
-    var grid_idx: Int32            # -1 = homogeneous; >=0 = index into scene.grids
-    var _pad1:   Float32
+    var grid_idx: Int32            # -1 = homogeneous; >=0 = index into scene.grids (dense "uniformgrid")
+    var nvdb_idx: Int32            # -1 = none; >=0 = index into scene.nvdb_grids (sparse "nanovdb")
     var _pad2:   Float32
 
 @fieldwise_init
@@ -856,6 +857,76 @@ def grid_sample_density(grid: Grid_C, p_world: Vec3f) -> Float32:
     var d0 = d00 * (Float32(1.0) - fy) + d10 * fy
     var d1 = d01 * (Float32(1.0) - fy) + d11 * fy
     return d0 * (Float32(1.0) - fz) + d1 * fz
+
+@fieldwise_init
+struct NvdbGrid_C(TrivialRegisterPassable):
+    """Sparse heterogeneous density grid backing a Medium_C (PBRT-v4
+    "nanovdb" -- a decompressed .nvdb blob, sampled via nvdb_sample_index).
+    Sibling to Grid_C, not a variant of it: NanoVDB's own index space has a
+    DIFFERENT coordinate convention (integer voxel index, own affine map)
+    from Grid_C's dense-array [p0,p1]-box convention, so this is its own
+    struct rather than a `kind` flag bolted onto Grid_C.
+
+    Two transforms compose to go from pbrt world space to an nvdb voxel
+    index, mirroring the two-stage pipeline pbrt-v4 itself uses for nanovdb
+    media: world_to_medium (this medium's own pbrt CTM inverse, same 4x4
+    column-major convention as Grid_C's field of the same name) maps pbrt
+    world space into the .nvdb file's OWN embedded world space, and
+    inv_map/map_vec (that file's PNanoVDB "Map", read once from the blob
+    at parse time) maps that into fractional index space:
+        world_to_index(x) = inv_map * (x - map_vec)
+    (matches pnanovdb_map_apply_inverse exactly; inv_map is row-major 3x3,
+    packed into a SIMD16 with 7 unused padding lanes to reuse Grid_C's own
+    storage convention rather than invent a 9-wide one).
+
+    index_min/index_max are the blob's indexBBox (nvdb_index_bbox), for a
+    cheap reject before touching the blob at all. max_density is the
+    majorant (root-node max, nvdb_value_range) used for delta-tracking free
+    -flight sampling, same role as Grid_C.max_density -- coarser than a
+    per-leaf majorant would be, a documented, deliberate v1 scope choice.
+    """
+    var blob: UnsafePointer[UInt8, MutExternalOrigin]
+    var blob_size: Int64  # bytes -- CPU sampling never needs this (pure offset
+                           # arithmetic, no bounds check), only the GPU upload's
+                           # memcpy does; kept here rather than threaded as a
+                           # separate parallel array alongside every other field.
+    var world_to_medium: SIMD[DType.float32, 16]
+    var inv_map: SIMD[DType.float32, 16]  # row-major 3x3 in lanes 0..8, rest unused
+    var map_vec: Vec3f
+    var index_min: Point3f
+    var index_max: Point3f
+    var max_density: Float32
+
+@always_inline
+def nvdb_sample_density(grid: NvdbGrid_C, p_world: Vec3f) -> Float32:
+    """Point-sampled (NOT trilinear -- v1 scope, see project_nanovdb_media
+    memory) density at a world-space point; 0 outside the grid's index
+    bounds. Same "0 outside bounds" contract as grid_sample_density, so a
+    shadow ray's ratio-tracking transmittance naturally stops attenuating
+    once it exits the medium with no extra bookkeeping, exactly as that
+    function's own docstring notes."""
+    var m = grid.world_to_medium
+    var mx = m[0]*p_world[0] + m[4]*p_world[1] + m[8]*p_world[2] + m[12]
+    var my = m[1]*p_world[0] + m[5]*p_world[1] + m[9]*p_world[2] + m[13]
+    var mz = m[2]*p_world[0] + m[6]*p_world[1] + m[10]*p_world[2] + m[14]
+
+    var im = grid.inv_map
+    var sx = mx - grid.map_vec.x
+    var sy = my - grid.map_vec.y
+    var sz = mz - grid.map_vec.z
+    var ix = sx*im[0] + sy*im[1] + sz*im[2]
+    var iy = sx*im[3] + sy*im[4] + sz*im[5]
+    var iz = sx*im[6] + sy*im[7] + sz*im[8]
+
+    # floor, not round: NanoVDB's index convention is that voxel i spans
+    # continuous index-space [i, i+1) -- confirmed against the real bridge
+    # (indexBBox.min * voxelSize == worldBBox.min exactly on every asset
+    # checked), same convention nvdb_diff's oracle comparison relies on.
+    var i = Int32(floor(ix)); var j = Int32(floor(iy)); var k = Int32(floor(iz))
+    if i < Int32(grid.index_min.x) or i > Int32(grid.index_max.x): return Float32(0.0)
+    if j < Int32(grid.index_min.y) or j > Int32(grid.index_max.y): return Float32(0.0)
+    if k < Int32(grid.index_min.z) or k > Int32(grid.index_max.z): return Float32(0.0)
+    return nvdb_sample_index(grid.blob, i, j, k)
 
 @fieldwise_init
 struct MediumInterface_C(TrivialRegisterPassable):

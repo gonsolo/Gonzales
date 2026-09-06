@@ -5,7 +5,7 @@ from max.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc, memcpy
-from .geometry import RGB, Point3f, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr
+from .geometry import RGB, Point3f, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, NvdbGrid_C, nvdb_sample_density, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres
 from .transform import transform_normal_by_instance
@@ -106,6 +106,9 @@ struct GpuSceneHandle(Movable):
     var grids_buf: DeviceBuffer[DType.uint8]          # n_grids × sizeof(Grid_C); Grid_C.density points into grid_density_bufs
     var n_grids: Int
     var grid_density_bufs: List[DeviceBuffer[DType.uint8]]  # kept alive; one per grid's density array
+    var nvdb_grids_buf: DeviceBuffer[DType.uint8]     # n_nvdb_grids × sizeof(NvdbGrid_C); NvdbGrid_C.blob points into nvdb_blob_bufs
+    var n_nvdb_grids: Int
+    var nvdb_blob_bufs: List[DeviceBuffer[DType.uint8]]  # kept alive; one per grid's decompressed .nvdb blob
     var measured_brdfs_buf: DeviceBuffer[DType.uint8]  # n_measured_brdfs × sizeof(MeasuredBRDF_C); each entry's 12 pointer fields point into measured_field_bufs
     var n_measured_brdfs: Int
     var measured_field_bufs: List[DeviceBuffer[DType.uint8]]  # kept alive; 12 sub-array buffers per measured material
@@ -225,6 +228,8 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
     medium_iface_count: Int64,
     grids: UnsafePointer[Grid_C, MutExternalOrigin],
     gridCount: Int64,
+    nvdbGrids: UnsafePointer[NvdbGrid_C, MutExternalOrigin],
+    nvdbGridCount: Int64,
     measured_brdfs: UnsafePointer[MeasuredBRDF_C, MutExternalOrigin],
     measuredBrdfCount: Int64,
     n_pixels: Int64,
@@ -536,6 +541,37 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             grid_structs_host.free()
             if n_grids_int > 0:
                 print("GPU: " + String(n_grids_int) + " heterogeneous density grid(s) uploaded")
+
+            # Upload sparse density grids ("nanovdb" media). Same shape as
+            # the dense-grid upload just above: each grid's decompressed
+            # blob gets its own device buffer, and the NvdbGrid_C struct
+            # array embeds device-resident pointers into those buffers.
+            var nvdb_blob_bufs = List[DeviceBuffer[DType.uint8]]()
+            var n_nvdb_grids_int = Int(nvdbGridCount)
+            var nvdb_structs_host = alloc[NvdbGrid_C](max(n_nvdb_grids_int, 1))
+            for gi in range(n_nvdb_grids_int):
+                var host_nvdb = nvdbGrids[gi]
+                var blob_bytes = Int(host_nvdb.blob_size)
+                var blob_buf = ctx.enqueue_create_buffer[DType.uint8](max(blob_bytes, 1))
+                if blob_bytes > 0:
+                    with blob_buf.map_to_host() as host_buf:
+                        var dst = host_buf.unsafe_ptr()
+                        var src = host_nvdb.blob
+                        memcpy(dest=dst, src=src, count=blob_bytes)
+                nvdb_structs_host[gi] = NvdbGrid_C(
+                    blob_buf.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](), host_nvdb.blob_size,
+                    host_nvdb.world_to_medium, host_nvdb.inv_map, host_nvdb.map_vec,
+                    host_nvdb.index_min, host_nvdb.index_max, host_nvdb.max_density)
+                nvdb_blob_bufs.append(blob_buf^)
+            var nvdb_struct_bytes = max(n_nvdb_grids_int, 1) * size_of[NvdbGrid_C]()
+            var nvdb_grids_buf = ctx.enqueue_create_buffer[DType.uint8](nvdb_struct_bytes)
+            with nvdb_grids_buf.map_to_host() as host_buf:
+                var dst = host_buf.unsafe_ptr()
+                var src = nvdb_structs_host.bitcast[UInt8]()
+                memcpy(dest=dst, src=src, count=nvdb_struct_bytes)
+            nvdb_structs_host.free()
+            if n_nvdb_grids_int > 0:
+                print("GPU: " + String(n_nvdb_grids_int) + " sparse (nanovdb) density grid(s) uploaded")
 
             # Upload MeasuredBxDF tabulated-BRDF tensors ("measured" material,
             # see project_measured_bxdf memory / lovely-dazzling-meteor plan
@@ -947,6 +983,9 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                 grids_buf=grids_buf^,
                 n_grids=n_grids_int,
                 grid_density_bufs=grid_density_bufs^,
+                nvdb_grids_buf=nvdb_grids_buf^,
+                n_nvdb_grids=n_nvdb_grids_int,
+                nvdb_blob_bufs=nvdb_blob_bufs^,
                 measured_brdfs_buf=measured_brdfs_buf^,
                 n_measured_brdfs=n_measured_int,
                 measured_field_bufs=measured_field_bufs^,
@@ -1882,6 +1921,7 @@ def _sample_medium_core(
     mediums: UnsafePointer[Medium_C, MutExternalOrigin],
     n_mediums: Int,
     grids: UnsafePointer[Grid_C, MutExternalOrigin],
+    nvdb_grids: UnsafePointer[NvdbGrid_C, MutExternalOrigin],
     bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
     primIds: UnsafePointer[PrimId_C, MutExternalOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
@@ -1975,10 +2015,24 @@ def _sample_medium_core(
 
     var t_free: Float32
     var albedo_r: Float32
-    if med.grid_idx >= Int32(0):
+    if med.grid_idx >= Int32(0) or med.nvdb_idx >= Int32(0):
         # ── Heterogeneous: delta tracking ────────────────────────────────
-        var grid = grids[Int(med.grid_idx)]
-        var sigma_maj = grid.max_density * sigma_t.r
+        # Two density sources share this one Woodcock-tracking loop --
+        # dense "uniformgrid" (grid_idx) and sparse "nanovdb" (nvdb_idx),
+        # mutually exclusive per medium (the parser never sets both). They
+        # differ only in the per-candidate density lookup and majorant, so
+        # branch ONCE on which source this medium has, not per iteration.
+        var use_nvdb = med.nvdb_idx >= Int32(0)
+        var grid = grids[Int(med.grid_idx)] if not use_nvdb else Grid_C(
+            UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), Int32(0), Int32(0), Int32(0),
+            Point3f(Float32(0), Float32(0), Float32(0)), Point3f(Float32(0), Float32(0), Float32(0)),
+            SIMD[DType.float32, 16](0), Float32(0))
+        var nvdb_grid = nvdb_grids[Int(med.nvdb_idx)] if use_nvdb else NvdbGrid_C(
+            UnsafePointer[UInt8, MutExternalOrigin].unsafe_dangling(), Int64(0), SIMD[DType.float32, 16](0),
+            SIMD[DType.float32, 16](0), Vec3f(Float32(0), Float32(0), Float32(0)),
+            Point3f(Float32(0), Float32(0), Float32(0)), Point3f(Float32(0), Float32(0), Float32(0)), Float32(0))
+        var majorant_density = nvdb_grid.max_density if use_nvdb else grid.max_density
+        var sigma_maj = majorant_density * sigma_t.r
         if sigma_maj <= Float32(0.0):
             path_ptr[].pcgState = pcg.state
             return
@@ -1992,7 +2046,7 @@ def _sample_medium_core(
             if t >= t_surf:
                 break
             var p_world = ray_org + t * ray_dir
-            var density = grid_sample_density(grid, p_world)
+            var density = nvdb_sample_density(nvdb_grid, p_world) if use_nvdb else grid_sample_density(grid, p_world)
             var sigma_t_real = density * sigma_t.r
             var u2 = pcg.next_float()
             if u2 < sigma_t_real / sigma_maj:
@@ -2066,13 +2120,26 @@ def _sample_medium_core(
                     var shad_tmax = dist * Float32(0.9995)
                     if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shad_ray, shad_tmax, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres):
                         var T: RGB
-                        if med.grid_idx >= Int32(0):
+                        if med.grid_idx >= Int32(0) or med.nvdb_idx >= Int32(0):
                             # Ratio-tracking transmittance through the grid (see
-                            # sample_medium_gpu's docstring). grid_sample_density
-                            # returns 0 past the grid's AABB, so this naturally
-                            # stops attenuating once the shadow ray exits it.
-                            var grid = grids[Int(med.grid_idx)]
-                            var sigma_maj_s = grid.max_density * sigma_t.r
+                            # sample_medium_gpu's docstring). The density
+                            # lookup returns 0 past the grid's bounds for
+                            # EITHER source (grid_sample_density's [p0,p1] box,
+                            # nvdb_sample_density's index bbox), so this
+                            # naturally stops attenuating once the shadow ray
+                            # exits the medium -- same dual-source dispatch as
+                            # the free-flight sampling above.
+                            var use_nvdb_s = med.nvdb_idx >= Int32(0)
+                            var grid_s = grids[Int(med.grid_idx)] if not use_nvdb_s else Grid_C(
+                                UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), Int32(0), Int32(0), Int32(0),
+                                Point3f(Float32(0), Float32(0), Float32(0)), Point3f(Float32(0), Float32(0), Float32(0)),
+                                SIMD[DType.float32, 16](0), Float32(0))
+                            var nvdb_grid_s = nvdb_grids[Int(med.nvdb_idx)] if use_nvdb_s else NvdbGrid_C(
+                                UnsafePointer[UInt8, MutExternalOrigin].unsafe_dangling(), Int64(0), SIMD[DType.float32, 16](0),
+                                SIMD[DType.float32, 16](0), Vec3f(Float32(0), Float32(0), Float32(0)),
+                                Point3f(Float32(0), Float32(0), Float32(0)), Point3f(Float32(0), Float32(0), Float32(0)), Float32(0))
+                            var majorant_s = nvdb_grid_s.max_density if use_nvdb_s else grid_s.max_density
+                            var sigma_maj_s = majorant_s * sigma_t.r
                             var Tval = Float32(1.0)
                             if sigma_maj_s > Float32(0.0):
                                 var ts = Float32(0.0)
@@ -2084,7 +2151,7 @@ def _sample_medium_core(
                                     if ts >= dist:
                                         break
                                     var ps = scatter_pt_s + shadow_dir * ts
-                                    var density_s = grid_sample_density(grid, ps)
+                                    var density_s = nvdb_sample_density(nvdb_grid_s, ps) if use_nvdb_s else grid_sample_density(grid_s, ps)
                                     Tval *= Float32(1.0) - (density_s * sigma_t.r) / sigma_maj_s
                                     if Tval < Float32(1e-4):
                                         Tval = Float32(0.0)
@@ -2122,6 +2189,7 @@ def sample_medium_gpu(
     mediums: UnsafePointer[Medium_C, MutExternalOrigin],
     n_mediums_dp: Int64,
     grids: UnsafePointer[Grid_C, MutExternalOrigin],
+    nvdb_grids: UnsafePointer[NvdbGrid_C, MutExternalOrigin],
     bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
     primIds: UnsafePointer[PrimId_C, MutExternalOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
@@ -2155,7 +2223,7 @@ def sample_medium_gpu(
     if tid >= count:
         return
     _sample_medium_core(
-        paths, intersections, tid, mediums, n_mediums, grids,
+        paths, intersections, tid, mediums, n_mediums, grids, nvdb_grids,
         bvh2Nodes, primIds, meshes, curves,
         blasNodesArr, blasPrimIdsArr, instances,
         areaLights, n_area_lights, lightSamplerCdf, n_light_sampler,
@@ -3189,6 +3257,7 @@ def _gpu_bounce_kernels(
         handle[].mediums_buf.unsafe_ptr().bitcast[Medium_C](),
         Int64(handle[].n_mediums),
         handle[].grids_buf.unsafe_ptr().bitcast[Grid_C](),
+        handle[].nvdb_grids_buf.unsafe_ptr().bitcast[NvdbGrid_C](),
         handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
         handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
         handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),

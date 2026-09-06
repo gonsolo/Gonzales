@@ -16,7 +16,7 @@ from std.testing import assert_true, TestSuite
 from gonzales.geometry import (
     RGB, Point3f, Vec3f, Intersection_C, LightSampler_C, INV_FOUR_PI, INV_PI,
     AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, Sphere_C,
-    Medium_C, MediumInterface_C, Grid_C, PrimId_C, Instance_C, MeasuredBRDF_C,
+    Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, PrimId_C, Instance_C, MeasuredBRDF_C,
     GpuTexture_C,
     NormalSlopeMap_C,
 )
@@ -71,6 +71,7 @@ def _dummy_sd() -> SceneDescriptor2_C:
         UnsafePointer[Medium_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
         UnsafePointer[MediumInterface_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
         UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
         LightSampler_C(UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), Int32(0), Int32(0)),
         UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
         UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
@@ -272,6 +273,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         UnsafePointer[Medium_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
         UnsafePointer[MediumInterface_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
         UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
         LightSampler_C(UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), Int32(0), Int32(0)),
         UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
         UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),

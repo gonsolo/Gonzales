@@ -54,6 +54,14 @@ float nvdb_get_value(void* handle, int i, int j, int k);
 void nvdb_active_coord(void* handle, unsigned long n, int* out3);
 unsigned long nvdb_active_count(void* handle);
 
+// World<->index affine map (PNanoVDB's Map): index_to_world(x) = matf*x+vecf,
+// world_to_index(x) = invmatf*(x-vecf). matf/invmatf are row-major 3x3 (9
+// floats); vecf is the translation (3 floats). Single precision only (the
+// grids in this project's scene corpus don't need double).
+void nvdb_map_matf(void* handle, float* out9);
+void nvdb_map_invmatf(void* handle, float* out9);
+void nvdb_map_vecf(void* handle, float* out3);
+
 void nvdb_free(void* handle);
 
 #ifdef __cplusplus

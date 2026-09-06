@@ -160,6 +160,7 @@ struct SceneParseState(Movable):
     var med_ss:      List[Float32]   # 3 floats per medium
     var med_g:       List[Float32]   # 1 per medium
     var med_grid_idx: List[Int32]    # 1 per medium; -1 = homogeneous, else index into grid_* below
+    var med_nvdb_idx: List[Int32]    # 1 per medium; -1 = none, else index into nvdb_* below
 
     # Heterogeneous density grids ("uniformgrid" media). One record per grid;
     # med_grid_idx above points into these by index.
@@ -171,6 +172,13 @@ struct SceneParseState(Movable):
     var grid_ctm: List[Float32]      # 16 floats per grid (world_to_medium built from this at finalize)
     var grid_density: List[Float32]  # flattened, grid_density_base[i]..+nx*ny*nz per grid
     var grid_density_base: List[Int32]
+
+    # Sparse density grids ("nanovdb" media). One record per grid; the
+    # actual .nvdb file is loaded (via the C bridge) at finalize_scene time,
+    # not here -- only the filename and CTM are captured during parsing.
+    # med_nvdb_idx above points into these by index.
+    var nvdb_filenames: List[String]
+    var nvdb_ctm: List[Float32]      # 16 floats per grid (world_to_medium built from this at finalize)
 
     # Textures
     var tex_names: List[String]
@@ -284,6 +292,7 @@ struct SceneParseState(Movable):
         self.med_ss       = List[Float32]()
         self.med_g        = List[Float32]()
         self.med_grid_idx = List[Int32]()
+        self.med_nvdb_idx = List[Int32]()
 
         self.grid_nx = List[Int32]()
         self.grid_ny = List[Int32]()
@@ -293,6 +302,9 @@ struct SceneParseState(Movable):
         self.grid_ctm = List[Float32]()
         self.grid_density = List[Float32]()
         self.grid_density_base = List[Int32]()
+
+        self.nvdb_filenames = List[String]()
+        self.nvdb_ctm = List[Float32]()
 
         self.tex_names = List[String]()
         self.tex_files = List[String]()

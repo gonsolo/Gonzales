@@ -97,6 +97,34 @@ def nvdb_active_coord(handle: UnsafePointer[UInt8, MutExternalOrigin], n: Int64,
     returns background would pass such a test vacuously."""
     external_call["nvdb_active_coord", NoneType](handle, n, out3)
 
+# ── Metadata needed to plug an .nvdb grid into a Medium_C (host only) ────
+
+def nvdb_index_bbox(handle: UnsafePointer[UInt8, MutExternalOrigin],
+                    out_min3: UnsafePointer[Int32, MutExternalOrigin],
+                    out_max3: UnsafePointer[Int32, MutExternalOrigin]):
+    """The grid's indexBBox (inclusive), for the cheap reject
+    nvdb_sample_density does before touching the blob at all."""
+    external_call["nvdb_index_bbox", NoneType](handle, out_min3, out_max3)
+
+def nvdb_value_range(handle: UnsafePointer[UInt8, MutExternalOrigin],
+                     out_min: UnsafePointer[Float32, MutExternalOrigin],
+                     out_max: UnsafePointer[Float32, MutExternalOrigin]):
+    """Root-node min/max -- the majorant used for delta-tracking free-flight
+    sampling. Coarser than a per-leaf majorant would be; a documented v1
+    scope choice, see project_nanovdb_media memory."""
+    external_call["nvdb_value_range", NoneType](handle, out_min, out_max)
+
+def nvdb_map_invmatf(handle: UnsafePointer[UInt8, MutExternalOrigin],
+                     out9: UnsafePointer[Float32, MutExternalOrigin]):
+    """World-to-index 3x3 (row-major), PNanoVDB's inverse Map matrix."""
+    external_call["nvdb_map_invmatf", NoneType](handle, out9)
+
+def nvdb_map_vecf(handle: UnsafePointer[UInt8, MutExternalOrigin],
+                  out3: UnsafePointer[Float32, MutExternalOrigin]):
+    """World-to-index translation, PNanoVDB's Map vecF (subtracted before
+    the inverse matrix multiply -- see pnanovdb_map_apply_inverse)."""
+    external_call["nvdb_map_vecf", NoneType](handle, out3)
+
 # ── The accessor (Mojo, CPU+GPU) ─────────────────────────────────────────
 
 comptime NVDB_GRID_SIZE = 672

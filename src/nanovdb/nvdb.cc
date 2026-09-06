@@ -159,6 +159,27 @@ void nvdb_active_coord(void* handle, unsigned long n, int* out3) {
     out3[0] = out3[1] = out3[2] = 0;
 }
 
+void nvdb_map_matf(void* handle, float* out9) {
+    auto* g = float_grid(static_cast<Handle*>(handle));
+    if (!g || !out9) return;
+    auto map = g->map();
+    for (int i = 0; i < 9; ++i) out9[i] = map.mMatF[i];
+}
+
+void nvdb_map_invmatf(void* handle, float* out9) {
+    auto* g = float_grid(static_cast<Handle*>(handle));
+    if (!g || !out9) return;
+    auto map = g->map();
+    for (int i = 0; i < 9; ++i) out9[i] = map.mInvMatF[i];
+}
+
+void nvdb_map_vecf(void* handle, float* out3) {
+    auto* g = float_grid(static_cast<Handle*>(handle));
+    if (!g || !out3) return;
+    auto map = g->map();
+    for (int i = 0; i < 3; ++i) out3[i] = map.mVecF[i];
+}
+
 void nvdb_free(void* handle) {
     delete static_cast<Handle*>(handle);
 }
