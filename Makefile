@@ -123,6 +123,26 @@ $(OIIO_BRIDGE_LIB): $(OIIO_BRIDGE_SRC) $(OIIO_BRIDGE_INC)/oiio.h
 	@mkdir -p $(BUILD_DIR)
 	g++ -fPIC -shared -std=c++20 -I$(OIIO_BRIDGE_INC) $(OIIO_BRIDGE_SRC) -lOpenImageIO -o $(OIIO_BRIDGE_LIB)
 
+# NanoVDB bridge. Gated on the headers being present, exactly like
+# HAVE_CUDA above: CI has no NanoVDB, and a missing header must not break
+# the build of everything else. When absent, .nvdb media are unsupported at
+# runtime rather than a compile error.
+HAVE_NANOVDB := $(wildcard /usr/include/nanovdb/NanoVDB.h)
+NVDB_BRIDGE_SRC = src/nanovdb/nvdb.cc
+NVDB_BRIDGE_INC = src/nanovdb
+ifneq ($(HAVE_NANOVDB),)
+NVDB_BRIDGE_LIB = $(BUILD_DIR)/libnvdbbridge.so
+else
+NVDB_BRIDGE_LIB =
+endif
+
+# -DNANOVDB_USE_ZIP + -lz are required, not optional: the grid blob inside a
+# .nvdb is codec-compressed (all three scene assets here are ZIP), and
+# without it readGrid fails at runtime on every real file.
+$(BUILD_DIR)/libnvdbbridge.so: $(NVDB_BRIDGE_SRC) $(NVDB_BRIDGE_INC)/nvdb.h
+	@mkdir -p $(BUILD_DIR)
+	g++ -fPIC -shared -std=c++20 -DNANOVDB_USE_ZIP -I$(NVDB_BRIDGE_INC) $(NVDB_BRIDGE_SRC) -lz -o $@
+
 VIEWER_SRC = src/viewer/viewer.cpp
 VIEWER_INC = src/viewer
 VIEWER_GEN = src/viewer/generated
@@ -192,7 +212,7 @@ MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIR) -Xlinker -loiiobridge -Xlinker -lvulka
                   -Xlinker -rpath -Xlinker $(BUILD_DIR) -Xlinker -lm
 
 MOJO_SRCS := $(wildcard src/gonzales/*.mojo)
-$(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB)
+$(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(NVDB_BRIDGE_LIB)
 	@mkdir -p $(BUILD_DIR)
 	uv run mojo build src/gonzales/__init__.mojo -I src -o $(GONZALES) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
 
