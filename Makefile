@@ -221,7 +221,7 @@ $(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULK
 # gonzales's own SMS, not part of the renderer. See that file's header.
 # Differential harness for the NanoVDB accessor port: runs the Mojo
 # accessor and NanoVDB's own C++ one over the same blob and compares.
-nvdb_diff: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(NVDB_BRIDGE_LIB) Tools/nvdb_diff.mojo
+nvdb_diff: $(MOJO_SRCS) $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(NVDB_BRIDGE_LIB) Tools/nvdb_diff.mojo
 	uv run mojo build Tools/nvdb_diff.mojo -I src -o $(BUILD_DIR)/nvdb_diff $(MOJO_LINK_FLAGS) -Xlinker -lnvdbbridge
 
 sms_mitsuba_ref: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) Tools/sms_mitsuba_ref.mojo
