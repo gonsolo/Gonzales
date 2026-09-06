@@ -266,6 +266,16 @@ def _visible_transmittance(
         if not had_bvh_hit:
             inter_mem[0].hit = Int8(1)
             inter_mem[0].tHit = remaining * Float32(0.9995)
+            # Clear the primId along with the sentinel. `scratch` is a
+            # caller-owned slot reused across bounces, samples and (on GPU)
+            # threads, so on a BVH miss the primId still holds STALE data
+            # from a previous traversal -- and test_spheres writes none when
+            # sphereCount == 0. The `primId.type != 4` test just below then
+            # reads that stale type, and a leftover 4 makes a pure miss
+            # masquerade as a sphere hit, falling through to
+            # sd.spheres[stale id1] and sd.materials[stale materialIndex]:
+            # an out-of-bounds read on any scene with no spheres.
+            inter_mem[0].primId.type = Int8(0)
         test_spheres(sd.spheres, Int(sd.sphereCount), ray, inter_mem)
         if not had_bvh_hit and inter_mem[0].primId.type != Int8(4):
             inter_mem[0].hit = Int8(0)

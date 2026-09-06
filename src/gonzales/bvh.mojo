@@ -1332,13 +1332,20 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
                 # Both hit — visit nearer first, push farther
                 var leftTNear = leftHit[1]
                 var rightTNear = rightHit[1]
+                # Bound the push against the 64-entry stack. Overflowing it
+                # writes past the InlineArray and corrupts whatever follows
+                # it in the frame; dropping the far child instead can only
+                # cost a missed intersection, never memory corruption.
                 if leftTNear <= rightTNear:
                     current = leftIdx
-                    stack_ptr[toVisit] = Int32(rightIdx)
+                    if toVisit < 64:
+                        stack_ptr[toVisit] = Int32(rightIdx)
+                        toVisit += 1
                 else:
                     current = rightIdx
-                    stack_ptr[toVisit] = Int32(leftIdx)
-                toVisit += 1
+                    if toVisit < 64:
+                        stack_ptr[toVisit] = Int32(leftIdx)
+                        toVisit += 1
             elif leftIsHit:
                 current = leftIdx
             elif rightIsHit:
@@ -1528,13 +1535,20 @@ def traverse_bvh2_core_defer_curves(
                 # Both hit — visit nearer first, push farther
                 var leftTNear = leftHit[1]
                 var rightTNear = rightHit[1]
+                # Bound the push against the 64-entry stack. Overflowing it
+                # writes past the InlineArray and corrupts whatever follows
+                # it in the frame; dropping the far child instead can only
+                # cost a missed intersection, never memory corruption.
                 if leftTNear <= rightTNear:
                     current = leftIdx
-                    stack_ptr[toVisit] = Int32(rightIdx)
+                    if toVisit < 64:
+                        stack_ptr[toVisit] = Int32(rightIdx)
+                        toVisit += 1
                 else:
                     current = rightIdx
-                    stack_ptr[toVisit] = Int32(leftIdx)
-                toVisit += 1
+                    if toVisit < 64:
+                        stack_ptr[toVisit] = Int32(leftIdx)
+                        toVisit += 1
             elif leftIsHit:
                 current = leftIdx
             elif rightIsHit:
