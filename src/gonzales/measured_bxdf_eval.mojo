@@ -747,7 +747,7 @@ def _nee_weight_measured(
     own _nee_weight_hair. Projects wo/ls.wi into the local (tangent,
     bitangent, normal) frame bxdf_eval_measured expects.
 
-    Mirrors _nee_weight_simple_via_spectral (bxdf.mojo): bxdf_eval_measured
+    Mirrors _nee_weight_simple_spectral (bxdf.mojo): bxdf_eval_measured
     returns a RAW spectral reflectance (not RGB -- see its docstring), which
     must be composited with the light's own spectral radiance (via
     rgb_illuminant_to_spectral_sample on ls.Li) BEFORE the one-time

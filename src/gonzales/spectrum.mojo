@@ -10,6 +10,7 @@
 # alias for `RGB` until a later layer threads `SampledWavelengths` through
 # the shading context and switches that alias over.
 
+from gonzales.sampling import mix_bits_u64
 from gonzales.rgb2spec import (
     SpectrumTable, CieXyzTables, RGBSigmoidCoeffs,
     rgb_to_coeffs_table_lookup_ptr, eval_sigmoid_spectrum,
@@ -56,6 +57,49 @@ def sample_wavelengths_uniform(u: Float32) -> SampledWavelengths:
         lambdas[i] = off
     var pdf = Float32(1.0) / span
     return SampledWavelengths(lambdas[0], lambdas[1], lambdas[2], lambdas[3], pdf)
+
+@always_inline
+def pass_wavelengths(pass_idx: Int) -> SampledWavelengths:
+    """The hero wavelengths for one progressive pass (a VCM spp sample, an SPPM photon pass), shared by EVERY camera and
+    light subpath in it.
+
+    Spectral transport forces this: a connection multiplies a camera
+    vertex's beta by a light vertex's flux, and a merge does the same across
+    arbitrary light paths, so lane i of one only means the same thing as
+    lane i of the other when both were traced at identical wavelengths.
+    Per-subpath sampling (what this replaced) made that false for every
+    connection and every merge.
+
+    A pure function of the PASS INDEX and nothing else, so every backend and
+    every kernel derives the identical value from an input they all agree on.
+    It deliberately does NOT take the rng seed: the seed is not one value
+    here. The light-path kernels are launched with `pass_seed`
+    (= base_seed ^ hash(si)) and the camera kernels with `base_seed`, so a
+    seed-dependent derivation handed the light and camera subpaths of the
+    SAME pass different wavelength sets -- precisely the inconsistency this
+    sharing exists to prevent. Measured, that made GPU VCM disagree with CPU
+    VCM by 4% on cornell-box, chromatically, and it did not shrink with more
+    samples; pinning one fixed wavelength set on both backends collapsed the
+    gap to 0.3% (atomics ordering), which is how the input, not the
+    arithmetic, was identified as the culprit.
+
+    The schedule is a HASH of the pass index, not a low-discrepancy sequence
+    over it, and that is deliberate. sample_wavelengths_uniform is itself a
+    lattice -- Wilkie et al. hero sampling puts the other three wavelengths
+    at fixed strides of span/4 from the first -- so a stratified u lattice on
+    top of it produces a doubly-regular set that aliases against the CIE
+    curves instead of covering them. Measured on the saturated-box harness,
+    chroma error vs pbrt: 0.0135 for frac(i*phi), 0.0120 for frac(i*R1),
+    0.0026 for this hash. Randomising u is what breaks the alignment; the
+    stratification that matters is already inside the hero-wavelength stride.
+
+    A consequence is that the wavelength schedule is the same for every
+    --seed. That is fine: everything else in the render is still seeded, and
+    a deterministic schedule is one fewer thing that can differ between
+    backends."""
+    var h = mix_bits_u64(UInt64(pass_idx) + UInt64(0x9E3779B97F4A7C15))
+    var u = Float32(h >> UInt32(8)) * Float32(1.0 / 16777216.0)
+    return sample_wavelengths_uniform(u)
 
 # ── Spectral radiance sample (4-wide, tied to one SampledWavelengths) ──────
 
@@ -253,6 +297,36 @@ def spec_refl(
 ) -> SpectralSample:
     """RGB REFLECTANCE -> spectral, at the material boundary."""
     return rgb_to_spectral_sample(coeffs, res, cie_x, cie_y, cie_z, d65, r, g, b, wl)
+
+@always_inline
+def spec_refl_unbounded(
+    coeffs: UnsafePointer[Float32, MutExternalOrigin], res: Int,
+    cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    d65: UnsafePointer[Float32, MutExternalOrigin],
+    r: Float32, g: Float32, b: Float32, wl: SampledWavelengths,
+) -> SpectralSample:
+    """A reflectance-shaped WEIGHT that may exceed 1, upsampled without being
+    clipped.
+
+    spec_refl goes through rgb_to_spectral_sample, whose table domain is a
+    bounded reflectance and which therefore CLAMPS its input to [0,1]. That is
+    right for an albedo and silently wrong for a sampling weight: a
+    Russian-roulette-compensated throughput (albedo / rr_prob) or an f/pdf
+    ratio is legitimately greater than 1, and clamping it destroys energy
+    per channel -- so it also shifts colour, not just brightness.
+
+    Splitting off the largest component as a scalar and upsampling only the
+    normalised remainder keeps the chromaticity in the table's domain and the
+    magnitude exact. Using the ILLUMINANT curve instead would take unbounded
+    input but is the wrong spectral shape for a reflectance."""
+    var m = max(r, max(g, b))
+    if m <= Float32(1.0):
+        return rgb_to_spectral_sample(coeffs, res, cie_x, cie_y, cie_z, d65, r, g, b, wl)
+    var inv = Float32(1.0) / m
+    return rgb_to_spectral_sample(coeffs, res, cie_x, cie_y, cie_z, d65,
+                                  r * inv, g * inv, b * inv, wl) * m
 
 @always_inline
 def spec_illum(

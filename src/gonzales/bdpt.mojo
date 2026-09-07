@@ -39,14 +39,15 @@ from .sppm import (
     _sppm_trace_visible_point, _sppm_store_photon, _sppm_trace_photon,
 )
 from .shading import _tex_lookup, _get_tri_verts, _mnee_walk, _mnee_walk2
-from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
+from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured, bxdf_pdf_measured
 from .gpu import GpuSceneHandle, vulkaninterop_unpack_results_kernel
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
 from max.gpu.host._nvidia_cuda import CUDA
 from .spectrum import (
     SampledWavelengths, SpectralSample, sample_wavelengths_uniform, SpectralHandle,
-    spec_refl, spec_illum,
+    pass_wavelengths,
+    spec_refl, spec_refl_unbounded, spec_illum,
     rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb,
     rgb_bands_to_spectral_sample,
 )
@@ -353,7 +354,7 @@ def _visible_transmittance(
 @always_inline
 def _bdpt_nee_contribute(
     beta: SpectralSample,
-    w: RGB,
+    w: SpectralSample,
     ls: LightSample,
     hit: Point3f,
     gn: Vec3f,
@@ -379,15 +380,12 @@ def _bdpt_nee_contribute(
     var shadow_end = shadow_org + Vec3f(ls.wi[0], ls.wi[1], ls.wi[2]) * ls.dist
     var Tr = _visible_transmittance(shadow_org, shadow_end, cur_med_idx, sd, scratch)
     if Tr[0] > Float32(0) or Tr[1] > Float32(0) or Tr[2] > Float32(0):
-        # `w` already folds the light's RGB radiance into the BSDF weight, so
-        # it crosses into the spectral domain through the ILLUMINANT curve;
         # `Tr` is a per-channel transmittance COEFFICIENT, so it band-picks
-        # (see rgb_bands_to_spectral_sample -- an illuminant upsample of a
+        # rather than going through either upsampling curve (see
+        # rgb_bands_to_spectral_sample -- an illuminant upsample of a
         # transmittance is exactly the mistake that cost the media path a
         # 10x error).
-        return (beta
-                * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w.r, w.g, w.b, wl)
-                * rgb_bands_to_spectral_sample(Tr[0], Tr[1], Tr[2], wl))
+        return beta * w * rgb_bands_to_spectral_sample(Tr[0], Tr[1], Tr[2], wl)
     return SpectralSample(Float32(0))
 
 def _bdpt_mnee_diffuse_area_light(
@@ -1349,48 +1347,6 @@ def _bdpt_merge_from_cache(
 
 # ── Trace one camera subpath, connecting to the shared cache inline ─────────
 
-@always_inline
-def _bdpt_pass_wavelengths(pass_idx: Int) -> SampledWavelengths:
-    """The hero wavelengths for one spp pass, shared by EVERY camera and
-    light subpath in it.
-
-    Spectral transport forces this: a connection multiplies a camera
-    vertex's beta by a light vertex's flux, and a merge does the same across
-    arbitrary light paths, so lane i of one only means the same thing as
-    lane i of the other when both were traced at identical wavelengths.
-    Per-subpath sampling (what this replaced) made that false for every
-    connection and every merge.
-
-    A pure function of the PASS INDEX and nothing else, so every backend and
-    every kernel derives the identical value from an input they all agree on.
-    It deliberately does NOT take the rng seed: the seed is not one value
-    here. The light-path kernels are launched with `pass_seed`
-    (= base_seed ^ hash(si)) and the camera kernels with `base_seed`, so a
-    seed-dependent derivation handed the light and camera subpaths of the
-    SAME pass different wavelength sets -- precisely the inconsistency this
-    sharing exists to prevent. Measured, that made GPU VCM disagree with CPU
-    VCM by 4% on cornell-box, chromatically, and it did not shrink with more
-    samples; pinning one fixed wavelength set on both backends collapsed the
-    gap to 0.3% (atomics ordering), which is how the input, not the
-    arithmetic, was identified as the culprit.
-
-    The schedule is a HASH of the pass index, not a low-discrepancy sequence
-    over it, and that is deliberate. sample_wavelengths_uniform is itself a
-    lattice -- Wilkie et al. hero sampling puts the other three wavelengths
-    at fixed strides of span/4 from the first -- so a stratified u lattice on
-    top of it produces a doubly-regular set that aliases against the CIE
-    curves instead of covering them. Measured on the saturated-box harness,
-    chroma error vs pbrt: 0.0135 for frac(i*phi), 0.0120 for frac(i*R1),
-    0.0026 for this hash. Randomising u is what breaks the alignment; the
-    stratification that matters is already inside the hero-wavelength stride.
-
-    A consequence is that the wavelength schedule is the same for every
-    --seed. That is fine: everything else in the render is still seeded, and
-    a deterministic schedule is one fewer thing that can differ between
-    backends."""
-    var h = mix_bits_u64(UInt64(pass_idx) + UInt64(0x9E3779B97F4A7C15))
-    var u = Float32(h >> UInt32(8)) * Float32(1.0 / 16777216.0)
-    return sample_wavelengths_uniform(u)
 
 def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     r2c:     UnsafePointer[Float32, MutExternalOrigin],
@@ -1904,19 +1860,19 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var wo_d = -ray_dir
             for dl_i in range(Int(sd.distantLightCount)):
                 var ls_d = _sample_distant_light_nee(sd.distantLights[dl_i])
-                var w_d = _nee_weight_simple_via_spectral(ls_d, Int32(0), eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                var w_d = _nee_weight_simple_spectral(ls_d, Int32(0), eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                 total += _bdpt_nee_contribute(beta, w_d, ls_d, hit, gn, cur_med_idx, sd, scratch, wavelengths)
             for pl_i in range(Int(sd.pointLightCount)):
                 var ls_p = _sample_point_light_nee(sd.pointLights[pl_i], hit.to_simd())
-                var w_p = _nee_weight_simple_via_spectral(ls_p, Int32(0), eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                var w_p = _nee_weight_simple_spectral(ls_p, Int32(0), eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                 total += _bdpt_nee_contribute(beta, w_p, ls_p, hit, gn, cur_med_idx, sd, scratch, wavelengths)
             for sph_i in range(Int(sd.sphereCount)):
                 var ls_sph = _sample_sphere_light_nee(sd.spheres[sph_i], Int(sd.sphereCount), hit.to_simd(), pcg)
-                var w_sph = _nee_weight_simple_via_spectral(ls_sph, Int32(0), eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                var w_sph = _nee_weight_simple_spectral(ls_sph, Int32(0), eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                 total += _bdpt_nee_contribute(beta, w_sph, ls_sph, hit, gn, cur_med_idx, sd, scratch, wavelengths)
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ls_e = _sample_infinite_light_nee(sd.infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-                var w_e = _nee_weight_simple_via_spectral(ls_e, Int32(0), eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                var w_e = _nee_weight_simple_spectral(ls_e, Int32(0), eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                 total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn, cur_med_idx, sd, scratch, wavelengths)
             # Real MNEE for area lights behind glass (task #161) -- see
             # _bdpt_mnee_diffuse_area_light's docstring. Ordinary (non-glass)
@@ -2015,19 +1971,19 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 for dl_ic in range(Int(sd.distantLightCount)):
                     var ls_dlc = _sample_distant_light_nee(sd.distantLights[dl_ic])
                     var w_dlc = _nee_weight_coated_coat_lobe(ls_dlc, ior, coat_alpha, gn, wo)
-                    total += _bdpt_nee_contribute(beta, w_dlc, ls_dlc, hit, gn, cur_med_idx, sd, scratch, wavelengths)
+                    total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_dlc.r, w_dlc.g, w_dlc.b, wavelengths), ls_dlc, hit, gn, cur_med_idx, sd, scratch, wavelengths)
                 for pl_ic in range(Int(sd.pointLightCount)):
                     var ls_plc = _sample_point_light_nee(sd.pointLights[pl_ic], hit.to_simd())
                     var w_plc = _nee_weight_coated_coat_lobe(ls_plc, ior, coat_alpha, gn, wo)
-                    total += _bdpt_nee_contribute(beta, w_plc, ls_plc, hit, gn, cur_med_idx, sd, scratch, wavelengths)
+                    total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_plc.r, w_plc.g, w_plc.b, wavelengths), ls_plc, hit, gn, cur_med_idx, sd, scratch, wavelengths)
                 for sph_ic in range(Int(sd.sphereCount)):
                     var ls_sphc = _sample_sphere_light_nee(sd.spheres[sph_ic], Int(sd.sphereCount), hit.to_simd(), pcg)
                     var w_sphc = _nee_weight_coated_coat_lobe(ls_sphc, ior, coat_alpha, gn, wo)
-                    total += _bdpt_nee_contribute(beta, w_sphc, ls_sphc, hit, gn, cur_med_idx, sd, scratch, wavelengths)
+                    total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_sphc.r, w_sphc.g, w_sphc.b, wavelengths), ls_sphc, hit, gn, cur_med_idx, sd, scratch, wavelengths)
                 for inf_ic in range(Int(sd.infiniteLightCount)):
                     var ls_infc = _sample_infinite_light_nee(sd.infiniteLights[inf_ic], Point2f(pcg.next_float(), pcg.next_float()))
                     var w_infc = _nee_weight_coated_coat_lobe(ls_infc, ior, coat_alpha, gn, wo)
-                    total += _bdpt_nee_contribute(beta, w_infc, ls_infc, hit, gn, cur_med_idx, sd, scratch, wavelengths)
+                    total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_infc.r, w_infc.g, w_infc.b, wavelengths), ls_infc, hit, gn, cur_med_idx, sd, scratch, wavelengths)
 
             if pcg.next_float() < f_entry:
                 # Glossy reflection off the coat (rough => GGX lobe, smooth => mirror).
@@ -2077,19 +2033,19 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 for dl_i in range(Int(sd.distantLightCount)):
                     var ls_dl = _sample_distant_light_nee(sd.distantLights[dl_i])
                     var w_dl = _nee_weight_coated_diffuse_base(ls_dl, eff_alb, ior, gn)
-                    total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), w_dl, ls_dl, hit, gn, cur_med_idx, sd, scratch, wavelengths)
+                    total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_dl.r, w_dl.g, w_dl.b, wavelengths), ls_dl, hit, gn, cur_med_idx, sd, scratch, wavelengths)
                 for pl_i in range(Int(sd.pointLightCount)):
                     var ls_pl = _sample_point_light_nee(sd.pointLights[pl_i], hit.to_simd())
                     var w_pl = _nee_weight_coated_diffuse_base(ls_pl, eff_alb, ior, gn)
-                    total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), w_pl, ls_pl, hit, gn, cur_med_idx, sd, scratch, wavelengths)
+                    total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_pl.r, w_pl.g, w_pl.b, wavelengths), ls_pl, hit, gn, cur_med_idx, sd, scratch, wavelengths)
                 for sph_i in range(Int(sd.sphereCount)):
                     var ls_sph = _sample_sphere_light_nee(sd.spheres[sph_i], Int(sd.sphereCount), hit.to_simd(), pcg)
                     var w_sph = _nee_weight_coated_diffuse_base(ls_sph, eff_alb, ior, gn)
-                    total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), w_sph, ls_sph, hit, gn, cur_med_idx, sd, scratch, wavelengths)
+                    total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_sph.r, w_sph.g, w_sph.b, wavelengths), ls_sph, hit, gn, cur_med_idx, sd, scratch, wavelengths)
                 for inf_i in range(Int(sd.infiniteLightCount)):
                     var ls_inf = _sample_infinite_light_nee(sd.infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
                     var w_inf = _nee_weight_coated_diffuse_base(ls_inf, eff_alb, ior, gn)
-                    total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), w_inf, ls_inf, hit, gn, cur_med_idx, sd, scratch, wavelengths)
+                    total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_inf.r, w_inf.g, w_inf.b, wavelengths), ls_inf, hit, gn, cur_med_idx, sd, scratch, wavelengths)
 
                 # Task #161 follow-up (2026-07-13): MNEE for area lights
                 # behind glass, extended to coateddiffuse's base layer --
@@ -2249,19 +2205,19 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # through the shared, already-correct _nee_weight_simple.
                 for dl_ic in range(Int(sd.distantLightCount)):
                     var ls_dc = _sample_distant_light_nee(sd.distantLights[dl_ic])
-                    var w_dc = _nee_weight_simple_via_spectral(ls_dc, Int32(1), mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                    var w_dc = _nee_weight_simple_spectral(ls_dc, Int32(1), mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                     total += _bdpt_nee_contribute(beta, w_dc, ls_dc, hit, gn_c, cur_med_idx, sd, scratch, wavelengths)
                 for pl_ic in range(Int(sd.pointLightCount)):
                     var ls_pc = _sample_point_light_nee(sd.pointLights[pl_ic], hit.to_simd())
-                    var w_pc = _nee_weight_simple_via_spectral(ls_pc, Int32(1), mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                    var w_pc = _nee_weight_simple_spectral(ls_pc, Int32(1), mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                     total += _bdpt_nee_contribute(beta, w_pc, ls_pc, hit, gn_c, cur_med_idx, sd, scratch, wavelengths)
                 for sph_ic in range(Int(sd.sphereCount)):
                     var ls_sphc = _sample_sphere_light_nee(sd.spheres[sph_ic], Int(sd.sphereCount), hit.to_simd(), pcg)
-                    var w_sphc = _nee_weight_simple_via_spectral(ls_sphc, Int32(1), mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                    var w_sphc = _nee_weight_simple_spectral(ls_sphc, Int32(1), mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                     total += _bdpt_nee_contribute(beta, w_sphc, ls_sphc, hit, gn_c, cur_med_idx, sd, scratch, wavelengths)
                 for inf_ic in range(Int(sd.infiniteLightCount)):
                     var ls_ec = _sample_infinite_light_nee(sd.infiniteLights[inf_ic], Point2f(pcg.next_float(), pcg.next_float()))
-                    var w_ec = _nee_weight_simple_via_spectral(ls_ec, Int32(1), mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                    var w_ec = _nee_weight_simple_spectral(ls_ec, Int32(1), mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                     total += _bdpt_nee_contribute(beta, w_ec, ls_ec, hit, gn_c, cur_med_idx, sd, scratch, wavelengths)
 
             beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (bs_c.f).r, (bs_c.f).g, (bs_c.f).b, wavelengths)
@@ -2350,22 +2306,22 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             for dl_ih in range(Int(sd.distantLightCount)):
                 var ls_dh = _sample_distant_light_nee(sd.distantLights[dl_ih])
                 var w_dh = _nee_weight_hair(ls_dh, hc)
-                total += _bdpt_nee_contribute(beta, w_dh, ls_dh, hit, hc.geo_normal, cur_med_idx, sd, scratch, wavelengths, hair_eps)
+                total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_dh.r, w_dh.g, w_dh.b, wavelengths), ls_dh, hit, hc.geo_normal, cur_med_idx, sd, scratch, wavelengths, hair_eps)
             for pl_ih in range(Int(sd.pointLightCount)):
                 var ls_ph = _sample_point_light_nee(sd.pointLights[pl_ih], hit.to_simd())
                 var w_ph = _nee_weight_hair(ls_ph, hc)
-                total += _bdpt_nee_contribute(beta, w_ph, ls_ph, hit, hc.geo_normal, cur_med_idx, sd, scratch, wavelengths, hair_eps)
+                total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_ph.r, w_ph.g, w_ph.b, wavelengths), ls_ph, hit, hc.geo_normal, cur_med_idx, sd, scratch, wavelengths, hair_eps)
             for sph_ih in range(Int(sd.sphereCount)):
                 var ls_sphh = _sample_sphere_light_nee(sd.spheres[sph_ih], Int(sd.sphereCount), hit.to_simd(), pcg)
                 var w_sphh = _nee_weight_hair(ls_sphh, hc)
-                total += _bdpt_nee_contribute(beta, w_sphh, ls_sphh, hit, hc.geo_normal, cur_med_idx, sd, scratch, wavelengths, hair_eps)
+                total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_sphh.r, w_sphh.g, w_sphh.b, wavelengths), ls_sphh, hit, hc.geo_normal, cur_med_idx, sd, scratch, wavelengths, hair_eps)
             for inf_ih in range(Int(sd.infiniteLightCount)):
                 var ls_eh = _sample_infinite_light_nee(sd.infiniteLights[inf_ih], Point2f(pcg.next_float(), pcg.next_float()))
                 var w_eh = _nee_weight_hair(ls_eh, hc)
-                total += _bdpt_nee_contribute(beta, w_eh, ls_eh, hit, hc.geo_normal, cur_med_idx, sd, scratch, wavelengths, hair_eps)
+                total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_eh.r, w_eh.g, w_eh.b, wavelengths), ls_eh, hit, hc.geo_normal, cur_med_idx, sd, scratch, wavelengths, hair_eps)
 
             var (wi_hs, f_hs, pdf_hs, cos_ti_hs2) = _hair_sample_dir(hc, pcg)
-            beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (f_hs / pdf_hs).r, (f_hs / pdf_hs).g, (f_hs / pdf_hs).b, wavelengths)
+            beta *= spec_refl_unbounded(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (f_hs / pdf_hs).r, (f_hs / pdf_hs).g, (f_hs / pdf_hs).b, wavelengths)
             rd = vec3f(wi_hs)
             var hsign = Float32(1) if dot(wi_hs, hc.geo_normal) >= Float32(0) else Float32(-1)
             ro = hit + vec3f(hc.geo_normal) * hair_eps * hsign
@@ -2470,19 +2426,19 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             for dl_im in range(Int(sd.distantLightCount)):
                 var ls_dm = _sample_distant_light_nee(sd.distantLights[dl_im])
                 var w_dm = _nee_weight_measured(ls_dm, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-                total += _bdpt_nee_contribute(beta, w_dm, ls_dm, hit, gn_m, cur_med_idx, sd, scratch, wavelengths)
+                total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_dm.r, w_dm.g, w_dm.b, wavelengths), ls_dm, hit, gn_m, cur_med_idx, sd, scratch, wavelengths)
             for pl_im in range(Int(sd.pointLightCount)):
                 var ls_pm = _sample_point_light_nee(sd.pointLights[pl_im], hit.to_simd())
                 var w_pm = _nee_weight_measured(ls_pm, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-                total += _bdpt_nee_contribute(beta, w_pm, ls_pm, hit, gn_m, cur_med_idx, sd, scratch, wavelengths)
+                total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_pm.r, w_pm.g, w_pm.b, wavelengths), ls_pm, hit, gn_m, cur_med_idx, sd, scratch, wavelengths)
             for sph_im in range(Int(sd.sphereCount)):
                 var ls_sm = _sample_sphere_light_nee(sd.spheres[sph_im], Int(sd.sphereCount), hit.to_simd(), pcg)
                 var w_sm = _nee_weight_measured(ls_sm, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-                total += _bdpt_nee_contribute(beta, w_sm, ls_sm, hit, gn_m, cur_med_idx, sd, scratch, wavelengths)
+                total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_sm.r, w_sm.g, w_sm.b, wavelengths), ls_sm, hit, gn_m, cur_med_idx, sd, scratch, wavelengths)
             for inf_im in range(Int(sd.infiniteLightCount)):
                 var ls_em = _sample_infinite_light_nee(sd.infiniteLights[inf_im], Point2f(pcg.next_float(), pcg.next_float()))
                 var w_em = _nee_weight_measured(ls_em, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-                total += _bdpt_nee_contribute(beta, w_em, ls_em, hit, gn_m, cur_med_idx, sd, scratch, wavelengths)
+                total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_em.r, w_em.g, w_em.b, wavelengths), ls_em, hit, gn_m, cur_med_idx, sd, scratch, wavelengths)
 
             var wo_l_m = Vec3f(dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, gn_m))
             var um1 = pcg.next_float(); var um2 = pcg.next_float()
@@ -2496,7 +2452,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var cos_wi_m = dot(wi_m, gn_m)
             if cos_wi_m <= Float32(0):
                 return False   # measured: sampled direction below the surface
-            beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (f_m * (cos_wi_m / pdf_m)).r, (f_m * (cos_wi_m / pdf_m)).g, (f_m * (cos_wi_m / pdf_m)).b, wavelengths)
+            beta *= spec_refl_unbounded(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (f_m * (cos_wi_m / pdf_m)).r, (f_m * (cos_wi_m / pdf_m)).g, (f_m * (cos_wi_m / pdf_m)).b, wavelengths)
             rd = vec3f(wi_m)
             ro = hit + rd*Float32(0.0002)
             last_bsdf_pdf = pdf_m
@@ -3182,7 +3138,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             n_verts += 1
             _bdpt_store_lvc_vertex(v_h, lvc, lp_idx, n_verts - 1)
             var (wi_hs, f_hs, pdf_hs, cos_ti_hs2) = _hair_sample_dir(hc, pcg)
-            flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (f_hs / pdf_hs).r, (f_hs / pdf_hs).g, (f_hs / pdf_hs).b, wavelengths)
+            flux *= spec_refl_unbounded(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (f_hs / pdf_hs).r, (f_hs / pdf_hs).g, (f_hs / pdf_hs).b, wavelengths)
             rd = vec3f(wi_hs)
             var hsign = Float32(1) if dot(wi_hs, hc.geo_normal) >= Float32(0) else Float32(-1)
             ro = hit + vec3f(hc.geo_normal) * curve_offset_eps(hc.radius) * hsign
@@ -3267,7 +3223,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             var cos_wi_m = dot(wi_m, gn_m)
             if cos_wi_m <= Float32(0):
                 return False   # measured: sampled direction below the surface
-            flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (f_m * (cos_wi_m / pdf_m)).r, (f_m * (cos_wi_m / pdf_m)).g, (f_m * (cos_wi_m / pdf_m)).b, wavelengths)
+            flux *= spec_refl_unbounded(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (f_m * (cos_wi_m / pdf_m)).r, (f_m * (cos_wi_m / pdf_m)).g, (f_m * (cos_wi_m / pdf_m)).b, wavelengths)
             rd = vec3f(wi_m)
             ro = hit + rd*Float32(0.0002)
             # VCM Stage 2b: recursive continuation, real forward/reverse pdf
@@ -4080,7 +4036,7 @@ def _bdpt_render_core(
         # density scales with however many light paths actually feed its
         # grid, independent of how many camera pixels exist.
         # This pass's shared hero wavelengths -- see _bdpt_pass_wavelengths.
-        var pass_wl = _bdpt_pass_wavelengths(si)
+        var pass_wl = pass_wavelengths(si)
 
         var eta_vcm = PI * max(merge_r2, Float32(1e-12)) * Float32(n_light_paths_merge)
         var mis_vm_weight_factor = eta_vcm
@@ -4318,7 +4274,7 @@ def _bdpt_emit_light_paths_gpu(
     var has_med = mediumCount > Int64(0)
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
     var scratch = inter_scratch + k
-    var pass_wl = _bdpt_pass_wavelengths(pass_idx)
+    var pass_wl = pass_wavelengths(pass_idx)
     _bdpt_trace_light_path[True](sd, pcg, has_med, default_emit_med, scratch, lvc, k, lvc_path_len,
                                  mis_vc_weight_factor, mis_vm_weight_factor, pass_wl)
 
@@ -4525,7 +4481,7 @@ def _bdpt_camera_connect_gpu(
     var pcg = PCG32(seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
                      UInt64(pass_idx * 2654435761 + 1))
     var scratch = inter_scratch + pix
-    var pass_wl = _bdpt_pass_wavelengths(pass_idx)
+    var pass_wl = pass_wavelengths(pass_idx)
     var (contrib, alb) = _bdpt_trace_camera_and_connect[True](
         r2c, c2w, px, py, sd, pcg, has_med, scratch, lvc, pix, Int(lvc_path_len[pix]),
         merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
@@ -4634,7 +4590,7 @@ def _bdpt_light_path_init_gpu(
         gpuTextures, gpuTextureCount,
     )
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
-    var pass_wl = _bdpt_pass_wavelengths(pass_idx)
+    var pass_wl = pass_wavelengths(pass_idx)
     states[k] = _bdpt_light_path_init[True](sd, pcg, default_emit_med, k, lvc, lvc_path_len, mis_vc_weight_factor, pass_wl)
 
 def _bdpt_light_path_intersect_gpu(
@@ -4795,7 +4751,7 @@ def _bdpt_camera_path_init_gpu(
     var py = pix // fw
     var pcg = PCG32(seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
                      UInt64(pass_idx * 2654435761 + 1))
-    var pass_wl = _bdpt_pass_wavelengths(pass_idx)
+    var pass_wl = pass_wavelengths(pass_idx)
     states[pix] = _bdpt_camera_path_init[True](r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl)
 
 def _bdpt_camera_path_intersect_gpu(
@@ -6406,7 +6362,9 @@ def sppm_emit_photons_gpu(
         gpuTextures, gpuTextureCount,
     )
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
-    _sppm_trace_photon[True, True](sd, pcg, inter_scratch + k, n_emit, photons, max_photons, stored_counter, default_emit_med)
+    _sppm_trace_photon[True, True](sd, pcg, inter_scratch + k, n_emit, photons, max_photons, stored_counter, default_emit_med,
+        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
+        spectral_cie_z, spectral_d65, pass_wavelengths(pass_idx))
 
 
 def sppm_grid_reset_gpu(heads: UnsafePointer[Int32, MutExternalOrigin], hsize_dp: Int64):
@@ -6452,6 +6410,7 @@ def sppm_gather_gpu(
     spectral_d65: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutExternalOrigin] = UnsafePointer[MeasuredBRDF_C, MutExternalOrigin].unsafe_dangling(),
     measuredBrdfCount: Int64 = Int64(0),
+    pass_idx_dp: Int64 = Int64(0),
 ):
     var spectral_res = Int(spectral_res_dp)
     var n_pix = Int(n_pix_dp)
@@ -6480,7 +6439,9 @@ def sppm_gather_gpu(
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
         measuredBrdfs, measuredBrdfCount,
     )
-    _sppm_gather_one(vps, i, photons, heads, inv_cell, sd)
+    _sppm_gather_one(vps, i, photons, heads, inv_cell, sd,
+                     spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
+                     spectral_cie_z, spectral_d65, pass_wavelengths(Int(pass_idx_dp)))
 
 
 def sppm_nee_gpu(
@@ -6559,6 +6520,12 @@ def sppm_finalize_gpu(
     max_comp:   Float32,
     out_pixels: UnsafePointer[Float32, MutExternalOrigin],
     albedo_out: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_res_dp: Int64,
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
 ):
     var n_pix = Int(n_pix_dp)
     var vp_samples = Int(vp_samples_dp)
@@ -6569,7 +6536,9 @@ def sppm_finalize_gpu(
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= n_pix:
         return
-    var acc = _sppm_finalize_one_pixel(vps, i, vp_samples, n_passes, iso_scale, max_comp)
+    var acc = _sppm_finalize_one_pixel(vps, i, vp_samples, n_passes, iso_scale, max_comp,
+                                       spectral_coeffs, Int(spectral_res_dp), spectral_cie_x,
+                                       spectral_cie_y, spectral_cie_z, spectral_d65)
     out_pixels[i * 3 + 0] = acc.r
     out_pixels[i * 3 + 1] = acc.g
     out_pixels[i * 3 + 2] = acc.b
@@ -6762,7 +6731,7 @@ def sppm_render_gpu(
                         vps_ptr, Int64(n_vps), photons_ptr, heads_ptr, inv_cell,
                         bvh2Nodes, primIds, meshes, materials, curves, n_curves, instances, n_instances,
                         spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-                        measured_brdfs, n_measured_brdfs,
+                        measured_brdfs, n_measured_brdfs, Int64(pass_idx),
                         grid_dim=grid_vps, block_dim=block_size)
 
                 var nee_seed = psc[0].rng_seed ^ UInt64(pass_idx * 0xBF58476D1CE4E5B9 + 3)
@@ -6786,6 +6755,7 @@ def sppm_render_gpu(
 
             handle[].ctx.enqueue_function[sppm_finalize_gpu](
                 vps_ptr, Int64(n_pix), Int64(_VP_SAMPLES), Int32(n_passes), iso_scale, max_comp, out_ptr, albedo_out_ptr,
+                spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
                 grid_dim=grid_pix, block_dim=block_size)
             handle[].ctx.synchronize()
             # Keep these device buffers alive (Mojo's ASAP destruction would

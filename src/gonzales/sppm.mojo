@@ -25,7 +25,7 @@ from .bvh import (
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
     render_aux_buffers,
 )
-from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, bxdf_eval_any_spectral, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_via_spectral
+from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, bxdf_eval_any_spectral, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured
 from .shading import _tex_lookup, _get_tri_verts
 from .sampling import power_heuristic
@@ -37,6 +37,7 @@ from .gpu import GpuSceneHandle
 from .spectrum import (
     SampledWavelengths, SpectralSample, sample_wavelengths_uniform,
     rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb,
+    rgb_bands_to_spectral_sample, spec_refl, spec_refl_unbounded, spec_illum, pass_wavelengths,
 )
 
 
@@ -62,9 +63,27 @@ struct SPPMPixel(TrivialRegisterPassable):
     """Visible point from one camera ray + SPPM accumulators."""
     var pos:    Point3f
     var normal: Vec3f
+    # Camera-subpath throughput, RGB. It is the one transport quantity here
+    # that deliberately stays RGB, because it has nowhere spectral to go: it
+    # multiplies `tau`, which sums gathers from many passes at many
+    # wavelengths and is RGB by construction (see below). Carrying it as a
+    # SpectralSample and converting at finalize is WRONG and was measured to
+    # be: spectral_sample_to_rgb is a radiance estimator, so a bare
+    # throughput -- a flat unit spectrum, not an upsampled colour -- does not
+    # come back as (1,1,1). A lossless white cavity, which must be exactly
+    # neutral, rendered (0.446, 0.377, 0.375). The camera subpath here is
+    # also short by construction (eye to the first diffuse/volume vertex,
+    # i.e. a specular chain), so this is where RGB costs least.
     var beta: RGB  # camera throughput
     var alb:  RGB  # surface albedo
-    var tau:  RGB  # accumulated flux
+    # Gathered flux, accumulated ACROSS passes -- and each pass carries its
+    # own hero wavelengths, so this one cannot be spectral: lane i would mean
+    # a different wavelength in every term of the sum. Each pass's gather is
+    # spectral internally and converts to RGB exactly once, here. That leaves
+    # a single RGB product where the two subpaths meet (beta x tau); the
+    # transport along each of them is spectral end to end, which is where the
+    # per-bounce compounding error lives.
+    var tau:  RGB  # accumulated flux (RGB: sums across passes/wavelengths)
     var N_acc:  Float32   # photon count (alpha-weighted sum)
     var r2:     Float32   # current search radius²
     var valid:  Int32     # 1 = has VP
@@ -81,7 +100,7 @@ struct SPPMPixel(TrivialRegisterPassable):
     # leave this at 0 (this scene has no participating media; NEE from a
     # volume scatter point would need a phase-function-weighted variant,
     # not implemented).
-    var ld: RGB
+    var ld: SpectralSample
     # Infinite-light radiance for a VP sample whose traced ray escaped the
     # scene entirely (valid stays 0 — there's no surface to gather photons
     # at or run NEE from) instead of hitting a diffuse/volume scatterer.
@@ -124,7 +143,7 @@ struct SPPMPhoton(TrivialRegisterPassable):
     """Photon stored at a scatter event (surface diffuse, conductor, or
     volume)."""
     var pos: Point3f
-    var flux: RGB  # flux at stored position
+    var flux: SpectralSample  # flux at stored position, at the PASS's wavelengths
     var nxt:       Int32  # chained-list link in hash grid (-1 = end)
     var is_volume: Int32  # 1 = volume scatter photon; 0 = surface
     # Direction the photon was travelling when it was stored (i.e. the ray
@@ -471,10 +490,12 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     var org = Point3f(c2w[12], c2w[13], c2w[14])
     var has_media = Int(sd.mediumCount) > 0
 
-    # One hero-wavelength sample for this VP's own camera subpath (staged
-    # spectral rendering rollout, Stage 4 -- see project_spectral_rendering
-    # memory), used for its direct (NEE) lighting term. The photon-density
-    # (tau) gather term stays RGB by design -- see _sppm_gather_one.
+    # One hero-wavelength sample for this VP's own camera subpath, carrying
+    # its throughput (`beta`), its direct-lighting term (`ld`) and its
+    # miss-escape emission (`env`). It is deliberately NOT a per-pass value:
+    # SPPM traces visible points ONCE, before any photon pass exists, so a
+    # VP's wavelengths cannot agree with the photons'. That is why `tau` is
+    # RGB -- see SPPMPixel.tau.
     var vp_wavelengths = sample_wavelengths_uniform(pcg.next_float())
 
     var vp = SPPMPixel(
@@ -485,7 +506,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         tau=RGB(Float32(0)),
         N_acc=Float32(0), r2=init_r2, valid=Int32(0), pidx=pidx,
         is_volume=Int32(0),
-        ld=RGB(Float32(0)),
+        ld=SpectralSample(Float32(0)),
         env=RGB(Float32(0)),
         mat_kind=Int32(0),
         wo=Vec3f(Float32(0)),
@@ -811,6 +832,25 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     max_photons:      Int,
     counter:          UnsafePointer[Int32, MutExternalOrigin],
     default_emit_med: Int32,
+    # Decomposed spectral tables rather than reading sd.spectral. `sd` is a
+    # SceneDescriptor2_C passed BY VALUE, and it contains a SpectralHandle --
+    # the 6-field TrivialRegisterPassable struct whose by-value passing across
+    # a real call boundary is a confirmed miscompilation
+    # (modular/modular#6759). It does not fail loudly: measured here, the GPU
+    # kernel held sd.spectral.res == 64 immediately before the call and this
+    # function read 0 from the same field, silently taking every conversion's
+    # table-less path while the photons it was tracing had been built WITH
+    # the table. CPU and GPU SPPM then disagreed by 10%, chromatically. This
+    # only surfaced when the gather started reading sd.spectral on its common
+    # path; before that only the measured-BxDF branch did, which no test
+    # scene hit.
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
+    pass_wl:          SampledWavelengths,
 ):
     """Emit one photon path from a random light (area, distant, or
     infinite), trace through glass/media, storing at diffuse/volume hits via
@@ -853,16 +893,16 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
 
     var ro: Point3f
     var rd: Vec3f
-    var flux: RGB
-    # One hero-wavelength sample for this photon subpath (staged spectral
-    # rendering rollout, Stage 4 -- see project_spectral_rendering memory).
-    # Stored on each stored SPPMPhoton but NOT used to make tau/flux
-    # spectral -- see _sppm_gather_one's docstring for why that stays RGB
-    # (independent per-photon wavelength draws pooled into one running VP
-    # sum is the classic spectral-photon-mapping cross-wavelength problem;
-    # this field is here for potential future use, e.g. a from-scratch
-    # spectral photon-density estimator, not consumed by anything yet).
-    var ph_wavelengths = sample_wavelengths_uniform(pcg.next_float())
+    # A photon's flux is EMISSION, so it enters the spectral domain through
+    # the illuminant curve.
+    var flux: SpectralSample
+    # This PASS's hero wavelengths, shared by every photon in the pass. It has
+    # to be shared: a visible point gathers photons from many different light
+    # subpaths and sums them into one running total, so lane i only means the
+    # same wavelength in every term if every photon in the pass agrees. Per-
+    # photon draws (what this replaced) made that sum meaningless the moment
+    # flux stopped being RGB.
+    var ph_wavelengths = pass_wl
 
     var light_pick = Int(pcg.next_uint() % UInt32(n_lights))
     if light_pick < n_area:
@@ -881,7 +921,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         # Photon flux: total_light_power / n_emit
         # total_power = emission * pi * total_area * n_lights (uniform light selection)
         var scale = PI * al.total_area * Float32(n_lights) / Float32(n_emit)
-        flux = al.emission * scale
+        flux = spec_illum(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, al.emission.r, al.emission.g, al.emission.b, ph_wavelengths) * scale
         ro = point3f(lp) + vec3f(ln) * Float32(0.0001)
         rd = vec3f(pdir)
     elif light_pick < n_area + n_distant:
@@ -889,7 +929,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         var (center, radius) = _scene_bounding_sphere(sd)
         var dir = Vec3f(dl.direction.x, dl.direction.y, dl.direction.z)
         var disk_pt = _sample_disk_perpendicular(dir, center, radius, Point2f(pcg.next_float(), pcg.next_float()))
-        flux = dl.emission * (Float32(n_lights) * PI * radius * radius) / Float32(n_emit)
+        flux = spec_illum(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, dl.emission.r, dl.emission.g, dl.emission.b, ph_wavelengths) * (Float32(n_lights) * PI * radius * radius) / Float32(n_emit)
         ro = disk_pt
         rd = dir
     elif light_pick < n_area + n_distant + n_infinite:
@@ -903,7 +943,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             return
         var emit_dir = -env_dir
         var disk_pt = _sample_disk_perpendicular(emit_dir, center, radius, Point2f(pcg.next_float(), pcg.next_float()))
-        flux = env_rgb * (Float32(n_lights) * PI * radius * radius / pdf_dir) / Float32(n_emit)
+        flux = spec_illum(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, env_rgb.r, env_rgb.g, env_rgb.b, ph_wavelengths) * (Float32(n_lights) * PI * radius * radius / pdf_dir) / Float32(n_emit)
         ro = disk_pt
         rd = emit_dir
     else:
@@ -917,7 +957,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         var sin_p = sqrt(max(Float32(0), Float32(1) - cos_p * cos_p))
         var phi_p = Float32(2) * PI * u2p
         var pdir_p = Vec3f(sin_p * cos(phi_p), sin_p * sin(phi_p), cos_p)
-        flux = pll.intensity * (Float32(4) * PI * Float32(n_lights) / Float32(n_emit))
+        flux = spec_illum(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, pll.intensity.r, pll.intensity.g, pll.intensity.b, ph_wavelengths) * (Float32(4) * PI * Float32(n_lights) / Float32(n_emit))
         ro = pll.position
         rd = pdir_p
     var cur_med_idx = default_emit_med  # start in medium if light is above one
@@ -952,7 +992,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                         SPPMPhoton(pos=sp, flux=flux, nxt=Int32(-1), is_volume=Int32(1), dir_in=rd, wavelengths=ph_wavelengths),
                         photons, max_photons, counter)
                 # Scatter: isotropic phase function, modulate by albedo
-                flux *= ff.albedo
+                flux *= spec_refl(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, ph_wavelengths)
                 # Sample new isotropic direction (uniform sphere)
                 var usp1 = pcg.next_float()
                 var usp2 = pcg.next_float()
@@ -964,7 +1004,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 continue
             else:
                 # Apply Beer-Lambert transmittance through segment
-                flux *= ff.transmittance
+                flux *= rgb_bands_to_spectral_sample(ff.transmittance.r, ff.transmittance.g, ff.transmittance.b, ph_wavelengths)
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[mat_idx]
@@ -1012,7 +1052,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             if dot(gn, ray_dir) > Float32(0.0):
                 gn = gn * Float32(-1.0)
             var new_dir = _cosine_hemisphere_sample(gn, pcg.next_float(), pcg.next_float())
-            flux *= eff_alb / rr_prob
+            flux *= spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (eff_alb / rr_prob).r, (eff_alb / rr_prob).g, (eff_alb / rr_prob).b, ph_wavelengths)
             rd = vec3f(new_dir)
             ro = hit + vec3f(gn) * Float32(0.0001)
             continue
@@ -1067,7 +1107,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 _sppm_store_photon[use_gpu](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
-            flux *= bs_c.f
+            flux *= spec_refl(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (bs_c.f).r, (bs_c.f).g, (bs_c.f).b, ph_wavelengths)
             rd = vec3f(bs_c.wi)
             ro = hit + rd * Float32(0.0002)
 
@@ -1083,7 +1123,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
             var (wi_hs, f_hs, pdf_hs, _) = _hair_sample_dir(hc, pcg)
-            flux *= f_hs / pdf_hs
+            flux *= spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (f_hs / pdf_hs).r, (f_hs / pdf_hs).g, (f_hs / pdf_hs).b, ph_wavelengths)
             rd = vec3f(wi_hs)
             var hsign = Float32(1) if dot(wi_hs, hc.geo_normal) >= Float32(0) else Float32(-1)
             ro = hit + vec3f(hc.geo_normal) * curve_offset_eps(hc.radius) * hsign
@@ -1111,7 +1151,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var mb_m = sd.measuredBrdfs[Int(mat.measured_idx)]
             var wo_l_m = Vec3f(dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, gn_m))
             var uml1 = pcg.next_float(); var uml2 = pcg.next_float()
-            var (wi_l_m, f_m, pdf_m, valid_m) = bxdf_sample_measured(mb_m, wo_l_m, uml1, uml2, ph_wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+            var (wi_l_m, f_m, pdf_m, valid_m) = bxdf_sample_measured(mb_m, wo_l_m, uml1, uml2, ph_wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
             if not valid_m or pdf_m <= Float32(0):
                 break
             if bounce > 0:
@@ -1125,7 +1165,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var cos_wi_m = dot(wi_m, gn_m)
             if cos_wi_m <= Float32(0):
                 break
-            flux *= f_m * (cos_wi_m / pdf_m)
+            flux *= spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (f_m * (cos_wi_m / pdf_m)).r, (f_m * (cos_wi_m / pdf_m)).g, (f_m * (cos_wi_m / pdf_m)).b, ph_wavelengths)
             rd = vec3f(wi_m)
             ro = hit + rd * Float32(0.0002)
 
@@ -1199,7 +1239,9 @@ def _sppm_photon_pass(
     @parameter
     def emit_one(k: Int):
         var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
-        _sppm_trace_photon[True, False](sd, pcg, scratch + k, n_emit, photons, max_photons, counter, default_emit_med)
+        _sppm_trace_photon[True, False](sd, pcg, scratch + k, n_emit, photons, max_photons, counter, default_emit_med,
+            sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y,
+            sd.spectral.cie_z, sd.spectral.d65, pass_wavelengths(pass_idx))
 
     parallelize[emit_one](n_emit)
 
@@ -1266,6 +1308,25 @@ def _sppm_gather_one(
     heads:    UnsafePointer[Int32, MutExternalOrigin],
     inv_cell: Float32,
     sd:       SceneDescriptor2_C,
+    # Decomposed spectral tables rather than reading sd.spectral. `sd` is a
+    # SceneDescriptor2_C passed BY VALUE, and it contains a SpectralHandle --
+    # the 6-field TrivialRegisterPassable struct whose by-value passing across
+    # a real call boundary is a confirmed miscompilation
+    # (modular/modular#6759). It does not fail loudly: measured here, the GPU
+    # kernel held sd.spectral.res == 64 immediately before the call and this
+    # function read 0 from the same field, silently taking every conversion's
+    # table-less path while the photons it was gathering had been built WITH
+    # the table. CPU and GPU SPPM then disagreed by 10%, chromatically. This
+    # only surfaced when the gather started reading sd.spectral on its common
+    # path; before that only the measured-BxDF branch did, which no test
+    # scene hit.
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
+    pass_wl:  SampledWavelengths,
 ):
     """Gather nearby photons into visible point `i` and apply the SPPM
     radius/flux update. Shared verbatim between the CPU driver
@@ -1280,7 +1341,9 @@ def _sppm_gather_one(
     var r2 = vp.r2
 
     # Accumulate contributions from photons in 3x3x3 neighborhood
-    var phi = RGB(Float32(0))
+    # Gathered spectrally at THIS pass's wavelengths, then converted to RGB
+    # exactly once on the way into `tau` (see SPPMPixel.tau).
+    var phi = SpectralSample(Float32(0))
     var M = Float32(0)
 
     var cix = Int(floor(vp.pos.x * inv_cell))
@@ -1306,11 +1369,11 @@ def _sppm_gather_one(
                         # cosine-weighted density (same convention the
                         # Lambertian/phase branches already rely on).
                         if vp.is_volume == Int32(1):
-                            phi += (vp.alb * INV_FOUR_PI) * ph.flux
+                            phi += spec_refl(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, vp.alb.r, vp.alb.g, vp.alb.b, ph.wavelengths) * INV_FOUR_PI * ph.flux
                         elif vp.mat_kind == Int32(1):
                             var wi_c = (-ph.dir_in).to_simd()
                             var f_c = bxdf_eval_conductor_ggx(vp.normal.to_simd(), vp.wo.to_simd(), wi_c, vp.alpha, vp.alb)
-                            phi += f_c * ph.flux
+                            phi += spec_refl(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f_c.r, f_c.g, f_c.b, ph.wavelengths) * ph.flux
                         elif vp.mat_kind == Int32(2):
                             var mat_h = sd.materials[Int(vp.mat_idx)]
                             var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, vp.wo.to_simd())
@@ -1322,15 +1385,16 @@ def _sppm_gather_one(
                                 hc.cos_theta_o, hc.sin_theta_o, hc.inv_vm0, hc.inv_vm1, hc.inv_vm2, hc.mp_c0, hc.mp_c1, hc.mp_c2, hc.s,
                                 hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
                             )
-                            phi += f_h * ph.flux
+                            phi += spec_refl(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f_h.r, f_h.g, f_h.b, ph.wavelengths) * ph.flux
                         elif vp.mat_kind == Int32(3):
                             # Measured BxDF: same shared eval as
                             # _sppm_vp_brdf's own mat_kind=3 branch, reused
                             # here directly (photon-flux gather also just
                             # needs raw f_r, no extra cosine).
-                            phi += _sppm_vp_brdf(vp, sd, vp.normal.to_simd(), (-ph.dir_in).to_simd()) * ph.flux
+                            var f_msd = _sppm_vp_brdf(vp, sd, vp.normal.to_simd(), (-ph.dir_in).to_simd())
+                            phi += spec_refl(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f_msd.r, f_msd.g, f_msd.b, ph.wavelengths) * ph.flux
                         else:
-                            phi += (vp.alb * (Float32(1.0) / PI)) * ph.flux
+                            phi += spec_refl(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, vp.alb.r, vp.alb.g, vp.alb.b, ph.wavelengths) * (Float32(1.0) / PI) * ph.flux
                         M += Float32(1.0)
                     k = Int(ph.nxt)
 
@@ -1339,7 +1403,8 @@ def _sppm_gather_one(
         var N = vp.N_acc
         var ratio = (N + _ALPHA * M) / (N + M)
         vps[i].r2  = r2 * ratio
-        vps[i].tau = (vp.tau + phi) * ratio
+        var (phi_r, phi_g, phi_b) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, phi, pass_wl)
+        vps[i].tau = (vp.tau + RGB(phi_r, phi_g, phi_b)) * ratio
         vps[i].N_acc = N + _ALPHA * M
 
 
@@ -1350,10 +1415,13 @@ def _gather_update(
     heads:    UnsafePointer[Int32, MutExternalOrigin],
     inv_cell: Float32,
     sd:       SceneDescriptor2_C,
+    pass_wl:  SampledWavelengths,
 ):
     @parameter
     def gather_one(i: Int):
-        _sppm_gather_one(vps, i, photons, heads, inv_cell, sd)
+        _sppm_gather_one(vps, i, photons, heads, inv_cell, sd,
+                         sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y,
+                         sd.spectral.cie_z, sd.spectral.d65, pass_wl)
 
     parallelize[gather_one](n_pix)
 
@@ -1417,7 +1485,7 @@ def _sppm_nee_weight(
     vn: Vec3f,
     wo: Vec3f,
     ls: LightSample,
-) -> RGB:
+) -> SpectralSample:
     """Dispatches one LightSample (bvh.mojo's shared distant/point/sphere/
     infinite sampler output — see that struct's docstring) to the right
     per-material NEE weight function for a stored SPPM visible point, via
@@ -1429,16 +1497,25 @@ def _sppm_nee_weight(
     if vp.mat_kind == Int32(2):
         var mat_h = sd.materials[Int(vp.mat_idx)]
         var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, wo)
-        return _nee_weight_hair(ls, hc)
+        # Hair's three lobes are RGB-authored, so this crosses the boundary
+        # here rather than being evaluated per wavelength.
+        var w_h = _nee_weight_hair(ls, hc)
+        return spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_h.r, w_h.g, w_h.b, vp.wavelengths)
     if vp.mat_kind == Int32(3):
         var mat_m = sd.materials[Int(vp.mat_idx)]
         var mb_m = sd.measuredBrdfs[Int(mat_m.measured_idx)]
         var frm_m = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
         var tangent_m = Vec3f(frm_m.x.x, frm_m.x.y, frm_m.x.z)
         var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
-        return _nee_weight_measured(ls, mb_m, tangent_m, bitangent_m, vn, wo, vp.wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+        var w_m = _nee_weight_measured(ls, mb_m, tangent_m, bitangent_m, vn, wo, vp.wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+        return spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_m.r, w_m.g, w_m.b, vp.wavelengths)
     var mat_kind_simple = Int32(1) if vp.mat_kind == Int32(1) else Int32(0)
-    return _nee_weight_simple_via_spectral(ls, mat_kind_simple, vp.alb, vp.alpha, vn, wo, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths)
+    # Straight to a SpectralSample: this used to go through
+    # _nee_weight_simple_spectral, which evaluates spectrally and
+    # converts back to RGB (with a variance clamp) purely because `ld` was
+    # RGB. `ld` is spectral now, so that round trip -- and the clamp -- are
+    # gone.
+    return _nee_weight_simple_spectral(ls, mat_kind_simple, vp.alb, vp.alpha, vn, wo, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths)
 
 @always_inline
 def _sppm_vp_shadow_eps(vp: SPPMPixel, sd: SceneDescriptor2_C, wo: Vec3f) -> Float32:
@@ -1524,14 +1601,14 @@ def _sppm_nee_one(
                     # no-table-loaded case fall back to the original RGB path.
                     if vp.mat_kind == Int32(2) or vp.mat_kind == Int32(3) or sd.spectral.res <= 0:
                         var brdf = _sppm_vp_brdf(vp, sd, vn, wi)
-                        vps[i].ld += (brdf * al.emission) * geom
+                        vps[i].ld += (spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, brdf.r, brdf.g, brdf.b, vp.wavelengths)
+                                      * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
+                                      * geom)
                     else:
                         var mat_kind_simple = Int32(1) if vp.mat_kind == Int32(1) else Int32(0)
                         var (f_spec, _) = bxdf_eval_any_spectral(mat_kind_simple, vp.alb, vp.alpha, vn, wo, wi, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths)
                         var light_spec = rgb_illuminant_to_spectral_sample(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
-                        var product_spec = f_spec * light_spec
-                        var (pr, pg, pb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, product_spec, vp.wavelengths)
-                        vps[i].ld += RGB(pr, pg, pb) * geom
+                        vps[i].ld += f_spec * light_spec * geom
 
     # Distant/point/sphere/infinite NEE — via the shared Light interface
     # (bvh.mojo's LightSample samplers) + BxDF interface (_sppm_nee_weight
@@ -1636,6 +1713,12 @@ def _sppm_finalize_one_pixel(
     n_passes:   Int32,
     iso_scale:  Float32,
     max_comp:   Float32,
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
 ) -> RGB:
     """Averages the vp_samples independently-converged samples for pixel i —
     see _sppm_trace_visible_point's docstring for why each sample has its
@@ -1652,17 +1735,31 @@ def _sppm_finalize_one_pixel(
             # stored directly in vp.env (0 if neither happened).
             acc += vp.env
             continue
-        var vp_l = RGB(Float32(0))
+        # ── Output boundary. The two terms cross it differently, which is
+        # forced by SPPM's structure, not a choice:
+        #
+        #   ld  is gathered at the VP's OWN wavelengths every pass, so the
+        #       BSDF x emission product stays spectral across all passes and
+        #       converts once, here.
+        #   tau sums photon gathers from many passes, each at that pass's
+        #       wavelengths, so it is already RGB (see SPPMPixel.tau) and
+        #       beta has to meet it in RGB.
+        #
+        # The per-bounce compounding that RGB transport gets wrong lives
+        # ALONG each subpath, and both subpaths are spectral end to end; what
+        # remains is one product at the junction.
         if vp.N_acc > Float32(0.0) and vp.r2 > Float32(0.0):
             # L = tau / (pi * r² * n_passes) — tau already has
             # albedo/pi folded in at gather time
             var denom = PI * vp.r2 * Float32(n_passes)
-            vp_l += vp.tau / denom
+            acc += vp.beta * (vp.tau / denom)
         if vp.is_volume == Int32(0):
             # Direct (NEE) term — pbrt's "pixel.Ld", resampled once per
             # pass, averaged over n_passes.
-            vp_l += vp.ld / Float32(n_passes)
-        acc += vp.beta * vp_l
+            var (dr, dg, db) = spectral_sample_to_rgb(
+                spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
+                spectral_cie_z, spectral_d65, vp.ld / Float32(n_passes), vp.wavelengths)
+            acc += vp.beta * RGB(dr, dg, db)
     acc = acc / Float32(vp_samples)
 
     # ISO exposure compensation (matches normalize_film)
@@ -1748,7 +1845,7 @@ def _sppm_render_core(
         var n_stored = _sppm_photon_pass(photons, n_photons_per_pass, max_photons, sd, pass_seed, pass_idx)
         if n_stored > 0:
             _build_grid(photons, n_stored, heads, inv_cell)
-            _gather_update(vps, n_vps, photons, heads, inv_cell, sd)
+            _gather_update(vps, n_vps, photons, heads, inv_cell, sd, pass_wavelengths(pass_idx))
         var nee_seed = psc[0].rng_seed ^ UInt64(pass_idx * 0xBF58476D1CE4E5B9 + 3)
         _sppm_nee_update(vps, n_vps, sd, nee_seed, pass_idx)
         if verbose or (pass_idx + 1) % 10 == 0:
@@ -1771,7 +1868,9 @@ def _sppm_render_core(
 
     @parameter
     def finalize_one(i: Int):
-        var acc = _sppm_finalize_one_pixel(vps, i, _VP_SAMPLES, Int32(n_passes), iso_scale, max_comp)
+        var acc = _sppm_finalize_one_pixel(vps, i, _VP_SAMPLES, Int32(n_passes), iso_scale, max_comp,
+                                         sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
+                                         sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
         out_pixels[i * 3 + 0] = acc.r
         out_pixels[i * 3 + 1] = acc.g
         out_pixels[i * 3 + 2] = acc.b
