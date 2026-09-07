@@ -25,7 +25,7 @@ from .bvh import (
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
     render_aux_buffers,
 )
-from .sampling import power_heuristic, sample_ggx_vndf, sample_cosine_hemisphere_world
+from .sampling import power_heuristic, sample_ggx_vndf, sample_cosine_hemisphere_world, mix_bits_u64
 from .rng import PCG32
 from .transform import matrix_invert
 from .pbrt_parser import ParsedScene_Mojo
@@ -45,8 +45,10 @@ from .gpu import GpuSceneHandle, vulkaninterop_unpack_results_kernel
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
 from max.gpu.host._nvidia_cuda import CUDA
 from .spectrum import (
-    SampledWavelengths, SpectralSample, sample_wavelengths_uniform,
+    SampledWavelengths, SpectralSample, sample_wavelengths_uniform, SpectralHandle,
+    spec_refl, spec_illum,
     rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb,
+    rgb_bands_to_spectral_sample,
 )
 
 comptime _BDPT_MAX_DEPTH = 40  # max surface/medium interactions per subpath (incl.
@@ -124,7 +126,7 @@ struct BDPTVertex(TrivialRegisterPassable):
     """A vertex on a camera or light subpath."""
     var pos:    Point3f  # world position
     var normal: Vec3f    # geometric normal (0 for volume)
-    var beta: RGB  # throughput to here
+    var beta: SpectralSample  # throughput to here, at THIS PASS's hero wavelengths
     var alb:  RGB  # BSDF albedo (F0 for conductor)
     var pdf_fwd: Float32  # area PDF forward (from previous vertex) -- unused by the
                            # dVCM/dVC/dVM MIS scheme below (kept for other callers)
@@ -176,7 +178,7 @@ def _null_vertex() -> BDPTVertex:
     return BDPTVertex(
         pos=Point3f(Float32(0)),
         normal=Vec3f(Float32(0), Float32(1), Float32(0)),
-        beta=RGB(Float32(0)),
+        beta=SpectralSample(Float32(0)),
         alb=RGB(Float32(0)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
@@ -350,7 +352,7 @@ def _visible_transmittance(
 
 @always_inline
 def _bdpt_nee_contribute(
-    beta: RGB,
+    beta: SpectralSample,
     w: RGB,
     ls: LightSample,
     hit: Point3f,
@@ -358,8 +360,9 @@ def _bdpt_nee_contribute(
     cur_med_idx: Int32,
     sd: SceneDescriptor2_C,
     scratch: UnsafePointer[Intersection_C, MutExternalOrigin],
+    wl: SampledWavelengths,
     eps: Float32 = Float32(0.0001),
-) -> RGB:
+) -> SpectralSample:
     """BDPT-side NEE glue shared by every per-material light loop below:
     given a LightSample + material weight (from the shared Light interface
     — bvh.mojo's LightSample samplers — and BxDF interface —
@@ -371,18 +374,27 @@ def _bdpt_nee_contribute(
     offset used for triangle/sphere hits; hair call sites pass
     curve_offset_eps(hc.radius) instead (see bvh.mojo)."""
     if w.is_black():
-        return RGB(Float32(0))
+        return SpectralSample(Float32(0))
     var shadow_org = hit + vec3f(gn) * eps
     var shadow_end = shadow_org + Vec3f(ls.wi[0], ls.wi[1], ls.wi[2]) * ls.dist
     var Tr = _visible_transmittance(shadow_org, shadow_end, cur_med_idx, sd, scratch)
     if Tr[0] > Float32(0) or Tr[1] > Float32(0) or Tr[2] > Float32(0):
-        return beta * w * RGB(Tr[0], Tr[1], Tr[2])
-    return RGB(Float32(0))
+        # `w` already folds the light's RGB radiance into the BSDF weight, so
+        # it crosses into the spectral domain through the ILLUMINANT curve;
+        # `Tr` is a per-channel transmittance COEFFICIENT, so it band-picks
+        # (see rgb_bands_to_spectral_sample -- an illuminant upsample of a
+        # transmittance is exactly the mistake that cost the media path a
+        # 10x error).
+        return (beta
+                * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w.r, w.g, w.b, wl)
+                * rgb_bands_to_spectral_sample(Tr[0], Tr[1], Tr[2], wl))
+    return SpectralSample(Float32(0))
 
 def _bdpt_mnee_diffuse_area_light(
     sd: SceneDescriptor2_C, hit: Point3f, gn: Vec3f, eff_alb: RGB,
-    beta: RGB, mut pcg: PCG32, ior: Float32 = Float32(1.0),
-) -> RGB:
+    beta: SpectralSample, mut pcg: PCG32, wl: SampledWavelengths,
+    ior: Float32 = Float32(1.0),
+) -> SpectralSample:
     """Real MNEE (manifold next-event estimation, task #161): for a diffuse
     (or coateddiffuse base-layer, see `ior` below) camera vertex, probe
     whether a straight line toward a randomly-picked area light first hits
@@ -420,11 +432,11 @@ def _bdpt_mnee_diffuse_area_light(
     shading.mojo."""
     var n_area = Int(sd.areaLightCount)
     if n_area <= 0:
-        return RGB(Float32(0))
+        return SpectralSample(Float32(0))
     var li = Int(pcg.next_uint() % UInt32(n_area))
     var al = sd.areaLights[li]
     if al.kind == Int8(1):
-        return RGB(Float32(0))
+        return SpectralSample(Float32(0))
     var lmesh = sd.meshes[Int(al.meshIdx)]
     var n_tris = Int(max(Int(al.n_tris), 1))
     var ti = Int(pcg.next_uint() % UInt32(n_tris))
@@ -442,7 +454,7 @@ def _bdpt_mnee_diffuse_area_light(
     var to_light = light_point - hit_v
     var dist_sq = dot(to_light, to_light)
     if dist_sq < Float32(1e-8) or al.total_area <= Float32(0):
-        return RGB(Float32(0))
+        return SpectralSample(Float32(0))
     var dist = sqrt(dist_sq)
     var shadow_dir = to_light * (Float32(1) / dist)
 
@@ -456,14 +468,14 @@ def _bdpt_mnee_diffuse_area_light(
                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
     var probe_inter = probe_store[0]
     if probe_inter.hit == Int8(0) or probe_inter.primId.type != Int8(0):
-        return RGB(Float32(0))
+        return SpectralSample(Float32(0))
     var probe_mat = sd.materials[Int(probe_inter.primId.materialIndex)]
     if probe_mat.type != MatKind.dielectric and probe_mat.type != MatKind.thin_dielectric:
-        return RGB(Float32(0))
+        return SpectralSample(Float32(0))
 
     var (pmesh, pv0, pv1, pv2, ptok) = _get_tri_verts(probe_inter, sd.meshes)
     if not ptok:
-        return RGB(Float32(0))
+        return SpectralSample(Float32(0))
     var pp0 = Vec3f(pmesh.points[pv0*4], pmesh.points[pv0*4+1], pmesh.points[pv0*4+2])
     var pp1 = Vec3f(pmesh.points[pv1*4], pmesh.points[pv1*4+1], pmesh.points[pv1*4+2])
     var pp2 = Vec3f(pmesh.points[pv2*4], pmesh.points[pv2*4+1], pmesh.points[pv2*4+2])
@@ -472,7 +484,7 @@ def _bdpt_mnee_diffuse_area_light(
     var pgeo_n3 = cross(pdp_du, pdp_dv)
     var pgeo_n_len = sqrt(dot(pgeo_n3, pgeo_n3))
     if pgeo_n_len <= Float32(1e-10):
-        return RGB(Float32(0))
+        return SpectralSample(Float32(0))
     var pgeo_n_raw = pgeo_n3 * (Float32(1) / pgeo_n_len)
     var ior1 = probe_mat.albedo.r
     var eta1 = ior1 if dot(pgeo_n_raw, shadow_dir) <= Float32(0) else (Float32(1) / ior1)
@@ -501,7 +513,7 @@ def _bdpt_mnee_diffuse_area_light(
             # --- 2-vertex MNEE ---
             var (p2mesh, p2v0, p2v1, p2v2, p2ok) = _get_tri_verts(probe2_inter, sd.meshes)
             if not p2ok:
-                return RGB(Float32(0))
+                return SpectralSample(Float32(0))
             var p2p0 = Vec3f(p2mesh.points[p2v0*4], p2mesh.points[p2v0*4+1], p2mesh.points[p2v0*4+2])
             var p2p1 = Vec3f(p2mesh.points[p2v1*4], p2mesh.points[p2v1*4+1], p2mesh.points[p2v1*4+2])
             var p2p2 = Vec3f(p2mesh.points[p2v2*4], p2mesh.points[p2v2*4+1], p2mesh.points[p2v2*4+2])
@@ -509,7 +521,7 @@ def _bdpt_mnee_diffuse_area_light(
             var pgeo_n3_2 = cross(pdp_du2, pdp_dv2)
             var pgeo_n_len2 = sqrt(dot(pgeo_n3_2, pgeo_n3_2))
             if pgeo_n_len2 <= Float32(1e-10):
-                return RGB(Float32(0))
+                return SpectralSample(Float32(0))
             var pgeo_n2_raw = pgeo_n3_2 * (Float32(1) / pgeo_n_len2)
             var ior2 = probe2_mat.albedo.r
             var eta2 = ior2 if dot(pgeo_n2_raw, shadow_dir) <= Float32(0) else (Float32(1) / ior2)
@@ -524,60 +536,64 @@ def _bdpt_mnee_diffuse_area_light(
                 x2_init, pgeo_n2, pdp_du2, pdp_dv2, eta2,
                 ldp_du, ldp_dv)
             if not ok2:
-                return RGB(Float32(0))
+                return SpectralSample(Float32(0))
             var wi2f = hit_v - x1_f2
             var wi2fl = sqrt(dot(wi2f, wi2f))
             if wi2fl <= Float32(1e-8):
-                return RGB(Float32(0))
+                return SpectralSample(Float32(0))
             var wi2fn = wi2f * (Float32(1) / wi2fl)
             var cos_s_x0 = dot(gn, -wi2fn)
             if cos_s_x0 <= Float32(0):
-                return RGB(Float32(0))
+                return SpectralSample(Float32(0))
             var G2 = min(abs(dot(wi2fn, pgeo_n)) / (wi2fl*wi2fl) * dx1_dxl2, Float32(2))
             var pdf_area2 = pdf_sel / al.total_area
             var wo2f = light_point - x2_f2
             var wo2fl = sqrt(dot(wo2f, wo2f))
             if wo2fl <= Float32(1e-8):
-                return RGB(Float32(0))
+                return SpectralSample(Float32(0))
             var wo2fn = wo2f * (Float32(1) / wo2fl)
             var vis2_org = x2_f2 + wo2fn * Float32(0.001)
             var vis2_ray = Ray_C(Point3f(vis2_org[0], vis2_org[1], vis2_org[2]), Vec3f(wo2fn[0], wo2fn[1], wo2fn[2]))
             if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis2_ray, wo2fl * Float32(0.999),
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                                   sd.spheres, Int(sd.sphereCount)):
-                return RGB(Float32(0))
+                return SpectralSample(Float32(0))
             var coat_t2 = Float32(1.0) - fr_dielectric(cos_s_x0, ior)
-            return beta * bxdf_eval_diffuse(eff_alb) * coat_t2 * al.emission * (cos_s_x0 * G2 * bsdf_prod / pdf_area2)
-        return RGB(Float32(0))
+            var f_r = bxdf_eval_diffuse(eff_alb) * coat_t2
+            return (beta
+                * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, f_r.r, f_r.g, f_r.b, wl)
+                * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, wl)
+                * (cos_s_x0 * G2 * bsdf_prod / pdf_area2))
+        return SpectralSample(Float32(0))
     else:
         # --- 1-vertex MNEE ---
         var (mnee_ok, x1_f, det_b, eta_f) = _mnee_walk(hit_v, light_point, x1_init, pgeo_n, pdp_du, pdp_dv, eta1)
         if not mnee_ok:
-            return RGB(Float32(0))
+            return SpectralSample(Float32(0))
         var wi_f = hit_v - x1_f
         var wi_len2_f = dot(wi_f, wi_f)
         var wo_f = light_point - x1_f
         var wo_len2_f = dot(wo_f, wo_f)
         if wi_len2_f <= Float32(1e-8) or wo_len2_f <= Float32(1e-8):
-            return RGB(Float32(0))
+            return SpectralSample(Float32(0))
         var wi_len_f = sqrt(wi_len2_f)
         var wo_len_f = sqrt(wo_len2_f)
         var wi_fn = wi_f * (Float32(1) / wi_len_f)
         var wo_fn = wo_f * (Float32(1) / wo_len_f)
         var cos_s_x0 = dot(gn, -wi_fn)
         if cos_s_x0 <= Float32(0):
-            return RGB(Float32(0))
+            return SpectralSample(Float32(0))
         var H3_f = -(wi_fn + wo_fn * eta_f)
         var H_len2_f = dot(H3_f, H3_f)
         if H_len2_f <= Float32(1e-10):
-            return RGB(Float32(0))
+            return SpectralSample(Float32(0))
         var H_len_f = sqrt(H_len2_f)
         var H_f = H3_f * (Float32(1) / H_len_f)
         var dp_du_dot_n = dot(pdp_du, pgeo_n)
         var s3_f = pdp_du - pgeo_n * dp_du_dot_n
         var s_len2_f = dot(s3_f, s3_f)
         if s_len2_f <= Float32(1e-10):
-            return RGB(Float32(0))
+            return SpectralSample(Float32(0))
         var s_f = s3_f * (Float32(1) / sqrt(s_len2_f))
         var t_f = cross(pgeo_n, s_f)
         var ilo_l = eta_f / (H_len_f * wo_len_f)
@@ -603,15 +619,20 @@ def _bdpt_mnee_diffuse_area_light(
         if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis_ray, wo_len_f * Float32(0.999),
                               sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                               sd.spheres, Int(sd.sphereCount)):
-            return RGB(Float32(0))
+            return SpectralSample(Float32(0))
         var coat_t1 = Float32(1.0) - fr_dielectric(cos_s_x0, ior)
-        return beta * bxdf_eval_diffuse(eff_alb) * coat_t1 * al.emission * (cos_s_x0 * G * bsdf_s / pdf_area_x2)
+        var f_r = bxdf_eval_diffuse(eff_alb) * coat_t1
+        return (beta
+                * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, f_r.r, f_r.g, f_r.b, wl)
+                * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, wl)
+                * (cos_s_x0 * G * bsdf_s / pdf_area_x2))
 
 
 def _bdpt_mnee_sphere_light(
     sd: SceneDescriptor2_C, hit: Point3f, gn: Vec3f, eff_alb: RGB,
-    beta: RGB, mut pcg: PCG32, sph_idx: Int, n_spheres: Int, ior: Float32 = Float32(1.0),
-) -> RGB:
+    beta: SpectralSample, mut pcg: PCG32, sph_idx: Int, n_spheres: Int,
+    wl: SampledWavelengths, ior: Float32 = Float32(1.0),
+) -> SpectralSample:
     """Real MNEE (task #161 follow-up, 2026-07-13) against an ANALYTIC
     SPHERE area light behind glass -- sibling to
     _bdpt_mnee_diffuse_area_light (mesh/triangle lights), which live in a
@@ -692,7 +713,7 @@ def _bdpt_mnee_sphere_light(
     was already in place before the real cause was found."""
     var sph = sd.spheres[sph_idx]
     if sph.isAreaLight == Int8(0):
-        return RGB(Float32(0))
+        return SpectralSample(Float32(0))
     var u1 = pcg.next_float(); var u2 = pcg.next_float()
     var cosT = Float32(1) - Float32(2) * u1
     var sinT = sqrt(max(Float32(0), Float32(1) - cosT*cosT))
@@ -707,12 +728,12 @@ def _bdpt_mnee_sphere_light(
     var ldp_dv = Vec3f(cosT*cosPhi, cosT*sinPhi, -sinT) * sph.radius          # dp/dtheta
     var total_area = Float32(4) * PI * sph.radius * sph.radius
     if total_area <= Float32(0):
-        return RGB(Float32(0))
+        return SpectralSample(Float32(0))
     var hit_v = hit.to_simd()
     var to_light = light_point - hit_v
     var dist_sq = dot(to_light, to_light)
     if dist_sq < Float32(1e-8) or total_area <= Float32(0):
-        return RGB(Float32(0))
+        return SpectralSample(Float32(0))
     var dist = sqrt(dist_sq)
     var shadow_dir = to_light * (Float32(1) / dist)
 
@@ -726,14 +747,14 @@ def _bdpt_mnee_sphere_light(
                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
     var probe_inter = probe_store[0]
     if probe_inter.hit == Int8(0) or probe_inter.primId.type != Int8(0):
-        return RGB(Float32(0))
+        return SpectralSample(Float32(0))
     var probe_mat = sd.materials[Int(probe_inter.primId.materialIndex)]
     if probe_mat.type != MatKind.dielectric and probe_mat.type != MatKind.thin_dielectric:
-        return RGB(Float32(0))
+        return SpectralSample(Float32(0))
 
     var (pmesh, pv0, pv1, pv2, ptok) = _get_tri_verts(probe_inter, sd.meshes)
     if not ptok:
-        return RGB(Float32(0))
+        return SpectralSample(Float32(0))
     var pp0 = Vec3f(pmesh.points[pv0*4], pmesh.points[pv0*4+1], pmesh.points[pv0*4+2])
     var pp1 = Vec3f(pmesh.points[pv1*4], pmesh.points[pv1*4+1], pmesh.points[pv1*4+2])
     var pp2 = Vec3f(pmesh.points[pv2*4], pmesh.points[pv2*4+1], pmesh.points[pv2*4+2])
@@ -742,7 +763,7 @@ def _bdpt_mnee_sphere_light(
     var pgeo_n3 = cross(pdp_du, pdp_dv)
     var pgeo_n_len = sqrt(dot(pgeo_n3, pgeo_n3))
     if pgeo_n_len <= Float32(1e-10):
-        return RGB(Float32(0))
+        return SpectralSample(Float32(0))
     var pgeo_n_raw = pgeo_n3 * (Float32(1) / pgeo_n_len)
     var ior1 = probe_mat.albedo.r
     var eta1 = ior1 if dot(pgeo_n_raw, shadow_dir) <= Float32(0) else (Float32(1) / ior1)
@@ -771,7 +792,7 @@ def _bdpt_mnee_sphere_light(
             # --- 2-vertex MNEE ---
             var (p2mesh, p2v0, p2v1, p2v2, p2ok) = _get_tri_verts(probe2_inter, sd.meshes)
             if not p2ok:
-                return RGB(Float32(0))
+                return SpectralSample(Float32(0))
             var p2p0 = Vec3f(p2mesh.points[p2v0*4], p2mesh.points[p2v0*4+1], p2mesh.points[p2v0*4+2])
             var p2p1 = Vec3f(p2mesh.points[p2v1*4], p2mesh.points[p2v1*4+1], p2mesh.points[p2v1*4+2])
             var p2p2 = Vec3f(p2mesh.points[p2v2*4], p2mesh.points[p2v2*4+1], p2mesh.points[p2v2*4+2])
@@ -779,7 +800,7 @@ def _bdpt_mnee_sphere_light(
             var pgeo_n3_2 = cross(pdp_du2, pdp_dv2)
             var pgeo_n_len2 = sqrt(dot(pgeo_n3_2, pgeo_n3_2))
             if pgeo_n_len2 <= Float32(1e-10):
-                return RGB(Float32(0))
+                return SpectralSample(Float32(0))
             var pgeo_n2_raw = pgeo_n3_2 * (Float32(1) / pgeo_n_len2)
             var ior2 = probe2_mat.albedo.r
             var eta2 = ior2 if dot(pgeo_n2_raw, shadow_dir) <= Float32(0) else (Float32(1) / ior2)
@@ -794,28 +815,28 @@ def _bdpt_mnee_sphere_light(
                 x2_init, pgeo_n2, pdp_du2, pdp_dv2, eta2,
                 ldp_du, ldp_dv)
             if not ok2:
-                return RGB(Float32(0))
+                return SpectralSample(Float32(0))
             var wi2f = hit_v - x1_f2
             var wi2fl = sqrt(dot(wi2f, wi2f))
             if wi2fl <= Float32(1e-8):
-                return RGB(Float32(0))
+                return SpectralSample(Float32(0))
             var wi2fn = wi2f * (Float32(1) / wi2fl)
             var cos_s_x0 = dot(gn, -wi2fn)
             if cos_s_x0 <= Float32(0):
-                return RGB(Float32(0))
+                return SpectralSample(Float32(0))
             var G2 = min(abs(dot(wi2fn, pgeo_n)) / (wi2fl*wi2fl) * dx1_dxl2, Float32(2))
             var pdf_area2 = pdf_sel / total_area
             var wo2f = light_point - x2_f2
             var wo2fl = sqrt(dot(wo2f, wo2f))
             if wo2fl <= Float32(1e-8):
-                return RGB(Float32(0))
+                return SpectralSample(Float32(0))
             var wo2fn = wo2f * (Float32(1) / wo2fl)
             var vis2_org = x2_f2 + wo2fn * Float32(0.001)
             var vis2_ray = Ray_C(Point3f(vis2_org[0], vis2_org[1], vis2_org[2]), Vec3f(wo2fn[0], wo2fn[1], wo2fn[2]))
             if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis2_ray, wo2fl * Float32(0.999),
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                                   sd.spheres, Int(sd.sphereCount)):
-                return RGB(Float32(0))
+                return SpectralSample(Float32(0))
             # coat_t (coateddiffuse coat-transmittance, mirrors
             # _bdpt_mnee_diffuse_area_light's `ior` handling) is DELIBERATELY
             # not applied here -- see this function's own docstring, "GPU
@@ -826,37 +847,41 @@ def _bdpt_mnee_sphere_light(
             # disabled, see _MNEE_MAX_SPHERES call-site comments), for which
             # fr_dielectric(_, 1.0) == 0 exactly, so coat_t == 1.0 exactly --
             # applying it would be a mathematical no-op anyway.
-            return beta * bxdf_eval_diffuse(eff_alb) * sph.emission * (cos_s_x0 * G2 * bsdf_prod / pdf_area2)
-        return RGB(Float32(0))
+            var f_r = bxdf_eval_diffuse(eff_alb)
+            return (beta
+                * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, f_r.r, f_r.g, f_r.b, wl)
+                * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, sph.emission.r, sph.emission.g, sph.emission.b, wl)
+                * (cos_s_x0 * G2 * bsdf_prod / pdf_area2))
+        return SpectralSample(Float32(0))
     else:
         # --- 1-vertex MNEE ---
         var (mnee_ok, x1_f, det_b, eta_f) = _mnee_walk(hit_v, light_point, x1_init, pgeo_n, pdp_du, pdp_dv, eta1)
         if not mnee_ok:
-            return RGB(Float32(0))
+            return SpectralSample(Float32(0))
         var wi_f = hit_v - x1_f
         var wi_len2_f = dot(wi_f, wi_f)
         var wo_f = light_point - x1_f
         var wo_len2_f = dot(wo_f, wo_f)
         if wi_len2_f <= Float32(1e-8) or wo_len2_f <= Float32(1e-8):
-            return RGB(Float32(0))
+            return SpectralSample(Float32(0))
         var wi_len_f = sqrt(wi_len2_f)
         var wo_len_f = sqrt(wo_len2_f)
         var wi_fn = wi_f * (Float32(1) / wi_len_f)
         var wo_fn = wo_f * (Float32(1) / wo_len_f)
         var cos_s_x0 = dot(gn, -wi_fn)
         if cos_s_x0 <= Float32(0):
-            return RGB(Float32(0))
+            return SpectralSample(Float32(0))
         var H3_f = -(wi_fn + wo_fn * eta_f)
         var H_len2_f = dot(H3_f, H3_f)
         if H_len2_f <= Float32(1e-10):
-            return RGB(Float32(0))
+            return SpectralSample(Float32(0))
         var H_len_f = sqrt(H_len2_f)
         var H_f = H3_f * (Float32(1) / H_len_f)
         var dp_du_dot_n = dot(pdp_du, pgeo_n)
         var s3_f = pdp_du - pgeo_n * dp_du_dot_n
         var s_len2_f = dot(s3_f, s3_f)
         if s_len2_f <= Float32(1e-10):
-            return RGB(Float32(0))
+            return SpectralSample(Float32(0))
         var s_f = s3_f * (Float32(1) / sqrt(s_len2_f))
         var t_f = cross(pgeo_n, s_f)
         var ilo_l = eta_f / (H_len_f * wo_len_f)
@@ -882,12 +907,16 @@ def _bdpt_mnee_sphere_light(
         if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis_ray, wo_len_f * Float32(0.999),
                               sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                               sd.spheres, Int(sd.sphereCount)):
-            return RGB(Float32(0))
+            return SpectralSample(Float32(0))
         # coat_t deliberately not applied -- see the 2-vertex branch's
         # identical comment above (this function's docstring has the full
         # GPU-codegen-bug writeup). ior=1.0 at every current call site makes
         # this an exact no-op, not an approximation.
-        return beta * bxdf_eval_diffuse(eff_alb) * sph.emission * (cos_s_x0 * G * bsdf_s / pdf_area_x2)
+        var f_r = bxdf_eval_diffuse(eff_alb)
+        return (beta
+            * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, f_r.r, f_r.g, f_r.b, wl)
+            * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, sph.emission.r, sph.emission.g, sph.emission.b, wl)
+            * (cos_s_x0 * G * bsdf_s / pdf_area_x2))
 
 # ── Cosine-area PDF conversion ────────────────────────────────────────────────
 
@@ -978,7 +1007,7 @@ def _bdpt_connect_to_camera(
     px_scale: Float32,
     n_light_paths_f: Float32,
     mis_vm_weight_factor: Float32,
-) -> Tuple[Bool, Int32, RGB]:
+) -> Tuple[Bool, Int32, SpectralSample]:
     """The t=1 strategy: connect a LIGHT-subpath vertex directly to the
     camera and return the film pixel it lands on plus its contribution.
     Ported from SmallVCM's `ConnectToCamera` (vertexcm.hxx), the same
@@ -1016,24 +1045,24 @@ def _bdpt_connect_to_camera(
 
     Returns (ok, pixel_index, contribution)."""
     if lv.is_delta != Int32(0) or lv.is_surface == Int32(0):
-        return (False, Int32(-1), RGB(Float32(0)))
+        return (False, Int32(-1), SpectralSample(Float32(0)))
     if not (lv.is_light == Int32(1) or _bdpt_vertex_mis_scoped(lv)):
-        return (False, Int32(-1), RGB(Float32(0)))
+        return (False, Int32(-1), SpectralSample(Float32(0)))
 
     var lp = lv.pos.to_simd()
     var d3 = cam_pos - lp
     var dist2 = dot(d3, d3)
     if dist2 < Float32(1e-8):
-        return (False, Int32(-1), RGB(Float32(0)))
+        return (False, Int32(-1), SpectralSample(Float32(0)))
     var dist = sqrt(dist2)
     var dir_to_cam = d3 * (Float32(1) / dist)
 
     var pr = _bdpt_world_to_raster(lp, w2c, c2r, fw, fh)
     if not pr[0]:
-        return (False, Int32(-1), RGB(Float32(0)))
+        return (False, Int32(-1), SpectralSample(Float32(0)))
     var cos_at_camera = pr[3]
     if cos_at_camera <= Float32(1e-6):
-        return (False, Int32(-1), RGB(Float32(0)))
+        return (False, Int32(-1), SpectralSample(Float32(0)))
 
     # A light-source vertex is evaluated the way `_connect` evaluates one:
     # f = Le, with NO cosine and no 1/pi -- its cosine is supplied by the
@@ -1041,25 +1070,26 @@ def _bdpt_connect_to_camera(
     # through `_eval_vertex` instead would apply a diffuse BSDF to an
     # emitter and silently lose that vertex's share.
     var cos_signed = dot(lv.normal.to_simd(), dir_to_cam)
-    var f: Vec3f
+    var wl = lv.wavelengths
+    var f: SpectralSample
     var cos_to_camera: Float32
     if lv.is_light == Int32(1):
         if cos_signed <= Float32(0):
-            return (False, Int32(-1), RGB(Float32(0)))
+            return (False, Int32(-1), SpectralSample(Float32(0)))
         cos_to_camera = cos_signed
-        f = Vec3f(lv.alb.r, lv.alb.g, lv.alb.b) * cos_to_camera
+        f = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, lv.alb.r, lv.alb.g, lv.alb.b, wl) * cos_to_camera
     else:
         cos_to_camera = abs(cos_signed)
-        f = _eval_vertex(lv, Vec3f(dir_to_cam[0], dir_to_cam[1], dir_to_cam[2]), sd)
-    if f[0] <= Float32(0) and f[1] <= Float32(0) and f[2] <= Float32(0):
-        return (False, Int32(-1), RGB(Float32(0)))
+        f = _eval_vertex_spectral(lv, Vec3f(dir_to_cam[0], dir_to_cam[1], dir_to_cam[2]), sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
+    if f.is_black():
+        return (False, Int32(-1), SpectralSample(Float32(0)))
     if cos_to_camera <= Float32(1e-8):
-        return (False, Int32(-1), RGB(Float32(0)))
+        return (False, Int32(-1), SpectralSample(Float32(0)))
 
     var Tr = _visible_transmittance(
         lv.pos, Point3f(cam_pos[0], cam_pos[1], cam_pos[2]), lv.med_idx, sd, scratch)
     if Tr[0] < Float32(1e-7) and Tr[1] < Float32(1e-7) and Tr[2] < Float32(1e-7):
-        return (False, Int32(-1), RGB(Float32(0)))
+        return (False, Int32(-1), SpectralSample(Float32(0)))
 
     var image_plane_dist = Float32(1) / max(px_scale, Float32(1e-12))
     var ipcd = image_plane_dist / cos_at_camera
@@ -1070,9 +1100,10 @@ def _bdpt_connect_to_camera(
     var image_to_surface = image_to_solid_angle * cos_to_camera / dist2
 
     var inv_n = Float32(1) / max(n_light_paths_f, Float32(1))
-    var contrib = Vec3f(
-        lv.beta.r * f[0] * Tr[0], lv.beta.g * f[1] * Tr[1], lv.beta.b * f[2] * Tr[2]
-    ) * (geom * inv_n)
+    # Tr band-picks: it is a transmittance coefficient, not a colour.
+    var contrib = (lv.beta * f
+                   * rgb_bands_to_spectral_sample(Tr[0], Tr[1], Tr[2], wl)
+                   * (geom * inv_n))
 
     # MIS, SmallVCM ConnectToCamera:
     #   wLight = (cameraPdfA / lightSubPathCount)
@@ -1090,7 +1121,7 @@ def _bdpt_connect_to_camera(
     contrib = contrib * mis_weight
 
     var pix = Int32(Int(pr[2]) * Int(fw) + Int(pr[1]))
-    return (True, pix, RGB(contrib[0], contrib[1], contrib[2]))
+    return (True, pix, contrib)
 
 def _bdpt_connect_to_cache(
     cv: BDPTVertex,
@@ -1101,7 +1132,7 @@ def _bdpt_connect_to_cache(
     lp_idx: Int,
     path_len: Int,
     mis_vm_weight_factor: Float32,
-) -> RGB:
+) -> SpectralSample:
     """VCM Stage 2b (2026-07-10): connect eye vertex `cv` to EVERY vertex of
     its deterministically PAIRED light path (`lp_idx` — standard Veach BDPT
     pairing: n_light_paths == n_pix, one dedicated light path per pixel,
@@ -1114,11 +1145,11 @@ def _bdpt_connect_to_cache(
     the old random-subsample design was not verified compatible with them.
     No RNG needed here anymore — the set of light vertices to connect to is
     now fully determined by which pixel `cv`'s eye subpath belongs to."""
-    var sum = Vec3f(Float32(0), Float32(0), Float32(0))
+    var sum = SpectralSample(Float32(0))
     for local in range(path_len):
         var lv = lvc[lp_idx * _BDPT_MAX_VERTS + local]
         sum += _connect(cv, lv, sd, has_med, scratch, mis_vm_weight_factor)
-    return RGB(sum[0], sum[1], sum[2])
+    return sum
 
 def _bdpt_connect_to_cache_deferred(
     cv: BDPTVertex,
@@ -1128,7 +1159,7 @@ def _bdpt_connect_to_cache_deferred(
     path_len: Int,
     mis_vm_weight_factor: Float32,
     shadow_rays: UnsafePointer[Float32, MutExternalOrigin],
-    shadow_pending: UnsafePointer[RGB, MutExternalOrigin],
+    shadow_pending: UnsafePointer[SpectralSample, MutExternalOrigin],
     shadow_valid: UnsafePointer[Int8, MutExternalOrigin],
     shadow_seg_med: UnsafePointer[Int32, MutExternalOrigin],
 ):
@@ -1164,7 +1195,7 @@ def _bdpt_connect_to_cache_deferred(
         shadow_rays[idx8 + 5] = dir[1]
         shadow_rays[idx8 + 6] = dir[2]
         shadow_rays[idx8 + 7] = dist * Float32(0.9995)
-        shadow_pending[base + local] = RGB(contrib[0], contrib[1], contrib[2])
+        shadow_pending[base + local] = contrib
         shadow_seg_med[base + local] = cv.med_idx
         shadow_valid[base + local] = Int8(1)
 
@@ -1245,7 +1276,7 @@ def _bdpt_merge_from_cache(
     r2: Float32,
     norm: Float32,
     mis_vc_weight_factor: Float32,
-) -> RGB:
+) -> SpectralSample:
     """Vertex MERGING (photon-mapping-style density estimation) against the
     shared Light Vertex Cache -- the "M" in VCM, run UNCONDITIONALLY
     alongside _bdpt_connect_to_cache's vertex CONNECTION for every non-delta
@@ -1277,8 +1308,8 @@ def _bdpt_merge_from_cache(
     hair/measured) -- the same scope _connect uses for its own connection
     weight, for the same reason (see that function's docstring)."""
     if cv.is_delta != Int32(0) or cv.is_surface == Int32(0):
-        return RGB(Float32(0))
-    var total = Vec3f(Float32(0), Float32(0), Float32(0))
+        return SpectralSample(Float32(0))
+    var total = SpectralSample(Float32(0))
     var cix = Int(floor(cv.pos.x * inv_cell))
     var ciy = Int(floor(cv.pos.y * inv_cell))
     var ciz = Int(floor(cv.pos.z * inv_cell))
@@ -1305,21 +1336,61 @@ def _bdpt_merge_from_cache(
                         var e = lv.pos - cv.pos
                         var dist2 = e.length_sq()
                         if dist2 <= r2:
-                            var f_cv = _eval_vertex(cv, lv.wo.to_simd(), sd)
+                            var f_cv = _eval_vertex_spectral(cv, lv.wo.to_simd(), sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, cv.wavelengths)
                             var w = Float32(1)
                             if _bdpt_vertex_mis_scoped(cv) and _bdpt_vertex_mis_scoped(lv):
                                 var (camera_bsdf_dir_pdf_w, camera_bsdf_rev_pdf_w) = _bdpt_vertex_pdfs(cv, lv.wo.to_simd(), sd)
                                 var w_light = lv.dVCM * mis_vc_weight_factor + lv.dVM * camera_bsdf_dir_pdf_w
                                 var w_camera = cv.dVCM * mis_vc_weight_factor + cv.dVM * camera_bsdf_rev_pdf_w
                                 w = Float32(1) / (w_light + Float32(1) + w_camera)
-                            total[0] += f_cv[0] * lv.beta.r * w
-                            total[1] += f_cv[1] * lv.beta.g * w
-                            total[2] += f_cv[2] * lv.beta.b * w
+                            total += f_cv * lv.beta * w
                     k = Int(merge_next[k])
-    var beta = cv.beta
-    return RGB(total[0] * beta.r, total[1] * beta.g, total[2] * beta.b) * norm
+    return total * cv.beta * norm
 
 # ── Trace one camera subpath, connecting to the shared cache inline ─────────
+
+@always_inline
+def _bdpt_pass_wavelengths(pass_idx: Int) -> SampledWavelengths:
+    """The hero wavelengths for one spp pass, shared by EVERY camera and
+    light subpath in it.
+
+    Spectral transport forces this: a connection multiplies a camera
+    vertex's beta by a light vertex's flux, and a merge does the same across
+    arbitrary light paths, so lane i of one only means the same thing as
+    lane i of the other when both were traced at identical wavelengths.
+    Per-subpath sampling (what this replaced) made that false for every
+    connection and every merge.
+
+    A pure function of the PASS INDEX and nothing else, so every backend and
+    every kernel derives the identical value from an input they all agree on.
+    It deliberately does NOT take the rng seed: the seed is not one value
+    here. The light-path kernels are launched with `pass_seed`
+    (= base_seed ^ hash(si)) and the camera kernels with `base_seed`, so a
+    seed-dependent derivation handed the light and camera subpaths of the
+    SAME pass different wavelength sets -- precisely the inconsistency this
+    sharing exists to prevent. Measured, that made GPU VCM disagree with CPU
+    VCM by 4% on cornell-box, chromatically, and it did not shrink with more
+    samples; pinning one fixed wavelength set on both backends collapsed the
+    gap to 0.3% (atomics ordering), which is how the input, not the
+    arithmetic, was identified as the culprit.
+
+    The schedule is a HASH of the pass index, not a low-discrepancy sequence
+    over it, and that is deliberate. sample_wavelengths_uniform is itself a
+    lattice -- Wilkie et al. hero sampling puts the other three wavelengths
+    at fixed strides of span/4 from the first -- so a stratified u lattice on
+    top of it produces a doubly-regular set that aliases against the CIE
+    curves instead of covering them. Measured on the saturated-box harness,
+    chroma error vs pbrt: 0.0135 for frac(i*phi), 0.0120 for frac(i*R1),
+    0.0026 for this hash. Randomising u is what breaks the alignment; the
+    stratification that matters is already inside the hero-wavelength stride.
+
+    A consequence is that the wavelength schedule is the same for every
+    --seed. That is fine: everything else in the render is still seeded, and
+    a deterministic schedule is one fewer thing that can differ between
+    backends."""
+    var h = mix_bits_u64(UInt64(pass_idx) + UInt64(0x9E3779B97F4A7C15))
+    var u = Float32(h >> UInt32(8)) * Float32(1.0 / 16777216.0)
+    return sample_wavelengths_uniform(u)
 
 def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     r2c:     UnsafePointer[Float32, MutExternalOrigin],
@@ -1341,8 +1412,9 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     mis_vc_weight_factor: Float32,
     mis_vm_weight_factor: Float32,
     n_light_paths_f: Float32,
+    pass_wl: SampledWavelengths,
     start_med_idx: Int32 = Int32(-1),
-) -> Tuple[RGB, RGB]:
+) -> Tuple[SpectralSample, RGB]:
     """Trace one camera subpath from pixel (px,py). At each non-delta vertex,
     connect inline/synchronously to the shared Light Vertex Cache via
     `_bdpt_connect_to_cache` — mirrors how every live GPU shading kernel in
@@ -1379,7 +1451,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     # once per depth level with the loop-carried state -- including the
     # `total`/`first_alb` accumulators -- parked in a VCMCameraPathState_C.
     var st = _bdpt_camera_path_init[use_gpu](
-        r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, start_med_idx)
+        r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl, start_med_idx)
     var ro = st.ro
     var rd = st.rd
     var beta = st.beta
@@ -1428,8 +1500,8 @@ struct VCMCameraPathState_C(TrivialRegisterPassable):
     the same value the original single-function loop would have returned."""
     var ro: Point3f
     var rd: Vec3f
-    var beta: RGB
-    var total: RGB
+    var beta: SpectralSample
+    var total: SpectralSample
     var first_alb: RGB
     var dvcm: Float32
     var dvc: Float32
@@ -1454,6 +1526,7 @@ def _bdpt_camera_path_init[use_gpu: Bool](
     mut pcg: PCG32,
     px_scale: Float32,
     n_light_paths_f: Float32,
+    pass_wl: SampledWavelengths,
     start_med_idx: Int32 = Int32(-1),
 ) -> VCMCameraPathState_C:
     """Task #163 stage 4: camera-ray generation + MIS-origin setup half of
@@ -1503,15 +1576,22 @@ def _bdpt_camera_path_init[use_gpu: Bool](
 
     var n_verts = 0
     var n_bounces = 0  # total surface hits including glass (for _dielectric_bounce entering logic)
-    var beta = RGB(Float32(1))
+    var beta = SpectralSample(Float32(1))
     var cur_med_idx = start_med_idx
-    var total = RGB(Float32(0))
+    var total = SpectralSample(Float32(0))
     var first_alb = RGB(Float32(0))  # denoiser albedo AOV -- set at the first stored vertex, below
-    # One hero-wavelength sample per camera subpath (staged spectral
-    # rendering rollout, Stage 3 -- see project_spectral_rendering memory),
-    # stored into every vertex this subpath constructs and used for this
-    # subpath's own NEE terms.
-    var wavelengths = sample_wavelengths_uniform(pcg.next_float())
+    # ONE hero-wavelength set per spp PASS, shared by every camera AND light
+    # subpath in it, rather than one per subpath. This is forced by the flip
+    # to spectral transport: a connection multiplies a camera vertex's beta
+    # by a light vertex's flux, and a merge does the same across ARBITRARY
+    # light paths -- lane i of one only means the same thing as lane i of the
+    # other if both were traced at identical wavelengths. Per-subpath
+    # sampling made that false for every connection and every merge. Sharing
+    # per pass correlates wavelengths across pixels within one sample, which
+    # costs nothing in expectation (the pass index still decorrelates across
+    # spp) and is what photon-mapping-family renderers do for exactly this
+    # reason.
+    var wavelengths = pass_wl
     # pdf (solid angle) of the cosine-weighted diffuse bounce that produced
     # the CURRENT `rd`, used to MIS-weight this ray's eventual infinite-light
     # miss-escape contribution against the NEE-to-infinite-light sample taken
@@ -1548,8 +1628,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     mis_vm_weight_factor: Float32,
     mut ro: Point3f,
     mut rd: Vec3f,
-    mut beta: RGB,
-    mut total: RGB,
+    mut beta: SpectralSample,
+    mut total: SpectralSample,
     mut first_alb: RGB,
     mut n_verts: Int,
     mut n_bounces: Int,
@@ -1568,7 +1648,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     # deliberately narrow first slice, not "all shadow rays on Vulkan RT".
     defer_shadow_rays: Bool = False,
     shadow_rays: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-    shadow_pending: UnsafePointer[RGB, MutExternalOrigin] = UnsafePointer[RGB, MutExternalOrigin].unsafe_dangling(),
+    shadow_pending: UnsafePointer[SpectralSample, MutExternalOrigin] = UnsafePointer[SpectralSample, MutExternalOrigin].unsafe_dangling(),
     shadow_valid: UnsafePointer[Int8, MutExternalOrigin] = UnsafePointer[Int8, MutExternalOrigin].unsafe_dangling(),
     shadow_seg_med: UnsafePointer[Int32, MutExternalOrigin] = UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
 ) -> Bool:
@@ -1628,7 +1708,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var mis_w = Float32(1)
                 if last_bsdf_pdf >= Float32(0) and pdf_light_here > Float32(0):
                     mis_w = power_heuristic(last_bsdf_pdf, pdf_light_here)
-                total += beta * Le * mis_w
+                total += beta * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (Le).r, (Le).g, (Le).b, wavelengths) * mis_w
             return False   # nothing hit -- path escapes the scene
         var t_hit = inter.tHit
         var ray_dir = rd.to_simd()
@@ -1652,7 +1732,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # (exp(-sig_t×t) cancels between Tr numerator and pdf denominator)
                 var v = _null_vertex()
                 v.pos = sp
-                v.beta = beta * ff.albedo
+                v.beta = beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, wavelengths)
                 v.alb = ff.albedo
                 v.is_surface = Int32(0); v.is_delta = Int32(0)
                 v.pdf_fwd = ff.sig_t * exp(-ff.sig_t * ff.t_free)
@@ -1682,7 +1762,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                         total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
                     total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
                 # Continuation beta = prev × alb_s (same as stored vertex beta)
-                beta *= ff.albedo
+                beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, wavelengths)
                 var u1 = pcg.next_float(); var u2 = pcg.next_float()
                 var cosT = Float32(2)*u1 - Float32(1)
                 var sinT = sqrt(max(Float32(0), Float32(1)-cosT*cosT))
@@ -1693,7 +1773,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 return True   # volume free-flight scatter: no vertex stored this bounce, path continues
             else:
                 # Beer-Lambert through full segment to surface
-                beta *= ff.transmittance
+                beta *= rgb_bands_to_spectral_sample(ff.transmittance.r, ff.transmittance.g, ff.transmittance.b, wavelengths)
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[mat_idx]
@@ -1724,7 +1804,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                         var n_sph_hit = Float32(max(Int(sd.sphereCount), 1))
                         var pdf_light_hit = Float32(1) / (solid_angle_hit * n_sph_hit)
                         mis_w_sph_hit = power_heuristic(last_bsdf_pdf, pdf_light_hit)
-                total += beta * sph_hit.emission * mis_w_sph_hit
+                total += beta * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (sph_hit.emission).r, (sph_hit.emission).g, (sph_hit.emission).b, wavelengths) * mis_w_sph_hit
                 return False   # direct hit on emissive analytic sphere -- terminates the path
 
         # Mix material: stochastically resolve to one of two sub-materials
@@ -1755,7 +1835,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var n_area_hit = Float32(max(Int(sd.areaLightCount), 1))
                     var pdf_light_al = dist2_hit / (cos_l_hit * n_area_hit * al_hit.total_area)
                     mis_w_al_hit = power_heuristic(last_bsdf_pdf, pdf_light_al)
-                total += beta * al_hit.emission * mis_w_al_hit
+                total += beta * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (al_hit.emission).r, (al_hit.emission).g, (al_hit.emission).b, wavelengths) * mis_w_al_hit
             return False   # direct hit on an area-light triangle/curve -- terminates the path
 
         elif mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit:
@@ -1825,23 +1905,23 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             for dl_i in range(Int(sd.distantLightCount)):
                 var ls_d = _sample_distant_light_nee(sd.distantLights[dl_i])
                 var w_d = _nee_weight_simple_via_spectral(ls_d, Int32(0), eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
-                total += _bdpt_nee_contribute(beta, w_d, ls_d, hit, gn, cur_med_idx, sd, scratch)
+                total += _bdpt_nee_contribute(beta, w_d, ls_d, hit, gn, cur_med_idx, sd, scratch, wavelengths)
             for pl_i in range(Int(sd.pointLightCount)):
                 var ls_p = _sample_point_light_nee(sd.pointLights[pl_i], hit.to_simd())
                 var w_p = _nee_weight_simple_via_spectral(ls_p, Int32(0), eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
-                total += _bdpt_nee_contribute(beta, w_p, ls_p, hit, gn, cur_med_idx, sd, scratch)
+                total += _bdpt_nee_contribute(beta, w_p, ls_p, hit, gn, cur_med_idx, sd, scratch, wavelengths)
             for sph_i in range(Int(sd.sphereCount)):
                 var ls_sph = _sample_sphere_light_nee(sd.spheres[sph_i], Int(sd.sphereCount), hit.to_simd(), pcg)
                 var w_sph = _nee_weight_simple_via_spectral(ls_sph, Int32(0), eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
-                total += _bdpt_nee_contribute(beta, w_sph, ls_sph, hit, gn, cur_med_idx, sd, scratch)
+                total += _bdpt_nee_contribute(beta, w_sph, ls_sph, hit, gn, cur_med_idx, sd, scratch, wavelengths)
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ls_e = _sample_infinite_light_nee(sd.infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
                 var w_e = _nee_weight_simple_via_spectral(ls_e, Int32(0), eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
-                total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn, cur_med_idx, sd, scratch)
+                total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn, cur_med_idx, sd, scratch, wavelengths)
             # Real MNEE for area lights behind glass (task #161) -- see
             # _bdpt_mnee_diffuse_area_light's docstring. Ordinary (non-glass)
             # area lights are deliberately left to connect/merge, unchanged.
-            total += _bdpt_mnee_diffuse_area_light(sd, hit, gn, eff_alb, beta, pcg)
+            total += _bdpt_mnee_diffuse_area_light(sd, hit, gn, eff_alb, beta, pcg, wavelengths)
             # Sphere-shaped area lights (task #161 follow-up, 2026-07-13):
             # a completely separate list from sd.areaLights (see
             # _bdpt_mnee_sphere_light's docstring). Deliberately NOT a
@@ -1852,13 +1932,13 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # -- update both together if that constant ever changes).
             var n_sph_mnee = Int(sd.sphereCount)
             if 0 < n_sph_mnee:
-                total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 0, n_sph_mnee)
+                total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 0, n_sph_mnee, wavelengths)
             if 1 < n_sph_mnee:
-                total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 1, n_sph_mnee)
+                total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 1, n_sph_mnee, wavelengths)
             if 2 < n_sph_mnee:
-                total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 2, n_sph_mnee)
+                total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 2, n_sph_mnee, wavelengths)
             if 3 < n_sph_mnee:
-                total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 3, n_sph_mnee)
+                total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 3, n_sph_mnee, wavelengths)
 
             # Cosine-weighted scatter direction
             var u1 = pcg.next_float(); var u2 = pcg.next_float()
@@ -1866,7 +1946,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             ro = hit + rd*Float32(0.0002)
             last_bsdf_pdf = bxdf_pdf_diffuse(dot(gn, rd.to_simd()))
             # Update beta: f/pdf for Lambertian = (alb/π) / (cosθ/π) = alb
-            beta *= eff_alb
+            beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (eff_alb).r, (eff_alb).g, (eff_alb).b, wavelengths)
             # VCM Stage 2b: recursive continuation for the NEXT bounce --
             # see _bdpt_trace_light_path's matching diffuse-branch comment.
             var cos_theta_out = abs(dot(rd.to_simd(), gn))
@@ -1935,19 +2015,19 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 for dl_ic in range(Int(sd.distantLightCount)):
                     var ls_dlc = _sample_distant_light_nee(sd.distantLights[dl_ic])
                     var w_dlc = _nee_weight_coated_coat_lobe(ls_dlc, ior, coat_alpha, gn, wo)
-                    total += _bdpt_nee_contribute(beta, w_dlc, ls_dlc, hit, gn, cur_med_idx, sd, scratch)
+                    total += _bdpt_nee_contribute(beta, w_dlc, ls_dlc, hit, gn, cur_med_idx, sd, scratch, wavelengths)
                 for pl_ic in range(Int(sd.pointLightCount)):
                     var ls_plc = _sample_point_light_nee(sd.pointLights[pl_ic], hit.to_simd())
                     var w_plc = _nee_weight_coated_coat_lobe(ls_plc, ior, coat_alpha, gn, wo)
-                    total += _bdpt_nee_contribute(beta, w_plc, ls_plc, hit, gn, cur_med_idx, sd, scratch)
+                    total += _bdpt_nee_contribute(beta, w_plc, ls_plc, hit, gn, cur_med_idx, sd, scratch, wavelengths)
                 for sph_ic in range(Int(sd.sphereCount)):
                     var ls_sphc = _sample_sphere_light_nee(sd.spheres[sph_ic], Int(sd.sphereCount), hit.to_simd(), pcg)
                     var w_sphc = _nee_weight_coated_coat_lobe(ls_sphc, ior, coat_alpha, gn, wo)
-                    total += _bdpt_nee_contribute(beta, w_sphc, ls_sphc, hit, gn, cur_med_idx, sd, scratch)
+                    total += _bdpt_nee_contribute(beta, w_sphc, ls_sphc, hit, gn, cur_med_idx, sd, scratch, wavelengths)
                 for inf_ic in range(Int(sd.infiniteLightCount)):
                     var ls_infc = _sample_infinite_light_nee(sd.infiniteLights[inf_ic], Point2f(pcg.next_float(), pcg.next_float()))
                     var w_infc = _nee_weight_coated_coat_lobe(ls_infc, ior, coat_alpha, gn, wo)
-                    total += _bdpt_nee_contribute(beta, w_infc, ls_infc, hit, gn, cur_med_idx, sd, scratch)
+                    total += _bdpt_nee_contribute(beta, w_infc, ls_infc, hit, gn, cur_med_idx, sd, scratch, wavelengths)
 
             if pcg.next_float() < f_entry:
                 # Glossy reflection off the coat (rough => GGX lobe, smooth => mirror).
@@ -1997,19 +2077,19 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 for dl_i in range(Int(sd.distantLightCount)):
                     var ls_dl = _sample_distant_light_nee(sd.distantLights[dl_i])
                     var w_dl = _nee_weight_coated_diffuse_base(ls_dl, eff_alb, ior, gn)
-                    total += _bdpt_nee_contribute(beta * walk_beta, w_dl, ls_dl, hit, gn, cur_med_idx, sd, scratch)
+                    total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), w_dl, ls_dl, hit, gn, cur_med_idx, sd, scratch, wavelengths)
                 for pl_i in range(Int(sd.pointLightCount)):
                     var ls_pl = _sample_point_light_nee(sd.pointLights[pl_i], hit.to_simd())
                     var w_pl = _nee_weight_coated_diffuse_base(ls_pl, eff_alb, ior, gn)
-                    total += _bdpt_nee_contribute(beta * walk_beta, w_pl, ls_pl, hit, gn, cur_med_idx, sd, scratch)
+                    total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), w_pl, ls_pl, hit, gn, cur_med_idx, sd, scratch, wavelengths)
                 for sph_i in range(Int(sd.sphereCount)):
                     var ls_sph = _sample_sphere_light_nee(sd.spheres[sph_i], Int(sd.sphereCount), hit.to_simd(), pcg)
                     var w_sph = _nee_weight_coated_diffuse_base(ls_sph, eff_alb, ior, gn)
-                    total += _bdpt_nee_contribute(beta * walk_beta, w_sph, ls_sph, hit, gn, cur_med_idx, sd, scratch)
+                    total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), w_sph, ls_sph, hit, gn, cur_med_idx, sd, scratch, wavelengths)
                 for inf_i in range(Int(sd.infiniteLightCount)):
                     var ls_inf = _sample_infinite_light_nee(sd.infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
                     var w_inf = _nee_weight_coated_diffuse_base(ls_inf, eff_alb, ior, gn)
-                    total += _bdpt_nee_contribute(beta * walk_beta, w_inf, ls_inf, hit, gn, cur_med_idx, sd, scratch)
+                    total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), w_inf, ls_inf, hit, gn, cur_med_idx, sd, scratch, wavelengths)
 
                 # Task #161 follow-up (2026-07-13): MNEE for area lights
                 # behind glass, extended to coateddiffuse's base layer --
@@ -2024,7 +2104,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # walk_beta's attenuation does, so this models a genuinely
                 # different bounce each iteration, not a repeated estimate
                 # of the same one.
-                total += _bdpt_mnee_diffuse_area_light(sd, hit, gn, eff_alb, beta * walk_beta, pcg, ior)
+                total += _bdpt_mnee_diffuse_area_light(sd, hit, gn, eff_alb, beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), pcg, wavelengths, ior)
                 # Sphere-shaped area lights -- see the plain-diffuse
                 # branch's matching call site (above in this file) for
                 # why this is manually unrolled, not a `for` loop.
@@ -2036,13 +2116,13 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # case. Safe to enable once coat_t gets a real fix.
                 var n_sph_mnee_cd = 0
                 if 0 < n_sph_mnee_cd:
-                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * walk_beta, pcg, 0, n_sph_mnee_cd, ior)
+                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), pcg, 0, n_sph_mnee_cd, wavelengths, ior)
                 if False and 1 < n_sph_mnee_cd:
-                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * walk_beta, pcg, 1, n_sph_mnee_cd, ior)
+                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), pcg, 1, n_sph_mnee_cd, wavelengths, ior)
                 if False and 2 < n_sph_mnee_cd:
-                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * walk_beta, pcg, 2, n_sph_mnee_cd, ior)
+                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), pcg, 2, n_sph_mnee_cd, wavelengths, ior)
                 if False and 3 < n_sph_mnee_cd:
-                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * walk_beta, pcg, 3, n_sph_mnee_cd, ior)
+                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), pcg, 3, n_sph_mnee_cd, wavelengths, ior)
 
                 var _w_up_sample = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), gn)
                 var w_up = _w_up_sample[0]
@@ -2076,7 +2156,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             rd = vec3f(exit_dir)
             ro = hit + rd*Float32(0.0002)
             last_bsdf_pdf = Float32(0)  # NEE-only: exit ray's true pdf is intractable
-            beta *= walk_beta
+            beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths)
             var v = _null_vertex()
             v.pos = hit
             v.normal = vec3f(gn)
@@ -2170,21 +2250,21 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 for dl_ic in range(Int(sd.distantLightCount)):
                     var ls_dc = _sample_distant_light_nee(sd.distantLights[dl_ic])
                     var w_dc = _nee_weight_simple_via_spectral(ls_dc, Int32(1), mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
-                    total += _bdpt_nee_contribute(beta, w_dc, ls_dc, hit, gn_c, cur_med_idx, sd, scratch)
+                    total += _bdpt_nee_contribute(beta, w_dc, ls_dc, hit, gn_c, cur_med_idx, sd, scratch, wavelengths)
                 for pl_ic in range(Int(sd.pointLightCount)):
                     var ls_pc = _sample_point_light_nee(sd.pointLights[pl_ic], hit.to_simd())
                     var w_pc = _nee_weight_simple_via_spectral(ls_pc, Int32(1), mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
-                    total += _bdpt_nee_contribute(beta, w_pc, ls_pc, hit, gn_c, cur_med_idx, sd, scratch)
+                    total += _bdpt_nee_contribute(beta, w_pc, ls_pc, hit, gn_c, cur_med_idx, sd, scratch, wavelengths)
                 for sph_ic in range(Int(sd.sphereCount)):
                     var ls_sphc = _sample_sphere_light_nee(sd.spheres[sph_ic], Int(sd.sphereCount), hit.to_simd(), pcg)
                     var w_sphc = _nee_weight_simple_via_spectral(ls_sphc, Int32(1), mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
-                    total += _bdpt_nee_contribute(beta, w_sphc, ls_sphc, hit, gn_c, cur_med_idx, sd, scratch)
+                    total += _bdpt_nee_contribute(beta, w_sphc, ls_sphc, hit, gn_c, cur_med_idx, sd, scratch, wavelengths)
                 for inf_ic in range(Int(sd.infiniteLightCount)):
                     var ls_ec = _sample_infinite_light_nee(sd.infiniteLights[inf_ic], Point2f(pcg.next_float(), pcg.next_float()))
                     var w_ec = _nee_weight_simple_via_spectral(ls_ec, Int32(1), mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
-                    total += _bdpt_nee_contribute(beta, w_ec, ls_ec, hit, gn_c, cur_med_idx, sd, scratch)
+                    total += _bdpt_nee_contribute(beta, w_ec, ls_ec, hit, gn_c, cur_med_idx, sd, scratch, wavelengths)
 
-            beta *= bs_c.f
+            beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (bs_c.f).r, (bs_c.f).g, (bs_c.f).b, wavelengths)
             rd = vec3f(bs_c.wi)
             ro = hit + rd*Float32(0.0002)
             var cos_theta_out_c = abs(dot(bs_c.wi, gn_c))
@@ -2270,22 +2350,22 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             for dl_ih in range(Int(sd.distantLightCount)):
                 var ls_dh = _sample_distant_light_nee(sd.distantLights[dl_ih])
                 var w_dh = _nee_weight_hair(ls_dh, hc)
-                total += _bdpt_nee_contribute(beta, w_dh, ls_dh, hit, hc.geo_normal, cur_med_idx, sd, scratch, hair_eps)
+                total += _bdpt_nee_contribute(beta, w_dh, ls_dh, hit, hc.geo_normal, cur_med_idx, sd, scratch, wavelengths, hair_eps)
             for pl_ih in range(Int(sd.pointLightCount)):
                 var ls_ph = _sample_point_light_nee(sd.pointLights[pl_ih], hit.to_simd())
                 var w_ph = _nee_weight_hair(ls_ph, hc)
-                total += _bdpt_nee_contribute(beta, w_ph, ls_ph, hit, hc.geo_normal, cur_med_idx, sd, scratch, hair_eps)
+                total += _bdpt_nee_contribute(beta, w_ph, ls_ph, hit, hc.geo_normal, cur_med_idx, sd, scratch, wavelengths, hair_eps)
             for sph_ih in range(Int(sd.sphereCount)):
                 var ls_sphh = _sample_sphere_light_nee(sd.spheres[sph_ih], Int(sd.sphereCount), hit.to_simd(), pcg)
                 var w_sphh = _nee_weight_hair(ls_sphh, hc)
-                total += _bdpt_nee_contribute(beta, w_sphh, ls_sphh, hit, hc.geo_normal, cur_med_idx, sd, scratch, hair_eps)
+                total += _bdpt_nee_contribute(beta, w_sphh, ls_sphh, hit, hc.geo_normal, cur_med_idx, sd, scratch, wavelengths, hair_eps)
             for inf_ih in range(Int(sd.infiniteLightCount)):
                 var ls_eh = _sample_infinite_light_nee(sd.infiniteLights[inf_ih], Point2f(pcg.next_float(), pcg.next_float()))
                 var w_eh = _nee_weight_hair(ls_eh, hc)
-                total += _bdpt_nee_contribute(beta, w_eh, ls_eh, hit, hc.geo_normal, cur_med_idx, sd, scratch, hair_eps)
+                total += _bdpt_nee_contribute(beta, w_eh, ls_eh, hit, hc.geo_normal, cur_med_idx, sd, scratch, wavelengths, hair_eps)
 
             var (wi_hs, f_hs, pdf_hs, cos_ti_hs2) = _hair_sample_dir(hc, pcg)
-            beta *= f_hs / pdf_hs
+            beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (f_hs / pdf_hs).r, (f_hs / pdf_hs).g, (f_hs / pdf_hs).b, wavelengths)
             rd = vec3f(wi_hs)
             var hsign = Float32(1) if dot(wi_hs, hc.geo_normal) >= Float32(0) else Float32(-1)
             ro = hit + vec3f(hc.geo_normal) * hair_eps * hsign
@@ -2390,19 +2470,19 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             for dl_im in range(Int(sd.distantLightCount)):
                 var ls_dm = _sample_distant_light_nee(sd.distantLights[dl_im])
                 var w_dm = _nee_weight_measured(ls_dm, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-                total += _bdpt_nee_contribute(beta, w_dm, ls_dm, hit, gn_m, cur_med_idx, sd, scratch)
+                total += _bdpt_nee_contribute(beta, w_dm, ls_dm, hit, gn_m, cur_med_idx, sd, scratch, wavelengths)
             for pl_im in range(Int(sd.pointLightCount)):
                 var ls_pm = _sample_point_light_nee(sd.pointLights[pl_im], hit.to_simd())
                 var w_pm = _nee_weight_measured(ls_pm, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-                total += _bdpt_nee_contribute(beta, w_pm, ls_pm, hit, gn_m, cur_med_idx, sd, scratch)
+                total += _bdpt_nee_contribute(beta, w_pm, ls_pm, hit, gn_m, cur_med_idx, sd, scratch, wavelengths)
             for sph_im in range(Int(sd.sphereCount)):
                 var ls_sm = _sample_sphere_light_nee(sd.spheres[sph_im], Int(sd.sphereCount), hit.to_simd(), pcg)
                 var w_sm = _nee_weight_measured(ls_sm, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-                total += _bdpt_nee_contribute(beta, w_sm, ls_sm, hit, gn_m, cur_med_idx, sd, scratch)
+                total += _bdpt_nee_contribute(beta, w_sm, ls_sm, hit, gn_m, cur_med_idx, sd, scratch, wavelengths)
             for inf_im in range(Int(sd.infiniteLightCount)):
                 var ls_em = _sample_infinite_light_nee(sd.infiniteLights[inf_im], Point2f(pcg.next_float(), pcg.next_float()))
                 var w_em = _nee_weight_measured(ls_em, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-                total += _bdpt_nee_contribute(beta, w_em, ls_em, hit, gn_m, cur_med_idx, sd, scratch)
+                total += _bdpt_nee_contribute(beta, w_em, ls_em, hit, gn_m, cur_med_idx, sd, scratch, wavelengths)
 
             var wo_l_m = Vec3f(dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, gn_m))
             var um1 = pcg.next_float(); var um2 = pcg.next_float()
@@ -2416,7 +2496,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var cos_wi_m = dot(wi_m, gn_m)
             if cos_wi_m <= Float32(0):
                 return False   # measured: sampled direction below the surface
-            beta *= f_m * (cos_wi_m / pdf_m)
+            beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (f_m * (cos_wi_m / pdf_m)).r, (f_m * (cos_wi_m / pdf_m)).g, (f_m * (cos_wi_m / pdf_m)).b, wavelengths)
             rd = vec3f(wi_m)
             ro = hit + rd*Float32(0.0002)
             last_bsdf_pdf = pdf_m
@@ -2491,7 +2571,7 @@ struct VCMLightPathState_C(TrivialRegisterPassable):
     its `active` flag drops to 0, matching PathState_C's own convention."""
     var ro: Point3f
     var rd: Vec3f
-    var flux: RGB
+    var flux: SpectralSample
     var dvcm: Float32
     var dvc: Float32
     var dvm: Float32
@@ -2512,7 +2592,7 @@ def _null_light_path_state() -> VCMLightPathState_C:
     return VCMLightPathState_C(
         Point3f(Float32(0), Float32(0), Float32(0)),
         Vec3f(Float32(0), Float32(0), Float32(0)),
-        RGB(Float32(0), Float32(0), Float32(0)),
+        SpectralSample(Float32(0)),
         Float32(0), Float32(0), Float32(0), Int8(0),
         Int32(-1), Int32(0), Int32(0), Int8(0),
         UInt64(0), UInt64(0),
@@ -2527,6 +2607,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
     lvc: UnsafePointer[BDPTVertex, MutExternalOrigin],
     lvc_path_len: UnsafePointer[Int32, MutExternalOrigin],
     mis_vc_weight_factor: Float32,
+    pass_wl: SampledWavelengths,
 ) -> VCMLightPathState_C:
     """Task #163 stage 4: light-emission setup half of
     `_bdpt_trace_light_path` (bdpt.mojo:1734-1880), split out to seed a
@@ -2549,7 +2630,10 @@ def _bdpt_light_path_init[use_gpu: Bool](
 
     var ro: Point3f
     var rd: Vec3f
-    var flux: RGB
+    # A light subpath's flux is EMISSION, so it crosses into the spectral
+    # domain through the illuminant curve -- the same boundary the camera
+    # subpath crosses at an emitter hit.
+    var flux: SpectralSample
     var n_verts: Int
     # VCM Stage 2b: real per-vertex MIS state, recursively carried along
     # this light subpath (see project_vcm_stage2_mis_derivation memory for
@@ -2565,13 +2649,9 @@ def _bdpt_light_path_init[use_gpu: Bool](
     var dvc_carry = Float32(0)
     var dvm_carry = Float32(0)
     var is_finite_origin = False
-    # One hero-wavelength sample per light subpath (see
-    # _bdpt_trace_camera_and_connect's matching comment) — this subpath's own
-    # NEE is done from the CAMERA side (this function's own docstring above),
-    # so `wavelengths` here is only stored into cache vertices, used later at
-    # whichever camera vertex's own wavelength-consistent connection picks
-    # this one from the LVC.
-    var wavelengths = sample_wavelengths_uniform(pcg.next_float())
+    # This pass's shared hero wavelengths (see _bdpt_camera_path_init's
+    # comment for why every subpath in a pass must agree on them).
+    var wavelengths = pass_wl
 
     var light_pick = Int(pcg.next_uint() % UInt32(n_lights))
     if light_pick < n_area:
@@ -2593,7 +2673,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         var lv0_vert = _null_vertex()
         lv0_vert.pos = point3f(lp)
         lv0_vert.normal = vec3f(ln)
-        lv0_vert.beta = RGB(area_weight, area_weight, area_weight)
+        lv0_vert.beta = SpectralSample(area_weight)
         lv0_vert.alb = al.emission
         lv0_vert.is_surface = Int32(1); lv0_vert.is_light = Int32(1)
         lv0_vert.pdf_fwd = Float32(1) / area_weight
@@ -2630,7 +2710,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         # of letting it cancel, inflating flux by up to 100x on near-grazing
         # emission directions (clamped at cos_θ=0.01) -- root cause of BDPT's
         # pre-existing indirect-bounce fireflies, see project_bdpt_todo memory.
-        flux = al.emission * (area_weight * PI)
+        flux = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, wavelengths) * (area_weight * PI)
         ro = point3f(lp) + vec3f(ln)*Float32(0.0001)
         rd = vec3f(pdir)
         n_verts = 1  # vertex 0 is the light point itself
@@ -2641,7 +2721,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         var disk_pt = _sample_disk_perpendicular(dir, center, radius, Point2f(pcg.next_float(), pcg.next_float()))
         # Phi_light = emission(irradiance) × disk_area; p_i = 1/n_lights;
         # pdf_pos = 1/disk_area; pdf_dir = 1 (delta) → flux = emission × disk_area × n_lights.
-        flux = dl.emission * (Float32(n_lights) * PI * radius * radius)
+        flux = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, dl.emission.r, dl.emission.g, dl.emission.b, wavelengths) * (Float32(n_lights) * PI * radius * radius)
         ro = disk_pt
         rd = dir
         n_verts = 0  # no finite light point to store as a cache vertex
@@ -2660,7 +2740,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         var disk_pt = _sample_disk_perpendicular(emit_dir, center, radius, Point2f(pcg.next_float(), pcg.next_float()))
         # Same derivation as distant, but pdf_dir is the CDF's solid-angle pdf
         # instead of an implicit delta (=1): flux = radiance × disk_area × n_lights / pdf_dir.
-        flux = env_rgb * (Float32(n_lights) * PI * radius * radius / pdf_dir)
+        flux = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, env_rgb.r, env_rgb.g, env_rgb.b, wavelengths) * (Float32(n_lights) * PI * radius * radius / pdf_dir)
         ro = disk_pt
         rd = emit_dir
         n_verts = 0
@@ -2678,7 +2758,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         var sin_p = sqrt(max(Float32(0), Float32(1) - cos_p * cos_p))
         var phi_p = Float32(2) * PI * u2p
         var pdir_p = Vec3f(sin_p * cos(phi_p), sin_p * sin(phi_p), cos_p)
-        flux = pll.intensity * (Float32(4) * PI * Float32(n_lights))
+        flux = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, pll.intensity.r, pll.intensity.g, pll.intensity.b, wavelengths) * (Float32(4) * PI * Float32(n_lights))
         ro = pll.position
         rd = pdir_p
         n_verts = 0
@@ -2705,7 +2785,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
     mis_vm_weight_factor: Float32,
     mut ro: Point3f,
     mut rd: Vec3f,
-    mut flux: RGB,
+    mut flux: SpectralSample,
     mut n_verts: Int,
     mut dvcm_carry: Float32,
     mut dvc_carry: Float32,
@@ -2779,7 +2859,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 # BDPT vertex beta: exp(-sig_t×t)/pdf_free × alb_s = 1/sig_t × alb_s = alb_s (for sig_t=1)
                 var v = _null_vertex()
                 v.pos = sp
-                v.beta = flux * ff.albedo
+                v.beta = flux * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, wavelengths)
                 v.alb = ff.albedo
                 v.is_surface = Int32(0); v.is_delta = Int32(0)
                 v.pdf_fwd = ff.sig_t * exp(-ff.sig_t * ff.t_free)
@@ -2793,7 +2873,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 # measured bounce still gets a well-defined carry.
                 dvcm_carry = Float32(0)
                 # Continuation: flux = prev × alb_s (same as stored vertex beta)
-                flux *= ff.albedo
+                flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, wavelengths)
                 var u1 = pcg.next_float(); var u2 = pcg.next_float()
                 var cosT = Float32(2)*u1 - Float32(1)
                 var sinT = sqrt(max(Float32(0), Float32(1)-cosT*cosT))
@@ -2802,7 +2882,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 ro = sp + rd*Float32(0.0002)
                 return True   # volume free-flight scatter: no vertex stored this bounce, path continues
             else:
-                flux *= ff.transmittance
+                flux *= rgb_bands_to_spectral_sample(ff.transmittance.r, ff.transmittance.g, ff.transmittance.b, wavelengths)
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[mat_idx]
@@ -2854,7 +2934,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             var u1 = pcg.next_float(); var u2 = pcg.next_float()
             rd = vec3f(_cosine_hemisphere_sample(gn, u1, u2))
             ro = hit + rd*Float32(0.0002)
-            flux *= eff_alb
+            flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (eff_alb).r, (eff_alb).g, (eff_alb).b, wavelengths)
             # VCM Stage 2b: recursive continuation for the NEXT bounce
             # (cosThetaOut/bsdfDirPdfW simplifies to PI exactly for
             # cosine-weighted diffuse sampling; bsdfRevPdfW reuses cos_fix,
@@ -2981,7 +3061,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
 
             rd = vec3f(exit_dir)
             ro = hit + rd*Float32(0.0002)
-            flux *= walk_flux
+            flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_flux).r, (walk_flux).g, (walk_flux).b, wavelengths)
             var v = _null_vertex()
             v.pos = hit
             v.normal = vec3f(gn)
@@ -3048,7 +3128,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
                 n_verts += 1
                 _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
-            flux *= bs_c.f
+            flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (bs_c.f).r, (bs_c.f).g, (bs_c.f).b, wavelengths)
             rd = vec3f(bs_c.wi)
             ro = hit + rd*Float32(0.0002)
             var cos_theta_out_c = abs(dot(bs_c.wi, gn_c))
@@ -3102,7 +3182,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             n_verts += 1
             _bdpt_store_lvc_vertex(v_h, lvc, lp_idx, n_verts - 1)
             var (wi_hs, f_hs, pdf_hs, cos_ti_hs2) = _hair_sample_dir(hc, pcg)
-            flux *= f_hs / pdf_hs
+            flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (f_hs / pdf_hs).r, (f_hs / pdf_hs).g, (f_hs / pdf_hs).b, wavelengths)
             rd = vec3f(wi_hs)
             var hsign = Float32(1) if dot(wi_hs, hc.geo_normal) >= Float32(0) else Float32(-1)
             ro = hit + vec3f(hc.geo_normal) * curve_offset_eps(hc.radius) * hsign
@@ -3187,7 +3267,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             var cos_wi_m = dot(wi_m, gn_m)
             if cos_wi_m <= Float32(0):
                 return False   # measured: sampled direction below the surface
-            flux *= f_m * (cos_wi_m / pdf_m)
+            flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (f_m * (cos_wi_m / pdf_m)).r, (f_m * (cos_wi_m / pdf_m)).g, (f_m * (cos_wi_m / pdf_m)).b, wavelengths)
             rd = vec3f(wi_m)
             ro = hit + rd*Float32(0.0002)
             # VCM Stage 2b: recursive continuation, real forward/reverse pdf
@@ -3262,6 +3342,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
     lvc_path_len: UnsafePointer[Int32, MutExternalOrigin],
     mis_vc_weight_factor: Float32,
     mis_vm_weight_factor: Float32,
+    pass_wl: SampledWavelengths,
 ):
     """Emit a photon from a random light and trace a light subpath, storing
     every non-delta vertex (including the light-source point itself, the
@@ -3307,7 +3388,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
     # wavefront driver launches it once per depth level with the loop-carried
     # state parked in a VCMLightPathState_C between launches.
     var st = _bdpt_light_path_init[use_gpu](
-        sd, pcg, default_emit_med, lp_idx, lvc, lvc_path_len, mis_vc_weight_factor)
+        sd, pcg, default_emit_med, lp_idx, lvc, lvc_path_len, mis_vc_weight_factor, pass_wl)
     if st.active == Int8(0):
         return
     var ro = st.ro
@@ -3345,100 +3426,15 @@ def _bdpt_trace_light_path[use_gpu: Bool](
 
 # ── BSDF/phase evaluation at a vertex ────────────────────────────────────────
 
-@always_inline
-def _eval_conductor_ggx(
-    n:     Vec3f,
-    wo:    Vec3f,   # toward this vertex's own predecessor
-    wi:    Vec3f,   # toward the other connected vertex
-    alpha: Float32,
-    f0: RGB,
-) -> Vec3f:
-    """Isotropic GGX (Trowbridge-Reitz) conductor f(wo,wi) × |cos(wi,n)|, for an
-    arbitrary (not self-sampled) direction pair — the BDPT connection case that
-    bxdf_sample_conductor (a self-sampled-direction-only throughput multiplier)
-    can't serve. Schlick Fresnel at the half-vector, height-correlated Smith G2."""
-    var cos_o = dot(wo, n)
-    var cos_i = dot(wi, n)
-    if cos_o <= Float32(0) or cos_i <= Float32(0):
-        return Vec3f(Float32(0), Float32(0), Float32(0))
-    var wh = wo + wi
-    var whl = dot(wh, wh)
-    if whl <= Float32(0):
-        return Vec3f(Float32(0), Float32(0), Float32(0))
-    wh = wh * (Float32(1) / sqrt(whl))
-    var cos_h = dot(wh, n)
-    var cos_wo_h = dot(wo, wh)
-    if cos_wo_h < Float32(0): cos_wo_h = -cos_wo_h
-    var d = ggx_D(cos_h, alpha)
-    var g = ggx_G2(cos_o, cos_i, alpha)
-    var one_m = Float32(1) - cos_wo_h
-    var one_m2 = one_m * one_m
-    var schlick = one_m2 * one_m2 * one_m
-    var fr = f0 + (RGB(Float32(1)) - f0) * schlick
-    var k = d * g / (Float32(4) * cos_o * cos_i) * cos_i
-    return Vec3f(k * fr.r, k * fr.g, k * fr.b)
-
-@always_inline
-def _eval_vertex(
-    v:   BDPTVertex,
-    dir_to_other:  Vec3f,   # direction from v toward the other connected vertex
-    sd:  SceneDescriptor2_C,
-) -> Vec3f:
-    """Evaluate BSDF (or phase) × cos at vertex v toward dir_to_other. Takes
-    `sd` only for mat_kind=2 (hair), to re-fetch the material + curve data
-    _hair_precompute needs (v itself only carries small indices, not the
-    full precomputed HairLobeConstants — see BDPTVertex's docstring)."""
-    if v.is_delta != Int32(0):
-        return Vec3f(Float32(0), Float32(0), Float32(0))
-    if v.is_surface == Int32(0):
-        # Volume scatter: isotropic phase function 1/(4π), no cosine term
-        return Vec3f(v.alb.r*INV_FOUR_PI, v.alb.g*INV_FOUR_PI, v.alb.b*INV_FOUR_PI)
-    var vn = v.normal.to_simd()
-    if v.mat_kind == Int32(1):
-        var vwo = v.wo.to_simd()
-        return _eval_conductor_ggx(vn, vwo, dir_to_other, v.pdf_bwd, v.alb)
-    if v.mat_kind == Int32(2):
-        var mat = sd.materials[Int(v.mat_idx)]
-        var hc = _hair_precompute(mat, sd.curves, Int(v.hair_curve_idx), v.hair_v, v.hair_h, v.wo.to_simd())
-        var (cos_ti, f_val, _) = _hair_eval_lobes(
-            dir_to_other, hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
-            hc.dphi0, hc.dphi1, hc.dphi2,
-            hc.cos_tp0_o, hc.sin_tp0_o, hc.cos_tp1_o, hc.sin_tp1_o, hc.cos_tp2_o, hc.sin_tp2_o,
-            hc.cos_theta_o, hc.sin_theta_o, hc.inv_vm0, hc.inv_vm1, hc.inv_vm2, hc.mp_c0, hc.mp_c1, hc.mp_c2, hc.s,
-            hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
-        )
-        return Vec3f(f_val.r*cos_ti, f_val.g*cos_ti, f_val.b*cos_ti)
-    if v.mat_kind == Int32(3):
-        # Measured BxDF is inherently spectral (its tabulated `spectra`
-        # tensor is indexed by wavelength) -- bxdf_eval_measured always
-        # needs v.wavelengths + the spectral table regardless of whether
-        # the caller wanted the plain-RGB or spectral connection path, so
-        # this one branch serves both (see _connect's dispatch condition).
-        var vmat = sd.materials[Int(v.mat_idx)]
-        var mb = sd.measuredBrdfs[Int(vmat.measured_idx)]
-        var vwo_m = v.wo.to_simd()
-        var frm_ev = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
-        var tangent_ev = Vec3f(frm_ev.x.x, frm_ev.x.y, frm_ev.x.z)
-        var bitangent_ev = Vec3f(frm_ev.y.x, frm_ev.y.y, frm_ev.y.z)
-        var wo_l_ev = Vec3f(dot(vwo_m, tangent_ev), dot(vwo_m, bitangent_ev), dot(vwo_m, vn))
-        var wi_l_ev = Vec3f(dot(dir_to_other, tangent_ev), dot(dir_to_other, bitangent_ev), dot(dir_to_other, vn))
-        var (fr_spec_ev, _) = bxdf_eval_measured(mb, wo_l_ev, wi_l_ev, v.wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-        var (r_ev, g_ev, b_ev) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, fr_spec_ev, v.wavelengths)
-        var cos_o_ev = dot(dir_to_other, vn)
-        if cos_o_ev < Float32(0): cos_o_ev = -cos_o_ev
-        return Vec3f(r_ev*cos_o_ev, g_ev*cos_o_ev, b_ev*cos_o_ev)
-    # Surface: Lambertian f = alb/π × |cos(wo,n)|
-    var cos_o = dot(dir_to_other, vn)
-    if cos_o < Float32(0): cos_o = -cos_o
-    return Vec3f(v.alb.r*INV_PI*cos_o, v.alb.g*INV_PI*cos_o, v.alb.b*INV_PI*cos_o)
-
-# ── Spectral siblings of the two functions above (staged spectral rendering
-# rollout, Stage 3 -- see project_spectral_rendering memory). Take
-# SpectralHandle's fields DECOMPOSED into individual pointer/int params, NOT
-# a single by-value SpectralHandle param -- passing that 6-field struct by
-# value across a real Mojo function-call boundary is a confirmed,
-# reproducible miscompilation (see spectrum.mojo's comment above
-# rgb_to_spectral_sample). Hair (mat_kind=2) is NOT covered here (same
+# The RGB siblings of these two (_eval_vertex / _eval_conductor_ggx) are gone:
+# BDPT/VCM transport is spectral, so a connection multiplies two spectral
+# betas and there is no RGB product left for an RGB evaluator to feed.
+#
+# These take SpectralHandle's fields DECOMPOSED into individual pointer/int
+# params, NOT a single by-value SpectralHandle param -- passing that 6-field
+# struct by value across a real Mojo function-call boundary is a confirmed,
+# reproducible miscompilation (modular/modular#6759; see spectrum.mojo's
+# comment above rgb_to_spectral_sample). Hair (mat_kind=2) is NOT covered here (same
 # deliberate exclusion as bxdf.mojo's spectral siblings) -- callers must
 # check v.mat_kind != 2 before using these; _connect below does exactly
 # that by falling back to the plain RGB _eval_vertex/_eval_conductor_ggx for
@@ -3486,6 +3482,7 @@ def _eval_conductor_ggx_spectral(
 def _eval_vertex_spectral(
     v:   BDPTVertex,
     dir_to_other:  Vec3f,
+    sd:  SceneDescriptor2_C,
     spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
     spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
     spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
@@ -3493,9 +3490,21 @@ def _eval_vertex_spectral(
     spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
     wavelengths: SampledWavelengths,
 ) -> SpectralSample:
-    """Spectral counterpart of _eval_vertex for mat_kind in {diffuse(0),
-    conductor(1)} and volume scatter — see this function's docstring at the
-    top of this section. Callers must not reach mat_kind=2 (hair) here."""
+    """BSDF (or phase) x cos at vertex `v` toward `dir_to_other`, in the
+    spectral domain. Covers EVERY mat_kind -- this replaced the RGB
+    `_eval_vertex` outright when BDPT/VCM transport went spectral, because a
+    connection now multiplies two spectral betas and there is no longer an
+    RGB product for an RGB evaluator to feed.
+
+    `sd` is needed for mat_kind 2 (hair, to re-fetch the material + curve
+    data _hair_precompute wants -- v carries only small indices) and 3
+    (measured, for the tabulated BRDF). Hair's three lobes are evaluated in
+    RGB and upsampled as a REFLECTANCE, a scoped approximation: the
+    Marschner model here is authored per-RGB-channel, so there is no
+    per-wavelength form to evaluate. Measured is genuinely spectral already
+    -- bxdf_eval_measured's tabulated `spectra` tensor is indexed by
+    wavelength -- and is now consumed without the round trip back to RGB
+    that the RGB caller used to force on it."""
     if v.is_delta != Int32(0):
         return SpectralSample(Float32(0))
     if v.is_surface == Int32(0):
@@ -3505,6 +3514,31 @@ def _eval_vertex_spectral(
     if v.mat_kind == Int32(1):
         var vwo = v.wo.to_simd()
         return _eval_conductor_ggx_spectral(vn, vwo, dir_to_other, v.pdf_bwd, v.alb, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
+    if v.mat_kind == Int32(2):
+        var mat = sd.materials[Int(v.mat_idx)]
+        var hc = _hair_precompute(mat, sd.curves, Int(v.hair_curve_idx), v.hair_v, v.hair_h, v.wo.to_simd())
+        var (cos_ti, f_val, _) = _hair_eval_lobes(
+            dir_to_other, hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
+            hc.dphi0, hc.dphi1, hc.dphi2,
+            hc.cos_tp0_o, hc.sin_tp0_o, hc.cos_tp1_o, hc.sin_tp1_o, hc.cos_tp2_o, hc.sin_tp2_o,
+            hc.cos_theta_o, hc.sin_theta_o, hc.inv_vm0, hc.inv_vm1, hc.inv_vm2, hc.mp_c0, hc.mp_c1, hc.mp_c2, hc.s,
+            hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
+        )
+        var hair_spec = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f_val.r, f_val.g, f_val.b, wavelengths)
+        return hair_spec * cos_ti
+    if v.mat_kind == Int32(3):
+        var vmat = sd.materials[Int(v.mat_idx)]
+        var mb = sd.measuredBrdfs[Int(vmat.measured_idx)]
+        var vwo_m = v.wo.to_simd()
+        var frm_ev = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
+        var tangent_ev = Vec3f(frm_ev.x.x, frm_ev.x.y, frm_ev.x.z)
+        var bitangent_ev = Vec3f(frm_ev.y.x, frm_ev.y.y, frm_ev.y.z)
+        var wo_l_ev = Vec3f(dot(vwo_m, tangent_ev), dot(vwo_m, bitangent_ev), dot(vwo_m, vn))
+        var wi_l_ev = Vec3f(dot(dir_to_other, tangent_ev), dot(dir_to_other, bitangent_ev), dot(dir_to_other, vn))
+        var (fr_spec_ev, _) = bxdf_eval_measured(mb, wo_l_ev, wi_l_ev, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+        var cos_o_ev = dot(dir_to_other, vn)
+        if cos_o_ev < Float32(0): cos_o_ev = -cos_o_ev
+        return fr_spec_ev * cos_o_ev
     # Surface: Lambertian f = alb/π × |cos(wo,n)|
     var cos_o = dot(dir_to_other, vn)
     if cos_o < Float32(0): cos_o = -cos_o
@@ -3665,7 +3699,7 @@ def _connect(
     has_med: Bool,
     scratch: UnsafePointer[Intersection_C, MutExternalOrigin],
     mis_vm_weight_factor: Float32,
-) -> Vec3f:
+) -> SpectralSample:
     """Evaluate the contribution of connecting cv to lv via a shadow ray.
     Each connection is already a complete, self-normalized estimator of its
     own depth-strategy's contribution (see the module's LVC-BPT docstring);
@@ -3688,12 +3722,12 @@ def _connect(
     comment) -- both deliberately scoped boundaries, not silent
     omissions."""
     if cv.is_delta != Int32(0) or lv.is_delta != Int32(0):
-        return Vec3f(Float32(0), Float32(0), Float32(0))
+        return SpectralSample(Float32(0))
 
     var d3 = lv.pos - cv.pos
     var dist2 = d3.length_sq()
     if dist2 < Float32(1e-8):
-        return Vec3f(Float32(0), Float32(0), Float32(0))
+        return SpectralSample(Float32(0))
     var dist = sqrt(dist2)
 
     # Determine medium for the shadow segment.
@@ -3701,71 +3735,44 @@ def _connect(
     var seg_med = cv.med_idx
     var Tr = _visible_transmittance(cv.pos, lv.pos, seg_med, sd, scratch)
     if Tr[0] < Float32(1e-7) and Tr[1] < Float32(1e-7) and Tr[2] < Float32(1e-7):
-        return Vec3f(Float32(0), Float32(0), Float32(0))
+        return SpectralSample(Float32(0))
 
     var dir = d3.to_simd() / dist
     var neg_dir = -dir
 
-    # Spectral connection eval (staged spectral rendering rollout, Stage 3 —
-    # see project_spectral_rendering memory): if the table is loaded and
-    # neither endpoint is hair (mat_kind=2, deliberately excluded — same as
-    # bxdf.mojo's spectral siblings; a hair-touching connection falls back to
-    # the plain RGB path below), evaluate BOTH vertices' BSDF/emission as a
-    # SpectralSample product at the LIGHT vertex's own stored wavelengths
-    # (a valid, unbiased hero-wavelength MC choice, applied consistently per
-    # connection — the camera subpath's own wavelength sample is discarded
-    # for this one connection's purposes, resolving the LVC's cross-
-    # wavelength mismatch since cache vertices come from many different
-    # light subpaths, each with its own independent wavelength draw), then
-    # convert the PRODUCT (not each factor separately) back to RGB — the
-    # whole point of spectral rendering's product-of-spectra accuracy.
-    # mat_kind=3 (measured) is ALSO routed to the plain-RGB fallback below,
-    # same as hair — _eval_vertex's own mat_kind=3 branch already does the
-    # full spectral eval internally (bxdf_eval_measured needs v.wavelengths
-    # regardless), so there's no separate _eval_vertex_spectral variant to
-    # maintain for it.
-    var is_hair_conn = cv.mat_kind == Int32(2) or cv.mat_kind == Int32(3) or (lv.is_light == Int32(0) and (lv.mat_kind == Int32(2) or lv.mat_kind == Int32(3)))
-    var f_combined: Vec3f
-    if is_hair_conn or sd.spectral.res <= 0:
-        # BSDF at camera vertex (toward light)
-        var f_cam = _eval_vertex(cv, dir, sd)
-        # BSDF at light vertex (toward camera)
-        var f_lgt: Vec3f
-        if lv.is_light == Int32(1):
-            # Light emission: f_lgt = Le (emission radiance, no cosine here).
-            # _geom_term already computes cos_l at the light surface, so don't multiply again.
-            var ln = lv.normal.to_simd()
-            var cos_l = dot(neg_dir, ln)  # emission normal vs direction toward cv
-            if cos_l <= Float32(0):
-                return Vec3f(Float32(0), Float32(0), Float32(0))
-            f_lgt = Vec3f(lv.alb.r, lv.alb.g, lv.alb.b)
-        else:
-            f_lgt = _eval_vertex(lv, neg_dir, sd)
-        f_combined = f_cam * f_lgt
+    # Both endpoints evaluate in the spectral domain and multiply there --
+    # the product of two spectra, not the product of two RGB triples, which
+    # is the entire point. This used to be a dual RGB/spectral path whose
+    # spectral branch evaluated at the LIGHT vertex's own wavelengths and
+    # discarded the camera subpath's, because LVC vertices each carried an
+    # independent wavelength draw and there was no consistent basis to
+    # multiply in. Every subpath in a pass now shares one wavelength set
+    # (see _bdpt_pass_wavelengths), so cv and lv are guaranteed to agree and
+    # the fallback is gone -- including for hair and measured, which the old
+    # spectral branch had to route around.
+    var wl = cv.wavelengths
+    var f_cam_spec = _eval_vertex_spectral(cv, dir, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
+    var f_lgt_spec: SpectralSample
+    if lv.is_light == Int32(1):
+        # Light emission: f_lgt = Le, no cosine here (_geom_term supplies
+        # cos_l at the light surface) and emission only leaves the front face.
+        var ln = lv.normal.to_simd()
+        var cos_l = dot(neg_dir, ln)
+        if cos_l <= Float32(0):
+            return SpectralSample(Float32(0))
+        f_lgt_spec = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, lv.alb.r, lv.alb.g, lv.alb.b, wl)
     else:
-        var wl = lv.wavelengths
-        var f_cam_spec = _eval_vertex_spectral(cv, dir, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
-        var f_lgt_spec: SpectralSample
-        if lv.is_light == Int32(1):
-            var ln = lv.normal.to_simd()
-            var cos_l = dot(neg_dir, ln)
-            if cos_l <= Float32(0):
-                return Vec3f(Float32(0), Float32(0), Float32(0))
-            f_lgt_spec = rgb_illuminant_to_spectral_sample(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, lv.alb.r, lv.alb.g, lv.alb.b, wl)
-        else:
-            f_lgt_spec = _eval_vertex_spectral(lv, neg_dir, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
-        var product_spec = f_cam_spec * f_lgt_spec
-        var (pr, pg, pb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, product_spec, wl)
-        f_combined = Vec3f(pr, pg, pb)
+        f_lgt_spec = _eval_vertex_spectral(lv, neg_dir, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
+    var f_combined = f_cam_spec * f_lgt_spec
 
     # Geometry term G = |cos_cv| × |cos_lv| / dist²
     var G = _geom_term(cv, lv)
 
-    var beta = cv.beta * lv.beta
-    var contrib = f_combined * Vec3f(G, G, G) * Tr
-    contrib[0] *= beta.r
-    contrib[1] *= beta.g
-    contrib[2] *= beta.b
+    # Tr is a per-channel transmittance COEFFICIENT, so it band-picks rather
+    # than going through either upsampling curve (see
+    # rgb_bands_to_spectral_sample).
+    var contrib = (cv.beta * lv.beta * f_combined * G
+                   * rgb_bands_to_spectral_sample(Tr[0], Tr[1], Tr[2], wl))
 
     # VCM Stage 2b/2d: real MIS weight for diffuse/conductor/light-source
     # connections (see this function's docstring + _bdpt_vertex_pdfs'/
@@ -3805,7 +3812,7 @@ def _connect_unweighted(
     lv: BDPTVertex,  # light-subpath vertex (including light point itself)
     sd: SceneDescriptor2_C,
     mis_vm_weight_factor: Float32,
-) -> Tuple[Vec3f, Bool]:
+) -> Tuple[SpectralSample, Bool]:
     """Task #163 stage 5: byte-for-byte copy of _connect's math (see that
     function's own docstring for the MIS derivation, not repeated here),
     with the visibility test (_visible_transmittance) REMOVED -- returns
@@ -3840,77 +3847,46 @@ def _connect_unweighted(
     comment) -- both deliberately scoped boundaries, not silent
     omissions."""
     if cv.is_delta != Int32(0) or lv.is_delta != Int32(0):
-        return (Vec3f(Float32(0), Float32(0), Float32(0)), False)
+        return (SpectralSample(Float32(0)), False)
 
     var d3 = lv.pos - cv.pos
     var dist2 = d3.length_sq()
     if dist2 < Float32(1e-8):
-        return (Vec3f(Float32(0), Float32(0), Float32(0)), False)
+        return (SpectralSample(Float32(0)), False)
     var dist = sqrt(dist2)
 
     var dir = d3.to_simd() / dist
     var neg_dir = -dir
 
-    # Spectral connection eval (staged spectral rendering rollout, Stage 3 —
-    # see project_spectral_rendering memory): if the table is loaded and
-    # neither endpoint is hair (mat_kind=2, deliberately excluded — same as
-    # bxdf.mojo's spectral siblings; a hair-touching connection falls back to
-    # the plain RGB path below), evaluate BOTH vertices' BSDF/emission as a
-    # SpectralSample product at the LIGHT vertex's own stored wavelengths
-    # (a valid, unbiased hero-wavelength MC choice, applied consistently per
-    # connection — the camera subpath's own wavelength sample is discarded
-    # for this one connection's purposes, resolving the LVC's cross-
-    # wavelength mismatch since cache vertices come from many different
-    # light subpaths, each with its own independent wavelength draw), then
-    # convert the PRODUCT (not each factor separately) back to RGB — the
-    # whole point of spectral rendering's product-of-spectra accuracy.
-    # mat_kind=3 (measured) is ALSO routed to the plain-RGB fallback below,
-    # same as hair — _eval_vertex's own mat_kind=3 branch already does the
-    # full spectral eval internally (bxdf_eval_measured needs v.wavelengths
-    # regardless), so there's no separate _eval_vertex_spectral variant to
-    # maintain for it.
-    var is_hair_conn = cv.mat_kind == Int32(2) or cv.mat_kind == Int32(3) or (lv.is_light == Int32(0) and (lv.mat_kind == Int32(2) or lv.mat_kind == Int32(3)))
-    var f_combined: Vec3f
-    if is_hair_conn or sd.spectral.res <= 0:
-        # BSDF at camera vertex (toward light)
-        var f_cam = _eval_vertex(cv, dir, sd)
-        # BSDF at light vertex (toward camera)
-        var f_lgt: Vec3f
-        if lv.is_light == Int32(1):
-            # Light emission: f_lgt = Le (emission radiance, no cosine here).
-            # _geom_term already computes cos_l at the light surface, so don't multiply again.
-            var ln = lv.normal.to_simd()
-            var cos_l = dot(neg_dir, ln)  # emission normal vs direction toward cv
-            if cos_l <= Float32(0):
-                return (Vec3f(Float32(0), Float32(0), Float32(0)), False)
-            f_lgt = Vec3f(lv.alb.r, lv.alb.g, lv.alb.b)
-        else:
-            f_lgt = _eval_vertex(lv, neg_dir, sd)
-        f_combined = f_cam * f_lgt
+    # Both endpoints evaluate in the spectral domain and multiply there --
+    # the product of two spectra, not the product of two RGB triples, which
+    # is the entire point. This used to be a dual RGB/spectral path whose
+    # spectral branch evaluated at the LIGHT vertex's own wavelengths and
+    # discarded the camera subpath's, because LVC vertices each carried an
+    # independent wavelength draw and there was no consistent basis to
+    # multiply in. Every subpath in a pass now shares one wavelength set
+    # (see _bdpt_pass_wavelengths), so cv and lv are guaranteed to agree and
+    # the fallback is gone -- including for hair and measured, which the old
+    # spectral branch had to route around.
+    var wl = cv.wavelengths
+    var f_cam_spec = _eval_vertex_spectral(cv, dir, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
+    var f_lgt_spec: SpectralSample
+    if lv.is_light == Int32(1):
+        # Light emission: f_lgt = Le, no cosine here (_geom_term supplies
+        # cos_l at the light surface) and emission only leaves the front face.
+        var ln = lv.normal.to_simd()
+        var cos_l = dot(neg_dir, ln)
+        if cos_l <= Float32(0):
+            return (SpectralSample(Float32(0)), False)
+        f_lgt_spec = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, lv.alb.r, lv.alb.g, lv.alb.b, wl)
     else:
-        var wl = lv.wavelengths
-        var f_cam_spec = _eval_vertex_spectral(cv, dir, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
-        var f_lgt_spec: SpectralSample
-        if lv.is_light == Int32(1):
-            var ln = lv.normal.to_simd()
-            var cos_l = dot(neg_dir, ln)
-            if cos_l <= Float32(0):
-                return (Vec3f(Float32(0), Float32(0), Float32(0)), False)
-            f_lgt_spec = rgb_illuminant_to_spectral_sample(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, lv.alb.r, lv.alb.g, lv.alb.b, wl)
-        else:
-            f_lgt_spec = _eval_vertex_spectral(lv, neg_dir, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
-        var product_spec = f_cam_spec * f_lgt_spec
-        var (pr, pg, pb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, product_spec, wl)
-        f_combined = Vec3f(pr, pg, pb)
+        f_lgt_spec = _eval_vertex_spectral(lv, neg_dir, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
+    var f_combined = f_cam_spec * f_lgt_spec
 
     # Geometry term G = |cos_cv| × |cos_lv| / dist²
     var G = _geom_term(cv, lv)
 
-    var beta = cv.beta * lv.beta
-    var contrib = f_combined * Vec3f(G, G, G)
-    contrib[0] *= beta.r
-    contrib[1] *= beta.g
-    contrib[2] *= beta.b
+    var contrib = cv.beta * lv.beta * f_combined * G
 
     # VCM Stage 2b/2d: real MIS weight for diffuse/conductor/light-source
     # connections (see this function's docstring + _bdpt_vertex_pdfs'/
@@ -4077,7 +4053,7 @@ def _bdpt_render_core(
     var merge_next = alloc[Int32](max(lvc_cap, 1))
     # t=1 splat records: one slot per potential light vertex.
     var splat_pix = alloc[Int32](max(n_light_paths_merge * _BDPT_MAX_VERTS, 1))
-    var splat_val = alloc[RGB](max(n_light_paths_merge * _BDPT_MAX_VERTS, 1))
+    var splat_val = alloc[SpectralSample](max(n_light_paths_merge * _BDPT_MAX_VERTS, 1))
     var cam_pos = Vec3f(c2w[12], c2w[13], c2w[14])
 
     for si in range(n_spp):
@@ -4103,6 +4079,9 @@ def _bdpt_render_core(
         # reflects each technique's actual sampling density, and merge's
         # density scales with however many light paths actually feed its
         # grid, independent of how many camera pixels exist.
+        # This pass's shared hero wavelengths -- see _bdpt_pass_wavelengths.
+        var pass_wl = _bdpt_pass_wavelengths(si)
+
         var eta_vcm = PI * max(merge_r2, Float32(1e-12)) * Float32(n_light_paths_merge)
         var mis_vm_weight_factor = eta_vcm
         var mis_vc_weight_factor = Float32(1.0) / eta_vcm
@@ -4117,7 +4096,7 @@ def _bdpt_render_core(
                               UInt64(si * 2654435761 + 1))
             _bdpt_trace_light_path[False](sd, lpcg, has_med, default_emit_med,
                                          scratch_light + lp_idx, lvc, lp_idx, lvc_path_len,
-                                         mis_vc_weight_factor, mis_vm_weight_factor)
+                                         mis_vc_weight_factor, mis_vm_weight_factor, pass_wl)
 
         parallelize[emit_light_path](n_light_paths_merge)
 
@@ -4147,10 +4126,12 @@ def _bdpt_render_core(
 
         parallelize[splat_light_path](n_light_paths_merge)
 
+        # ── Output boundary: spectral splat -> RGB film ──────────────────
         for k in range(n_light_paths_merge * _BDPT_MAX_VERTS):
             var sp = splat_pix[k]
             if sp >= Int32(0):
-                buf[Int(sp)] += splat_val[k]
+                var (sr, sg, sb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, splat_val[k], lvc[k].wavelengths)
+                buf[Int(sp)] += RGB(sr, sg, sb)
 
         # ── Phase 2: trace each pixel's camera path and connect ──────────────
         # Each worker only ever writes its own buf[pix] slot and only reads
@@ -4167,8 +4148,10 @@ def _bdpt_render_core(
             var (contrib, alb) = _bdpt_trace_camera_and_connect[False](
                 r2c, c2w, px, py, sd, cpcg, has_med, scratch_cam + pix, lvc, pix, Int(lvc_path_len[pix]),
                 merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
-                px_scale, mis_vc_weight_factor, mis_vm_weight_factor, Float32(n_light_paths_merge))
-            buf[pix] += contrib
+                px_scale, mis_vc_weight_factor, mis_vm_weight_factor, Float32(n_light_paths_merge), pass_wl)
+            # ── Output boundary: spectral transport -> RGB film ──────────
+            var (cr, cg, cb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, contrib, pass_wl)
+            buf[pix] += RGB(cr, cg, cb)
             albedo_buf[pix] += alb
 
         parallelize[camera_connect](n_pix)
@@ -4335,8 +4318,9 @@ def _bdpt_emit_light_paths_gpu(
     var has_med = mediumCount > Int64(0)
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
     var scratch = inter_scratch + k
+    var pass_wl = _bdpt_pass_wavelengths(pass_idx)
     _bdpt_trace_light_path[True](sd, pcg, has_med, default_emit_med, scratch, lvc, k, lvc_path_len,
-                                 mis_vc_weight_factor, mis_vm_weight_factor)
+                                 mis_vc_weight_factor, mis_vm_weight_factor, pass_wl)
 
 def _bdpt_splat_light_paths_gpu(
     accum: UnsafePointer[Float32, MutExternalOrigin],
@@ -4440,10 +4424,13 @@ def _bdpt_splat_light_paths_gpu(
             # is belt-and-braces -- but an out-of-range pix here would be an
             # unbounded scatter into device memory, not a wrong pixel.
             if pix >= 0 and pix < n_pix_k:
-                var c = r[2]
-                _ = Atomic[DType.float32].fetch_add(accum + (pix * 3 + 0), c.r)
-                _ = Atomic[DType.float32].fetch_add(accum + (pix * 3 + 1), c.g)
-                _ = Atomic[DType.float32].fetch_add(accum + (pix * 3 + 2), c.b)
+                # ── Output boundary: spectral splat -> RGB film ──────────
+                var (cr, cg, cb) = spectral_sample_to_rgb(
+                    spectral_coeffs, Int(spectral_res_dp), spectral_cie_x, spectral_cie_y,
+                    spectral_cie_z, spectral_d65, r[2], lvc[base + local].wavelengths)
+                _ = Atomic[DType.float32].fetch_add(accum + (pix * 3 + 0), cr)
+                _ = Atomic[DType.float32].fetch_add(accum + (pix * 3 + 1), cg)
+                _ = Atomic[DType.float32].fetch_add(accum + (pix * 3 + 2), cb)
 
 def _bdpt_camera_connect_gpu(
     accum: UnsafePointer[Float32, MutExternalOrigin],
@@ -4538,13 +4525,18 @@ def _bdpt_camera_connect_gpu(
     var pcg = PCG32(seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
                      UInt64(pass_idx * 2654435761 + 1))
     var scratch = inter_scratch + pix
+    var pass_wl = _bdpt_pass_wavelengths(pass_idx)
     var (contrib, alb) = _bdpt_trace_camera_and_connect[True](
         r2c, c2w, px, py, sd, pcg, has_med, scratch, lvc, pix, Int(lvc_path_len[pix]),
         merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
-        px_scale, mis_vc_weight_factor, mis_vm_weight_factor, n_light_paths_f)
-    accum[pix*3]   += contrib.r
-    accum[pix*3+1] += contrib.g
-    accum[pix*3+2] += contrib.b
+        px_scale, mis_vc_weight_factor, mis_vm_weight_factor, n_light_paths_f, pass_wl)
+    # ── Output boundary: spectral transport -> RGB film ──────────────────
+    var (cr, cg, cb) = spectral_sample_to_rgb(
+        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
+        spectral_cie_z, spectral_d65, contrib, pass_wl)
+    accum[pix*3]   += cr
+    accum[pix*3+1] += cg
+    accum[pix*3+2] += cb
     albedo_accum[pix*3]   += alb.r
     albedo_accum[pix*3+1] += alb.g
     albedo_accum[pix*3+2] += alb.b
@@ -4642,7 +4634,8 @@ def _bdpt_light_path_init_gpu(
         gpuTextures, gpuTextureCount,
     )
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
-    states[k] = _bdpt_light_path_init[True](sd, pcg, default_emit_med, k, lvc, lvc_path_len, mis_vc_weight_factor)
+    var pass_wl = _bdpt_pass_wavelengths(pass_idx)
+    states[k] = _bdpt_light_path_init[True](sd, pcg, default_emit_med, k, lvc, lvc_path_len, mis_vc_weight_factor, pass_wl)
 
 def _bdpt_light_path_intersect_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
@@ -4802,7 +4795,8 @@ def _bdpt_camera_path_init_gpu(
     var py = pix // fw
     var pcg = PCG32(seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
                      UInt64(pass_idx * 2654435761 + 1))
-    states[pix] = _bdpt_camera_path_init[True](r2c, c2w, px, py, pcg, px_scale, n_light_paths_f)
+    var pass_wl = _bdpt_pass_wavelengths(pass_idx)
+    states[pix] = _bdpt_camera_path_init[True](r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl)
 
 def _bdpt_camera_path_intersect_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
@@ -4887,7 +4881,7 @@ def _bdpt_camera_path_bounce_gpu(
     # Bool that's merely a regular-function parameter one level down).
     defer_shadow_rays: Int8 = Int8(0),
     shadow_rays: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-    shadow_pending: UnsafePointer[RGB, MutExternalOrigin] = UnsafePointer[RGB, MutExternalOrigin].unsafe_dangling(),
+    shadow_pending: UnsafePointer[SpectralSample, MutExternalOrigin] = UnsafePointer[SpectralSample, MutExternalOrigin].unsafe_dangling(),
     shadow_valid: UnsafePointer[Int8, MutExternalOrigin] = UnsafePointer[Int8, MutExternalOrigin].unsafe_dangling(),
     shadow_seg_med: UnsafePointer[Int32, MutExternalOrigin] = UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
 ):
@@ -4961,6 +4955,12 @@ def _bdpt_camera_path_accumulate_gpu(
     accum: UnsafePointer[Float32, MutExternalOrigin],
     albedo_accum: UnsafePointer[Float32, MutExternalOrigin],
     n_pix_dp: Int64,
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_res_dp: Int64,
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
 ):
     var n_pix = Int(n_pix_dp)
     """Runs once per `si` sample, after the camera-path bounce loop has
@@ -4972,9 +4972,15 @@ def _bdpt_camera_path_accumulate_gpu(
     var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
     if pix >= n_pix:
         return
-    accum[pix*3]   += states[pix].total.r
-    accum[pix*3+1] += states[pix].total.g
-    accum[pix*3+2] += states[pix].total.b
+    # ── Output boundary: spectral transport -> RGB film ──────────────────
+    var wl_acc = SampledWavelengths(states[pix].wl0, states[pix].wl1,
+                                    states[pix].wl2, states[pix].wl3, states[pix].wl_pdf)
+    var (tr, tg, tb) = spectral_sample_to_rgb(
+        spectral_coeffs, Int(spectral_res_dp), spectral_cie_x, spectral_cie_y,
+        spectral_cie_z, spectral_d65, states[pix].total, wl_acc)
+    accum[pix*3]   += tr
+    accum[pix*3+1] += tg
+    accum[pix*3+2] += tb
     albedo_accum[pix*3]   += states[pix].first_alb.r
     albedo_accum[pix*3+1] += states[pix].first_alb.g
     albedo_accum[pix*3+2] += states[pix].first_alb.b
@@ -5590,7 +5596,8 @@ def resolve_shadow_connect_gpu(
     shadow_results: UnsafePointer[Float32, MutExternalOrigin],
     mesh_material_idx: UnsafePointer[Int64, MutExternalOrigin],
     n_meshes_vk_dp: Int64,
-    shadow_pending: UnsafePointer[RGB, MutExternalOrigin],
+    cam_states: UnsafePointer[VCMCameraPathState_C, MutExternalOrigin],
+    shadow_pending: UnsafePointer[SpectralSample, MutExternalOrigin],
     shadow_valid: UnsafePointer[Int8, MutExternalOrigin],
     shadow_seg_med: UnsafePointer[Int32, MutExternalOrigin],
     shadow_rays: UnsafePointer[Float32, MutExternalOrigin],
@@ -5679,7 +5686,7 @@ def resolve_shadow_connect_gpu(
             needs_fallback = True
         else:
             # Opaque hit, no medium: fully occluded.
-            shadow_pending[idx] = RGB(Float32(0))
+            shadow_pending[idx] = SpectralSample(Float32(0))
 
     if needs_fallback:
         # Per-thread scratch slot (offset by `tid`) -- matches the
@@ -5692,11 +5699,14 @@ def resolve_shadow_connect_gpu(
         var dst = org + dir * dist
         var Tr = _visible_transmittance(org, dst, seg_med, sd, scratch + tid)
         var p = shadow_pending[idx]
-        shadow_pending[idx] = RGB(p.r * Tr[0], p.g * Tr[1], p.b * Tr[2])
+        # Tr is a transmittance coefficient -> band-pick, not an upsample.
+        var cst = cam_states[idx // _BDPT_MAX_VERTS]
+        var wl_sp = SampledWavelengths(cst.wl0, cst.wl1, cst.wl2, cst.wl3, cst.wl_pdf)
+        shadow_pending[idx] = p * rgb_bands_to_spectral_sample(Tr[0], Tr[1], Tr[2], wl_sp)
 
 def sum_shadow_connect_gpu(
     states: UnsafePointer[VCMCameraPathState_C, MutExternalOrigin],
-    shadow_pending: UnsafePointer[RGB, MutExternalOrigin],
+    shadow_pending: UnsafePointer[SpectralSample, MutExternalOrigin],
     shadow_valid: UnsafePointer[Int8, MutExternalOrigin],
     n_pix_dp: Int64,
 ):
@@ -5705,7 +5715,7 @@ def sum_shadow_connect_gpu(
     if pix >= n_pix:
         return
     var base = pix * _BDPT_MAX_VERTS
-    var sum = RGB(Float32(0))
+    var sum = SpectralSample(Float32(0))
     for local in range(_BDPT_MAX_VERTS):
         if shadow_valid[base + local] != Int8(0):
             sum += shadow_pending[base + local]
@@ -5802,7 +5812,7 @@ def vcm_render_gpu_wavefront(
             # the only path otherwise).
             var shadow_cap = n_pix * _BDPT_MAX_VERTS
             var shadow_rays_buf    = handle[].ctx.enqueue_create_buffer[DType.uint8](max(shadow_cap, 1) * 8 * size_of[Float32]())
-            var shadow_pending_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(shadow_cap, 1) * size_of[RGB]())
+            var shadow_pending_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(shadow_cap, 1) * size_of[SpectralSample]())
             var shadow_valid_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](max(shadow_cap, 1) * size_of[Int8]())
             var shadow_seg_med_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(shadow_cap, 1) * size_of[Int32]())
             # One Intersection_C scratch slot PER THREAD (not per pixel) for
@@ -5844,7 +5854,7 @@ def vcm_render_gpu_wavefront(
             var light_states_ptr = light_states_buf.unsafe_ptr().bitcast[VCMLightPathState_C]()
             var cam_states_ptr   = cam_states_buf.unsafe_ptr().bitcast[VCMCameraPathState_C]()
             var shadow_rays_ptr    = shadow_rays_buf.unsafe_ptr().bitcast[Float32]()
-            var shadow_pending_ptr = shadow_pending_buf.unsafe_ptr().bitcast[RGB]()
+            var shadow_pending_ptr = shadow_pending_buf.unsafe_ptr().bitcast[SpectralSample]()
             var shadow_valid_ptr   = shadow_valid_buf.unsafe_ptr().bitcast[Int8]()
             var shadow_seg_med_ptr = shadow_seg_med_buf.unsafe_ptr().bitcast[Int32]()
             var shadow_scratch_ptr = shadow_scratch_buf.unsafe_ptr().bitcast[Intersection_C]()
@@ -6129,7 +6139,7 @@ def vcm_render_gpu_wavefront(
                             interop_results_buf.value().unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
                             mesh_material_idx_buf.value().unsafe_ptr().bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
                             Int64(n_meshes_vk),
-                            shadow_pending_ptr, shadow_valid_ptr, shadow_seg_med_ptr, shadow_rays_ptr,
+                            cam_states_ptr, shadow_pending_ptr, shadow_valid_ptr, shadow_seg_med_ptr, shadow_rays_ptr,
                             shadow_scratch_ptr, Int64(shadow_cap),
                             bvh2Nodes, primIds, meshes, materials,
                             areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
@@ -6147,6 +6157,8 @@ def vcm_render_gpu_wavefront(
 
                 handle[].ctx.enqueue_function[_bdpt_camera_path_accumulate_gpu](
                     cam_states_ptr, accum_ptr, albedo_accum_ptr, Int64(n_pix),
+                    sd.spectral.coeffs, Int64(sd.spectral.res), sd.spectral.cie_x,
+                    sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
                     grid_dim=grid_pix, block_dim=block_size)
 
                 # Phase 1.5: t=1 light tracing -- the SAME kernel the

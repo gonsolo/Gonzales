@@ -233,6 +233,41 @@ struct SpectralHandle(TrivialRegisterPassable):
     var cie_z:  UnsafePointer[Float32, MutExternalOrigin]
     var d65:    UnsafePointer[Float32, MutExternalOrigin]
 
+# ── Boundary conversions, in DECOMPOSED-pointer form ────────────────────────
+# These take SpectralHandle's fields as individual params rather than the
+# handle itself. Passing that 6-field TrivialRegisterPassable struct by value
+# across a real Mojo call boundary is a confirmed, reproducible
+# miscompilation (modular/modular#6759) -- and it does not fail loudly: the
+# first version of these helpers took `h: SpectralHandle` and produced a
+# BDPT/VCM CPU-vs-GPU mismatch of 4% on cornell-box that survived to 256 spp,
+# on code both backends share. Keep them decomposed.
+
+@always_inline
+def spec_refl(
+    coeffs: UnsafePointer[Float32, MutExternalOrigin], res: Int,
+    cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    d65: UnsafePointer[Float32, MutExternalOrigin],
+    r: Float32, g: Float32, b: Float32, wl: SampledWavelengths,
+) -> SpectralSample:
+    """RGB REFLECTANCE -> spectral, at the material boundary."""
+    return rgb_to_spectral_sample(coeffs, res, cie_x, cie_y, cie_z, d65, r, g, b, wl)
+
+@always_inline
+def spec_illum(
+    coeffs: UnsafePointer[Float32, MutExternalOrigin], res: Int,
+    cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    d65: UnsafePointer[Float32, MutExternalOrigin],
+    r: Float32, g: Float32, b: Float32, wl: SampledWavelengths,
+) -> SpectralSample:
+    """RGB EMISSION/RADIANCE -> spectral, at the light boundary. Uses the
+    ILLUMINANT upsampling, a DIFFERENT curve from spec_refl's -- see
+    _to_spec_illum in shading.mojo for what mixing them up costs."""
+    return rgb_illuminant_to_spectral_sample(coeffs, res, cie_x, cie_y, cie_z, d65, r, g, b, wl)
+
 @always_inline
 def spectral_handle(mut ctx: SpectralContext) -> SpectralHandle:
     return SpectralHandle(

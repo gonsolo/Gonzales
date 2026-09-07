@@ -39,7 +39,7 @@ from gonzales.geometry import (
 )
 from gonzales.bvh import SceneDescriptor2_C, BVH2Node, build_bvh2, traverse_bvh2_core, test_spheres
 from gonzales.rng import PCG32
-from gonzales.spectrum import null_spectral_handle, SampledWavelengths
+from gonzales.spectrum import sample_wavelengths_uniform, null_spectral_handle, SampledWavelengths
 from gonzales.bdpt import (
     BDPTVertex, _bdpt_trace_camera_and_connect, _bdpt_camera_path_init,
     _bdpt_camera_path_bounce, _BDPT_MAX_VERTS, _BDPT_MAX_DEPTH,
@@ -137,6 +137,11 @@ def _identity_camera_matrices() -> Tuple[UnsafePointer[Float32, MutExternalOrigi
     c2w[0] = Float32(1.0); c2w[5] = Float32(1.0); c2w[10] = Float32(1.0); c2w[15] = Float32(1.0)
     return (r2c, c2w)
 
+# Both subpath halves of a VCM pass share one hero-wavelength set (see
+# bdpt.mojo's _bdpt_pass_wavelengths); this test drives the two halves
+# directly, so it supplies that set itself.
+comptime _TEST_PASS_WL = sample_wavelengths_uniform(Float32(0.5))
+
 def test_wavefront_split_matches_original_camera_path_closely() raises:
     var sd = _build_scene()
     var (r2c, c2w) = _identity_camera_matrices()
@@ -151,12 +156,12 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
         UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
         UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
         Float32(0), Float32(0), Float32(0),
-        px_scale, Float32(0), Float32(0), n_light_paths_f,
+        px_scale, Float32(0), Float32(0), n_light_paths_f, _TEST_PASS_WL,
     )
 
     var pcg_new = PCG32(UInt64(999), UInt64(3))
     var scratch_new = alloc[Intersection_C](1)
-    var state = _bdpt_camera_path_init[False](r2c, c2w, 0, 0, pcg_new, px_scale, n_light_paths_f)
+    var state = _bdpt_camera_path_init[False](r2c, c2w, 0, 0, pcg_new, px_scale, n_light_paths_f, _TEST_PASS_WL)
 
     var pcg_bounce = PCG32(UInt64(0), UInt64(0))
     pcg_bounce.state = state.pcg_state
@@ -198,9 +203,12 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
         )
         active = Int8(1) if cont else Int8(0)
 
-    assert_true(_close(total.r, total_old.r))
-    assert_true(_close(total.g, total_old.g))
-    assert_true(_close(total.b, total_old.b))
+    # `total` is spectral (BDPT/VCM transport carries hero wavelengths); the
+    # two halves must agree lane for lane, which is the real invariant here.
+    assert_true(_close(total.v0, total_old.v0))
+    assert_true(_close(total.v1, total_old.v1))
+    assert_true(_close(total.v2, total_old.v2))
+    assert_true(_close(total.v3, total_old.v3))
     assert_true(_close(first_alb.r, alb_old.r))
     assert_true(_close(first_alb.g, alb_old.g))
     assert_true(_close(first_alb.b, alb_old.b))

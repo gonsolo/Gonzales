@@ -27,7 +27,7 @@ from gonzales.geometry import (
 )
 from gonzales.bvh import SceneDescriptor2_C, BVH2Node, build_bvh2, traverse_bvh2_core
 from gonzales.rng import PCG32
-from gonzales.spectrum import null_spectral_handle, SampledWavelengths
+from gonzales.spectrum import null_spectral_handle, SampledWavelengths, SpectralSample, sample_wavelengths_uniform
 from gonzales.bdpt import (
     BDPTVertex, _bdpt_trace_light_path, _bdpt_light_path_init,
     _bdpt_light_path_bounce, _BDPT_MAX_VERTS, _BDPT_MAX_DEPTH,
@@ -44,7 +44,8 @@ def _vertex_close(a: BDPTVertex, b: BDPTVertex) -> Bool:
     return (
         _close(a.pos.x, b.pos.x) and _close(a.pos.y, b.pos.y) and _close(a.pos.z, b.pos.z) and
         _close(a.normal.x, b.normal.x) and _close(a.normal.y, b.normal.y) and _close(a.normal.z, b.normal.z) and
-        _close(a.beta.r, b.beta.r) and _close(a.beta.g, b.beta.g) and _close(a.beta.b, b.beta.b) and
+        _close(a.beta.v0, b.beta.v0) and _close(a.beta.v1, b.beta.v1) and
+        _close(a.beta.v2, b.beta.v2) and _close(a.beta.v3, b.beta.v3) and
         _close(a.alb.r, b.alb.r) and _close(a.alb.g, b.alb.g) and _close(a.alb.b, b.alb.b) and
         a.is_surface == b.is_surface and a.is_delta == b.is_delta and a.is_light == b.is_light and
         a.mat_kind == b.mat_kind and a.med_idx == b.med_idx and
@@ -130,6 +131,11 @@ def _build_scene() -> SceneDescriptor2_C:
         UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling(),
     )
 
+# Both subpath halves of a VCM pass share one hero-wavelength set (see
+# bdpt.mojo's _bdpt_pass_wavelengths); this test drives the halves directly,
+# so it supplies that set itself.
+comptime _TEST_PASS_WL = sample_wavelengths_uniform(Float32(0.5))
+
 def test_wavefront_split_matches_original_light_path_exactly() raises:
     var sd = _build_scene()
 
@@ -137,12 +143,12 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
     var scratch_old = alloc[Intersection_C](1)
     var lvc_old = alloc[BDPTVertex](_BDPT_MAX_VERTS)
     var lvc_path_len_old = alloc[Int32](1)
-    _bdpt_trace_light_path[False](sd, pcg_old, False, Int32(-1), scratch_old, lvc_old, 0, lvc_path_len_old, Float32(0), Float32(0))
+    _bdpt_trace_light_path[False](sd, pcg_old, False, Int32(-1), scratch_old, lvc_old, 0, lvc_path_len_old, Float32(0), Float32(0), _TEST_PASS_WL)
 
     var pcg_new = PCG32(UInt64(12345), UInt64(7))
     var lvc_new = alloc[BDPTVertex](_BDPT_MAX_VERTS)
     var lvc_path_len_new = alloc[Int32](1)
-    var state = _bdpt_light_path_init[False](sd, pcg_new, Int32(-1), 0, lvc_new, lvc_path_len_new, Float32(0))
+    var state = _bdpt_light_path_init[False](sd, pcg_new, Int32(-1), 0, lvc_new, lvc_path_len_new, Float32(0), _TEST_PASS_WL)
     lvc_path_len_new[0] = state.n_verts
 
     var pcg_bounce = PCG32(UInt64(0), UInt64(0))

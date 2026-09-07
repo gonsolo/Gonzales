@@ -1,7 +1,8 @@
 # Unit tests for pure MIS/vertex-evaluation math extracted from bdpt.mojo:
 # solid-angle-to-area PDF conversion, the geometry term G(a,b), per-vertex
-# BSDF/phase evaluation (_eval_vertex), and the GGX conductor connection BRDF
-# (_eval_conductor_ggx) used when connecting a camera vertex to a light vertex
+# BSDF/phase evaluation (_eval_vertex_spectral), and the GGX conductor
+# connection BRDF (_eval_conductor_ggx_spectral) used when connecting a camera
+# vertex to a light vertex
 # via a shadow ray. (power_heuristic itself is tested in test_sampling.mojo;
 # ggx_D/ggx_G2 primitives are tested in test_bxdf.mojo -- this file tests the
 # combination logic bdpt.mojo layers on top of them, not those primitives
@@ -23,10 +24,10 @@ from gonzales.geometry import (
 from gonzales.bvh import SceneDescriptor2_C, BVH2Node
 from gonzales.bxdf import ggx_D, ggx_G2
 from gonzales.bdpt import (
-    BDPTVertex, _pdf_solid_to_area, _geom_term, _eval_vertex, _eval_conductor_ggx,
-    _bdpt_connect_to_cache,
+    BDPTVertex, _pdf_solid_to_area, _geom_term, _eval_vertex_spectral,
+    _eval_conductor_ggx_spectral, _bdpt_connect_to_cache,
 )
-from gonzales.spectrum import SampledWavelengths, null_spectral_handle
+from gonzales.spectrum import SampledWavelengths, SpectralSample, null_spectral_handle
 from _scene_fixture import make_triangle_scene
 
 comptime EPS: Float32 = 1e-3
@@ -37,11 +38,37 @@ def _close(a: Float32, b: Float32) -> Bool:
 def _simd_close(a: Vec3f, b: Vec3f) -> Bool:
     return _close(a[0], b[0]) and _close(a[1], b[1]) and _close(a[2], b[2])
 
+# BDPT/VCM transport is spectral, so the vertex evaluators return a
+# SpectralSample. These tests use a NULL spectral handle, under which
+# spectrum.mojo's conversions carry plain R/G/B on lanes v0/v1/v2 (see
+# rgb_to_spectral_sample's table-less fallback) -- so every closed form
+# asserted below is still exactly the RGB one, read off the first three lanes.
+comptime NULL_WL = SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0),
+                                      Float32(0.0), Float32(0.0))
+
+def _spec_close(a: SpectralSample, b: Vec3f) -> Bool:
+    return _close(a.v0, b[0]) and _close(a.v1, b[1]) and _close(a.v2, b[2])
+
+def _spec_close_spec(a: SpectralSample, b: SpectralSample) -> Bool:
+    return _close(a.v0, b.v0) and _close(a.v1, b.v1) and _close(a.v2, b.v2)
+
+@always_inline
+def _eval_v(v: BDPTVertex, dir: Vec3f, sd: SceneDescriptor2_C) -> SpectralSample:
+    var h = null_spectral_handle()
+    return _eval_vertex_spectral(v, dir, sd, h.coeffs, h.res, h.cie_x, h.cie_y,
+                                 h.cie_z, h.d65, NULL_WL)
+
+@always_inline
+def _eval_cond(n: Vec3f, wo: Vec3f, wi: Vec3f, alpha: Float32, f0: RGB) -> SpectralSample:
+    var h = null_spectral_handle()
+    return _eval_conductor_ggx_spectral(n, wo, wi, alpha, f0, h.coeffs, h.res,
+                                        h.cie_x, h.cie_y, h.cie_z, h.d65, NULL_WL)
+
 # ── shared fixture ────────────────────────────────────────────────────────────
 
 def _make_vertex(pos: Point3f, normal: Vec3f, is_surface: Int32) -> BDPTVertex:
     return BDPTVertex(
-        pos=pos, normal=normal, beta=RGB(Float32(0)), alb=RGB(Float32(0)),
+        pos=pos, normal=normal, beta=SpectralSample(Float32(0)), alb=RGB(Float32(0)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=is_surface, is_delta=Int32(0), is_light=Int32(0),
@@ -52,7 +79,7 @@ def _make_vertex(pos: Point3f, normal: Vec3f, is_surface: Int32) -> BDPTVertex:
 
 def _dummy_sd() -> SceneDescriptor2_C:
     """A minimal (geometrically irrelevant) SceneDescriptor2_C for
-    _eval_vertex calls that never exercise mat_kind=2 (hair) -- that's the
+    _eval_vertex_spectral calls that never exercise mat_kind=2 (hair) -- that's the
     only branch that dereferences sd.materials/sd.curves, so any valid
     SceneDescriptor2_C works for the Lambertian/conductor/volume tests below."""
     var fixture = make_triangle_scene([
@@ -126,15 +153,15 @@ def test_geom_term_volume_vertex_has_no_cosine_factor() raises:
     var g = _geom_term(a, b)
     assert_true(_close(g, Float32(1.0) / Float32(4.0)))
 
-# ── _eval_vertex ──────────────────────────────────────────────────────────────
+# ── _eval_vertex_spectral ──────────────────────────────────────────────────────────────
 
 def test_eval_vertex_delta_vertex_is_always_zero() raises:
     """Specular (mirror conductor / dielectric) vertices cannot be connected
-    via a shadow ray -- _eval_vertex must return 0 regardless of mat_kind or
+    via a shadow ray -- _eval_vertex_spectral must return 0 regardless of mat_kind or
     albedo."""
     var v = BDPTVertex(
         pos=Point3f(Float32(0)), normal=Vec3f(0.0, 0.0, 1.0),
-        beta=RGB(Float32(0)), alb=RGB(Float32(1.0), Float32(1.0), Float32(1.0)),
+        beta=SpectralSample(Float32(0)), alb=RGB(Float32(1.0), Float32(1.0), Float32(1.0)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(1), is_delta=Int32(1), is_light=Int32(0),
@@ -142,15 +169,15 @@ def test_eval_vertex_delta_vertex_is_always_zero() raises:
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
-    var result = _eval_vertex(v, Vec3f(0.0, 0.0, 1.0), _dummy_sd())
-    assert_true(_simd_close(result, Vec3f(0.0, 0.0, 0.0)))
+    var result = _eval_v(v, Vec3f(0.0, 0.0, 1.0), _dummy_sd())
+    assert_true(_spec_close(result, Vec3f(0.0, 0.0, 0.0)))
 
 def test_eval_vertex_volume_scatter_matches_isotropic_phase_function() raises:
     """A volume-scatter vertex (is_surface=0) uses the isotropic phase
     function alb/(4*pi) -- no cosine term at all, unlike the surface case."""
     var v = BDPTVertex(
         pos=Point3f(Float32(0)), normal=Vec3f(0.0, 1.0, 0.0),
-        beta=RGB(Float32(0)), alb=RGB(Float32(0.3), Float32(0.4), Float32(0.5)),
+        beta=SpectralSample(Float32(0)), alb=RGB(Float32(0.3), Float32(0.4), Float32(0.5)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(0), is_delta=Int32(0), is_light=Int32(0),
@@ -159,15 +186,15 @@ def test_eval_vertex_volume_scatter_matches_isotropic_phase_function() raises:
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
     var dir = Vec3f(0.267261, 0.534522, 0.801784)  # arbitrary; ignored by volume path
-    var result = _eval_vertex(v, dir, _dummy_sd())
-    assert_true(_simd_close(result, Vec3f(
+    var result = _eval_v(v, dir, _dummy_sd())
+    assert_true(_spec_close(result, Vec3f(
         Float32(0.3) * INV_FOUR_PI, Float32(0.4) * INV_FOUR_PI, Float32(0.5) * INV_FOUR_PI)))
 
 def test_eval_vertex_lambertian_matches_closed_form() raises:
     """Surface Lambertian: f = (alb/pi) * |cos(dir_to_other, normal)|."""
     var v = BDPTVertex(
         pos=Point3f(Float32(0)), normal=Vec3f(0.0, 0.0, 1.0),
-        beta=RGB(Float32(0)), alb=RGB(Float32(0.2), Float32(0.4), Float32(0.6)),
+        beta=SpectralSample(Float32(0)), alb=RGB(Float32(0.2), Float32(0.4), Float32(0.6)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(1), is_delta=Int32(0), is_light=Int32(0),
@@ -176,15 +203,15 @@ def test_eval_vertex_lambertian_matches_closed_form() raises:
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
     var dir = Vec3f(0.7071068, 0.0, 0.7071068)  # 45 degrees off the normal
-    var result = _eval_vertex(v, dir, _dummy_sd())
+    var result = _eval_v(v, dir, _dummy_sd())
     var cos_o = Float32(0.7071068)
-    assert_true(_simd_close(result, Vec3f(
+    assert_true(_spec_close(result, Vec3f(
         Float32(0.2) * INV_PI * cos_o, Float32(0.4) * INV_PI * cos_o, Float32(0.6) * INV_PI * cos_o)))
 
 def test_eval_vertex_conductor_dispatches_to_eval_conductor_ggx_with_own_fields() raises:
     """Mat_kind=1 vertices must route to the GGX conductor eval using the
     vertex's own normal/wo/pdf_bwd(=alpha)/alb(=F0) fields -- verified by
-    comparing against a direct call to _eval_conductor_ggx with those same
+    comparing against a direct call to _eval_conductor_ggx_spectral with those same
     values, which pins down the field-to-argument wiring (not just the GGX
     math itself, which is covered by the dedicated test below)."""
     var n = Vec3f(0.0, 0.0, 1.0)
@@ -194,7 +221,7 @@ def test_eval_vertex_conductor_dispatches_to_eval_conductor_ggx_with_own_fields(
     var f0 = RGB(Float32(0.5), Float32(0.6), Float32(0.7))
     var v = BDPTVertex(
         pos=Point3f(Float32(0)), normal=Vec3f(0.0, 0.0, 1.0),
-        beta=RGB(Float32(0)), alb=f0,
+        beta=SpectralSample(Float32(0)), alb=f0,
         pdf_fwd=Float32(0), pdf_bwd=alpha,
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(1), is_delta=Int32(0), is_light=Int32(0),
@@ -202,25 +229,25 @@ def test_eval_vertex_conductor_dispatches_to_eval_conductor_ggx_with_own_fields(
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
-    var expected = _eval_conductor_ggx(n, wo, wi, alpha, f0)
-    var result = _eval_vertex(v, wi, _dummy_sd())
-    assert_true(_simd_close(result, expected))
+    var expected = _eval_cond(n, wo, wi, alpha, f0)
+    var result = _eval_v(v, wi, _dummy_sd())
+    assert_true(_spec_close_spec(result, expected))
 
-# ── _eval_conductor_ggx ───────────────────────────────────────────────────────
+# ── _eval_conductor_ggx_spectral ───────────────────────────────────────────────────────
 
 def test_eval_conductor_ggx_grazing_wo_returns_zero() raises:
     var n  = Vec3f(0.0, 0.0, 1.0)
     var wo = Vec3f(1.0, 0.0, 0.0)  # perpendicular to n -> cos_o = 0
     var wi = Vec3f(0.0, 0.0, 1.0)
-    var result = _eval_conductor_ggx(n, wo, wi, Float32(0.2), RGB(Float32(1.0)))
-    assert_true(_simd_close(result, Vec3f(0.0, 0.0, 0.0)))
+    var result = _eval_cond(n, wo, wi, Float32(0.2), RGB(Float32(1.0)))
+    assert_true(_spec_close(result, Vec3f(0.0, 0.0, 0.0)))
 
 def test_eval_conductor_ggx_grazing_wi_returns_zero() raises:
     var n  = Vec3f(0.0, 0.0, 1.0)
     var wo = Vec3f(0.0, 0.0, 1.0)
     var wi = Vec3f(1.0, 0.0, 0.0)  # perpendicular to n -> cos_i = 0
-    var result = _eval_conductor_ggx(n, wo, wi, Float32(0.2), RGB(Float32(1.0)))
-    assert_true(_simd_close(result, Vec3f(0.0, 0.0, 0.0)))
+    var result = _eval_cond(n, wo, wi, Float32(0.2), RGB(Float32(1.0)))
+    assert_true(_spec_close(result, Vec3f(0.0, 0.0, 0.0)))
 
 def test_eval_conductor_ggx_normal_incidence_matches_closed_form() raises:
     """At wo=wi=n (normal incidence, half-vector = n exactly), cos_wo_h=1 so
@@ -228,7 +255,7 @@ def test_eval_conductor_ggx_normal_incidence_matches_closed_form() raises:
     F0. The remaining factor is D(1,alpha)*G2(1,1,alpha)/(4*1*1)*1 -- checked
     by calling the same ggx_D/ggx_G2 primitives (already independently unit-
     tested in test_bxdf.mojo) and combining them exactly as
-    _eval_conductor_ggx's k/fr formula does."""
+    _eval_conductor_ggx_spectral's k/fr formula does."""
     var n = Vec3f(0.0, 0.0, 1.0)
     var alpha = Float32(0.2)
     var f0 = RGB(Float32(0.5), Float32(0.6), Float32(0.7))
@@ -236,8 +263,8 @@ def test_eval_conductor_ggx_normal_incidence_matches_closed_form() raises:
     var g = ggx_G2(Float32(1.0), Float32(1.0), alpha)
     var k = d * g / Float32(4.0)
     var expected = Vec3f(k * f0.r, k * f0.g, k * f0.b)
-    var result = _eval_conductor_ggx(n, n, n, alpha, f0)
-    assert_true(_simd_close(result, expected))
+    var result = _eval_cond(n, n, n, alpha, f0)
+    assert_true(_spec_close(result, expected))
 
 # ── _bdpt_connect_to_cache (VCM Stage 2b: standard Veach pairing) ───────────
 # Since Stage 2b.1, connection is an EXHAUSTIVE sum over the camera vertex's
@@ -287,7 +314,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
 
     var cv = BDPTVertex(
         pos=Point3f(5.0, 5.0, 10.0), normal=Vec3f(0.0, 0.0, 1.0),
-        beta=RGB(Float32(3.0)), alb=RGB(Float32(0.5)),
+        beta=SpectralSample(Float32(3.0)), alb=RGB(Float32(0.5)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(1), is_delta=Int32(0), is_light=Int32(0),
@@ -297,7 +324,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
     )
     var lv = BDPTVertex(
         pos=Point3f(5.0, 5.0, 20.0), normal=Vec3f(0.0, 0.0, -1.0),
-        beta=RGB(Float32(2.0)), alb=RGB(Float32(1.0)),
+        beta=SpectralSample(Float32(2.0)), alb=RGB(Float32(1.0)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(1), is_delta=Int32(0), is_light=Int32(1),
@@ -315,15 +342,15 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
     # produce, then verify the exhaustive-sum-over-the-path wrapper against
     # it directly.
     var dir_to_light = Vec3f(0.0, 0.0, 1.0)
-    var f_cam = _eval_vertex(cv, dir_to_light, sd)  # Lambertian: alb/pi * cos
+    var f_cam = _eval_v(cv, dir_to_light, sd)  # Lambertian: alb/pi * cos
     var f_lgt = Vec3f(lv.alb.r, lv.alb.g, lv.alb.b)  # is_light: Le, no cosine
     var g = _geom_term(cv, lv)  # 1*1/10^2
     var beta_prod = Float32(3.0) * Float32(2.0)
-    var expected = f_cam[0] * f_lgt[0] * g * beta_prod  # unoccluded, Tr=1; all channels equal here
+    var expected = f_cam.v0 * f_lgt[0] * g * beta_prod  # unoccluded, Tr=1; all channels equal here
 
-    assert_true(_close(result.r, expected))
-    assert_true(_close(result.g, expected))
-    assert_true(_close(result.b, expected))
+    assert_true(_close(result.v0, expected))
+    assert_true(_close(result.v1, expected))
+    assert_true(_close(result.v2, expected))
     # `sd` holds raw pointers borrowed from `fixture` (bvh_nodes/prim_ids/
     # meshes/materials/curves) with no other owner -- `fixture` has no
     # syntactic use after constructing `sd` above, so Mojo's ASAP
