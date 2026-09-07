@@ -102,6 +102,62 @@ struct SpectralSample(TrivialRegisterPassable):
     def average(self) -> Float32:
         return (self.v0 + self.v1 + self.v2 + self.v3) * Float32(0.25)
 
+    # ── Operator surface matching RGB ─────────────────────────────────────
+    # Path transport carries SpectralSample, so the arithmetic the integrators
+    # already write against RGB (`throughput *= f`, `estimate += c`) has to
+    # exist here too, or the flip becomes a rewrite instead of a type change.
+
+    @always_inline
+    def __sub__(self, o: SpectralSample) -> SpectralSample:
+        return SpectralSample(self.v0 - o.v0, self.v1 - o.v1, self.v2 - o.v2, self.v3 - o.v3)
+
+    @always_inline
+    def __rmul__(self, s: Float32) -> SpectralSample:
+        return self * s
+
+    @always_inline
+    def __iadd__(mut self, o: SpectralSample):
+        self.v0 += o.v0; self.v1 += o.v1; self.v2 += o.v2; self.v3 += o.v3
+
+    @always_inline
+    def __isub__(mut self, o: SpectralSample):
+        self.v0 -= o.v0; self.v1 -= o.v1; self.v2 -= o.v2; self.v3 -= o.v3
+
+    @always_inline
+    def __imul__(mut self, o: SpectralSample):
+        self.v0 *= o.v0; self.v1 *= o.v1; self.v2 *= o.v2; self.v3 *= o.v3
+
+    @always_inline
+    def __imul__(mut self, s: Float32):
+        self.v0 *= s; self.v1 *= s; self.v2 *= s; self.v3 *= s
+
+    @always_inline
+    def __itruediv__(mut self, s: Float32):
+        var inv = Float32(1.0) / s
+        self.v0 *= inv; self.v1 *= inv; self.v2 *= inv; self.v3 *= inv
+
+    @always_inline
+    def luma(self) -> Float32:
+        """Scalar magnitude for Russian roulette / firefly tests. RGB.luma()
+        is a CIE luminance; the hero-wavelength analogue is the mean over the
+        sampled wavelengths (what pbrt uses for the same purpose), NOT a
+        luminance -- these 4 values are radiance at arbitrary wavelengths and
+        have no fixed luminous weighting."""
+        return self.average()
+
+    @always_inline
+    def max_component(self) -> Float32:
+        var m = self.v0
+        if self.v1 > m: m = self.v1
+        if self.v2 > m: m = self.v2
+        if self.v3 > m: m = self.v3
+        return m
+
+    @always_inline
+    def is_black(self) -> Bool:
+        return (self.v0 <= Float32(0.0) and self.v1 <= Float32(0.0)
+                and self.v2 <= Float32(0.0) and self.v3 <= Float32(0.0))
+
 # ── Spectral context: the loaded table + CIE data, built once per render ───
 
 @fieldwise_init
