@@ -405,3 +405,60 @@ def nvdb_majorant_at(
     var leaf_base = lower_base + Int(_nvdb_i64(blob, lower_slot))
     return SIMD[DType.float32, 2](
         _nvdb_f32(blob, leaf_base + NVDB_LEAF_OFF_MAX), Float32(NVDB_LEAF_DIM))
+
+
+@always_inline
+def nvdb_leaf_base(
+    blob: UnsafePointer[UInt8, MutExternalOrigin],
+    i: Int32, j: Int32, k: Int32,
+) -> Int:
+    """Byte offset of the LEAF node containing (i,j,k), or -1 when the point
+    falls in a constant tile or background rather than a real leaf.
+
+    Exists so trilinear sampling can pay for the root->upper->lower->leaf
+    descent ONCE instead of eight times. A leaf spans 8^3 voxels, so a
+    2x2x2 interpolation stencil lies wholly inside one leaf unless the base
+    voxel sits on a leaf boundary -- (7/8)^3 ~ 67% of lookups take the
+    single-descent path and read the other seven values by offset
+    arithmetic alone. Same descent as nvdb_sample_index; kept as its own
+    function rather than folded in so the value path stays untouched."""
+    var tree_base = NVDB_GRID_SIZE
+    var root_base = tree_base + Int(_nvdb_u64(blob, tree_base + NVDB_TREE_OFF_NODE_OFFSET_ROOT))
+    var table_size = Int(_nvdb_u32(blob, root_base + NVDB_ROOT_OFF_TABLE_SIZE))
+    var key = _nvdb_coord_to_key(i, j, k)
+
+    var tile_base = root_base + NVDB_ROOT_SIZE
+    var found = False
+    for _ in range(table_size):
+        if _nvdb_u64(blob, tile_base + NVDB_ROOT_TILE_OFF_KEY) == key:
+            found = True
+            break
+        tile_base += NVDB_ROOT_TILE_SIZE
+    if not found:
+        return -1
+    var root_child = _nvdb_i64(blob, tile_base + NVDB_ROOT_TILE_OFF_CHILD)
+    if root_child == Int64(0):
+        return -1
+    var upper_base = root_base + Int(root_child)
+    var n_upper = _nvdb_upper_offset(i, j, k)
+    if not _nvdb_mask_is_on(blob, upper_base + NVDB_UPPER_OFF_CHILD_MASK, n_upper):
+        return -1
+    var upper_slot = upper_base + NVDB_UPPER_OFF_TABLE + NVDB_TABLE_STRIDE * n_upper
+    var lower_base = upper_base + Int(_nvdb_i64(blob, upper_slot))
+    var n_lower = _nvdb_lower_offset(i, j, k)
+    if not _nvdb_mask_is_on(blob, lower_base + NVDB_LOWER_OFF_CHILD_MASK, n_lower):
+        return -1
+    var lower_slot = lower_base + NVDB_LOWER_OFF_TABLE + NVDB_TABLE_STRIDE * n_lower
+    return lower_base + Int(_nvdb_i64(blob, lower_slot))
+
+
+@always_inline
+def nvdb_leaf_value(
+    blob: UnsafePointer[UInt8, MutExternalOrigin],
+    leaf_base: Int, i: Int32, j: Int32, k: Int32,
+) -> Float32:
+    """Value at (i,j,k) read straight out of an already-located leaf. The
+    caller must have checked the coordinate really is inside that leaf --
+    _nvdb_leaf_offset masks to the low 3 bits per axis, so an out-of-leaf
+    coordinate would silently alias to the wrong voxel rather than fault."""
+    return _nvdb_f32(blob, leaf_base + NVDB_LEAF_OFF_TABLE + 4 * _nvdb_leaf_offset(i, j, k))

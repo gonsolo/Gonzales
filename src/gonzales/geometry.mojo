@@ -3,7 +3,7 @@ from std.memory import alloc
 from std.math import sqrt, acos, atan2, cos, sin, min, max, abs, floor, log
 from std.sys.info import align_of
 from gonzales.spectrum import SampledWavelengths
-from gonzales.nanovdb import nvdb_sample_index, nvdb_majorant_at
+from gonzales.nanovdb import nvdb_sample_index, nvdb_majorant_at, nvdb_leaf_base, nvdb_leaf_value
 
 # Value structs shared with GPU code can't hold Optional[UnsafePointer], so an
 # "unset" pointer field is instead left at its `.unsafe_dangling()` sentinel --
@@ -947,14 +947,36 @@ def nvdb_sample_density(grid: NvdbGrid_C, p_world: Vec3f) -> Float32:
     if j < Int32(grid.index_min.y) - Int32(1) or j > Int32(grid.index_max.y): return Float32(0.0)
     if k < Int32(grid.index_min.z) - Int32(1) or k > Int32(grid.index_max.z): return Float32(0.0)
     var tx = ix - fi; var ty = iy - fj; var tz = iz - fk
-    var v000 = nvdb_sample_index(grid.blob, i,           j,           k)
-    var v100 = nvdb_sample_index(grid.blob, i + Int32(1), j,           k)
-    var v010 = nvdb_sample_index(grid.blob, i,           j + Int32(1), k)
-    var v110 = nvdb_sample_index(grid.blob, i + Int32(1), j + Int32(1), k)
-    var v001 = nvdb_sample_index(grid.blob, i,           j,           k + Int32(1))
-    var v101 = nvdb_sample_index(grid.blob, i + Int32(1), j,           k + Int32(1))
-    var v011 = nvdb_sample_index(grid.blob, i,           j + Int32(1), k + Int32(1))
-    var v111 = nvdb_sample_index(grid.blob, i + Int32(1), j + Int32(1), k + Int32(1))
+    var v000: Float32; var v100: Float32; var v010: Float32; var v110: Float32
+    var v001: Float32; var v101: Float32; var v011: Float32; var v111: Float32
+    # Fast path: when the 2x2x2 stencil does not cross a leaf boundary (the
+    # low 3 bits of every axis are < 7), one root->leaf descent locates the
+    # leaf and the other seven values are pure offset arithmetic inside it --
+    # 1 tree walk instead of 8. A leaf is 8^3, so this covers (7/8)^3 ~ 67%
+    # of lookups; the rest fall back to eight independent descents, which is
+    # exactly what this function did before. Both paths return identical
+    # values by construction (the slow path would descend to this same leaf).
+    var leaf_base = -1
+    if (i & Int32(7)) < Int32(7) and (j & Int32(7)) < Int32(7) and (k & Int32(7)) < Int32(7):
+        leaf_base = nvdb_leaf_base(grid.blob, i, j, k)
+    if leaf_base >= 0:
+        v000 = nvdb_leaf_value(grid.blob, leaf_base, i,           j,           k)
+        v100 = nvdb_leaf_value(grid.blob, leaf_base, i + Int32(1), j,           k)
+        v010 = nvdb_leaf_value(grid.blob, leaf_base, i,           j + Int32(1), k)
+        v110 = nvdb_leaf_value(grid.blob, leaf_base, i + Int32(1), j + Int32(1), k)
+        v001 = nvdb_leaf_value(grid.blob, leaf_base, i,           j,           k + Int32(1))
+        v101 = nvdb_leaf_value(grid.blob, leaf_base, i + Int32(1), j,           k + Int32(1))
+        v011 = nvdb_leaf_value(grid.blob, leaf_base, i,           j + Int32(1), k + Int32(1))
+        v111 = nvdb_leaf_value(grid.blob, leaf_base, i + Int32(1), j + Int32(1), k + Int32(1))
+    else:
+        v000 = nvdb_sample_index(grid.blob, i,           j,           k)
+        v100 = nvdb_sample_index(grid.blob, i + Int32(1), j,           k)
+        v010 = nvdb_sample_index(grid.blob, i,           j + Int32(1), k)
+        v110 = nvdb_sample_index(grid.blob, i + Int32(1), j + Int32(1), k)
+        v001 = nvdb_sample_index(grid.blob, i,           j,           k + Int32(1))
+        v101 = nvdb_sample_index(grid.blob, i + Int32(1), j,           k + Int32(1))
+        v011 = nvdb_sample_index(grid.blob, i,           j + Int32(1), k + Int32(1))
+        v111 = nvdb_sample_index(grid.blob, i + Int32(1), j + Int32(1), k + Int32(1))
     var v00 = v000 + (v100 - v000) * tx
     var v10 = v010 + (v110 - v010) * tx
     var v01 = v001 + (v101 - v001) * tx

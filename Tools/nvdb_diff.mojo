@@ -21,7 +21,7 @@ from std.sys import argv
 from std.memory import alloc
 from gonzales.nanovdb import (
     nvdb_load, nvdb_data, nvdb_size, nvdb_free,
-    nvdb_get_value_ref, nvdb_active_count, nvdb_active_coord, nvdb_majorant_at,
+    nvdb_get_value_ref, nvdb_active_count, nvdb_active_coord, nvdb_majorant_at, nvdb_leaf_base, nvdb_leaf_value,
     nvdb_sample_index,
 )
 
@@ -95,6 +95,46 @@ def main() raises:
             if first_bad_shown < 5:
                 print("    MISMATCH at (", x, y, z, ") ref=", expect, " got=", got)
                 first_bad_shown += 1
+
+    # ── Leaf fast-path equivalence ───────────────────────────────────────
+    # nvdb_sample_density's trilinear fast path locates ONE leaf and reads
+    # the other seven stencil taps by offset arithmetic. _nvdb_leaf_offset
+    # masks to the low 3 bits per axis, so a coordinate that is NOT actually
+    # inside that leaf would silently alias to the wrong voxel instead of
+    # faulting -- exactly the kind of bug that shows up as a subtly wrong
+    # image and nothing else. Check the fast read against the full descent.
+    var lf_checked = 0
+    var lf_bad = 0
+    var lf_shown = 0
+    # Walk ACTIVE voxels, not random coordinates: random points in the index
+    # bbox of a sparse grid almost never land in a leaf, which made an
+    # earlier version of this check pass on as few as 32 taps -- far too
+    # little to mean anything.
+    var lf_stride = n_active // Int64(500)
+    if lf_stride < Int64(1): lf_stride = Int64(1)
+    var lf_i = Int64(0)
+    while lf_i < n_active:
+        nvdb_active_coord(h, lf_i, coord)
+        lf_i += lf_stride
+        var lx = coord[0]; var ly = coord[1]; var lz = coord[2]
+        if (lx & Int32(7)) >= Int32(7) or (ly & Int32(7)) >= Int32(7) or (lz & Int32(7)) >= Int32(7):
+            continue
+        var lb = nvdb_leaf_base(blob, lx, ly, lz)
+        if lb < 0:
+            continue
+        for dz in range(2):
+            for dy in range(2):
+                for dx in range(2):
+                    var qx = lx + Int32(dx); var qy = ly + Int32(dy); var qz = lz + Int32(dz)
+                    var fast = nvdb_leaf_value(blob, lb, qx, qy, qz)
+                    var slow = nvdb_sample_index(blob, qx, qy, qz)
+                    lf_checked += 1
+                    if fast != slow:
+                        lf_bad += 1
+                        if lf_shown < 5:
+                            print("    LEAF FAST-PATH MISMATCH at (", qx, qy, qz, ") fast=", fast, " slow=", slow)
+                            lf_shown += 1
+    print("  leaf fast path: checked", lf_checked, "taps,", lf_bad, "mismatched")
 
     # ── Majorant validity ────────────────────────────────────────────────
     # A LOCAL majorant that is ever SMALLER than a real density inside the
