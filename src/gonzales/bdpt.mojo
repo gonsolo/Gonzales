@@ -6378,6 +6378,7 @@ def sppm_gen_vp_gpu(
     c2w: UnsafePointer[Float32, MutExternalOrigin],
     init_r2: Float32,
     seed: UInt64,
+    max_depth_dp: Int64,
     bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
     primIds: UnsafePointer[PrimId_C, MutExternalOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
@@ -6424,7 +6425,7 @@ def sppm_gen_vp_gpu(
         gpuTextures=gpuTextures, gpuTextureCount=gpuTextureCount,
     )
     var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
-    vps[combined] = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch + combined)
+    vps[combined] = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch + combined, Int(max_depth_dp))
 
 
 def sppm_emit_photons_gpu(
@@ -6436,6 +6437,7 @@ def sppm_emit_photons_gpu(
     default_emit_med: Int32,
     seed: UInt64,
     pass_idx_dp: Int64,
+    max_depth_dp: Int64,
     bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
     primIds: UnsafePointer[PrimId_C, MutExternalOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
@@ -6503,7 +6505,7 @@ def sppm_emit_photons_gpu(
         gpuTextures, gpuTextureCount,
     )
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
-    _sppm_trace_photon[True, True](sd, pcg, inter_scratch + k, n_emit, photons, max_photons, stored_counter, default_emit_med,
+    _sppm_trace_photon[True, True](sd, pcg, inter_scratch + k, n_emit, photons, max_photons, stored_counter, default_emit_med, Int(max_depth_dp),
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, pass_wavelengths(pass_idx))
 
@@ -6825,7 +6827,7 @@ def sppm_render_gpu(
             var cam_seed = psc[0].rng_seed ^ UInt64(0x9E3779B97F4A7C15 + 7)
             handle[].ctx.enqueue_function[sppm_gen_vp_gpu](
                 vps_ptr, inter_cam_ptr, Int64(n_pix), Int64(_VP_SAMPLES), psc[0].film_w, r2c_ptr, c2w_ptr,
-                init_r2, cam_seed,
+                init_r2, cam_seed, Int64(psc[0].max_depth),
                 bvh2Nodes, primIds, meshes, materials,
                 areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
                 mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
@@ -6842,7 +6844,7 @@ def sppm_render_gpu(
                 var grid_emit = ceildiv(max(n_photons_per_pass, 1), block_size)
                 handle[].ctx.enqueue_function[sppm_emit_photons_gpu](
                     photons_ptr, Int64(n_photons_per_pass), Int64(max_photons), inter_ph_ptr, counter_ptr,
-                    default_emit_med, pass_seed, Int64(pass_idx),
+                    default_emit_med, pass_seed, Int64(pass_idx), Int64(psc[0].max_depth),
                     bvh2Nodes, primIds, meshes, materials,
                     areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
                     mediums, n_mediums, mediumInterfaces, n_medium_ifaces,

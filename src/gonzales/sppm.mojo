@@ -42,7 +42,16 @@ from .spectrum import (
 
 
 comptime _ALPHA  = Float32(0.7)
-comptime _MAX_B  = 10
+comptime _MAX_B  = 10  # hard safety ceiling, matching bdpt.mojo's own
+                       # _BDPT_MAX_VERTS -- SPPM's bounce loops are additionally
+                       # bounded by min(scene maxdepth, _MAX_B), see
+                       # _sppm_trace_visible_point/_sppm_trace_photon's own
+                       # `maxdepth` parameter. Before that bound was added, a
+                       # scene with a small maxdepth (a common way to
+                       # deliberately limit indirect bounces) was silently
+                       # ignored and rendered up to 10 anyway -- measured on a
+                       # cavity scene at maxdepth=1: SPPM read 2.05x pbrt where
+                       # the (maxdepth-respecting) path tracer read 0.93x.
 comptime _HSIZE  = 1048576   # 2^20 hash buckets
 # Independent visible-point samples per pixel, traced ONCE for the whole
 # render (not re-traced every SPPM pass — see _sppm_camera_pass's docstring).
@@ -476,6 +485,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     pidx:     Int32,
     init_r2:  Float32,
     scratch:  UnsafePointer[Intersection_C, MutExternalOrigin],
+    maxdepth: Int,
 ) -> SPPMPixel:
     """Trace one primary ray for pixel (px,py), returning its visible point.
     Shared verbatim between the CPU driver (_sppm_camera_pass, [False]) and
@@ -539,7 +549,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
 
     var cur_med_idx = Int32(-1)  # camera starts in vacuum
 
-    for bounce in range(_MAX_B):
+    for bounce in range(min(maxdepth, _MAX_B)):
         var ray = Ray_C(ro, rd)
         scratch[0].hit = Int8(0)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), scratch,
@@ -768,6 +778,7 @@ def _sppm_camera_pass(
     sd:       SceneDescriptor2_C,
     init_r2:  Float32,
     seed:     UInt64,
+    maxdepth: Int,
 ):
     """Trace `vp_samples` independent primary rays per pixel, ONCE for the
     whole render (not once per SPPM pass — see sppm_render's docstring for
@@ -792,7 +803,7 @@ def _sppm_camera_pass(
         var px = pix % Int(fw)
         var py = pix // Int(fw)
         var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
-        vps[combined] = _sppm_trace_visible_point[False](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, scratch + combined)
+        vps[combined] = _sppm_trace_visible_point[False](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, scratch + combined, maxdepth)
 
     parallelize[trace_one](n_pix * vp_samples)
 
@@ -832,6 +843,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     max_photons:      Int,
     counter:          UnsafePointer[Int32, MutExternalOrigin],
     default_emit_med: Int32,
+    maxdepth: Int,
     # Decomposed spectral tables rather than reading sd.spectral. `sd` is a
     # SceneDescriptor2_C passed BY VALUE, and it contains a SpectralHandle --
     # the 6-field TrivialRegisterPassable struct whose by-value passing across
@@ -962,7 +974,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         rd = pdir_p
     var cur_med_idx = default_emit_med  # start in medium if light is above one
 
-    for bounce in range(_MAX_B):
+    for bounce in range(min(maxdepth, _MAX_B)):
         var ray = Ray_C(ro, rd)
         scratch[0].hit = Int8(0)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), scratch,
@@ -1205,6 +1217,7 @@ def _sppm_photon_pass(
     sd:           SceneDescriptor2_C,
     seed:         UInt64,
     pass_idx:     Int,
+    maxdepth:     Int,
 ) -> Int:
     """CPU driver: emit n_emit photon paths, returning the number actually
     stored (clamped to max_photons)."""
@@ -1239,7 +1252,7 @@ def _sppm_photon_pass(
     @parameter
     def emit_one(k: Int):
         var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
-        _sppm_trace_photon[True, False](sd, pcg, scratch + k, n_emit, photons, max_photons, counter, default_emit_med,
+        _sppm_trace_photon[True, False](sd, pcg, scratch + k, n_emit, photons, max_photons, counter, default_emit_med, maxdepth,
             sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y,
             sd.spectral.cie_z, sd.spectral.d65, pass_wavelengths(pass_idx))
 
@@ -1831,7 +1844,7 @@ def _sppm_render_core(
     _sppm_camera_pass(
         vps, n_pix, _VP_SAMPLES, psc[0].film_w,
         psc[0].raster_to_camera, psc[0].camera_to_world,
-        sd, init_r2, cam_seed,
+        sd, init_r2, cam_seed, Int(psc[0].max_depth),
     )
     if verbose:
         var n_valid = 0
@@ -1842,7 +1855,7 @@ def _sppm_render_core(
     # Photon passes
     for pass_idx in range(n_passes):
         var pass_seed = psc[0].rng_seed ^ UInt64(pass_idx * 2654435761 + 1)
-        var n_stored = _sppm_photon_pass(photons, n_photons_per_pass, max_photons, sd, pass_seed, pass_idx)
+        var n_stored = _sppm_photon_pass(photons, n_photons_per_pass, max_photons, sd, pass_seed, pass_idx, Int(psc[0].max_depth))
         if n_stored > 0:
             _build_grid(photons, n_stored, heads, inv_cell)
             _gather_update(vps, n_vps, photons, heads, inv_cell, sd, pass_wavelengths(pass_idx))
