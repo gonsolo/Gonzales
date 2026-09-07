@@ -2410,7 +2410,7 @@ def _sample_medium_core(
                 if cos_l > Float32(0):
                     var shad_org = point3f(scatter_pt_s + shadow_dir * Float32(0.0002))
                     var shad_ray = Ray_C(shad_org, vec3f(shadow_dir))
-                    var shad_tmax = dist * Float32(0.9995)
+                    var shad_tmax = max(dist - Float32(0.0002), Float32(0.0)) * Float32(0.9995)
                     if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shad_ray, shad_tmax, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres, materials=materials):
                         var T: RGB
                         if med.grid_idx >= Int32(0) or med.nvdb_idx >= Int32(0):
