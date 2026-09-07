@@ -2599,6 +2599,9 @@ def _sample_medium_core(
         path_ptr[].specularBounce = Int8(0)
         path_ptr[].lastBsdfPdf = hs[3]
         path_ptr[].volume_scattered = Int8(1)
+        # A volume scatter IS the real scattering event the emitter-hit MIS
+        # measures from, and it puts the ray origin exactly there.
+        path_ptr[].mis_null_dist = Float32(0.0)
         path_ptr[].bounce += 1
         intersections[i].hit = Int8(0)  # no surface hit this bounce
     else:
@@ -2976,6 +2979,7 @@ def gen_primary_rays_wavefront_gpu(
         Int32(-1),
         Int32(3), sobol_idx,
         wavelengths,
+        Float32(0.0),   # mis_null_dist
     )
 
 
@@ -3437,6 +3441,7 @@ def gen_primary_rays_gpu(
         Int32(-1),
         Int32(3), sobol_idx,
         wavelengths,
+        Float32(0.0),   # mis_null_dist
     )
 
 

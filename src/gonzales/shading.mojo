@@ -4161,6 +4161,11 @@ def shade_interface(
     var ray_dir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
     var ray_org = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
     var hit_point = ray_org + ray_dir * inter.tHit + ray_dir * Float32(0.0002)
+    # Crossing a null interface moves the ray ORIGIN without being a scattering
+    # event, so remember how far it moved -- the emitter-hit MIS downstream
+    # needs the distance back to the real scattering vertex, not to here.
+    # See PathState_C.mis_null_dist.
+    path_ptr[].mis_null_dist += inter.tHit + Float32(0.0002)
     path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), path_ptr[].ray.direction)
 
 
@@ -4175,6 +4180,13 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     pixel_idx: Int = -1,
     sms_io: SMSReservoirIO = sms_reservoir_io_null(),
 ):
+    # Any material other than a null interface is a REAL scattering event, so
+    # the null-interface distance accumulated on the way here has served its
+    # purpose and must not leak into the next segment's MIS. Reset here rather
+    # than at each of the dozen sites that write lastBsdfPdf: one place, and it
+    # cannot be forgotten when a new material is added.
+    if mat.type != MatKind.interface:
+        path_ptr[].mis_null_dist = Float32(0.0)
     if mat.type == MatKind.diffuse:
         shade_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat, guide_write, restir_io, pixel_idx, sms_io)
     # Delta BSDFs (dielectric variants) need only triangle geometry — no NEE,
@@ -4403,7 +4415,10 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                     lnorm = lnorm * (Float32(1.0) / sqrt(lnlen))
                 var ray_dir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
                 var cos_l = -dot(lnorm, ray_dir)
-                var dist  = inter.tHit
+                # Distance from the vertex whose sample generated this
+                # direction, NOT from the current ray origin -- those differ by
+                # every null interface crossed in between (PathState_C.mis_null_dist).
+                var dist  = inter.tHit + path_ptr[].mis_null_dist
                 var dist2 = dist * dist
                 if cos_l > Float32(0.0) and al.total_area > Float32(0.0):
                     var ls = ctx.lights.light_sampler

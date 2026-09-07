@@ -524,8 +524,29 @@ struct PathState_C(TrivialRegisterPassable):
     # gen_primary_ray_state); unused by shading until Stage 2b/2c wire
     # spectral BxDF/light evaluation through it.
     var wavelengths: SampledWavelengths
+    # Distance this path has travelled through NULL INTERFACES since its last
+    # REAL scattering event.
+    #
+    # The emitter-hit MIS weight needs pdf_light in solid angle AT THE VERTEX
+    # WHOSE BSDF/PHASE SAMPLE GENERATED THIS DIRECTION, because that is the
+    # vertex where the competing NEE strategy was evaluated. It used to take
+    # that distance as `inter.tHit` -- but shade_interface advances the ray
+    # ORIGIN to the boundary it just crossed, so for any path that scattered
+    # inside a medium and then left it, inter.tHit measures from the boundary,
+    # not from the scattering vertex.
+    #
+    # With a light close to the medium's boundary the two differ enormously:
+    # boundary->light ~0.05 gives pdf_light ~0.0025 and an emitter-hit MIS
+    # weight of ~0.999, while the true scatter->light ~2 gives pdf_light ~4
+    # and a weight of ~0.001. Both NEE and BSDF sampling then took nearly FULL
+    # weight instead of partitioning, and the two summed: measured on an
+    # area-lit slab, NEE alone 0.861x pbrt, phase sampling alone 0.975x,
+    # combined 1.80x ~= their sum. Adding this back to inter.tHit restores the
+    # real distance. A null interface never bends the ray, so accumulating
+    # scalar distance is exact, however many boundaries are crossed.
+    var mis_null_dist: Float32
 # <</listing>>
-# PathState_C layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+8+20 = 124 bytes (no trailing pad needed);
+# PathState_C layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+8+20+4 = 128 bytes;
 # size is computed via size_of[PathState_C]() everywhere (GPU buffer sizing included), not hardcoded.
 
 # ── Lights ────────────────────────────────────────────────────────────────────

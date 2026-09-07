@@ -28,6 +28,7 @@ def _dummy_path(ray: Ray_C, throughput: SpectralSample) -> PathState_C:
         Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
         Float32(0.0), Int32(-1), Int32(0), UInt64(0),
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
+        Float32(0.0),   # mis_null_dist
     )
 
 # ── Curve area lights (task #59: glowing_hair.pbrt used to render black) ───
@@ -161,6 +162,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
         UInt64(1), UInt64(1), Int8(1), Int8(0),  # specularBounce = 0
         Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)), pdf_bsdf, Int32(-1), Int32(0), UInt64(0),
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
+        Float32(0.0),   # mis_null_dist
     )
     intersections[0] = inter
 
