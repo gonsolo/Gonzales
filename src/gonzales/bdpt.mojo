@@ -1813,7 +1813,20 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             if sph_hit.isAreaLight != Int8(0):
                 var mis_w_sph_hit = Float32(1)
                 if last_bsdf_pdf >= Float32(0):
-                    var to_c_hit = sph_hit.center - hit
+                    # The competing NEE strategy was taken at the vertex that
+                    # GENERATED this ray, so its cone pdf must be measured from
+                    # there -- `ro` -- exactly as the area-light case below
+                    # measures its own pdf with `t_hit` from the same origin.
+                    # This used to measure from `hit`, the point ON the sphere,
+                    # where |center - hit| IS the radius by construction, so
+                    # sin2_max was identically 1, the `< 1` guard below always
+                    # failed and mis_w stayed 1: the emitter hit took FULL
+                    # weight against an already-full-weight NEE and every
+                    # sphere light was counted TWICE. Measured on a sphere
+                    # light over a diffuse floor: --vcm read 1.96x pbrt, and
+                    # the emitter hit alone accounted for 0.121 of the correct
+                    # 0.130 where MIS should have given it ~3.6e-5.
+                    var to_c_hit = sph_hit.center - ro
                     var dc_sq_hit = to_c_hit.length_sq()
                     var sin2_max_hit = sph_hit.radius * sph_hit.radius / dc_sq_hit
                     if sin2_max_hit < Float32(1):
