@@ -1152,21 +1152,37 @@ def _bdpt_connect_to_cache(
     No RNG needed here anymore — the set of light vertices to connect to is
     now fully determined by which pixel `cv`'s eye subpath belongs to."""
     var sum = SpectralSample(Float32(0))
-    # See _bdpt_light_path_bounce's volume-vertex-store comment: an
-    # area-light-originated path's index 0 IS the light source, and every
-    # later index is an ADDITIONAL real scattering event on the SAME photon --
-    # connecting a volume cv to more than one of them summed an n-scatter
-    # path (n+1) times (measured 2.7x on an area-lit slab, fixed to ~0.98x by
-    # this restriction + the emitter-hit MIS fix below). A distant/infinite/
-    # point-light origin has no such vertex (n_verts starts at 0 for them),
-    # so index 0 there is itself a real photon with no s=1 alternative to
-    # single out -- the restriction must not apply, or that light type loses
-    # its only bidirectional connection into the medium entirely.
-    var area_light_origin = (path_len > 0
-        and lvc[lp_idx * _BDPT_MAX_VERTS].is_light == Int32(1))
-    var n_connect = Int(1) if (cv.is_surface == Int32(0) and area_light_origin) else path_len
-    for local in range(n_connect):
+    # Sum every MIS-WEIGHTED pair, but take at most ONE UNWEIGHTED pair.
+    #
+    # Connecting cv to light vertex s and to light vertex s+1 samples paths of
+    # DIFFERENT total length, so both are legitimate -- but they are also two
+    # of the several (s,t) splits by which BDPT can reach a path of any GIVEN
+    # length, and those splits are competing strategies that must share one
+    # unit of weight between them. The dVCM/dVC machinery does exactly that
+    # for pairs it covers. It does NOT cover volume vertices (no surface pdf),
+    # so those pairs come back at full weight and simply SUM: measured on an
+    # env-lit slab, capping the light-vertex count at 1/2/3/all gave
+    # 1.027 / 1.388 / 1.651 / 1.969 x pbrt -- each extra split adding a
+    # roughly constant amount that never decays, which is the signature.
+    #
+    # Limiting the unweighted ones to a single (lowest-index) pair restores
+    # exactly one strategy per path length: a path with N scattering vertices
+    # is sampled as (camera N-1, light 1) and no other way. That is unbiased,
+    # and it costs only the bidirectional variance reduction those extra
+    # splits were providing -- correctness over noise, until volume vertices
+    # get real MIS weights of their own.
+    #
+    # Deliberately keyed on the PAIR rather than on the light type: a SURFACE
+    # cv connecting to several volume light vertices is the same over-count
+    # seen from the other side, and an earlier light-type-keyed version of
+    # this fix missed it entirely.
+    var took_unweighted = False
+    for local in range(path_len):
         var lv = lvc[lp_idx * _BDPT_MAX_VERTS + local]
+        if not _bdpt_connect_pair_weighted(cv, lv):
+            if took_unweighted:
+                continue
+            took_unweighted = True
         sum += _connect(cv, lv, sd, has_med, scratch, mis_vm_weight_factor)
     return sum
 
@@ -1193,18 +1209,21 @@ def _bdpt_connect_to_cache_deferred(
     _BDPT_MAX_VERTS slots, marking unused/invalid ones so stale data from a
     previous bounce or sample never leaks through a reused buffer."""
     var base = lp_idx * _BDPT_MAX_VERTS
-    # See _bdpt_connect_to_cache's matching comment: a camera VOLUME vertex
-    # connects to at most the light path's index 0, and only when that index
-    # is an area-light source -- otherwise (distant/infinite/point origin, or
-    # index 0 being a real photon with no s=1 alternative) it must reach every
-    # stored vertex, same as a surface cv always does.
-    var area_light_origin = (path_len > 0 and lvc[base].is_light == Int32(1))
-    var n_connect = Int(1) if (cv.is_surface == Int32(0) and area_light_origin) else path_len
+    # Same "every weighted pair, at most one unweighted pair" rule as
+    # _bdpt_connect_to_cache -- see its comment for the derivation and the
+    # measurement. Slots skipped by the rule are marked invalid, exactly like
+    # slots past path_len, so no stale contribution leaks through.
+    var took_unweighted = False
     for local in range(_BDPT_MAX_VERTS):
-        if local >= n_connect:
+        if local >= path_len:
             shadow_valid[base + local] = Int8(0)
             continue
         var lv = lvc[base + local]
+        if not _bdpt_connect_pair_weighted(cv, lv):
+            if took_unweighted:
+                shadow_valid[base + local] = Int8(0)
+                continue
+            took_unweighted = True
         var (contrib, valid) = _connect_unweighted(cv, lv, sd, mis_vm_weight_factor)
         if not valid:
             shadow_valid[base + local] = Int8(0)
@@ -3734,6 +3753,17 @@ def _bdpt_vertex_mis_scoped(v: BDPTVertex) -> Bool:
     if v.is_surface != Int32(1):
         return False
     return v.mat_kind == Int32(0) or v.mat_kind == Int32(1) or v.mat_kind == Int32(2) or v.mat_kind == Int32(3)
+
+@always_inline
+def _bdpt_connect_pair_weighted(cv: BDPTVertex, lv: BDPTVertex) -> Bool:
+    """True when _connect applies a real per-pair MIS weight to (cv, lv).
+
+    MUST stay identical to the condition guarding _connect's own dVCM/dVC
+    weight block -- the caller uses this to decide which connections may be
+    summed freely (weighted ones) and which must be limited to one per camera
+    vertex (unweighted ones), so a mismatch here silently reintroduces the
+    over-count this predicate exists to prevent."""
+    return _bdpt_vertex_mis_scoped(cv) and (lv.is_light == Int32(1) or _bdpt_vertex_mis_scoped(lv))
 
 # ── Connect one camera vertex to one light vertex ─────────────────────────────
 
