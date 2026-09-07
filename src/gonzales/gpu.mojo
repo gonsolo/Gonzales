@@ -2450,21 +2450,74 @@ def _sample_medium_core(
                                         Tval = Float32(0.0)
                                         break
                             T = RGB(Tval, Tval, Tval)
-                        elif spectral_res > 0:
-                            # Same reasoning as the free-flight weight above:
-                            # the spectral extinction conversion is not a real
-                            # extinction fit and returned transmittances > 1.
-                            T = RGB(exp(-sigma_t.r * dist), exp(-sigma_t.g * dist), exp(-sigma_t.b * dist))
                         else:
-                            T = RGB(exp(-sigma_t.r * dist), exp(-sigma_t.g * dist), exp(-sigma_t.b * dist))
+                            # Beer-Lambert over the part of the segment that is
+                            # actually INSIDE the medium, not the whole way to
+                            # the light.
+                            #
+                            # This used to attenuate over `dist` unconditionally,
+                            # which charges the vacuum between the medium's
+                            # boundary and the light for extinction it never
+                            # applies. The grid branch above is accidentally
+                            # immune -- its density lookup returns 0 outside the
+                            # grid, so ratio tracking simply stops attenuating --
+                            # which is why only homogeneous media showed it.
+                            # Measured on an area-lit slab: homogeneous read
+                            # 0.117x pbrt where uniformgrid read 0.954x at the
+                            # same geometry, against a predicted e^2 = 7.4x for
+                            # the 2 units of vacuum involved.
+                            #
+                            # The exit distance is the first interface surface
+                            # along the segment. Occlusion has already been
+                            # ruled out above, so any hit here is a non-opaque
+                            # boundary. Scope: this finds ONE exit, which is
+                            # exact for a ray leaving a single convex medium --
+                            # the case every medium scene in the corpus has --
+                            # and does not model re-entry or nested media. A
+                            # general version needs the medium-transition walk
+                            # bdpt.mojo's _visible_transmittance already does.
+                            var t_med = dist
+                            var _exit_inter = InlineArray[Intersection_C, 1](fill=Intersection_C(
+                                PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
+                                Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
+                            var exit_ptr = _exit_inter.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin]()
+                            exit_ptr[0].hit = Int8(0)
+                            traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, shad_ray,
+                                               shad_tmax, exit_ptr, blasNodesArr, blasPrimIdsArr, instances)
+                            if exit_ptr[0].hit != Int8(0):
+                                var exit_mat = materials[Int(exit_ptr[0].primId.materialIndex)]
+                                if exit_mat.type == MatKind.interface:
+                                    t_med = exit_ptr[0].tHit
+                            T = RGB(exp(-sigma_t.r * t_med), exp(-sigma_t.g * t_med), exp(-sigma_t.b * t_med))
                         # The old `geom` also carried al.total_area/light_sel_pdf,
                         # i.e. 1/q -- that now lives inside res.state.w, so the
                         # geometry factor here is the bare cos_l/dist^2.
                         var geom = cos_l / dist_sq
                         var ph_a = hg_phase(dot(-ray_dir, shadow_dir), med.g)
+                        # MIS against phase sampling. A volume scatter sets
+                        # lastBsdfPdf to the phase pdf and specularBounce to 0,
+                        # so a phase-sampled ray that lands on this same emitter
+                        # is ALREADY weighted by power_heuristic(pdf_bsdf,
+                        # pdf_light) in shading.mojo's emitter-hit handler --
+                        # but this side carried no weight at all, so the two
+                        # strategies summed to more than one. Invisible for
+                        # small/distant lights, where phase sampling almost
+                        # never finds the emitter and this weight is ~1; it grew
+                        # to 1.70x too bright once the lights subtended a large
+                        # solid angle. pdf_light is deliberately spelled exactly
+                        # as the emitter-hit side spells it -- MIS is only
+                        # correct if both halves agree on the pdf.
+                        var al_win = areaLights[Int(res.light_idx)]
+                        var sel_lo = lightSamplerCdf[Int(res.light_idx)]
+                        var sel_hi = lightSamplerCdf[Int(res.light_idx) + 1]
+                        var sel_pdf_win = max(sel_hi - sel_lo, Float32(1e-6))
+                        var mis_w = Float32(1.0)
+                        if al_win.total_area > Float32(0.0):
+                            var pdf_light = dist_sq * sel_pdf_win / (cos_l * al_win.total_area)
+                            mis_w = power_heuristic(pdf_light, ph_a)
                         path_ptr[].estimate += path_ptr[].throughput * _med_spec_illum(
                             res.le * T, path_ptr[].wavelengths, spectral_coeffs, spectral_res,
-                            spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) * (geom * ph_a * res.state.w)
+                            spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) * (geom * ph_a * mis_w * res.state.w)
 
         # ── Volume scatter NEE — INFINITE (environment) light ────────────
         # Without this a medium lit ONLY by a sky dome -- which is every
