@@ -52,6 +52,14 @@ from .spectrum import (
     rgb_bands_to_spectral_sample,
 )
 
+# last_bsdf_pdf sentinel: the previous camera-path event was a VOLUME scatter.
+# Distinct from -1 (delta bounce, no competing strategy anywhere) because a
+# volume vertex DOES have a competing strategy for a subsequent area-light
+# hit -- its own s=1 connection to the light-source vertex -- and the hit must
+# be MIS-weighted against it with the isotropic phase pdf 1/(4pi). It stays
+# negative so the infinite-light miss handler keeps giving full weight: volume
+# vertices do no environment NEE in this integrator, so nothing competes there.
+comptime _VOL_PHASE_HIT: Float32 = Float32(-2.0)
 comptime _BDPT_MAX_DEPTH = 40  # max surface/medium interactions per subpath (incl.
                                 # non-stored delta/dielectric bounces — glass-of-water's
                                 # nested water/ice/glass interfaces need ~30 crossings
@@ -1144,7 +1152,20 @@ def _bdpt_connect_to_cache(
     No RNG needed here anymore — the set of light vertices to connect to is
     now fully determined by which pixel `cv`'s eye subpath belongs to."""
     var sum = SpectralSample(Float32(0))
-    for local in range(path_len):
+    # See _bdpt_light_path_bounce's volume-vertex-store comment: an
+    # area-light-originated path's index 0 IS the light source, and every
+    # later index is an ADDITIONAL real scattering event on the SAME photon --
+    # connecting a volume cv to more than one of them summed an n-scatter
+    # path (n+1) times (measured 2.7x on an area-lit slab, fixed to ~0.98x by
+    # this restriction + the emitter-hit MIS fix below). A distant/infinite/
+    # point-light origin has no such vertex (n_verts starts at 0 for them),
+    # so index 0 there is itself a real photon with no s=1 alternative to
+    # single out -- the restriction must not apply, or that light type loses
+    # its only bidirectional connection into the medium entirely.
+    var area_light_origin = (path_len > 0
+        and lvc[lp_idx * _BDPT_MAX_VERTS].is_light == Int32(1))
+    var n_connect = Int(1) if (cv.is_surface == Int32(0) and area_light_origin) else path_len
+    for local in range(n_connect):
         var lv = lvc[lp_idx * _BDPT_MAX_VERTS + local]
         sum += _connect(cv, lv, sd, has_med, scratch, mis_vm_weight_factor)
     return sum
@@ -1172,8 +1193,15 @@ def _bdpt_connect_to_cache_deferred(
     _BDPT_MAX_VERTS slots, marking unused/invalid ones so stale data from a
     previous bounce or sample never leaks through a reused buffer."""
     var base = lp_idx * _BDPT_MAX_VERTS
+    # See _bdpt_connect_to_cache's matching comment: a camera VOLUME vertex
+    # connects to at most the light path's index 0, and only when that index
+    # is an area-light source -- otherwise (distant/infinite/point origin, or
+    # index 0 being a real photon with no s=1 alternative) it must reach every
+    # stored vertex, same as a surface cv always does.
+    var area_light_origin = (path_len > 0 and lvc[base].is_light == Int32(1))
+    var n_connect = Int(1) if (cv.is_surface == Int32(0) and area_light_origin) else path_len
     for local in range(_BDPT_MAX_VERTS):
-        if local >= path_len:
+        if local >= n_connect:
             shadow_valid[base + local] = Int8(0)
             continue
         var lv = lvc[base + local]
@@ -1420,6 +1448,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     var dvc_carry = st.dvc
     var dvm_carry = st.dvm
     var last_bsdf_pdf = st.last_bsdf_pdf
+    var mis_null_dist = st.mis_null_dist
     var wavelengths = SampledWavelengths(st.wl0, st.wl1, st.wl2, st.wl3, st.wl_pdf)
     if st.active == Int8(0):
         return (total, first_alb)
@@ -1439,7 +1468,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
             mis_vc_weight_factor, mis_vm_weight_factor,
             ro, rd, beta, total, first_alb, n_verts, n_bounces, cur_med_idx,
-            dvcm_carry, dvc_carry, dvm_carry, last_bsdf_pdf, wavelengths):
+            dvcm_carry, dvc_carry, dvm_carry, last_bsdf_pdf, mis_null_dist, wavelengths):
             break
 
     return (total, first_alb)
@@ -1474,6 +1503,12 @@ struct VCMCameraPathState_C(TrivialRegisterPassable):
     var wl2: Float32
     var wl3: Float32
     var wl_pdf: Float32
+    # Distance travelled through null interfaces since the last real
+    # scattering event -- same role as PathState_C.mis_null_dist. The
+    # interface branch resets `ro` to the boundary it crossed, so a later
+    # emitter hit's t_hit measures from the boundary, not from the vertex
+    # whose sample generated the direction; the MIS pdf needs the latter.
+    var mis_null_dist: Float32
 
 def _bdpt_camera_path_init[use_gpu: Bool](
     r2c:     UnsafePointer[Float32, MutExternalOrigin],
@@ -1564,6 +1599,7 @@ def _bdpt_camera_path_init[use_gpu: Bool](
         Int32(n_verts), Int32(n_bounces), cur_med_idx, last_bsdf_pdf, Int8(1),
         pcg.state, pcg.inc,
         wavelengths.lambda0, wavelengths.lambda1, wavelengths.lambda2, wavelengths.lambda3, wavelengths.pdf,
+        Float32(0.0),
     )
 
 def _bdpt_camera_path_bounce[use_gpu: Bool](
@@ -1594,6 +1630,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     mut dvc_carry: Float32,
     mut dvm_carry: Float32,
     mut last_bsdf_pdf: Float32,
+    mut mis_null_dist: Float32,
     wavelengths: SampledWavelengths,
     # Task #163 stage 5: when set, the DIFFUSE branch's connect step queues
     # its shadow rays into these buffers (one _BDPT_MAX_VERTS-sized slice
@@ -1684,11 +1721,16 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             if ff.collided:
                 # Volume scatter vertex
                 var sp = ro + rd*ff.t_free
-                # BDPT vertex beta: Tr/pdf_free × phase/pdf_phase = 1/sig_t × sig_s = alb_s
-                # (exp(-sig_t×t) cancels between Tr numerator and pdf denominator)
                 var v = _null_vertex()
                 v.pos = sp
-                v.beta = beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, wavelengths)
+                # `beta`, NOT beta*albedo. A vertex's beta is the throughput
+                # ARRIVING at it; its own response is applied separately at
+                # connect time by _eval_vertex_spectral, whose volume branch
+                # returns v.alb/(4*pi). Baking albedo in here as well counted
+                # it twice per volume vertex. Measured (2048 spp, 3 seeds):
+                # the direct s=1 connection read 0.785x pbrt with the double
+                # count and 0.983x without -- a factor of exactly 1/albedo.
+                v.beta = beta
                 v.alb = ff.albedo
                 v.is_surface = Int32(0); v.is_delta = Int32(0)
                 v.pdf_fwd = ff.sig_t * exp(-ff.sig_t * ff.t_free)
@@ -1725,7 +1767,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var phi  = Float32(2)*PI*u2
                 rd = Vec3f(sinT*cos(phi), sinT*sin(phi), cosT)
                 ro = sp + rd*Float32(0.0002)
-                last_bsdf_pdf = Float32(-1)  # isotropic phase scatter: no infinite-light NEE done here
+                last_bsdf_pdf = _VOL_PHASE_HIT   # see the sentinel's definition
+                mis_null_dist = Float32(0)     # this vertex is the new origin
                 return True   # volume free-flight scatter: no vertex stored this bounce, path continues
             else:
                 # Beer-Lambert through full segment to surface
@@ -1791,10 +1834,37 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var n_area_hit = Float32(max(Int(sd.areaLightCount), 1))
                     var pdf_light_al = dist2_hit / (cos_l_hit * n_area_hit * al_hit.total_area)
                     mis_w_al_hit = power_heuristic(last_bsdf_pdf, pdf_light_al)
+                elif last_bsdf_pdf == _VOL_PHASE_HIT:
+                    # The competing strategy is the volume vertex's s=1
+                    # connection to the light-source vertex, whose area pdf is
+                    # 1/(total_area * n_lights) with n_lights counting EVERY
+                    # light type (that is how _bdpt_light_path_init picks a
+                    # light) -- spelled the same way here, since MIS is only
+                    # right when both halves agree on the pdf. The distance is
+                    # from the scattering vertex, not the current ray origin.
+                    var d_vol = t_hit + mis_null_dist
+                    var n_lights_hit = Float32(max(Int(sd.areaLightCount) + Int(sd.distantLightCount)
+                                                   + Int(sd.infiniteLightCount) + Int(sd.pointLightCount), 1))
+                    var pdf_light_vol = d_vol * d_vol / (cos_l_hit * n_lights_hit * al_hit.total_area)
+                    mis_w_al_hit = power_heuristic(INV_FOUR_PI, pdf_light_vol)
                 total += beta * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (al_hit.emission).r, (al_hit.emission).g, (al_hit.emission).b, wavelengths) * mis_w_al_hit
             return False   # direct hit on an area-light triangle/curve -- terminates the path
 
-        elif mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit:
+        # Every arm of the dispatch below except a null interface is a real
+        # scattering event, and the null-interface distance accumulated on
+        # the way here has served its purpose. A plain (non-chained) `if`,
+        # deliberately: folding this into the elif chain below as its own
+        # first arm silently swallowed every other branch (diffuse, conductor,
+        # dielectric, interface's own logic, ...) -- an `if` that matches
+        # takes over the ENTIRE following elif sequence, which is exactly
+        # backwards from "reset unless interface". Caught by the smoketest
+        # regressing (cpu-vcm 0.130 -> 0.106 on cornell-box, no medium at
+        # all), which is why this comment is here: the failure mode is
+        # completely silent otherwise -- it still compiles and still returns.
+        if mat.type != MatKind.interface:
+            mis_null_dist = Float32(0)
+
+        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit:
             var gn = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             # VCM Stage 2b: finish the per-bounce MIS correction (dist²
@@ -2503,6 +2573,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
                 if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
             ro = hit + rd*Float32(0.0002)
+            mis_null_dist += t_hit + Float32(0.0002)   # see VCMCameraPathState_C.mis_null_dist
             # VCM Stage 2b: pure pass-through, carry unchanged (see
             # _bdpt_trace_light_path's matching interface-branch comment).
 
@@ -2812,10 +2883,13 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             var ff = sample_homogeneous_free_flight(med, t_hit, pcg)
             if ff.collided:
                 var sp = ro + rd*ff.t_free
-                # BDPT vertex beta: exp(-sig_t×t)/pdf_free × alb_s = 1/sig_t × alb_s = alb_s (for sig_t=1)
                 var v = _null_vertex()
                 v.pos = sp
-                v.beta = flux * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, wavelengths)
+                # `flux`, NOT flux*albedo -- see the matching camera-side
+                # comment in _bdpt_camera_path_bounce: a stored vertex's
+                # beta/flux must EXCLUDE its own local response, which
+                # _eval_vertex_spectral applies fresh at connect/merge time.
+                v.beta = flux
                 v.alb = ff.albedo
                 v.is_surface = Int32(0); v.is_delta = Int32(0)
                 v.pdf_fwd = ff.sig_t * exp(-ff.sig_t * ff.t_free)
@@ -2823,6 +2897,21 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 v.wavelengths = wavelengths
                 n_verts += 1
                 _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
+                # Distant/infinite/point lights store NO lv0 (n_verts starts at
+                # 0 for them -- this function's own docstring: they have no
+                # NEE-equivalent cache vertex at all), so THIS volume scatter
+                # can land at index 0 and is the ONLY bidirectional-connection
+                # pathway those light types have into a medium -- deleting it
+                # outright (an earlier version of this fix) broke them (an
+                # env-lit slab went from 1.35x to 0.44x pbrt). An AREA-light
+                # origin, by contrast, has the light-source vertex ITSELF at
+                # index 0, and _bdpt_connect_to_cache restricts a camera
+                # VOLUME vertex to connecting to THAT one only -- see its own
+                # comment for why connecting to later same-subpath volume
+                # vertices too over-counted an n-scatter path (n+1) times
+                # (measured 2.7x on an area-lit slab). That restriction is
+                # keyed on the light path's own origin, so storing every
+                # volume vertex here unconditionally is correct for both.
                 # Volume scatter is isotropic (no surface normal, no
                 # cosThetaFix) -- out of MIS scope (like delta dielectric),
                 # reset as if specular so a LATER diffuse/conductor/hair/
@@ -3760,6 +3849,16 @@ def _connect(
         var w_camera = light_bsdf_dir_pdf_a * (mis_vm_weight_factor + cv.dVCM + cv.dVC * camera_bsdf_rev_pdf_w)
         var mis_weight = Float32(1) / (w_light + Float32(1) + w_camera)
         contrib *= mis_weight
+    elif cv.is_surface == Int32(0) and lv.is_light == Int32(1) and lv.pdf_fwd > Float32(0):
+        # Volume vertex -> light source: MIS against the phase-hit strategy
+        # (the camera path continuing by uniform-sphere sampling and landing
+        # on this emitter), whose pdf is the isotropic phase pdf 1/(4pi).
+        # lv.pdf_fwd is the light point's area pdf; convert to solid angle at
+        # cv. The hit side computes the same pdf in the same measure.
+        var cos_lv_vol = abs(dot(neg_dir, lv.normal.to_simd()))
+        if cos_lv_vol > Float32(1e-8):
+            var pdf_light_w_vol = lv.pdf_fwd * dist2 / cos_lv_vol
+            contrib *= power_heuristic(pdf_light_w_vol, INV_FOUR_PI)
 
     return contrib
 
@@ -3874,6 +3973,16 @@ def _connect_unweighted(
         var w_camera = light_bsdf_dir_pdf_a * (mis_vm_weight_factor + cv.dVCM + cv.dVC * camera_bsdf_rev_pdf_w)
         var mis_weight = Float32(1) / (w_light + Float32(1) + w_camera)
         contrib *= mis_weight
+    elif cv.is_surface == Int32(0) and lv.is_light == Int32(1) and lv.pdf_fwd > Float32(0):
+        # Volume vertex -> light source: MIS against the phase-hit strategy
+        # (the camera path continuing by uniform-sphere sampling and landing
+        # on this emitter), whose pdf is the isotropic phase pdf 1/(4pi).
+        # lv.pdf_fwd is the light point's area pdf; convert to solid angle at
+        # cv. The hit side computes the same pdf in the same measure.
+        var cos_lv_vol = abs(dot(neg_dir, lv.normal.to_simd()))
+        if cos_lv_vol > Float32(1e-8):
+            var pdf_light_w_vol = lv.pdf_fwd * dist2 / cos_lv_vol
+            contrib *= power_heuristic(pdf_light_w_vol, INV_FOUR_PI)
 
     return (contrib, True)
 
@@ -4880,6 +4989,7 @@ def _bdpt_camera_path_bounce_gpu(
     var dvc_carry = states[pix].dvc
     var dvm_carry = states[pix].dvm
     var last_bsdf_pdf = states[pix].last_bsdf_pdf
+    var mis_null_dist = states[pix].mis_null_dist
     var wavelengths = SampledWavelengths(states[pix].wl0, states[pix].wl1, states[pix].wl2, states[pix].wl3, states[pix].wl_pdf)
 
     var cont = _bdpt_camera_path_bounce[True](
@@ -4887,7 +4997,7 @@ def _bdpt_camera_path_bounce_gpu(
         merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
         mis_vc_weight_factor, mis_vm_weight_factor,
         ro, rd, beta, total, first_alb, n_verts, n_bounces, cur_med_idx,
-        dvcm_carry, dvc_carry, dvm_carry, last_bsdf_pdf, wavelengths,
+        dvcm_carry, dvc_carry, dvm_carry, last_bsdf_pdf, mis_null_dist, wavelengths,
         defer_shadow_rays != Int8(0), shadow_rays, shadow_pending, shadow_valid, shadow_seg_med,
     )
     states[pix].active = Int8(1) if cont else Int8(0)
@@ -4903,6 +5013,7 @@ def _bdpt_camera_path_bounce_gpu(
     states[pix].dvc = dvc_carry
     states[pix].dvm = dvm_carry
     states[pix].last_bsdf_pdf = last_bsdf_pdf
+    states[pix].mis_null_dist = mis_null_dist
     states[pix].pcg_state = pcg.state
     states[pix].pcg_inc = pcg.inc
 
