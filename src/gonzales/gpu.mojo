@@ -1919,7 +1919,22 @@ def _spectral_beer_lambert_rgb(
     var v3 = exp(-sigma_t_spec.v3 * dist)
     var trans_spec = SpectralSample(v0, v1, v2, v3)
     var (tr, tg, tb) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, trans_spec, wl)
-    return RGB(tr, tg, tb)
+    # Normalise the spectral round trip. spectral_sample_to_rgb is built for
+    # radiance, so it does NOT map a flat unit spectrum back to RGB 1 -- the
+    # unnormalised result here returned values ABOVE 1 for a quantity that is
+    # a TRANSMITTANCE and must lie in [0,1]. Multiplying path throughput by a
+    # >1 "transmittance" once per scattering event compounds: measured
+    # against an analytic answer of exactly 1.0, a conservative homogeneous
+    # medium rendered 0.470 at tau=2, 6.0 at tau=4 and 1979 at tau=8, with
+    # single pixels reaching 6.1e6. Dividing by the SAME round trip applied
+    # to a flat unit spectrum (at this path's own hero wavelengths, so the
+    # normaliser matches the numerator exactly) restores T(0) = 1 and keeps
+    # the spectral colouring the Stage-5b rollout added.
+    var white_spec = SpectralSample(Float32(1), Float32(1), Float32(1), Float32(1))
+    var (wr, wg, wb) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, white_spec, wl)
+    return RGB(tr / max(wr, Float32(1e-8)),
+               tg / max(wg, Float32(1e-8)),
+               tb / max(wb, Float32(1e-8)))
 
 @always_inline
 def _volume_nee_light(
@@ -1930,6 +1945,7 @@ def _volume_nee_light(
     g: Float32,
     mut pcg: PCG32,
     use_nvdb: Bool,
+    use_dense: Bool,
     grid: Grid_C,
     nvdb_grid: NvdbGrid_C,
     sigma_maj: Float32,
@@ -1968,6 +1984,26 @@ def _volume_nee_light(
     # Ratio-track transmittance, but only across the span the ray actually
     # spends inside the density grid -- see nvdb_ray_range's docstring for why
     # an unbounded march is not an option for a light with no finite distance.
+    var is_het = use_dense or use_nvdb
+    if not is_het:
+        # Homogeneous: transmittance is closed-form, but only over the span
+        # the ray actually spends INSIDE the medium. That span ends at the
+        # medium's bounding interface, which this function does not otherwise
+        # know, so find it with a closest-hit query. Interface surfaces are
+        # invisible to any_hit (they must not occlude), so this deliberately
+        # uses the ordinary traversal, whose first hit IS that shell.
+        var exit_i = Intersection_C(
+            PrimId_C(Int64(0), Int64(0), Int64(-1), Int32(-1), Int8(0), 0, 0, 0),
+            Float32(0), Float32(0), Float32(0), Int8(0), 0, 0, 0)
+        traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, e_ray, ls.dist,
+                           UnsafePointer(to=exit_i), blasNodesArr, blasPrimIdsArr,
+                           instances, spheres, n_spheres)
+        var span = ls.dist if exit_i.hit == Int8(0) else exit_i.tHit
+        var Th = exp(-sigma_t_r * span)
+        var ph_h = hg_phase(dot(wo, edir), g)
+        var mis_h = Float32(1.0) if ls.is_delta else power_heuristic(ls.pdf, ph_h)
+        path_ptr[].estimate += path_ptr[].throughput * ls.Li * (Th * ph_h * mis_h / ls.pdf)
+        return
     var rng = nvdb_ray_range(nvdb_grid, scatter_pt_w, edir) if use_nvdb else grid_ray_range(grid, scatter_pt_w, edir)
     var t_lo = max(rng[0], Float32(0.0))
     var t_hi = min(rng[1], ls.dist)
@@ -2223,16 +2259,55 @@ def _sample_medium_core(
         if sigma_t.r <= Float32(0.0):
             path_ptr[].pcgState = pcg.state
             return
+        # The free-flight distance is sampled from the R channel's own
+        # exponential, pdf(t) = sigma_t.r * exp(-sigma_t.r * t), so that
+        # channel's transmittance is ALREADY accounted for by the sampling
+        # probability. Only the RATIO of each channel's transmittance to the
+        # sampled one survives as a weight:
+        #     pass-through : exp(-(sigma_t_c - sigma_t.r) * t_surf)
+        #     collision    : exp(-(sigma_t_c - sigma_t.r) * t) * sigma_s_c/sigma_s.r
+        # (the sigma_s ratio because the analog scatter/absorb coin below
+        # already applies sigma_s.r/sigma_t.r). For a GREY medium both
+        # reduce to exactly 1 -- nothing to multiply at all.
+        #
+        # This used to multiply by the FULL exp(-sigma_t_c * t), double-
+        # counting the transmittance the pdf already contains. That made
+        # throughput decay exponentially per scattering event, which
+        # Russian roulette then compensated for with 1/luminance factors --
+        # so the medium came out both far too dark AND threw enormous
+        # fireflies (measured against an analytic answer of exactly 1.0: a
+        # conservative medium read 0.470 at tau=2, 6.0 at tau=4 and 1979 at
+        # tau=8, with single pixels reaching 6.1e6).
         var u_free = pcg.next_float()
         t_free = -log(max(u_free, Float32(1e-7))) / sigma_t.r
         var t_seg = min(t_free, t_surf)
-        if spectral_res > 0:
-            path_ptr[].throughput *= _spectral_beer_lambert_rgb(sigma_t, t_seg, path_ptr[].wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
-        else:
-            path_ptr[].throughput *= RGB(exp(-sigma_t.r * t_seg), exp(-sigma_t.g * t_seg), exp(-sigma_t.b * t_seg))
+        # The weight MUST be the ratio of each channel's transmittance to the
+        # one the distance was sampled from, using the SAME sigma_t. It used
+        # to use a spectral Beer-Lambert whose sigma_t came from an
+        # illuminant-style RGB->spectral conversion the function itself
+        # documents as "not a physically rigorous spectral-extinction fit".
+        # That made the numerator's effective extinction differ from the
+        # sampling one, so the weight was exp((sigma_t.r - sigma_t_spec) * t)
+        # -- growing exponentially with distance and compounding once per
+        # scattering event. Measured against an analytic answer of exactly
+        # 1.0, a conservative homogeneous medium rendered 0.470 at tau=2,
+        # 6.0 at tau=4 and 1979 at tau=8 (single pixels at 6.1e6), and the
+        # divergence survived normalising that round trip. Spectral colouring
+        # of EXTINCTION is therefore not applied here; doing it properly
+        # means sampling the free flight from a hero wavelength and combining
+        # wavelengths with MIS, which is real chromatic-media work, not a
+        # colour conversion.
+        var t_ref = exp(-sigma_t.r * t_seg)          # the sampled channel's own transmittance
+        if t_ref < Float32(1e-30): t_ref = Float32(1e-30)
+        path_ptr[].throughput *= RGB(Float32(1.0),
+                                     exp(-sigma_t.g * t_seg) / t_ref,
+                                     exp(-sigma_t.b * t_seg) / t_ref)
         if t_free >= t_surf:
             path_ptr[].pcgState = pcg.state
             return
+        # Chromatic scattering ratio; 1 for a grey medium.
+        var ss_r = max(med.sigma_s.r, Float32(1e-30))
+        path_ptr[].throughput *= RGB(Float32(1.0), med.sigma_s.g / ss_r, med.sigma_s.b / ss_r)
         albedo_r = med.sigma_s.r / max(sigma_t.r, Float32(1e-7))
 
     # Both branches above already `return` early for the "no real collision"
@@ -2318,7 +2393,10 @@ def _sample_medium_core(
                                         break
                             T = RGB(Tval, Tval, Tval)
                         elif spectral_res > 0:
-                            T = _spectral_beer_lambert_rgb(sigma_t, dist, path_ptr[].wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+                            # Same reasoning as the free-flight weight above:
+                            # the spectral extinction conversion is not a real
+                            # extinction fit and returned transmittances > 1.
+                            T = RGB(exp(-sigma_t.r * dist), exp(-sigma_t.g * dist), exp(-sigma_t.b * dist))
                         else:
                             T = RGB(exp(-sigma_t.r * dist), exp(-sigma_t.g * dist), exp(-sigma_t.b * dist))
                         var geom = al.total_area * cos_l / (dist_sq * light_sel_pdf)
@@ -2357,29 +2435,29 @@ def _sample_medium_core(
         # this function does not know -- so it keeps its previous behavior
         # rather than getting a subtly wrong transmittance. That remains a
         # real, pre-existing gap for homogeneous media.
-        if use_dense or use_nvdb:
+        if True:
             var scatter_w = scatter_pt.to_simd()
             var wo_v = -ray_dir
             for dl_i in range(n_distant_lights):
                 _volume_nee_light(path_ptr, _sample_distant_light_nee(distantLights[dl_i]),
-                    scatter_w, wo_v, med.g, pcg, use_nvdb, grid, nvdb_grid, sigma_maj, sigma_t.r,
+                    scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
                     bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
                     instances, spheres, n_spheres, materials)
             for pl_i in range(n_point_lights):
                 _volume_nee_light(path_ptr, _sample_point_light_nee(pointLights[pl_i], scatter_w),
-                    scatter_w, wo_v, med.g, pcg, use_nvdb, grid, nvdb_grid, sigma_maj, sigma_t.r,
+                    scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
                     bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
                     instances, spheres, n_spheres, materials)
             for sph_i in range(n_spheres):
                 if spheres[sph_i].isAreaLight == Int8(1):
                     _volume_nee_light(path_ptr, _sample_sphere_light_nee(spheres[sph_i], n_spheres, scatter_w, pcg),
-                        scatter_w, wo_v, med.g, pcg, use_nvdb, grid, nvdb_grid, sigma_maj, sigma_t.r,
+                        scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
                         bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
                         instances, spheres, n_spheres, materials)
             for inf_i in range(n_infinite_lights):
                 _volume_nee_light(path_ptr,
                     _sample_infinite_light_nee(infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float())),
-                    scatter_w, wo_v, med.g, pcg, use_nvdb, grid, nvdb_grid, sigma_maj, sigma_t.r,
+                    scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
                     bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
                     instances, spheres, n_spheres, materials)
         # Sample the scatter direction from the medium's Henyey-Greenstein
