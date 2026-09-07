@@ -7,7 +7,7 @@ from gonzales.geometry import (
     DistantLight_C, PointLight_C, InfiniteLight_C, Sphere_C, LightSampler_C,
     curve_bspline_point, curve_light_tube_area, _curve_perp_axis, dot, cross,
 )
-from gonzales.spectrum import SampledWavelengths
+from gonzales.spectrum import SpectralSample, SampledWavelengths
 from gonzales.bvh import BVH2Node
 from gonzales.shading import shade_core_cpu_nee
 from gonzales.guide import null_guide
@@ -17,9 +17,14 @@ comptime EPS: Float32 = 1e-4
 def _close(a: Float32, b: Float32) -> Bool:
     return abs(a - b) < EPS
 
-def _dummy_path(ray: Ray_C, throughput: RGB) -> PathState_C:
+# Path transport is spectral (PathState_C.throughput/estimate are
+# SpectralSample). These fixtures use a null spectral handle, under which
+# spectrum.mojo's conversions carry plain R/G/B on lanes v0/v1/v2 (see
+# rgb_to_spectral_sample's table-less fallback) -- so the assertions below
+# read those lanes and mean exactly what the old RGB assertions meant.
+def _dummy_path(ray: Ray_C, throughput: SpectralSample) -> PathState_C:
     return PathState_C(
-        ray, throughput, RGB(Float32(0.0)), RGB(Float32(0.0)),
+        ray, throughput, SpectralSample(Float32(0.0)), RGB(Float32(0.0)),
         Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
         Float32(0.0), Int32(-1), Int32(0), UInt64(0),
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
@@ -53,7 +58,7 @@ def test_emissive_curve_hit_adds_emission_and_retires_path() raises:
 
     var paths = alloc[PathState_C](1)
     var intersections = alloc[Intersection_C](1)
-    paths[0] = _dummy_path(ray, RGB(Float32(0.5)))
+    paths[0] = _dummy_path(ray, SpectralSample(Float32(0.5)))
     intersections[0] = inter
 
     shade_core_cpu_nee(
@@ -76,9 +81,9 @@ def test_emissive_curve_hit_adds_emission_and_retires_path() raises:
     )
 
     # estimate += throughput(0.5) * emission(200,80,20) = (100,40,10); path retires.
-    assert_true(_close(paths[0].estimate.r, Float32(100.0)))
-    assert_true(_close(paths[0].estimate.g, Float32(40.0)))
-    assert_true(_close(paths[0].estimate.b, Float32(10.0)))
+    assert_true(_close(paths[0].estimate.v0, Float32(100.0)))
+    assert_true(_close(paths[0].estimate.v1, Float32(40.0)))
+    assert_true(_close(paths[0].estimate.v2, Float32(10.0)))
     assert_true(Int(paths[0].active) == 0)
     paths.free(); intersections.free(); materials.free()
 
@@ -151,7 +156,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
     var paths = alloc[PathState_C](1)
     var intersections = alloc[Intersection_C](1)
     paths[0] = PathState_C(
-        ray, RGB(Float32(0.5)), RGB(Float32(0.0)), RGB(Float32(0.0)),
+        ray, SpectralSample(Float32(0.5)), SpectralSample(Float32(0.0)), RGB(Float32(0.0)),
         Int32(1),  # bounce > 0: NOT the "camera sees light directly" shortcut
         UInt64(1), UInt64(1), Int8(1), Int8(0),  # specularBounce = 0
         Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)), pdf_bsdf, Int32(-1), Int32(0), UInt64(0),
@@ -185,7 +190,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
     # pdf_light = 25 / 1.1327173 = 22.070820, w = pdf_bsdf^2/(pdf_bsdf^2+pdf_light^2)
     # = 0.4^2/(0.4^2+22.070820^2) = 0.00032835258, estimate.r = 0.5*200*w =
     # 0.0328353 -- strictly less than the full-credit 100.0 this replaced.
-    assert_true(_close(paths[0].estimate.r, Float32(0.0328353)))
+    assert_true(_close(paths[0].estimate.v0, Float32(0.0328353)))
     paths.free(); intersections.free(); materials.free()
     curves.free(); area_lights.free(); cdf.free()
 

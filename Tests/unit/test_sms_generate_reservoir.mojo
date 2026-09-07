@@ -14,7 +14,7 @@ from gonzales.geometry import (
     AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, Sphere_C,
     MeasuredBRDF_C, PathState_C,
 )
-from gonzales.spectrum import null_spectral_handle, SampledWavelengths
+from gonzales.spectrum import SpectralSample, null_spectral_handle, SampledWavelengths
 from gonzales.bvh import BVH2Node
 from gonzales.guide import null_guide
 from gonzales.shading import ShadeContext, LightContext, GIPendingX1, sms_generate_reservoir, sms_resolve, sms_temporal_step, _shade_diffuse_nee
@@ -227,7 +227,7 @@ def test_sms_generate_real_glass_produces_a_streamed_candidate() raises:
 def _make_path() -> PathState_C:
     return PathState_C(
         Ray_C(Point3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0)),
-        RGB(Float32(1.0)), RGB(Float32(0.0)), RGB(Float32(0.0)),
+        SpectralSample(Float32(1.0)), SpectralSample(Float32(0.0)), RGB(Float32(0.0)),
         Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
         Float32(0.0), Int32(-1), Int32(0), UInt64(0),
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
@@ -261,7 +261,7 @@ def test_sms_resolve_on_empty_reservoir_is_a_noop() raises:
     assert_true(res.n_vertices == Int32(0))
 
     sms_resolve(path_arr, ctx, Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0), RGB(Float32(0.8)), res)
-    assert_true(_close(path_arr[0].estimate.r, Float32(0.0)))
+    assert_true(_close(path_arr[0].estimate.v0, Float32(0.0)))
 
     meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
     primIds.free(); bvh.free(); cdf.free(); path_arr.free()
@@ -303,9 +303,9 @@ def test_sms_resolve_on_real_glass_adds_positive_contribution() raises:
     path_arr[0] = _make_path()
     sms_resolve(path_arr, ctx, hit_point, normal, alb, res)
     assert_true(res.state.w > Float32(0.0))
-    assert_true(path_arr[0].estimate.r > Float32(0.0))
-    assert_true(path_arr[0].estimate.g > Float32(0.0))
-    assert_true(path_arr[0].estimate.b > Float32(0.0))
+    assert_true(path_arr[0].estimate.v0 > Float32(0.0))
+    assert_true(path_arr[0].estimate.v1 > Float32(0.0))
+    assert_true(path_arr[0].estimate.v2 > Float32(0.0))
 
     meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
     materials.free(); area_lights.free(); primIds.free(); bvh.free(); cdf.free(); path_arr.free()
@@ -346,7 +346,7 @@ def test_sms_temporal_step_without_io_still_resolves_like_batch_mode() raises:
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
         area_lights[0], Float32(1.0), pcg)
     assert_true(found == True)
-    assert_true(path_arr[0].estimate.r > Float32(0.0))
+    assert_true(path_arr[0].estimate.v0 > Float32(0.0))
 
     meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
     materials.free(); area_lights.free(); primIds.free(); bvh.free(); cdf.free(); path_arr.free()
@@ -426,7 +426,7 @@ def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
 
     assert_true(buf_a[0].n_vertices == Int32(1))
     assert_true(m_after_frame1 > m_after_frame0)
-    assert_true(path_arr[0].estimate.r > Float32(0.0))
+    assert_true(path_arr[0].estimate.v0 > Float32(0.0))
 
     meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
     materials.free(); area_lights.free(); primIds.free(); bvh.free(); cdf.free()
@@ -494,7 +494,7 @@ def test_shade_diffuse_nee_sms_wiring_accumulates_confidence_across_frames() rai
     var m_after_frame0 = buf_b[0].state.m
     assert_true(buf_b[0].n_vertices == Int32(1))
     assert_true(m_after_frame0 > Float32(0.0))
-    assert_true(path_arr[0].estimate.r > Float32(0.0))
+    assert_true(path_arr[0].estimate.v0 > Float32(0.0))
 
     # Frame 1: read=buf_b (frame 0's result), write=buf_a.
     var io1 = SMSReservoirIO(read=buf_b, write=buf_a,
@@ -513,7 +513,7 @@ def test_shade_diffuse_nee_sms_wiring_accumulates_confidence_across_frames() rai
 
     assert_true(buf_a[0].n_vertices == Int32(1))
     assert_true(m_after_frame1 > m_after_frame0)
-    assert_true(path_arr[0].estimate.r > Float32(0.0))
+    assert_true(path_arr[0].estimate.v0 > Float32(0.0))
 
     meshes[0].points.free(); meshes[0].vertexIndices.free()
     meshes[1].points.free(); meshes[1].vertexIndices.free()
@@ -581,7 +581,7 @@ def test_shade_diffuse_nee_sms_io_inactive_at_bounce_1_uses_plain_mnee() raises:
     # still holds exactly its seeded value, unchanged.
     assert_true(_close(buf_b[0].state.m, seed_m))
     # The refracted contribution should still appear via plain MNEE.
-    assert_true(path_arr[0].estimate.r > Float32(0.0))
+    assert_true(path_arr[0].estimate.v0 > Float32(0.0))
 
     meshes[0].points.free(); meshes[0].vertexIndices.free()
     meshes[1].points.free(); meshes[1].vertexIndices.free()

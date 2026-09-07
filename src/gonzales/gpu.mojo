@@ -17,7 +17,7 @@ from .restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io
 from .restir_gi import gi_reservoir_io_null
 from .postprocess import _firefly_clamp_pixel, _atrous_tap_weight, _atrous_spatial_weight
 from .sampling import power_heuristic, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gen_primary_ray_state
-from .spectrum import SampledWavelengths, SpectralSample, SpectralHandle, null_spectral_handle, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb
+from .spectrum import SampledWavelengths, SpectralSample, SpectralHandle, null_spectral_handle, rgb_illuminant_to_spectral_sample, rgb_bands_to_spectral_sample, spectral_sample_to_rgb
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
 from max.gpu.host._nvidia_cuda import CUDA
 
@@ -1130,13 +1130,14 @@ def shade_gpu(
     intersections: UnsafePointer[Intersection_C, MutExternalOrigin],
     meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
     materials: UnsafePointer[Material_C, MutExternalOrigin],
+    spectral: SpectralHandle,
     count_dp: Int64,
 ):
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    shade_core(paths, intersections, meshes, materials, tid)
+    shade_core(paths, intersections, meshes, materials, spectral, tid)
 
 
 
@@ -1892,49 +1893,22 @@ def update_medium_gpu(
 
 comptime MEDIUM_TRACK_MAX_ITERS: Int = 10000  # delta/ratio-tracking loop safety bound
 
-def _spectral_beer_lambert_rgb(
-    sigma_t: RGB, dist: Float32, wl: SampledWavelengths,
+@always_inline
+def _med_spec_illum(
+    c: RGB, wl: SampledWavelengths,
     spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
     spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
     spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
     spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
     spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
-) -> RGB:
-    """Beer-Lambert transmittance exp(-sigma_t * dist), colored via a real
-    per-wavelength spectral evaluation of sigma_t at this path's own hero
-    wavelengths (staged spectral rendering rollout, Stage 5b -- see
-    project_spectral_rendering memory) instead of the old independent-
-    per-RGB-channel exp(). sigma_t is an extinction COEFFICIENT, not a
-    light color, and has no dedicated spectral-upsampling target in this
-    codebase -- this reuses the Jakob-Hanika illuminant-style unbounded-RGB
-    conversion (rgb_illuminant_to_spectral_sample) as a documented, scoped
-    approximation (same "approximate via the closest existing conversion"
-    precedent as project_material_type_warnings' subsurface/measured
-    material approximations), not a physically rigorous spectral-extinction
-    fit."""
-    var sigma_t_spec = rgb_illuminant_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, sigma_t.r, sigma_t.g, sigma_t.b, wl)
-    var v0 = exp(-sigma_t_spec.v0 * dist)
-    var v1 = exp(-sigma_t_spec.v1 * dist)
-    var v2 = exp(-sigma_t_spec.v2 * dist)
-    var v3 = exp(-sigma_t_spec.v3 * dist)
-    var trans_spec = SpectralSample(v0, v1, v2, v3)
-    var (tr, tg, tb) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, trans_spec, wl)
-    # Normalise the spectral round trip. spectral_sample_to_rgb is built for
-    # radiance, so it does NOT map a flat unit spectrum back to RGB 1 -- the
-    # unnormalised result here returned values ABOVE 1 for a quantity that is
-    # a TRANSMITTANCE and must lie in [0,1]. Multiplying path throughput by a
-    # >1 "transmittance" once per scattering event compounds: measured
-    # against an analytic answer of exactly 1.0, a conservative homogeneous
-    # medium rendered 0.470 at tau=2, 6.0 at tau=4 and 1979 at tau=8, with
-    # single pixels reaching 6.1e6. Dividing by the SAME round trip applied
-    # to a flat unit spectrum (at this path's own hero wavelengths, so the
-    # normaliser matches the numerator exactly) restores T(0) = 1 and keeps
-    # the spectral colouring the Stage-5b rollout added.
-    var white_spec = SpectralSample(Float32(1), Float32(1), Float32(1), Float32(1))
-    var (wr, wg, wb) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, white_spec, wl)
-    return RGB(tr / max(wr, Float32(1e-8)),
-               tg / max(wg, Float32(1e-8)),
-               tb / max(wb, Float32(1e-8)))
+) -> SpectralSample:
+    """RGB emission/radiance -> spectral, at the light boundary inside the
+    medium kernel. Falls back to a flat spectrum when no spectral table is
+    loaded, so a table-less build still transports the RGB magnitude."""
+    if spectral_res <= 0:
+        return SpectralSample(c.r, c.g, c.b, (c.r + c.g + c.b) * Float32(0.3333333))
+    return rgb_illuminant_to_spectral_sample(spectral_coeffs, spectral_res,
+        spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, c.r, c.g, c.b, wl)
 
 @always_inline
 def _volume_nee_light(
@@ -1960,6 +1934,11 @@ def _volume_nee_light(
     spheres: UnsafePointer[Sphere_C, MutExternalOrigin],
     n_spheres: Int,
     materials: UnsafePointer[Material_C, MutExternalOrigin],
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
 ):
     """One NEE sample from ONE non-area light toward a volume scatter point.
 
@@ -2002,7 +1981,9 @@ def _volume_nee_light(
         var Th = exp(-sigma_t_r * span)
         var ph_h = hg_phase(dot(wo, edir), g)
         var mis_h = Float32(1.0) if ls.is_delta else power_heuristic(ls.pdf, ph_h)
-        path_ptr[].estimate += path_ptr[].throughput * ls.Li * (Th * ph_h * mis_h / ls.pdf)
+        path_ptr[].estimate += path_ptr[].throughput * _med_spec_illum(
+        ls.Li, path_ptr[].wavelengths, spectral_coeffs, spectral_res,
+        spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) * (Th * ph_h * mis_h / ls.pdf)
         return
     var rng = nvdb_ray_range(nvdb_grid, scatter_pt_w, edir) if use_nvdb else grid_ray_range(grid, scatter_pt_w, edir)
     var t_lo = max(rng[0], Float32(0.0))
@@ -2048,7 +2029,9 @@ def _volume_nee_light(
         return
     var ph = hg_phase(dot(wo, edir), g)
     var mis = Float32(1.0) if ls.is_delta else power_heuristic(ls.pdf, ph)
-    path_ptr[].estimate += path_ptr[].throughput * ls.Li * (Te * ph * mis / ls.pdf)
+    path_ptr[].estimate += path_ptr[].throughput * _med_spec_illum(
+        ls.Li, path_ptr[].wavelengths, spectral_coeffs, spectral_res,
+        spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) * (Te * ph * mis / ls.pdf)
 
 
 def _sample_medium_core(
@@ -2125,21 +2108,15 @@ def _sample_medium_core(
     medium — not needed for uniformgrid, would matter for a future colored
     nanovdb medium.
 
-    Staged spectral rendering rollout, Stage 5b (spectralize now that 5a
-    unified this function — see project_spectral_rendering memory): the
-    HOMOGENEOUS branch's Beer-Lambert transmittance (both the main
-    throughput multiply and the NEE shadow-ray transmittance) now goes
-    through _spectral_beer_lambert_rgb — real per-wavelength color at this
-    path's own hero wavelengths, not independent per-RGB-channel exp().
-    Deliberately scoped to just the COLOR of the transmittance result, not
-    the free-flight DISTANCE-sampling decision above (still red-channel-only,
-    unchanged) — matches this whole rollout's established "evaluate
-    spectrally, convert back to RGB immediately, don't touch the sampling
-    PDF" pattern. The heterogeneous (uniformgrid) branch is NOT spectralized:
-    per this docstring's own note, uniformgrid density has no per-channel
-    color to begin with, so there is nothing to spectralize there yet — this
-    would matter for a future colored volumetric medium (e.g. nanovdb), not
-    today's grayscale uniformgrid smoke/fire density.
+    Path throughput is spectral end to end now, so the homogeneous branch
+    carries only the RATIO of each channel's transmittance to the one the
+    free flight was actually sampled from (still the red channel), lifted
+    into the 4 hero lanes by band-picking. The extinction COLOUR is
+    therefore still not spectrally resolved -- doing that means sampling the
+    free flight per hero wavelength and combining the wavelengths with MIS,
+    which is chromatic-media work, not a colour conversion. The
+    heterogeneous (uniformgrid) branch has nothing to colour to begin with:
+    its density is a single scalar field.
     """
     var path_ptr = paths + i
     if path_ptr[].active == 0:
@@ -2243,7 +2220,10 @@ def _sample_medium_core(
                 var tk = (nvdb_sample_density(tgrid, p_world) - med.temp_offset) * med.temp_scale
                 if tk > Float32(100.0):
                     var sigma_a_real = density * med.sigma_a.r
-                    path_ptr[].estimate += path_ptr[].throughput * blackbody_rgb(tk) * (med.le_scale * sigma_a_real / sigma_maj_seg)
+                    path_ptr[].estimate += path_ptr[].throughput * _med_spec_illum(
+                        blackbody_rgb(tk), path_ptr[].wavelengths, spectral_coeffs, spectral_res,
+                        spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65
+                    ) * (med.le_scale * sigma_a_real / sigma_maj_seg)
             var sigma_t_real = density * sigma_t.r
             var u2 = pcg.next_float()
             if u2 < sigma_t_real / sigma_maj_seg:
@@ -2299,15 +2279,20 @@ def _sample_medium_core(
         # colour conversion.
         var t_ref = exp(-sigma_t.r * t_seg)          # the sampled channel's own transmittance
         if t_ref < Float32(1e-30): t_ref = Float32(1e-30)
-        path_ptr[].throughput *= RGB(Float32(1.0),
-                                     exp(-sigma_t.g * t_seg) / t_ref,
-                                     exp(-sigma_t.b * t_seg) / t_ref)
+        # Chromatic transmittance ratio. sigma_t is RGB scene data, so this is
+        # a boundary: lift the per-channel ratio into the spectral domain. For
+        # a grey medium every lane is 1 and this is a no-op.
+        path_ptr[].throughput *= rgb_bands_to_spectral_sample(
+            Float32(1.0), exp(-sigma_t.g * t_seg) / t_ref, exp(-sigma_t.b * t_seg) / t_ref,
+            path_ptr[].wavelengths)
         if t_free >= t_surf:
             path_ptr[].pcgState = pcg.state
             return
         # Chromatic scattering ratio; 1 for a grey medium.
         var ss_r = max(med.sigma_s.r, Float32(1e-30))
-        path_ptr[].throughput *= RGB(Float32(1.0), med.sigma_s.g / ss_r, med.sigma_s.b / ss_r)
+        path_ptr[].throughput *= rgb_bands_to_spectral_sample(
+            Float32(1.0), med.sigma_s.g / ss_r, med.sigma_s.b / ss_r,
+            path_ptr[].wavelengths)
         albedo_r = med.sigma_s.r / max(sigma_t.r, Float32(1e-7))
 
     # Both branches above already `return` early for the "no real collision"
@@ -2401,7 +2386,9 @@ def _sample_medium_core(
                             T = RGB(exp(-sigma_t.r * dist), exp(-sigma_t.g * dist), exp(-sigma_t.b * dist))
                         var geom = al.total_area * cos_l / (dist_sq * light_sel_pdf)
                         var ph_a = hg_phase(dot(-ray_dir, shadow_dir), med.g)
-                        path_ptr[].estimate += path_ptr[].throughput * al.emission * T * (geom * ph_a)
+                        path_ptr[].estimate += path_ptr[].throughput * _med_spec_illum(
+                            al.emission * T, path_ptr[].wavelengths, spectral_coeffs, spectral_res,
+                            spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) * (geom * ph_a)
 
         # ── Volume scatter NEE — INFINITE (environment) light ────────────
         # Without this a medium lit ONLY by a sky dome -- which is every
@@ -2442,24 +2429,32 @@ def _sample_medium_core(
                 _volume_nee_light(path_ptr, _sample_distant_light_nee(distantLights[dl_i]),
                     scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
                     bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
-                    instances, spheres, n_spheres, materials)
+                    instances, spheres, n_spheres, materials,
+                    spectral_coeffs, spectral_res, spectral_cie_x,
+                    spectral_cie_y, spectral_cie_z, spectral_d65)
             for pl_i in range(n_point_lights):
                 _volume_nee_light(path_ptr, _sample_point_light_nee(pointLights[pl_i], scatter_w),
                     scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
                     bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
-                    instances, spheres, n_spheres, materials)
+                    instances, spheres, n_spheres, materials,
+                    spectral_coeffs, spectral_res, spectral_cie_x,
+                    spectral_cie_y, spectral_cie_z, spectral_d65)
             for sph_i in range(n_spheres):
                 if spheres[sph_i].isAreaLight == Int8(1):
                     _volume_nee_light(path_ptr, _sample_sphere_light_nee(spheres[sph_i], n_spheres, scatter_w, pcg),
                         scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
                         bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
-                        instances, spheres, n_spheres, materials)
+                        instances, spheres, n_spheres, materials,
+                        spectral_coeffs, spectral_res, spectral_cie_x,
+                        spectral_cie_y, spectral_cie_z, spectral_d65)
             for inf_i in range(n_infinite_lights):
                 _volume_nee_light(path_ptr,
                     _sample_infinite_light_nee(infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float())),
                     scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
                     bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
-                    instances, spheres, n_spheres, materials)
+                    instances, spheres, n_spheres, materials,
+                    spectral_coeffs, spectral_res, spectral_cie_x,
+                    spectral_cie_y, spectral_cie_z, spectral_d65)
         # Sample the scatter direction from the medium's Henyey-Greenstein
         # phase function. `g` was parsed into Medium_C all along but never
         # used: scattering was hardcoded isotropic (uniform sphere), so a
@@ -2732,7 +2727,7 @@ def traverse_shadow_rays_gpu(
         return
     var shadow_ray = Ray_C(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
     if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shadow_ray, task.tmax, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres, materials=materials):
-        paths[tid].estimate += RGB(task.contrib.r, task.contrib.g, task.contrib.b)
+        paths[tid].estimate += task.contrib
 
 
 def accumulate_film_gpu(
@@ -2740,14 +2735,24 @@ def accumulate_film_gpu(
     film: UnsafePointer[Float32, MutExternalOrigin],
     albedo_film: UnsafePointer[Float32, MutExternalOrigin],
     count_dp: Int64,
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_res_dp: Int64 = Int64(0),
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
 ):
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    film[tid*3+0] += paths[tid].estimate.r
-    film[tid*3+1] += paths[tid].estimate.g
-    film[tid*3+2] += paths[tid].estimate.b
+    # ── Output boundary: spectral transport -> RGB film ──────────────────
+    var _e = spectral_sample_to_rgb(spectral_coeffs, Int(spectral_res_dp),
+        spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+        paths[tid].estimate, paths[tid].wavelengths)
+    film[tid*3+0] += _e[0]
+    film[tid*3+1] += _e[1]
+    film[tid*3+2] += _e[2]
     albedo_film[tid*3+0] += paths[tid].albedo.r
     albedo_film[tid*3+1] += paths[tid].albedo.g
     albedo_film[tid*3+2] += paths[tid].albedo.b
@@ -2770,6 +2775,12 @@ def accumulate_film_wavefront_gpu(
     film: UnsafePointer[Float32, MutExternalOrigin],
     albedo_film: UnsafePointer[Float32, MutExternalOrigin],
     n_pixels_dp: Int64, actual_batch_dp: Int64,
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_res_dp: Int64 = Int64(0),
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
 ):
     var n_pixels = Int(n_pixels_dp)
     var actual_batch = Int(actual_batch_dp)
@@ -2780,7 +2791,10 @@ def accumulate_film_wavefront_gpu(
     var ar = Float32(0); var ag = Float32(0); var ab = Float32(0)
     for si in range(actual_batch):
         var p = paths[si * n_pixels + px]
-        r += p.estimate.r; g += p.estimate.g; b += p.estimate.b
+        var _pe = spectral_sample_to_rgb(spectral_coeffs, Int(spectral_res_dp),
+            spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+            p.estimate, p.wavelengths)
+        r += _pe[0]; g += _pe[1]; b += _pe[2]
         ar += p.albedo.r;  ag += p.albedo.g;  ab += p.albedo.b
     film[px*3+0] += r; film[px*3+1] += g; film[px*3+2] += b
     albedo_film[px*3+0] += ar; albedo_film[px*3+1] += ag; albedo_film[px*3+2] += ab
@@ -2824,8 +2838,8 @@ def gen_primary_rays_wavefront_gpu(
     )
     paths[ti] = PathState_C(
         ray,
-        RGB(Float32(1.0)),
-        RGB(Float32(0.0)),
+        SpectralSample(Float32(1.0)),
+        SpectralSample(Float32(0.0)),
         RGB(Float32(0.0)),
         Int32(0), pcg_state, pcg_inc,
         Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
@@ -3234,6 +3248,7 @@ def gpu_shade_batch(
                 inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
                 handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
                 handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+                null_spectral_handle(),
                 Int64(n),
                 grid_dim=grid_dim,
                 block_dim=block_size,
@@ -3284,8 +3299,8 @@ def gen_primary_rays_gpu(
     )
     paths[tid] = PathState_C(
         ray,
-        RGB(Float32(1.0)),
-        RGB(Float32(0.0)),
+        SpectralSample(Float32(1.0)),
+        SpectralSample(Float32(0.0)),
         RGB(Float32(0.0)),
         Int32(0), pcg_state, pcg_inc,
         Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
@@ -4065,7 +4080,13 @@ def gpu_render_sample[Oc: Origin[mut=True]](
                 handle[].film_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].albedo_film_buf.unsafe_ptr().bitcast[Float32](),
                 Int64(n_int),
-                grid_dim=grid_dim,
+                        handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+        Int64(handle[].spectral_res),
+        handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
+        grid_dim=grid_dim,
                 block_dim=block_size,
             )
         except e:
@@ -4153,7 +4174,13 @@ def gpu_render_wavefront(
                 handle[].film_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].albedo_film_buf.unsafe_ptr().bitcast[Float32](),
                 Int64(n_pix), Int64(batch),
-                grid_dim=grid_pix,
+                        handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
+        Int64(handle[].spectral_res),
+        handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
+        grid_dim=grid_pix,
                 block_dim=block_size,
             )
         except e:

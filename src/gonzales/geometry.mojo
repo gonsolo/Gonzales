@@ -2,7 +2,7 @@ from std.ffi import external_call
 from std.memory import alloc
 from std.math import sqrt, acos, atan2, cos, sin, min, max, abs, floor, log
 from std.sys.info import align_of
-from gonzales.spectrum import SampledWavelengths
+from gonzales.spectrum import SampledWavelengths, SpectralSample
 from gonzales.nanovdb import nvdb_sample_index, nvdb_majorant_at, nvdb_leaf_base, nvdb_leaf_value
 
 # Value structs shared with GPU code can't hold Optional[UnsafePointer], so an
@@ -483,9 +483,12 @@ struct Intersection_C(TrivialRegisterPassable):
 struct PathState_C(TrivialRegisterPassable):
 # <<listing: PathState_C>>
     var ray: Ray_C
-    var throughput: SampledSpectrum
-    var estimate: SampledSpectrum
-    var albedo: SampledSpectrum
+    # Path TRANSPORT is spectral: these carry radiance/weight at this path's
+    # own 4 hero wavelengths, and RGB appears only at the boundaries (light
+    # and material lookup on the way in, film splat on the way out).
+    var throughput: SpectralSample
+    var estimate: SpectralSample
+    var albedo: SampledSpectrum      # denoiser AOV -- an output, stays RGB
     var bounce: Int32
     var pcgState: UInt64
     var pcgInc: UInt64
@@ -1287,7 +1290,7 @@ struct ShadowTask_C(TrivialRegisterPassable):
     var origin: Point3f
     var direction: Vec3f
     var tmax: Float32
-    var contrib: SampledSpectrum
+    var contrib: SpectralSample   # deferred TRANSPORT, so spectral like throughput
     var active: Int32
     var _pad: Int32
 

@@ -15,7 +15,7 @@ from gonzales.geometry import (
     DistantLight_C, PointLight_C, InfiniteLight_C, Sphere_C, MeasuredBRDF_C,
     PathState_C,
 )
-from gonzales.spectrum import null_spectral_handle, SampledWavelengths
+from gonzales.spectrum import SpectralSample, null_spectral_handle, SampledWavelengths
 from gonzales.bvh import BVH2Node
 from gonzales.guide import null_guide
 from gonzales.shading import ShadeContext, LightContext, GIPendingX1, gi_pending_x1_init, _gi_generate_recon_candidate, _shade_diffuse_nee
@@ -236,13 +236,13 @@ def test_gi_generate_occluded_light_gives_valid_zero_lo() raises:
 def _make_path(org: Vec3f, dir: Vec3f) -> PathState_C:
     return PathState_C(
         Ray_C(Point3f(org[0], org[1], org[2]), Vec3f(dir[0], dir[1], dir[2])),
-        RGB(Float32(1.0)), RGB(Float32(0.0)), RGB(Float32(0.0)),
+        SpectralSample(Float32(1.0)), SpectralSample(Float32(0.0)), RGB(Float32(0.0)),
         Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
         Float32(0.0), Int32(-1), Int32(0), UInt64(0),
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
 
-def _run_two_bounce(gi_active: Bool) -> RGB:
+def _run_two_bounce(gi_active: Bool) -> SpectralSample:
     var cdf = alloc[Float32](2)
     cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
     var bvh = alloc[BVH2Node](1)
@@ -302,7 +302,12 @@ def _run_two_bounce(gi_active: Bool) -> RGB:
     # here (as the original version of this test did) leaves
     # path_ptr[].throughput == T_0 at bounce 1 by coincidence, which is
     # exactly the state gi_resolve's bug silently relied on.
-    path_arr[0].throughput = path_arr[0].throughput * x1_alb
+    # x1_alb is an RGB reflectance; transport is spectral, and this fixture's
+    # null spectral handle carries R/G/B on lanes v0/v1/v2 (see
+    # rgb_to_spectral_sample's table-less fallback), so the per-channel
+    # multiply is expressed lane-wise here.
+    path_arr[0].throughput = path_arr[0].throughput * SpectralSample(
+        x1_alb.r, x1_alb.g, x1_alb.b, Float32(0.0))
 
     path_arr[0].bounce = Int32(1)
     var x2_hit = Vec3f(0.0, 0.0, 0.0)
@@ -333,9 +338,9 @@ def test_shade_diffuse_nee_gi_wiring_adds_positive_reconnection_contribution() r
     for the exact geometry)."""
     var enabled = _run_two_bounce(gi_active=True)
     var disabled = _run_two_bounce(gi_active=False)
-    assert_true(enabled.r > disabled.r + Float32(1e-12))
-    assert_true(enabled.g > disabled.g + Float32(1e-12))
-    assert_true(enabled.b > disabled.b + Float32(1e-12))
+    assert_true(enabled.v0 > disabled.v0 + Float32(1e-12))
+    assert_true(enabled.v1 > disabled.v1 + Float32(1e-12))
+    assert_true(enabled.v2 > disabled.v2 + Float32(1e-12))
 
 def test_shade_diffuse_nee_gi_wiring_delta_channel_ratio_matches_expected_formula() raises:
     """The GI-attributable delta's chromatic variation comes from exactly
@@ -353,9 +358,9 @@ def test_shade_diffuse_nee_gi_wiring_delta_channel_ratio_matches_expected_formul
     var enabled = _run_two_bounce(gi_active=True)
     var disabled = _run_two_bounce(gi_active=False)
     var delta = enabled - disabled
-    assert_true(delta.r > Float32(0.0) and delta.g > Float32(0.0) and delta.b > Float32(0.0))
-    var rg = delta.r / delta.g
-    var rb = delta.r / delta.b
+    assert_true(delta.v0 > Float32(0.0) and delta.v1 > Float32(0.0) and delta.v2 > Float32(0.0))
+    var rg = delta.v0 / delta.v1
+    var rb = delta.v0 / delta.v2
     var expected_rg = (Float32(0.5) * Float32(200.0)) / (Float32(0.3) * Float32(80.0))
     var expected_rb = (Float32(0.5) * Float32(200.0)) / (Float32(0.7) * Float32(20.0))
     assert_true(_close(rg, expected_rg))

@@ -158,6 +158,39 @@ struct SpectralSample(TrivialRegisterPassable):
         return (self.v0 <= Float32(0.0) and self.v1 <= Float32(0.0)
                 and self.v2 <= Float32(0.0) and self.v3 <= Float32(0.0))
 
+@always_inline
+def _band_pick(r: Float32, g: Float32, b: Float32, lam: Float32) -> Float32:
+    """Which sRGB primary owns wavelength `lam`, at the usual crossovers."""
+    if lam < Float32(490.0): return b
+    elif lam < Float32(580.0): return g
+    return r
+
+@always_inline
+def rgb_bands_to_spectral_sample(
+    r: Float32, g: Float32, b: Float32, wl: SampledWavelengths
+) -> SpectralSample:
+    """Evaluate a per-CHANNEL COEFFICIENT (not a colour) at the 4 hero
+    wavelengths, by picking whichever of r/g/b owns each wavelength's band.
+
+    This is deliberately NOT rgb_to_spectral_sample / _illuminant_: those
+    reconstruct a *reflectance* or an *emission spectrum*, normalised so the
+    reconstruction integrates back to the requested colour. Feeding them a
+    ratio is meaningless -- notably RGB(1,1,1) does not come back as 1 in
+    every lane, so a grey medium (every ratio exactly 1) picks up a spurious
+    D65-shaped tint that compounds once per scattering event. Measured on the
+    slab harness at tau=8: a grey homogeneous medium read 3.5x its analytic
+    answer and a NanoVDB one 10.7x. Band-picking degenerates to exactly 1 in
+    every lane for a grey coefficient, which is the invariant that matters.
+
+    The band split is the usual sRGB-primary crossover (blue below 490nm,
+    green to 580nm, red above). It carries exactly the information the RGB
+    coefficient had and no more; a real chromatic-extinction fit needs
+    hero-wavelength free-flight sampling with MIS across wavelengths, which
+    is separate work (see _sample_medium_core's own note)."""
+    return SpectralSample(
+        _band_pick(r, g, b, wl.lambda0), _band_pick(r, g, b, wl.lambda1),
+        _band_pick(r, g, b, wl.lambda2), _band_pick(r, g, b, wl.lambda3))
+
 # ── Spectral context: the loaded table + CIE data, built once per render ───
 
 @fieldwise_init
@@ -272,6 +305,12 @@ def rgb_to_spectral_sample(
 ) -> SpectralSample:
     """Reflectance/albedo conversion — values are expected in [0,1] (clamped
     here defensively) since the table's domain is a bounded reflectance."""
+    # No table loaded (null_spectral_handle): carry R/G/B on lanes 0/1/2 --
+    # spectral_sample_to_rgb's matching fallback reads them straight back, so
+    # transport degrades to the old per-channel RGB renderer rather than
+    # dereferencing the sentinel's dangling table pointers.
+    if spectral_res <= 0:
+        return SpectralSample(rgb_r, rgb_g, rgb_b, Float32(0.0))
     var r = rgb_r; var g = rgb_g; var b = rgb_b
     if r < Float32(0.0): r = Float32(0.0)
     if r > Float32(1.0): r = Float32(1.0)
@@ -298,6 +337,12 @@ def rgb_illuminant_to_spectral_sample(
     """Light-emission conversion — PBRT's RGBIlluminantSpectrum convention
     (values are NOT bounded to [0,1], tints the D65 illuminant shape rather
     than standing alone as a bare reflectance)."""
+    # No table loaded (null_spectral_handle): carry R/G/B on lanes 0/1/2 --
+    # spectral_sample_to_rgb's matching fallback reads them straight back, so
+    # transport degrades to the old per-channel RGB renderer rather than
+    # dereferencing the sentinel's dangling table pointers.
+    if spectral_res <= 0:
+        return SpectralSample(rgb_r, rgb_g, rgb_b, Float32(0.0))
     var (coeffs, scale) = rgb_illuminant_to_coeffs_ptr(spectral_coeffs, spectral_res, rgb_r, rgb_g, rgb_b)
     var v0 = eval_illuminant_spectrum(coeffs, scale, spectral_d65, wavelengths.lambda0)
     var v1 = eval_illuminant_spectrum(coeffs, scale, spectral_d65, wavelengths.lambda1)
@@ -323,6 +368,12 @@ def spectral_sample_to_rgb(
     by CIE_Y_INTEGRAL, matching PBRT's SampledSpectrum::ToXYZ/ToRGB — the
     unbiased estimator for integral(radiance(lambda) * cie_x/y/z(lambda) dlambda)
     is (1/N) * sum_i radiance_i * cie_*(lambda_i) / pdf_i."""
+    # No table loaded (null_spectral_handle): lanes 0/1/2 carry plain R/G/B,
+    # see rgb_to_spectral_sample's matching fallback. The two compose to the
+    # identity, so a table-less build degrades cleanly to the old per-channel
+    # RGB renderer instead of dereferencing the sentinel's dangling pointers.
+    if spectral_res <= 0:
+        return (radiance.v0, radiance.v1, radiance.v2)
     var x = Float32(0.0); var y = Float32(0.0); var z = Float32(0.0)
     if wavelengths.pdf > Float32(0.0):
         for i in range(N_SPECTRAL_SAMPLES):

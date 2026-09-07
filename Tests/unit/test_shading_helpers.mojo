@@ -17,7 +17,7 @@ from gonzales.geometry import (
     Instance_C, PathState_C, AreaLight_C, DistantLight_C, PointLight_C,
     InfiniteLight_C, Sphere_C, MeasuredBRDF_C, dot, cross,
 )
-from gonzales.spectrum import SampledWavelengths, null_spectral_handle
+from gonzales.spectrum import SpectralSample, SampledWavelengths, null_spectral_handle
 from gonzales.bvh import BVH2Node
 from gonzales.guide import GuideGrid, null_guide
 from gonzales.shading import (
@@ -108,7 +108,7 @@ def _make_ctx(
 def _make_path(org: Vec3f, dir: Vec3f) -> PathState_C:
     return PathState_C(
         Ray_C(Point3f(org[0], org[1], org[2]), Vec3f(dir[0], dir[1], dir[2])),
-        RGB(Float32(1.0)), RGB(Float32(0.0)), RGB(Float32(0.0)),
+        SpectralSample(Float32(1.0)), SpectralSample(Float32(0.0)), RGB(Float32(0.0)),
         Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
         Float32(0.0), Int32(-1), Int32(0), UInt64(0),
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
@@ -365,12 +365,12 @@ def test_shadow_contribute_direct_adds_contribution_when_unoccluded() raises:
     var path_arr = alloc[PathState_C](1)
     path_arr[0] = path
 
-    var contrib = RGB(Float32(1.0), Float32(2.0), Float32(3.0))
+    var contrib = SpectralSample(Float32(1.0), Float32(2.0), Float32(3.0), Float32(0.0))
     _shadow_contribute[False](path_arr, ctx, Vec3f(0.0, 0.0, 0.0),
         Vec3f(0.0, 0.0, -1.0), Float32(10.0), contrib)
-    assert_true(_close(path_arr[0].estimate.r, contrib.r))
-    assert_true(_close(path_arr[0].estimate.g, contrib.g))
-    assert_true(_close(path_arr[0].estimate.b, contrib.b))
+    assert_true(_close(path_arr[0].estimate.v0, contrib.v0))
+    assert_true(_close(path_arr[0].estimate.v1, contrib.v1))
+    assert_true(_close(path_arr[0].estimate.v2, contrib.v2))
 
     meshes[0].points.free()
     meshes[0].vertexIndices.free()
@@ -401,12 +401,12 @@ def test_shadow_contribute_direct_skips_when_occluded() raises:
     var path_arr = alloc[PathState_C](1)
     path_arr[0] = path
 
-    var contrib = RGB(Float32(1.0), Float32(2.0), Float32(3.0))
+    var contrib = SpectralSample(Float32(1.0), Float32(2.0), Float32(3.0), Float32(0.0))
     _shadow_contribute[False](path_arr, ctx, Vec3f(0.0, 0.0, 0.0),
         Vec3f(0.0, 0.0, 1.0), Float32(10.0), contrib)
-    assert_true(_close(path_arr[0].estimate.r, Float32(0.0)))
-    assert_true(_close(path_arr[0].estimate.g, Float32(0.0)))
-    assert_true(_close(path_arr[0].estimate.b, Float32(0.0)))
+    assert_true(_close(path_arr[0].estimate.v0, Float32(0.0)))
+    assert_true(_close(path_arr[0].estimate.v1, Float32(0.0)))
+    assert_true(_close(path_arr[0].estimate.v2, Float32(0.0)))
 
     meshes[0].points.free()
     meshes[0].vertexIndices.free()

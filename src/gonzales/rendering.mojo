@@ -10,7 +10,7 @@ from .shading import shade_core_cpu_nee, GIPendingX1, gi_pending_x1_init
 from .rng import PCG32
 from .sampling import TileSamplerParams_C, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gaussian_norm, mix_bits_u64, gen_primary_ray_state
 from .guide import GuideGrid, guide_merge, null_guide
-from .spectrum import SampledWavelengths
+from .spectrum import SampledWavelengths, SpectralSample, spectral_sample_to_rgb
 from .gpu import _sample_medium_core
 from .restir_di import ReservoirIO, reservoir_io_null
 from .restir_gi import GIReservoirIO, gi_reservoir_io_null
@@ -120,8 +120,8 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                 )
                 paths[idx] = PathState_C(
                     ray,
-                    RGB(Float32(1.0)),
-                    RGB(Float32(0.0)),
+                    SpectralSample(Float32(1.0)),
+                    SpectralSample(Float32(0.0)),
                     RGB(Float32(0.0)),
                     Int32(0), pcg_state, pcg_inc,
                     Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
@@ -267,7 +267,17 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
             var sumA = RGB(Float32(0.0))
             var sumW = Float32(0.0)
             for _ in range(spp):
-                sumL += paths[idx].estimate
+                # ── Output boundary: spectral transport -> RGB film ──────
+                # This is the ONLY place a finished path's radiance leaves
+                # the spectral domain. Each sample converts with its OWN
+                # hero wavelengths, which is why it happens per sample here
+                # rather than once on an accumulated total.
+                var est_rgb = spectral_sample_to_rgb(
+                    scene.spectral.coeffs, scene.spectral.res,
+                    scene.spectral.cie_x, scene.spectral.cie_y,
+                    scene.spectral.cie_z, scene.spectral.d65,
+                    paths[idx].estimate, paths[idx].wavelengths)
+                sumL += RGB(est_rgb[0], est_rgb[1], est_rgb[2])
                 sumA += paths[idx].albedo
                 sumW += sp.filterWeight
                 idx += 1

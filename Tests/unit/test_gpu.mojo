@@ -5,17 +5,22 @@ from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from gonzales.gpu import clear_film_gpu, accumulate_film_gpu
 from gonzales.geometry import RGB, Point3f, Vec3f, Ray_C, PathState_C
-from gonzales.spectrum import SampledWavelengths
+from gonzales.spectrum import SpectralSample, SampledWavelengths
 
 comptime EPS: Float32 = 1e-4
 
 def _close(a: Float32, b: Float32) -> Bool:
     return abs(a - b) < EPS
 
-def _dummy_path(estimate: RGB, albedo: RGB) -> PathState_C:
+# Path transport is spectral (PathState_C.throughput/estimate are
+# SpectralSample). These fixtures use a null spectral handle, under which
+# spectrum.mojo's conversions carry plain R/G/B on lanes v0/v1/v2 (see
+# rgb_to_spectral_sample's table-less fallback) -- so the assertions below
+# read those lanes and mean exactly what the old RGB assertions meant.
+def _dummy_path(estimate: SpectralSample, albedo: RGB) -> PathState_C:
     return PathState_C(
         Ray_C(Point3f(0.0), Vec3f(0.0, 0.0, 1.0)),
-        RGB(Float32(1.0)),  # throughput
+        SpectralSample(Float32(1.0)),  # throughput
         estimate,
         albedo,
         Int32(0),           # bounce
@@ -71,7 +76,7 @@ def _accumulate_film_gpu_body(ctx: DeviceContext) raises:
         for i in range(n):
             var f = Float32(i)
             paths[i] = _dummy_path(
-                RGB(f * Float32(0.1), f * Float32(0.2), f * Float32(0.3)),
+                SpectralSample(f * Float32(0.1), f * Float32(0.2), f * Float32(0.3), Float32(0.0)),
                 RGB(f * Float32(0.01), f * Float32(0.02), f * Float32(0.03)),
             )
 
@@ -81,9 +86,16 @@ def _accumulate_film_gpu_body(ctx: DeviceContext) raises:
     albedo_buf.enqueue_fill(Float32(1.0))
     ctx.synchronize()
 
+    # A GPU kernel launch cannot use the signature's default arguments, so the
+    # spectral tables are passed explicitly. The null handle (res 0 + dangling
+    # pointers) selects spectral_sample_to_rgb's table-less path, which reads
+    # R/G/B straight off lanes v0/v1/v2 -- so the film assertions below are
+    # exactly the per-channel values this fixture wrote into `estimate`.
+    var null_tbl = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
     ctx.enqueue_function[accumulate_film_gpu](
         path_buf.unsafe_ptr().bitcast[PathState_C](),
         film_buf.unsafe_ptr(), albedo_buf.unsafe_ptr(), Int64(n),
+        null_tbl, Int64(0), null_tbl, null_tbl, null_tbl, null_tbl,
         grid_dim=1, block_dim=n,
     )
     ctx.synchronize()

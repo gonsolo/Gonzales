@@ -2,7 +2,7 @@ from std.math import abs
 from std.memory import alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import Point3f, Vec3f, RGB, Ray_C, Intersection_C, PathState_C, Material_C, MatKind
-from gonzales.spectrum import SampledWavelengths
+from gonzales.spectrum import SpectralSample, SampledWavelengths, null_spectral_handle
 from gonzales.shading import shade_core
 from _scene_fixture import make_triangle_scene
 
@@ -11,9 +11,14 @@ comptime EPS: Float32 = 1e-4
 def _close(a: Float32, b: Float32) -> Bool:
     return abs(a - b) < EPS
 
-def _dummy_path(ray: Ray_C, throughput: RGB) -> PathState_C:
+# Path transport is spectral (PathState_C.throughput/estimate are
+# SpectralSample). These fixtures use a null spectral handle, under which
+# spectrum.mojo's conversions carry plain R/G/B on lanes v0/v1/v2 (see
+# rgb_to_spectral_sample's table-less fallback) -- so the assertions below
+# read those lanes and mean exactly what the old RGB assertions meant.
+def _dummy_path(ray: Ray_C, throughput: SpectralSample) -> PathState_C:
     return PathState_C(
-        ray, throughput, RGB(Float32(0.0)), RGB(Float32(0.0)),
+        ray, throughput, SpectralSample(Float32(0.0)), RGB(Float32(0.0)),
         Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
         Float32(0.0), Int32(-1), Int32(0), UInt64(0),
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
@@ -54,15 +59,15 @@ def disabled_test_shade_core_area_light_hit_adds_emission() raises:
 
     var paths = alloc[PathState_C](1)
     var intersections = alloc[Intersection_C](1)
-    paths[0] = _dummy_path(ray, RGB(Float32(0.5), Float32(0.5), Float32(0.5)))
+    paths[0] = _dummy_path(ray, SpectralSample(Float32(0.5)))
     intersections[0] = inter
 
-    shade_core(paths, intersections, fx.meshes, fx.materials, 0)
+    shade_core(paths, intersections, fx.meshes, fx.materials, null_spectral_handle(), 0)
 
     # estimate += throughput * emission = 0.5*(2,3,4) = (1,1.5,2); path retires.
-    assert_true(_close(paths[0].estimate.r, Float32(1.0)))
-    assert_true(_close(paths[0].estimate.g, Float32(1.5)))
-    assert_true(_close(paths[0].estimate.b, Float32(2.0)))
+    assert_true(_close(paths[0].estimate.v0, Float32(1.0)))
+    assert_true(_close(paths[0].estimate.v1, Float32(1.5)))
+    assert_true(_close(paths[0].estimate.v2, Float32(2.0)))
     assert_true(Int(paths[0].active) == 0)
     paths.free(); intersections.free()
 
@@ -78,13 +83,13 @@ def test_shade_core_miss_deactivates_path() raises:
 
     var paths = alloc[PathState_C](1)
     var intersections = alloc[Intersection_C](1)
-    paths[0] = _dummy_path(ray, RGB(Float32(1.0)))
+    paths[0] = _dummy_path(ray, SpectralSample(Float32(1.0)))
     intersections[0] = inter
 
-    shade_core(paths, intersections, fx.meshes, fx.materials, 0)
+    shade_core(paths, intersections, fx.meshes, fx.materials, null_spectral_handle(), 0)
 
     assert_true(Int(paths[0].active) == 0)
-    assert_true(_close(paths[0].estimate.r, Float32(0.0)))
+    assert_true(_close(paths[0].estimate.v0, Float32(0.0)))
     paths.free(); intersections.free()
 
 def main() raises:
