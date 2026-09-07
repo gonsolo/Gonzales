@@ -34,12 +34,34 @@ def handle_light_source(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     var filename = params.get_string("filename", "")
 
     if _psc_streq(ltype, "distant"):
-        # direction = -from (from describes where light comes from)
-        var dlen = sqrt(xyz.r*xyz.r + xyz.g*xyz.g + xyz.b*xyz.b)
-        if dlen < Float32(0.0001): dlen = Float32(1.0)
-        s[0].distant_dirs.append(-xyz.r / dlen)
-        s[0].distant_dirs.append(-xyz.g / dlen)
-        s[0].distant_dirs.append(-xyz.b / dlen)
+        # pbrt defines a distant light by TWO points: "from" (default 0,0,0)
+        # and "to" (default 0,0,1); light travels along normalize(to - from),
+        # and both points are transformed by the CTM. This used to read only
+        # "from", ignore "to" entirely, and default "from" to (0,0,1000) --
+        # so any scene that aims its sun the normal way, with "to", got a
+        # direction that had nothing to do with what it asked for.
+        # disney-cloud gives ONLY "to": pbrt lit it along
+        # (-0.583,-0.766,-0.272) while gonzales lit it along (0,0,-1), which
+        # is why that cloud came out dim and wrongly shaded.
+        var dfrom = params.get_rgb("from", RGB(Float32(0), Float32(0), Float32(0)))
+        var dto   = params.get_rgb("to",   RGB(Float32(0), Float32(0), Float32(1)))
+        var draw = alloc[Float32](8)
+        draw[0] = dfrom.r; draw[1] = dfrom.g; draw[2] = dfrom.b; draw[3] = Float32(1)
+        draw[4] = dto.r;   draw[5] = dto.g;   draw[6] = dto.b;   draw[7] = Float32(1)
+        var dfin = alloc[Float32](8)
+        transform_points(s[0].ctm.unsafe_ptr(), draw, Int32(2), dfin)
+        var ddx = dfin[4] - dfin[0]
+        var ddy = dfin[5] - dfin[1]
+        var ddz = dfin[6] - dfin[2]
+        draw.free(); dfin.free()
+        var dlen = sqrt(ddx*ddx + ddy*ddy + ddz*ddz)
+        if dlen < Float32(0.0001):
+            ddx = Float32(0); ddy = Float32(0); ddz = Float32(1); dlen = Float32(1)
+        # stored as the direction of TRAVEL; _sample_distant_light_nee negates
+        # it to get the direction toward the light.
+        s[0].distant_dirs.append(ddx / dlen)
+        s[0].distant_dirs.append(ddy / dlen)
+        s[0].distant_dirs.append(ddz / dlen)
         s[0].distant_rgbs.append(rgb.r * scale)
         s[0].distant_rgbs.append(rgb.g * scale)
         s[0].distant_rgbs.append(rgb.b * scale)

@@ -928,15 +928,40 @@ def nvdb_sample_density(grid: NvdbGrid_C, p_world: Vec3f) -> Float32:
     var iy = sx*im[3] + sy*im[4] + sz*im[5]
     var iz = sx*im[6] + sy*im[7] + sz*im[8]
 
-    # floor, not round: NanoVDB's index convention is that voxel i spans
-    # continuous index-space [i, i+1) -- confirmed against the real bridge
-    # (indexBBox.min * voxelSize == worldBBox.min exactly on every asset
-    # checked), same convention nvdb_diff's oracle comparison relies on.
-    var i = Int32(floor(ix)); var j = Int32(floor(iy)); var k = Int32(floor(iz))
-    if i < Int32(grid.index_min.x) or i > Int32(grid.index_max.x): return Float32(0.0)
-    if j < Int32(grid.index_min.y) or j > Int32(grid.index_max.y): return Float32(0.0)
-    if k < Int32(grid.index_min.z) or k > Int32(grid.index_max.z): return Float32(0.0)
-    return nvdb_sample_index(grid.blob, i, j, k)
+    # Trilinear, matching pbrt's NanoVDBMedium, which samples density with
+    # nanovdb's SampleFromVoxels<..., 1, false> (order 1 = trilinear). NanoVDB's
+    # convention places voxel VALUES at integer index coordinates, so the base
+    # cell is floor(p) and the weights are the fractional part -- this is NOT
+    # the half-integer cell-centre convention Grid_C's dense sampler uses, and
+    # getting that wrong shifts the field by half a voxel.
+    #
+    # Point sampling (the original v1 scope) is not merely noisier: on a sparse
+    # wispy cloud it keeps hard voxel edges where pbrt's trilinear bleeds each
+    # occupied voxel into its neighbours, which changes the effective optical
+    # thickness and rendered a visibly dimmer cloud than the reference.
+    var fi = floor(ix); var fj = floor(iy); var fk = floor(iz)
+    var i = Int32(fi); var j = Int32(fj); var k = Int32(fk)
+    # Reject only when the whole 8-tap neighbourhood lies outside the grid;
+    # taps that fall outside individually just read the background (0).
+    if i < Int32(grid.index_min.x) - Int32(1) or i > Int32(grid.index_max.x): return Float32(0.0)
+    if j < Int32(grid.index_min.y) - Int32(1) or j > Int32(grid.index_max.y): return Float32(0.0)
+    if k < Int32(grid.index_min.z) - Int32(1) or k > Int32(grid.index_max.z): return Float32(0.0)
+    var tx = ix - fi; var ty = iy - fj; var tz = iz - fk
+    var v000 = nvdb_sample_index(grid.blob, i,           j,           k)
+    var v100 = nvdb_sample_index(grid.blob, i + Int32(1), j,           k)
+    var v010 = nvdb_sample_index(grid.blob, i,           j + Int32(1), k)
+    var v110 = nvdb_sample_index(grid.blob, i + Int32(1), j + Int32(1), k)
+    var v001 = nvdb_sample_index(grid.blob, i,           j,           k + Int32(1))
+    var v101 = nvdb_sample_index(grid.blob, i + Int32(1), j,           k + Int32(1))
+    var v011 = nvdb_sample_index(grid.blob, i,           j + Int32(1), k + Int32(1))
+    var v111 = nvdb_sample_index(grid.blob, i + Int32(1), j + Int32(1), k + Int32(1))
+    var v00 = v000 + (v100 - v000) * tx
+    var v10 = v010 + (v110 - v010) * tx
+    var v01 = v001 + (v101 - v001) * tx
+    var v11 = v011 + (v111 - v011) * tx
+    var v0 = v00 + (v10 - v00) * ty
+    var v1 = v01 + (v11 - v01) * ty
+    return v0 + (v1 - v0) * tz
 
 @always_inline
 def _slab_range(o: Vec3f, d: Vec3f, bmin: Vec3f, bmax: Vec3f) -> SIMD[DType.float32, 2]:

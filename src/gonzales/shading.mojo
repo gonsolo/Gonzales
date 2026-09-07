@@ -4114,13 +4114,23 @@ def shade_interface(
 ):
     """Interface (null/passthrough) material: advance the ray through the surface.
     No scattering, no throughput change. Medium transition is handled externally:
-    on CPU by rendering.mojo's medium-interface loop; on GPU by shade_interface_gpu."""
+    on CPU by rendering.mojo's medium-interface loop; on GPU by shade_interface_gpu.
+
+    Deliberately does NOT touch specularBounce / lastBsdfPdf. A null interface
+    is not a scattering event, so it must leave the MIS bookkeeping of the last
+    REAL one intact. Setting specularBounce=1 here (as this used to) told the
+    miss handler "no NEE competed for this direction", so a path that scattered
+    in the medium and then crossed the bounding shell on its way out collected
+    the environment at FULL weight while its NEE partner had already been
+    correctly weighted 0.5 -- - 0.5 + 1.0 = 1.5x too much light. Measured
+    exactly that: a conservative (albedo 1) medium in a uniform field, which
+    must render at exactly 1.0, came out at 1.498. A camera ray still gets full
+    weight on a genuine miss because the miss handler's own `bounce == 0` test
+    covers that case, so nothing needs to be faked here."""
     var ray_dir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
     var ray_org = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
     var hit_point = ray_org + ray_dir * inter.tHit + ray_dir * Float32(0.0002)
     path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), path_ptr[].ray.direction)
-    path_ptr[].specularBounce = Int8(1)
-    path_ptr[].lastBsdfPdf = Float32(0.0)
 
 
 @always_inline
