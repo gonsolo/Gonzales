@@ -1569,6 +1569,21 @@ def _sppm_nee_one(
     var vn   = vp.normal.to_simd()
     var wo   = vp.wo.to_simd()
     var shadow_eps = _sppm_vp_shadow_eps(vp, sd, wo)
+    # EVERY shadow ray below starts at this offset point, so every light
+    # sample must be measured FROM it too. Sampling a light from vp.pos while
+    # firing the ray from vp.pos + n*eps makes the ray overshoot the light by
+    # the offset's along-ray component (eps*cos_surface), so a tmax of
+    # dist*0.999 runs INTO the light and reports a false occlusion whenever
+    #     eps*cos_surface >= 0.001*dist   <=>   dist <= 1000*eps*cos_surface.
+    # For a sphere light (real geometry, unlike a point/distant/infinite one)
+    # with the 0.999 factor that is dist <= 0.1, and with the 0.9999 factor
+    # used by the per-light-type blocks it is dist <= cos_surface, i.e. about
+    # a full unit -- those lights were simply black. Same defect, same cause,
+    # as the volume NEE one fixed in f79999f4; shading.mojo's surface NEE
+    # avoids it by passing its own offset `hit_point` to the samplers, which
+    # is what this mirrors.
+    var shadow_org = vp.pos + vp.normal * shadow_eps
+    var spos = shadow_org.to_simd()
 
     var n_area = Int(sd.areaLightCount)
     if n_area > 0:
@@ -1579,7 +1594,7 @@ def _sppm_nee_one(
         var lp = light_sample.point
         var ln = light_sample.normal
 
-        var to_light = lp - vpos
+        var to_light = lp - spos
         var dist2 = dot(to_light, to_light)
         var dist = sqrt(dist2)
         if dist > Float32(0.0):
@@ -1588,7 +1603,6 @@ def _sppm_nee_one(
             var cos_light = -dot(ln, wi)
             if cos_surface > Float32(0.0) and cos_light > Float32(0.0):
                 # Shadow ray, offset from both ends to avoid self-intersection.
-                var shadow_org = vp.pos + vp.normal * shadow_eps
                 var shadow_ray = Ray_C(shadow_org, vec3f(wi))
                 var t_max = dist * Float32(0.999)
                 if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, t_max,
@@ -1632,19 +1646,17 @@ def _sppm_nee_one(
         var ls_d = _sample_distant_light_nee(sd.distantLights[dl_i])
         var w_d = _sppm_nee_weight(vp, sd, vn, wo, ls_d)
         if not w_d.is_black():
-            var shadow_org_d = vp.pos + vp.normal * shadow_eps
-            var shadow_ray_d = Ray_C(shadow_org_d, vec3f(ls_d.wi))
+            var shadow_ray_d = Ray_C(shadow_org, vec3f(ls_d.wi))
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_d, ls_d.dist,
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                                   sd.spheres, Int(sd.sphereCount)):
                 vps[i].ld += w_d
 
     for pl_i in range(Int(sd.pointLightCount)):
-        var ls_p = _sample_point_light_nee(sd.pointLights[pl_i], vpos)
+        var ls_p = _sample_point_light_nee(sd.pointLights[pl_i], spos)
         var w_p = _sppm_nee_weight(vp, sd, vn, wo, ls_p)
         if not w_p.is_black():
-            var shadow_org_p = vp.pos + vp.normal * shadow_eps
-            var shadow_ray_p = Ray_C(shadow_org_p, vec3f(ls_p.wi))
+            var shadow_ray_p = Ray_C(shadow_org, vec3f(ls_p.wi))
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_p, ls_p.dist * Float32(0.9999),
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                                   sd.spheres, Int(sd.sphereCount)):
@@ -1655,11 +1667,10 @@ def _sppm_nee_one(
     # sd.spheres/sphereCount is the raw geometric array, not a pre-filtered
     # lights-only one like every other light type.
     for sph_i in range(Int(sd.sphereCount)):
-        var ls_sph = _sample_sphere_light_nee(sd.spheres[sph_i], Int(sd.sphereCount), vpos, pcg)
+        var ls_sph = _sample_sphere_light_nee(sd.spheres[sph_i], Int(sd.sphereCount), spos, pcg)
         var w_sph = _sppm_nee_weight(vp, sd, vn, wo, ls_sph)
         if not w_sph.is_black():
-            var shadow_org_sph = vp.pos + vp.normal * shadow_eps
-            var shadow_ray_sph = Ray_C(shadow_org_sph, vec3f(ls_sph.wi))
+            var shadow_ray_sph = Ray_C(shadow_org, vec3f(ls_sph.wi))
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_sph, ls_sph.dist * Float32(0.9999),
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                                   sd.spheres, Int(sd.sphereCount)):
@@ -1669,8 +1680,7 @@ def _sppm_nee_one(
         var ls_e = _sample_infinite_light_nee(sd.infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
         var w_e = _sppm_nee_weight(vp, sd, vn, wo, ls_e)
         if not w_e.is_black():
-            var shadow_org_e = vp.pos + vp.normal * shadow_eps
-            var shadow_ray_e = Ray_C(shadow_org_e, vec3f(ls_e.wi))
+            var shadow_ray_e = Ray_C(shadow_org, vec3f(ls_e.wi))
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_e, ls_e.dist,
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                                   sd.spheres, Int(sd.sphereCount)):

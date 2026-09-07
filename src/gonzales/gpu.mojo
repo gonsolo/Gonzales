@@ -1958,7 +1958,17 @@ def _volume_nee_light(
     var edir = Vec3f(ls.wi[0], ls.wi[1], ls.wi[2])
     var e_org = point3f(scatter_pt_w + edir * Float32(0.0002))
     var e_ray = Ray_C(e_org, vec3f(edir))
-    if any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, e_ray, ls.dist,
+    # `ls.dist` is measured from scatter_pt_w but the ray starts 0.0002 FURTHER
+    # ALONG it, so an untrimmed tmax of ls.dist reaches 0.0002 PAST the light
+    # sample -- every time, at any distance. Harmless for a point/distant/
+    # infinite light (no geometry sits at that end to be hit) but fatal for a
+    # SPHERE light, which is real geometry: the ray hit the sphere and every
+    # volume scatter vertex reported it occluded, so a sphere light lit a
+    # participating medium only through phase-sampled escapes. Measured on a
+    # sphere light over a homogeneous box: 0.39x pbrt. Same defect as the area
+    # -light volume NEE one fixed in f79999f4.
+    var e_tmax = max(ls.dist - Float32(0.0002), Float32(0.0)) * Float32(0.9995)
+    if any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, e_ray, e_tmax,
                          blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres,
                          materials=materials):
         return
