@@ -3620,9 +3620,34 @@ def gpu_gen_aux_buffers[Oc: Origin[mut=True]](
 # code, so it doesn't touch the class of PTX-codegen bugs that blocks sharing
 # actual kernel bodies elsewhere in this codebase (see bdpt.mojo's MNEE/
 # _connect duplication comments for that unrelated, still-real constraint).
+def deactivate_paths_past_maxdepth_gpu(
+    paths: UnsafePointer[PathState_C, MutExternalOrigin],
+    n_dp: Int64, max_depth: Int32,
+):
+    """A NULL INTERFACE crossing (entering/leaving a medium) does not
+    increment `path_ptr[].bounce` -- correctly, since pbrt does not count it
+    as a bounce either -- but nothing else previously stopped a path once its
+    OWN bounce count reached the scene's real max_depth: the host loop's
+    fixed round count (gpu_render_sample/gpu_render_wavefront's own
+    `for _ in range(Int(maxDepth))`) was the ENTIRE termination mechanism,
+    and every kind of round (real scatter OR free interface pass-through)
+    consumed one of those rounds equally. For any volumetric scene, that
+    silently granted one fewer REAL bounce than requested for every interface
+    the path had to cross -- see rendering.mojo's CPU-side twin of this
+    kernel for the measurement. Dispatched as the FIRST kernel of every
+    bounce round, so every later kernel's own `active != 0` check already
+    skips whatever this one just deactivated."""
+    var n = Int(n_dp)
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= n:
+        return
+    if paths[tid].active != Int8(0) and paths[tid].bounce >= max_depth:
+        paths[tid].active = Int8(0)
+
 def _gpu_bounce_kernels(
     handle: UnsafePointer[GpuSceneHandle, MutExternalOrigin],
     n: Int, grid_dim: Int, px_scale: Float32,
+    max_depth: Int32,
     use_vulkan_rt: Bool = False,
     interop_scene: VulkanInteropRtSceneHandle = UnsafePointer[UInt8, MutExternalOrigin].unsafe_dangling(),
     interop_rays_buf: Optional[DeviceBuffer[DType.float32]] = None,
@@ -3641,6 +3666,11 @@ def _gpu_bounce_kernels(
     instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]] = None,
 ) raises:
     comptime block_size = 256
+    handle[].ctx.enqueue_function[deactivate_paths_past_maxdepth_gpu](
+        handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        Int64(n), max_depth,
+        grid_dim=grid_dim, block_dim=block_size,
+    )
     if use_vulkan_rt:
         vulkaninterop_rt_traverse_paths_gpu(
             handle[].ctx,
@@ -4205,8 +4235,22 @@ def gpu_render_sample[Oc: Origin[mut=True]](
                     restir_rd = buf_a; restir_wr = buf_b
                 else:
                     restir_rd = buf_b; restir_wr = buf_a
-            for _ in range(Int(maxDepth)):
-                _gpu_bounce_kernels(handle, n_int, grid_dim, px_scale,
+            # Padding is CONDITIONAL on the scene actually containing a
+            # medium: for the vast majority of scenes (no participating
+            # media), a null interface never occurs, every path already
+            # reaches its true maxDepth at round maxDepth exactly, and there
+            # is no per-round host sync here (unlike the CPU loop's cheap
+            # `anyActive` early-exit) to make extra rounds free -- each one
+            # is a real, unconditional dispatch of every kernel in
+            # _gpu_bounce_kernels. Keeping the loop bound exactly `maxDepth`
+            # when handle[].n_mediums == 0 makes this fix a complete no-op,
+            # performance-wise, for every non-volumetric scene.
+            comptime _MEDIUM_INTERFACE_MARGIN = 8
+            var gpu_max_rounds = Int(maxDepth)
+            if handle[].n_mediums > 0:
+                gpu_max_rounds += _MEDIUM_INTERFACE_MARGIN
+            for _ in range(gpu_max_rounds):
+                _gpu_bounce_kernels(handle, n_int, grid_dim, px_scale, maxDepth,
                                     use_restir=use_restir,
                                     restir_read=restir_rd, restir_write=restir_wr)
             handle[].ctx.enqueue_function[accumulate_film_gpu](
@@ -4296,9 +4340,23 @@ def gpu_render_wavefront(
                 grid_dim=grid_total,
                 block_dim=block_size,
             )
-            for _ in range(Int(maxDepth)):
+            # Padding is CONDITIONAL on the scene actually containing a
+            # medium: for the vast majority of scenes (no participating
+            # media), a null interface never occurs, every path already
+            # reaches its true maxDepth at round maxDepth exactly, and there
+            # is no per-round host sync here (unlike the CPU loop's cheap
+            # `anyActive` early-exit) to make extra rounds free -- each one
+            # is a real, unconditional dispatch of every kernel in
+            # _gpu_bounce_kernels. Keeping the loop bound exactly `maxDepth`
+            # when handle[].n_mediums == 0 makes this fix a complete no-op,
+            # performance-wise, for every non-volumetric scene.
+            comptime _MEDIUM_INTERFACE_MARGIN = 8
+            var gpu_max_rounds = Int(maxDepth)
+            if handle[].n_mediums > 0:
+                gpu_max_rounds += _MEDIUM_INTERFACE_MARGIN
+            for _ in range(gpu_max_rounds):
                 _gpu_bounce_kernels(
-                    handle, n_total, grid_total, px_scale,
+                    handle, n_total, grid_total, px_scale, maxDepth,
                     use_vulkan_rt, interop_scene, interop_rays_buf, interop_results_buf,
                     mesh_material_idx_buf, mesh_al_idx_buf, n_meshes_vk,
                     instance_base_mesh_buf=instance_base_mesh_buf,

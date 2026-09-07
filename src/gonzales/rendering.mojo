@@ -60,7 +60,16 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
 ):
     var sp = samplerParamsPtr[0]
     var scene = scenePtr[0]
-    var maxD = Int(maxDepth)
+    # `maxD` (the outer loop's iteration budget) is padded beyond the scene's
+    # own `maxDepth` -- see the deactivation check inside the loop for why.
+    # Cheap and safe for a scene with no participating media: a null
+    # interface never occurs there, so every path already reaches its true
+    # `maxDepth` at round `maxDepth` exactly, the deactivation check fires at
+    # the same round it always would have, and the padding costs at most one
+    # extra empty round before `anyActive` goes false.
+    comptime _MEDIUM_INTERFACE_MARGIN = 20
+    var trueMaxDepth = Int(maxDepth)
+    var maxD = trueMaxDepth + _MEDIUM_INTERFACE_MARGIN
     var tileW = Int(tileMaxX - tileMinX)
     var tileH = Int(tileMaxY - tileMinY)
     var spp = Int(sp.samplesPerPixel)
@@ -136,11 +145,24 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
 
     # Multi-bounce path trace
     for _ in range(maxD):
+        # A NULL INTERFACE crossing (entering/leaving a medium) does not
+        # increment `path_ptr[].bounce` -- correctly, since pbrt does not
+        # count it as a bounce either -- but nothing else previously stopped
+        # a path once its OWN bounce count reached the scene's real
+        # `maxDepth`: this loop's fixed round count was the ENTIRE
+        # termination mechanism, and every kind of round (real scatter OR
+        # free interface pass-through) consumed one of those rounds equally.
+        # For any volumetric scene, that silently granted one fewer REAL
+        # bounce than requested for every interface the path had to cross.
+        # Measured on a homogeneous slab (PT, one interface crossing to enter
+        # the medium): gonzales at maxDepth=N matched pbrt at maxDepth=N-1
+        # almost exactly, e.g. gz(3)=0.03257 vs pbrt(2)=0.03256.
         var anyActive = False
         for i in range(n):
+            if paths[i].active != 0 and paths[i].bounce >= Int32(trueMaxDepth):
+                paths[i].active = Int8(0)
             if paths[i].active != 0:
                 anyActive = True
-                break
         if not anyActive:
             break
         for i in range(n):
