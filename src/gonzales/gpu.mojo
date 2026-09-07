@@ -5,7 +5,7 @@ from max.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc, memcpy
-from .geometry import RGB, Point3f, Point2f, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, NvdbGrid_C, nvdb_sample_density, nvdb_ray_range, grid_ray_range, hg_phase, hg_sample, blackbody_rgb, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr
+from .geometry import RGB, Point3f, Point2f, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, NvdbGrid_C, nvdb_sample_density, nvdb_ray_range, grid_ray_range, nvdb_index_ray, nvdb_node_exit_t, nvdb_majorant_at_world, hg_phase, hg_sample, blackbody_rgb, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres, LightSample, _sample_infinite_light_nee, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee
 from .transform import transform_normal_by_instance
@@ -1973,17 +1973,38 @@ def _volume_nee_light(
     var t_hi = min(rng[1], ls.dist)
     var Te = Float32(1.0)
     if t_hi > t_lo and sigma_maj > Float32(0.0):
+        # Same local-majorant segment walk as the free-flight loop -- see the
+        # comment there. Ratio tracking stays unbiased under a piecewise
+        # majorant for the same memorylessness reason.
+        var eray = nvdb_index_ray(nvdb_grid, scatter_pt_w, edir) if use_nvdb else SIMD[DType.float32, 8](0)
         var te = t_lo
+        var eseg_end = t_lo - Float32(1.0)
+        var esig = Float32(0.0)
         var eiters = 0
         while eiters < MEDIUM_TRACK_MAX_ITERS:
             eiters += 1
+            if te >= eseg_end:
+                if te >= t_hi:
+                    break
+                if use_nvdb:
+                    var emr = nvdb_majorant_at_world(nvdb_grid, scatter_pt_w + edir * te)
+                    esig = emr[0] * sigma_t_r
+                    eseg_end = min(nvdb_node_exit_t(eray, te, emr[1]), t_hi)
+                else:
+                    esig = sigma_maj
+                    eseg_end = t_hi
+                if esig <= Float32(0.0):
+                    te = eseg_end
+                    continue
             var ue = pcg.next_float()
-            te += -log(max(ue, Float32(1e-7))) / sigma_maj
-            if te >= t_hi:
-                break
+            var te_next = te + (-log(max(ue, Float32(1e-7))) / esig)
+            if te_next >= eseg_end:
+                te = eseg_end
+                continue
+            te = te_next
             var pe = scatter_pt_w + edir * te
             var de = nvdb_sample_density(nvdb_grid, pe) if use_nvdb else grid_sample_density(grid, pe)
-            Te *= Float32(1.0) - (de * sigma_t_r) / sigma_maj
+            Te *= Float32(1.0) - (de * sigma_t_r) / esig
             if Te < Float32(1e-4):
                 Te = Float32(0.0)
                 break
@@ -2128,15 +2149,46 @@ def _sample_medium_core(
         if sigma_maj <= Float32(0.0):
             path_ptr[].pcgState = pcg.state
             return
+        # ── Segment-wise tracking with LOCAL majorants ───────────────────
+        # A single global majorant forces the step size set by the densest
+        # voxel anywhere in the grid, even while crossing empty space: on
+        # disney-cloud that is a fixed 0.25-world-unit step across a
+        # 596-unit bounding sphere, ~2400 steps almost all of which are null
+        # collisions in vacuum. NanoVDB stores a max per node, so instead
+        # walk the ray one node at a time and use that node's max: an empty
+        # upper node (4096^3) or lower node (128^3) is then skipped in ONE
+        # step. Unbiased by the memorylessness of the exponential -- when a
+        # sampled distance overshoots the current segment we simply resume
+        # sampling from the segment boundary under the next majorant.
+        # uniformgrid keeps exactly its previous behaviour: one segment
+        # spanning the whole ray with the global majorant.
         var t = Float32(0.0)
         var collided = False
         var iters = 0
+        var seg_end = Float32(-1.0)       # < t forces a majorant query on entry
+        var sigma_maj_seg = Float32(0.0)
+        var iray = nvdb_index_ray(nvdb_grid, ray_org, ray_dir) if use_nvdb else SIMD[DType.float32, 8](0)
         while iters < MEDIUM_TRACK_MAX_ITERS:
             iters += 1
+            if t >= seg_end:
+                if t >= t_surf:
+                    break
+                if use_nvdb:
+                    var mr = nvdb_majorant_at_world(nvdb_grid, ray_org + t * ray_dir)
+                    sigma_maj_seg = mr[0] * sigma_t.r
+                    seg_end = min(nvdb_node_exit_t(iray, t, mr[1]), t_surf)
+                else:
+                    sigma_maj_seg = sigma_maj
+                    seg_end = t_surf
+                if sigma_maj_seg <= Float32(0.0):
+                    t = seg_end
+                    continue
             var u = pcg.next_float()
-            t += -log(max(u, Float32(1e-7))) / sigma_maj
-            if t >= t_surf:
-                break
+            var t_next = t + (-log(max(u, Float32(1e-7))) / sigma_maj_seg)
+            if t_next >= seg_end:
+                t = seg_end
+                continue
+            t = t_next
             var p_world = ray_org + t * ray_dir
             var density = nvdb_sample_density(nvdb_grid, p_world) if use_nvdb else grid_sample_density(grid, p_world)
             # ── Volumetric emission (pbrt NanoVDBMedium) ─────────────────
@@ -2155,10 +2207,10 @@ def _sample_medium_core(
                 var tk = (nvdb_sample_density(tgrid, p_world) - med.temp_offset) * med.temp_scale
                 if tk > Float32(100.0):
                     var sigma_a_real = density * med.sigma_a.r
-                    path_ptr[].estimate += path_ptr[].throughput * blackbody_rgb(tk) * (med.le_scale * sigma_a_real / sigma_maj)
+                    path_ptr[].estimate += path_ptr[].throughput * blackbody_rgb(tk) * (med.le_scale * sigma_a_real / sigma_maj_seg)
             var sigma_t_real = density * sigma_t.r
             var u2 = pcg.next_float()
-            if u2 < sigma_t_real / sigma_maj:
+            if u2 < sigma_t_real / sigma_maj_seg:
                 collided = True
                 break
         if not collided:

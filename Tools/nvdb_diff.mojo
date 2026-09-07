@@ -21,7 +21,7 @@ from std.sys import argv
 from std.memory import alloc
 from gonzales.nanovdb import (
     nvdb_load, nvdb_data, nvdb_size, nvdb_free,
-    nvdb_get_value_ref, nvdb_active_count, nvdb_active_coord,
+    nvdb_get_value_ref, nvdb_active_count, nvdb_active_coord, nvdb_majorant_at,
     nvdb_sample_index,
 )
 
@@ -96,10 +96,57 @@ def main() raises:
                 print("    MISMATCH at (", x, y, z, ") ref=", expect, " got=", got)
                 first_bad_shown += 1
 
+    # ── Majorant validity ────────────────────────────────────────────────
+    # A LOCAL majorant that is ever SMALLER than a real density inside the
+    # region it claims to bound silently biases delta tracking (it makes the
+    # medium look thinner, with no crash and no obvious artefact), so it is
+    # checked here rather than trusted. For each probe: the reported bound
+    # must be >= the true max over the whole aligned box it covers.
+    var maj_checked = 0
+    var maj_bad = 0
+    var maj_shown = 0
+    var maj_total_ratio = Float64(0)
+    for probe in range(min(n_active, Int64(400))):
+        var ci = Int64(probe) * (n_active // Int64(400) + Int64(1))
+        if ci >= n_active: break
+        nvdb_active_coord(h, ci, coord)
+        var bx = coord[0]; var by = coord[1]; var bz = coord[2]
+        var mr = nvdb_majorant_at(blob, bx, by, bz)
+        var bound = mr[0]
+        var dim = Int32(mr[1])
+        # aligned box base (arithmetic shift keeps negatives correct)
+        var shift = Int32(0)
+        var d = dim
+        while d > Int32(1):
+            d = d >> Int32(1); shift += Int32(1)
+        var b0 = (bx >> shift) << shift
+        var b1 = (by >> shift) << shift
+        var b2 = (bz >> shift) << shift
+        # true max over the box, subsampled for boxes too big to scan whole
+        var step = Int32(1)
+        if dim > Int32(16): step = dim // Int32(16)
+        var truemax = Float32(0)
+        for zz in range(0, Int(dim), Int(step)):
+            for yy in range(0, Int(dim), Int(step)):
+                for xx in range(0, Int(dim), Int(step)):
+                    var v = nvdb_sample_index(blob, b0 + Int32(xx), b1 + Int32(yy), b2 + Int32(zz))
+                    if v > truemax: truemax = v
+        maj_checked += 1
+        if truemax > bound * Float32(1.0001):
+            maj_bad += 1
+            if maj_shown < 5:
+                print("    MAJORANT TOO SMALL at (", bx, by, bz, ") bound=", bound,
+                      " true max in", dim, "^3 box =", truemax)
+                maj_shown += 1
+        if bound > Float32(0):
+            maj_total_ratio += Float64(truemax / bound)
+
     coord.free()
     cpath.free()
     nvdb_free(h)
 
+    print("  majorant: checked", maj_checked, "regions,", maj_bad, "invalid;",
+          "mean tightness (true max / bound) =", maj_total_ratio / Float64(max(maj_checked, 1)))
     print("  checked", checked, "voxels,", nonzero_ref, "of them non-background")
     if nonzero_ref == 0:
         print("FAIL: every probe was background -- the comparison proves nothing")

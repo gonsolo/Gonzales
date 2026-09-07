@@ -3,7 +3,7 @@ from std.memory import alloc
 from std.math import sqrt, acos, atan2, cos, sin, min, max, abs, floor, log
 from std.sys.info import align_of
 from gonzales.spectrum import SampledWavelengths
-from gonzales.nanovdb import nvdb_sample_index
+from gonzales.nanovdb import nvdb_sample_index, nvdb_majorant_at
 
 # Value structs shared with GPU code can't hold Optional[UnsafePointer], so an
 # "unset" pointer field is instead left at its `.unsafe_dangling()` sentinel --
@@ -1019,6 +1019,89 @@ def nvdb_ray_range(grid: NvdbGrid_C, org: Vec3f, dir: Vec3f) -> SIMD[DType.float
     return _slab_range(oi, di,
         Vec3f(grid.index_min.x, grid.index_min.y, grid.index_min.z),
         Vec3f(grid.index_max.x + Float32(1), grid.index_max.y + Float32(1), grid.index_max.z + Float32(1)))
+
+@always_inline
+def nvdb_index_ray(grid: NvdbGrid_C, org: Vec3f, dir: Vec3f) -> SIMD[DType.float32, 8]:
+    """The world ray expressed in the grid's INDEX space, as
+    (ox,oy,oz,|d|, dx,dy,dz,unused). Both transforms are affine and the
+    direction is carried as a vector, so the ray parameter t is IDENTICAL in
+    both spaces -- index-space box tests therefore return world-space t
+    directly. Computed once per tracked ray so the per-segment majorant
+    walk costs only arithmetic."""
+    var m = grid.world_to_medium
+    var ox = m[0]*org[0] + m[4]*org[1] + m[8]*org[2] + m[12]
+    var oy = m[1]*org[0] + m[5]*org[1] + m[9]*org[2] + m[13]
+    var oz = m[2]*org[0] + m[6]*org[1] + m[10]*org[2] + m[14]
+    var dx = m[0]*dir[0] + m[4]*dir[1] + m[8]*dir[2]
+    var dy = m[1]*dir[0] + m[5]*dir[1] + m[9]*dir[2]
+    var dz = m[2]*dir[0] + m[6]*dir[1] + m[10]*dir[2]
+    var im = grid.inv_map
+    var sx = ox - grid.map_vec.x
+    var sy = oy - grid.map_vec.y
+    var sz = oz - grid.map_vec.z
+    var iox = sx*im[0] + sy*im[1] + sz*im[2]
+    var ioy = sx*im[3] + sy*im[4] + sz*im[5]
+    var ioz = sx*im[6] + sy*im[7] + sz*im[8]
+    var idx = dx*im[0] + dy*im[1] + dz*im[2]
+    var idy = dx*im[3] + dy*im[4] + dz*im[5]
+    var idz = dx*im[6] + dy*im[7] + dz*im[8]
+    var dlen = sqrt(max(idx*idx + idy*idy + idz*idz, Float32(1e-20)))
+    return SIMD[DType.float32, 8](iox, ioy, ioz, dlen, idx, idy, idz, Float32(0))
+
+@always_inline
+def nvdb_node_exit_t(iray: SIMD[DType.float32, 8], t_now: Float32, dim: Float32) -> Float32:
+    """t at which the ray leaves the `dim`-aligned node box currently
+    containing it. `dim` is a power of two (8/128/4096, the leaf/lower/upper
+    extents), so the box base is the index coordinate with its low bits
+    masked off -- an arithmetic shift, which is correct for negative
+    coordinates too. A small nudge past the face is added so the next
+    majorant query lands in the NEXT node and the walk always makes
+    progress; without it a ray exactly on a node face would re-query the
+    same node forever."""
+    var px = iray[0] + t_now * iray[4]
+    var py = iray[1] + t_now * iray[5]
+    var pz = iray[2] + t_now * iray[6]
+    var shift = Int32(3)
+    if dim > Float32(2048): shift = Int32(12)
+    elif dim > Float32(64): shift = Int32(7)
+    var b0 = Float32((Int32(floor(px)) >> shift) << shift)
+    var b1 = Float32((Int32(floor(py)) >> shift) << shift)
+    var b2 = Float32((Int32(floor(pz)) >> shift) << shift)
+    var t_exit = Float32(1.0e30)
+    if abs(iray[4]) > Float32(1e-12):
+        var bx = (b0 + dim) if iray[4] > Float32(0) else b0
+        var tx = (bx - iray[0]) / iray[4]
+        if tx < t_exit: t_exit = tx
+    if abs(iray[5]) > Float32(1e-12):
+        var by = (b1 + dim) if iray[5] > Float32(0) else b1
+        var ty = (by - iray[1]) / iray[5]
+        if ty < t_exit: t_exit = ty
+    if abs(iray[6]) > Float32(1e-12):
+        var bz = (b2 + dim) if iray[6] > Float32(0) else b2
+        var tz = (bz - iray[2]) / iray[6]
+        if tz < t_exit: t_exit = tz
+    # nudge ~1e-3 voxel past the face
+    var eps = Float32(1.0e-3) / iray[3]
+    if t_exit <= t_now: t_exit = t_now
+    return t_exit + eps
+
+@always_inline
+def nvdb_majorant_at_world(grid: NvdbGrid_C, p_world: Vec3f) -> SIMD[DType.float32, 2]:
+    """LOCAL majorant (max, extent) at a WORLD-space point -- thin wrapper
+    over nanovdb.mojo's nvdb_majorant_at that applies the same two-stage
+    world->medium->index transform nvdb_sample_density uses."""
+    var m = grid.world_to_medium
+    var mx = m[0]*p_world[0] + m[4]*p_world[1] + m[8]*p_world[2] + m[12]
+    var my = m[1]*p_world[0] + m[5]*p_world[1] + m[9]*p_world[2] + m[13]
+    var mz = m[2]*p_world[0] + m[6]*p_world[1] + m[10]*p_world[2] + m[14]
+    var im = grid.inv_map
+    var sx = mx - grid.map_vec.x
+    var sy = my - grid.map_vec.y
+    var sz = mz - grid.map_vec.z
+    var ix = sx*im[0] + sy*im[1] + sz*im[2]
+    var iy = sx*im[3] + sy*im[4] + sz*im[5]
+    var iz = sx*im[6] + sy*im[7] + sz*im[8]
+    return nvdb_majorant_at(grid.blob, Int32(floor(ix)), Int32(floor(iy)), Int32(floor(iz)))
 
 @always_inline
 def grid_ray_range(grid: Grid_C, org: Vec3f, dir: Vec3f) -> SIMD[DType.float32, 2]:

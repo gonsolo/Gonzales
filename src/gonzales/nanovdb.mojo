@@ -166,6 +166,20 @@ comptime NVDB_LOWER_OFF_TABLE = 1088
 
 # Leaf node (3-bit, 8^3 voxels) -- Float row: leaf_off_table=96, dense
 # 4-byte-per-voxel value array (value_stride_bits=32).
+# Per-node max stats (Float row of pnanovdb_grid_type_constants:
+# upper_off_max=8228, lower_off_max=1060, leaf_off_max=84). These are what
+# make LOCAL majorants possible -- see nvdb_majorant_at.
+comptime NVDB_UPPER_OFF_MAX = 8228
+comptime NVDB_LOWER_OFF_MAX = 1060
+comptime NVDB_LEAF_OFF_MAX = 84
+
+# Index-space extent of each node level, in voxels: leaf 8^3, lower 16^3
+# leaves = 128, upper 32^3 lowers = 4096 (which is also the root tile span,
+# matching _nvdb_coord_to_key's >>12).
+comptime NVDB_LEAF_DIM = 8
+comptime NVDB_LOWER_DIM = 128
+comptime NVDB_UPPER_DIM = 4096
+
 comptime NVDB_LEAF_OFF_VALUE_MASK = 16
 comptime NVDB_LEAF_OFF_TABLE = 96
 
@@ -311,3 +325,83 @@ def nvdb_sample_index(
             return _nvdb_f32(blob, lower_base + NVDB_LOWER_OFF_TABLE + NVDB_TABLE_STRIDE * n_lower)
     else:
         return _nvdb_f32(blob, upper_base + NVDB_UPPER_OFF_TABLE + NVDB_TABLE_STRIDE * n_upper)
+
+
+def nvdb_majorant_at(
+    blob: UnsafePointer[UInt8, MutExternalOrigin],
+    i: Int32, j: Int32, k: Int32,
+) -> SIMD[DType.float32, 2]:
+    """LOCAL majorant at index-space (i,j,k): returns (max_value, extent),
+    where `extent` is the voxel-space size of the region that bound covers.
+
+    This is the whole point of a sparse grid and the single biggest
+    performance lever in volumetric rendering. With ONE global majorant,
+    delta tracking must step at the rate implied by the densest voxel
+    ANYWHERE in the grid, even while crossing hundreds of voxels of empty
+    space -- on disney-cloud that is a fixed 0.25-world-unit step across a
+    596-unit bounding sphere, ~2400 steps of which the overwhelming
+    majority are null collisions in vacuum. NanoVDB already stores a max
+    per node, so the tracker can instead use the max of the smallest node
+    containing the point and skip an entire empty upper node (4096^3) or
+    lower node (128^3) in ONE step. That is what pbrt's separate 16^3
+    majorant DDA grid buys, obtained here straight from the blob with no
+    extra structure to build or upload.
+
+    The returned extent is a power of two and the region is aligned to it,
+    so the caller gets the box as base = (ijk >> log2(extent)) <<
+    log2(extent), size `extent` -- see nvdb_node_box_exit.
+
+    Same pure-offset-arithmetic discipline as nvdb_sample_index: no
+    allocation, no host calls, identical on CPU and GPU."""
+    var tree_base = NVDB_GRID_SIZE
+    var root_base = tree_base + Int(_nvdb_u64(blob, tree_base + NVDB_TREE_OFF_NODE_OFFSET_ROOT))
+    var table_size = Int(_nvdb_u32(blob, root_base + NVDB_ROOT_OFF_TABLE_SIZE))
+    var key = _nvdb_coord_to_key(i, j, k)
+
+    var tile_base = root_base + NVDB_ROOT_SIZE
+    var found = False
+    for _ in range(table_size):
+        if _nvdb_u64(blob, tile_base + NVDB_ROOT_TILE_OFF_KEY) == key:
+            found = True
+            break
+        tile_base += NVDB_ROOT_TILE_SIZE
+
+    # No root tile at all: this whole 4096^3 region is background.
+    if not found:
+        return SIMD[DType.float32, 2](
+            _nvdb_f32(blob, root_base + NVDB_ROOT_OFF_BACKGROUND), Float32(NVDB_UPPER_DIM))
+
+    var root_child = _nvdb_i64(blob, tile_base + NVDB_ROOT_TILE_OFF_CHILD)
+    if root_child == Int64(0):
+        return SIMD[DType.float32, 2](
+            _nvdb_f32(blob, tile_base + NVDB_ROOT_TILE_OFF_VALUE), Float32(NVDB_UPPER_DIM))
+
+    var upper_base = root_base + Int(root_child)
+    # An entirely empty upper node is skipped whole -- the big win.
+    var upper_max = _nvdb_f32(blob, upper_base + NVDB_UPPER_OFF_MAX)
+    if upper_max <= Float32(0.0):
+        return SIMD[DType.float32, 2](upper_max, Float32(NVDB_UPPER_DIM))
+
+    var n_upper = _nvdb_upper_offset(i, j, k)
+    if not _nvdb_mask_is_on(blob, upper_base + NVDB_UPPER_OFF_CHILD_MASK, n_upper):
+        # Constant lower-sized tile.
+        return SIMD[DType.float32, 2](
+            _nvdb_f32(blob, upper_base + NVDB_UPPER_OFF_TABLE + NVDB_TABLE_STRIDE * n_upper),
+            Float32(NVDB_LOWER_DIM))
+
+    var upper_slot = upper_base + NVDB_UPPER_OFF_TABLE + NVDB_TABLE_STRIDE * n_upper
+    var lower_base = upper_base + Int(_nvdb_i64(blob, upper_slot))
+    var lower_max = _nvdb_f32(blob, lower_base + NVDB_LOWER_OFF_MAX)
+    if lower_max <= Float32(0.0):
+        return SIMD[DType.float32, 2](lower_max, Float32(NVDB_LOWER_DIM))
+
+    var n_lower = _nvdb_lower_offset(i, j, k)
+    if not _nvdb_mask_is_on(blob, lower_base + NVDB_LOWER_OFF_CHILD_MASK, n_lower):
+        return SIMD[DType.float32, 2](
+            _nvdb_f32(blob, lower_base + NVDB_LOWER_OFF_TABLE + NVDB_TABLE_STRIDE * n_lower),
+            Float32(NVDB_LEAF_DIM))
+
+    var lower_slot = lower_base + NVDB_LOWER_OFF_TABLE + NVDB_TABLE_STRIDE * n_lower
+    var leaf_base = lower_base + Int(_nvdb_i64(blob, lower_slot))
+    return SIMD[DType.float32, 2](
+        _nvdb_f32(blob, leaf_base + NVDB_LEAF_OFF_MAX), Float32(NVDB_LEAF_DIM))
