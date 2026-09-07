@@ -514,7 +514,19 @@ def _sample_sphere_light_nee(
     var solid_angle = TWO_PI * (Float32(1.0) - cos_max)
     var n_sph = Float32(max(n_sphere_lights, 1))
     var pdf_light = Float32(1.0) / (solid_angle * n_sph)
-    return LightSample(wi, sph.emission, pdf_light, dc, False, True)
+    # `dist` must be the distance to the sphere's SURFACE along wi, not to its
+    # CENTER. Every caller uses it as the shadow ray's tmax (dist*0.9999), so
+    # returning the centre distance made the ray overshoot the near surface by
+    # a whole radius -- it hit the light's own geometry and reported occlusion
+    # EVERY time, at every distance. Sphere area lights therefore illuminated
+    # nothing at all: a sphere light over a diffuse floor rendered the sphere
+    # itself correctly and left the floor black (0.00001 against an analytic
+    # 0.164). Cone sampling guarantees dc*sin_th <= radius, so the discriminant
+    # below is non-negative; the max() is belt-and-braces against rounding.
+    var sin2_th = max(Float32(0.0), Float32(1.0) - cos_th * cos_th)
+    var disc = max(Float32(0.0), sph.radius * sph.radius - dc_sq * sin2_th)
+    var d_surf = dc * cos_th - sqrt(disc)
+    return LightSample(wi, sph.emission, pdf_light, max(d_surf, Float32(0.0)), False, True)
 
 @always_inline
 def _sample_infinite_light_nee(ilight: InfiniteLight_C, u: Point2f) -> LightSample:
