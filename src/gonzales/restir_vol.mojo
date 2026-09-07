@@ -53,6 +53,19 @@ from .geometry import RGB, dot, hg_phase, _is_real_ptr, Vec3f
 from .reservoir import ReservoirState, reservoir_state_init, reservoir_combine, reservoir_finalize, reservoir_cap_confidence
 from .rng import PCG32
 
+# How many light candidates one volume scatter vertex resamples over. The
+# asymmetry that makes this worth doing: a candidate costs a light pick plus an
+# unshadowed target evaluation, while resolving one costs a visibility ray and,
+# in a heterogeneous medium, a full ratio-tracking transmittance march -- so M
+# candidates and ONE resolve is close to the price of the single sample it
+# replaces.
+#
+# 1 reduces the estimator EXACTLY to that single sample (W = (p_hat/q)/p_hat =
+# 1/q), which makes it the natural A/B baseline and a cheap correctness check.
+# 8 is a starting value, not a measured optimum -- there is no tuning data for
+# volumetric candidate counts in this renderer yet.
+comptime VOL_RIS_CANDIDATES: Int = 8
+
 # Transmittance seam sentinel -- see this file's header, seam 1. Passing this
 # as vol_target_pdf's `tr` yields the transmittance-free target function.
 comptime VOL_TR_UNIT: Float32 = Float32(1.0)

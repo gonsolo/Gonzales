@@ -14,6 +14,8 @@ from .rng import PCG32
 from .shading import shade_core, shade_nee_core, ShadeContext, LightContext, shade_diffuse, shade_coated_diffuse, shade_diffuse_transmission, shade_mix, shade_conductor, shade_dielectric, shade_thin_dielectric, shade_coated_conductor, shade_hair, shade_interface, shade_measured, GIPendingX1
 from .guide import null_guide
 from .restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io_null
+from .restir_vol import vol_reservoir_init, vol_target_pdf, VOL_TR_UNIT, VOL_RIS_CANDIDATES
+from .reservoir import reservoir_update, reservoir_finalize
 from .restir_gi import gi_reservoir_io_null
 from .postprocess import _firefly_clamp_pixel, _atrous_tap_weight, _atrous_spatial_weight
 from .sampling import power_heuristic, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gen_primary_ray_state
@@ -2304,34 +2306,105 @@ def _sample_medium_core(
         # Volume scatter: compute scatter point
         var scatter_pt = path_ptr[].ray.origin + path_ptr[].ray.direction * t_free
         # ── Volume scatter NEE — area light direct lighting ──────────────
+        # Phase 7.2 (docs/A2_restir_migration_plan.md): resampled importance
+        # sampling over VOL_RIS_CANDIDATES light samples instead of one.
+        #
+        # The whole point is the asymmetry between the two halves. Generating
+        # a candidate is cheap -- pick a light, a triangle, a barycentric
+        # point, evaluate the UNSHADOWED target -- while resolving one costs a
+        # visibility ray plus, in a heterogeneous medium, a whole
+        # ratio-tracking march for transmittance. So M candidates are
+        # generated and exactly ONE is resolved, which is why this can afford
+        # to look at many lights for barely more than the price of the single
+        # sample it replaces.
+        #
+        # `tr` is VOL_TR_UNIT at every target evaluation here on purpose: this
+        # is the resampling stage, and the target must not contain
+        # intermediate transmittance (restir_vol.mojo, seam 1). The real
+        # transmittance appears once below, in the resolve, along a ray that
+        # is actually traced.
+        #
+        # With VOL_RIS_CANDIDATES == 1 this reduces EXACTLY to the single-
+        # sample estimator it replaced: W = w_sum/(m*p_hat) = (p_hat/q)/p_hat
+        # = 1/q, and 1/q is precisely the `al.total_area / light_sel_pdf`
+        # factor the old `geom` term carried. That equivalence is the cheapest
+        # correctness check available here and is worth preserving.
         if n_area_lights > 0 and n_light_sampler > 0:
             var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
-            var u_nee = pcg.next_float()
-            var ls_result = light_sampler_sample(ls, u_nee)
-            var light_idx = ls_result[0]
-            var light_sel_pdf = ls_result[1]
-            var al = areaLights[light_idx]
-            var lmesh = meshes[Int(al.meshIdx)]
-            var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
-            var r1 = pcg.next_float()
-            var r2 = pcg.next_float()
-            var lb = lti * 3
-            var lv0 = Int(lmesh.vertexIndices[lb])
-            var lv1 = Int(lmesh.vertexIndices[lb + 1])
-            var lv2 = Int(lmesh.vertexIndices[lb + 2])
-            var lp0 = Vec3f(lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
-            var lp1 = Vec3f(lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
-            var lp2 = Vec3f(lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
-            var sqrt_r1 = sqrt(r1)
-            var light_point = lp0 * (Float32(1) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1) - r2)) + lp2 * (sqrt_r1 * r2)
-            var lcross = cross(lp1 - lp0, lp2 - lp0)
-            var lcross_len = sqrt(max(Float32(1e-14), dot(lcross, lcross)))
-            var light_normal = lcross * (Float32(1) / lcross_len)
             var scatter_pt_s = scatter_pt.to_simd()
-            var to_light = light_point - scatter_pt_s
-            var dist_sq = dot(to_light, to_light)
-            var dist = sqrt(dist_sq)
-            if dist > Float32(0.0001) and al.total_area > Float32(0):
+            var scatter_v = Vec3f(scatter_pt_s[0], scatter_pt_s[1], scatter_pt_s[2])
+            var res = vol_reservoir_init()
+            res.scatter_point = scatter_v
+            # sigma_s is a CONSTANT across every candidate at this fixed
+            # vertex, so it cancels between w_sum and p_hat(winner) and cannot
+            # affect the estimate. It is passed (rather than 1.0) so the
+            # payload field means what it says, for the distance-resampling
+            # half where vertices genuinely differ in density.
+            res.sigma_s = max(med.sigma_s.r, Float32(1e-30))
+            res.phase_g = med.g
+            res.medium_idx = Int32(med_idx)
+            var p_hat_win = Float32(0.0)
+
+            for _cand in range(VOL_RIS_CANDIDATES):
+                var u_nee = pcg.next_float()
+                var ls_result = light_sampler_sample(ls, u_nee)
+                var light_idx = ls_result[0]
+                var light_sel_pdf = ls_result[1]
+                var al = areaLights[light_idx]
+                var lmesh = meshes[Int(al.meshIdx)]
+                var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
+                var r1 = pcg.next_float()
+                var r2 = pcg.next_float()
+                var lb = lti * 3
+                var lv0 = Int(lmesh.vertexIndices[lb])
+                var lv1 = Int(lmesh.vertexIndices[lb + 1])
+                var lv2 = Int(lmesh.vertexIndices[lb + 2])
+                var lp0 = Vec3f(lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
+                var lp1 = Vec3f(lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
+                var lp2 = Vec3f(lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
+                var sqrt_r1 = sqrt(r1)
+                var light_point = lp0 * (Float32(1) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1) - r2)) + lp2 * (sqrt_r1 * r2)
+                var lcross = cross(lp1 - lp0, lp2 - lp0)
+                var lcross_len = sqrt(max(Float32(1e-14), dot(lcross, lcross)))
+                var light_normal = lcross * (Float32(1) / lcross_len)
+
+                # Every candidate must be streamed, including a rejected one:
+                # reservoir_update increments m unconditionally, and RIS's 1/M
+                # normalization is only right if m counts candidates CONSIDERED
+                # rather than candidates that happened to be usable.
+                var w_cand = Float32(0.0)
+                var p_hat_cand = Float32(0.0)
+                var to_light_c = light_point - scatter_pt_s
+                var dist_c = sqrt(dot(to_light_c, to_light_c))
+                if dist_c > Float32(0.0001) and al.total_area > Float32(0) and light_sel_pdf > Float32(0):
+                    var lp_v = Vec3f(light_point[0], light_point[1], light_point[2])
+                    var ln_v = Vec3f(light_normal[0], light_normal[1], light_normal[2])
+                    p_hat_cand = vol_target_pdf(
+                        ray_dir, scatter_v, res.sigma_s, med.g,
+                        lp_v, ln_v, al.emission, VOL_TR_UNIT)
+                    if p_hat_cand > Float32(0.0):
+                        # q is the AREA-measure pdf of this sample: probability
+                        # of picking this light, times a uniform 1/total_area.
+                        var q_cand = light_sel_pdf / al.total_area
+                        w_cand = p_hat_cand / q_cand
+                if reservoir_update(res.state, w_cand, pcg.next_float()):
+                    res.light_point = Vec3f(light_point[0], light_point[1], light_point[2])
+                    res.light_normal = Vec3f(light_normal[0], light_normal[1], light_normal[2])
+                    res.le = al.emission
+                    res.light_idx = Int32(light_idx)
+                    res.valid = Int8(1)
+                    p_hat_win = p_hat_cand
+
+            reservoir_finalize(res.state, p_hat_win)
+
+            # ── Resolve: one visibility ray + one transmittance march, for
+            # the winner only.
+            if res.valid != Int8(0) and res.state.w > Float32(0.0):
+                var light_point = res.light_point.to_simd()
+                var light_normal = res.light_normal.to_simd()
+                var to_light = light_point - scatter_pt_s
+                var dist_sq = dot(to_light, to_light)
+                var dist = sqrt(dist_sq)
                 var shadow_dir = to_light * (Float32(1) / dist)
                 var cos_l = -dot(light_normal, shadow_dir)
                 if cos_l > Float32(0):
@@ -2384,11 +2457,14 @@ def _sample_medium_core(
                             T = RGB(exp(-sigma_t.r * dist), exp(-sigma_t.g * dist), exp(-sigma_t.b * dist))
                         else:
                             T = RGB(exp(-sigma_t.r * dist), exp(-sigma_t.g * dist), exp(-sigma_t.b * dist))
-                        var geom = al.total_area * cos_l / (dist_sq * light_sel_pdf)
+                        # The old `geom` also carried al.total_area/light_sel_pdf,
+                        # i.e. 1/q -- that now lives inside res.state.w, so the
+                        # geometry factor here is the bare cos_l/dist^2.
+                        var geom = cos_l / dist_sq
                         var ph_a = hg_phase(dot(-ray_dir, shadow_dir), med.g)
                         path_ptr[].estimate += path_ptr[].throughput * _med_spec_illum(
-                            al.emission * T, path_ptr[].wavelengths, spectral_coeffs, spectral_res,
-                            spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) * (geom * ph_a)
+                            res.le * T, path_ptr[].wavelengths, spectral_coeffs, spectral_res,
+                            spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) * (geom * ph_a * res.state.w)
 
         # ── Volume scatter NEE — INFINITE (environment) light ────────────
         # Without this a medium lit ONLY by a sky dome -- which is every
