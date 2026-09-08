@@ -1,18 +1,16 @@
 # Volumetric ReSTIR (Lin, Kettunen, Bitterli, Pantaleoni, Yuksel, Wyman 2021 --
 # "Fast Volume Rendering with Spatiotemporal Reservoir Resampling"), Phase 7 of
-# docs/A2_restir_migration_plan.md. Payload type and pure target-function math
-# only, no dependency on the medium sampler that calls it (gpu.mojo's
-# _sample_medium_core) -- same one-directional layering restir_di.mojo and
-# restir_gi.mojo use, for the same circular-import reason.
+# docs/A2_restir_migration_plan.md -- read that section for the Ghost ReSTIR
+# poster background and full implementation/wiring status. Payload type and
+# pure target-function math only, no dependency on the medium sampler that
+# calls it (gpu.mojo's _sample_medium_core) -- same one-directional layering
+# restir_di.mojo and restir_gi.mojo use, for the same circular-import reason.
 #
-# WHAT IS RESAMPLED. A camera ray crossing a participating medium picks a
-# scattering distance and then a light at that point. Both choices are
-# resampled jointly: a reservoir candidate is the PAIR (volume scattering
-# vertex, light sample taken there). That is the whole point of the method --
-# distance sampling alone is nearly free but blind to where the light is, and
-# light sampling alone cannot know which distances are unoccluded, so
-# resampling the pair is what finds the few (t, light) combinations that carry
-# the energy.
+# WHAT IS RESAMPLED. A reservoir candidate is the PAIR (volume scattering
+# vertex, light sample taken there), resampled jointly -- distance sampling
+# alone is blind to where the light is, light sampling alone can't know which
+# distances are unoccluded, so resampling the pair is what finds the few
+# (t, light) combinations that carry the energy.
 #
 # WHY THE VERTEX IS STORED IN WORLD SPACE. Exactly as DIReservoir's
 # `sample_point` and GIReservoir's `recon_point` are: reuse moves a sample to a
@@ -21,31 +19,22 @@
 # new pixel's own ray does all the reweighting. See vol_shift_scatter_vertex
 # for the one seam where that assumption is stated explicitly.
 #
-# TWO DELIBERATE SEAMS, both required by the migration plan's Phase 7 note.
-# "Ghost ReSTIR: Volumetric Resampling with Ghost Vertices in Null-Scattering
-# Space" (Zhang, Lin, Hong, Kettunen, Yuksel, Wyman, SIGGRAPH 2026) published
-# only as a two-page poster abstract -- no full paper, no derivation, no code --
-# so this implements the older, fully-published formulation while keeping the
-# two things the abstract says that work replaces behind single, named,
-# swappable seams:
-#
+# TWO DELIBERATE SEAMS (see A2's Phase 7 section for why -- the newer,
+# ghost-vertex formulation exists only as a poster abstract, no derivation):
 #   1. Transmittance. vol_target_pdf takes `tr` as an explicit argument rather
-#      than computing it. Passing VOL_TR_UNIT gives a target function with no
-#      intermediate transmittance at all, which is the property the newer
-#      formulation needs so the target evaluates CONSISTENTLY across every
-#      resampling stage. Today's callers pass a real estimate; switching is a
-#      call-site change, not a rewrite.
+#      than computing it; VOL_TR_UNIT gives a target with no intermediate
+#      transmittance, the property the newer formulation needs.
 #   2. The domain mapping of the reconnection shift. vol_shift_scatter_vertex
-#      is the only place that maps a stored vertex onto a different camera ray,
-#      and it is written as a mode dispatch (VolShiftMode) rather than an
-#      inlined assumption, so a ghost-vertex bijection -- which is well-defined
-#      regardless of null-vertex count or density change, unlike the identity
-#      mapping below -- can be added as a second mode without touching the
-#      reservoir plumbing.
+#      is a mode dispatch (VolShiftMode), not an inlined assumption, so a
+#      ghost-vertex bijection can be added as a second mode without touching
+#      the reservoir plumbing.
 #
 # Scope actually implemented here: the payload, the target function, and the
-# temporal+spatial combine. Candidate generation and the shadow-ray resolve are
-# NOT here -- they belong next to the medium sampler that owns the ray, exactly
+# temporal+spatial combine (vol_temporal_spatial_combine) -- fully unit-tested
+# (Tests/unit/test_restir_vol.mojo) but NOT YET WIRED into the render loop (no
+# persistent per-pixel buffers, no G-buffer plumbing, no call site). Candidate
+# generation and the shadow-ray resolve ARE wired, in gpu.mojo's
+# _sample_medium_core, next to the medium sampler that owns the ray -- exactly
 # as DI's generation half lives in shading.mojo.
 
 from std.math import sqrt, cos, sin, abs

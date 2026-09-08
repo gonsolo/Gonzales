@@ -1,10 +1,14 @@
 # A2: ReSTIR / SMS Migration Plan
 
 Plan for moving gonzales from VCM + SPPM + lightweight guiding to a
-GRIS/ReSTIR-based sampling framework. **Status (2026-09-06): Phases 0-5
+GRIS/ReSTIR-based sampling framework. **Status (2026-09-08): Phases 0-5
 done; Phase 6 core done (`--sms-restir`, temporal-only reuse, no spatial
-yet -- see §4's phase table and `docs/A1_feature_status.md`'s Implemented
-Features); Phases 7-10 not started.**
+yet); Phase 7 candidate generation + resolve done (GPU wavefront volume
+scatter vertices, `restir_vol.mojo` + `gpu.mojo`), but temporal/spatial
+reservoir reuse is only written and unit-tested, not wired into the render
+loop -- see §4's phase table, this section's own Phase 7 writeup for the
+exact boundary, and `docs/A1_feature_status.md`'s Implemented Features;
+Phases 8-10 not started.**
 
 Theory (MIS, RIS/GRIS, shift mappings, VCM's weight derivation, the
 "common currency" problem) lives in a companion document,
@@ -135,7 +139,7 @@ Phases 1-8 each deliver standalone value and do **not** depend on Phase 9.
 | 4 | ReSTIR GI (path reuse) | 3 | Engineering | Done (diffuse x1/x2 only) |
 | 5 | SMS (generalize MNEE) | — (parallel from 0) | Eng. + some research | Done (`sms.mojo`) |
 | 6 | SMS-ReSTIR (manifold shift reservoir) | 4, 5 | Research-flavored | Core done, `--sms-restir` (temporal only, no spatial) |
-| 7 | Volumetric ReSTIR → retire SPPM | 4 | Research-flavored | Not started |
+| 7 | Volumetric ReSTIR → retire SPPM | 4 | Research-flavored | Candidate generation + resolve done (GPU wavefront); temporal/spatial combine implemented + unit-tested, not wired into the render loop |
 | 8 | ReSTIR BDPT → retire VCM | 4 | Hard | Not started |
 | 9 | Common currency: joint reservoir | 6, 7, 8 | **Open research** | Investigated, not implemented |
 | 10 | Cost-aware weights + throttling | 9 | **Open research** | Investigated, not implemented |
@@ -332,6 +336,26 @@ partly gates this phase's *validation surface* — `volumetric-caustic` still
 works as a test case, but `disney-cloud`-class scenes cannot be used to
 exercise it until VDB lands. Consider pulling VDB earlier than its priority
 suggests if Phase 7 is to be properly validated.
+
+**Implemented (2026-09-08):** the RIS candidate side is done and wired into
+the GPU wavefront medium sampler -- `restir_vol.mojo` (`VolReservoir`
+payload, `vol_target_pdf`, `VOL_RIS_CANDIDATES = 8`) and its call site in
+`gpu.mojo`'s `_sample_medium_core` (~:2320-2400). A volume scattering vertex
+draws `VOL_RIS_CANDIDATES` (light, point) pairs, streams them through a
+single-frame reservoir via `reservoir_update`, and resolves the winner with
+one shadow ray + transmittance march. With `VOL_RIS_CANDIDATES = 1` this
+reduces exactly to the pre-ReSTIR single-sample estimator (`W = 1/q`), kept
+deliberately as the cheapest available correctness check.
+
+**Not yet wired:** `vol_temporal_spatial_combine` -- temporal reuse via
+identity reprojection plus spatial reuse over `VOL_SPATIAL_NEIGHBORS = 4`
+neighbours, with Bitterli et al. 2020 Algorithm 6 Z-normalization -- is
+fully implemented and unit-tested (`Tests/unit/test_restir_vol.mojo`), but
+has no caller in `gpu.mojo`/`pipeline.mojo`: no persistent per-pixel
+`VolReservoirIO` buffers are allocated, and no depth/world-position
+G-buffer data is threaded to it. Wiring this in (persistent reservoir
+buffers across wavefront batches, the G-buffer plumbing, and a call site
+replacing the current single-frame resolve) is the remaining Phase 7 work.
 
 Gonzales already has homogeneous media (`Medium_C`,
 `sample_homogeneous_free_flight`, `sample_medium_gpu`). Retire `sppm.mojo`
