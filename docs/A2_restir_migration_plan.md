@@ -357,6 +357,23 @@ G-buffer data is threaded to it. Wiring this in (persistent reservoir
 buffers across wavefront batches, the G-buffer plumbing, and a call site
 replacing the current single-frame resolve) is the remaining Phase 7 work.
 
+**2026-09-08: full wiring plan derived, not yet implemented.** Investigated
+for implementation and found tractable but too large to land unverified in
+one pass (DI's own temporal/spatial reuse took several sessions and a
+~10-cycle bug hunt once accumulation was added — see the
+`project_restir_migration` memory's Phase 2 section). A complete,
+file-and-line-precise plan mirroring DI's already-shipped pattern —
+including the one architectural unknown that needed resolving
+(`gpu_render_sample` already dispatches the medium kernel when
+`n_mediums > 0`, so no prerequisite work is needed there) — is recorded in
+the `project_restir_migration` memory under "7.3 (temporal/spatial reuse)".
+Ship temporal-only first (a real, cheap slice: leave the G-buffer pointers
+null and the spatial pass self-disables); DI's own matched-cap verdict on
+spatial reuse was "correct but genuinely not worth enabling," so hold
+volumetric spatial reuse to the same bar before enabling it by default.
+Distance resampling (the plan's other half) remains fully open and was not
+investigated.
+
 Gonzales already has homogeneous media (`Medium_C`,
 `sample_homogeneous_free_flight`, `sample_medium_gpu`). Retire `sppm.mojo`
 only after parity on `volumetric-caustic`.
