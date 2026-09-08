@@ -2085,50 +2085,24 @@ def _sample_medium_core(
     or absorb inside the medium. On scatter, performs direct area-light NEE
     with isotropic phase function. Shared verbatim between the GPU kernel
     (sample_medium_gpu, one call per thread) and the CPU driver
-    (render_all_tiles's per-sample loop) — staged spectral rendering
-    rollout, Stage 5a (unify before spectralize), see
-    project_spectral_rendering memory. Was previously hand-duplicated with
-    real, if minor, divergences: the CPU copy never set `.bounce`/
-    `.lastBsdfPdf` on a volume-scatter event (this function, matching what
-    was already GPU's behavior, now does on both) and drew its NEE/
-    scatter-direction random numbers in the opposite order from GPU (this
-    function uses GPU's order, matching the CPU code's own long-standing
-    comment that GPU was the intended canonical reference "mirrored" on the
-    CPU side) — both fixed as a natural side effect of unifying into one
-    body, not preserved as intentional per-backend differences.
+    (render_all_tiles's per-sample loop). See docs/09_volumetric_media.md
+    for the delta/ratio-tracking theory, the local-majorant optimization,
+    and the volumetric NEE/connect bug history behind the choices below.
 
-    Homogeneous media (grid_idx < 0): closed-form analytic transmittance,
-    single free-flight sample (unchanged from before heterogeneous support).
+    Homogeneous media (grid_idx < 0): closed-form analytic transmittance.
+    Heterogeneous media (grid_idx >= 0 or nvdb_idx >= 0): delta tracking
+    against a local majorant; NEE shadow rays use the matching ratio-tracking
+    transmittance estimator, which naturally stops attenuating once the ray
+    exits the density source's bounds.
 
-    Heterogeneous media (grid_idx >= 0, "uniformgrid"): real delta tracking
-    (Woodcock tracking) against the grid's majorant — repeatedly sample
-    candidate collision distances at the majorant rate, accept/reject against
-    the true local density at each candidate. Null collisions leave
-    throughput unchanged (that's the point of the null-collision trick —
-    transmittance emerges from the accept/reject statistics, not an explicit
-    exp() multiply). NEE shadow rays through the grid use the matching
-    ratio-tracking transmittance estimator (grid_sample_density naturally
-    returns 0 outside the grid's bounds, so this correctly stops attenuating
-    once the shadow ray exits the grid's AABB — no separate bookkeeping
-    needed for "did the shadow ray leave the medium").
-
-    Both paths use the RED channel exclusively for majorant/accept-reject
-    decisions (matching the pre-existing homogeneous code's own simplification):
-    exact for gray/achromatic media (uniformgrid's only supported density
-    representation today has no per-channel color), would need spectral MIS
-    (hero-wavelength weighting) to be unbiased for a colored heterogeneous
-    medium — not needed for uniformgrid, would matter for a future colored
-    nanovdb medium.
-
-    Path throughput is spectral end to end now, so the homogeneous branch
-    carries only the RATIO of each channel's transmittance to the one the
-    free flight was actually sampled from (still the red channel), lifted
-    into the 4 hero lanes by band-picking. The extinction COLOUR is
-    therefore still not spectrally resolved -- doing that means sampling the
-    free flight per hero wavelength and combining the wavelengths with MIS,
-    which is chromatic-media work, not a colour conversion. The
-    heterogeneous (uniformgrid) branch has nothing to colour to begin with:
-    its density is a single scalar field.
+    Both heterogeneous sources use the RED channel exclusively for
+    majorant/accept-reject decisions: exact for the achromatic density
+    fields supported today, would need per-wavelength free-flight sampling
+    with spectral MIS to extend to a colored medium. The homogeneous branch
+    carries only the RATIO of each channel's transmittance to the
+    red-channel one actually sampled, lifted into the 4 hero lanes by
+    band-picking (see spectrum.mojo's rgb_bands_to_spectral_sample) — real
+    chromatic extinction is the same unimplemented, separate piece of work.
     """
     var path_ptr = paths + i
     if path_ptr[].active == 0:
@@ -2175,18 +2149,13 @@ def _sample_medium_core(
             path_ptr[].pcgState = pcg.state
             return
         # ── Segment-wise tracking with LOCAL majorants ───────────────────
-        # A single global majorant forces the step size set by the densest
-        # voxel anywhere in the grid, even while crossing empty space: on
-        # disney-cloud that is a fixed 0.25-world-unit step across a
-        # 596-unit bounding sphere, ~2400 steps almost all of which are null
-        # collisions in vacuum. NanoVDB stores a max per node, so instead
-        # walk the ray one node at a time and use that node's max: an empty
-        # upper node (4096^3) or lower node (128^3) is then skipped in ONE
-        # step. Unbiased by the memorylessness of the exponential -- when a
-        # sampled distance overshoots the current segment we simply resume
-        # sampling from the segment boundary under the next majorant.
-        # uniformgrid keeps exactly its previous behaviour: one segment
-        # spanning the whole ray with the global majorant.
+        # Walk the ray one NanoVDB tree node at a time, using that node's own
+        # max density as the local majorant (6.7x on disney-cloud vs one
+        # global majorant -- see docs/09_volumetric_media.md, "Local
+        # majorants"). Unbiased by the memorylessness of the exponential: an
+        # overshoot just resumes sampling from the segment boundary under the
+        # next node's majorant. uniformgrid keeps one segment spanning the
+        # whole ray under the global majorant (no per-node structure to walk).
         var t = Float32(0.0)
         var collided = False
         var iters = 0

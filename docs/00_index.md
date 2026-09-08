@@ -11,6 +11,7 @@
 6. [Lights and Materials](06_lights_and_materials.md) — Light sources, textures, and materials
 7. [Path Tracing](07_path_tracing.md) — The rendering equation in practice
 8. [The Rendering Pipeline](08_rendering_pipeline.md) — GPU wavefront, CPU tile rendering, and image output
+9. [Volumetric Media](09_volumetric_media.md) — Delta/ratio tracking, local majorants, and bidirectional volume connections
 
 ### Appendices
 

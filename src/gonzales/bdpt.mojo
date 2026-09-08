@@ -1200,29 +1200,14 @@ def _bdpt_connect_to_cache(
     now fully determined by which pixel `cv`'s eye subpath belongs to."""
     var sum = SpectralSample(Float32(0))
     # Sum every MIS-WEIGHTED pair, but take at most ONE UNWEIGHTED pair.
-    #
-    # Connecting cv to light vertex s and to light vertex s+1 samples paths of
-    # DIFFERENT total length, so both are legitimate -- but they are also two
-    # of the several (s,t) splits by which BDPT can reach a path of any GIVEN
-    # length, and those splits are competing strategies that must share one
-    # unit of weight between them. The dVCM/dVC machinery does exactly that
-    # for pairs it covers. It does NOT cover volume vertices (no surface pdf),
-    # so those pairs come back at full weight and simply SUM: measured on an
-    # env-lit slab, capping the light-vertex count at 1/2/3/all gave
-    # 1.027 / 1.388 / 1.651 / 1.969 x pbrt -- each extra split adding a
-    # roughly constant amount that never decays, which is the signature.
-    #
-    # Limiting the unweighted ones to a single (lowest-index) pair restores
-    # exactly one strategy per path length: a path with N scattering vertices
-    # is sampled as (camera N-1, light 1) and no other way. That is unbiased,
-    # and it costs only the bidirectional variance reduction those extra
-    # splits were providing -- correctness over noise, until volume vertices
-    # get real MIS weights of their own.
-    #
-    # Deliberately keyed on the PAIR rather than on the light type: a SURFACE
-    # cv connecting to several volume light vertices is the same over-count
-    # seen from the other side, and an earlier light-type-keyed version of
-    # this fix missed it entirely.
+    # Volume vertices have no dVCM/dVC (no surface pdf), so any (s,t) split
+    # touching one comes back unweighted -- summing every such split
+    # over-counts (see docs/09_volumetric_media.md, "VCM/BDPT volume
+    # connections": the 1.027/1.388/1.651/1.969x non-decaying-increment
+    # signature). Keeping only the lowest-index unweighted pair restores
+    # exactly one strategy per path length, unbiased. Keyed on the PAIR, not
+    # on which side is in a medium -- a surface cv into several volume light
+    # vertices is the same over-count from the other side.
     var took_unweighted = False
     for local in range(path_len):
         var lv = lvc[lp_idx * _BDPT_MAX_VERTS + local]
@@ -1789,13 +1774,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var sp = ro + rd*ff.t_free
                 var v = _null_vertex()
                 v.pos = sp
-                # `beta`, NOT beta*albedo. A vertex's beta is the throughput
-                # ARRIVING at it; its own response is applied separately at
-                # connect time by _eval_vertex_spectral, whose volume branch
-                # returns v.alb/(4*pi). Baking albedo in here as well counted
-                # it twice per volume vertex. Measured (2048 spp, 3 seeds):
-                # the direct s=1 connection read 0.785x pbrt with the double
-                # count and 0.983x without -- a factor of exactly 1/albedo.
+                # `beta`, NOT beta*albedo -- a vertex's beta is the throughput
+                # ARRIVING at it; connect time applies the vertex's own
+                # response separately (v.alb/(4*pi)). Baking albedo in here
+                # too double-counted it (see docs/09_volumetric_media.md,
+                # "VCM/BDPT volume connections": 0.785x -> 0.983x fix).
                 v.beta = beta
                 v.alb = ff.albedo
                 v.is_surface = Int32(0); v.is_delta = Int32(0)
