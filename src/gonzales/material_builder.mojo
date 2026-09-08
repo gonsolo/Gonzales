@@ -313,6 +313,35 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
         s[0].tex_names.append(String("__normalmap"))
         s[0].tex_files.append(nm_file)
 
+    # "displacement": bump map. The named texture is resolved to an
+    # imagemap index either directly (a plain `Texture "x" "float"
+    # "imagemap" ...`) or through one level of "scale" indirection (`Texture
+    # "x" "float" "scale" "texture tex" ["base"] "float scale" [s]`, the
+    # shape every bump map in this scene corpus actually uses -- see
+    # handle_texture's "scale" class). Only one level of indirection is
+    # resolved; a scale-of-a-scale isn't a pattern seen in practice.
+    var bump_tex_idx_for_mat = Int32(-1)
+    var bump_scale_for_mat = Float32(1)
+    var disp_tex = params.get_string("displacement", "")
+    if disp_tex != "":
+        var matched_disp = False
+        for ti in range(len(s[0].tex_names)):
+            if s[0].tex_names[ti] == disp_tex:
+                bump_tex_idx_for_mat = Int32(ti)
+                matched_disp = True
+                break
+        if not matched_disp:
+            for si in range(len(s[0].scale_tex_names)):
+                if s[0].scale_tex_names[si] == disp_tex:
+                    var base_name = s[0].scale_tex_base[si]
+                    for ti in range(len(s[0].tex_names)):
+                        if s[0].tex_names[ti] == base_name:
+                            bump_tex_idx_for_mat = Int32(ti)
+                            bump_scale_for_mat = s[0].scale_tex_scale[si]
+                            matched_disp = True
+                            break
+                    break
+
     # "mix": blend amount and the two component material names.
     var mix_amount = params.get_float("amount", Float32(0.5))
     var mix_names = params.get_strings("materials")
@@ -365,6 +394,8 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
     nm.tex_idx        = tex_idx_for_mat
     nm.normal_tex_idx = normal_tex_idx_for_mat
     nm.rough_tex_idx  = rough_tex_idx_for_mat
+    nm.bump_tex_idx   = bump_tex_idx_for_mat
+    nm.bump_scale     = bump_scale_for_mat
     nm.checker_tex1   = checker_tex1
     nm.checker_tex2   = checker_tex2
     nm.checker_uscale = checker_uscale

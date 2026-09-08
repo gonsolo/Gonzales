@@ -28,6 +28,12 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     var tex_idx:        Int32
     var normal_tex_idx: Int32
     var rough_tex_idx:  Int32
+    # PBRT "displacement": bump map, resolved to an imagemap texture index
+    # (through a "scale" texture wrapper if present -- see handle_texture's
+    # "scale" class) + the scalar height multiplier applied to that
+    # texture's raw [0,1] value. -1 = no bump map.
+    var bump_tex_idx:   Int32
+    var bump_scale:     Float32
     # UV scale applied to an imagemap `tex_idx` texture's mesh UVs at parse
     # time (Mitsuba's `<transform name="to_uv"><scale .../></transform>`,
     # e.g. a tiled floor texture) -- NOT the same field as checker_uscale/
@@ -63,6 +69,8 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
         self.tex_idx        = Int32(-1)
         self.normal_tex_idx = Int32(-1)
         self.rough_tex_idx  = Int32(-1)
+        self.bump_tex_idx   = Int32(-1)
+        self.bump_scale     = Float32(1)
         self.tex_uscale     = Float32(1)
         self.tex_vscale     = Float32(1)
         self.mix_name1      = String("")
@@ -199,6 +207,15 @@ struct SceneParseState(Movable):
     var checker_tex2:       List[Float32]  # 3 floats per entry
     var checker_uscale:     List[Float32]  # 1 float per entry
     var checker_vscale:     List[Float32]  # 1 float per entry
+    # "scale" float textures: name -> (base texture name, scalar multiplier),
+    # parallel to names. PBRT wraps a bump-map imagemap in one of these to
+    # apply a height scale (e.g. `Texture "x" "float" "scale" "texture tex"
+    # ["base"] "float scale" [0.005]`) -- resolved to an actual imagemap
+    # index by material_builder.mojo's displacement handling, not stored as
+    # its own texture kind in Material_C.
+    var scale_tex_names:    List[String]
+    var scale_tex_base:     List[String]
+    var scale_tex_scale:    List[Float32]
 
     # Film / camera / sampler settings
     var film_w:           Int32
@@ -324,6 +341,9 @@ struct SceneParseState(Movable):
         self.const_tex_names = List[String]()
         self.const_tex_rgb = List[Float32]()
         self.checker_tex_names = List[String]()
+        self.scale_tex_names = List[String]()
+        self.scale_tex_base = List[String]()
+        self.scale_tex_scale = List[Float32]()
         self.checker_tex1 = List[Float32]()
         self.checker_tex2 = List[Float32]()
         self.checker_uscale = List[Float32]()

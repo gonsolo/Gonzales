@@ -1756,6 +1756,98 @@ def _apply_normal_map[use_gpu: Bool](
     return geom_normal
 
 @always_inline
+def _apply_bump_map[use_gpu: Bool](
+    mat: Material_C,
+    v0: Int, v1: Int, v2: Int,
+    mesh: TriangleMesh_C,
+    inter: Intersection_C,
+    geom_normal: Vec3f,
+    p0: Vec3f,
+    p1: Vec3f,
+    p2: Vec3f,
+    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin],
+    textures: UnsafePointer[GpuTexture_C, MutExternalOrigin],
+    n_textures: Int,
+    pixel_uv: Float32 = Float32(0.0),
+) -> Vec3f:
+    """PBRT-style bump map: perturb dpdu/dpdv by the finite-difference height
+    gradient of `mat.bump_tex_idx` (scaled by `mat.bump_scale`), then rebuild
+    the normal as cross(dpdu', dpdv'). Distinct from `_apply_normal_map` (a
+    tangent-space normal image) -- this is a scalar HEIGHT texture, so unlike
+    that function it needs the RAW (non-normalized) dpdu/dpdv, since the
+    height gradient's magnitude must compose against their actual
+    world-per-parametric-unit scale, not a unit direction.
+
+    The finite-difference step MUST scale with the ray footprint
+    (`pixel_uv`, already computed per-hit by the caller for texture LOD) --
+    never a fixed UV constant. A first attempt at this used a fixed epsilon
+    and made barcelona-pavilion's water WORSE (1.682x -> 1.804x pbrt): a
+    fixed step over a heavily-tiled UV layout produces enormous gradients
+    wherever texels are small in world space. Matches pbrt's own adaptive
+    `du = .5*(|dudx|+|dudy|)`, falling back to a small constant only when no
+    footprint is available (first ray, or non-UV-mapped geometry) -- see
+    project_barcelona_pavilion_mnee memory for the full history."""
+    if mat.bump_tex_idx < Int32(0) or Int(mesh.uvs) <= 4:
+        return geom_normal
+    var dp1 = p1 - p0; var dp2 = p2 - p0
+    var u0f = mesh.uvs[v0*2]; var v0f = mesh.uvs[v0*2+1]
+    var u1f = mesh.uvs[v1*2]; var v1f = mesh.uvs[v1*2+1]
+    var u2f = mesh.uvs[v2*2]; var v2f = mesh.uvs[v2*2+1]
+    var du1 = u1f - u0f; var dv1 = v1f - v0f
+    var du2 = u2f - u0f; var dv2 = v2f - v0f
+    var det = du1 * dv2 - du2 * dv1
+    if det == Float32(0.0):
+        return geom_normal
+    var inv_det = Float32(1.0) / det
+    # Raw (unnormalized) dp/du, dp/dv -- same barycentric solve as
+    # _apply_normal_map's tangent, but kept at real world-per-parametric-unit
+    # magnitude instead of normalizing immediately.
+    var dpdu = (dp1 * dv2 - dp2 * dv1) * inv_det
+    var dpdv = (dp2 * du1 - dp1 * du2) * inv_det
+
+    var bw0 = Float32(1.0) - inter.u - inter.v
+    var uv_u = bw0 * u0f + inter.u * u1f + inter.v * u2f
+    var uv_v = bw0 * v0f + inter.u * v1f + inter.v * v2f  # unflipped; sample_texture applies its own V-flip consistently to every sample below
+
+    var h = pixel_uv * Float32(0.5)
+    if h <= Float32(1e-6):
+        h = Float32(0.0005)
+
+    # raw=False: unlike a normal map (tangent-space vectors, never gamma
+    # data), a height texture sourced from an 8-bit PNG is sRGB-encoded by
+    # convention -- pbrt-v4 itself defaults every PNG-sourced FloatImageTexture
+    # to sRGB decoding (textures.cpp: `HasExtension(filename, "png") ? "sRGB"
+    # : "linear"`), confirmed empirically here: an sRGB-decoded ramp produces
+    # a nonlinear (gamma ~2.2) height profile, and using raw=True (no decode)
+    # against a scene authored assuming pbrt's default made this feature's
+    # own controlled validation (a monotonic ramp vs a real pbrt render)
+    # diverge from pbrt's falloff shape. GPU already gets this for free --
+    # gpu.mojo's upload only marks normal_tex_idx textures raw, so
+    # bump_tex_idx defaults to the sRGB-decoded (non-raw) upload path.
+    var found = False
+    var h0 = sample_texture[use_gpu](Int(mat.bump_tex_idx), uv_u, uv_v, False, pixel_uv, tex_filenames, textures, n_textures, found).r
+    if not found:
+        return geom_normal
+    var hu = sample_texture[use_gpu](Int(mat.bump_tex_idx), uv_u + h, uv_v, False, pixel_uv, tex_filenames, textures, n_textures, found).r
+    var hv = sample_texture[use_gpu](Int(mat.bump_tex_idx), uv_u, uv_v + h, False, pixel_uv, tex_filenames, textures, n_textures, found).r
+    var dhdu = (hu - h0) * (Float32(1.0) / h) * mat.bump_scale
+    var dhdv = (hv - h0) * (Float32(1.0) / h) * mat.bump_scale
+
+    # newDpdu = dpdu + dh/du * n (dndu term dropped -- flat-shaded triangles
+    # have no meaningful dn/du of their own; matches pbrt's BumpMap when the
+    # base shading normal has no derivative to contribute).
+    var new_dpdu = dpdu + geom_normal * dhdu
+    var new_dpdv = dpdv + geom_normal * dhdv
+    var world_n = cross(new_dpdu, new_dpdv)
+    var wn_len2 = dot(world_n, world_n)
+    if wn_len2 <= Float32(0.0):
+        return geom_normal
+    world_n = world_n * (Float32(1.0) / sqrt(wn_len2))
+    if dot(world_n, geom_normal) < Float32(0.0):
+        world_n = -world_n
+    return world_n
+
+@always_inline
 def _apply_normal_map_sphere[use_gpu: Bool](
     mat: Material_C,
     center: Vec3f,
@@ -1906,6 +1998,8 @@ def _build_geom_context_full[use_gpu: Bool](
 
     var normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances)
     normal = _apply_normal_map[use_gpu](mat, v0, v1, v2, mesh, inter, normal, p0, p1, p2,
+        ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
+    normal = _apply_bump_map[use_gpu](mat, v0, v1, v2, mesh, inter, normal, p0, p1, p2,
         ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
     if dot(normal, ng_ff) < Float32(0.0):
         normal = -normal

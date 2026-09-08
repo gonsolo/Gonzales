@@ -1073,6 +1073,16 @@ def handle_texture(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         s[0].checker_uscale.append(kuscale)
         s[0].checker_vscale.append(kvscale)
         return
+    if _psc_streq(tex_class, "scale"):
+        tex_type.free(); tex_class.free()
+        var params = _psc_collect_params(handle)
+        var base_name = params.get_string("tex", "")
+        var scale_val = params.get_float("scale", Float32(1))
+        s[0].scale_tex_names.append(name_str)
+        s[0].scale_tex_base.append(base_name)
+        s[0].scale_tex_scale.append(scale_val)
+        return
+
     if not _psc_streq(tex_class, "imagemap"):
         tex_type.free(); tex_class.free()
         _psc_skip_params(handle)
@@ -1674,6 +1684,8 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
         mats[i].roughU  = nm3.roughness_u
         mats[i].roughV  = nm3.roughness_v
         mats[i].normal_tex_idx = nm3.normal_tex_idx
+        mats[i].bump_tex_idx = nm3.bump_tex_idx
+        mats[i].bump_scale = nm3.bump_scale
         mats[i].rough_tex_idx = nm3.rough_tex_idx
         mats[i].medium_interface_idx = Int32(-1)
         if nm3.measured_bsdf_path == "":
@@ -1822,6 +1834,8 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             mats[al_mat_base + al_idx].roughU   = Float32(0)
             mats[al_mat_base + al_idx].roughV   = Float32(0)
             mats[al_mat_base + al_idx].normal_tex_idx = Int32(-1)
+            mats[al_mat_base + al_idx].bump_tex_idx = Int32(-1)
+            mats[al_mat_base + al_idx].bump_scale = Float32(1)
             mats[al_mat_base + al_idx].rough_tex_idx = Int32(-1)
             mats[al_mat_base + al_idx].medium_interface_idx = Int32(-1)
             mats[al_mat_base + al_idx].measured_idx = Int32(-1)
@@ -1847,6 +1861,8 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             mats[slot].roughU   = Float32(0)
             mats[slot].roughV   = Float32(0)
             mats[slot].normal_tex_idx = Int32(-1)
+            mats[slot].bump_tex_idx = Int32(-1)
+            mats[slot].bump_scale = Float32(1)
             mats[slot].rough_tex_idx = Int32(-1)
             mats[slot].medium_interface_idx = Int32(-1)
             mats[slot].measured_idx = Int32(-1)
