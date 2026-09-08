@@ -2313,6 +2313,17 @@ def _sample_medium_core(
     var p_scatter = albedo_r
     var u_mode = pcg.next_float()
     if u_mode < p_scatter:
+        # A capped path dies at this real scatter, BEFORE this vertex's NEE
+        # and before a new direction is sampled -- pbrt's volpath does exactly
+        # this (`if (depth++ >= maxDepth) { terminated = true; return false; }`
+        # ahead of its own SampleLd). The segment that BROUGHT the path here
+        # was already traced and any emitter on it already collected, which is
+        # the whole point of carrying `at_cap` instead of killing a round
+        # earlier. Absorption below needs no such guard: it terminates anyway.
+        if path_ptr[].at_cap != Int8(0):
+            path_ptr[].pcgState = pcg.state
+            path_ptr[].active = Int8(0)
+            return
         # Volume scatter: compute scatter point
         var scatter_pt = path_ptr[].ray.origin + path_ptr[].ray.direction * t_free
         # ── Volume scatter NEE — area light direct lighting ──────────────
@@ -2984,7 +2995,7 @@ def gen_primary_rays_wavefront_gpu(
         SpectralSample(Float32(0.0)),
         RGB(Float32(0.0)),
         Int32(0), pcg_state, pcg_inc,
-        Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
+        Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
         Float32(0.0),
         Int32(-1),
         Int32(3), sobol_idx,
@@ -3446,7 +3457,7 @@ def gen_primary_rays_gpu(
         SpectralSample(Float32(0.0)),
         RGB(Float32(0.0)),
         Int32(0), pcg_state, pcg_inc,
-        Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
+        Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
         Float32(0.0),
         Int32(-1),
         Int32(3), sobol_idx,
@@ -3651,8 +3662,10 @@ def deactivate_paths_past_maxdepth_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= n:
         return
+    # Marks, does not kill -- see rendering.mojo's twin of this for why the
+    # segment leaving the last allowed vertex must still be traced.
     if paths[tid].active != Int8(0) and paths[tid].bounce >= max_depth:
-        paths[tid].active = Int8(0)
+        paths[tid].at_cap = Int8(1)
 
 def _gpu_bounce_kernels(
     handle: UnsafePointer[GpuSceneHandle, MutExternalOrigin],

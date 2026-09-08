@@ -133,7 +133,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     SpectralSample(Float32(0.0)),
                     RGB(Float32(0.0)),
                     Int32(0), pcg_state, pcg_inc,
-                    Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
+                    Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
                     Float32(0.0),
                     Int32(-1),
                     Int32(3), sobol_idx,
@@ -159,8 +159,18 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
         # almost exactly, e.g. gz(3)=0.03257 vs pbrt(2)=0.03256.
         var anyActive = False
         for i in range(n):
+            # MARK, do not kill. pbrt terminates at the NEXT real scattering
+            # event, not before the segment that leaves the last allowed one --
+            # so the capped path still gets one intersect, may cross null
+            # interfaces, and may land on an emitter and collect it. Killing it
+            # here (what this line used to do) dropped exactly that segment's
+            # emission, which is the MIS partner of the last vertex's own NEE:
+            # invisible when the light is far (that share is ~0) and dominant
+            # when it is close, where MIS gives BSDF sampling nearly all the
+            # weight. `at_cap` is consumed by _shade_dispatch and
+            # _sample_medium_core, which refuse NEE and refuse to scatter.
             if paths[i].active != 0 and paths[i].bounce >= Int32(trueMaxDepth):
-                paths[i].active = Int8(0)
+                paths[i].at_cap = Int8(1)
             if paths[i].active != 0:
                 anyActive = True
         if not anyActive:

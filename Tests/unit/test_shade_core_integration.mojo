@@ -19,7 +19,7 @@ def _close(a: Float32, b: Float32) -> Bool:
 def _dummy_path(ray: Ray_C, throughput: SpectralSample) -> PathState_C:
     return PathState_C(
         ray, throughput, SpectralSample(Float32(0.0)), RGB(Float32(0.0)),
-        Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
+        Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
         Float32(0.0), Int32(-1), Int32(0), UInt64(0),
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
         Float32(0.0),   # mis_null_dist

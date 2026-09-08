@@ -4187,6 +4187,17 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     pixel_idx: Int = -1,
     sms_io: SMSReservoirIO = sms_reservoir_io_null(),
 ):
+    # A path that has used its full maxdepth budget dies HERE, at the next
+    # real scattering event -- after any emission this segment landed on has
+    # already been collected upstream, and before this vertex would do NEE or
+    # sample a new direction. That is exactly pbrt's ordering (integrators.cpp:
+    # emission, then `if (depth++ >= maxDepth) return L;`, then SampleLd).
+    # A null interface is NOT a scattering event, so a capped path is still
+    # allowed to cross it and keep looking for an emitter beyond.
+    if path_ptr[].at_cap != Int8(0) and mat.type != MatKind.interface:
+        path_ptr[].active = 0
+        return
+
     # Any material other than a null interface is a REAL scattering event, so
     # the null-interface distance accumulated on the way here has served its
     # purpose and must not leak into the next segment's MIS. Reset here rather

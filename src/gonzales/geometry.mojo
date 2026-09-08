@@ -496,6 +496,14 @@ struct PathState_C(TrivialRegisterPassable):
     var specularBounce: Int8   # 1 if previous scatter was a delta BSDF (mirror/glass)
     var pending_mat: Int8      # GPU only: MatKind of material awaiting per-material kernel (0 = none)
     var volume_scattered: Int8 # 1 if this bounce was a volume scatter; shade_nee_core skips miss handling
+    # 1 once this path has used its full `maxdepth` budget of REAL scattering
+    # events. It is NOT dead yet: pbrt checks `depth++ >= maxDepth` at a
+    # scatter BEFORE that vertex's NEE and before sampling a new direction, so
+    # the segment LEAVING the last allowed vertex is still traced and whatever
+    # emitter it lands on is still collected. A capped path therefore gets one
+    # more intersect, may cross null interfaces, and may pick up emission --
+    # but must not do NEE and must not scatter again.
+    var at_cap: Int8
     # 1 if the last NON-specular vertex delegates its specular-chain lighting
     # to MNEE/SMS. That strategy samples exactly the paths
     # diffuse -> (specular chain) -> emitter, so when the path then REACHES

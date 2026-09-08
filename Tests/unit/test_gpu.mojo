@@ -30,6 +30,7 @@ def _dummy_path(estimate: SpectralSample, albedo: RGB) -> PathState_C:
         Int8(0),            # specularBounce
         Int8(0),            # pending_mat
         Int8(0),            # volume_scattered
+        Int8(0),            # at_cap
         Int8(0),            # sms_covered
         Vec3f(Float32(0.0)),  # last_ns_p
         Float32(0.0),       # lastBsdfPdf
