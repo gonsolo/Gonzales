@@ -836,29 +836,22 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
             path_ptr[].albedo = _albedo_highlight_boost(path_ptr[].albedo, contrib_area_c)
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_area_c.wi, ls_area_c.dist * Float32(0.9999), contrib_area_c)
 
-        for sph_i_coat in range(ctx.lights.sphere_count):
-            var ls_sph_coat = _sample_sphere_light_nee(ctx.lights.spheres[sph_i_coat], ctx.lights.sphere_count, hit_point, pcg)
-            var w_sph_coat = _nee_weight_coated_coat_lobe(ls_sph_coat, ior, coat_alpha, normal, wo)
-            if not w_sph_coat.is_black():
-                var contrib_sph_coat = path_ptr[].throughput * _to_spec_illum(ctx, w_sph_coat, path_ptr[].wavelengths)
-                path_ptr[].albedo = _albedo_highlight_boost(path_ptr[].albedo, contrib_sph_coat)
-                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_sph_coat.wi, ls_sph_coat.dist * Float32(0.9999), contrib_sph_coat)
-
-        for dl_i_coat in range(ctx.lights.distant_count):
-            var ls_dl_coat = _sample_distant_light_nee(ctx.lights.distant_lights[dl_i_coat])
-            var w_dl_coat = _nee_weight_coated_coat_lobe(ls_dl_coat, ior, coat_alpha, normal, wo)
-            if not w_dl_coat.is_black():
-                var contrib_dl_coat = path_ptr[].throughput * _to_spec_illum(ctx, w_dl_coat, path_ptr[].wavelengths)
-                path_ptr[].albedo = _albedo_highlight_boost(path_ptr[].albedo, contrib_dl_coat)
-                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_dl_coat.wi, ls_dl_coat.dist, contrib_dl_coat)
-
-        for pl_i_coat in range(ctx.lights.point_count):
-            var ls_pl_coat = _sample_point_light_nee(ctx.lights.point_lights[pl_i_coat], hit_point)
-            var w_pl_coat = _nee_weight_coated_coat_lobe(ls_pl_coat, ior, coat_alpha, normal, wo)
-            if not w_pl_coat.is_black():
-                var contrib_pl_coat = path_ptr[].throughput * _to_spec_illum(ctx, w_pl_coat, path_ptr[].wavelengths)
-                path_ptr[].albedo = _albedo_highlight_boost(path_ptr[].albedo, contrib_pl_coat)
-                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_pl_coat.wi, ls_pl_coat.dist * Float32(0.9999), contrib_pl_coat)
+        # distant/point/sphere via the shared sampler (_nee_sample_simple_light) --
+        # collapses what were 3 hand-copied loops into one. RNG-order note: of
+        # the 3, only sphere draws from `pcg`, and only distant+point (both
+        # 0-draw) change position relative to the ORIGINAL sphere/distant/point
+        # ordering here -- sphere's draw still happens exactly where it did
+        # (immediately after area, before infinite below), so the pcg sequence
+        # this function produces is unchanged.
+        for li_coat in range(_nee_simple_light_count(ctx)):
+            var res_coat = _nee_sample_simple_light(ctx, li_coat, hit_point, pcg)
+            var ls_coat = res_coat[0].copy()
+            var tmax_coat = res_coat[1]
+            var w_coat = _nee_weight_coated_coat_lobe(ls_coat, ior, coat_alpha, normal, wo)
+            if not w_coat.is_black():
+                var contrib_coat = path_ptr[].throughput * _to_spec_illum(ctx, w_coat, path_ptr[].wavelengths)
+                path_ptr[].albedo = _albedo_highlight_boost(path_ptr[].albedo, contrib_coat)
+                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_coat.wi, tmax_coat, contrib_coat)
 
         for inf_i_coat in range(ctx.lights.infinite_count):
             var ls_inf_coat = _sample_infinite_light_nee(ctx.lights.infinite_lights[inf_i_coat], Point2f(pcg.next_float(), pcg.next_float()))
@@ -949,19 +942,21 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
             var contrib_area = path_ptr[].throughput * _to_spec_refl(ctx, beta, path_ptr[].wavelengths) * _to_spec_illum(ctx, w_area, path_ptr[].wavelengths)
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_area.wi, ls_area.dist * Float32(0.9999), contrib_area)
 
-        for sph_i in range(ctx.lights.sphere_count):
-            var ls_sph = _sample_sphere_light_nee(ctx.lights.spheres[sph_i], ctx.lights.sphere_count, hit_point, pcg)
-            var w_sph = _nee_weight_coated_diffuse_base(ls_sph, alb, ior, normal, wo)
-            if not w_sph.is_black():
-                var contrib_sph = path_ptr[].throughput * _to_spec_refl(ctx, beta, path_ptr[].wavelengths) * _to_spec_illum(ctx, w_sph, path_ptr[].wavelengths)
-                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_sph.wi, ls_sph.dist * Float32(0.9999), contrib_sph)
-
-        for pl_i in range(ctx.lights.point_count):
-            var ls_pl = _sample_point_light_nee(ctx.lights.point_lights[pl_i], hit_point)
-            var w_pl = _nee_weight_coated_diffuse_base(ls_pl, alb, ior, normal, wo)
-            if not w_pl.is_black():
-                var contrib_pl = path_ptr[].throughput * _to_spec_refl(ctx, beta, path_ptr[].wavelengths) * _to_spec_illum(ctx, w_pl, path_ptr[].wavelengths)
-                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_pl.wi, ls_pl.dist * Float32(0.9999), contrib_pl)
+        # distant/point/sphere via the shared sampler -- see this function's
+        # coat-lobe block above for the RNG-order argument; it applies
+        # identically here (sphere is the only pcg-consuming type of the 3,
+        # and it still fires immediately after area / before infinite). The
+        # standalone distant loop that used to sit after infinite is now
+        # folded in here instead -- distant draws no pcg, so its position
+        # relative to infinite's draws is irrelevant to the pcg sequence.
+        for li in range(_nee_simple_light_count(ctx)):
+            var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
+            var ls = res[0].copy()
+            var tmax = res[1]
+            var w = _nee_weight_coated_diffuse_base(ls, alb, ior, normal, wo)
+            if not w.is_black():
+                var contrib = path_ptr[].throughput * _to_spec_refl(ctx, beta, path_ptr[].wavelengths) * _to_spec_illum(ctx, w, path_ptr[].wavelengths)
+                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls.wi, tmax, contrib)
 
         # ── Env-map (infinite light) NEE at the base, every bounce (see area
         #    lights above). Light enters via the coat so the contribution is
@@ -994,15 +989,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                     var t_max_env = Float32(100000.0)
                     _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, env_dir, t_max_env, contrib_e)
 
-        # Distant light NEE through the coat (delta light: MIS weight = 1),
-        # every bounce (see area lights above) — now correctly `beta`-weighted
-        # per depth instead of the old fire-once gate, so no double-counting.
-        for dl_i in range(ctx.lights.distant_count):
-            var ls_dl = _sample_distant_light_nee(ctx.lights.distant_lights[dl_i])
-            var w_dl = _nee_weight_coated_diffuse_base(ls_dl, alb, ior, normal, wo)
-            if not w_dl.is_black():
-                var contrib_dl = path_ptr[].throughput * _to_spec_refl(ctx, beta, path_ptr[].wavelengths) * _to_spec_illum(ctx, w_dl, path_ptr[].wavelengths)
-                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_dl.wi, ls_dl.dist, contrib_dl)
+        # Distant light NEE is now folded into the shared sweep above.
 
         # Lambertian base: sample a cosine-weighted up-going direction.
         var _w_up_sample = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), normal)
