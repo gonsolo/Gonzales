@@ -1544,6 +1544,46 @@ def _sppm_vp_shadow_eps(vp: SPPMPixel, sd: SceneDescriptor2_C, wo: Vec3f) -> Flo
         return curve_offset_eps(hc.radius)
     return Float32(0.0001)
 
+@always_inline
+def _sppm_simple_light_count(sd: SceneDescriptor2_C) -> Int:
+    """Sibling of shading.mojo's _nee_simple_light_count / bdpt.mojo's
+    _bdpt_simple_light_count -- a third, independent definition rather than
+    a shared one, because sppm.mojo is typed against SceneDescriptor2_C (like
+    bdpt.mojo) but needs the (LightSample, tmax) PAIRING (like shading.mojo's
+    ShadeContext version), and bdpt.mojo already imports from sppm.mojo (for
+    _sppm_trace_visible_point etc.), so importing back the other way would be
+    circular. distant + point + sphere; area and infinite stay at their own
+    call sites, same rationale as the other two files."""
+    return Int(sd.distantLightCount) + Int(sd.pointLightCount) + Int(sd.sphereCount)
+
+
+@always_inline
+def _sppm_sample_simple_light(
+    sd: SceneDescriptor2_C, i: Int, hit_point: Vec3f, mut pcg: PCG32,
+) -> Tuple[LightSample, Float32]:
+    """The i-th distant/point/sphere light, plus the any_hit_bvh2_core tmax
+    to use for it -- same pairing shading.mojo's _nee_sample_simple_light
+    centralizes, getting it wrong here is exactly the 08246179 bug (tmax
+    computed from the wrong reference point overshot into the light itself).
+    ORDER IS LOAD-BEARING: distant, then point, then sphere -- matching
+    _sppm_nee_one's own existing order exactly, so converting its loop to
+    this iterator is a pure collapse, not a reordering."""
+    var nd = Int(sd.distantLightCount)
+    var np_ = Int(sd.pointLightCount)
+    if i < nd:
+        var ls_d = _sample_distant_light_nee(sd.distantLights[i])
+        var d = ls_d.dist
+        return (ls_d^, d)
+    if i < nd + np_:
+        var ls_p = _sample_point_light_nee(sd.pointLights[i - nd], hit_point)
+        var d = ls_p.dist * Float32(0.9999)
+        return (ls_p^, d)
+    var si = i - nd - np_
+    var ls_s = _sample_sphere_light_nee(sd.spheres[si], Int(sd.sphereCount), hit_point, pcg)
+    var d = ls_s.dist * Float32(0.9999)
+    return (ls_s^, d)
+
+
 def _sppm_nee_one(
     vps:     UnsafePointer[SPPMPixel, MutExternalOrigin],
     i:       Int,
@@ -1642,39 +1682,22 @@ def _sppm_nee_one(
     # above), replacing 4 formerly hand-inlined per-light-type blocks. Area
     # lights are handled separately above (still via _sppm_vp_brdf directly
     # — see that function's docstring).
-    for dl_i in range(Int(sd.distantLightCount)):
-        var ls_d = _sample_distant_light_nee(sd.distantLights[dl_i])
-        var w_d = _sppm_nee_weight(vp, sd, vn, wo, ls_d)
-        if not w_d.is_black():
-            var shadow_ray_d = Ray_C(shadow_org, vec3f(ls_d.wi))
-            if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_d, ls_d.dist,
-                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
-                                  sd.spheres, Int(sd.sphereCount)):
-                vps[i].ld += w_d
-
-    for pl_i in range(Int(sd.pointLightCount)):
-        var ls_p = _sample_point_light_nee(sd.pointLights[pl_i], spos)
-        var w_p = _sppm_nee_weight(vp, sd, vn, wo, ls_p)
-        if not w_p.is_black():
-            var shadow_ray_p = Ray_C(shadow_org, vec3f(ls_p.wi))
-            if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_p, ls_p.dist * Float32(0.9999),
-                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
-                                  sd.spheres, Int(sd.sphereCount)):
-                vps[i].ld += w_p
-
-    # Sphere-light NEE (solid-angle cone sampling). Loops ALL analytic
-    # spheres (the sampler itself skips non-emissive ones), since
+    # distant/point/sphere via the shared sampler -- pure loop collapse,
+    # order was already distant,point,sphere. Sphere-light NEE loops ALL
+    # analytic spheres (the sampler itself skips non-emissive ones), since
     # sd.spheres/sphereCount is the raw geometric array, not a pre-filtered
     # lights-only one like every other light type.
-    for sph_i in range(Int(sd.sphereCount)):
-        var ls_sph = _sample_sphere_light_nee(sd.spheres[sph_i], Int(sd.sphereCount), spos, pcg)
-        var w_sph = _sppm_nee_weight(vp, sd, vn, wo, ls_sph)
-        if not w_sph.is_black():
-            var shadow_ray_sph = Ray_C(shadow_org, vec3f(ls_sph.wi))
-            if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_sph, ls_sph.dist * Float32(0.9999),
+    for li in range(_sppm_simple_light_count(sd)):
+        var res = _sppm_sample_simple_light(sd, li, spos, pcg)
+        var ls = res[0].copy()
+        var tmax = res[1]
+        var w = _sppm_nee_weight(vp, sd, vn, wo, ls)
+        if not w.is_black():
+            var shadow_ray = Ray_C(shadow_org, vec3f(ls.wi))
+            if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, tmax,
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                                   sd.spheres, Int(sd.sphereCount)):
-                vps[i].ld += w_sph
+                vps[i].ld += w
 
     for inf_i in range(Int(sd.infiniteLightCount)):
         var ls_e = _sample_infinite_light_nee(sd.infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
