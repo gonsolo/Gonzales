@@ -150,6 +150,50 @@ struct ShadeContext:
     var gi_pending: UnsafePointer[GIPendingX1, MutExternalOrigin]
     var gi_io:      GIReservoirIO
 
+# Orient an emitter triangle's WINDING normal to agree with the mesh's own
+# supplied per-vertex normals, which is what decides whether a one-sided
+# pbrt area light faces a given direction.
+#
+# pbrt does this in Triangle::InteractionFromIntersection: when the mesh
+# carries `normal N`, the geometric normal is flipped to the shading
+# normal's hemisphere (`isect.n = FaceForward(isect.n, ns)`), and
+# DiffuseAreaLight::L's one-sided `Dot(n, w) < 0` test then uses THAT
+# normal. Winding alone is not authoritative: an exporter is free to emit a
+# quad whose index order winds opposite to the `N` it also supplies, and
+# staircase2 has exactly that -- its big window emitter supplies
+# N = (1,0,0) while its indices wind to (-1,0,0). Testing the raw winding
+# normal there made the light face away from the room: it rendered pure
+# black when looked at (4906 px, 2% of frame, against a reference showing
+# its full 4.575/3.591/1.550 radiance) AND lit nothing via NEE, since the
+# same sign test gates both.
+#
+# Returns the (unnormalized) winding normal, flipped if needed -- callers
+# that need a unit vector normalize it themselves, exactly as before.
+@always_inline
+def _emitter_face_normal(
+    mesh: TriangleMesh_C,
+    v0: Int, v1: Int, v2: Int,
+    bu: Float32, bv: Float32,
+    p0: Vec3f, p1: Vec3f, p2: Vec3f,
+    instance_idx: Int32 = Int32(-1),
+    instances: UnsafePointer[Instance_C, MutExternalOrigin] = UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
+) -> Vec3f:
+    var gn = cross(p1 - p0, p2 - p0)
+    if Int(mesh.normals) <= 4:
+        return gn
+    var w0 = Float32(1.0) - bu - bv
+    var n0 = Vec3f(mesh.normals[v0*3], mesh.normals[v0*3+1], mesh.normals[v0*3+2])
+    var n1 = Vec3f(mesh.normals[v1*3], mesh.normals[v1*3+1], mesh.normals[v1*3+2])
+    var n2 = Vec3f(mesh.normals[v2*3], mesh.normals[v2*3+1], mesh.normals[v2*3+2])
+    var sn = n0 * w0 + n1 * bu + n2 * bv
+    if instance_idx >= Int32(0):
+        sn = transform_normal_by_instance(instances[Int(instance_idx)].worldToObj, sn)
+    if dot(sn, sn) <= Float32(1e-12):
+        return gn
+    if dot(gn, sn) < Float32(0.0):
+        return -gn
+    return gn
+
 @always_inline
 def _shading_normal(
     mesh: TriangleMesh_C,
@@ -2456,7 +2500,13 @@ def _sample_light_point_and_normal(
         var lp2 = Vec3f(lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
         var sqrt_r1 = sqrt(u1)
         var point = lp0 * (Float32(1.0) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1.0) - u2)) + lp2 * (sqrt_r1 * u2)
-        var lcross = cross(lp1 - lp0, lp2 - lp0)
+        # Winding oriented to the mesh's supplied normals (see
+        # _emitter_face_normal) -- this normal gates NEE via cos_l > 0, so
+        # getting it backwards makes the light illuminate nothing at all.
+        # Barycentrics of the sampled point, matching `point` above.
+        var b_u = sqrt_r1 * (Float32(1.0) - u2)
+        var b_v = sqrt_r1 * u2
+        var lcross = _emitter_face_normal(lmesh, lv0, lv1, lv2, b_u, b_v, lp0, lp1, lp2)
         var normal = lcross
         var lcross_len = dot(lcross, lcross)
         if lcross_len > Float32(0.0):
@@ -4470,7 +4520,9 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 var ep0 = Vec3f(efm.points[ev0*4], efm.points[ev0*4+1], efm.points[ev0*4+2])
                 var ep1 = Vec3f(efm.points[ev1*4], efm.points[ev1*4+1], efm.points[ev1*4+2])
                 var ep2 = Vec3f(efm.points[ev2*4], efm.points[ev2*4+1], efm.points[ev2*4+2])
-                var en = cross(ep1 - ep0, ep2 - ep0)
+                var en = _emitter_face_normal(efm, ev0, ev1, ev2, inter.u, inter.v,
+                                              ep0, ep1, ep2,
+                                              inter.primId.instanceIdx, ctx.instances)
                 var edir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
                 e_front = -dot(en, edir) > Float32(0.0)
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
@@ -4483,7 +4535,12 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 var lp0 = Vec3f(lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
                 var lp1 = Vec3f(lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
                 var lp2 = Vec3f(lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
-                var lnorm = cross(lp1 - lp0, lp2 - lp0)
+                # Same supplied-normal orientation as the NEE sampler above --
+                # this branch MIS-weights against that sampler's pdf, so the
+                # two must agree on which way the emitter faces.
+                var lnorm = _emitter_face_normal(lmesh, lv0, lv1, lv2, inter.u, inter.v,
+                                                 lp0, lp1, lp2,
+                                                 inter.primId.instanceIdx, ctx.instances)
                 var lnlen = dot(lnorm, lnorm)
                 if lnlen > Float32(0.0):
                     lnorm = lnorm * (Float32(1.0) / sqrt(lnlen))
