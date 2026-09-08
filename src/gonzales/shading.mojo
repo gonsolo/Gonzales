@@ -4409,8 +4409,34 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                     if pr_mat.type == MatKind.dielectric or pr_mat.type == MatKind.thin_dielectric:
                         path_ptr[].active = 0
                         return
+        # A pbrt area light emits from its FRONT face only
+        # (DiffuseAreaLight::L: `if (!twoSided && Dot(n, w) < 0) return 0`).
+        # The MIS branch below has always enforced that via its own
+        # `cos_l_hit > 0`, but this camera-ray/specular branch did not, so a
+        # ray landing on the BACK of an emitter was credited full radiance.
+        # Invisible for a flat quad light (you cannot see its back without
+        # going behind it) and glaring for a CLOSED emissive shell, where the
+        # far side of the shell is visible through every gap: the lantern in
+        # barcelona-pavilion rendered as a solid bright blob at 2.07x pbrt's
+        # emitted radiance, where pbrt shows dark structure between its bars.
+        # NOTE: pbrt's `"bool twosided"` is not parsed at all (only the
+        # Mitsuba front-end understands twosided), so one-sided is
+        # unconditionally right here for every pbrt scene in the corpus --
+        # exactly one uses the flag (zero-day) and it would need parser work
+        # to honour regardless.
+        var e_front = True
+        if inter.primId.type == Int8(3):
+            var (efm, ev0, ev1, ev2, e_ok) = _get_tri_verts(inter, ctx.meshes)
+            if e_ok:
+                var ep0 = Vec3f(efm.points[ev0*4], efm.points[ev0*4+1], efm.points[ev0*4+2])
+                var ep1 = Vec3f(efm.points[ev1*4], efm.points[ev1*4+1], efm.points[ev1*4+2])
+                var ep2 = Vec3f(efm.points[ev2*4], efm.points[ev2*4+1], efm.points[ev2*4+2])
+                var en = cross(ep1 - ep0, ep2 - ep0)
+                var edir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+                e_front = -dot(en, edir) > Float32(0.0)
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
-            path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths)
+            if e_front:
+                path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths)
         else:
             var pdf_bsdf = path_ptr[].lastBsdfPdf
             if pdf_bsdf > Float32(0.0):
