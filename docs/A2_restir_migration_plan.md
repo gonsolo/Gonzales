@@ -461,6 +461,22 @@ Validate on `veach-bidir` plus an SDS regression check on `bathroom`
 against the retained VCM baseline. **Keep `--vcm` working for at least one
 release after `--restir` lands.**
 
+**2026-09-08: scoped, not yet tractable for a file-level implementation
+plan.** Not blocked on Phase 9 (the dependency runs the other way), but
+bundles three separate open items: 8.1's own "recursive formulation (van
+Antwerpen 2011, extended here)" isn't derived yet (no local copy of the
+paper found; gonzales's existing `dVCM`/`dVC` machinery is a genuine
+template to extend, unlike Phase 9.2's SMS density, which has no closed
+form at all); correct bidirectional MIS through participating media
+doesn't exist yet even in gonzales's own VCM (`_bdpt_vertex_mis_scoped`,
+bdpt.mojo:4909, excludes every volume vertex today — "a known-hard
+problem, research not porting", per the project_restir_migration
+memory), and base ReSTIR BDPT has zero media support to inherit instead;
+and retiring VCM also needs Phase 6's spatial reuse to start paying off,
+which it currently doesn't. See the `project_restir_migration` memory's
+"Phase 8" section for the full scoping writeup and a recommended
+resolution ordering.
+
 ### Phase 9 — Common currency (**open research**)
 
 Goal: one reservoir where DI/GI, SMS, volumetric, and bidirectional
