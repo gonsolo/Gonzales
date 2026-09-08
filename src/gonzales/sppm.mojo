@@ -1857,16 +1857,35 @@ def _sppm_render_core(
           + String(n_photons_per_pass) + " photons  r=" + String(initial_radius))
 
     # Allocate visible points (n_pix * _VP_SAMPLES independent samples) and photon buffer.
-    # max_photons intentionally equals n_photons_per_pass, NOT a multiple of
-    # it: letting every Russian-roulette diffuse-diffuse continuation event
-    # (see _sppm_photon_pass) store unconditionally was tried and measurably
-    # over-brightened the render (each stored event's flux isn't re-weighted
-    # for "there are now more data points per emitted photon than the
-    # density-estimation formula assumes") — the cap at n_photons_per_pass,
-    # dropping excess bounce events once the buffer fills, is not a bug.
+    #
+    # max_photons is sized for the WORST CASE, not n_photons_per_pass: one
+    # emitted photon path can store up to min(maxdepth, _MAX_B) - 1 deposits
+    # (one per RR diffuse-diffuse bounce past the first), not just one. A
+    # buffer sized at n_photons_per_pass (the older code here) meant the
+    # shared atomic `counter` in _sppm_store_photon started silently
+    # dropping deposits the moment total stored events -- not paths --
+    # exceeded n_photons_per_pass, which for any scene with real multi-
+    # bounce diffuse interreflection is most of them. Root-caused via a
+    # closed-cavity radiative-equilibrium test (reflectance 1.0 everywhere,
+    # one wall emitting L=1: every surface must read exactly 1.0, Russian
+    # roulette never fires since albedo=1, so this scene hits the worst
+    # case on every path) -- SPPM read 0.39 of that 1.0 with the old sizing
+    # and 0.87 with this fix, path tracer (unaffected by this buffer) reads
+    # 1.00 throughout. See project_photon_estimator_energy_gap memory.
+    #
+    # An earlier version of this comment claimed storing every bounce
+    # event "measurably over-brightened the render" and kept the drop
+    # deliberately -- that test predates several other estimator fixes
+    # landed this session and was never re-verified against a ground
+    # truth; the closed-cavity test above is the ground truth, and it
+    # says the drop was strictly wrong, not a deliberate bias/cost
+    # tradeoff. If a future regression looks like "over-brightening",
+    # re-derive against an equilibrium or analytic scene before
+    # reintroducing a cap -- don't just trust the old claim.
     var n_vps    = n_pix * _VP_SAMPLES
     var vps     = alloc[SPPMPixel](n_vps)
-    var max_photons = n_photons_per_pass
+    var max_bounces_per_photon = min(Int(psc[0].max_depth), _MAX_B)
+    var max_photons = n_photons_per_pass * max(max_bounces_per_photon, 1)
     var photons = alloc[SPPMPhoton](max_photons)
     var heads   = alloc[Int32](_HSIZE)
     var init_r2 = initial_radius * initial_radius

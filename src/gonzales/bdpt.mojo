@@ -35,7 +35,7 @@ from .sppm import (
     SPPMPixel, SPPMPhoton, _sppm_reset_grid_cell, _sppm_insert_photon,
     _sppm_gather_one, _sppm_vp_brdf, _sppm_nee_one,
     _sppm_finalize_albedo_one_pixel, _sppm_finalize_one_pixel,
-    _VP_SAMPLES, _sppm_has_sphere_lights,
+    _VP_SAMPLES, _sppm_has_sphere_lights, _MAX_B,
     _sppm_trace_visible_point, _sppm_store_photon, _sppm_trace_photon,
 )
 from .shading import _tex_lookup, _get_tri_verts, _mnee_walk, _mnee_walk2
@@ -6746,12 +6746,13 @@ def sppm_render_gpu(
             comptime block_size = 256
 
             var n_vps = n_pix * _VP_SAMPLES
-            # max_photons intentionally equals n_photons_per_pass — see
-            # sppm_render's docstring for why a larger buffer (letting every
-            # Russian-roulette diffuse-continuation event store
-            # unconditionally) was tried and measurably over-brightened
-            # the render instead of helping.
-            var max_photons = n_photons_per_pass
+            # Sized for the worst case, mirroring sppm.mojo's CPU driver
+            # (_sppm_render_core) exactly -- see its comment for why
+            # max_photons must scale with the per-photon bounce budget, not
+            # just n_photons_per_pass (one emitted path can store up to
+            # min(maxdepth, _MAX_B) - 1 deposits, not one).
+            var max_bounces_per_photon = min(Int(psc[0].max_depth), _MAX_B)
+            var max_photons = n_photons_per_pass * max(max_bounces_per_photon, 1)
             var vps_buf     = handle[].ctx.enqueue_create_buffer[DType.uint8](n_vps * size_of[SPPMPixel]())
             var photons_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(max_photons, 1) * size_of[SPPMPhoton]())
             var heads_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](_HSIZE * size_of[Int32]())
