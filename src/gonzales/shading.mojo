@@ -1265,6 +1265,47 @@ def shade_thin_dielectric(
 # ── Conductor (mirror + GGX microfacet) branch ────────────────────────────────
 
 @always_inline
+def _nee_simple_light_count(ctx: ShadeContext) -> Int:
+    """Number of lights reachable through _nee_sample_simple_light: the three
+    types every material samples the SAME way. Area and infinite lights are
+    deliberately excluded -- each material samples those with a genuinely
+    different strategy (MNEE-capable area sampling, env-map CDF vs cosine
+    fallback), which is why they stay written out at their call sites."""
+    return ctx.lights.distant_count + ctx.lights.point_count + ctx.lights.sphere_count
+
+
+@always_inline
+def _nee_sample_simple_light(
+    ctx: ShadeContext, i: Int, hit_point: Vec3f, mut pcg: PCG32,
+) -> Tuple[LightSample, Float32]:
+    """The i-th distant/point/sphere light, plus the shadow-ray tmax to use for
+    it. One place that knows which sampler each type needs and which tmax
+    factor it takes -- that pairing used to be re-typed in every sweep, and
+    getting it wrong is precisely how sphere lights ended up shadowing
+    themselves (bba82627: tmax from the CENTRE distance).
+
+    ORDER IS LOAD-BEARING: distant, then point, then sphere. Of the three only
+    SPHERE draws from `pcg`, so any sweep that visited them in some other
+    order still consumed randomness in the same sequence, and switching it to
+    this one is byte-identical. A sweep that interleaves an INFINITE light
+    (which also draws) between them is NOT, and must keep its own order."""
+    var nd = ctx.lights.distant_count
+    var np_ = ctx.lights.point_count
+    if i < nd:
+        var ls_d = _sample_distant_light_nee(ctx.lights.distant_lights[i])
+        var d = ls_d.dist
+        return (ls_d^, d)
+    if i < nd + np_:
+        var ls_p = _sample_point_light_nee(ctx.lights.point_lights[i - nd], hit_point)
+        var d = ls_p.dist * Float32(0.9999)
+        return (ls_p^, d)
+    var si = i - nd - np_
+    var ls_s = _sample_sphere_light_nee(ctx.lights.spheres[si], ctx.lights.sphere_count, hit_point, pcg)
+    var d = ls_s.dist * Float32(0.9999)
+    return (ls_s^, d)
+
+
+@always_inline
 def _nee_loop_simple[enqueue_shadow: Bool](
     path_ptr: UnsafePointer[PathState_C, MutExternalOrigin],
     ctx: ShadeContext,
@@ -1291,27 +1332,14 @@ def _nee_loop_simple[enqueue_shadow: Bool](
     fallback vs conductor's plain uniform-sphere _sample_area_light_nee/
     _sample_infinite_light_nee) — folding those in here would be a behavior
     change, not a refactor. See project_light_bxdf_interfaces memory."""
-    for dl_i in range(ctx.lights.distant_count):
-        var ls_d = _sample_distant_light_nee(ctx.lights.distant_lights[dl_i])
-        var w_d = _nee_weight_simple_spectral(ls_d, mat_kind, alb, alpha, normal, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths) * lobe_w
-        if not w_d.is_black():
-            var contrib_d = path_ptr[].throughput * w_d
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_d.wi, ls_d.dist, contrib_d, guide_write)
-
-    for pl_i in range(ctx.lights.point_count):
-        var ls_p = _sample_point_light_nee(ctx.lights.point_lights[pl_i], hit_point)
-        var w_p = _nee_weight_simple_spectral(ls_p, mat_kind, alb, alpha, normal, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths) * lobe_w
-        if not w_p.is_black():
-            var contrib_p = path_ptr[].throughput * w_p
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_p.wi, ls_p.dist * Float32(0.9999), contrib_p, guide_write)
-
-    for sph_i in range(ctx.lights.sphere_count):
-        var ls_sph = _sample_sphere_light_nee(ctx.lights.spheres[sph_i], ctx.lights.sphere_count, hit_point, pcg)
-        var w_sph = _nee_weight_simple_spectral(ls_sph, mat_kind, alb, alpha, normal, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths) * lobe_w
-        if not w_sph.is_black():
-            var contrib_sph = path_ptr[].throughput * w_sph
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_sph.wi, ls_sph.dist * Float32(0.9999), contrib_sph, guide_write)
-
+    for li in range(_nee_simple_light_count(ctx)):
+        var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
+        var ls = res[0].copy()
+        var tmax = res[1]
+        var w = _nee_weight_simple_spectral(ls, mat_kind, alb, alpha, normal, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths) * lobe_w
+        if not w.is_black():
+            var contrib = path_ptr[].throughput * w
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls.wi, tmax, contrib, guide_write)
 
 @always_inline
 def _shade_conductor_nee[enqueue_shadow: Bool](
