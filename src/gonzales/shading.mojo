@@ -1545,26 +1545,18 @@ def _shade_measured_nee[enqueue_shadow: Bool](
         var contrib_area = path_ptr[].throughput * _to_spec_illum(ctx, w_area, path_ptr[].wavelengths)
         _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_area.wi, ls_area.dist * Float32(0.9999), contrib_area)
 
-    for dl_i in range(ctx.lights.distant_count):
-        var ls_d = _sample_distant_light_nee(ctx.lights.distant_lights[dl_i])
-        var w_d = _nee_weight_measured(ls_d, mb, tangent, bitangent, normal, wo, path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
-        if not w_d.is_black():
-            var contrib_d = path_ptr[].throughput * _to_spec_illum(ctx, w_d, path_ptr[].wavelengths)
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_d.wi, ls_d.dist, contrib_d)
-
-    for pl_i in range(ctx.lights.point_count):
-        var ls_p = _sample_point_light_nee(ctx.lights.point_lights[pl_i], hit_point)
-        var w_p = _nee_weight_measured(ls_p, mb, tangent, bitangent, normal, wo, path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
-        if not w_p.is_black():
-            var contrib_p = path_ptr[].throughput * _to_spec_illum(ctx, w_p, path_ptr[].wavelengths)
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_p.wi, ls_p.dist * Float32(0.9999), contrib_p)
-
-    for sph_i in range(ctx.lights.sphere_count):
-        var ls_sph = _sample_sphere_light_nee(ctx.lights.spheres[sph_i], ctx.lights.sphere_count, hit_point, pcg)
-        var w_sph = _nee_weight_measured(ls_sph, mb, tangent, bitangent, normal, wo, path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
-        if not w_sph.is_black():
-            var contrib_sph = path_ptr[].throughput * _to_spec_illum(ctx, w_sph, path_ptr[].wavelengths)
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_sph.wi, ls_sph.dist * Float32(0.9999), contrib_sph)
+    # distant/point/sphere via the shared sampler. Note this is the ONE
+    # conversion in this file where the ORIGINAL order (distant, point,
+    # sphere) already matches the iterator's canonical order exactly -- no
+    # reordering happens, this is a pure loop collapse.
+    for li in range(_nee_simple_light_count(ctx)):
+        var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
+        var ls = res[0].copy()
+        var tmax = res[1]
+        var w = _nee_weight_measured(ls, mb, tangent, bitangent, normal, wo, path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
+        if not w.is_black():
+            var contrib = path_ptr[].throughput * _to_spec_illum(ctx, w, path_ptr[].wavelengths)
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls.wi, tmax, contrib)
 
     for inf_i in range(ctx.lights.infinite_count):
         var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
@@ -2067,32 +2059,21 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
             var contrib_e = path_ptr[].throughput * _to_spec_illum(ctx, w_e, path_ptr[].wavelengths)
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, eorg, ls_e.wi, ls_e.dist, contrib_e)
 
-    for dl_i in range(ctx.lights.distant_count):
-        var ls_d = _sample_distant_light_nee(ctx.lights.distant_lights[dl_i])
-        var w_d = _nee_weight_hair(ls_d, hc)
-        if not w_d.is_black():
-            var dsign = Float32(1.0) if dot(ls_d.wi, geo_normal) >= Float32(0.0) else Float32(-1.0)
-            var dorg = hit_base + geo_normal * curve_eps * dsign
-            var contrib_d = path_ptr[].throughput * _to_spec_illum(ctx, w_d, path_ptr[].wavelengths)
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, dorg, ls_d.wi, ls_d.dist, contrib_d)
-
-    for pl_i in range(ctx.lights.point_count):
-        var ls_p = _sample_point_light_nee(ctx.lights.point_lights[pl_i], hit_base)
-        var w_p = _nee_weight_hair(ls_p, hc)
-        if not w_p.is_black():
-            var psign = Float32(1.0) if dot(ls_p.wi, geo_normal) >= Float32(0.0) else Float32(-1.0)
-            var porg = hit_base + geo_normal * curve_eps * psign
-            var contrib_p = path_ptr[].throughput * _to_spec_illum(ctx, w_p, path_ptr[].wavelengths)
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, porg, ls_p.wi, ls_p.dist * Float32(0.9999), contrib_p)
-
-    for sph_i in range(ctx.lights.sphere_count):
-        var ls_sph = _sample_sphere_light_nee(ctx.lights.spheres[sph_i], ctx.lights.sphere_count, hit_base, pcg)
-        var w_sph = _nee_weight_hair(ls_sph, hc)
-        if not w_sph.is_black():
-            var sphsign = Float32(1.0) if dot(ls_sph.wi, geo_normal) >= Float32(0.0) else Float32(-1.0)
-            var sphorg = hit_base + geo_normal * curve_eps * sphsign
-            var contrib_sph = path_ptr[].throughput * _to_spec_illum(ctx, w_sph, path_ptr[].wavelengths)
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, sphorg, ls_sph.wi, ls_sph.dist * Float32(0.9999), contrib_sph)
+    # distant/point/sphere via the shared sampler. `infinite` stays outside
+    # (unchanged, still first) -- of these four types only infinite and
+    # sphere draw pcg, and sphere still fires immediately after infinite's
+    # draw with nothing pcg-consuming in between, in both the old order
+    # (distant,point,sphere all after infinite) and this one.
+    for li in range(_nee_simple_light_count(ctx)):
+        var res = _nee_sample_simple_light(ctx, li, hit_base, pcg)
+        var ls = res[0].copy()
+        var tmax = res[1]
+        var w = _nee_weight_hair(ls, hc)
+        if not w.is_black():
+            var sign = Float32(1.0) if dot(ls.wi, geo_normal) >= Float32(0.0) else Float32(-1.0)
+            var org = hit_base + geo_normal * curve_eps * sign
+            var contrib = path_ptr[].throughput * _to_spec_illum(ctx, w, path_ptr[].wavelengths)
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, org, ls.wi, tmax, contrib)
 
     # ── Step 15: Indirect sampling ────────────────────────────────────────────
     # Delegated to bvh.mojo's _hair_sample_dir (same lobe-pick + vMF/logistic
