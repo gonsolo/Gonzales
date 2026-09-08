@@ -398,8 +398,27 @@ verifying this feature — the new mesh-light scene exists because of that;
 CPU-side reservoir work needs a convergence-rate check (low frame count
 vs. high) rather than a multi-seed MSE average.
 
-Distance resampling (the plan's other half) remains fully open and was not
-investigated.
+**2026-09-08: distance resampling investigated, NOT implemented, remains
+open.** RIS over candidate free-flight distances needs the proposal
+density `p(X_i)` for each candidate; a homogeneous medium's exact
+inverse-CDF sampling already IS the true free-flight pdf (nothing to
+resample), and a heterogeneous medium's delta-tracking accepted distance,
+while unbiasedly distributed according to the true free-flight pdf, has
+NO CLOSED FORM for that pdf — the entire reason delta tracking is used
+instead of inverse-CDF sampling in the first place. Real Volumetric
+ReSTIR sidesteps this by resampling in **null-scattering primary sample
+space** (the full random-walk realization, not the marginal distance) —
+a materially more involved technique than plain candidate RIS, and one
+this session could not verify a derivation for against any primary
+source (`~/work/restir`, a local Falcor ReSTIR reference clone, has
+`RestirDI`/`RestirGI` passes but no volumetric one to check against).
+Implementing it from an unverified recollection of a paper's approach
+risks silent bias with no visual tell. See the `project_restir_migration`
+memory's "Distance resampling" section for the full derivation and why
+this reaches the same "treat as scaffold, don't sink effort into
+internals" conclusion this section already recorded for Ghost ReSTIR
+above. Phase 7's light-resampling (7.1/7.2) and temporal-reuse (7.3, CPU
+and GPU) halves are the complete, verified, shippable slice as it stands.
 
 Gonzales already has homogeneous media (`Medium_C`,
 `sample_homogeneous_free_flight`, `sample_medium_gpu`). Retire `sppm.mojo`
