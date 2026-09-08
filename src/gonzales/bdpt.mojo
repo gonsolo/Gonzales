@@ -64,8 +64,19 @@ comptime _BDPT_MAX_DEPTH = 40  # max surface/medium interactions per subpath (in
                                 # non-stored delta/dielectric bounces — glass-of-water's
                                 # nested water/ice/glass interfaces need ~30 crossings
                                 # just to reach a real (diffuse) vertex)
-comptime _BDPT_MAX_VERTS = 10  # max non-delta vertices stored per light subpath (caps
-                                # each light path's contribution to the shared cache below)
+comptime _BDPT_MAX_VERTS = 10  # max non-delta vertices per subpath. NOT light-only,
+                                # despite the name: it caps how many vertices a light
+                                # subpath stores in the shared cache (_bdpt_light_path_bounce)
+                                # AND hard-terminates the CAMERA subpath at the same count
+                                # (_bdpt_camera_path_bounce's `n_verts >= _BDPT_MAX_VERTS:
+                                # return False`). So it bounds camera path LENGTH too --
+                                # raising it changes image energy in multi-bounce scenes,
+                                # it is not purely a cache-memory knob. Volume-scatter
+                                # events store no vertex and so do NOT count against it;
+                                # they consume _BDPT_MAX_DEPTH loop iterations instead.
+                                # See project_photon_estimator_energy_gap /
+                                # project_sphere_light_nee_bug memories for the measured
+                                # effect of raising each.
 comptime _MNEE_MAX_SPHERES = 4  # cap on sphere-light MNEE call sites, unrolled via `if`
                                   # guards instead of a `for` loop -- see
                                   # _bdpt_mnee_sphere_light's own docstring for the real
