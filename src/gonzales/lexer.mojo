@@ -1,6 +1,6 @@
 from std.memory import alloc
 from std.math import log as _log_math, pow as _pow_math
-from .geometry import RGB, _is_real_ptr
+from .geometry import RGB, _is_real_ptr, blackbody_rgb
 
 # ── pbrt Scanner Helpers ──────────────────────────────────────────────
 
@@ -612,38 +612,16 @@ def _psc_type_is_float(t: UnsafePointer[UInt8, MutExternalOrigin]) -> Bool:
 def _psc_type_is_blackbody(t: UnsafePointer[UInt8, MutExternalOrigin]) -> Bool:
     return t[0] == UInt8(98) and t[1] == UInt8(108)  # 'b','l'
 
-# Mitchell-Charity blackbody colour approximation (normalised, max=1).
-# Reference: http://www.tannerhelland.com/4435/
+# Blackbody -> linear sRGB for `blackbody L`/`blackbody I` light specs.
+# Delegates to geometry.mojo's blackbody_rgb so the parser and the GPU medium
+# kernel cannot drift apart; see that function for why the normalization is
+# to LUMINANCE 1 (what pbrt actually delivers) rather than to a max channel of
+# 1, which is what the Mitchell-Charity approximation here used to do and
+# which was wrong in both magnitude and chromaticity.
 @always_inline
 def _psc_blackbody_to_rgb(temp: Float32, rgb: UnsafePointer[Float32, MutExternalOrigin]):
-    var t100 = temp / Float32(100.0)
-    var r: Float32; var g: Float32; var b: Float32
-    # Red channel
-    if temp <= Float32(6600):
-        r = Float32(1.0)
-    else:
-        r = Float32(329.698727446) * _pow_math(t100 - Float32(60), Float32(-0.1332047592)) / Float32(255)
-        r = max(Float32(0), min(Float32(1), r))
-    # Green channel
-    if temp <= Float32(6600):
-        g = (Float32(99.4708025861) * _log_math(t100) - Float32(161.1195681661)) / Float32(255)
-        g = max(Float32(0), min(Float32(1), g))
-    else:
-        g = Float32(288.1221695283) * _pow_math(t100 - Float32(60), Float32(-0.0755148492)) / Float32(255)
-        g = max(Float32(0), min(Float32(1), g))
-    # Blue channel
-    if temp >= Float32(6600):
-        b = Float32(1.0)
-    elif temp <= Float32(1900):
-        b = Float32(0.0)
-    else:
-        b = (Float32(138.5177312231) * _log_math(t100 - Float32(10)) - Float32(305.0447927307)) / Float32(255)
-        b = max(Float32(0), min(Float32(1), b))
-    # Normalise so max component = 1 (scale is applied separately)
-    var mx = max(r, max(g, b))
-    if mx > Float32(0):
-        r /= mx; g /= mx; b /= mx
-    rgb[0] = r; rgb[1] = g; rgb[2] = b
+    var c = blackbody_rgb(temp)
+    rgb[0] = c.r; rgb[1] = c.g; rgb[2] = c.b
 
 def _psc_type_is_int(t: UnsafePointer[UInt8, MutExternalOrigin]) -> Bool:
     return t[0] == UInt8(105)  # 'i' integer

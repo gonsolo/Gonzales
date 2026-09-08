@@ -1,6 +1,6 @@
 from std.ffi import external_call
 from std.memory import alloc
-from std.math import sqrt, acos, atan2, cos, sin, min, max, abs, floor, log
+from std.math import sqrt, acos, atan2, cos, sin, min, max, abs, floor, log, exp
 from std.sys.info import align_of
 from gonzales.spectrum import SampledWavelengths, SpectralSample
 from gonzales.nanovdb import nvdb_sample_index, nvdb_majorant_at, nvdb_leaf_base, nvdb_leaf_value
@@ -1164,33 +1164,84 @@ def grid_ray_range(grid: Grid_C, org: Vec3f, dir: Vec3f) -> SIMD[DType.float32, 
         Vec3f(grid.p0.x, grid.p0.y, grid.p0.z), Vec3f(grid.p1.x, grid.p1.y, grid.p1.z))
 
 @always_inline
+@always_inline
+def _bb_lobe(x: Float32, m: Float32, s1: Float32, s2: Float32) -> Float32:
+    """One asymmetric-Gaussian lobe of Wyman et al. 2013's analytic fit to the
+    CIE 1931 colour-matching functions."""
+    var sd = s1 if x < m else s2
+    var t = (x - m) / sd
+    return exp(Float32(-0.5) * t * t)
+
+
 def blackbody_rgb(temp: Float32) -> RGB:
-    """Blackbody colour at `temp` Kelvin, normalized so the brightest channel
-    is 1 -- matching pbrt's BlackbodySpectrum, which likewise normalizes to a
-    peak of 1 (via Wien's law) so that "Lescale" alone sets the magnitude.
-    Mitchell-Charity approximation, the same one lexer.mojo already uses for
-    `blackbody` light specs; duplicated here in an allocation-free,
-    RGB-returning form because this one runs inside the GPU medium kernel."""
-    var t100 = temp / Float32(100.0)
-    var r: Float32; var g: Float32; var b: Float32
-    if temp <= Float32(6600):
-        r = Float32(1.0)
-    else:
-        r = Float32(329.698727446) * ((t100 - Float32(60)) ** Float32(-0.1332047592)) / Float32(255)
-        r = max(Float32(0), min(Float32(1), r))
-    if temp <= Float32(6600):
-        g = (Float32(99.4708025861) * log(max(t100, Float32(1e-6))) - Float32(161.1195681661)) / Float32(255)
-    else:
-        g = Float32(288.1221695283) * ((t100 - Float32(60)) ** Float32(-0.0755148492)) / Float32(255)
-    g = max(Float32(0), min(Float32(1), g))
-    if temp >= Float32(6600):
-        b = Float32(1.0)
-    elif temp <= Float32(1900):
-        b = Float32(0.0)
-    else:
-        b = (Float32(138.5177312231) * log(max(t100 - Float32(10), Float32(1e-6))) - Float32(305.0447927307)) / Float32(255)
-        b = max(Float32(0), min(Float32(1), b))
-    return RGB(r, g, b)
+    """Linear-sRGB colour of a `temp` Kelvin blackbody, normalized to
+    LUMINANCE 1 -- which is what pbrt's blackbody lights actually deliver, so
+    a `"float scale"` beside a `"blackbody L"` means the same thing in both
+    renderers.
+
+    This used to be the Mitchell-Charity RGB approximation normalized so the
+    max CHANNEL was 1, on the stated reasoning that pbrt's BlackbodySpectrum
+    "likewise normalizes to a peak of 1 (via Wien's law)". That conflates two
+    different things: pbrt normalizes the SPECTRUM's peak, and the RGB that
+    spectrum then integrates to has neither unit max-channel nor unit
+    luminance a priori. Measured against pbrt on a quad light (per unit L,
+    with an `"rgb L" [1 1 1]` control confirming the harness at 1.0006):
+
+        T=3500  pbrt [1.5642 0.8913 0.4063]   old code [1.0 0.756 0.555]
+        T=6500  pbrt [1.0437 0.9827 1.0335]   old code [1.0 1.0   0.985]
+
+    -- wrong in magnitude AND chromaticity. pbrt's own values have luminance
+    0.9994 and 0.9994 respectively, i.e. exactly 1, which is what this now
+    reproduces (to 0.7% at 3500 K and 0.2% at 6500 K, the residual being the
+    analytic CIE fit rather than the quadrature).
+
+    Planck's law integrated against Wyman et al. 2013's analytic CIE fits at
+    10 nm over 360-830 nm, then XYZ->linear sRGB and divided by Y. 10 nm is
+    indistinguishable from 1 nm here (<0.01%) because Planck is smooth and the
+    fit's narrowest lobe is still ~12 nm wide -- worth keeping cheap, since
+    this also runs per emission sample inside the GPU medium kernel for nanovdb
+    temperature grids. Wavelengths are carried in MICROMETRES so lambda^-5 stays
+    in a comfortable Float32 range.
+
+    A future improvement worth noting: for the SPECTRAL medium path this is
+    strictly worse than evaluating Planck at the four hero wavelengths
+    directly -- that would be both cheaper (4 exps, not 48) and exact, with no
+    RGB round trip at all."""
+    if temp <= Float32(0.0):
+        return RGB(Float32(0.0))
+    var X = Float32(0.0)
+    var Y = Float32(0.0)
+    var Z = Float32(0.0)
+    var lam = Float32(360.0)
+    while lam <= Float32(830.0):
+        var lum = lam * Float32(0.001)                  # micrometres
+        var xarg = Float32(14388.0) / (lum * temp)      # c2 in um*K
+        var inv: Float32
+        if xarg > Float32(80.0):
+            # exp(xarg) would overflow Float32; 1/(e^x - 1) -> e^-x there.
+            inv = exp(-xarg)
+        else:
+            inv = Float32(1.0) / (exp(xarg) - Float32(1.0))
+        var l2 = lum * lum
+        var spec = inv / (l2 * l2 * lum)
+        X += spec * (Float32(1.056) * _bb_lobe(lam, Float32(599.8), Float32(37.9), Float32(31.0))
+                   + Float32(0.362) * _bb_lobe(lam, Float32(442.0), Float32(16.0), Float32(26.7))
+                   - Float32(0.065) * _bb_lobe(lam, Float32(501.1), Float32(20.4), Float32(26.2)))
+        Y += spec * (Float32(0.821) * _bb_lobe(lam, Float32(568.8), Float32(46.9), Float32(40.5))
+                   + Float32(0.286) * _bb_lobe(lam, Float32(530.9), Float32(16.3), Float32(31.1)))
+        Z += spec * (Float32(1.217) * _bb_lobe(lam, Float32(437.0), Float32(11.8), Float32(36.0))
+                   + Float32(0.681) * _bb_lobe(lam, Float32(459.0), Float32(26.0), Float32(13.8)))
+        lam += Float32(10.0)
+    if Y <= Float32(0.0):
+        return RGB(Float32(0.0))
+    var iy = Float32(1.0) / Y
+    var xn = X * iy
+    var zn = Z * iy
+    var r = Float32(3.2406) * xn - Float32(1.5372) - Float32(0.4986) * zn
+    var g = Float32(-0.9689) * xn + Float32(1.8758) + Float32(0.0415) * zn
+    var b = Float32(0.0557) * xn - Float32(0.2040) + Float32(1.0570) * zn
+    return RGB(max(r, Float32(0.0)), max(g, Float32(0.0)), max(b, Float32(0.0)))
+
 
 @always_inline
 def hg_phase(cos_theta: Float32, g: Float32) -> Float32:
