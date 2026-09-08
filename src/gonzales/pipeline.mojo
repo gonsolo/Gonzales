@@ -17,7 +17,7 @@ from .guide import GuideGrid, guide_create, guide_free, guide_clone_empty, guide
 from .restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io_null
 from .restir_gi import GIReservoir, gi_reservoir_init, GIReservoirIO, gi_reservoir_io_null
 from .restir_sms import SMSReservoir, sms_reservoir_init, SMSReservoirIO, sms_reservoir_io_null
-from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene
+from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 from .spectrum import SpectralHandle, null_spectral_handle
 from .vulkanrt import VulkanRtSceneHandle, vulkanrt_build_scene, vulkanrt_destroy_scene
@@ -837,6 +837,13 @@ def parse_and_render(
     # genuinely has no effect at all without --interactive, unlike
     # --restir-gi's own batch-mode fallback.
     use_sms_restir: Bool = False,
+    # Phase 7.3: volume-scatter TEMPORAL reuse (no spatial -- see
+    # project_restir_migration memory's "7.3" section). INDEPENDENT of
+    # use_restir (this is the medium sampler's own NEE, a different call
+    # site from DI's diffuse-material NEE). Batch mode gets it by joining
+    # use_restir's own dispatch-mode-switch condition below (1 sample/pixel
+    # per dispatch via gpu_render_sample) -- CPU has no wiring yet.
+    use_vol_restir_reuse: Bool = False,
 ) raises -> Int32:
     if use_gpu and not gpu_available():
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
@@ -1201,7 +1208,14 @@ def parse_and_render(
         var seed_dim0 = UInt32(hash_bits & UInt64(0xFFFFFFFF))
         # See rendering.mojo's matching comment: was a hardcoded 0.
         var seed_dim1 = UInt32(UInt64(mix_bits_u64(UInt64(1))) & UInt64(0xFFFFFFFF))
-        if use_restir:
+        # use_vol_restir_reuse joins use_restir's own condition here: both
+        # need the "1 sample/pixel per dispatch" gpu_render_sample path
+        # instead of gpu_render_wavefront to get persistent per-pixel
+        # reservoir state (Phase 7.3, same reasoning as Phase 2/3 below --
+        # WAVEFRONT_BATCH concurrent samples/pixel would race a shared
+        # reservoir slot).
+        var vol_reuse_needs_sample_dispatch = use_restir or use_vol_restir_reuse
+        if vol_reuse_needs_sample_dispatch:
             # Architecture change (docs/A2_restir_migration_plan.md, replaces
             # the Phase 3.1 wavefront-persistence attempt, reverted): rather
             # than adapt reservoir reuse to WAVEFRONT_BATCH concurrent
@@ -1214,14 +1228,18 @@ def parse_and_render(
             # real wins there). This inherits that path's full temporal+
             # spatial reuse for free, at the cost of WAVEFRONT_BATCH-wide
             # batching's throughput (more, smaller kernel launches).
-            print("Note: --gpu --restir batch mode renders 1 sample/pixel per "
-                  "dispatch (like --interactive-frames) for full reservoir "
-                  "reuse, trading wavefront-batching throughput for it.")
+            print("Note: --gpu --restir/--vol-restir-reuse batch mode renders "
+                  "1 sample/pixel per dispatch (like --interactive-frames) "
+                  "for full reservoir reuse, trading wavefront-batching "
+                  "throughput for it.")
             gpu_gen_aux_buffers(handle, psc[0].camera_to_world, Int64(n_pixels))
-            gpu_clear_restir(handle, Int64(n_pixels))
+            if use_restir:
+                gpu_clear_restir(handle, Int64(n_pixels))
+            if use_vol_restir_reuse:
+                gpu_clear_restir_vol(handle, Int64(n_pixels))
         gpu_clear_film(handle, Int64(n_pixels))
         var t0_gpu = perf_counter_ns()
-        if use_restir:
+        if vol_reuse_needs_sample_dispatch:
             for si in range(spp):
                 gpu_render_sample(
                     handle,
@@ -1233,6 +1251,7 @@ def parse_and_render(
                     Int64(n_pixels), psc[0].max_depth,
                     px_scale,
                     use_restir=use_restir, frame_index=si,
+                    use_vol_restir_reuse=use_vol_restir_reuse,
                 )
                 var elapsed = Float64(perf_counter_ns() - t0_gpu) / 1.0e9
                 print(progress_str(si + 1, spp, elapsed, "spp"), end="\r")
@@ -1518,6 +1537,10 @@ def render_interactive(
     # temporal-only reservoir reuse (no spatial yet) -- see
     # project_sms_restir_phase6 memory.
     use_sms_restir: Bool = False,
+    # Phase 7.3: volume-scatter TEMPORAL reuse (no spatial), GPU only so
+    # far -- see project_restir_migration memory's "7.3" section and
+    # parse_and_render's matching flag. INDEPENDENT of use_restir.
+    use_vol_restir_reuse: Bool = False,
     headless_frames: Int32 = Int32(0),
 ):
     if use_gpu and not gpu_available():
@@ -1529,6 +1552,8 @@ def render_interactive(
         print("--restir-gi: CPU only so far, no effect combined with --gpu")
     if use_sms_restir and use_gpu:
         print("--sms-restir: CPU only so far, no effect combined with --gpu")
+    if use_vol_restir_reuse and not use_gpu:
+        print("--vol-restir-reuse: GPU only so far, no effect without --gpu")
 
     var psc = mojo_parse_scene_any(path, verbose)
     if Int(psc) == 0:
@@ -1684,6 +1709,8 @@ def render_interactive(
         gpu_clear_film(handle, Int64(n_pixels))
         if use_restir:
             gpu_clear_restir(handle, Int64(n_pixels))
+        if use_vol_restir_reuse:
+            gpu_clear_restir_vol(handle, Int64(n_pixels))
         gpu_gen_aux_buffers(handle, psc[0].camera_to_world, Int64(n_pixels))
     else:
         sd = mojo_parsed_scene_descriptor(psc, spectral)
@@ -1752,6 +1779,8 @@ def render_interactive(
                         # reservoir after a camera move describes a different
                         # shading point (identity reprojection).
                         gpu_clear_restir(handle, Int64(n_pixels))
+                    if use_vol_restir_reuse:
+                        gpu_clear_restir_vol(handle, Int64(n_pixels))
                     gpu_gen_aux_buffers(handle, c2w_buf.unsafe_ptr(), Int64(n_pixels))
                 else:
                     for i in range(n_pixels * 3):
@@ -1794,6 +1823,7 @@ def render_interactive(
                 UInt32(frame_count & 0xFFFFFFFF), UInt32(0),
                 Int64(n_pixels), psc[0].max_depth,
                 use_restir=use_restir, frame_index=frame_count,
+                use_vol_restir_reuse=use_vol_restir_reuse,
             )
             frame_count += 1
             gpu_atrous_denoise(handle, denoised.unsafe_ptr(), Int64(n_pixels),

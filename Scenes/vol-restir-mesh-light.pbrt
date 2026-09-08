@@ -1,0 +1,54 @@
+# Phase 7.3 verification scene: a homogeneous-fog sphere lit by a
+# TRIANGLE-MESH (quad) area light -- deliberately NOT a native sphere light
+# (Shape "sphere" + AreaLightSource), since gonzales represents that as a
+# Sphere_C light in sd.spheres[]/handle[].spheres, a completely different
+# code path from _sample_medium_core's RIS block, which only iterates
+# handle[].areaLights[] (triangle-mesh-backed). A quad area light exercises
+# the actual RIS/temporal-reuse code being verified.
+Integrator "volpath" "integer maxdepth" [ 16 ]
+Sampler "sobol" "integer pixelsamples" [ 256 ]
+Film "rgb"
+    "string filename" [ "vol-restir-mesh-light.exr" ]
+    "integer xresolution" [ 64 ] "integer yresolution" [ 64 ]
+LookAt 0 0 6  0 0 0  0 1 0
+Camera "perspective" "float fov" [ 40 ]
+
+WorldBegin
+
+MakeNamedMedium "fog" "string type" [ "homogeneous" ]
+    "rgb sigma_a" [ 0.02 0.02 0.02 ]
+    "rgb sigma_s" [ 2.0 2.0 2.0 ]
+    "float g" [ 0.0 ]
+
+MakeNamedMaterial "Interface"
+    "string type" [ "interface" ]
+
+MakeNamedMaterial "LightMat"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0 0 0 ]
+
+MakeNamedMaterial "Floor"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0.02 0.02 0.02 ]
+
+NamedMaterial "Floor"
+Shape "trianglemesh"
+    "point3 P" [ -20 -8 -20  20 -8 -20  20 -8 20  -20 -8 20 ]
+    "integer indices" [ 0 1 2 0 2 3 ]
+
+AttributeBegin
+    NamedMaterial "Interface"
+    MediumInterface "fog" ""
+    Shape "sphere" "float radius" [ 2.0 ]
+AttributeEnd
+
+AttributeBegin
+    Translate 6 0 0
+    AreaLightSource "diffuse"
+        "rgb L" [ 40 40 40 ]
+    NamedMaterial "LightMat"
+    Shape "trianglemesh"
+        "normal N" [ -1 0 0  -1 0 0  -1 0 0  -1 0 0 ]
+        "point3 P" [ 0 -0.4 -0.4  0 -0.4 0.4  0 0.4 0.4  0 0.4 -0.4 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd

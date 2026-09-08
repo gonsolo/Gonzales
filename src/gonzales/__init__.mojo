@@ -92,6 +92,13 @@ def main() raises:
                              # --restir-gi) -- no effect in batch mode, since a single
                              # SMS candidate with no reservoir combine is mathematically
                              # identical to plain per-frame MNEE.
+    var use_vol_restir_reuse = False  # Phase 7.3: volume-scatter TEMPORAL reuse (no
+                             # spatial -- see project_restir_migration memory's "7.3"
+                             # section). GPU only so far (gpu_render_sample's per-pixel
+                             # dispatch, both true --interactive-frames and batch
+                             # --gpu, which switches dispatch mode the same way
+                             # --restir already does). INDEPENDENT of --restir --
+                             # this is the medium sampler's own NEE, not DI's.
     var headless_frames = Int32(0)  # --interactive-frames: run render_interactive's
                              # per-frame loop N times with no window/camera polling,
                              # then write the result like a normal batch render --
@@ -161,6 +168,8 @@ def main() raises:
             use_restir_gi = True
         elif arg == "--sms-restir":
             use_sms_restir = True
+        elif arg == "--vol-restir-reuse":
+            use_vol_restir_reuse = True
         elif arg == "--interactive-frames" and i + 1 < len(args):
             i += 1
             headless_frames = _parse_int32(String(args[i]), 0)
@@ -243,9 +252,9 @@ def main() raises:
     elif use_vulkan_rt:
         debug_render_vulkanrt(path_cstr, verbose)
     elif interactive:
-        render_interactive(path_cstr, sobol, use_gpu, spectral=spectral, fullscreen=fullscreen, override_w=override_w, override_h=override_h, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, headless_frames=headless_frames)
+        render_interactive(path_cstr, sobol, use_gpu, spectral=spectral, fullscreen=fullscreen, override_w=override_w, override_h=override_h, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, use_vol_restir_reuse=use_vol_restir_reuse, headless_frames=headless_frames)
     else:
-        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons, use_vulkan_rt_shade=use_vulkan_rt_shade, use_vcm_wavefront=use_vcm_wavefront, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir)
+        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons, use_vulkan_rt_shade=use_vulkan_rt_shade, use_vcm_wavefront=use_vcm_wavefront, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, use_vol_restir_reuse=use_vol_restir_reuse)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
         if rc != Int32(0):

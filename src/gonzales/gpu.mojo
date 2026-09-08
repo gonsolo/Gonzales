@@ -14,7 +14,11 @@ from .rng import PCG32
 from .shading import shade_core, shade_nee_core, ShadeContext, LightContext, shade_diffuse, shade_coated_diffuse, shade_diffuse_transmission, shade_mix, shade_conductor, shade_dielectric, shade_thin_dielectric, shade_coated_conductor, shade_hair, shade_interface, shade_measured, GIPendingX1
 from .guide import null_guide
 from .restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io_null
-from .restir_vol import vol_reservoir_init, vol_target_pdf, VOL_TR_UNIT, VOL_RIS_CANDIDATES
+from .restir_vol import (
+    vol_reservoir_init, vol_target_pdf, VOL_TR_UNIT, VOL_RIS_CANDIDATES,
+    VolReservoir, VolReservoirIO, vol_reservoir_io_null,
+    vol_temporal_spatial_combine, VolShiftMode,
+)
 from .reservoir import reservoir_update, reservoir_finalize
 from .restir_gi import gi_reservoir_io_null
 from .postprocess import _firefly_clamp_pixel, _atrous_tap_weight, _atrous_spatial_weight
@@ -141,6 +145,13 @@ struct GpuSceneHandle(Movable):
     # reason -- see pipeline.mojo's restir_buf_a/b.
     var restir_a_buf: DeviceBuffer[DType.uint8]     # n_pixels × sizeof(DIReservoir)
     var restir_b_buf: DeviceBuffer[DType.uint8]     # n_pixels × sizeof(DIReservoir)
+    # Phase 7.3 (docs/A2_restir_migration_plan.md, project_restir_migration
+    # memory): volume-scatter temporal reuse, TEMPORAL-ONLY (no spatial --
+    # gbuf pointers are never wired to VolReservoirIO here, which self-
+    # disables vol_temporal_spatial_combine's spatial pass). Same ping-pong
+    # rule as restir_a_buf/b above.
+    var restir_vol_a_buf: DeviceBuffer[DType.uint8] # n_pixels × sizeof(VolReservoir)
+    var restir_vol_b_buf: DeviceBuffer[DType.uint8] # n_pixels × sizeof(VolReservoir)
     var shadow_buf: DeviceBuffer[DType.uint8]       # n_pixels × WAVEFRONT_BATCH × sizeof(ShadowTask_C) = 48 -- must match path_buf/inter_buf sizing (gpu_render_sample only uses the first n_pixels slots; gpu_render_wavefront's _gpu_bounce_kernels call indexes up to n_pixels × WAVEFRONT_BATCH)
     var active_count_buf: DeviceBuffer[DType.uint8] # 1 × Int32
     var active_idx_buf: DeviceBuffer[DType.uint8]   # n_pixels × Int32
@@ -765,6 +776,8 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var r_gbuf_material_id_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
             var r_restir_a_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[DIReservoir]())
             var r_restir_b_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[DIReservoir]())
+            var r_restir_vol_a_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[VolReservoir]())
+            var r_restir_vol_b_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[VolReservoir]())
             var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[ShadowTask_C]() * WAVEFRONT_BATCH)
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](4)
             var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
@@ -1077,6 +1090,8 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                 gbuf_material_id_buf=r_gbuf_material_id_buf^,
                 restir_a_buf=r_restir_a_buf^,
                 restir_b_buf=r_restir_b_buf^,
+                restir_vol_a_buf=r_restir_vol_a_buf^,
+                restir_vol_b_buf=r_restir_vol_b_buf^,
                 shadow_buf=r_shadow_buf^,
                 active_count_buf=r_active_count_buf^,
                 active_idx_buf=r_active_idx_buf^,
@@ -2151,6 +2166,17 @@ def _sample_medium_core(
     n_distant_lights: Int = 0,
     pointLights: UnsafePointer[PointLight_C, MutExternalOrigin] = UnsafePointer[PointLight_C, MutExternalOrigin].unsafe_dangling(),
     n_point_lights: Int = 0,
+    # Phase 7.3 (docs/A2_restir_migration_plan.md, project_restir_migration
+    # memory): volume-scatter TEMPORAL reuse. Decomposed pointers, not one
+    # `vol_io: VolReservoirIO` argument -- same defensive convention this
+    # file already applies to SpectralHandle at this same kind of boundary
+    # (see spectrum.mojo's comment on rgb_to_spectral_sample). `pixel_idx`
+    # only means anything when this call came from gpu_render_sample (one
+    # path per pixel); the wavefront batch path always leaves it at -1,
+    # which the code below treats identically to "no reuse".
+    vol_read: UnsafePointer[VolReservoir, MutExternalOrigin] = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling(),
+    vol_write: UnsafePointer[VolReservoir, MutExternalOrigin] = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling(),
+    pixel_idx: Int = -1,
 ):
     """Apply medium transmittance along the ray segment and possibly scatter
     or absorb inside the medium. On scatter, performs direct area-light NEE
@@ -2456,7 +2482,28 @@ def _sample_medium_core(
                     res.valid = Int8(1)
                     p_hat_win = p_hat_cand
 
-            reservoir_finalize(res.state, p_hat_win)
+            # Phase 7.3: temporal reuse when this call has a real per-pixel
+            # slot (gpu_render_sample only); otherwise the single-frame path
+            # 7.2 already shipped, unchanged. vol_temporal_spatial_combine
+            # finalizes res.state AND writes it back to vol_write[pixel_idx]
+            # internally -- no separate persistence step needed here. Spatial
+            # reuse is NOT enabled: gbuf_depth/gbuf_world_pos are left at
+            # their null-sentinel default inside vol_reservoir_io_null(), and
+            # vol_temporal_spatial_combine's spatial pass self-disables on
+            # that (see restir_vol.mojo's own null-safety contract).
+            if pixel_idx >= 0 and _is_real_ptr(vol_read):
+                var vol_io = vol_reservoir_io_null()
+                vol_io.read = vol_read
+                vol_io.write = vol_write
+                var ray_o_s = path_ptr[].ray.origin.to_simd()
+                var ray_d_s = path_ptr[].ray.direction.to_simd()
+                var ray_o = Vec3f(ray_o_s[0], ray_o_s[1], ray_o_s[2])
+                var ray_d = Vec3f(ray_d_s[0], ray_d_s[1], ray_d_s[2])
+                vol_temporal_spatial_combine(
+                    res, ray_o, ray_d, Int32(med_idx), pcg,
+                    vol_io, pixel_idx, VolShiftMode.identity)
+            else:
+                reservoir_finalize(res.state, p_hat_win)
 
             # ── Resolve: one visibility ray + one transmittance march, for
             # the winner only.
@@ -2704,6 +2751,12 @@ def sample_medium_gpu(
     n_distant_lights_dp: Int64 = Int64(0),
     pointLights: UnsafePointer[PointLight_C, MutExternalOrigin] = UnsafePointer[PointLight_C, MutExternalOrigin].unsafe_dangling(),
     n_point_lights_dp: Int64 = Int64(0),
+    # Phase 7.3: only gpu_render_wavefront_kernels(...) callers that pass
+    # use_vol_restir=1 AND real buffers get reuse -- see _sample_medium_core's
+    # own comment for why these stay decomposed rather than one VolReservoirIO.
+    use_vol_restir: Int32 = Int32(0),
+    vol_read: UnsafePointer[VolReservoir, MutExternalOrigin] = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling(),
+    vol_write: UnsafePointer[VolReservoir, MutExternalOrigin] = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling(),
 ):
     var n_spheres = Int(n_spheres_dp)
     var spectral_res = Int(spectral_res_dp)
@@ -2716,6 +2769,10 @@ def sample_medium_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
+    # tid IS the pixel index here only when use_vol_restir=1 -- that only
+    # ever comes from gpu_render_sample (one path per pixel per dispatch),
+    # mirroring shade_diffuse_gpu's identical restir_has_state contract.
+    var vol_has_state = use_vol_restir != Int32(0) and _is_real_ptr(vol_read)
     _sample_medium_core(
         paths, intersections, tid, mediums, n_mediums, grids, nvdb_grids,
         bvh2Nodes, primIds, meshes, curves,
@@ -2725,6 +2782,8 @@ def sample_medium_gpu(
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
         materials, infiniteLights, Int(n_infinite_lights_dp),
         distantLights, Int(n_distant_lights_dp), pointLights, Int(n_point_lights_dp),
+        vol_read=vol_read, vol_write=vol_write,
+        pixel_idx=tid if vol_has_state else -1,
     )
 
 
@@ -2893,6 +2952,19 @@ def reset_restir_reservoirs_gpu(
     if tid >= count:
         return
     reservoirs[tid] = di_reservoir_init()
+
+def reset_restir_vol_reservoirs_gpu(
+    reservoirs: UnsafePointer[VolReservoir, MutExternalOrigin],
+    count_dp: Int64,
+):
+    """Clear volume ReSTIR reservoirs to "no candidate yet" -- the same
+    identity-reprojection invalidation reason as reset_restir_reservoirs_gpu
+    above, applied to Phase 7.3's per-pixel volume-scatter reservoirs."""
+    var count = Int(count_dp)
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    reservoirs[tid] = vol_reservoir_init()
 
 
 def traverse_shadow_rays_gpu(
@@ -3723,6 +3795,11 @@ def _gpu_bounce_kernels(
     use_restir: Bool = False,
     restir_read: UnsafePointer[DIReservoir, MutExternalOrigin] = UnsafePointer[DIReservoir, MutExternalOrigin].unsafe_dangling(),
     restir_write: UnsafePointer[DIReservoir, MutExternalOrigin] = UnsafePointer[DIReservoir, MutExternalOrigin].unsafe_dangling(),
+    # Phase 7.3: same "only gpu_render_sample passes these" contract as
+    # use_restir/restir_read/restir_write above, for volume-scatter vertices.
+    use_vol_restir_reuse: Bool = False,
+    restir_vol_read: UnsafePointer[VolReservoir, MutExternalOrigin] = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling(),
+    restir_vol_write: UnsafePointer[VolReservoir, MutExternalOrigin] = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling(),
     # Object-instancing decode for Vulkan RT hits (see
     # vulkaninterop_unpack_results_kernel) -- None for scenes with no
     # instancing, matching every other Optional buffer above.
@@ -3836,6 +3913,8 @@ def _gpu_bounce_kernels(
         Int64(handle[].n_distant_lights),
         handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
         Int64(handle[].n_point_lights),
+        Int32(1) if use_vol_restir_reuse else Int32(0),
+        restir_vol_read, restir_vol_write,
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_nee_preamble_gpu](
@@ -4255,6 +4334,7 @@ def gpu_render_sample[Oc: Origin[mut=True]](
     px_scale: Float32 = Float32(0.0),
     use_restir: Bool = False,
     frame_index: Int = 0,
+    use_vol_restir_reuse: Bool = False,
 ):
     var n_int = Int(n)
     if n_int == 0:
@@ -4298,6 +4378,20 @@ def gpu_render_sample[Oc: Origin[mut=True]](
                     restir_rd = buf_a; restir_wr = buf_b
                 else:
                     restir_rd = buf_b; restir_wr = buf_a
+            # Phase 7.3: same ping-pong rule as DI's above, own buffer pair.
+            # Temporal-only (no spatial neighbour reads), so the same-frame
+            # in-flight-write race spatial reuse would need to worry about
+            # doesn't apply here, but ping-ponging costs nothing and keeps
+            # this consistent with every other reservoir buffer in the file.
+            var vol_rd = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling()
+            var vol_wr = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling()
+            if use_vol_restir_reuse:
+                var vbuf_a = handle[].restir_vol_a_buf.unsafe_ptr().bitcast[VolReservoir]()
+                var vbuf_b = handle[].restir_vol_b_buf.unsafe_ptr().bitcast[VolReservoir]()
+                if frame_index % 2 == 0:
+                    vol_rd = vbuf_a; vol_wr = vbuf_b
+                else:
+                    vol_rd = vbuf_b; vol_wr = vbuf_a
             # Padding is CONDITIONAL on the scene actually containing a
             # medium: for the vast majority of scenes (no participating
             # media), a null interface never occurs, every path already
@@ -4315,7 +4409,9 @@ def gpu_render_sample[Oc: Origin[mut=True]](
             for _ in range(gpu_max_rounds):
                 _gpu_bounce_kernels(handle, n_int, grid_dim, px_scale, maxDepth,
                                     use_restir=use_restir,
-                                    restir_read=restir_rd, restir_write=restir_wr)
+                                    restir_read=restir_rd, restir_write=restir_wr,
+                                    use_vol_restir_reuse=use_vol_restir_reuse,
+                                    restir_vol_read=vol_rd, restir_vol_write=vol_wr)
             handle[].ctx.enqueue_function[accumulate_film_gpu](
                 handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
                 handle[].film_buf.unsafe_ptr().bitcast[Float32](),
@@ -4827,6 +4923,34 @@ def gpu_clear_restir(
             handle[].ctx.synchronize()
         except e:
             print("GPU clear restir failed: " + String(e))
+
+
+def gpu_clear_restir_vol(
+    handlePtr: UnsafePointer[GpuSceneHandle, MutExternalOrigin],
+    n: Int64,
+):
+    """Reset both volume ReSTIR reservoir buffers (Phase 7.3). Call wherever
+    gpu_clear_restir is called -- same identity-reprojection invalidation
+    rule, same both-buffers-cleared reason (frame parity)."""
+    var n_int = Int(n)
+    if n_int == 0:
+        return
+    comptime if has_accelerator():
+        try:
+            var handle = handlePtr
+            comptime block_size = 256
+            var grid_dim = ceildiv(n_int, block_size)
+            handle[].ctx.enqueue_function[reset_restir_vol_reservoirs_gpu](
+                handle[].restir_vol_a_buf.unsafe_ptr().bitcast[VolReservoir](),
+                Int64(n_int), grid_dim=grid_dim, block_dim=block_size,
+            )
+            handle[].ctx.enqueue_function[reset_restir_vol_reservoirs_gpu](
+                handle[].restir_vol_b_buf.unsafe_ptr().bitcast[VolReservoir](),
+                Int64(n_int), grid_dim=grid_dim, block_dim=block_size,
+            )
+            handle[].ctx.synchronize()
+        except e:
+            print("GPU clear restir vol failed: " + String(e))
 
 
 def gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutExternalOrigin]):
