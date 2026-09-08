@@ -2190,6 +2190,16 @@ def _sample_medium_core(
     # inside a dense medium within one frame (common -- see the long
     # comment at this buffer's read site for the real bug this fixes).
     vol_used: UnsafePointer[Int8, MutExternalOrigin] = UnsafePointer[Int8, MutExternalOrigin].unsafe_dangling(),
+    # Phase 7.3 spatial reuse (2026-09-08): SAME G-buffers DI's own spatial
+    # reuse already reads (handle[].atrous_depth_buf/gbuf_worldpos_buf on
+    # GPU, depth_int/world_pos_int on CPU) -- harmless to pass unconditionally
+    # (mirrors DI's own convention), vol_temporal_spatial_combine's own
+    # `_is_real_ptr`/frame_w>0/frame_h>0 checks gate the spatial pass off
+    # when they're not real or the caller (batch wavefront) has no G-buffer.
+    vol_gbuf_depth: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    vol_gbuf_world_pos: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    vol_frame_w: Int32 = Int32(0),
+    vol_frame_h: Int32 = Int32(0),
 ):
     """Apply medium transmittance along the ray segment and possibly scatter
     or absorb inside the medium. On scatter, performs direct area-light NEE
@@ -2536,6 +2546,10 @@ def _sample_medium_core(
                 var vol_io = vol_reservoir_io_null()
                 vol_io.read = vol_read
                 vol_io.write = vol_write
+                vol_io.gbuf_depth = vol_gbuf_depth
+                vol_io.gbuf_world_pos = vol_gbuf_world_pos
+                vol_io.frame_w = vol_frame_w
+                vol_io.frame_h = vol_frame_h
                 var ray_o_s = path_ptr[].ray.origin.to_simd()
                 var ray_d_s = path_ptr[].ray.direction.to_simd()
                 var ray_o = Vec3f(ray_o_s[0], ray_o_s[1], ray_o_s[2])
@@ -2799,6 +2813,10 @@ def sample_medium_gpu(
     vol_read: UnsafePointer[VolReservoir, MutExternalOrigin] = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling(),
     vol_write: UnsafePointer[VolReservoir, MutExternalOrigin] = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling(),
     vol_used: UnsafePointer[Int8, MutExternalOrigin] = UnsafePointer[Int8, MutExternalOrigin].unsafe_dangling(),
+    vol_gbuf_depth: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    vol_gbuf_world_pos: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    vol_frame_w: Int32 = Int32(0),
+    vol_frame_h: Int32 = Int32(0),
 ):
     var n_spheres = Int(n_spheres_dp)
     var spectral_res = Int(spectral_res_dp)
@@ -2827,6 +2845,8 @@ def sample_medium_gpu(
         vol_read=vol_read, vol_write=vol_write,
         pixel_idx=tid if vol_has_state else -1,
         vol_used=vol_used,
+        vol_gbuf_depth=vol_gbuf_depth, vol_gbuf_world_pos=vol_gbuf_world_pos,
+        vol_frame_w=vol_frame_w, vol_frame_h=vol_frame_h,
     )
 
 
@@ -3863,6 +3883,13 @@ def _gpu_bounce_kernels(
     # gpu_render_sample before the bounce-round loop starts -- see
     # _sample_medium_core's own comment on vol_used for the bug this fixes.
     restir_vol_used: UnsafePointer[Int8, MutExternalOrigin] = UnsafePointer[Int8, MutExternalOrigin].unsafe_dangling(),
+    # Spatial reuse (2026-09-08): same G-buffers DI's own spatial reuse
+    # already reads, harmless to pass unconditionally (see
+    # _sample_medium_core's matching comment).
+    restir_vol_gbuf_depth: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    restir_vol_gbuf_world_pos: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    restir_vol_frame_w: Int32 = Int32(0),
+    restir_vol_frame_h: Int32 = Int32(0),
     # Object-instancing decode for Vulkan RT hits (see
     # vulkaninterop_unpack_results_kernel) -- None for scenes with no
     # instancing, matching every other Optional buffer above.
@@ -3978,6 +4005,8 @@ def _gpu_bounce_kernels(
         Int64(handle[].n_point_lights),
         Int32(1) if use_vol_restir_reuse else Int32(0),
         restir_vol_read, restir_vol_write, restir_vol_used,
+        restir_vol_gbuf_depth, restir_vol_gbuf_world_pos,
+        restir_vol_frame_w, restir_vol_frame_h,
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_nee_preamble_gpu](
@@ -4449,6 +4478,10 @@ def gpu_render_sample[Oc: Origin[mut=True]](
             var vol_rd = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling()
             var vol_wr = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling()
             var vol_used_ptr = UnsafePointer[Int8, MutExternalOrigin].unsafe_dangling()
+            var vol_gbuf_depth_ptr = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
+            var vol_gbuf_world_pos_ptr = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
+            var vol_fw = Int32(0)
+            var vol_fh = Int32(0)
             if use_vol_restir_reuse:
                 var vbuf_a = handle[].restir_vol_a_buf.unsafe_ptr().bitcast[VolReservoir]()
                 var vbuf_b = handle[].restir_vol_b_buf.unsafe_ptr().bitcast[VolReservoir]()
@@ -4460,6 +4493,13 @@ def gpu_render_sample[Oc: Origin[mut=True]](
                 handle[].ctx.enqueue_function[reset_vol_used_gpu](
                     vol_used_ptr, Int64(n_int), grid_dim=grid_dim, block_dim=block_size,
                 )
+                # Spatial reuse: the SAME G-buffers DI's own spatial reuse
+                # already reads (gen_aux_buffers_gpu populates them
+                # unconditionally every frame, see gpu_gen_aux_buffers).
+                vol_gbuf_depth_ptr = handle[].atrous_depth_buf.unsafe_ptr().bitcast[Float32]()
+                vol_gbuf_world_pos_ptr = handle[].gbuf_worldpos_buf.unsafe_ptr().bitcast[Float32]()
+                vol_fw = Int32(handle[].fw)
+                vol_fh = Int32(handle[].fh)
             # Padding is CONDITIONAL on the scene actually containing a
             # medium: for the vast majority of scenes (no participating
             # media), a null interface never occurs, every path already
@@ -4480,7 +4520,10 @@ def gpu_render_sample[Oc: Origin[mut=True]](
                                     restir_read=restir_rd, restir_write=restir_wr,
                                     use_vol_restir_reuse=use_vol_restir_reuse,
                                     restir_vol_read=vol_rd, restir_vol_write=vol_wr,
-                                    restir_vol_used=vol_used_ptr)
+                                    restir_vol_used=vol_used_ptr,
+                                    restir_vol_gbuf_depth=vol_gbuf_depth_ptr,
+                                    restir_vol_gbuf_world_pos=vol_gbuf_world_pos_ptr,
+                                    restir_vol_frame_w=vol_fw, restir_vol_frame_h=vol_fh)
             handle[].ctx.enqueue_function[accumulate_film_gpu](
                 handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
                 handle[].film_buf.unsafe_ptr().bitcast[Float32](),

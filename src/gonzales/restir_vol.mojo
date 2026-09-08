@@ -230,14 +230,24 @@ def vol_reservoir_io_null() -> VolReservoirIO:
     )
 
 # Tuning constants. Started from GI's (restir_gi.mojo), themselves started from
-# DI's MEASURED values, and UNVALIDATED for the volumetric case: no candidate
-# generation exists yet to render an A/B against. A volume vertex has neither a
-# normal nor a material id, so two of DI/GI's three G-buffer rejection tests do
-# not apply at all here -- what replaces them is the medium match plus the
-# target function scoring an incompatible neighbour at 0 on its own. Re-measure
-# once generation lands; do not trust these as final.
+# DI's MEASURED values. A volume vertex has neither a normal nor a material
+# id, so two of DI/GI's three G-buffer rejection tests do not apply at all
+# here -- what replaces them is the medium match plus the target function
+# scoring an incompatible neighbour at 0 on its own.
 comptime VOL_TEMPORAL_M_CAP: Float32 = Float32(64.0)
-comptime VOL_SPATIAL_NEIGHBORS: Int = 4
+# MEASURED 2026-09-08, now that temporal reuse + G-buffer wiring both exist
+# (`Scenes/vol-restir-mesh-light.pbrt`, 5 seeds, matched cap, vs a 16384spp
+# reference -- same methodology DI's own spatial-reuse verdict used):
+# average MSE across seeds is a near-wash, mildly WORSE with spatial on
+# (temporal-only 0.272 vs temporal+spatial 0.287, both ×1e-12 scale) and
+# highly variable per seed (spatial ranged from 76% worse to 54% better on
+# individual seeds) -- no consistent win. Both configurations are UNBIASED
+# (converged mean within ~0.15% of the reference either way, Z-normalization
+# already correct from Phase 7.1) -- this is DI's exact "correct but
+# genuinely not worth enabling" verdict, now actually measured for the
+# volumetric case instead of assumed by analogy. Machinery stays wired and
+# correct; re-enabling is a one-constant change, same as DI's own history.
+comptime VOL_SPATIAL_NEIGHBORS: Int = 0
 comptime VOL_SPATIAL_SLOTS: Int = VOL_SPATIAL_NEIGHBORS + 1
 comptime VOL_SPATIAL_RADIUS_PX: Float32 = Float32(20.0)
 comptime VOL_SPATIAL_DEPTH_REL_MAX: Float32 = Float32(0.25)

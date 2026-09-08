@@ -1740,7 +1740,7 @@ def render_interactive(
         # `use_restir` alone left the other two holding a dangling pointer,
         # which their own null-safety checks then read as "no G-buffer" and
         # skipped spatial reuse entirely, silently.
-        if use_restir or use_restir_gi or use_sms_restir:
+        if use_restir or use_restir_gi or use_sms_restir or use_vol_restir_reuse:
             for _ in range(n_pixels):
                 material_id_int.append(Int32(-1))
             for _ in range(n_pixels * 3):
@@ -1890,7 +1890,7 @@ def render_interactive(
                 # `use_restir` alone left --sms-restir with a zero depth
                 # buffer, which its neighbour test reads as "degenerate" and
                 # rejects, so spatial reuse silently did nothing.
-                if use_restir or use_restir_gi or use_sms_restir:
+                if use_restir or use_restir_gi or use_sms_restir or use_vol_restir_reuse:
                     render_aux_buffers(
                         psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
                         Int32(0), Int32(0), fw, fh, sd,
@@ -1932,14 +1932,23 @@ def render_interactive(
                     gbuf_world_pos=world_pos_int.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](),
                     frame_w=fw, frame_h=fh,
                 )
-            # TEMPORAL ONLY (matches the GPU wiring, commit 1685154c): only
-            # read/write are set, so vol_temporal_spatial_combine's spatial
-            # pass self-disables (its own `_is_real_ptr(vol_io.gbuf_depth)`
-            # gate never passes).
+            # TEMPORAL + SPATIAL (2026-09-08): gbuf_depth/gbuf_world_pos now
+            # wired (same depth_int/world_pos_int buffers DI/GI/SMS already
+            # populate above), so vol_temporal_spatial_combine's spatial pass
+            # (VOL_SPATIAL_NEIGHBORS=4, restir_vol.mojo) is live, not just
+            # unit-tested. See project_restir_migration memory's "Spatial
+            # reuse for volumes" section for the verification methodology
+            # and result -- DI's own spatial reuse was found not worth it,
+            # but that was never actually tested for the volumetric case
+            # until now.
             var vol_io = vol_reservoir_io_null()
             if use_vol_restir_reuse:
                 vol_io.read = vol_read
                 vol_io.write = vol_write
+                vol_io.gbuf_depth = depth_int.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin]()
+                vol_io.gbuf_world_pos = world_pos_int.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin]()
+                vol_io.frame_w = fw
+                vol_io.frame_h = fh
             render_all_tiles(
                 psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
                 Int32(0), Int32(0), fw, fh,
