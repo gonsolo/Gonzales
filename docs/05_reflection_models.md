@@ -190,3 +190,58 @@ worth naming once here rather than re-deriving at each site:
 
 Materials can mix two BSDFs by a scalar weight. This enables partially
 oxidized metal or wet surfaces without dedicated material models.
+
+## Hair (Marschner)
+
+Curve primitives use the Marschner model: a longitudinal lobe `Mp` (a von
+Mises–Fisher distribution over the deviation from the perfect-cone
+reflection angle, `bvh.mojo::_hair_Mp`) times an azimuthal term summing the
+R, TT, and TRT light paths (single reflection off the cuticle, and the two
+paths that refract through the fiber once or twice, each attenuated by an
+absorption term `A0`/`A1`/`A2`/`A3` — `_hair_eval_lobes`). Unlike every other
+material in gonzales, hair's NEE weight (`_nee_weight_hair`, `bxdf.mojo`)
+stays RGB-only rather than spectral: converting Marschner's per-path
+absorption to a genuine spectral quantity needs the fiber's `sigma_a`
+threaded through as an absorption coefficient rather than a color, which is
+a separate, larger piece of work than the plain reflectance/illuminant
+upsampling every other material uses (see `docs/02_spectra_and_color.md`) —
+a deliberate scope cut, not an oversight.
+
+Curves can themselves be area lights (`AreaLight_C.kind == 1`, sampled as a
+random point on the tube: a random piece, arc-position, and angle around the
+circle). NEE, BDPT, and SPPM all reach curve lights through the same
+generic `sample_area_light_uniform` codepath mesh lights use, needing no
+curve-specific logic beyond the sampling branch itself — MNEE is the one
+exception, staying mesh-only since it needs a flat `(dp_du, dp_dv)` tangent
+basis a round tube doesn't have; curve lights behind glass fall back to
+plain shadow-ray NEE.
+
+## Measured BRDFs
+
+The `measured` material type is a real port of pbrt-v4's Dupuy & Jakob
+tabulated BRDF representation (`measured_bsdf.mojo`'s loader,
+`measured_bxdf_eval.mojo`'s piecewise-linear-2D evaluation, ported directly
+from pbrt-v4's `bxdfs.{h,cpp}`) — a `.bsdf` tensor file measured from a real
+material (e.g. sportscar's car paint), not a fitted analytic model. Two
+traps worth knowing if this code is touched again:
+
+- **Composite before converting to RGB, not after.** Converting a bare
+  reflectance spectrum to RGB in isolation implicitly assumes an
+  equal-energy illuminant, whose white point doesn't match sRGB's D65
+  reference — a flat 0.8 reflectance round-tripped to a visibly tinted
+  RGB (0.96, 0.76, 0.73) instead of neutral gray. `bxdf_eval_measured`
+  returns the raw spectral value and lets the caller composite it with the
+  light's actual illuminant spectrum (or a neutral D65 shape, at sample
+  time when no specific light is known yet) before the one-time
+  `spectral_sample_to_rgb` conversion — the same reflectance-then-
+  illuminant discipline every other material follows.
+- **Fall back to the geometric normal, not the shading normal, for the
+  same-hemisphere gate.** At near-edge-on viewing angles on a curved,
+  low-poly mesh, an interpolated shading normal can land on the opposite
+  side of `wo` from the geometric normal even when the geometric normal is
+  correctly face-forwarded — a classic silhouette artifact. Gating
+  `bxdf_eval_measured`'s reflect/transmit test on the shading-normal frame
+  hard-zeroes every light sample at exactly those pixels; `shade_measured`
+  falls back to the geometric normal whenever `dot(shading_normal, wo) <=
+  0`, matching pbrt's own convention that the geometric normal gates which
+  side is valid while the shading normal only shapes the lobe.
