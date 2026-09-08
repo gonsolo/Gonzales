@@ -5,10 +5,10 @@ GRIS/ReSTIR-based sampling framework. **Status (2026-09-08): Phases 0-5
 done; Phase 6 core done (`--sms-restir`, temporal-only reuse, no spatial
 yet); Phase 7 candidate generation + resolve done (GPU wavefront volume
 scatter vertices, `restir_vol.mojo` + `gpu.mojo`), TEMPORAL reservoir reuse
-now wired in too (`--vol-restir-reuse`, GPU-only, temporal-only -- no
-spatial), verified with a real variance win -- see §4's phase table, this
-section's own Phase 7 writeup for the exact boundary, and
-`docs/A1_feature_status.md`'s Implemented Features; Phases 8-10 not
+now wired in too (`--vol-restir-reuse`, CPU and GPU, temporal-only -- no
+spatial), verified with a real variance win on both backends -- see §4's
+phase table, this section's own Phase 7 writeup for the exact boundary,
+and `docs/A1_feature_status.md`'s Implemented Features; Phases 8-10 not
 started.**
 
 Theory (MIS, RIS/GRIS, shift mappings, VCM's weight derivation, the
@@ -358,29 +358,45 @@ G-buffer data is threaded to it. Wiring this in (persistent reservoir
 buffers across wavefront batches, the G-buffer plumbing, and a call site
 replacing the current single-frame resolve) is the remaining Phase 7 work.
 
-**2026-09-08: TEMPORAL reuse shipped (commit 1685154c), spatial still
-deferred.** `--vol-restir-reuse` (off by default) wires
-`vol_temporal_spatial_combine` into `_sample_medium_core` via a new
-`restir_vol_a_buf`/`restir_vol_b_buf` reservoir pair on `GpuSceneHandle`,
-ping-ponged in `gpu_render_sample` exactly like DI's own reservoir pair;
-batch `--gpu` joins `--restir`'s existing dispatch-mode switch (1
-sample/pixel/dispatch) to get real cross-sample persistence. GPU only —
-CPU/`render_tile` wiring is still deferred. Spatial reuse remains OFF
-(the G-buffer pointers are never wired, so `vol_temporal_spatial_combine`'s
-spatial pass self-disables), deliberately: DI's own matched-cap verdict
-was "correct but genuinely not worth enabling," and volumetric spatial
-reuse hasn't earned its own verification pass yet.
+**2026-09-08: TEMPORAL reuse shipped, CPU and GPU (commits 1685154c,
+21c3cfb2), spatial still deferred.** `--vol-restir-reuse` (off by default)
+wires `vol_temporal_spatial_combine` into `_sample_medium_core` via a new
+`restir_vol_a_buf`/`restir_vol_b_buf` reservoir pair on `GpuSceneHandle`
+(GPU) and a matching ping-ponged pair in `render_interactive`'s CPU branch
+(`rendering.mojo`'s `render_tile`/`render_all_tiles`), both mirroring DI's
+own reservoir-pair pattern exactly. Batch `--gpu` joins `--restir`'s
+existing dispatch-mode switch (1 sample/pixel/dispatch) to get real
+cross-sample persistence; CPU persistence only exists in
+`render_interactive` (`--interactive-frames`), matching `--restir`'s own
+CPU scope — plain CPU batch rendering has no reuse either. Spatial reuse
+remains OFF (the G-buffer pointers are never wired, so
+`vol_temporal_spatial_combine`'s spatial pass self-disables),
+deliberately: DI's own matched-cap verdict was "correct but genuinely not
+worth enabling," and volumetric spatial reuse hasn't earned its own
+verification pass yet.
 
-Verified on a new test scene, `Scenes/vol-restir-mesh-light.pbrt`: both
-flag states track a 16384spp reference to within ~0.2% across 5 seeds
-with no systematic bias, and flag-on's MSE is 3–10x lower than flag-off's
-— a real, reproducible variance win. `make smoketest` unaffected (flag
-defaults off). See the `project_restir_migration` memory's "7.3 (temporal
-reuse)" section for the full verification writeup and a real debugging
-lesson worth reading before touching this code again: the *existing*
+Verified on a new test scene, `Scenes/vol-restir-mesh-light.pbrt`: GPU's
+flag-on MSE is 3–10x lower than flag-off's against a 16384spp reference,
+averaged over 5 seeds, no systematic bias. CPU verification caught and
+fixed a REAL bug present in the original GPU-only commit too (not
+CPU-specific in its root cause, just not exposed by that commit's
+verification methodology): a single path can scatter many times inside a
+dense medium within one frame, and each scatter independently called the
+combine and overwrote the persisted reservoir, so only the last one
+survived — a "stalled convergence = bias" pattern, fixed by only letting a
+path's first in-frame scatter touch the persisted reservoir. Post-fix, CPU
+shows the same qualitative pattern as GPU (unbiased mean, real if more
+modest variance win) and CPU/GPU agree with each other within ~0.6% at
+matched frame counts. `make smoketest` unaffected (flag defaults off).
+See the `project_restir_migration` memory's "7.3 (temporal reuse)" section
+for the full verification writeup and two real debugging lessons worth
+reading before touching this code again: (1) the *existing*
 `Scenes/vcm-media-sphere-light.pbrt` test scene turned out to exercise a
 completely different, sphere-native light code path and was useless for
-verifying this feature — the new mesh-light scene exists because of that.
+verifying this feature — the new mesh-light scene exists because of that;
+(2) `--seed` has no effect on CPU interactive rendering, so verifying
+CPU-side reservoir work needs a convergence-rate check (low frame count
+vs. high) rather than a multi-seed MSE average.
 
 Distance resampling (the plan's other half) remains fully open and was not
 investigated.
