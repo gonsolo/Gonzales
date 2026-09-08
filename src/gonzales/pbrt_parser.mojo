@@ -935,7 +935,14 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         ply_has_uvs[0] = Int32(0)
         ply_nrm[0] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
         ply_has_nrm[0] = Int32(0)
-        # For .ply.gz, try the decompressed .ply file first (strip ".gz").
+        # For .ply.gz, use the decompressed .ply sibling (strip ".gz"),
+        # auto-decompressing once if it isn't there yet. load_ply reads the
+        # file raw and rejects anything whose first word isn't "ply", so
+        # handing it gzip bytes fails outright -- pbrt-v4-scenes ships
+        # ganesha, sssdragon and lte-orb's meshes gzipped, and without this
+        # their geometry silently vanished from the render (the statue, the
+        # dragon, three of lte-orb's four meshes). Mirrors the `.pbrt.gz`
+        # include path below, which already decompresses this way.
         var fp_len = 0
         while full_path[fp_len] != UInt8(0): fp_len += 1
         var ends_gz = (fp_len >= 4 and
@@ -947,6 +954,16 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
             var ap = alloc[UInt8](fp_len - 2)
             for ci in range(fp_len - 3): ap[ci] = full_path[ci]
             ap[fp_len - 3] = UInt8(0)
+            var ap_str = String(unsafe_from_utf8_ptr=ap.as_immutable())
+            if not exists(ap_str):
+                var gz_str = String(unsafe_from_utf8_ptr=full_path.as_immutable())
+                print("decompressing", gz_str, "(one-time, cached alongside it)")
+                try:
+                    _ = run("gzip -dk '" + gz_str + "'")
+                except:
+                    pass
+                if not exists(ap_str):
+                    print("PLY gunzip FAILED (is `gzip` installed?):", gz_str)
             ok = load_ply(ap, ply_pts, ply_nv, ply_idx, ply_nt, ply_uvs, ply_has_uvs, ply_nrm, ply_has_nrm)
             ap.free()
         if ok == 0:

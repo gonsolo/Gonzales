@@ -213,6 +213,11 @@ def load_ply(
             file_buf[i] = bytes[i]
         file_buf[file_size] = UInt8(0)
     except:
+        # Every failure path here names the file AND the reason. A mesh that
+        # fails to load doesn't crash the render -- it just isn't there, and
+        # a scene missing its subject still looks like a plausible image
+        # (ganesha rendered its backdrop, light and floor, minus the statue).
+        print("PLY load FAILED (cannot open/read):", path_str)
         return Int32(0)
 
     var line_buf = alloc[UInt8](512)
@@ -220,6 +225,13 @@ def load_ply(
 
     pos = _ply_read_line(file_buf, file_size, pos, line_buf, 512)
     if not _ply_word_eq(line_buf, 0, "ply"):
+        # Most likely a still-compressed file: gzip's magic (0x1f 0x8b) is
+        # not "ply". The .ply.gz decompression lives in pbrt_parser.mojo's
+        # plymesh handler, which passes the decompressed sibling's path.
+        if file_size >= 2 and file_buf[0] == UInt8(0x1f) and file_buf[1] == UInt8(0x8b):
+            print("PLY load FAILED (file is still gzip-compressed):", path_str)
+        else:
+            print("PLY load FAILED (missing 'ply' magic, not a PLY file):", path_str)
         line_buf.free(); file_buf.free()
         return Int32(0)
 
@@ -288,6 +300,8 @@ def load_ply(
                 face_idx_size   = _ply_type_size(line_buf, 3)
 
     if n_verts <= 0 or n_faces <= 0:
+        print("PLY load FAILED (header declares", n_verts, "vertices and",
+              n_faces, "faces):", path_str)
         line_buf.free(); prop_roles.free(); prop_sizes.free()
         prop_is_double.free(); file_buf.free()
         return Int32(0)
