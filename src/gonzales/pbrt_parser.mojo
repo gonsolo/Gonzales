@@ -1013,6 +1013,7 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     var uv_list = params.take_floats("uv")
     if len(uv_list) == 0:
         uv_list = params.take_floats("st")
+    var n_list = params.take_floats("N")
 
     var n_verts = Int32(len(p_list) / 3)
     var n_tris  = Int32(len(i_list) / 3)
@@ -1024,6 +1025,36 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     if Int32(len(uv_list)) >= n_verts * Int32(2):
         for ui in range(Int(n_verts) * 2):
             s[0].meshes[len(s[0].meshes) - 1].uvs.append(uv_list[ui])
+    # "N" (per-vertex shading normals) -- same treatment plymesh already
+    # gives its PLY-supplied normals: inverse-transpose CTM into world
+    # space, then normalize. Dropping these (as this handler did) is not
+    # merely a loss of smooth shading: a one-sided area light's facing test
+    # consults them, and pbrt takes them as authoritative over the index
+    # winding (Triangle::InteractionFromIntersection does
+    # `n = FaceForward(n, ns)`). staircase2's big window emitter supplies
+    # N = (1,0,0) against indices that wind to (-1,0,0), so with N dropped
+    # it faced away from the room: rendered black where the reference shows
+    # its full 4.575/3.591/1.550 radiance, and lit nothing through NEE.
+    if Int32(len(n_list)) >= n_verts * Int32(3):
+        var ctm_inv = alloc[Float32](16)
+        _ = matrix_invert(s[0].ctm.unsafe_ptr(), ctm_inv)
+        var nrm_world = alloc[Float32](Int(n_verts) * 3)
+        var nrm_src = alloc[Float32](Int(n_verts) * 3)
+        for ni in range(Int(n_verts) * 3): nrm_src[ni] = n_list[ni]
+        transform_normals(ctm_inv, nrm_src, n_verts, nrm_world)
+        nrm_src.free()
+        ref nm = s[0].meshes[len(s[0].meshes) - 1]
+        nm.normals.reserve(Int(n_verts) * 3)
+        for ni in range(Int(n_verts)):
+            var nx = nrm_world[ni*3+0]; var ny = nrm_world[ni*3+1]; var nz = nrm_world[ni*3+2]
+            var nlen = sqrt(nx*nx + ny*ny + nz*nz)
+            if nlen > Float32(1e-12):
+                var inv = Float32(1.0) / nlen
+                nx *= inv; ny *= inv; nz *= inv
+            nm.normals.append(nx)
+            nm.normals.append(ny)
+            nm.normals.append(nz)
+        nrm_world.free(); ctm_inv.free()
 
 # ── Texture handler ───────────────────────────────────────────────────────────
 
