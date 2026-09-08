@@ -17,6 +17,7 @@ from .guide import GuideGrid, guide_create, guide_free, guide_clone_empty, guide
 from .restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io_null
 from .restir_gi import GIReservoir, gi_reservoir_init, GIReservoirIO, gi_reservoir_io_null
 from .restir_sms import SMSReservoir, sms_reservoir_init, SMSReservoirIO, sms_reservoir_io_null
+from .restir_vol import VolReservoir, vol_reservoir_init, VolReservoirIO, vol_reservoir_io_null
 from .gpu import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol, gpu_atrous_denoise, gpu_gen_aux_buffers, gpu_free_scene
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 from .spectrum import SpectralHandle, null_spectral_handle
@@ -840,9 +841,13 @@ def parse_and_render(
     # Phase 7.3: volume-scatter TEMPORAL reuse (no spatial -- see
     # project_restir_migration memory's "7.3" section). INDEPENDENT of
     # use_restir (this is the medium sampler's own NEE, a different call
-    # site from DI's diffuse-material NEE). Batch mode gets it by joining
-    # use_restir's own dispatch-mode-switch condition below (1 sample/pixel
-    # per dispatch via gpu_render_sample) -- CPU has no wiring yet.
+    # site from DI's diffuse-material NEE). GPU batch mode gets it by
+    # joining use_restir's own dispatch-mode-switch condition below (1
+    # sample/pixel per dispatch via gpu_render_sample). CPU BATCH mode
+    # (this function's non-GPU branch) has no persistence, matching
+    # use_restir's own CPU-batch scope exactly -- true cross-sample reuse,
+    # CPU or GPU, only ever happens in render_interactive (below), the
+    # only place a stable per-frame identity exists to key a reservoir on.
     use_vol_restir_reuse: Bool = False,
 ) raises -> Int32:
     if use_gpu and not gpu_available():
@@ -1537,8 +1542,8 @@ def render_interactive(
     # temporal-only reservoir reuse (no spatial yet) -- see
     # project_sms_restir_phase6 memory.
     use_sms_restir: Bool = False,
-    # Phase 7.3: volume-scatter TEMPORAL reuse (no spatial), GPU only so
-    # far -- see project_restir_migration memory's "7.3" section and
+    # Phase 7.3: volume-scatter TEMPORAL reuse (no spatial), CPU and GPU
+    # both -- see project_restir_migration memory's "7.3" section and
     # parse_and_render's matching flag. INDEPENDENT of use_restir.
     use_vol_restir_reuse: Bool = False,
     headless_frames: Int32 = Int32(0),
@@ -1552,8 +1557,6 @@ def render_interactive(
         print("--restir-gi: CPU only so far, no effect combined with --gpu")
     if use_sms_restir and use_gpu:
         print("--sms-restir: CPU only so far, no effect combined with --gpu")
-    if use_vol_restir_reuse and not use_gpu:
-        print("--vol-restir-reuse: GPU only so far, no effect without --gpu")
 
     var psc = mojo_parse_scene_any(path, verbose)
     if Int(psc) == 0:
@@ -1657,6 +1660,17 @@ def render_interactive(
     var sms_buf_b = UnsafePointer[SMSReservoir, MutExternalOrigin].unsafe_dangling()
     var sms_read  = UnsafePointer[SMSReservoir, MutExternalOrigin].unsafe_dangling()
     var sms_write = UnsafePointer[SMSReservoir, MutExternalOrigin].unsafe_dangling()
+    # Phase 7.3: ping-ponged VolReservoir buffers, same race-free scheme as
+    # restir_buf_a/b above -- INDEPENDENT of use_restir, matching
+    # use_sms_restir's own independence (this is the medium sampler's own
+    # NEE, not DI's). TEMPORAL ONLY: no G-buffer pointers are threaded
+    # through (see render_all_tiles's vol_io construction below), so
+    # vol_temporal_spatial_combine's spatial pass self-disables, mirroring
+    # the GPU wiring's own scope exactly (commit 1685154c).
+    var vol_buf_a = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling()
+    var vol_buf_b = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling()
+    var vol_read  = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling()
+    var vol_write = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling()
     # Phase 4: ping-ponged GIReservoir buffers, same scheme as
     # restir_buf_a/b above (race-free for the same reason: read only from
     # `gi_read`, write only to `gi_write`, swapped after each frame).
@@ -1758,6 +1772,16 @@ def render_interactive(
                 sms_buf_b[i] = sms_reservoir_init()
             sms_read = sms_buf_a
             sms_write = sms_buf_b
+        if use_vol_restir_reuse:
+            # Independent of use_restir, same reasoning as use_sms_restir
+            # above -- the medium sampler's own NEE.
+            vol_buf_a = alloc[VolReservoir](n_pixels)
+            vol_buf_b = alloc[VolReservoir](n_pixels)
+            for i in range(n_pixels):
+                vol_buf_a[i] = vol_reservoir_init()
+                vol_buf_b[i] = vol_reservoir_init()
+            vol_read = vol_buf_a
+            vol_write = vol_buf_b
 
     var zero = TileResult_C(
         estimate=RGB(Float32(0)),
@@ -1807,6 +1831,10 @@ def render_interactive(
                         for i in range(n_pixels):
                             sms_buf_a[i] = sms_reservoir_init()
                             sms_buf_b[i] = sms_reservoir_init()
+                    if use_vol_restir_reuse:
+                        for i in range(n_pixels):
+                            vol_buf_a[i] = vol_reservoir_init()
+                            vol_buf_b[i] = vol_reservoir_init()
         # headless: camera is never polled, so it never "changes" -- every
         # frame accumulates onto the same static view, exactly the
         # steady-state case temporal reuse (Phase 2.3) needs to be verified
@@ -1904,6 +1932,14 @@ def render_interactive(
                     gbuf_world_pos=world_pos_int.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](),
                     frame_w=fw, frame_h=fh,
                 )
+            # TEMPORAL ONLY (matches the GPU wiring, commit 1685154c): only
+            # read/write are set, so vol_temporal_spatial_combine's spatial
+            # pass self-disables (its own `_is_real_ptr(vol_io.gbuf_depth)`
+            # gate never passes).
+            var vol_io = vol_reservoir_io_null()
+            if use_vol_restir_reuse:
+                vol_io.read = vol_read
+                vol_io.write = vol_write
             render_all_tiles(
                 psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
                 Int32(0), Int32(0), fw, fh,
@@ -1912,7 +1948,7 @@ def render_interactive(
                 guide_read=null_guide(), write_guides=UnsafePointer[GuideGrid, MutExternalOrigin].unsafe_dangling(),
                 n_write_guides=0, use_restir=use_restir, frame_w=fw, restir_io=restir_io,
                 use_gi=use_restir_gi, gi_io=gi_io,
-                use_sms_restir=use_sms_restir, sms_io=sms_io)
+                use_sms_restir=use_sms_restir, sms_io=sms_io, vol_io=vol_io)
             if use_restir_gi:
                 var gi_tmp = gi_read
                 gi_read = gi_write
@@ -1932,6 +1968,11 @@ def render_interactive(
                 var tmp = restir_read
                 restir_read = restir_write
                 restir_write = tmp
+            if use_vol_restir_reuse:
+                # Same synchronous-completion reasoning as restir above.
+                var vol_tmp = vol_read
+                vol_read = vol_write
+                vol_write = vol_tmp
             var beauty_frame = List[Float32](capacity=n_pixels * 3)
             var albedo_frame = List[Float32](capacity=n_pixels * 3)
             for _ in range(n_pixels * 3): beauty_frame.append(Float32(0)); albedo_frame.append(Float32(0))
@@ -1979,5 +2020,8 @@ def render_interactive(
         if use_sms_restir:
             sms_buf_a.free()
             sms_buf_b.free()
+        if use_vol_restir_reuse:
+            vol_buf_a.free()
+            vol_buf_b.free()
     mojo_parsed_free(psc)
     viewer_destroy(v)

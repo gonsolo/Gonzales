@@ -15,6 +15,7 @@ from .gpu import _sample_medium_core
 from .restir_di import ReservoirIO, reservoir_io_null
 from .restir_gi import GIReservoirIO, gi_reservoir_io_null
 from .restir_sms import SMSReservoirIO, sms_reservoir_io_null
+from .restir_vol import VolReservoirIO, vol_reservoir_io_null
 
 
 def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
@@ -57,6 +58,15 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
     # fields yet -- temporal-only, no spatial reuse).
     use_sms_restir: Bool = False,
     sms_io: SMSReservoirIO = sms_reservoir_io_null(),
+    # Phase 7.3 (docs/A2_restir_migration_plan.md, project_restir_migration
+    # memory): volume-scatter TEMPORAL reuse, CPU side. INDEPENDENT of
+    # use_restir (this is the medium sampler's own NEE, a different call
+    # site from DI's diffuse-material NEE, see _sample_medium_core below).
+    # vol_io is the frame-wide, caller-owned read/write VolReservoir buffer
+    # pair (same role as restir_io above); harmless if non-real, since
+    # _sample_medium_core's own `_is_real_ptr` check already gates the
+    # whole reuse path off.
+    vol_io: VolReservoirIO = vol_reservoir_io_null(),
 ):
     var sp = samplerParamsPtr[0]
     var scene = scenePtr[0]
@@ -96,6 +106,18 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
     # valid buffer index) whenever frame_w wasn't supplied -- matches
     # di_temporal_step's own "no temporal reuse" fallback.
     var pixel_idx_buf = alloc[Int](n)
+
+    # Phase 7.3: per-PATH-SLOT "already combined this frame" guard (indexed
+    # by the local `i` used for paths/intersections, NOT pixel_idx_buf's
+    # frame-wide id -- one render_tile call already IS one frame's worth of
+    # work for its own paths at spp=1). See _sample_medium_core's own
+    # vol_used comment for the real multi-scatter-per-frame bug this fixes.
+    # Tile-call-local like gi_pending_buf below, zeroed unconditionally
+    # (cheap, and harmless when vol_io isn't real -- _sample_medium_core's
+    # own `_is_real_ptr(vol_read)` check gates the whole path off first).
+    var vol_used_buf = alloc[Int8](n)
+    for vu_i in range(n):
+        vol_used_buf[vu_i] = Int8(0)
 
     # Phase 4's per-path-slot scratch (GIPendingX1), tile-call-local like
     # `paths`/`intersections` above -- NOT frame-wide like gi_io.
@@ -209,6 +231,8 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                 scene.materials, scene.infiniteLights, Int(scene.infiniteLightCount),
                 scene.distantLights, Int(scene.distantLightCount),
                 scene.pointLights, Int(scene.pointLightCount),
+                vol_read=vol_io.read, vol_write=vol_io.write,
+                pixel_idx=pixel_idx_buf[i], vol_used=vol_used_buf,
             )
         for i in range(n):
             if paths[i].active == 0:
@@ -320,6 +344,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
     intersections.free()
     paths.free()
     pixel_idx_buf.free()
+    vol_used_buf.free()
     if use_gi:
         gi_pending_buf.free()
 
@@ -372,6 +397,7 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
     gi_io: GIReservoirIO = gi_reservoir_io_null(),
     use_sms_restir: Bool = False,
     sms_io: SMSReservoirIO = sms_reservoir_io_null(),
+    vol_io: VolReservoirIO = vol_reservoir_io_null(),
 ):
     var res_x = Int(max_x - min_x)
     var tw = Int(tile_w)
@@ -415,7 +441,7 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
             raster_to_camera, camera_to_world,
             Int32(tx), Int32(ty), tx_max, ty_max,
             sampler_params, scene, tile_buf, max_depth, guide_read, gw, use_restir,
-            frame_w, restir_io, use_gi, gi_io, use_sms_restir, sms_io)
+            frame_w, restir_io, use_gi, gi_io, use_sms_restir, sms_io, vol_io)
         for iy in range(th_actual):
             for ix in range(tw_actual):
                 var src = iy * tw_actual + ix

@@ -152,6 +152,11 @@ struct GpuSceneHandle(Movable):
     # rule as restir_a_buf/b above.
     var restir_vol_a_buf: DeviceBuffer[DType.uint8] # n_pixels × sizeof(VolReservoir)
     var restir_vol_b_buf: DeviceBuffer[DType.uint8] # n_pixels × sizeof(VolReservoir)
+    # Per-pixel "already combined this frame" guard (one Int8/pixel), reset
+    # to 0 every gpu_render_sample call before its bounce-round loop starts
+    # -- NOT ping-ponged, NOT persisted across frames, unlike the pair
+    # above. See _sample_medium_core's vol_used comment for why this exists.
+    var restir_vol_used_buf: DeviceBuffer[DType.uint8] # n_pixels × sizeof(Int8)
     var shadow_buf: DeviceBuffer[DType.uint8]       # n_pixels × WAVEFRONT_BATCH × sizeof(ShadowTask_C) = 48 -- must match path_buf/inter_buf sizing (gpu_render_sample only uses the first n_pixels slots; gpu_render_wavefront's _gpu_bounce_kernels call indexes up to n_pixels × WAVEFRONT_BATCH)
     var active_count_buf: DeviceBuffer[DType.uint8] # 1 × Int32
     var active_idx_buf: DeviceBuffer[DType.uint8]   # n_pixels × Int32
@@ -778,6 +783,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var r_restir_b_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[DIReservoir]())
             var r_restir_vol_a_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[VolReservoir]())
             var r_restir_vol_b_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[VolReservoir]())
+            var r_restir_vol_used_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Int8]())
             var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[ShadowTask_C]() * WAVEFRONT_BATCH)
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](4)
             var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
@@ -1092,6 +1098,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                 restir_b_buf=r_restir_b_buf^,
                 restir_vol_a_buf=r_restir_vol_a_buf^,
                 restir_vol_b_buf=r_restir_vol_b_buf^,
+                restir_vol_used_buf=r_restir_vol_used_buf^,
                 shadow_buf=r_shadow_buf^,
                 active_count_buf=r_active_count_buf^,
                 active_idx_buf=r_active_idx_buf^,
@@ -2177,6 +2184,12 @@ def _sample_medium_core(
     vol_read: UnsafePointer[VolReservoir, MutExternalOrigin] = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling(),
     vol_write: UnsafePointer[VolReservoir, MutExternalOrigin] = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling(),
     pixel_idx: Int = -1,
+    # One Int8 per PATH SLOT (indexed by `i`, this call's own index -- NOT
+    # by pixel_idx), reset to 0 once at the start of this dispatch/frame by
+    # the caller: guards against a single path scattering more than once
+    # inside a dense medium within one frame (common -- see the long
+    # comment at this buffer's read site for the real bug this fixes).
+    vol_used: UnsafePointer[Int8, MutExternalOrigin] = UnsafePointer[Int8, MutExternalOrigin].unsafe_dangling(),
 ):
     """Apply medium transmittance along the ray segment and possibly scatter
     or absorb inside the medium. On scatter, performs direct area-light NEE
@@ -2491,7 +2504,35 @@ def _sample_medium_core(
             # their null-sentinel default inside vol_reservoir_io_null(), and
             # vol_temporal_spatial_combine's spatial pass self-disables on
             # that (see restir_vol.mojo's own null-safety contract).
-            if pixel_idx >= 0 and _is_real_ptr(vol_read):
+            # `vol_used[i]` (one entry per PATH SLOT for this dispatch/frame,
+            # NOT per pixel across frames -- that's vol_read/vol_write's job)
+            # guards a real bug found verifying the CPU wiring: a single
+            # path can have MULTIPLE real scatter events inside a dense
+            # medium within one frame (this scene's optical depth is ~8
+            # through the sphere, so 10+ scatters per sample is common) --
+            # _sample_medium_core runs once per bounce ROUND, so each of
+            # those events independently called vol_temporal_spatial_combine
+            # and overwrote vol_write[pixel_idx], leaving only the LAST
+            # in-frame scatter's result actually persisted. Traced live: the
+            # reservoir's state.m plateaued around 40 (never reaching
+            # VOL_TEMPORAL_M_CAP=64) and MSE-vs-a-16384spp-reference got
+            # WORSE from 16 to 256 accumulated frames instead of better --
+            # exactly the "stalled convergence = bias" signature documented
+            # in project_restir_migration's DI Bug 2 section. This affected
+            # the GPU-only commit (1685154c) too, silently, since that
+            # verification pass's methodology (fixed-budget MSE across 5
+            # seeds) didn't happen to expose it the way this session's CPU
+            # convergence-rate check did. Fix: only the path's FIRST real
+            # scatter this frame gets the temporal combine (mirrors DI's own
+            # "one NEE per pixel per frame" scoping, applied per-PATH since
+            # media have no fixed bounce-0 the way surfaces do); every later
+            # in-frame scatter falls back to the plain single-frame RIS
+            # estimator (7.2's original, always-correct behavior) instead of
+            # corrupting the persisted reservoir.
+            var vol_reuse_ok = (pixel_idx >= 0 and _is_real_ptr(vol_read)
+                and _is_real_ptr(vol_used) and vol_used[i] == Int8(0))
+            if vol_reuse_ok:
+                vol_used[i] = Int8(1)
                 var vol_io = vol_reservoir_io_null()
                 vol_io.read = vol_read
                 vol_io.write = vol_write
@@ -2757,6 +2798,7 @@ def sample_medium_gpu(
     use_vol_restir: Int32 = Int32(0),
     vol_read: UnsafePointer[VolReservoir, MutExternalOrigin] = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling(),
     vol_write: UnsafePointer[VolReservoir, MutExternalOrigin] = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling(),
+    vol_used: UnsafePointer[Int8, MutExternalOrigin] = UnsafePointer[Int8, MutExternalOrigin].unsafe_dangling(),
 ):
     var n_spheres = Int(n_spheres_dp)
     var spectral_res = Int(spectral_res_dp)
@@ -2784,6 +2826,7 @@ def sample_medium_gpu(
         distantLights, Int(n_distant_lights_dp), pointLights, Int(n_point_lights_dp),
         vol_read=vol_read, vol_write=vol_write,
         pixel_idx=tid if vol_has_state else -1,
+        vol_used=vol_used,
     )
 
 
@@ -2965,6 +3008,22 @@ def reset_restir_vol_reservoirs_gpu(
     if tid >= count:
         return
     reservoirs[tid] = vol_reservoir_init()
+
+
+def reset_vol_used_gpu(
+    used: UnsafePointer[Int8, MutExternalOrigin],
+    count_dp: Int64,
+):
+    """Zero the per-pixel "already combined this frame" guard -- called once
+    at the start of every gpu_render_sample dispatch, NOT on camera move
+    (unlike reset_restir_vol_reservoirs_gpu above): this buffer has no
+    cross-frame meaning at all, it only disambiguates within ONE frame's own
+    bounce-round loop. See _sample_medium_core's vol_used comment."""
+    var count = Int(count_dp)
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    used[tid] = Int8(0)
 
 
 def traverse_shadow_rays_gpu(
@@ -3800,6 +3859,10 @@ def _gpu_bounce_kernels(
     use_vol_restir_reuse: Bool = False,
     restir_vol_read: UnsafePointer[VolReservoir, MutExternalOrigin] = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling(),
     restir_vol_write: UnsafePointer[VolReservoir, MutExternalOrigin] = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling(),
+    # Per-pixel "already combined this frame" guard, reset by
+    # gpu_render_sample before the bounce-round loop starts -- see
+    # _sample_medium_core's own comment on vol_used for the bug this fixes.
+    restir_vol_used: UnsafePointer[Int8, MutExternalOrigin] = UnsafePointer[Int8, MutExternalOrigin].unsafe_dangling(),
     # Object-instancing decode for Vulkan RT hits (see
     # vulkaninterop_unpack_results_kernel) -- None for scenes with no
     # instancing, matching every other Optional buffer above.
@@ -3914,7 +3977,7 @@ def _gpu_bounce_kernels(
         handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
         Int64(handle[].n_point_lights),
         Int32(1) if use_vol_restir_reuse else Int32(0),
-        restir_vol_read, restir_vol_write,
+        restir_vol_read, restir_vol_write, restir_vol_used,
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_nee_preamble_gpu](
@@ -4385,6 +4448,7 @@ def gpu_render_sample[Oc: Origin[mut=True]](
             # this consistent with every other reservoir buffer in the file.
             var vol_rd = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling()
             var vol_wr = UnsafePointer[VolReservoir, MutExternalOrigin].unsafe_dangling()
+            var vol_used_ptr = UnsafePointer[Int8, MutExternalOrigin].unsafe_dangling()
             if use_vol_restir_reuse:
                 var vbuf_a = handle[].restir_vol_a_buf.unsafe_ptr().bitcast[VolReservoir]()
                 var vbuf_b = handle[].restir_vol_b_buf.unsafe_ptr().bitcast[VolReservoir]()
@@ -4392,6 +4456,10 @@ def gpu_render_sample[Oc: Origin[mut=True]](
                     vol_rd = vbuf_a; vol_wr = vbuf_b
                 else:
                     vol_rd = vbuf_b; vol_wr = vbuf_a
+                vol_used_ptr = handle[].restir_vol_used_buf.unsafe_ptr().bitcast[Int8]()
+                handle[].ctx.enqueue_function[reset_vol_used_gpu](
+                    vol_used_ptr, Int64(n_int), grid_dim=grid_dim, block_dim=block_size,
+                )
             # Padding is CONDITIONAL on the scene actually containing a
             # medium: for the vast majority of scenes (no participating
             # media), a null interface never occurs, every path already
@@ -4411,7 +4479,8 @@ def gpu_render_sample[Oc: Origin[mut=True]](
                                     use_restir=use_restir,
                                     restir_read=restir_rd, restir_write=restir_wr,
                                     use_vol_restir_reuse=use_vol_restir_reuse,
-                                    restir_vol_read=vol_rd, restir_vol_write=vol_wr)
+                                    restir_vol_read=vol_rd, restir_vol_write=vol_wr,
+                                    restir_vol_used=vol_used_ptr)
             handle[].ctx.enqueue_function[accumulate_film_gpu](
                 handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
                 handle[].film_buf.unsafe_ptr().bitcast[Float32](),
