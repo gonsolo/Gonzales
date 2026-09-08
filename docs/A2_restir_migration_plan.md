@@ -4,11 +4,12 @@ Plan for moving gonzales from VCM + SPPM + lightweight guiding to a
 GRIS/ReSTIR-based sampling framework. **Status (2026-09-08): Phases 0-5
 done; Phase 6 core done (`--sms-restir`, temporal-only reuse, no spatial
 yet); Phase 7 candidate generation + resolve done (GPU wavefront volume
-scatter vertices, `restir_vol.mojo` + `gpu.mojo`), but temporal/spatial
-reservoir reuse is only written and unit-tested, not wired into the render
-loop -- see §4's phase table, this section's own Phase 7 writeup for the
-exact boundary, and `docs/A1_feature_status.md`'s Implemented Features;
-Phases 8-10 not started.**
+scatter vertices, `restir_vol.mojo` + `gpu.mojo`), TEMPORAL reservoir reuse
+now wired in too (`--vol-restir-reuse`, GPU-only, temporal-only -- no
+spatial), verified with a real variance win -- see §4's phase table, this
+section's own Phase 7 writeup for the exact boundary, and
+`docs/A1_feature_status.md`'s Implemented Features; Phases 8-10 not
+started.**
 
 Theory (MIS, RIS/GRIS, shift mappings, VCM's weight derivation, the
 "common currency" problem) lives in a companion document,
@@ -357,20 +358,30 @@ G-buffer data is threaded to it. Wiring this in (persistent reservoir
 buffers across wavefront batches, the G-buffer plumbing, and a call site
 replacing the current single-frame resolve) is the remaining Phase 7 work.
 
-**2026-09-08: full wiring plan derived, not yet implemented.** Investigated
-for implementation and found tractable but too large to land unverified in
-one pass (DI's own temporal/spatial reuse took several sessions and a
-~10-cycle bug hunt once accumulation was added — see the
-`project_restir_migration` memory's Phase 2 section). A complete,
-file-and-line-precise plan mirroring DI's already-shipped pattern —
-including the one architectural unknown that needed resolving
-(`gpu_render_sample` already dispatches the medium kernel when
-`n_mediums > 0`, so no prerequisite work is needed there) — is recorded in
-the `project_restir_migration` memory under "7.3 (temporal/spatial reuse)".
-Ship temporal-only first (a real, cheap slice: leave the G-buffer pointers
-null and the spatial pass self-disables); DI's own matched-cap verdict on
-spatial reuse was "correct but genuinely not worth enabling," so hold
-volumetric spatial reuse to the same bar before enabling it by default.
+**2026-09-08: TEMPORAL reuse shipped (commit 1685154c), spatial still
+deferred.** `--vol-restir-reuse` (off by default) wires
+`vol_temporal_spatial_combine` into `_sample_medium_core` via a new
+`restir_vol_a_buf`/`restir_vol_b_buf` reservoir pair on `GpuSceneHandle`,
+ping-ponged in `gpu_render_sample` exactly like DI's own reservoir pair;
+batch `--gpu` joins `--restir`'s existing dispatch-mode switch (1
+sample/pixel/dispatch) to get real cross-sample persistence. GPU only —
+CPU/`render_tile` wiring is still deferred. Spatial reuse remains OFF
+(the G-buffer pointers are never wired, so `vol_temporal_spatial_combine`'s
+spatial pass self-disables), deliberately: DI's own matched-cap verdict
+was "correct but genuinely not worth enabling," and volumetric spatial
+reuse hasn't earned its own verification pass yet.
+
+Verified on a new test scene, `Scenes/vol-restir-mesh-light.pbrt`: both
+flag states track a 16384spp reference to within ~0.2% across 5 seeds
+with no systematic bias, and flag-on's MSE is 3–10x lower than flag-off's
+— a real, reproducible variance win. `make smoketest` unaffected (flag
+defaults off). See the `project_restir_migration` memory's "7.3 (temporal
+reuse)" section for the full verification writeup and a real debugging
+lesson worth reading before touching this code again: the *existing*
+`Scenes/vcm-media-sphere-light.pbrt` test scene turned out to exercise a
+completely different, sphere-native light code path and was useless for
+verifying this feature — the new mesh-light scene exists because of that.
+
 Distance resampling (the plan's other half) remains fully open and was not
 investigated.
 
