@@ -556,6 +556,7 @@ def _nee_weight_coated_diffuse_base(
     alb: RGB,
     ior: Float32,
     n:   Vec3f,
+    wo:  Vec3f,
 ) -> RGB:
     """NEE contribution weight (throughput AND the walk's `beta` NOT
     applied — caller multiplies by both) for ONE LightSample against a
@@ -572,13 +573,29 @@ def _nee_weight_coated_diffuse_base(
     if cos_s <= Float32(0.0):
         return RGB(Float32(0.0))
     var t_light = Float32(1.0) - fr_dielectric(cos_s, ior)
+    # Light must ALSO transmit back OUT through the coat toward the viewer.
+    # Only the entry transmission was applied, so this whole lobe was too
+    # bright by 1/(1 - F(cos_o)) on top of the missing radiance compression
+    # the caller now folds into `beta` -- together they were worth eta^2:
+    # measured against pbrt on a coateddiffuse floor, gonzales/pbrt tracked
+    # eta^2 across the range (eta 1.2/1.5/2.0 -> 1.47/2.34/4.31 against
+    # eta^2 = 1.44/2.25/4.00).
+    var cos_o = abs(dot(n, wo))
+    var t_view = Float32(1.0) - fr_dielectric(cos_o, ior)
+    # ...and 1/eta^2, the radiance compression leaving the dense coat for air.
+    # Deliberately here and not folded into the caller's walk `beta`: beta is
+    # what the coat loop's Russian roulette and chrominance floor threshold
+    # against (`beta_max < 0.25`), and scaling it by 1/eta^2 -- 0.25 at eta 2
+    # -- puts it at that threshold before the walk even starts, firing the RR
+    # immediately and perturbing heuristics tuned for beta starting at 1.
+    var t_both = t_light * t_view / max(ior * ior, Float32(1e-6))
     if ls.is_delta:
-        return alb * ls.Li * (cos_s * t_light / PI)
+        return alb * ls.Li * (cos_s * t_both / PI)
     if ls.pdf <= Float32(0.0):
         return RGB(Float32(0.0))
     var pdf_bsdf = cos_s / PI
     var w = power_heuristic(ls.pdf, pdf_bsdf)
-    return alb * ls.Li * (cos_s * t_light * w / (ls.pdf * PI))
+    return alb * ls.Li * (cos_s * t_both * w / (ls.pdf * PI))
 
 # ── Spectral siblings (staged rollout, see project_spectral_rendering memory
 # / lovely-dazzling-meteor plan) ────────────────────────────────────────────

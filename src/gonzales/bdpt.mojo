@@ -2135,19 +2135,19 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
 
                 for dl_i in range(Int(sd.distantLightCount)):
                     var ls_dl = _sample_distant_light_nee(sd.distantLights[dl_i])
-                    var w_dl = _nee_weight_coated_diffuse_base(ls_dl, eff_alb, ior, gn)
+                    var w_dl = _nee_weight_coated_diffuse_base(ls_dl, eff_alb, ior, gn, wo)
                     total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_dl.r, w_dl.g, w_dl.b, wavelengths), ls_dl, hit, gn, cur_med_idx, sd, scratch, wavelengths)
                 for pl_i in range(Int(sd.pointLightCount)):
                     var ls_pl = _sample_point_light_nee(sd.pointLights[pl_i], hit.to_simd())
-                    var w_pl = _nee_weight_coated_diffuse_base(ls_pl, eff_alb, ior, gn)
+                    var w_pl = _nee_weight_coated_diffuse_base(ls_pl, eff_alb, ior, gn, wo)
                     total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_pl.r, w_pl.g, w_pl.b, wavelengths), ls_pl, hit, gn, cur_med_idx, sd, scratch, wavelengths)
                 for sph_i in range(Int(sd.sphereCount)):
                     var ls_sph = _sample_sphere_light_nee(sd.spheres[sph_i], Int(sd.sphereCount), hit.to_simd(), pcg)
-                    var w_sph = _nee_weight_coated_diffuse_base(ls_sph, eff_alb, ior, gn)
+                    var w_sph = _nee_weight_coated_diffuse_base(ls_sph, eff_alb, ior, gn, wo)
                     total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_sph.r, w_sph.g, w_sph.b, wavelengths), ls_sph, hit, gn, cur_med_idx, sd, scratch, wavelengths)
                 for inf_i in range(Int(sd.infiniteLightCount)):
                     var ls_inf = _sample_infinite_light_nee(sd.infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-                    var w_inf = _nee_weight_coated_diffuse_base(ls_inf, eff_alb, ior, gn)
+                    var w_inf = _nee_weight_coated_diffuse_base(ls_inf, eff_alb, ior, gn, wo)
                     total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_inf.r, w_inf.g, w_inf.b, wavelengths), ls_inf, hit, gn, cur_med_idx, sd, scratch, wavelengths)
 
                 # Task #161 follow-up (2026-07-13): MNEE for area lights
@@ -2215,7 +2215,13 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             rd = vec3f(exit_dir)
             ro = hit + rd*Float32(0.0002)
             last_bsdf_pdf = Float32(0)  # NEE-only: exit ray's true pdf is intractable
-            beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths)
+            # 1/eta^2: the exit ray leaves the dense coat for air, so its
+            # radiance is compressed by the squared IOR ratio -- see
+            # shading.mojo's twin of this line and
+            # _nee_weight_coated_diffuse_base, which carries the NEE side's
+            # own copy. Missing on both, it was worth eta^2 (2.3x at 1.5).
+            var _coat_exit = Float32(1) / max(ior * ior, Float32(1e-6))
+            beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r * _coat_exit, (walk_beta).g * _coat_exit, (walk_beta).b * _coat_exit, wavelengths)
             var v = _null_vertex()
             v.pos = hit
             v.normal = vec3f(gn)

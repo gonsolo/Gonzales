@@ -954,21 +954,21 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         # fallback sampler — same rationale as diffuse's own infinite-light
         # NEE (see project_light_bxdf_interfaces memory).
         var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
-        var w_area = _nee_weight_coated_diffuse_base(ls_area, alb, ior, normal)
+        var w_area = _nee_weight_coated_diffuse_base(ls_area, alb, ior, normal, wo)
         if not w_area.is_black():
             var contrib_area = path_ptr[].throughput * _to_spec_refl(ctx, beta, path_ptr[].wavelengths) * _to_spec_illum(ctx, w_area, path_ptr[].wavelengths)
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_area.wi, ls_area.dist * Float32(0.9999), contrib_area)
 
         for sph_i in range(ctx.lights.sphere_count):
             var ls_sph = _sample_sphere_light_nee(ctx.lights.spheres[sph_i], ctx.lights.sphere_count, hit_point, pcg)
-            var w_sph = _nee_weight_coated_diffuse_base(ls_sph, alb, ior, normal)
+            var w_sph = _nee_weight_coated_diffuse_base(ls_sph, alb, ior, normal, wo)
             if not w_sph.is_black():
                 var contrib_sph = path_ptr[].throughput * _to_spec_refl(ctx, beta, path_ptr[].wavelengths) * _to_spec_illum(ctx, w_sph, path_ptr[].wavelengths)
                 _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_sph.wi, ls_sph.dist * Float32(0.9999), contrib_sph)
 
         for pl_i in range(ctx.lights.point_count):
             var ls_pl = _sample_point_light_nee(ctx.lights.point_lights[pl_i], hit_point)
-            var w_pl = _nee_weight_coated_diffuse_base(ls_pl, alb, ior, normal)
+            var w_pl = _nee_weight_coated_diffuse_base(ls_pl, alb, ior, normal, wo)
             if not w_pl.is_black():
                 var contrib_pl = path_ptr[].throughput * _to_spec_refl(ctx, beta, path_ptr[].wavelengths) * _to_spec_illum(ctx, w_pl, path_ptr[].wavelengths)
                 _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_pl.wi, ls_pl.dist * Float32(0.9999), contrib_pl)
@@ -1009,7 +1009,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         # per depth instead of the old fire-once gate, so no double-counting.
         for dl_i in range(ctx.lights.distant_count):
             var ls_dl = _sample_distant_light_nee(ctx.lights.distant_lights[dl_i])
-            var w_dl = _nee_weight_coated_diffuse_base(ls_dl, alb, ior, normal)
+            var w_dl = _nee_weight_coated_diffuse_base(ls_dl, alb, ior, normal, wo)
             if not w_dl.is_black():
                 var contrib_dl = path_ptr[].throughput * _to_spec_refl(ctx, beta, path_ptr[].wavelengths) * _to_spec_illum(ctx, w_dl, path_ptr[].wavelengths)
                 _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_dl.wi, ls_dl.dist, contrib_dl)
@@ -1086,7 +1086,14 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     # double-count between the multi-scatter exit and single-scatter NEE.
     path_ptr[].lastBsdfPdf = Float32(0.0)
     path_ptr[].specularBounce = Int8(0)
-    path_ptr[].throughput *= _to_spec_refl(ctx, beta, path_ptr[].wavelengths)
+    # 1/eta^2: the exit ray leaves the dense coat for air, so its radiance is
+    # compressed by the squared IOR ratio. Missing entirely before, on this
+    # ray AND on the base's NEE (which now carries its own copy inside
+    # _nee_weight_coated_diffuse_base) -- together worth eta^2, i.e. 2.3x too
+    # bright at the default 1.5, and enough to make a coated surface render
+    # BRIGHTER than the same albedo uncoated when a dielectric coat must make
+    # it darker.
+    path_ptr[].throughput *= _to_spec_refl(ctx, beta * (Float32(1.0) / max(ior * ior, Float32(1e-6))), path_ptr[].wavelengths)
     path_ptr[].bounce += 1
 
     var u_rr = pcg.next_float()
