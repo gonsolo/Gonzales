@@ -513,17 +513,12 @@ def _nee_weight_coated_coat_lobe(
     n:          Vec3f,
     wo:         Vec3f,
 ) -> RGB:
-    """NEE contribution weight (throughput NOT applied) for ONE LightSample
-    against a coateddiffuse/coated_conductor coat's own glossy dielectric
-    GGX reflection lobe (D*G2*F/(4*cos_o), same microfacet term
-    shade_coated_diffuse's coat block used to hand-inline once per light
-    type). Delta lights get MIS weight 1 (no competing BSDF-sampling
-    strategy exists for a delta direction); real-pdf lights (sphere/
-    infinite/area) use the power heuristic against this lobe's own
-    ggx_vndf_pdf. Caller should skip calling this for a smooth coat
-    (coat_alpha below the is_rough_coat threshold) — a delta reflection can
-    never land on a stochastically-sampled light direction, so evaluating
-    this would just waste the shadow-ray test."""
+    """NEE weight (throughput not applied) for a coateddiffuse/coated_conductor
+    coat's own glossy GGX lobe (D*G2*F/(4*cos_o)) against ONE LightSample --
+    see docs/05_reflection_models.md for the model. Delta lights: MIS weight
+    1. Real-pdf lights: power heuristic against ggx_vndf_pdf. Caller must
+    skip this for a smooth coat (delta reflection can't land on a
+    stochastic light sample)."""
     if not ls.valid:
         return RGB(Float32(0.0))
     var cos_o = dot(wo, n)
@@ -558,36 +553,24 @@ def _nee_weight_coated_diffuse_base(
     n:   Vec3f,
     wo:  Vec3f,
 ) -> RGB:
-    """NEE contribution weight (throughput AND the walk's `beta` NOT
-    applied — caller multiplies by both) for ONE LightSample against a
-    coateddiffuse's Lambertian base layer, reached by transmitting through
-    the coat (attenuated by 1 - Fresnel at the light's own incidence
-    angle). Delta lights get MIS weight 1; real-pdf lights use the power
-    heuristic against the base's own cosine-weighted pdf — same shape as
-    _nee_weight_simple, kept separate because the coat's transmittance
-    term and the caller's `beta` state don't fit bxdf_eval_any's flat
-    (mat_kind, alb, alpha) signature."""
+    """NEE weight (throughput AND the walk's `beta` not applied) for a
+    coateddiffuse base against ONE LightSample -- see
+    docs/05_reflection_models.md for the eta^2/Fresnel derivation. Kept
+    separate from _nee_weight_simple because the coat transmittance and
+    `beta` walk state don't fit bxdf_eval_any's flat signature."""
     if not ls.valid:
         return RGB(Float32(0.0))
     var cos_s = dot(n, ls.wi)
     if cos_s <= Float32(0.0):
         return RGB(Float32(0.0))
     var t_light = Float32(1.0) - fr_dielectric(cos_s, ior)
-    # Light must ALSO transmit back OUT through the coat toward the viewer.
-    # Only the entry transmission was applied, so this whole lobe was too
-    # bright by 1/(1 - F(cos_o)) on top of the missing radiance compression
-    # the caller now folds into `beta` -- together they were worth eta^2:
-    # measured against pbrt on a coateddiffuse floor, gonzales/pbrt tracked
-    # eta^2 across the range (eta 1.2/1.5/2.0 -> 1.47/2.34/4.31 against
-    # eta^2 = 1.44/2.25/4.00).
+    # Both Fresnel transmissions (light in, view out) AND 1/eta^2 -- see
+    # docs/05_reflection_models.md. TRAP: 1/eta^2 lives HERE, not folded into
+    # the caller's walk `beta`, because beta is what the coat loop's RR and
+    # chrominance floor threshold against (`beta_max < 0.25`) -- scaling it
+    # by 1/eta^2 (0.25 at eta 2) would fire RR before the walk even starts.
     var cos_o = abs(dot(n, wo))
     var t_view = Float32(1.0) - fr_dielectric(cos_o, ior)
-    # ...and 1/eta^2, the radiance compression leaving the dense coat for air.
-    # Deliberately here and not folded into the caller's walk `beta`: beta is
-    # what the coat loop's Russian roulette and chrominance floor threshold
-    # against (`beta_max < 0.25`), and scaling it by 1/eta^2 -- 0.25 at eta 2
-    # -- puts it at that threshold before the walk even starts, firing the RR
-    # immediately and perturbing heuristics tuned for beta starting at 1.
     var t_both = t_light * t_view / max(ior * ior, Float32(1e-6))
     if ls.is_delta:
         return alb * ls.Li * (cos_s * t_both / PI)

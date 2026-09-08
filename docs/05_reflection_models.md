@@ -63,10 +63,128 @@ glossy reflections.
 
 ## Coated and Layered BSDFs
 
-Real materials often have multiple layers — a clear coat over diffuse paint.
-`shade_coated_diffuse` models a dielectric layer over a diffuse substrate
-and includes NEE (next-event estimation) for direct lighting at both the
-surface and the coat interface.
+Real materials often have multiple layers — a clear coat over diffuse paint,
+lacquer over wood, a wet or oxidized metal surface. `shade_coated_diffuse`
+models the common case: a smooth or rough dielectric coat (car paint, gloss
+varnish) over a Lambertian base. It follows the same shape as PBRT's
+`LayeredBxDF`, but resolves it as one continuous stochastic random walk
+rather than a closed-form integral.
+
+### The random walk
+
+At the coat's air interface, the exact dielectric Fresnel term splits the
+ray probabilistically: reflect off the coat as a glossy (or, for a smooth
+coat like fresh lacquer, mirror) lobe, or transmit into the coat toward the
+base. A transmitted ray enters a loop, capped at ten iterations:
+
+1. **Scatter off the diffuse base.** NEE samples every light type against
+   the base's Lambertian response, attenuated by how much of that light's
+   own incoming and outgoing directions actually make it through the coat
+   (see below). Sample a new, cosine-weighted outgoing direction.
+2. **Hit the coat's underside from inside.** The dielectric Fresnel term
+   (now evaluated from inside the denser medium, hence `1/η`) again splits
+   probabilistically: escape through the coat into air, or total-internally
+   reflect and recycle back down to the base for another bounce.
+
+Each recycled bounce multiplies an accumulator `beta` by the base albedo, so
+after `n` bounces the light carries `albedo^n` — this is what saturates a
+coated material's color relative to the same albedo left uncoated: light
+that would have escaped after one bounce on a bare diffuse surface instead
+gets a second, third, or further chance to pick up the base's tint before
+it finally exits. A textured base makes this compounding sensitive to a
+single texel's own color imbalance (see "Numerical hygiene" below).
+
+Where gonzales's walk differs deliberately from PBRT's: `LayeredBxDF::f()`
+reuses *one* correlated light sample across every recycled bounce to
+evaluate the whole `TRT`, `TRTRT`, ... series in one pass. Gonzales instead
+draws an independent, fresh light sample at every iteration and fires NEE
+every time — the same expected energy, decorrelated, and simpler to reason
+about at the cost of one shadow ray per recycle bounce (bounded by a
+Russian-roulette gate once `beta` has decayed past a few bounces, so a
+low-albedo coat's walk terminates quickly and a high-albedo one doesn't
+flood the renderer with shadow rays).
+
+### Radiance compression: the η² factor
+
+A ray crossing from a dense medium (the coat, index of refraction η) into
+air doesn't just lose energy to reflection at the interface — the *solid
+angle* it's confined to expands by η², and radiance (power per unit solid
+angle per unit area) is diluted by exactly that factor. Combined with the
+ordinary Fresnel transmission term `(1 − F(cosθ))` at both the light's
+incidence angle and the viewer's angle (light has to get both *into* the
+coat toward the base and *back out* toward the eye), the base's
+contribution through the coat is:
+
+```
+f = albedo/π · (1 − F(cos θᵢ)) · (1 − F(cos θₒ)) / η²
+```
+
+Every term here — both Fresnel factors and the `1/η²` — is easy to miss
+independently, and gonzales did for a while: without them a coated surface
+measurably renders *brighter* than the same albedo left uncoated, which is
+backwards (a dielectric coat can only ever attenuate the base, never
+amplify it). At the default coat index of 1.5, the missing factor is worth
+2.3× — large enough to be obviously wrong once checked against a reference,
+but the kind of error that a spot check with a single test light angle can
+still miss, since the two Fresnel terms partially cancel except near
+grazing angles.
+
+### Which reference is "correct"? Neither, exactly
+
+It's tempting to treat any one renderer as ground truth when validating
+against it, but this material is a good illustration of why that's not
+quite right. Mitsuba's `plastic` BSDF is the *same* physical configuration
+— smooth dielectric coat over Lambertian base — solved in closed form under
+one specific assumption: that light re-randomizes to a uniform cosine
+distribution on every internal bounce. That assumption lets it sum the
+entire `TRT + TRTRT + ...` series analytically:
+
+```
+f = albedo/(1 − albedo·Fᵈᵢ) · (1 − F(cosθᵢ))(1 − F(cosθₒ)) / (π η²)
+```
+
+where `Fᵈᵢ` is the hemispherically-averaged internal Fresnel reflectance
+(the fraction of light bouncing off the coat's underside from *any*
+direction, not one specific angle). PBRT's `LayeredBxDF`, and gonzales's
+walk above, instead track the *actual* directional distribution through
+each bounce — a more expensive but more accurate model when the coat has
+real (non-zero) thickness and the base isn't perfectly diffuse-Lambertian
+in its own right.
+
+Evaluated on the same test geometry, PBRT and Mitsuba disagree with each
+other by up to 8% at η = 2 — a real difference between two published,
+peer-reviewed models, not a bug in either. So a discrepancy between
+gonzales and any one reference of a similar size is not automatically a
+defect; it may simply mean gonzales's stochastic walk is closer to one
+model's assumptions than the other's. The practical approach is to target
+whichever renderer's *specific algorithm* gonzales's own code most closely
+mirrors (here, PBRT's directional walk) rather than chase exact numeric
+agreement with a structurally different closed-form model.
+
+### Numerical hygiene in a stochastic recycling loop
+
+Two unrelated numerical-stability techniques recur throughout gonzales
+wherever a value compounds over an unbounded number of Monte Carlo steps —
+worth naming once here rather than re-deriving at each site:
+
+- **Clamp the compounding *result*, not the individual step.** Each single
+  operation (a Russian-roulette throughput compensation, one `beta *=
+  albedo` recycle bounce) is an unbiased estimator on its own. The problem
+  is a *streak*: many legitimate individual steps compounding into an
+  extreme value — 2× per bounce is unremarkable, but thirty bounces of it
+  is not. Clamping after each step, rather than only at the very end,
+  trades a small bias for a large variance reduction and stops runaway
+  values from ever being computed, rather than painting over them
+  afterward the way an image-space firefly filter does.
+- **A per-channel floor prevents color starvation, not just brightness
+  blowup.** Raising an ordinary texture's albedo to a high power (many
+  recycle bounces at one texel) can drive the weakest color channel toward
+  zero while another channel stays large — an ordinary, mild per-channel
+  imbalance becomes an extreme, visible color-saturated artifact once
+  compounded. Flooring each channel at a small fraction of the strongest
+  channel bounds how extreme a single texel's saturation can compound to,
+  while still allowing real, order-of-magnitude color saturation through
+  for textures that are actually strongly tinted.
 
 ## Mix BSDF
 

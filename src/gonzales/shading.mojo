@@ -763,19 +763,14 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
         path_ptr[].albedo = alb
 
-    # ── Layered BSDF: smooth dielectric coat over a Lambertian base ──────────
-    # Stochastic random walk (PBRT LayeredBxDF, CoatedDiffuse). The coat's air
-    # interface reflects a glossy lobe (exact dielectric Fresnel) and transmits
-    # the rest into the coat, where light scatters off the diffuse base and is
-    # partially recycled by (total internal) reflection at the coat underside.
-    # That multiple scattering is what brightens and saturates the base colour.
-    # Fresnel at each interface is handled by the reflect/transmit probability
-    # split, so the throughput accumulator beta only gathers the base albedo.
-    var ior = mat.emission.r            # coat IOR (η_coat/η_air), set at parse
+    # Layered BSDF: smooth/rough dielectric coat over a Lambertian base, as a
+    # stochastic random walk -- see docs/05_reflection_models.md ("Coated and
+    # Layered BSDFs") for the model, the eta^2 derivation, and why gonzales's
+    # decorrelated-per-bounce NEE differs from PBRT's correlated LayeredBxDF.
+    var ior = mat.emission.r            # coat IOR (eta_coat/eta_air), set at parse
     var inv_ior = Float32(1.0) / ior
-    # roughU/V already hold the resolved GGX alpha (see _psc_handle_make_named_material's
-    # remaproughness handling). 0 ⇒ smooth mirror coat (e.g. car paint 0.001);
-    # larger ⇒ soft sheen (e.g. tyres 0.4).
+    # roughU/V already hold the resolved GGX alpha (remaproughness handling).
+    # 0 = smooth mirror coat (car paint); larger = soft sheen (tyres ~0.4).
     var coat_alpha = max(mat.roughU, mat.roughV)
     var is_rough_coat = coat_alpha > Float32(0.001)
     var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])  # toward viewer
@@ -801,30 +796,14 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     var f_entry = fr_dielectric(cos_wm, ior)
     var cos_o = dot(wo, normal)
 
-    # Rough coat: NEE against area lights and distant lights, MIS-combined
-    # with the reflected ray below. Fired unconditionally (NOT gated on the
-    # reflect-vs-transmit coin flip a few lines down) because it evaluates
-    # the coat's own BRDF response — a surface property, independent of
-    # which lobe this particular sample's *continuation* ray happens to
-    # follow. Gating it on that coin flip would double-count the interface
-    # Fresnel term (once implicitly via the gate's own probability, once via
-    # the NEE half-vector's own Fresnel term computed below) and silently
-    # bias the result low by roughly that probability — this was tried
-    # first and measurably under-shot pbrt's reference brightness.
-    # A glossy lobe's reflection cone is too narrow for naive BSDF sampling
-    # to reliably find compact/distant lights (confirmed by a real missing
-    # highlight — lamp's shade never picked up its bulb's reflection even at
-    # 512spp without this). Smooth coat (is_rough_coat false, e.g. car
-    # paint) skips NEE entirely: a delta reflection can never land on a
-    # stochastically-sampled light direction, so any shadow ray fired there
-    # would just be wasted work.
+    # Coat's own glossy NEE, evaluated unconditionally here -- TRAP: do NOT
+    # gate this on the reflect-vs-transmit coin flip below. It is the coat's
+    # BRDF response, independent of which lobe the continuation ray follows;
+    # gating it double-counts the interface Fresnel term (once via the
+    # gate's own probability, once via the half-vector Fresnel here) and
+    # silently biases low. Skipped for a smooth coat: a delta reflection
+    # can never land on a stochastic light sample.
     if is_rough_coat and cos_o > Float32(0.0):
-        # Coat's own glossy dielectric lobe against every light type, via the
-        # shared Light interface (LightSample samplers, bvh.mojo) + the
-        # coat-specific BxDF weight (_nee_weight_coated_coat_lobe, bxdf.mojo)
-        # — one call per light instead of the same D*G2*F/(4*cos_o) math
-        # hand-inlined once per light type. Previously only area+distant
-        # were covered; sphere/point/infinite were silently missing.
         var ls_area_c = _sample_area_light_nee(ctx, hit_point, pcg)
         var w_area_c = _nee_weight_coated_coat_lobe(ls_area_c, ior, coat_alpha, normal, wo)
         if not w_area_c.is_black():
@@ -836,13 +815,10 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
             path_ptr[].albedo = _albedo_highlight_boost(path_ptr[].albedo, contrib_area_c)
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_area_c.wi, ls_area_c.dist * Float32(0.9999), contrib_area_c)
 
-        # distant/point/sphere via the shared sampler (_nee_sample_simple_light) --
-        # collapses what were 3 hand-copied loops into one. RNG-order note: of
-        # the 3, only sphere draws from `pcg`, and only distant+point (both
-        # 0-draw) change position relative to the ORIGINAL sphere/distant/point
-        # ordering here -- sphere's draw still happens exactly where it did
-        # (immediately after area, before infinite below), so the pcg sequence
-        # this function produces is unchanged.
+        # distant/point/sphere via the shared sampler. TRAP: sphere is the only
+        # pcg-consuming type of the 3 -- it must keep firing immediately after
+        # area/before infinite (below) if this loop's position ever changes,
+        # or the pcg sequence (and every render since) shifts.
         for li_coat in range(_nee_simple_light_count(ctx)):
             var res_coat = _nee_sample_simple_light(ctx, li_coat, hit_point, pcg)
             var ls_coat = res_coat[0].copy()
@@ -909,46 +885,22 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                     break
                 beta = beta * (Float32(1.0) / (Float32(1.0) - q_rr))
 
-        # ── Diffuse base: NEE at THIS bounce, weighted by the coat's
-        #    transmittance for the incoming light direction AND `beta` — the
-        #    accumulated base-albedo attenuation from any prior recycled
-        #    bounces at this same hit point (still 1.0 on the first pass, so
-        #    this exactly reproduces the old single-scatter formula there).
-        #    Firing every iteration instead of only the first is what turns
-        #    this into "full stochastic NEE": PBRT's LayeredBxDF::f() gets the
-        #    same TRT/TRTRT/... multi-scatter terms from ONE correlated random
-        #    walk reusing a single virtual-light sample; gonzales instead
-        #    draws an independent fresh light sample per bounce (decorrelated,
-        #    same expected energy, simpler to reason about). The RR gate above
-        #    keeps this from growing shadow-ray traffic unboundedly on
-        #    high-albedo/grazing-angle coats that recycle many times. ──
-        # Diffuse base against every light type via the shared Light
-        # interface + the coat-transmittance-aware BxDF weight
-        # (_nee_weight_coated_diffuse_base, bxdf.mojo) — `beta` (this
-        # bounce's accumulated recycled-albedo attenuation) is applied by
-        # the caller here, not inside the weight function, since it's walk
-        # state the interface's flat per-LightSample signature can't hold.
-        # Previously only area+distant were covered; sphere was entirely
-        # missing (see the pbrt-book bug this closed: a scene lit ONLY by
-        # sphere lights rendered this material almost completely black) and
-        # point was entirely missing too. Infinite lights (below, unchanged)
-        # deliberately keep their own textured-CDF/cosine-hemisphere-fallback
-        # sampling rather than routing through the generic uniform-sphere
-        # fallback sampler — same rationale as diffuse's own infinite-light
-        # NEE (see project_light_bxdf_interfaces memory).
+        # Diffuse base NEE, fired every recycle iteration -- see
+        # docs/05_reflection_models.md for why. `beta` (accumulated recycled-
+        # albedo attenuation) is applied by the CALLER here, not inside the
+        # weight function, since it's walk state the flat per-LightSample
+        # interface can't hold. Infinite lights (below) deliberately keep
+        # their own textured-CDF/cosine-hemisphere sampling rather than this
+        # generic path -- see project_light_bxdf_interfaces memory.
         var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
         var w_area = _nee_weight_coated_diffuse_base(ls_area, alb, ior, normal, wo)
         if not w_area.is_black():
             var contrib_area = path_ptr[].throughput * _to_spec_refl(ctx, beta, path_ptr[].wavelengths) * _to_spec_illum(ctx, w_area, path_ptr[].wavelengths)
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_area.wi, ls_area.dist * Float32(0.9999), contrib_area)
 
-        # distant/point/sphere via the shared sampler -- see this function's
-        # coat-lobe block above for the RNG-order argument; it applies
-        # identically here (sphere is the only pcg-consuming type of the 3,
-        # and it still fires immediately after area / before infinite). The
-        # standalone distant loop that used to sit after infinite is now
-        # folded in here instead -- distant draws no pcg, so its position
-        # relative to infinite's draws is irrelevant to the pcg sequence.
+        # distant/point/sphere via the shared sampler -- same TRAP as the
+        # coat-lobe block above (sphere must stay the last pcg-consuming
+        # type before infinite).
         for li in range(_nee_simple_light_count(ctx)):
             var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
             var ls = res[0].copy()
@@ -995,24 +947,10 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         var _w_up_sample = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), normal)
         var w_up = _w_up_sample[0]
         beta *= alb
-        # Chrominance floor: up to MAX_COAT_DEPTH iterations of `beta *= alb`
-        # against the SAME cached texture sample (one _tex_lookup per shading
-        # call, reused for the whole recycling walk -- see `alb` above) means
-        # beta = base_albedo^depth. That's the intended "saturation" effect
-        # (see this function's own docstring), but for a texture whose
-        # specific texel has even a modest per-channel imbalance (ordinary
-        # texture variation -- a wood-grain fleck, a tile-grout pixel),
-        # raising it to the 10th power drives the weakest channel toward
-        # zero while another stays large -- a real, visible magenta/green-
-        # starved artifact found by comparing against the scene's published
-        # reference image (a thin ceiling/glass-edge highlight was purple
-        # instead of the reference's green). Same class of bug as the
-        # RR-throughput and spectral-NEE fixes earlier this session:
-        # legitimate per-step math, unboundedly extreme after enough
-        # repetitions. Floor the weakest channel at a small fraction of the
-        # strongest each iteration to bound how extreme a single texel's
-        # saturation can compound to, while still letting real,
-        # order-of-magnitude color saturation through.
+        # Per-channel chrominance floor -- see "Numerical hygiene" in
+        # docs/05_reflection_models.md. Without it, up to MAX_COAT_DEPTH
+        # applications of `beta *= alb` against the same cached texel can
+        # drive one channel to zero while another stays large.
         var beta_max_c = max(beta.r, max(beta.g, beta.b))
         comptime BETA_CHROMA_FLOOR: Float32 = 0.1
         var beta_floor = beta_max_c * BETA_CHROMA_FLOOR
@@ -1063,13 +1001,9 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     # double-count between the multi-scatter exit and single-scatter NEE.
     path_ptr[].lastBsdfPdf = Float32(0.0)
     path_ptr[].specularBounce = Int8(0)
-    # 1/eta^2: the exit ray leaves the dense coat for air, so its radiance is
-    # compressed by the squared IOR ratio. Missing entirely before, on this
-    # ray AND on the base's NEE (which now carries its own copy inside
-    # _nee_weight_coated_diffuse_base) -- together worth eta^2, i.e. 2.3x too
-    # bright at the default 1.5, and enough to make a coated surface render
-    # BRIGHTER than the same albedo uncoated when a dielectric coat must make
-    # it darker.
+    # 1/eta^2 radiance compression leaving the coat for air -- see
+    # docs/05_reflection_models.md. Applied here on the exit ray AND inside
+    # _nee_weight_coated_diffuse_base on the NEE side; both are required.
     path_ptr[].throughput *= _to_spec_refl(ctx, beta * (Float32(1.0) / max(ior * ior, Float32(1e-6))), path_ptr[].wavelengths)
     path_ptr[].bounce += 1
 
@@ -1077,21 +1011,12 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     _apply_russian_roulette(path_ptr, pcg, u_rr)
 
 
-# Cap on throughput luminance immediately after an RR survival compensation
-# (see _apply_russian_roulette below). Each individual RR event is still the
-# standard unbiased estimator (throughput /= survival_probability) -- the
-# problem this guards against is a RARE STREAK of survivals compounding
-# across many bounces, seen concretely on a path trapped doing many
-# consecutive total-internal-reflection bounces inside glass (each
-# survival's ~2x compensation is unremarkable alone, but 2^30 is not).
-# Clamping the RESULT after each application trades a small, deliberate
-# bias for a large variance reduction -- the same trade-off the denoiser's
-# own firefly clamp already makes at the image level (project_denoiser_
-# firefly_clamp memory), just applied earlier, at the estimator level,
-# where it actually stops the compounding instead of painting over it
-# after the fact. 32x is generous relative to any well-behaved path's
-# throughput (which should hover near 1 after RR, by construction) while
-# still cutting off blowups many orders of magnitude larger.
+# Cap on throughput luminance after each RR survival compensation -- see
+# "Numerical hygiene" in docs/05_reflection_models.md for the general
+# technique (also used by coateddiffuse's chrominance floor above). 32x is
+# generous relative to a well-behaved path's throughput (~1 after RR) while
+# still cutting off blowups from a rare streak of TIR-bounce survivals many
+# orders of magnitude larger.
 comptime RR_THROUGHPUT_CLAMP: Float32 = 32.0
 
 # Russian roulette after the first bounce, then save PCG state -- the same
