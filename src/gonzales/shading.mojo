@@ -191,10 +191,23 @@ def _srgb_to_linear(c: Float32) -> Float32:
         return Float32(((c + Float32(0.055)) / Float32(1.055)) ** Float32(2.4))
 
 @always_inline
-# Bilinear sample of ONE mip level: `off` = float offset of the level in
+def _u8_to_linear_rgb(data: UnsafePointer[UInt8, MutExternalOrigin], idx: Int) -> RGB:
+    """One texel's raw, undecoded sRGB bytes -> linear RGB. Decode must
+    happen HERE, per tap, before bilinear blending -- blending raw sRGB
+    bytes then decoding is a different, wrong, nonlinear operation."""
+    return RGB(
+        _srgb_to_linear(Float32(data[idx])   * Float32(1.0 / 255.0)),
+        _srgb_to_linear(Float32(data[idx+1]) * Float32(1.0 / 255.0)),
+        _srgb_to_linear(Float32(data[idx+2]) * Float32(1.0 / 255.0)),
+    )
+
+# Bilinear sample of ONE mip level: `off` = texel offset of the level in
 # tex.data, (lw, lh) = that level's dimensions. Pixel centres at +0.5, wrap.
+# `is_u8`: data is raw undecoded sRGB UInt8 (decode-then-blend, see
+# _u8_to_linear_rgb) vs. pre-linearised Float32 (data.bitcast[Float32]()) --
+# see GpuTexture_C's docstring in geometry.mojo for why two formats exist.
 @always_inline
-def _sample_level(data: UnsafePointer[Float32, MutExternalOrigin], off: Int, lw: Int, lh: Int, u: Float32, v: Float32) -> RGB:
+def _sample_level(data: UnsafePointer[UInt8, MutExternalOrigin], off: Int, lw: Int, lh: Int, u: Float32, v: Float32, is_u8: Bool) -> RGB:
     var s = u - Float32(Int(u))
     if s < Float32(0.0): s += Float32(1.0)
     var t = v - Float32(Int(v))
@@ -215,10 +228,17 @@ def _sample_level(data: UnsafePointer[Float32, MutExternalOrigin], off: Int, lw:
     var w10 = wx * (Float32(1.0) - wy)
     var w01 = (Float32(1.0) - wx) * wy
     var w11 = wx * wy
+    if is_u8:
+        var c00 = _u8_to_linear_rgb(data, i00)
+        var c10 = _u8_to_linear_rgb(data, i10)
+        var c01 = _u8_to_linear_rgb(data, i01)
+        var c11 = _u8_to_linear_rgb(data, i11)
+        return c00 * w00 + c10 * w10 + c01 * w01 + c11 * w11
+    var fdata = data.bitcast[Float32]()
     return RGB(
-        data[i00]   * w00 + data[i10]   * w10 + data[i01]   * w01 + data[i11]   * w11,
-        data[i00+1] * w00 + data[i10+1] * w10 + data[i01+1] * w01 + data[i11+1] * w11,
-        data[i00+2] * w00 + data[i10+2] * w10 + data[i01+2] * w01 + data[i11+2] * w11,
+        fdata[i00]   * w00 + fdata[i10]   * w10 + fdata[i01]   * w01 + fdata[i11]   * w11,
+        fdata[i00+1] * w00 + fdata[i10+1] * w10 + fdata[i01+1] * w01 + fdata[i11+1] * w11,
+        fdata[i00+2] * w00 + fdata[i10+2] * w10 + fdata[i01+2] * w01 + fdata[i11+2] * w11,
     )
 
 # Trilinear mip sample. lod 0 = base level (full res); higher = coarser.
@@ -226,25 +246,26 @@ def _sample_level(data: UnsafePointer[Float32, MutExternalOrigin], off: Int, lw:
 @always_inline
 def _sample_tex(tex: GpuTexture_C, u: Float32, v: Float32, lod: Float32 = Float32(0.0)) -> RGB:
     var nl = Int(tex.n_levels)
+    var is_u8 = tex.is_u8 != Int32(0)
     if nl <= 1:
-        return _sample_level(tex.data, 0, Int(tex.width), Int(tex.height), u, v)
+        return _sample_level(tex.data, 0, Int(tex.width), Int(tex.height), u, v, is_u8)
     var clamped = lod
     if clamped < Float32(0.0): clamped = Float32(0.0)
     var maxl = Float32(nl - 1)
     if clamped > maxl: clamped = maxl
     var l0 = Int(floor(clamped))
     var f = clamped - Float32(l0)
-    # Walk to level l0, tracking its float offset and dims.
+    # Walk to level l0, tracking its texel offset and dims.
     var off = 0; var w = Int(tex.width); var h = Int(tex.height)
     for _k in range(l0):
         off += w * h * 3
         w = max(1, w // 2); h = max(1, h // 2)
-    var c0 = _sample_level(tex.data, off, w, h, u, v)
+    var c0 = _sample_level(tex.data, off, w, h, u, v, is_u8)
     if f <= Float32(0.0) or l0 >= nl - 1:
         return c0
     var off1 = off + w * h * 3
     var w1 = max(1, w // 2); var h1 = max(1, h // 2)
-    var c1 = _sample_level(tex.data, off1, w1, h1, u, v)
+    var c1 = _sample_level(tex.data, off1, w1, h1, u, v, is_u8)
     return c0 + (c1 - c0) * f
 
 # Unified 2D-texture fetch — the single use_gpu seam for texture sampling.

@@ -145,6 +145,78 @@ int load_texture_rgb(const char *filename, float **data, int *width, int *height
         return 1;
 }
 
+// GPU-upload-only variant: for a genuinely 8-bit-per-channel, non-HDR,
+// non-raw source (the common case -- most PNG/JPEG albedo/roughness
+// textures), returns the RAW UNDECODED sRGB bytes at 1 byte/channel instead
+// of pre-decoding to a 4-byte/channel float. sRGB->linear decode is deferred
+// to sample time (per bilinear tap, before blending) on the GPU -- see
+// docs/09... texture caching notes / project_gpu_texture_cache memory for
+// why (this is gonzales's biggest GPU VRAM cost: 4x per texture). Every
+// other caller of load_texture_rgb (CPU paths, normal-map loads) is
+// untouched -- this is a narrow, GPU-upload-specific addition.
+int load_texture_u8_or_float(const char *filename, uint8_t **data_u8, float **data_f32,
+                              int *width, int *height, int *is_u8, int raw) {
+        auto in = OIIO::ImageInput::open(filename);
+        if (!in) return 0;
+        const OIIO::ImageSpec &spec = in->spec();
+        *width  = spec.width;
+        *height = spec.height;
+        int n = spec.width * spec.height;
+        int nc = spec.nchannels;
+        bool hdr = strstr(filename, ".exr") != nullptr || strstr(filename, ".hdr") != nullptr || strstr(filename, ".pfm") != nullptr;
+        bool native_u8 = (spec.format == OIIO::TypeDesc::UINT8);
+
+        if (!hdr && !raw && native_u8) {
+                std::vector<uint8_t> buf(n * nc);
+                in->read_image(0, 0, 0, nc, OIIO::TypeDesc::UINT8, buf.data());
+                in->close();
+                *data_u8 = (uint8_t *)malloc(n * 3);
+                if (!*data_u8) return 0;
+                for (int i = 0; i < n; ++i) {
+                        uint8_t r = nc > 0 ? buf[i * nc + 0] : 0;
+                        uint8_t g = nc > 1 ? buf[i * nc + 1] : r;
+                        uint8_t b = nc > 2 ? buf[i * nc + 2] : r;
+                        (*data_u8)[i * 3 + 0] = r;
+                        (*data_u8)[i * 3 + 1] = g;
+                        (*data_u8)[i * 3 + 2] = b;
+                }
+                *data_f32 = nullptr;
+                *is_u8 = 1;
+                return 1;
+        }
+
+        // Fall back to the existing float path: raw (linear, e.g. normal
+        // maps), HDR sources, or a non-8-bit-native source (e.g. 16-bit PNG).
+        std::vector<float> buf(n * nc);
+        in->read_image(0, 0, 0, nc, OIIO::TypeDesc::FLOAT, buf.data());
+        in->close();
+        *data_f32 = (float *)malloc(n * 3 * sizeof(float));
+        if (!*data_f32) return 0;
+        for (int i = 0; i < n; ++i) {
+                float r = nc > 0 ? buf[i * nc + 0] : 0.0f;
+                float g = nc > 1 ? buf[i * nc + 1] : r;
+                float b = nc > 2 ? buf[i * nc + 2] : r;
+                if (!hdr && !raw) {
+                        auto cvt = [](float c) {
+                                return c <= 0.04045f ? c / 12.92f
+                                                     : std::pow((c + 0.055f) / 1.055f, 2.4f);
+                        };
+                        r = cvt(r); g = cvt(g); b = cvt(b);
+                }
+                (*data_f32)[i * 3 + 0] = r;
+                (*data_f32)[i * 3 + 1] = g;
+                (*data_f32)[i * 3 + 2] = b;
+        }
+        *data_u8 = nullptr;
+        *is_u8 = 0;
+        return 1;
+}
+
+int free_texture_u8(uint8_t *data) {
+        free(data);
+        return 0;
+}
+
 int free_texture_rgb(float *data) {
         free(data);
         return 0;
