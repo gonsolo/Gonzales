@@ -60,43 +60,29 @@ def sample_wavelengths_uniform(u: Float32) -> SampledWavelengths:
 
 @always_inline
 def pass_wavelengths(pass_idx: Int) -> SampledWavelengths:
-    """The hero wavelengths for one progressive pass (a VCM spp sample, an SPPM photon pass), shared by EVERY camera and
-    light subpath in it.
+    """The hero wavelengths for one progressive pass (a VCM spp sample, an
+    SPPM photon pass), shared by EVERY camera and light subpath in it -- see
+    docs/02_spectra_and_color.md ("Spectral Transport") for why a
+    connection/merge requires this and the measured numbers behind the two
+    traps below.
 
-    Spectral transport forces this: a connection multiplies a camera
-    vertex's beta by a light vertex's flux, and a merge does the same across
-    arbitrary light paths, so lane i of one only means the same thing as
-    lane i of the other when both were traced at identical wavelengths.
-    Per-subpath sampling (what this replaced) made that false for every
-    connection and every merge.
+    TRAP 1: must be a pure function of the PASS INDEX alone, not the RNG
+    seed -- light and camera kernels are launched with different seeds
+    (`pass_seed` vs `base_seed`), so deriving wavelengths from either one
+    gives the two subpaths of the SAME pass different wavelength sets.
+    Measured: 4% CPU/GPU chroma mismatch on cornell-box, collapsing to 0.3%
+    (ordinary atomics-ordering noise) once fixed.
 
-    A pure function of the PASS INDEX and nothing else, so every backend and
-    every kernel derives the identical value from an input they all agree on.
-    It deliberately does NOT take the rng seed: the seed is not one value
-    here. The light-path kernels are launched with `pass_seed`
-    (= base_seed ^ hash(si)) and the camera kernels with `base_seed`, so a
-    seed-dependent derivation handed the light and camera subpaths of the
-    SAME pass different wavelength sets -- precisely the inconsistency this
-    sharing exists to prevent. Measured, that made GPU VCM disagree with CPU
-    VCM by 4% on cornell-box, chromatically, and it did not shrink with more
-    samples; pinning one fixed wavelength set on both backends collapsed the
-    gap to 0.3% (atomics ordering), which is how the input, not the
-    arithmetic, was identified as the culprit.
+    TRAP 2: must be a HASH of the pass index, not a low-discrepancy
+    sequence over it -- sample_wavelengths_uniform is itself a lattice
+    (Wilkie et al. hero sampling at fixed span/4 strides), so a second
+    regular lattice on top of it aliases against the CIE curves instead of
+    covering them. Measured chroma error vs pbrt: 0.0135 (golden-ratio),
+    0.0120 (Halton-style), 0.0026 (this hash).
 
-    The schedule is a HASH of the pass index, not a low-discrepancy sequence
-    over it, and that is deliberate. sample_wavelengths_uniform is itself a
-    lattice -- Wilkie et al. hero sampling puts the other three wavelengths
-    at fixed strides of span/4 from the first -- so a stratified u lattice on
-    top of it produces a doubly-regular set that aliases against the CIE
-    curves instead of covering them. Measured on the saturated-box harness,
-    chroma error vs pbrt: 0.0135 for frac(i*phi), 0.0120 for frac(i*R1),
-    0.0026 for this hash. Randomising u is what breaks the alignment; the
-    stratification that matters is already inside the hero-wavelength stride.
-
-    A consequence is that the wavelength schedule is the same for every
-    --seed. That is fine: everything else in the render is still seeded, and
-    a deterministic schedule is one fewer thing that can differ between
-    backends."""
+    Consequence: the wavelength schedule is the same for every --seed,
+    which is fine -- everything else in the render is still seeded, and a
+    fixed schedule is one fewer thing that could differ between backends."""
     var h = mix_bits_u64(UInt64(pass_idx) + UInt64(0x9E3779B97F4A7C15))
     var u = Float32(h >> UInt32(8)) * Float32(1.0 / 16777216.0)
     return sample_wavelengths_uniform(u)
@@ -214,23 +200,19 @@ def rgb_bands_to_spectral_sample(
     r: Float32, g: Float32, b: Float32, wl: SampledWavelengths
 ) -> SpectralSample:
     """Evaluate a per-CHANNEL COEFFICIENT (not a colour) at the 4 hero
-    wavelengths, by picking whichever of r/g/b owns each wavelength's band.
-
-    This is deliberately NOT rgb_to_spectral_sample / _illuminant_: those
-    reconstruct a *reflectance* or an *emission spectrum*, normalised so the
-    reconstruction integrates back to the requested colour. Feeding them a
-    ratio is meaningless -- notably RGB(1,1,1) does not come back as 1 in
-    every lane, so a grey medium (every ratio exactly 1) picks up a spurious
-    D65-shaped tint that compounds once per scattering event. Measured on the
-    slab harness at tau=8: a grey homogeneous medium read 3.5x its analytic
-    answer and a NanoVDB one 10.7x. Band-picking degenerates to exactly 1 in
-    every lane for a grey coefficient, which is the invariant that matters.
-
-    The band split is the usual sRGB-primary crossover (blue below 490nm,
-    green to 580nm, red above). It carries exactly the information the RGB
-    coefficient had and no more; a real chromatic-extinction fit needs
-    hero-wavelength free-flight sampling with MIS across wavelengths, which
-    is separate work (see _sample_medium_core's own note)."""
+    wavelengths, by picking whichever of r/g/b owns each wavelength's band
+    (usual sRGB-primary crossover: blue below 490nm, green to 580nm, red
+    above) -- NOT rgb_to_spectral_sample / _illuminant_, which reconstruct a
+    reflectance/emission spectrum and are meaningless fed a ratio, since
+    RGB(1,1,1) doesn't come back as 1 in every lane (see
+    docs/02_spectra_and_color.md, "A coefficient is not a color"). A grey
+    ratio (every channel exactly 1) must come back as exactly 1 in every
+    lane; band-picking gives that, the reflectance/illuminant upsamplers
+    don't -- measured on the slab harness at tau=8, a grey medium read 3.5x
+    (homogeneous) / 10.7x (NanoVDB) its analytic answer before this fix. A
+    real chromatic-extinction fit needs hero-wavelength free-flight
+    sampling with MIS across wavelengths, which is separate work (see
+    _sample_medium_core's own note)."""
     return SpectralSample(
         _band_pick(r, g, b, wl.lambda0), _band_pick(r, g, b, wl.lambda1),
         _band_pick(r, g, b, wl.lambda2), _band_pick(r, g, b, wl.lambda3))
@@ -309,20 +291,16 @@ def spec_refl_unbounded(
     d65: UnsafePointer[Float32, MutExternalOrigin],
     r: Float32, g: Float32, b: Float32, wl: SampledWavelengths,
 ) -> SpectralSample:
-    """A reflectance-shaped WEIGHT that may exceed 1, upsampled without being
-    clipped.
-
-    spec_refl goes through rgb_to_spectral_sample, whose table domain is a
-    bounded reflectance and which therefore CLAMPS its input to [0,1]. That is
-    right for an albedo and silently wrong for a sampling weight: a
-    Russian-roulette-compensated throughput (albedo / rr_prob) or an f/pdf
-    ratio is legitimately greater than 1, and clamping it destroys energy
-    per channel -- so it also shifts colour, not just brightness.
-
-    Splitting off the largest component as a scalar and upsampling only the
-    normalised remainder keeps the chromaticity in the table's domain and the
-    magnitude exact. Using the ILLUMINANT curve instead would take unbounded
-    input but is the wrong spectral shape for a reflectance."""
+    """A reflectance-shaped WEIGHT that may exceed 1 (a Russian-roulette-
+    compensated throughput, an f/pdf ratio), upsampled without clamping --
+    spec_refl's plain path clamps to [0,1], which destroys energy per
+    channel (so it shifts colour, not just brightness) for a legitimately
+    >1 weight. Splits off the largest RGB component as a scalar and
+    upsamples only the normalised remainder, keeping chromaticity in the
+    table's domain while preserving the exact magnitude; the ILLUMINANT
+    curve isn't a substitute here since it's the wrong spectral shape for a
+    reflectance. See docs/02_spectra_and_color.md ("RGB <-> Spectrum
+    Conversion")."""
     var m = max(r, max(g, b))
     if m <= Float32(1.0):
         return rgb_to_spectral_sample(coeffs, res, cie_x, cie_y, cie_z, d65, r, g, b, wl)
