@@ -211,7 +211,7 @@ gives a kernel term proportional to `1/(π r²)`, scaled by how many photons
 
 This is a real, working example of the "common currency" derivation Phase
 9.2 needs for SMS — and it's not hypothetical, it's **implemented and
-verified in gonzales today**, at `bdpt.mojo:5352`
+verified in gonzales today**, at `bdpt.mojo:4185`
 (`eta_vcm = PI * merge_r2 * n_light_paths_merge`), feeding directly into
 the MIS weight-combination constants (`mis_vm_weight_factor`,
 `mis_vc_weight_factor`) used every sample. If you need a template for "how
@@ -301,3 +301,53 @@ problem, a decision-theoretic one (whether to *invoke* an expensive
 technique at all, independent of how its weight is computed once you have).
 It doesn't depend on Section 6 being solved; `A2` §10 records why, and that
 the mechanism (unlike Phase 9) has already been validated by simulation.
+
+---
+
+## 8. Gonzales's VCM implementation today (implementation notes, not theory)
+
+VCM (`--vcm`, formerly `--bdpt`) is production code in `bdpt.mojo`, not a
+research prototype — but it's also slated for eventual retirement once the
+ReSTIR migration above lands, so this section is deliberately short: just
+the gonzales-specific facts that aren't general theory, verified against
+current source.
+
+**Per-vertex MIS coverage.** Real per-vertex MIS weighting (dVCM/dVC/dVM,
+Section 5's `η_vcm` feeding `mis_vm_weight_factor`/`mis_vc_weight_factor`)
+applies wherever both connection endpoints have a genuine standalone pdf:
+diffuse, light-source (emission-profile) vertices, rough conductor/
+coated-conductor (GGX-VNDF pdf), hair (Marschner 3-lobe pdf), and measured
+(tabulated-BRDF pdf). Two deliberate, documented exclusions, not bugs:
+volume vertices (isotropic phase, no surface normal) fall through to
+unweighted `weight=1`; dielectric/thin_dielectric are delta/specular and
+never reach LVC storage at all. See `_bdpt_connect_pair`'s docstring in
+`bdpt.mojo` for the exact per-`mat_kind` breakdown. Volume-connect
+over-counting was a separate, now-fixed bug — see `docs/09_volumetric_media.md`,
+not repeated here.
+
+**The t=1 gap: fixed on CPU and GPU, still open on wavefront.** BDPT's t=1
+strategy — connecting a light-subpath vertex straight to the camera via a
+splat, no camera-subpath vertex needed — was unimplemented for a long time,
+even though `_connect`'s MIS weight already reserved its ~21% share of the
+estimate through the dVC/dVCM recursion. That made `--vcm` structurally
+dark (0.774 of gonzales's own path tracer on a cornell-box reference) since
+leaving the strategy out didn't just omit those paths, it under-weighted
+every other strategy by the share MIS had already reserved for it. Fixed
+for CPU and the non-wavefront GPU path, bringing VCM/PT to 0.98.
+`--vcm-wavefront` still lacks it: the wavefront driver and the inline
+CPU/GPU bounce loop used to be a byte-for-byte-duplicated body, and that's
+exactly the kind of drift that let a fix land in one copy and not the
+other (see the comment above `_bdpt_light_path_bounce` in `bdpt.mojo`).
+
+**Known non-reproducibility.** `--gpu --vcm` (the non-wavefront GPU path)
+isn't bitwise-reproducible run-to-run — the t=1 splat writes via atomic
+add, so accumulation order isn't fixed. That's ordinary floating-point
+non-associativity, not a correctness bug.
+
+**Sphere-light MIS, already fixed.** VCM once double-counted sphere-light
+contributions ~2x: the emitter-hit MIS guard (`sin2_max < 1`) could never
+pass because the pdf was measured from a point already on the sphere
+surface instead of the shading point it was hit from. Fixed.
+
+For the general theory these facts sit on top of, see Sections 1 and 5
+above.
