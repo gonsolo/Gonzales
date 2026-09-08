@@ -1832,8 +1832,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     if sin2_max_hit < Float32(1):
                         var cos_max_hit = sqrt(Float32(1) - sin2_max_hit)
                         var solid_angle_hit = Float32(2) * PI * (Float32(1) - cos_max_hit)
-                        var n_sph_hit = Float32(max(Int(sd.sphereCount), 1))
-                        var pdf_light_hit = Float32(1) / (solid_angle_hit * n_sph_hit)
+                        # No 1/count factor -- see _sample_sphere_light_nee,
+                        # whose pdf this must match exactly for MIS to be right.
+                        var pdf_light_hit = Float32(1) / solid_angle_hit
                         mis_w_sph_hit = power_heuristic(last_bsdf_pdf, pdf_light_hit)
                 total += beta * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (sph_hit.emission).r, (sph_hit.emission).g, (sph_hit.emission).b, wavelengths) * mis_w_sph_hit
                 return False   # direct hit on emissive analytic sphere -- terminates the path

@@ -512,8 +512,19 @@ def _sample_sphere_light_nee(
     if wlen > Float32(0.0):
         wi = wi * (Float32(1.0) / sqrt(wlen))
     var solid_angle = TWO_PI * (Float32(1.0) - cos_max)
-    var n_sph = Float32(max(n_sphere_lights, 1))
-    var pdf_light = Float32(1.0) / (solid_angle * n_sph)
+    # NO 1/n_sphere_lights selection factor. That factor belongs to a sampler
+    # that picks ONE light at random, and every caller here instead ENUMERATES
+    # every sphere and sums (`for sph_i in range(sphereCount)`, in shading.mojo,
+    # sppm.mojo and bdpt.mojo alike). Dividing each enumerated light's pdf by
+    # the count multiplies each contribution BY the count, so N sphere lights
+    # came out N times too bright -- veach-mis, which is built from exactly
+    # three sphere lights, rendered ~3x too bright over most of the frame. A
+    # scene with a single sphere light cannot show this (N=1), which is how it
+    # survived the sphere-light fix in bba82627.
+    # `n_sphere_lights` is deliberately left in the signature: it is what the
+    # emitter-hit MIS on the other side keys its own spelling off, and both
+    # halves must agree that the factor is absent.
+    var pdf_light = Float32(1.0) / solid_angle
     # `dist` must be the distance to the sphere's SURFACE along wi, not to its
     # CENTER. Every caller uses it as the shadow ray's tmax (dist*0.9999), so
     # returning the centre distance made the ray overshoot the near surface by

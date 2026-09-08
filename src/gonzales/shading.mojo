@@ -4357,7 +4357,9 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 if sin2_max < Float32(1.0) and pdf_bsdf > Float32(0.0):
                     var cos_max = sqrt(Float32(1.0) - sin2_max)
                     var solid_angle = TWO_PI * (Float32(1.0) - cos_max)
-                    var pdf_light = Float32(1.0) / (solid_angle * Float32(max(ctx.lights.sphere_count, 1)))
+                    # No 1/count factor -- see _sample_sphere_light_nee,
+                    # whose pdf this must match exactly for MIS to be right.
+                    var pdf_light = Float32(1.0) / solid_angle
                     var w = power_heuristic(pdf_bsdf, pdf_light)
                     path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, sph.emission, path_ptr[].wavelengths) * w
             path_ptr[].active = 0
