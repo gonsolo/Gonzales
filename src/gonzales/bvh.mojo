@@ -174,9 +174,11 @@ def _mk_sd_full(
     pointLightCount: Int64 = Int64(0),
     # Staged spectral rendering rollout, Stage 3 (BDPT). Decomposed into
     # individual pointer/int params -- NOT a single `spectral: SpectralHandle`
-    # by-value param -- because that shape is a confirmed, reproducible Mojo
-    # miscompilation (see spectrum.mojo's comment above rgb_to_spectral_sample
-    # / project_spectral_rendering memory). Defaults match null_spectral_handle()
+    # by-value param -- because that shape was suspected of a Mojo
+    # miscompilation (modular/modular#6759, later retracted by its own author
+    # as unreproducible; see spectrum.mojo's comment above
+    # rgb_to_spectral_sample / project_spectral_rendering memory), kept
+    # decomposed defensively regardless. Defaults match null_spectral_handle()
     # so existing (SPPM, Stage 4) callers that don't pass these are unaffected.
     spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     spectral_res: Int = 0,

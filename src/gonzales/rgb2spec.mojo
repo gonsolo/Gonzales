@@ -773,9 +773,10 @@ def cie_xyz_at_ptr(
     lambda_nm: Float32,
 ) -> Tuple[Float32, Float32, Float32]:
     # Named locals, not inline constructor-argument calls -- see
-    # rgb_to_spectral_sample's comment in spectrum.mojo for why (a real,
-    # reproducible Mojo miscompilation with multiple always_inline calls
-    # passed directly as constructor/tuple arguments).
+    # rgb_to_spectral_sample's comment in spectrum.mojo for why (a suspected
+    # Mojo miscompilation, modular/modular#6759, with multiple always_inline
+    # calls passed directly as constructor/tuple arguments; later retracted
+    # by its own author as unreproducible, but avoided defensively).
     var xv = _cie_interp_ptr_f32(x_tbl, lambda_nm)
     var yv = _cie_interp_ptr_f32(y_tbl, lambda_nm)
     var zv = _cie_interp_ptr_f32(z_tbl, lambda_nm)

@@ -846,9 +846,10 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     maxdepth: Int,
     # Decomposed spectral tables rather than reading sd.spectral. `sd` is a
     # SceneDescriptor2_C passed BY VALUE, and it contains a SpectralHandle --
-    # the 6-field TrivialRegisterPassable struct whose by-value passing across
-    # a real call boundary is a confirmed miscompilation
-    # (modular/modular#6759). It does not fail loudly: measured here, the GPU
+    # the 6-field TrivialRegisterPassable struct suspected (modular/modular#6759,
+    # later retracted by its own author as unreproducible) of corrupting
+    # under by-value passing across a real call boundary. Whatever the cause,
+    # decomposing fixed a real observed symptom here: measured here, the GPU
     # kernel held sd.spectral.res == 64 immediately before the call and this
     # function read 0 from the same field, silently taking every conversion's
     # table-less path while the photons it was tracing had been built WITH
@@ -1323,9 +1324,10 @@ def _sppm_gather_one(
     sd:       SceneDescriptor2_C,
     # Decomposed spectral tables rather than reading sd.spectral. `sd` is a
     # SceneDescriptor2_C passed BY VALUE, and it contains a SpectralHandle --
-    # the 6-field TrivialRegisterPassable struct whose by-value passing across
-    # a real call boundary is a confirmed miscompilation
-    # (modular/modular#6759). It does not fail loudly: measured here, the GPU
+    # the 6-field TrivialRegisterPassable struct suspected (modular/modular#6759,
+    # later retracted by its own author as unreproducible) of corrupting
+    # under by-value passing across a real call boundary. Whatever the cause,
+    # decomposing fixed a real observed symptom here: measured here, the GPU
     # kernel held sd.spectral.res == 64 immediately before the call and this
     # function read 0 from the same field, silently taking every conversion's
     # table-less path while the photons it was gathering had been built WITH

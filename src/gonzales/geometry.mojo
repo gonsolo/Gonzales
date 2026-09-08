@@ -396,9 +396,10 @@ struct Material_C(TrivialRegisterPassable):
 #
 # CAUTION: this struct has many pointer fields, so it must NEVER be passed BY
 # VALUE across a real (non-inlined) function-call boundary -- see
-# spectrum.mojo's long comment on the confirmed Mojo compiler miscompilation
-# class (modular/modular#6759). Always load a local `var mb = ...[idx]` and
-# only hand it to @always_inline helpers.
+# spectrum.mojo's long comment on the suspected Mojo miscompilation class
+# (modular/modular#6759, later retracted by its own author as
+# unreproducible; kept as a defensive workaround regardless). Always load a
+# local `var mb = ...[idx]` and only hand it to @always_inline helpers.
 @fieldwise_init
 struct MeasuredBRDF_C(TrivialRegisterPassable):
     var isotropic:     Int32  # 1 if n_phi_i <= 2 (only isotropic supported today)

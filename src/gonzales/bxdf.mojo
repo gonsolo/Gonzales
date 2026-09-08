@@ -595,9 +595,11 @@ def _nee_weight_coated_diffuse_base(
 # The `spectral_coeffs/_res/_cie_x/_cie_y/_cie_z/_d65` sextuple below replaces
 # a single `ctx: SpectralHandle` parameter -- see spectrum.mojo's long
 # comment above rgb_to_spectral_sample for why: passing that 6-field struct
-# BY VALUE across a real Mojo function-call boundary is a confirmed,
-# reproducible miscompilation (one field comes back corrupted on a random
-# subset of runs). Callers hold a SpectralHandle (e.g. shading.mojo's
+# BY VALUE across a real Mojo function-call boundary was suspected of a
+# miscompilation (modular/modular#6759, one field observed corrupted on a
+# random subset of runs; later retracted by its own author as
+# unreproducible -- kept decomposed defensively regardless). Callers hold a
+# SpectralHandle (e.g. shading.mojo's
 # ctx.spectral) and pass its fields individually: ctx.spectral.coeffs,
 # ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z,
 # ctx.spectral.d65.

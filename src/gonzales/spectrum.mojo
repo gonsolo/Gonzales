@@ -279,12 +279,14 @@ struct SpectralHandle(TrivialRegisterPassable):
 
 # ── Boundary conversions, in DECOMPOSED-pointer form ────────────────────────
 # These take SpectralHandle's fields as individual params rather than the
-# handle itself. Passing that 6-field TrivialRegisterPassable struct by value
-# across a real Mojo call boundary is a confirmed, reproducible
-# miscompilation (modular/modular#6759) -- and it does not fail loudly: the
-# first version of these helpers took `h: SpectralHandle` and produced a
-# BDPT/VCM CPU-vs-GPU mismatch of 4% on cornell-box that survived to 256 spp,
-# on code both backends share. Keep them decomposed.
+# handle itself. The first version of these helpers took `h: SpectralHandle`
+# by value across a real Mojo call boundary and produced a BDPT/VCM
+# CPU-vs-GPU mismatch of 4% on cornell-box that survived to 256 spp, on code
+# both backends share; decomposing the parameters made it go away. This was
+# suspected as a compiler miscompilation (modular/modular#6759), but the
+# report was later retracted by its own author as unreproducible -- treat it
+# as an unexplained anomaly with a working code-level fix, not a confirmed
+# bug. Keep them decomposed anyway, defensively.
 
 @always_inline
 def spec_refl(
@@ -372,37 +374,30 @@ def null_spectral_handle() -> SpectralHandle:
 # NOTE on the functions below: they take SpectralHandle's fields DECOMPOSED
 # into individual pointer/int parameters, NOT `handle: SpectralHandle` as a
 # single by-value struct argument. This mirrors gpu.mojo's GPU-kernel
-# parameter convention (forced there by DevicePassable), but here it's for a
-# different, CPU-only reason: passing the 6-field SpectralHandle struct BY
-# VALUE across a real (non-inlined) Mojo function-call boundary is a
-# confirmed, reproducible MISCOMPILATION -- one field (observed on the `d65`
-# pointer specifically, via cie_d65_runtime's result) comes back corrupted
-# (near-zero, sign-flipped, or NaN) on a random subset of otherwise-identical
-# process runs, in both `mojo run` and a `mojo build`-compiled binary. Fully
-# root-caused via scratch diagnostics: the table data, the CIE data, and
-# every leaf function are 100% deterministic in isolation; only wrapping the
-# same calls in a function that receives SpectralHandle BY VALUE reproduces
-# it. Passing the same 6 fields as separate scalar arguments (or a pointer
-# TO a SpectralHandle) is 100% stable across 20+ repeated runs each. Given
-# SpectralHandle is threaded through several nested calls here
-# (bxdf_eval_any_spectral -> rgb_to_spectral_sample, etc.), every function on
-# the path needed the same treatment -- see bxdf.mojo's spectral siblings and
-# shading.mojo's call sites, which pass ctx.spectral.coeffs/.res/.cie_x/etc.
-# instead of ctx.spectral.
+# parameter convention (forced there by DevicePassable), but here it's a
+# separate, CPU-only precaution: passing the 6-field SpectralHandle struct BY
+# VALUE across a real (non-inlined) Mojo function-call boundary appeared to
+# corrupt one field (observed on the `d65` pointer specifically, via
+# cie_d65_runtime's result -- near-zero, sign-flipped, or NaN) on a random
+# subset of otherwise-identical process runs, in both `mojo run` and a
+# `mojo build`-compiled binary, while every leaf function was 100%
+# deterministic in isolation and passing the same 6 fields as separate
+# scalar arguments was 100% stable across 20+ repeated runs each. A second,
+# similar-looking case turned up in gpu.mojo's gpu_upload_scene /
+# pipeline.mojo's _gpu_upload_scene (2026-07-09, task #130), which took
+# `spectral: SpectralHandle` by value in the GPU-enabled compilation unit and
+# made every --gpu render using it come back black; fixed the same way.
 #
-# SECOND CONFIRMED INSTANCE (2026-07-09, task #130): gpu.mojo's
-# gpu_upload_scene/pipeline.mojo's _gpu_upload_scene took `spectral:
-# SpectralHandle` by value too -- in the GPU-enabled (--target-accelerator)
-# compilation unit this reproduced the exact same corruption class
-# (spectral_res read back as 0, coeffs pointer read back as a tiny garbage
-# address), making the whole spectral NEE pipeline evaluate against a
-# 1-element dummy table and every --gpu render using it come back black.
-# Same fix applied there. Two independent reproductions of the same failure
-# mode across different call chains and compilation targets -- worth filing
-# as a Mojo compiler bug upstream rather than assuming more instances won't
-# turn up; any NEW function that takes a TrivialRegisterPassable struct
-# containing pointer fields by value should be treated as suspect until
-# proven otherwise.
+# This was filed upstream as modular/modular#6759; the reporter later
+# retracted it themselves as unreproducible, after 250+ further trials at
+# the exact historical commit/toolchain came back clean. So this is NOT a
+# confirmed compiler bug -- treat both instances as unexplained anomalies
+# with a working code-level fix. SpectralHandle is threaded through several
+# nested calls here (bxdf_eval_any_spectral -> rgb_to_spectral_sample, etc.),
+# so every function on the path got the same decomposed-parameter treatment
+# defensively -- see bxdf.mojo's spectral siblings and shading.mojo's call
+# sites, which pass ctx.spectral.coeffs/.res/.cie_x/etc. instead of
+# ctx.spectral.
 @always_inline
 def rgb_to_spectral_sample(
     spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,

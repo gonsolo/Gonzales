@@ -733,13 +733,14 @@ def _bdpt_mnee_sphere_light(
     statements (`var contrib = ...; return contrib * coat_t`) did NOT
     help -- still crashed identically, ruling out "too many chained
     multiplies in one expression" as the mechanism. This is consistent
-    with (though not confirmed identical to) the compiler bug already
-    flagged in `reference_mojo_compiler_bug_6759.md` -- a real, filed-
-    worthy Mojo/GPU-codegen issue tied to register allocation/scheduling
-    for this class of function (heavy, `InlineArray`-using, multiple
-    early returns, BVH traversal) under this scene's specific complexity,
-    not a NaN/degenerate-value bug in this code (cos_s_x0/ior were always
-    finite, well-conditioned values at the crash site).
+    with the general shape of the anomaly logged in
+    `reference_mojo_compiler_bug_6759.md` (heavy, `InlineArray`-using,
+    multiple early returns, BVH traversal, under this scene's specific
+    complexity) -- though that report was later retracted by its own
+    author as unreproducible, so this crash stands on its own bisection
+    below, not on 6759 as corroboration. Not a NaN/degenerate-value bug
+    in this code (cos_s_x0/ior were always finite, well-conditioned
+    values at the crash site).
     WORKAROUND (applied here): don't compute/apply `coat_t` at all. Every
     CURRENT call site passes the default `ior=1.0`, for which
     `fr_dielectric(_, 1.0) == 0` exactly (an identity already relied on
@@ -3516,9 +3517,10 @@ def _bdpt_trace_light_path[use_gpu: Bool](
 #
 # These take SpectralHandle's fields DECOMPOSED into individual pointer/int
 # params, NOT a single by-value SpectralHandle param -- passing that 6-field
-# struct by value across a real Mojo function-call boundary is a confirmed,
-# reproducible miscompilation (modular/modular#6759; see spectrum.mojo's
-# comment above rgb_to_spectral_sample). Hair (mat_kind=2) is NOT covered here (same
+# struct by value across a real Mojo function-call boundary was suspected of
+# a miscompilation (modular/modular#6759, later retracted as unreproducible;
+# see spectrum.mojo's comment above rgb_to_spectral_sample), kept decomposed
+# defensively. Hair (mat_kind=2) is NOT covered here (same
 # deliberate exclusion as bxdf.mojo's spectral siblings) -- callers must
 # check v.mat_kind != 2 before using these; _connect below does exactly
 # that by falling back to the plain RGB _eval_vertex/_eval_conductor_ggx for

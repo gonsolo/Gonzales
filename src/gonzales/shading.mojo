@@ -1434,9 +1434,10 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
 # Takes `measured_brdfs` + an index rather than `mb: MeasuredBRDF_C` (loading
 # mb LOCALLY below instead) to avoid MeasuredBRDF_C -- a TrivialRegisterPassable
 # struct with 12 pointer fields -- crossing this now-real call boundary by
-# value, the modular/modular#6759 hazard already documented on SpectralHandle
-# (see spectrum.mojo). This was tried as a fix candidate before the real bug
-# (below) was found and did NOT resolve it on its own -- but it's a
+# value, the same by-value hazard already documented on SpectralHandle (see
+# spectrum.mojo; filed as modular/modular#6759, later retracted by its own
+# author as unreproducible). This was tried as a fix candidate before the
+# real bug (below) was found and did NOT resolve it on its own -- but it's a
 # reasonable precaution independent of that, so it's kept.
 #
 # The ACTUAL root cause (root-caused 2026-07-10 via progressive stubbing of

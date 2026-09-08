@@ -31,7 +31,8 @@
 # These functions take only plain UnsafePointer[Float32]/Int/Float32
 # arguments -- never MeasuredBRDF_C itself -- so making them real (non-
 # inlined) calls carries none of the by-value TrivialRegisterPassable-struct
-# corruption risk documented elsewhere (modular/modular#6759).
+# corruption risk documented elsewhere (modular/modular#6759, later
+# retracted by its own author as unreproducible, but avoided defensively).
 from std.math import sqrt, sin, cos, acos, abs, min, max, floor
 from .geometry import RGB, MeasuredBRDF_C, safe_sqrt, PI, dot, Vec3f
 from .spectrum import SampledWavelengths, SpectralSample, spectral_sample_to_rgb, rgb_illuminant_to_spectral_sample
@@ -547,7 +548,8 @@ def bxdf_eval_measured(
     """Thin @always_inline wrapper: unpacks `mb`'s fields (a plain local
     read, never a by-value cross-call pass -- safe under inlining, per the
     by-value TrivialRegisterPassable-struct hazard documented on
-    MeasuredBRDF_C / modular/modular#6759) and forwards to
+    MeasuredBRDF_C / modular/modular#6759, later retracted by its own author
+    as unreproducible but avoided defensively) and forwards to
     _bxdf_eval_measured_core, the real (non-inlined) implementation. Exists
     so every call site keeps the ergonomic `mb: MeasuredBRDF_C` signature
     while the actual ~90-line body compiles once instead of once per call
