@@ -1808,6 +1808,42 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     if _bdpt_vertex_mis_scoped(v):
                         total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
                     total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
+                # Volume-scatter NEE: distant/point/sphere/infinite lights.
+                # _bdpt_connect_to_cache above only reaches AREA lights -- the
+                # only kind _bdpt_light_path_init seeds the light-vertex cache
+                # from (its own `n_lights` count is area+distant+infinite+point,
+                # but only area lights get a real lv0 origin vertex placed in
+                # the cache; see its docstring). Every other light type
+                # therefore illuminated a scatter vertex only through the
+                # tiny-probability event of an isotropic-scattered ray
+                # randomly re-hitting it (the sphere case of which was ALSO
+                # unweighted until the fix just above this block) -- both far
+                # too dark and far too noisy, the same failure this file's own
+                # docs/09_volumetric_media.md chapter describes for the
+                # wavefront integrator's pre-fix state. Mirrors gpu.mojo's
+                # _volume_nee_light (that integrator's equivalent): phase
+                # (isotropic, INV_FOUR_PI -- this file's volume scatter is
+                # hardcoded isotropic, see the uniform-sphere sample just
+                # below, so g plays no role here yet, a separate pre-existing
+                # gap) x albedo x Li x reciprocal power-heuristic MIS / pdf.
+                # See project_sphere_light_nee_bug memory, "STILL OPEN: sphere
+                # lights + media under --vcm read 0.66x".
+                var alb_spec_v = spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, wavelengths)
+                var phase_alb_v = alb_spec_v * INV_FOUR_PI
+                for li_v in range(_bdpt_simple_light_count(sd)):
+                    var ls_v = _bdpt_sample_simple_light(sd, li_v, sp.to_simd(), pcg)
+                    if ls_v.valid and ls_v.pdf > Float32(0):
+                        var li_spec_v = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ls_v.Li).r, (ls_v.Li).g, (ls_v.Li).b, wavelengths)
+                        var mis_v = Float32(1) if ls_v.is_delta else power_heuristic(ls_v.pdf, INV_FOUR_PI)
+                        var w_v = phase_alb_v * li_spec_v * (mis_v / ls_v.pdf)
+                        total += _bdpt_nee_contribute(beta, w_v, ls_v, sp, Vec3f(Float32(0)), cur_med_idx, sd, scratch, wavelengths, Float32(0))
+                for inf_v in range(Int(sd.infiniteLightCount)):
+                    var ls_infv = _sample_infinite_light_nee(sd.infiniteLights[inf_v], Point2f(pcg.next_float(), pcg.next_float()))
+                    if ls_infv.valid and ls_infv.pdf > Float32(0):
+                        var li_spec_infv = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ls_infv.Li).r, (ls_infv.Li).g, (ls_infv.Li).b, wavelengths)
+                        var mis_infv = Float32(1) if ls_infv.is_delta else power_heuristic(ls_infv.pdf, INV_FOUR_PI)
+                        var w_infv = phase_alb_v * li_spec_infv * (mis_infv / ls_infv.pdf)
+                        total += _bdpt_nee_contribute(beta, w_infv, ls_infv, sp, Vec3f(Float32(0)), cur_med_idx, sd, scratch, wavelengths, Float32(0))
                 # Continuation beta = prev × alb_s (same as stored vertex beta)
                 beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, wavelengths)
                 var u1 = pcg.next_float(); var u2 = pcg.next_float()
@@ -1866,6 +1902,22 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                         # whose pdf this must match exactly for MIS to be right.
                         var pdf_light_hit = Float32(1) / solid_angle_hit
                         mis_w_sph_hit = power_heuristic(last_bsdf_pdf, pdf_light_hit)
+                elif last_bsdf_pdf == _VOL_PHASE_HIT:
+                    # Same missing-case bug as the area-light branch above
+                    # used to have: an isotropic-phase-sampled ray landing
+                    # directly on a sphere light took FULL weight here with
+                    # no competing-strategy reduction at all (this elif
+                    # simply didn't exist). Same pdf convention as the
+                    # `>= 0` branch, just weighed against the phase pdf
+                    # (INV_FOUR_PI) instead of a surface BSDF's.
+                    var to_c_vhit = sph_hit.center - ro
+                    var dc_sq_vhit = to_c_vhit.length_sq()
+                    var sin2_max_vhit = sph_hit.radius * sph_hit.radius / dc_sq_vhit
+                    if sin2_max_vhit < Float32(1):
+                        var cos_max_vhit = sqrt(Float32(1) - sin2_max_vhit)
+                        var solid_angle_vhit = Float32(2) * PI * (Float32(1) - cos_max_vhit)
+                        var pdf_light_vhit = Float32(1) / solid_angle_vhit
+                        mis_w_sph_hit = power_heuristic(INV_FOUR_PI, pdf_light_vhit)
                 total += beta * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (sph_hit.emission).r, (sph_hit.emission).g, (sph_hit.emission).b, wavelengths) * mis_w_sph_hit
                 return False   # direct hit on emissive analytic sphere -- terminates the path
 

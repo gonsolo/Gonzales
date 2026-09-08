@@ -1,0 +1,50 @@
+# Isolates VCM+media+sphere-light (project_sphere_light_nee_bug memory):
+# a homogeneous-fog sphere lit ONLY by a nearby sphere area light, no area/
+# distant/point/infinite lights at all, so every photon of illumination in
+# this scene has to travel through the direct-NEE-from-a-volume-vertex path
+# this bug is about. Compare `./build/gonzales` (plain PT, ground truth) vs
+# `./build/gonzales --vcm` (and `--gpu --vcm`) mean pixel values.
+Integrator "volpath" "integer maxdepth" [ 16 ]
+Sampler "sobol" "integer pixelsamples" [ 256 ]
+Film "rgb"
+    "string filename" [ "vcm-media-sphere-light.exr" ]
+    "integer xresolution" [ 64 ] "integer yresolution" [ 64 ]
+LookAt 0 0 6  0 0 0  0 1 0
+Camera "perspective" "float fov" [ 40 ]
+
+WorldBegin
+
+MakeNamedMedium "fog" "string type" [ "homogeneous" ]
+    "rgb sigma_a" [ 0.02 0.02 0.02 ]
+    "rgb sigma_s" [ 2.0 2.0 2.0 ]
+    "float g" [ 0.0 ]
+
+MakeNamedMaterial "Interface"
+    "string type" [ "interface" ]
+
+MakeNamedMaterial "LightMat"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0 0 0 ]
+
+MakeNamedMaterial "Floor"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0.02 0.02 0.02 ]
+
+NamedMaterial "Floor"
+Shape "trianglemesh"
+    "point3 P" [ -20 -8 -20  20 -8 -20  20 -8 20  -20 -8 20 ]
+    "integer indices" [ 0 1 2 0 2 3 ]
+
+AttributeBegin
+    NamedMaterial "Interface"
+    MediumInterface "fog" ""
+    Shape "sphere" "float radius" [ 2.0 ]
+AttributeEnd
+
+AttributeBegin
+    Translate 6 0 0
+    AreaLightSource "diffuse"
+        "rgb L" [ 40 40 40 ]
+    NamedMaterial "LightMat"
+    Shape "sphere" "float radius" [ 0.4 ]
+AttributeEnd
