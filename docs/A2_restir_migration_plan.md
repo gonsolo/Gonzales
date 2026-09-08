@@ -368,12 +368,25 @@ own reservoir-pair pattern exactly. Batch `--gpu` joins `--restir`'s
 existing dispatch-mode switch (1 sample/pixel/dispatch) to get real
 cross-sample persistence; CPU persistence only exists in
 `render_interactive` (`--interactive-frames`), matching `--restir`'s own
-CPU scope — plain CPU batch rendering has no reuse either. Spatial reuse
-remains OFF (the G-buffer pointers are never wired, so
-`vol_temporal_spatial_combine`'s spatial pass self-disables),
-deliberately: DI's own matched-cap verdict was "correct but genuinely not
-worth enabling," and volumetric spatial reuse hasn't earned its own
-verification pass yet.
+CPU scope — plain CPU batch rendering has no reuse either.
+
+**2026-09-08: spatial reuse wired and ACTUALLY MEASURED (commit
+ee9e4370), not just deferred by DI analogy.** G-buffer pointers
+(CPU: `depth_int`/`world_pos_int`; GPU: the same `atrous_depth_buf`/
+`gbuf_worldpos_buf` DI's own spatial reuse already uses) are now wired
+through, so `vol_temporal_spatial_combine`'s spatial pass is live
+whenever `VOL_SPATIAL_NEIGHBORS > 0`. Matched-cap measurement (5 seeds,
+`Scenes/vol-restir-mesh-light.pbrt`, same methodology as DI's own
+verdict): both temporal-only and temporal+spatial are unbiased (mean
+within ~0.15% of a 16384spp reference either way), but spatial shows no
+consistent variance win — average MSE across seeds is a near-wash
+(slightly worse on average, highly variable per seed: 76% worse to 54%
+better depending on seed). Shipped `VOL_SPATIAL_NEIGHBORS=0` (disabled)
+— DI's exact verdict, now independently confirmed for the volumetric
+case rather than assumed. See the `project_restir_migration` memory's
+"Spatial reuse for volumes" section for the full numbers and a real
+git-workflow lesson from verifying this on a working directory another
+concurrent session was also committing to.
 
 Verified on a new test scene, `Scenes/vol-restir-mesh-light.pbrt`: GPU's
 flag-on MSE is 3–10x lower than flag-off's against a 16384spp reference,
