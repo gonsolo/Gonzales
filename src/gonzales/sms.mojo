@@ -88,18 +88,12 @@ def mnee_orthonormal_basis(du: Vec3f, dv: Vec3f) -> Tuple[Vec3f, Vec3f]:
     A manifold walk's |dx1/dxL| is only an AREA-to-area Jacobian when both
     the specular vertex's basis and the light's are orthonormal -- otherwise
     it comes out per-parametric-unit and no longer pairs with the
-    area-measure light density the estimator divides by. The reference
-    renderer makes the same call (ManifoldVertex::make_orthonormal, applied
-    to its specular AND emitter vertices before building the geometric
-    term).
-
-    The bases actually handed in are neither unit nor perpendicular -- a
-    triangle's raw edges (lp1-lp0, lp2-lp0) or a sphere's radius-scaled
-    dp/dphi, dp/dtheta -- so this is not optional bookkeeping: getting it
-    wrong scaled gonzales's sphere caustic by 0.61x until it was fixed.
-    It lives here, rather than in each caller, precisely because it is an
-    invariant of the walk and every caller was getting it wrong the same
-    way.
+    area-measure light density the estimator divides by. The bases actually
+    handed in are neither unit nor perpendicular (a triangle's raw edges, a
+    sphere's radius-scaled dp/dphi, dp/dtheta), so this is not optional
+    bookkeeping -- see docs/05b_manifold_caustics.md ("Six real bugs") for
+    the measured cost of skipping it. Lives here, not in each caller,
+    because every caller was getting it wrong the same way.
 
     Degenerate input (zero-length or parallel) is returned unchanged, which
     leaves the caller in exactly the state it was in before -- the walk's
@@ -517,57 +511,34 @@ def _sms_reproject_onto_sphere_anchored(
     spheres: UnsafePointer[Sphere_C, MutExternalOrigin] = UnsafePointer[Sphere_C, MutExternalOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
 ) -> Tuple[Vec3f, Vec3f, Vec3f, Vec3f, Bool]:
-    """Reprojects a raw Newton-step proposal onto the sphere by actually
-    RAY-CASTING from a fixed anchor through the proposal, instead of
+    """Reprojects a raw Newton-step proposal onto the sphere by RAY-CASTING
+    from a fixed anchor through the proposal, instead of
     `_sms_reproject_onto_sphere`'s closed-form `normalize(x_raw-center)*
     radius` snap -- ports the real SMS reference renderer's own reprojection
-    strategy (`SpecularManifoldSingleScatter::newton_solver`,
-    manifold_ss.cpp: re-intersects a ray from the ORIGINAL shading point
-    through the proposed point with the actual scene every iteration,
-    rejecting/shrinking the step if it misses or lands on a different
-    shape).
-
-    This matters because the closed-form snap has no notion of WHICH side
-    of the sphere is reachable from the rest of the chain: it accepts
-    whatever point is nearest to `x_raw` in ANY direction from the sphere's
-    center, including the far/hidden hemisphere. Root-caused via a
-    real-scene diagnostic on `sphere_sms.xml`: the coupled 2-vertex
-    (entry+exit) Newton solve was converging "successfully" (small
-    residual, plausible-looking BSDF/Jacobian) to entry points on the
-    UNDERSIDE of the sphere -- physically unreachable, embedded below the
-    scene's own floor -- 100% of the time, silently discarded by the
-    caller's downstream visibility check. A ray cast from the anchor can
-    only ever hit the surface actually visible/reachable from that anchor,
-    which structurally forecloses that failure mode.
+    strategy. The closed-form snap has no notion of which side of the
+    sphere is reachable from the rest of the chain and can converge to
+    physically unreachable points on the far/hidden hemisphere; a ray from
+    a real anchor structurally cannot land anywhere but the visible
+    surface. See docs/05b_manifold_caustics.md ("Curved casters") for the
+    measured effect of this fix.
 
     `anchor` is the fixed reference point to cast from: `x0` (the shading
     point) for the first vertex in a chain, or the PREVIOUS vertex's
-    (already reprojected) position for any later vertex -- mirroring how
-    `_sms_probe_and_solve`'s own initial straight-line probe sequentially
-    marches from one hit to the next. `anchor_on_surface` distinguishes the
-    two cases: False (anchor is off-sphere, e.g. x0) takes the ray's FIRST
-    crossing (t_min close to 0) -- the near/visible hemisphere from that
-    anchor; True (anchor is itself already ON this same sphere, e.g. the
-    previous vertex) skips a small epsilon past the anchor's own surface so
-    the ray finds the FAR crossing -- the point reached by continuing
-    through the sphere's interior, exactly the entry-to-exit relationship a
-    solid glass sphere needs.
+    (already reprojected) position for any later vertex. `anchor_on_surface`
+    distinguishes the two cases: False (anchor off-sphere, e.g. x0) takes
+    the ray's FIRST crossing (near/visible hemisphere); True (anchor
+    already on this sphere, e.g. the previous vertex) skips a small
+    epsilon past the anchor's own surface and takes the FAR crossing --
+    the entry-to-exit relationship a solid glass sphere needs.
 
     Returns (pos, normal, dp_du, dp_dv, ok) -- `ok=False` when the proposal
-    direction is degenerate, the ray misses the sphere entirely (should
-    only happen for a wildly oversized step), or (when `n_spheres > 0`
-    opts into it) the anchor-to-sphere ray is blocked by OTHER scene
-    geometry first. That last check matters just as much as the ray-cast
-    itself: `ray_sphere_hit` alone only knows about this one analytic
-    sphere, so on its own it can still "successfully" reproject onto a
-    sphere point that a real ray from the anchor could never actually
-    reach because something else (a floor, in the scene that exposed this)
-    sits in the way first -- exactly mirroring the reference
-    implementation's own `vtx.shape != si_current.shape` rejection
-    (manifold_ss.cpp), which re-intersects the FULL scene each iteration,
-    not just the specular shape in isolation. The caller falls back to the
-    closed-form snap when `ok=False`, matching the reference's own
-    "missed/blocked, shrink the step" recovery."""
+    direction is degenerate, the ray misses the sphere (an oversized step),
+    or (when `n_spheres > 0` opts in) the anchor-to-sphere ray is blocked
+    by OTHER scene geometry first -- `ray_sphere_hit` alone only knows
+    about this one analytic sphere, so without this check it can still
+    reproject onto a point a real ray from the anchor could never reach
+    because something else (a floor) sits in the way first. The caller
+    falls back to the closed-form snap when `ok=False`."""
     var dir_raw = x_raw - anchor
     var dir_len = sqrt(dot(dir_raw, dir_raw))
     if dir_len <= Float32(1e-9):

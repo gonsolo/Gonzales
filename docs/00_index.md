@@ -8,6 +8,7 @@
 3. [Shapes and Acceleration](03_shapes_and_acceleration.md) — BVH construction and traversal
 4. [Sampling](04_sampling.md) — Piecewise distributions and Z-Sobol sequences
 5. [Reflection Models](05_reflection_models.md) — BSDFs from diffuse to layered coatings
+5b. [Manifold Caustics](05b_manifold_caustics.md) — Specular Manifold Sampling, the N-vertex manifold walk
 6. [Lights and Materials](06_lights_and_materials.md) — Light sources, textures, and materials
 7. [Path Tracing](07_path_tracing.md) — The rendering equation in practice
 8. [The Rendering Pipeline](08_rendering_pipeline.md) — GPU wavefront, CPU tile rendering, and image output
