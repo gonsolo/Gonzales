@@ -2638,7 +2638,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var cos_wi_m = dot(wi_m, gn_m)
             if cos_wi_m <= Float32(0):
                 return False   # measured: sampled direction below the surface
-            beta *= spec_refl_unbounded(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (f_m * (cos_wi_m / pdf_m)).r, (f_m * (cos_wi_m / pdf_m)).g, (f_m * (cos_wi_m / pdf_m)).b, wavelengths)
+            # f_m is already spectral -- no RGB round trip (see
+            # bxdf_sample_measured's docstring).
+            beta *= f_m * (cos_wi_m / pdf_m)
             rd = vec3f(wi_m)
             ro = hit + rd*Float32(0.0002)
             last_bsdf_pdf = pdf_m
@@ -3428,7 +3430,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             var cos_wi_m = dot(wi_m, gn_m)
             if cos_wi_m <= Float32(0):
                 return False   # measured: sampled direction below the surface
-            flux *= spec_refl_unbounded(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (f_m * (cos_wi_m / pdf_m)).r, (f_m * (cos_wi_m / pdf_m)).g, (f_m * (cos_wi_m / pdf_m)).b, wavelengths)
+            # f_m is already spectral -- no RGB round trip.
+            flux *= f_m * (cos_wi_m / pdf_m)
             rd = vec3f(wi_m)
             ro = hit + rd*Float32(0.0002)
             # VCM Stage 2b: recursive continuation, real forward/reverse pdf

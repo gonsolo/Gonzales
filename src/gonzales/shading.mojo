@@ -1679,13 +1679,24 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
 
     path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(wi[0], wi[1], wi[2]))
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
-        path_ptr[].albedo = f
+        # Denoiser AOV only -- albedo is a colour-space quantity, so the RGB
+        # conversion is legitimate here (and only here). Transport stays
+        # spectral below.
+        var (ar, ag, ab) = spectral_sample_to_rgb(
+            ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x,
+            ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65,
+            f, path_ptr[].wavelengths)
+        path_ptr[].albedo = RGB(max(ar, Float32(0.0)), max(ag, Float32(0.0)), max(ab, Float32(0.0)))
     # General non-delta BxDFSample convention (f already includes the
     # measured BRDF's own 1/AbsCosTheta(wi) term, matching pbrt's own fr —
     # this cos_wi is the separate Monte-Carlo importance-sampling weight,
     # not a duplicate of that internal term; no analytic cancellation exists
     # for a tabulated BxDF the way there is for VNDF-sampled GGX conductor).
-    path_ptr[].throughput *= _to_spec_refl(ctx, f, path_ptr[].wavelengths) * (cos_wi / pdf)
+    #
+    # `f` is already spectral; it used to arrive as RGB and be re-upsampled
+    # via _to_spec_refl, which clamped to [0,1] and re-smoothed the spectrum,
+    # destroying saturation and iridescence. See bxdf_sample_measured.
+    path_ptr[].throughput *= f * (cos_wi / pdf)
     path_ptr[].specularBounce = Int8(0)
     path_ptr[].lastBsdfPdf = bxdf_pdf_measured(mb, wo_l, wi_l)
     path_ptr[].bounce += 1
