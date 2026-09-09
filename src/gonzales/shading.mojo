@@ -706,6 +706,13 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     if not ok:
         path_ptr[].active = 0
         return
+    if not is_sphere:
+        # 146 corpus diffusetransmission materials carry "texture displacement"
+        # (foliage cards in sanmiguel, etc). NOTE this path never interpolates a
+        # vertex shading normal either -- it perturbs the face-forwarded
+        # geometric normal directly, which is a separate pre-existing gap.
+        normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, normal, ray_dir,
+            ctx.px_scale, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
     # "texture reflectance"/"texture transmittance" (e.g. a leaf.tga imagemap)
     # both resolve to the same mat.tex_idx (Material_C has one texture slot,
@@ -829,6 +836,8 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures)
         # Use interpolated shading normal (geometric normal still drives hit-point offset)
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances)
+        normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_normal, ray_dir,
+            ctx.px_scale, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
     var hit_point = ray_org + ray_dir * inter.tHit + geo_normal * Float32(0.0001)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
@@ -1158,6 +1167,7 @@ def shade_dielectric[use_gpu: Bool](
     tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin] = UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
     textures: UnsafePointer[GpuTexture_C, MutExternalOrigin] = UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(),
     n_textures: Int = 0,
+    px_scale: Float32 = Float32(0.0),
 ):
     var (ok, is_sphere, geom_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, meshes, spheres)
     if not ok:
@@ -1197,6 +1207,16 @@ def shade_dielectric[use_gpu: Bool](
         else:
             raw_gn = geom_normal
         geom_normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, raw_gn)
+        # barcelona-pavilion's water is a `dielectric` carrying
+        # "texture displacement" -- before this, that map was silently ignored
+        # (measured: high-frequency structure in the water was identical with
+        # the displacement present and stripped, ratio 0.999). Orient to
+        # `raw_gn`, the WINDING normal, NOT to a ray-face-forwarded one: the
+        # entering/exiting test below is `dot(ray_dir, n) < 0`, so flipping the
+        # perturbed normal toward the ray would make it tautologically true and
+        # bring back the 1/eta^4 loss this branch exists to prevent.
+        geom_normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, geom_normal, raw_gn, ray_dir,
+            px_scale, tex_filenames, textures, n_textures)
     else:
         # `_hit_geom`/`_sphere_geom_normal_and_ray` returns a FACE-FORWARDED
         # normal (always flipped to oppose the incoming ray) -- correct for
@@ -1460,6 +1480,8 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
 
         # Use interpolated shading normal for smooth specular reflections
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
+        normal = _apply_surface_maps[use_gpu](mat_eff, v0, v1, v2, mesh, inter, normal, geo_normal, ray_dir,
+            ctx.px_scale, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
         # roughU/V already hold the resolved GGX alpha — no squaring here.
         alpha_x = max(mat_eff.roughU, Float32(0.0001))
@@ -1612,6 +1634,10 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
         normal = geo_normal
     else:
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
+        # Before the grazing fallback below, so a bump-perturbed normal that
+        # lands on the wrong side of wo is caught by it like any other.
+        normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_normal, ray_dir,
+            ctx.px_scale, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
         # Silhouette-grazing shading-normal fallback: geo_normal is guaranteed
         # face-forwarded toward wo (_geom_normal_and_ray), but the INTERPOLATED
@@ -2038,6 +2064,84 @@ def _apply_normal_map_sphere[use_gpu: Bool](
 # shade_conductor/shade_coated_conductor build their GeomContext inline instead of
 # sharing one minimal builder.
 
+# Ray-footprint estimate in UV units, for texture LOD and (critically) the bump
+# map's finite-difference step. Split out of _build_geom_context_full so the
+# shading paths that build their geometry inline can compute the same value --
+# _apply_bump_map's step MUST scale with this, never a fixed UV constant (see
+# its docstring for what a fixed epsilon did to barcelona's water).
+@always_inline
+def _pixel_uv_for_hit(
+    mesh: TriangleMesh_C, v0: Int, v1: Int, v2: Int,
+    p0: Vec3f, p1: Vec3f, p2: Vec3f,
+    ng: Vec3f, ray_dir: Vec3f, t_hit: Float32, px_scale: Float32,
+) -> Float32:
+    if px_scale <= Float32(0.0) or Int(mesh.uvs) <= 1:
+        return Float32(0.0)
+    var fu1 = mesh.uvs[v1*2] - mesh.uvs[v0*2]; var fv1 = mesh.uvs[v1*2+1] - mesh.uvs[v0*2+1]
+    var fu2 = mesh.uvs[v2*2] - mesh.uvs[v0*2]; var fv2 = mesh.uvs[v2*2+1] - mesh.uvs[v0*2+1]
+    var det = fu1*fv2 - fu2*fv1
+    if det == Float32(0.0):
+        return Float32(0.0)
+    var inv = Float32(1.0) / det
+    var dpdu = (p1 - p0) * (fv2 * inv) - (p2 - p0) * (fv1 * inv)
+    var dpdu_len = sqrt(dot(dpdu, dpdu))
+    if dpdu_len <= Float32(0.0):
+        return Float32(0.0)
+    var rc = dot(ng, ray_dir)
+    if rc < Float32(0.0): rc = -rc
+    if rc < Float32(0.05): rc = Float32(0.05)
+    return (t_hit * px_scale / rc) / dpdu_len
+
+# Apply normal + bump maps to an already-interpolated shading normal.
+#
+# WHY THIS EXISTS: _apply_normal_map/_apply_bump_map used to be called from
+# exactly one site, inside _build_geom_context_full -- which only
+# shade_diffuse calls. Every other material builds its geometry inline (see
+# the comment above), so coateddiffuse, diffusetransmission, conductor,
+# measured, coated_conductor and dielectric silently ignored their
+# "texture displacement"/"normalmap" parameters entirely. Across the pbrt-v4
+# corpus that is 284 coateddiffuse and 146 diffusetransmission materials
+# dropped against 73 diffuse ones honoured -- i.e. ~86% of them. Confirmed on
+# barcelona-pavilion's water (a `dielectric` with "texture displacement"):
+# high-frequency structure in the water was identical with the displacement
+# present and stripped (ratio 0.999, matching a no-displacement control
+# region), i.e. the map had no effect whatsoever.
+#
+# `orient_to` is the reference direction the perturbed normal is kept on the
+# same side of. Pass the FACE-FORWARDED geometric normal for ordinary
+# reflective/transmissive shading (matching _build_geom_context_full), but for
+# dielectric/thin_dielectric pass the RAW WINDING normal instead: those decide
+# entering-vs-exiting from `dot(ray_dir, n) < 0`, so flipping the perturbed
+# normal toward the ray would make that test tautological and resurrect the
+# 1/eta^4 transmission loss documented in shade_dielectric.
+@always_inline
+def _apply_surface_maps[use_gpu: Bool](
+    mat: Material_C,
+    v0: Int, v1: Int, v2: Int,
+    mesh: TriangleMesh_C,
+    inter: Intersection_C,
+    shading_normal: Vec3f,
+    orient_to: Vec3f,
+    ray_dir: Vec3f,
+    px_scale: Float32,
+    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin],
+    textures: UnsafePointer[GpuTexture_C, MutExternalOrigin],
+    n_textures: Int,
+) -> Vec3f:
+    if mat.normal_tex_idx < Int32(0) and mat.bump_tex_idx < Int32(0):
+        return shading_normal
+    var p0 = Vec3f(mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+    var p1 = Vec3f(mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+    var p2 = Vec3f(mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+    var pixel_uv = _pixel_uv_for_hit(mesh, v0, v1, v2, p0, p1, p2, orient_to, ray_dir, inter.tHit, px_scale)
+    var n = _apply_normal_map[use_gpu](mat, v0, v1, v2, mesh, inter, shading_normal, p0, p1, p2,
+        tex_filenames, textures, n_textures, pixel_uv)
+    n = _apply_bump_map[use_gpu](mat, v0, v1, v2, mesh, inter, n, p0, p1, p2,
+        tex_filenames, textures, n_textures, pixel_uv)
+    if dot(n, orient_to) < Float32(0.0):
+        n = -n
+    return n
+
 # Full context for NEE materials (diffuse, diffuse_transmit, coated_diffuse).
 # Computes pixel_uv, applies normal map, looks up albedo texture.
 # hit_point offset uses the bumped shading normal (matches shade_diffuse convention).
@@ -2071,28 +2175,11 @@ def _build_geom_context_full[use_gpu: Bool](
     var p1 = Vec3f(mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = Vec3f(mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
 
-    var pixel_uv = Float32(0.0)
-    if ctx.px_scale > Float32(0.0) and Int(mesh.uvs) > 1:
-        var fu1 = mesh.uvs[v1*2] - mesh.uvs[v0*2]; var fv1 = mesh.uvs[v1*2+1] - mesh.uvs[v0*2+1]
-        var fu2 = mesh.uvs[v2*2] - mesh.uvs[v0*2]; var fv2 = mesh.uvs[v2*2+1] - mesh.uvs[v0*2+1]
-        var det = fu1*fv2 - fu2*fv1
-        if det != Float32(0.0):
-            var inv = Float32(1.0) / det
-            var dpdu = (p1 - p0) * (fv2 * inv) - (p2 - p0) * (fv1 * inv)
-            var dpdu_len = sqrt(dot(dpdu, dpdu))
-            if dpdu_len > Float32(0.0):
-                var rc = dot(ng_ff, ray_dir)
-                if rc < Float32(0.0): rc = -rc
-                if rc < Float32(0.05): rc = Float32(0.05)
-                pixel_uv = (inter.tHit * ctx.px_scale / rc) / dpdu_len
+    var pixel_uv = _pixel_uv_for_hit(mesh, v0, v1, v2, p0, p1, p2, ng_ff, ray_dir, inter.tHit, ctx.px_scale)
 
     var normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances)
-    normal = _apply_normal_map[use_gpu](mat, v0, v1, v2, mesh, inter, normal, p0, p1, p2,
-        ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
-    normal = _apply_bump_map[use_gpu](mat, v0, v1, v2, mesh, inter, normal, p0, p1, p2,
-        ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
-    if dot(normal, ng_ff) < Float32(0.0):
-        normal = -normal
+    normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, ng_ff, ray_dir,
+        ctx.px_scale, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
     var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
@@ -4339,7 +4426,7 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     elif mat.type == MatKind.conductor:
         shade_conductor[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.dielectric:
-        shade_dielectric[False](path_ptr, inter, ctx.meshes, mat, ctx.lights.spheres, ctx.tex_filenames, ctx.textures, ctx.n_textures)
+        shade_dielectric[False](path_ptr, inter, ctx.meshes, mat, ctx.lights.spheres, ctx.tex_filenames, ctx.textures, ctx.n_textures, ctx.px_scale)
     elif mat.type == MatKind.coated_diffuse:
         shade_coated_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.diffuse_transmit:
