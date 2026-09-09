@@ -2714,6 +2714,25 @@ def _sample_medium_core(
                             # and does not model re-entry or nested media. A
                             # general version needs the medium-transition walk
                             # bdpt.mojo's _visible_transmittance already does.
+                            #
+                            # test_spheres is REQUIRED here, not optional:
+                            # traverse_bvh2_core walks the mesh/curve BVH only,
+                            # and analytic spheres live in their own flat array.
+                            # A `MediumInterface .. Shape "sphere"` boundary --
+                            # the single most common way to bound a medium, and
+                            # what every fog/cloud test scene here uses -- was
+                            # therefore never found, so t_med stayed at the FULL
+                            # distance to the light and Beer-Lambert charged the
+                            # vacuum outside the medium for extinction it never
+                            # applies. Measured on a tau=8 fog sphere lit by a
+                            # mesh quad: exp(-2.02*6) instead of exp(-2.02*2),
+                            # i.e. PT read 0.0000567 where the same scene with a
+                            # mesh-box boundary reads 0.0355 (574x too dark).
+                            # Same root cause and same shape as the sphere case
+                            # bdpt.mojo's _visible_transmittance needed, and as
+                            # the vacuum-attenuation bug this very branch was
+                            # written to fix -- that fix just never covered the
+                            # sphere-bounded case.
                             var t_med = dist
                             var _exit_inter = InlineArray[Intersection_C, 1](fill=Intersection_C(
                                 PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
@@ -2722,7 +2741,12 @@ def _sample_medium_core(
                             exit_ptr[0].hit = Int8(0)
                             traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, shad_ray,
                                                shad_tmax, exit_ptr, blasNodesArr, blasPrimIdsArr, instances)
-                            if exit_ptr[0].hit != Int8(0):
+                            test_spheres(spheres, n_spheres, shad_ray, exit_ptr)
+                            # test_spheres ignores shad_tmax (it bounds only by
+                            # an already-recorded closer hit), so a sphere past
+                            # the light would otherwise set t_med > dist and
+                            # over-attenuate instead of under-.
+                            if exit_ptr[0].hit != Int8(0) and exit_ptr[0].tHit <= shad_tmax:
                                 var exit_mat = materials[Int(exit_ptr[0].primId.materialIndex)]
                                 if exit_mat.type == MatKind.interface:
                                     t_med = exit_ptr[0].tHit
