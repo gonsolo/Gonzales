@@ -1,0 +1,48 @@
+# Isolation probe for coateddiffuse's eta-dependent residual.
+#
+# A single coateddiffuse quad facing the camera, lit by one large area light
+# behind the camera so the surface is front-lit at near-normal incidence.
+# There is no closed form for a layered BSDF, so this is measured against
+# pbrt-v4 rendering the SAME file -- the eta sweep is what carries the signal
+# (see project_coateddiffuse_eta2_bug: the original bug tracked eta^2 exactly,
+# and a ~4-14% eta-growing deficit was left open afterwards).
+#
+# Deliberately simple: no glass, no textures, one material, one light. That
+# keeps the ratio attributable to the coat model rather than to transport.
+#
+# NOTE on winding (testing_scene_winding_trap): the light quad's "normal N"
+# is stated explicitly and points at -z, i.e. back toward the surface and
+# camera. Verify the render is non-black before trusting any ratio.
+Sampler "halton" "integer pixelsamples" [ 512 ]
+Film "rgb" "string filename" [ "coateddiffuse-eta-probe.exr" ]
+    "integer xresolution" [ 120 ] "integer yresolution" [ 120 ]
+LookAt 0 0 -6   0 0 0   0 1 0
+Camera "perspective" "float fov" [ 25 ]
+
+Integrator "path" "integer maxdepth" [ 32 ]
+
+WorldBegin
+
+# Emitter OVERHEAD, facing down at the sample quad. Deliberately not between
+# the camera and the surface: a large emitter placed there occludes the whole
+# view and every render comes back black (hit while writing this file).
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 30 30 30 ]
+    Translate 0 4 -1
+    Shape "trianglemesh"
+        "integer indices" [ 0 1 2 0 2 3 ]
+        "point3 P" [ -4 0 -3   4 0 -3   4 0 3   -4 0 3 ]
+        "normal N" [ 0 -1 0  0 -1 0  0 -1 0  0 -1 0 ]
+AttributeEnd
+
+# The sample surface: mid-grey base under a smooth dielectric coat.
+AttributeBegin
+    Material "coateddiffuse"
+        "rgb reflectance" [ 0.5 0.5 0.5 ]
+        "float roughness" [ 0 ]
+        "float eta" [ 1.5 ]
+    Shape "trianglemesh"
+        "integer indices" [ 0 1 2 0 2 3 ]
+        "point3 P" [ -2 -2 0   2 -2 0   2 2 0   -2 2 0 ]
+        "normal N" [ 0 0 -1  0 0 -1  0 0 -1  0 0 -1 ]
+AttributeEnd
