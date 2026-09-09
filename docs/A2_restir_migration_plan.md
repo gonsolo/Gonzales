@@ -184,10 +184,23 @@ Tungsten references carry a scene-conversion scale (real pbrt-v4 is equally
 caustic there"). Reference scores 5.53; a caustic-free render 1.54.
 
 1. `volumetric-caustic` scores excess > 2.0 **without** `--sppm`, with fog
-   and glass sphere visibly rendered. *Today: no integrator passes.* PT
-   scores 1.54 (absent, 2.0× too bright overall); SPPM scores 1.41 and
-   renders an almost-empty dark box — no fog, no sphere, 8× too dark; VCM
-   did not finish in 40 min.
+   and glass sphere visibly rendered. *Today: still no integrator passes* —
+   PT scores 1.54 (absent, 2.0× too bright overall) and VCM did not finish
+   in 40 min. **This condition is about retiring SPPM, so SPPM's own score
+   does not satisfy it** — but the "SPPM renders an almost-empty dark box"
+   half of the original note was a bug in SPPM, now fixed (2026-09-09,
+   commit `4c1a5c1e`): it scores **2.11 (CAUSTIC PRESENT)** with fog, sphere
+   and beam rendered and a mean within 5% of the reference. Four independent
+   defects were involved — analytic spheres invisible to SPPM's traversals
+   entirely, a placeholder sphere normal, a dropped `hit` argument, and
+   volume visible points receiving no direct lighting through three separate
+   gates — plus a volume photon-density estimator normalising by disk area
+   instead of sphere volume. See `project_sppm.md`.
+
+   Residual, not closed: gonzales scores 2.11 against real pbrt-v4's 3.96 and
+   the Tungsten reference's 5.53 on the same file, so the beam is present but
+   materially less concentrated. It does not improve with sample budget
+   (2.03/2.06/2.11 at 8/16/32 passes), so it is systematic.
 2. `water-caustic` scores > 2.0 without `--sppm`, **in batch mode**.
    *Today: only SPPM passes* (present, structurally correct, 5.4× bright).
    PT and `--sms-restir` both score 0.05× the reference — caustic absent.
@@ -211,9 +224,15 @@ Three findings from that measurement change the picture:
   is a live capability gap, independent of any retirement decision, and
   outranks retirement as work.
 
-Also: **SPPM has zero smoketest coverage** (`SMOKE_MODES` = cpu-pt,
+Also: **SPPM had zero smoketest coverage** (`SMOKE_MODES` = cpu-pt,
 cpu-vcm, gpu-pt, gpu-vcm, gpu-vcm-wf), which is why the above went
-unnoticed. It needs a row far more than it needs deleting. Cost of keeping
+unnoticed. **Fixed 2026-09-09** (`4c1a5c1e`): `SMOKE_MODES` gained
+`cpu-sppm` and `gpu-sppm` rows (both mean 0.11571, exact CPU/GPU
+agreement), and a new `make causticstest` target runs the scale-free
+presence metric on `volumetric-caustic` — because a mean-based smoketest
+structurally cannot catch a missing caustic (an unlit box still has a
+plausible mean, and cornell-box has neither media nor an analytic sphere).
+It needs those rows far more than it needs deleting. Cost of keeping
 it, for the other side of the ledger: 1995 lines, plus 620 lines exiled
 into `bdpt.mojo` (6440–7060) by the per-file Mojo `enqueue_function`
 defect, 11 referencing files, one 386-line test.
