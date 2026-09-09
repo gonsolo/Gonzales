@@ -94,38 +94,36 @@ comptime VOL_RIS_CANDIDATES: Int = 8
 # expectation. Correct and known; simply not paid for until the cheap
 # homogeneous case shows the technique earns its keep at all.
 #
-# MEASURED (2026-09-09, 64x64 GPU, --no-denoise, vs a 16384spp reference of
-# the same estimator; MSE at a matched 64spp budget over 5 seeds):
+# MEASURED (2026-09-09, RE-measured after the sphere-boundary shadow-ray fix
+# -- 64x64 GPU, --no-denoise, MSE at a matched 64spp budget over 5 seeds,
+# against a 65536spp reference of the same estimator):
 #
-#   scene                                   MSE change   per-seed
-#   thin fog + close light (favourable)       -15.7%     -11.4% .. -22.6%
-#   dense fog + distant light                  -2.5%      -5.8% ..  +2.8%
+#   scene                                   MSE vs 7.2   bias @4096spp
+#   thin fog + close light (favourable)       -19.5%        0.99939
+#   dense fog + distant light                  -1.9%        0.99982
 #
-# UNBIASED both ways: at 4096spp the ratio to the reference is 0.99987 with
-# this on vs 1.00035 with it off (favourable scene), 0.99961 vs 0.99968
-# (dense scene) -- no systematic shift, which is the check that actually
-# matters here. And it is FREE: interleaved A/B timings at 256 and 2048 spp
-# are indistinguishable (the enabled build's best time was at or below the
-# disabled build's on both scenes), as expected when the added work per
-# candidate is one RNG draw and one log against a light pick, a target
-# evaluation and a reservoir update.
+# ON by default as of that measurement. Every earlier figure for this feature
+# was taken before the sphere-boundary fix, when a shadow ray leaving a
+# sphere-bounded medium was Beer-Lambert'd across the vacuum all the way to
+# the light -- both test scenes here are sphere-bounded, so those numbers were
+# measured against a baseline 574x too dark and are void. The technique
+# survived re-measurement; the conclusions drawn ALONGSIDE it did not (see
+# VOL_TEMPORAL_M_CAP's note on temporal reuse).
 #
-# So unlike VOL_SPATIAL_NEIGHBORS below -- which measured as a genuine wash --
-# this is a real, consistent, free win. It still ships OFF, for one specific
-# reason: it is currently mutually exclusive with TEMPORAL reuse (see the
-# `not dist_ris` term in gpu.mojo's vol_reuse_ok), and temporal reuse measured
-# 3-10x MSE reduction on GPU. Defaulting this on would silently trade that
-# much larger win for this smaller one in exactly the homogeneous scenes where
-# both apply. Enabling it is therefore gated on making the two COMPOSE -- the
-# shift mapping has to accept a resampled vertex rather than assuming the
-# reservoir's vertex is the one the resolve shadows from -- not on any doubt
-# about this estimator. Until then it is a one-constant opt-in, same as
-# spatial reuse.
+# The unbiasedness check that carries the most weight is not the 4096spp
+# ratios above but the two independent 65536spp references: the plain 7.2
+# estimator and this one converge to 0.132659 vs 0.132683 on thin fog (0.018%
+# apart) and 0.030218 vs 0.030220 on dense (0.006%). Two structurally
+# different estimators agreeing to that tolerance is much harder to fake than
+# either one matching itself.
+#
+# It is also FREE -- the added work per candidate is one RNG draw and one log,
+# against a light pick, a target evaluation and a reservoir update.
 #
 # Compile-time constant rather than a CLI flag, matching VOL_SPATIAL_NEIGHBORS
 # below: this code runs inside GPU kernels, where a runtime switch has to be
 # threaded through every kernel signature.
-comptime VOL_RIS_DISTANCE: Bool = False
+comptime VOL_RIS_DISTANCE: Bool = True
 
 # Transmittance seam sentinel -- see this file's header, seam 1. Passing this
 # as vol_target_pdf's `tr` yields the transmittance-free target function.
@@ -339,6 +337,29 @@ def vol_reservoir_io_null() -> VolReservoirIO:
 # id, so two of DI/GI's three G-buffer rejection tests do not apply at all
 # here -- what replaces them is the medium match plus the target function
 # scoring an incompatible neighbour at 0 on its own.
+#
+# TEMPORAL REUSE (`--vol-restir-reuse`) NO LONGER SHOWS A MEASURABLE WIN, and
+# the constants below are therefore untuned against anything real. It was
+# recorded at 3-10x MSE reduction on GPU; re-measured 2026-09-09 after the
+# sphere-boundary shadow-ray fix, on the same dense scene plus a thin-fog one,
+# both against 65536spp references:
+#
+#   scene       temporal-only MSE vs off   bias @4096spp
+#   thin fog             +2.9%                0.99998
+#   dense fog            -0.7%                1.00004
+#
+# i.e. a wash on dense and mildly WORSE on thin. The original figure was taken
+# when a shadow ray leaving a sphere-bounded medium was attenuated across the
+# vacuum out to the light, so it compared two variants of a near-black image
+# (that scene's mean was 5.7e-5; it is 0.0302 once correct) -- MSE ratios
+# measured against a 574x-too-dark baseline do not survive the fix.
+#
+# It remains UNBIASED and correct, and it stays wired and opt-in rather than
+# being removed: the machinery is shared with DI/GI, and a scene with genuine
+# frame-to-frame coherence (interactive camera, many accumulated frames) is a
+# different regime from these batch measurements. But nothing currently
+# justifies defaulting it on, and its constants should be re-derived rather
+# than trusted if it is ever revisited.
 comptime VOL_TEMPORAL_M_CAP: Float32 = Float32(64.0)
 # MEASURED 2026-09-08, now that temporal reuse + G-buffer wiring both exist
 # (`Scenes/vol-restir-mesh-light.pbrt`, 5 seeds, matched cap, vs a 16384spp

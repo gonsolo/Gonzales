@@ -445,21 +445,84 @@ gives `E[1/(1-T_hat)] > 1/(1-E[T_hat])` — a systematic over-estimate,
 worst exactly where the medium is optically thin. Choosing the exact
 conditional removes the offending factors rather than estimating them.
 
-Measured (64x64 GPU, `--no-denoise`, MSE at a matched 64spp budget over 5
-seeds against a 16384spp reference): **-15.7%** on a favourable scene
-(thin fog, close light, target varying strongly along the ray),
-consistently negative on every seed (-11.4% .. -22.6%); **-2.5%** on a
-dense-fog/distant-light scene. Unbiased both ways (4096spp ratio to
-reference 0.99987 on vs 1.00035 off). No measurable time cost —
-interleaved A/B timings are indistinguishable.
+**2026-09-09, later the same day: the two now COMPOSE, everything was
+re-measured after the sphere-boundary shadow-ray fix, and the conclusions
+changed. `VOL_RIS_DISTANCE` now defaults ON; `--vol-restir-reuse` stays
+opt-in.**
 
-It ships OFF despite being a real, free win for one specific reason: it
-is currently mutually exclusive with **temporal reuse**, which measured
-3-10x MSE reduction, so defaulting it on would silently trade the larger
-win for the smaller one in exactly the scenes where both apply. Enabling
-it is gated on making the two compose (the shift mapping must accept a
-resampled vertex instead of assuming the reservoir's vertex is the one
-the resolve shadows from), not on any doubt about the estimator.
+Every Phase 7 measurement before that fix is void. A shadow ray leaving a
+sphere-bounded medium was Beer-Lambert'd across the vacuum all the way to
+the light, because the exit-point search walked the mesh/curve BVH and
+never tested analytic spheres — and *both* volumetric test scenes bound
+their medium with `Shape "sphere"`. The dense scene's mean was 5.7e-5
+where it should be 0.0302. Ratios measured against a baseline 574x too
+dark cannot be rescued by reinterpretation.
+
+Re-measured (64x64 GPU, `--no-denoise`, MSE at a matched 64spp budget
+over 5 seeds, against **65536spp** references):
+
+| config | thin fog MSE | vs 7.2 | dense MSE | vs 7.2 |
+|---|---|---|---|---|
+| 7.2 baseline | 7.040e-3 | — | 8.412e-5 | — |
+| temporal only | 7.245e-3 | +2.9% | 8.355e-5 | −0.7% |
+| distance only | 5.664e-3 | **−19.5%** | 8.250e-5 | **−1.9%** |
+| both | 5.927e-3 | −15.8% | 8.686e-5 | +3.3% |
+
+All four are unbiased: 4096spp ratios to reference land in 0.99936 ..
+1.00076 across both scenes. The stronger check is that the two
+independent 65536spp references — the plain 7.2 estimator and the
+distance-resampled one — agree to 0.018% (thin) and 0.006% (dense); two
+structurally different estimators converging to the same answer is much
+harder to fake than either matching itself.
+
+So: **distance resampling survived re-measurement and is now on by
+default.** **Temporal reuse's 3-10x win did not survive** — it is a wash
+on dense and mildly worse on thin. It stays wired, correct and opt-in
+(a genuinely coherent interactive sequence is a different regime from
+these batch runs), but nothing currently justifies defaulting it on, and
+its tuning constants should be re-derived rather than trusted. The
+combination is unbiased but slightly worse than distance alone on both
+scenes, so composing them is now *permitted* rather than *required*.
+
+### How they compose, and the bias the old guard was hiding
+
+The `not dist_ris` guard that made the two mutually exclusive rested on a
+premise that was backwards. Its comment said `VolShiftMode.identity`
+"re-targets a previous frame's sample at THIS pixel's vertex", so
+distance resampling would break it. `identity` does the opposite: it
+returns the **donor's** vertex verbatim, and the combine then stores it
+as the winner's. So the configuration the guard *permitted* was the
+broken one and the configuration it *forbade* was the sound one.
+
+Concretely, with distance resampling off and temporal reuse on:
+`reservoir_finalize` sets `W = w_sum / (m · p̂(winner))` with `p̂`
+evaluated at `res.scatter_point` — the donor's vertex when a donor won —
+while the resolve in `_sample_medium_core` shadow-rayed from
+`scatter_pt_s`, this frame's own vertex. `F` and `W` were evaluated at
+different points, which is not a valid RIS estimator. It stayed invisible
+because both points lie on the same camera ray in a homogeneous medium,
+so the two targets are close and the error is a quiet scale factor with
+no visual signature.
+
+The fix is one line at the resolve — always shadow from
+`res.scatter_point`, the point `p̂` was evaluated at — plus choosing the
+shift by what actually produced the vertex:
+
+- **distance resampling ON → `identity`.** The vertex came from
+  `q(t)`, which depends only on `sigma_t` and `t_surf`, identical across
+  frames at a pixel. A donor's vertex is a draw from precisely the
+  receiver's own proposal: domains match, Jacobian 1. This is the
+  *better*-founded case, not the broken one.
+- **distance resampling OFF → `retarget`** (new mode). The vertex is
+  delta tracking's single `t_free`, a point mass that differs every
+  frame, so the receiver's proposal could never have produced the
+  donor's. Import only the light sample and keep our own vertex — plain
+  ReSTIR DI reuse, where the shading point is fixed by the pixel.
+
+`retarget` also keeps the receiver's `sigma_s`/`phase_g`, since those
+describe the vertex rather than the light sample and differ within a
+heterogeneous medium (the `medium_idx` gate only guarantees the same
+medium, not the same density in it).
 
 Heterogeneous media remain out of scope but are no longer *blocked*: the
 same construction works there if each candidate's distance comes from its
