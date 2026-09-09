@@ -1,0 +1,52 @@
+# Analytic ground truth for the subsurface boundary + interior transport.
+#
+# Same backlit slab as sss-backlit-slab.pbrt, but with sigma_s = 0: with no
+# scattering the interior reduces to pure Beer-Lambert absorption, and the
+# whole configuration has a closed-form answer. The emitter is uniform and
+# fills the background, so refraction bending the ray does not change which
+# radiance it finds -- the geometry drops out and only the transport remains:
+#
+#   L_center = L_emit * (1-R)/(1+R) * exp(-sigma_a * thickness)
+#
+# with R the normal-incidence Fresnel reflectance ((eta-1)/(eta+1))^2 and the
+# (1-R)/(1+R) factor summing the infinite series of internal reflections in a
+# lossless slab. thickness = 0.1, eta = 1.33 -> R = 0.020060, so the Fresnel
+# factor is 0.96068.
+#
+# This exercises exactly the parts most likely to be wrong: refraction into
+# and out of the boundary, the eta^2 radiance factors (which must cancel for
+# parallel faces), and the medium-crossing bookkeeping that decides whether a
+# ray is inside or outside. Sweep "sigma_a" and compare against the formula.
+Sampler "halton" "integer pixelsamples" [ 256 ]
+Film "rgb" "string filename" [ "sss-beer-lambert.exr" ]
+    "integer xresolution" [ 100 ] "integer yresolution" [ 100 ]
+LookAt 0 0 -6   0 0 0   0 1 0
+Camera "perspective" "float fov" [ 30 ]
+
+WorldBegin
+
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60 60 60 ]
+    Translate 0 0 3
+    Shape "trianglemesh"
+        "integer indices" [ 0 1 2 0 2 3 ]
+        "point3 P" [ -6 -6 0   6 -6 0   6 6 0   -6 6 0 ]
+        "normal N" [ 0 0 -1  0 0 -1  0 0 -1  0 0 -1 ]
+AttributeEnd
+
+AttributeBegin
+    Material "subsurface"
+        "float scale" [ 1 ]
+        "rgb sigma_s" [ 0 0 0 ]
+        "rgb sigma_a" [ 10 10 10 ]
+        "float eta" [ 1.33 ]
+    Shape "trianglemesh"
+        "integer indices" [ 0 2 1  0 3 2
+                            4 5 6  4 6 7
+                            0 1 5  0 5 4
+                            1 2 6  1 6 5
+                            2 3 7  2 7 6
+                            3 0 4  3 4 7 ]
+        "point3 P" [ -1 -1 -0.05   1 -1 -0.05   1 1 -0.05   -1 1 -0.05
+                     -1 -1  0.05   1 -1  0.05   1 1  0.05   -1 1  0.05 ]
+AttributeEnd

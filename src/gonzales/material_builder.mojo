@@ -1,9 +1,36 @@
 from std.memory import alloc
-from std.math import sqrt
-from .lexer import (PbrtScanner, scanner_parse_quoted_string, _psc_collect_params)
+from std.math import sqrt, exp, max
+from .lexer import (PbrtScanner, scanner_parse_quoted_string, _psc_collect_params, ParameterDictionary)
 from .parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX
 from .geometry import RGB, MatKind
 from .measured_bsdf import load_measured_bsdf_reflectance
+
+
+@always_inline
+def _mb_float_or_rgb(params: ParameterDictionary, name: StringLiteral, default: RGB) -> RGB:
+    """A param that may be written as a bare float (replicated to all three
+    channels) or an rgb triple. Local twin of pbrt_parser's
+    _psc_get_float_or_rgb -- duplicated rather than imported because
+    pbrt_parser imports THIS file, so the dependency only runs one way."""
+    var f = params.get_floats(name)
+    if len(f) >= 3:
+        return RGB(f[0], f[1], f[2])
+    elif len(f) == 1:
+        return RGB(f[0])
+    return default
+
+
+@always_inline
+def _sss_alpha_from_reflectance(a: Float32) -> Float32:
+    """Single-scattering albedo that makes a random walk reproduce diffuse
+    reflectance `a` (Christensen & Burley 2015, the fit Cycles uses to set up
+    random-walk subsurface). pbrt instead inverts its tabulated BSSRDF; this
+    targets the same quantity by a different route -- see the "reflectance"
+    branch in the subsurface block below."""
+    var x = min(max(a, Float32(0)), Float32(1))
+    return Float32(1) - exp(Float32(-5.09406) * x
+                            + Float32(2.61188) * x * x
+                            - Float32(4.31805) * x * x * x)
 
 def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                                    s: UnsafePointer[SceneParseState, MutExternalOrigin],
@@ -31,11 +58,10 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
     # conductor whose F0 is the mean of the file's own "luminance" tensor;
     # see measured_bsdf.mojo for why this isn't the full spectral BxDF.
     var is_measured = False
-    # "subsurface" — approximated as coateddiffuse; "string name" (a named
-    # measured-scattering preset, e.g. "Skin1") needs its own lookup since no
-    # other material type uses that param name. See measured_bsdf.mojo-style
-    # scoping note at the subsurface branch below for why this isn't a real
-    # BSSRDF.
+    # "subsurface" — a dielectric surface bounding a scattering interior
+    # medium (real random-walk SSS). Its "string name" preset, sigma_a/
+    # sigma_s, scale and mfp params need their own resolution pass since no
+    # other material type uses them; see the subsurface block further down.
     var is_subsurface = False
     var mat_type = MatKind.diffuse
     var mat_ior = Float32(1.5)
@@ -84,23 +110,29 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
             is_measured = True
             mat_roughU = Float32(0.1); mat_roughV = Float32(0.1)
         elif type_str == "subsurface":
-            # Approximated as a coateddiffuse (specular coat + Lambertian
-            # base) — real subsurface needs a volumetric random walk /
-            # BSSRDF (lateral light transport under the surface, translucency
-            # through thin geometry), which this does NOT reproduce. This
-            # just gets the base color roughly right (see the "name" param
-            # handler below) so the material isn't flat grey; reuses
-            # coateddiffuse's existing reflectance-texture/roughness/eta
-            # handling below for free since subsurface uses the same param
-            # names for those.
-            mat_type = MatKind.coated_diffuse
+            # Real subsurface scattering, by random walk: the SURFACE is an
+            # ordinary dielectric (exactly what pbrt's SubsurfaceMaterial
+            # builds -- a DielectricBxDF), and the object's INTERIOR is a
+            # homogeneous participating medium that light actually scatters
+            # through. See the sigma-resolution block further down, which
+            # registers that medium and records it in nm.sss_medium_idx.
+            #
+            # Where this differs from pbrt: pbrt resolves the interior with a
+            # TabulatedBSSRDF (photon-beam-diffusion tables, an approximation
+            # that assumes a semi-infinite planar slab), while this walks the
+            # medium for real. The random walk converges to ground truth and
+            # gets thin-geometry translucency the diffusion approximation
+            # cannot, at the cost of many scattering events per path -- which
+            # is why Medium_C.is_sss exists (those events must not be charged
+            # to the path's maxdepth budget). Same approach as Cycles.
+            mat_type = MatKind.dielectric
             is_subsurface = True
         else:
             # Unrecognized material type — used to fall back to a flat
             # 50%-grey diffuse in total silence, which made scenes using it
             # look wrong with no clue why. mat_type already defaults to
             # MatKind.diffuse above, so this just adds the warning.
-            print("Warning: unsupported material type '" + type_str + "' — rendering as flat 50%-grey diffuse. Supported: diffuse, conductor, dielectric, thindielectric, coateddiffuse, coatedconductor, diffusetransmission, mix, hair, interface, measured (approximate), subsurface (approximate).")
+            print("Warning: unsupported material type '" + type_str + "' — rendering as flat 50%-grey diffuse. Supported: diffuse, conductor, dielectric, thindielectric, coateddiffuse, coatedconductor, diffusetransmission, mix, hair, interface, measured (approximate), subsurface.")
             mat_type = MatKind.diffuse
 
     # "eta"/"k": dielectric IOR (a scalar) and conductor Fresnel constants (an
@@ -280,25 +312,116 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
         else:
             print("Warning: could not read measured BRDF file '" + bsdf_path + "' — using default grey")
 
-    # "subsurface": named measured-scattering preset (Jensen/Marschner/Levoy/
-    # Hanrahan 2001, "A Practical Model for Subsurface Light Transport" — the
-    # same table pbrt's GetMediumScatteringProperties uses). Only the presets
-    # actually seen in this scene corpus (sssdragon's "Skin1") plus its
-    # common companion "Skin2" are included — add more from pbrt's media.cpp
-    # SubsurfaceParameterTable if another shows up. Approximates the base
-    # reflectance as each channel's single-scattering albedo
-    # sigma_s'/(sigma_s'+sigma_a) — not the true dipole diffuse reflectance,
-    # but a reasonable, cheap proxy (and, notably, no substitute for the real
-    # lateral subsurface light transport this material is completely
-    # missing).
-    if is_subsurface and params.has("name"):
+    # "subsurface": resolve the interior medium's scattering coefficients and
+    # register it, so the dielectric surface selected above actually bounds a
+    # scattering volume. Mirrors pbrt's SubsurfaceMaterial::Create
+    # (materials.cpp:498) exactly, including its four mutually-exclusive ways
+    # of specifying the properties and their precedence.
+    var sss_medium_idx = Int32(-1)
+    if is_subsurface:
+        # pbrt defaults eta to 1.33 for subsurface (not 1.5 as elsewhere).
+        if not params.has("eta") and not params.has("intIOR"):
+            mat_ior = Float32(1.33)
+        var sss_g = params.get_float("g", Float32(0))
+        # Coefficients are in mm^-1; "scale" converts to the scene's own unit
+        # (sssdragon uses scale 50). Applied to both, as pbrt does.
+        var sss_scale = params.get_float("scale", Float32(1))
+        var sig_s = RGB(Float32(0))
+        var sig_a = RGB(Float32(0))
+        var have_sigmas = False
+
         var preset_name = params.get_string("name", "")
-        if preset_name == "Skin1":
-            rgb = RGB(Float32(0.9585), Float32(0.8381), Float32(0.6779))
-        elif preset_name == "Skin2":
-            rgb = RGB(Float32(0.9882), Float32(0.9578), Float32(0.9250))
-        else:
-            print("Warning: unrecognized subsurface preset '" + preset_name + "' — using default grey reflectance")
+        if preset_name != "":
+            # 1. By name. pbrt's SubsurfaceParameterTable (media.cpp:81), from
+            # Jensen/Marschner/Levoy/Hanrahan 2001 "A Practical Model for
+            # Subsurface Light Transport". The table stores REDUCED scattering
+            # coefficients, so pbrt forces g=0 with them -- do the same, with
+            # the same warning, or the anisotropy would be applied twice.
+            var found = True
+            if   preset_name == "Apple":      sig_s = RGB(Float32(2.29), Float32(2.39), Float32(1.97)); sig_a = RGB(Float32(0.0030), Float32(0.0034), Float32(0.046))
+            elif preset_name == "Chicken1":   sig_s = RGB(Float32(0.15), Float32(0.21), Float32(0.38)); sig_a = RGB(Float32(0.015), Float32(0.077), Float32(0.19))
+            elif preset_name == "Chicken2":   sig_s = RGB(Float32(0.19), Float32(0.25), Float32(0.32)); sig_a = RGB(Float32(0.018), Float32(0.088), Float32(0.20))
+            elif preset_name == "Cream":      sig_s = RGB(Float32(7.38), Float32(5.47), Float32(3.15)); sig_a = RGB(Float32(0.0002), Float32(0.0028), Float32(0.0163))
+            elif preset_name == "Ketchup":    sig_s = RGB(Float32(0.18), Float32(0.07), Float32(0.03)); sig_a = RGB(Float32(0.061), Float32(0.97), Float32(1.45))
+            elif preset_name == "Marble":     sig_s = RGB(Float32(2.19), Float32(2.62), Float32(3.00)); sig_a = RGB(Float32(0.0021), Float32(0.0041), Float32(0.0071))
+            elif preset_name == "Potato":     sig_s = RGB(Float32(0.68), Float32(0.70), Float32(0.55)); sig_a = RGB(Float32(0.0024), Float32(0.0090), Float32(0.12))
+            elif preset_name == "Skimmilk":   sig_s = RGB(Float32(0.70), Float32(1.22), Float32(1.90)); sig_a = RGB(Float32(0.0014), Float32(0.0025), Float32(0.0142))
+            elif preset_name == "Skin1":      sig_s = RGB(Float32(0.74), Float32(0.88), Float32(1.01)); sig_a = RGB(Float32(0.032), Float32(0.17), Float32(0.48))
+            elif preset_name == "Skin2":      sig_s = RGB(Float32(1.09), Float32(1.59), Float32(1.79)); sig_a = RGB(Float32(0.013), Float32(0.070), Float32(0.145))
+            elif preset_name == "Spectralon": sig_s = RGB(Float32(11.6), Float32(20.4), Float32(14.9)); sig_a = RGB(Float32(0.0), Float32(0.0), Float32(0.0))
+            elif preset_name == "Wholemilk":  sig_s = RGB(Float32(2.55), Float32(3.21), Float32(3.77)); sig_a = RGB(Float32(0.0011), Float32(0.0024), Float32(0.014))
+            else:
+                found = False
+            if found:
+                have_sigmas = True
+                if sss_g != Float32(0):
+                    print("Warning: subsurface preset '" + preset_name + "' specifies REDUCED scattering coefficients — ignoring \"g\" (matching pbrt).")
+                sss_g = Float32(0)
+            else:
+                print("Warning: unknown subsurface preset '" + preset_name + "' — falling back to pbrt's default coefficients. Known presets: Apple, Chicken1, Chicken2, Cream, Ketchup, Marble, Potato, Skimmilk, Skin1, Skin2, Spectralon, Wholemilk.")
+        elif params.has("sigma_a") or params.has("sigma_s"):
+            # 2. sigma_a and sigma_s directly. pbrt makes it an error to give
+            # one without the other; warn and fill the missing one from the
+            # default rather than aborting the whole render.
+            if not (params.has("sigma_a") and params.has("sigma_s")):
+                print("Warning: subsurface material gives only one of \"sigma_a\"/\"sigma_s\" — pbrt requires both; using the default for the missing one.")
+            sig_a = _mb_float_or_rgb(params, "sigma_a", RGB(Float32(0.0011), Float32(0.0024), Float32(0.014)))
+            sig_s = _mb_float_or_rgb(params, "sigma_s", RGB(Float32(2.55), Float32(3.21), Float32(3.77)))
+            have_sigmas = True
+        elif params.has("reflectance"):
+            # 3. Diffuse reflectance + mean free path. pbrt inverts its
+            # tabulated BSSRDF (SubsurfaceFromDiffuse) to find the sigmas that
+            # reproduce a given diffuse albedo; that inversion needs the
+            # photon-beam-diffusion tables this renderer does not build. Use
+            # the standard random-walk inversion instead -- Christensen &
+            # Burley 2015's single-scattering-albedo fit, what Cycles uses for
+            # exactly this purpose. It targets the same quantity by a
+            # different route, so expect agreement in character but not to the
+            # last digit against pbrt on a `reflectance`-specified scene.
+            var refl = params.get_rgb("reflectance", RGB(Float32(0.5)))
+            var mfp = _mb_float_or_rgb(params, "mfp", RGB(Float32(1)))
+            print("Note: subsurface \"reflectance\"/\"mfp\" inverted with the Christensen-Burley fit, not pbrt's tabulated SubsurfaceFromDiffuse — close in character, not bit-comparable.")
+            var ar = _sss_alpha_from_reflectance(refl.r)
+            var ag = _sss_alpha_from_reflectance(refl.g)
+            var ab = _sss_alpha_from_reflectance(refl.b)
+            # sigma_t = 1/mfp, split into scattering/absorption by the albedo.
+            var tr = Float32(1) / max(mfp.r, Float32(1e-6))
+            var tg = Float32(1) / max(mfp.g, Float32(1e-6))
+            var tb = Float32(1) / max(mfp.b, Float32(1e-6))
+            sig_s = RGB(ar * tr, ag * tg, ab * tb)
+            sig_a = RGB((Float32(1) - ar) * tr, (Float32(1) - ag) * tg, (Float32(1) - ab) * tb)
+            have_sigmas = True
+
+        if not have_sigmas:
+            # 4. Nothing specified — pbrt's own defaults (a milk-like medium).
+            sig_a = RGB(Float32(0.0011), Float32(0.0024), Float32(0.014))
+            sig_s = RGB(Float32(2.55), Float32(3.21), Float32(3.77))
+
+        # Register the interior as an ordinary homogeneous medium. Everything
+        # downstream -- free-flight sampling, phase-function scattering,
+        # volume NEE, the medium-crossing bookkeeping that swaps
+        # current_medium_idx when a refracted ray passes through the surface
+        # -- is the participating-media machinery that already exists, and is
+        # entirely unaware this particular medium happens to be an object's
+        # interior.
+        sss_medium_idx = Int32(len(s[0].med_names))
+        s[0].med_names.append(String("__sss_interior"))
+        s[0].med_sa.append(sig_a.r * sss_scale); s[0].med_sa.append(sig_a.g * sss_scale); s[0].med_sa.append(sig_a.b * sss_scale)
+        s[0].med_ss.append(sig_s.r * sss_scale); s[0].med_ss.append(sig_s.g * sss_scale); s[0].med_ss.append(sig_s.b * sss_scale)
+        s[0].med_g.append(sss_g)
+        s[0].med_grid_idx.append(Int32(-1))
+        s[0].med_nvdb_idx.append(Int32(-1))
+        s[0].med_nvdb_temp_idx.append(Int32(-1))
+        s[0].med_le_scale.append(Float32(0)); s[0].med_temp_offset.append(Float32(0)); s[0].med_temp_scale.append(Float32(1))
+        s[0].med_is_sss.append(Int32(1))
+
+        # An inline `Material "subsurface"` takes effect immediately, so bind
+        # the interior to the live attribute state here -- shapes declared
+        # after it pick it up exactly as they would an explicit
+        # `MediumInterface "interior" ""`. The MakeNamedMaterial form binds
+        # later instead, when `NamedMaterial` activates it.
+        if inline_type:
+            s[0].cur_attr.inside_medium = sss_medium_idx
 
     # "normalmap"/"bumpmap": register the file as an (unnamed) imagemap
     # texture and point the material's normal_tex_idx at it — same path as a
@@ -404,6 +527,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
     nm.mix_name2      = mix_name2
     nm.mix_amount     = mix_amount
     nm.measured_bsdf_path = measured_bsdf_path
+    nm.sss_medium_idx = sss_medium_idx
     s[0].named_materials.append(nm^)
 
     mat_name.free()
@@ -417,5 +541,13 @@ def _psc_handle_named_material(handle: UnsafePointer[PbrtScanner, MutExternalOri
     for i in range(len(s[0].named_materials)):
         if s[0].named_materials[i].name == name_str:
             s[0].cur_attr.mat_idx = Int32(i)
+            # A `subsurface` material carries an interior medium with it (see
+            # _psc_handle_make_named_material). Activating the material has to
+            # bind that interior to the live attribute state too, or shapes
+            # using it would get the dielectric shell with vacuum inside and
+            # render as clear glass. The inline `Material` form binds at
+            # declaration instead, since it takes effect immediately.
+            if s[0].named_materials[i].sss_medium_idx >= Int32(0):
+                s[0].cur_attr.inside_medium = s[0].named_materials[i].sss_medium_idx
             break
     mat_name.free()

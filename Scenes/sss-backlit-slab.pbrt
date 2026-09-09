@@ -1,0 +1,50 @@
+# Backlit thin slab -- the controlled test for random-walk subsurface
+# scattering (Material "subsurface", see material_builder.mojo).
+#
+# A strong area light sits BEHIND a thin slab, facing the camera. The camera
+# sees only the slab's front face, so every photon that reaches it had to
+# enter the slab, scatter through its interior, and refract back out. A
+# material with no transmission renders this black; a working random walk
+# renders a glow whose brightness falls as absorption rises.
+#
+# Vary "sigma_a" to check the physics: raising absorption must darken the
+# slab monotonically, and a high-albedo/low-absorption interior must stay
+# bright. Vary "sigma_s" to check the other axis: a denser interior scatters
+# light more, blurring and dimming what gets through a slab of fixed
+# thickness.
+Sampler "halton" "integer pixelsamples" [ 256 ]
+Film "rgb" "string filename" [ "sss-backlit-slab.exr" ]
+    "integer xresolution" [ 200 ] "integer yresolution" [ 200 ]
+LookAt 0 0 -6   0 0 0   0 1 0
+Camera "perspective" "float fov" [ 30 ]
+
+WorldBegin
+
+# Emitter behind the slab, normals pointing at the camera (-z).
+AttributeBegin
+    AreaLightSource "diffuse" "rgb L" [ 60 60 60 ]
+    Translate 0 0 3
+    Shape "trianglemesh"
+        "integer indices" [ 0 1 2 0 2 3 ]
+        "point3 P" [ -3 -3 0   3 -3 0   3 3 0   -3 3 0 ]
+        "normal N" [ 0 0 -1  0 0 -1  0 0 -1  0 0 -1 ]
+AttributeEnd
+
+# Thin subsurface slab at the origin, spanning z in [-0.05, 0.05]. Closed
+# box: the interior medium is only well defined if the boundary is watertight.
+AttributeBegin
+    Material "subsurface"
+        "float scale" [ 1 ]
+        "rgb sigma_s" [ 8 8 8 ]
+        "rgb sigma_a" [ 0.05 0.05 0.05 ]
+        "float eta" [ 1.33 ]
+    Shape "trianglemesh"
+        "integer indices" [ 0 2 1  0 3 2
+                            4 5 6  4 6 7
+                            0 1 5  0 5 4
+                            1 2 6  1 6 5
+                            2 3 7  2 7 6
+                            3 0 4  3 4 7 ]
+        "point3 P" [ -1 -1 -0.05   1 -1 -0.05   1 1 -0.05   -1 1 -0.05
+                     -1 -1  0.05   1 -1  0.05   1 1  0.05   -1 1  0.05 ]
+AttributeEnd
