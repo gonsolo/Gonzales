@@ -1991,6 +1991,15 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
         var dup_idx = n_mats
         var iface_idx = 0
 
+        # An interface whose INTERIOR is a subsurface medium marks its
+        # material, so shade_dielectric can keep the resulting boundary
+        # events off the maxdepth budget (see Material_C.sss_boundary).
+        @parameter
+        def _ins_is_sss(ins: Int32) -> Int8:
+            if ins < Int32(0): return Int8(0)
+            if Int(ins) >= len(s[0].med_is_sss): return Int8(0)
+            return Int8(1) if s[0].med_is_sss[Int(ins)] != Int32(0) else Int8(0)
+
         for mi in range(n_meshes):
             var ins = s[0].meshes[mi].inside_medium
             var out = s[0].meshes[mi].outside_medium
@@ -1999,6 +2008,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             if orig_mat < 0: continue
             mats[dup_idx] = mats[orig_mat]
             mats[dup_idx].medium_interface_idx = Int32(iface_idx)
+            mats[dup_idx].sss_boundary = _ins_is_sss(ins)
             iface_buf[iface_idx] = MediumInterface_C(ins, out)
             s[0].meshes[mi].mat_idx = Int32(dup_idx)
             dup_idx += 1
@@ -2012,6 +2022,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             if orig_mat < 0: continue
             mats[dup_idx] = mats[orig_mat]
             mats[dup_idx].medium_interface_idx = Int32(iface_idx)
+            mats[dup_idx].sss_boundary = _ins_is_sss(ins)
             iface_buf[iface_idx] = MediumInterface_C(ins, out)
             s[0].spheres_mat[si] = Int32(dup_idx)
             dup_idx += 1
