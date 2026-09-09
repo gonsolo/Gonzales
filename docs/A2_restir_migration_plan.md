@@ -509,6 +509,11 @@ Validate on `veach-bidir` plus an SDS regression check on `bathroom`
 against the retained VCM baseline. **Keep `--vcm` working for at least one
 release after `--restir` lands.**
 
+**2026-09-09: 8.1's derivation is DONE and machine-checked; media scoped
+OUT.** The blocker below ("8.1's own recursive formulation isn't derived
+yet") is resolved — see "8.1 derivation" immediately after this note. The
+other two items (media, Phase 6 spatial reuse) stand.
+
 **2026-09-08: scoped, not yet tractable for a file-level implementation
 plan.** Not blocked on Phase 9 (the dependency runs the other way), but
 bundles three separate open items: 8.1's own "recursive formulation (van
@@ -524,6 +529,94 @@ and retiring VCM also needs Phase 6's spatial reuse to start paying off,
 which it currently doesn't. See the `project_restir_migration` memory's
 "Phase 8" section for the full scoping writeup and a recommended
 resolution ordering.
+
+#### 8.1 derivation — recovering `ω_τ` in O(1), and why it survives a shift
+
+Derived 2026-09-09 from gonzales's own `dVCM`/`dVC` recursion rather than
+from van Antwerpen 2011 (still not sourced; it turned out not to be
+needed). Implemented as executable, dependency-free reference math in
+`src/gonzales/restir_bdpt.mojo`, checked against a brute-force sum over
+every strategy in `Tests/unit/test_restir_bdpt_mis.mojo`.
+
+Index a full path's vertices `x_0` (light) … `x_k` (camera). Strategy `s`
+means the light subpath supplied `x_0..x_{s-1}`, so the connection crosses
+edge `s-1`. Per edge `e`, write `pf[e]`/`pr[e]` for the forward/reverse
+solid-angle pdfs and `gl[e]`/`gc[e]` for the solid-angle→area conversions
+at `x_{e+1}`/`x_e`. Then the balance-heuristic weight is
+
+```
+ω_s = 1 / ( 1 + (pf[s-1]·gl[s-1])·B_C(s) + (pr[s-1]·gc[s-1])·B_L(s) )
+
+B_L(0)   = 0                        B_C(k+1) = 0
+B_L(1)   = 1 / pa_light             B_C(k)   = 1 / pa_cam
+B_L(s+1) = (1 + pr[s-1]·gc[s-1]·B_L(s)) / (pf[s-1]·gl[s-1])
+B_C(s)   = (1 + pf[s]  ·gl[s]  ·B_C(s+1)) / (pr[s]·gc[s])
+```
+
+Both tails of the strategy sum telescope, and each factors into *one
+subpath's* accumulator times *the connecting edge's* own pdfs. This is the
+same shape `bdpt.mojo` already ships at its connect sites (`w_light`/
+`w_camera`, `bdpt.mojo:3946`), with `η_VM = 0` (merging off — ReSTIR
+BDPT's setting) and the vertex's reverse pdf folded into the accumulator
+instead of split across `dVCM`/`dVC`.
+
+**The property Phase 8 actually needs — subpath locality.** `B_L(s)` reads
+only `pa_light` and edges `≤ s-2`; `B_C(s)` reads only `pa_cam` and edges
+`≥ s`. Neither touches the other side. Under a reconnection shift that
+keeps a candidate's light subpath and swaps in the receiving pixel's
+camera prefix:
+
+- `B_L(s)` is **shift-invariant** — reuse the stored value verbatim.
+- `B_C(s)` is exactly what the *receiving* pixel already carries for its
+  own base path.
+- The connecting edge's four pdfs must be re-evaluated, but they are
+  needed anyway to evaluate the shifted path's contribution.
+
+So `ω_τ(T(x̄))` costs **O(1)** with no subpath retracing — which is what
+8.1 asked for. `test_shifted_path_mis_weight_reuses_light_accumulator`
+demonstrates this against a from-scratch evaluation of the shifted path.
+
+**The trap, locked down by a test.** The target must be evaluated *at the
+shifted path*: reusing the donor's `B_C` as well — the tempting shortcut,
+since the candidate already carries it — evaluates `ω` at the *unshifted*
+path. It is wrong, and silently so (a plausible image, quietly wrong
+weights). `test_reusing_donor_camera_accumulator_is_wrong` asserts the two
+disagree, so the mistake cannot pass unnoticed.
+
+**Why this composes with GRIS.** Two independent MIS layers: `ω_τ` is a
+partition of unity over strategies for each fixed path (verified by
+`test_strategy_weights_partition_unity`); GRIS's `m_i` is a partition of
+unity over candidate domains for each fixed sample. GRIS needs only that
+`p̂ = ω_τ·q̂` be evaluable and that the shift be a bijection with a correct
+Jacobian, so correctness reduces to evaluating `ω` at the shifted path
+(above) plus the standard reconnection Jacobian — **which is separate work
+and not covered by this derivation.**
+
+**Limits, inherited not introduced.** Delta vertices reset
+`dVCM`/`dVC` to 0, which is correct (they cannot be connected to) and
+consistent with reconnection shifts needing a rough vertex anyway.
+Distant/infinite/point-seeded light paths start at 0 — a documented
+scoped simplification in gonzales today, which Phase 8 would inherit.
+Volume vertices are excluded entirely (`_bdpt_vertex_mis_scoped`), which
+is the media decision below.
+
+#### 8.6 Media scope decision (2026-09-09): **surfaces only**
+
+Phase 8 is scoped to non-volumetric transport; `--vcm`/`--sppm` stay alive
+for volumetric caustics indefinitely. Reasoning, not assertion:
+
+1. The `dVCM`/`dVC` recursion the 8.1 derivation extends **does not cover
+   volume vertices at all** — `_bdpt_vertex_mis_scoped` (`bdpt.mojo:4909`)
+   excludes them, so there is no accumulator to reuse and nothing to shift.
+2. Base ReSTIR BDPT has **zero** media support (§8.3, full-text verified),
+   so porting it would inherit this gap, not close it.
+3. Volumetric scenes are already served by Phase 7's separate volumetric
+   reservoir (light resampling + temporal reuse, shipped and verified).
+   Keeping them in a separate reservoir and summing estimates is the
+   field-consensus move §9.2 already documents for intractable densities.
+4. Closing it properly means extending `dVCM`/`dVC` to the phase
+   function's directional/reverse pdfs — a standalone research task, and
+   one being probed concurrently from the VCM+media side.
 
 ### Phase 9 — Common currency (**open research**)
 
