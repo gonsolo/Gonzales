@@ -107,6 +107,11 @@ struct GpuSceneHandle(Movable):
     var n_infinite_lights: Int
     var mediums_buf: DeviceBuffer[DType.uint8]        # n_mediums × sizeof(Medium_C)
     var n_mediums: Int
+    # True if any medium is a `Material "subsurface"` interior. Read once on
+    # the host to size the bounce-round budget -- an interior random walk
+    # needs far more rounds than an ordinary path (see the round-count block
+    # in gpu_render_sample and Medium_C.is_sss).
+    var has_sss_medium: Bool
     var medium_ifaces_buf: DeviceBuffer[DType.uint8]  # n_medium_ifaces × sizeof(MediumInterface_C)
     var n_medium_ifaces: Int
     var grids_buf: DeviceBuffer[DType.uint8]          # n_grids × sizeof(Grid_C); Grid_C.density points into grid_density_bufs
@@ -551,6 +556,14 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
 
             # Upload participating media (small array; >= 1 elem to avoid zero-size buffer)
             var med_buf = _gpu_upload_array[Medium_C](ctx, mediums, Int(mediumCount))
+            # Read the SSS flag off the host copy while it is still in reach --
+            # the round-budget decision this feeds is made on the host, and
+            # reading it back off the device later would need a sync.
+            var has_sss_med = False
+            for mi in range(Int(mediumCount)):
+                if mediums[mi].is_sss != Int32(0):
+                    has_sss_med = True
+                    break
 
             # Upload medium interfaces
             var miface_buf = _gpu_upload_array[MediumInterface_C](ctx, medium_ifaces, Int(medium_iface_count))
@@ -1070,6 +1083,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                 n_infinite_lights=Int(infiniteLightCount),
                 mediums_buf=med_buf^,
                 n_mediums=Int(mediumCount),
+                has_sss_medium=has_sss_med,
                 medium_ifaces_buf=miface_buf^,
                 n_medium_ifaces=Int(medium_iface_count),
                 grids_buf=grids_buf^,
@@ -2765,7 +2779,19 @@ def _sample_medium_core(
         # A volume scatter IS the real scattering event the emitter-hit MIS
         # measures from, and it puts the ray origin exactly there.
         path_ptr[].mis_null_dist = Float32(0.0)
-        path_ptr[].bounce += 1
+        # Interior random-walk steps of a `Material "subsurface"` object are
+        # NOT path bounces and are not charged to maxdepth. Skin1 at
+        # sssdragon's scale has a red-channel single-scattering albedo of
+        # 0.996 and ~37 extinction events per scene unit, so a walk routinely
+        # runs tens to hundreds of steps before it escapes or is absorbed --
+        # against pbrt's default maxdepth of 5 the object would render nearly
+        # black. pbrt never spends path depth on the interior either (its
+        # BSSRDF resolves the whole thing analytically); the walk here is
+        # bounded instead by absorption, by Russian roulette, and finally by
+        # the render loop's own round budget, which is extended to cover it
+        # (see _SSS_WALK_ROUNDS in rendering.mojo / gpu.mojo).
+        if med.is_sss == Int32(0):
+            path_ptr[].bounce += 1
         intersections[i].hit = Int8(0)  # no surface hit this bounce
     else:
         # Absorbed
@@ -4511,9 +4537,19 @@ def gpu_render_sample[Oc: Origin[mut=True]](
             # when handle[].n_mediums == 0 makes this fix a complete no-op,
             # performance-wise, for every non-volumetric scene.
             comptime _MEDIUM_INTERFACE_MARGIN = 8
+            # An SSS interior is walked one scattering event per round and
+            # those steps are not charged to maxDepth (Medium_C.is_sss), so
+            # the round count is what actually bounds the walk. Unlike the
+            # margin above this is a large budget, and unlike the CPU loop
+            # there is no `anyActive` early exit here -- every round is a real
+            # dispatch. Gated on the scene actually containing an SSS medium
+            # so no other scene pays for it.
+            comptime _SSS_WALK_ROUNDS = 256
             var gpu_max_rounds = Int(maxDepth)
             if handle[].n_mediums > 0:
                 gpu_max_rounds += _MEDIUM_INTERFACE_MARGIN
+            if handle[].has_sss_medium:
+                gpu_max_rounds += _SSS_WALK_ROUNDS
             for _ in range(gpu_max_rounds):
                 _gpu_bounce_kernels(handle, n_int, grid_dim, px_scale, maxDepth,
                                     use_restir=use_restir,
@@ -4622,9 +4658,19 @@ def gpu_render_wavefront(
             # when handle[].n_mediums == 0 makes this fix a complete no-op,
             # performance-wise, for every non-volumetric scene.
             comptime _MEDIUM_INTERFACE_MARGIN = 8
+            # An SSS interior is walked one scattering event per round and
+            # those steps are not charged to maxDepth (Medium_C.is_sss), so
+            # the round count is what actually bounds the walk. Unlike the
+            # margin above this is a large budget, and unlike the CPU loop
+            # there is no `anyActive` early exit here -- every round is a real
+            # dispatch. Gated on the scene actually containing an SSS medium
+            # so no other scene pays for it.
+            comptime _SSS_WALK_ROUNDS = 256
             var gpu_max_rounds = Int(maxDepth)
             if handle[].n_mediums > 0:
                 gpu_max_rounds += _MEDIUM_INTERFACE_MARGIN
+            if handle[].has_sss_medium:
+                gpu_max_rounds += _SSS_WALK_ROUNDS
             for _ in range(gpu_max_rounds):
                 _gpu_bounce_kernels(
                     handle, n_total, grid_total, px_scale, maxDepth,

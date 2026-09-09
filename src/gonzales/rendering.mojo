@@ -80,6 +80,22 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
     comptime _MEDIUM_INTERFACE_MARGIN = 20
     var trueMaxDepth = Int(maxDepth)
     var maxD = trueMaxDepth + _MEDIUM_INTERFACE_MARGIN
+    # A `Material "subsurface"` interior is walked step by step, and those
+    # steps are deliberately not charged to maxDepth (see _sample_medium_core
+    # in gpu.mojo). The loop's own round count is then the only thing bounding
+    # the walk, so it has to be able to accommodate one: a dense preset like
+    # Skin1 needs tens to hundreds of steps before a path escapes or is
+    # absorbed. Paid for only by scenes that actually contain such a medium --
+    # elsewhere `anyActive` goes false long before these rounds are reached,
+    # and each extra round then costs one cheap inactive-path scan.
+    comptime _SSS_WALK_ROUNDS = 256
+    var has_sss = False
+    for mi in range(Int(scene.mediumCount)):
+        if scene.mediums[mi].is_sss != Int32(0):
+            has_sss = True
+            break
+    if has_sss:
+        maxD += _SSS_WALK_ROUNDS
     var tileW = Int(tileMaxX - tileMinX)
     var tileH = Int(tileMaxY - tileMinY)
     var spp = Int(sp.samplesPerPixel)

@@ -58,6 +58,13 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     # parse, materialize packed C arrays once at the end" convention) — see
     # measured_bsdf.mojo's load_measured_brdf_full and its call site.
     var measured_bsdf_path: String
+    # `Material "subsurface"`: index of the homogeneous interior medium built
+    # for this material, or -1. The surface itself is an ordinary dielectric;
+    # this is what makes it subsurface. Stored per-material (not just applied
+    # to the live attribute state) so `NamedMaterial "x"` re-attaches the same
+    # interior every time it is activated, exactly as an explicit
+    # `MediumInterface "x_interior" ""` would.
+    var sss_medium_idx: Int32
 
     def __init__(out self, name: String):
         self.name           = name
@@ -82,6 +89,7 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
         self.checker_uscale = Float32(1)
         self.checker_vscale = Float32(1)
         self.measured_bsdf_path = String("")
+        self.sss_medium_idx = Int32(-1)
 
 struct MeshAccum(Copyable, Movable):
     var points:         List[Float32]  # 4 floats per vertex (xyz + pad)
@@ -173,6 +181,7 @@ struct SceneParseState(Movable):
     var med_le_scale: List[Float32]     # 1 per medium (pbrt "Lescale")
     var med_temp_offset: List[Float32]  # 1 per medium ("temperatureoffset"/"temperaturecutoff")
     var med_temp_scale: List[Float32]   # 1 per medium ("temperaturescale")
+    var med_is_sss:  List[Int32]        # 1 per medium; 1 = subsurface interior (Medium_C.is_sss)
 
     # Heterogeneous density grids ("uniformgrid" media). One record per grid;
     # med_grid_idx above points into these by index.
@@ -322,6 +331,7 @@ struct SceneParseState(Movable):
         self.med_le_scale = List[Float32]()
         self.med_temp_offset = List[Float32]()
         self.med_temp_scale = List[Float32]()
+        self.med_is_sss   = List[Int32]()
 
         self.grid_nx = List[Int32]()
         self.grid_ny = List[Int32]()

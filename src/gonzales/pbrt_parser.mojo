@@ -639,6 +639,7 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         s[0].med_nvdb_idx.append(Int32(-1))
         s[0].med_nvdb_temp_idx.append(Int32(-1))
         s[0].med_le_scale.append(Float32(0)); s[0].med_temp_offset.append(Float32(0)); s[0].med_temp_scale.append(Float32(1))
+        s[0].med_is_sss.append(Int32(0))
     elif is_grid:
         # PBRT-v4 default for GridMedium sigma_a/sigma_s when unspecified is
         # ConstantSpectrum(1) (see media.cpp) — unlike gonzales's existing
@@ -655,6 +656,7 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         s[0].med_nvdb_idx.append(Int32(-1))
         s[0].med_nvdb_temp_idx.append(Int32(-1))
         s[0].med_le_scale.append(Float32(0)); s[0].med_temp_offset.append(Float32(0)); s[0].med_temp_scale.append(Float32(1))
+        s[0].med_is_sss.append(Int32(0))
 
         s[0].grid_nx.append(g_nx); s[0].grid_ny.append(g_ny); s[0].grid_nz.append(g_nz)
         s[0].grid_p0.append(g_p0.r); s[0].grid_p0.append(g_p0.g); s[0].grid_p0.append(g_p0.b)
@@ -712,6 +714,7 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         s[0].med_le_scale.append(le_scale)
         s[0].med_temp_offset.append(temp_off)
         s[0].med_temp_scale.append(temp_scl)
+        s[0].med_is_sss.append(Int32(0))
         s[0].nvdb_filenames.append(nvdb_full)
         s[0].nvdb_gridnames.append(temp_name)
         for ci in range(16):
@@ -2776,7 +2779,8 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             med_buf[i] = Medium_C(sa, ss, s[0].med_g[i],
                                   s[0].med_grid_idx[i], s[0].med_nvdb_idx[i],
                                   s[0].med_nvdb_temp_idx[i], s[0].med_le_scale[i],
-                                  s[0].med_temp_offset[i], s[0].med_temp_scale[i])
+                                  s[0].med_temp_offset[i], s[0].med_temp_scale[i],
+                                  s[0].med_is_sss[i])
         psc[0].mediums = med_buf
     else:
         psc[0].mediums = UnsafePointer[Medium_C, MutExternalOrigin].unsafe_dangling()

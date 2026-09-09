@@ -836,6 +836,19 @@ struct Medium_C(TrivialRegisterPassable):
     var le_scale:    Float32
     var temp_offset: Float32
     var temp_scale:  Float32
+    # 1 if this medium is the INTERIOR of a `Material "subsurface"` object
+    # (see material_builder.mojo). Subsurface scattering is rendered as a
+    # plain random walk through this medium behind a dielectric boundary, so
+    # the only thing that distinguishes it from an ordinary participating
+    # medium is bookkeeping: its scattering events are interior random-walk
+    # steps, not path bounces, and must NOT be charged to the path's
+    # maxdepth budget. Skin1 at the scale sssdragon uses is ~37-50 extinction
+    # events per scene unit with a red-channel albedo of 0.996, so a walk
+    # routinely takes tens to hundreds of steps -- against pbrt's default
+    # maxdepth of 5 the object would render nearly black. pbrt has the same
+    # property for a different reason: its BSSRDF resolves the whole interior
+    # analytically and never spends path depth on it either.
+    var is_sss:      Int32
 
 @fieldwise_init
 struct Grid_C(TrivialRegisterPassable):
