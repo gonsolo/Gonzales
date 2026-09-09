@@ -370,7 +370,7 @@ def debug_trace_pixel(
     (hit mesh/material/normal/t, dielectric entering/eta/Fresnel decision,
     envmap lookup). For comparing against `pbrt --pixelmaterial`."""
     from .bvh import traverse_bvh2_core, test_spheres, any_hit_bvh2_core, _equal_area_sphere_to_square
-    from .geometry import Intersection_C, Material_C, cross, fr_dielectric
+    from .geometry import Intersection_C, Material_C, cross, fr_dielectric, sphere_outward_normal
 
     var psc = mojo_parse_scene_any(path)
     if Int(psc) == 0:
@@ -428,25 +428,43 @@ def debug_trace_pixel(
                 print("  bounce", bounce, "MISS (no envmap)")
             break
 
-        # Identify mesh + material
-        var mesh_idx: Int; var base_vidx: Int
-        if inter[0].primId.type == 0:
-            mesh_idx = Int(inter[0].primId.id1); base_vidx = Int(inter[0].primId.id2)
-        else:
-            mesh_idx = Int(inter[0].primId.id2 >> 32); base_vidx = Int(inter[0].primId.id2 & 0xFFFFFFFF) * 3
+        # Identify primitive + material. `type == 4` is an ANALYTIC SPHERE and
+        # has no mesh at all -- its id1 indexes psc[0].spheres, not
+        # psc[0].meshes. Taking the triangle path for it indexed `meshes` with
+        # a sphere's id2 and segfaulted, which is why --pixel died on any
+        # scene containing a Shape "sphere" (test_spheres above makes such
+        # hits reachable here). Same primId-type dispatch every other consumer
+        # already does -- see gpu.mojo's medium-interface kernel,
+        # rendering.mojo's CPU medium loop, and bdpt.mojo's
+        # _visible_transmittance, which had this exact bug.
         var mat = psc[0].materials[Int(inter[0].primId.materialIndex)]
-        var mesh = psc[0].meshes[mesh_idx]
-        var v0 = Int(mesh.vertexIndices[base_vidx]); var v1 = Int(mesh.vertexIndices[base_vidx+1]); var v2 = Int(mesh.vertexIndices[base_vidx+2])
-        var p0x = mesh.points[v0*4]; var p0y = mesh.points[v0*4+1]; var p0z = mesh.points[v0*4+2]
-        var p1x = mesh.points[v1*4]; var p1y = mesh.points[v1*4+1]; var p1z = mesh.points[v1*4+2]
-        var p2x = mesh.points[v2*4]; var p2y = mesh.points[v2*4+1]; var p2z = mesh.points[v2*4+2]
-        var gnx = (p1y-p0y)*(p2z-p0z) - (p1z-p0z)*(p2y-p0y)
-        var gny = (p1z-p0z)*(p2x-p0x) - (p1x-p0x)*(p2z-p0z)
-        var gnz = (p1x-p0x)*(p2y-p0y) - (p1y-p0y)*(p2x-p0x)
+        var hx = ox + dx*inter[0].tHit; var hy = oy + dy*inter[0].tHit; var hz = oz + dz*inter[0].tHit
+        var mesh_idx: Int = -1
+        var gnx: Float32; var gny: Float32; var gnz: Float32
+        if inter[0].primId.type == Int8(4):
+            var sph = psc[0].spheres[Int(inter[0].primId.id1)]
+            var sn = sphere_outward_normal(Point3f(hx, hy, hz), sph.center)
+            gnx = sn.x; gny = sn.y; gnz = sn.z
+        else:
+            var base_vidx: Int
+            if inter[0].primId.type == 0:
+                mesh_idx = Int(inter[0].primId.id1); base_vidx = Int(inter[0].primId.id2)
+            else:
+                mesh_idx = Int(inter[0].primId.id2 >> 32); base_vidx = Int(inter[0].primId.id2 & 0xFFFFFFFF) * 3
+            var mesh = psc[0].meshes[mesh_idx]
+            var v0 = Int(mesh.vertexIndices[base_vidx]); var v1 = Int(mesh.vertexIndices[base_vidx+1]); var v2 = Int(mesh.vertexIndices[base_vidx+2])
+            var p0x = mesh.points[v0*4]; var p0y = mesh.points[v0*4+1]; var p0z = mesh.points[v0*4+2]
+            var p1x = mesh.points[v1*4]; var p1y = mesh.points[v1*4+1]; var p1z = mesh.points[v1*4+2]
+            var p2x = mesh.points[v2*4]; var p2y = mesh.points[v2*4+1]; var p2z = mesh.points[v2*4+2]
+            gnx = (p1y-p0y)*(p2z-p0z) - (p1z-p0z)*(p2y-p0y)
+            gny = (p1z-p0z)*(p2x-p0x) - (p1x-p0x)*(p2z-p0z)
+            gnz = (p1x-p0x)*(p2y-p0y) - (p1y-p0y)*(p2x-p0x)
         var gnl = _dbg_vlen(gnx, gny, gnz)
         if gnl > Float32(0.0): gnx /= gnl; gny /= gnl; gnz /= gnl
-        var hx = ox + dx*inter[0].tHit; var hy = oy + dy*inter[0].tHit; var hz = oz + dz*inter[0].tHit
-        print("  bounce", bounce, "HIT mesh", mesh_idx, "matType", Int(mat.type), "t", inter[0].tHit, "p", hx, hy, hz, "gN", gnx, gny, gnz)
+        if mesh_idx >= 0:
+            print("  bounce", bounce, "HIT mesh", mesh_idx, "matType", Int(mat.type), "t", inter[0].tHit, "p", hx, hy, hz, "gN", gnx, gny, gnz)
+        else:
+            print("  bounce", bounce, "HIT sphere", Int(inter[0].primId.id1), "matType", Int(mat.type), "t", inter[0].tHit, "p", hx, hy, hz, "gN", gnx, gny, gnz)
 
         if Int(mat.type) == 4:
             # Dielectric — mirror shade_dielectric's decision (no RNG: report Fresnel, follow transmit)
