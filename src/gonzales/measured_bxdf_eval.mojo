@@ -743,37 +743,41 @@ def _nee_weight_measured(
     spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
     spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
     spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
-) -> RGB:
+) -> SpectralSample:
     """Measured's own version of _nee_weight_simple (bxdf.mojo) — can't share
     that function's flat (mat_kind, alb, alpha) signature since it needs the
     full MeasuredBRDF_C descriptor + wavelengths, same reason hair has its
     own _nee_weight_hair. Projects wo/ls.wi into the local (tangent,
     bitangent, normal) frame bxdf_eval_measured expects.
 
-    Mirrors _nee_weight_simple_spectral (bxdf.mojo): bxdf_eval_measured
-    returns a RAW spectral reflectance (not RGB -- see its docstring), which
-    must be composited with the light's own spectral radiance (via
-    rgb_illuminant_to_spectral_sample on ls.Li) BEFORE the one-time
-    spectral_sample_to_rgb conversion. Converting the bare reflectance alone
-    would (as it previously did) implicitly assume an equal-energy
-    illuminant, biasing neutral/blue reflectances toward violet."""
+    Mirrors _nee_weight_simple_spectral (bxdf.mojo) exactly: bxdf_eval_measured
+    returns a RAW spectral reflectance (not RGB -- see its docstring), which is
+    composited with the light's own spectral radiance (via
+    rgb_illuminant_to_spectral_sample on ls.Li) and returned SPECTRAL.
+
+    Returns SpectralSample, NOT RGB. It used to return RGB, which forced every
+    caller to re-upsample via _to_spec_illum/spec_illum -- a
+    spectral->RGB->spectral round trip that (a) clamps to [0,1], discarding the
+    out-of-gamut negative red a saturated measured blue legitimately carries,
+    and (b) reconstructs a SMOOTH Jakob-Hanika sigmoid, which cannot represent
+    the sharp spectrum that IS a measured material's iridescence. The sampling
+    path (bxdf_sample_measured) was freed of the same round trip in f0df724a;
+    this is its NEE counterpart."""
     if not ls.valid:
-        return RGB(Float32(0.0))
+        return SpectralSample(Float32(0.0))
     var cos_s = dot(normal, ls.wi)
     if cos_s <= Float32(0.0):
-        return RGB(Float32(0.0))
+        return SpectralSample(Float32(0.0))
     var wo_l = Vec3f(dot(wo, tangent), dot(wo, bitangent), dot(wo, normal))
     var wi_l = Vec3f(dot(ls.wi, tangent), dot(ls.wi, bitangent), dot(ls.wi, normal))
     var (fr_spectral, pdf_bsdf) = bxdf_eval_measured(mb, wo_l, wi_l, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
     if fr_spectral.v0 <= Float32(0.0) and fr_spectral.v1 <= Float32(0.0) and fr_spectral.v2 <= Float32(0.0) and fr_spectral.v3 <= Float32(0.0):
-        return RGB(Float32(0.0))
+        return SpectralSample(Float32(0.0))
     var li_spectral = rgb_illuminant_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, ls.Li.r, ls.Li.g, ls.Li.b, wavelengths)
-    var product = fr_spectral * li_spectral
-    var (r, g, b) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, product, wavelengths)
-    var f_times_li = RGB(r, g, b)
+    var f_times_li = fr_spectral * li_spectral
     if ls.is_delta:
         return f_times_li * cos_s
     if ls.pdf <= Float32(0.0):
-        return RGB(Float32(0.0))
+        return SpectralSample(Float32(0.0))
     var mis_w = power_heuristic(ls.pdf, pdf_bsdf)
     return f_times_li * (cos_s * mis_w / ls.pdf)
