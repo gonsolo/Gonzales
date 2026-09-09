@@ -625,11 +625,28 @@ def bxdf_sample_measured(
     spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
     spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
     spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
-) -> Tuple[Vec3f, RGB, Float32, Bool]:
+) -> Tuple[Vec3f, SpectralSample, Float32, Bool]:
     """MeasuredBxDF::Sample_f (bxdfs.cpp:1036-1085) — returns (wi_l, f, pdf,
     valid). wo_l is LOCAL-frame; wi_l is returned in the SAME local frame
     (caller transforms back to world, matching bxdf_sample_conductor's own
-    tangent/bitangent/normal reconstruction)."""
+    tangent/bitangent/normal reconstruction).
+
+    `f` is a RAW SPECTRAL reflectance, exactly like bxdf_eval_measured's --
+    NOT RGB. Path transport is spectral (see project_spectral_throughput_flip),
+    so the caller multiplies it straight onto the spectral throughput.
+
+    It used to composite a D65 illuminant here and convert to RGB, which the
+    caller then re-upsampled via _to_spec_refl. That round trip clamped to
+    [0,1] (rgb_to_spectral_sample) -- discarding the out-of-sRGB-gamut
+    negative red a saturated measured blue legitimately produces -- and
+    reconstructed a SMOOTH Jakob-Hanika sigmoid, which cannot represent the
+    sharp spectrum that makes a tabulated BRDF iridescent. Verified against
+    real pbrt-v4 on lte-orb-blue-agat-spec.
+
+    Verified energy-conserving after the change (Tests probe, 3 corpus .bsdf
+    files): mean and per-lane max of f*cos/pdf are both <= 1 (0.15-0.98), and
+    this function agrees with bxdf_eval_measured to 1.0000 at matched
+    directions -- so returning f unclamped cannot inflate throughput."""
     var wo = wo_l
     var flip_wi = False
     if wo[2] <= Float32(0.0):
@@ -663,7 +680,7 @@ def bxdf_sample_measured(
     var wo_dot_wm = dot(wo, wm)
     var wi = wm * (Float32(2.0) * wo_dot_wm) - wo
     if wi[2] <= Float32(0.0):
-        return (wi, RGB(Float32(0.0)), Float32(0.0), False)
+        return (wi, SpectralSample(Float32(0.0)), Float32(0.0), False)
 
     var fr0 = _pl2d_eval3(mb.spectra_data, Int(mb.spectra_xs), Int(mb.spectra_ys),
         Int(mb.stride3_phi), Int(mb.stride3_theta), Int(mb.stride3_lambda),
@@ -689,37 +706,21 @@ def bxdf_sample_measured(
     var sigma_val = _pl2d_eval0(mb.sigma_data, Int(mb.sigma_xs), Int(mb.sigma_ys), u_wo_x, u_wo_y)
     var abs_cos_wi = abs(wi[2])
     if sigma_val <= Float32(0.0) or abs_cos_wi <= Float32(0.0):
-        return (wi, RGB(Float32(0.0)), Float32(0.0), False)
+        return (wi, SpectralSample(Float32(0.0)), Float32(0.0), False)
     var fr_scaled = fr * (ndf_val / (Float32(4.0) * sigma_val * abs_cos_wi))
-
-    # This is a bounce-continuation sample: there is no specific light to
-    # composite with yet (unlike _nee_weight_measured, which has ls.Li), so
-    # -- matching every other material's indirect-bounce convention -- we
-    # composite against a neutral D65 illuminant shape before the one-time
-    # RGB conversion. Converting the bare reflectance alone (the previous,
-    # buggy behavior) implicitly assumes an equal-energy illuminant, whose
-    # white point doesn't match sRGB's D65 reference and biased neutral/blue
-    # reflectances toward violet -- see bxdf_eval_measured's docstring.
-    var illum0 = cie_d65_runtime(spectral_d65, wavelengths.get(0))
-    var illum1 = cie_d65_runtime(spectral_d65, wavelengths.get(1))
-    var illum2 = cie_d65_runtime(spectral_d65, wavelengths.get(2))
-    var illum3 = cie_d65_runtime(spectral_d65, wavelengths.get(3))
-    var fr_lit = SpectralSample(fr_scaled.v0 * illum0, fr_scaled.v1 * illum1, fr_scaled.v2 * illum2, fr_scaled.v3 * illum3)
-    var (r, g, b) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, fr_lit, wavelengths)
 
     var jacobian = Float32(4.0) * wo_dot_wm * max(Float32(2.0) * PI * PI * u_wm_x * sin_theta_m, Float32(1e-6))
     if jacobian <= Float32(0.0):
-        return (wi, RGB(Float32(0.0)), Float32(0.0), False)
+        return (wi, SpectralSample(Float32(0.0)), Float32(0.0), False)
     var pdf = (vndf_pdf / jacobian) * lum_pdf
 
     if flip_wi:
         wi = -wi
 
-    # No post-conversion max(,0) clamp -- see bxdf_eval_measured's comment
-    # above the same pattern for why (out-of-sRGB-gamut negative red is
-    # legitimate for a saturated measured blue, and clamping it away here
-    # inflates the accumulated red channel, reading as violet).
-    return (wi, RGB(r, g, b), pdf, True)
+    # Returned RAW SPECTRAL -- no illuminant composite, no RGB conversion.
+    # The per-wavelength max(fr_i, 0) above is the correct and only clamp
+    # point, matching pbrt's own MeasuredBxDF::Sample_f.
+    return (wi, fr_scaled, pdf, True)
 
 # ── NEE weight (mirrors bxdf.mojo's _nee_weight_simple / _nee_weight_hair) ──
 

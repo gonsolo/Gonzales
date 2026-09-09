@@ -1178,7 +1178,8 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var cos_wi_m = dot(wi_m, gn_m)
             if cos_wi_m <= Float32(0):
                 break
-            flux *= spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (f_m * (cos_wi_m / pdf_m)).r, (f_m * (cos_wi_m / pdf_m)).g, (f_m * (cos_wi_m / pdf_m)).b, ph_wavelengths)
+            # f_m is already spectral -- no RGB round trip.
+            flux *= f_m * (cos_wi_m / pdf_m)
             rd = vec3f(wi_m)
             ro = hit + rd * Float32(0.0002)
 
