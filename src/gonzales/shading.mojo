@@ -1129,6 +1129,7 @@ def _finish_delta_bounce(
     f_spec: SpectralSample,
     hit_point: Vec3f,
     default_albedo: RGB,
+    charge_depth: Bool = True,
 ):
     if bs.is_valid == Int8(0):
         path_ptr[].active = 0
@@ -1141,7 +1142,15 @@ def _finish_delta_bounce(
     path_ptr[].throughput *= f_spec
     path_ptr[].specularBounce = Int8(1)
     path_ptr[].lastBsdfPdf = Float32(0.0)
-    path_ptr[].bounce += 1
+    # `charge_depth` is False only at the boundary of a subsurface interior
+    # (Material_C.sss_boundary). Entry, exit and total internal reflection
+    # there are all parts of ONE BSSRDF scattering event, so charging them to
+    # maxdepth kills TIR-trapped light before it can escape -- the interior
+    # walk steps are already exempt for exactly this reason (Medium_C.is_sss).
+    # Termination still comes from absorption, Russian roulette and the
+    # render loop's round budget.
+    if charge_depth:
+        path_ptr[].bounce += 1
 
     var u_rr = pcg.next_float()
     _apply_russian_roulette(path_ptr, pcg, u_rr)
@@ -1237,7 +1246,16 @@ def shade_dielectric[use_gpu: Bool](
     # glass from air. Some meshes in this model have inward-facing normals (no
     # ReverseOrientation) which would otherwise be read as "exiting" and total-
     # internal-reflect the envmap. Trust the physics for the first bounce.
-    var force_entering = path_ptr[].bounce == 0
+    #
+    # The `current_medium_idx < 0` half matters for subsurface boundaries,
+    # whose events are deliberately not charged to `bounce` (see
+    # Material_C.sss_boundary): without it, `bounce` stays 0 for the whole
+    # interior walk and every boundary hit from INSIDE would be forced to
+    # "entering", applying 1/eta^2 again and refracting as if into the medium
+    # -- light could never leave. Being inside a medium is the physical fact
+    # this test actually wants, and the medium-crossing pass already tracks
+    # it exactly. For an ordinary camera in vacuum this is unchanged.
+    var force_entering = path_ptr[].bounce == 0 and path_ptr[].current_medium_idx < Int32(0)
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var (bs, normal) = bxdf_sample_dielectric(geom_normal, ray_dir, ior, force_entering, pcg.next_float())
@@ -1245,7 +1263,8 @@ def shade_dielectric[use_gpu: Bool](
     var is_reflect = (Int(bs.flags) & Int(BxDFFlags.reflect)) != 0
     var offset = (normal if is_reflect else -normal) * Float32(0.0001)
     var hit_point = ray_org + ray_dir * inter.tHit + offset
-    _finish_delta_bounce(path_ptr, pcg, bs, SpectralSample(bs.f.r), hit_point, RGB(Float32(1)))
+    _finish_delta_bounce(path_ptr, pcg, bs, SpectralSample(bs.f.r), hit_point, RGB(Float32(1)),
+                         mat.sss_boundary == Int8(0))
 
 # Thin dielectric (type 9): one-sided glass — Fresnel selects reflect or transmit,
 # but transmitted ray is NOT refracted (direction unchanged). Models window glass,

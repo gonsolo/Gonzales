@@ -358,7 +358,19 @@ struct MatKind:
 @fieldwise_init
 struct Material_C(TrivialRegisterPassable):
     var type: Int8
-    var _pad0: Int8
+    # 1 when this material is the BOUNDARY of a subsurface interior (its
+    # medium interface's inside medium has Medium_C.is_sss). Set by
+    # pbrt_parser's medium-interface binding pass. Boundary interactions on
+    # such a surface -- entry, exit, and especially total internal reflection
+    # -- must NOT be charged to the scene's maxdepth: the whole
+    # enter/walk/exit sequence models ONE BSSRDF scattering event, exactly
+    # the reasoning that already exempts the interior walk steps via
+    # Medium_C.is_sss. Charging them silently ate light trapped by TIR (a
+    # white furnace lost 10.7% at eta 1.5 and 30% at eta 2.0); see
+    # Scenes/sss_furnace_sweep.py. Occupies a former padding byte, so
+    # Material_C's size and every existing constructor call site are
+    # unchanged.
+    var sss_boundary: Int8
     var _pad1: Int8
     var _pad2: Int8
     var albedo: RGB

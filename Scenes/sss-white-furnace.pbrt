@@ -1,0 +1,58 @@
+# White furnace test -- the ground truth for the subsurface random WALK.
+#
+# The existing sss-beer-lambert / sss-backlit-slab scenes set sigma_s = 0, so
+# they validate the dielectric boundary, the eta^2 factors and Beer-Lambert
+# absorption -- but they contain no scattering at all and therefore cannot
+# test the multiple-scattering walk, which is the entire point of subsurface.
+# This scene closes that gap.
+#
+# Setup: a uniform environment of radiance L = 1 surrounds an object whose
+# interior is a NON-ABSORBING medium (sigma_a = 0, single-scattering albedo
+# exactly 1) behind an INDEX-MATCHED boundary (eta = 1, so Fresnel vanishes
+# and the surface neither reflects nor refracts).
+#
+# Under those conditions energy conservation alone fixes the answer with no
+# free parameters: every photon entering the object must eventually leave it,
+# and the boundary cannot redirect anything on the way in or out. The object
+# is therefore INVISIBLE -- every pixel must read exactly 1.0, and the object's
+# silhouette must not be discernible at any sigma_s.
+#
+# What this catches that an absorption-only test cannot: any per-scattering-
+# event energy error. Such an error compounds as albedo^n over a walk, so it
+# is invisible at one bounce and glaring after many. Raising sigma_s raises
+# the mean number of scattering events, so sweeping it turns a per-bounce
+# error of any size into an arbitrarily large image error -- a gain reads as
+# a bright blob, a loss as a dark one. See Scenes/sss_furnace_sweep.py.
+Sampler "halton" "integer pixelsamples" [ 256 ]
+Film "rgb" "string filename" [ "sss-white-furnace.exr" ]
+    "integer xresolution" [ 120 ] "integer yresolution" [ 120 ]
+LookAt 0 0 -5   0 0 0   0 1 0
+Camera "perspective" "float fov" [ 30 ]
+
+WorldBegin
+
+# Uniform environment, L = 1 in every direction.
+LightSource "infinite" "rgb L" [ 1 1 1 ]
+
+# Index-matched, non-absorbing scattering sphere. sigma_s is the swept axis;
+# sigma_a stays 0 so the interior is exactly conservative.
+# NOTE: a closed trianglemesh box, not Shape "sphere" -- a scene whose only
+# geometry is an analytic sphere is currently rejected outright with "scene
+# has no geometry, skipping render" (pre-existing, unrelated to subsurface).
+AttributeBegin
+    Material "subsurface"
+        "float scale" [ 1 ]
+        "rgb sigma_s" [ 5 5 5 ]
+        "rgb sigma_a" [ 0 0 0 ]
+        "float g" [ 0 ]
+        "float eta" [ 1 ]
+    Shape "trianglemesh"
+        "integer indices" [ 0 2 1  0 3 2
+                            4 5 6  4 6 7
+                            0 1 5  0 5 4
+                            1 2 6  1 6 5
+                            2 3 7  2 7 6
+                            3 0 4  3 4 7 ]
+        "point3 P" [ -1 -1 -1   1 -1 -1   1 1 -1   -1 1 -1
+                     -1 -1  1   1 -1  1   1 1  1   -1 1  1 ]
+AttributeEnd
