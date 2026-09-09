@@ -405,7 +405,9 @@ def _tex_lookup[use_gpu: Bool](
                 var su = w0*mesh.uvs[v0*2]   + inter.u*mesh.uvs[v1*2]   + inter.v*mesh.uvs[v2*2]
                 var tv = w0*mesh.uvs[v0*2+1] + inter.u*mesh.uvs[v1*2+1] + inter.v*mesh.uvs[v2*2+1]
                 tv = Float32(1.0) - tv  # PBRT V-flip: V=0 at top
-                return _sample_tex(tex, su, tv)
+                # mat.tex_scale is pbrt's "scale" texture class folded into the
+                # lookup (1.0 when absent) -- see material_builder.mojo.
+                return _sample_tex(tex, su, tv) * mat.tex_scale
     else:
         if ti >= 0 and Int(tex_filenames) > 8:
             var filename = tex_filenames[ti]
@@ -425,7 +427,7 @@ def _tex_lookup[use_gpu: Bool](
                     UnsafePointer[Float32, MutExternalOrigin]](filename, su, tv, tr)
                 var result = RGB(_srgb_to_linear(tr[0]), _srgb_to_linear(tr[1]), _srgb_to_linear(tr[2]))
                 tr.free()
-                return result
+                return result * mat.tex_scale
     return mat.albedo
 
 

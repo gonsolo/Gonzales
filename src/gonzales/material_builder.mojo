@@ -242,8 +242,14 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
 
     # "reflectance": either an RGB/float value, OR a texture reference --
     # looked up in tex_names (imagemap) first, then constant textures, then
-    # procedural checkerboard textures.
+    # procedural checkerboard textures, then through one level of "scale"
+    # indirection to an imagemap (`Texture "sgrid" "spectrum" "scale"
+    # "texture tex" ["grid"] "float scale" [0.5]`, the shape killeroos and
+    # ~49 other spectrum-texture declarations in the corpus use). Only one
+    # level is resolved, matching the bump path's own convention below; a
+    # scale-of-a-scale isn't a pattern seen in practice.
     var tex_idx_for_mat = Int32(-1)
+    var tex_scale_for_mat = Float32(1)
     var checker_tex1 = RGB(Float32(1))
     var checker_tex2 = RGB(Float32(0))
     var checker_uscale = Float32(1)
@@ -279,7 +285,43 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
                             checker_tex2 = RGB(s[0].checker_tex2[ki*3+0], s[0].checker_tex2[ki*3+1], s[0].checker_tex2[ki*3+2])
                             checker_uscale = s[0].checker_uscale[ki]
                             checker_vscale = s[0].checker_vscale[ki]
+                            matched_tex = True
                             break
+                if not matched_tex:
+                    for si in range(len(s[0].scale_tex_names)):
+                        if s[0].scale_tex_names[si] == tex_name:
+                            var base_name = s[0].scale_tex_base[si]
+                            for ti in range(len(s[0].tex_names)):
+                                if s[0].tex_names[ti] == base_name:
+                                    tex_idx_for_mat = Int32(ti)
+                                    tex_scale_for_mat = s[0].scale_tex_scale[si]
+                                    matched_tex = True
+                                    break
+                            if not matched_tex:
+                                # A "scale" wrapping something that isn't a
+                                # plain imagemap (a constant, a checkerboard,
+                                # or another scale). Fold the multiplier into
+                                # the flat albedo rather than dropping it.
+                                for ci in range(len(s[0].const_tex_names)):
+                                    if s[0].const_tex_names[ci] == base_name:
+                                        var sc = s[0].scale_tex_scale[si]
+                                        rgb = RGB(s[0].const_tex_rgb[ci*3+0] * sc,
+                                                  s[0].const_tex_rgb[ci*3+1] * sc,
+                                                  s[0].const_tex_rgb[ci*3+2] * sc)
+                                        matched_tex = True
+                                        break
+                            if not matched_tex:
+                                print("Warning: texture '" + tex_name
+                                      + "' is a \"scale\" of '" + base_name
+                                      + "', which is not a supported base texture"
+                                      + " — falling back to flat albedo.")
+                                matched_tex = True
+                            break
+                if not matched_tex:
+                    print("Warning: material references undefined texture '"
+                          + tex_name + "' for reflectance — falling back to"
+                          + " flat albedo. (Unsupported texture classes are"
+                          + " reported by handle_texture at parse time.)")
 
     # "L": some scenes set a material's base color via this name instead of
     # "reflectance" -- overrides if present (same target, same as the RGB
@@ -563,6 +605,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
     nm.roughness_u    = mat_roughU
     nm.roughness_v    = mat_roughV
     nm.tex_idx        = tex_idx_for_mat
+    nm.tex_scale      = tex_scale_for_mat
     nm.normal_tex_idx = normal_tex_idx_for_mat
     nm.rough_tex_idx  = rough_tex_idx_for_mat
     nm.bump_tex_idx   = bump_tex_idx_for_mat

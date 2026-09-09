@@ -383,6 +383,12 @@ struct Material_C(TrivialRegisterPassable):
     var checker_vscale: Float32
     var measured_idx: Int32  # -1 = not a "measured" material; >= 0 = index into
                               # SceneDescriptor2_C.measuredBrdfs (see MeasuredBRDF_C)
+    var tex_scale: Float32   # multiplier applied to tex_idx's looked-up value, from
+                              # pbrt's "scale" texture class wrapping an imagemap
+                              # (`Texture "x" "spectrum" "scale" "texture tex" ["base"]
+                              # "float scale" [s]`). 1.0 = no scaling. Resolved in
+                              # material_builder.mojo's "reflectance" handler; applied
+                              # in shading.mojo's _tex_lookup.
 
 # ── Measured (tabulated) BRDF ────────────────────────────────────────────────
 # One instance per distinct ".bsdf" tensor file (deduped by path — a scene may

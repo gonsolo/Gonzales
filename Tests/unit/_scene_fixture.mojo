@@ -106,6 +106,7 @@ def make_triangle_scene(verts: List[Point3f]) -> TriangleSceneFixture:
         RGB(Float32(0.0)), RGB(Float32(0.0)),  # checker_tex1/2
         Float32(1.0), Float32(1.0),  # checker_uscale/vscale
         Int32(-1),                   # measured_idx
+        Float32(1.0),                # tex_scale
     )
 
     return TriangleSceneFixture(
