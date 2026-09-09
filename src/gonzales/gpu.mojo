@@ -16,6 +16,7 @@ from .guide import null_guide
 from .restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io_null
 from .restir_vol import (
     vol_reservoir_init, vol_target_pdf, VOL_TR_UNIT, VOL_RIS_CANDIDATES,
+    VOL_RIS_DISTANCE,
     VolReservoir, VolReservoirIO, vol_reservoir_io_null,
     vol_temporal_spatial_combine, VolShiftMode,
 )
@@ -2455,7 +2456,48 @@ def _sample_medium_core(
             res.medium_idx = Int32(med_idx)
             var p_hat_win = Float32(0.0)
 
+            # ── Distance resampling (restir_vol.mojo's VOL_RIS_DISTANCE) ──
+            # Each candidate draws its own scatter distance as well as its own
+            # light, from the EXACT conditional collision density
+            # q(t) = sigma_t e^{-sigma_t t} / (1 - e^{-sigma_t t_surf}). That
+            # choice is what makes this cheap: q(t) cancels out of both the
+            # RIS weight and the resolve (see the derivation on
+            # VOL_RIS_DISTANCE), so nothing below changes except WHERE the
+            # target is evaluated and which point gets shadowed.
+            #
+            # Restricted to homogeneous, achromatic media. Homogeneous because
+            # only there is the conditional analytic (heterogeneous needs a
+            # rejection-conditioned delta-tracking walk per candidate --
+            # unbiased, no marches, but ~M walks per segment). Achromatic
+            # because the per-channel transmittance ratio applied to
+            # throughput above was computed at t_free, and a resampled vertex
+            # sits at a different optical depth; for a grey medium that factor
+            # is exactly 1, so the question does not arise. Both guards fail
+            # CLOSED -- a medium that does not qualify silently keeps 7.2's
+            # fixed-vertex behavior, which is always correct.
+            var dist_ris = (VOL_RIS_DISTANCE and (not use_dense) and (not use_nvdb)
+                and sigma_t.r > Float32(0.0) and t_surf > Float32(0.0)
+                and sigma_t.g == sigma_t.r and sigma_t.b == sigma_t.r
+                and med.sigma_s.g == med.sigma_s.r and med.sigma_s.b == med.sigma_s.r)
+            var pc_norm = Float32(0.0)
+            if dist_ris:
+                pc_norm = Float32(1.0) - exp(-sigma_t.r * t_surf)
+                # A segment with essentially no collision probability cannot
+                # produce a usable conditional draw; fall back rather than
+                # divide by a vanishing normalizer.
+                if pc_norm < Float32(1e-6):
+                    dist_ris = False
+
             for _cand in range(VOL_RIS_CANDIDATES):
+                # Candidate vertex. When distance resampling is off this is
+                # exactly the delta-tracking vertex, for every candidate --
+                # i.e. bit-identical to 7.2, no extra RNG draw taken.
+                var cand_v = scatter_v
+                if dist_ris:
+                    var u_t = pcg.next_float()
+                    # Inverse CDF of the truncated exponential: exact, cheap.
+                    var t_c = -log(max(Float32(1.0) - u_t * pc_norm, Float32(1e-7))) / sigma_t.r
+                    cand_v = ray_org + ray_dir * t_c
                 var u_nee = pcg.next_float()
                 var ls_result = light_sampler_sample(ls, u_nee)
                 var light_idx = ls_result[0]
@@ -2484,13 +2526,13 @@ def _sample_medium_core(
                 # rather than candidates that happened to be usable.
                 var w_cand = Float32(0.0)
                 var p_hat_cand = Float32(0.0)
-                var to_light_c = light_point - scatter_pt_s
+                var to_light_c = light_point - cand_v
                 var dist_c = sqrt(dot(to_light_c, to_light_c))
                 if dist_c > Float32(0.0001) and al.total_area > Float32(0) and light_sel_pdf > Float32(0):
                     var lp_v = Vec3f(light_point[0], light_point[1], light_point[2])
                     var ln_v = Vec3f(light_normal[0], light_normal[1], light_normal[2])
                     p_hat_cand = vol_target_pdf(
-                        ray_dir, scatter_v, res.sigma_s, med.g,
+                        ray_dir, cand_v, res.sigma_s, med.g,
                         lp_v, ln_v, al.emission, VOL_TR_UNIT)
                     if p_hat_cand > Float32(0.0):
                         # q is the AREA-measure pdf of this sample: probability
@@ -2503,6 +2545,11 @@ def _sample_medium_core(
                     res.le = al.emission
                     res.light_idx = Int32(light_idx)
                     res.valid = Int8(1)
+                    # The winning VERTEX travels with the winning light: the
+                    # resolve below shadow-rays from here, and the payload is
+                    # what a reusing pixel would read. Identical to scatter_v
+                    # when distance resampling is off.
+                    res.scatter_point = cand_v
                     p_hat_win = p_hat_cand
 
             # Phase 7.3: temporal reuse when this call has a real per-pixel
@@ -2539,8 +2586,17 @@ def _sample_medium_core(
             # in-frame scatter falls back to the plain single-frame RIS
             # estimator (7.2's original, always-correct behavior) instead of
             # corrupting the persisted reservoir.
+            # `not dist_ris`: temporal reuse re-targets a previous frame's
+            # sample at THIS pixel's vertex (VolShiftMode.identity), which
+            # assumes the vertex is the one the resolve will shadow from.
+            # Distance resampling breaks that assumption -- the winner's
+            # vertex is now a resampled one -- and combining the two is
+            # untested. They are kept mutually exclusive rather than shipped
+            # as an unverified interaction; measuring distance resampling on
+            # its own is what this pass is for.
             var vol_reuse_ok = (pixel_idx >= 0 and _is_real_ptr(vol_read)
-                and _is_real_ptr(vol_used) and vol_used[i] == Int8(0))
+                and _is_real_ptr(vol_used) and vol_used[i] == Int8(0)
+                and not dist_ris)
             if vol_reuse_ok:
                 vol_used[i] = Int8(1)
                 var vol_io = vol_reservoir_io_null()
@@ -2565,13 +2621,18 @@ def _sample_medium_core(
             if res.valid != Int8(0) and res.state.w > Float32(0.0):
                 var light_point = res.light_point.to_simd()
                 var light_normal = res.light_normal.to_simd()
-                var to_light = light_point - scatter_pt_s
+                # Shadow-ray from the WINNER's vertex. Equal to scatter_pt_s
+                # unless distance resampling moved it (and temporal reuse,
+                # which can substitute a vertex from another frame, is
+                # mutually exclusive with that -- see vol_reuse_ok above).
+                var resolve_pt = res.scatter_point if dist_ris else scatter_pt_s
+                var to_light = light_point - resolve_pt
                 var dist_sq = dot(to_light, to_light)
                 var dist = sqrt(dist_sq)
                 var shadow_dir = to_light * (Float32(1) / dist)
                 var cos_l = -dot(light_normal, shadow_dir)
                 if cos_l > Float32(0):
-                    var shad_org = point3f(scatter_pt_s + shadow_dir * Float32(0.0002))
+                    var shad_org = point3f(resolve_pt + shadow_dir * Float32(0.0002))
                     var shad_ray = Ray_C(shad_org, vec3f(shadow_dir))
                     var shad_tmax = max(dist - Float32(0.0002), Float32(0.0)) * Float32(0.9995)
                     if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shad_ray, shad_tmax, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres, materials=materials):
@@ -2606,7 +2667,7 @@ def _sample_medium_core(
                                     ts += -log(max(us, Float32(1e-7))) / sigma_maj_s
                                     if ts >= dist:
                                         break
-                                    var ps = scatter_pt_s + shadow_dir * ts
+                                    var ps = resolve_pt + shadow_dir * ts
                                     var density_s = nvdb_sample_density(nvdb_grid_s, ps) if use_nvdb_s else grid_sample_density(grid_s, ps)
                                     Tval *= Float32(1.0) - (density_s * sigma_t.r) / sigma_maj_s
                                     if Tval < Float32(1e-4):
