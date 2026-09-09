@@ -2244,11 +2244,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
 
                 for li_b in range(_bdpt_simple_light_count(sd)):
                     var ls_ib = _bdpt_sample_simple_light(sd, li_b, hit.to_simd(), pcg)
-                    var w_ib = _nee_weight_coated_diffuse_base(ls_ib, eff_alb, ior, gn, wo)
+                    var w_ib = _nee_weight_coated_diffuse_base(ls_ib, eff_alb, ior, gn)
                     total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_ib.r, w_ib.g, w_ib.b, wavelengths), ls_ib, hit, gn, cur_med_idx, sd, scratch, wavelengths)
                 for inf_i in range(Int(sd.infiniteLightCount)):
                     var ls_inf = _sample_infinite_light_nee(sd.infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-                    var w_inf = _nee_weight_coated_diffuse_base(ls_inf, eff_alb, ior, gn, wo)
+                    var w_inf = _nee_weight_coated_diffuse_base(ls_inf, eff_alb, ior, gn)
                     total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_inf.r, w_inf.g, w_inf.b, wavelengths), ls_inf, hit, gn, cur_med_idx, sd, scratch, wavelengths)
 
                 # Task #161 follow-up (2026-07-13): MNEE for area lights

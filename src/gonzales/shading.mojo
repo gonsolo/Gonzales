@@ -966,7 +966,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         # their own textured-CDF/cosine-hemisphere sampling rather than this
         # generic path -- see project_light_bxdf_interfaces memory.
         var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
-        var w_area = _nee_weight_coated_diffuse_base(ls_area, alb, ior, normal, wo)
+        var w_area = _nee_weight_coated_diffuse_base(ls_area, alb, ior, normal)
         if not w_area.is_black():
             var contrib_area = path_ptr[].throughput * _to_spec_refl(ctx, beta, path_ptr[].wavelengths) * _to_spec_illum(ctx, w_area, path_ptr[].wavelengths)
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_area.wi, ls_area.dist * Float32(0.9999), contrib_area)
@@ -978,7 +978,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
             var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
             var ls = res[0].copy()
             var tmax = res[1]
-            var w = _nee_weight_coated_diffuse_base(ls, alb, ior, normal, wo)
+            var w = _nee_weight_coated_diffuse_base(ls, alb, ior, normal)
             if not w.is_black():
                 var contrib = path_ptr[].throughput * _to_spec_refl(ctx, beta, path_ptr[].wavelengths) * _to_spec_illum(ctx, w, path_ptr[].wavelengths)
                 _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls.wi, tmax, contrib)

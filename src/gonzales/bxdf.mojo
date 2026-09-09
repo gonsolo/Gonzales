@@ -551,27 +551,35 @@ def _nee_weight_coated_diffuse_base(
     alb: RGB,
     ior: Float32,
     n:   Vec3f,
-    wo:  Vec3f,
 ) -> RGB:
     """NEE weight (throughput AND the walk's `beta` not applied) for a
     coateddiffuse base against ONE LightSample -- see
     docs/05_reflection_models.md for the eta^2/Fresnel derivation. Kept
     separate from _nee_weight_simple because the coat transmittance and
-    `beta` walk state don't fit bxdf_eval_any's flat signature."""
+    `beta` walk state don't fit bxdf_eval_any's flat signature.
+
+    TRAP: applies the LIGHT-side coat transmittance only. The VIEW-side one
+    is already supplied, in expectation, by the caller's entry coin flip
+    (`if u < f_entry: reflect; return`) -- reaching this walk at all costs
+    exactly one factor of `1 - F(cos_o)`. Applying it here too squares it,
+    which is invisible at normal incidence (0.96 -> 0.92 at eta 1.5) and
+    catastrophic at grazing exit, where F -> 1: it cost 56% of the energy at
+    a 4-degree view. Same double-count the coat-lobe NEE's own docstring
+    warns about, and the env-map NEE in the same loop already gets this
+    right ("view-side coat transmittance is implicit in reaching this
+    branch")."""
     if not ls.valid:
         return RGB(Float32(0.0))
     var cos_s = dot(n, ls.wi)
     if cos_s <= Float32(0.0):
         return RGB(Float32(0.0))
     var t_light = Float32(1.0) - fr_dielectric(cos_s, ior)
-    # Both Fresnel transmissions (light in, view out) AND 1/eta^2 -- see
+    # Light-side Fresnel transmission AND 1/eta^2 -- see
     # docs/05_reflection_models.md. TRAP: 1/eta^2 lives HERE, not folded into
     # the caller's walk `beta`, because beta is what the coat loop's RR and
     # chrominance floor threshold against (`beta_max < 0.25`) -- scaling it
     # by 1/eta^2 (0.25 at eta 2) would fire RR before the walk even starts.
-    var cos_o = abs(dot(n, wo))
-    var t_view = Float32(1.0) - fr_dielectric(cos_o, ior)
-    var t_both = t_light * t_view / max(ior * ior, Float32(1e-6))
+    var t_both = t_light / max(ior * ior, Float32(1e-6))
     if ls.is_delta:
         return alb * ls.Li * (cos_s * t_both / PI)
     if ls.pdf <= Float32(0.0):
