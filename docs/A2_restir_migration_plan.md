@@ -1,15 +1,28 @@
 # A2: ReSTIR / SMS Migration Plan
 
 Plan for moving gonzales from VCM + SPPM + lightweight guiding to a
-GRIS/ReSTIR-based sampling framework. **Status (2026-09-08): Phases 0-5
-done; Phase 6 core done (`--sms-restir`, temporal-only reuse, no spatial
-yet); Phase 7 candidate generation + resolve done (GPU wavefront volume
-scatter vertices, `restir_vol.mojo` + `gpu.mojo`), TEMPORAL reservoir reuse
-now wired in too (`--vol-restir-reuse`, CPU and GPU, temporal-only -- no
-spatial), verified with a real variance win on both backends -- see §4's
-phase table, this section's own Phase 7 writeup for the exact boundary,
-and `docs/A1_feature_status.md`'s Implemented Features; Phases 8-10 not
-started.**
+GRIS/ReSTIR-based sampling framework.
+
+**Status (2026-09-09): Phases 0-5 done; Phase 6 core done (`--sms-restir`,
+temporal-only reuse — its spatial half runs but finds mostly-empty
+neighbour reservoirs, so no win yet); Phase 7 machinery complete (light RIS
+at volume scatter vertices, distance resampling **on by default**, temporal
+reuse opt-in via `--vol-restir-reuse`, spatial reuse measured and shipped
+disabled); Phase 8.1's MIS-weight recovery derived and machine-checked
+(`restir_bdpt.mojo`, `Tests/unit/test_restir_bdpt_mis.mojo`) with the rest
+of Phase 8 not started; Phases 9-10 open research.**
+
+**Neither SPPM nor VCM has been retired, and completing Phases 7 and 8 does
+not by itself permit it** — those are separate coverage decisions, written
+as explicit gates in §4a. Read that before concluding a phase's completion
+means an integrator can go.
+
+A caution learned the hard way (2026-09-09): a phase's *machinery* being
+done, an integrator being *replaceable*, and a measured *variance win* are
+three different claims, and this document previously blurred all three.
+Several recorded figures also turned out to be measured against baselines
+that were themselves buggy — always re-measure after a correctness fix
+lands rather than trusting a number recorded earlier in this file.
 
 Theory (MIS, RIS/GRIS, shift mappings, VCM's weight derivation, the
 "common currency" problem) lives in a companion document,
@@ -140,10 +153,49 @@ Phases 1-8 each deliver standalone value and do **not** depend on Phase 9.
 | 4 | ReSTIR GI (path reuse) | 3 | Engineering | Done (diffuse x1/x2 only) |
 | 5 | SMS (generalize MNEE) | — (parallel from 0) | Eng. + some research | Done (`sms.mojo`) |
 | 6 | SMS-ReSTIR (manifold shift reservoir) | 4, 5 | Research-flavored | Core done, `--sms-restir` (temporal only, no spatial) |
-| 7 | Volumetric ReSTIR → retire SPPM | 4 | Research-flavored | Candidate generation + resolve done (GPU wavefront); temporal/spatial combine implemented + unit-tested, not wired into the render loop |
-| 8 | ReSTIR BDPT → retire VCM | 4 | Hard | Not started |
+| 7 | Volumetric ReSTIR machinery (SPPM retirement is gated separately — §4a) | 4 | Research-flavored | Done: light RIS (7.1/7.2) wired CPU+GPU; distance resampling (default **on**); temporal reuse (opt-in, `--vol-restir-reuse`); spatial reuse measured as no consistent win, shipped disabled |
+| 8 | ReSTIR BDPT machinery (VCM retirement is gated separately — §4a) | 4 | Hard | 8.1 MIS-weight recovery derived from gonzales's own dVCM/dVC and machine-checked (`restir_bdpt.mojo`); reconnection Jacobian + reservoir plumbing not started; 8.2/8.3 not started |
 | 9 | Common currency: joint reservoir | 6, 7, 8 | **Open research** | Investigated, not implemented |
 | 10 | Cost-aware weights + throttling | 9 | **Open research** | Investigated, not implemented |
+
+## 4a. Retirement gates (added 2026-09-09)
+
+Phases 7 and 8 were originally titled "→ retire SPPM" and "→ retire VCM".
+That framing was **misleading and cost real time**: it repeatedly led both
+the author and later contributors to read "Phase 7 complete" as "SPPM can
+go", when the two are not the same claim. What those phases deliver is
+*resampling machinery*. Retiring an integrator is a separate decision, and
+it is gated on **coverage** — whether every effect the old integrator
+uniquely reaches has an in-framework substitute — not on the machinery
+existing.
+
+The plan already said as much in two places, easy to miss: §3's closing
+line ("gonzales already ships two SDS-capable integrators, so it can never
+regress on SDS"), and §8.3's admission that ReSTIR BDPT leaves SDS
+unsolved and has **no participating-media support at all**.
+
+State the gates explicitly, so they can be checked rather than assumed:
+
+**Gate S — retire SPPM.** All must hold:
+1. Every caustic-bearing corpus scene renders without SPPM at no measured
+   loss of the caustic feature itself (per-region comparison against a
+   reference — a whole-image mean can look healthy while a caustic is
+   entirely absent).
+2. **Volumetric** caustics have an in-framework substitute. Today they do
+   not: SMS is surface-only, and `_bdpt_vertex_mis_scoped` (`bdpt.mojo`)
+   excludes every volume-scattering vertex from per-vertex MIS, which is
+   precisely why `--sppm` is kept alive. Closing this means extending
+   `dVCM`/`dVC` to phase-function pdfs — a standalone research task, and
+   the same gap Phase 8.3 scopes out.
+3. Phase 6's SMS-ReSTIR actually carries the surface-SDS load (its spatial
+   reuse currently finds mostly-empty neighbour reservoirs — no win yet).
+
+**Gate V — retire VCM.** All of Gate S, plus §8.3's own limitations
+resolved: SDS paths covered by something (Phase 6, per §3's table), and
+participating media handled, which ReSTIR BDPT does not do.
+
+Until a gate is met, "Phase N is complete" means the machinery shipped —
+never that the integrator can be removed.
 
 ### Phase 0 — Infrastructure
 
@@ -301,7 +353,10 @@ model). Keep it a **separate reservoir** per the published design — fusing
 with DI/GI is Phase 9. Optionally adopt their tile-based sample-space
 partitioning, which is what makes it interactive-viable.
 
-### Phase 7 — Volumetric ReSTIR → retire SPPM
+### Phase 7 — Volumetric ReSTIR machinery
+
+*(Originally titled "→ retire SPPM". Retiring SPPM is Gate S in §4a, not a
+deliverable of this phase — see that section for why the rename.)*
 
 **Ghost ReSTIR check RESOLVED (2026-09-06): it published, but only as a
 SIGGRAPH 2026 *Poster* — a two-page extended abstract, no full paper, no
@@ -535,7 +590,11 @@ Gonzales already has homogeneous media (`Medium_C`,
 `sample_homogeneous_free_flight`, `sample_medium_gpu`). Retire `sppm.mojo`
 only after parity on `volumetric-caustic`.
 
-### Phase 8 — ReSTIR BDPT → retire VCM
+### Phase 8 — ReSTIR BDPT machinery
+
+*(Originally titled "→ retire VCM". Retiring VCM is Gate V in §4a. Note
+8.3 below states plainly that ReSTIR BDPT does not cover everything VCM
+does, so this phase cannot on its own justify the removal.)*
 
 **Highest-risk phase.**
 
