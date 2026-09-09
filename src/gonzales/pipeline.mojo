@@ -1330,7 +1330,11 @@ def parse_and_render(
         # denoised_gpu, albedo_gpu, and results freed automatically
         mojo_parsed_free(psc)
         return Int32(0)
-    elif psc[0].prim_count == 0:
+    elif psc[0].prim_count == 0 and psc[0].sphere_count == 0:
+        # Analytic spheres are NOT in prim_count -- they live in their own flat
+        # psc[0].spheres array (see bvh.mojo's test_spheres), so a scene whose
+        # only geometry is Shape "sphere" has prim_count == 0 and was rejected
+        # outright. Same mesh-only assumption as the primId.type==4 bug class.
         print("Warning: scene has no geometry, skipping render")
         mojo_parsed_free(psc)
         return Int32(0)
@@ -1617,7 +1621,9 @@ def render_interactive(
             gpu_free_scene(handle)
         mojo_parsed_free(psc)
         return
-    if not use_gpu and psc[0].prim_count == 0:
+    if not use_gpu and psc[0].prim_count == 0 and psc[0].sphere_count == 0:
+        # See the batch-path guard above: analytic spheres are not counted in
+        # prim_count.
         print("Warning: scene has no geometry, skipping render")
         viewer_destroy(v)
         mojo_parsed_free(psc)

@@ -1168,6 +1168,12 @@ def traverse_bvh2_gpu(
     var ray = rays[tid]
     var tMax = tMaxValues[tid]
     var result_ptr = results + tid
+    # WARNING: no spheres/n_spheres are threaded into this kernel, so analytic
+    # spheres (PrimId_C.type == 4, held in a separate flat array) are INVISIBLE
+    # to it -- the same omission that made spheres invisible to SPPM and broke
+    # volumetric-caustic. This kernel and its host wrapper gpu_traverse_batch
+    # have no callers today. Before giving them one, add sphere params and a
+    # test_spheres pass, exactly as sample_medium_gpu and the SPPM kernels do.
     traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, tMax, result_ptr)
 
 def gpu_traverse_batch(

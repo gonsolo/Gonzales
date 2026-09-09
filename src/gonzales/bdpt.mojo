@@ -2021,7 +2021,15 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             mis_null_dist = Float32(0)
 
         if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit:
-            var gn = _geom_normal(inter, sd.meshes, sd.instances)
+            var gn: Vec3f
+            if inter.primId.type == Int8(4):
+                # Analytic sphere: _geom_normal returns a fixed +Y placeholder
+                # for every non-mesh primitive, which silently corrupts the
+                # cos_fix below and with it this vertex's dVCM/dVC/dVM carries.
+                var _sph_gn = sd.spheres[Int(inter.primId.id1)]
+                gn = sphere_outward_normal(hit, _sph_gn.center).to_simd()
+            else:
+                gn = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             # VCM Stage 2b: finish the per-bounce MIS correction (dist²
             # portion already applied above) -- see
@@ -2147,7 +2155,15 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # vertices via _eval_vertex's generic Lambertian fallback
             # (weight=1, no real MIS), never a full "no connection at all"
             # exclusion.
-            var gn = _geom_normal(inter, sd.meshes, sd.instances)
+            var gn: Vec3f
+            if inter.primId.type == Int8(4):
+                # Analytic sphere: _geom_normal returns a fixed +Y placeholder
+                # for every non-mesh primitive, which silently corrupts the
+                # cos_fix below and with it this vertex's dVCM/dVC/dVM carries.
+                var _sph_gn = sd.spheres[Int(inter.primId.id1)]
+                gn = sphere_outward_normal(hit, _sph_gn.center).to_simd()
+            else:
+                gn = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             var cos_fix = abs(dot(-ray_dir, gn))
             if cos_fix > Float32(1e-6):
@@ -3062,7 +3078,15 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 mat.type = MatKind.diffuse
 
         if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit:
-            var gn = _geom_normal(inter, sd.meshes, sd.instances)
+            var gn: Vec3f
+            if inter.primId.type == Int8(4):
+                # Analytic sphere: _geom_normal returns a fixed +Y placeholder
+                # for every non-mesh primitive, which silently corrupts the
+                # cos_fix below and with it this vertex's dVCM/dVC/dVM carries.
+                var _sph_gn = sd.spheres[Int(inter.primId.id1)]
+                gn = sphere_outward_normal(hit, _sph_gn.center).to_simd()
+            else:
+                gn = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             # VCM Stage 2b: finish the per-bounce MIS correction (the
             # dist² portion was already applied above, shared across
@@ -3122,7 +3146,15 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             # walk's continuation direction + flux attenuation matter here.
             # Stored vertices use mat_kind=4, same unweighted scope as the
             # camera side.
-            var gn = _geom_normal(inter, sd.meshes, sd.instances)
+            var gn: Vec3f
+            if inter.primId.type == Int8(4):
+                # Analytic sphere: _geom_normal returns a fixed +Y placeholder
+                # for every non-mesh primitive, which silently corrupts the
+                # cos_fix below and with it this vertex's dVCM/dVC/dVM carries.
+                var _sph_gn = sd.spheres[Int(inter.primId.id1)]
+                gn = sphere_outward_normal(hit, _sph_gn.center).to_simd()
+            else:
+                gn = _geom_normal(inter, sd.meshes, sd.instances)
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             var cos_fix = abs(dot(-ray_dir, gn))
             if cos_fix > Float32(1e-6):
