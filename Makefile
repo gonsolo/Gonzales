@@ -85,7 +85,7 @@ OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(
 
 .PHONY: all c ca clean clean_all e edit es editScene em editMakefile lldb p perf tags t test smoke smoketest \
 	test_debug test_release v view wc book book-html book-watch ut unittest \
-	sms_mitsuba_ref
+	caustics causticstest sms_mitsuba_ref
 
 PBRT_OPTIONS = #--quiet # --stats #--gpu #--nthreads 1 #--quiet --v 2
 
@@ -277,10 +277,72 @@ endif
 # GPU rows only run where there is a CUDA toolkit to build them.
 SMOKE_SCENE := Scenes/cornell-box.pbrt
 SMOKE_ARGS  := --no-denoise --spp 4 --resolution 32x32 --seed 1
-SMOKE_MODES := cpu-pt:  cpu-vcm:--vcm
+SMOKE_MODES := cpu-pt:  cpu-vcm:--vcm cpu-sppm:--sppm
 ifneq ($(HAVE_CUDA),)
-SMOKE_MODES += gpu-pt:--gpu gpu-vcm:--gpu\ --vcm gpu-vcm-wf:--gpu\ --vcm\ --vcm-wavefront
+SMOKE_MODES += gpu-pt:--gpu gpu-vcm:--gpu\ --vcm gpu-vcm-wf:--gpu\ --vcm\ --vcm-wavefront gpu-sppm:--gpu\ --sppm
 endif
+# ── causticstest ──────────────────────────────────────────────────────────────
+# The smoketest above asserts a per-mode MEAN, which structurally CANNOT catch
+# a missing caustic: volumetric-caustic rendered as an unlit box with no fog,
+# no sphere and no beam still has a perfectly plausible nonzero mean, and
+# cornell-box (the smoke scene) contains no participating media and no
+# analytic sphere at all. That is precisely how SPPM shipped for a long time
+# producing neither, unnoticed.
+#
+# So caustic PRESENCE gets its own target, on the scenes that actually have
+# one, using the scale-free row-median metric in
+# Scenes/caustic_presence_check.py (absolute error cannot answer "is the
+# caustic there" -- the Tungsten references sit at a different scene-conversion
+# scale, and real pbrt-v4 is equally "off" against them).
+#
+# Not folded into `make smoketest`: this needs the reference's native 1024**2
+# (the metric's trajectory is in absolute reference pixels) and takes ~1 min,
+# against a smoketest measured in seconds. Run it after touching SPPM,
+# participating media, dielectrics, or analytic-sphere traversal.
+#
+# CAUSTIC_REF_DIR defaults to the bitterli corpus; override if it lives
+# elsewhere. Scenes are skipped (not failed) when the corpus is absent, so
+# this stays runnable on a machine without it.
+#
+# Threshold: this fails only on the harness's ABSENT verdict, deliberately
+# NOT on its stricter "CAUSTIC PRESENT" (> 2.0). Measured on volumetric-
+# caustic at this budget the score sits at 1.99-2.11 run to run, straddling
+# 2.0, while the pre-fix broken renderer scored 1.05 and the reference scores
+# 5.53. So ABSENT cleanly separates working from broken, and gating on
+# PRESENT would be flaky. That 2.0-vs-5.5 gap is itself real and unclosed:
+# gonzales's beam is present but materially less concentrated than the
+# reference's, and raising passes/photons does not move it (2.03 at 8 passes,
+# 2.06 at 16, 2.11 at 32) -- so it is a systematic difference, not noise.
+CAUSTIC_REF_DIR ?= $(HOME)/src/bitterli
+CAUSTIC_PASSES  ?= 8
+CAUSTIC_PHOTONS ?= 100000
+caustics: causticstest
+causticstest: release
+	@rc=0; \
+	vc="$(CAUSTIC_REF_DIR)/volumetric-caustic/pbrt"; \
+	if [ ! -f "$$vc/scene-v4.pbrt" ]; then \
+		echo "skip volumetric-caustic (no corpus at $$vc)"; \
+	else \
+		sed 's/volumetric-caustic\.png/caustictest-vc.exr/' "$$vc/scene-v4.pbrt" > build/caustictest-vc.pbrt; \
+		rm -f caustictest-vc.exr; \
+		./build/gonzales --sppm --sppm-passes $(CAUSTIC_PASSES) --sppm-photons $(CAUSTIC_PHOTONS) \
+			build/caustictest-vc.pbrt > build/caustictest-vc.log 2>&1 || true; \
+		if [ ! -f caustictest-vc.exr ]; then \
+			echo "FAIL volumetric-caustic: no output written"; rc=1; \
+		else \
+			python3 Scenes/caustic_presence_check.py "$$vc/TungstenRender.exr" caustictest-vc.exr \
+				| tee build/caustictest-vc.txt; \
+			if grep -q "caustictest-vc.exr.*ABSENT" build/caustictest-vc.txt; then \
+				echo "FAIL volumetric-caustic: caustic ABSENT"; rc=1; \
+			else \
+				echo "  ok   volumetric-caustic"; \
+			fi; \
+		fi; \
+		rm -f caustictest-vc.exr; \
+	fi; \
+	if [ $$rc -ne 0 ]; then echo "causticstest FAILED"; else echo "causticstest passed"; fi; \
+	exit $$rc
+
 smoke: smoketest
 smoketest: release
 	@rc=0; \
