@@ -76,7 +76,13 @@ comptime _BDPT_MAX_VERTS = 10  # max non-delta vertices per subpath. NOT light-o
                                 # they consume _BDPT_MAX_DEPTH loop iterations instead.
                                 # See project_photon_estimator_energy_gap /
                                 # project_sphere_light_nee_bug memories for the measured
-                                # effect of raising each.
+                                # effect of raising each. The camera-side
+                                # volume branch deliberately does NOT increment
+                                # n_verts -- re-adding that increment caps a
+                                # dense-medium walk at 10 scatters and halves
+                                # nothing visibly on thin media while costing
+                                # ~2x on thick ones (0.45x -> 0.99x vs the path
+                                # tracer when removed).
 comptime _MNEE_MAX_SPHERES = 4  # cap on sphere-light MNEE call sites, unrolled via `if`
                                   # guards instead of a `for` loop -- see
                                   # _bdpt_mnee_sphere_light's own docstring for the real
@@ -358,7 +364,22 @@ def _visible_transmittance(
             # Pure medium boundary: update medium, continue
             if mat.medium_interface_idx >= Int32(0) and sd.mediumIfaceCount > Int64(0):
                 var iface = sd.mediumInterfaces[Int(mat.medium_interface_idx)]
-                var igna = _geom_normal(inter, sd.meshes, sd.instances)
+                # An ANALYTIC SPHERE boundary has no mesh to read a normal
+                # from -- _geom_normal would index sd.meshes with a sphere's
+                # primId fields and return garbage, making the inside/outside
+                # test below a coin flip. The dielectric branch above already
+                # special-cases this; the interface branch did not, so roughly
+                # half the shadow rays leaving a sphere-bounded medium kept
+                # cur_med set to the medium and were then Beer-Lambert'd across
+                # the vacuum outside it -- annihilating them. That halved every
+                # volume NEE contribution at every scatter order (measured
+                # 0.500x vs the path tracer on a sphere-bounded fog).
+                var igna: Vec3f
+                if inter.primId.type == Int8(4):
+                    var isph = sd.spheres[Int(inter.primId.id1)]
+                    igna = sphere_outward_normal(hit, isph.center).to_simd()
+                else:
+                    igna = _geom_normal(inter, sd.meshes, sd.instances)
                 var md = dir[0]*igna[0]+dir[1]*igna[1]+dir[2]*igna[2]
                 cur_med = iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
             org = hit + Vec3f(dir[0], dir[1], dir[2]) * Float32(0.0002)
@@ -1797,7 +1818,16 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 v.med_idx = cur_med_idx
                 v.wavelengths = wavelengths
                 if n_verts == 0: first_alb = ff.albedo
-                n_verts += 1
+                # NOT `n_verts += 1`. _BDPT_MAX_VERTS is the light-vertex
+                # CACHE's per-path slot count, and the camera subpath stores
+                # nothing in that cache (only _bdpt_light_path_bounce calls
+                # _bdpt_store_lvc_vertex). Counting volume scatters against it
+                # capped a camera walk at 10 scatter events -- far too few for
+                # a dense medium, where a diffusive walk needs tens of orders
+                # to converge (the path tracer needs maxdepth ~33 on the same
+                # scene). Volume scatters are bounded by _BDPT_MAX_DEPTH loop
+                # iterations instead, which is what this branch's own "no
+                # vertex stored this bounce" return comment already implied.
                 # Volume: out of MIS scope this pass, same as the light side.
                 dvcm_carry = Float32(0)
                 if path_len > 0:
