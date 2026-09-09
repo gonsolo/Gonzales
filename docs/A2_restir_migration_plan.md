@@ -176,19 +176,47 @@ unsolved and has **no participating-media support at all**.
 
 State the gates explicitly, so they can be checked rather than assumed:
 
-**Gate S — retire SPPM.** All must hold:
-1. Every caustic-bearing corpus scene renders without SPPM at no measured
-   loss of the caustic feature itself (per-region comparison against a
-   reference — a whole-image mean can look healthy while a caustic is
-   entirely absent).
-2. **Volumetric** caustics have an in-framework substitute. Today they do
-   not: SMS is surface-only, and `_bdpt_vertex_mis_scoped` (`bdpt.mojo`)
-   excludes every volume-scattering vertex from per-vertex MIS, which is
-   precisely why `--sppm` is kept alive. Closing this means extending
-   `dVCM`/`dVC` to phase-function pdfs — a standalone research task, and
-   the same gap Phase 8.3 scopes out.
-3. Phase 6's SMS-ReSTIR actually carries the surface-SDS load (its spatial
-   reuse currently finds mostly-empty neighbour reservoirs — no win yet).
+**Gate S — retire SPPM.** Measured 2026-09-09 (`Scenes/caustic_presence_check.py`);
+**all four conditions currently FAIL.** The metric is scale-free —
+luminance ÷ its own row median along the caustic's trajectory — because the
+Tungsten references carry a scene-conversion scale (real pbrt-v4 is equally
+1.8× off on `glass-of-water`, so absolute error cannot answer "is the
+caustic there"). Reference scores 5.53; a caustic-free render 1.54.
+
+1. `volumetric-caustic` scores excess > 2.0 **without** `--sppm`, with fog
+   and glass sphere visibly rendered. *Today: no integrator passes.* PT
+   scores 1.54 (absent, 2.0× too bright overall); SPPM scores 1.41 and
+   renders an almost-empty dark box — no fog, no sphere, 8× too dark; VCM
+   did not finish in 40 min.
+2. `water-caustic` scores > 2.0 without `--sppm`, **in batch mode**.
+   *Today: only SPPM passes* (present, structurally correct, 5.4× bright).
+   PT and `--sms-restir` both score 0.05× the reference — caustic absent.
+3. Both within a stated tolerance of **real pbrt-v4 on the same file** —
+   pbrt is the arbiter, not the Tungsten `.exr`.
+4. The replacement finishes in time comparable to SPPM (< ~560 s for
+   `water-caustic`). *Today: VCM could not, on an idle GPU.*
+
+Three findings from that measurement change the picture:
+
+- **`--sms-restir` is interactive-only.** It prints "no effect without
+  --interactive" and returns PT-identical output. §3's table designates it
+  "the in-framework answer" for SDS; it cannot fill that role offline
+  today. §3's claim that gonzales "can never regress on SDS" rests on
+  SPPM alone in batch mode.
+- **SPPM is broken on `volumetric-caustic`**, despite having medium code
+  (`sample_homogeneous_free_flight`, `sppm.mojo:571`/`:993`) — likely the
+  camera path not starting inside the enclosing medium
+  (`MediumInterface "gas" ""` on the FrontWall). A failure, not a gap.
+- Therefore **volumetric caustics have no working producer at all**. That
+  is a live capability gap, independent of any retirement decision, and
+  outranks retirement as work.
+
+Also: **SPPM has zero smoketest coverage** (`SMOKE_MODES` = cpu-pt,
+cpu-vcm, gpu-pt, gpu-vcm, gpu-vcm-wf), which is why the above went
+unnoticed. It needs a row far more than it needs deleting. Cost of keeping
+it, for the other side of the ledger: 1995 lines, plus 620 lines exiled
+into `bdpt.mojo` (6440–7060) by the per-file Mojo `enqueue_function`
+defect, 11 referencing files, one 386-line test.
 
 **Gate V — retire VCM.** All of Gate S, plus §8.3's own limitations
 resolved: SDS paths covered by something (Phase 6, per §3's table), and
