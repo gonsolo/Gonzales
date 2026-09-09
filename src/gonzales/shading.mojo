@@ -1609,7 +1609,7 @@ def _shade_measured_nee[enqueue_shadow: Bool](
     var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
     var w_area = _nee_weight_measured(ls_area, mb, tangent, bitangent, normal, wo, path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
     if not w_area.is_black():
-        var contrib_area = path_ptr[].throughput * _to_spec_illum(ctx, w_area, path_ptr[].wavelengths)
+        var contrib_area = path_ptr[].throughput * w_area
         _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_area.wi, ls_area.dist * Float32(0.9999), contrib_area)
 
     # distant/point/sphere via the shared sampler. Note this is the ONE
@@ -1622,14 +1622,14 @@ def _shade_measured_nee[enqueue_shadow: Bool](
         var tmax = res[1]
         var w = _nee_weight_measured(ls, mb, tangent, bitangent, normal, wo, path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
         if not w.is_black():
-            var contrib = path_ptr[].throughput * _to_spec_illum(ctx, w, path_ptr[].wavelengths)
+            var contrib = path_ptr[].throughput * w
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls.wi, tmax, contrib)
 
     for inf_i in range(ctx.lights.infinite_count):
         var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
         var w_e = _nee_weight_measured(ls_e, mb, tangent, bitangent, normal, wo, path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
         if not w_e.is_black():
-            var contrib_e = path_ptr[].throughput * _to_spec_illum(ctx, w_e, path_ptr[].wavelengths)
+            var contrib_e = path_ptr[].throughput * w_e
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_e.wi, ls_e.dist, contrib_e)
 
 @always_inline

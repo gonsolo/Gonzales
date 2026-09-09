@@ -1639,7 +1639,7 @@ def _sppm_nee_weight(
         var tangent_m = Vec3f(frm_m.x.x, frm_m.x.y, frm_m.x.z)
         var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
         var w_m = _nee_weight_measured(ls, mb_m, tangent_m, bitangent_m, vn, wo, vp.wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-        return spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_m.r, w_m.g, w_m.b, vp.wavelengths)
+        return w_m
     var mat_kind_simple = Int32(1) if vp.mat_kind == Int32(1) else Int32(0)
     # Straight to a SpectralSample: this used to go through
     # _nee_weight_simple_spectral, which evaluates spectrally and

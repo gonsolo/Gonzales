@@ -2620,11 +2620,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             for li_m in range(_bdpt_simple_light_count(sd)):
                 var ls_im = _bdpt_sample_simple_light(sd, li_m, hit.to_simd(), pcg)
                 var w_im = _nee_weight_measured(ls_im, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-                total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_im.r, w_im.g, w_im.b, wavelengths), ls_im, hit, gn_m, cur_med_idx, sd, scratch, wavelengths)
+                total += _bdpt_nee_contribute(beta, w_im, ls_im, hit, gn_m, cur_med_idx, sd, scratch, wavelengths)
             for inf_im in range(Int(sd.infiniteLightCount)):
                 var ls_em = _sample_infinite_light_nee(sd.infiniteLights[inf_im], Point2f(pcg.next_float(), pcg.next_float()))
                 var w_em = _nee_weight_measured(ls_em, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-                total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_em.r, w_em.g, w_em.b, wavelengths), ls_em, hit, gn_m, cur_med_idx, sd, scratch, wavelengths)
+                total += _bdpt_nee_contribute(beta, w_em, ls_em, hit, gn_m, cur_med_idx, sd, scratch, wavelengths)
 
             var wo_l_m = Vec3f(dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, gn_m))
             var um1 = pcg.next_float(); var um2 = pcg.next_float()
