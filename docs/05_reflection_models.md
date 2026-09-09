@@ -129,6 +129,25 @@ but the kind of error that a spot check with a single test light angle can
 still miss, since the two Fresnel terms partially cancel except near
 grazing angles.
 
+**Where that formula meets a stochastic walk, though, only *one* of the two
+Fresnel factors may be written down.** The expression above is the BSDF as
+an analytic function. Gonzales resolves the coat as a random walk, and a
+ray reaches the base at all only by losing the entry coin flip against
+`F(cos θₒ)` — so arriving there has *already* cost a factor of
+`1 − F(cos θₒ)`, in expectation, with nothing dividing it back out. An NEE
+weight evaluated at the base must therefore supply the light-side factor
+only. Applying the view-side one again squares it.
+
+That mistake is nearly invisible where it is cheapest to test — at normal
+incidence and η = 1.5 it turns 0.96 into 0.92 — and ruinous where nobody
+looks: as the view approaches grazing, `F → 1`, and the squared term
+destroyed 56% of the energy at a 4° view. It is worth stating the general
+form, because it recurs whenever an analytic BSDF is grafted onto a
+sampling procedure: **a factor already paid by a sampling decision must not
+be written into the estimator as well.** The reliable way to catch it is a
+sweep, not a spot check — a single near-normal probe reports everything is
+fine.
+
 ### Which reference is "correct"? Neither, exactly
 
 It's tempting to treat any one renderer as ground truth when validating
@@ -150,6 +169,27 @@ walk above, instead track the *actual* directional distribution through
 each bounce — a more expensive but more accurate model when the coat has
 real (non-zero) thickness and the base isn't perfectly diffuse-Lambertian
 in its own right.
+
+There is one configuration where that closed form stops being an
+approximation and becomes *exact*, which makes it a genuine ground truth
+rather than a third opinion: a **smooth** coat over a **Lambertian** base.
+The formula's whole assumption is that light re-randomizes to a cosine
+distribution on each internal bounce — and a Lambertian base does exactly
+that, by definition, at every bounce. `Scenes/coateddiffuse-grazing-probe.pbrt`
+is built to sit in that configuration, and
+`Scenes/coateddiffuse_analytic_check.py` evaluates the formula per pixel
+(at grazing incidence `F` varies so steeply across the patch that the mean
+of `f` and `f` of the mean angle differ by ~7%). Gonzales matches it to
+0.1% across a 60°→4° view sweep. Reaching for an exact special case beats
+arguing about which renderer to trust.
+
+That same check settles a standing 4.5% gap against PBRT: PBRT's
+`coateddiffuse` defaults to `thickness 0.01` and attenuates by
+`exp(−thickness/cos θ)` on entry, exit, and every internal bounce. Set
+PBRT's thickness to zero and it lands within 0.24% of the closed form.
+Gonzales does not model coat thickness at all — so the discrepancy is a
+missing *parameter*, not a wrong *transport*, and it is worth knowing which
+of those you are looking at before trying to "fix" a number.
 
 Evaluated on the same test geometry, PBRT and Mitsuba disagree with each
 other by up to 8% at η = 2 — a real difference between two published,
