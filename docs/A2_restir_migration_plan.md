@@ -241,6 +241,48 @@ caustic there"). Reference scores 5.53; a caustic-free render 1.54.
 4. The replacement finishes in time comparable to SPPM (< ~560 s for
    `water-caustic`). *Today: VCM could not, on an idle GPU.*
 
+**Attempted and REFUTED (2026-09-09): multi-root SMS re-probe for mesh
+casters.** Since a typical submerged point on `water-caustic` has **≥8**
+distinct specular solutions (instrumented: 843,579 points at the counter's
+cap of 8, single-root points rare) while the mesh path takes exactly one at
+weight 1.0, the obvious fix was a re-probe proposal — perturb the shadow
+direction, re-traverse, rebuild the vertex from the surface actually hit
+(which does fix the wrong-plane problem that tangent-plane jitter has) —
+plus reciprocal counting. The cone half-angle was *derived*, not tuned:
+displacing the specular vertex by arc length `d` rotates the required
+normal at `|dn*/dd| ≈ (1/r_i + 1/r_o)/2`, and a physical surface supplies a
+normal tilted at most π/2 from the view direction, confining roots to
+`d_max = π·r_i·r_o/(r_i+r_o)`, i.e. `θ = π·r_o/(r_i+r_o)`.
+
+**The covering sweep disqualified it.** An unbiased estimator must be
+invariant to widening the cone — a wider cone lowers each root's hit
+probability and raises the trial count to compensate exactly. Measured
+submerged-band ratio vs the reference:
+
+| widen | 0.25 | 0.5 | 1.0 | 2.0 | 4.0 |
+|---|---|---|---|---|---|
+| ratio | 0.482 | 0.109 | 0.0255 | 0.0151 | 0.0145 |
+
+It **falls 33×** and flattens low; it is also sample-count dependent
+(0.0255 at 32 spp → 0.153 at 128 spp), which is disqualifying on its own.
+Mechanism, measured with a trial-count-as-radiance diagnostic (mean 2.7,
+p99 19, max 72): the cap is not binding on average but truncates exactly
+the rare filament roots whose proposal probability is smallest and
+contribution largest, and widening makes more roots rare. The heavy tail
+lives in `f(X*)·T` — this emitter is `L = 541126` and the geometric term
+spikes — not in transmittance. At the brightest setting the submerged
+volume was much brighter than baseline but had **no web structure at all**:
+a broad diffuse wash under salt-and-pepper noise. Energy recovered, feature
+not. Cost was ~60× baseline. Implementation preserved at commit `bf3fd541`
+on `worktree-agent-aba36ff2b7a0cd103`, then reverted; nothing shipped.
+
+**Consequence for Gate S:** deterministic root-finding plus reciprocal
+counting is not the route to batch SDS on this scene class. A viable fix
+must attack the contribution's heavy tail directly — i.e. photon density
+estimation, which is precisely what SPPM does and why it remains the only
+integrator that renders this caustic. That materially strengthens the case
+for keeping SPPM rather than retiring it.
+
 Three findings from that measurement change the picture:
 
 - **`--sms-restir` is interactive-only — but that is NOT why batch mode
