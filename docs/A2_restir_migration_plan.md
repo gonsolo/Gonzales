@@ -411,27 +411,62 @@ verifying this feature — the new mesh-light scene exists because of that;
 CPU-side reservoir work needs a convergence-rate check (low frame count
 vs. high) rather than a multi-seed MSE average.
 
-**2026-09-08: distance resampling investigated, NOT implemented, remains
-open.** RIS over candidate free-flight distances needs the proposal
-density `p(X_i)` for each candidate; a homogeneous medium's exact
-inverse-CDF sampling already IS the true free-flight pdf (nothing to
-resample), and a heterogeneous medium's delta-tracking accepted distance,
-while unbiasedly distributed according to the true free-flight pdf, has
-NO CLOSED FORM for that pdf — the entire reason delta tracking is used
-instead of inverse-CDF sampling in the first place. Real Volumetric
-ReSTIR sidesteps this by resampling in **null-scattering primary sample
-space** (the full random-walk realization, not the marginal distance) —
-a materially more involved technique than plain candidate RIS, and one
-this session could not verify a derivation for against any primary
-source (`~/work/restir`, a local Falcor ReSTIR reference clone, has
-`RestirDI`/`RestirGI` passes but no volumetric one to check against).
-Implementing it from an unverified recollection of a paper's approach
-risks silent bias with no visual tell. See the `project_restir_migration`
-memory's "Distance resampling" section for the full derivation and why
-this reaches the same "treat as scaffold, don't sink effort into
-internals" conclusion this section already recorded for Ghost ReSTIR
-above. Phase 7's light-resampling (7.1/7.2) and temporal-reuse (7.3, CPU
-and GPU) halves are the complete, verified, shippable slice as it stands.
+**2026-09-09: distance resampling IMPLEMENTED and measured — Phase 7 is
+now feature-complete.** Shipped behind `VOL_RIS_DISTANCE`
+(`restir_vol.mojo`), default OFF; homogeneous, achromatic media only.
+
+Two earlier passes concluded this was blocked. Both were reasoning about
+the wrong proposal. The obstruction they hit — delta tracking's accepted
+distance has no closed-form marginal density — only bites if you try to
+use *that* distribution as the RIS proposal, or approximate it with a
+majorant-rate exponential and then correct for the mismatch. Draw the
+candidates from the **exact conditional collision density** instead,
+
+```
+q(t) = sigma_t e^{-sigma_t t} / (1 - e^{-sigma_t t_surf})
+```
+
+(analytic for a homogeneous medium), take the target
+`p_hat(t,y) = q(t) c_hat(t,y)` with `c_hat` the unshadowed target 7.2
+already uses, and `q(t)` cancels out of both the RIS weight and the
+resolve. Nothing is left to correct: no transmittance march, no
+`1/P(collided)` divisor, no throughput correction. The weight formula and
+resolve are unchanged from 7.2; the only difference is that each
+candidate evaluates its target at its own vertex and the winner's vertex
+is what gets shadowed.
+
+That matters beyond simplicity, because the previously-recorded design
+(majorant proposal + `h(t) = T(0,t)/P(collided)`, two ratio-tracking
+marches per scatter event) is not merely costlier — it is **biased** for
+heterogeneous media. `P(collided) = 1 - T(0,t_surf)` has no closed form
+there, so `T` must be estimated stochastically, and the estimator then
+divides by `1 - T_hat`; since `x -> 1/(1-x)` is strictly convex, Jensen
+gives `E[1/(1-T_hat)] > 1/(1-E[T_hat])` — a systematic over-estimate,
+worst exactly where the medium is optically thin. Choosing the exact
+conditional removes the offending factors rather than estimating them.
+
+Measured (64x64 GPU, `--no-denoise`, MSE at a matched 64spp budget over 5
+seeds against a 16384spp reference): **-15.7%** on a favourable scene
+(thin fog, close light, target varying strongly along the ray),
+consistently negative on every seed (-11.4% .. -22.6%); **-2.5%** on a
+dense-fog/distant-light scene. Unbiased both ways (4096spp ratio to
+reference 0.99987 on vs 1.00035 off). No measurable time cost —
+interleaved A/B timings are indistinguishable.
+
+It ships OFF despite being a real, free win for one specific reason: it
+is currently mutually exclusive with **temporal reuse**, which measured
+3-10x MSE reduction, so defaulting it on would silently trade the larger
+win for the smaller one in exactly the scenes where both apply. Enabling
+it is gated on making the two compose (the shift mapping must accept a
+resampled vertex instead of assuming the reservoir's vertex is the one
+the resolve shadows from), not on any doubt about the estimator.
+
+Heterogeneous media remain out of scope but are no longer *blocked*: the
+same construction works there if each candidate's distance comes from its
+own exact conditional, i.e. an independent delta-tracking walk
+rejection-conditioned on collision — unbiased, still no marches, but
+~M walks per segment in expectation. Worth paying only if the cheap
+homogeneous case proves valuable in practice.
 
 Gonzales already has homogeneous media (`Medium_C`,
 `sample_homogeneous_free_flight`, `sample_medium_gpu`). Retire `sppm.mojo`

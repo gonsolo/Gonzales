@@ -55,6 +55,78 @@ from .rng import PCG32
 # volumetric candidate counts in this renderer yet.
 comptime VOL_RIS_CANDIDATES: Int = 8
 
+# ── DISTANCE resampling (Phase 7.3's last piece) ────────────────────────────
+# When true, each of the VOL_RIS_CANDIDATES candidates draws its OWN scatter
+# distance along the segment as well as its own light sample, so the reservoir
+# resamples the joint (distance, light) pair instead of the light alone at a
+# fixed vertex.
+#
+# The derivation is short because the proposal is chosen to make it short.
+# Draw candidate distances from the EXACT conditional collision density
+#   q(t) = sigma_t e^{-sigma_t t} / P_c,  P_c = 1 - e^{-sigma_t t_surf}
+# (analytic for a homogeneous medium), pair with the existing light sampler
+# q_L, and use the target p_hat(t,y) = q(t) * c_hat(t,y) with c_hat the same
+# unshadowed, transmittance-free `vol_target_pdf` 7.2 already uses. Then
+#   w_i      = p_hat/Q = q(t_i)c_hat_i / (q(t_i) q_L)  = c_hat_i / q_L
+#   F/p_hat  = q(t_Y)c_Y / (q(t_Y)c_hat_Y)             = c_Y / c_hat_Y
+# -- q(t) cancels in BOTH places. So the weight formula and the resolve are
+# bit-identical to 7.2's; the only difference is that c_hat is evaluated at
+# each candidate's own point and the winner's point is what gets shadowed.
+# No transmittance march, no 1/P_c divisor, no throughput correction.
+#
+# That last point is worth stating plainly because an earlier design pass
+# (recorded in project_restir_migration) reached a DIFFERENT and more
+# expensive answer -- a majorant-rate exponential proposal, corrected by
+# h(t) = T(0,t)/P(collided) and costing two ratio-tracking marches per scatter
+# event. That design is not merely costlier, it is BIASED for heterogeneous
+# media: P(collided) = 1 - T(0,t_surf) has no closed form there, so T must be
+# estimated by ratio tracking, and the estimator then divides by 1 - T_hat.
+# Since x -> 1/(1-x) is strictly convex, E[1/(1-T_hat)] > 1/(1-E[T_hat]) by
+# Jensen -- a systematic OVER-estimate, worst exactly where the medium is
+# optically thin and T -> 1. Sampling the proposal from the exact conditional
+# instead removes the offending factors rather than trying to estimate them.
+#
+# Scope, deliberately narrow: HOMOGENEOUS, achromatic media only (see the
+# guard at the use site in gpu.mojo). Heterogeneous media would need candidate
+# distances drawn from their own exact conditional too -- an independent
+# delta-tracking walk per candidate, rejection-conditioned on collision, which
+# is unbiased and needs no marches either but costs ~M walks per segment in
+# expectation. Correct and known; simply not paid for until the cheap
+# homogeneous case shows the technique earns its keep at all.
+#
+# MEASURED (2026-09-09, 64x64 GPU, --no-denoise, vs a 16384spp reference of
+# the same estimator; MSE at a matched 64spp budget over 5 seeds):
+#
+#   scene                                   MSE change   per-seed
+#   thin fog + close light (favourable)       -15.7%     -11.4% .. -22.6%
+#   dense fog + distant light                  -2.5%      -5.8% ..  +2.8%
+#
+# UNBIASED both ways: at 4096spp the ratio to the reference is 0.99987 with
+# this on vs 1.00035 with it off (favourable scene), 0.99961 vs 0.99968
+# (dense scene) -- no systematic shift, which is the check that actually
+# matters here. And it is FREE: interleaved A/B timings at 256 and 2048 spp
+# are indistinguishable (the enabled build's best time was at or below the
+# disabled build's on both scenes), as expected when the added work per
+# candidate is one RNG draw and one log against a light pick, a target
+# evaluation and a reservoir update.
+#
+# So unlike VOL_SPATIAL_NEIGHBORS below -- which measured as a genuine wash --
+# this is a real, consistent, free win. It still ships OFF, for one specific
+# reason: it is currently mutually exclusive with TEMPORAL reuse (see the
+# `not dist_ris` term in gpu.mojo's vol_reuse_ok), and temporal reuse measured
+# 3-10x MSE reduction on GPU. Defaulting this on would silently trade that
+# much larger win for this smaller one in exactly the homogeneous scenes where
+# both apply. Enabling it is therefore gated on making the two COMPOSE -- the
+# shift mapping has to accept a resampled vertex rather than assuming the
+# reservoir's vertex is the one the resolve shadows from -- not on any doubt
+# about this estimator. Until then it is a one-constant opt-in, same as
+# spatial reuse.
+#
+# Compile-time constant rather than a CLI flag, matching VOL_SPATIAL_NEIGHBORS
+# below: this code runs inside GPU kernels, where a runtime switch has to be
+# threaded through every kernel signature.
+comptime VOL_RIS_DISTANCE: Bool = False
+
 # Transmittance seam sentinel -- see this file's header, seam 1. Passing this
 # as vol_target_pdf's `tr` yields the transmittance-free target function.
 comptime VOL_TR_UNIT: Float32 = Float32(1.0)
