@@ -16,7 +16,7 @@ from .geometry import (
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Medium_C, MediumInterface_C,
     Instance_C, dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI, Frame,
     Curve_C, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, InfiniteLight_C, PointLight_C,
-    MeasuredBRDF_C, GpuTexture_C,
+    MeasuredBRDF_C, GpuTexture_C, _is_real_ptr,
 )
 from .bvh import (
     BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, _mk_sd_full,
@@ -105,11 +105,20 @@ struct SPPMPixel(TrivialRegisterPassable):
     # capturing direct illumination at the visible point (which the
     # photon-density term alone can't reconstruct without heavy noise, since
     # it's estimating both direct AND indirect/caustic lighting through a
-    # single, indirect-only channel otherwise). Surface VPs only — volume VPs
-    # leave this at 0 (this scene has no participating media; NEE from a
-    # volume scatter point would need a phase-function-weighted variant,
-    # not implemented).
+    # single, indirect-only channel otherwise). Applies to BOTH surface and
+    # volume VPs: a volume VP uses the isotropic phase function (albedo/4pi,
+    # no cosine) in place of a BRDF. Volume VPs were excluded from this
+    # entirely until 2026-09-09, on the recorded assumption that "this scene
+    # has no participating media" -- true of water-caustic, which is what
+    # SPPM's NEE was validated against, and false of volumetric-caustic,
+    # where ~86% of camera rays scatter in fog and thus received NO direct
+    # lighting at all (the scene rendered as an unlit box, 8x too dark).
     var ld: SpectralSample
+    # Index into sd.mediums of the medium this VP sits in, or -1 for vacuum.
+    # Set for surface AND volume VPs alike: NEE from any point inside a
+    # medium must attenuate the shadow ray by that medium's transmittance,
+    # not just from a volume scatter vertex.
+    var med_idx: Int32
     # Infinite-light radiance for a VP sample whose traced ray escaped the
     # scene entirely (valid stays 0 — there's no surface to gather photons
     # at or run NEE from) instead of hitting a diffuse/volume scatterer.
@@ -212,6 +221,8 @@ def _shading_normal_at(
     inter: Intersection_C,
     meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
     instances: UnsafePointer[Instance_C, MutExternalOrigin] = UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
+    spheres: UnsafePointer[Sphere_C, MutExternalOrigin] = UnsafePointer[Sphere_C, MutExternalOrigin].unsafe_dangling(),
+    hit: Point3f = Point3f(Float32(0)),
 ) -> Vec3f:
     """Barycentrically-interpolated SMOOTH shading normal at a triangle hit,
     falling back to the flat geometric normal when the mesh has no per-vertex
@@ -221,12 +232,20 @@ def _shading_normal_at(
     triangle's whole patch of light in one direction, producing a blocky/
     blotchy caustic and the wrong energy distribution. This is what pbrt (and
     gonzales's own main path tracer via shading.mojo::_shading_normal) does;
-    SPPM previously used only _geom_normal here, which was the discrepancy."""
+    SPPM previously used only _geom_normal here, which was the discrepancy.
+
+    `spheres`/`hit` give analytic spheres (primId.type == 4) their exact
+    outward normal. Without them this returned the +Y placeholder below for
+    every sphere hit, so a dielectric sphere refracted every ray identically
+    regardless of where it was struck -- silently destroying any caustic it
+    should cast."""
     var mi: Int; var bv: Int
     if inter.primId.type == 0:
         mi = Int(inter.primId.id1); bv = Int(inter.primId.id2)
     elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
         mi = Int(inter.primId.id2 >> 32); bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
+    elif inter.primId.type == Int8(4) and _is_real_ptr[Sphere_C](spheres):
+        return sphere_outward_normal(hit, spheres[Int(inter.primId.id1)].center)
     else:
         return Vec3f(Float32(0), Float32(1), Float32(0))
     var m = meshes[mi]
@@ -450,7 +469,17 @@ def _sppm_update_medium(
     sd: SceneDescriptor2_C,
     hit: Point3f = Point3f(Float32(0)),
 ) -> Int32:
-    """Return new current_medium_idx after crossing a surface with MediumInterface."""
+    """Return new current_medium_idx after crossing a surface with MediumInterface.
+
+    `hit` is REQUIRED for analytic spheres (primId.type == 4): their outward
+    normal is normalize(hit - center), so leaving it at the default origin
+    makes the inside/outside test read one FIXED direction for every ray that
+    crosses the sphere, regardless of where it actually struck. All four call
+    sites omitted it until 2026-09-09, which is why volumetric-caustic's glass
+    sphere never switched a ray between `gas` and its own vacuum interior --
+    and so never produced the focused beam that is the whole point of the
+    scene. Same mesh-only-assumption class as the three sphere bugs found
+    earlier that day (see project_volume_area_light_nee_bug defect 3)."""
     if mat.medium_interface_idx < Int32(0) or sd.mediumIfaceCount == Int64(0):
         return Int32(-1)  # stays vacuum; caller keeps existing idx if needed
     var iface = sd.mediumInterfaces[Int(mat.medium_interface_idx)]
@@ -523,6 +552,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         alpha=Float32(0),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=vp_wavelengths,
+        med_idx=Int32(-1),
     )
 
     # Sub-pixel jitter — diversifies which point on a dielectric-obscured
@@ -552,8 +582,14 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     for bounce in range(min(maxdepth, _MAX_B)):
         var ray = Ray_C(ro, rd)
         scratch[0].hit = Int8(0)
+        # sd.spheres/sphereCount are REQUIRED: analytic spheres live in their
+        # own flat array, not the mesh/curve BVH this walks, so omitting them
+        # makes every `Shape "sphere"` invisible to SPPM -- which is exactly
+        # why volumetric-caustic's glass sphere, and therefore its entire
+        # caustic, was missing from the render until 2026-09-09.
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), scratch,
-                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
+                           sd.spheres, Int(sd.sphereCount))
         if scratch[0].hit == Int8(0):
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ilight = sd.infiniteLights[inf_i]
@@ -575,6 +611,12 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 vp.normal = Vec3f(Float32(0), Float32(1), Float32(0))
                 vp.alb = ff.albedo
                 vp.is_volume = Int32(1)
+                # wo is what an anisotropic (HG) phase function would need;
+                # the gather and NEE both assume isotropic today, but store
+                # it so a g != 0 phase is a local change here, not a
+                # re-plumbing of the VP struct.
+                vp.wo = vec3f((-rd).to_simd())
+                vp.med_idx = cur_med_idx
                 vp.valid = Int32(1)
                 break
             else:
@@ -643,18 +685,19 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             vp.normal = vec3f(gn)
             vp.alb = eff_alb
             vp.is_volume = Int32(0)
+            vp.med_idx = cur_med_idx
             vp.valid = Int32(1)
             break
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var ior = mat.albedo.r
-            var gn = _shading_normal_at(inter, sd.meshes, sd.instances)
+            var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
             var (new_dir, new_org, radiance_scale) = _dielectric_bounce(ray_dir, hit.to_simd(), gn, ior, bounce, pcg)
             vp.beta *= radiance_scale  # camera-path (Radiance mode): apply non-symmetric-scattering correction
             rd = vec3f(new_dir)
             ro = point3f(new_org)
             if has_media:
-                var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd)
+                var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
                     cur_med_idx = new_idx
 
@@ -702,6 +745,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 vp.wo = vec3f(wo_c)
                 vp.alpha = max(mat.roughU, mat.roughV)
                 vp.is_volume = Int32(0)
+                vp.med_idx = cur_med_idx
                 vp.valid = Int32(1)
                 break
             vp.beta *= bs_c.f
@@ -725,6 +769,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             vp.hair_h = inter.u
             vp.hair_v = inter.v
             vp.is_volume = Int32(0)
+            vp.med_idx = cur_med_idx
             vp.valid = Int32(1)
             break
 
@@ -752,13 +797,14 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             vp.wo = vec3f((-rd).to_simd())
             vp.mat_idx = Int32(mat_idx)
             vp.is_volume = Int32(0)
+            vp.med_idx = cur_med_idx
             vp.valid = Int32(1)
             break
 
         elif mat.type == MatKind.interface:
             # Transparent boundary — update medium, continue ray
             if has_media:
-                var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd)
+                var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
                     cur_med_idx = new_idx
             ro = hit + rd * Float32(0.0002)
@@ -978,8 +1024,14 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     for bounce in range(min(maxdepth, _MAX_B)):
         var ray = Ray_C(ro, rd)
         scratch[0].hit = Int8(0)
+        # sd.spheres/sphereCount are REQUIRED: analytic spheres live in their
+        # own flat array, not the mesh/curve BVH this walks, so omitting them
+        # makes every `Shape "sphere"` invisible to SPPM -- which is exactly
+        # why volumetric-caustic's glass sphere, and therefore its entire
+        # caustic, was missing from the render until 2026-09-09.
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), scratch,
-                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
+                           sd.spheres, Int(sd.sphereCount))
         if scratch[0].hit == Int8(0):
             break  # miss
 
@@ -1072,7 +1124,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var ior = mat.albedo.r
-            var gn = _shading_normal_at(inter, sd.meshes, sd.instances)
+            var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
             var (new_dir, new_org, _) = _dielectric_bounce(ray_dir, hit.to_simd(), gn, ior, bounce, pcg)
             # Light path (TransportMode::Importance): do NOT apply the
             # radiance_scale non-symmetric-scattering correction to flux —
@@ -1081,7 +1133,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             rd = vec3f(new_dir)
             ro = point3f(new_org)
             if has_media:
-                var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd)
+                var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
                     cur_med_idx = new_idx
 
@@ -1185,7 +1237,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
 
         elif mat.type == MatKind.interface:
             if has_media:
-                var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd)
+                var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
                     cur_med_idx = new_idx
             ro = hit + rd * Float32(0.0002)
@@ -1449,8 +1501,9 @@ def _gather_update(
 # photon-density (tau) term alone has to represent BOTH direct and indirect
 # lighting through one noisy channel — pbrt keeps them separate, which is
 # why its SPPM output is much smoother/less "blotchy" for the same pass
-# count. Surface VPs only (is_volume == 0); this scene has no participating
-# media, so a phase-function-weighted variant for volume VPs isn't needed.
+# count. Handles surface VPs (BRDF) and volume VPs (isotropic phase,
+# albedo/4pi with no cosine) alike, each attenuated by the transmittance of
+# whatever medium the VP sits in.
 
 @always_inline
 def _sppm_vp_brdf(
@@ -1495,6 +1548,47 @@ def _sppm_vp_brdf(
     return vp.alb / PI
 
 @always_inline
+def _sppm_shadow_transmittance(
+    vp: SPPMPixel,
+    sd: SceneDescriptor2_C,
+    org: Point3f,
+    wi: Vec3f,
+    dist: Float32,
+) -> RGB:
+    """Beer-Lambert transmittance along a shadow ray leaving a VP that sits
+    inside a participating medium. RGB(1) when the VP is in vacuum.
+
+    Mirrors gpu.mojo's `_volume_nee_light` homogeneous branch: the closed
+    form applies only over the span the ray actually spends INSIDE the
+    medium, which ends at the medium's bounding interface. This function does
+    not otherwise know where that is, so it finds it with an ordinary
+    closest-hit query -- interface surfaces are invisible to `any_hit` (they
+    must not occlude) but ARE visible to `traverse_bvh2_core`, so the first
+    hit IS that shell. Without this clamp a light outside the medium would be
+    attenuated across vacuum, the defect fixed for the path tracer in
+    f79999f4 (see project_volume_area_light_nee_bug)."""
+    if Int(vp.med_idx) < 0 or Int(sd.mediumCount) == 0:
+        return RGB(Float32(1))
+    var med = sd.mediums[Int(vp.med_idx)]
+    if med.grid_idx >= Int32(0) or med.nvdb_idx >= Int32(0):
+        # Heterogeneous: needs ratio tracking, not a closed form. SPPM only
+        # ever samples homogeneous free flight today (see
+        # sample_homogeneous_free_flight's own call sites), so a VP can only
+        # be inside a homogeneous medium -- but fail open rather than
+        # silently applying a wrong closed form if that ever changes.
+        return RGB(Float32(1))
+    var exit_i = Intersection_C(
+        PrimId_C(Int64(0), Int64(0), Int64(-1), Int32(-1), Int8(0), 0, 0, 0),
+        Float32(0), Float32(0), Float32(0), Int8(0), 0, 0, 0)
+    traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves,
+                       Ray_C(org, vec3f(wi)), dist, UnsafePointer(to=exit_i),
+                       sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
+                       sd.spheres, Int(sd.sphereCount))
+    var span = dist if exit_i.hit == Int8(0) else exit_i.tHit
+    var sigma_t = med.sigma_a + med.sigma_s
+    return RGB(exp(-sigma_t.r * span), exp(-sigma_t.g * span), exp(-sigma_t.b * span))
+
+@always_inline
 def _sppm_nee_weight(
     vp: SPPMPixel,
     sd: SceneDescriptor2_C,
@@ -1510,6 +1604,27 @@ def _sppm_nee_weight(
     direction/pdf/MIS math once per light type inside _sppm_nee_one; area
     lights still go through _sppm_vp_brdf directly (see that function's own
     docstring for why area-light NEE isn't part of this shared interface)."""
+    if vp.is_volume == Int32(1):
+        # Isotropic phase function: albedo/4pi, and NO cosine factor -- a
+        # volume vertex has no normal. Same convention the photon gather
+        # already uses for volume VPs (see _sppm_gather_one), so the two
+        # estimators agree on what a volume VP scatters.
+        #
+        # Deliberately NO MIS weight, unlike _nee_weight_simple_spectral's
+        # sphere/infinite branch: MIS discounts a light sample by the chance
+        # a competing BSDF/phase-sampling strategy would have found the same
+        # path, and an SPPM visible point has no such strategy -- the VP
+        # TERMINATES at this scatter (see _sppm_trace_visible_point's volume
+        # branch, which stores and breaks). Weighting here would discard that
+        # share to nobody. This matches the area-light branch of
+        # _sppm_nee_one, which likewise applies none.
+        if not ls.valid or ls.pdf <= Float32(0.0):
+            return SpectralSample(Float32(0))
+        var ph_v = spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
+                             vp.alb.r * INV_FOUR_PI, vp.alb.g * INV_FOUR_PI, vp.alb.b * INV_FOUR_PI, vp.wavelengths)
+        var li_v = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
+                              ls.Li.r, ls.Li.g, ls.Li.b, vp.wavelengths)
+        return ph_v * li_v * (Float32(1.0) / ls.pdf)
     if vp.mat_kind == Int32(2):
         var mat_h = sd.materials[Int(vp.mat_idx)]
         var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, wo)
@@ -1606,12 +1721,17 @@ def _sppm_nee_one(
     mutually exclusive per sample, so there's no competing strategy to
     double-count against."""
     var vp = vps[i]
-    if vp.valid == Int32(0) or vp.is_volume == Int32(1):
+    if vp.valid == Int32(0):
         return
+    var is_vol = vp.is_volume == Int32(1)
     var vpos = vp.pos.to_simd()
     var vn   = vp.normal.to_simd()
     var wo   = vp.wo.to_simd()
-    var shadow_eps = _sppm_vp_shadow_eps(vp, sd, wo)
+    # A volume scatter point has no surface to self-intersect against, so it
+    # needs no normal-offset epsilon -- and applying one would displace the
+    # shadow origin along an arbitrary placeholder normal (volume VPs store
+    # +Y), biasing every volume NEE sample by that offset.
+    var shadow_eps = Float32(0) if is_vol else _sppm_vp_shadow_eps(vp, sd, wo)
     # EVERY shadow ray below starts at this offset point, so every light
     # sample must be measured FROM it too. Sampling a light from vp.pos while
     # firing the ray from vp.pos + n*eps makes the ray overshoot the light by
@@ -1642,7 +1762,9 @@ def _sppm_nee_one(
         var dist = sqrt(dist2)
         if dist > Float32(0.0):
             var wi = to_light * (Float32(1.0) / dist)
-            var cos_surface = dot(vn, wi)
+            # No cosine at a volume vertex (it has no normal); the isotropic
+            # phase function replaces the BRDF below.
+            var cos_surface = Float32(1.0) if is_vol else dot(vn, wi)
             var cos_light = -dot(ln, wi)
             if cos_surface > Float32(0.0) and cos_light > Float32(0.0):
                 # Shadow ray, offset from both ends to avoid self-intersection.
@@ -1650,11 +1772,16 @@ def _sppm_nee_one(
                 var t_max = dist * Float32(0.999)
                 if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, t_max,
                                       sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
-                                      sd.spheres, Int(sd.sphereCount)):
+                                      sd.spheres, Int(sd.sphereCount),
+                                      materials=sd.materials):
                     # pdf_area = 1/(n_area * total_area) — uniform-over-all-lights
                     # assumption, same as the emission-sampling flux scale factor.
                     var inv_pdf_area = Float32(n_area) * al.total_area
                     var geom = cos_surface * cos_light / dist2 * inv_pdf_area
+                    # Attenuate across whatever medium the VP sits in. RGB(1)
+                    # in vacuum, so this is inert for every media-free scene.
+                    var tr_a = _sppm_shadow_transmittance(vp, sd, shadow_org, wi, dist)
+                    geom *= tr_a.r
                     # Spectral eval (staged spectral rendering rollout, Stage 4
                     # -- see project_spectral_rendering memory): real
                     # per-wavelength material response x light emission,
@@ -1669,7 +1796,14 @@ def _sppm_nee_one(
                     # measured (3, always spectral internally regardless --
                     # see _sppm_vp_brdf's own mat_kind=3 branch), and the
                     # no-table-loaded case fall back to the original RGB path.
-                    if vp.mat_kind == Int32(2) or vp.mat_kind == Int32(3) or sd.spectral.res <= 0:
+                    if is_vol:
+                        # Isotropic phase (albedo/4pi), matching the photon
+                        # gather's own volume-VP convention.
+                        vps[i].ld += (spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
+                                                vp.alb.r * INV_FOUR_PI, vp.alb.g * INV_FOUR_PI, vp.alb.b * INV_FOUR_PI, vp.wavelengths)
+                                      * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
+                                      * geom)
+                    elif vp.mat_kind == Int32(2) or vp.mat_kind == Int32(3) or sd.spectral.res <= 0:
                         var brdf = _sppm_vp_brdf(vp, sd, vn, wi)
                         vps[i].ld += (spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, brdf.r, brdf.g, brdf.b, vp.wavelengths)
                                       * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
@@ -1699,8 +1833,10 @@ def _sppm_nee_one(
             var shadow_ray = Ray_C(shadow_org, vec3f(ls.wi))
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, tmax,
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
-                                  sd.spheres, Int(sd.sphereCount)):
-                vps[i].ld += w
+                                  sd.spheres, Int(sd.sphereCount),
+                                  materials=sd.materials):
+                var tr_s = _sppm_shadow_transmittance(vp, sd, shadow_org, ls.wi, ls.dist)
+                vps[i].ld += w * tr_s.r
 
     for inf_i in range(Int(sd.infiniteLightCount)):
         var ls_e = _sample_infinite_light_nee(sd.infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
@@ -1709,8 +1845,10 @@ def _sppm_nee_one(
             var shadow_ray_e = Ray_C(shadow_org, vec3f(ls_e.wi))
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_e, ls_e.dist,
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
-                                  sd.spheres, Int(sd.sphereCount)):
-                vps[i].ld += w_e
+                                  sd.spheres, Int(sd.sphereCount),
+                                  materials=sd.materials):
+                var tr_e = _sppm_shadow_transmittance(vp, sd, shadow_org, ls_e.wi, ls_e.dist)
+                vps[i].ld += w_e * tr_e.r
 
 
 def _sppm_nee_update(
@@ -1798,13 +1936,29 @@ def _sppm_finalize_one_pixel(
         # ALONG each subpath, and both subpaths are spectral end to end; what
         # remains is one product at the junction.
         if vp.N_acc > Float32(0.0) and vp.r2 > Float32(0.0):
-            # L = tau / (pi * r² * n_passes) — tau already has
-            # albedo/pi folded in at gather time
+            # Surface: L = tau / (pi * r^2 * n_passes) -- a photon lands ON a
+            # surface, so the estimator normalises by the DISK AREA the search
+            # radius sweeps out. tau already has albedo/pi folded in at gather
+            # time.
+            #
+            # Volume: photons land THROUGHOUT a medium, so the same estimator
+            # must normalise by the SPHERE VOLUME (4/3)pi r^3 instead -- the
+            # standard volumetric photon-map density. Using the surface kernel
+            # here understates a volume gather by (4/3)r, which at this
+            # scene's r=0.05 is ~15x too dark. That went unnoticed because
+            # volume VPs had no working direct-lighting term to compare
+            # against until the same session fixed that.
             var denom = PI * vp.r2 * Float32(n_passes)
+            if vp.is_volume == Int32(1):
+                denom = (Float32(4.0) / Float32(3.0)) * PI * vp.r2 * sqrt(vp.r2) * Float32(n_passes)
             acc += vp.beta * (vp.tau / denom)
-        if vp.is_volume == Int32(0):
+        if True:
             # Direct (NEE) term — pbrt's "pixel.Ld", resampled once per
-            # pass, averaged over n_passes.
+            # pass, averaged over n_passes. Applies to volume VPs too: this
+            # was gated on `is_volume == 0` until 2026-09-09, so a volume
+            # scatter point's direct lighting was computed and then thrown
+            # away -- the third of three independent gates that each had to
+            # be opened for fog to receive any direct light at all.
             var (dr, dg, db) = spectral_sample_to_rgb(
                 spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
                 spectral_cie_z, spectral_d65, vp.ld / Float32(n_passes), vp.wavelengths)
