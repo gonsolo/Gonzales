@@ -139,6 +139,36 @@ def test_vol_shift_identity_reuses_the_world_space_vertex_verbatim() raises:
     assert_true(ok)
     assert_true(_close(got.x, p.x) and _close(got.y, p.y) and _close(got.z, p.z))
 
+def test_vol_shift_retarget_keeps_the_receivers_vertex_not_the_donors() raises:
+    """`retarget` is the map for the case where the donor's vertex could never
+    have been produced by the receiver's own proposal -- delta-tracking's
+    single t_free, a different point mass every frame. Only the light sample
+    may travel; the vertex must come back as the RECEIVER's."""
+    var donor = Vec3f(Float32(1), Float32(2), Float32(3))
+    var receiver = Vec3f(Float32(-4), Float32(5), Float32(-6))
+    var (ok, got) = vol_shift_scatter_vertex(
+        VolShiftMode.retarget, donor, Vec3f(Float32(0)),
+        Vec3f(Float32(0), Float32(0), Float32(1)), receiver)
+    assert_true(ok)
+    assert_true(_close(got.x, receiver.x) and _close(got.y, receiver.y)
+                and _close(got.z, receiver.z))
+
+def test_vol_shift_identity_and_retarget_disagree_on_the_same_inputs() raises:
+    """Anti-vacuity for the pair: the two modes must be genuinely different
+    maps, so that picking the wrong one for a given proposal is a real error
+    rather than a relabelling. identity keeps the donor, retarget keeps the
+    receiver."""
+    var donor = Vec3f(Float32(1), Float32(2), Float32(3))
+    var receiver = Vec3f(Float32(-4), Float32(5), Float32(-6))
+    var ray_d = Vec3f(Float32(0), Float32(0), Float32(1))
+    var (ok_i, got_i) = vol_shift_scatter_vertex(
+        VolShiftMode.identity, donor, Vec3f(Float32(0)), ray_d, receiver)
+    var (ok_r, got_r) = vol_shift_scatter_vertex(
+        VolShiftMode.retarget, donor, Vec3f(Float32(0)), ray_d, receiver)
+    assert_true(ok_i and ok_r)
+    assert_true(_close(got_i.x, donor.x) and _close(got_r.x, receiver.x))
+    assert_false(_close(got_i.x, got_r.x))
+
 def test_vol_shift_ghost_mode_is_refused_not_silently_aliased() raises:
     """The ghost-vertex bijection has no published derivation yet. Asking for
     it must FAIL rather than quietly return the identity map's answer, or a
@@ -264,6 +294,81 @@ def test_vol_combine_temporal_accumulates_confidence_regardless_of_winner() rais
     vol_temporal_spatial_combine(res, ray_o, ray_d, Int32(0), pcg, io, pixel_idx=0)
     _ = prev_buf^; _ = write_buf^
     assert_true(_close(res.state.m, Float32(1.0) + Float32(3.0)))
+
+def test_vol_combine_retarget_never_moves_the_receivers_vertex() raises:
+    """Under `retarget` the stored vertex must be invariant across the entire
+    combine, whoever wins -- a donor may hand over its light sample but never
+    its scattering vertex. The donor here is given an overwhelming w and m so
+    it wins essentially surely, which is exactly the case that must NOT move
+    the vertex.
+
+    This is the invariant gpu.mojo's resolve depends on when distance
+    resampling is off: it shadow-rays from res.scatter_point, and
+    reservoir_finalize built W from p_hat at that same point. If retarget ever
+    imported the donor's vertex, W and the traced contribution would be
+    evaluated at different places and the RIS identity would break silently
+    -- both points sit on one camera ray in a homogeneous medium, so the
+    error is a quiet scale factor with no visual tell."""
+    var ray_o = Vec3f(Float32(0), Float32(0), Float32(-1))
+    var ray_d = Vec3f(Float32(0), Float32(0), Float32(1))
+    var light_n = Vec3f(Float32(0), Float32(-1), Float32(0))
+    var recv_vertex = Vec3f(Float32(0), Float32(0), Float32(0))
+    var donor_vertex = Vec3f(Float32(0), Float32(0), Float32(0.5))
+
+    var fresh = _make_valid(recv_vertex, Vec3f(Float32(0), Float32(2), Float32(0)),
+                            light_n, RGB(Float32(3.0)), Float32(1e-6), Float32(1.0))
+    var prev = _make_valid(donor_vertex, Vec3f(Float32(0), Float32(3), Float32(0)),
+                           light_n, RGB(Float32(6.0)), Float32(1e6), Float32(64.0))
+
+    var prev_buf = List[VolReservoir]()
+    prev_buf.append(prev)
+    var write_buf = List[VolReservoir]()
+    write_buf.append(vol_reservoir_init())
+    var io = _io_temporal_only(prev_buf, write_buf)
+
+    var pcg = PCG32(UInt64(999), UInt64(1))
+    var res = fresh
+    vol_temporal_spatial_combine(res, ray_o, ray_d, Int32(0), pcg, io,
+                                 pixel_idx=0, shift_mode=VolShiftMode.retarget)
+    _ = prev_buf^; _ = write_buf^
+
+    # The donor won (its light sample travelled) ...
+    assert_true(_close(res.le.r, Float32(6.0)))
+    # ... but the vertex is still ours.
+    assert_true(_close(res.scatter_point.z, recv_vertex.z))
+    assert_false(_close(res.scatter_point.z, donor_vertex.z))
+
+def test_vol_combine_identity_does_import_the_donors_vertex() raises:
+    """The counterpart to the retarget test, and the reason the two modes are
+    not interchangeable: `identity` DOES move the stored vertex to the
+    donor's. That is correct only when the donor's vertex was drawn from the
+    same continuous proposal as the receiver's (distance resampling on), and
+    it is why gpu.mojo picks the mode from `dist_ris`."""
+    var ray_o = Vec3f(Float32(0), Float32(0), Float32(-1))
+    var ray_d = Vec3f(Float32(0), Float32(0), Float32(1))
+    var light_n = Vec3f(Float32(0), Float32(-1), Float32(0))
+    var recv_vertex = Vec3f(Float32(0), Float32(0), Float32(0))
+    var donor_vertex = Vec3f(Float32(0), Float32(0), Float32(0.5))
+
+    var fresh = _make_valid(recv_vertex, Vec3f(Float32(0), Float32(2), Float32(0)),
+                            light_n, RGB(Float32(3.0)), Float32(1e-6), Float32(1.0))
+    var prev = _make_valid(donor_vertex, Vec3f(Float32(0), Float32(3), Float32(0)),
+                           light_n, RGB(Float32(6.0)), Float32(1e6), Float32(64.0))
+
+    var prev_buf = List[VolReservoir]()
+    prev_buf.append(prev)
+    var write_buf = List[VolReservoir]()
+    write_buf.append(vol_reservoir_init())
+    var io = _io_temporal_only(prev_buf, write_buf)
+
+    var pcg = PCG32(UInt64(999), UInt64(1))
+    var res = fresh
+    vol_temporal_spatial_combine(res, ray_o, ray_d, Int32(0), pcg, io,
+                                 pixel_idx=0, shift_mode=VolShiftMode.identity)
+    _ = prev_buf^; _ = write_buf^
+
+    assert_true(_close(res.le.r, Float32(6.0)))
+    assert_true(_close(res.scatter_point.z, donor_vertex.z))
 
 def test_vol_combine_rejects_previous_reservoir_from_a_different_medium() raises:
     """A vertex in another medium is not a low-quality candidate, it is a

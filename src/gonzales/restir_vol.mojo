@@ -94,38 +94,36 @@ comptime VOL_RIS_CANDIDATES: Int = 8
 # expectation. Correct and known; simply not paid for until the cheap
 # homogeneous case shows the technique earns its keep at all.
 #
-# MEASURED (2026-09-09, 64x64 GPU, --no-denoise, vs a 16384spp reference of
-# the same estimator; MSE at a matched 64spp budget over 5 seeds):
+# MEASURED (2026-09-09, RE-measured after the sphere-boundary shadow-ray fix
+# -- 64x64 GPU, --no-denoise, MSE at a matched 64spp budget over 5 seeds,
+# against a 65536spp reference of the same estimator):
 #
-#   scene                                   MSE change   per-seed
-#   thin fog + close light (favourable)       -15.7%     -11.4% .. -22.6%
-#   dense fog + distant light                  -2.5%      -5.8% ..  +2.8%
+#   scene                                   MSE vs 7.2   bias @4096spp
+#   thin fog + close light (favourable)       -19.5%        0.99939
+#   dense fog + distant light                  -1.9%        0.99982
 #
-# UNBIASED both ways: at 4096spp the ratio to the reference is 0.99987 with
-# this on vs 1.00035 with it off (favourable scene), 0.99961 vs 0.99968
-# (dense scene) -- no systematic shift, which is the check that actually
-# matters here. And it is FREE: interleaved A/B timings at 256 and 2048 spp
-# are indistinguishable (the enabled build's best time was at or below the
-# disabled build's on both scenes), as expected when the added work per
-# candidate is one RNG draw and one log against a light pick, a target
-# evaluation and a reservoir update.
+# ON by default as of that measurement. Every earlier figure for this feature
+# was taken before the sphere-boundary fix, when a shadow ray leaving a
+# sphere-bounded medium was Beer-Lambert'd across the vacuum all the way to
+# the light -- both test scenes here are sphere-bounded, so those numbers were
+# measured against a baseline 574x too dark and are void. The technique
+# survived re-measurement; the conclusions drawn ALONGSIDE it did not (see
+# VOL_TEMPORAL_M_CAP's note on temporal reuse).
 #
-# So unlike VOL_SPATIAL_NEIGHBORS below -- which measured as a genuine wash --
-# this is a real, consistent, free win. It still ships OFF, for one specific
-# reason: it is currently mutually exclusive with TEMPORAL reuse (see the
-# `not dist_ris` term in gpu.mojo's vol_reuse_ok), and temporal reuse measured
-# 3-10x MSE reduction on GPU. Defaulting this on would silently trade that
-# much larger win for this smaller one in exactly the homogeneous scenes where
-# both apply. Enabling it is therefore gated on making the two COMPOSE -- the
-# shift mapping has to accept a resampled vertex rather than assuming the
-# reservoir's vertex is the one the resolve shadows from -- not on any doubt
-# about this estimator. Until then it is a one-constant opt-in, same as
-# spatial reuse.
+# The unbiasedness check that carries the most weight is not the 4096spp
+# ratios above but the two independent 65536spp references: the plain 7.2
+# estimator and this one converge to 0.132659 vs 0.132683 on thin fog (0.018%
+# apart) and 0.030218 vs 0.030220 on dense (0.006%). Two structurally
+# different estimators agreeing to that tolerance is much harder to fake than
+# either one matching itself.
+#
+# It is also FREE -- the added work per candidate is one RNG draw and one log,
+# against a light pick, a target evaluation and a reservoir update.
 #
 # Compile-time constant rather than a CLI flag, matching VOL_SPATIAL_NEIGHBORS
 # below: this code runs inside GPU kernels, where a runtime switch has to be
 # threaded through every kernel signature.
-comptime VOL_RIS_DISTANCE: Bool = False
+comptime VOL_RIS_DISTANCE: Bool = True
 
 # Transmittance seam sentinel -- see this file's header, seam 1. Passing this
 # as vol_target_pdf's `tr` yields the transmittance-free target function.
@@ -149,6 +147,24 @@ struct VolShiftMode:
     # only). vol_shift_scatter_vertex rejects it rather than silently falling
     # back to `identity`, so a caller cannot half-enable it by accident.
     comptime ghost: Int32 = Int32(1)
+    # Keep the RECEIVING pixel's own scattering vertex and import only the
+    # light sample. Correct -- and the ONLY correct choice -- when the vertex
+    # was NOT drawn from a shared continuous proposal, i.e. when distance
+    # resampling is off and the vertex is whatever delta-tracking's single
+    # t_free happened to be for this path. Two frames' vertices are then point
+    # masses with disjoint support: the receiver's proposal could never have
+    # produced the donor's vertex, so importing it and dividing by the pooled
+    # m over-counts. Re-targeting the light sample onto our own vertex is the
+    # textbook ReSTIR DI reuse (the shading point is fixed by the pixel, only
+    # the light sample travels) and sidesteps the question entirely.
+    #
+    # `identity` is right for the opposite case: with distance resampling on,
+    # the vertex comes from q(t) = sigma_t e^{-sigma_t t}/(1 - e^{-sigma_t
+    # t_surf}), which depends only on sigma_t and t_surf -- identical across
+    # frames for a static camera at one pixel. The donor's vertex is then a
+    # draw from exactly the receiver's own proposal, so the domains match and
+    # the Jacobian is 1.
+    comptime retarget: Int32 = Int32(2)
 
 @fieldwise_init
 struct VolReservoir(TrivialRegisterPassable):
@@ -203,6 +219,7 @@ def vol_reservoir_init() -> VolReservoir:
 @always_inline
 def vol_shift_scatter_vertex(
     mode: Int32, scatter_point: Vec3f, ray_origin: Vec3f, ray_dir: Vec3f,
+    receiver_vertex: Vec3f = Vec3f(Float32(0)),
 ) -> Tuple[Bool, Vec3f]:
     """Map a stored scattering vertex onto the camera ray (`ray_origin`,
     `ray_dir`) of the pixel now trying to reuse it. Returns (ok, vertex).
@@ -215,11 +232,25 @@ def vol_shift_scatter_vertex(
     through the medium; that is the gap ghost vertices are for, and it is why
     `ghost` is rejected here rather than aliased onto `identity`.
 
-    `ray_origin`/`ray_dir` are unused by the identity map and are taken anyway
-    so that adding a real mapping later does not change this function's
-    signature, and therefore does not change any call site."""
+    Under `retarget` the donor's vertex is DISCARDED and `receiver_vertex` --
+    the reusing pixel's own scattering vertex -- is returned, so only the
+    light sample travels. See VolShiftMode.retarget for when each is correct;
+    the short version is that `identity` needs the two vertices to be draws
+    from a shared continuous proposal, which is true exactly when distance
+    resampling is on.
+
+    Whichever vertex comes back is the one the caller must BOTH evaluate the
+    target at and, eventually, trace the shadow ray from: reservoir_finalize
+    divides by p_hat of the chosen sample, so a resolve that shadows from a
+    different point silently breaks the RIS identity.
+
+    `ray_origin`/`ray_dir` are unused by both maps and are taken anyway so
+    that adding a real (ray-dependent) mapping later does not change this
+    function's signature, and therefore does not change any call site."""
     if mode == VolShiftMode.identity:
         return (True, scatter_point)
+    if mode == VolShiftMode.retarget:
+        return (True, receiver_vertex)
     # VolShiftMode.ghost, or anything unrecognised: refuse. Falling back to
     # identity would silently produce the older formulation's answer while the
     # caller believed it had the newer one.
@@ -306,6 +337,29 @@ def vol_reservoir_io_null() -> VolReservoirIO:
 # id, so two of DI/GI's three G-buffer rejection tests do not apply at all
 # here -- what replaces them is the medium match plus the target function
 # scoring an incompatible neighbour at 0 on its own.
+#
+# TEMPORAL REUSE (`--vol-restir-reuse`) NO LONGER SHOWS A MEASURABLE WIN, and
+# the constants below are therefore untuned against anything real. It was
+# recorded at 3-10x MSE reduction on GPU; re-measured 2026-09-09 after the
+# sphere-boundary shadow-ray fix, on the same dense scene plus a thin-fog one,
+# both against 65536spp references:
+#
+#   scene       temporal-only MSE vs off   bias @4096spp
+#   thin fog             +2.9%                0.99998
+#   dense fog            -0.7%                1.00004
+#
+# i.e. a wash on dense and mildly WORSE on thin. The original figure was taken
+# when a shadow ray leaving a sphere-bounded medium was attenuated across the
+# vacuum out to the light, so it compared two variants of a near-black image
+# (that scene's mean was 5.7e-5; it is 0.0302 once correct) -- MSE ratios
+# measured against a 574x-too-dark baseline do not survive the fix.
+#
+# It remains UNBIASED and correct, and it stays wired and opt-in rather than
+# being removed: the machinery is shared with DI/GI, and a scene with genuine
+# frame-to-frame coherence (interactive camera, many accumulated frames) is a
+# different regime from these batch measurements. But nothing currently
+# justifies defaulting it on, and its constants should be re-derived rather
+# than trusted if it is ever revisited.
 comptime VOL_TEMPORAL_M_CAP: Float32 = Float32(64.0)
 # MEASURED 2026-09-08, now that temporal reuse + G-buffer wiring both exist
 # (`Scenes/vol-restir-mesh-light.pbrt`, 5 seeds, matched cap, vs a 16384spp
@@ -389,22 +443,36 @@ def vol_temporal_spatial_combine(
     var nb_seen = 0
     var m_same_domain = Float32(0.0)
 
+    # The receiving pixel's OWN vertex and the medium properties there, taken
+    # before any donor can overwrite them. `retarget` maps every donor onto
+    # this vertex, and the medium terms describe the VERTEX rather than the
+    # light sample, so they have to travel with it -- in a heterogeneous
+    # medium sigma_s at the donor's position is simply not sigma_s at ours.
+    # (The medium_idx gate below only guarantees the same medium, not the same
+    # density within it.)
+    var recv_vertex = res.scatter_point
+    var recv_sigma_s = res.sigma_s
+    var recv_phase_g = res.phase_g
+    var keep_recv_vertex = shift_mode == VolShiftMode.retarget
+
     if has_temporal:
         var prev = vol_io.read[pixel_idx]
         if prev.valid != Int8(0) and prev.medium_idx == medium_idx:
             var (ok_prev, pt_prev) = vol_shift_scatter_vertex(
-                shift_mode, prev.scatter_point, ray_origin, ray_dir)
+                shift_mode, prev.scatter_point, ray_origin, ray_dir, recv_vertex)
             if ok_prev:
+                var sig_prev = recv_sigma_s if keep_recv_vertex else prev.sigma_s
+                var g_prev = recv_phase_g if keep_recv_vertex else prev.phase_g
                 var p_hat_prev = vol_target_pdf(
-                    ray_dir, pt_prev, prev.sigma_s, prev.phase_g,
+                    ray_dir, pt_prev, sig_prev, g_prev,
                     prev.light_point, prev.light_normal, prev.le, VOL_TR_UNIT)
                 if reservoir_combine(res.state, prev.state, p_hat_prev, pcg.next_float()):
                     res.scatter_point = pt_prev
                     res.light_point = prev.light_point
                     res.light_normal = prev.light_normal
                     res.le = prev.le
-                    res.sigma_s = prev.sigma_s
-                    res.phase_g = prev.phase_g
+                    res.sigma_s = sig_prev
+                    res.phase_g = g_prev
                     res.light_idx = prev.light_idx
                     res.medium_idx = prev.medium_idx
                     res.valid = Int8(1)
@@ -432,11 +500,13 @@ def vol_temporal_spatial_combine(
                 if nb.valid == Int8(0) or nb.medium_idx != medium_idx:
                     continue
                 var (ok_nb, pt_nb) = vol_shift_scatter_vertex(
-                    shift_mode, nb.scatter_point, ray_origin, ray_dir)
+                    shift_mode, nb.scatter_point, ray_origin, ray_dir, recv_vertex)
                 if not ok_nb:
                     continue
+                var sig_nb = recv_sigma_s if keep_recv_vertex else nb.sigma_s
+                var g_nb = recv_phase_g if keep_recv_vertex else nb.phase_g
                 var p_hat_nb = vol_target_pdf(
-                    ray_dir, pt_nb, nb.sigma_s, nb.phase_g,
+                    ray_dir, pt_nb, sig_nb, g_nb,
                     nb.light_point, nb.light_normal, nb.le, VOL_TR_UNIT)
                 if nb_seen < VOL_SPATIAL_SLOTS:
                     nb_px_seen[nb_seen] = Int32(n_idx)
@@ -447,8 +517,8 @@ def vol_temporal_spatial_combine(
                     res.light_point = nb.light_point
                     res.light_normal = nb.light_normal
                     res.le = nb.le
-                    res.sigma_s = nb.sigma_s
-                    res.phase_g = nb.phase_g
+                    res.sigma_s = sig_nb
+                    res.phase_g = g_nb
                     res.light_idx = nb.light_idx
                     res.medium_idx = nb.medium_idx
                     res.valid = Int8(1)

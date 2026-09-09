@@ -1,0 +1,74 @@
+# Phase 7.3 measurement scene: the FAVOURABLE shape for volumetric distance
+# resampling, rebuilt from the recipe recorded in project_restir_migration
+# ("thin fog, small bright quad light just outside the fog sphere").
+#
+# Why this shape rather than Scenes/vol-restir-mesh-light.pbrt: that scene is
+# dense (sigma_s 2.0, optical depth ~8) and multiple-scattering dominated, so
+# the single-scatter NEE term distance resampling improves is a small part of
+# its answer -- it understates the technique by roughly 6x. Here the fog is
+# thin (sigma_s 0.5) and the light sits just off the sphere's surface, so
+# c_hat(t) varies by ~2 orders of magnitude along one camera segment, which is
+# exactly the regime where choosing WHERE on the segment to shadow matters.
+#
+# The light is a TRIANGLE-MESH quad, not a native Shape "sphere" area light:
+# _sample_medium_core's RIS block only iterates the triangle-mesh-backed
+# areaLights[] array, so a native sphere light would leave the code under test
+# completely unexercised (that mistake cost a previous verification pass a
+# long dead-end -- see project_restir_migration's 7.3 notes).
+#
+# "normal N" is supplied and agrees with the index winding: cross(p1-p0,
+# p2-p0) = (-1,0,0), the same direction N gives, so the quad faces the fog
+# sphere at the origin under either convention. Worth stating explicitly
+# because inline "N" only began to be parsed recently, and because
+# hand-built quad lights have produced false "renderer bug" verdicts here
+# twice (testing_scene_winding_trap).
+Integrator "volpath" "integer maxdepth" [ 16 ]
+Sampler "sobol" "integer pixelsamples" [ 256 ]
+Film "rgb"
+    "string filename" [ "vol-restir-thin-fog.exr" ]
+    "integer xresolution" [ 64 ] "integer yresolution" [ 64 ]
+LookAt 0 0 6  0 0 0  0 1 0
+Camera "perspective" "float fov" [ 40 ]
+
+WorldBegin
+
+MakeNamedMedium "fog" "string type" [ "homogeneous" ]
+    "rgb sigma_a" [ 0.01 0.01 0.01 ]
+    "rgb sigma_s" [ 0.5 0.5 0.5 ]
+    "float g" [ 0.0 ]
+
+MakeNamedMaterial "Interface"
+    "string type" [ "interface" ]
+
+MakeNamedMaterial "LightMat"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0 0 0 ]
+
+MakeNamedMaterial "Floor"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0.02 0.02 0.02 ]
+
+NamedMaterial "Floor"
+Shape "trianglemesh"
+    "point3 P" [ -20 -8 -20  20 -8 -20  20 -8 20  -20 -8 20 ]
+    "integer indices" [ 0 1 2 0 2 3 ]
+
+AttributeBegin
+    NamedMaterial "Interface"
+    MediumInterface "fog" ""
+    Shape "sphere" "float radius" [ 2.0 ]
+AttributeEnd
+
+# Small and bright, at x=2.3 -- 0.3 units off the sphere's surface. The
+# near-field falloff across the fog sphere's 4-unit diameter is what makes
+# the target function vary strongly along each camera segment.
+AttributeBegin
+    Translate 2.3 0 0
+    AreaLightSource "diffuse"
+        "rgb L" [ 120 120 120 ]
+    NamedMaterial "LightMat"
+    Shape "trianglemesh"
+        "normal N" [ -1 0 0  -1 0 0  -1 0 0  -1 0 0 ]
+        "point3 P" [ 0 -0.2 -0.2  0 -0.2 0.2  0 0.2 0.2  0 0.2 -0.2 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
