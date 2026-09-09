@@ -1,0 +1,49 @@
+# Isolation probe for coateddiffuse's VIEW-ANGLE dependence.
+#
+# Companion to coateddiffuse-eta-probe.pbrt, which sweeps eta at near-normal
+# incidence. staircase2's floor (FloorTiles, coateddiffuse) reads 0.62-0.71 of
+# real pbrt along the bottom of frame while the upper three quarters sit at
+# 0.93-0.96, and the ratio degrades monotonically toward the bottom -- i.e.
+# toward grazing VIEW angles. The eta probe cannot see that: it is front-lit
+# and viewed at near-normal incidence, where the residual is only ~5%.
+#
+# Design: one horizontal coateddiffuse quad lit by a DISTANT light straight
+# down. A distant light gives constant irradiance everywhere on the plane, so
+# the light-side geometry is fixed and the only variable is the camera's
+# elevation -- any change in the gonzales/pbrt ratio across the sweep isolates
+# the VIEW-side half of the coat model.
+#
+# EYEY/EYEZ are rewritten by Scenes/coateddiffuse_grazing_sweep.py.
+#
+# NOTE on winding (testing_scene_winding_trap): the quad's "normal N" points
+# +y, up toward the light and the camera. Verify renders are non-black before
+# trusting any ratio -- the sweep script asserts this.
+Sampler "halton" "integer pixelsamples" [ 512 ]
+Film "rgb" "string filename" [ "coateddiffuse-grazing-probe.exr" ]
+    "integer xresolution" [ 120 ] "integer yresolution" [ 120 ]
+LookAt 0 EYEY EYEZ   0 0 0   0 1 0
+Camera "perspective" "float fov" [ 20 ]
+
+Integrator "path" "integer maxdepth" [ 32 ]
+
+WorldBegin
+
+# Distant light straight down: constant irradiance on the plane, so the
+# light-side incidence angle is fixed at normal for every camera position.
+LightSource "distant"
+    "point3 from" [ 0 10 0 ]
+    "point3 to" [ 0 0 0 ]
+    "rgb L" [ 10 10 10 ]
+
+# Large horizontal quad so it fills the frame at every elevation, including
+# near-grazing where the visible patch is far from the origin.
+AttributeBegin
+    Material "coateddiffuse"
+        "rgb reflectance" [ 0.5 0.5 0.5 ]
+        "float roughness" [ 0 ]
+        "float eta" [ 1.5 ]
+    Shape "trianglemesh"
+        "integer indices" [ 0 1 2 0 2 3 ]
+        "point3 P" [ -200 0 -200   200 0 -200   200 0 200   -200 0 200 ]
+        "normal N" [ 0 1 0  0 1 0  0 1 0  0 1 0 ]
+AttributeEnd
