@@ -4,6 +4,7 @@ from .lexer import (PbrtScanner, scanner_parse_quoted_string, _psc_collect_param
 from .parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX
 from .geometry import RGB, MatKind
 from .measured_bsdf import load_measured_bsdf_reflectance
+from .spd import load_spd_rgb, named_metal_rgb, named_glass_ior
 
 def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                                    s: UnsafePointer[SceneParseState, MutExternalOrigin],
@@ -113,8 +114,39 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
     # meaningful only for conductor -- harmless cross-assignment either way
     # since a material can't be both kinds), and 0 floats means it was a
     # named-spectrum string, looked up by common-metal prefix.
+    # `coatedconductor` names its conductor constants "conductor.eta"/
+    # "conductor.k" rather than plain "eta"/"k" (pbrt namespaces the inner
+    # layer's params). Neither name was handled before, so every
+    # coatedconductor in the corpus fell back to the 0.5/0.5 default --
+    # killeroo-coated-gold rendered as dark chrome instead of gold.
+    # ParameterDictionary's accessors take a StringLiteral (compile-time) key,
+    # so the alias can't be selected by a runtime string -- resolve both
+    # spellings into locals here, then interpret them once below.
+    var eta_f = List[Float32]()
+    var eta_name = String("")
+    var has_eta = False
     if params.has("eta"):
-        var eta_f = params.get_floats("eta")
+        has_eta = True
+        eta_f = params.get_floats("eta")
+        eta_name = params.get_string("eta", "")
+    elif params.has("conductor.eta"):
+        has_eta = True
+        eta_f = params.get_floats("conductor.eta")
+        eta_name = params.get_string("conductor.eta", "")
+
+    var k_f = List[Float32]()
+    var k_name = String("")
+    var has_k = False
+    if params.has("k"):
+        has_k = True
+        k_f = params.get_floats("k")
+        k_name = params.get_string("k", "")
+    elif params.has("conductor.k"):
+        has_k = True
+        k_f = params.get_floats("conductor.k")
+        k_name = params.get_string("conductor.k", "")
+
+    if has_eta:
         if len(eta_f) >= 3:
             metal_eta = RGB(eta_f[0], eta_f[1], eta_f[2])
             has_spectral_conductor = True
@@ -123,25 +155,35 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
             metal_eta = RGB(eta_f[0])
             has_spectral_conductor = True
         else:
-            # Precomputed Fresnel F0 = ((eta-1)^2+k^2)/((eta+1)^2+k^2) for common metals
-            # Channels: R≈630nm, G≈530nm, B≈450nm  (from NIST/Filament spectral data)
-            var eta_name = params.get_string("eta", "")
-            if eta_name.startswith("metal-Ag"):
-                metal_eta = RGB(Float32(0.136), Float32(0.130), Float32(0.144))
-            elif eta_name.startswith("metal-Al"):
-                metal_eta = RGB(Float32(1.300), Float32(0.826), Float32(0.644))
-            elif eta_name.startswith("metal-Au"):
-                metal_eta = RGB(Float32(0.194), Float32(0.608), Float32(1.426))
-            elif eta_name.startswith("metal-Cu"):
-                metal_eta = RGB(Float32(0.272), Float32(1.120), Float32(1.160))
-            has_spectral_conductor = True
+            # Zero floats => the value was a string: either a pbrt built-in
+            # named spectrum ("metal-Au-eta", "glass-BK7") or a path to a
+            # .spd file. Both were previously ignored without a word.
+            var (m_eta, m_ok) = named_metal_rgb(eta_name, False)
+            if m_ok:
+                metal_eta = m_eta
+                has_spectral_conductor = True
+            else:
+                var (g_ior, g_ok) = named_glass_ior(eta_name)
+                if g_ok:
+                    mat_ior = g_ior
+                elif eta_name.endswith(".spd"):
+                    var (f_eta, f_ok) = load_spd_rgb(s[0].scene_dir + eta_name)
+                    if f_ok:
+                        metal_eta = f_eta
+                        has_spectral_conductor = True
+                    else:
+                        print("SPD load FAILED (cannot open/parse), material '"
+                              + String(unsafe_from_utf8_ptr=mat_name.as_immutable())
+                              + "' eta falls back to 0.5:", s[0].scene_dir + eta_name)
+                elif eta_name != "":
+                    print("Warning: unknown named spectrum '" + eta_name
+                          + "' for eta — falling back to 0.5. Supported: metal-{Ag,Al,Au,Cu,CuZn,TiO2,MgO}-*, glass-{BK7,BAF10,FK51A,LASF9,F5,F10,F11}, or a .spd file path.")
     if params.has("intIOR"):
         # Float-only alias for dielectric eta; no RGB/spectrum/named form.
         var iior_f = params.get_floats("intIOR")
         if len(iior_f) > 0:
             mat_ior = iior_f[0]
-    if params.has("k"):
-        var k_f = params.get_floats("k")
+    if has_k:
         if len(k_f) >= 3:
             metal_k = RGB(k_f[0], k_f[1], k_f[2])
             has_spectral_conductor = True
@@ -149,16 +191,22 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
             metal_k = RGB(k_f[0])
             has_spectral_conductor = True
         else:
-            var k_name = params.get_string("k", "")
-            if k_name.startswith("metal-Ag"):
-                metal_k = RGB(Float32(3.880), Float32(3.070), Float32(2.560))
-            elif k_name.startswith("metal-Al"):
-                metal_k = RGB(Float32(7.480), Float32(6.280), Float32(5.580))
-            elif k_name.startswith("metal-Au"):
-                metal_k = RGB(Float32(3.060), Float32(2.120), Float32(1.846))
-            elif k_name.startswith("metal-Cu"):
-                metal_k = RGB(Float32(3.240), Float32(2.605), Float32(2.433))
-            has_spectral_conductor = True
+            var (m_k, mk_ok) = named_metal_rgb(k_name, True)
+            if mk_ok:
+                metal_k = m_k
+                has_spectral_conductor = True
+            elif k_name.endswith(".spd"):
+                var (f_k, fk_ok) = load_spd_rgb(s[0].scene_dir + k_name)
+                if fk_ok:
+                    metal_k = f_k
+                    has_spectral_conductor = True
+                else:
+                    print("SPD load FAILED (cannot open/parse), material '"
+                          + String(unsafe_from_utf8_ptr=mat_name.as_immutable())
+                          + "' k falls back to 0.5:", s[0].scene_dir + k_name)
+            elif k_name != "":
+                print("Warning: unknown named spectrum '" + k_name
+                      + "' for k — falling back to 0.5. Supported: metal-{Ag,Al,Au,Cu,CuZn,TiO2,MgO}-*, or a .spd file path.")
 
     # "reflectance": either an RGB/float value, OR a texture reference --
     # looked up in tex_names (imagemap) first, then constant textures, then
