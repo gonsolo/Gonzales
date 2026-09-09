@@ -1156,12 +1156,39 @@ def shade_dielectric[use_gpu: Bool](
         path_ptr[].active = 0
         return
     if not is_sphere:
-        # Smooth shading normal, oriented to the geometric/winding normal (PBRT's
-        # FaceForward(Ns, Ng)): the winding — flipped at parse time by
-        # ReverseOrientation — is the authoritative outside direction the dielectric
-        # uses to pick entering vs exiting. (Using the raw vertex normal instead
-        # breaks meshes whose vertex normals point inward, causing spurious TIR.)
-        geom_normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geom_normal)
+        # The winding normal, NOT face-forwarded to the ray. `_hit_geom` (via
+        # _geom_normal_and_ray) flips its geometric normal to oppose the
+        # incoming ray, which is right for diffuse/conductor shading and fatal
+        # here: `bxdf_sample_dielectric` decides entering-vs-exiting with
+        # `dot(ray_dir, geom_normal) < 0`, and against a pre-flipped normal
+        # that test is tautologically TRUE. Every crossing then reads as an
+        # entry, so eta = 1/ior is applied on the way in AND on the way out
+        # instead of 1/ior then ior -- a full traversal loses
+        # (1/ior^2)*(1/ior^2) = 1/ior^4 of the transmitted radiance instead of
+        # the correct factor of exactly 1. Measured on a backlit parallel slab
+        # against the closed form L*(1-R)/(1+R): 0.679x at eta=1.1, 0.321x at
+        # 1.33, 0.204x at 1.5, 0.061x at 2.0 -- tracking 1/eta^4 (0.683,
+        # 0.320, 0.198, 0.063) across the whole range.
+        #
+        # This is the SAME defect the sphere branch below already documents
+        # and fixes; it was believed not to affect meshes because
+        # `_shading_normal` re-orients to the winding, but that orients to the
+        # geo_normal it is HANDED, which arrives already flipped -- so the
+        # flip survived. Recompute the raw winding normal from the vertices
+        # (cross(p1-p0, p2-p0), the same expression _geom_normal_and_ray uses
+        # before its flip) and orient the interpolated shading normal to THAT.
+        # ReverseOrientation is already baked into the winding at parse time,
+        # so this stays the authoritative outside direction.
+        var dp0 = Vec3f(mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
+        var dp1 = Vec3f(mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
+        var dp2 = Vec3f(mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+        var raw_gn = cross(dp1 - dp0, dp2 - dp0)
+        var raw_len = dot(raw_gn, raw_gn)
+        if raw_len > Float32(0.0):
+            raw_gn = raw_gn * (Float32(1.0) / sqrt(raw_len))
+        else:
+            raw_gn = geom_normal
+        geom_normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, raw_gn)
     else:
         # `_hit_geom`/`_sphere_geom_normal_and_ray` returns a FACE-FORWARDED
         # normal (always flipped to oppose the incoming ray) -- correct for
