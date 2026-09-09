@@ -34,6 +34,10 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     # texture's raw [0,1] value. -1 = no bump map.
     var bump_tex_idx:   Int32
     var bump_scale:     Float32
+    # PBRT "scale" texture class wrapping the reflectance imagemap: the
+    # scalar multiplier applied to `tex_idx`'s looked-up value. Same one-level
+    # indirection the bump path resolves, but for the colour texture.
+    var tex_scale:      Float32
     # UV scale applied to an imagemap `tex_idx` texture's mesh UVs at parse
     # time (Mitsuba's `<transform name="to_uv"><scale .../></transform>`,
     # e.g. a tiled floor texture) -- NOT the same field as checker_uscale/
@@ -71,6 +75,7 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
         self.rough_tex_idx  = Int32(-1)
         self.bump_tex_idx   = Int32(-1)
         self.bump_scale     = Float32(1)
+        self.tex_scale      = Float32(1)
         self.tex_uscale     = Float32(1)
         self.tex_vscale     = Float32(1)
         self.mix_name1      = String("")

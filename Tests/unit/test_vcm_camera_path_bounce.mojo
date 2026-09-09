@@ -95,7 +95,7 @@ def _build_scene() -> SceneDescriptor2_C:
         MatKind.diffuse, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.8)), RGB(Float32(0.0)), Int32(-1),
         Float32(0.0), Float32(0.0), Int32(-1), Int32(-1), Float32(1.0), Int32(-1), Int32(-1),
-        RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0), Int32(-1),
+        RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0), Int32(-1), Float32(1.0),
     )
 
     return SceneDescriptor2_C(

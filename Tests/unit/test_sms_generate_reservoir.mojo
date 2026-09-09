@@ -51,7 +51,7 @@ def _make_dielectric(ior: Float32) -> Material_C:
         RGB(ior), RGB(Float32(0.0)),
         Int32(-1), Float32(0.0), Float32(0.0),
         Int32(-1), Int32(-1), Float32(1.0), Int32(-1), Int32(-1),
-        RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0), Int32(-1))
+        RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0), Int32(-1), Float32(1.0))
 
 def _make_ctx(
     bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],

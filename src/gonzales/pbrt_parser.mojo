@@ -1132,6 +1132,17 @@ def handle_texture(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         return
 
     if not _psc_streq(tex_class, "imagemap"):
+        # Unsupported texture class. Warn rather than dropping it in silence:
+        # a silently-ignored texture renders as a plausible flat surface with
+        # no error, which is exactly how the "scale"-on-reflectance gap
+        # survived (killeroos' floor grid). Same convention as the
+        # unsupported-material warnings in material_builder.mojo.
+        var class_str = String(unsafe_from_utf8_ptr=tex_class.as_immutable())
+        var type_str  = String(unsafe_from_utf8_ptr=tex_type.as_immutable())
+        print("Warning: unsupported texture class '" + class_str + "' ("
+              + type_str + ") for texture '" + name_str
+              + "' — it will render as a flat default. Supported: imagemap,"
+              + " scale, checkerboard, constant.")
         tex_type.free(); tex_class.free()
         _psc_skip_params(handle)
         return
@@ -1734,6 +1745,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
         mats[i].normal_tex_idx = nm3.normal_tex_idx
         mats[i].bump_tex_idx = nm3.bump_tex_idx
         mats[i].bump_scale = nm3.bump_scale
+        mats[i].tex_scale = nm3.tex_scale
         mats[i].rough_tex_idx = nm3.rough_tex_idx
         mats[i].medium_interface_idx = Int32(-1)
         if nm3.measured_bsdf_path == "":
@@ -1884,6 +1896,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             mats[al_mat_base + al_idx].normal_tex_idx = Int32(-1)
             mats[al_mat_base + al_idx].bump_tex_idx = Int32(-1)
             mats[al_mat_base + al_idx].bump_scale = Float32(1)
+            mats[al_mat_base + al_idx].tex_scale = Float32(1)
             mats[al_mat_base + al_idx].rough_tex_idx = Int32(-1)
             mats[al_mat_base + al_idx].medium_interface_idx = Int32(-1)
             mats[al_mat_base + al_idx].measured_idx = Int32(-1)
@@ -1911,6 +1924,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             mats[slot].normal_tex_idx = Int32(-1)
             mats[slot].bump_tex_idx = Int32(-1)
             mats[slot].bump_scale = Float32(1)
+            mats[slot].tex_scale = Float32(1)
             mats[slot].rough_tex_idx = Int32(-1)
             mats[slot].medium_interface_idx = Int32(-1)
             mats[slot].measured_idx = Int32(-1)
