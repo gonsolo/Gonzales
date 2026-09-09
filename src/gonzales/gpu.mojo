@@ -2600,17 +2600,11 @@ def _sample_medium_core(
             # in-frame scatter falls back to the plain single-frame RIS
             # estimator (7.2's original, always-correct behavior) instead of
             # corrupting the persisted reservoir.
-            # `not dist_ris`: temporal reuse re-targets a previous frame's
-            # sample at THIS pixel's vertex (VolShiftMode.identity), which
-            # assumes the vertex is the one the resolve will shadow from.
-            # Distance resampling breaks that assumption -- the winner's
-            # vertex is now a resampled one -- and combining the two is
-            # untested. They are kept mutually exclusive rather than shipped
-            # as an unverified interaction; measuring distance resampling on
-            # its own is what this pass is for.
+            # Distance resampling and temporal reuse COMPOSE (they were once
+            # mutually exclusive here, on a premise that turned out to be
+            # backwards -- see the shift-mode choice below).
             var vol_reuse_ok = (pixel_idx >= 0 and _is_real_ptr(vol_read)
-                and _is_real_ptr(vol_used) and vol_used[i] == Int8(0)
-                and not dist_ris)
+                and _is_real_ptr(vol_used) and vol_used[i] == Int8(0))
             if vol_reuse_ok:
                 vol_used[i] = Int8(1)
                 var vol_io = vol_reservoir_io_null()
@@ -2624,9 +2618,32 @@ def _sample_medium_core(
                 var ray_d_s = path_ptr[].ray.direction.to_simd()
                 var ray_o = Vec3f(ray_o_s[0], ray_o_s[1], ray_o_s[2])
                 var ray_d = Vec3f(ray_d_s[0], ray_d_s[1], ray_d_s[2])
+                # Which shift is valid depends on how this frame's vertex was
+                # produced, and the two cases are opposites:
+                #
+                # dist_ris ON -> `identity`. The vertex came from q(t), which
+                # depends only on sigma_t and t_surf -- the same for every
+                # frame at this pixel -- so a donor's vertex is a draw from
+                # exactly our own proposal. Domains match, Jacobian 1.
+                #
+                # dist_ris OFF -> `retarget`. The vertex is delta-tracking's
+                # single t_free, a point mass that differs every frame; our
+                # proposal could never have produced the donor's. Import only
+                # the light sample and keep our own vertex, which is plain
+                # ReSTIR DI reuse.
+                #
+                # The guard that used to sit here had this backwards: it
+                # claimed `identity` re-targets onto this pixel's vertex and
+                # so could not survive distance resampling. `identity` does
+                # the opposite -- it keeps the DONOR's vertex verbatim -- so
+                # the configuration it permitted (dist_ris off + reuse) was
+                # the inconsistent one, and the configuration it forbade was
+                # the well-founded one. See the resolve below for the bug
+                # that inconsistency caused.
+                var vol_shift = VolShiftMode.identity if dist_ris else VolShiftMode.retarget
                 vol_temporal_spatial_combine(
                     res, ray_o, ray_d, Int32(med_idx), pcg,
-                    vol_io, pixel_idx, VolShiftMode.identity)
+                    vol_io, pixel_idx, vol_shift)
             else:
                 reservoir_finalize(res.state, p_hat_win)
 
@@ -2635,11 +2652,27 @@ def _sample_medium_core(
             if res.valid != Int8(0) and res.state.w > Float32(0.0):
                 var light_point = res.light_point.to_simd()
                 var light_normal = res.light_normal.to_simd()
-                # Shadow-ray from the WINNER's vertex. Equal to scatter_pt_s
-                # unless distance resampling moved it (and temporal reuse,
-                # which can substitute a vertex from another frame, is
-                # mutually exclusive with that -- see vol_reuse_ok above).
-                var resolve_pt = res.scatter_point if dist_ris else scatter_pt_s
+                # Shadow-ray from the WINNER's vertex, ALWAYS -- this is the
+                # one point that must agree with the target evaluation, since
+                # reservoir_finalize set W = w_sum/(m * p_hat(winner)) using
+                # p_hat at res.scatter_point. Tracing F from anywhere else
+                # multiplies an F from one vertex by a W from another and the
+                # RIS identity is gone.
+                #
+                # This used to read `res.scatter_point if dist_ris else
+                # scatter_pt_s`, which was a live bias whenever temporal reuse
+                # won with a donor sample: the donor's vertex went into p_hat
+                # (and into W) while the shadow ray still left from THIS
+                # frame's vertex. It stayed hidden because both points lie on
+                # the same camera ray in a homogeneous fog, so the two targets
+                # are close and the error is a quiet scale factor rather than
+                # anything visible.
+                #
+                # Equal to scatter_pt_s whenever nothing moved the vertex --
+                # every candidate writes cand_v, which is scatter_v itself
+                # unless distance resampling drew a new one -- so the default
+                # (no reuse, no distance resampling) path is unchanged.
+                var resolve_pt = res.scatter_point.to_simd()
                 var to_light = light_point - resolve_pt
                 var dist_sq = dot(to_light, to_light)
                 var dist = sqrt(dist_sq)

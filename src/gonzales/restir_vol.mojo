@@ -149,6 +149,24 @@ struct VolShiftMode:
     # only). vol_shift_scatter_vertex rejects it rather than silently falling
     # back to `identity`, so a caller cannot half-enable it by accident.
     comptime ghost: Int32 = Int32(1)
+    # Keep the RECEIVING pixel's own scattering vertex and import only the
+    # light sample. Correct -- and the ONLY correct choice -- when the vertex
+    # was NOT drawn from a shared continuous proposal, i.e. when distance
+    # resampling is off and the vertex is whatever delta-tracking's single
+    # t_free happened to be for this path. Two frames' vertices are then point
+    # masses with disjoint support: the receiver's proposal could never have
+    # produced the donor's vertex, so importing it and dividing by the pooled
+    # m over-counts. Re-targeting the light sample onto our own vertex is the
+    # textbook ReSTIR DI reuse (the shading point is fixed by the pixel, only
+    # the light sample travels) and sidesteps the question entirely.
+    #
+    # `identity` is right for the opposite case: with distance resampling on,
+    # the vertex comes from q(t) = sigma_t e^{-sigma_t t}/(1 - e^{-sigma_t
+    # t_surf}), which depends only on sigma_t and t_surf -- identical across
+    # frames for a static camera at one pixel. The donor's vertex is then a
+    # draw from exactly the receiver's own proposal, so the domains match and
+    # the Jacobian is 1.
+    comptime retarget: Int32 = Int32(2)
 
 @fieldwise_init
 struct VolReservoir(TrivialRegisterPassable):
@@ -203,6 +221,7 @@ def vol_reservoir_init() -> VolReservoir:
 @always_inline
 def vol_shift_scatter_vertex(
     mode: Int32, scatter_point: Vec3f, ray_origin: Vec3f, ray_dir: Vec3f,
+    receiver_vertex: Vec3f = Vec3f(Float32(0)),
 ) -> Tuple[Bool, Vec3f]:
     """Map a stored scattering vertex onto the camera ray (`ray_origin`,
     `ray_dir`) of the pixel now trying to reuse it. Returns (ok, vertex).
@@ -215,11 +234,25 @@ def vol_shift_scatter_vertex(
     through the medium; that is the gap ghost vertices are for, and it is why
     `ghost` is rejected here rather than aliased onto `identity`.
 
-    `ray_origin`/`ray_dir` are unused by the identity map and are taken anyway
-    so that adding a real mapping later does not change this function's
-    signature, and therefore does not change any call site."""
+    Under `retarget` the donor's vertex is DISCARDED and `receiver_vertex` --
+    the reusing pixel's own scattering vertex -- is returned, so only the
+    light sample travels. See VolShiftMode.retarget for when each is correct;
+    the short version is that `identity` needs the two vertices to be draws
+    from a shared continuous proposal, which is true exactly when distance
+    resampling is on.
+
+    Whichever vertex comes back is the one the caller must BOTH evaluate the
+    target at and, eventually, trace the shadow ray from: reservoir_finalize
+    divides by p_hat of the chosen sample, so a resolve that shadows from a
+    different point silently breaks the RIS identity.
+
+    `ray_origin`/`ray_dir` are unused by both maps and are taken anyway so
+    that adding a real (ray-dependent) mapping later does not change this
+    function's signature, and therefore does not change any call site."""
     if mode == VolShiftMode.identity:
         return (True, scatter_point)
+    if mode == VolShiftMode.retarget:
+        return (True, receiver_vertex)
     # VolShiftMode.ghost, or anything unrecognised: refuse. Falling back to
     # identity would silently produce the older formulation's answer while the
     # caller believed it had the newer one.
@@ -389,22 +422,36 @@ def vol_temporal_spatial_combine(
     var nb_seen = 0
     var m_same_domain = Float32(0.0)
 
+    # The receiving pixel's OWN vertex and the medium properties there, taken
+    # before any donor can overwrite them. `retarget` maps every donor onto
+    # this vertex, and the medium terms describe the VERTEX rather than the
+    # light sample, so they have to travel with it -- in a heterogeneous
+    # medium sigma_s at the donor's position is simply not sigma_s at ours.
+    # (The medium_idx gate below only guarantees the same medium, not the same
+    # density within it.)
+    var recv_vertex = res.scatter_point
+    var recv_sigma_s = res.sigma_s
+    var recv_phase_g = res.phase_g
+    var keep_recv_vertex = shift_mode == VolShiftMode.retarget
+
     if has_temporal:
         var prev = vol_io.read[pixel_idx]
         if prev.valid != Int8(0) and prev.medium_idx == medium_idx:
             var (ok_prev, pt_prev) = vol_shift_scatter_vertex(
-                shift_mode, prev.scatter_point, ray_origin, ray_dir)
+                shift_mode, prev.scatter_point, ray_origin, ray_dir, recv_vertex)
             if ok_prev:
+                var sig_prev = recv_sigma_s if keep_recv_vertex else prev.sigma_s
+                var g_prev = recv_phase_g if keep_recv_vertex else prev.phase_g
                 var p_hat_prev = vol_target_pdf(
-                    ray_dir, pt_prev, prev.sigma_s, prev.phase_g,
+                    ray_dir, pt_prev, sig_prev, g_prev,
                     prev.light_point, prev.light_normal, prev.le, VOL_TR_UNIT)
                 if reservoir_combine(res.state, prev.state, p_hat_prev, pcg.next_float()):
                     res.scatter_point = pt_prev
                     res.light_point = prev.light_point
                     res.light_normal = prev.light_normal
                     res.le = prev.le
-                    res.sigma_s = prev.sigma_s
-                    res.phase_g = prev.phase_g
+                    res.sigma_s = sig_prev
+                    res.phase_g = g_prev
                     res.light_idx = prev.light_idx
                     res.medium_idx = prev.medium_idx
                     res.valid = Int8(1)
@@ -432,11 +479,13 @@ def vol_temporal_spatial_combine(
                 if nb.valid == Int8(0) or nb.medium_idx != medium_idx:
                     continue
                 var (ok_nb, pt_nb) = vol_shift_scatter_vertex(
-                    shift_mode, nb.scatter_point, ray_origin, ray_dir)
+                    shift_mode, nb.scatter_point, ray_origin, ray_dir, recv_vertex)
                 if not ok_nb:
                     continue
+                var sig_nb = recv_sigma_s if keep_recv_vertex else nb.sigma_s
+                var g_nb = recv_phase_g if keep_recv_vertex else nb.phase_g
                 var p_hat_nb = vol_target_pdf(
-                    ray_dir, pt_nb, nb.sigma_s, nb.phase_g,
+                    ray_dir, pt_nb, sig_nb, g_nb,
                     nb.light_point, nb.light_normal, nb.le, VOL_TR_UNIT)
                 if nb_seen < VOL_SPATIAL_SLOTS:
                     nb_px_seen[nb_seen] = Int32(n_idx)
@@ -447,8 +496,8 @@ def vol_temporal_spatial_combine(
                     res.light_point = nb.light_point
                     res.light_normal = nb.light_normal
                     res.le = nb.le
-                    res.sigma_s = nb.sigma_s
-                    res.phase_g = nb.phase_g
+                    res.sigma_s = sig_nb
+                    res.phase_g = g_nb
                     res.light_idx = nb.light_idx
                     res.medium_idx = nb.medium_idx
                     res.valid = Int8(1)
