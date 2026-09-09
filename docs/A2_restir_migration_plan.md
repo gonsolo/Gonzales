@@ -137,6 +137,34 @@ are the gap ReSTIR BDPT leaves open. VCM's merge is one answer, not the only:
 can never regress on SDS. The only question is which technique eventually
 carries that load — most likely Phase 6, not a retained merge term.
 
+> **Correction (2026-09-09): "ships it" is not "it works", and this
+> paragraph was measured false.** On `water-caustic` — surface SDS, no
+> media — the caustic web is produced by **SPPM only**. Plain PT scores
+> 0.05× the reference and the entire submerged volume renders **black**.
+>
+> Two clarifications the table above invites the reader to get wrong:
+>
+> 1. **SMS/MNEE is not interactive-gated.** `_mnee_area_light_contribute`
+>    runs unconditionally in the batch path tracer's NEE (disabling it
+>    changes 95% of pixels on `water-caustic`). `--sms-restir` is a
+>    *reuse* layer on top, and its interactive-only gate is correct: a
+>    lone candidate with no reservoir combine is algebraically identical
+>    to per-frame MNEE. So "SMS-ReSTIR is the in-framework answer" is
+>    about *variance*, while the SDS *capability* is plain MNEE/SMS, which
+>    is always on.
+> 2. **A failed manifold solve is worse than no MNEE at all.** MNEE
+>    suppresses the straight shadow ray as soon as it finds a dielectric
+>    (correct — glass occludes it), then returns without contributing if
+>    the Newton solve does not converge. On a wavy water surface that path
+>    is taken almost everywhere, so the receiver goes black rather than
+>    merely noisy. Verified by painting failed solves magenta: the whole
+>    submerged volume lights up.
+>
+> So the honest statement is: **SDS coverage in batch mode rests on SPPM
+> today.** Phase 6 cannot take that load until the underlying solver finds
+> the multiple admissible refraction points a caustic web is made of —
+> reuse cannot rescue candidates that never converge. See §4a Gate S.
+
 ---
 
 ## 4. Phases
@@ -191,6 +219,10 @@ caustic there"). Reference scores 5.53; a caustic-free render 1.54.
 2. `water-caustic` scores > 2.0 without `--sppm`, **in batch mode**.
    *Today: only SPPM passes* (present, structurally correct, 5.4× bright).
    PT and `--sms-restir` both score 0.05× the reference — caustic absent.
+   The blocker is **MNEE's Newton solve failing below the waterline**, not
+   the `--sms-restir` gate (see the bullets below); the submerged volume
+   renders black because a failed solve contributes nothing while still
+   suppressing the straight shadow ray.
 3. Both within a stated tolerance of **real pbrt-v4 on the same file** —
    pbrt is the arbiter, not the Tungsten `.exr`.
 4. The replacement finishes in time comparable to SPPM (< ~560 s for
@@ -198,11 +230,31 @@ caustic there"). Reference scores 5.53; a caustic-free render 1.54.
 
 Three findings from that measurement change the picture:
 
-- **`--sms-restir` is interactive-only.** It prints "no effect without
-  --interactive" and returns PT-identical output. §3's table designates it
-  "the in-framework answer" for SDS; it cannot fill that role offline
-  today. §3's claim that gonzales "can never regress on SDS" rests on
-  SPPM alone in batch mode.
+- **`--sms-restir` is interactive-only — but that is NOT why batch mode
+  lacks the caustic** (corrected 2026-09-09, after the flag was initially
+  and wrongly blamed). SMS/MNEE glass-caustic probing runs **unconditionally
+  in batch**: `_mnee_area_light_contribute` is called from
+  `shading.mojo`'s plain NEE path with no flag guarding it, and disabling it
+  changes 95% of pixels on `water-caustic`. `--sms-restir` only swaps that
+  call for `sms_temporal_step`, a *reuse* layer. Its gate is sound and
+  documented at `pipeline.mojo`'s `use_sms_restir` parameter: a lone SMS
+  candidate with no reservoir combine is mathematically identical to
+  per-frame MNEE (`W` collapses to exactly `inv_pdf_area*trials`), so batch
+  wiring would add nothing. **Wiring it would not fix `water-caustic`:
+  reuse cannot rescue a candidate that never converges** — see the next
+  bullet.
+- **The real cause of `water-caustic`'s missing caustic: the Newton solve
+  fails essentially everywhere below the waterline.** MNEE detects the
+  water dielectric and correctly suppresses the straight shadow ray (glass
+  occludes it either way), then `shading.mojo`'s `if not solve_ok: return
+  True` returns having contributed **nothing** — so a failed solve renders
+  *black*, not merely noisy. Diagnostic: painting failed solves magenta
+  turns the entire submerged volume magenta, matching exactly the region
+  that should carry the caustic web. Scene is a tiny mesh area light above
+  a wavy `dielectric` plymesh (`Mesh001.ply`, eta 1.8) — many admissible
+  refraction points per shading point, which is what makes the web, and
+  what a single Newton solve per (point, light-sample) pair does not find.
+  This is the actual SDS gap, and it is in the solver, not the flag.
 - **SPPM is broken on `volumetric-caustic`**, despite having medium code
   (`sample_homogeneous_free_flight`, `sppm.mojo:571`/`:993`) — likely the
   camera path not starting inside the enclosing medium
@@ -380,6 +432,25 @@ uniqueness threshold; reject on failure (`Shift.slang::shiftPathSMS` is the
 model). Keep it a **separate reservoir** per the published design — fusing
 with DI/GI is Phase 9. Optionally adopt their tile-based sample-space
 partitioning, which is what makes it interactive-viable.
+
+**Scope, measured 2026-09-09.** `--sms-restir` is interactive-only, and
+that gate is **correct, not a shortfall**: it reuses SMS candidates across
+frames, and a lone candidate with no reservoir combine is algebraically
+identical to the per-frame MNEE that already runs unconditionally in batch
+(`W` collapses to exactly `inv_pdf_area*trials`; see `pipeline.mojo`'s
+`use_sms_restir` parameter comment). Batch wiring would therefore be a
+no-op, and was deliberately not done.
+
+**What this phase does NOT deliver, and cannot until the solver improves:**
+SDS *capability*. On `water-caustic` the underlying MNEE solve fails
+essentially everywhere below the waterline, and because a failed solve
+suppresses the straight shadow ray without contributing, the submerged
+volume renders black. Reuse cannot rescue a candidate that never
+converges, so no amount of Phase 6 work will make that scene pass Gate S
+condition 2. The prerequisite is a solver that finds the *multiple*
+admissible refraction points a caustic web consists of — one Newton solve
+per (shading point, light sample) pair finds at most one. Hong et al.'s
+tile-based partitioning is about interactive viability, not about this.
 
 ### Phase 7 — Volumetric ReSTIR machinery
 
