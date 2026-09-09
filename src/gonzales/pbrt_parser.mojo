@@ -1127,11 +1127,43 @@ def handle_texture(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     if _psc_streq(tex_class, "scale"):
         tex_type.free(); tex_class.free()
         var params = _psc_collect_params(handle)
+        # Both operands may be a nested texture or a literal -- see the
+        # scale_tex_* comment in parse_types.mojo. get_string returns "" when
+        # the operand has no string form, which is the "it's a literal" marker.
         var base_name = params.get_string("tex", "")
+        var base_rgb = _psc_get_float_or_rgb(params, "tex", RGB(Float32(1.0)))
+        var scale_name = params.get_string("scale", "")
         var scale_val = params.get_float("scale", Float32(1))
         s[0].scale_tex_names.append(name_str)
         s[0].scale_tex_base.append(base_name)
+        s[0].scale_tex_base_rgb.append(base_rgb.r)
+        s[0].scale_tex_base_rgb.append(base_rgb.g)
+        s[0].scale_tex_base_rgb.append(base_rgb.b)
         s[0].scale_tex_scale.append(scale_val)
+        s[0].scale_tex_scale_name.append(scale_name)
+        return
+    if _psc_streq(tex_class, "mix"):
+        tex_type.free(); tex_class.free()
+        var params = _psc_collect_params(handle)
+        # Each slot is either a nested texture reference (lands in the
+        # dictionary's `strs` -- `"texture tex1" "name"`) or a literal
+        # (lands in `floats` -- `"rgb tex1" [r g b]` / `"float tex1" [v]`).
+        # get_string returns "" when the slot has no string form, which is
+        # exactly the "this one is a constant" marker the tables expect.
+        var t1_name = params.get_string("tex1", "")
+        var t2_name = params.get_string("tex2", "")
+        var am_name = params.get_string("amount", "")
+        # pbrt's own defaults: tex1 = 0, tex2 = 1, amount = 0.5.
+        var t1_rgb = _psc_get_float_or_rgb(params, "tex1", RGB(Float32(0.0)))
+        var t2_rgb = _psc_get_float_or_rgb(params, "tex2", RGB(Float32(1.0)))
+        var am_val = params.get_float("amount", Float32(0.5))
+        s[0].mix_tex_names.append(name_str)
+        s[0].mix_tex1_name.append(t1_name)
+        s[0].mix_tex1_rgb.append(t1_rgb.r); s[0].mix_tex1_rgb.append(t1_rgb.g); s[0].mix_tex1_rgb.append(t1_rgb.b)
+        s[0].mix_tex2_name.append(t2_name)
+        s[0].mix_tex2_rgb.append(t2_rgb.r); s[0].mix_tex2_rgb.append(t2_rgb.g); s[0].mix_tex2_rgb.append(t2_rgb.b)
+        s[0].mix_amount_name.append(am_name)
+        s[0].mix_amount_val.append(am_val)
         return
 
     if not _psc_streq(tex_class, "imagemap"):
@@ -1145,7 +1177,7 @@ def handle_texture(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         print("Warning: unsupported texture class '" + class_str + "' ("
               + type_str + ") for texture '" + name_str
               + "' — it will render as a flat default. Supported: imagemap,"
-              + " scale, checkerboard, constant.")
+              + " scale, mix, checkerboard, constant.")
         tex_type.free(); tex_class.free()
         _psc_skip_params(handle)
         return
@@ -1749,6 +1781,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
         mats[i].bump_tex_idx = nm3.bump_tex_idx
         mats[i].bump_scale = nm3.bump_scale
         mats[i].tex_scale = nm3.tex_scale
+        mats[i].tex_bias = nm3.tex_bias
         mats[i].rough_tex_idx = nm3.rough_tex_idx
         mats[i].medium_interface_idx = Int32(-1)
         if nm3.measured_bsdf_path == "":
@@ -1899,7 +1932,8 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             mats[al_mat_base + al_idx].normal_tex_idx = Int32(-1)
             mats[al_mat_base + al_idx].bump_tex_idx = Int32(-1)
             mats[al_mat_base + al_idx].bump_scale = Float32(1)
-            mats[al_mat_base + al_idx].tex_scale = Float32(1)
+            mats[al_mat_base + al_idx].tex_scale = RGB(Float32(1))
+            mats[al_mat_base + al_idx].tex_bias = RGB(Float32(0))
             mats[al_mat_base + al_idx].rough_tex_idx = Int32(-1)
             mats[al_mat_base + al_idx].medium_interface_idx = Int32(-1)
             mats[al_mat_base + al_idx].measured_idx = Int32(-1)
@@ -1927,7 +1961,8 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             mats[slot].normal_tex_idx = Int32(-1)
             mats[slot].bump_tex_idx = Int32(-1)
             mats[slot].bump_scale = Float32(1)
-            mats[slot].tex_scale = Float32(1)
+            mats[slot].tex_scale = RGB(Float32(1))
+            mats[slot].tex_bias = RGB(Float32(0))
             mats[slot].rough_tex_idx = Int32(-1)
             mats[slot].medium_interface_idx = Int32(-1)
             mats[slot].measured_idx = Int32(-1)

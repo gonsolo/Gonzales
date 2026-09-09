@@ -34,10 +34,12 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     # texture's raw [0,1] value. -1 = no bump map.
     var bump_tex_idx:   Int32
     var bump_scale:     Float32
-    # PBRT "scale" texture class wrapping the reflectance imagemap: the
-    # scalar multiplier applied to `tex_idx`'s looked-up value. Same one-level
-    # indirection the bump path resolves, but for the colour texture.
-    var tex_scale:      Float32
+    # PBRT "scale"/"mix" texture graph over the reflectance imagemap, folded
+    # into one affine correction: value = tex_bias + tex_scale * texel, per
+    # channel. Identity is scale=1, bias=0. Resolved by material_builder's
+    # _resolve_affine_rgb; applied in shading.mojo's _tex_lookup.
+    var tex_scale:      RGB
+    var tex_bias:       RGB
     # UV scale applied to an imagemap `tex_idx` texture's mesh UVs at parse
     # time (Mitsuba's `<transform name="to_uv"><scale .../></transform>`,
     # e.g. a tiled floor texture) -- NOT the same field as checker_uscale/
@@ -82,7 +84,8 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
         self.rough_tex_idx  = Int32(-1)
         self.bump_tex_idx   = Int32(-1)
         self.bump_scale     = Float32(1)
-        self.tex_scale      = Float32(1)
+        self.tex_scale      = RGB(Float32(1))
+        self.tex_bias       = RGB(Float32(0))
         self.tex_uscale     = Float32(1)
         self.tex_vscale     = Float32(1)
         self.mix_name1      = String("")
@@ -227,9 +230,32 @@ struct SceneParseState(Movable):
     # ["base"] "float scale" [0.005]`) -- resolved to an actual imagemap
     # index by material_builder.mojo's displacement handling, not stored as
     # its own texture kind in Material_C.
+    # "scale" textures. BOTH operands are independently either a nested
+    # texture name or a literal, exactly like "mix" below: kroken's book
+    # covers are `"rgb tex" [c] "texture scale" [t]` (a constant tinted by a
+    # texture), the mirror image of killeroos' `"texture tex" [t]
+    # "float scale" [s]`. The *_name entry is "" when that operand is a
+    # literal; the parallel *_rgb / *_scale entry then carries it.
     var scale_tex_names:    List[String]
     var scale_tex_base:     List[String]
+    var scale_tex_base_rgb: List[Float32]  # 3 floats per entry
     var scale_tex_scale:    List[Float32]
+    var scale_tex_scale_name: List[String]
+    # "mix" textures: pbrt evaluates these as (1 - amount)*tex1 + amount*tex2
+    # (textures.h's {Float,Spectrum}MixTexture::Evaluate). Each of tex1/tex2/
+    # amount is independently either a nested texture NAME or a literal
+    # constant, so all three are stored both ways: the *_name entry is "" when
+    # that slot is a constant, and the parallel *_rgb / *_val entry carries the
+    # constant. material_builder.mojo folds the whole thing into an affine
+    # `bias + scale * texture` form -- see _resolve_affine_rgb there for which
+    # combinations are representable and which fall back with a warning.
+    var mix_tex_names:      List[String]
+    var mix_tex1_name:      List[String]
+    var mix_tex1_rgb:       List[Float32]  # 3 floats per entry
+    var mix_tex2_name:      List[String]
+    var mix_tex2_rgb:       List[Float32]  # 3 floats per entry
+    var mix_amount_name:    List[String]
+    var mix_amount_val:     List[Float32]
 
     # Film / camera / sampler settings
     var film_w:           Int32
@@ -358,7 +384,16 @@ struct SceneParseState(Movable):
         self.checker_tex_names = List[String]()
         self.scale_tex_names = List[String]()
         self.scale_tex_base = List[String]()
+        self.scale_tex_base_rgb = List[Float32]()
         self.scale_tex_scale = List[Float32]()
+        self.scale_tex_scale_name = List[String]()
+        self.mix_tex_names = List[String]()
+        self.mix_tex1_name = List[String]()
+        self.mix_tex1_rgb = List[Float32]()
+        self.mix_tex2_name = List[String]()
+        self.mix_tex2_rgb = List[Float32]()
+        self.mix_amount_name = List[String]()
+        self.mix_amount_val = List[Float32]()
         self.checker_tex1 = List[Float32]()
         self.checker_tex2 = List[Float32]()
         self.checker_uscale = List[Float32]()

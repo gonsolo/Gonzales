@@ -1,5 +1,5 @@
 from std.memory import alloc
-from std.math import sqrt, exp, max
+from std.math import sqrt, exp, max, abs
 from .lexer import (PbrtScanner, scanner_parse_quoted_string, _psc_collect_params, ParameterDictionary)
 from .parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX
 from .geometry import RGB, MatKind
@@ -19,6 +19,142 @@ def _mb_float_or_rgb(params: ParameterDictionary, name: StringLiteral, default: 
     elif len(f) == 1:
         return RGB(f[0])
     return default
+
+
+@fieldwise_init
+struct _AffineTex(Copyable, Movable):
+    """A resolved texture reference in gonzales's affine form:
+
+        value(uv) = bias + scale * imagemap[tex_idx](uv)
+
+    `tex_idx == -1` means the graph collapsed to a pure constant (`bias`;
+    `scale` is then zero). `ok == False` means the graph is not representable
+    this way -- the only such case in practice is a product of two *different*
+    textures, which would need a second lookup per shading point.
+
+    Everything pbrt's "scale" and "mix" classes do on a single underlying
+    imagemap is affine, and affine functions compose, so arbitrarily nested
+    scale/mix chains fold into one (scale, bias) pair at parse time and cost
+    nothing at render time."""
+    var ok:      Bool
+    var tex_idx: Int32
+    var scale:   RGB
+    var bias:    RGB
+
+
+@always_inline
+def _affine_fail() -> _AffineTex:
+    return _AffineTex(False, Int32(-1), RGB(Float32(1)), RGB(Float32(0)))
+
+
+@always_inline
+def _affine_const(c: RGB) -> _AffineTex:
+    return _AffineTex(True, Int32(-1), RGB(Float32(0)), c)
+
+
+def _resolve_affine_rgb(s: UnsafePointer[SceneParseState, MutExternalOrigin],
+                        name: String, depth: Int) -> _AffineTex:
+    """Fold a named texture -- possibly a nested scale/mix graph -- into one
+    affine (scale, bias) pair over a single imagemap. See _AffineTex.
+
+    Depth-capped rather than cycle-detected: pbrt texture graphs are declared
+    strictly bottom-up (a texture can only name one declared earlier), so a
+    cycle is impossible in a valid file, and the cap only guards against a
+    malformed one."""
+    if depth > 8:
+        return _affine_fail()
+
+    for ti in range(len(s[0].tex_names)):
+        if s[0].tex_names[ti] == name:
+            return _AffineTex(True, Int32(ti), RGB(Float32(1)), RGB(Float32(0)))
+
+    for ci in range(len(s[0].const_tex_names)):
+        if s[0].const_tex_names[ci] == name:
+            return _affine_const(RGB(s[0].const_tex_rgb[ci*3+0],
+                                     s[0].const_tex_rgb[ci*3+1],
+                                     s[0].const_tex_rgb[ci*3+2]))
+
+    for si in range(len(s[0].scale_tex_names)):
+        if s[0].scale_tex_names[si] == name:
+            var bn = s[0].scale_tex_base[si]
+            var base = _affine_const(RGB(s[0].scale_tex_base_rgb[si*3+0],
+                                         s[0].scale_tex_base_rgb[si*3+1],
+                                         s[0].scale_tex_base_rgb[si*3+2]))
+            if bn != "":
+                base = _resolve_affine_rgb(s, bn, depth + 1)
+            if not base.ok:
+                return _affine_fail()
+            var sn = s[0].scale_tex_scale_name[si]
+            if sn == "":
+                var k = s[0].scale_tex_scale[si]
+                return _AffineTex(True, base.tex_idx, base.scale * k, base.bias * k)
+            # Texture-valued multiplier. base * (sM*T + bM) stays affine only
+            # if at most one of the two operands actually varies -- otherwise
+            # it is a genuine product of two lookups. kroken's book covers are
+            # the useful case: a constant base tinted by a texture.
+            var mul = _resolve_affine_rgb(s, sn, depth + 1)
+            if not mul.ok:
+                return _affine_fail()
+            if base.tex_idx < 0:
+                return _AffineTex(True, mul.tex_idx,
+                                  mul.scale * base.bias, mul.bias * base.bias)
+            if mul.tex_idx < 0:
+                return _AffineTex(True, base.tex_idx,
+                                  base.scale * mul.bias, base.bias * mul.bias)
+            return _affine_fail()
+
+    for mi in range(len(s[0].mix_tex_names)):
+        if s[0].mix_tex_names[mi] == name:
+            var c1 = RGB(s[0].mix_tex1_rgb[mi*3+0], s[0].mix_tex1_rgb[mi*3+1], s[0].mix_tex1_rgb[mi*3+2])
+            var c2 = RGB(s[0].mix_tex2_rgb[mi*3+0], s[0].mix_tex2_rgb[mi*3+1], s[0].mix_tex2_rgb[mi*3+2])
+            var n1 = s[0].mix_tex1_name[mi]
+            var n2 = s[0].mix_tex2_name[mi]
+            var na = s[0].mix_amount_name[mi]
+
+            var r1 = _affine_const(c1)
+            if n1 != "":
+                r1 = _resolve_affine_rgb(s, n1, depth + 1)
+            var r2 = _affine_const(c2)
+            if n2 != "":
+                r2 = _resolve_affine_rgb(s, n2, depth + 1)
+            if (not r1.ok) or (not r2.ok):
+                return _affine_fail()
+
+            if na == "":
+                # Constant blend factor: pbrt's (1-a)*tex1 + a*tex2. Both
+                # sides are already affine, so the result is affine unless
+                # they ride on two *different* imagemaps.
+                var a = s[0].mix_amount_val[mi]
+                var w1 = Float32(1) - a
+                var bias = r1.bias * w1 + r2.bias * a
+                if r1.tex_idx < 0 and r2.tex_idx < 0:
+                    return _affine_const(bias)
+                if r2.tex_idx < 0:
+                    return _AffineTex(True, r1.tex_idx, r1.scale * w1, bias)
+                if r1.tex_idx < 0:
+                    return _AffineTex(True, r2.tex_idx, r2.scale * a, bias)
+                if r1.tex_idx == r2.tex_idx:
+                    return _AffineTex(True, r1.tex_idx,
+                                      r1.scale * w1 + r2.scale * a, bias)
+                return _affine_fail()
+
+            # Texture-driven blend factor. Substituting the amount's own
+            # affine form A(uv) = sA*T + bA into (1-A)*c1 + A*c2 gives
+            #   [sA*(c2-c1)] * T + [c1 + bA*(c2-c1)]
+            # -- still affine, but only when both blended sides are constants;
+            # otherwise the expansion carries a T*T term.
+            if r1.tex_idx >= 0 or r2.tex_idx >= 0:
+                return _affine_fail()
+            var ra = _resolve_affine_rgb(s, na, depth + 1)
+            if not ra.ok:
+                return _affine_fail()
+            var d = r2.bias - r1.bias
+            var bias2 = r1.bias + ra.bias * d
+            if ra.tex_idx < 0:
+                return _affine_const(bias2)
+            return _AffineTex(True, ra.tex_idx, ra.scale * d, bias2)
+
+    return _affine_fail()
 
 
 @always_inline
@@ -242,14 +378,15 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
 
     # "reflectance": either an RGB/float value, OR a texture reference --
     # looked up in tex_names (imagemap) first, then constant textures, then
-    # procedural checkerboard textures, then through one level of "scale"
-    # indirection to an imagemap (`Texture "sgrid" "spectrum" "scale"
-    # "texture tex" ["grid"] "float scale" [0.5]`, the shape killeroos and
-    # ~49 other spectrum-texture declarations in the corpus use). Only one
-    # level is resolved, matching the bump path's own convention below; a
-    # scale-of-a-scale isn't a pattern seen in practice.
+    # procedural checkerboard textures (which need Material_C's embedded
+    # checker_* fields and so can't participate in a texture graph), and
+    # finally through _resolve_affine_rgb, which folds arbitrarily nested
+    # "scale"/"mix" graphs over a single imagemap into one (scale, bias) pair.
+    # That last path covers ~49 scale and ~20 mix spectrum declarations in the
+    # corpus. Only a product of two *different* textures is out of reach.
     var tex_idx_for_mat = Int32(-1)
-    var tex_scale_for_mat = Float32(1)
+    var tex_scale_for_mat = RGB(Float32(1))
+    var tex_bias_for_mat = RGB(Float32(0))
     var checker_tex1 = RGB(Float32(1))
     var checker_tex2 = RGB(Float32(0))
     var checker_uscale = Float32(1)
@@ -288,40 +425,42 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
                             matched_tex = True
                             break
                 if not matched_tex:
-                    for si in range(len(s[0].scale_tex_names)):
-                        if s[0].scale_tex_names[si] == tex_name:
-                            var base_name = s[0].scale_tex_base[si]
-                            for ti in range(len(s[0].tex_names)):
-                                if s[0].tex_names[ti] == base_name:
-                                    tex_idx_for_mat = Int32(ti)
-                                    tex_scale_for_mat = s[0].scale_tex_scale[si]
-                                    matched_tex = True
-                                    break
-                            if not matched_tex:
-                                # A "scale" wrapping something that isn't a
-                                # plain imagemap (a constant, a checkerboard,
-                                # or another scale). Fold the multiplier into
-                                # the flat albedo rather than dropping it.
-                                for ci in range(len(s[0].const_tex_names)):
-                                    if s[0].const_tex_names[ci] == base_name:
-                                        var sc = s[0].scale_tex_scale[si]
-                                        rgb = RGB(s[0].const_tex_rgb[ci*3+0] * sc,
-                                                  s[0].const_tex_rgb[ci*3+1] * sc,
-                                                  s[0].const_tex_rgb[ci*3+2] * sc)
-                                        matched_tex = True
-                                        break
-                            if not matched_tex:
-                                print("Warning: texture '" + tex_name
-                                      + "' is a \"scale\" of '" + base_name
-                                      + "', which is not a supported base texture"
-                                      + " — falling back to flat albedo.")
-                                matched_tex = True
-                            break
+                    # Everything else -- "scale", "mix", and any nesting of
+                    # them over one imagemap -- folds into a single affine
+                    # (scale, bias) pair. See _resolve_affine_rgb.
+                    var aff = _resolve_affine_rgb(s, tex_name, 0)
+                    if aff.ok:
+                        if aff.tex_idx >= 0:
+                            tex_idx_for_mat = aff.tex_idx
+                            tex_scale_for_mat = aff.scale
+                            tex_bias_for_mat = aff.bias
+                        else:
+                            # Collapsed to a constant (e.g. a mix of two
+                            # constants by a constant amount).
+                            rgb = aff.bias
+                        matched_tex = True
                 if not matched_tex:
-                    print("Warning: material references undefined texture '"
-                          + tex_name + "' for reflectance — falling back to"
-                          + " flat albedo. (Unsupported texture classes are"
-                          + " reported by handle_texture at parse time.)")
+                    var is_known = False
+                    for mi in range(len(s[0].mix_tex_names)):
+                        if s[0].mix_tex_names[mi] == tex_name:
+                            is_known = True
+                            break
+                    if not is_known:
+                        for si in range(len(s[0].scale_tex_names)):
+                            if s[0].scale_tex_names[si] == tex_name:
+                                is_known = True
+                                break
+                    if is_known:
+                        print("Warning: texture '" + tex_name + "' combines two"
+                              + " different textures (a texture-valued scale or"
+                              + " mix amount over a textured base) — gonzales"
+                              + " folds texture graphs into one lookup, so this"
+                              + " falls back to flat albedo.")
+                    else:
+                        print("Warning: material references undefined texture '"
+                              + tex_name + "' for reflectance — falling back to"
+                              + " flat albedo. (Unsupported texture classes are"
+                              + " reported by handle_texture at parse time.)")
 
     # "L": some scenes set a material's base color via this name instead of
     # "reflectance" -- overrides if present (same target, same as the RGB
@@ -544,16 +683,23 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
                 matched_disp = True
                 break
         if not matched_disp:
-            for si in range(len(s[0].scale_tex_names)):
-                if s[0].scale_tex_names[si] == disp_tex:
-                    var base_name = s[0].scale_tex_base[si]
-                    for ti in range(len(s[0].tex_names)):
-                        if s[0].tex_names[ti] == base_name:
-                            bump_tex_idx_for_mat = Int32(ti)
-                            bump_scale_for_mat = s[0].scale_tex_scale[si]
-                            matched_disp = True
-                            break
-                    break
+            # Same affine fold as reflectance, but the bump path carries only
+            # a scalar height multiplier with no offset, so a graph resolving
+            # to a non-zero bias can't be represented. In practice that never
+            # bites: villa's seven `mix` bump maps are all
+            # (tex1=0, tex2=h, amount=texture), which is exactly scale=h,
+            # bias=0. Channels are equal for a float texture graph, so .r is
+            # the whole story.
+            var aff = _resolve_affine_rgb(s, disp_tex, 0)
+            if aff.ok and aff.tex_idx >= 0:
+                if abs(aff.bias.r) > Float32(1e-6):
+                    print("Warning: displacement texture '" + disp_tex
+                          + "' resolves to an affine graph with a non-zero"
+                          + " offset, which the bump path cannot represent —"
+                          + " applying the scale only.")
+                bump_tex_idx_for_mat = aff.tex_idx
+                bump_scale_for_mat = aff.scale.r
+                matched_disp = True
 
     # "mix": blend amount and the two component material names.
     var mix_amount = params.get_float("amount", Float32(0.5))
@@ -606,6 +752,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
     nm.roughness_v    = mat_roughV
     nm.tex_idx        = tex_idx_for_mat
     nm.tex_scale      = tex_scale_for_mat
+    nm.tex_bias       = tex_bias_for_mat
     nm.normal_tex_idx = normal_tex_idx_for_mat
     nm.rough_tex_idx  = rough_tex_idx_for_mat
     nm.bump_tex_idx   = bump_tex_idx_for_mat

@@ -405,9 +405,13 @@ def _tex_lookup[use_gpu: Bool](
                 var su = w0*mesh.uvs[v0*2]   + inter.u*mesh.uvs[v1*2]   + inter.v*mesh.uvs[v2*2]
                 var tv = w0*mesh.uvs[v0*2+1] + inter.u*mesh.uvs[v1*2+1] + inter.v*mesh.uvs[v2*2+1]
                 tv = Float32(1.0) - tv  # PBRT V-flip: V=0 at top
-                # mat.tex_scale is pbrt's "scale" texture class folded into the
-                # lookup (1.0 when absent) -- see material_builder.mojo.
-                return _sample_tex(tex, su, tv) * mat.tex_scale
+                # bias + scale*texel is pbrt's "scale"/"mix" texture graph
+                # folded into the lookup (scale=1, bias=0 when absent) --
+                # see material_builder.mojo's _resolve_affine_rgb.
+                var t = _sample_tex(tex, su, tv)
+                return RGB(mat.tex_bias.r + mat.tex_scale.r * t.r,
+                           mat.tex_bias.g + mat.tex_scale.g * t.g,
+                           mat.tex_bias.b + mat.tex_scale.b * t.b)
     else:
         if ti >= 0 and Int(tex_filenames) > 8:
             var filename = tex_filenames[ti]
@@ -427,7 +431,9 @@ def _tex_lookup[use_gpu: Bool](
                     UnsafePointer[Float32, MutExternalOrigin]](filename, su, tv, tr)
                 var result = RGB(_srgb_to_linear(tr[0]), _srgb_to_linear(tr[1]), _srgb_to_linear(tr[2]))
                 tr.free()
-                return result * mat.tex_scale
+                return RGB(mat.tex_bias.r + mat.tex_scale.r * result.r,
+                           mat.tex_bias.g + mat.tex_scale.g * result.g,
+                           mat.tex_bias.b + mat.tex_scale.b * result.b)
     return mat.albedo
 
 
