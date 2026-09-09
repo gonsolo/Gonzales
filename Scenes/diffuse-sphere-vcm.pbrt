@@ -1,0 +1,34 @@
+# Analytic-sphere regression scene for the "mesh-only geometry assumption"
+# bug class (see project_mesh_only_geometry_assumption memory).
+#
+# Two things it exercises that no other committed scene did:
+#  1. The ONLY geometry is Shape "sphere". pipeline.mojo's no-geometry guard
+#     tested psc[0].prim_count == 0, which does not count analytic spheres
+#     (they live in their own flat psc[0].spheres array), so this scene was
+#     rejected outright with "scene has no geometry, skipping render".
+#  2. A DIFFUSE analytic sphere reached bdpt.mojo's light/camera-path
+#     MatKind.diffuse branches, which called _geom_normal unguarded.
+#     _geom_normal returns a fixed +Y placeholder for every non-mesh
+#     primitive, silently corrupting cos_fix and with it the vertex's
+#     dVCM/dVC/dVM MIS carries. Measured at 512spp --no-denoise:
+#       PT          0.004602 / 0.001974 / 0.001972
+#       VCM before  0.002191 / 0.000223 / 0.000270   (green 8.9x too dark)
+#       VCM after   0.004627 / 0.002056 / 0.002043
+#     So render this with both --vcm and the plain path tracer; they must
+#     agree to a few percent.
+Integrator "path" "integer maxdepth" [ 5 ]
+Sampler "halton" "integer pixelsamples" [ 16 ]
+Film "rgb" "string filename" [ "diffuse-sphere-vcm.exr" ]
+    "integer xresolution" [ 64 ] "integer yresolution" [ 64 ]
+LookAt 0 0 5  0 0 0  0 1 0
+Camera "perspective" "float fov" [ 40 ]
+WorldBegin
+AttributeBegin
+  AreaLightSource "diffuse" "rgb L" [ 8 8 8 ]
+  Translate 0 3 0
+  Shape "sphere" "float radius" [ 0.5 ]
+AttributeEnd
+AttributeBegin
+  Material "diffuse" "rgb reflectance" [ 0.7 0.3 0.3 ]
+  Shape "sphere" "float radius" [ 1 ]
+AttributeEnd

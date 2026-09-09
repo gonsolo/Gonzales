@@ -1766,8 +1766,14 @@ def any_hit_bvh2_core(
 def traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutExternalOrigin], rayPtr: UnsafePointer[Ray_C, MutExternalOrigin], tMax: Float32, resultPtr: UnsafePointer[Intersection_C, MutExternalOrigin]):
     var scene = scenePtr[0]
     var ray = rayPtr[0]
+    # spheres/sphereCount are passed explicitly: omitting them defaults
+    # n_spheres=0, which silently makes every analytic sphere invisible to the
+    # traversal. That omission is a recurring bug class in this codebase (see
+    # traverse_bvh2_core's own note); this wrapper has no live caller today,
+    # so it is fixed pre-emptively rather than left as a trap for the first one.
     traverse_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves, ray, tMax, resultPtr,
-                       scene.blasNodesArr, scene.blasPrimIdsArr, scene.instances)
+                       scene.blasNodesArr, scene.blasPrimIdsArr, scene.instances,
+                       scene.spheres, Int(scene.sphereCount))
 
 
 # ── BVH2 Construction (SAH) ───────────────────────────────────────────
