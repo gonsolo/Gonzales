@@ -1800,9 +1800,6 @@ def shade_dielectric_gpu(
     materials: UnsafePointer[Material_C, MutExternalOrigin],
     spheres: UnsafePointer[Sphere_C, MutExternalOrigin],
     count_dp: Int64,
-    textures: UnsafePointer[GpuTexture_C, MutExternalOrigin],
-    n_textures_dp: Int64,
-    px_scale: Float32,
 ):
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -1814,13 +1811,7 @@ def shade_dielectric_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[tid]
     var mat = materials[Int(inter.primId.materialIndex)]
-    # textures/px_scale are here only so a dielectric carrying "texture
-    # displacement"/"normalmap" gets it applied (barcelona-pavilion's water).
-    # tex_filenames is CPU-only (GPU samples the uploaded texture table), so
-    # the dangling default is correct on this path.
-    shade_dielectric[True](path_ptr, inter, meshes, mat, spheres,
-        UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
-        textures, Int(n_textures_dp), px_scale)
+    shade_dielectric[True](path_ptr, inter, meshes, mat, spheres)
 
 
 def shade_thin_dielectric_gpu(
@@ -4436,8 +4427,6 @@ def _gpu_bounce_kernels(
         handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
         handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
         Int64(n),
-        handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
-        Int64(handle[].n_textures), px_scale,
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_thin_dielectric_gpu](
