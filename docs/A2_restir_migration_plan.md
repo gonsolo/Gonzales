@@ -204,6 +204,57 @@ unsolved and has **no participating-media support at all**.
 
 State the gates explicitly, so they can be checked rather than assumed:
 
+**Volume MIS: derived and numerically verified 2026-09-10, NOT implemented
+(`Scenes/vcm_volume_mis_derivation.py`).** Gate S condition 2 blames
+`_bdpt_vertex_mis_scoped`'s exclusion of volume vertices. That exclusion is
+now shown to be *removable in principle* — the recursion extends cleanly —
+but removing it requires first fixing a separate defect in the **surface**
+carries, which is why this is not a small change.
+
+The extension itself, verified against a brute-force enumeration of every
+BDPT strategy's full path pdf in the mixed area/volume measure (13,284
+strategy weights over 2,613 volume-containing paths, worst relative error
+**1.1e-15**; corrupting the volume Jacobian drives it to ~1.0, so the test
+is not vacuous):
+
+- **Measure.** A volume vertex is sampled per unit *volume*: choosing a
+  direction then a distance gives `dV = t² dt dω`, so
+  `p_V = p_ω · p_t(t) / t²` — the solid-angle→measure Jacobian carries
+  **no cosine**, unlike a surface vertex's `p_A = p_ω · cosθ / t²`. So on
+  arrival at a volume vertex the `/= cos_fix` step is simply *omitted*, and
+  on scattering the `cosThetaOut / pdfDirW` factor loses its cosine,
+  becoming `1 / pdfDirW` = `4π` for the isotropic phase function this
+  integrator hardcodes.
+- **Free flight — the part the shipped code is missing.** The distance
+  pdf belongs in the carries: `dVCM` takes `1/FF_b`, and `dVC`/`dVM` take
+  `FF_a/FF_b`, where `FF = σ_t·e^{-σ_t d}` for a volume endpoint and
+  `e^{-σ_t d}` (the survival probability) for a surface one. For a
+  homogeneous medium the exponentials cancel and only `σ_t` survives, and
+  only across an edge whose two endpoints differ in kind.
+- **Merge kernel.** Photons land on a 2D manifold at a surface but in a 3D
+  region in a medium, so `eta_vcm = π r² N` becomes `(4/3) π r³ N`.
+  Confirmed independently by exact quadrature: the probability that a
+  photon lands within `r` of a point, divided by that point's volume-measure
+  density, converges to the **sphere volume** (ratio 1.00004 at r=0.01)
+  while the disk-area hypothesis diverges linearly in `r`. This is the same
+  measure error found in SPPM's estimator on 2026-09-09 (πr² for 4/3πr³,
+  ~15×), reached from the opposite direction.
+
+**The prerequisite.** The shipped surface-only recursion carries **no
+free-flight factor at all**. That is exact in vacuum and wrong inside a
+medium, with error growing in optical depth — measured on all-surface paths
+against the same brute-force ground truth: worst relative weight error
+7.9e-16 at σ_t=0, but 0.32 at σ_t=0.1, 4.4 at σ_t=0.5, and 1.5e5 at σ_t=4.
+It has stayed invisible because volume vertices are excluded from MIS
+entirely, so a path must reach a *surface through a medium* and have several
+strategies competing for it before the error is expressed. Any implementation
+must therefore fix the surface side first; doing only the volume half would
+make mixed paths inconsistent.
+
+Safety note for whoever implements it: because every one of these factors is
+identically 1 when `σ_t = 0`, the whole change is inert outside media scenes
+— `make smoketest`'s rows should stay byte-identical.
+
 **Gate S — retire SPPM.** Measured 2026-09-09 (`Scenes/caustic_presence_check.py`);
 **all four conditions currently FAIL.** The metric is scale-free —
 luminance ÷ its own row median along the caustic's trajectory — because the
