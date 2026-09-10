@@ -5,7 +5,7 @@ from max.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc, memcpy
-from .geometry import RGB, Point3f, Point2f, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, NvdbGrid_C, nvdb_sample_density, nvdb_ray_range, grid_ray_range, nvdb_index_ray, nvdb_node_exit_t, nvdb_majorant_at_world, hg_phase, hg_sample, blackbody_rgb, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr
+from .geometry import RGB, Point3f, Point2f, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, NvdbGrid_C, nvdb_sample_density, nvdb_ray_range, grid_ray_range, nvdb_index_ray, nvdb_node_exit_t, nvdb_majorant_at_world, hg_phase, hg_sample, blackbody_rgb, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr, HomogeneousFreeFlight, sample_homogeneous_free_flight, medium_transmittance_ratio_spectral
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres, LightSample, _sample_infinite_light_nee, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee
 from .transform import transform_normal_by_instance
@@ -2389,8 +2389,18 @@ def _sample_medium_core(
         # fireflies (measured against an analytic answer of exactly 1.0: a
         # conservative medium read 0.470 at tau=2, 6.0 at tau=4 and 1979 at
         # tau=8, with single pixels reaching 6.1e6).
-        var u_free = pcg.next_float()
-        t_free = -log(max(u_free, Float32(1e-7))) / sigma_t.r
+        #
+        # The distance itself is sampled by sample_homogeneous_free_flight
+        # (geometry.mojo) -- the exact same `-log(u)/sigma_t.r` draw this
+        # branch used to do inline, now shared with BDPT/SPPM's free-flight
+        # sampler (project_elegance_backlog_2026_09_10 item 1). Only the
+        # DISTANCE is shared: this branch keeps its own real scatter/absorb
+        # Russian-roulette coin below (`p_scatter = albedo_r`) rather than
+        # BDPT/SPPM's deterministic-continuation weight, so `ff.weight` /
+        # `ff.albedo` are deliberately unused here -- see
+        # medium_transmittance_ratio_spectral's own docstring.
+        var ff = sample_homogeneous_free_flight(med, t_surf, pcg)
+        t_free = ff.t_free
         var t_seg = min(t_free, t_surf)
         # The weight MUST be the ratio of each channel's transmittance to the
         # one the distance was sampled from, using the SAME sigma_t. It used
@@ -2420,18 +2430,14 @@ def _sample_medium_core(
         # samples. Smooth upsampling reconstructs a real spectral curve from
         # those same 3 samples instead, matching bdpt.mojo/sppm.mojo's
         # spectral_free_flight_weight (same fix, same derivation) so CPU
-        # PT / GPU PT / VCM / SPPM all treat a medium's colour identically.
+        # PT / GPU PT / VCM / SPPM all treat a medium's colour identically --
+        # now literally the same shared helper (medium_transmittance_ratio_spectral,
+        # geometry.mojo), not just the same derivation independently applied.
         # See docs/02_spectra_and_color.md, "Chromatic extinction".
-        var sig_t_spec = spec_refl_unbounded(
-            spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-            sigma_t.r, sigma_t.g, sigma_t.b, path_ptr[].wavelengths)
-        var sig_t_r_ref = sigma_t.r
-        path_ptr[].throughput *= SpectralSample(
-            exp(-(sig_t_spec.v0 - sig_t_r_ref) * t_seg),
-            exp(-(sig_t_spec.v1 - sig_t_r_ref) * t_seg),
-            exp(-(sig_t_spec.v2 - sig_t_r_ref) * t_seg),
-            exp(-(sig_t_spec.v3 - sig_t_r_ref) * t_seg))
-        if t_free >= t_surf:
+        path_ptr[].throughput *= medium_transmittance_ratio_spectral(
+            med, t_seg, path_ptr[].wavelengths,
+            spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+        if not ff.collided:
             path_ptr[].pcgState = pcg.state
             return
         # Chromatic scattering ratio; 1 for a grey medium.

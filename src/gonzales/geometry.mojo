@@ -2,8 +2,9 @@ from std.ffi import external_call
 from std.memory import alloc
 from std.math import sqrt, acos, atan2, cos, sin, min, max, abs, floor, log, exp
 from std.sys.info import align_of
-from gonzales.spectrum import SampledWavelengths, SpectralSample
+from gonzales.spectrum import SampledWavelengths, SpectralSample, spec_refl_unbounded
 from gonzales.nanovdb import nvdb_sample_index, nvdb_majorant_at, nvdb_leaf_base, nvdb_leaf_value
+from gonzales.rng import PCG32
 
 # Value structs shared with GPU code can't hold Optional[UnsafePointer], so an
 # "unset" pointer field is instead left at its `.unsafe_dangling()` sentinel --
@@ -946,6 +947,242 @@ struct Medium_C(TrivialRegisterPassable):
     # property for a different reason: its BSSRDF resolves the whole interior
     # analytically and never spends path depth on it either.
     var is_sss:      Int32
+
+
+# ── Homogeneous-medium free-flight sampling ───────────────────────────────────
+# Shared by BDPT, SPPM and the plain path tracer (CPU + GPU, gpu.mojo's
+# _sample_medium_core) for the achromatic-decision, homogeneous case (glass-
+# of-water / volumetric-caustic scenes) — no delta-tracking needed. Lives here
+# (not in a higher-level integrator file) precisely so gpu.mojo can reach it
+# too: geometry.mojo already sits below every integrator module and already
+# imports spectrum.mojo (for SampledWavelengths/SpectralSample) and defines
+# Medium_C/RGB, so it is the one place all three consumers can import from
+# without a circular dependency (sppm.mojo imports gpu.mojo, so gpu.mojo can
+# never import sppm.mojo's functions directly).
+#
+# Moved here 2026-09-10 from sppm.mojo (project_elegance_backlog_2026_09_10
+# item 1) as part of collapsing three historically independent
+# implementations of this same physical operation down to a smaller shared
+# core. Full unification turned out to be a partial win, not a total one:
+# BDPT and SPPM were ALREADY calling this exact function (bdpt.mojo imports
+# it from sppm.mojo) by the time this pass started, so only the free-flight-
+# DISTANCE sampling and the chromatic transmittance-RATIO math needed
+# extracting for gpu.mojo to share too (see medium_transmittance_ratio_spectral
+# below, and _sample_medium_core's own call site). gpu.mojo's homogeneous
+# branch keeps its OWN scatter/absorb decision: it plays a physical
+# Russian-roulette coin against sigma_s.r/sigma_t.r and terminates the path
+# outright on absorption, whereas this struct's `weight`/`albedo` fields
+# instead let BDPT/SPPM continue deterministically with throughput scaled by
+# the exact albedo — two different, individually unbiased estimators of the
+# same integral, not two buggy copies of one, so they were deliberately left
+# separate rather than forced through one return shape. See
+# docs/09_volumetric_media.md, "One shared free-flight core".
+@fieldwise_init
+struct HomogeneousFreeFlight(TrivialRegisterPassable):
+    """Result of sampling a free-flight distance through a homogeneous medium
+    by its red/hero-wavelength extinction coefficient (the same "sample by
+    one channel, let the rest cancel analytically" convention used
+    throughout gonzales's spectral MIS)."""
+    var collided: Bool
+    var t_free: Float32     # sampled distance (meaningful either way)
+    var sig_t:   Float32    # red-channel extinction sigma_a.r + sigma_s.r
+    var albedo:  RGB        # single-scattering albedo at the collision point (only if collided)
+    var weight:  RGB        # per-channel chromatic WEIGHT, meaningful in BOTH branches.
+                            # A pure RATIO to the sampled (red) channel, never a raw
+                            # Beer-Lambert factor -- exactly 1 on red, and exactly 1 on
+                            # every channel for a grey medium. Callers must multiply it
+                            # into beta/flux in BOTH branches.
+
+@always_inline
+def sample_homogeneous_free_flight(med: Medium_C, t_surf: Float32, mut pcg: PCG32) -> HomogeneousFreeFlight:
+    var sigma_t = med.sigma_a + med.sigma_s
+    var sig_t = sigma_t.r
+    if sig_t <= Float32(0.0):
+        return HomogeneousFreeFlight(False, t_surf, sig_t, RGB(Float32(0)), RGB(Float32(1)))
+    var t_free = -log(max(pcg.next_float(), Float32(1e-7))) / sig_t
+    if t_free < t_surf:
+        var alb_s = med.sigma_s.r / sig_t
+        var alb_g_s = med.sigma_s.g / sigma_t.g if sigma_t.g > Float32(0.0) else alb_s
+        var alb_b_s = med.sigma_s.b / sigma_t.b if sigma_t.b > Float32(0.0) else alb_s
+        # COLLISION WEIGHT. The distance was sampled from red's exponential,
+        # pdf(t) = sigma_t.r * exp(-sigma_t.r * t), so lane c's contribution
+        # sigma_s_c * exp(-sigma_t_c * t) needs
+        #     sigma_s_c*exp(-sigma_t_c*t) / (sigma_t.r*exp(-sigma_t.r*t))
+        # and `albedo` above already carries sigma_s_c/sigma_t_c, leaving
+        #     exp(-(sigma_t_c - sigma_t.r)*t) * sigma_t_c/sigma_t.r.
+        # (Algebraically identical to gpu.mojo's albedo_r * sigma_s_c/sigma_s.r
+        # form, just factored to keep `albedo` per-channel here.)
+        #
+        # This weight was MISSING entirely: the collision branch returned a
+        # flat RGB(1), so VCM/SPPM were chromatically BIASED in any medium
+        # whose channels differ -- a red-heavy medium lost exactly the green
+        # and blue extinction ratio at every scattering event, compounding
+        # per bounce. gpu.mojo's _sample_medium_core has always applied it
+        # (its comment spells out both factors); it simply never propagated
+        # to this shared BDPT/SPPM sampler -- the same fixed-in-one-consumer
+        # split that accounts for most defects in this codebase. Exactly 1 on
+        # every channel for a grey medium, so grey renders are unaffected.
+        var wg = (exp(-(sigma_t.g - sigma_t.r) * t_free) * sigma_t.g / sig_t
+                  if sigma_t.g > Float32(0.0) else Float32(1.0))
+        var wb = (exp(-(sigma_t.b - sigma_t.r) * t_free) * sigma_t.b / sig_t
+                  if sigma_t.b > Float32(0.0) else Float32(1.0))
+        return HomogeneousFreeFlight(True, t_free, sig_t,
+                                     RGB(alb_s, alb_g_s, alb_b_s),
+                                     RGB(Float32(1.0), wg, wb))
+    # Pass-through WEIGHT, not the raw Beer-Lambert factor. The distance was
+    # sampled from the red channel, so P(reach the surface) is ALREADY
+    # exp(-sigma_t.r * t_surf) -- that channel's transmittance is carried by
+    # the sampling probability itself. Only the RATIO of each channel's
+    # transmittance to the sampled one survives as a weight:
+    #     exp(-sigma_t_c * t) / exp(-sigma_t.r * t) = exp(-(sigma_t_c - sigma_t.r) * t)
+    # which is exactly 1 on red, and exactly 1 on every channel for a grey
+    # medium.
+    #
+    # This used to return the FULL exp(-sigma_t_c * t) on all three channels,
+    # which callers multiply into beta/flux -- double-counting the sampled
+    # channel's transmittance, so the expected contribution of a surface seen
+    # through a medium was exp(-2*sigma_r*t) where it should be
+    # exp(-sigma_r*t). Surfaces behind a medium came out too dark by exactly
+    # the transmittance, and unlike the chromatic terms this bit GREY media
+    # too. gpu.mojo's _sample_medium_core has always used the ratio (its own
+    # comment records the same fix); it simply never propagated to this
+    # BDPT/SPPM sampler.
+    var t_ref = exp(-sigma_t.r * t_surf)
+    if t_ref < Float32(1e-30): t_ref = Float32(1e-30)
+    var Tr = RGB(Float32(1.0),
+                 exp(-sigma_t.g * t_surf) / t_ref,
+                 exp(-sigma_t.b * t_surf) / t_ref)
+    return HomogeneousFreeFlight(False, t_free, sig_t, RGB(Float32(0)), Tr)
+
+
+# ── Genuinely spectral free-flight weight (chromatic media) ─────────────────
+# `HomogeneousFreeFlight.weight` above is a RATIO computed entirely in RGB
+# (exp(-sigma_t.g*t), exp(-sigma_t.b*t), ...) and every caller used to lift it
+# into the 4 hero lanes by BAND-PICKING that already-exponentiated triple --
+# i.e. selecting, per lane, which of the 3 RGB ratios to read. Band-picking a
+# genuine coefficient (see rgb_bands_to_spectral_sample's own docstring, "a
+# coefficient is not a colour") is fine on its own, but here it throws away
+# information for free: an extinction coefficient IS spectral data, and
+# gonzales already has a real RGB->spectrum upsampler for exactly this shape
+# of quantity (spec_refl_unbounded, used elsewhere for reflectance-shaped
+# weights that may exceed 1 -- an extinction coefficient is the same kind of
+# thing). The two orders are NOT interchangeable for a smooth upsampler:
+# upsample(exp(-sigma*t)) != exp(-upsample(sigma)*t) in general (they
+# coincide only for band-picking, a pure per-lane selection, since selection
+# commutes with exp). Verified 2026-09-10 that the smooth upsampler's grey
+# invariant survives exactly (spec_refl_unbounded(c,c,c) -> c in every lane,
+# to machine precision) — see project_spectral_media_state.md,
+# "Refutation 2" — so nothing is lost by switching sigma_t's upsampling from
+# band-picking to the real curve; a grey medium is bit-for-bit unaffected.
+#
+# This computes the weight the CORRECT way: upsample sigma_t to per-lane
+# values FIRST, then exponentiate PER LANE, using the same red-channel
+# proposal density `sample_homogeneous_free_flight` already sampled `t_free`
+# from (so this is purely a change to the WEIGHT, never to what distance was
+# sampled or its acceptance probability -- no change to path continuation).
+@always_inline
+def medium_sigma_t_spectral(
+    med: Medium_C, wavelengths: SampledWavelengths,
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
+) -> SpectralSample:
+    """Upsample a medium's total extinction sigma_t = sigma_a + sigma_s from
+    its 3 authored RGB channels to the 4 hero wavelengths via
+    spec_refl_unbounded -- the same unbounded-coefficient upsampler used for
+    reflectance-shaped weights that may exceed 1 (an extinction coefficient
+    is the same kind of quantity). Shared by spectral_free_flight_weight,
+    bdpt.mojo's _visible_transmittance and gpu.mojo's _sample_medium_core
+    (via medium_transmittance_ratio_spectral below) so all consumers agree on
+    what "the medium's colour" means."""
+    var sig_t = med.sigma_a + med.sigma_s
+    return spec_refl_unbounded(
+        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+        sig_t.r, sig_t.g, sig_t.b, wavelengths)
+
+@always_inline
+def medium_transmittance_ratio_spectral(
+    med: Medium_C, t: Float32, wavelengths: SampledWavelengths,
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
+) -> SpectralSample:
+    """The chromatic RATIO of each hero wavelength's transmittance over a
+    homogeneous segment of length `t` to the sampled (red) channel's:
+    exp(-(sigma_t(lambda_i) - sigma_t.r) * t), sigma_t upsampled to the 4
+    hero lanes FIRST (medium_sigma_t_spectral) then exponentiated PER LANE --
+    exactly the `d0..d3` half of spectral_free_flight_weight below, pulled
+    out because gpu.mojo's _sample_medium_core needs precisely this ratio
+    (and nothing else -- it applies its own sigma_s/albedo factor separately,
+    via a real scatter/absorb coin flip rather than a deterministic
+    multiply) and can share this ordering-sensitive arithmetic without also
+    taking on BDPT/SPPM's deterministic-continuation collision weight. Never
+    fold a sigma_s/albedo factor into THIS function -- see the two callers'
+    own docstrings for why they apply it differently."""
+    var sig_t_r = med.sigma_a.r + med.sigma_s.r
+    if sig_t_r <= Float32(0.0):
+        return SpectralSample(Float32(1.0))
+    var sig_t_spec = medium_sigma_t_spectral(
+        med, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+    return SpectralSample(
+        exp(-(sig_t_spec.v0 - sig_t_r) * t),
+        exp(-(sig_t_spec.v1 - sig_t_r) * t),
+        exp(-(sig_t_spec.v2 - sig_t_r) * t),
+        exp(-(sig_t_spec.v3 - sig_t_r) * t))
+
+@always_inline
+def spectral_free_flight_weight(
+    med: Medium_C, ff: HomogeneousFreeFlight, t_surf: Float32, wavelengths: SampledWavelengths,
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
+) -> SpectralSample:
+    """Replaces `rgb_bands_to_spectral_sample(ff.weight.r, .g, .b, wl)` at
+    every chromatic-media consumer. `ff` must come from
+    `sample_homogeneous_free_flight(med, t_surf, ...)` -- SAME `med` and
+    `t_surf` -- (this does not re-sample anything, it only re-derives the
+    weight spectrally). `t_surf` is required explicitly, not read from
+    `ff.t_free`: in the pass-through branch `ff.t_free` is the raw sampled
+    distance (which exceeded `t_surf`, that's WHY it's pass-through), while
+    the weight must use the actual segment length `t_surf` -- the same
+    distinction `sample_homogeneous_free_flight`'s own RGB `Tr` makes
+    (built from `t_surf`, not `t_free`, in that branch).
+    Grey media pass through exactly, at every tau, since spec_refl_unbounded
+    reproduces a grey coefficient exactly and the sig_t_r reference cancels
+    to 1 on every lane. See docs/02_spectra_and_color.md, "Chromatic
+    extinction" for the derivation and the measured before/after."""
+    var sig_t_r = med.sigma_a.r + med.sigma_s.r
+    if sig_t_r <= Float32(0.0):
+        return SpectralSample(Float32(1.0))
+    # sig_t_spec computed ONCE and reused for both the d0..d3 ratio and (on
+    # collision) the extra r0..r3 factor -- deliberately NOT routed through
+    # medium_transmittance_ratio_spectral, which would upsample sigma_t a
+    # second time on the collision branch (that helper exists for gpu.mojo's
+    # simpler case, which never needs r0..r3).
+    var sig_t_spec = medium_sigma_t_spectral(
+        med, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+    var t = ff.t_free if ff.collided else t_surf
+    var d0 = exp(-(sig_t_spec.v0 - sig_t_r) * t)
+    var d1 = exp(-(sig_t_spec.v1 - sig_t_r) * t)
+    var d2 = exp(-(sig_t_spec.v2 - sig_t_r) * t)
+    var d3 = exp(-(sig_t_spec.v3 - sig_t_r) * t)
+    if not ff.collided:
+        return SpectralSample(d0, d1, d2, d3)
+    # Collision branch carries an extra sigma_t(lambda)/sigma_t.r factor (see
+    # sample_homogeneous_free_flight's own derivation comment for the RGB
+    # analogue -- same algebra, per hero lane instead of per RGB channel).
+    var r0 = sig_t_spec.v0 / sig_t_r
+    var r1 = sig_t_spec.v1 / sig_t_r
+    var r2 = sig_t_spec.v2 / sig_t_r
+    var r3 = sig_t_spec.v3 / sig_t_r
+    return SpectralSample(d0 * r0, d1 * r1, d2 * r2, d3 * r3)
+
 
 @fieldwise_init
 struct Grid_C(TrivialRegisterPassable):

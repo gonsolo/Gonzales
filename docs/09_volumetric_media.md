@@ -100,6 +100,78 @@ chromatic scatterer VCM read blue at 0.36x the path tracer, and about 0.97x
 once the weight was restored. Neither defect is visible in a grey fog, which
 is why both survived so long.
 
+### One shared free-flight core
+
+Until 2026-09-10 this "sample one channel, weight the rest" logic existed
+as three independent implementations — `sample_homogeneous_free_flight`
+(SPPM), `_visible_transmittance`'s Beer-Lambert evaluation (BDPT/VCM shadow
+rays), and `_sample_medium_core`'s homogeneous branch (gpu.mojo, the plain
+path tracer, CPU+GPU shared) — and every bug in this section (the 6.1x
+double-count, the missing collision weight, the upsample-then-exponentiate
+ordering) had to be found and fixed in some subset of the three
+independently, because there was no single function to fix once.
+
+Consolidating them turned out to be a **partial**, not total, unification —
+the honest outcome the three call sites' actual needs called for:
+
+- **BDPT and SPPM already shared one function** by the time this pass
+  started (`bdpt.mojo` imports `sample_homogeneous_free_flight` directly
+  from `sppm.mojo`) — nothing to do there except relocate it.
+- **`_visible_transmittance` is a genuinely different operation**: a
+  deterministic, ray-marched product of Beer-Lambert factors across
+  possibly several medium segments and dielectric interfaces along one
+  shadow ray, not a stochastic free-flight *distance* sample. It was
+  already sharing the one piece that matters — `medium_sigma_t_spectral`,
+  "what is this medium's spectral extinction" — so it was left as its own
+  function rather than forced through `HomogeneousFreeFlight`'s shape.
+- **`gpu.mojo`'s homogeneous branch models absorption differently on
+  purpose**: it plays a real Russian-roulette coin
+  (`u < sigma_s.r/sigma_t.r`) that terminates the path outright on
+  absorption, the standard volumetric-path-tracing variance-reduction
+  trick — whereas SPPM/BDPT's `HomogeneousFreeFlight.weight`/`.albedo`
+  fields instead let the walk continue *deterministically*, multiplying
+  throughput by the exact albedo every time. Both are unbiased estimators
+  of the same integral; forcing them through one return shape would have
+  meant rewriting one of the two working, extensively-verified strategies
+  for no correctness gain — exactly the "don't force an awkward
+  abstraction" case.
+
+What **did** move into one place (`geometry.mojo`, the one module low
+enough in the dependency graph — below `sppm.mojo`, `bdpt.mojo` and
+`gpu.mojo` alike — for all three to import without a cycle):
+
+- `HomogeneousFreeFlight` / `sample_homogeneous_free_flight` — the
+  free-flight distance sampler itself (relocated from `sppm.mojo`,
+  unchanged).
+- `medium_sigma_t_spectral` — upsample a medium's `sigma_t` to the 4 hero
+  wavelengths (relocated, unchanged; already shared by
+  `_visible_transmittance`).
+- `spectral_free_flight_weight` — SPPM/BDPT's full chromatic weight,
+  including the collision branch's extra `sigma_t(lambda)/sigma_t.r`
+  factor (relocated, unchanged).
+- **`medium_transmittance_ratio_spectral`** — new. The exact
+  upsample-then-exponentiate ratio (`exp(-(sigma_t(lambda) - sigma_t.r) *
+  t)`) factored out of `spectral_free_flight_weight`'s `d0..d3`, since this
+  is precisely the piece `gpu.mojo`'s homogeneous branch needs and nothing
+  more (it applies its own sigma_s-ratio/Russian-roulette handling
+  separately). `_sample_medium_core` now calls this instead of
+  re-deriving the same upsample-then-exponentiate arithmetic inline —
+  closing the gap where the historical ordering bug lived, without
+  touching the branch's own absorption model. It also now calls
+  `sample_homogeneous_free_flight` for the free-flight distance itself
+  (same single `pcg.next_float()` draw, same `-log(u)/sigma_t.r` formula,
+  RNG-stream-identical), rather than sampling it inline a third time.
+
+Verified behavior-preserving 2026-09-10 across `make smoketest`,
+`make causticstest`, `make unittest`, and a before/after render (against
+the pre-refactor binary) of every scene in the volumetric/SSS/caustic test
+corpus, all backends (`cpu-pt`/`cpu-vcm`/`cpu-sppm`/`gpu-pt`/`gpu-vcm`/
+`gpu-sppm`): every comparison came back byte-identical or within float32
+ULP noise (worst case ~1e-5 relative, from FP reassociation across the new
+function-call boundary — not a systematic shift). See
+`project_elegance_backlog_2026_09_10` memory, item 1, for the full
+before/after table.
+
 ### Local majorants: 6.7x
 
 A single global majorant forces the delta-tracking step size to whatever
