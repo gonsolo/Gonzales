@@ -202,6 +202,27 @@ struct SceneParseState(Movable):
     var grid_density: List[Float32]  # flattened, grid_density_base[i]..+nx*ny*nz per grid
     var grid_density_base: List[Int32]
 
+    # Procedural "cloud" media whose scene file omitted "p0"/"p1": pbrt's own
+    # CloudMedium::Density evaluates the noise function at the RAW medium-
+    # space point (scaled only by "frequency"), never remapped through
+    # p0/p1 -- that pair is a pure ray-marching bound, unrelated to where
+    # the noise pattern itself sits. Gonzales instead BAKES the noise into a
+    # dense [p0,p1] grid (see handle_named_medium's is_cloud branch), so
+    # p0/p1 here does double duty as "where in world space the baked voxels
+    # actually are" -- get that wrong (e.g. pbrt's own default p0=(0,0,0)/
+    # p1=(1,1,1), a 1-unit box) and most of a scene's actual medium-bounding
+    # shape (typically several units across) falls outside it, reading back
+    # zero density (grid_sample_density's hard 0/1 UV cutoff) instead of
+    # real noise -- the "soft mushy blob with no structure" symptom this
+    # fixes. One record per grid (parallel to grid_nx/grid_p0/...): 1 if
+    # this grid's bounds are still the synthetic default and need to be
+    # resized to the first shape found using it as an inside-medium (see
+    # handle_sphere_shape), 0 once resolved or never pending.
+    var grid_cloud_pending:    List[Int32]
+    var grid_cloud_density:    List[Float32]  # "density" param, 1 per grid
+    var grid_cloud_wispiness:  List[Float32]  # "wispiness" param, 1 per grid
+    var grid_cloud_frequency:  List[Float32]  # "frequency" param, 1 per grid
+
     # Sparse density grids ("nanovdb" media). One record per grid; the
     # actual .nvdb file is loaded (via the C bridge) at finalize_scene time,
     # not here -- only the filename and CTM are captured during parsing.
@@ -372,6 +393,10 @@ struct SceneParseState(Movable):
         self.grid_ctm = List[Float32]()
         self.grid_density = List[Float32]()
         self.grid_density_base = List[Int32]()
+        self.grid_cloud_pending = List[Int32]()
+        self.grid_cloud_density = List[Float32]()
+        self.grid_cloud_wispiness = List[Float32]()
+        self.grid_cloud_frequency = List[Float32]()
 
         self.nvdb_filenames = List[String]()
         self.nvdb_gridnames = List[String]()

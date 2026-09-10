@@ -602,16 +602,29 @@ def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
 # Resolution the procedural "cloud" medium (see handle_named_medium's
 # is_cloud branch) is baked to. pbrt evaluates its noise live, at whatever
 # resolution the ray marcher happens to sample; baking commits to one fixed
-# resolution up front. 160^3 (~4.1M voxels, ~16MB) sits comfortably above
-# the finest octave's own spatial frequency for this scene corpus's default
-# `frequency=5` (5 octaves at a 1.99x ratio put the last octave's frequency
-# at ~5*1.99^4 =~ 78 cycles across the unit box -- 160 samples/axis is a
-# ~2x oversample of that, plenty for the low/mid octaves that carry most of
-# the noise sum's amplitude; the finest octave, contributing only 1/16 of
-# the first octave's weight, softens slightly rather than aliasing). Not
-# tied to any specific scene's `frequency` value -- a scene requesting a
-# much higher frequency would need a higher CLOUD_BAKE_RES to stay crisp.
-comptime CLOUD_BAKE_RES: Int = 160
+# resolution up front.
+#
+# CORRECTED 2026-09-10: the original 160 was sized assuming noise frequency
+# is relative to a 1-UNIT box (`frequency * 1.99^4 =~ 78 cycles across "the
+# unit box"`). That was never the right frame -- pbrt's own Density(p) has
+# no reference to p0/p1 at all; `frequency` is cycles per WORLD UNIT, full
+# stop, and the box being baked into now correctly matches the medium's
+# real geometric extent (see _resolve_pending_cloud_grid -- p0/p1 auto-size
+# to the enclosing shape's AABB when the scene omits them, instead of
+# silently defaulting to pbrt's own 1-unit-box default and clipping most of
+# a several-unit-wide medium to zero density). `clouds.pbrt`'s bounding
+# sphere has DIAMETER 2, so the finest octave actually spans
+# `5*1.99^4*2 =~ 156` cycles across the true baked extent -- double the
+# original estimate, and 160 samples/axis was barely above bare Nyquist
+# for that, not "comfortably above" it: trilinear reconstruction needs real
+# oversampling margin (bare Nyquist still looks heavily blurred after
+# trilinear filtering, which is a poor lowpass compared to ideal sinc
+# reconstruction). 320 is a ~2x oversample of the corrected 156-cycle
+# figure (~4.6x samples/cycle) -- 320^3 = ~32.8M voxels, ~131MB, still
+# comfortably parse-time-tractable. Not tied to any specific scene's
+# `frequency`/extent -- a scene requesting a higher frequency or spanning a
+# larger shape would need a higher CLOUD_BAKE_RES to stay crisp.
+comptime CLOUD_BAKE_RES: Int = 320
 
 def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                                   s: UnsafePointer[SceneParseState, MutExternalOrigin]):
@@ -634,13 +647,19 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
 
     # sigma_a/sigma_s: rgb triple, OR inline numeric spectrum array (mean of
     # samples, replicated to all 3 channels) via the same float-or-rgb
-    # duality as texture "value"/"tex1"/"tex2" above. A named-spectrum
-    # string reference (0 floats collected) is silently unsupported, same as
-    # before -- no medium in this scene corpus uses one.
+    # duality as texture "value"/"tex1"/"tex2" above -- EXCEPT a "spectrum"-
+    # declared inline array (an even count of wavelength/value pairs, e.g.
+    # "spectrum sigma_a" [200 .01 900 .01]) is NOT an RGB triple even when
+    # it happens to have >=3 floats; _psc_get_sigma_or_rgb (not the shared
+    # texture helper) handles that distinction -- see its own docstring for
+    # the real bug this fixed (an RGB triple was being read off the raw
+    # wavelength/value numbers). A named-spectrum string reference (0
+    # floats collected) is silently unsupported, same as before -- no
+    # medium in this scene corpus uses one.
     var sa_set = len(params.get_floats("sigma_a")) > 0
     var ss_set = len(params.get_floats("sigma_s")) > 0
-    var sa = _psc_get_float_or_rgb(params, "sigma_a", RGB(Float32(0)))
-    var ss = _psc_get_float_or_rgb(params, "sigma_s", RGB(Float32(0)))
+    var sa = _psc_get_sigma_or_rgb(params, "sigma_a", RGB(Float32(0)))
+    var ss = _psc_get_sigma_or_rgb(params, "sigma_s", RGB(Float32(0)))
     var g_val = params.get_float("g", Float32(0))
     var scale = params.get_float("scale", Float32(1))
     # uniformgrid-specific params
@@ -737,23 +756,47 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
             s[0].grid_ctm.append(s[0].ctm[ci])
         s[0].grid_density_base.append(Int32(len(s[0].grid_density)))
 
-        # Voxel centers at half-integer offsets within [p0,p1] -- matches
-        # grid_sample_density's own half-texel convention (geometry.mojo),
-        # so the trilinear reconstruction of this baked grid lands exactly
-        # where cloud_density was evaluated, not off by half a cell.
-        var perm = _perlin_perm_table()
-        var ext_x = g_p1.r - g_p0.r
-        var ext_y = g_p1.g - g_p0.g
-        var ext_z = g_p1.b - g_p0.b
-        var inv_res = Float32(1.0) / Float32(CLOUD_BAKE_RES)
-        for zi in range(CLOUD_BAKE_RES):
-            var pz = g_p0.b + ext_z * (Float32(zi) + Float32(0.5)) * inv_res
-            for yi in range(CLOUD_BAKE_RES):
-                var py = g_p0.g + ext_y * (Float32(yi) + Float32(0.5)) * inv_res
-                for xi in range(CLOUD_BAKE_RES):
-                    var px = g_p0.r + ext_x * (Float32(xi) + Float32(0.5)) * inv_res
-                    var dv = cloud_density(perm, px, py, pz, c_frequency, c_wispiness, c_density)
-                    s[0].grid_density.append(dv)
+        # pbrt's real CloudMedium::Density(p) evaluates the noise function at
+        # the RAW medium-space point p (scaled only by "frequency") -- it
+        # never remaps through p0/p1 at all; "bounds" exists purely for the
+        # ray-marching majorant, not for where the noise pattern sits (see
+        # media.h -- Density() has no reference to `bounds` in its body).
+        # Baking into a dense [p0,p1] grid the way gonzales does makes p0/p1
+        # do double duty as "where in world space the baked voxels actually
+        # are", so when a scene omits them (this one does -- p0/p1 default
+        # to pbrt's OWN default of a 1-unit box), that box needs to actually
+        # cover the medium's real geometric extent, or most of it reads back
+        # zero density. Defer the bake until the first shape using this
+        # medium as an inside-interface is seen (handle_sphere_shape) and
+        # resize p0/p1 to that shape's world AABB first -- reserve the
+        # voxel slots now (zero-filled placeholder) so grid_density_base
+        # indexing stays valid either way.
+        var has_explicit_bounds = params.has("p0") or params.has("p1")
+        if has_explicit_bounds:
+            s[0].grid_cloud_pending.append(Int32(0))
+            s[0].grid_cloud_density.append(Float32(0)); s[0].grid_cloud_wispiness.append(Float32(0)); s[0].grid_cloud_frequency.append(Float32(0))
+            # Voxel centers at half-integer offsets within [p0,p1] -- matches
+            # grid_sample_density's own half-texel convention (geometry.mojo),
+            # so the trilinear reconstruction of this baked grid lands
+            # exactly where cloud_density was evaluated, not off by half a cell.
+            var perm = _perlin_perm_table()
+            var ext_x = g_p1.r - g_p0.r
+            var ext_y = g_p1.g - g_p0.g
+            var ext_z = g_p1.b - g_p0.b
+            var inv_res = Float32(1.0) / Float32(CLOUD_BAKE_RES)
+            for zi in range(CLOUD_BAKE_RES):
+                var pz = g_p0.b + ext_z * (Float32(zi) + Float32(0.5)) * inv_res
+                for yi in range(CLOUD_BAKE_RES):
+                    var py = g_p0.g + ext_y * (Float32(yi) + Float32(0.5)) * inv_res
+                    for xi in range(CLOUD_BAKE_RES):
+                        var px = g_p0.r + ext_x * (Float32(xi) + Float32(0.5)) * inv_res
+                        var dv = cloud_density(perm, px, py, pz, c_frequency, c_wispiness, c_density)
+                        s[0].grid_density.append(dv)
+        else:
+            s[0].grid_cloud_pending.append(Int32(1))
+            s[0].grid_cloud_density.append(c_density); s[0].grid_cloud_wispiness.append(c_wispiness); s[0].grid_cloud_frequency.append(c_frequency)
+            for _ in range(CLOUD_BAKE_RES * CLOUD_BAKE_RES * CLOUD_BAKE_RES):
+                s[0].grid_density.append(Float32(0))
     elif is_nvdb:
         # PBRT-v4's NanoVDBMedium ALSO defaults sigma_a/sigma_s to
         # ConstantSpectrum(1) when unspecified (media.cpp), same as
@@ -857,9 +900,64 @@ def handle_sphere_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     s[0].spheres_r.append(radius)
     s[0].spheres_mat.append(s[0].cur_attr.mat_idx)
     s[0].spheres_inside_med.append(s[0].cur_attr.inside_medium)
+
+    # If this sphere is the inside boundary of a "cloud" medium whose scene
+    # file never gave it explicit p0/p1 bounds, size the medium's baked
+    # density grid to this sphere's own world AABB now that we know it --
+    # see _resolve_pending_cloud_grid's docstring. Only the FIRST shape
+    # found using a given pending cloud medium resolves it (documented
+    # scope: multiple shapes sharing one unbounded cloud medium is not
+    # handled -- rare, and each would want its own bounds anyway).
+    var inside_idx = s[0].cur_attr.inside_medium
+    if inside_idx >= Int32(0) and Int(inside_idx) < len(s[0].med_grid_idx):
+        var g_idx = s[0].med_grid_idx[Int(inside_idx)]
+        if g_idx >= Int32(0):
+            _resolve_pending_cloud_grid(s, g_idx,
+                cx - radius, cy - radius, cz - radius,
+                cx + radius, cy + radius, cz + radius)
     s[0].spheres_outside_med.append(s[0].cur_attr.outside_medium)
     s[0].spheres_al.append(s[0].cur_attr.is_alight)
     s[0].spheres_rgb.append(s[0].cur_attr.al_rgb)
+
+def _resolve_pending_cloud_grid(
+    s: UnsafePointer[SceneParseState, MutExternalOrigin], grid_idx: Int32,
+    min_x: Float32, min_y: Float32, min_z: Float32,
+    max_x: Float32, max_y: Float32, max_z: Float32,
+):
+    """Rebakes a "cloud" medium's density grid (see handle_named_medium's
+    is_cloud branch) once the first shape using it as an inside-interface is
+    known, sizing p0/p1 to that shape's world AABB instead of the synthetic
+    default -- called from handle_sphere_shape et al. No-op if grid_idx is
+    invalid or this grid isn't a pending cloud (already resolved, or never
+    was one -- e.g. a plain "uniformgrid" medium)."""
+    if grid_idx < Int32(0) or Int(grid_idx) >= len(s[0].grid_cloud_pending):
+        return
+    var gi = Int(grid_idx)
+    if s[0].grid_cloud_pending[gi] == Int32(0):
+        return
+    s[0].grid_cloud_pending[gi] = Int32(0)
+    s[0].grid_p0[gi * 3 + 0] = min_x; s[0].grid_p0[gi * 3 + 1] = min_y; s[0].grid_p0[gi * 3 + 2] = min_z
+    s[0].grid_p1[gi * 3 + 0] = max_x; s[0].grid_p1[gi * 3 + 1] = max_y; s[0].grid_p1[gi * 3 + 2] = max_z
+
+    var c_density = s[0].grid_cloud_density[gi]
+    var c_wispiness = s[0].grid_cloud_wispiness[gi]
+    var c_frequency = s[0].grid_cloud_frequency[gi]
+    var perm = _perlin_perm_table()
+    var ext_x = max_x - min_x
+    var ext_y = max_y - min_y
+    var ext_z = max_z - min_z
+    var inv_res = Float32(1.0) / Float32(CLOUD_BAKE_RES)
+    var base = Int(s[0].grid_density_base[gi])
+    var idx = base
+    for zi in range(CLOUD_BAKE_RES):
+        var pz = min_z + ext_z * (Float32(zi) + Float32(0.5)) * inv_res
+        for yi in range(CLOUD_BAKE_RES):
+            var py = min_y + ext_y * (Float32(yi) + Float32(0.5)) * inv_res
+            for xi in range(CLOUD_BAKE_RES):
+                var px = min_x + ext_x * (Float32(xi) + Float32(0.5)) * inv_res
+                var dv = cloud_density(perm, px, py, pz, c_frequency, c_wispiness, c_density)
+                s[0].grid_density[idx] = dv
+                idx += 1
 
 comptime DISK_TESSELLATION_SEGMENTS: Int = 32
 
@@ -1247,6 +1345,49 @@ def _psc_get_float_or_rgb(params: ParameterDictionary, name: StringLiteral, defa
         return RGB(f[0], f[1], f[2])
     elif len(f) == 1:
         return RGB(f[0])
+    return default
+
+def _psc_get_sigma_or_rgb(params: ParameterDictionary, name: StringLiteral, default: RGB) -> RGB:
+    """Medium "sigma_a"/"sigma_s" only -- NOT `_psc_get_float_or_rgb`'s
+    texture-RGB duality, which this deliberately does not share (only 2
+    call sites, both here).
+
+    pbrt declares these `"spectrum sigma_a"`. `ParamValue` collapses every
+    float-bearing pbrt type (float/rgb/spectrum-numeric-array/...) into one
+    flat `floats` list with no surviving type tag (see its own docstring),
+    so a bare `len(f)` count is the only signal left to tell an RGB TRIPLE
+    (always exactly 3 floats: r, g, b) apart from a SPECTRUM NUMERIC ARRAY
+    (an even, usually >3, count of alternating `wavelength value` pairs --
+    e.g. `[200 .01 900 .01]` means sigma_a=.01 at both 200nm and 900nm, NOT
+    the RGB triple (200, .01, 900)).
+
+    Before this function existed, both medium call sites went through
+    `_psc_get_float_or_rgb`, which has no spectrum case at all and read ANY
+    `len(f) >= 3` as a bare RGB triple -- so `[200 .01 900 .01]` (4 floats)
+    became `RGB(200, .01, 900)`: sigma_a in the R and B channels off by
+    four orders of magnitude (200/900 instead of .01), sigma_t there
+    (R/B ~200-900 vs the real ~10) making those channels essentially fully
+    opaque at any real path length, while G alone carried sane values --
+    exactly the washed-out, low-contrast "doesn't look right" a cloud
+    medium using this exact spectrum form produced (`clouds.pbrt`'s
+    "spectrum sigma_s"/"spectrum sigma_a"). The existing comment above this
+    function's own call sites already claimed the intended behaviour was
+    "mean of samples, replicated to all 3 channels" -- this makes the code
+    match that stated intent, using only the VALUE half of each pair (the
+    odd indices), not the wavelengths themselves."""
+    var f = params.get_floats(name)
+    var n = len(f)
+    if n == 1:
+        return RGB(f[0])
+    if n == 3:
+        return RGB(f[0], f[1], f[2])
+    if n >= 4 and n % 2 == 0:
+        var sum_v = Float32(0.0)
+        var n_pairs = n // 2
+        for i in range(n_pairs):
+            sum_v += f[2 * i + 1]
+        var mean_v = sum_v / Float32(n_pairs)
+        return RGB(mean_v)
     return default
 
 def handle_texture(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
