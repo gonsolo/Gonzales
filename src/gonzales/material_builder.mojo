@@ -238,7 +238,17 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
             mat_type = MatKind.thin_dielectric
         elif type_str == "hair":
             mat_type = MatKind.hair
-        elif type_str == "interface":
+        elif type_str == "interface" or type_str == "none" or type_str == "":
+            # pbrt: `Material ""` (and `"none"`) creates a NULL material --
+            # no surface scattering at all, the shape exists only to bound a
+            # participating medium. It is the standard idiom for a medium
+            # boundary and clouds.pbrt uses exactly that (`Material ""` on the
+            # sphere holding the cloud medium).
+            #
+            # This used to fall through to the unsupported-type branch below
+            # and render as flat 50%-grey diffuse -- an opaque grey ball where
+            # the scene wanted an invisible boundary, which is why clouds.pbrt
+            # produced a featureless grey disc (std 0.006) rather than a cloud.
             mat_type = MatKind.interface
         elif type_str == "diffuse":
             mat_type = MatKind.diffuse
