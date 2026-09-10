@@ -1278,7 +1278,9 @@ def shade_dielectric[use_gpu: Bool](
     var force_entering = path_ptr[].bounce == 0 and path_ptr[].current_medium_idx < Int32(0)
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
-    var (bs, normal) = bxdf_sample_dielectric(geom_normal, ray_dir, ior, force_entering, pcg.next_float())
+    var (bs, normal, new_dielectric_ior) = bxdf_sample_dielectric(
+        geom_normal, ray_dir, ior, force_entering, pcg.next_float(), path_ptr[].current_dielectric_ior)
+    path_ptr[].current_dielectric_ior = new_dielectric_ior
 
     var is_reflect = (Int(bs.flags) & Int(BxDFFlags.reflect)) != 0
     var offset = (normal if is_reflect else -normal) * Float32(0.0001)
