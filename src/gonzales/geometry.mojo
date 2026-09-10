@@ -223,16 +223,24 @@ struct Bounds3f(TrivialRegisterPassable):
     var max: Point3f
 
 # ── Color / Spectrum ───────────────────────────────────────────────────────────
-# SampledSpectrum is the RGB-typed running throughput/radiance accumulator
-# threaded through PathState_C, BDPTVertex, SPPMPixel/SPPMPhoton, etc. It is
-# deliberately RGB, not a 4-wide spectral type: real per-wavelength spectral
-# evaluation (spectrum.mojo's SpectralSample, Jakob-Hanika upsampling) happens
-# only at the specific points that need it -- NEE terms, medium transmittance
-# -- converting back to RGB immediately so it can fold into this accumulator.
-# Flipping this alias to a true spectral accumulator (full multi-bounce
-# spectral coherence) is a distinct, much larger future project, not a
-# mechanical rename -- see project_spectral_rendering memory's Stage 6 notes.
-# See: docs/02_spectra_and_color.md
+# RGB is used where a quantity genuinely HAS three authored channels: a
+# light's emission/intensity/scale, a medium's sigma_a/sigma_s, the denoiser's
+# albedo AOV. Radiance transport itself is spectral -- spectrum.mojo's
+# SpectralSample, four hero wavelengths -- in all three integrators (see
+# project_spectral_throughput_flip).
+#
+# There used to be a `SampledSpectrum = RGB` alias here, described as the
+# single switch a future spectral flip would throw. The flip happened without
+# it, needed far more than a rename, and afterwards the alias only misled: a
+# type named SampledSpectrum that was three floats, sitting on medium
+# coefficients inside a renderer whose transport is four hero wavelengths. It
+# is deleted. A type must not claim to be spectral while being RGB.
+#
+# NOTE for anyone converting one of these to spectral: an RGB *coefficient*
+# (a medium's extinction, a single-scattering albedo) must be BAND-PICKED via
+# rgb_bands_to_spectral_sample, never pushed through the reflectance
+# upsampler -- RGB(a,a,a) does not come back as `a` in every lane.
+# See: docs/02_spectra_and_color.md, "A coefficient is not a color"
 
 @fieldwise_init
 struct RGB(TrivialRegisterPassable):
@@ -305,13 +313,6 @@ struct RGB(TrivialRegisterPassable):
             max(lo, min(hi, self.b)),
         )
 
-comptime SampledSpectrum = RGB
-# <<listing: SampledSpectrum>>
-"""RGB-typed running throughput/radiance accumulator. Intentionally == RGB,
-   not a spectral type -- see the comment above this alias's declaration.
-   See: docs/02_spectra_and_color.md
-# <</listing>>
-"""
 
 # ── Scene primitives ───────────────────────────────────────────────────────────
 
@@ -517,7 +518,7 @@ struct PathState_C(TrivialRegisterPassable):
     # and material lookup on the way in, film splat on the way out).
     var throughput: SpectralSample
     var estimate: SpectralSample
-    var albedo: SampledSpectrum      # denoiser AOV -- an output, stays RGB
+    var albedo: RGB      # denoiser AOV -- an output, stays RGB
     var bounce: Int32
     var pcgState: UInt64
     var pcgInc: UInt64
@@ -601,7 +602,7 @@ struct AreaLight_C(TrivialRegisterPassable):
     shading.mojo's NEE area-light sampling."""
     var meshIdx: Int32
     var n_tris: Int32       # number of triangles in this light mesh (kind==0 only)
-    var emission: SampledSpectrum
+    var emission: RGB
     var total_area: Float32 # total surface area of this light mesh or curve tube
     var kind: Int8          # 0 = mesh triangle light, 1 = curve light
     var _pad0: Int8
@@ -620,7 +621,7 @@ struct Sphere_C(TrivialRegisterPassable):
     var _pad0: Int8
     var _pad1: Int8
     var _pad2: Int8
-    var emission: SampledSpectrum
+    var emission: RGB
 
 @always_inline
 def sphere_outward_normal(hit: Point3f, center: Point3f) -> Vec3f:
@@ -846,8 +847,8 @@ struct Medium_C(TrivialRegisterPassable):
     Grid_C/grid_sample_density below.
     g = Henyey-Greenstein anisotropy in [-1, 1]; 0 = isotropic.
     """
-    var sigma_a: SampledSpectrum   # absorption coefficient (1/m), per unit density if grid_idx >= 0
-    var sigma_s: SampledSpectrum   # scattering coefficient (1/m), per unit density if grid_idx >= 0
+    var sigma_a: RGB   # absorption coefficient (1/m), per unit density if grid_idx >= 0
+    var sigma_s: RGB   # scattering coefficient (1/m), per unit density if grid_idx >= 0
     var g:       Float32           # HG anisotropy
     var grid_idx: Int32            # -1 = homogeneous; >=0 = index into scene.grids (dense "uniformgrid")
     var nvdb_idx: Int32            # -1 = none; >=0 = index into scene.nvdb_grids (sparse "nanovdb")
@@ -1342,7 +1343,7 @@ struct DistantLight_C(TrivialRegisterPassable):
     """
     var direction: Vec3f
     var _pad: Float32
-    var emission: SampledSpectrum
+    var emission: RGB
     var _pad2: Float32
 
 @fieldwise_init
@@ -1350,7 +1351,7 @@ struct PointLight_C(TrivialRegisterPassable):
     """An isotropic point light at a world-space position."""
     var position: Point3f
     var _pad: Float32
-    var intensity: SampledSpectrum
+    var intensity: RGB
     var _pad2: Float32
 
 @fieldwise_init
@@ -1358,7 +1359,7 @@ struct InfiniteLight_C(TrivialRegisterPassable):
     """An environment map (lat-long HDRI), importance-sampled via 2D CDF.
     See: docs/06_lights_and_materials.md — Infinite Area Lights.
     """
-    var scale: SampledSpectrum
+    var scale: RGB
     var tex_idx: Int32   # -1 = solid colour, >= 0 = texture
     var cdf_w: Int32     # env-map pixel width (also CDF width; 0 = no texture)
     var cdf_h: Int32     # env-map pixel height
@@ -1462,8 +1463,8 @@ def light_sampler_pdf(ls: LightSampler_C, light_idx: Int32) -> Float32:
 
 @fieldwise_init
 struct TileResult_C(TrivialRegisterPassable):
-    var estimate: SampledSpectrum
-    var albedo: SampledSpectrum
+    var estimate: RGB
+    var albedo: RGB
     var filterWeight: Float32
     var pixelX: Int32
     var pixelY: Int32

@@ -12,7 +12,7 @@ from std.math import sqrt, cos, sin, floor, log, exp, max, min, ceildiv
 from std.memory import alloc
 from std.atomic import Atomic
 from .geometry import (
-    RGB, SampledSpectrum, Point3f, Point2f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, PrimId_C,
+    RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, PrimId_C,
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Medium_C, MediumInterface_C,
     Instance_C, dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI, Frame,
     Curve_C, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, InfiniteLight_C, PointLight_C,
@@ -370,8 +370,11 @@ struct HomogeneousFreeFlight(TrivialRegisterPassable):
     var t_free: Float32     # sampled distance (meaningful either way)
     var sig_t:   Float32    # red-channel extinction sigma_a.r + sigma_s.r
     var albedo:  RGB        # single-scattering albedo at the collision point (only if collided)
-    var transmittance: RGB  # pass-through WEIGHT (only if NOT collided) -- see below,
-                            # this is a per-channel RATIO, not a Beer-Lambert factor
+    var weight:  RGB        # per-channel chromatic WEIGHT, meaningful in BOTH branches.
+                            # A pure RATIO to the sampled (red) channel, never a raw
+                            # Beer-Lambert factor -- exactly 1 on red, and exactly 1 on
+                            # every channel for a grey medium. Callers must multiply it
+                            # into beta/flux in BOTH branches.
 
 @always_inline
 def sample_homogeneous_free_flight(med: Medium_C, t_surf: Float32, mut pcg: PCG32) -> HomogeneousFreeFlight:
@@ -384,7 +387,31 @@ def sample_homogeneous_free_flight(med: Medium_C, t_surf: Float32, mut pcg: PCG3
         var alb_s = med.sigma_s.r / sig_t
         var alb_g_s = med.sigma_s.g / sigma_t.g if sigma_t.g > Float32(0.0) else alb_s
         var alb_b_s = med.sigma_s.b / sigma_t.b if sigma_t.b > Float32(0.0) else alb_s
-        return HomogeneousFreeFlight(True, t_free, sig_t, RGB(alb_s, alb_g_s, alb_b_s), RGB(Float32(1)))
+        # COLLISION WEIGHT. The distance was sampled from red's exponential,
+        # pdf(t) = sigma_t.r * exp(-sigma_t.r * t), so lane c's contribution
+        # sigma_s_c * exp(-sigma_t_c * t) needs
+        #     sigma_s_c*exp(-sigma_t_c*t) / (sigma_t.r*exp(-sigma_t.r*t))
+        # and `albedo` above already carries sigma_s_c/sigma_t_c, leaving
+        #     exp(-(sigma_t_c - sigma_t.r)*t) * sigma_t_c/sigma_t.r.
+        # (Algebraically identical to gpu.mojo's albedo_r * sigma_s_c/sigma_s.r
+        # form, just factored to keep `albedo` per-channel here.)
+        #
+        # This weight was MISSING entirely: the collision branch returned a
+        # flat RGB(1), so VCM/SPPM were chromatically BIASED in any medium
+        # whose channels differ -- a red-heavy medium lost exactly the green
+        # and blue extinction ratio at every scattering event, compounding
+        # per bounce. gpu.mojo's _sample_medium_core has always applied it
+        # (its comment spells out both factors); it simply never propagated
+        # to this shared BDPT/SPPM sampler -- the same fixed-in-one-consumer
+        # split that accounts for most defects in this codebase. Exactly 1 on
+        # every channel for a grey medium, so grey renders are unaffected.
+        var wg = (exp(-(sigma_t.g - sigma_t.r) * t_free) * sigma_t.g / sig_t
+                  if sigma_t.g > Float32(0.0) else Float32(1.0))
+        var wb = (exp(-(sigma_t.b - sigma_t.r) * t_free) * sigma_t.b / sig_t
+                  if sigma_t.b > Float32(0.0) else Float32(1.0))
+        return HomogeneousFreeFlight(True, t_free, sig_t,
+                                     RGB(alb_s, alb_g_s, alb_b_s),
+                                     RGB(Float32(1.0), wg, wb))
     # Pass-through WEIGHT, not the raw Beer-Lambert factor. The distance was
     # sampled from the red channel, so P(reach the surface) is ALREADY
     # exp(-sigma_t.r * t_surf) -- that channel's transmittance is carried by
@@ -630,6 +657,10 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var ff = sample_homogeneous_free_flight(med, t_hit, pcg)
             if ff.collided:
                 # Volume scatter — store VP here
+                # The collision weight is the chromatic ratio to the sampled
+                # (red) channel; without it a chromatic medium is biased at
+                # every scattering event. Exactly 1 for a grey medium.
+                vp.beta *= ff.weight
                 vp.pos = ro + rd * ff.t_free
                 vp.normal = Vec3f(Float32(0), Float32(1), Float32(0))
                 vp.alb = ff.albedo
@@ -644,7 +675,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 break
             else:
                 # Transmittance through full segment to surface
-                vp.beta *= ff.transmittance
+                vp.beta *= ff.weight
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[mat_idx]
@@ -1080,7 +1111,18 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                         SPPMPhoton(pos=sp, flux=flux, nxt=Int32(-1), is_volume=Int32(1), dir_in=rd, wavelengths=ph_wavelengths),
                         photons, max_photons, counter)
                 # Scatter: isotropic phase function, modulate by albedo
-                flux *= spec_refl(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, ph_wavelengths)
+                # Single-scattering albedo is a per-channel COEFFICIENT
+                # (sigma_s/sigma_t), not a reflectance: band-pick it, never
+                # push it through the reflectance upsampler. spec_refl was
+                # used here, and RGB(a,a,a) does NOT upsample to a in every
+                # lane, so even a GREY medium picked up a spurious D65-shaped
+                # tint compounding once per scattering event -- the exact
+                # bug class docs/02_spectra_and_color.md documents ("A
+                # coefficient is not a color"). Band-picking degenerates to
+                # exactly the channel value in every lane.
+                flux *= rgb_bands_to_spectral_sample((ff.albedo).r, (ff.albedo).g, (ff.albedo).b, ph_wavelengths)
+                # Chromatic collision weight (ratio to the sampled channel).
+                flux *= rgb_bands_to_spectral_sample(ff.weight.r, ff.weight.g, ff.weight.b, ph_wavelengths)
                 # Sample new isotropic direction (uniform sphere)
                 var usp1 = pcg.next_float()
                 var usp2 = pcg.next_float()
@@ -1092,7 +1134,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 continue
             else:
                 # Apply Beer-Lambert transmittance through segment
-                flux *= rgb_bands_to_spectral_sample(ff.transmittance.r, ff.transmittance.g, ff.transmittance.b, ph_wavelengths)
+                flux *= rgb_bands_to_spectral_sample(ff.weight.r, ff.weight.g, ff.weight.b, ph_wavelengths)
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[mat_idx]

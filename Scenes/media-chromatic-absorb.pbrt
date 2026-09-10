@@ -1,0 +1,72 @@
+# CHROMATIC twin of media-passthrough-absorb.pbrt. Identical in every way
+# except sigma_a, which is now (0.25, 0.5, 1.0) instead of grey 0.5 -- so the
+# chord of 2R = 4 gives per-channel optical depths tau = (1, 2, 4) and the
+# analytic centre value is exp(-tau) = (0.36788, 0.13534, 0.01832), exact,
+# with no free parameters.
+#
+# Why this scene exists: the grey twin cannot detect a CHROMATIC error at all
+# (every per-channel ratio is 1 by construction). This one isolates exactly
+# the weights the free-flight sampler applies per channel. sigma_s = 0 keeps
+# the pass-through branch the only path to the camera, so nothing masks an
+# error.
+# Isolates the free-flight sampler's PASS-THROUGH branch
+# (project_vcm_volume_mis memory, "separate bug found en route").
+#
+# A purely ABSORBING medium (sigma_s = 0) sits between the camera and an
+# emissive backdrop. With no scattering, a camera ray can only either be
+# absorbed -- the "collided" branch, whose albedo is then 0, contributing
+# nothing -- or pass through to the emitter. So every non-black pixel is
+# carried by the pass-through weight alone, and nothing else can mask an
+# error in it.
+#
+# The medium sphere (radius 2, centred at the origin) fully covers the frame
+# at this fov, so a central camera ray travels a chord of 2*R = 4 through
+# sigma_a = 0.5, i.e. optical depth tau = 2. The backdrop emits L = 1, so the
+# analytic centre value is exp(-2) = 0.13534 -- no free parameters.
+#
+# Compare:
+#   ./build/gonzales                 (plain PT: uses gpu.mojo's correct ratio)
+#   ./build/gonzales --vcm           (BDPT/SPPM sampler -- the one under test)
+#   ./build/gonzales --sppm ...
+# Before the 2026-09-10 fix the latter two read exp(-2*tau) = exp(-4) instead,
+# i.e. too dark by exactly exp(-tau) = 7.39x here.
+Integrator "volpath" "integer maxdepth" [ 8 ]
+Sampler "sobol" "integer pixelsamples" [ 256 ]
+Film "rgb"
+    "string filename" [ "media-chromatic-absorb.exr" ]
+    "integer xresolution" [ 64 ] "integer yresolution" [ 64 ]
+LookAt 0 0 6  0 0 0  0 1 0
+Camera "perspective" "float fov" [ 16 ]
+
+WorldBegin
+
+# Pure absorber: sigma_s = 0 means the "collided" branch has albedo 0 and
+# terminates, so only the pass-through weight can produce light here.
+MakeNamedMedium "absorber" "string type" [ "homogeneous" ]
+    "rgb sigma_a" [ 0.25 0.5 1.0 ]
+    "rgb sigma_s" [ 0.0 0.0 0.0 ]
+    "float g" [ 0.0 ]
+
+MakeNamedMaterial "Interface"
+    "string type" [ "interface" ]
+
+MakeNamedMaterial "Black"
+    "string type" [ "diffuse" ]
+    "rgb reflectance" [ 0 0 0 ]
+
+# Emissive backdrop, L = 1, well behind the absorbing sphere.
+AttributeBegin
+    NamedMaterial "Black"
+    AreaLightSource "diffuse"
+        "rgb L" [ 1 1 1 ]
+    Shape "trianglemesh"
+        "point3 P" [ -20 -20 -6   20 -20 -6   20 20 -6   -20 20 -6 ]
+        "integer indices" [ 0 1 2 0 2 3 ]
+        "normal N" [ 0 0 1  0 0 1  0 0 1  0 0 1 ]
+AttributeEnd
+
+AttributeBegin
+    NamedMaterial "Interface"
+    MediumInterface "absorber" ""
+    Shape "sphere" "float radius" [ 2.0 ]
+AttributeEnd
