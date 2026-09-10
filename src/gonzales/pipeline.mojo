@@ -418,6 +418,7 @@ def debug_trace_pixel(
     print("PIXEL", px, py, "ray.o", ox, oy, oz, "ray.d", dx, dy, dz)
 
     var inter = alloc[Intersection_C](1)
+    var current_ior = Float32(1.0)   # mirrors PathState_C.current_dielectric_ior
     for bounce in range(8):
         var ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
         inter[0].hit = Int8(0)
@@ -495,12 +496,12 @@ def debug_trace_pixel(
             var nx = gnx if facing else -gnx
             var ny = gny if facing else -gny
             var nz = gnz if facing else -gnz
-            var eta = (Float32(1.0)/ior) if entering else ior
+            var eta = (current_ior/ior) if entering else ior
             var cos_i = -(dx*nx + dy*ny + dz*nz)
             var sin2t = eta*eta*(Float32(1.0) - cos_i*cos_i)
             var tir = sin2t > Float32(1.0)
             var fres = fr_dielectric(cos_i, Float32(1.0)/eta)
-            print("        DIELECTRIC entering", Int(entering), "eta", eta, "cos_i", cos_i, "fresnel", fres, "tir", Int(tir))
+            print("        DIELECTRIC entering", Int(entering), "current_ior", current_ior, "surface_ior", ior, "eta", eta, "cos_i", cos_i, "fresnel", fres, "tir", Int(tir))
             # Probe the REFLECTED ray's envmap value (the bright contribution).
             var rcos = dx*nx + dy*ny + dz*nz
             var rfx = dx - nx*Float32(2.0)*rcos
@@ -541,7 +542,8 @@ def debug_trace_pixel(
                 var nl = _dbg_vlen(dx,dy,dz)
                 if nl > Float32(0.0): dx /= nl; dy /= nl; dz /= nl
                 ox = hx - nx*Float32(0.0001); oy = hy - ny*Float32(0.0001); oz = hz - nz*Float32(0.0001)
-                print("        -> TRANSMIT dir", dx, dy, dz)
+                current_ior = ior if entering else Float32(1.0)
+                print("        -> TRANSMIT dir", dx, dy, dz, "new current_ior", current_ior)
         elif Int(mat.type) == 5:
             # CoatedDiffuse — mirror reflection off the coat only (ignore roughness/
             # transmit-into-base for this probe; just checking what the coat's
