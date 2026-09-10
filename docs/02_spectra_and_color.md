@@ -111,22 +111,35 @@ component as a scalar multiplier and upsampling only the normalized,
 in-range remainder, keeping chromaticity in the table's valid domain while
 preserving the exact magnitude.
 
-**A coefficient is not a color, and upsampling one is a different, smaller
-error than it looks.** A participating medium's per-channel extinction
-*ratio* (green's σₜ relative to red's, say) is a plain multiplier, not a
-reflectance or an emission — feeding it through the ordinary reflectance
-upsampler is meaningless, because `RGB(1,1,1)` does not upsample to exactly
-1 in every wavelength lane (the table has no reason to be "flat" there).
-Concretely, a *grey* medium — every channel ratio exactly 1 — picked up a
-spurious D65-shaped tint from this, compounding once per scattering event:
-measured on a validation harness, a grey homogeneous medium read 3.5× its
+**A coefficient is not a color.** A participating medium's per-channel
+extinction σₜ is a plain multiplier, not a reflectance or an emission, and
+feeding one through the *illuminant* upsampler is genuinely meaningless —
+`spec_illum` tints the D65 shape by construction, so a coefficient acquires
+a spurious daylight-shaped colour that compounds once per scattering event.
+Measured on a validation harness, a grey homogeneous medium read 3.5× its
 known-correct analytic answer, and a heterogeneous (NanoVDB) one 10.7×.
-The fix is not to upsample a coefficient at all: `rgb_bands_to_spectral_sample`
-just picks whichever of R, G, or B "owns" each hero wavelength by the usual
-sRGB-primary crossover (blue below 490 nm, green to 580 nm, red above), which
-degenerates to exactly 1 in every lane for a grey ratio — the invariant that
-actually matters here. It carries no more chromatic information than the
-original RGB coefficient had.
+The fix in place today is `rgb_bands_to_spectral_sample`, which picks
+whichever of R, G, or B "owns" each hero wavelength by the usual sRGB-primary
+crossover (blue below 490 nm, green to 580 nm, red above).
+
+**Correction (2026-09-10).** This passage previously justified band-picking
+by asserting that `RGB(1,1,1)` "does not upsample to exactly 1 in every
+wavelength lane (the table has no reason to be flat there)". **That is
+false, and it was measured.** `Tests/unit/test_coefficient_upsampling.mojo`
+checks the actual table across four hero-wavelength sets: `spec_refl(1,1,1)`
+returns exactly 1.0 in all four lanes, and `spec_refl_unbounded(2,2,2)`
+exactly 2.0. The grey invariant is preserved by the smooth Jakob-Hanika
+upsampler, not only by band-picking. Note also that the recorded symptom —
+a *D65-shaped* tint — is the fingerprint of `spec_illum`, not of
+`spec_refl`; the original fix was very likely right for a different reason
+than the one written down.
+
+This matters because it removes the stated blocker on matching pbrt, whose
+medium coefficients use `RGBUnboundedSpectrum` — a smooth sigmoid, the
+direct analogue of `spec_refl_unbounded`. Band-picking remains a defensible
+choice, but it is a **3-band step function**: it carries no more chromatic
+information than the original RGB had, and it is not the same spectral model
+pbrt uses. See "Where this still falls short" below.
 
 Band-picking is now used consistently for every medium *coefficient*: the
 free-flight weights, and the single-scattering albedo at each of the three
@@ -134,6 +147,42 @@ places that consume it. Three of those used to push the albedo through the
 reflectance upsampler instead, so a grey medium acquired a D65-shaped tint
 once per scattering event — the same defect this section describes, just in
 a spot nobody had checked.
+
+### Where this still falls short, measured
+
+It is tempting to grade chromatic media against the obvious closed form:
+for a pure absorber of depth *d*, each channel should read `exp(-σ_c·d)`.
+**That target is wrong, and real pbrt misses it too.** On
+`Scenes/media-chromatic-absorb.pbrt` — σ_a = (0.25, 0.5, 1.0) across a
+sphere of diameter 4, so τ = (1, 2, 4) against an L = 1 backdrop:
+
+| centre 16×16 | R | G | B |
+|---|---|---|---|
+| naive `exp(-τ)` | 0.3679 | 0.1353 | 0.0183 |
+| real pbrt-v4, 512 spp | 0.3321 | 0.1314 | 0.0093 |
+| gonzales PT, 512 spp | 0.4332 | 0.1606 | 0.0068 |
+| **pbrt / naive** | 0.90 | 0.97 | **0.51** |
+| **gonzales / pbrt** | 1.30 | 1.22 | **0.73** |
+
+`exp(-σ_c·d)` is an *RGB-renderer* expectation. Any genuinely spectral
+renderer upsamples the authored RGB coefficient to a spectrum, exponentiates
+per wavelength, and integrates against the CIE curves — and
+`∫exp(-σ(λ)d)·x̄(λ)dλ` is not `exp(-σ_R·d)`. pbrt lands 2× off the naive
+answer in blue for exactly this reason, and that is correct behaviour, not a
+defect. The deviation is largest in blue because blue carries the largest τ,
+where the exponential is most nonlinear and within-band variation of σ(λ)
+matters most.
+
+So the meaningful figure is the last row: **gonzales sits 1.30/1.22/0.73
+against pbrt**, a chromatic spread of about 1.8×. That is a real gap and
+worth closing, but it is roughly half the size that grading against the
+naive analytic suggests. Two candidate causes, in order of likelihood:
+band-picking models σ(λ) as a 3-band step function where pbrt uses a smooth
+sigmoid, and gonzales band-picks the *transmittance* (already exponentiated)
+rather than upsampling σ and exponentiating per lane — and for a smooth
+upsampler those two orderings differ, since `upsample(exp(-σd))` ≠
+`exp(-upsample(σ)·d)`. Band-picking is the one case where they coincide,
+because selection commutes with `exp`.
 
 **What remains, and it is measurable.** Sampling still draws the free-flight
 distance from one channel (red) and reweights the others by their ratio to
