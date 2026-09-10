@@ -115,9 +115,9 @@ def test_free_flight_zero_extinction_never_collides_and_keeps_t_surf() raises:
     var ff = sample_homogeneous_free_flight(med, Float32(17.0), pcg)
     assert_false(ff.collided)
     assert_true(_close(ff.t_free, Float32(17.0)))
-    assert_true(_close(ff.transmittance.r, Float32(1.0)))
-    assert_true(_close(ff.transmittance.g, Float32(1.0)))
-    assert_true(_close(ff.transmittance.b, Float32(1.0)))
+    assert_true(_close(ff.weight.r, Float32(1.0)))
+    assert_true(_close(ff.weight.g, Float32(1.0)))
+    assert_true(_close(ff.weight.b, Float32(1.0)))
 
 def test_free_flight_t_free_matches_closed_form_inversion_formula() raises:
     """T_free must equal -ln(max(u, 1e-7))/sigma_t for the exact `u` the
@@ -169,9 +169,9 @@ def test_free_flight_no_collision_gives_per_channel_beer_lambert_transmittance()
         var ratio_b = exp(-((sigma_a.b + sigma_s.b) - sig_r) * t_surf)
         # Red is the sampled channel: its transmittance is carried by the
         # pass-through probability, so the weight is exactly 1.
-        assert_true(_close(ff.transmittance.r, Float32(1.0)))
-        assert_true(_close(ff.transmittance.g, ratio_g))
-        assert_true(_close(ff.transmittance.b, ratio_b))
+        assert_true(_close(ff.weight.r, Float32(1.0)))
+        assert_true(_close(ff.weight.g, ratio_g))
+        assert_true(_close(ff.weight.b, ratio_b))
     else:
         # sigma_t.r == 0.15 with t_surf == 0.5 collided anyway: still a
         # valid outcome (t_free < t_surf), just doesn't exercise the branch
@@ -199,11 +199,60 @@ def test_free_flight_grey_medium_pass_through_weight_is_exactly_one() raises:
         var ff = sample_homogeneous_free_flight(med, t_surf, pcg)
         if not ff.collided:
             found_pass_through = True
-            assert_true(_close(ff.transmittance.r, Float32(1.0)))
-            assert_true(_close(ff.transmittance.g, Float32(1.0)))
-            assert_true(_close(ff.transmittance.b, Float32(1.0)))
+            assert_true(_close(ff.weight.r, Float32(1.0)))
+            assert_true(_close(ff.weight.g, Float32(1.0)))
+            assert_true(_close(ff.weight.b, Float32(1.0)))
     # Anti-vacuity: the loop must actually have exercised the branch.
     assert_true(found_pass_through)
+
+def test_free_flight_collision_weight_is_chromatic_ratio() raises:
+    """The COLLISION branch's weight must be the chromatic ratio to the
+    sampled (red) channel: exp(-(sigma_t_c - sigma_t_r)*t) * sigma_t_c/sigma_t_r.
+
+    This branch had NO coverage at all, which is why it went unnoticed that it
+    returned a flat RGB(1) -- dropping the chromatic ratio entirely and biasing
+    VCM/SPPM in any medium whose channels differ. Measured on a chromatic
+    scatterer, VCM sat at 0.36x the path tracer in blue; with this weight it
+    agrees to ~3%. (gpu.mojo's sampler has always applied the equivalent
+    factors, so the path tracer was the unaffected reference.)"""
+    var sigma_a = RGB(Float32(0.05), Float32(0.05), Float32(0.05))
+    var sigma_s = RGB(Float32(0.20), Float32(0.45), Float32(0.95))
+    var med = _medium(sigma_a, sigma_s)
+    var sig_r = sigma_a.r + sigma_s.r
+    var sig_g = sigma_a.g + sigma_s.g
+    var sig_b = sigma_a.b + sigma_s.b
+    var found_collision = False
+    for i in range(64):
+        var pcg = PCG32(UInt64(i * 3 + 2), UInt64(5))
+        # A long segment so a collision is the likely outcome.
+        var ff = sample_homogeneous_free_flight(med, Float32(50.0), pcg)
+        if ff.collided:
+            found_collision = True
+            var t = ff.t_free
+            assert_true(_close(ff.weight.r, Float32(1.0)))
+            assert_true(_close(ff.weight.g, exp(-(sig_g - sig_r) * t) * sig_g / sig_r))
+            assert_true(_close(ff.weight.b, exp(-(sig_b - sig_r) * t) * sig_b / sig_r))
+    # Anti-vacuity: the loop must actually have collided at least once,
+    # otherwise every assertion above is skipped and the test proves nothing.
+    assert_true(found_collision)
+
+def test_free_flight_grey_collision_weight_is_exactly_one() raises:
+    """The regression guard for the change above: a GREY medium's collision
+    weight must be identically 1 on every channel, so grey renders are
+    bit-unaffected. Both factors -- the transmittance ratio and the
+    sigma_t ratio -- degenerate to 1 when the channels agree."""
+    var med = _medium(RGB(Float32(0.3), Float32(0.3), Float32(0.3)),
+                      RGB(Float32(0.7), Float32(0.7), Float32(0.7)))
+    var found_collision = False
+    for i in range(64):
+        var pcg = PCG32(UInt64(i * 5 + 3), UInt64(13))
+        var ff = sample_homogeneous_free_flight(med, Float32(50.0), pcg)
+        if ff.collided:
+            found_collision = True
+            assert_true(_close(ff.weight.r, Float32(1.0)))
+            assert_true(_close(ff.weight.g, Float32(1.0)))
+            assert_true(_close(ff.weight.b, Float32(1.0)))
+    assert_true(found_collision)
 
 # ── sample_area_light_uniform ────────────────────────────────────────────────
 

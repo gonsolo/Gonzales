@@ -44,6 +44,33 @@ weight by `1 - sigma_t(x)/sigma_maj` instead of stochastically
 accepting/rejecting, giving a continuous, unbiased transmittance estimate
 with no need to know whether the ray actually left the medium.
 
+### Sampling one channel, weighting the rest
+
+A medium's `sigma_a`/`sigma_s` are three authored RGB numbers, and the
+free-flight distance is drawn from a single channel's exponential — red's.
+That channel's transmittance is then already carried by the sampling
+probability itself, so what survives as a weight is only each *other*
+channel's ratio to it. Two branches, two weights:
+
+- **pass-through** (`t >= t_surf`): `exp(-(sigma_c - sigma_r) * t_surf)`
+- **collision** (`t < t_surf`): `exp(-(sigma_c - sigma_r) * t) * sigma_c/sigma_r`,
+  the second factor because the albedo applied at the vertex is already
+  per-channel `sigma_s_c/sigma_t_c`
+
+Both are exactly 1 on red, and exactly 1 on *every* channel for a grey
+medium — which is the invariant to reach for when touching this code, since
+it means grey renders must not move at all.
+
+Getting either wrong is expensive and quiet. Returning the raw
+Beer-Lambert factor rather than the ratio double-counts the sampled
+channel's transmittance, and made surfaces seen through a medium 6.1x too
+dark in VCM and SPPM. Omitting the collision weight entirely — which those
+two integrators did, while the path tracer applied it all along — biases any
+medium whose channels differ, compounding once per scattering event: on a
+chromatic scatterer VCM read blue at 0.36x the path tracer, and about 0.97x
+once the weight was restored. Neither defect is visible in a grey fog, which
+is why both survived so long.
+
 ### Local majorants: 6.7x
 
 A single global majorant forces the delta-tracking step size to whatever

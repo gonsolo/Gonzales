@@ -657,10 +657,16 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var ff = sample_homogeneous_free_flight(med, t_hit, pcg)
             if ff.collided:
                 # Volume scatter — store VP here
-                # The collision weight is the chromatic ratio to the sampled
-                # (red) channel; without it a chromatic medium is biased at
-                # every scattering event. Exactly 1 for a grey medium.
-                vp.beta *= ff.weight
+                # NOTE: ff.weight (the chromatic collision ratio) is deliberately
+                # NOT applied here, unlike bdpt.mojo. Applying it to both the VP
+                # and photon subpaths measurably WORSENED SPPM's agreement with
+                # the path tracer on a chromatic scatterer (blue 1.22x -> 2.03x
+                # of PT; chroma spread 1.38 -> 2.14), while VCM improved sharply
+                # under the same change. SPPM's volume path has a separate,
+                # unresolved discrepancy -- it already sits ~5% off PT on a GREY
+                # scatterer -- so the weight is withheld here until that is
+                # root-caused rather than shipping a measured regression.
+                # See Scenes/media-chromatic-scatter.pbrt.
                 vp.pos = ro + rd * ff.t_free
                 vp.normal = Vec3f(Float32(0), Float32(1), Float32(0))
                 vp.alb = ff.albedo
@@ -1121,8 +1127,6 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 # coefficient is not a color"). Band-picking degenerates to
                 # exactly the channel value in every lane.
                 flux *= rgb_bands_to_spectral_sample((ff.albedo).r, (ff.albedo).g, (ff.albedo).b, ph_wavelengths)
-                # Chromatic collision weight (ratio to the sampled channel).
-                flux *= rgb_bands_to_spectral_sample(ff.weight.r, ff.weight.g, ff.weight.b, ph_wavelengths)
                 # Sample new isotropic direction (uniform sphere)
                 var usp1 = pcg.next_float()
                 var usp2 = pcg.next_float()

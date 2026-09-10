@@ -52,6 +52,22 @@ def _spec_close(a: SpectralSample, b: Vec3f) -> Bool:
 def _spec_close_spec(a: SpectralSample, b: SpectralSample) -> Bool:
     return _close(a.v0, b.v0) and _close(a.v1, b.v1) and _close(a.v2, b.v2)
 
+# Hero wavelengths chosen so lanes 0/1/2 fall in the RED/GREEN/BLUE bands
+# respectively, under the sRGB-primary crossovers band-picking uses (blue
+# below 490nm, green to 580nm, red above). That makes a band-picked RGB
+# coefficient land as (r, g, b) on lanes 0/1/2 -- so a test can state its
+# expectation in plain RGB while genuinely exercising the band-pick path.
+# NULL_WL (all zeros) cannot: every lane would read as blue.
+comptime BAND_WL = SampledWavelengths(Float32(600.0), Float32(550.0),
+                                      Float32(450.0), Float32(700.0),
+                                      Float32(1.0))
+
+@always_inline
+def _eval_v_bands(v: BDPTVertex, dir: Vec3f, sd: SceneDescriptor2_C) -> SpectralSample:
+    var h = null_spectral_handle()
+    return _eval_vertex_spectral(v, dir, sd, h.coeffs, h.res, h.cie_x, h.cie_y,
+                                 h.cie_z, h.d65, BAND_WL)
+
 @always_inline
 def _eval_v(v: BDPTVertex, dir: Vec3f, sd: SceneDescriptor2_C) -> SpectralSample:
     var h = null_spectral_handle()
@@ -186,7 +202,12 @@ def test_eval_vertex_volume_scatter_matches_isotropic_phase_function() raises:
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
     var dir = Vec3f(0.267261, 0.534522, 0.801784)  # arbitrary; ignored by volume path
-    var result = _eval_v(v, dir, _dummy_sd())
+    # BAND_WL, not NULL_WL: a volume vertex's alb is the single-scattering
+    # albedo sigma_s/sigma_t, a per-channel COEFFICIENT, so it is band-picked
+    # rather than pushed through the Jakob-Hanika reflectance upsampler (see
+    # docs/02_spectra_and_color.md, "A coefficient is not a color"). With
+    # all-zero wavelengths every lane would band-pick as blue.
+    var result = _eval_v_bands(v, dir, _dummy_sd())
     assert_true(_spec_close(result, Vec3f(
         Float32(0.3) * INV_FOUR_PI, Float32(0.4) * INV_FOUR_PI, Float32(0.5) * INV_FOUR_PI)))
 

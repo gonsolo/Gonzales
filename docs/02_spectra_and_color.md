@@ -126,9 +126,36 @@ just picks whichever of R, G, or B "owns" each hero wavelength by the usual
 sRGB-primary crossover (blue below 490 nm, green to 580 nm, red above), which
 degenerates to exactly 1 in every lane for a grey ratio — the invariant that
 actually matters here. It carries no more chromatic information than the
-original RGB coefficient had; a physically accurate chromatic-extinction
-model would need hero-wavelength free-flight sampling with MIS across
-wavelengths, which is a separate, larger piece of work.
+original RGB coefficient had.
+
+Band-picking is now used consistently for every medium *coefficient*: the
+free-flight weights, and the single-scattering albedo at each of the three
+places that consume it. Three of those used to push the albedo through the
+reflectance upsampler instead, so a grey medium acquired a D65-shaped tint
+once per scattering event — the same defect this section describes, just in
+a spot nobody had checked.
+
+**What remains, and it is measurable.** Sampling still draws the free-flight
+distance from one channel (red) and reweights the others by their ratio to
+it. That is unbiased, and a chromatic scattering test now shows VCM agreeing
+with the path tracer to about 3% where it was 2.8x apart. But the *round
+trip* — three authored RGB numbers, band-picked into four hero lanes,
+reconstructed through the CIE curves — is lossy in a way no estimator can
+undo. On a pure absorber with `sigma_a = (0.25, 0.5, 1.0)`, where the
+analytic answer is exactly `exp(-tau)` per channel, every integrator
+including the path tracer reads blue at roughly a quarter of it
+(`Scenes/media-chromatic-absorb.pbrt`). A grey medium of the same optical
+depth is correct to 3 decimal places, which locates the error in the
+representation rather than in the transport.
+
+Closing that needs a genuinely spectral `sigma_t(lambda)` rather than three
+numbers, plus hero-wavelength free-flight sampling with MIS across
+wavelengths. The MIS half is derivable — sample from one lane, weight by the
+balance heuristic over all four lanes' free-flight densities — but it is
+blocked on representation: `Medium_C` stores RGB, and SPPM's `VisiblePoint`
+carries a deliberately RGB throughput (its `tau` accumulates across passes
+whose hero wavelengths differ, so it *cannot* be spectral). Both are real
+architectural commitments, not oversights.
 
 **Converting back:** a finished pixel's spectral radiance sample is turned
 back into a displayable color by a direct Monte Carlo estimate of the CIE
