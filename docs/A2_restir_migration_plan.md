@@ -905,6 +905,16 @@ for volumetric caustics indefinitely. Reasoning, not assertion:
 Goal: one reservoir where DI/GI, SMS, volumetric, and bidirectional
 candidates compete, so technique selection emerges from resampling weights.
 
+> **Status note (2026-09-10).** 9.2's last actionable idea — the
+> bias-bounded naive plug-in — was measured against 158,824 real SMS solves
+> and **refuted**; see 9.2. That removes the remaining hope of a *single*
+> joint weight covering SMS, and leaves separate-reservoir-and-sum as the
+> answer for the specular technique, matching ReSTIR BDPT's own practice.
+> The realistic endpoint of this migration is therefore **one framework
+> with several reservoirs**, not one weight over everything: resampling
+> does the work where densities are tractable, and estimates are summed
+> where they are not. 9.1 and 9.3 are unaffected and still worth doing.
+
 - **9.1** Derive SMS's density in **area-measure units**, the way VCM
   expresses its merge kernel as `η_vcm = π r² N` — already implemented
   correctly at `bdpt.mojo:5352` and the working template.
@@ -931,6 +941,48 @@ candidates compete, so technique selection emerges from resampling weights.
   (no joint weight, already published) when it isn't. Needs: verifying
   the bound holds with gonzales's actual `n_i`/`M` scales, and picking a
   threshold empirically against the validation scenes.
+  **MEASURED 2026-09-10 — the bound is correct, its premise is not. The
+  pragmatic direction is REFUTED; use the fallback unconditionally.**
+  Instrumented `sms_solve_bernoulli` with a hit-rate probe
+  (`SMS_QHAT_PROBE_M`, default 0; the existing trial count `T ~ Geom(q)`
+  is unbiased for `1/q`, and `1/T` is *not* an unbiased estimator of `q`,
+  which is what the denominator needs). 158,824 real SMS solves on
+  `sphere_sms.xml`; analysis reproducible via `Scenes/sms_qhat_analysis.py`.
+  1. **The algebra simplifies and `n_SMS` cancels entirely**: with
+     `Var(q̂)=q(1-q)/M` and `r = C/(n_SMS·q)`, the relative bias is
+     `(1-q)/(M·q·(1+r)²)`. So it is governed by `q` and `M`, *not* by the
+     `n_i` scales this entry expected to be the deciding factor.
+  2. **The closed form is accurate where it is finite** — within 1–7% of
+     the exact expectation over `k ~ Binom(M,q)` across the whole measured
+     `q` range. The math was right.
+  3. **But at `r = 0` the true bias is infinite, not small.** `q̂ = k/M`
+     is exactly zero for **0.40%** of solves, making `F = 0`. The Taylor
+     bound predicts `8e-4` where the truth is unbounded, because the
+     expansion assumes `δ ≪ F₀` and that fails in precisely this tail.
+     `P(q̂=0)` plateaus at ~4e-3 no matter how large `M` grows — those
+     solves have genuinely tiny `q` (the `SMS_BERNOULLI_MAX_TRIALS` cap
+     cases), so no sample budget rescues them.
+  4. **`r = 0` *is* the SMS regime**, which inverts this entry's premise.
+     The premise was that `q_SMS` is small relative to the rest of the sum
+     because "most pixels aren't on a specular chain" — but pixels not on a
+     specular chain never invoke SMS at all. SMS only produces a candidate
+     where it is the *only* technique with support: the caster is a smooth
+     (delta) `dielectric`, so NEE and BSDF sampling have zero density on
+     that path. Measured corroboration from the same session: a dielectric
+     blocks the straight shadow ray, and the fallback ray contributes
+     exactly 0 (`_shadow_is_null_material` exempts only interface/null
+     materials). So `C = 0` exactly where the joint weight would be used.
+  5. **Cost, at `r = 0`, from the real `q` distribution** (median 0.70,
+     p5 0.156): reaching 1% bias needs `M ≥ 40` at median `q`, `≥ 121` at
+     p25, `≥ 540` at p5 — extra Newton solves *per SMS solve*, against the
+     existing Bernoulli estimator's median `T = 1`. Even at `M = 64`, 41%
+     of solves exceed 1% bias and route to the fallback; `M = 1024` still
+     leaves 2.8%.
+  So the threshold would send most SMS work down the fallback path anyway,
+  at a ~500× cost multiplier, while leaving a hard division-by-zero tail no
+  budget removes. **Do not implement the switch.** Phase 6's separate
+  reservoir is not a fallback here — it is the answer, which is exactly
+  what the independent confirmation below already indicates.
   **Second independent confirmation (re-verified full text 2026-08-02):**
   ReSTIR BDPT's own caustics reservoirs use exactly this strategy for its
   `t≤1` caustic paths — it does not attempt a joint MIS weight against an
