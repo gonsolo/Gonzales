@@ -17,6 +17,8 @@ from .geometry import (
     Sphere_C, Curve_C, PrimId_C, Instance_C, DistantLight_C, InfiniteLight_C, PointLight_C,
     MeasuredBRDF_C, GpuTexture_C,
     dot, cross, fr_dielectric, sphere_outward_normal, refract, PI, INV_FOUR_PI, INV_PI,
+    HomogeneousFreeFlight, sample_homogeneous_free_flight, medium_sigma_t_spectral,
+    spectral_free_flight_weight,
 )
 from .bvh import (
     BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres, _mk_sd_full,
@@ -30,7 +32,7 @@ from .rng import PCG32
 from .transform import matrix_invert
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, denoise
-from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_homogeneous_free_flight, sample_area_light_uniform, _HSIZE, _hash_cell, _sppm_render_core, spectral_free_flight_weight, medium_sigma_t_spectral
+from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_area_light_uniform, _HSIZE, _hash_cell, _sppm_render_core
 from .sppm import (
     SPPMPixel, SPPMPhoton, _sppm_reset_grid_cell, _sppm_insert_photon,
     _sppm_gather_one, _sppm_vp_brdf, _sppm_nee_one,
