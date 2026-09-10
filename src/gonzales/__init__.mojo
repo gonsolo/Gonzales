@@ -248,7 +248,7 @@ def main() raises:
     path_cstr[path_len] = UInt8(0)
 
     if pixel_x >= 0 and pixel_y >= 0:
-        debug_trace_pixel(path_cstr, pixel_x, pixel_y)
+        debug_trace_pixel(path_cstr, pixel_x, pixel_y, override_w=override_w, override_h=override_h)
     elif use_vulkan_rt:
         debug_render_vulkanrt(path_cstr, verbose)
     elif interactive:
