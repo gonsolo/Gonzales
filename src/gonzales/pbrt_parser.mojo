@@ -12,7 +12,7 @@ from .lexer import (PbrtScanner, scanner_open, scanner_free, scanner_is_at_end,
                     _psc_skip_params, _psc_skip_line)
 from .parse_types import (SceneParseState, MeshAccum, NamedMaterial,
                            ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX)
-from .geometry import (RGB, SampledSpectrum, Point3f, Vec3f, Material_C, MatKind, AreaLight_C,
+from .geometry import (RGB, Point3f, Vec3f, Material_C, MatKind, AreaLight_C,
                         Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area, dot, DistantLight_C, PointLight_C, InfiniteLight_C,
                         TriangleMesh_C, PrimId_C, Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, PI,
                         LightSampler_C, Instance_C, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, _is_real_ptr)
@@ -2672,7 +2672,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
     if ns > 0:
         var sph_buf = alloc[Sphere_C](ns)
         for i in range(ns):
-            var em = SampledSpectrum(s[0].spheres_rgb[i].r, s[0].spheres_rgb[i].g, s[0].spheres_rgb[i].b)
+            var em = RGB(s[0].spheres_rgb[i].r, s[0].spheres_rgb[i].g, s[0].spheres_rgb[i].b)
             var al_flag = Int8(1) if s[0].spheres_al[i] else Int8(0)
             var sph_mat_idx = s[0].spheres_mat[i]
             if sph_mat_idx == Int32(-1) and not s[0].spheres_al[i]:
@@ -2858,8 +2858,8 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
     if nm > 0:
         var med_buf = alloc[Medium_C](nm)
         for i in range(nm):
-            var sa = SampledSpectrum(s[0].med_sa[i*3], s[0].med_sa[i*3+1], s[0].med_sa[i*3+2])
-            var ss = SampledSpectrum(s[0].med_ss[i*3], s[0].med_ss[i*3+1], s[0].med_ss[i*3+2])
+            var sa = RGB(s[0].med_sa[i*3], s[0].med_sa[i*3+1], s[0].med_sa[i*3+2])
+            var ss = RGB(s[0].med_ss[i*3], s[0].med_ss[i*3+1], s[0].med_ss[i*3+2])
             med_buf[i] = Medium_C(sa, ss, s[0].med_g[i],
                                   s[0].med_grid_idx[i], s[0].med_nvdb_idx[i],
                                   s[0].med_nvdb_temp_idx[i], s[0].med_le_scale[i],

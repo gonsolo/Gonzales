@@ -5,10 +5,13 @@
 # hold a hand-designed 3-Gaussian-basis approximation (layer 1); that was
 # retired once rgb2spec.mojo's real table was built and verified (layer 2)
 # — see project_spectral_rendering memory for the staged history. This is
-# layer 1+2 combined: self-contained and independently testable, NOT yet
-# wired into any integrator. `SampledSpectrum` in geometry.mojo remains an
-# alias for `RGB` until a later layer threads `SampledWavelengths` through
-# the shading context and switches that alias over.
+# layer 1+2 combined. It IS now wired into every integrator: all three
+# transport spectrally (see project_spectral_throughput_flip). geometry.mojo's
+# `SampledSpectrum = RGB` alias, which this comment used to point at as the
+# thing a later layer would "switch over", has been deleted -- the flip did
+# not happen by swapping it, and afterwards a type named SampledSpectrum that
+# was three floats only misled. RGB is now named RGB wherever a quantity
+# genuinely has three authored channels.
 
 from gonzales.sampling import mix_bits_u64
 from gonzales.rgb2spec import (
@@ -447,7 +450,7 @@ def spectral_sample_to_rgb(
     """Monte-Carlo estimate of the CIE XYZ integral from one hero-wavelength
     sample (exact tabulated CIE curves, same data the table itself was
     fitted against), then XYZ -> linear sRGB. Divides by the sampling pdf and
-    by CIE_Y_INTEGRAL, matching PBRT's SampledSpectrum::ToXYZ/ToRGB — the
+    by CIE_Y_INTEGRAL, matching PBRT's RGB::ToXYZ/ToRGB — the
     unbiased estimator for integral(radiance(lambda) * cie_x/y/z(lambda) dlambda)
     is (1/N) * sum_i radiance_i * cie_*(lambda_i) / pdf_i."""
     # No table loaded (null_spectral_handle): lanes 0/1/2 carry plain R/G/B,

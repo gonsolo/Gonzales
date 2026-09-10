@@ -41,13 +41,17 @@ to 40 bytes, breaking the one-node-per-cache-line layout.
 All arithmetic is in *scene-linear* space. The `luma()` method returns the
 CIE Y luminance (Rec. 709 primaries), used for MIS PDF heuristics.
 
-`SampledSpectrum` is currently a type alias for `RGB`:
-
-<!-- <<listing: SampledSpectrum>> -->
-
-This one-line alias makes every shader forward-compatible with a future
-hero-wavelength spectral representation — swapping the alias is the only
-change needed.
+`RGB` is used directly wherever a quantity genuinely has three authored
+channels — a light's emission, a medium's `sigma_a`/`sigma_s`, the denoiser's
+albedo AOV. There used to be a `SampledSpectrum = RGB` alias here, described
+as making shaders "forward-compatible with a future hero-wavelength spectral
+representation — swapping the alias is the only change needed." Both halves
+of that turned out to be wrong: the spectral flip happened anyway (see
+[Spectra and Color](02_spectra_and_color.md)), it needed far more than a
+one-line swap, and afterwards the alias actively misled — a type named
+`SampledSpectrum` that was three floats, sitting on medium coefficients in a
+renderer whose radiance transport is four hero wavelengths. It is gone. A
+type should not claim to be spectral while being RGB.
 
 ## Rays
 

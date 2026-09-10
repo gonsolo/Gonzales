@@ -12,7 +12,7 @@ from std.math import sqrt, cos, sin, tan, floor, log, exp, max, min, abs, ceildi
 from std.memory import alloc
 from std.atomic import Atomic
 from .geometry import (
-    RGB, SampledSpectrum, Point3f, Point2f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, Frame,
+    RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, Frame,
     TriangleMesh_C, Material_C, MatKind, AreaLight_C, Medium_C, MediumInterface_C,
     Sphere_C, Curve_C, PrimId_C, Instance_C, DistantLight_C, InfiniteLight_C, PointLight_C,
     MeasuredBRDF_C, GpuTexture_C,
@@ -1802,6 +1802,12 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var med = sd.mediums[Int(cur_med_idx)]
             var ff = sample_homogeneous_free_flight(med, t_hit, pcg)
             if ff.collided:
+                # Chromatic collision weight -- the ratio to the sampled (red)
+                # channel. Without it a chromatic medium is biased at every
+                # scattering event; exactly 1 for a grey medium. Applied to
+                # `beta` BEFORE the vertex stores it, so the stored throughput
+                # is the one arriving at the vertex.
+                beta *= rgb_bands_to_spectral_sample(ff.weight.r, ff.weight.g, ff.weight.b, wavelengths)
                 # Volume scatter vertex
                 var sp = ro + rd*ff.t_free
                 var v = _null_vertex()
@@ -1869,7 +1875,12 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # gap) x albedo x Li x reciprocal power-heuristic MIS / pdf.
                 # See project_sphere_light_nee_bug memory, "STILL OPEN: sphere
                 # lights + media under --vcm read 0.66x".
-                var alb_spec_v = spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, wavelengths)
+                # Albedo is a per-channel COEFFICIENT (sigma_s/sigma_t), not a
+                # reflectance -- band-pick it. spec_refl was used here, and
+                # RGB(a,a,a) does not upsample to a in every lane, so even a
+                # grey medium picked up a D65-shaped tint (see
+                # docs/02_spectra_and_color.md, "A coefficient is not a color").
+                var alb_spec_v = rgb_bands_to_spectral_sample((ff.albedo).r, (ff.albedo).g, (ff.albedo).b, wavelengths)
                 var phase_alb_v = alb_spec_v * INV_FOUR_PI
                 for li_v in range(_bdpt_simple_light_count(sd)):
                     var ls_v = _bdpt_sample_simple_light(sd, li_v, sp.to_simd(), pcg)
@@ -1902,7 +1913,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # transmittance is already carried by the pass-through
                 # probability, so multiplying the FULL Beer-Lambert factor
                 # here double-counted it).
-                beta *= rgb_bands_to_spectral_sample(ff.transmittance.r, ff.transmittance.g, ff.transmittance.b, wavelengths)
+                beta *= rgb_bands_to_spectral_sample(ff.weight.r, ff.weight.g, ff.weight.b, wavelengths)
                 # MIS: dVCM must equal 1/P(prev -> this vertex), and reaching a
                 # SURFACE through a medium carries a survival factor
                 # FF = exp(-sigma_t * d) that the vacuum recursion above
@@ -3035,6 +3046,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             var med = sd.mediums[Int(cur_med_idx)]
             var ff = sample_homogeneous_free_flight(med, t_hit, pcg)
             if ff.collided:
+                # Chromatic collision weight; see the camera-side comment.
+                flux *= rgb_bands_to_spectral_sample(ff.weight.r, ff.weight.g, ff.weight.b, wavelengths)
                 var sp = ro + rd*ff.t_free
                 var v = _null_vertex()
                 v.pos = sp
@@ -3080,7 +3093,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 ro = sp + rd*Float32(0.0002)
                 return True   # volume free-flight scatter: no vertex stored this bounce, path continues
             else:
-                flux *= rgb_bands_to_spectral_sample(ff.transmittance.r, ff.transmittance.g, ff.transmittance.b, wavelengths)
+                flux *= rgb_bands_to_spectral_sample(ff.weight.r, ff.weight.g, ff.weight.b, wavelengths)
                 # Same missing free-flight factor on dVCM as the camera path --
                 # see _bdpt_camera_path_bounce's matching comment for the
                 # derivation and the measured error growth with optical depth.
@@ -3730,7 +3743,13 @@ def _eval_vertex_spectral(
     if v.is_delta != Int32(0):
         return SpectralSample(Float32(0))
     if v.is_surface == Int32(0):
-        var alb_spec = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, v.alb.r, v.alb.g, v.alb.b, wavelengths)
+        # A volume vertex's alb is the single-scattering albedo
+        # sigma_s/sigma_t -- a per-channel COEFFICIENT, not a reflectance.
+        # rgb_to_spectral_sample (the Jakob-Hanika reflectance upsampler) was
+        # used here: RGB(a,a,a) does not come back as a in every lane, so a
+        # grey medium acquired a D65-shaped tint at every connect/merge. See
+        # docs/02_spectra_and_color.md, "A coefficient is not a color".
+        var alb_spec = rgb_bands_to_spectral_sample(v.alb.r, v.alb.g, v.alb.b, wavelengths)
         return alb_spec * INV_FOUR_PI
     var vn = v.normal.to_simd()
     if v.mat_kind == Int32(1):
