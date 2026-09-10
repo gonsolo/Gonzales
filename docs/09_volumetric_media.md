@@ -10,13 +10,14 @@ went through before they matched a reference. All code lives in
 the GPU kernel), `sppm.mojo`/`bdpt.mojo` (their own simpler
 `sample_homogeneous_free_flight`), and `nanovdb.mojo`.
 
-## Three representations
+## Three representations, plus one that compiles down to the second
 
 | Medium | Density | Path tracer | BDPT/VCM, SPPM |
 |---|---|---|---|
 | `homogeneous` | constant | closed-form transmittance | closed-form transmittance |
 | `uniformgrid` | dense `nx*ny*nz` float array | delta tracking | not supported |
 | `nanovdb` | sparse `.nvdb` grid | delta tracking, point-sampled or trilinear | not supported |
+| `cloud` | procedural Perlin noise, **baked to `uniformgrid`** | delta tracking | not supported |
 
 The asymmetry is deliberate, not an oversight: BDPT/VCM and SPPM only ever
 exercise homogeneous media (glass-of-water and volumetric-caustic scenes)
@@ -24,6 +25,34 @@ today, so they keep their own smaller `sample_homogeneous_free_flight`
 rather than sharing the path tracer's richer, heterogeneous-capable
 `_sample_medium_core`. Extending them to `uniformgrid`/`nanovdb` is future
 work, not a known bug.
+
+### `cloud`: baked, not live
+
+PBRT-v4's `MakeNamedMedium "cloud"` is procedural — a `Density(p)` function
+built from Ken Perlin's improved noise (5 octaves, plus a 2-octave
+"wispiness" domain warp, plus an altitude falloff), evaluated live at
+whatever points the ray marcher happens to visit. `noise.mojo` ports that
+`Density` function line-for-line from real pbrt source (permutation table
+included, transcribed via script, not retyped), but gonzales does **not**
+evaluate it live during rendering. `handle_named_medium`'s `is_cloud`
+branch (`pbrt_parser.mojo`) instead **bakes it once, at parse time**, into
+an ordinary `uniformgrid` density array (`CLOUD_BAKE_RES`^3 = 160^3, approx.
+4.1M samples, evaluated at voxel centers over the medium's `[p0,p1]` bounds)
+and hands it to the exact same `elif is_grid:` code path that reads a
+scene-authored `uniformgrid`. Every downstream consumer -- delta tracking,
+local majorants, GPU upload, NEE ratio tracking -- needs zero changes,
+because none of them know or care how a dense grid's values were produced.
+
+The trade: a fixed bake resolution instead of infinite-resolution live
+noise. `CLOUD_BAKE_RES` is sized against the finest octave's own spatial
+frequency (`frequency * 1.99^4`, approx. 78 cycles across the unit box at the
+scene corpus's default `frequency=5`) so it oversamples the octaves that
+carry most of the noise sum's energy; the very finest octave (1/16th the
+first octave's amplitude) softens slightly rather than aliasing. Verified
+by rendering `clouds.pbrt` against a real pbrt-v4 build: the resulting
+cloud *shape* -- not just "some clouds instead of flat sky" -- matches
+closely enough (matching dark rifts in matching positions) to corroborate
+the noise port itself, not merely the baking mechanics.
 
 ## Free-flight sampling: delta and ratio tracking
 

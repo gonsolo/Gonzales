@@ -17,6 +17,7 @@ from .geometry import (RGB, Point3f, Vec3f, Material_C, MatKind, AreaLight_C,
                         TriangleMesh_C, PrimId_C, Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, PI,
                         LightSampler_C, Instance_C, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, _is_real_ptr)
 from .nanovdb import nvdb_load, nvdb_load_named, nvdb_data, nvdb_size, nvdb_free, nvdb_index_bbox, nvdb_value_range, nvdb_map_invmatf, nvdb_map_vecf
+from .noise import _perlin_perm_table, cloud_density
 from .transform import matrix_multiply, matrix_invert, transform_points, transform_normals
 from .bvh import BVH2Node, SceneDescriptor2_C, build_bvh2
 from .spectrum import SpectralHandle
@@ -598,6 +599,20 @@ def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
 
 # ── Medium handlers ───────────────────────────────────────────────────────────
 
+# Resolution the procedural "cloud" medium (see handle_named_medium's
+# is_cloud branch) is baked to. pbrt evaluates its noise live, at whatever
+# resolution the ray marcher happens to sample; baking commits to one fixed
+# resolution up front. 160^3 (~4.1M voxels, ~16MB) sits comfortably above
+# the finest octave's own spatial frequency for this scene corpus's default
+# `frequency=5` (5 octaves at a 1.99x ratio put the last octave's frequency
+# at ~5*1.99^4 =~ 78 cycles across the unit box -- 160 samples/axis is a
+# ~2x oversample of that, plenty for the low/mid octaves that carry most of
+# the noise sum's amplitude; the finest octave, contributing only 1/16 of
+# the first octave's weight, softens slightly rather than aliasing). Not
+# tied to any specific scene's `frequency` value -- a scene requesting a
+# much higher frequency would need a higher CLOUD_BAKE_RES to stay crisp.
+comptime CLOUD_BAKE_RES: Int = 160
+
 def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                                   s: UnsafePointer[SceneParseState, MutExternalOrigin]):
     var name_buf = alloc[UInt8](64)
@@ -615,6 +630,7 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     var is_hom = type_str == "homogeneous"
     var is_grid = type_str == "uniformgrid"
     var is_nvdb = type_str == "nanovdb"
+    var is_cloud = type_str == "cloud"
 
     # sigma_a/sigma_s: rgb triple, OR inline numeric spectrum array (mean of
     # samples, replicated to all 3 channels) via the same float-or-rgb
@@ -682,6 +698,62 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         # (shouldn't happen for well-formed scenes, but keeps indexing safe).
         for _ in range(copy_n, expected_n):
             s[0].grid_density.append(Float32(0))
+    elif is_cloud:
+        # PBRT-v4's procedural Perlin-noise CloudMedium. No baked asset file
+        # (unlike "nanovdb") -- density is a live noise function of world
+        # position, see noise.mojo's cloud_density (ported line-for-line
+        # from real pbrt source, not reconstructed from memory). Baked HERE,
+        # at parse time, into an ordinary dense grid -- i.e. this reuses the
+        # exact "uniformgrid" branch just above verbatim (same grid_*
+        # arrays, same med_grid_idx indexing), just with the density array
+        # populated by evaluating cloud_density at each voxel center instead
+        # of being read from the scene file. That means every downstream
+        # consumer (delta tracking, local majorants, the GPU upload path,
+        # NEE ratio tracking) needs zero changes: they already only know
+        # "dense grid with a density array", not how it was produced.
+        #
+        # PBRT-v4 defaults sigma_a/sigma_s to ConstantSpectrum(1) when
+        # unspecified, same as GridMedium/NanoVDBMedium above.
+        var c_density = params.get_float("density", Float32(1))
+        var c_wispiness = params.get_float("wispiness", Float32(1))
+        var c_frequency = params.get_float("frequency", Float32(5))
+        var sa_eff_c = sa if sa_set else RGB(Float32(1))
+        var ss_eff_c = ss if ss_set else RGB(Float32(1))
+        var name_str_c = String(unsafe_from_utf8_ptr=name_buf.as_immutable())
+        s[0].med_names.append(name_str_c)
+        s[0].med_sa.append(sa_eff_c.r * scale); s[0].med_sa.append(sa_eff_c.g * scale); s[0].med_sa.append(sa_eff_c.b * scale)
+        s[0].med_ss.append(ss_eff_c.r * scale); s[0].med_ss.append(ss_eff_c.g * scale); s[0].med_ss.append(ss_eff_c.b * scale)
+        s[0].med_g.append(g_val)
+        s[0].med_grid_idx.append(Int32(len(s[0].grid_nx)))
+        s[0].med_nvdb_idx.append(Int32(-1))
+        s[0].med_nvdb_temp_idx.append(Int32(-1))
+        s[0].med_le_scale.append(Float32(0)); s[0].med_temp_offset.append(Float32(0)); s[0].med_temp_scale.append(Float32(1))
+        s[0].med_is_sss.append(Int32(0))
+
+        s[0].grid_nx.append(Int32(CLOUD_BAKE_RES)); s[0].grid_ny.append(Int32(CLOUD_BAKE_RES)); s[0].grid_nz.append(Int32(CLOUD_BAKE_RES))
+        s[0].grid_p0.append(g_p0.r); s[0].grid_p0.append(g_p0.g); s[0].grid_p0.append(g_p0.b)
+        s[0].grid_p1.append(g_p1.r); s[0].grid_p1.append(g_p1.g); s[0].grid_p1.append(g_p1.b)
+        for ci in range(16):
+            s[0].grid_ctm.append(s[0].ctm[ci])
+        s[0].grid_density_base.append(Int32(len(s[0].grid_density)))
+
+        # Voxel centers at half-integer offsets within [p0,p1] -- matches
+        # grid_sample_density's own half-texel convention (geometry.mojo),
+        # so the trilinear reconstruction of this baked grid lands exactly
+        # where cloud_density was evaluated, not off by half a cell.
+        var perm = _perlin_perm_table()
+        var ext_x = g_p1.r - g_p0.r
+        var ext_y = g_p1.g - g_p0.g
+        var ext_z = g_p1.b - g_p0.b
+        var inv_res = Float32(1.0) / Float32(CLOUD_BAKE_RES)
+        for zi in range(CLOUD_BAKE_RES):
+            var pz = g_p0.b + ext_z * (Float32(zi) + Float32(0.5)) * inv_res
+            for yi in range(CLOUD_BAKE_RES):
+                var py = g_p0.g + ext_y * (Float32(yi) + Float32(0.5)) * inv_res
+                for xi in range(CLOUD_BAKE_RES):
+                    var px = g_p0.r + ext_x * (Float32(xi) + Float32(0.5)) * inv_res
+                    var dv = cloud_density(perm, px, py, pz, c_frequency, c_wispiness, c_density)
+                    s[0].grid_density.append(dv)
     elif is_nvdb:
         # PBRT-v4's NanoVDBMedium ALSO defaults sigma_a/sigma_s to
         # ConstantSpectrum(1) when unspecified (media.cpp), same as
@@ -733,16 +805,17 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         # Unsupported medium type. This branch used not to exist, so an
         # unrecognised type appended NOTHING to med_names -- lookup_medium
         # then returned -1 and the MediumInterface bound to no medium at
-        # all, silently. `clouds.pbrt` (type "cloud", pbrt's procedural
-        # Perlin-noise CloudMedium) rendered as a bare null-material sphere
-        # you see straight through: a flat sky, no cloud, no warning. Same
-        # defect class as the .spd/.ply.gz/scale-texture drops -- parsed,
-        # recognised as "not mine", and discarded without a word.
+        # all, silently -- `clouds.pbrt` (type "cloud") used to hit exactly
+        # this (now fixed, see the is_cloud branch above): a bare
+        # null-material sphere you see straight through, no cloud, no
+        # warning. Same defect class as the .spd/.ply.gz/scale-texture
+        # drops -- parsed, recognised as "not mine", and discarded without
+        # a word.
         var bad_name = String(unsafe_from_utf8_ptr=name_buf.as_immutable())
         print("Warning: unsupported medium type '" + type_str
               + "' for medium '" + bad_name
               + "' — it is DROPPED, so any MediumInterface naming it renders as"
-              + " empty space. Supported: homogeneous, uniformgrid, nanovdb.")
+              + " empty space. Supported: homogeneous, uniformgrid, nanovdb, cloud.")
     name_buf.free()
 
 def lookup_medium(s: UnsafePointer[SceneParseState, MutExternalOrigin],
