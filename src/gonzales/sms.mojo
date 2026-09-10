@@ -50,6 +50,14 @@ comptime MAX_SMS_VERTICES: Int = 6
 # trade-off, not a correctness switch; the reference renderer's own scenes
 # set it to 10^7 and simply rely on the loop breaking early.
 comptime SMS_BERNOULLI_MAX_TRIALS: Int = 512
+# DIAGNOSTIC ONLY (Phase 9.2 measurement, 2026-09-10). When > 0,
+# sms_solve_bernoulli additionally fires this many INDEPENDENT fresh seeds and
+# counts how many converge back to X*, giving q_hat = k/M -- a hit-rate
+# estimator that is unbiased for q ITSELF, unlike the Bernoulli trial count T
+# which is unbiased for 1/q. Phase 9.2's joint balance-heuristic denominator
+# needs q, not 1/q, so this quantity does not otherwise exist in the renderer.
+# Costs M extra Newton solves per SMS solve: never enable in a real render.
+comptime SMS_QHAT_PROBE_M: Int = 0
 # Two Newton solves count as the SAME root when the directions x0->x_i agree
 # to within this much of cos=1 -- ported verbatim from the reference SMS
 # renderer's own uniqueness test (manifold_ss.cpp:
@@ -1342,4 +1350,14 @@ def sms_solve_bernoulli(
         if okk and sms_same_solution(x0, posk, pos0, n):
             matched = True; break
     _ = matched
+    comptime if SMS_QHAT_PROBE_M > 0:
+        var hits = 0
+        for _m in range(SMS_QHAT_PROBE_M):
+            var seed_m = verts_seed.copy()
+            sms_seed_randomize(x0, seed_m, n, pcg, jitter_scale)
+            var _walkm = sms_walk(x0, xL, seed_m, n, ldp_du, ldp_dv,
+                bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
+            if _walkm[0] and sms_same_solution(x0, _walkm[1], pos0, n):
+                hits += 1
+        print("QSMS", hits, SMS_QHAT_PROBE_M, Int(trials), n)
     return (True, pos0.copy(), bsdf0, jac0, trials)
