@@ -370,7 +370,8 @@ struct HomogeneousFreeFlight(TrivialRegisterPassable):
     var t_free: Float32     # sampled distance (meaningful either way)
     var sig_t:   Float32    # red-channel extinction sigma_a.r + sigma_s.r
     var albedo:  RGB        # single-scattering albedo at the collision point (only if collided)
-    var transmittance: RGB  # Beer-Lambert factor over the full segment (only if NOT collided)
+    var transmittance: RGB  # pass-through WEIGHT (only if NOT collided) -- see below,
+                            # this is a per-channel RATIO, not a Beer-Lambert factor
 
 @always_inline
 def sample_homogeneous_free_flight(med: Medium_C, t_surf: Float32, mut pcg: PCG32) -> HomogeneousFreeFlight:
@@ -384,7 +385,29 @@ def sample_homogeneous_free_flight(med: Medium_C, t_surf: Float32, mut pcg: PCG3
         var alb_g_s = med.sigma_s.g / sigma_t.g if sigma_t.g > Float32(0.0) else alb_s
         var alb_b_s = med.sigma_s.b / sigma_t.b if sigma_t.b > Float32(0.0) else alb_s
         return HomogeneousFreeFlight(True, t_free, sig_t, RGB(alb_s, alb_g_s, alb_b_s), RGB(Float32(1)))
-    var Tr = RGB(exp(-sigma_t.r * t_surf), exp(-sigma_t.g * t_surf), exp(-sigma_t.b * t_surf))
+    # Pass-through WEIGHT, not the raw Beer-Lambert factor. The distance was
+    # sampled from the red channel, so P(reach the surface) is ALREADY
+    # exp(-sigma_t.r * t_surf) -- that channel's transmittance is carried by
+    # the sampling probability itself. Only the RATIO of each channel's
+    # transmittance to the sampled one survives as a weight:
+    #     exp(-sigma_t_c * t) / exp(-sigma_t.r * t) = exp(-(sigma_t_c - sigma_t.r) * t)
+    # which is exactly 1 on red, and exactly 1 on every channel for a grey
+    # medium.
+    #
+    # This used to return the FULL exp(-sigma_t_c * t) on all three channels,
+    # which callers multiply into beta/flux -- double-counting the sampled
+    # channel's transmittance, so the expected contribution of a surface seen
+    # through a medium was exp(-2*sigma_r*t) where it should be
+    # exp(-sigma_r*t). Surfaces behind a medium came out too dark by exactly
+    # the transmittance, and unlike the chromatic terms this bit GREY media
+    # too. gpu.mojo's _sample_medium_core has always used the ratio (its own
+    # comment records the same fix); it simply never propagated to this
+    # BDPT/SPPM sampler.
+    var t_ref = exp(-sigma_t.r * t_surf)
+    if t_ref < Float32(1e-30): t_ref = Float32(1e-30)
+    var Tr = RGB(Float32(1.0),
+                 exp(-sigma_t.g * t_surf) / t_ref,
+                 exp(-sigma_t.b * t_surf) / t_ref)
     return HomogeneousFreeFlight(False, t_free, sig_t, RGB(Float32(0)), Tr)
 
 

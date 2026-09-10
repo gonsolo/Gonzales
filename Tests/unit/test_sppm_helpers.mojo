@@ -141,9 +141,19 @@ def test_free_flight_t_free_matches_closed_form_inversion_formula() raises:
     assert_true(ff.collided == (expected_t_free < t_surf))
 
 def test_free_flight_no_collision_gives_per_channel_beer_lambert_transmittance() raises:
-    """When t_free >= t_surf (short segment / low extinction), the returned
-    transmittance must be exp(-sigma_t_channel * t_surf) evaluated
-    PER CHANNEL — not just the red/hero channel used to drive sampling."""
+    """When t_free >= t_surf, the returned weight must be the per-channel
+    transmittance RATIO exp(-(sigma_t_c - sigma_t.r) * t_surf) -- exactly 1
+    on the red/hero channel the distance was sampled from, and exactly 1 on
+    every channel for a grey medium.
+
+    This test previously asserted the FULL exp(-sigma_t_c * t_surf) on all
+    three channels, i.e. it encoded the double-counting bug's own invariant:
+    the sampled channel's transmittance is already carried by the
+    pass-through probability, so returning it again made surfaces behind a
+    medium render too dark by exactly exp(-sigma_r * t). Measured on
+    Scenes/media-passthrough-absorb.pbrt, VCM and SPPM read 0.163x the
+    analytic answer before the fix and ~1.09x (matching the path tracer,
+    which never had the bug) after."""
     var sigma_a = RGB(Float32(0.1), Float32(0.2), Float32(0.3))
     var sigma_s = RGB(Float32(0.05), Float32(0.05), Float32(0.05))
     var med = _medium(sigma_a, sigma_s)
@@ -154,18 +164,46 @@ def test_free_flight_no_collision_gives_per_channel_beer_lambert_transmittance()
     var pcg = PCG32(UInt64(77), UInt64(3))
     var ff = sample_homogeneous_free_flight(med, t_surf, pcg)
     if not ff.collided:
-        var exp_r = exp(-(sigma_a.r + sigma_s.r) * t_surf)
-        var exp_g = exp(-(sigma_a.g + sigma_s.g) * t_surf)
-        var exp_b = exp(-(sigma_a.b + sigma_s.b) * t_surf)
-        assert_true(_close(ff.transmittance.r, exp_r))
-        assert_true(_close(ff.transmittance.g, exp_g))
-        assert_true(_close(ff.transmittance.b, exp_b))
+        var sig_r = sigma_a.r + sigma_s.r
+        var ratio_g = exp(-((sigma_a.g + sigma_s.g) - sig_r) * t_surf)
+        var ratio_b = exp(-((sigma_a.b + sigma_s.b) - sig_r) * t_surf)
+        # Red is the sampled channel: its transmittance is carried by the
+        # pass-through probability, so the weight is exactly 1.
+        assert_true(_close(ff.transmittance.r, Float32(1.0)))
+        assert_true(_close(ff.transmittance.g, ratio_g))
+        assert_true(_close(ff.transmittance.b, ratio_b))
     else:
         # sigma_t.r == 0.15 with t_surf == 0.5 collided anyway: still a
         # valid outcome (t_free < t_surf), just doesn't exercise the branch
         # this test targets. Assert the collided-branch invariant instead
         # so the test isn't a no-op either way.
         assert_true(ff.t_free < t_surf)
+
+def test_free_flight_grey_medium_pass_through_weight_is_exactly_one() raises:
+    """A GREY medium's pass-through weight must be identically 1 on every
+    channel: the distance was sampled from an extinction all three channels
+    share, so nothing is left over to weight by.
+
+    This is the sharpest statement of the double-counting bug -- the old code
+    returned exp(-sigma_t * t_surf) here, attenuating a surface seen through
+    the medium a second time on top of the sampling probability that already
+    contained it. Unlike the chromatic terms, this bit grey media too, which
+    is why it survived scenes that only ever used colourless fog."""
+    var med = _medium(RGB(Float32(0.4), Float32(0.4), Float32(0.4)),
+                      RGB(Float32(0.6), Float32(0.6), Float32(0.6)))
+    # sigma_t = 1.0 on every channel; a short segment so pass-through is likely.
+    var t_surf = Float32(0.05)
+    var found_pass_through = False
+    for i in range(64):
+        var pcg = PCG32(UInt64(i * 2 + 1), UInt64(11))
+        var ff = sample_homogeneous_free_flight(med, t_surf, pcg)
+        if not ff.collided:
+            found_pass_through = True
+            assert_true(_close(ff.transmittance.r, Float32(1.0)))
+            assert_true(_close(ff.transmittance.g, Float32(1.0)))
+            assert_true(_close(ff.transmittance.b, Float32(1.0)))
+    # Anti-vacuity: the loop must actually have exercised the branch.
+    assert_true(found_pass_through)
 
 # ── sample_area_light_uniform ────────────────────────────────────────────────
 
