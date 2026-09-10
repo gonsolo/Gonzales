@@ -875,8 +875,19 @@ def parse_and_render(
     var psc = mojo_parse_scene_any(path, verbose)
     if Int(psc) == 0:
         return Int32(-1)
-    if override_w > 0 and override_h > 0:
-        resize_film(psc, override_w, override_h)
+    if override_w > 0 or override_h > 0:
+        var eff_w = override_w
+        var eff_h = override_h
+        # --width (or --height) alone used to be silently DROPPED here --
+        # the render then went out at the scene's own, possibly huge, native
+        # resolution (bistro_cafe.pbrt is 1920x1080) with no indication the
+        # flag did nothing. Derive the missing dimension from the scene's
+        # native aspect ratio instead.
+        if eff_w <= 0:
+            eff_w = Int32(Int(eff_h) * Int(psc[0].film_w) / max(Int(psc[0].film_h), 1))
+        if eff_h <= 0:
+            eff_h = Int32(Int(eff_w) * Int(psc[0].film_h) / max(Int(psc[0].film_w), 1))
+        resize_film(psc, eff_w, eff_h)
     mojo_apply_overrides(psc, spp_override, Int32(0), Int32(0), seed_override)
 
     var fw = psc[0].film_w
@@ -1584,8 +1595,17 @@ def render_interactive(
     if Int(psc) == 0:
         print("Failed to parse scene")
         return
-    if override_w > 0 and override_h > 0:
-        resize_film(psc, override_w, override_h)
+    if override_w > 0 or override_h > 0:
+        var eff_w = override_w
+        var eff_h = override_h
+        # See parse_and_render's identical comment: --width/--height alone
+        # used to be silently dropped, rendering at the scene's native
+        # resolution instead. Derive the missing side from native aspect.
+        if eff_w <= 0:
+            eff_w = Int32(Int(eff_h) * Int(psc[0].film_w) / max(Int(psc[0].film_h), 1))
+        if eff_h <= 0:
+            eff_h = Int32(Int(eff_w) * Int(psc[0].film_h) / max(Int(psc[0].film_w), 1))
+        resize_film(psc, eff_w, eff_h)
 
     mojo_apply_overrides(psc, spp_override, Int32(0), Int32(0), seed_override)
 
