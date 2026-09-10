@@ -36,6 +36,8 @@ def _dummy_path(estimate: SpectralSample, albedo: RGB) -> PathState_C:
         Float32(0.0),       # lastBsdfPdf
         Int32(-1),          # current_medium_idx
         Float32(1.0),       # current_dielectric_ior
+        Float32(1.0),       # previous_dielectric_ior
+        Float32(1.0),       # eta_scale
         Int32(0),           # sampler_dim
         UInt64(0),          # sobol_idx
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),  # wavelengths

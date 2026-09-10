@@ -1112,8 +1112,16 @@ def _apply_russian_roulette(
     u_rr: Float32,
 ):
     if path_ptr[].bounce > 1:
-        var lum = path_ptr[].throughput.luma()
-        var q = Float32(1.0) - (lum if lum < Float32(0.95) else Float32(0.95))
+        # rr_lum, not raw throughput luma, decides termination -- eta_scale
+        # (1.0 for any path that hasn't transmitted through a dielectric)
+        # undoes the temporary eta^2 compression bxdf_sample_dielectric
+        # applies mid-transit through a higher-index medium, exactly like
+        # pbrt-v4's `rrBeta = beta * etaScale` (PathIntegrator::Li). Without
+        # this, RR reads that compression as real attenuation and kills
+        # paths that were about to be restored to full brightness on exit --
+        # see PathState_C.eta_scale's docstring.
+        var rr_lum = path_ptr[].throughput.luma() * path_ptr[].eta_scale
+        var q = Float32(1.0) - (rr_lum if rr_lum < Float32(0.95) else Float32(0.95))
         if u_rr < q:
             path_ptr[].active = 0
         else:
@@ -1278,11 +1286,27 @@ def shade_dielectric[use_gpu: Bool](
     var force_entering = path_ptr[].bounce == 0 and path_ptr[].current_medium_idx < Int32(0)
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
-    var (bs, normal, new_dielectric_ior) = bxdf_sample_dielectric(
-        geom_normal, ray_dir, ior, force_entering, pcg.next_float(), path_ptr[].current_dielectric_ior)
-    path_ptr[].current_dielectric_ior = new_dielectric_ior
+    var (bs, normal, new_dielectric_ior, new_previous_dielectric_ior) = bxdf_sample_dielectric(
+        geom_normal, ray_dir, ior, force_entering, pcg.next_float(),
+        path_ptr[].current_dielectric_ior, path_ptr[].previous_dielectric_ior)
 
     var is_reflect = (Int(bs.flags) & Int(BxDFFlags.reflect)) != 0
+    if not is_reflect:
+        # bxdf_sample_dielectric's radiance_transmit factor is eta*eta, and
+        # eta (its internal entering/exiting-relative ratio) always equals
+        # old_current_ior/new_current_ior here -- entering: eta =
+        # current_ior/ior = old/new (new_dielectric_ior becomes `ior`);
+        # exiting: eta = ior/previous_ior = old/new too, since old current_ior
+        # always equals this surface's own `ior` on an exit (it was set to
+        # `ior` by the matching entry) and new_dielectric_ior becomes the OLD
+        # previous_ior. So this reconstructs eta from the ior transition
+        # alone in both cases, no extra return value needed. See
+        # PathState_C.eta_scale's docstring for why RR needs this decoupled
+        # from the real throughput.
+        var eta_for_rr = path_ptr[].current_dielectric_ior / new_dielectric_ior
+        path_ptr[].eta_scale *= eta_for_rr * eta_for_rr
+    path_ptr[].current_dielectric_ior = new_dielectric_ior
+    path_ptr[].previous_dielectric_ior = new_previous_dielectric_ior
     var offset = (normal if is_reflect else -normal) * Float32(0.0001)
     var hit_point = ray_org + ray_dir * inter.tHit + offset
     _finish_delta_bounce(path_ptr, pcg, bs, SpectralSample(bs.f.r), hit_point, RGB(Float32(1)),

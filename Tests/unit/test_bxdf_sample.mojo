@@ -89,7 +89,7 @@ def test_dielectric_total_internal_reflection_always_reflects() raises:
     branch even when u_reflect is chosen to almost never reflect."""
     var geom_normal = NORMAL_Z()
     var ray_dir = Vec3f(0.99, 0.0, 0.1411).normalize().to_simd()  # dot(ray,n) > 0: exiting
-    var (bs, _, _) = bxdf_sample_dielectric(geom_normal, ray_dir, Float32(1.5), False, Float32(0.99))
+    var (bs, _, _, _) = bxdf_sample_dielectric(geom_normal, ray_dir, Float32(1.5), False, Float32(0.99))
     assert_true((Int(bs.flags) & Int(BxDFFlags.reflect)) != 0)
     assert_true(Int(bs.is_valid) == 1)
 
@@ -98,7 +98,7 @@ def test_dielectric_normal_incidence_transmits_straight_through() raises:
     reflectance, the ray must transmit essentially undeviated."""
     var geom_normal = NORMAL_Z()
     var ray_dir = Vec3f(0.0, 0.0, -1.0)  # straight in, entering
-    var (bs, _, _) = bxdf_sample_dielectric(geom_normal, ray_dir, Float32(1.5), True, Float32(0.999))
+    var (bs, _, _, _) = bxdf_sample_dielectric(geom_normal, ray_dir, Float32(1.5), True, Float32(0.999))
     assert_true((Int(bs.flags) & Int(BxDFFlags.transmit)) != 0)
     assert_true(_simd_close(bs.wi, ray_dir))
 
@@ -114,7 +114,7 @@ def test_dielectric_touching_same_ior_seam_is_optically_invisible() raises:
     var geom_normal = NORMAL_Z()
     var ray_dir = Vec3f(0.3, 0.0, -0.95393924).normalize().to_simd()  # oblique, entering
     var same_ior = Float32(1.5196)
-    var (bs, _, new_ior) = bxdf_sample_dielectric(
+    var (bs, _, new_ior, _) = bxdf_sample_dielectric(
         geom_normal, ray_dir, same_ior, False, Float32(0.999), same_ior)
     assert_true((Int(bs.flags) & Int(BxDFFlags.transmit)) != 0)
     assert_true(_simd_close(bs.wi, ray_dir))              # eta=1: no bend
@@ -122,7 +122,7 @@ def test_dielectric_touching_same_ior_seam_is_optically_invisible() raises:
     # Anti-vacuity: the OLD (no-current_ior) call on the identical geometry
     # must NOT transmit straight through -- it has real Fresnel reflectance
     # at this oblique angle and a non-trivial chance of reflecting/bending.
-    var (bs_old, _, _) = bxdf_sample_dielectric(geom_normal, ray_dir, same_ior, False, Float32(0.999))
+    var (bs_old, _, _, _) = bxdf_sample_dielectric(geom_normal, ray_dir, same_ior, False, Float32(0.999))
     assert_false(_simd_close(bs_old.wi, ray_dir))
 
 def test_dielectric_touching_different_ior_uses_relative_eta() raises:
@@ -133,12 +133,37 @@ def test_dielectric_touching_different_ior_uses_relative_eta() raises:
     var ray_dir = Vec3f(0.0, 0.0, -1.0)  # normal incidence: TIR/Fresnel can't mask a wrong eta
     var ior_b = Float32(1.6)
     var current = Float32(1.3)
-    var (bs, _, new_ior) = bxdf_sample_dielectric(geom_normal, ray_dir, ior_b, False, Float32(0.999), current)
+    var (bs, _, new_ior, _) = bxdf_sample_dielectric(geom_normal, ray_dir, ior_b, False, Float32(0.999), current)
     assert_true((Int(bs.flags) & Int(BxDFFlags.transmit)) != 0)
     assert_true(_close(new_ior, ior_b))
     # radiance_transmit carries eta^2; back it out and compare to 1.3/1.6.
     var expected_eta = current / ior_b
     assert_true(_close(bs.f.r, expected_eta * expected_eta))
+
+def test_dielectric_exiting_touching_same_ior_seam_is_optically_invisible() raises:
+    """The transparent-machines runaway-TIR bug (found via --pixel trace:
+    mesh124->mesh126 same-BK7 material correctly transmits invisibly on
+    ENTERING, then spuriously TIRs EXITING back toward mesh124 because the
+    old exit formula ignored current_ior/previous_ior entirely and used the
+    surface's raw ior). At this grazing angle (same ray_dir as the TIR test
+    above), eta=1.5196 (the old, wrong, unconditional exit formula) forces
+    TIR; the correct relative eta=ior/previous_ior=1.5196/1.5196=1.0 never
+    can. Anti-vacuity: the no-previous_ior default call TIRs on this exact
+    geometry, proving the assertion below is not vacuously true."""
+    var geom_normal = NORMAL_Z()
+    var ray_dir = Vec3f(0.99, 0.0, 0.1411).normalize().to_simd()  # grazing, exiting
+    var same_ior = Float32(1.5196)
+    var (bs, _, new_ior, new_prev) = bxdf_sample_dielectric(
+        geom_normal, ray_dir, same_ior, False, Float32(0.999), same_ior, same_ior)
+    assert_true((Int(bs.flags) & Int(BxDFFlags.transmit)) != 0)
+    assert_true(_simd_close(bs.wi, ray_dir))       # eta=1: no bend, no TIR
+    assert_true(_close(new_ior, same_ior))         # popped back to previous_ior (still K)
+    assert_true(_close(new_prev, Float32(1.0)))    # degraded to vacuum (depth-2 stack limit)
+    # Anti-vacuity: without previous_ior (defaults to vacuum), the OLD exit
+    # formula (eta=ior=1.5196) forces TIR at this same grazing angle.
+    var (bs_old, _, _, _) = bxdf_sample_dielectric(
+        geom_normal, ray_dir, same_ior, False, Float32(0.999), same_ior)
+    assert_true((Int(bs_old.flags) & Int(BxDFFlags.reflect)) != 0)
 
 def test_dielectric_reflect_leaves_current_ior_unchanged() raises:
     """TIR/reflect must NOT update current_ior -- the ray stays in whatever
@@ -146,9 +171,10 @@ def test_dielectric_reflect_leaves_current_ior_unchanged() raises:
     var geom_normal = NORMAL_Z()
     var ray_dir = Vec3f(0.99, 0.0, 0.1411).normalize().to_simd()  # grazing, TIR-forcing
     var current = Float32(1.4)
-    var (bs, _, new_ior) = bxdf_sample_dielectric(geom_normal, ray_dir, Float32(1.5), False, Float32(0.99), current)
+    var (bs, _, new_ior, new_prev) = bxdf_sample_dielectric(geom_normal, ray_dir, Float32(1.5), False, Float32(0.99), current)
     assert_true((Int(bs.flags) & Int(BxDFFlags.reflect)) != 0)
     assert_true(_close(new_ior, current))
+    assert_true(_close(new_prev, Float32(1.0)))  # previous_ior (defaulted) also untouched by reflect/TIR
 
 # ── bxdf_sample_thin_dielectric ─────────────────────────────────────────────
 
