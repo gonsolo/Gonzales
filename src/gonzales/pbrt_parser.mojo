@@ -756,47 +756,64 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
             s[0].grid_ctm.append(s[0].ctm[ci])
         s[0].grid_density_base.append(Int32(len(s[0].grid_density)))
 
-        # pbrt's real CloudMedium::Density(p) evaluates the noise function at
-        # the RAW medium-space point p (scaled only by "frequency") -- it
-        # never remaps through p0/p1 at all; "bounds" exists purely for the
-        # ray-marching majorant, not for where the noise pattern sits (see
-        # media.h -- Density() has no reference to `bounds` in its body).
-        # Baking into a dense [p0,p1] grid the way gonzales does makes p0/p1
-        # do double duty as "where in world space the baked voxels actually
-        # are", so when a scene omits them (this one does -- p0/p1 default
-        # to pbrt's OWN default of a 1-unit box), that box needs to actually
-        # cover the medium's real geometric extent, or most of it reads back
-        # zero density. Defer the bake until the first shape using this
-        # medium as an inside-interface is seen (handle_sphere_shape) and
-        # resize p0/p1 to that shape's world AABB first -- reserve the
-        # voxel slots now (zero-filled placeholder) so grid_density_base
-        # indexing stays valid either way.
-        var has_explicit_bounds = params.has("p0") or params.has("p1")
-        if has_explicit_bounds:
-            s[0].grid_cloud_pending.append(Int32(0))
-            s[0].grid_cloud_density.append(Float32(0)); s[0].grid_cloud_wispiness.append(Float32(0)); s[0].grid_cloud_frequency.append(Float32(0))
-            # Voxel centers at half-integer offsets within [p0,p1] -- matches
-            # grid_sample_density's own half-texel convention (geometry.mojo),
-            # so the trilinear reconstruction of this baked grid lands
-            # exactly where cloud_density was evaluated, not off by half a cell.
-            var perm = _perlin_perm_table()
-            var ext_x = g_p1.r - g_p0.r
-            var ext_y = g_p1.g - g_p0.g
-            var ext_z = g_p1.b - g_p0.b
-            var inv_res = Float32(1.0) / Float32(CLOUD_BAKE_RES)
-            for zi in range(CLOUD_BAKE_RES):
-                var pz = g_p0.b + ext_z * (Float32(zi) + Float32(0.5)) * inv_res
-                for yi in range(CLOUD_BAKE_RES):
-                    var py = g_p0.g + ext_y * (Float32(yi) + Float32(0.5)) * inv_res
-                    for xi in range(CLOUD_BAKE_RES):
-                        var px = g_p0.r + ext_x * (Float32(xi) + Float32(0.5)) * inv_res
-                        var dv = cloud_density(perm, px, py, pz, c_frequency, c_wispiness, c_density)
-                        s[0].grid_density.append(dv)
-        else:
-            s[0].grid_cloud_pending.append(Int32(1))
-            s[0].grid_cloud_density.append(c_density); s[0].grid_cloud_wispiness.append(c_wispiness); s[0].grid_cloud_frequency.append(c_frequency)
-            for _ in range(CLOUD_BAKE_RES * CLOUD_BAKE_RES * CLOUD_BAKE_RES):
-                s[0].grid_density.append(Float32(0))
+        # CORRECTED 2026-09-10 (second pass): the "auto-size p0/p1 to the
+        # enclosing shape's AABB" heuristic below (formerly gated on
+        # `has_explicit_bounds`, now removed) was itself wrong, verified
+        # against real pbrt source (media.h). pbrt's CloudMedium::Density(p)
+        # never references `bounds` in its body -- bounds exists PURELY to
+        # gate SampleRay's ray-medium overlap test. A ray segment outside
+        # [p0,p1] finds an EMPTY majorant iterator and is treated as vacuum
+        # -- Density() is simply never called there. So when a scene omits
+        # p0/p1 (as clouds.pbrt does), pbrt's own default of a 1-unit box
+        # `(0,0,0)-(1,1,1)` is NOT "most of a several-unit medium clipped to
+        # zero density" (the previous framing) -- it is pbrt's actual,
+        # intended behavior: the cloud is a small puffy region sitting in
+        # one corner of whatever larger shape (here, a radius-1 sphere)
+        # marks the medium interface, with the rest of that shape's volume
+        # being real vacuum. Verified directly against clouds.pbrt: no
+        # transform between WorldBegin and MakeNamedMedium "c", so the
+        # medium's own default box IS world-space [0,1]^3 -- entirely
+        # inside the sphere (centered (.5,.5,.5), radius 1), occupying only
+        # ~24% of its volume.
+        #
+        # Expanding the baked box to the sphere's AABB [-.5,1.5]^3 (8x the
+        # volume) evaluated cloud_density() far outside the altitude
+        # falloff's intended y in [0,1] range. For y<0 specifically, the
+        # additive base-pad term `2*max(0, 0.5-p.y)` exceeds 1 and clamps
+        # to full saturation (density=1, zero noise variation) across the
+        # ENTIRE y<0 half of the baked volume -- a large solid-opaque
+        # region with no structure at all, which is what was reading as
+        # "low contrast" (StdDev ~0.09 vs real pbrt's ~0.24 on this scene).
+        #
+        # Fix: just bake into [p0,p1] directly, exactly as given (pbrt's
+        # own defaults if the scene omits them) -- matching pbrt exactly,
+        # same as the sibling "uniformgrid" branch just above already does
+        # for its own p0/p1. No shape-AABB inference, no deferred/pending
+        # bake. `grid_cloud_pending` and `_resolve_pending_cloud_grid`
+        # become permanently dead (every grid_cloud_pending entry is now
+        # always 0) -- left in place rather than deleted, since
+        # _resolve_pending_cloud_grid's own early-return on pending==0
+        # already makes every call a safe no-op, and removing the dead
+        # code is a separate, lower-risk cleanup than this fix.
+        s[0].grid_cloud_pending.append(Int32(0))
+        s[0].grid_cloud_density.append(Float32(0)); s[0].grid_cloud_wispiness.append(Float32(0)); s[0].grid_cloud_frequency.append(Float32(0))
+        # Voxel centers at half-integer offsets within [p0,p1] -- matches
+        # grid_sample_density's own half-texel convention (geometry.mojo),
+        # so the trilinear reconstruction of this baked grid lands exactly
+        # where cloud_density was evaluated, not off by half a cell.
+        var perm = _perlin_perm_table()
+        var ext_x = g_p1.r - g_p0.r
+        var ext_y = g_p1.g - g_p0.g
+        var ext_z = g_p1.b - g_p0.b
+        var inv_res = Float32(1.0) / Float32(CLOUD_BAKE_RES)
+        for zi in range(CLOUD_BAKE_RES):
+            var pz = g_p0.b + ext_z * (Float32(zi) + Float32(0.5)) * inv_res
+            for yi in range(CLOUD_BAKE_RES):
+                var py = g_p0.g + ext_y * (Float32(yi) + Float32(0.5)) * inv_res
+                for xi in range(CLOUD_BAKE_RES):
+                    var px = g_p0.r + ext_x * (Float32(xi) + Float32(0.5)) * inv_res
+                    var dv = cloud_density(perm, px, py, pz, c_frequency, c_wispiness, c_density)
+                    s[0].grid_density.append(dv)
     elif is_nvdb:
         # PBRT-v4's NanoVDBMedium ALSO defaults sigma_a/sigma_s to
         # ConstantSpectrum(1) when unspecified (media.cpp), same as
