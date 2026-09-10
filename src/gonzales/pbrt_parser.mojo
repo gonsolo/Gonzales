@@ -862,6 +862,60 @@ def handle_disk_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     var n_tris = Int32(len(idx) // 3)
     store_mesh(s, pts.unsafe_ptr(), idx.unsafe_ptr(), n_verts, n_tris)
 
+def handle_bilinearmesh_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
+                               s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+    """PBRT `Shape "bilinearmesh"`: one or more planar-quad patches given as
+    "point3 P" (+ optional "integer indices", 4 per patch; pbrt's own
+    default when omitted and len(P)==4 is a single patch {0,1,2,3} -- see
+    pbrt-v4 BilinearPatch::CreateMesh). Each patch's 4 control points are in
+    pbrt's (p00, p10, p01, p11) convention -- verified against
+    ~/src/pbrt-v4/src/pbrt/shapes.cpp's BilinearPatch::NormalBounds
+    (v[0]=p00, v[1]=p10, v[2]=p01, v[3]=p11; n00 = cross(p10-p00, p01-p00)).
+
+    gonzales has no native bilinear-patch primitive (and the general
+    doubly-ruled surface is curved for a non-planar quad, which the
+    triangle-fan approximation below does not reproduce) -- but every known
+    use in the corpus (sportscar's area-light emitter planes) is a flat
+    quad, where two triangles are exact, not an approximation. Tessellated
+    into a mesh at parse time exactly like disk/loopsubdiv above, so it goes
+    through store_mesh and gets full trianglemesh machinery (BVH, area-light
+    NEE/ReSTIR, GPU, ...) for free.
+
+    Winding (p00, p10, p01) / (p10, p11, p01) matches pbrt's own outward
+    normal at corner (0,0) -- both triangles share that same winding sense,
+    so a planar quad's normal is uniform across the tessellation."""
+    var params = _psc_collect_params(handle)
+    var p = params.take_floats("P")
+    var indices = params.take_ints("indices")
+    var n_pts = Int32(len(p) // 3)
+
+    if len(indices) == 0:
+        if n_pts == Int32(4):
+            indices.append(Int32(0)); indices.append(Int32(1))
+            indices.append(Int32(2)); indices.append(Int32(3))
+        else:
+            print("Warning: Shape \"bilinearmesh\" with no \"integer indices\" needs exactly 4 points per pbrt's own single-patch default; got", n_pts, "-- shape dropped.")
+            return
+    elif len(indices) % 4 != 0:
+        print("Warning: Shape \"bilinearmesh\" \"integer indices\" length", len(indices), "is not a multiple of 4 -- shape dropped.")
+        return
+
+    var n_patches = len(indices) // 4
+    var idx = List[Int32]()
+    for patch in range(n_patches):
+        var i00 = indices[patch * 4 + 0]
+        var i10 = indices[patch * 4 + 1]
+        var i01 = indices[patch * 4 + 2]
+        var i11 = indices[patch * 4 + 3]
+        if i00 >= n_pts or i10 >= n_pts or i01 >= n_pts or i11 >= n_pts or i00 < 0 or i10 < 0 or i01 < 0 or i11 < 0:
+            print("Warning: Shape \"bilinearmesh\" patch", patch, "indexes past the end of \"P\" -- shape dropped.")
+            return
+        idx.append(i00); idx.append(i10); idx.append(i01)
+        idx.append(i10); idx.append(i11); idx.append(i01)
+
+    var n_tris = Int32(len(idx) // 3)
+    store_mesh(s, p.unsafe_ptr(), idx.unsafe_ptr(), n_pts, n_tris)
+
 def handle_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                      s: UnsafePointer[SceneParseState, MutExternalOrigin]):
     var shape_type = alloc[UInt8](64)
@@ -873,6 +927,7 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     var is_sphere = _psc_streq(shape_type, "sphere")
     var is_loopsubdiv = _psc_streq(shape_type, "loopsubdiv")
     var is_disk = _psc_streq(shape_type, "disk")
+    var is_bilinearmesh = _psc_streq(shape_type, "bilinearmesh")
     shape_type.free()
 
     if is_disk:
@@ -882,6 +937,13 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         # no object_depth restriction needed (unlike curve/sphere above,
         # which are native, uninstanced primitives).
         handle_disk_shape(handle, s)
+        return
+
+    if is_bilinearmesh:
+        # Tessellated into a mesh (handle_bilinearmesh_shape above), same
+        # store_mesh path as disk/loopsubdiv -- usable inside
+        # ObjectBegin/ObjectEnd instancing templates.
+        handle_bilinearmesh_shape(handle, s)
         return
 
     if is_curve:
