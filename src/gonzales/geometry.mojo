@@ -554,6 +554,23 @@ struct PathState_C(TrivialRegisterPassable):
     # Used for MIS weighting when the next bounce hits an emitter.
     var lastBsdfPdf: Float32
     var current_medium_idx: Int32  # -1 = vacuum; >= 0 = index into scene.mediums
+    # IOR of the dielectric SURFACE the path is currently transmitted inside
+    # of; 1.0 = vacuum. bxdf_sample_dielectric's entering/exiting test is
+    # purely local per-surface and otherwise always assumes the far side of
+    # any interface is vacuum -- correct for an isolated pane, wrong for two
+    # touching dielectric surfaces with no air gap (dense CAD assemblies,
+    # nested/adjoining parts): a ray already inside glass A that
+    # enters touching glass B got eta = 1/ior_B (as if from vacuum) instead
+    # of ior_A/ior_B. For A==B (an optically invisible seam) that measured
+    # 0.904x on Scenes/dielectric-touching-same-ior.pbrt where it should read
+    # 1.0. Updated only on a TRANSMIT (not reflect/TIR, which stays in
+    # whatever medium the path already occupied) and only on ENTERING (the
+    # exiting branch keeps using the surface's own ior directly, unchanged --
+    # deliberately NOT restored to a saved "previous" IOR on exit, since a
+    # single scalar cannot represent nesting deeper than one level; this is a
+    # scoped, documented limitation, not an oversight. See
+    # project_dielectric_radiance_transmission_bug.md.
+    var current_dielectric_ior: Float32
     var sampler_dim: Int32         # next Sobol dimension; 3 after primary ray (dims 0+1 film pos, dim 2 wavelength), +8 per bounce
     var sobol_idx: UInt64          # path's Z-Sobol sample index (from Morton code + si)
     # Hero-wavelength sample for spectral rendering (staged rollout, see
@@ -584,7 +601,7 @@ struct PathState_C(TrivialRegisterPassable):
     # scalar distance is exact, however many boundaries are crossed.
     var mis_null_dist: Float32
 # <</listing>>
-# PathState_C layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+8+20+4 = 128 bytes;
+# PathState_C layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+4+4+8+20+4 = 132 bytes (was 128 -- +4 for current_dielectric_ior);
 # size is computed via size_of[PathState_C]() everywhere (GPU buffer sizing included), not hardcoded.
 
 # ── Lights ────────────────────────────────────────────────────────────────────
