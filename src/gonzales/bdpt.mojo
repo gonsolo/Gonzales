@@ -1897,8 +1897,27 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 mis_null_dist = Float32(0)     # this vertex is the new origin
                 return True   # volume free-flight scatter: no vertex stored this bounce, path continues
             else:
-                # Beer-Lambert through full segment to surface
+                # Pass-through weight (a per-channel RATIO -- see
+                # sample_homogeneous_free_flight; the sampled channel's
+                # transmittance is already carried by the pass-through
+                # probability, so multiplying the FULL Beer-Lambert factor
+                # here double-counted it).
                 beta *= rgb_bands_to_spectral_sample(ff.transmittance.r, ff.transmittance.g, ff.transmittance.b, wavelengths)
+                # MIS: dVCM must equal 1/P(prev -> this vertex), and reaching a
+                # SURFACE through a medium carries a survival factor
+                # FF = exp(-sigma_t * d) that the vacuum recursion above
+                # (`dvcm_carry *= t_hit*t_hit`) does not include. So dVCM takes
+                # 1/FF. dVC needs nothing here: its second-order term carries
+                # FF_a/FF_b, and for a surface->surface edge both endpoints
+                # contribute the same survival factor, so the ratio is exactly 1.
+                # Verified against a brute-force enumeration of every strategy's
+                # full path pdf -- see Scenes/vcm_surface_ff_gap.py, where the
+                # uncorrected recursion's worst relative error runs 8e-16 in
+                # vacuum but 0.27 at sigma_t=0.1, 12 at 1.0 and 1e5 at 4.0.
+                # Identically 1 when sigma_t = 0, so this is inert outside media.
+                var ff_exp = ff.sig_t * t_hit
+                if ff_exp > Float32(60.0): ff_exp = Float32(60.0)  # defensive: e^-60 pass-through never occurs
+                dvcm_carry *= exp(ff_exp)
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[mat_idx]
@@ -3062,6 +3081,12 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 return True   # volume free-flight scatter: no vertex stored this bounce, path continues
             else:
                 flux *= rgb_bands_to_spectral_sample(ff.transmittance.r, ff.transmittance.g, ff.transmittance.b, wavelengths)
+                # Same missing free-flight factor on dVCM as the camera path --
+                # see _bdpt_camera_path_bounce's matching comment for the
+                # derivation and the measured error growth with optical depth.
+                var ff_exp_l = ff.sig_t * t_hit
+                if ff_exp_l > Float32(60.0): ff_exp_l = Float32(60.0)
+                dvcm_carry *= exp(ff_exp_l)
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[mat_idx]
