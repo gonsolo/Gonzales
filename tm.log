@@ -1,0 +1,6 @@
+GPU: NVIDIA GeForce RTX 3060 — 10496 MB free
+GPU: 1 infinite light(s) uploaded
+GPU: 1 texture(s) uploaded (1 unique file(s) loaded)
+GPU: scene uploaded
+Rendering: 8 / 32 spp (25.0%) | Elapsed: 0.4s | Total Est.: 1.4s                Rendering: 16 / 32 spp (50.0%) | Elapsed: 0.6s | Total Est.: 1.2s                Rendering: 24 / 32 spp (75.0%) | Elapsed: 0.9s | Total Est.: 1.2s                Rendering: 32 / 32 spp (100.0%) | Elapsed: 1.2s | Total Est.: 1.2s                Rendering: 32 / 32 spp (100.0%) | Done: 1.2s                
+Gonzales Total Execution Time: 4.734013544 s

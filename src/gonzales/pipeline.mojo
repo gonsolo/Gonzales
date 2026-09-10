@@ -365,6 +365,7 @@ def _build_mesh_light_info(
 def debug_trace_pixel(
     path: UnsafePointer[UInt8, MutExternalOrigin],
     px: Int32, py: Int32,
+    override_w: Int32 = Int32(0), override_h: Int32 = Int32(0),
 ):
     """Trace the centre ray of one pixel and print the path bounce-by-bounce
     (hit mesh/material/normal/t, dielectric entering/eta/Fresnel decision,
@@ -375,6 +376,25 @@ def debug_trace_pixel(
     var psc = mojo_parse_scene_any(path)
     if Int(psc) == 0:
         print("parse failed"); return
+
+    # --pixel used to ALWAYS trace against the scene's native resolution,
+    # silently ignoring --width/--height/--resolution -- so a coordinate
+    # meant for a downscaled render (e.g. "the pixel at 200,68 in a
+    # --width 400 image") actually probed a completely different point in
+    # the full-resolution frame, with no warning. Same missing-dimension
+    # derivation as parse_and_render/render_interactive.
+    if override_w > 0 or override_h > 0:
+        var eff_w = override_w
+        var eff_h = override_h
+        if eff_w <= 0:
+            eff_w = Int32(Int(eff_h) * Int(psc[0].film_w) / max(Int(psc[0].film_h), 1))
+        if eff_h <= 0:
+            eff_h = Int32(Int(eff_w) * Int(psc[0].film_h) / max(Int(psc[0].film_w), 1))
+        resize_film(psc, eff_w, eff_h)
+    if px >= psc[0].film_w or py >= psc[0].film_h:
+        print("--pixel", px, py, "is outside the", psc[0].film_w, "x", psc[0].film_h,
+              "frame being traced -- pass --width/--height/--resolution to match your render")
+        return
 
     # Centre ray (no jitter): raster_to_camera then camera_to_world rotation.
     var r2c = psc[0].raster_to_camera
