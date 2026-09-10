@@ -24,7 +24,7 @@ from .reservoir import reservoir_update, reservoir_finalize
 from .restir_gi import gi_reservoir_io_null
 from .postprocess import _firefly_clamp_pixel, _atrous_tap_weight, _atrous_spatial_weight
 from .sampling import power_heuristic, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gen_primary_ray_state
-from .spectrum import SampledWavelengths, SpectralSample, SpectralHandle, null_spectral_handle, rgb_illuminant_to_spectral_sample, rgb_bands_to_spectral_sample, spectral_sample_to_rgb
+from .spectrum import SampledWavelengths, SpectralSample, SpectralHandle, null_spectral_handle, rgb_illuminant_to_spectral_sample, rgb_bands_to_spectral_sample, spectral_sample_to_rgb, spec_refl_unbounded
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
 from max.gpu.host._nvidia_cuda import CUDA
 
@@ -2408,14 +2408,29 @@ def _sample_medium_core(
         # means sampling the free flight from a hero wavelength and combining
         # wavelengths with MIS, which is real chromatic-media work, not a
         # colour conversion.
-        var t_ref = exp(-sigma_t.r * t_seg)          # the sampled channel's own transmittance
-        if t_ref < Float32(1e-30): t_ref = Float32(1e-30)
-        # Chromatic transmittance ratio. sigma_t is RGB scene data, so this is
-        # a boundary: lift the per-channel ratio into the spectral domain. For
-        # a grey medium every lane is 1 and this is a no-op.
-        path_ptr[].throughput *= rgb_bands_to_spectral_sample(
-            Float32(1.0), exp(-sigma_t.g * t_seg) / t_ref, exp(-sigma_t.b * t_seg) / t_ref,
-            path_ptr[].wavelengths)
+        # Chromatic transmittance ratio -- UPSAMPLE sigma_t to the 4 hero
+        # lanes FIRST via spec_refl_unbounded (the coefficient-safe smooth
+        # upsampler; grey media pass through it exactly -- verified in
+        # Tests/unit/test_coefficient_upsampling.mojo), THEN exponentiate
+        # PER LANE. This used to compute the ratio in RGB
+        # (exp(-sigma_t.g*t)/exp(-sigma_t.r*t), etc) and band-pick the
+        # already-exponentiated triple -- band-picking and this order agree
+        # (selection commutes with exp), but the RGB ratio itself was only
+        # ever an approximation of "the medium's colour" using 3 discrete
+        # samples. Smooth upsampling reconstructs a real spectral curve from
+        # those same 3 samples instead, matching bdpt.mojo/sppm.mojo's
+        # spectral_free_flight_weight (same fix, same derivation) so CPU
+        # PT / GPU PT / VCM / SPPM all treat a medium's colour identically.
+        # See docs/02_spectra_and_color.md, "Chromatic extinction".
+        var sig_t_spec = spec_refl_unbounded(
+            spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+            sigma_t.r, sigma_t.g, sigma_t.b, path_ptr[].wavelengths)
+        var sig_t_r_ref = sigma_t.r
+        path_ptr[].throughput *= SpectralSample(
+            exp(-(sig_t_spec.v0 - sig_t_r_ref) * t_seg),
+            exp(-(sig_t_spec.v1 - sig_t_r_ref) * t_seg),
+            exp(-(sig_t_spec.v2 - sig_t_r_ref) * t_seg),
+            exp(-(sig_t_spec.v3 - sig_t_r_ref) * t_seg))
         if t_free >= t_surf:
             path_ptr[].pcgState = pcg.state
             return

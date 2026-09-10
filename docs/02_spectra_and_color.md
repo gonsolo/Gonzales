@@ -174,37 +174,67 @@ where the exponential is most nonlinear and within-band variation of σ(λ)
 matters most.
 
 So the meaningful figure is the last row: **gonzales sits 1.30/1.22/0.73
-against pbrt**, a chromatic spread of about 1.8×. That is a real gap and
-worth closing, but it is roughly half the size that grading against the
-naive analytic suggests. Two candidate causes, in order of likelihood:
-band-picking models σ(λ) as a 3-band step function where pbrt uses a smooth
-sigmoid, and gonzales band-picks the *transmittance* (already exponentiated)
-rather than upsampling σ and exponentiating per lane — and for a smooth
-upsampler those two orderings differ, since `upsample(exp(-σd))` ≠
-`exp(-upsample(σ)·d)`. Band-picking is the one case where they coincide,
-because selection commutes with `exp`.
+against pbrt**, a chromatic spread of about 1.8×. Two candidate causes were
+recorded, in order of likelihood: band-picking models σ(λ) as a 3-band step
+function where pbrt uses a smooth sigmoid, and gonzales band-picked the
+*transmittance* (already exponentiated) rather than upsampling σ and
+exponentiating per lane — and for a smooth upsampler those two orderings
+differ, since `upsample(exp(-σd))` ≠ `exp(-upsample(σ)·d)`. Band-picking is
+the one case where they coincide, because selection commutes with `exp`.
 
-**What remains, and it is measurable.** Sampling still draws the free-flight
-distance from one channel (red) and reweights the others by their ratio to
-it. That is unbiased, and a chromatic scattering test now shows VCM agreeing
-with the path tracer to about 3% where it was 2.8x apart. But the *round
-trip* — three authored RGB numbers, band-picked into four hero lanes,
-reconstructed through the CIE curves — is lossy in a way no estimator can
-undo. On a pure absorber with `sigma_a = (0.25, 0.5, 1.0)`, where the
-analytic answer is exactly `exp(-tau)` per channel, every integrator
-including the path tracer reads blue at roughly a quarter of it
-(`Scenes/media-chromatic-absorb.pbrt`). A grey medium of the same optical
-depth is correct to 3 decimal places, which locates the error in the
-representation rather than in the transport.
+**The ordering fix (2026-09-10): implemented, verified, and it does NOT
+close the gap.** `spec_refl_unbounded` now upsamples σ_t to the four hero
+lanes *first*, and every consumer exponentiates *per lane* — `sppm.mojo`'s
+`spectral_free_flight_weight`/`medium_sigma_t_spectral` (shared by
+`bdpt.mojo`'s camera- and light-path free-flight and by
+`_visible_transmittance`'s shadow-ray segments) and `gpu.mojo`'s
+`_sample_medium_core` homogeneous branch (the plain path tracer, CPU and
+GPU) all now do this identically. This was necessary just to keep the
+backends *consistent with each other*: fixing only the BDPT/SPPM side first
+surfaced a genuine new VCM/PT disagreement (0.88×, up from ~1.4% before)
+because PT's `gpu.mojo` path was still band-picking — extending the same
+fix there closed that back to 0.94×.
 
-Closing that needs a genuinely spectral `sigma_t(lambda)` rather than three
-numbers, plus hero-wavelength free-flight sampling with MIS across
-wavelengths. The MIS half is derivable — sample from one lane, weight by the
-balance heuristic over all four lanes' free-flight densities — but it is
-blocked on representation: `Medium_C` stores RGB, and SPPM's `VisiblePoint`
-carries a deliberately RGB throughput (its `tau` accumulates across passes
-whose hero wavelengths differ, so it *cannot* be spectral). Both are real
-architectural commitments, not oversights.
+But measured against real pbrt-v4 on the *same* absorber scene, before and
+after, at matched high sample counts:
+
+| ratio to pbrt | R | G | B | spread |
+|---|---|---|---|---|
+| PT, band-picking (before) | 1.261 | 1.137 | 0.466 | 2.70× |
+| PT, smooth upsampling (after) | 0.928 | 1.163 | 0.415 | 2.80× |
+| VCM, smooth upsampling (after) | 0.936 | 1.160 | 0.419 | 2.77× |
+
+**The spread against pbrt is unchanged — if anything very slightly worse —
+while PT and VCM now agree closely with each other** (both ≈2.7–2.8×,
+individual channel ratios within noise of one another). That is decisive:
+it rules out ordering as the dominant cause of the pbrt gap. Fixing the
+ordering bug was still correct and worth keeping (it *is* a real
+mathematical inconsistency, and grey media are provably unaffected — see
+`Tests/unit/test_coefficient_upsampling.mojo`), but the ~1.8–2.8× spread
+against pbrt lives somewhere else: most likely a difference between
+gonzales's Jakob-Hanika reconstruction table/basis and pbrt's own
+`RGBUnboundedSpectrum` fit for the *same* RGB triple, or something specific
+to how a direct camera-ray emitter hit through a chromatic medium
+integrates wavelengths versus pbrt's convention. Neither has been isolated
+yet. On a pure absorber with `sigma_a = (0.25, 0.5, 1.0)`, where the
+analytic answer is exactly `exp(-tau)` per channel and real pbrt itself
+misses that by design (see above), every gonzales integrator reads blue
+noticeably low relative to pbrt while a grey medium of the same optical
+depth is correct to 3 decimal places — which still locates the error in
+*representation*, just not in the order sigma was upsampled.
+
+The `sigma_s.c/sigma_s.r` *scattering-fraction* ratio (a plain coefficient,
+no exponential involved, so there is no ordering question for it at all)
+stays band-picked everywhere, deliberately, matching the single-scattering
+albedo elsewhere in this file.
+
+A second, still-blocked piece: hero-wavelength free-flight *sampling* with
+MIS across wavelengths (as opposed to always drawing the free-flight
+distance from the red channel and reweighting) remains undone. `Medium_C`
+stores RGB, and SPPM's `VisiblePoint` carries a deliberately RGB throughput
+(its `tau` accumulates across passes whose hero wavelengths differ, so it
+*cannot* be spectral) — both real architectural commitments, not
+oversights, and neither was touched by the ordering fix.
 
 **Converting back:** a finished pixel's spectral radiance sample is turned
 back into a displayable color by a direct Monte Carlo estimate of the CIE

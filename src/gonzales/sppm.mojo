@@ -438,6 +438,97 @@ def sample_homogeneous_free_flight(med: Medium_C, t_surf: Float32, mut pcg: PCG3
     return HomogeneousFreeFlight(False, t_free, sig_t, RGB(Float32(0)), Tr)
 
 
+# ── Genuinely spectral free-flight weight (chromatic media) ─────────────────
+# `HomogeneousFreeFlight.weight` above is a RATIO computed entirely in RGB
+# (exp(-sigma_t.g*t), exp(-sigma_t.b*t), ...) and every caller used to lift it
+# into the 4 hero lanes by BAND-PICKING that already-exponentiated triple --
+# i.e. selecting, per lane, which of the 3 RGB ratios to read. Band-picking a
+# genuine coefficient (see rgb_bands_to_spectral_sample's own docstring, "a
+# coefficient is not a colour") is fine on its own, but here it throws away
+# information for free: an extinction coefficient IS spectral data, and
+# gonzales already has a real RGB->spectrum upsampler for exactly this shape
+# of quantity (spec_refl_unbounded, used elsewhere for reflectance-shaped
+# weights that may exceed 1 -- an extinction coefficient is the same kind of
+# thing). The two orders are NOT interchangeable for a smooth upsampler:
+# upsample(exp(-sigma*t)) != exp(-upsample(sigma)*t) in general (they
+# coincide only for band-picking, a pure per-lane selection, since selection
+# commutes with exp). Verified 2026-09-10 that the smooth upsampler's grey
+# invariant survives exactly (spec_refl_unbounded(c,c,c) -> c in every lane,
+# to machine precision) — see project_spectral_media_state.md,
+# "Refutation 2" — so nothing is lost by switching sigma_t's upsampling from
+# band-picking to the real curve; a grey medium is bit-for-bit unaffected.
+#
+# This computes the weight the CORRECT way: upsample sigma_t to per-lane
+# values FIRST, then exponentiate PER LANE, using the same red-channel
+# proposal density `sample_homogeneous_free_flight` already sampled `t_free`
+# from (so this is purely a change to the WEIGHT, never to what distance was
+# sampled or its acceptance probability -- no change to path continuation).
+@always_inline
+def medium_sigma_t_spectral(
+    med: Medium_C, wavelengths: SampledWavelengths,
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
+) -> SpectralSample:
+    """Upsample a medium's total extinction sigma_t = sigma_a + sigma_s from
+    its 3 authored RGB channels to the 4 hero wavelengths via
+    spec_refl_unbounded -- the same unbounded-coefficient upsampler used for
+    reflectance-shaped weights that may exceed 1 (an extinction coefficient
+    is the same kind of quantity). Shared by spectral_free_flight_weight and
+    bdpt.mojo's _visible_transmittance so the two agree on what "the
+    medium's colour" means."""
+    var sig_t = med.sigma_a + med.sigma_s
+    return spec_refl_unbounded(
+        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+        sig_t.r, sig_t.g, sig_t.b, wavelengths)
+
+@always_inline
+def spectral_free_flight_weight(
+    med: Medium_C, ff: HomogeneousFreeFlight, t_surf: Float32, wavelengths: SampledWavelengths,
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
+) -> SpectralSample:
+    """Replaces `rgb_bands_to_spectral_sample(ff.weight.r, .g, .b, wl)` at
+    every chromatic-media consumer. `ff` must come from
+    `sample_homogeneous_free_flight(med, t_surf, ...)` -- SAME `med` and
+    `t_surf` -- (this does not re-sample anything, it only re-derives the
+    weight spectrally). `t_surf` is required explicitly, not read from
+    `ff.t_free`: in the pass-through branch `ff.t_free` is the raw sampled
+    distance (which exceeded `t_surf`, that's WHY it's pass-through), while
+    the weight must use the actual segment length `t_surf` -- the same
+    distinction `sample_homogeneous_free_flight`'s own RGB `Tr` makes
+    (built from `t_surf`, not `t_free`, in that branch).
+    Grey media pass through exactly, at every tau, since spec_refl_unbounded
+    reproduces a grey coefficient exactly and the sig_t_r reference cancels
+    to 1 on every lane. See docs/02_spectra_and_color.md, "Chromatic
+    extinction" for the derivation and the measured before/after."""
+    var sig_t_r = med.sigma_a.r + med.sigma_s.r
+    if sig_t_r <= Float32(0.0):
+        return SpectralSample(Float32(1.0))
+    var sig_t_spec = medium_sigma_t_spectral(
+        med, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+    var t = ff.t_free if ff.collided else t_surf
+    var d0 = exp(-(sig_t_spec.v0 - sig_t_r) * t)
+    var d1 = exp(-(sig_t_spec.v1 - sig_t_r) * t)
+    var d2 = exp(-(sig_t_spec.v2 - sig_t_r) * t)
+    var d3 = exp(-(sig_t_spec.v3 - sig_t_r) * t)
+    if not ff.collided:
+        return SpectralSample(d0, d1, d2, d3)
+    # Collision branch carries an extra sigma_t(lambda)/sigma_t.r factor (see
+    # sample_homogeneous_free_flight's own derivation comment for the RGB
+    # analogue -- same algebra, per hero lane instead of per RGB channel).
+    var r0 = sig_t_spec.v0 / sig_t_r
+    var r1 = sig_t_spec.v1 / sig_t_r
+    var r2 = sig_t_spec.v2 / sig_t_r
+    var r3 = sig_t_spec.v3 / sig_t_r
+    return SpectralSample(d0 * r0, d1 * r1, d2 * r2, d3 * r3)
+
+
 # ── Uniform area-light sampling ───────────────────────────────────────────────
 # Shared by BDPT's light-subpath emission and SPPM's photon emission + NEE
 # (CPU + GPU) — all three use the same "uniform over all lights, uniform over
@@ -1137,8 +1228,13 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 ro = sp + rd * Float32(0.0001)
                 continue
             else:
-                # Apply Beer-Lambert transmittance through segment
-                flux *= rgb_bands_to_spectral_sample(ff.weight.r, ff.weight.g, ff.weight.b, ph_wavelengths)
+                # Apply Beer-Lambert transmittance through segment. Spectral:
+                # upsample sigma_t to the 4 hero lanes FIRST, exponentiate
+                # PER LANE -- see spectral_free_flight_weight's docstring for
+                # why this differs from (and replaces) band-picking the
+                # already-exponentiated RGB ratio.
+                flux *= spectral_free_flight_weight(med, ff, t_hit, ph_wavelengths,
+                    spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[mat_idx]
