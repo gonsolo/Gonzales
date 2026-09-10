@@ -30,7 +30,7 @@ from .rng import PCG32
 from .transform import matrix_invert
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, denoise
-from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_homogeneous_free_flight, sample_area_light_uniform, _HSIZE, _hash_cell, _sppm_render_core
+from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_homogeneous_free_flight, sample_area_light_uniform, _HSIZE, _hash_cell, _sppm_render_core, spectral_free_flight_weight, medium_sigma_t_spectral
 from .sppm import (
     SPPMPixel, SPPMPhoton, _sppm_reset_grid_cell, _sppm_insert_photon,
     _sppm_gather_one, _sppm_vp_brdf, _sppm_nee_one,
@@ -258,21 +258,31 @@ def _visible_transmittance(
     med_idx: Int32,
     sd:      SceneDescriptor2_C,
     scratch: UnsafePointer[Intersection_C, MutExternalOrigin],
-) -> Vec3f:
-    """Returns transmittance along segment AB, or (0,0,0) if occluded.
-    Glass (dielectric) surfaces are passed through with Fresnel transmittance.
-    `scratch` is one caller-owned Intersection_C slot (no internal alloc/free)
-    so this is safe to call from a GPU kernel thread — every existing GPU
-    kernel in this codebase takes pre-allocated, thread-indexed scratch
-    instead of allocating per-thread (see sppm_gen_vp_gpu's inter_scratch)."""
+    wl:      SampledWavelengths,
+) -> SpectralSample:
+    """Returns transmittance along segment AB, spectrally, or black if
+    occluded. Glass (dielectric) surfaces are passed through with Fresnel
+    transmittance. `scratch` is one caller-owned Intersection_C slot (no
+    internal alloc/free) so this is safe to call from a GPU kernel thread —
+    every existing GPU kernel in this codebase takes pre-allocated,
+    thread-indexed scratch instead of allocating per-thread (see
+    sppm_gen_vp_gpu's inter_scratch).
+
+    Each medium segment's sigma_t is upsampled to the 4 hero lanes FIRST
+    (medium_sigma_t_spectral), then exponentiated PER LANE -- the same
+    ordering fix as spectral_free_flight_weight, applied here to a plain
+    deterministic Beer-Lambert evaluation rather than an importance-sampled
+    ratio (no red-channel proposal to correct against; this just IS
+    exp(-sigma_t(lambda)*d) at each segment, multiplied across segments,
+    which is exact: exp(a)*exp(b) = exp(a+b))."""
     var d = b - a
     var dist_total = d.length()
     if dist_total < Float32(1e-5):
-        return Vec3f(Float32(0), Float32(0), Float32(0))
+        return SpectralSample(Float32(0))
     var inv = Float32(1) / dist_total
     var dir = Vec3f(d.x*inv, d.y*inv, d.z*inv)
 
-    var Tr = RGB(Float32(1))
+    var Tr = SpectralSample(Float32(1.0))
     var org = a + Vec3f(dir[0], dir[1], dir[2]) * Float32(0.0002)
     var remaining = dist_total - Float32(0.0002)
     var cur_med = med_idx
@@ -317,8 +327,8 @@ def _visible_transmittance(
             # Nothing between here and destination: apply remaining Beer-Lambert
             if Int(cur_med) >= 0:
                 var med = sd.mediums[Int(cur_med)]
-                var sigma_t = med.sigma_a + med.sigma_s
-                Tr *= RGB(exp(-sigma_t.r*remaining), exp(-sigma_t.g*remaining), exp(-sigma_t.b*remaining))
+                var st_spec = medium_sigma_t_spectral(med, wl, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+                Tr *= SpectralSample(exp(-st_spec.v0*remaining), exp(-st_spec.v1*remaining), exp(-st_spec.v2*remaining), exp(-st_spec.v3*remaining))
             break
 
         var inter = inter_mem[0]
@@ -330,8 +340,8 @@ def _visible_transmittance(
         # Beer-Lambert through medium segment up to hit
         if Int(cur_med) >= 0:
             var med = sd.mediums[Int(cur_med)]
-            var sigma_t = med.sigma_a + med.sigma_s
-            Tr *= RGB(exp(-sigma_t.r*t_hit), exp(-sigma_t.g*t_hit), exp(-sigma_t.b*t_hit))
+            var st_spec = medium_sigma_t_spectral(med, wl, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+            Tr *= SpectralSample(exp(-st_spec.v0*t_hit), exp(-st_spec.v1*t_hit), exp(-st_spec.v2*t_hit), exp(-st_spec.v3*t_hit))
 
         if mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             # Pass through glass with Fresnel transmittance
@@ -350,8 +360,8 @@ def _visible_transmittance(
             var fr = fr_dielectric(cos_i, Float32(1)/ior if facing else ior)
             var T = Float32(1) - fr
             Tr *= T
-            if Tr.r < Float32(1e-7) and Tr.g < Float32(1e-7) and Tr.b < Float32(1e-7):
-                return Vec3f(Float32(0), Float32(0), Float32(0))
+            if Tr.is_black():
+                return SpectralSample(Float32(0))
             # Update medium after crossing glass surface
             if mat.medium_interface_idx >= Int32(0) and sd.mediumIfaceCount > Int64(0):
                 var iface = sd.mediumInterfaces[Int(mat.medium_interface_idx)]
@@ -387,9 +397,9 @@ def _visible_transmittance(
 
         else:
             # Opaque surface blocks the segment
-            return Vec3f(Float32(0), Float32(0), Float32(0))
+            return SpectralSample(Float32(0))
 
-    return Vec3f(Tr.r, Tr.g, Tr.b)
+    return Tr
 
 @always_inline
 def _bdpt_simple_light_count(sd: SceneDescriptor2_C) -> Int:
@@ -464,14 +474,9 @@ def _bdpt_nee_contribute(
         return SpectralSample(Float32(0))
     var shadow_org = hit + vec3f(gn) * eps
     var shadow_end = shadow_org + Vec3f(ls.wi[0], ls.wi[1], ls.wi[2]) * ls.dist
-    var Tr = _visible_transmittance(shadow_org, shadow_end, cur_med_idx, sd, scratch)
-    if Tr[0] > Float32(0) or Tr[1] > Float32(0) or Tr[2] > Float32(0):
-        # `Tr` is a per-channel transmittance COEFFICIENT, so it band-picks
-        # rather than going through either upsampling curve (see
-        # rgb_bands_to_spectral_sample -- an illuminant upsample of a
-        # transmittance is exactly the mistake that cost the media path a
-        # 10x error).
-        return beta * w * rgb_bands_to_spectral_sample(Tr[0], Tr[1], Tr[2], wl)
+    var Tr = _visible_transmittance(shadow_org, shadow_end, cur_med_idx, sd, scratch, wl)
+    if not Tr.is_black():
+        return beta * w * Tr
     return SpectralSample(Float32(0))
 
 def _bdpt_mnee_diffuse_area_light(
@@ -1172,8 +1177,8 @@ def _bdpt_connect_to_camera(
         return (False, Int32(-1), SpectralSample(Float32(0)))
 
     var Tr = _visible_transmittance(
-        lv.pos, Point3f(cam_pos[0], cam_pos[1], cam_pos[2]), lv.med_idx, sd, scratch)
-    if Tr[0] < Float32(1e-7) and Tr[1] < Float32(1e-7) and Tr[2] < Float32(1e-7):
+        lv.pos, Point3f(cam_pos[0], cam_pos[1], cam_pos[2]), lv.med_idx, sd, scratch, wl)
+    if Tr.is_black():
         return (False, Int32(-1), SpectralSample(Float32(0)))
 
     var image_plane_dist = Float32(1) / max(px_scale, Float32(1e-12))
@@ -1185,9 +1190,7 @@ def _bdpt_connect_to_camera(
     var image_to_surface = image_to_solid_angle * cos_to_camera / dist2
 
     var inv_n = Float32(1) / max(n_light_paths_f, Float32(1))
-    # Tr band-picks: it is a transmittance coefficient, not a colour.
-    var contrib = (lv.beta * f
-                   * rgb_bands_to_spectral_sample(Tr[0], Tr[1], Tr[2], wl)
+    var contrib = (lv.beta * f * Tr
                    * (geom * inv_n))
 
     # MIS, SmallVCM ConnectToCamera:
@@ -1807,7 +1810,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # scattering event; exactly 1 for a grey medium. Applied to
                 # `beta` BEFORE the vertex stores it, so the stored throughput
                 # is the one arriving at the vertex.
-                beta *= rgb_bands_to_spectral_sample(ff.weight.r, ff.weight.g, ff.weight.b, wavelengths)
+                beta *= spectral_free_flight_weight(med, ff, t_hit, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
                 # Volume scatter vertex
                 var sp = ro + rd*ff.t_free
                 var v = _null_vertex()
@@ -1913,7 +1916,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # transmittance is already carried by the pass-through
                 # probability, so multiplying the FULL Beer-Lambert factor
                 # here double-counted it).
-                beta *= rgb_bands_to_spectral_sample(ff.weight.r, ff.weight.g, ff.weight.b, wavelengths)
+                beta *= spectral_free_flight_weight(med, ff, t_hit, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
                 # MIS: dVCM must equal 1/P(prev -> this vertex), and reaching a
                 # SURFACE through a medium carries a survival factor
                 # FF = exp(-sigma_t * d) that the vacuum recursion above
@@ -3047,7 +3050,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             var ff = sample_homogeneous_free_flight(med, t_hit, pcg)
             if ff.collided:
                 # Chromatic collision weight; see the camera-side comment.
-                flux *= rgb_bands_to_spectral_sample(ff.weight.r, ff.weight.g, ff.weight.b, wavelengths)
+                flux *= spectral_free_flight_weight(med, ff, t_hit, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
                 var sp = ro + rd*ff.t_free
                 var v = _null_vertex()
                 v.pos = sp
@@ -3093,7 +3096,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 ro = sp + rd*Float32(0.0002)
                 return True   # volume free-flight scatter: no vertex stored this bounce, path continues
             else:
-                flux *= rgb_bands_to_spectral_sample(ff.weight.r, ff.weight.g, ff.weight.b, wavelengths)
+                flux *= spectral_free_flight_weight(med, ff, t_hit, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
                 # Same missing free-flight factor on dVCM as the camera path --
                 # see _bdpt_camera_path_bounce's matching comment for the
                 # derivation and the measured error growth with optical depth.
@@ -3985,8 +3988,9 @@ def _connect(
     # Determine medium for the shadow segment.
     # Use camera vertex's medium (both should agree in a well-defined scene).
     var seg_med = cv.med_idx
-    var Tr = _visible_transmittance(cv.pos, lv.pos, seg_med, sd, scratch)
-    if Tr[0] < Float32(1e-7) and Tr[1] < Float32(1e-7) and Tr[2] < Float32(1e-7):
+    var wl = cv.wavelengths
+    var Tr = _visible_transmittance(cv.pos, lv.pos, seg_med, sd, scratch, wl)
+    if Tr.is_black():
         return SpectralSample(Float32(0))
 
     var dir = d3.to_simd() / dist
@@ -4002,7 +4006,6 @@ def _connect(
     # (see _bdpt_pass_wavelengths), so cv and lv are guaranteed to agree and
     # the fallback is gone -- including for hair and measured, which the old
     # spectral branch had to route around.
-    var wl = cv.wavelengths
     var f_cam_spec = _eval_vertex_spectral(cv, dir, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
     var f_lgt_spec: SpectralSample
     if lv.is_light == Int32(1):
@@ -4020,11 +4023,7 @@ def _connect(
     # Geometry term G = |cos_cv| × |cos_lv| / dist²
     var G = _geom_term(cv, lv)
 
-    # Tr is a per-channel transmittance COEFFICIENT, so it band-picks rather
-    # than going through either upsampling curve (see
-    # rgb_bands_to_spectral_sample).
-    var contrib = (cv.beta * lv.beta * f_combined * G
-                   * rgb_bands_to_spectral_sample(Tr[0], Tr[1], Tr[2], wl))
+    var contrib = (cv.beta * lv.beta * f_combined * G * Tr)
 
     # VCM Stage 2b/2d: real MIS weight for diffuse/conductor/light-source
     # connections (see this function's docstring + _bdpt_vertex_pdfs'/
@@ -5971,12 +5970,11 @@ def resolve_shadow_connect_gpu(
         # actually enters this fallback path (no dielectric/medium), but
         # fixed now while this kernel is being rewritten anyway.
         var dst = org + dir * dist
-        var Tr = _visible_transmittance(org, dst, seg_med, sd, scratch + tid)
-        var p = shadow_pending[idx]
-        # Tr is a transmittance coefficient -> band-pick, not an upsample.
         var cst = cam_states[idx // _BDPT_MAX_VERTS]
         var wl_sp = SampledWavelengths(cst.wl0, cst.wl1, cst.wl2, cst.wl3, cst.wl_pdf)
-        shadow_pending[idx] = p * rgb_bands_to_spectral_sample(Tr[0], Tr[1], Tr[2], wl_sp)
+        var Tr = _visible_transmittance(org, dst, seg_med, sd, scratch + tid, wl_sp)
+        var p = shadow_pending[idx]
+        shadow_pending[idx] = p * Tr
 
 def sum_shadow_connect_gpu(
     states: UnsafePointer[VCMCameraPathState_C, MutExternalOrigin],
