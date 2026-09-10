@@ -308,30 +308,43 @@ def bxdf_sample_dielectric(
     ior: Float32,
     force_entering: Bool,   # bounce==0: trust physics (camera ray always from air)
     u_reflect: Float32,
-    current_ior: Float32 = Float32(1.0),   # IOR of the medium the ray is ALREADY in; 1.0 = vacuum
-) -> Tuple[BxDFSample, Vec3f, Float32]:
-    """Third return value is the CALLER'S new current_ior to store (path
-    state), for the next dielectric interaction along this path: unchanged
-    on reflect/TIR (still in the same medium), `ior` on a transmitted entry
-    (now inside this surface's material), or 1.0 on a transmitted exit
-    (assumed vacuum outside -- see PathState_C.current_dielectric_ior's
-    docstring for why this is a deliberate, scoped, one-level limitation).
+    current_ior: Float32 = Float32(1.0),    # IOR of the medium the ray is ALREADY in; 1.0 = vacuum
+    previous_ior: Float32 = Float32(1.0),   # IOR one level below current_ior (what exiting restores)
+) -> Tuple[BxDFSample, Vec3f, Float32, Float32]:
+    """Third/fourth return values are the CALLER'S new current_ior/
+    previous_ior to store (path state) for the next dielectric interaction
+    along this path -- unchanged on reflect/TIR (still in the same medium).
+    On a transmitted ENTRY: current_ior <- `ior` (now inside this surface's
+    material), previous_ior <- the OLD current_ior (pushed, so the matching
+    exit can restore it). On a transmitted EXIT: current_ior <- the OLD
+    previous_ior (popped -- what's really outside, not always vacuum),
+    previous_ior <- 1.0 (this is only a depth-2 stack: a third level of
+    nesting loses the level below the one just popped -- a scoped,
+    documented limitation, not an oversight; see
+    PathState_C.previous_dielectric_ior's docstring).
 
-    `current_ior` defaults to vacuum so every OTHER caller (BDPT/SPPM's own
-    separate _dielectric_bounce, and any test that doesn't care about
-    touching-dielectric seams) is unaffected -- this only changes behavior
-    when a caller actually threads a non-vacuum current_ior through."""
+    `current_ior`/`previous_ior` default to vacuum so every OTHER caller
+    (BDPT/SPPM's own separate _dielectric_bounce, and any test that doesn't
+    care about touching-dielectric seams) is unaffected -- this only changes
+    behavior when a caller actually threads non-vacuum values through."""
     var facing = dot(ray_dir, geom_normal) < Float32(0.0)
     var entering = facing or force_entering
     var normal = geom_normal if facing else -geom_normal
     # Entering: relative IOR is (medium the ray is coming FROM) / (this
-    # surface's own IOR) -- current_ior, not a hardcoded vacuum. Exiting
-    # keeps the old, always-vacuum-outside approximation unchanged: without
-    # a real medium stack there is no way to know what is really on the far
-    # side of an exit, and this is the branch the touching-dielectric repro
-    # scenes show is ALREADY close to correct (0.94-0.97x pbrt) -- changing
-    # it risks a regression for no confirmed gain.
-    var eta = (current_ior / ior) if entering else ior
+    # surface's own IOR) -- current_ior, not a hardcoded vacuum. Exiting:
+    # relative IOR is (this surface's own IOR) / (medium one level below,
+    # i.e. what's really outside) -- previous_ior, not a hardcoded vacuum
+    # either. Both directions used to assume vacuum on the far side; for a
+    # simple isolated pane previous_ior defaults to 1.0 so this is
+    # unchanged, but for touching same-material CAD parts (bolt threaded
+    # through a bracket, etc.) the old unconditional `eta = ior` on exit
+    # spuriously triggered TOTAL INTERNAL REFLECTION on a boundary that
+    # should have been invisible (eta=1), trapping rays in a runaway TIR
+    # cascade instead of letting them escape -- confirmed via --pixel trace
+    # on transparent-machines (Scenes/dielectric-touching-same-ior.pbrt's
+    # simple 2-sphere repro didn't expose this because it never chains
+    # enough touching interfaces to matter at the whole-image mean).
+    var eta = (current_ior / ior) if entering else (ior / previous_ior)
 
     var cos_i = -dot(ray_dir, normal)
     var sin2_t = eta * eta * (Float32(1.0) - cos_i * cos_i)
@@ -345,7 +358,7 @@ def bxdf_sample_dielectric(
         var rlen = dot(refl, refl)
         if rlen > Float32(0.0):
             refl = refl * (Float32(1.0) / sqrt(rlen))
-        return (BxDFSample(refl, white, Float32(1.0), BxDFFlags.delta | BxDFFlags.reflect, Int8(1), Int8(0), Int8(0)), normal, current_ior)
+        return (BxDFSample(refl, white, Float32(1.0), BxDFFlags.delta | BxDFFlags.reflect, Int8(1), Int8(0), Int8(0)), normal, current_ior, previous_ior)
 
     var cos_t = sqrt(Float32(1.0) - sin2_t)
     var refr = ray_dir * eta + normal * (eta * cos_i - cos_t)
@@ -378,8 +391,9 @@ def bxdf_sample_dielectric(
     # inflating past 1e11 by bounce ~30 on a maxdepth=65 scene with several
     # glass surfaces, producing extreme, denoiser-smeared fireflies.
     var radiance_transmit = white * (eta * eta)
-    var new_current_ior = ior if entering else Float32(1.0)
-    return (BxDFSample(refr, radiance_transmit, Float32(1.0), BxDFFlags.delta | BxDFFlags.transmit, Int8(1), Int8(0), Int8(0)), normal, new_current_ior)
+    var new_current_ior = ior if entering else previous_ior
+    var new_previous_ior = current_ior if entering else Float32(1.0)
+    return (BxDFSample(refr, radiance_transmit, Float32(1.0), BxDFFlags.delta | BxDFFlags.transmit, Int8(1), Int8(0), Int8(0)), normal, new_current_ior, new_previous_ior)
 
 # ── Thin dielectric (one-sided glass slab: window, soap film) ────────────────
 # Transmitted ray keeps its original direction (no refraction) — models a thin

@@ -419,6 +419,7 @@ def debug_trace_pixel(
 
     var inter = alloc[Intersection_C](1)
     var current_ior = Float32(1.0)   # mirrors PathState_C.current_dielectric_ior
+    var previous_ior = Float32(1.0)  # mirrors PathState_C.previous_dielectric_ior
     for bounce in range(8):
         var ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
         inter[0].hit = Int8(0)
@@ -496,7 +497,7 @@ def debug_trace_pixel(
             var nx = gnx if facing else -gnx
             var ny = gny if facing else -gny
             var nz = gnz if facing else -gnz
-            var eta = (current_ior/ior) if entering else ior
+            var eta = (current_ior/ior) if entering else (ior/previous_ior)
             var cos_i = -(dx*nx + dy*ny + dz*nz)
             var sin2t = eta*eta*(Float32(1.0) - cos_i*cos_i)
             var tir = sin2t > Float32(1.0)
@@ -542,8 +543,11 @@ def debug_trace_pixel(
                 var nl = _dbg_vlen(dx,dy,dz)
                 if nl > Float32(0.0): dx /= nl; dy /= nl; dz /= nl
                 ox = hx - nx*Float32(0.0001); oy = hy - ny*Float32(0.0001); oz = hz - nz*Float32(0.0001)
-                current_ior = ior if entering else Float32(1.0)
-                print("        -> TRANSMIT dir", dx, dy, dz, "new current_ior", current_ior)
+                var new_current_ior = ior if entering else previous_ior
+                var new_previous_ior = current_ior if entering else Float32(1.0)
+                current_ior = new_current_ior
+                previous_ior = new_previous_ior
+                print("        -> TRANSMIT dir", dx, dy, dz, "new current_ior", current_ior, "new previous_ior", previous_ior)
         elif Int(mat.type) == 5:
             # CoatedDiffuse — mirror reflection off the coat only (ignore roughness/
             # transmit-into-base for this probe; just checking what the coat's

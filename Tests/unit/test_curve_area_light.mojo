@@ -26,7 +26,7 @@ def _dummy_path(ray: Ray_C, throughput: SpectralSample) -> PathState_C:
     return PathState_C(
         ray, throughput, SpectralSample(Float32(0.0)), RGB(Float32(0.0)),
         Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
-        Float32(0.0), Int32(-1), Float32(1.0), Int32(0), UInt64(0),
+        Float32(0.0), Int32(-1), Float32(1.0), Float32(1.0), Float32(1.0), Int32(0), UInt64(0),
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
         Float32(0.0),   # mis_null_dist
     )
@@ -163,7 +163,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
         ray, SpectralSample(Float32(0.5)), SpectralSample(Float32(0.0)), RGB(Float32(0.0)),
         Int32(1),  # bounce > 0: NOT the "camera sees light directly" shortcut
         UInt64(1), UInt64(1), Int8(1), Int8(0),  # specularBounce = 0
-        Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)), pdf_bsdf, Int32(-1), Float32(1.0), Int32(0), UInt64(0),
+        Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)), pdf_bsdf, Int32(-1), Float32(1.0), Float32(1.0), Float32(1.0), Int32(0), UInt64(0),
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
         Float32(0.0),   # mis_null_dist
     )

@@ -564,13 +564,66 @@ struct PathState_C(TrivialRegisterPassable):
     # of ior_A/ior_B. For A==B (an optically invisible seam) that measured
     # 0.904x on Scenes/dielectric-touching-same-ior.pbrt where it should read
     # 1.0. Updated only on a TRANSMIT (not reflect/TIR, which stays in
-    # whatever medium the path already occupied) and only on ENTERING (the
-    # exiting branch keeps using the surface's own ior directly, unchanged --
-    # deliberately NOT restored to a saved "previous" IOR on exit, since a
-    # single scalar cannot represent nesting deeper than one level; this is a
-    # scoped, documented limitation, not an oversight. See
-    # project_dielectric_radiance_transmission_bug.md.
+    # whatever medium the path already occupied), on both ENTERING (new
+    # value = this surface's ior) and EXITING (new value = the ONE saved
+    # `previous_dielectric_ior`, see below -- NOT unconditionally vacuum
+    # anymore).
     var current_dielectric_ior: Float32
+    # The medium current_dielectric_ior held BEFORE the most recent ENTERING
+    # transmit -- i.e. what to restore on the matching exit. Together the two
+    # fields make a depth-2 stack (current + one level below), pushed on
+    # enter and popped on exit, instead of current_dielectric_ior alone
+    # (which has no memory at all once it's overwritten).
+    #
+    # Why this matters beyond the touching-seam case current_dielectric_ior
+    # alone already fixed: for real multi-part CAD assemblies (see
+    # transparent-machines), a ray entering touching glass B while still
+    # inside glass A correctly reads eta=1 there (current_dielectric_ior
+    # alone handles it) -- but the OLD exiting formula (`eta = ior`,
+    # unconditional) then computes the EXIT out of B back into A as if B's
+    # far side were vacuum too. For A==B that wrongly inflates eta from 1
+    # back up to ior, and at grazing angles that spuriously triggers TOTAL
+    # INTERNAL REFLECTION on a boundary that is physically invisible --
+    # trapping the ray in a runaway TIR cascade through the assembly's many
+    # touching interfaces instead of letting it escape. Traced directly via
+    # `--pixel` on transparent-machines: a ray legitimately transmits
+    # mesh124->mesh126 (same BK7 material, eta=1, fresnel=0, exactly
+    # correct) and then immediately TIRs exiting mesh126 back toward
+    # mesh124 (eta wrongly computed as 1.5196 instead of 1.0), continuing to
+    # TIR for the rest of the 8-bounce debug trace without escaping -- the
+    # direct mechanism behind the "flat, uniformly dark, missing highlights"
+    # look, not noise or Russian roulette.
+    #
+    # Pushed on ENTERING (previous <- old current, before current is
+    # overwritten to the new surface's ior) and popped on EXITING (current
+    # <- previous, then previous resets to vacuum -- this is still only
+    # depth 2: a THIRD level of nesting loses the level below B once B is
+    # exited, exactly the same scoped, documented single-level-of-memory
+    # limitation as before, just one level deeper than a bare scalar can
+    # reach). Unchanged on reflect/TIR, same as current_dielectric_ior.
+    var previous_dielectric_ior: Float32
+    # Accumulated (eta_i/eta_t)^2 product across every dielectric TRANSMIT
+    # this path has made so far; 1.0 = none yet. Mirrors pbrt-v4's
+    # PathIntegrator::Li `etaScale` (cpu/integrators.cpp). Exists ONLY to
+    # correct Russian roulette's termination probability, never applied to
+    # the real throughput: bxdf_sample_dielectric's radiance_transmit factor
+    # (eta*eta) temporarily compresses `throughput` while a path is INSIDE a
+    # higher-index medium (entering eta<1 shrinks it) -- correct and exactly
+    # cancelled once the path exits back out (eta>1 restores it) -- but
+    # `_apply_russian_roulette` reads raw throughput luminance, so it sees
+    # this mid-transit dip as if it were real attenuation and kills paths
+    # that were about to be restored to full brightness on exit. For a
+    # multi-bounce TIR chain through a complex glass assembly (see
+    # transparent-machines: object-region highlights read as sparse
+    # firefly-clamped spikes over an otherwise uniformly darker body instead
+    # of pbrt's smooth bright highlight fan-out -- exactly the signature of
+    # RR prematurely killing long, temporarily-dim, ultimately-bright paths,
+    # with the rare survivors over-boosted by RR's own 1/(1-q) compensation)
+    # this compounds badly. `eta_scale` divides the mid-transit compression
+    # back out for the RR decision only, matching pbrt's `rrBeta = beta *
+    # etaScale`. Updated only on a genuine TRANSMIT (reflect/TIR leave it
+    # unchanged, same condition as current_dielectric_ior above).
+    var eta_scale: Float32
     var sampler_dim: Int32         # next Sobol dimension; 3 after primary ray (dims 0+1 film pos, dim 2 wavelength), +8 per bounce
     var sobol_idx: UInt64          # path's Z-Sobol sample index (from Morton code + si)
     # Hero-wavelength sample for spectral rendering (staged rollout, see
@@ -601,7 +654,7 @@ struct PathState_C(TrivialRegisterPassable):
     # scalar distance is exact, however many boundaries are crossed.
     var mis_null_dist: Float32
 # <</listing>>
-# PathState_C layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+4+4+8+20+4 = 132 bytes (was 128 -- +4 for current_dielectric_ior);
+# PathState_C layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+4+4+4+4+8+20+4 = 140 bytes (was 136 -- +4 for previous_dielectric_ior);
 # size is computed via size_of[PathState_C]() everywhere (GPU buffer sizing included), not hardcoded.
 
 # ── Lights ────────────────────────────────────────────────────────────────────

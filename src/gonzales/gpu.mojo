@@ -3364,6 +3364,8 @@ def gen_primary_rays_wavefront_gpu(
         Float32(0.0),
         Int32(-1),
         Float32(1.0),   # current_dielectric_ior (vacuum)
+        Float32(1.0),   # previous_dielectric_ior (vacuum)
+        Float32(1.0),   # eta_scale
         Int32(3), sobol_idx,
         wavelengths,
         Float32(0.0),   # mis_null_dist
@@ -3827,6 +3829,8 @@ def gen_primary_rays_gpu(
         Float32(0.0),
         Int32(-1),
         Float32(1.0),   # current_dielectric_ior (vacuum)
+        Float32(1.0),   # previous_dielectric_ior (vacuum)
+        Float32(1.0),   # eta_scale
         Int32(3), sobol_idx,
         wavelengths,
         Float32(0.0),   # mis_null_dist
