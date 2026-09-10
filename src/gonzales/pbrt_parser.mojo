@@ -302,7 +302,17 @@ def _psc_handle_film(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                     s: UnsafePointer[SceneParseState, MutExternalOrigin]):
     var sbuf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
+    # The film TYPE is otherwise unused: every type renders as "rgb". That is
+    # right for "rgb"/"spectral", but pbrt's "gbuffer" film also writes
+    # auxiliary AOV channels (albedo/normal/depth/variance) into the same EXR,
+    # which gonzales does not. Say so rather than let a scene author believe
+    # those channels were produced -- watercolor and kroken both ask for it.
+    var is_gbuf = _psc_streq(sbuf, "gbuffer")
     sbuf.free()
+    if is_gbuf:
+        print("Warning: Film \"gbuffer\" — rendering as \"rgb\"; the auxiliary"
+              + " G-buffer channels (albedo/normal/depth/variance) are NOT"
+              + " written into the output EXR.")
     var params = _psc_collect_params(handle)
     s[0].film_w = params.get_int("xresolution", s[0].film_w)
     s[0].film_h = params.get_int("yresolution", s[0].film_h)
@@ -719,6 +729,20 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         s[0].nvdb_gridnames.append(temp_name)
         for ci in range(16):
             s[0].nvdb_ctm.append(s[0].ctm[ci])
+    else:
+        # Unsupported medium type. This branch used not to exist, so an
+        # unrecognised type appended NOTHING to med_names -- lookup_medium
+        # then returned -1 and the MediumInterface bound to no medium at
+        # all, silently. `clouds.pbrt` (type "cloud", pbrt's procedural
+        # Perlin-noise CloudMedium) rendered as a bare null-material sphere
+        # you see straight through: a flat sky, no cloud, no warning. Same
+        # defect class as the .spd/.ply.gz/scale-texture drops -- parsed,
+        # recognised as "not mine", and discarded without a word.
+        var bad_name = String(unsafe_from_utf8_ptr=name_buf.as_immutable())
+        print("Warning: unsupported medium type '" + type_str
+              + "' for medium '" + bad_name
+              + "' — it is DROPPED, so any MediumInterface naming it renders as"
+              + " empty space. Supported: homogeneous, uniformgrid, nanovdb.")
     name_buf.free()
 
 def lookup_medium(s: UnsafePointer[SceneParseState, MutExternalOrigin],
