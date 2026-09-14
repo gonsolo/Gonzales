@@ -2145,15 +2145,25 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
     var node_count_gpu = build_bvh2(prim_bounds, total_prims_gpu, bvh_nodes_gpu, bvh_order_gpu)
 
     # ---- CPU-inclusive TLAS: tris + curves + instances ----
-    var max_bvh_nodes = Int(total_prims) * 2 + 4
-    var bvh_nodes = alloc[BVH2Node](max_bvh_nodes)
-    var bvh_order = alloc[Int32](Int(total_prims))
-    var node_count = build_bvh2(prim_bounds, total_prims, bvh_nodes, bvh_order)
+    # Without instances this covers exactly the primitives above, in the same
+    # order, so a second build would reproduce that tree node for node (and its
+    # PrimIds entry for entry). Share those arrays instead; free_parsed_scene
+    # frees shared arrays once.
+    var shared_tlas = total_instances == 0
+    var bvh_nodes = bvh_nodes_gpu
+    var bvh_order = bvh_order_gpu
+    var node_count = node_count_gpu
+    if not shared_tlas:
+        bvh_nodes = alloc[BVH2Node](Int(total_prims) * 2 + 4)
+        bvh_order = alloc[Int32](Int(total_prims))
+        node_count = build_bvh2(prim_bounds, total_prims, bvh_nodes, bvh_order)
 
     prim_bounds.free()
 
     var prim_ids_gpu = alloc[PrimId_C](Int(total_prims_gpu))
-    var prim_ids = alloc[PrimId_C](Int(total_prims))
+    var prim_ids = prim_ids_gpu
+    if not shared_tlas:
+        prim_ids = alloc[PrimId_C](Int(total_prims))
 
     var mesh_al_idx = alloc[Int32](max(n_meshes, 1))
     var running_al = Int32(0)
@@ -2195,7 +2205,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
         prim_ids_gpu[k].instanceIdx = Int32(-1)
         prim_ids_gpu[k]._pad0 = Int8(0); prim_ids_gpu[k]._pad1 = Int8(0); prim_ids_gpu[k]._pad2 = Int8(0)
 
-    for k in range(Int(total_prims)):
+    for k in range(0 if shared_tlas else Int(total_prims)):   # shared: filled above
         var orig = Int(bvh_order[k])
         if orig < Int(total_tris):
             var mi   = Int(tri_mesh[orig])
@@ -2234,7 +2244,9 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
         prim_ids[k]._pad0 = Int8(0); prim_ids[k]._pad1 = Int8(0)
         prim_ids[k]._pad2 = Int8(0)
 
-    tri_mesh.free(); tri_local.free(); bvh_order.free(); bvh_order_gpu.free(); mesh_al_idx.free()
+    if not shared_tlas:
+        bvh_order.free()
+    tri_mesh.free(); tri_local.free(); bvh_order_gpu.free(); mesh_al_idx.free()
     curve_al_mat_idx.free()
     curve_group_base.free(); group_curve_idx.free(); group_id2.free()
 
@@ -2863,9 +2875,10 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin]):
         psc[0].bvh_nodes.free()
     if psc[0].prim_count > 0:
         psc[0].prim_ids.free()
-    if psc[0].bvh_node_count_cpu > 0:
+    # Without instances the CPU TLAS shares the GPU one's arrays (freed above).
+    if psc[0].bvh_node_count_cpu > 0 and Int(psc[0].bvh_nodes_cpu) != Int(psc[0].bvh_nodes):
         psc[0].bvh_nodes_cpu.free()
-    if psc[0].prim_count_cpu > 0:
+    if psc[0].prim_count_cpu > 0 and Int(psc[0].prim_ids_cpu) != Int(psc[0].prim_ids):
         psc[0].prim_ids_cpu.free()
     if Int(psc[0].raster_to_camera) > 4:
         psc[0].raster_to_camera.free()
