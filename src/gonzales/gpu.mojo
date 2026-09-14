@@ -5,7 +5,7 @@ from max.gpu.host import DeviceContext, DeviceBuffer
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc, memcpy
-from .geometry import RGB, Point3f, Point2f, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, NvdbGrid_C, nvdb_sample_density, nvdb_ray_range, grid_ray_range, nvdb_index_ray, nvdb_node_exit_t, nvdb_majorant_at_world, hg_phase, hg_sample, blackbody_rgb, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr
+from .geometry import RGB, Point3f, Point2f, FilmDims, FilterParams, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, NvdbGrid_C, nvdb_sample_density, nvdb_ray_range, grid_ray_range, nvdb_index_ray, nvdb_node_exit_t, nvdb_majorant_at_world, hg_phase, hg_sample, blackbody_rgb, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres, LightSample, _sample_infinite_light_nee, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee
 from .transform import transform_normal_by_instance
@@ -36,58 +36,115 @@ def _cstr_eq(a: UnsafePointer[UInt8, MutExternalOrigin], b: UnsafePointer[UInt8,
             return True
         i += 1
 
-# GPU scene handle — holds DeviceContext and device-resident scene buffers.
-# Allocated on the heap, returned as an opaque pointer.
+@always_inline
+def typed_ptr[T: AnyType](mut buf: DeviceBuffer[DType.uint8]) -> UnsafePointer[T, MutExternalOrigin]:
+    """Reinterpret a type-erased byte DeviceBuffer's pointer as UnsafePointer[T]
+    with an origin that can escape the caller (unsafe_ptr() alone ties the
+    origin to the buffer's local scope; MutExternalOrigin is required for
+    GpuSceneHandle's buffer accessor methods, whose return values are used
+    well past that scope). Collapses the buf.unsafe_ptr().bitcast[T]()
+    .unsafe_origin_cast[MutExternalOrigin]() chain repeated at every
+    GpuSceneHandle sub-struct's accessor into one call."""
+    return buf.unsafe_ptr().bitcast[T]().unsafe_origin_cast[MutExternalOrigin]()
+
 @fieldwise_init
-struct GpuSceneHandle(Movable):
-    var ctx: DeviceContext
-    var bvh2Nodes_buf: DeviceBuffer[DType.uint8]
-    var primIds_buf: DeviceBuffer[DType.uint8]
-    # Object instancing (see [[project_object_instancing]]/geometry.mojo's
-    # Instance_C docs): one device buffer per BLAS (kept alive here), plus two
-    # small "array of device pointers" buffers so a kernel's
-    # blasNodesArr[i]/blasPrimIdsArr[i] resolves to the right BLAS's buffer.
-    var blas_nodes_bufs: List[DeviceBuffer[DType.uint8]]
-    var blas_primids_bufs: List[DeviceBuffer[DType.uint8]]
-    var blas_nodes_ptrs_buf: DeviceBuffer[DType.uint8]
-    var blas_primids_ptrs_buf: DeviceBuffer[DType.uint8]
+struct SpectralBuffers(Movable):
+    """Device-side twin of the host SpectralHandle -- see spectrum.mojo's
+    long comment on the confirmed by-value SpectralHandle miscompilation for
+    why these stay separate DeviceBuffer/Int fields (not a SpectralHandle)
+    on GpuSceneHandle itself; this struct only bundles them for the ONE
+    place they're all constructed/read together, GpuSceneHandle, which is
+    always accessed by pointer -- never passed by value."""
+    var coeffs_buf: DeviceBuffer[DType.uint8]
+    var cie_x_buf:  DeviceBuffer[DType.uint8]
+    var cie_y_buf:  DeviceBuffer[DType.uint8]
+    var cie_z_buf:  DeviceBuffer[DType.uint8]
+    var d65_buf:    DeviceBuffer[DType.uint8]
+    var res: Int
+
+    @always_inline
+    def unsafe_ptrs(mut self) -> Tuple[
+        UnsafePointer[Float32, MutExternalOrigin], Int,
+        UnsafePointer[Float32, MutExternalOrigin],
+        UnsafePointer[Float32, MutExternalOrigin],
+        UnsafePointer[Float32, MutExternalOrigin],
+        UnsafePointer[Float32, MutExternalOrigin],
+    ]:
+        """(coeffs, res, cie_x, cie_y, cie_z, d65) -- the individual-pointer
+        shape rgb_illuminant_to_spectral_sample/spectral_sample_to_rgb/etc.
+        need (never a SpectralHandle by value, see spectrum.mojo's
+        miscompilation comment), collapsing the usual 6-line unpack at each
+        call site to one line."""
+        return (
+            typed_ptr[Float32](self.coeffs_buf), self.res,
+            typed_ptr[Float32](self.cie_x_buf),
+            typed_ptr[Float32](self.cie_y_buf),
+            typed_ptr[Float32](self.cie_z_buf),
+            typed_ptr[Float32](self.d65_buf),
+        )
+
+@fieldwise_init
+struct BvhBuffers(Movable):
+    var nodes_buf: DeviceBuffer[DType.uint8]
+    var prim_ids_buf: DeviceBuffer[DType.uint8]
+
+    @always_inline
+    def nodes_ptr(mut self) -> UnsafePointer[BVH2Node, MutExternalOrigin]:
+        return typed_ptr[BVH2Node](self.nodes_buf)
+
+    @always_inline
+    def prim_ids_ptr(mut self) -> UnsafePointer[PrimId_C, MutExternalOrigin]:
+        return typed_ptr[PrimId_C](self.prim_ids_buf)
+
+@fieldwise_init
+struct BlasBuffers(Movable):
+    """Object instancing (see [[project_object_instancing]]/geometry.mojo's
+    Instance_C docs): one device buffer per BLAS (kept alive here), plus two
+    small "array of device pointers" buffers so a kernel's
+    blasNodesArr[i]/blasPrimIdsArr[i] resolves to the right BLAS's buffer."""
+    var nodes_bufs: List[DeviceBuffer[DType.uint8]]
+    var primids_bufs: List[DeviceBuffer[DType.uint8]]
+    var nodes_ptrs_buf: DeviceBuffer[DType.uint8]
+    var primids_ptrs_buf: DeviceBuffer[DType.uint8]
     var n_blas: Int
-    var instances_buf: DeviceBuffer[DType.uint8]
-    var n_instances: Int
+
+    @always_inline
+    def nodes_arr(mut self) -> UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin]:
+        return typed_ptr[UnsafePointer[BVH2Node, MutExternalOrigin]](self.nodes_ptrs_buf)
+
+    @always_inline
+    def primids_arr(mut self) -> UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin]:
+        return typed_ptr[UnsafePointer[PrimId_C, MutExternalOrigin]](self.primids_ptrs_buf)
+
+@fieldwise_init
+struct MeshBuffers(Movable):
     var meshes_buf: DeviceBuffer[DType.uint8]
     var mesh_count: Int
-    var materials_buf: DeviceBuffer[DType.uint8]
-    var material_count: Int
     # Keep all per-mesh device buffers alive
     var points_bufs: List[DeviceBuffer[DType.uint8]]
     var faceIndices_bufs: List[DeviceBuffer[DType.uint8]]
     var vertexIndices_bufs: List[DeviceBuffer[DType.uint8]]
     var uv_bufs: List[DeviceBuffer[DType.uint8]]
     var nrm_bufs: List[DeviceBuffer[DType.uint8]]
+
+    @always_inline
+    def meshes_ptr(mut self) -> UnsafePointer[TriangleMesh_C, MutExternalOrigin]:
+        return typed_ptr[TriangleMesh_C](self.meshes_buf)
+
+@fieldwise_init
+struct TextureBuffers(Movable):
     var tex_data_bufs: List[DeviceBuffer[DType.uint8]]
     var textures_buf: DeviceBuffer[DType.uint8]  # array of GpuTexture_C
     var n_textures: Int
+
+    @always_inline
+    def textures_ptr(mut self) -> UnsafePointer[GpuTexture_C, MutExternalOrigin]:
+        return typed_ptr[GpuTexture_C](self.textures_buf)
+
+@fieldwise_init
+struct LightBuffers(Movable):
     var area_lights_buf: DeviceBuffer[DType.uint8]  # n_lights × sizeof(AreaLight_C) = 24
     var n_area_lights: Int
-    var spheres_buf: DeviceBuffer[DType.uint8]   # n_spheres × sizeof(Sphere_C) = 36
-    var n_spheres: Int
-    var curves_buf: DeviceBuffer[DType.uint8]    # n_curves × sizeof(Curve_C)
-    var n_curves: Int
-    # Curve-divergence-mitigation scratch (see traverse_bvh2_core_defer_curves).
-    # Only meaningfully sized when n_curves > 0; otherwise 1-byte dummies.
-    var curve_cand_prim_buf: DeviceBuffer[DType.uint8]      # n_pixels×WAVEFRONT_BATCH×CURVE_DEFER_K × Int32
-    var curve_cand_count_buf: DeviceBuffer[DType.uint8]     # n_pixels×WAVEFRONT_BATCH × Int32
-    # Each ray's start offset into curve_cand_prim_buf. The CUDA-native path
-    # (traverse_bvh2_core_defer_curves) always writes tid*CURVE_DEFER_K-
-    # strided candidates, so this is initialized ONCE to that same formula
-    # (init_curve_cand_offset_gpu) and never touched again for CUDA-only
-    # rendering. The Vulkan RT path OVERWRITES it every bounce with real,
-    # uncapped pool offsets from its own count-then-place scheme (see
-    # intersect_batch.comp) -- resolve_curve_candidates_gpu always reads
-    # through this indirection so one indexing scheme serves both backends.
-    var curve_cand_offset_buf: DeviceBuffer[DType.uint8]    # n_pixels×WAVEFRONT_BATCH × Int32
-    var curve_compact_path_buf: DeviceBuffer[DType.uint8]   # n_pixels×WAVEFRONT_BATCH × Int32
-    var curve_compact_counter_buf: DeviceBuffer[DType.uint8] # 1 × Int32
     var distant_lights_buf: DeviceBuffer[DType.uint8]  # n_distant × sizeof(DistantLight_C) = 32
     var n_distant_lights: Int
     var point_lights_buf: DeviceBuffer[DType.uint8]    # n_point × sizeof(PointLight_C) = 16
@@ -99,6 +156,88 @@ struct GpuSceneHandle(Movable):
     var il_cdf_bufs: List[DeviceBuffer[DType.uint8]]    # per-light 2D CDF on GPU
     var il_w2l_bufs: List[DeviceBuffer[DType.uint8]]    # per-light world_to_light matrix on GPU
     var n_infinite_lights: Int
+
+    @always_inline
+    def area_lights_ptr(mut self) -> UnsafePointer[AreaLight_C, MutExternalOrigin]:
+        return typed_ptr[AreaLight_C](self.area_lights_buf)
+
+    @always_inline
+    def distant_lights_ptr(mut self) -> UnsafePointer[DistantLight_C, MutExternalOrigin]:
+        return typed_ptr[DistantLight_C](self.distant_lights_buf)
+
+    @always_inline
+    def point_lights_ptr(mut self) -> UnsafePointer[PointLight_C, MutExternalOrigin]:
+        return typed_ptr[PointLight_C](self.point_lights_buf)
+
+    @always_inline
+    def light_sampler_ptr(mut self) -> UnsafePointer[Float32, MutExternalOrigin]:
+        return typed_ptr[Float32](self.light_sampler_buf)
+
+    @always_inline
+    def infinite_lights_ptr(mut self) -> UnsafePointer[InfiniteLight_C, MutExternalOrigin]:
+        return typed_ptr[InfiniteLight_C](self.infinite_lights_buf)
+
+@fieldwise_init
+struct CurveBuffers(Movable):
+    var curves_buf: DeviceBuffer[DType.uint8]    # n_curves × sizeof(Curve_C)
+    var n_curves: Int
+    # Curve-divergence-mitigation scratch (see traverse_bvh2_core_defer_curves).
+    # Only meaningfully sized when n_curves > 0; otherwise 1-byte dummies.
+    var cand_prim_buf: DeviceBuffer[DType.uint8]      # n_pixels×WAVEFRONT_BATCH×CURVE_DEFER_K × Int32
+    var cand_count_buf: DeviceBuffer[DType.uint8]     # n_pixels×WAVEFRONT_BATCH × Int32
+    # Each ray's start offset into cand_prim_buf. The CUDA-native path
+    # (traverse_bvh2_core_defer_curves) always writes tid*CURVE_DEFER_K-
+    # strided candidates, so this is initialized ONCE to that same formula
+    # (init_curve_cand_offset_gpu) and never touched again for CUDA-only
+    # rendering. The Vulkan RT path OVERWRITES it every bounce with real,
+    # uncapped pool offsets from its own count-then-place scheme (see
+    # intersect_batch.comp) -- resolve_curve_candidates_gpu always reads
+    # through this indirection so one indexing scheme serves both backends.
+    var cand_offset_buf: DeviceBuffer[DType.uint8]    # n_pixels×WAVEFRONT_BATCH × Int32
+    var compact_path_buf: DeviceBuffer[DType.uint8]   # n_pixels×WAVEFRONT_BATCH × Int32
+    var compact_counter_buf: DeviceBuffer[DType.uint8] # 1 × Int32
+
+    @always_inline
+    def curves_ptr(mut self) -> UnsafePointer[Curve_C, MutExternalOrigin]:
+        return typed_ptr[Curve_C](self.curves_buf)
+
+    @always_inline
+    def cand_prim_ptr(mut self) -> UnsafePointer[Int32, MutExternalOrigin]:
+        return typed_ptr[Int32](self.cand_prim_buf)
+
+    @always_inline
+    def cand_count_ptr(mut self) -> UnsafePointer[Int32, MutExternalOrigin]:
+        return typed_ptr[Int32](self.cand_count_buf)
+
+    @always_inline
+    def cand_offset_ptr(mut self) -> UnsafePointer[Int32, MutExternalOrigin]:
+        return typed_ptr[Int32](self.cand_offset_buf)
+
+    @always_inline
+    def compact_path_ptr(mut self) -> UnsafePointer[Int32, MutExternalOrigin]:
+        return typed_ptr[Int32](self.compact_path_buf)
+
+    @always_inline
+    def compact_counter_ptr(mut self) -> UnsafePointer[Int32, MutExternalOrigin]:
+        return typed_ptr[Int32](self.compact_counter_buf)
+
+# GPU scene handle — holds DeviceContext and device-resident scene buffers.
+# Allocated on the heap, returned as an opaque pointer.
+@fieldwise_init
+struct GpuSceneHandle(Movable):
+    var ctx: DeviceContext
+    var bvh: BvhBuffers
+    var blas: BlasBuffers
+    var instances_buf: DeviceBuffer[DType.uint8]
+    var n_instances: Int
+    var meshes: MeshBuffers
+    var materials_buf: DeviceBuffer[DType.uint8]
+    var material_count: Int
+    var textures: TextureBuffers
+    var lights: LightBuffers
+    var spheres_buf: DeviceBuffer[DType.uint8]   # n_spheres × sizeof(Sphere_C) = 36
+    var n_spheres: Int
+    var curves: CurveBuffers
     var mediums_buf: DeviceBuffer[DType.uint8]        # n_mediums × sizeof(Medium_C)
     var n_mediums: Int
     var medium_ifaces_buf: DeviceBuffer[DType.uint8]  # n_medium_ifaces × sizeof(MediumInterface_C)
@@ -147,24 +286,13 @@ struct GpuSceneHandle(Movable):
     var sobol_buf: DeviceBuffer[DType.uint8]  # 1024 dims × 52 UInt32 = 212992 bytes
     var r2c_buf: DeviceBuffer[DType.uint8]    # raster_to_camera: 16 Float32 = 64 bytes
     var c2w_buf: DeviceBuffer[DType.uint8]    # camera_to_world: 16 Float32 = 64 bytes (updated each frame)
-    var filter_sigma: Float32
-    var filter_support_x: Float32
-    var filter_support_y: Float32
-    var filter_norm_x: Float32
-    var filter_norm_y: Float32
-    var filter_type: Int32
-    var fw: Int
-    var fh: Int
+    var filter: FilterParams
+    var film: FilmDims
     # Staged spectral rendering rollout (Stage 2c-1, see
     # project_spectral_rendering memory) — device-side twin of the host
     # SpectralHandle; spectral_res=0 means no real table was uploaded (dummy
     # 1-element buffers, BDPT/SPPM GPU dispatch, Stage 3/4 not wired yet).
-    var spectral_coeffs_buf: DeviceBuffer[DType.uint8]
-    var spectral_cie_x_buf:  DeviceBuffer[DType.uint8]
-    var spectral_cie_y_buf:  DeviceBuffer[DType.uint8]
-    var spectral_cie_z_buf:  DeviceBuffer[DType.uint8]
-    var spectral_d65_buf:    DeviceBuffer[DType.uint8]
-    var spectral_res: Int
+    var spectral: SpectralBuffers
 
 def gpu_available() -> Bool:
     return has_accelerator()
@@ -236,10 +364,8 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
     sobol_matrices: UnsafePointer[UInt32, MutExternalOrigin],
     r2c: UnsafePointer[Float32, MutExternalOrigin],
     c2w_init: UnsafePointer[Float32, MutExternalOrigin],
-    filter_sigma: Float32, filter_support_x: Float32, filter_support_y: Float32,
-    filter_norm_x: Float32, filter_norm_y: Float32,
-    filter_type: Int32,
-    fw: Int32, fh: Int32,
+    filter: FilterParams,
+    film: FilmDims,
     # Decomposed, NOT a single by-value `spectral: SpectralHandle` param --
     # see spectrum.mojo's long comment on the confirmed by-value SpectralHandle
     # miscompilation. This host function is part of the GPU-enabled
@@ -753,7 +879,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             # dependent dark/wrong-color regression this fixes.
             # curve_compact_path_buf/curve_compact_counter_buf are only ever
             # touched by compact_curve_paths_gpu/resolve_curve_candidates_gpu,
-            # both gated behind `if handle[].n_curves > 0` at the dispatch site,
+            # both gated behind `if handle[].curves.n_curves > 0` at the dispatch site,
             # so those two are still safe to leave dummy-sized.
             var n_curve_paths = n_pix * WAVEFRONT_BATCH
             var r_curve_cand_prim_buf   = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * CURVE_DEFER_K * 4)
@@ -933,49 +1059,61 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var handle = alloc[GpuSceneHandle](1)
             handle.init_pointee_move(GpuSceneHandle(
                 ctx=ctx^,
-                bvh2Nodes_buf=bvh_buf^,
-                primIds_buf=prim_buf^,
-                blas_nodes_bufs=blas_nodes_bufs^,
-                blas_primids_bufs=blas_primids_bufs^,
-                blas_nodes_ptrs_buf=blas_nodes_ptrs_buf^,
-                blas_primids_ptrs_buf=blas_primids_ptrs_buf^,
-                n_blas=n_blas_int,
+                bvh=BvhBuffers(
+                    nodes_buf=bvh_buf^,
+                    prim_ids_buf=prim_buf^,
+                ),
+                blas=BlasBuffers(
+                    nodes_bufs=blas_nodes_bufs^,
+                    primids_bufs=blas_primids_bufs^,
+                    nodes_ptrs_buf=blas_nodes_ptrs_buf^,
+                    primids_ptrs_buf=blas_primids_ptrs_buf^,
+                    n_blas=n_blas_int,
+                ),
                 instances_buf=instances_gpu_buf^,
                 n_instances=n_instances_int,
-                meshes_buf=meshes_buf^,
-                mesh_count=Int(meshCount),
+                meshes=MeshBuffers(
+                    meshes_buf=meshes_buf^,
+                    mesh_count=Int(meshCount),
+                    points_bufs=points_bufs^,
+                    faceIndices_bufs=face_bufs^,
+                    vertexIndices_bufs=vert_bufs^,
+                    uv_bufs=uv_bufs^,
+                    nrm_bufs=nrm_bufs^,
+                ),
                 materials_buf=mat_buf^,
                 material_count=Int(materialCount),
-                points_bufs=points_bufs^,
-                faceIndices_bufs=face_bufs^,
-                vertexIndices_bufs=vert_bufs^,
-                uv_bufs=uv_bufs^,
-                nrm_bufs=nrm_bufs^,
-                tex_data_bufs=tex_data_bufs^,
-                textures_buf=textures_gpu_buf^,
-                n_textures=n_textures_int,
-                area_lights_buf=al_buf^,
-                n_area_lights=Int(areaLightCount),
+                textures=TextureBuffers(
+                    tex_data_bufs=tex_data_bufs^,
+                    textures_buf=textures_gpu_buf^,
+                    n_textures=n_textures_int,
+                ),
+                lights=LightBuffers(
+                    area_lights_buf=al_buf^,
+                    n_area_lights=Int(areaLightCount),
+                    distant_lights_buf=dl_buf^,
+                    n_distant_lights=Int(distantLightCount),
+                    point_lights_buf=pl_buf^,
+                    n_point_lights=Int(pointLightCount),
+                    light_sampler_buf=ls_buf^,
+                    n_light_sampler=Int(lightSamplerN),
+                    infinite_lights_buf=il_buf^,
+                    il_pixels_bufs=il_pixels_bufs^,
+                    il_cdf_bufs=il_cdf_bufs^,
+                    il_w2l_bufs=il_w2l_bufs^,
+                    n_infinite_lights=Int(infiniteLightCount),
+                ),
                 spheres_buf=sphere_buf^,
                 n_spheres=Int(sphereCount),
-                curves_buf=curve_buf^,
-                n_curves=Int(curveCount),
-                curve_cand_prim_buf=r_curve_cand_prim_buf^,
-                curve_cand_count_buf=r_curve_cand_count_buf^,
-                curve_cand_offset_buf=r_curve_cand_offset_buf^,
-                curve_compact_path_buf=r_curve_compact_path_buf^,
-                curve_compact_counter_buf=r_curve_compact_counter_buf^,
-                distant_lights_buf=dl_buf^,
-                n_distant_lights=Int(distantLightCount),
-                point_lights_buf=pl_buf^,
-                n_point_lights=Int(pointLightCount),
-                light_sampler_buf=ls_buf^,
-                n_light_sampler=Int(lightSamplerN),
-                infinite_lights_buf=il_buf^,
-                il_pixels_bufs=il_pixels_bufs^,
-                il_cdf_bufs=il_cdf_bufs^,
-                il_w2l_bufs=il_w2l_bufs^,
-                n_infinite_lights=Int(infiniteLightCount),
+                curves=CurveBuffers(
+                    curves_buf=curve_buf^,
+                    n_curves=Int(curveCount),
+                    cand_prim_buf=r_curve_cand_prim_buf^,
+                    cand_count_buf=r_curve_cand_count_buf^,
+                    cand_offset_buf=r_curve_cand_offset_buf^,
+                    compact_path_buf=r_curve_compact_path_buf^,
+                    compact_counter_buf=r_curve_compact_counter_buf^,
+                ),
                 mediums_buf=med_buf^,
                 n_mediums=Int(mediumCount),
                 medium_ifaces_buf=miface_buf^,
@@ -1011,20 +1149,16 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                 sobol_buf=sobol_gpu_buf^,
                 r2c_buf=r2c_gpu_buf^,
                 c2w_buf=c2w_gpu_buf^,
-                filter_sigma=filter_sigma,
-                filter_support_x=filter_support_x,
-                filter_support_y=filter_support_y,
-                filter_norm_x=filter_norm_x,
-                filter_norm_y=filter_norm_y,
-                filter_type=filter_type,
-                fw=Int(fw),
-                fh=Int(fh),
-                spectral_coeffs_buf=spec_coeffs_gpu_buf^,
-                spectral_cie_x_buf=spec_cie_x_gpu_buf^,
-                spectral_cie_y_buf=spec_cie_y_gpu_buf^,
-                spectral_cie_z_buf=spec_cie_z_gpu_buf^,
-                spectral_d65_buf=spec_d65_gpu_buf^,
-                spectral_res=spectral_res,
+                filter=filter,
+                film=film,
+                spectral=SpectralBuffers(
+                    coeffs_buf=spec_coeffs_gpu_buf^,
+                    cie_x_buf=spec_cie_x_gpu_buf^,
+                    cie_y_buf=spec_cie_y_gpu_buf^,
+                    cie_z_buf=spec_cie_z_gpu_buf^,
+                    d65_buf=spec_d65_gpu_buf^,
+                    res=spectral_res,
+                ),
             ))
 
             print("GPU: scene uploaded")
@@ -1102,10 +1236,10 @@ def gpu_traverse_batch(
             var grid_dim = ceildiv(n, block_size)
 
             handle[].ctx.enqueue_function[traverse_bvh2_gpu](
-                handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
-                handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
-                handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
-                handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+                handle[].bvh.nodes_ptr(),
+                handle[].bvh.prim_ids_ptr(),
+                handle[].meshes.meshes_ptr(),
+                handle[].curves.curves_ptr(),
                 ray_buf.unsafe_ptr().bitcast[Ray_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
                 tmax_buf.unsafe_ptr().bitcast[Float32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
                 result_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
@@ -3232,7 +3366,7 @@ def gpu_shade_batch(
             handle[].ctx.enqueue_function[shade_gpu](
                 path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
                 inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-                handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+                handle[].meshes.meshes_ptr(),
                 handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
                 Int64(n),
                 grid_dim=grid_dim,
@@ -3441,12 +3575,12 @@ def gpu_gen_aux_buffers[Oc: Origin[mut=True]](
             handle[].ctx.enqueue_function[gen_aux_buffers_gpu](
                 handle[].r2c_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].c2w_buf.unsafe_ptr().bitcast[Float32](),
-                handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
-                handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
-                handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
-                handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
-                handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutExternalOrigin]](),
-                handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutExternalOrigin]](),
+                handle[].bvh.nodes_ptr(),
+                handle[].bvh.prim_ids_ptr(),
+                handle[].meshes.meshes_ptr(),
+                handle[].curves.curves_ptr(),
+                handle[].blas.nodes_arr(),
+                handle[].blas.primids_arr(),
                 handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
                 handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
                 Int64(handle[].n_spheres),
@@ -3456,7 +3590,7 @@ def gpu_gen_aux_buffers[Oc: Origin[mut=True]](
                 handle[].atrous_curve_mask_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].gbuf_worldpos_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].gbuf_material_id_buf.unsafe_ptr().bitcast[Int32](),
-                Int64(handle[].fw), Int64(handle[].fh),
+                Int64(handle[].film.width), Int64(handle[].film.height),
                 grid_dim=grid_n, block_dim=block_size,
             )
             handle[].ctx.synchronize()
@@ -3510,19 +3644,19 @@ def _gpu_bounce_kernels(
         )
     else:
         handle[].ctx.enqueue_function[traverse_paths_gpu](
-            handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
-            handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
-            handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
-            handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
-            handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutExternalOrigin]](),
-            handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutExternalOrigin]](),
+            handle[].bvh.nodes_ptr(),
+            handle[].bvh.prim_ids_ptr(),
+            handle[].meshes.meshes_ptr(),
+            handle[].curves.curves_ptr(),
+            handle[].blas.nodes_arr(),
+            handle[].blas.primids_arr(),
             handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
             handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
             Int64(handle[].n_spheres),
             handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
             handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-            handle[].curve_cand_prim_buf.unsafe_ptr().bitcast[Int32](),
-            handle[].curve_cand_count_buf.unsafe_ptr().bitcast[Int32](),
+            handle[].curves.cand_prim_ptr(),
+            handle[].curves.cand_count_ptr(),
             Int64(n),
             grid_dim=grid_dim,
             block_dim=block_size,
@@ -3535,26 +3669,26 @@ def _gpu_bounce_kernels(
     # (see vulkaninterop_rt_traverse_paths_gpu / vulkaninterop_unpack_
     # results_kernel's hitFlag==2 branch) -- so this whole compact+resolve
     # pass is CUDA-native-only.
-    if handle[].n_curves > 0 and not use_vulkan_rt:
+    if handle[].curves.n_curves > 0 and not use_vulkan_rt:
         handle[].ctx.enqueue_function[reset_curve_counter_gpu](
-            handle[].curve_compact_counter_buf.unsafe_ptr().bitcast[Int32](),
+            handle[].curves.compact_counter_ptr(),
             grid_dim=1, block_dim=1,
         )
         handle[].ctx.enqueue_function[compact_curve_paths_gpu](
-            handle[].curve_cand_count_buf.unsafe_ptr().bitcast[Int32](),
+            handle[].curves.cand_count_ptr(),
             Int64(n),
-            handle[].curve_compact_path_buf.unsafe_ptr().bitcast[Int32](),
-            handle[].curve_compact_counter_buf.unsafe_ptr().bitcast[Int32](),
+            handle[].curves.compact_path_ptr(),
+            handle[].curves.compact_counter_ptr(),
             grid_dim=grid_dim, block_dim=block_size,
         )
         handle[].ctx.enqueue_function[resolve_curve_candidates_gpu](
-            handle[].curve_compact_path_buf.unsafe_ptr().bitcast[Int32](),
-            handle[].curve_compact_counter_buf.unsafe_ptr().bitcast[Int32](),
-            handle[].curve_cand_prim_buf.unsafe_ptr().bitcast[Int32](),
-            handle[].curve_cand_count_buf.unsafe_ptr().bitcast[Int32](),
-            handle[].curve_cand_offset_buf.unsafe_ptr().bitcast[Int32](),
-            handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
-            handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
+            handle[].curves.compact_path_ptr(),
+            handle[].curves.compact_counter_ptr(),
+            handle[].curves.cand_prim_ptr(),
+            handle[].curves.cand_count_ptr(),
+            handle[].curves.cand_offset_ptr(),
+            handle[].bvh.prim_ids_ptr(),
+            handle[].curves.curves_ptr(),
             handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
             handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
             Int64(n),
@@ -3567,68 +3701,68 @@ def _gpu_bounce_kernels(
         Int64(handle[].n_mediums),
         handle[].grids_buf.unsafe_ptr().bitcast[Grid_C](),
         handle[].nvdb_grids_buf.unsafe_ptr().bitcast[NvdbGrid_C](),
-        handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
-        handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
-        handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
-        handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
-        handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutExternalOrigin]](),
-        handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutExternalOrigin]](),
+        handle[].bvh.nodes_ptr(),
+        handle[].bvh.prim_ids_ptr(),
+        handle[].meshes.meshes_ptr(),
+        handle[].curves.curves_ptr(),
+        handle[].blas.nodes_arr(),
+        handle[].blas.primids_arr(),
         handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
-        handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
-        Int64(handle[].n_area_lights),
-        handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
-        Int64(handle[].n_light_sampler),
+        handle[].lights.area_lights_ptr(),
+        Int64(handle[].lights.n_area_lights),
+        handle[].lights.light_sampler_ptr(),
+        Int64(handle[].lights.n_light_sampler),
         Int64(n),
         handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
         Int64(handle[].n_spheres),
-        handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
-        Int64(handle[].spectral_res),
-        handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.coeffs_buf.unsafe_ptr().bitcast[Float32](),
+        Int64(handle[].spectral.res),
+        handle[].spectral.cie_x_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_y_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_z_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.d65_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
-                handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
-        Int64(handle[].n_infinite_lights),
-                handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C](),
-        Int64(handle[].n_distant_lights),
-        handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
-        Int64(handle[].n_point_lights),
+                handle[].lights.infinite_lights_ptr(),
+        Int64(handle[].lights.n_infinite_lights),
+                handle[].lights.distant_lights_ptr(),
+        Int64(handle[].lights.n_distant_lights),
+        handle[].lights.point_lights_ptr(),
+        Int64(handle[].lights.n_point_lights),
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_nee_preamble_gpu](
         handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
-        handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
-        handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
-        handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
-        handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutExternalOrigin]](),
-        handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutExternalOrigin]](),
+        handle[].bvh.nodes_ptr(),
+        handle[].bvh.prim_ids_ptr(),
+        handle[].meshes.meshes_ptr(),
+        handle[].curves.curves_ptr(),
+        handle[].blas.nodes_arr(),
+        handle[].blas.primids_arr(),
         handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
         handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
-        handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
-        Int64(handle[].n_area_lights),
-        handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
-        Int64(handle[].n_textures),
-        handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C](),
-        Int64(handle[].n_distant_lights),
-        handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
-        Int64(handle[].n_point_lights),
-        handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
-        Int64(handle[].n_light_sampler),
-        handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
-        Int64(handle[].n_infinite_lights),
+        handle[].lights.area_lights_ptr(),
+        Int64(handle[].lights.n_area_lights),
+        handle[].textures.textures_ptr(),
+        Int64(handle[].textures.n_textures),
+        handle[].lights.distant_lights_ptr(),
+        Int64(handle[].lights.n_distant_lights),
+        handle[].lights.point_lights_ptr(),
+        Int64(handle[].lights.n_point_lights),
+        handle[].lights.light_sampler_ptr(),
+        Int64(handle[].lights.n_light_sampler),
+        handle[].lights.infinite_lights_ptr(),
+        Int64(handle[].lights.n_infinite_lights),
         handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
         Int64(handle[].n_spheres),
         handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
         Int64(n), px_scale,
-        handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
-        Int64(handle[].spectral_res),
-        handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.coeffs_buf.unsafe_ptr().bitcast[Float32](),
+        Int64(handle[].spectral.res),
+        handle[].spectral.cie_x_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_y_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_z_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.d65_buf.unsafe_ptr().bitcast[Float32](),
         grid_dim=grid_dim, block_dim=block_size,
     )
     # mix is a pure selector (see shade_mix_gpu's docstring) -- enqueued
@@ -3677,36 +3811,36 @@ def _gpu_bounce_kernels(
     handle[].ctx.enqueue_function[shade_diffuse_gpu](
         handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
-        handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
-        handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
-        handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
-        handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutExternalOrigin]](),
-        handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutExternalOrigin]](),
+        handle[].bvh.nodes_ptr(),
+        handle[].bvh.prim_ids_ptr(),
+        handle[].meshes.meshes_ptr(),
+        handle[].curves.curves_ptr(),
+        handle[].blas.nodes_arr(),
+        handle[].blas.primids_arr(),
         handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
         handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
-        handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
-        Int64(handle[].n_area_lights),
-        handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
-        Int64(handle[].n_textures),
-        handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C](),
-        Int64(handle[].n_distant_lights),
-        handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
-        Int64(handle[].n_point_lights),
-        handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
-        Int64(handle[].n_light_sampler),
-        handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
-        Int64(handle[].n_infinite_lights),
+        handle[].lights.area_lights_ptr(),
+        Int64(handle[].lights.n_area_lights),
+        handle[].textures.textures_ptr(),
+        Int64(handle[].textures.n_textures),
+        handle[].lights.distant_lights_ptr(),
+        Int64(handle[].lights.n_distant_lights),
+        handle[].lights.point_lights_ptr(),
+        Int64(handle[].lights.n_point_lights),
+        handle[].lights.light_sampler_ptr(),
+        Int64(handle[].lights.n_light_sampler),
+        handle[].lights.infinite_lights_ptr(),
+        Int64(handle[].lights.n_infinite_lights),
         handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
         Int64(handle[].n_spheres),
         handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
         Int64(n), px_scale,
-        handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
-        Int64(handle[].spectral_res),
-        handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.coeffs_buf.unsafe_ptr().bitcast[Float32](),
+        Int64(handle[].spectral.res),
+        handle[].spectral.cie_x_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_y_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_z_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.d65_buf.unsafe_ptr().bitcast[Float32](),
         Int32(1) if use_restir else Int32(0),
         restir_read,
         restir_write,
@@ -3714,159 +3848,159 @@ def _gpu_bounce_kernels(
         handle[].atrous_depth_buf.unsafe_ptr().bitcast[Float32](),
         handle[].gbuf_material_id_buf.unsafe_ptr().bitcast[Int32](),
         handle[].gbuf_worldpos_buf.unsafe_ptr().bitcast[Float32](),
-        Int32(handle[].fw),
-        Int32(handle[].fh),
+        handle[].film.width,
+        handle[].film.height,
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_coated_diffuse_gpu](
         handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
-        handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
-        handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
-        handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
-        handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutExternalOrigin]](),
-        handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutExternalOrigin]](),
+        handle[].bvh.nodes_ptr(),
+        handle[].bvh.prim_ids_ptr(),
+        handle[].meshes.meshes_ptr(),
+        handle[].curves.curves_ptr(),
+        handle[].blas.nodes_arr(),
+        handle[].blas.primids_arr(),
         handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
         handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
-        handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
-        Int64(handle[].n_area_lights),
-        handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
-        Int64(handle[].n_textures),
-        handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C](),
-        Int64(handle[].n_distant_lights),
-        handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
-        Int64(handle[].n_point_lights),
-        handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
-        Int64(handle[].n_light_sampler),
-        handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
-        Int64(handle[].n_infinite_lights),
+        handle[].lights.area_lights_ptr(),
+        Int64(handle[].lights.n_area_lights),
+        handle[].textures.textures_ptr(),
+        Int64(handle[].textures.n_textures),
+        handle[].lights.distant_lights_ptr(),
+        Int64(handle[].lights.n_distant_lights),
+        handle[].lights.point_lights_ptr(),
+        Int64(handle[].lights.n_point_lights),
+        handle[].lights.light_sampler_ptr(),
+        Int64(handle[].lights.n_light_sampler),
+        handle[].lights.infinite_lights_ptr(),
+        Int64(handle[].lights.n_infinite_lights),
         handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
         Int64(handle[].n_spheres),
         handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
         Int64(n), px_scale,
         handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
-        handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
-        Int64(handle[].spectral_res),
-        handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.coeffs_buf.unsafe_ptr().bitcast[Float32](),
+        Int64(handle[].spectral.res),
+        handle[].spectral.cie_x_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_y_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_z_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.d65_buf.unsafe_ptr().bitcast[Float32](),
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_diffuse_transmit_gpu](
         handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
-        handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
-        handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
-        handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
-        handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutExternalOrigin]](),
-        handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutExternalOrigin]](),
+        handle[].bvh.nodes_ptr(),
+        handle[].bvh.prim_ids_ptr(),
+        handle[].meshes.meshes_ptr(),
+        handle[].curves.curves_ptr(),
+        handle[].blas.nodes_arr(),
+        handle[].blas.primids_arr(),
         handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
         handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
-        handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
-        Int64(handle[].n_area_lights),
-        handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
-        Int64(handle[].n_textures),
-        handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C](),
-        Int64(handle[].n_distant_lights),
-        handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
-        Int64(handle[].n_point_lights),
-        handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
-        Int64(handle[].n_light_sampler),
-        handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
-        Int64(handle[].n_infinite_lights),
+        handle[].lights.area_lights_ptr(),
+        Int64(handle[].lights.n_area_lights),
+        handle[].textures.textures_ptr(),
+        Int64(handle[].textures.n_textures),
+        handle[].lights.distant_lights_ptr(),
+        Int64(handle[].lights.n_distant_lights),
+        handle[].lights.point_lights_ptr(),
+        Int64(handle[].lights.n_point_lights),
+        handle[].lights.light_sampler_ptr(),
+        Int64(handle[].lights.n_light_sampler),
+        handle[].lights.infinite_lights_ptr(),
+        Int64(handle[].lights.n_infinite_lights),
         handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
         Int64(handle[].n_spheres),
         handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
         Int64(n), px_scale,
         handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
-        handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
-        Int64(handle[].spectral_res),
-        handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.coeffs_buf.unsafe_ptr().bitcast[Float32](),
+        Int64(handle[].spectral.res),
+        handle[].spectral.cie_x_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_y_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_z_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.d65_buf.unsafe_ptr().bitcast[Float32](),
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_conductor_gpu](
         handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
-        handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
-        handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
-        handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
-        handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutExternalOrigin]](),
-        handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutExternalOrigin]](),
+        handle[].bvh.nodes_ptr(),
+        handle[].bvh.prim_ids_ptr(),
+        handle[].meshes.meshes_ptr(),
+        handle[].curves.curves_ptr(),
+        handle[].blas.nodes_arr(),
+        handle[].blas.primids_arr(),
         handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
         handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
-        handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
-        Int64(handle[].n_area_lights),
-        handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
-        Int64(handle[].n_textures),
-        handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C](),
-        Int64(handle[].n_distant_lights),
-        handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
-        Int64(handle[].n_point_lights),
-        handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
-        Int64(handle[].n_light_sampler),
-        handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
-        Int64(handle[].n_infinite_lights),
+        handle[].lights.area_lights_ptr(),
+        Int64(handle[].lights.n_area_lights),
+        handle[].textures.textures_ptr(),
+        Int64(handle[].textures.n_textures),
+        handle[].lights.distant_lights_ptr(),
+        Int64(handle[].lights.n_distant_lights),
+        handle[].lights.point_lights_ptr(),
+        Int64(handle[].lights.n_point_lights),
+        handle[].lights.light_sampler_ptr(),
+        Int64(handle[].lights.n_light_sampler),
+        handle[].lights.infinite_lights_ptr(),
+        Int64(handle[].lights.n_infinite_lights),
         handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
         Int64(handle[].n_spheres),
         handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
         Int64(n), px_scale,
         handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
-        handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
-        Int64(handle[].spectral_res),
-        handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.coeffs_buf.unsafe_ptr().bitcast[Float32](),
+        Int64(handle[].spectral.res),
+        handle[].spectral.cie_x_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_y_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_z_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.d65_buf.unsafe_ptr().bitcast[Float32](),
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_measured_gpu](
         handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
-        handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
-        handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
-        handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
-        handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutExternalOrigin]](),
-        handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutExternalOrigin]](),
+        handle[].bvh.nodes_ptr(),
+        handle[].bvh.prim_ids_ptr(),
+        handle[].meshes.meshes_ptr(),
+        handle[].curves.curves_ptr(),
+        handle[].blas.nodes_arr(),
+        handle[].blas.primids_arr(),
         handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
         handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
-        handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
-        Int64(handle[].n_area_lights),
-        handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
-        Int64(handle[].n_textures),
-        handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C](),
-        Int64(handle[].n_distant_lights),
-        handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
-        Int64(handle[].n_point_lights),
-        handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
-        Int64(handle[].n_light_sampler),
-        handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
-        Int64(handle[].n_infinite_lights),
+        handle[].lights.area_lights_ptr(),
+        Int64(handle[].lights.n_area_lights),
+        handle[].textures.textures_ptr(),
+        Int64(handle[].textures.n_textures),
+        handle[].lights.distant_lights_ptr(),
+        Int64(handle[].lights.n_distant_lights),
+        handle[].lights.point_lights_ptr(),
+        Int64(handle[].lights.n_point_lights),
+        handle[].lights.light_sampler_ptr(),
+        Int64(handle[].lights.n_light_sampler),
+        handle[].lights.infinite_lights_ptr(),
+        Int64(handle[].lights.n_infinite_lights),
         handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
         Int64(handle[].n_spheres),
         handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
         Int64(n), px_scale,
         handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
         handle[].measured_brdfs_buf.unsafe_ptr().bitcast[MeasuredBRDF_C](),
-        handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
-        Int64(handle[].spectral_res),
-        handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.coeffs_buf.unsafe_ptr().bitcast[Float32](),
+        Int64(handle[].spectral.res),
+        handle[].spectral.cie_x_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_y_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_z_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.d65_buf.unsafe_ptr().bitcast[Float32](),
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_dielectric_gpu](
         handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+        handle[].meshes.meshes_ptr(),
         handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
         handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
         Int64(n),
@@ -3875,7 +4009,7 @@ def _gpu_bounce_kernels(
     handle[].ctx.enqueue_function[shade_thin_dielectric_gpu](
         handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+        handle[].meshes.meshes_ptr(),
         handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
         handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
         Int64(n),
@@ -3884,43 +4018,43 @@ def _gpu_bounce_kernels(
     handle[].ctx.enqueue_function[shade_coated_conductor_gpu](
         handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
-        handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
-        handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
-        handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
-        handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutExternalOrigin]](),
-        handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutExternalOrigin]](),
+        handle[].bvh.nodes_ptr(),
+        handle[].bvh.prim_ids_ptr(),
+        handle[].meshes.meshes_ptr(),
+        handle[].curves.curves_ptr(),
+        handle[].blas.nodes_arr(),
+        handle[].blas.primids_arr(),
         handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
         handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
-        handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
-        Int64(handle[].n_area_lights),
-        handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
-        Int64(handle[].n_textures),
-        handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C](),
-        Int64(handle[].n_distant_lights),
-        handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
-        Int64(handle[].n_point_lights),
-        handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
-        Int64(handle[].n_light_sampler),
-        handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
-        Int64(handle[].n_infinite_lights),
+        handle[].lights.area_lights_ptr(),
+        Int64(handle[].lights.n_area_lights),
+        handle[].textures.textures_ptr(),
+        Int64(handle[].textures.n_textures),
+        handle[].lights.distant_lights_ptr(),
+        Int64(handle[].lights.n_distant_lights),
+        handle[].lights.point_lights_ptr(),
+        Int64(handle[].lights.n_point_lights),
+        handle[].lights.light_sampler_ptr(),
+        Int64(handle[].lights.n_light_sampler),
+        handle[].lights.infinite_lights_ptr(),
+        Int64(handle[].lights.n_infinite_lights),
         handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
         Int64(handle[].n_spheres),
         handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
         Int64(n), px_scale,
         handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
-        handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
-        Int64(handle[].spectral_res),
-        handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.coeffs_buf.unsafe_ptr().bitcast[Float32](),
+        Int64(handle[].spectral.res),
+        handle[].spectral.cie_x_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_y_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_z_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.d65_buf.unsafe_ptr().bitcast[Float32](),
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_interface_gpu](
         handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+        handle[].meshes.meshes_ptr(),
         handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
         handle[].medium_ifaces_buf.unsafe_ptr().bitcast[MediumInterface_C](),
         Int64(n),
@@ -3929,7 +4063,7 @@ def _gpu_bounce_kernels(
     handle[].ctx.enqueue_function[update_medium_gpu](
         handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
+        handle[].meshes.meshes_ptr(),
         handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
         handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
         handle[].medium_ifaces_buf.unsafe_ptr().bitcast[MediumInterface_C](),
@@ -3939,37 +4073,37 @@ def _gpu_bounce_kernels(
     handle[].ctx.enqueue_function[shade_hair_gpu](
         handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
-        handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
-        handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
-        handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
-        handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutExternalOrigin]](),
-        handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutExternalOrigin]](),
+        handle[].bvh.nodes_ptr(),
+        handle[].bvh.prim_ids_ptr(),
+        handle[].meshes.meshes_ptr(),
+        handle[].curves.curves_ptr(),
+        handle[].blas.nodes_arr(),
+        handle[].blas.primids_arr(),
         handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
         handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
-        handle[].area_lights_buf.unsafe_ptr().bitcast[AreaLight_C](),
-        Int64(handle[].n_area_lights),
-        handle[].textures_buf.unsafe_ptr().bitcast[GpuTexture_C](),
-        Int64(handle[].n_textures),
-        handle[].distant_lights_buf.unsafe_ptr().bitcast[DistantLight_C](),
-        Int64(handle[].n_distant_lights),
-        handle[].point_lights_buf.unsafe_ptr().bitcast[PointLight_C](),
-        Int64(handle[].n_point_lights),
-        handle[].light_sampler_buf.unsafe_ptr().bitcast[Float32](),
-        Int64(handle[].n_light_sampler),
-        handle[].infinite_lights_buf.unsafe_ptr().bitcast[InfiniteLight_C](),
-        Int64(handle[].n_infinite_lights),
+        handle[].lights.area_lights_ptr(),
+        Int64(handle[].lights.n_area_lights),
+        handle[].textures.textures_ptr(),
+        Int64(handle[].textures.n_textures),
+        handle[].lights.distant_lights_ptr(),
+        Int64(handle[].lights.n_distant_lights),
+        handle[].lights.point_lights_ptr(),
+        Int64(handle[].lights.n_point_lights),
+        handle[].lights.light_sampler_ptr(),
+        Int64(handle[].lights.n_light_sampler),
+        handle[].lights.infinite_lights_ptr(),
+        Int64(handle[].lights.n_infinite_lights),
         handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
         Int64(handle[].n_spheres),
         handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
         Int64(n), px_scale,
         handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
-        handle[].spectral_coeffs_buf.unsafe_ptr().bitcast[Float32](),
-        Int64(handle[].spectral_res),
-        handle[].spectral_cie_x_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_cie_y_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_cie_z_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral_d65_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.coeffs_buf.unsafe_ptr().bitcast[Float32](),
+        Int64(handle[].spectral.res),
+        handle[].spectral.cie_x_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_y_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_z_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.d65_buf.unsafe_ptr().bitcast[Float32](),
         grid_dim=grid_dim, block_dim=block_size,
     )
     # Phase 0.4: resolve whatever shadow rays this bounce's per-material
@@ -3983,12 +4117,12 @@ def _gpu_bounce_kernels(
     # implementation) even when use_vulkan_rt is set -- this machinery isn't
     # wired to Vulkan RT yet.
     handle[].ctx.enqueue_function[traverse_shadow_rays_gpu](
-        handle[].bvh2Nodes_buf.unsafe_ptr().bitcast[BVH2Node](),
-        handle[].primIds_buf.unsafe_ptr().bitcast[PrimId_C](),
-        handle[].meshes_buf.unsafe_ptr().bitcast[TriangleMesh_C](),
-        handle[].curves_buf.unsafe_ptr().bitcast[Curve_C](),
-        handle[].blas_nodes_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[BVH2Node, MutExternalOrigin]](),
-        handle[].blas_primids_ptrs_buf.unsafe_ptr().bitcast[UnsafePointer[PrimId_C, MutExternalOrigin]](),
+        handle[].bvh.nodes_ptr(),
+        handle[].bvh.prim_ids_ptr(),
+        handle[].meshes.meshes_ptr(),
+        handle[].curves.curves_ptr(),
+        handle[].blas.nodes_arr(),
+        handle[].blas.primids_arr(),
         handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
         handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
@@ -4032,13 +4166,13 @@ def gpu_render_sample[Oc: Origin[mut=True]](
                 handle[].r2c_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].c2w_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-                Int64(handle[].fw), Int64(handle[].fh),
+                Int64(handle[].film.width), Int64(handle[].film.height),
                 si, log2spp, n_base4,
                 seed_dim0, seed_dim1,
                 rng_seed_lo, rng_seed_hi,
-                handle[].filter_sigma, handle[].filter_norm_x, handle[].filter_support_x,
-                handle[].filter_norm_y, handle[].filter_support_y,
-                handle[].filter_type,
+                handle[].filter.sigma, handle[].filter.norm_x, handle[].filter.support_x,
+                handle[].filter.norm_y, handle[].filter.support_y,
+                handle[].filter.type,
                 Int64(n_int),
                 grid_dim=grid_dim,
                 block_dim=block_size,
@@ -4131,12 +4265,12 @@ def gpu_render_wavefront(
                 handle[].r2c_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].c2w_buf.unsafe_ptr().bitcast[Float32](),
                 handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-                Int64(handle[].fw), Int64(handle[].fh),
+                Int64(handle[].film.width), Int64(handle[].film.height),
                 si_start, log2spp, n_base4,
                 seed_dim0, seed_dim1, rng_seed_lo, rng_seed_hi,
-                handle[].filter_sigma, handle[].filter_norm_x, handle[].filter_support_x,
-                handle[].filter_norm_y, handle[].filter_support_y,
-                handle[].filter_type,
+                handle[].filter.sigma, handle[].filter.norm_x, handle[].filter.support_x,
+                handle[].filter.norm_y, handle[].filter.support_y,
+                handle[].filter.type,
                 Int64(n_total), Int64(n_pix),
                 grid_dim=grid_total,
                 block_dim=block_size,
@@ -4406,7 +4540,7 @@ def gpu_atrous_denoise[Oo: Origin[mut=True]](
     comptime if has_accelerator():
         try:
             var handle = handlePtr
-            var fw = handle[].fw; var fh = handle[].fh
+            var fw = Int(handle[].film.width); var fh = Int(handle[].film.height)
             comptime block_size = 256
             var grid_n = ceildiv(n_pix, block_size)
             var inv_weight = Float32(1.0) / Float32(max(Int(frame_count), 1))

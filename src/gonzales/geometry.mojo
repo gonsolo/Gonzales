@@ -217,6 +217,26 @@ struct Point2f(TrivialRegisterPassable):
         self.x = v; self.y = v
 
 @fieldwise_init
+struct FilmDims(TrivialRegisterPassable):
+    """Film/framebuffer resolution (width, height), replacing the separate
+    fw/fh pair on GpuSceneHandle and gpu_upload_scene. GPU kernels still take
+    fw_dp/fh_dp as separate scalars: this struct doesn't implement
+    DevicePassable, so it can't be an enqueue_function argument as-is."""
+    var width: Int32
+    var height: Int32
+
+@fieldwise_init
+struct FilterParams(TrivialRegisterPassable):
+    """Pixel-reconstruction filter parameters, grouped on GpuSceneHandle and
+    gpu_upload_scene; unpacked into scalars at kernel launches (see FilmDims)."""
+    var sigma: Float32
+    var support_x: Float32
+    var support_y: Float32
+    var norm_x: Float32
+    var norm_y: Float32
+    var type: Int32
+
+@fieldwise_init
 struct Bounds3f(TrivialRegisterPassable):
     """An axis-aligned bounding box (world space)."""
     var min: Point3f
