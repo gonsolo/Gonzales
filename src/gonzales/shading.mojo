@@ -247,6 +247,15 @@ def _sample_tex(tex: GpuTexture_C, u: Float32, v: Float32, lod: Float32 = Float3
     var c1 = _sample_level(tex.data, off1, w1, h1, u, v)
     return c0 + (c1 - c0) * f
 
+# LOD = log2(texels covered by one pixel). pixel_uv is the uv footprint;
+# * width converts to texels.
+@always_inline
+def _footprint_lod(tex: GpuTexture_C, pixel_uv: Float32) -> Float32:
+    var texels = pixel_uv * Float32(tex.width)
+    if texels > Float32(1.0):
+        return log2(texels)
+    return Float32(0.0)
+
 # Unified 2D-texture fetch — the single use_gpu seam for texture sampling.
 # GPU reads the uploaded GpuTexture_C table; CPU reads via OIIO by filename.
 # (u, v) are the interpolated, NOT-yet-V-flipped coords; this applies pbrt's
@@ -273,13 +282,7 @@ def sample_texture[use_gpu: Bool](
             var tex = textures[tex_idx]
             if Int(tex.width) > 0:
                 found = True
-                # LOD = log2(texels covered by one pixel). pixel_uv is the uv
-                # footprint; * width converts to texels. (CPU branch lets OIIO filter.)
-                var texels = pixel_uv * Float32(tex.width)
-                var lod = Float32(0.0)
-                if texels > Float32(1.0):
-                    lod = log2(texels)
-                return _sample_tex(tex, su, tv, lod)
+                return _sample_tex(tex, su, tv, _footprint_lod(tex, pixel_uv))
     else:
         if Int(tex_filenames) > 1:
             var filename = tex_filenames[tex_idx]
@@ -340,7 +343,7 @@ def _tex_lookup[use_gpu: Bool](
                 var su = w0*mesh.uvs[v0*2]   + inter.u*mesh.uvs[v1*2]   + inter.v*mesh.uvs[v2*2]
                 var tv = w0*mesh.uvs[v0*2+1] + inter.u*mesh.uvs[v1*2+1] + inter.v*mesh.uvs[v2*2+1]
                 tv = Float32(1.0) - tv  # PBRT V-flip: V=0 at top
-                return _sample_tex(tex, su, tv)
+                return _sample_tex(tex, su, tv, _footprint_lod(tex, pixel_uv))
     else:
         if ti >= 0 and Int(tex_filenames) > 8:
             var filename = tex_filenames[ti]
