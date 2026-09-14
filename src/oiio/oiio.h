@@ -14,6 +14,18 @@ bool texture(const char *filename_c, float s, float t, float result[3]);
 int load_texture_rgb(const char *filename, float **data, int *width, int *height, int raw);
 int free_texture_rgb(float *data);
 
+// 256-entry uint8 -> linear float table written to out[0..255]: OIIO's normalized
+// conversion, sRGB-decoded when decode != 0. Matches load_texture_rgb exactly.
+void texture_uint8_lut(int decode, float *out);
+
+// Load an 8-bit image as bytes: 1 channel for single-channel sources, otherwise 3
+// (same channel mapping as load_texture_rgb). *srgb says which table decodes it.
+// Returns 0 for images that aren't 8-bit, so callers can fall back to
+// load_texture_rgb. malloc'd — free with free_texture_u8.
+int load_texture_u8(const char *filename, int raw, unsigned char **data, int *width, int *height,
+                    int *channels, int *srgb);
+int free_texture_u8(unsigned char *data);
+
 // --- New Tiled Image Writing Functions ---
 
 // Returns an opaque pointer (OIIO::ImageOutput* in C++)

@@ -190,11 +190,25 @@ def _srgb_to_linear(c: Float32) -> Float32:
     else:
         return Float32(((c + Float32(0.055)) / Float32(1.055)) ** Float32(2.4))
 
+# Linear RGB of texel `i`, counted in texels from the start of tex.data. uint8
+# textures decode each channel through tex.lut, so every blend happens in
+# linear space; single-channel textures replicate into all three channels.
 @always_inline
-# Bilinear sample of ONE mip level: `off` = float offset of the level in
+def _texel(tex: GpuTexture_C, i: Int) -> RGB:
+    if Int(tex.format) == GpuTexture_C.FORMAT_U8:
+        if Int(tex.channels) == 1:
+            var l = tex.lut[Int(tex.data[i])]
+            return RGB(l, l, l)
+        var j = i * 3
+        return RGB(tex.lut[Int(tex.data[j])], tex.lut[Int(tex.data[j + 1])], tex.lut[Int(tex.data[j + 2])])
+    var f = tex.data.bitcast[Float32]()
+    var k = i * 3
+    return RGB(f[k], f[k + 1], f[k + 2])
+
+# Bilinear sample of ONE mip level: `off` = texel offset of the level in
 # tex.data, (lw, lh) = that level's dimensions. Pixel centres at +0.5, wrap.
 @always_inline
-def _sample_level(data: UnsafePointer[Float32, MutExternalOrigin], off: Int, lw: Int, lh: Int, u: Float32, v: Float32) -> RGB:
+def _sample_level(tex: GpuTexture_C, off: Int, lw: Int, lh: Int, u: Float32, v: Float32) -> RGB:
     var s = u - Float32(Int(u))
     if s < Float32(0.0): s += Float32(1.0)
     var t = v - Float32(Int(v))
@@ -207,19 +221,15 @@ def _sample_level(data: UnsafePointer[Float32, MutExternalOrigin], off: Int, lw:
     var y0w = ((y0 % lh) + lh) % lh
     var x1w = (x0w + 1) % lw
     var y1w = (y0w + 1) % lh
-    var i00 = off + (y0w * lw + x0w) * 3
-    var i10 = off + (y0w * lw + x1w) * 3
-    var i01 = off + (y1w * lw + x0w) * 3
-    var i11 = off + (y1w * lw + x1w) * 3
+    var i00 = off + y0w * lw + x0w
+    var i10 = off + y0w * lw + x1w
+    var i01 = off + y1w * lw + x0w
+    var i11 = off + y1w * lw + x1w
     var w00 = (Float32(1.0) - wx) * (Float32(1.0) - wy)
     var w10 = wx * (Float32(1.0) - wy)
     var w01 = (Float32(1.0) - wx) * wy
     var w11 = wx * wy
-    return RGB(
-        data[i00]   * w00 + data[i10]   * w10 + data[i01]   * w01 + data[i11]   * w11,
-        data[i00+1] * w00 + data[i10+1] * w10 + data[i01+1] * w01 + data[i11+1] * w11,
-        data[i00+2] * w00 + data[i10+2] * w10 + data[i01+2] * w01 + data[i11+2] * w11,
-    )
+    return _texel(tex, i00) * w00 + _texel(tex, i10) * w10 + _texel(tex, i01) * w01 + _texel(tex, i11) * w11
 
 # Trilinear mip sample. lod 0 = base level (full res); higher = coarser.
 # With a 1-level texture (no pyramid) this is plain bilinear on the base.
@@ -227,24 +237,24 @@ def _sample_level(data: UnsafePointer[Float32, MutExternalOrigin], off: Int, lw:
 def _sample_tex(tex: GpuTexture_C, u: Float32, v: Float32, lod: Float32 = Float32(0.0)) -> RGB:
     var nl = Int(tex.n_levels)
     if nl <= 1:
-        return _sample_level(tex.data, 0, Int(tex.width), Int(tex.height), u, v)
+        return _sample_level(tex, 0, Int(tex.width), Int(tex.height), u, v)
     var clamped = lod
     if clamped < Float32(0.0): clamped = Float32(0.0)
     var maxl = Float32(nl - 1)
     if clamped > maxl: clamped = maxl
     var l0 = Int(floor(clamped))
     var f = clamped - Float32(l0)
-    # Walk to level l0, tracking its float offset and dims.
+    # Walk to level l0, tracking its texel offset and dims.
     var off = 0; var w = Int(tex.width); var h = Int(tex.height)
     for _k in range(l0):
-        off += w * h * 3
+        off += w * h
         w = max(1, w // 2); h = max(1, h // 2)
-    var c0 = _sample_level(tex.data, off, w, h, u, v)
+    var c0 = _sample_level(tex, off, w, h, u, v)
     if f <= Float32(0.0) or l0 >= nl - 1:
         return c0
-    var off1 = off + w * h * 3
+    var off1 = off + w * h
     var w1 = max(1, w // 2); var h1 = max(1, h // 2)
-    var c1 = _sample_level(tex.data, off1, w1, h1, u, v)
+    var c1 = _sample_level(tex, off1, w1, h1, u, v)
     return c0 + (c1 - c0) * f
 
 # LOD = log2(texels covered by one pixel). pixel_uv is the uv footprint;

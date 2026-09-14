@@ -1265,10 +1265,15 @@ struct InfiniteLight_C(TrivialRegisterPassable):
 
 @fieldwise_init
 struct GpuTexture_C(TrivialRegisterPassable):
-    var data: UnsafePointer[Float32, MutExternalOrigin]  # device pointer: full mip pyramid, contiguous, pre-linearised float RGB
-    var width: Int32                                 # level-0 width
-    var height: Int32                                # level-0 height
-    var n_levels: Int32                              # number of mip levels stored in `data` (>=1)
+    comptime FORMAT_F32 = 0   # data holds Float32 linear RGB
+    comptime FORMAT_U8 = 1    # data holds UInt8, decoded to linear through lut
+    var data: UnsafePointer[UInt8, MutExternalOrigin]    # device pointer: full mip pyramid, contiguous
+    var lut: UnsafePointer[Float32, MutExternalOrigin]   # device pointer: 256-entry byte -> linear table (FORMAT_U8 only)
+    var width: Int32                                     # level-0 width
+    var height: Int32                                    # level-0 height
+    var n_levels: Int32                                  # number of mip levels stored in `data` (>=1)
+    var channels: Int32                                  # stored channels per texel: 1 (replicated to RGB) or 3
+    var format: Int32                                    # FORMAT_F32 or FORMAT_U8
 
 @fieldwise_init
 struct NormalSlopeMap_C(TrivialRegisterPassable):

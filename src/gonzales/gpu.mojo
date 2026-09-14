@@ -47,6 +47,92 @@ def typed_ptr[T: AnyType](mut buf: DeviceBuffer[DType.uint8]) -> UnsafePointer[T
     GpuSceneHandle sub-struct's accessor into one call."""
     return buf.unsafe_ptr().bitcast[T]().unsafe_origin_cast[MutExternalOrigin]()
 
+# (levels, total texels) of a full mip pyramid down to 1x1.
+def _mip_texel_count(tw: Int, th: Int) -> Tuple[Int, Int]:
+    var nlev = 1; var texels = tw * th
+    var ww = tw; var hh = th
+    while ww > 1 or hh > 1:
+        ww = max(1, ww // 2); hh = max(1, hh // 2)
+        nlev += 1; texels += ww * hh
+    return (nlev, texels)
+
+# The byte whose decoded value in `lut` (256 entries, non-decreasing) is nearest `v`.
+@always_inline
+def _nearest_lut_byte(lut: UnsafePointer[Float32, MutExternalOrigin], v: Float32) -> UInt8:
+    var lo = 0; var hi = 255
+    while lo < hi:
+        var mid = (lo + hi) // 2
+        if lut[mid] < v:
+            lo = mid + 1
+        else:
+            hi = mid
+    if lo > 0 and v - lut[lo - 1] <= lut[lo] - v:
+        return UInt8(lo - 1)
+    return UInt8(lo)
+
+comptime _INV_LUT_SIZE: Int = 65536
+
+@always_inline
+def _dist(a: Float32, b: Float32) -> Float32:
+    return a - b if a > b else b - a
+
+# inv[q] = _nearest_lut_byte(lut, q / (_INV_LUT_SIZE - 1)): a candidate byte for
+# each of _INV_LUT_SIZE evenly spaced values in [0, 1].
+def _build_inverse_lut(lut: UnsafePointer[Float32, MutExternalOrigin], inv: UnsafePointer[UInt8, MutExternalOrigin]):
+    for q in range(_INV_LUT_SIZE):
+        inv[q] = _nearest_lut_byte(lut, Float32(q) / Float32(_INV_LUT_SIZE - 1))
+
+# Same byte as _nearest_lut_byte(lut, v), in O(1). The grid is far finer than
+# the LUT spacing, so the candidate is the nearest byte or a neighbour of it;
+# |lut[b] - v| is unimodal in b, so walking up while strictly closer and down
+# while no farther lands on the nearest byte, ties going to the lower one.
+@always_inline
+def _quantize_to_lut_byte(
+    lut: UnsafePointer[Float32, MutExternalOrigin], inv: UnsafePointer[UInt8, MutExternalOrigin], v: Float32,
+) -> UInt8:
+    var q = Int(v * Float32(_INV_LUT_SIZE - 1) + Float32(0.5))
+    if q < 0: q = 0
+    if q > _INV_LUT_SIZE - 1: q = _INV_LUT_SIZE - 1
+    var b = Int(inv[q])
+    while b < 255 and _dist(lut[b + 1], v) < _dist(lut[b], v):
+        b += 1
+    while b > 0 and _dist(lut[b - 1], v) <= _dist(lut[b], v):
+        b -= 1
+    return UInt8(b)
+
+# Fill `pyr` with a uint8 mip pyramid of `src` (tw x th, c channels). Each coarser
+# level is the 2x2 box average in LINEAR space (bytes decoded through `lut`) --
+# the same averages the float path computes -- stored as the nearest byte (via
+# `inv`, the matching _build_inverse_lut table). The averages are carried in
+# float between levels so rounding doesn't compound.
+def _fill_u8_mips(
+    pyr: UnsafePointer[UInt8, MutExternalOrigin], src: UnsafePointer[UInt8, MutExternalOrigin],
+    tw: Int, th: Int, c: Int, lut: UnsafePointer[Float32, MutExternalOrigin],
+    inv: UnsafePointer[UInt8, MutExternalOrigin],
+):
+    memcpy(dest=pyr, src=src, count=tw * th * c)
+    var prev = alloc[Float32](tw * th * c)
+    for i in range(tw * th * c):
+        prev[i] = lut[Int(src[i])]
+    var cur = alloc[Float32](max(1, tw // 2) * max(1, th // 2) * c)
+    var off_cur = tw * th * c
+    var pw = tw; var ph = th
+    while pw > 1 or ph > 1:
+        var cw = max(1, pw // 2); var ch = max(1, ph // 2)
+        for y in range(ch):
+            for x in range(cw):
+                var x0 = 2 * x; var x1 = min(2 * x + 1, pw - 1)
+                var y0 = 2 * y; var y1 = min(2 * y + 1, ph - 1)
+                for k in range(c):
+                    var avg = (prev[(y0 * pw + x0) * c + k] + prev[(y0 * pw + x1) * c + k]
+                               + prev[(y1 * pw + x0) * c + k] + prev[(y1 * pw + x1) * c + k]) * Float32(0.25)
+                    cur[(y * cw + x) * c + k] = avg
+                    pyr[off_cur + (y * cw + x) * c + k] = _quantize_to_lut_byte(lut, inv, avg)
+        off_cur += cw * ch * c
+        var tmp = prev; prev = cur; cur = tmp
+        pw = cw; ph = ch
+    prev.free(); cur.free()
+
 @fieldwise_init
 struct SpectralBuffers(Movable):
     """Device-side twin of the host SpectralHandle -- see spectrum.mojo's
@@ -135,6 +221,7 @@ struct MeshBuffers(Movable):
 struct TextureBuffers(Movable):
     var tex_data_bufs: List[DeviceBuffer[DType.uint8]]
     var textures_buf: DeviceBuffer[DType.uint8]  # array of GpuTexture_C
+    var lut_buf: DeviceBuffer[DType.float32]     # uint8 decode tables: linear at 0, sRGB at 256
     var n_textures: Int
 
     @always_inline
@@ -928,63 +1015,108 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                         break
             var tex_data_bufs = List[DeviceBuffer[DType.uint8]]()
             var gpu_textures_host = alloc[GpuTexture_C](max(n_textures_int, 1))
+            # 8-bit textures stay 8-bit on the GPU and decode through one of two
+            # 256-entry tables (linear at 0, sRGB at 256), built by the oiio bridge
+            # exactly as load_texture_rgb decodes, so level 0 matches the float path.
+            var lut_host = alloc[Float32](512)
+            _ = external_call["texture_uint8_lut", NoneType, Int32, UnsafePointer[Float32, MutExternalOrigin]](Int32(0), lut_host)
+            _ = external_call["texture_uint8_lut", NoneType, Int32, UnsafePointer[Float32, MutExternalOrigin]](Int32(1), lut_host + 256)
+            var lut_buf = ctx.enqueue_create_buffer[DType.float32](512)
+            with lut_buf.map_to_host() as h:
+                memcpy(dest=h.unsafe_ptr(), src=lut_host, count=512)
+            var lut_dev = lut_buf.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin]()
+            var inv_host = alloc[UInt8](2 * _INV_LUT_SIZE)
+            _build_inverse_lut(lut_host, inv_host)
+            _build_inverse_lut(lut_host + 256, inv_host + _INV_LUT_SIZE)
+            var tex_bytes = 0
             for ti in range(n_textures_int):
                 if dup_of[ti] != Int32(-1):
                     gpu_textures_host[ti] = gpu_textures_host[Int(dup_of[ti])]
                     continue
                 var filename = tex_filenames[ti]
-                var data_out = alloc[UnsafePointer[Float32, MutExternalOrigin]](1)
+                var raw_flag = Int32(1) if tex_is_raw[ti] else Int32(0)
                 var w_out = alloc[Int32](1)
                 var h_out = alloc[Int32](1)
+                var c_out = alloc[Int32](1)
+                var srgb_out = alloc[Int32](1)
                 w_out[0] = Int32(0); h_out[0] = Int32(0)
-                var raw_flag = Int32(1) if tex_is_raw[ti] else Int32(0)
-                var ok = external_call["load_texture_rgb", Int32,
-                    UnsafePointer[UInt8, MutExternalOrigin],
-                    UnsafePointer[UnsafePointer[Float32, MutExternalOrigin], MutExternalOrigin],
-                    UnsafePointer[Int32, MutExternalOrigin],
-                    UnsafePointer[Int32, MutExternalOrigin],
-                    Int32](filename, data_out, w_out, h_out, raw_flag)
-                if ok != 0 and Int(w_out[0]) > 0:
-                    var tw = Int(w_out[0]); var th = Int(h_out[0])
-                    # Mip pyramid: levels until 1x1, box-downsampled (in linear
-                    # space, which is what load_texture_rgb returns). Anti-aliases
-                    # minified textures; trilinear-sampled on the GPU via the LOD.
-                    var nlev = 1; var ww = tw; var hh = th
-                    while ww > 1 or hh > 1:
-                        ww = max(1, ww // 2); hh = max(1, hh // 2); nlev += 1
-                    var total = 0; ww = tw; hh = th
-                    for _k in range(nlev):
-                        total += ww * hh * 3
-                        ww = max(1, ww // 2); hh = max(1, hh // 2)
-                    var pyr = alloc[Float32](total)
-                    var src0 = data_out[0]
-                    memcpy(dest=pyr, src=src0, count=tw * th * 3)
-                    var off_prev = 0; var pw = tw; var ph = th
-                    var off_cur = tw * th * 3
-                    for _k in range(1, nlev):
-                        var cw = max(1, pw // 2); var ch = max(1, ph // 2)
-                        for y in range(ch):
-                            for x in range(cw):
-                                var x0 = 2 * x; var x1 = min(2 * x + 1, pw - 1)
-                                var y0 = 2 * y; var y1 = min(2 * y + 1, ph - 1)
-                                for c in range(3):
-                                    var a = pyr[off_prev + (y0 * pw + x0) * 3 + c]
-                                    var b = pyr[off_prev + (y0 * pw + x1) * 3 + c]
-                                    var cc = pyr[off_prev + (y1 * pw + x0) * 3 + c]
-                                    var d = pyr[off_prev + (y1 * pw + x1) * 3 + c]
-                                    pyr[off_cur + (y * cw + x) * 3 + c] = (a + b + cc + d) * Float32(0.25)
-                        off_prev = off_cur; off_cur += cw * ch * 3; pw = cw; ph = ch
-                    var tex_buf = ctx.enqueue_create_buffer[DType.uint8](total * 4)
+                var u8_out = alloc[UnsafePointer[UInt8, MutExternalOrigin]](1)
+                var ok_u8 = external_call["load_texture_u8", Int32,
+                    UnsafePointer[UInt8, MutExternalOrigin], Int32,
+                    UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin],
+                    UnsafePointer[Int32, MutExternalOrigin], UnsafePointer[Int32, MutExternalOrigin],
+                    UnsafePointer[Int32, MutExternalOrigin], UnsafePointer[Int32, MutExternalOrigin]](
+                    filename, raw_flag, u8_out, w_out, h_out, c_out, srgb_out)
+                if ok_u8 != 0 and Int(w_out[0]) > 0:
+                    var tw = Int(w_out[0]); var th = Int(h_out[0]); var c = Int(c_out[0])
+                    var lut_off = 256 if srgb_out[0] != Int32(0) else 0
+                    var (nlev, texels) = _mip_texel_count(tw, th)
+                    var pyr = alloc[UInt8](texels * c)
+                    _fill_u8_mips(pyr, u8_out[0], tw, th, c, lut_host + lut_off,
+                                  inv_host + (_INV_LUT_SIZE if lut_off != 0 else 0))
+                    var tex_buf = ctx.enqueue_create_buffer[DType.uint8](texels * c)
                     with tex_buf.map_to_host() as h:
-                        var dst = h.unsafe_ptr().bitcast[Float32]()
-                        memcpy(dest=dst, src=pyr, count=total)
+                        memcpy(dest=h.unsafe_ptr(), src=pyr, count=texels * c)
                     pyr.free()
-                    gpu_textures_host[ti] = GpuTexture_C(tex_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin](), Int32(tw), Int32(th), Int32(nlev))
-                    _ = external_call["free_texture_rgb", Int32, UnsafePointer[Float32, MutExternalOrigin]](data_out[0])
+                    gpu_textures_host[ti] = GpuTexture_C(typed_ptr[UInt8](tex_buf), lut_dev + lut_off,
+                        Int32(tw), Int32(th), Int32(nlev), Int32(c), Int32(GpuTexture_C.FORMAT_U8))
+                    _ = external_call["free_texture_u8", Int32, UnsafePointer[UInt8, MutExternalOrigin]](u8_out[0])
+                    tex_bytes += texels * c
                     tex_data_bufs.append(tex_buf^)
                 else:
-                    gpu_textures_host[ti] = GpuTexture_C(UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), Int32(0), Int32(0), Int32(0))
-                data_out.free(); w_out.free(); h_out.free()
+                    if ok_u8 != 0:
+                        _ = external_call["free_texture_u8", Int32, UnsafePointer[UInt8, MutExternalOrigin]](u8_out[0])
+                    var data_out = alloc[UnsafePointer[Float32, MutExternalOrigin]](1)
+                    w_out[0] = Int32(0); h_out[0] = Int32(0)
+                    var ok = external_call["load_texture_rgb", Int32,
+                        UnsafePointer[UInt8, MutExternalOrigin],
+                        UnsafePointer[UnsafePointer[Float32, MutExternalOrigin], MutExternalOrigin],
+                        UnsafePointer[Int32, MutExternalOrigin],
+                        UnsafePointer[Int32, MutExternalOrigin],
+                        Int32](filename, data_out, w_out, h_out, raw_flag)
+                    if ok != 0 and Int(w_out[0]) > 0:
+                        var tw = Int(w_out[0]); var th = Int(h_out[0])
+                        # Mip pyramid: levels until 1x1, box-downsampled (in linear
+                        # space, which is what load_texture_rgb returns). Anti-aliases
+                        # minified textures; trilinear-sampled on the GPU via the LOD.
+                        var (nlev, texels) = _mip_texel_count(tw, th)
+                        var total = texels * 3
+                        var pyr = alloc[Float32](total)
+                        var src0 = data_out[0]
+                        memcpy(dest=pyr, src=src0, count=tw * th * 3)
+                        var off_prev = 0; var pw = tw; var ph = th
+                        var off_cur = tw * th * 3
+                        for _k in range(1, nlev):
+                            var cw = max(1, pw // 2); var ch = max(1, ph // 2)
+                            for y in range(ch):
+                                for x in range(cw):
+                                    var x0 = 2 * x; var x1 = min(2 * x + 1, pw - 1)
+                                    var y0 = 2 * y; var y1 = min(2 * y + 1, ph - 1)
+                                    for cn in range(3):
+                                        var a = pyr[off_prev + (y0 * pw + x0) * 3 + cn]
+                                        var b = pyr[off_prev + (y0 * pw + x1) * 3 + cn]
+                                        var cc = pyr[off_prev + (y1 * pw + x0) * 3 + cn]
+                                        var d = pyr[off_prev + (y1 * pw + x1) * 3 + cn]
+                                        pyr[off_cur + (y * cw + x) * 3 + cn] = (a + b + cc + d) * Float32(0.25)
+                            off_prev = off_cur; off_cur += cw * ch * 3; pw = cw; ph = ch
+                        var tex_buf = ctx.enqueue_create_buffer[DType.uint8](total * 4)
+                        with tex_buf.map_to_host() as h:
+                            var dst = h.unsafe_ptr().bitcast[Float32]()
+                            memcpy(dest=dst, src=pyr, count=total)
+                        pyr.free()
+                        gpu_textures_host[ti] = GpuTexture_C(typed_ptr[UInt8](tex_buf),
+                            UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+                            Int32(tw), Int32(th), Int32(nlev), Int32(3), Int32(GpuTexture_C.FORMAT_F32))
+                        _ = external_call["free_texture_rgb", Int32, UnsafePointer[Float32, MutExternalOrigin]](data_out[0])
+                        tex_bytes += total * 4
+                        tex_data_bufs.append(tex_buf^)
+                    else:
+                        gpu_textures_host[ti] = GpuTexture_C(UnsafePointer[UInt8, MutExternalOrigin].unsafe_dangling(),
+                            UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+                            Int32(0), Int32(0), Int32(0), Int32(0), Int32(GpuTexture_C.FORMAT_F32))
+                    data_out.free()
+                w_out.free(); h_out.free(); c_out.free(); srgb_out.free(); u8_out.free()
+            lut_host.free(); inv_host.free()
             var tex_struct_bytes = max(n_textures_int, 1) * size_of[GpuTexture_C]()
             var textures_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](tex_struct_bytes)
             with textures_gpu_buf.map_to_host() as h:
@@ -999,7 +1131,8 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             tex_is_raw.free()
             dup_of.free()
             print("GPU: " + String(n_textures_int) + " texture(s) uploaded ("
-                  + String(n_unique_tex) + " unique file(s) loaded)")
+                  + String(n_unique_tex) + " unique file(s) loaded, "
+                  + String(tex_bytes // (1024 * 1024)) + " MB)")
 
             # Upload Sobol matrices: first 1024 dimensions × 52 UInt32 = 212992 bytes
             comptime N_SOBOL_GPU_DIMS = 1024
@@ -1086,6 +1219,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                 textures=TextureBuffers(
                     tex_data_bufs=tex_data_bufs^,
                     textures_buf=textures_gpu_buf^,
+                    lut_buf=lut_buf^,
                     n_textures=n_textures_int,
                 ),
                 lights=LightBuffers(

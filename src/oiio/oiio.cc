@@ -31,6 +31,13 @@ static std::array<float, 256> make_uint8_lut(bool decode) {
         return lut;
 }
 
+// raw != 0 keeps linear data (e.g. normal maps); only sRGB colour textures get decoded.
+static bool wants_srgb_decode(const char *filename, int raw) {
+        const bool hdr = strstr(filename, ".exr") != nullptr || strstr(filename, ".hdr") != nullptr ||
+                         strstr(filename, ".pfm") != nullptr;
+        return !hdr && !raw;
+}
+
 template <typename T, typename Map>
 static void to_linear_rgb(const T *src, int64_t n, int nc, float *dst, Map map) {
         for (int64_t i = 0; i < n; ++i) {
@@ -150,9 +157,7 @@ int load_texture_rgb(const char *filename, float **data, int *width, int *height
         *height = spec.height;
         const int64_t n = int64_t(spec.width) * spec.height;
         const int nc = spec.nchannels;
-        const bool hdr = strstr(filename, ".exr") != nullptr || strstr(filename, ".hdr") != nullptr || strstr(filename, ".pfm") != nullptr;
-        // raw != 0 keeps linear data (e.g. normal maps); only sRGB colour textures get decoded.
-        const bool decode = !hdr && !raw;
+        const bool decode = wants_srgb_decode(filename, raw);
         *data = (float *)malloc(n * 3 * sizeof(float));
         if (!*data) return 0;
         bool ok;
@@ -181,6 +186,60 @@ int load_texture_rgb(const char *filename, float **data, int *width, int *height
 }
 
 int free_texture_rgb(float *data) {
+        free(data);
+        return 0;
+}
+
+void texture_uint8_lut(int decode, float *out) {
+        const std::array<float, 256> lut = make_uint8_lut(decode != 0);
+        std::copy(lut.begin(), lut.end(), out);
+}
+
+int load_texture_u8(const char *filename, int raw, unsigned char **data, int *width, int *height,
+                    int *channels, int *srgb) {
+        auto in = OIIO::ImageInput::open(filename);
+        if (!in) return 0;
+        const OIIO::ImageSpec &spec = in->spec();
+        if (spec.format != OIIO::TypeDesc::UINT8 || !spec.channelformats.empty() || spec.nchannels < 1) {
+                in->close();
+                return 0;
+        }
+        const int w = spec.width, h = spec.height, nc = spec.nchannels;
+        const int64_t n = int64_t(w) * h;
+        auto *buf = static_cast<unsigned char *>(malloc(n * nc));
+        if (!buf || !in->read_image(0, 0, 0, nc, OIIO::TypeDesc::UINT8, buf)) {
+                free(buf);
+                in->close();
+                return 0;
+        }
+        in->close();
+        if (nc == 1 || nc == 3) {
+                *data = buf;
+        } else {
+                // Same mapping as load_texture_rgb: G from channel 1 (alpha for 2-channel
+                // sources), B from channel 2 or copied from R.
+                auto *rgb = static_cast<unsigned char *>(malloc(n * 3));
+                if (!rgb) {
+                        free(buf);
+                        return 0;
+                }
+                for (int64_t i = 0; i < n; ++i) {
+                        const unsigned char *p = buf + i * nc;
+                        rgb[i * 3 + 0] = p[0];
+                        rgb[i * 3 + 1] = p[1];
+                        rgb[i * 3 + 2] = nc > 2 ? p[2] : p[0];
+                }
+                free(buf);
+                *data = rgb;
+        }
+        *width = w;
+        *height = h;
+        *channels = nc == 1 ? 1 : 3;
+        *srgb = wants_srgb_decode(filename, raw) ? 1 : 0;
+        return 1;
+}
+
+int free_texture_u8(unsigned char *data) {
         free(data);
         return 0;
 }
