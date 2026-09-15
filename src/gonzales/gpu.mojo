@@ -712,14 +712,17 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             # Upload point lights
             var pl_buf = _gpu_upload_array[PointLight_C](ctx, pointLights, Int(pointLightCount))
 
-            # Upload light sampler CDF (n+1 Float32 entries)
+            # Upload light sampler CDF (n+1 Float32 entries), in a buffer of at
+            # least 2 entries: pad a host copy, since enqueue_copy copies the whole
+            # buffer. (No map_to_host anywhere here: its first use pins a ~1.3 GiB
+            # host pool, ~1 s of page faults.)
             var ls_entries = Int(lightSamplerN) + 1
-            var ls_bytes = max(ls_entries, 2) * size_of[Float32]()
-            var ls_buf = ctx.enqueue_create_buffer[DType.uint8](ls_bytes)
-            if ls_entries > 0:
-                with ls_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr().bitcast[Float32]()
-                    memcpy(dest=dst, src=lightSamplerCdf, count=ls_entries)
+            var ls_host = alloc[Float32](max(ls_entries, 2))
+            ls_host[1] = Float32(0)
+            memcpy(dest=ls_host, src=lightSamplerCdf, count=ls_entries)
+            var ls_buf = _gpu_upload_array[Float32](ctx, ls_host, max(ls_entries, 2))
+            ctx.synchronize()   # ls_host is freed next
+            ls_host.free()
 
             # Upload infinite/environment lights with GPU-resident pixel/CDF data
             var il_count = Int(infiniteLightCount)
@@ -3529,9 +3532,7 @@ def gpu_gen_aux_buffers[Oc: Origin[mut=True]](
     comptime if has_accelerator():
         try:
             var handle = handlePtr
-            with handle[].c2w_buf.map_to_host() as h:
-                var dst = h.unsafe_ptr().bitcast[Float32]()
-                memcpy(dest=dst, src=c2w, count=16)
+            handle[].ctx.enqueue_copy(handle[].c2w_buf, c2w.bitcast[UInt8]())
             comptime block_size = 256
             var grid_n = ceildiv(n_pix, block_size)
             handle[].ctx.enqueue_function[gen_aux_buffers_gpu](
@@ -4117,9 +4118,7 @@ def gpu_render_sample[Oc: Origin[mut=True]](
         try:
             var handle = handlePtr
             # Update c2w for this frame
-            with handle[].c2w_buf.map_to_host() as h:
-                var dst = h.unsafe_ptr().bitcast[Float32]()
-                memcpy(dest=dst, src=c2w, count=16)
+            handle[].ctx.enqueue_copy(handle[].c2w_buf, c2w.bitcast[UInt8]())
             comptime block_size = 256
             var grid_dim = ceildiv(n_int, block_size)
             # Generate primary rays on GPU
@@ -4216,9 +4215,7 @@ def gpu_render_wavefront(
     comptime if has_accelerator():
         try:
             var handle = handlePtr
-            with handle[].c2w_buf.map_to_host() as h:
-                var dst = h.unsafe_ptr().bitcast[Float32]()
-                memcpy(dest=dst, src=c2w, count=16)
+            handle[].ctx.enqueue_copy(handle[].c2w_buf, c2w.bitcast[UInt8]())
             comptime block_size = 256
             var grid_total = ceildiv(n_total, block_size)
             var grid_pix   = ceildiv(n_pix, block_size)
@@ -4267,12 +4264,11 @@ def gpu_download_film(
     comptime if has_accelerator():
         try:
             var handle = handlePtr
+            # Straight device-to-host copy: map_to_host would pin a ~1.3 GiB host
+            # pool on first use (~1 s of page faults). film holds n_int*3 floats,
+            # the size of film_buf.
+            handle[].ctx.enqueue_copy(film.bitcast[UInt8](), handle[].film_buf)
             handle[].ctx.synchronize()
-            var film_bytes = n_int * 12
-            with handle[].film_buf.map_to_host() as host_buf:
-                var src = host_buf.unsafe_ptr()
-                var dst = film.bitcast[UInt8]()
-                memcpy(dest=dst, src=src, count=film_bytes)
         except e:
             print("GPU download film failed: " + String(e))
 
@@ -4288,12 +4284,9 @@ def gpu_download_albedo[Of: Origin[mut=True]](
     comptime if has_accelerator():
         try:
             var handle = handlePtr
+            # See gpu_download_film.
+            handle[].ctx.enqueue_copy(film.bitcast[UInt8](), handle[].albedo_film_buf)
             handle[].ctx.synchronize()
-            var film_bytes = n_int * 12
-            with handle[].albedo_film_buf.map_to_host() as host_buf:
-                var src = host_buf.unsafe_ptr()
-                var dst = film.bitcast[UInt8]()
-                memcpy(dest=dst, src=src, count=film_bytes)
         except e:
             print("GPU download albedo failed: " + String(e))
 
@@ -4519,12 +4512,8 @@ def gpu_atrous_denoise[Oo: Origin[mut=True]](
             # --no-denoise: emit the normalized beauty (atrous_ping_buf) without
             # the à-trous blur passes, so the written image is the raw render.
             if not apply_denoise:
+                handle[].ctx.enqueue_copy(output.bitcast[UInt8](), handle[].atrous_ping_buf)
                 handle[].ctx.synchronize()
-                var bytes_b = n_pix * 12
-                with handle[].atrous_ping_buf.map_to_host() as h:
-                    var src = h.unsafe_ptr()
-                    var dst = output.bitcast[UInt8]()
-                    memcpy(dest=dst, src=src, count=bytes_b)
                 return
             # Firefly pre-clamp -- matches CPU's denoise() (postprocess.mojo),
             # which GPU never had before this. Without it a single extreme
@@ -4574,13 +4563,11 @@ def gpu_atrous_denoise[Oo: Origin[mut=True]](
                     grid_dim=grid_n, block_dim=block_size,
                 )
             # Result is in ping if n_passes is odd, pong if even (start=pong).
+            if n_passes % 2 == 1:
+                handle[].ctx.enqueue_copy(output.bitcast[UInt8](), handle[].atrous_ping_buf)
+            else:
+                handle[].ctx.enqueue_copy(output.bitcast[UInt8](), handle[].atrous_pong_buf)
             handle[].ctx.synchronize()
-            var bytes = n_pix * 12
-            var result_buf = handle[].atrous_ping_buf if n_passes % 2 == 1 else handle[].atrous_pong_buf
-            with result_buf.map_to_host() as h:
-                var src = h.unsafe_ptr()
-                var dst = output.bitcast[UInt8]()
-                memcpy(dest=dst, src=src, count=bytes)
         except e:
             print("GPU atrous denoise failed: " + String(e))
 
