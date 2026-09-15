@@ -1016,8 +1016,28 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                     var t_env = Float32(1.0) - fr_dielectric(cos_env, ior)
                     var cos_env_internal = cos_theta_t_dielectric(cos_env, ior)
                     t_env *= coat_beer_lambert_tr(cos_env_internal, DEFAULT_COAT_THICKNESS)
-                    var pdf_bsdf_nee = cos_env / PI
-                    var mis_w = power_heuristic(pdf_light, pdf_bsdf_nee)
+                    # 1/eta^2: the light's refraction into the coat compresses
+                    # solid angle onto the base -- the same factor
+                    # _nee_weight_coated_diffuse_base applies for every other
+                    # light type (its docstring: "1/eta^2 lives HERE"). This
+                    # branch inlined its own formula and dropped it, making
+                    # env-lit coateddiffuse eta^2 (2.25x at eta 1.5) too
+                    # bright at the first hit. The exit ray needs no explicit
+                    # factor: its cosine-sampled internal direction is TIR-
+                    # rejected outside the escape cone, which yields 1/eta^2
+                    # in expectation.
+                    t_env /= max(ior * ior, Float32(1e-6))
+                    # No MIS split here: the coat's eventual exit ray -- the
+                    # only "BSDF-sampled" strategy that could otherwise also
+                    # see this light -- has its outer lastBsdfPdf forced to 0
+                    # (see the end of this function), so the miss/emitter
+                    # handlers always give it mis_weight 0 for direct light.
+                    # NEE is the ONLY strategy actually contributing direct
+                    # light through the coat; splitting its weight with
+                    # power_heuristic against a phantom, nonzero competing
+                    # pdf (the old `cos_env/PI` here) discarded a real
+                    # fraction of the light with nothing else picking it up.
+                    var mis_w = Float32(1.0)
                     var contrib_e = path_ptr[].throughput * _to_spec_refl(ctx, beta * alb, path_ptr[].wavelengths) * _to_spec_illum(ctx, env_rgb, path_ptr[].wavelengths) * (cos_env * t_env / (PI * pdf_light)) * mis_w
                     var t_max_env = Float32(100000.0)
                     _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, env_dir, t_max_env, contrib_e)
