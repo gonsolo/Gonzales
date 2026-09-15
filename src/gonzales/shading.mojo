@@ -2232,8 +2232,15 @@ def _apply_surface_maps[use_gpu: Bool](
     var p1 = Vec3f(mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
     var p2 = Vec3f(mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
     var pixel_uv = _pixel_uv_for_hit(mesh, v0, v1, v2, p0, p1, p2, orient_to, ray_dir, inter.tHit, px_scale)
+    # Normal map at LOD 0, like pbrt's NormalMap() (a plain bilerp of the
+    # full-resolution image, no mip chain). A box-filtered mip of encoded
+    # normals averages toward the flat (0,0,1) texel, so at a distant or
+    # grazing hit the footprint LOD silently erased the map -- on Bistro's
+    # pavement pbrt's normal map darkens the ground ~10% and gonzales's
+    # did nothing. The bump map keeps the footprint: pbrt's BumpMap()
+    # evaluates a mipmapped FloatImageTexture.
     var n = _apply_normal_map[use_gpu](mat, v0, v1, v2, mesh, inter, shading_normal, p0, p1, p2,
-        tex_filenames, textures, n_textures, pixel_uv)
+        tex_filenames, textures, n_textures, Float32(0.0))
     n = _apply_bump_map[use_gpu](mat, v0, v1, v2, mesh, inter, n, p0, p1, p2,
         tex_filenames, textures, n_textures, pixel_uv)
     if dot(n, orient_to) < Float32(0.0):
