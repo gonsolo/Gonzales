@@ -218,6 +218,26 @@ struct Point2f(TrivialRegisterPassable):
         self.x = v; self.y = v
 
 @fieldwise_init
+struct FilmDims(TrivialRegisterPassable):
+    """Film/framebuffer resolution (width, height), replacing the separate
+    fw/fh pair on GpuSceneHandle and gpu_upload_scene. GPU kernels still take
+    fw_dp/fh_dp as separate scalars: this struct doesn't implement
+    DevicePassable, so it can't be an enqueue_function argument as-is."""
+    var width: Int32
+    var height: Int32
+
+@fieldwise_init
+struct FilterParams(TrivialRegisterPassable):
+    """Pixel-reconstruction filter parameters, grouped on GpuSceneHandle and
+    gpu_upload_scene; unpacked into scalars at kernel launches (see FilmDims)."""
+    var sigma: Float32
+    var support_x: Float32
+    var support_y: Float32
+    var norm_x: Float32
+    var norm_y: Float32
+    var type: Int32
+
+@fieldwise_init
 struct Bounds3f(TrivialRegisterPassable):
     """An axis-aligned bounding box (world space)."""
     var min: Point3f
@@ -1678,20 +1698,15 @@ struct InfiniteLight_C(TrivialRegisterPassable):
 
 @fieldwise_init
 struct GpuTexture_C(TrivialRegisterPassable):
-    """`data` holds a full mip pyramid, contiguous, 3 channels/texel.
-    `is_u8`==0: `data` is a Float32 pointer (bitcast from the raw bytes),
-    pre-linearised at load time -- the original, VRAM-heavy format. `is_u8`==1:
-    `data` is raw, UNDECODED sRGB bytes (1 byte/channel, 4x less VRAM) --
-    sRGB->linear decode happens per bilinear tap at sample time instead (see
-    _sample_level in shading.mojo). Only genuinely 8-bit-per-channel,
-    non-HDR, non-raw sources take the u8 path (see project_gpu_texture_cache
-    memory / load_texture_u8_or_float in oiio.cc); raw normal maps and HDR
-    sources always come back as float and are never marked is_u8."""
-    var data: UnsafePointer[UInt8, MutExternalOrigin]  # device pointer: raw bytes, see is_u8 for interpretation
-    var width: Int32                                 # level-0 width
-    var height: Int32                                # level-0 height
-    var n_levels: Int32                              # number of mip levels stored in `data` (>=1)
-    var is_u8: Int32                                 # 1 = data is undecoded UInt8 RGB; 0 = data is linear Float32 RGB
+    comptime FORMAT_F32 = 0   # data holds Float32 linear RGB
+    comptime FORMAT_U8 = 1    # data holds UInt8, decoded to linear through lut
+    var data: UnsafePointer[UInt8, MutExternalOrigin]    # device pointer: full mip pyramid, contiguous
+    var lut: UnsafePointer[Float32, MutExternalOrigin]   # device pointer: 256-entry byte -> linear table (FORMAT_U8 only)
+    var width: Int32                                     # level-0 width
+    var height: Int32                                    # level-0 height
+    var n_levels: Int32                                  # number of mip levels stored in `data` (>=1)
+    var channels: Int32                                  # stored channels per texel: 1 (replicated to RGB) or 3
+    var format: Int32                                    # FORMAT_F32 or FORMAT_U8
 
 @fieldwise_init
 struct NormalSlopeMap_C(TrivialRegisterPassable):

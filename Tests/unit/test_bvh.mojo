@@ -1,7 +1,8 @@
-from std.math import abs
-from std.testing import assert_true, assert_false, TestSuite
+from std.math import abs, max
+from std.memory import alloc
+from std.testing import assert_true, assert_false, assert_equal, TestSuite
 from gonzales.geometry import Point3f, Vec3f
-from gonzales.bvh import intersect_aabb
+from gonzales.bvh import intersect_aabb, build_bvh2, BVH2Node
 
 comptime EPS: Float32 = 1e-4
 
@@ -96,6 +97,76 @@ def test_intersect_aabb_axis_aligned_ray_offset_misses() raises:
     var direction = Vec3f(0.0, 0.0, 1.0)
     var (hit, _) = _aabb_hit(origin, direction)
     assert_false(hit)
+
+# ── build_bvh2: the parallel build must reproduce the serial tree exactly ────
+
+def _fill_boxes(bounds: UnsafePointer[Float32, MutExternalOrigin], n: Int, seed: UInt64,
+                clusters: Int, dup_every: Int):
+    """Deterministic pseudo-random AABBs, 6 floats each (min xyz, max xyz).
+    clusters > 0 gathers centres around that many points; dup_every > 0 makes
+    every dup_every-th box an exact copy of the one before (dup_every == 1:
+    all boxes identical), which exercises degenerate splits."""
+    var s = seed
+    var cc = alloc[Float32](max(clusters, 1) * 3)
+    for k in range(max(clusters, 1) * 3):
+        s = s * UInt64(6364136223846793005) + UInt64(1442695040888963407)
+        cc[k] = Float32(s >> 40) / Float32(1 << 24) * Float32(100.0)
+    for i in range(n):
+        if dup_every > 0 and i > 0 and i % dup_every == 0:
+            for a in range(6):
+                bounds[i * 6 + a] = bounds[(i - 1) * 6 + a]
+            continue
+        var r = InlineArray[Float32, 4](fill=Float32(0))
+        for a in range(4):
+            s = s * UInt64(6364136223846793005) + UInt64(1442695040888963407)
+            r[a] = Float32(s >> 40) / Float32(1 << 24)
+        var half = Float32(0.01) + r[3]
+        for a in range(3):
+            var c = r[a] * Float32(100.0)
+            if clusters > 0:
+                c = cc[(i % clusters) * 3 + a] + (r[a] - Float32(0.5)) * Float32(4.0)
+            bounds[i * 6 + a] = c - half
+            bounds[i * 6 + 3 + a] = c + half
+    cc.free()
+
+# A small subtree size makes the parallel build split many levels near the
+# root and build hundreds of subtrees, on inputs small enough to test quickly.
+comptime _TEST_SUBTREE_PRIMS = 64
+
+def _check_parallel_matches_serial(n: Int, seed: UInt64, clusters: Int, dup_every: Int) raises:
+    var bounds = alloc[Float32](n * 6)
+    _fill_boxes(bounds, n, seed, clusters, dup_every)
+    var serial_nodes = alloc[BVH2Node](2 * n + 4)
+    var parallel_nodes = alloc[BVH2Node](2 * n + 4)
+    var serial_order = alloc[Int32](n)
+    var parallel_order = alloc[Int32](n)
+    var serial_count = build_bvh2(bounds, Int32(n), serial_nodes, serial_order, parallel=False)
+    var parallel_count = build_bvh2(bounds, Int32(n), parallel_nodes, parallel_order,
+                                    parallel=True, subtree_prims=_TEST_SUBTREE_PRIMS)
+    assert_equal(serial_count, parallel_count)
+    var mismatches = 0
+    for i in range(Int(serial_count)):
+        var a = serial_nodes[i]; var b = parallel_nodes[i]
+        if a.offset != b.offset or a.count != b.count or \
+           a.min.x != b.min.x or a.min.y != b.min.y or a.min.z != b.min.z or \
+           a.max.x != b.max.x or a.max.y != b.max.y or a.max.z != b.max.z:
+            mismatches += 1
+    for i in range(n):
+        if serial_order[i] != parallel_order[i]:
+            mismatches += 1
+    assert_equal(mismatches, 0)
+    bounds.free(); serial_nodes.free(); parallel_nodes.free()
+    serial_order.free(); parallel_order.free()
+
+def test_build_bvh2_parallel_matches_serial_uniform() raises:
+    _check_parallel_matches_serial(5000, UInt64(1), 0, 0)
+
+def test_build_bvh2_parallel_matches_serial_clustered_with_duplicates() raises:
+    _check_parallel_matches_serial(5000, UInt64(7), 16, 5)
+
+def test_build_bvh2_parallel_matches_serial_all_identical() raises:
+    """All boxes identical: the root is one degenerate leaf in both builds."""
+    _check_parallel_matches_serial(2000, UInt64(3), 0, 1)
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

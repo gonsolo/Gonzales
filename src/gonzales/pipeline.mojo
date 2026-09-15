@@ -7,7 +7,7 @@ from .pbrt_parser import ParsedScene_Mojo, mojo_parsed_free, mojo_parsed_scene_d
 from .scene_loader import mojo_parse_scene_any
 from .rendering import render_all_tiles, normalize_film, apply_film_sensor, fmt_time, progress_str
 from std.time import perf_counter_ns
-from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, Ray_C, dot, TriangleMesh_C, _is_real_ptr, Curve_C, curve_piece_bounds
+from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, Ray_C, dot, TriangleMesh_C, _is_real_ptr, Curve_C, curve_piece_bounds, FilmDims, FilterParams
 from .postprocess import denoise, write_image, write_image_cropped
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
 from .bvh import BVH2Node, SceneDescriptor2_C, render_aux_buffers
@@ -236,8 +236,7 @@ def _gpu_upload_scene(
     spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     spectral_d65: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
 ) -> UnsafePointer[GpuSceneHandle, MutExternalOrigin]:
-    var fw = psc[0].film_w
-    var fh = psc[0].film_h
+    var film = FilmDims(psc[0].film_w, psc[0].film_h)
     var n_meshes = Int(psc[0].mesh_count)
     var pts_counts = List[Int64](capacity=max(n_meshes, 1))
     var fi_counts  = List[Int64](capacity=max(n_meshes, 1))
@@ -284,10 +283,11 @@ def _gpu_upload_scene(
         Int64(n_pixels),
         sobol,
         psc[0].raster_to_camera, psc[0].camera_to_world,
-        psc[0].filter_sigma, psc[0].filter_support_x, psc[0].filter_support_y,
-        psc[0].filter_norm_x, psc[0].filter_norm_y,
-        psc[0].filter_type,
-        fw, fh,
+        FilterParams(
+            psc[0].filter_sigma, psc[0].filter_support_x, psc[0].filter_support_y,
+            psc[0].filter_norm_x, psc[0].filter_norm_y, psc[0].filter_type,
+        ),
+        film,
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
     )
     # pts_counts, fi_counts, vi_counts, uv_counts freed automatically

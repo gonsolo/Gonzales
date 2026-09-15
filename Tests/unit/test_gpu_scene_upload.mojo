@@ -86,11 +86,11 @@ def test_gpu_upload_scene_round_trips_mesh_and_material_data() raises:
     var handle = _gpu_upload_scene(psc, sobol, n_pixels)
     assert_true(Int(handle) != 0)
 
-    assert_true(handle[].mesh_count == 1)
+    assert_true(handle[].meshes.mesh_count == 1)
     assert_true(handle[].material_count == 1)
     assert_true(handle[].n_pixels == n_pixels)
-    assert_true(handle[].fw == Int(psc[0].film_w))
-    assert_true(handle[].fh == Int(psc[0].film_h))
+    assert_true(Int(handle[].film.width) == Int(psc[0].film_w))
+    assert_true(Int(handle[].film.height) == Int(psc[0].film_h))
 
     # Material bytes round-trip: read back the uploaded Material_C and
     # compare against what finalize_scene actually built on the CPU side --
@@ -105,7 +105,7 @@ def test_gpu_upload_scene_round_trips_mesh_and_material_data() raises:
 
     # Mesh point data round-trip (stride-4 floats per vertex: x,y,z,w=1).
     var n_floats = Int(psc[0].mesh_n_verts[0]) * 4
-    with handle[].points_bufs[0].map_to_host() as h:
+    with handle[].meshes.points_bufs[0].map_to_host() as h:
         var gpu_pts = h.unsafe_ptr().bitcast[Float32]()
         var cpu_pts = psc[0].meshes[0].points
         for i in range(n_floats):
@@ -117,7 +117,7 @@ def test_gpu_upload_scene_round_trips_mesh_and_material_data() raises:
     # renderer uses).
     var n_bvh_bytes = Int(psc[0].bvh_node_count_cpu) * size_of[BVH2Node]()
     assert_true(n_bvh_bytes > 0)
-    with handle[].bvh2Nodes_buf.map_to_host() as h:
+    with handle[].bvh.nodes_buf.map_to_host() as h:
         var gpu_bytes = h.unsafe_ptr()
         var cpu_bytes = psc[0].bvh_nodes_cpu.bitcast[UInt8]()
         var mismatch = False

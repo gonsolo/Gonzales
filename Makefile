@@ -115,13 +115,16 @@ em: editMakefile
 editMakefile:
 	@vim Makefile
 
+# C++ bridge libraries. Host-specific tuning via override, e.g. CXXFLAGS="-O3 -march=native".
+CXXFLAGS ?= -O3
+
 OIIO_BRIDGE_SRC = src/oiio/oiio.cc
 OIIO_BRIDGE_INC = src/oiio
 OIIO_BRIDGE_LIB = $(BUILD_DIR)/liboiiobridge.so
 
 $(OIIO_BRIDGE_LIB): $(OIIO_BRIDGE_SRC) $(OIIO_BRIDGE_INC)/oiio.h
 	@mkdir -p $(BUILD_DIR)
-	g++ -fPIC -shared -std=c++20 -I$(OIIO_BRIDGE_INC) $(OIIO_BRIDGE_SRC) -lOpenImageIO -o $(OIIO_BRIDGE_LIB)
+	g++ $(CXXFLAGS) -fPIC -shared -std=c++20 -I$(OIIO_BRIDGE_INC) $(OIIO_BRIDGE_SRC) -lOpenImageIO -o $(OIIO_BRIDGE_LIB)
 
 # NanoVDB bridge. nanovdb.mojo (the loader FFI, not the pure-Mojo accessor)
 # is imported by the core renderer now (geometry.mojo, "nanovdb" pbrt
@@ -140,14 +143,14 @@ ifeq ($(HAVE_NANOVDB),)
 $(NVDB_BRIDGE_LIB): $(NVDB_BRIDGE_INC)/nvdb_stub.cc $(NVDB_BRIDGE_INC)/nvdb.h
 	@mkdir -p $(BUILD_DIR)
 	@echo "note: no NanoVDB headers -- building nvdb bridge stub (.nvdb media disabled)"
-	g++ -fPIC -shared -std=c++20 -I$(NVDB_BRIDGE_INC) $(NVDB_BRIDGE_INC)/nvdb_stub.cc -o $(NVDB_BRIDGE_LIB)
+	g++ $(CXXFLAGS) -fPIC -shared -std=c++20 -I$(NVDB_BRIDGE_INC) $(NVDB_BRIDGE_INC)/nvdb_stub.cc -o $(NVDB_BRIDGE_LIB)
 else
 # -DNANOVDB_USE_ZIP + -lz are required, not optional: the grid blob inside a
 # .nvdb is codec-compressed (all three scene assets here are ZIP), and
 # without it readGrid fails at runtime on every real file.
 $(NVDB_BRIDGE_LIB): $(NVDB_BRIDGE_INC)/nvdb.cc $(NVDB_BRIDGE_INC)/nvdb.h
 	@mkdir -p $(BUILD_DIR)
-	g++ -fPIC -shared -std=c++20 -DNANOVDB_USE_ZIP -I$(NVDB_BRIDGE_INC) $(NVDB_BRIDGE_INC)/nvdb.cc -lz -o $(NVDB_BRIDGE_LIB)
+	g++ $(CXXFLAGS) -fPIC -shared -std=c++20 -DNANOVDB_USE_ZIP -I$(NVDB_BRIDGE_INC) $(NVDB_BRIDGE_INC)/nvdb.cc -lz -o $(NVDB_BRIDGE_LIB)
 endif
 
 VIEWER_SRC = src/viewer/viewer.cpp
@@ -157,7 +160,7 @@ VIEWER_LIB = $(BUILD_DIR)/libvulkanviewer.so
 
 $(VIEWER_LIB): $(VIEWER_SRC) $(VIEWER_INC)/viewer.h
 	@mkdir -p $(BUILD_DIR)
-	g++ -fPIC -shared -std=c++20 -I$(VIEWER_INC) -I$(VIEWER_GEN) \
+	g++ $(CXXFLAGS) -fPIC -shared -std=c++20 -I$(VIEWER_INC) -I$(VIEWER_GEN) \
 		$(VIEWER_SRC) -lvulkan -lglfw -o $(VIEWER_LIB)
 
 # Task #162: headless Vulkan ray-query backend (2nd GPU intersection
@@ -172,7 +175,7 @@ VULKANRT_LIB = $(BUILD_DIR)/libvulkanrt.so
 
 $(VULKANRT_LIB): $(VULKANRT_SRC) $(VULKANRT_INC)/vulkanrt.h $(VULKANRT_GEN)/smoke_comp_spv.h $(VULKANRT_GEN)/trace_ray_comp_spv.h $(VULKANRT_GEN)/intersect_batch_comp_spv.h
 	@mkdir -p $(BUILD_DIR)
-	g++ -fPIC -shared -std=c++20 -I$(VULKANRT_INC) -I$(VULKANRT_GEN) \
+	g++ $(CXXFLAGS) -fPIC -shared -std=c++20 -I$(VULKANRT_INC) -I$(VULKANRT_GEN) \
 		$(VULKANRT_SRC) -lvulkan -o $(VULKANRT_LIB)
 
 # Task #163 stage 1: CUDA/Vulkan GPU-side interop foundation (real CUDA
@@ -200,12 +203,12 @@ ifeq ($(HAVE_CUDA),)
 $(VULKANINTEROP_LIB): $(VULKANINTEROP_INC)/vulkaninterop_stub.cpp $(VULKANINTEROP_INC)/vulkaninterop.h
 	@mkdir -p $(BUILD_DIR)
 	@echo "note: no CUDA at $(CUDA_HOME) -- building vulkaninterop stub (CUDA/Vulkan interop disabled)"
-	g++ -fPIC -shared -std=c++20 -I$(VULKANINTEROP_INC) \
+	g++ $(CXXFLAGS) -fPIC -shared -std=c++20 -I$(VULKANINTEROP_INC) \
 		$(VULKANINTEROP_INC)/vulkaninterop_stub.cpp -o $(VULKANINTEROP_LIB)
 else
 $(VULKANINTEROP_LIB): $(VULKANINTEROP_SRC) $(VULKANINTEROP_INC)/vulkaninterop.h $(VULKANINTEROP_GEN)/interop_double_comp_spv.h $(VULKANINTEROP_GEN)/intersect_batch_comp_spv.h
 	@mkdir -p $(BUILD_DIR)
-	g++ -fPIC -shared -std=c++20 -I$(VULKANINTEROP_INC) -I$(VULKANINTEROP_GEN) -I$(CUDA_HOME)/include \
+	g++ $(CXXFLAGS) -fPIC -shared -std=c++20 -I$(VULKANINTEROP_INC) -I$(VULKANINTEROP_GEN) -I$(CUDA_HOME)/include \
 		$(VULKANINTEROP_SRC) -lvulkan -L$(CUDA_HOME)/lib64 -lcudart -o $(VULKANINTEROP_LIB)
 endif
 

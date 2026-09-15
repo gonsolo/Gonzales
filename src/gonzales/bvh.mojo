@@ -1,6 +1,8 @@
 from std.memory import alloc
 from std.math import sqrt, cos, sin, max, min, exp, floor, log
 from max.algorithm import parallelize
+from std.atomic import Atomic
+from std.sys.info import num_performance_cores
 from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, MatKind, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, _is_real_ptr, store_vec3, _atan2f
 from .rng import PCG32
 from .spectrum import SpectralHandle
@@ -1790,17 +1792,23 @@ def _bvh_swap(
         var mn = wmin[i*3+a]; wmin[i*3+a] = wmin[j*3+a]; wmin[j*3+a] = mn
         var mx = wmax[i*3+a]; wmax[i*3+a] = wmax[j*3+a]; wmax[j*3+a] = mx
 
-def build_bvh2_node(
+@fieldwise_init
+struct _BVHSplit(TrivialRegisterPassable):
+    """How primitives [start, end) are split: their bounds, and `mid`, the
+    partition point in the reordered work arrays (-1: make them a leaf)."""
+    var bmin: Point3f
+    var bmax: Point3f
+    var mid: Int
+
+def _bvh_split(
     widx: UnsafePointer[Int32, MutExternalOrigin],
     wmin: UnsafePointer[Float32, MutExternalOrigin],
     wmax: UnsafePointer[Float32, MutExternalOrigin],
     start: Int, end: Int,
-    out_nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
-    node_count: UnsafePointer[Int32, MutExternalOrigin],
     prims_per_node: Int,
-) -> Int32:
-    var my = Int(node_count[0])
-    node_count[0] = node_count[0] + 1
+) -> _BVHSplit:
+    """Binned-SAH split of [start, end), partitioning the work arrays in place.
+    Touches only that range, so disjoint ranges can be split concurrently."""
     var count = end - start
 
     var INF = Float32(3.0e38)
@@ -1836,9 +1844,7 @@ def build_bvh2_node(
 
     # Leaf when geometry is degenerate or a single primitive.
     if sa == Float32(0.0) or count == 1 or cmax_d == cmin_d:
-        out_nodes[my] = BVH2Node(Point3f(bminx, bminy, bminz), Point3f(bmaxx, bmaxy, bmaxz),
-                                 Int32(start), Int32(count))
-        return Int32(my)
+        return _BVHSplit(Point3f(bminx, bminy, bminz), Point3f(bmaxx, bmaxy, bmaxz), -1)
 
     # Compute the split index `mid` (-1 => fall back to a leaf).
     var mid = -1
@@ -1932,19 +1938,169 @@ def build_bvh2_node(
                 mid = -1                     # degenerate split => leaf
         # else: leave mid = -1 (leaf)
 
-    if mid < 0:
-        out_nodes[my] = BVH2Node(Point3f(bminx, bminy, bminz), Point3f(bmaxx, bmaxy, bmaxz),
-                                 Int32(start), Int32(count))
-        return Int32(my)
+    return _BVHSplit(Point3f(bminx, bminy, bminz), Point3f(bmaxx, bmaxy, bmaxz), mid)
 
-    # Interior node: left child is the next reserved slot (my+1).
-    _ = build_bvh2_node(widx, wmin, wmax, start, mid,
+
+def build_bvh2_node(
+    widx: UnsafePointer[Int32, MutExternalOrigin],
+    wmin: UnsafePointer[Float32, MutExternalOrigin],
+    wmax: UnsafePointer[Float32, MutExternalOrigin],
+    start: Int, end: Int,
+    out_nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
+    node_count: UnsafePointer[Int32, MutExternalOrigin],
+    prims_per_node: Int,
+) -> Int32:
+    """Build the subtree over [start, end) depth-first: this node, then the
+    left subtree at my+1, then the right one, whose index the node stores."""
+    var my = Int(node_count[0])
+    node_count[0] = node_count[0] + 1
+    var sp = _bvh_split(widx, wmin, wmax, start, end, prims_per_node)
+    if sp.mid < 0:
+        out_nodes[my] = BVH2Node(sp.bmin, sp.bmax, Int32(start), Int32(end - start))
+        return Int32(my)
+    _ = build_bvh2_node(widx, wmin, wmax, start, sp.mid,
                         out_nodes, node_count, prims_per_node)
-    var right = build_bvh2_node(widx, wmin, wmax, mid, end,
+    var right = build_bvh2_node(widx, wmin, wmax, sp.mid, end,
                                 out_nodes, node_count, prims_per_node)
-    out_nodes[my] = BVH2Node(Point3f(bminx, bminy, bminz), Point3f(bmaxx, bmaxy, bmaxz),
-                             right, Int32(0))
+    out_nodes[my] = BVH2Node(sp.bmin, sp.bmax, right, Int32(0))
     return Int32(my)
+
+
+# Near the root, ranges with more primitives than this are split before the
+# parallel phase; the ranges left over become the parallel subtree builds.
+# Inputs of at most four subtrees' worth build serially.
+comptime _BVH_SUBTREE_PRIMS = 16384
+comptime _BVH_MAX_TASKS = 8192
+
+@fieldwise_init
+struct _BVHTask(TrivialRegisterPassable):
+    """A node near the root. Interior (left >= 0): split before the parallel
+    phase, children at task indices left/right. Subtree (left == -1): primitives
+    [start, end), whose build_bvh2_node output ends up at `nodes`, root at 0."""
+    var start: Int
+    var end: Int
+    var left: Int
+    var right: Int
+    var bmin: Point3f
+    var bmax: Point3f
+    var nodes: UnsafePointer[BVH2Node, MutExternalOrigin]
+    var n_nodes: Int
+
+def _bvh_subtree_task(start: Int, end: Int) -> _BVHTask:
+    return _BVHTask(start, end, -1, -1, Point3f(Float32(0), Float32(0), Float32(0)),
+                    Point3f(Float32(0), Float32(0), Float32(0)),
+                    UnsafePointer[BVH2Node, MutExternalOrigin].unsafe_dangling(), 0)
+
+def _bvh_emit(
+    tasks: UnsafePointer[_BVHTask, MutExternalOrigin], i: Int,
+    out_nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
+    node_count: UnsafePointer[Int32, MutExternalOrigin],
+) -> Int32:
+    """Lay task `i` out depth-first exactly where build_bvh2_node would have put
+    it. A subtree is copied as one block, its right-child offsets rebased;
+    leaf offsets index the shared primitive order and stay as they are."""
+    var my = Int(node_count[0])
+    var t = tasks[i]
+    if t.left < 0:
+        for j in range(t.n_nodes):
+            var nd = t.nodes[j]
+            if nd.count == Int32(0):
+                nd.offset += Int32(my)
+            out_nodes[my + j] = nd
+        node_count[0] = Int32(my + t.n_nodes)
+        return Int32(my)
+    node_count[0] = Int32(my + 1)
+    _ = _bvh_emit(tasks, t.left, out_nodes, node_count)
+    var right = _bvh_emit(tasks, t.right, out_nodes, node_count)
+    out_nodes[my] = BVH2Node(t.bmin, t.bmax, right, Int32(0))
+    return Int32(my)
+
+def _build_bvh2_parallel(
+    widx: UnsafePointer[Int32, MutExternalOrigin],
+    wmin: UnsafePointer[Float32, MutExternalOrigin],
+    wmax: UnsafePointer[Float32, MutExternalOrigin],
+    n: Int,
+    out_nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
+    node_count: UnsafePointer[Int32, MutExternalOrigin],
+    subtree_prims: Int,
+):
+    """The tree build_bvh2_node would build over [0, n), node for node, on all
+    cores. Every split only reorders its own range of the work arrays, so the
+    same splits in any order give the same arrays and the same nodes."""
+    var tasks = alloc[_BVHTask](_BVH_MAX_TASKS)
+    tasks[0] = _bvh_subtree_task(0, n)
+    var n_tasks = 1
+
+    # 1. Split the top of the tree level by level, each level's ranges in parallel.
+    var level = alloc[Int](_BVH_MAX_TASKS)
+    var next_level = alloc[Int](_BVH_MAX_TASKS)
+    var splits = alloc[_BVHSplit](_BVH_MAX_TASKS)
+    level[0] = 0
+    var n_level = 1
+    while n_level > 0 and n_tasks + 2 * n_level <= _BVH_MAX_TASKS:
+        @parameter
+        def split_one(k: Int):
+            var t = tasks[level[k]]
+            if t.end - t.start > subtree_prims:
+                splits[k] = _bvh_split(widx, wmin, wmax, t.start, t.end, 4)
+            else:
+                splits[k] = _BVHSplit(t.bmin, t.bmax, -1)   # small enough: a subtree build
+
+        parallelize[split_one](n_level)
+        var n_next = 0
+        for k in range(n_level):
+            var sp = splits[k]
+            if sp.mid < 0:
+                continue   # stays a subtree task (a leaf split is redone there, cheaply)
+            var i = level[k]
+            var t = tasks[i]
+            tasks[n_tasks] = _bvh_subtree_task(t.start, sp.mid)
+            tasks[n_tasks + 1] = _bvh_subtree_task(sp.mid, t.end)
+            tasks[i] = _BVHTask(t.start, t.end, n_tasks, n_tasks + 1, sp.bmin, sp.bmax, t.nodes, 0)
+            next_level[n_next] = n_tasks
+            next_level[n_next + 1] = n_tasks + 1
+            n_tasks += 2
+            n_next += 2
+        var tmp = level; level = next_level; next_level = tmp
+        n_level = n_next
+
+    # 2. Build the remaining subtrees concurrently, workers claiming the next one.
+    var subtrees = alloc[Int](n_tasks)
+    var n_subtrees = 0
+    for i in range(n_tasks):
+        if tasks[i].left < 0:
+            subtrees[n_subtrees] = i
+            n_subtrees += 1
+    var next_subtree = alloc[Int32](1)
+    next_subtree[0] = Int32(0)
+
+    @parameter
+    def build_worker(_worker_idx: Int):
+        while True:
+            var k = Int(Atomic.fetch_add(next_subtree, Int32(1)))
+            if k >= n_subtrees:
+                break
+            var i = subtrees[k]
+            var t = tasks[i]
+            var nodes = alloc[BVH2Node](2 * (t.end - t.start))
+            var cnt = alloc[Int32](1)
+            cnt[0] = Int32(0)
+            _ = build_bvh2_node(widx, wmin, wmax, t.start, t.end, nodes, cnt, 4)
+            t.nodes = nodes.unsafe_origin_cast[MutExternalOrigin]()
+            t.n_nodes = Int(cnt[0])
+            tasks[i] = t
+            cnt.free()
+
+    parallelize[build_worker](min(num_performance_cores(), n_subtrees))
+
+    # 3. Lay everything out depth-first.
+    node_count[0] = Int32(0)
+    _ = _bvh_emit(tasks, 0, out_nodes, node_count)
+
+    for k in range(n_subtrees):
+        tasks[subtrees[k]].nodes.free()
+    tasks.free(); level.free(); next_level.free(); splits.free()
+    subtrees.free(); next_subtree.free()
 
 
 def build_bvh2(
@@ -1952,6 +2108,8 @@ def build_bvh2(
     primCount: Int32,
     outNodes: UnsafePointer[BVH2Node, MutExternalOrigin],     # capacity >= 2*n
     outOrder: UnsafePointer[Int32, MutExternalOrigin],        # capacity >= n
+    parallel: Bool = True,   # False: the plain serial build, e.g. to check against
+    subtree_prims: Int = _BVH_SUBTREE_PRIMS,   # parallel subtree size; tests lower it
 ) -> Int32:
     var n = Int(primCount)
     if n <= 0:
@@ -1971,7 +2129,10 @@ def build_bvh2(
 
     var node_count = alloc[Int32](1)
     node_count[0] = 0
-    _ = build_bvh2_node(widx, wmin, wmax, 0, n, outNodes, node_count, 4)
+    if parallel and n > 4 * subtree_prims:
+        _build_bvh2_parallel(widx, wmin, wmax, n, outNodes, node_count, subtree_prims)
+    else:
+        _ = build_bvh2_node(widx, wmin, wmax, 0, n, outNodes, node_count, 4)
 
     for k in range(n):
         outOrder[k] = widx[k]

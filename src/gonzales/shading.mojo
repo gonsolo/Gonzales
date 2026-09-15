@@ -234,24 +234,25 @@ def _srgb_to_linear(c: Float32) -> Float32:
     else:
         return Float32(((c + Float32(0.055)) / Float32(1.055)) ** Float32(2.4))
 
+# Linear RGB of texel `i`, counted in texels from the start of tex.data. uint8
+# textures decode each channel through tex.lut, so every blend happens in
+# linear space; single-channel textures replicate into all three channels.
 @always_inline
-def _u8_to_linear_rgb(data: UnsafePointer[UInt8, MutExternalOrigin], idx: Int) -> RGB:
-    """One texel's raw, undecoded sRGB bytes -> linear RGB. Decode must
-    happen HERE, per tap, before bilinear blending -- blending raw sRGB
-    bytes then decoding is a different, wrong, nonlinear operation."""
-    return RGB(
-        _srgb_to_linear(Float32(data[idx])   * Float32(1.0 / 255.0)),
-        _srgb_to_linear(Float32(data[idx+1]) * Float32(1.0 / 255.0)),
-        _srgb_to_linear(Float32(data[idx+2]) * Float32(1.0 / 255.0)),
-    )
+def _texel(tex: GpuTexture_C, i: Int) -> RGB:
+    if Int(tex.format) == GpuTexture_C.FORMAT_U8:
+        if Int(tex.channels) == 1:
+            var l = tex.lut[Int(tex.data[i])]
+            return RGB(l, l, l)
+        var j = i * 3
+        return RGB(tex.lut[Int(tex.data[j])], tex.lut[Int(tex.data[j + 1])], tex.lut[Int(tex.data[j + 2])])
+    var f = tex.data.bitcast[Float32]()
+    var k = i * 3
+    return RGB(f[k], f[k + 1], f[k + 2])
 
 # Bilinear sample of ONE mip level: `off` = texel offset of the level in
 # tex.data, (lw, lh) = that level's dimensions. Pixel centres at +0.5, wrap.
-# `is_u8`: data is raw undecoded sRGB UInt8 (decode-then-blend, see
-# _u8_to_linear_rgb) vs. pre-linearised Float32 (data.bitcast[Float32]()) --
-# see GpuTexture_C's docstring in geometry.mojo for why two formats exist.
 @always_inline
-def _sample_level(data: UnsafePointer[UInt8, MutExternalOrigin], off: Int, lw: Int, lh: Int, u: Float32, v: Float32, is_u8: Bool) -> RGB:
+def _sample_level(tex: GpuTexture_C, off: Int, lw: Int, lh: Int, u: Float32, v: Float32) -> RGB:
     var s = u - Float32(Int(u))
     if s < Float32(0.0): s += Float32(1.0)
     var t = v - Float32(Int(v))
@@ -264,35 +265,23 @@ def _sample_level(data: UnsafePointer[UInt8, MutExternalOrigin], off: Int, lw: I
     var y0w = ((y0 % lh) + lh) % lh
     var x1w = (x0w + 1) % lw
     var y1w = (y0w + 1) % lh
-    var i00 = off + (y0w * lw + x0w) * 3
-    var i10 = off + (y0w * lw + x1w) * 3
-    var i01 = off + (y1w * lw + x0w) * 3
-    var i11 = off + (y1w * lw + x1w) * 3
+    var i00 = off + y0w * lw + x0w
+    var i10 = off + y0w * lw + x1w
+    var i01 = off + y1w * lw + x0w
+    var i11 = off + y1w * lw + x1w
     var w00 = (Float32(1.0) - wx) * (Float32(1.0) - wy)
     var w10 = wx * (Float32(1.0) - wy)
     var w01 = (Float32(1.0) - wx) * wy
     var w11 = wx * wy
-    if is_u8:
-        var c00 = _u8_to_linear_rgb(data, i00)
-        var c10 = _u8_to_linear_rgb(data, i10)
-        var c01 = _u8_to_linear_rgb(data, i01)
-        var c11 = _u8_to_linear_rgb(data, i11)
-        return c00 * w00 + c10 * w10 + c01 * w01 + c11 * w11
-    var fdata = data.bitcast[Float32]()
-    return RGB(
-        fdata[i00]   * w00 + fdata[i10]   * w10 + fdata[i01]   * w01 + fdata[i11]   * w11,
-        fdata[i00+1] * w00 + fdata[i10+1] * w10 + fdata[i01+1] * w01 + fdata[i11+1] * w11,
-        fdata[i00+2] * w00 + fdata[i10+2] * w10 + fdata[i01+2] * w01 + fdata[i11+2] * w11,
-    )
+    return _texel(tex, i00) * w00 + _texel(tex, i10) * w10 + _texel(tex, i01) * w01 + _texel(tex, i11) * w11
 
 # Trilinear mip sample. lod 0 = base level (full res); higher = coarser.
 # With a 1-level texture (no pyramid) this is plain bilinear on the base.
 @always_inline
 def _sample_tex(tex: GpuTexture_C, u: Float32, v: Float32, lod: Float32 = Float32(0.0)) -> RGB:
     var nl = Int(tex.n_levels)
-    var is_u8 = tex.is_u8 != Int32(0)
     if nl <= 1:
-        return _sample_level(tex.data, 0, Int(tex.width), Int(tex.height), u, v, is_u8)
+        return _sample_level(tex, 0, Int(tex.width), Int(tex.height), u, v)
     var clamped = lod
     if clamped < Float32(0.0): clamped = Float32(0.0)
     var maxl = Float32(nl - 1)
@@ -302,15 +291,24 @@ def _sample_tex(tex: GpuTexture_C, u: Float32, v: Float32, lod: Float32 = Float3
     # Walk to level l0, tracking its texel offset and dims.
     var off = 0; var w = Int(tex.width); var h = Int(tex.height)
     for _k in range(l0):
-        off += w * h * 3
+        off += w * h
         w = max(1, w // 2); h = max(1, h // 2)
-    var c0 = _sample_level(tex.data, off, w, h, u, v, is_u8)
+    var c0 = _sample_level(tex, off, w, h, u, v)
     if f <= Float32(0.0) or l0 >= nl - 1:
         return c0
-    var off1 = off + w * h * 3
+    var off1 = off + w * h
     var w1 = max(1, w // 2); var h1 = max(1, h // 2)
-    var c1 = _sample_level(tex.data, off1, w1, h1, u, v, is_u8)
+    var c1 = _sample_level(tex, off1, w1, h1, u, v)
     return c0 + (c1 - c0) * f
+
+# LOD = log2(texels covered by one pixel). pixel_uv is the uv footprint;
+# * width converts to texels.
+@always_inline
+def _footprint_lod(tex: GpuTexture_C, pixel_uv: Float32) -> Float32:
+    var texels = pixel_uv * Float32(tex.width)
+    if texels > Float32(1.0):
+        return log2(texels)
+    return Float32(0.0)
 
 # Unified 2D-texture fetch — the single use_gpu seam for texture sampling.
 # GPU reads the uploaded GpuTexture_C table; CPU reads via OIIO by filename.
@@ -338,13 +336,7 @@ def sample_texture[use_gpu: Bool](
             var tex = textures[tex_idx]
             if Int(tex.width) > 0:
                 found = True
-                # LOD = log2(texels covered by one pixel). pixel_uv is the uv
-                # footprint; * width converts to texels. (CPU branch lets OIIO filter.)
-                var texels = pixel_uv * Float32(tex.width)
-                var lod = Float32(0.0)
-                if texels > Float32(1.0):
-                    lod = log2(texels)
-                return _sample_tex(tex, su, tv, lod)
+                return _sample_tex(tex, su, tv, _footprint_lod(tex, pixel_uv))
     else:
         if Int(tex_filenames) > 1:
             var filename = tex_filenames[tex_idx]
@@ -408,7 +400,7 @@ def _tex_lookup[use_gpu: Bool](
                 # bias + scale*texel is pbrt's "scale"/"mix" texture graph
                 # folded into the lookup (scale=1, bias=0 when absent) --
                 # see material_builder.mojo's _resolve_affine_rgb.
-                var t = _sample_tex(tex, su, tv)
+                var t = _sample_tex(tex, su, tv, _footprint_lod(tex, pixel_uv))
                 return RGB(mat.tex_bias.r + mat.tex_scale.r * t.r,
                            mat.tex_bias.g + mat.tex_scale.g * t.g,
                            mat.tex_bias.b + mat.tex_scale.b * t.b)
