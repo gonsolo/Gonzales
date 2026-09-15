@@ -481,19 +481,46 @@ def gpu_available() -> Bool:
 
 # Uploads count elements of T from a host array into a fresh device buffer
 # (>= 1 elem so a zero-count scene never creates a 0-byte device buffer,
-# which crashes on use/free). Shared by gpu_upload_scene's ~11 near-identical
-# "size, create buffer, memcpy if non-empty" upload sites below.
+# which crashes on use/free). enqueue_copy copies straight from the host
+# pointer; map_to_host would first copy the device buffer to host pages and
+# back on exit, which cost San Miguel ~1.2 s of page faults across its
+# per-mesh uploads. The copy is asynchronous: `src` must stay valid until the
+# next ctx.synchronize().
 def _gpu_upload_array[T: AnyType](
     ctx: DeviceContext,
     src: UnsafePointer[T, MutExternalOrigin],
     count: Int,
 ) raises -> DeviceBuffer[DType.uint8]:
-    var n_bytes = max(count, 1) * size_of[T]()
-    var buf = ctx.enqueue_create_buffer[DType.uint8](n_bytes)
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(count, 1) * size_of[T]())
     if count > 0:
-        with buf.map_to_host() as host_buf:
-            memcpy(dest=host_buf.unsafe_ptr(), src=src.bitcast[UInt8](), count=count * size_of[T]())
+        ctx.enqueue_copy(buf, src.bitcast[UInt8]())
     return buf^
+
+# _gpu_upload_array into a buffer that `bufs` keeps alive; returns its device
+# pointer typed as T.
+def _gpu_upload_owned[T: AnyType](
+    ctx: DeviceContext,
+    mut bufs: List[DeviceBuffer[DType.uint8]],
+    src: UnsafePointer[T, MutExternalOrigin],
+    count: Int,
+) raises -> UnsafePointer[T, MutExternalOrigin]:
+    var buf = _gpu_upload_array[T](ctx, src, count)
+    var dptr = typed_ptr[T](buf)
+    bufs.append(buf^)
+    return dptr
+
+# A zero-filled device buffer of `count` elements of T that `bufs` keeps alive;
+# returns its device pointer typed as T.
+def _gpu_zeros_owned[T: AnyType](
+    ctx: DeviceContext,
+    mut bufs: List[DeviceBuffer[DType.uint8]],
+    count: Int,
+) raises -> UnsafePointer[T, MutExternalOrigin]:
+    var buf = ctx.enqueue_create_buffer[DType.uint8](max(count, 1) * size_of[T]())
+    ctx.enqueue_memset(buf, UInt8(0))
+    var dptr = typed_ptr[T](buf)
+    bufs.append(buf^)
+    return dptr
 
 def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origin[mut=True], Ouv: Origin[mut=True], Onv: Origin[mut=True]](
     bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
@@ -612,35 +639,16 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var blas_nodes_ptrs_host = alloc[UnsafePointer[UInt8, MutExternalOrigin]](max(n_blas_int, 1))
             var blas_primids_ptrs_host = alloc[UnsafePointer[UInt8, MutExternalOrigin]](max(n_blas_int, 1))
             for bi in range(n_blas_int):
-                var bn_count = Int(blasNodeCounts[bi])
-                var bn_bytes = max(bn_count, 1) * size_of[BVH2Node]()
-                var bn_buf = ctx.enqueue_create_buffer[DType.uint8](bn_bytes)
-                with bn_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr()
-                    var src = blasNodesArr[bi].bitcast[UInt8]()
-                    memcpy(dest=dst, src=src, count=bn_count * size_of[BVH2Node]())
-                blas_nodes_ptrs_host[bi] = bn_buf.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin]()
-                blas_nodes_bufs.append(bn_buf^)
+                blas_nodes_ptrs_host[bi] = _gpu_upload_owned[BVH2Node](
+                    ctx, blas_nodes_bufs, blasNodesArr[bi], Int(blasNodeCounts[bi])).bitcast[UInt8]()
+                blas_primids_ptrs_host[bi] = _gpu_upload_owned[PrimId_C](
+                    ctx, blas_primids_bufs, blasPrimIdsArr[bi], Int(blasPrimidCounts[bi])).bitcast[UInt8]()
 
-                var bp_count = Int(blasPrimidCounts[bi])
-                var bp_bytes = max(bp_count, 1) * size_of[PrimId_C]()
-                var bp_buf = ctx.enqueue_create_buffer[DType.uint8](bp_bytes)
-                with bp_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr()
-                    var src = blasPrimIdsArr[bi].bitcast[UInt8]()
-                    memcpy(dest=dst, src=src, count=bp_count * size_of[PrimId_C]())
-                blas_primids_ptrs_host[bi] = bp_buf.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin]()
-                blas_primids_bufs.append(bp_buf^)
-
-            var blas_ptrs_bytes = max(n_blas_int, 1) * size_of[UnsafePointer[UInt8, MutExternalOrigin]]()
-            var blas_nodes_ptrs_buf = ctx.enqueue_create_buffer[DType.uint8](blas_ptrs_bytes)
-            with blas_nodes_ptrs_buf.map_to_host() as host_buf:
-                var dst = host_buf.unsafe_ptr().bitcast[UnsafePointer[UInt8, MutExternalOrigin]]()
-                memcpy(dest=dst, src=blas_nodes_ptrs_host, count=n_blas_int)
-            var blas_primids_ptrs_buf = ctx.enqueue_create_buffer[DType.uint8](blas_ptrs_bytes)
-            with blas_primids_ptrs_buf.map_to_host() as host_buf:
-                var dst = host_buf.unsafe_ptr().bitcast[UnsafePointer[UInt8, MutExternalOrigin]]()
-                memcpy(dest=dst, src=blas_primids_ptrs_host, count=n_blas_int)
+            var blas_nodes_ptrs_buf = _gpu_upload_array[UnsafePointer[UInt8, MutExternalOrigin]](
+                ctx, blas_nodes_ptrs_host, n_blas_int)
+            var blas_primids_ptrs_buf = _gpu_upload_array[UnsafePointer[UInt8, MutExternalOrigin]](
+                ctx, blas_primids_ptrs_host, n_blas_int)
+            ctx.synchronize()   # the host pointer arrays are freed next
             blas_nodes_ptrs_host.free(); blas_primids_ptrs_host.free()
 
             var n_instances_int = Int(instanceCount)
@@ -658,82 +666,30 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             for i in range(Int(meshCount)):
                 var host_mesh = meshes[i]
 
-                # Upload points
-                var pts_count = Int(meshPointsCounts[i])
-                var pts_bytes = pts_count * 4
-                var pts_buf = ctx.enqueue_create_buffer[DType.uint8](pts_bytes)
-                with pts_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr()
-                    var src = host_mesh.points.bitcast[UInt8]()
-                    memcpy(dest=dst, src=src, count=pts_bytes)
-
-                # Upload face indices
-                var fi_count = Int(meshFaceIndicesCounts[i])
-                var fi_bytes = fi_count * 8
-                var fi_buf = ctx.enqueue_create_buffer[DType.uint8](fi_bytes)
-                with fi_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr()
-                    var src = host_mesh.faceIndices.bitcast[UInt8]()
-                    memcpy(dest=dst, src=src, count=fi_bytes)
-
-                # Upload vertex indices
-                var vi_count = Int(meshVertexIndicesCounts[i])
-                var vi_bytes = vi_count * 8
-                var vi_buf = ctx.enqueue_create_buffer[DType.uint8](vi_bytes)
-                with vi_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr()
-                    var src = host_mesh.vertexIndices.bitcast[UInt8]()
-                    memcpy(dest=dst, src=src, count=vi_bytes)
-
-                # Upload UVs (2 floats per vertex; zeros if mesh has no UVs)
+                # Points (Float32), face and vertex indices (Int64), then UVs (2 floats
+                # per vertex) and shading normals (3 per vertex), each a zeroed
+                # 4-byte buffer when the mesh has none.
+                var pts_dptr = _gpu_upload_owned[Float32](ctx, points_bufs, host_mesh.points, Int(meshPointsCounts[i]))
+                var fi_dptr = _gpu_upload_owned[Int64](ctx, face_bufs, host_mesh.faceIndices, Int(meshFaceIndicesCounts[i]))
+                var vi_dptr = _gpu_upload_owned[Int64](ctx, vert_bufs, host_mesh.vertexIndices, Int(meshVertexIndicesCounts[i]))
                 var uv_n = Int(meshUvNVerts[i])
-                var uv_bytes = max(uv_n * 2 * 4, 4)
-                var uv_buf = ctx.enqueue_create_buffer[DType.uint8](uv_bytes)
-                with uv_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr()
-                    if uv_n > 0:
-                        var src = host_mesh.uvs.bitcast[UInt8]()
-                        memcpy(dest=dst, src=src, count=uv_n * 2 * 4)
-                    else:
-                        for j in range(uv_bytes):
-                            dst[j] = UInt8(0)
-
-                # Upload shading normals (3 floats per vertex; zeros if mesh has none)
+                var uv_dptr: UnsafePointer[Float32, MutExternalOrigin]
+                if uv_n > 0:
+                    uv_dptr = _gpu_upload_owned[Float32](ctx, uv_bufs, host_mesh.uvs, uv_n * 2)
+                else:
+                    uv_dptr = _gpu_zeros_owned[Float32](ctx, uv_bufs, 1)
                 var nrm_n = Int(meshNrmNVerts[i])
-                var nrm_bytes = max(nrm_n * 3 * 4, 4)
-                var nrm_buf = ctx.enqueue_create_buffer[DType.uint8](nrm_bytes)
-                with nrm_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr()
-                    if nrm_n > 0:
-                        var src = host_mesh.normals.bitcast[UInt8]()
-                        memcpy(dest=dst, src=src, count=nrm_n * 3 * 4)
-                    else:
-                        for j in range(nrm_bytes):
-                            dst[j] = UInt8(0)
+                var nrm_dptr = UnsafePointer[Float32, MutExternalOrigin](unsafe_from_address=1)   # "no normals"
+                if nrm_n > 0:
+                    nrm_dptr = _gpu_upload_owned[Float32](ctx, nrm_bufs, host_mesh.normals, nrm_n * 3)
+                else:
+                    _ = _gpu_zeros_owned[Float32](ctx, nrm_bufs, 1)
 
-                mesh_structs_host[i] = TriangleMesh_C(
-                    pts_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin](),
-                    fi_buf.unsafe_ptr().bitcast[Int64]().unsafe_origin_cast[MutExternalOrigin](),
-                    vi_buf.unsafe_ptr().bitcast[Int64]().unsafe_origin_cast[MutExternalOrigin](),
-                    uv_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin](),
-                    nrm_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]() if nrm_n > 0 else UnsafePointer[
-                        Float32, MutExternalOrigin
-                    ](unsafe_from_address=1),
-                )
-
-                points_bufs.append(pts_buf^)
-                face_bufs.append(fi_buf^)
-                vert_bufs.append(vi_buf^)
-                uv_bufs.append(uv_buf^)
-                nrm_bufs.append(nrm_buf^)
+                mesh_structs_host[i] = TriangleMesh_C(pts_dptr, fi_dptr, vi_dptr, uv_dptr, nrm_dptr)
 
             # Upload mesh struct array
-            var meshes_buf = ctx.enqueue_create_buffer[DType.uint8](mesh_struct_bytes)
-            with meshes_buf.map_to_host() as host_buf:
-                var dst = host_buf.unsafe_ptr()
-                var src = mesh_structs_host.bitcast[UInt8]()
-                memcpy(dest=dst, src=src, count=mesh_struct_bytes)
-
+            var meshes_buf = _gpu_upload_array[TriangleMesh_C](ctx, mesh_structs_host, Int(meshCount))
+            ctx.synchronize()   # mesh_structs_host is freed next
             mesh_structs_host.free()
 
             # Upload materials array (>= 1 elem to avoid a zero-size buffer)
@@ -773,42 +729,16 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var il_patched = alloc[InfiniteLight_C](max(il_count, 1))
             for ii in range(il_count):
                 var il = infiniteLights[ii]
-                # Upload world_to_light matrix (16 floats = 64 bytes)
-                var w2l_buf = ctx.enqueue_create_buffer[DType.uint8](64)
-                with w2l_buf.map_to_host() as h:
-                    var dst = h.unsafe_ptr().bitcast[Float32]()
-                    for k in range(16):
-                        dst[k] = il.world_to_light[k]
-                il.world_to_light = w2l_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
-                il_w2l_bufs.append(w2l_buf^)
-                # Upload pixels + CDF when texture is present
+                # world_to_light matrix (16 floats), then pixels + CDF when textured.
+                il.world_to_light = _gpu_upload_owned[Float32](ctx, il_w2l_bufs, il.world_to_light, 16)
                 if il.cdf_w > Int32(0) and _is_real_ptr(il.pixels_ptr):
                     var iw = Int(il.cdf_w); var ih = Int(il.cdf_h)
-                    # Pixel data: iw × ih × 3 floats
-                    var pix_count = iw * ih * 3
-                    var pix_buf = ctx.enqueue_create_buffer[DType.uint8](pix_count * 4)
-                    with pix_buf.map_to_host() as h:
-                        var dst = h.unsafe_ptr().bitcast[Float32]()
-                        for k in range(pix_count):
-                            dst[k] = il.pixels_ptr[k]
-                    il.pixels_ptr = pix_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
-                    il_pixels_bufs.append(pix_buf^)
-                    # CDF data: (ih+1) marginal rows + ih×(iw+1) conditional entries
-                    var cdf_count = (ih + 1) + ih * (iw + 1)
-                    var cdf_buf = ctx.enqueue_create_buffer[DType.uint8](cdf_count * 4)
-                    with cdf_buf.map_to_host() as h:
-                        var dst = h.unsafe_ptr().bitcast[Float32]()
-                        for k in range(cdf_count):
-                            dst[k] = il.cdf_ptr[k]
-                    il.cdf_ptr = cdf_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
-                    il_cdf_bufs.append(cdf_buf^)
+                    # Pixels: iw × ih × 3 floats. CDF: (ih+1) marginal rows + ih×(iw+1) conditional entries.
+                    il.pixels_ptr = _gpu_upload_owned[Float32](ctx, il_pixels_bufs, il.pixels_ptr, iw * ih * 3)
+                    il.cdf_ptr = _gpu_upload_owned[Float32](ctx, il_cdf_bufs, il.cdf_ptr, (ih + 1) + ih * (iw + 1))
                 il_patched[ii] = il
-            var il_bytes = max(il_count, 1) * size_of[InfiniteLight_C]()
-            var il_buf = ctx.enqueue_create_buffer[DType.uint8](il_bytes)
-            with il_buf.map_to_host() as host_buf:
-                var dst = host_buf.unsafe_ptr()
-                var src = il_patched.bitcast[UInt8]()
-                memcpy(dest=dst, src=src, count=il_count * size_of[InfiniteLight_C]())
+            var il_buf = _gpu_upload_array[InfiniteLight_C](ctx, il_patched, il_count)
+            ctx.synchronize()   # il_patched is freed next
             il_patched.free()
             print("GPU: " + String(il_count) + " infinite light(s) uploaded")
 
@@ -828,24 +758,13 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             for gi in range(n_grids_int):
                 var host_grid = grids[gi]
                 var n_voxels = Int(host_grid.nx) * Int(host_grid.ny) * Int(host_grid.nz)
-                var density_bytes = max(n_voxels, 1) * 4
-                var density_buf = ctx.enqueue_create_buffer[DType.uint8](density_bytes)
-                with density_buf.map_to_host() as host_buf:
-                    var dst = host_buf.unsafe_ptr()
-                    var src = host_grid.density.bitcast[UInt8]()
-                    memcpy(dest=dst, src=src, count=n_voxels * 4)
                 grid_structs_host[gi] = Grid_C(
-                    density_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin](),
+                    _gpu_upload_owned[Float32](ctx, grid_density_bufs, host_grid.density, n_voxels),
                     host_grid.nx, host_grid.ny, host_grid.nz,
                     host_grid.p0, host_grid.p1,
                     host_grid.world_to_medium, host_grid.max_density)
-                grid_density_bufs.append(density_buf^)
-            var grid_struct_bytes = max(n_grids_int, 1) * size_of[Grid_C]()
-            var grids_buf = ctx.enqueue_create_buffer[DType.uint8](grid_struct_bytes)
-            with grids_buf.map_to_host() as host_buf:
-                var dst = host_buf.unsafe_ptr()
-                var src = grid_structs_host.bitcast[UInt8]()
-                memcpy(dest=dst, src=src, count=grid_struct_bytes)
+            var grids_buf = _gpu_upload_array[Grid_C](ctx, grid_structs_host, n_grids_int)
+            ctx.synchronize()   # grid_structs_host is freed next
             grid_structs_host.free()
             if n_grids_int > 0:
                 print("GPU: " + String(n_grids_int) + " heterogeneous density grid(s) uploaded")
@@ -859,24 +778,13 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var nvdb_structs_host = alloc[NvdbGrid_C](max(n_nvdb_grids_int, 1))
             for gi in range(n_nvdb_grids_int):
                 var host_nvdb = nvdbGrids[gi]
-                var blob_bytes = Int(host_nvdb.blob_size)
-                var blob_buf = ctx.enqueue_create_buffer[DType.uint8](max(blob_bytes, 1))
-                if blob_bytes > 0:
-                    with blob_buf.map_to_host() as host_buf:
-                        var dst = host_buf.unsafe_ptr()
-                        var src = host_nvdb.blob
-                        memcpy(dest=dst, src=src, count=blob_bytes)
                 nvdb_structs_host[gi] = NvdbGrid_C(
-                    blob_buf.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](), host_nvdb.blob_size,
+                    _gpu_upload_owned[UInt8](ctx, nvdb_blob_bufs, host_nvdb.blob, Int(host_nvdb.blob_size)),
+                    host_nvdb.blob_size,
                     host_nvdb.world_to_medium, host_nvdb.inv_map, host_nvdb.map_vec,
                     host_nvdb.index_min, host_nvdb.index_max, host_nvdb.max_density)
-                nvdb_blob_bufs.append(blob_buf^)
-            var nvdb_struct_bytes = max(n_nvdb_grids_int, 1) * size_of[NvdbGrid_C]()
-            var nvdb_grids_buf = ctx.enqueue_create_buffer[DType.uint8](nvdb_struct_bytes)
-            with nvdb_grids_buf.map_to_host() as host_buf:
-                var dst = host_buf.unsafe_ptr()
-                var src = nvdb_structs_host.bitcast[UInt8]()
-                memcpy(dest=dst, src=src, count=nvdb_struct_bytes)
+            var nvdb_grids_buf = _gpu_upload_array[NvdbGrid_C](ctx, nvdb_structs_host, n_nvdb_grids_int)
+            ctx.synchronize()   # nvdb_structs_host is freed next
             nvdb_structs_host.free()
             if n_nvdb_grids_int > 0:
                 print("GPU: " + String(n_nvdb_grids_int) + " sparse (nanovdb) density grid(s) uploaded")
@@ -897,114 +805,23 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var measured_structs_host = alloc[MeasuredBRDF_C](max(n_measured_int, 1))
             for mi in range(n_measured_int):
                 var hm = measured_brdfs[mi]
-                var n_theta_i = Int(hm.n_theta_i)
-                var n_phi_i = Int(hm.n_phi_i)
-                var n_wavelengths = Int(hm.n_wavelengths)
-                var slices2 = n_phi_i * n_theta_i
-                var slices3 = slices2 * n_wavelengths
-
-                var theta_i_buf = ctx.enqueue_create_buffer[DType.uint8](max(n_theta_i, 1) * 4)
-                with theta_i_buf.map_to_host() as h:
-                    var dst = h.unsafe_ptr().bitcast[Float32]()
-                    for k in range(n_theta_i):
-                        dst[k] = hm.theta_i[k]
-                var theta_i_dptr = theta_i_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
-                measured_field_bufs.append(theta_i_buf^)
-
-                var phi_i_buf = ctx.enqueue_create_buffer[DType.uint8](max(n_phi_i, 1) * 4)
-                with phi_i_buf.map_to_host() as h:
-                    var dst = h.unsafe_ptr().bitcast[Float32]()
-                    for k in range(n_phi_i):
-                        dst[k] = hm.phi_i[k]
-                var phi_i_dptr = phi_i_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
-                measured_field_bufs.append(phi_i_buf^)
-
-                var wavelengths_buf = ctx.enqueue_create_buffer[DType.uint8](max(n_wavelengths, 1) * 4)
-                with wavelengths_buf.map_to_host() as h:
-                    var dst = h.unsafe_ptr().bitcast[Float32]()
-                    for k in range(n_wavelengths):
-                        dst[k] = hm.wavelengths[k]
-                var wavelengths_dptr = wavelengths_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
-                measured_field_bufs.append(wavelengths_buf^)
-
-                var ndf_n = Int(hm.ndf_xs) * Int(hm.ndf_ys)
-                var ndf_buf = ctx.enqueue_create_buffer[DType.uint8](max(ndf_n, 1) * 4)
-                with ndf_buf.map_to_host() as h:
-                    var dst = h.unsafe_ptr().bitcast[Float32]()
-                    for k in range(ndf_n):
-                        dst[k] = hm.ndf_data[k]
-                var ndf_dptr = ndf_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
-                measured_field_bufs.append(ndf_buf^)
-
-                var sigma_n = Int(hm.sigma_xs) * Int(hm.sigma_ys)
-                var sigma_buf = ctx.enqueue_create_buffer[DType.uint8](max(sigma_n, 1) * 4)
-                with sigma_buf.map_to_host() as h:
-                    var dst = h.unsafe_ptr().bitcast[Float32]()
-                    for k in range(sigma_n):
-                        dst[k] = hm.sigma_data[k]
-                var sigma_dptr = sigma_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
-                measured_field_bufs.append(sigma_buf^)
-
+                var slices2 = Int(hm.n_phi_i) * Int(hm.n_theta_i)
+                var slices3 = slices2 * Int(hm.n_wavelengths)
                 var vndf_n = slices2 * Int(hm.vndf_xs) * Int(hm.vndf_ys)
-                var vndf_buf = ctx.enqueue_create_buffer[DType.uint8](max(vndf_n, 1) * 4)
-                with vndf_buf.map_to_host() as h:
-                    var dst = h.unsafe_ptr().bitcast[Float32]()
-                    for k in range(vndf_n):
-                        dst[k] = hm.vndf_data[k]
-                var vndf_dptr = vndf_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
-                measured_field_bufs.append(vndf_buf^)
-
-                var vndf_marg_n = slices2 * Int(hm.vndf_ys)
-                var vndf_marg_buf = ctx.enqueue_create_buffer[DType.uint8](max(vndf_marg_n, 1) * 4)
-                with vndf_marg_buf.map_to_host() as h:
-                    var dst = h.unsafe_ptr().bitcast[Float32]()
-                    for k in range(vndf_marg_n):
-                        dst[k] = hm.vndf_marg[k]
-                var vndf_marg_dptr = vndf_marg_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
-                measured_field_bufs.append(vndf_marg_buf^)
-
-                var vndf_cond_buf = ctx.enqueue_create_buffer[DType.uint8](max(vndf_n, 1) * 4)
-                with vndf_cond_buf.map_to_host() as h:
-                    var dst = h.unsafe_ptr().bitcast[Float32]()
-                    for k in range(vndf_n):
-                        dst[k] = hm.vndf_cond[k]
-                var vndf_cond_dptr = vndf_cond_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
-                measured_field_bufs.append(vndf_cond_buf^)
-
                 var lum_n = slices2 * Int(hm.lum_xs) * Int(hm.lum_ys)
-                var lum_buf = ctx.enqueue_create_buffer[DType.uint8](max(lum_n, 1) * 4)
-                with lum_buf.map_to_host() as h:
-                    var dst = h.unsafe_ptr().bitcast[Float32]()
-                    for k in range(lum_n):
-                        dst[k] = hm.lum_data[k]
-                var lum_dptr = lum_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
-                measured_field_bufs.append(lum_buf^)
-
-                var lum_marg_n = slices2 * Int(hm.lum_ys)
-                var lum_marg_buf = ctx.enqueue_create_buffer[DType.uint8](max(lum_marg_n, 1) * 4)
-                with lum_marg_buf.map_to_host() as h:
-                    var dst = h.unsafe_ptr().bitcast[Float32]()
-                    for k in range(lum_marg_n):
-                        dst[k] = hm.lum_marg[k]
-                var lum_marg_dptr = lum_marg_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
-                measured_field_bufs.append(lum_marg_buf^)
-
-                var lum_cond_buf = ctx.enqueue_create_buffer[DType.uint8](max(lum_n, 1) * 4)
-                with lum_cond_buf.map_to_host() as h:
-                    var dst = h.unsafe_ptr().bitcast[Float32]()
-                    for k in range(lum_n):
-                        dst[k] = hm.lum_cond[k]
-                var lum_cond_dptr = lum_cond_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
-                measured_field_bufs.append(lum_cond_buf^)
-
-                var spectra_n = slices3 * Int(hm.spectra_xs) * Int(hm.spectra_ys)
-                var spectra_buf = ctx.enqueue_create_buffer[DType.uint8](max(spectra_n, 1) * 4)
-                with spectra_buf.map_to_host() as h:
-                    var dst = h.unsafe_ptr().bitcast[Float32]()
-                    for k in range(spectra_n):
-                        dst[k] = hm.spectra_data[k]
-                var spectra_dptr = spectra_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
-                measured_field_bufs.append(spectra_buf^)
+                var theta_i_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.theta_i, Int(hm.n_theta_i))
+                var phi_i_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.phi_i, Int(hm.n_phi_i))
+                var wavelengths_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.wavelengths, Int(hm.n_wavelengths))
+                var ndf_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.ndf_data, Int(hm.ndf_xs) * Int(hm.ndf_ys))
+                var sigma_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.sigma_data, Int(hm.sigma_xs) * Int(hm.sigma_ys))
+                var vndf_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.vndf_data, vndf_n)
+                var vndf_marg_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.vndf_marg, slices2 * Int(hm.vndf_ys))
+                var vndf_cond_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.vndf_cond, vndf_n)
+                var lum_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.lum_data, lum_n)
+                var lum_marg_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.lum_marg, slices2 * Int(hm.lum_ys))
+                var lum_cond_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.lum_cond, lum_n)
+                var spectra_dptr = _gpu_upload_owned[Float32](
+                    ctx, measured_field_bufs, hm.spectra_data, slices3 * Int(hm.spectra_xs) * Int(hm.spectra_ys))
 
                 measured_structs_host[mi] = MeasuredBRDF_C(
                     hm.isotropic, hm.n_theta_i, hm.n_phi_i, hm.n_wavelengths,
@@ -1017,12 +834,8 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                     spectra_dptr, hm.spectra_xs, hm.spectra_ys,
                     hm.stride3_phi, hm.stride3_theta, hm.stride3_lambda,
                 )
-            var measured_struct_bytes = max(n_measured_int, 1) * size_of[MeasuredBRDF_C]()
-            var measured_brdfs_buf = ctx.enqueue_create_buffer[DType.uint8](measured_struct_bytes)
-            with measured_brdfs_buf.map_to_host() as host_buf:
-                var dst = host_buf.unsafe_ptr()
-                var src = measured_structs_host.bitcast[UInt8]()
-                memcpy(dest=dst, src=src, count=measured_struct_bytes)
+            var measured_brdfs_buf = _gpu_upload_array[MeasuredBRDF_C](ctx, measured_structs_host, n_measured_int)
+            ctx.synchronize()   # measured_structs_host is freed next
             measured_structs_host.free()
             if n_measured_int > 0:
                 print("GPU: " + String(n_measured_int) + " measured BRDF(s) uploaded")
@@ -1075,14 +888,8 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var n_curve_compact_paths = n_curve_paths if Int(curveCount) > 0 else 1
             var r_curve_compact_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_curve_compact_paths * 4)
             var r_curve_compact_counter_buf = ctx.enqueue_create_buffer[DType.uint8](4)
-            with r_film_buf.map_to_host() as h:
-                var p = h.unsafe_ptr()
-                for i in range(n_pix * 12):
-                    p[i] = UInt8(0)
-            with r_albedo_film_buf.map_to_host() as h:
-                var p = h.unsafe_ptr()
-                for i in range(n_pix * 12):
-                    p[i] = UInt8(0)
+            ctx.enqueue_memset(r_film_buf, UInt8(0))
+            ctx.enqueue_memset(r_albedo_film_buf, UInt8(0))
 
             # Load and upload textures
             var n_textures_int = Int(n_tex)
@@ -1117,8 +924,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             _ = external_call["texture_uint8_lut", NoneType, Int32, UnsafePointer[Float32, MutExternalOrigin]](Int32(0), lut_host)
             _ = external_call["texture_uint8_lut", NoneType, Int32, UnsafePointer[Float32, MutExternalOrigin]](Int32(1), lut_host + 256)
             var lut_buf = ctx.enqueue_create_buffer[DType.float32](512)
-            with lut_buf.map_to_host() as h:
-                memcpy(dest=h.unsafe_ptr(), src=lut_host, count=512)
+            ctx.enqueue_copy(lut_buf, lut_host)
             var lut_dev = lut_buf.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin]()
             var inv_host = alloc[UInt8](2 * _INV_LUT_SIZE)
             _build_inverse_lut(lut_host, inv_host)
@@ -1157,25 +963,20 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                         UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
                         Int32(0), Int32(0), Int32(0), Int32(0), Int32(GpuTexture_C.FORMAT_F32))
                     continue
-                var tex_buf = ctx.enqueue_create_buffer[DType.uint8](ht.n_bytes)
-                with tex_buf.map_to_host() as h:
-                    memcpy(dest=h.unsafe_ptr(), src=ht.data, count=ht.n_bytes)
-                ht.data.free()
                 var lut = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
                 if Int(ht.format) == GpuTexture_C.FORMAT_U8:
                     lut = lut_dev + Int(ht.lut_off)
-                gpu_textures_host[ti] = GpuTexture_C(typed_ptr[UInt8](tex_buf), lut,
-                    ht.width, ht.height, ht.n_levels, ht.channels, ht.format)
+                gpu_textures_host[ti] = GpuTexture_C(_gpu_upload_owned[UInt8](ctx, tex_data_bufs, ht.data, ht.n_bytes),
+                    lut, ht.width, ht.height, ht.n_levels, ht.channels, ht.format)
                 tex_bytes += ht.n_bytes
-                tex_data_bufs.append(tex_buf^)
+            var textures_gpu_buf = _gpu_upload_array[GpuTexture_C](ctx, gpu_textures_host, n_textures_int)
+            # The uploads above are asynchronous; free their host sources once they're done.
+            ctx.synchronize()
+            for ti in range(n_textures_int):
+                if dup_of[ti] == Int32(-1) and host_tex[ti].n_bytes > 0:
+                    host_tex[ti].data.free()
             host_tex.free()
             lut_host.free(); inv_host.free()
-            var tex_struct_bytes = max(n_textures_int, 1) * size_of[GpuTexture_C]()
-            var textures_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](tex_struct_bytes)
-            with textures_gpu_buf.map_to_host() as h:
-                var dst = h.unsafe_ptr()
-                var src = gpu_textures_host.bitcast[UInt8]()
-                memcpy(dest=dst, src=src, count=tex_struct_bytes)
             var n_unique_tex = 0
             for ti in range(n_textures_int):
                 if dup_of[ti] == Int32(-1):
@@ -1190,23 +991,11 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             # Upload Sobol matrices: first 1024 dimensions × 52 UInt32 = 212992 bytes
             comptime N_SOBOL_GPU_DIMS = 1024
             comptime N_SOBOL_GPU_WORDS = N_SOBOL_GPU_DIMS * 52
-            comptime N_SOBOL_GPU_BYTES = N_SOBOL_GPU_WORDS * 4
-            var sobol_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](N_SOBOL_GPU_BYTES)
-            with sobol_gpu_buf.map_to_host() as h:
-                var dst = h.unsafe_ptr().bitcast[UInt32]()
-                memcpy(dest=dst, src=sobol_matrices, count=N_SOBOL_GPU_WORDS)
+            var sobol_gpu_buf = _gpu_upload_array[UInt32](ctx, sobol_matrices, N_SOBOL_GPU_WORDS)
 
-            # Upload raster_to_camera (16 floats = 64 bytes)
-            var r2c_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](64)
-            with r2c_gpu_buf.map_to_host() as h:
-                var dst = h.unsafe_ptr().bitcast[Float32]()
-                memcpy(dest=dst, src=r2c, count=16)
-
-            # Upload camera_to_world (16 floats = 64 bytes)
-            var c2w_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](64)
-            with c2w_gpu_buf.map_to_host() as h:
-                var dst = h.unsafe_ptr().bitcast[Float32]()
-                memcpy(dest=dst, src=c2w_init, count=16)
+            # Upload raster_to_camera and camera_to_world (16 floats each)
+            var r2c_gpu_buf = _gpu_upload_array[Float32](ctx, r2c, 16)
+            var c2w_gpu_buf = _gpu_upload_array[Float32](ctx, c2w_init, 16)
 
             # Upload the spectral (Jakob-Hanika) coefficient table + CIE
             # X/Y/Z/D65 tables, if a real one was loaded (spectral.res > 0)
@@ -1215,31 +1004,17 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             # spectral yet — Stage 3/4 — same "at least 1 elem" convention
             # already used above for zero-size scene data).
             comptime CIE_N = 95
-            var spec_coeffs_count = (3 * spectral_res * spectral_res * spectral_res * 3) if spectral_res > 0 else 1
-            var spec_coeffs_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](spec_coeffs_count * 4)
-            if spectral_res > 0:
-                with spec_coeffs_gpu_buf.map_to_host() as h:
-                    var dst = h.unsafe_ptr().bitcast[Float32]()
-                    memcpy(dest=dst, src=spectral_coeffs, count=spec_coeffs_count)
+            var spec_coeffs_count = (3 * spectral_res * spectral_res * spectral_res * 3) if spectral_res > 0 else 0
+            var spec_cie_count = CIE_N if spectral_res > 0 else 0
+            var spec_coeffs_gpu_buf = _gpu_upload_array[Float32](ctx, spectral_coeffs, spec_coeffs_count)
+            var spec_cie_x_gpu_buf = _gpu_upload_array[Float32](ctx, spectral_cie_x, spec_cie_count)
+            var spec_cie_y_gpu_buf = _gpu_upload_array[Float32](ctx, spectral_cie_y, spec_cie_count)
+            var spec_cie_z_gpu_buf = _gpu_upload_array[Float32](ctx, spectral_cie_z, spec_cie_count)
+            var spec_d65_gpu_buf   = _gpu_upload_array[Float32](ctx, spectral_d65, spec_cie_count)
 
-            var spec_cie_count = CIE_N if spectral_res > 0 else 1
-            var spec_cie_x_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](spec_cie_count * 4)
-            var spec_cie_y_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](spec_cie_count * 4)
-            var spec_cie_z_gpu_buf = ctx.enqueue_create_buffer[DType.uint8](spec_cie_count * 4)
-            var spec_d65_gpu_buf   = ctx.enqueue_create_buffer[DType.uint8](spec_cie_count * 4)
-            if spectral_res > 0:
-                with spec_cie_x_gpu_buf.map_to_host() as h:
-                    var dst = h.unsafe_ptr().bitcast[Float32]()
-                    memcpy(dest=dst, src=spectral_cie_x, count=CIE_N)
-                with spec_cie_y_gpu_buf.map_to_host() as h:
-                    var dst = h.unsafe_ptr().bitcast[Float32]()
-                    memcpy(dest=dst, src=spectral_cie_y, count=CIE_N)
-                with spec_cie_z_gpu_buf.map_to_host() as h:
-                    var dst = h.unsafe_ptr().bitcast[Float32]()
-                    memcpy(dest=dst, src=spectral_cie_z, count=CIE_N)
-                with spec_d65_gpu_buf.map_to_host() as h:
-                    var dst = h.unsafe_ptr().bitcast[Float32]()
-                    memcpy(dest=dst, src=spectral_d65, count=CIE_N)
+            # Every upload is asynchronous: finish them while the caller's host
+            # arrays are still alive.
+            ctx.synchronize()
 
             # Allocate handle on heap
             var handle = alloc[GpuSceneHandle](1)
