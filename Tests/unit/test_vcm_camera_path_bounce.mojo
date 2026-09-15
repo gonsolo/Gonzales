@@ -180,6 +180,8 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
     var dvm = state.dvm
     var last_bsdf_pdf = state.last_bsdf_pdf
     var mis_null_dist = state.mis_null_dist
+    var current_dielectric_ior = state.current_dielectric_ior
+    var previous_dielectric_ior = state.previous_dielectric_ior
     var wavelengths = SampledWavelengths(state.wl0, state.wl1, state.wl2, state.wl3, state.wl_pdf)
 
     var n_iters = 0
@@ -200,7 +202,8 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
             UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
             Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
             ro, rd, beta, total, first_alb, n_verts, n_bounces, cur_med_idx,
-            dvcm, dvc, dvm, last_bsdf_pdf, mis_null_dist, wavelengths,
+            dvcm, dvc, dvm, last_bsdf_pdf, mis_null_dist,
+            current_dielectric_ior, previous_dielectric_ior, wavelengths,
         )
         active = Int8(1) if cont else Int8(0)
 
