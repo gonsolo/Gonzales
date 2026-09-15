@@ -188,6 +188,8 @@ def _geom_normal(
     inter: Intersection_C,
     meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
     instances: UnsafePointer[Instance_C, MutExternalOrigin] = UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
+    spheres: UnsafePointer[Sphere_C, MutExternalOrigin] = UnsafePointer[Sphere_C, MutExternalOrigin].unsafe_dangling(),
+    hit: Vec3f = Vec3f(Float32(0), Float32(0), Float32(0)),
 ) -> Vec3f:
     """Normalized geometric normal from triangle cross product. If this hit
     came from inside an instanced BLAS (primId.instanceIdx >= 0 — see
@@ -195,12 +197,27 @@ def _geom_normal(
     instance's object space, so the normal is transformed to world space
     before returning (the hit *point*, elsewhere computed as
     ray_org + ray_dir*tHit, needs no such fixup — see transform.mojo's
-    transform_normal_by_instance for why)."""
+    transform_normal_by_instance for why).
+
+    `spheres`/`hit` give analytic spheres (primId.type == 4) their exact
+    outward normal, mirroring `_shading_normal_at` right below (which this
+    function predates and was never given the same treatment). Without
+    them, every caller either had to special-case type==4 itself before
+    calling this -- duplicating the same sphere_outward_normal(hit, center)
+    one-liner at each of the (as of 2026-09-15) 21 call sites across
+    bdpt.mojo/sppm.mojo -- or, at 2 call sites that omitted the guard
+    entirely, silently got the +Y placeholder below: a live bug (a diffuse
+    analytic sphere corrupted both SPPM's visible-point normal and its
+    photon-bounce normal identically to how a dielectric sphere corrupted
+    refraction before _shading_normal_at's own fix). See
+    project_mesh_only_geometry_assumption memory."""
     var mi: Int; var bv: Int
     if inter.primId.type == 0:
         mi = Int(inter.primId.id1); bv = Int(inter.primId.id2)
     elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
         mi = Int(inter.primId.id2 >> 32); bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
+    elif inter.primId.type == Int8(4) and _is_real_ptr[Sphere_C](spheres):
+        return sphere_outward_normal(Point3f(hit[0], hit[1], hit[2]), spheres[Int(inter.primId.id1)].center)
     else:
         return Vec3f(Float32(0), Float32(1), Float32(0))
     var m = meshes[mi]
@@ -676,13 +693,13 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # back face (spheres above need no such check — always hit from
             # outside, always the front/emitting face).
             var al_hit = sd.areaLights[Int(inter.primId.id1)]
-            var gn_al_hit = _geom_normal(inter, sd.meshes, sd.instances)
+            var gn_al_hit = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if -dot(gn_al_hit, ray_dir) > Float32(0):
                 vp.env += vp.beta * al_hit.emission
             break
 
         if mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
-            var gn = _geom_normal(inter, sd.meshes, sd.instances)
+            var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0.0):
                 gn = gn * Float32(-1.0)
             # Real image-texture reflectance -- see bdpt.mojo's matching
@@ -728,7 +745,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 var sph_c = sd.spheres[Int(inter.primId.id1)]
                 gn_c = sphere_outward_normal(hit, sph_c.center).to_simd()
             else:
-                gn_c = _geom_normal(inter, sd.meshes, sd.instances)
+                gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_c, ray_dir) > Float32(0.0):
                 gn_c = gn_c * Float32(-1.0)
             var wo_c = (-rd).to_simd()
@@ -798,7 +815,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 var sph_m = sd.spheres[Int(inter.primId.id1)]
                 gn_m = sphere_outward_normal(hit, sph_m.center).to_simd()
             else:
-                gn_m = _geom_normal(inter, sd.meshes, sd.instances)
+                gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_m, ray_dir) > Float32(0.0):
                 gn_m = gn_m * Float32(-1.0)
             if mat.measured_idx < Int32(0):
@@ -1146,7 +1163,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var rr_prob = max(eff_alb.r, max(eff_alb.g, eff_alb.b))
             if rr_prob <= Float32(0.0) or pcg.next_float() >= rr_prob:
                 break
-            var gn = _geom_normal(inter, sd.meshes, sd.instances)
+            var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0.0):
                 gn = gn * Float32(-1.0)
             var new_dir = _cosine_hemisphere_sample(gn, pcg.next_float(), pcg.next_float())
@@ -1183,7 +1200,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 var sph_c = sd.spheres[Int(inter.primId.id1)]
                 gn_c = sphere_outward_normal(hit, sph_c.center).to_simd()
             else:
-                gn_c = _geom_normal(inter, sd.meshes, sd.instances)
+                gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_c, ray_dir) > Float32(0.0):
                 gn_c = gn_c * Float32(-1.0)
             var wo_c = (-rd).to_simd()
@@ -1240,7 +1257,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 var sph_m = sd.spheres[Int(inter.primId.id1)]
                 gn_m = sphere_outward_normal(hit, sph_m.center).to_simd()
             else:
-                gn_m = _geom_normal(inter, sd.meshes, sd.instances)
+                gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_m, ray_dir) > Float32(0.0):
                 gn_m = gn_m * Float32(-1.0)
             if mat.measured_idx < Int32(0):

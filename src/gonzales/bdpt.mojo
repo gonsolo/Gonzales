@@ -353,7 +353,7 @@ def _visible_transmittance(
                 var sph = sd.spheres[si]
                 gn = sphere_outward_normal(hit, sph.center).to_simd()
             else:
-                gn = _geom_normal(inter, sd.meshes, sd.instances)
+                gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             var facing = dot(dir, gn) < Float32(0)
             var n_for_cos = gn if facing else gn*Float32(-1)
             var cos_i = -dot(dir, n_for_cos)
@@ -391,7 +391,7 @@ def _visible_transmittance(
                     var isph = sd.spheres[Int(inter.primId.id1)]
                     igna = sphere_outward_normal(hit, isph.center).to_simd()
                 else:
-                    igna = _geom_normal(inter, sd.meshes, sd.instances)
+                    igna = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
                 var md = dir[0]*igna[0]+dir[1]*igna[1]+dir[2]*igna[2]
                 cur_med = iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
             org = hit + Vec3f(dir[0], dir[1], dir[2]) * Float32(0.0002)
@@ -2028,7 +2028,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # AreaLight_C index directly for a type==3 (area-light-triangle)
             # hit, per pbrt_parser.mojo's own PrimId_C encoding.
             var al_hit = sd.areaLights[Int(inter.primId.id1)]
-            var gn_al_hit = _geom_normal(inter, sd.meshes, sd.instances)
+            var gn_al_hit = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             var cos_l_hit = -dot(gn_al_hit, ray_dir)
             if cos_l_hit > Float32(0):
                 var mis_w_al_hit = Float32(1)
@@ -2076,7 +2076,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var _sph_gn = sd.spheres[Int(inter.primId.id1)]
                 gn = sphere_outward_normal(hit, _sph_gn.center).to_simd()
             else:
-                gn = _geom_normal(inter, sd.meshes, sd.instances)
+                gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             # VCM Stage 2b: finish the per-bounce MIS correction (dist²
             # portion already applied above) -- see
@@ -2210,7 +2210,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var _sph_gn = sd.spheres[Int(inter.primId.id1)]
                 gn = sphere_outward_normal(hit, _sph_gn.center).to_simd()
             else:
-                gn = _geom_normal(inter, sd.meshes, sd.instances)
+                gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             var cos_fix = abs(dot(-ray_dir, gn))
             if cos_fix > Float32(1e-6):
@@ -2408,7 +2408,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var sph_c = sd.spheres[si_c]
                 gn_c = sphere_outward_normal(hit, sph_c.center).to_simd()
             else:
-                gn_c = _geom_normal(inter, sd.meshes, sd.instances)
+                gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_c, ray_dir) > Float32(0): gn_c = gn_c * Float32(-1)
             var wo_c = (-rd).to_simd()
             var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
@@ -2628,7 +2628,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var sph_m = sd.spheres[si_m]
                 gn_m = sphere_outward_normal(hit, sph_m.center).to_simd()
             else:
-                gn_m = _geom_normal(inter, sd.meshes, sd.instances)
+                gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_m, ray_dir) > Float32(0): gn_m = gn_m * Float32(-1)
             if mat.measured_idx < Int32(0):
                 # Load failure fallback (see material_builder.mojo) -- matches
@@ -2725,7 +2725,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var sph = sd.spheres[si]
                 gn = sphere_outward_normal(hit, sph.center).to_simd()
             else:
-                gn = _geom_normal(inter, sd.meshes, sd.instances)
+                gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
                 ray_dir, hit.to_simd(), gn, mat.albedo.r, n_bounces, pcg, current_dielectric_ior, previous_dielectric_ior)
             current_dielectric_ior = new_cur_ior
@@ -3153,7 +3153,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 var _sph_gn = sd.spheres[Int(inter.primId.id1)]
                 gn = sphere_outward_normal(hit, _sph_gn.center).to_simd()
             else:
-                gn = _geom_normal(inter, sd.meshes, sd.instances)
+                gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             # VCM Stage 2b: finish the per-bounce MIS correction (the
             # dist² portion was already applied above, shared across
@@ -3221,7 +3221,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 var _sph_gn = sd.spheres[Int(inter.primId.id1)]
                 gn = sphere_outward_normal(hit, _sph_gn.center).to_simd()
             else:
-                gn = _geom_normal(inter, sd.meshes, sd.instances)
+                gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             var cos_fix = abs(dot(-ray_dir, gn))
             if cos_fix > Float32(1e-6):
@@ -3346,7 +3346,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 var sph_c = sd.spheres[si_c]
                 gn_c = sphere_outward_normal(hit, sph_c.center).to_simd()
             else:
-                gn_c = _geom_normal(inter, sd.meshes, sd.instances)
+                gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_c, ray_dir) > Float32(0): gn_c = gn_c * Float32(-1)
             var wo_c = (-rd).to_simd()
             var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
@@ -3485,7 +3485,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 var sph_m = sd.spheres[si_m]
                 gn_m = sphere_outward_normal(hit, sph_m.center).to_simd()
             else:
-                gn_m = _geom_normal(inter, sd.meshes, sd.instances)
+                gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_m, ray_dir) > Float32(0): gn_m = gn_m * Float32(-1)
             if mat.measured_idx < Int32(0):
                 return False   # measured: no tabulated BRDF for this material
@@ -3552,7 +3552,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 var sph = sd.spheres[si]
                 gn = sphere_outward_normal(hit, sph.center).to_simd()
             else:
-                gn = _geom_normal(inter, sd.meshes, sd.instances)
+                gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
                 ray_dir, hit.to_simd(), gn, mat.albedo.r, n_lbounces, pcg, current_dielectric_ior, previous_dielectric_ior)
             current_dielectric_ior = new_cur_ior

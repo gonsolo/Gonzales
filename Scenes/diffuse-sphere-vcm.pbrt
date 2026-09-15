@@ -16,6 +16,14 @@
 #       VCM after   0.004627 / 0.002056 / 0.002043
 #     So render this with both --vcm and the plain path tracer; they must
 #     agree to a few percent.
+#  3. (2026-09-15) sppm.mojo's OWN separate _geom_normal had the identical
+#     unguarded +Y-placeholder bug, in the diffuse-continuation branches of
+#     both _sppm_trace_visible_point and _sppm_trace_photon. Unlike VCM's
+#     partial darkening, this scene's diffuse sphere renders COMPLETELY
+#     BLACK under --sppm before the fix (0/0/0 -- the wrong normal sends
+#     every gather/hemisphere sample looking the wrong way almost
+#     everywhere on the sphere). After: 0.004651/0.001991/0.001991, ~1%
+#     of PT. Render with --sppm too; it must agree with PT as well.
 Integrator "path" "integer maxdepth" [ 5 ]
 Sampler "halton" "integer pixelsamples" [ 16 ]
 Film "rgb" "string filename" [ "diffuse-sphere-vcm.exr" ]
