@@ -2,7 +2,18 @@ from .geometry import RGB
 
 # ── ParsedScene constants ─────────────────────────────────────────────────────
 
-comptime PSC_NAME_MAX   = 64
+# Must be >= the buffer _psc_collect_params uses for string-typed parameter
+# VALUES (512, lexer.mojo) -- a texture/material/object NAME registered
+# through a smaller buffer here than a "texture reflectance"-style reference
+# to that same name truncates the registration but not the reference,
+# breaking the string-equality lookup silently (no error, just a fallback to
+# a default value). Real-world case: bistro_cafe's 66-char
+# "Pavement_Cobblestone_Wet_Leaves_BLENDSHADER_BaseColor" texture name
+# truncated to 63 chars at registration, so its own material's "texture
+# reflectance" reference (the untruncated 66-char string) never matched --
+# the ground plane silently fell back to flat 0.5 gray, inflating bounce
+# lighting across the whole scene (~2x too bright vs pbrt-v4).
+comptime PSC_NAME_MAX   = 512
 comptime PSC_FILE_MAX   = 256
 
 

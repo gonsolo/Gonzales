@@ -1537,6 +1537,8 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     var dvm_carry = st.dvm
     var last_bsdf_pdf = st.last_bsdf_pdf
     var mis_null_dist = st.mis_null_dist
+    var current_dielectric_ior = st.current_dielectric_ior
+    var previous_dielectric_ior = st.previous_dielectric_ior
     var wavelengths = SampledWavelengths(st.wl0, st.wl1, st.wl2, st.wl3, st.wl_pdf)
     if st.active == Int8(0):
         return (total, first_alb)
@@ -1556,7 +1558,8 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
             mis_vc_weight_factor, mis_vm_weight_factor,
             ro, rd, beta, total, first_alb, n_verts, n_bounces, cur_med_idx,
-            dvcm_carry, dvc_carry, dvm_carry, last_bsdf_pdf, mis_null_dist, wavelengths):
+            dvcm_carry, dvc_carry, dvm_carry, last_bsdf_pdf, mis_null_dist,
+            current_dielectric_ior, previous_dielectric_ior, wavelengths):
             break
 
     return (total, first_alb)
@@ -1597,6 +1600,12 @@ struct VCMCameraPathState_C(TrivialRegisterPassable):
     # emitter hit's t_hit measures from the boundary, not from the vertex
     # whose sample generated the direction; the MIS pdf needs the latter.
     var mis_null_dist: Float32
+    # Touching-dielectric IOR depth-2 stack for _dielectric_bounce (see that
+    # function's docstring, sppm.mojo) -- same role and convention as
+    # PathState_C.current_dielectric_ior/previous_dielectric_ior
+    # (geometry.mojo). Both start at vacuum (1.0).
+    var current_dielectric_ior: Float32
+    var previous_dielectric_ior: Float32
 
 def _bdpt_camera_path_init[use_gpu: Bool](
     r2c:     UnsafePointer[Float32, MutExternalOrigin],
@@ -1688,6 +1697,7 @@ def _bdpt_camera_path_init[use_gpu: Bool](
         pcg.state, pcg.inc,
         wavelengths.lambda0, wavelengths.lambda1, wavelengths.lambda2, wavelengths.lambda3, wavelengths.pdf,
         Float32(0.0),
+        Float32(1.0), Float32(1.0),   # current_dielectric_ior, previous_dielectric_ior (vacuum)
     )
 
 def _bdpt_camera_path_bounce[use_gpu: Bool](
@@ -1719,6 +1729,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     mut dvm_carry: Float32,
     mut last_bsdf_pdf: Float32,
     mut mis_null_dist: Float32,
+    mut current_dielectric_ior: Float32,
+    mut previous_dielectric_ior: Float32,
     wavelengths: SampledWavelengths,
     # Task #163 stage 5: when set, the DIFFUSE branch's connect step queues
     # its shadow rays into these buffers (one _BDPT_MAX_VERTS-sized slice
@@ -2714,7 +2726,10 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 gn = sphere_outward_normal(hit, sph.center).to_simd()
             else:
                 gn = _geom_normal(inter, sd.meshes, sd.instances)
-            var (new_dir, new_org, radiance_scale) = _dielectric_bounce(ray_dir, hit.to_simd(), gn, mat.albedo.r, n_bounces, pcg)
+            var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
+                ray_dir, hit.to_simd(), gn, mat.albedo.r, n_bounces, pcg, current_dielectric_ior, previous_dielectric_ior)
+            current_dielectric_ior = new_cur_ior
+            previous_dielectric_ior = new_prev_ior
             n_bounces += 1
             last_bsdf_pdf = Float32(-1)  # delta bounce: no infinite-light NEE done here
             # Specular vertex: no BSDF record needed, just track throughput.
@@ -2783,6 +2798,11 @@ struct VCMLightPathState_C(TrivialRegisterPassable):
     var wl2: Float32
     var wl3: Float32
     var wl_pdf: Float32
+    # Touching-dielectric IOR depth-2 stack for _dielectric_bounce (see that
+    # function's docstring, sppm.mojo) -- same role and convention as
+    # VCMCameraPathState_C's matching fields. Both start at vacuum (1.0).
+    var current_dielectric_ior: Float32
+    var previous_dielectric_ior: Float32
 
 def _null_light_path_state() -> VCMLightPathState_C:
     return VCMLightPathState_C(
@@ -2793,6 +2813,7 @@ def _null_light_path_state() -> VCMLightPathState_C:
         Int32(-1), Int32(0), Int32(0), Int8(0),
         UInt64(0), UInt64(0),
         Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
+        Float32(1.0), Float32(1.0),   # current_dielectric_ior, previous_dielectric_ior (vacuum)
     )
 
 def _bdpt_light_path_init[use_gpu: Bool](
@@ -2968,6 +2989,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         cur_med_idx, Int32(n_lbounces), Int32(n_verts), Int8(1),
         pcg.state, pcg.inc,
         wavelengths.lambda0, wavelengths.lambda1, wavelengths.lambda2, wavelengths.lambda3, wavelengths.pdf,
+        Float32(1.0), Float32(1.0),   # current_dielectric_ior, previous_dielectric_ior (vacuum)
     )
 
 def _bdpt_light_path_bounce[use_gpu: Bool](
@@ -2989,6 +3011,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
     is_finite_origin: Bool,
     mut cur_med_idx: Int32,
     mut n_lbounces: Int,
+    mut current_dielectric_ior: Float32,
+    mut previous_dielectric_ior: Float32,
     wavelengths: SampledWavelengths,
 ) -> Bool:
     """Task #163 stage 4: wavefront-staged variant of ONE bounce iteration of
@@ -3529,7 +3553,10 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 gn = sphere_outward_normal(hit, sph.center).to_simd()
             else:
                 gn = _geom_normal(inter, sd.meshes, sd.instances)
-            var (new_dir, new_org, _) = _dielectric_bounce(ray_dir, hit.to_simd(), gn, mat.albedo.r, n_lbounces, pcg)
+            var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
+                ray_dir, hit.to_simd(), gn, mat.albedo.r, n_lbounces, pcg, current_dielectric_ior, previous_dielectric_ior)
+            current_dielectric_ior = new_cur_ior
+            previous_dielectric_ior = new_prev_ior
             n_lbounces += 1
             # Light path (TransportMode::Importance): do NOT apply the
             # radiance_scale non-symmetric-scattering correction — it's only
@@ -3640,6 +3667,8 @@ def _bdpt_trace_light_path[use_gpu: Bool](
     var is_finite_origin = st.is_finite_origin == Int8(1)
     var cur_med_idx = st.cur_med_idx
     var n_lbounces = Int(st.n_lbounces)
+    var current_dielectric_ior = st.current_dielectric_ior
+    var previous_dielectric_ior = st.previous_dielectric_ior
     var wavelengths = SampledWavelengths(st.wl0, st.wl1, st.wl2, st.wl3, st.wl_pdf)
 
     for _ in range(_BDPT_MAX_DEPTH):
@@ -3657,7 +3686,8 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             sd, pcg, has_med, scratch[0], lvc, lp_idx,
             mis_vc_weight_factor, mis_vm_weight_factor,
             ro, rd, flux, n_verts, dvcm_carry, dvc_carry, dvm_carry,
-            is_finite_origin, cur_med_idx, n_lbounces, wavelengths):
+            is_finite_origin, cur_med_idx, n_lbounces,
+            current_dielectric_ior, previous_dielectric_ior, wavelengths):
             break
 
     lvc_path_len[lp_idx] = Int32(n_verts)
@@ -5022,12 +5052,15 @@ def _bdpt_light_path_bounce_gpu(
     var is_finite_origin = states[k].is_finite_origin == Int8(1)
     var cur_med_idx = states[k].cur_med_idx
     var n_lbounces = Int(states[k].n_lbounces)
+    var current_dielectric_ior = states[k].current_dielectric_ior
+    var previous_dielectric_ior = states[k].previous_dielectric_ior
     var wavelengths = SampledWavelengths(states[k].wl0, states[k].wl1, states[k].wl2, states[k].wl3, states[k].wl_pdf)
 
     var cont = _bdpt_light_path_bounce[True](
         sd, pcg, has_med, results[k], lvc, k, mis_vc_weight_factor, mis_vm_weight_factor,
         ro, rd, flux, n_verts, dvcm_carry, dvc_carry, dvm_carry,
-        is_finite_origin, cur_med_idx, n_lbounces, wavelengths,
+        is_finite_origin, cur_med_idx, n_lbounces,
+        current_dielectric_ior, previous_dielectric_ior, wavelengths,
     )
     lvc_path_len[k] = Int32(n_verts)
     states[k].active = Int8(1) if cont else Int8(0)
@@ -5040,6 +5073,8 @@ def _bdpt_light_path_bounce_gpu(
     states[k].dvm = dvm_carry
     states[k].cur_med_idx = cur_med_idx
     states[k].n_lbounces = Int32(n_lbounces)
+    states[k].current_dielectric_ior = current_dielectric_ior
+    states[k].previous_dielectric_ior = previous_dielectric_ior
     states[k].pcg_state = pcg.state
     states[k].pcg_inc = pcg.inc
 
@@ -5198,6 +5233,8 @@ def _bdpt_camera_path_bounce_gpu(
     var dvm_carry = states[pix].dvm
     var last_bsdf_pdf = states[pix].last_bsdf_pdf
     var mis_null_dist = states[pix].mis_null_dist
+    var current_dielectric_ior = states[pix].current_dielectric_ior
+    var previous_dielectric_ior = states[pix].previous_dielectric_ior
     var wavelengths = SampledWavelengths(states[pix].wl0, states[pix].wl1, states[pix].wl2, states[pix].wl3, states[pix].wl_pdf)
 
     var cont = _bdpt_camera_path_bounce[True](
@@ -5205,7 +5242,8 @@ def _bdpt_camera_path_bounce_gpu(
         merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
         mis_vc_weight_factor, mis_vm_weight_factor,
         ro, rd, beta, total, first_alb, n_verts, n_bounces, cur_med_idx,
-        dvcm_carry, dvc_carry, dvm_carry, last_bsdf_pdf, mis_null_dist, wavelengths,
+        dvcm_carry, dvc_carry, dvm_carry, last_bsdf_pdf, mis_null_dist,
+        current_dielectric_ior, previous_dielectric_ior, wavelengths,
         defer_shadow_rays != Int8(0), shadow_rays, shadow_pending, shadow_valid, shadow_seg_med,
     )
     states[pix].active = Int8(1) if cont else Int8(0)
@@ -5222,6 +5260,8 @@ def _bdpt_camera_path_bounce_gpu(
     states[pix].dvm = dvm_carry
     states[pix].last_bsdf_pdf = last_bsdf_pdf
     states[pix].mis_null_dist = mis_null_dist
+    states[pix].current_dielectric_ior = current_dielectric_ior
+    states[pix].previous_dielectric_ior = previous_dielectric_ior
     states[pix].pcg_state = pcg.state
     states[pix].pcg_inc = pcg.inc
 
