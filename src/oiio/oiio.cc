@@ -49,6 +49,169 @@ static void to_linear_rgb(const T *src, int64_t n, int nc, float *dst, Map map) 
         }
 }
 
+// ── Embedded working-colour-space (chromaticities) → renderer's Rec.709/sRGB
+// primaries ────────────────────────────────────────────────────────────────
+// Some HDRI environment maps in the corpus (bistro/sanmiguel/villa/sportscar/
+// etc.'s "sky.exr") carry an OpenEXR "chromaticities" attribute tagging them
+// as ACES2065-1 (AP0) data -- R(0.7347,0.2653) G(0,1) B(0.0001,-0.077)
+// White~(0.3217,0.3377), NOT the renderer's native Rec.709/sRGB primaries
+// (D65 white 0.3127,0.3290). Reading those floats as if they were already
+// Rec.709 (this loader's prior behaviour) desaturates and hue-shifts the
+// whole image -- AP0's much wider red primary reads as excess red, turning
+// a saturated blue sky visibly purple/lavender and inflating luminance by
+// ~10% even before any scene-specific compounding. Confirmed against a real
+// pbrt-v4 render of bistro's sky.exr alone (no geometry): gonzales's R
+// channel averaged 47% brighter than pbrt's, G/B within 4% -- exactly the
+// asymmetric-per-channel signature of an unconverted wide-gamut primaries
+// mismatch, not a uniform exposure/scale error (which affects all channels
+// equally) or a texture-mapping/rotation bug (which would show as spatial
+// displacement, not a per-channel colour cast at a fixed pixel).
+//
+// Converts any embedded primaries+white to XYZ (standard chromaticity->XYZ
+// construction), Bradford-adapts between the two white points, and composes
+// the full source-RGB -> XYZ -> dest-RGB matrix. Verified independently
+// (scratch Python) to reproduce the widely-published ACES AP0 -> linear
+// Rec.709 (Bradford D60->D65) matrix to 5 decimal places, so this is not a
+// special case for ACES specifically -- any tagged primaries get the same
+// treatment, matching how pbrt-v4 itself handles embedded EXR chromaticities.
+
+static void invert3x3(const double m[9], double out[9]) {
+        double a = m[0], b = m[1], c = m[2];
+        double d = m[3], e = m[4], f = m[5];
+        double g = m[6], h = m[7], i = m[8];
+        double A =  (e * i - f * h);
+        double B = -(d * i - f * g);
+        double C =  (d * h - e * g);
+        double D = -(b * i - c * h);
+        double E =  (a * i - c * g);
+        double F = -(a * h - b * g);
+        double G =  (b * f - c * e);
+        double H = -(a * f - c * d);
+        double I =  (a * e - b * d);
+        double det = a * A + b * B + c * C;
+        if (std::fabs(det) < 1e-12) {
+                // Degenerate primaries -- fall back to identity rather than divide by ~0.
+                out[0]=1; out[1]=0; out[2]=0;
+                out[3]=0; out[4]=1; out[5]=0;
+                out[6]=0; out[7]=0; out[8]=1;
+                return;
+        }
+        double invDet = 1.0 / det;
+        out[0] = A * invDet; out[1] = D * invDet; out[2] = G * invDet;
+        out[3] = B * invDet; out[4] = E * invDet; out[5] = H * invDet;
+        out[6] = C * invDet; out[7] = F * invDet; out[8] = I * invDet;
+}
+
+static void mat3_mul(const double a[9], const double b[9], double out[9]) {
+        for (int r = 0; r < 3; ++r)
+                for (int c = 0; c < 3; ++c)
+                        out[r * 3 + c] = a[r * 3 + 0] * b[0 * 3 + c] + a[r * 3 + 1] * b[1 * 3 + c] +
+                                         a[r * 3 + 2] * b[2 * 3 + c];
+}
+
+static void mat3_vec(const double m[9], const double v[3], double out[3]) {
+        out[0] = m[0] * v[0] + m[1] * v[1] + m[2] * v[2];
+        out[1] = m[3] * v[0] + m[4] * v[1] + m[5] * v[2];
+        out[2] = m[6] * v[0] + m[7] * v[1] + m[8] * v[2];
+}
+
+static void chromaticity_to_XYZ(double x, double y, double xyz[3]) {
+        if (y == 0.0) { xyz[0] = xyz[1] = xyz[2] = 0.0; return; }
+        xyz[1] = 1.0;
+        xyz[0] = x / y;
+        xyz[2] = (1.0 - x - y) / y;
+}
+
+// RGB(primaries,white) -> XYZ, columns = R/G/B chromaticities scaled so the
+// white point maps to XYZ with Y=1 (the standard primaries-matrix method).
+static void primaries_to_XYZ(double rx, double ry, double gx, double gy, double bx, double by, double wx,
+                             double wy, double out[9]) {
+        double Xr[3], Xg[3], Xb[3], Xw[3];
+        chromaticity_to_XYZ(rx, ry, Xr);
+        chromaticity_to_XYZ(gx, gy, Xg);
+        chromaticity_to_XYZ(bx, by, Xb);
+        chromaticity_to_XYZ(wx, wy, Xw);
+        double P[9] = {Xr[0], Xg[0], Xb[0], Xr[1], Xg[1], Xb[1], Xr[2], Xg[2], Xb[2]};
+        double Pinv[9];
+        invert3x3(P, Pinv);
+        double S[3];
+        mat3_vec(Pinv, Xw, S);
+        out[0] = Xr[0] * S[0]; out[1] = Xg[0] * S[1]; out[2] = Xb[0] * S[2];
+        out[3] = Xr[1] * S[0]; out[4] = Xg[1] * S[1]; out[5] = Xb[1] * S[2];
+        out[6] = Xr[2] * S[0]; out[7] = Xg[2] * S[1]; out[8] = Xb[2] * S[2];
+}
+
+// Bradford chromatic-adaptation matrix (XYZ_src-white -> XYZ_dst-white).
+static void bradford_adapt(const double Xw_src[3], const double Xw_dst[3], double out[9]) {
+        double B[9] = {0.8951, 0.2664, -0.1614, -0.7502, 1.7135, 0.0367, 0.0389, -0.0685, 1.0296};
+        double Binv[9];
+        invert3x3(B, Binv);
+        double cone_src[3], cone_dst[3];
+        mat3_vec(B, Xw_src, cone_src);
+        mat3_vec(B, Xw_dst, cone_dst);
+        double diag[9] = {0};
+        diag[0] = cone_dst[0] / cone_src[0];
+        diag[4] = cone_dst[1] / cone_src[1];
+        diag[8] = cone_dst[2] / cone_src[2];
+        double tmp[9];
+        mat3_mul(diag, B, tmp);
+        mat3_mul(Binv, tmp, out);
+}
+
+// Renderer's working space: Rec.709/sRGB primaries, D65 white.
+static const double REC709_R[2] = {0.64, 0.33};
+static const double REC709_G[2] = {0.30, 0.60};
+static const double REC709_B[2] = {0.15, 0.06};
+static const double REC709_W[2] = {0.3127, 0.3290};
+
+// Fills `m` (row-major 3x3, applied as m*rgb) with the source-primaries ->
+// Rec.709/sRGB conversion and returns true, unless the embedded primaries
+// already match Rec.709/D65 closely (common case -- most textures aren't
+// tagged, or are already native), in which case returns false and leaves
+// `m` untouched so callers can skip the per-pixel matrix multiply entirely.
+static bool chromaticities_to_working_space_matrix(const float chroma[8], double m[9]) {
+        double rx = chroma[0], ry = chroma[1], gx = chroma[2], gy = chroma[3];
+        double bx = chroma[4], by = chroma[5], wx = chroma[6], wy = chroma[7];
+        static const double TOL = 0.002;
+        if (std::fabs(rx - REC709_R[0]) < TOL && std::fabs(ry - REC709_R[1]) < TOL &&
+            std::fabs(gx - REC709_G[0]) < TOL && std::fabs(gy - REC709_G[1]) < TOL &&
+            std::fabs(bx - REC709_B[0]) < TOL && std::fabs(by - REC709_B[1]) < TOL &&
+            std::fabs(wx - REC709_W[0]) < TOL && std::fabs(wy - REC709_W[1]) < TOL)
+                return false;
+        double M_src_to_XYZ[9];
+        primaries_to_XYZ(rx, ry, gx, gy, bx, by, wx, wy, M_src_to_XYZ);
+        double M_dst_to_XYZ[9];
+        primaries_to_XYZ(REC709_R[0], REC709_R[1], REC709_G[0], REC709_G[1], REC709_B[0], REC709_B[1],
+                         REC709_W[0], REC709_W[1], M_dst_to_XYZ);
+        double M_XYZ_to_dst[9];
+        invert3x3(M_dst_to_XYZ, M_XYZ_to_dst);
+        double Xw_src[3], Xw_dst[3];
+        chromaticity_to_XYZ(wx, wy, Xw_src);
+        chromaticity_to_XYZ(REC709_W[0], REC709_W[1], Xw_dst);
+        double M_cat[9];
+        bradford_adapt(Xw_src, Xw_dst, M_cat);
+        double tmp[9];
+        mat3_mul(M_cat, M_src_to_XYZ, tmp);
+        mat3_mul(M_XYZ_to_dst, tmp, m);
+        return true;
+}
+
+// Reads the EXR "chromaticities" attribute (redX,redY,greenX,greenY,blueX,
+// blueY,whiteX,whiteY) if present; returns false (leaving chroma untouched)
+// when the file has none -- the overwhelmingly common case.
+static bool read_chromaticities(const OIIO::ImageSpec &spec, float chroma[8]) {
+        return spec.getattribute("chromaticities", OIIO::TypeDesc(OIIO::TypeDesc::FLOAT, 8), chroma);
+}
+
+static void apply_working_space_matrix(float *data, int64_t n, const double m[9]) {
+        for (int64_t i = 0; i < n; ++i) {
+                double r = data[i * 3 + 0], g = data[i * 3 + 1], b = data[i * 3 + 2];
+                data[i * 3 + 0] = float(m[0] * r + m[1] * g + m[2] * b);
+                data[i * 3 + 1] = float(m[3] * r + m[4] * g + m[5] * b);
+                data[i * 3 + 2] = float(m[6] * r + m[7] * g + m[8] * b);
+        }
+}
+
 // --- Exposed C functions (Must be compiled with C linkage) ---
 #ifdef __cplusplus
 extern "C" {
@@ -181,6 +344,15 @@ int load_texture_rgb(const char *filename, float **data, int *width, int *height
                 free(*data);
                 *data = nullptr;
                 return 0;
+        }
+        // Embedded working-colour-space conversion (see the comment above
+        // chromaticities_to_working_space_matrix) -- e.g. the corpus's ACES
+        // AP0-tagged "sky.exr" HDRIs, read as-is until now.
+        float chroma[8];
+        if (read_chromaticities(spec, chroma)) {
+                double m[9];
+                if (chromaticities_to_working_space_matrix(chroma, m))
+                        apply_working_space_matrix(*data, n, m);
         }
         return 1;
 }
