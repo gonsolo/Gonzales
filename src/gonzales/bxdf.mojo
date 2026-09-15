@@ -585,6 +585,7 @@ def _nee_weight_coated_diffuse_base(
     alb: RGB,
     ior: Float32,
     n:   Vec3f,
+    coat_alpha: Float32 = Float32(0.0),
 ) -> RGB:
     """NEE weight (throughput AND the walk's `beta` not applied) for a
     coateddiffuse base against ONE LightSample -- see
@@ -619,6 +620,10 @@ def _nee_weight_coated_diffuse_base(
     # REFRACTED internal angle, not its external one.
     var cos_s_internal = cos_theta_t_dielectric(cos_s, ior)
     var tr_light = coat_beer_lambert_tr(cos_s_internal, DEFAULT_COAT_THICKNESS)
+    if coat_alpha > Float32(0.001):
+        # Rough transmission weight G2(wo,wi)/G1(wo), same as every other
+        # rough crossing in shade_coated_diffuse.
+        t_light *= ggx_G2(cos_s, cos_s_internal, coat_alpha) / ggx_G1(cos_s, coat_alpha)
     var t_both = t_light * tr_light / max(ior * ior, Float32(1e-6))
     if ls.is_delta:
         return alb * ls.Li * (cos_s * t_both / PI)

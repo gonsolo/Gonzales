@@ -924,6 +924,10 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
 
         path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(refl[0], refl[1], refl[2]))
         if is_rough_coat:
+            # VNDF-sampled rough reflection: f*cos/pdf = G2(wo,wi)/G1(wo)
+            # (pbrt DielectricBxDF::Sample_f), not 1 -- the masking-shadowing
+            # loss every rough microfacet event carries.
+            path_ptr[].throughput = path_ptr[].throughput * (ggx_G2(cos_o, dot(refl, normal), coat_alpha) / ggx_G1(cos_o, coat_alpha))
             # MIS-gate the reflected ray against the NEE above (real pdf_bsdf,
             # specularBounce=0) instead of the delta-lobe full-credit path.
             var d_sampled = ggx_D(dot(normal, wm), coat_alpha)
@@ -945,6 +949,12 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     # entry angle; refract it to the internal angle the medium actually sees.
     var cos_wm_internal = cos_theta_t_dielectric(cos_wm, ior)
     var beta = RGB(coat_beer_lambert_tr(cos_wm_internal, DEFAULT_COAT_THICKNESS))
+    if is_rough_coat:
+        # Rough transmission weight G2(wo,wi)/G1(wo) -- see the reflect
+        # branch above. wi's cosine to the macro normal is taken from the
+        # macro-normal refraction, matching how the light-side NEE below
+        # models the coat (its own crossings have no sampled facet).
+        beta *= ggx_G2(cos_o, cos_theta_t_dielectric(cos_o, ior), coat_alpha) / ggx_G1(cos_o, coat_alpha)
     var exited = False
     var exit_dir = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
 
@@ -972,7 +982,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         # their own textured-CDF/cosine-hemisphere sampling rather than this
         # generic path -- see project_light_bxdf_interfaces memory.
         var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
-        var w_area = _nee_weight_coated_diffuse_base(ls_area, alb, ior, normal)
+        var w_area = _nee_weight_coated_diffuse_base(ls_area, alb, ior, normal, coat_alpha)
         if not w_area.is_black():
             var contrib_area = path_ptr[].throughput * _to_spec_refl(ctx, beta, path_ptr[].wavelengths) * _to_spec_illum(ctx, w_area, path_ptr[].wavelengths)
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_area.wi, ls_area.dist * Float32(0.9999), contrib_area)
@@ -984,7 +994,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
             var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
             var ls = res[0].copy()
             var tmax = res[1]
-            var w = _nee_weight_coated_diffuse_base(ls, alb, ior, normal)
+            var w = _nee_weight_coated_diffuse_base(ls, alb, ior, normal, coat_alpha)
             if not w.is_black():
                 var contrib = path_ptr[].throughput * _to_spec_refl(ctx, beta, path_ptr[].wavelengths) * _to_spec_illum(ctx, w, path_ptr[].wavelengths)
                 _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls.wi, tmax, contrib)
@@ -1027,6 +1037,8 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                     # rejected outside the escape cone, which yields 1/eta^2
                     # in expectation.
                     t_env /= max(ior * ior, Float32(1e-6))
+                    if is_rough_coat:
+                        t_env *= ggx_G2(cos_env, cos_env_internal, coat_alpha) / ggx_G1(cos_env, coat_alpha)
                     # No MIS split here: the coat's eventual exit ray -- the
                     # only "BSDF-sampled" strategy that could otherwise also
                     # see this light -- has its outer lastBsdfPdf forced to 0
@@ -1094,12 +1106,21 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                     # applies it again below for the same ascend, plus once
                     # more next loop entry represents the matching descend.
                     beta *= tr_leg
+                    if is_rough_coat:
+                        var cos_up_n = dot(w_up, normal)
+                        beta *= ggx_G2(cos_up_n, dot(exit_dir, normal), coat_alpha) / ggx_G1(cos_up_n, coat_alpha)
                     break
             # Refraction failed / exited below surface → fall through and recycle.
         # Internal reflection: light recycled -- this bounce crossed the coat
         # twice (up to the underside, deciding not to exit, then back down to
         # the base for the next iteration's NEE), so apply tr_leg twice.
         beta *= tr_leg * tr_leg
+        if is_rough_coat:
+            # Rough internal reflection off the underside: G2/G1 like every
+            # other rough microfacet event (mirror about the macro normal
+            # keeps the cosine, so G2(c,c)/G1(c)).
+            var cos_up_r = dot(w_up, normal)
+            beta *= ggx_G2(cos_up_r, cos_up_r, coat_alpha) / ggx_G1(cos_up_r, coat_alpha)
 
     if not exited:
         path_ptr[].active = 0
