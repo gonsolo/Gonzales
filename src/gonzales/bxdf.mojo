@@ -580,7 +580,7 @@ def _nee_weight_coated_coat_lobe(
     return ls.Li * (f_cos * w / ls.pdf)
 
 @always_inline
-def _nee_weight_coated_diffuse_base(
+def _nee_weight_coated_diffuse_base[nee_is_sole_strategy: Bool = False](
     ls:  LightSample,
     alb: RGB,
     ior: Float32,
@@ -592,6 +592,26 @@ def _nee_weight_coated_diffuse_base(
     docs/05_reflection_models.md for the eta^2/Fresnel derivation. Kept
     separate from _nee_weight_simple because the coat transmittance and
     `beta` walk state don't fit bxdf_eval_any's flat signature.
+
+    `nee_is_sole_strategy` (comptime) states whether a BSDF-sampling
+    strategy competes with NEE for this light AT THIS VERTEX -- a property
+    of the calling integrator's own bookkeeping, statically known per call
+    site, so it compiles the branch out rather than costing a runtime test:
+
+    - True  -- the caller guarantees its continuation ray carries
+      lastBsdfPdf = 0, so every miss/emitter handler drops that ray's
+      direct-light contribution (`power_heuristic(0, pdf_light)` = 0, and
+      the area-light handler's own `if pdf_bsdf > 0` skips it outright).
+      NEE is then the ONLY strategy contributing this light and must carry
+      the full weight. shading.mojo's `shade_coated_diffuse` is exactly
+      this case: the layered exit ray's true pdf is intractable, so it
+      zeroes it deliberately. Splitting the weight against a competing pdf
+      that no longer exists silently discards a real fraction of the light
+      with nothing else picking it up.
+    - False -- ordinary two-strategy MIS against a cosine-lobe pdf, the
+      historical behaviour, kept as the default so bdpt.mojo's own call
+      sites (which have their own separate dVCM/dVC MIS story) are
+      unchanged.
 
     TRAP: applies the LIGHT-side coat transmittance only. The VIEW-side one
     is already supplied, in expectation, by the caller's entry coin flip
@@ -629,8 +649,13 @@ def _nee_weight_coated_diffuse_base(
         return alb * ls.Li * (cos_s * t_both / PI)
     if ls.pdf <= Float32(0.0):
         return RGB(Float32(0.0))
-    var pdf_bsdf = cos_s / PI
-    var w = power_heuristic(ls.pdf, pdf_bsdf)
+    # MIS weight. `nee_is_sole_strategy` is the CALLER's guarantee that no
+    # BSDF-sampling strategy competes for this light at this vertex -- see
+    # the parameter's docstring above. Only the weight is affected; the
+    # 1/pdf of the light sample itself is always required.
+    var w = Float32(1.0)
+    comptime if not nee_is_sole_strategy:
+        w = power_heuristic(ls.pdf, cos_s / PI)
     return alb * ls.Li * (cos_s * t_both * w / (ls.pdf * PI))
 
 # ── Spectral siblings (staged rollout, see project_spectral_rendering memory

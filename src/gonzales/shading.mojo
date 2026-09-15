@@ -982,7 +982,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         # their own textured-CDF/cosine-hemisphere sampling rather than this
         # generic path -- see project_light_bxdf_interfaces memory.
         var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
-        var w_area = _nee_weight_coated_diffuse_base(ls_area, alb, ior, normal, coat_alpha)
+        var w_area = _nee_weight_coated_diffuse_base[True](ls_area, alb, ior, normal, coat_alpha)
         if not w_area.is_black():
             var contrib_area = path_ptr[].throughput * _to_spec_refl(ctx, beta, path_ptr[].wavelengths) * _to_spec_illum(ctx, w_area, path_ptr[].wavelengths)
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_area.wi, ls_area.dist * Float32(0.9999), contrib_area)
@@ -994,7 +994,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
             var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
             var ls = res[0].copy()
             var tmax = res[1]
-            var w = _nee_weight_coated_diffuse_base(ls, alb, ior, normal, coat_alpha)
+            var w = _nee_weight_coated_diffuse_base[True](ls, alb, ior, normal, coat_alpha)
             if not w.is_black():
                 var contrib = path_ptr[].throughput * _to_spec_refl(ctx, beta, path_ptr[].wavelengths) * _to_spec_illum(ctx, w, path_ptr[].wavelengths)
                 _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls.wi, tmax, contrib)
@@ -1021,36 +1021,25 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                     env_dir = _env_s[0]
                     pdf_light = _env_s[1]
                     env_rgb = ilight.scale
-                var cos_env = dot(normal, env_dir)
-                if cos_env > Float32(0.0) and not env_rgb.is_black() and pdf_light > Float32(0.0):
-                    var t_env = Float32(1.0) - fr_dielectric(cos_env, ior)
-                    var cos_env_internal = cos_theta_t_dielectric(cos_env, ior)
-                    t_env *= coat_beer_lambert_tr(cos_env_internal, DEFAULT_COAT_THICKNESS)
-                    # 1/eta^2: the light's refraction into the coat compresses
-                    # solid angle onto the base -- the same factor
-                    # _nee_weight_coated_diffuse_base applies for every other
-                    # light type (its docstring: "1/eta^2 lives HERE"). This
-                    # branch inlined its own formula and dropped it, making
-                    # env-lit coateddiffuse eta^2 (2.25x at eta 1.5) too
-                    # bright at the first hit. The exit ray needs no explicit
-                    # factor: its cosine-sampled internal direction is TIR-
-                    # rejected outside the escape cone, which yields 1/eta^2
-                    # in expectation.
-                    t_env /= max(ior * ior, Float32(1e-6))
-                    if is_rough_coat:
-                        t_env *= ggx_G2(cos_env, cos_env_internal, coat_alpha) / ggx_G1(cos_env, coat_alpha)
-                    # No MIS split here: the coat's eventual exit ray -- the
-                    # only "BSDF-sampled" strategy that could otherwise also
-                    # see this light -- has its outer lastBsdfPdf forced to 0
-                    # (see the end of this function), so the miss/emitter
-                    # handlers always give it mis_weight 0 for direct light.
-                    # NEE is the ONLY strategy actually contributing direct
-                    # light through the coat; splitting its weight with
-                    # power_heuristic against a phantom, nonzero competing
-                    # pdf (the old `cos_env/PI` here) discarded a real
-                    # fraction of the light with nothing else picking it up.
-                    var mis_w = Float32(1.0)
-                    var contrib_e = path_ptr[].throughput * _to_spec_refl(ctx, beta * alb, path_ptr[].wavelengths) * _to_spec_illum(ctx, env_rgb, path_ptr[].wavelengths) * (cos_env * t_env / (PI * pdf_light)) * mis_w
+                # The coat-transfer math itself (Fresnel, coat thickness,
+                # 1/eta^2, rough-facet G2/G1, MIS convention) is the SHARED
+                # one every other light type at this vertex goes through --
+                # only the sampling above stays bespoke. This branch used to
+                # inline its own copy of that formula and had silently
+                # dropped the 1/eta^2 factor (eta^2 = 2.25x too bright at
+                # eta 1.5, on every env-lit coateddiffuse surface) while the
+                # shared function had it right all along; sharing the math
+                # is what makes that class of drift impossible, so resist
+                # re-inlining it. `alb` is passed as 1 and applied by the
+                # caller below instead, so it keeps going through
+                # _to_spec_refl (a reflectance) rather than being bundled
+                # into the illuminant upsample with the light's radiance.
+                var ls_env = LightSample(env_dir, env_rgb, pdf_light,
+                                         Float32(100000.0), False, True)
+                var w_env = _nee_weight_coated_diffuse_base[True](
+                    ls_env, RGB(Float32(1.0)), ior, normal, coat_alpha)
+                if not w_env.is_black():
+                    var contrib_e = path_ptr[].throughput * _to_spec_refl(ctx, beta * alb, path_ptr[].wavelengths) * _to_spec_illum(ctx, w_env, path_ptr[].wavelengths)
                     var t_max_env = Float32(100000.0)
                     _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, env_dir, t_max_env, contrib_e)
 
