@@ -1,7 +1,7 @@
 from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory import alloc
-from .geometry import RGB, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, ShadowTask_C, LightSampler_C, light_sampler_sample, light_sampler_pdf, Instance_C, MeasuredBRDF_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
+from .geometry import RGB, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, ShadowTask_C, LightSampler_C, light_sampler_sample, light_sampler_pdf, Instance_C, MeasuredBRDF_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from .bxdf import BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
 from .rng import PCG32
@@ -939,7 +939,12 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         return
 
     # Transmitted into the coat: random-walk the base/coat-underside layers.
-    var beta = RGB(Float32(1.0))
+    # Coat-thickness Beer-Lambert attenuation for the entry crossing (top
+    # interface down to the base) -- see coat_beer_lambert_tr's docstring
+    # (geometry.mojo) and pbrt's LayeredBxDF::Tr. cos_wm is the EXTERNAL
+    # entry angle; refract it to the internal angle the medium actually sees.
+    var cos_wm_internal = cos_theta_t_dielectric(cos_wm, ior)
+    var beta = RGB(coat_beer_lambert_tr(cos_wm_internal, DEFAULT_COAT_THICKNESS))
     var exited = False
     var exit_dir = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
 
@@ -1009,6 +1014,8 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                 var cos_env = dot(normal, env_dir)
                 if cos_env > Float32(0.0) and not env_rgb.is_black() and pdf_light > Float32(0.0):
                     var t_env = Float32(1.0) - fr_dielectric(cos_env, ior)
+                    var cos_env_internal = cos_theta_t_dielectric(cos_env, ior)
+                    t_env *= coat_beer_lambert_tr(cos_env_internal, DEFAULT_COAT_THICKNESS)
                     var pdf_bsdf_nee = cos_env / PI
                     var mis_w = power_heuristic(pdf_light, pdf_bsdf_nee)
                     var contrib_e = path_ptr[].throughput * _to_spec_refl(ctx, beta * alb, path_ptr[].wavelengths) * _to_spec_illum(ctx, env_rgb, path_ptr[].wavelengths) * (cos_env * t_env / (PI * pdf_light)) * mis_w
@@ -1044,6 +1051,11 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
             if wmelen > Float32(0.0):
                 wm_e = wm_e * (Float32(1.0) / sqrt(wmelen))
         var cos_up = dot(w_up, wm_e)
+        # Coat-thickness Beer-Lambert attenuation for this leg's crossing.
+        # w_up is generated WITHIN the coat medium (the base's own scattered
+        # direction), so cos_up is already the internal angle -- no Snell
+        # refraction needed here, unlike the entry/light/env crossings above.
+        var tr_leg = coat_beer_lambert_tr(cos_up, DEFAULT_COAT_THICKNESS)
         var f_exit = fr_dielectric(cos_up, inv_ior)
         if pcg.next_float() < (Float32(1.0) - f_exit):
             var rr = refract(Vec3f(-w_up[0], -w_up[1], -w_up[2]),
@@ -1057,9 +1069,17 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                 # A rough microfacet can refract below the surface; recycle then.
                 if dot(exit_dir, normal) > Float32(0.0):
                     exited = True
+                    # One crossing (ascend to the top interface) either way;
+                    # applied once here for the exit case. The recycle case
+                    # applies it again below for the same ascend, plus once
+                    # more next loop entry represents the matching descend.
+                    beta *= tr_leg
                     break
             # Refraction failed / exited below surface → fall through and recycle.
-        # Internal reflection: light recycled; next iteration re-samples base.
+        # Internal reflection: light recycled -- this bounce crossed the coat
+        # twice (up to the underside, deciding not to exit, then back down to
+        # the base for the next iteration's NEE), so apply tr_leg twice.
+        beta *= tr_leg * tr_leg
 
     if not exited:
         path_ptr[].active = 0

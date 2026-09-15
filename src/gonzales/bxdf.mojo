@@ -1,5 +1,5 @@
 from std.math import sqrt
-from .geometry import RGB, MatKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric
+from .geometry import RGB, MatKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world, power_heuristic
 from .bvh import LightSample, HairLobeConstants, _hair_eval_lobes
 from .spectrum import SampledWavelengths, SpectralSample, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb
@@ -613,7 +613,13 @@ def _nee_weight_coated_diffuse_base(
     # the caller's walk `beta`, because beta is what the coat loop's RR and
     # chrominance floor threshold against (`beta_max < 0.25`) -- scaling it
     # by 1/eta^2 (0.25 at eta 2) would fire RR before the walk even starts.
-    var t_both = t_light / max(ior * ior, Float32(1e-6))
+    # Coat-thickness Beer-Lambert attenuation for the light's descent through
+    # the coat to reach the base -- see coat_beer_lambert_tr's docstring
+    # (geometry.mojo) and pbrt's LayeredBxDF::Tr, applied via the light's
+    # REFRACTED internal angle, not its external one.
+    var cos_s_internal = cos_theta_t_dielectric(cos_s, ior)
+    var tr_light = coat_beer_lambert_tr(cos_s_internal, DEFAULT_COAT_THICKNESS)
+    var t_both = t_light * tr_light / max(ior * ior, Float32(1e-6))
     if ls.is_delta:
         return alb * ls.Li * (cos_s * t_both / PI)
     if ls.pdf <= Float32(0.0):

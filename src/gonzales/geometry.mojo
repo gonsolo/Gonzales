@@ -1909,6 +1909,43 @@ def fr_dielectric(cos_theta_i_in: Float32, eta_in: Float32) -> Float32:
     var r_perp = (cos_theta_i - eta * cos_theta_t) / (cos_theta_i + eta * cos_theta_t)
     return (r_parl * r_parl + r_perp * r_perp) * Float32(0.5)
 
+# pbrt's coateddiffuse/coatedconductor default when a scene doesn't set
+# "float thickness" explicitly (LayeredBxDF's own default). gonzales has no
+# per-material storage for this (Material_C has no thickness field -- adding
+# one touches the GPU upload path/struct size, out of scope here), so every
+# coat uses this single default. Only 2 of the pbrt-v4 corpus's ~180
+# coateddiffuse/coatedconductor materials (both bistro_cafe coatedconductor
+# props, not a dominant surface) set it explicitly; this default covers the
+# rest exactly.
+comptime DEFAULT_COAT_THICKNESS: Float32 = 0.01
+
+@always_inline
+def coat_beer_lambert_tr(cos_theta_internal: Float32, thickness: Float32) -> Float32:
+    """Beer-Lambert transmittance for one crossing of a coat layer of the
+    given thickness, given the INTERNAL (refracted) cosine of the ray's angle
+    to the interface normal. Mirrors pbrt's LayeredBxDF::Tr(dz, w) =
+    exp(-|dz / w.z|) -- see bxdfs.h. `cos_theta_internal` is w.z in that
+    formula; callers crossing from outside the coat must refract the external
+    cosine first via cos_theta_t_dielectric below (pbrt tracks z in the
+    medium's own frame, not the external ray's)."""
+    var c = max(cos_theta_internal, Float32(1e-4))
+    return exp(-thickness / c)
+
+@always_inline
+def cos_theta_t_dielectric(cos_theta_i_in: Float32, eta: Float32) -> Float32:
+    """Cosine of the refracted angle inside a medium of relative IOR eta
+    (eta_t/eta_i), given the EXTERNAL cosine of incidence. Same geometry as
+    fr_dielectric, factored out so coat-thickness attenuation (which needs
+    the internal ray angle, not the external one) can share it. Returns 0 on
+    total internal reflection (grazing limit, matching fr_dielectric's own
+    TIR branch)."""
+    var cos_theta_i = max(Float32(0.0), min(Float32(1.0), abs(cos_theta_i_in)))
+    var sin2_theta_i = max(Float32(0.0), Float32(1.0) - cos_theta_i * cos_theta_i)
+    var sin2_theta_t = sin2_theta_i / max(eta * eta, Float32(1e-6))
+    if sin2_theta_t >= Float32(1.0):
+        return Float32(0.0)
+    return safe_sqrt(Float32(1.0) - sin2_theta_t)
+
 @always_inline
 def spherical_direction(sin_theta: Float32, cos_theta: Float32, phi: Float32) -> Vec3f:
     """Convert spherical coordinates (θ,φ) to a unit Cartesian vector.
