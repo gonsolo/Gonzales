@@ -2199,8 +2199,17 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
         if dl > Float32(0): dir = dir / dl
 
         var ray = Ray_C(org, dir)
-        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), isects + i,
-                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+        # A scene with literally zero mesh/curve/instance primitives (e.g.
+        # clouds.pbrt -- one analytic sphere plus a heterogeneous medium, no
+        # mesh Shape at all) still has *some* bvh2Nodes/primIds allocation,
+        # but traverse_bvh2_core was never exercised against a genuinely
+        # empty tree before this scene: skip it outright rather than trust
+        # an edge case this function has never had to handle.
+        if Int(sd.meshCount) > 0 or Int(sd.curveCount) > 0 or Int(sd.instanceCount) > 0:
+            traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), isects + i,
+                               sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+        else:
+            isects[i] = Intersection_C(PrimId_C(-1, -1, 0, -1, 0, 0, 0, 0), Float32(1e38), 0.0, 0.0, Int8(0), 0, 0, 0)
         if Int(sd.sphereCount) > 0:
             test_spheres(sd.spheres, Int(sd.sphereCount), ray, isects + i)
 
@@ -2213,28 +2222,31 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
             if typ == 4:
                 # Sphere: normal = normalize(hit_point - center)
                 var si  = Int(isects[i].primId.id1)
-                normal = sphere_outward_normal(org + dir*d, sd.spheres[si].center)
+                if si >= 0 and si < Int(sd.sphereCount):
+                    normal = sphere_outward_normal(org + dir*d, sd.spheres[si].center)
             elif typ == 5:
                 # Native curve: reconstruct the geometric normal the same way
                 # shade_hair does (shading.mojo) — h/v come straight from
                 # intersect_curve via Intersection_C.u/.v, no tessellated mesh.
-                var curve = sd.curves[Int(isects[i].primId.id1)]
-                var h = max(Float32(-0.99), min(Float32(0.99), isects[i].u))
-                var piece = min(Int(curve.n_pieces) - 1, max(0, Int(isects[i].v * Float32(curve.n_pieces))))
-                var (q0, q1, _, _) = curve_piece_endpoints(curve, piece)
-                var seg_axis = q1 - q0
-                var seg_len = sqrt(dot(seg_axis, seg_axis))
-                var tangent: Vec3f
-                if seg_len > Float32(1e-8):
-                    tangent = seg_axis * (Float32(1.0) / seg_len)
-                else:
-                    tangent = Vec3f(Float32(1), Float32(0), Float32(0))
-                var n_perp = _curve_perp_axis(tangent)
-                var b_perp0 = cross(tangent, n_perp)
-                var geo = n_perp * h + b_perp0 * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
-                var gl = sqrt(dot(geo, geo))
-                if gl > Float32(0):
-                    normal = Vec3f(geo[0] / gl, geo[1] / gl, geo[2] / gl)
+                var curve_idx = Int(isects[i].primId.id1)
+                if curve_idx >= 0 and curve_idx < Int(sd.curveCount):
+                    var curve = sd.curves[curve_idx]
+                    var h = max(Float32(-0.99), min(Float32(0.99), isects[i].u))
+                    var piece = min(Int(curve.n_pieces) - 1, max(0, Int(isects[i].v * Float32(curve.n_pieces))))
+                    var (q0, q1, _, _) = curve_piece_endpoints(curve, piece)
+                    var seg_axis = q1 - q0
+                    var seg_len = sqrt(dot(seg_axis, seg_axis))
+                    var tangent: Vec3f
+                    if seg_len > Float32(1e-8):
+                        tangent = seg_axis * (Float32(1.0) / seg_len)
+                    else:
+                        tangent = Vec3f(Float32(1), Float32(0), Float32(0))
+                    var n_perp = _curve_perp_axis(tangent)
+                    var b_perp0 = cross(tangent, n_perp)
+                    var geo = n_perp * h + b_perp0 * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
+                    var gl = sqrt(dot(geo, geo))
+                    if gl > Float32(0):
+                        normal = Vec3f(geo[0] / gl, geo[1] / gl, geo[2] / gl)
             elif typ == 0 or typ == 1 or typ == 2 or typ == 3:
                 # Triangle: geometric normal from edge cross product
                 var mesh_idx: Int
@@ -2245,17 +2257,22 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
                 else:
                     mesh_idx  = Int(isects[i].primId.id2 >> 32)
                     base_vidx = Int(isects[i].primId.id2 & 0xFFFFFFFF) * 3
-                var mesh = sd.meshes[mesh_idx]
-                var vi0 = Int(mesh.vertexIndices[base_vidx])
-                var vi1 = Int(mesh.vertexIndices[base_vidx + 1])
-                var vi2 = Int(mesh.vertexIndices[base_vidx + 2])
-                var p0 = Point3f(mesh.points[vi0*4], mesh.points[vi0*4+1], mesh.points[vi0*4+2])
-                var p1 = Point3f(mesh.points[vi1*4], mesh.points[vi1*4+1], mesh.points[vi1*4+2])
-                var p2 = Point3f(mesh.points[vi2*4], mesh.points[vi2*4+1], mesh.points[vi2*4+2])
-                var e1 = p1 - p0; var e2 = p2 - p0
-                normal = Vec3f(e1.y*e2.z - e1.z*e2.y, e1.z*e2.x - e1.x*e2.z, e1.x*e2.y - e1.y*e2.x)
-                var nl = normal.length()
-                if nl > Float32(0): normal = normal / nl
+                # Bounds-check before dereferencing sd.meshes -- defensive,
+                # same as the sphere/curve branches above: fail open (leave
+                # `normal` at its background default) rather than trust an
+                # index this function never validated before.
+                if mesh_idx >= 0 and mesh_idx < Int(sd.meshCount):
+                    var mesh = sd.meshes[mesh_idx]
+                    var vi0 = Int(mesh.vertexIndices[base_vidx])
+                    var vi1 = Int(mesh.vertexIndices[base_vidx + 1])
+                    var vi2 = Int(mesh.vertexIndices[base_vidx + 2])
+                    var p0 = Point3f(mesh.points[vi0*4], mesh.points[vi0*4+1], mesh.points[vi0*4+2])
+                    var p1 = Point3f(mesh.points[vi1*4], mesh.points[vi1*4+1], mesh.points[vi1*4+2])
+                    var p2 = Point3f(mesh.points[vi2*4], mesh.points[vi2*4+1], mesh.points[vi2*4+2])
+                    var e1 = p1 - p0; var e2 = p2 - p0
+                    normal = Vec3f(e1.y*e2.z - e1.z*e2.y, e1.z*e2.x - e1.x*e2.z, e1.x*e2.y - e1.y*e2.x)
+                    var nl = normal.length()
+                    if nl > Float32(0): normal = normal / nl
             # else: unrecognized hit type (shouldn't occur for a real
             # Intersection_C — type==6 only ever exists as a transient BVH
             # leaf marker, resolved into type 0-3 with instanceIdx set before
