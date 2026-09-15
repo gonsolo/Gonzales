@@ -1,6 +1,7 @@
 from std.math import sqrt
-from .geometry import RGB, MatKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS
+from .geometry import RGB, MatKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS, Frame, refract
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world, power_heuristic
+from .rng import PCG32
 from .bvh import LightSample, HairLobeConstants, _hair_eval_lobes
 from .spectrum import SampledWavelengths, SpectralSample, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb
 
@@ -538,6 +539,239 @@ def _nee_weight_simple(
         return f * ls.Li * cos_s
     var mis_w = power_heuristic(ls.pdf, pdf_bsdf)
     return f * ls.Li * (cos_s * mis_w / ls.pdf)
+
+# ── Coateddiffuse: THE layered-BSDF walk, shared by every integrator ─────────
+#
+# A coated diffuse surface has no closed-form BSDF: evaluating it means
+# stochastically walking the coat (refract in, bounce off the Lambertian base,
+# try to refract back out, repeat). Before this existed, EVERY integrator
+# re-derived that walk inline in its own bounce loop -- shading.mojo's
+# shade_coated_diffuse, bdpt.mojo's camera AND light path branches, and
+# (eventually) sppm.mojo. Each copy then drifted independently, which is
+# exactly how 2026-09-15 found: a missing 1/eta^2 in one, absent coat-thickness
+# attenuation in another, no rough-coat G2/G1 anywhere but the path tracer, and
+# -- worst -- sppm.mojo having no coat model AT ALL (it aliased coateddiffuse
+# to plain Lambertian, rendering 2.02x too bright). See
+# project_elegance_backlog_2026_09_10 items 4/9 and
+# project_bistro_brightness_gap.
+#
+# WHY A STEPPER AND NOT ONE `walk()` CALL: the walk's RNG draws are interleaved
+# with each integrator's OWN next-event-estimation draws -- the coat-lobe NEE
+# fires between the half-vector sample and the entry coin flip, and the base
+# NEE fires between the Russian-roulette check and the cosine-hemisphere
+# sample, at every recycle depth. A black-box `walk()` would have to hoist
+# those out, changing every existing render's random sequence. Splitting the
+# walk at exactly those two seams keeps each caller's RNG stream bit-identical
+# while still leaving ONE copy of the physics. Integrator bookkeeping (NEE,
+# vertex/VP/photon storage, MIS carries, transport-mode eta^2) stays with the
+# integrator, where it belongs; only the material's own behaviour lives here.
+#
+# Call sequence:
+#     var w = coat_walk_begin(gn, wo, alb, ior, alpha, pcg)
+#     <caller's coat-lobe NEE, using w.alpha/w.gn/w.wo>
+#     coat_walk_enter(w, pcg)
+#     if w.event == COAT_REFLECT:  <caller uses w.wi / w.pdf / w.beta>
+#     else:
+#         while w.event == COAT_WALKING:
+#             if not coat_walk_at_base(w, pcg): break
+#             <caller's base NEE, using w.beta>
+#             coat_walk_scatter(w, pcg)
+#         if w.event == COAT_EXIT:  <caller uses w.wi / w.beta>
+
+comptime COAT_WALKING = Int32(0)   # inside the coat, more base bounces possible
+comptime COAT_REFLECT = Int32(1)   # sampled the coat's own top-interface lobe
+comptime COAT_EXIT    = Int32(2)   # refracted back out after >= 1 base bounce
+comptime COAT_ABSORB  = Int32(3)   # terminated (Russian roulette or depth cap)
+
+comptime COAT_MAX_DEPTH = 10
+
+# Per-channel chrominance floor -- see "Numerical hygiene" in
+# docs/05_reflection_models.md. Without it, up to COAT_MAX_DEPTH applications
+# of `beta *= alb` against one cached texel drive the weakest channel toward
+# zero while another stays large. Deliberately part of the SHARED walk: before
+# this, shading.mojo applied it and bdpt.mojo did not -- a silent divergence
+# between two copies of "the same" model, which is the whole reason this
+# function exists.
+comptime COAT_BETA_CHROMA_FLOOR: Float32 = 0.1
+
+@fieldwise_init
+struct CoatWalk(TrivialRegisterPassable):
+    """State of one coateddiffuse layered-BSDF walk. See the block comment
+    above for the call sequence and why this is a stepper."""
+    var gn:        Vec3f      # face-forwarded geometric/shading normal
+    var tangent:   Vec3f
+    var bitangent: Vec3f
+    var wo:        Vec3f      # toward the viewer (camera path) or the previous vertex
+    var wm:        Vec3f      # sampled top-interface microfacet (== gn when smooth)
+    var alb:       RGB        # base-layer reflectance at this hit
+    var ior:       Float32    # coat IOR (eta_coat / eta_outside)
+    var inv_ior:   Float32
+    var alpha:     Float32    # coat GGX roughness
+    var is_rough:  Bool
+    var cos_o:     Float32    # dot(wo, gn)
+    var cos_wm:    Float32    # dot(wo, wm)
+    var f_entry:   Float32    # Fresnel reflectance at the top interface
+    # Accumulated walk throughput, NOT including the transport-mode-dependent
+    # eta^2 (that is the caller's call: radiance transport needs it, importance
+    # transport does not -- see bdpt.mojo's light-path exit). On the REFLECT
+    # path this is ACHROMATIC by construction: only scalar G2/G1 weights are
+    # applied and the coloured base layer is never reached, so a caller whose
+    # throughput is spectral may use `beta.r` as a plain scalar rather than
+    # pushing a bare weight through the reflectance upsampler (which would not
+    # come back unchanged per lane).
+    var beta:      RGB
+    var wi:        Vec3f      # outgoing direction once event is REFLECT or EXIT
+    var pdf:       Float32    # REFLECT: VNDF pdf (rough) / -1 (smooth delta). EXIT: 0.
+    var event:     Int32
+    var depth:     Int32
+
+@always_inline
+def coat_walk_begin(
+    gn:    Vec3f,
+    wo:    Vec3f,
+    alb:   RGB,
+    ior:   Float32,
+    alpha: Float32,
+    mut pcg: PCG32,
+) -> CoatWalk:
+    """Build the tangent frame and sample the coat's top-interface microfacet.
+    Consumes 2 RNG draws when the coat is rough, none when smooth. Does NOT
+    decide reflect-vs-transmit yet -- call the caller's own coat-lobe NEE
+    first, then coat_walk_enter, to keep the historical draw order."""
+    var is_rough = alpha > Float32(0.001)
+    var frm = Frame.from_z(Vec3f(gn[0], gn[1], gn[2]))
+    var tangent = Vec3f(frm.x.x, frm.x.y, frm.x.z)
+    var bitangent = Vec3f(frm.y.x, frm.y.y, frm.y.z)
+    var wm = gn
+    if is_rough:
+        var wo_l = Vec3f(dot(wo, tangent), dot(wo, bitangent), dot(wo, gn))
+        var wm_l = sample_ggx_vndf(wo_l, alpha, alpha, pcg.next_float(), pcg.next_float())
+        wm = tangent * wm_l.x + bitangent * wm_l.y + gn * wm_l.z
+        var wmlen = dot(wm, wm)
+        if wmlen > Float32(0.0):
+            wm = wm * (Float32(1.0) / sqrt(wmlen))
+    var cos_wm = dot(wo, wm)
+    return CoatWalk(
+        gn=gn, tangent=tangent, bitangent=bitangent, wo=wo, wm=wm, alb=alb,
+        ior=ior, inv_ior=Float32(1.0) / ior, alpha=alpha, is_rough=is_rough,
+        cos_o=dot(wo, gn), cos_wm=cos_wm, f_entry=fr_dielectric(cos_wm, ior),
+        beta=RGB(Float32(1.0)), wi=Vec3f(Float32(0.0), Float32(0.0), Float32(0.0)),
+        pdf=Float32(0.0), event=COAT_WALKING, depth=Int32(0),
+    )
+
+@always_inline
+def coat_walk_enter(mut w: CoatWalk, mut pcg: PCG32):
+    """The entry coin flip: reflect off the coat, or refract into it.
+
+    Consumes 1 RNG draw. On REFLECT the throughput weight carries the rough
+    lobe's G2/G1 masking-shadowing (weight 1 for a smooth coat, which is a
+    delta lobe); the Fresnel factor itself is NOT applied -- the coin flip IS
+    its estimator. On transmit, `beta` starts at the entry crossing's
+    Beer-Lambert attenuation times that same G2/G1.
+
+    TRAP, and the reason the two internal angles below differ: Beer-Lambert
+    follows the SAMPLED FACET's refraction (cos_wm), because that is the path
+    light actually takes through the coat; G2/G1 uses the MACRO normal's
+    refraction (cos_o), matching how the light-side NEE weight models the same
+    crossing with no sampled facet available. Conflating them is wrong in both
+    directions."""
+    if pcg.next_float() < w.f_entry:
+        var refl = w.wm * (Float32(2.0) * w.cos_wm) - w.wo
+        var rlen = dot(refl, refl)
+        if rlen > Float32(0.0):
+            refl = refl * (Float32(1.0) / sqrt(rlen))
+        if dot(refl, w.gn) <= Float32(0.0):
+            w.event = COAT_ABSORB      # reflected below the surface
+            return
+        w.wi = refl
+        w.event = COAT_REFLECT
+        if w.is_rough:
+            w.beta *= ggx_G2(w.cos_o, dot(refl, w.gn), w.alpha) / ggx_G1(w.cos_o, w.alpha)
+            w.pdf = ggx_vndf_pdf(w.cos_o, w.cos_wm, ggx_D(dot(w.gn, w.wm), w.alpha), w.alpha)
+        else:
+            w.pdf = Float32(-1.0)      # smooth mirror coat: delta lobe, no MIS
+        return
+    # Transmitted into the coat.
+    w.beta = RGB(coat_beer_lambert_tr(cos_theta_t_dielectric(w.cos_wm, w.ior), DEFAULT_COAT_THICKNESS))
+    if w.is_rough:
+        w.beta *= ggx_G2(w.cos_o, cos_theta_t_dielectric(w.cos_o, w.ior), w.alpha) / ggx_G1(w.cos_o, w.alpha)
+
+@always_inline
+def coat_walk_at_base(mut w: CoatWalk, mut pcg: PCG32) -> Bool:
+    """Russian-roulette gate at the start of one recycle iteration. Returns
+    True when the walk is sitting on the base layer and the caller may run its
+    own NEE against `w.beta`; False when the walk has terminated (event is then
+    COAT_ABSORB). Consumes 1 RNG draw only past depth 3 and only once the
+    throughput has decayed, exactly as every hand-rolled copy of this loop
+    did."""
+    if w.depth >= Int32(COAT_MAX_DEPTH):
+        w.event = COAT_ABSORB
+        return False
+    if w.depth > Int32(3):
+        var beta_max = max(w.beta.r, max(w.beta.g, w.beta.b))
+        if beta_max < Float32(0.25):
+            var q_rr = max(Float32(0.0), Float32(1.0) - beta_max)
+            if pcg.next_float() < q_rr:
+                w.event = COAT_ABSORB
+                return False
+            w.beta = w.beta * (Float32(1.0) / (Float32(1.0) - q_rr))
+    return True
+
+@always_inline
+def coat_walk_scatter(mut w: CoatWalk, mut pcg: PCG32):
+    """One base bounce plus the attempt to leave the coat: cosine-sample the
+    Lambertian base, attenuate by its albedo, then sample the underside
+    microfacet and either refract out (event becomes COAT_EXIT, `wi` is the
+    exit direction) or total-internally reflect and recycle for another
+    iteration. Consumes 2 draws for the base direction, 2 more when rough for
+    the exit facet, and 1 for the exit coin flip.
+
+    The exit crossing costs ONE coat traversal; an internal reflection costs
+    TWO (up to the underside, then back down to the base for the next
+    iteration's NEE) -- hence tr_leg vs tr_leg squared."""
+    var w_up = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), w.gn)[0]
+    w.beta *= w.alb
+    var beta_max_c = max(w.beta.r, max(w.beta.g, w.beta.b))
+    var beta_floor = beta_max_c * COAT_BETA_CHROMA_FLOOR
+    if w.beta.r < beta_floor: w.beta.r = beta_floor
+    if w.beta.g < beta_floor: w.beta.g = beta_floor
+    if w.beta.b < beta_floor: w.beta.b = beta_floor
+    var wm_e = w.gn
+    if w.is_rough:
+        var wup_l = Vec3f(dot(w_up, w.tangent), dot(w_up, w.bitangent), dot(w_up, w.gn))
+        var wm_e_l = sample_ggx_vndf(wup_l, w.alpha, w.alpha, pcg.next_float(), pcg.next_float())
+        wm_e = w.tangent * wm_e_l.x + w.bitangent * wm_e_l.y + w.gn * wm_e_l.z
+        var wmelen = dot(wm_e, wm_e)
+        if wmelen > Float32(0.0):
+            wm_e = wm_e * (Float32(1.0) / sqrt(wmelen))
+    var cos_up = dot(w_up, wm_e)
+    var tr_leg = coat_beer_lambert_tr(cos_up, DEFAULT_COAT_THICKNESS)
+    var f_exit = fr_dielectric(cos_up, w.inv_ior)
+    w.depth += Int32(1)
+    if pcg.next_float() < (Float32(1.0) - f_exit):
+        var rr = refract(Vec3f(-w_up[0], -w_up[1], -w_up[2]),
+                         Vec3f(-wm_e[0], -wm_e[1], -wm_e[2]), w.ior)
+        if rr[0]:
+            var wt = rr[1]
+            var exit_dir = Vec3f(wt.x, wt.y, wt.z)
+            var elen = dot(exit_dir, exit_dir)
+            if elen > Float32(0.0):
+                exit_dir = exit_dir * (Float32(1.0) / sqrt(elen))
+            # A rough microfacet can refract below the surface; recycle then.
+            if dot(exit_dir, w.gn) > Float32(0.0):
+                w.beta *= tr_leg
+                if w.is_rough:
+                    var cos_up_n = dot(w_up, w.gn)
+                    w.beta *= ggx_G2(cos_up_n, dot(exit_dir, w.gn), w.alpha) / ggx_G1(cos_up_n, w.alpha)
+                w.wi = exit_dir
+                w.pdf = Float32(0.0)   # layered exit pdf is intractable -- NEE-only
+                w.event = COAT_EXIT
+                return
+    # Internal reflection: recycled, two crossings this bounce.
+    w.beta *= tr_leg * tr_leg
+    if w.is_rough:
+        var cos_up_r = dot(w_up, w.gn)
+        w.beta *= ggx_G2(cos_up_r, cos_up_r, w.alpha) / ggx_G1(cos_up_r, w.alpha)
 
 @always_inline
 def _nee_weight_coated_coat_lobe(

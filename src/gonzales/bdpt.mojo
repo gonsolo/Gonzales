@@ -17,7 +17,6 @@ from .geometry import (
     Sphere_C, Curve_C, PrimId_C, Instance_C, DistantLight_C, InfiniteLight_C, PointLight_C,
     MeasuredBRDF_C, GpuTexture_C,
     dot, cross, fr_dielectric, sphere_outward_normal, refract, PI, INV_FOUR_PI, INV_PI,
-    coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS,
     HomogeneousFreeFlight, sample_homogeneous_free_flight, medium_sigma_t_spectral,
     spectral_free_flight_weight,
 )
@@ -42,7 +41,7 @@ from .sppm import (
     _sppm_trace_visible_point, _sppm_store_photon, _sppm_trace_photon,
 )
 from .shading import _tex_lookup, _get_tri_verts, _mnee_walk, _mnee_walk2
-from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
+from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured, bxdf_pdf_measured
 from .gpu import GpuSceneHandle, vulkaninterop_unpack_results_kernel
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
@@ -2224,25 +2223,18 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
 
             var ior = mat.emission.r
-            var inv_ior = Float32(1) / ior
             var coat_alpha = max(mat.roughU, mat.roughV)
             var is_rough_coat = coat_alpha > Float32(0.001)
             var wo = -ray_dir
-            var frm = Frame.from_z(Vec3f(gn[0], gn[1], gn[2]))
-            var tangent = Vec3f(frm.x.x, frm.x.y, frm.x.z)
-            var bitangent = Vec3f(frm.y.x, frm.y.y, frm.y.z)
-
-            var wm = gn
-            if is_rough_coat:
-                var wo_l = Vec3f(dot(wo, tangent), dot(wo, bitangent), dot(wo, gn))
-                var wm_l = sample_ggx_vndf(wo_l, coat_alpha, coat_alpha, pcg.next_float(), pcg.next_float())
-                wm = tangent * wm_l.x + bitangent * wm_l.y + gn * wm_l.z
-                var wmlen = dot(wm, wm)
-                if wmlen > Float32(0):
-                    wm = wm * (Float32(1) / sqrt(wmlen))
-            var cos_wm = dot(wo, wm)
-            var f_entry = fr_dielectric(cos_wm, ior)
-            var cos_o = dot(wo, gn)
+            # THE shared layered-BSDF walk (bxdf.mojo) -- this branch used to
+            # carry its own copy, which is how it ended up missing the coat
+            # thickness, the rough G2/G1 and the chrominance floor the path
+            # tracer had. Integrator bookkeeping (NEE per recycle depth, LVC
+            # vertex storage, connect/merge, MIS carries, the
+            # radiance-transport eta^2) stays here; only the material's own
+            # behaviour moved out.
+            var cw = coat_walk_begin(gn, wo, eff_alb, ior, coat_alpha, pcg)
+            var cos_o = cw.cos_o
 
             # Coat's own glossy dielectric lobe NEE -- fired unconditionally
             # for a rough coat (independent of the reflect/transmit coin
@@ -2261,24 +2253,23 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var w_infc = _nee_weight_coated_coat_lobe(ls_infc, ior, coat_alpha, gn, wo)
                     total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_infc.r, w_infc.g, w_infc.b, wavelengths), ls_infc, hit, gn, cur_med_idx, sd, scratch, wavelengths)
 
-            if pcg.next_float() < f_entry:
+            coat_walk_enter(cw, pcg)
+
+            if cw.event == COAT_ABSORB:
+                return False   # coat total-internal-reflection-like case: terminate
+
+            if cw.event == COAT_REFLECT:
                 # Glossy reflection off the coat (rough => GGX lobe, smooth => mirror).
-                var refl = wm * (Float32(2) * cos_wm) - wo
-                var rlen = dot(refl, refl)
-                if rlen > Float32(0):
-                    refl = refl * (Float32(1) / sqrt(rlen))
-                if dot(refl, gn) <= Float32(0):
-                    return False   # coat total-internal-reflection-like case: terminate
+                var refl = cw.wi
                 rd = vec3f(refl)
                 ro = hit + rd*Float32(0.0002)
                 if is_rough_coat:
-                    # G2(wo,wi)/G1(wo) masking-shadowing weight, same as
-                    # every other rough microfacet event in
-                    # shade_coated_diffuse (shading.mojo) -- was applied
-                    # nowhere in this ported walk, weight 1 throughout.
-                    beta *= ggx_G2(cos_o, dot(refl, gn), coat_alpha) / ggx_G1(cos_o, coat_alpha)
-                    var d_sampled = ggx_D(dot(gn, wm), coat_alpha)
-                    last_bsdf_pdf = ggx_vndf_pdf(cos_o, cos_wm, d_sampled, coat_alpha)
+                    # cw.beta carries the rough lobe's G2(wo,wi)/G1(wo)
+                    # masking-shadowing weight. Achromatic by construction on
+                    # this path (see CoatWalk.beta), hence the scalar multiply
+                    # rather than a spectral upsample of a bare weight.
+                    beta *= cw.beta.r
+                    last_bsdf_pdf = cw.pdf
                     var v = _null_vertex()
                     v.pos = hit
                     v.normal = vec3f(gn)
@@ -2316,30 +2307,14 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 dvcm_carry = Float32(0)  # out of MIS scope, same reset convention as volume scatter
                 return True   # coat-reflect (rough): vertex already stored above, path continues
 
-            # Transmitted into the coat: random-walk the base/coat-underside layers.
-            # Entry crossing: coat-thickness Beer-Lambert attenuation + rough
-            # G2/G1, mirroring shade_coated_diffuse's entry (shading.mojo) --
-            # this walk was ported with weight 1 on entry, missing both. Two
-            # DIFFERENT internal angles, matching shading.mojo exactly:
-            # Beer-Lambert follows the sampled facet's refraction (cos_wm),
-            # G2/G1 uses the macro-normal's own refraction (cos_o) to match
-            # how the light-side NEE below models the coat (no sampled
-            # facet there).
-            var cos_wm_internal_entry = cos_theta_t_dielectric(cos_wm, ior)
-            var walk_beta = RGB(coat_beer_lambert_tr(cos_wm_internal_entry, DEFAULT_COAT_THICKNESS))
-            if is_rough_coat:
-                walk_beta *= ggx_G2(cos_o, cos_theta_t_dielectric(cos_o, ior), coat_alpha) / ggx_G1(cos_o, coat_alpha)
+            # Transmitted into the coat: random-walk the base/coat-underside
+            # layers. Entry attenuation already applied by coat_walk_enter.
             var exited = False
             var exit_dir = Vec3f(Float32(0), Float32(0), Float32(0))
-            comptime MAX_COAT_DEPTH = 10
-            for depth in range(MAX_COAT_DEPTH):
-                if depth > 3:
-                    var beta_max = max(walk_beta.r, max(walk_beta.g, walk_beta.b))
-                    if beta_max < Float32(0.25):
-                        var q_rr = max(Float32(0), Float32(1) - beta_max)
-                        if pcg.next_float() < q_rr:
-                            break
-                        walk_beta = walk_beta * (Float32(1) / (Float32(1) - q_rr))
+            while cw.event == COAT_WALKING:
+                if not coat_walk_at_base(cw, pcg):
+                    break
+                var walk_beta = cw.beta
 
                 # coat_alpha (rough-coat G2/G1) and nee_is_sole_strategy=True
                 # (this walk's exit ray always sets last_bsdf_pdf=0 below --
@@ -2388,51 +2363,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 if False and 3 < n_sph_mnee_cd:
                     total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), pcg, 3, n_sph_mnee_cd, wavelengths, ior)
 
-                var _w_up_sample = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), gn)
-                var w_up = _w_up_sample[0]
-                walk_beta *= eff_alb
+                # One base bounce + the attempt to leave the coat -- shared.
+                coat_walk_scatter(cw, pcg)
 
-                var wm_e = gn
-                if is_rough_coat:
-                    var wup_l = Vec3f(dot(w_up, tangent), dot(w_up, bitangent), dot(w_up, gn))
-                    var wm_e_l = sample_ggx_vndf(wup_l, coat_alpha, coat_alpha, pcg.next_float(), pcg.next_float())
-                    wm_e = tangent * wm_e_l.x + bitangent * wm_e_l.y + gn * wm_e_l.z
-                    var wmelen = dot(wm_e, wm_e)
-                    if wmelen > Float32(0):
-                        wm_e = wm_e * (Float32(1) / sqrt(wmelen))
-                var cos_up = dot(w_up, wm_e)
-                # Coat-thickness Beer-Lambert for this leg's crossing --
-                # missing from this ported walk entirely (every recycle
-                # iteration crossed the coat for free). See
-                # shade_coated_diffuse's identical tr_leg for the exit-vs-
-                # recycle accounting (one crossing on exit, two on internal
-                # reflection: up to the underside, then back down again for
-                # the next iteration's NEE).
-                var tr_leg = coat_beer_lambert_tr(cos_up, DEFAULT_COAT_THICKNESS)
-                var f_exit = fr_dielectric(cos_up, inv_ior)
-                if pcg.next_float() < (Float32(1) - f_exit):
-                    var rr = refract(Vec3f(-w_up[0], -w_up[1], -w_up[2]), Vec3f(-wm_e[0], -wm_e[1], -wm_e[2]), ior)
-                    if rr[0]:
-                        var wt = rr[1]
-                        exit_dir = Vec3f(wt.x, wt.y, wt.z)
-                        var elen = dot(exit_dir, exit_dir)
-                        if elen > Float32(0):
-                            exit_dir = exit_dir * (Float32(1) / sqrt(elen))
-                        if dot(exit_dir, gn) > Float32(0):
-                            exited = True
-                            walk_beta *= tr_leg
-                            if is_rough_coat:
-                                var cos_up_n = dot(w_up, gn)
-                                walk_beta *= ggx_G2(cos_up_n, dot(exit_dir, gn), coat_alpha) / ggx_G1(cos_up_n, coat_alpha)
-                            break
-                # Internal reflection: light recycled -- this bounce crossed
-                # the coat twice (up to the underside, deciding not to exit,
-                # then back down to the base for the next iteration's NEE).
-                walk_beta *= tr_leg * tr_leg
-                if is_rough_coat:
-                    var cos_up_r = dot(w_up, gn)
-                    walk_beta *= ggx_G2(cos_up_r, cos_up_r, coat_alpha) / ggx_G1(cos_up_r, coat_alpha)
-
+            exited = cw.event == COAT_EXIT
+            exit_dir = cw.wi
             if not exited:
                 return False   # coat recycling walk absorbed (RR-killed or ran out of depth)
 
@@ -2445,7 +2380,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # _nee_weight_coated_diffuse_base, which carries the NEE side's
             # own copy. Missing on both, it was worth eta^2 (2.3x at 1.5).
             var _coat_exit = Float32(1) / max(ior * ior, Float32(1e-6))
-            beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r * _coat_exit, (walk_beta).g * _coat_exit, (walk_beta).b * _coat_exit, wavelengths)
+            beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (cw.beta).r * _coat_exit, (cw.beta).g * _coat_exit, (cw.beta).b * _coat_exit, wavelengths)
             var v = _null_vertex()
             v.pos = hit
             v.normal = vec3f(gn)
@@ -3304,38 +3239,25 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
 
             var ior = mat.emission.r
-            var inv_ior = Float32(1) / ior
             var coat_alpha = max(mat.roughU, mat.roughV)
             var is_rough_coat = coat_alpha > Float32(0.001)
             var wo = -ray_dir
-            var frm = Frame.from_z(Vec3f(gn[0], gn[1], gn[2]))
-            var tangent = Vec3f(frm.x.x, frm.x.y, frm.x.z)
-            var bitangent = Vec3f(frm.y.x, frm.y.y, frm.y.z)
+            # THE shared layered-BSDF walk (bxdf.mojo) -- see the camera-side
+            # branch above. This light-side copy is gone too; only the LVC
+            # vertex storage and the deliberate absence of eta^2 stay here.
+            var cw = coat_walk_begin(gn, wo, eff_alb, ior, coat_alpha, pcg)
+            coat_walk_enter(cw, pcg)
 
-            var wm = gn
-            if is_rough_coat:
-                var wo_l = Vec3f(dot(wo, tangent), dot(wo, bitangent), dot(wo, gn))
-                var wm_l = sample_ggx_vndf(wo_l, coat_alpha, coat_alpha, pcg.next_float(), pcg.next_float())
-                wm = tangent * wm_l.x + bitangent * wm_l.y + gn * wm_l.z
-                var wmlen = dot(wm, wm)
-                if wmlen > Float32(0):
-                    wm = wm * (Float32(1) / sqrt(wmlen))
-            var cos_wm = dot(wo, wm)
-            var f_entry = fr_dielectric(cos_wm, ior)
-            var cos_o = dot(wo, gn)
+            if cw.event == COAT_ABSORB:
+                return False   # coat total-internal-reflection-like case: terminate
 
-            if pcg.next_float() < f_entry:
-                var refl = wm * (Float32(2) * cos_wm) - wo
-                var rlen = dot(refl, refl)
-                if rlen > Float32(0):
-                    refl = refl * (Float32(1) / sqrt(rlen))
-                if dot(refl, gn) <= Float32(0):
-                    return False   # coat total-internal-reflection-like case: terminate
+            if cw.event == COAT_REFLECT:
+                var refl = cw.wi
                 rd = vec3f(refl)
                 ro = hit + rd*Float32(0.0002)
                 if is_rough_coat:
-                    # G2(wo,wi)/G1(wo), same as the camera-side branch above.
-                    flux *= ggx_G2(cos_o, dot(refl, gn), coat_alpha) / ggx_G1(cos_o, coat_alpha)
+                    # cw.beta carries G2(wo,wi)/G1(wo); achromatic here.
+                    flux *= cw.beta.r
                     var v = _null_vertex()
                     v.pos = hit
                     v.normal = vec3f(gn)
@@ -3352,65 +3274,17 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 dvcm_carry = Float32(0)
                 return True   # coat-reflect (rough): vertex already stored above, path continues
 
-            # Entry crossing: coat-thickness Beer-Lambert + rough G2/G1,
-            # mirroring the camera-side branch above (transport-symmetric --
-            # pure attenuation and microfacet masking-shadowing, unlike the
-            # eta^2 radiance-compression factor the camera side's exit needs
-            # and this light-side exit deliberately still omits, see this
-            # branch's docstring update below).
-            var cos_wm_internal_entry = cos_theta_t_dielectric(cos_wm, ior)
-            var walk_flux = RGB(coat_beer_lambert_tr(cos_wm_internal_entry, DEFAULT_COAT_THICKNESS))
-            if is_rough_coat:
-                walk_flux *= ggx_G2(cos_o, cos_theta_t_dielectric(cos_o, ior), coat_alpha) / ggx_G1(cos_o, coat_alpha)
+            # Entry attenuation already applied by coat_walk_enter. The light
+            # subpath does no NEE of its own, so this loop is just the walk.
             var exited = False
             var exit_dir = Vec3f(Float32(0), Float32(0), Float32(0))
-            comptime MAX_COAT_DEPTH = 10
-            for depth in range(MAX_COAT_DEPTH):
-                if depth > 3:
-                    var beta_max = max(walk_flux.r, max(walk_flux.g, walk_flux.b))
-                    if beta_max < Float32(0.25):
-                        var q_rr = max(Float32(0), Float32(1) - beta_max)
-                        if pcg.next_float() < q_rr:
-                            break
-                        walk_flux = walk_flux * (Float32(1) / (Float32(1) - q_rr))
+            while cw.event == COAT_WALKING:
+                if not coat_walk_at_base(cw, pcg):
+                    break
+                coat_walk_scatter(cw, pcg)
 
-                var _w_up_sample = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), gn)
-                var w_up = _w_up_sample[0]
-                walk_flux *= eff_alb
-
-                var wm_e = gn
-                if is_rough_coat:
-                    var wup_l = Vec3f(dot(w_up, tangent), dot(w_up, bitangent), dot(w_up, gn))
-                    var wm_e_l = sample_ggx_vndf(wup_l, coat_alpha, coat_alpha, pcg.next_float(), pcg.next_float())
-                    wm_e = tangent * wm_e_l.x + bitangent * wm_e_l.y + gn * wm_e_l.z
-                    var wmelen = dot(wm_e, wm_e)
-                    if wmelen > Float32(0):
-                        wm_e = wm_e * (Float32(1) / sqrt(wmelen))
-                var cos_up = dot(w_up, wm_e)
-                # Coat-thickness Beer-Lambert for this leg -- see the
-                # camera-side branch's identical tr_leg comment.
-                var tr_leg = coat_beer_lambert_tr(cos_up, DEFAULT_COAT_THICKNESS)
-                var f_exit = fr_dielectric(cos_up, inv_ior)
-                if pcg.next_float() < (Float32(1) - f_exit):
-                    var rr = refract(Vec3f(-w_up[0], -w_up[1], -w_up[2]), Vec3f(-wm_e[0], -wm_e[1], -wm_e[2]), ior)
-                    if rr[0]:
-                        var wt = rr[1]
-                        exit_dir = Vec3f(wt.x, wt.y, wt.z)
-                        var elen = dot(exit_dir, exit_dir)
-                        if elen > Float32(0):
-                            exit_dir = exit_dir * (Float32(1) / sqrt(elen))
-                        if dot(exit_dir, gn) > Float32(0):
-                            exited = True
-                            walk_flux *= tr_leg
-                            if is_rough_coat:
-                                var cos_up_n = dot(w_up, gn)
-                                walk_flux *= ggx_G2(cos_up_n, dot(exit_dir, gn), coat_alpha) / ggx_G1(cos_up_n, coat_alpha)
-                            break
-                walk_flux *= tr_leg * tr_leg
-                if is_rough_coat:
-                    var cos_up_r = dot(w_up, gn)
-                    walk_flux *= ggx_G2(cos_up_r, cos_up_r, coat_alpha) / ggx_G1(cos_up_r, coat_alpha)
-
+            exited = cw.event == COAT_EXIT
+            exit_dir = cw.wi
             if not exited:
                 return False   # coat recycling walk failed to find an exit direction
 
@@ -3431,7 +3305,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             # gap noted elsewhere in this file). Guessing a sign here
             # without that connection-weight context fixed first risks
             # trading one silent bias for another; left alone, not ignored.
-            flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_flux).r, (walk_flux).g, (walk_flux).b, wavelengths)
+            flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (cw.beta).r, (cw.beta).g, (cw.beta).b, wavelengths)
             var v = _null_vertex()
             v.pos = hit
             v.normal = vec3f(gn)

@@ -27,7 +27,7 @@ from .bvh import (
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
     render_aux_buffers,
 )
-from .bxdf import GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, bxdf_eval_any_spectral, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral
+from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, bxdf_eval_any_spectral, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured
 from .shading import _tex_lookup, _get_tri_verts
 from .sampling import power_heuristic
@@ -698,7 +698,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 vp.env += vp.beta * al_hit.emission
             break
 
-        if mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
+        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit:
             var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0.0):
                 gn = gn * Float32(-1.0)
@@ -717,6 +717,76 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             vp.med_idx = cur_med_idx
             vp.valid = Int32(1)
             break
+
+        elif mat.type == MatKind.coated_diffuse:
+            # SPPM had NO coat model at all until 2026-09-15: coateddiffuse
+            # was aliased to the plain-Lambertian branch above, using the raw
+            # base reflectance with none of the coat's Fresnel/eta^2/thickness
+            # losses -- so a coated surface rendered BRIGHTER than the
+            # correctly-coated path tracer (coateddiffuse-eta-probe.pbrt:
+            # 2.02x, layered-cornell-box.pbrt: 1.06-1.18x).
+            #
+            # Now it runs THE shared walk (bxdf.mojo) that shading.mojo and
+            # bdpt.mojo use. What SPPM does NOT do is per-recycle-depth NEE:
+            # its own direct lighting (vp.ld) is resampled fresh every pass at
+            # the stored point instead, a different and still-convergent
+            # design. So this loop is the bare walk, and the exit is handed to
+            # the UNCHANGED Lambertian VP machinery (mat_kind=0, the SPPMPixel
+            # default) with a coat-attenuated beta -- the same generic
+            # Lambertian treatment bdpt.mojo's connect/merge already gives a
+            # coateddiffuse vertex, not a new approximation.
+            #
+            # Scoped omission, explicit not silent: the coat's own glossy
+            # reflect lobe continues the ray rather than becoming its own
+            # gatherable GGX point the way rough conductor does. Every
+            # measured case is dominated by the diffuse-base term.
+            var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+            if dot(gn, ray_dir) > Float32(0.0):
+                gn = gn * Float32(-1.0)
+            var eff_alb = mat.albedo
+            var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
+            if tex_ok:
+                eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            var ior_cd = mat.emission.r
+            var cw = coat_walk_begin(gn, -ray_dir, eff_alb, ior_cd, max(mat.roughU, mat.roughV), pcg)
+            coat_walk_enter(cw, pcg)
+            if cw.event == COAT_ABSORB:
+                break                      # reflected below the surface: no VP
+            if cw.event == COAT_REFLECT:
+                vp.beta *= cw.beta.r       # achromatic on this path (see CoatWalk.beta)
+                rd = vec3f(cw.wi)
+                ro = hit + rd * Float32(0.0002)
+            else:
+                # STOP AT THE BASE -- deliberately do NOT run the recycle
+                # loop here, unlike the path tracer and BDPT.
+                #
+                # Those two need a continuation DIRECTION, so they must walk
+                # until the ray leaves the coat. A visible point needs no
+                # direction at all: it needs the transfer for light arriving
+                # at the base and leaving toward the camera. cw.beta after
+                # coat_walk_enter is exactly the view-side crossing
+                # (Fresnel via the coin flip, thickness, rough G2/G1) and
+                # carries NO albedo yet -- coat_walk_scatter is what applies
+                # it. That matters: SPPM's gather evaluates this point as
+                # Lambertian from vp.alb, so walking further would apply the
+                # base albedo TWICE (measured: 2.02x too bright before any
+                # coat model, 0.237x too dark with the full walk).
+                #
+                # By reciprocity the same crossing factor covers light
+                # leaving the base toward the camera, and the photon pass
+                # applies the light-side crossing to its own flux, so the
+                # pair composes into the correct single-scattering layered
+                # transfer. The coat's internal recycling (2nd+ base bounces)
+                # is the scoped approximation this trades away -- explicit,
+                # and far closer than either number above.
+                vp.beta *= cw.beta * (Float32(1.0) / max(ior_cd * ior_cd, Float32(1e-6)))
+                vp.pos = hit
+                vp.normal = vec3f(gn)
+                vp.alb = eff_alb
+                vp.is_volume = Int32(0)
+                vp.med_idx = cur_med_idx
+                vp.valid = Int32(1)
+                break
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var ior = mat.albedo.r
@@ -1135,7 +1205,64 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             if mat.type == MatKind.mix:
                 mat.type = MatKind.diffuse
 
-        if mat.type == MatKind.diffuse or mat.type == MatKind.coated_diffuse or mat.type == MatKind.diffuse_transmit:
+        if mat.type == MatKind.coated_diffuse:
+            # Light-side twin of the camera-side coateddiffuse walk above --
+            # see that branch for why SPPM had no coat model at all before
+            # 2026-09-15. Stores a photon for the flux ARRIVING at the coat's
+            # outer surface (same convention as the plain-diffuse branch
+            # below: stored before this bounce's own attenuation), then walks
+            # and continues along the real exit direction.
+            #
+            # NO 1/eta^2 here, unlike the camera-side walk: a photon carries
+            # IMPORTANCE, whose non-symmetric-scattering correction runs the
+            # opposite way from radiance transport's. Matches bdpt.mojo's
+            # light-path exit and its long comment there; see
+            # project_elegance_backlog_2026_09_10 item 9 for the open
+            # question that decision is entangled with.
+            var eff_alb_cd = mat.albedo
+            var (tm_cd, t0_cd, t1_cd, t2_cd, tok_cd) = _get_tri_verts(inter, sd.meshes)
+            if tok_cd:
+                eff_alb_cd = _tex_lookup[tex_gpu](mat, inter, t0_cd, t1_cd, t2_cd, tm_cd, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            var gn_cd = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+            if dot(gn_cd, ray_dir) > Float32(0.0):
+                gn_cd = gn_cd * Float32(-1.0)
+            var cw = coat_walk_begin(gn_cd, -ray_dir, eff_alb_cd, mat.emission.r, max(mat.roughU, mat.roughV), pcg)
+            coat_walk_enter(cw, pcg)
+            if cw.event == COAT_ABSORB:
+                break
+            if cw.event == COAT_REFLECT:
+                flux *= cw.beta.r          # achromatic on this path (see CoatWalk.beta)
+                rd = vec3f(cw.wi)
+                ro = hit + rd * Float32(0.0002)
+                continue
+            # Light-side crossing, applied to the flux DEPOSITED at the base:
+            # the gather pairs this photon with a visible point whose own beta
+            # carries the view-side crossing (see the VP branch), so each side
+            # contributes exactly one traversal of the coat.
+            flux *= spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (cw.beta).r, (cw.beta).g, (cw.beta).b, ph_wavelengths)
+            if bounce > 0:
+                _sppm_store_photon[use_gpu](
+                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=ph_wavelengths),
+                    photons, max_photons, counter)
+            var entry_beta_cd = cw.beta
+            while cw.event == COAT_WALKING:
+                if not coat_walk_at_base(cw, pcg):
+                    break
+                coat_walk_scatter(cw, pcg)
+            if cw.event != COAT_EXIT:
+                break                      # walk absorbed: photon terminates
+            # Continuation: the walk's total divided by the entry crossing
+            # already folded into `flux` above, so the coat is traversed once
+            # on the way in and once on the way out, never twice on the way in.
+            var cont_cd = RGB(cw.beta.r / max(entry_beta_cd.r, Float32(1e-8)),
+                              cw.beta.g / max(entry_beta_cd.g, Float32(1e-8)),
+                              cw.beta.b / max(entry_beta_cd.b, Float32(1e-8)))
+            flux *= spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, cont_cd.r, cont_cd.g, cont_cd.b, ph_wavelengths)
+            rd = vec3f(cw.wi)
+            ro = hit + rd * Float32(0.0002)
+            continue
+
+        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit:
             # bounce > 0: skip storing a photon at a surface directly hit
             # by the light with no intermediate bounce — that direct
             # contribution is now covered by _sppm_nee_update instead
