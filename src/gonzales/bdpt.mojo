@@ -2292,6 +2292,25 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     v.dVCM = Float32(0); v.dVC = Float32(0); v.dVM = Float32(0)
                     if n_verts == 0: first_alb = eff_alb
                     n_verts += 1
+                    # BUG (found 2026-09-15, chasing coateddiffuse-eta-probe
+                    # rendering solid black under --vcm): every OTHER
+                    # material branch in this function connects/merges its
+                    # vertex against the light-path cache right after
+                    # storing it (see the diffuse/conductor/hair/measured
+                    # branches' identical `if path_len > 0:` block). This
+                    # coateddiffuse vertex never did -- confirmed via direct
+                    # instrumentation: the exit vertex below was reached
+                    # with a perfectly valid nonzero walk_beta every time,
+                    # but _connect was never once called for it. Since
+                    # coateddiffuse also has no NEE path to an (unobstructed)
+                    # area light -- only distant/point/sphere/infinite via
+                    # _bdpt_simple_light_count, plus MNEE which only fires
+                    # when the light is glass-obscured -- a scene lit purely
+                    # by an area light through a coateddiffuse surface had
+                    # NO way to receive any light at all.
+                    if path_len > 0:
+                        total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
+                        total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
                 else:
                     last_bsdf_pdf = Float32(-1)  # smooth mirror coat: delta, no MIS at destination
                 dvcm_carry = Float32(0)  # out of MIS scope, same reset convention as volume scatter
@@ -2440,6 +2459,16 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             v.dVCM = Float32(0); v.dVC = Float32(0); v.dVM = Float32(0)
             if n_verts == 0: first_alb = eff_alb
             n_verts += 1
+            # BUG (found 2026-09-15): same missing connect/merge call as the
+            # coat-reflect vertex above -- see that site's comment for the
+            # full story. This exit vertex is the ONE both smooth and rough
+            # coats always reach, so this was THE fix for
+            # coateddiffuse-eta-probe.pbrt rendering solid black under
+            # --vcm (a coateddiffuse surface lit only by an unobstructed
+            # area light had no path to receive any light at all).
+            if path_len > 0:
+                total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
+                total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
             dvcm_carry = Float32(0)
 
         elif mat.type == MatKind.conductor or mat.type == MatKind.coated_conductor:
