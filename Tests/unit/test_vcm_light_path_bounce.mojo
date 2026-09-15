@@ -167,6 +167,8 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
     var is_finite_origin = state.is_finite_origin == Int8(1)
     var cur_med_idx = state.cur_med_idx
     var n_lbounces = Int(state.n_lbounces)
+    var current_dielectric_ior = state.current_dielectric_ior
+    var previous_dielectric_ior = state.previous_dielectric_ior
     var wavelengths = SampledWavelengths(state.wl0, state.wl1, state.wl2, state.wl3, state.wl_pdf)
 
     var n_iters = 0
@@ -183,7 +185,8 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
         var cont = _bdpt_light_path_bounce[False](
             sd, pcg_bounce, False, inter, lvc_new, 0, Float32(0), Float32(0),
             ro, rd, flux, n_verts, dvcm, dvc, dvm,
-            is_finite_origin, cur_med_idx, n_lbounces, wavelengths,
+            is_finite_origin, cur_med_idx, n_lbounces,
+            current_dielectric_ior, previous_dielectric_ior, wavelengths,
         )
         active = Int8(1) if cont else Int8(0)
         lvc_path_len_new[0] = Int32(n_verts)
