@@ -1,4 +1,5 @@
 from std.memory import alloc
+from std.ffi import external_call
 from std.math import sqrt, exp, max, abs
 from .lexer import (PbrtScanner, scanner_parse_quoted_string, _psc_collect_params, ParameterDictionary)
 from .parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX
@@ -168,6 +169,76 @@ def _sss_alpha_from_reflectance(a: Float32) -> Float32:
     return Float32(1) - exp(Float32(-5.09406) * x
                             + Float32(2.61188) * x * x
                             - Float32(4.31805) * x * x * x)
+
+
+def _sss_reflectance(s: UnsafePointer[SceneParseState, MutExternalOrigin],
+                     params: ParameterDictionary) -> RGB:
+    """The subsurface `reflectance`, resolved even when it is a TEXTURE.
+
+    This used to be a bare `params.get_rgb("reflectance", RGB(0.5))`, which
+    silently returns the grey 0.5 default for a texture-valued parameter --
+    and `head.pbrt` specifies `"texture reflectance" ["albedomap"]`, so all of
+    the skin's colour was being discarded. The head rendered NEUTRAL GREY
+    (chromaticity .332/.343/.325) where pbrt gives skin (.441/.290/.235); the
+    albedomap's own mean is .478/.287/.235, i.e. the colour was entirely in
+    the texture that was being thrown away. Exactly the silent-asset-failure
+    shape catalogued in project_silent_asset_load_failures: a plausible image,
+    never an error.
+
+    The interior is registered as ONE homogeneous medium, so a spatially
+    varying reflectance cannot be represented exactly; the image's mean is the
+    honest approximation and is warned about. Constant and imagemap textures
+    are resolved; anything else keeps pbrt's default and says so."""
+    var refl_f = params.get_floats("reflectance")
+    if len(refl_f) >= 3:
+        return RGB(refl_f[0], refl_f[1], refl_f[2])
+    if len(refl_f) == 1:
+        return RGB(refl_f[0], refl_f[0], refl_f[0])
+    var tname = params.get_string("reflectance", "")
+    if tname == "":
+        return RGB(Float32(0.5))
+    for ci in range(len(s[0].const_tex_names)):
+        if s[0].const_tex_names[ci] == tname:
+            return RGB(s[0].const_tex_rgb[ci*3+0], s[0].const_tex_rgb[ci*3+1], s[0].const_tex_rgb[ci*3+2])
+    for ti in range(len(s[0].tex_names)):
+        if s[0].tex_names[ti] == tname:
+            var fstr = s[0].tex_files[ti]
+            var flen = fstr.byte_length()
+            var fbuf = alloc[UInt8](flen + 1)
+            for k in range(flen): fbuf[k] = fstr.unsafe_ptr()[k]
+            fbuf[flen] = UInt8(0)
+            var data_out = alloc[UnsafePointer[Float32, MutExternalOrigin]](1)
+            var w_out = alloc[Int32](1)
+            var h_out = alloc[Int32](1)
+            w_out[0] = Int32(0); h_out[0] = Int32(0)
+            var ok = external_call["load_texture_rgb", Int32,
+                UnsafePointer[UInt8, MutExternalOrigin],
+                UnsafePointer[UnsafePointer[Float32, MutExternalOrigin], MutExternalOrigin],
+                UnsafePointer[Int32, MutExternalOrigin],
+                UnsafePointer[Int32, MutExternalOrigin],
+                Int32](fbuf, data_out, w_out, h_out, Int32(0))
+            var out = RGB(Float32(0.5))
+            if ok != 0 and Int(w_out[0]) > 0 and Int(h_out[0]) > 0:
+                var n = Int(w_out[0]) * Int(h_out[0])
+                var ptr = data_out[0]
+                var sr = Float64(0); var sg = Float64(0); var sb = Float64(0)
+                for k in range(n):
+                    sr += Float64(ptr[k*3+0]); sg += Float64(ptr[k*3+1]); sb += Float64(ptr[k*3+2])
+                var inv = Float64(1) / Float64(n)
+                out = RGB(Float32(sr*inv), Float32(sg*inv), Float32(sb*inv))
+                print("Note: subsurface \"reflectance\" is the texture '" + tname +
+                      "'; the interior is one homogeneous medium, so its MEAN colour is used.")
+                _ = external_call["free_texture_rgb", Int32,
+                    UnsafePointer[Float32, MutExternalOrigin]](ptr)
+            else:
+                print("Warning: subsurface \"reflectance\" texture '" + tname +
+                      "' (" + fstr + ") failed to load — falling back to grey 0.5, which will render colourless.")
+            fbuf.free(); data_out.free(); w_out.free(); h_out.free()
+            return out
+    print("Warning: subsurface \"reflectance\" names texture '" + tname +
+          "', which is not a constant or imagemap — using grey 0.5.")
+    return RGB(Float32(0.5))
+
 
 def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                                    s: UnsafePointer[SceneParseState, MutExternalOrigin],
@@ -617,7 +688,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
             # exactly this purpose. It targets the same quantity by a
             # different route, so expect agreement in character but not to the
             # last digit against pbrt on a `reflectance`-specified scene.
-            var refl = params.get_rgb("reflectance", RGB(Float32(0.5)))
+            var refl = _sss_reflectance(s, params)
             var mfp = _mb_float_or_rgb(params, "mfp", RGB(Float32(1)))
             print("Note: subsurface \"reflectance\"/\"mfp\" inverted with the Christensen-Burley fit, not pbrt's tabulated SubsurfaceFromDiffuse — close in character, not bit-comparable.")
             var ar = _sss_alpha_from_reflectance(refl.r)
