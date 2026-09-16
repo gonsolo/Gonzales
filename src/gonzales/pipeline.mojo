@@ -10,7 +10,7 @@ from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, Ray_C, dot, TriangleMesh_C, _is_real_ptr, Curve_C, curve_piece_bounds, FilmDims, FilterParams
 from .postprocess import denoise, write_image, write_image_cropped, write_image_cropwindow
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
-from .bvh import BVH2Node, SceneDescriptor2_C, render_aux_buffers
+from .bvh import BVH2Node, SceneDescriptor2_C, render_aux_buffers, _scene_bounding_sphere
 from .sppm import sppm_render
 from .bdpt import vcm_render, vcm_render_gpu, vcm_render_gpu_wavefront, _BDPT_MAX_VERTS, sppm_render_gpu
 from .guide import GuideGrid, guide_create, guide_free, guide_clone_empty, guide_refine, null_guide, guide_merge, guide_cell_has_data
@@ -28,20 +28,49 @@ from .vulkaninterop import (
     vulkaninterop_rt_destroy_scene,
 )
 
+# Fraction of the scene's bounding-sphere radius used as SPPM's initial gather
+# radius when nothing explicit is given. Calibrated on classroom, whose black
+# fraction falls 79.3% -> 43.4% -> 2.7% -> 0.0% as the radius goes
+# 0.05 -> 0.3 -> 1.0 -> 3.0, i.e. it wants ~1-3 units where the old fixed
+# default handed it 0.05. Too small loses all indirect light (black pixels);
+# too large over-blurs and slows the gather, so this deliberately sits at the
+# low end of the working range and SPPM's own per-pass radius reduction takes
+# it down from there.
+comptime SPPM_DEFAULT_RADIUS_FRACTION = Float32(0.006)
+
 # Resolve effective SPPM radius/photons-per-pass: an explicit CLI flag
 # (sentinel -1 = not passed) wins; otherwise fall back to what the scene's
-# own `Integrator "sppm"` directive specifies; otherwise a last-resort
-# default (0.05 for radius; film_w*film_h for photons, matching pbrt-v4's
-# own SPPM integrator default of "one photon per pixel" when
-# photonsperiteration is unspecified).
+# own `Integrator "sppm"` directive specifies; otherwise a default derived
+# from the SCENE'S OWN SIZE (photons: film_w*film_h, matching pbrt-v4's SPPM
+# default of one photon per pixel when photonsperiteration is unspecified).
+#
+# The radius default used to be a hard-coded 0.05 WORLD UNITS, which is a
+# quantity with a scale but no reference -- fine in a unit-sized test scene
+# and hopeless in a room. A gather radius far below the photon spacing finds
+# nothing, so the visible point contributes nothing and the pixel comes out
+# EXACTLY BLACK; since direct light still lands, what is lost is precisely the
+# dim, indirect-only regions. That is what it looked like across the corpus:
+# 14 scenes blacker than the reference, worst in the big ones -- classroom
+# 64% black, sanmiguel 51%, spaceship 44% -- and measured on classroom the
+# black fraction runs 79.3% at r=0.05, 43.4% at 0.3, 2.7% at 1.0 and 0.0% at
+# 3.0. (pbrt-v4's own default is a fixed 1.0, which has the same flaw and
+# merely picks a luckier constant for metre-scale scenes.)
+#
+# Scaling by the scene's bounding sphere makes the default mean the same thing
+# at every scale. An explicit CLI or scene-file radius still wins outright.
 def _resolve_sppm_params(
     psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
+    sd: SceneDescriptor2_C,
     sppm_photons_cli: Int32,
     sppm_radius_cli: Float32,
 ) -> Tuple[Int32, Float32]:
     var radius = sppm_radius_cli
     if radius <= Float32(0):
-        radius = psc[0].sppm_radius if psc[0].sppm_radius > Float32(0) else Float32(0.05)
+        if psc[0].sppm_radius > Float32(0):
+            radius = psc[0].sppm_radius
+        else:
+            var (_, scene_radius) = _scene_bounding_sphere(sd)
+            radius = scene_radius * SPPM_DEFAULT_RADIUS_FRACTION
     var photons = sppm_photons_cli
     if photons <= Int32(0):
         if psc[0].sppm_photons_per_iter > Int32(0):
@@ -948,7 +977,7 @@ def parse_and_render(
             sd.free()
             mojo_parsed_free(psc)
             return Int32(-1)
-        var resolved = _resolve_sppm_params(psc, sppm_photons, sppm_radius)
+        var resolved = _resolve_sppm_params(psc, sd[0], sppm_photons, sppm_radius)
         var ret = sppm_render_gpu(
             handle, psc, sd[0],
             Int(sppm_passes), Int(resolved[0]), resolved[1],
@@ -1381,7 +1410,7 @@ def parse_and_render(
         return ret
     elif use_sppm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
-        var resolved = _resolve_sppm_params(psc, sppm_photons, sppm_radius)
+        var resolved = _resolve_sppm_params(psc, sd[0], sppm_photons, sppm_radius)
         var ret = sppm_render(
             psc, sd[0],
             Int(sppm_passes), Int(resolved[0]), resolved[1],
