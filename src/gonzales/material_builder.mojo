@@ -572,6 +572,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
     # That last path covers ~49 scale and ~20 mix spectrum declarations in the
     # corpus. Only a product of two *different* textures is out of reach.
     var tex_idx_for_mat = Int32(-1)
+    var sss_mean_refl_for_mat = RGB(Float32(1))
     var tex_scale_for_mat = RGB(Float32(1))
     var tex_bias_for_mat = RGB(Float32(0))
     var checker_tex1 = RGB(Float32(1))
@@ -801,6 +802,9 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
             var refl = _sss_reflectance(s, params)
             var mfp = _mb_float_or_rgb(params, "mfp", RGB(Float32(1)))
             print("Note: subsurface \"reflectance\"/\"mfp\" inverted with the Christensen-Burley fit, not pbrt's tabulated SubsurfaceFromDiffuse — close in character, not bit-comparable.")
+            # Remember what the medium was built from, so the shader can
+            # correct each point back to its own texel (Material_C.sss_mean_refl).
+            sss_mean_refl_for_mat = refl
             var ar = _sss_invert_alpha(refl.r, sss_eta, sss_g)
             var ag = _sss_invert_alpha(refl.g, sss_eta, sss_g)
             var ab = _sss_invert_alpha(refl.b, sss_eta, sss_g)
@@ -943,6 +947,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
     nm.roughness_v    = mat_roughV
     nm.tex_idx        = tex_idx_for_mat
     nm.tex_scale      = tex_scale_for_mat
+    nm.sss_mean_refl  = sss_mean_refl_for_mat
     nm.tex_bias       = tex_bias_for_mat
     nm.normal_tex_idx = normal_tex_idx_for_mat
     nm.rough_tex_idx  = rough_tex_idx_for_mat

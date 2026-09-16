@@ -108,6 +108,7 @@ def make_triangle_scene(verts: List[Point3f]) -> TriangleSceneFixture:
         Int32(-1),                   # measured_idx
         RGB(Float32(1.0)),           # tex_scale
         RGB(Float32(0.0)),           # tex_bias
+        RGB(Float32(1.0)),           # sss_mean_refl (inert: not a subsurface boundary)
     )
 
     return TriangleSceneFixture(

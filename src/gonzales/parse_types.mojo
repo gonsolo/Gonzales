@@ -50,6 +50,7 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     # channel. Identity is scale=1, bias=0. Resolved by material_builder's
     # _resolve_affine_rgb; applied in shading.mojo's _tex_lookup.
     var tex_scale:      RGB
+    var sss_mean_refl:  RGB
     var tex_bias:       RGB
     # UV scale applied to an imagemap `tex_idx` texture's mesh UVs at parse
     # time (Mitsuba's `<transform name="to_uv"><scale .../></transform>`,
@@ -96,6 +97,7 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
         self.bump_tex_idx   = Int32(-1)
         self.bump_scale     = Float32(1)
         self.tex_scale      = RGB(Float32(1))
+        self.sss_mean_refl  = RGB(Float32(1))
         self.tex_bias       = RGB(Float32(0))
         self.tex_uscale     = Float32(1)
         self.tex_vscale     = Float32(1)

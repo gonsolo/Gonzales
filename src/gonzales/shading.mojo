@@ -9,7 +9,7 @@ from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
 from .transform import transform_normal_by_instance
 from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide, guide_is_active
-from .spectrum import SpectralHandle, null_spectral_handle, SpectralSample, SampledWavelengths, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb
+from .spectrum import SpectralHandle, null_spectral_handle, SpectralSample, SampledWavelengths, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb, rgb_bands_to_spectral_sample
 from .reservoir import ReservoirState, reservoir_update, reservoir_finalize, reservoir_combine, reservoir_cap_confidence
 from .restir_di import DIReservoir, di_reservoir_init, di_target_pdf, ReservoirIO, reservoir_io_null
 from .restir_gi import GIReservoir, gi_reservoir_init, gi_target_pdf, GIReservoirIO, gi_reservoir_io_null, gi_temporal_spatial_combine
@@ -1273,6 +1273,42 @@ def shade_dielectric[use_gpu: Bool](
     path_ptr[].previous_dielectric_ior = new_previous_dielectric_ior
     var offset = (normal if is_reflect else -normal) * Float32(0.0001)
     var hit_point = ray_org + ray_dir * inter.tHit + offset
+    # ── Spatially varying subsurface reflectance ──────────────────────────
+    # The interior is ONE homogeneous medium, so a textured `reflectance` has
+    # to be collapsed to a mean to build it (Material_C.sss_mean_refl). But
+    # the diffuse reflectance a given point should show is its OWN texel, and
+    # with the mean alone the head renders flat -- measured 23% less spatial
+    # detail and 36% less red-channel hue variation than pbrt, with the
+    # eyebrows, lips and skin variation all collapsed to one tone.
+    #
+    # The inversion in material_builder solves alpha so the walk REPRODUCES
+    # the reflectance it was given, i.e. R(alpha(A)) = A. So a point whose
+    # texel is A, rendered through a medium built for Abar, is off by exactly
+    # A/Abar to first order -- apply that on the way IN, once per BSSRDF
+    # event. (`_tex_lookup` already folds this material's whole scale/mix
+    # texture graph, so this picks up nested graphs for free.)
+    if mat.sss_boundary != Int8(0) and mat.tex_idx >= Int32(0) and not is_reflect:
+        var entering = force_entering or dot(ray_dir, geom_normal) < Float32(0.0)
+        if entering:
+            var a_pt = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh,
+                                            tex_filenames, textures, n_textures)
+            var mr = mat.sss_mean_refl
+            # Guard a degenerate mean, and cap the correction: a texel far
+            # above the mean must brighten its patch, never manufacture an
+            # unbounded throughput spike the way an unclamped ratio would.
+            var kr = min(a_pt.r / mr.r, Float32(4.0)) if mr.r > Float32(1e-4) else Float32(1.0)
+            var kg = min(a_pt.g / mr.g, Float32(4.0)) if mr.g > Float32(1e-4) else Float32(1.0)
+            var kb = min(a_pt.b / mr.b, Float32(4.0)) if mr.b > Float32(1e-4) else Float32(1.0)
+            # Band-picked rather than smoothly upsampled: the spectral table
+            # is not threaded into the dielectric kernel, and unlike the
+            # sigma_s ratio that had to be made consistent with sigma_t (see
+            # medium_sigma_s_spectral), this tint is applied ONCE per BSSRDF
+            # event -- only on the way in, since TIR events are reflections --
+            # so its error is bounded instead of compounding over hundreds of
+            # scatters.
+            path_ptr[].throughput *= rgb_bands_to_spectral_sample(
+                max(kr, Float32(0.0)), max(kg, Float32(0.0)), max(kb, Float32(0.0)),
+                path_ptr[].wavelengths)
     _finish_delta_bounce(path_ptr, pcg, bs, SpectralSample(bs.f.r), hit_point, RGB(Float32(1)),
                          mat.sss_boundary == Int8(0))
 
@@ -4541,7 +4577,24 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             # pdf from one sharp texel is a radiance/pdf registration mismatch
             # that biases (and adds fireflies to) this MIS term specifically.
             var env_rgb_contrib = env_rgb
-            if path_ptr[].specularBounce == Int8(0) and path_ptr[].bounce > 0:
+            # `lastBsdfPdf > 0`, NOT `bounce > 0`. Both mean "a sampled
+            # scattering event already happened, and its pdf is the MIS
+            # partner for this escape" -- and they agree for every ordinary
+            # path (a non-delta bounce sets both; a delta one zeroes the pdf
+            # and is excluded by specularBounce anyway). They diverge for a
+            # SUBSURFACE interior, whose walk is deliberately not charged to
+            # `bounce` (Material_C.sss_boundary / Medium_C.is_sss): `bounce`
+            # stays 0 for hundreds of real phase-sampled scatters, so every
+            # ray that escaped the skin and hit the sky took FULL weight
+            # instead of its MIS weight -- double-counting against the volume
+            # NEE at that same vertex, and handing each escape that happened
+            # to land on the sun the raw sun radiance. head.pbrt: 48 pixels
+            # held 95% of the frame's energy, max 52747 against a pbrt
+            # reference whose whole-frame mean is 0.282, and the mean did not
+            # converge (64spp 4.40, 256spp 3.99, 1024spp 11.79). Same class of
+            # bug as _dielectric_bounce's old `bounce == 0` force-entering
+            # test, which this file already documents.
+            if path_ptr[].specularBounce == Int8(0) and path_ptr[].lastBsdfPdf > Float32(0.0):
                 var pdf_bsdf = path_ptr[].lastBsdfPdf
                 # Uniform env: NEE cosine-hemisphere samples it, so the light pdf
                 # for this (cosine-sampled) direction equals pdf_bsdf -> MIS 0.5.

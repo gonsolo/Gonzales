@@ -431,6 +431,16 @@ struct Material_C(TrivialRegisterPassable):
     # (a texture-times-texture product) are not representable and warn there.
     var tex_scale: RGB
     var tex_bias:  RGB
+    # For a subsurface boundary (sss_boundary == 1): the MEAN reflectance the
+    # interior medium's coefficients were inverted from. The interior is one
+    # homogeneous medium, so a textured `reflectance` has to be collapsed to a
+    # single value to build it -- but the diffuse reflectance a point SHOULD
+    # show is its own texel, not that mean, and with the mean alone the head
+    # renders flat: measured 23% less spatial detail and 36% less red-channel
+    # hue variation than pbrt. `_tex_lookup` already resolves this material's
+    # reflectance texture graph, so dividing that lookup by this mean gives
+    # the per-point correction. RGB(1) (i.e. inert) for every other material.
+    var sss_mean_refl: RGB
 
 # ── Measured (tabulated) BRDF ────────────────────────────────────────────────
 # One instance per distinct ".bsdf" tensor file (deduped by path — a scene may

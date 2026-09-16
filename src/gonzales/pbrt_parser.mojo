@@ -2101,6 +2101,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
         mats[i].bump_tex_idx = nm3.bump_tex_idx
         mats[i].bump_scale = nm3.bump_scale
         mats[i].tex_scale = nm3.tex_scale
+        mats[i].sss_mean_refl = nm3.sss_mean_refl
         mats[i].tex_bias = nm3.tex_bias
         mats[i].rough_tex_idx = nm3.rough_tex_idx
         mats[i].medium_interface_idx = Int32(-1)
@@ -2253,6 +2254,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             mats[al_mat_base + al_idx].bump_tex_idx = Int32(-1)
             mats[al_mat_base + al_idx].bump_scale = Float32(1)
             mats[al_mat_base + al_idx].tex_scale = RGB(Float32(1))
+            mats[al_mat_base + al_idx].sss_mean_refl = RGB(Float32(1))
             mats[al_mat_base + al_idx].tex_bias = RGB(Float32(0))
             mats[al_mat_base + al_idx].rough_tex_idx = Int32(-1)
             mats[al_mat_base + al_idx].medium_interface_idx = Int32(-1)
