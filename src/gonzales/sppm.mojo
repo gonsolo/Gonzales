@@ -34,7 +34,7 @@ from .sampling import power_heuristic
 from .transform import transform_normal_by_instance
 from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
-from .postprocess import write_image, denoise
+from .postprocess import write_image, write_image_cropwindow, denoise
 from .gpu import GpuSceneHandle
 from .spectrum import (
     SampledWavelengths, SpectralSample, sample_wavelengths_uniform,
@@ -2335,8 +2335,9 @@ def sppm_render(
         denoise(out_pixels, albedo_pixels, normals, depth, psc[0].film_w, psc[0].film_h,
                 denoised, Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
 
-    _ = write_image(denoised, psc[0].film_w, psc[0].film_h,
-                    psc[0].film_filename, Int32(32), Int32(32))
+    _ = write_image_cropwindow(denoised, psc[0].film_w, psc[0].film_h,
+        psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
+        psc[0].film_filename, Int32(32), Int32(32))
 
     out_pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
     return Int32(0)

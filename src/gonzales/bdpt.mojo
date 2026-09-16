@@ -32,7 +32,7 @@ from .sampling import power_heuristic, sample_ggx_vndf, sample_cosine_hemisphere
 from .rng import PCG32
 from .transform import matrix_invert
 from .pbrt_parser import ParsedScene_Mojo
-from .postprocess import write_image, denoise
+from .postprocess import write_image, write_image_cropwindow, denoise
 from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_area_light_uniform, _HSIZE, _hash_cell, _sppm_render_core
 from .sppm import (
     SPPMPixel, SPPMPhoton, _sppm_reset_grid_cell, _sppm_insert_photon,
@@ -4522,7 +4522,9 @@ def vcm_render(
         denoise(pixels, albedo_pixels, normals, depth, psc[0].film_w, psc[0].film_h,
                 denoised, Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
 
-    _ = write_image(denoised, psc[0].film_w, psc[0].film_h, psc[0].film_filename, Int32(32), Int32(32))
+    _ = write_image_cropwindow(denoised, psc[0].film_w, psc[0].film_h,
+        psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
+        psc[0].film_filename, Int32(32), Int32(32))
     pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
     return Int32(0)
 
@@ -5859,7 +5861,9 @@ def vcm_render_gpu(
                 denoise(pixels, albedo_pixels, normals, depth, psc[0].film_w, psc[0].film_h,
                         denoised, Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
 
-            _ = write_image(denoised, psc[0].film_w, psc[0].film_h, psc[0].film_filename, Int32(32), Int32(32))
+            _ = write_image_cropwindow(denoised, psc[0].film_w, psc[0].film_h,
+        psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
+        psc[0].film_filename, Int32(32), Int32(32))
             pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
         except e:
             print("VCM GPU render failed: " + String(e))
@@ -6573,7 +6577,9 @@ def vcm_render_gpu_wavefront(
                 denoise(pixels, albedo_pixels, normals, depth, psc[0].film_w, psc[0].film_h,
                         denoised, Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
 
-            _ = write_image(denoised, psc[0].film_w, psc[0].film_h, psc[0].film_filename, Int32(32), Int32(32))
+            _ = write_image_cropwindow(denoised, psc[0].film_w, psc[0].film_h,
+        psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
+        psc[0].film_filename, Int32(32), Int32(32))
             pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
         except e:
             print("VCM GPU wavefront render failed: " + String(e))
@@ -7215,8 +7221,9 @@ def sppm_render_gpu(
                 denoise(out_pixels, albedo_pixels, normals, depth, psc[0].film_w, psc[0].film_h,
                         denoised, Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
 
-            _ = write_image(denoised, psc[0].film_w, psc[0].film_h,
-                            psc[0].film_filename, Int32(32), Int32(32))
+            _ = write_image_cropwindow(denoised, psc[0].film_w, psc[0].film_h,
+                psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
+                psc[0].film_filename, Int32(32), Int32(32))
             out_pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
         except e:
             print("SPPM GPU render failed: " + String(e))

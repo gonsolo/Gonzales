@@ -1,5 +1,5 @@
 from std.ffi import external_call
-from std.math import exp
+from std.math import exp, ceil
 from std.memory import alloc
 from std.collections import List
 from .geometry import RGB
@@ -344,3 +344,28 @@ def write_image_cropped[Opx: Origin[mut=True]](
                                     filename, tile_w, tile_h)
     cropped.free()
     return ret
+
+
+# Film "float cropwindow", from the NORMALIZED [0,1] bounds the parser stores,
+# in one place. The ceil() convention has to match pbrt's own Film pixel-bounds
+# computation exactly (verified against a real cropwindow scene's reference
+# render), which is precisely why it should not be open-coded per call site:
+# it used to live only in pipeline.mojo, so `--sppm`/`--vcm` -- whose render+
+# write sites are in sppm.mojo/bdpt.mojo -- wrote the FULL frame and silently
+# ignored the crop (head.pbrt, cropwindow [.3 .8 .15 .7], came out uncropped
+# under both while the path tracer and pbrt agreed).
+def write_image_cropwindow[Opx: Origin[mut=True]](
+    pixels: UnsafePointer[Float32, Opx],
+    full_w: Int32, full_h: Int32,
+    cx0: Float32, cy0: Float32, cx1: Float32, cy1: Float32,
+    filename: UnsafePointer[UInt8, MutExternalOrigin],
+    tile_w: Int32, tile_h: Int32,
+) -> Int32:
+    var crop_x0px = Int32(ceil(cx0 * Float32(full_w)))
+    var crop_y0px = Int32(ceil(cy0 * Float32(full_h)))
+    var crop_x1px = Int32(ceil(cx1 * Float32(full_w)))
+    var crop_y1px = Int32(ceil(cy1 * Float32(full_h)))
+    return write_image_cropped(pixels, full_w, full_h,
+                               crop_x0px, crop_y0px,
+                               crop_x1px - crop_x0px, crop_y1px - crop_y0px,
+                               filename, tile_w, tile_h)
