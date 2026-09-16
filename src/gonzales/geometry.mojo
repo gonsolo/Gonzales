@@ -2,7 +2,7 @@ from std.ffi import external_call
 from std.memory import alloc
 from std.math import sqrt, acos, atan2, cos, sin, min, max, abs, floor, log, exp
 from std.sys.info import align_of
-from gonzales.spectrum import SampledWavelengths, SpectralSample, spec_refl_unbounded
+from gonzales.spectrum import SampledWavelengths, SpectralSample, spec_refl_unbounded, rgb_illuminant_to_spectral_sample
 from gonzales.nanovdb import nvdb_sample_index, nvdb_majorant_at, nvdb_leaf_base, nvdb_leaf_value
 from gonzales.rng import PCG32
 
@@ -998,27 +998,44 @@ struct Medium_C(TrivialRegisterPassable):
 # separate rather than forced through one return shape. See
 # docs/09_volumetric_media.md, "One shared free-flight core".
 @fieldwise_init
-struct HomogeneousFreeFlight(TrivialRegisterPassable):
-    """Result of sampling a free-flight distance through a homogeneous medium
-    by its red/hero-wavelength extinction coefficient (the same "sample by
-    one channel, let the rest cancel analytically" convention used
-    throughout gonzales's spectral MIS)."""
+struct FreeFlight(TrivialRegisterPassable):
+    """Result of sampling a free-flight distance through a medium by its
+    red/hero-wavelength extinction coefficient (the same "sample by one
+    channel, let the rest cancel analytically" convention used throughout
+    gonzales's spectral MIS). Produced by `sample_free_flight`, which picks
+    the homogeneous closed form or heterogeneous delta tracking; the fields
+    below mean the same thing either way, so a caller needs no branch."""
     var collided: Bool
     var t_free: Float32     # sampled distance (meaningful either way)
-    var sig_t:   Float32    # red-channel extinction sigma_a.r + sigma_s.r
+    var sig_t:   Float32    # red-channel extinction ACTUALLY IN FORCE at the sampled
+                            # point: sigma_a.r + sigma_s.r for a homogeneous medium,
+                            # density(x) * that for a heterogeneous one -- so a caller's
+                            # `sig_t * exp(-sig_t * t_free)` pdf stays meaningful in both
+                            # cases and reduces exactly to the old expression at density 1.
     var albedo:  RGB        # single-scattering albedo at the collision point (only if collided)
     var weight:  RGB        # per-channel chromatic WEIGHT, meaningful in BOTH branches.
                             # A pure RATIO to the sampled (red) channel, never a raw
                             # Beer-Lambert factor -- exactly 1 on red, and exactly 1 on
                             # every channel for a grey medium. Callers must multiply it
-                            # into beta/flux in BOTH branches.
+                            # into beta/flux in BOTH branches. Heterogeneous media leave
+                            # it at 1: their majorant/accept-reject decisions are
+                            # red-channel-only, so there is no per-channel ratio to carry
+                            # (real chromatic extinction in a density field is the same
+                            # separate, unimplemented piece of work the path tracer's own
+                            # heterogeneous branch documents).
+    var emission: SpectralSample  # in-scattered volumetric EMISSION accumulated along the
+                            # tracked segment (pbrt NanoVDBMedium's temperature grid),
+                            # already spectral and already weighted by each candidate's
+                            # absorption fraction -- the caller multiplies by its own
+                            # throughput and adds. Zero for every non-emissive medium and
+                            # for the whole homogeneous branch.
 
 @always_inline
-def sample_homogeneous_free_flight(med: Medium_C, t_surf: Float32, mut pcg: PCG32) -> HomogeneousFreeFlight:
+def sample_homogeneous_free_flight(med: Medium_C, t_surf: Float32, mut pcg: PCG32) -> FreeFlight:
     var sigma_t = med.sigma_a + med.sigma_s
     var sig_t = sigma_t.r
     if sig_t <= Float32(0.0):
-        return HomogeneousFreeFlight(False, t_surf, sig_t, RGB(Float32(0)), RGB(Float32(1)))
+        return FreeFlight(False, t_surf, sig_t, RGB(Float32(0)), RGB(Float32(1)), SpectralSample(Float32(0)))
     var t_free = -log(max(pcg.next_float(), Float32(1e-7))) / sig_t
     if t_free < t_surf:
         var alb_s = med.sigma_s.r / sig_t
@@ -1046,9 +1063,10 @@ def sample_homogeneous_free_flight(med: Medium_C, t_surf: Float32, mut pcg: PCG3
                   if sigma_t.g > Float32(0.0) else Float32(1.0))
         var wb = (exp(-(sigma_t.b - sigma_t.r) * t_free) * sigma_t.b / sig_t
                   if sigma_t.b > Float32(0.0) else Float32(1.0))
-        return HomogeneousFreeFlight(True, t_free, sig_t,
+        return FreeFlight(True, t_free, sig_t,
                                      RGB(alb_s, alb_g_s, alb_b_s),
-                                     RGB(Float32(1.0), wg, wb))
+                                     RGB(Float32(1.0), wg, wb),
+                                     SpectralSample(Float32(0)))
     # Pass-through WEIGHT, not the raw Beer-Lambert factor. The distance was
     # sampled from the red channel, so P(reach the surface) is ALREADY
     # exp(-sigma_t.r * t_surf) -- that channel's transmittance is carried by
@@ -1072,11 +1090,11 @@ def sample_homogeneous_free_flight(med: Medium_C, t_surf: Float32, mut pcg: PCG3
     var Tr = RGB(Float32(1.0),
                  exp(-sigma_t.g * t_surf) / t_ref,
                  exp(-sigma_t.b * t_surf) / t_ref)
-    return HomogeneousFreeFlight(False, t_free, sig_t, RGB(Float32(0)), Tr)
+    return FreeFlight(False, t_free, sig_t, RGB(Float32(0)), Tr, SpectralSample(Float32(0)))
 
 
 # ── Genuinely spectral free-flight weight (chromatic media) ─────────────────
-# `HomogeneousFreeFlight.weight` above is a RATIO computed entirely in RGB
+# `FreeFlight.weight` above is a RATIO computed entirely in RGB
 # (exp(-sigma_t.g*t), exp(-sigma_t.b*t), ...) and every caller used to lift it
 # into the 4 hero lanes by BAND-PICKING that already-exponentiated triple --
 # i.e. selecting, per lane, which of the 3 RGB ratios to read. Band-picking a
@@ -1156,7 +1174,7 @@ def medium_transmittance_ratio_spectral(
 
 @always_inline
 def spectral_free_flight_weight(
-    med: Medium_C, ff: HomogeneousFreeFlight, t_surf: Float32, wavelengths: SampledWavelengths,
+    med: Medium_C, ff: FreeFlight, t_surf: Float32, wavelengths: SampledWavelengths,
     spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
     spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
     spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
@@ -1179,6 +1197,18 @@ def spectral_free_flight_weight(
     extinction" for the derivation and the measured before/after."""
     var sig_t_r = med.sigma_a.r + med.sigma_s.r
     if sig_t_r <= Float32(0.0):
+        return SpectralSample(Float32(1.0))
+    # A density-modulated medium has NO chromatic ratio to carry: its free
+    # flight accepts/rejects on the red channel alone, so `ff.weight` comes
+    # back at 1 and the correct spectral weight is 1 too. Guarding HERE rather
+    # than at all five consumers (bdpt.mojo x4, sppm.mojo x1) keeps the rule in
+    # the one place that owns it -- and it matters: sigma_a/sigma_s are
+    # PER-UNIT-DENSITY coefficients for such a medium (see Medium_C), so
+    # feeding them to the Beer-Lambert exponential below would weight by an
+    # extinction the sampler never used. Real chromatic extinction in a density
+    # field is the same separate, unimplemented piece of work the path tracer's
+    # own heterogeneous branch documents.
+    if medium_is_heterogeneous(med):
         return SpectralSample(Float32(1.0))
     # sig_t_spec computed ONCE and reused for both the d0..d3 ratio and (on
     # collision) the extra r0..r3 factor -- deliberately NOT routed through
@@ -2058,3 +2088,211 @@ def intersect_triangle(
         return (False, tMax, 0.0, 0.0)
 
     return (True, t, u, v)
+
+
+# ── One free-flight sampler for every integrator ───────────────────────────────
+# `sample_homogeneous_free_flight` above handles the closed-form case. Everything
+# from here down is the HETEROGENEOUS half plus the dispatcher that picks between
+# them, so that a caller writes one call and gets the right estimator.
+#
+# This used to live inline in gpu.mojo's `_sample_medium_core`, which meant the
+# PLAIN PATH TRACER was the only integrator that ever sampled a density field:
+# SPPM (sppm.mojo) and BDPT/VCM (bdpt.mojo) called
+# `sample_homogeneous_free_flight` UNCONDITIONALLY, so for any "uniformgrid",
+# "nanovdb" or procedural-"cloud" medium they used sigma_a/sigma_s -- which are
+# PER-UNIT-DENSITY coefficients for such a medium, see Medium_C -- as if they
+# were the absolute extinction, i.e. density identically 1 everywhere inside the
+# bounding shape. bunny-cloud rendered as a featureless fog-filled sphere with no
+# bunny in it, and clouds as flat noise, under both integrators (2026-09-16, found
+# by the 4-way integrator-switcher gallery putting them beside the path tracer).
+# Moving the loop here rather than copying it into two more files is the whole
+# point: there is exactly one delta tracker, and it is this one.
+comptime MEDIUM_TRACK_MAX_ITERS: Int = 10000  # delta/ratio-tracking loop safety bound
+
+@always_inline
+def medium_is_heterogeneous(med: Medium_C) -> Bool:
+    """True if this medium's extinction is modulated by a density field, from
+    EITHER source -- dense "uniformgrid" (grid_idx) or sparse "nanovdb"
+    (nvdb_idx); the parser never sets both. The one place that question is
+    asked, so a consumer never open-codes `grid_idx >= 0 or nvdb_idx >= 0` and
+    silently forgets one of the two sources."""
+    return med.grid_idx >= Int32(0) or med.nvdb_idx >= Int32(0)
+
+@always_inline
+def medium_grid_for(
+    med: Medium_C, grids: UnsafePointer[Grid_C, MutExternalOrigin]
+) -> Grid_C:
+    """`grids[med.grid_idx]`, or an inert zero-extent placeholder when this
+    medium has no dense grid -- a homogeneous or nanovdb medium has
+    grid_idx == -1 and must never index that array. Exists so the placeholder
+    literal is written ONCE instead of at every site that needs a Grid_C in
+    scope (free-flight sampling, NEE ratio tracking, shadow rays)."""
+    if med.grid_idx < Int32(0):
+        return Grid_C(
+            UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+            Int32(0), Int32(0), Int32(0),
+            Point3f(Float32(0), Float32(0), Float32(0)),
+            Point3f(Float32(0), Float32(0), Float32(0)),
+            SIMD[DType.float32, 16](0), Float32(0))
+    return grids[Int(med.grid_idx)]
+
+@always_inline
+def medium_nvdb_for(
+    med: Medium_C, nvdb_grids: UnsafePointer[NvdbGrid_C, MutExternalOrigin]
+) -> NvdbGrid_C:
+    """`nvdb_grids[med.nvdb_idx]`, or an inert placeholder. See medium_grid_for."""
+    if med.nvdb_idx < Int32(0):
+        return NvdbGrid_C(
+            UnsafePointer[UInt8, MutExternalOrigin].unsafe_dangling(), Int64(0),
+            SIMD[DType.float32, 16](0), SIMD[DType.float32, 16](0),
+            Vec3f(Float32(0), Float32(0), Float32(0)),
+            Point3f(Float32(0), Float32(0), Float32(0)),
+            Point3f(Float32(0), Float32(0), Float32(0)), Float32(0))
+    return nvdb_grids[Int(med.nvdb_idx)]
+
+@always_inline
+def medium_emission_spectral(
+    c: RGB, wl: SampledWavelengths,
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
+) -> SpectralSample:
+    """RGB emission/radiance -> spectral, at the light boundary inside a medium.
+    Falls back to a flat spectrum when no spectral table is loaded, so a
+    table-less build still transports the RGB magnitude. (Was gpu.mojo's
+    `_med_spec_illum`; moved here so the shared tracker below can apply it to
+    each emission candidate exactly where the path tracer used to.)"""
+    if spectral_res <= 0:
+        return SpectralSample(c.r, c.g, c.b, (c.r + c.g + c.b) * Float32(0.3333333))
+    return rgb_illuminant_to_spectral_sample(spectral_coeffs, spectral_res,
+        spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, c.r, c.g, c.b, wl)
+
+def sample_free_flight(
+    med: Medium_C,
+    grids: UnsafePointer[Grid_C, MutExternalOrigin],
+    nvdb_grids: UnsafePointer[NvdbGrid_C, MutExternalOrigin],
+    ray_org: Vec3f,
+    ray_dir: Vec3f,
+    t_surf: Float32,
+    mut pcg: PCG32,
+    # Inert placeholder: only ever reached when a caller omits the emission
+    # arguments, and then spectral_res is 0 too, so medium_emission_spectral
+    # takes its flat-spectrum fallback and never reads these.
+    wavelengths: SampledWavelengths = SampledWavelengths(
+        Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_res: Int = 0,
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+) -> FreeFlight:
+    """Sample a free-flight distance through `med` along `ray_org + t*ray_dir`,
+    up to the surface at `t_surf`. THE entry point every integrator should use:
+    homogeneous media take the analytic closed form, heterogeneous ones take
+    delta tracking against a local majorant, and both come back in the same
+    `FreeFlight` shape.
+
+    The emission arguments are optional and only do anything for an emissive
+    nanovdb medium (pbrt NanoVDBMedium's temperature grid); a caller that does
+    not model volumetric emission can omit them and ignore `.emission`.
+
+    Both heterogeneous sources use the RED channel exclusively for
+    majorant/accept-reject decisions: exact for the achromatic density fields
+    supported today, would need per-wavelength free-flight sampling with
+    spectral MIS to extend to a colored density field. See
+    docs/09_volumetric_media.md for the delta/ratio-tracking theory and the
+    local-majorant optimization."""
+    if not medium_is_heterogeneous(med):
+        return sample_homogeneous_free_flight(med, t_surf, pcg)
+
+    var sigma_t = med.sigma_a + med.sigma_s
+    # Resolve which density source this medium has ONCE, not per iteration:
+    # they differ only in the per-candidate lookup and the majorant.
+    var use_nvdb = med.nvdb_idx >= Int32(0)
+    var grid = medium_grid_for(med, grids)
+    var nvdb_grid = medium_nvdb_for(med, nvdb_grids)
+    var majorant_density = nvdb_grid.max_density if use_nvdb else grid.max_density
+    var sigma_maj = majorant_density * sigma_t.r
+    var emission = SpectralSample(Float32(0))
+    if sigma_maj <= Float32(0.0):
+        return FreeFlight(False, t_surf, Float32(0), RGB(Float32(0)), RGB(Float32(1)), emission)
+
+    # ── Segment-wise tracking with LOCAL majorants ─────────────────────────
+    # Walk the ray one NanoVDB tree node at a time, using that node's own max
+    # density as the local majorant (6.7x on disney-cloud vs one global
+    # majorant -- see docs/09_volumetric_media.md, "Local majorants").
+    # Unbiased by the memorylessness of the exponential: an overshoot just
+    # resumes sampling from the segment boundary under the next node's
+    # majorant. uniformgrid keeps one segment spanning the whole ray under the
+    # global majorant (no per-node structure to walk).
+    var t = Float32(0.0)
+    var collided = False
+    var iters = 0
+    var seg_end = Float32(-1.0)       # < t forces a majorant query on entry
+    var sigma_maj_seg = Float32(0.0)
+    var density = Float32(0.0)
+    var iray = nvdb_index_ray(nvdb_grid, ray_org, ray_dir) if use_nvdb else SIMD[DType.float32, 8](0)
+    while iters < MEDIUM_TRACK_MAX_ITERS:
+        iters += 1
+        if t >= seg_end:
+            if t >= t_surf:
+                break
+            if use_nvdb:
+                var mr = nvdb_majorant_at_world(nvdb_grid, ray_org + t * ray_dir)
+                sigma_maj_seg = mr[0] * sigma_t.r
+                seg_end = min(nvdb_node_exit_t(iray, t, mr[1]), t_surf)
+            else:
+                sigma_maj_seg = sigma_maj
+                seg_end = t_surf
+            if sigma_maj_seg <= Float32(0.0):
+                t = seg_end
+                continue
+        var u = pcg.next_float()
+        var t_next = t + (-log(max(u, Float32(1e-7))) / sigma_maj_seg)
+        if t_next >= seg_end:
+            t = seg_end
+            continue
+        t = t_next
+        var p_world = ray_org + t * ray_dir
+        density = nvdb_sample_density(nvdb_grid, p_world) if use_nvdb else grid_sample_density(grid, p_world)
+        # ── Volumetric emission (pbrt NanoVDBMedium) ───────────────────────
+        # Accumulated at EVERY majorant candidate, weighted by the local
+        # absorption fraction sigma_a/sigma_maj: that is the standard unbiased
+        # estimator of the emitted-radiance integral along the segment when
+        # distances are drawn against the majorant, and it must happen before
+        # the collision test below (which breaks out of the loop) so emission
+        # from the pass-through candidates is not silently dropped.
+        # Temperature comes from a SECOND nanovdb grid stored as an ordinary
+        # entry in the same array, so this reuses nvdb_sample_density
+        # unchanged. Non-emissive media take the nvdb_temp_idx < 0 branch and
+        # pay nothing.
+        if med.nvdb_temp_idx >= Int32(0) and med.le_scale > Float32(0.0):
+            var tgrid = nvdb_grids[Int(med.nvdb_temp_idx)]
+            var tk = (nvdb_sample_density(tgrid, p_world) - med.temp_offset) * med.temp_scale
+            if tk > Float32(100.0):
+                var sigma_a_real = density * med.sigma_a.r
+                emission += medium_emission_spectral(
+                    blackbody_rgb(tk), wavelengths, spectral_coeffs, spectral_res,
+                    spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65
+                ) * (med.le_scale * sigma_a_real / sigma_maj_seg)
+        var sigma_t_real = density * sigma_t.r
+        var u2 = pcg.next_float()
+        if u2 < sigma_t_real / sigma_maj_seg:
+            collided = True
+            break
+    if not collided:
+        return FreeFlight(False, t, Float32(0), RGB(Float32(0)), RGB(Float32(1)), emission)
+
+    # `sig_t` is the extinction ACTUALLY in force at the collision point
+    # (density-scaled), so a caller's analytic `sig_t * exp(-sig_t * t_free)`
+    # pdf stays meaningful and reduces exactly to the homogeneous expression at
+    # density 1. The single-scattering albedo needs no density factor at all --
+    # it cancels between sigma_s and sigma_t.
+    var inv_sig_t = Float32(1.0) / max(sigma_t.r, Float32(1e-7))
+    var alb = RGB(med.sigma_s.r * inv_sig_t,
+                  med.sigma_s.g / max(sigma_t.g, Float32(1e-7)) if sigma_t.g > Float32(0.0) else med.sigma_s.r * inv_sig_t,
+                  med.sigma_s.b / max(sigma_t.b, Float32(1e-7)) if sigma_t.b > Float32(0.0) else med.sigma_s.r * inv_sig_t)
+    return FreeFlight(True, t, density * sigma_t.r, alb, RGB(Float32(1)), emission)

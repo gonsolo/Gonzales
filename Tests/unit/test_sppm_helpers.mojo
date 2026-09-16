@@ -14,7 +14,7 @@ from gonzales.geometry import (
 from gonzales.sppm import (
     _hash_cell, _cosine_hemisphere_sample, sample_homogeneous_free_flight,
     sample_area_light_uniform, _geom_normal, _shading_normal_at, _dielectric_bounce,
-    HomogeneousFreeFlight, AreaLightSample, _HSIZE,
+    FreeFlight, AreaLightSample, _HSIZE,
 )
 from gonzales.rng import PCG32
 

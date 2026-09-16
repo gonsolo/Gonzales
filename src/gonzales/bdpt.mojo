@@ -17,7 +17,8 @@ from .geometry import (
     Sphere_C, Curve_C, PrimId_C, Instance_C, DistantLight_C, InfiniteLight_C, PointLight_C,
     MeasuredBRDF_C, GpuTexture_C,
     dot, cross, fr_dielectric, sphere_outward_normal, refract, PI, INV_FOUR_PI, INV_PI,
-    HomogeneousFreeFlight, sample_homogeneous_free_flight, medium_sigma_t_spectral,
+    FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral,
+    Grid_C, NvdbGrid_C,
     spectral_free_flight_weight,
 )
 from .bvh import (
@@ -1817,7 +1818,14 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
         # Volume free-flight
         if has_med and Int(cur_med_idx) >= 0:
             var med = sd.mediums[Int(cur_med_idx)]
-            var ff = sample_homogeneous_free_flight(med, t_hit, pcg)
+            # ONE shared sampler for both medium kinds (geometry.mojo):
+            # homogeneous closed form, or delta tracking against the real
+            # density field. This call site used to be the homogeneous one
+            # unconditionally, which rendered every "uniformgrid"/"nanovdb"/
+            # "cloud" medium as uniform density-1 fog -- bunny-cloud came out a
+            # featureless sphere with no bunny in it. See sample_free_flight.
+            var ff = sample_free_flight(
+                med, sd.grids, sd.nvdbGrids, Vec3f(ro.x, ro.y, ro.z), rd, t_hit, pcg)
             if ff.collided:
                 # Chromatic collision weight -- the ratio to the sampled (red)
                 # channel. Without it a chromatic medium is biased at every
@@ -3078,7 +3086,14 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         # Volume free-flight
         if has_med and Int(cur_med_idx) >= 0:
             var med = sd.mediums[Int(cur_med_idx)]
-            var ff = sample_homogeneous_free_flight(med, t_hit, pcg)
+            # ONE shared sampler for both medium kinds (geometry.mojo):
+            # homogeneous closed form, or delta tracking against the real
+            # density field. This call site used to be the homogeneous one
+            # unconditionally, which rendered every "uniformgrid"/"nanovdb"/
+            # "cloud" medium as uniform density-1 fog -- bunny-cloud came out a
+            # featureless sphere with no bunny in it. See sample_free_flight.
+            var ff = sample_free_flight(
+                med, sd.grids, sd.nvdbGrids, Vec3f(ro.x, ro.y, ro.z), rd, t_hit, pcg)
             if ff.collided:
                 # Chromatic collision weight; see the camera-side comment.
                 flux *= spectral_free_flight_weight(med, ff, t_hit, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
@@ -4575,6 +4590,12 @@ def _bdpt_emit_light_paths_gpu(
     measuredBrdfCount: Int64 = Int64(0),
     gpuTextures: UnsafePointer[GpuTexture_C, MutExternalOrigin] = UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(),
     gpuTextureCount: Int64 = Int64(0),
+    # Device-resident density fields, for the free-flight sampler (see the
+    # matching comment on the bounce kernels).
+    grids: UnsafePointer[Grid_C, MutExternalOrigin] = UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling(),
+    n_grids: Int64 = Int64(0),
+    nvdb_grids: UnsafePointer[NvdbGrid_C, MutExternalOrigin] = UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling(),
+    n_nvdb_grids: Int64 = Int64(0),
 ):
     var spectral_res = Int(spectral_res_dp)
     var n_light_paths = Int(n_light_paths_dp)
@@ -4599,6 +4620,7 @@ def _bdpt_emit_light_paths_gpu(
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
         measuredBrdfs, measuredBrdfCount,
         gpuTextures, gpuTextureCount,
+        grids=grids, gridCount=n_grids, nvdbGrids=nvdb_grids, nvdbGridCount=n_nvdb_grids,
     )
     var has_med = mediumCount > Int64(0)
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
@@ -4773,6 +4795,12 @@ def _bdpt_camera_connect_gpu(
     measuredBrdfCount: Int64 = Int64(0),
     gpuTextures: UnsafePointer[GpuTexture_C, MutExternalOrigin] = UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(),
     gpuTextureCount: Int64 = Int64(0),
+    # Device-resident density fields, for the free-flight sampler (see the
+    # matching comment on the bounce kernels).
+    grids: UnsafePointer[Grid_C, MutExternalOrigin] = UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling(),
+    n_grids: Int64 = Int64(0),
+    nvdb_grids: UnsafePointer[NvdbGrid_C, MutExternalOrigin] = UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling(),
+    n_nvdb_grids: Int64 = Int64(0),
 ):
     var spectral_res = Int(spectral_res_dp)
     var n_pix = Int(n_pix_dp)
@@ -4803,6 +4831,7 @@ def _bdpt_camera_connect_gpu(
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
         measuredBrdfs, measuredBrdfCount,
         gpuTextures, gpuTextureCount,
+        grids=grids, gridCount=n_grids, nvdbGrids=nvdb_grids, nvdbGridCount=n_nvdb_grids,
     )
     var has_med = mediumCount > Int64(0)
     var px = pix % fw
@@ -4997,6 +5026,13 @@ def _bdpt_light_path_bounce_gpu(
     measuredBrdfCount: Int64 = Int64(0),
     gpuTextures: UnsafePointer[GpuTexture_C, MutExternalOrigin] = UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(),
     gpuTextureCount: Int64 = Int64(0),
+    # Device-resident density fields, for the free-flight sampler. Without
+    # these the descriptor built below reports no density fields and every
+    # heterogeneous medium samples as uniform density-1 fog.
+    grids: UnsafePointer[Grid_C, MutExternalOrigin] = UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling(),
+    n_grids: Int64 = Int64(0),
+    nvdb_grids: UnsafePointer[NvdbGrid_C, MutExternalOrigin] = UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling(),
+    n_nvdb_grids: Int64 = Int64(0),
 ):
     var spectral_res = Int(spectral_res_dp)
     var n_light_paths = Int(n_light_paths_dp)
@@ -5019,6 +5055,7 @@ def _bdpt_light_path_bounce_gpu(
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
         measuredBrdfs, measuredBrdfCount,
         gpuTextures, gpuTextureCount,
+        grids=grids, gridCount=n_grids, nvdbGrids=nvdb_grids, nvdbGridCount=n_nvdb_grids,
     )
     var has_med = mediumCount > Int64(0)
     var pcg = PCG32(UInt64(0), UInt64(0))
@@ -5174,6 +5211,13 @@ def _bdpt_camera_path_bounce_gpu(
     shadow_pending: UnsafePointer[SpectralSample, MutExternalOrigin] = UnsafePointer[SpectralSample, MutExternalOrigin].unsafe_dangling(),
     shadow_valid: UnsafePointer[Int8, MutExternalOrigin] = UnsafePointer[Int8, MutExternalOrigin].unsafe_dangling(),
     shadow_seg_med: UnsafePointer[Int32, MutExternalOrigin] = UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
+    # Device-resident density fields, for the free-flight sampler. Without
+    # these the descriptor built below reports no density fields and every
+    # heterogeneous medium samples as uniform density-1 fog.
+    grids: UnsafePointer[Grid_C, MutExternalOrigin] = UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling(),
+    n_grids: Int64 = Int64(0),
+    nvdb_grids: UnsafePointer[NvdbGrid_C, MutExternalOrigin] = UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling(),
+    n_nvdb_grids: Int64 = Int64(0),
 ):
     var spectral_res = Int(spectral_res_dp)
     var n_pix = Int(n_pix_dp)
@@ -5197,6 +5241,7 @@ def _bdpt_camera_path_bounce_gpu(
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
         measuredBrdfs, measuredBrdfCount,
         gpuTextures, gpuTextureCount,
+        grids=grids, gridCount=n_grids, nvdbGrids=nvdb_grids, nvdbGridCount=n_nvdb_grids,
     )
     var has_med = mediumCount > Int64(0)
     var pcg = PCG32(UInt64(0), UInt64(0))
@@ -5651,6 +5696,12 @@ def vcm_render_gpu(
             var instances = handle[].instances_buf.unsafe_ptr().bitcast[Instance_C]()
             var materials = handle[].materials_buf.unsafe_ptr().bitcast[Material_C]()
             var mediums = handle[].mediums_buf.unsafe_ptr().bitcast[Medium_C]()
+            # Device-resident density fields for the free-flight sampler. These
+            # were never handed to the VCM/SPPM kernels before, which is exactly
+            # why those integrators sampled every heterogeneous medium as uniform
+            # density-1 fog -- see geometry.mojo's sample_free_flight.
+            var grids_dev = handle[].grids_buf.unsafe_ptr().bitcast[Grid_C]()
+            var nvdb_grids_dev = handle[].nvdb_grids_buf.unsafe_ptr().bitcast[NvdbGrid_C]()
             var mediumInterfaces = handle[].medium_ifaces_buf.unsafe_ptr().bitcast[MediumInterface_C]()
             var spheres = handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C]()
             var areaLights = handle[].lights.area_lights_ptr()
@@ -5710,6 +5761,7 @@ def vcm_render_gpu(
                     spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
                     measured_brdfs, n_measured_brdfs,
                     gpu_textures, n_gpu_textures,
+                    grids_dev, Int64(handle[].n_grids), nvdb_grids_dev, Int64(handle[].n_nvdb_grids),
                     grid_dim=grid_light, block_dim=block_size)
 
                 # VCM Stage 2b: light paths are deterministically paired with
@@ -5739,6 +5791,7 @@ def vcm_render_gpu(
                     spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
                     measured_brdfs, n_measured_brdfs,
                     gpu_textures, n_gpu_textures,
+                    grids_dev, Int64(handle[].n_grids), nvdb_grids_dev, Int64(handle[].n_nvdb_grids),
                     grid_dim=grid_pix, block_dim=block_size)
 
                 # Phase 1.5: t=1 light tracing, the GPU counterpart of
@@ -6216,6 +6269,12 @@ def vcm_render_gpu_wavefront(
             var instances = handle[].instances_buf.unsafe_ptr().bitcast[Instance_C]()
             var materials = handle[].materials_buf.unsafe_ptr().bitcast[Material_C]()
             var mediums = handle[].mediums_buf.unsafe_ptr().bitcast[Medium_C]()
+            # Device-resident density fields for the free-flight sampler. These
+            # were never handed to the VCM/SPPM kernels before, which is exactly
+            # why those integrators sampled every heterogeneous medium as uniform
+            # density-1 fog -- see geometry.mojo's sample_free_flight.
+            var grids_dev = handle[].grids_buf.unsafe_ptr().bitcast[Grid_C]()
+            var nvdb_grids_dev = handle[].nvdb_grids_buf.unsafe_ptr().bitcast[NvdbGrid_C]()
             var mediumInterfaces = handle[].medium_ifaces_buf.unsafe_ptr().bitcast[MediumInterface_C]()
             var spheres = handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C]()
             var areaLights = handle[].lights.area_lights_ptr()
@@ -6312,6 +6371,7 @@ def vcm_render_gpu_wavefront(
                         spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
                         measured_brdfs, n_measured_brdfs,
                         gpu_textures, n_gpu_textures,
+                        grids_dev, Int64(handle[].n_grids), nvdb_grids_dev, Int64(handle[].n_nvdb_grids),
                         grid_dim=grid_light, block_dim=block_size)
 
                 # VCM Stage 2b: light paths are deterministically paired with
@@ -6403,6 +6463,7 @@ def vcm_render_gpu_wavefront(
                         measured_brdfs, n_measured_brdfs,
                         gpu_textures, n_gpu_textures,
                         Int8(1) if shadow_batch_enabled else Int8(0), shadow_rays_ptr, shadow_pending_ptr, shadow_valid_ptr, shadow_seg_med_ptr,
+                        grids_dev, Int64(handle[].n_grids), nvdb_grids_dev, Int64(handle[].n_nvdb_grids),
                         grid_dim=grid_pix, block_dim=block_size)
 
                     # Task #163 stage 5 perf follow-up (2026-07-13): resolve
@@ -6593,6 +6654,13 @@ def sppm_gen_vp_gpu(
     infiniteLightCount: Int64,
     gpuTextures: UnsafePointer[GpuTexture_C, MutExternalOrigin] = UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(),
     gpuTextureCount: Int64 = Int64(0),
+    # Device-resident density fields, for the free-flight sampler. Without
+    # these the descriptor built below reports no density fields and every
+    # heterogeneous medium samples as uniform density-1 fog.
+    grids: UnsafePointer[Grid_C, MutExternalOrigin] = UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling(),
+    n_grids: Int64 = Int64(0),
+    nvdb_grids: UnsafePointer[NvdbGrid_C, MutExternalOrigin] = UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling(),
+    n_nvdb_grids: Int64 = Int64(0),
 ):
     var n_pix = Int(n_pix_dp)
     var vp_samples = Int(vp_samples_dp)
@@ -6612,6 +6680,7 @@ def sppm_gen_vp_gpu(
         blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
         distantLights, distantLightCount, infiniteLights, infiniteLightCount,
         gpuTextures=gpuTextures, gpuTextureCount=gpuTextureCount,
+        grids=grids, gridCount=n_grids, nvdbGrids=nvdb_grids, nvdbGridCount=n_nvdb_grids,
     )
     var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
     vps[combined] = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch + combined, Int(max_depth_dp))
@@ -6662,6 +6731,13 @@ def sppm_emit_photons_gpu(
     measuredBrdfCount: Int64 = Int64(0),
     gpuTextures: UnsafePointer[GpuTexture_C, MutExternalOrigin] = UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(),
     gpuTextureCount: Int64 = Int64(0),
+    # Device-resident density fields, for the free-flight sampler. Without
+    # these the descriptor built below reports no density fields and every
+    # heterogeneous medium samples as uniform density-1 fog.
+    grids: UnsafePointer[Grid_C, MutExternalOrigin] = UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling(),
+    n_grids: Int64 = Int64(0),
+    nvdb_grids: UnsafePointer[NvdbGrid_C, MutExternalOrigin] = UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling(),
+    n_nvdb_grids: Int64 = Int64(0),
 ):
     var spectral_res = Int(spectral_res_dp)
     var n_emit = Int(n_emit_dp)
@@ -6692,6 +6768,7 @@ def sppm_emit_photons_gpu(
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
         measuredBrdfs, measuredBrdfCount,
         gpuTextures, gpuTextureCount,
+        grids=grids, gridCount=n_grids, nvdbGrids=nvdb_grids, nvdbGridCount=n_nvdb_grids,
     )
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
     _sppm_trace_photon[True, True](sd, pcg, inter_scratch + k, n_emit, photons, max_photons, stored_counter, default_emit_med, Int(max_depth_dp),
@@ -6979,6 +7056,12 @@ def sppm_render_gpu(
             var instances = handle[].instances_buf.unsafe_ptr().bitcast[Instance_C]()
             var materials = handle[].materials_buf.unsafe_ptr().bitcast[Material_C]()
             var mediums = handle[].mediums_buf.unsafe_ptr().bitcast[Medium_C]()
+            # Device-resident density fields for the free-flight sampler. These
+            # were never handed to the VCM/SPPM kernels before, which is exactly
+            # why those integrators sampled every heterogeneous medium as uniform
+            # density-1 fog -- see geometry.mojo's sample_free_flight.
+            var grids_dev = handle[].grids_buf.unsafe_ptr().bitcast[Grid_C]()
+            var nvdb_grids_dev = handle[].nvdb_grids_buf.unsafe_ptr().bitcast[NvdbGrid_C]()
             var mediumInterfaces = handle[].medium_ifaces_buf.unsafe_ptr().bitcast[MediumInterface_C]()
             var spheres = handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C]()
             var areaLights = handle[].lights.area_lights_ptr()
@@ -7019,6 +7102,7 @@ def sppm_render_gpu(
                 blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
                 distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
                 gpu_textures, n_gpu_textures,
+                grids_dev, Int64(handle[].n_grids), nvdb_grids_dev, Int64(handle[].n_nvdb_grids),
                 grid_dim=grid_vps, block_dim=block_size)
 
             for pass_idx in range(n_passes):
@@ -7039,6 +7123,7 @@ def sppm_render_gpu(
                     spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
                     measured_brdfs, n_measured_brdfs,
                     gpu_textures, n_gpu_textures,
+                    grids_dev, Int64(handle[].n_grids), nvdb_grids_dev, Int64(handle[].n_nvdb_grids),
                     grid_dim=grid_emit, block_dim=block_size)
 
                 handle[].ctx.synchronize()

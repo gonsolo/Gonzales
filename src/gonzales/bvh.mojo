@@ -192,6 +192,19 @@ def _mk_sd_full(
     measuredBrdfCount: Int64 = Int64(0),
     gpuTextures: UnsafePointer[GpuTexture_C, MutExternalOrigin] = UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(),
     gpuTextureCount: Int64 = Int64(0),
+    # Heterogeneous density fields. Optional because most GPU kernels never
+    # touch a medium, but a kernel that samples free flight MUST pass the
+    # DEVICE-resident arrays (handle[].grids_buf / nvdb_grids_buf): these
+    # used to be hard-wired to the dangling sentinel with count 0 here, so
+    # every kernel built through this saw a scene with no density fields at
+    # all -- which is why SPPM/VCM sampled "uniformgrid"/"nanovdb" media as
+    # if density were uniformly 1 (see geometry.mojo's sample_free_flight).
+    # The CPU descriptor (pbrt_parser.mojo's mojo_parsed_scene_descriptor)
+    # has always set these correctly from the host arrays.
+    grids: UnsafePointer[Grid_C, MutExternalOrigin] = UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling(),
+    gridCount: Int64 = Int64(0),
+    nvdbGrids: UnsafePointer[NvdbGrid_C, MutExternalOrigin] = UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling(),
+    nvdbGridCount: Int64 = Int64(0),
 ) -> SceneDescriptor2_C:
     """Builds a complete SceneDescriptor2_C from raw GPU device pointers so
     the SAME `sd.field`-based traversal code a CPU-side function already
@@ -234,10 +247,10 @@ def _mk_sd_full(
         curves=curves, curveCount=curveCount,
         mediums=mediums, mediumCount=mediumCount,
         mediumInterfaces=mediumInterfaces, mediumIfaceCount=mediumIfaceCount,
-        grids=UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling(),
-        gridCount=Int64(0),
-        nvdbGrids=UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling(),
-        nvdbGridCount=Int64(0),
+        grids=grids,
+        gridCount=gridCount,
+        nvdbGrids=nvdbGrids,
+        nvdbGridCount=nvdbGridCount,
         lightSampler=LightSampler_C(cdf=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), n=Int32(0), _pad=Int32(0)),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, blasCount=blasCount,
         instances=instances, instanceCount=instanceCount,

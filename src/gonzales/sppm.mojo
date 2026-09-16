@@ -17,7 +17,7 @@ from .geometry import (
     Instance_C, dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI, Frame,
     Curve_C, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, InfiniteLight_C, PointLight_C,
     MeasuredBRDF_C, GpuTexture_C, _is_real_ptr,
-    HomogeneousFreeFlight, sample_homogeneous_free_flight, medium_sigma_t_spectral,
+    FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral,
     medium_transmittance_ratio_spectral, spectral_free_flight_weight,
 )
 from .bvh import (
@@ -623,7 +623,14 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         # ── Volume free-flight ────────────────────────────────────────────
         if has_media and Int(cur_med_idx) >= 0:
             var med = sd.mediums[Int(cur_med_idx)]
-            var ff = sample_homogeneous_free_flight(med, t_hit, pcg)
+            # ONE shared sampler for both medium kinds (geometry.mojo):
+            # homogeneous closed form, or delta tracking against the real
+            # density field. This call site used to be the homogeneous one
+            # unconditionally, which rendered every "uniformgrid"/"nanovdb"/
+            # "cloud" medium as uniform density-1 fog -- bunny-cloud came out a
+            # featureless sphere with no bunny in it. See sample_free_flight.
+            var ff = sample_free_flight(
+                med, sd.grids, sd.nvdbGrids, Vec3f(ro.x, ro.y, ro.z), rd, t_hit, pcg)
             if ff.collided:
                 # Volume scatter — store VP here
                 # NOTE: ff.weight (the chromatic collision ratio) is deliberately
@@ -1148,7 +1155,14 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         # ── Volume free-flight ────────────────────────────────────────────
         if has_media and Int(cur_med_idx) >= 0:
             var med = sd.mediums[Int(cur_med_idx)]
-            var ff = sample_homogeneous_free_flight(med, t_hit, pcg)
+            # ONE shared sampler for both medium kinds (geometry.mojo):
+            # homogeneous closed form, or delta tracking against the real
+            # density field. This call site used to be the homogeneous one
+            # unconditionally, which rendered every "uniformgrid"/"nanovdb"/
+            # "cloud" medium as uniform density-1 fog -- bunny-cloud came out a
+            # featureless sphere with no bunny in it. See sample_free_flight.
+            var ff = sample_free_flight(
+                med, sd.grids, sd.nvdbGrids, Vec3f(ro.x, ro.y, ro.z), rd, t_hit, pcg)
             if ff.collided:
                 # Volume scatter — store photon and sample new direction
                 var sp = ro + rd * ff.t_free
