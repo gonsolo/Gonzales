@@ -21,6 +21,7 @@ from .geometry import (
     Grid_C, NvdbGrid_C,
     spectral_free_flight_weight,
 )
+from .bssrdf import dipole_max_radius
 from .bvh import (
     BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres, _mk_sd_full,
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf,
@@ -6826,6 +6827,8 @@ def sppm_gather_gpu(
     measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutExternalOrigin] = UnsafePointer[MeasuredBRDF_C, MutExternalOrigin].unsafe_dangling(),
     measuredBrdfCount: Int64 = Int64(0),
     pass_idx_dp: Int64 = Int64(0),
+    med_arr_dp: UnsafePointer[Medium_C, MutExternalOrigin] = UnsafePointer[Medium_C, MutExternalOrigin].unsafe_dangling(),
+    med_count_dp: Int64 = Int64(0),
 ):
     var spectral_res = Int(spectral_res_dp)
     var n_pix = Int(n_pix_dp)
@@ -6854,7 +6857,7 @@ def sppm_gather_gpu(
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
         measuredBrdfs, measuredBrdfCount,
     )
-    _sppm_gather_one(vps, i, photons, heads, inv_cell, sd,
+    _sppm_gather_one(vps, i, photons, heads, inv_cell, sd, med_arr_dp, Int(med_count_dp),
                      spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
                      spectral_cie_z, spectral_d65, pass_wavelengths(Int(pass_idx_dp)))
 
@@ -7003,8 +7006,27 @@ def sppm_render_gpu(
                 default_emit_med = iface.outside_medium_idx
                 break
 
+    # A BSSRDF visible point gathers out to the material's DIFFUSION reach,
+    # which for skin is several times the SPPM radius this scene would
+    # otherwise pick. The photon grid's cells are initial_radius-sized and the
+    # gather looks at 3x3x3 of them, so the radius has to cover that reach or
+    # the neighbour search silently misses the photons carrying the subsurface
+    # signal. Widening it costs nothing on this path: R_d is normalised, so
+    # unlike a density estimate the radius does not scale the answer.
+    var eff_radius = initial_radius
+    for _mi in range(Int(sd.mediumCount)):
+        if sd.mediums[_mi].is_sss != Int32(0):
+            var _rq = dipole_max_radius(sd.mediums[_mi].sigma_s, sd.mediums[_mi].sigma_a, sd.mediums[_mi].g)
+            if _rq > eff_radius:
+                eff_radius = _rq
+    # init_r2 stays on the SCENE's radius -- widening it would blur every
+    # ordinary surface visible point in the scene. Only the grid CELLS grow,
+    # so the 3x3x3 neighbour search can reach the diffusion distance; a larger
+    # cell never changes a surface gather, it only searches more candidates.
     var init_r2 = initial_radius * initial_radius
-    var inv_cell = Float32(1.0) / initial_radius
+    var inv_cell = Float32(1.0) / eff_radius
+    if verbose:
+        print("SPPM: vp radius " + String(initial_radius) + ", grid cell " + String(eff_radius))
 
     var ret = Int32(0)
     comptime if has_accelerator():
@@ -7034,30 +7056,13 @@ def sppm_render_gpu(
                 if sd.mediums[mi].is_sss != Int32(0):
                     has_sss_medium = True
                     break
-            if has_sss_medium:
-                # SPPM is the wrong estimator for a DENSE medium, and skin is
-                # about as dense as they come (mfp ~0.001 scene units, so
-                # sigma_t ~1000). A volumetric photon gather needs its radius
-                # down at the mean free path to resolve the medium at all, and
-                # the kernel volume then goes as r^3 -- the photon count needed
-                # scales as 1/mfp^3. Measured on head.pbrt: the lit-pixel ratio
-                # against pbrt's path tracer is 0.068 at 36864 photons/pass and
-                # 0.068 at 589824, i.e. SIXTEEN TIMES the photons changes
-                # nothing. It is structurally wrong, not under-sampled.
-                #
-                # For reference, pbrt-v4's own SPPM has NO participating-media
-                # support whatsoever -- no medium sampling, no phase function,
-                # no transmittance anywhere in SPPMIntegrator -- so there is no
-                # reference implementation to match here either.
-                #
-                # Ordinary media are fine (disney-cloud 1.00x, explosion 0.94x,
-                # clouds 0.85x against the reference); it is density that kills
-                # it. Say so instead of shipping a plausible dark image.
-                print("Warning: --sppm with a \"subsurface\" material is not a"
-                      + " supported combination. A volumetric photon gather cannot"
-                      + " resolve a medium this dense (more photons do not help),"
-                      + " and pbrt's own SPPM has no media support at all."
-                      + " Use the path tracer for subsurface scenes.")
+            # (The "--sppm + subsurface is unsupported" warning that stood here
+            # was WRONG and has been removed. It rested on one experiment --
+            # 16x photons changing nothing -- which showed the estimate was
+            # BIASED, not undersampled, i.e. a bug rather than a limit. With
+            # subsurface transport evaluated by a surface-side diffusion BSSRDF
+            # (bssrdf.mojo) instead of by photon-mapping the interior, head
+            # renders at 0.86x the reference with no black pixels.)
             if has_sss_medium:
                 max_bounces_per_photon += SSS_WALK_ROUNDS
             var max_photons = n_photons_per_pass * max(max_bounces_per_photon, 1)
@@ -7203,6 +7208,7 @@ def sppm_render_gpu(
                         bvh2Nodes, primIds, meshes, materials, curves, n_curves, instances, n_instances,
                         spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
                         measured_brdfs, n_measured_brdfs, Int64(pass_idx),
+                        mediums, n_mediums,
                         grid_dim=grid_vps, block_dim=block_size)
 
                 var nee_seed = psc[0].rng_seed ^ UInt64(pass_idx * 0xBF58476D1CE4E5B9 + 3)
@@ -7235,7 +7241,7 @@ def sppm_render_gpu(
             # budget, the photon-pass equivalent, buffer saturation, glossy VP
             # placement). This says which term is actually zero instead.
             if verbose:
-                var n_novp = 0; var n_nophot = 0; var n_dark = 0; var n_tot = 0; var n_envonly = 0
+                var n_novp = 0; var n_nophot = 0; var n_dark = 0; var n_tot = 0; var n_envonly = 0; var n_bssrdf = 0; var n_bssrdf_lit = 0; var n_bssrdf_nan = 0
                 with vps_buf.map_to_host() as vh:
                     var vp_host = vh.unsafe_ptr().bitcast[SPPMPixel]()
                     for pi in range(n_pix):
@@ -7250,6 +7256,13 @@ def sppm_render_gpu(
                             if (v.ld.v0 + v.ld.v1 + v.ld.v2 + v.ld.v3) > Float32(1e-12): any_light = True
                             if (v.env.r + v.env.g + v.env.b) > Float32(1e-12): any_light = True
                         n_tot += 1
+                        for s_i in range(_VP_SAMPLES):
+                            var v2 = vp_host[pi * _VP_SAMPLES + s_i]
+                            if v2.mat_kind == Int32(4) and v2.valid != Int32(0):
+                                n_bssrdf += 1
+                                var ts = v2.tau.r + v2.tau.g + v2.tau.b
+                                if ts > Float32(0): n_bssrdf_lit += 1
+                                elif ts != ts: n_bssrdf_nan += 1
                         if not any_valid:
                             # Split the no-VP case: a camera ray that MISSES all
                             # geometry legitimately has no visible point and
@@ -7259,10 +7272,23 @@ def sppm_render_gpu(
                             else: n_envonly += 1
                         elif not any_phot and not any_light: n_dark += 1
                         elif not any_phot: n_nophot += 1
+                var n_ph_surf = 0; var n_ph_vol = 0; var n_ph_bssrdf = 0
+                with photons_buf.map_to_host() as ph_h:
+                    var ph_host = ph_h.unsafe_ptr().bitcast[SPPMPhoton]()
+                    var n_scan = min(max_photons, 200000)
+                    for k in range(n_scan):
+                        var kind = Int(ph_host[k].is_volume)
+                        if kind == 0: n_ph_surf += 1
+                        elif kind == 1: n_ph_vol += 1
+                        elif kind == 2: n_ph_bssrdf += 1
+                print("SPPM diag photons (last pass, first " + String(min(max_photons,200000))
+                      + " slots): surface=" + String(n_ph_surf) + " volume=" + String(n_ph_vol)
+                      + " bssrdf=" + String(n_ph_bssrdf))
                 print("SPPM diag: " + String(n_tot) + " pixels | DEAD (no VP, no env): " + String(n_novp)
                       + " | no VP but env only: " + String(n_envonly)
                       + " | VP but zero photons AND no light: " + String(n_dark)
-                      + " | VP with light but zero photons: " + String(n_nophot))
+                      + " | VP with light but zero photons: " + String(n_nophot)
+                      + " || BSSRDF VPs: " + String(n_bssrdf) + " of which tau>0: " + String(n_bssrdf_lit) + " NaN: " + String(n_bssrdf_nan))
             # Keep these device buffers alive (Mojo's ASAP destruction would
             # otherwise free them right after their own last syntactic
             # reference, which is BEFORE this point -- their derived _ptr

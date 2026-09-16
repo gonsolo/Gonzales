@@ -20,6 +20,7 @@ from .geometry import (
     FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS,
     medium_transmittance_ratio_spectral, spectral_free_flight_weight,
 )
+from .bssrdf import dipole_rd, dipole_max_radius
 from .bvh import (
     BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, _mk_sd_full,
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf,
@@ -828,6 +829,35 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 break
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
+            # ── Subsurface boundary: stop here, as a BSSRDF visible point ──
+            # Instead of refracting INTO the skin and placing a volume visible
+            # point a mean free path down (a 3D density estimate in a medium
+            # whose mfp is ~0.001 scene units -- provably photon-count
+            # insensitive, see bssrdf.mojo), keep the visible point ON the
+            # surface and let a diffusion kernel carry the interior transport
+            # at gather time. Photons stop on the surface too, so the photon
+            # map stays two-dimensional -- which is where density estimation
+            # actually works.
+            #
+            # Needs no new SPPMPixel fields: `med_idx` already reaches the
+            # interior Medium_C for sigma_s/sigma_a/g, and `alpha` is unused
+            # for this visible-point kind so it carries the boundary IOR.
+            if mat.sss_boundary != Int8(0) and Int(cur_med_idx) < 0:
+                var gn_s = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
+                if dot(gn_s, rd) > Float32(0.0):
+                    gn_s = gn_s * Float32(-1.0)
+                var inside_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd, hit)
+                if inside_idx >= Int32(0):
+                    vp.pos = hit
+                    vp.normal = vec3f(gn_s)
+                    vp.wo = vec3f((-rd).to_simd())
+                    vp.alb = RGB(Float32(1))
+                    vp.mat_kind = Int32(4)          # BSSRDF
+                    vp.alpha = mat.albedo.r          # boundary IOR
+                    vp.med_idx = inside_idx
+                    vp.is_volume = Int32(0)
+                    vp.valid = Int32(1)
+                    break
             # Entering, leaving or total-internal-reflecting at the boundary of
             # a subsurface interior is part of the ONE BSSRDF event the walk
             # inside it belongs to, so it is not charged to maxdepth. Same rule
@@ -1383,6 +1413,35 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             continue
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
+            # ── Subsurface boundary: deposit on the SURFACE and stop ───────
+            # The photon's remaining transport is what the diffusion kernel
+            # models, so entering the medium and random-walking would double
+            # count it. Flux is attenuated by the boundary's Fresnel
+            # TRANSMITTANCE, which is the fraction that actually gets in;
+            # R_d then carries it from here to wherever it re-emerges.
+            # is_volume = 2 marks a BSSRDF surface photon, which only a
+            # BSSRDF visible point gathers.
+            # NOT gated on bounce > 0, unlike a surface photon. That gate
+            # exists to avoid double counting the light's first segment against
+            # the visible point's own NEE -- and a BSSRDF visible point has no
+            # NEE (there is no BRDF at it; all of its light arrives as photons).
+            # head.pbrt is lit by an environment map, so nearly every photon
+            # reaches the skin on its FIRST segment: with the gate, essentially
+            # nothing was deposited and the render came out pure black.
+            if mat.sss_boundary != Int8(0) and Int(cur_med_idx) < 0:
+                var gn_b = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
+                var cos_in = dot(gn_b, rd)
+                if cos_in > Float32(0.0):
+                    gn_b = gn_b * Float32(-1.0)
+                    cos_in = -cos_in
+                var ft = Float32(1.0) - fr_dielectric(-cos_in, mat.albedo.r)
+                if ft > Float32(0.0):
+                    _sppm_store_photon[use_gpu](
+                        SPPMPhoton(pos=hit, flux=flux * ft, nxt=Int32(-1),
+                                   is_volume=Int32(2), dir_in=rd,
+                                   wavelengths=ph_wavelengths),
+                        photons, max_photons, counter)
+                break
             # Entering, leaving or total-internal-reflecting at the boundary of
             # a subsurface interior is part of the ONE BSSRDF event the walk
             # inside it belongs to, so it is not charged to maxdepth. Same rule
@@ -1644,6 +1703,14 @@ def _sppm_gather_one(
     heads:    UnsafePointer[Int32, MutExternalOrigin],
     inv_cell: Float32,
     sd:       SceneDescriptor2_C,
+    # Decomposed for exactly the reason the spectral tables below are: `sd` is
+    # passed BY VALUE and its struct members do not read back reliably inside
+    # the GPU kernel. Reading sd.mediumCount here returned 0 while the driver
+    # held the real count, so every BSSRDF visible point silently fell back to
+    # looking for SURFACE photons on a surface that only has BSSRDF ones, and
+    # gathered nothing at all.
+    med_arr:   UnsafePointer[Medium_C, MutExternalOrigin],
+    med_count: Int,
     # Decomposed spectral tables rather than reading sd.spectral. `sd` is a
     # SceneDescriptor2_C passed BY VALUE, and it contains a SpectralHandle --
     # the 6-field TrivialRegisterPassable struct suspected (modular/modular#6759,
@@ -1682,6 +1749,27 @@ def _sppm_gather_one(
     # exactly once on the way into `tau` (see SPPMPixel.tau).
     var phi = SpectralSample(Float32(0))
     var M = Float32(0)
+    # BSSRDF constants, hoisted out of the photon loop.
+    var bssrdf_r2 = r2
+    var bssrdf_ft_o = Float32(1.0)
+    # The medium is read ONCE here, never inside the photon loop: an
+    # unguarded sd.mediums[...] per photon is an illegal access on the GPU the
+    # moment med_idx is out of range, and it aborted every --sppm run.
+    var bssrdf_ok = (vp.mat_kind == Int32(4) and Int(vp.med_idx) >= 0
+                     and Int(vp.med_idx) < med_count and _is_real_ptr[Medium_C](med_arr))
+    var bssrdf_ss = RGB(Float32(0))
+    var bssrdf_sa = RGB(Float32(0))
+    var bssrdf_g  = Float32(0)
+    if bssrdf_ok:
+        var mb0 = med_arr[Int(vp.med_idx)]
+        bssrdf_ss = mb0.sigma_s
+        bssrdf_sa = mb0.sigma_a
+        bssrdf_g  = mb0.g
+        var rmax = dipole_max_radius(mb0.sigma_s, mb0.sigma_a, mb0.g)
+        bssrdf_r2 = rmax * rmax
+        # Fresnel TRANSMITTANCE on the way out, for the view direction.
+        var cos_o = abs(dot(vp.normal.to_simd(), vp.wo.to_simd()))
+        bssrdf_ft_o = Float32(1.0) - fr_dielectric(cos_o, vp.alpha)
 
     var cix = Int(floor(vp.pos.x * inv_cell))
     var ciy = Int(floor(vp.pos.y * inv_cell))
@@ -1695,7 +1783,14 @@ def _sppm_gather_one(
                     var ph = photons[k]
                     var e = ph.pos - vp.pos
                     var dist2 = e.length_sq()
-                    if dist2 <= r2 and ph.is_volume == vp.is_volume:
+                    # A BSSRDF visible point gathers only BSSRDF surface
+                    # photons (is_volume == 2), and out to the DIFFUSION
+                    # truncation distance rather than the shrinking SPPM
+                    # radius -- R_d is a normalised kernel, so its reach is a
+                    # material property, not a bias parameter.
+                    var want_kind = Int32(2) if bssrdf_ok else vp.is_volume
+                    var reach2 = bssrdf_r2 if bssrdf_ok else r2
+                    if dist2 <= reach2 and ph.is_volume == want_kind:
                         # Volume VP: isotropic phase f=alb/(4π). Surface VP:
                         # Lambertian f=alb/π (angle-independent, pulled out
                         # of the sum) or, for a conductor VP, the raw GGX
@@ -1705,7 +1800,32 @@ def _sppm_gather_one(
                         # photon's flux already encodes the appropriate
                         # cosine-weighted density (same convention the
                         # Lambertian/phase branches already rely on).
-                        if vp.is_volume == Int32(1):
+                        if vp.mat_kind == Int32(4) and bssrdf_ok:
+                            # DIFFUSION BSSRDF. L_o(xo,wo) = (Ft(wo)/pi) *
+                            # sum_p R_d(|xi_p - xo|) * Phi_p  (Jensen & Buhler
+                            # 2002). Note what is NOT here: no 1/(pi r^2), no
+                            # kernel volume, no radius at all. R_d already
+                            # integrates over the plane to the material's
+                            # diffuse albedo, so the photons' flux is carried
+                            # exactly -- which is why this path has no
+                            # bias/radius tradeoff to lose.
+                            var rr = sqrt(dist2)
+                            var rd_rgb = dipole_rd(bssrdf_ss, bssrdf_sa, bssrdf_g, vp.alpha, rr)
+                            # UNBOUNDED upsampler. R_d is a density with units
+                            # of 1/area, not a reflectance: for skin (mfp
+                            # ~0.001) it is on the order of 1e4. spec_refl
+                            # clamps to [0,1], which silently flattened every
+                            # value to 1 and rendered the head ~200x too dark.
+                            # Same trap as the throughput weights earlier --
+                            # a coefficient is not a colour.
+                            phi += spec_refl_unbounded(spectral_coeffs, spectral_res,
+                                             spectral_cie_x, spectral_cie_y,
+                                             spectral_cie_z, spectral_d65,
+                                             rd_rgb.r * bssrdf_ft_o * (Float32(1.0) / PI),
+                                             rd_rgb.g * bssrdf_ft_o * (Float32(1.0) / PI),
+                                             rd_rgb.b * bssrdf_ft_o * (Float32(1.0) / PI),
+                                             ph.wavelengths) * ph.flux
+                        elif vp.is_volume == Int32(1):
                             # VOLUME radiance estimate, which is NOT the surface
                             # one with a different kernel volume.
                             #
@@ -1828,7 +1948,11 @@ def _sppm_gather_one(
         # kernel leaves a per-pass factor of ratio^-0.5 that COMPOUNDS over
         # every pass -- a systematic bias, which is why more photons never
         # moved the result.
-        var tau_scale = ratio * sqrt(ratio) if vp.is_volume == Int32(1) else ratio
+        # A BSSRDF visible point has no kernel normalisation to track, so its
+        # history must NOT be rescaled when the radius shrinks -- there is no
+        # radius in its estimator at all.
+        var tau_scale = Float32(1.0) if vp.mat_kind == Int32(4) else (
+            ratio * sqrt(ratio) if vp.is_volume == Int32(1) else ratio)
         vps[i].tau = (vp.tau + RGB(phi_r, phi_g, phi_b)) * tau_scale
         vps[i].N_acc = N + _ALPHA * M
 
@@ -1844,7 +1968,7 @@ def _gather_update(
 ):
     @parameter
     def gather_one(i: Int):
-        _sppm_gather_one(vps, i, photons, heads, inv_cell, sd,
+        _sppm_gather_one(vps, i, photons, heads, inv_cell, sd, sd.mediums, Int(sd.mediumCount),
                          sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y,
                          sd.spectral.cie_z, sd.spectral.d65, pass_wl)
 
@@ -2306,7 +2430,13 @@ def _sppm_finalize_one_pixel(
             # volume VPs had no working direct-lighting term to compare
             # against until the same session fixed that.
             var denom = PI * vp.r2 * Float32(n_passes)
-            if vp.is_volume == Int32(1):
+            if vp.mat_kind == Int32(4):
+                # BSSRDF: R_d is already a normalised kernel, so there is NO
+                # kernel area or volume to divide by -- only the pass average.
+                # Dividing by pi*r^2 here would scale the result by an
+                # arbitrary radius that carries no meaning on this path.
+                denom = Float32(n_passes)
+            elif vp.is_volume == Int32(1):
                 denom = (Float32(4.0) / Float32(3.0)) * PI * vp.r2 * sqrt(vp.r2) * Float32(n_passes)
             acc += vp.beta * (vp.tau / denom)
         if True:
@@ -2417,8 +2547,25 @@ def _sppm_render_core(
     var max_photons = n_photons_per_pass * max(max_bounces_per_photon, 1)
     var photons = alloc[SPPMPhoton](max_photons)
     var heads   = alloc[Int32](_HSIZE)
+    # A BSSRDF visible point gathers out to the material's DIFFUSION reach,
+    # which for skin is several times the SPPM radius this scene would
+    # otherwise pick. The photon grid's cells are initial_radius-sized and the
+    # gather looks at 3x3x3 of them, so the radius has to cover that reach or
+    # the neighbour search silently misses the photons carrying the subsurface
+    # signal. Widening it costs nothing on this path: R_d is normalised, so
+    # unlike a density estimate the radius does not scale the answer.
+    var eff_radius = initial_radius
+    for _mi in range(Int(sd.mediumCount)):
+        if sd.mediums[_mi].is_sss != Int32(0):
+            var _rq = dipole_max_radius(sd.mediums[_mi].sigma_s, sd.mediums[_mi].sigma_a, sd.mediums[_mi].g)
+            if _rq > eff_radius:
+                eff_radius = _rq
+    # init_r2 stays on the SCENE's radius -- widening it would blur every
+    # ordinary surface visible point in the scene. Only the grid CELLS grow,
+    # so the 3x3x3 neighbour search can reach the diffusion distance; a larger
+    # cell never changes a surface gather, it only searches more candidates.
     var init_r2 = initial_radius * initial_radius
-    var inv_cell = Float32(1.0) / initial_radius  # cell size == initial radius
+    var inv_cell = Float32(1.0) / eff_radius  # cell size == effective radius
 
     # Trace the camera/visible-point samples ONCE for the whole render — see
     # _sppm_camera_pass's docstring for why a per-pass re-trace (the old
