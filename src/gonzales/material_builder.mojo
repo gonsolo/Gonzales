@@ -189,10 +189,17 @@ def _sss_walk_reflectance(alpha: Float32, eta: Float32, g: Float32, n_walks: Int
     # Relative index crossing OUT of the medium.
     var eta_out = Float32(1.0) / max(eta, Float32(1e-4))
     for _ in range(n_walks):
-        # Enters along the normal (refraction at normal incidence does not
-        # bend), one mean free path in. Depth z >= 0 is inside.
+        # Entry direction. The surfaces this inverts for are lit by an
+        # environment, not a collimated beam, so sample a COSINE-weighted
+        # incident direction and refract it, rather than assuming normal
+        # incidence: refraction into a denser medium concentrates grazing
+        # light toward the normal, and how deep a photon starts is exactly
+        # what sets how much of it comes back out.
+        var ci = sqrt(max(rng.next_float(), Float32(0.0)))   # cosine-weighted
+        var si = sqrt(max(Float32(1.0) - ci*ci, Float32(0.0)))
+        var st = si / max(eta, Float32(1e-4))                # Snell, into the medium
+        var wz = sqrt(max(Float32(1.0) - st*st, Float32(0.0)))
         var z = Float32(0.0)
-        var wz = Float32(1.0)      # only the z component of direction matters
         var alive = True
         for _step in range(10000):
             var t = -log(max(rng.next_float(), Float32(1e-7)))
