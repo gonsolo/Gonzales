@@ -7035,6 +7035,30 @@ def sppm_render_gpu(
                     has_sss_medium = True
                     break
             if has_sss_medium:
+                # SPPM is the wrong estimator for a DENSE medium, and skin is
+                # about as dense as they come (mfp ~0.001 scene units, so
+                # sigma_t ~1000). A volumetric photon gather needs its radius
+                # down at the mean free path to resolve the medium at all, and
+                # the kernel volume then goes as r^3 -- the photon count needed
+                # scales as 1/mfp^3. Measured on head.pbrt: the lit-pixel ratio
+                # against pbrt's path tracer is 0.068 at 36864 photons/pass and
+                # 0.068 at 589824, i.e. SIXTEEN TIMES the photons changes
+                # nothing. It is structurally wrong, not under-sampled.
+                #
+                # For reference, pbrt-v4's own SPPM has NO participating-media
+                # support whatsoever -- no medium sampling, no phase function,
+                # no transmittance anywhere in SPPMIntegrator -- so there is no
+                # reference implementation to match here either.
+                #
+                # Ordinary media are fine (disney-cloud 1.00x, explosion 0.94x,
+                # clouds 0.85x against the reference); it is density that kills
+                # it. Say so instead of shipping a plausible dark image.
+                print("Warning: --sppm with a \"subsurface\" material is not a"
+                      + " supported combination. A volumetric photon gather cannot"
+                      + " resolve a medium this dense (more photons do not help),"
+                      + " and pbrt's own SPPM has no media support at all."
+                      + " Use the path tracer for subsurface scenes.")
+            if has_sss_medium:
                 max_bounces_per_photon += SSS_WALK_ROUNDS
             var max_photons = n_photons_per_pass * max(max_bounces_per_photon, 1)
             var vps_buf     = handle[].ctx.enqueue_create_buffer[DType.uint8](n_vps * size_of[SPPMPixel]())
