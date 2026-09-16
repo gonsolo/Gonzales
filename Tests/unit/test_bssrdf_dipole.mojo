@@ -11,8 +11,9 @@ over the plane, 2*pi*integral(r R_d(r) dr), has something exact to be checked
 against -- not another implementation of the same thing.
 """
 from std.math import exp, sqrt
+from gonzales.rng import PCG32
 from std.testing import assert_true, TestSuite
-from gonzales.bssrdf import dipole_rd_channel, fdr_moment, dipole_max_radius
+from gonzales.bssrdf import dipole_rd_channel, fdr_moment, dipole_max_radius, dipole_sample_radius, dipole_sample_pdf_mis, dipole_mis_sigma_tr
 from gonzales.geometry import RGB
 
 
@@ -73,6 +74,34 @@ def test_dipole_is_positive_and_decreasing() raises:
         assert_true(cur >= Float32(0.0), "R_d must be non-negative")
         assert_true(cur <= prev + Float32(1e-9), "R_d must decrease with distance")
         prev = cur
+
+
+def test_sampler_is_unbiased_against_the_analytic_total() raises:
+    """Integrating R_d THROUGH the sampler must give the same analytic total
+    the direct quadrature does. This is what a bidirectional integrator needs
+    and a gather does not: an exit point with a known pdf, such that
+    R_d/pdf is an unbiased estimator. If the pdf and the sampling routine ever
+    drift apart, this is what catches it."""
+    var rng = PCG32(UInt64(0x243F6A8885A308D3), UInt64(17))
+    var cases_ss: List[Float32] = [100.0, 100.0, 10.0]
+    var cases_sa: List[Float32] = [1.0,   10.0,  5.0]
+    for i in range(len(cases_ss)):
+        var ss = RGB(cases_ss[i]); var sa = RGB(cases_sa[i])
+        var acc = Float32(0.0)
+        comptime N = 400000
+        for _ in range(N):
+            # pick a channel uniformly, exactly as the renderer does
+            var c = Int(rng.next_float() * Float32(3.0))
+            if c > 2: c = 2
+            var str_c = dipole_mis_sigma_tr(ss, sa, Float32(0.0), c)
+            var r = dipole_sample_radius(str_c, rng.next_float())
+            var pdf = dipole_sample_pdf_mis(ss, sa, Float32(0.0), r)
+            if pdf > Float32(0.0):
+                acc += dipole_rd_channel(cases_ss[i], cases_sa[i], Float32(0.0), Float32(1.33), r) / pdf
+        var est = acc / Float32(N)
+        var ana = _analytic_total(cases_ss[i], cases_sa[i], Float32(0.0), Float32(1.33))
+        assert_true(_close(est, ana, Float32(0.06)),
+                    "sampled estimate of the profile must match the analytic total")
 
 
 def main() raises:

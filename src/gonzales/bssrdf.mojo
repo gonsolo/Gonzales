@@ -30,7 +30,7 @@ accurate near the source and for high absorption. Swapping the kernel later
 means replacing `dipole_rd` alone -- every caller only wants R_d(r).
 """
 
-from std.math import exp, sqrt, max, min
+from std.math import exp, sqrt, max, min, log
 from gonzales.geometry import RGB
 
 
@@ -113,3 +113,76 @@ def dipole_max_radius(sigma_s: RGB, sigma_a: RGB, g: Float32) -> Float32:
     # Four transport lengths captures essentially all of the profile's energy
     # while keeping the neighbour search bounded.
     return Float32(4.0) * best
+
+
+# ── Sampling the profile ────────────────────────────────────────────────────
+# A gather only needs to EVALUATE R_d. A bidirectional integrator has to
+# SAMPLE it: the camera subpath arrives at an entry point and must produce an
+# exit point (and vice versa for the light subpath) with a known pdf, so the
+# hop can carry a throughput weight and take part in MIS. That is the whole
+# difference between the SPPM path (evaluate) and this one (sample).
+#
+# The profile is sampled radially as an exponential in the effective transport
+# coefficient sigma_tr -- which is exactly R_d's asymptotic decay, so the
+# weight R_d/pdf stays bounded -- and uniformly in azimuth. The pdf returned is
+# an AREA density on the tangent plane (the 1/(2 pi r) Jacobian is already
+# folded in), which is what a surface-area-measure integrator wants.
+
+@always_inline
+def dipole_sigma_tr_channel(sigma_s: Float32, sigma_a: Float32, g: Float32) -> Float32:
+    var ss_p = sigma_s * (Float32(1.0) - g)
+    var st_p = ss_p + sigma_a
+    if st_p <= Float32(0.0):
+        return Float32(0.0)
+    return sqrt(Float32(3.0) * sigma_a * st_p)
+
+
+@always_inline
+def dipole_sample_radius(sigma_tr: Float32, u: Float32) -> Float32:
+    """Radius from an exponential of rate sigma_tr: r = -ln(1-u)/sigma_tr."""
+    if sigma_tr <= Float32(0.0):
+        return Float32(0.0)
+    var uu = min(max(u, Float32(0.0)), Float32(0.9999999))
+    return -log(Float32(1.0) - uu) / sigma_tr
+
+
+@always_inline
+def dipole_radius_pdf_area(sigma_tr: Float32, r: Float32) -> Float32:
+    """Area-measure pdf of `dipole_sample_radius` on the tangent plane:
+    p_area(r) = sigma_tr * exp(-sigma_tr r) / (2 pi r).
+
+    Diverges as r -> 0, which is correct (the sampler concentrates there) but
+    has to be guarded by the caller, since R_d is finite at the origin and the
+    ratio would otherwise be 0/0."""
+    if sigma_tr <= Float32(0.0) or r <= Float32(1e-9):
+        return Float32(0.0)
+    return sigma_tr * exp(-sigma_tr * r) / (Float32(2.0) * Float32(3.14159265) * r)
+
+
+@always_inline
+def dipole_mis_sigma_tr(sigma_s: RGB, sigma_a: RGB, g: Float32, which: Int) -> Float32:
+    """sigma_tr of one channel, for picking which channel's profile to sample
+    from. Sampling a single channel and weighting by the balance heuristic over
+    all three is what keeps a chromatic material (skin's channels differ by
+    ~4x in transport length) from blowing up -- the same reasoning as the
+    hero-wavelength free-flight MIS."""
+    if which == 0: return dipole_sigma_tr_channel(sigma_s.r, sigma_a.r, g)
+    if which == 1: return dipole_sigma_tr_channel(sigma_s.g, sigma_a.g, g)
+    return dipole_sigma_tr_channel(sigma_s.b, sigma_a.b, g)
+
+
+@always_inline
+def dipole_sample_pdf_mis(sigma_s: RGB, sigma_a: RGB, g: Float32, r: Float32) -> Float32:
+    """The MIXTURE area pdf actually used: a channel is chosen uniformly and
+    its exponential sampled, so the density is the average of the three. Using
+    one channel's pdf alone would leave the other two's weights unbounded."""
+    var acc = Float32(0.0)
+    var n = 0
+    for c in range(3):
+        var str_c = dipole_mis_sigma_tr(sigma_s, sigma_a, g, c)
+        if str_c > Float32(0.0):
+            acc += dipole_radius_pdf_area(str_c, r)
+            n += 1
+    if n == 0:
+        return Float32(0.0)
+    return acc / Float32(n)
