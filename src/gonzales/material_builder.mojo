@@ -672,6 +672,35 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
     # GetFloat("uroughness", roughness_default) accessor chain uses,
     # independent of the params' declaration order in the scene file.
     var rough_tex_idx_for_mat = Int32(-1)
+    # pbrt NAMESPACES a coatedconductor's two roughnesses: the dielectric coat
+    # is "interface.roughness" and the metal underneath is
+    # "conductor.roughness"; plain "roughness" is not what such a material
+    # declares. We only ever queried the plain name, so BOTH were silently
+    # dropped and the material fell back to roughness 0 -- a PERFECT MIRROR
+    # where the scene asked for a slightly rough metal under a slightly rough
+    # coat. killeroo-coated-gold ("interface.roughness" 0.02,
+    # "conductor.roughness" 0.002) is exactly that scene, and a delta mirror is
+    # unshadeable for SPPM: a visible point on it can gather no photons and
+    # NEE through no lobe, so 408 of 9216 pixels held a visible point that
+    # received neither photons nor light, and rendered BLACK.
+    #
+    # Same namespacing bug already fixed once for this material's
+    # conductor.eta/conductor.k (project_spd_spectrum_files_unsupported); the
+    # roughness pair was missed in that pass. Our coated_conductor reuses the
+    # conductor GGX lobe (see shade_coated_conductor), so the CONDUCTOR
+    # roughness is the one that maps onto roughU/roughV; the coat's own
+    # roughness has nowhere to go yet and says so rather than vanishing.
+    if params.has("conductor.roughness"):
+        var cr = params.get_floats("conductor.roughness")
+        if len(cr) > 0:
+            mat_roughU = cr[0]; mat_roughV = cr[0]
+    if params.has("interface.roughness") and not params.has("conductor.roughness"):
+        var ir = params.get_floats("interface.roughness")
+        if len(ir) > 0:
+            mat_roughU = ir[0]; mat_roughV = ir[0]
+    elif params.has("interface.roughness"):
+        print("Note: coatedconductor \"interface.roughness\" is not modelled separately —"
+              + " the coat reuses the conductor lobe, so only \"conductor.roughness\" is applied.")
     var rough_f = params.get_floats("roughness")
     if len(rough_f) > 0:
         mat_roughU = rough_f[0]; mat_roughV = rough_f[0]

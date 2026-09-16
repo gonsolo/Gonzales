@@ -7205,6 +7205,33 @@ def sppm_render_gpu(
                 spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
                 grid_dim=grid_pix, block_dim=block_size)
             handle[].ctx.synchronize()
+            # --- why-is-this-pixel-black diagnostic -------------------------
+            # Four hypotheses about SPPM's remaining black pixels were refuted
+            # in a row by guessing at mechanisms (delta bounces eating the VP
+            # budget, the photon-pass equivalent, buffer saturation, glossy VP
+            # placement). This says which term is actually zero instead.
+            if verbose:
+                var n_novp = 0; var n_nophot = 0; var n_dark = 0; var n_tot = 0
+                with vps_buf.map_to_host() as vh:
+                    var vp_host = vh.unsafe_ptr().bitcast[SPPMPixel]()
+                    for pi in range(n_pix):
+                        var any_valid = False
+                        var any_phot = False
+                        var any_light = False
+                        for s_i in range(_VP_SAMPLES):
+                            var v = vp_host[pi * _VP_SAMPLES + s_i]
+                            if v.valid != Int32(0):
+                                any_valid = True
+                                if v.N_acc > Float32(0): any_phot = True
+                            if (v.ld.v0 + v.ld.v1 + v.ld.v2 + v.ld.v3) > Float32(1e-12): any_light = True
+                            if (v.env.r + v.env.g + v.env.b) > Float32(1e-12): any_light = True
+                        n_tot += 1
+                        if not any_valid: n_novp += 1
+                        elif not any_phot and not any_light: n_dark += 1
+                        elif not any_phot: n_nophot += 1
+                print("SPPM diag: " + String(n_tot) + " pixels | no VP at all: " + String(n_novp)
+                      + " | VP but zero photons AND no light: " + String(n_dark)
+                      + " | VP with light but zero photons: " + String(n_nophot))
             # Keep these device buffers alive (Mojo's ASAP destruction would
             # otherwise free them right after their own last syntactic
             # reference, which is BEFORE this point -- their derived _ptr
