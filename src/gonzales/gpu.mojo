@@ -6,7 +6,7 @@ from max.algorithm import parallelize
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc, memcpy
-from .geometry import RGB, Point3f, Point2f, FilmDims, FilterParams, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, NvdbGrid_C, nvdb_sample_density, nvdb_ray_range, grid_ray_range, nvdb_index_ray, nvdb_node_exit_t, nvdb_majorant_at_world, hg_phase, hg_sample, blackbody_rgb, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_grid_for, medium_nvdb_for, medium_emission_spectral, MEDIUM_TRACK_MAX_ITERS, medium_transmittance_ratio_spectral
+from .geometry import RGB, Point3f, Point2f, FilmDims, FilterParams, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, NvdbGrid_C, nvdb_sample_density, nvdb_ray_range, grid_ray_range, nvdb_index_ray, nvdb_node_exit_t, nvdb_majorant_at_world, hg_phase, hg_sample, blackbody_rgb, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_grid_for, medium_nvdb_for, medium_emission_spectral, MEDIUM_TRACK_MAX_ITERS, medium_transmittance_ratio_spectral, medium_sigma_s_spectral
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres, LightSample, _sample_infinite_light_nee, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee
 from .transform import transform_normal_by_instance
@@ -2265,10 +2265,17 @@ def _sample_medium_core(
             #   = sigma_s_i * exp(-sigma_i*t)            <- what is wanted
             # for every lane i. p_bar cancels, which is the point: correctness
             # does not depend on WHICH lane the free flight was drawn from.
+            # sigma_s(lambda) comes from the SAME smooth upsampler as the
+            # sigma_t(lambda) in the exponential above. It used to be
+            # BAND-PICKED off the RGB triple, which made the per-lane albedo
+            # sigma_s(lambda)/sigma_t(lambda) a ratio of two inconsistent
+            # conversions -- invisible at 2-3 scatters, hue-inverting over a
+            # subsurface walk's hundreds (see medium_sigma_s_spectral).
             var ss_r = max(med.sigma_s.r, Float32(1e-30))
-            path_ptr[].throughput *= rgb_bands_to_spectral_sample(
-                Float32(1.0), med.sigma_s.g / ss_r, med.sigma_s.b / ss_r,
-                path_ptr[].wavelengths) * sigma_t.r
+            var sig_s_spec = medium_sigma_s_spectral(
+                med, path_ptr[].wavelengths, spectral_coeffs, spectral_res,
+                spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+            path_ptr[].throughput *= (sig_s_spec * (Float32(1.0) / ss_r)) * sigma_t.r
 
     if not ff.collided:
         path_ptr[].pcgState = pcg.state

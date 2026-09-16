@@ -1258,6 +1258,32 @@ def medium_sigma_t_spectral(
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
         sig_t.r, sig_t.g, sig_t.b, wavelengths)
 
+def medium_sigma_s_spectral(
+    med: Medium_C, wavelengths: SampledWavelengths,
+    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
+) -> SpectralSample:
+    """The SCATTERING coefficient sigma_s on the 4 hero lanes, upsampled with
+    the SAME smooth curve medium_sigma_t_spectral uses for sigma_t.
+
+    Using one conversion for sigma_t and a different one for sigma_s (this
+    used to be band-picked from RGB in gpu.mojo) makes the per-lane single-
+    scattering albedo sigma_s(lambda)/sigma_t(lambda) a ratio of two
+    INCONSISTENT quantities. Harmless at two or three scatters, catastrophic
+    in a subsurface walk: skin's albedo is ~0.99 and the walk runs hundreds
+    of scatters, so a 1% per-lane albedo error compounds as 0.99^250 ~ 12x
+    and inverts the hue. head.pbrt rendered BLUE-dominant (chromaticity
+    b .406 against pbrt's .270, red 0.49x) until sigma_s came through here.
+
+    Rule: whenever a per-lane RATIO of two medium coefficients is formed,
+    both sides must come from the same upsampler."""
+    return spec_refl_unbounded(
+        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+        med.sigma_s.r, med.sigma_s.g, med.sigma_s.b, wavelengths)
+
 @always_inline
 def medium_transmittance_ratio_spectral(
     med: Medium_C, t: Float32, pdf: Float32, wavelengths: SampledWavelengths,
