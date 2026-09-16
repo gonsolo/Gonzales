@@ -1818,7 +1818,18 @@ def _sppm_gather_one(
         var ratio = (N + _ALPHA * M) / (N + M)
         vps[i].r2  = r2 * ratio
         var (phi_r, phi_g, phi_b) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, phi, pass_wl)
-        vps[i].tau = (vp.tau + RGB(phi_r, phi_g, phi_b)) * ratio
+        # tau must be rescaled by the KERNEL's own dimension, because tau is
+        # later divided by that kernel. pbrt scales by Sqr(rNew)/Sqr(radius)
+        # because its estimator divides by pi*r^2 -- it has only surface
+        # visible points. Ours divides a VOLUME visible point by (4/3)pi*r^3,
+        # so its history has to be rescaled by (rNew/r)^3, not (rNew/r)^2.
+        # With ratio = (rNew/r)^2, that is ratio^1.5 for a volume VP and
+        # ratio for a surface one. Using the surface rescale on a volume
+        # kernel leaves a per-pass factor of ratio^-0.5 that COMPOUNDS over
+        # every pass -- a systematic bias, which is why more photons never
+        # moved the result.
+        var tau_scale = ratio * sqrt(ratio) if vp.is_volume == Int32(1) else ratio
+        vps[i].tau = (vp.tau + RGB(phi_r, phi_g, phi_b)) * tau_scale
         vps[i].N_acc = N + _ALPHA * M
 
 
