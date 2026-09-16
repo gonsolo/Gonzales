@@ -298,18 +298,31 @@ def spec_refl_unbounded(
     compensated throughput, an f/pdf ratio), upsampled without clamping --
     spec_refl's plain path clamps to [0,1], which destroys energy per
     channel (so it shifts colour, not just brightness) for a legitimately
-    >1 weight. Splits off the largest RGB component as a scalar and
+    >1 weight. Splits off twice the largest RGB component as a scalar and
     upsamples only the normalised remainder, keeping chromaticity in the
-    table's domain while preserving the exact magnitude; the ILLUMINANT
+    well-conditioned middle of the table's domain while preserving the exact
+    magnitude (PBRT's RGBUnboundedSpectrum); the ILLUMINANT
     curve isn't a substitute here since it's the wrong spectral shape for a
     reflectance. See docs/02_spectra_and_color.md ("RGB <-> Spectrum
     Conversion")."""
     var m = max(r, max(g, b))
-    if m <= Float32(1.0):
-        return rgb_to_spectral_sample(coeffs, res, cie_x, cie_y, cie_z, d65, r, g, b, wl)
-    var inv = Float32(1.0) / m
+    if m <= Float32(0.0):
+        return SpectralSample(Float32(0.0))
+    # PBRT's RGBUnboundedSpectrum: normalise by 2*max, ALWAYS -- not by max,
+    # and not only when max > 1. Both halves matter. Dividing by max puts the
+    # largest component at exactly 1.0, the saturated EDGE of the sigmoid
+    # fit's domain, where the polynomial has to blow up to reach 1 and the
+    # fitted shape is at its least accurate; 2*max puts it at 0.5, mid-domain
+    # where the fit is well conditioned. And skipping the normalisation for
+    # max <= 1 silently switched conventions at m == 1, so a medium with
+    # "rgb sigma_a" [0.25 0.5 1.0] was fitted with blue pinned to that edge --
+    # measured 0.41x PBRT's blue on Scenes/media-chromatic-absorb.pbrt.
+    # The grey invariant is unaffected: an achromatic fit is exactly flat, so
+    # 2m * fit(0.5) == m == fit(m).
+    var scale = Float32(2.0) * m
+    var inv = Float32(1.0) / scale
     return rgb_to_spectral_sample(coeffs, res, cie_x, cie_y, cie_z, d65,
-                                  r * inv, g * inv, b * inv, wl) * m
+                                  r * inv, g * inv, b * inv, wl) * scale
 
 @always_inline
 def spec_illum(
