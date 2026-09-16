@@ -6,6 +6,8 @@ from .parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX
 from .geometry import RGB, MatKind
 from .measured_bsdf import load_measured_bsdf_reflectance
 from .spd import load_spd_rgb, named_metal_rgb, named_glass_ior
+from .rng import PCG32
+from std.math import log, sqrt, cos
 
 
 @always_inline
@@ -169,6 +171,110 @@ def _sss_alpha_from_reflectance(a: Float32) -> Float32:
     return Float32(1) - exp(Float32(-5.09406) * x
                             + Float32(2.61188) * x * x
                             - Float32(4.31805) * x * x * x)
+
+
+
+def _sss_walk_reflectance(alpha: Float32, eta: Float32, g: Float32, n_walks: Int) -> Float32:
+    """Monte-Carlo the diffuse reflectance of a semi-infinite medium of
+    single-scattering albedo `alpha` sitting behind a smooth dielectric
+    boundary of relative index `eta`, using the SAME transport the renderer
+    itself runs (exponential free flight, HG phase, Fresnel/TIR at the
+    boundary). Units are sigma_t = 1, which the answer is independent of.
+
+    Deterministic: a fixed seed, so the bisection in _sss_invert_alpha sees a
+    smooth monotone function (common random numbers) rather than a noisy one.
+    """
+    var rng = PCG32(UInt64(0x9E3779B97F4A7C15), UInt64(1))
+    var escaped = Float32(0)
+    # Relative index crossing OUT of the medium.
+    var eta_out = Float32(1.0) / max(eta, Float32(1e-4))
+    for _ in range(n_walks):
+        # Enters along the normal (refraction at normal incidence does not
+        # bend), one mean free path in. Depth z >= 0 is inside.
+        var z = Float32(0.0)
+        var wz = Float32(1.0)      # only the z component of direction matters
+        var alive = True
+        for _step in range(10000):
+            var t = -log(max(rng.next_float(), Float32(1e-7)))
+            z += wz * t
+            if z < Float32(0.0):
+                # Reached the boundary. cos of the angle to the normal.
+                var ct = min(abs(wz), Float32(1.0))
+                # Fresnel for going inside -> outside; below the critical
+                # angle sin_t2 > 1 means total internal reflection.
+                var sin_t2 = (Float32(1.0) - ct*ct) / (eta_out*eta_out)
+                var refl = Float32(1.0)
+                if sin_t2 < Float32(1.0):
+                    var ct2 = sqrt(max(Float32(1.0) - sin_t2, Float32(0.0)))
+                    var rs = (eta_out*ct - ct2) / (eta_out*ct + ct2)
+                    var rp = (ct - eta_out*ct2) / (ct + eta_out*ct2)
+                    refl = Float32(0.5) * (rs*rs + rp*rp)
+                if rng.next_float() > refl:
+                    escaped += Float32(1.0)
+                    alive = False
+                    break
+                # Total (or Fresnel) internal reflection: back inside.
+                z = -z
+                wz = -wz
+                continue
+            # Real collision: absorb, or scatter.
+            if rng.next_float() > alpha:
+                alive = False
+                break
+            # New direction's z component. Isotropic for g = 0, else HG.
+            var u = rng.next_float()
+            var mu: Float32
+            if abs(g) < Float32(1e-3):
+                mu = Float32(2.0) * u - Float32(1.0)
+            else:
+                var sq = (Float32(1.0) - g*g) / (Float32(1.0) + g - Float32(2.0)*g*u)
+                mu = (Float32(1.0) + g*g - sq*sq) / (Float32(2.0)*g)
+            # Rotate the old direction by mu about a uniformly random azimuth;
+            # only the z component is tracked, so this is the standard
+            # cos-composition with a uniform azimuth.
+            var sz = sqrt(max(Float32(1.0) - wz*wz, Float32(0.0)))
+            var smu = sqrt(max(Float32(1.0) - mu*mu, Float32(0.0)))
+            var phi = Float32(6.2831853) * rng.next_float()
+            var cphi = cos(phi)
+            wz = wz * mu + sz * smu * cphi
+            if wz > Float32(1.0): wz = Float32(1.0)
+            if wz < Float32(-1.0): wz = Float32(-1.0)
+        _ = alive
+    return escaped / Float32(n_walks)
+
+
+def _sss_invert_alpha(target: Float32, eta: Float32, g: Float32) -> Float32:
+    """The single-scattering albedo whose random walk actually REPRODUCES
+    diffuse reflectance `target` under this boundary.
+
+    _sss_alpha_from_reflectance (the Chiang et al. 2016 closed form) ignores
+    eta entirely, and the boundary is not a small correction: total internal
+    reflection keeps photons inside longer, so with alpha < 1 more of them are
+    absorbed and the surface goes DARK. Measured on head.pbrt, the same
+    material rendered 0.91x pbrt at eta = 1 but 0.64x at eta = 1.33, while
+    pbrt barely moved (0.3577 -> 0.3518) because its tabulated
+    SubsurfaceFromDiffuse solves for sigma WITH the boundary in the loop.
+
+    So solve it the same way, but against the walk this renderer actually
+    runs -- which is more faithful than porting a closed form fitted to a
+    different transport model, and costs one bisection at parse time.
+    Common random numbers keep the objective monotone, so plain bisection is
+    stable at a few thousand walks."""
+    var t = min(max(target, Float32(0.0)), Float32(0.999))
+    if t <= Float32(0.0):
+        return Float32(0.0)
+    # 16 bisection steps resolve alpha to 2^-16, far finer than the Monte
+    # Carlo noise floor, so more would only cost parse time.
+    comptime N_WALKS = 6000
+    var lo = Float32(0.0)
+    var hi = Float32(1.0)
+    for _ in range(16):
+        var mid = Float32(0.5) * (lo + hi)
+        if _sss_walk_reflectance(mid, eta, g, N_WALKS) < t:
+            lo = mid
+        else:
+            hi = mid
+    return Float32(0.5) * (lo + hi)
 
 
 def _sss_reflectance(s: UnsafePointer[SceneParseState, MutExternalOrigin],
@@ -633,6 +739,10 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
         if not params.has("eta") and not params.has("intIOR"):
             mat_ior = Float32(1.33)
         var sss_g = params.get_float("g", Float32(0))
+        # The boundary's relative index, needed by the albedo inversion below:
+        # total internal reflection is what makes the same alpha render very
+        # differently at eta 1.0 and 1.33 (see _sss_invert_alpha).
+        var sss_eta = mat_ior if mat_ior > Float32(0) else Float32(1.33)
         # Coefficients are in mm^-1; "scale" converts to the scene's own unit
         # (sssdragon uses scale 50). Applied to both, as pbrt does.
         var sss_scale = params.get_float("scale", Float32(1))
@@ -691,9 +801,9 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
             var refl = _sss_reflectance(s, params)
             var mfp = _mb_float_or_rgb(params, "mfp", RGB(Float32(1)))
             print("Note: subsurface \"reflectance\"/\"mfp\" inverted with the Christensen-Burley fit, not pbrt's tabulated SubsurfaceFromDiffuse — close in character, not bit-comparable.")
-            var ar = _sss_alpha_from_reflectance(refl.r)
-            var ag = _sss_alpha_from_reflectance(refl.g)
-            var ab = _sss_alpha_from_reflectance(refl.b)
+            var ar = _sss_invert_alpha(refl.r, sss_eta, sss_g)
+            var ag = _sss_invert_alpha(refl.g, sss_eta, sss_g)
+            var ab = _sss_invert_alpha(refl.b, sss_eta, sss_g)
             # sigma_t = 1/mfp, split into scattering/absorption by the albedo.
             var tr = Float32(1) / max(mfp.r, Float32(1e-6))
             var tg = Float32(1) / max(mfp.g, Float32(1e-6))
