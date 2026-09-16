@@ -17,7 +17,7 @@ from .geometry import (
     Sphere_C, Curve_C, PrimId_C, Instance_C, DistantLight_C, InfiniteLight_C, PointLight_C,
     MeasuredBRDF_C, GpuTexture_C,
     dot, cross, fr_dielectric, sphere_outward_normal, refract, PI, INV_FOUR_PI, INV_PI,
-    FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral,
+    FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, SSS_WALK_ROUNDS,
     Grid_C, NvdbGrid_C,
     spectral_free_flight_weight,
 )
@@ -2740,7 +2740,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             else:
                 gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
-                ray_dir, hit.to_simd(), gn, mat.albedo.r, n_bounces, pcg, current_dielectric_ior, previous_dielectric_ior)
+                ray_dir, hit.to_simd(), gn, mat.albedo.r, n_bounces == 0 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior)
             current_dielectric_ior = new_cur_ior
             previous_dielectric_ior = new_prev_ior
             n_bounces += 1
@@ -3551,7 +3551,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             else:
                 gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
-                ray_dir, hit.to_simd(), gn, mat.albedo.r, n_lbounces, pcg, current_dielectric_ior, previous_dielectric_ior)
+                ray_dir, hit.to_simd(), gn, mat.albedo.r, n_lbounces == 0 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior)
             current_dielectric_ior = new_cur_ior
             previous_dielectric_ior = new_prev_ior
             n_lbounces += 1
@@ -7019,6 +7019,23 @@ def sppm_render_gpu(
             # just n_photons_per_pass (one emitted path can store up to
             # min(maxdepth, _MAX_B) - 1 deposits, not one).
             var max_bounces_per_photon = min(Int(psc[0].max_depth), _MAX_B)
+            # A subsurface interior blows this budget wide open: its random-walk
+            # steps are deliberately NOT charged to maxdepth (see
+            # _sppm_trace_photon's loop header), so one photon entering skin
+            # deposits at every scatter for as long as the walk survives --
+            # hundreds of events, not `maxdepth` of them. Sized for maxdepth
+            # alone, _sppm_store_photon's shared atomic counter saturates almost
+            # immediately (head.pbrt: stored hit exactly n_photons*maxdepth on
+            # every pass) and the estimator still divides by the full emitted
+            # count, leaving the surviving deposits' local density wildly
+            # inflated. Mirrors the same sizing in sppm.mojo's CPU driver.
+            var has_sss_medium = False
+            for mi in range(Int(sd.mediumCount)):
+                if sd.mediums[mi].is_sss != Int32(0):
+                    has_sss_medium = True
+                    break
+            if has_sss_medium:
+                max_bounces_per_photon += SSS_WALK_ROUNDS
             var max_photons = n_photons_per_pass * max(max_bounces_per_photon, 1)
             var vps_buf     = handle[].ctx.enqueue_create_buffer[DType.uint8](n_vps * size_of[SPPMPixel]())
             var photons_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(max_photons, 1) * size_of[SPPMPhoton]())

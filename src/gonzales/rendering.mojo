@@ -4,7 +4,7 @@ from max.algorithm import parallelize
 from std.atomic import Atomic
 from std.sys.info import num_performance_cores
 from std.time import perf_counter_ns
-from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, PathState_C, TileResult_C, Sphere_C, AreaLight_C, LightSampler_C, light_sampler_sample, dot, cross, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, INV_FOUR_PI, curve_piece_endpoints, _curve_perp_axis
+from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, PathState_C, TileResult_C, Sphere_C, AreaLight_C, LightSampler_C, light_sampler_sample, dot, cross, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, INV_FOUR_PI, curve_piece_endpoints, _curve_perp_axis, SSS_WALK_ROUNDS
 from .bvh import SceneDescriptor2_C, traverse_bvh2_core, test_spheres, any_hit_bvh2_core
 from .shading import shade_core_cpu_nee, GIPendingX1, gi_pending_x1_init
 from .rng import PCG32
@@ -88,14 +88,13 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
     # absorbed. Paid for only by scenes that actually contain such a medium --
     # elsewhere `anyActive` goes false long before these rounds are reached,
     # and each extra round then costs one cheap inactive-path scan.
-    comptime _SSS_WALK_ROUNDS = 256
     var has_sss = False
     for mi in range(Int(scene.mediumCount)):
         if scene.mediums[mi].is_sss != Int32(0):
             has_sss = True
             break
     if has_sss:
-        maxD += _SSS_WALK_ROUNDS
+        maxD += SSS_WALK_ROUNDS
     var tileW = Int(tileMaxX - tileMinX)
     var tileH = Int(tileMaxY - tileMinY)
     var spp = Int(sp.samplesPerPixel)

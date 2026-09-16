@@ -978,6 +978,16 @@ struct Medium_C(TrivialRegisterPassable):
     # analytically and never spends path depth on it either.
     var is_sss:      Int32
 
+# Extra loop rounds a renderer must allow when the scene contains a subsurface
+# interior (`Medium_C.is_sss` above). Those interior random-walk steps and the
+# boundary crossings bracketing them are ONE BSSRDF event and are deliberately
+# NOT charged to the path's maxdepth, so the depth budget alone would never
+# end the walk -- a dense preset like Skin1 needs tens to hundreds of steps
+# before a path escapes or is absorbed. This is the safety bound that does.
+# Lives here, beside the flag it exists for, so the path tracer
+# (rendering.mojo) and SPPM (sppm.mojo) share ONE number.
+comptime SSS_WALK_ROUNDS: Int = 256
+
 
 # ── Homogeneous-medium free-flight sampling ───────────────────────────────────
 # Shared by BDPT, SPPM and the plain path tracer (CPU + GPU, gpu.mojo's

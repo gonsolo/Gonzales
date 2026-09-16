@@ -17,7 +17,7 @@ from .geometry import (
     Instance_C, dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI, Frame,
     Curve_C, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, InfiniteLight_C, PointLight_C,
     MeasuredBRDF_C, GpuTexture_C, _is_real_ptr,
-    FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density,
+    FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS,
     medium_transmittance_ratio_spectral, spectral_free_flight_weight,
 )
 from .bvh import (
@@ -361,14 +361,23 @@ def _dielectric_bounce(
     hit_point: Vec3f,
     geom_normal: Vec3f,
     ior: Float32,
-    bounce: Int,
+    # True only for a ray that cannot possibly be inside this dielectric yet,
+    # i.e. the primary/first segment in vacuum. Used to fix inward-normal
+    # meshes. Was `bounce: Int` with an internal `bounce == 0` test, which
+    # breaks the moment a caller stops charging bounces for subsurface
+    # boundaries (see Material_C.sss_boundary): `bounce` then stays 0 for the
+    # whole interior walk and every boundary hit from INSIDE would be forced
+    # to "entering", refracting inward again so light could never leave. The
+    # caller knows whether it is in a medium; it passes the real question.
+    # Same expression the path tracer uses (shading.mojo's force_entering).
+    force_entering: Bool,
     mut pcg: PCG32,
     current_ior: Float32 = Float32(1.0),    # IOR of the medium the ray is ALREADY in; 1.0 = vacuum
     previous_ior: Float32 = Float32(1.0),   # IOR one level below current_ior (what exiting restores)
 ) -> Tuple[Vec3f, Vec3f, Float32, Float32, Float32]:
     var facing = dot(ray_dir, geom_normal) < Float32(0.0)
     var entering = facing
-    if bounce == 0:
+    if force_entering:
         entering = True  # primary ray always enters (fixes inward-normal meshes)
     var normal = geom_normal if entering else (geom_normal * Float32(-1.0))
     # See this function's docstring / bxdf_sample_dielectric (bxdf.mojo) for
@@ -598,7 +607,30 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     var current_dielectric_ior = Float32(1.0)
     var previous_dielectric_ior = Float32(1.0)
 
-    for bounce in range(min(maxdepth, _MAX_B)):
+    # Depth is counted EXPLICITLY rather than by the loop variable, because a
+    # subsurface interior must not be charged for it: the boundary crossings
+    # into and out of a `Material "subsurface"` object, and the random-walk
+    # scattering events between them, are all ONE BSSRDF event. Charging them
+    # would kill the walk immediately -- head.pbrt declares maxdepth 2, so a
+    # path entering skin died after ~2 scatters and no subsurface transport
+    # happened at all (SPPM rendered the head flat white; the path tracer,
+    # which has had this exemption, renders it correctly). Same rule and same
+    # reasoning as shading.mojo's `charge_depth` / Medium_C.is_sss.
+    #
+    # `rounds` is only a safety bound so an exempt event cannot loop forever;
+    # for a scene with no subsurface medium every event charges, so `bounce`
+    # reaches the cap in exactly that many rounds and this is a no-op.
+    var max_charged = min(maxdepth, _MAX_B)
+    var bounce = 0
+    var n_events = 0   # interactions so far, charged or not
+    while bounce < max_charged and n_events < max_charged + SSS_WALK_ROUNDS:
+        n_events += 1
+        # Charged up front, and the two subsurface-exempt branches below undo
+        # it locally. Deliberately NOT a `charge_depth` flag applied at the
+        # bottom of the body: several branches `continue` from the middle, so
+        # a bottom-of-loop increment is silently skipped for exactly the
+        # volume-scatter path that matters most.
+        bounce += 1
         var ray = Ray_C(ro, rd)
         scratch[0].hit = Int8(0)
         # sd.spheres/sphereCount are REQUIRED: analytic spheres live in their
@@ -796,10 +828,16 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 break
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
+            # Entering, leaving or total-internal-reflecting at the boundary of
+            # a subsurface interior is part of the ONE BSSRDF event the walk
+            # inside it belongs to, so it is not charged to maxdepth. Same rule
+            # as the path tracer (Material_C.sss_boundary).
+            if mat.sss_boundary != Int8(0):
+                bounce -= 1
             var ior = mat.albedo.r
             var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
             var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
-                ray_dir, hit.to_simd(), gn, ior, bounce, pcg, current_dielectric_ior, previous_dielectric_ior)
+                ray_dir, hit.to_simd(), gn, ior, n_events == 1 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior)
             current_dielectric_ior = new_cur_ior
             previous_dielectric_ior = new_prev_ior
             vp.beta *= radiance_scale  # camera-path (Radiance mode): apply non-symmetric-scattering correction
@@ -1134,7 +1172,30 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     var current_dielectric_ior = Float32(1.0)
     var previous_dielectric_ior = Float32(1.0)
 
-    for bounce in range(min(maxdepth, _MAX_B)):
+    # Depth is counted EXPLICITLY rather than by the loop variable, because a
+    # subsurface interior must not be charged for it: the boundary crossings
+    # into and out of a `Material "subsurface"` object, and the random-walk
+    # scattering events between them, are all ONE BSSRDF event. Charging them
+    # would kill the walk immediately -- head.pbrt declares maxdepth 2, so a
+    # path entering skin died after ~2 scatters and no subsurface transport
+    # happened at all (SPPM rendered the head flat white; the path tracer,
+    # which has had this exemption, renders it correctly). Same rule and same
+    # reasoning as shading.mojo's `charge_depth` / Medium_C.is_sss.
+    #
+    # `rounds` is only a safety bound so an exempt event cannot loop forever;
+    # for a scene with no subsurface medium every event charges, so `bounce`
+    # reaches the cap in exactly that many rounds and this is a no-op.
+    var max_charged = min(maxdepth, _MAX_B)
+    var bounce = 0
+    var n_events = 0   # interactions so far, charged or not
+    while bounce < max_charged and n_events < max_charged + SSS_WALK_ROUNDS:
+        n_events += 1
+        # Charged up front, and the two subsurface-exempt branches below undo
+        # it locally. Deliberately NOT a `charge_depth` flag applied at the
+        # bottom of the body: several branches `continue` from the middle, so
+        # a bottom-of-loop increment is silently skipped for exactly the
+        # volume-scatter path that matters most.
+        bounce += 1
         var ray = Ray_C(ro, rd)
         scratch[0].hit = Int8(0)
         # sd.spheres/sphereCount are REQUIRED: analytic spheres live in their
@@ -1164,15 +1225,23 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var ff = sample_free_flight(
                 med, sd.grids, sd.nvdbGrids, Vec3f(ro.x, ro.y, ro.z), rd, t_hit, pcg)
             if ff.collided:
+                # A scattering event INSIDE a subsurface interior is a step of
+                # the BSSRDF random walk, not a path bounce, so it is not
+                # charged to maxdepth -- the same exemption Medium_C.is_sss
+                # buys the path tracer. Skin1 at the scale sssdragon/head use
+                # needs tens to hundreds of these before a photon escapes or is
+                # absorbed; charging them ends the walk almost immediately.
+                if med.is_sss != Int32(0):
+                    bounce -= 1
                 # Volume scatter — store photon and sample new direction
                 var sp = ro + rd * ff.t_free
-                # bounce > 0: skip storing at the light's own first
+                # n_events > 1: skip storing at the light's own first
                 # segment — that direct contribution is now covered
                 # by _sppm_nee_update instead (matches pbrt's own
                 # SPPM, which skips photon-grid gathering at depth 0
                 # specifically to avoid double-counting with its NEE
                 # term).
-                if bounce > 0:
+                if n_events > 1:
                     _sppm_store_photon[use_gpu](
                         SPPMPhoton(pos=sp, flux=flux, nxt=Int32(-1), is_volume=Int32(1), dir_in=rd, wavelengths=ph_wavelengths),
                         photons, max_photons, counter)
@@ -1254,7 +1323,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             # carries the view-side crossing (see the VP branch), so each side
             # contributes exactly one traversal of the coat.
             flux *= spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (cw.beta).r, (cw.beta).g, (cw.beta).b, ph_wavelengths)
-            if bounce > 0:
+            if n_events > 1:
                 _sppm_store_photon[use_gpu](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
@@ -1277,13 +1346,13 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             continue
 
         if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit:
-            # bounce > 0: skip storing a photon at a surface directly hit
+            # n_events > 1: skip storing a photon at a surface directly hit
             # by the light with no intermediate bounce — that direct
             # contribution is now covered by _sppm_nee_update instead
             # (matches pbrt's own SPPM, which skips gathering at depth 0
             # for the same reason: avoid double-counting direct light
             # once via NEE and again via an unfiltered photon density).
-            if bounce > 0:
+            if n_events > 1:
                 _sppm_store_photon[use_gpu](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
@@ -1314,10 +1383,16 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             continue
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
+            # Entering, leaving or total-internal-reflecting at the boundary of
+            # a subsurface interior is part of the ONE BSSRDF event the walk
+            # inside it belongs to, so it is not charged to maxdepth. Same rule
+            # as the path tracer (Material_C.sss_boundary).
+            if mat.sss_boundary != Int8(0):
+                bounce -= 1
             var ior = mat.albedo.r
             var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
             var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
-                ray_dir, hit.to_simd(), gn, ior, bounce, pcg, current_dielectric_ior, previous_dielectric_ior)
+                ray_dir, hit.to_simd(), gn, ior, n_events == 1 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior)
             current_dielectric_ior = new_cur_ior
             previous_dielectric_ior = new_prev_ior
             # Light path (TransportMode::Importance): do NOT apply the
@@ -1333,7 +1408,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
 
         elif mat.type == MatKind.conductor or mat.type == MatKind.coated_conductor:
             # Rough conductor/coated_conductor: store a gatherable photon
-            # (same bounce > 0 depth-0 double-count guard as diffuse) unless
+            # (same n_events > 1 depth-0 double-count guard as diffuse) unless
             # the sampled lobe is a perfect-mirror delta, which just
             # continues the path — mirrors bdpt.mojo's light-path treatment.
             var gn_c: Vec3f
@@ -1362,7 +1437,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 bs_c = bxdf_sample_coated_conductor(gc_c, mat, ior_c, usplit_c, uc1, uc2)
             if bs_c.is_valid == Int8(0):
                 break
-            if not bxdf_is_delta(bs_c.flags) and bounce > 0:
+            if not bxdf_is_delta(bs_c.flags) and n_events > 1:
                 _sppm_store_photon[use_gpu](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
@@ -1377,7 +1452,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var curve_idx_h = Int(inter.primId.id1)
             var wo_h = (-rd).to_simd()
             var hc = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wo_h)
-            if bounce > 0:
+            if n_events > 1:
                 _sppm_store_photon[use_gpu](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
@@ -1413,7 +1488,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var (wi_l_m, f_m, pdf_m, valid_m) = bxdf_sample_measured(mb_m, wo_l_m, uml1, uml2, ph_wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
             if not valid_m or pdf_m <= Float32(0):
                 break
-            if bounce > 0:
+            if n_events > 1:
                 _sppm_store_photon[use_gpu](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
@@ -2311,6 +2386,23 @@ def _sppm_render_core(
     var n_vps    = n_pix * _VP_SAMPLES
     var vps     = alloc[SPPMPixel](n_vps)
     var max_bounces_per_photon = min(Int(psc[0].max_depth), _MAX_B)
+    # A subsurface interior blows this budget wide open: its random-walk steps
+    # are deliberately NOT charged to maxdepth (see _sppm_trace_photon's loop
+    # header), so one photon entering skin deposits at every scatter for as
+    # long as the walk survives -- hundreds of events, not `maxdepth` of them.
+    # Sized for maxdepth alone, the shared atomic counter in
+    # _sppm_store_photon starts dropping deposits almost immediately, and the
+    # few paths that DID fit leave a wildly inflated local photon density that
+    # the estimator still divides by the full emitted count: head.pbrt read
+    # ~33x the pbrt reference, uniformly, at every pass count. Exactly the
+    # failure the comment above describes, with a different cause.
+    var has_sss_medium = False
+    for mi in range(Int(sd.mediumCount)):
+        if sd.mediums[mi].is_sss != Int32(0):
+            has_sss_medium = True
+            break
+    if has_sss_medium:
+        max_bounces_per_photon += SSS_WALK_ROUNDS
     var max_photons = n_photons_per_pass * max(max_bounces_per_photon, 1)
     var photons = alloc[SPPMPhoton](max_photons)
     var heads   = alloc[Int32](_HSIZE)
