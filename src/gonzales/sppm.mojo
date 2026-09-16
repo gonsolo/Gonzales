@@ -17,7 +17,7 @@ from .geometry import (
     Instance_C, dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI, Frame,
     Curve_C, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, InfiniteLight_C, PointLight_C,
     MeasuredBRDF_C, GpuTexture_C, _is_real_ptr,
-    FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral,
+    FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density,
     medium_transmittance_ratio_spectral, spectral_free_flight_weight,
 )
 from .bvh import (
@@ -1631,7 +1631,84 @@ def _sppm_gather_one(
                         # cosine-weighted density (same convention the
                         # Lambertian/phase branches already rely on).
                         if vp.is_volume == Int32(1):
-                            phi += spec_refl(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, vp.alb.r, vp.alb.g, vp.alb.b, ph.wavelengths) * INV_FOUR_PI * ph.flux
+                            # VOLUME radiance estimate, which is NOT the surface
+                            # one with a different kernel volume.
+                            #
+                            # Photons stored in a medium sit at SCATTERING
+                            # EVENTS, and the density of those events is itself
+                            # proportional to sigma_s: flux deposited in dV from
+                            # direction w' is sigma_s * L(x,w') dV dw'. Recovering
+                            # radiance therefore needs a 1/sigma_s that a surface
+                            # gather has no analogue of (Jensen's volumetric
+                            # radiance estimate). It was missing, so the estimate
+                            # was too bright by exactly sigma_s -- invisible in
+                            # thin fog and ruinous in anything dense. Measured on
+                            # a plain homogeneous scatterer of albedo 0.9 against
+                            # the path tracer, with no subsurface material
+                            # anywhere: 1.67x at sigma_s = 1, 10.5x at 10, 55.9x
+                            # at 100. That is the whole of the "SPPM subsurface is
+                            # 33-142x hot" symptom -- skin is simply a very dense
+                            # medium.
+                            #
+                            # `vp.alb` (= sigma_s/sigma_t) is applied here rather
+                            # than folded into vp.beta, mirroring how a surface VP
+                            # defers its BRDF, so alb/sigma_s collapses to
+                            # 1/sigma_t. Using that form directly is both cheaper
+                            # and safer: sigma_t is never zero inside a medium,
+                            # and it avoids dividing two INDEPENDENTLY upsampled
+                            # spectra, which is exactly what made the subsurface
+                            # albedo exceed 1 in 6de092a1.
+                            # Guard the index: a VP whose medium is unknown
+                            # (or a descriptor with no medium table) must not
+                            # index the array -- dereferencing it crashed every
+                            # --sppm run here. NOTE: no `continue` in this
+                            # guard. The enclosing loop is a `while k != -1`
+                            # walk down a photon linked list whose `k` advance
+                            # sits at the BOTTOM, so a `continue` never
+                            # advances it and the render hangs forever (it did,
+                            # for 30 minutes, before this was written as a
+                            # plain conditional).
+                            var mi_v = Int(vp.med_idx)
+                            var ok_med = (mi_v >= 0 and mi_v < Int(sd.mediumCount)
+                                          and _is_real_ptr[Medium_C](sd.mediums))
+                            var medv = sd.mediums[mi_v] if ok_med else Medium_C(
+                                sigma_a=RGB(Float32(0)), sigma_s=RGB(Float32(1)),
+                                g=Float32(0), grid_idx=Int32(-1), nvdb_idx=Int32(-1),
+                                nvdb_temp_idx=Int32(-1), le_scale=Float32(0),
+                                temp_offset=Float32(0), temp_scale=Float32(1),
+                                is_sss=Int32(0))
+                            var sig_t_spec = medium_sigma_t_spectral(
+                                medv, ph.wavelengths, spectral_coeffs, spectral_res,
+                                spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+                            # Heterogeneous media author sigma per UNIT DENSITY,
+                            # so the extinction actually in force at the VP is
+                            # density(x) * sigma_t (same rule Medium_C documents).
+                            var dens = Float32(1.0)
+                            if medium_is_heterogeneous(medv):
+                                var gvol = medium_grid_for(medv, sd.grids)
+                                var nvol = medium_nvdb_for(medv, sd.nvdbGrids)
+                                if medv.nvdb_idx >= Int32(0):
+                                    dens = nvdb_sample_density(nvol, vp.pos.to_simd())
+                                else:
+                                    dens = grid_sample_density(gvol, vp.pos.to_simd())
+                            var inv0 = Float32(1.0) / max(sig_t_spec.v0 * dens, Float32(1e-12))
+                            var inv1 = Float32(1.0) / max(sig_t_spec.v1 * dens, Float32(1e-12))
+                            var inv2 = Float32(1.0) / max(sig_t_spec.v2 * dens, Float32(1e-12))
+                            var inv3 = Float32(1.0) / max(sig_t_spec.v3 * dens, Float32(1e-12))
+                            if ok_med:
+                                # Keep `alb`, and divide by sigma_t (NOT
+                                # sigma_s): this implementation stores a photon
+                                # at every COLLISION, before the scatter/absorb
+                                # decision, so deposit density goes as sigma_t
+                                # and the flux is pre-albedo. Jensen's 1/sigma_s
+                                # assumes deposits at SCATTERING events; matching
+                                # the divisor to where photons are actually
+                                # stored is what makes the two conventions agree.
+                                phi += spec_refl(spectral_coeffs, spectral_res,
+                                                 spectral_cie_x, spectral_cie_y,
+                                                 spectral_cie_z, spectral_d65,
+                                                 vp.alb.r, vp.alb.g, vp.alb.b, ph.wavelengths) \
+                                       * SpectralSample(inv0, inv1, inv2, inv3) * INV_FOUR_PI * ph.flux
                         elif vp.mat_kind == Int32(1):
                             var wi_c = (-ph.dir_in).to_simd()
                             var f_c = bxdf_eval_conductor_ggx(vp.normal.to_simd(), vp.wo.to_simd(), wi_c, vp.alpha, vp.alb)
