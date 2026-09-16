@@ -2250,14 +2250,25 @@ def _sample_medium_core(
         # GPU PT / VCM / SPPM all treat a medium's colour identically.
         # See docs/02_spectra_and_color.md, "Chromatic extinction".
         path_ptr[].throughput *= medium_transmittance_ratio_spectral(
-            med, t_seg, path_ptr[].wavelengths,
+            med, t_seg, ff.pdf, path_ptr[].wavelengths,
             spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
         if ff.collided:
             # Chromatic scattering ratio; 1 for a grey medium.
+            #
+            # The extra sigma_t.r closes the estimator against the scatter/
+            # absorb coin below, which is played at RED's albedo
+            # (sigma_s.r/sigma_t.r) whatever lane the distance came from.
+            # With the segment factor above now exp(-sigma_i*t)/p_bar rather
+            # than a ratio to red's own exponential, the full product is
+            #   p_bar * (sigma_s.r/sigma_t.r)            <- actually sampled
+            #     * exp(-sigma_i*t)/p_bar * sigma_t.r * sigma_s_i/sigma_s.r
+            #   = sigma_s_i * exp(-sigma_i*t)            <- what is wanted
+            # for every lane i. p_bar cancels, which is the point: correctness
+            # does not depend on WHICH lane the free flight was drawn from.
             var ss_r = max(med.sigma_s.r, Float32(1e-30))
             path_ptr[].throughput *= rgb_bands_to_spectral_sample(
                 Float32(1.0), med.sigma_s.g / ss_r, med.sigma_s.b / ss_r,
-                path_ptr[].wavelengths)
+                path_ptr[].wavelengths) * sigma_t.r
 
     if not ff.collided:
         path_ptr[].pcgState = pcg.state

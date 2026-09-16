@@ -1012,6 +1012,16 @@ struct FreeFlight(TrivialRegisterPassable):
                             # density(x) * that for a heterogeneous one -- so a caller's
                             # `sig_t * exp(-sig_t * t_free)` pdf stays meaningful in both
                             # cases and reduces exactly to the old expression at density 1.
+    var pdf:     Float32    # the density the outcome was ACTUALLY drawn from, and the
+                            # single source of truth for every weight (all of which are
+                            # f/pdf). Collided: a density, 1/length. Pass-through: the
+                            # survival PROBABILITY, dimensionless. Under hero-wavelength
+                            # MIS this is the uniform MIXTURE over the sampleable lanes
+                            # (free_flight_mixture_pdf), NOT sig_t's lone exponential --
+                            # which is exactly why it has to be carried rather than
+                            # reconstructed by a caller from sig_t. A caller that
+                            # reconstructs is silently wrong the moment the medium is
+                            # chromatic; use this field.
     var albedo:  RGB        # single-scattering albedo at the collision point (only if collided)
     var weight:  RGB        # per-channel chromatic WEIGHT, meaningful in BOTH branches.
                             # A pure RATIO to the sampled (red) channel, never a raw
@@ -1031,12 +1041,112 @@ struct FreeFlight(TrivialRegisterPassable):
                             # for the whole homogeneous branch.
 
 @always_inline
-def sample_homogeneous_free_flight(med: Medium_C, t_surf: Float32, mut pcg: PCG32) -> FreeFlight:
+@always_inline
+def _ff_lane(sig: SpectralSample, i: Int) -> Float32:
+    """Lane `i` of a 4-lane extinction sample, by index (SpectralSample has no
+    subscript)."""
+    if i == 0: return sig.v0
+    if i == 1: return sig.v1
+    if i == 2: return sig.v2
+    return sig.v3
+
+
+@always_inline
+def free_flight_mixture_pdf(sig: SpectralSample, n: Int, t: Float32, collided: Bool) -> Float32:
+    """The density a free-flight distance drawn under hero-wavelength MIS was
+    actually sampled from: the UNIFORM MIXTURE p_bar = (1/|A|) * sum_{j in A} p_j
+    over the sampleable lanes A = {j < n : sigma_j > 0}.
+
+    Choosing a lane uniformly and then sampling that lane's exponential IS
+    sampling from this mixture, so `f_i / p_bar` is the single-sample
+    balance-heuristic MIS estimator for lane i -- and it is bounded by |A|,
+    where the old ratio-to-red `f_i / p_red` was unbounded. That bound is the
+    entire point: a subsurface walk multiplies hundreds of these together, and
+    a product of hundreds of mean-1 UNBOUNDED factors is log-normal, which is
+    the firefly distribution that made `head.pbrt` diverge
+    (project_pt_sss_energy_amplification).
+
+    Lanes with sigma_j == 0 are excluded from A -- they cannot be sampled from
+    (infinite mean free path) -- but they are still WEIGHTED by the caller,
+    which stays unbiased because p_bar > 0 wherever any f_i > 0.
+
+    n == 1 recovers the old behaviour EXACTLY: A = {red}, p_bar = p_red, and
+    every weight collapses to the ratio-to-red this replaced. So the previous
+    estimator is literally the one-lane case of this one, not a separate path."""
+    var acc = Float32(0.0)
+    var cnt = 0
+    for i in range(n):
+        var sj = _ff_lane(sig, i)
+        if sj <= Float32(0.0):
+            continue
+        cnt += 1
+        if collided:
+            acc += sj * exp(-sj * t)
+        else:
+            acc += exp(-sj * t)
+    if cnt == 0:
+        # No lane can extinguish: nothing collides, everything survives intact.
+        return Float32(0.0) if collided else Float32(1.0)
+    return acc / Float32(cnt)
+
+
+@always_inline
+def _ff_pick_lane(sig: SpectralSample, n: Int, mut pcg: PCG32) -> Float32:
+    """Uniformly choose one sampleable lane's extinction, or 0 if none is."""
+    var cnt = 0
+    for i in range(n):
+        if _ff_lane(sig, i) > Float32(0.0):
+            cnt += 1
+    if cnt == 0:
+        return Float32(0.0)
+    if cnt == 1:
+        # Draw NOTHING when there is no choice to make. Consuming a variate
+        # here would shift the PCG stream for every existing caller, so the
+        # n == 1 path would stop being bit-identical to the pre-MIS sampler
+        # it is supposed to reduce to -- which is exactly what
+        # test_free_flight_t_free_matches_closed_form_inversion_formula
+        # caught.
+        for i in range(n):
+            var sj = _ff_lane(sig, i)
+            if sj > Float32(0.0):
+                return sj
+        return Float32(0.0)
+    var k = Int(pcg.next_float() * Float32(cnt))
+    if k >= cnt: k = cnt - 1        # guard the u == 1.0 endpoint
+    var seen = 0
+    for i in range(n):
+        var sj = _ff_lane(sig, i)
+        if sj <= Float32(0.0):
+            continue
+        if seen == k:
+            return sj
+        seen += 1
+    return Float32(0.0)
+
+
+def sample_homogeneous_free_flight(
+    med: Medium_C, t_surf: Float32, mut pcg: PCG32,
+    # Hero-wavelength MIS. Supply these and the free flight is drawn from the
+    # uniform MIXTURE over the 4 hero lanes' exponentials instead of from red
+    # alone, which bounds every resulting weight by the lane count. Omit them
+    # and `lane_sig` stays a single red lane, i.e. EXACTLY the old estimator --
+    # correctness never depends on the plumbing, only variance does. Whatever
+    # was used is recorded in FreeFlight.pdf, so a weight computed later as
+    # f/ff.pdf can never disagree with what was actually sampled.
+    lane_sig: SpectralSample = SpectralSample(Float32(0.0)),
+    lane_n: Int = 0,
+) -> FreeFlight:
     var sigma_t = med.sigma_a + med.sigma_s
     var sig_t = sigma_t.r
     if sig_t <= Float32(0.0):
-        return FreeFlight(False, t_surf, sig_t, RGB(Float32(0)), RGB(Float32(1)), SpectralSample(Float32(0)))
-    var t_free = -log(max(pcg.next_float(), Float32(1e-7))) / sig_t
+        return FreeFlight(False, t_surf, sig_t, Float32(1.0), RGB(Float32(0)), RGB(Float32(1)), SpectralSample(Float32(0)))
+    # n == 1 with lane 0 = red reproduces the pre-MIS sampler bit-for-bit.
+    var sig = lane_sig if lane_n > 0 else SpectralSample(sig_t, Float32(0), Float32(0), Float32(0))
+    var n = lane_n if lane_n > 0 else 1
+    var sig_k = _ff_pick_lane(sig, n, pcg)
+    if sig_k <= Float32(0.0):
+        sig_k = sig_t
+    var t_free = -log(max(pcg.next_float(), Float32(1e-7))) / sig_k
     if t_free < t_surf:
         var alb_s = med.sigma_s.r / sig_t
         var alb_g_s = med.sigma_s.g / sigma_t.g if sigma_t.g > Float32(0.0) else alb_s
@@ -1059,13 +1169,21 @@ def sample_homogeneous_free_flight(med: Medium_C, t_surf: Float32, mut pcg: PCG3
         # to this shared BDPT/SPPM sampler -- the same fixed-in-one-consumer
         # split that accounts for most defects in this codebase. Exactly 1 on
         # every channel for a grey medium, so grey renders are unaffected.
-        var wg = (exp(-(sigma_t.g - sigma_t.r) * t_free) * sigma_t.g / sig_t
+        # Both the RGB weight here and the spectral one in
+        # spectral_free_flight_weight are now the SAME estimator, f/p_bar,
+        # differing only in which basis f is evaluated on. p_bar reduces to
+        # sigma_t.r*exp(-sigma_t.r*t) when no lanes were supplied, which makes
+        # each of these exactly the ratio-to-red expression it replaced.
+        var p_bar = free_flight_mixture_pdf(sig, n, t_free, True)
+        if p_bar < Float32(1e-30): p_bar = Float32(1e-30)
+        var wr = sigma_t.r * exp(-sigma_t.r * t_free) / p_bar
+        var wg = (sigma_t.g * exp(-sigma_t.g * t_free) / p_bar
                   if sigma_t.g > Float32(0.0) else Float32(1.0))
-        var wb = (exp(-(sigma_t.b - sigma_t.r) * t_free) * sigma_t.b / sig_t
+        var wb = (sigma_t.b * exp(-sigma_t.b * t_free) / p_bar
                   if sigma_t.b > Float32(0.0) else Float32(1.0))
-        return FreeFlight(True, t_free, sig_t,
+        return FreeFlight(True, t_free, sig_t, p_bar,
                                      RGB(alb_s, alb_g_s, alb_b_s),
-                                     RGB(Float32(1.0), wg, wb),
+                                     RGB(wr, wg, wb),
                                      SpectralSample(Float32(0)))
     # Pass-through WEIGHT, not the raw Beer-Lambert factor. The distance was
     # sampled from the red channel, so P(reach the surface) is ALREADY
@@ -1085,12 +1203,12 @@ def sample_homogeneous_free_flight(med: Medium_C, t_surf: Float32, mut pcg: PCG3
     # too. gpu.mojo's _sample_medium_core has always used the ratio (its own
     # comment records the same fix); it simply never propagated to this
     # BDPT/SPPM sampler.
-    var t_ref = exp(-sigma_t.r * t_surf)
-    if t_ref < Float32(1e-30): t_ref = Float32(1e-30)
-    var Tr = RGB(Float32(1.0),
-                 exp(-sigma_t.g * t_surf) / t_ref,
-                 exp(-sigma_t.b * t_surf) / t_ref)
-    return FreeFlight(False, t_free, sig_t, RGB(Float32(0)), Tr, SpectralSample(Float32(0)))
+    var p_bar = free_flight_mixture_pdf(sig, n, t_surf, False)
+    if p_bar < Float32(1e-30): p_bar = Float32(1e-30)
+    var Tr = RGB(exp(-sigma_t.r * t_surf) / p_bar,
+                 exp(-sigma_t.g * t_surf) / p_bar,
+                 exp(-sigma_t.b * t_surf) / p_bar)
+    return FreeFlight(False, t_free, sig_t, p_bar, RGB(Float32(0)), Tr, SpectralSample(Float32(0)))
 
 
 # ── Genuinely spectral free-flight weight (chromatic media) ─────────────────
@@ -1142,7 +1260,7 @@ def medium_sigma_t_spectral(
 
 @always_inline
 def medium_transmittance_ratio_spectral(
-    med: Medium_C, t: Float32, wavelengths: SampledWavelengths,
+    med: Medium_C, t: Float32, pdf: Float32, wavelengths: SampledWavelengths,
     spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
     spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
     spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
@@ -1150,9 +1268,10 @@ def medium_transmittance_ratio_spectral(
     spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
 ) -> SpectralSample:
     """The chromatic RATIO of each hero wavelength's transmittance over a
-    homogeneous segment of length `t` to the sampled (red) channel's:
-    exp(-(sigma_t(lambda_i) - sigma_t.r) * t), sigma_t upsampled to the 4
-    hero lanes FIRST (medium_sigma_t_spectral) then exponentiated PER LANE --
+    homogeneous segment of length `t` to the density it was actually SAMPLED
+    from, `pdf` (pass FreeFlight.pdf): exp(-sigma_t(lambda_i) * t) / pdf, with
+    sigma_t upsampled to the 4 hero lanes FIRST (medium_sigma_t_spectral) then
+    exponentiated PER LANE --
     exactly the `d0..d3` half of spectral_free_flight_weight below, pulled
     out because gpu.mojo's _sample_medium_core needs precisely this ratio
     (and nothing else -- it applies its own sigma_s/albedo factor separately,
@@ -1166,11 +1285,13 @@ def medium_transmittance_ratio_spectral(
         return SpectralSample(Float32(1.0))
     var sig_t_spec = medium_sigma_t_spectral(
         med, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+    var p = pdf
+    if p < Float32(1e-30): p = Float32(1e-30)
     return SpectralSample(
-        exp(-(sig_t_spec.v0 - sig_t_r) * t),
-        exp(-(sig_t_spec.v1 - sig_t_r) * t),
-        exp(-(sig_t_spec.v2 - sig_t_r) * t),
-        exp(-(sig_t_spec.v3 - sig_t_r) * t))
+        exp(-sig_t_spec.v0 * t) / p,
+        exp(-sig_t_spec.v1 * t) / p,
+        exp(-sig_t_spec.v2 * t) / p,
+        exp(-sig_t_spec.v3 * t) / p)
 
 @always_inline
 def spectral_free_flight_weight(
@@ -1218,20 +1339,27 @@ def spectral_free_flight_weight(
     var sig_t_spec = medium_sigma_t_spectral(
         med, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
     var t = ff.t_free if ff.collided else t_surf
-    var d0 = exp(-(sig_t_spec.v0 - sig_t_r) * t)
-    var d1 = exp(-(sig_t_spec.v1 - sig_t_r) * t)
-    var d2 = exp(-(sig_t_spec.v2 - sig_t_r) * t)
-    var d3 = exp(-(sig_t_spec.v3 - sig_t_r) * t)
+    # Single-sample MIS estimator f_i / p_bar, where p_bar is the density the
+    # distance was ACTUALLY drawn from. Read it off `ff` rather than rederiving
+    # it: BDPT and SPPM call sample_free_flight without the lane arguments, so
+    # a locally recomputed 4-lane mixture would silently disagree with the
+    # 1-lane one the sampler used and bias every chromatic medium. Taking it
+    # from `ff` makes the two impossible to desynchronise -- richer plumbing
+    # then buys variance, never correctness.
+    var p_bar = ff.pdf
+    if p_bar < Float32(1e-30): p_bar = Float32(1e-30)
     if not ff.collided:
-        return SpectralSample(d0, d1, d2, d3)
-    # Collision branch carries an extra sigma_t(lambda)/sigma_t.r factor (see
-    # sample_homogeneous_free_flight's own derivation comment for the RGB
-    # analogue -- same algebra, per hero lane instead of per RGB channel).
-    var r0 = sig_t_spec.v0 / sig_t_r
-    var r1 = sig_t_spec.v1 / sig_t_r
-    var r2 = sig_t_spec.v2 / sig_t_r
-    var r3 = sig_t_spec.v3 / sig_t_r
-    return SpectralSample(d0 * r0, d1 * r1, d2 * r2, d3 * r3)
+        return SpectralSample(exp(-sig_t_spec.v0 * t) / p_bar,
+                              exp(-sig_t_spec.v1 * t) / p_bar,
+                              exp(-sig_t_spec.v2 * t) / p_bar,
+                              exp(-sig_t_spec.v3 * t) / p_bar)
+    # Collision: f_i = sigma_t(lambda_i) * exp(-sigma_t(lambda_i) * t). The
+    # caller applies `ff.albedo` (sigma_s/sigma_t) separately, so the product
+    # is the physical sigma_s(lambda_i)*exp(-sigma_t(lambda_i)*t) / p_bar.
+    return SpectralSample(sig_t_spec.v0 * exp(-sig_t_spec.v0 * t) / p_bar,
+                          sig_t_spec.v1 * exp(-sig_t_spec.v1 * t) / p_bar,
+                          sig_t_spec.v2 * exp(-sig_t_spec.v2 * t) / p_bar,
+                          sig_t_spec.v3 * exp(-sig_t_spec.v3 * t) / p_bar)
 
 
 @fieldwise_init
@@ -2206,6 +2334,16 @@ def sample_free_flight(
     docs/09_volumetric_media.md for the delta/ratio-tracking theory and the
     local-majorant optimization."""
     if not medium_is_heterogeneous(med):
+        # Hand the homogeneous sampler its 4 hero-lane extinctions when a real
+        # spectral table is available, so the free flight is drawn from the
+        # lane mixture (bounded weights) rather than from red alone. Without a
+        # table medium_sigma_t_spectral has no curve to evaluate, so stay on
+        # the single-lane estimator, which is the same estimator with n = 1.
+        if spectral_res > 0:
+            var lane_sig = medium_sigma_t_spectral(
+                med, wavelengths, spectral_coeffs, spectral_res,
+                spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+            return sample_homogeneous_free_flight(med, t_surf, pcg, lane_sig, 4)
         return sample_homogeneous_free_flight(med, t_surf, pcg)
 
     var sigma_t = med.sigma_a + med.sigma_s
@@ -2218,7 +2356,7 @@ def sample_free_flight(
     var sigma_maj = majorant_density * sigma_t.r
     var emission = SpectralSample(Float32(0))
     if sigma_maj <= Float32(0.0):
-        return FreeFlight(False, t_surf, Float32(0), RGB(Float32(0)), RGB(Float32(1)), emission)
+        return FreeFlight(False, t_surf, Float32(0), Float32(1.0), RGB(Float32(0)), RGB(Float32(1)), emission)
 
     # ── Segment-wise tracking with LOCAL majorants ─────────────────────────
     # Walk the ray one NanoVDB tree node at a time, using that node's own max
@@ -2284,7 +2422,7 @@ def sample_free_flight(
             collided = True
             break
     if not collided:
-        return FreeFlight(False, t, Float32(0), RGB(Float32(0)), RGB(Float32(1)), emission)
+        return FreeFlight(False, t, Float32(0), Float32(1.0), RGB(Float32(0)), RGB(Float32(1)), emission)
 
     # `sig_t` is the extinction ACTUALLY in force at the collision point
     # (density-scaled), so a caller's analytic `sig_t * exp(-sig_t * t_free)`
@@ -2295,4 +2433,10 @@ def sample_free_flight(
     var alb = RGB(med.sigma_s.r * inv_sig_t,
                   med.sigma_s.g / max(sigma_t.g, Float32(1e-7)) if sigma_t.g > Float32(0.0) else med.sigma_s.r * inv_sig_t,
                   med.sigma_s.b / max(sigma_t.b, Float32(1e-7)) if sigma_t.b > Float32(0.0) else med.sigma_s.r * inv_sig_t)
-    return FreeFlight(True, t, density * sigma_t.r, alb, RGB(Float32(1)), emission)
+    # Delta tracking's collision density is not analytic; it accepts on the
+    # red channel alone and carries no chromatic ratio (weight 1), so the
+    # honest pdf to record is that lane's own exponential -- which is what
+    # bdpt.mojo reconstructed here before, so heterogeneous media are
+    # bit-for-bit unchanged by the MIS work.
+    var het_sig = density * sigma_t.r
+    return FreeFlight(True, t, het_sig, het_sig * exp(-het_sig * t), alb, RGB(Float32(1)), emission)

@@ -1845,7 +1845,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 v.beta = beta
                 v.alb = ff.albedo
                 v.is_surface = Int32(0); v.is_delta = Int32(0)
-                v.pdf_fwd = ff.sig_t * exp(-ff.sig_t * ff.t_free)
+                v.pdf_fwd = ff.pdf   # the density actually sampled from; under hero-wavelength MIS this is a lane MIXTURE, not sig_t's lone exponential
                 v.med_idx = cur_med_idx
                 v.wavelengths = wavelengths
                 if n_verts == 0: first_alb = ff.albedo
@@ -1951,7 +1951,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # uncorrected recursion's worst relative error runs 8e-16 in
                 # vacuum but 0.27 at sigma_t=0.1, 12 at 1.0 and 1e5 at 4.0.
                 # Identically 1 when sigma_t = 0, so this is inert outside media.
-                var ff_exp = ff.sig_t * t_hit
+                var ff_exp = -log(max(ff.pdf, Float32(1e-30)))   # optical depth of the density actually sampled from (see FreeFlight.pdf)
                 if ff_exp > Float32(60.0): ff_exp = Float32(60.0)  # defensive: e^-60 pass-through never occurs
                 dvcm_carry *= exp(ff_exp)
 
@@ -3107,7 +3107,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 v.beta = flux
                 v.alb = ff.albedo
                 v.is_surface = Int32(0); v.is_delta = Int32(0)
-                v.pdf_fwd = ff.sig_t * exp(-ff.sig_t * ff.t_free)
+                v.pdf_fwd = ff.pdf   # the density actually sampled from; under hero-wavelength MIS this is a lane MIXTURE, not sig_t's lone exponential
                 v.med_idx = cur_med_idx
                 v.wavelengths = wavelengths
                 n_verts += 1
@@ -3146,7 +3146,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 # Same missing free-flight factor on dVCM as the camera path --
                 # see _bdpt_camera_path_bounce's matching comment for the
                 # derivation and the measured error growth with optical depth.
-                var ff_exp_l = ff.sig_t * t_hit
+                var ff_exp_l = -log(max(ff.pdf, Float32(1e-30)))   # optical depth of the density actually sampled from (see FreeFlight.pdf)
                 if ff_exp_l > Float32(60.0): ff_exp_l = Float32(60.0)
                 dvcm_carry *= exp(ff_exp_l)
 
