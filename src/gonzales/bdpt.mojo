@@ -7211,7 +7211,7 @@ def sppm_render_gpu(
             # budget, the photon-pass equivalent, buffer saturation, glossy VP
             # placement). This says which term is actually zero instead.
             if verbose:
-                var n_novp = 0; var n_nophot = 0; var n_dark = 0; var n_tot = 0
+                var n_novp = 0; var n_nophot = 0; var n_dark = 0; var n_tot = 0; var n_envonly = 0
                 with vps_buf.map_to_host() as vh:
                     var vp_host = vh.unsafe_ptr().bitcast[SPPMPixel]()
                     for pi in range(n_pix):
@@ -7226,10 +7226,17 @@ def sppm_render_gpu(
                             if (v.ld.v0 + v.ld.v1 + v.ld.v2 + v.ld.v3) > Float32(1e-12): any_light = True
                             if (v.env.r + v.env.g + v.env.b) > Float32(1e-12): any_light = True
                         n_tot += 1
-                        if not any_valid: n_novp += 1
+                        if not any_valid:
+                            # Split the no-VP case: a camera ray that MISSES all
+                            # geometry legitimately has no visible point and
+                            # carries the environment in `env`. Only a pixel with
+                            # neither a VP nor any env is genuinely dead.
+                            if not any_light: n_novp += 1
+                            else: n_envonly += 1
                         elif not any_phot and not any_light: n_dark += 1
                         elif not any_phot: n_nophot += 1
-                print("SPPM diag: " + String(n_tot) + " pixels | no VP at all: " + String(n_novp)
+                print("SPPM diag: " + String(n_tot) + " pixels | DEAD (no VP, no env): " + String(n_novp)
+                      + " | no VP but env only: " + String(n_envonly)
                       + " | VP but zero photons AND no light: " + String(n_dark)
                       + " | VP with light but zero photons: " + String(n_nophot))
             # Keep these device buffers alive (Mojo's ASAP destruction would
