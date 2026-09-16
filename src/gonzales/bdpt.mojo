@@ -21,7 +21,7 @@ from .geometry import (
     Grid_C, NvdbGrid_C,
     spectral_free_flight_weight,
 )
-from .bssrdf import dipole_max_radius
+from .bssrdf import dipole_max_radius, dipole_rd, dipole_mis_sigma_tr, dipole_sample_radius, bssrdf_probe_offset, bssrdf_exit_pdf_area
 from .bvh import (
     BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres, _mk_sd_full,
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf,
@@ -2733,38 +2733,135 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             dvm_carry = dvm_new_m
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
-            var gn: Vec3f
-            if inter.primId.type == Int8(4):
-                var si = Int(inter.primId.id1)
-                var sph = sd.spheres[si]
-                gn = sphere_outward_normal(hit, sph.center).to_simd()
-            else:
-                gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-            var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
-                ray_dir, hit.to_simd(), gn, mat.albedo.r, n_bounces == 0 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior)
-            current_dielectric_ior = new_cur_ior
-            previous_dielectric_ior = new_prev_ior
-            n_bounces += 1
-            last_bsdf_pdf = Float32(-1)  # delta bounce: no infinite-light NEE done here
-            # Specular vertex: no BSDF record needed, just track throughput.
-            # Camera path (Radiance mode): apply the non-symmetric-scattering
-            # correction (see _dielectric_bounce's docstring).
-            beta *= radiance_scale
-            if has_med:
-                var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
-                if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
-            rd = vec3f(new_dir)
-            ro = point3f(new_org)
-            # VCM Stage 2b: genuinely delta/specular, matches SmallVCM's own
-            # specular-bounce handling directly.
-            var cos_fix_d = abs(dot(-ray_dir, gn))
-            if cos_fix_d > Float32(1e-6):
-                dvc_carry /= cos_fix_d
-                dvm_carry /= cos_fix_d
-            var cos_theta_out_d = abs(dot(new_dir, gn))
-            dvcm_carry = Float32(0)
-            dvc_carry *= cos_theta_out_d
-            dvm_carry *= cos_theta_out_d
+            var did_bssrdf_hop = False
+            # ── Subsurface boundary: a BSSRDF hop, as an EXTRA vertex ──────
+            # See bssrdf.mojo for the MIS derivation. The essential point: the
+            # hop is sampled NATIVELY in area measure, p_A(x_o|x_i), so unlike
+            # every other vertex here it needs NO geometry conversion -- the
+            # cos/d^2 the local-vertex recursion applies would be wrong by
+            # exactly that factor. And p_rev = p_A, because both the radial
+            # profile and the probe Jacobian |n_i . n_o| are symmetric in the
+            # two endpoints, so a light subpath's hop has the same density.
+            #
+            # Contained by construction: this fires only on sss_boundary, so
+            # no non-subsurface scene in the corpus can be affected.
+            if mat.sss_boundary != Int8(0) and Int(cur_med_idx) < 0 and has_med:
+                var gn_s0: Vec3f
+                if inter.primId.type == Int8(4):
+                    var sph_s = sd.spheres[Int(inter.primId.id1)]
+                    gn_s0 = sphere_outward_normal(hit, sph_s.center).to_simd()
+                else:
+                    gn_s0 = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+                if dot(gn_s0, ray_dir) > Float32(0.0):
+                    gn_s0 = gn_s0 * Float32(-1.0)
+                var med_i = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
+                if med_i >= Int32(0) and Int(med_i) < Int(sd.mediumCount):
+                    var medb = sd.mediums[Int(med_i)]
+                    var eta_b = mat.albedo.r
+                    var cos_i = abs(dot(gn_s0, ray_dir))
+                    var ft_i = Float32(1.0) - fr_dielectric(cos_i, eta_b)
+                    var rmax_b = dipole_max_radius(medb.sigma_s, medb.sigma_a, medb.g)
+                    var ch = Int(pcg.next_float() * Float32(3.0))
+                    if ch > 2: ch = 2
+                    var str_c = dipole_mis_sigma_tr(medb.sigma_s, medb.sigma_a, medb.g, ch)
+                    var r_s = dipole_sample_radius(str_c, pcg.next_float())
+                    if ft_i > Float32(0.0) and r_s < rmax_b and str_c > Float32(0.0):
+                        var frm_s = Frame.from_z(gn_s0)
+                        var t_s = Vec3f(frm_s.x.x, frm_s.x.y, frm_s.x.z)
+                        var b_s = Vec3f(frm_s.y.x, frm_s.y.y, frm_s.y.z)
+                        var phi_s = Float32(6.2831853) * pcg.next_float()
+                        var (off_s, seg_s) = bssrdf_probe_offset(r_s, phi_s, rmax_b, t_s, b_s, gn_s0)
+                        var probe_o = hit + off_s
+                        var probe_ray = Ray_C(probe_o, vec3f(gn_s0 * Float32(-1.0)))
+                        scratch[0].hit = Int8(0)
+                        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves,
+                                           probe_ray, seg_s, scratch,
+                                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
+                                           sd.spheres, Int(sd.sphereCount))
+                        if scratch[0].hit != Int8(0):
+                            var pi2 = scratch[0]
+                            var x_o = probe_o + (gn_s0 * Float32(-1.0)) * pi2.tHit
+                            var n_o: Vec3f
+                            if pi2.primId.type == Int8(4):
+                                var sph_o = sd.spheres[Int(pi2.primId.id1)]
+                                n_o = sphere_outward_normal(x_o, sph_o.center).to_simd()
+                            else:
+                                n_o = _geom_normal(pi2, sd.meshes, sd.instances, sd.spheres, x_o.to_simd())
+                            var d_io = x_o - hit
+                            var r_act = sqrt(dot(d_io, d_io))
+                            var cos_probe = abs(dot(n_o, gn_s0))
+                            var p_A = bssrdf_exit_pdf_area(medb.sigma_s, medb.sigma_a, medb.g, r_act, cos_probe)
+                            if p_A > Float32(1e-12) and r_act <= rmax_b:
+                                var rd_v = dipole_rd(medb.sigma_s, medb.sigma_a, medb.g, eta_b, r_act)
+                                # Cosine-weighted exit, and its Fresnel.
+                                var frm_o = Frame.from_z(n_o)
+                                var u1 = pcg.next_float(); var u2 = pcg.next_float()
+                                var rr_o = sqrt(u1); var ph_o = Float32(6.2831853) * u2
+                                var loc = Vec3f(rr_o * cos(ph_o), rr_o * sin(ph_o), sqrt(max(Float32(1.0) - u1, Float32(0.0))))
+                                var wo_new = (Vec3f(frm_o.x.x, frm_o.x.y, frm_o.x.z) * loc[0]
+                                            + Vec3f(frm_o.y.x, frm_o.y.y, frm_o.y.z) * loc[1]
+                                            + n_o * loc[2])
+                                var cos_out_s = max(loc[2], Float32(1e-6))
+                                var pdf_w_s = cos_out_s / Float32(3.14159265)
+                                var ft_o = Float32(1.0) - fr_dielectric(cos_out_s, eta_b)
+                                # UNBOUNDED upsample: R_d is a density (~1e4 for
+                                # skin), not a reflectance -- spec_refl clamps.
+                                var wgt = spec_refl_unbounded(
+                                    sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
+                                    sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
+                                    rd_v.r * ft_i * ft_o / p_A,
+                                    rd_v.g * ft_i * ft_o / p_A,
+                                    rd_v.b * ft_i * ft_o / p_A, wavelengths)
+                                beta *= wgt
+                                # MIS: the hop (area measure, NO cos/d^2), then
+                                # the ordinary cosine exit at x_o.
+                                var inv_pA = Float32(1.0) / p_A
+                                var dvc_h = inv_pA * (dvc_carry * p_A + dvcm_carry + mis_vm_weight_factor)
+                                var dvm_h = inv_pA * (dvm_carry * p_A + dvcm_carry * mis_vc_weight_factor + Float32(1))
+                                var dvcm_h = inv_pA
+                                var inv_pw = Float32(1.0) / pdf_w_s
+                                dvc_carry = (cos_out_s * inv_pw) * (dvc_h * pdf_w_s + dvcm_h + mis_vm_weight_factor)
+                                dvm_carry = (cos_out_s * inv_pw) * (dvm_h * pdf_w_s + dvcm_h * mis_vc_weight_factor + Float32(1))
+                                dvcm_carry = inv_pw
+                                rd = vec3f(wo_new)
+                                ro = x_o + n_o * Float32(0.0002)
+                                n_bounces += 1
+                                last_bsdf_pdf = pdf_w_s
+                                did_bssrdf_hop = True
+            # Ordinary specular boundary, only when no hop was taken.
+            if not did_bssrdf_hop:
+                var gn: Vec3f
+                if inter.primId.type == Int8(4):
+                    var si = Int(inter.primId.id1)
+                    var sph = sd.spheres[si]
+                    gn = sphere_outward_normal(hit, sph.center).to_simd()
+                else:
+                    gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+                var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
+                    ray_dir, hit.to_simd(), gn, mat.albedo.r, n_bounces == 0 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior)
+                current_dielectric_ior = new_cur_ior
+                previous_dielectric_ior = new_prev_ior
+                n_bounces += 1
+                last_bsdf_pdf = Float32(-1)  # delta bounce: no infinite-light NEE done here
+                # Specular vertex: no BSDF record needed, just track throughput.
+                # Camera path (Radiance mode): apply the non-symmetric-scattering
+                # correction (see _dielectric_bounce's docstring).
+                beta *= radiance_scale
+                if has_med:
+                    var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
+                    if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
+                rd = vec3f(new_dir)
+                ro = point3f(new_org)
+                # VCM Stage 2b: genuinely delta/specular, matches SmallVCM's own
+                # specular-bounce handling directly.
+                var cos_fix_d = abs(dot(-ray_dir, gn))
+                if cos_fix_d > Float32(1e-6):
+                    dvc_carry /= cos_fix_d
+                    dvm_carry /= cos_fix_d
+                var cos_theta_out_d = abs(dot(new_dir, gn))
+                dvcm_carry = Float32(0)
+                dvc_carry *= cos_theta_out_d
+                dvm_carry *= cos_theta_out_d
 
         elif mat.type == MatKind.interface:
             if has_med:

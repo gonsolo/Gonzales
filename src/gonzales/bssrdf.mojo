@@ -30,8 +30,8 @@ accurate near the source and for high absorption. Swapping the kernel later
 means replacing `dipole_rd` alone -- every caller only wants R_d(r).
 """
 
-from std.math import exp, sqrt, max, min, log
-from gonzales.geometry import RGB
+from std.math import exp, sqrt, max, min, log, cos, sin
+from gonzales.geometry import RGB, Vec3f
 
 
 @always_inline
@@ -186,3 +186,87 @@ def dipole_sample_pdf_mis(sigma_s: RGB, sigma_a: RGB, g: Float32, r: Float32) ->
     if n == 0:
         return Float32(0.0)
     return acc / Float32(n)
+
+
+# ── Exit-point sampling (the bidirectional half) ────────────────────────────
+# MIS DERIVATION, because this is the part that cannot be waved through.
+#
+# VCM's per-vertex carries assume a vertex whose direction was sampled with a
+# SOLID-ANGLE pdf, converted to area measure by the geometry term
+# G = cos(theta) / d^2:
+#
+#     dVCM' = 1 / p_area          with p_area = p_omega * G
+#     dVC'  = (cos_out / p_area) * (dVC * p_rev + dVCM + w_vm)
+#
+# A BSSRDF hop is not that. It is sampled NATIVELY in area measure -- we draw
+# a radius and an azimuth on the tangent plane and land on the surface -- so
+# its forward pdf p_A(x_o | x_i) is ALREADY an area density and the geometry
+# conversion factor is exactly 1. There is no cos/d^2 to apply, and applying
+# one (as a naive port of the local-vertex recursion would) is wrong by
+# precisely that factor.
+#
+# The hop is therefore treated as an EXTRA vertex on the subpath, not as a
+# modified local one:
+#
+#     x_i  (entry)  --p_A-->  x_o  (exit)  --cosine-->  next direction
+#
+# with, at the hop,
+#
+#     dVCM' = 1 / p_A
+#     dVC'  = (1 / p_A) * (dVC * p_rev + dVCM + w_vm)        [no cos_out]
+#     dVM'  = (1 / p_A) * (dVM * p_rev + dVCM * w_vc + 1)    [no cos_out]
+#
+# and p_rev = p_A. That needs checking rather than asserting, because the
+# radial profile being symmetric is NOT by itself enough -- the probe Jacobian
+# could break it. Write both out:
+#
+#     p_A(x_o | x_i) = p_radial(r) * |n_o . axis_i|,   axis_i = n_i
+#     p_A(x_i | x_o) = p_radial(r) * |n_i . axis_o|,   axis_o = n_o
+#
+# Both cosines are |n_i . n_o|, and p_radial depends only on r = |x_i - x_o|,
+# so the two are equal -- for CURVED surfaces too, not just planar ones. The
+# hop is genuinely symmetric under normal-axis probing. That is what makes the
+# bidirectional case tractable: a light subpath's hop has the same density as
+# a camera subpath's, so a connection through a subsurface object needs no
+# separate reverse profile. (It would NOT survive pbrt's three-axis probe MIS,
+# where the axis choice differs at the two ends -- a reason to keep the single
+# normal axis here beyond simplicity.)
+#
+# The exit vertex x_o is then an ORDINARY diffuse-like vertex (cosine exit
+# lobe) and takes the standard recursion unchanged.
+#
+# The probe. Sampling a radius gives a point on the TANGENT PLANE, which is
+# not on the surface. A probe ray along the normal axis finds the real exit
+# point, and the change of variables from the tangent disk to the surface
+# contributes |cos(theta_probe)| -- the angle between the surface normal at
+# x_o and the probe axis. That factor is in `pdf_area` below. (pbrt additionally
+# MIS-combines probes along three axes, which recovers the grazing geometry a
+# single axis under-samples; single-axis is unbiased wherever the probe lands
+# and loses the near-tangential cases, so this is a known, bounded gap.)
+
+@always_inline
+def bssrdf_probe_offset(r: Float32, phi: Float32, r_max: Float32,
+                        t: Vec3f, b: Vec3f, n: Vec3f) -> Tuple[Vec3f, Float32]:
+    """Probe segment for an exit point at radius `r`, azimuth `phi` around a
+    surface frame. Returns the START offset from the entry point and the
+    segment LENGTH: a chord of the sphere of radius `r_max`, centred on the
+    entry point, so every surface point within the profile's reach can be
+    found. Probing along the normal is what makes the tangent-disk sample a
+    surface sample."""
+    var half = sqrt(max(r_max * r_max - r * r, Float32(0.0)))
+    var lateral = t * (r * cos(phi)) + b * (r * sin(phi))
+    return (lateral + n * half, Float32(2.0) * half)
+
+
+@always_inline
+def bssrdf_exit_pdf_area(sigma_s: RGB, sigma_a: RGB, g: Float32,
+                         r: Float32, cos_probe: Float32) -> Float32:
+    """p_A(x_o | x_i): the area density of the sampled exit point ON THE
+    SURFACE. The radial mixture density is a density on the tangent PLANE, so
+    the Jacobian of the plane->surface map, |cos(theta_probe)|, converts it.
+    Returns 0 for a degenerate (edge-on) probe, which the caller must treat as
+    a failed sample rather than an infinite weight."""
+    var ct = abs(cos_probe)
+    if ct <= Float32(1e-4):
+        return Float32(0.0)
+    return dipole_sample_pdf_mis(sigma_s, sigma_a, g, r) * ct
