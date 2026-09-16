@@ -2,7 +2,7 @@ from std.ffi import external_call
 from std.memory import alloc
 from std.math import sqrt, acos, atan2, cos, sin, min, max, abs, floor, log, exp
 from std.sys.info import align_of
-from gonzales.spectrum import SampledWavelengths, SpectralSample, spec_refl_unbounded, rgb_illuminant_to_spectral_sample
+from gonzales.spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, rgb_illuminant_to_spectral_sample
 from gonzales.nanovdb import nvdb_sample_index, nvdb_majorant_at, nvdb_leaf_base, nvdb_leaf_value
 from gonzales.rng import PCG32
 
@@ -1280,9 +1280,29 @@ def medium_sigma_s_spectral(
 
     Rule: whenever a per-lane RATIO of two medium coefficients is formed,
     both sides must come from the same upsampler."""
-    return spec_refl_unbounded(
+    # NOT an independent unbounded fit of sigma_s. sigma_s and sigma_t fitted
+    # SEPARATELY are two different curves, and nothing makes the second stay
+    # above the first, so their ratio -- the single-scattering albedo -- can
+    # come out GREATER THAN 1 on some lanes. That is an energy-creating
+    # medium, and a subsurface walk compounds it over hundreds of scatters:
+    # measured on head.pbrt, 35% of pixels blown out and a max of 1.7e31.
+    #
+    # Upsample the ALBEDO instead, with the BOUNDED upsampler that clamps to
+    # [0,1] (an albedo is exactly the reflectance-shaped quantity spec_refl
+    # exists for), and rebuild sigma_s from it. sigma_s(lambda) <= sigma_t(lambda)
+    # then holds on every lane by construction.
+    var sig_t_rgb = med.sigma_a + med.sigma_s
+    var alb_r = med.sigma_s.r / sig_t_rgb.r if sig_t_rgb.r > Float32(0.0) else Float32(0.0)
+    var alb_g = med.sigma_s.g / sig_t_rgb.g if sig_t_rgb.g > Float32(0.0) else Float32(0.0)
+    var alb_b = med.sigma_s.b / sig_t_rgb.b if sig_t_rgb.b > Float32(0.0) else Float32(0.0)
+    var alb = spec_refl(
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-        med.sigma_s.r, med.sigma_s.g, med.sigma_s.b, wavelengths)
+        alb_r, alb_g, alb_b, wavelengths)
+    var sig_t = medium_sigma_t_spectral(
+        med, wavelengths, spectral_coeffs, spectral_res,
+        spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+    return SpectralSample(alb.v0 * sig_t.v0, alb.v1 * sig_t.v1,
+                          alb.v2 * sig_t.v2, alb.v3 * sig_t.v3)
 
 @always_inline
 def medium_transmittance_ratio_spectral(

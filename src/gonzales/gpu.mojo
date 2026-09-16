@@ -6,7 +6,7 @@ from max.algorithm import parallelize
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory import alloc, memcpy
-from .geometry import RGB, Point3f, Point2f, FilmDims, FilterParams, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, NvdbGrid_C, nvdb_sample_density, nvdb_ray_range, grid_ray_range, nvdb_index_ray, nvdb_node_exit_t, nvdb_majorant_at_world, hg_phase, hg_sample, blackbody_rgb, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_grid_for, medium_nvdb_for, medium_emission_spectral, MEDIUM_TRACK_MAX_ITERS, medium_transmittance_ratio_spectral, medium_sigma_s_spectral
+from .geometry import RGB, Point3f, Point2f, FilmDims, FilterParams, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, NvdbGrid_C, nvdb_sample_density, nvdb_ray_range, grid_ray_range, nvdb_index_ray, nvdb_node_exit_t, nvdb_majorant_at_world, hg_phase, hg_sample, blackbody_rgb, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_grid_for, medium_nvdb_for, medium_emission_spectral, MEDIUM_TRACK_MAX_ITERS, medium_transmittance_ratio_spectral, medium_sigma_s_spectral, medium_sigma_t_spectral
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres, LightSample, _sample_infinite_light_nee, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee
 from .transform import transform_normal_by_instance
@@ -2220,6 +2220,10 @@ def _sample_medium_core(
     # non-emissive or homogeneous medium, so this costs nothing there.
     path_ptr[].estimate += path_ptr[].throughput * ff.emission
 
+    # Set by the homogeneous branch when a spectral table is available: the
+    # LANE-AVERAGED single-scattering albedo, which the scatter/absorb coin
+    # below is played on instead of red's. Negative means "not set".
+    var p_scatter_spec = Float32(-1.0)
     if not (use_dense or use_nvdb):
         # ── Homogeneous-only throughput bookkeeping ────────────────────────
         # Delta tracking carries transmittance implicitly in its accept/reject
@@ -2272,10 +2276,46 @@ def _sample_medium_core(
             # conversions -- invisible at 2-3 scatters, hue-inverting over a
             # subsurface walk's hundreds (see medium_sigma_s_spectral).
             var ss_r = max(med.sigma_s.r, Float32(1e-30))
-            var sig_s_spec = medium_sigma_s_spectral(
-                med, path_ptr[].wavelengths, spectral_coeffs, spectral_res,
-                spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
-            path_ptr[].throughput *= (sig_s_spec * (Float32(1.0) / ss_r)) * sigma_t.r
+            if spectral_res > 0:
+                # The scatter/absorb coin is ONE coin for all four lanes, so
+                # whichever albedo it is played on becomes the reference every
+                # lane is corrected against. Playing it on RED made that
+                # correction sigma_s(lambda)/sigma_s.r, which for skin runs up
+                # to 1.48 and is systematically >1 in blue -- and a subsurface
+                # walk multiplies hundreds of them, so the product is
+                # log-normal and explodes. Measured on head.pbrt the moment
+                # the albedo became chromatic: max 1.3 -> 1.75e9, with 1.4% of
+                # pixels above 100x the median against pbrt's 0.000%.
+                #
+                # Play it on the LANE MEAN instead. The correction is then
+                # alpha_i/alpha_bar, centred on 1 and bounded either side, and
+                # it pairs with the free-flight MIS weight (also centred on 1)
+                # so neither factor drifts. Unbiased either way -- E[.] is
+                # alpha_i per scatter for both -- this is purely variance.
+                var sig_t_spec = medium_sigma_t_spectral(
+                    med, path_ptr[].wavelengths, spectral_coeffs, spectral_res,
+                    spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+                var sig_s_spec = medium_sigma_s_spectral(
+                    med, path_ptr[].wavelengths, spectral_coeffs, spectral_res,
+                    spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+                var a0 = sig_s_spec.v0 / max(sig_t_spec.v0, Float32(1e-30))
+                var a1 = sig_s_spec.v1 / max(sig_t_spec.v1, Float32(1e-30))
+                var a2 = sig_s_spec.v2 / max(sig_t_spec.v2, Float32(1e-30))
+                var a3 = sig_s_spec.v3 / max(sig_t_spec.v3, Float32(1e-30))
+                var abar = (a0 + a1 + a2 + a3) * Float32(0.25)
+                if abar < Float32(1e-6): abar = Float32(1e-6)
+                p_scatter_spec = abar
+                var inv_ab = Float32(1.0) / abar
+                path_ptr[].throughput *= SpectralSample(
+                    sig_t_spec.v0 * a0 * inv_ab, sig_t_spec.v1 * a1 * inv_ab,
+                    sig_t_spec.v2 * a2 * inv_ab, sig_t_spec.v3 * a3 * inv_ab)
+            else:
+                # No spectral table: lanes carry RGB, so red IS the reference
+                # and this is the original expression unchanged.
+                var sig_s_spec = medium_sigma_s_spectral(
+                    med, path_ptr[].wavelengths, spectral_coeffs, spectral_res,
+                    spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+                path_ptr[].throughput *= (sig_s_spec * (Float32(1.0) / ss_r)) * sigma_t.r
 
     if not ff.collided:
         path_ptr[].pcgState = pcg.state
@@ -2288,7 +2328,7 @@ def _sample_medium_core(
     # Both branches above already `return` early for the "no real collision"
     # case (homogeneous: t_free >= t_surf; heterogeneous: not collided) — so
     # reaching here always means a real scatter/absorb event at t_free.
-    var p_scatter = albedo_r
+    var p_scatter = p_scatter_spec if p_scatter_spec >= Float32(0.0) else albedo_r
     var u_mode = pcg.next_float()
     if u_mode < p_scatter:
         # A capped path dies at this real scatter, BEFORE this vertex's NEE
