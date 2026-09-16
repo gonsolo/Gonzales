@@ -7154,6 +7154,17 @@ def sppm_render_gpu(
                 with counter_buf.map_to_host() as host_buf:
                     var src = host_buf.unsafe_ptr().bitcast[Int32]()
                     n_stored_raw = src[0]
+                # A silent clamp is how dropped deposits stay invisible: the
+                # estimator still divides by the FULL emitted count, so the
+                # render just comes out patchy and dark with nothing in the
+                # log. Saturation is a real failure mode here (it is what made
+                # head.pbrt read ~33x before the buffer was sized for the
+                # subsurface walk), so say so rather than absorbing it.
+                if Int(n_stored_raw) > max_photons:
+                    print("Warning: SPPM photon buffer saturated ("
+                          + String(n_stored_raw) + " deposits into "
+                          + String(max_photons) + " slots) — photons were dropped"
+                          + " and this pass is biased dark. Raise --sppm-photons.")
                 var n_stored = min(Int(n_stored_raw), max_photons)
 
                 if n_stored > 0:
