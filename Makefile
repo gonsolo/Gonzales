@@ -283,6 +283,17 @@ SMOKE_ARGS  := --no-denoise --spp 4 --resolution 32x32 --seed 1
 SMOKE_MODES := cpu-pt:  cpu-vcm:--vcm cpu-sppm:--sppm
 ifneq ($(HAVE_CUDA),)
 SMOKE_MODES += gpu-pt:--gpu gpu-vcm:--gpu\ --vcm gpu-vcm-wf:--gpu\ --vcm\ --vcm-wavefront gpu-sppm:--gpu\ --sppm
+# Subsurface + coateddiffuse scene, GPU only, with each mode's non-emitter
+# mean pinned (label:expected:tolerance:flags). The values differ per mode on
+# purpose: VCM reads ~36% under the path tracer in this closed box at
+# maxdepth 4 (the documented light-path-budget x depth-truncation gap, see
+# Scenes/closed-cavity-equilibrium.pbrt), SPPM ~12% under. A pin catches a
+# shift in any of them; seed-to-seed spread measured at <=2% (PT), <=0.5%
+# (SPPM), <=0.1% (VCM).
+SMOKE_SSS_SCENE := Scenes/cornell-box-subsurface.pbrt
+SMOKE_SSS_ARGS  := --gpu --no-denoise --spp 64 --resolution 48x48 --seed 1
+SMOKE_SSS_MODES := gpu-sss-pt:0.05918:0.05: gpu-sss-vcm:0.03801:0.03:--vcm \
+                   gpu-sss-vcm-wf:0.03801:0.03:--vcm\ --vcm-wavefront gpu-sss-sppm:0.05212:0.03:--sppm
 endif
 # ── causticstest ──────────────────────────────────────────────────────────────
 # The smoketest above asserts a per-mode MEAN, which structurally CANNOT catch
@@ -360,6 +371,18 @@ smoketest: release
 		python3 Scripts/check_render.py "$$label" cornell-box.exr || rc=1; \
 	done; \
 	rm -f cornell-box.exr; \
+	for entry in $(SMOKE_SSS_MODES); do \
+		label=$${entry%%:*}; rest=$${entry#*:}; expected=$${rest%%:*}; rest=$${rest#*:}; \
+		tol=$${rest%%:*}; flags=$$(echo "$${rest#*:}" | tr '\\' ' '); \
+		rm -f cornell-box-subsurface.exr; \
+		if ! ./build/gonzales $(SMOKE_SSS_ARGS) $$flags $(SMOKE_SSS_SCENE) > build/smoke-$$label.log 2>&1; then \
+			echo "FAIL $$label: renderer exited non-zero"; \
+			tail -3 build/smoke-$$label.log | sed 's/^/       /'; \
+			rc=1; continue; \
+		fi; \
+		python3 Scripts/check_render.py "$$label" cornell-box-subsurface.exr $$expected $$tol || rc=1; \
+	done; \
+	rm -f cornell-box-subsurface.exr; \
 	if [ $$rc -ne 0 ]; then echo "smoketest FAILED"; else echo "smoketest passed"; fi; \
 	exit $$rc
 
