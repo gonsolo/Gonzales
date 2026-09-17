@@ -1,0 +1,167 @@
+{
+  "analytic-sphere.pt": {
+    "mean": 0.002876,
+    "median": 0.0,
+    "tol": 0.03
+  },
+  "analytic-sphere.sppm": {
+    "mean": 0.002814,
+    "median": 0.0,
+    "tol": 0.03
+  },
+  "analytic-sphere.vcm": {
+    "mean": 0.0027,
+    "median": 0.0,
+    "tol": 0.03
+  },
+  "baseline-diffuse.pt": {
+    "mean": 0.11072,
+    "median": 0.051433,
+    "tol": 0.03
+  },
+  "baseline-diffuse.sppm": {
+    "mean": 0.111965,
+    "median": 0.050548,
+    "tol": 0.03
+  },
+  "baseline-diffuse.vcm": {
+    "mean": 0.182795,
+    "median": 0.038294,
+    "tol": 0.03
+  },
+  "chromatic-medium.pt": {
+    "mean": 0.355735,
+    "median": 0.341726,
+    "tol": 0.03
+  },
+  "chromatic-medium.sppm": {
+    "mean": 0.313484,
+    "median": 0.313285,
+    "tol": 0.03
+  },
+  "chromatic-medium.vcm": {
+    "mean": 0.355547,
+    "median": 0.340495,
+    "tol": 0.03
+  },
+  "closed-cavity.pt": {
+    "mean": 0.99621,
+    "median": 0.984992,
+    "tol": 0.03
+  },
+  "closed-cavity.sppm": {
+    "mean": 0.874706,
+    "median": 0.869947,
+    "tol": 0.03
+  },
+  "closed-cavity.vcm": {
+    "mean": 0.632506,
+    "median": 0.62859,
+    "tol": 0.03
+  },
+  "curves-hair.pt": {
+    "mean": 2.979038,
+    "median": 0.079173,
+    "tol": 0.03
+  },
+  "curves-hair.sppm": {
+    "mean": 1.754784,
+    "median": 0.024666,
+    "tol": 0.03
+  },
+  "curves-hair.vcm": {
+    "mean": 2.236402,
+    "median": 0.031512,
+    "tol": 0.03
+  },
+  "many-lights.pt": {
+    "mean": 0.664903,
+    "median": 0.477812,
+    "tol": 0.03
+  },
+  "many-lights.sppm": {
+    "mean": 0.677577,
+    "median": 0.5174,
+    "tol": 0.03
+  },
+  "many-lights.vcm": {
+    "mean": 0.707833,
+    "median": 0.386263,
+    "tol": 0.03
+  },
+  "medium-sphere-light.pt": {
+    "mean": 0.0249,
+    "median": 0.009003,
+    "tol": 0.03
+  },
+  "medium-sphere-light.sppm": {
+    "mean": 0.007348,
+    "median": 0.000532,
+    "tol": 0.03
+  },
+  "medium-sphere-light.vcm": {
+    "mean": 0.026269,
+    "median": 0.010068,
+    "tol": 0.03
+  },
+  "mnee-through-glass.pt": {
+    "mean": 0.20575,
+    "median": 0.116446,
+    "tol": 0.03
+  },
+  "mnee-through-glass.sppm": {
+    "mean": 0.219909,
+    "median": 0.117574,
+    "tol": 0.03
+  },
+  "mnee-through-glass.vcm": {
+    "mean": 0.303306,
+    "median": 0.078926,
+    "tol": 0.03
+  },
+  "normal-map.pt": {
+    "mean": 0.077757,
+    "median": 0.023497,
+    "tol": 0.03
+  },
+  "normal-map.sppm": {
+    "mean": 0.073611,
+    "median": 0.022981,
+    "tol": 0.03
+  },
+  "normal-map.vcm": {
+    "mean": 0.15443,
+    "median": 0.016238,
+    "tol": 0.03
+  },
+  "sss-slab.pt": {
+    "mean": 49.626854,
+    "median": 57.067177,
+    "tol": 0.03
+  },
+  "sss-slab.sppm": {
+    "mean": 5.091487,
+    "median": 0.0,
+    "tol": 0.03
+  },
+  "sss-slab.vcm": {
+    "mean": 11.316481,
+    "median": 11.124714,
+    "tol": 0.03
+  },
+  "subsurface-coated.pt": {
+    "mean": 0.108399,
+    "median": 0.041778,
+    "tol": 0.03
+  },
+  "subsurface-coated.sppm": {
+    "mean": 0.099831,
+    "median": 0.037653,
+    "tol": 0.03
+  },
+  "subsurface-coated.vcm": {
+    "mean": 0.172922,
+    "median": 0.029252,
+    "tol": 0.03
+  }
+}
