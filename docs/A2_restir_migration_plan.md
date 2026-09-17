@@ -825,6 +825,35 @@ does, so this phase cannot on its own justify the removal.)*
   result) — ReSTIR BDPT updates via a *proxy*: the prior frame's
   motion-vector-mapped reservoir weight (their §5.1, Eq. 27). Worth the
   same care if Phase 6's SMS reservoir ever gains temporal reuse.
+#### 8.2 measured, 2026-09-18
+
+`Scenes/restir_caustic_confidence_check.py` runs the estimator instead of
+arguing about it (same approach as 8.1's harness): a discrete caustic path
+space, one fresh uniform candidate per frame combined with the previous
+frame's reservoir, 24 frames x 200k chains, against a known `sum(f)`.
+
+| confidence rule | estimate vs truth |
+|---|---|
+| count of frames (realization-independent, what gonzales ships) | **-0.19%**, 1.0 sigma |
+| "did the caustic land on the pixel" | **+127%** |
+| scaled by the carried reservoir's own weight | **+88%** |
+
+So the warning is real and the bias is enormous, not marginal. The second
+row is the trap the phase text names. **The third row is the one worth
+recording**: scaling confidence by the prior reservoir's WEIGHT -- the
+obvious reading of "update via the prior frame's motion-vector-mapped
+reservoir weight" -- is itself realization-dependent, because the weight is
+a function of the carried sample, and it biases almost as badly. Modelling
+ReSTIR BDPT's Eq. 27 faithfully needs the paper, which this repo does not
+have; until it is sourced, the only rule shown here to be safe is a
+realization-independent count.
+
+**Audit of what ships today (2026-09-18): the trap is NOT present.**
+`restir_di`/`restir_gi`/`restir_vol`/`restir_sms` all carry `m` as a plain
+candidate count with a cap, and a failed SMS shift sets the target function
+to zero (GRIS's shift-invalid convention, restir_sms.mojo) rather than
+touching the confidence weight -- which is the correct treatment.
+
 - **8.3** **ReSTIR BDPT does not cover everything your VCM does.** Its
   Limitations section states SDS paths remain unsolved (suggesting vertex
   merging or manifold shifts), and it has **no participating-media support
