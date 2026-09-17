@@ -486,7 +486,7 @@ def sample_area_light_uniform(
 # ── Camera pass ───────────────────────────────────────────────────────────────
 
 @always_inline
-def _sppm_update_medium(
+def medium_after_crossing(
     ray_dir: Vec3f,
     inter: Intersection_C,
     meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
@@ -496,8 +496,11 @@ def _sppm_update_medium(
 ) -> Int32:
     """Return new current_medium_idx after crossing a surface with MediumInterface.
 
-    `hit` is REQUIRED for analytic spheres (primId.type == 4): their outward
-    normal is normalize(hit - center), so leaving it at the default origin
+    Shared by SPPM and VCM (bdpt.mojo had a byte-for-byte copy of this until
+    2026-09-17, whose mesh branch also ignored instance transforms).
+
+    `hit` is REQUIRED for analytic spheres: their outward normal is
+    normalize(hit - center), so leaving it at the default origin
     makes the inside/outside test read one FIXED direction for every ray that
     crosses the sphere, regardless of where it actually struck. All four call
     sites omitted it until 2026-09-09, which is why volumetric-caustic's glass
@@ -508,25 +511,7 @@ def _sppm_update_medium(
     if mat.medium_interface_idx < Int32(0) or sd.mediumIfaceCount == Int64(0):
         return Int32(-1)  # stays vacuum; caller keeps existing idx if needed
     var iface = sd.mediumInterfaces[Int(mat.medium_interface_idx)]
-    var n: Vec3f
-    if inter.primId.type == Int8(4):
-        # Analytic sphere: outward normal = normalize(hit - center)
-        var si = Int(inter.primId.id1)
-        var sph = sd.spheres[si]
-        n = sphere_outward_normal(hit, sph.center)
-    else:
-        var mi: Int; var bv: Int
-        if inter.primId.type == 0:
-            mi = Int(inter.primId.id1); bv = Int(inter.primId.id2)
-        else:
-            mi = Int(inter.primId.id2 >> 32); bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-        var m = meshes[mi]
-        var v0 = Int(m.vertexIndices[bv]); var v1 = Int(m.vertexIndices[bv+1]); var v2 = Int(m.vertexIndices[bv+2])
-        var p0 = Point3f(m.points[v0*4], m.points[v0*4+1], m.points[v0*4+2])
-        var p1 = Point3f(m.points[v1*4], m.points[v1*4+1], m.points[v1*4+2])
-        var p2 = Point3f(m.points[v2*4], m.points[v2*4+1], m.points[v2*4+2])
-        var e1 = p1 - p0; var e2 = p2 - p0
-        n = Vec3f(e1.y*e2.z - e1.z*e2.y, e1.z*e2.x - e1.x*e2.z, e1.x*e2.y - e1.y*e2.x)
+    var n = _geom_normal(inter, meshes, sd.instances, sd.spheres, hit.to_simd())
     var md = ray_dir[0]*n.x + ray_dir[1]*n.y + ray_dir[2]*n.z
     return iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
 
@@ -846,7 +831,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 var gn_s = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
                 if dot(gn_s, rd) > Float32(0.0):
                     gn_s = gn_s * Float32(-1.0)
-                var inside_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd, hit)
+                var inside_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if inside_idx >= Int32(0):
                     vp.pos = hit
                     vp.normal = vec3f(gn_s)
@@ -874,7 +859,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             rd = vec3f(new_dir)
             ro = point3f(new_org)
             if has_media:
-                var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd, hit)
+                var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
                     cur_med_idx = new_idx
 
@@ -885,12 +870,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # nothing to gather against and the ray must continue to find a
             # real (non-delta) VP downstream — same reasoning dielectric
             # bounces already use.
-            var gn_c: Vec3f
-            if inter.primId.type == Int8(4):
-                var sph_c = sd.spheres[Int(inter.primId.id1)]
-                gn_c = sphere_outward_normal(hit, sph_c.center).to_simd()
-            else:
-                gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+            var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_c, ray_dir) > Float32(0.0):
                 gn_c = gn_c * Float32(-1.0)
             var wo_c = (-rd).to_simd()
@@ -955,12 +935,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # single-terminal-surface convention as diffuse/hair, via the
             # shared bxdf.mojo/measured_bxdf_eval.mojo interface
             # shading.mojo/bdpt.mojo already use.
-            var gn_m: Vec3f
-            if inter.primId.type == Int8(4):
-                var sph_m = sd.spheres[Int(inter.primId.id1)]
-                gn_m = sphere_outward_normal(hit, sph_m.center).to_simd()
-            else:
-                gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+            var gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_m, ray_dir) > Float32(0.0):
                 gn_m = gn_m * Float32(-1.0)
             if mat.measured_idx < Int32(0):
@@ -981,7 +956,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         elif mat.type == MatKind.interface:
             # Transparent boundary — update medium, continue ray
             if has_media:
-                var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd, hit)
+                var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
                     cur_med_idx = new_idx
             ro = hit + rd * Float32(0.0002)
@@ -1461,7 +1436,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             rd = vec3f(new_dir)
             ro = point3f(new_org)
             if has_media:
-                var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd, hit)
+                var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
                     cur_med_idx = new_idx
 
@@ -1470,12 +1445,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             # (same n_events > 1 depth-0 double-count guard as diffuse) unless
             # the sampled lobe is a perfect-mirror delta, which just
             # continues the path — mirrors bdpt.mojo's light-path treatment.
-            var gn_c: Vec3f
-            if inter.primId.type == Int8(4):
-                var sph_c = sd.spheres[Int(inter.primId.id1)]
-                gn_c = sphere_outward_normal(hit, sph_c.center).to_simd()
-            else:
-                gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+            var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_c, ray_dir) > Float32(0.0):
                 gn_c = gn_c * Float32(-1.0)
             var wo_c = (-rd).to_simd()
@@ -1527,12 +1497,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             # direction -- mirrors bdpt.mojo's light-path measured
             # treatment, via the same shared bxdf.mojo/measured_bxdf_eval.mojo
             # interface.
-            var gn_m: Vec3f
-            if inter.primId.type == Int8(4):
-                var sph_m = sd.spheres[Int(inter.primId.id1)]
-                gn_m = sphere_outward_normal(hit, sph_m.center).to_simd()
-            else:
-                gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+            var gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_m, ray_dir) > Float32(0.0):
                 gn_m = gn_m * Float32(-1.0)
             if mat.measured_idx < Int32(0):
@@ -1565,7 +1530,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
 
         elif mat.type == MatKind.interface:
             if has_media:
-                var new_idx = _sppm_update_medium(ray_dir, inter, sd.meshes, mat, sd, hit)
+                var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
                     cur_med_idx = new_idx
             ro = hit + rd * Float32(0.0002)

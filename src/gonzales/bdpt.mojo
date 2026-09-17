@@ -34,7 +34,7 @@ from .rng import PCG32
 from .transform import matrix_invert
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, write_image_cropwindow, denoise
-from .sppm import _geom_normal, _dielectric_bounce, _sppm_update_medium, _cosine_hemisphere_sample, sample_area_light_uniform, _HSIZE, _hash_cell, _sppm_render_core
+from .sppm import _geom_normal, _dielectric_bounce, medium_after_crossing, _cosine_hemisphere_sample, sample_area_light_uniform, _HSIZE, _hash_cell, _sppm_render_core
 from .sppm import (
     SPPMPixel, SPPMPhoton, _sppm_reset_grid_cell, _sppm_insert_photon,
     _sppm_gather_one, _sppm_vp_brdf, _sppm_nee_one,
@@ -222,39 +222,6 @@ def _null_vertex() -> BDPTVertex:
 # ── Geometry helpers ──────────────────────────────────────────────────────────
 
 @always_inline
-def _bdpt_medium_update(
-    ray_dir: Vec3f,
-    inter:   Intersection_C,
-    mat:     Material_C,
-    ref sd:      SceneDescriptor2_C,
-    hit: Point3f,
-) -> Int32:
-    """Determine new current_medium_idx after crossing a surface."""
-    if mat.medium_interface_idx < Int32(0) or sd.mediumIfaceCount == Int64(0):
-        return Int32(-1)
-    var iface = sd.mediumInterfaces[Int(mat.medium_interface_idx)]
-    var n: Vec3f
-    if inter.primId.type == Int8(4):
-        # Analytic sphere: outward normal = normalize(hit - center)
-        var si = Int(inter.primId.id1)
-        var sph = sd.spheres[si]
-        n = sphere_outward_normal(hit, sph.center)
-    else:
-        var mi: Int; var bv: Int
-        if inter.primId.type == 0:
-            mi = Int(inter.primId.id1); bv = Int(inter.primId.id2)
-        else:
-            mi = Int(inter.primId.id2 >> 32); bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-        var m  = sd.meshes[mi]
-        var v0 = Int(m.vertexIndices[bv]); var v1 = Int(m.vertexIndices[bv+1]); var v2 = Int(m.vertexIndices[bv+2])
-        var p0 = Point3f(m.points[v0*4], m.points[v0*4+1], m.points[v0*4+2])
-        var p1 = Point3f(m.points[v1*4], m.points[v1*4+1], m.points[v1*4+2])
-        var p2 = Point3f(m.points[v2*4], m.points[v2*4+1], m.points[v2*4+2])
-        var e1 = p1 - p0; var e2 = p2 - p0
-        n = Vec3f(e1.y*e2.z - e1.z*e2.y, e1.z*e2.x - e1.x*e2.z, e1.x*e2.y - e1.y*e2.x)
-    var md = ray_dir[0]*n.x + ray_dir[1]*n.y + ray_dir[2]*n.z
-    return iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
-
 # ── Visibility with transmittance ─────────────────────────────────────────────
 
 def _visible_transmittance(
@@ -349,13 +316,7 @@ def _visible_transmittance(
 
         if mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             # Pass through glass with Fresnel transmittance
-            var gn: Vec3f
-            if inter.primId.type == Int8(4):
-                var si = Int(inter.primId.id1)
-                var sph = sd.spheres[si]
-                gn = sphere_outward_normal(hit, sph.center).to_simd()
-            else:
-                gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+            var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             var facing = dot(dir, gn) < Float32(0)
             var n_for_cos = gn if facing else gn*Float32(-1)
             var cos_i = -dot(dir, n_for_cos)
@@ -388,12 +349,7 @@ def _visible_transmittance(
                 # the vacuum outside it -- annihilating them. That halved every
                 # volume NEE contribution at every scatter order (measured
                 # 0.500x vs the path tracer on a sphere-bounded fog).
-                var igna: Vec3f
-                if inter.primId.type == Int8(4):
-                    var isph = sd.spheres[Int(inter.primId.id1)]
-                    igna = sphere_outward_normal(hit, isph.center).to_simd()
-                else:
-                    igna = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+                var igna = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
                 var md = dir[0]*igna[0]+dir[1]*igna[1]+dir[2]*igna[2]
                 cur_med = iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
             org = hit + Vec3f(dir[0], dir[1], dir[2]) * Float32(0.0002)
@@ -2080,15 +2036,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             mis_null_dist = Float32(0)
 
         if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit:
-            var gn: Vec3f
-            if inter.primId.type == Int8(4):
-                # Analytic sphere: _geom_normal returns a fixed +Y placeholder
-                # for every non-mesh primitive, which silently corrupts the
-                # cos_fix below and with it this vertex's dVCM/dVC/dVM carries.
-                var _sph_gn = sd.spheres[Int(inter.primId.id1)]
-                gn = sphere_outward_normal(hit, _sph_gn.center).to_simd()
-            else:
-                gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+            var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             # VCM Stage 2b: finish the per-bounce MIS correction (dist²
             # portion already applied above) -- see
@@ -2214,15 +2162,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # vertices via _eval_vertex's generic Lambertian fallback
             # (weight=1, no real MIS), never a full "no connection at all"
             # exclusion.
-            var gn: Vec3f
-            if inter.primId.type == Int8(4):
-                # Analytic sphere: _geom_normal returns a fixed +Y placeholder
-                # for every non-mesh primitive, which silently corrupts the
-                # cos_fix below and with it this vertex's dVCM/dVC/dVM carries.
-                var _sph_gn = sd.spheres[Int(inter.primId.id1)]
-                gn = sphere_outward_normal(hit, _sph_gn.center).to_simd()
-            else:
-                gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+            var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             var cos_fix = abs(dot(-ray_dir, gn))
             if cos_fix > Float32(1e-6):
@@ -2408,13 +2348,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             dvcm_carry = Float32(0)
 
         elif mat.type == MatKind.conductor or mat.type == MatKind.coated_conductor:
-            var gn_c: Vec3f
-            if inter.primId.type == Int8(4):
-                var si_c = Int(inter.primId.id1)
-                var sph_c = sd.spheres[si_c]
-                gn_c = sphere_outward_normal(hit, sph_c.center).to_simd()
-            else:
-                gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+            var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_c, ray_dir) > Float32(0): gn_c = gn_c * Float32(-1)
             var wo_c = (-rd).to_simd()
             var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
@@ -2628,13 +2562,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # shading.mojo's shade_measured already uses. Isotropic only (see
             # the loader's scope note), so an arbitrary Frisvad tangent frame
             # is fine -- no UV alignment needed, same reasoning as conductor.
-            var gn_m: Vec3f
-            if inter.primId.type == Int8(4):
-                var si_m = Int(inter.primId.id1)
-                var sph_m = sd.spheres[si_m]
-                gn_m = sphere_outward_normal(hit, sph_m.center).to_simd()
-            else:
-                gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+            var gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_m, ray_dir) > Float32(0): gn_m = gn_m * Float32(-1)
             if mat.measured_idx < Int32(0):
                 # Load failure fallback (see material_builder.mojo) -- matches
@@ -2736,13 +2664,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # rule machine-checked in Scenes/vcm_bssrdf_mis_derivation.py.
             # The entry itself is never connectible.
             if mat.sss_boundary != Int8(0) and Int(cur_med_idx) < 0 and has_med:
-                var med_in = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
+                var med_in = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if med_in >= Int32(0) and Int(med_in) < Int(sd.mediumCount):
-                    var gn_e: Vec3f
-                    if inter.primId.type == Int8(4):
-                        gn_e = sphere_outward_normal(hit, sd.spheres[Int(inter.primId.id1)].center).to_simd()
-                    else:
-                        gn_e = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+                    var gn_e = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
                     if dot(gn_e, ray_dir) > Float32(0): gn_e = gn_e * Float32(-1)
                     var cos_e = abs(dot(-ray_dir, gn_e))
                     # Arrival at the entry, as at any surface vertex.
@@ -2815,13 +2739,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     did_bssrdf_hop = True
             # Ordinary specular boundary, only when no hop was taken.
             if not did_bssrdf_hop:
-                var gn: Vec3f
-                if inter.primId.type == Int8(4):
-                    var si = Int(inter.primId.id1)
-                    var sph = sd.spheres[si]
-                    gn = sphere_outward_normal(hit, sph.center).to_simd()
-                else:
-                    gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+                var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
                 var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
                     ray_dir, hit.to_simd(), gn, mat.albedo.r, n_bounces == 0 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior)
                 current_dielectric_ior = new_cur_ior
@@ -2833,7 +2751,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # correction (see _dielectric_bounce's docstring).
                 beta *= radiance_scale
                 if has_med:
-                    var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
+                    var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
                     if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
                 rd = vec3f(new_dir)
                 ro = point3f(new_org)
@@ -2850,7 +2768,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
 
         elif mat.type == MatKind.interface:
             if has_med:
-                var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
+                var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
             ro = hit + rd*Float32(0.0002)
             mis_null_dist += t_hit + Float32(0.0002)   # see VCMCameraPathState_C.mis_null_dist
@@ -3248,15 +3166,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 mat.type = MatKind.diffuse
 
         if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit:
-            var gn: Vec3f
-            if inter.primId.type == Int8(4):
-                # Analytic sphere: _geom_normal returns a fixed +Y placeholder
-                # for every non-mesh primitive, which silently corrupts the
-                # cos_fix below and with it this vertex's dVCM/dVC/dVM carries.
-                var _sph_gn = sd.spheres[Int(inter.primId.id1)]
-                gn = sphere_outward_normal(hit, _sph_gn.center).to_simd()
-            else:
-                gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+            var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             # VCM Stage 2b: finish the per-bounce MIS correction (the
             # dist² portion was already applied above, shared across
@@ -3316,15 +3226,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             # walk's continuation direction + flux attenuation matter here.
             # Stored vertices use mat_kind=4, same unweighted scope as the
             # camera side.
-            var gn: Vec3f
-            if inter.primId.type == Int8(4):
-                # Analytic sphere: _geom_normal returns a fixed +Y placeholder
-                # for every non-mesh primitive, which silently corrupts the
-                # cos_fix below and with it this vertex's dVCM/dVC/dVM carries.
-                var _sph_gn = sd.spheres[Int(inter.primId.id1)]
-                gn = sphere_outward_normal(hit, _sph_gn.center).to_simd()
-            else:
-                gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+            var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             var cos_fix = abs(dot(-ray_dir, gn))
             if cos_fix > Float32(1e-6):
@@ -3420,13 +3322,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             dvcm_carry = Float32(0)
 
         elif mat.type == MatKind.conductor or mat.type == MatKind.coated_conductor:
-            var gn_c: Vec3f
-            if inter.primId.type == Int8(4):
-                var si_c = Int(inter.primId.id1)
-                var sph_c = sd.spheres[si_c]
-                gn_c = sphere_outward_normal(hit, sph_c.center).to_simd()
-            else:
-                gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+            var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_c, ray_dir) > Float32(0): gn_c = gn_c * Float32(-1)
             var wo_c = (-rd).to_simd()
             var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
@@ -3559,13 +3455,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             # Mirrors the camera-side measured branch above, minus the NEE
             # loops (light subpaths don't do NEE against other lights) --
             # see that branch's docstring for the shared-interface rationale.
-            var gn_m: Vec3f
-            if inter.primId.type == Int8(4):
-                var si_m = Int(inter.primId.id1)
-                var sph_m = sd.spheres[si_m]
-                gn_m = sphere_outward_normal(hit, sph_m.center).to_simd()
-            else:
-                gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+            var gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_m, ray_dir) > Float32(0): gn_m = gn_m * Float32(-1)
             if mat.measured_idx < Int32(0):
                 return False   # measured: no tabulated BRDF for this material
@@ -3634,13 +3524,9 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             # continues from it. The entry is never stored.
             var did_bssrdf_hop = False
             if mat.sss_boundary != Int8(0) and Int(cur_med_idx) < 0 and has_med:
-                var med_in = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
+                var med_in = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if med_in >= Int32(0) and Int(med_in) < Int(sd.mediumCount):
-                    var gn_e: Vec3f
-                    if inter.primId.type == Int8(4):
-                        gn_e = sphere_outward_normal(hit, sd.spheres[Int(inter.primId.id1)].center).to_simd()
-                    else:
-                        gn_e = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+                    var gn_e = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
                     if dot(gn_e, ray_dir) > Float32(0): gn_e = gn_e * Float32(-1)
                     var cos_e = abs(dot(-ray_dir, gn_e))
                     if cos_e > Float32(1e-6):
@@ -3690,13 +3576,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     n_lbounces += 1
                     did_bssrdf_hop = True
             if not did_bssrdf_hop:
-                var gn: Vec3f
-                if inter.primId.type == Int8(4):
-                    var si = Int(inter.primId.id1)
-                    var sph = sd.spheres[si]
-                    gn = sphere_outward_normal(hit, sph.center).to_simd()
-                else:
-                    gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+                var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
                 var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
                     ray_dir, hit.to_simd(), gn, mat.albedo.r, n_lbounces == 0 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior)
                 current_dielectric_ior = new_cur_ior
@@ -3707,7 +3587,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 # for camera/Radiance-mode paths, see _dielectric_bounce's
                 # docstring.
                 if has_med:
-                    var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
+                    var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
                     if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
                 rd = vec3f(new_dir)
                 ro = point3f(new_org)
@@ -3727,7 +3607,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
 
         elif mat.type == MatKind.interface:
             if has_med:
-                var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
+                var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
             ro = hit + rd*Float32(0.0002)
             # VCM Stage 2b: pure medium-boundary pass-through, no direction
