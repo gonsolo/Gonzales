@@ -200,7 +200,7 @@ def load_ply(
     out_normals: UnsafePointer[UnsafePointer[Float32, MutExternalOrigin], MutExternalOrigin],
     out_has_normals: UnsafePointer[Int32, MutExternalOrigin],
 ) -> Int32:
-    var path_str = String(unsafe_from_utf8_ptr=path_cstr.as_immutable())
+    var path_str = String(unsafe_from_utf8_ptr=path_cstr.as_imm())
     var file_buf: UnsafePointer[UInt8, MutExternalOrigin]
     var file_size: Int
     try:

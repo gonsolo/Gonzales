@@ -447,7 +447,7 @@ def scanner_call_float(handle: UnsafePointer[PbrtScanner, MutExternalOrigin], re
 
 def scanner_open(path: UnsafePointer[UInt8, MutExternalOrigin]) -> UnsafePointer[PbrtScanner, MutExternalOrigin]:
     var handle = alloc[PbrtScanner](1)
-    var path_str = String(unsafe_from_utf8_ptr=path.as_immutable())
+    var path_str = String(unsafe_from_utf8_ptr=path.as_imm())
     try:
         var f = open(path_str, "r")
         var bytes = f.read_bytes()
@@ -1007,7 +1007,7 @@ def _psc_collect_params(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]) -
             if is_numeric:
                 pv.floats.append(mean)
             else:
-                pv.strs.append(String(unsafe_from_utf8_ptr=name_buf.as_immutable()))
+                pv.strs.append(String(unsafe_from_utf8_ptr=name_buf.as_imm()))
             name_buf.free()
         elif _psc_type_is_float(ps.type_buf):
             if ps.is_array:
@@ -1052,13 +1052,13 @@ def _psc_collect_params(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]) -
             var tmp_s = alloc[UInt8](512)
             var r = scanner_parse_quoted_string(handle, tmp_s, 512)
             if r >= 0:
-                pv.strs.append(String(unsafe_from_utf8_ptr=tmp_s.as_immutable()))
+                pv.strs.append(String(unsafe_from_utf8_ptr=tmp_s.as_imm()))
             if ps.is_array:
                 while True:
                     var r2 = scanner_parse_quoted_string(handle, tmp_s, 512)
                     if r2 < 0:
                         break
-                    pv.strs.append(String(unsafe_from_utf8_ptr=tmp_s.as_immutable()))
+                    pv.strs.append(String(unsafe_from_utf8_ptr=tmp_s.as_imm()))
                 _ = scanner_scan_char(handle, UInt8(93))
             tmp_s.free()
         else:
@@ -1071,10 +1071,10 @@ def _psc_collect_params(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]) -
             nl_buf[0] = UInt8(10)
             _ = scanner_scan_token(handle, nl_buf, 1, tmp_s, 32)
             nl_buf.free()
-            pv.strs.append(String(unsafe_from_utf8_ptr=tmp_s.as_immutable()))
+            pv.strs.append(String(unsafe_from_utf8_ptr=tmp_s.as_imm()))
             tmp_s.free()
             if ps.is_array:
                 _ = scanner_scan_char(handle, UInt8(93))
-        var name_str = String(unsafe_from_utf8_ptr=ps.name_buf.as_immutable())
+        var name_str = String(unsafe_from_utf8_ptr=ps.name_buf.as_imm())
         dict.params.append(ParsedParam(name_str, pv^))
     return dict^

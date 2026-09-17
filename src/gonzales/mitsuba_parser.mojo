@@ -63,7 +63,7 @@ def _mxml_make_string(buf: UnsafePointer[UInt8, MutExternalOrigin], start: Int, 
     for i in range(n):
         tmp[i] = buf[start + i]
     tmp[n] = UInt8(0)
-    var s = String(unsafe_from_utf8_ptr=tmp.as_immutable())
+    var s = String(unsafe_from_utf8_ptr=tmp.as_imm())
     tmp.free()
     return s
 
@@ -290,7 +290,7 @@ def _mit_string_from(s: String, start: Int) -> String:
     for i in range(start, n):
         buf[i - start] = bytes[i]
     buf[n - start] = UInt8(0)
-    var r = String(unsafe_from_utf8_ptr=buf.as_immutable())
+    var r = String(unsafe_from_utf8_ptr=buf.as_imm())
     buf.free()
     return r
 
@@ -909,7 +909,7 @@ def mojo_parse_mitsuba_scene(path: UnsafePointer[UInt8, MutExternalOrigin],
     # here meant any Mitsuba scene with a real bitmap texture (e.g. a
     # tiled floor) crashed the moment it was first sampled.
     external_call["createTextureSystem", NoneType]()
-    var path_str = String(unsafe_from_utf8_ptr=path.as_immutable())
+    var path_str = String(unsafe_from_utf8_ptr=path.as_imm())
 
     var pi = 0
     while path[pi] != UInt8(0):
@@ -924,7 +924,7 @@ def mojo_parse_mitsuba_scene(path: UnsafePointer[UInt8, MutExternalOrigin],
         for ki in range(last_slash + 1):
             dir_tmp[ki] = path[ki]
         dir_tmp[last_slash + 1] = UInt8(0)
-        scene_dir = String(unsafe_from_utf8_ptr=dir_tmp.as_immutable())
+        scene_dir = String(unsafe_from_utf8_ptr=dir_tmp.as_imm())
         dir_tmp.free()
 
     var byte_list: List[UInt8]

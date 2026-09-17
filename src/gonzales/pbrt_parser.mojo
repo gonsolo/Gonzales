@@ -675,7 +675,7 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     var g_density = params.get_floats("density")
 
     if is_hom:
-        var name_str = String(unsafe_from_utf8_ptr=name_buf.as_immutable())
+        var name_str = String(unsafe_from_utf8_ptr=name_buf.as_imm())
         s[0].med_names.append(name_str)
         s[0].med_sa.append(sa.r * scale)
         s[0].med_sa.append(sa.g * scale)
@@ -696,7 +696,7 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         # pre-existing, separate behavior not touched here).
         var sa_eff = sa if sa_set else RGB(Float32(1))
         var ss_eff = ss if ss_set else RGB(Float32(1))
-        var name_str = String(unsafe_from_utf8_ptr=name_buf.as_immutable())
+        var name_str = String(unsafe_from_utf8_ptr=name_buf.as_imm())
         s[0].med_names.append(name_str)
         s[0].med_sa.append(sa_eff.r * scale); s[0].med_sa.append(sa_eff.g * scale); s[0].med_sa.append(sa_eff.b * scale)
         s[0].med_ss.append(ss_eff.r * scale); s[0].med_ss.append(ss_eff.g * scale); s[0].med_ss.append(ss_eff.b * scale)
@@ -742,7 +742,7 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         var c_frequency = params.get_float("frequency", Float32(5))
         var sa_eff_c = sa if sa_set else RGB(Float32(1))
         var ss_eff_c = ss if ss_set else RGB(Float32(1))
-        var name_str_c = String(unsafe_from_utf8_ptr=name_buf.as_immutable())
+        var name_str_c = String(unsafe_from_utf8_ptr=name_buf.as_imm())
         s[0].med_names.append(name_str_c)
         s[0].med_sa.append(sa_eff_c.r * scale); s[0].med_sa.append(sa_eff_c.g * scale); s[0].med_sa.append(sa_eff_c.b * scale)
         s[0].med_ss.append(ss_eff_c.r * scale); s[0].med_ss.append(ss_eff_c.g * scale); s[0].med_ss.append(ss_eff_c.b * scale)
@@ -824,7 +824,7 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         # GridMedium above -- see that branch's comment.
         var sa_eff_v = sa if sa_set else RGB(Float32(1))
         var ss_eff_v = ss if ss_set else RGB(Float32(1))
-        var name_str = String(unsafe_from_utf8_ptr=name_buf.as_immutable())
+        var name_str = String(unsafe_from_utf8_ptr=name_buf.as_imm())
         s[0].med_names.append(name_str)
         s[0].med_sa.append(sa_eff_v.r * scale); s[0].med_sa.append(sa_eff_v.g * scale); s[0].med_sa.append(sa_eff_v.b * scale)
         s[0].med_ss.append(ss_eff_v.r * scale); s[0].med_ss.append(ss_eff_v.g * scale); s[0].med_ss.append(ss_eff_v.b * scale)
@@ -875,7 +875,7 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         # warning. Same defect class as the .spd/.ply.gz/scale-texture
         # drops -- parsed, recognised as "not mine", and discarded without
         # a word.
-        var bad_name = String(unsafe_from_utf8_ptr=name_buf.as_immutable())
+        var bad_name = String(unsafe_from_utf8_ptr=name_buf.as_imm())
         warn_unsupported_in("medium type", type_str, "medium", bad_name,
                             "it is DROPPED, so any MediumInterface naming it renders as empty space",
                             "homogeneous, uniformgrid, nanovdb, cloud")
@@ -885,7 +885,7 @@ def lookup_medium(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                   name: UnsafePointer[UInt8, MutExternalOrigin]) -> Int32:
     if name[0] == UInt8(0):
         return Int32(-1)
-    var name_str = String(unsafe_from_utf8_ptr=name.as_immutable())
+    var name_str = String(unsafe_from_utf8_ptr=name.as_imm())
     for i in range(len(s[0].med_names)):
         if s[0].med_names[i] == name_str:
             return Int32(i)
@@ -1119,7 +1119,7 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     var is_loopsubdiv = _psc_streq(shape_type, "loopsubdiv")
     var is_disk = _psc_streq(shape_type, "disk")
     var is_bilinearmesh = _psc_streq(shape_type, "bilinearmesh")
-    var shape_type_name = String(unsafe_from_utf8_ptr=shape_type.as_immutable())
+    var shape_type_name = String(unsafe_from_utf8_ptr=shape_type.as_imm())
     shape_type.free()
 
     if is_disk:
@@ -1241,9 +1241,9 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
             var ap = alloc[UInt8](fp_len - 2)
             for ci in range(fp_len - 3): ap[ci] = full_path[ci]
             ap[fp_len - 3] = UInt8(0)
-            var ap_str = String(unsafe_from_utf8_ptr=ap.as_immutable())
+            var ap_str = String(unsafe_from_utf8_ptr=ap.as_imm())
             if not exists(ap_str):
-                var gz_str = String(unsafe_from_utf8_ptr=full_path.as_immutable())
+                var gz_str = String(unsafe_from_utf8_ptr=full_path.as_imm())
                 print("decompressing", gz_str, "(one-time, cached alongside it)")
                 try:
                     _ = run("gzip -dk '" + gz_str + "'")
@@ -1256,7 +1256,7 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         if ok == 0:
             ok = load_ply(full_path, ply_pts, ply_nv, ply_idx, ply_nt, ply_uvs, ply_has_uvs, ply_nrm, ply_has_nrm)
         if ok == 0:
-            print("PLY load FAILED:", String(unsafe_from_utf8_ptr=full_path.as_immutable()))
+            print("PLY load FAILED:", String(unsafe_from_utf8_ptr=full_path.as_imm()))
             full_path.free()
             ply_pts.free(); ply_nv.free(); ply_idx.free(); ply_nt.free()
             ply_uvs.free(); ply_has_uvs.free(); ply_nrm.free(); ply_has_nrm.free()
@@ -1425,7 +1425,7 @@ def handle_texture(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     _ = scanner_parse_quoted_string(handle, tex_type, 64)
     var tex_class = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, tex_class, 64)
-    var name_str = String(unsafe_from_utf8_ptr=tex_name.as_immutable())
+    var name_str = String(unsafe_from_utf8_ptr=tex_name.as_imm())
     tex_name.free()
 
     if _psc_streq(tex_class, "constant"):
@@ -1499,8 +1499,8 @@ def handle_texture(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         # no error, which is exactly how the "scale"-on-reflectance gap
         # survived (killeroos' floor grid). Same convention as the
         # unsupported-material warnings in material_builder.mojo.
-        var class_str = String(unsafe_from_utf8_ptr=tex_class.as_immutable())
-        var type_str  = String(unsafe_from_utf8_ptr=tex_type.as_immutable())
+        var class_str = String(unsafe_from_utf8_ptr=tex_class.as_imm())
+        var type_str  = String(unsafe_from_utf8_ptr=tex_type.as_imm())
         warn_unsupported_in("texture class", class_str + " (" + type_str + ")",
                             "texture", name_str, "it renders as a flat default",
                             "imagemap, scale, mix, checkerboard, constant")
@@ -1627,7 +1627,7 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
             var obj_name = alloc[UInt8](PSC_NAME_MAX)
             _ = scanner_parse_quoted_string(handle, obj_name, PSC_NAME_MAX)
             if s[0].object_depth == 0:
-                s[0].pending_object_name  = String(unsafe_from_utf8_ptr=obj_name.as_immutable())
+                s[0].pending_object_name  = String(unsafe_from_utf8_ptr=obj_name.as_imm())
                 s[0].pending_object_start = Int32(len(s[0].meshes))
                 s[0].pending_object_ctm   = s[0].ctm.copy()
             obj_name.free()
@@ -1640,7 +1640,7 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         elif _psc_streq(kw_buf, "ObjectInstance"):
             var obj_name = alloc[UInt8](PSC_NAME_MAX)
             _ = scanner_parse_quoted_string(handle, obj_name, PSC_NAME_MAX)
-            var inst_name = String(unsafe_from_utf8_ptr=obj_name.as_immutable())
+            var inst_name = String(unsafe_from_utf8_ptr=obj_name.as_imm())
             obj_name.free()
             _psc_emit_object_instance(s, inst_name)
         elif _psc_streq(kw_buf, "Shape"):
@@ -1702,9 +1702,9 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                 for ci in range(inc_path_len - 3):
                     stripped[ci] = inc_path[ci]
                 stripped[inc_path_len - 3] = UInt8(0)
-                var stripped_str = String(unsafe_from_utf8_ptr=stripped.as_immutable())
+                var stripped_str = String(unsafe_from_utf8_ptr=stripped.as_imm())
                 if not exists(stripped_str):
-                    var inc_path_str = String(unsafe_from_utf8_ptr=inc_path.as_immutable())
+                    var inc_path_str = String(unsafe_from_utf8_ptr=inc_path.as_imm())
                     try:
                         _ = run("gzip -dk '" + inc_path_str + "'")
                     except:
@@ -1735,7 +1735,7 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                 handle[0].cursor = Int32(0)
                 handle[0].is_at_end = Int32(0)
             else:
-                var inc_str = String(unsafe_from_utf8_ptr=inc_name.as_immutable())
+                var inc_str = String(unsafe_from_utf8_ptr=inc_name.as_imm())
                 if inc_str.endswith(".xz"):
                     print("Warning: cannot open include (decompress first with xz -dk):", inc_str)
                 elif inc_str.endswith(".gz"):
@@ -3270,7 +3270,7 @@ def mojo_parse_scene(path: UnsafePointer[UInt8, MutExternalOrigin],
     external_call["createTextureSystem", NoneType]()
     var handle = scanner_open(path)
     if handle[0].is_at_end != Int32(0):
-        print("Error: cannot open scene file:", String(unsafe_from_utf8_ptr=path.as_immutable()))
+        print("Error: cannot open scene file:", String(unsafe_from_utf8_ptr=path.as_imm()))
         scanner_free(handle)
         return UnsafePointer[ParsedScene_Mojo, MutExternalOrigin].unsafe_dangling()
 
@@ -3288,7 +3288,7 @@ def mojo_parse_scene(path: UnsafePointer[UInt8, MutExternalOrigin],
         for ki in range(last_slash + 1):
             dir_tmp[ki] = path[ki]
         dir_tmp[last_slash + 1] = UInt8(0)
-        s_ptr[0].scene_dir = String(unsafe_from_utf8_ptr=dir_tmp.as_immutable())
+        s_ptr[0].scene_dir = String(unsafe_from_utf8_ptr=dir_tmp.as_imm())
         dir_tmp.free()
     parse_scene_file(handle, s_ptr)
     scanner_free(handle)

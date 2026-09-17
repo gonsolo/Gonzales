@@ -386,7 +386,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
     var type_str = String("diffuse")
     var have_type_str = False
     if inline_type:
-        type_str = String(unsafe_from_utf8_ptr=mat_name.as_immutable())
+        type_str = String(unsafe_from_utf8_ptr=mat_name.as_imm())
         have_type_str = True
     elif params.has("type"):
         type_str = params.get_string("type", "diffuse")
@@ -525,7 +525,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
                         has_spectral_conductor = True
                     else:
                         print("SPD load FAILED (cannot open/parse), material '"
-                              + String(unsafe_from_utf8_ptr=mat_name.as_immutable())
+                              + String(unsafe_from_utf8_ptr=mat_name.as_imm())
                               + "' eta falls back to 0.5:", s[0].scene_dir + eta_name)
                 elif eta_name != "":
                     print("Warning: unknown named spectrum '" + eta_name
@@ -554,7 +554,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
                     has_spectral_conductor = True
                 else:
                     print("SPD load FAILED (cannot open/parse), material '"
-                          + String(unsafe_from_utf8_ptr=mat_name.as_immutable())
+                          + String(unsafe_from_utf8_ptr=mat_name.as_imm())
                           + "' k falls back to 0.5:", s[0].scene_dir + k_name)
             elif k_name != "":
                 print("Warning: unknown named spectrum '" + k_name
@@ -933,7 +933,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
         mix_name2 = mix_names[1]
 
     # Store into named_materials List
-    var nm = NamedMaterial(String(unsafe_from_utf8_ptr=mat_name.as_immutable()))
+    var nm = NamedMaterial(String(unsafe_from_utf8_ptr=mat_name.as_imm()))
     # For named-spectrum conductors: compute Fresnel F0 per channel
     if has_spectral_conductor and (mat_type == MatKind.conductor or mat_type == MatKind.coated_conductor):
         var f0r = ((metal_eta.r-Float32(1.0))*(metal_eta.r-Float32(1.0)) + metal_k.r*metal_k.r) / \
@@ -997,7 +997,7 @@ def _psc_handle_named_material(handle: UnsafePointer[PbrtScanner, MutExternalOri
     var mat_name = alloc[UInt8](PSC_NAME_MAX)
     _ = scanner_parse_quoted_string(handle, mat_name, PSC_NAME_MAX)
     s[0].cur_attr.mat_idx = Int32(-1)
-    var name_str = String(unsafe_from_utf8_ptr=mat_name.as_immutable())
+    var name_str = String(unsafe_from_utf8_ptr=mat_name.as_imm())
     for i in range(len(s[0].named_materials)):
         if s[0].named_materials[i].name == name_str:
             s[0].cur_attr.mat_idx = Int32(i)
