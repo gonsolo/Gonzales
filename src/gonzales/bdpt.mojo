@@ -226,7 +226,7 @@ def _bdpt_medium_update(
     ray_dir: Vec3f,
     inter:   Intersection_C,
     mat:     Material_C,
-    sd:      SceneDescriptor2_C,
+    ref sd:      SceneDescriptor2_C,
     hit: Point3f,
 ) -> Int32:
     """Determine new current_medium_idx after crossing a surface."""
@@ -260,7 +260,7 @@ def _bdpt_medium_update(
 def _visible_transmittance(
     a: Point3f, b: Point3f,
     med_idx: Int32,
-    sd:      SceneDescriptor2_C,
+    ref sd:      SceneDescriptor2_C,
     scratch: UnsafePointer[Intersection_C, MutExternalOrigin],
     wl:      SampledWavelengths,
 ) -> SpectralSample:
@@ -406,7 +406,7 @@ def _visible_transmittance(
     return Tr
 
 @always_inline
-def _bdpt_simple_light_count(sd: SceneDescriptor2_C) -> Int:
+def _bdpt_simple_light_count(ref sd: SceneDescriptor2_C) -> Int:
     """Number of lights reachable through _bdpt_sample_simple_light: distant +
     point + sphere, the three every BDPT material-loop samples the SAME way.
     Area and infinite are NOT covered -- area gets its own MNEE-capable
@@ -421,7 +421,7 @@ def _bdpt_simple_light_count(sd: SceneDescriptor2_C) -> Int:
 
 @always_inline
 def _bdpt_sample_simple_light(
-    sd: SceneDescriptor2_C, i: Int, hit_point: Vec3f, mut pcg: PCG32,
+    ref sd: SceneDescriptor2_C, i: Int, hit_point: Vec3f, mut pcg: PCG32,
 ) -> LightSample:
     """The i-th distant/point/sphere light. Unlike shading.mojo's twin
     (_nee_sample_simple_light), this returns ONLY the LightSample -- BDPT's
@@ -459,7 +459,7 @@ def _bdpt_nee_contribute(
     hit: Point3f,
     gn: Vec3f,
     cur_med_idx: Int32,
-    sd: SceneDescriptor2_C,
+    ref sd: SceneDescriptor2_C,
     scratch: UnsafePointer[Intersection_C, MutExternalOrigin],
     wl: SampledWavelengths,
     eps: Float32 = Float32(0.0001),
@@ -484,7 +484,7 @@ def _bdpt_nee_contribute(
     return SpectralSample(Float32(0))
 
 def _bdpt_mnee_diffuse_area_light(
-    sd: SceneDescriptor2_C, hit: Point3f, gn: Vec3f, eff_alb: RGB,
+    ref sd: SceneDescriptor2_C, hit: Point3f, gn: Vec3f, eff_alb: RGB,
     beta: SpectralSample, mut pcg: PCG32, wl: SampledWavelengths,
     ior: Float32 = Float32(1.0),
 ) -> SpectralSample:
@@ -722,7 +722,7 @@ def _bdpt_mnee_diffuse_area_light(
 
 
 def _bdpt_mnee_sphere_light(
-    sd: SceneDescriptor2_C, hit: Point3f, gn: Vec3f, eff_alb: RGB,
+    ref sd: SceneDescriptor2_C, hit: Point3f, gn: Vec3f, eff_alb: RGB,
     beta: SpectralSample, mut pcg: PCG32, sph_idx: Int, n_spheres: Int,
     wl: SampledWavelengths, ior: Float32 = Float32(1.0),
 ) -> SpectralSample:
@@ -1092,7 +1092,7 @@ def _bdpt_world_to_raster(
 
 def _bdpt_connect_to_camera(
     lv: BDPTVertex,
-    sd: SceneDescriptor2_C,
+    ref sd: SceneDescriptor2_C,
     scratch: UnsafePointer[Intersection_C, MutExternalOrigin],
     cam_pos: Vec3f,
     w2c: UnsafePointer[Float32, MutExternalOrigin],
@@ -1217,7 +1217,7 @@ def _bdpt_connect_to_camera(
 
 def _bdpt_connect_to_cache(
     cv: BDPTVertex,
-    sd: SceneDescriptor2_C,
+    ref sd: SceneDescriptor2_C,
     has_med: Bool,
     scratch: UnsafePointer[Intersection_C, MutExternalOrigin],
     lvc: UnsafePointer[BDPTVertex, MutExternalOrigin],
@@ -1259,7 +1259,7 @@ def _bdpt_connect_to_cache(
 
 def _bdpt_connect_to_cache_deferred(
     cv: BDPTVertex,
-    sd: SceneDescriptor2_C,
+    ref sd: SceneDescriptor2_C,
     lvc: UnsafePointer[BDPTVertex, MutExternalOrigin],
     lp_idx: Int,
     path_len: Int,
@@ -1384,7 +1384,7 @@ def _bdpt_build_merge_grid(
 @always_inline
 def _bdpt_merge_from_cache(
     cv: BDPTVertex,
-    sd: SceneDescriptor2_C,
+    ref sd: SceneDescriptor2_C,
     lvc: UnsafePointer[BDPTVertex, MutExternalOrigin],
     merge_next: UnsafePointer[Int32, MutExternalOrigin],
     heads: UnsafePointer[Int32, MutExternalOrigin],
@@ -1473,7 +1473,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     r2c:     UnsafePointer[Float32, MutExternalOrigin],
     c2w:     UnsafePointer[Float32, MutExternalOrigin],
     px:      Int, py:      Int,
-    sd:      SceneDescriptor2_C,
+    ref sd:      SceneDescriptor2_C,
     mut pcg: PCG32,
     has_med: Bool,
     scratch: UnsafePointer[Intersection_C, MutExternalOrigin],
@@ -1706,7 +1706,7 @@ def _bdpt_camera_path_init[use_gpu: Bool](
     )
 
 def _bdpt_camera_path_bounce[use_gpu: Bool](
-    sd:      SceneDescriptor2_C,
+    ref sd:      SceneDescriptor2_C,
     mut pcg: PCG32,
     has_med: Bool,
     inter: Intersection_C,
@@ -2762,10 +2762,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                         dvc_carry /= cos_e
                         dvm_carry /= cos_e
                     var eta_e = mat.albedo.r
-                    var ex = _bdpt_sample_bssrdf_exit(
-                        sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, sd.materials,
-                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, sd.sphereCount,
-                        sd.mediums, Int(med_in), hit, gn_e, cos_e, eta_e, pcg)
+                    var ex = _bdpt_sample_bssrdf_exit(sd, Int(med_in), hit, gn_e, cos_e, eta_e, pcg)
                     if not ex.ok:
                         return False
                     beta *= spec_refl_unbounded(
@@ -2927,7 +2924,7 @@ def _null_light_path_state() -> VCMLightPathState_C:
     )
 
 def _bdpt_light_path_init[use_gpu: Bool](
-    sd: SceneDescriptor2_C,
+    ref sd: SceneDescriptor2_C,
     mut pcg: PCG32,
     default_emit_med: Int32,
     lp_idx: Int,
@@ -3103,7 +3100,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
     )
 
 def _bdpt_light_path_bounce[use_gpu: Bool](
-    sd:      SceneDescriptor2_C,
+    ref sd:      SceneDescriptor2_C,
     mut pcg: PCG32,
     has_med: Bool,
     inter: Intersection_C,
@@ -3662,10 +3659,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                         dvc_carry /= cos_e
                         dvm_carry /= cos_e
                     var eta_e = mat.albedo.r
-                    var ex = _bdpt_sample_bssrdf_exit(
-                        sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, sd.materials,
-                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, sd.sphereCount,
-                        sd.mediums, Int(med_in), hit, gn_e, cos_e, eta_e, pcg)
+                    var ex = _bdpt_sample_bssrdf_exit(sd, Int(med_in), hit, gn_e, cos_e, eta_e, pcg)
                     if not ex.ok:
                         return False
                     flux *= spec_refl_unbounded(
@@ -3759,7 +3753,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         return True   # bounce processed normally, path continues
 
 def _bdpt_trace_light_path[use_gpu: Bool](
-    sd:      SceneDescriptor2_C,
+    ref sd:      SceneDescriptor2_C,
     mut pcg: PCG32,
     has_med: Bool,
     default_emit_med: Int32,
@@ -3920,17 +3914,7 @@ struct BssrdfExitSample(TrivialRegisterPassable):
 
 
 def _bdpt_sample_bssrdf_exit(
-    bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
-    primIds: UnsafePointer[PrimId_C, MutExternalOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
-    curves: UnsafePointer[Curve_C, MutExternalOrigin],
-    materials: UnsafePointer[Material_C, MutExternalOrigin],
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin],
-    instances: UnsafePointer[Instance_C, MutExternalOrigin],
-    spheres: UnsafePointer[Sphere_C, MutExternalOrigin],
-    sphereCount: Int64,
-    mediums: UnsafePointer[Medium_C, MutExternalOrigin],
+    ref sd: SceneDescriptor2_C,
     med_idx: Int,
     hit: Point3f,
     n_in: Vec3f,          # entry normal, facing the side the path arrived from
@@ -3949,11 +3933,11 @@ def _bdpt_sample_bssrdf_exit(
     reach is a failed sample: the caller terminates the path (it must not fall
     back to a different strategy, which would bias the estimate).
 
-    Takes the scene's pointers, not the SceneDescriptor2_C: a descriptor
-    passed by value one call deeper than the light loop's own traversal came
-    through corrupted on the GPU (modular#6759 shape), and the probe
-    traversal then faulted with CUDA_ERROR_ILLEGAL_ADDRESS."""
-    var med = mediums[med_idx]
+    `sd` is taken by reference, like every other descriptor parameter here:
+    by value, one call deeper than the light loop's own traversal, the probe
+    traversal faulted with CUDA_ERROR_ILLEGAL_ADDRESS in
+    _bdpt_emit_light_paths_gpu."""
+    var med = sd.mediums[med_idx]
     var fail = BssrdfExitSample(False, hit, n_in, RGB(Float32(0)), Float32(0))
     var ft_in = bssrdf_exit_ft(cos_in, eta)
     if ft_in <= Float32(0.0):
@@ -3981,23 +3965,23 @@ def _bdpt_sample_bssrdf_exit(
     var probe_scratch = _probe_slot.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin]()
     probe_scratch[0].hit = Int8(0)
     var probe_ray = Ray_C(probe_org, probe_dir)
-    traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, probe_ray, seg_len, probe_scratch,
-                       blasNodesArr, blasPrimIdsArr, instances)
-    test_spheres(spheres, Int(sphereCount), probe_ray, probe_scratch)
+    traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe_ray, seg_len, probe_scratch,
+                       sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+    test_spheres(sd.spheres, Int(sd.sphereCount), probe_ray, probe_scratch)
     if probe_scratch[0].hit == Int8(0):
         return fail
     var pi = probe_scratch[0]
     # The exit must be on a subsurface boundary too, or the profile does not
     # describe what happens there.
-    var pmat = materials[Int(pi.primId.materialIndex)]
+    var pmat = sd.materials[Int(pi.primId.materialIndex)]
     if pmat.sss_boundary == Int8(0):
         return fail
     var x_o = probe_org + probe_dir * pi.tHit
     var n_o: Vec3f
     if pi.primId.type == Int8(4):
-        n_o = sphere_outward_normal(x_o, spheres[Int(pi.primId.id1)].center)
+        n_o = sphere_outward_normal(x_o, sd.spheres[Int(pi.primId.id1)].center)
     else:
-        n_o = _geom_normal(pi, meshes, instances, spheres, x_o.to_simd())
+        n_o = _geom_normal(pi, sd.meshes, sd.instances, sd.spheres, x_o.to_simd())
     if dot(n_o, n_in) < Float32(0.0):
         n_o = n_o * Float32(-1.0)
     var d = x_o - hit
@@ -4016,7 +4000,7 @@ def _bdpt_sample_bssrdf_exit(
 def _eval_vertex_spectral(
     v:   BDPTVertex,
     dir_to_other:  Vec3f,
-    sd:  SceneDescriptor2_C,
+    ref sd:  SceneDescriptor2_C,
     spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
     spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
     spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
@@ -4118,7 +4102,7 @@ def _geom_term(
 
 @always_inline
 def _bdpt_vertex_pdfs(
-    v: BDPTVertex, dir_to_other: Vec3f, sd: SceneDescriptor2_C,
+    v: BDPTVertex, dir_to_other: Vec3f, ref sd: SceneDescriptor2_C,
 ) -> Tuple[Float32, Float32]:
     """Real forward/reverse solid-angle BSDF pdfs for a VCM-MIS-scoped
     vertex (diffuse mat_kind=0, rough conductor/coated_conductor mat_kind=1,
@@ -4257,7 +4241,7 @@ def _bdpt_connect_pair_weighted(cv: BDPTVertex, lv: BDPTVertex) -> Bool:
 def _connect(
     cv: BDPTVertex,  # camera-subpath vertex
     lv: BDPTVertex,  # light-subpath vertex (including light point itself)
-    sd: SceneDescriptor2_C,
+    ref sd: SceneDescriptor2_C,
     has_med: Bool,
     scratch: UnsafePointer[Intersection_C, MutExternalOrigin],
     mis_vm_weight_factor: Float32,
@@ -4378,7 +4362,7 @@ def _connect(
 def _connect_unweighted(
     cv: BDPTVertex,  # camera-subpath vertex
     lv: BDPTVertex,  # light-subpath vertex (including light point itself)
-    sd: SceneDescriptor2_C,
+    ref sd: SceneDescriptor2_C,
     mis_vm_weight_factor: Float32,
 ) -> Tuple[SpectralSample, Bool]:
     """Task #163 stage 5: byte-for-byte copy of _connect's math (see that
@@ -4503,7 +4487,7 @@ def _connect_unweighted(
 
 def _bdpt_render_core(
     psc:      UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
-    sd:       SceneDescriptor2_C,
+    ref sd:       SceneDescriptor2_C,
     n_spp:    Int,
     n_photons_req: Int,
     verbose:  Bool,
@@ -4768,7 +4752,7 @@ def _bdpt_render_core(
 
 def vcm_render(
     psc:      UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
-    sd:       SceneDescriptor2_C,
+    ref sd:       SceneDescriptor2_C,
     n_spp:    Int,
     n_photons: Int,
     no_denoise: Bool,
@@ -5844,7 +5828,7 @@ def bdpt_merge_grid_insert_gpu(
 def vcm_render_gpu(
     handlePtr: UnsafePointer[GpuSceneHandle, MutExternalOrigin],
     psc:      UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
-    sd:       SceneDescriptor2_C,
+    ref sd:       SceneDescriptor2_C,
     n_spp:    Int,
     n_photons_req: Int,
     no_denoise: Bool,
@@ -6350,7 +6334,7 @@ def sum_shadow_connect_gpu(
 def vcm_render_gpu_wavefront(
     handlePtr: UnsafePointer[GpuSceneHandle, MutExternalOrigin],
     psc:      UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
-    sd:       SceneDescriptor2_C,
+    ref sd:       SceneDescriptor2_C,
     n_spp:    Int,
     n_photons_req: Int,
     no_denoise: Bool,
@@ -7248,7 +7232,7 @@ def sppm_finalize_gpu(
 def sppm_render_gpu(
     handlePtr: UnsafePointer[GpuSceneHandle, MutExternalOrigin],
     psc:      UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
-    sd:       SceneDescriptor2_C,
+    ref sd:       SceneDescriptor2_C,
     n_passes: Int,
     n_photons_per_pass: Int,
     initial_radius: Float32,

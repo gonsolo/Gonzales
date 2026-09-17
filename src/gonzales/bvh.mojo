@@ -269,7 +269,7 @@ def _mk_sd_full(
 #    here.) ────────────────────────────────────────────────────────────────
 
 @always_inline
-def _scene_bounding_sphere(sd: SceneDescriptor2_C) -> Tuple[Point3f, Float32]:
+def _scene_bounding_sphere(ref sd: SceneDescriptor2_C) -> Tuple[Point3f, Float32]:
     """Scene bounding sphere derived from the top-level BVH's root AABB.
     Infinite/distant lights have no position of their own — emitting a
     light-path/photon from one requires an arbitrary point outside the

@@ -60,7 +60,7 @@ comptime SPPM_DEFAULT_RADIUS_FRACTION = Float32(0.006)
 # at every scale. An explicit CLI or scene-file radius still wins outright.
 def _resolve_sppm_params(
     psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
-    sd: SceneDescriptor2_C,
+    ref sd: SceneDescriptor2_C,
     sppm_photons_cli: Int32,
     sppm_radius_cli: Float32,
 ) -> Tuple[Int32, Float32]:
