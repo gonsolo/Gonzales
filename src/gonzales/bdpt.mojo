@@ -21,7 +21,7 @@ from .geometry import (
     Grid_C, NvdbGrid_C,
     spectral_free_flight_weight,
 )
-from .bssrdf import dipole_max_radius, dipole_rd, dipole_mis_sigma_tr, dipole_sample_radius, bssrdf_probe_offset, bssrdf_exit_pdf_area
+from .bssrdf import dipole_max_radius, dipole_rd, dipole_mis_sigma_tr, dipole_sample_radius, bssrdf_probe_offset, bssrdf_exit_pdf_area, bssrdf_exit_ft, bssrdf_hop_carries, bssrdf_exit_scatter_carries
 from .bvh import (
     BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres, _mk_sd_full,
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf,
@@ -151,6 +151,10 @@ comptime _MNEE_MAX_SPHERES = 4  # cap on sphere-light MNEE call sites, unrolled 
 
 # ── Vertex types ──────────────────────────────────────────────────────────────
 
+# A subsurface exit vertex: exit lobe Ft(cos)/pi, reverse area density in
+# pdf_fwd, eta in pdf_bwd. Kind 4 is the coateddiffuse walk's.
+comptime MAT_KIND_BSSRDF_EXIT = Int32(5)
+
 @fieldwise_init
 struct BDPTVertex(TrivialRegisterPassable):
     """A vertex on a camera or light subpath."""
@@ -179,7 +183,8 @@ struct BDPTVertex(TrivialRegisterPassable):
     var is_delta:   Int32  # 1 = specular (mirror conductor / dielectric) — cannot be connected
     var is_light:   Int32  # 1 = this is a light-source vertex (s=0 in BDPT notation)
     var med_idx:    Int32  # medium index AFTER this vertex (-1 = vacuum)
-    var mat_kind:   Int32  # 0 = Lambertian (diffuse/volume), 1 = rough conductor (GGX), 2 = hair (Marschner 3-lobe)
+    var mat_kind:   Int32  # 0 = Lambertian (diffuse/volume), 1 = rough conductor (GGX), 2 = hair (Marschner 3-lobe),
+                           # 3 = measured, 4 = coateddiffuse walk, MAT_KIND_BSSRDF_EXIT = subsurface exit
     # Direction back toward this vertex's own predecessor on its subpath
     # (-incoming ray direction). Populated for mat_kind=1 (GGX needs both
     # directions around the half-vector) and mat_kind=2 (hair's wo, needed to
@@ -1448,7 +1453,10 @@ def _bdpt_merge_from_cache(
                     # direct contribution is now covered by NEE instead").
                     # Every OTHER stored vertex's beta already has emission
                     # folded in via the light path's own flux computation.
-                    if lv.is_delta == Int32(0) and lv.is_surface == Int32(1) and lv.is_light == Int32(0):
+                    # BSSRDF exits excluded: a light-side exit vertex has no
+                    # incoming ray (it was reached by a hop), so there is no
+                    # photon direction to evaluate the camera vertex against.
+                    if lv.is_delta == Int32(0) and lv.is_surface == Int32(1) and lv.is_light == Int32(0) and lv.mat_kind != MAT_KIND_BSSRDF_EXIT:
                         var e = lv.pos - cv.pos
                         var dist2 = e.length_sq()
                         if dist2 <= r2:
@@ -2734,100 +2742,96 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var did_bssrdf_hop = False
-            # ── Subsurface boundary: a BSSRDF hop, as an EXTRA vertex ──────
-            # See bssrdf.mojo for the MIS derivation. The essential point: the
-            # hop is sampled NATIVELY in area measure, p_A(x_o|x_i), so unlike
-            # every other vertex here it needs NO geometry conversion -- the
-            # cos/d^2 the local-vertex recursion applies would be wrong by
-            # exactly that factor. And p_rev = p_A, because both the radial
-            # profile and the probe Jacobian |n_i . n_o| are symmetric in the
-            # two endpoints, so a light subpath's hop has the same density.
-            #
-            # Contained by construction: this fires only on sss_boundary, so
-            # no non-subsurface scene in the corpus can be affected.
+            # ── Subsurface boundary: a BSSRDF hop to a real EXIT VERTEX ────
+            # The camera arrives at the entry x_i, the exit x_o is sampled from
+            # the diffusion profile (shared with the light subpath, see
+            # _bdpt_sample_bssrdf_exit), and x_o then becomes an ordinary
+            # connectible vertex: merge, connect, direct lighting, continue.
+            # Its BSDF is the exit lobe Ft(cos)/pi (MAT_KIND_BSSRDF_EXIT), whose pdfs are
+            # exactly Lambertian. The MIS carries across the hop follow the
+            # rule machine-checked in Scenes/vcm_bssrdf_mis_derivation.py.
+            # The entry itself is never connectible.
             if mat.sss_boundary != Int8(0) and Int(cur_med_idx) < 0 and has_med:
-                var gn_s0: Vec3f
-                if inter.primId.type == Int8(4):
-                    var sph_s = sd.spheres[Int(inter.primId.id1)]
-                    gn_s0 = sphere_outward_normal(hit, sph_s.center).to_simd()
-                else:
-                    gn_s0 = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-                if dot(gn_s0, ray_dir) > Float32(0.0):
-                    gn_s0 = gn_s0 * Float32(-1.0)
-                var med_i = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
-                if med_i >= Int32(0) and Int(med_i) < Int(sd.mediumCount):
-                    var medb = sd.mediums[Int(med_i)]
-                    var eta_b = mat.albedo.r
-                    var cos_i = abs(dot(gn_s0, ray_dir))
-                    var ft_i = Float32(1.0) - fr_dielectric(cos_i, eta_b)
-                    var rmax_b = dipole_max_radius(medb.sigma_s, medb.sigma_a, medb.g)
-                    var ch = Int(pcg.next_float() * Float32(3.0))
-                    if ch > 2: ch = 2
-                    var str_c = dipole_mis_sigma_tr(medb.sigma_s, medb.sigma_a, medb.g, ch)
-                    var r_s = dipole_sample_radius(str_c, pcg.next_float())
-                    if ft_i > Float32(0.0) and r_s < rmax_b and str_c > Float32(0.0):
-                        var frm_s = Frame.from_z(gn_s0)
-                        var t_s = Vec3f(frm_s.x.x, frm_s.x.y, frm_s.x.z)
-                        var b_s = Vec3f(frm_s.y.x, frm_s.y.y, frm_s.y.z)
-                        var phi_s = Float32(6.2831853) * pcg.next_float()
-                        var (off_s, seg_s) = bssrdf_probe_offset(r_s, phi_s, rmax_b, t_s, b_s, gn_s0)
-                        var probe_o = hit + off_s
-                        var probe_ray = Ray_C(probe_o, vec3f(gn_s0 * Float32(-1.0)))
-                        scratch[0].hit = Int8(0)
-                        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves,
-                                           probe_ray, seg_s, scratch,
-                                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
-                                           sd.spheres, Int(sd.sphereCount))
-                        if scratch[0].hit != Int8(0):
-                            var pi2 = scratch[0]
-                            var x_o = probe_o + (gn_s0 * Float32(-1.0)) * pi2.tHit
-                            var n_o: Vec3f
-                            if pi2.primId.type == Int8(4):
-                                var sph_o = sd.spheres[Int(pi2.primId.id1)]
-                                n_o = sphere_outward_normal(x_o, sph_o.center).to_simd()
-                            else:
-                                n_o = _geom_normal(pi2, sd.meshes, sd.instances, sd.spheres, x_o.to_simd())
-                            var d_io = x_o - hit
-                            var r_act = sqrt(dot(d_io, d_io))
-                            var cos_probe = abs(dot(n_o, gn_s0))
-                            var p_A = bssrdf_exit_pdf_area(medb.sigma_s, medb.sigma_a, medb.g, r_act, cos_probe)
-                            if p_A > Float32(1e-12) and r_act <= rmax_b:
-                                var rd_v = dipole_rd(medb.sigma_s, medb.sigma_a, medb.g, eta_b, r_act)
-                                # Cosine-weighted exit, and its Fresnel.
-                                var frm_o = Frame.from_z(n_o)
-                                var u1 = pcg.next_float(); var u2 = pcg.next_float()
-                                var rr_o = sqrt(u1); var ph_o = Float32(6.2831853) * u2
-                                var loc = Vec3f(rr_o * cos(ph_o), rr_o * sin(ph_o), sqrt(max(Float32(1.0) - u1, Float32(0.0))))
-                                var wo_new = (Vec3f(frm_o.x.x, frm_o.x.y, frm_o.x.z) * loc[0]
-                                            + Vec3f(frm_o.y.x, frm_o.y.y, frm_o.y.z) * loc[1]
-                                            + n_o * loc[2])
-                                var cos_out_s = max(loc[2], Float32(1e-6))
-                                var pdf_w_s = cos_out_s / Float32(3.14159265)
-                                var ft_o = Float32(1.0) - fr_dielectric(cos_out_s, eta_b)
-                                # UNBOUNDED upsample: R_d is a density (~1e4 for
-                                # skin), not a reflectance -- spec_refl clamps.
-                                var wgt = spec_refl_unbounded(
-                                    sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
-                                    sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
-                                    rd_v.r * ft_i * ft_o / p_A,
-                                    rd_v.g * ft_i * ft_o / p_A,
-                                    rd_v.b * ft_i * ft_o / p_A, wavelengths)
-                                beta *= wgt
-                                # MIS: the hop (area measure, NO cos/d^2), then
-                                # the ordinary cosine exit at x_o.
-                                var inv_pA = Float32(1.0) / p_A
-                                var dvc_h = inv_pA * (dvc_carry * p_A + dvcm_carry + mis_vm_weight_factor)
-                                var dvm_h = inv_pA * (dvm_carry * p_A + dvcm_carry * mis_vc_weight_factor + Float32(1))
-                                var dvcm_h = inv_pA
-                                var inv_pw = Float32(1.0) / pdf_w_s
-                                dvc_carry = (cos_out_s * inv_pw) * (dvc_h * pdf_w_s + dvcm_h + mis_vm_weight_factor)
-                                dvm_carry = (cos_out_s * inv_pw) * (dvm_h * pdf_w_s + dvcm_h * mis_vc_weight_factor + Float32(1))
-                                dvcm_carry = inv_pw
-                                rd = vec3f(wo_new)
-                                ro = x_o + n_o * Float32(0.0002)
-                                n_bounces += 1
-                                last_bsdf_pdf = pdf_w_s
-                                did_bssrdf_hop = True
+                var med_in = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
+                if med_in >= Int32(0) and Int(med_in) < Int(sd.mediumCount):
+                    var gn_e: Vec3f
+                    if inter.primId.type == Int8(4):
+                        gn_e = sphere_outward_normal(hit, sd.spheres[Int(inter.primId.id1)].center).to_simd()
+                    else:
+                        gn_e = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+                    if dot(gn_e, ray_dir) > Float32(0): gn_e = gn_e * Float32(-1)
+                    var cos_e = abs(dot(-ray_dir, gn_e))
+                    # Arrival at the entry, as at any surface vertex.
+                    if cos_e > Float32(1e-6):
+                        dvcm_carry /= cos_e
+                        dvc_carry /= cos_e
+                        dvm_carry /= cos_e
+                    var eta_e = mat.albedo.r
+                    var ex = _bdpt_sample_bssrdf_exit(
+                        sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, sd.materials,
+                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, sd.sphereCount,
+                        sd.mediums, Int(med_in), hit, gn_e, cos_e, eta_e, pcg)
+                    if not ex.ok:
+                        return False
+                    beta *= spec_refl_unbounded(
+                        sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
+                        sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
+                        ex.weight.r, ex.weight.g, ex.weight.b, wavelengths)
+                    var (h0, h1, h2) = bssrdf_hop_carries(
+                        dvcm_carry, dvc_carry, dvm_carry, ex.p_area, cos_e * INV_PI, mis_vc_weight_factor)
+                    dvcm_carry = h0
+                    dvc_carry = h1
+                    dvm_carry = h2
+                    var x_o = ex.x_o
+                    var n_o = ex.n_o
+                    var v = _null_vertex()
+                    v.pos = x_o
+                    v.normal = vec3f(n_o)
+                    v.beta = beta
+                    v.alb = RGB(Float32(1))
+                    v.is_surface = Int32(1); v.is_delta = Int32(0)
+                    v.mat_kind = MAT_KIND_BSSRDF_EXIT
+                    v.pdf_fwd = ex.p_area      # reverse density toward x_i (hop is symmetric)
+                    v.pdf_bwd = eta_e
+                    v.wo = vec3f(n_o)          # unused by MAT_KIND_BSSRDF_EXIT
+                    v.med_idx = cur_med_idx
+                    v.wavelengths = wavelengths
+                    v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
+                    if n_verts == 0: first_alb = mat.sss_mean_refl
+                    n_verts += 1
+                    if path_len > 0:
+                        total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
+                        if defer_shadow_rays:
+                            _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med)
+                        else:
+                            total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
+                    # Direct lighting at the exit: the diffuse vertex's NEE with
+                    # the exit lobe's Fresnel factor toward each light.
+                    for li_x in range(_bdpt_simple_light_count(sd)):
+                        var ls_x = _bdpt_sample_simple_light(sd, li_x, x_o.to_simd(), pcg)
+                        var w_x = _nee_weight_simple_spectral(ls_x, Int32(0), RGB(Float32(1)), Float32(0), n_o, n_o, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                        w_x = w_x * bssrdf_exit_ft(dot(n_o, ls_x.wi), eta_e)
+                        total += _bdpt_nee_contribute(beta, w_x, ls_x, x_o, n_o, cur_med_idx, sd, scratch, wavelengths)
+                    for inf_x in range(Int(sd.infiniteLightCount)):
+                        var ls_xe = _sample_infinite_light_nee(sd.infiniteLights[inf_x], Point2f(pcg.next_float(), pcg.next_float()))
+                        var w_xe = _nee_weight_simple_spectral(ls_xe, Int32(0), RGB(Float32(1)), Float32(0), n_o, n_o, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                        w_xe = w_xe * bssrdf_exit_ft(dot(n_o, ls_xe.wi), eta_e)
+                        total += _bdpt_nee_contribute(beta, w_xe, ls_xe, x_o, n_o, cur_med_idx, sd, scratch, wavelengths)
+                    # Continue with the exit lobe: cosine-sampled, weight Ft(cos_out).
+                    var ux1 = pcg.next_float(); var ux2 = pcg.next_float()
+                    rd = vec3f(_cosine_hemisphere_sample(n_o, ux1, ux2))
+                    ro = x_o + rd * Float32(0.0002)
+                    var cos_out_x = abs(dot(rd.to_simd(), n_o))
+                    last_bsdf_pdf = cos_out_x * INV_PI
+                    beta *= SpectralSample(bssrdf_exit_ft(cos_out_x, eta_e))
+                    var (c0, c1, c2) = bssrdf_exit_scatter_carries(
+                        dvcm_carry, dvc_carry, dvm_carry, ex.p_area, cos_out_x,
+                        mis_vc_weight_factor, mis_vm_weight_factor)
+                    dvcm_carry = c0
+                    dvc_carry = c1
+                    dvm_carry = c2
+                    n_bounces += 1
+                    did_bssrdf_hop = True
             # Ordinary specular boundary, only when no hop was taken.
             if not did_bssrdf_hop:
                 var gn: Vec3f
@@ -3641,40 +3645,107 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             dvm_carry = dvm_new_m
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
-            var gn: Vec3f
-            if inter.primId.type == Int8(4):
-                var si = Int(inter.primId.id1)
-                var sph = sd.spheres[si]
-                gn = sphere_outward_normal(hit, sph.center).to_simd()
-            else:
-                gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-            var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
-                ray_dir, hit.to_simd(), gn, mat.albedo.r, n_lbounces == 0 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior)
-            current_dielectric_ior = new_cur_ior
-            previous_dielectric_ior = new_prev_ior
-            n_lbounces += 1
-            # Light path (TransportMode::Importance): do NOT apply the
-            # radiance_scale non-symmetric-scattering correction — it's only
-            # for camera/Radiance-mode paths, see _dielectric_bounce's
-            # docstring.
-            if has_med:
-                var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
-                if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
-            rd = vec3f(new_dir)
-            ro = point3f(new_org)
-            # VCM Stage 2b: dielectric is genuinely delta/specular (true
-            # reflect-or-refract, not an approximation like conductor's
-            # VNDF sampling) -- matches SmallVCM's own specular-bounce
-            # handling directly (vertexcm.hxx:977-982), no LVC vertex
-            # stored either way.
-            var cos_fix_d = abs(dot(-ray_dir, gn))
-            if cos_fix_d > Float32(1e-6):
-                dvc_carry /= cos_fix_d
-                dvm_carry /= cos_fix_d
-            var cos_theta_out_d = abs(dot(new_dir, gn))
-            dvcm_carry = Float32(0)
-            dvc_carry *= cos_theta_out_d
-            dvm_carry *= cos_theta_out_d
+            # ── Subsurface boundary: the light subpath's half of the hop ───
+            # Mirror of the camera side: the light enters at x_i, the exit x_o
+            # is drawn by the SAME sampler (the MIS weights require identical
+            # densities on both sides; the hop is symmetric), x_o is stored as
+            # a connectible light vertex with the exit lobe, and the subpath
+            # continues from it. The entry is never stored.
+            var did_bssrdf_hop = False
+            if mat.sss_boundary != Int8(0) and Int(cur_med_idx) < 0 and has_med:
+                var med_in = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
+                if med_in >= Int32(0) and Int(med_in) < Int(sd.mediumCount):
+                    var gn_e: Vec3f
+                    if inter.primId.type == Int8(4):
+                        gn_e = sphere_outward_normal(hit, sd.spheres[Int(inter.primId.id1)].center).to_simd()
+                    else:
+                        gn_e = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+                    if dot(gn_e, ray_dir) > Float32(0): gn_e = gn_e * Float32(-1)
+                    var cos_e = abs(dot(-ray_dir, gn_e))
+                    if cos_e > Float32(1e-6):
+                        dvcm_carry /= cos_e
+                        dvc_carry /= cos_e
+                        dvm_carry /= cos_e
+                    var eta_e = mat.albedo.r
+                    var ex = _bdpt_sample_bssrdf_exit(
+                        sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, sd.materials,
+                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, sd.sphereCount,
+                        sd.mediums, Int(med_in), hit, gn_e, cos_e, eta_e, pcg)
+                    if not ex.ok:
+                        return False
+                    flux *= spec_refl_unbounded(
+                        sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
+                        sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
+                        ex.weight.r, ex.weight.g, ex.weight.b, wavelengths)
+                    var (h0, h1, h2) = bssrdf_hop_carries(
+                        dvcm_carry, dvc_carry, dvm_carry, ex.p_area, cos_e * INV_PI, mis_vc_weight_factor)
+                    dvcm_carry = h0
+                    dvc_carry = h1
+                    dvm_carry = h2
+                    var n_o = ex.n_o
+                    var v = _null_vertex()
+                    v.pos = ex.x_o
+                    v.normal = vec3f(n_o)
+                    v.beta = flux
+                    v.alb = RGB(Float32(1))
+                    v.is_surface = Int32(1); v.is_delta = Int32(0)
+                    v.mat_kind = MAT_KIND_BSSRDF_EXIT
+                    v.pdf_fwd = ex.p_area
+                    v.pdf_bwd = eta_e
+                    v.wo = vec3f(n_o)
+                    v.med_idx = cur_med_idx
+                    v.wavelengths = wavelengths
+                    v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
+                    n_verts += 1
+                    _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
+                    var ux1 = pcg.next_float(); var ux2 = pcg.next_float()
+                    rd = vec3f(_cosine_hemisphere_sample(n_o, ux1, ux2))
+                    ro = ex.x_o + rd * Float32(0.0002)
+                    var cos_out_x = abs(dot(rd.to_simd(), n_o))
+                    flux *= SpectralSample(bssrdf_exit_ft(cos_out_x, eta_e))
+                    var (c0, c1, c2) = bssrdf_exit_scatter_carries(
+                        dvcm_carry, dvc_carry, dvm_carry, ex.p_area, cos_out_x,
+                        mis_vc_weight_factor, mis_vm_weight_factor)
+                    dvcm_carry = c0
+                    dvc_carry = c1
+                    dvm_carry = c2
+                    n_lbounces += 1
+                    did_bssrdf_hop = True
+            if not did_bssrdf_hop:
+                var gn: Vec3f
+                if inter.primId.type == Int8(4):
+                    var si = Int(inter.primId.id1)
+                    var sph = sd.spheres[si]
+                    gn = sphere_outward_normal(hit, sph.center).to_simd()
+                else:
+                    gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+                var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
+                    ray_dir, hit.to_simd(), gn, mat.albedo.r, n_lbounces == 0 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior)
+                current_dielectric_ior = new_cur_ior
+                previous_dielectric_ior = new_prev_ior
+                n_lbounces += 1
+                # Light path (TransportMode::Importance): do NOT apply the
+                # radiance_scale non-symmetric-scattering correction — it's only
+                # for camera/Radiance-mode paths, see _dielectric_bounce's
+                # docstring.
+                if has_med:
+                    var new_idx = _bdpt_medium_update(ray_dir, inter, mat, sd, hit)
+                    if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
+                rd = vec3f(new_dir)
+                ro = point3f(new_org)
+                # VCM Stage 2b: dielectric is genuinely delta/specular (true
+                # reflect-or-refract, not an approximation like conductor's
+                # VNDF sampling) -- matches SmallVCM's own specular-bounce
+                # handling directly (vertexcm.hxx:977-982), no LVC vertex
+                # stored either way.
+                var cos_fix_d = abs(dot(-ray_dir, gn))
+                if cos_fix_d > Float32(1e-6):
+                    dvc_carry /= cos_fix_d
+                    dvm_carry /= cos_fix_d
+                var cos_theta_out_d = abs(dot(new_dir, gn))
+                dvcm_carry = Float32(0)
+                dvc_carry *= cos_theta_out_d
+                dvm_carry *= cos_theta_out_d
 
         elif mat.type == MatKind.interface:
             if has_med:
@@ -3843,6 +3914,109 @@ def _eval_conductor_ggx_spectral(
     var k = d * g / (Float32(4) * cos_o * cos_i) * cos_i
     return fr_spec * k
 
+@fieldwise_init
+struct BssrdfExitSample(TrivialRegisterPassable):
+    """Result of sampling where a subsurface hop leaves the surface."""
+    var ok: Bool
+    var x_o: Point3f
+    var n_o: Vec3f        # outward geometric normal at the exit
+    var weight: RGB       # R_d(r) * Ft(entry) / p_A -- the exit lobe's Ft is NOT in here
+    var p_area: Float32   # p_A(x_o | x_i), area measure; also the reverse density
+
+
+def _bdpt_sample_bssrdf_exit(
+    bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
+    primIds: UnsafePointer[PrimId_C, MutExternalOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
+    curves: UnsafePointer[Curve_C, MutExternalOrigin],
+    materials: UnsafePointer[Material_C, MutExternalOrigin],
+    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin],
+    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin],
+    instances: UnsafePointer[Instance_C, MutExternalOrigin],
+    spheres: UnsafePointer[Sphere_C, MutExternalOrigin],
+    sphereCount: Int64,
+    mediums: UnsafePointer[Medium_C, MutExternalOrigin],
+    med_idx: Int,
+    hit: Point3f,
+    n_in: Vec3f,          # entry normal, facing the side the path arrived from
+    cos_in: Float32,
+    eta: Float32,
+    mut pcg: PCG32,
+) -> BssrdfExitSample:
+    """ONE exit-point sampler for both VCM subpaths. The MIS weights assume the
+    camera and light sides draw the hop from the same density (the hop is
+    symmetric, bssrdf.mojo), so this must never be duplicated per side.
+
+    A channel is chosen uniformly and its exponential radius sampled; the pdf
+    is the mixture over channels. The tangent-disk sample is projected onto
+    the surface by a probe ray along the entry normal, whose |n_in . n_o|
+    Jacobian is part of p_A. A missed probe or an exit beyond the profile's
+    reach is a failed sample: the caller terminates the path (it must not fall
+    back to a different strategy, which would bias the estimate).
+
+    Takes the scene's pointers, not the SceneDescriptor2_C: a descriptor
+    passed by value one call deeper than the light loop's own traversal came
+    through corrupted on the GPU (modular#6759 shape), and the probe
+    traversal then faulted with CUDA_ERROR_ILLEGAL_ADDRESS."""
+    var med = mediums[med_idx]
+    var fail = BssrdfExitSample(False, hit, n_in, RGB(Float32(0)), Float32(0))
+    var ft_in = bssrdf_exit_ft(cos_in, eta)
+    if ft_in <= Float32(0.0):
+        return fail
+    var r_max = dipole_max_radius(med.sigma_s, med.sigma_a, med.g)
+    var ch = Int(pcg.next_float() * Float32(3.0))
+    if ch > 2: ch = 2
+    var sigma_tr = dipole_mis_sigma_tr(med.sigma_s, med.sigma_a, med.g, ch)
+    if sigma_tr <= Float32(0.0):
+        return fail
+    var r = dipole_sample_radius(sigma_tr, pcg.next_float())
+    var phi = Float32(2.0) * PI * pcg.next_float()
+    if r >= r_max:
+        return fail
+    var frm = Frame.from_z(n_in)
+    var (off, seg_len) = bssrdf_probe_offset(
+        r, phi, r_max, Vec3f(frm.x.x, frm.x.y, frm.x.z), Vec3f(frm.y.x, frm.y.y, frm.y.z), n_in)
+    var probe_org = hit + off
+    var probe_dir = n_in * Float32(-1.0)
+    # Private probe slot: the caller's scratch still holds the intersection
+    # the enclosing path loop is shading.
+    var _probe_slot = InlineArray[Intersection_C, 1](fill=Intersection_C(
+        PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
+        Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
+    var probe_scratch = _probe_slot.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin]()
+    probe_scratch[0].hit = Int8(0)
+    var probe_ray = Ray_C(probe_org, probe_dir)
+    traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, probe_ray, seg_len, probe_scratch,
+                       blasNodesArr, blasPrimIdsArr, instances)
+    test_spheres(spheres, Int(sphereCount), probe_ray, probe_scratch)
+    if probe_scratch[0].hit == Int8(0):
+        return fail
+    var pi = probe_scratch[0]
+    # The exit must be on a subsurface boundary too, or the profile does not
+    # describe what happens there.
+    var pmat = materials[Int(pi.primId.materialIndex)]
+    if pmat.sss_boundary == Int8(0):
+        return fail
+    var x_o = probe_org + probe_dir * pi.tHit
+    var n_o: Vec3f
+    if pi.primId.type == Int8(4):
+        n_o = sphere_outward_normal(x_o, spheres[Int(pi.primId.id1)].center)
+    else:
+        n_o = _geom_normal(pi, meshes, instances, spheres, x_o.to_simd())
+    if dot(n_o, n_in) < Float32(0.0):
+        n_o = n_o * Float32(-1.0)
+    var d = x_o - hit
+    var r_act = sqrt(dot(d, d))
+    if r_act > r_max:
+        return fail
+    var p_area = bssrdf_exit_pdf_area(med.sigma_s, med.sigma_a, med.g, r_act, dot(n_o, n_in))
+    if p_area <= Float32(1e-12):
+        return fail
+    var rd = dipole_rd(med.sigma_s, med.sigma_a, med.g, eta, r_act)
+    var k = ft_in / p_area
+    return BssrdfExitSample(True, x_o, n_o, RGB(rd.r * k, rd.g * k, rd.b * k), p_area)
+
+
 @always_inline
 def _eval_vertex_spectral(
     v:   BDPTVertex,
@@ -3882,6 +4056,11 @@ def _eval_vertex_spectral(
         var alb_spec = rgb_bands_to_spectral_sample(v.alb.r, v.alb.g, v.alb.b, wavelengths)
         return alb_spec * INV_FOUR_PI
     var vn = v.normal.to_simd()
+    if v.mat_kind == MAT_KIND_BSSRDF_EXIT:
+        # BSSRDF exit lobe Ft(cos)/pi (eta in pdf_bwd). Spectrally flat: the
+        # material's colour already rode in on the hop weight R_d/p_A.
+        var cos_x = abs(dot(dir_to_other, vn))
+        return SpectralSample(bssrdf_exit_ft(cos_x, v.pdf_bwd) * INV_PI * cos_x)
     if v.mat_kind == Int32(1):
         var vwo = v.wo.to_simd()
         return _eval_conductor_ggx_spectral(vn, vwo, dir_to_other, v.pdf_bwd, v.alb, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
@@ -3995,6 +4174,11 @@ def _bdpt_vertex_pdfs(
     bxdf_pdf_conductor_ggx's/bxdf_pdf_measured's/_hair_eval_lobes' own
     internal guards are the only "this direction is impossible under the
     sampling scheme" cases they need to handle."""
+    if v.mat_kind == MAT_KIND_BSSRDF_EXIT:
+        # Exit vertex: cosine lobe forward; the REVERSE density toward its
+        # predecessor is the hop's own area pdf p_A (in pdf_fwd), not a
+        # direction pdf -- machine-checked, Scenes/vcm_bssrdf_mis_derivation.py.
+        return (abs(dot(dir_to_other, v.normal.to_simd())) * INV_PI, v.pdf_fwd)
     if v.mat_kind == Int32(1):
         var n = v.normal.to_simd()
         var wo = v.wo.to_simd()
@@ -4059,7 +4243,8 @@ def _bdpt_vertex_mis_scoped(v: BDPTVertex) -> Bool:
     construction, not merely False."""
     if v.is_surface != Int32(1):
         return False
-    return v.mat_kind == Int32(0) or v.mat_kind == Int32(1) or v.mat_kind == Int32(2) or v.mat_kind == Int32(3)
+    return (v.mat_kind == Int32(0) or v.mat_kind == Int32(1) or v.mat_kind == Int32(2)
+            or v.mat_kind == Int32(3) or v.mat_kind == MAT_KIND_BSSRDF_EXIT)
 
 @always_inline
 def _bdpt_connect_pair_weighted(cv: BDPTVertex, lv: BDPTVertex) -> Bool:
