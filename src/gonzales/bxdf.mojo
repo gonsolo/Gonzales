@@ -1,5 +1,5 @@
 from std.math import sqrt
-from .geometry import RGB, MatKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS, Frame, refract
+from .geometry import RGB, MatKind, LobeKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS, Frame, refract
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world, power_heuristic
 from .rng import PCG32
 from .bvh import LightSample, HairLobeConstants, _hair_eval_lobes
@@ -504,7 +504,7 @@ def bxdf_eval_any(
     wo:       Vec3f,
     wi:       Vec3f,
 ) -> Tuple[RGB, Float32]:
-    if mat_kind == Int32(1):
+    if mat_kind == LobeKind.ggx:
         return (bxdf_eval_conductor_ggx(n, wo, wi, alpha, alb), bxdf_pdf_conductor_ggx(n, wo, wi, alpha))
     var cos_wi = dot(n, wi)
     return (bxdf_eval_diffuse(alb), bxdf_pdf_diffuse(cos_wi))
@@ -931,7 +931,7 @@ def bxdf_eval_any_spectral(
     wavelengths: SampledWavelengths,
 ) -> Tuple[SpectralSample, Float32]:
     var alb_spectral = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, alb.r, alb.g, alb.b, wavelengths)
-    if mat_kind == Int32(1):
+    if mat_kind == LobeKind.ggx:
         var (valid, k, schlick) = _ggx_conductor_shape_terms(n, wo, wi, alpha)
         if not valid:
             return (SpectralSample(Float32(0.0)), bxdf_pdf_conductor_ggx(n, wo, wi, alpha))

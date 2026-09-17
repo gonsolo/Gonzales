@@ -13,7 +13,7 @@ from std.memory import alloc
 from std.atomic import Atomic
 from .geometry import (
     RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, Frame,
-    TriangleMesh_C, Material_C, MatKind, AreaLight_C, Medium_C, MediumInterface_C,
+    TriangleMesh_C, Material_C, MatKind, LobeKind, PhotonKind, AreaLight_C, Medium_C, MediumInterface_C,
     Sphere_C, Curve_C, PrimId_C, Instance_C, DistantLight_C, InfiniteLight_C, PointLight_C,
     MeasuredBRDF_C, GpuTexture_C,
     dot, cross, fr_dielectric, sphere_outward_normal, refract, PI, INV_FOUR_PI, INV_PI,
@@ -151,10 +151,6 @@ comptime _MNEE_MAX_SPHERES = 4  # cap on sphere-light MNEE call sites, unrolled 
 
 # ── Vertex types ──────────────────────────────────────────────────────────────
 
-# A subsurface exit vertex: exit lobe Ft(cos)/pi, reverse area density in
-# pdf_fwd, eta in pdf_bwd. Kind 4 is the coateddiffuse walk's.
-comptime MAT_KIND_BSSRDF_EXIT = Int32(5)
-
 @fieldwise_init
 struct BDPTVertex(TrivialRegisterPassable):
     """A vertex on a camera or light subpath."""
@@ -183,8 +179,7 @@ struct BDPTVertex(TrivialRegisterPassable):
     var is_delta:   Int32  # 1 = specular (mirror conductor / dielectric) — cannot be connected
     var is_light:   Int32  # 1 = this is a light-source vertex (s=0 in BDPT notation)
     var med_idx:    Int32  # medium index AFTER this vertex (-1 = vacuum)
-    var mat_kind:   Int32  # 0 = Lambertian (diffuse/volume), 1 = rough conductor (GGX), 2 = hair (Marschner 3-lobe),
-                           # 3 = measured, 4 = coateddiffuse walk, MAT_KIND_BSSRDF_EXIT = subsurface exit
+    var mat_kind:   Int32  # a LobeKind
     # Direction back toward this vertex's own predecessor on its subpath
     # (-incoming ray direction). Populated for mat_kind=1 (GGX needs both
     # directions around the half-vector) and mat_kind=2 (hair's wo, needed to
@@ -218,7 +213,7 @@ def _null_vertex() -> BDPTVertex:
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(0), is_delta=Int32(0), is_light=Int32(0),
-        med_idx=Int32(-1), mat_kind=Int32(0),
+        med_idx=Int32(-1), mat_kind=LobeKind.lambertian,
         wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
@@ -1456,7 +1451,7 @@ def _bdpt_merge_from_cache(
                     # BSSRDF exits excluded: a light-side exit vertex has no
                     # incoming ray (it was reached by a hop), so there is no
                     # photon direction to evaluate the camera vertex against.
-                    if lv.is_delta == Int32(0) and lv.is_surface == Int32(1) and lv.is_light == Int32(0) and lv.mat_kind != MAT_KIND_BSSRDF_EXIT:
+                    if lv.is_delta == Int32(0) and lv.is_surface == Int32(1) and lv.is_light == Int32(0) and lv.mat_kind != LobeKind.bssrdf:
                         var e = lv.pos - cv.pos
                         var dist2 = e.length_sq()
                         if dist2 <= r2:
@@ -2160,11 +2155,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # order was already distant,point,sphere, matching the iterator).
             for li_d in range(_bdpt_simple_light_count(sd)):
                 var ls_i = _bdpt_sample_simple_light(sd, li_d, hit.to_simd(), pcg)
-                var w_i = _nee_weight_simple_spectral(ls_i, Int32(0), eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                var w_i = _nee_weight_simple_spectral(ls_i, LobeKind.lambertian, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                 total += _bdpt_nee_contribute(beta, w_i, ls_i, hit, gn, cur_med_idx, sd, scratch, wavelengths)
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ls_e = _sample_infinite_light_nee(sd.infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-                var w_e = _nee_weight_simple_spectral(ls_e, Int32(0), eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                var w_e = _nee_weight_simple_spectral(ls_e, LobeKind.lambertian, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                 total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn, cur_med_idx, sd, scratch, wavelengths)
             # Real MNEE for area lights behind glass (task #161) -- see
             # _bdpt_mnee_diffuse_area_light's docstring. Ordinary (non-glass)
@@ -2292,7 +2287,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     v.normal = vec3f(gn)
                     v.beta = beta
                     v.alb = eff_alb
-                    v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = Int32(4)
+                    v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.coated_walk
                     v.wo = vec3f(wo)
                     v.pdf_fwd = Float32(1)
                     v.med_idx = cur_med_idx
@@ -2403,7 +2398,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             v.normal = vec3f(gn)
             v.beta = beta
             v.alb = eff_alb
-            v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = Int32(4)
+            v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.coated_walk
             v.wo = vec3f(wo)
             v.pdf_fwd = Float32(1)
             v.med_idx = cur_med_idx
@@ -2476,7 +2471,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 v.normal = vec3f(gn_c)
                 v.beta = beta
                 v.alb = mat.albedo
-                v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = Int32(1)
+                v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.ggx
                 v.pdf_bwd = alpha_c
                 v.wo = vec3f(wo_c)
                 v.pdf_fwd = Float32(1)
@@ -2500,11 +2495,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # through the shared, already-correct _nee_weight_simple.
                 for li_cc in range(_bdpt_simple_light_count(sd)):
                     var ls_icc = _bdpt_sample_simple_light(sd, li_cc, hit.to_simd(), pcg)
-                    var w_icc = _nee_weight_simple_spectral(ls_icc, Int32(1), mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                    var w_icc = _nee_weight_simple_spectral(ls_icc, LobeKind.ggx, mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                     total += _bdpt_nee_contribute(beta, w_icc, ls_icc, hit, gn_c, cur_med_idx, sd, scratch, wavelengths)
                 for inf_ic in range(Int(sd.infiniteLightCount)):
                     var ls_ec = _sample_infinite_light_nee(sd.infiniteLights[inf_ic], Point2f(pcg.next_float(), pcg.next_float()))
-                    var w_ec = _nee_weight_simple_spectral(ls_ec, Int32(1), mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                    var w_ec = _nee_weight_simple_spectral(ls_ec, LobeKind.ggx, mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                     total += _bdpt_nee_contribute(beta, w_ec, ls_ec, hit, gn_c, cur_med_idx, sd, scratch, wavelengths)
 
             beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (bs_c.f).r, (bs_c.f).g, (bs_c.f).b, wavelengths)
@@ -2565,7 +2560,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             v_h.normal = vec3f(hc.geo_normal)
             v_h.beta = beta
             v_h.alb = mat.albedo
-            v_h.is_surface = Int32(1); v_h.is_delta = Int32(0); v_h.mat_kind = Int32(2)
+            v_h.is_surface = Int32(1); v_h.is_delta = Int32(0); v_h.mat_kind = LobeKind.hair
             v_h.wo = vec3f(wo_h)
             v_h.mat_idx = Int32(mat_idx)
             v_h.hair_curve_idx = Int32(curve_idx_h)
@@ -2676,7 +2671,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             v_m.normal = vec3f(gn_m)
             v_m.beta = beta
             v_m.alb = mat.albedo
-            v_m.is_surface = Int32(1); v_m.is_delta = Int32(0); v_m.mat_kind = Int32(3)
+            v_m.is_surface = Int32(1); v_m.is_delta = Int32(0); v_m.mat_kind = LobeKind.measured
             v_m.wo = vec3f(wo_m)
             v_m.mat_idx = Int32(mat_idx)
             v_m.pdf_fwd = Float32(1)
@@ -2747,7 +2742,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # the diffusion profile (shared with the light subpath, see
             # _bdpt_sample_bssrdf_exit), and x_o then becomes an ordinary
             # connectible vertex: merge, connect, direct lighting, continue.
-            # Its BSDF is the exit lobe Ft(cos)/pi (MAT_KIND_BSSRDF_EXIT), whose pdfs are
+            # Its BSDF is the exit lobe Ft(cos)/pi (LobeKind.bssrdf), whose pdfs are
             # exactly Lambertian. The MIS carries across the hop follow the
             # rule machine-checked in Scenes/vcm_bssrdf_mis_derivation.py.
             # The entry itself is never connectible.
@@ -2790,10 +2785,10 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     v.beta = beta
                     v.alb = RGB(Float32(1))
                     v.is_surface = Int32(1); v.is_delta = Int32(0)
-                    v.mat_kind = MAT_KIND_BSSRDF_EXIT
+                    v.mat_kind = LobeKind.bssrdf
                     v.pdf_fwd = ex.p_area      # reverse density toward x_i (hop is symmetric)
                     v.pdf_bwd = eta_e
-                    v.wo = vec3f(n_o)          # unused by MAT_KIND_BSSRDF_EXIT
+                    v.wo = vec3f(n_o)          # unused by LobeKind.bssrdf
                     v.med_idx = cur_med_idx
                     v.wavelengths = wavelengths
                     v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
@@ -2809,12 +2804,12 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # the exit lobe's Fresnel factor toward each light.
                     for li_x in range(_bdpt_simple_light_count(sd)):
                         var ls_x = _bdpt_sample_simple_light(sd, li_x, x_o.to_simd(), pcg)
-                        var w_x = _nee_weight_simple_spectral(ls_x, Int32(0), RGB(Float32(1)), Float32(0), n_o, n_o, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                        var w_x = _nee_weight_simple_spectral(ls_x, LobeKind.lambertian, RGB(Float32(1)), Float32(0), n_o, n_o, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                         w_x = w_x * bssrdf_exit_ft(dot(n_o, ls_x.wi), eta_e)
                         total += _bdpt_nee_contribute(beta, w_x, ls_x, x_o, n_o, cur_med_idx, sd, scratch, wavelengths)
                     for inf_x in range(Int(sd.infiniteLightCount)):
                         var ls_xe = _sample_infinite_light_nee(sd.infiniteLights[inf_x], Point2f(pcg.next_float(), pcg.next_float()))
-                        var w_xe = _nee_weight_simple_spectral(ls_xe, Int32(0), RGB(Float32(1)), Float32(0), n_o, n_o, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                        var w_xe = _nee_weight_simple_spectral(ls_xe, LobeKind.lambertian, RGB(Float32(1)), Float32(0), n_o, n_o, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                         w_xe = w_xe * bssrdf_exit_ft(dot(n_o, ls_xe.wi), eta_e)
                         total += _bdpt_nee_contribute(beta, w_xe, ls_xe, x_o, n_o, cur_med_idx, sd, scratch, wavelengths)
                     # Continue with the exit lobe: cosine-sampled, weight Ft(cos_out).
@@ -3380,7 +3375,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     v.normal = vec3f(gn)
                     v.beta = flux
                     v.alb = eff_alb
-                    v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = Int32(4)
+                    v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.coated_walk
                     v.wo = vec3f(wo)
                     v.pdf_fwd = Float32(1)
                     v.med_idx = cur_med_idx
@@ -3428,7 +3423,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             v.normal = vec3f(gn)
             v.beta = flux
             v.alb = eff_alb
-            v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = Int32(4)
+            v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.coated_walk
             v.wo = vec3f(wo)
             v.pdf_fwd = Float32(1)
             v.med_idx = cur_med_idx
@@ -3480,7 +3475,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 v.normal = vec3f(gn_c)
                 v.beta = flux
                 v.alb = mat.albedo
-                v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = Int32(1)
+                v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.ggx
                 v.pdf_bwd = alpha_c
                 v.wo = vec3f(wo_c)
                 v.pdf_fwd = Float32(1)
@@ -3530,7 +3525,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             v_h.normal = vec3f(hc.geo_normal)
             v_h.beta = flux
             v_h.alb = mat.albedo
-            v_h.is_surface = Int32(1); v_h.is_delta = Int32(0); v_h.mat_kind = Int32(2)
+            v_h.is_surface = Int32(1); v_h.is_delta = Int32(0); v_h.mat_kind = LobeKind.hair
             v_h.wo = vec3f(wo_h)
             v_h.mat_idx = Int32(mat_idx)
             v_h.hair_curve_idx = Int32(curve_idx_h)
@@ -3612,7 +3607,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             v_m.normal = vec3f(gn_m)
             v_m.beta = flux
             v_m.alb = mat.albedo
-            v_m.is_surface = Int32(1); v_m.is_delta = Int32(0); v_m.mat_kind = Int32(3)
+            v_m.is_surface = Int32(1); v_m.is_delta = Int32(0); v_m.mat_kind = LobeKind.measured
             v_m.wo = vec3f(wo_m)
             v_m.mat_idx = Int32(mat_idx)
             v_m.pdf_fwd = Float32(1)
@@ -3689,7 +3684,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     v.beta = flux
                     v.alb = RGB(Float32(1))
                     v.is_surface = Int32(1); v.is_delta = Int32(0)
-                    v.mat_kind = MAT_KIND_BSSRDF_EXIT
+                    v.mat_kind = LobeKind.bssrdf
                     v.pdf_fwd = ex.p_area
                     v.pdf_bwd = eta_e
                     v.wo = vec3f(n_o)
@@ -4056,15 +4051,15 @@ def _eval_vertex_spectral(
         var alb_spec = rgb_bands_to_spectral_sample(v.alb.r, v.alb.g, v.alb.b, wavelengths)
         return alb_spec * INV_FOUR_PI
     var vn = v.normal.to_simd()
-    if v.mat_kind == MAT_KIND_BSSRDF_EXIT:
+    if v.mat_kind == LobeKind.bssrdf:
         # BSSRDF exit lobe Ft(cos)/pi (eta in pdf_bwd). Spectrally flat: the
         # material's colour already rode in on the hop weight R_d/p_A.
         var cos_x = abs(dot(dir_to_other, vn))
         return SpectralSample(bssrdf_exit_ft(cos_x, v.pdf_bwd) * INV_PI * cos_x)
-    if v.mat_kind == Int32(1):
+    if v.mat_kind == LobeKind.ggx:
         var vwo = v.wo.to_simd()
         return _eval_conductor_ggx_spectral(vn, vwo, dir_to_other, v.pdf_bwd, v.alb, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
-    if v.mat_kind == Int32(2):
+    if v.mat_kind == LobeKind.hair:
         var mat = sd.materials[Int(v.mat_idx)]
         var hc = _hair_precompute(mat, sd.curves, Int(v.hair_curve_idx), v.hair_v, v.hair_h, v.wo.to_simd())
         var (cos_ti, f_val, _) = _hair_eval_lobes(
@@ -4076,7 +4071,7 @@ def _eval_vertex_spectral(
         )
         var hair_spec = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f_val.r, f_val.g, f_val.b, wavelengths)
         return hair_spec * cos_ti
-    if v.mat_kind == Int32(3):
+    if v.mat_kind == LobeKind.measured:
         var vmat = sd.materials[Int(v.mat_idx)]
         var mb = sd.measuredBrdfs[Int(vmat.measured_idx)]
         var vwo_m = v.wo.to_simd()
@@ -4174,12 +4169,12 @@ def _bdpt_vertex_pdfs(
     bxdf_pdf_conductor_ggx's/bxdf_pdf_measured's/_hair_eval_lobes' own
     internal guards are the only "this direction is impossible under the
     sampling scheme" cases they need to handle."""
-    if v.mat_kind == MAT_KIND_BSSRDF_EXIT:
+    if v.mat_kind == LobeKind.bssrdf:
         # Exit vertex: cosine lobe forward; the REVERSE density toward its
         # predecessor is the hop's own area pdf p_A (in pdf_fwd), not a
         # direction pdf -- machine-checked, Scenes/vcm_bssrdf_mis_derivation.py.
         return (abs(dot(dir_to_other, v.normal.to_simd())) * INV_PI, v.pdf_fwd)
-    if v.mat_kind == Int32(1):
+    if v.mat_kind == LobeKind.ggx:
         var n = v.normal.to_simd()
         var wo = v.wo.to_simd()
         var alpha = v.pdf_bwd
@@ -4187,7 +4182,7 @@ def _bdpt_vertex_pdfs(
             bxdf_pdf_conductor_ggx(n, wo, dir_to_other, alpha),
             bxdf_pdf_conductor_ggx(n, dir_to_other, wo, alpha),
         )
-    if v.mat_kind == Int32(2):
+    if v.mat_kind == LobeKind.hair:
         var mat_h = sd.materials[Int(v.mat_idx)]
         var hc_fwd = _hair_precompute(mat_h, sd.curves, Int(v.hair_curve_idx), v.hair_v, v.hair_h, v.wo.to_simd())
         var (cos_ti_fwd, _, pdf_oc_fwd) = _hair_eval_lobes(
@@ -4206,7 +4201,7 @@ def _bdpt_vertex_pdfs(
             hc_rev.A0, hc_rev.A1, hc_rev.A2, hc_rev.A3, hc_rev.lum0, hc_rev.lum1, hc_rev.lum2, hc_rev.lum3, hc_rev.total_lum,
         )
         return (cos_ti_fwd * pdf_oc_fwd, cos_ti_rev * pdf_oc_rev)
-    if v.mat_kind == Int32(3):
+    if v.mat_kind == LobeKind.measured:
         var n_m = v.normal.to_simd()
         var frm_m = Frame.from_z(Vec3f(n_m[0], n_m[1], n_m[2]))
         var tangent_m = Vec3f(frm_m.x.x, frm_m.x.y, frm_m.x.z)
@@ -4243,8 +4238,8 @@ def _bdpt_vertex_mis_scoped(v: BDPTVertex) -> Bool:
     construction, not merely False."""
     if v.is_surface != Int32(1):
         return False
-    return (v.mat_kind == Int32(0) or v.mat_kind == Int32(1) or v.mat_kind == Int32(2)
-            or v.mat_kind == Int32(3) or v.mat_kind == MAT_KIND_BSSRDF_EXIT)
+    return (v.mat_kind == LobeKind.lambertian or v.mat_kind == LobeKind.ggx or v.mat_kind == LobeKind.hair
+            or v.mat_kind == LobeKind.measured or v.mat_kind == LobeKind.bssrdf)
 
 @always_inline
 def _bdpt_connect_pair_weighted(cv: BDPTVertex, lv: BDPTVertex) -> Bool:
@@ -7540,7 +7535,7 @@ def sppm_render_gpu(
                         n_tot += 1
                         for s_i in range(_VP_SAMPLES):
                             var v2 = vp_host[pi * _VP_SAMPLES + s_i]
-                            if v2.mat_kind == Int32(4) and v2.valid != Int32(0):
+                            if v2.mat_kind == LobeKind.bssrdf and v2.valid != Int32(0):
                                 n_bssrdf += 1
                                 var ts = v2.tau.r + v2.tau.g + v2.tau.b
                                 if ts > Float32(0): n_bssrdf_lit += 1

@@ -13,7 +13,7 @@ from std.memory import alloc
 from std.atomic import Atomic
 from .geometry import (
     RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, PrimId_C,
-    TriangleMesh_C, Material_C, MatKind, AreaLight_C, Sphere_C, Medium_C, MediumInterface_C,
+    TriangleMesh_C, Material_C, MatKind, LobeKind, PhotonKind, AreaLight_C, Sphere_C, Medium_C, MediumInterface_C,
     Instance_C, dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI, Frame,
     Curve_C, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, InfiniteLight_C, PointLight_C,
     MeasuredBRDF_C, GpuTexture_C, _is_real_ptr,
@@ -569,10 +569,10 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         alb=RGB(Float32(0)),
         tau=RGB(Float32(0)),
         N_acc=Float32(0), r2=init_r2, valid=Int32(0), pidx=pidx,
-        is_volume=Int32(0),
+        is_volume=PhotonKind.surface,
         ld=SpectralSample(Float32(0)),
         env=RGB(Float32(0)),
-        mat_kind=Int32(0),
+        mat_kind=LobeKind.lambertian,
         wo=Vec3f(Float32(0)),
         alpha=Float32(0),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
@@ -679,7 +679,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 vp.pos = ro + rd * ff.t_free
                 vp.normal = Vec3f(Float32(0), Float32(1), Float32(0))
                 vp.alb = ff.albedo
-                vp.is_volume = Int32(1)
+                vp.is_volume = PhotonKind.volume
                 # wo is what an anisotropic (HG) phase function would need;
                 # the gather and NEE both assume isotropic today, but store
                 # it so a g != 0 phase is a local change here, not a
@@ -753,7 +753,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             vp.pos = hit
             vp.normal = vec3f(gn)
             vp.alb = eff_alb
-            vp.is_volume = Int32(0)
+            vp.is_volume = PhotonKind.surface
             vp.med_idx = cur_med_idx
             vp.valid = Int32(1)
             break
@@ -823,7 +823,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 vp.pos = hit
                 vp.normal = vec3f(gn)
                 vp.alb = eff_alb
-                vp.is_volume = Int32(0)
+                vp.is_volume = PhotonKind.surface
                 vp.med_idx = cur_med_idx
                 vp.valid = Int32(1)
                 break
@@ -852,10 +852,10 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                     vp.normal = vec3f(gn_s)
                     vp.wo = vec3f((-rd).to_simd())
                     vp.alb = RGB(Float32(1))
-                    vp.mat_kind = Int32(4)          # BSSRDF
+                    vp.mat_kind = LobeKind.bssrdf          # BSSRDF
                     vp.alpha = mat.albedo.r          # boundary IOR
                     vp.med_idx = inside_idx
-                    vp.is_volume = Int32(0)
+                    vp.is_volume = PhotonKind.surface
                     vp.valid = Int32(1)
                     break
             # Entering, leaving or total-internal-reflecting at the boundary of
@@ -918,10 +918,10 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 vp.pos = hit
                 vp.normal = vec3f(gn_c)
                 vp.alb = mat.albedo
-                vp.mat_kind = Int32(1)
+                vp.mat_kind = LobeKind.ggx
                 vp.wo = vec3f(wo_c)
                 vp.alpha = max(mat.roughU, mat.roughV)
-                vp.is_volume = Int32(0)
+                vp.is_volume = PhotonKind.surface
                 vp.med_idx = cur_med_idx
                 vp.valid = Int32(1)
                 break
@@ -939,13 +939,13 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             vp.pos = hit
             vp.normal = vec3f(hc.geo_normal)
             vp.alb = mat.albedo
-            vp.mat_kind = Int32(2)
+            vp.mat_kind = LobeKind.hair
             vp.wo = vec3f(wo_h)
             vp.mat_idx = Int32(mat_idx)
             vp.hair_curve_idx = Int32(curve_idx_h)
             vp.hair_h = inter.u
             vp.hair_v = inter.v
-            vp.is_volume = Int32(0)
+            vp.is_volume = PhotonKind.surface
             vp.med_idx = cur_med_idx
             vp.valid = Int32(1)
             break
@@ -970,10 +970,10 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             vp.pos = hit
             vp.normal = vec3f(gn_m)
             vp.alb = mat.albedo
-            vp.mat_kind = Int32(3)
+            vp.mat_kind = LobeKind.measured
             vp.wo = vec3f((-rd).to_simd())
             vp.mat_idx = Int32(mat_idx)
-            vp.is_volume = Int32(0)
+            vp.is_volume = PhotonKind.surface
             vp.med_idx = cur_med_idx
             vp.valid = Int32(1)
             break
@@ -1273,7 +1273,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 # term).
                 if n_events > 1:
                     _sppm_store_photon[use_gpu](
-                        SPPMPhoton(pos=sp, flux=flux, nxt=Int32(-1), is_volume=Int32(1), dir_in=rd, wavelengths=ph_wavelengths),
+                        SPPMPhoton(pos=sp, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.volume, dir_in=rd, wavelengths=ph_wavelengths),
                         photons, max_photons, counter)
                 # Scatter: isotropic phase function, modulate by albedo
                 # Single-scattering albedo is a per-channel COEFFICIENT
@@ -1355,7 +1355,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             flux *= spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (cw.beta).r, (cw.beta).g, (cw.beta).b, ph_wavelengths)
             if n_events > 1:
                 _sppm_store_photon[use_gpu](
-                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=ph_wavelengths),
+                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
             var entry_beta_cd = cw.beta
             while cw.event == COAT_WALKING:
@@ -1384,7 +1384,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             # once via NEE and again via an unfiltered photon density).
             if n_events > 1:
                 _sppm_store_photon[use_gpu](
-                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=ph_wavelengths),
+                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
             # Real image-texture reflectance -- see bdpt.mojo's matching
             # light-side comment (task #150/#151). Affects the RR
@@ -1438,7 +1438,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 if ft > Float32(0.0):
                     _sppm_store_photon[use_gpu](
                         SPPMPhoton(pos=hit, flux=flux * ft, nxt=Int32(-1),
-                                   is_volume=Int32(2), dir_in=rd,
+                                   is_volume=PhotonKind.bssrdf, dir_in=rd,
                                    wavelengths=ph_wavelengths),
                         photons, max_photons, counter)
                 break
@@ -1498,7 +1498,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 break
             if not bxdf_is_delta(bs_c.flags) and n_events > 1:
                 _sppm_store_photon[use_gpu](
-                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=ph_wavelengths),
+                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
             flux *= spec_refl(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (bs_c.f).r, (bs_c.f).g, (bs_c.f).b, ph_wavelengths)
             rd = vec3f(bs_c.wi)
@@ -1513,7 +1513,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var hc = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wo_h)
             if n_events > 1:
                 _sppm_store_photon[use_gpu](
-                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=ph_wavelengths),
+                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
             var (wi_hs, f_hs, pdf_hs, _) = _hair_sample_dir(hc, pcg)
             flux *= spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (f_hs / pdf_hs).r, (f_hs / pdf_hs).g, (f_hs / pdf_hs).b, ph_wavelengths)
@@ -1549,7 +1549,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 break
             if n_events > 1:
                 _sppm_store_photon[use_gpu](
-                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=Int32(0), dir_in=rd, wavelengths=ph_wavelengths),
+                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
             var wi_m = tangent_m * wi_l_m[0] + bitangent_m * wi_l_m[1] + gn_m * wi_l_m[2]
             var wilen_m = dot(wi_m, wi_m)
@@ -1755,7 +1755,7 @@ def _sppm_gather_one(
     # The medium is read ONCE here, never inside the photon loop: an
     # unguarded sd.mediums[...] per photon is an illegal access on the GPU the
     # moment med_idx is out of range, and it aborted every --sppm run.
-    var bssrdf_ok = (vp.mat_kind == Int32(4) and Int(vp.med_idx) >= 0
+    var bssrdf_ok = (vp.mat_kind == LobeKind.bssrdf and Int(vp.med_idx) >= 0
                      and Int(vp.med_idx) < med_count and _is_real_ptr[Medium_C](med_arr))
     var bssrdf_ss = RGB(Float32(0))
     var bssrdf_sa = RGB(Float32(0))
@@ -1788,7 +1788,7 @@ def _sppm_gather_one(
                     # truncation distance rather than the shrinking SPPM
                     # radius -- R_d is a normalised kernel, so its reach is a
                     # material property, not a bias parameter.
-                    var want_kind = Int32(2) if bssrdf_ok else vp.is_volume
+                    var want_kind = PhotonKind.bssrdf if bssrdf_ok else vp.is_volume
                     var reach2 = bssrdf_r2 if bssrdf_ok else r2
                     if dist2 <= reach2 and ph.is_volume == want_kind:
                         # Volume VP: isotropic phase f=alb/(4π). Surface VP:
@@ -1800,7 +1800,7 @@ def _sppm_gather_one(
                         # photon's flux already encodes the appropriate
                         # cosine-weighted density (same convention the
                         # Lambertian/phase branches already rely on).
-                        if vp.mat_kind == Int32(4) and bssrdf_ok:
+                        if vp.mat_kind == LobeKind.bssrdf and bssrdf_ok:
                             # DIFFUSION BSSRDF. L_o(xo,wo) = (Ft(wo)/pi) *
                             # sum_p R_d(|xi_p - xo|) * Phi_p  (Jensen & Buhler
                             # 2002). Note what is NOT here: no 1/(pi r^2), no
@@ -1825,7 +1825,7 @@ def _sppm_gather_one(
                                              rd_rgb.g * bssrdf_ft_o * (Float32(1.0) / PI),
                                              rd_rgb.b * bssrdf_ft_o * (Float32(1.0) / PI),
                                              ph.wavelengths) * ph.flux
-                        elif vp.is_volume == Int32(1):
+                        elif vp.is_volume == PhotonKind.volume:
                             # VOLUME radiance estimate, which is NOT the surface
                             # one with a different kernel volume.
                             #
@@ -1904,11 +1904,11 @@ def _sppm_gather_one(
                                                  spectral_cie_z, spectral_d65,
                                                  vp.alb.r, vp.alb.g, vp.alb.b, ph.wavelengths) \
                                        * SpectralSample(inv0, inv1, inv2, inv3) * INV_FOUR_PI * ph.flux
-                        elif vp.mat_kind == Int32(1):
+                        elif vp.mat_kind == LobeKind.ggx:
                             var wi_c = (-ph.dir_in).to_simd()
                             var f_c = bxdf_eval_conductor_ggx(vp.normal.to_simd(), vp.wo.to_simd(), wi_c, vp.alpha, vp.alb)
                             phi += spec_refl(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f_c.r, f_c.g, f_c.b, ph.wavelengths) * ph.flux
-                        elif vp.mat_kind == Int32(2):
+                        elif vp.mat_kind == LobeKind.hair:
                             var mat_h = sd.materials[Int(vp.mat_idx)]
                             var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, vp.wo.to_simd())
                             var wi_h = (-ph.dir_in).to_simd()
@@ -1920,7 +1920,7 @@ def _sppm_gather_one(
                                 hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
                             )
                             phi += spec_refl(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f_h.r, f_h.g, f_h.b, ph.wavelengths) * ph.flux
-                        elif vp.mat_kind == Int32(3):
+                        elif vp.mat_kind == LobeKind.measured:
                             # Measured BxDF: same shared eval as
                             # _sppm_vp_brdf's own mat_kind=3 branch, reused
                             # here directly (photon-flux gather also just
@@ -1951,8 +1951,8 @@ def _sppm_gather_one(
         # A BSSRDF visible point has no kernel normalisation to track, so its
         # history must NOT be rescaled when the radius shrinks -- there is no
         # radius in its estimator at all.
-        var tau_scale = Float32(1.0) if vp.mat_kind == Int32(4) else (
-            ratio * sqrt(ratio) if vp.is_volume == Int32(1) else ratio)
+        var tau_scale = Float32(1.0) if vp.mat_kind == LobeKind.bssrdf else (
+            ratio * sqrt(ratio) if vp.is_volume == PhotonKind.volume else ratio)
         vps[i].tau = (vp.tau + RGB(phi_r, phi_g, phi_b)) * tau_scale
         vps[i].N_acc = N + _ALPHA * M
 
@@ -1997,9 +1997,9 @@ def _sppm_vp_brdf(
     "raw BRDF, cosine supplied externally via the caller's geom/cos_s/
     cos_env factor" convention as _sppm_gather_one. Lambertian is
     angle-independent (alb/π); conductor/hair both need the actual wi."""
-    if vp.mat_kind == Int32(1):
+    if vp.mat_kind == LobeKind.ggx:
         return bxdf_eval_conductor_ggx(vn, vp.wo.to_simd(), wi, vp.alpha, vp.alb)
-    if vp.mat_kind == Int32(2):
+    if vp.mat_kind == LobeKind.hair:
         var mat_h = sd.materials[Int(vp.mat_idx)]
         var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, vp.wo.to_simd())
         var (_, f_h, _) = _hair_eval_lobes(
@@ -2010,7 +2010,7 @@ def _sppm_vp_brdf(
             hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
         )
         return f_h
-    if vp.mat_kind == Int32(3):
+    if vp.mat_kind == LobeKind.measured:
         # Measured BxDF is inherently spectral (tabulated `spectra` tensor
         # indexed by wavelength) -- does its own spectral eval + RGB
         # conversion internally using vp.wavelengths, same as bdpt.mojo's
@@ -2085,7 +2085,7 @@ def _sppm_nee_weight(
     direction/pdf/MIS math once per light type inside _sppm_nee_one; area
     lights still go through _sppm_vp_brdf directly (see that function's own
     docstring for why area-light NEE isn't part of this shared interface)."""
-    if vp.is_volume == Int32(1):
+    if vp.is_volume == PhotonKind.volume:
         # Isotropic phase function: albedo/4pi, and NO cosine factor -- a
         # volume vertex has no normal. Same convention the photon gather
         # already uses for volume VPs (see _sppm_gather_one), so the two
@@ -2106,14 +2106,14 @@ def _sppm_nee_weight(
         var li_v = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
                               ls.Li.r, ls.Li.g, ls.Li.b, vp.wavelengths)
         return ph_v * li_v * (Float32(1.0) / ls.pdf)
-    if vp.mat_kind == Int32(2):
+    if vp.mat_kind == LobeKind.hair:
         var mat_h = sd.materials[Int(vp.mat_idx)]
         var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, wo)
         # Hair's three lobes are RGB-authored, so this crosses the boundary
         # here rather than being evaluated per wavelength.
         var w_h = _nee_weight_hair(ls, hc)
         return spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_h.r, w_h.g, w_h.b, vp.wavelengths)
-    if vp.mat_kind == Int32(3):
+    if vp.mat_kind == LobeKind.measured:
         var mat_m = sd.materials[Int(vp.mat_idx)]
         var mb_m = sd.measuredBrdfs[Int(mat_m.measured_idx)]
         var frm_m = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
@@ -2121,7 +2121,7 @@ def _sppm_nee_weight(
         var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
         var w_m = _nee_weight_measured(ls, mb_m, tangent_m, bitangent_m, vn, wo, vp.wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
         return w_m
-    var mat_kind_simple = Int32(1) if vp.mat_kind == Int32(1) else Int32(0)
+    var mat_kind_simple = LobeKind.ggx if vp.mat_kind == LobeKind.ggx else LobeKind.lambertian
     # Straight to a SpectralSample: this used to go through
     # _nee_weight_simple_spectral, which evaluates spectrally and
     # converts back to RGB (with a variance clamp) purely because `ld` was
@@ -2137,7 +2137,7 @@ def _sppm_vp_shadow_eps(vp: SPPMPixel, sd: SceneDescriptor2_C, wo: Vec3f) -> Flo
     bvh.mojo's curve_offset_eps) -- the fixed 0.0001 that works fine for
     triangle/sphere hits was too coarse relative to a curve's own radius.
     Triangle/sphere-hit VPs are unaffected, unchanged fixed epsilon."""
-    if vp.mat_kind == Int32(2):
+    if vp.mat_kind == LobeKind.hair:
         var mat_h = sd.materials[Int(vp.mat_idx)]
         var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, wo)
         return curve_offset_eps(hc.radius)
@@ -2204,7 +2204,7 @@ def _sppm_nee_one(
     var vp = vps[i]
     if vp.valid == Int32(0):
         return
-    var is_vol = vp.is_volume == Int32(1)
+    var is_vol = vp.is_volume == PhotonKind.volume
     var vpos = vp.pos.to_simd()
     var vn   = vp.normal.to_simd()
     var wo   = vp.wo.to_simd()
@@ -2284,13 +2284,13 @@ def _sppm_nee_one(
                                                 vp.alb.r * INV_FOUR_PI, vp.alb.g * INV_FOUR_PI, vp.alb.b * INV_FOUR_PI, vp.wavelengths)
                                       * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
                                       * geom)
-                    elif vp.mat_kind == Int32(2) or vp.mat_kind == Int32(3) or sd.spectral.res <= 0:
+                    elif vp.mat_kind == LobeKind.hair or vp.mat_kind == LobeKind.measured or sd.spectral.res <= 0:
                         var brdf = _sppm_vp_brdf(vp, sd, vn, wi)
                         vps[i].ld += (spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, brdf.r, brdf.g, brdf.b, vp.wavelengths)
                                       * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
                                       * geom)
                     else:
-                        var mat_kind_simple = Int32(1) if vp.mat_kind == Int32(1) else Int32(0)
+                        var mat_kind_simple = LobeKind.ggx if vp.mat_kind == LobeKind.ggx else LobeKind.lambertian
                         var (f_spec, _) = bxdf_eval_any_spectral(mat_kind_simple, vp.alb, vp.alpha, vn, wo, wi, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths)
                         var light_spec = rgb_illuminant_to_spectral_sample(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
                         vps[i].ld += f_spec * light_spec * geom
@@ -2430,13 +2430,13 @@ def _sppm_finalize_one_pixel(
             # volume VPs had no working direct-lighting term to compare
             # against until the same session fixed that.
             var denom = PI * vp.r2 * Float32(n_passes)
-            if vp.mat_kind == Int32(4):
+            if vp.mat_kind == LobeKind.bssrdf:
                 # BSSRDF: R_d is already a normalised kernel, so there is NO
                 # kernel area or volume to divide by -- only the pass average.
                 # Dividing by pi*r^2 here would scale the result by an
                 # arbitrary radius that carries no meaning on this path.
                 denom = Float32(n_passes)
-            elif vp.is_volume == Int32(1):
+            elif vp.is_volume == PhotonKind.volume:
                 denom = (Float32(4.0) / Float32(3.0)) * PI * vp.r2 * sqrt(vp.r2) * Float32(n_passes)
             acc += vp.beta * (vp.tau / denom)
         if True:

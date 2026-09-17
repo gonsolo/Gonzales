@@ -377,6 +377,27 @@ struct MatKind:
     comptime hair              = Int8(11)
     comptime measured          = Int8(12)
 
+struct LobeKind:
+    """The BSDF a STORED vertex is re-evaluated with when something connects
+    to it later (VCM's BDPTVertex, SPPM's visible point, the BxDF NEE helpers).
+    Not MatKind: several materials share one lobe, and a coated or subsurface
+    material stores a lobe that is not the material's own. One numbering for
+    every integrator, so a new kind cannot silently collide with an existing
+    one (kind 4 once meant coateddiffuse in VCM and BSSRDF in SPPM)."""
+    comptime lambertian  = Int32(0)
+    comptime ggx         = Int32(1)
+    comptime hair        = Int32(2)
+    comptime measured    = Int32(3)
+    comptime coated_walk = Int32(4)   # coateddiffuse walk outcome, Lambertian fallback in VCM
+    comptime bssrdf      = Int32(5)   # subsurface: exit lobe Ft(cos)/pi (VCM), diffusion gather (SPPM)
+
+struct PhotonKind:
+    """What an SPPM photon (or visible point) was deposited on. A gather only
+    pairs equal kinds."""
+    comptime surface = Int32(0)
+    comptime volume  = Int32(1)
+    comptime bssrdf  = Int32(2)   # photons on a subsurface boundary, for the diffusion gather
+
 @fieldwise_init
 struct Material_C(TrivialRegisterPassable):
     var type: Int8
