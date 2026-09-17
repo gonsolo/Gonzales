@@ -160,20 +160,6 @@ def _resolve_affine_rgb(s: UnsafePointer[SceneParseState, MutExternalOrigin],
     return _affine_fail()
 
 
-@always_inline
-def _sss_alpha_from_reflectance(a: Float32) -> Float32:
-    """Single-scattering albedo that makes a random walk reproduce diffuse
-    reflectance `a` (Christensen & Burley 2015, the fit Cycles uses to set up
-    random-walk subsurface). pbrt instead inverts its tabulated BSSRDF; this
-    targets the same quantity by a different route -- see the "reflectance"
-    branch in the subsurface block below."""
-    var x = min(max(a, Float32(0)), Float32(1))
-    return Float32(1) - exp(Float32(-5.09406) * x
-                            + Float32(2.61188) * x * x
-                            - Float32(4.31805) * x * x * x)
-
-
-
 def _sss_walk_reflectance(alpha: Float32, eta: Float32, g: Float32, n_walks: Int) -> Float32:
     """Monte-Carlo the diffuse reflectance of a semi-infinite medium of
     single-scattering albedo `alpha` sitting behind a smooth dielectric
@@ -254,8 +240,8 @@ def _sss_invert_alpha(target: Float32, eta: Float32, g: Float32) -> Float32:
     """The single-scattering albedo whose random walk actually REPRODUCES
     diffuse reflectance `target` under this boundary.
 
-    _sss_alpha_from_reflectance (the Chiang et al. 2016 closed form) ignores
-    eta entirely, and the boundary is not a small correction: total internal
+    A closed-form albedo fit (Christensen & Burley 2015, what Cycles uses)
+    ignores eta entirely, and the boundary is not a small correction: total internal
     reflection keeps photons inside longer, so with alpha < 1 more of them are
     absorbed and the surface goes DARK. Measured on head.pbrt, the same
     material rendered 0.91x pbrt at eta = 1 but 0.64x at eta = 1.33, while
