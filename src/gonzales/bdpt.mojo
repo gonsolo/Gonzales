@@ -6867,11 +6867,17 @@ def vcm_render_gpu_wavefront(
 # kernel called cross-file, once for a brand-new kernel+host-function pair
 # defined directly in bdpt.mojo) -- this appears to be a real, per-FILE-
 # specific compiler defect (a new file created for this code, e.g.
-# `sppm_gpu.mojo`, was ALSO cursed; it is specifically the sppm.mojo file
-# object, not "new code" or "a new file", that triggers it). See
-# reference_mojo_compiler_bug_6759 memory / project_modular_26_5_0_migration
-# memory for the full bisection. Do not move this code back into sppm.mojo
-# without re-verifying the bug is gone.
+# `sppm_gpu.mojo`, was ALSO cursed). See reference_mojo_compiler_bug_6759
+# memory / project_modular_26_5_0_migration memory for the full bisection.
+#
+# Re-checked 2026-09-17 on the current toolchain, and the move still fails --
+# but the recorded "it is specifically the sppm.mojo file object" reading is
+# WRONG: a minimal kernel + enqueue_function pair appended to sppm.mojo
+# compiles fine, while THESE kernels fail both there and in a fresh
+# sppm_gpu.mojo, with explicit imports as well as a wildcard one. So the
+# trigger travels with this code, not with a file. Whatever it is has not
+# been isolated; a smaller repro than "move all 735 lines" is the next step
+# for anyone retrying.
 # ── GPU kernels ───────────────────────────────────────────────────────────────
 # Each kernel is a thin wrapper: compute this thread's index, build a complete
 # SceneDescriptor2_C via _mk_sd_full (bvh.mojo), then call the EXACT SAME
