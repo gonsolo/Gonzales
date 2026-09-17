@@ -418,6 +418,10 @@ unittest: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB)
 		echo "=== $$f ==="; \
 		cat build/unittest-logs/$$i.log; \
 		[ "$$(cat build/unittest-logs/$$i.exit)" = "0" ] || fail=1; \
+		if ! grep -Eq "[1-9][0-9]* tests run" build/unittest-logs/$$i.log; then \
+			echo "FAIL $$f: ran no tests (exit 0 alone cannot tell a file whose main never runs its suite)"; \
+			fail=1; \
+		fi; \
 	done < build/unittest-logs/order.txt; \
 	exit $$fail
 
