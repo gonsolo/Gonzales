@@ -2356,24 +2356,13 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # different bounce each iteration, not a repeated estimate
                 # of the same one.
                 total += _bdpt_mnee_diffuse_area_light(sd, hit, gn, eff_alb, beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), pcg, wavelengths, ior)
-                # Sphere-shaped area lights -- see the plain-diffuse
-                # branch's matching call site (above in this file) for
-                # why this is manually unrolled, not a `for` loop.
-                # Kept at 0 (not sd.sphereCount): _bdpt_mnee_sphere_light no
-                # longer applies coat_t at all (see its docstring's "GPU
-                # codegen bug" section) -- calling it here with a non-1.0
-                # ior would silently skip the coat's Fresnel attenuation,
-                # overestimating light through the coat for this specific
-                # case. Safe to enable once coat_t gets a real fix.
-                var n_sph_mnee_cd = 0
-                if 0 < n_sph_mnee_cd:
-                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), pcg, 0, n_sph_mnee_cd, wavelengths, ior)
-                if False and 1 < n_sph_mnee_cd:
-                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), pcg, 1, n_sph_mnee_cd, wavelengths, ior)
-                if False and 2 < n_sph_mnee_cd:
-                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), pcg, 2, n_sph_mnee_cd, wavelengths, ior)
-                if False and 3 < n_sph_mnee_cd:
-                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), pcg, 3, n_sph_mnee_cd, wavelengths, ior)
+                # Sphere-shaped area lights are deliberately NOT MNEE'd
+                # from the coat's base: _bdpt_mnee_sphere_light no longer
+                # applies coat_t at all (see its docstring's "GPU codegen
+                # bug" section), so calling it with a non-1.0 ior would skip
+                # the coat's Fresnel attenuation and overestimate light
+                # through the coat. Re-enable by mirroring the plain-diffuse
+                # branch's unrolled call site once coat_t has a real fix.
 
                 # One base bounce + the attempt to leave the coat -- shared.
                 coat_walk_scatter(cw, pcg)
@@ -4861,9 +4850,6 @@ def _bdpt_emit_light_paths_gpu(
     nvdb_grids: UnsafePointer[NvdbGrid_C, MutExternalOrigin] = UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling(),
     n_nvdb_grids: Int64 = Int64(0),
 ):
-    var spectral_res = Int(spectral_res_dp)
-    var n_light_paths = Int(n_light_paths_dp)
-    var pass_idx = Int(pass_idx_dp)
     """One thread per light path, each writing only its own dedicated
     per-path slice of `lvc` (VCM Stage 2b, see _bdpt_store_lvc_vertex's
     docstring) -- no atomics/contention. Thin wrapper: build sd, seed this
@@ -4871,6 +4857,9 @@ def _bdpt_emit_light_paths_gpu(
     CPU driver calls (with [False] on CPU, [True] here). `has_med` isn't a
     kernel parameter (`Bool` isn't a `DevicePassable` type `enqueue_function`
     accepts) -- derived here from `mediumCount`, which already is."""
+    var spectral_res = Int(spectral_res_dp)
+    var n_light_paths = Int(n_light_paths_dp)
+    var pass_idx = Int(pass_idx_dp)
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
     if k >= n_light_paths:
         return
@@ -5066,10 +5055,6 @@ def _bdpt_camera_connect_gpu(
     nvdb_grids: UnsafePointer[NvdbGrid_C, MutExternalOrigin] = UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling(),
     n_nvdb_grids: Int64 = Int64(0),
 ):
-    var spectral_res = Int(spectral_res_dp)
-    var n_pix = Int(n_pix_dp)
-    var fw = Int(fw_dp)
-    var pass_idx = Int(pass_idx_dp)
     """One thread per pixel. Thin wrapper: build sd, seed this thread's own
     PCG32 (same seed formula vcm_render's CPU driver uses, keyed by pixel
     index), call the SAME _bdpt_trace_camera_and_connect with [True], then
@@ -5082,6 +5067,10 @@ def _bdpt_camera_connect_gpu(
     Stage 2c, see the module's opening VCM comment) -- the grid is built
     once per pass by vcm_render_gpu before this kernel launches, mirroring
     the LVC's own build-then-consume shape."""
+    var spectral_res = Int(spectral_res_dp)
+    var n_pix = Int(n_pix_dp)
+    var fw = Int(fw_dp)
+    var pass_idx = Int(pass_idx_dp)
     var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
     if pix >= n_pix:
         return
@@ -5189,14 +5178,14 @@ def _bdpt_light_path_init_gpu(
     gpuTextures: UnsafePointer[GpuTexture_C, MutExternalOrigin] = UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(),
     gpuTextureCount: Int64 = Int64(0),
 ):
-    var spectral_res = Int(spectral_res_dp)
-    var n_light_paths = Int(n_light_paths_dp)
-    var pass_idx = Int(pass_idx_dp)
     """One thread per light path: seed this thread's own PCG32 (same seed
     formula _bdpt_emit_light_paths_gpu uses), call _bdpt_light_path_init,
     store the resulting VCMLightPathState_C. Mirrors
     _bdpt_emit_light_paths_gpu's docstring for why `has_med` isn't a kernel
     parameter -- not needed here since init doesn't touch media."""
+    var spectral_res = Int(spectral_res_dp)
+    var n_light_paths = Int(n_light_paths_dp)
+    var pass_idx = Int(pass_idx_dp)
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
     if k >= n_light_paths:
         return
@@ -5229,13 +5218,13 @@ def _bdpt_light_path_intersect_gpu(
     results: UnsafePointer[Intersection_C, MutExternalOrigin],
     count_dp: Int64,
 ):
-    var n_spheres = Int(n_spheres_dp)
-    var count = Int(count_dp)
     """Batched-per-thread primary/bounce-ray intersect for one light-path
     depth level -- separated from the material dispatch in
     _bdpt_light_path_bounce_gpu so this specific step (and only this step)
     is the eventual Vulkan RT swap point, matching the plain wavefront path
     tracer's traverse_paths_gpu/shade_*_gpu split."""
+    var n_spheres = Int(n_spheres_dp)
+    var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
@@ -5298,12 +5287,12 @@ def _bdpt_light_path_bounce_gpu(
     nvdb_grids: UnsafePointer[NvdbGrid_C, MutExternalOrigin] = UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling(),
     n_nvdb_grids: Int64 = Int64(0),
 ):
-    var spectral_res = Int(spectral_res_dp)
-    var n_light_paths = Int(n_light_paths_dp)
     """One bounce's material dispatch for one light path, reading the
     Intersection_C _bdpt_light_path_intersect_gpu already computed this
     depth level instead of tracing it inline -- see this section's opening
     comment."""
+    var spectral_res = Int(spectral_res_dp)
+    var n_light_paths = Int(n_light_paths_dp)
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
     if k >= n_light_paths:
         return
@@ -5372,13 +5361,13 @@ def _bdpt_camera_path_init_gpu(
     seed: UInt64,
     pass_idx_dp: Int64,
 ):
-    var n_pix = Int(n_pix_dp)
-    var fw = Int(fw_dp)
-    var pass_idx = Int(pass_idx_dp)
     """One thread per pixel: seed this thread's own PCG32 (same seed formula
     _bdpt_camera_connect_gpu uses), call _bdpt_camera_path_init, store the
     resulting VCMCameraPathState_C. No scene params needed -- camera-ray
     generation doesn't touch the scene."""
+    var n_pix = Int(n_pix_dp)
+    var fw = Int(fw_dp)
+    var pass_idx = Int(pass_idx_dp)
     var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
     if pix >= n_pix:
         return
@@ -5403,10 +5392,10 @@ def _bdpt_camera_path_intersect_gpu(
     results: UnsafePointer[Intersection_C, MutExternalOrigin],
     count_dp: Int64,
 ):
-    var n_spheres = Int(n_spheres_dp)
-    var count = Int(count_dp)
     """Camera-path counterpart to _bdpt_light_path_intersect_gpu -- see its
     docstring."""
+    var n_spheres = Int(n_spheres_dp)
+    var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
@@ -5483,13 +5472,13 @@ def _bdpt_camera_path_bounce_gpu(
     nvdb_grids: UnsafePointer[NvdbGrid_C, MutExternalOrigin] = UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling(),
     n_nvdb_grids: Int64 = Int64(0),
 ):
-    var spectral_res = Int(spectral_res_dp)
-    var n_pix = Int(n_pix_dp)
     """One bounce's material dispatch (incl. NEE/connect/merge/MNEE, all
     still on the existing software-BVH `results + pix` scratch slot -- see
     this section's opening comment) for one camera path, reading the
     Intersection_C _bdpt_camera_path_intersect_gpu already computed this
     depth level."""
+    var spectral_res = Int(spectral_res_dp)
+    var n_pix = Int(n_pix_dp)
     var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
     if pix >= n_pix:
         return
@@ -5568,13 +5557,13 @@ def _bdpt_camera_path_accumulate_gpu(
     spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
     spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
 ):
-    var n_pix = Int(n_pix_dp)
     """Runs once per `si` sample, after the camera-path bounce loop has
     fully terminated for every lane -- writes each pixel's now-complete
     `total`/`first_alb` (accumulated across every bounce inside the state
     struct) into the persistent per-pixel accum buffers, exactly once,
     matching what _bdpt_camera_connect_gpu's own single `accum[...] +=
     contrib...` did at the end of its one-shot whole-subpath trace."""
+    var n_pix = Int(n_pix_dp)
     var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
     if pix >= n_pix:
         return
@@ -6936,11 +6925,11 @@ def sppm_gen_vp_gpu(
     nvdb_grids: UnsafePointer[NvdbGrid_C, MutExternalOrigin] = UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling(),
     n_nvdb_grids: Int64 = Int64(0),
 ):
-    var n_pix = Int(n_pix_dp)
-    var vp_samples = Int(vp_samples_dp)
     """One thread per (pixel, vp_sample). Calls the SAME
     _sppm_trace_visible_point the CPU driver (_sppm_camera_pass) calls,
     with use_gpu=True (task #151: real image-texture reflectance)."""
+    var n_pix = Int(n_pix_dp)
+    var vp_samples = Int(vp_samples_dp)
     var combined = Int(block_idx.x * block_dim.x + thread_idx.x)
     if combined >= n_pix * vp_samples:
         return
@@ -7013,10 +7002,6 @@ def sppm_emit_photons_gpu(
     nvdb_grids: UnsafePointer[NvdbGrid_C, MutExternalOrigin] = UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling(),
     n_nvdb_grids: Int64 = Int64(0),
 ):
-    var spectral_res = Int(spectral_res_dp)
-    var n_emit = Int(n_emit_dp)
-    var max_photons = Int(max_photons_dp)
-    var pass_idx = Int(pass_idx_dp)
     """One thread per emitted photon path. Calls the SAME _sppm_trace_photon
     the CPU driver (_sppm_photon_pass) calls, with use_gpu=True so
     _sppm_store_photon reserves its slot via an atomic fetch-add (CPU uses a
@@ -7029,6 +7014,10 @@ def sppm_emit_photons_gpu(
     (for the RGB conversion) and the measured-BRDF array -- unlike this
     kernel's other materials, which only draw a wavelength via PCG and
     never dereference sd.spectral."""
+    var spectral_res = Int(spectral_res_dp)
+    var n_emit = Int(n_emit_dp)
+    var max_photons = Int(max_photons_dp)
+    var pass_idx = Int(pass_idx_dp)
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
     if k >= n_emit or (areaLightCount == Int64(0) and distantLightCount == Int64(0) and infiniteLightCount == Int64(0) and pointLightCount == Int64(0)):
         return
@@ -7097,8 +7086,6 @@ def sppm_gather_gpu(
     med_arr_dp: UnsafePointer[Medium_C, MutExternalOrigin] = UnsafePointer[Medium_C, MutExternalOrigin].unsafe_dangling(),
     med_count_dp: Int64 = Int64(0),
 ):
-    var spectral_res = Int(spectral_res_dp)
-    var n_pix = Int(n_pix_dp)
     """One thread per visible point. `sd` here only needs to be complete
     enough for _sppm_gather_one's hair branch (sd.materials/sd.curves) —
     plus, since measured BxDF support was added (see project_measured_bxdf
@@ -7106,6 +7093,8 @@ def sppm_gather_gpu(
     via _sppm_vp_brdf). Other SceneDescriptor2_C fields it builds are still
     unused by gather, so stay zeroed/dangling exactly like sppm_nee_gpu's
     own _mk_sd_full call."""
+    var spectral_res = Int(spectral_res_dp)
+    var n_pix = Int(n_pix_dp)
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= n_pix:
         return
@@ -7168,9 +7157,6 @@ def sppm_nee_gpu(
     measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutExternalOrigin] = UnsafePointer[MeasuredBRDF_C, MutExternalOrigin].unsafe_dangling(),
     measuredBrdfCount: Int64 = Int64(0),
 ):
-    var spectral_res = Int(spectral_res_dp)
-    var n_vps = Int(n_vps_dp)
-    var pass_idx = Int(pass_idx_dp)
     """One thread per visible point. Calls the SAME _sppm_nee_one the CPU
     driver (_sppm_nee_update) calls. The only one of SPPM's 4 GPU kernels
     that needs the spectral device buffers (staged spectral rendering
@@ -7179,6 +7165,9 @@ def sppm_nee_gpu(
     only (no table lookup needed to draw a wavelength), and the gather pass
     stays RGB by design (see _sppm_gather_one's docstring) -- only this
     NEE pass's direct-lighting term actually dereferences sd.spectral."""
+    var spectral_res = Int(spectral_res_dp)
+    var n_vps = Int(n_vps_dp)
+    var pass_idx = Int(pass_idx_dp)
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= n_vps:
         return
@@ -7212,12 +7201,12 @@ def sppm_finalize_gpu(
     spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
     spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
 ):
-    var n_pix = Int(n_pix_dp)
-    var vp_samples = Int(vp_samples_dp)
     """One thread per pixel. Calls the SAME _sppm_finalize_one_pixel the CPU
     driver (sppm_render's tail loop) calls, plus the matching albedo AOV
     average for the denoiser (staged along with the rest of Stage 4-adjacent
     denoiser wiring — see project_spectral_rendering memory)."""
+    var n_pix = Int(n_pix_dp)
+    var vp_samples = Int(vp_samples_dp)
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= n_pix:
         return

@@ -1871,9 +1871,9 @@ def shade_interface_gpu(
     medium_ifaces: UnsafePointer[MediumInterface_C, MutExternalOrigin],
     count_dp: Int64,
 ):
-    var count = Int(count_dp)
     """Passthrough (interface) material: advance ray through the surface.
     Medium update is handled by update_medium_gpu which runs after all shaders."""
+    var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
@@ -1894,10 +1894,10 @@ def update_medium_gpu(
     medium_ifaces: UnsafePointer[MediumInterface_C, MutExternalOrigin],
     count_dp: Int64,
 ):
-    var count = Int(count_dp)
     """Update current_medium_idx for any surface hit with a MediumInterface bound.
     Runs after all material shaders; uses the post-scatter ray direction (same
     convention as CPU rendering.mojo) to determine inside vs outside."""
+    var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
@@ -2876,14 +2876,14 @@ def sample_medium_gpu(
     vol_frame_w: Int32 = Int32(0),
     vol_frame_h: Int32 = Int32(0),
 ):
+    """GPU kernel wrapper: bounds-check, then call the SAME
+    _sample_medium_core the CPU driver (render_all_tiles) calls."""
     var n_spheres = Int(n_spheres_dp)
     var spectral_res = Int(spectral_res_dp)
     var n_mediums = Int(n_mediums_dp)
     var n_area_lights = Int(n_area_lights_dp)
     var n_light_sampler = Int(n_light_sampler_dp)
     var count = Int(count_dp)
-    """GPU kernel wrapper: bounds-check, then call the SAME
-    _sample_medium_core the CPU driver (render_all_tiles) calls."""
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
@@ -3062,13 +3062,13 @@ def reset_restir_reservoirs_gpu(
     reservoirs: UnsafePointer[DIReservoir, MutExternalOrigin],
     count_dp: Int64,
 ):
-    var count = Int(count_dp)
     """Clear ReSTIR DI reservoirs to "no candidate yet". Needed at scene
     upload and on every camera move: identity reprojection assumes the
     previous frame's reservoir describes THIS pixel's shading point, so a
     surviving reservoir after the camera moves would reuse a light chosen
     for a different view. The GPU film is cleared on the same events for
     exactly the same reason (gpu_clear_film)."""
+    var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
@@ -4784,8 +4784,6 @@ def firefly_clamp_gpu(
     output: UnsafePointer[Float32, MutExternalOrigin],
     fw_dp: Int64, fh_dp: Int64,
 ):
-    var fw = Int(fw_dp)
-    var fh = Int(fh_dp)
     """GPU counterpart of postprocess.mojo's _clamp_fireflies, which the GPU
     à-trous path never had until now -- a live divergence (see
     project_gpu_denoiser_energy_bug.md memory): without it, a single
@@ -4794,6 +4792,8 @@ def firefly_clamp_gpu(
     fix existed. Same isolated-pixel test as CPU, via the SAME shared
     _firefly_clamp_pixel -- only the neighbor-gathering loop differs (one
     GPU thread per pixel vs a nested CPU loop)."""
+    var fw = Int(fw_dp)
+    var fh = Int(fh_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= fw * fh:
         return
