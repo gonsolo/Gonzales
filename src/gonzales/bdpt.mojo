@@ -6868,7 +6868,14 @@ def sppm_emit_photons_gpu(
     var max_photons = Int(max_photons_dp)
     var pass_idx = Int(pass_idx_dp)
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if k >= n_emit or (areaLightCount == Int64(0) and distantLightCount == Int64(0) and infiniteLightCount == Int64(0) and pointLightCount == Int64(0)):
+    # sphereCount is part of the test because an analytic sphere can BE the
+    # scene's only light (Sphere_C.isAreaLight); leaving it out made this
+    # kernel return before emitting a single photon there, so SPPM fell back
+    # to visible-point NEE alone. _sppm_trace_photon does the exact
+    # "is any sphere emitting" scan and returns on its own if none is.
+    if k >= n_emit or (areaLightCount == Int64(0) and distantLightCount == Int64(0)
+                       and infiniteLightCount == Int64(0) and pointLightCount == Int64(0)
+                       and sphereCount == Int64(0)):
         return
     var sd = _mk_sd_full(
         bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),

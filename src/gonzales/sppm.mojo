@@ -1090,10 +1090,21 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     is provided separately by _sppm_nee_one's own distant/infinite sampling."""
     var has_media = Int(sd.mediumCount) > 0
     var n_area = Int(sd.areaLightCount)
+    # Analytic sphere lights are NOT in a pre-filtered lights array (sd.spheres
+    # holds every sphere), so they need their own scan and their own slice of
+    # the selection pool. They used to be left out of photon emission
+    # entirely: a scene lit only by spheres emitted ZERO photons, so SPPM fell
+    # back to visible-point NEE alone and lost every multiply-scattered path.
+    # Scenes/vcm-media-sphere-light.pbrt read 0.0073 against pbrt's 0.0244
+    # that way -- the fog ball kept its directly-lit rim and lost its glow.
+    var n_sphere = 0
+    for i in range(Int(sd.sphereCount)):
+        if sd.spheres[i].isAreaLight != Int8(0):
+            n_sphere += 1
     var n_distant = Int(sd.distantLightCount)
     var n_infinite = Int(sd.infiniteLightCount)
     var n_point = Int(sd.pointLightCount)
-    var n_lights = n_area + n_distant + n_infinite + n_point
+    var n_lights = n_area + n_sphere + n_distant + n_infinite + n_point
     if n_lights == 0:
         return
 
@@ -1130,16 +1141,45 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         flux = spec_illum(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, al.emission.r, al.emission.g, al.emission.b, ph_wavelengths) * scale
         ro = point3f(lp) + vec3f(ln) * Float32(0.0001)
         rd = vec3f(pdir)
-    elif light_pick < n_area + n_distant:
-        var dl = sd.distantLights[light_pick - n_area]
+    elif light_pick < n_area + n_sphere:
+        # Sphere area light: pick the k-th emitting sphere, a uniform point on
+        # its surface, and a cosine-weighted outward direction -- the same
+        # emission model the mesh branch above uses, with 4*pi*r^2 for the
+        # area. Its NEE counterpart is _sample_sphere_light_nee (cone
+        # sampling), a different strategy for the same light; SPPM does not
+        # MIS the two (photons and NEE cover disjoint path lengths here).
+        var want = light_pick - n_area
+        var si_e = 0
+        var seen = 0
+        for i in range(Int(sd.sphereCount)):
+            if sd.spheres[i].isAreaLight != Int8(0):
+                if seen == want:
+                    si_e = i
+                    break
+                seen += 1
+        var sph_e = sd.spheres[si_e]
+        var us1 = pcg.next_float(); var us2 = pcg.next_float()
+        var cz = Float32(1) - Float32(2) * us1
+        var sz = sqrt(max(Float32(0), Float32(1) - cz * cz))
+        var sphi = Float32(2) * PI * us2
+        var sn = Vec3f(sz * cos(sphi), sz * sin(sphi), cz)
+        var area_e = Float32(4) * PI * sph_e.radius * sph_e.radius
+        var scale_e = PI * area_e * Float32(n_lights) / Float32(n_emit)
+        var du1e = pcg.next_float(); var du2e = pcg.next_float()
+        flux = spec_illum(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
+                          sph_e.emission.r * scale_e, sph_e.emission.g * scale_e, sph_e.emission.b * scale_e, ph_wavelengths)
+        ro = sph_e.center + sn * sph_e.radius * Float32(1.0001)
+        rd = vec3f(_cosine_hemisphere_sample(sn, du1e, du2e))
+    elif light_pick < n_area + n_sphere + n_distant:
+        var dl = sd.distantLights[light_pick - n_area - n_sphere]
         var (center, radius) = _scene_bounding_sphere(sd)
         var dir = Vec3f(dl.direction.x, dl.direction.y, dl.direction.z)
         var disk_pt = _sample_disk_perpendicular(dir, center, radius, Point2f(pcg.next_float(), pcg.next_float()))
         flux = spec_illum(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, dl.emission.r, dl.emission.g, dl.emission.b, ph_wavelengths) * (Float32(n_lights) * PI * radius * radius) / Float32(n_emit)
         ro = disk_pt
         rd = dir
-    elif light_pick < n_area + n_distant + n_infinite:
-        var il = sd.infiniteLights[light_pick - n_area - n_distant]
+    elif light_pick < n_area + n_sphere + n_distant + n_infinite:
+        var il = sd.infiniteLights[light_pick - n_area - n_sphere - n_distant]
         var (center, radius) = _scene_bounding_sphere(sd)
         # _sample_infinite_light_dir returns env_dir in the NEE convention
         # ("direction FROM a shading point TOWARD the light"). A photon
@@ -1157,7 +1197,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         # bounding-sphere disk trick needed — emit directly from it, uniform
         # over the sphere (isotropic point light). pdf_dir = 1/(4π), so
         # flux = intensity × 4π × n_lights / n_emit (pdf_dir cancels).
-        var pll = sd.pointLights[light_pick - n_area - n_distant - n_infinite]
+        var pll = sd.pointLights[light_pick - n_area - n_sphere - n_distant - n_infinite]
         var u1p = pcg.next_float(); var u2p = pcg.next_float()
         var cos_p = Float32(1) - Float32(2) * u1p
         var sin_p = sqrt(max(Float32(0), Float32(1) - cos_p * cos_p))
