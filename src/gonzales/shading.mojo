@@ -1267,7 +1267,18 @@ def shade_dielectric[use_gpu: Bool](
         # alone in both cases, no extra return value needed. See
         # PathState_C.eta_scale's docstring for why RR needs this decoupled
         # from the real throughput.
-        var eta_for_rr = path_ptr[].current_dielectric_ior / new_dielectric_ior
+        # new/current, NOT current/new: this has to UNDO the eta^2 the
+        # throughput just took, so it is the RECIPROCAL of that factor
+        # (pbrt's `etaScale *= Sqr(bs->eta)` with bs->eta = eta_t/eta_i,
+        # against an f that was divided by the same square). Written the
+        # other way up it compounded the compression instead: inside glass
+        # RR read 0.356 * 0.356 = 0.127 for ior 1.675 and killed ~87% of the
+        # paths that were mid-transit, which is why dambreak0's glass tank
+        # and transparent-machines rendered as flat opaque slabs under the
+        # path tracer while VCM/SPPM -- which do not run this RR -- showed
+        # the glass. It cancels over a complete enter+exit pair, so only
+        # paths still INSIDE a dielectric when RR fires were affected.
+        var eta_for_rr = new_dielectric_ior / path_ptr[].current_dielectric_ior
         path_ptr[].eta_scale *= eta_for_rr * eta_for_rr
     path_ptr[].current_dielectric_ior = new_dielectric_ior
     path_ptr[].previous_dielectric_ior = new_previous_dielectric_ior
