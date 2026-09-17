@@ -17,3 +17,5 @@ bla.ppm
 /gonzales.perfscript
 .claude/
 /compare/
+__pycache__/
+gallery-tiles/
