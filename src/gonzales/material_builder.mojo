@@ -1,6 +1,7 @@
 from std.memory import alloc
 from std.ffi import external_call
 from std.math import sqrt, exp, max, abs
+from .diagnostics import warn_unsupported
 from .lexer import (PbrtScanner, scanner_parse_quoted_string, _psc_collect_params, ParameterDictionary)
 from .parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX
 from .geometry import RGB, MatKind
@@ -449,7 +450,10 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
             # 50%-grey diffuse in total silence, which made scenes using it
             # look wrong with no clue why. mat_type already defaults to
             # MatKind.diffuse above, so this just adds the warning.
-            print("Warning: unsupported material type '" + type_str + "' — rendering as flat 50%-grey diffuse. Supported: diffuse, conductor, dielectric, thindielectric, coateddiffuse, coatedconductor, diffusetransmission, mix, hair, interface, measured (approximate), subsurface.")
+            warn_unsupported("material type", type_str, "renders as flat 50%-grey diffuse",
+                             "diffuse, conductor, dielectric, thindielectric, coateddiffuse,"
+                             + " coatedconductor, diffusetransmission, mix, subsurface,"
+                             + " interface/none, hair, measured")
             mat_type = MatKind.diffuse
 
     # "eta"/"k": dielectric IOR (a scalar) and conductor Fresnel constants (an

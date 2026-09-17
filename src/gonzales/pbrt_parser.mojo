@@ -7,6 +7,7 @@ from std.sys.info import num_performance_cores
 from max.algorithm import parallelize
 from std.subprocess import run
 from std.os.path import exists
+from .diagnostics import warn_unsupported, warn_unsupported_in
 from .lexer import (PbrtScanner, scanner_open, scanner_free, scanner_is_at_end,
                     scanner_scan_token, scanner_parse_quoted_string,
                     scanner_scan_char, scanner_scan_float,
@@ -875,10 +876,9 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         # drops -- parsed, recognised as "not mine", and discarded without
         # a word.
         var bad_name = String(unsafe_from_utf8_ptr=name_buf.as_immutable())
-        print("Warning: unsupported medium type '" + type_str
-              + "' for medium '" + bad_name
-              + "' — it is DROPPED, so any MediumInterface naming it renders as"
-              + " empty space. Supported: homogeneous, uniformgrid, nanovdb, cloud.")
+        warn_unsupported_in("medium type", type_str, "medium", bad_name,
+                            "it is DROPPED, so any MediumInterface naming it renders as empty space",
+                            "homogeneous, uniformgrid, nanovdb, cloud")
     name_buf.free()
 
 def lookup_medium(s: UnsafePointer[SceneParseState, MutExternalOrigin],
@@ -1119,6 +1119,7 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     var is_loopsubdiv = _psc_streq(shape_type, "loopsubdiv")
     var is_disk = _psc_streq(shape_type, "disk")
     var is_bilinearmesh = _psc_streq(shape_type, "bilinearmesh")
+    var shape_type_name = String(unsafe_from_utf8_ptr=shape_type.as_immutable())
     shape_type.free()
 
     if is_disk:
@@ -1178,6 +1179,12 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         return
 
     if not is_tri and not is_ply:
+        # Every shape this parser knows returned above, so this one is
+        # unknown. It used to be skipped without a word, which is the silent
+        # drop this codebase keeps paying for: the geometry is simply absent
+        # from an otherwise plausible image.
+        warn_unsupported("shape type", shape_type_name, "the shape is skipped, leaving a hole in the scene",
+                         "trianglemesh, plymesh, loopsubdiv, disk, bilinearmesh, sphere, curve")
         _psc_skip_params(handle)
         return
 
@@ -1494,10 +1501,9 @@ def handle_texture(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         # unsupported-material warnings in material_builder.mojo.
         var class_str = String(unsafe_from_utf8_ptr=tex_class.as_immutable())
         var type_str  = String(unsafe_from_utf8_ptr=tex_type.as_immutable())
-        print("Warning: unsupported texture class '" + class_str + "' ("
-              + type_str + ") for texture '" + name_str
-              + "' — it will render as a flat default. Supported: imagemap,"
-              + " scale, mix, checkerboard, constant.")
+        warn_unsupported_in("texture class", class_str + " (" + type_str + ")",
+                            "texture", name_str, "it renders as a flat default",
+                            "imagemap, scale, mix, checkerboard, constant")
         tex_type.free(); tex_class.free()
         _psc_skip_params(handle)
         return

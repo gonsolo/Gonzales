@@ -1,6 +1,7 @@
 from std.memory import alloc
 from std.math import tan, atan2, sqrt, cos, sin
 from std.ffi import external_call
+from .diagnostics import warn_unsupported
 from .lexer import is_whitespace
 from .parse_types import SceneParseState, NamedMaterial
 from .geometry import RGB, MatKind, PI, Vec3f
@@ -688,7 +689,8 @@ def _mit_build_named_material(tags: List[MitsubaTag], open_idx: Int, end: Int,
             nm.roughness_u = a
             nm.roughness_v = a
     else:
-        print("Warning: unsupported Mitsuba bsdf type '" + eff_type + "' -- rendering as flat 50%-grey diffuse. Supported in this parser: diffuse, dielectric.")
+        warn_unsupported("Mitsuba bsdf type", eff_type, "renders as flat 50%-grey diffuse",
+                         "diffuse, dielectric")
         nm.kind = MatKind.diffuse
     return nm^
 
@@ -847,7 +849,8 @@ def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
         uvs.append(Float32(1)); uvs.append(Float32(1))
         uvs.append(Float32(0)); uvs.append(Float32(1))
     else:
-        print("Warning: unsupported Mitsuba shape type '" + shape_type + "' -- skipped. Supported in this parser: serialized, rectangle.")
+        warn_unsupported("Mitsuba shape type", shape_type, "the shape is skipped",
+                         "serialized, obj, ply, rectangle, cube, sphere, disk")
         return
 
     var mat_idx_result = _mit_resolve_material_idx(tags, shape_idx, end, s_ptr)
