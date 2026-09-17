@@ -405,7 +405,7 @@ def debug_trace_pixel(
     from .sppm import _geom_normal
 
     var psc = mojo_parse_scene_any(path)
-    if Int(psc) == 0:
+    if not _is_real_ptr[ParsedScene_Mojo](psc):
         print("parse failed"); return
 
     # --pixel used to ALWAYS trace against the scene's native resolution,
@@ -687,7 +687,7 @@ def debug_render_vulkanrt(
     from std.math import abs
 
     var psc = mojo_parse_scene_any(path, verbose)
-    if Int(psc) == 0:
+    if not _is_real_ptr[ParsedScene_Mojo](psc):
         print("parse failed"); return
 
     var w = Int(psc[0].film_w)
@@ -917,7 +917,7 @@ def parse_and_render(
         return Int32(-1)
 
     var psc = mojo_parse_scene_any(path, verbose)
-    if Int(psc) == 0:
+    if not _is_real_ptr[ParsedScene_Mojo](psc):
         return Int32(-1)
     if override_w > 0 or override_h > 0:
         var eff_w = override_w
@@ -1634,7 +1634,7 @@ def render_interactive(
         print("--sms-restir: CPU only so far, no effect combined with --gpu")
 
     var psc = mojo_parse_scene_any(path, verbose)
-    if Int(psc) == 0:
+    if not _is_real_ptr[ParsedScene_Mojo](psc):
         print("Failed to parse scene")
         return
     if override_w > 0 or override_h > 0:
