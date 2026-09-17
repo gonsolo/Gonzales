@@ -28,7 +28,7 @@ this doc is the quick-scan summary.
 | SMS (specular manifold sampling) | — | Generalizes MNEE's 1-/2-vertex manifold walk to N specular vertices (`sms.mojo`), block-tridiagonal Newton solve, random seeding + Bernoulli-trial reciprocal estimator for chains where the manifold solution isn't unique; 1-/2-vertex cases stay on MNEE's original fast path unchanged |
 | SMS-ReSTIR (`--sms-restir`) | `2f3455e4`+ | Temporal-only reservoir reuse for glass-caustic MNEE probing (manifold shift + bijectivity check, `restir_sms.mojo`); interactive mode only, independent of `--restir`; validated stable at 256 frames (no energy explosion); no spatial reuse yet |
 | VCM (connect + merge) | — | `bdpt.mojo`; real Georgiev MIS, verified vs SmallVCM; CPU/GPU/wavefront/Vulkan-RT-assisted |
-| SPPM | — | Progressive photon mapping, CPU+GPU, water-caustic scenes |
+| SPPM | — | Progressive photon mapping, CPU+GPU, water-caustic scenes. Photon emission covers mesh/curve/sphere area, distant, infinite and point lights. **In participating media its volume gather was dead on the GPU until `e6e3b60a`; with it alive a dense medium reads 0.94x of the path tracer, but a density-dependent error remains (thin too bright, dense too dark) — see project_sppm_volumetric_deficit.** |
 | Volumetric media (uniformgrid) | — | Delta/ratio tracking heterogeneous media |
 | Spectral rendering | — | Full rollout: `SpectralSample`-based NEE/BSDF/CIE conversion path |
 | Measured BRDF | — | Tabulated pbrt-v4 `.bsdf` format, CPU+GPU, all 3 integrators |
