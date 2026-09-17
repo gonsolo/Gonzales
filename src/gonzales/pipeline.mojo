@@ -401,6 +401,8 @@ def debug_trace_pixel(
     envmap lookup). For comparing against `pbrt --pixelmaterial`."""
     from .bvh import traverse_bvh2_core, test_spheres, any_hit_bvh2_core, _equal_area_sphere_to_square
     from .geometry import Intersection_C, Material_C, cross, fr_dielectric, sphere_outward_normal
+    from .bxdf import dielectric_interface
+    from .sppm import _geom_normal
 
     var psc = mojo_parse_scene_any(path)
     if Int(psc) == 0:
@@ -490,28 +492,17 @@ def debug_trace_pixel(
         # _visible_transmittance, which had this exact bug.
         var mat = psc[0].materials[Int(inter[0].primId.materialIndex)]
         var hx = ox + dx*inter[0].tHit; var hy = oy + dy*inter[0].tHit; var hz = oz + dz*inter[0].tHit
+        # Geometry via the SAME resolver the renderer uses (spheres,
+        # instance transforms and all) -- this used to re-derive the
+        # triangle normal inline, which is how it went stale twice.
         var mesh_idx: Int = -1
-        var gnx: Float32; var gny: Float32; var gnz: Float32
-        if inter[0].primId.type == Int8(4):
-            var sph = psc[0].spheres[Int(inter[0].primId.id1)]
-            var sn = sphere_outward_normal(Point3f(hx, hy, hz), sph.center)
-            gnx = sn.x; gny = sn.y; gnz = sn.z
-        else:
-            var base_vidx: Int
-            if inter[0].primId.type == 0:
-                mesh_idx = Int(inter[0].primId.id1); base_vidx = Int(inter[0].primId.id2)
-            else:
-                mesh_idx = Int(inter[0].primId.id2 >> 32); base_vidx = Int(inter[0].primId.id2 & 0xFFFFFFFF) * 3
-            var mesh = psc[0].meshes[mesh_idx]
-            var v0 = Int(mesh.vertexIndices[base_vidx]); var v1 = Int(mesh.vertexIndices[base_vidx+1]); var v2 = Int(mesh.vertexIndices[base_vidx+2])
-            var p0x = mesh.points[v0*4]; var p0y = mesh.points[v0*4+1]; var p0z = mesh.points[v0*4+2]
-            var p1x = mesh.points[v1*4]; var p1y = mesh.points[v1*4+1]; var p1z = mesh.points[v1*4+2]
-            var p2x = mesh.points[v2*4]; var p2y = mesh.points[v2*4+1]; var p2z = mesh.points[v2*4+2]
-            gnx = (p1y-p0y)*(p2z-p0z) - (p1z-p0z)*(p2y-p0y)
-            gny = (p1z-p0z)*(p2x-p0x) - (p1x-p0x)*(p2z-p0z)
-            gnz = (p1x-p0x)*(p2y-p0y) - (p1y-p0y)*(p2x-p0x)
-        var gnl = _dbg_vlen(gnx, gny, gnz)
-        if gnl > Float32(0.0): gnx /= gnl; gny /= gnl; gnz /= gnl
+        if inter[0].primId.type == Int8(0):
+            mesh_idx = Int(inter[0].primId.id1)
+        elif inter[0].primId.type != Int8(4):
+            mesh_idx = Int(inter[0].primId.id2 >> 32)
+        var gn_v = _geom_normal(inter[0], psc[0].meshes, psc[0].instances, psc[0].spheres,
+                               Vec3f(hx, hy, hz))
+        var gnx = gn_v.x; var gny = gn_v.y; var gnz = gn_v.z
         if mesh_idx >= 0:
             print("  bounce", bounce, "HIT mesh", mesh_idx, "matType", Int(mat.type), "t", inter[0].tHit, "p", hx, hy, hz, "gN", gnx, gny, gnz)
         else:
@@ -520,17 +511,15 @@ def debug_trace_pixel(
         if Int(mat.type) == 4:
             # Dielectric — mirror shade_dielectric's decision (no RNG: report Fresnel, follow transmit)
             var ior = mat.albedo.r
-            var facing = (dx*gnx + dy*gny + dz*gnz) < Float32(0.0)
-            var entering = facing
-            if bounce == 0: entering = True
-            var nx = gnx if facing else -gnx
-            var ny = gny if facing else -gny
-            var nz = gnz if facing else -gnz
-            var eta = (current_ior/ior) if entering else (ior/previous_ior)
-            var cos_i = -(dx*nx + dy*ny + dz*nz)
-            var sin2t = eta*eta*(Float32(1.0) - cos_i*cos_i)
-            var tir = sin2t > Float32(1.0)
-            var fres = fr_dielectric(cos_i, Float32(1.0)/eta)
+            var di = dielectric_interface(Vec3f(gnx, gny, gnz), Vec3f(dx, dy, dz), ior,
+                                          bounce == 0, current_ior, previous_ior)
+            var entering = di.entering
+            var nx = di.normal.x; var ny = di.normal.y; var nz = di.normal.z
+            var eta = di.eta
+            var cos_i = di.cos_i
+            var sin2t = di.sin2_t
+            var tir = di.tir
+            var fres = di.fresnel
             print("        DIELECTRIC entering", Int(entering), "current_ior", current_ior, "surface_ior", ior, "eta", eta, "cos_i", cos_i, "fresnel", fres, "tir", Int(tir))
             # Probe the REFLECTED ray's envmap value (the bright contribution).
             var rcos = dx*nx + dy*ny + dz*nz

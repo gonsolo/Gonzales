@@ -28,7 +28,7 @@ from .bvh import (
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
     render_aux_buffers,
 )
-from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, bxdf_eval_any_spectral, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral
+from .bxdf import dielectric_interface, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, bxdf_eval_any_spectral, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured
 from .shading import _tex_lookup, _get_tri_verts
 from .sampling import power_heuristic
@@ -376,19 +376,14 @@ def _dielectric_bounce(
     current_ior: Float32 = Float32(1.0),    # IOR of the medium the ray is ALREADY in; 1.0 = vacuum
     previous_ior: Float32 = Float32(1.0),   # IOR one level below current_ior (what exiting restores)
 ) -> Tuple[Vec3f, Vec3f, Float32, Float32, Float32]:
-    var facing = dot(ray_dir, geom_normal) < Float32(0.0)
-    var entering = facing
-    if force_entering:
-        entering = True  # primary ray always enters (fixes inward-normal meshes)
-    var normal = geom_normal if entering else (geom_normal * Float32(-1.0))
-    # See this function's docstring / bxdf_sample_dielectric (bxdf.mojo) for
-    # why both directions need the real neighboring IOR, not a hardcoded
-    # vacuum assumption.
-    var eta = (current_ior / ior) if entering else (ior / previous_ior)   # n_i / n_t
-    var cos_i = -dot(ray_dir, normal)
-    var sin2_t = eta * eta * (Float32(1.0) - cos_i * cos_i)
-    var tir = sin2_t > Float32(1.0)
-    var fresnel = fr_dielectric(cos_i, Float32(1.0) / eta)
+    var di = dielectric_interface(geom_normal, ray_dir, ior, force_entering, current_ior, previous_ior)
+    var normal = di.normal
+    var entering = di.entering
+    var eta = di.eta
+    var cos_i = di.cos_i
+    var sin2_t = di.sin2_t
+    var tir = di.tir
+    var fresnel = di.fresnel
 
     if tir or pcg.next_float() < fresnel:
         # Reflect: r = d + 2*cos_i*n -- still in the same medium.

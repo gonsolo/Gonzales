@@ -302,6 +302,58 @@ def bxdf_sample_coated_conductor(
 # wo, so this takes geometry directly instead of a GeomContext. Returns the
 # facing normal alongside the sample so the caller can offset hit_point
 # (+normal for reflect, -normal for transmit; BxDFSample.flags says which).
+@fieldwise_init
+struct DielectricInterface(TrivialRegisterPassable):
+    """The decision every dielectric interaction makes before it picks a
+    lobe: which way the surface faces, the relative IOR, and whether the
+    transmitted direction exists at all. Sampling (the Fresnel coin flip)
+    and the refracted/reflected directions are the CALLER's, so this one
+    function serves the path tracer's sampler, SPPM/VCM's own bounce, and
+    the --pixel tracer, which each used to re-derive it (and had drifted:
+    the debug tracer twice went stale against the real formula, and
+    SPPM's copy still flips the normal by `entering` rather than by which
+    way the surface faces the ray)."""
+    var normal:   Vec3f     # geometric normal, flipped to face the incoming ray
+    var entering: Bool      # crossing INTO this surface's material
+    var eta:      Float32   # relative IOR n_i / n_t
+    var cos_i:    Float32
+    var sin2_t:   Float32
+    var tir:      Bool      # no transmitted direction exists
+    var fresnel:  Float32   # reflectance at this angle
+
+@always_inline
+def dielectric_interface(
+    geom_normal: Vec3f,
+    ray_dir: Vec3f,
+    ior: Float32,
+    force_entering: Bool,   # bounce==0: trust physics (camera ray always from air)
+    current_ior: Float32 = Float32(1.0),
+    previous_ior: Float32 = Float32(1.0),
+) -> DielectricInterface:
+    var facing = dot(ray_dir, geom_normal) < Float32(0.0)
+    var entering = facing or force_entering
+    var normal = geom_normal if facing else -geom_normal
+    # Entering: relative IOR is (medium the ray is coming FROM) / (this
+    # surface's own IOR) -- current_ior, not a hardcoded vacuum. Exiting:
+    # relative IOR is (this surface's own IOR) / (medium one level below,
+    # i.e. what's really outside) -- previous_ior, not a hardcoded vacuum
+    # either. Both directions used to assume vacuum on the far side; for a
+    # simple isolated pane previous_ior defaults to 1.0 so this is
+    # unchanged, but for touching same-material CAD parts (bolt threaded
+    # through a bracket, etc.) the old unconditional `eta = ior` on exit
+    # spuriously triggered TOTAL INTERNAL REFLECTION on a boundary that
+    # should have been invisible (eta=1), trapping rays in a runaway TIR
+    # cascade instead of letting them escape -- confirmed via --pixel trace
+    # on transparent-machines (Scenes/dielectric-touching-same-ior.pbrt's
+    # simple 2-sphere repro didn't expose this because it never chains
+    # enough touching interfaces to matter at the whole-image mean).
+    var eta = (current_ior / ior) if entering else (ior / previous_ior)
+    var cos_i = -dot(ray_dir, normal)
+    var sin2_t = eta * eta * (Float32(1.0) - cos_i * cos_i)
+    # eta here is eta_i/eta_t; fr_dielectric wants its reciprocal.
+    return DielectricInterface(normal, entering, eta, cos_i, sin2_t,
+                               sin2_t > Float32(1.0), fr_dielectric(cos_i, Float32(1.0) / eta))
+
 @always_inline
 def bxdf_sample_dielectric(
     geom_normal: Vec3f,
@@ -328,30 +380,14 @@ def bxdf_sample_dielectric(
     (BDPT/SPPM's own separate _dielectric_bounce, and any test that doesn't
     care about touching-dielectric seams) is unaffected -- this only changes
     behavior when a caller actually threads non-vacuum values through."""
-    var facing = dot(ray_dir, geom_normal) < Float32(0.0)
-    var entering = facing or force_entering
-    var normal = geom_normal if facing else -geom_normal
-    # Entering: relative IOR is (medium the ray is coming FROM) / (this
-    # surface's own IOR) -- current_ior, not a hardcoded vacuum. Exiting:
-    # relative IOR is (this surface's own IOR) / (medium one level below,
-    # i.e. what's really outside) -- previous_ior, not a hardcoded vacuum
-    # either. Both directions used to assume vacuum on the far side; for a
-    # simple isolated pane previous_ior defaults to 1.0 so this is
-    # unchanged, but for touching same-material CAD parts (bolt threaded
-    # through a bracket, etc.) the old unconditional `eta = ior` on exit
-    # spuriously triggered TOTAL INTERNAL REFLECTION on a boundary that
-    # should have been invisible (eta=1), trapping rays in a runaway TIR
-    # cascade instead of letting them escape -- confirmed via --pixel trace
-    # on transparent-machines (Scenes/dielectric-touching-same-ior.pbrt's
-    # simple 2-sphere repro didn't expose this because it never chains
-    # enough touching interfaces to matter at the whole-image mean).
-    var eta = (current_ior / ior) if entering else (ior / previous_ior)
-
-    var cos_i = -dot(ray_dir, normal)
-    var sin2_t = eta * eta * (Float32(1.0) - cos_i * cos_i)
-    var tir = sin2_t > Float32(1.0)
-    # eta here is η_i/η_t; fr_dielectric wants its reciprocal as the relative IOR.
-    var fresnel = fr_dielectric(cos_i, Float32(1.0) / eta)
+    var di = dielectric_interface(geom_normal, ray_dir, ior, force_entering, current_ior, previous_ior)
+    var normal = di.normal
+    var entering = di.entering
+    var eta = di.eta
+    var cos_i = di.cos_i
+    var sin2_t = di.sin2_t
+    var tir = di.tir
+    var fresnel = di.fresnel
     var white = RGB(Float32(1.0))
 
     if tir or u_reflect < fresnel:
