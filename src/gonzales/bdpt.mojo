@@ -15,7 +15,7 @@ from .geometry import (
     RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, Frame,
     TriangleMesh_C, Material_C, MatKind, LobeKind, PhotonKind, AreaLight_C, Medium_C, MediumInterface_C,
     Sphere_C, Curve_C, PrimId_C, Instance_C, DistantLight_C, InfiniteLight_C, PointLight_C,
-    MeasuredBRDF_C, GpuTexture_C,
+    MeasuredBRDF_C, GpuTexture_C, dielectric_normals_point_inward,
     dot, cross, fr_dielectric, sphere_outward_normal, refract, PI, INV_FOUR_PI, INV_PI,
     FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, SSS_WALK_ROUNDS,
     Grid_C, NvdbGrid_C,
@@ -2726,7 +2726,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             if not did_bssrdf_hop:
                 var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
                 var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
-                    ray_dir, hit.to_simd(), gn, mat.albedo.r, n_bounces == 0 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior)
+                    ray_dir, hit.to_simd(), gn, mat.albedo.r, n_bounces == 0 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior,
+                    dielectric_normals_point_inward(mat))
                 current_dielectric_ior = new_cur_ior
                 previous_dielectric_ior = new_prev_ior
                 n_bounces += 1
@@ -3547,7 +3548,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             if not did_bssrdf_hop:
                 var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
                 var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
-                    ray_dir, hit.to_simd(), gn, mat.albedo.r, n_lbounces == 0 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior)
+                    ray_dir, hit.to_simd(), gn, mat.albedo.r, n_lbounces == 0 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior,
+                    dielectric_normals_point_inward(mat))
                 current_dielectric_ior = new_cur_ior
                 previous_dielectric_ior = new_prev_ior
                 n_lbounces += 1

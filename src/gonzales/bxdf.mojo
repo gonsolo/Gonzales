@@ -329,10 +329,15 @@ def dielectric_interface(
     force_entering: Bool,   # bounce==0: trust physics (camera ray always from air)
     current_ior: Float32 = Float32(1.0),
     previous_ior: Float32 = Float32(1.0),
+    # True when the winding normals point INTO the material -- see
+    # geometry.mojo's dielectric_normals_point_inward, which is what every
+    # caller passes here.
+    normals_point_inward: Bool = False,
 ) -> DielectricInterface:
-    var facing = dot(ray_dir, geom_normal) < Float32(0.0)
+    var n_out = -geom_normal if normals_point_inward else geom_normal
+    var facing = dot(ray_dir, n_out) < Float32(0.0)
     var entering = facing or force_entering
-    var normal = geom_normal if facing else -geom_normal
+    var normal = n_out if facing else -n_out
     # Entering: relative IOR is (medium the ray is coming FROM) / (this
     # surface's own IOR) -- current_ior, not a hardcoded vacuum. Exiting:
     # relative IOR is (this surface's own IOR) / (medium one level below,
@@ -363,6 +368,7 @@ def bxdf_sample_dielectric(
     u_reflect: Float32,
     current_ior: Float32 = Float32(1.0),    # IOR of the medium the ray is ALREADY in; 1.0 = vacuum
     previous_ior: Float32 = Float32(1.0),   # IOR one level below current_ior (what exiting restores)
+    normals_point_inward: Bool = False,     # geometry.mojo's dielectric_normals_point_inward
 ) -> Tuple[BxDFSample, Vec3f, Float32, Float32]:
     """Third/fourth return values are the CALLER'S new current_ior/
     previous_ior to store (path state) for the next dielectric interaction
@@ -380,7 +386,8 @@ def bxdf_sample_dielectric(
     (BDPT/SPPM's own separate _dielectric_bounce, and any test that doesn't
     care about touching-dielectric seams) is unaffected -- this only changes
     behavior when a caller actually threads non-vacuum values through."""
-    var di = dielectric_interface(geom_normal, ray_dir, ior, force_entering, current_ior, previous_ior)
+    var di = dielectric_interface(geom_normal, ray_dir, ior, force_entering, current_ior, previous_ior,
+                                  normals_point_inward)
     var normal = di.normal
     var entering = di.entering
     var eta = di.eta

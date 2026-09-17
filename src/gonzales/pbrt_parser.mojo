@@ -2337,6 +2337,10 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             mats[dup_idx] = mats[orig_mat]
             mats[dup_idx].medium_interface_idx = Int32(iface_idx)
             mats[dup_idx].sss_boundary = _ins_is_sss(ins)
+            # Medium on the NORMAL side and vacuum on the other means this
+            # surface's winding points INTO the dense material -- see
+            # dielectric_normals_point_inward.
+            mats[dup_idx].normals_inward = Int8(1) if (out >= Int32(0) and ins < Int32(0)) else Int8(0)
             iface_buf[iface_idx] = MediumInterface_C(ins, out)
             s[0].meshes[mi].mat_idx = Int32(dup_idx)
             dup_idx += 1
@@ -2351,6 +2355,10 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             mats[dup_idx] = mats[orig_mat]
             mats[dup_idx].medium_interface_idx = Int32(iface_idx)
             mats[dup_idx].sss_boundary = _ins_is_sss(ins)
+            # Medium on the NORMAL side and vacuum on the other means this
+            # surface's winding points INTO the dense material -- see
+            # dielectric_normals_point_inward.
+            mats[dup_idx].normals_inward = Int8(1) if (out >= Int32(0) and ins < Int32(0)) else Int8(0)
             iface_buf[iface_idx] = MediumInterface_C(ins, out)
             s[0].spheres_mat[si] = Int32(dup_idx)
             dup_idx += 1

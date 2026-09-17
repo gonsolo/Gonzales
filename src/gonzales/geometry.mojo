@@ -414,7 +414,13 @@ struct Material_C(TrivialRegisterPassable):
     # Material_C's size and every existing constructor call site are
     # unchanged.
     var sss_boundary: Int8
-    var _pad1: Int8
+    # 1 when this dielectric's winding normals point INTO the dense side --
+    # the scene put a medium on the NORMAL side and vacuum on the other
+    # (dambreak's water: `MediumInterface "" "liquid"`). Set once by
+    # pbrt_parser's medium-interface binding pass, beside sss_boundary, so the
+    # BSDF needs no access to the interface table. See
+    # dielectric_normals_point_inward for what goes wrong without it.
+    var normals_inward: Int8
     var _pad2: Int8
     var albedo: RGB
     var emission: RGB
@@ -1906,6 +1912,33 @@ struct MediumInterface_C(TrivialRegisterPassable):
     """Binds inside/outside media to a surface. -1 = vacuum."""
     var inside_medium_idx:  Int32
     var outside_medium_idx: Int32
+
+
+@always_inline
+def dielectric_normals_point_inward(mat: Material_C) -> Bool:
+    """True when this dielectric's winding normals point INTO the dense side,
+    i.e. the scene put the medium on the NORMAL side and vacuum on the other.
+
+    A dielectric decides entering-vs-exiting from `dot(ray_dir, n) < 0`, which
+    silently assumes the winding normal points OUT of the material. dambreak's
+    water says otherwise in the scene file itself -- `MediumInterface ""
+    "liquid"`, vacuum inside, liquid outside -- and with inward normals every
+    layer of the splash reads as "entering" again. The IOR stack then already
+    holds the water's own index, so `eta = current/ior` collapses to exactly 1:
+    the interface vanishes, the ray is neither bent nor Fresnel-attenuated, and
+    it flies dead straight through layer after layer spending one maxdepth
+    bounce at each until the path dies. That is why dambreak0 rendered as a
+    flat opaque slab under the path tracer while VCM/SPPM showed the glass.
+
+    Keyed on the scene's own inside/outside declaration, so it cannot disturb a
+    dielectric that has no medium interface -- which is every surface in
+    transparent-machines and in Scenes/dielectric-touching-*.pbrt, the scenes
+    whose touching same-IOR seams the IOR stack exists to fix.
+
+    Used ONLY for that BSDF-side decision. `medium_after_crossing` keeps
+    reading the RAW winding normal, because the scene states its inside/outside
+    assignment relative to that winding and it is already correct there."""
+    return mat.normals_inward != Int8(0)
 
 
 @fieldwise_init
