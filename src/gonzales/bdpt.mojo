@@ -6941,6 +6941,8 @@ def sppm_gather_gpu(
     pass_idx_dp: Int64 = Int64(0),
     med_arr_dp: UnsafePointer[Medium_C, MutExternalOrigin] = UnsafePointer[Medium_C, MutExternalOrigin].unsafe_dangling(),
     med_count_dp: Int64 = Int64(0),
+    grids_dp: UnsafePointer[Grid_C, MutExternalOrigin] = UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling(),
+    nvdb_grids_dp: UnsafePointer[NvdbGrid_C, MutExternalOrigin] = UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling(),
 ):
     """One thread per visible point. `sd` here only needs to be complete
     enough for _sppm_gather_one's hair branch (sd.materials/sd.curves) —
@@ -6970,6 +6972,7 @@ def sppm_gather_gpu(
         measuredBrdfs, measuredBrdfCount,
     )
     _sppm_gather_one(vps, i, photons, heads, inv_cell, sd, med_arr_dp, Int(med_count_dp),
+                     grids_dp, nvdb_grids_dp,
                      spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
                      spectral_cie_z, spectral_d65, pass_wavelengths(Int(pass_idx_dp)))
 
@@ -7320,7 +7323,7 @@ def sppm_render_gpu(
                         bvh2Nodes, primIds, meshes, materials, curves, n_curves, instances, n_instances,
                         spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
                         measured_brdfs, n_measured_brdfs, Int64(pass_idx),
-                        mediums, n_mediums,
+                        mediums, n_mediums, grids_dev, nvdb_grids_dev,
                         grid_dim=grid_vps, block_dim=block_size)
 
                 var nee_seed = psc[0].rng_seed ^ UInt64(pass_idx * 0xBF58476D1CE4E5B9 + 3)

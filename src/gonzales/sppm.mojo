@@ -16,7 +16,7 @@ from .geometry import (
     TriangleMesh_C, Material_C, MatKind, LobeKind, PhotonKind, AreaLight_C, Sphere_C, Medium_C, MediumInterface_C,
     Instance_C, dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI, Frame,
     Curve_C, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, InfiniteLight_C, PointLight_C,
-    MeasuredBRDF_C, GpuTexture_C, _is_real_ptr,
+    MeasuredBRDF_C, GpuTexture_C, _is_real_ptr, Grid_C, NvdbGrid_C,
     FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS,
     medium_transmittance_ratio_spectral, spectral_free_flight_weight,
 )
@@ -1711,6 +1711,11 @@ def _sppm_gather_one(
     # gathered nothing at all.
     med_arr:   UnsafePointer[Medium_C, MutExternalOrigin],
     med_count: Int,
+    # Density fields, decomposed for the same reason: the gather kernel's own
+    # `sd` carries dangling grid pointers, so a heterogeneous medium's density
+    # lookup must not go through it.
+    grids_arr: UnsafePointer[Grid_C, MutExternalOrigin],
+    nvdb_arr:  UnsafePointer[NvdbGrid_C, MutExternalOrigin],
     # Decomposed spectral tables rather than reading sd.spectral. `sd` is a
     # SceneDescriptor2_C passed BY VALUE, and it contains a SpectralHandle --
     # the 6-field TrivialRegisterPassable struct suspected (modular/modular#6759,
@@ -1864,9 +1869,21 @@ def _sppm_gather_one(
                             # for 30 minutes, before this was written as a
                             # plain conditional).
                             var mi_v = Int(vp.med_idx)
-                            var ok_med = (mi_v >= 0 and mi_v < Int(sd.mediumCount)
-                                          and _is_real_ptr[Medium_C](sd.mediums))
-                            var medv = sd.mediums[mi_v] if ok_med else Medium_C(
+                            # med_arr/med_count, NOT sd.mediums/sd.mediumCount:
+                            # the GPU gather kernel builds its sd with a
+                            # DANGLING medium table and count 0, so reading it
+                            # here made ok_med always false and every volume
+                            # visible point gathered exactly zero -- SPPM in
+                            # any participating medium was its direct-lighting
+                            # term alone (measured: 0.29-0.52x of the path
+                            # tracer, and completely insensitive to
+                            # --sppm-photons, which is what gave it away).
+                            # Same decomposition the BSSRDF path above already
+                            # had for this exact reason; the volume branch was
+                            # missed.
+                            var ok_med = (mi_v >= 0 and mi_v < med_count
+                                          and _is_real_ptr[Medium_C](med_arr))
+                            var medv = med_arr[mi_v] if ok_med else Medium_C(
                                 sigma_a=RGB(Float32(0)), sigma_s=RGB(Float32(1)),
                                 g=Float32(0), grid_idx=Int32(-1), nvdb_idx=Int32(-1),
                                 nvdb_temp_idx=Int32(-1), le_scale=Float32(0),
@@ -1880,8 +1897,8 @@ def _sppm_gather_one(
                             # density(x) * sigma_t (same rule Medium_C documents).
                             var dens = Float32(1.0)
                             if medium_is_heterogeneous(medv):
-                                var gvol = medium_grid_for(medv, sd.grids)
-                                var nvol = medium_nvdb_for(medv, sd.nvdbGrids)
+                                var gvol = medium_grid_for(medv, grids_arr)
+                                var nvol = medium_nvdb_for(medv, nvdb_arr)
                                 if medv.nvdb_idx >= Int32(0):
                                     dens = nvdb_sample_density(nvol, vp.pos.to_simd())
                                 else:
@@ -1969,6 +1986,7 @@ def _gather_update(
     @parameter
     def gather_one(i: Int):
         _sppm_gather_one(vps, i, photons, heads, inv_cell, sd, sd.mediums, Int(sd.mediumCount),
+                         sd.grids, sd.nvdbGrids,
                          sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y,
                          sd.spectral.cie_z, sd.spectral.d65, pass_wl)
 
