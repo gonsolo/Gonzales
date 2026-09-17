@@ -21,7 +21,8 @@ from .geometry import (
     Grid_C, NvdbGrid_C,
     spectral_free_flight_weight,
 )
-from .bssrdf import dipole_max_radius, dipole_rd, dipole_mis_sigma_tr, dipole_sample_radius, bssrdf_probe_offset, bssrdf_exit_pdf_area, bssrdf_exit_ft, bssrdf_hop_carries, bssrdf_exit_scatter_carries
+from .bssrdf import dipole_max_radius, dipole_rd, dipole_mis_sigma_tr, dipole_sample_radius, bssrdf_probe_offset, bssrdf_exit_pdf_area, bssrdf_exit_ft
+from .vcm_mis import vcm_arrival_carries, vcm_scatter_carries, bssrdf_hop_carries, bssrdf_exit_scatter_carries
 from .bvh import (
     BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres, _mk_sd_full,
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf,
@@ -2042,10 +2043,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # portion already applied above) -- see
             # _bdpt_trace_light_path's matching comment.
             var cos_fix = abs(dot(-ray_dir, gn))
-            if cos_fix > Float32(1e-6):
-                dvcm_carry /= cos_fix
-                dvc_carry /= cos_fix
-                dvm_carry /= cos_fix
+            (dvcm_carry, dvc_carry, dvm_carry) = vcm_arrival_carries(
+                dvcm_carry, dvc_carry, dvm_carry, cos_fix)
             # Real image-texture reflectance (e.g. "texture reflectance" on
             # coateddiffuse) — before this, bdpt.mojo always used the flat
             # mat.albedo fallback (material_builder.mojo's own 0.5 grey
@@ -2142,12 +2141,10 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # see _bdpt_trace_light_path's matching diffuse-branch comment.
             var cos_theta_out = abs(dot(rd.to_simd(), gn))
             var bsdf_rev_pdf_w = cos_fix / PI
-            var dvc_new = PI * (dvc_carry * bsdf_rev_pdf_w + dvcm_carry + mis_vm_weight_factor)
-            var dvm_new = PI * (dvm_carry * bsdf_rev_pdf_w + dvcm_carry * mis_vc_weight_factor + Float32(1))
             var bsdf_dir_pdf_w = cos_theta_out / PI
-            dvcm_carry = Float32(1) / bsdf_dir_pdf_w if bsdf_dir_pdf_w > Float32(1e-8) else Float32(0)
-            dvc_carry = dvc_new
-            dvm_carry = dvm_new
+            (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
+                dvcm_carry, dvc_carry, dvm_carry, PI, bsdf_dir_pdf_w, bsdf_rev_pdf_w,
+                mis_vc_weight_factor, mis_vm_weight_factor)
 
         elif mat.type == MatKind.coated_diffuse:
             # VCM: coateddiffuse is a stochastic multi-bounce recycling walk
@@ -2165,10 +2162,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             var cos_fix = abs(dot(-ray_dir, gn))
-            if cos_fix > Float32(1e-6):
-                dvcm_carry /= cos_fix
-                dvc_carry /= cos_fix
-                dvm_carry /= cos_fix
+            (dvcm_carry, dvc_carry, dvm_carry) = vcm_arrival_carries(
+                dvcm_carry, dvc_carry, dvm_carry, cos_fix)
             var eff_alb = mat.albedo
             var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
             if tex_ok:
@@ -2450,11 +2445,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 if bsdf_dir_pdf_w_c > Float32(1e-8):
                     var bsdf_rev_pdf_w_c = bxdf_pdf_conductor_ggx(gn_c, bs_c.wi, wo_c, alpha_c)
                     var inv_pdf_c = cos_theta_out_c / bsdf_dir_pdf_w_c
-                    var dvc_new_c = inv_pdf_c * (dvc_carry * bsdf_rev_pdf_w_c + dvcm_carry + mis_vm_weight_factor)
-                    var dvm_new_c = inv_pdf_c * (dvm_carry * bsdf_rev_pdf_w_c + dvcm_carry * mis_vc_weight_factor + Float32(1))
-                    dvcm_carry = Float32(1) / bsdf_dir_pdf_w_c
-                    dvc_carry = dvc_new_c
-                    dvm_carry = dvm_new_c
+                    (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
+                        dvcm_carry, dvc_carry, dvm_carry, inv_pdf_c, bsdf_dir_pdf_w_c, bsdf_rev_pdf_w_c,
+                        mis_vc_weight_factor, mis_vm_weight_factor)
                 else:
                     dvcm_carry = Float32(0)
                     dvc_carry = Float32(0)
@@ -2545,11 +2538,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 )
                 var bsdf_rev_pdf_w_h = cos_ti_rev_h * pdf_oc_rev_h
                 var inv_pdf_h = cos_theta_out_h / bsdf_dir_pdf_w_h
-                var dvc_new_h = inv_pdf_h * (dvc_carry * bsdf_rev_pdf_w_h + dvcm_carry + mis_vm_weight_factor)
-                var dvm_new_h = inv_pdf_h * (dvm_carry * bsdf_rev_pdf_w_h + dvcm_carry * mis_vc_weight_factor + Float32(1))
-                dvcm_carry = Float32(1) / bsdf_dir_pdf_w_h
-                dvc_carry = dvc_new_h
-                dvm_carry = dvm_new_h
+                (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
+                    dvcm_carry, dvc_carry, dvm_carry, inv_pdf_h, bsdf_dir_pdf_w_h, bsdf_rev_pdf_w_h,
+                    mis_vc_weight_factor, mis_vm_weight_factor)
             else:
                 dvcm_carry = Float32(0)
                 dvc_carry = Float32(0)
@@ -2578,10 +2569,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # VCM Stage 2b: measured BxDF has a real standalone pdf -- in
             # MIS scope this pass, same real treatment as diffuse.
             var cos_fix_m = abs(dot(-ray_dir, gn_m))
-            if cos_fix_m > Float32(1e-6):
-                dvcm_carry /= cos_fix_m
-                dvc_carry /= cos_fix_m
-                dvm_carry /= cos_fix_m
+            (dvcm_carry, dvc_carry, dvm_carry) = vcm_arrival_carries(
+                dvcm_carry, dvc_carry, dvm_carry, cos_fix_m)
 
             var v_m = _null_vertex()
             v_m.pos = hit
@@ -2646,11 +2635,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # matching measured-branch comment (reverse-pdf convention
             # ASSUMED, not independently verified).
             var pdf_rev_m = bxdf_pdf_measured(mb, wi_l_m, wo_l_m)
-            var dvc_new_m = (cos_wi_m / pdf_m) * (dvc_carry * pdf_rev_m + dvcm_carry + mis_vm_weight_factor)
-            var dvm_new_m = (cos_wi_m / pdf_m) * (dvm_carry * pdf_rev_m + dvcm_carry * mis_vc_weight_factor + Float32(1))
-            dvcm_carry = Float32(1) / pdf_m if pdf_m > Float32(1e-8) else Float32(0)
-            dvc_carry = dvc_new_m
-            dvm_carry = dvm_new_m
+            (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
+                dvcm_carry, dvc_carry, dvm_carry, (cos_wi_m / pdf_m), pdf_m, pdf_rev_m,
+                mis_vc_weight_factor, mis_vm_weight_factor)
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var did_bssrdf_hop = False
@@ -2670,10 +2657,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     if dot(gn_e, ray_dir) > Float32(0): gn_e = gn_e * Float32(-1)
                     var cos_e = abs(dot(-ray_dir, gn_e))
                     # Arrival at the entry, as at any surface vertex.
-                    if cos_e > Float32(1e-6):
-                        dvcm_carry /= cos_e
-                        dvc_carry /= cos_e
-                        dvm_carry /= cos_e
+                    (dvcm_carry, dvc_carry, dvm_carry) = vcm_arrival_carries(
+                        dvcm_carry, dvc_carry, dvm_carry, cos_e)
                     var eta_e = mat.albedo.r
                     var ex = _bdpt_sample_bssrdf_exit(sd, Int(med_in), hit, gn_e, cos_e, eta_e, pcg)
                     if not ex.ok:
@@ -3173,10 +3158,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             # branches) -- cos_fix is the incoming ray's cosine against
             # this vertex's own normal, matching SmallVCM's cosThetaFix.
             var cos_fix = abs(dot(-ray_dir, gn))
-            if cos_fix > Float32(1e-6):
-                dvcm_carry /= cos_fix
-                dvc_carry /= cos_fix
-                dvm_carry /= cos_fix
+            (dvcm_carry, dvc_carry, dvm_carry) = vcm_arrival_carries(
+                dvcm_carry, dvc_carry, dvm_carry, cos_fix)
             # Real image-texture reflectance -- see the matching comment in
             # _bdpt_trace_camera_and_connect's diffuse branch. Also feeds
             # the continuation flux multiply below, not just the stored
@@ -3209,12 +3192,10 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             # file for the full derivation).
             var cos_theta_out = abs(dot(rd.to_simd(), gn))
             var bsdf_rev_pdf_w = cos_fix / PI
-            var dvc_new = PI * (dvc_carry * bsdf_rev_pdf_w + dvcm_carry + mis_vm_weight_factor)
-            var dvm_new = PI * (dvm_carry * bsdf_rev_pdf_w + dvcm_carry * mis_vc_weight_factor + Float32(1))
             var bsdf_dir_pdf_w = cos_theta_out / PI
-            dvcm_carry = Float32(1) / bsdf_dir_pdf_w if bsdf_dir_pdf_w > Float32(1e-8) else Float32(0)
-            dvc_carry = dvc_new
-            dvm_carry = dvm_new
+            (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
+                dvcm_carry, dvc_carry, dvm_carry, PI, bsdf_dir_pdf_w, bsdf_rev_pdf_w,
+                mis_vc_weight_factor, mis_vm_weight_factor)
 
         elif mat.type == MatKind.coated_diffuse:
             # VCM light-side coateddiffuse (task #158) -- same sampling
@@ -3229,10 +3210,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             var cos_fix = abs(dot(-ray_dir, gn))
-            if cos_fix > Float32(1e-6):
-                dvcm_carry /= cos_fix
-                dvc_carry /= cos_fix
-                dvm_carry /= cos_fix
+            (dvcm_carry, dvc_carry, dvm_carry) = vcm_arrival_carries(
+                dvcm_carry, dvc_carry, dvm_carry, cos_fix)
             var eff_alb = mat.albedo
             var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
             if tex_ok:
@@ -3381,11 +3360,9 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 if bsdf_dir_pdf_w_c > Float32(1e-8):
                     var bsdf_rev_pdf_w_c = bxdf_pdf_conductor_ggx(gn_c, bs_c.wi, wo_c, alpha_c)
                     var inv_pdf_c = cos_theta_out_c / bsdf_dir_pdf_w_c
-                    var dvc_new_c = inv_pdf_c * (dvc_carry * bsdf_rev_pdf_w_c + dvcm_carry + mis_vm_weight_factor)
-                    var dvm_new_c = inv_pdf_c * (dvm_carry * bsdf_rev_pdf_w_c + dvcm_carry * mis_vc_weight_factor + Float32(1))
-                    dvcm_carry = Float32(1) / bsdf_dir_pdf_w_c
-                    dvc_carry = dvc_new_c
-                    dvm_carry = dvm_new_c
+                    (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
+                        dvcm_carry, dvc_carry, dvm_carry, inv_pdf_c, bsdf_dir_pdf_w_c, bsdf_rev_pdf_w_c,
+                        mis_vc_weight_factor, mis_vm_weight_factor)
                 else:
                     dvcm_carry = Float32(0)
                     dvc_carry = Float32(0)
@@ -3441,11 +3418,9 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 )
                 var bsdf_rev_pdf_w_h = cos_ti_rev_h * pdf_oc_rev_h
                 var inv_pdf_h = cos_theta_out_h / bsdf_dir_pdf_w_h
-                var dvc_new_h = inv_pdf_h * (dvc_carry * bsdf_rev_pdf_w_h + dvcm_carry + mis_vm_weight_factor)
-                var dvm_new_h = inv_pdf_h * (dvm_carry * bsdf_rev_pdf_w_h + dvcm_carry * mis_vc_weight_factor + Float32(1))
-                dvcm_carry = Float32(1) / bsdf_dir_pdf_w_h
-                dvc_carry = dvc_new_h
-                dvm_carry = dvm_new_h
+                (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
+                    dvcm_carry, dvc_carry, dvm_carry, inv_pdf_h, bsdf_dir_pdf_w_h, bsdf_rev_pdf_w_h,
+                    mis_vc_weight_factor, mis_vm_weight_factor)
             else:
                 dvcm_carry = Float32(0)
                 dvc_carry = Float32(0)
@@ -3474,10 +3449,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             # this pass, same real treatment as diffuse (see that branch's
             # comments + project_vcm_stage2_mis_derivation memory).
             var cos_fix_m = abs(dot(-ray_dir, gn_m))
-            if cos_fix_m > Float32(1e-6):
-                dvcm_carry /= cos_fix_m
-                dvc_carry /= cos_fix_m
-                dvm_carry /= cos_fix_m
+            (dvcm_carry, dvc_carry, dvm_carry) = vcm_arrival_carries(
+                dvcm_carry, dvc_carry, dvm_carry, cos_fix_m)
             var v_m = _null_vertex()
             v_m.pos = hit
             v_m.normal = vec3f(gn_m)
@@ -3509,11 +3482,9 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             # measured_bxdf_eval.mojo's exact semantics; flag if results look
             # wrong on sportscar/measured-material scenes).
             var pdf_rev_m = bxdf_pdf_measured(mb, wi_l_m, wo_l_m)
-            var dvc_new_m = (cos_wi_m / pdf_m) * (dvc_carry * pdf_rev_m + dvcm_carry + mis_vm_weight_factor)
-            var dvm_new_m = (cos_wi_m / pdf_m) * (dvm_carry * pdf_rev_m + dvcm_carry * mis_vc_weight_factor + Float32(1))
-            dvcm_carry = Float32(1) / pdf_m if pdf_m > Float32(1e-8) else Float32(0)
-            dvc_carry = dvc_new_m
-            dvm_carry = dvm_new_m
+            (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
+                dvcm_carry, dvc_carry, dvm_carry, (cos_wi_m / pdf_m), pdf_m, pdf_rev_m,
+                mis_vc_weight_factor, mis_vm_weight_factor)
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             # ── Subsurface boundary: the light subpath's half of the hop ───
@@ -3529,10 +3500,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     var gn_e = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
                     if dot(gn_e, ray_dir) > Float32(0): gn_e = gn_e * Float32(-1)
                     var cos_e = abs(dot(-ray_dir, gn_e))
-                    if cos_e > Float32(1e-6):
-                        dvcm_carry /= cos_e
-                        dvc_carry /= cos_e
-                        dvm_carry /= cos_e
+                    (dvcm_carry, dvc_carry, dvm_carry) = vcm_arrival_carries(
+                        dvcm_carry, dvc_carry, dvm_carry, cos_e)
                     var eta_e = mat.albedo.r
                     var ex = _bdpt_sample_bssrdf_exit(sd, Int(med_in), hit, gn_e, cos_e, eta_e, pcg)
                     if not ex.ok:
