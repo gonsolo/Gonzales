@@ -1,6 +1,6 @@
 from std.ffi import external_call
 from std.time import perf_counter_ns
-from std.memory import alloc, memcpy
+from std.memory import alloc, unsafe_memcpy
 from std.math import tan, sqrt, abs
 from std.atomic import Atomic
 from std.sys.info import num_performance_cores
@@ -3161,7 +3161,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                 # 146.6MB decompressed, and a scalar byte-index loop over
                 # that is orders of magnitude slower than a real memcpy --
                 # slow enough it looked like a hang/crash during bring-up.
-                memcpy(dest=blob, src=src, count=blob_size)
+                unsafe_memcpy(dest=blob, src=src, count=blob_size)
                 var ibbmin = alloc[Int32](3); var ibbmax = alloc[Int32](3)
                 nvdb_index_bbox(handle, ibbmin, ibbmax)
                 idx_min = Point3f(Float32(ibbmin[0]), Float32(ibbmin[1]), Float32(ibbmin[2]))

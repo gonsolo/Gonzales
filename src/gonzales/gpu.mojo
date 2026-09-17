@@ -5,7 +5,7 @@ from max.gpu.host import DeviceContext, DeviceBuffer
 from max.algorithm import parallelize
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
-from std.memory import alloc, memcpy
+from std.memory import alloc, unsafe_memcpy
 from .geometry import RGB, Point3f, Point2f, FilmDims, FilterParams, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, NvdbGrid_C, nvdb_sample_density, nvdb_ray_range, grid_ray_range, nvdb_index_ray, nvdb_node_exit_t, nvdb_majorant_at_world, hg_phase, hg_sample, blackbody_rgb, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_grid_for, medium_nvdb_for, medium_emission_spectral, MEDIUM_TRACK_MAX_ITERS, medium_transmittance_ratio_spectral, medium_sigma_s_spectral, medium_sigma_t_spectral
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres, LightSample, _sample_infinite_light_nee, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee
@@ -118,7 +118,7 @@ def _fill_u8_mips(
     tw: Int, th: Int, c: Int, lut: UnsafePointer[Float32, MutExternalOrigin],
     inv: UnsafePointer[UInt8, MutExternalOrigin],
 ):
-    memcpy(dest=pyr, src=src, count=tw * th * c)
+    unsafe_memcpy(dest=pyr, src=src, count=tw * th * c)
     var prev = alloc[Float32](tw * th * c)
     for i in range(tw * th * c):
         prev[i] = lut[Int(src[i])]
@@ -148,7 +148,7 @@ def _fill_f32_mips(
     pyr: UnsafePointer[Float32, MutExternalOrigin], src: UnsafePointer[Float32, MutExternalOrigin],
     tw: Int, th: Int,
 ):
-    memcpy(dest=pyr, src=src, count=tw * th * 3)
+    unsafe_memcpy(dest=pyr, src=src, count=tw * th * 3)
     var off_prev = 0; var off_cur = tw * th * 3
     var pw = tw; var ph = th
     while pw > 1 or ph > 1:
@@ -743,7 +743,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var ls_entries = Int(lightSamplerN) + 1
             var ls_host = alloc[Float32](max(ls_entries, 2))
             ls_host[1] = Float32(0)
-            memcpy(dest=ls_host, src=lightSamplerCdf, count=ls_entries)
+            unsafe_memcpy(dest=ls_host, src=lightSamplerCdf, count=ls_entries)
             var ls_buf = _gpu_upload_array[Float32](ctx, ls_host, max(ls_entries, 2))
             ctx.synchronize()   # ls_host is freed next
             ls_host.free()
