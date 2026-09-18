@@ -64,11 +64,15 @@ def render(args):
     with open(stem + ".log", "w") as log:
         rc = subprocess.run(cmd, cwd=REPO, stdout=log, stderr=subprocess.STDOUT).returncode
     # The film writes into the repo root under the scene's own filename.
+    # A scene whose Film names a .png (several Bitterli ones do) makes gonzales
+    # tonemap and write that instead of an EXR; take it as-is rather than
+    # running it through the ACES display transform a second time.
     written = [f for f in os.listdir(REPO)
-               if f.endswith(".exr") and os.path.getmtime(os.path.join(REPO, f)) >= start]
+               if f.endswith((".exr", ".png")) and os.path.getmtime(os.path.join(REPO, f)) >= start]
     beauty = [f for f in written if "albedo" not in f]
+    is_png = len(beauty) == 1 and beauty[0].endswith(".png")
     if len(beauty) == 1:
-        shutil.move(os.path.join(REPO, beauty[0]), stem + ".exr")
+        shutil.move(os.path.join(REPO, beauty[0]), stem + (".png" if is_png else ".exr"))
     for f in written:
         if os.path.exists(os.path.join(REPO, f)):
             os.remove(os.path.join(REPO, f))
@@ -83,9 +87,13 @@ def render(args):
         sys.exit(f"{args.name}: log shows {found.group(1) if found else 'PT'}, column is {args.mode}")
     if len(beauty) != 1:
         sys.exit(f"{args.name}: expected one new EXR in {REPO}, got {written}")
-    subprocess.run(["oiiotool", stem + ".exr", "--ociodisplay", "sRGB - Display",
-                    "ACES 2.0 - SDR 100 nits (Rec.709)", "--quality", "88",
-                    "-o", stem + ".jpg"], check=True)
+    if is_png:
+        subprocess.run(["oiiotool", stem + ".png", "--quality", "88",
+                        "-o", stem + ".jpg"], check=True)
+    else:
+        subprocess.run(["oiiotool", stem + ".exr", "--ociodisplay", "sRGB - Display",
+                        "ACES 2.0 - SDR 100 nits (Rec.709)", "--quality", "88",
+                        "-o", stem + ".jpg"], check=True)
     print(stem + ".jpg")
 
 
