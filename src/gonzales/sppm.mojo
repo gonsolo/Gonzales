@@ -1324,7 +1324,6 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var mix_amount = mat.roughU
             var mix_chosen = mix_idx2 if pcg.next_float() < mix_amount else mix_idx1
             mat = sd.materials[unsafe_offset=mix_chosen]
-            mat_idx = mix_chosen  # keep in sync with the resolved sub-material (hair needs the real index to re-fetch at gather/NEE time)
             if mat.type == MatKind.mix:
                 mat.type = MatKind.diffuse
 
@@ -1442,7 +1441,6 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 var gn_b = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
                 var cos_in = dot(gn_b, rd)
                 if cos_in > Float32(0.0):
-                    gn_b = gn_b * Float32(-1.0)
                     cos_in = -cos_in
                 var ft = Float32(1.0) - fr_dielectric(-cos_in, mat.albedo.r)
                 if ft > Float32(0.0):
@@ -2223,7 +2221,6 @@ def _sppm_nee_one(
     if vp.valid == Int32(0):
         return
     var is_vol = vp.is_volume == PhotonKind.volume
-    var vpos = vp.pos.to_simd()
     var vn   = vp.normal.to_simd()
     var wo   = vp.wo.to_simd()
     # A volume scatter point has no surface to self-intersect against, so it

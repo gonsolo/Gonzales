@@ -920,7 +920,6 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
                           + " applying the scale only.")
                 bump_tex_idx_for_mat = aff.tex_idx
                 bump_scale_for_mat = aff.scale.r
-                matched_disp = True
 
     # "mix": blend amount and the two component material names.
     var mix_amount = params.get_float("amount", Float32(0.5))

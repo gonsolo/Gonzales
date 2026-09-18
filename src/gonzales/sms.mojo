@@ -918,7 +918,7 @@ def sms_walk(
         # that generalizes to it.
         var dx = InlineArray[SIMD[DType.float32, 2], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 2](Float32(0.0)))
         var wol = InlineArray[Float32, MAX_SMS_VERTICES](fill=Float32(0.0))
-        var err = Float32(0.0)
+        var err: Float32
         if use_anglediff:
             var st = _sms_step_anglediff(x0, xL, verts[0])
             if not st[0]:

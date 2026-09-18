@@ -256,7 +256,7 @@ def _pl2d_sample2(
     # capture convention for the pointer/float locals this needs).
     var moff = slice_offset * ys
 
-    var row = 0
+    var row: Int
     var size = ys - 2
     var first = 1
     while size > 0:
@@ -290,7 +290,7 @@ def _pl2d_sample2(
     # Sample the column (conditional CDF over x, blended by row-fraction sy).
     sx *= (Float32(1.0) - sy) * r0 + sy * r1
 
-    var col = 0
+    var col: Int
     size = xs - 2
     first = 1
     while size > 0:
@@ -489,7 +489,7 @@ def _bxdf_eval_measured_core(
     if cos_wi <= Float32(0.0):
         return (SpectralSample(Float32(0.0)), Float32(0.0))
 
-    var fr = SpectralSample(Float32(0.0))
+    var fr: SpectralSample
     var fr0 = _pl2d_eval3(spectra_data, Int(spectra_xs), Int(spectra_ys),
         Int(stride3_phi), Int(stride3_theta), Int(stride3_lambda),
         phi_i, Int(n_phi_i), theta_i, Int(n_theta_i),

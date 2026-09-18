@@ -621,7 +621,6 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             # Check GPU memory
             var mem_info = ctx.get_memory_info()
             var free_bytes = mem_info[0]
-            var total_bytes = mem_info[1]
 
             # Guard against zero-size device buffers (scene with no geometry):
             # a 0-byte enqueue_create_buffer yields a misaligned/invalid device
@@ -629,7 +628,6 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var bvh_bytes = max(Int(bvh2NodesCount), 1) * size_of[BVH2Node]()
             var prim_bytes = max(Int(primIdsCount), 1) * size_of[PrimId_C]()
             var mesh_struct_bytes = max(Int(meshCount), 1) * size_of[TriangleMesh_C]()
-            var material_struct_bytes = max(Int(materialCount), 1) * size_of[Material_C]()
 
             # Estimate total mesh data
             var mesh_data_bytes = 0
@@ -3220,7 +3218,6 @@ def gen_primary_rays_wavefront_gpu(
     count_dp: Int64, n_pixels_dp: Int64,
 ):
     var fw = Int(fw_dp)
-    var fh = Int(fh_dp)
     var count = Int(count_dp)
     var n_pixels = Int(n_pixels_dp)
     var ti = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -3634,7 +3631,6 @@ def gen_primary_rays_gpu(
     count_dp: Int64,
 ):
     var fw = Int(fw_dp)
-    var fh = Int(fh_dp)
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:

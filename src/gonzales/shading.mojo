@@ -722,7 +722,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
         trans = tex_rgb
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
-    var (bs, bounce_normal, lobe_alb, lobe_w, choose_reflect) = bxdf_sample_diffuse_transmit(
+    var (bs, bounce_normal, lobe_alb, lobe_w, _) = bxdf_sample_diffuse_transmit(
         normal, refl, trans, pcg.next_float(), pcg.next_float(), pcg.next_float())
     if bs.is_valid == Int8(0):
         path_ptr[].active = 0
@@ -842,7 +842,6 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     # Layered BSDFs") for the model, the eta^2 derivation, and why gonzales's
     # decorrelated-per-bounce NEE differs from PBRT's correlated LayeredBxDF.
     var ior = mat.emission.r            # coat IOR (eta_coat/eta_air), set at parse
-    var inv_ior = Float32(1.0) / ior
     # roughU/V already hold the resolved GGX alpha (remaproughness handling).
     # 0 = smooth mirror coat (car paint); larger = soft sheen (tyres ~0.4).
     var coat_alpha = max(mat.roughU, mat.roughV)
@@ -938,8 +937,6 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         return
 
     # Transmitted into the coat: random-walk the base/coat-underside layers.
-    var exited = False
-    var exit_dir = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
 
     while cw.event == COAT_WALKING:
         # Russian-roulette the recycling walk itself once `beta` (the base
@@ -1030,8 +1027,8 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         # Beer-Lambert per crossing, exit-or-recycle) -- all shared.
         coat_walk_scatter(cw, pcg)
 
-    exited = cw.event == COAT_EXIT
-    exit_dir = cw.wi
+    var exited = cw.event == COAT_EXIT
+    var exit_dir = cw.wi
 
     if not exited:
         path_ptr[].active = 0
@@ -1334,7 +1331,7 @@ def shade_thin_dielectric(
     mat: Material_C,
     spheres: Pointer[Sphere_C, MutUntrackedOrigin],
 ):
-    var (ok, is_sphere, geom_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, meshes, spheres)
+    var (ok, _, geom_normal, ray_dir, ray_org, _, _, _, _) = _hit_geom(path_ptr, inter, meshes, spheres)
     if not ok:
         path_ptr[].active = 0
         return
@@ -1800,7 +1797,7 @@ def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
     # No shading-normal interpolation here (unlike conductor) — matches the
     # pre-existing coated_conductor behavior of using the flat geometric
     # normal (which, for a sphere, IS already the exact shading normal).
-    var (ok, is_sphere, normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres)
+    var (ok, _, normal, ray_dir, ray_org, _, _, _, _) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres)
     if not ok:
         path_ptr[].active = 0
         return
@@ -2064,14 +2061,6 @@ def _apply_normal_map_sphere[use_gpu: Bool](
     var u = phi / (Float32(2.0) * Float32(3.14159265358979))
     var v = theta / Float32(3.14159265358979)
     var dp_du = Vec3f(-local[1], local[0], Float32(0.0)) * (Float32(2.0) * Float32(3.14159265358979))
-    var dp_dv: Vec3f
-    if rd > Float32(1e-8):
-        var inv_rd = Float32(1.0) / rd
-        var cos_phi = local[0] * inv_rd
-        var sin_phi = local[1] * inv_rd
-        dp_dv = Vec3f(local[2] * cos_phi, local[2] * sin_phi, -rd) * Float32(3.14159265358979)
-    else:
-        dp_dv = Vec3f(Float32(1.0), Float32(0.0), Float32(0.0)) * Float32(3.14159265358979)
     var tangent: Vec3f
     var du_len2 = dot(dp_du, dp_du)
     if du_len2 > Float32(1e-12):
@@ -2318,7 +2307,6 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     var ray_org = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
     var hit_base = ray_org + ray_dir * inter.tHit
     var curve_eps = curve_offset_eps(hc.radius)
-    var hit_point = hit_base + geo_normal * curve_eps
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
@@ -3872,7 +3860,7 @@ def _gi_generate_recon_candidate(
     normal/alb (not available here -- this runs at x2's shading call) via
     gi_target_pdf, then stream it with reservoir_update, before this
     becomes usable in gi_temporal_spatial_combine."""
-    var (ok, light_idx, sample_point, light_normal, le, gen_pdf, ldp_du_v, ldp_dv_v) = _di_sample_candidate(ctx, hit_point, pcg)
+    var (ok, _, sample_point, _, le, gen_pdf, _, _) = _di_sample_candidate(ctx, hit_point, pcg)
     if not ok:
         return gi_reservoir_init()
     var to_light = sample_point - hit_point

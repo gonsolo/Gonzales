@@ -2256,8 +2256,6 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
 
             # Transmitted into the coat: random-walk the base/coat-underside
             # layers. Entry attenuation already applied by coat_walk_enter.
-            var exited = False
-            var exit_dir = Vec3f(Float32(0), Float32(0), Float32(0))
             while cw.event == COAT_WALKING:
                 if not coat_walk_at_base(cw, pcg):
                     break
@@ -2302,8 +2300,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # One base bounce + the attempt to leave the coat -- shared.
                 coat_walk_scatter(cw, pcg)
 
-            exited = cw.event == COAT_EXIT
-            exit_dir = cw.wi
+            var exited = cw.event == COAT_EXIT
+            var exit_dir = cw.wi
             if not exited:
                 return False   # coat recycling walk absorbed (RR-killed or ran out of depth)
 
@@ -3255,15 +3253,13 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
 
             # Entry attenuation already applied by coat_walk_enter. The light
             # subpath does no NEE of its own, so this loop is just the walk.
-            var exited = False
-            var exit_dir = Vec3f(Float32(0), Float32(0), Float32(0))
             while cw.event == COAT_WALKING:
                 if not coat_walk_at_base(cw, pcg):
                     break
                 coat_walk_scatter(cw, pcg)
 
-            exited = cw.event == COAT_EXIT
-            exit_dir = cw.wi
+            var exited = cw.event == COAT_EXIT
+            var exit_dir = cw.wi
             if not exited:
                 return False   # coat recycling walk failed to find an exit direction
 
