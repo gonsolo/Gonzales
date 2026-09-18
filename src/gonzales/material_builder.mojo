@@ -56,7 +56,7 @@ def _affine_const(c: RGB) -> _AffineTex:
     return _AffineTex(True, Int32(-1), RGB(Float32(0)), c)
 
 
-def _resolve_affine_rgb(s: UnsafePointer[SceneParseState, MutUntrackedOrigin],
+def _resolve_affine_rgb(s: Pointer[SceneParseState, MutUntrackedOrigin],
                         name: String, depth: Int) -> _AffineTex:
     """Fold a named texture -- possibly a nested scale/mix graph -- into one
     affine (scale, bias) pair over a single imagemap. See _AffineTex.
@@ -271,7 +271,7 @@ def _sss_invert_alpha(target: Float32, eta: Float32, g: Float32) -> Float32:
     return Float32(0.5) * (lo + hi)
 
 
-def _sss_reflectance(s: UnsafePointer[SceneParseState, MutUntrackedOrigin],
+def _sss_reflectance(s: Pointer[SceneParseState, MutUntrackedOrigin],
                      params: ParameterDictionary) -> RGB:
     """The subsurface `reflectance`, resolved even when it is a TEXTURE.
 
@@ -307,15 +307,15 @@ def _sss_reflectance(s: UnsafePointer[SceneParseState, MutUntrackedOrigin],
             var fbuf = alloc[UInt8](flen + 1)
             for k in range(flen): fbuf[unsafe_offset=k] = fstr.unsafe_ptr()[unsafe_offset=k]
             fbuf[unsafe_offset=flen] = UInt8(0)
-            var data_out = alloc[UnsafePointer[Float32, MutUntrackedOrigin]](1)
+            var data_out = alloc[Pointer[Float32, MutUntrackedOrigin]](1)
             var w_out = alloc[Int32](1)
             var h_out = alloc[Int32](1)
             w_out[unsafe_offset=0] = Int32(0); h_out[unsafe_offset=0] = Int32(0)
             var ok = external_call["load_texture_rgb", Int32,
-                UnsafePointer[UInt8, MutUntrackedOrigin],
-                UnsafePointer[UnsafePointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin],
-                UnsafePointer[Int32, MutUntrackedOrigin],
-                UnsafePointer[Int32, MutUntrackedOrigin],
+                Pointer[UInt8, MutUntrackedOrigin],
+                Pointer[Pointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin],
+                Pointer[Int32, MutUntrackedOrigin],
+                Pointer[Int32, MutUntrackedOrigin],
                 Int32](fbuf, data_out, w_out, h_out, Int32(0))
             var out = RGB(Float32(0.5))
             if ok != 0 and Int(w_out[unsafe_offset=0]) > 0 and Int(h_out[unsafe_offset=0]) > 0:
@@ -329,7 +329,7 @@ def _sss_reflectance(s: UnsafePointer[SceneParseState, MutUntrackedOrigin],
                 print("Note: subsurface \"reflectance\" is the texture '" + tname +
                       "'; the interior is one homogeneous medium, so its MEAN colour is used.")
                 _ = external_call["free_texture_rgb", Int32,
-                    UnsafePointer[Float32, MutUntrackedOrigin]](ptr)
+                    Pointer[Float32, MutUntrackedOrigin]](ptr)
             else:
                 print("Warning: subsurface \"reflectance\" texture '" + tname +
                       "' (" + fstr + ") failed to load — falling back to grey 0.5, which will render colourless.")
@@ -340,8 +340,8 @@ def _sss_reflectance(s: UnsafePointer[SceneParseState, MutUntrackedOrigin],
     return RGB(Float32(0.5))
 
 
-def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
-                                   s: UnsafePointer[SceneParseState, MutUntrackedOrigin],
+def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
+                                   s: Pointer[SceneParseState, MutUntrackedOrigin],
                                    inline_type: Bool = False):
     """Builds a NamedMaterial from a `Material`/`MakeNamedMaterial` directive.
     Scans every parameter ONCE, generically, into a ParameterDictionary
@@ -992,8 +992,8 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutUntrac
 
     mat_name.unsafe_free()
 
-def _psc_handle_named_material(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
-                               s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
+def _psc_handle_named_material(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
+                               s: Pointer[SceneParseState, MutUntrackedOrigin]):
     var mat_name = alloc[UInt8](PSC_NAME_MAX)
     _ = scanner_parse_quoted_string(handle, mat_name, PSC_NAME_MAX)
     s[unsafe_offset=0].cur_attr.mat_idx = Int32(-1)

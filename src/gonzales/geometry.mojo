@@ -6,14 +6,14 @@ from gonzales.spectrum import SampledWavelengths, SpectralSample, spec_refl, spe
 from gonzales.nanovdb import nvdb_sample_index, nvdb_majorant_at, nvdb_leaf_base, nvdb_leaf_value
 from gonzales.rng import PCG32
 
-# Value structs shared with GPU code can't hold Optional[UnsafePointer], so an
+# Value structs shared with GPU code can't hold Optional[Pointer], so an
 # "unset" pointer field is instead left at its `.unsafe_dangling()` sentinel --
 # which Mojo returns as an address equal to align_of[T](), NOT a fixed value
 # across pointee types (4 for Float32, 1 for UInt8, 8 for a pointer-sized
 # struct, ...). Use this helper instead of a hand-picked magic-number
 # threshold at each call site.
 @always_inline
-def _is_real_ptr[T: AnyType, O: Origin[mut=True]](ptr: UnsafePointer[T, O]) -> Bool:
+def _is_real_ptr[T: AnyType, O: Origin[mut=True]](ptr: Pointer[T, O]) -> Bool:
     return Int(ptr) > align_of[T]()
 
 # ── Math constants ─────────────────────────────────────────────────────────────
@@ -193,7 +193,7 @@ def point3f(s: Vec3f) -> Point3f:
     return Point3f(s[0], s[1], s[2])
 
 @always_inline
-def store_vec3[O: Origin[mut=True]](dst: UnsafePointer[Float32, O], slot: Int, v: Vec3f):
+def store_vec3[O: Origin[mut=True]](dst: Pointer[Float32, O], slot: Int, v: Vec3f):
     """Write a Point3f/Vec3f (pass `.to_simd()`) into a flat, stride-3
     Float32 buffer at `slot` -- i.e. dst[slot*3 : slot*3+3] -- replacing the
     dst[slot*3+0]=v.x; dst[slot*3+1]=v.y; dst[slot*3+2]=v.z pattern repeated
@@ -487,29 +487,29 @@ struct MeasuredBRDF_C(TrivialRegisterPassable):
     var n_theta_i:     Int32
     var n_phi_i:       Int32
     var n_wavelengths: Int32
-    var theta_i:     UnsafePointer[Float32, MutUntrackedOrigin]  # [n_theta_i]
-    var phi_i:       UnsafePointer[Float32, MutUntrackedOrigin]  # [n_phi_i]
-    var wavelengths: UnsafePointer[Float32, MutUntrackedOrigin]  # [n_wavelengths]
+    var theta_i:     Pointer[Float32, MutUntrackedOrigin]  # [n_theta_i]
+    var phi_i:       Pointer[Float32, MutUntrackedOrigin]  # [n_phi_i]
+    var wavelengths: Pointer[Float32, MutUntrackedOrigin]  # [n_wavelengths]
 
     # ndf / sigma: PiecewiseLinear2D<0> — Evaluate-only, no param axes, no CDF.
-    var ndf_data:   UnsafePointer[Float32, MutUntrackedOrigin]  # [ndf_ys * ndf_xs]
+    var ndf_data:   Pointer[Float32, MutUntrackedOrigin]  # [ndf_ys * ndf_xs]
     var ndf_xs:     Int32
     var ndf_ys:     Int32
-    var sigma_data: UnsafePointer[Float32, MutUntrackedOrigin]  # [sigma_ys * sigma_xs]
+    var sigma_data: Pointer[Float32, MutUntrackedOrigin]  # [sigma_ys * sigma_xs]
     var sigma_xs:   Int32
     var sigma_ys:   Int32
 
     # vndf / luminance: PiecewiseLinear2D<2>, param axes (phi_i, theta_i),
     # both Sample+Evaluate-capable (marginal/conditional CDFs built). Both
     # share the same param resolution, hence the same stride2_* pair below.
-    var vndf_data: UnsafePointer[Float32, MutUntrackedOrigin]  # [slices2 * vndf_ys * vndf_xs]
-    var vndf_marg: UnsafePointer[Float32, MutUntrackedOrigin]  # [slices2 * vndf_ys]
-    var vndf_cond: UnsafePointer[Float32, MutUntrackedOrigin]  # [slices2 * vndf_ys * vndf_xs]
+    var vndf_data: Pointer[Float32, MutUntrackedOrigin]  # [slices2 * vndf_ys * vndf_xs]
+    var vndf_marg: Pointer[Float32, MutUntrackedOrigin]  # [slices2 * vndf_ys]
+    var vndf_cond: Pointer[Float32, MutUntrackedOrigin]  # [slices2 * vndf_ys * vndf_xs]
     var vndf_xs:   Int32
     var vndf_ys:   Int32
-    var lum_data: UnsafePointer[Float32, MutUntrackedOrigin]   # [slices2 * lum_ys * lum_xs]
-    var lum_marg: UnsafePointer[Float32, MutUntrackedOrigin]   # [slices2 * lum_ys]
-    var lum_cond: UnsafePointer[Float32, MutUntrackedOrigin]   # [slices2 * lum_ys * lum_xs]
+    var lum_data: Pointer[Float32, MutUntrackedOrigin]   # [slices2 * lum_ys * lum_xs]
+    var lum_marg: Pointer[Float32, MutUntrackedOrigin]   # [slices2 * lum_ys]
+    var lum_cond: Pointer[Float32, MutUntrackedOrigin]   # [slices2 * lum_ys * lum_xs]
     var lum_xs:   Int32
     var lum_ys:   Int32
     var stride2_phi:   Int32  # PiecewiseLinear2D<2>'s per-param-axis stride
@@ -519,7 +519,7 @@ struct MeasuredBRDF_C(TrivialRegisterPassable):
     # Evaluate-only (no CDF) — its own stride triple (different Dimension
     # than vndf/luminance's, so the strides differ even though phi_i/theta_i
     # are shared).
-    var spectra_data: UnsafePointer[Float32, MutUntrackedOrigin]  # [slices3 * spectra_ys * spectra_xs]
+    var spectra_data: Pointer[Float32, MutUntrackedOrigin]  # [slices3 * spectra_ys * spectra_xs]
     var spectra_xs: Int32
     var spectra_ys: Int32
     var stride3_phi:    Int32
@@ -528,11 +528,11 @@ struct MeasuredBRDF_C(TrivialRegisterPassable):
 
 @fieldwise_init
 struct TriangleMesh_C(TrivialRegisterPassable):
-    var points: UnsafePointer[Float32, MutUntrackedOrigin]
-    var faceIndices: UnsafePointer[Int64, MutUntrackedOrigin]
-    var vertexIndices: UnsafePointer[Int64, MutUntrackedOrigin]
-    var uvs: UnsafePointer[Float32, MutUntrackedOrigin]   # nullable; stride 2 floats per vertex
-    var normals: UnsafePointer[Float32, MutUntrackedOrigin]  # nullable; stride 3 floats per vertex (shading normals)
+    var points: Pointer[Float32, MutUntrackedOrigin]
+    var faceIndices: Pointer[Int64, MutUntrackedOrigin]
+    var vertexIndices: Pointer[Int64, MutUntrackedOrigin]
+    var uvs: Pointer[Float32, MutUntrackedOrigin]   # nullable; stride 2 floats per vertex
+    var normals: Pointer[Float32, MutUntrackedOrigin]  # nullable; stride 3 floats per vertex (shading normals)
 
 # ── Ray ───────────────────────────────────────────────────────────────────────
 # See: docs/03_shapes_and_acceleration.md
@@ -1280,11 +1280,11 @@ def sample_homogeneous_free_flight(
 @always_inline
 def medium_sigma_t_spectral(
     med: Medium_C, wavelengths: SampledWavelengths,
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin], spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
 ) -> SpectralSample:
     """Upsample a medium's total extinction sigma_t = sigma_a + sigma_s from
     its 3 authored RGB channels to the 4 hero wavelengths via
@@ -1301,11 +1301,11 @@ def medium_sigma_t_spectral(
 
 def medium_sigma_s_spectral(
     med: Medium_C, wavelengths: SampledWavelengths,
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin], spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
 ) -> SpectralSample:
     """The SCATTERING coefficient sigma_s on the 4 hero lanes, upsampled with
     the SAME smooth curve medium_sigma_t_spectral uses for sigma_t.
@@ -1348,11 +1348,11 @@ def medium_sigma_s_spectral(
 @always_inline
 def medium_transmittance_ratio_spectral(
     med: Medium_C, t: Float32, pdf: Float32, wavelengths: SampledWavelengths,
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin], spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
 ) -> SpectralSample:
     """The chromatic RATIO of each hero wavelength's transmittance over a
     homogeneous segment of length `t` to the density it was actually SAMPLED
@@ -1383,11 +1383,11 @@ def medium_transmittance_ratio_spectral(
 @always_inline
 def spectral_free_flight_weight(
     med: Medium_C, ff: FreeFlight, t_surf: Float32, wavelengths: SampledWavelengths,
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin], spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
 ) -> SpectralSample:
     """Replaces `rgb_bands_to_spectral_sample(ff.weight.r, .g, .b, wl)` at
     every chromatic-media consumer. `ff` must come from
@@ -1460,7 +1460,7 @@ struct Grid_C(TrivialRegisterPassable):
     as transform.mojo's transform_points: m[0],m[4],m[8],m[12] combine for x).
     max_density is the majorant used for delta-tracking free-flight sampling.
     """
-    var density: UnsafePointer[Float32, MutUntrackedOrigin]  # flat, nz-major: idx = (z*ny + y)*nx + x
+    var density: Pointer[Float32, MutUntrackedOrigin]  # flat, nz-major: idx = (z*ny + y)*nx + x
     var nx: Int32
     var ny: Int32
     var nz: Int32
@@ -1542,7 +1542,7 @@ struct NvdbGrid_C(TrivialRegisterPassable):
     -flight sampling, same role as Grid_C.max_density -- coarser than a
     per-leaf majorant would be, a documented, deliberate v1 scope choice.
     """
-    var blob: UnsafePointer[UInt8, MutUntrackedOrigin]
+    var blob: Pointer[UInt8, MutUntrackedOrigin]
     var blob_size: Int64  # bytes -- CPU sampling never needs this (pure offset
                            # arithmetic, no bounds check), only the GPU upload's
                            # memcpy does; kept here rather than threaded as a
@@ -1935,9 +1935,9 @@ struct InfiniteLight_C(TrivialRegisterPassable):
     var tex_idx: Int32   # -1 = solid colour, >= 0 = texture
     var cdf_w: Int32     # env-map pixel width (also CDF width; 0 = no texture)
     var cdf_h: Int32     # env-map pixel height
-    var cdf_ptr: UnsafePointer[Float32, MutUntrackedOrigin]   # flat 2D CDF (marginal + conditional)
-    var pixels_ptr: UnsafePointer[Float32, MutUntrackedOrigin] # raw HDR pixels, 3 floats/pixel (CPU only)
-    var world_to_light: UnsafePointer[Float32, MutUntrackedOrigin]  # 16-float col-major inverse of light CTM
+    var cdf_ptr: Pointer[Float32, MutUntrackedOrigin]   # flat 2D CDF (marginal + conditional)
+    var pixels_ptr: Pointer[Float32, MutUntrackedOrigin] # raw HDR pixels, 3 floats/pixel (CPU only)
+    var world_to_light: Pointer[Float32, MutUntrackedOrigin]  # 16-float col-major inverse of light CTM
 
 # ── GPU / render pipeline helpers ─────────────────────────────────────────────
 
@@ -1945,8 +1945,8 @@ struct InfiniteLight_C(TrivialRegisterPassable):
 struct GpuTexture_C(TrivialRegisterPassable):
     comptime FORMAT_F32 = 0   # data holds Float32 linear RGB
     comptime FORMAT_U8 = 1    # data holds UInt8, decoded to linear through lut
-    var data: UnsafePointer[UInt8, MutUntrackedOrigin]    # device pointer: full mip pyramid, contiguous
-    var lut: UnsafePointer[Float32, MutUntrackedOrigin]   # device pointer: 256-entry byte -> linear table (FORMAT_U8 only)
+    var data: Pointer[UInt8, MutUntrackedOrigin]    # device pointer: full mip pyramid, contiguous
+    var lut: Pointer[Float32, MutUntrackedOrigin]   # device pointer: 256-entry byte -> linear table (FORMAT_U8 only)
     var width: Int32                                     # level-0 width
     var height: Int32                                    # level-0 height
     var n_levels: Int32                                  # number of mip levels stored in `data` (>=1)
@@ -1977,12 +1977,12 @@ struct NormalSlopeMap_C(TrivialRegisterPassable):
     Square, power-of-two maps only (the reference assumes the same).
     `res <= 0` means "this texture has no slope map" -- always test that
     before touching `slopes`, which is dangling in that case."""
-    var slopes: UnsafePointer[Float32, MutUntrackedOrigin]  # 2 floats/texel, row-major
+    var slopes: Pointer[Float32, MutUntrackedOrigin]  # 2 floats/texel, row-major
     var res:    Int32                                      # 0 => absent
 
 @always_inline
 def normal_slope_map_none() -> NormalSlopeMap_C:
-    return NormalSlopeMap_C(UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0))
+    return NormalSlopeMap_C(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0))
 
 @fieldwise_init
 struct ShadowTask_C(TrivialRegisterPassable):
@@ -2000,7 +2000,7 @@ struct LightSampler_C(TrivialRegisterPassable):
     cdf[0]=0, cdf[n]=1; pdf[i] = cdf[i+1] - cdf[i] = power_i / total_power.
     Built at parse time; on GPU the cdf pointer is patched to device memory.
     """
-    var cdf: UnsafePointer[Float32, MutUntrackedOrigin]  # n+1 entries
+    var cdf: Pointer[Float32, MutUntrackedOrigin]  # n+1 entries
     var n: Int32
     var _pad: Int32
 
@@ -2335,7 +2335,7 @@ def medium_is_heterogeneous(med: Medium_C) -> Bool:
 
 @always_inline
 def medium_grid_for(
-    med: Medium_C, grids: UnsafePointer[Grid_C, MutUntrackedOrigin]
+    med: Medium_C, grids: Pointer[Grid_C, MutUntrackedOrigin]
 ) -> Grid_C:
     """`grids[med.grid_idx]`, or an inert zero-extent placeholder when this
     medium has no dense grid -- a homogeneous or nanovdb medium has
@@ -2344,7 +2344,7 @@ def medium_grid_for(
     scope (free-flight sampling, NEE ratio tracking, shadow rays)."""
     if med.grid_idx < Int32(0):
         return Grid_C(
-            UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+            Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
             Int32(0), Int32(0), Int32(0),
             Point3f(Float32(0), Float32(0), Float32(0)),
             Point3f(Float32(0), Float32(0), Float32(0)),
@@ -2353,12 +2353,12 @@ def medium_grid_for(
 
 @always_inline
 def medium_nvdb_for(
-    med: Medium_C, nvdb_grids: UnsafePointer[NvdbGrid_C, MutUntrackedOrigin]
+    med: Medium_C, nvdb_grids: Pointer[NvdbGrid_C, MutUntrackedOrigin]
 ) -> NvdbGrid_C:
     """`nvdb_grids[med.nvdb_idx]`, or an inert placeholder. See medium_grid_for."""
     if med.nvdb_idx < Int32(0):
         return NvdbGrid_C(
-            UnsafePointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+            Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
             SIMD[DType.float32, 16](0), SIMD[DType.float32, 16](0),
             Vec3f(Float32(0), Float32(0), Float32(0)),
             Point3f(Float32(0), Float32(0), Float32(0)),
@@ -2368,11 +2368,11 @@ def medium_nvdb_for(
 @always_inline
 def medium_emission_spectral(
     c: RGB, wl: SampledWavelengths,
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin], spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
 ) -> SpectralSample:
     """RGB emission/radiance -> spectral, at the light boundary inside a medium.
     Falls back to a flat spectrum when no spectral table is loaded, so a
@@ -2386,8 +2386,8 @@ def medium_emission_spectral(
 
 def sample_free_flight(
     med: Medium_C,
-    grids: UnsafePointer[Grid_C, MutUntrackedOrigin],
-    nvdb_grids: UnsafePointer[NvdbGrid_C, MutUntrackedOrigin],
+    grids: Pointer[Grid_C, MutUntrackedOrigin],
+    nvdb_grids: Pointer[NvdbGrid_C, MutUntrackedOrigin],
     ray_org: Vec3f,
     ray_dir: Vec3f,
     t_surf: Float32,
@@ -2397,12 +2397,12 @@ def sample_free_flight(
     # takes its flat-spectrum fallback and never reads these.
     wavelengths: SampledWavelengths = SampledWavelengths(
         Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_res: Int = 0,
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
 ) -> FreeFlight:
     """Sample a free-flight distance through `med` along `ray_org + t*ray_dir`,
     up to the surface at `t_surf`. THE entry point every integrator should use:

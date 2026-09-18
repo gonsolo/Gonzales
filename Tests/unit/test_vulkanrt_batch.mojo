@@ -40,14 +40,14 @@ def test_vulkanrt_trace_rays_batches_and_matches_cpu_barycentrics() raises:
 
     var meshes = alloc[TriangleMesh_C](2)
     meshes[unsafe_offset=0] = TriangleMesh_C(
-        pts0, UnsafePointer[Int64, MutUntrackedOrigin].unsafe_dangling(), idx0,
-        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        pts0, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), idx0,
+        Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
     meshes[unsafe_offset=1] = TriangleMesh_C(
-        pts1, UnsafePointer[Int64, MutUntrackedOrigin].unsafe_dangling(), idx1,
-        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        pts1, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), idx1,
+        Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
 
     var point_counts = alloc[Int64](2)

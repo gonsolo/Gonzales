@@ -315,20 +315,20 @@ struct VolReservoirIO(TrivialRegisterPassable):
     All pointers default to `.unsafe_dangling()` and frame_w/frame_h to 0;
     vol_temporal_spatial_combine checks `_is_real_ptr`/`> 0` before touching
     them, the same null-safety contract the other two follow."""
-    var read:  UnsafePointer[VolReservoir, MutUntrackedOrigin]
-    var write: UnsafePointer[VolReservoir, MutUntrackedOrigin]
-    var gbuf_depth:       UnsafePointer[Float32, MutUntrackedOrigin]
-    var gbuf_world_pos:   UnsafePointer[Float32, MutUntrackedOrigin]
+    var read:  Pointer[VolReservoir, MutUntrackedOrigin]
+    var write: Pointer[VolReservoir, MutUntrackedOrigin]
+    var gbuf_depth:       Pointer[Float32, MutUntrackedOrigin]
+    var gbuf_world_pos:   Pointer[Float32, MutUntrackedOrigin]
     var frame_w: Int32
     var frame_h: Int32
 
 @always_inline
 def vol_reservoir_io_null() -> VolReservoirIO:
     return VolReservoirIO(
-        read=UnsafePointer[VolReservoir, MutUntrackedOrigin].unsafe_dangling(),
-        write=UnsafePointer[VolReservoir, MutUntrackedOrigin].unsafe_dangling(),
-        gbuf_depth=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-        gbuf_world_pos=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        read=Pointer[VolReservoir, MutUntrackedOrigin].unsafe_dangling(),
+        write=Pointer[VolReservoir, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_depth=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_world_pos=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0),
     )
 

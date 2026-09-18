@@ -59,7 +59,7 @@ comptime SPPM_DEFAULT_RADIUS_FRACTION = Float32(0.006)
 # Scaling by the scene's bounding sphere makes the default mean the same thing
 # at every scale. An explicit CLI or scene-file radius still wins outright.
 def _resolve_sppm_params(
-    psc: UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin],
+    psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
     ref sd: SceneDescriptor2_C,
     sppm_photons_cli: Int32,
     sppm_radius_cli: Float32,
@@ -104,8 +104,8 @@ def _resolve_vcm_spp(vcm_spp_cli: Int32, scene_spp: Int32) -> Int:
 
 # Generate Sobol matrices from the Joe-Kuo data file.
 # Returns a heap-allocated pointer to 21201*52 UInt32 values, or null on error.
-def _generate_sobol_matrices(path: String) -> Optional[UnsafePointer[UInt32, MutUntrackedOrigin]]:
-    var file_buf: UnsafePointer[UInt8, MutUntrackedOrigin]
+def _generate_sobol_matrices(path: String) -> Optional[Pointer[UInt32, MutUntrackedOrigin]]:
+    var file_buf: Pointer[UInt8, MutUntrackedOrigin]
     var file_size: Int
     try:
         var f = open(path, "r")
@@ -251,20 +251,20 @@ def _generate_sobol_matrices(path: String) -> Optional[UnsafePointer[UInt32, Mut
 
 
 def _gpu_upload_scene(
-    psc: UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin],
-    sobol: UnsafePointer[UInt32, MutUntrackedOrigin],
+    psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
+    sobol: Pointer[UInt32, MutUntrackedOrigin],
     n_pixels: Int,
     # Decomposed, NOT a single by-value `spectral: SpectralHandle` param --
     # see spectrum.mojo's long comment on the confirmed by-value SpectralHandle
     # miscompilation; this GPU-upload path reproduced the same corruption
     # class (see project_priority_backlog memory item 3).
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_res: Int = 0,
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-) -> UnsafePointer[GpuSceneHandle, MutUntrackedOrigin]:
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+) -> Pointer[GpuSceneHandle, MutUntrackedOrigin]:
     var film = FilmDims(psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h)
     var n_meshes = Int(psc[unsafe_offset=0].mesh_count)
     var pts_counts = List[Int64](capacity=max(n_meshes, 1))
@@ -349,8 +349,8 @@ def _dbg_vlen(x: Float32, y: Float32, z: Float32) -> Float32:
 # representative. Returns (mesh_material_idx, mesh_al_idx); the latter is
 # -1 for ordinary (non-light) meshes.
 def _build_mesh_light_info(
-    psc: UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin],
-) -> Tuple[UnsafePointer[Int64, MutUntrackedOrigin], UnsafePointer[Int32, MutUntrackedOrigin]]:
+    psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
+) -> Tuple[Pointer[Int64, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin]]:
     var n_meshes = Int(psc[unsafe_offset=0].mesh_count)
     var mat_idx = alloc[Int64](max(n_meshes, 1))
     var al_idx = alloc[Int32](max(n_meshes, 1))
@@ -392,7 +392,7 @@ def _build_mesh_light_info(
     return (mat_idx, al_idx)
 
 def debug_trace_pixel(
-    path: UnsafePointer[UInt8, MutUntrackedOrigin],
+    path: Pointer[UInt8, MutUntrackedOrigin],
     px: Int32, py: Int32,
     override_w: Int32 = Int32(0), override_h: Int32 = Int32(0),
 ):
@@ -662,7 +662,7 @@ def debug_trace_pixel(
 
 
 def debug_render_vulkanrt(
-    path: UnsafePointer[UInt8, MutUntrackedOrigin],
+    path: Pointer[UInt8, MutUntrackedOrigin],
     verbose: Bool = False,
 ):
     """Task #162 step 4: build a real Vulkan RT scene from the parsed
@@ -840,8 +840,8 @@ def debug_render_vulkanrt(
 
 
 def parse_and_render(
-    path: UnsafePointer[UInt8, MutUntrackedOrigin],
-    sobol_matrices: UnsafePointer[UInt32, MutUntrackedOrigin],
+    path: Pointer[UInt8, MutUntrackedOrigin],
+    sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     use_gpu: Bool,
     spectral: SpectralHandle = null_spectral_handle(),
     override_w: Int32 = Int32(0), override_h: Int32 = Int32(0),
@@ -994,7 +994,7 @@ def parse_and_render(
             # camera pass every sample (n_light_paths_merge is always
             # >= n_pix, so one scene sized for it covers both).
             var use_vk_vcm = use_vulkan_rt_shade
-            var interop_scene_vcm = UnsafePointer[UInt8, MutUntrackedOrigin].unsafe_dangling()
+            var interop_scene_vcm = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling()
             var interop_rays_buf_vcm: Optional[DeviceBuffer[DType.float32]] = None
             var interop_results_buf_vcm: Optional[DeviceBuffer[DType.float32]] = None
             var mesh_material_idx_buf_vcm: Optional[DeviceBuffer[DType.uint8]] = None
@@ -1033,12 +1033,12 @@ def parse_and_render(
                     # already keeps instanced/curve/sphere scenes off this
                     # path entirely, so template_count/instance_count/
                     # n_curve_leaves are always 0 here.
-                    var no_templates_vcm = UnsafePointer[Int64, MutUntrackedOrigin].unsafe_dangling()
-                    var no_instances_vcm = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling()
-                    var no_instance_tmpl_vcm = UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling()
-                    var no_curve_aabbs_vcm = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling()
-                    var no_curve_i32_vcm = UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling()
-                    var no_curve_data_vcm = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling()
+                    var no_templates_vcm = Pointer[Int64, MutUntrackedOrigin].unsafe_dangling()
+                    var no_instances_vcm = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
+                    var no_instance_tmpl_vcm = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
+                    var no_curve_aabbs_vcm = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
+                    var no_curve_i32_vcm = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
+                    var no_curve_data_vcm = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
                     interop_scene_vcm = vulkaninterop_rt_create_scene(
                         vmeshes_vcm, Int64(n_meshes_vk_vcm), point_counts_vcm, vidx_counts_vcm,
                         Int64(0), no_templates_vcm, no_templates_vcm,
@@ -1115,7 +1115,7 @@ def parse_and_render(
         if use_vulkan_rt_shade and use_restir:
             print("Note: --restir batch mode does not support --vulkan-rt-shade yet "
                   "(gpu_render_sample has no Vulkan RT interop path) -- using CUDA intersection.")
-        var interop_scene = UnsafePointer[UInt8, MutUntrackedOrigin].unsafe_dangling()
+        var interop_scene = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling()
         var interop_rays_buf_opt: Optional[DeviceBuffer[DType.float32]] = None
         var interop_results_buf_opt: Optional[DeviceBuffer[DType.float32]] = None
         var mesh_material_idx_buf_opt: Optional[DeviceBuffer[DType.uint8]] = None
@@ -1540,7 +1540,7 @@ def parse_and_render(
                 Int32(32), Int32(32),
                 sp_ptr.unsafe_ptr(), sd, results.unsafe_ptr(), psc[unsafe_offset=0].max_depth,
                 quiet=False, guide_read=null_guide(),
-                write_guides=UnsafePointer[GuideGrid, MutUntrackedOrigin].unsafe_dangling(), n_write_guides=0,
+                write_guides=Pointer[GuideGrid, MutUntrackedOrigin].unsafe_dangling(), n_write_guides=0,
                 use_restir=use_restir, use_gi=use_restir and use_restir_gi)
             # sp_ptr freed automatically
 
@@ -1590,8 +1590,8 @@ def parse_and_render(
 
 
 def render_interactive(
-    path: UnsafePointer[UInt8, MutUntrackedOrigin],
-    sobol: UnsafePointer[UInt32, MutUntrackedOrigin],
+    path: Pointer[UInt8, MutUntrackedOrigin],
+    sobol: Pointer[UInt32, MutUntrackedOrigin],
     use_gpu: Bool,
     spectral: SpectralHandle = null_spectral_handle(),
     fullscreen: Bool = False,
@@ -1655,7 +1655,7 @@ def render_interactive(
     var fh = psc[unsafe_offset=0].film_h
     var n_pixels = Int(fw) * Int(fh)
 
-    var handle = UnsafePointer[GpuSceneHandle, MutUntrackedOrigin].unsafe_dangling()
+    var handle = Pointer[GpuSceneHandle, MutUntrackedOrigin].unsafe_dangling()
     if use_gpu:
         handle = _gpu_upload_scene(psc, sobol, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
         if not _is_real_ptr(handle):
@@ -1716,7 +1716,7 @@ def render_interactive(
     var frame_count = 0
 
     # Mode-specific buffers — dangling until allocated below
-    var sd           = UnsafePointer[SceneDescriptor2_C, MutUntrackedOrigin].unsafe_dangling()
+    var sd           = Pointer[SceneDescriptor2_C, MutUntrackedOrigin].unsafe_dangling()
     # Phase 2.3+2.5 (docs/A2_restir_migration_plan.md): two persistent
     # DIReservoir buffers per pixel, ping-ponged each frame -- CPU-only
     # (--restir has no GPU wiring yet, see restir_di.mojo's header).
@@ -1729,23 +1729,23 @@ def render_interactive(
     # pixel written by exactly one thread, at 1 spp/frame) makes both
     # race-free without any locking. Swapped after each frame completes,
     # below.
-    var restir_buf_a = UnsafePointer[DIReservoir, MutUntrackedOrigin].unsafe_dangling()
-    var restir_buf_b = UnsafePointer[DIReservoir, MutUntrackedOrigin].unsafe_dangling()
-    var restir_read  = UnsafePointer[DIReservoir, MutUntrackedOrigin].unsafe_dangling()
-    var restir_write = UnsafePointer[DIReservoir, MutUntrackedOrigin].unsafe_dangling()
-    var gi_buf_a = UnsafePointer[GIReservoir, MutUntrackedOrigin].unsafe_dangling()
-    var gi_buf_b = UnsafePointer[GIReservoir, MutUntrackedOrigin].unsafe_dangling()
-    var gi_read  = UnsafePointer[GIReservoir, MutUntrackedOrigin].unsafe_dangling()
-    var gi_write = UnsafePointer[GIReservoir, MutUntrackedOrigin].unsafe_dangling()
+    var restir_buf_a = Pointer[DIReservoir, MutUntrackedOrigin].unsafe_dangling()
+    var restir_buf_b = Pointer[DIReservoir, MutUntrackedOrigin].unsafe_dangling()
+    var restir_read  = Pointer[DIReservoir, MutUntrackedOrigin].unsafe_dangling()
+    var restir_write = Pointer[DIReservoir, MutUntrackedOrigin].unsafe_dangling()
+    var gi_buf_a = Pointer[GIReservoir, MutUntrackedOrigin].unsafe_dangling()
+    var gi_buf_b = Pointer[GIReservoir, MutUntrackedOrigin].unsafe_dangling()
+    var gi_read  = Pointer[GIReservoir, MutUntrackedOrigin].unsafe_dangling()
+    var gi_write = Pointer[GIReservoir, MutUntrackedOrigin].unsafe_dangling()
     # Phase 6: ping-ponged SMSReservoir buffers, same race-free scheme as
     # restir_buf_a/b and gi_buf_a/b above -- SMS_MAX_FINALIZED_WEIGHT
     # (shading.mojo) was applied proactively from the start (not
     # discovered via a live bug this time, unlike DI/GI's own history),
     # so no separate bug-fix narrative applies here.
-    var sms_buf_a = UnsafePointer[SMSReservoir, MutUntrackedOrigin].unsafe_dangling()
-    var sms_buf_b = UnsafePointer[SMSReservoir, MutUntrackedOrigin].unsafe_dangling()
-    var sms_read  = UnsafePointer[SMSReservoir, MutUntrackedOrigin].unsafe_dangling()
-    var sms_write = UnsafePointer[SMSReservoir, MutUntrackedOrigin].unsafe_dangling()
+    var sms_buf_a = Pointer[SMSReservoir, MutUntrackedOrigin].unsafe_dangling()
+    var sms_buf_b = Pointer[SMSReservoir, MutUntrackedOrigin].unsafe_dangling()
+    var sms_read  = Pointer[SMSReservoir, MutUntrackedOrigin].unsafe_dangling()
+    var sms_write = Pointer[SMSReservoir, MutUntrackedOrigin].unsafe_dangling()
     # Phase 7.3: ping-ponged VolReservoir buffers, same race-free scheme as
     # restir_buf_a/b above -- INDEPENDENT of use_restir, matching
     # use_sms_restir's own independence (this is the medium sampler's own
@@ -1753,10 +1753,10 @@ def render_interactive(
     # through (see render_all_tiles's vol_io construction below), so
     # vol_temporal_spatial_combine's spatial pass self-disables, mirroring
     # the GPU wiring's own scope exactly (commit 1685154c).
-    var vol_buf_a = UnsafePointer[VolReservoir, MutUntrackedOrigin].unsafe_dangling()
-    var vol_buf_b = UnsafePointer[VolReservoir, MutUntrackedOrigin].unsafe_dangling()
-    var vol_read  = UnsafePointer[VolReservoir, MutUntrackedOrigin].unsafe_dangling()
-    var vol_write = UnsafePointer[VolReservoir, MutUntrackedOrigin].unsafe_dangling()
+    var vol_buf_a = Pointer[VolReservoir, MutUntrackedOrigin].unsafe_dangling()
+    var vol_buf_b = Pointer[VolReservoir, MutUntrackedOrigin].unsafe_dangling()
+    var vol_read  = Pointer[VolReservoir, MutUntrackedOrigin].unsafe_dangling()
+    var vol_write = Pointer[VolReservoir, MutUntrackedOrigin].unsafe_dangling()
     # Phase 4: ping-ponged GIReservoir buffers, same scheme as
     # restir_buf_a/b above (race-free for the same reason: read only from
     # `gi_read`, write only to `gi_write`, swapped after each frame).
@@ -2040,7 +2040,7 @@ def render_interactive(
                 Int32(0), Int32(0), fw, fh,
                 Int32(32), Int32(32),
                 sp_int.unsafe_ptr(), sd, results.unsafe_ptr(), psc[unsafe_offset=0].max_depth, True,
-                guide_read=null_guide(), write_guides=UnsafePointer[GuideGrid, MutUntrackedOrigin].unsafe_dangling(),
+                guide_read=null_guide(), write_guides=Pointer[GuideGrid, MutUntrackedOrigin].unsafe_dangling(),
                 n_write_guides=0, use_restir=use_restir, frame_w=fw, restir_io=restir_io,
                 use_gi=use_restir_gi, gi_io=gi_io,
                 use_sms_restir=use_sms_restir, sms_io=sms_io, vol_io=vol_io)

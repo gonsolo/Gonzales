@@ -229,7 +229,7 @@ def _visible_transmittance(
     a: Point3f, b: Point3f,
     med_idx: Int32,
     ref sd:      SceneDescriptor2_C,
-    scratch: UnsafePointer[Intersection_C, MutUntrackedOrigin],
+    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
     wl:      SampledWavelengths,
 ) -> SpectralSample:
     """Returns transmittance along segment AB, spectrally, or black if
@@ -417,7 +417,7 @@ def _bdpt_nee_contribute(
     gn: Vec3f,
     cur_med_idx: Int32,
     ref sd: SceneDescriptor2_C,
-    scratch: UnsafePointer[Intersection_C, MutUntrackedOrigin],
+    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
     wl: SampledWavelengths,
     eps: Float32 = Float32(0.0001),
 ) -> SpectralSample:
@@ -982,7 +982,7 @@ def _pdf_solid_to_area(pdf_solid: Float32, cos_theta: Float32, dist2: Float32) -
 @always_inline
 def _bdpt_store_lvc_vertex(
     v: BDPTVertex,
-    lvc: UnsafePointer[BDPTVertex, MutUntrackedOrigin],
+    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
     lp_idx: Int,
     local_idx: Int,
 ):
@@ -1007,8 +1007,8 @@ def _bdpt_store_lvc_vertex(
 @always_inline
 def _bdpt_world_to_raster(
     p_world: Vec3f,
-    w2c: UnsafePointer[Float32, MutUntrackedOrigin],     # inverse(cameraToWorld), col-major
-    c2r: UnsafePointer[Float32, MutUntrackedOrigin],     # inverse of the 3x3 raster->camera map, row-major
+    w2c: Pointer[Float32, MutUntrackedOrigin],     # inverse(cameraToWorld), col-major
+    c2r: Pointer[Float32, MutUntrackedOrigin],     # inverse of the 3x3 raster->camera map, row-major
     fw: Int32, fh: Int32,
 ) -> Tuple[Bool, Float32, Float32, Float32]:
     """Project a world point onto the film. Returns (ok, filmX, filmY,
@@ -1050,10 +1050,10 @@ def _bdpt_world_to_raster(
 def _bdpt_connect_to_camera(
     lv: BDPTVertex,
     ref sd: SceneDescriptor2_C,
-    scratch: UnsafePointer[Intersection_C, MutUntrackedOrigin],
+    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
     cam_pos: Vec3f,
-    w2c: UnsafePointer[Float32, MutUntrackedOrigin],
-    c2r: UnsafePointer[Float32, MutUntrackedOrigin],
+    w2c: Pointer[Float32, MutUntrackedOrigin],
+    c2r: Pointer[Float32, MutUntrackedOrigin],
     fw: Int32, fh: Int32,
     px_scale: Float32,
     n_light_paths_f: Float32,
@@ -1176,8 +1176,8 @@ def _bdpt_connect_to_cache(
     cv: BDPTVertex,
     ref sd: SceneDescriptor2_C,
     has_med: Bool,
-    scratch: UnsafePointer[Intersection_C, MutUntrackedOrigin],
-    lvc: UnsafePointer[BDPTVertex, MutUntrackedOrigin],
+    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
     lp_idx: Int,
     path_len: Int,
     mis_vm_weight_factor: Float32,
@@ -1217,14 +1217,14 @@ def _bdpt_connect_to_cache(
 def _bdpt_connect_to_cache_deferred(
     cv: BDPTVertex,
     ref sd: SceneDescriptor2_C,
-    lvc: UnsafePointer[BDPTVertex, MutUntrackedOrigin],
+    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
     lp_idx: Int,
     path_len: Int,
     mis_vm_weight_factor: Float32,
-    shadow_rays: UnsafePointer[Float32, MutUntrackedOrigin],
-    shadow_pending: UnsafePointer[SpectralSample, MutUntrackedOrigin],
-    shadow_valid: UnsafePointer[Int8, MutUntrackedOrigin],
-    shadow_seg_med: UnsafePointer[Int32, MutUntrackedOrigin],
+    shadow_rays: Pointer[Float32, MutUntrackedOrigin],
+    shadow_pending: Pointer[SpectralSample, MutUntrackedOrigin],
+    shadow_valid: Pointer[Int8, MutUntrackedOrigin],
+    shadow_seg_med: Pointer[Int32, MutUntrackedOrigin],
 ):
     """Task #163 stage 5: Vulkan-RT-batched counterpart to
     _bdpt_connect_to_cache -- instead of resolving each connection's shadow
@@ -1281,15 +1281,15 @@ def _bdpt_connect_to_cache_deferred(
 # sppm.mojo's _HSIZE bucket count and _hash_cell function directly -- no
 # reason for the grid math itself to differ between the two use sites.
 
-def _bdpt_reset_merge_cell(heads: UnsafePointer[Int32, MutUntrackedOrigin], h: Int):
+def _bdpt_reset_merge_cell(heads: Pointer[Int32, MutUntrackedOrigin], h: Int):
     heads[unsafe_offset=h] = Int32(-1)
 
 def _bdpt_insert_merge_vertex[use_gpu: Bool](
     k: Int,
-    lvc: UnsafePointer[BDPTVertex, MutUntrackedOrigin],
-    lvc_path_len: UnsafePointer[Int32, MutUntrackedOrigin],
-    merge_next: UnsafePointer[Int32, MutUntrackedOrigin],
-    heads: UnsafePointer[Int32, MutUntrackedOrigin],
+    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
+    lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
+    merge_next: Pointer[Int32, MutUntrackedOrigin],
+    heads: Pointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
 ):
     """Insert LVC slot `k` into the merge hash grid, unless it's an unused
@@ -1314,11 +1314,11 @@ def _bdpt_insert_merge_vertex[use_gpu: Bool](
         heads[unsafe_offset=h] = Int32(k)
 
 def _bdpt_build_merge_grid(
-    lvc: UnsafePointer[BDPTVertex, MutUntrackedOrigin],
-    lvc_path_len: UnsafePointer[Int32, MutUntrackedOrigin],
+    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
+    lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
     n_light_paths: Int,
-    merge_next: UnsafePointer[Int32, MutUntrackedOrigin],
-    heads: UnsafePointer[Int32, MutUntrackedOrigin],
+    merge_next: Pointer[Int32, MutUntrackedOrigin],
+    heads: Pointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
 ):
     """CPU-only grid build (mirrors sppm.mojo's _build_grid): reset all
@@ -1342,9 +1342,9 @@ def _bdpt_build_merge_grid(
 def _bdpt_merge_from_cache(
     cv: BDPTVertex,
     ref sd: SceneDescriptor2_C,
-    lvc: UnsafePointer[BDPTVertex, MutUntrackedOrigin],
-    merge_next: UnsafePointer[Int32, MutUntrackedOrigin],
-    heads: UnsafePointer[Int32, MutUntrackedOrigin],
+    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
+    merge_next: Pointer[Int32, MutUntrackedOrigin],
+    heads: Pointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
     r2: Float32,
     norm: Float32,
@@ -1427,18 +1427,18 @@ def _bdpt_merge_from_cache(
 
 
 def _bdpt_trace_camera_and_connect[use_gpu: Bool](
-    r2c:     UnsafePointer[Float32, MutUntrackedOrigin],
-    c2w:     UnsafePointer[Float32, MutUntrackedOrigin],
+    r2c:     Pointer[Float32, MutUntrackedOrigin],
+    c2w:     Pointer[Float32, MutUntrackedOrigin],
     px:      Int, py:      Int,
     ref sd:      SceneDescriptor2_C,
     mut pcg: PCG32,
     has_med: Bool,
-    scratch: UnsafePointer[Intersection_C, MutUntrackedOrigin],
-    lvc:     UnsafePointer[BDPTVertex, MutUntrackedOrigin],
+    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    lvc:     Pointer[BDPTVertex, MutUntrackedOrigin],
     lp_idx:  Int,
     path_len: Int,
-    merge_next: UnsafePointer[Int32, MutUntrackedOrigin],
-    merge_heads: UnsafePointer[Int32, MutUntrackedOrigin],
+    merge_next: Pointer[Int32, MutUntrackedOrigin],
+    merge_heads: Pointer[Int32, MutUntrackedOrigin],
     merge_inv_cell: Float32,
     merge_r2: Float32,
     merge_norm: Float32,
@@ -1570,8 +1570,8 @@ struct VCMCameraPathState_C(TrivialRegisterPassable):
     var previous_dielectric_ior: Float32
 
 def _bdpt_camera_path_init[use_gpu: Bool](
-    r2c:     UnsafePointer[Float32, MutUntrackedOrigin],
-    c2w:     UnsafePointer[Float32, MutUntrackedOrigin],
+    r2c:     Pointer[Float32, MutUntrackedOrigin],
+    c2w:     Pointer[Float32, MutUntrackedOrigin],
     px:      Int, py:      Int,
     mut pcg: PCG32,
     px_scale: Float32,
@@ -1667,12 +1667,12 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     mut pcg: PCG32,
     has_med: Bool,
     inter: Intersection_C,
-    scratch: UnsafePointer[Intersection_C, MutUntrackedOrigin],
-    lvc:     UnsafePointer[BDPTVertex, MutUntrackedOrigin],
+    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    lvc:     Pointer[BDPTVertex, MutUntrackedOrigin],
     lp_idx:  Int,
     path_len: Int,
-    merge_next: UnsafePointer[Int32, MutUntrackedOrigin],
-    merge_heads: UnsafePointer[Int32, MutUntrackedOrigin],
+    merge_next: Pointer[Int32, MutUntrackedOrigin],
+    merge_heads: Pointer[Int32, MutUntrackedOrigin],
     merge_inv_cell: Float32,
     merge_r2: Float32,
     merge_norm: Float32,
@@ -1702,10 +1702,10 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     # shadow ray anywhere) is UNCHANGED regardless of this flag -- a
     # deliberately narrow first slice, not "all shadow rays on Vulkan RT".
     defer_shadow_rays: Bool = False,
-    shadow_rays: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    shadow_pending: UnsafePointer[SpectralSample, MutUntrackedOrigin] = UnsafePointer[SpectralSample, MutUntrackedOrigin].unsafe_dangling(),
-    shadow_valid: UnsafePointer[Int8, MutUntrackedOrigin] = UnsafePointer[Int8, MutUntrackedOrigin].unsafe_dangling(),
-    shadow_seg_med: UnsafePointer[Int32, MutUntrackedOrigin] = UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+    shadow_rays: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    shadow_pending: Pointer[SpectralSample, MutUntrackedOrigin] = Pointer[SpectralSample, MutUntrackedOrigin].unsafe_dangling(),
+    shadow_valid: Pointer[Int8, MutUntrackedOrigin] = Pointer[Int8, MutUntrackedOrigin].unsafe_dangling(),
+    shadow_seg_med: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Bool:
     """Task #163 stage 4: wavefront-staged variant of ONE bounce iteration of
     `_bdpt_trace_camera_and_connect`'s main loop (bdpt.mojo:887-1684), the
@@ -2820,8 +2820,8 @@ def _bdpt_light_path_init[use_gpu: Bool](
     mut pcg: PCG32,
     default_emit_med: Int32,
     lp_idx: Int,
-    lvc: UnsafePointer[BDPTVertex, MutUntrackedOrigin],
-    lvc_path_len: UnsafePointer[Int32, MutUntrackedOrigin],
+    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
+    lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
     mis_vc_weight_factor: Float32,
     pass_wl: SampledWavelengths,
 ) -> VCMLightPathState_C:
@@ -2996,7 +2996,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
     mut pcg: PCG32,
     has_med: Bool,
     inter: Intersection_C,
-    lvc:      UnsafePointer[BDPTVertex, MutUntrackedOrigin],
+    lvc:      Pointer[BDPTVertex, MutUntrackedOrigin],
     lp_idx:   Int,
     mis_vc_weight_factor: Float32,
     mis_vm_weight_factor: Float32,
@@ -3595,10 +3595,10 @@ def _bdpt_trace_light_path[use_gpu: Bool](
     mut pcg: PCG32,
     has_med: Bool,
     default_emit_med: Int32,
-    scratch: UnsafePointer[Intersection_C, MutUntrackedOrigin],
-    lvc:      UnsafePointer[BDPTVertex, MutUntrackedOrigin],
+    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    lvc:      Pointer[BDPTVertex, MutUntrackedOrigin],
     lp_idx:   Int,
-    lvc_path_len: UnsafePointer[Int32, MutUntrackedOrigin],
+    lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
     mis_vc_weight_factor: Float32,
     mis_vm_weight_factor: Float32,
     pass_wl: SampledWavelengths,
@@ -3709,11 +3709,11 @@ def _eval_conductor_ggx_spectral(
     wi:    Vec3f,
     alpha: Float32,
     f0: RGB,
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin], spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
     wavelengths: SampledWavelengths,
 ) -> SpectralSample:
     """Spectral counterpart of _eval_conductor_ggx — same GGX/Schlick math,
@@ -3839,11 +3839,11 @@ def _eval_vertex_spectral(
     v:   BDPTVertex,
     dir_to_other:  Vec3f,
     ref sd:  SceneDescriptor2_C,
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin], spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
     wavelengths: SampledWavelengths,
 ) -> SpectralSample:
     """BSDF (or phase) x cos at vertex `v` toward `dir_to_other`, in the
@@ -4081,7 +4081,7 @@ def _connect(
     lv: BDPTVertex,  # light-subpath vertex (including light point itself)
     ref sd: SceneDescriptor2_C,
     has_med: Bool,
-    scratch: UnsafePointer[Intersection_C, MutUntrackedOrigin],
+    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
     mis_vm_weight_factor: Float32,
 ) -> SpectralSample:
     """Evaluate the contribution of connecting cv to lv via a shadow ray.
@@ -4324,12 +4324,12 @@ def _connect_unweighted(
 # ── Main BDPT render ──────────────────────────────────────────────────────────
 
 def _bdpt_render_core(
-    psc:      UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin],
+    psc:      Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
     ref sd:       SceneDescriptor2_C,
     n_spp:    Int,
     n_photons_req: Int,
     verbose:  Bool,
-) -> Tuple[UnsafePointer[Float32, MutUntrackedOrigin], UnsafePointer[Float32, MutUntrackedOrigin]]:
+) -> Tuple[Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]]:
     """Bidirectional Path Tracing main loop with real VCM connect+merge MIS
     (Light Vertex Cache architecture — see the module docstring above),
     factored out of `vcm_render` (its CLI-facing caller, below) so the CPU
@@ -4586,10 +4586,10 @@ def _bdpt_render_core(
         albedo_pixels[unsafe_offset=i*3+2] = a.b
     albedo_buf.unsafe_free()
 
-    return Tuple[UnsafePointer[Float32, MutUntrackedOrigin], UnsafePointer[Float32, MutUntrackedOrigin]](pixels, albedo_pixels)
+    return Tuple[Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]](pixels, albedo_pixels)
 
 def vcm_render(
-    psc:      UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin],
+    psc:      Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
     ref sd:       SceneDescriptor2_C,
     n_spp:    Int,
     n_photons: Int,
@@ -4613,7 +4613,7 @@ def vcm_render(
     var depth = alloc[Float32](n_pix)
     var sd_local = sd
     render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world, Int32(0), Int32(0),
-                        psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, UnsafePointer(to=sd_local), normals, depth)
+                        psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, Pointer(to=sd_local), normals, depth)
 
     var denoised = alloc[Float32](n_pix * 3)
     if no_denoise:
@@ -4648,55 +4648,55 @@ def vcm_render(
 # helpers from .sppm).
 
 def _bdpt_emit_light_paths_gpu(
-    lvc: UnsafePointer[BDPTVertex, MutUntrackedOrigin],
-    lvc_path_len: UnsafePointer[Int32, MutUntrackedOrigin],
+    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
+    lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
     mis_vc_weight_factor: Float32,
     mis_vm_weight_factor: Float32,
-    inter_scratch: UnsafePointer[Intersection_C, MutUntrackedOrigin],
+    inter_scratch: Pointer[Intersection_C, MutUntrackedOrigin],
     n_light_paths_dp: Int64,
     default_emit_med: Int32,
     seed: UInt64,
     pass_idx_dp: Int64,
-    bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: UnsafePointer[Material_C, MutUntrackedOrigin],
-    areaLights: UnsafePointer[AreaLight_C, MutUntrackedOrigin],
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    materials: Pointer[Material_C, MutUntrackedOrigin],
+    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
     areaLightCount: Int64,
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
     sphereCount: Int64,
-    curves: UnsafePointer[Curve_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
     curveCount: Int64,
-    mediums: UnsafePointer[Medium_C, MutUntrackedOrigin],
+    mediums: Pointer[Medium_C, MutUntrackedOrigin],
     mediumCount: Int64,
-    mediumInterfaces: UnsafePointer[MediumInterface_C, MutUntrackedOrigin],
+    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
     mediumIfaceCount: Int64,
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
     blasCount: Int64,
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin],
+    instances: Pointer[Instance_C, MutUntrackedOrigin],
     instanceCount: Int64,
-    distantLights: UnsafePointer[DistantLight_C, MutUntrackedOrigin],
+    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
     distantLightCount: Int64,
-    infiniteLights: UnsafePointer[InfiniteLight_C, MutUntrackedOrigin],
+    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
     infiniteLightCount: Int64,
-    pointLights: UnsafePointer[PointLight_C, MutUntrackedOrigin],
+    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
     pointLightCount: Int64,
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin] = UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
     measuredBrdfCount: Int64 = Int64(0),
-    gpuTextures: UnsafePointer[GpuTexture_C, MutUntrackedOrigin] = UnsafePointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
+    gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
     gpuTextureCount: Int64 = Int64(0),
     # Device-resident density fields, for the free-flight sampler (see the
     # matching comment on the bounce kernels).
-    grids: UnsafePointer[Grid_C, MutUntrackedOrigin] = UnsafePointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
+    grids: Pointer[Grid_C, MutUntrackedOrigin] = Pointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
     n_grids: Int64 = Int64(0),
-    nvdb_grids: UnsafePointer[NvdbGrid_C, MutUntrackedOrigin] = UnsafePointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
+    nvdb_grids: Pointer[NvdbGrid_C, MutUntrackedOrigin] = Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
     n_nvdb_grids: Int64 = Int64(0),
 ):
     """One thread per light path, each writing only its own dedicated
@@ -4732,51 +4732,51 @@ def _bdpt_emit_light_paths_gpu(
                                  mis_vc_weight_factor, mis_vm_weight_factor, pass_wl)
 
 def _bdpt_splat_light_paths_gpu(
-    accum: UnsafePointer[Float32, MutUntrackedOrigin],
-    lvc: UnsafePointer[BDPTVertex, MutUntrackedOrigin],
-    lvc_path_len: UnsafePointer[Int32, MutUntrackedOrigin],
+    accum: Pointer[Float32, MutUntrackedOrigin],
+    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
+    lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
     n_light_paths_dp: Int64,
-    inter_scratch: UnsafePointer[Intersection_C, MutUntrackedOrigin],
-    w2c: UnsafePointer[Float32, MutUntrackedOrigin],
-    c2r: UnsafePointer[Float32, MutUntrackedOrigin],
-    c2w: UnsafePointer[Float32, MutUntrackedOrigin],
+    inter_scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    w2c: Pointer[Float32, MutUntrackedOrigin],
+    c2r: Pointer[Float32, MutUntrackedOrigin],
+    c2w: Pointer[Float32, MutUntrackedOrigin],
     fw_dp: Int64, fh_dp: Int64,
     px_scale: Float32,
     mis_vm_weight_factor: Float32,
-    bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: UnsafePointer[Material_C, MutUntrackedOrigin],
-    areaLights: UnsafePointer[AreaLight_C, MutUntrackedOrigin],
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    materials: Pointer[Material_C, MutUntrackedOrigin],
+    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
     areaLightCount: Int64,
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
     sphereCount: Int64,
-    curves: UnsafePointer[Curve_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
     curveCount: Int64,
-    mediums: UnsafePointer[Medium_C, MutUntrackedOrigin],
+    mediums: Pointer[Medium_C, MutUntrackedOrigin],
     mediumCount: Int64,
-    mediumInterfaces: UnsafePointer[MediumInterface_C, MutUntrackedOrigin],
+    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
     mediumIfaceCount: Int64,
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
     blasCount: Int64,
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin],
+    instances: Pointer[Instance_C, MutUntrackedOrigin],
     instanceCount: Int64,
-    distantLights: UnsafePointer[DistantLight_C, MutUntrackedOrigin],
+    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
     distantLightCount: Int64,
-    infiniteLights: UnsafePointer[InfiniteLight_C, MutUntrackedOrigin],
+    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
     infiniteLightCount: Int64,
-    pointLights: UnsafePointer[PointLight_C, MutUntrackedOrigin],
+    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
     pointLightCount: Int64,
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin] = UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
     measuredBrdfCount: Int64 = Int64(0),
-    gpuTextures: UnsafePointer[GpuTexture_C, MutUntrackedOrigin] = UnsafePointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
+    gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
     gpuTextureCount: Int64 = Int64(0),
 ):
     """GPU t=1 light tracing: one thread per light path, splatting each of
@@ -4842,17 +4842,17 @@ def _bdpt_splat_light_paths_gpu(
                 _ = Atomic[DType.float32].fetch_add(accum.unsafe_offset((pix * 3 + 2)), cb)
 
 def _bdpt_camera_connect_gpu(
-    accum: UnsafePointer[Float32, MutUntrackedOrigin],
-    albedo_accum: UnsafePointer[Float32, MutUntrackedOrigin],
+    accum: Pointer[Float32, MutUntrackedOrigin],
+    albedo_accum: Pointer[Float32, MutUntrackedOrigin],
     n_pix_dp: Int64,
     fw_dp: Int64,
-    r2c: UnsafePointer[Float32, MutUntrackedOrigin],
-    c2w: UnsafePointer[Float32, MutUntrackedOrigin],
-    inter_scratch: UnsafePointer[Intersection_C, MutUntrackedOrigin],
-    lvc: UnsafePointer[BDPTVertex, MutUntrackedOrigin],
-    lvc_path_len: UnsafePointer[Int32, MutUntrackedOrigin],
-    merge_next: UnsafePointer[Int32, MutUntrackedOrigin],
-    merge_heads: UnsafePointer[Int32, MutUntrackedOrigin],
+    r2c: Pointer[Float32, MutUntrackedOrigin],
+    c2w: Pointer[Float32, MutUntrackedOrigin],
+    inter_scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
+    lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
+    merge_next: Pointer[Int32, MutUntrackedOrigin],
+    merge_heads: Pointer[Int32, MutUntrackedOrigin],
     merge_inv_cell: Float32,
     merge_r2: Float32,
     merge_norm: Float32,
@@ -4862,46 +4862,46 @@ def _bdpt_camera_connect_gpu(
     n_light_paths_f: Float32,
     seed: UInt64,
     pass_idx_dp: Int64,
-    bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: UnsafePointer[Material_C, MutUntrackedOrigin],
-    areaLights: UnsafePointer[AreaLight_C, MutUntrackedOrigin],
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    materials: Pointer[Material_C, MutUntrackedOrigin],
+    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
     areaLightCount: Int64,
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
     sphereCount: Int64,
-    curves: UnsafePointer[Curve_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
     curveCount: Int64,
-    mediums: UnsafePointer[Medium_C, MutUntrackedOrigin],
+    mediums: Pointer[Medium_C, MutUntrackedOrigin],
     mediumCount: Int64,
-    mediumInterfaces: UnsafePointer[MediumInterface_C, MutUntrackedOrigin],
+    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
     mediumIfaceCount: Int64,
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
     blasCount: Int64,
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin],
+    instances: Pointer[Instance_C, MutUntrackedOrigin],
     instanceCount: Int64,
-    distantLights: UnsafePointer[DistantLight_C, MutUntrackedOrigin],
+    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
     distantLightCount: Int64,
-    infiniteLights: UnsafePointer[InfiniteLight_C, MutUntrackedOrigin],
+    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
     infiniteLightCount: Int64,
-    pointLights: UnsafePointer[PointLight_C, MutUntrackedOrigin],
+    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
     pointLightCount: Int64,
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin] = UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
     measuredBrdfCount: Int64 = Int64(0),
-    gpuTextures: UnsafePointer[GpuTexture_C, MutUntrackedOrigin] = UnsafePointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
+    gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
     gpuTextureCount: Int64 = Int64(0),
     # Device-resident density fields, for the free-flight sampler (see the
     # matching comment on the bounce kernels).
-    grids: UnsafePointer[Grid_C, MutUntrackedOrigin] = UnsafePointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
+    grids: Pointer[Grid_C, MutUntrackedOrigin] = Pointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
     n_grids: Int64 = Int64(0),
-    nvdb_grids: UnsafePointer[NvdbGrid_C, MutUntrackedOrigin] = UnsafePointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
+    nvdb_grids: Pointer[NvdbGrid_C, MutUntrackedOrigin] = Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
     n_nvdb_grids: Int64 = Int64(0),
 ):
     """One thread per pixel. Thin wrapper: build sd, seed this thread's own
@@ -4983,48 +4983,48 @@ def _bdpt_camera_connect_gpu(
 # next piece of work once this staging is itself verified correct.
 
 def _bdpt_light_path_init_gpu(
-    states: UnsafePointer[VCMLightPathState_C, MutUntrackedOrigin],
-    lvc: UnsafePointer[BDPTVertex, MutUntrackedOrigin],
-    lvc_path_len: UnsafePointer[Int32, MutUntrackedOrigin],
+    states: Pointer[VCMLightPathState_C, MutUntrackedOrigin],
+    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
+    lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
     mis_vc_weight_factor: Float32,
     n_light_paths_dp: Int64,
     default_emit_med: Int32,
     seed: UInt64,
     pass_idx_dp: Int64,
-    bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: UnsafePointer[Material_C, MutUntrackedOrigin],
-    areaLights: UnsafePointer[AreaLight_C, MutUntrackedOrigin],
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    materials: Pointer[Material_C, MutUntrackedOrigin],
+    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
     areaLightCount: Int64,
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
     sphereCount: Int64,
-    curves: UnsafePointer[Curve_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
     curveCount: Int64,
-    mediums: UnsafePointer[Medium_C, MutUntrackedOrigin],
+    mediums: Pointer[Medium_C, MutUntrackedOrigin],
     mediumCount: Int64,
-    mediumInterfaces: UnsafePointer[MediumInterface_C, MutUntrackedOrigin],
+    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
     mediumIfaceCount: Int64,
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
     blasCount: Int64,
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin],
+    instances: Pointer[Instance_C, MutUntrackedOrigin],
     instanceCount: Int64,
-    distantLights: UnsafePointer[DistantLight_C, MutUntrackedOrigin],
+    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
     distantLightCount: Int64,
-    infiniteLights: UnsafePointer[InfiniteLight_C, MutUntrackedOrigin],
+    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
     infiniteLightCount: Int64,
-    pointLights: UnsafePointer[PointLight_C, MutUntrackedOrigin],
+    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
     pointLightCount: Int64,
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin] = UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
     measuredBrdfCount: Int64 = Int64(0),
-    gpuTextures: UnsafePointer[GpuTexture_C, MutUntrackedOrigin] = UnsafePointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
+    gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
     gpuTextureCount: Int64 = Int64(0),
 ):
     """One thread per light path: seed this thread's own PCG32 (same seed
@@ -5054,17 +5054,17 @@ def _bdpt_light_path_init_gpu(
     states[unsafe_offset=k] = _bdpt_light_path_init[True](sd, pcg, default_emit_med, k, lvc, lvc_path_len, mis_vc_weight_factor, pass_wl)
 
 def _bdpt_light_path_intersect_gpu(
-    bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    curves: UnsafePointer[Curve_C, MutUntrackedOrigin],
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin],
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin],
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
+    instances: Pointer[Instance_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
     n_spheres_dp: Int64,
-    states: UnsafePointer[VCMLightPathState_C, MutUntrackedOrigin],
-    results: UnsafePointer[Intersection_C, MutUntrackedOrigin],
+    states: Pointer[VCMLightPathState_C, MutUntrackedOrigin],
+    results: Pointer[Intersection_C, MutUntrackedOrigin],
     count_dp: Int64,
 ):
     """Batched-per-thread primary/bounce-ray intersect for one light-path
@@ -5086,54 +5086,54 @@ def _bdpt_light_path_intersect_gpu(
     test_spheres(spheres, n_spheres, ray, results.unsafe_offset(tid))
 
 def _bdpt_light_path_bounce_gpu(
-    states: UnsafePointer[VCMLightPathState_C, MutUntrackedOrigin],
-    results: UnsafePointer[Intersection_C, MutUntrackedOrigin],
-    lvc: UnsafePointer[BDPTVertex, MutUntrackedOrigin],
-    lvc_path_len: UnsafePointer[Int32, MutUntrackedOrigin],
+    states: Pointer[VCMLightPathState_C, MutUntrackedOrigin],
+    results: Pointer[Intersection_C, MutUntrackedOrigin],
+    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
+    lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
     mis_vc_weight_factor: Float32,
     mis_vm_weight_factor: Float32,
     n_light_paths_dp: Int64,
-    bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: UnsafePointer[Material_C, MutUntrackedOrigin],
-    areaLights: UnsafePointer[AreaLight_C, MutUntrackedOrigin],
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    materials: Pointer[Material_C, MutUntrackedOrigin],
+    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
     areaLightCount: Int64,
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
     sphereCount: Int64,
-    curves: UnsafePointer[Curve_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
     curveCount: Int64,
-    mediums: UnsafePointer[Medium_C, MutUntrackedOrigin],
+    mediums: Pointer[Medium_C, MutUntrackedOrigin],
     mediumCount: Int64,
-    mediumInterfaces: UnsafePointer[MediumInterface_C, MutUntrackedOrigin],
+    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
     mediumIfaceCount: Int64,
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
     blasCount: Int64,
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin],
+    instances: Pointer[Instance_C, MutUntrackedOrigin],
     instanceCount: Int64,
-    distantLights: UnsafePointer[DistantLight_C, MutUntrackedOrigin],
+    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
     distantLightCount: Int64,
-    infiniteLights: UnsafePointer[InfiniteLight_C, MutUntrackedOrigin],
+    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
     infiniteLightCount: Int64,
-    pointLights: UnsafePointer[PointLight_C, MutUntrackedOrigin],
+    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
     pointLightCount: Int64,
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin] = UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
     measuredBrdfCount: Int64 = Int64(0),
-    gpuTextures: UnsafePointer[GpuTexture_C, MutUntrackedOrigin] = UnsafePointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
+    gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
     gpuTextureCount: Int64 = Int64(0),
     # Device-resident density fields, for the free-flight sampler. Without
     # these the descriptor built below reports no density fields and every
     # heterogeneous medium samples as uniform density-1 fog.
-    grids: UnsafePointer[Grid_C, MutUntrackedOrigin] = UnsafePointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
+    grids: Pointer[Grid_C, MutUntrackedOrigin] = Pointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
     n_grids: Int64 = Int64(0),
-    nvdb_grids: UnsafePointer[NvdbGrid_C, MutUntrackedOrigin] = UnsafePointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
+    nvdb_grids: Pointer[NvdbGrid_C, MutUntrackedOrigin] = Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
     n_nvdb_grids: Int64 = Int64(0),
 ):
     """One bounce's material dispatch for one light path, reading the
@@ -5200,9 +5200,9 @@ def _bdpt_light_path_bounce_gpu(
     states[unsafe_offset=k].pcg_inc = pcg.inc
 
 def _bdpt_camera_path_init_gpu(
-    states: UnsafePointer[VCMCameraPathState_C, MutUntrackedOrigin],
-    r2c: UnsafePointer[Float32, MutUntrackedOrigin],
-    c2w: UnsafePointer[Float32, MutUntrackedOrigin],
+    states: Pointer[VCMCameraPathState_C, MutUntrackedOrigin],
+    r2c: Pointer[Float32, MutUntrackedOrigin],
+    c2w: Pointer[Float32, MutUntrackedOrigin],
     n_pix_dp: Int64,
     fw_dp: Int64,
     px_scale: Float32,
@@ -5228,17 +5228,17 @@ def _bdpt_camera_path_init_gpu(
     states[unsafe_offset=pix] = _bdpt_camera_path_init[True](r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl)
 
 def _bdpt_camera_path_intersect_gpu(
-    bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    curves: UnsafePointer[Curve_C, MutUntrackedOrigin],
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin],
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin],
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
+    instances: Pointer[Instance_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
     n_spheres_dp: Int64,
-    states: UnsafePointer[VCMCameraPathState_C, MutUntrackedOrigin],
-    results: UnsafePointer[Intersection_C, MutUntrackedOrigin],
+    states: Pointer[VCMCameraPathState_C, MutUntrackedOrigin],
+    results: Pointer[Intersection_C, MutUntrackedOrigin],
     count_dp: Int64,
 ):
     """Camera-path counterpart to _bdpt_light_path_intersect_gpu -- see its
@@ -5257,68 +5257,68 @@ def _bdpt_camera_path_intersect_gpu(
     test_spheres(spheres, n_spheres, ray, results.unsafe_offset(tid))
 
 def _bdpt_camera_path_bounce_gpu(
-    states: UnsafePointer[VCMCameraPathState_C, MutUntrackedOrigin],
-    results: UnsafePointer[Intersection_C, MutUntrackedOrigin],
-    lvc: UnsafePointer[BDPTVertex, MutUntrackedOrigin],
-    lvc_path_len: UnsafePointer[Int32, MutUntrackedOrigin],
-    merge_next: UnsafePointer[Int32, MutUntrackedOrigin],
-    merge_heads: UnsafePointer[Int32, MutUntrackedOrigin],
+    states: Pointer[VCMCameraPathState_C, MutUntrackedOrigin],
+    results: Pointer[Intersection_C, MutUntrackedOrigin],
+    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
+    lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
+    merge_next: Pointer[Int32, MutUntrackedOrigin],
+    merge_heads: Pointer[Int32, MutUntrackedOrigin],
     merge_inv_cell: Float32,
     merge_r2: Float32,
     merge_norm: Float32,
     mis_vc_weight_factor: Float32,
     mis_vm_weight_factor: Float32,
     n_pix_dp: Int64,
-    bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: UnsafePointer[Material_C, MutUntrackedOrigin],
-    areaLights: UnsafePointer[AreaLight_C, MutUntrackedOrigin],
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    materials: Pointer[Material_C, MutUntrackedOrigin],
+    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
     areaLightCount: Int64,
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
     sphereCount: Int64,
-    curves: UnsafePointer[Curve_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
     curveCount: Int64,
-    mediums: UnsafePointer[Medium_C, MutUntrackedOrigin],
+    mediums: Pointer[Medium_C, MutUntrackedOrigin],
     mediumCount: Int64,
-    mediumInterfaces: UnsafePointer[MediumInterface_C, MutUntrackedOrigin],
+    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
     mediumIfaceCount: Int64,
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
     blasCount: Int64,
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin],
+    instances: Pointer[Instance_C, MutUntrackedOrigin],
     instanceCount: Int64,
-    distantLights: UnsafePointer[DistantLight_C, MutUntrackedOrigin],
+    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
     distantLightCount: Int64,
-    infiniteLights: UnsafePointer[InfiniteLight_C, MutUntrackedOrigin],
+    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
     infiniteLightCount: Int64,
-    pointLights: UnsafePointer[PointLight_C, MutUntrackedOrigin],
+    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
     pointLightCount: Int64,
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin] = UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
     measuredBrdfCount: Int64 = Int64(0),
-    gpuTextures: UnsafePointer[GpuTexture_C, MutUntrackedOrigin] = UnsafePointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
+    gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
     gpuTextureCount: Int64 = Int64(0),
     # Task #163 stage 5: see _bdpt_camera_path_bounce's own matching
     # params -- forwarded through unchanged, except Bool -> Int8 (raw kernel
     # launch args must be DevicePassable; Bool doesn't conform, unlike a
     # Bool that's merely a regular-function parameter one level down).
     defer_shadow_rays: Int8 = Int8(0),
-    shadow_rays: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    shadow_pending: UnsafePointer[SpectralSample, MutUntrackedOrigin] = UnsafePointer[SpectralSample, MutUntrackedOrigin].unsafe_dangling(),
-    shadow_valid: UnsafePointer[Int8, MutUntrackedOrigin] = UnsafePointer[Int8, MutUntrackedOrigin].unsafe_dangling(),
-    shadow_seg_med: UnsafePointer[Int32, MutUntrackedOrigin] = UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+    shadow_rays: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    shadow_pending: Pointer[SpectralSample, MutUntrackedOrigin] = Pointer[SpectralSample, MutUntrackedOrigin].unsafe_dangling(),
+    shadow_valid: Pointer[Int8, MutUntrackedOrigin] = Pointer[Int8, MutUntrackedOrigin].unsafe_dangling(),
+    shadow_seg_med: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
     # Device-resident density fields, for the free-flight sampler. Without
     # these the descriptor built below reports no density fields and every
     # heterogeneous medium samples as uniform density-1 fog.
-    grids: UnsafePointer[Grid_C, MutUntrackedOrigin] = UnsafePointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
+    grids: Pointer[Grid_C, MutUntrackedOrigin] = Pointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
     n_grids: Int64 = Int64(0),
-    nvdb_grids: UnsafePointer[NvdbGrid_C, MutUntrackedOrigin] = UnsafePointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
+    nvdb_grids: Pointer[NvdbGrid_C, MutUntrackedOrigin] = Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
     n_nvdb_grids: Int64 = Int64(0),
 ):
     """One bounce's material dispatch (incl. NEE/connect/merge/MNEE, all
@@ -5395,16 +5395,16 @@ def _bdpt_camera_path_bounce_gpu(
     states[unsafe_offset=pix].pcg_inc = pcg.inc
 
 def _bdpt_camera_path_accumulate_gpu(
-    states: UnsafePointer[VCMCameraPathState_C, MutUntrackedOrigin],
-    accum: UnsafePointer[Float32, MutUntrackedOrigin],
-    albedo_accum: UnsafePointer[Float32, MutUntrackedOrigin],
+    states: Pointer[VCMCameraPathState_C, MutUntrackedOrigin],
+    accum: Pointer[Float32, MutUntrackedOrigin],
+    albedo_accum: Pointer[Float32, MutUntrackedOrigin],
     n_pix_dp: Int64,
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin],
     spectral_res_dp: Int64,
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
 ):
     """Runs once per `si` sample, after the camera-path bounce loop has
     fully terminated for every lane -- writes each pixel's now-complete
@@ -5445,8 +5445,8 @@ def _bdpt_camera_path_accumulate_gpu(
 # debug_render_vulkanrt/--vulkan-rt-shade already enforce).
 
 def vulkaninterop_pack_light_rays_kernel(
-    states: UnsafePointer[VCMLightPathState_C, MutUntrackedOrigin],
-    rays: UnsafePointer[Float32, MutUntrackedOrigin],
+    states: Pointer[VCMLightPathState_C, MutUntrackedOrigin],
+    rays: Pointer[Float32, MutUntrackedOrigin],
     count_dp: Int64,
 ):
     var count = Int(count_dp)
@@ -5466,8 +5466,8 @@ def vulkaninterop_pack_light_rays_kernel(
     rays[unsafe_offset=idx + 7] = Float32(1.0e8)
 
 def vulkaninterop_pack_camera_rays_kernel(
-    states: UnsafePointer[VCMCameraPathState_C, MutUntrackedOrigin],
-    rays: UnsafePointer[Float32, MutUntrackedOrigin],
+    states: Pointer[VCMCameraPathState_C, MutUntrackedOrigin],
+    rays: Pointer[Float32, MutUntrackedOrigin],
     count_dp: Int64,
 ):
     var count = Int(count_dp)
@@ -5523,7 +5523,7 @@ def vulkaninterop_rt_traverse_light_paths_gpu(
         mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         Int64(n_meshes),
         Int64(n_total),
-        UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         grid_dim=grid, block_dim=block_size,
     )
 
@@ -5564,7 +5564,7 @@ def vulkaninterop_rt_traverse_camera_paths_gpu(
         mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         Int64(n_meshes),
         Int64(n_total),
-        UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         grid_dim=grid, block_dim=block_size,
     )
 
@@ -5579,9 +5579,9 @@ def vulkaninterop_pack_all_shadow_rays_kernel(
     # a straight elementwise copy, not a re-layout. Invalid slots get a
     # zero-length degenerate ray (tMax=0) so the trace call never reads
     # uninitialized memory -- resolve skips them via shadow_valid regardless.
-    shadow_rays: UnsafePointer[Float32, MutUntrackedOrigin],
-    shadow_valid: UnsafePointer[Int8, MutUntrackedOrigin],
-    out_rays: UnsafePointer[Float32, MutUntrackedOrigin],
+    shadow_rays: Pointer[Float32, MutUntrackedOrigin],
+    shadow_valid: Pointer[Int8, MutUntrackedOrigin],
+    out_rays: Pointer[Float32, MutUntrackedOrigin],
     count_dp: Int64,
 ):
     var count = Int(count_dp)
@@ -5638,7 +5638,7 @@ def vulkaninterop_rt_traverse_shadow_gpu(
     var cuda_stream = CUDA(ctx.stream())
     _ = vulkaninterop_rt_trace(interop_scene, Int32(count), cuda_stream)
 
-def bdpt_merge_grid_reset_gpu(heads: UnsafePointer[Int32, MutUntrackedOrigin], hsize_dp: Int64):
+def bdpt_merge_grid_reset_gpu(heads: Pointer[Int32, MutUntrackedOrigin], hsize_dp: Int64):
     var hsize = Int(hsize_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= hsize:
@@ -5647,11 +5647,11 @@ def bdpt_merge_grid_reset_gpu(heads: UnsafePointer[Int32, MutUntrackedOrigin], h
 
 
 def bdpt_merge_grid_insert_gpu(
-    lvc: UnsafePointer[BDPTVertex, MutUntrackedOrigin],
-    lvc_path_len: UnsafePointer[Int32, MutUntrackedOrigin],
+    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
+    lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
     lvc_cap_dp: Int64,
-    merge_next: UnsafePointer[Int32, MutUntrackedOrigin],
-    heads: UnsafePointer[Int32, MutUntrackedOrigin],
+    merge_next: Pointer[Int32, MutUntrackedOrigin],
+    heads: Pointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
 ):
     var lvc_cap = Int(lvc_cap_dp)
@@ -5664,8 +5664,8 @@ def bdpt_merge_grid_insert_gpu(
 # ── Host driver ───────────────────────────────────────────────────────────
 
 def vcm_render_gpu(
-    handlePtr: UnsafePointer[GpuSceneHandle, MutUntrackedOrigin],
-    psc:      UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin],
+    handlePtr: Pointer[GpuSceneHandle, MutUntrackedOrigin],
+    psc:      Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
     ref sd:       SceneDescriptor2_C,
     n_spp:    Int,
     n_photons_req: Int,
@@ -5952,7 +5952,7 @@ def vcm_render_gpu(
             var depth = alloc[Float32](n_pix)
             var sd_local = sd
             render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world, Int32(0), Int32(0),
-                                psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, UnsafePointer(to=sd_local), normals, depth)
+                                psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, Pointer(to=sd_local), normals, depth)
 
             var denoised = alloc[Float32](n_pix * 3)
             if no_denoise:
@@ -6009,7 +6009,7 @@ def reset_shadow_valid_gpu(
     # apart from "went inactive last bounce" (must now read as all-invalid)
     # -- both read `active=0` by the time this would run. An unconditional
     # per-bounce reset sidesteps that distinction entirely.
-    shadow_valid: UnsafePointer[Int8, MutUntrackedOrigin],
+    shadow_valid: Pointer[Int8, MutUntrackedOrigin],
     n_pix_dp: Int64,
 ):
     var n_pix = Int(n_pix_dp)
@@ -6042,50 +6042,50 @@ def resolve_shadow_connect_gpu(
     # _visible_transmittance's own internal multi-round tracing in the
     # fallback path -- must not alias `shadow_pending`/`shadow_valid`/
     # `shadow_seg_med`/`shadow_rays`.
-    shadow_results: UnsafePointer[Float32, MutUntrackedOrigin],
-    mesh_material_idx: UnsafePointer[Int64, MutUntrackedOrigin],
+    shadow_results: Pointer[Float32, MutUntrackedOrigin],
+    mesh_material_idx: Pointer[Int64, MutUntrackedOrigin],
     n_meshes_vk_dp: Int64,
-    cam_states: UnsafePointer[VCMCameraPathState_C, MutUntrackedOrigin],
-    shadow_pending: UnsafePointer[SpectralSample, MutUntrackedOrigin],
-    shadow_valid: UnsafePointer[Int8, MutUntrackedOrigin],
-    shadow_seg_med: UnsafePointer[Int32, MutUntrackedOrigin],
-    shadow_rays: UnsafePointer[Float32, MutUntrackedOrigin],
-    scratch: UnsafePointer[Intersection_C, MutUntrackedOrigin],
+    cam_states: Pointer[VCMCameraPathState_C, MutUntrackedOrigin],
+    shadow_pending: Pointer[SpectralSample, MutUntrackedOrigin],
+    shadow_valid: Pointer[Int8, MutUntrackedOrigin],
+    shadow_seg_med: Pointer[Int32, MutUntrackedOrigin],
+    shadow_rays: Pointer[Float32, MutUntrackedOrigin],
+    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
     count_dp: Int64,
-    bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: UnsafePointer[Material_C, MutUntrackedOrigin],
-    areaLights: UnsafePointer[AreaLight_C, MutUntrackedOrigin],
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    materials: Pointer[Material_C, MutUntrackedOrigin],
+    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
     areaLightCount: Int64,
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
     sphereCount: Int64,
-    curves: UnsafePointer[Curve_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
     curveCount: Int64,
-    mediums: UnsafePointer[Medium_C, MutUntrackedOrigin],
+    mediums: Pointer[Medium_C, MutUntrackedOrigin],
     mediumCount: Int64,
-    mediumInterfaces: UnsafePointer[MediumInterface_C, MutUntrackedOrigin],
+    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
     mediumIfaceCount: Int64,
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
     blasCount: Int64,
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin],
+    instances: Pointer[Instance_C, MutUntrackedOrigin],
     instanceCount: Int64,
-    distantLights: UnsafePointer[DistantLight_C, MutUntrackedOrigin],
+    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
     distantLightCount: Int64,
-    infiniteLights: UnsafePointer[InfiniteLight_C, MutUntrackedOrigin],
+    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
     infiniteLightCount: Int64,
-    pointLights: UnsafePointer[PointLight_C, MutUntrackedOrigin],
+    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
     pointLightCount: Int64,
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin] = UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
     measuredBrdfCount: Int64 = Int64(0),
-    gpuTextures: UnsafePointer[GpuTexture_C, MutUntrackedOrigin] = UnsafePointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
+    gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
     gpuTextureCount: Int64 = Int64(0),
 ):
     var spectral_res = Int(spectral_res_dp)
@@ -6153,9 +6153,9 @@ def resolve_shadow_connect_gpu(
         shadow_pending[unsafe_offset=idx] = p * Tr
 
 def sum_shadow_connect_gpu(
-    states: UnsafePointer[VCMCameraPathState_C, MutUntrackedOrigin],
-    shadow_pending: UnsafePointer[SpectralSample, MutUntrackedOrigin],
-    shadow_valid: UnsafePointer[Int8, MutUntrackedOrigin],
+    states: Pointer[VCMCameraPathState_C, MutUntrackedOrigin],
+    shadow_pending: Pointer[SpectralSample, MutUntrackedOrigin],
+    shadow_valid: Pointer[Int8, MutUntrackedOrigin],
     n_pix_dp: Int64,
 ):
     var n_pix = Int(n_pix_dp)
@@ -6170,8 +6170,8 @@ def sum_shadow_connect_gpu(
     states[unsafe_offset=pix].total += sum
 
 def vcm_render_gpu_wavefront(
-    handlePtr: UnsafePointer[GpuSceneHandle, MutUntrackedOrigin],
-    psc:      UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin],
+    handlePtr: Pointer[GpuSceneHandle, MutUntrackedOrigin],
+    psc:      Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
     ref sd:       SceneDescriptor2_C,
     n_spp:    Int,
     n_photons_req: Int,
@@ -6186,7 +6186,7 @@ def vcm_render_gpu_wavefront(
     # n_photons_req's docstring below) since it's reused sequentially for
     # both the light pass and the camera pass every sample.
     use_vk: Bool = False,
-    interop_scene: VulkanInteropRtSceneHandle = UnsafePointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
+    interop_scene: VulkanInteropRtSceneHandle = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
     interop_rays_buf: Optional[DeviceBuffer[DType.float32]] = None,
     interop_results_buf: Optional[DeviceBuffer[DType.float32]] = None,
     mesh_material_idx_buf: Optional[DeviceBuffer[DType.uint8]] = None,
@@ -6668,7 +6668,7 @@ def vcm_render_gpu_wavefront(
             var depth = alloc[Float32](n_pix)
             var sd_local = sd
             render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world, Int32(0), Int32(0),
-                                psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, UnsafePointer(to=sd_local), normals, depth)
+                                psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, Pointer(to=sd_local), normals, depth)
 
             var denoised = alloc[Float32](n_pix * 3)
             if no_denoise:
@@ -6725,53 +6725,53 @@ def vcm_render_gpu_wavefront(
 # GPU kernels, deliberately unlike the old gpu_sppm.mojo (a full duplicate
 # reimplementation).
 
-def sppm_reset_i32_gpu(counter: UnsafePointer[Int32, MutUntrackedOrigin]):
+def sppm_reset_i32_gpu(counter: Pointer[Int32, MutUntrackedOrigin]):
     if block_idx.x == 0 and thread_idx.x == 0:
         counter[unsafe_offset=0] = Int32(0)
 
 
 def sppm_gen_vp_gpu(
-    vps: UnsafePointer[SPPMPixel, MutUntrackedOrigin],
-    inter_scratch: UnsafePointer[Intersection_C, MutUntrackedOrigin],
+    vps: Pointer[SPPMPixel, MutUntrackedOrigin],
+    inter_scratch: Pointer[Intersection_C, MutUntrackedOrigin],
     n_pix_dp: Int64,
     vp_samples_dp: Int64,
     fw: Int32,
-    r2c: UnsafePointer[Float32, MutUntrackedOrigin],
-    c2w: UnsafePointer[Float32, MutUntrackedOrigin],
+    r2c: Pointer[Float32, MutUntrackedOrigin],
+    c2w: Pointer[Float32, MutUntrackedOrigin],
     init_r2: Float32,
     seed: UInt64,
     max_depth_dp: Int64,
-    bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: UnsafePointer[Material_C, MutUntrackedOrigin],
-    areaLights: UnsafePointer[AreaLight_C, MutUntrackedOrigin],
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    materials: Pointer[Material_C, MutUntrackedOrigin],
+    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
     areaLightCount: Int64,
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
     sphereCount: Int64,
-    curves: UnsafePointer[Curve_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
     curveCount: Int64,
-    mediums: UnsafePointer[Medium_C, MutUntrackedOrigin],
+    mediums: Pointer[Medium_C, MutUntrackedOrigin],
     mediumCount: Int64,
-    mediumInterfaces: UnsafePointer[MediumInterface_C, MutUntrackedOrigin],
+    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
     mediumIfaceCount: Int64,
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
     blasCount: Int64,
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin],
+    instances: Pointer[Instance_C, MutUntrackedOrigin],
     instanceCount: Int64,
-    distantLights: UnsafePointer[DistantLight_C, MutUntrackedOrigin],
+    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
     distantLightCount: Int64,
-    infiniteLights: UnsafePointer[InfiniteLight_C, MutUntrackedOrigin],
+    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
     infiniteLightCount: Int64,
-    gpuTextures: UnsafePointer[GpuTexture_C, MutUntrackedOrigin] = UnsafePointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
+    gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
     gpuTextureCount: Int64 = Int64(0),
     # Device-resident density fields, for the free-flight sampler. Without
     # these the descriptor built below reports no density fields and every
     # heterogeneous medium samples as uniform density-1 fog.
-    grids: UnsafePointer[Grid_C, MutUntrackedOrigin] = UnsafePointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
+    grids: Pointer[Grid_C, MutUntrackedOrigin] = Pointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
     n_grids: Int64 = Int64(0),
-    nvdb_grids: UnsafePointer[NvdbGrid_C, MutUntrackedOrigin] = UnsafePointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
+    nvdb_grids: Pointer[NvdbGrid_C, MutUntrackedOrigin] = Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
     n_nvdb_grids: Int64 = Int64(0),
 ):
     """One thread per (pixel, vp_sample). Calls the SAME
@@ -6799,56 +6799,56 @@ def sppm_gen_vp_gpu(
 
 
 def sppm_emit_photons_gpu(
-    photons: UnsafePointer[SPPMPhoton, MutUntrackedOrigin],
+    photons: Pointer[SPPMPhoton, MutUntrackedOrigin],
     n_emit_dp: Int64,
     max_photons_dp: Int64,
-    inter_scratch: UnsafePointer[Intersection_C, MutUntrackedOrigin],
-    stored_counter: UnsafePointer[Int32, MutUntrackedOrigin],
+    inter_scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    stored_counter: Pointer[Int32, MutUntrackedOrigin],
     default_emit_med: Int32,
     seed: UInt64,
     pass_idx_dp: Int64,
     max_depth_dp: Int64,
-    bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: UnsafePointer[Material_C, MutUntrackedOrigin],
-    areaLights: UnsafePointer[AreaLight_C, MutUntrackedOrigin],
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    materials: Pointer[Material_C, MutUntrackedOrigin],
+    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
     areaLightCount: Int64,
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
     sphereCount: Int64,
-    curves: UnsafePointer[Curve_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
     curveCount: Int64,
-    mediums: UnsafePointer[Medium_C, MutUntrackedOrigin],
+    mediums: Pointer[Medium_C, MutUntrackedOrigin],
     mediumCount: Int64,
-    mediumInterfaces: UnsafePointer[MediumInterface_C, MutUntrackedOrigin],
+    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
     mediumIfaceCount: Int64,
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
     blasCount: Int64,
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin],
+    instances: Pointer[Instance_C, MutUntrackedOrigin],
     instanceCount: Int64,
-    distantLights: UnsafePointer[DistantLight_C, MutUntrackedOrigin],
+    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
     distantLightCount: Int64,
-    infiniteLights: UnsafePointer[InfiniteLight_C, MutUntrackedOrigin],
+    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
     infiniteLightCount: Int64,
-    pointLights: UnsafePointer[PointLight_C, MutUntrackedOrigin],
+    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
     pointLightCount: Int64,
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin] = UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
     measuredBrdfCount: Int64 = Int64(0),
-    gpuTextures: UnsafePointer[GpuTexture_C, MutUntrackedOrigin] = UnsafePointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
+    gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
     gpuTextureCount: Int64 = Int64(0),
     # Device-resident density fields, for the free-flight sampler. Without
     # these the descriptor built below reports no density fields and every
     # heterogeneous medium samples as uniform density-1 fog.
-    grids: UnsafePointer[Grid_C, MutUntrackedOrigin] = UnsafePointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
+    grids: Pointer[Grid_C, MutUntrackedOrigin] = Pointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
     n_grids: Int64 = Int64(0),
-    nvdb_grids: UnsafePointer[NvdbGrid_C, MutUntrackedOrigin] = UnsafePointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
+    nvdb_grids: Pointer[NvdbGrid_C, MutUntrackedOrigin] = Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
     n_nvdb_grids: Int64 = Int64(0),
 ):
     """One thread per emitted photon path. Calls the SAME _sppm_trace_photon
@@ -6895,7 +6895,7 @@ def sppm_emit_photons_gpu(
         spectral_cie_z, spectral_d65, pass_wavelengths(pass_idx))
 
 
-def sppm_grid_reset_gpu(heads: UnsafePointer[Int32, MutUntrackedOrigin], hsize_dp: Int64):
+def sppm_grid_reset_gpu(heads: Pointer[Int32, MutUntrackedOrigin], hsize_dp: Int64):
     var hsize = Int(hsize_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= hsize:
@@ -6904,9 +6904,9 @@ def sppm_grid_reset_gpu(heads: UnsafePointer[Int32, MutUntrackedOrigin], hsize_d
 
 
 def sppm_grid_insert_gpu(
-    photons:  UnsafePointer[SPPMPhoton, MutUntrackedOrigin],
+    photons:  Pointer[SPPMPhoton, MutUntrackedOrigin],
     n_stored_dp: Int64,
-    heads:    UnsafePointer[Int32, MutUntrackedOrigin],
+    heads:    Pointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
 ):
     var n_stored = Int(n_stored_dp)
@@ -6917,32 +6917,32 @@ def sppm_grid_insert_gpu(
 
 
 def sppm_gather_gpu(
-    vps:      UnsafePointer[SPPMPixel, MutUntrackedOrigin],
+    vps:      Pointer[SPPMPixel, MutUntrackedOrigin],
     n_pix_dp:    Int64,
-    photons:  UnsafePointer[SPPMPhoton, MutUntrackedOrigin],
-    heads:    UnsafePointer[Int32, MutUntrackedOrigin],
+    photons:  Pointer[SPPMPhoton, MutUntrackedOrigin],
+    heads:    Pointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
-    bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: UnsafePointer[Material_C, MutUntrackedOrigin],
-    curves: UnsafePointer[Curve_C, MutUntrackedOrigin],
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    materials: Pointer[Material_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
     curveCount: Int64,
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin],
+    instances: Pointer[Instance_C, MutUntrackedOrigin],
     instanceCount: Int64,
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin] = UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
     measuredBrdfCount: Int64 = Int64(0),
     pass_idx_dp: Int64 = Int64(0),
-    med_arr_dp: UnsafePointer[Medium_C, MutUntrackedOrigin] = UnsafePointer[Medium_C, MutUntrackedOrigin].unsafe_dangling(),
+    med_arr_dp: Pointer[Medium_C, MutUntrackedOrigin] = Pointer[Medium_C, MutUntrackedOrigin].unsafe_dangling(),
     med_count_dp: Int64 = Int64(0),
-    grids_dp: UnsafePointer[Grid_C, MutUntrackedOrigin] = UnsafePointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
-    nvdb_grids_dp: UnsafePointer[NvdbGrid_C, MutUntrackedOrigin] = UnsafePointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
+    grids_dp: Pointer[Grid_C, MutUntrackedOrigin] = Pointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
+    nvdb_grids_dp: Pointer[NvdbGrid_C, MutUntrackedOrigin] = Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
 ):
     """One thread per visible point. `sd` here only needs to be complete
     enough for _sppm_gather_one's hair branch (sd.materials/sd.curves) —
@@ -6958,16 +6958,16 @@ def sppm_gather_gpu(
         return
     var sd = _mk_sd_full(
         bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
-        UnsafePointer[AreaLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0), curves, curveCount,
-        UnsafePointer[Medium_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[MediumInterface_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[AreaLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0), curves, curveCount,
+        Pointer[Medium_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[MediumInterface_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         instances, instanceCount,
-        UnsafePointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
         measuredBrdfs, measuredBrdfCount,
     )
@@ -6978,42 +6978,42 @@ def sppm_gather_gpu(
 
 
 def sppm_nee_gpu(
-    vps:    UnsafePointer[SPPMPixel, MutUntrackedOrigin],
+    vps:    Pointer[SPPMPixel, MutUntrackedOrigin],
     n_vps_dp:  Int64,
     seed:   UInt64,
     pass_idx_dp: Int64,
-    bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: UnsafePointer[Material_C, MutUntrackedOrigin],
-    areaLights: UnsafePointer[AreaLight_C, MutUntrackedOrigin],
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    materials: Pointer[Material_C, MutUntrackedOrigin],
+    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
     areaLightCount: Int64,
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
     sphereCount: Int64,
-    curves: UnsafePointer[Curve_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
     curveCount: Int64,
-    mediums: UnsafePointer[Medium_C, MutUntrackedOrigin],
+    mediums: Pointer[Medium_C, MutUntrackedOrigin],
     mediumCount: Int64,
-    mediumInterfaces: UnsafePointer[MediumInterface_C, MutUntrackedOrigin],
+    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
     mediumIfaceCount: Int64,
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
     blasCount: Int64,
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin],
+    instances: Pointer[Instance_C, MutUntrackedOrigin],
     instanceCount: Int64,
-    distantLights: UnsafePointer[DistantLight_C, MutUntrackedOrigin],
+    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
     distantLightCount: Int64,
-    infiniteLights: UnsafePointer[InfiniteLight_C, MutUntrackedOrigin],
+    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
     infiniteLightCount: Int64,
-    pointLights: UnsafePointer[PointLight_C, MutUntrackedOrigin],
+    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
     pointLightCount: Int64,
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin] = UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
     measuredBrdfCount: Int64 = Int64(0),
 ):
     """One thread per visible point. Calls the SAME _sppm_nee_one the CPU
@@ -7045,20 +7045,20 @@ def sppm_nee_gpu(
 
 
 def sppm_finalize_gpu(
-    vps:        UnsafePointer[SPPMPixel, MutUntrackedOrigin],
+    vps:        Pointer[SPPMPixel, MutUntrackedOrigin],
     n_pix_dp:      Int64,
     vp_samples_dp: Int64,
     n_passes:   Int32,
     iso_scale:  Float32,
     max_comp:   Float32,
-    out_pixels: UnsafePointer[Float32, MutUntrackedOrigin],
-    albedo_out: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin],
+    out_pixels: Pointer[Float32, MutUntrackedOrigin],
+    albedo_out: Pointer[Float32, MutUntrackedOrigin],
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin],
     spectral_res_dp: Int64,
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin],
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
 ):
     """One thread per pixel. Calls the SAME _sppm_finalize_one_pixel the CPU
     driver (sppm_render's tail loop) calls, plus the matching albedo AOV
@@ -7084,8 +7084,8 @@ def sppm_finalize_gpu(
 # ── GPU host driver ───────────────────────────────────────────────────────────
 
 def sppm_render_gpu(
-    handlePtr: UnsafePointer[GpuSceneHandle, MutUntrackedOrigin],
-    psc:      UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin],
+    handlePtr: Pointer[GpuSceneHandle, MutUntrackedOrigin],
+    psc:      Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
     ref sd:       SceneDescriptor2_C,
     n_passes: Int,
     n_photons_per_pass: Int,
@@ -7439,7 +7439,7 @@ def sppm_render_gpu(
             var depth = alloc[Float32](n_pix)
             var sd_local = sd
             render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world, Int32(0), Int32(0),
-                                psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, UnsafePointer(to=sd_local), normals, depth)
+                                psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, Pointer(to=sd_local), normals, depth)
 
             var denoised = alloc[Float32](n_pix * 3)
             if no_denoise:

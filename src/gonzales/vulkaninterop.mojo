@@ -15,7 +15,7 @@ from .geometry import TriangleMesh_C
 # backend that's actually faster than gonzales's existing software-BVH GPU
 # path, not just correct).
 
-comptime VulkanInteropHandle = UnsafePointer[UInt8, MutUntrackedOrigin]
+comptime VulkanInteropHandle = Pointer[UInt8, MutUntrackedOrigin]
 
 def vulkaninterop_create(elem_count: Int64) -> VulkanInteropHandle:
     return external_call["vulkaninterop_create", VulkanInteropHandle, Int64](elem_count)
@@ -25,8 +25,8 @@ def vulkaninterop_create(elem_count: Int64) -> VulkanInteropHandle:
 # owning=False)` to read/write it with ordinary enqueue_function kernels --
 # `owning=False` is essential, this memory is owned by the interop context
 # (freed by vulkaninterop_destroy), not by the DeviceBuffer wrapper.
-def vulkaninterop_get_cuda_ptr(interop: VulkanInteropHandle) -> UnsafePointer[Float32, MutUntrackedOrigin]:
-    return external_call["vulkaninterop_get_cuda_ptr", UnsafePointer[Float32, MutUntrackedOrigin],
+def vulkaninterop_get_cuda_ptr(interop: VulkanInteropHandle) -> Pointer[Float32, MutUntrackedOrigin]:
+    return external_call["vulkaninterop_get_cuda_ptr", Pointer[Float32, MutUntrackedOrigin],
         VulkanInteropHandle](interop)
 
 # Enqueues one GPU-side round trip on `cuda_stream` (get one via
@@ -45,7 +45,7 @@ def vulkaninterop_destroy(interop: VulkanInteropHandle):
 # standalone C/CUDA test) -- lives in the package rather than the test file
 # itself since fresh kernel definitions at `mojo run` top level for a
 # standalone test script were not picked up for GPU codegen correctly.
-def vulkaninterop_fill_kernel_test(data: UnsafePointer[Float32, MutUntrackedOrigin], n: Int32, base: Float32):
+def vulkaninterop_fill_kernel_test(data: Pointer[Float32, MutUntrackedOrigin], n: Int32, base: Float32):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid < Int(n):
         data[unsafe_offset=tid] = base + Float32(tid)
@@ -54,7 +54,7 @@ def vulkaninterop_fill_kernel_test(data: UnsafePointer[Float32, MutUntrackedOrig
 # Stage 2: real VK_KHR_ray_query tracing through the same interop mechanism.
 # ---------------------------------------------------------------------------
 
-comptime VulkanInteropRtSceneHandle = UnsafePointer[UInt8, MutUntrackedOrigin]
+comptime VulkanInteropRtSceneHandle = Pointer[UInt8, MutUntrackedOrigin]
 
 # Builds an interop-AND-ray-query-capable scene from gonzales's own
 # TriangleMesh_C data (same field-for-field-mirror trick as vulkanrt.mojo's
@@ -85,34 +85,34 @@ comptime VulkanInteropRtSceneHandle = UnsafePointer[UInt8, MutUntrackedOrigin]
 # n_curve_leaves=0/n_curves=0 for a scene with no curves -- byte-identical
 # to before curve support existed. Returns a null handle on failure.
 def vulkaninterop_rt_create_scene(
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
     mesh_count: Int64,
-    point_counts: UnsafePointer[Int64, MutUntrackedOrigin],
-    vertex_index_counts: UnsafePointer[Int64, MutUntrackedOrigin],
+    point_counts: Pointer[Int64, MutUntrackedOrigin],
+    vertex_index_counts: Pointer[Int64, MutUntrackedOrigin],
     template_count: Int64,
-    template_mesh_start: UnsafePointer[Int64, MutUntrackedOrigin],
-    template_mesh_end: UnsafePointer[Int64, MutUntrackedOrigin],
+    template_mesh_start: Pointer[Int64, MutUntrackedOrigin],
+    template_mesh_end: Pointer[Int64, MutUntrackedOrigin],
     instance_count: Int64,
-    instance_obj_to_world: UnsafePointer[Float32, MutUntrackedOrigin],
-    instance_template_idx: UnsafePointer[Int32, MutUntrackedOrigin],
+    instance_obj_to_world: Pointer[Float32, MutUntrackedOrigin],
+    instance_template_idx: Pointer[Int32, MutUntrackedOrigin],
     n_curve_leaves: Int64,
-    curve_leaf_aabbs: UnsafePointer[Float32, MutUntrackedOrigin],
-    curve_leaf_curve_idx: UnsafePointer[Int32, MutUntrackedOrigin],
-    curve_leaf_piece_info: UnsafePointer[Int32, MutUntrackedOrigin],
-    curve_leaf_mat_idx: UnsafePointer[Int32, MutUntrackedOrigin],
+    curve_leaf_aabbs: Pointer[Float32, MutUntrackedOrigin],
+    curve_leaf_curve_idx: Pointer[Int32, MutUntrackedOrigin],
+    curve_leaf_piece_info: Pointer[Int32, MutUntrackedOrigin],
+    curve_leaf_mat_idx: Pointer[Int32, MutUntrackedOrigin],
     n_curves: Int64,
-    curve_data: UnsafePointer[Float32, MutUntrackedOrigin],
-    curve_n_pieces: UnsafePointer[Int32, MutUntrackedOrigin],
+    curve_data: Pointer[Float32, MutUntrackedOrigin],
+    curve_n_pieces: Pointer[Int32, MutUntrackedOrigin],
     max_rays: Int64,
 ) -> VulkanInteropRtSceneHandle:
     return external_call["vulkaninterop_rt_create_scene", VulkanInteropRtSceneHandle,
-        UnsafePointer[TriangleMesh_C, MutUntrackedOrigin], Int64,
-        UnsafePointer[Int64, MutUntrackedOrigin], UnsafePointer[Int64, MutUntrackedOrigin],
-        Int64, UnsafePointer[Int64, MutUntrackedOrigin], UnsafePointer[Int64, MutUntrackedOrigin],
-        Int64, UnsafePointer[Float32, MutUntrackedOrigin], UnsafePointer[Int32, MutUntrackedOrigin],
-        Int64, UnsafePointer[Float32, MutUntrackedOrigin],
-        UnsafePointer[Int32, MutUntrackedOrigin], UnsafePointer[Int32, MutUntrackedOrigin], UnsafePointer[Int32, MutUntrackedOrigin],
-        Int64, UnsafePointer[Float32, MutUntrackedOrigin], UnsafePointer[Int32, MutUntrackedOrigin],
+        Pointer[TriangleMesh_C, MutUntrackedOrigin], Int64,
+        Pointer[Int64, MutUntrackedOrigin], Pointer[Int64, MutUntrackedOrigin],
+        Int64, Pointer[Int64, MutUntrackedOrigin], Pointer[Int64, MutUntrackedOrigin],
+        Int64, Pointer[Float32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin],
+        Int64, Pointer[Float32, MutUntrackedOrigin],
+        Pointer[Int32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin],
+        Int64, Pointer[Float32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin],
         Int64](
         meshes, mesh_count, point_counts, vertex_index_counts,
         template_count, template_mesh_start, template_mesh_end,
@@ -126,8 +126,8 @@ def vulkaninterop_rt_create_scene(
 # (ox,oy,oz,tmin,dx,dy,dz,tmax) layout vulkanrt_trace_rays takes). Wrap with
 # DeviceBuffer[DType.float32](ctx, ptr, max_rays * 8, owning=False) to
 # write ray data directly from a Mojo kernel -- no host round trip.
-def vulkaninterop_rt_get_rays_ptr(scene: VulkanInteropRtSceneHandle) -> UnsafePointer[Float32, MutUntrackedOrigin]:
-    return external_call["vulkaninterop_rt_get_rays_ptr", UnsafePointer[Float32, MutUntrackedOrigin],
+def vulkaninterop_rt_get_rays_ptr(scene: VulkanInteropRtSceneHandle) -> Pointer[Float32, MutUntrackedOrigin]:
+    return external_call["vulkaninterop_rt_get_rays_ptr", Pointer[Float32, MutUntrackedOrigin],
         VulkanInteropRtSceneHandle](scene)
 
 # CUDA device pointer for the shared results buffer (max_rays * 32 bytes,
@@ -140,8 +140,8 @@ def vulkaninterop_rt_get_rays_ptr(scene: VulkanInteropRtSceneHandle) -> UnsafePo
 # vulkaninterop_unpack_results_kernel (gpu.mojo) for the instancing decode
 # and the curve decode (hitFlag==2 -- fields mean something different there,
 # see that kernel's own comment).
-def vulkaninterop_rt_get_results_ptr(scene: VulkanInteropRtSceneHandle) -> UnsafePointer[Float32, MutUntrackedOrigin]:
-    return external_call["vulkaninterop_rt_get_results_ptr", UnsafePointer[Float32, MutUntrackedOrigin],
+def vulkaninterop_rt_get_results_ptr(scene: VulkanInteropRtSceneHandle) -> Pointer[Float32, MutUntrackedOrigin]:
+    return external_call["vulkaninterop_rt_get_results_ptr", Pointer[Float32, MutUntrackedOrigin],
         VulkanInteropRtSceneHandle](scene)
 
 # Enqueues one GPU-side ray-query dispatch on `cuda_stream`, tracing the
@@ -159,7 +159,7 @@ def vulkaninterop_rt_destroy_scene(scene: VulkanInteropRtSceneHandle):
 # write 3 known test rays directly into the interop rays buffer (same
 # reasoning as vulkaninterop_fill_kernel_test for living in the package
 # rather than the test file).
-def vulkaninterop_rt_write_test_rays_kernel(rays: UnsafePointer[Float32, MutUntrackedOrigin]):
+def vulkaninterop_rt_write_test_rays_kernel(rays: Pointer[Float32, MutUntrackedOrigin]):
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i == 0:
         # Hits mesh 0's triangle at (0.25, 0.25).

@@ -76,9 +76,9 @@ struct GuideGrid(TrivialRegisterPassable):
     value (matches every other pointer+metadata handle in this codebase);
     see file header for the structural-freeze invariant that makes that
     safe during a render pass."""
-    var snodes:   UnsafePointer[SNode, MutUntrackedOrigin]
+    var snodes:   Pointer[SNode, MutUntrackedOrigin]
     var n_snodes: Int32
-    var dnodes:   UnsafePointer[DNode, MutUntrackedOrigin]
+    var dnodes:   Pointer[DNode, MutUntrackedOrigin]
     var n_dnodes: Int32
     var bounds:   Bounds3f
 
@@ -86,9 +86,9 @@ def null_guide() -> GuideGrid:
     """Sentinel GuideGrid. Guard with guide_is_active(g) to tell an active
     guide from this disabled placeholder."""
     return GuideGrid(
-        snodes=UnsafePointer[SNode, MutUntrackedOrigin].unsafe_dangling(),
+        snodes=Pointer[SNode, MutUntrackedOrigin].unsafe_dangling(),
         n_snodes=Int32(0),
-        dnodes=UnsafePointer[DNode, MutUntrackedOrigin].unsafe_dangling(),
+        dnodes=Pointer[DNode, MutUntrackedOrigin].unsafe_dangling(),
         n_dnodes=Int32(0),
         bounds=Bounds3f(Point3f(Float32(0)), Point3f(Float32(1), Float32(1), Float32(1))),
     )
@@ -331,7 +331,7 @@ def guide_sample(
 
 # ── Refinement (between training iterations, single-threaded) ──────────────
 
-def _count_dtree_growth(dnodes: UnsafePointer[DNode, MutUntrackedOrigin], node_idx: Int32, root_total: Float32, depth: Int32) -> Int:
+def _count_dtree_growth(dnodes: Pointer[DNode, MutUntrackedOrigin], node_idx: Int32, root_total: Float32, depth: Int32) -> Int:
     var n = dnodes[unsafe_offset=Int(node_idx)]
     if n.child0 >= Int32(0):
         return (_count_dtree_growth(dnodes, n.child0, root_total, depth + Int32(1))
@@ -344,7 +344,7 @@ def _count_dtree_growth(dnodes: UnsafePointer[DNode, MutUntrackedOrigin], node_i
         return 4
     return 0
 
-def _grow_dtree(dnodes: UnsafePointer[DNode, MutUntrackedOrigin], node_idx: Int32, root_total: Float32, depth: Int32, mut next_free: Int32):
+def _grow_dtree(dnodes: Pointer[DNode, MutUntrackedOrigin], node_idx: Int32, root_total: Float32, depth: Int32, mut next_free: Int32):
     """Split leaves whose energy fraction of root_total exceeds
     DIR_SPLIT_FRACTION into 4 fresh children (each seeded with energy/4, an
     inherited estimate -- refined for real once the next iteration's
@@ -402,7 +402,7 @@ def _axis_mid(lo: Point3f, hi: Point3f, axis: Int32) -> Float32:
         return (lo.y + hi.y) * Float32(0.5)
     return (lo.z + hi.z) * Float32(0.5)
 
-def _collect_spatial_splits(snodes: UnsafePointer[SNode, MutUntrackedOrigin], idx: Int32, lo: Point3f, hi: Point3f, mut out: List[_SplitCandidate]):
+def _collect_spatial_splits(snodes: Pointer[SNode, MutUntrackedOrigin], idx: Int32, lo: Point3f, hi: Point3f, mut out: List[_SplitCandidate]):
     var n = snodes[unsafe_offset=Int(idx)]
     if n.child0 >= Int32(0):
         if n.split_axis == Int32(0):

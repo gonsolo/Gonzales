@@ -265,8 +265,8 @@ def _io_temporal_only(mut prev_buf: List[VolReservoir], mut write_buf: List[VolR
     return VolReservoirIO(
         read=prev_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         write=write_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
-        gbuf_depth=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-        gbuf_world_pos=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_depth=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_world_pos=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0),
     )
 

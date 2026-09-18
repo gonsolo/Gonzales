@@ -19,12 +19,12 @@ from .restir_vol import VolReservoirIO, vol_reservoir_io_null
 
 
 def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
-    rasterToCamera: UnsafePointer[Float32, MutUntrackedOrigin],
-    cameraToWorld: UnsafePointer[Float32, Oc2w],
+    rasterToCamera: Pointer[Float32, MutUntrackedOrigin],
+    cameraToWorld: Pointer[Float32, Oc2w],
     tileMinX: Int32, tileMinY: Int32, tileMaxX: Int32, tileMaxY: Int32,
-    samplerParamsPtr: UnsafePointer[TileSamplerParams_C, Osp],
-    scenePtr: UnsafePointer[SceneDescriptor2_C, MutUntrackedOrigin],
-    resultsPtr: UnsafePointer[TileResult_C, MutUntrackedOrigin],
+    samplerParamsPtr: Pointer[TileSamplerParams_C, Osp],
+    scenePtr: Pointer[SceneDescriptor2_C, MutUntrackedOrigin],
+    resultsPtr: Pointer[TileResult_C, MutUntrackedOrigin],
     maxDepth: Int32,
     guide_read: GuideGrid,
     guide_write: GuideGrid,
@@ -140,7 +140,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
     # init; otherwise a path that never reaches bounce 1 (miss, RR kill, or
     # a non-diffuse x2) would leave garbage that a later stray read could
     # misinterpret as a real pending snapshot.
-    var gi_pending_buf = UnsafePointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling()
+    var gi_pending_buf = Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling()
     if use_gi:
         gi_pending_buf = alloc[GIPendingX1](n)
         for gi_i in range(n):
@@ -396,17 +396,17 @@ def progress_str(done: Int, total: Int, elapsed: Float64, unit: String) -> Strin
 
 
 def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin[mut=True]](
-    raster_to_camera: UnsafePointer[Float32, MutUntrackedOrigin],
-    camera_to_world: UnsafePointer[Float32, Oc2w],
+    raster_to_camera: Pointer[Float32, MutUntrackedOrigin],
+    camera_to_world: Pointer[Float32, Oc2w],
     min_x: Int32, min_y: Int32, max_x: Int32, max_y: Int32,
     tile_w: Int32, tile_h: Int32,
-    sampler_params: UnsafePointer[TileSamplerParams_C, Osp],
-    scene: UnsafePointer[SceneDescriptor2_C, MutUntrackedOrigin],
-    results: UnsafePointer[TileResult_C, Ores],
+    sampler_params: Pointer[TileSamplerParams_C, Osp],
+    scene: Pointer[SceneDescriptor2_C, MutUntrackedOrigin],
+    results: Pointer[TileResult_C, Ores],
     max_depth: Int32,
     quiet: Bool = False,
     guide_read: GuideGrid = null_guide(),
-    write_guides: UnsafePointer[GuideGrid, MutUntrackedOrigin] = UnsafePointer[GuideGrid, MutUntrackedOrigin].unsafe_dangling(),
+    write_guides: Pointer[GuideGrid, MutUntrackedOrigin] = Pointer[GuideGrid, MutUntrackedOrigin].unsafe_dangling(),
     n_write_guides: Int = 0,
     use_restir: Bool = False,
     frame_w: Int32 = Int32(0),
@@ -526,7 +526,7 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
 # depth_out:   n_pixels floats (first-hit tHit; background = 1e38).
 # Normalize TileResult_C[] → per-pixel float RGB arrays.
 def apply_film_sensor[Ob: Origin[mut=True]](
-    buf: UnsafePointer[Float32, Ob],
+    buf: Pointer[Float32, Ob],
     n_pixels: Int,
     exposure_time: Float32,
     wb: SIMD[DType.float32, 16],
@@ -564,12 +564,12 @@ def apply_film_sensor[Ob: Origin[mut=True]](
 
 
 def normalize_film[Ores: Origin[mut=True], Obo: Origin[mut=True], Oao: Origin[mut=True]](
-    results: UnsafePointer[TileResult_C, Ores],
+    results: Pointer[TileResult_C, Ores],
     count: Int32,
     iso: Float32,
     max_component_value: Float32,
-    beauty_out: UnsafePointer[Float32, Obo],
-    albedo_out: UnsafePointer[Float32, Oao],
+    beauty_out: Pointer[Float32, Obo],
+    albedo_out: Pointer[Float32, Oao],
 ):
     var scale = iso / Float32(100)
     for i in range(Int(count)):

@@ -156,7 +156,7 @@ def _cie_interp(table: List[Float64], lambda_nm: Float64) -> Float64:
     return (Float64(1.0) - weight) * table[offset] + weight * table[offset + 1]
 
 @always_inline
-def _cie_interp_ptr(table: UnsafePointer[Float64, MutUntrackedOrigin], lambda_nm: Float64) -> Float64:
+def _cie_interp_ptr(table: Pointer[Float64, MutUntrackedOrigin], lambda_nm: Float64) -> Float64:
     """Render-hot-path variant of _cie_interp — takes a raw pointer into a
     table built ONCE (see SpectralHandle in spectrum.mojo), so calling this
     every wavelength/every NEE sample costs nothing beyond the interpolation
@@ -561,7 +561,7 @@ def save_spectrum_table(table: List[Float32], res: Int, path: String) raises:
     var header = List[UInt8](capacity=8)
     header.append(UInt8(83)); header.append(UInt8(80)); header.append(UInt8(84)); header.append(UInt8(66))  # "SPTB"
     var res32 = Int32(res)
-    var res_bytes = UnsafePointer(to=res32).unsafe_bitcast[UInt8]()
+    var res_bytes = Pointer(to=res32).unsafe_bitcast[UInt8]()
     for i in range(4):
         header.append(res_bytes[unsafe_offset=i])
     f.write_bytes(Span(header))
@@ -570,7 +570,7 @@ def save_spectrum_table(table: List[Float32], res: Int, path: String) raises:
     var data = List[UInt8](capacity=count * 4)
     for i in range(count):
         var v = table[i]
-        var vp = UnsafePointer(to=v).unsafe_bitcast[UInt8]()
+        var vp = Pointer(to=v).unsafe_bitcast[UInt8]()
         data.append(vp[unsafe_offset=0]); data.append(vp[unsafe_offset=1]); data.append(vp[unsafe_offset=2]); data.append(vp[unsafe_offset=3])
     f.write_bytes(Span(data))
     f.close()
@@ -692,7 +692,7 @@ def _inverse_smoothstep_f32(x: Float32) -> Float32:
     return Float32(0.5) - sin(asin(v) / Float32(3.0))
 
 @always_inline
-def rgb_to_coeffs_table_lookup_ptr(table: UnsafePointer[Float32, MutUntrackedOrigin], res: Int, r: Float32, g: Float32, b: Float32) -> RGBSigmoidCoeffs:
+def rgb_to_coeffs_table_lookup_ptr(table: Pointer[Float32, MutUntrackedOrigin], res: Int, r: Float32, g: Float32, b: Float32) -> RGBSigmoidCoeffs:
     """Pointer-based twin of rgb_to_coeffs_table_lookup — identical trilinear
     query, just indexing a raw pointer (see SpectralHandle in spectrum.mojo)
     instead of an owned List, so it's safe to call every NEE sample without
@@ -753,7 +753,7 @@ def rgb_to_coeffs_table_lookup_ptr(table: UnsafePointer[Float32, MutUntrackedOri
 
     return RGBSigmoidCoeffs(acc0, acc1, acc2)
 
-def _cie_interp_ptr_f32(table: UnsafePointer[Float32, MutUntrackedOrigin], lambda_nm: Float32) -> Float32:
+def _cie_interp_ptr_f32(table: Pointer[Float32, MutUntrackedOrigin], lambda_nm: Float32) -> Float32:
     """Float32 twin of _cie_interp/_cie_interp_ptr, for the render-hot-path
     (GPU-safe, see CieXyzTables' docstring)."""
     var x = lambda_nm - Float32(CIE_LAMBDA_MIN)
@@ -767,9 +767,9 @@ def _cie_interp_ptr_f32(table: UnsafePointer[Float32, MutUntrackedOrigin], lambd
     return (Float32(1.0) - weight) * table[unsafe_offset=offset] + weight * table[unsafe_offset=offset + 1]
 
 def cie_xyz_at_ptr(
-    x_tbl: UnsafePointer[Float32, MutUntrackedOrigin],
-    y_tbl: UnsafePointer[Float32, MutUntrackedOrigin],
-    z_tbl: UnsafePointer[Float32, MutUntrackedOrigin],
+    x_tbl: Pointer[Float32, MutUntrackedOrigin],
+    y_tbl: Pointer[Float32, MutUntrackedOrigin],
+    z_tbl: Pointer[Float32, MutUntrackedOrigin],
     lambda_nm: Float32,
 ) -> Tuple[Float32, Float32, Float32]:
     # Named locals, not inline constructor-argument calls -- see
@@ -784,14 +784,14 @@ def cie_xyz_at_ptr(
 
 comptime _CIE_D65_NORM_F32 = Float32(10566.864005283874576)
 
-def cie_d65_runtime(d65_tbl: UnsafePointer[Float32, MutUntrackedOrigin], lambda_nm: Float32) -> Float32:
+def cie_d65_runtime(d65_tbl: Pointer[Float32, MutUntrackedOrigin], lambda_nm: Float32) -> Float32:
     """PBRT's RUNTIME D65 illuminant (RGBColorSpace::illuminant): rescaled so
     integral(D65*ybar) = CIE_Y_integral (~106.86), NOT the unit-luminance
     convention used internally for FITTING the table. Pointer-based — see
     CieXyzTables.d65_tbl / SpectralHandle."""
     return (_cie_interp_ptr_f32(d65_tbl, lambda_nm) / _CIE_D65_NORM_F32) * CIE_Y_INTEGRAL
 
-def rgb_illuminant_to_coeffs_ptr(table: UnsafePointer[Float32, MutUntrackedOrigin], res: Int, r: Float32, g: Float32, b: Float32) -> Tuple[RGBSigmoidCoeffs, Float32]:
+def rgb_illuminant_to_coeffs_ptr(table: Pointer[Float32, MutUntrackedOrigin], res: Int, r: Float32, g: Float32, b: Float32) -> Tuple[RGBSigmoidCoeffs, Float32]:
     """PBRT's RGBIlluminantSpectrum convention for light-color RGB values
     (which are NOT in [0,1] like a reflectance): scale=2*max(r,g,b), fit the
     table against rgb/scale, evaluate as scale*rsp(lambda)*D65(lambda) — the
@@ -807,5 +807,5 @@ def rgb_illuminant_to_coeffs_ptr(table: UnsafePointer[Float32, MutUntrackedOrigi
     var coeffs = rgb_to_coeffs_table_lookup_ptr(table, res, r / scale, g / scale, b / scale)
     return (coeffs, scale)
 
-def eval_illuminant_spectrum(coeffs: RGBSigmoidCoeffs, scale: Float32, d65_tbl: UnsafePointer[Float32, MutUntrackedOrigin], lambda_nm: Float32) -> Float32:
+def eval_illuminant_spectrum(coeffs: RGBSigmoidCoeffs, scale: Float32, d65_tbl: Pointer[Float32, MutUntrackedOrigin], lambda_nm: Float32) -> Float32:
     return eval_sigmoid_spectrum(coeffs, lambda_nm) * scale * cie_d65_runtime(d65_tbl, lambda_nm)

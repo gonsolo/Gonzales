@@ -96,7 +96,7 @@ def _accumulate_film_gpu_body(ctx: DeviceContext) raises:
     # pointers) selects spectral_sample_to_rgb's table-less path, which reads
     # R/G/B straight off lanes v0/v1/v2 -- so the film assertions below are
     # exactly the per-channel values this fixture wrote into `estimate`.
-    var null_tbl = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling()
+    var null_tbl = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
     ctx.enqueue_function[accumulate_film_gpu](
         path_buf.unsafe_ptr().unsafe_bitcast[PathState_C](),
         film_buf.unsafe_ptr(), albedo_buf.unsafe_ptr(), Int64(n),

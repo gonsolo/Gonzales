@@ -84,7 +84,7 @@ comptime SPHERE_RADIUS_G: Float32 = 6.5
 
 # ── Small linear algebra ────────────────────────────────────────────────────
 
-def cstr(s: String) -> UnsafePointer[UInt8, MutUntrackedOrigin]:
+def cstr(s: String) -> Pointer[UInt8, MutUntrackedOrigin]:
     """Null-terminated, mutable-pointer copy of `s` for the OIIO bridge."""
     var b = s.as_bytes()
     var n = len(b)
@@ -246,19 +246,19 @@ def compute_shading_frame_derivative(
 # need mip level 0 here: smoothing is 0 (twostage=false in the scene).
 
 struct Normalmap(Movable):
-    var slopes: UnsafePointer[Float32, MutUntrackedOrigin]  # 2 floats/texel
+    var slopes: Pointer[Float32, MutUntrackedOrigin]  # 2 floats/texel
     var res: Int
 
     def __init__(out self, filename: String) raises:
-        var pixels_ptr = alloc[UnsafePointer[Float32, MutUntrackedOrigin]](1)
+        var pixels_ptr = alloc[Pointer[Float32, MutUntrackedOrigin]](1)
         var w_out = alloc[Int32](1)
         var h_out = alloc[Int32](1)
         w_out[unsafe_offset=0] = Int32(0); h_out[unsafe_offset=0] = Int32(0)
         var fname = cstr(filename)
         var ok = external_call["load_texture_rgb", Int32,
-            UnsafePointer[UInt8, MutUntrackedOrigin],
-            UnsafePointer[UnsafePointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin],
-            UnsafePointer[Int32, MutUntrackedOrigin], UnsafePointer[Int32, MutUntrackedOrigin],
+            Pointer[UInt8, MutUntrackedOrigin],
+            Pointer[Pointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin],
+            Pointer[Int32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin],
             Int32](
             fname, pixels_ptr, w_out, h_out, Int32(1))
         fname.unsafe_free()
@@ -331,20 +331,20 @@ struct Normalmap(Movable):
 # ── Albedo texture (floor) ──────────────────────────────────────────────────
 
 struct ColorTexture(Movable):
-    var data: UnsafePointer[Float32, MutUntrackedOrigin]
+    var data: Pointer[Float32, MutUntrackedOrigin]
     var w: Int
     var h: Int
 
     def __init__(out self, filename: String) raises:
-        var pixels_ptr = alloc[UnsafePointer[Float32, MutUntrackedOrigin]](1)
+        var pixels_ptr = alloc[Pointer[Float32, MutUntrackedOrigin]](1)
         var w_out = alloc[Int32](1)
         var h_out = alloc[Int32](1)
         w_out[unsafe_offset=0] = Int32(0); h_out[unsafe_offset=0] = Int32(0)
         var fname = cstr(filename)
         var ok = external_call["load_texture_rgb", Int32,
-            UnsafePointer[UInt8, MutUntrackedOrigin],
-            UnsafePointer[UnsafePointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin],
-            UnsafePointer[Int32, MutUntrackedOrigin], UnsafePointer[Int32, MutUntrackedOrigin],
+            Pointer[UInt8, MutUntrackedOrigin],
+            Pointer[Pointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin],
+            Pointer[Int32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin],
             Int32](
             fname, pixels_ptr, w_out, h_out, Int32(0))   # raw=0 -> sRGB decoded to linear
         fname.unsafe_free()
@@ -1344,8 +1344,8 @@ def main() raises:
 
     var name = cstr(out_path)
     var rc = external_call["write_image_rgb", Int32,
-        UnsafePointer[UInt8, MutUntrackedOrigin],
-        UnsafePointer[Float32, MutUntrackedOrigin],
+        Pointer[UInt8, MutUntrackedOrigin],
+        Pointer[Float32, MutUntrackedOrigin],
         Int32, Int32, Int32, Int32](
         name, pixels.unsafe_origin_cast[MutUntrackedOrigin](),
         Int32(width), Int32(height), Int32(0), Int32(0))

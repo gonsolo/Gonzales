@@ -70,15 +70,15 @@ struct LightContext(Copyable, Movable):
     fields — construction call sites build this with keyword args precisely
     because several fields share the same Int/pointer type and a positional
     transposition wouldn't be caught by the type checker."""
-    var area_lights:      UnsafePointer[AreaLight_C, MutUntrackedOrigin]
+    var area_lights:      Pointer[AreaLight_C, MutUntrackedOrigin]
     var area_light_count: Int
-    var distant_lights:   UnsafePointer[DistantLight_C, MutUntrackedOrigin]
+    var distant_lights:   Pointer[DistantLight_C, MutUntrackedOrigin]
     var distant_count:    Int
-    var point_lights:     UnsafePointer[PointLight_C, MutUntrackedOrigin]
+    var point_lights:     Pointer[PointLight_C, MutUntrackedOrigin]
     var point_count:      Int
-    var infinite_lights:  UnsafePointer[InfiniteLight_C, MutUntrackedOrigin]
+    var infinite_lights:  Pointer[InfiniteLight_C, MutUntrackedOrigin]
     var infinite_count:   Int
-    var spheres:          UnsafePointer[Sphere_C, MutUntrackedOrigin]
+    var spheres:          Pointer[Sphere_C, MutUntrackedOrigin]
     var sphere_count:     Int
     var light_sampler:    LightSampler_C
 
@@ -88,13 +88,13 @@ struct ShadeContext:
     and material shaders. Light-source data lives in the nested `lights`
     LightContext (step 7)."""
     var path_idx:         Int
-    var bvh2Nodes:        UnsafePointer[BVH2Node, MutUntrackedOrigin]
-    var primIds:          UnsafePointer[PrimId_C, MutUntrackedOrigin]
-    var meshes:           UnsafePointer[TriangleMesh_C, MutUntrackedOrigin]
-    var curves:           UnsafePointer[Curve_C, MutUntrackedOrigin]
-    var materials:        UnsafePointer[Material_C, MutUntrackedOrigin]
-    var tex_filenames:    UnsafePointer[UnsafePointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin]
-    var textures:         UnsafePointer[GpuTexture_C, MutUntrackedOrigin]
+    var bvh2Nodes:        Pointer[BVH2Node, MutUntrackedOrigin]
+    var primIds:          Pointer[PrimId_C, MutUntrackedOrigin]
+    var meshes:           Pointer[TriangleMesh_C, MutUntrackedOrigin]
+    var curves:           Pointer[Curve_C, MutUntrackedOrigin]
+    var materials:        Pointer[Material_C, MutUntrackedOrigin]
+    var tex_filenames:    Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin]
+    var textures:         Pointer[GpuTexture_C, MutUntrackedOrigin]
     var n_textures:       Int
     # Slope-space copies of the normal maps, indexed exactly like
     # `tex_filenames`/`textures` (so a Material_C's `normal_tex_idx`
@@ -104,10 +104,10 @@ struct ShadeContext:
     # device-side scene upload has no slope maps yet, so a normal-mapped
     # caustic caster falls back to its smooth surface there, exactly as it
     # did before these existed).
-    var nmaps:            UnsafePointer[NormalSlopeMap_C, MutUntrackedOrigin]
-    var shadow_tasks:     UnsafePointer[ShadowTask_C, MutUntrackedOrigin]
+    var nmaps:            Pointer[NormalSlopeMap_C, MutUntrackedOrigin]
+    var shadow_tasks:     Pointer[ShadowTask_C, MutUntrackedOrigin]
     var px_scale:         Float32
-    var sobol_matrices:   UnsafePointer[UInt32, MutUntrackedOrigin]
+    var sobol_matrices:   Pointer[UInt32, MutUntrackedOrigin]
     var guide:            GuideGrid
     # Phase 2 (docs/A2_restir_migration_plan.md): CPU-only today, like
     # `guide` above -- every GPU ShadeContext construction site passes
@@ -120,9 +120,9 @@ struct ShadeContext:
     # pass dangling/zero-count values — GPU's own device-side scene upload
     # never populates instance data, so no PrimId_C.type==6 leaf can appear
     # there and these are never dereferenced on that path.
-    var blasNodesArr:   UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin]
-    var blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin]
-    var instances:      UnsafePointer[Instance_C, MutUntrackedOrigin]
+    var blasNodesArr:   Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin]
+    var blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin]
+    var instances:      Pointer[Instance_C, MutUntrackedOrigin]
     # Staged spectral rendering rollout (Stage 2c, see project_spectral_rendering
     # memory) — host pointers on CPU, device pointers on GPU (see gpu.mojo's
     # ShadeContext construction sites).
@@ -131,7 +131,7 @@ struct ShadeContext:
     # indexed by Material_C.measured_idx (see measured_bsdf.mojo's loader).
     # Host pointer on CPU; dangling on GPU call sites until Stage 3 uploads
     # these as device buffers.
-    var measured_brdfs: UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin]
+    var measured_brdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin]
     # Phase 4 (docs/A2_restir_migration_plan.md), CPU-only, dead/unwired
     # (dangling/null on every call site except shade_core_cpu_nee's, which
     # is itself not called with real buffers by any render path yet -- see
@@ -147,7 +147,7 @@ struct ShadeContext:
     # gi_temporal_spatial_combine/gi_resolve consume once bounce 1 lands on
     # a diffuse x2 too (this scope's restriction, see
     # _gi_generate_recon_candidate's docstring for why).
-    var gi_pending: UnsafePointer[GIPendingX1, MutUntrackedOrigin]
+    var gi_pending: Pointer[GIPendingX1, MutUntrackedOrigin]
     var gi_io:      GIReservoirIO
 
 # Orient an emitter triangle's WINDING normal to agree with the mesh's own
@@ -176,7 +176,7 @@ def _emitter_face_normal(
     bu: Float32, bv: Float32,
     p0: Vec3f, p1: Vec3f, p2: Vec3f,
     instance_idx: Int32 = Int32(-1),
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin] = UnsafePointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Vec3f:
     var gn = cross(p1 - p0, p2 - p0)
     if Int(mesh.normals) <= 4:
@@ -201,7 +201,7 @@ def _shading_normal(
     bu: Float32, bv: Float32,
     geo_normal: Vec3f,
     instance_idx: Int32 = Int32(-1),
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin] = UnsafePointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Vec3f:
     """Interpolate per-vertex shading normals with barycentric (bu, bv).
     Falls back to the geometric normal if the mesh has no shading normals.
@@ -321,8 +321,8 @@ def sample_texture[use_gpu: Bool](
     u: Float32, v: Float32,
     raw: Bool,
     pixel_uv: Float32,   # texture-space footprint of one pixel (uv units); <=0 => LOD 0
-    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
-    textures: UnsafePointer[GpuTexture_C, MutUntrackedOrigin],
+    tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
+    textures: Pointer[GpuTexture_C, MutUntrackedOrigin],
     n_textures: Int,
     mut found: Bool,
 ) -> RGB:
@@ -348,8 +348,8 @@ def sample_texture[use_gpu: Bool](
                 var tr = alloc[Float32](3)
                 tr[unsafe_offset=0] = Float32(0.0); tr[unsafe_offset=1] = Float32(0.0); tr[unsafe_offset=2] = Float32(0.0)
                 _ = external_call["texture", Bool,
-                    UnsafePointer[UInt8, MutUntrackedOrigin], Float32, Float32,
-                    UnsafePointer[Float32, MutUntrackedOrigin]](filename, su, tv, tr)
+                    Pointer[UInt8, MutUntrackedOrigin], Float32, Float32,
+                    Pointer[Float32, MutUntrackedOrigin]](filename, su, tv, tr)
                 var rr = tr[unsafe_offset=0]; var gg = tr[unsafe_offset=1]; var bb = tr[unsafe_offset=2]
                 tr.unsafe_free()
                 found = True
@@ -364,8 +364,8 @@ def _tex_lookup[use_gpu: Bool](
     inter: Intersection_C,
     v0: Int, v1: Int, v2: Int,
     mesh: TriangleMesh_C,
-    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
-    textures: UnsafePointer[GpuTexture_C, MutUntrackedOrigin],
+    tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
+    textures: Pointer[GpuTexture_C, MutUntrackedOrigin],
     n_textures: Int,
     pixel_uv: Float32 = Float32(0.0),
 ) -> RGB:
@@ -419,8 +419,8 @@ def _tex_lookup[use_gpu: Bool](
                 var tr = alloc[Float32](3)
                 tr[unsafe_offset=0] = Float32(0.0); tr[unsafe_offset=1] = Float32(0.0); tr[unsafe_offset=2] = Float32(0.0)
                 _ = external_call["texture", Bool,
-                    UnsafePointer[UInt8, MutUntrackedOrigin], Float32, Float32,
-                    UnsafePointer[Float32, MutUntrackedOrigin]](filename, su, tv, tr)
+                    Pointer[UInt8, MutUntrackedOrigin], Float32, Float32,
+                    Pointer[Float32, MutUntrackedOrigin]](filename, su, tv, tr)
                 var result = RGB(_srgb_to_linear(tr[unsafe_offset=0]), _srgb_to_linear(tr[unsafe_offset=1]), _srgb_to_linear(tr[unsafe_offset=2]))
                 tr.unsafe_free()
                 return RGB(mat.tex_bias.r + mat.tex_scale.r * result.r,
@@ -431,10 +431,10 @@ def _tex_lookup[use_gpu: Bool](
 
 @always_inline
 def shade_core(
-    paths: UnsafePointer[PathState_C, MutUntrackedOrigin],
-    intersections: UnsafePointer[Intersection_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: UnsafePointer[Material_C, MutUntrackedOrigin],
+    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    intersections: Pointer[Intersection_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    materials: Pointer[Material_C, MutUntrackedOrigin],
     spectral: SpectralHandle,
     tid: Int,
 ):
@@ -514,7 +514,7 @@ def shade_core(
 @always_inline
 def _get_tri_verts(
     inter: Intersection_C,
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
 ) -> Tuple[TriangleMesh_C, Int, Int, Int, Bool]:
     var mi: Int
     var bv: Int
@@ -536,12 +536,12 @@ def _get_tri_verts(
 # Returns (geom_normal_ff, ray_dir, ray_org).
 @always_inline
 def _geom_normal_and_ray(
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     p0: Vec3f,
     p1: Vec3f,
     p2: Vec3f,
     instance_idx: Int32 = Int32(-1),
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin] = UnsafePointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Tuple[Vec3f, Vec3f, Vec3f]:
     """p0/p1/p2 come straight from `mesh.points` — object-space if this hit
     came from an instanced BLAS (instance_idx >= 0), so the resulting normal
@@ -569,9 +569,9 @@ def _geom_normal_and_ray(
 # unlike the triangle path there is no object/world transform to apply.
 @always_inline
 def _sphere_geom_normal_and_ray(
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     inter: Intersection_C,
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
 ) -> Tuple[Vec3f, Vec3f, Vec3f]:
     var sph = spheres[unsafe_offset=Int(inter.primId.id1)]
     var rd = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
@@ -601,12 +601,12 @@ def _sphere_geom_normal_and_ray(
 # False the caller must deactivate the path without reading anything else.
 @always_inline
 def _hit_geom(
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     inter: Intersection_C,
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
     instance_idx: Int32 = Int32(-1),
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin] = UnsafePointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Tuple[Bool, Bool, Vec3f, Vec3f, Vec3f, TriangleMesh_C, Int, Int, Int]:
     """Returns (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2)."""
     if inter.primId.type == Int8(4):
@@ -646,7 +646,7 @@ def _to_spec_illum(ctx: ShadeContext, c: RGB, wl: SampledWavelengths) -> Spectra
 
 @always_inline
 def _shadow_contribute[enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     ctx: ShadeContext,
     origin: Vec3f,
     dir: Vec3f,
@@ -688,7 +688,7 @@ def _shadow_contribute[enqueue_shadow: Bool](
 # ── DiffuseTransmission branch ────────────────────────────────────────────────
 @always_inline
 def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
 ):
@@ -806,7 +806,7 @@ def _albedo_highlight_boost(albedo: RGB, contrib: SpectralSample) -> RGB:
 
 @always_inline
 def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
     mat: Material_C,
@@ -1071,7 +1071,7 @@ comptime RR_THROUGHPUT_CLAMP: Float32 = 32.0
 # the same bounce for other purposes and must not draw a second one.
 @always_inline
 def _apply_russian_roulette(
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     pcg: PCG32,
     u_rr: Float32,
 ):
@@ -1104,7 +1104,7 @@ def _apply_russian_roulette(
 # variants, so the early-return there is a harmless no-op for them.
 @always_inline
 def _finish_delta_bounce(
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     mut pcg: PCG32,
     bs: BxDFSample,
     f_spec: SpectralSample,
@@ -1140,13 +1140,13 @@ def _finish_delta_bounce(
 # ── Dielectric (glass) branch ─────────────────────────────────────────────────
 @always_inline
 def shade_dielectric[use_gpu: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     inter: Intersection_C,
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
     mat: Material_C,
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin],
-    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin] = UnsafePointer[UnsafePointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    textures: UnsafePointer[GpuTexture_C, MutUntrackedOrigin] = UnsafePointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
+    tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    textures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
     n_textures: Int = 0,
     px_scale: Float32 = Float32(0.0),
 ):
@@ -1328,11 +1328,11 @@ def shade_dielectric[use_gpu: Bool](
 # soap bubbles, thin films. IOR stored in mat.albedo.r like regular dielectric.
 @always_inline
 def shade_thin_dielectric(
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     inter: Intersection_C,
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
     mat: Material_C,
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
 ):
     var (ok, is_sphere, geom_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, meshes, spheres)
     if not ok:
@@ -1395,7 +1395,7 @@ def _nee_sample_simple_light(
 
 @always_inline
 def _nee_loop_simple[enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     ctx: ShadeContext,
     normal: Vec3f,
     hit_point: Vec3f,
@@ -1431,7 +1431,7 @@ def _nee_loop_simple[enqueue_shadow: Bool](
 
 @always_inline
 def _shade_conductor_nee[enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     ctx: ShadeContext,
     n: Vec3f,
     wo: Vec3f,
@@ -1478,7 +1478,7 @@ def _shade_conductor_nee[enqueue_shadow: Bool](
 
 @always_inline
 def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
     mat: Material_C,
@@ -1629,9 +1629,9 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
 # bisection trail, including the earlier wrong kernel-size and by-value-struct
 # hypotheses.
 def _shade_measured_nee[enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     ctx: ShadeContext,
-    measured_brdfs: UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin],
+    measured_brdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin],
     measured_idx: Int32,
     tangent: Vec3f, bitangent: Vec3f, normal: Vec3f,
     wo: Vec3f,
@@ -1671,7 +1671,7 @@ def _shade_measured_nee[enqueue_shadow: Bool](
 
 @always_inline
 def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
     mat: Material_C,
@@ -1792,7 +1792,7 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
 # This is an energy-conserving two-lobe approximation of pbrt's LayeredBxDF.
 @always_inline
 def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
     mat: Material_C,
@@ -1844,7 +1844,7 @@ def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
 # mat.roughU = blend amount (probability of picking mat2).
 # Not @always_inline: shade_mix ↔ _shade_dispatch would form an always_inline recursion.
 def shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
     mat: Material_C,
@@ -1874,8 +1874,8 @@ def _apply_normal_map[use_gpu: Bool](
     p0: Vec3f,
     p1: Vec3f,
     p2: Vec3f,
-    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
-    textures: UnsafePointer[GpuTexture_C, MutUntrackedOrigin],
+    tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
+    textures: Pointer[GpuTexture_C, MutUntrackedOrigin],
     n_textures: Int,
     pixel_uv: Float32 = Float32(0.0),
 ) -> Vec3f:
@@ -1937,8 +1937,8 @@ def _apply_bump_map[use_gpu: Bool](
     p0: Vec3f,
     p1: Vec3f,
     p2: Vec3f,
-    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
-    textures: UnsafePointer[GpuTexture_C, MutUntrackedOrigin],
+    tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
+    textures: Pointer[GpuTexture_C, MutUntrackedOrigin],
     n_textures: Int,
     pixel_uv: Float32 = Float32(0.0),
 ) -> Vec3f:
@@ -2025,8 +2025,8 @@ def _apply_normal_map_sphere[use_gpu: Bool](
     center: Vec3f,
     hit_point: Vec3f,
     geom_normal: Vec3f,
-    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
-    textures: UnsafePointer[GpuTexture_C, MutUntrackedOrigin],
+    tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
+    textures: Pointer[GpuTexture_C, MutUntrackedOrigin],
     n_textures: Int,
 ) -> Vec3f:
     """Analytic-sphere counterpart to `_apply_normal_map` -- no mesh/UVs
@@ -2180,8 +2180,8 @@ def _apply_surface_maps[use_gpu: Bool](
     orient_to: Vec3f,
     ray_dir: Vec3f,
     px_scale: Float32,
-    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
-    textures: UnsafePointer[GpuTexture_C, MutUntrackedOrigin],
+    tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
+    textures: Pointer[GpuTexture_C, MutUntrackedOrigin],
     n_textures: Int,
 ) -> Vec3f:
     if mat.normal_tex_idx < Int32(0) and mat.bump_tex_idx < Int32(0):
@@ -2211,7 +2211,7 @@ def _apply_surface_maps[use_gpu: Bool](
 # Does NOT perform the backface check — caller must check dot(gc.normal, gc.wo) > 0.
 @always_inline
 def _build_geom_context_full[use_gpu: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     inter: Intersection_C,
     mat: Material_C,
     ctx: ShadeContext,
@@ -2256,8 +2256,8 @@ def _build_geom_context_full[use_gpu: Bool](
 # the path's sampler_dim counter.
 @always_inline
 def _draw_sobol_8(
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
-    sobol_matrices: UnsafePointer[UInt32, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
 ) -> SobolSamples8:
     var _sidx = Int(path_ptr[].sobol_idx)
     var _sdim = Int(path_ptr[].sampler_dim)
@@ -2283,7 +2283,7 @@ def _draw_sobol_8(
 
 # ── Marschner/Chiang hair BSDF (3-lobe: R, TT, TRT) ─────────────────────────
 def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
     mat: Material_C,
@@ -2606,7 +2606,7 @@ def _mnee_walk(
 
 @always_inline
 def _nee_infinite_light[enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     ctx: ShadeContext,
     ilight: InfiniteLight_C,
     normal: Vec3f,
@@ -3219,7 +3219,7 @@ def _sms_probe_and_solve(
 
 @always_inline
 def _mnee_area_light_contribute(
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     ctx: ShadeContext,
     normal: Vec3f,
     hit_point: Vec3f,
@@ -3449,7 +3449,7 @@ comptime SMS_MAX_FINALIZED_WEIGHT: Float32 = Float32(10.0)
 comptime SMS_TEMPORAL_M_CAP: Float32 = Float32(64.0)
 
 def sms_resolve(
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin], ctx: ShadeContext,
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin], ctx: ShadeContext,
     hit_point: Vec3f, normal: Vec3f, alb: RGB,
     mut res: SMSReservoir,
 ):
@@ -3506,7 +3506,7 @@ def sms_resolve(
     path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, contrib, path_ptr[].wavelengths)
 
 def sms_temporal_step(
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin], ctx: ShadeContext,
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin], ctx: ShadeContext,
     hit_point: Vec3f, normal: Vec3f, alb: RGB,
     shadow_dir: Vec3f, dist: Float32, light_point: Vec3f,
     ldp_du_v: Vec3f, ldp_dv_v: Vec3f,
@@ -3566,7 +3566,7 @@ def sms_temporal_step(
     return dielectric_found
 
 def _nee_area_lights[enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     ctx: ShadeContext,
     normal: Vec3f,
     hit_point: Vec3f,
@@ -3745,7 +3745,7 @@ def di_generate_reservoir(
     return res
 
 def di_resolve(
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin], ctx: ShadeContext,
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin], ctx: ShadeContext,
     hit_point: Vec3f, normal: Vec3f, alb: RGB,
     mut res: DIReservoir,
     z_norm: Float32 = Float32(-1.0),
@@ -3898,7 +3898,7 @@ def _gi_generate_recon_candidate(
     return res
 
 def gi_resolve(
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin], ctx: ShadeContext,
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin], ctx: ShadeContext,
     hit_point: Vec3f, normal: Vec3f, alb: RGB,
     throughput: SpectralSample,
     res: GIReservoir,
@@ -4045,7 +4045,7 @@ comptime DI_SPATIAL_DEPTH_REL_MAX: Float32 = Float32(0.1)
 comptime DI_MAX_FINALIZED_WEIGHT: Float32 = Float32(10.0)
 
 def di_temporal_step(
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin], ctx: ShadeContext,
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin], ctx: ShadeContext,
     hit_point: Vec3f, normal: Vec3f, alb: RGB,
     mut pcg: PCG32,
     restir_io: ReservoirIO = reservoir_io_null(),
@@ -4192,7 +4192,7 @@ def di_temporal_step(
         restir_io.write[unsafe_offset=pixel_idx] = res
 
 def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     ctx: ShadeContext,
     normal: Vec3f,
     hit_point: Vec3f,
@@ -4299,7 +4299,7 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
 # Texture lookup uses OIIO external_call on CPU and device-resident GpuTexture_C on GPU.
 @always_inline
 def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
     mat: Material_C,
@@ -4421,7 +4421,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
 
 @always_inline
 def shade_interface(
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     inter: Intersection_C,
 ):
     """Interface (null/passthrough) material: advance the ray through the surface.
@@ -4453,7 +4453,7 @@ def shade_interface(
 @always_inline
 def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     mat: Material_C,
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
     guide_write: GuideGrid = null_guide(),
@@ -4515,7 +4515,7 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
 # Texture lookup uses OIIO external_call on CPU and device-resident GpuTexture_C on GPU.
 @always_inline
 def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: UnsafePointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     inter: Intersection_C,
     ctx: ShadeContext,
     guide_write: GuideGrid = null_guide(),
@@ -4569,8 +4569,8 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                         var tr = alloc[Float32](3)
                         tr[unsafe_offset=0] = Float32(0.0); tr[unsafe_offset=1] = Float32(0.0); tr[unsafe_offset=2] = Float32(0.0)
                         _ = external_call["texture", Bool,
-                            UnsafePointer[UInt8, MutUntrackedOrigin], Float32, Float32,
-                            UnsafePointer[Float32, MutUntrackedOrigin]](fname, u, v, tr)
+                            Pointer[UInt8, MutUntrackedOrigin], Float32, Float32,
+                            Pointer[Float32, MutUntrackedOrigin]](fname, u, v, tr)
                         env_rgb = RGB(tr[unsafe_offset=0], tr[unsafe_offset=1], tr[unsafe_offset=2]) * ilight.scale
                         tr.unsafe_free()
                     else:
@@ -4835,41 +4835,41 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
 
 @always_inline
 def shade_core_cpu_nee(
-    paths: UnsafePointer[PathState_C, MutUntrackedOrigin],
-    intersections: UnsafePointer[Intersection_C, MutUntrackedOrigin],
-    bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    curves: UnsafePointer[Curve_C, MutUntrackedOrigin],
-    materials: UnsafePointer[Material_C, MutUntrackedOrigin],
-    areaLights: UnsafePointer[AreaLight_C, MutUntrackedOrigin],
+    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    intersections: Pointer[Intersection_C, MutUntrackedOrigin],
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
+    materials: Pointer[Material_C, MutUntrackedOrigin],
+    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
     areaLightCount: Int,
-    tex_filenames: UnsafePointer[UnsafePointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
+    tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
     tid: Int,
-    distantLights: UnsafePointer[DistantLight_C, MutUntrackedOrigin],
+    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
     distantLightCount: Int,
-    pointLights: UnsafePointer[PointLight_C, MutUntrackedOrigin],
+    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
     pointLightCount: Int,
-    infiniteLights: UnsafePointer[InfiniteLight_C, MutUntrackedOrigin],
+    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
     infiniteLightCount: Int,
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
     sphereCount: Int,
     light_sampler: LightSampler_C,
-    sobol_matrices: UnsafePointer[UInt32, MutUntrackedOrigin],
+    sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     guide: GuideGrid,
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin] = UnsafePointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
     guide_write: GuideGrid = null_guide(),
     spectral: SpectralHandle = null_spectral_handle(),
-    measured_brdfs: UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin] = UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+    measured_brdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
     use_restir: Bool = False,
     restir_io: ReservoirIO = reservoir_io_null(),
     pixel_idx: Int = -1,
-    gi_pending: UnsafePointer[GIPendingX1, MutUntrackedOrigin] = UnsafePointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
+    gi_pending: Pointer[GIPendingX1, MutUntrackedOrigin] = Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
     gi_io: GIReservoirIO = gi_reservoir_io_null(),
     sms_io: SMSReservoirIO = sms_reservoir_io_null(),
-    nmaps: UnsafePointer[NormalSlopeMap_C, MutUntrackedOrigin] = UnsafePointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
+    nmaps: Pointer[NormalSlopeMap_C, MutUntrackedOrigin] = Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
 ):
     var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].active == 0:
@@ -4878,9 +4878,9 @@ def shade_core_cpu_nee(
     var ctx = ShadeContext(
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=tex_filenames,
-        textures=UnsafePointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), n_textures=0,
+        textures=Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), n_textures=0,
         nmaps=nmaps,
-        shadow_tasks=UnsafePointer[ShadowTask_C, MutUntrackedOrigin].unsafe_dangling(),
+        shadow_tasks=Pointer[ShadowTask_C, MutUntrackedOrigin].unsafe_dangling(),
         px_scale=Float32(0.0), sobol_matrices=sobol_matrices, guide=guide, use_restir=use_restir,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=spectral, measured_brdfs=measured_brdfs,

@@ -19,13 +19,13 @@ from gonzales.geometry import (
 )
 from gonzales.bvh import BVH2Node, traverse_bvh2_core
 
-comptime NO_CURVES = UnsafePointer[Curve_C, MutUntrackedOrigin].unsafe_dangling
+comptime NO_CURVES = Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling
 
 def _nested_shared(
-    bvh: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    prims: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    cell: UnsafePointer[Intersection_C, MutUntrackedOrigin],
+    bvh: Pointer[BVH2Node, MutUntrackedOrigin],
+    prims: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    cell: Pointer[Intersection_C, MutUntrackedOrigin],
     org: Point3f, dir: Vec3f,
 ) -> Float32:
     """Traverses through the CALLER'S cell -- the aliasing under test."""
@@ -35,9 +35,9 @@ def _nested_shared(
     return cell[unsafe_offset=0].tHit if cell[unsafe_offset=0].hit != Int8(0) else Float32(-1)
 
 def _nested_private(
-    bvh: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    prims: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
+    bvh: Pointer[BVH2Node, MutUntrackedOrigin],
+    prims: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
     org: Point3f, dir: Vec3f,
 ) -> Float32:
     """Same, but with its own local cell -- the fix."""
@@ -51,11 +51,11 @@ def _nested_private(
     return cell[unsafe_offset=0].tHit if cell[unsafe_offset=0].hit != Int8(0) else Float32(-1)
 
 def k_single(
-    bvh: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    prims: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    scratch: UnsafePointer[Intersection_C, MutUntrackedOrigin],
-    out_buf: UnsafePointer[Float32, MutUntrackedOrigin],
+    bvh: Pointer[BVH2Node, MutUntrackedOrigin],
+    prims: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    out_buf: Pointer[Float32, MutUntrackedOrigin],
 ):
     if Int(block_idx.x * block_dim.x + thread_idx.x) != 0: return
     var org = Point3f(Float32(0), Float32(0), Float32(-2))
@@ -67,11 +67,11 @@ def k_single(
     out_buf[unsafe_offset=1] = Float32(0)
 
 def k_aliased(
-    bvh: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    prims: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    scratch: UnsafePointer[Intersection_C, MutUntrackedOrigin],
-    out_buf: UnsafePointer[Float32, MutUntrackedOrigin],
+    bvh: Pointer[BVH2Node, MutUntrackedOrigin],
+    prims: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    out_buf: Pointer[Float32, MutUntrackedOrigin],
 ):
     if Int(block_idx.x * block_dim.x + thread_idx.x) != 0: return
     var org = Point3f(Float32(0), Float32(0), Float32(-2))
@@ -85,11 +85,11 @@ def k_aliased(
     out_buf[unsafe_offset=1] = t1
 
 def k_private(
-    bvh: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    prims: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    scratch: UnsafePointer[Intersection_C, MutUntrackedOrigin],
-    out_buf: UnsafePointer[Float32, MutUntrackedOrigin],
+    bvh: Pointer[BVH2Node, MutUntrackedOrigin],
+    prims: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    out_buf: Pointer[Float32, MutUntrackedOrigin],
 ):
     if Int(block_idx.x * block_dim.x + thread_idx.x) != 0: return
     var org = Point3f(Float32(0), Float32(0), Float32(-2))
@@ -117,8 +117,8 @@ def main() raises:
     vidx[unsafe_offset=0]=0; vidx[unsafe_offset=1]=1; vidx[unsafe_offset=2]=2
     var mesh_h = alloc[TriangleMesh_C](1)
     mesh_h[unsafe_offset=0] = TriangleMesh_C(pts, vidx, vidx,
-        UnsafePointer[Float32, MutUntrackedOrigin](unsafe_from_address=1),
-        UnsafePointer[Float32, MutUntrackedOrigin](unsafe_from_address=1))
+        Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=1),
+        Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=1))
     var prim_h = alloc[PrimId_C](1)
     prim_h[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var bvh_h = alloc[BVH2Node](1)
@@ -153,8 +153,8 @@ def main() raises:
             pts_d.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin](),
             vi_d.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_origin_cast[MutUntrackedOrigin](),
             vi_d.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_origin_cast[MutUntrackedOrigin](),
-            UnsafePointer[Float32, MutUntrackedOrigin](unsafe_from_address=1),
-            UnsafePointer[Float32, MutUntrackedOrigin](unsafe_from_address=1))
+            Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=1),
+            Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=1))
     var prim_d = ctx.enqueue_create_buffer[DType.uint8](size_of[PrimId_C]())
     with prim_d.map_to_host() as h:
         h.unsafe_ptr().unsafe_bitcast[PrimId_C]()[unsafe_offset=0] = prim_h[unsafe_offset=0]

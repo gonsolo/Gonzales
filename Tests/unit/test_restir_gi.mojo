@@ -167,10 +167,10 @@ def test_gi_combine_temporal_accumulates_confidence_regardless_of_winner() raise
     write_buf.append(gi_reservoir_init())
     var io = GIReservoirIO(
         read=prev_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](), write=write_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
-        gbuf_normal=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-        gbuf_depth=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-        gbuf_material_id=UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-        gbuf_world_pos=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_normal=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_depth=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_material_id=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_world_pos=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0),  # spatial disabled -- isolates temporal-only behavior
     )
     var pcg = PCG32(UInt64(12345), UInt64(1))
@@ -201,10 +201,10 @@ def test_gi_combine_rejects_delta_flagged_previous_reservoir_entirely() raises:
     write_buf.append(gi_reservoir_init())
     var io = GIReservoirIO(
         read=prev_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](), write=write_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
-        gbuf_normal=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-        gbuf_depth=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-        gbuf_material_id=UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-        gbuf_world_pos=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_normal=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_depth=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_material_id=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_world_pos=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0),
     )
     var pcg = PCG32(UInt64(12345), UInt64(1))
@@ -233,10 +233,10 @@ def test_gi_combine_rejects_invalid_previous_reservoir() raises:
     write_buf.append(gi_reservoir_init())
     var io = GIReservoirIO(
         read=prev_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](), write=write_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
-        gbuf_normal=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-        gbuf_depth=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-        gbuf_material_id=UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-        gbuf_world_pos=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_normal=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_depth=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_material_id=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_world_pos=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0),
     )
     var pcg = PCG32(UInt64(12345), UInt64(1))

@@ -134,24 +134,24 @@ struct GIReservoirIO(TrivialRegisterPassable):
     pointers default to `.unsafe_dangling()` and frame_w/frame_h to 0;
     gi_temporal_spatial_combine checks `_is_real_ptr`/`> 0` before ever
     touching them, matching ReservoirIO's own null-safety contract."""
-    var read:  UnsafePointer[GIReservoir, MutUntrackedOrigin]
-    var write: UnsafePointer[GIReservoir, MutUntrackedOrigin]
-    var gbuf_normal:      UnsafePointer[Float32, MutUntrackedOrigin]
-    var gbuf_depth:       UnsafePointer[Float32, MutUntrackedOrigin]
-    var gbuf_material_id: UnsafePointer[Int32, MutUntrackedOrigin]
-    var gbuf_world_pos:   UnsafePointer[Float32, MutUntrackedOrigin]
+    var read:  Pointer[GIReservoir, MutUntrackedOrigin]
+    var write: Pointer[GIReservoir, MutUntrackedOrigin]
+    var gbuf_normal:      Pointer[Float32, MutUntrackedOrigin]
+    var gbuf_depth:       Pointer[Float32, MutUntrackedOrigin]
+    var gbuf_material_id: Pointer[Int32, MutUntrackedOrigin]
+    var gbuf_world_pos:   Pointer[Float32, MutUntrackedOrigin]
     var frame_w: Int32
     var frame_h: Int32
 
 @always_inline
 def gi_reservoir_io_null() -> GIReservoirIO:
     return GIReservoirIO(
-        read=UnsafePointer[GIReservoir, MutUntrackedOrigin].unsafe_dangling(),
-        write=UnsafePointer[GIReservoir, MutUntrackedOrigin].unsafe_dangling(),
-        gbuf_normal=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-        gbuf_depth=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-        gbuf_material_id=UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-        gbuf_world_pos=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        read=Pointer[GIReservoir, MutUntrackedOrigin].unsafe_dangling(),
+        write=Pointer[GIReservoir, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_normal=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_depth=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_material_id=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_world_pos=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0),
     )
 

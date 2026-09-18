@@ -57,7 +57,7 @@ struct MitsubaTag(Copyable, Movable):
         self.is_close = is_close
         self.is_self_close = is_self_close
 
-def _mxml_make_string(buf: UnsafePointer[UInt8, MutUntrackedOrigin], start: Int, end: Int) -> String:
+def _mxml_make_string(buf: Pointer[UInt8, MutUntrackedOrigin], start: Int, end: Int) -> String:
     var n = end - start
     var tmp = alloc[UInt8](n + 1)
     for i in range(n):
@@ -127,7 +127,7 @@ def _mit_find_value_tag(tags: List[MitsubaTag], start: Int, end: Int, param_name
         return idx
     return _mit_find_child_by_attr(tags, start, end, "spectrum", "name", param_name)
 
-def tokenize_mitsuba_xml(buf: UnsafePointer[UInt8, MutUntrackedOrigin], length: Int) -> List[MitsubaTag]:
+def tokenize_mitsuba_xml(buf: Pointer[UInt8, MutUntrackedOrigin], length: Int) -> List[MitsubaTag]:
     var tags = List[MitsubaTag]()
     var pos = 0
     while pos < length:
@@ -523,7 +523,7 @@ def _mit_shorter_axis_fov(fov_deg: Float32, fov_axis: String, film_w: Int32, fil
 # ── Sensor (camera/film/sampler) ─────────────────────────────────────────────
 
 def _mit_process_sensor(tags: List[MitsubaTag], start: Int, end: Int,
-                        s_ptr: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
+                        s_ptr: Pointer[SceneParseState, MutUntrackedOrigin]):
     var tf_idx = _mit_find_transform(tags, start, end)
     if tf_idx >= 0:
         var tf_end = _mit_block_end(tags, tf_idx)
@@ -610,7 +610,7 @@ def _mit_process_sensor(tags: List[MitsubaTag], start: Int, end: Int,
 
 def _mit_build_named_material(tags: List[MitsubaTag], open_idx: Int, end: Int,
                               name: String, mtype: String,
-                              s_ptr: UnsafePointer[SceneParseState, MutUntrackedOrigin]) -> NamedMaterial:
+                              s_ptr: Pointer[SceneParseState, MutUntrackedOrigin]) -> NamedMaterial:
     # Wrapper bsdfs (normalmap/bumpmap/twosided) carry the real material as
     # one nested <bsdf> child -- unwrap to it and use ITS type/params.
     # Two-sidedness itself still isn't modeled (v1 scope), same
@@ -697,7 +697,7 @@ def _mit_build_named_material(tags: List[MitsubaTag], open_idx: Int, end: Int,
 # ── Shape (serialized / rectangle) ──────────────────────────────────────────
 
 def _mit_resolve_material_idx(tags: List[MitsubaTag], shape_idx: Int, end: Int,
-                              s_ptr: UnsafePointer[SceneParseState, MutUntrackedOrigin]) -> Int32:
+                              s_ptr: Pointer[SceneParseState, MutUntrackedOrigin]) -> Int32:
     var mat_idx_result = Int32(-1)
     var inline_bsdf_idx = _mit_find_child(tags, shape_idx, end, "bsdf")
     if inline_bsdf_idx >= 0:
@@ -732,7 +732,7 @@ def _mit_resolve_emitter(tags: List[MitsubaTag], shape_idx: Int, end: Int) -> Tu
     return (True, rad)
 
 def _mit_process_sphere(tags: List[MitsubaTag], shape_idx: Int, end: Int,
-                        s_ptr: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
+                        s_ptr: Pointer[SceneParseState, MutUntrackedOrigin]):
     """Native analytic Sphere_C for Mitsuba's built-in `sphere` shape --
     exact intersection and exact shading (see shading.mojo's
     primId.type==4 branches in shade_dielectric/shade_thin_dielectric/
@@ -781,7 +781,7 @@ def _mit_process_sphere(tags: List[MitsubaTag], shape_idx: Int, end: Int,
     s_ptr[unsafe_offset=0].spheres_rgb.append(em[1])
 
 def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
-                       s_ptr: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
+                       s_ptr: Pointer[SceneParseState, MutUntrackedOrigin]):
     var shape_type = _mxml_find_attr(tags[shape_idx], "type")
 
     var tf_idx = _mit_find_transform(tags, shape_idx, end)
@@ -800,8 +800,8 @@ def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
         _mit_process_sphere(tags, shape_idx, end, s_ptr)
         return
 
-    var tmp_f: UnsafePointer[Float32, MutUntrackedOrigin]
-    var tmp_i: UnsafePointer[Int32, MutUntrackedOrigin]
+    var tmp_f: Pointer[Float32, MutUntrackedOrigin]
+    var tmp_i: Pointer[Int32, MutUntrackedOrigin]
     var nv: Int32
     var nt: Int32
     var uvs = List[Float32]()
@@ -899,9 +899,9 @@ def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
 
 # ── Top-level entry point ────────────────────────────────────────────────────
 
-def mojo_parse_mitsuba_scene(path: UnsafePointer[UInt8, MutUntrackedOrigin],
+def mojo_parse_mitsuba_scene(path: Pointer[UInt8, MutUntrackedOrigin],
                              verbose: Bool = False,
-                            ) -> UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin]:
+                            ) -> Pointer[ParsedScene_Mojo, MutUntrackedOrigin]:
     # mojo_parse_scene (pbrt_parser.mojo) does this at its own entry --
     # needed once, globally, before any OIIO `texture()` bridge call
     # (shading.mojo's sample_texture CPU branch) or every lookup
@@ -934,7 +934,7 @@ def mojo_parse_mitsuba_scene(path: UnsafePointer[UInt8, MutUntrackedOrigin],
         fh.close()
     except:
         print("Error: cannot open scene file:", path_str)
-        return UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin].unsafe_dangling()
+        return Pointer[ParsedScene_Mojo, MutUntrackedOrigin].unsafe_dangling()
 
     var n = len(byte_list)
     var buf = alloc[UInt8](n)
@@ -951,7 +951,7 @@ def mojo_parse_mitsuba_scene(path: UnsafePointer[UInt8, MutUntrackedOrigin],
             break
     if scene_idx < 0:
         print("Error: no <scene> element found in", path_str)
-        return UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin].unsafe_dangling()
+        return Pointer[ParsedScene_Mojo, MutUntrackedOrigin].unsafe_dangling()
 
     var s_ptr = alloc[SceneParseState](1)
     s_ptr.init_pointee_move(SceneParseState())

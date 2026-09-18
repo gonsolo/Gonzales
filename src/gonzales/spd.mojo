@@ -27,8 +27,8 @@ comptime SPD_MAX_SAMPLES: Int = 1024
 
 @always_inline
 def _spd_interp(
-    lambdas: UnsafePointer[Float32, MutUntrackedOrigin],
-    values:  UnsafePointer[Float32, MutUntrackedOrigin],
+    lambdas: Pointer[Float32, MutUntrackedOrigin],
+    values:  Pointer[Float32, MutUntrackedOrigin],
     n:       Int,
     lam:     Float32,
 ) -> Float32:

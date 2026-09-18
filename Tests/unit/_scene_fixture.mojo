@@ -21,13 +21,13 @@ from gonzales.bvh import BVH2Node, build_bvh2, traverse_bvh2_core
 
 @fieldwise_init
 struct TriangleSceneFixture(Movable):
-    var points:         UnsafePointer[Float32, MutUntrackedOrigin]
-    var vertex_indices: UnsafePointer[Int64, MutUntrackedOrigin]
-    var meshes:         UnsafePointer[TriangleMesh_C, MutUntrackedOrigin]
-    var bvh_nodes:      UnsafePointer[BVH2Node, MutUntrackedOrigin]
-    var prim_ids:       UnsafePointer[PrimId_C, MutUntrackedOrigin]
-    var curves:         UnsafePointer[Curve_C, MutUntrackedOrigin]
-    var materials:      UnsafePointer[Material_C, MutUntrackedOrigin]
+    var points:         Pointer[Float32, MutUntrackedOrigin]
+    var vertex_indices: Pointer[Int64, MutUntrackedOrigin]
+    var meshes:         Pointer[TriangleMesh_C, MutUntrackedOrigin]
+    var bvh_nodes:      Pointer[BVH2Node, MutUntrackedOrigin]
+    var prim_ids:       Pointer[PrimId_C, MutUntrackedOrigin]
+    var curves:         Pointer[Curve_C, MutUntrackedOrigin]
+    var materials:      Pointer[Material_C, MutUntrackedOrigin]
     var n_tris:          Int32
 
     def intersect(self, ray: Ray_C, tMax: Float32) -> Intersection_C:
@@ -64,10 +64,10 @@ def make_triangle_scene(verts: List[Point3f]) -> TriangleSceneFixture:
     var meshes = alloc[TriangleMesh_C](1)
     meshes[unsafe_offset=0] = TriangleMesh_C(
         points,
-        UnsafePointer[Int64, MutUntrackedOrigin].unsafe_dangling(),  # faceIndices, unused
+        Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(),  # faceIndices, unused
         vertex_indices,
-        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),  # uvs
-        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),  # normals
+        Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),  # uvs
+        Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),  # normals
     )
 
     var bounds = alloc[Float32](Int(n_tris) * 6)
@@ -113,6 +113,6 @@ def make_triangle_scene(verts: List[Point3f]) -> TriangleSceneFixture:
 
     return TriangleSceneFixture(
         points, vertex_indices, meshes, bvh_nodes, prim_ids,
-        UnsafePointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
         materials, n_tris,
     )

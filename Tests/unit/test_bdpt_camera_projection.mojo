@@ -18,9 +18,9 @@ comptime FW: Int32 = 64
 comptime FH: Int32 = 48
 
 def _make_camera() -> Tuple[
-    UnsafePointer[Float32, MutUntrackedOrigin],
-    UnsafePointer[Float32, MutUntrackedOrigin],
-    UnsafePointer[Float32, MutUntrackedOrigin],
+    Pointer[Float32, MutUntrackedOrigin],
+    Pointer[Float32, MutUntrackedOrigin],
+    Pointer[Float32, MutUntrackedOrigin],
 ]:
     """(rasterToCamera, worldToCamera, cameraToRaster3x3) for a simple
     pinhole: film spans [-1,1] x [-0.75,0.75] at z=1, camera at the origin

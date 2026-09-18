@@ -65,33 +65,33 @@ def intersect_aabb(
 
 @fieldwise_init
 struct SceneDescriptor2_C(TrivialRegisterPassable):
-    var bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin]
-    var primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin]
-    var meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin]
+    var bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin]
+    var primIds: Pointer[PrimId_C, MutUntrackedOrigin]
+    var meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin]
     var meshCount: Int64
-    var materials: UnsafePointer[Material_C, MutUntrackedOrigin]
+    var materials: Pointer[Material_C, MutUntrackedOrigin]
     var materialCount: Int64
-    var areaLights: UnsafePointer[AreaLight_C, MutUntrackedOrigin]
+    var areaLights: Pointer[AreaLight_C, MutUntrackedOrigin]
     var areaLightCount: Int64
-    var textures: UnsafePointer[UnsafePointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin]
+    var textures: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin]
     var textureCount: Int64
-    var distantLights: UnsafePointer[DistantLight_C, MutUntrackedOrigin]
+    var distantLights: Pointer[DistantLight_C, MutUntrackedOrigin]
     var distantLightCount: Int64
-    var pointLights: UnsafePointer[PointLight_C, MutUntrackedOrigin]
+    var pointLights: Pointer[PointLight_C, MutUntrackedOrigin]
     var pointLightCount: Int64
-    var infiniteLights: UnsafePointer[InfiniteLight_C, MutUntrackedOrigin]
+    var infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin]
     var infiniteLightCount: Int64
-    var spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin]
+    var spheres: Pointer[Sphere_C, MutUntrackedOrigin]
     var sphereCount: Int64
-    var curves: UnsafePointer[Curve_C, MutUntrackedOrigin]
+    var curves: Pointer[Curve_C, MutUntrackedOrigin]
     var curveCount: Int64
-    var mediums: UnsafePointer[Medium_C, MutUntrackedOrigin]
+    var mediums: Pointer[Medium_C, MutUntrackedOrigin]
     var mediumCount: Int64
-    var mediumInterfaces: UnsafePointer[MediumInterface_C, MutUntrackedOrigin]
+    var mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin]
     var mediumIfaceCount: Int64
-    var grids: UnsafePointer[Grid_C, MutUntrackedOrigin]
+    var grids: Pointer[Grid_C, MutUntrackedOrigin]
     var gridCount: Int64
-    var nvdbGrids: UnsafePointer[NvdbGrid_C, MutUntrackedOrigin]
+    var nvdbGrids: Pointer[NvdbGrid_C, MutUntrackedOrigin]
     var nvdbGridCount: Int64
     var lightSampler: LightSampler_C
 
@@ -101,16 +101,16 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
     # scenes with no ObjectInstance usage (the blas*/instances pointers may
     # then be dangling — never dereferenced since no PrimId_C.type==6 leaf
     # exists in that case).
-    var blasNodesArr:   UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin]
-    var blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin]
+    var blasNodesArr:   Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin]
+    var blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin]
     var blasCount:      Int64
-    var instances:      UnsafePointer[Instance_C, MutUntrackedOrigin]
+    var instances:      Pointer[Instance_C, MutUntrackedOrigin]
     var instanceCount:  Int64
 
     # "measured" materials: one MeasuredBRDF_C per distinct .bsdf file
     # (deduped at scene-build time), referenced by Material_C.measured_idx.
     # See measured_bsdf.mojo's loader / pbrt_parser.mojo's finalize_scene.
-    var measuredBrdfs:      UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin]
+    var measuredBrdfs:      Pointer[MeasuredBRDF_C, MutUntrackedOrigin]
     var measuredBrdfCount:  Int64
 
     # Staged spectral rendering rollout (see project_spectral_rendering memory
@@ -130,7 +130,7 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
     # Dangling/0 for BDPT/SPPM CPU callers (scene.mojo's scene_descriptor(),
     # which has no GPU buffers to offer) and any caller that never reaches a
     # material with an image-texture reflectance.
-    var gpuTextures: UnsafePointer[GpuTexture_C, MutUntrackedOrigin]
+    var gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin]
     var gpuTextureCount: Int64
 
     # One NormalSlopeMap_C per entry of `textures` (same indices, so a
@@ -143,36 +143,36 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
     # that are not normal maps have `res == 0`; the whole array is dangling
     # for callers that never built one, which every reader tolerates by
     # checking `res` first.
-    var normalSlopeMaps: UnsafePointer[NormalSlopeMap_C, MutUntrackedOrigin]
+    var normalSlopeMaps: Pointer[NormalSlopeMap_C, MutUntrackedOrigin]
 
 @always_inline
 def _mk_sd_full(
-    bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
     meshCount: Int64,
-    materials: UnsafePointer[Material_C, MutUntrackedOrigin],
+    materials: Pointer[Material_C, MutUntrackedOrigin],
     materialCount: Int64,
-    areaLights: UnsafePointer[AreaLight_C, MutUntrackedOrigin],
+    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
     areaLightCount: Int64,
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
     sphereCount: Int64,
-    curves: UnsafePointer[Curve_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
     curveCount: Int64,
-    mediums: UnsafePointer[Medium_C, MutUntrackedOrigin],
+    mediums: Pointer[Medium_C, MutUntrackedOrigin],
     mediumCount: Int64,
-    mediumInterfaces: UnsafePointer[MediumInterface_C, MutUntrackedOrigin],
+    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
     mediumIfaceCount: Int64,
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
     blasCount: Int64,
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin],
+    instances: Pointer[Instance_C, MutUntrackedOrigin],
     instanceCount: Int64,
-    distantLights: UnsafePointer[DistantLight_C, MutUntrackedOrigin] = UnsafePointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(),
+    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin] = Pointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(),
     distantLightCount: Int64 = Int64(0),
-    infiniteLights: UnsafePointer[InfiniteLight_C, MutUntrackedOrigin] = UnsafePointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(),
+    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin] = Pointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(),
     infiniteLightCount: Int64 = Int64(0),
-    pointLights: UnsafePointer[PointLight_C, MutUntrackedOrigin] = UnsafePointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(),
+    pointLights: Pointer[PointLight_C, MutUntrackedOrigin] = Pointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(),
     pointLightCount: Int64 = Int64(0),
     # Staged spectral rendering rollout, Stage 3 (BDPT). Decomposed into
     # individual pointer/int params -- NOT a single `spectral: SpectralHandle`
@@ -182,15 +182,15 @@ def _mk_sd_full(
     # rgb_to_spectral_sample / project_spectral_rendering memory), kept
     # decomposed defensively regardless. Defaults match null_spectral_handle()
     # so existing (SPPM, Stage 4) callers that don't pass these are unaffected.
-    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_res: Int = 0,
-    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin] = UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
     measuredBrdfCount: Int64 = Int64(0),
-    gpuTextures: UnsafePointer[GpuTexture_C, MutUntrackedOrigin] = UnsafePointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
+    gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
     gpuTextureCount: Int64 = Int64(0),
     # Heterogeneous density fields. Optional because most GPU kernels never
     # touch a medium, but a kernel that samples free flight MUST pass the
@@ -201,9 +201,9 @@ def _mk_sd_full(
     # if density were uniformly 1 (see geometry.mojo's sample_free_flight).
     # The CPU descriptor (pbrt_parser.mojo's mojo_parsed_scene_descriptor)
     # has always set these correctly from the host arrays.
-    grids: UnsafePointer[Grid_C, MutUntrackedOrigin] = UnsafePointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
+    grids: Pointer[Grid_C, MutUntrackedOrigin] = Pointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
     gridCount: Int64 = Int64(0),
-    nvdbGrids: UnsafePointer[NvdbGrid_C, MutUntrackedOrigin] = UnsafePointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
+    nvdbGrids: Pointer[NvdbGrid_C, MutUntrackedOrigin] = Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
     nvdbGridCount: Int64 = Int64(0),
 ) -> SceneDescriptor2_C:
     """Builds a complete SceneDescriptor2_C from raw GPU device pointers so
@@ -235,7 +235,7 @@ def _mk_sd_full(
         meshes=meshes, meshCount=meshCount,
         materials=materials, materialCount=materialCount,
         areaLights=areaLights, areaLightCount=areaLightCount,
-        textures=UnsafePointer[UnsafePointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        textures=Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         textureCount=Int64(0),
         distantLights=distantLights,
         distantLightCount=distantLightCount,
@@ -251,13 +251,13 @@ def _mk_sd_full(
         gridCount=gridCount,
         nvdbGrids=nvdbGrids,
         nvdbGridCount=nvdbGridCount,
-        lightSampler=LightSampler_C(cdf=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(), n=Int32(0), _pad=Int32(0)),
+        lightSampler=LightSampler_C(cdf=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), n=Int32(0), _pad=Int32(0)),
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, blasCount=blasCount,
         instances=instances, instanceCount=instanceCount,
         measuredBrdfs=measuredBrdfs, measuredBrdfCount=measuredBrdfCount,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         gpuTextures=gpuTextures, gpuTextureCount=gpuTextureCount,
-        normalSlopeMaps=UnsafePointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
+        normalSlopeMaps=Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
     )
 
 # ── Infinite/distant-light emission + NEE sampling (shared by bdpt.mojo and
@@ -344,7 +344,7 @@ def _equal_area_square_to_sphere(u: Float32, v: Float32) -> Vec3f:
     return Vec3f(cp * xy_scale, sp * xy_scale, z)
 
 @always_inline
-def _lower_bound_bvh(arr: UnsafePointer[Float32, MutUntrackedOrigin], lo: Int, hi: Int, val: Float32) -> Int:
+def _lower_bound_bvh(arr: Pointer[Float32, MutUntrackedOrigin], lo: Int, hi: Int, val: Float32) -> Int:
     """Binary search: first index i in [lo, hi) s.t. arr[i] >= val; returns
     hi if all < val. Used only by _sample_infinite_light_textured below —
     the sole remaining copy after unifying the 3 duplicate CDF-walk sites
@@ -790,7 +790,7 @@ struct HairLobeConstants(TrivialRegisterPassable):
 @always_inline
 def _hair_precompute(
     mat: Material_C,
-    curves: UnsafePointer[Curve_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
     curve_idx: Int,
     v_global: Float32,
     h_raw: Float32,
@@ -1037,10 +1037,10 @@ def ray_sphere_hit(center: Point3f, radius: Float32,
 
 @always_inline
 def test_spheres(
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
     n_spheres: Int,
     ray: Ray_C,
-    result: UnsafePointer[Intersection_C, MutUntrackedOrigin],
+    result: Pointer[Intersection_C, MutUntrackedOrigin],
 ):
     """Test all analytical spheres against the ray, updating result if closer.
     Sets primId.type = 4 and primId.id1 = sphere_index on a sphere hit.
@@ -1069,9 +1069,9 @@ def test_spheres(
 
 @always_inline
 def _traverse_blas_triangles(
-    blasNodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    blasPrimIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
+    blasNodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    blasPrimIds: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
     ray_org: Vec3f,
     ray_dir: Vec3f,
     tMax: Float32,
@@ -1167,10 +1167,10 @@ def _traverse_blas_triangles(
 @always_inline
 def _traverse_instance_leaf(
     prim: PrimId_C,
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
+    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
+    instances: Pointer[Instance_C, MutUntrackedOrigin],
     ray_org: Vec3f,
     ray_dir: Vec3f,
     tMax: Float32,
@@ -1226,17 +1226,17 @@ def _transform_ray_to_instance_space(
 
 @always_inline
 def traverse_bvh2_core[Or: Origin[mut=True]](
-    bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    curves: UnsafePointer[Curve_C, MutUntrackedOrigin],
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
     ray: Ray_C,
     tMax: Float32,
-    resultPtr: UnsafePointer[Intersection_C, Or],
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin] = UnsafePointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin] = UnsafePointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(),
+    resultPtr: Pointer[Intersection_C, Or],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin] = Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
 ):
     # Callers that never populate any PrimId_C.type==6 leaf (GPU kernels, which
@@ -1437,18 +1437,18 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
 # enough — it only affects how many rays get the compaction benefit.
 @always_inline
 def traverse_bvh2_core_defer_curves(
-    bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    curves: UnsafePointer[Curve_C, MutUntrackedOrigin],
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
     ray: Ray_C,
     tMax: Float32,
-    resultPtr: UnsafePointer[Intersection_C, MutUntrackedOrigin],
-    curve_cand_prim: UnsafePointer[Int32, MutUntrackedOrigin],
-    curve_cand_count: UnsafePointer[Int32, MutUntrackedOrigin],
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin] = UnsafePointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
+    resultPtr: Pointer[Intersection_C, MutUntrackedOrigin],
+    curve_cand_prim: Pointer[Int32, MutUntrackedOrigin],
+    curve_cand_count: Pointer[Int32, MutUntrackedOrigin],
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
 ):
 
     var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
@@ -1617,7 +1617,7 @@ def traverse_bvh2_core_defer_curves(
 @always_inline
 @always_inline
 def _shadow_is_null_material(
-    materials: UnsafePointer[Material_C, MutUntrackedOrigin], mat_idx: Int64
+    materials: Pointer[Material_C, MutUntrackedOrigin], mat_idx: Int64
 ) -> Bool:
     """True if this primitive carries pbrt's "interface" (null) material, which
     has NO BSDF: it exists only to mark a medium boundary and must be invisible
@@ -1638,20 +1638,20 @@ def _shadow_is_null_material(
     return materials[unsafe_offset=Int(mat_idx)].type == MatKind.interface
 
 def any_hit_bvh2_core(
-    bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
-    curves: UnsafePointer[Curve_C, MutUntrackedOrigin],
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
     ray: Ray_C,
     tMax: Float32,
-    blasNodesArr: UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    blasPrimIdsArr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin] = UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    instances: UnsafePointer[Instance_C, MutUntrackedOrigin] = UnsafePointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
-    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin] = UnsafePointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(),
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
+    spheres: Pointer[Sphere_C, MutUntrackedOrigin] = Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
     ignore_sphere_center: Vec3f = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0)),
     ignore_sphere_radius: Float32 = Float32(-1.0),
-    materials: UnsafePointer[Material_C, MutUntrackedOrigin] = UnsafePointer[Material_C, MutUntrackedOrigin].unsafe_dangling(),
+    materials: Pointer[Material_C, MutUntrackedOrigin] = Pointer[Material_C, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Bool:
     # Analytic spheres live in their own flat array, not the mesh/curve BVH
     # this function walks, so they need their own (cheap, since n_spheres
@@ -1778,7 +1778,7 @@ def any_hit_bvh2_core(
 
 # ── CPU entry point ─────────────────────────────────────────────────────────
 
-def traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutUntrackedOrigin], rayPtr: UnsafePointer[Ray_C, MutUntrackedOrigin], tMax: Float32, resultPtr: UnsafePointer[Intersection_C, MutUntrackedOrigin]):
+def traverse_bvh2(scenePtr: Pointer[SceneDescriptor2_C, MutUntrackedOrigin], rayPtr: Pointer[Ray_C, MutUntrackedOrigin], tMax: Float32, resultPtr: Pointer[Intersection_C, MutUntrackedOrigin]):
     var scene = scenePtr[unsafe_offset=0]
     var ray = rayPtr[unsafe_offset=0]
     # spheres/sphereCount are passed explicitly: omitting them defaults
@@ -1795,9 +1795,9 @@ def traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutUntrackedOrigin
 
 @always_inline
 def _bvh_swap(
-    widx: UnsafePointer[Int32, MutUntrackedOrigin],
-    wmin: UnsafePointer[Float32, MutUntrackedOrigin],
-    wmax: UnsafePointer[Float32, MutUntrackedOrigin],
+    widx: Pointer[Int32, MutUntrackedOrigin],
+    wmin: Pointer[Float32, MutUntrackedOrigin],
+    wmax: Pointer[Float32, MutUntrackedOrigin],
     i: Int, j: Int,
 ):
     var ti = widx[unsafe_offset=i]; widx[unsafe_offset=i] = widx[unsafe_offset=j]; widx[unsafe_offset=j] = ti
@@ -1814,9 +1814,9 @@ struct _BVHSplit(TrivialRegisterPassable):
     var mid: Int
 
 def _bvh_split(
-    widx: UnsafePointer[Int32, MutUntrackedOrigin],
-    wmin: UnsafePointer[Float32, MutUntrackedOrigin],
-    wmax: UnsafePointer[Float32, MutUntrackedOrigin],
+    widx: Pointer[Int32, MutUntrackedOrigin],
+    wmin: Pointer[Float32, MutUntrackedOrigin],
+    wmax: Pointer[Float32, MutUntrackedOrigin],
     start: Int, end: Int,
     prims_per_node: Int,
 ) -> _BVHSplit:
@@ -1955,12 +1955,12 @@ def _bvh_split(
 
 
 def build_bvh2_node(
-    widx: UnsafePointer[Int32, MutUntrackedOrigin],
-    wmin: UnsafePointer[Float32, MutUntrackedOrigin],
-    wmax: UnsafePointer[Float32, MutUntrackedOrigin],
+    widx: Pointer[Int32, MutUntrackedOrigin],
+    wmin: Pointer[Float32, MutUntrackedOrigin],
+    wmax: Pointer[Float32, MutUntrackedOrigin],
     start: Int, end: Int,
-    out_nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    node_count: UnsafePointer[Int32, MutUntrackedOrigin],
+    out_nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    node_count: Pointer[Int32, MutUntrackedOrigin],
     prims_per_node: Int,
 ) -> Int32:
     """Build the subtree over [start, end) depth-first: this node, then the
@@ -1996,18 +1996,18 @@ struct _BVHTask(TrivialRegisterPassable):
     var right: Int
     var bmin: Point3f
     var bmax: Point3f
-    var nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin]
+    var nodes: Pointer[BVH2Node, MutUntrackedOrigin]
     var n_nodes: Int
 
 def _bvh_subtree_task(start: Int, end: Int) -> _BVHTask:
     return _BVHTask(start, end, -1, -1, Point3f(Float32(0), Float32(0), Float32(0)),
                     Point3f(Float32(0), Float32(0), Float32(0)),
-                    UnsafePointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(), 0)
+                    Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(), 0)
 
 def _bvh_emit(
-    tasks: UnsafePointer[_BVHTask, MutUntrackedOrigin], i: Int,
-    out_nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    node_count: UnsafePointer[Int32, MutUntrackedOrigin],
+    tasks: Pointer[_BVHTask, MutUntrackedOrigin], i: Int,
+    out_nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    node_count: Pointer[Int32, MutUntrackedOrigin],
 ) -> Int32:
     """Lay task `i` out depth-first exactly where build_bvh2_node would have put
     it. A subtree is copied as one block, its right-child offsets rebased;
@@ -2029,12 +2029,12 @@ def _bvh_emit(
     return Int32(my)
 
 def _build_bvh2_parallel(
-    widx: UnsafePointer[Int32, MutUntrackedOrigin],
-    wmin: UnsafePointer[Float32, MutUntrackedOrigin],
-    wmax: UnsafePointer[Float32, MutUntrackedOrigin],
+    widx: Pointer[Int32, MutUntrackedOrigin],
+    wmin: Pointer[Float32, MutUntrackedOrigin],
+    wmax: Pointer[Float32, MutUntrackedOrigin],
     n: Int,
-    out_nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
-    node_count: UnsafePointer[Int32, MutUntrackedOrigin],
+    out_nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    node_count: Pointer[Int32, MutUntrackedOrigin],
     subtree_prims: Int,
 ):
     """The tree build_bvh2_node would build over [0, n), node for node, on all
@@ -2117,10 +2117,10 @@ def _build_bvh2_parallel(
 
 
 def build_bvh2(
-    primBounds: UnsafePointer[Float32, MutUntrackedOrigin],   # 6 floats per prim
+    primBounds: Pointer[Float32, MutUntrackedOrigin],   # 6 floats per prim
     primCount: Int32,
-    outNodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],     # capacity >= 2*n
-    outOrder: UnsafePointer[Int32, MutUntrackedOrigin],        # capacity >= n
+    outNodes: Pointer[BVH2Node, MutUntrackedOrigin],     # capacity >= 2*n
+    outOrder: Pointer[Int32, MutUntrackedOrigin],        # capacity >= n
     parallel: Bool = True,   # False: the plain serial build, e.g. to check against
     subtree_prims: Int = _BVH_SUBTREE_PRIMS,   # parallel subtree size; tests lower it
 ) -> Int32:
@@ -2165,18 +2165,18 @@ def build_bvh2(
 # so pipeline.mojo's existing `from .rendering import render_aux_buffers`
 # still resolves.
 def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origin[mut=True], Odp: Origin[mut=True], Owp: Origin[mut=True] = MutUntrackedOrigin, Omi: Origin[mut=True] = MutUntrackedOrigin](
-    rasterToCamera: UnsafePointer[Float32, MutUntrackedOrigin],
-    cameraToWorld:  UnsafePointer[Float32, Oc2w],
+    rasterToCamera: Pointer[Float32, MutUntrackedOrigin],
+    cameraToWorld:  Pointer[Float32, Oc2w],
     min_x: Int32, min_y: Int32, max_x: Int32, max_y: Int32,
-    scene: UnsafePointer[SceneDescriptor2_C, Osc],
-    normals_out: UnsafePointer[Float32, Onm],
-    depth_out:   UnsafePointer[Float32, Odp],
+    scene: Pointer[SceneDescriptor2_C, Osc],
+    normals_out: Pointer[Float32, Onm],
+    depth_out:   Pointer[Float32, Odp],
     # G-buffer extension (Phase 0.3, docs/A2_restir_migration_plan.md), CPU
     # counterpart of gpu.mojo's gen_aux_buffers_gpu. Optional/unused by every
     # current caller -- default to the .unsafe_dangling() sentinel and skip
     # the write, guarded by _is_real_ptr, so existing call sites are unaffected.
-    world_pos_out: UnsafePointer[Float32, Owp] = UnsafePointer[Float32, Owp].unsafe_dangling(),
-    material_id_out: UnsafePointer[Int32, Omi] = UnsafePointer[Int32, Omi].unsafe_dangling(),
+    world_pos_out: Pointer[Float32, Owp] = Pointer[Float32, Owp].unsafe_dangling(),
+    material_id_out: Pointer[Int32, Omi] = Pointer[Int32, Omi].unsafe_dangling(),
 ):
     var w  = Int(max_x - min_x)
     var h  = Int(max_y - min_y)

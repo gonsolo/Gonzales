@@ -219,29 +219,29 @@ struct SMSReservoirIO(TrivialRegisterPassable):
     resolved reservoirs; `write` is this frame's target -- pipeline.mojo's
     render_interactive swaps which physical buffer is which each frame
     rather than copying, same convention as the DI/GI buffers."""
-    var read:  UnsafePointer[SMSReservoir, MutUntrackedOrigin]
-    var write: UnsafePointer[SMSReservoir, MutUntrackedOrigin]
+    var read:  Pointer[SMSReservoir, MutUntrackedOrigin]
+    var write: Pointer[SMSReservoir, MutUntrackedOrigin]
     # Phase 0.3's shared G-buffer, added with spatial reuse exactly as this
     # struct's docstring said it would be. `gbuf_world_pos` is not just for
     # rejection here the way it is for DI/GI: the manifold shift needs the
     # NEIGHBOUR'S OWN shading point as `src_x0`, because a specular chain is
     # only admissible relative to the point it was solved for.
-    var gbuf_normal:      UnsafePointer[Float32, MutUntrackedOrigin]
-    var gbuf_depth:       UnsafePointer[Float32, MutUntrackedOrigin]
-    var gbuf_material_id: UnsafePointer[Int32, MutUntrackedOrigin]
-    var gbuf_world_pos:   UnsafePointer[Float32, MutUntrackedOrigin]
+    var gbuf_normal:      Pointer[Float32, MutUntrackedOrigin]
+    var gbuf_depth:       Pointer[Float32, MutUntrackedOrigin]
+    var gbuf_material_id: Pointer[Int32, MutUntrackedOrigin]
+    var gbuf_world_pos:   Pointer[Float32, MutUntrackedOrigin]
     var frame_w: Int32
     var frame_h: Int32
 
 @always_inline
 def sms_reservoir_io_null() -> SMSReservoirIO:
     return SMSReservoirIO(
-        read=UnsafePointer[SMSReservoir, MutUntrackedOrigin].unsafe_dangling(),
-        write=UnsafePointer[SMSReservoir, MutUntrackedOrigin].unsafe_dangling(),
-        gbuf_normal=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-        gbuf_depth=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-        gbuf_material_id=UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-        gbuf_world_pos=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        read=Pointer[SMSReservoir, MutUntrackedOrigin].unsafe_dangling(),
+        write=Pointer[SMSReservoir, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_normal=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_depth=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_material_id=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_world_pos=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0),
     )
 

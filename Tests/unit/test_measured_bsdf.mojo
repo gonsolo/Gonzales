@@ -107,19 +107,19 @@ def test_build_cdf_handles_multiple_slices_independently() raises:
 # tests' docstrings for the real-world numbers this mirrors).
 
 def _put_u16(mut buf: List[UInt8], v: UInt16):
-    var p = UnsafePointer(to=v).unsafe_bitcast[UInt8]()
+    var p = Pointer(to=v).unsafe_bitcast[UInt8]()
     buf.append(p[unsafe_offset=0]); buf.append(p[unsafe_offset=1])
 
 def _put_u32(mut buf: List[UInt8], v: UInt32):
-    var p = UnsafePointer(to=v).unsafe_bitcast[UInt8]()
+    var p = Pointer(to=v).unsafe_bitcast[UInt8]()
     for i in range(4): buf.append(p[unsafe_offset=i])
 
 def _put_u64(mut buf: List[UInt8], v: UInt64):
-    var p = UnsafePointer(to=v).unsafe_bitcast[UInt8]()
+    var p = Pointer(to=v).unsafe_bitcast[UInt8]()
     for i in range(8): buf.append(p[unsafe_offset=i])
 
 def _put_f32(mut buf: List[UInt8], v: Float32):
-    var p = UnsafePointer(to=v).unsafe_bitcast[UInt8]()
+    var p = Pointer(to=v).unsafe_bitcast[UInt8]()
     for i in range(4): buf.append(p[unsafe_offset=i])
 
 def _lit_len(s: StringLiteral) -> Int:

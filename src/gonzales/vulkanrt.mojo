@@ -20,7 +20,7 @@ def vulkanrt_smoke_test() -> Int32:
 # destroy_scene below). Mirrors viewer.mojo's ViewerHandle pattern -- a
 # UInt8* stays away from the !kgen.pointer<none> representation Mojo
 # rejects.
-comptime VulkanRtSceneHandle = UnsafePointer[UInt8, MutUntrackedOrigin]
+comptime VulkanRtSceneHandle = Pointer[UInt8, MutUntrackedOrigin]
 
 # Task #162 step 2: build a real Vulkan RT scene (one BLAS per mesh, one
 # TLAS instancing all of them with an identity transform) directly from
@@ -34,14 +34,14 @@ comptime VulkanRtSceneHandle = UnsafePointer[UInt8, MutUntrackedOrigin]
 # Returns a null handle on failure (extension unsupported, device creation
 # failed, AS build failed) -- check before calling vulkanrt_trace_ray.
 def vulkanrt_build_scene(
-    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
     mesh_count: Int64,
-    point_counts: UnsafePointer[Int64, MutUntrackedOrigin],
-    vertex_index_counts: UnsafePointer[Int64, MutUntrackedOrigin],
+    point_counts: Pointer[Int64, MutUntrackedOrigin],
+    vertex_index_counts: Pointer[Int64, MutUntrackedOrigin],
 ) -> VulkanRtSceneHandle:
     return external_call["vulkanrt_build_scene", VulkanRtSceneHandle,
-        UnsafePointer[TriangleMesh_C, MutUntrackedOrigin], Int64,
-        UnsafePointer[Int64, MutUntrackedOrigin], UnsafePointer[Int64, MutUntrackedOrigin]](
+        Pointer[TriangleMesh_C, MutUntrackedOrigin], Int64,
+        Pointer[Int64, MutUntrackedOrigin], Pointer[Int64, MutUntrackedOrigin]](
         meshes, mesh_count, point_counts, vertex_index_counts)
 
 # Traces one ray against a scene built by vulkanrt_build_scene. Returns 1 on
@@ -54,15 +54,15 @@ def vulkanrt_trace_ray(
     ox: Float32, oy: Float32, oz: Float32,
     dx: Float32, dy: Float32, dz: Float32,
     t_min: Float32, t_max: Float32,
-    out_t: UnsafePointer[Float32, MutUntrackedOrigin],
-    out_mesh: UnsafePointer[Int32, MutUntrackedOrigin],
-    out_triangle: UnsafePointer[Int32, MutUntrackedOrigin],
+    out_t: Pointer[Float32, MutUntrackedOrigin],
+    out_mesh: Pointer[Int32, MutUntrackedOrigin],
+    out_triangle: Pointer[Int32, MutUntrackedOrigin],
 ) -> Int32:
     return external_call["vulkanrt_trace_ray", Int32,
         VulkanRtSceneHandle,
         Float32, Float32, Float32, Float32, Float32, Float32, Float32, Float32,
-        UnsafePointer[Float32, MutUntrackedOrigin], UnsafePointer[Int32, MutUntrackedOrigin],
-        UnsafePointer[Int32, MutUntrackedOrigin]](
+        Pointer[Float32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin],
+        Pointer[Int32, MutUntrackedOrigin]](
         scene, ox, oy, oz, dx, dy, dz, t_min, t_max, out_t, out_mesh, out_triangle)
 
 # Destroys a scene built by vulkanrt_build_scene.
@@ -86,17 +86,17 @@ def vulkanrt_destroy_scene(scene: VulkanRtSceneHandle):
 def vulkanrt_trace_rays(
     scene: VulkanRtSceneHandle,
     ray_count: Int32,
-    rays: UnsafePointer[Float32, MutUntrackedOrigin],
-    out_t: UnsafePointer[Float32, MutUntrackedOrigin],
-    out_u: UnsafePointer[Float32, MutUntrackedOrigin],
-    out_v: UnsafePointer[Float32, MutUntrackedOrigin],
-    out_mesh: UnsafePointer[Int32, MutUntrackedOrigin],
-    out_triangle: UnsafePointer[Int32, MutUntrackedOrigin],
-    out_hit: UnsafePointer[UInt8, MutUntrackedOrigin],
+    rays: Pointer[Float32, MutUntrackedOrigin],
+    out_t: Pointer[Float32, MutUntrackedOrigin],
+    out_u: Pointer[Float32, MutUntrackedOrigin],
+    out_v: Pointer[Float32, MutUntrackedOrigin],
+    out_mesh: Pointer[Int32, MutUntrackedOrigin],
+    out_triangle: Pointer[Int32, MutUntrackedOrigin],
+    out_hit: Pointer[UInt8, MutUntrackedOrigin],
 ) -> Int32:
     return external_call["vulkanrt_trace_rays", Int32,
-        VulkanRtSceneHandle, Int32, UnsafePointer[Float32, MutUntrackedOrigin],
-        UnsafePointer[Float32, MutUntrackedOrigin], UnsafePointer[Float32, MutUntrackedOrigin],
-        UnsafePointer[Float32, MutUntrackedOrigin], UnsafePointer[Int32, MutUntrackedOrigin],
-        UnsafePointer[Int32, MutUntrackedOrigin], UnsafePointer[UInt8, MutUntrackedOrigin]](
+        VulkanRtSceneHandle, Int32, Pointer[Float32, MutUntrackedOrigin],
+        Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin],
+        Pointer[Float32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin],
+        Pointer[Int32, MutUntrackedOrigin], Pointer[UInt8, MutUntrackedOrigin]](
         scene, ray_count, rays, out_t, out_u, out_v, out_mesh, out_triangle, out_hit)
