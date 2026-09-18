@@ -2402,10 +2402,18 @@ def _sample_medium_core(
             # is exactly 1, so the question does not arise. Both guards fail
             # CLOSED -- a medium that does not qualify silently keeps 7.2's
             # fixed-vertex behavior, which is always correct.
-            var dist_ris = (VOL_RIS_DISTANCE and (not use_dense) and (not use_nvdb)
-                and sigma_t.r > Float32(0.0) and t_surf > Float32(0.0)
-                and sigma_t.g == sigma_t.r and sigma_t.b == sigma_t.r
-                and med.sigma_s.g == med.sigma_s.r and med.sigma_s.b == med.sigma_s.r)
+            # VOL_RIS_DISTANCE is a compile-time kill switch, so it gates the
+            # whole test at compile time rather than sitting in the runtime
+            # `and` chain: with the flag off the qualification test is not
+            # emitted at all, instead of being evaluated and ANDed with False.
+            var dist_ris: Bool
+            comptime if VOL_RIS_DISTANCE:
+                dist_ris = ((not use_dense) and (not use_nvdb)
+                    and sigma_t.r > Float32(0.0) and t_surf > Float32(0.0)
+                    and sigma_t.g == sigma_t.r and sigma_t.b == sigma_t.r
+                    and med.sigma_s.g == med.sigma_s.r and med.sigma_s.b == med.sigma_s.r)
+            else:
+                dist_ris = False
             var pc_norm = Float32(0.0)
             if dist_ris:
                 pc_norm = Float32(1.0) - exp(-sigma_t.r * t_surf)
