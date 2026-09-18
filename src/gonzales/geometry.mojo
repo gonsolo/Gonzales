@@ -1,5 +1,5 @@
 from std.ffi import external_call
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.math import sqrt, acos, atan2, cos, sin, min, max, abs, floor, log, exp
 from std.sys.info import align_of
 from gonzales.spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, rgb_illuminant_to_spectral_sample

@@ -1,6 +1,6 @@
 from std.ffi import external_call
 from std.math import exp, ceil
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.collections import List
 from .geometry import RGB
 
@@ -73,7 +73,7 @@ def _clamp_fireflies[Ob: Origin[mut=True]](
 ) -> Pointer[Float32, MutUntrackedOrigin]:
     var w = Int(width)
     var h = Int(height)
-    var out = alloc[Float32](w * h * 3)
+    var out = unsafe_alloc[Float32](w * h * 3)
     for py in range(h):
         for px in range(w):
             var ci = (py * w + px) * 3
@@ -198,7 +198,7 @@ def denoise[Ob: Origin[mut=True], Oa: Origin[mut=True], On: Origin[mut=True], Od
     # Per-pixel luminance variance over a 3x3 neighborhood, estimated ONCE
     # (not re-estimated per pass, matching estimate_variance_gpu) and used,
     # via min(var_p,var_q), by every à-trous pass below.
-    var variance = alloc[Float32](n)
+    var variance = unsafe_alloc[Float32](n)
     for py in range(h):
         for px in range(w):
             var pi = py * w + px
@@ -220,7 +220,7 @@ def denoise[Ob: Origin[mut=True], Oa: Origin[mut=True], On: Origin[mut=True], Od
             variance[unsafe_offset=pi] = v if v > Float32(0) else Float32(0)
 
     var ping = clamped
-    var pong = alloc[Float32](n * 3)
+    var pong = unsafe_alloc[Float32](n * 3)
     var np = Int(n_passes)
     for i in range(np):
         var step = 1 << i
@@ -330,7 +330,7 @@ def write_image_cropped[Opx: Origin[mut=True]](
     if crop_x0 == Int32(0) and crop_y0 == Int32(0) and crop_w == full_w and crop_h == full_h:
         return write_image(pixels, full_w, full_h, filename, tile_w, tile_h)
     var n = Int(crop_w) * Int(crop_h) * 3
-    var cropped = alloc[Float32](n)
+    var cropped = unsafe_alloc[Float32](n)
     for row in range(Int(crop_h)):
         var src_row_off = (Int(crop_y0) + row) * Int(full_w) + Int(crop_x0)
         var dst_row_off = row * Int(crop_w)

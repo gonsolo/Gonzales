@@ -1,4 +1,4 @@
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext, DeviceBuffer
 from max.gpu.host._nvidia_cuda import CUDA
@@ -28,22 +28,22 @@ def test_vulkaninterop_rt_trace_matches_known_geometry() raises:
         return
 
     # Mesh 0: triangle (0,0,0)-(1,0,0)-(0,1,0) at z=0.
-    var pts0 = alloc[Float32](12)
+    var pts0 = unsafe_alloc[Float32](12)
     var tri0 = [Float32(0), 0, 0, 1,  1, 0, 0, 1,  0, 1, 0, 1]
     for i in range(12):
         pts0[unsafe_offset=i] = tri0[i]
-    var idx0 = alloc[Int64](3)
+    var idx0 = unsafe_alloc[Int64](3)
     idx0[unsafe_offset=0] = 0; idx0[unsafe_offset=1] = 1; idx0[unsafe_offset=2] = 2
 
     # Mesh 1: triangle (5,0,0)-(6,0,0)-(5,1,0) at z=0, far away in x.
-    var pts1 = alloc[Float32](12)
+    var pts1 = unsafe_alloc[Float32](12)
     var tri1 = [Float32(5), 0, 0, 1,  6, 0, 0, 1,  5, 1, 0, 1]
     for i in range(12):
         pts1[unsafe_offset=i] = tri1[i]
-    var idx1 = alloc[Int64](3)
+    var idx1 = unsafe_alloc[Int64](3)
     idx1[unsafe_offset=0] = 0; idx1[unsafe_offset=1] = 1; idx1[unsafe_offset=2] = 2
 
-    var meshes = alloc[TriangleMesh_C](2)
+    var meshes = unsafe_alloc[TriangleMesh_C](2)
     meshes[unsafe_offset=0] = TriangleMesh_C(
         pts0, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), idx0,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
@@ -55,9 +55,9 @@ def test_vulkaninterop_rt_trace_matches_known_geometry() raises:
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
 
-    var point_counts = alloc[Int64](2)
+    var point_counts = unsafe_alloc[Int64](2)
     point_counts[unsafe_offset=0] = 3; point_counts[unsafe_offset=1] = 3
-    var idx_counts = alloc[Int64](2)
+    var idx_counts = unsafe_alloc[Int64](2)
     idx_counts[unsafe_offset=0] = 3; idx_counts[unsafe_offset=1] = 3
 
     comptime maxRays = 16
@@ -137,34 +137,34 @@ def test_vulkaninterop_rt_instancing_places_template_correctly() raises:
     # instanceCustomIndex = mesh_count + instance_index encoding, and
     # geometryIndex reporting -- see vulkaninterop_rt_create_scene's
     # docstring.
-    var pts0 = alloc[Float32](12)
+    var pts0 = unsafe_alloc[Float32](12)
     var tri0 = [Float32(0), 0, 0, 1,  1, 0, 0, 1,  0, 1, 0, 1]
     for i in range(12):
         pts0[unsafe_offset=i] = tri0[i]
-    var idx0 = alloc[Int64](3)
+    var idx0 = unsafe_alloc[Int64](3)
     idx0[unsafe_offset=0] = 0; idx0[unsafe_offset=1] = 1; idx0[unsafe_offset=2] = 2
 
-    var meshes = alloc[TriangleMesh_C](1)
+    var meshes = unsafe_alloc[TriangleMesh_C](1)
     meshes[unsafe_offset=0] = TriangleMesh_C(
         pts0, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), idx0,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
-    var point_counts = alloc[Int64](1)
+    var point_counts = unsafe_alloc[Int64](1)
     point_counts[unsafe_offset=0] = 3
-    var idx_counts = alloc[Int64](1)
+    var idx_counts = unsafe_alloc[Int64](1)
     idx_counts[unsafe_offset=0] = 3
 
-    var template_start = alloc[Int64](1); template_start[unsafe_offset=0] = 0
-    var template_end   = alloc[Int64](1); template_end[unsafe_offset=0] = 1
+    var template_start = unsafe_alloc[Int64](1); template_start[unsafe_offset=0] = 0
+    var template_end   = unsafe_alloc[Int64](1); template_end[unsafe_offset=0] = 1
 
     # Column-major 4x4 identity and +5-in-x translation (gonzales's own
     # transform.mojo convention: M[col*4+row], translation in column 3).
-    var o2w = alloc[Float32](32)
+    var o2w = unsafe_alloc[Float32](32)
     for i in range(32): o2w[unsafe_offset=i] = Float32(0)
     o2w[unsafe_offset=0] = 1; o2w[unsafe_offset=5] = 1; o2w[unsafe_offset=10] = 1; o2w[unsafe_offset=15] = 1               # instance 0: identity
     o2w[unsafe_offset=16] = 1; o2w[unsafe_offset=21] = 1; o2w[unsafe_offset=26] = 1; o2w[unsafe_offset=31] = 1; o2w[unsafe_offset=28] = 5  # instance 1: +5 in x
-    var inst_tmpl_idx = alloc[Int32](2)
+    var inst_tmpl_idx = unsafe_alloc[Int32](2)
     inst_tmpl_idx[unsafe_offset=0] = 0; inst_tmpl_idx[unsafe_offset=1] = 0
 
     comptime maxRays = 16

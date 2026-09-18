@@ -1,5 +1,5 @@
 from std.math import abs
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.lexer import PbrtScanner, scanner_free
 from gonzales.parse_types import SceneParseState
@@ -17,11 +17,11 @@ def _scanner_from_string(s: String) -> Pointer[PbrtScanner, MutUntrackedOrigin]:
     directive dispatch does: the leading keyword (e.g. "MakeNamedMedium") is
     already consumed by the caller, so the snippet starts right after it."""
     var n = s.byte_length()
-    var buf = alloc[UInt8](n + 1)
+    var buf = unsafe_alloc[UInt8](n + 1)
     for i in range(n):
         buf[unsafe_offset=i] = s.as_bytes()[i]
     buf[unsafe_offset=n] = UInt8(0)
-    var handle = alloc[PbrtScanner](1)
+    var handle = unsafe_alloc[PbrtScanner](1)
     handle[unsafe_offset=0].buffer = buf
     handle[unsafe_offset=0].total_bytes = Int32(n)
     handle[unsafe_offset=0].cursor = Int32(0)
@@ -44,7 +44,7 @@ def test_curve_shape_grows_past_default_control_point_cap() raises:
     body += String('] "float width" [ 0.1 ]')
 
     var handle = _scanner_from_string(body)
-    var s_ptr = alloc[SceneParseState](1)
+    var s_ptr = unsafe_alloc[SceneParseState](1)
     s_ptr.init_pointee_move(SceneParseState())
     handle_curve_shape(handle, s_ptr)
 
@@ -73,7 +73,7 @@ def test_named_medium_bracket_wrapped_type_does_not_desync() raises:
         + '"float density" [ 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 ]'
     )
     var handle = _scanner_from_string(body)
-    var s_ptr = alloc[SceneParseState](1)
+    var s_ptr = unsafe_alloc[SceneParseState](1)
     s_ptr.init_pointee_move(SceneParseState())
     handle_named_medium(handle, s_ptr)
 
@@ -113,7 +113,7 @@ def test_named_material_long_normalmap_path_is_not_truncated() raises:
         + '"string normalmap" [ "' + long_name + '" ]'
     )
     var handle = _scanner_from_string(body)
-    var s_ptr = alloc[SceneParseState](1)
+    var s_ptr = unsafe_alloc[SceneParseState](1)
     s_ptr.init_pointee_move(SceneParseState())
     _psc_handle_make_named_material(handle, s_ptr, False)
 

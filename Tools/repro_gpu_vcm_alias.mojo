@@ -18,6 +18,7 @@ from gonzales.geometry import (
     Point3f, Vec3f, Ray_C, PrimId_C, Intersection_C, TriangleMesh_C, Curve_C,
 )
 from gonzales.bvh import BVH2Node, traverse_bvh2_core
+from std.memory.alloc import unsafe_alloc
 
 comptime NO_CURVES = Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling
 
@@ -108,24 +109,24 @@ def main() raises:
     if len(av) > 1: mode = String(av[1])
 
     # one triangle at z=0, points stride 4 floats
-    var pts = alloc[Float32](12)
+    var pts = unsafe_alloc[Float32](12)
     for i in range(12): pts[unsafe_offset=i] = Float32(0)
     pts[unsafe_offset=0]=-1.0; pts[unsafe_offset=1]=-1.0; pts[unsafe_offset=2]=0.0
     pts[unsafe_offset=4]= 1.0; pts[unsafe_offset=5]=-1.0; pts[unsafe_offset=6]=0.0
     pts[unsafe_offset=8]= 0.0; pts[unsafe_offset=9]= 1.0; pts[unsafe_offset=10]=0.0
-    var vidx = alloc[Int64](3)
+    var vidx = unsafe_alloc[Int64](3)
     vidx[unsafe_offset=0]=0; vidx[unsafe_offset=1]=1; vidx[unsafe_offset=2]=2
-    var mesh_h = alloc[TriangleMesh_C](1)
+    var mesh_h = unsafe_alloc[TriangleMesh_C](1)
     mesh_h[unsafe_offset=0] = TriangleMesh_C(pts, vidx, vidx,
         Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=1),
         Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=1))
-    var prim_h = alloc[PrimId_C](1)
+    var prim_h = unsafe_alloc[PrimId_C](1)
     prim_h[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    var bvh_h = alloc[BVH2Node](1)
+    var bvh_h = unsafe_alloc[BVH2Node](1)
     bvh_h[unsafe_offset=0] = BVH2Node(Point3f(-1.1,-1.1,-0.1), Point3f(1.1,1.1,0.1), Int32(0), Int32(1))
 
     if mode == "cpu":
-        var cell = alloc[Intersection_C](1)
+        var cell = unsafe_alloc[Intersection_C](1)
         var ray = Ray_C(Point3f(0,0,-2), Vec3f(0,0,1))
         cell[unsafe_offset=0].hit = Int8(0)
         traverse_bvh2_core(bvh_h, prim_h, mesh_h, NO_CURVES(), ray, Float32(1e38), cell)

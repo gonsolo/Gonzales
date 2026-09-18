@@ -29,7 +29,7 @@
 # `_bdpt_camera_path_bounce`'s docstring), so their correctness is already
 # covered elsewhere and out of scope for this test.
 
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import (
     RGB, Point3f, Vec3f, Ray_C, Intersection_C, LightSampler_C, PrimId_C,
@@ -55,7 +55,7 @@ def _close(a: Float32, b: Float32) -> Bool:
 def _build_scene() -> SceneDescriptor2_C:
     # One huge diffuse triangle at z=10.
     var n_verts = 3
-    var points = alloc[Float32](n_verts * 4)
+    var points = unsafe_alloc[Float32](n_verts * 4)
     var verts = [
         Point3f(-10000.0, -10000.0, 10.0), Point3f(10000.0, -10000.0, 10.0), Point3f(0.0, 10000.0, 10.0),
     ]
@@ -64,10 +64,10 @@ def _build_scene() -> SceneDescriptor2_C:
         points[unsafe_offset=i*4+1] = verts[i].y
         points[unsafe_offset=i*4+2] = verts[i].z
         points[unsafe_offset=i*4+3] = Float32(1.0)
-    var vertex_indices = alloc[Int64](n_verts)
+    var vertex_indices = unsafe_alloc[Int64](n_verts)
     for i in range(n_verts):
         vertex_indices[unsafe_offset=i] = Int64(i)
-    var meshes = alloc[TriangleMesh_C](1)
+    var meshes = unsafe_alloc[TriangleMesh_C](1)
     meshes[unsafe_offset=0] = TriangleMesh_C(
         points, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), vertex_indices,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
@@ -75,22 +75,22 @@ def _build_scene() -> SceneDescriptor2_C:
     )
 
     var n_tris = 1
-    var bounds = alloc[Float32](n_tris * 6)
+    var bounds = unsafe_alloc[Float32](n_tris * 6)
     var p0 = verts[0]; var p1 = verts[1]; var p2 = verts[2]
     bounds[unsafe_offset=0] = min(p0.x, min(p1.x, p2.x)); bounds[unsafe_offset=1] = min(p0.y, min(p1.y, p2.y)); bounds[unsafe_offset=2] = min(p0.z, min(p1.z, p2.z))
     bounds[unsafe_offset=3] = max(p0.x, max(p1.x, p2.x)); bounds[unsafe_offset=4] = max(p0.y, max(p1.y, p2.y)); bounds[unsafe_offset=5] = max(p0.z, max(p1.z, p2.z))
     var max_nodes = n_tris * 2 + 4
-    var bvh_nodes = alloc[BVH2Node](max_nodes)
-    var order = alloc[Int32](n_tris)
+    var bvh_nodes = unsafe_alloc[BVH2Node](max_nodes)
+    var order = unsafe_alloc[Int32](n_tris)
     _ = build_bvh2(bounds, Int32(n_tris), bvh_nodes, order)
     bounds.unsafe_free()
-    var prim_ids = alloc[PrimId_C](n_tris)
+    var prim_ids = unsafe_alloc[PrimId_C](n_tris)
     for k in range(n_tris):
         var orig = Int(order[unsafe_offset=k])
         prim_ids[unsafe_offset=k] = PrimId_C(Int64(0), Int64(orig * 3), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     order.unsafe_free()
 
-    var materials = alloc[Material_C](1)
+    var materials = unsafe_alloc[Material_C](1)
     materials[unsafe_offset=0] = Material_C(
         MatKind.diffuse, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.8)), RGB(Float32(0.0)), Int32(-1),
@@ -129,11 +129,11 @@ def _identity_camera_matrices() -> Tuple[Pointer[Float32, MutUntrackedOrigin], P
     # camera-space direction (0,0,1) regardless of fX/fY's exact value
     # (columns 0/1 are all zero), independent of realistic raster-to-camera
     # semantics -- see this file's module docstring.
-    var r2c = alloc[Float32](16)
+    var r2c = unsafe_alloc[Float32](16)
     for i in range(16): r2c[unsafe_offset=i] = Float32(0.0)
     r2c[unsafe_offset=14] = Float32(1.0)
     r2c[unsafe_offset=15] = Float32(1.0)
-    var c2w = alloc[Float32](16)
+    var c2w = unsafe_alloc[Float32](16)
     for i in range(16): c2w[unsafe_offset=i] = Float32(0.0)
     c2w[unsafe_offset=0] = Float32(1.0); c2w[unsafe_offset=5] = Float32(1.0); c2w[unsafe_offset=10] = Float32(1.0); c2w[unsafe_offset=15] = Float32(1.0)
     return (r2c, c2w)
@@ -150,7 +150,7 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
     comptime n_light_paths_f = Float32(1.0)
 
     var pcg_old = PCG32(UInt64(999), UInt64(3))
-    var scratch_old = alloc[Intersection_C](1)
+    var scratch_old = unsafe_alloc[Intersection_C](1)
     var (total_old, alb_old) = _bdpt_trace_camera_and_connect[False](
         r2c, c2w, 0, 0, sd, pcg_old, False, scratch_old,
         Pointer[BDPTVertex, MutUntrackedOrigin].unsafe_dangling(), 0, 0,
@@ -161,7 +161,7 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
     )
 
     var pcg_new = PCG32(UInt64(999), UInt64(3))
-    var scratch_new = alloc[Intersection_C](1)
+    var scratch_new = unsafe_alloc[Intersection_C](1)
     var state = _bdpt_camera_path_init[False](r2c, c2w, 0, 0, pcg_new, px_scale, n_light_paths_f, _TEST_PASS_WL)
 
     var pcg_bounce = PCG32(UInt64(0), UInt64(0))

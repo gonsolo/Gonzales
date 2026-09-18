@@ -1,4 +1,4 @@
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.math import log as _log_math, pow as _pow_math
 from .geometry import RGB, _is_real_ptr, blackbody_rgb
 
@@ -427,7 +427,7 @@ struct PbrtScanner:
 
 @always_inline
 def scanner_call_int(handle: Pointer[PbrtScanner, MutUntrackedOrigin], result: Pointer[Int32, MutUntrackedOrigin]) -> Int32:
-    var cur = alloc[Int32](1)
+    var cur = unsafe_alloc[Int32](1)
     cur[unsafe_offset=0] = handle[unsafe_offset=0].cursor
     var ret = scan_int(handle[unsafe_offset=0].buffer, handle[unsafe_offset=0].total_bytes, cur, result)
     handle[unsafe_offset=0].cursor = cur[unsafe_offset=0]
@@ -437,7 +437,7 @@ def scanner_call_int(handle: Pointer[PbrtScanner, MutUntrackedOrigin], result: P
 
 @always_inline
 def scanner_call_float(handle: Pointer[PbrtScanner, MutUntrackedOrigin], result: Pointer[Float32, MutUntrackedOrigin]) -> Int32:
-    var cur = alloc[Int32](1)
+    var cur = unsafe_alloc[Int32](1)
     cur[unsafe_offset=0] = handle[unsafe_offset=0].cursor
     var ret = scan_float(handle[unsafe_offset=0].buffer, handle[unsafe_offset=0].total_bytes, cur, result)
     handle[unsafe_offset=0].cursor = cur[unsafe_offset=0]
@@ -446,14 +446,14 @@ def scanner_call_float(handle: Pointer[PbrtScanner, MutUntrackedOrigin], result:
 
 
 def scanner_open(path: Pointer[UInt8, MutUntrackedOrigin]) -> Pointer[PbrtScanner, MutUntrackedOrigin]:
-    var handle = alloc[PbrtScanner](1)
+    var handle = unsafe_alloc[PbrtScanner](1)
     var path_str = String(unsafe_from_utf8_ptr=path.as_imm())
     try:
         var f = open(path_str, "r")
         var bytes = f.read_bytes()
         f.close()
         var size = len(bytes)
-        var buf = alloc[UInt8](size + 1)
+        var buf = unsafe_alloc[UInt8](size + 1)
         for i in range(size):
             buf[unsafe_offset=i] = bytes[i]
         buf[unsafe_offset=size] = UInt8(0)
@@ -480,7 +480,7 @@ def scanner_is_at_end(handle: Pointer[PbrtScanner, MutUntrackedOrigin]) -> Int32
 
 
 def scanner_scan_char(handle: Pointer[PbrtScanner, MutUntrackedOrigin], expected: UInt8) -> Int32:
-    var cur = alloc[Int32](1)
+    var cur = unsafe_alloc[Int32](1)
     cur[unsafe_offset=0] = handle[unsafe_offset=0].cursor
     var ret = scan_char(handle[unsafe_offset=0].buffer, handle[unsafe_offset=0].total_bytes, cur, expected)
     handle[unsafe_offset=0].cursor = cur[unsafe_offset=0]
@@ -501,7 +501,7 @@ def scanner_count_floats(handle: Pointer[PbrtScanner, MutUntrackedOrigin]) -> In
 
 
 def scanner_scan_floats[Or: Origin[mut=True]](handle: Pointer[PbrtScanner, MutUntrackedOrigin], dst: Pointer[Float32, Or], max_count: Int32) -> Int32:
-    var cur = alloc[Int32](1)
+    var cur = unsafe_alloc[Int32](1)
     cur[unsafe_offset=0] = handle[unsafe_offset=0].cursor
     var ret = scan_floats(handle[unsafe_offset=0].buffer, handle[unsafe_offset=0].total_bytes, cur, dst, max_count)
     handle[unsafe_offset=0].cursor = cur[unsafe_offset=0]
@@ -514,7 +514,7 @@ def scanner_count_ints(handle: Pointer[PbrtScanner, MutUntrackedOrigin]) -> Int3
 
 
 def scanner_scan_ints[Or: Origin[mut=True]](handle: Pointer[PbrtScanner, MutUntrackedOrigin], dst: Pointer[Int32, Or], max_count: Int32) -> Int32:
-    var cur = alloc[Int32](1)
+    var cur = unsafe_alloc[Int32](1)
     cur[unsafe_offset=0] = handle[unsafe_offset=0].cursor
     var ret = scan_ints(handle[unsafe_offset=0].buffer, handle[unsafe_offset=0].total_bytes, cur, dst, max_count)
     handle[unsafe_offset=0].cursor = cur[unsafe_offset=0]
@@ -523,7 +523,7 @@ def scanner_scan_ints[Or: Origin[mut=True]](handle: Pointer[PbrtScanner, MutUntr
 
 
 def scanner_parse_quoted_string(handle: Pointer[PbrtScanner, MutUntrackedOrigin], buf: Pointer[UInt8, MutUntrackedOrigin], max_buf: Int32) -> Int32:
-    var cur = alloc[Int32](1)
+    var cur = unsafe_alloc[Int32](1)
     cur[unsafe_offset=0] = handle[unsafe_offset=0].cursor
     var ret = parse_quoted_string(handle[unsafe_offset=0].buffer, handle[unsafe_offset=0].total_bytes, cur, buf, max_buf)
     handle[unsafe_offset=0].cursor = cur[unsafe_offset=0]
@@ -537,7 +537,7 @@ def scanner_parse_param_header(
     name_buf: Pointer[UInt8, MutUntrackedOrigin], name_max: Int32,
     is_array: Pointer[Int32, MutUntrackedOrigin],
 ) -> Int32:
-    var cur = alloc[Int32](1)
+    var cur = unsafe_alloc[Int32](1)
     cur[unsafe_offset=0] = handle[unsafe_offset=0].cursor
     var ret = parse_param_header(handle[unsafe_offset=0].buffer, handle[unsafe_offset=0].total_bytes, cur,
                                       type_buf, type_max, name_buf, name_max, is_array)
@@ -551,7 +551,7 @@ def scanner_scan_token(
     delims: Pointer[UInt8, MutUntrackedOrigin], n_delims: Int32,
     buf: Pointer[UInt8, MutUntrackedOrigin], max_buf: Int32,
 ) -> Int32:
-    var cur = alloc[Int32](1)
+    var cur = unsafe_alloc[Int32](1)
     cur[unsafe_offset=0] = handle[unsafe_offset=0].cursor
     var ret = scan_token(handle[unsafe_offset=0].buffer, handle[unsafe_offset=0].total_bytes, cur,
                               delims, n_delims, buf, max_buf)
@@ -634,28 +634,28 @@ def _psc_type_is_str(t: Pointer[UInt8, MutUntrackedOrigin]) -> Bool:
 def _psc_skip_value(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                    type_buf: Pointer[UInt8, MutUntrackedOrigin],
                    is_array: Int32):
-    var tmp_s = alloc[UInt8](1024)
+    var tmp_s = unsafe_alloc[UInt8](1024)
     if _psc_type_is_float(type_buf):
         if is_array:
             # Size to fit exactly — a fixed cap here would silently stop
             # short and desync the scanner cursor mid-array, same bug as
             # the mesh/curve scratch buffers (see pbrt_parser.mojo).
             var cnt = scanner_count_floats(handle)
-            var tmp = alloc[Float32](Int(cnt) if cnt > Int32(0) else 1)
+            var tmp = unsafe_alloc[Float32](Int(cnt) if cnt > Int32(0) else 1)
             _ = scanner_scan_floats(handle, tmp, cnt)
             tmp.unsafe_free()
         else:
-            var tmp = alloc[Float32](1)
+            var tmp = unsafe_alloc[Float32](1)
             _ = scanner_scan_float(handle, tmp)
             tmp.unsafe_free()
     elif _psc_type_is_int(type_buf):
         if is_array:
             var cnt = scanner_count_ints(handle)
-            var tmp = alloc[Int32](Int(cnt) if cnt > Int32(0) else 1)
+            var tmp = unsafe_alloc[Int32](Int(cnt) if cnt > Int32(0) else 1)
             _ = scanner_scan_ints(handle, tmp, cnt)
             tmp.unsafe_free()
         else:
-            var tmp = alloc[Int32](1)
+            var tmp = unsafe_alloc[Int32](1)
             _ = scanner_scan_int(handle, tmp)
             tmp.unsafe_free()
     elif _psc_type_is_str(type_buf):
@@ -664,7 +664,7 @@ def _psc_skip_value(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
             while scanner_parse_quoted_string(handle, tmp_s, 1024) >= 0:
                 pass
     else:
-        var nl_buf = alloc[UInt8](1)
+        var nl_buf = unsafe_alloc[UInt8](1)
         nl_buf[unsafe_offset=0] = UInt8(10)
         _ = scanner_scan_token(handle, nl_buf, 1, tmp_s, 1024)
         nl_buf.unsafe_free()
@@ -685,9 +685,9 @@ struct ParamScanner(Movable):
     def __init__(out self, type_cap: Int32 = Int32(64), name_cap: Int32 = Int32(128)):
         self.type_cap = type_cap
         self.name_cap = name_cap
-        self.type_buf = alloc[UInt8](Int(type_cap))
-        self.name_buf = alloc[UInt8](Int(name_cap))
-        self.ia = alloc[Int32](1)
+        self.type_buf = unsafe_alloc[UInt8](Int(type_cap))
+        self.name_buf = unsafe_alloc[UInt8](Int(name_cap))
+        self.ia = unsafe_alloc[Int32](1)
         self.is_array = Int32(0)
 
     def next(mut self, handle: Pointer[PbrtScanner, MutUntrackedOrigin]) -> Bool:
@@ -725,9 +725,9 @@ def _psc_skip_params(handle: Pointer[PbrtScanner, MutUntrackedOrigin]):
         ps.skip(handle)
 
 def _psc_skip_line(handle: Pointer[PbrtScanner, MutUntrackedOrigin]):
-    var nl_buf = alloc[UInt8](1)
+    var nl_buf = unsafe_alloc[UInt8](1)
     nl_buf[unsafe_offset=0] = UInt8(10)
-    var buf = alloc[UInt8](4096)
+    var buf = unsafe_alloc[UInt8](4096)
     _ = scanner_scan_token(handle, nl_buf, 1, buf, 4096)
     nl_buf.unsafe_free()
     buf.unsafe_free()
@@ -764,7 +764,7 @@ def _psc_scan_spectrum_scalar(
     var cnt = scanner_count_floats(handle)
     if cnt > Int32(0):
         var cap = Int(cnt) if Int(cnt) < SPECTRUM_SCAN_SCRATCH_MAX else SPECTRUM_SCAN_SCRATCH_MAX
-        var tmp = alloc[Float32](cap)
+        var tmp = unsafe_alloc[Float32](cap)
         var n = scanner_scan_floats(handle, tmp, Int32(cap))
         var sum = Float32(0.0)
         var count = 0
@@ -783,7 +783,7 @@ def _psc_scan_spectrum_scalar(
     else:
         _ = scanner_parse_quoted_string(handle, name_dst, name_max)
         if is_array:
-            var tmp_s = alloc[UInt8](Int(name_max) if name_max > Int32(0) else 1)
+            var tmp_s = unsafe_alloc[UInt8](Int(name_max) if name_max > Int32(0) else 1)
             while scanner_parse_quoted_string(handle, tmp_s, name_max) >= 0:
                 pass
             tmp_s.unsafe_free()
@@ -882,7 +882,7 @@ struct ParameterDictionary(Movable):
                 if len(p.value.floats) >= 3:
                     return RGB(p.value.floats[0], p.value.floats[1], p.value.floats[2])
                 elif len(p.value.floats) == 1:
-                    var rgb_out = alloc[Float32](3)
+                    var rgb_out = unsafe_alloc[Float32](3)
                     _psc_blackbody_to_rgb(p.value.floats[0], rgb_out)
                     var result = RGB(rgb_out[unsafe_offset=0], rgb_out[unsafe_offset=1], rgb_out[unsafe_offset=2])
                     rgb_out.unsafe_free()
@@ -994,7 +994,7 @@ def _psc_collect_params(handle: Pointer[PbrtScanner, MutUntrackedOrigin]) -> Par
             # temperature ("blackbody L" [6500], 1 float) for the same
             # logical parameter distinguish the two by count, same pattern
             # used for "eta"'s RGB-vs-scalar duality in material_builder.mojo.
-            var tmp = alloc[Float32](1)
+            var tmp = unsafe_alloc[Float32](1)
             var n = scanner_scan_float(handle, tmp)
             if n > Int32(0):
                 pv.floats.append(tmp[unsafe_offset=0])
@@ -1002,7 +1002,7 @@ def _psc_collect_params(handle: Pointer[PbrtScanner, MutUntrackedOrigin]) -> Par
             if ps.is_array:
                 _ = scanner_scan_char(handle, UInt8(93))
         elif is_spectrum:
-            var name_buf = alloc[UInt8](256)
+            var name_buf = unsafe_alloc[UInt8](256)
             var (mean, is_numeric) = _psc_scan_spectrum_scalar(handle, ps.is_array, name_buf, Int32(256))
             if is_numeric:
                 pv.floats.append(mean)
@@ -1026,7 +1026,7 @@ def _psc_collect_params(handle: Pointer[PbrtScanner, MutUntrackedOrigin]) -> Par
                     pv.floats.resize(unsafe_uninit_length=Int(n) if n > Int32(0) else 0)
                 _ = scanner_scan_char(handle, UInt8(93))
             else:
-                var tmp = alloc[Float32](1)
+                var tmp = unsafe_alloc[Float32](1)
                 var n = scanner_scan_float(handle, tmp)
                 if n > Int32(0):
                     pv.floats.append(tmp[unsafe_offset=0])
@@ -1043,13 +1043,13 @@ def _psc_collect_params(handle: Pointer[PbrtScanner, MutUntrackedOrigin]) -> Par
                     pv.ints.resize(unsafe_uninit_length=Int(n) if n > Int32(0) else 0)
                 _ = scanner_scan_char(handle, UInt8(93))
             else:
-                var tmp = alloc[Int32](1)
+                var tmp = unsafe_alloc[Int32](1)
                 var n = scanner_scan_int(handle, tmp)
                 if n > Int32(0):
                     pv.ints.append(tmp[unsafe_offset=0])
                 tmp.unsafe_free()
         elif _psc_type_is_str(ps.type_buf):
-            var tmp_s = alloc[UInt8](512)
+            var tmp_s = unsafe_alloc[UInt8](512)
             var r = scanner_parse_quoted_string(handle, tmp_s, 512)
             if r >= 0:
                 pv.strs.append(String(unsafe_from_utf8_ptr=tmp_s.as_imm()))
@@ -1066,8 +1066,8 @@ def _psc_collect_params(handle: Pointer[PbrtScanner, MutUntrackedOrigin]) -> Par
             # above -- scan the raw token and keep it as a string so
             # get_bool can compare it; mirrors _psc_skip_value's own
             # else-branch scanning, just retained instead of discarded.
-            var tmp_s = alloc[UInt8](32)
-            var nl_buf = alloc[UInt8](1)
+            var tmp_s = unsafe_alloc[UInt8](32)
+            var nl_buf = unsafe_alloc[UInt8](1)
             nl_buf[unsafe_offset=0] = UInt8(10)
             _ = scanner_scan_token(handle, nl_buf, 1, tmp_s, 32)
             nl_buf.unsafe_free()

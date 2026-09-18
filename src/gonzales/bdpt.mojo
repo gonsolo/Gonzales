@@ -9,7 +9,7 @@ from std.gpu import block_idx, thread_idx, block_dim
 from max.gpu.host import DeviceContext, DeviceBuffer
 from max.algorithm import parallelize
 from std.math import sqrt, cos, sin, tan, floor, log, exp, max, min, abs, ceildiv, pow
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
 from .geometry import (
     RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, Frame,
@@ -4388,8 +4388,8 @@ def _bdpt_render_core(
 
     # Output buffer: one RGB per pixel, plus a parallel first-hit-albedo AOV
     # accumulator for the post-render denoiser (see write_image call below).
-    var buf = alloc[RGB](n_pix)
-    var albedo_buf = alloc[RGB](n_pix)
+    var buf = unsafe_alloc[RGB](n_pix)
+    var albedo_buf = unsafe_alloc[RGB](n_pix)
     for i in range(n_pix):
         buf[unsafe_offset=i] = RGB(Float32(0))
         albedo_buf[unsafe_offset=i] = RGB(Float32(0))
@@ -4402,7 +4402,7 @@ def _bdpt_render_core(
     # w2c = inverse(cameraToWorld). c2r inverts the 3x3 that
     # gen_primary_ray_state uses to turn (filmX, filmY, 1) into a
     # camera-space direction -- rasterToCamera's columns 0, 1 and 3.
-    var w2c = alloc[Float32](16)
+    var w2c = unsafe_alloc[Float32](16)
     _ = matrix_invert(c2w, w2c)
     var a0 = r2c[unsafe_offset=0]; var a1 = r2c[unsafe_offset=4]; var a2 = r2c[unsafe_offset=12]
     var b0 = r2c[unsafe_offset=1]; var b1 = r2c[unsafe_offset=5]; var b2 = r2c[unsafe_offset=13]
@@ -4412,7 +4412,7 @@ def _bdpt_render_core(
     var d2 = b0*g1 - b1*g0
     var det = a0*d0 - a1*d1 + a2*d2
     var idet = Float32(1) / det if abs(det) > Float32(1e-20) else Float32(0)
-    var c2r = alloc[Float32](9)
+    var c2r = unsafe_alloc[Float32](9)
     c2r[unsafe_offset=0] =  d0*idet;                 c2r[unsafe_offset=1] = -(a1*g2 - a2*g1)*idet; c2r[unsafe_offset=2] =  (a1*b2 - a2*b1)*idet
     c2r[unsafe_offset=3] = -d1*idet;                 c2r[unsafe_offset=4] =  (a0*g2 - a2*g0)*idet; c2r[unsafe_offset=5] = -(a0*b2 - a2*b0)*idet
     c2r[unsafe_offset=6] =  d2*idet;                 c2r[unsafe_offset=7] = -(a0*g1 - a1*g0)*idet; c2r[unsafe_offset=8] =  (a0*b1 - a1*b0)*idet
@@ -4429,15 +4429,15 @@ def _bdpt_render_core(
     # contention, no atomics); `lvc_path_len[lp_idx]` records how many of
     # those slots it actually filled.
     var lvc_cap = n_light_paths_merge * _BDPT_MAX_VERTS
-    var lvc = alloc[BDPTVertex](max(lvc_cap, 1))
-    var lvc_path_len = alloc[Int32](max(n_light_paths_merge, 1))
+    var lvc = unsafe_alloc[BDPTVertex](max(lvc_cap, 1))
+    var lvc_path_len = unsafe_alloc[Int32](max(n_light_paths_merge, 1))
     # One scratch Intersection_C per concurrent worker (light path / pixel)
     # instead of one shared slot — CPU threads now race on this exactly like
     # GPU threads already do (see _bdpt_emit_light_paths_gpu/
     # _bdpt_camera_connect_gpu's own per-thread inter_light_ptr+k/
     # inter_cam_ptr+pix), so it can no longer be a single reused buffer.
-    var scratch_light = alloc[Intersection_C](max(n_light_paths_merge, 1))
-    var scratch_cam = alloc[Intersection_C](max(n_pix, 1))
+    var scratch_light = unsafe_alloc[Intersection_C](max(n_light_paths_merge, 1))
+    var scratch_cam = unsafe_alloc[Intersection_C](max(n_pix, 1))
 
     # VCM vertex merging: grid buffers allocated once, rebuilt fresh every
     # spp sample (mirrors the LVC itself). Stage 2c: the radius itself is
@@ -4449,11 +4449,11 @@ def _bdpt_render_core(
     var (_scene_center, scene_radius) = _scene_bounding_sphere(sd)
     var merge_radius_1 = scene_radius * Float32(0.03)
     comptime _VCM_RADIUS_ALPHA = Float32(2.0) / Float32(3.0)  # Georgiev 2012's typical choice
-    var merge_heads = alloc[Int32](_HSIZE)
-    var merge_next = alloc[Int32](max(lvc_cap, 1))
+    var merge_heads = unsafe_alloc[Int32](_HSIZE)
+    var merge_next = unsafe_alloc[Int32](max(lvc_cap, 1))
     # t=1 splat records: one slot per potential light vertex.
-    var splat_pix = alloc[Int32](max(n_light_paths_merge * _BDPT_MAX_VERTS, 1))
-    var splat_val = alloc[SpectralSample](max(n_light_paths_merge * _BDPT_MAX_VERTS, 1))
+    var splat_pix = unsafe_alloc[Int32](max(n_light_paths_merge * _BDPT_MAX_VERTS, 1))
+    var splat_val = unsafe_alloc[SpectralSample](max(n_light_paths_merge * _BDPT_MAX_VERTS, 1))
     var cam_pos = Vec3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
 
     for si in range(n_spp):
@@ -4565,7 +4565,7 @@ def _bdpt_render_core(
     # Clamp into caller-owned output buffers (no denoise/write here -- see
     # vcm_render/vcm_render_gpu, this function's two callers, for the tail).
     var inv_spp = iso_scale / Float32(n_spp)
-    var pixels = alloc[Float32](n_pix * 3)
+    var pixels = unsafe_alloc[Float32](n_pix * 3)
     for i in range(n_pix):
         var c = buf[unsafe_offset=i] * inv_spp
         if max_comp > Float32(0):
@@ -4577,7 +4577,7 @@ def _bdpt_render_core(
         pixels[unsafe_offset=i*3+2] = c.b
     buf.unsafe_free()
 
-    var albedo_pixels = alloc[Float32](n_pix * 3)
+    var albedo_pixels = unsafe_alloc[Float32](n_pix * 3)
     var inv_spp_alb = Float32(1) / Float32(n_spp)
     for i in range(n_pix):
         var a = albedo_buf[unsafe_offset=i] * inv_spp_alb
@@ -4609,13 +4609,13 @@ def vcm_render(
     var n_pix = Int(psc[unsafe_offset=0].film_w) * Int(psc[unsafe_offset=0].film_h)
     var (pixels, albedo_pixels) = _bdpt_render_core(psc, sd, n_spp, n_photons, verbose)
 
-    var normals = alloc[Float32](n_pix * 3)
-    var depth = alloc[Float32](n_pix)
+    var normals = unsafe_alloc[Float32](n_pix * 3)
+    var depth = unsafe_alloc[Float32](n_pix)
     var sd_local = sd
     render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world, Int32(0), Int32(0),
                         psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, Pointer(to=sd_local), normals, depth)
 
-    var denoised = alloc[Float32](n_pix * 3)
+    var denoised = unsafe_alloc[Float32](n_pix * 3)
     if no_denoise:
         for i in range(n_pix * 3): denoised[unsafe_offset=i] = pixels[unsafe_offset=i]
     else:
@@ -5746,7 +5746,7 @@ def vcm_render_gpu(
             # matrices vcm_render builds on the CPU (see its matching
             # comment): w2c = inverse(cameraToWorld), and c2r inverting the
             # 3x3 that turns (filmX, filmY, 1) into a camera-space direction.
-            var w2c_host = alloc[Float32](16)
+            var w2c_host = unsafe_alloc[Float32](16)
             _ = matrix_invert(psc[unsafe_offset=0].camera_to_world, w2c_host)
             var _r2c_h = psc[unsafe_offset=0].raster_to_camera
             var a0 = _r2c_h[unsafe_offset=0]; var a1 = _r2c_h[unsafe_offset=4]; var a2 = _r2c_h[unsafe_offset=12]
@@ -5757,7 +5757,7 @@ def vcm_render_gpu(
             var d2 = b0*g1 - b1*g0
             var det = a0*d0 - a1*d1 + a2*d2
             var idet = Float32(1) / det if abs(det) > Float32(1e-20) else Float32(0)
-            var c2r_host = alloc[Float32](9)
+            var c2r_host = unsafe_alloc[Float32](9)
             c2r_host[unsafe_offset=0] =  d0*idet; c2r_host[unsafe_offset=1] = -(a1*g2 - a2*g1)*idet; c2r_host[unsafe_offset=2] =  (a1*b2 - a2*b1)*idet
             c2r_host[unsafe_offset=3] = -d1*idet; c2r_host[unsafe_offset=4] =  (a0*g2 - a2*g0)*idet; c2r_host[unsafe_offset=5] = -(a0*b2 - a2*b0)*idet
             c2r_host[unsafe_offset=6] =  d2*idet; c2r_host[unsafe_offset=7] = -(a0*g1 - a1*g0)*idet; c2r_host[unsafe_offset=8] =  (a0*b1 - a1*b0)*idet
@@ -5921,7 +5921,7 @@ def vcm_render_gpu(
 
             handle[].ctx.synchronize()
 
-            var pixels = alloc[Float32](n_pix * 3)
+            var pixels = unsafe_alloc[Float32](n_pix * 3)
             with accum_buf.map_to_host() as host_buf:
                 var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 var inv_spp = iso_scale / Float32(n_spp)
@@ -5941,20 +5941,20 @@ def vcm_render_gpu(
             # render_aux_buffers the CPU path/plain tracer use -- host-only,
             # so it runs on the CPU here too, not as a GPU kernel), then the
             # same CPU denoise() the CPU BDPT path uses.
-            var albedo_pixels = alloc[Float32](n_pix * 3)
+            var albedo_pixels = unsafe_alloc[Float32](n_pix * 3)
             with albedo_accum_buf.map_to_host() as host_buf:
                 var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 var inv_spp_alb = Float32(1) / Float32(n_spp)
                 for i in range(n_pix * 3):
                     albedo_pixels[unsafe_offset=i] = src[unsafe_offset=i] * inv_spp_alb
 
-            var normals = alloc[Float32](n_pix * 3)
-            var depth = alloc[Float32](n_pix)
+            var normals = unsafe_alloc[Float32](n_pix * 3)
+            var depth = unsafe_alloc[Float32](n_pix)
             var sd_local = sd
             render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world, Int32(0), Int32(0),
                                 psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, Pointer(to=sd_local), normals, depth)
 
-            var denoised = alloc[Float32](n_pix * 3)
+            var denoised = unsafe_alloc[Float32](n_pix * 3)
             if no_denoise:
                 for i in range(n_pix * 3): denoised[unsafe_offset=i] = pixels[unsafe_offset=i]
             else:
@@ -6332,7 +6332,7 @@ def vcm_render_gpu_wavefront(
             # matrices vcm_render / vcm_render_gpu build (see vcm_render's
             # comment): w2c = inverse(cameraToWorld), and c2r inverting the
             # 3x3 that turns (filmX, filmY, 1) into a camera-space direction.
-            var w2c_host = alloc[Float32](16)
+            var w2c_host = unsafe_alloc[Float32](16)
             _ = matrix_invert(psc[unsafe_offset=0].camera_to_world, w2c_host)
             var _r2c_h = psc[unsafe_offset=0].raster_to_camera
             var a0 = _r2c_h[unsafe_offset=0]; var a1 = _r2c_h[unsafe_offset=4]; var a2 = _r2c_h[unsafe_offset=12]
@@ -6343,7 +6343,7 @@ def vcm_render_gpu_wavefront(
             var d2 = b0*g1 - b1*g0
             var det = a0*d0 - a1*d1 + a2*d2
             var idet = Float32(1) / det if abs(det) > Float32(1e-20) else Float32(0)
-            var c2r_host = alloc[Float32](9)
+            var c2r_host = unsafe_alloc[Float32](9)
             c2r_host[unsafe_offset=0] =  d0*idet; c2r_host[unsafe_offset=1] = -(a1*g2 - a2*g1)*idet; c2r_host[unsafe_offset=2] =  (a1*b2 - a2*b1)*idet
             c2r_host[unsafe_offset=3] = -d1*idet; c2r_host[unsafe_offset=4] =  (a0*g2 - a2*g0)*idet; c2r_host[unsafe_offset=5] = -(a0*b2 - a2*b0)*idet
             c2r_host[unsafe_offset=6] =  d2*idet; c2r_host[unsafe_offset=7] = -(a0*g1 - a1*g0)*idet; c2r_host[unsafe_offset=8] =  (a0*b1 - a1*b0)*idet
@@ -6637,7 +6637,7 @@ def vcm_render_gpu_wavefront(
 
             handle[].ctx.synchronize()
 
-            var pixels = alloc[Float32](n_pix * 3)
+            var pixels = unsafe_alloc[Float32](n_pix * 3)
             with accum_buf.map_to_host() as host_buf:
                 var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 var inv_spp = iso_scale / Float32(n_spp)
@@ -6657,20 +6657,20 @@ def vcm_render_gpu_wavefront(
             # render_aux_buffers the CPU path/plain tracer use -- host-only,
             # so it runs on the CPU here too, not as a GPU kernel), then the
             # same CPU denoise() the CPU BDPT path uses.
-            var albedo_pixels = alloc[Float32](n_pix * 3)
+            var albedo_pixels = unsafe_alloc[Float32](n_pix * 3)
             with albedo_accum_buf.map_to_host() as host_buf:
                 var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 var inv_spp_alb = Float32(1) / Float32(n_spp)
                 for i in range(n_pix * 3):
                     albedo_pixels[unsafe_offset=i] = src[unsafe_offset=i] * inv_spp_alb
 
-            var normals = alloc[Float32](n_pix * 3)
-            var depth = alloc[Float32](n_pix)
+            var normals = unsafe_alloc[Float32](n_pix * 3)
+            var depth = unsafe_alloc[Float32](n_pix)
             var sd_local = sd
             render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world, Int32(0), Int32(0),
                                 psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, Pointer(to=sd_local), normals, depth)
 
-            var denoised = alloc[Float32](n_pix * 3)
+            var denoised = unsafe_alloc[Float32](n_pix * 3)
             if no_denoise:
                 for i in range(n_pix * 3): denoised[unsafe_offset=i] = pixels[unsafe_offset=i]
             else:
@@ -7416,7 +7416,7 @@ def sppm_render_gpu(
             _ = vps_buf^; _ = photons_buf^; _ = heads_buf^
             _ = inter_cam_buf^; _ = inter_ph_buf^; _ = r2c_buf^; _ = c2w_buf^
 
-            var out_pixels = alloc[Float32](n_pix * 3)
+            var out_pixels = unsafe_alloc[Float32](n_pix * 3)
             with out_buf.map_to_host() as host_buf:
                 var src = host_buf.unsafe_ptr()
                 var dst = out_pixels.unsafe_bitcast[UInt8]()
@@ -7428,20 +7428,20 @@ def sppm_render_gpu(
             # fresh normals/depth pass via the host-side sd (same
             # render_aux_buffers the CPU path/plain tracer use), then the
             # same CPU denoise() the CPU SPPM path uses.
-            var albedo_pixels = alloc[Float32](n_pix * 3)
+            var albedo_pixels = unsafe_alloc[Float32](n_pix * 3)
             with albedo_out_buf.map_to_host() as host_buf:
                 var src = host_buf.unsafe_ptr()
                 var dst = albedo_pixels.unsafe_bitcast[UInt8]()
                 for i in range(n_pix * 3 * size_of[Float32]()):
                     dst[unsafe_offset=i] = src[unsafe_offset=i]
 
-            var normals = alloc[Float32](n_pix * 3)
-            var depth = alloc[Float32](n_pix)
+            var normals = unsafe_alloc[Float32](n_pix * 3)
+            var depth = unsafe_alloc[Float32](n_pix)
             var sd_local = sd
             render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world, Int32(0), Int32(0),
                                 psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, Pointer(to=sd_local), normals, depth)
 
-            var denoised = alloc[Float32](n_pix * 3)
+            var denoised = unsafe_alloc[Float32](n_pix * 3)
             if no_denoise:
                 for i in range(n_pix * 3): denoised[unsafe_offset=i] = out_pixels[unsafe_offset=i]
             else:

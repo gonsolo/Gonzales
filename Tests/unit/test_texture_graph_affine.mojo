@@ -8,7 +8,7 @@ imagemaps must refuse to resolve (it would need a second lookup per shading
 point) and fall back to flat albedo rather than rendering something wrong.
 """
 from std.math import abs
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.lexer import PbrtScanner, scanner_free
 from gonzales.parse_types import SceneParseState
@@ -20,11 +20,11 @@ comptime _EPS = Float32(1e-5)
 
 def _scanner_from_string(body: String) -> Pointer[PbrtScanner, MutUntrackedOrigin]:
     var n = body.byte_length()
-    var buf = alloc[UInt8](n + 1)
+    var buf = unsafe_alloc[UInt8](n + 1)
     for i in range(n):
         buf[unsafe_offset=i] = body.as_bytes()[i]
     buf[unsafe_offset=n] = UInt8(0)
-    var handle = alloc[PbrtScanner](1)
+    var handle = unsafe_alloc[PbrtScanner](1)
     handle[unsafe_offset=0].buffer = buf
     handle[unsafe_offset=0].total_bytes = Int32(n)
     handle[unsafe_offset=0].cursor = Int32(0)
@@ -33,7 +33,7 @@ def _scanner_from_string(body: String) -> Pointer[PbrtScanner, MutUntrackedOrigi
 
 
 def _state() -> Pointer[SceneParseState, MutUntrackedOrigin]:
-    var s_ptr = alloc[SceneParseState](1)
+    var s_ptr = unsafe_alloc[SceneParseState](1)
     s_ptr.init_pointee_move(SceneParseState())
     return s_ptr
 

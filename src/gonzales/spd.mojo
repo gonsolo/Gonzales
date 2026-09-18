@@ -13,7 +13,7 @@
 # _spd_sample_rgb's docstring for the exact-match cross-check that pins this
 # loader against it.
 
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from .geometry import RGB
 
 # The three representative wavelengths material_builder.mojo's named-metal
@@ -78,8 +78,8 @@ def load_spd_rgb(path: String) -> Tuple[RGB, Bool]:
     canonical 630/530/450 instead, which differs slightly (gold's eta is
     steep in the red) but is the documented convention and is applied
     uniformly to file-loaded and built-in spectra alike."""
-    var lambdas = alloc[Float32](SPD_MAX_SAMPLES)
-    var values = alloc[Float32](SPD_MAX_SAMPLES)
+    var lambdas = unsafe_alloc[Float32](SPD_MAX_SAMPLES)
+    var values = unsafe_alloc[Float32](SPD_MAX_SAMPLES)
     var n = 0
 
     try:
@@ -184,8 +184,8 @@ def load_spd_rgb_at(path: String, lr: Float32, lg: Float32, lb: Float32) -> Tupl
     exact-match cross-check against material_builder.mojo's named-metal
     table (see load_spd_rgb's docstring); production code wants the
     canonical 630/530/450 entry point."""
-    var lambdas = alloc[Float32](SPD_MAX_SAMPLES)
-    var values = alloc[Float32](SPD_MAX_SAMPLES)
+    var lambdas = unsafe_alloc[Float32](SPD_MAX_SAMPLES)
+    var values = unsafe_alloc[Float32](SPD_MAX_SAMPLES)
     var n = 0
     try:
         var f = open(path, "r")

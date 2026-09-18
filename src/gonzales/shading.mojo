@@ -1,6 +1,6 @@
 from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from .geometry import RGB, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, LobeKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, ShadowTask_C, LightSampler_C, light_sampler_sample, light_sampler_pdf, Instance_C, MeasuredBRDF_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
@@ -345,7 +345,7 @@ def sample_texture[use_gpu: Bool](
                 if su < Float32(0.0): su += Float32(1.0)
                 tv = tv - Float32(Int(tv))
                 if tv < Float32(0.0): tv += Float32(1.0)
-                var tr = alloc[Float32](3)
+                var tr = unsafe_alloc[Float32](3)
                 tr[unsafe_offset=0] = Float32(0.0); tr[unsafe_offset=1] = Float32(0.0); tr[unsafe_offset=2] = Float32(0.0)
                 _ = external_call["texture", Bool,
                     Pointer[UInt8, MutUntrackedOrigin], Float32, Float32,
@@ -416,7 +416,7 @@ def _tex_lookup[use_gpu: Bool](
                 if su < Float32(0.0): su += Float32(1.0)
                 tv = tv - Float32(Int(tv))
                 if tv < Float32(0.0): tv += Float32(1.0)
-                var tr = alloc[Float32](3)
+                var tr = unsafe_alloc[Float32](3)
                 tr[unsafe_offset=0] = Float32(0.0); tr[unsafe_offset=1] = Float32(0.0); tr[unsafe_offset=2] = Float32(0.0)
                 _ = external_call["texture", Bool,
                     Pointer[UInt8, MutUntrackedOrigin], Float32, Float32,
@@ -4566,7 +4566,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                         var fname = ctx.tex_filenames[unsafe_offset=Int(ilight.tex_idx)]
                         var ea_uv2 = _equal_area_sphere_to_square(local_dir[0], local_dir[1], local_dir[2])
                         var u = ea_uv2[0]; var v = ea_uv2[1]
-                        var tr = alloc[Float32](3)
+                        var tr = unsafe_alloc[Float32](3)
                         tr[unsafe_offset=0] = Float32(0.0); tr[unsafe_offset=1] = Float32(0.0); tr[unsafe_offset=2] = Float32(0.0)
                         _ = external_call["texture", Bool,
                             Pointer[UInt8, MutUntrackedOrigin], Float32, Float32,

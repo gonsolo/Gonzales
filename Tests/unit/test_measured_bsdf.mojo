@@ -1,5 +1,6 @@
 from std.math import abs
 from std.testing import assert_true, assert_equal, TestSuite
+from std.memory.alloc import unsafe_alloc
 from gonzales.measured_bsdf import (
     load_measured_brdf_full, _pl2d_strides2, _pl2d_strides3,
     _pl2d_build_cdf, _pl2d_build_scaled_verbatim,
@@ -49,7 +50,7 @@ def test_build_scaled_verbatim_uses_inv_patch_size_normalization() raises:
     A 2x2 grid of all-1.0s scaled by 1/((2-1)*(2-1)) = 1/1 = 1.0 stays 1.0;
     verify the *formula* with a non-trivial shape instead so a regression to
     "verbatim copy" would actually be caught."""
-    var raw = alloc[Float32](3 * 4)  # xs=4, ys=3 -> norm = 1/((4-1)*(3-1)) = 1/6
+    var raw = unsafe_alloc[Float32](3 * 4)  # xs=4, ys=3 -> norm = 1/((4-1)*(3-1)) = 1/6
     for i in range(12):
         raw[unsafe_offset=i] = Float32(6.0)
     var out = _pl2d_build_scaled_verbatim(raw, 4, 3, 1)
@@ -63,7 +64,7 @@ def test_build_cdf_marginal_ends_at_one_and_is_monotonic() raises:
     1.0 after normalization, and (being a CDF of nonnegative density) every
     entry must be monotonically non-decreasing."""
     var xs = 4; var ys = 5
-    var raw = alloc[Float32](xs * ys)
+    var raw = unsafe_alloc[Float32](xs * ys)
     # Arbitrary nonnegative density, not uniform -- exercises real weighting.
     for y in range(ys):
         for x in range(xs):
@@ -89,7 +90,7 @@ def test_build_cdf_handles_multiple_slices_independently() raises:
     processes slice 0 (e.g. a forgotten per-slice base-offset) would leave
     slice 1's marginal at 0."""
     var xs = 3; var ys = 3
-    var raw = alloc[Float32](xs * ys * 2)
+    var raw = unsafe_alloc[Float32](xs * ys * 2)
     for i in range(xs * ys * 2):
         raw[unsafe_offset=i] = Float32(1.0 + Float32(i))
     var (data_out, marginal, conditional) = _pl2d_build_cdf(raw, xs, ys, 2)

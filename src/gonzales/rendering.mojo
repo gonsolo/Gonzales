@@ -1,5 +1,5 @@
 from std.math import ceildiv, sqrt, log, exp, cos, sin, max
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from max.algorithm import parallelize
 from std.atomic import Atomic
 from std.sys.info import num_performance_cores
@@ -112,15 +112,15 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
     var hash_bits1 = UInt64(mix_bits_u64(UInt64(1) ^ UInt64(sp.sobolSeed)))
     var seed_dim1 = UInt32(hash_bits1 & UInt64(0xFFFFFFFF))
 
-    var paths = alloc[PathState_C](n)
-    var intersections = alloc[Intersection_C](n)
+    var paths = unsafe_alloc[PathState_C](n)
+    var intersections = unsafe_alloc[Intersection_C](n)
     # Global (frame-wide) pixel index per path -- needed only for ReSTIR DI's
     # temporal reservoir buffer (Phase 2.3, docs/A2_restir_migration_plan.md),
     # which persists across frames and so must be indexed by a stable,
     # tile-independent key, not the tile-local `idx` below. -1 (never a
     # valid buffer index) whenever frame_w wasn't supplied -- matches
     # di_temporal_step's own "no temporal reuse" fallback.
-    var pixel_idx_buf = alloc[Int](n)
+    var pixel_idx_buf = unsafe_alloc[Int](n)
 
     # Phase 7.3: per-PATH-SLOT "already combined this frame" guard (indexed
     # by the local `i` used for paths/intersections, NOT pixel_idx_buf's
@@ -130,19 +130,19 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
     # Tile-call-local like gi_pending_buf below, zeroed unconditionally
     # (cheap, and harmless when vol_io isn't real -- _sample_medium_core's
     # own `_is_real_ptr(vol_read)` check gates the whole path off first).
-    var vol_used_buf = alloc[Int8](n)
+    var vol_used_buf = unsafe_alloc[Int8](n)
     for vu_i in range(n):
         vol_used_buf[unsafe_offset=vu_i] = Int8(0)
 
     # Phase 4's per-path-slot scratch (GIPendingX1), tile-call-local like
     # `paths`/`intersections` above -- NOT frame-wide like gi_io.
-    # alloc() doesn't zero memory, so every slot needs an explicit inactive
+    # unsafe_alloc() doesn't zero memory, so every slot needs an explicit inactive
     # init; otherwise a path that never reaches bounce 1 (miss, RR kill, or
     # a non-diffuse x2) would leave garbage that a later stray read could
     # misinterpret as a real pending snapshot.
     var gi_pending_buf = Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling()
     if use_gi:
-        gi_pending_buf = alloc[GIPendingX1](n)
+        gi_pending_buf = unsafe_alloc[GIPendingX1](n)
         for gi_i in range(n):
             gi_pending_buf[unsafe_offset=gi_i] = gi_pending_x1_init()
 
@@ -427,10 +427,10 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
     var n_tiles = n_tiles_x * n_tiles_y
 
     # One scratch buffer per tile so threads never alias each other's writes.
-    var tile_bufs = alloc[TileResult_C](n_tiles * max_tile_pixels)
+    var tile_bufs = unsafe_alloc[TileResult_C](n_tiles * max_tile_pixels)
 
     # Progress counter — incremented after each tile (racy, display-only).
-    var done_ptr = alloc[Int32](1)
+    var done_ptr = unsafe_alloc[Int32](1)
     done_ptr[unsafe_offset=0] = Int32(0)
     var t0 = perf_counter_ns()
     # Print every ~5% of tiles (at least every 1 tile).
@@ -494,7 +494,7 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
     if n_write_guides > 0:
         parallelize[render_one](n_tiles)
     else:
-        var next_tile = alloc[Int32](1)
+        var next_tile = unsafe_alloc[Int32](1)
         next_tile[unsafe_offset=0] = Int32(0)
 
         @parameter

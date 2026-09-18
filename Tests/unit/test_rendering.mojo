@@ -6,7 +6,7 @@
 # branch, a full heterogeneous-media scene) and are out of scope here.
 
 from std.math import abs
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, TileResult_C
 from gonzales.rendering import _fmt_f1, fmt_time, progress_str, normalize_film
@@ -60,10 +60,10 @@ def _make_result(r: Float32, g: Float32, b: Float32, ar: Float32, ag: Float32, a
 def test_normalize_film_zero_filter_weight_gives_zero_output() raises:
     """The w==0 early-out must zero BOTH beauty and albedo, even though the
     stored estimate/albedo are non-zero -- avoids a 0/0 division."""
-    var results = alloc[TileResult_C](1)
+    var results = unsafe_alloc[TileResult_C](1)
     results[unsafe_offset=0] = _make_result(Float32(5.0), Float32(5.0), Float32(5.0), Float32(1.0), Float32(1.0), Float32(1.0), Float32(0.0))
-    var beauty = alloc[Float32](3)
-    var albedo = alloc[Float32](3)
+    var beauty = unsafe_alloc[Float32](3)
+    var albedo = unsafe_alloc[Float32](3)
     normalize_film(results, Int32(1), Float32(100.0), Float32(0.0), beauty, albedo)
     for i in range(3):
         assert_true(_close(beauty[unsafe_offset=i], Float32(0.0)))
@@ -74,10 +74,10 @@ def test_normalize_film_scales_beauty_by_iso_but_leaves_albedo_unscaled() raises
     """Beauty = estimate/weight * (iso/100); albedo = albedo_sum/weight with
     NO iso scaling at all -- these are genuinely different formulas, worth
     pinning down separately since they're easy to accidentally conflate."""
-    var results = alloc[TileResult_C](1)
+    var results = unsafe_alloc[TileResult_C](1)
     results[unsafe_offset=0] = _make_result(Float32(2.0), Float32(4.0), Float32(6.0), Float32(0.5), Float32(0.25), Float32(0.75), Float32(2.0))
-    var beauty = alloc[Float32](3)
-    var albedo = alloc[Float32](3)
+    var beauty = unsafe_alloc[Float32](3)
+    var albedo = unsafe_alloc[Float32](3)
     normalize_film(results, Int32(1), Float32(200.0), Float32(0.0), beauty, albedo)
     # scale = 200/100 = 2; beauty = (2/2, 4/2, 6/2) * 2 = (2, 4, 6)
     assert_true(_close(beauty[unsafe_offset=0], Float32(2.0)))
@@ -90,10 +90,10 @@ def test_normalize_film_scales_beauty_by_iso_but_leaves_albedo_unscaled() raises
     results.unsafe_free(); beauty.unsafe_free(); albedo.unsafe_free()
 
 def test_normalize_film_clamps_negative_beauty_to_zero() raises:
-    var results = alloc[TileResult_C](1)
+    var results = unsafe_alloc[TileResult_C](1)
     results[unsafe_offset=0] = _make_result(Float32(-1.0), Float32(3.0), Float32(-5.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(1.0))
-    var beauty = alloc[Float32](3)
-    var albedo = alloc[Float32](3)
+    var beauty = unsafe_alloc[Float32](3)
+    var albedo = unsafe_alloc[Float32](3)
     normalize_film(results, Int32(1), Float32(100.0), Float32(0.0), beauty, albedo)
     assert_true(_close(beauty[unsafe_offset=0], Float32(0.0)))
     assert_true(_close(beauty[unsafe_offset=1], Float32(3.0)))
@@ -104,12 +104,12 @@ def test_normalize_film_clamps_nan_beauty_to_zero() raises:
     """A NaN component (e.g. propagated from an earlier 0/0) fails self-
     equality -- the function relies on exactly that (b.r != b.r) to detect
     and zero it, since a plain `< 0` check would let NaN through."""
-    var results = alloc[TileResult_C](1)
+    var results = unsafe_alloc[TileResult_C](1)
     var zero = Float32(0.0)
     var nan_val = zero / zero
     results[unsafe_offset=0] = _make_result(nan_val, Float32(1.0), Float32(1.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(1.0))
-    var beauty = alloc[Float32](3)
-    var albedo = alloc[Float32](3)
+    var beauty = unsafe_alloc[Float32](3)
+    var albedo = unsafe_alloc[Float32](3)
     normalize_film(results, Int32(1), Float32(100.0), Float32(0.0), beauty, albedo)
     assert_true(_close(beauty[unsafe_offset=0], Float32(0.0)))
     assert_true(_close(beauty[unsafe_offset=1], Float32(1.0)))
@@ -120,10 +120,10 @@ def test_normalize_film_max_component_clamp_preserves_color_ratio() raises:
     """When the brightest channel exceeds max_component_value, ALL channels
     are scaled down by the same factor (max_component_value/mx) -- a hue-
     preserving clamp, not an independent per-channel clamp."""
-    var results = alloc[TileResult_C](1)
+    var results = unsafe_alloc[TileResult_C](1)
     results[unsafe_offset=0] = _make_result(Float32(4.0), Float32(8.0), Float32(2.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(1.0))
-    var beauty = alloc[Float32](3)
-    var albedo = alloc[Float32](3)
+    var beauty = unsafe_alloc[Float32](3)
+    var albedo = unsafe_alloc[Float32](3)
     normalize_film(results, Int32(1), Float32(100.0), Float32(4.0), beauty, albedo)
     # mx=8 > 4 -> factor = 4/8 = 0.5
     assert_true(_close(beauty[unsafe_offset=0], Float32(2.0)))

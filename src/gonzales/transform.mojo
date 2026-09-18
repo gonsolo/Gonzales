@@ -1,5 +1,5 @@
 from std.ffi import external_call
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from .geometry import Vec3f
 
 # Matrix math. 4x4 matrices are 16 Float32 in column-major order:

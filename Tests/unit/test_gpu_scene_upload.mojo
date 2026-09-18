@@ -1,5 +1,5 @@
 from std.math import abs
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.sys.info import size_of
 from std.sys import has_accelerator
 from std.testing import assert_true, TestSuite
@@ -33,11 +33,11 @@ def _scanner_from_string(s: String) -> Pointer[PbrtScanner, MutUntrackedOrigin]:
     -- unlike the single-directive handlers that file tests -- expects to
     read directive keywords itself from the very start of the buffer."""
     var n = s.byte_length()
-    var buf = alloc[UInt8](n + 1)
+    var buf = unsafe_alloc[UInt8](n + 1)
     for i in range(n):
         buf[unsafe_offset=i] = s.as_bytes()[i]
     buf[unsafe_offset=n] = UInt8(0)
-    var handle = alloc[PbrtScanner](1)
+    var handle = unsafe_alloc[PbrtScanner](1)
     handle[unsafe_offset=0].buffer = buf
     handle[unsafe_offset=0].total_bytes = Int32(n)
     handle[unsafe_offset=0].cursor = Int32(0)
@@ -58,11 +58,11 @@ def _parse_minimal_scene() -> Pointer[ParsedScene_Mojo, MutUntrackedOrigin]:
     scene_text += String('Shape "trianglemesh" "point3 P" [0 0 0  1 0 0  0 1 0] "integer indices" [0 1 2]\n')
     scene_text += String("WorldEnd\n")
     var handle = _scanner_from_string(scene_text)
-    var s_ptr = alloc[SceneParseState](1)
+    var s_ptr = unsafe_alloc[SceneParseState](1)
     s_ptr.init_pointee_move(SceneParseState())
     parse_scene_file(handle, s_ptr)
 
-    var psc = alloc[ParsedScene_Mojo](1)
+    var psc = unsafe_alloc[ParsedScene_Mojo](1)
     finalize_scene(s_ptr, psc, False)
     _ = s_ptr.take_pointee(); s_ptr.unsafe_free()
     handle[unsafe_offset=0].buffer.unsafe_free(); handle.unsafe_free()
@@ -78,7 +78,7 @@ def test_gpu_upload_scene_round_trips_mesh_and_material_data() raises:
     assert_true(Int(psc[unsafe_offset=0].material_count) == 1)
 
     comptime N_SOBOL_GPU_WORDS = 1024 * 52
-    var sobol = alloc[UInt32](N_SOBOL_GPU_WORDS)
+    var sobol = unsafe_alloc[UInt32](N_SOBOL_GPU_WORDS)
     for i in range(N_SOBOL_GPU_WORDS):
         sobol[unsafe_offset=i] = UInt32(i * 7 + 3)
 

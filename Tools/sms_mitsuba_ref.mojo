@@ -61,6 +61,7 @@ from std.ffi import external_call
 from max.algorithm import parallelize
 from gonzales.geometry import Vec3f, dot, cross, _atan2f
 from gonzales.rng import PCG32
+from std.memory.alloc import unsafe_alloc
 
 comptime PI_F: Float32 = 3.14159265358979323846
 comptime TWO_PI_F: Float32 = 6.28318530717958647692
@@ -88,7 +89,7 @@ def cstr(s: String) -> Pointer[UInt8, MutUntrackedOrigin]:
     """Null-terminated, mutable-pointer copy of `s` for the OIIO bridge."""
     var b = s.as_bytes()
     var n = len(b)
-    var p = alloc[UInt8](n + 1)
+    var p = unsafe_alloc[UInt8](n + 1)
     for i in range(n):
         p[unsafe_offset=i] = b[i]
     p[unsafe_offset=n] = UInt8(0)
@@ -250,9 +251,9 @@ struct Normalmap(Movable):
     var res: Int
 
     def __init__(out self, filename: String) raises:
-        var pixels_ptr = alloc[Pointer[Float32, MutUntrackedOrigin]](1)
-        var w_out = alloc[Int32](1)
-        var h_out = alloc[Int32](1)
+        var pixels_ptr = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](1)
+        var w_out = unsafe_alloc[Int32](1)
+        var h_out = unsafe_alloc[Int32](1)
         w_out[unsafe_offset=0] = Int32(0); h_out[unsafe_offset=0] = Int32(0)
         var fname = cstr(filename)
         var ok = external_call["load_texture_rgb", Int32,
@@ -268,7 +269,7 @@ struct Normalmap(Movable):
             raise Error("Normalmap: failed to load or non-square: " + filename)
         var src = pixels_ptr[unsafe_offset=0]
         self.res = w
-        self.slopes = alloc[Float32](2 * w * w)
+        self.slopes = unsafe_alloc[Float32](2 * w * w)
         for i in range(w * w):
             var nx = Float32(2.0) * src[unsafe_offset=i*3 + 0] - Float32(1.0)
             var ny = Float32(2.0) * src[unsafe_offset=i*3 + 1] - Float32(1.0)
@@ -336,9 +337,9 @@ struct ColorTexture(Movable):
     var h: Int
 
     def __init__(out self, filename: String) raises:
-        var pixels_ptr = alloc[Pointer[Float32, MutUntrackedOrigin]](1)
-        var w_out = alloc[Int32](1)
-        var h_out = alloc[Int32](1)
+        var pixels_ptr = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](1)
+        var w_out = unsafe_alloc[Int32](1)
+        var h_out = unsafe_alloc[Int32](1)
         w_out[unsafe_offset=0] = Int32(0); h_out[unsafe_offset=0] = Int32(0)
         var fname = cstr(filename)
         var ok = external_call["load_texture_rgb", Int32,
@@ -353,7 +354,7 @@ struct ColorTexture(Movable):
         if ok == Int32(0) or self.w <= 0:
             raise Error("ColorTexture: failed to load " + filename)
         var src = pixels_ptr[unsafe_offset=0]
-        self.data = alloc[Float32](3 * self.w * self.h)
+        self.data = unsafe_alloc[Float32](3 * self.w * self.h)
         for i in range(3 * self.w * self.h):
             self.data[unsafe_offset=i] = src[unsafe_offset=i]
         pixels_ptr.unsafe_free()
@@ -1251,10 +1252,10 @@ def main() raises:
                     shown += 1
         return
 
-    var pixels = alloc[Float32](3 * width * height)
+    var pixels = unsafe_alloc[Float32](3 * width * height)
     var n_pixels = width * height
-    var solved_total = alloc[Int](1); solved_total[unsafe_offset=0] = 0
-    var trials_total = alloc[Int](1); trials_total[unsafe_offset=0] = 0
+    var solved_total = unsafe_alloc[Int](1); solved_total[unsafe_offset=0] = 0
+    var trials_total = unsafe_alloc[Int](1); trials_total[unsafe_offset=0] = 0
 
     @parameter
     def render_row(row: Int):

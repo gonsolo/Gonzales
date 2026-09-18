@@ -1,4 +1,5 @@
-from std.memory import alloc, OwnedPointer
+from std.memory.alloc import unsafe_alloc
+from std.memory import OwnedPointer
 from std.collections import List
 from std.math import sqrt, tan, ceil
 from std.sys.info import size_of
@@ -112,7 +113,7 @@ def _generate_sobol_matrices(path: String) -> Optional[Pointer[UInt32, MutUntrac
         var bytes = f.read_bytes()
         f.close()
         file_size = len(bytes)
-        file_buf = alloc[UInt8](file_size + 1)
+        file_buf = unsafe_alloc[UInt8](file_size + 1)
         var bytes_ptr = bytes.unsafe_ptr()
         for i in range(file_size):
             file_buf[unsafe_offset=i] = bytes_ptr[unsafe_offset=i]
@@ -124,7 +125,7 @@ def _generate_sobol_matrices(path: String) -> Optional[Pointer[UInt32, MutUntrac
     # Allocate matrices: 21201 dimensions × 52 bits
     comptime N_DIMS = 21201
     comptime N_BITS = 52
-    var matrices = alloc[UInt32](N_DIMS * N_BITS)
+    var matrices = unsafe_alloc[UInt32](N_DIMS * N_BITS)
     # Zero-initialize
     for i in range(N_DIMS * N_BITS):
         matrices[unsafe_offset=i] = UInt32(0)
@@ -352,9 +353,9 @@ def _build_mesh_light_info(
     psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
 ) -> Tuple[Pointer[Int64, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin]]:
     var n_meshes = Int(psc[unsafe_offset=0].mesh_count)
-    var mat_idx = alloc[Int64](max(n_meshes, 1))
-    var al_idx = alloc[Int32](max(n_meshes, 1))
-    var seen = alloc[UInt8](max(n_meshes, 1))
+    var mat_idx = unsafe_alloc[Int64](max(n_meshes, 1))
+    var al_idx = unsafe_alloc[Int32](max(n_meshes, 1))
+    var seen = unsafe_alloc[UInt8](max(n_meshes, 1))
     for i in range(max(n_meshes, 1)):
         mat_idx[unsafe_offset=i] = Int64(0)
         al_idx[unsafe_offset=i] = Int32(-1)
@@ -448,7 +449,7 @@ def debug_trace_pixel(
     var ox = c2w[unsafe_offset=12]; var oy = c2w[unsafe_offset=13]; var oz = c2w[unsafe_offset=14]
     print("PIXEL", px, py, "ray.o", ox, oy, oz, "ray.d", dx, dy, dz)
 
-    var inter = alloc[Intersection_C](1)
+    var inter = unsafe_alloc[Intersection_C](1)
     var current_ior = Float32(1.0)   # mirrors PathState_C.current_dielectric_ior
     var previous_ior = Float32(1.0)  # mirrors PathState_C.previous_dielectric_ior
     for bounce in range(8):
@@ -529,7 +530,7 @@ def debug_trace_pixel(
             var rfl = _dbg_vlen(rfx, rfy, rfz)
             if rfl > Float32(0.0): rfx /= rfl; rfy /= rfl; rfz /= rfl
             var rray = Ray_C(Point3f(hx+nx*Float32(0.001), hy+ny*Float32(0.001), hz+nz*Float32(0.001)), Vec3f(rfx, rfy, rfz))
-            var rint = alloc[Intersection_C](1); rint[unsafe_offset=0].hit = Int8(0)
+            var rint = unsafe_alloc[Intersection_C](1); rint[unsafe_offset=0].hit = Int8(0)
             traverse_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, rray, Float32(1.0e38), rint,
                                 psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances)
             if rint[unsafe_offset=0].hit == Int8(0) and psc[unsafe_offset=0].infinite_count > 0:
@@ -581,7 +582,7 @@ def debug_trace_pixel(
             var rfl5 = _dbg_vlen(rfx5, rfy5, rfz5)
             if rfl5 > Float32(0.0): rfx5 /= rfl5; rfy5 /= rfl5; rfz5 /= rfl5
             var rray5 = Ray_C(Point3f(hx+nx5*Float32(0.001), hy+ny5*Float32(0.001), hz+nz5*Float32(0.001)), Vec3f(rfx5, rfy5, rfz5))
-            var rint5 = alloc[Intersection_C](1); rint5[unsafe_offset=0].hit = Int8(0)
+            var rint5 = unsafe_alloc[Intersection_C](1); rint5[unsafe_offset=0].hit = Int8(0)
             traverse_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, rray5, Float32(1.0e38), rint5,
                                 psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances)
             if rint5[unsafe_offset=0].hit == Int8(0):
@@ -606,7 +607,7 @@ def debug_trace_pixel(
             var rfl3 = _dbg_vlen(rfx3, rfy3, rfz3)
             if rfl3 > Float32(0.0): rfx3 /= rfl3; rfy3 /= rfl3; rfz3 /= rfl3
             var rray3 = Ray_C(Point3f(hx+nx3*Float32(0.001), hy+ny3*Float32(0.001), hz+nz3*Float32(0.001)), Vec3f(rfx3, rfy3, rfz3))
-            var rint3 = alloc[Intersection_C](1); rint3[unsafe_offset=0].hit = Int8(0)
+            var rint3 = unsafe_alloc[Intersection_C](1); rint3[unsafe_offset=0].hit = Int8(0)
             traverse_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, rray3, Float32(1.0e38), rint3,
                                 psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances)
             if rint3[unsafe_offset=0].hit == Int8(0):
@@ -703,9 +704,9 @@ def debug_render_vulkanrt(
     # Build the Vulkan RT scene directly from the parsed meshes -- points/
     # vertexIndices pointers passed through as-is (vulkanrt.h's
     # VulkanRtMesh is a field-for-field mirror of TriangleMesh_C).
-    var vmeshes = alloc[TriangleMesh_C](n_meshes)
-    var point_counts = alloc[Int64](n_meshes)
-    var vidx_counts = alloc[Int64](n_meshes)
+    var vmeshes = unsafe_alloc[TriangleMesh_C](n_meshes)
+    var point_counts = unsafe_alloc[Int64](n_meshes)
+    var vidx_counts = unsafe_alloc[Int64](n_meshes)
     for i in range(n_meshes):
         vmeshes[unsafe_offset=i] = psc[unsafe_offset=0].meshes[unsafe_offset=i]
         point_counts[unsafe_offset=i] = Int64(psc[unsafe_offset=0].mesh_n_verts[unsafe_offset=i])
@@ -722,7 +723,7 @@ def debug_render_vulkanrt(
     # camera_to_world math as debug_trace_pixel above -- packed straight
     # into vulkanrt_trace_rays's flat 8-floats-per-ray layout.
     var n_pix = w * h
-    var rays = alloc[Float32](n_pix * 8)
+    var rays = unsafe_alloc[Float32](n_pix * 8)
     var r2c = psc[unsafe_offset=0].raster_to_camera
     var c2w = psc[unsafe_offset=0].camera_to_world
     for py in range(h):
@@ -747,12 +748,12 @@ def debug_render_vulkanrt(
             rays[unsafe_offset=idx+0] = ox; rays[unsafe_offset=idx+1] = oy; rays[unsafe_offset=idx+2] = oz; rays[unsafe_offset=idx+3] = Float32(0.001)
             rays[unsafe_offset=idx+4] = dx; rays[unsafe_offset=idx+5] = dy; rays[unsafe_offset=idx+6] = dz; rays[unsafe_offset=idx+7] = Float32(1.0e8)
 
-    var out_t = alloc[Float32](n_pix)
-    var out_u = alloc[Float32](n_pix)
-    var out_v = alloc[Float32](n_pix)
-    var out_mesh = alloc[Int32](n_pix)
-    var out_tri = alloc[Int32](n_pix)
-    var out_hit = alloc[UInt8](n_pix)
+    var out_t = unsafe_alloc[Float32](n_pix)
+    var out_u = unsafe_alloc[Float32](n_pix)
+    var out_v = unsafe_alloc[Float32](n_pix)
+    var out_mesh = unsafe_alloc[Int32](n_pix)
+    var out_tri = unsafe_alloc[Int32](n_pix)
+    var out_hit = unsafe_alloc[UInt8](n_pix)
 
     var rc = vulkanrt_trace_rays(scene, Int32(n_pix), rays, out_t, out_u, out_v,
                                   out_mesh, out_tri, out_hit)
@@ -768,8 +769,8 @@ def debug_render_vulkanrt(
     # Cross-check every pixel against the CPU software BVH tracing the
     # identical ray (step 5's image-level validation, folded into step 4),
     # and build an N.V-shaded visibility image from the GPU hits.
-    var img = alloc[Float32](n_pix * 3)
-    var inter = alloc[Intersection_C](1)
+    var img = unsafe_alloc[Float32](n_pix * 3)
+    var inter = unsafe_alloc[Intersection_C](1)
     var cpu_hits = 0
     var gpu_hits = 0
     var both_hit = 0
@@ -822,7 +823,7 @@ def debug_render_vulkanrt(
     print("  depth error (both-hit pixels): mean", mean_depth_err, " max", depth_err_max)
 
     var out_path = String("vulkanrt_debug.exr")
-    var out_cstr = alloc[UInt8](out_path.byte_length() + 1)
+    var out_cstr = unsafe_alloc[UInt8](out_path.byte_length() + 1)
     for k in range(out_path.byte_length()):
         out_cstr[unsafe_offset=k] = out_path.as_bytes()[k]
     out_cstr[unsafe_offset=out_path.byte_length()] = UInt8(0)
@@ -1017,9 +1018,9 @@ def parse_and_render(
                     # change needed to raise it.
                     var max_rays_vk_vcm = max(n_light_paths_merge_vk, n_pixels * _BDPT_MAX_VERTS)
                     n_meshes_vk_vcm = Int(psc[unsafe_offset=0].mesh_count)
-                    var vmeshes_vcm = alloc[TriangleMesh_C](max(n_meshes_vk_vcm, 1))
-                    var point_counts_vcm = alloc[Int64](max(n_meshes_vk_vcm, 1))
-                    var vidx_counts_vcm = alloc[Int64](max(n_meshes_vk_vcm, 1))
+                    var vmeshes_vcm = unsafe_alloc[TriangleMesh_C](max(n_meshes_vk_vcm, 1))
+                    var point_counts_vcm = unsafe_alloc[Int64](max(n_meshes_vk_vcm, 1))
+                    var vidx_counts_vcm = unsafe_alloc[Int64](max(n_meshes_vk_vcm, 1))
                     for i in range(n_meshes_vk_vcm):
                         vmeshes_vcm[unsafe_offset=i] = psc[unsafe_offset=0].meshes[unsafe_offset=i]
                         point_counts_vcm[unsafe_offset=i] = Int64(psc[unsafe_offset=0].mesh_n_verts[unsafe_offset=i])
@@ -1125,9 +1126,9 @@ def parse_and_render(
         var max_rays_vk = Int64(n_pixels) * Int64(WAVEFRONT_BATCH)
         if use_vk:
             n_meshes_vk = Int(psc[unsafe_offset=0].mesh_count)
-            var vmeshes = alloc[TriangleMesh_C](max(n_meshes_vk, 1))
-            var point_counts = alloc[Int64](max(n_meshes_vk, 1))
-            var vidx_counts = alloc[Int64](max(n_meshes_vk, 1))
+            var vmeshes = unsafe_alloc[TriangleMesh_C](max(n_meshes_vk, 1))
+            var point_counts = unsafe_alloc[Int64](max(n_meshes_vk, 1))
+            var vidx_counts = unsafe_alloc[Int64](max(n_meshes_vk, 1))
             for i in range(n_meshes_vk):
                 vmeshes[unsafe_offset=i] = psc[unsafe_offset=0].meshes[unsafe_offset=i]
                 point_counts[unsafe_offset=i] = Int64(psc[unsafe_offset=0].mesh_n_verts[unsafe_offset=i])
@@ -1143,20 +1144,20 @@ def parse_and_render(
             # ObjectInstance. Empty (n_templates=0) is byte-identical to
             # the pre-instancing call.
             var n_templates_vk = Int(psc[unsafe_offset=0].blas_count)
-            var template_mesh_start_vk = alloc[Int64](max(n_templates_vk, 1))
-            var template_mesh_end_vk   = alloc[Int64](max(n_templates_vk, 1))
+            var template_mesh_start_vk = unsafe_alloc[Int64](max(n_templates_vk, 1))
+            var template_mesh_end_vk   = unsafe_alloc[Int64](max(n_templates_vk, 1))
             for t in range(n_templates_vk):
                 template_mesh_start_vk[unsafe_offset=t] = Int64(psc[unsafe_offset=0].template_mesh_start[unsafe_offset=t])
                 template_mesh_end_vk[unsafe_offset=t]   = Int64(psc[unsafe_offset=0].template_mesh_end[unsafe_offset=t])
 
             var n_instances_vk = Int(psc[unsafe_offset=0].instance_count)
-            var instance_o2w_vk = alloc[Float32](max(n_instances_vk, 1) * 16)
-            var instance_tmpl_idx_vk = alloc[Int32](max(n_instances_vk, 1))
+            var instance_o2w_vk = unsafe_alloc[Float32](max(n_instances_vk, 1) * 16)
+            var instance_tmpl_idx_vk = unsafe_alloc[Int32](max(n_instances_vk, 1))
             # Precompute each instance's real BASE mesh index (its
             # template's own mstart) here on the host so the GPU decode
             # kernel only needs one array lookup + geometryIndex add --
             # see vulkaninterop_unpack_results_kernel (gpu.mojo).
-            var instance_base_mesh_host = alloc[Int32](max(n_instances_vk, 1))
+            var instance_base_mesh_host = unsafe_alloc[Int32](max(n_instances_vk, 1))
             for k in range(n_instances_vk):
                 var inst = psc[unsafe_offset=0].instances[unsafe_offset=k]
                 for ci in range(16):
@@ -1183,10 +1184,10 @@ def parse_and_render(
             for i in range(Int(psc[unsafe_offset=0].prim_count)):
                 if psc[unsafe_offset=0].prim_ids[unsafe_offset=i].type == Int8(5):
                     n_curve_leaves_vk += 1
-            var curve_leaf_aabbs_vk = alloc[Float32](max(n_curve_leaves_vk, 1) * 6)
-            var curve_leaf_curve_idx_vk = alloc[Int32](max(n_curve_leaves_vk, 1))
-            var curve_leaf_piece_info_vk = alloc[Int32](max(n_curve_leaves_vk, 1))
-            var curve_leaf_mat_idx_vk = alloc[Int32](max(n_curve_leaves_vk, 1))
+            var curve_leaf_aabbs_vk = unsafe_alloc[Float32](max(n_curve_leaves_vk, 1) * 6)
+            var curve_leaf_curve_idx_vk = unsafe_alloc[Int32](max(n_curve_leaves_vk, 1))
+            var curve_leaf_piece_info_vk = unsafe_alloc[Int32](max(n_curve_leaves_vk, 1))
+            var curve_leaf_mat_idx_vk = unsafe_alloc[Int32](max(n_curve_leaves_vk, 1))
             var curve_leaf_write = 0
             for i in range(Int(psc[unsafe_offset=0].prim_count)):
                 var p = psc[unsafe_offset=0].prim_ids[unsafe_offset=i]
@@ -1209,8 +1210,8 @@ def parse_and_render(
                 curve_leaf_write += 1
 
             var n_curves_vk = Int(psc[unsafe_offset=0].curve_count)
-            var curve_data_vk = alloc[Float32](max(n_curves_vk, 1) * 14)
-            var curve_n_pieces_vk = alloc[Int32](max(n_curves_vk, 1))
+            var curve_data_vk = unsafe_alloc[Float32](max(n_curves_vk, 1) * 14)
+            var curve_n_pieces_vk = unsafe_alloc[Int32](max(n_curves_vk, 1))
             for ci in range(n_curves_vk):
                 var c = psc[unsafe_offset=0].curves[unsafe_offset=ci]
                 var cb = ci * 14
@@ -1369,7 +1370,7 @@ def parse_and_render(
         _ = write_image_cropwindow(denoised_gpu.unsafe_ptr(), fw, fh,
                                  psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0, psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1,
                                  psc[unsafe_offset=0].film_filename, Int32(32), Int32(32))
-        var albedo_name_buf = alloc[UInt8](11)
+        var albedo_name_buf = unsafe_alloc[UInt8](11)
         var albedo_name_str = "albedo.exr"
         var anp = albedo_name_str.unsafe_ptr()
         for i in range(10): albedo_name_buf[unsafe_offset=i] = anp[unsafe_offset=i]
@@ -1438,7 +1439,7 @@ def parse_and_render(
             var n_iters = min(Int(spp), N_ITERATIONS)
             var base_spp = spp // Int32(n_iters)
             var tree = guide_create(Bounds3f(root.min, root.max))
-            var write_guides = alloc[GuideGrid](N_GUIDE_THREADS)
+            var write_guides = unsafe_alloc[GuideGrid](N_GUIDE_THREADS)
             print("Path guiding: " + String(n_iters) + " iterations x ~" + String(base_spp)
                 + " spp, adaptive SD-tree, 16 private shards")
             var t0_g = perf_counter_ns()
@@ -1575,7 +1576,7 @@ def parse_and_render(
         _ = write_image_cropwindow(denoised.unsafe_ptr(), fw, fh,
                                  psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0, psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1,
                                  psc[unsafe_offset=0].film_filename, Int32(32), Int32(32))
-        var albedo_name_buf = alloc[UInt8](11)
+        var albedo_name_buf = unsafe_alloc[UInt8](11)
         var albedo_name_str = "albedo.exr"
         var anp2 = albedo_name_str.unsafe_ptr()
         for i in range(10): albedo_name_buf[unsafe_offset=i] = anp2[unsafe_offset=i]
@@ -1670,7 +1671,7 @@ def render_interactive(
     else:
         title_str = "gonzales"
         title_len = 8
-    var title_buf = alloc[UInt8](title_len + 1)
+    var title_buf = unsafe_alloc[UInt8](title_len + 1)
     var ts = title_str.unsafe_ptr()
     for i in range(title_len):
         title_buf[unsafe_offset=i] = ts[unsafe_offset=i]
@@ -1832,16 +1833,16 @@ def render_interactive(
             for _ in range(n_pixels * 3):
                 world_pos_int.append(Float32(0))
         if use_restir:
-            restir_buf_a = alloc[DIReservoir](n_pixels)
-            restir_buf_b = alloc[DIReservoir](n_pixels)
+            restir_buf_a = unsafe_alloc[DIReservoir](n_pixels)
+            restir_buf_b = unsafe_alloc[DIReservoir](n_pixels)
             for i in range(n_pixels):
                 restir_buf_a[unsafe_offset=i] = di_reservoir_init()
                 restir_buf_b[unsafe_offset=i] = di_reservoir_init()
             restir_read = restir_buf_a
             restir_write = restir_buf_b
             if use_restir_gi:
-                gi_buf_a = alloc[GIReservoir](n_pixels)
-                gi_buf_b = alloc[GIReservoir](n_pixels)
+                gi_buf_a = unsafe_alloc[GIReservoir](n_pixels)
+                gi_buf_b = unsafe_alloc[GIReservoir](n_pixels)
                 for i in range(n_pixels):
                     gi_buf_a[unsafe_offset=i] = gi_reservoir_init()
                     gi_buf_b[unsafe_offset=i] = gi_reservoir_init()
@@ -1851,8 +1852,8 @@ def render_interactive(
             # Independent of use_restir (unlike use_restir_gi above) --
             # SMS-ReSTIR only ever touches _nee_area_lights' own glass-
             # probing branch, not ReSTIR DI's reservoir path.
-            sms_buf_a = alloc[SMSReservoir](n_pixels)
-            sms_buf_b = alloc[SMSReservoir](n_pixels)
+            sms_buf_a = unsafe_alloc[SMSReservoir](n_pixels)
+            sms_buf_b = unsafe_alloc[SMSReservoir](n_pixels)
             for i in range(n_pixels):
                 sms_buf_a[unsafe_offset=i] = sms_reservoir_init()
                 sms_buf_b[unsafe_offset=i] = sms_reservoir_init()
@@ -1861,8 +1862,8 @@ def render_interactive(
         if use_vol_restir_reuse:
             # Independent of use_restir, same reasoning as use_sms_restir
             # above -- the medium sampler's own NEE.
-            vol_buf_a = alloc[VolReservoir](n_pixels)
-            vol_buf_b = alloc[VolReservoir](n_pixels)
+            vol_buf_a = unsafe_alloc[VolReservoir](n_pixels)
+            vol_buf_b = unsafe_alloc[VolReservoir](n_pixels)
             for i in range(n_pixels):
                 vol_buf_a[unsafe_offset=i] = vol_reservoir_init()
                 vol_buf_b[unsafe_offset=i] = vol_reservoir_init()

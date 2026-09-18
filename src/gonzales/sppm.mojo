@@ -9,7 +9,7 @@ from std.gpu import block_idx, thread_idx, block_dim
 from max.gpu.host import DeviceContext, DeviceBuffer
 from max.algorithm import parallelize
 from std.math import sqrt, cos, sin, floor, log, exp, max, min, ceildiv
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
 from .geometry import (
     RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, PrimId_C,
@@ -988,7 +988,7 @@ def _sppm_camera_pass(
     # of one shared slot — same convention the GPU kernel already uses
     # (inter_scratch + combined, one per thread) — needed now that this loop
     # runs across CPU threads too, not just GPU ones.
-    var scratch = alloc[Intersection_C](max(n_pix * vp_samples, 1))
+    var scratch = unsafe_alloc[Intersection_C](max(n_pix * vp_samples, 1))
 
     @parameter
     def trace_one(combined: Int):
@@ -1610,8 +1610,8 @@ def _sppm_photon_pass(
     # One scratch Intersection_C per worker (indexed by k), same convention
     # as the GPU kernel's inter_scratch + k — needed now that this loop runs
     # across CPU threads too.
-    var scratch = alloc[Intersection_C](max(n_emit, 1))
-    var counter = alloc[Int32](1)
+    var scratch = unsafe_alloc[Intersection_C](max(n_emit, 1))
+    var counter = unsafe_alloc[Int32](1)
     counter[unsafe_offset=0] = Int32(0)
 
     # Determine the "default" starting medium for photons emitted into a medium.
@@ -2543,7 +2543,7 @@ def _sppm_render_core(
     # re-derive against an equilibrium or analytic scene before
     # reintroducing a cap -- don't just trust the old claim.
     var n_vps    = n_pix * _VP_SAMPLES
-    var vps     = alloc[SPPMPixel](n_vps)
+    var vps     = unsafe_alloc[SPPMPixel](n_vps)
     var max_bounces_per_photon = min(Int(psc[unsafe_offset=0].max_depth), _MAX_B)
     # A subsurface interior blows this budget wide open: its random-walk steps
     # are deliberately NOT charged to maxdepth (see _sppm_trace_photon's loop
@@ -2563,8 +2563,8 @@ def _sppm_render_core(
     if has_sss_medium:
         max_bounces_per_photon += SSS_WALK_ROUNDS
     var max_photons = n_photons_per_pass * max(max_bounces_per_photon, 1)
-    var photons = alloc[SPPMPhoton](max_photons)
-    var heads   = alloc[Int32](_HSIZE)
+    var photons = unsafe_alloc[SPPMPhoton](max_photons)
+    var heads   = unsafe_alloc[Int32](_HSIZE)
     # A BSSRDF visible point gathers out to the material's DIFFUSION reach,
     # which for skin is several times the SPPM radius this scene would
     # otherwise pick. The photon grid's cells are initial_radius-sized and the
@@ -2624,8 +2624,8 @@ def _sppm_render_core(
     # everything — the average over all samples is what correctly reproduces
     # the fresnel-weighted reflect/refract blend a real specular interface
     # would show.
-    var out_pixels = alloc[Float32](n_pix * 3)
-    var albedo_pixels = alloc[Float32](n_pix * 3)
+    var out_pixels = unsafe_alloc[Float32](n_pix * 3)
+    var albedo_pixels = unsafe_alloc[Float32](n_pix * 3)
 
     @parameter
     def finalize_one(i: Int):
@@ -2667,13 +2667,13 @@ def sppm_render(
         return Int32(-1)
 
     var n_pix = Int(psc[unsafe_offset=0].film_w) * Int(psc[unsafe_offset=0].film_h)
-    var normals = alloc[Float32](n_pix * 3)
-    var depth = alloc[Float32](n_pix)
+    var normals = unsafe_alloc[Float32](n_pix * 3)
+    var depth = unsafe_alloc[Float32](n_pix)
     var sd_local = sd
     render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world, Int32(0), Int32(0),
                         psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, Pointer(to=sd_local), normals, depth)
 
-    var denoised = alloc[Float32](n_pix * 3)
+    var denoised = unsafe_alloc[Float32](n_pix * 3)
     if no_denoise:
         for i in range(n_pix * 3): denoised[unsafe_offset=i] = out_pixels[unsafe_offset=i]
     else:

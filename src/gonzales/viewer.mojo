@@ -1,5 +1,5 @@
 from std.ffi import external_call
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.math import sqrt
 from .geometry import Point3f, Vec3f
 

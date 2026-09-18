@@ -1,7 +1,7 @@
 from std.sys import argv, exit
 from std.time import perf_counter_ns
 from std.os import getenv
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from gonzales.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel, debug_render_vulkanrt
 from gonzales.spectrum import load_spectral_context, spectral_handle
 
@@ -242,7 +242,7 @@ def main() raises:
         print("Warning: could not load spectral table from " + data_dir + " -- spectral rendering disabled")
 
     var path_len = scene_path.byte_length()
-    var path_cstr = alloc[UInt8](path_len + 1)
+    var path_cstr = unsafe_alloc[UInt8](path_len + 1)
     for k in range(path_len):
         path_cstr[unsafe_offset=k] = scene_path.as_bytes()[k]
     path_cstr[unsafe_offset=path_len] = UInt8(0)

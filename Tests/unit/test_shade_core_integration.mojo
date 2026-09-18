@@ -1,5 +1,5 @@
 from std.math import abs
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import Point3f, Vec3f, RGB, Ray_C, Intersection_C, PathState_C, Material_C, MatKind
 from gonzales.spectrum import SpectralSample, SampledWavelengths, null_spectral_handle
@@ -59,8 +59,8 @@ def disabled_test_shade_core_area_light_hit_adds_emission() raises:
     var inter = fx.intersect(ray, Float32(100.0))
     assert_true(Int(inter.hit) == 1)
 
-    var paths = alloc[PathState_C](1)
-    var intersections = alloc[Intersection_C](1)
+    var paths = unsafe_alloc[PathState_C](1)
+    var intersections = unsafe_alloc[Intersection_C](1)
     paths[unsafe_offset=0] = _dummy_path(ray, SpectralSample(Float32(0.5)))
     intersections[unsafe_offset=0] = inter
 
@@ -83,8 +83,8 @@ def test_shade_core_miss_deactivates_path() raises:
     var inter = fx.intersect(ray, Float32(100.0))
     assert_true(Int(inter.hit) == 0)
 
-    var paths = alloc[PathState_C](1)
-    var intersections = alloc[Intersection_C](1)
+    var paths = unsafe_alloc[PathState_C](1)
+    var intersections = unsafe_alloc[Intersection_C](1)
     paths[unsafe_offset=0] = _dummy_path(ray, SpectralSample(Float32(1.0)))
     intersections[unsafe_offset=0] = inter
 

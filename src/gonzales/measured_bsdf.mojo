@@ -15,7 +15,7 @@
 # a faithful port rather than a reconstruction from memory. See bxdf.mojo's
 # bxdf_eval_measured/bxdf_sample_measured/bxdf_pdf_measured (Stage 2) for the
 # consumers of the MeasuredBRDF_C this returns.
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from .geometry import MeasuredBRDF_C
 
 @always_inline
@@ -58,7 +58,7 @@ def load_measured_bsdf_reflectance(path: String) -> Tuple[Bool, Float32]:
         file_size = len(bytes)
         if file_size < 18:
             return (False, Float32(0.0))
-        file_buf = alloc[UInt8](file_size)
+        file_buf = unsafe_alloc[UInt8](file_size)
         for i in range(file_size):
             file_buf[unsafe_offset=i] = bytes[i]
     except:
@@ -211,7 +211,7 @@ def _mbsdf_scan_fields(file_buf: Pointer[UInt8, MutUntrackedOrigin], file_size: 
     return out^
 
 def _mbsdf_copy_f32(file_buf: Pointer[UInt8, MutUntrackedOrigin], offset: Int, count: Int) -> Pointer[Float32, MutUntrackedOrigin]:
-    var out = alloc[Float32](max(count, 1))
+    var out = unsafe_alloc[Float32](max(count, 1))
     for i in range(count):
         out[unsafe_offset=i] = _mbsdf_f32(file_buf, offset + i * 4)
     return out
@@ -235,9 +235,9 @@ def _pl2d_build_cdf(
     rescaled by 1/marginal_cdf[ys-1]. Float64 accumulators match pbrt's own
     `double sum` (util/sampling.h:1380,1391)."""
     var n_values = xs * ys
-    var data_out = alloc[Float32](slices * n_values)
-    var marginal = alloc[Float32](slices * ys)
-    var conditional = alloc[Float32](slices * n_values)
+    var data_out = unsafe_alloc[Float32](slices * n_values)
+    var marginal = unsafe_alloc[Float32](slices * ys)
+    var conditional = unsafe_alloc[Float32](slices * n_values)
     for slice_i in range(slices):
         var base = slice_i * n_values
         var mbase = slice_i * ys
@@ -271,7 +271,7 @@ def _pl2d_build_scaled_verbatim(
     spectra): scaled by 1/((xs-1)*(ys-1)), not a verbatim copy -- see the
     module-level note above."""
     var n_values = xs * ys
-    var data_out = alloc[Float32](slices * n_values)
+    var data_out = unsafe_alloc[Float32](slices * n_values)
     var norm = Float32(1.0) / (Float32(xs - 1) * Float32(ys - 1))
     for i in range(slices * n_values):
         data_out[unsafe_offset=i] = raw[unsafe_offset=i] * norm
@@ -334,7 +334,7 @@ def load_measured_brdf_full(path: String) -> Tuple[Bool, MeasuredBRDF_C]:
         file_size = len(bytes)
         if file_size < 18:
             return _fail()
-        file_buf = alloc[UInt8](file_size)
+        file_buf = unsafe_alloc[UInt8](file_size)
         for i in range(file_size):
             file_buf[unsafe_offset=i] = bytes[i]
     except:

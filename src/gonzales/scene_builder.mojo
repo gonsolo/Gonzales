@@ -1,4 +1,4 @@
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from .parse_types import SceneParseState, MeshAccum
 from .transform import transform_points
 
@@ -28,13 +28,13 @@ def store_mesh[Of: Origin[mut=True], Oi: Origin[mut=True]](
     append" contract any scene-format front-end must satisfy before calling
     this. UV/normal data (optional) is appended separately by the caller,
     directly onto `s[0].meshes[len(s[0].meshes) - 1]` after this returns."""
-    var raw_pts = alloc[Float32](Int(n_verts) * 4)
+    var raw_pts = unsafe_alloc[Float32](Int(n_verts) * 4)
     for v in range(Int(n_verts)):
         raw_pts[unsafe_offset=v*4+0] = tmp_f[unsafe_offset=v*3+0]
         raw_pts[unsafe_offset=v*4+1] = tmp_f[unsafe_offset=v*3+1]
         raw_pts[unsafe_offset=v*4+2] = tmp_f[unsafe_offset=v*3+2]
         raw_pts[unsafe_offset=v*4+3] = Float32(1)
-    var fin_pts = alloc[Float32](Int(n_verts) * 4)
+    var fin_pts = unsafe_alloc[Float32](Int(n_verts) * 4)
     transform_points(s[unsafe_offset=0].ctm.unsafe_ptr(), raw_pts, n_verts, fin_pts)
     raw_pts.unsafe_free()
     var ma = MeshAccum(

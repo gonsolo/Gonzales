@@ -18,7 +18,7 @@ empty space and far-outside-bbox on purpose -- background must be right
 too, and it is the one case a stub gets free.
 """
 from std.sys import argv
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from gonzales.nanovdb import (
     nvdb_load, nvdb_data, nvdb_size, nvdb_free,
     nvdb_get_value_ref, nvdb_active_count, nvdb_active_coord, nvdb_majorant_at, nvdb_leaf_base, nvdb_leaf_value,
@@ -38,7 +38,7 @@ def main() raises:
     # NUL-terminated copy for the C bridge -- same idiom pbrt_parser uses
     # when handing texture paths to the OIIO bridge.
     var slen = path.byte_length()
-    var cpath = alloc[UInt8](slen + 1)
+    var cpath = unsafe_alloc[UInt8](slen + 1)
     for ci in range(slen):
         cpath[unsafe_offset=ci] = path.unsafe_ptr()[unsafe_offset=ci]
     cpath[unsafe_offset=slen] = UInt8(0)
@@ -55,7 +55,7 @@ def main() raises:
         nvdb_free(h)
         return
 
-    var coord = alloc[Int32](3)
+    var coord = unsafe_alloc[Int32](3)
     var mismatches = 0
     var checked = 0
     var nonzero_ref = 0

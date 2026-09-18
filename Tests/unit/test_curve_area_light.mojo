@@ -1,5 +1,5 @@
 from std.math import abs, sqrt
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import (
     Point3f, Vec3f, RGB, Ray_C, Intersection_C, PrimId_C, PathState_C,
@@ -42,7 +42,7 @@ def _dummy_path(ray: Ray_C, throughput: SpectralSample) -> PathState_C:
 # hand-rolled approximation of it.
 
 def test_emissive_curve_hit_adds_emission_and_retires_path() raises:
-    var materials = alloc[Material_C](1)
+    var materials = unsafe_alloc[Material_C](1)
     materials[unsafe_offset=0] = Material_C(
         MatKind.area_light, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.0)),                                  # albedo
@@ -59,8 +59,8 @@ def test_emissive_curve_hit_adds_emission_and_retires_path() raises:
         Float32(5.0), Float32(0.0), Float32(0.5), Int8(1), Int8(0), Int8(0), Int8(0),
     )
 
-    var paths = alloc[PathState_C](1)
-    var intersections = alloc[Intersection_C](1)
+    var paths = unsafe_alloc[PathState_C](1)
+    var intersections = unsafe_alloc[Intersection_C](1)
     paths[unsafe_offset=0] = _dummy_path(ray, SpectralSample(Float32(0.5)))
     intersections[unsafe_offset=0] = inter
 
@@ -95,7 +95,7 @@ def test_nonemissive_curve_hit_does_not_self_terminate_via_the_arealight_path() 
     must NOT be caught by the new type==5 area-light branch; it should fall
     through unchanged. This test only checks it doesn't take the emissive
     shortcut (estimate stays 0); it doesn't exercise shade_hair itself."""
-    var materials = alloc[Material_C](1)
+    var materials = unsafe_alloc[Material_C](1)
     materials[unsafe_offset=0] = Material_C(
         MatKind.hair, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.3)), RGB(Float32(1.55), Float32(0.0), Float32(0.0)),
@@ -121,7 +121,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
         Point3f(2.0, -1.0, 0.0), Point3f(3.0, 0.0, 0.0),
         Float32(0.2), Float32(0.2), Int32(0), Int32(1),
     )
-    var curves = alloc[Curve_C](1)
+    var curves = unsafe_alloc[Curve_C](1)
     curves[unsafe_offset=0] = curve
 
     # Reconstruct the same geometric normal shade_nee_core's new branch
@@ -134,7 +134,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
     var b_perp0 = cross(tangent, n_perp)
     var ray_dir = -b_perp0  # cos_l = -dot(geo_normal, ray_dir) = 1 (straight-on hit)
 
-    var materials = alloc[Material_C](1)
+    var materials = unsafe_alloc[Material_C](1)
     materials[unsafe_offset=0] = Material_C(
         MatKind.area_light, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.0)), RGB(Float32(200.0), Float32(80.0), Float32(20.0)),
@@ -145,10 +145,10 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
     )
 
     var total_area = curve_light_tube_area(curve)
-    var area_lights = alloc[AreaLight_C](1)
+    var area_lights = unsafe_alloc[AreaLight_C](1)
     area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(0), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), total_area, Int8(1), Int8(0), Int8(0), Int8(0))
 
-    var cdf = alloc[Float32](2)
+    var cdf = unsafe_alloc[Float32](2)
     cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var light_sampler = LightSampler_C(cdf, Int32(1), Int32(0))
 
@@ -160,8 +160,8 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
         t_hit, Float32(0.0), Float32(0.5), Int8(1), Int8(0), Int8(0), Int8(0),
     )
 
-    var paths = alloc[PathState_C](1)
-    var intersections = alloc[Intersection_C](1)
+    var paths = unsafe_alloc[PathState_C](1)
+    var intersections = unsafe_alloc[Intersection_C](1)
     paths[unsafe_offset=0] = PathState_C(
         ray, SpectralSample(Float32(0.5)), SpectralSample(Float32(0.0)), RGB(Float32(0.0)),
         Int32(1),  # bounce > 0: NOT the "camera sees light directly" shortcut

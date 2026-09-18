@@ -1,5 +1,5 @@
 from std.math import abs
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, assert_equal, TestSuite
 from gonzales.lexer import (
     scan_int, scan_float, scan_floats, scan_ints, count_floats, count_ints,
@@ -21,7 +21,7 @@ def _buf(s: String) -> Pointer[UInt8, MutUntrackedOrigin]:
     against the byte-level scan_* primitives directly (no PbrtScanner/file
     needed)."""
     var n = s.byte_length()
-    var b = alloc[UInt8](n)
+    var b = unsafe_alloc[UInt8](n)
     for i in range(n):
         b[unsafe_offset=i] = s.as_bytes()[i]
     return b
@@ -31,7 +31,7 @@ def _buf0(s: String) -> Pointer[UInt8, MutUntrackedOrigin]:
     _psc_type_is_* helpers, which (unlike scan_int/scan_float/...) take no
     explicit length and instead scan/index until a 0 byte or a fixed offset."""
     var n = s.byte_length()
-    var b = alloc[UInt8](n + 1)
+    var b = unsafe_alloc[UInt8](n + 1)
     for i in range(n):
         b[unsafe_offset=i] = s.as_bytes()[i]
     b[unsafe_offset=n] = UInt8(0)
@@ -43,11 +43,11 @@ def _scanner_from_string(s: String) -> Pointer[PbrtScanner, MutUntrackedOrigin]:
     ParamScanner, which is only ever handed a PbrtScanner handle, never raw
     bytes."""
     var n = s.byte_length()
-    var buf = alloc[UInt8](n + 1)
+    var buf = unsafe_alloc[UInt8](n + 1)
     for i in range(n):
         buf[unsafe_offset=i] = s.as_bytes()[i]
     buf[unsafe_offset=n] = UInt8(0)
-    var handle = alloc[PbrtScanner](1)
+    var handle = unsafe_alloc[PbrtScanner](1)
     handle[unsafe_offset=0].buffer = buf
     handle[unsafe_offset=0].total_bytes = Int32(n)
     handle[unsafe_offset=0].cursor = Int32(0)
@@ -58,8 +58,8 @@ def _scanner_from_string(s: String) -> Pointer[PbrtScanner, MutUntrackedOrigin]:
 
 def test_scan_int_positive() raises:
     var buf = _buf("42")
-    var cur = alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
-    var result = alloc[Int32](1)
+    var cur = unsafe_alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
+    var result = unsafe_alloc[Int32](1)
     var ok = scan_int(buf, Int32(2), cur, result)
     assert_true(ok == Int32(1))
     assert_true(result[unsafe_offset=0] == Int32(42))
@@ -68,8 +68,8 @@ def test_scan_int_positive() raises:
 
 def test_scan_int_negative() raises:
     var buf = _buf("-17")
-    var cur = alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
-    var result = alloc[Int32](1)
+    var cur = unsafe_alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
+    var result = unsafe_alloc[Int32](1)
     var ok = scan_int(buf, Int32(3), cur, result)
     assert_true(ok == Int32(1))
     assert_true(result[unsafe_offset=0] == Int32(-17))
@@ -77,8 +77,8 @@ def test_scan_int_negative() raises:
 
 def test_scan_int_skips_leading_whitespace() raises:
     var buf = _buf("   7")
-    var cur = alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
-    var result = alloc[Int32](1)
+    var cur = unsafe_alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
+    var result = unsafe_alloc[Int32](1)
     var ok = scan_int(buf, Int32(4), cur, result)
     assert_true(ok == Int32(1))
     assert_true(result[unsafe_offset=0] == Int32(7))
@@ -89,8 +89,8 @@ def test_scan_int_failure_leaves_cursor_unchanged() raises:
     started — callers rely on this to detect "not an int" without having
     consumed anything from the stream."""
     var buf = _buf("abc")
-    var cur = alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
-    var result = alloc[Int32](1)
+    var cur = unsafe_alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
+    var result = unsafe_alloc[Int32](1)
     var ok = scan_int(buf, Int32(3), cur, result)
     assert_true(ok == Int32(0))
     assert_true(cur[unsafe_offset=0] == Int32(0))
@@ -100,8 +100,8 @@ def test_scan_int_failure_leaves_cursor_unchanged() raises:
 
 def test_scan_float_decimal() raises:
     var buf = _buf("3.14")
-    var cur = alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
-    var result = alloc[Float32](1)
+    var cur = unsafe_alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
+    var result = unsafe_alloc[Float32](1)
     var ok = scan_float(buf, Int32(4), cur, result)
     assert_true(ok == Int32(1))
     assert_true(_close(result[unsafe_offset=0], Float32(3.14)))
@@ -109,8 +109,8 @@ def test_scan_float_decimal() raises:
 
 def test_scan_float_negative() raises:
     var buf = _buf("-0.5")
-    var cur = alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
-    var result = alloc[Float32](1)
+    var cur = unsafe_alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
+    var result = unsafe_alloc[Float32](1)
     var ok = scan_float(buf, Int32(4), cur, result)
     assert_true(ok == Int32(1))
     assert_true(_close(result[unsafe_offset=0], Float32(-0.5)))
@@ -118,8 +118,8 @@ def test_scan_float_negative() raises:
 
 def test_scan_float_exponent() raises:
     var buf = _buf("1.5e-2")
-    var cur = alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
-    var result = alloc[Float32](1)
+    var cur = unsafe_alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
+    var result = unsafe_alloc[Float32](1)
     var ok = scan_float(buf, Int32(6), cur, result)
     assert_true(ok == Int32(1))
     assert_true(_close(result[unsafe_offset=0], Float32(0.015)))
@@ -127,8 +127,8 @@ def test_scan_float_exponent() raises:
 
 def test_scan_float_bare_integer() raises:
     var buf = _buf("42")
-    var cur = alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
-    var result = alloc[Float32](1)
+    var cur = unsafe_alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
+    var result = unsafe_alloc[Float32](1)
     var ok = scan_float(buf, Int32(2), cur, result)
     assert_true(ok == Int32(1))
     assert_true(_close(result[unsafe_offset=0], Float32(42.0)))
@@ -145,8 +145,8 @@ def test_count_floats_does_not_advance_cursor() raises:
 
 def test_scan_floats_reads_all_when_capacity_suffices() raises:
     var buf = _buf("1.5 2.5 3.5")
-    var cur = alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
-    var dst = alloc[Float32](8)
+    var cur = unsafe_alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
+    var dst = unsafe_alloc[Float32](8)
     var n = scan_floats(buf, Int32(11), cur, dst, Int32(8))
     assert_true(n == Int32(3))
     assert_true(_close(dst[unsafe_offset=0], Float32(1.5)))
@@ -164,8 +164,8 @@ def test_scan_floats_truncates_at_max_count_and_leaves_cursor_mid_buffer() raise
     callers must size the destination via count_floats first rather than
     assume a fixed cap always fits."""
     var buf = _buf("1.5 2.5 3.5")
-    var cur = alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
-    var dst = alloc[Float32](2)
+    var cur = unsafe_alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
+    var dst = unsafe_alloc[Float32](2)
     var n = scan_floats(buf, Int32(11), cur, dst, Int32(2))
     assert_true(n == Int32(2))
     assert_true(_close(dst[unsafe_offset=0], Float32(1.5)))
@@ -183,8 +183,8 @@ def test_count_ints_does_not_advance_cursor() raises:
 
 def test_scan_ints_truncates_at_max_count() raises:
     var buf = _buf("1 2 3 4")
-    var cur = alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
-    var dst = alloc[Int32](2)
+    var cur = unsafe_alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
+    var dst = unsafe_alloc[Int32](2)
     var n = scan_ints(buf, Int32(7), cur, dst, Int32(2))
     assert_true(n == Int32(2))
     assert_true(dst[unsafe_offset=0] == Int32(1))
@@ -196,7 +196,7 @@ def test_scan_ints_truncates_at_max_count() raises:
 
 def test_scan_char_matches_and_advances() raises:
     var buf = _buf("  ]rest")
-    var cur = alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
+    var cur = unsafe_alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
     var ok = scan_char(buf, Int32(7), cur, UInt8(93))  # ']'
     assert_true(ok == Int32(1))
     assert_true(cur[unsafe_offset=0] == Int32(3))
@@ -207,7 +207,7 @@ def test_scan_char_no_match_advances_past_whitespace_only() raises:
     skipped (per the implementation), but the mismatching byte itself is
     not consumed."""
     var buf = _buf("  x")
-    var cur = alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
+    var cur = unsafe_alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
     var ok = scan_char(buf, Int32(3), cur, UInt8(93))  # ']', buffer has 'x'
     assert_true(ok == Int32(0))
     assert_true(cur[unsafe_offset=0] == Int32(2))
@@ -217,9 +217,9 @@ def test_scan_char_no_match_advances_past_whitespace_only() raises:
 
 def test_scan_token_reads_until_delimiter() raises:
     var buf = _buf("hello world")
-    var cur = alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
-    var delims = alloc[UInt8](1); delims[unsafe_offset=0] = UInt8(32)  # ' '
-    var out = alloc[UInt8](32)
+    var cur = unsafe_alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
+    var delims = unsafe_alloc[UInt8](1); delims[unsafe_offset=0] = UInt8(32)  # ' '
+    var out = unsafe_alloc[UInt8](32)
     var n = scan_token(buf, Int32(11), cur, delims, Int32(1), out, Int32(32))
     assert_true(n == Int32(5))
     assert_true(String(unsafe_from_utf8_ptr=out.as_immutable()) == String("hello"))
@@ -228,9 +228,9 @@ def test_scan_token_reads_until_delimiter() raises:
 
 def test_scan_token_at_end_returns_negative() raises:
     var buf = _buf("")
-    var cur = alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
-    var delims = alloc[UInt8](1); delims[unsafe_offset=0] = UInt8(32)
-    var out = alloc[UInt8](8)
+    var cur = unsafe_alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
+    var delims = unsafe_alloc[UInt8](1); delims[unsafe_offset=0] = UInt8(32)
+    var out = unsafe_alloc[UInt8](8)
     var n = scan_token(buf, Int32(0), cur, delims, Int32(1), out, Int32(8))
     assert_true(n == Int32(-1))
     buf.unsafe_free(); cur.unsafe_free(); delims.unsafe_free(); out.unsafe_free()
@@ -239,8 +239,8 @@ def test_scan_token_at_end_returns_negative() raises:
 
 def test_parse_quoted_string_basic() raises:
     var buf = _buf('"hello"')
-    var cur = alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
-    var out = alloc[UInt8](32)
+    var cur = unsafe_alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
+    var out = unsafe_alloc[UInt8](32)
     var n = parse_quoted_string(buf, Int32(7), cur, out, Int32(32))
     assert_true(n == Int32(5))
     assert_true(String(unsafe_from_utf8_ptr=out.as_immutable()) == String("hello"))
@@ -249,16 +249,16 @@ def test_parse_quoted_string_basic() raises:
 
 def test_parse_quoted_string_requires_opening_quote() raises:
     var buf = _buf("hello")
-    var cur = alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
-    var out = alloc[UInt8](32)
+    var cur = unsafe_alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
+    var out = unsafe_alloc[UInt8](32)
     var n = parse_quoted_string(buf, Int32(5), cur, out, Int32(32))
     assert_true(n == Int32(-1))
     buf.unsafe_free(); cur.unsafe_free(); out.unsafe_free()
 
 def test_parse_quoted_string_truncates_at_max_buf() raises:
     var buf = _buf('"abcdef"')
-    var cur = alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
-    var out = alloc[UInt8](4)
+    var cur = unsafe_alloc[Int32](1); cur[unsafe_offset=0] = Int32(0)
+    var out = unsafe_alloc[UInt8](4)
     var n = parse_quoted_string(buf, Int32(8), cur, out, Int32(4))
     assert_true(n == Int32(6))  # reports the true length...
     assert_true(String(unsafe_from_utf8_ptr=out.as_immutable()) == String("abc"))  # ...but out is capped
@@ -281,7 +281,7 @@ def test_psc_streq_stops_at_null_terminator() raises:
     terminator rather than reading (or caring about) whatever garbage bytes
     follow it — build a buffer where the bytes past the logical string
     spell something else entirely and confirm the match still succeeds."""
-    var buf = alloc[UInt8](6)
+    var buf = unsafe_alloc[UInt8](6)
     buf[unsafe_offset=0] = UInt8(104)  # 'h'
     buf[unsafe_offset=1] = UInt8(105)  # 'i'
     buf[unsafe_offset=2] = UInt8(0)    # terminator
@@ -311,7 +311,7 @@ def test_psc_strncpy_truncates_and_null_terminates() raises:
     """Bounded copy: at most n-1 source bytes are copied, and the destination
     is always null-terminated within the n-byte capacity."""
     var src = _buf0("hello")
-    var dst = alloc[UInt8](3)
+    var dst = unsafe_alloc[UInt8](3)
     _psc_strncpy(dst, src, Int32(3))
     assert_true(dst[unsafe_offset=0] == UInt8(104))  # 'h'
     assert_true(dst[unsafe_offset=1] == UInt8(101))  # 'e'
@@ -320,7 +320,7 @@ def test_psc_strncpy_truncates_and_null_terminates() raises:
 
 def test_psc_strncpy_full_copy_when_capacity_suffices() raises:
     var src = _buf0("hi")
-    var dst = alloc[UInt8](8)
+    var dst = unsafe_alloc[UInt8](8)
     _psc_strncpy(dst, src, Int32(8))
     assert_true(dst[unsafe_offset=0] == UInt8(104))  # 'h'
     assert_true(dst[unsafe_offset=1] == UInt8(105))  # 'i'
@@ -379,7 +379,7 @@ def test_psc_blackbody_to_rgb_low_temp_is_red_dominant() raises:
     """~1000K (candlelight) sits at the warm end of the Planckian locus; the
     Mitchell-Charity approximation should give a clearly red-dominant color
     (and in fact zero blue, per the temp <= 1900 branch)."""
-    var rgb = alloc[Float32](3)
+    var rgb = unsafe_alloc[Float32](3)
     _psc_blackbody_to_rgb(Float32(1000.0), rgb)
     assert_true(rgb[unsafe_offset=0] > rgb[unsafe_offset=2])
     rgb.unsafe_free()
@@ -388,7 +388,7 @@ def test_psc_blackbody_to_rgb_high_temp_is_blue_dominant() raises:
     """~10000K+ sits at the cool end; unlike the low-temp case, blue should
     now equal-or-exceed red — a directional sanity check on the empirical
     fit, not an exact numeric match (no simple closed form exists)."""
-    var rgb = alloc[Float32](3)
+    var rgb = unsafe_alloc[Float32](3)
     _psc_blackbody_to_rgb(Float32(12000.0), rgb)
     assert_true(rgb[unsafe_offset=2] >= rgb[unsafe_offset=0])
     rgb.unsafe_free()

@@ -1,4 +1,4 @@
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.ffi import external_call
 from std.math import sqrt, exp, max, abs
 from .diagnostics import warn_unsupported
@@ -304,12 +304,12 @@ def _sss_reflectance(s: Pointer[SceneParseState, MutUntrackedOrigin],
         if s[unsafe_offset=0].tex_names[ti] == tname:
             var fstr = s[unsafe_offset=0].tex_files[ti]
             var flen = fstr.byte_length()
-            var fbuf = alloc[UInt8](flen + 1)
+            var fbuf = unsafe_alloc[UInt8](flen + 1)
             for k in range(flen): fbuf[unsafe_offset=k] = fstr.unsafe_ptr()[unsafe_offset=k]
             fbuf[unsafe_offset=flen] = UInt8(0)
-            var data_out = alloc[Pointer[Float32, MutUntrackedOrigin]](1)
-            var w_out = alloc[Int32](1)
-            var h_out = alloc[Int32](1)
+            var data_out = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](1)
+            var w_out = unsafe_alloc[Int32](1)
+            var h_out = unsafe_alloc[Int32](1)
             w_out[unsafe_offset=0] = Int32(0); h_out[unsafe_offset=0] = Int32(0)
             var ok = external_call["load_texture_rgb", Int32,
                 Pointer[UInt8, MutUntrackedOrigin],
@@ -350,7 +350,7 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
     design instead of hand-scanning each (name, type) combination inline.
     See project_parser_architecture memory for why this replaced the old
     single-pass special-cased scan."""
-    var mat_name = alloc[UInt8](PSC_NAME_MAX)
+    var mat_name = unsafe_alloc[UInt8](PSC_NAME_MAX)
     _ = scanner_parse_quoted_string(handle, mat_name, PSC_NAME_MAX)
 
     var params = _psc_collect_params(handle)
@@ -994,7 +994,7 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
 
 def _psc_handle_named_material(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                                s: Pointer[SceneParseState, MutUntrackedOrigin]):
-    var mat_name = alloc[UInt8](PSC_NAME_MAX)
+    var mat_name = unsafe_alloc[UInt8](PSC_NAME_MAX)
     _ = scanner_parse_quoted_string(handle, mat_name, PSC_NAME_MAX)
     s[unsafe_offset=0].cur_attr.mat_idx = Int32(-1)
     var name_str = String(unsafe_from_utf8_ptr=mat_name.as_imm())

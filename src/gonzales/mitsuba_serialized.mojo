@@ -1,4 +1,4 @@
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.subprocess import run
 from std.os.path import exists
 
@@ -72,7 +72,7 @@ def load_mitsuba_serialized(path: String) -> MitsubaMesh:
     var raw_n = len(raw_list)
     if raw_n < 4:
         return mesh^
-    var raw = alloc[UInt8](raw_n)
+    var raw = unsafe_alloc[UInt8](raw_n)
     for i in range(raw_n):
         raw[unsafe_offset=i] = raw_list[i]
     var version = Int(raw.unsafe_bitcast[UInt16]()[unsafe_offset=1])
@@ -99,7 +99,7 @@ def load_mitsuba_serialized(path: String) -> MitsubaMesh:
     var n = len(body_list)
     if n < 4:
         return mesh^
-    var body = alloc[UInt8](n)
+    var body = unsafe_alloc[UInt8](n)
     for i in range(n):
         body[unsafe_offset=i] = body_list[i]
 

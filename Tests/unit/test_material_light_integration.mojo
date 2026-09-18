@@ -1,5 +1,5 @@
 from std.math import abs
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.lexer import PbrtScanner, scanner_free
 from gonzales.parse_types import SceneParseState
@@ -17,11 +17,11 @@ def _scanner_from_string(s: String) -> Pointer[PbrtScanner, MutUntrackedOrigin]:
     an in-memory buffer, positioned right after the directive keyword, exactly
     as parse_scene_file's directive dispatch hands off to a handler."""
     var n = s.byte_length()
-    var buf = alloc[UInt8](n + 1)
+    var buf = unsafe_alloc[UInt8](n + 1)
     for i in range(n):
         buf[unsafe_offset=i] = s.as_bytes()[i]
     buf[unsafe_offset=n] = UInt8(0)
-    var handle = alloc[PbrtScanner](1)
+    var handle = unsafe_alloc[PbrtScanner](1)
     handle[unsafe_offset=0].buffer = buf
     handle[unsafe_offset=0].total_bytes = Int32(n)
     handle[unsafe_offset=0].cursor = Int32(0)
@@ -38,7 +38,7 @@ def test_light_source_distant_direction_and_rgb() raises:
         '"distant" "point3 from" [ 0 0 5 ] "rgb L" [ 2 3 4 ]'
     )
     var handle = _scanner_from_string(body)
-    var s_ptr = alloc[SceneParseState](1)
+    var s_ptr = unsafe_alloc[SceneParseState](1)
     s_ptr.init_pointee_move(SceneParseState())
     handle_light_source(handle, s_ptr)
 
@@ -61,7 +61,7 @@ def test_light_source_point_position_and_rgb() raises:
         '"point" "point3 from" [ 1 2 3 ] "rgb I" [ 0.5 0.5 0.5 ]'
     )
     var handle = _scanner_from_string(body)
-    var s_ptr = alloc[SceneParseState](1)
+    var s_ptr = unsafe_alloc[SceneParseState](1)
     s_ptr.init_pointee_move(SceneParseState())
     handle_light_source(handle, s_ptr)
 
@@ -82,7 +82,7 @@ def test_light_source_point_position_and_rgb() raises:
 def test_light_source_infinite_no_filename() raises:
     var body = String('"infinite" "rgb L" [ 0.1 0.2 0.3 ]')
     var handle = _scanner_from_string(body)
-    var s_ptr = alloc[SceneParseState](1)
+    var s_ptr = unsafe_alloc[SceneParseState](1)
     s_ptr.init_pointee_move(SceneParseState())
     handle_light_source(handle, s_ptr)
 
@@ -104,7 +104,7 @@ def test_light_source_infinite_with_filename() raises:
         '"infinite" "string filename" [ "textures/sky.exr" ] "rgb L" [ 1 1 1 ]'
     )
     var handle = _scanner_from_string(body)
-    var s_ptr = alloc[SceneParseState](1)
+    var s_ptr = unsafe_alloc[SceneParseState](1)
     s_ptr.init_pointee_move(SceneParseState())
     handle_light_source(handle, s_ptr)
 
@@ -121,7 +121,7 @@ def test_light_source_infinite_with_filename() raises:
 def test_area_light_source_rgb_l_scaled() raises:
     var body = String('"diffuse" "rgb L" [ 2 4 6 ] "float scale" [ 0.5 ]')
     var handle = _scanner_from_string(body)
-    var s_ptr = alloc[SceneParseState](1)
+    var s_ptr = unsafe_alloc[SceneParseState](1)
     s_ptr.init_pointee_move(SceneParseState())
     _psc_handle_area_light_source(handle, s_ptr)
 
@@ -142,7 +142,7 @@ def test_named_material_conductor_rgb_eta_k_fresnel() raises:
         + '"rgb eta" [ 0.2 0.9 1.1 ] "rgb k" [ 3.0 2.5 2.0 ]'
     )
     var handle = _scanner_from_string(body)
-    var s_ptr = alloc[SceneParseState](1)
+    var s_ptr = unsafe_alloc[SceneParseState](1)
     s_ptr.init_pointee_move(SceneParseState())
     _psc_handle_make_named_material(handle, s_ptr, False)
 
@@ -159,7 +159,7 @@ def test_named_material_conductor_rgb_eta_k_fresnel() raises:
 def test_named_material_dielectric_float_eta() raises:
     var body = '"glass" "string type" [ "dielectric" ] "float eta" [ 1.33 ]'
     var handle = _scanner_from_string(body)
-    var s_ptr = alloc[SceneParseState](1)
+    var s_ptr = unsafe_alloc[SceneParseState](1)
     s_ptr.init_pointee_move(SceneParseState())
     _psc_handle_make_named_material(handle, s_ptr, False)
 
@@ -177,7 +177,7 @@ def test_named_material_mix_names_and_amount() raises:
         + '"string materials" [ "matA" "matB" ] "float amount" [ 0.25 ]'
     )
     var handle = _scanner_from_string(body)
-    var s_ptr = alloc[SceneParseState](1)
+    var s_ptr = unsafe_alloc[SceneParseState](1)
     s_ptr.init_pointee_move(SceneParseState())
     _psc_handle_make_named_material(handle, s_ptr, False)
 

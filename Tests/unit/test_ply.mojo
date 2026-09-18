@@ -1,5 +1,5 @@
 from std.math import abs
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.os import remove
 from std.testing import assert_true, TestSuite
 from gonzales.ply import load_ply
@@ -21,40 +21,40 @@ def _append_str(mut data: List[UInt8], s: String):
         data.append(bytes[i])
 
 def _append_f32_le(mut data: List[UInt8], v: Float32):
-    var tmp = alloc[UInt8](4)
+    var tmp = unsafe_alloc[UInt8](4)
     tmp.unsafe_bitcast[Float32]()[unsafe_offset=0] = v
     for i in range(4):
         data.append(tmp[unsafe_offset=i])
     tmp.unsafe_free()
 
 def _append_f32_be(mut data: List[UInt8], v: Float32):
-    var tmp = alloc[UInt8](4)
+    var tmp = unsafe_alloc[UInt8](4)
     tmp.unsafe_bitcast[Float32]()[unsafe_offset=0] = v
     data.append(tmp[unsafe_offset=3]); data.append(tmp[unsafe_offset=2]); data.append(tmp[unsafe_offset=1]); data.append(tmp[unsafe_offset=0])
     tmp.unsafe_free()
 
 def _append_f64_le(mut data: List[UInt8], v: Float64):
-    var tmp = alloc[UInt8](8)
+    var tmp = unsafe_alloc[UInt8](8)
     tmp.unsafe_bitcast[Float64]()[unsafe_offset=0] = v
     for i in range(8):
         data.append(tmp[unsafe_offset=i])
     tmp.unsafe_free()
 
 def _append_i32_le(mut data: List[UInt8], v: Int32):
-    var tmp = alloc[UInt8](4)
+    var tmp = unsafe_alloc[UInt8](4)
     tmp.unsafe_bitcast[Int32]()[unsafe_offset=0] = v
     for i in range(4):
         data.append(tmp[unsafe_offset=i])
     tmp.unsafe_free()
 
 def _append_i32_be(mut data: List[UInt8], v: Int32):
-    var tmp = alloc[UInt8](4)
+    var tmp = unsafe_alloc[UInt8](4)
     tmp.unsafe_bitcast[Int32]()[unsafe_offset=0] = v
     data.append(tmp[unsafe_offset=3]); data.append(tmp[unsafe_offset=2]); data.append(tmp[unsafe_offset=1]); data.append(tmp[unsafe_offset=0])
     tmp.unsafe_free()
 
 def _append_u16_le(mut data: List[UInt8], v: UInt16):
-    var tmp = alloc[UInt8](2)
+    var tmp = unsafe_alloc[UInt8](2)
     tmp.unsafe_bitcast[UInt16]()[unsafe_offset=0] = v
     data.append(tmp[unsafe_offset=0]); data.append(tmp[unsafe_offset=1])
     tmp.unsafe_free()
@@ -66,7 +66,7 @@ def _write_file(path: String, data: List[UInt8]) raises:
 
 def _path_cstr(path: String) -> Pointer[UInt8, MutUntrackedOrigin]:
     var n = path.byte_length()
-    var buf = alloc[UInt8](n + 1)
+    var buf = unsafe_alloc[UInt8](n + 1)
     for i in range(n):
         buf[unsafe_offset=i] = path.as_bytes()[i]
     buf[unsafe_offset=n] = UInt8(0)
@@ -90,14 +90,14 @@ struct _PlyResult(Movable):
 
 def _alloc_ply_result() -> _PlyResult:
     var r = _PlyResult(
-        alloc[Pointer[Float32, MutUntrackedOrigin]](1),
-        alloc[Int32](1),
-        alloc[Pointer[Int32, MutUntrackedOrigin]](1),
-        alloc[Int32](1),
-        alloc[Pointer[Float32, MutUntrackedOrigin]](1),
-        alloc[Int32](1),
-        alloc[Pointer[Float32, MutUntrackedOrigin]](1),
-        alloc[Int32](1),
+        unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](1),
+        unsafe_alloc[Int32](1),
+        unsafe_alloc[Pointer[Int32, MutUntrackedOrigin]](1),
+        unsafe_alloc[Int32](1),
+        unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](1),
+        unsafe_alloc[Int32](1),
+        unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](1),
+        unsafe_alloc[Int32](1),
     )
     r.uvs[unsafe_offset=0] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
     r.has_uvs[unsafe_offset=0] = Int32(0)

@@ -5,7 +5,8 @@ from max.gpu.host import DeviceContext, DeviceBuffer
 from max.algorithm import parallelize
 from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
-from std.memory import alloc, unsafe_memcpy
+from std.memory.alloc import unsafe_alloc
+from std.memory import unsafe_memcpy
 from .geometry import RGB, Point3f, Point2f, FilmDims, FilterParams, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, NvdbGrid_C, nvdb_sample_density, nvdb_ray_range, grid_ray_range, nvdb_index_ray, nvdb_node_exit_t, nvdb_majorant_at_world, hg_phase, hg_sample, blackbody_rgb, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_grid_for, medium_nvdb_for, medium_emission_spectral, MEDIUM_TRACK_MAX_ITERS, medium_transmittance_ratio_spectral, medium_sigma_s_spectral, medium_sigma_t_spectral
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres, LightSample, _sample_infinite_light_nee, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee
@@ -119,10 +120,10 @@ def _fill_u8_mips(
     inv: Pointer[UInt8, MutUntrackedOrigin],
 ):
     unsafe_memcpy(dest=pyr, src=src, count=tw * th * c)
-    var prev = alloc[Float32](tw * th * c)
+    var prev = unsafe_alloc[Float32](tw * th * c)
     for i in range(tw * th * c):
         prev[unsafe_offset=i] = lut[unsafe_offset=Int(src[unsafe_offset=i])]
-    var cur = alloc[Float32](max(1, tw // 2) * max(1, th // 2) * c)
+    var cur = unsafe_alloc[Float32](max(1, tw // 2) * max(1, th // 2) * c)
     var off_cur = tw * th * c
     var pw = tw; var ph = th
     while pw > 1 or ph > 1:
@@ -192,10 +193,10 @@ def _load_host_texture(
 ) -> _HostTexture:
     var result = _HostTexture(Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), 0,
                               Int32(0), Int32(0), Int32(0), Int32(0), Int32(GpuTexture_C.FORMAT_F32), Int32(0))
-    var w_out = alloc[Int32](1); var h_out = alloc[Int32](1)
-    var c_out = alloc[Int32](1); var srgb_out = alloc[Int32](1)
+    var w_out = unsafe_alloc[Int32](1); var h_out = unsafe_alloc[Int32](1)
+    var c_out = unsafe_alloc[Int32](1); var srgb_out = unsafe_alloc[Int32](1)
     w_out[unsafe_offset=0] = Int32(0); h_out[unsafe_offset=0] = Int32(0)
-    var u8_out = alloc[Pointer[UInt8, MutUntrackedOrigin]](1)
+    var u8_out = unsafe_alloc[Pointer[UInt8, MutUntrackedOrigin]](1)
     var ok_u8 = external_call["load_texture_u8", Int32,
         Pointer[UInt8, MutUntrackedOrigin], Int32,
         Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
@@ -206,7 +207,7 @@ def _load_host_texture(
         var tw = Int(w_out[unsafe_offset=0]); var th = Int(h_out[unsafe_offset=0]); var c = Int(c_out[unsafe_offset=0])
         var lut_off = 256 if srgb_out[unsafe_offset=0] != Int32(0) else 0
         var (nlev, texels) = _mip_texel_count(tw, th)
-        var pyr = alloc[UInt8](texels * c)
+        var pyr = unsafe_alloc[UInt8](texels * c)
         _fill_u8_mips(pyr, u8_out[unsafe_offset=0], tw, th, c, lut.unsafe_offset(lut_off),
                       inv.unsafe_offset((_INV_LUT_SIZE if lut_off != 0 else 0)))
         result = _HostTexture(pyr.unsafe_origin_cast[MutUntrackedOrigin](), texels * c, Int32(tw), Int32(th),
@@ -215,7 +216,7 @@ def _load_host_texture(
     else:
         if ok_u8 != 0:
             _ = external_call["free_texture_u8", Int32, Pointer[UInt8, MutUntrackedOrigin]](u8_out[unsafe_offset=0])
-        var data_out = alloc[Pointer[Float32, MutUntrackedOrigin]](1)
+        var data_out = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](1)
         w_out[unsafe_offset=0] = Int32(0); h_out[unsafe_offset=0] = Int32(0)
         var ok = external_call["load_texture_rgb", Int32,
             Pointer[UInt8, MutUntrackedOrigin],
@@ -226,7 +227,7 @@ def _load_host_texture(
         if ok != 0 and Int(w_out[unsafe_offset=0]) > 0:
             var tw = Int(w_out[unsafe_offset=0]); var th = Int(h_out[unsafe_offset=0])
             var (nlev, texels) = _mip_texel_count(tw, th)
-            var pyr = alloc[Float32](texels * 3)
+            var pyr = unsafe_alloc[Float32](texels * 3)
             _fill_f32_mips(pyr, data_out[unsafe_offset=0], tw, th)
             result = _HostTexture(pyr.unsafe_bitcast[UInt8]().unsafe_origin_cast[MutUntrackedOrigin](), texels * 3 * 4,
                                   Int32(tw), Int32(th), Int32(nlev), Int32(3), Int32(GpuTexture_C.FORMAT_F32), Int32(0))
@@ -660,8 +661,8 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var n_blas_int = Int(blasCount)
             var blas_nodes_bufs = List[DeviceBuffer[DType.uint8]]()
             var blas_primids_bufs = List[DeviceBuffer[DType.uint8]]()
-            var blas_nodes_ptrs_host = alloc[Pointer[UInt8, MutUntrackedOrigin]](max(n_blas_int, 1))
-            var blas_primids_ptrs_host = alloc[Pointer[UInt8, MutUntrackedOrigin]](max(n_blas_int, 1))
+            var blas_nodes_ptrs_host = unsafe_alloc[Pointer[UInt8, MutUntrackedOrigin]](max(n_blas_int, 1))
+            var blas_primids_ptrs_host = unsafe_alloc[Pointer[UInt8, MutUntrackedOrigin]](max(n_blas_int, 1))
             for bi in range(n_blas_int):
                 blas_nodes_ptrs_host[unsafe_offset=bi] = _gpu_upload_owned[BVH2Node](
                     ctx, blas_nodes_bufs, blasNodesArr[unsafe_offset=bi], Int(blasNodeCounts[unsafe_offset=bi])).unsafe_bitcast[UInt8]()
@@ -685,7 +686,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var uv_bufs   = List[DeviceBuffer[DType.uint8]]()
             var nrm_bufs  = List[DeviceBuffer[DType.uint8]]()
 
-            var mesh_structs_host = alloc[TriangleMesh_C](max(Int(meshCount), 1))
+            var mesh_structs_host = unsafe_alloc[TriangleMesh_C](max(Int(meshCount), 1))
 
             for i in range(Int(meshCount)):
                 var host_mesh = meshes[unsafe_offset=i]
@@ -741,7 +742,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             # buffer. (No map_to_host anywhere here: its first use pins a ~1.3 GiB
             # host pool, ~1 s of page faults.)
             var ls_entries = Int(lightSamplerN) + 1
-            var ls_host = alloc[Float32](max(ls_entries, 2))
+            var ls_host = unsafe_alloc[Float32](max(ls_entries, 2))
             ls_host[unsafe_offset=1] = Float32(0)
             unsafe_memcpy(dest=ls_host, src=lightSamplerCdf, count=ls_entries)
             var ls_buf = _gpu_upload_array[Float32](ctx, ls_host, max(ls_entries, 2))
@@ -753,7 +754,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var il_pixels_bufs = List[DeviceBuffer[DType.uint8]]()
             var il_cdf_bufs    = List[DeviceBuffer[DType.uint8]]()
             var il_w2l_bufs    = List[DeviceBuffer[DType.uint8]]()
-            var il_patched = alloc[InfiniteLight_C](max(il_count, 1))
+            var il_patched = unsafe_alloc[InfiniteLight_C](max(il_count, 1))
             for ii in range(il_count):
                 var il = infiniteLights[unsafe_offset=ii]
                 # world_to_light matrix (16 floats), then pixels + CDF when textured.
@@ -789,7 +790,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             # struct array embeds device-resident pointers into those buffers.
             var grid_density_bufs = List[DeviceBuffer[DType.uint8]]()
             var n_grids_int = Int(gridCount)
-            var grid_structs_host = alloc[Grid_C](max(n_grids_int, 1))
+            var grid_structs_host = unsafe_alloc[Grid_C](max(n_grids_int, 1))
             for gi in range(n_grids_int):
                 var host_grid = grids[unsafe_offset=gi]
                 var n_voxels = Int(host_grid.nx) * Int(host_grid.ny) * Int(host_grid.nz)
@@ -810,7 +811,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             # array embeds device-resident pointers into those buffers.
             var nvdb_blob_bufs = List[DeviceBuffer[DType.uint8]]()
             var n_nvdb_grids_int = Int(nvdbGridCount)
-            var nvdb_structs_host = alloc[NvdbGrid_C](max(n_nvdb_grids_int, 1))
+            var nvdb_structs_host = unsafe_alloc[NvdbGrid_C](max(n_nvdb_grids_int, 1))
             for gi in range(n_nvdb_grids_int):
                 var host_nvdb = nvdbGrids[unsafe_offset=gi]
                 nvdb_structs_host[unsafe_offset=gi] = NvdbGrid_C(
@@ -837,7 +838,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             # pointer-struct hazard already documented on MeasuredBRDF_C.
             var measured_field_bufs = List[DeviceBuffer[DType.uint8]]()
             var n_measured_int = Int(measuredBrdfCount)
-            var measured_structs_host = alloc[MeasuredBRDF_C](max(n_measured_int, 1))
+            var measured_structs_host = unsafe_alloc[MeasuredBRDF_C](max(n_measured_int, 1))
             for mi in range(n_measured_int):
                 var hm = measured_brdfs[unsafe_offset=mi]
                 var slices2 = Int(hm.n_phi_i) * Int(hm.n_theta_i)
@@ -933,7 +934,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var n_textures_int = Int(n_tex)
             # Textures referenced as normal maps hold linear data and must NOT be
             # sRGB-decoded on load. Mark those indices by scanning the materials.
-            var tex_is_raw = alloc[Bool](max(n_textures_int, 1))
+            var tex_is_raw = unsafe_alloc[Bool](max(n_textures_int, 1))
             for ti in range(n_textures_int):
                 tex_is_raw[unsafe_offset=ti] = False
             for mi in range(Int(materialCount)):
@@ -945,7 +946,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             # image file (batch-exported "-renamed-N" duplicates). Dedup by
             # (filename, raw-ness) so each unique file is only loaded from disk
             # and uploaded to the GPU once, instead of once per declaration.
-            var dup_of = alloc[Int32](max(n_textures_int, 1))
+            var dup_of = unsafe_alloc[Int32](max(n_textures_int, 1))
             for ti in range(n_textures_int):
                 dup_of[unsafe_offset=ti] = Int32(-1)
                 for tj in range(ti):
@@ -954,17 +955,17 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                         dup_of[unsafe_offset=ti] = Int32(tj)
                         break
             var tex_data_bufs = List[DeviceBuffer[DType.uint8]]()
-            var gpu_textures_host = alloc[GpuTexture_C](max(n_textures_int, 1))
+            var gpu_textures_host = unsafe_alloc[GpuTexture_C](max(n_textures_int, 1))
             # 8-bit textures stay 8-bit on the GPU and decode through one of two
             # 256-entry tables (linear at 0, sRGB at 256), built by the oiio bridge
             # exactly as load_texture_rgb decodes, so level 0 matches the float path.
-            var lut_host = alloc[Float32](512)
+            var lut_host = unsafe_alloc[Float32](512)
             _ = external_call["texture_uint8_lut", NoneType, Int32, Pointer[Float32, MutUntrackedOrigin]](Int32(0), lut_host)
             _ = external_call["texture_uint8_lut", NoneType, Int32, Pointer[Float32, MutUntrackedOrigin]](Int32(1), lut_host.unsafe_offset(256))
             var lut_buf = ctx.enqueue_create_buffer[DType.float32](512)
             ctx.enqueue_copy(lut_buf, lut_host)
             var lut_dev = lut_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-            var inv_host = alloc[UInt8](2 * _INV_LUT_SIZE)
+            var inv_host = unsafe_alloc[UInt8](2 * _INV_LUT_SIZE)
             _build_inverse_lut(lut_host, inv_host)
             _build_inverse_lut(lut_host.unsafe_offset(256), inv_host.unsafe_offset(_INV_LUT_SIZE))
             # Decoding and mip building are independent per file and dominate
@@ -972,8 +973,8 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             # workers claiming the next texture from a shared cursor (file sizes
             # vary a lot). Uploads then happen here, in texture order, so the GPU
             # receives exactly the buffers a serial loop would build.
-            var host_tex = alloc[_HostTexture](max(n_textures_int, 1))
-            var next_tex = alloc[Int32](1)
+            var host_tex = unsafe_alloc[_HostTexture](max(n_textures_int, 1))
+            var next_tex = unsafe_alloc[Int32](1)
             next_tex[unsafe_offset=0] = Int32(0)
 
             @parameter
@@ -1055,7 +1056,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             ctx.synchronize()
 
             # Allocate handle on heap
-            var handle = alloc[GpuSceneHandle](1)
+            var handle = unsafe_alloc[GpuSceneHandle](1)
             handle.init_pointee_move(GpuSceneHandle(
                 ctx=ctx^,
                 bvh=BvhBuffers(

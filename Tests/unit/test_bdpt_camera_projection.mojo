@@ -8,7 +8,7 @@
 # a failure mode that looks like noise rather than like a bug. Round-tripping
 # through the forward transform pins it exactly.
 from std.math import sqrt, abs, max
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import Vec3f
 from gonzales.bdpt import _bdpt_world_to_raster
@@ -25,7 +25,7 @@ def _make_camera() -> Tuple[
     """(rasterToCamera, worldToCamera, cameraToRaster3x3) for a simple
     pinhole: film spans [-1,1] x [-0.75,0.75] at z=1, camera at the origin
     looking down +z, so cameraToWorld is the identity."""
-    var r2c = alloc[Float32](16)
+    var r2c = unsafe_alloc[Float32](16)
     for k in range(16): r2c[unsafe_offset=k] = Float32(0)
     # column-major, matching gen_primary_ray_state's indexing:
     # cx = r2c[0]*fx + r2c[4]*fy + r2c[12]
@@ -36,13 +36,13 @@ def _make_camera() -> Tuple[
     r2c[unsafe_offset=14] = Float32(1.0)                      # z = 1 plane
     r2c[unsafe_offset=15] = Float32(1.0)
 
-    var c2w = alloc[Float32](16)
+    var c2w = unsafe_alloc[Float32](16)
     for k in range(16): c2w[unsafe_offset=k] = Float32(0)
     c2w[unsafe_offset=0] = Float32(1); c2w[unsafe_offset=5] = Float32(1); c2w[unsafe_offset=10] = Float32(1); c2w[unsafe_offset=15] = Float32(1)
-    var w2c = alloc[Float32](16)
+    var w2c = unsafe_alloc[Float32](16)
     _ = matrix_invert(c2w, w2c)
 
-    var c2r = alloc[Float32](9)
+    var c2r = unsafe_alloc[Float32](9)
     var a0 = r2c[unsafe_offset=0]; var a1 = r2c[unsafe_offset=4]; var a2 = r2c[unsafe_offset=12]
     var b0 = r2c[unsafe_offset=1]; var b1 = r2c[unsafe_offset=5]; var b2 = r2c[unsafe_offset=13]
     var g0 = r2c[unsafe_offset=2]; var g1 = r2c[unsafe_offset=6]; var g2 = r2c[unsafe_offset=14]

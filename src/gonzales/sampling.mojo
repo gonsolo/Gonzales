@@ -1,5 +1,5 @@
 from std.math import sqrt, log, exp, cos, sin, atan2, acos
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from .geometry import Vec3f, Ray_C, Point3f, dot, Frame, PI, TWO_PI, INV_PI
 from .spectrum import SampledWavelengths, sample_wavelengths_uniform
 

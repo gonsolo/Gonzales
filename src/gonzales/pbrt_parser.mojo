@@ -1,6 +1,7 @@
 from std.ffi import external_call
 from std.time import perf_counter_ns
-from std.memory import alloc, unsafe_memcpy
+from std.memory.alloc import unsafe_alloc
+from std.memory import unsafe_memcpy
 from std.math import tan, sqrt, abs
 from std.atomic import Atomic
 from std.sys.info import num_performance_cores
@@ -162,7 +163,7 @@ def _psc_matcopy(dst: Pointer[Float32, MutUntrackedOrigin],
 def _psc_ctm_concat(s: Pointer[SceneParseState, MutUntrackedOrigin],
                    t: Pointer[Float32, MutUntrackedOrigin]):
     """Compute s.ctm = s.ctm × t and store back."""
-    var result = alloc[Float32](16)
+    var result = unsafe_alloc[Float32](16)
     matrix_multiply(s[unsafe_offset=0].ctm.unsafe_ptr(), t, result)
     for i in range(16):
         s[unsafe_offset=0].ctm[i] = result[unsafe_offset=i]
@@ -179,12 +180,12 @@ def _psc_row_to_col(col_out: Pointer[Float32, MutUntrackedOrigin],
 def _psc_handle_translate(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                          s: Pointer[SceneParseState, MutUntrackedOrigin]):
     """Translate tx ty tz  →  CTM = CTM × T(tx,ty,tz)"""
-    var v = alloc[Float32](3)
+    var v = unsafe_alloc[Float32](3)
     v[unsafe_offset=0] = Float32(0); v[unsafe_offset=1] = Float32(0); v[unsafe_offset=2] = Float32(0)
     _ = scanner_scan_float(handle, v.unsafe_offset(0))
     _ = scanner_scan_float(handle, v.unsafe_offset(1))
     _ = scanner_scan_float(handle, v.unsafe_offset(2))
-    var t = alloc[Float32](16)
+    var t = unsafe_alloc[Float32](16)
     _psc_identity(t)
     t[unsafe_offset=12] = v[unsafe_offset=0]; t[unsafe_offset=13] = v[unsafe_offset=1]; t[unsafe_offset=14] = v[unsafe_offset=2]   # col-major: col3 = (tx,ty,tz,1)
     _psc_ctm_concat(s, t)
@@ -193,12 +194,12 @@ def _psc_handle_translate(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
 def _psc_handle_scale_kw(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                         s: Pointer[SceneParseState, MutUntrackedOrigin]):
     """Scale sx sy sz  →  CTM = CTM × S(sx,sy,sz)"""
-    var v = alloc[Float32](3)
+    var v = unsafe_alloc[Float32](3)
     v[unsafe_offset=0] = Float32(1); v[unsafe_offset=1] = Float32(1); v[unsafe_offset=2] = Float32(1)
     _ = scanner_scan_float(handle, v.unsafe_offset(0))
     _ = scanner_scan_float(handle, v.unsafe_offset(1))
     _ = scanner_scan_float(handle, v.unsafe_offset(2))
-    var t = alloc[Float32](16)
+    var t = unsafe_alloc[Float32](16)
     _psc_identity(t)
     t[unsafe_offset=0] = v[unsafe_offset=0]; t[unsafe_offset=5] = v[unsafe_offset=1]; t[unsafe_offset=10] = v[unsafe_offset=2]     # col-major: diagonal
     _psc_ctm_concat(s, t)
@@ -208,7 +209,7 @@ def _psc_handle_rotate(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                       s: Pointer[SceneParseState, MutUntrackedOrigin]):
     """Rotate angle ax ay az  →  CTM = CTM × R(angle, axis)"""
     from std.math import sin as _sin, cos as _cos, sqrt as _sqrt
-    var rv = alloc[Float32](4)  # angle, ax, ay, az
+    var rv = unsafe_alloc[Float32](4)  # angle, ax, ay, az
     rv[unsafe_offset=0] = Float32(0); rv[unsafe_offset=1] = Float32(0); rv[unsafe_offset=2] = Float32(0); rv[unsafe_offset=3] = Float32(1)
     _ = scanner_scan_float(handle, rv.unsafe_offset(0))
     _ = scanner_scan_float(handle, rv.unsafe_offset(1))
@@ -219,7 +220,7 @@ def _psc_handle_rotate(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
     var ln = _sqrt(ax*ax + ay*ay + az*az)
     if ln > Float32(1e-12): ax /= ln; ay /= ln; az /= ln
     var c = _cos(angle); var sv = _sin(angle); var mc = Float32(1) - c
-    var t = alloc[Float32](16)
+    var t = unsafe_alloc[Float32](16)
     # Column-major rotation matrix (standard Rodrigues)
     t[unsafe_offset=0]  = c + ax*ax*mc;       t[unsafe_offset=1]  = ay*ax*mc + az*sv;   t[unsafe_offset=2]  = az*ax*mc - ay*sv;   t[unsafe_offset=3]  = Float32(0)
     t[unsafe_offset=4]  = ax*ay*mc - az*sv;   t[unsafe_offset=5]  = c + ay*ay*mc;       t[unsafe_offset=6]  = az*ay*mc + ax*sv;   t[unsafe_offset=7]  = Float32(0)
@@ -232,7 +233,7 @@ def _psc_handle_lookat(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                       s: Pointer[SceneParseState, MutUntrackedOrigin]):
     """LookAt ex ey ez  lx ly lz  ux uy uz"""
     from std.math import sqrt as _sqrt
-    var v = alloc[Float32](9)
+    var v = unsafe_alloc[Float32](9)
     for i in range(9): _ = scanner_scan_float(handle, v.unsafe_offset(i))
     var ex = v[unsafe_offset=0]; var ey = v[unsafe_offset=1]; var ez = v[unsafe_offset=2]
     var lx = v[unsafe_offset=3]; var ly = v[unsafe_offset=4]; var lz = v[unsafe_offset=5]
@@ -255,7 +256,7 @@ def _psc_handle_lookat(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
     var ny = dz*rx - dx*rz
     var nz = dx*ry - dy*rx
 
-    var t = alloc[Float32](16)
+    var t = unsafe_alloc[Float32](16)
     t[unsafe_offset=0]  = rx;  t[unsafe_offset=1]  = nx;  t[unsafe_offset=2]  = dx;  t[unsafe_offset=3]  = Float32(0)
     t[unsafe_offset=4]  = ry;  t[unsafe_offset=5]  = ny;  t[unsafe_offset=6]  = dy;  t[unsafe_offset=7]  = Float32(0)
     t[unsafe_offset=8]  = rz;  t[unsafe_offset=9]  = nz;  t[unsafe_offset=10] = dz;  t[unsafe_offset=11] = Float32(0)
@@ -270,7 +271,7 @@ def _psc_handle_lookat(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
 
 def _psc_handle_integrator(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                           s: Pointer[SceneParseState, MutUntrackedOrigin]):
-    var sbuf = alloc[UInt8](64)
+    var sbuf = unsafe_alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
     sbuf.unsafe_free()
     var params = _psc_collect_params(handle)
@@ -280,7 +281,7 @@ def _psc_handle_integrator(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
 
 def _psc_handle_sampler(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                        s: Pointer[SceneParseState, MutUntrackedOrigin]):
-    var sbuf = alloc[UInt8](64)
+    var sbuf = unsafe_alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
     sbuf.unsafe_free()
     var params = _psc_collect_params(handle)
@@ -289,7 +290,7 @@ def _psc_handle_sampler(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
 
 def _psc_handle_filter(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                       s: Pointer[SceneParseState, MutUntrackedOrigin]):
-    var sbuf = alloc[UInt8](64)
+    var sbuf = unsafe_alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
     if _psc_streq(sbuf, "triangle") or _psc_streq(sbuf, "tent"):
         s[unsafe_offset=0].filter_type = Int32(1)
@@ -305,7 +306,7 @@ def _psc_handle_filter(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
 
 def _psc_handle_film(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                     s: Pointer[SceneParseState, MutUntrackedOrigin]):
-    var sbuf = alloc[UInt8](64)
+    var sbuf = unsafe_alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
     # The film TYPE is otherwise unused: every type renders as "rgb". That is
     # right for "rgb"/"spectral", but pbrt's "gbuffer" film also writes
@@ -343,7 +344,7 @@ def _psc_handle_film(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
 
 def _psc_handle_camera(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                       s: Pointer[SceneParseState, MutUntrackedOrigin]):
-    var sbuf = alloc[UInt8](64)
+    var sbuf = unsafe_alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
     sbuf.unsafe_free()
     # Copy current CTM into cam2w_raw
@@ -354,7 +355,7 @@ def _psc_handle_camera(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
 def _psc_handle_transform(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                          s: Pointer[SceneParseState, MutUntrackedOrigin]):
     _ = scanner_scan_char(handle, UInt8(91))  # '['
-    var tmp = alloc[Float32](1)
+    var tmp = unsafe_alloc[Float32](1)
     for i in range(16):
         _ = scanner_scan_float(handle, tmp)
         s[unsafe_offset=0].ctm[i] = tmp[unsafe_offset=0]
@@ -573,8 +574,8 @@ def handle_curve_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         return
 
     var n_raw = Int(n_cp)
-    var raw4 = alloc[Float32](n_raw * 4)
-    var xfm4 = alloc[Float32](n_raw * 4)
+    var raw4 = unsafe_alloc[Float32](n_raw * 4)
+    var xfm4 = unsafe_alloc[Float32](n_raw * 4)
     for i in range(n_raw):
         raw4[unsafe_offset=i*4+0] = cp_list[i*3+0]; raw4[unsafe_offset=i*4+1] = cp_list[i*3+1]
         raw4[unsafe_offset=i*4+2] = cp_list[i*3+2]; raw4[unsafe_offset=i*4+3] = Float32(1)
@@ -632,7 +633,7 @@ comptime CLOUD_BAKE_RES: Int = 320
 
 def handle_named_medium(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                                   s: Pointer[SceneParseState, MutUntrackedOrigin]):
-    var name_buf = alloc[UInt8](64)
+    var name_buf = unsafe_alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, name_buf, 64)
     var params = _psc_collect_params(handle)
 
@@ -893,8 +894,8 @@ def lookup_medium(s: Pointer[SceneParseState, MutUntrackedOrigin],
 
 def handle_medium_interface(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                             s: Pointer[SceneParseState, MutUntrackedOrigin]):
-    var inside_buf  = alloc[UInt8](64)
-    var outside_buf = alloc[UInt8](64)
+    var inside_buf  = unsafe_alloc[UInt8](64)
+    var outside_buf = unsafe_alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, inside_buf, 64)
     _ = scanner_parse_quoted_string(handle, outside_buf, 64)
     s[unsafe_offset=0].cur_attr.inside_medium  = lookup_medium(s, inside_buf)
@@ -1109,7 +1110,7 @@ def handle_bilinearmesh_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
 
 def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                      s: Pointer[SceneParseState, MutUntrackedOrigin]):
-    var shape_type = alloc[UInt8](64)
+    var shape_type = unsafe_alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, shape_type, 64)
 
     var is_tri = _psc_streq(shape_type, "trianglemesh")
@@ -1198,7 +1199,7 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         var params = _psc_collect_params(handle)
         var ply_filename_str = params.get_string("filename", "")
 
-        var full_path = alloc[UInt8](PSC_FILE_MAX * 2)
+        var full_path = unsafe_alloc[UInt8](PSC_FILE_MAX * 2)
         var dir_len = s[unsafe_offset=0].scene_dir.byte_length()
         for ki in range(dir_len):
             full_path[unsafe_offset=ki] = s[unsafe_offset=0].scene_dir.unsafe_ptr()[unsafe_offset=ki]
@@ -1210,14 +1211,14 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
             fn_i += 1
         full_path[unsafe_offset=dir_len + fn_i] = UInt8(0)
 
-        var ply_pts     = alloc[Pointer[Float32, MutUntrackedOrigin]](1)
-        var ply_nv      = alloc[Int32](1)
-        var ply_idx     = alloc[Pointer[Int32, MutUntrackedOrigin]](1)
-        var ply_nt      = alloc[Int32](1)
-        var ply_uvs     = alloc[Pointer[Float32, MutUntrackedOrigin]](1)
-        var ply_has_uvs = alloc[Int32](1)
-        var ply_nrm     = alloc[Pointer[Float32, MutUntrackedOrigin]](1)
-        var ply_has_nrm = alloc[Int32](1)
+        var ply_pts     = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](1)
+        var ply_nv      = unsafe_alloc[Int32](1)
+        var ply_idx     = unsafe_alloc[Pointer[Int32, MutUntrackedOrigin]](1)
+        var ply_nt      = unsafe_alloc[Int32](1)
+        var ply_uvs     = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](1)
+        var ply_has_uvs = unsafe_alloc[Int32](1)
+        var ply_nrm     = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](1)
+        var ply_has_nrm = unsafe_alloc[Int32](1)
         ply_uvs[unsafe_offset=0] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
         ply_has_uvs[unsafe_offset=0] = Int32(0)
         ply_nrm[unsafe_offset=0] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
@@ -1238,7 +1239,7 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                        full_path[unsafe_offset=fp_len-1] == UInt8(122))
         var ok = Int32(0)
         if ends_gz:
-            var ap = alloc[UInt8](fp_len - 2)
+            var ap = unsafe_alloc[UInt8](fp_len - 2)
             for ci in range(fp_len - 3): ap[unsafe_offset=ci] = full_path[unsafe_offset=ci]
             ap[unsafe_offset=fp_len - 3] = UInt8(0)
             var ap_str = String(unsafe_from_utf8_ptr=ap.as_imm())
@@ -1284,9 +1285,9 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
             uv_ptr.unsafe_free()
         if ply_has_nrm[unsafe_offset=0] != 0:
             var nrm_ptr = ply_nrm[unsafe_offset=0]
-            var ctm_inv = alloc[Float32](16)
+            var ctm_inv = unsafe_alloc[Float32](16)
             _ = matrix_invert(s[unsafe_offset=0].ctm.unsafe_ptr(), ctm_inv)
-            var nrm_world = alloc[Float32](Int(nv) * 3)
+            var nrm_world = unsafe_alloc[Float32](Int(nv) * 3)
             transform_normals(ctm_inv, nrm_ptr, nv, nrm_world)
             ref last_mesh = s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1]
             last_mesh.normals.reserve(Int(nv) * 3)
@@ -1340,10 +1341,10 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
     # it faced away from the room: rendered black where the reference shows
     # its full 4.575/3.591/1.550 radiance, and lit nothing through NEE.
     if Int32(len(n_list)) >= n_verts * Int32(3):
-        var ctm_inv = alloc[Float32](16)
+        var ctm_inv = unsafe_alloc[Float32](16)
         _ = matrix_invert(s[unsafe_offset=0].ctm.unsafe_ptr(), ctm_inv)
-        var nrm_world = alloc[Float32](Int(n_verts) * 3)
-        var nrm_src = alloc[Float32](Int(n_verts) * 3)
+        var nrm_world = unsafe_alloc[Float32](Int(n_verts) * 3)
+        var nrm_src = unsafe_alloc[Float32](Int(n_verts) * 3)
         for ni in range(Int(n_verts) * 3): nrm_src[unsafe_offset=ni] = n_list[ni]
         transform_normals(ctm_inv, nrm_src, n_verts, nrm_world)
         nrm_src.unsafe_free()
@@ -1419,11 +1420,11 @@ def _psc_get_sigma_or_rgb(params: ParameterDictionary, name: StringLiteral, defa
 
 def handle_texture(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                        s: Pointer[SceneParseState, MutUntrackedOrigin]):
-    var tex_name = alloc[UInt8](PSC_NAME_MAX)
+    var tex_name = unsafe_alloc[UInt8](PSC_NAME_MAX)
     _ = scanner_parse_quoted_string(handle, tex_name, PSC_NAME_MAX)
-    var tex_type = alloc[UInt8](64)
+    var tex_type = unsafe_alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, tex_type, 64)
-    var tex_class = alloc[UInt8](64)
+    var tex_class = unsafe_alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, tex_class, 64)
     var name_str = String(unsafe_from_utf8_ptr=tex_name.as_imm())
     tex_name.unsafe_free()
@@ -1559,13 +1560,13 @@ def _psc_emit_object_instance(s: Pointer[SceneParseState, MutUntrackedOrigin], n
     # obj_to_world = CTM_now * inverse(CTM_at_ObjectBegin) — since template
     # geometry is already baked in "CTM_at_ObjectBegin space", this maps it
     # into this placement's world position without re-parsing/duplicating it.
-    var mdef = alloc[Float32](16)
+    var mdef = unsafe_alloc[Float32](16)
     for ci in range(16): mdef[unsafe_offset=ci] = s[unsafe_offset=0].object_ctm[tmpl_idx * 16 + ci]
-    var mdef_inv = alloc[Float32](16)
+    var mdef_inv = unsafe_alloc[Float32](16)
     _ = matrix_invert(mdef, mdef_inv)
-    var obj_to_world = alloc[Float32](16)
+    var obj_to_world = unsafe_alloc[Float32](16)
     matrix_multiply(s[unsafe_offset=0].ctm.unsafe_ptr(), mdef_inv, obj_to_world)
-    var world_to_obj = alloc[Float32](16)
+    var world_to_obj = unsafe_alloc[Float32](16)
     _ = matrix_invert(obj_to_world, world_to_obj)
 
     s[unsafe_offset=0].instance_template_idx.append(Int32(tmpl_idx))
@@ -1579,8 +1580,8 @@ def _psc_emit_object_instance(s: Pointer[SceneParseState, MutUntrackedOrigin], n
 
 def parse_scene_file(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
               s: Pointer[SceneParseState, MutUntrackedOrigin]):
-    var kw_buf = alloc[UInt8](256)
-    var ws_delims = alloc[UInt8](4)
+    var kw_buf = unsafe_alloc[UInt8](256)
+    var ws_delims = unsafe_alloc[UInt8](4)
     ws_delims[unsafe_offset=0] = UInt8(32); ws_delims[unsafe_offset=1] = UInt8(9)
     ws_delims[unsafe_offset=2] = UInt8(10); ws_delims[unsafe_offset=3] = UInt8(13)
 
@@ -1624,7 +1625,7 @@ def parse_scene_file(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         elif _psc_streq(kw_buf, "NamedMaterial"):
             _psc_handle_named_material(handle, s)
         elif _psc_streq(kw_buf, "ObjectBegin"):
-            var obj_name = alloc[UInt8](PSC_NAME_MAX)
+            var obj_name = unsafe_alloc[UInt8](PSC_NAME_MAX)
             _ = scanner_parse_quoted_string(handle, obj_name, PSC_NAME_MAX)
             if s[unsafe_offset=0].object_depth == 0:
                 s[unsafe_offset=0].pending_object_name  = String(unsafe_from_utf8_ptr=obj_name.as_imm())
@@ -1638,7 +1639,7 @@ def parse_scene_file(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                 if s[unsafe_offset=0].object_depth == 0:
                     _psc_finish_object_def(s)
         elif _psc_streq(kw_buf, "ObjectInstance"):
-            var obj_name = alloc[UInt8](PSC_NAME_MAX)
+            var obj_name = unsafe_alloc[UInt8](PSC_NAME_MAX)
             _ = scanner_parse_quoted_string(handle, obj_name, PSC_NAME_MAX)
             var inst_name = String(unsafe_from_utf8_ptr=obj_name.as_imm())
             obj_name.unsafe_free()
@@ -1671,9 +1672,9 @@ def parse_scene_file(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         elif _psc_streq(kw_buf, "Texture"):
             handle_texture(handle, s)
         elif _psc_streq(kw_buf, "Include") or _psc_streq(kw_buf, "Import"):
-            var inc_name = alloc[UInt8](PSC_FILE_MAX)
+            var inc_name = unsafe_alloc[UInt8](PSC_FILE_MAX)
             _ = scanner_parse_quoted_string(handle, inc_name, PSC_FILE_MAX)
-            var inc_path = alloc[UInt8](PSC_FILE_MAX * 2)
+            var inc_path = unsafe_alloc[UInt8](PSC_FILE_MAX * 2)
             var dlen = s[unsafe_offset=0].scene_dir.byte_length()
             for ki in range(dlen):
                 inc_path[unsafe_offset=ki] = s[unsafe_offset=0].scene_dir.unsafe_ptr()[unsafe_offset=ki]
@@ -1698,7 +1699,7 @@ def parse_scene_file(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                            inc_path[unsafe_offset=inc_path_len-1] == UInt8(122))
             var stripped = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling()
             if ends_gz:
-                stripped = alloc[UInt8](inc_path_len - 2)
+                stripped = unsafe_alloc[UInt8](inc_path_len - 2)
                 for ci in range(inc_path_len - 3):
                     stripped[unsafe_offset=ci] = inc_path[unsafe_offset=ci]
                 stripped[unsafe_offset=inc_path_len - 3] = UInt8(0)
@@ -1722,7 +1723,7 @@ def parse_scene_file(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                 var rest_start = Int(handle[unsafe_offset=0].cursor)
                 var rest_len = Int(handle[unsafe_offset=0].total_bytes) - rest_start
                 var merged_len = inc_len + rest_len
-                var merged = alloc[UInt8](merged_len + 1)
+                var merged = unsafe_alloc[UInt8](merged_len + 1)
                 for mi in range(inc_len):
                     merged[unsafe_offset=mi] = sub_handle[unsafe_offset=0].buffer[unsafe_offset=mi]
                 for mi in range(rest_len):
@@ -1755,11 +1756,11 @@ def parse_scene_file(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
             handle_medium_interface(handle, s)
         elif _psc_streq(kw_buf, "ConcatTransform"):
             _ = scanner_scan_char(handle, UInt8(91))  # '['
-            var tmp = alloc[Float32](16)
+            var tmp = unsafe_alloc[Float32](16)
             for i in range(16):
                 _ = scanner_scan_float(handle, tmp.unsafe_offset(i))
             _ = scanner_scan_char(handle, UInt8(93))  # ']'
-            var result = alloc[Float32](16)
+            var result = unsafe_alloc[Float32](16)
             matrix_multiply(s[unsafe_offset=0].ctm.unsafe_ptr(), tmp, result)
             for i in range(16):
                 s[unsafe_offset=0].ctm[i] = result[unsafe_offset=i]
@@ -1961,8 +1962,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                  verbose: Bool = False):
 
     # ---- Camera matrices ----
-    var c2w = alloc[Float32](16)
-    var cam2w_tmp = alloc[Float32](16)
+    var c2w = unsafe_alloc[Float32](16)
+    var cam2w_tmp = unsafe_alloc[Float32](16)
     for i in range(16): cam2w_tmp[unsafe_offset=i] = s[unsafe_offset=0].cam2w_raw[i]
     _ = matrix_invert(cam2w_tmp, c2w)
     cam2w_tmp.unsafe_free()
@@ -1978,7 +1979,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         print("  Named materials:", len(s[unsafe_offset=0].named_materials))
         print("=== END DEBUG ===")
 
-    var cts = alloc[Float32](16)
+    var cts = unsafe_alloc[Float32](16)
     make_perspective_matrix(s[unsafe_offset=0].camera_fov, Float32(0.01), cts)
 
     var frame = Float32(s[unsafe_offset=0].film_w) / Float32(s[unsafe_offset=0].film_h)
@@ -1990,17 +1991,17 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         smin_x = Float32(-1); smax_x = Float32(1)
         smin_y = -Float32(1)/frame; smax_y = Float32(1)/frame
 
-    var str_mat = alloc[Float32](16)
+    var str_mat = unsafe_alloc[Float32](16)
     make_screen_to_raster(s[unsafe_offset=0].film_w, s[unsafe_offset=0].film_h,
                                 smin_x, smax_x, smin_y, smax_y, str_mat)
 
-    var rts = alloc[Float32](16)
+    var rts = unsafe_alloc[Float32](16)
     _ = matrix_invert(str_mat, rts)
 
-    var cts_inv = alloc[Float32](16)
+    var cts_inv = unsafe_alloc[Float32](16)
     _ = matrix_invert(cts, cts_inv)
 
-    var r2c = alloc[Float32](16)
+    var r2c = unsafe_alloc[Float32](16)
     matrix_multiply(cts_inv, rts, r2c)
     psc[unsafe_offset=0].raster_to_camera = r2c
 
@@ -2089,12 +2090,12 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         measured_ok.append(mok)
         measured_list.append(mb)
     psc[unsafe_offset=0].measured_count = Int32(len(measured_list))
-    var measured_brdfs_buf = alloc[MeasuredBRDF_C](max(len(measured_list), 1))
+    var measured_brdfs_buf = unsafe_alloc[MeasuredBRDF_C](max(len(measured_list), 1))
     for i in range(len(measured_list)):
         measured_brdfs_buf[unsafe_offset=i] = measured_list[i]
     psc[unsafe_offset=0].measured_brdfs = measured_brdfs_buf
 
-    var mats = alloc[Material_C](max(n_mats, 1))
+    var mats = unsafe_alloc[Material_C](max(n_mats, 1))
     for i in range(n_regular):
         var nm3 = s[unsafe_offset=0].named_materials[i]
         var material_kind = nm3.kind
@@ -2175,20 +2176,20 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
 
     # ---- Meshes + area lights ----
     var n_meshes = len(s[unsafe_offset=0].meshes)
-    var meshes   = alloc[TriangleMesh_C](max(n_meshes, 1))
-    var out_pts  = alloc[Pointer[Float32, MutUntrackedOrigin]](max(n_meshes, 1))
-    var out_vis  = alloc[Pointer[Int64, MutUntrackedOrigin]](max(n_meshes, 1))
-    var out_fis  = alloc[Pointer[Int64, MutUntrackedOrigin]](max(n_meshes, 1))
-    var out_nv    = alloc[Int32](max(n_meshes, 1))
-    var out_nt    = alloc[Int32](max(n_meshes, 1))
-    var out_uv_nv = alloc[Int32](max(n_meshes, 1))
-    var out_nrm_nv = alloc[Int32](max(n_meshes, 1))
+    var meshes   = unsafe_alloc[TriangleMesh_C](max(n_meshes, 1))
+    var out_pts  = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](max(n_meshes, 1))
+    var out_vis  = unsafe_alloc[Pointer[Int64, MutUntrackedOrigin]](max(n_meshes, 1))
+    var out_fis  = unsafe_alloc[Pointer[Int64, MutUntrackedOrigin]](max(n_meshes, 1))
+    var out_nv    = unsafe_alloc[Int32](max(n_meshes, 1))
+    var out_nt    = unsafe_alloc[Int32](max(n_meshes, 1))
+    var out_uv_nv = unsafe_alloc[Int32](max(n_meshes, 1))
+    var out_nrm_nv = unsafe_alloc[Int32](max(n_meshes, 1))
 
     # al_list (used for NEE light sampling) covers mesh area lights (kind=0,
     # filled below) AND curve area lights (kind=1, appended once curve_buf
     # is built further down in "Native curves") — sized for both up front
     # since it's one contiguous allocation.
-    var al_list  = alloc[AreaLight_C](max(n_al_mesh + n_al_curve, 1))
+    var al_list  = unsafe_alloc[AreaLight_C](max(n_al_mesh + n_al_curve, 1))
     var al_count = Int32(0)
     var al_mat_base = n_regular
 
@@ -2196,11 +2197,11 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         ref ma = s[unsafe_offset=0].meshes[i]
         var nv = len(ma.points) // 4
         var nt = len(ma.face_idxs)
-        var pts_c = alloc[Float32](nv * 4)
+        var pts_c = unsafe_alloc[Float32](nv * 4)
         for vi in range(nv * 4): pts_c[unsafe_offset=vi] = ma.points[vi]
-        var vis_c = alloc[Int64](nt * 3)
+        var vis_c = unsafe_alloc[Int64](nt * 3)
         for ti2 in range(nt * 3): vis_c[unsafe_offset=ti2] = ma.vert_idxs[ti2]
-        var fis_c = alloc[Int64](nt)
+        var fis_c = unsafe_alloc[Int64](nt)
         for ti2 in range(nt): fis_c[unsafe_offset=ti2] = ma.face_idxs[ti2]
         out_pts[unsafe_offset=i] = pts_c
         out_vis[unsafe_offset=i] = vis_c
@@ -2211,7 +2212,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         meshes[unsafe_offset=i].vertexIndices = vis_c
         meshes[unsafe_offset=i].faceIndices   = fis_c
         if len(ma.uvs) >= nv * 2:
-            var uv_c = alloc[Float32](nv * 2)
+            var uv_c = unsafe_alloc[Float32](nv * 2)
             for ui in range(nv * 2): uv_c[unsafe_offset=ui] = ma.uvs[ui]
             meshes[unsafe_offset=i].uvs = uv_c
             out_uv_nv[unsafe_offset=i] = Int32(nv)
@@ -2219,7 +2220,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             meshes[unsafe_offset=i].uvs = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
             out_uv_nv[unsafe_offset=i] = Int32(0)
         if len(ma.normals) >= nv * 3:
-            var nrm_c = alloc[Float32](nv * 3)
+            var nrm_c = unsafe_alloc[Float32](nv * 3)
             for ni in range(nv * 3): nrm_c[unsafe_offset=ni] = ma.normals[ni]
             meshes[unsafe_offset=i].normals = nrm_c
             out_nrm_nv[unsafe_offset=i] = Int32(nv)
@@ -2273,7 +2274,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # AreaLight_C/NEE entries (al_list[n_al_mesh:]) are appended further down
     # in "Native curves" once curve_buf/curve_n_pieces exist — total_area
     # needs the curve's actual piece tessellation (curve_light_tube_area).
-    var curve_al_mat_idx = alloc[Int32](max(len(s[unsafe_offset=0].curves_al), 1))
+    var curve_al_mat_idx = unsafe_alloc[Int32](max(len(s[unsafe_offset=0].curves_al), 1))
     var curve_al_running = Int32(0)
     for ci in range(len(s[unsafe_offset=0].curves_al)):
         if s[unsafe_offset=0].curves_al[ci]:
@@ -2309,13 +2310,13 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
 
     if n_with_mi > 0:
         var expanded_n = n_mats + n_with_mi
-        var new_mats = alloc[Material_C](expanded_n)
+        var new_mats = unsafe_alloc[Material_C](expanded_n)
         for ci in range(n_mats):
             new_mats[unsafe_offset=ci] = mats[unsafe_offset=ci]
         mats.unsafe_free()
         mats = new_mats
 
-        var iface_buf = alloc[MediumInterface_C](n_with_mi)
+        var iface_buf = unsafe_alloc[MediumInterface_C](n_with_mi)
         var dup_idx = n_mats
         var iface_idx = 0
 
@@ -2374,13 +2375,13 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # _curve_greedy_groups) so the leaf count stays close to the number of
     # visually-distinct bends, not always CURVE_N_PIECES.
     var n_curves = Int32(len(s[unsafe_offset=0].curves_mat))
-    var curve_n_pieces = alloc[Int32](max(Int(n_curves), 1))
-    var curve_group_base = alloc[Int32](max(Int(n_curves), 1))
+    var curve_n_pieces = unsafe_alloc[Int32](max(Int(n_curves), 1))
+    var curve_group_base = unsafe_alloc[Int32](max(Int(n_curves), 1))
     var total_curve_groups = Int32(0)
     # Never dereferenced (the counting pass below only counts groups; the
     # write=False branch of _curve_greedy_groups skips all writes) — just
     # needs to be a valid, non-dangling pointer to satisfy the signature.
-    var count_pass_scratch = alloc[Int32](1)
+    var count_pass_scratch = unsafe_alloc[Int32](1)
     for i in range(Int(n_curves)):
         var cb = i * 12
         var cx0 = s[unsafe_offset=0].curves_cp[cb+0]; var cy0 = s[unsafe_offset=0].curves_cp[cb+1]; var cz0 = s[unsafe_offset=0].curves_cp[cb+2]
@@ -2416,9 +2417,9 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     var total_prims_gpu = total_tris + total_curve_groups
     var total_prims = total_prims_gpu + total_instances
 
-    var prim_bounds = alloc[Float32](Int(total_prims) * 6)
-    var tri_mesh    = alloc[Int32](max(Int(total_tris), 1))
-    var tri_local   = alloc[Int32](max(Int(total_tris), 1))
+    var prim_bounds = unsafe_alloc[Float32](Int(total_prims) * 6)
+    var tri_mesh    = unsafe_alloc[Int32](max(Int(total_tris), 1))
+    var tri_local   = unsafe_alloc[Int32](max(Int(total_tris), 1))
 
     var flat_idx = Int32(0)
     for mi in range(n_meshes):
@@ -2449,10 +2450,10 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # (see _curve_greedy_groups), each with a tight AABB — the union of that
     # run's individual piece bounds, still far tighter than the old
     # whole-segment hull since a run rarely spans the entire curly curve.
-    var group_curve_idx = alloc[Int32](max(Int(total_curve_groups), 1))
-    var group_id2 = alloc[Int32](max(Int(total_curve_groups), 1))  # packed first_piece*8 + piece_count
-    var group_first_scratch = alloc[Int32](CURVE_N_PIECES)
-    var group_count_scratch = alloc[Int32](CURVE_N_PIECES)
+    var group_curve_idx = unsafe_alloc[Int32](max(Int(total_curve_groups), 1))
+    var group_id2 = unsafe_alloc[Int32](max(Int(total_curve_groups), 1))  # packed first_piece*8 + piece_count
+    var group_first_scratch = unsafe_alloc[Int32](CURVE_N_PIECES)
+    var group_count_scratch = unsafe_alloc[Int32](CURVE_N_PIECES)
     for ci in range(Int(n_curves)):
         var base = ci * 12
         var curve_i = Curve_C(
@@ -2485,16 +2486,16 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # entries referencing the SAME GLOBAL `meshes` array (no per-BLAS mesh
     # storage, no geometry duplication).
     var n_templates = len(s[unsafe_offset=0].object_names)
-    var blas_nodes_arr   = alloc[Pointer[BVH2Node, MutUntrackedOrigin]](max(n_templates, 1))
-    var blas_primids_arr = alloc[Pointer[PrimId_C, MutUntrackedOrigin]](max(n_templates, 1))
+    var blas_nodes_arr   = unsafe_alloc[Pointer[BVH2Node, MutUntrackedOrigin]](max(n_templates, 1))
+    var blas_primids_arr = unsafe_alloc[Pointer[PrimId_C, MutUntrackedOrigin]](max(n_templates, 1))
     # Per-BLAS array lengths — the CPU traversal side never needs these (it
     # just walks from node/primid index 0, self-describing via each node's
     # offset/count), but GPU upload does: it copies each BLAS's arrays into
     # their own device buffers and needs to know how many bytes that is.
-    var blas_node_counts   = alloc[Int32](max(n_templates, 1))
-    var blas_primid_counts = alloc[Int32](max(n_templates, 1))
-    var template_mesh_start = alloc[Int32](max(n_templates, 1))
-    var template_mesh_end   = alloc[Int32](max(n_templates, 1))
+    var blas_node_counts   = unsafe_alloc[Int32](max(n_templates, 1))
+    var blas_primid_counts = unsafe_alloc[Int32](max(n_templates, 1))
+    var template_mesh_start = unsafe_alloc[Int32](max(n_templates, 1))
+    var template_mesh_end   = unsafe_alloc[Int32](max(n_templates, 1))
     for tmpl in range(n_templates):
         var mstart = Int(s[unsafe_offset=0].object_mesh_start[tmpl])
         var mend   = Int(s[unsafe_offset=0].object_mesh_end[tmpl])
@@ -2503,9 +2504,9 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         var t_tris = Int32(0)
         for mi in range(mstart, mend):
             t_tris += Int32(len(s[unsafe_offset=0].meshes[mi].face_idxs))
-        var t_bounds = alloc[Float32](max(Int(t_tris), 1) * 6)
-        var t_mesh   = alloc[Int32](max(Int(t_tris), 1))
-        var t_local  = alloc[Int32](max(Int(t_tris), 1))
+        var t_bounds = unsafe_alloc[Float32](max(Int(t_tris), 1) * 6)
+        var t_mesh   = unsafe_alloc[Int32](max(Int(t_tris), 1))
+        var t_local  = unsafe_alloc[Int32](max(Int(t_tris), 1))
         var t_flat = Int32(0)
         for mi in range(mstart, mend):
             var pts = out_pts[unsafe_offset=mi]
@@ -2529,11 +2530,11 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 t_local[unsafe_offset=Int(t_flat)] = Int32(ti)
                 t_flat += 1
         var t_max_nodes = max(Int(t_tris) * 2 + 4, 1)
-        var t_nodes = alloc[BVH2Node](t_max_nodes)
-        var t_order = alloc[Int32](max(Int(t_tris), 1))
+        var t_nodes = unsafe_alloc[BVH2Node](t_max_nodes)
+        var t_order = unsafe_alloc[Int32](max(Int(t_tris), 1))
         var t_node_count = build_bvh2(t_bounds, t_tris, t_nodes, t_order)
         t_bounds.unsafe_free()
-        var t_prim_ids = alloc[PrimId_C](max(Int(t_tris), 1))
+        var t_prim_ids = unsafe_alloc[PrimId_C](max(Int(t_tris), 1))
         for k in range(Int(t_tris)):
             var orig = Int(t_order[unsafe_offset=k])
             var mi = Int(t_mesh[unsafe_offset=orig])
@@ -2547,7 +2548,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         blas_node_counts[unsafe_offset=tmpl]   = t_node_count
         blas_primid_counts[unsafe_offset=tmpl] = t_tris
 
-    var instances_c = alloc[Instance_C](max(Int(total_instances), 1))
+    var instances_c = unsafe_alloc[Instance_C](max(Int(total_instances), 1))
     for k in range(Int(total_instances)):
         var tmpl_idx = Int(s[unsafe_offset=0].instance_template_idx[k])
         var o2w = SIMD[DType.float32, 16](0.0)
@@ -2592,8 +2593,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # chasing further when structurally preventing GPU from ever seeing one
     # of these leaves is the clean fix anyway).
     var max_bvh_nodes_gpu = Int(total_prims_gpu) * 2 + 4
-    var bvh_nodes_gpu = alloc[BVH2Node](max_bvh_nodes_gpu)
-    var bvh_order_gpu = alloc[Int32](Int(total_prims_gpu))
+    var bvh_nodes_gpu = unsafe_alloc[BVH2Node](max_bvh_nodes_gpu)
+    var bvh_order_gpu = unsafe_alloc[Int32](Int(total_prims_gpu))
     var node_count_gpu = build_bvh2(prim_bounds, total_prims_gpu, bvh_nodes_gpu, bvh_order_gpu)
 
     # ---- CPU-inclusive TLAS: tris + curves + instances ----
@@ -2606,18 +2607,18 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     var bvh_order = bvh_order_gpu
     var node_count = node_count_gpu
     if not shared_tlas:
-        bvh_nodes = alloc[BVH2Node](Int(total_prims) * 2 + 4)
-        bvh_order = alloc[Int32](Int(total_prims))
+        bvh_nodes = unsafe_alloc[BVH2Node](Int(total_prims) * 2 + 4)
+        bvh_order = unsafe_alloc[Int32](Int(total_prims))
         node_count = build_bvh2(prim_bounds, total_prims, bvh_nodes, bvh_order)
 
     prim_bounds.unsafe_free()
 
-    var prim_ids_gpu = alloc[PrimId_C](Int(total_prims_gpu))
+    var prim_ids_gpu = unsafe_alloc[PrimId_C](Int(total_prims_gpu))
     var prim_ids = prim_ids_gpu
     if not shared_tlas:
-        prim_ids = alloc[PrimId_C](Int(total_prims))
+        prim_ids = unsafe_alloc[PrimId_C](Int(total_prims))
 
-    var mesh_al_idx = alloc[Int32](max(n_meshes, 1))
+    var mesh_al_idx = unsafe_alloc[Int32](max(n_meshes, 1))
     var running_al = Int32(0)
     for mi in range(n_meshes):
         if s[unsafe_offset=0].meshes[mi].is_area_light:
@@ -2727,7 +2728,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     var rng_seed = UInt64(perf_counter_ns())
 
     # ---- Film filename copy ----
-    var fname = alloc[UInt8](PSC_FILE_MAX)
+    var fname = unsafe_alloc[UInt8](PSC_FILE_MAX)
     var fnstr = s[unsafe_offset=0].film_filename
     var fnlen = min(fnstr.byte_length(), PSC_FILE_MAX - 1)
     for fi in range(fnlen): fname[unsafe_offset=fi] = fnstr.unsafe_ptr()[unsafe_offset=fi]
@@ -2735,11 +2736,11 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
 
     # ---- Texture filename table ----
     var n_tex = len(s[unsafe_offset=0].tex_names)
-    var tex_ptrs = alloc[Pointer[UInt8, MutUntrackedOrigin]](max(n_tex, 1))
+    var tex_ptrs = unsafe_alloc[Pointer[UInt8, MutUntrackedOrigin]](max(n_tex, 1))
     for ti in range(n_tex):
         var fstr = s[unsafe_offset=0].tex_files[ti]
         var slen = fstr.byte_length()
-        var copy = alloc[UInt8](slen + 1)
+        var copy = unsafe_alloc[UInt8](slen + 1)
         for ci in range(slen): copy[unsafe_offset=ci] = fstr.unsafe_ptr()[unsafe_offset=ci]
         copy[unsafe_offset=slen] = UInt8(0)
         tex_ptrs[unsafe_offset=ti] = copy
@@ -2814,16 +2815,16 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # sms.mojo's nmap_eval/nmap_eval_derivs for the evaluation.
     psc[unsafe_offset=0].nmaps = Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling()
     if n_tex > 0:
-        var nmaps = alloc[NormalSlopeMap_C](n_tex)
+        var nmaps = unsafe_alloc[NormalSlopeMap_C](n_tex)
         for ti in range(n_tex):
             nmaps[unsafe_offset=ti] = normal_slope_map_none()
         # Each map is decoded and converted independently, and a scene can have
         # many (Bistro: 132, ~15 s of startup serially), so convert them on all
         # cores. First collect the distinct texture indices, in material order.
-        var is_nmap = alloc[Bool](n_tex)
+        var is_nmap = unsafe_alloc[Bool](n_tex)
         for ti in range(n_tex):
             is_nmap[unsafe_offset=ti] = False
-        var nm_idx = alloc[Int](n_tex)
+        var nm_idx = unsafe_alloc[Int](n_tex)
         var n_nm = 0
         for mi in range(n_mats):
             var nti = Int(mats[unsafe_offset=mi].normal_tex_idx)
@@ -2832,8 +2833,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 nm_idx[unsafe_offset=n_nm] = nti
                 n_nm += 1
         # (w, h) of each map skipped for not being square, reported below in order.
-        var nonsquare = alloc[Int32](max(n_nm, 1) * 2)
-        var next_nm = alloc[Int32](1)
+        var nonsquare = unsafe_alloc[Int32](max(n_nm, 1) * 2)
+        var next_nm = unsafe_alloc[Int32](1)
         next_nm[unsafe_offset=0] = Int32(0)
 
         @parameter
@@ -2844,8 +2845,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                     break
                 var nti = nm_idx[unsafe_offset=k]
                 nonsquare[unsafe_offset=k * 2] = Int32(0); nonsquare[unsafe_offset=k * 2 + 1] = Int32(0)
-                var np_ptr = alloc[Pointer[Float32, MutUntrackedOrigin]](1)
-                var nw_out = alloc[Int32](1); var nh_out = alloc[Int32](1)
+                var np_ptr = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](1)
+                var nw_out = unsafe_alloc[Int32](1); var nh_out = unsafe_alloc[Int32](1)
                 nw_out[unsafe_offset=0] = Int32(0); nh_out[unsafe_offset=0] = Int32(0)
                 var nm_ok = external_call["load_texture_rgb", Int32,
                     Pointer[UInt8, MutUntrackedOrigin],
@@ -2857,7 +2858,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 nw_out.unsafe_free(); nh_out.unsafe_free()
                 if nm_ok != Int32(0) and nw > 0 and nw == nh:
                     var src = np_ptr[unsafe_offset=0]
-                    var slopes = alloc[Float32](2 * nw * nh)
+                    var slopes = unsafe_alloc[Float32](2 * nw * nh)
                     for i in range(nw * nh):
                         var nx = Float32(2.0)*src[unsafe_offset=i*3+0] - Float32(1.0)
                         var ny = Float32(2.0)*src[unsafe_offset=i*3+1] - Float32(1.0)
@@ -2894,7 +2895,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # ---- Non-area lights ----
     var nd = len(s[unsafe_offset=0].distant_dirs) // 3
     if nd > 0:
-        var dl_buf = alloc[DistantLight_C](nd)
+        var dl_buf = unsafe_alloc[DistantLight_C](nd)
         for i in range(nd):
             dl_buf[unsafe_offset=i] = DistantLight_C(
                 Vec3f(s[unsafe_offset=0].distant_dirs[i*3+0], s[unsafe_offset=0].distant_dirs[i*3+1], s[unsafe_offset=0].distant_dirs[i*3+2]),
@@ -2908,7 +2909,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
 
     var np2 = len(s[unsafe_offset=0].point_pos) // 3
     if np2 > 0:
-        var pl_buf = alloc[PointLight_C](np2)
+        var pl_buf = unsafe_alloc[PointLight_C](np2)
         for i in range(np2):
             pl_buf[unsafe_offset=i] = PointLight_C(
                 Point3f(s[unsafe_offset=0].point_pos[i*3+0], s[unsafe_offset=0].point_pos[i*3+1], s[unsafe_offset=0].point_pos[i*3+2]),
@@ -2922,7 +2923,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
 
     var ni = len(s[unsafe_offset=0].inf_tex_idx)
     if ni > 0:
-        var il_buf = alloc[InfiniteLight_C](ni)
+        var il_buf = unsafe_alloc[InfiniteLight_C](ni)
         for i in range(ni):
             var tidx = s[unsafe_offset=0].inf_tex_idx[i]
             var sc = RGB(s[unsafe_offset=0].inf_rgb[i*3+0], s[unsafe_offset=0].inf_rgb[i*3+1], s[unsafe_offset=0].inf_rgb[i*3+2])
@@ -2931,8 +2932,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             var raw_pixels = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
             if tidx >= Int32(0):
                 var fname2 = psc[unsafe_offset=0].tex_filenames[unsafe_offset=Int(tidx)]
-                var pixels_ptr = alloc[Pointer[Float32, MutUntrackedOrigin]](1)
-                var iw_out = alloc[Int32](1); var ih_out = alloc[Int32](1)
+                var pixels_ptr = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](1)
+                var iw_out = unsafe_alloc[Int32](1); var ih_out = unsafe_alloc[Int32](1)
                 iw_out[unsafe_offset=0] = Int32(0); ih_out[unsafe_offset=0] = Int32(0)
                 var load_ok = external_call["load_texture_rgb", Int32,
                     Pointer[UInt8, MutUntrackedOrigin],
@@ -2953,8 +2954,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                     # project_infinite_light_shadows memory.
                     raw_pixels = pixels
                     var cdf_size = (ih + 1) + ih * (iw + 1)
-                    var cdf_buf = alloc[Float32](cdf_size)
-                    var row_sums = alloc[Float32](ih)
+                    var cdf_buf = unsafe_alloc[Float32](cdf_size)
+                    var row_sums = unsafe_alloc[Float32](ih)
                     for ry in range(ih):
                         var row_sum = Float32(0.0)
                         for rx in range(iw):
@@ -2990,7 +2991,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                     cdf_ptr = cdf_buf
                     cdf_w = Int32(iw); cdf_h = Int32(ih)
                 pixels_ptr.unsafe_free()
-            var w2l = alloc[Float32](16)
+            var w2l = unsafe_alloc[Float32](16)
             var light_ctm_base = i * 16
             var is_identity = True
             for ci in range(16):
@@ -3001,7 +3002,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             if is_identity:
                 _psc_identity(w2l)
             else:
-                var light_ctm_tmp = alloc[Float32](16)
+                var light_ctm_tmp = unsafe_alloc[Float32](16)
                 for ci in range(16): light_ctm_tmp[unsafe_offset=ci] = s[unsafe_offset=0].inf_ctm[light_ctm_base + ci]
                 _ = matrix_invert(light_ctm_tmp, w2l)
                 light_ctm_tmp.unsafe_free()
@@ -3014,7 +3015,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # ---- Analytical spheres ----
     var ns = len(s[unsafe_offset=0].spheres_cx)
     if ns > 0:
-        var sph_buf = alloc[Sphere_C](ns)
+        var sph_buf = unsafe_alloc[Sphere_C](ns)
         for i in range(ns):
             var em = RGB(s[unsafe_offset=0].spheres_rgb[i].r, s[unsafe_offset=0].spheres_rgb[i].g, s[unsafe_offset=0].spheres_rgb[i].b)
             var al_flag = Int8(1) if s[unsafe_offset=0].spheres_al[i] else Int8(0)
@@ -3039,7 +3040,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # recomputing.
     var nc = len(s[unsafe_offset=0].curves_mat)
     if nc > 0:
-        var curve_buf = alloc[Curve_C](nc)
+        var curve_buf = unsafe_alloc[Curve_C](nc)
         for i in range(nc):
             var cb = i * 12
             curve_buf[unsafe_offset=i] = Curve_C(
@@ -3072,19 +3073,19 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # ---- Heterogeneous density grids ("uniformgrid" media) ----
     var ng = len(s[unsafe_offset=0].grid_nx)
     if ng > 0:
-        var grid_buf = alloc[Grid_C](ng)
+        var grid_buf = unsafe_alloc[Grid_C](ng)
         for i in range(ng):
             var nx = s[unsafe_offset=0].grid_nx[i]; var ny = s[unsafe_offset=0].grid_ny[i]; var nz = s[unsafe_offset=0].grid_nz[i]
             var n_voxels = Int(nx) * Int(ny) * Int(nz)
-            var density_buf = alloc[Float32](max(n_voxels, 1))
+            var density_buf = unsafe_alloc[Float32](max(n_voxels, 1))
             var base = Int(s[unsafe_offset=0].grid_density_base[i])
             var max_d = Float32(0.0)
             for vi in range(n_voxels):
                 var dv = s[unsafe_offset=0].grid_density[base + vi]
                 density_buf[unsafe_offset=vi] = dv
                 if dv > max_d: max_d = dv
-            var ctm_tmp = alloc[Float32](16)
-            var w2m = alloc[Float32](16)
+            var ctm_tmp = unsafe_alloc[Float32](16)
+            var w2m = unsafe_alloc[Float32](16)
             for ci in range(16):
                 ctm_tmp[unsafe_offset=ci] = s[unsafe_offset=0].grid_ctm[i*16 + ci]
             _ = matrix_invert(ctm_tmp, w2m)
@@ -3115,17 +3116,17 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # never unsafe, and `print`ed so it isn't silent in the log.
     var nvg = len(s[unsafe_offset=0].nvdb_filenames)
     if nvg > 0:
-        var nvdb_buf = alloc[NvdbGrid_C](nvg)
+        var nvdb_buf = unsafe_alloc[NvdbGrid_C](nvg)
         for i in range(nvg):
             var path_str = s[unsafe_offset=0].nvdb_filenames[i]
             var plen = path_str.byte_length()
-            var cpath = alloc[UInt8](plen + 1)
+            var cpath = unsafe_alloc[UInt8](plen + 1)
             for ci in range(plen):
                 cpath[unsafe_offset=ci] = path_str.unsafe_ptr()[unsafe_offset=ci]
             cpath[unsafe_offset=plen] = UInt8(0)
             var gname = s[unsafe_offset=0].nvdb_gridnames[i]
             var glen = gname.byte_length()
-            var cname = alloc[UInt8](glen + 1)
+            var cname = unsafe_alloc[UInt8](glen + 1)
             for ci in range(glen):
                 cname[unsafe_offset=ci] = gname.unsafe_ptr()[unsafe_offset=ci]
             cname[unsafe_offset=glen] = UInt8(0)
@@ -3155,24 +3156,24 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             else:
                 var blob_size = Int(nvdb_size(handle))
                 blob_size_v = Int64(blob_size)
-                blob = alloc[UInt8](max(blob_size, 1))
+                blob = unsafe_alloc[UInt8](max(blob_size, 1))
                 var src = nvdb_data(handle)
                 # memcpy, not a per-byte Mojo loop: bunny_cloud alone is
                 # 146.6MB decompressed, and a scalar byte-index loop over
                 # that is orders of magnitude slower than a real memcpy --
                 # slow enough it looked like a hang/crash during bring-up.
                 unsafe_memcpy(dest=blob, src=src, count=blob_size)
-                var ibbmin = alloc[Int32](3); var ibbmax = alloc[Int32](3)
+                var ibbmin = unsafe_alloc[Int32](3); var ibbmax = unsafe_alloc[Int32](3)
                 nvdb_index_bbox(handle, ibbmin, ibbmax)
                 idx_min = Point3f(Float32(ibbmin[unsafe_offset=0]), Float32(ibbmin[unsafe_offset=1]), Float32(ibbmin[unsafe_offset=2]))
                 idx_max = Point3f(Float32(ibbmax[unsafe_offset=0]), Float32(ibbmax[unsafe_offset=1]), Float32(ibbmax[unsafe_offset=2]))
                 ibbmin.unsafe_free(); ibbmax.unsafe_free()
-                var lo = alloc[Float32](1); var hi = alloc[Float32](1)
+                var lo = unsafe_alloc[Float32](1); var hi = unsafe_alloc[Float32](1)
                 lo[unsafe_offset=0] = Float32(0); hi[unsafe_offset=0] = Float32(0)
                 nvdb_value_range(handle, lo, hi)
                 max_d = hi[unsafe_offset=0]
                 lo.unsafe_free(); hi.unsafe_free()
-                var im9 = alloc[Float32](9); var v3 = alloc[Float32](3)
+                var im9 = unsafe_alloc[Float32](9); var v3 = unsafe_alloc[Float32](3)
                 nvdb_map_invmatf(handle, im9); nvdb_map_vecf(handle, v3)
                 imat = SIMD[DType.float32, 16](
                     im9[unsafe_offset=0], im9[unsafe_offset=1], im9[unsafe_offset=2], im9[unsafe_offset=3], im9[unsafe_offset=4], im9[unsafe_offset=5], im9[unsafe_offset=6], im9[unsafe_offset=7], im9[unsafe_offset=8],
@@ -3181,8 +3182,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 im9.unsafe_free(); v3.unsafe_free()
                 nvdb_free(handle)
 
-            var ctm_tmp2 = alloc[Float32](16)
-            var w2m2 = alloc[Float32](16)
+            var ctm_tmp2 = unsafe_alloc[Float32](16)
+            var w2m2 = unsafe_alloc[Float32](16)
             for ci in range(16):
                 ctm_tmp2[unsafe_offset=ci] = s[unsafe_offset=0].nvdb_ctm[i*16 + ci]
             _ = matrix_invert(ctm_tmp2, w2m2)
@@ -3200,7 +3201,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # ---- Media ----
     var nm = len(s[unsafe_offset=0].med_g)
     if nm > 0:
-        var med_buf = alloc[Medium_C](nm)
+        var med_buf = unsafe_alloc[Medium_C](nm)
         for i in range(nm):
             var sa = RGB(s[unsafe_offset=0].med_sa[i*3], s[unsafe_offset=0].med_sa[i*3+1], s[unsafe_offset=0].med_sa[i*3+2])
             var ss = RGB(s[unsafe_offset=0].med_ss[i*3], s[unsafe_offset=0].med_ss[i*3+1], s[unsafe_offset=0].med_ss[i*3+2])
@@ -3216,7 +3217,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
 
     # ---- Build power-weighted area light CDF ----
     var ls_n = Int(psc[unsafe_offset=0].area_light_count)
-    var ls_cdf = alloc[Float32](max(ls_n + 1, 2))
+    var ls_cdf = unsafe_alloc[Float32](max(ls_n + 1, 2))
     ls_cdf[unsafe_offset=0] = Float32(0.0)
     var ls_total_power = Float32(0.0)
     for i in range(ls_n):
@@ -3249,17 +3250,17 @@ def resize_film(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
         smin_x = Float32(-1); smax_x = Float32(1)
         smin_y = -Float32(1)/frame; smax_y = Float32(1)/frame
 
-    var str_mat = alloc[Float32](16)
+    var str_mat = unsafe_alloc[Float32](16)
     make_screen_to_raster(new_w, new_h, smin_x, smax_x, smin_y, smax_y, str_mat)
-    var rts = alloc[Float32](16)
+    var rts = unsafe_alloc[Float32](16)
     _ = matrix_invert(str_mat, rts)
-    var cts = alloc[Float32](16)
+    var cts = unsafe_alloc[Float32](16)
     make_perspective_matrix(psc[unsafe_offset=0].camera_fov, Float32(0.01), cts)
-    var cts_inv = alloc[Float32](16)
+    var cts_inv = unsafe_alloc[Float32](16)
     _ = matrix_invert(cts, cts_inv)
     if Int(psc[unsafe_offset=0].raster_to_camera) > 1:
         psc[unsafe_offset=0].raster_to_camera.unsafe_free()
-    var r2c = alloc[Float32](16)
+    var r2c = unsafe_alloc[Float32](16)
     matrix_multiply(cts_inv, rts, r2c)
     psc[unsafe_offset=0].raster_to_camera = r2c
     cts.unsafe_free(); str_mat.unsafe_free(); rts.unsafe_free(); cts_inv.unsafe_free()
@@ -3274,7 +3275,7 @@ def mojo_parse_scene(path: Pointer[UInt8, MutUntrackedOrigin],
         scanner_free(handle)
         return Pointer[ParsedScene_Mojo, MutUntrackedOrigin].unsafe_dangling()
 
-    var s_ptr = alloc[SceneParseState](1)
+    var s_ptr = unsafe_alloc[SceneParseState](1)
     s_ptr.init_pointee_move(SceneParseState())
     var pi = 0
     while path[unsafe_offset=pi] != UInt8(0):
@@ -3284,7 +3285,7 @@ def mojo_parse_scene(path: Pointer[UInt8, MutUntrackedOrigin],
         if path[unsafe_offset=ki] == UInt8(47):
             last_slash = ki
     if last_slash >= 0:
-        var dir_tmp = alloc[UInt8](last_slash + 2)
+        var dir_tmp = unsafe_alloc[UInt8](last_slash + 2)
         for ki in range(last_slash + 1):
             dir_tmp[unsafe_offset=ki] = path[unsafe_offset=ki]
         dir_tmp[unsafe_offset=last_slash + 1] = UInt8(0)
@@ -3293,7 +3294,7 @@ def mojo_parse_scene(path: Pointer[UInt8, MutUntrackedOrigin],
     parse_scene_file(handle, s_ptr)
     scanner_free(handle)
 
-    var psc = alloc[ParsedScene_Mojo](1)
+    var psc = unsafe_alloc[ParsedScene_Mojo](1)
     finalize_scene(s_ptr, psc, verbose)
     _ = s_ptr.take_pointee()
     s_ptr.unsafe_free()
@@ -3450,7 +3451,7 @@ def mojo_apply_overrides(
     if w_override > Int32(0) and h_override > Int32(0):
         psc[unsafe_offset=0].film_w = w_override
         psc[unsafe_offset=0].film_h = h_override
-        var cts = alloc[Float32](16)
+        var cts = unsafe_alloc[Float32](16)
         make_perspective_matrix(psc[unsafe_offset=0].camera_fov, Float32(0.01), cts)
         var frame = Float32(w_override) / Float32(h_override)
         var smin_x: Float32; var smax_x: Float32
@@ -3460,12 +3461,12 @@ def mojo_apply_overrides(
         else:
             smin_x = Float32(-1); smax_x = Float32(1)
             smin_y = -Float32(1)/frame; smax_y = Float32(1)/frame
-        var str_mat = alloc[Float32](16)
+        var str_mat = unsafe_alloc[Float32](16)
         make_screen_to_raster(w_override, h_override,
                               smin_x, smax_x, smin_y, smax_y, str_mat)
-        var rts = alloc[Float32](16)
+        var rts = unsafe_alloc[Float32](16)
         _ = matrix_invert(str_mat, rts)
-        var cts_inv = alloc[Float32](16)
+        var cts_inv = unsafe_alloc[Float32](16)
         _ = matrix_invert(cts, cts_inv)
         matrix_multiply(cts_inv, rts, psc[unsafe_offset=0].raster_to_camera)
         cts.unsafe_free(); str_mat.unsafe_free(); rts.unsafe_free(); cts_inv.unsafe_free()
@@ -3484,7 +3485,7 @@ def mojo_parsed_scene_descriptor(
     psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
     spectral: SpectralHandle,
 ) -> Pointer[SceneDescriptor2_C, MutUntrackedOrigin]:
-    var sd = alloc[SceneDescriptor2_C](1)
+    var sd = unsafe_alloc[SceneDescriptor2_C](1)
     sd[unsafe_offset=0].bvh2Nodes        = psc[unsafe_offset=0].bvh_nodes_cpu
     sd[unsafe_offset=0].primIds          = psc[unsafe_offset=0].prim_ids_cpu
     sd[unsafe_offset=0].meshes           = psc[unsafe_offset=0].meshes

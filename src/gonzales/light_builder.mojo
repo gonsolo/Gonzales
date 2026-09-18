@@ -1,4 +1,4 @@
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.math import sqrt
 from .lexer import (PbrtScanner, scanner_parse_quoted_string, _psc_collect_params,
                     _psc_streq)
@@ -8,7 +8,7 @@ from .transform import transform_points
 
 def _psc_handle_area_light_source(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                                  s: Pointer[SceneParseState, MutUntrackedOrigin]):
-    var sbuf = alloc[UInt8](64)
+    var sbuf = unsafe_alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
     sbuf.unsafe_free()
     var params = _psc_collect_params(handle)
@@ -19,7 +19,7 @@ def _psc_handle_area_light_source(handle: Pointer[PbrtScanner, MutUntrackedOrigi
 
 def handle_light_source(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                              s: Pointer[SceneParseState, MutUntrackedOrigin]):
-    var ltype = alloc[UInt8](64)
+    var ltype = unsafe_alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, ltype, 64)
     var params = _psc_collect_params(handle)
 
@@ -45,10 +45,10 @@ def handle_light_source(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         # is why that cloud came out dim and wrongly shaded.
         var dfrom = params.get_rgb("from", RGB(Float32(0), Float32(0), Float32(0)))
         var dto   = params.get_rgb("to",   RGB(Float32(0), Float32(0), Float32(1)))
-        var draw = alloc[Float32](8)
+        var draw = unsafe_alloc[Float32](8)
         draw[unsafe_offset=0] = dfrom.r; draw[unsafe_offset=1] = dfrom.g; draw[unsafe_offset=2] = dfrom.b; draw[unsafe_offset=3] = Float32(1)
         draw[unsafe_offset=4] = dto.r;   draw[unsafe_offset=5] = dto.g;   draw[unsafe_offset=6] = dto.b;   draw[unsafe_offset=7] = Float32(1)
-        var dfin = alloc[Float32](8)
+        var dfin = unsafe_alloc[Float32](8)
         transform_points(s[unsafe_offset=0].ctm.unsafe_ptr(), draw, Int32(2), dfin)
         var ddx = dfin[unsafe_offset=4] - dfin[unsafe_offset=0]
         var ddy = dfin[unsafe_offset=5] - dfin[unsafe_offset=1]
@@ -67,9 +67,9 @@ def handle_light_source(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         s[unsafe_offset=0].distant_rgbs.append(rgb.b * scale)
     elif _psc_streq(ltype, "point"):
         # Apply current CTM to position
-        var raw = alloc[Float32](4)
+        var raw = unsafe_alloc[Float32](4)
         raw[unsafe_offset=0] = xyz.r; raw[unsafe_offset=1] = xyz.g; raw[unsafe_offset=2] = xyz.b; raw[unsafe_offset=3] = Float32(1)
-        var fin = alloc[Float32](4)
+        var fin = unsafe_alloc[Float32](4)
         transform_points(s[unsafe_offset=0].ctm.unsafe_ptr(), raw, Int32(1), fin)
         s[unsafe_offset=0].point_pos.append(fin[unsafe_offset=0])
         s[unsafe_offset=0].point_pos.append(fin[unsafe_offset=1])

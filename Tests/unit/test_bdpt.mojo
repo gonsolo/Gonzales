@@ -12,7 +12,7 @@
 # geometrically irrelevant) BVH to satisfy _connect's visibility check.
 
 from std.math import abs
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import (
     LobeKind,
@@ -354,9 +354,9 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
-    var lvc = alloc[BDPTVertex](1)
+    var lvc = unsafe_alloc[BDPTVertex](1)
     lvc[unsafe_offset=0] = lv
-    var scratch = alloc[Intersection_C](1)
+    var scratch = unsafe_alloc[Intersection_C](1)
 
     var result = _bdpt_connect_to_cache(cv, sd, False, scratch, lvc, 0, 1, Float32(0))
 

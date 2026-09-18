@@ -1,4 +1,4 @@
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator
 from std.testing import assert_true, TestSuite
 from std.math import abs
@@ -23,22 +23,22 @@ def test_vulkanrt_trace_rays_batches_and_matches_cpu_barycentrics() raises:
         return
 
     # Mesh 0: triangle (0,0,0)-(1,0,0)-(0,1,0) at z=0.
-    var pts0 = alloc[Float32](12)
+    var pts0 = unsafe_alloc[Float32](12)
     var tri0 = [Float32(0), 0, 0, 1,  1, 0, 0, 1,  0, 1, 0, 1]
     for i in range(12):
         pts0[unsafe_offset=i] = tri0[i]
-    var idx0 = alloc[Int64](3)
+    var idx0 = unsafe_alloc[Int64](3)
     idx0[unsafe_offset=0] = 0; idx0[unsafe_offset=1] = 1; idx0[unsafe_offset=2] = 2
 
     # Mesh 1: triangle (5,0,0)-(6,0,0)-(5,1,0) at z=0, far away in x.
-    var pts1 = alloc[Float32](12)
+    var pts1 = unsafe_alloc[Float32](12)
     var tri1 = [Float32(5), 0, 0, 1,  6, 0, 0, 1,  5, 1, 0, 1]
     for i in range(12):
         pts1[unsafe_offset=i] = tri1[i]
-    var idx1 = alloc[Int64](3)
+    var idx1 = unsafe_alloc[Int64](3)
     idx1[unsafe_offset=0] = 0; idx1[unsafe_offset=1] = 1; idx1[unsafe_offset=2] = 2
 
-    var meshes = alloc[TriangleMesh_C](2)
+    var meshes = unsafe_alloc[TriangleMesh_C](2)
     meshes[unsafe_offset=0] = TriangleMesh_C(
         pts0, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), idx0,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
@@ -50,9 +50,9 @@ def test_vulkanrt_trace_rays_batches_and_matches_cpu_barycentrics() raises:
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
 
-    var point_counts = alloc[Int64](2)
+    var point_counts = unsafe_alloc[Int64](2)
     point_counts[unsafe_offset=0] = 3; point_counts[unsafe_offset=1] = 3
-    var idx_counts = alloc[Int64](2)
+    var idx_counts = unsafe_alloc[Int64](2)
     idx_counts[unsafe_offset=0] = 3; idx_counts[unsafe_offset=1] = 3
 
     var scene = vulkanrt_build_scene(meshes, Int64(2), point_counts, idx_counts)
@@ -61,7 +61,7 @@ def test_vulkanrt_trace_rays_batches_and_matches_cpu_barycentrics() raises:
     # 4 rays in one batch: hits mesh 0, hits mesh 1, misses both, repeats
     # mesh 0's ray at a different offset.
     comptime N = 4
-    var rays = alloc[Float32](N * 8)
+    var rays = unsafe_alloc[Float32](N * 8)
     # ray 0: hits mesh 0 at (0.25, 0.25)
     rays[unsafe_offset=0] = 0.25; rays[unsafe_offset=1] = 0.25; rays[unsafe_offset=2] = -1.0; rays[unsafe_offset=3] = 0.001
     rays[unsafe_offset=4] = 0.0; rays[unsafe_offset=5] = 0.0; rays[unsafe_offset=6] = 1.0; rays[unsafe_offset=7] = 10.0
@@ -75,12 +75,12 @@ def test_vulkanrt_trace_rays_batches_and_matches_cpu_barycentrics() raises:
     rays[unsafe_offset=24] = 0.1; rays[unsafe_offset=25] = 0.1; rays[unsafe_offset=26] = -1.0; rays[unsafe_offset=27] = 0.001
     rays[unsafe_offset=28] = 0.0; rays[unsafe_offset=29] = 0.0; rays[unsafe_offset=30] = 1.0; rays[unsafe_offset=31] = 10.0
 
-    var out_t = alloc[Float32](N)
-    var out_u = alloc[Float32](N)
-    var out_v = alloc[Float32](N)
-    var out_mesh = alloc[Int32](N)
-    var out_tri = alloc[Int32](N)
-    var out_hit = alloc[UInt8](N)
+    var out_t = unsafe_alloc[Float32](N)
+    var out_u = unsafe_alloc[Float32](N)
+    var out_v = unsafe_alloc[Float32](N)
+    var out_mesh = unsafe_alloc[Int32](N)
+    var out_tri = unsafe_alloc[Int32](N)
+    var out_hit = unsafe_alloc[UInt8](N)
 
     var rc = vulkanrt_trace_rays(scene, Int32(N), rays, out_t, out_u, out_v,
                                   out_mesh, out_tri, out_hit)

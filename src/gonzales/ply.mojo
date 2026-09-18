@@ -1,4 +1,4 @@
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 
 comptime PLY_X    = 0
 comptime PLY_Y    = 1
@@ -142,7 +142,7 @@ def _ply_u8_at(buf: Pointer[UInt8, MutUntrackedOrigin], pos: Int) -> Int:
     return Int(buf[unsafe_offset=pos])
 
 def _ply_f32_be(buf: Pointer[UInt8, MutUntrackedOrigin], pos: Int) -> Float32:
-    var tmp = alloc[UInt8](4)
+    var tmp = unsafe_alloc[UInt8](4)
     tmp[unsafe_offset=0] = buf[unsafe_offset=pos + 3]; tmp[unsafe_offset=1] = buf[unsafe_offset=pos + 2]
     tmp[unsafe_offset=2] = buf[unsafe_offset=pos + 1]; tmp[unsafe_offset=3] = buf[unsafe_offset=pos + 0]
     var v = tmp.unsafe_bitcast[Float32]()[unsafe_offset=0]
@@ -150,7 +150,7 @@ def _ply_f32_be(buf: Pointer[UInt8, MutUntrackedOrigin], pos: Int) -> Float32:
     return v
 
 def _ply_i32_be(buf: Pointer[UInt8, MutUntrackedOrigin], pos: Int) -> Int32:
-    var tmp = alloc[UInt8](4)
+    var tmp = unsafe_alloc[UInt8](4)
     tmp[unsafe_offset=0] = buf[unsafe_offset=pos + 3]; tmp[unsafe_offset=1] = buf[unsafe_offset=pos + 2]
     tmp[unsafe_offset=2] = buf[unsafe_offset=pos + 1]; tmp[unsafe_offset=3] = buf[unsafe_offset=pos + 0]
     var v = tmp.unsafe_bitcast[Int32]()[unsafe_offset=0]
@@ -159,7 +159,7 @@ def _ply_i32_be(buf: Pointer[UInt8, MutUntrackedOrigin], pos: Int) -> Int32:
 
 # Read a 64-bit double and return as Float32 (for double-precision PLY positions).
 def _ply_f64_le(buf: Pointer[UInt8, MutUntrackedOrigin], pos: Int) -> Float32:
-    var tmp = alloc[UInt8](8)
+    var tmp = unsafe_alloc[UInt8](8)
     for k in range(8):
         tmp[unsafe_offset=k] = buf[unsafe_offset=pos + k]
     var d = tmp.unsafe_bitcast[Float64]()[unsafe_offset=0]
@@ -167,7 +167,7 @@ def _ply_f64_le(buf: Pointer[UInt8, MutUntrackedOrigin], pos: Int) -> Float32:
     return Float32(d)
 
 def _ply_f64_be(buf: Pointer[UInt8, MutUntrackedOrigin], pos: Int) -> Float32:
-    var tmp = alloc[UInt8](8)
+    var tmp = unsafe_alloc[UInt8](8)
     for k in range(8):
         tmp[unsafe_offset=k] = buf[unsafe_offset=pos + 7 - k]
     var d = tmp.unsafe_bitcast[Float64]()[unsafe_offset=0]
@@ -208,7 +208,7 @@ def load_ply(
         var bytes = f.read_bytes()
         f.close()
         file_size = len(bytes)
-        file_buf = alloc[UInt8](file_size + 1)
+        file_buf = unsafe_alloc[UInt8](file_size + 1)
         for i in range(file_size):
             file_buf[unsafe_offset=i] = bytes[i]
         file_buf[unsafe_offset=file_size] = UInt8(0)
@@ -220,7 +220,7 @@ def load_ply(
         print("PLY load FAILED (cannot open/read):", path_str)
         return Int32(0)
 
-    var line_buf = alloc[UInt8](512)
+    var line_buf = unsafe_alloc[UInt8](512)
     var pos = 0
 
     pos = _ply_read_line(file_buf, file_size, pos, line_buf, 512)
@@ -241,9 +241,9 @@ def load_ply(
     var n_faces = 0
 
     # Per-vertex property role (PLY_X/Y/Z/SKIP) and byte size
-    var prop_roles = alloc[Int32](PLY_MAX_PROPS)
-    var prop_sizes = alloc[Int32](PLY_MAX_PROPS)  # byte size of each property
-    var prop_is_double = alloc[Int32](PLY_MAX_PROPS)  # 1 if float64/double
+    var prop_roles = unsafe_alloc[Int32](PLY_MAX_PROPS)
+    var prop_sizes = unsafe_alloc[Int32](PLY_MAX_PROPS)  # byte size of each property
+    var prop_is_double = unsafe_alloc[Int32](PLY_MAX_PROPS)  # 1 if float64/double
     var n_props = 0
 
     var face_count_size = 1   # bytes for face vertex-count field (uchar=1 by default)
@@ -306,11 +306,11 @@ def load_ply(
         prop_is_double.unsafe_free(); file_buf.unsafe_free()
         return Int32(0)
 
-    var pts     = alloc[Float32](n_verts * 3)
-    var uvs_buf = alloc[Float32](n_verts * 2)
-    var nrm_buf = alloc[Float32](n_verts * 3)
+    var pts     = unsafe_alloc[Float32](n_verts * 3)
+    var uvs_buf = unsafe_alloc[Float32](n_verts * 2)
+    var nrm_buf = unsafe_alloc[Float32](n_verts * 3)
     var max_idx = n_faces * 6   # worst case: quads → 2 triangles each
-    var idx_buf = alloc[Int32](max_idx)
+    var idx_buf = unsafe_alloc[Int32](max_idx)
     var n_tris  = 0
     var found_uvs = False
     var found_normals = False
@@ -375,7 +375,7 @@ def load_ply(
             if not is_ascii:
                 pos += cnt * face_idx_size
             continue
-        var face_idx = alloc[Int32](cnt)
+        var face_idx = unsafe_alloc[Int32](cnt)
         for fi in range(cnt):
             if is_ascii:
                 face_idx[unsafe_offset=fi] = Int32(_ply_word_to_int(line_buf, fi + 1))

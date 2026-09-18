@@ -1,5 +1,5 @@
 from std.math import abs, max
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, assert_equal, TestSuite
 from gonzales.geometry import Point3f, Vec3f
 from gonzales.bvh import intersect_aabb, build_bvh2, BVH2Node
@@ -107,7 +107,7 @@ def _fill_boxes(bounds: Pointer[Float32, MutUntrackedOrigin], n: Int, seed: UInt
     every dup_every-th box an exact copy of the one before (dup_every == 1:
     all boxes identical), which exercises degenerate splits."""
     var s = seed
-    var cc = alloc[Float32](max(clusters, 1) * 3)
+    var cc = unsafe_alloc[Float32](max(clusters, 1) * 3)
     for k in range(max(clusters, 1) * 3):
         s = s * UInt64(6364136223846793005) + UInt64(1442695040888963407)
         cc[unsafe_offset=k] = Float32(s >> 40) / Float32(1 << 24) * Float32(100.0)
@@ -134,12 +134,12 @@ def _fill_boxes(bounds: Pointer[Float32, MutUntrackedOrigin], n: Int, seed: UInt
 comptime _TEST_SUBTREE_PRIMS = 64
 
 def _check_parallel_matches_serial(n: Int, seed: UInt64, clusters: Int, dup_every: Int) raises:
-    var bounds = alloc[Float32](n * 6)
+    var bounds = unsafe_alloc[Float32](n * 6)
     _fill_boxes(bounds, n, seed, clusters, dup_every)
-    var serial_nodes = alloc[BVH2Node](2 * n + 4)
-    var parallel_nodes = alloc[BVH2Node](2 * n + 4)
-    var serial_order = alloc[Int32](n)
-    var parallel_order = alloc[Int32](n)
+    var serial_nodes = unsafe_alloc[BVH2Node](2 * n + 4)
+    var parallel_nodes = unsafe_alloc[BVH2Node](2 * n + 4)
+    var serial_order = unsafe_alloc[Int32](n)
+    var parallel_order = unsafe_alloc[Int32](n)
     var serial_count = build_bvh2(bounds, Int32(n), serial_nodes, serial_order, parallel=False)
     var parallel_count = build_bvh2(bounds, Int32(n), parallel_nodes, parallel_order,
                                     parallel=True, subtree_prims=_TEST_SUBTREE_PRIMS)

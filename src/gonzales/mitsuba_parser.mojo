@@ -1,4 +1,4 @@
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.math import tan, atan2, sqrt, cos, sin
 from std.ffi import external_call
 from .diagnostics import warn_unsupported
@@ -59,7 +59,7 @@ struct MitsubaTag(Copyable, Movable):
 
 def _mxml_make_string(buf: Pointer[UInt8, MutUntrackedOrigin], start: Int, end: Int) -> String:
     var n = end - start
-    var tmp = alloc[UInt8](n + 1)
+    var tmp = unsafe_alloc[UInt8](n + 1)
     for i in range(n):
         tmp[unsafe_offset=i] = buf[unsafe_offset=start + i]
     tmp[unsafe_offset=n] = UInt8(0)
@@ -286,7 +286,7 @@ def _mit_parse_floats(s: String) -> List[Float32]:
 def _mit_string_from(s: String, start: Int) -> String:
     var bytes = s.as_bytes()
     var n = len(bytes)
-    var buf = alloc[UInt8](n - start + 1)
+    var buf = unsafe_alloc[UInt8](n - start + 1)
     for i in range(start, n):
         buf[unsafe_offset=i - start] = bytes[i]
     buf[unsafe_offset=n - start] = UInt8(0)
@@ -545,10 +545,10 @@ def _mit_process_sensor(tags: List[MitsubaTag], start: Int, end: Int,
         c2w_col[0] = -c2w_col[0]
         c2w_col[1] = -c2w_col[1]
         c2w_col[2] = -c2w_col[2]
-        var c2w_arr = alloc[Float32](16)
+        var c2w_arr = unsafe_alloc[Float32](16)
         for k in range(16):
             c2w_arr[unsafe_offset=k] = c2w_col[k]
-        var w2c = alloc[Float32](16)
+        var w2c = unsafe_alloc[Float32](16)
         _ = matrix_invert(c2w_arr, w2c)
         for k in range(16):
             s_ptr[unsafe_offset=0].cam2w_raw[k] = w2c[unsafe_offset=k]
@@ -819,10 +819,10 @@ def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
             return
         nv = mesh.n_verts
         nt = mesh.n_tris
-        tmp_f = alloc[Float32](Int(nv) * 3)
+        tmp_f = unsafe_alloc[Float32](Int(nv) * 3)
         for k in range(Int(nv) * 3):
             tmp_f[unsafe_offset=k] = mesh.positions[k]
-        tmp_i = alloc[Int32](Int(nt) * 3)
+        tmp_i = unsafe_alloc[Int32](Int(nt) * 3)
         for k in range(Int(nt) * 3):
             tmp_i[unsafe_offset=k] = mesh.indices[k]
         uvs = mesh.uvs.copy()
@@ -833,12 +833,12 @@ def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
         # mesh file, just a hardcoded 4-vertex/2-triangle quad.
         nv = Int32(4)
         nt = Int32(2)
-        tmp_f = alloc[Float32](12)
+        tmp_f = unsafe_alloc[Float32](12)
         tmp_f[unsafe_offset=0]  = Float32(-1); tmp_f[unsafe_offset=1]  = Float32(-1); tmp_f[unsafe_offset=2]  = Float32(0)
         tmp_f[unsafe_offset=3]  = Float32(1);  tmp_f[unsafe_offset=4]  = Float32(-1); tmp_f[unsafe_offset=5]  = Float32(0)
         tmp_f[unsafe_offset=6]  = Float32(1);  tmp_f[unsafe_offset=7]  = Float32(1);  tmp_f[unsafe_offset=8]  = Float32(0)
         tmp_f[unsafe_offset=9]  = Float32(-1); tmp_f[unsafe_offset=10] = Float32(1);  tmp_f[unsafe_offset=11] = Float32(0)
-        tmp_i = alloc[Int32](6)
+        tmp_i = unsafe_alloc[Int32](6)
         tmp_i[unsafe_offset=0] = Int32(0); tmp_i[unsafe_offset=1] = Int32(1); tmp_i[unsafe_offset=2] = Int32(2)
         tmp_i[unsafe_offset=3] = Int32(0); tmp_i[unsafe_offset=4] = Int32(2); tmp_i[unsafe_offset=5] = Int32(3)
         # Natural unit-square UVs matching the vertex order above -- scaled
@@ -877,12 +877,12 @@ def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
             s_ptr[unsafe_offset=0].meshes[last].uvs.append(uvs[k])
 
     if len(normals) > 0:
-        var nrm_obj = alloc[Float32](Int(nv) * 3)
+        var nrm_obj = unsafe_alloc[Float32](Int(nv) * 3)
         for k in range(Int(nv) * 3):
             nrm_obj[unsafe_offset=k] = normals[k]
-        var ctm_inv = alloc[Float32](16)
+        var ctm_inv = unsafe_alloc[Float32](16)
         _ = matrix_invert(s_ptr[unsafe_offset=0].ctm.unsafe_ptr(), ctm_inv)
-        var nrm_world = alloc[Float32](Int(nv) * 3)
+        var nrm_world = unsafe_alloc[Float32](Int(nv) * 3)
         transform_normals(ctm_inv, nrm_obj, nv, nrm_world)
         ref last_mesh = s_ptr[unsafe_offset=0].meshes[last]
         last_mesh.normals.reserve(Int(nv) * 3)
@@ -920,7 +920,7 @@ def mojo_parse_mitsuba_scene(path: Pointer[UInt8, MutUntrackedOrigin],
             last_slash = ki
     var scene_dir = String("")
     if last_slash >= 0:
-        var dir_tmp = alloc[UInt8](last_slash + 2)
+        var dir_tmp = unsafe_alloc[UInt8](last_slash + 2)
         for ki in range(last_slash + 1):
             dir_tmp[unsafe_offset=ki] = path[unsafe_offset=ki]
         dir_tmp[unsafe_offset=last_slash + 1] = UInt8(0)
@@ -937,7 +937,7 @@ def mojo_parse_mitsuba_scene(path: Pointer[UInt8, MutUntrackedOrigin],
         return Pointer[ParsedScene_Mojo, MutUntrackedOrigin].unsafe_dangling()
 
     var n = len(byte_list)
-    var buf = alloc[UInt8](n)
+    var buf = unsafe_alloc[UInt8](n)
     for i in range(n):
         buf[unsafe_offset=i] = byte_list[i]
     var tags = tokenize_mitsuba_xml(buf, n)
@@ -953,7 +953,7 @@ def mojo_parse_mitsuba_scene(path: Pointer[UInt8, MutUntrackedOrigin],
         print("Error: no <scene> element found in", path_str)
         return Pointer[ParsedScene_Mojo, MutUntrackedOrigin].unsafe_dangling()
 
-    var s_ptr = alloc[SceneParseState](1)
+    var s_ptr = unsafe_alloc[SceneParseState](1)
     s_ptr.init_pointee_move(SceneParseState())
     s_ptr[unsafe_offset=0].scene_dir = scene_dir
 
@@ -974,7 +974,7 @@ def mojo_parse_mitsuba_scene(path: Pointer[UInt8, MutUntrackedOrigin],
             _mit_process_shape(tags, i, blk_end, s_ptr)
         i = blk_end
 
-    var psc = alloc[ParsedScene_Mojo](1)
+    var psc = unsafe_alloc[ParsedScene_Mojo](1)
     finalize_scene(s_ptr, psc, verbose)
     _ = s_ptr.take_pointee()
     s_ptr.unsafe_free()

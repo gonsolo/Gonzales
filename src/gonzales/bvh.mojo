@@ -1,4 +1,4 @@
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.math import sqrt, cos, sin, max, min, exp, floor, log
 from max.algorithm import parallelize
 from std.atomic import Atomic
@@ -2040,14 +2040,14 @@ def _build_bvh2_parallel(
     """The tree build_bvh2_node would build over [0, n), node for node, on all
     cores. Every split only reorders its own range of the work arrays, so the
     same splits in any order give the same arrays and the same nodes."""
-    var tasks = alloc[_BVHTask](_BVH_MAX_TASKS)
+    var tasks = unsafe_alloc[_BVHTask](_BVH_MAX_TASKS)
     tasks[unsafe_offset=0] = _bvh_subtree_task(0, n)
     var n_tasks = 1
 
     # 1. Split the top of the tree level by level, each level's ranges in parallel.
-    var level = alloc[Int](_BVH_MAX_TASKS)
-    var next_level = alloc[Int](_BVH_MAX_TASKS)
-    var splits = alloc[_BVHSplit](_BVH_MAX_TASKS)
+    var level = unsafe_alloc[Int](_BVH_MAX_TASKS)
+    var next_level = unsafe_alloc[Int](_BVH_MAX_TASKS)
+    var splits = unsafe_alloc[_BVHSplit](_BVH_MAX_TASKS)
     level[unsafe_offset=0] = 0
     var n_level = 1
     while n_level > 0 and n_tasks + 2 * n_level <= _BVH_MAX_TASKS:
@@ -2078,13 +2078,13 @@ def _build_bvh2_parallel(
         n_level = n_next
 
     # 2. Build the remaining subtrees concurrently, workers claiming the next one.
-    var subtrees = alloc[Int](n_tasks)
+    var subtrees = unsafe_alloc[Int](n_tasks)
     var n_subtrees = 0
     for i in range(n_tasks):
         if tasks[unsafe_offset=i].left < 0:
             subtrees[unsafe_offset=n_subtrees] = i
             n_subtrees += 1
-    var next_subtree = alloc[Int32](1)
+    var next_subtree = unsafe_alloc[Int32](1)
     next_subtree[unsafe_offset=0] = Int32(0)
 
     @parameter
@@ -2095,8 +2095,8 @@ def _build_bvh2_parallel(
                 break
             var i = subtrees[unsafe_offset=k]
             var t = tasks[unsafe_offset=i]
-            var nodes = alloc[BVH2Node](2 * (t.end - t.start))
-            var cnt = alloc[Int32](1)
+            var nodes = unsafe_alloc[BVH2Node](2 * (t.end - t.start))
+            var cnt = unsafe_alloc[Int32](1)
             cnt[unsafe_offset=0] = Int32(0)
             _ = build_bvh2_node(widx, wmin, wmax, t.start, t.end, nodes, cnt, 4)
             t.nodes = nodes.unsafe_origin_cast[MutUntrackedOrigin]()
@@ -2128,9 +2128,9 @@ def build_bvh2(
     if n <= 0:
         return Int32(0)
 
-    var widx = alloc[Int32](n)
-    var wmin = alloc[Float32](n * 3)
-    var wmax = alloc[Float32](n * 3)
+    var widx = unsafe_alloc[Int32](n)
+    var wmin = unsafe_alloc[Float32](n * 3)
+    var wmax = unsafe_alloc[Float32](n * 3)
     for i in range(n):
         widx[unsafe_offset=i] = Int32(i)
         wmin[unsafe_offset=i*3+0] = primBounds[unsafe_offset=i*6+0]
@@ -2140,7 +2140,7 @@ def build_bvh2(
         wmax[unsafe_offset=i*3+1] = primBounds[unsafe_offset=i*6+4]
         wmax[unsafe_offset=i*3+2] = primBounds[unsafe_offset=i*6+5]
 
-    var node_count = alloc[Int32](1)
+    var node_count = unsafe_alloc[Int32](1)
     node_count[unsafe_offset=0] = 0
     if parallel and n > 4 * subtree_prims:
         _build_bvh2_parallel(widx, wmin, wmax, n, outNodes, node_count, subtree_prims)
@@ -2183,7 +2183,7 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
     var n_pixels = w * h
     var sd = scene[unsafe_offset=0]
     var org = Point3f(cameraToWorld[unsafe_offset=12], cameraToWorld[unsafe_offset=13], cameraToWorld[unsafe_offset=14])
-    var isects = alloc[Intersection_C](n_pixels)
+    var isects = unsafe_alloc[Intersection_C](n_pixels)
 
     @parameter
     def trace_pixel(i: Int):

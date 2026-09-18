@@ -1,5 +1,5 @@
 from std.math import abs
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, TestSuite
 from gonzales.transform import matrix_multiply, matrix_invert, transform_points, transform_normals
 
@@ -37,21 +37,21 @@ def _mat_close(a: Pointer[Float32, MutUntrackedOrigin], b: Pointer[Float32, MutU
 def test_matrix_multiply_identity_is_neutral() raises:
     """Identity * M must return M unchanged — the base case CTM concatenation
     relies on (a fresh CTM starts as the identity)."""
-    var id = alloc[Float32](16); _identity(id)
-    var m = alloc[Float32](16)
+    var id = unsafe_alloc[Float32](16); _identity(id)
+    var m = unsafe_alloc[Float32](16)
     _translation(m, Float32(1.0), Float32(2.0), Float32(3.0))
-    var result = alloc[Float32](16)
+    var result = unsafe_alloc[Float32](16)
     matrix_multiply(id, m, result)
     assert_true(_mat_close(result, m))
     id.unsafe_free(); m.unsafe_free(); result.unsafe_free()
 
 def test_matrix_multiply_translation_composition() raises:
     """T(a) * T(b) must equal T(a+b) — translations compose additively."""
-    var t1 = alloc[Float32](16); _translation(t1, Float32(1.0), Float32(2.0), Float32(3.0))
-    var t2 = alloc[Float32](16); _translation(t2, Float32(4.0), Float32(-1.0), Float32(0.5))
-    var result = alloc[Float32](16)
+    var t1 = unsafe_alloc[Float32](16); _translation(t1, Float32(1.0), Float32(2.0), Float32(3.0))
+    var t2 = unsafe_alloc[Float32](16); _translation(t2, Float32(4.0), Float32(-1.0), Float32(0.5))
+    var result = unsafe_alloc[Float32](16)
     matrix_multiply(t1, t2, result)
-    var expected = alloc[Float32](16)
+    var expected = unsafe_alloc[Float32](16)
     _translation(expected, Float32(5.0), Float32(1.0), Float32(3.5))
     assert_true(_mat_close(result, expected))
     t1.unsafe_free(); t2.unsafe_free(); result.unsafe_free(); expected.unsafe_free()
@@ -60,15 +60,15 @@ def test_matrix_multiply_matches_hand_computed_case() raises:
     """A hand-computed 4x4 * 4x4 case, independent of any translate/scale
     shortcut, to pin down the column-major index arithmetic itself."""
     # a = row-major [[1,2,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]] stored column-major
-    var a = alloc[Float32](16); _identity(a)
+    var a = unsafe_alloc[Float32](16); _identity(a)
     a[unsafe_offset=4] = Float32(2.0)  # row0,col1 = 2  -> flat[col*4+row] = flat[1*4+0] = flat[4]
-    var b = alloc[Float32](16); _identity(b)
+    var b = unsafe_alloc[Float32](16); _identity(b)
     b[unsafe_offset=12] = Float32(3.0); b[unsafe_offset=13] = Float32(5.0); b[unsafe_offset=14] = Float32(7.0)
-    var result = alloc[Float32](16)
+    var result = unsafe_alloc[Float32](16)
     matrix_multiply(a, b, result)
     # Expect: a * b = translate by (3 + 2*5, 5, 7) = (13, 5, 7) in col 3,
     # since row0 of a is [1,2,0,0] dotted with b's translation column (3,5,7,1).
-    var expected = alloc[Float32](16); _identity(expected)
+    var expected = unsafe_alloc[Float32](16); _identity(expected)
     expected[unsafe_offset=4] = Float32(2.0)
     expected[unsafe_offset=12] = Float32(13.0); expected[unsafe_offset=13] = Float32(5.0); expected[unsafe_offset=14] = Float32(7.0)
     assert_true(_mat_close(result, expected))
@@ -77,8 +77,8 @@ def test_matrix_multiply_matches_hand_computed_case() raises:
 # ── matrix_invert ────────────────────────────────────────────────────────────
 
 def test_matrix_invert_of_identity_is_identity() raises:
-    var id = alloc[Float32](16); _identity(id)
-    var result = alloc[Float32](16)
+    var id = unsafe_alloc[Float32](16); _identity(id)
+    var result = unsafe_alloc[Float32](16)
     var ok = matrix_invert(id, result)
     assert_true(ok == Int32(1))
     assert_true(_mat_close(result, id))
@@ -86,25 +86,25 @@ def test_matrix_invert_of_identity_is_identity() raises:
 
 def test_matrix_invert_translation() raises:
     """Inverse of T(tx,ty,tz) is exactly T(-tx,-ty,-tz)."""
-    var t = alloc[Float32](16); _translation(t, Float32(2.0), Float32(-3.0), Float32(5.0))
-    var inv = alloc[Float32](16)
+    var t = unsafe_alloc[Float32](16); _translation(t, Float32(2.0), Float32(-3.0), Float32(5.0))
+    var inv = unsafe_alloc[Float32](16)
     var ok = matrix_invert(t, inv)
     assert_true(ok == Int32(1))
-    var expected = alloc[Float32](16); _translation(expected, Float32(-2.0), Float32(3.0), Float32(-5.0))
+    var expected = unsafe_alloc[Float32](16); _translation(expected, Float32(-2.0), Float32(3.0), Float32(-5.0))
     assert_true(_mat_close(inv, expected))
     t.unsafe_free(); inv.unsafe_free(); expected.unsafe_free()
 
 def test_matrix_invert_round_trip_matches_original() raises:
     """Matrix_invert(matrix_invert(M)) == M for an invertible translate+scale
     composition, i.e. inversion is its own involution."""
-    var s = alloc[Float32](16); _scale(s, Float32(2.0), Float32(4.0), Float32(0.5))
-    var t = alloc[Float32](16); _translation(t, Float32(1.0), Float32(2.0), Float32(3.0))
-    var m = alloc[Float32](16)
+    var s = unsafe_alloc[Float32](16); _scale(s, Float32(2.0), Float32(4.0), Float32(0.5))
+    var t = unsafe_alloc[Float32](16); _translation(t, Float32(1.0), Float32(2.0), Float32(3.0))
+    var m = unsafe_alloc[Float32](16)
     matrix_multiply(t, s, m)  # composed invertible matrix
-    var inv1 = alloc[Float32](16)
+    var inv1 = unsafe_alloc[Float32](16)
     var ok1 = matrix_invert(m, inv1)
     assert_true(ok1 == Int32(1))
-    var inv2 = alloc[Float32](16)
+    var inv2 = unsafe_alloc[Float32](16)
     var ok2 = matrix_invert(inv1, inv2)
     assert_true(ok2 == Int32(1))
     assert_true(_mat_close(inv2, m))
@@ -112,39 +112,39 @@ def test_matrix_invert_round_trip_matches_original() raises:
 
 def test_matrix_invert_times_original_is_identity() raises:
     """M * M^-1 == identity, the defining property of matrix inversion."""
-    var s = alloc[Float32](16); _scale(s, Float32(2.0), Float32(4.0), Float32(0.5))
-    var t = alloc[Float32](16); _translation(t, Float32(1.0), Float32(2.0), Float32(3.0))
-    var m = alloc[Float32](16)
+    var s = unsafe_alloc[Float32](16); _scale(s, Float32(2.0), Float32(4.0), Float32(0.5))
+    var t = unsafe_alloc[Float32](16); _translation(t, Float32(1.0), Float32(2.0), Float32(3.0))
+    var m = unsafe_alloc[Float32](16)
     matrix_multiply(t, s, m)
-    var inv = alloc[Float32](16)
+    var inv = unsafe_alloc[Float32](16)
     var ok = matrix_invert(m, inv)
     assert_true(ok == Int32(1))
-    var product = alloc[Float32](16)
+    var product = unsafe_alloc[Float32](16)
     matrix_multiply(m, inv, product)
-    var id = alloc[Float32](16); _identity(id)
+    var id = unsafe_alloc[Float32](16); _identity(id)
     assert_true(_mat_close(product, id))
     s.unsafe_free(); t.unsafe_free(); m.unsafe_free(); inv.unsafe_free(); product.unsafe_free(); id.unsafe_free()
 
 def test_matrix_invert_singular_writes_identity_and_reports_failure() raises:
     """A singular (all-zero) matrix must fail cleanly: return 0 and leave the
     identity in `result`, never garbage — callers rely on this fallback."""
-    var singular = alloc[Float32](16)
+    var singular = unsafe_alloc[Float32](16)
     for i in range(16):
         singular[unsafe_offset=i] = Float32(0)
-    var result = alloc[Float32](16)
+    var result = unsafe_alloc[Float32](16)
     var ok = matrix_invert(singular, result)
     assert_true(ok == Int32(0))
-    var id = alloc[Float32](16); _identity(id)
+    var id = unsafe_alloc[Float32](16); _identity(id)
     assert_true(_mat_close(result, id))
     singular.unsafe_free(); result.unsafe_free(); id.unsafe_free()
 
 # ── transform_points ─────────────────────────────────────────────────────────
 
 def test_transform_points_identity_leaves_points_unchanged() raises:
-    var id = alloc[Float32](16); _identity(id)
-    var pts_in = alloc[Float32](4)
+    var id = unsafe_alloc[Float32](16); _identity(id)
+    var pts_in = unsafe_alloc[Float32](4)
     pts_in[unsafe_offset=0] = Float32(1.0); pts_in[unsafe_offset=1] = Float32(2.0); pts_in[unsafe_offset=2] = Float32(3.0); pts_in[unsafe_offset=3] = Float32(1.0)
-    var pts_out = alloc[Float32](4)
+    var pts_out = unsafe_alloc[Float32](4)
     transform_points(id, pts_in, Int32(1), pts_out)
     assert_true(_close(pts_out[unsafe_offset=0], Float32(1.0)))
     assert_true(_close(pts_out[unsafe_offset=1], Float32(2.0)))
@@ -152,10 +152,10 @@ def test_transform_points_identity_leaves_points_unchanged() raises:
     id.unsafe_free(); pts_in.unsafe_free(); pts_out.unsafe_free()
 
 def test_transform_points_translation_moves_by_exact_vector() raises:
-    var t = alloc[Float32](16); _translation(t, Float32(10.0), Float32(-5.0), Float32(2.0))
-    var pts_in = alloc[Float32](4)
+    var t = unsafe_alloc[Float32](16); _translation(t, Float32(10.0), Float32(-5.0), Float32(2.0))
+    var pts_in = unsafe_alloc[Float32](4)
     pts_in[unsafe_offset=0] = Float32(1.0); pts_in[unsafe_offset=1] = Float32(1.0); pts_in[unsafe_offset=2] = Float32(1.0); pts_in[unsafe_offset=3] = Float32(1.0)
-    var pts_out = alloc[Float32](4)
+    var pts_out = unsafe_alloc[Float32](4)
     transform_points(t, pts_in, Int32(1), pts_out)
     assert_true(_close(pts_out[unsafe_offset=0], Float32(11.0)))
     assert_true(_close(pts_out[unsafe_offset=1], Float32(-4.0)))
@@ -163,11 +163,11 @@ def test_transform_points_translation_moves_by_exact_vector() raises:
     t.unsafe_free(); pts_in.unsafe_free(); pts_out.unsafe_free()
 
 def test_transform_points_scale_scales_coordinates_exactly() raises:
-    var s = alloc[Float32](16); _scale(s, Float32(2.0), Float32(3.0), Float32(-1.0))
-    var pts_in = alloc[Float32](8)
+    var s = unsafe_alloc[Float32](16); _scale(s, Float32(2.0), Float32(3.0), Float32(-1.0))
+    var pts_in = unsafe_alloc[Float32](8)
     pts_in[unsafe_offset=0] = Float32(1.0); pts_in[unsafe_offset=1] = Float32(2.0); pts_in[unsafe_offset=2] = Float32(3.0); pts_in[unsafe_offset=3] = Float32(1.0)
     pts_in[unsafe_offset=4] = Float32(-2.0); pts_in[unsafe_offset=5] = Float32(0.5); pts_in[unsafe_offset=6] = Float32(4.0); pts_in[unsafe_offset=7] = Float32(1.0)
-    var pts_out = alloc[Float32](8)
+    var pts_out = unsafe_alloc[Float32](8)
     transform_points(s, pts_in, Int32(2), pts_out)
     assert_true(_close(pts_out[unsafe_offset=0], Float32(2.0)))
     assert_true(_close(pts_out[unsafe_offset=1], Float32(6.0)))
@@ -182,10 +182,10 @@ def test_transform_points_scale_scales_coordinates_exactly() raises:
 def test_transform_normals_identity_leaves_normal_unchanged() raises:
     """Inv_matrix here is the inverse of the forward transform; for the
     identity transform the inverse is itself, so the normal passes through."""
-    var id = alloc[Float32](16); _identity(id)
-    var n_in = alloc[Float32](3)
+    var id = unsafe_alloc[Float32](16); _identity(id)
+    var n_in = unsafe_alloc[Float32](3)
     n_in[unsafe_offset=0] = Float32(0.0); n_in[unsafe_offset=1] = Float32(1.0); n_in[unsafe_offset=2] = Float32(0.0)
-    var n_out = alloc[Float32](3)
+    var n_out = unsafe_alloc[Float32](3)
     transform_normals(id, n_in, Int32(1), n_out)
     assert_true(_close(n_out[unsafe_offset=0], Float32(0.0)))
     assert_true(_close(n_out[unsafe_offset=1], Float32(1.0)))
@@ -197,10 +197,10 @@ def test_transform_normals_uniform_scale_inverse_rescales_normal() raises:
     caller passes inv_matrix = S^-1 = diag(1/k,1/k,1/k); transform_normals
     applies its transpose, so the normal is scaled by exactly 1/k."""
     var k = Float32(2.0)
-    var inv_s = alloc[Float32](16); _scale(inv_s, Float32(1.0) / k, Float32(1.0) / k, Float32(1.0) / k)
-    var n_in = alloc[Float32](3)
+    var inv_s = unsafe_alloc[Float32](16); _scale(inv_s, Float32(1.0) / k, Float32(1.0) / k, Float32(1.0) / k)
+    var n_in = unsafe_alloc[Float32](3)
     n_in[unsafe_offset=0] = Float32(0.0); n_in[unsafe_offset=1] = Float32(0.0); n_in[unsafe_offset=2] = Float32(1.0)
-    var n_out = alloc[Float32](3)
+    var n_out = unsafe_alloc[Float32](3)
     transform_normals(inv_s, n_in, Int32(1), n_out)
     assert_true(_close(n_out[unsafe_offset=0], Float32(0.0)))
     assert_true(_close(n_out[unsafe_offset=1], Float32(0.0)))

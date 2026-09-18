@@ -31,7 +31,7 @@
 # changes concurrently with reads/writes. guide_refine (which does change
 # shape) must only ever run single-threaded, strictly between passes.
 
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.math import sqrt, cos, sin, max, min
 from .geometry import Point3f, Bounds3f, _is_real_ptr
 from .bvh import _equal_area_square_to_sphere, _equal_area_sphere_to_square
@@ -102,8 +102,8 @@ def guide_create(bounds: Bounds3f) -> GuideGrid:
     """A fresh SD-tree: one spatial leaf covering `bounds`, whose
     directional quadtree is a single leaf covering the whole sphere.
     Zero energy/sample_count everywhere -- ready to record into directly."""
-    var snodes = alloc[SNode](1)
-    var dnodes = alloc[DNode](1)
+    var snodes = unsafe_alloc[SNode](1)
+    var dnodes = unsafe_alloc[DNode](1)
     snodes[unsafe_offset=0] = SNode(split_axis=Int32(-1), split_pos=Float32(0), depth=Int32(0),
                        child0=Int32(-1), child1=Int32(-1), dtree_root=Int32(0), sample_count=Int32(0))
     dnodes[unsafe_offset=0] = DNode(energy=Float32(0), depth=Int32(0),
@@ -124,8 +124,8 @@ def guide_clone_empty(g: GuideGrid) -> GuideGrid:
     guide_merge'd into the real, cumulative tree afterward. Never use the
     result as guide_read directly -- it has no distribution to sample from
     yet."""
-    var snodes = alloc[SNode](Int(g.n_snodes))
-    var dnodes = alloc[DNode](Int(g.n_dnodes))
+    var snodes = unsafe_alloc[SNode](Int(g.n_snodes))
+    var dnodes = unsafe_alloc[DNode](Int(g.n_dnodes))
     for i in range(Int(g.n_snodes)):
         var n = g.snodes[unsafe_offset=i]
         snodes[unsafe_offset=i] = SNode(split_axis=n.split_axis, split_pos=n.split_pos, depth=n.depth,
@@ -438,7 +438,7 @@ def guide_refine(g: GuideGrid) -> GuideGrid:
             var droot = g.snodes[unsafe_offset=i].dtree_root
             extra_d += _count_dtree_growth(g.dnodes, droot, g.dnodes[unsafe_offset=Int(droot)].energy, Int32(0))
     var n_dnodes1 = Int(g.n_dnodes) + extra_d
-    var dnodes1 = alloc[DNode](n_dnodes1)
+    var dnodes1 = unsafe_alloc[DNode](n_dnodes1)
     for i in range(Int(g.n_dnodes)):
         dnodes1[unsafe_offset=i] = g.dnodes[unsafe_offset=i]
     var next_free_d = g.n_dnodes
@@ -454,8 +454,8 @@ def guide_refine(g: GuideGrid) -> GuideGrid:
     var n_new_leaves = 2 * len(to_split)
     var n_snodes2 = Int(g.n_snodes) + n_new_leaves
     var n_dnodes2 = Int(next_free_d) + n_new_leaves
-    var snodes2 = alloc[SNode](n_snodes2)
-    var dnodes2 = alloc[DNode](n_dnodes2)
+    var snodes2 = unsafe_alloc[SNode](n_snodes2)
+    var dnodes2 = unsafe_alloc[DNode](n_dnodes2)
     for i in range(Int(g.n_snodes)):
         snodes2[unsafe_offset=i] = g.snodes[unsafe_offset=i]
     for i in range(Int(next_free_d)):

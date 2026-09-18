@@ -1,4 +1,4 @@
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import TriangleMesh_C
@@ -19,22 +19,22 @@ def test_vulkanrt_build_scene_traces_correct_mesh_and_triangle() raises:
         return
 
     # Mesh 0: triangle (0,0,0)-(1,0,0)-(0,1,0) at z=0.
-    var pts0 = alloc[Float32](12)
+    var pts0 = unsafe_alloc[Float32](12)
     var tri0 = [Float32(0), 0, 0, 1,  1, 0, 0, 1,  0, 1, 0, 1]
     for i in range(12):
         pts0[unsafe_offset=i] = tri0[i]
-    var idx0 = alloc[Int64](3)
+    var idx0 = unsafe_alloc[Int64](3)
     idx0[unsafe_offset=0] = 0; idx0[unsafe_offset=1] = 1; idx0[unsafe_offset=2] = 2
 
     # Mesh 1: triangle (5,0,0)-(6,0,0)-(5,1,0) at z=0, far away in x.
-    var pts1 = alloc[Float32](12)
+    var pts1 = unsafe_alloc[Float32](12)
     var tri1 = [Float32(5), 0, 0, 1,  6, 0, 0, 1,  5, 1, 0, 1]
     for i in range(12):
         pts1[unsafe_offset=i] = tri1[i]
-    var idx1 = alloc[Int64](3)
+    var idx1 = unsafe_alloc[Int64](3)
     idx1[unsafe_offset=0] = 0; idx1[unsafe_offset=1] = 1; idx1[unsafe_offset=2] = 2
 
-    var meshes = alloc[TriangleMesh_C](2)
+    var meshes = unsafe_alloc[TriangleMesh_C](2)
     meshes[unsafe_offset=0] = TriangleMesh_C(
         pts0, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), idx0,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
@@ -46,17 +46,17 @@ def test_vulkanrt_build_scene_traces_correct_mesh_and_triangle() raises:
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
 
-    var point_counts = alloc[Int64](2)
+    var point_counts = unsafe_alloc[Int64](2)
     point_counts[unsafe_offset=0] = 3; point_counts[unsafe_offset=1] = 3
-    var idx_counts = alloc[Int64](2)
+    var idx_counts = unsafe_alloc[Int64](2)
     idx_counts[unsafe_offset=0] = 3; idx_counts[unsafe_offset=1] = 3
 
     var scene = vulkanrt_build_scene(meshes, Int64(2), point_counts, idx_counts)
     assert_true(Int(scene) != 0)
 
-    var out_t = alloc[Float32](1)
-    var out_mesh = alloc[Int32](1)
-    var out_tri = alloc[Int32](1)
+    var out_t = unsafe_alloc[Float32](1)
+    var out_mesh = unsafe_alloc[Int32](1)
+    var out_tri = unsafe_alloc[Int32](1)
 
     # Ray hits mesh 0's triangle.
     var hit0 = vulkanrt_trace_ray(scene, 0.25, 0.25, -1.0, 0, 0, 1, 0.001, 10.0,

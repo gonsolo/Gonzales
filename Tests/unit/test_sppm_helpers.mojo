@@ -5,7 +5,7 @@
 # bounce helper.
 
 from std.math import abs, sqrt, log, exp
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, TestSuite
 from gonzales.geometry import (
     RGB, Point3f, Vec3f, PrimId_C, Intersection_C, TriangleMesh_C,
@@ -258,11 +258,11 @@ def test_free_flight_grey_collision_weight_is_exactly_one() raises:
 
 def _make_triangle_mesh(p0: Vec3f, p1: Vec3f, p2: Vec3f) -> TriangleMesh_C:
     # Stride 4 floats/vertex: x,y,z,pad.
-    var points = alloc[Float32](4 * 3)
+    var points = unsafe_alloc[Float32](4 * 3)
     points[unsafe_offset=0*4+0] = p0[0]; points[unsafe_offset=0*4+1] = p0[1]; points[unsafe_offset=0*4+2] = p0[2]; points[unsafe_offset=0*4+3] = Float32(0.0)
     points[unsafe_offset=1*4+0] = p1[0]; points[unsafe_offset=1*4+1] = p1[1]; points[unsafe_offset=1*4+2] = p1[2]; points[unsafe_offset=1*4+3] = Float32(0.0)
     points[unsafe_offset=2*4+0] = p2[0]; points[unsafe_offset=2*4+1] = p2[1]; points[unsafe_offset=2*4+2] = p2[2]; points[unsafe_offset=2*4+3] = Float32(0.0)
-    var vidx = alloc[Int64](3)
+    var vidx = unsafe_alloc[Int64](3)
     vidx[unsafe_offset=0] = 0; vidx[unsafe_offset=1] = 1; vidx[unsafe_offset=2] = 2
     return TriangleMesh_C(
         points, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), vidx,
@@ -281,11 +281,11 @@ def test_sample_area_light_uniform_point_is_a_convex_combination_of_vertices() r
     var p1 = Vec3f(2.0, 0.0, 0.0)
     var p2 = Vec3f(0.0, 3.0, 0.0)
     var mesh = _make_triangle_mesh(p0, p1, p2)
-    var meshes = alloc[TriangleMesh_C](1)
+    var meshes = unsafe_alloc[TriangleMesh_C](1)
     meshes[unsafe_offset=0] = mesh
 
     var al = AreaLight_C(Int32(0), Int32(1), RGB(Float32(1.0)), Float32(3.0), Int8(0), Int8(0), Int8(0), Int8(0))
-    var lights = alloc[AreaLight_C](1)
+    var lights = unsafe_alloc[AreaLight_C](1)
     lights[unsafe_offset=0] = al
 
     var seed = UInt64(4242)
@@ -315,10 +315,10 @@ def test_sample_area_light_uniform_normal_matches_geometric_normal_when_no_shadi
     var p1 = Vec3f(1.0, 0.0, 0.0)
     var p2 = Vec3f(0.0, 1.0, 0.0)
     var mesh = _make_triangle_mesh(p0, p1, p2)
-    var meshes = alloc[TriangleMesh_C](1)
+    var meshes = unsafe_alloc[TriangleMesh_C](1)
     meshes[unsafe_offset=0] = mesh
     var al = AreaLight_C(Int32(0), Int32(1), RGB(Float32(1.0)), Float32(0.5), Int8(0), Int8(0), Int8(0), Int8(0))
-    var lights = alloc[AreaLight_C](1)
+    var lights = unsafe_alloc[AreaLight_C](1)
     lights[unsafe_offset=0] = al
 
     var pcg = PCG32(UInt64(88), UInt64(2))
@@ -344,7 +344,7 @@ def test_geom_normal_matches_cross_product_of_the_triangle_edges() raises:
     var p1 = Vec3f(1.0, 0.0, 0.0)
     var p2 = Vec3f(0.0, 1.0, 0.0)
     var mesh = _make_triangle_mesh(p0, p1, p2)
-    var meshes = alloc[TriangleMesh_C](1)
+    var meshes = unsafe_alloc[TriangleMesh_C](1)
     meshes[unsafe_offset=0] = mesh
 
     var inter = _make_hit(Float32(0.25), Float32(0.25))
@@ -360,7 +360,7 @@ def test_shading_normal_at_falls_back_to_geometric_when_no_vertex_normals() rais
     var p1 = Vec3f(1.0, 0.0, 0.0)
     var p2 = Vec3f(0.0, 1.0, 0.0)
     var mesh = _make_triangle_mesh(p0, p1, p2)
-    var meshes = alloc[TriangleMesh_C](1)
+    var meshes = unsafe_alloc[TriangleMesh_C](1)
     meshes[unsafe_offset=0] = mesh
 
     var inter = _make_hit(Float32(0.3), Float32(0.3))
@@ -384,12 +384,12 @@ def test_shading_normal_at_interpolates_per_vertex_normals_barycentrically() rai
     var n0 = Vec3f(0.0, 0.0, 1.0)
     var n1 = Vec3f(0.0, 0.0, 1.0)
     var n2 = Vec3f(0.267261, 0.534522, 0.801784)  # normalize(1,2,3), tilted but same hemisphere
-    var normals = alloc[Float32](3 * 3)
+    var normals = unsafe_alloc[Float32](3 * 3)
     normals[unsafe_offset=0] = n0[0]; normals[unsafe_offset=1] = n0[1]; normals[unsafe_offset=2] = n0[2]
     normals[unsafe_offset=3] = n1[0]; normals[unsafe_offset=4] = n1[1]; normals[unsafe_offset=5] = n1[2]
     normals[unsafe_offset=6] = n2[0]; normals[unsafe_offset=7] = n2[1]; normals[unsafe_offset=8] = n2[2]
     mesh.normals = normals
-    var meshes = alloc[TriangleMesh_C](1)
+    var meshes = unsafe_alloc[TriangleMesh_C](1)
     meshes[unsafe_offset=0] = mesh
 
     var u = Float32(0.2); var v = Float32(0.3)

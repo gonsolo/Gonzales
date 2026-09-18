@@ -29,7 +29,7 @@
 # not-yet-done follow-up work.
 
 from std.math import sqrt, exp, sin, asin
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 
 comptime CIE_LAMBDA_MIN = Float64(360.0)
 comptime CIE_LAMBDA_MAX = Float64(830.0)
@@ -587,7 +587,7 @@ def load_spectrum_table(path: String) -> Tuple[Bool, Int, List[Float32]]:
             return (False, 0, empty^)
         if bytes[0] != UInt8(83) or bytes[1] != UInt8(80) or bytes[2] != UInt8(84) or bytes[3] != UInt8(66):
             return (False, 0, empty^)
-        var buf = alloc[UInt8](n)
+        var buf = unsafe_alloc[UInt8](n)
         for i in range(n):
             buf[unsafe_offset=i] = bytes[i]
         var res = Int((buf.unsafe_offset(4)).unsafe_bitcast[Int32]()[unsafe_offset=0])
