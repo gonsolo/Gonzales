@@ -118,7 +118,7 @@ def sample_ggx_vndf(
 
 @fieldwise_init
 struct TileSamplerParams_C(TrivialRegisterPassable):
-    var sobolMatrices: UnsafePointer[UInt32, MutExternalOrigin]
+    var sobolMatrices: UnsafePointer[UInt32, MutUntrackedOrigin]
     var rngSeed: UInt64
     var sobolSeed: Int32
     var log2SamplesPerPixel: Int32
@@ -216,7 +216,7 @@ def sobol_get_sample_index(
 @always_inline
 def sobol_sample(
     index: Int, dim: Int, seed: UInt32,
-    matrices: UnsafePointer[UInt32, MutExternalOrigin],
+    matrices: UnsafePointer[UInt32, MutUntrackedOrigin],
 ) -> Float32:
     var acc: UInt32 = 0
     var cur = index
@@ -302,13 +302,13 @@ def triangle_sample_1d(u: Float32, radius: Float32) -> Float32:
 # Returns the world-space Ray_C and the PCG seed pair for the path.
 # px/py are integer pixel coords; si is the sample index (Int32).
 @always_inline
-def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutExternalOrigin](
+def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     px: Int32, py: Int32, si: Int32,
     log2spp: Int, n_base4: Int,
     seed_dim0: UInt32, seed_dim1: UInt32,
     rng_seed: UInt64,
-    sobol_matrices: UnsafePointer[UInt32, MutExternalOrigin],
-    r2c: UnsafePointer[Float32, MutExternalOrigin],   # rasterToCamera  (16 Float32, col-major)
+    sobol_matrices: UnsafePointer[UInt32, MutUntrackedOrigin],
+    r2c: UnsafePointer[Float32, MutUntrackedOrigin],   # rasterToCamera  (16 Float32, col-major)
     c2w: UnsafePointer[Float32, Oc2w],   # cameraToWorld   (16 Float32, col-major)
     filter_norm_x: Float32, filter_sigma: Float32, filter_support_x: Float32,
     filter_norm_y: Float32, filter_support_y: Float32,

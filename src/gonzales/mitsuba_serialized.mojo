@@ -46,16 +46,16 @@ struct MitsubaMesh(Movable):
         self.n_tris    = Int32(0)
 
 
-def _mit_ser_u32(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int:
+def _mit_ser_u32(buf: UnsafePointer[UInt8, MutUntrackedOrigin], pos: Int) -> Int:
     return Int((buf.unsafe_offset(pos)).unsafe_bitcast[UInt32]()[unsafe_offset=0])
 
-def _mit_ser_u64(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int:
+def _mit_ser_u64(buf: UnsafePointer[UInt8, MutUntrackedOrigin], pos: Int) -> Int:
     return Int((buf.unsafe_offset(pos)).unsafe_bitcast[UInt64]()[unsafe_offset=0])
 
-def _mit_ser_f32(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float32:
+def _mit_ser_f32(buf: UnsafePointer[UInt8, MutUntrackedOrigin], pos: Int) -> Float32:
     return (buf.unsafe_offset(pos)).unsafe_bitcast[Float32]()[unsafe_offset=0]
 
-def _mit_ser_f64(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float64:
+def _mit_ser_f64(buf: UnsafePointer[UInt8, MutUntrackedOrigin], pos: Int) -> Float64:
     return (buf.unsafe_offset(pos)).unsafe_bitcast[Float64]()[unsafe_offset=0]
 
 

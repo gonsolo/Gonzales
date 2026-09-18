@@ -58,39 +58,39 @@ from std.ffi import external_call
 
 # ── Loading (C bridge, host only) ────────────────────────────────────────
 
-def nvdb_load(path: UnsafePointer[UInt8, MutExternalOrigin], n: Int32) -> UnsafePointer[UInt8, MutExternalOrigin]:
+def nvdb_load(path: UnsafePointer[UInt8, MutUntrackedOrigin], n: Int32) -> UnsafePointer[UInt8, MutUntrackedOrigin]:
     """Opens a .nvdb and returns an opaque handle, or a null-ish pointer on
     failure. The handle owns the DECOMPRESSED grid blob (the on-disk one is
     codec-compressed -- every scene asset here is ZIP)."""
-    return external_call["nvdb_load", UnsafePointer[UInt8, MutExternalOrigin]](path, n)
+    return external_call["nvdb_load", UnsafePointer[UInt8, MutUntrackedOrigin]](path, n)
 
-def nvdb_data(handle: UnsafePointer[UInt8, MutExternalOrigin]) -> UnsafePointer[UInt8, MutExternalOrigin]:
+def nvdb_data(handle: UnsafePointer[UInt8, MutUntrackedOrigin]) -> UnsafePointer[UInt8, MutUntrackedOrigin]:
     """The flat grid blob. memcpy-able straight to the GPU."""
-    return external_call["nvdb_data", UnsafePointer[UInt8, MutExternalOrigin]](handle)
+    return external_call["nvdb_data", UnsafePointer[UInt8, MutUntrackedOrigin]](handle)
 
-def nvdb_size(handle: UnsafePointer[UInt8, MutExternalOrigin]) -> Int64:
+def nvdb_size(handle: UnsafePointer[UInt8, MutUntrackedOrigin]) -> Int64:
     return external_call["nvdb_size", Int64](handle)
 
-def nvdb_free(handle: UnsafePointer[UInt8, MutExternalOrigin]):
+def nvdb_free(handle: UnsafePointer[UInt8, MutUntrackedOrigin]):
     external_call["nvdb_free", NoneType](handle)
 
 # ── Test oracle (C bridge, host only -- NOT for rendering) ───────────────
 
-def nvdb_get_value_ref(handle: UnsafePointer[UInt8, MutExternalOrigin], i: Int32, j: Int32, k: Int32) -> Float32:
+def nvdb_get_value_ref(handle: UnsafePointer[UInt8, MutUntrackedOrigin], i: Int32, j: Int32, k: Int32) -> Float32:
     """NanoVDB's own C++ accessor. Exists ONLY so `nvdb_sample_index` can be
     diffed against it -- offset/bitmask errors in a tree traversal are
     silent (wrong densities, not crashes). Never call this from rendering
     code: it cannot run on the GPU."""
     return external_call["nvdb_get_value", Float32](handle, i, j, k)
 
-def nvdb_active_count(handle: UnsafePointer[UInt8, MutExternalOrigin]) -> Int64:
+def nvdb_active_count(handle: UnsafePointer[UInt8, MutUntrackedOrigin]) -> Int64:
     """Count of LEAF-RESIDENT active voxels -- deliberately not the grid's
     activeVoxelCount(), which also counts voxels covered by active upper
     tiles that `nvdb_active_coord` cannot enumerate."""
     return external_call["nvdb_active_count", Int64](handle)
 
-def nvdb_active_coord(handle: UnsafePointer[UInt8, MutExternalOrigin], n: Int64,
-                      out3: UnsafePointer[Int32, MutExternalOrigin]):
+def nvdb_active_coord(handle: UnsafePointer[UInt8, MutUntrackedOrigin], n: Int64,
+                      out3: UnsafePointer[Int32, MutUntrackedOrigin]):
     """Coordinate of the n-th leaf-resident active voxel. Deterministic for
     a given blob. Needed because uniform random sampling of the index bbox
     mostly lands in empty space on a sparse grid -- a stub that always
@@ -99,35 +99,35 @@ def nvdb_active_coord(handle: UnsafePointer[UInt8, MutExternalOrigin], n: Int64,
 
 # ── Metadata needed to plug an .nvdb grid into a Medium_C (host only) ────
 
-def nvdb_load_named(path: UnsafePointer[UInt8, MutExternalOrigin],
-                    grid_name: UnsafePointer[UInt8, MutExternalOrigin]) -> UnsafePointer[UInt8, MutExternalOrigin]:
+def nvdb_load_named(path: UnsafePointer[UInt8, MutUntrackedOrigin],
+                    grid_name: UnsafePointer[UInt8, MutUntrackedOrigin]) -> UnsafePointer[UInt8, MutUntrackedOrigin]:
     """Load one named grid from a multi-grid .nvdb. Null (0) if absent -- an
     emissive-volume caller treats that as "this medium has no temperature
     grid" rather than an error."""
-    return external_call["nvdb_load_named", UnsafePointer[UInt8, MutExternalOrigin]](path, grid_name)
+    return external_call["nvdb_load_named", UnsafePointer[UInt8, MutUntrackedOrigin]](path, grid_name)
 
-def nvdb_index_bbox(handle: UnsafePointer[UInt8, MutExternalOrigin],
-                    out_min3: UnsafePointer[Int32, MutExternalOrigin],
-                    out_max3: UnsafePointer[Int32, MutExternalOrigin]):
+def nvdb_index_bbox(handle: UnsafePointer[UInt8, MutUntrackedOrigin],
+                    out_min3: UnsafePointer[Int32, MutUntrackedOrigin],
+                    out_max3: UnsafePointer[Int32, MutUntrackedOrigin]):
     """The grid's indexBBox (inclusive), for the cheap reject
     nvdb_sample_density does before touching the blob at all."""
     external_call["nvdb_index_bbox", NoneType](handle, out_min3, out_max3)
 
-def nvdb_value_range(handle: UnsafePointer[UInt8, MutExternalOrigin],
-                     out_min: UnsafePointer[Float32, MutExternalOrigin],
-                     out_max: UnsafePointer[Float32, MutExternalOrigin]):
+def nvdb_value_range(handle: UnsafePointer[UInt8, MutUntrackedOrigin],
+                     out_min: UnsafePointer[Float32, MutUntrackedOrigin],
+                     out_max: UnsafePointer[Float32, MutUntrackedOrigin]):
     """Root-node min/max -- the majorant used for delta-tracking free-flight
     sampling. Coarser than a per-leaf majorant would be; a documented v1
     scope choice, see project_nanovdb_media memory."""
     external_call["nvdb_value_range", NoneType](handle, out_min, out_max)
 
-def nvdb_map_invmatf(handle: UnsafePointer[UInt8, MutExternalOrigin],
-                     out9: UnsafePointer[Float32, MutExternalOrigin]):
+def nvdb_map_invmatf(handle: UnsafePointer[UInt8, MutUntrackedOrigin],
+                     out9: UnsafePointer[Float32, MutUntrackedOrigin]):
     """World-to-index 3x3 (row-major), PNanoVDB's inverse Map matrix."""
     external_call["nvdb_map_invmatf", NoneType](handle, out9)
 
-def nvdb_map_vecf(handle: UnsafePointer[UInt8, MutExternalOrigin],
-                  out3: UnsafePointer[Float32, MutExternalOrigin]):
+def nvdb_map_vecf(handle: UnsafePointer[UInt8, MutUntrackedOrigin],
+                  out3: UnsafePointer[Float32, MutUntrackedOrigin]):
     """World-to-index translation, PNanoVDB's Map vecF (subtracted before
     the inverse matrix multiply -- see pnanovdb_map_apply_inverse)."""
     external_call["nvdb_map_vecf", NoneType](handle, out3)
@@ -184,19 +184,19 @@ comptime NVDB_LEAF_OFF_VALUE_MASK = 16
 comptime NVDB_LEAF_OFF_TABLE = 96
 
 @always_inline
-def _nvdb_u32(blob: UnsafePointer[UInt8, MutExternalOrigin], off: Int) -> UInt32:
+def _nvdb_u32(blob: UnsafePointer[UInt8, MutUntrackedOrigin], off: Int) -> UInt32:
     return (blob.unsafe_offset(off)).unsafe_bitcast[UInt32]()[unsafe_offset=0]
 
 @always_inline
-def _nvdb_u64(blob: UnsafePointer[UInt8, MutExternalOrigin], off: Int) -> UInt64:
+def _nvdb_u64(blob: UnsafePointer[UInt8, MutUntrackedOrigin], off: Int) -> UInt64:
     return (blob.unsafe_offset(off)).unsafe_bitcast[UInt64]()[unsafe_offset=0]
 
 @always_inline
-def _nvdb_i64(blob: UnsafePointer[UInt8, MutExternalOrigin], off: Int) -> Int64:
+def _nvdb_i64(blob: UnsafePointer[UInt8, MutUntrackedOrigin], off: Int) -> Int64:
     return (blob.unsafe_offset(off)).unsafe_bitcast[Int64]()[unsafe_offset=0]
 
 @always_inline
-def _nvdb_f32(blob: UnsafePointer[UInt8, MutExternalOrigin], off: Int) -> Float32:
+def _nvdb_f32(blob: UnsafePointer[UInt8, MutUntrackedOrigin], off: Int) -> Float32:
     return (blob.unsafe_offset(off)).unsafe_bitcast[Float32]()[unsafe_offset=0]
 
 @always_inline
@@ -265,12 +265,12 @@ def _nvdb_leaf_offset(i: Int32, j: Int32, k: Int32) -> Int:
     return Int(((i & 7) << 6) + ((j & 7) << 3) + (k & 7))
 
 @always_inline
-def _nvdb_mask_is_on(blob: UnsafePointer[UInt8, MutExternalOrigin], mask_base: Int, bit: Int) -> Bool:
+def _nvdb_mask_is_on(blob: UnsafePointer[UInt8, MutUntrackedOrigin], mask_base: Int, bit: Int) -> Bool:
     var word = _nvdb_u32(blob, mask_base + 4 * (bit >> 5))
     return (word & (UInt32(1) << UInt32(bit & 31))) != UInt32(0)
 
 def nvdb_sample_index(
-    blob: UnsafePointer[UInt8, MutExternalOrigin],
+    blob: UnsafePointer[UInt8, MutUntrackedOrigin],
     i: Int32, j: Int32, k: Int32,
 ) -> Float32:
     """Value at index-space voxel (i,j,k), or the background value outside
@@ -328,7 +328,7 @@ def nvdb_sample_index(
 
 
 def nvdb_majorant_at(
-    blob: UnsafePointer[UInt8, MutExternalOrigin],
+    blob: UnsafePointer[UInt8, MutUntrackedOrigin],
     i: Int32, j: Int32, k: Int32,
 ) -> SIMD[DType.float32, 2]:
     """LOCAL majorant at index-space (i,j,k): returns (max_value, extent),
@@ -409,7 +409,7 @@ def nvdb_majorant_at(
 
 @always_inline
 def nvdb_leaf_base(
-    blob: UnsafePointer[UInt8, MutExternalOrigin],
+    blob: UnsafePointer[UInt8, MutUntrackedOrigin],
     i: Int32, j: Int32, k: Int32,
 ) -> Int:
     """Byte offset of the LEAF node containing (i,j,k), or -1 when the point
@@ -454,7 +454,7 @@ def nvdb_leaf_base(
 
 @always_inline
 def nvdb_leaf_value(
-    blob: UnsafePointer[UInt8, MutExternalOrigin],
+    blob: UnsafePointer[UInt8, MutUntrackedOrigin],
     leaf_base: Int, i: Int32, j: Int32, k: Int32,
 ) -> Float32:
     """Value at (i,j,k) read straight out of an already-located leaf. The

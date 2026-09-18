@@ -102,28 +102,28 @@ struct ReservoirIO(TrivialRegisterPassable):
     di_temporal_step checks `_is_real_ptr`/`> 0` before ever touching them,
     so callers that don't pass a real ReservoirIO (the batch --restir path)
     get exactly the old "no temporal, no spatial reuse" behavior for free."""
-    var read:  UnsafePointer[DIReservoir, MutExternalOrigin]
-    var write: UnsafePointer[DIReservoir, MutExternalOrigin]
-    var gbuf_normal:      UnsafePointer[Float32, MutExternalOrigin]
-    var gbuf_depth:       UnsafePointer[Float32, MutExternalOrigin]
-    var gbuf_material_id: UnsafePointer[Int32, MutExternalOrigin]
+    var read:  UnsafePointer[DIReservoir, MutUntrackedOrigin]
+    var write: UnsafePointer[DIReservoir, MutUntrackedOrigin]
+    var gbuf_normal:      UnsafePointer[Float32, MutUntrackedOrigin]
+    var gbuf_depth:       UnsafePointer[Float32, MutUntrackedOrigin]
+    var gbuf_material_id: UnsafePointer[Int32, MutUntrackedOrigin]
     # World position per pixel (Phase 0.3's other G-buffer output). Needed
     # for spatial reuse's Z normalization: deciding whether a NEIGHBOUR's
     # integration domain could have produced the chosen sample means
     # re-evaluating the target function at THAT neighbour's shading point,
     # which needs its position, not just its normal.
-    var gbuf_world_pos:   UnsafePointer[Float32, MutExternalOrigin]
+    var gbuf_world_pos:   UnsafePointer[Float32, MutUntrackedOrigin]
     var frame_w: Int32
     var frame_h: Int32
 
 @always_inline
 def reservoir_io_null() -> ReservoirIO:
     return ReservoirIO(
-        read=UnsafePointer[DIReservoir, MutExternalOrigin].unsafe_dangling(),
-        write=UnsafePointer[DIReservoir, MutExternalOrigin].unsafe_dangling(),
-        gbuf_normal=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        gbuf_depth=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        gbuf_material_id=UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
-        gbuf_world_pos=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        read=UnsafePointer[DIReservoir, MutUntrackedOrigin].unsafe_dangling(),
+        write=UnsafePointer[DIReservoir, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_normal=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_depth=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_material_id=UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_world_pos=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0),
     )

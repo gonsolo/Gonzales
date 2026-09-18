@@ -266,7 +266,7 @@ def main() raises:
     # has finished. The comment at its declaration says exactly this, but
     # nothing enforced it: `spectral_ctx` is not mentioned again after
     # `spectral_handle(spectral_ctx)`, and that handle is only raw
-    # MutExternalOrigin pointers INTO it, so the origin erasure hides the
+    # MutUntrackedOrigin pointers INTO it, so the origin erasure hides the
     # dependency and ASAP destruction was free to drop the tables before
     # rendering ever read them.
     #

@@ -35,23 +35,23 @@ from .scene_builder import store_mesh
 # ── Output struct ─────────────────────────────────────────────────────────────
 
 struct ParsedScene_Mojo:
-    var raster_to_camera: UnsafePointer[Float32, MutExternalOrigin]   # 16 floats, column-major
-    var camera_to_world:  UnsafePointer[Float32, MutExternalOrigin]   # 16 floats, column-major
-    var materials:        UnsafePointer[Material_C, MutExternalOrigin]
+    var raster_to_camera: UnsafePointer[Float32, MutUntrackedOrigin]   # 16 floats, column-major
+    var camera_to_world:  UnsafePointer[Float32, MutUntrackedOrigin]   # 16 floats, column-major
+    var materials:        UnsafePointer[Material_C, MutUntrackedOrigin]
     var material_count:   Int32
-    var area_lights:      UnsafePointer[AreaLight_C, MutExternalOrigin]
+    var area_lights:      UnsafePointer[AreaLight_C, MutUntrackedOrigin]
     var area_light_count: Int32
-    var meshes:           UnsafePointer[TriangleMesh_C, MutExternalOrigin]
-    var mesh_pts:         UnsafePointer[UnsafePointer[Float32, MutExternalOrigin], MutExternalOrigin]
-    var mesh_vis:         UnsafePointer[UnsafePointer[Int64, MutExternalOrigin], MutExternalOrigin]
-    var mesh_fis:         UnsafePointer[UnsafePointer[Int64, MutExternalOrigin], MutExternalOrigin]
-    var mesh_n_verts:     UnsafePointer[Int32, MutExternalOrigin]
-    var mesh_n_tris:      UnsafePointer[Int32, MutExternalOrigin]
-    var mesh_uv_n_verts:  UnsafePointer[Int32, MutExternalOrigin]  # per-mesh UV vertex count; 0 = no UVs
-    var mesh_nrm_n_verts: UnsafePointer[Int32, MutExternalOrigin]  # per-mesh normal vertex count; 0 = no shading normals
+    var meshes:           UnsafePointer[TriangleMesh_C, MutUntrackedOrigin]
+    var mesh_pts:         UnsafePointer[UnsafePointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin]
+    var mesh_vis:         UnsafePointer[UnsafePointer[Int64, MutUntrackedOrigin], MutUntrackedOrigin]
+    var mesh_fis:         UnsafePointer[UnsafePointer[Int64, MutUntrackedOrigin], MutUntrackedOrigin]
+    var mesh_n_verts:     UnsafePointer[Int32, MutUntrackedOrigin]
+    var mesh_n_tris:      UnsafePointer[Int32, MutUntrackedOrigin]
+    var mesh_uv_n_verts:  UnsafePointer[Int32, MutUntrackedOrigin]  # per-mesh UV vertex count; 0 = no UVs
+    var mesh_nrm_n_verts: UnsafePointer[Int32, MutUntrackedOrigin]  # per-mesh normal vertex count; 0 = no shading normals
     var mesh_count:       Int32
-    var bvh_nodes:        UnsafePointer[BVH2Node, MutExternalOrigin]   # GPU-safe TLAS: tris+curves only, no instance leaves
-    var prim_ids:         UnsafePointer[PrimId_C, MutExternalOrigin]
+    var bvh_nodes:        UnsafePointer[BVH2Node, MutUntrackedOrigin]   # GPU-safe TLAS: tris+curves only, no instance leaves
+    var prim_ids:         UnsafePointer[PrimId_C, MutUntrackedOrigin]
     var bvh_node_count:   Int32
     var prim_count:       Int32
     # CPU-inclusive TLAS: tris+curves+instances. Used only by
@@ -60,8 +60,8 @@ struct ParsedScene_Mojo:
     # its traversal kernels have no BLAS/instance buffers to resolve a
     # PrimId_C.type==6 leaf, so one must never appear in its uploaded arrays
     # (confirmed via testing: it does not degrade gracefully, it crashes).
-    var bvh_nodes_cpu:      UnsafePointer[BVH2Node, MutExternalOrigin]
-    var prim_ids_cpu:       UnsafePointer[PrimId_C, MutExternalOrigin]
+    var bvh_nodes_cpu:      UnsafePointer[BVH2Node, MutUntrackedOrigin]
+    var prim_ids_cpu:       UnsafePointer[PrimId_C, MutUntrackedOrigin]
     var bvh_node_count_cpu: Int32
     var prim_count_cpu:     Int32
     var film_w:           Int32
@@ -78,7 +78,7 @@ struct ParsedScene_Mojo:
     var film_exposuretime: Float32
     var film_wb:          SIMD[DType.float32, 16]  # 3x3 row-major in lanes 0..8; sensor white balance
     var film_max_comp:    Float32
-    var film_filename:    UnsafePointer[UInt8, MutExternalOrigin]      # null-terminated
+    var film_filename:    UnsafePointer[UInt8, MutUntrackedOrigin]      # null-terminated
     var filter_sigma:     Float32
     var filter_support_x: Float32
     var filter_support_y: Float32
@@ -93,40 +93,40 @@ struct ParsedScene_Mojo:
     var rng_seed:         UInt64
     var sppm_radius:            Float32  # -1 = not specified by scene; caller falls back to CLI/default
     var sppm_photons_per_iter:  Int32    # -1 = not specified by scene; pbrt itself defaults to film_w*film_h
-    var tex_filenames:    UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin]
+    var tex_filenames:    UnsafePointer[UnsafePointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin]
     var tex_count:        Int32
     # Parallel to `tex_filenames`: the slope-space form of every texture some
     # material uses as a NORMAL map, for the SMS/MNEE manifold walk (see
     # geometry.mojo's NormalSlopeMap_C). Entries for other textures have
     # res == 0.
-    var nmaps:            UnsafePointer[NormalSlopeMap_C, MutExternalOrigin]
-    var distant_lights:   UnsafePointer[DistantLight_C, MutExternalOrigin]
+    var nmaps:            UnsafePointer[NormalSlopeMap_C, MutUntrackedOrigin]
+    var distant_lights:   UnsafePointer[DistantLight_C, MutUntrackedOrigin]
     var distant_count:    Int32
-    var point_lights:     UnsafePointer[PointLight_C, MutExternalOrigin]
+    var point_lights:     UnsafePointer[PointLight_C, MutUntrackedOrigin]
     var point_count:      Int32
-    var infinite_lights:  UnsafePointer[InfiniteLight_C, MutExternalOrigin]
+    var infinite_lights:  UnsafePointer[InfiniteLight_C, MutUntrackedOrigin]
     var infinite_count:   Int32
-    var spheres:          UnsafePointer[Sphere_C, MutExternalOrigin]
+    var spheres:          UnsafePointer[Sphere_C, MutUntrackedOrigin]
     var sphere_count:     Int32
-    var curves:           UnsafePointer[Curve_C, MutExternalOrigin]
+    var curves:           UnsafePointer[Curve_C, MutUntrackedOrigin]
     var curve_count:      Int32
-    var mediums:          UnsafePointer[Medium_C, MutExternalOrigin]
+    var mediums:          UnsafePointer[Medium_C, MutUntrackedOrigin]
     var medium_count:     Int32
-    var medium_ifaces:    UnsafePointer[MediumInterface_C, MutExternalOrigin]
+    var medium_ifaces:    UnsafePointer[MediumInterface_C, MutUntrackedOrigin]
     var medium_iface_count: Int32
-    var grids:            UnsafePointer[Grid_C, MutExternalOrigin]
+    var grids:            UnsafePointer[Grid_C, MutUntrackedOrigin]
     var grid_count:       Int32
-    var nvdb_grids:       UnsafePointer[NvdbGrid_C, MutExternalOrigin]
+    var nvdb_grids:       UnsafePointer[NvdbGrid_C, MutUntrackedOrigin]
     var nvdb_grid_count:  Int32
     var light_sampler:    LightSampler_C
     # Object instancing: one BLAS (private BVH2, over `meshes` above) per
     # ObjectBegin/ObjectEnd template, referenced by Instance_C.blasIdx.
-    var blas_nodes_arr:   UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin]
-    var blas_primids_arr: UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin]
-    var blas_node_counts:   UnsafePointer[Int32, MutExternalOrigin]  # per-BLAS array length, needed for GPU upload
-    var blas_primid_counts: UnsafePointer[Int32, MutExternalOrigin]
+    var blas_nodes_arr:   UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin]
+    var blas_primids_arr: UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin]
+    var blas_node_counts:   UnsafePointer[Int32, MutUntrackedOrigin]  # per-BLAS array length, needed for GPU upload
+    var blas_primid_counts: UnsafePointer[Int32, MutUntrackedOrigin]
     var blas_count:       Int32
-    var instances:        UnsafePointer[Instance_C, MutExternalOrigin]
+    var instances:        UnsafePointer[Instance_C, MutUntrackedOrigin]
     var instance_count:   Int32
     # Mesh-index range [start, end) each template's BLAS spans, into the SAME
     # `meshes` array above (a template can bundle several Shape calls, e.g.
@@ -135,18 +135,18 @@ struct ParsedScene_Mojo:
     # which needs to know which mesh indices are template-only (excluded from
     # its ordinary one-BLAS-per-mesh loop) and which meshes feed which
     # per-template multi-geometry BLAS -- see [[project_vulkan_rt_backend]].
-    var template_mesh_start: UnsafePointer[Int32, MutExternalOrigin]
-    var template_mesh_end:   UnsafePointer[Int32, MutExternalOrigin]
+    var template_mesh_start: UnsafePointer[Int32, MutUntrackedOrigin]
+    var template_mesh_end:   UnsafePointer[Int32, MutUntrackedOrigin]
     # "measured" materials: one MeasuredBRDF_C per distinct .bsdf file
     # (deduped by path), referenced by Material_C.measured_idx. Populated at
     # final-scene-build time from named_materials[i].measured_bsdf_path -- see
     # the dedup+load loop near the materials array build below.
-    var measured_brdfs:  UnsafePointer[MeasuredBRDF_C, MutExternalOrigin]
+    var measured_brdfs:  UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin]
     var measured_count:  Int32
 
 # ── Matrix utilities ──────────────────────────────────────────────────────────
 
-def _psc_identity(m: UnsafePointer[Float32, MutExternalOrigin]):
+def _psc_identity(m: UnsafePointer[Float32, MutUntrackedOrigin]):
     for i in range(16):
         m[unsafe_offset=i] = Float32(0)
     m[unsafe_offset=0] = Float32(1)
@@ -154,13 +154,13 @@ def _psc_identity(m: UnsafePointer[Float32, MutExternalOrigin]):
     m[unsafe_offset=10] = Float32(1)
     m[unsafe_offset=15] = Float32(1)
 
-def _psc_matcopy(dst: UnsafePointer[Float32, MutExternalOrigin],
-                src: UnsafePointer[Float32, MutExternalOrigin]):
+def _psc_matcopy(dst: UnsafePointer[Float32, MutUntrackedOrigin],
+                src: UnsafePointer[Float32, MutUntrackedOrigin]):
     for i in range(16):
         dst[unsafe_offset=i] = src[unsafe_offset=i]
 
-def _psc_ctm_concat(s: UnsafePointer[SceneParseState, MutExternalOrigin],
-                   t: UnsafePointer[Float32, MutExternalOrigin]):
+def _psc_ctm_concat(s: UnsafePointer[SceneParseState, MutUntrackedOrigin],
+                   t: UnsafePointer[Float32, MutUntrackedOrigin]):
     """Compute s.ctm = s.ctm × t and store back."""
     var result = alloc[Float32](16)
     matrix_multiply(s[unsafe_offset=0].ctm.unsafe_ptr(), t, result)
@@ -168,16 +168,16 @@ def _psc_ctm_concat(s: UnsafePointer[SceneParseState, MutExternalOrigin],
         s[unsafe_offset=0].ctm[i] = result[unsafe_offset=i]
     result.unsafe_free()
 
-def _psc_row_to_col(col_out: UnsafePointer[Float32, MutExternalOrigin],
-                   row_in:  UnsafePointer[Float32, MutExternalOrigin]):
+def _psc_row_to_col(col_out: UnsafePointer[Float32, MutUntrackedOrigin],
+                   row_in:  UnsafePointer[Float32, MutUntrackedOrigin]):
     for row in range(4):
         for col in range(4):
             col_out[unsafe_offset=col * 4 + row] = row_in[unsafe_offset=row * 4 + col]
 
 # ── Transform keyword handlers ────────────────────────────────────────────────
 
-def _psc_handle_translate(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
-                         s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def _psc_handle_translate(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
+                         s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     """Translate tx ty tz  →  CTM = CTM × T(tx,ty,tz)"""
     var v = alloc[Float32](3)
     v[unsafe_offset=0] = Float32(0); v[unsafe_offset=1] = Float32(0); v[unsafe_offset=2] = Float32(0)
@@ -190,8 +190,8 @@ def _psc_handle_translate(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     _psc_ctm_concat(s, t)
     v.unsafe_free(); t.unsafe_free()
 
-def _psc_handle_scale_kw(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
-                        s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def _psc_handle_scale_kw(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
+                        s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     """Scale sx sy sz  →  CTM = CTM × S(sx,sy,sz)"""
     var v = alloc[Float32](3)
     v[unsafe_offset=0] = Float32(1); v[unsafe_offset=1] = Float32(1); v[unsafe_offset=2] = Float32(1)
@@ -204,8 +204,8 @@ def _psc_handle_scale_kw(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     _psc_ctm_concat(s, t)
     v.unsafe_free(); t.unsafe_free()
 
-def _psc_handle_rotate(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
-                      s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def _psc_handle_rotate(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
+                      s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     """Rotate angle ax ay az  →  CTM = CTM × R(angle, axis)"""
     from std.math import sin as _sin, cos as _cos, sqrt as _sqrt
     var rv = alloc[Float32](4)  # angle, ax, ay, az
@@ -228,8 +228,8 @@ def _psc_handle_rotate(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     _psc_ctm_concat(s, t)
     rv.unsafe_free(); t.unsafe_free()
 
-def _psc_handle_lookat(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
-                      s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def _psc_handle_lookat(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
+                      s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     """LookAt ex ey ez  lx ly lz  ux uy uz"""
     from std.math import sqrt as _sqrt
     var v = alloc[Float32](9)
@@ -268,8 +268,8 @@ def _psc_handle_lookat(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
 
 # ── Directive handlers ────────────────────────────────────────────────────────
 
-def _psc_handle_integrator(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
-                          s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def _psc_handle_integrator(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
+                          s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     var sbuf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
     sbuf.unsafe_free()
@@ -278,8 +278,8 @@ def _psc_handle_integrator(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]
     s[unsafe_offset=0].sppm_radius = params.get_float("radius", s[unsafe_offset=0].sppm_radius)
     s[unsafe_offset=0].sppm_photons_per_iter = params.get_int("photonsperiteration", s[unsafe_offset=0].sppm_photons_per_iter)
 
-def _psc_handle_sampler(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
-                       s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def _psc_handle_sampler(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
+                       s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     var sbuf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
     sbuf.unsafe_free()
@@ -287,8 +287,8 @@ def _psc_handle_sampler(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     s[unsafe_offset=0].samples_per_pixel = params.get_int("pixelsamples", s[unsafe_offset=0].samples_per_pixel)
     s[unsafe_offset=0].samples_per_pixel = params.get_int("samples", s[unsafe_offset=0].samples_per_pixel)
 
-def _psc_handle_filter(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
-                      s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def _psc_handle_filter(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
+                      s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     var sbuf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
     if _psc_streq(sbuf, "triangle") or _psc_streq(sbuf, "tent"):
@@ -303,8 +303,8 @@ def _psc_handle_filter(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     s[unsafe_offset=0].filter_support_y = params.get_float("yradius", s[unsafe_offset=0].filter_support_y)
     s[unsafe_offset=0].filter_sigma = params.get_float("sigma", s[unsafe_offset=0].filter_sigma)
 
-def _psc_handle_film(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
-                    s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def _psc_handle_film(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
+                    s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     var sbuf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
     # The film TYPE is otherwise unused: every type renders as "rgb". That is
@@ -341,8 +341,8 @@ def _psc_handle_film(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         s[unsafe_offset=0].crop_x0 = cw[0]; s[unsafe_offset=0].crop_x1 = cw[1]
         s[unsafe_offset=0].crop_y0 = cw[2]; s[unsafe_offset=0].crop_y1 = cw[3]
 
-def _psc_handle_camera(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
-                      s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def _psc_handle_camera(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
+                      s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     var sbuf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
     sbuf.unsafe_free()
@@ -351,8 +351,8 @@ def _psc_handle_camera(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     var params = _psc_collect_params(handle)
     s[unsafe_offset=0].camera_fov = params.get_float("fov", s[unsafe_offset=0].camera_fov)
 
-def _psc_handle_transform(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
-                         s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def _psc_handle_transform(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
+                         s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     _ = scanner_scan_char(handle, UInt8(91))  # '['
     var tmp = alloc[Float32](1)
     for i in range(16):
@@ -361,17 +361,17 @@ def _psc_handle_transform(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     tmp.unsafe_free()
     _ = scanner_scan_char(handle, UInt8(93))  # ']'
 
-def _psc_handle_world_begin(s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def _psc_handle_world_begin(s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     for i in range(16): s[unsafe_offset=0].ctm[i] = Float32(0)
     s[unsafe_offset=0].ctm[0] = Float32(1); s[unsafe_offset=0].ctm[5] = Float32(1)
     s[unsafe_offset=0].ctm[10] = Float32(1); s[unsafe_offset=0].ctm[15] = Float32(1)
     s[unsafe_offset=0].ctm_stack.clear()
 
-def _psc_handle_attribute_begin(s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def _psc_handle_attribute_begin(s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     ctm_push(s[unsafe_offset=0])
     s[unsafe_offset=0].attr_stack.append(s[unsafe_offset=0].cur_attr)
 
-def _psc_handle_attribute_end(s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def _psc_handle_attribute_end(s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     ctm_pop(s[unsafe_offset=0])
     if len(s[unsafe_offset=0].attr_stack) > 0:
         s[unsafe_offset=0].cur_attr = s[unsafe_offset=0].attr_stack[len(s[unsafe_offset=0].attr_stack) - 1]
@@ -553,8 +553,8 @@ def _loopsubdiv_tessellate(
 
 # ── Hair curve helpers ────────────────────────────────────────────────────────
 
-def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
-                            s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
+                            s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     """PBRT `Shape "curve"`: stored natively (no tessellation) as one Curve_C
     per local cubic B-spline segment, CTM-transformed at parse time. See
     Curve_C / intersect_curve in geometry.mojo for the BVH-time intersection."""
@@ -630,8 +630,8 @@ def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
 # larger shape would need a higher CLOUD_BAKE_RES to stay crisp.
 comptime CLOUD_BAKE_RES: Int = 320
 
-def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
-                                  s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
+                                  s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     var name_buf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, name_buf, 64)
     var params = _psc_collect_params(handle)
@@ -881,8 +881,8 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                             "homogeneous, uniformgrid, nanovdb, cloud")
     name_buf.unsafe_free()
 
-def lookup_medium(s: UnsafePointer[SceneParseState, MutExternalOrigin],
-                  name: UnsafePointer[UInt8, MutExternalOrigin]) -> Int32:
+def lookup_medium(s: UnsafePointer[SceneParseState, MutUntrackedOrigin],
+                  name: UnsafePointer[UInt8, MutUntrackedOrigin]) -> Int32:
     if name[unsafe_offset=0] == UInt8(0):
         return Int32(-1)
     var name_str = String(unsafe_from_utf8_ptr=name.as_imm())
@@ -891,8 +891,8 @@ def lookup_medium(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             return Int32(i)
     return Int32(-1)
 
-def handle_medium_interface(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
-                            s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def handle_medium_interface(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
+                            s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     var inside_buf  = alloc[UInt8](64)
     var outside_buf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, inside_buf, 64)
@@ -903,8 +903,8 @@ def handle_medium_interface(handle: UnsafePointer[PbrtScanner, MutExternalOrigin
 
 # ── Shape handlers ────────────────────────────────────────────────────────────
 
-def handle_sphere_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
-                             s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def handle_sphere_shape(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
+                             s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     var params = _psc_collect_params(handle)
     var radius = params.get_float("radius", Float32(1.0))
 
@@ -940,7 +940,7 @@ def handle_sphere_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     s[unsafe_offset=0].spheres_rgb.append(s[unsafe_offset=0].cur_attr.al_rgb)
 
 def _resolve_pending_cloud_grid(
-    s: UnsafePointer[SceneParseState, MutExternalOrigin], grid_idx: Int32,
+    s: UnsafePointer[SceneParseState, MutUntrackedOrigin], grid_idx: Int32,
     min_x: Float32, min_y: Float32, min_z: Float32,
     max_x: Float32, max_y: Float32, max_z: Float32,
 ):
@@ -981,8 +981,8 @@ def _resolve_pending_cloud_grid(
 
 comptime DISK_TESSELLATION_SEGMENTS: Int = 32
 
-def handle_disk_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
-                           s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def handle_disk_shape(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
+                           s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     """PBRT `Shape "disk"`: not a native primitive here (unlike sphere) --
     tessellated into a triangle mesh at parse time and handed to the
     existing trianglemesh machinery (BVH, area-light NEE/ReSTIR, GPU, ...)
@@ -1053,8 +1053,8 @@ def handle_disk_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     var n_tris = Int32(len(idx) // 3)
     store_mesh(s, pts.unsafe_ptr(), idx.unsafe_ptr(), n_verts, n_tris)
 
-def handle_bilinearmesh_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
-                               s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def handle_bilinearmesh_shape(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
+                               s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     """PBRT `Shape "bilinearmesh"`: one or more planar-quad patches given as
     "point3 P" (+ optional "integer indices", 4 per patch; pbrt's own
     default when omitted and len(P)==4 is a single patch {0,1,2,3} -- see
@@ -1107,8 +1107,8 @@ def handle_bilinearmesh_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrig
     var n_tris = Int32(len(idx) // 3)
     store_mesh(s, p.unsafe_ptr(), idx.unsafe_ptr(), n_pts, n_tris)
 
-def handle_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
-                     s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def handle_shape(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
+                     s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     var shape_type = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, shape_type, 64)
 
@@ -1210,17 +1210,17 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
             fn_i += 1
         full_path[unsafe_offset=dir_len + fn_i] = UInt8(0)
 
-        var ply_pts     = alloc[UnsafePointer[Float32, MutExternalOrigin]](1)
+        var ply_pts     = alloc[UnsafePointer[Float32, MutUntrackedOrigin]](1)
         var ply_nv      = alloc[Int32](1)
-        var ply_idx     = alloc[UnsafePointer[Int32, MutExternalOrigin]](1)
+        var ply_idx     = alloc[UnsafePointer[Int32, MutUntrackedOrigin]](1)
         var ply_nt      = alloc[Int32](1)
-        var ply_uvs     = alloc[UnsafePointer[Float32, MutExternalOrigin]](1)
+        var ply_uvs     = alloc[UnsafePointer[Float32, MutUntrackedOrigin]](1)
         var ply_has_uvs = alloc[Int32](1)
-        var ply_nrm     = alloc[UnsafePointer[Float32, MutExternalOrigin]](1)
+        var ply_nrm     = alloc[UnsafePointer[Float32, MutUntrackedOrigin]](1)
         var ply_has_nrm = alloc[Int32](1)
-        ply_uvs[unsafe_offset=0] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
+        ply_uvs[unsafe_offset=0] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling()
         ply_has_uvs[unsafe_offset=0] = Int32(0)
-        ply_nrm[unsafe_offset=0] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
+        ply_nrm[unsafe_offset=0] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling()
         ply_has_nrm[unsafe_offset=0] = Int32(0)
         # For .ply.gz, use the decompressed .ply sibling (strip ".gz"),
         # auto-decompressing once if it isn't there yet. load_ply reads the
@@ -1417,8 +1417,8 @@ def _psc_get_sigma_or_rgb(params: ParameterDictionary, name: StringLiteral, defa
         return RGB(mean_v)
     return default
 
-def handle_texture(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
-                       s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def handle_texture(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
+                       s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     var tex_name = alloc[UInt8](PSC_NAME_MAX)
     _ = scanner_parse_quoted_string(handle, tex_name, PSC_NAME_MAX)
     var tex_type = alloc[UInt8](64)
@@ -1526,7 +1526,7 @@ def handle_texture(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
 # placement contributes a small TLAS leaf (transform + BLAS reference) rather
 # than a duplicated copy of the geometry.
 
-def _psc_finish_object_def(s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def _psc_finish_object_def(s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     """Called when the outermost ObjectEnd closes a template: mark the
     meshes captured since the matching ObjectBegin as template-only and
     record the template's (name, mesh range, definition-time CTM) for
@@ -1543,7 +1543,7 @@ def _psc_finish_object_def(s: UnsafePointer[SceneParseState, MutExternalOrigin])
     for ci in range(16):
         s[unsafe_offset=0].object_ctm.append(s[unsafe_offset=0].pending_object_ctm[ci])
 
-def _psc_emit_object_instance(s: UnsafePointer[SceneParseState, MutExternalOrigin], name: String):
+def _psc_emit_object_instance(s: UnsafePointer[SceneParseState, MutUntrackedOrigin], name: String):
     """Called on ObjectInstance "name": look up the named template and record
     a placement (template index + obj_to_world/world_to_obj transforms,
     derived from the CTM active now vs. the CTM active at that template's
@@ -1577,8 +1577,8 @@ def _psc_emit_object_instance(s: UnsafePointer[SceneParseState, MutExternalOrigi
 
 # ── Main parse loop ───────────────────────────────────────────────────────────
 
-def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
-              s: UnsafePointer[SceneParseState, MutExternalOrigin]):
+def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutUntrackedOrigin],
+              s: UnsafePointer[SceneParseState, MutUntrackedOrigin]):
     var kw_buf = alloc[UInt8](256)
     var ws_delims = alloc[UInt8](4)
     ws_delims[unsafe_offset=0] = UInt8(32); ws_delims[unsafe_offset=1] = UInt8(9)
@@ -1690,13 +1690,13 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
             # error at all. Auto-decompress once into a cached ".pbrt"
             # sibling next to the source (mirrors the pre-existing ".ply.gz"
             # sibling-file convention above), then open that instead.
-            var open_path: UnsafePointer[UInt8, MutExternalOrigin] = inc_path
+            var open_path: UnsafePointer[UInt8, MutUntrackedOrigin] = inc_path
             var inc_path_len = dlen + fi
             var ends_gz = (inc_path_len >= 3 and
                            inc_path[unsafe_offset=inc_path_len-3] == UInt8(46) and
                            inc_path[unsafe_offset=inc_path_len-2] == UInt8(103) and
                            inc_path[unsafe_offset=inc_path_len-1] == UInt8(122))
-            var stripped = UnsafePointer[UInt8, MutExternalOrigin].unsafe_dangling()
+            var stripped = UnsafePointer[UInt8, MutUntrackedOrigin].unsafe_dangling()
             if ends_gz:
                 stripped = alloc[UInt8](inc_path_len - 2)
                 for ci in range(inc_path_len - 3):
@@ -1774,7 +1774,7 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
 # ── Camera/film matrix helpers ────────────────────────────────────────────────
 
 def make_perspective_matrix(fov_deg: Float32, near: Float32,
-                         dst: UnsafePointer[Float32, MutExternalOrigin]):
+                         dst: UnsafePointer[Float32, MutUntrackedOrigin]):
     var half_rad = fov_deg * PI / Float32(360)
     var inv_tan = Float32(1) / tan(half_rad)
     var far = fov_deg
@@ -1791,7 +1791,7 @@ def make_perspective_matrix(fov_deg: Float32, near: Float32,
 def make_screen_to_raster(fw: Int32, fh: Int32,
                                smin_x: Float32, smax_x: Float32,
                                smin_y: Float32, smax_y: Float32,
-                               dst: UnsafePointer[Float32, MutExternalOrigin]):
+                               dst: UnsafePointer[Float32, MutUntrackedOrigin]):
     var sx = Float32(fw) / (smax_x - smin_x)
     var sy = Float32(fh) / (smin_y - smax_y)
     var tx = -smin_x * sx
@@ -1821,8 +1821,8 @@ comptime CURVE_GROUP_MAX: Int = 2   # hard cap on pieces merged per BVH leaf —
 def _curve_greedy_groups(
     curve: Curve_C,
     n_pieces: Int,
-    out_first: UnsafePointer[Int32, MutExternalOrigin],
-    out_count: UnsafePointer[Int32, MutExternalOrigin],
+    out_first: UnsafePointer[Int32, MutUntrackedOrigin],
+    out_count: UnsafePointer[Int32, MutUntrackedOrigin],
     write: Bool,
 ) -> Int:
     """Greedy-merge adjacent pieces of one curve into flat runs. Returns the
@@ -1956,8 +1956,8 @@ def _film_white_balance_matrix(temp_k: Float32) -> SIMD[DType.float32, 16]:
 
 # ── Scene finalization ────────────────────────────────────────────────────────
 
-def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
-                 psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
+def finalize_scene(s: UnsafePointer[SceneParseState, MutUntrackedOrigin],
+                 psc: UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin],
                  verbose: Bool = False):
 
     # ---- Camera matrices ----
@@ -2176,9 +2176,9 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
     # ---- Meshes + area lights ----
     var n_meshes = len(s[unsafe_offset=0].meshes)
     var meshes   = alloc[TriangleMesh_C](max(n_meshes, 1))
-    var out_pts  = alloc[UnsafePointer[Float32, MutExternalOrigin]](max(n_meshes, 1))
-    var out_vis  = alloc[UnsafePointer[Int64, MutExternalOrigin]](max(n_meshes, 1))
-    var out_fis  = alloc[UnsafePointer[Int64, MutExternalOrigin]](max(n_meshes, 1))
+    var out_pts  = alloc[UnsafePointer[Float32, MutUntrackedOrigin]](max(n_meshes, 1))
+    var out_vis  = alloc[UnsafePointer[Int64, MutUntrackedOrigin]](max(n_meshes, 1))
+    var out_fis  = alloc[UnsafePointer[Int64, MutUntrackedOrigin]](max(n_meshes, 1))
     var out_nv    = alloc[Int32](max(n_meshes, 1))
     var out_nt    = alloc[Int32](max(n_meshes, 1))
     var out_uv_nv = alloc[Int32](max(n_meshes, 1))
@@ -2216,7 +2216,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             meshes[unsafe_offset=i].uvs = uv_c
             out_uv_nv[unsafe_offset=i] = Int32(nv)
         else:
-            meshes[unsafe_offset=i].uvs = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
+            meshes[unsafe_offset=i].uvs = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling()
             out_uv_nv[unsafe_offset=i] = Int32(0)
         if len(ma.normals) >= nv * 3:
             var nrm_c = alloc[Float32](nv * 3)
@@ -2224,7 +2224,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             meshes[unsafe_offset=i].normals = nrm_c
             out_nrm_nv[unsafe_offset=i] = Int32(nv)
         else:
-            meshes[unsafe_offset=i].normals = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
+            meshes[unsafe_offset=i].normals = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling()
             out_nrm_nv[unsafe_offset=i] = Int32(0)
 
         if ma.is_area_light:
@@ -2360,7 +2360,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
         psc[unsafe_offset=0].medium_ifaces = iface_buf
         psc[unsafe_offset=0].medium_iface_count = Int32(iface_idx)
     else:
-        psc[unsafe_offset=0].medium_ifaces = UnsafePointer[MediumInterface_C, MutExternalOrigin].unsafe_dangling()
+        psc[unsafe_offset=0].medium_ifaces = UnsafePointer[MediumInterface_C, MutUntrackedOrigin].unsafe_dangling()
         psc[unsafe_offset=0].medium_iface_count = Int32(0)
 
     var total_tris = Int32(0)
@@ -2485,8 +2485,8 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
     # entries referencing the SAME GLOBAL `meshes` array (no per-BLAS mesh
     # storage, no geometry duplication).
     var n_templates = len(s[unsafe_offset=0].object_names)
-    var blas_nodes_arr   = alloc[UnsafePointer[BVH2Node, MutExternalOrigin]](max(n_templates, 1))
-    var blas_primids_arr = alloc[UnsafePointer[PrimId_C, MutExternalOrigin]](max(n_templates, 1))
+    var blas_nodes_arr   = alloc[UnsafePointer[BVH2Node, MutUntrackedOrigin]](max(n_templates, 1))
+    var blas_primids_arr = alloc[UnsafePointer[PrimId_C, MutUntrackedOrigin]](max(n_templates, 1))
     # Per-BLAS array lengths — the CPU traversal side never needs these (it
     # just walks from node/primid index 0, self-describing via each node's
     # offset/count), but GPU upload does: it copies each BLAS's arrays into
@@ -2735,7 +2735,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
 
     # ---- Texture filename table ----
     var n_tex = len(s[unsafe_offset=0].tex_names)
-    var tex_ptrs = alloc[UnsafePointer[UInt8, MutExternalOrigin]](max(n_tex, 1))
+    var tex_ptrs = alloc[UnsafePointer[UInt8, MutUntrackedOrigin]](max(n_tex, 1))
     for ti in range(n_tex):
         var fstr = s[unsafe_offset=0].tex_files[ti]
         var slen = fstr.byte_length()
@@ -2812,7 +2812,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
     # of the raw RGB does not give consistently with the reference -- see
     # geometry.mojo's NormalSlopeMap_C for the representation and
     # sms.mojo's nmap_eval/nmap_eval_derivs for the evaluation.
-    psc[unsafe_offset=0].nmaps = UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling()
+    psc[unsafe_offset=0].nmaps = UnsafePointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling()
     if n_tex > 0:
         var nmaps = alloc[NormalSlopeMap_C](n_tex)
         for ti in range(n_tex):
@@ -2844,13 +2844,13 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                     break
                 var nti = nm_idx[unsafe_offset=k]
                 nonsquare[unsafe_offset=k * 2] = Int32(0); nonsquare[unsafe_offset=k * 2 + 1] = Int32(0)
-                var np_ptr = alloc[UnsafePointer[Float32, MutExternalOrigin]](1)
+                var np_ptr = alloc[UnsafePointer[Float32, MutUntrackedOrigin]](1)
                 var nw_out = alloc[Int32](1); var nh_out = alloc[Int32](1)
                 nw_out[unsafe_offset=0] = Int32(0); nh_out[unsafe_offset=0] = Int32(0)
                 var nm_ok = external_call["load_texture_rgb", Int32,
-                    UnsafePointer[UInt8, MutExternalOrigin],
-                    UnsafePointer[UnsafePointer[Float32, MutExternalOrigin], MutExternalOrigin],
-                    UnsafePointer[Int32, MutExternalOrigin], UnsafePointer[Int32, MutExternalOrigin],
+                    UnsafePointer[UInt8, MutUntrackedOrigin],
+                    UnsafePointer[UnsafePointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin],
+                    UnsafePointer[Int32, MutUntrackedOrigin], UnsafePointer[Int32, MutUntrackedOrigin],
                     Int32](
                     tex_ptrs[unsafe_offset=nti], np_ptr, nw_out, nh_out, Int32(1))   # raw=1: no sRGB decode
                 var nw = Int(nw_out[unsafe_offset=0]); var nh = Int(nh_out[unsafe_offset=0])
@@ -2871,7 +2871,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                             slopes[unsafe_offset=i*2+1] = Float32(0.0)
                     nmaps[unsafe_offset=nti] = NormalSlopeMap_C(slopes, Int32(nw))
                     _ = external_call["free_texture_rgb", Int32,
-                        UnsafePointer[Float32, MutExternalOrigin]](src)
+                        UnsafePointer[Float32, MutUntrackedOrigin]](src)
                 elif nm_ok != Int32(0) and nw > 0:
                     # Non-square: the slope-map addressing (and the reference it
                     # mirrors) assumes square, power-of-two maps. Leave res == 0
@@ -2879,7 +2879,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                     # reading the map with the wrong stride.
                     nonsquare[unsafe_offset=k * 2] = Int32(nw); nonsquare[unsafe_offset=k * 2 + 1] = Int32(nh)
                     _ = external_call["free_texture_rgb", Int32,
-                        UnsafePointer[Float32, MutExternalOrigin]](np_ptr[unsafe_offset=0])
+                        UnsafePointer[Float32, MutUntrackedOrigin]](np_ptr[unsafe_offset=0])
                 np_ptr.unsafe_free()
 
         if n_nm > 0:
@@ -2903,7 +2903,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                 Float32(0))
         psc[unsafe_offset=0].distant_lights = dl_buf
     else:
-        psc[unsafe_offset=0].distant_lights = UnsafePointer[DistantLight_C, MutExternalOrigin].unsafe_dangling()
+        psc[unsafe_offset=0].distant_lights = UnsafePointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].distant_count = Int32(nd)
 
     var np2 = len(s[unsafe_offset=0].point_pos) // 3
@@ -2917,7 +2917,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                 Float32(0))
         psc[unsafe_offset=0].point_lights = pl_buf
     else:
-        psc[unsafe_offset=0].point_lights = UnsafePointer[PointLight_C, MutExternalOrigin].unsafe_dangling()
+        psc[unsafe_offset=0].point_lights = UnsafePointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].point_count = Int32(np2)
 
     var ni = len(s[unsafe_offset=0].inf_tex_idx)
@@ -2927,17 +2927,17 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             var tidx = s[unsafe_offset=0].inf_tex_idx[i]
             var sc = RGB(s[unsafe_offset=0].inf_rgb[i*3+0], s[unsafe_offset=0].inf_rgb[i*3+1], s[unsafe_offset=0].inf_rgb[i*3+2])
             var cdf_w = Int32(0); var cdf_h = Int32(0)
-            var cdf_ptr = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
-            var raw_pixels = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
+            var cdf_ptr = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling()
+            var raw_pixels = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling()
             if tidx >= Int32(0):
                 var fname2 = psc[unsafe_offset=0].tex_filenames[unsafe_offset=Int(tidx)]
-                var pixels_ptr = alloc[UnsafePointer[Float32, MutExternalOrigin]](1)
+                var pixels_ptr = alloc[UnsafePointer[Float32, MutUntrackedOrigin]](1)
                 var iw_out = alloc[Int32](1); var ih_out = alloc[Int32](1)
                 iw_out[unsafe_offset=0] = Int32(0); ih_out[unsafe_offset=0] = Int32(0)
                 var load_ok = external_call["load_texture_rgb", Int32,
-                    UnsafePointer[UInt8, MutExternalOrigin],
-                    UnsafePointer[UnsafePointer[Float32, MutExternalOrigin], MutExternalOrigin],
-                    UnsafePointer[Int32, MutExternalOrigin], UnsafePointer[Int32, MutExternalOrigin],
+                    UnsafePointer[UInt8, MutUntrackedOrigin],
+                    UnsafePointer[UnsafePointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin],
+                    UnsafePointer[Int32, MutUntrackedOrigin], UnsafePointer[Int32, MutUntrackedOrigin],
                     Int32](
                     fname2, pixels_ptr, iw_out, ih_out, Int32(0))
                 var iw = Int(iw_out[unsafe_offset=0]); var ih = Int(ih_out[unsafe_offset=0])
@@ -3008,7 +3008,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             il_buf[unsafe_offset=i] = InfiniteLight_C(sc, tidx, cdf_w, cdf_h, cdf_ptr, raw_pixels, w2l)
         psc[unsafe_offset=0].infinite_lights = il_buf
     else:
-        psc[unsafe_offset=0].infinite_lights = UnsafePointer[InfiniteLight_C, MutExternalOrigin].unsafe_dangling()
+        psc[unsafe_offset=0].infinite_lights = UnsafePointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].infinite_count = Int32(ni)
 
     # ---- Analytical spheres ----
@@ -3030,7 +3030,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                 em)
         psc[unsafe_offset=0].spheres = sph_buf
     else:
-        psc[unsafe_offset=0].spheres = UnsafePointer[Sphere_C, MutExternalOrigin].unsafe_dangling()
+        psc[unsafe_offset=0].spheres = UnsafePointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].sphere_count = Int32(ns)
 
     # ---- Native curves (hair/fur) ----
@@ -3050,7 +3050,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                 s[unsafe_offset=0].curves_w0[i], s[unsafe_offset=0].curves_w1[i], s[unsafe_offset=0].curves_mat[i], curve_n_pieces[unsafe_offset=i])
         psc[unsafe_offset=0].curves = curve_buf
     else:
-        psc[unsafe_offset=0].curves = UnsafePointer[Curve_C, MutExternalOrigin].unsafe_dangling()
+        psc[unsafe_offset=0].curves = UnsafePointer[Curve_C, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].curve_count = Int32(nc)
     curve_n_pieces.unsafe_free()
 
@@ -3099,7 +3099,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             ctm_tmp.unsafe_free(); w2m.unsafe_free()
         psc[unsafe_offset=0].grids = grid_buf
     else:
-        psc[unsafe_offset=0].grids = UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling()
+        psc[unsafe_offset=0].grids = UnsafePointer[Grid_C, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].grid_count = Int32(ng)
 
     # ---- Sparse density grids ("nanovdb" media) ----
@@ -3138,7 +3138,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             cname.unsafe_free()
             cpath.unsafe_free()
 
-            var blob: UnsafePointer[UInt8, MutExternalOrigin]
+            var blob: UnsafePointer[UInt8, MutUntrackedOrigin]
             var blob_size_v = Int64(0)
             var idx_min = Point3f(Float32(0), Float32(0), Float32(0))
             var idx_max = Point3f(Float32(-1), Float32(-1), Float32(-1))  # empty range: min > max
@@ -3151,7 +3151,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                 # grid is worth warning about.
                 if s[unsafe_offset=0].nvdb_gridnames[i] != "temperature":
                     print("Warning: could not load nanovdb grid '" + s[unsafe_offset=0].nvdb_gridnames[i] + "' from:", path_str)
-                blob = UnsafePointer[UInt8, MutExternalOrigin].unsafe_dangling()
+                blob = UnsafePointer[UInt8, MutUntrackedOrigin].unsafe_dangling()
             else:
                 var blob_size = Int(nvdb_size(handle))
                 blob_size_v = Int64(blob_size)
@@ -3194,7 +3194,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             nvdb_buf[unsafe_offset=i] = NvdbGrid_C(blob, blob_size_v, w2m2_simd, imat, mvec, idx_min, idx_max, max_d)
         psc[unsafe_offset=0].nvdb_grids = nvdb_buf
     else:
-        psc[unsafe_offset=0].nvdb_grids = UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling()
+        psc[unsafe_offset=0].nvdb_grids = UnsafePointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].nvdb_grid_count = Int32(nvg)
 
     # ---- Media ----
@@ -3211,7 +3211,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                                   s[unsafe_offset=0].med_is_sss[i])
         psc[unsafe_offset=0].mediums = med_buf
     else:
-        psc[unsafe_offset=0].mediums = UnsafePointer[Medium_C, MutExternalOrigin].unsafe_dangling()
+        psc[unsafe_offset=0].mediums = UnsafePointer[Medium_C, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].medium_count = Int32(nm)
 
     # ---- Build power-weighted area light CDF ----
@@ -3235,7 +3235,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
 
 # ── Exported API ──────────────────────────────────────────────────────────────
 
-def resize_film(psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
+def resize_film(psc: UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin],
                new_w: Int32, new_h: Int32):
     psc[unsafe_offset=0].film_w = new_w
     psc[unsafe_offset=0].film_h = new_h
@@ -3264,15 +3264,15 @@ def resize_film(psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
     psc[unsafe_offset=0].raster_to_camera = r2c
     cts.unsafe_free(); str_mat.unsafe_free(); rts.unsafe_free(); cts_inv.unsafe_free()
 
-def mojo_parse_scene(path: UnsafePointer[UInt8, MutExternalOrigin],
+def mojo_parse_scene(path: UnsafePointer[UInt8, MutUntrackedOrigin],
                      verbose: Bool = False,
-                    ) -> UnsafePointer[ParsedScene_Mojo, MutExternalOrigin]:
+                    ) -> UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin]:
     external_call["createTextureSystem", NoneType]()
     var handle = scanner_open(path)
     if handle[unsafe_offset=0].is_at_end != Int32(0):
         print("Error: cannot open scene file:", String(unsafe_from_utf8_ptr=path.as_imm()))
         scanner_free(handle)
-        return UnsafePointer[ParsedScene_Mojo, MutExternalOrigin].unsafe_dangling()
+        return UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin].unsafe_dangling()
 
     var s_ptr = alloc[SceneParseState](1)
     s_ptr.init_pointee_move(SceneParseState())
@@ -3299,7 +3299,7 @@ def mojo_parse_scene(path: UnsafePointer[UInt8, MutExternalOrigin],
     s_ptr.unsafe_free()
     return psc
 
-def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin]):
+def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin]):
     if Int(psc) == 0:
         return
     var n = Int(psc[unsafe_offset=0].mesh_count)
@@ -3360,7 +3360,7 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin]):
                 il.cdf_ptr.unsafe_free()
             if _is_real_ptr(il.pixels_ptr):
                 _ = external_call["free_texture_rgb", Int32,
-                    UnsafePointer[Float32, MutExternalOrigin]](il.pixels_ptr)
+                    UnsafePointer[Float32, MutUntrackedOrigin]](il.pixels_ptr)
             il.world_to_light.unsafe_free()
         psc[unsafe_offset=0].infinite_lights.unsafe_free()
     if psc[unsafe_offset=0].sphere_count > 0:
@@ -3414,7 +3414,7 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin]):
     psc.unsafe_free()
 
 def mojo_apply_overrides(
-    psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
+    psc: UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin],
     spp_override: Int32,
     w_override: Int32,
     h_override: Int32,
@@ -3481,9 +3481,9 @@ def mojo_apply_overrides(
         psc[unsafe_offset=0].n_base4_digits = log2_dim + log4_spp
 
 def mojo_parsed_scene_descriptor(
-    psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
+    psc: UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin],
     spectral: SpectralHandle,
-) -> UnsafePointer[SceneDescriptor2_C, MutExternalOrigin]:
+) -> UnsafePointer[SceneDescriptor2_C, MutUntrackedOrigin]:
     var sd = alloc[SceneDescriptor2_C](1)
     sd[unsafe_offset=0].bvh2Nodes        = psc[unsafe_offset=0].bvh_nodes_cpu
     sd[unsafe_offset=0].primIds          = psc[unsafe_offset=0].prim_ids_cpu
@@ -3527,6 +3527,6 @@ def mojo_parsed_scene_descriptor(
     # _tex_lookup[False] branch uses sd.textures/textureCount above
     # instead) -- dangling/0, same convention every other GPU-only field
     # here would use if this were a GPU builder.
-    sd[unsafe_offset=0].gpuTextures      = UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling()
+    sd[unsafe_offset=0].gpuTextures      = UnsafePointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling()
     sd[unsafe_offset=0].gpuTextureCount  = Int64(0)
     return sd

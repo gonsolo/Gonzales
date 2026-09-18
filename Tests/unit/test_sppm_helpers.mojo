@@ -265,9 +265,9 @@ def _make_triangle_mesh(p0: Vec3f, p1: Vec3f, p2: Vec3f) -> TriangleMesh_C:
     var vidx = alloc[Int64](3)
     vidx[unsafe_offset=0] = 0; vidx[unsafe_offset=1] = 1; vidx[unsafe_offset=2] = 2
     return TriangleMesh_C(
-        points, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), vidx,
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        points, UnsafePointer[Int64, MutUntrackedOrigin].unsafe_dangling(), vidx,
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
 
 def test_sample_area_light_uniform_point_is_a_convex_combination_of_vertices() raises:

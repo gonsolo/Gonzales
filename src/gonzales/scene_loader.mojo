@@ -7,9 +7,9 @@ from .mitsuba_parser import mojo_parse_mitsuba_scene
 # mitsuba_parser.mojo already depends on pbrt_parser.mojo for
 # ParsedScene_Mojo/finalize_scene, so the reverse dependency has to live
 # elsewhere.
-def mojo_parse_scene_any(path: UnsafePointer[UInt8, MutExternalOrigin],
+def mojo_parse_scene_any(path: UnsafePointer[UInt8, MutUntrackedOrigin],
                          verbose: Bool = False,
-                        ) -> UnsafePointer[ParsedScene_Mojo, MutExternalOrigin]:
+                        ) -> UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin]:
     var pi = 0
     while path[unsafe_offset=pi] != UInt8(0):
         pi += 1

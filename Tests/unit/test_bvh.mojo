@@ -100,7 +100,7 @@ def test_intersect_aabb_axis_aligned_ray_offset_misses() raises:
 
 # ── build_bvh2: the parallel build must reproduce the serial tree exactly ────
 
-def _fill_boxes(bounds: UnsafePointer[Float32, MutExternalOrigin], n: Int, seed: UInt64,
+def _fill_boxes(bounds: UnsafePointer[Float32, MutUntrackedOrigin], n: Int, seed: UInt64,
                 clusters: Int, dup_every: Int):
     """Deterministic pseudo-random AABBs, 6 floats each (min xyz, max xyz).
     clusters > 0 gathers centres around that many points; dup_every > 0 makes

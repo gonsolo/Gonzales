@@ -263,10 +263,10 @@ def test_vol_combine_does_not_clamp_a_legitimately_large_weight() raises:
 def _io_temporal_only(mut prev_buf: List[VolReservoir], mut write_buf: List[VolReservoir]) -> VolReservoirIO:
     # frame_w/frame_h = 0 disables the spatial pass, isolating temporal behaviour.
     return VolReservoirIO(
-        read=prev_buf.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](),
-        write=write_buf.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](),
-        gbuf_depth=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        gbuf_world_pos=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        read=prev_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+        write=write_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+        gbuf_depth=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_world_pos=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0),
     )
 

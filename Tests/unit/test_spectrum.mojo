@@ -32,9 +32,9 @@ comptime N_TRIALS = 2000
 # fields are unpacked at each call site: handle.coeffs, handle.res,
 # handle.cie_x, handle.cie_y, handle.cie_z, handle.d65.
 def _roundtrip(
-    coeffs: UnsafePointer[Float32, MutExternalOrigin], res: Int,
-    cie_x: UnsafePointer[Float32, MutExternalOrigin], cie_y: UnsafePointer[Float32, MutExternalOrigin],
-    cie_z: UnsafePointer[Float32, MutExternalOrigin], d65: UnsafePointer[Float32, MutExternalOrigin],
+    coeffs: UnsafePointer[Float32, MutUntrackedOrigin], res: Int,
+    cie_x: UnsafePointer[Float32, MutUntrackedOrigin], cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
+    cie_z: UnsafePointer[Float32, MutUntrackedOrigin], d65: UnsafePointer[Float32, MutUntrackedOrigin],
     r: Float32, g: Float32, b: Float32,
 ) -> Tuple[Float32, Float32, Float32]:
     """A bare reflectance spectrum is fit assuming it's viewed under a D65
@@ -98,7 +98,7 @@ def test_roundtrip_white_is_near_identity() raises:
     assert_true(_close(g, Float32(1.0), Float32(0.02)))
     assert_true(_close(b, Float32(1.0), Float32(0.02)))
     # Keep `ctx` alive to the end of the test. `handle` holds raw
-    # MutExternalOrigin pointers INTO ctx's own Lists; that origin erasure
+    # MutUntrackedOrigin pointers INTO ctx's own Lists; that origin erasure
     # hides the dependency from the compiler, so ASAP destruction is free to
     # drop ctx right after spectral_handle() and every later read is a
     # use-after-free. That is why these tests failed intermittently -- whether
@@ -113,7 +113,7 @@ def test_roundtrip_grey_scales_linearly() raises:
     assert_true(_close(g, Float32(0.5), Float32(0.02)))
     assert_true(_close(b, Float32(0.5), Float32(0.02)))
     # Keep `ctx` alive to the end of the test. `handle` holds raw
-    # MutExternalOrigin pointers INTO ctx's own Lists; that origin erasure
+    # MutUntrackedOrigin pointers INTO ctx's own Lists; that origin erasure
     # hides the dependency from the compiler, so ASAP destruction is free to
     # drop ctx right after spectral_handle() and every later read is a
     # use-after-free. That is why these tests failed intermittently -- whether
@@ -128,7 +128,7 @@ def test_roundtrip_black_is_black() raises:
     assert_true(_close(g, Float32(0.0), Float32(0.02)))
     assert_true(_close(b, Float32(0.0), Float32(0.02)))
     # Keep `ctx` alive to the end of the test. `handle` holds raw
-    # MutExternalOrigin pointers INTO ctx's own Lists; that origin erasure
+    # MutUntrackedOrigin pointers INTO ctx's own Lists; that origin erasure
     # hides the dependency from the compiler, so ASAP destruction is free to
     # drop ctx right after spectral_handle() and every later read is a
     # use-after-free. That is why these tests failed intermittently -- whether
@@ -143,7 +143,7 @@ def test_roundtrip_red_dominant_channel_preserved() raises:
     assert_true(_close(g, Float32(0.05), Float32(0.03)))
     assert_true(_close(b, Float32(0.05), Float32(0.03)))
     # Keep `ctx` alive to the end of the test. `handle` holds raw
-    # MutExternalOrigin pointers INTO ctx's own Lists; that origin erasure
+    # MutUntrackedOrigin pointers INTO ctx's own Lists; that origin erasure
     # hides the dependency from the compiler, so ASAP destruction is free to
     # drop ctx right after spectral_handle() and every later read is a
     # use-after-free. That is why these tests failed intermittently -- whether
@@ -158,7 +158,7 @@ def test_roundtrip_green_dominant_channel_preserved() raises:
     assert_true(_close(g, Float32(0.8), Float32(0.03)))
     assert_true(_close(b, Float32(0.05), Float32(0.03)))
     # Keep `ctx` alive to the end of the test. `handle` holds raw
-    # MutExternalOrigin pointers INTO ctx's own Lists; that origin erasure
+    # MutUntrackedOrigin pointers INTO ctx's own Lists; that origin erasure
     # hides the dependency from the compiler, so ASAP destruction is free to
     # drop ctx right after spectral_handle() and every later read is a
     # use-after-free. That is why these tests failed intermittently -- whether
@@ -173,7 +173,7 @@ def test_roundtrip_blue_dominant_channel_preserved() raises:
     assert_true(_close(g, Float32(0.05), Float32(0.03)))
     assert_true(_close(b, Float32(0.8), Float32(0.03)))
     # Keep `ctx` alive to the end of the test. `handle` holds raw
-    # MutExternalOrigin pointers INTO ctx's own Lists; that origin erasure
+    # MutUntrackedOrigin pointers INTO ctx's own Lists; that origin erasure
     # hides the dependency from the compiler, so ASAP destruction is free to
     # drop ctx right after spectral_handle() and every later read is a
     # use-after-free. That is why these tests failed intermittently -- whether
@@ -195,7 +195,7 @@ def test_spectral_sample_values_are_nonnegative() raises:
 
 # ── illuminant (light-color) conversion ─────────────────────────────────────
     # Keep `ctx` alive to the end of the test. `handle` holds raw
-    # MutExternalOrigin pointers INTO ctx's own Lists; that origin erasure
+    # MutUntrackedOrigin pointers INTO ctx's own Lists; that origin erasure
     # hides the dependency from the compiler, so ASAP destruction is free to
     # drop ctx right after spectral_handle() and every later read is a
     # use-after-free. That is why these tests failed intermittently -- whether
@@ -220,7 +220,7 @@ def test_illuminant_roundtrip_matches_direct_rgb_for_neutral_light() raises:
     assert_true(_close(accG, Float32(10.0), Float32(0.5)))
     assert_true(_close(accB, Float32(10.0), Float32(0.5)))
     # Keep `ctx` alive to the end of the test. `handle` holds raw
-    # MutExternalOrigin pointers INTO ctx's own Lists; that origin erasure
+    # MutUntrackedOrigin pointers INTO ctx's own Lists; that origin erasure
     # hides the dependency from the compiler, so ASAP destruction is free to
     # drop ctx right after spectral_handle() and every later read is a
     # use-after-free. That is why these tests failed intermittently -- whether
@@ -237,7 +237,7 @@ def test_illuminant_spectral_values_are_nonnegative() raises:
     assert_true(spec.v2 >= Float32(0.0))
     assert_true(spec.v3 >= Float32(0.0))
     # Keep `ctx` alive to the end of the test. `handle` holds raw
-    # MutExternalOrigin pointers INTO ctx's own Lists; that origin erasure
+    # MutUntrackedOrigin pointers INTO ctx's own Lists; that origin erasure
     # hides the dependency from the compiler, so ASAP destruction is free to
     # drop ctx right after spectral_handle() and every later read is a
     # use-after-free. That is why these tests failed intermittently -- whether

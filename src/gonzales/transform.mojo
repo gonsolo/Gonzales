@@ -5,7 +5,7 @@ from .geometry import Vec3f
 # Matrix math. 4x4 matrices are 16 Float32 in column-major order:
 # flat[col*4 + row] = matrix[row, col], matching Transform.columnMajorFloats().
 
-def _write_identity(result: UnsafePointer[Float32, MutExternalOrigin]) -> Int32:
+def _write_identity(result: UnsafePointer[Float32, MutUntrackedOrigin]) -> Int32:
     for i in range(16):
         result[unsafe_offset=i] = Float32(0)
     result[unsafe_offset=0] = Float32(1)
@@ -16,9 +16,9 @@ def _write_identity(result: UnsafePointer[Float32, MutExternalOrigin]) -> Int32:
 
 
 def matrix_multiply(
-    a: UnsafePointer[Float32, MutExternalOrigin],
-    b: UnsafePointer[Float32, MutExternalOrigin],
-    result: UnsafePointer[Float32, MutExternalOrigin],
+    a: UnsafePointer[Float32, MutUntrackedOrigin],
+    b: UnsafePointer[Float32, MutUntrackedOrigin],
+    result: UnsafePointer[Float32, MutUntrackedOrigin],
 ):
     # result[i, j] = sum_k a[i, k] * b[k, j]   (column-major)
     for j in range(4):
@@ -30,8 +30,8 @@ def matrix_multiply(
 
 
 def matrix_invert(
-    m: UnsafePointer[Float32, MutExternalOrigin],
-    result: UnsafePointer[Float32, MutExternalOrigin],
+    m: UnsafePointer[Float32, MutUntrackedOrigin],
+    result: UnsafePointer[Float32, MutUntrackedOrigin],
 ) -> Int32:
     # Gauss-Jordan elimination with full pivoting (mirrors Matrix.invert).
     # On a singular matrix, writes the identity and returns 0.
@@ -100,10 +100,10 @@ def matrix_invert(
 # matrix / inv_matrix are 16-float column-major (flat[col*4+row] = m[row,col]).
 
 def transform_points(
-    matrix: UnsafePointer[Float32, MutExternalOrigin],
-    points_in: UnsafePointer[Float32, MutExternalOrigin],
+    matrix: UnsafePointer[Float32, MutUntrackedOrigin],
+    points_in: UnsafePointer[Float32, MutUntrackedOrigin],
     count: Int32,
-    points_out: UnsafePointer[Float32, MutExternalOrigin],
+    points_out: UnsafePointer[Float32, MutUntrackedOrigin],
 ):
     var m0 = matrix[unsafe_offset=0];  var m1 = matrix[unsafe_offset=1];  var m2 = matrix[unsafe_offset=2];  var m3 = matrix[unsafe_offset=3]
     var m4 = matrix[unsafe_offset=4];  var m5 = matrix[unsafe_offset=5];  var m6 = matrix[unsafe_offset=6];  var m7 = matrix[unsafe_offset=7]
@@ -138,10 +138,10 @@ def transform_normal_by_instance(
 
 
 def transform_normals(
-    inv_matrix: UnsafePointer[Float32, MutExternalOrigin],
-    normals_in: UnsafePointer[Float32, MutExternalOrigin],
+    inv_matrix: UnsafePointer[Float32, MutUntrackedOrigin],
+    normals_in: UnsafePointer[Float32, MutUntrackedOrigin],
     count: Int32,
-    normals_out: UnsafePointer[Float32, MutExternalOrigin],
+    normals_out: UnsafePointer[Float32, MutUntrackedOrigin],
 ):
     # Normals transform by the transpose of the inverse 3×3.
     # result[i] = sum_j inv[i*4+j] * n[j]  for i,j in 0..2 -- i.e. row i of

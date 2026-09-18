@@ -49,9 +49,9 @@ def _make_triangle_mesh(p0: Vec3f, p1: Vec3f, p2: Vec3f) -> TriangleMesh_C:
     var vidx = alloc[Int64](3)
     vidx[unsafe_offset=0] = 0; vidx[unsafe_offset=1] = 1; vidx[unsafe_offset=2] = 2
     return TriangleMesh_C(
-        points, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), vidx,
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        points, UnsafePointer[Int64, MutUntrackedOrigin].unsafe_dangling(), vidx,
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
 
 def _make_material(albedo: RGB, normal_tex_idx: Int32) -> Material_C:
@@ -64,19 +64,19 @@ def _null_light_context() -> LightContext:
     touch ctx.lights at all (NEE light-sampling lives in the shade_* callers,
     not in these lower-level helpers)."""
     return LightContext(
-        UnsafePointer[AreaLight_C, MutExternalOrigin].unsafe_dangling(), 0,
-        UnsafePointer[DistantLight_C, MutExternalOrigin].unsafe_dangling(), 0,
-        UnsafePointer[PointLight_C, MutExternalOrigin].unsafe_dangling(), 0,
-        UnsafePointer[InfiniteLight_C, MutExternalOrigin].unsafe_dangling(), 0,
-        UnsafePointer[Sphere_C, MutExternalOrigin].unsafe_dangling(), 0,
-        LightSampler_C(UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), Int32(0), Int32(0)),
+        UnsafePointer[AreaLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+        UnsafePointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+        UnsafePointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+        UnsafePointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+        UnsafePointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+        LightSampler_C(UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
     )
 
 def _make_ctx(
-    bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
-    primIds: UnsafePointer[PrimId_C, MutExternalOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
-    materials: UnsafePointer[Material_C, MutExternalOrigin],
+    bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
+    primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
+    materials: UnsafePointer[Material_C, MutUntrackedOrigin],
     px_scale: Float32,
 ) -> ShadeContext:
     """A ShadeContext with every field the functions under test don't touch
@@ -85,23 +85,23 @@ def _make_ctx(
     normal_tex_idx=-1 mean the texture/normal-map branches never run)."""
     return ShadeContext(
         0, bvh2Nodes, primIds, meshes,
-        UnsafePointer[Curve_C, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
         materials,
-        UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(), 0,
-        UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[ShadowTask_C, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+        UnsafePointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[ShadowTask_C, MutUntrackedOrigin].unsafe_dangling(),
         px_scale,
-        UnsafePointer[UInt32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[UInt32, MutUntrackedOrigin].unsafe_dangling(),
         null_guide(),
         False,
         _null_light_context(),
-        UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
         null_spectral_handle(),
-        UnsafePointer[MeasuredBRDF_C, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[GIPendingX1, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
         gi_reservoir_io_null(),
     )
 
@@ -125,10 +125,10 @@ def _make_two_tri_mesh() -> TriangleMesh_C:
     vidx[unsafe_offset=0] = 10; vidx[unsafe_offset=1] = 11; vidx[unsafe_offset=2] = 12
     vidx[unsafe_offset=3] = 20; vidx[unsafe_offset=4] = 21; vidx[unsafe_offset=5] = 22
     return TriangleMesh_C(
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), vidx,
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[Int64, MutUntrackedOrigin].unsafe_dangling(), vidx,
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
 
 def test_get_tri_verts_type0_decodes_second_triangle_correctly() raises:
@@ -175,11 +175,11 @@ def test_get_tri_verts_non_triangle_prim_returns_not_ok() raises:
 def test_apply_normal_map_returns_geom_normal_unchanged_when_no_normal_map() raises:
     var mat = _make_material(RGB(Float32(0.5)), Int32(-1))
     var mesh = TriangleMesh_C(
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[Int64, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[Int64, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
     var pid = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var inter = Intersection_C(pid, Float32(1.0), Float32(0.25), Float32(0.25), Int8(1), Int8(0), Int8(0), Int8(0))
@@ -189,8 +189,8 @@ def test_apply_normal_map_returns_geom_normal_unchanged_when_no_normal_map() rai
     var p2 = Vec3f(0.0, 1.0, 0.0)
 
     var result = _apply_normal_map[False](mat, 0, 1, 2, mesh, inter, geom_normal, p0, p1, p2,
-        UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(), 0)
+        UnsafePointer[UnsafePointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), 0)
     assert_true(_simd_close(result, geom_normal))
 
 # ── _build_geom_context_full ──────────────────────────────────────────────────
@@ -217,8 +217,8 @@ def test_build_geom_context_full_matches_closed_form_for_axis_aligned_hit() rais
     materials[unsafe_offset=0] = mat
 
     var ctx = _make_ctx(
-        UnsafePointer[BVH2Node, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[PrimId_C, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[PrimId_C, MutUntrackedOrigin].unsafe_dangling(),
         meshes, materials, Float32(0.0))
 
     var org = Vec3f(0.0, 0.0, 5.0)
@@ -276,33 +276,33 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
     spheres[unsafe_offset=0] = Sphere_C(Point3f(0.0, 0.0, -1.0), Float32(1.0), Int32(-1),
         Int8(0), Int8(0), Int8(0), Int8(0), RGB(Float32(0.0)))
     var lights = LightContext(
-        UnsafePointer[AreaLight_C, MutExternalOrigin].unsafe_dangling(), 0,
-        UnsafePointer[DistantLight_C, MutExternalOrigin].unsafe_dangling(), 0,
-        UnsafePointer[PointLight_C, MutExternalOrigin].unsafe_dangling(), 0,
-        UnsafePointer[InfiniteLight_C, MutExternalOrigin].unsafe_dangling(), 0,
+        UnsafePointer[AreaLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+        UnsafePointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+        UnsafePointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+        UnsafePointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
         spheres, 1,
-        LightSampler_C(UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), Int32(0), Int32(0)),
+        LightSampler_C(UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
     )
     var ctx = ShadeContext(
-        0, UnsafePointer[BVH2Node, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[PrimId_C, MutExternalOrigin].unsafe_dangling(), meshes,
-        UnsafePointer[Curve_C, MutExternalOrigin].unsafe_dangling(),
+        0, UnsafePointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[PrimId_C, MutUntrackedOrigin].unsafe_dangling(), meshes,
+        UnsafePointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
         materials,
-        UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(), 0,
-        UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[ShadowTask_C, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+        UnsafePointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[ShadowTask_C, MutUntrackedOrigin].unsafe_dangling(),
         Float32(0.0),
-        UnsafePointer[UInt32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[UInt32, MutUntrackedOrigin].unsafe_dangling(),
         null_guide(),
         False,
         lights^,
-        UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
         null_spectral_handle(),
-        UnsafePointer[MeasuredBRDF_C, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[GIPendingX1, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
         gi_reservoir_io_null(),
     )
 

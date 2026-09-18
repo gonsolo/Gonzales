@@ -187,9 +187,9 @@ struct SPPMPhoton(TrivialRegisterPassable):
 @always_inline
 def _geom_normal(
     inter: Intersection_C,
-    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
-    instances: UnsafePointer[Instance_C, MutExternalOrigin] = UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
-    spheres: UnsafePointer[Sphere_C, MutExternalOrigin] = UnsafePointer[Sphere_C, MutExternalOrigin].unsafe_dangling(),
+    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
+    instances: UnsafePointer[Instance_C, MutUntrackedOrigin] = UnsafePointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
+    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin] = UnsafePointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(),
     hit: Vec3f = Vec3f(Float32(0), Float32(0), Float32(0)),
 ) -> Vec3f:
     """Normalized geometric normal from triangle cross product. If this hit
@@ -239,9 +239,9 @@ def _geom_normal(
 @always_inline
 def _shading_normal_at(
     inter: Intersection_C,
-    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
-    instances: UnsafePointer[Instance_C, MutExternalOrigin] = UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
-    spheres: UnsafePointer[Sphere_C, MutExternalOrigin] = UnsafePointer[Sphere_C, MutExternalOrigin].unsafe_dangling(),
+    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
+    instances: UnsafePointer[Instance_C, MutUntrackedOrigin] = UnsafePointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
+    spheres: UnsafePointer[Sphere_C, MutUntrackedOrigin] = UnsafePointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(),
     hit: Point3f = Point3f(Float32(0)),
 ) -> Vec3f:
     """Barycentrically-interpolated SMOOTH shading normal at a triangle hit,
@@ -422,11 +422,11 @@ struct AreaLightSample(TrivialRegisterPassable):
 
 @always_inline
 def sample_area_light_uniform(
-    areaLights: UnsafePointer[AreaLight_C, MutExternalOrigin],
-    meshes:     UnsafePointer[TriangleMesh_C, MutExternalOrigin],
+    areaLights: UnsafePointer[AreaLight_C, MutUntrackedOrigin],
+    meshes:     UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
     n_lights:   Int,
     mut pcg:    PCG32,
-    curves:     UnsafePointer[Curve_C, MutExternalOrigin] = UnsafePointer[Curve_C, MutExternalOrigin].unsafe_dangling(),
+    curves:     UnsafePointer[Curve_C, MutUntrackedOrigin] = UnsafePointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
 ) -> AreaLightSample:
     """Uniformly picks one area light, then a point + geometric normal on
     it: a random triangle + barycentric point on a mesh light (kind==0,
@@ -484,7 +484,7 @@ def sample_area_light_uniform(
 def medium_after_crossing(
     ray_dir: Vec3f,
     inter: Intersection_C,
-    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
     mat: Material_C,
     ref sd: SceneDescriptor2_C,
     hit: Point3f = Point3f(Float32(0)),
@@ -513,12 +513,12 @@ def medium_after_crossing(
 def _sppm_trace_visible_point[use_gpu: Bool](
     ref sd:       SceneDescriptor2_C,
     mut pcg:  PCG32,
-    r2c:      UnsafePointer[Float32, MutExternalOrigin],
-    c2w:      UnsafePointer[Float32, MutExternalOrigin],
+    r2c:      UnsafePointer[Float32, MutUntrackedOrigin],
+    c2w:      UnsafePointer[Float32, MutUntrackedOrigin],
     px: Int, py: Int,
     pidx:     Int32,
     init_r2:  Float32,
-    scratch:  UnsafePointer[Intersection_C, MutExternalOrigin],
+    scratch:  UnsafePointer[Intersection_C, MutUntrackedOrigin],
     maxdepth: Int,
 ) -> SPPMPixel:
     """Trace one primary ray for pixel (px,py), returning its visible point.
@@ -962,12 +962,12 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     return vp
 
 def _sppm_camera_pass(
-    vps:        UnsafePointer[SPPMPixel, MutExternalOrigin],
+    vps:        UnsafePointer[SPPMPixel, MutUntrackedOrigin],
     n_pix:      Int,
     vp_samples: Int,
     fw:       Int32,
-    r2c:      UnsafePointer[Float32, MutExternalOrigin],
-    c2w:      UnsafePointer[Float32, MutExternalOrigin],
+    r2c:      UnsafePointer[Float32, MutUntrackedOrigin],
+    c2w:      UnsafePointer[Float32, MutUntrackedOrigin],
     ref sd:       SceneDescriptor2_C,
     init_r2:  Float32,
     seed:     UInt64,
@@ -1007,9 +1007,9 @@ def _sppm_camera_pass(
 
 def _sppm_store_photon[use_gpu: Bool](
     ph:          SPPMPhoton,
-    photons:     UnsafePointer[SPPMPhoton, MutExternalOrigin],
+    photons:     UnsafePointer[SPPMPhoton, MutUntrackedOrigin],
     max_photons: Int,
-    counter:     UnsafePointer[Int32, MutExternalOrigin],
+    counter:     UnsafePointer[Int32, MutUntrackedOrigin],
 ):
     """Reserve the next photon slot and store `ph` there, dropping it if the
     buffer is already full. Comptime-branches only on the slot-reservation
@@ -1030,11 +1030,11 @@ def _sppm_store_photon[use_gpu: Bool](
 def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     ref sd:               SceneDescriptor2_C,
     mut pcg:          PCG32,
-    scratch:          UnsafePointer[Intersection_C, MutExternalOrigin],
+    scratch:          UnsafePointer[Intersection_C, MutUntrackedOrigin],
     n_emit:           Int,
-    photons:          UnsafePointer[SPPMPhoton, MutExternalOrigin],
+    photons:          UnsafePointer[SPPMPhoton, MutUntrackedOrigin],
     max_photons:      Int,
-    counter:          UnsafePointer[Int32, MutExternalOrigin],
+    counter:          UnsafePointer[Int32, MutUntrackedOrigin],
     default_emit_med: Int32,
     maxdepth: Int,
     # Decomposed spectral tables rather than reading sd.spectral. `sd` is a
@@ -1050,12 +1050,12 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     # only surfaced when the gather started reading sd.spectral on its common
     # path; before that only the measured-BxDF branch did, which no test
     # scene hit.
-    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin],
     spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin],
     pass_wl:          SampledWavelengths,
 ):
     """Emit one photon path from a random light (area, distant, or
@@ -1593,7 +1593,7 @@ def _sppm_has_sphere_lights(ref sd: SceneDescriptor2_C) -> Bool:
     return False
 
 def _sppm_photon_pass(
-    photons:      UnsafePointer[SPPMPhoton, MutExternalOrigin],
+    photons:      UnsafePointer[SPPMPhoton, MutUntrackedOrigin],
     n_emit:       Int,
     max_photons:  Int,
     ref sd:           SceneDescriptor2_C,
@@ -1648,14 +1648,14 @@ def _sppm_photon_pass(
 
 # ── Hash grid ─────────────────────────────────────────────────────────────────
 
-def _sppm_reset_grid_cell(heads: UnsafePointer[Int32, MutExternalOrigin], h: Int):
+def _sppm_reset_grid_cell(heads: UnsafePointer[Int32, MutUntrackedOrigin], h: Int):
     heads[unsafe_offset=h] = Int32(-1)
 
 
 def _sppm_insert_photon[use_gpu: Bool](
     k:        Int,
-    photons:  UnsafePointer[SPPMPhoton, MutExternalOrigin],
-    heads:    UnsafePointer[Int32, MutExternalOrigin],
+    photons:  UnsafePointer[SPPMPhoton, MutUntrackedOrigin],
+    heads:    UnsafePointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
 ):
     """Insert stored photon `k` into the hash grid. Comptime-branches only on
@@ -1674,9 +1674,9 @@ def _sppm_insert_photon[use_gpu: Bool](
 
 
 def _build_grid(
-    photons:  UnsafePointer[SPPMPhoton, MutExternalOrigin],
+    photons:  UnsafePointer[SPPMPhoton, MutUntrackedOrigin],
     n_phot:   Int,
-    heads:    UnsafePointer[Int32, MutExternalOrigin],
+    heads:    UnsafePointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
 ):
     @parameter
@@ -1697,10 +1697,10 @@ def _build_grid(
 # ── Gather + SPPM update ──────────────────────────────────────────────────────
 
 def _sppm_gather_one(
-    vps:      UnsafePointer[SPPMPixel, MutExternalOrigin],
+    vps:      UnsafePointer[SPPMPixel, MutUntrackedOrigin],
     i:        Int,
-    photons:  UnsafePointer[SPPMPhoton, MutExternalOrigin],
-    heads:    UnsafePointer[Int32, MutExternalOrigin],
+    photons:  UnsafePointer[SPPMPhoton, MutUntrackedOrigin],
+    heads:    UnsafePointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
     ref sd:       SceneDescriptor2_C,
     # Decomposed for exactly the reason the spectral tables below are: `sd` is
@@ -1709,13 +1709,13 @@ def _sppm_gather_one(
     # held the real count, so every BSSRDF visible point silently fell back to
     # looking for SURFACE photons on a surface that only has BSSRDF ones, and
     # gathered nothing at all.
-    med_arr:   UnsafePointer[Medium_C, MutExternalOrigin],
+    med_arr:   UnsafePointer[Medium_C, MutUntrackedOrigin],
     med_count: Int,
     # Density fields, decomposed for the same reason: the gather kernel's own
     # `sd` carries dangling grid pointers, so a heterogeneous medium's density
     # lookup must not go through it.
-    grids_arr: UnsafePointer[Grid_C, MutExternalOrigin],
-    nvdb_arr:  UnsafePointer[NvdbGrid_C, MutExternalOrigin],
+    grids_arr: UnsafePointer[Grid_C, MutUntrackedOrigin],
+    nvdb_arr:  UnsafePointer[NvdbGrid_C, MutUntrackedOrigin],
     # Decomposed spectral tables rather than reading sd.spectral. `sd` is a
     # SceneDescriptor2_C passed BY VALUE, and it contains a SpectralHandle --
     # the 6-field TrivialRegisterPassable struct suspected (modular/modular#6759,
@@ -1729,12 +1729,12 @@ def _sppm_gather_one(
     # only surfaced when the gather started reading sd.spectral on its common
     # path; before that only the measured-BxDF branch did, which no test
     # scene hit.
-    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin],
     spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin],
     pass_wl:  SampledWavelengths,
 ):
     """Gather nearby photons into visible point `i` and apply the SPPM
@@ -1975,10 +1975,10 @@ def _sppm_gather_one(
 
 
 def _gather_update(
-    vps:      UnsafePointer[SPPMPixel, MutExternalOrigin],
+    vps:      UnsafePointer[SPPMPixel, MutUntrackedOrigin],
     n_pix:    Int,
-    photons:  UnsafePointer[SPPMPhoton, MutExternalOrigin],
-    heads:    UnsafePointer[Int32, MutExternalOrigin],
+    photons:  UnsafePointer[SPPMPhoton, MutUntrackedOrigin],
+    heads:    UnsafePointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
     ref sd:       SceneDescriptor2_C,
     pass_wl:  SampledWavelengths,
@@ -2202,7 +2202,7 @@ def _sppm_sample_simple_light(
 
 
 def _sppm_nee_one(
-    vps:     UnsafePointer[SPPMPixel, MutExternalOrigin],
+    vps:     UnsafePointer[SPPMPixel, MutUntrackedOrigin],
     i:       Int,
     ref sd:      SceneDescriptor2_C,
     mut pcg: PCG32,
@@ -2351,7 +2351,7 @@ def _sppm_nee_one(
 
 
 def _sppm_nee_update(
-    vps:     UnsafePointer[SPPMPixel, MutExternalOrigin],
+    vps:     UnsafePointer[SPPMPixel, MutUntrackedOrigin],
     n_vps:   Int,
     ref sd:      SceneDescriptor2_C,
     seed:    UInt64,
@@ -2373,7 +2373,7 @@ def _sppm_nee_update(
 
 @always_inline
 def _sppm_finalize_albedo_one_pixel(
-    vps:        UnsafePointer[SPPMPixel, MutExternalOrigin],
+    vps:        UnsafePointer[SPPMPixel, MutUntrackedOrigin],
     i:          Int,
     vp_samples: Int,
 ) -> RGB:
@@ -2393,18 +2393,18 @@ def _sppm_finalize_albedo_one_pixel(
     return acc / Float32(vp_samples)
 
 def _sppm_finalize_one_pixel(
-    vps:        UnsafePointer[SPPMPixel, MutExternalOrigin],
+    vps:        UnsafePointer[SPPMPixel, MutUntrackedOrigin],
     i:          Int,
     vp_samples: Int,
     n_passes:   Int32,
     iso_scale:  Float32,
     max_comp:   Float32,
-    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin],
     spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin],
 ) -> RGB:
     """Averages the vp_samples independently-converged samples for pixel i —
     see _sppm_trace_visible_point's docstring for why each sample has its
@@ -2487,13 +2487,13 @@ def _sppm_finalize_one_pixel(
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def _sppm_render_core(
-    psc:      UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
+    psc:      UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin],
     ref sd:       SceneDescriptor2_C,
     n_passes: Int,
     n_photons_per_pass: Int,
     initial_radius: Float32,
     verbose:  Bool,
-) -> Tuple[Bool, UnsafePointer[Float32, MutExternalOrigin], UnsafePointer[Float32, MutExternalOrigin]]:
+) -> Tuple[Bool, UnsafePointer[Float32, MutUntrackedOrigin], UnsafePointer[Float32, MutUntrackedOrigin]]:
     """Stochastic Progressive Photon Mapping main loop, factored out of
     `sppm_render` so the CPU driver's aux-buffer/denoise/write tail is a
     separate, reusable step. Returns (ok, pixels, albedo_pixels) --
@@ -2509,8 +2509,8 @@ def _sppm_render_core(
 
     if Int(sd.areaLightCount) + Int(sd.distantLightCount) + Int(sd.infiniteLightCount) + Int(sd.pointLightCount) == 0 and not _sppm_has_sphere_lights(sd):
         print("SPPM: no lights in scene, cannot emit photons")
-        return Tuple[Bool, UnsafePointer[Float32, MutExternalOrigin], UnsafePointer[Float32, MutExternalOrigin]](
-            False, UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling())
+        return Tuple[Bool, UnsafePointer[Float32, MutUntrackedOrigin], UnsafePointer[Float32, MutUntrackedOrigin]](
+            False, UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(), UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling())
 
     print("SPPM: " + String(fw) + "x" + String(fh)
           + " " + String(n_passes) + " passes x "
@@ -2645,11 +2645,11 @@ def _sppm_render_core(
     heads.unsafe_free()
     photons.unsafe_free()
     vps.unsafe_free()
-    return Tuple[Bool, UnsafePointer[Float32, MutExternalOrigin], UnsafePointer[Float32, MutExternalOrigin]](
+    return Tuple[Bool, UnsafePointer[Float32, MutUntrackedOrigin], UnsafePointer[Float32, MutUntrackedOrigin]](
         True, out_pixels, albedo_pixels)
 
 def sppm_render(
-    psc:      UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
+    psc:      UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin],
     ref sd:       SceneDescriptor2_C,
     n_passes: Int,
     n_photons_per_pass: Int,

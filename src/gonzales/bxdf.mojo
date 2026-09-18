@@ -959,11 +959,11 @@ def bxdf_eval_any_spectral(
     n:        Vec3f,
     wo:       Vec3f,
     wi:       Vec3f,
-    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin],
     wavelengths: SampledWavelengths,
 ) -> Tuple[SpectralSample, Float32]:
     var alb_spectral = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, alb.r, alb.g, alb.b, wavelengths)
@@ -986,11 +986,11 @@ def _nee_weight_simple_spectral(
     alpha: Float32,
     n:     Vec3f,
     wo:    Vec3f,
-    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin],
     wavelengths: SampledWavelengths,
 ) -> SpectralSample:
     """Spectral counterpart of _nee_weight_simple — same formula, but the

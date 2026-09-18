@@ -72,9 +72,9 @@ def _build_scene() -> SceneDescriptor2_C:
         vertex_indices[unsafe_offset=i] = Int64(i)
     var meshes = alloc[TriangleMesh_C](1)
     meshes[unsafe_offset=0] = TriangleMesh_C(
-        points, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), vertex_indices,
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        points, UnsafePointer[Int64, MutUntrackedOrigin].unsafe_dangling(), vertex_indices,
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
 
     var n_tris = 2
@@ -111,25 +111,25 @@ def _build_scene() -> SceneDescriptor2_C:
         bvh_nodes, prim_ids, meshes, Int64(1),
         materials, Int64(1),
         area_lights, Int64(1),
-        UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[DistantLight_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[PointLight_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[InfiniteLight_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[Sphere_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[Curve_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[Medium_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[MediumInterface_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        LightSampler_C(UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), Int32(0), Int32(0)),
-        UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Medium_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[MediumInterface_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        LightSampler_C(UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
+        UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Int64(0),
-        UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[MeasuredBRDF_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         null_spectral_handle(),
-        UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
     )
 
 # Both subpath halves of a VCM pass share one hero-wavelength set (see

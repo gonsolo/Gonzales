@@ -255,12 +255,12 @@ struct SpectralHandle(TrivialRegisterPassable):
     SpectralContext itself, which owns the underlying List buffers). The
     SpectralContext this was built from must outlive every use of the
     handle."""
-    var coeffs: UnsafePointer[Float32, MutExternalOrigin]
+    var coeffs: UnsafePointer[Float32, MutUntrackedOrigin]
     var res:    Int
-    var cie_x:  UnsafePointer[Float32, MutExternalOrigin]
-    var cie_y:  UnsafePointer[Float32, MutExternalOrigin]
-    var cie_z:  UnsafePointer[Float32, MutExternalOrigin]
-    var d65:    UnsafePointer[Float32, MutExternalOrigin]
+    var cie_x:  UnsafePointer[Float32, MutUntrackedOrigin]
+    var cie_y:  UnsafePointer[Float32, MutUntrackedOrigin]
+    var cie_z:  UnsafePointer[Float32, MutUntrackedOrigin]
+    var d65:    UnsafePointer[Float32, MutUntrackedOrigin]
 
 # ── Boundary conversions, in DECOMPOSED-pointer form ────────────────────────
 # These take SpectralHandle's fields as individual params rather than the
@@ -275,11 +275,11 @@ struct SpectralHandle(TrivialRegisterPassable):
 
 @always_inline
 def spec_refl(
-    coeffs: UnsafePointer[Float32, MutExternalOrigin], res: Int,
-    cie_x: UnsafePointer[Float32, MutExternalOrigin],
-    cie_y: UnsafePointer[Float32, MutExternalOrigin],
-    cie_z: UnsafePointer[Float32, MutExternalOrigin],
-    d65: UnsafePointer[Float32, MutExternalOrigin],
+    coeffs: UnsafePointer[Float32, MutUntrackedOrigin], res: Int,
+    cie_x: UnsafePointer[Float32, MutUntrackedOrigin],
+    cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
+    cie_z: UnsafePointer[Float32, MutUntrackedOrigin],
+    d65: UnsafePointer[Float32, MutUntrackedOrigin],
     r: Float32, g: Float32, b: Float32, wl: SampledWavelengths,
 ) -> SpectralSample:
     """RGB REFLECTANCE -> spectral, at the material boundary."""
@@ -287,11 +287,11 @@ def spec_refl(
 
 @always_inline
 def spec_refl_unbounded(
-    coeffs: UnsafePointer[Float32, MutExternalOrigin], res: Int,
-    cie_x: UnsafePointer[Float32, MutExternalOrigin],
-    cie_y: UnsafePointer[Float32, MutExternalOrigin],
-    cie_z: UnsafePointer[Float32, MutExternalOrigin],
-    d65: UnsafePointer[Float32, MutExternalOrigin],
+    coeffs: UnsafePointer[Float32, MutUntrackedOrigin], res: Int,
+    cie_x: UnsafePointer[Float32, MutUntrackedOrigin],
+    cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
+    cie_z: UnsafePointer[Float32, MutUntrackedOrigin],
+    d65: UnsafePointer[Float32, MutUntrackedOrigin],
     r: Float32, g: Float32, b: Float32, wl: SampledWavelengths,
 ) -> SpectralSample:
     """A reflectance-shaped WEIGHT that may exceed 1 (a Russian-roulette-
@@ -326,11 +326,11 @@ def spec_refl_unbounded(
 
 @always_inline
 def spec_illum(
-    coeffs: UnsafePointer[Float32, MutExternalOrigin], res: Int,
-    cie_x: UnsafePointer[Float32, MutExternalOrigin],
-    cie_y: UnsafePointer[Float32, MutExternalOrigin],
-    cie_z: UnsafePointer[Float32, MutExternalOrigin],
-    d65: UnsafePointer[Float32, MutExternalOrigin],
+    coeffs: UnsafePointer[Float32, MutUntrackedOrigin], res: Int,
+    cie_x: UnsafePointer[Float32, MutUntrackedOrigin],
+    cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
+    cie_z: UnsafePointer[Float32, MutUntrackedOrigin],
+    d65: UnsafePointer[Float32, MutUntrackedOrigin],
     r: Float32, g: Float32, b: Float32, wl: SampledWavelengths,
 ) -> SpectralSample:
     """RGB EMISSION/RADIANCE -> spectral, at the light boundary. Uses the
@@ -341,11 +341,11 @@ def spec_illum(
 @always_inline
 def spectral_handle(mut ctx: SpectralContext) -> SpectralHandle:
     return SpectralHandle(
-        ctx.table.coeffs.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](), ctx.table.res,
-        ctx.cie.x_tbl.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](),
-        ctx.cie.y_tbl.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](),
-        ctx.cie.z_tbl.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](),
-        ctx.cie.d65_tbl.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin](),
+        ctx.table.coeffs.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](), ctx.table.res,
+        ctx.cie.x_tbl.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+        ctx.cie.y_tbl.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+        ctx.cie.z_tbl.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+        ctx.cie.d65_tbl.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
     )
 
 @always_inline
@@ -356,11 +356,11 @@ def null_spectral_handle() -> SpectralHandle:
     Stage 3/4; test fixtures) — never dereferenced by code that doesn't
     consume it, same as those other sentinels."""
     return SpectralHandle(
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), 0,
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(), 0,
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
 
 # ── RGB -> spectrum upsampling (real Jakob-Hanika, via rgb2spec.mojo) ──────
@@ -394,11 +394,11 @@ def null_spectral_handle() -> SpectralHandle:
 # ctx.spectral.
 @always_inline
 def rgb_to_spectral_sample(
-    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin],
     rgb_r: Float32, rgb_g: Float32, rgb_b: Float32, wavelengths: SampledWavelengths,
 ) -> SpectralSample:
     """Reflectance/albedo conversion — values are expected in [0,1] (clamped
@@ -425,11 +425,11 @@ def rgb_to_spectral_sample(
 
 @always_inline
 def rgb_illuminant_to_spectral_sample(
-    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin],
     rgb_r: Float32, rgb_g: Float32, rgb_b: Float32, wavelengths: SampledWavelengths,
 ) -> SpectralSample:
     """Light-emission conversion — PBRT's RGBIlluminantSpectrum convention
@@ -453,11 +453,11 @@ def rgb_illuminant_to_spectral_sample(
 
 @always_inline
 def spectral_sample_to_rgb(
-    spectral_coeffs: UnsafePointer[Float32, MutExternalOrigin], spectral_res: Int,
-    spectral_cie_x: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_cie_y: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin],
-    spectral_d65: UnsafePointer[Float32, MutExternalOrigin],
+    spectral_coeffs: UnsafePointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: UnsafePointer[Float32, MutUntrackedOrigin],
+    spectral_d65: UnsafePointer[Float32, MutUntrackedOrigin],
     radiance: SpectralSample, wavelengths: SampledWavelengths,
 ) -> Tuple[Float32, Float32, Float32]:
     """Monte-Carlo estimate of the CIE XYZ integral from one hero-wavelength

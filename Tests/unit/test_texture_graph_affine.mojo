@@ -18,7 +18,7 @@ from gonzales.material_builder import _psc_handle_make_named_material
 comptime _EPS = Float32(1e-5)
 
 
-def _scanner_from_string(body: String) -> UnsafePointer[PbrtScanner, MutExternalOrigin]:
+def _scanner_from_string(body: String) -> UnsafePointer[PbrtScanner, MutUntrackedOrigin]:
     var n = body.byte_length()
     var buf = alloc[UInt8](n + 1)
     for i in range(n):
@@ -32,19 +32,19 @@ def _scanner_from_string(body: String) -> UnsafePointer[PbrtScanner, MutExternal
     return handle
 
 
-def _state() -> UnsafePointer[SceneParseState, MutExternalOrigin]:
+def _state() -> UnsafePointer[SceneParseState, MutUntrackedOrigin]:
     var s_ptr = alloc[SceneParseState](1)
     s_ptr.init_pointee_move(SceneParseState())
     return s_ptr
 
 
-def _tex(s: UnsafePointer[SceneParseState, MutExternalOrigin], decl: String):
+def _tex(s: UnsafePointer[SceneParseState, MutUntrackedOrigin], decl: String):
     var h = _scanner_from_string(decl)
     handle_texture(h, s)
     scanner_free(h)
 
 
-def _mat(s: UnsafePointer[SceneParseState, MutExternalOrigin], decl: String):
+def _mat(s: UnsafePointer[SceneParseState, MutUntrackedOrigin], decl: String):
     var h = _scanner_from_string(decl)
     _psc_handle_make_named_material(h, s, False)
     scanner_free(h)

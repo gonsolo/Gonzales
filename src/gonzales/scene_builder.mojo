@@ -15,7 +15,7 @@ from .transform import transform_points
 # not reimplementing per format.
 
 def store_mesh[Of: Origin[mut=True], Oi: Origin[mut=True]](
-    s:       UnsafePointer[SceneParseState, MutExternalOrigin],
+    s:       UnsafePointer[SceneParseState, MutUntrackedOrigin],
     tmp_f:   UnsafePointer[Float32, Of],
     tmp_i:   UnsafePointer[Int32, Oi],
     n_verts: Int32,

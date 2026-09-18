@@ -64,7 +64,7 @@ def _write_file(path: String, data: List[UInt8]) raises:
     f.write_all(Span(data))
     f.close()
 
-def _path_cstr(path: String) -> UnsafePointer[UInt8, MutExternalOrigin]:
+def _path_cstr(path: String) -> UnsafePointer[UInt8, MutUntrackedOrigin]:
     var n = path.byte_length()
     var buf = alloc[UInt8](n + 1)
     for i in range(n):
@@ -79,29 +79,29 @@ def _path_cstr(path: String) -> UnsafePointer[UInt8, MutExternalOrigin]:
 
 @fieldwise_init
 struct _PlyResult(Movable):
-    var pts:         UnsafePointer[UnsafePointer[Float32, MutExternalOrigin], MutExternalOrigin]
-    var n_verts:     UnsafePointer[Int32, MutExternalOrigin]
-    var idx:         UnsafePointer[UnsafePointer[Int32, MutExternalOrigin], MutExternalOrigin]
-    var n_tris:      UnsafePointer[Int32, MutExternalOrigin]
-    var uvs:         UnsafePointer[UnsafePointer[Float32, MutExternalOrigin], MutExternalOrigin]
-    var has_uvs:     UnsafePointer[Int32, MutExternalOrigin]
-    var normals:     UnsafePointer[UnsafePointer[Float32, MutExternalOrigin], MutExternalOrigin]
-    var has_normals: UnsafePointer[Int32, MutExternalOrigin]
+    var pts:         UnsafePointer[UnsafePointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin]
+    var n_verts:     UnsafePointer[Int32, MutUntrackedOrigin]
+    var idx:         UnsafePointer[UnsafePointer[Int32, MutUntrackedOrigin], MutUntrackedOrigin]
+    var n_tris:      UnsafePointer[Int32, MutUntrackedOrigin]
+    var uvs:         UnsafePointer[UnsafePointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin]
+    var has_uvs:     UnsafePointer[Int32, MutUntrackedOrigin]
+    var normals:     UnsafePointer[UnsafePointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin]
+    var has_normals: UnsafePointer[Int32, MutUntrackedOrigin]
 
 def _alloc_ply_result() -> _PlyResult:
     var r = _PlyResult(
-        alloc[UnsafePointer[Float32, MutExternalOrigin]](1),
+        alloc[UnsafePointer[Float32, MutUntrackedOrigin]](1),
         alloc[Int32](1),
-        alloc[UnsafePointer[Int32, MutExternalOrigin]](1),
+        alloc[UnsafePointer[Int32, MutUntrackedOrigin]](1),
         alloc[Int32](1),
-        alloc[UnsafePointer[Float32, MutExternalOrigin]](1),
+        alloc[UnsafePointer[Float32, MutUntrackedOrigin]](1),
         alloc[Int32](1),
-        alloc[UnsafePointer[Float32, MutExternalOrigin]](1),
+        alloc[UnsafePointer[Float32, MutUntrackedOrigin]](1),
         alloc[Int32](1),
     )
-    r.uvs[unsafe_offset=0] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
+    r.uvs[unsafe_offset=0] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling()
     r.has_uvs[unsafe_offset=0] = Int32(0)
-    r.normals[unsafe_offset=0] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
+    r.normals[unsafe_offset=0] = UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling()
     r.has_normals[unsafe_offset=0] = Int32(0)
     return r^
 

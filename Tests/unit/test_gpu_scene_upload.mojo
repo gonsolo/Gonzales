@@ -27,7 +27,7 @@ comptime EPS: Float32 = 1e-4
 def _close(a: Float32, b: Float32) -> Bool:
     return abs(a - b) < EPS
 
-def _scanner_from_string(s: String) -> UnsafePointer[PbrtScanner, MutExternalOrigin]:
+def _scanner_from_string(s: String) -> UnsafePointer[PbrtScanner, MutUntrackedOrigin]:
     """Same technique as test_parser_integration.mojo's helper, but here fed
     a full scene (from the first top-level directive) since parse_scene_file
     -- unlike the single-directive handlers that file tests -- expects to
@@ -44,7 +44,7 @@ def _scanner_from_string(s: String) -> UnsafePointer[PbrtScanner, MutExternalOri
     handle[unsafe_offset=0].is_at_end = Int32(0)
     return handle
 
-def _parse_minimal_scene() -> UnsafePointer[ParsedScene_Mojo, MutExternalOrigin]:
+def _parse_minimal_scene() -> UnsafePointer[ParsedScene_Mojo, MutUntrackedOrigin]:
     """One triangle mesh + one diffuse material, 4x4 pixels -- just enough
     for finalize_scene to produce a real BVH, camera matrices, and a
     non-trivial mesh/material upload, without needing any lights."""

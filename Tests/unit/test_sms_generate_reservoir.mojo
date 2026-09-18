@@ -36,9 +36,9 @@ def _make_triangle_mesh(p0: Vec3f, p1: Vec3f, p2: Vec3f) -> TriangleMesh_C:
     var vidx = alloc[Int64](3)
     vidx[unsafe_offset=0] = 0; vidx[unsafe_offset=1] = 1; vidx[unsafe_offset=2] = 2
     return TriangleMesh_C(
-        points, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), vidx,
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        points, UnsafePointer[Int64, MutUntrackedOrigin].unsafe_dangling(), vidx,
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
 
 def _make_one_leaf_bvh(tri_min: Vec3f, tri_max: Vec3f) -> BVH2Node:
@@ -54,39 +54,39 @@ def _make_dielectric(ior: Float32) -> Material_C:
         RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0), Int32(-1), RGB(Float32(1.0)), RGB(Float32(0.0)), RGB(Float32(1.0)))
 
 def _make_ctx(
-    bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
-    primIds: UnsafePointer[PrimId_C, MutExternalOrigin],
-    meshes: UnsafePointer[TriangleMesh_C, MutExternalOrigin],
-    materials: UnsafePointer[Material_C, MutExternalOrigin],
-    area_lights: UnsafePointer[AreaLight_C, MutExternalOrigin],
+    bvh2Nodes: UnsafePointer[BVH2Node, MutUntrackedOrigin],
+    primIds: UnsafePointer[PrimId_C, MutUntrackedOrigin],
+    meshes: UnsafePointer[TriangleMesh_C, MutUntrackedOrigin],
+    materials: UnsafePointer[Material_C, MutUntrackedOrigin],
+    area_lights: UnsafePointer[AreaLight_C, MutUntrackedOrigin],
     area_light_count: Int,
-    light_sampler_cdf: UnsafePointer[Float32, MutExternalOrigin],
+    light_sampler_cdf: UnsafePointer[Float32, MutUntrackedOrigin],
 ) -> ShadeContext:
     return ShadeContext(
         0, bvh2Nodes, primIds, meshes,
-        UnsafePointer[Curve_C, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
         materials,
-        UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(), 0,
-        UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[ShadowTask_C, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+        UnsafePointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[ShadowTask_C, MutUntrackedOrigin].unsafe_dangling(),
         Float32(0.0),
-        UnsafePointer[UInt32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[UInt32, MutUntrackedOrigin].unsafe_dangling(),
         null_guide(),
         False,
         LightContext(
             area_lights, area_light_count,
-            UnsafePointer[DistantLight_C, MutExternalOrigin].unsafe_dangling(), 0,
-            UnsafePointer[PointLight_C, MutExternalOrigin].unsafe_dangling(), 0,
-            UnsafePointer[InfiniteLight_C, MutExternalOrigin].unsafe_dangling(), 0,
-            UnsafePointer[Sphere_C, MutExternalOrigin].unsafe_dangling(), 0,
+            UnsafePointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+            UnsafePointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+            UnsafePointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+            UnsafePointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(), 0,
             LightSampler_C(light_sampler_cdf, Int32(area_light_count), Int32(0))),
-        UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
         null_spectral_handle(),
-        UnsafePointer[MeasuredBRDF_C, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[GIPendingX1, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
         gi_reservoir_io_null(),
     )
 
@@ -131,10 +131,10 @@ def test_sms_generate_curve_light_returns_empty() raises:
     var area_lights = alloc[AreaLight_C](1)
     area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0)), Float32(0.000002), Int8(1), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx(
-        UnsafePointer[BVH2Node, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[PrimId_C, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[TriangleMesh_C, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[Material_C, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[PrimId_C, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[TriangleMesh_C, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[Material_C, MutUntrackedOrigin].unsafe_dangling(),
         area_lights, 1, cdf)
 
     var pcg = PCG32(UInt64(1), UInt64(1))
@@ -162,7 +162,7 @@ def test_sms_generate_no_glass_in_the_way_returns_empty() raises:
     var area_lights = alloc[AreaLight_C](1)
     area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx(bvh, primIds, meshes,
-        UnsafePointer[Material_C, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[Material_C, MutUntrackedOrigin].unsafe_dangling(),
         area_lights, 1, cdf)
 
     var pcg = PCG32(UInt64(1), UInt64(1))
@@ -246,8 +246,8 @@ def test_sms_resolve_on_empty_reservoir_is_a_noop() raises:
     var cdf = alloc[Float32](1)
     cdf[unsafe_offset=0] = Float32(0.0)
     var ctx = _make_ctx(bvh, primIds, meshes,
-        UnsafePointer[Material_C, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[AreaLight_C, MutExternalOrigin].unsafe_dangling(), 0, cdf)
+        UnsafePointer[Material_C, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[AreaLight_C, MutUntrackedOrigin].unsafe_dangling(), 0, cdf)
 
     var path_arr = alloc[PathState_C](1)
     path_arr[unsafe_offset=0] = _make_path()
@@ -394,10 +394,10 @@ def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
 
     # Frame 0: read=buf_a (empty), write=buf_b.
     var io0 = SMSReservoirIO(read=buf_a, write=buf_b,
-        gbuf_normal=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        gbuf_depth=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        gbuf_material_id=UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
-        gbuf_world_pos=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_normal=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_depth=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_material_id=UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_world_pos=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0))
     path_arr[unsafe_offset=0] = _make_path()
     var pcg0 = PCG32(UInt64(1), UInt64(1))
@@ -412,10 +412,10 @@ def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
     # Frame 1: read=buf_b (frame 0's result), write=buf_a -- mirrors
     # pipeline.mojo's own ping-pong swap between frames.
     var io1 = SMSReservoirIO(read=buf_b, write=buf_a,
-        gbuf_normal=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        gbuf_depth=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        gbuf_material_id=UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
-        gbuf_world_pos=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_normal=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_depth=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_material_id=UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_world_pos=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0))
     path_arr[unsafe_offset=0] = _make_path()
     var pcg1 = PCG32(UInt64(2), UInt64(1))
@@ -481,10 +481,10 @@ def test_shade_diffuse_nee_sms_wiring_accumulates_confidence_across_frames() rai
 
     # Frame 0, through the real _shade_diffuse_nee entry point.
     var io0 = SMSReservoirIO(read=buf_a, write=buf_b,
-        gbuf_normal=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        gbuf_depth=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        gbuf_material_id=UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
-        gbuf_world_pos=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_normal=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_depth=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_material_id=UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_world_pos=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0))
     path_arr[unsafe_offset=0] = _make_path()
     var pcg0 = PCG32(UInt64(1), UInt64(1))
@@ -499,10 +499,10 @@ def test_shade_diffuse_nee_sms_wiring_accumulates_confidence_across_frames() rai
 
     # Frame 1: read=buf_b (frame 0's result), write=buf_a.
     var io1 = SMSReservoirIO(read=buf_b, write=buf_a,
-        gbuf_normal=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        gbuf_depth=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        gbuf_material_id=UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
-        gbuf_world_pos=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_normal=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_depth=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_material_id=UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_world_pos=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0))
     path_arr[unsafe_offset=0] = _make_path()
     var pcg1 = PCG32(UInt64(2), UInt64(1))
@@ -568,10 +568,10 @@ def test_shade_diffuse_nee_sms_io_inactive_at_bounce_1_uses_plain_mnee() raises:
     path_arr[unsafe_offset=0] = _make_path()
     path_arr[unsafe_offset=0].bounce = Int32(1)
     var io0 = SMSReservoirIO(read=buf_a, write=buf_b,
-        gbuf_normal=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        gbuf_depth=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        gbuf_material_id=UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
-        gbuf_world_pos=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        gbuf_normal=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_depth=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_material_id=UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+        gbuf_world_pos=UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0))
     var pcg0 = PCG32(UInt64(1), UInt64(1))
     _shade_diffuse_nee[False, False](

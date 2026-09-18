@@ -70,7 +70,7 @@ def _firefly_clamp_pixel(
 def _clamp_fireflies[Ob: Origin[mut=True]](
     beauty: UnsafePointer[Float32, Ob],
     width: Int32, height: Int32,
-) -> UnsafePointer[Float32, MutExternalOrigin]:
+) -> UnsafePointer[Float32, MutUntrackedOrigin]:
     var w = Int(width)
     var h = Int(height)
     var out = alloc[Float32](w * h * 3)
@@ -282,14 +282,14 @@ def denoise[Ob: Origin[mut=True], Oa: Origin[mut=True], On: Origin[mut=True], Od
 def write_image[Opx: Origin[mut=True]](
     pixels: UnsafePointer[Float32, Opx],
     width: Int32, height: Int32,
-    filename: UnsafePointer[UInt8, MutExternalOrigin],
+    filename: UnsafePointer[UInt8, MutUntrackedOrigin],
     tile_w: Int32, tile_h: Int32,
 ) -> Int32:
     return external_call["write_image_rgb", Int32,
-        UnsafePointer[UInt8, MutExternalOrigin],
-        UnsafePointer[Float32, MutExternalOrigin],
+        UnsafePointer[UInt8, MutUntrackedOrigin],
+        UnsafePointer[Float32, MutUntrackedOrigin],
         Int32, Int32, Int32, Int32,
-    ](filename, pixels.unsafe_origin_cast[MutExternalOrigin](), width, height, tile_w, tile_h)
+    ](filename, pixels.unsafe_origin_cast[MutUntrackedOrigin](), width, height, tile_w, tile_h)
 
 # Same as write_image, but tags the output with an OpenEXR dataWindow/
 # displayWindow pair: `pixels` holds only the (width x height) data-window
@@ -300,16 +300,16 @@ def write_image[Opx: Origin[mut=True]](
 # etc. have no data/display-window concept, so the C++ bridge only applies
 # the windowing for EXR/HDR output.
 def write_image_windowed(
-    pixels: UnsafePointer[Float32, MutExternalOrigin],
+    pixels: UnsafePointer[Float32, MutUntrackedOrigin],
     width: Int32, height: Int32,
     full_width: Int32, full_height: Int32,
     x: Int32, y: Int32,
-    filename: UnsafePointer[UInt8, MutExternalOrigin],
+    filename: UnsafePointer[UInt8, MutUntrackedOrigin],
     tile_w: Int32, tile_h: Int32,
 ) -> Int32:
     return external_call["write_image_rgb_windowed", Int32,
-        UnsafePointer[UInt8, MutExternalOrigin],
-        UnsafePointer[Float32, MutExternalOrigin],
+        UnsafePointer[UInt8, MutUntrackedOrigin],
+        UnsafePointer[Float32, MutUntrackedOrigin],
         Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32,
     ](filename, pixels, width, height, full_width, full_height, x, y, tile_w, tile_h)
 
@@ -324,7 +324,7 @@ def write_image_cropped[Opx: Origin[mut=True]](
     pixels: UnsafePointer[Float32, Opx],
     full_w: Int32, full_h: Int32,
     crop_x0: Int32, crop_y0: Int32, crop_w: Int32, crop_h: Int32,
-    filename: UnsafePointer[UInt8, MutExternalOrigin],
+    filename: UnsafePointer[UInt8, MutUntrackedOrigin],
     tile_w: Int32, tile_h: Int32,
 ) -> Int32:
     if crop_x0 == Int32(0) and crop_y0 == Int32(0) and crop_w == full_w and crop_h == full_h:
@@ -358,7 +358,7 @@ def write_image_cropwindow[Opx: Origin[mut=True]](
     pixels: UnsafePointer[Float32, Opx],
     full_w: Int32, full_h: Int32,
     cx0: Float32, cy0: Float32, cx1: Float32, cy1: Float32,
-    filename: UnsafePointer[UInt8, MutExternalOrigin],
+    filename: UnsafePointer[UInt8, MutUntrackedOrigin],
     tile_w: Int32, tile_h: Int32,
 ) -> Int32:
     var crop_x0px = Int32(ceil(cx0 * Float32(full_w)))

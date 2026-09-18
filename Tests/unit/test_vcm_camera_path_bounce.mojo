@@ -69,9 +69,9 @@ def _build_scene() -> SceneDescriptor2_C:
         vertex_indices[unsafe_offset=i] = Int64(i)
     var meshes = alloc[TriangleMesh_C](1)
     meshes[unsafe_offset=0] = TriangleMesh_C(
-        points, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), vertex_indices,
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
+        points, UnsafePointer[Int64, MutUntrackedOrigin].unsafe_dangling(), vertex_indices,
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
 
     var n_tris = 1
@@ -102,29 +102,29 @@ def _build_scene() -> SceneDescriptor2_C:
     return SceneDescriptor2_C(
         bvh_nodes, prim_ids, meshes, Int64(1),
         materials, Int64(1),
-        UnsafePointer[AreaLight_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[UnsafePointer[UInt8, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[DistantLight_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[PointLight_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[InfiniteLight_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[Sphere_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[Curve_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[Medium_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[MediumInterface_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[NvdbGrid_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        LightSampler_C(UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), Int32(0), Int32(0)),
-        UnsafePointer[UnsafePointer[BVH2Node, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[UnsafePointer[PrimId_C, MutExternalOrigin], MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[AreaLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[UnsafePointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Medium_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[MediumInterface_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        LightSampler_C(UnsafePointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
+        UnsafePointer[UnsafePointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[UnsafePointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Int64(0),
-        UnsafePointer[Instance_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[MeasuredBRDF_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         null_spectral_handle(),
-        UnsafePointer[GpuTexture_C, MutExternalOrigin].unsafe_dangling(), Int64(0),
-        UnsafePointer[NormalSlopeMap_C, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        UnsafePointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
     )
 
-def _identity_camera_matrices() -> Tuple[UnsafePointer[Float32, MutExternalOrigin], UnsafePointer[Float32, MutExternalOrigin]]:
+def _identity_camera_matrices() -> Tuple[UnsafePointer[Float32, MutUntrackedOrigin], UnsafePointer[Float32, MutUntrackedOrigin]]:
     # r2c crafted so that at px=py=0 (fX=fY=0.5): cx=cy=0, cz=1, cw=1 --
     # camera-space direction (0,0,1) regardless of fX/fY's exact value
     # (columns 0/1 are all zero), independent of realistic raster-to-camera
@@ -153,9 +153,9 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
     var scratch_old = alloc[Intersection_C](1)
     var (total_old, alb_old) = _bdpt_trace_camera_and_connect[False](
         r2c, c2w, 0, 0, sd, pcg_old, False, scratch_old,
-        UnsafePointer[BDPTVertex, MutExternalOrigin].unsafe_dangling(), 0, 0,
-        UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
-        UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
+        UnsafePointer[BDPTVertex, MutUntrackedOrigin].unsafe_dangling(), 0, 0,
+        UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+        UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         Float32(0), Float32(0), Float32(0),
         px_scale, Float32(0), Float32(0), n_light_paths_f, _TEST_PASS_WL,
     )
@@ -198,9 +198,9 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
 
         var cont = _bdpt_camera_path_bounce[False](
             sd, pcg_bounce, False, inter, scratch_new,
-            UnsafePointer[BDPTVertex, MutExternalOrigin].unsafe_dangling(), 0, 0,
-            UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
-            UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
+            UnsafePointer[BDPTVertex, MutUntrackedOrigin].unsafe_dangling(), 0, 0,
+            UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+            UnsafePointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
             ro, rd, beta, total, first_alb, n_verts, n_bounces, cur_med_idx,
             dvcm, dvc, dvm, last_bsdf_pdf, mis_null_dist,
