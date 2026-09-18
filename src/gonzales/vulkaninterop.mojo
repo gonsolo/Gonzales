@@ -48,7 +48,7 @@ def vulkaninterop_destroy(interop: VulkanInteropHandle):
 def vulkaninterop_fill_kernel_test(data: UnsafePointer[Float32, MutExternalOrigin], n: Int32, base: Float32):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid < Int(n):
-        data[tid] = base + Float32(tid)
+        data[unsafe_offset=tid] = base + Float32(tid)
 
 # ---------------------------------------------------------------------------
 # Stage 2: real VK_KHR_ray_query tracing through the same interop mechanism.
@@ -163,13 +163,13 @@ def vulkaninterop_rt_write_test_rays_kernel(rays: UnsafePointer[Float32, MutExte
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i == 0:
         # Hits mesh 0's triangle at (0.25, 0.25).
-        rays[0] = Float32(0.25); rays[1] = Float32(0.25); rays[2] = Float32(-1.0); rays[3] = Float32(0.001)
-        rays[4] = Float32(0.0);  rays[5] = Float32(0.0);  rays[6] = Float32(1.0);  rays[7] = Float32(10.0)
+        rays[unsafe_offset=0] = Float32(0.25); rays[unsafe_offset=1] = Float32(0.25); rays[unsafe_offset=2] = Float32(-1.0); rays[unsafe_offset=3] = Float32(0.001)
+        rays[unsafe_offset=4] = Float32(0.0);  rays[unsafe_offset=5] = Float32(0.0);  rays[unsafe_offset=6] = Float32(1.0);  rays[unsafe_offset=7] = Float32(10.0)
     elif i == 1:
         # Hits mesh 1's triangle at (5.25, 0.25).
-        rays[8] = Float32(5.25); rays[9] = Float32(0.25); rays[10] = Float32(-1.0); rays[11] = Float32(0.001)
-        rays[12] = Float32(0.0); rays[13] = Float32(0.0);  rays[14] = Float32(1.0); rays[15] = Float32(10.0)
+        rays[unsafe_offset=8] = Float32(5.25); rays[unsafe_offset=9] = Float32(0.25); rays[unsafe_offset=10] = Float32(-1.0); rays[unsafe_offset=11] = Float32(0.001)
+        rays[unsafe_offset=12] = Float32(0.0); rays[unsafe_offset=13] = Float32(0.0);  rays[unsafe_offset=14] = Float32(1.0); rays[unsafe_offset=15] = Float32(10.0)
     elif i == 2:
         # Misses both.
-        rays[16] = Float32(100.0); rays[17] = Float32(100.0); rays[18] = Float32(-1.0); rays[19] = Float32(0.001)
-        rays[20] = Float32(0.0);   rays[21] = Float32(0.0);   rays[22] = Float32(1.0);  rays[23] = Float32(10.0)
+        rays[unsafe_offset=16] = Float32(100.0); rays[unsafe_offset=17] = Float32(100.0); rays[unsafe_offset=18] = Float32(-1.0); rays[unsafe_offset=19] = Float32(0.001)
+        rays[unsafe_offset=20] = Float32(0.0);   rays[unsafe_offset=21] = Float32(0.0);   rays[unsafe_offset=22] = Float32(1.0);  rays[unsafe_offset=23] = Float32(10.0)

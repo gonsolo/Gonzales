@@ -30,34 +30,34 @@ def store_mesh[Of: Origin[mut=True], Oi: Origin[mut=True]](
     directly onto `s[0].meshes[len(s[0].meshes) - 1]` after this returns."""
     var raw_pts = alloc[Float32](Int(n_verts) * 4)
     for v in range(Int(n_verts)):
-        raw_pts[v*4+0] = tmp_f[v*3+0]
-        raw_pts[v*4+1] = tmp_f[v*3+1]
-        raw_pts[v*4+2] = tmp_f[v*3+2]
-        raw_pts[v*4+3] = Float32(1)
+        raw_pts[unsafe_offset=v*4+0] = tmp_f[unsafe_offset=v*3+0]
+        raw_pts[unsafe_offset=v*4+1] = tmp_f[unsafe_offset=v*3+1]
+        raw_pts[unsafe_offset=v*4+2] = tmp_f[unsafe_offset=v*3+2]
+        raw_pts[unsafe_offset=v*4+3] = Float32(1)
     var fin_pts = alloc[Float32](Int(n_verts) * 4)
-    transform_points(s[0].ctm.unsafe_ptr(), raw_pts, n_verts, fin_pts)
+    transform_points(s[unsafe_offset=0].ctm.unsafe_ptr(), raw_pts, n_verts, fin_pts)
     raw_pts.unsafe_free()
     var ma = MeshAccum(
-        s[0].cur_attr.mat_idx,
-        s[0].cur_attr.inside_medium,
-        s[0].cur_attr.outside_medium,
+        s[unsafe_offset=0].cur_attr.mat_idx,
+        s[unsafe_offset=0].cur_attr.inside_medium,
+        s[unsafe_offset=0].cur_attr.outside_medium,
     )
-    ma.is_area_light = s[0].cur_attr.is_alight
-    ma.al_rgb = s[0].cur_attr.al_rgb
+    ma.is_area_light = s[unsafe_offset=0].cur_attr.is_alight
+    ma.al_rgb = s[unsafe_offset=0].cur_attr.al_rgb
     ma.points.reserve(Int(n_verts) * 4)
     for v in range(Int(n_verts) * 4):
-        ma.points.append(fin_pts[v])
+        ma.points.append(fin_pts[unsafe_offset=v])
     fin_pts.unsafe_free()
     ma.vert_idxs.reserve(Int(n_tris) * 3)
     ma.face_idxs.reserve(Int(n_tris))
-    var rev = s[0].cur_attr.reverse_orient
+    var rev = s[unsafe_offset=0].cur_attr.reverse_orient
     for t in range(Int(n_tris)):
-        ma.vert_idxs.append(Int64(tmp_i[t*3+0]))
+        ma.vert_idxs.append(Int64(tmp_i[unsafe_offset=t*3+0]))
         if rev:
-            ma.vert_idxs.append(Int64(tmp_i[t*3+2]))
-            ma.vert_idxs.append(Int64(tmp_i[t*3+1]))
+            ma.vert_idxs.append(Int64(tmp_i[unsafe_offset=t*3+2]))
+            ma.vert_idxs.append(Int64(tmp_i[unsafe_offset=t*3+1]))
         else:
-            ma.vert_idxs.append(Int64(tmp_i[t*3+1]))
-            ma.vert_idxs.append(Int64(tmp_i[t*3+2]))
+            ma.vert_idxs.append(Int64(tmp_i[unsafe_offset=t*3+1]))
+            ma.vert_idxs.append(Int64(tmp_i[unsafe_offset=t*3+2]))
         ma.face_idxs.append(Int64(3))
-    s[0].meshes.append(ma^)
+    s[unsafe_offset=0].meshes.append(ma^)

@@ -356,7 +356,7 @@ def _nmap_addr(res: Int, u: Float32, v: Float32) -> Tuple[Int, Int, Int, Int, Fl
 @always_inline
 def _nmap_slope(m: NormalSlopeMap_C, x: Int, y: Int) -> SIMD[DType.float32, 2]:
     var i = (y * Int(m.res) + x) * 2
-    return SIMD[DType.float32, 2](m.slopes[i], m.slopes[i + 1])
+    return SIMD[DType.float32, 2](m.slopes[unsafe_offset=i], m.slopes[unsafe_offset=i + 1])
 
 @always_inline
 def nmap_eval(m: NormalSlopeMap_C, u: Float32, v: Float32) -> Vec3f:

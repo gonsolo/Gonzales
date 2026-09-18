@@ -48,8 +48,8 @@ def viewer_destroy(v: ViewerHandle):
 
 # Build a column-major camera-to-world matrix from position/direction/up.
 def build_camera_to_world[Ocs: Origin[mut=True], Oc2w: Origin[mut=True]](cs: UnsafePointer[CameraState, Ocs], c2w: UnsafePointer[Float32, Oc2w]):
-    var dx = cs[0].direction.x; var dy = cs[0].direction.y; var dz = cs[0].direction.z
-    var ux = cs[0].up.x;        var uy = cs[0].up.y;        var uz = cs[0].up.z
+    var dx = cs[unsafe_offset=0].direction.x; var dy = cs[unsafe_offset=0].direction.y; var dz = cs[unsafe_offset=0].direction.z
+    var ux = cs[unsafe_offset=0].up.x;        var uy = cs[unsafe_offset=0].up.y;        var uz = cs[unsafe_offset=0].up.z
 
     # right = normalize(cross(dir, up))
     var rx = dy * uz - dz * uy
@@ -65,11 +65,11 @@ def build_camera_to_world[Ocs: Origin[mut=True], Oc2w: Origin[mut=True]](cs: Uns
     var tuz = rx * dy - ry * dx
 
     # Column 0: right
-    c2w[0] = rx;  c2w[1] = ry;  c2w[2] = rz;  c2w[3] = Float32(0)
+    c2w[unsafe_offset=0] = rx;  c2w[unsafe_offset=1] = ry;  c2w[unsafe_offset=2] = rz;  c2w[unsafe_offset=3] = Float32(0)
     # Column 1: true_up
-    c2w[4] = tux; c2w[5] = tuy; c2w[6] = tuz; c2w[7] = Float32(0)
+    c2w[unsafe_offset=4] = tux; c2w[unsafe_offset=5] = tuy; c2w[unsafe_offset=6] = tuz; c2w[unsafe_offset=7] = Float32(0)
     # Column 2: dir (forward = camera +Z)
-    c2w[8] = dx;  c2w[9] = dy;  c2w[10] = dz; c2w[11] = Float32(0)
+    c2w[unsafe_offset=8] = dx;  c2w[unsafe_offset=9] = dy;  c2w[unsafe_offset=10] = dz; c2w[unsafe_offset=11] = Float32(0)
     # Column 3: position
-    c2w[12] = cs[0].position.x; c2w[13] = cs[0].position.y
-    c2w[14] = cs[0].position.z; c2w[15] = Float32(1)
+    c2w[unsafe_offset=12] = cs[unsafe_offset=0].position.x; c2w[unsafe_offset=13] = cs[unsafe_offset=0].position.y
+    c2w[unsafe_offset=14] = cs[unsafe_offset=0].position.z; c2w[unsafe_offset=15] = Float32(1)

@@ -22,41 +22,41 @@ def _append_str(mut data: List[UInt8], s: String):
 
 def _append_f32_le(mut data: List[UInt8], v: Float32):
     var tmp = alloc[UInt8](4)
-    tmp.unsafe_bitcast[Float32]()[0] = v
+    tmp.unsafe_bitcast[Float32]()[unsafe_offset=0] = v
     for i in range(4):
-        data.append(tmp[i])
+        data.append(tmp[unsafe_offset=i])
     tmp.unsafe_free()
 
 def _append_f32_be(mut data: List[UInt8], v: Float32):
     var tmp = alloc[UInt8](4)
-    tmp.unsafe_bitcast[Float32]()[0] = v
-    data.append(tmp[3]); data.append(tmp[2]); data.append(tmp[1]); data.append(tmp[0])
+    tmp.unsafe_bitcast[Float32]()[unsafe_offset=0] = v
+    data.append(tmp[unsafe_offset=3]); data.append(tmp[unsafe_offset=2]); data.append(tmp[unsafe_offset=1]); data.append(tmp[unsafe_offset=0])
     tmp.unsafe_free()
 
 def _append_f64_le(mut data: List[UInt8], v: Float64):
     var tmp = alloc[UInt8](8)
-    tmp.unsafe_bitcast[Float64]()[0] = v
+    tmp.unsafe_bitcast[Float64]()[unsafe_offset=0] = v
     for i in range(8):
-        data.append(tmp[i])
+        data.append(tmp[unsafe_offset=i])
     tmp.unsafe_free()
 
 def _append_i32_le(mut data: List[UInt8], v: Int32):
     var tmp = alloc[UInt8](4)
-    tmp.unsafe_bitcast[Int32]()[0] = v
+    tmp.unsafe_bitcast[Int32]()[unsafe_offset=0] = v
     for i in range(4):
-        data.append(tmp[i])
+        data.append(tmp[unsafe_offset=i])
     tmp.unsafe_free()
 
 def _append_i32_be(mut data: List[UInt8], v: Int32):
     var tmp = alloc[UInt8](4)
-    tmp.unsafe_bitcast[Int32]()[0] = v
-    data.append(tmp[3]); data.append(tmp[2]); data.append(tmp[1]); data.append(tmp[0])
+    tmp.unsafe_bitcast[Int32]()[unsafe_offset=0] = v
+    data.append(tmp[unsafe_offset=3]); data.append(tmp[unsafe_offset=2]); data.append(tmp[unsafe_offset=1]); data.append(tmp[unsafe_offset=0])
     tmp.unsafe_free()
 
 def _append_u16_le(mut data: List[UInt8], v: UInt16):
     var tmp = alloc[UInt8](2)
-    tmp.unsafe_bitcast[UInt16]()[0] = v
-    data.append(tmp[0]); data.append(tmp[1])
+    tmp.unsafe_bitcast[UInt16]()[unsafe_offset=0] = v
+    data.append(tmp[unsafe_offset=0]); data.append(tmp[unsafe_offset=1])
     tmp.unsafe_free()
 
 def _write_file(path: String, data: List[UInt8]) raises:
@@ -68,8 +68,8 @@ def _path_cstr(path: String) -> UnsafePointer[UInt8, MutExternalOrigin]:
     var n = path.byte_length()
     var buf = alloc[UInt8](n + 1)
     for i in range(n):
-        buf[i] = path.as_bytes()[i]
-    buf[n] = UInt8(0)
+        buf[unsafe_offset=i] = path.as_bytes()[i]
+    buf[unsafe_offset=n] = UInt8(0)
     return buf
 
 # ── load_ply out-parameter bundle ───────────────────────────────────────────
@@ -99,10 +99,10 @@ def _alloc_ply_result() -> _PlyResult:
         alloc[UnsafePointer[Float32, MutExternalOrigin]](1),
         alloc[Int32](1),
     )
-    r.uvs[0] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
-    r.has_uvs[0] = Int32(0)
-    r.normals[0] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
-    r.has_normals[0] = Int32(0)
+    r.uvs[unsafe_offset=0] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
+    r.has_uvs[unsafe_offset=0] = Int32(0)
+    r.normals[unsafe_offset=0] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
+    r.has_normals[unsafe_offset=0] = Int32(0)
     return r^
 
 def _load(path: String, mut r: _PlyResult) -> Int32:
@@ -150,14 +150,14 @@ def test_ascii_triangle() raises:
     var r = _alloc_ply_result()
     var ok = _load(path, r)
     assert_true(ok == Int32(1))
-    assert_true(r.n_verts[0] == Int32(3))
-    assert_true(r.n_tris[0] == Int32(1))
-    var pts = r.pts[0]
-    assert_true(_close(pts[0], Float32(0.0)) and _close(pts[1], Float32(0.0)) and _close(pts[2], Float32(0.0)))
-    assert_true(_close(pts[3], Float32(1.0)) and _close(pts[4], Float32(0.0)) and _close(pts[5], Float32(0.0)))
-    assert_true(_close(pts[6], Float32(0.0)) and _close(pts[7], Float32(1.0)) and _close(pts[8], Float32(0.0)))
-    var idx = r.idx[0]
-    assert_true(idx[0] == Int32(0) and idx[1] == Int32(1) and idx[2] == Int32(2))
+    assert_true(r.n_verts[unsafe_offset=0] == Int32(3))
+    assert_true(r.n_tris[unsafe_offset=0] == Int32(1))
+    var pts = r.pts[unsafe_offset=0]
+    assert_true(_close(pts[unsafe_offset=0], Float32(0.0)) and _close(pts[unsafe_offset=1], Float32(0.0)) and _close(pts[unsafe_offset=2], Float32(0.0)))
+    assert_true(_close(pts[unsafe_offset=3], Float32(1.0)) and _close(pts[unsafe_offset=4], Float32(0.0)) and _close(pts[unsafe_offset=5], Float32(0.0)))
+    assert_true(_close(pts[unsafe_offset=6], Float32(0.0)) and _close(pts[unsafe_offset=7], Float32(1.0)) and _close(pts[unsafe_offset=8], Float32(0.0)))
+    var idx = r.idx[unsafe_offset=0]
+    assert_true(idx[unsafe_offset=0] == Int32(0) and idx[unsafe_offset=1] == Int32(1) and idx[unsafe_offset=2] == Int32(2))
 
     pts.unsafe_free(); idx.unsafe_free()
     _free(r)
@@ -183,12 +183,12 @@ def test_ascii_negative_and_exponent_values() raises:
     var r = _alloc_ply_result()
     var ok = _load(path, r)
     assert_true(ok == Int32(1))
-    var pts = r.pts[0]
-    assert_true(_close(pts[0], Float32(-1.5)) and _close(pts[1], Float32(2.25)))
-    assert_true(_close(pts[3], Float32(100.0)) and _close(pts[4], Float32(-0.35)))
-    assert_true(_close(pts[8], Float32(-0.001)))
+    var pts = r.pts[unsafe_offset=0]
+    assert_true(_close(pts[unsafe_offset=0], Float32(-1.5)) and _close(pts[unsafe_offset=1], Float32(2.25)))
+    assert_true(_close(pts[unsafe_offset=3], Float32(100.0)) and _close(pts[unsafe_offset=4], Float32(-0.35)))
+    assert_true(_close(pts[unsafe_offset=8], Float32(-0.001)))
 
-    pts.unsafe_free(); r.idx[0].unsafe_free()
+    pts.unsafe_free(); r.idx[unsafe_offset=0].unsafe_free()
     _free(r)
     _cleanup(path)
 
@@ -214,13 +214,13 @@ def test_ascii_quad_face_triangulated_into_fan() raises:
     var r = _alloc_ply_result()
     var ok = _load(path, r)
     assert_true(ok == Int32(1))
-    assert_true(r.n_verts[0] == Int32(4))
-    assert_true(r.n_tris[0] == Int32(2))
-    var idx = r.idx[0]
-    assert_true(idx[0] == Int32(0) and idx[1] == Int32(1) and idx[2] == Int32(2))
-    assert_true(idx[3] == Int32(0) and idx[4] == Int32(2) and idx[5] == Int32(3))
+    assert_true(r.n_verts[unsafe_offset=0] == Int32(4))
+    assert_true(r.n_tris[unsafe_offset=0] == Int32(2))
+    var idx = r.idx[unsafe_offset=0]
+    assert_true(idx[unsafe_offset=0] == Int32(0) and idx[unsafe_offset=1] == Int32(1) and idx[unsafe_offset=2] == Int32(2))
+    assert_true(idx[unsafe_offset=3] == Int32(0) and idx[unsafe_offset=4] == Int32(2) and idx[unsafe_offset=5] == Int32(3))
 
-    r.pts[0].unsafe_free(); idx.unsafe_free()
+    r.pts[unsafe_offset=0].unsafe_free(); idx.unsafe_free()
     _free(r)
     _cleanup(path)
 
@@ -245,16 +245,16 @@ def test_binary_le_triangle() raises:
     var r = _alloc_ply_result()
     var ok = _load(path, r)
     assert_true(ok == Int32(1))
-    assert_true(r.n_verts[0] == Int32(3))
-    assert_true(r.n_tris[0] == Int32(1))
-    var pts = r.pts[0]
-    assert_true(_close(pts[0], Float32(0.0)) and _close(pts[1], Float32(0.0)) and _close(pts[2], Float32(0.0)))
-    assert_true(_close(pts[3], Float32(1.0)) and _close(pts[4], Float32(0.0)) and _close(pts[5], Float32(0.0)))
-    assert_true(_close(pts[6], Float32(0.0)) and _close(pts[7], Float32(1.0)) and _close(pts[8], Float32(0.0)))
-    var idx = r.idx[0]
-    assert_true(idx[0] == Int32(0) and idx[1] == Int32(1) and idx[2] == Int32(2))
-    assert_true(r.has_uvs[0] == Int32(0))
-    assert_true(r.has_normals[0] == Int32(0))
+    assert_true(r.n_verts[unsafe_offset=0] == Int32(3))
+    assert_true(r.n_tris[unsafe_offset=0] == Int32(1))
+    var pts = r.pts[unsafe_offset=0]
+    assert_true(_close(pts[unsafe_offset=0], Float32(0.0)) and _close(pts[unsafe_offset=1], Float32(0.0)) and _close(pts[unsafe_offset=2], Float32(0.0)))
+    assert_true(_close(pts[unsafe_offset=3], Float32(1.0)) and _close(pts[unsafe_offset=4], Float32(0.0)) and _close(pts[unsafe_offset=5], Float32(0.0)))
+    assert_true(_close(pts[unsafe_offset=6], Float32(0.0)) and _close(pts[unsafe_offset=7], Float32(1.0)) and _close(pts[unsafe_offset=8], Float32(0.0)))
+    var idx = r.idx[unsafe_offset=0]
+    assert_true(idx[unsafe_offset=0] == Int32(0) and idx[unsafe_offset=1] == Int32(1) and idx[unsafe_offset=2] == Int32(2))
+    assert_true(r.has_uvs[unsafe_offset=0] == Int32(0))
+    assert_true(r.has_normals[unsafe_offset=0] == Int32(0))
 
     pts.unsafe_free(); idx.unsafe_free()
     _free(r)
@@ -281,14 +281,14 @@ def test_binary_be_triangle() raises:
     var r = _alloc_ply_result()
     var ok = _load(path, r)
     assert_true(ok == Int32(1))
-    assert_true(r.n_verts[0] == Int32(3))
-    assert_true(r.n_tris[0] == Int32(1))
-    var pts = r.pts[0]
-    assert_true(_close(pts[0], Float32(2.0)))
-    assert_true(_close(pts[4], Float32(2.0)))
-    assert_true(_close(pts[8], Float32(2.0)))
-    var idx = r.idx[0]
-    assert_true(idx[0] == Int32(0) and idx[1] == Int32(1) and idx[2] == Int32(2))
+    assert_true(r.n_verts[unsafe_offset=0] == Int32(3))
+    assert_true(r.n_tris[unsafe_offset=0] == Int32(1))
+    var pts = r.pts[unsafe_offset=0]
+    assert_true(_close(pts[unsafe_offset=0], Float32(2.0)))
+    assert_true(_close(pts[unsafe_offset=4], Float32(2.0)))
+    assert_true(_close(pts[unsafe_offset=8], Float32(2.0)))
+    var idx = r.idx[unsafe_offset=0]
+    assert_true(idx[unsafe_offset=0] == Int32(0) and idx[unsafe_offset=1] == Int32(1) and idx[unsafe_offset=2] == Int32(2))
 
     pts.unsafe_free(); idx.unsafe_free()
     _free(r)
@@ -315,12 +315,12 @@ def test_binary_le_double_precision_positions() raises:
     var r = _alloc_ply_result()
     var ok = _load(path, r)
     assert_true(ok == Int32(1))
-    assert_true(r.n_verts[0] == Int32(3))
-    var pts = r.pts[0]
-    assert_true(_close(pts[3], Float32(3.5)))
-    assert_true(_close(pts[7], Float32(3.5)))
+    assert_true(r.n_verts[unsafe_offset=0] == Int32(3))
+    var pts = r.pts[unsafe_offset=0]
+    assert_true(_close(pts[unsafe_offset=3], Float32(3.5)))
+    assert_true(_close(pts[unsafe_offset=7], Float32(3.5)))
 
-    pts.unsafe_free(); r.idx[0].unsafe_free()
+    pts.unsafe_free(); r.idx[unsafe_offset=0].unsafe_free()
     _free(r)
     _cleanup(path)
 
@@ -347,14 +347,14 @@ def test_quad_face_triangulated_into_fan() raises:
     var r = _alloc_ply_result()
     var ok = _load(path, r)
     assert_true(ok == Int32(1))
-    assert_true(r.n_verts[0] == Int32(4))
+    assert_true(r.n_verts[unsafe_offset=0] == Int32(4))
     # cnt-2 = 2 triangles: fan (face_idx[0], face_idx[ti+1], face_idx[ti+2])
-    assert_true(r.n_tris[0] == Int32(2))
-    var idx = r.idx[0]
-    assert_true(idx[0] == Int32(0) and idx[1] == Int32(1) and idx[2] == Int32(2))
-    assert_true(idx[3] == Int32(0) and idx[4] == Int32(2) and idx[5] == Int32(3))
+    assert_true(r.n_tris[unsafe_offset=0] == Int32(2))
+    var idx = r.idx[unsafe_offset=0]
+    assert_true(idx[unsafe_offset=0] == Int32(0) and idx[unsafe_offset=1] == Int32(1) and idx[unsafe_offset=2] == Int32(2))
+    assert_true(idx[unsafe_offset=3] == Int32(0) and idx[unsafe_offset=4] == Int32(2) and idx[unsafe_offset=5] == Int32(3))
 
-    r.pts[0].unsafe_free(); idx.unsafe_free()
+    r.pts[unsafe_offset=0].unsafe_free(); idx.unsafe_free()
     _free(r)
     _cleanup(path)
 
@@ -379,11 +379,11 @@ def test_face_list_ushort_index_width() raises:
     var r = _alloc_ply_result()
     var ok = _load(path, r)
     assert_true(ok == Int32(1))
-    assert_true(r.n_tris[0] == Int32(1))
-    var idx = r.idx[0]
-    assert_true(idx[0] == Int32(0) and idx[1] == Int32(1) and idx[2] == Int32(2))
+    assert_true(r.n_tris[unsafe_offset=0] == Int32(1))
+    var idx = r.idx[unsafe_offset=0]
+    assert_true(idx[unsafe_offset=0] == Int32(0) and idx[unsafe_offset=1] == Int32(1) and idx[unsafe_offset=2] == Int32(2))
 
-    r.pts[0].unsafe_free(); idx.unsafe_free()
+    r.pts[unsafe_offset=0].unsafe_free(); idx.unsafe_free()
     _free(r)
     _cleanup(path)
 
@@ -420,17 +420,17 @@ def test_normals_and_uvs_attached() raises:
     var r = _alloc_ply_result()
     var ok = _load(path, r)
     assert_true(ok == Int32(1))
-    assert_true(r.has_normals[0] == Int32(1))
-    assert_true(r.has_uvs[0] == Int32(1))
-    var nrm = r.normals[0]
-    assert_true(_close(nrm[0], Float32(0.0)) and _close(nrm[1], Float32(0.0)) and _close(nrm[2], Float32(1.0)))
-    assert_true(_close(nrm[6], Float32(0.0)) and _close(nrm[7], Float32(0.0)) and _close(nrm[8], Float32(1.0)))
-    var uvs = r.uvs[0]
-    assert_true(_close(uvs[0], Float32(0.0)) and _close(uvs[1], Float32(0.0)))
-    assert_true(_close(uvs[2], Float32(1.0)) and _close(uvs[3], Float32(0.0)))
-    assert_true(_close(uvs[4], Float32(0.0)) and _close(uvs[5], Float32(1.0)))
+    assert_true(r.has_normals[unsafe_offset=0] == Int32(1))
+    assert_true(r.has_uvs[unsafe_offset=0] == Int32(1))
+    var nrm = r.normals[unsafe_offset=0]
+    assert_true(_close(nrm[unsafe_offset=0], Float32(0.0)) and _close(nrm[unsafe_offset=1], Float32(0.0)) and _close(nrm[unsafe_offset=2], Float32(1.0)))
+    assert_true(_close(nrm[unsafe_offset=6], Float32(0.0)) and _close(nrm[unsafe_offset=7], Float32(0.0)) and _close(nrm[unsafe_offset=8], Float32(1.0)))
+    var uvs = r.uvs[unsafe_offset=0]
+    assert_true(_close(uvs[unsafe_offset=0], Float32(0.0)) and _close(uvs[unsafe_offset=1], Float32(0.0)))
+    assert_true(_close(uvs[unsafe_offset=2], Float32(1.0)) and _close(uvs[unsafe_offset=3], Float32(0.0)))
+    assert_true(_close(uvs[unsafe_offset=4], Float32(0.0)) and _close(uvs[unsafe_offset=5], Float32(1.0)))
 
-    r.pts[0].unsafe_free(); r.idx[0].unsafe_free(); nrm.unsafe_free(); uvs.unsafe_free()
+    r.pts[unsafe_offset=0].unsafe_free(); r.idx[unsafe_offset=0].unsafe_free(); nrm.unsafe_free(); uvs.unsafe_free()
     _free(r)
     _cleanup(path)
 

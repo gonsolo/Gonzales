@@ -69,7 +69,7 @@ def _pl_find_interval_array(vals: UnsafePointer[Float32, MutExternalOrigin], sz:
     while size > 0:
         var half = size // 2
         var middle = first + half
-        if vals[middle] <= x:
+        if vals[unsafe_offset=middle] <= x:
             first = middle + 1
             size = size - (half + 1)
         else:
@@ -87,8 +87,8 @@ def _pl_param_wt(vals: UnsafePointer[Float32, MutExternalOrigin], size: Int, x: 
     if size <= 1:
         return (0, Float32(0.0))
     var idx = _pl_find_interval_array(vals, size, x)
-    var p0 = vals[idx]
-    var p1 = vals[idx + 1]
+    var p0 = vals[unsafe_offset=idx]
+    var p1 = vals[unsafe_offset=idx + 1]
     var w1 = (x - p0) / (p1 - p0)
     if w1 < Float32(0.0): w1 = Float32(0.0)
     if w1 > Float32(1.0): w1 = Float32(1.0)
@@ -105,8 +105,8 @@ def _pl_lookup2(
     pbrt's back-to-front recursion), inner blend over phi (the first)."""
     var i_t0 = i0
     var i_t1 = i0 + stride_theta * size
-    var v_t0 = data[i_t0] * w_phi0 + data[i_t0 + stride_phi * size] * w_phi1
-    var v_t1 = data[i_t1] * w_phi0 + data[i_t1 + stride_phi * size] * w_phi1
+    var v_t0 = data[unsafe_offset=i_t0] * w_phi0 + data[unsafe_offset=i_t0 + stride_phi * size] * w_phi1
+    var v_t1 = data[unsafe_offset=i_t1] * w_phi0 + data[unsafe_offset=i_t1 + stride_phi * size] * w_phi1
     return v_t0 * w_theta0 + v_t1 * w_theta1
 
 def _pl_lookup3(
@@ -144,8 +144,8 @@ def _pl2d_eval0(
     var w0x = Float32(1.0) - w1x
     var w0y = Float32(1.0) - w1y
     var idx = ix + iy * xs
-    var v00 = data[idx]; var v10 = data[idx + 1]
-    var v01 = data[idx + xs]; var v11 = data[idx + xs + 1]
+    var v00 = data[unsafe_offset=idx]; var v10 = data[unsafe_offset=idx + 1]
+    var v01 = data[unsafe_offset=idx + xs]; var v11 = data[unsafe_offset=idx + xs + 1]
     return (w0y * (w0x * v00 + w1x * v10) + w1y * (w0x * v01 + w1x * v11)) * inv_px * inv_py
 
 def _pl2d_eval2(

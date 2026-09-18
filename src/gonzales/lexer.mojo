@@ -13,11 +13,11 @@ def is_whitespace(b: UInt8) -> Bool:
 def skip_whitespace_and_comments(bytes: UnsafePointer[UInt8, MutExternalOrigin], length: Int, pos: Int) -> Int:
     var cur = pos
     while cur < length:
-        var b = bytes[cur]
+        var b = bytes[unsafe_offset=cur]
         if is_whitespace(b):
             cur += 1
         elif b == UInt8(35):  # '#'
-            while cur < length and bytes[cur] != UInt8(10):
+            while cur < length and bytes[unsafe_offset=cur] != UInt8(10):
                 cur += 1
         else:
             break
@@ -33,26 +33,26 @@ def scan_int(
     cursor: UnsafePointer[Int32, MutExternalOrigin],
     result: UnsafePointer[Int32, MutExternalOrigin],
 ) -> Int32:
-    var cur = Int(cursor[0])
+    var cur = Int(cursor[unsafe_offset=0])
     var len = Int(length)
     cur = skip_whitespace_and_comments(bytes, len, cur)
     if cur >= len:
         return Int32(0)
 
     var negative = False
-    if bytes[cur] == UInt8(45):       # '-'
+    if bytes[unsafe_offset=cur] == UInt8(45):       # '-'
         negative = True
         cur += 1
-    if cur >= len or not is_digit(bytes[cur]):
+    if cur >= len or not is_digit(bytes[unsafe_offset=cur]):
         return Int32(0)
     var value = Int32(0)
-    while cur < len and is_digit(bytes[cur]):
-        value = value * Int32(10) + Int32(bytes[cur]) - Int32(48)
+    while cur < len and is_digit(bytes[unsafe_offset=cur]):
+        value = value * Int32(10) + Int32(bytes[unsafe_offset=cur]) - Int32(48)
         cur += 1
     if negative:
         value = -value
-    cursor[0] = Int32(cur)
-    result[0] = value
+    cursor[unsafe_offset=0] = Int32(cur)
+    result[unsafe_offset=0] = value
     return Int32(1)
 
 def scan_float(
@@ -61,22 +61,22 @@ def scan_float(
     cursor: UnsafePointer[Int32, MutExternalOrigin],
     result: UnsafePointer[Float32, MutExternalOrigin],
 ) -> Int32:
-    var cur = Int(cursor[0])
+    var cur = Int(cursor[unsafe_offset=0])
     var len = Int(length)
     cur = skip_whitespace_and_comments(bytes, len, cur)
     if cur >= len:
         return Int32(0)
 
-    var leading_negative = bytes[cur] == UInt8(45)
+    var leading_negative = bytes[unsafe_offset=cur] == UInt8(45)
 
     var int_negative = False
-    if cur < len and bytes[cur] == UInt8(45):
+    if cur < len and bytes[unsafe_offset=cur] == UInt8(45):
         int_negative = True
         cur += 1
     var int_part = Int32(0)
     var int_seen = False
-    while cur < len and is_digit(bytes[cur]):
-        int_part = int_part * Int32(10) + Int32(bytes[cur]) - Int32(48)
+    while cur < len and is_digit(bytes[unsafe_offset=cur]):
+        int_part = int_part * Int32(10) + Int32(bytes[unsafe_offset=cur]) - Int32(48)
         cur += 1
         int_seen = True
     if int_negative:
@@ -84,11 +84,11 @@ def scan_float(
 
     var dval = Float64(int_part)
 
-    if cur < len and bytes[cur] == UInt8(46):   # '.'
+    if cur < len and bytes[unsafe_offset=cur] == UInt8(46):   # '.'
         cur += 1
         var tenth = Float64(0.1)
-        while cur < len and is_digit(bytes[cur]):
-            var d = Float64(Int32(bytes[cur]) - Int32(48))
+        while cur < len and is_digit(bytes[unsafe_offset=cur]):
+            var d = Float64(Int32(bytes[unsafe_offset=cur]) - Int32(48))
             if dval < Float64(0.0):
                 dval -= tenth * d
             else:
@@ -98,16 +98,16 @@ def scan_float(
     elif not int_seen:
         return Int32(0)
 
-    if cur < len and bytes[cur] == UInt8(101):  # 'e'
+    if cur < len and bytes[unsafe_offset=cur] == UInt8(101):  # 'e'
         cur += 1
         cur = skip_whitespace_and_comments(bytes, len, cur)
         var exp_negative = False
-        if cur < len and bytes[cur] == UInt8(45):
+        if cur < len and bytes[unsafe_offset=cur] == UInt8(45):
             exp_negative = True
             cur += 1
         var exp_val = Int32(0)
-        while cur < len and is_digit(bytes[cur]):
-            exp_val = exp_val * Int32(10) + Int32(bytes[cur]) - Int32(48)
+        while cur < len and is_digit(bytes[unsafe_offset=cur]):
+            exp_val = exp_val * Int32(10) + Int32(bytes[unsafe_offset=cur]) - Int32(48)
             cur += 1
         if exp_negative:
             exp_val = -exp_val
@@ -124,8 +124,8 @@ def scan_float(
     if leading_negative and int_part == Int32(0):
         f = -f
 
-    cursor[0] = Int32(cur)
-    result[0] = f
+    cursor[unsafe_offset=0] = Int32(cur)
+    result[unsafe_offset=0] = f
     return Int32(1)
 
 def count_floats(
@@ -140,23 +140,23 @@ def count_floats(
         cur = skip_whitespace_and_comments(bytes, len, cur)
         if cur >= len:
             break
-        if cur < len and bytes[cur] == UInt8(45):   # optional '-'
+        if cur < len and bytes[unsafe_offset=cur] == UInt8(45):   # optional '-'
             cur += 1
         var int_seen = False
-        while cur < len and is_digit(bytes[cur]):
+        while cur < len and is_digit(bytes[unsafe_offset=cur]):
             int_seen = True
             cur += 1
-        if cur < len and bytes[cur] == UInt8(46):   # '.'
+        if cur < len and bytes[unsafe_offset=cur] == UInt8(46):   # '.'
             cur += 1
-            while cur < len and is_digit(bytes[cur]):
+            while cur < len and is_digit(bytes[unsafe_offset=cur]):
                 cur += 1
         elif not int_seen:
             break
-        if cur < len and bytes[cur] == UInt8(101):  # 'e'
+        if cur < len and bytes[unsafe_offset=cur] == UInt8(101):  # 'e'
             cur += 1
-            if cur < len and bytes[cur] == UInt8(45):
+            if cur < len and bytes[unsafe_offset=cur] == UInt8(45):
                 cur += 1
-            while cur < len and is_digit(bytes[cur]):
+            while cur < len and is_digit(bytes[unsafe_offset=cur]):
                 cur += 1
         count += Int32(1)
     return count
@@ -168,32 +168,32 @@ def scan_floats[Or: Origin[mut=True]](
     result: UnsafePointer[Float32, Or],
     max_count: Int32,
 ) -> Int32:
-    var cur = Int(cursor[0])
+    var cur = Int(cursor[unsafe_offset=0])
     var len = Int(length)
     var count = Int32(0)
     while count < max_count:
         cur = skip_whitespace_and_comments(bytes, len, cur)
         if cur >= len:
             break
-        var leading_negative = bytes[cur] == UInt8(45)
+        var leading_negative = bytes[unsafe_offset=cur] == UInt8(45)
         var int_negative = False
-        if cur < len and bytes[cur] == UInt8(45):
+        if cur < len and bytes[unsafe_offset=cur] == UInt8(45):
             int_negative = True
             cur += 1
         var int_part = Int32(0)
         var int_seen = False
-        while cur < len and is_digit(bytes[cur]):
-            int_part = int_part * Int32(10) + Int32(bytes[cur]) - Int32(48)
+        while cur < len and is_digit(bytes[unsafe_offset=cur]):
+            int_part = int_part * Int32(10) + Int32(bytes[unsafe_offset=cur]) - Int32(48)
             cur += 1
             int_seen = True
         if int_negative:
             int_part = -int_part
         var dval = Float64(int_part)
-        if cur < len and bytes[cur] == UInt8(46):
+        if cur < len and bytes[unsafe_offset=cur] == UInt8(46):
             cur += 1
             var tenth = Float64(0.1)
-            while cur < len and is_digit(bytes[cur]):
-                var d = Float64(Int32(bytes[cur]) - Int32(48))
+            while cur < len and is_digit(bytes[unsafe_offset=cur]):
+                var d = Float64(Int32(bytes[unsafe_offset=cur]) - Int32(48))
                 if dval < Float64(0.0):
                     dval -= tenth * d
                 else:
@@ -202,16 +202,16 @@ def scan_floats[Or: Origin[mut=True]](
                 cur += 1
         elif not int_seen:
             break
-        if cur < len and bytes[cur] == UInt8(101):
+        if cur < len and bytes[unsafe_offset=cur] == UInt8(101):
             cur += 1
             cur = skip_whitespace_and_comments(bytes, len, cur)
             var exp_negative = False
-            if cur < len and bytes[cur] == UInt8(45):
+            if cur < len and bytes[unsafe_offset=cur] == UInt8(45):
                 exp_negative = True
                 cur += 1
             var exp_val = Int32(0)
-            while cur < len and is_digit(bytes[cur]):
-                exp_val = exp_val * Int32(10) + Int32(bytes[cur]) - Int32(48)
+            while cur < len and is_digit(bytes[unsafe_offset=cur]):
+                exp_val = exp_val * Int32(10) + Int32(bytes[unsafe_offset=cur]) - Int32(48)
                 cur += 1
             if exp_negative:
                 exp_val = -exp_val
@@ -226,9 +226,9 @@ def scan_floats[Or: Origin[mut=True]](
         var f = Float32(dval)
         if leading_negative and int_part == Int32(0):
             f = -f
-        result[Int(count)] = f
+        result[unsafe_offset=Int(count)] = f
         count += Int32(1)
-    cursor[0] = Int32(cur)
+    cursor[unsafe_offset=0] = Int32(cur)
     return count
 
 def count_ints(
@@ -243,11 +243,11 @@ def count_ints(
         cur = skip_whitespace_and_comments(bytes, len, cur)
         if cur >= len:
             break
-        if cur < len and bytes[cur] == UInt8(45):
+        if cur < len and bytes[unsafe_offset=cur] == UInt8(45):
             cur += 1
-        if cur >= len or not is_digit(bytes[cur]):
+        if cur >= len or not is_digit(bytes[unsafe_offset=cur]):
             break
-        while cur < len and is_digit(bytes[cur]):
+        while cur < len and is_digit(bytes[unsafe_offset=cur]):
             cur += 1
         count += Int32(1)
     return count
@@ -259,7 +259,7 @@ def scan_ints[Or: Origin[mut=True]](
     result: UnsafePointer[Int32, Or],
     max_count: Int32,
 ) -> Int32:
-    var cur = Int(cursor[0])
+    var cur = Int(cursor[unsafe_offset=0])
     var len = Int(length)
     var count = Int32(0)
     while count < max_count:
@@ -267,20 +267,20 @@ def scan_ints[Or: Origin[mut=True]](
         if cur >= len:
             break
         var negative = False
-        if bytes[cur] == UInt8(45):
+        if bytes[unsafe_offset=cur] == UInt8(45):
             negative = True
             cur += 1
-        if cur >= len or not is_digit(bytes[cur]):
+        if cur >= len or not is_digit(bytes[unsafe_offset=cur]):
             break
         var value = Int32(0)
-        while cur < len and is_digit(bytes[cur]):
-            value = value * Int32(10) + Int32(bytes[cur]) - Int32(48)
+        while cur < len and is_digit(bytes[unsafe_offset=cur]):
+            value = value * Int32(10) + Int32(bytes[unsafe_offset=cur]) - Int32(48)
             cur += 1
         if negative:
             value = -value
-        result[Int(count)] = value
+        result[unsafe_offset=Int(count)] = value
         count += Int32(1)
-    cursor[0] = Int32(cur)
+    cursor[unsafe_offset=0] = Int32(cur)
     return count
 
 def scan_char(
@@ -289,13 +289,13 @@ def scan_char(
     cursor: UnsafePointer[Int32, MutExternalOrigin],
     expected: UInt8,
 ) -> Int32:
-    var cur = Int(cursor[0])
+    var cur = Int(cursor[unsafe_offset=0])
     var len = Int(length)
     cur = skip_whitespace_and_comments(bytes, len, cur)
-    cursor[0] = Int32(cur)
-    if cur >= len or bytes[cur] != expected:
+    cursor[unsafe_offset=0] = Int32(cur)
+    if cur >= len or bytes[unsafe_offset=cur] != expected:
         return Int32(0)
-    cursor[0] = Int32(cur + 1)
+    cursor[unsafe_offset=0] = Int32(cur + 1)
     return Int32(1)
 
 def scan_token(
@@ -307,33 +307,33 @@ def scan_token(
     buf: UnsafePointer[UInt8, MutExternalOrigin],
     max_buf: Int32,
 ) -> Int32:
-    var cur = Int(cursor[0])
+    var cur = Int(cursor[unsafe_offset=0])
     var len = Int(length)
     cur = skip_whitespace_and_comments(bytes, len, cur)
-    cursor[0] = Int32(cur)
+    cursor[unsafe_offset=0] = Int32(cur)
     if cur >= len:
         if max_buf > 0:
-            buf[0] = UInt8(0)
+            buf[unsafe_offset=0] = UInt8(0)
         return Int32(-1)
     var n = Int(n_delims)
     var written = Int32(0)
     while cur < len:
-        var b = bytes[cur]
+        var b = bytes[unsafe_offset=cur]
         var is_delim = False
         for i in range(n):
-            if delims[i] == b:
+            if delims[unsafe_offset=i] == b:
                 is_delim = True
                 break
         if is_delim:
             break
         if written < max_buf - 1:
-            buf[Int(written)] = b
+            buf[unsafe_offset=Int(written)] = b
         written += Int32(1)
         cur += 1
     var cap = Int(written) if Int(written) < Int(max_buf) - 1 else Int(max_buf) - 1
     if max_buf > 0:
-        buf[cap] = UInt8(0)
-    cursor[0] = Int32(cur)
+        buf[unsafe_offset=cap] = UInt8(0)
+    cursor[unsafe_offset=0] = Int32(cur)
     return written
 
 def parse_quoted_string(
@@ -343,25 +343,25 @@ def parse_quoted_string(
     buf: UnsafePointer[UInt8, MutExternalOrigin],
     max_buf: Int32,
 ) -> Int32:
-    var cur = Int(cursor[0])
+    var cur = Int(cursor[unsafe_offset=0])
     var len = Int(length)
     cur = skip_whitespace_and_comments(bytes, len, cur)
-    cursor[0] = Int32(cur)
-    if cur >= len or bytes[cur] != UInt8(34):   # '"' = 34
+    cursor[unsafe_offset=0] = Int32(cur)
+    if cur >= len or bytes[unsafe_offset=cur] != UInt8(34):   # '"' = 34
         return Int32(-1)
     cur += 1  # opening '"'
     var written = Int32(0)
-    while cur < len and bytes[cur] != UInt8(34):
+    while cur < len and bytes[unsafe_offset=cur] != UInt8(34):
         if written < max_buf - 1:
-            buf[Int(written)] = bytes[cur]
+            buf[unsafe_offset=Int(written)] = bytes[unsafe_offset=cur]
         written += Int32(1)
         cur += 1
     if cur < len:
         cur += 1  # closing '"'
     if max_buf > 0:
         var cap = Int(written) if Int(written) < Int(max_buf) - 1 else Int(max_buf) - 1
-        buf[cap] = UInt8(0)
-    cursor[0] = Int32(cur)
+        buf[unsafe_offset=cap] = UInt8(0)
+    cursor[unsafe_offset=0] = Int32(cur)
     return written
 
 def parse_param_header(
@@ -374,45 +374,45 @@ def parse_param_header(
     name_max: Int32,
     is_array: UnsafePointer[Int32, MutExternalOrigin],
 ) -> Int32:
-    var cur = Int(cursor[0])
+    var cur = Int(cursor[unsafe_offset=0])
     var len = Int(length)
     cur = skip_whitespace_and_comments(bytes, len, cur)
-    cursor[0] = Int32(cur)
-    if cur >= len or bytes[cur] != UInt8(34):
+    cursor[unsafe_offset=0] = Int32(cur)
+    if cur >= len or bytes[unsafe_offset=cur] != UInt8(34):
         return Int32(0)
     cur += 1  # opening '"'
     # type: read until whitespace or '"'
     var t = Int32(0)
-    while cur < len and not is_whitespace(bytes[cur]) and bytes[cur] != UInt8(34):
+    while cur < len and not is_whitespace(bytes[unsafe_offset=cur]) and bytes[unsafe_offset=cur] != UInt8(34):
         if t < type_max - 1:
-            type_buf[Int(t)] = bytes[cur]
+            type_buf[unsafe_offset=Int(t)] = bytes[unsafe_offset=cur]
         t += Int32(1)
         cur += 1
     if type_max > 0:
         var cap = Int(t) if Int(t) < Int(type_max) - 1 else Int(type_max) - 1
-        type_buf[cap] = UInt8(0)
+        type_buf[unsafe_offset=cap] = UInt8(0)
     # skip separator whitespace
     cur = skip_whitespace_and_comments(bytes, len, cur)
     # name: read until '"'
     var n = Int32(0)
-    while cur < len and bytes[cur] != UInt8(34):
+    while cur < len and bytes[unsafe_offset=cur] != UInt8(34):
         if n < name_max - 1:
-            name_buf[Int(n)] = bytes[cur]
+            name_buf[unsafe_offset=Int(n)] = bytes[unsafe_offset=cur]
         n += Int32(1)
         cur += 1
     if name_max > 0:
         var cap = Int(n) if Int(n) < Int(name_max) - 1 else Int(name_max) - 1
-        name_buf[cap] = UInt8(0)
-    if cur < len and bytes[cur] == UInt8(34):
+        name_buf[unsafe_offset=cap] = UInt8(0)
+    if cur < len and bytes[unsafe_offset=cur] == UInt8(34):
         cur += 1  # closing '"'
     # skip ws, check for '['
     cur = skip_whitespace_and_comments(bytes, len, cur)
-    if cur < len and bytes[cur] == UInt8(91):   # '[' = 91
+    if cur < len and bytes[unsafe_offset=cur] == UInt8(91):   # '[' = 91
         cur += 1
-        is_array[0] = Int32(1)
+        is_array[unsafe_offset=0] = Int32(1)
     else:
-        is_array[0] = Int32(0)
-    cursor[0] = Int32(cur)
+        is_array[unsafe_offset=0] = Int32(0)
+    cursor[unsafe_offset=0] = Int32(cur)
     return Int32(1)
 
 
@@ -428,9 +428,9 @@ struct PbrtScanner:
 @always_inline
 def scanner_call_int(handle: UnsafePointer[PbrtScanner, MutExternalOrigin], result: UnsafePointer[Int32, MutExternalOrigin]) -> Int32:
     var cur = alloc[Int32](1)
-    cur[0] = handle[0].cursor
-    var ret = scan_int(handle[0].buffer, handle[0].total_bytes, cur, result)
-    handle[0].cursor = cur[0]
+    cur[unsafe_offset=0] = handle[unsafe_offset=0].cursor
+    var ret = scan_int(handle[unsafe_offset=0].buffer, handle[unsafe_offset=0].total_bytes, cur, result)
+    handle[unsafe_offset=0].cursor = cur[unsafe_offset=0]
     cur.unsafe_free()
     return ret
 
@@ -438,9 +438,9 @@ def scanner_call_int(handle: UnsafePointer[PbrtScanner, MutExternalOrigin], resu
 @always_inline
 def scanner_call_float(handle: UnsafePointer[PbrtScanner, MutExternalOrigin], result: UnsafePointer[Float32, MutExternalOrigin]) -> Int32:
     var cur = alloc[Int32](1)
-    cur[0] = handle[0].cursor
-    var ret = scan_float(handle[0].buffer, handle[0].total_bytes, cur, result)
-    handle[0].cursor = cur[0]
+    cur[unsafe_offset=0] = handle[unsafe_offset=0].cursor
+    var ret = scan_float(handle[unsafe_offset=0].buffer, handle[unsafe_offset=0].total_bytes, cur, result)
+    handle[unsafe_offset=0].cursor = cur[unsafe_offset=0]
     cur.unsafe_free()
     return ret
 
@@ -455,35 +455,35 @@ def scanner_open(path: UnsafePointer[UInt8, MutExternalOrigin]) -> UnsafePointer
         var size = len(bytes)
         var buf = alloc[UInt8](size + 1)
         for i in range(size):
-            buf[i] = bytes[i]
-        buf[size] = UInt8(0)
-        handle[0].buffer = buf
-        handle[0].total_bytes = Int32(size)
-        handle[0].cursor = Int32(0)
-        handle[0].is_at_end = Int32(0)
+            buf[unsafe_offset=i] = bytes[i]
+        buf[unsafe_offset=size] = UInt8(0)
+        handle[unsafe_offset=0].buffer = buf
+        handle[unsafe_offset=0].total_bytes = Int32(size)
+        handle[unsafe_offset=0].cursor = Int32(0)
+        handle[unsafe_offset=0].is_at_end = Int32(0)
     except:
-        handle[0].buffer = UnsafePointer[UInt8, MutExternalOrigin].unsafe_dangling()
-        handle[0].total_bytes = Int32(0)
-        handle[0].cursor = Int32(0)
-        handle[0].is_at_end = Int32(1)
+        handle[unsafe_offset=0].buffer = UnsafePointer[UInt8, MutExternalOrigin].unsafe_dangling()
+        handle[unsafe_offset=0].total_bytes = Int32(0)
+        handle[unsafe_offset=0].cursor = Int32(0)
+        handle[unsafe_offset=0].is_at_end = Int32(1)
     return handle
 
 
 def scanner_free(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]):
-    if _is_real_ptr(handle[0].buffer):
-        handle[0].buffer.unsafe_free()
+    if _is_real_ptr(handle[unsafe_offset=0].buffer):
+        handle[unsafe_offset=0].buffer.unsafe_free()
     handle.unsafe_free()
 
 
 def scanner_is_at_end(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]) -> Int32:
-    return handle[0].is_at_end
+    return handle[unsafe_offset=0].is_at_end
 
 
 def scanner_scan_char(handle: UnsafePointer[PbrtScanner, MutExternalOrigin], expected: UInt8) -> Int32:
     var cur = alloc[Int32](1)
-    cur[0] = handle[0].cursor
-    var ret = scan_char(handle[0].buffer, handle[0].total_bytes, cur, expected)
-    handle[0].cursor = cur[0]
+    cur[unsafe_offset=0] = handle[unsafe_offset=0].cursor
+    var ret = scan_char(handle[unsafe_offset=0].buffer, handle[unsafe_offset=0].total_bytes, cur, expected)
+    handle[unsafe_offset=0].cursor = cur[unsafe_offset=0]
     cur.unsafe_free()
     return ret
 
@@ -497,36 +497,36 @@ def scanner_scan_float(handle: UnsafePointer[PbrtScanner, MutExternalOrigin], re
 
 
 def scanner_count_floats(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]) -> Int32:
-    return count_floats(handle[0].buffer, handle[0].total_bytes, handle[0].cursor)
+    return count_floats(handle[unsafe_offset=0].buffer, handle[unsafe_offset=0].total_bytes, handle[unsafe_offset=0].cursor)
 
 
 def scanner_scan_floats[Or: Origin[mut=True]](handle: UnsafePointer[PbrtScanner, MutExternalOrigin], dst: UnsafePointer[Float32, Or], max_count: Int32) -> Int32:
     var cur = alloc[Int32](1)
-    cur[0] = handle[0].cursor
-    var ret = scan_floats(handle[0].buffer, handle[0].total_bytes, cur, dst, max_count)
-    handle[0].cursor = cur[0]
+    cur[unsafe_offset=0] = handle[unsafe_offset=0].cursor
+    var ret = scan_floats(handle[unsafe_offset=0].buffer, handle[unsafe_offset=0].total_bytes, cur, dst, max_count)
+    handle[unsafe_offset=0].cursor = cur[unsafe_offset=0]
     cur.unsafe_free()
     return ret
 
 
 def scanner_count_ints(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]) -> Int32:
-    return count_ints(handle[0].buffer, handle[0].total_bytes, handle[0].cursor)
+    return count_ints(handle[unsafe_offset=0].buffer, handle[unsafe_offset=0].total_bytes, handle[unsafe_offset=0].cursor)
 
 
 def scanner_scan_ints[Or: Origin[mut=True]](handle: UnsafePointer[PbrtScanner, MutExternalOrigin], dst: UnsafePointer[Int32, Or], max_count: Int32) -> Int32:
     var cur = alloc[Int32](1)
-    cur[0] = handle[0].cursor
-    var ret = scan_ints(handle[0].buffer, handle[0].total_bytes, cur, dst, max_count)
-    handle[0].cursor = cur[0]
+    cur[unsafe_offset=0] = handle[unsafe_offset=0].cursor
+    var ret = scan_ints(handle[unsafe_offset=0].buffer, handle[unsafe_offset=0].total_bytes, cur, dst, max_count)
+    handle[unsafe_offset=0].cursor = cur[unsafe_offset=0]
     cur.unsafe_free()
     return ret
 
 
 def scanner_parse_quoted_string(handle: UnsafePointer[PbrtScanner, MutExternalOrigin], buf: UnsafePointer[UInt8, MutExternalOrigin], max_buf: Int32) -> Int32:
     var cur = alloc[Int32](1)
-    cur[0] = handle[0].cursor
-    var ret = parse_quoted_string(handle[0].buffer, handle[0].total_bytes, cur, buf, max_buf)
-    handle[0].cursor = cur[0]
+    cur[unsafe_offset=0] = handle[unsafe_offset=0].cursor
+    var ret = parse_quoted_string(handle[unsafe_offset=0].buffer, handle[unsafe_offset=0].total_bytes, cur, buf, max_buf)
+    handle[unsafe_offset=0].cursor = cur[unsafe_offset=0]
     cur.unsafe_free()
     return ret
 
@@ -538,10 +538,10 @@ def scanner_parse_param_header(
     is_array: UnsafePointer[Int32, MutExternalOrigin],
 ) -> Int32:
     var cur = alloc[Int32](1)
-    cur[0] = handle[0].cursor
-    var ret = parse_param_header(handle[0].buffer, handle[0].total_bytes, cur,
+    cur[unsafe_offset=0] = handle[unsafe_offset=0].cursor
+    var ret = parse_param_header(handle[unsafe_offset=0].buffer, handle[unsafe_offset=0].total_bytes, cur,
                                       type_buf, type_max, name_buf, name_max, is_array)
-    handle[0].cursor = cur[0]
+    handle[unsafe_offset=0].cursor = cur[unsafe_offset=0]
     cur.unsafe_free()
     return ret
 
@@ -552,12 +552,12 @@ def scanner_scan_token(
     buf: UnsafePointer[UInt8, MutExternalOrigin], max_buf: Int32,
 ) -> Int32:
     var cur = alloc[Int32](1)
-    cur[0] = handle[0].cursor
-    var ret = scan_token(handle[0].buffer, handle[0].total_bytes, cur,
+    cur[unsafe_offset=0] = handle[unsafe_offset=0].cursor
+    var ret = scan_token(handle[unsafe_offset=0].buffer, handle[unsafe_offset=0].total_bytes, cur,
                               delims, n_delims, buf, max_buf)
-    handle[0].cursor = cur[0]
+    handle[unsafe_offset=0].cursor = cur[unsafe_offset=0]
     if ret < 0:
-        handle[0].is_at_end = Int32(1)
+        handle[unsafe_offset=0].is_at_end = Int32(1)
     cur.unsafe_free()
     return ret
 
@@ -568,8 +568,8 @@ def _psc_streq(a: UnsafePointer[UInt8, MutExternalOrigin], b: StringLiteral) -> 
     var bp = b.unsafe_ptr()
     var i = 0
     while True:
-        var ai = a[i]
-        var bi = bp[i]
+        var ai = a[unsafe_offset=i]
+        var bi = bp[unsafe_offset=i]
         if ai != bi:
             return False
         if ai == UInt8(0):
@@ -580,16 +580,16 @@ def _psc_streq(a: UnsafePointer[UInt8, MutExternalOrigin], b: StringLiteral) -> 
 def _psc_strncpy(dst: UnsafePointer[UInt8, MutExternalOrigin],
                 src: UnsafePointer[UInt8, MutExternalOrigin], n: Int32):
     var i = Int32(0)
-    while i < n - Int32(1) and src[Int(i)] != UInt8(0):
-        dst[Int(i)] = src[Int(i)]
+    while i < n - Int32(1) and src[unsafe_offset=Int(i)] != UInt8(0):
+        dst[unsafe_offset=Int(i)] = src[unsafe_offset=Int(i)]
         i += 1
-    dst[Int(i)] = UInt8(0)
+    dst[unsafe_offset=Int(i)] = UInt8(0)
 
 def _psc_strncmp(a: UnsafePointer[UInt8, MutExternalOrigin], b: StringLiteral, n: Int) -> Int:
     """Compare first n bytes of a against literal b. Returns 0 if equal."""
     for i in range(n):
-        var ca = Int(a[i])
-        var cb = Int(b.unsafe_ptr()[i])
+        var ca = Int(a[unsafe_offset=i])
+        var cb = Int(b.unsafe_ptr()[unsafe_offset=i])
         if ca != cb:
             return ca - cb
         if ca == 0:
@@ -597,20 +597,20 @@ def _psc_strncmp(a: UnsafePointer[UInt8, MutExternalOrigin], b: StringLiteral, n
     return 0
 
 def _psc_type_is_float(t: UnsafePointer[UInt8, MutExternalOrigin]) -> Bool:
-    var c = t[0]
+    var c = t[unsafe_offset=0]
     if c == UInt8(102): return True  # 'f' float
     if c == UInt8(114): return True  # 'r' rgb
     if c == UInt8(99):  return True  # 'c' color
     if c == UInt8(110): return True  # 'n' normal
     if c == UInt8(112): return True  # 'p' point/point2/point3
     if c == UInt8(118): return True  # 'v' vector3
-    if c == UInt8(115) and t[1] == UInt8(112): return True  # "sp" spectrum
+    if c == UInt8(115) and t[unsafe_offset=1] == UInt8(112): return True  # "sp" spectrum
     # NOTE: "blackbody" is intentionally NOT listed here; it is 1 float (temperature),
     # not 3 floats, so _psc_scan_rgb must NOT be called for it.
     return False
 
 def _psc_type_is_blackbody(t: UnsafePointer[UInt8, MutExternalOrigin]) -> Bool:
-    return t[0] == UInt8(98) and t[1] == UInt8(108)  # 'b','l'
+    return t[unsafe_offset=0] == UInt8(98) and t[unsafe_offset=1] == UInt8(108)  # 'b','l'
 
 # Blackbody -> linear sRGB for `blackbody L`/`blackbody I` light specs.
 # Delegates to geometry.mojo's blackbody_rgb so the parser and the GPU medium
@@ -621,14 +621,14 @@ def _psc_type_is_blackbody(t: UnsafePointer[UInt8, MutExternalOrigin]) -> Bool:
 @always_inline
 def _psc_blackbody_to_rgb(temp: Float32, rgb: UnsafePointer[Float32, MutExternalOrigin]):
     var c = blackbody_rgb(temp)
-    rgb[0] = c.r; rgb[1] = c.g; rgb[2] = c.b
+    rgb[unsafe_offset=0] = c.r; rgb[unsafe_offset=1] = c.g; rgb[unsafe_offset=2] = c.b
 
 def _psc_type_is_int(t: UnsafePointer[UInt8, MutExternalOrigin]) -> Bool:
-    return t[0] == UInt8(105)  # 'i' integer
+    return t[unsafe_offset=0] == UInt8(105)  # 'i' integer
 
 def _psc_type_is_str(t: UnsafePointer[UInt8, MutExternalOrigin]) -> Bool:
-    if t[0] == UInt8(116): return True  # 't' texture
-    if t[0] == UInt8(115) and t[1] == UInt8(116): return True  # "string"
+    if t[unsafe_offset=0] == UInt8(116): return True  # 't' texture
+    if t[unsafe_offset=0] == UInt8(115) and t[unsafe_offset=1] == UInt8(116): return True  # "string"
     return False
 
 def _psc_skip_value(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
@@ -665,7 +665,7 @@ def _psc_skip_value(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                 pass
     else:
         var nl_buf = alloc[UInt8](1)
-        nl_buf[0] = UInt8(10)
+        nl_buf[unsafe_offset=0] = UInt8(10)
         _ = scanner_scan_token(handle, nl_buf, 1, tmp_s, 1024)
         nl_buf.unsafe_free()
     tmp_s.unsafe_free()
@@ -691,10 +691,10 @@ struct ParamScanner(Movable):
         self.is_array = Int32(0)
 
     def next(mut self, handle: UnsafePointer[PbrtScanner, MutExternalOrigin]) -> Bool:
-        self.ia[0] = Int32(0)
+        self.ia[unsafe_offset=0] = Int32(0)
         var found = scanner_parse_param_header(handle, self.type_buf, self.type_cap,
                                                 self.name_buf, self.name_cap, self.ia)
-        self.is_array = self.ia[0]
+        self.is_array = self.ia[unsafe_offset=0]
         return found != 0
 
     def name_is(self, n: StringLiteral) -> Bool:
@@ -726,7 +726,7 @@ def _psc_skip_params(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]):
 
 def _psc_skip_line(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]):
     var nl_buf = alloc[UInt8](1)
-    nl_buf[0] = UInt8(10)
+    nl_buf[unsafe_offset=0] = UInt8(10)
     var buf = alloc[UInt8](4096)
     _ = scanner_scan_token(handle, nl_buf, 1, buf, 4096)
     nl_buf.unsafe_free()
@@ -770,13 +770,13 @@ def _psc_scan_spectrum_scalar(
         var count = 0
         var vi = 1
         while vi < Int(n):
-            sum += tmp[vi]
+            sum += tmp[unsafe_offset=vi]
             count += 1
             vi += 2
         var mean = sum / Float32(max(count, 1))
         tmp.unsafe_free()
         if name_max > Int32(0):
-            name_dst[0] = UInt8(0)
+            name_dst[unsafe_offset=0] = UInt8(0)
         if is_array:
             _ = scanner_scan_char(handle, UInt8(93))
         return (mean, True)
@@ -884,7 +884,7 @@ struct ParameterDictionary(Movable):
                 elif len(p.value.floats) == 1:
                     var rgb_out = alloc[Float32](3)
                     _psc_blackbody_to_rgb(p.value.floats[0], rgb_out)
-                    var result = RGB(rgb_out[0], rgb_out[1], rgb_out[2])
+                    var result = RGB(rgb_out[unsafe_offset=0], rgb_out[unsafe_offset=1], rgb_out[unsafe_offset=2])
                     rgb_out.unsafe_free()
                     return result
         return default
@@ -985,7 +985,7 @@ def _psc_collect_params(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]) -
     var ps = ParamScanner()
     while ps.next(handle):
         var pv = ParamValue(List[Float32](), List[Int32](), List[String]())
-        var is_spectrum = ps.type_buf[0] == UInt8(115) and ps.type_buf[1] == UInt8(112)  # "sp"
+        var is_spectrum = ps.type_buf[unsafe_offset=0] == UInt8(115) and ps.type_buf[unsafe_offset=1] == UInt8(112)  # "sp"
         if _psc_type_is_blackbody(ps.type_buf):
             # "blackbody" is a single temperature value (Kelvin), not an RGB
             # triple -- stored as a 1-element float list, same shape as a
@@ -997,7 +997,7 @@ def _psc_collect_params(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]) -
             var tmp = alloc[Float32](1)
             var n = scanner_scan_float(handle, tmp)
             if n > Int32(0):
-                pv.floats.append(tmp[0])
+                pv.floats.append(tmp[unsafe_offset=0])
             tmp.unsafe_free()
             if ps.is_array:
                 _ = scanner_scan_char(handle, UInt8(93))
@@ -1029,7 +1029,7 @@ def _psc_collect_params(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]) -
                 var tmp = alloc[Float32](1)
                 var n = scanner_scan_float(handle, tmp)
                 if n > Int32(0):
-                    pv.floats.append(tmp[0])
+                    pv.floats.append(tmp[unsafe_offset=0])
                 tmp.unsafe_free()
         elif _psc_type_is_int(ps.type_buf):
             if ps.is_array:
@@ -1046,7 +1046,7 @@ def _psc_collect_params(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]) -
                 var tmp = alloc[Int32](1)
                 var n = scanner_scan_int(handle, tmp)
                 if n > Int32(0):
-                    pv.ints.append(tmp[0])
+                    pv.ints.append(tmp[unsafe_offset=0])
                 tmp.unsafe_free()
         elif _psc_type_is_str(ps.type_buf):
             var tmp_s = alloc[UInt8](512)
@@ -1068,7 +1068,7 @@ def _psc_collect_params(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]) -
             # else-branch scanning, just retained instead of discarded.
             var tmp_s = alloc[UInt8](32)
             var nl_buf = alloc[UInt8](1)
-            nl_buf[0] = UInt8(10)
+            nl_buf[unsafe_offset=0] = UInt8(10)
             _ = scanner_scan_token(handle, nl_buf, 1, tmp_s, 32)
             nl_buf.unsafe_free()
             pv.strs.append(String(unsafe_from_utf8_ptr=tmp_s.as_imm()))

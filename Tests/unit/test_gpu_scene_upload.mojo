@@ -35,13 +35,13 @@ def _scanner_from_string(s: String) -> UnsafePointer[PbrtScanner, MutExternalOri
     var n = s.byte_length()
     var buf = alloc[UInt8](n + 1)
     for i in range(n):
-        buf[i] = s.as_bytes()[i]
-    buf[n] = UInt8(0)
+        buf[unsafe_offset=i] = s.as_bytes()[i]
+    buf[unsafe_offset=n] = UInt8(0)
     var handle = alloc[PbrtScanner](1)
-    handle[0].buffer = buf
-    handle[0].total_bytes = Int32(n)
-    handle[0].cursor = Int32(0)
-    handle[0].is_at_end = Int32(0)
+    handle[unsafe_offset=0].buffer = buf
+    handle[unsafe_offset=0].total_bytes = Int32(n)
+    handle[unsafe_offset=0].cursor = Int32(0)
+    handle[unsafe_offset=0].is_at_end = Int32(0)
     return handle
 
 def _parse_minimal_scene() -> UnsafePointer[ParsedScene_Mojo, MutExternalOrigin]:
@@ -65,7 +65,7 @@ def _parse_minimal_scene() -> UnsafePointer[ParsedScene_Mojo, MutExternalOrigin]
     var psc = alloc[ParsedScene_Mojo](1)
     finalize_scene(s_ptr, psc, False)
     _ = s_ptr.take_pointee(); s_ptr.unsafe_free()
-    handle[0].buffer.unsafe_free(); handle.unsafe_free()
+    handle[unsafe_offset=0].buffer.unsafe_free(); handle.unsafe_free()
     return psc
 
 def test_gpu_upload_scene_round_trips_mesh_and_material_data() raises:
@@ -74,55 +74,55 @@ def test_gpu_upload_scene_round_trips_mesh_and_material_data() raises:
         return
 
     var psc = _parse_minimal_scene()
-    assert_true(Int(psc[0].mesh_count) == 1)
-    assert_true(Int(psc[0].material_count) == 1)
+    assert_true(Int(psc[unsafe_offset=0].mesh_count) == 1)
+    assert_true(Int(psc[unsafe_offset=0].material_count) == 1)
 
     comptime N_SOBOL_GPU_WORDS = 1024 * 52
     var sobol = alloc[UInt32](N_SOBOL_GPU_WORDS)
     for i in range(N_SOBOL_GPU_WORDS):
-        sobol[i] = UInt32(i * 7 + 3)
+        sobol[unsafe_offset=i] = UInt32(i * 7 + 3)
 
-    var n_pixels = Int(psc[0].film_w) * Int(psc[0].film_h)
+    var n_pixels = Int(psc[unsafe_offset=0].film_w) * Int(psc[unsafe_offset=0].film_h)
     var handle = _gpu_upload_scene(psc, sobol, n_pixels)
     assert_true(Int(handle) != 0)
 
     assert_true(handle[].meshes.mesh_count == 1)
     assert_true(handle[].material_count == 1)
     assert_true(handle[].n_pixels == n_pixels)
-    assert_true(Int(handle[].film.width) == Int(psc[0].film_w))
-    assert_true(Int(handle[].film.height) == Int(psc[0].film_h))
+    assert_true(Int(handle[].film.width) == Int(psc[unsafe_offset=0].film_w))
+    assert_true(Int(handle[].film.height) == Int(psc[unsafe_offset=0].film_h))
 
     # Material bytes round-trip: read back the uploaded Material_C and
     # compare against what finalize_scene actually built on the CPU side --
     # not the literal scene text, since e.g. checker/mix fields might differ.
-    var cpu_mat = psc[0].materials[0]
+    var cpu_mat = psc[unsafe_offset=0].materials[unsafe_offset=0]
     with handle[].materials_buf.map_to_host() as h:
-        var gpu_mat = h.unsafe_ptr().unsafe_bitcast[Material_C]()[0]
+        var gpu_mat = h.unsafe_ptr().unsafe_bitcast[Material_C]()[unsafe_offset=0]
         assert_true(gpu_mat.type == cpu_mat.type)
         assert_true(_close(gpu_mat.albedo.r, cpu_mat.albedo.r))
         assert_true(_close(gpu_mat.albedo.g, cpu_mat.albedo.g))
         assert_true(_close(gpu_mat.albedo.b, cpu_mat.albedo.b))
 
     # Mesh point data round-trip (stride-4 floats per vertex: x,y,z,w=1).
-    var n_floats = Int(psc[0].mesh_n_verts[0]) * 4
+    var n_floats = Int(psc[unsafe_offset=0].mesh_n_verts[unsafe_offset=0]) * 4
     with handle[].meshes.points_bufs[0].map_to_host() as h:
         var gpu_pts = h.unsafe_ptr().unsafe_bitcast[Float32]()
-        var cpu_pts = psc[0].meshes[0].points
+        var cpu_pts = psc[unsafe_offset=0].meshes[unsafe_offset=0].points
         for i in range(n_floats):
-            assert_true(_close(gpu_pts[i], cpu_pts[i]))
+            assert_true(_close(gpu_pts[unsafe_offset=i], cpu_pts[unsafe_offset=i]))
 
     # BVH node data round-trips byte-for-byte (same size_of[BVH2Node]()
     # struct copied verbatim in gpu_upload_scene -- a real, non-trivial
     # tree since finalize_scene built it via the same build_bvh2 the CPU
     # renderer uses).
-    var n_bvh_bytes = Int(psc[0].bvh_node_count_cpu) * size_of[BVH2Node]()
+    var n_bvh_bytes = Int(psc[unsafe_offset=0].bvh_node_count_cpu) * size_of[BVH2Node]()
     assert_true(n_bvh_bytes > 0)
     with handle[].bvh.nodes_buf.map_to_host() as h:
         var gpu_bytes = h.unsafe_ptr()
-        var cpu_bytes = psc[0].bvh_nodes_cpu.unsafe_bitcast[UInt8]()
+        var cpu_bytes = psc[unsafe_offset=0].bvh_nodes_cpu.unsafe_bitcast[UInt8]()
         var mismatch = False
         for i in range(n_bvh_bytes):
-            if gpu_bytes[i] != cpu_bytes[i]:
+            if gpu_bytes[unsafe_offset=i] != cpu_bytes[unsafe_offset=i]:
                 mismatch = True
                 break
         assert_true(not mismatch)
@@ -131,12 +131,12 @@ def test_gpu_upload_scene_round_trips_mesh_and_material_data() raises:
     with handle[].r2c_buf.map_to_host() as h:
         var gpu_r2c = h.unsafe_ptr().unsafe_bitcast[Float32]()
         for i in range(16):
-            assert_true(_close(gpu_r2c[i], psc[0].raster_to_camera[i]))
+            assert_true(_close(gpu_r2c[unsafe_offset=i], psc[unsafe_offset=0].raster_to_camera[unsafe_offset=i]))
     with handle[].sobol_buf.map_to_host() as h:
         var gpu_sobol = h.unsafe_ptr().unsafe_bitcast[UInt32]()
-        assert_true(gpu_sobol[0] == UInt32(3))
-        assert_true(gpu_sobol[1] == UInt32(10))
-        assert_true(gpu_sobol[N_SOBOL_GPU_WORDS - 1] == sobol[N_SOBOL_GPU_WORDS - 1])
+        assert_true(gpu_sobol[unsafe_offset=0] == UInt32(3))
+        assert_true(gpu_sobol[unsafe_offset=1] == UInt32(10))
+        assert_true(gpu_sobol[unsafe_offset=N_SOBOL_GPU_WORDS - 1] == sobol[unsafe_offset=N_SOBOL_GPU_WORDS - 1])
 
     sobol.unsafe_free()
     mojo_parsed_free(psc)

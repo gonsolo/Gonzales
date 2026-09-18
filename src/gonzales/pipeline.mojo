@@ -66,17 +66,17 @@ def _resolve_sppm_params(
 ) -> Tuple[Int32, Float32]:
     var radius = sppm_radius_cli
     if radius <= Float32(0):
-        if psc[0].sppm_radius > Float32(0):
-            radius = psc[0].sppm_radius
+        if psc[unsafe_offset=0].sppm_radius > Float32(0):
+            radius = psc[unsafe_offset=0].sppm_radius
         else:
             var (_, scene_radius) = _scene_bounding_sphere(sd)
             radius = scene_radius * SPPM_DEFAULT_RADIUS_FRACTION
     var photons = sppm_photons_cli
     if photons <= Int32(0):
-        if psc[0].sppm_photons_per_iter > Int32(0):
-            photons = psc[0].sppm_photons_per_iter
+        if psc[unsafe_offset=0].sppm_photons_per_iter > Int32(0):
+            photons = psc[unsafe_offset=0].sppm_photons_per_iter
         else:
-            photons = psc[0].film_w * psc[0].film_h
+            photons = psc[unsafe_offset=0].film_w * psc[unsafe_offset=0].film_h
     return (photons, radius)
 
 # Resolve the VCM merge side's light-path budget for the current pass
@@ -115,8 +115,8 @@ def _generate_sobol_matrices(path: String) -> Optional[UnsafePointer[UInt32, Mut
         file_buf = alloc[UInt8](file_size + 1)
         var bytes_ptr = bytes.unsafe_ptr()
         for i in range(file_size):
-            file_buf[i] = bytes_ptr[i]
-        file_buf[file_size] = UInt8(0)
+            file_buf[unsafe_offset=i] = bytes_ptr[unsafe_offset=i]
+        file_buf[unsafe_offset=file_size] = UInt8(0)
     except:
         print("Error: cannot open Sobol data file: " + path)
         return None
@@ -127,11 +127,11 @@ def _generate_sobol_matrices(path: String) -> Optional[UnsafePointer[UInt32, Mut
     var matrices = alloc[UInt32](N_DIMS * N_BITS)
     # Zero-initialize
     for i in range(N_DIMS * N_BITS):
-        matrices[i] = UInt32(0)
+        matrices[unsafe_offset=i] = UInt32(0)
 
     # Dimension 0: all ones (standard Sobol)
     for j in range(N_BITS):
-        matrices[j] = UInt32(1) << UInt32(31 - j)
+        matrices[unsafe_offset=j] = UInt32(1) << UInt32(31 - j)
 
     # Parse remaining dimensions from file
     var pos = 0
@@ -142,13 +142,13 @@ def _generate_sobol_matrices(path: String) -> Optional[UnsafePointer[UInt32, Mut
     # Read one line at a time and parse
     while pos < flen and dim < N_DIMS:
         # Skip leading whitespace including newlines
-        while pos < flen and (file_buf[pos] == UInt8(32) or file_buf[pos] == UInt8(9) or file_buf[pos] == UInt8(10) or file_buf[pos] == UInt8(13)):
+        while pos < flen and (file_buf[unsafe_offset=pos] == UInt8(32) or file_buf[unsafe_offset=pos] == UInt8(9) or file_buf[unsafe_offset=pos] == UInt8(10) or file_buf[unsafe_offset=pos] == UInt8(13)):
             pos += 1
         if pos >= flen:
             break
         # Skip comment lines starting with '#'
-        if file_buf[pos] == UInt8(35):  # '#'
-            while pos < flen and file_buf[pos] != UInt8(10):
+        if file_buf[unsafe_offset=pos] == UInt8(35):  # '#'
+            while pos < flen and file_buf[unsafe_offset=pos] != UInt8(10):
                 pos += 1
             continue
 
@@ -164,8 +164,8 @@ def _generate_sobol_matrices(path: String) -> Optional[UnsafePointer[UInt32, Mut
         # antialiasing, and shifting every higher dimension by one as well.
         # Skip any line that doesn't start with a digit, WITHOUT consuming
         # a dimension.
-        if not (file_buf[pos] >= UInt8(48) and file_buf[pos] <= UInt8(57)):
-            while pos < flen and file_buf[pos] != UInt8(10):
+        if not (file_buf[unsafe_offset=pos] >= UInt8(48) and file_buf[unsafe_offset=pos] <= UInt8(57)):
+            while pos < flen and file_buf[unsafe_offset=pos] != UInt8(10):
                 pos += 1
             continue
 
@@ -176,28 +176,28 @@ def _generate_sobol_matrices(path: String) -> Optional[UnsafePointer[UInt32, Mut
         # it (file d=2 is 0-indexed dimension 1, matching dimension 0's
         # hardcoded identity matrix above).
         var d_col = Int32(0)
-        while pos < flen and file_buf[pos] >= UInt8(48) and file_buf[pos] <= UInt8(57):
-            d_col = d_col * Int32(10) + Int32(file_buf[pos]) - Int32(48)
+        while pos < flen and file_buf[unsafe_offset=pos] >= UInt8(48) and file_buf[unsafe_offset=pos] <= UInt8(57):
+            d_col = d_col * Int32(10) + Int32(file_buf[unsafe_offset=pos]) - Int32(48)
             pos += 1
-        while pos < flen and (file_buf[pos] == UInt8(32) or file_buf[pos] == UInt8(9)):
+        while pos < flen and (file_buf[unsafe_offset=pos] == UInt8(32) or file_buf[unsafe_offset=pos] == UInt8(9)):
             pos += 1
 
         # s = number of direction numbers
         var s = Int32(0)
-        while pos < flen and file_buf[pos] >= UInt8(48) and file_buf[pos] <= UInt8(57):
-            s = s * Int32(10) + Int32(file_buf[pos]) - Int32(48)
+        while pos < flen and file_buf[unsafe_offset=pos] >= UInt8(48) and file_buf[unsafe_offset=pos] <= UInt8(57):
+            s = s * Int32(10) + Int32(file_buf[unsafe_offset=pos]) - Int32(48)
             pos += 1
         # skip whitespace
-        while pos < flen and (file_buf[pos] == UInt8(32) or file_buf[pos] == UInt8(9)):
+        while pos < flen and (file_buf[unsafe_offset=pos] == UInt8(32) or file_buf[unsafe_offset=pos] == UInt8(9)):
             pos += 1
 
         # a = polynomial
         var a = UInt32(0)
-        while pos < flen and file_buf[pos] >= UInt8(48) and file_buf[pos] <= UInt8(57):
-            a = a * UInt32(10) + UInt32(file_buf[pos]) - UInt32(48)
+        while pos < flen and file_buf[unsafe_offset=pos] >= UInt8(48) and file_buf[unsafe_offset=pos] <= UInt8(57):
+            a = a * UInt32(10) + UInt32(file_buf[unsafe_offset=pos]) - UInt32(48)
             pos += 1
         # skip whitespace
-        while pos < flen and (file_buf[pos] == UInt8(32) or file_buf[pos] == UInt8(9)):
+        while pos < flen and (file_buf[unsafe_offset=pos] == UInt8(32) or file_buf[unsafe_offset=pos] == UInt8(9)):
             pos += 1
 
         # m values
@@ -207,15 +207,15 @@ def _generate_sobol_matrices(path: String) -> Optional[UnsafePointer[UInt32, Mut
             num_m = N_BITS
         for i in range(num_m):
             var v = UInt32(0)
-            while pos < flen and file_buf[pos] >= UInt8(48) and file_buf[pos] <= UInt8(57):
-                v = v * UInt32(10) + UInt32(file_buf[pos]) - UInt32(48)
+            while pos < flen and file_buf[unsafe_offset=pos] >= UInt8(48) and file_buf[unsafe_offset=pos] <= UInt8(57):
+                v = v * UInt32(10) + UInt32(file_buf[unsafe_offset=pos]) - UInt32(48)
                 pos += 1
             m[i] = v
-            while pos < flen and (file_buf[pos] == UInt8(32) or file_buf[pos] == UInt8(9)):
+            while pos < flen and (file_buf[unsafe_offset=pos] == UInt8(32) or file_buf[unsafe_offset=pos] == UInt8(9)):
                 pos += 1
 
         # Skip to end of line
-        while pos < flen and file_buf[pos] != UInt8(10):
+        while pos < flen and file_buf[unsafe_offset=pos] != UInt8(10):
             pos += 1
 
         # Compute direction numbers v[i] = m[i] << (32 - i - 1)
@@ -226,20 +226,20 @@ def _generate_sobol_matrices(path: String) -> Optional[UnsafePointer[UInt32, Mut
         for i in range(Int(s)):
             if i >= N_BITS:
                 break
-            matrices[base + i] = m[i] << UInt32(31 - i)
+            matrices[unsafe_offset=base + i] = m[i] << UInt32(31 - i)
 
         # Recurrence for i >= s
         for i in range(Int(s), N_BITS):
-            var v_prev = matrices[base + i - Int(s)]
+            var v_prev = matrices[unsafe_offset=base + i - Int(s)]
             var vi = v_prev ^ (v_prev >> UInt32(s))
             var j = 1
             var poly = a
             while j <= Int(s) - 1:
                 if (poly & UInt32(1)) != UInt32(0):
-                    vi ^= matrices[base + i - j]
+                    vi ^= matrices[unsafe_offset=base + i - j]
                 poly >>= 1
                 j += 1
-            matrices[base + i] = vi
+            matrices[unsafe_offset=base + i] = vi
 
         dim += 1
 
@@ -265,8 +265,8 @@ def _gpu_upload_scene(
     spectral_cie_z: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     spectral_d65: UnsafePointer[Float32, MutExternalOrigin] = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
 ) -> UnsafePointer[GpuSceneHandle, MutExternalOrigin]:
-    var film = FilmDims(psc[0].film_w, psc[0].film_h)
-    var n_meshes = Int(psc[0].mesh_count)
+    var film = FilmDims(psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h)
+    var n_meshes = Int(psc[unsafe_offset=0].mesh_count)
     var pts_counts = List[Int64](capacity=max(n_meshes, 1))
     var fi_counts  = List[Int64](capacity=max(n_meshes, 1))
     var vi_counts  = List[Int64](capacity=max(n_meshes, 1))
@@ -277,44 +277,44 @@ def _gpu_upload_scene(
         vi_counts.append(Int64(0)); uv_counts.append(Int64(0))
         nrm_counts.append(Int64(0))
     for i in range(n_meshes):
-        pts_counts[i] = Int64(psc[0].mesh_n_verts[i]) * 4
-        fi_counts[i]  = Int64(psc[0].mesh_n_tris[i])
-        vi_counts[i]  = Int64(psc[0].mesh_n_tris[i]) * 3
-        uv_counts[i]  = Int64(psc[0].mesh_uv_n_verts[i])
-        nrm_counts[i] = Int64(psc[0].mesh_nrm_n_verts[i])
+        pts_counts[i] = Int64(psc[unsafe_offset=0].mesh_n_verts[unsafe_offset=i]) * 4
+        fi_counts[i]  = Int64(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i])
+        vi_counts[i]  = Int64(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i]) * 3
+        uv_counts[i]  = Int64(psc[unsafe_offset=0].mesh_uv_n_verts[unsafe_offset=i])
+        nrm_counts[i] = Int64(psc[unsafe_offset=0].mesh_nrm_n_verts[unsafe_offset=i])
     var handle = gpu_upload_scene(
         # CPU-inclusive TLAS (tris+curves+instances) — now that GPU has
         # BLAS/instance upload + traversal support, it uses the same TLAS
         # SceneDescriptor2_C does rather than the instance-free one.
-        psc[0].bvh_nodes_cpu,      Int64(psc[0].bvh_node_count_cpu),
-        psc[0].prim_ids_cpu,       Int64(psc[0].prim_count_cpu),
-        psc[0].blas_nodes_arr, psc[0].blas_primids_arr,
-        psc[0].blas_node_counts, psc[0].blas_primid_counts, Int64(psc[0].blas_count),
-        psc[0].instances, Int64(psc[0].instance_count),
-        psc[0].meshes,         Int64(n_meshes),
+        psc[unsafe_offset=0].bvh_nodes_cpu,      Int64(psc[unsafe_offset=0].bvh_node_count_cpu),
+        psc[unsafe_offset=0].prim_ids_cpu,       Int64(psc[unsafe_offset=0].prim_count_cpu),
+        psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr,
+        psc[unsafe_offset=0].blas_node_counts, psc[unsafe_offset=0].blas_primid_counts, Int64(psc[unsafe_offset=0].blas_count),
+        psc[unsafe_offset=0].instances, Int64(psc[unsafe_offset=0].instance_count),
+        psc[unsafe_offset=0].meshes,         Int64(n_meshes),
         pts_counts.unsafe_ptr(), fi_counts.unsafe_ptr(),
         vi_counts.unsafe_ptr(), uv_counts.unsafe_ptr(),
         nrm_counts.unsafe_ptr(),
-        psc[0].tex_filenames,  psc[0].tex_count,
-        psc[0].materials,      Int64(psc[0].material_count),
-        psc[0].area_lights,    Int64(psc[0].area_light_count),
-        psc[0].spheres,        Int64(psc[0].sphere_count),
-        psc[0].curves,         Int64(psc[0].curve_count),
-        psc[0].distant_lights, Int64(psc[0].distant_count),
-        psc[0].point_lights,   Int64(psc[0].point_count),
-        psc[0].light_sampler.cdf, Int64(psc[0].light_sampler.n),
-        psc[0].infinite_lights, Int64(psc[0].infinite_count),
-        psc[0].mediums,         Int64(psc[0].medium_count),
-        psc[0].medium_ifaces,   Int64(psc[0].medium_iface_count),
-        psc[0].grids,           Int64(psc[0].grid_count),
-        psc[0].nvdb_grids,      Int64(psc[0].nvdb_grid_count),
-        psc[0].measured_brdfs, Int64(psc[0].measured_count),
+        psc[unsafe_offset=0].tex_filenames,  psc[unsafe_offset=0].tex_count,
+        psc[unsafe_offset=0].materials,      Int64(psc[unsafe_offset=0].material_count),
+        psc[unsafe_offset=0].area_lights,    Int64(psc[unsafe_offset=0].area_light_count),
+        psc[unsafe_offset=0].spheres,        Int64(psc[unsafe_offset=0].sphere_count),
+        psc[unsafe_offset=0].curves,         Int64(psc[unsafe_offset=0].curve_count),
+        psc[unsafe_offset=0].distant_lights, Int64(psc[unsafe_offset=0].distant_count),
+        psc[unsafe_offset=0].point_lights,   Int64(psc[unsafe_offset=0].point_count),
+        psc[unsafe_offset=0].light_sampler.cdf, Int64(psc[unsafe_offset=0].light_sampler.n),
+        psc[unsafe_offset=0].infinite_lights, Int64(psc[unsafe_offset=0].infinite_count),
+        psc[unsafe_offset=0].mediums,         Int64(psc[unsafe_offset=0].medium_count),
+        psc[unsafe_offset=0].medium_ifaces,   Int64(psc[unsafe_offset=0].medium_iface_count),
+        psc[unsafe_offset=0].grids,           Int64(psc[unsafe_offset=0].grid_count),
+        psc[unsafe_offset=0].nvdb_grids,      Int64(psc[unsafe_offset=0].nvdb_grid_count),
+        psc[unsafe_offset=0].measured_brdfs, Int64(psc[unsafe_offset=0].measured_count),
         Int64(n_pixels),
         sobol,
-        psc[0].raster_to_camera, psc[0].camera_to_world,
+        psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
         FilterParams(
-            psc[0].filter_sigma, psc[0].filter_support_x, psc[0].filter_support_y,
-            psc[0].filter_norm_x, psc[0].filter_norm_y, psc[0].filter_type,
+            psc[unsafe_offset=0].filter_sigma, psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y,
+            psc[unsafe_offset=0].filter_norm_x, psc[unsafe_offset=0].filter_norm_y, psc[unsafe_offset=0].filter_type,
         ),
         film,
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
@@ -351,27 +351,27 @@ def _dbg_vlen(x: Float32, y: Float32, z: Float32) -> Float32:
 def _build_mesh_light_info(
     psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
 ) -> Tuple[UnsafePointer[Int64, MutExternalOrigin], UnsafePointer[Int32, MutExternalOrigin]]:
-    var n_meshes = Int(psc[0].mesh_count)
+    var n_meshes = Int(psc[unsafe_offset=0].mesh_count)
     var mat_idx = alloc[Int64](max(n_meshes, 1))
     var al_idx = alloc[Int32](max(n_meshes, 1))
     var seen = alloc[UInt8](max(n_meshes, 1))
     for i in range(max(n_meshes, 1)):
-        mat_idx[i] = Int64(0)
-        al_idx[i] = Int32(-1)
-        seen[i] = UInt8(0)
-    for i in range(Int(psc[0].prim_count)):
-        var p = psc[0].prim_ids[i]
+        mat_idx[unsafe_offset=i] = Int64(0)
+        al_idx[unsafe_offset=i] = Int32(-1)
+        seen[unsafe_offset=i] = UInt8(0)
+    for i in range(Int(psc[unsafe_offset=0].prim_count)):
+        var p = psc[unsafe_offset=0].prim_ids[unsafe_offset=i]
         if p.type == Int8(0):
             var mi = Int(p.id1)
-            if mi >= 0 and mi < n_meshes and seen[mi] == UInt8(0):
-                mat_idx[mi] = p.materialIndex
-                seen[mi] = UInt8(1)
+            if mi >= 0 and mi < n_meshes and seen[unsafe_offset=mi] == UInt8(0):
+                mat_idx[unsafe_offset=mi] = p.materialIndex
+                seen[unsafe_offset=mi] = UInt8(1)
         elif p.type == Int8(3):
             var mi = Int(p.id2 >> 32)
-            if mi >= 0 and mi < n_meshes and seen[mi] == UInt8(0):
-                mat_idx[mi] = p.materialIndex
-                al_idx[mi] = Int32(p.id1)
-                seen[mi] = UInt8(1)
+            if mi >= 0 and mi < n_meshes and seen[unsafe_offset=mi] == UInt8(0):
+                mat_idx[unsafe_offset=mi] = p.materialIndex
+                al_idx[unsafe_offset=mi] = Int32(p.id1)
+                seen[unsafe_offset=mi] = UInt8(1)
     # Object-instancing templates: their mesh triangles live ONLY in each
     # template's own BLAS (psc[0].prim_ids above is the ordinary top-level
     # TLAS, which explicitly excludes template meshes -- see finalize_scene),
@@ -380,14 +380,14 @@ def _build_mesh_light_info(
     # wrong material. AreaLightSource is not supported inside ObjectBegin/
     # ObjectEnd (parser skips it there), so template triangles are always
     # type==0 -- no type==3 case needed here.
-    for tmpl in range(Int(psc[0].blas_count)):
-        var tprims = psc[0].blas_primids_arr[tmpl]
-        for i in range(Int(psc[0].blas_primid_counts[tmpl])):
-            var p = tprims[i]
+    for tmpl in range(Int(psc[unsafe_offset=0].blas_count)):
+        var tprims = psc[unsafe_offset=0].blas_primids_arr[unsafe_offset=tmpl]
+        for i in range(Int(psc[unsafe_offset=0].blas_primid_counts[unsafe_offset=tmpl])):
+            var p = tprims[unsafe_offset=i]
             var mi = Int(p.id1)
-            if mi >= 0 and mi < n_meshes and seen[mi] == UInt8(0):
-                mat_idx[mi] = p.materialIndex
-                seen[mi] = UInt8(1)
+            if mi >= 0 and mi < n_meshes and seen[unsafe_offset=mi] == UInt8(0):
+                mat_idx[unsafe_offset=mi] = p.materialIndex
+                seen[unsafe_offset=mi] = UInt8(1)
     seen.unsafe_free()
     return (mat_idx, al_idx)
 
@@ -418,34 +418,34 @@ def debug_trace_pixel(
         var eff_w = override_w
         var eff_h = override_h
         if eff_w <= 0:
-            eff_w = Int32(Int(eff_h) * Int(psc[0].film_w) / max(Int(psc[0].film_h), 1))
+            eff_w = Int32(Int(eff_h) * Int(psc[unsafe_offset=0].film_w) / max(Int(psc[unsafe_offset=0].film_h), 1))
         if eff_h <= 0:
-            eff_h = Int32(Int(eff_w) * Int(psc[0].film_h) / max(Int(psc[0].film_w), 1))
+            eff_h = Int32(Int(eff_w) * Int(psc[unsafe_offset=0].film_h) / max(Int(psc[unsafe_offset=0].film_w), 1))
         resize_film(psc, eff_w, eff_h)
-    if px >= psc[0].film_w or py >= psc[0].film_h:
-        print("--pixel", px, py, "is outside the", psc[0].film_w, "x", psc[0].film_h,
+    if px >= psc[unsafe_offset=0].film_w or py >= psc[unsafe_offset=0].film_h:
+        print("--pixel", px, py, "is outside the", psc[unsafe_offset=0].film_w, "x", psc[unsafe_offset=0].film_h,
               "frame being traced -- pass --width/--height/--resolution to match your render")
         return
 
     # Centre ray (no jitter): raster_to_camera then camera_to_world rotation.
-    var r2c = psc[0].raster_to_camera
-    var c2w = psc[0].camera_to_world
+    var r2c = psc[unsafe_offset=0].raster_to_camera
+    var c2w = psc[unsafe_offset=0].camera_to_world
     var fX = Float32(px) + Float32(0.5)
     var fY = Float32(py) + Float32(0.5)
-    var cx = r2c[0]*fX + r2c[4]*fY + r2c[12]
-    var cy = r2c[1]*fX + r2c[5]*fY + r2c[13]
-    var cz = r2c[2]*fX + r2c[6]*fY + r2c[14]
-    var cw = r2c[3]*fX + r2c[7]*fY + r2c[15]
+    var cx = r2c[unsafe_offset=0]*fX + r2c[unsafe_offset=4]*fY + r2c[unsafe_offset=12]
+    var cy = r2c[unsafe_offset=1]*fX + r2c[unsafe_offset=5]*fY + r2c[unsafe_offset=13]
+    var cz = r2c[unsafe_offset=2]*fX + r2c[unsafe_offset=6]*fY + r2c[unsafe_offset=14]
+    var cw = r2c[unsafe_offset=3]*fX + r2c[unsafe_offset=7]*fY + r2c[unsafe_offset=15]
     if cw != Float32(0.0) and cw != Float32(1.0):
         cx /= cw; cy /= cw; cz /= cw
     var cl = _dbg_vlen(cx, cy, cz)
     if cl > Float32(0.0): cx /= cl; cy /= cl; cz /= cl
-    var dx = c2w[0]*cx + c2w[4]*cy + c2w[8]*cz
-    var dy = c2w[1]*cx + c2w[5]*cy + c2w[9]*cz
-    var dz = c2w[2]*cx + c2w[6]*cy + c2w[10]*cz
+    var dx = c2w[unsafe_offset=0]*cx + c2w[unsafe_offset=4]*cy + c2w[unsafe_offset=8]*cz
+    var dy = c2w[unsafe_offset=1]*cx + c2w[unsafe_offset=5]*cy + c2w[unsafe_offset=9]*cz
+    var dz = c2w[unsafe_offset=2]*cx + c2w[unsafe_offset=6]*cy + c2w[unsafe_offset=10]*cz
     var dl = _dbg_vlen(dx, dy, dz)
     if dl > Float32(0.0): dx /= dl; dy /= dl; dz /= dl
-    var ox = c2w[12]; var oy = c2w[13]; var oz = c2w[14]
+    var ox = c2w[unsafe_offset=12]; var oy = c2w[unsafe_offset=13]; var oz = c2w[unsafe_offset=14]
     print("PIXEL", px, py, "ray.o", ox, oy, oz, "ray.d", dx, dy, dz)
 
     var inter = alloc[Intersection_C](1)
@@ -453,28 +453,28 @@ def debug_trace_pixel(
     var previous_ior = Float32(1.0)  # mirrors PathState_C.previous_dielectric_ior
     for bounce in range(8):
         var ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
-        inter[0].hit = Int8(0)
-        traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, ray, Float32(1.0e38), inter,
-                            psc[0].blas_nodes_arr, psc[0].blas_primids_arr, psc[0].instances)
-        if psc[0].sphere_count > 0:
-            test_spheres(psc[0].spheres, Int(psc[0].sphere_count), ray, inter)
-        if inter[0].hit == Int8(0):
+        inter[unsafe_offset=0].hit = Int8(0)
+        traverse_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, ray, Float32(1.0e38), inter,
+                            psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances)
+        if psc[unsafe_offset=0].sphere_count > 0:
+            test_spheres(psc[unsafe_offset=0].spheres, Int(psc[unsafe_offset=0].sphere_count), ray, inter)
+        if inter[unsafe_offset=0].hit == Int8(0):
             # envmap miss
-            if psc[0].infinite_count > 0:
-                var il = psc[0].infinite_lights[0]
+            if psc[unsafe_offset=0].infinite_count > 0:
+                var il = psc[unsafe_offset=0].infinite_lights[unsafe_offset=0]
                 var w2l = il.world_to_light
-                var ldx = w2l[0]*dx + w2l[4]*dy + w2l[8]*dz
-                var ldy = w2l[1]*dx + w2l[5]*dy + w2l[9]*dz
-                var ldz = w2l[2]*dx + w2l[6]*dy + w2l[10]*dz
+                var ldx = w2l[unsafe_offset=0]*dx + w2l[unsafe_offset=4]*dy + w2l[unsafe_offset=8]*dz
+                var ldy = w2l[unsafe_offset=1]*dx + w2l[unsafe_offset=5]*dy + w2l[unsafe_offset=9]*dz
+                var ldz = w2l[unsafe_offset=2]*dx + w2l[unsafe_offset=6]*dy + w2l[unsafe_offset=10]*dz
                 var uv = _equal_area_sphere_to_square(ldx, ldy, ldz)
                 var rgb_str = String("(no pixels)")
                 if _is_real_ptr(il.pixels_ptr) and il.cdf_w > Int32(0):
                     var iw = Int(il.cdf_w); var ih = Int(il.cdf_h)
                     var pxe = Int(max(Float32(0), min(Float32(iw-1), uv[0]*Float32(iw))))
                     var pye = Int(max(Float32(0), min(Float32(ih-1), uv[1]*Float32(ih))))
-                    var rr = il.pixels_ptr[(pye*iw+pxe)*3+0]
-                    var gg = il.pixels_ptr[(pye*iw+pxe)*3+1]
-                    var bb = il.pixels_ptr[(pye*iw+pxe)*3+2]
+                    var rr = il.pixels_ptr[unsafe_offset=(pye*iw+pxe)*3+0]
+                    var gg = il.pixels_ptr[unsafe_offset=(pye*iw+pxe)*3+1]
+                    var bb = il.pixels_ptr[unsafe_offset=(pye*iw+pxe)*3+2]
                     rgb_str = String(rr) + " " + String(gg) + " " + String(bb)
                 print("  bounce", bounce, "MISS -> envmap localdir", ldx, ldy, ldz, "uv", uv[0], uv[1], "rgb", rgb_str)
             else:
@@ -490,23 +490,23 @@ def debug_trace_pixel(
         # already does -- see gpu.mojo's medium-interface kernel,
         # rendering.mojo's CPU medium loop, and bdpt.mojo's
         # _visible_transmittance, which had this exact bug.
-        var mat = psc[0].materials[Int(inter[0].primId.materialIndex)]
-        var hx = ox + dx*inter[0].tHit; var hy = oy + dy*inter[0].tHit; var hz = oz + dz*inter[0].tHit
+        var mat = psc[unsafe_offset=0].materials[unsafe_offset=Int(inter[unsafe_offset=0].primId.materialIndex)]
+        var hx = ox + dx*inter[unsafe_offset=0].tHit; var hy = oy + dy*inter[unsafe_offset=0].tHit; var hz = oz + dz*inter[unsafe_offset=0].tHit
         # Geometry via the SAME resolver the renderer uses (spheres,
         # instance transforms and all) -- this used to re-derive the
         # triangle normal inline, which is how it went stale twice.
         var mesh_idx: Int = -1
-        if inter[0].primId.type == Int8(0):
-            mesh_idx = Int(inter[0].primId.id1)
-        elif inter[0].primId.type != Int8(4):
-            mesh_idx = Int(inter[0].primId.id2 >> 32)
-        var gn_v = _geom_normal(inter[0], psc[0].meshes, psc[0].instances, psc[0].spheres,
+        if inter[unsafe_offset=0].primId.type == Int8(0):
+            mesh_idx = Int(inter[unsafe_offset=0].primId.id1)
+        elif inter[unsafe_offset=0].primId.type != Int8(4):
+            mesh_idx = Int(inter[unsafe_offset=0].primId.id2 >> 32)
+        var gn_v = _geom_normal(inter[unsafe_offset=0], psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].instances, psc[unsafe_offset=0].spheres,
                                Vec3f(hx, hy, hz))
         var gnx = gn_v.x; var gny = gn_v.y; var gnz = gn_v.z
         if mesh_idx >= 0:
-            print("  bounce", bounce, "HIT mesh", mesh_idx, "matType", Int(mat.type), "t", inter[0].tHit, "p", hx, hy, hz, "gN", gnx, gny, gnz)
+            print("  bounce", bounce, "HIT mesh", mesh_idx, "matType", Int(mat.type), "t", inter[unsafe_offset=0].tHit, "p", hx, hy, hz, "gN", gnx, gny, gnz)
         else:
-            print("  bounce", bounce, "HIT sphere", Int(inter[0].primId.id1), "matType", Int(mat.type), "t", inter[0].tHit, "p", hx, hy, hz, "gN", gnx, gny, gnz)
+            print("  bounce", bounce, "HIT sphere", Int(inter[unsafe_offset=0].primId.id1), "matType", Int(mat.type), "t", inter[unsafe_offset=0].tHit, "p", hx, hy, hz, "gN", gnx, gny, gnz)
 
         if Int(mat.type) == 4:
             # Dielectric — mirror shade_dielectric's decision (no RNG: report Fresnel, follow transmit)
@@ -529,25 +529,25 @@ def debug_trace_pixel(
             var rfl = _dbg_vlen(rfx, rfy, rfz)
             if rfl > Float32(0.0): rfx /= rfl; rfy /= rfl; rfz /= rfl
             var rray = Ray_C(Point3f(hx+nx*Float32(0.001), hy+ny*Float32(0.001), hz+nz*Float32(0.001)), Vec3f(rfx, rfy, rfz))
-            var rint = alloc[Intersection_C](1); rint[0].hit = Int8(0)
-            traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, rray, Float32(1.0e38), rint,
-                                psc[0].blas_nodes_arr, psc[0].blas_primids_arr, psc[0].instances)
-            if rint[0].hit == Int8(0) and psc[0].infinite_count > 0:
-                var il2 = psc[0].infinite_lights[0]
+            var rint = alloc[Intersection_C](1); rint[unsafe_offset=0].hit = Int8(0)
+            traverse_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, rray, Float32(1.0e38), rint,
+                                psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances)
+            if rint[unsafe_offset=0].hit == Int8(0) and psc[unsafe_offset=0].infinite_count > 0:
+                var il2 = psc[unsafe_offset=0].infinite_lights[unsafe_offset=0]
                 var w2 = il2.world_to_light
-                var l2x = w2[0]*rfx + w2[4]*rfy + w2[8]*rfz
-                var l2y = w2[1]*rfx + w2[5]*rfy + w2[9]*rfz
-                var l2z = w2[2]*rfx + w2[6]*rfy + w2[10]*rfz
+                var l2x = w2[unsafe_offset=0]*rfx + w2[unsafe_offset=4]*rfy + w2[unsafe_offset=8]*rfz
+                var l2y = w2[unsafe_offset=1]*rfx + w2[unsafe_offset=5]*rfy + w2[unsafe_offset=9]*rfz
+                var l2z = w2[unsafe_offset=2]*rfx + w2[unsafe_offset=6]*rfy + w2[unsafe_offset=10]*rfz
                 var uv2 = _equal_area_sphere_to_square(l2x, l2y, l2z)
                 var rs = String("")
                 if _is_real_ptr(il2.pixels_ptr) and il2.cdf_w > Int32(0):
                     var iw2 = Int(il2.cdf_w); var ih2 = Int(il2.cdf_h)
                     var ax = Int(max(Float32(0), min(Float32(iw2-1), uv2[0]*Float32(iw2))))
                     var ay = Int(max(Float32(0), min(Float32(ih2-1), uv2[1]*Float32(ih2))))
-                    rs = String(il2.pixels_ptr[(ay*iw2+ax)*3+0]) + " " + String(il2.pixels_ptr[(ay*iw2+ax)*3+1]) + " " + String(il2.pixels_ptr[(ay*iw2+ax)*3+2])
+                    rs = String(il2.pixels_ptr[unsafe_offset=(ay*iw2+ax)*3+0]) + " " + String(il2.pixels_ptr[unsafe_offset=(ay*iw2+ax)*3+1]) + " " + String(il2.pixels_ptr[unsafe_offset=(ay*iw2+ax)*3+2])
                 print("        REFLECT dir", rfx, rfy, rfz, "-> envmap uv", uv2[0], uv2[1], "rgb", rs)
             else:
-                print("        REFLECT dir", rfx, rfy, rfz, "-> hits mesh (occluded), matType", Int(psc[0].materials[Int(rint[0].primId.materialIndex)].type) if rint[0].hit != Int8(0) else -1)
+                print("        REFLECT dir", rfx, rfy, rfz, "-> hits mesh (occluded), matType", Int(psc[unsafe_offset=0].materials[unsafe_offset=Int(rint[unsafe_offset=0].primId.materialIndex)].type) if rint[unsafe_offset=0].hit != Int8(0) else -1)
             rint.unsafe_free()
             # Follow transmit branch (what pbrt did) if possible, else reflect
             if tir:
@@ -581,15 +581,15 @@ def debug_trace_pixel(
             var rfl5 = _dbg_vlen(rfx5, rfy5, rfz5)
             if rfl5 > Float32(0.0): rfx5 /= rfl5; rfy5 /= rfl5; rfz5 /= rfl5
             var rray5 = Ray_C(Point3f(hx+nx5*Float32(0.001), hy+ny5*Float32(0.001), hz+nz5*Float32(0.001)), Vec3f(rfx5, rfy5, rfz5))
-            var rint5 = alloc[Intersection_C](1); rint5[0].hit = Int8(0)
-            traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, rray5, Float32(1.0e38), rint5,
-                                psc[0].blas_nodes_arr, psc[0].blas_primids_arr, psc[0].instances)
-            if rint5[0].hit == Int8(0):
+            var rint5 = alloc[Intersection_C](1); rint5[unsafe_offset=0].hit = Int8(0)
+            traverse_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, rray5, Float32(1.0e38), rint5,
+                                psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances)
+            if rint5[unsafe_offset=0].hit == Int8(0):
                 print("        COAT REFLECT dir", rfx5, rfy5, rfz5, "-> MISS (no envmap in this scene)")
             else:
-                var ptype5 = Int(rint5[0].primId.type)
-                var pmatidx5 = Int(rint5[0].primId.materialIndex)
-                print("        COAT REFLECT dir", rfx5, rfy5, rfz5, "-> hit primType", ptype5, "matType", Int(psc[0].materials[pmatidx5].type), "matIdx", pmatidx5, "t", rint5[0].tHit)
+                var ptype5 = Int(rint5[unsafe_offset=0].primId.type)
+                var pmatidx5 = Int(rint5[unsafe_offset=0].primId.materialIndex)
+                print("        COAT REFLECT dir", rfx5, rfy5, rfz5, "-> hit primType", ptype5, "matType", Int(psc[unsafe_offset=0].materials[unsafe_offset=pmatidx5].type), "matIdx", pmatidx5, "t", rint5[unsafe_offset=0].tHit)
             rint5.unsafe_free()
             print("        STOP (coateddiffuse probe only, not following further)")
             break
@@ -606,15 +606,15 @@ def debug_trace_pixel(
             var rfl3 = _dbg_vlen(rfx3, rfy3, rfz3)
             if rfl3 > Float32(0.0): rfx3 /= rfl3; rfy3 /= rfl3; rfz3 /= rfl3
             var rray3 = Ray_C(Point3f(hx+nx3*Float32(0.001), hy+ny3*Float32(0.001), hz+nz3*Float32(0.001)), Vec3f(rfx3, rfy3, rfz3))
-            var rint3 = alloc[Intersection_C](1); rint3[0].hit = Int8(0)
-            traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, rray3, Float32(1.0e38), rint3,
-                                psc[0].blas_nodes_arr, psc[0].blas_primids_arr, psc[0].instances)
-            if rint3[0].hit == Int8(0):
+            var rint3 = alloc[Intersection_C](1); rint3[unsafe_offset=0].hit = Int8(0)
+            traverse_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, rray3, Float32(1.0e38), rint3,
+                                psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances)
+            if rint3[unsafe_offset=0].hit == Int8(0):
                 print("        REFLECT dir", rfx3, rfy3, rfz3, "-> MISS (no envmap in this scene)")
             else:
-                var ptype3 = Int(rint3[0].primId.type)
-                var pmatidx3 = Int(rint3[0].primId.materialIndex)
-                print("        REFLECT dir", rfx3, rfy3, rfz3, "-> hit primType", ptype3, "matType", Int(psc[0].materials[pmatidx3].type), "matIdx", pmatidx3, "t", rint3[0].tHit)
+                var ptype3 = Int(rint3[unsafe_offset=0].primId.type)
+                var pmatidx3 = Int(rint3[unsafe_offset=0].primId.materialIndex)
+                print("        REFLECT dir", rfx3, rfy3, rfz3, "-> hit primType", ptype3, "matType", Int(psc[unsafe_offset=0].materials[unsafe_offset=pmatidx3].type), "matIdx", pmatidx3, "t", rint3[unsafe_offset=0].tHit)
             rint3.unsafe_free()
             print("        STOP (conductor probe only, not following further)")
             break
@@ -624,33 +624,33 @@ def debug_trace_pixel(
             var ox1 = hx + gnx*Float32(0.0001)
             var oy1 = hy + gny*Float32(0.0001)
             var oz1 = hz + gnz*Float32(0.0001)
-            for dli in range(Int(psc[0].distant_count)):
-                var dl = psc[0].distant_lights[dli]
+            for dli in range(Int(psc[unsafe_offset=0].distant_count)):
+                var dl = psc[unsafe_offset=0].distant_lights[unsafe_offset=dli]
                 var ldx = -dl.direction.x; var ldy = -dl.direction.y; var ldz = -dl.direction.z
                 var cos_s = gnx*ldx + gny*ldy + gnz*ldz
                 var sray = Ray_C(Point3f(ox1, oy1, oz1), Vec3f(ldx, ldy, ldz))
-                var occluded = any_hit_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, sray, Float32(2000.0),
-                                                  psc[0].blas_nodes_arr, psc[0].blas_primids_arr, psc[0].instances,
-                                                  psc[0].spheres, Int(psc[0].sphere_count))
+                var occluded = any_hit_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, sray, Float32(2000.0),
+                                                  psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances,
+                                                  psc[unsafe_offset=0].spheres, Int(psc[unsafe_offset=0].sphere_count))
                 print("        DISTANT", dli, "dir", ldx, ldy, ldz, "cos_s", cos_s, "occluded", Int(occluded))
-            for ali in range(Int(psc[0].area_light_count)):
-                var al = psc[0].area_lights[ali]
-                var almesh = psc[0].meshes[Int(al.meshIdx)]
+            for ali in range(Int(psc[unsafe_offset=0].area_light_count)):
+                var al = psc[unsafe_offset=0].area_lights[unsafe_offset=ali]
+                var almesh = psc[unsafe_offset=0].meshes[unsafe_offset=Int(al.meshIdx)]
                 # Centroid of the light's first triangle — coarse but enough to
                 # tell whether shadow rays toward this light are ever blocked.
-                var lv0 = Int(almesh.vertexIndices[0]); var lv1 = Int(almesh.vertexIndices[1]); var lv2 = Int(almesh.vertexIndices[2])
-                var lcx = (almesh.points[lv0*4]   + almesh.points[lv1*4]   + almesh.points[lv2*4])   / Float32(3.0)
-                var lcy = (almesh.points[lv0*4+1] + almesh.points[lv1*4+1] + almesh.points[lv2*4+1]) / Float32(3.0)
-                var lcz = (almesh.points[lv0*4+2] + almesh.points[lv1*4+2] + almesh.points[lv2*4+2]) / Float32(3.0)
+                var lv0 = Int(almesh.vertexIndices[unsafe_offset=0]); var lv1 = Int(almesh.vertexIndices[unsafe_offset=1]); var lv2 = Int(almesh.vertexIndices[unsafe_offset=2])
+                var lcx = (almesh.points[unsafe_offset=lv0*4]   + almesh.points[unsafe_offset=lv1*4]   + almesh.points[unsafe_offset=lv2*4])   / Float32(3.0)
+                var lcy = (almesh.points[unsafe_offset=lv0*4+1] + almesh.points[unsafe_offset=lv1*4+1] + almesh.points[unsafe_offset=lv2*4+1]) / Float32(3.0)
+                var lcz = (almesh.points[unsafe_offset=lv0*4+2] + almesh.points[unsafe_offset=lv1*4+2] + almesh.points[unsafe_offset=lv2*4+2]) / Float32(3.0)
                 var tlx = lcx - ox1; var tly = lcy - oy1; var tlz = lcz - oz1
                 var tdist = _dbg_vlen(tlx, tly, tlz)
                 if tdist > Float32(0.0):
                     tlx /= tdist; tly /= tdist; tlz /= tdist
                 var cos_sa = gnx*tlx + gny*tly + gnz*tlz
                 var sray2 = Ray_C(Point3f(ox1, oy1, oz1), Vec3f(tlx, tly, tlz))
-                var occluded2 = any_hit_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, sray2, tdist * Float32(0.999),
-                                                   psc[0].blas_nodes_arr, psc[0].blas_primids_arr, psc[0].instances,
-                                                   psc[0].spheres, Int(psc[0].sphere_count))
+                var occluded2 = any_hit_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, sray2, tdist * Float32(0.999),
+                                                   psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances,
+                                                   psc[unsafe_offset=0].spheres, Int(psc[unsafe_offset=0].sphere_count))
                 print("        AREA", ali, "centroid", lcx, lcy, lcz, "dist", tdist, "cos_s", cos_sa, "occluded", Int(occluded2))
             print("        STOP (diffuse probe only, not following further)")
             break
@@ -690,14 +690,14 @@ def debug_render_vulkanrt(
     if not _is_real_ptr[ParsedScene_Mojo](psc):
         print("parse failed"); return
 
-    var w = Int(psc[0].film_w)
-    var h = Int(psc[0].film_h)
-    var n_meshes = Int(psc[0].mesh_count)
+    var w = Int(psc[unsafe_offset=0].film_w)
+    var h = Int(psc[unsafe_offset=0].film_h)
+    var n_meshes = Int(psc[unsafe_offset=0].mesh_count)
     if n_meshes == 0:
         print("Scene has no triangle meshes -- nothing for Vulkan RT to trace.")
         mojo_parsed_free(psc)
         return
-    if psc[0].instance_count > Int32(0):
+    if psc[unsafe_offset=0].instance_count > Int32(0):
         print("WARNING: scene uses ObjectInstance -- the Vulkan RT scene will be missing instanced geometry placements (see project_vulkan_rt_backend memory)")
 
     # Build the Vulkan RT scene directly from the parsed meshes -- points/
@@ -707,9 +707,9 @@ def debug_render_vulkanrt(
     var point_counts = alloc[Int64](n_meshes)
     var vidx_counts = alloc[Int64](n_meshes)
     for i in range(n_meshes):
-        vmeshes[i] = psc[0].meshes[i]
-        point_counts[i] = Int64(psc[0].mesh_n_verts[i])
-        vidx_counts[i] = Int64(psc[0].mesh_n_tris[i]) * 3
+        vmeshes[unsafe_offset=i] = psc[unsafe_offset=0].meshes[unsafe_offset=i]
+        point_counts[unsafe_offset=i] = Int64(psc[unsafe_offset=0].mesh_n_verts[unsafe_offset=i])
+        vidx_counts[unsafe_offset=i] = Int64(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i]) * 3
 
     var scene = vulkanrt_build_scene(vmeshes, Int64(n_meshes), point_counts, vidx_counts)
     if Int(scene) == 0:
@@ -723,29 +723,29 @@ def debug_render_vulkanrt(
     # into vulkanrt_trace_rays's flat 8-floats-per-ray layout.
     var n_pix = w * h
     var rays = alloc[Float32](n_pix * 8)
-    var r2c = psc[0].raster_to_camera
-    var c2w = psc[0].camera_to_world
+    var r2c = psc[unsafe_offset=0].raster_to_camera
+    var c2w = psc[unsafe_offset=0].camera_to_world
     for py in range(h):
         for px in range(w):
             var fX = Float32(px) + Float32(0.5)
             var fY = Float32(py) + Float32(0.5)
-            var cx = r2c[0]*fX + r2c[4]*fY + r2c[12]
-            var cy = r2c[1]*fX + r2c[5]*fY + r2c[13]
-            var cz = r2c[2]*fX + r2c[6]*fY + r2c[14]
-            var cw = r2c[3]*fX + r2c[7]*fY + r2c[15]
+            var cx = r2c[unsafe_offset=0]*fX + r2c[unsafe_offset=4]*fY + r2c[unsafe_offset=12]
+            var cy = r2c[unsafe_offset=1]*fX + r2c[unsafe_offset=5]*fY + r2c[unsafe_offset=13]
+            var cz = r2c[unsafe_offset=2]*fX + r2c[unsafe_offset=6]*fY + r2c[unsafe_offset=14]
+            var cw = r2c[unsafe_offset=3]*fX + r2c[unsafe_offset=7]*fY + r2c[unsafe_offset=15]
             if cw != Float32(0.0) and cw != Float32(1.0):
                 cx /= cw; cy /= cw; cz /= cw
             var cl = sqrt(cx*cx + cy*cy + cz*cz)
             if cl > Float32(0.0): cx /= cl; cy /= cl; cz /= cl
-            var dx = c2w[0]*cx + c2w[4]*cy + c2w[8]*cz
-            var dy = c2w[1]*cx + c2w[5]*cy + c2w[9]*cz
-            var dz = c2w[2]*cx + c2w[6]*cy + c2w[10]*cz
+            var dx = c2w[unsafe_offset=0]*cx + c2w[unsafe_offset=4]*cy + c2w[unsafe_offset=8]*cz
+            var dy = c2w[unsafe_offset=1]*cx + c2w[unsafe_offset=5]*cy + c2w[unsafe_offset=9]*cz
+            var dz = c2w[unsafe_offset=2]*cx + c2w[unsafe_offset=6]*cy + c2w[unsafe_offset=10]*cz
             var dl = sqrt(dx*dx + dy*dy + dz*dz)
             if dl > Float32(0.0): dx /= dl; dy /= dl; dz /= dl
-            var ox = c2w[12]; var oy = c2w[13]; var oz = c2w[14]
+            var ox = c2w[unsafe_offset=12]; var oy = c2w[unsafe_offset=13]; var oz = c2w[unsafe_offset=14]
             var idx = (py * w + px) * 8
-            rays[idx+0] = ox; rays[idx+1] = oy; rays[idx+2] = oz; rays[idx+3] = Float32(0.001)
-            rays[idx+4] = dx; rays[idx+5] = dy; rays[idx+6] = dz; rays[idx+7] = Float32(1.0e8)
+            rays[unsafe_offset=idx+0] = ox; rays[unsafe_offset=idx+1] = oy; rays[unsafe_offset=idx+2] = oz; rays[unsafe_offset=idx+3] = Float32(0.001)
+            rays[unsafe_offset=idx+4] = dx; rays[unsafe_offset=idx+5] = dy; rays[unsafe_offset=idx+6] = dz; rays[unsafe_offset=idx+7] = Float32(1.0e8)
 
     var out_t = alloc[Float32](n_pix)
     var out_u = alloc[Float32](n_pix)
@@ -780,39 +780,39 @@ def debug_render_vulkanrt(
         for px in range(w):
             var pi = py * w + px
             var idx = pi * 8
-            var ray = Ray_C(Point3f(rays[idx+0], rays[idx+1], rays[idx+2]),
-                             Vec3f(rays[idx+4], rays[idx+5], rays[idx+6]))
-            inter[0].hit = Int8(0)
-            traverse_bvh2_core(psc[0].bvh_nodes, psc[0].prim_ids, psc[0].meshes, psc[0].curves, ray, Float32(1.0e8), inter,
-                                psc[0].blas_nodes_arr, psc[0].blas_primids_arr, psc[0].instances)
-            var cpu_hit = inter[0].hit != Int8(0)
-            var gpu_hit = out_hit[pi] == UInt8(1)
+            var ray = Ray_C(Point3f(rays[unsafe_offset=idx+0], rays[unsafe_offset=idx+1], rays[unsafe_offset=idx+2]),
+                             Vec3f(rays[unsafe_offset=idx+4], rays[unsafe_offset=idx+5], rays[unsafe_offset=idx+6]))
+            inter[unsafe_offset=0].hit = Int8(0)
+            traverse_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, ray, Float32(1.0e8), inter,
+                                psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances)
+            var cpu_hit = inter[unsafe_offset=0].hit != Int8(0)
+            var gpu_hit = out_hit[unsafe_offset=pi] == UInt8(1)
             if cpu_hit: cpu_hits += 1
             if gpu_hit: gpu_hits += 1
             if cpu_hit == gpu_hit: agree += 1
             if cpu_hit and gpu_hit:
                 both_hit += 1
-                var derr = abs(inter[0].tHit - out_t[pi])
+                var derr = abs(inter[unsafe_offset=0].tHit - out_t[unsafe_offset=pi])
                 depth_err_sum += Float64(derr)
                 if derr > depth_err_max: depth_err_max = derr
 
             var shade = Float32(0)
             if gpu_hit:
-                var mi = Int(out_mesh[pi])
-                var ti = Int(out_tri[pi]) * 3
+                var mi = Int(out_mesh[unsafe_offset=pi])
+                var ti = Int(out_tri[unsafe_offset=pi]) * 3
                 if mi >= 0 and mi < n_meshes:
-                    var mesh = psc[0].meshes[mi]
-                    var v0 = Int(mesh.vertexIndices[ti]); var v1 = Int(mesh.vertexIndices[ti+1]); var v2 = Int(mesh.vertexIndices[ti+2])
-                    var p0x = mesh.points[v0*4]; var p0y = mesh.points[v0*4+1]; var p0z = mesh.points[v0*4+2]
-                    var p1x = mesh.points[v1*4]; var p1y = mesh.points[v1*4+1]; var p1z = mesh.points[v1*4+2]
-                    var p2x = mesh.points[v2*4]; var p2y = mesh.points[v2*4+1]; var p2z = mesh.points[v2*4+2]
+                    var mesh = psc[unsafe_offset=0].meshes[unsafe_offset=mi]
+                    var v0 = Int(mesh.vertexIndices[unsafe_offset=ti]); var v1 = Int(mesh.vertexIndices[unsafe_offset=ti+1]); var v2 = Int(mesh.vertexIndices[unsafe_offset=ti+2])
+                    var p0x = mesh.points[unsafe_offset=v0*4]; var p0y = mesh.points[unsafe_offset=v0*4+1]; var p0z = mesh.points[unsafe_offset=v0*4+2]
+                    var p1x = mesh.points[unsafe_offset=v1*4]; var p1y = mesh.points[unsafe_offset=v1*4+1]; var p1z = mesh.points[unsafe_offset=v1*4+2]
+                    var p2x = mesh.points[unsafe_offset=v2*4]; var p2y = mesh.points[unsafe_offset=v2*4+1]; var p2z = mesh.points[unsafe_offset=v2*4+2]
                     var gnx = (p1y-p0y)*(p2z-p0z) - (p1z-p0z)*(p2y-p0y)
                     var gny = (p1z-p0z)*(p2x-p0x) - (p1x-p0x)*(p2z-p0z)
                     var gnz = (p1x-p0x)*(p2y-p0y) - (p1y-p0y)*(p2x-p0x)
                     var gnl = sqrt(gnx*gnx + gny*gny + gnz*gnz)
                     if gnl > Float32(0): gnx /= gnl; gny /= gnl; gnz /= gnl
-                    shade = abs(rays[idx+4]*gnx + rays[idx+5]*gny + rays[idx+6]*gnz)
-            img[pi*3+0] = shade; img[pi*3+1] = shade; img[pi*3+2] = shade
+                    shade = abs(rays[unsafe_offset=idx+4]*gnx + rays[unsafe_offset=idx+5]*gny + rays[unsafe_offset=idx+6]*gnz)
+            img[unsafe_offset=pi*3+0] = shade; img[unsafe_offset=pi*3+1] = shade; img[unsafe_offset=pi*3+2] = shade
 
     var hit_agree_pct = Float64(agree) * 100.0 / Float64(max(n_pix, 1))
     var mean_depth_err = depth_err_sum / Float64(max(both_hit, 1))
@@ -824,8 +824,8 @@ def debug_render_vulkanrt(
     var out_path = String("vulkanrt_debug.exr")
     var out_cstr = alloc[UInt8](out_path.byte_length() + 1)
     for k in range(out_path.byte_length()):
-        out_cstr[k] = out_path.as_bytes()[k]
-    out_cstr[out_path.byte_length()] = UInt8(0)
+        out_cstr[unsafe_offset=k] = out_path.as_bytes()[k]
+    out_cstr[unsafe_offset=out_path.byte_length()] = UInt8(0)
     _ = write_image(img, Int32(w), Int32(h), out_cstr, Int32(32), Int32(32))
     print("  wrote", out_path)
     out_cstr.unsafe_free()
@@ -928,14 +928,14 @@ def parse_and_render(
         # flag did nothing. Derive the missing dimension from the scene's
         # native aspect ratio instead.
         if eff_w <= 0:
-            eff_w = Int32(Int(eff_h) * Int(psc[0].film_w) / max(Int(psc[0].film_h), 1))
+            eff_w = Int32(Int(eff_h) * Int(psc[unsafe_offset=0].film_w) / max(Int(psc[unsafe_offset=0].film_h), 1))
         if eff_h <= 0:
-            eff_h = Int32(Int(eff_w) * Int(psc[0].film_h) / max(Int(psc[0].film_w), 1))
+            eff_h = Int32(Int(eff_w) * Int(psc[unsafe_offset=0].film_h) / max(Int(psc[unsafe_offset=0].film_w), 1))
         resize_film(psc, eff_w, eff_h)
     mojo_apply_overrides(psc, spp_override, Int32(0), Int32(0), seed_override)
 
-    var fw = psc[0].film_w
-    var fh = psc[0].film_h
+    var fw = psc[unsafe_offset=0].film_w
+    var fh = psc[unsafe_offset=0].film_h
     var n_pixels = Int(fw) * Int(fh)
     var results = List[TileResult_C](capacity=n_pixels)
 
@@ -966,9 +966,9 @@ def parse_and_render(
             sd.unsafe_free()
             mojo_parsed_free(psc)
             return Int32(-1)
-        var resolved = _resolve_sppm_params(psc, sd[0], sppm_photons, sppm_radius)
+        var resolved = _resolve_sppm_params(psc, sd[unsafe_offset=0], sppm_photons, sppm_radius)
         var ret = sppm_render_gpu(
-            handle, psc, sd[0],
+            handle, psc, sd[unsafe_offset=0],
             Int(sppm_passes), Int(resolved[0]), resolved[1],
             no_denoise, verbose,
         )
@@ -984,7 +984,7 @@ def parse_and_render(
             mojo_parsed_free(psc)
             return Int32(-1)
         var n_photons = _resolve_vcm_photons(vcm_photons, n_pixels)
-        var resolved_vcm_spp = _resolve_vcm_spp(vcm_spp, psc[0].samples_per_pixel)
+        var resolved_vcm_spp = _resolve_vcm_spp(vcm_spp, psc[unsafe_offset=0].samples_per_pixel)
         var ret: Int32
         if use_vcm_wavefront:
             # Task #163 stage 4 part 4: build the same interop-AND-ray-
@@ -1001,7 +1001,7 @@ def parse_and_render(
             var mesh_al_idx_buf_vcm: Optional[DeviceBuffer[DType.uint8]] = None
             var n_meshes_vk_vcm = 0
             if use_vk_vcm:
-                if psc[0].curve_count > Int32(0) or psc[0].sphere_count > Int32(0) or psc[0].instance_count > Int32(0):
+                if psc[unsafe_offset=0].curve_count > Int32(0) or psc[unsafe_offset=0].sphere_count > Int32(0) or psc[unsafe_offset=0].instance_count > Int32(0):
                     print("WARNING: --vulkan-rt-shade requested but scene uses curves/spheres/instancing (unsupported) -- falling back to CUDA intersection")
                     use_vk_vcm = False
                 else:
@@ -1016,14 +1016,14 @@ def parse_and_render(
                     # confirmed in vulkaninterop.cpp), no other backend
                     # change needed to raise it.
                     var max_rays_vk_vcm = max(n_light_paths_merge_vk, n_pixels * _BDPT_MAX_VERTS)
-                    n_meshes_vk_vcm = Int(psc[0].mesh_count)
+                    n_meshes_vk_vcm = Int(psc[unsafe_offset=0].mesh_count)
                     var vmeshes_vcm = alloc[TriangleMesh_C](max(n_meshes_vk_vcm, 1))
                     var point_counts_vcm = alloc[Int64](max(n_meshes_vk_vcm, 1))
                     var vidx_counts_vcm = alloc[Int64](max(n_meshes_vk_vcm, 1))
                     for i in range(n_meshes_vk_vcm):
-                        vmeshes_vcm[i] = psc[0].meshes[i]
-                        point_counts_vcm[i] = Int64(psc[0].mesh_n_verts[i])
-                        vidx_counts_vcm[i] = Int64(psc[0].mesh_n_tris[i]) * 3
+                        vmeshes_vcm[unsafe_offset=i] = psc[unsafe_offset=0].meshes[unsafe_offset=i]
+                        point_counts_vcm[unsafe_offset=i] = Int64(psc[unsafe_offset=0].mesh_n_verts[unsafe_offset=i])
+                        vidx_counts_vcm[unsafe_offset=i] = Int64(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i]) * 3
                     # VCM's Vulkan RT path doesn't support object instancing
                     # yet (its own primary/bounce interop -- vulkaninterop_
                     # rt_traverse_light_paths_gpu/_camera_ in bdpt.mojo -- is
@@ -1066,37 +1066,37 @@ def parse_and_render(
                         with mmi_buf_vcm.map_to_host() as h:
                             var dst = h.unsafe_ptr().unsafe_bitcast[Int64]()
                             for i in range(n_meshes_vk_vcm):
-                                dst[i] = mesh_material_idx_vcm[i]
+                                dst[unsafe_offset=i] = mesh_material_idx_vcm[unsafe_offset=i]
                         mesh_material_idx_buf_vcm = mmi_buf_vcm^
 
                         var mai_buf_vcm = handle[].ctx.enqueue_create_buffer[DType.uint8](n_meshes_alloc_vcm * size_of[Int32]())
                         with mai_buf_vcm.map_to_host() as h2:
                             var dst2 = h2.unsafe_ptr().unsafe_bitcast[Int32]()
                             for i in range(n_meshes_vk_vcm):
-                                dst2[i] = mesh_al_idx_vcm[i]
+                                dst2[unsafe_offset=i] = mesh_al_idx_vcm[unsafe_offset=i]
                         mesh_al_idx_buf_vcm = mai_buf_vcm^
 
                         mesh_material_idx_vcm.unsafe_free()
                         mesh_al_idx_vcm.unsafe_free()
 
             ret = vcm_render_gpu_wavefront(
-                handle, psc, sd[0], resolved_vcm_spp, n_photons, no_denoise, verbose,
+                handle, psc, sd[unsafe_offset=0], resolved_vcm_spp, n_photons, no_denoise, verbose,
                 use_vk_vcm, interop_scene_vcm, interop_rays_buf_vcm, interop_results_buf_vcm,
                 mesh_material_idx_buf_vcm, mesh_al_idx_buf_vcm, n_meshes_vk_vcm,
             )
             if use_vk_vcm:
                 vulkaninterop_rt_destroy_scene(interop_scene_vcm)
         else:
-            ret = vcm_render_gpu(handle, psc, sd[0], resolved_vcm_spp, n_photons, no_denoise, verbose)
+            ret = vcm_render_gpu(handle, psc, sd[unsafe_offset=0], resolved_vcm_spp, n_photons, no_denoise, verbose)
         gpu_free_scene(handle)
         sd.unsafe_free()
         mojo_parsed_free(psc)
         return ret
     elif use_gpu:
-        var spp = Int(psc[0].samples_per_pixel)
+        var spp = Int(psc[unsafe_offset=0].samples_per_pixel)
         # World units spanned by one pixel per unit distance (for mip LOD):
         # 2*tan(fov/2)/height. fov is in degrees along the shorter axis.
-        var px_scale = Float32(2.0) * tan(psc[0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(Int(fh))
+        var px_scale = Float32(2.0) * tan(psc[unsafe_offset=0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(Int(fh))
         var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
         if not _is_real_ptr(handle):
             mojo_parsed_free(psc)
@@ -1124,14 +1124,14 @@ def parse_and_render(
         var n_meshes_vk = 0
         var max_rays_vk = Int64(n_pixels) * Int64(WAVEFRONT_BATCH)
         if use_vk:
-            n_meshes_vk = Int(psc[0].mesh_count)
+            n_meshes_vk = Int(psc[unsafe_offset=0].mesh_count)
             var vmeshes = alloc[TriangleMesh_C](max(n_meshes_vk, 1))
             var point_counts = alloc[Int64](max(n_meshes_vk, 1))
             var vidx_counts = alloc[Int64](max(n_meshes_vk, 1))
             for i in range(n_meshes_vk):
-                vmeshes[i] = psc[0].meshes[i]
-                point_counts[i] = Int64(psc[0].mesh_n_verts[i])
-                vidx_counts[i] = Int64(psc[0].mesh_n_tris[i]) * 3
+                vmeshes[unsafe_offset=i] = psc[unsafe_offset=0].meshes[unsafe_offset=i]
+                point_counts[unsafe_offset=i] = Int64(psc[unsafe_offset=0].mesh_n_verts[unsafe_offset=i])
+                vidx_counts[unsafe_offset=i] = Int64(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i]) * 3
 
             # Object instancing (project_vulkan_rt_backend memory's
             # "close the Vulkan RT gap" plan, item 1): template_mesh_
@@ -1142,14 +1142,14 @@ def parse_and_render(
             # world/instance_template_idx place one TLAS instance per
             # ObjectInstance. Empty (n_templates=0) is byte-identical to
             # the pre-instancing call.
-            var n_templates_vk = Int(psc[0].blas_count)
+            var n_templates_vk = Int(psc[unsafe_offset=0].blas_count)
             var template_mesh_start_vk = alloc[Int64](max(n_templates_vk, 1))
             var template_mesh_end_vk   = alloc[Int64](max(n_templates_vk, 1))
             for t in range(n_templates_vk):
-                template_mesh_start_vk[t] = Int64(psc[0].template_mesh_start[t])
-                template_mesh_end_vk[t]   = Int64(psc[0].template_mesh_end[t])
+                template_mesh_start_vk[unsafe_offset=t] = Int64(psc[unsafe_offset=0].template_mesh_start[unsafe_offset=t])
+                template_mesh_end_vk[unsafe_offset=t]   = Int64(psc[unsafe_offset=0].template_mesh_end[unsafe_offset=t])
 
-            var n_instances_vk = Int(psc[0].instance_count)
+            var n_instances_vk = Int(psc[unsafe_offset=0].instance_count)
             var instance_o2w_vk = alloc[Float32](max(n_instances_vk, 1) * 16)
             var instance_tmpl_idx_vk = alloc[Int32](max(n_instances_vk, 1))
             # Precompute each instance's real BASE mesh index (its
@@ -1158,11 +1158,11 @@ def parse_and_render(
             # see vulkaninterop_unpack_results_kernel (gpu.mojo).
             var instance_base_mesh_host = alloc[Int32](max(n_instances_vk, 1))
             for k in range(n_instances_vk):
-                var inst = psc[0].instances[k]
+                var inst = psc[unsafe_offset=0].instances[unsafe_offset=k]
                 for ci in range(16):
-                    instance_o2w_vk[k * 16 + ci] = inst.objToWorld[ci]
-                instance_tmpl_idx_vk[k] = Int32(inst.blasIdx)
-                instance_base_mesh_host[k] = psc[0].template_mesh_start[Int(inst.blasIdx)]
+                    instance_o2w_vk[unsafe_offset=k * 16 + ci] = inst.objToWorld[ci]
+                instance_tmpl_idx_vk[unsafe_offset=k] = Int32(inst.blasIdx)
+                instance_base_mesh_host[unsafe_offset=k] = psc[unsafe_offset=0].template_mesh_start[unsafe_offset=Int(inst.blasIdx)]
 
             # Curves: NOT tessellated. Scan the ordinary top-level prim_ids
             # for type==5 (curve) leaf entries -- each becomes one
@@ -1180,19 +1180,19 @@ def parse_and_render(
             # own control points/widths/piece count once (independent of
             # how many leaves reference it).
             var n_curve_leaves_vk = 0
-            for i in range(Int(psc[0].prim_count)):
-                if psc[0].prim_ids[i].type == Int8(5):
+            for i in range(Int(psc[unsafe_offset=0].prim_count)):
+                if psc[unsafe_offset=0].prim_ids[unsafe_offset=i].type == Int8(5):
                     n_curve_leaves_vk += 1
             var curve_leaf_aabbs_vk = alloc[Float32](max(n_curve_leaves_vk, 1) * 6)
             var curve_leaf_curve_idx_vk = alloc[Int32](max(n_curve_leaves_vk, 1))
             var curve_leaf_piece_info_vk = alloc[Int32](max(n_curve_leaves_vk, 1))
             var curve_leaf_mat_idx_vk = alloc[Int32](max(n_curve_leaves_vk, 1))
             var curve_leaf_write = 0
-            for i in range(Int(psc[0].prim_count)):
-                var p = psc[0].prim_ids[i]
+            for i in range(Int(psc[unsafe_offset=0].prim_count)):
+                var p = psc[unsafe_offset=0].prim_ids[unsafe_offset=i]
                 if p.type != Int8(5):
                     continue
-                var curve = psc[0].curves[Int(p.id1)]
+                var curve = psc[unsafe_offset=0].curves[unsafe_offset=Int(p.id1)]
                 var first_piece = Int(p.id2) // 8
                 var piece_count = Int(p.id2) % 8
                 var (xmin, ymin, zmin, xmax, ymax, zmax) = curve_piece_bounds(curve, first_piece)
@@ -1201,25 +1201,25 @@ def parse_and_render(
                     xmin = min(xmin, pxmin); ymin = min(ymin, pymin); zmin = min(zmin, pzmin)
                     xmax = max(xmax, pxmax); ymax = max(ymax, pymax); zmax = max(zmax, pzmax)
                 var b = curve_leaf_write * 6
-                curve_leaf_aabbs_vk[b+0] = xmin; curve_leaf_aabbs_vk[b+1] = ymin; curve_leaf_aabbs_vk[b+2] = zmin
-                curve_leaf_aabbs_vk[b+3] = xmax; curve_leaf_aabbs_vk[b+4] = ymax; curve_leaf_aabbs_vk[b+5] = zmax
-                curve_leaf_curve_idx_vk[curve_leaf_write] = Int32(p.id1)
-                curve_leaf_piece_info_vk[curve_leaf_write] = Int32(p.id2)
-                curve_leaf_mat_idx_vk[curve_leaf_write] = Int32(p.materialIndex)
+                curve_leaf_aabbs_vk[unsafe_offset=b+0] = xmin; curve_leaf_aabbs_vk[unsafe_offset=b+1] = ymin; curve_leaf_aabbs_vk[unsafe_offset=b+2] = zmin
+                curve_leaf_aabbs_vk[unsafe_offset=b+3] = xmax; curve_leaf_aabbs_vk[unsafe_offset=b+4] = ymax; curve_leaf_aabbs_vk[unsafe_offset=b+5] = zmax
+                curve_leaf_curve_idx_vk[unsafe_offset=curve_leaf_write] = Int32(p.id1)
+                curve_leaf_piece_info_vk[unsafe_offset=curve_leaf_write] = Int32(p.id2)
+                curve_leaf_mat_idx_vk[unsafe_offset=curve_leaf_write] = Int32(p.materialIndex)
                 curve_leaf_write += 1
 
-            var n_curves_vk = Int(psc[0].curve_count)
+            var n_curves_vk = Int(psc[unsafe_offset=0].curve_count)
             var curve_data_vk = alloc[Float32](max(n_curves_vk, 1) * 14)
             var curve_n_pieces_vk = alloc[Int32](max(n_curves_vk, 1))
             for ci in range(n_curves_vk):
-                var c = psc[0].curves[ci]
+                var c = psc[unsafe_offset=0].curves[unsafe_offset=ci]
                 var cb = ci * 14
-                curve_data_vk[cb+0] = c.cp0.x; curve_data_vk[cb+1] = c.cp0.y; curve_data_vk[cb+2] = c.cp0.z
-                curve_data_vk[cb+3] = c.cp1.x; curve_data_vk[cb+4] = c.cp1.y; curve_data_vk[cb+5] = c.cp1.z
-                curve_data_vk[cb+6] = c.cp2.x; curve_data_vk[cb+7] = c.cp2.y; curve_data_vk[cb+8] = c.cp2.z
-                curve_data_vk[cb+9] = c.cp3.x; curve_data_vk[cb+10] = c.cp3.y; curve_data_vk[cb+11] = c.cp3.z
-                curve_data_vk[cb+12] = c.width0; curve_data_vk[cb+13] = c.width1
-                curve_n_pieces_vk[ci] = c.n_pieces
+                curve_data_vk[unsafe_offset=cb+0] = c.cp0.x; curve_data_vk[unsafe_offset=cb+1] = c.cp0.y; curve_data_vk[unsafe_offset=cb+2] = c.cp0.z
+                curve_data_vk[unsafe_offset=cb+3] = c.cp1.x; curve_data_vk[unsafe_offset=cb+4] = c.cp1.y; curve_data_vk[unsafe_offset=cb+5] = c.cp1.z
+                curve_data_vk[unsafe_offset=cb+6] = c.cp2.x; curve_data_vk[unsafe_offset=cb+7] = c.cp2.y; curve_data_vk[unsafe_offset=cb+8] = c.cp2.z
+                curve_data_vk[unsafe_offset=cb+9] = c.cp3.x; curve_data_vk[unsafe_offset=cb+10] = c.cp3.y; curve_data_vk[unsafe_offset=cb+11] = c.cp3.z
+                curve_data_vk[unsafe_offset=cb+12] = c.width0; curve_data_vk[unsafe_offset=cb+13] = c.width1
+                curve_n_pieces_vk[unsafe_offset=ci] = c.n_pieces
 
             interop_scene = vulkaninterop_rt_create_scene(
                 vmeshes, Int64(n_meshes_vk), point_counts, vidx_counts,
@@ -1254,14 +1254,14 @@ def parse_and_render(
                 with mmi_buf.map_to_host() as h:
                     var dst = h.unsafe_ptr().unsafe_bitcast[Int64]()
                     for i in range(n_meshes_vk):
-                        dst[i] = mesh_material_idx[i]
+                        dst[unsafe_offset=i] = mesh_material_idx[unsafe_offset=i]
                 mesh_material_idx_buf_opt = mmi_buf^
 
                 var mai_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_meshes_alloc * size_of[Int32]())
                 with mai_buf.map_to_host() as h2:
                     var dst2 = h2.unsafe_ptr().unsafe_bitcast[Int32]()
                     for i in range(n_meshes_vk):
-                        dst2[i] = mesh_al_idx[i]
+                        dst2[unsafe_offset=i] = mesh_al_idx[unsafe_offset=i]
                 mesh_al_idx_buf_opt = mai_buf^
 
                 mesh_material_idx.unsafe_free()
@@ -1272,7 +1272,7 @@ def parse_and_render(
                     with ibm_buf.map_to_host() as h3:
                         var dst3 = h3.unsafe_ptr().unsafe_bitcast[Int32]()
                         for k in range(n_instances_vk):
-                            dst3[k] = instance_base_mesh_host[k]
+                            dst3[unsafe_offset=k] = instance_base_mesh_host[unsafe_offset=k]
                     instance_base_mesh_buf_opt = ibm_buf^
                 instance_base_mesh_host.unsafe_free()
 
@@ -1304,7 +1304,7 @@ def parse_and_render(
                   "1 sample/pixel per dispatch (like --interactive-frames) "
                   "for full reservoir reuse, trading wavefront-batching "
                   "throughput for it.")
-            gpu_gen_aux_buffers(handle, psc[0].camera_to_world, Int64(n_pixels))
+            gpu_gen_aux_buffers(handle, psc[unsafe_offset=0].camera_to_world, Int64(n_pixels))
             if use_restir:
                 gpu_clear_restir(handle, Int64(n_pixels))
             if use_vol_restir_reuse:
@@ -1315,12 +1315,12 @@ def parse_and_render(
             for si in range(spp):
                 gpu_render_sample(
                     handle,
-                    psc[0].camera_to_world,
-                    Int32(si), psc[0].log2_spp, psc[0].n_base4_digits,
+                    psc[unsafe_offset=0].camera_to_world,
+                    Int32(si), psc[unsafe_offset=0].log2_spp, psc[unsafe_offset=0].n_base4_digits,
                     seed_dim0, seed_dim1,
-                    UInt32(psc[0].rng_seed & UInt64(0xFFFFFFFF)),
-                    UInt32(psc[0].rng_seed >> UInt64(32)),
-                    Int64(n_pixels), psc[0].max_depth,
+                    UInt32(psc[unsafe_offset=0].rng_seed & UInt64(0xFFFFFFFF)),
+                    UInt32(psc[unsafe_offset=0].rng_seed >> UInt64(32)),
+                    Int64(n_pixels), psc[unsafe_offset=0].max_depth,
                     px_scale,
                     use_restir=use_restir, frame_index=si,
                     use_vol_restir_reuse=use_vol_restir_reuse,
@@ -1333,13 +1333,13 @@ def parse_and_render(
                 var actual_batch = min(WAVEFRONT_BATCH, spp - si)
                 gpu_render_wavefront(
                     handle,
-                    psc[0].camera_to_world,
+                    psc[unsafe_offset=0].camera_to_world,
                     Int32(si), Int32(actual_batch),
-                    psc[0].log2_spp, psc[0].n_base4_digits,
+                    psc[unsafe_offset=0].log2_spp, psc[unsafe_offset=0].n_base4_digits,
                     seed_dim0, seed_dim1,
-                    UInt32(psc[0].rng_seed & UInt64(0xFFFFFFFF)),
-                    UInt32(psc[0].rng_seed >> UInt64(32)),
-                    Int64(n_pixels), psc[0].max_depth,
+                    UInt32(psc[unsafe_offset=0].rng_seed & UInt64(0xFFFFFFFF)),
+                    UInt32(psc[unsafe_offset=0].rng_seed >> UInt64(32)),
+                    Int64(n_pixels), psc[unsafe_offset=0].max_depth,
                     px_scale,
                     use_vk, interop_scene, interop_rays_buf_opt, interop_results_buf_opt,
                     mesh_material_idx_buf_opt, mesh_al_idx_buf_opt, n_meshes_vk,
@@ -1356,32 +1356,32 @@ def parse_and_render(
         var denoised_gpu = List[Float32](capacity=n_pixels * 3)
         var albedo_gpu   = List[Float32](capacity=n_pixels * 3)
         for _ in range(n_pixels * 3): denoised_gpu.append(Float32(0)); albedo_gpu.append(Float32(0))
-        gpu_gen_aux_buffers(handle, psc[0].camera_to_world, Int64(n_pixels))
+        gpu_gen_aux_buffers(handle, psc[unsafe_offset=0].camera_to_world, Int64(n_pixels))
         gpu_atrous_denoise(handle, denoised_gpu.unsafe_ptr(), Int64(n_pixels),
-                                Int32(spp), psc[0].film_iso, psc[0].film_max_comp,
+                                Int32(spp), psc[unsafe_offset=0].film_iso, psc[unsafe_offset=0].film_max_comp,
                                 apply_denoise=not no_denoise)
-        apply_film_sensor(denoised_gpu.unsafe_ptr(), n_pixels, psc[0].film_exposuretime, psc[0].film_wb)
+        apply_film_sensor(denoised_gpu.unsafe_ptr(), n_pixels, psc[unsafe_offset=0].film_exposuretime, psc[unsafe_offset=0].film_wb)
         gpu_download_albedo(handle, albedo_gpu.unsafe_ptr(), Int64(n_pixels))
         var inv_spp = Float32(1.0) / Float32(spp)
         for i in range(n_pixels * 3):
             albedo_gpu[i] *= inv_spp
         gpu_free_scene(handle)
         _ = write_image_cropwindow(denoised_gpu.unsafe_ptr(), fw, fh,
-                                 psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
-                                 psc[0].film_filename, Int32(32), Int32(32))
+                                 psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0, psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1,
+                                 psc[unsafe_offset=0].film_filename, Int32(32), Int32(32))
         var albedo_name_buf = alloc[UInt8](11)
         var albedo_name_str = "albedo.exr"
         var anp = albedo_name_str.unsafe_ptr()
-        for i in range(10): albedo_name_buf[i] = anp[i]
-        albedo_name_buf[10] = UInt8(0)
+        for i in range(10): albedo_name_buf[unsafe_offset=i] = anp[unsafe_offset=i]
+        albedo_name_buf[unsafe_offset=10] = UInt8(0)
         _ = write_image_cropwindow(albedo_gpu.unsafe_ptr(), fw, fh,
-                                 psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
+                                 psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0, psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1,
                                  albedo_name_buf.unsafe_origin_cast[MutExternalOrigin](), Int32(32), Int32(32))
         albedo_name_buf.unsafe_free()
         # denoised_gpu, albedo_gpu, and results freed automatically
         mojo_parsed_free(psc)
         return Int32(0)
-    elif psc[0].prim_count == 0 and psc[0].sphere_count == 0:
+    elif psc[unsafe_offset=0].prim_count == 0 and psc[unsafe_offset=0].sphere_count == 0:
         # Analytic spheres are NOT in prim_count -- they live in their own flat
         # psc[0].spheres array (see bvh.mojo's test_spheres), so a scene whose
         # only geometry is Shape "sphere" has prim_count == 0 and was rejected
@@ -1392,16 +1392,16 @@ def parse_and_render(
     elif use_vcm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
         var n_photons = _resolve_vcm_photons(vcm_photons, n_pixels)
-        var resolved_vcm_spp = _resolve_vcm_spp(vcm_spp, psc[0].samples_per_pixel)
-        var ret = vcm_render(psc, sd[0], resolved_vcm_spp, n_photons, no_denoise, verbose)
+        var resolved_vcm_spp = _resolve_vcm_spp(vcm_spp, psc[unsafe_offset=0].samples_per_pixel)
+        var ret = vcm_render(psc, sd[unsafe_offset=0], resolved_vcm_spp, n_photons, no_denoise, verbose)
         sd.unsafe_free()
         mojo_parsed_free(psc)
         return ret
     elif use_sppm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
-        var resolved = _resolve_sppm_params(psc, sd[0], sppm_photons, sppm_radius)
+        var resolved = _resolve_sppm_params(psc, sd[unsafe_offset=0], sppm_photons, sppm_radius)
         var ret = sppm_render(
-            psc, sd[0],
+            psc, sd[unsafe_offset=0],
             Int(sppm_passes), Int(resolved[0]), resolved[1],
             no_denoise, verbose,
         )
@@ -1417,7 +1417,7 @@ def parse_and_render(
             results.append(zero)
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
 
-        if use_guide and psc[0].bvh_node_count > Int32(0):
+        if use_guide and psc[unsafe_offset=0].bvh_node_count > Int32(0):
             # ── N-iteration guided rendering (adaptive SD-tree) ───────────────
             # Build an empty SD-tree from the BVH root AABB (guide.mojo). Each
             # iteration: clone the current tree into 16 empty per-tile-group
@@ -1431,10 +1431,10 @@ def parse_and_render(
             # simplification vs. Müller's progressive-doubling schedule; both
             # are unbiased, doubling mainly reduces the final combined
             # estimator's variance, an optimization not attempted here.
-            var root = psc[0].bvh_nodes[0]
+            var root = psc[unsafe_offset=0].bvh_nodes[unsafe_offset=0]
             comptime N_GUIDE_THREADS: Int = 16
             comptime N_ITERATIONS: Int = 4
-            var spp = psc[0].samples_per_pixel
+            var spp = psc[unsafe_offset=0].samples_per_pixel
             var n_iters = min(Int(spp), N_ITERATIONS)
             var base_spp = spp // Int32(n_iters)
             var tree = guide_create(Bounds3f(root.min, root.max))
@@ -1448,21 +1448,21 @@ def parse_and_render(
                 if it == n_iters - 1:
                     iter_spp = spp - offset  # absorb any remainder into the last iteration
                 for gi in range(N_GUIDE_THREADS):
-                    write_guides[gi] = guide_clone_empty(tree)
+                    write_guides[unsafe_offset=gi] = guide_clone_empty(tree)
                 var sp_iter = TileSamplerParams_C(
                     sobolMatrices=sobol_matrices,
-                    rngSeed=psc[0].rng_seed,
+                    rngSeed=psc[unsafe_offset=0].rng_seed,
                     sobolSeed=Int32(0),
-                    log2SamplesPerPixel=psc[0].log2_spp,
-                    nBase4Digits=psc[0].n_base4_digits,
+                    log2SamplesPerPixel=psc[unsafe_offset=0].log2_spp,
+                    nBase4Digits=psc[unsafe_offset=0].n_base4_digits,
                     samplesPerPixel=iter_spp,
-                    filterSigma=psc[0].filter_sigma,
-                    filterSupportX=psc[0].filter_support_x,
-                    filterSupportY=psc[0].filter_support_y,
-                    filterNormX=psc[0].filter_norm_x,
-                    filterNormY=psc[0].filter_norm_y,
-                    filterWeight=psc[0].filter_weight,
-                    filterType=psc[0].filter_type,
+                    filterSigma=psc[unsafe_offset=0].filter_sigma,
+                    filterSupportX=psc[unsafe_offset=0].filter_support_x,
+                    filterSupportY=psc[unsafe_offset=0].filter_support_y,
+                    filterNormX=psc[unsafe_offset=0].filter_norm_x,
+                    filterNormY=psc[unsafe_offset=0].filter_norm_y,
+                    filterWeight=psc[unsafe_offset=0].filter_weight,
+                    filterType=psc[unsafe_offset=0].filter_type,
                     sampleIndexOffset=offset,
                 )
                 var sp_iter_ptr = OwnedPointer[TileSamplerParams_C](sp_iter)
@@ -1471,35 +1471,35 @@ def parse_and_render(
                     # First iteration writes straight into `results` (like the
                     # old pilot pass) -- no accumulation add needed.
                     render_all_tiles(
-                        psc[0].raster_to_camera, psc[0].camera_to_world,
+                        psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
                         Int32(0), Int32(0), fw, fh,
                         Int32(32), Int32(32),
                         sp_iter_ptr.unsafe_ptr(), sd, results.unsafe_ptr(),
-                        psc[0].max_depth, False,
+                        psc[unsafe_offset=0].max_depth, False,
                         guide_read, write_guides, N_GUIDE_THREADS)
                 else:
                     var iter_buf = List[TileResult_C](capacity=n_pixels)
                     for _ in range(n_pixels): iter_buf.append(zero)
                     render_all_tiles(
-                        psc[0].raster_to_camera, psc[0].camera_to_world,
+                        psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
                         Int32(0), Int32(0), fw, fh,
                         Int32(32), Int32(32),
                         sp_iter_ptr.unsafe_ptr(), sd, iter_buf.unsafe_ptr(),
-                        psc[0].max_depth, False,
+                        psc[unsafe_offset=0].max_depth, False,
                         guide_read, write_guides, N_GUIDE_THREADS)
                     for i in range(n_pixels):
-                        var p = results.unsafe_ptr()[i]
-                        var m = iter_buf.unsafe_ptr()[i]
-                        results.unsafe_ptr()[i] = TileResult_C(
+                        var p = results.unsafe_ptr()[unsafe_offset=i]
+                        var m = iter_buf.unsafe_ptr()[unsafe_offset=i]
+                        results.unsafe_ptr()[unsafe_offset=i] = TileResult_C(
                             p.estimate + m.estimate,
                             p.albedo   + m.albedo,
                             p.filterWeight + m.filterWeight,
                             m.pixelX, m.pixelY)
                 offset += iter_spp
                 # render_all_tiles already merged shards [1..N-1] into [0].
-                guide_merge(tree, write_guides[0])
+                guide_merge(tree, write_guides[unsafe_offset=0])
                 for gi in range(N_GUIDE_THREADS):
-                    guide_free(write_guides[gi])
+                    guide_free(write_guides[unsafe_offset=gi])
                 if it < n_iters - 1:
                     var refined = guide_refine(tree)
                     tree = refined
@@ -1519,26 +1519,26 @@ def parse_and_render(
             # ── Standard single-call rendering ───────────────────────────────
             var sp = TileSamplerParams_C(
                 sobolMatrices=sobol_matrices,
-                rngSeed=psc[0].rng_seed,
+                rngSeed=psc[unsafe_offset=0].rng_seed,
                 sobolSeed=Int32(0),
-                log2SamplesPerPixel=psc[0].log2_spp,
-                nBase4Digits=psc[0].n_base4_digits,
-                samplesPerPixel=psc[0].samples_per_pixel,
-                filterSigma=psc[0].filter_sigma,
-                filterSupportX=psc[0].filter_support_x,
-                filterSupportY=psc[0].filter_support_y,
-                filterNormX=psc[0].filter_norm_x,
-                filterNormY=psc[0].filter_norm_y,
-                filterWeight=psc[0].filter_weight,
-                filterType=psc[0].filter_type,
+                log2SamplesPerPixel=psc[unsafe_offset=0].log2_spp,
+                nBase4Digits=psc[unsafe_offset=0].n_base4_digits,
+                samplesPerPixel=psc[unsafe_offset=0].samples_per_pixel,
+                filterSigma=psc[unsafe_offset=0].filter_sigma,
+                filterSupportX=psc[unsafe_offset=0].filter_support_x,
+                filterSupportY=psc[unsafe_offset=0].filter_support_y,
+                filterNormX=psc[unsafe_offset=0].filter_norm_x,
+                filterNormY=psc[unsafe_offset=0].filter_norm_y,
+                filterWeight=psc[unsafe_offset=0].filter_weight,
+                filterType=psc[unsafe_offset=0].filter_type,
                 sampleIndexOffset=Int32(0),
             )
             var sp_ptr = OwnedPointer[TileSamplerParams_C](sp)
             render_all_tiles(
-                psc[0].raster_to_camera, psc[0].camera_to_world,
+                psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
                 Int32(0), Int32(0), fw, fh,
                 Int32(32), Int32(32),
-                sp_ptr.unsafe_ptr(), sd, results.unsafe_ptr(), psc[0].max_depth,
+                sp_ptr.unsafe_ptr(), sd, results.unsafe_ptr(), psc[unsafe_offset=0].max_depth,
                 quiet=False, guide_read=null_guide(),
                 write_guides=UnsafePointer[GuideGrid, MutExternalOrigin].unsafe_dangling(), n_write_guides=0,
                 use_restir=use_restir, use_gi=use_restir and use_restir_gi)
@@ -1550,7 +1550,7 @@ def parse_and_render(
         for _ in range(n_pixels * 3): normals.append(Float32(0))
         for _ in range(n_pixels):     dept.append(Float32(0))
         render_aux_buffers(
-            psc[0].raster_to_camera, psc[0].camera_to_world,
+            psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
             Int32(0), Int32(0), fw, fh, sd,
             normals.unsafe_ptr(), dept.unsafe_ptr())
         sd.unsafe_free()
@@ -1561,9 +1561,9 @@ def parse_and_render(
         var denoised = List[Float32](capacity=n_pixels * 3)
         for _ in range(n_pixels * 3): beauty.append(Float32(0)); albedo.append(Float32(0)); denoised.append(Float32(0))
         normalize_film(results.unsafe_ptr(), Int32(n_pixels),
-                            psc[0].film_iso, psc[0].film_max_comp,
+                            psc[unsafe_offset=0].film_iso, psc[unsafe_offset=0].film_max_comp,
                             beauty.unsafe_ptr(), albedo.unsafe_ptr())
-        apply_film_sensor(beauty.unsafe_ptr(), n_pixels, psc[0].film_exposuretime, psc[0].film_wb)
+        apply_film_sensor(beauty.unsafe_ptr(), n_pixels, psc[unsafe_offset=0].film_exposuretime, psc[unsafe_offset=0].film_wb)
         if no_denoise:
             # --no-denoise: write the normalized beauty directly (raw render).
             for i in range(n_pixels * 3): denoised[i] = beauty[i]
@@ -1573,15 +1573,15 @@ def parse_and_render(
                     fw, fh, denoised.unsafe_ptr(),
                     Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
         _ = write_image_cropwindow(denoised.unsafe_ptr(), fw, fh,
-                                 psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
-                                 psc[0].film_filename, Int32(32), Int32(32))
+                                 psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0, psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1,
+                                 psc[unsafe_offset=0].film_filename, Int32(32), Int32(32))
         var albedo_name_buf = alloc[UInt8](11)
         var albedo_name_str = "albedo.exr"
         var anp2 = albedo_name_str.unsafe_ptr()
-        for i in range(10): albedo_name_buf[i] = anp2[i]
-        albedo_name_buf[10] = UInt8(0)
+        for i in range(10): albedo_name_buf[unsafe_offset=i] = anp2[unsafe_offset=i]
+        albedo_name_buf[unsafe_offset=10] = UInt8(0)
         _ = write_image_cropwindow(albedo.unsafe_ptr(), fw, fh,
-                                 psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
+                                 psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0, psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1,
                                  albedo_name_buf.unsafe_origin_cast[MutExternalOrigin](), Int32(32), Int32(32))
         albedo_name_buf.unsafe_free()
         # beauty, albedo, denoised, normals, dept freed automatically
@@ -1644,15 +1644,15 @@ def render_interactive(
         # used to be silently dropped, rendering at the scene's native
         # resolution instead. Derive the missing side from native aspect.
         if eff_w <= 0:
-            eff_w = Int32(Int(eff_h) * Int(psc[0].film_w) / max(Int(psc[0].film_h), 1))
+            eff_w = Int32(Int(eff_h) * Int(psc[unsafe_offset=0].film_w) / max(Int(psc[unsafe_offset=0].film_h), 1))
         if eff_h <= 0:
-            eff_h = Int32(Int(eff_w) * Int(psc[0].film_h) / max(Int(psc[0].film_w), 1))
+            eff_h = Int32(Int(eff_w) * Int(psc[unsafe_offset=0].film_h) / max(Int(psc[unsafe_offset=0].film_w), 1))
         resize_film(psc, eff_w, eff_h)
 
     mojo_apply_overrides(psc, spp_override, Int32(0), Int32(0), seed_override)
 
-    var fw = psc[0].film_w
-    var fh = psc[0].film_h
+    var fw = psc[unsafe_offset=0].film_w
+    var fh = psc[unsafe_offset=0].film_h
     var n_pixels = Int(fw) * Int(fh)
 
     var handle = UnsafePointer[GpuSceneHandle, MutExternalOrigin].unsafe_dangling()
@@ -1673,8 +1673,8 @@ def render_interactive(
     var title_buf = alloc[UInt8](title_len + 1)
     var ts = title_str.unsafe_ptr()
     for i in range(title_len):
-        title_buf[i] = ts[i]
-    title_buf[title_len] = UInt8(0)
+        title_buf[unsafe_offset=i] = ts[unsafe_offset=i]
+    title_buf[unsafe_offset=title_len] = UInt8(0)
     var v = viewer_create(fw, fh, title_buf, Int32(1) if fullscreen else Int32(0))
     title_buf.unsafe_free()
     if Int(v) == 0:
@@ -1683,7 +1683,7 @@ def render_interactive(
             gpu_free_scene(handle)
         mojo_parsed_free(psc)
         return
-    if not use_gpu and psc[0].prim_count == 0 and psc[0].sphere_count == 0:
+    if not use_gpu and psc[unsafe_offset=0].prim_count == 0 and psc[unsafe_offset=0].sphere_count == 0:
         # See the batch-path guard above: analytic spheres are not counted in
         # prim_count.
         print("Warning: scene has no geometry, skipping render")
@@ -1691,17 +1691,17 @@ def render_interactive(
         mojo_parsed_free(psc)
         return
 
-    var c2w = psc[0].camera_to_world
+    var c2w = psc[unsafe_offset=0].camera_to_world
     var cam_buf = OwnedPointer[CameraState](CameraState(
-        position=Point3f(c2w[12], c2w[13], c2w[14]),
-        direction=Vec3f(c2w[8],  c2w[9],  c2w[10]),
-        up=Vec3f(c2w[4],  c2w[5],  c2w[6]),
+        position=Point3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14]),
+        direction=Vec3f(c2w[unsafe_offset=8],  c2w[unsafe_offset=9],  c2w[unsafe_offset=10]),
+        up=Vec3f(c2w[unsafe_offset=4],  c2w[unsafe_offset=5],  c2w[unsafe_offset=6]),
         cameraChanged=Int32(0),
     ))
     viewer_set_camera_state(v, cam_buf.unsafe_ptr())
 
     var c2w_buf = List[Float32](capacity=16)
-    for i in range(16): c2w_buf.append(c2w[i])
+    for i in range(16): c2w_buf.append(c2w[unsafe_offset=i])
 
     var results  = List[TileResult_C](capacity=n_pixels)
     var beauty   = List[Float32](capacity=n_pixels * 3)
@@ -1795,13 +1795,13 @@ def render_interactive(
         rngSeed=UInt64(0), sobolSeed=Int32(0),
         log2SamplesPerPixel=Int32(0), nBase4Digits=Int32(1),
         samplesPerPixel=Int32(1),
-        filterSigma=psc[0].filter_sigma,
-        filterSupportX=psc[0].filter_support_x,
-        filterSupportY=psc[0].filter_support_y,
-        filterNormX=psc[0].filter_norm_x,
-        filterNormY=psc[0].filter_norm_y,
-        filterWeight=psc[0].filter_weight,
-        filterType=psc[0].filter_type,
+        filterSigma=psc[unsafe_offset=0].filter_sigma,
+        filterSupportX=psc[unsafe_offset=0].filter_support_x,
+        filterSupportY=psc[unsafe_offset=0].filter_support_y,
+        filterNormX=psc[unsafe_offset=0].filter_norm_x,
+        filterNormY=psc[unsafe_offset=0].filter_norm_y,
+        filterWeight=psc[unsafe_offset=0].filter_weight,
+        filterType=psc[unsafe_offset=0].filter_type,
         sampleIndexOffset=Int32(0),
     ))
 
@@ -1811,7 +1811,7 @@ def render_interactive(
             gpu_clear_restir(handle, Int64(n_pixels))
         if use_vol_restir_reuse:
             gpu_clear_restir_vol(handle, Int64(n_pixels))
-        gpu_gen_aux_buffers(handle, psc[0].camera_to_world, Int64(n_pixels))
+        gpu_gen_aux_buffers(handle, psc[unsafe_offset=0].camera_to_world, Int64(n_pixels))
     else:
         sd = mojo_parsed_scene_descriptor(psc, spectral)
         for _ in range(n_pixels * 3):
@@ -1835,16 +1835,16 @@ def render_interactive(
             restir_buf_a = alloc[DIReservoir](n_pixels)
             restir_buf_b = alloc[DIReservoir](n_pixels)
             for i in range(n_pixels):
-                restir_buf_a[i] = di_reservoir_init()
-                restir_buf_b[i] = di_reservoir_init()
+                restir_buf_a[unsafe_offset=i] = di_reservoir_init()
+                restir_buf_b[unsafe_offset=i] = di_reservoir_init()
             restir_read = restir_buf_a
             restir_write = restir_buf_b
             if use_restir_gi:
                 gi_buf_a = alloc[GIReservoir](n_pixels)
                 gi_buf_b = alloc[GIReservoir](n_pixels)
                 for i in range(n_pixels):
-                    gi_buf_a[i] = gi_reservoir_init()
-                    gi_buf_b[i] = gi_reservoir_init()
+                    gi_buf_a[unsafe_offset=i] = gi_reservoir_init()
+                    gi_buf_b[unsafe_offset=i] = gi_reservoir_init()
                 gi_read = gi_buf_a
                 gi_write = gi_buf_b
         if use_sms_restir:
@@ -1854,8 +1854,8 @@ def render_interactive(
             sms_buf_a = alloc[SMSReservoir](n_pixels)
             sms_buf_b = alloc[SMSReservoir](n_pixels)
             for i in range(n_pixels):
-                sms_buf_a[i] = sms_reservoir_init()
-                sms_buf_b[i] = sms_reservoir_init()
+                sms_buf_a[unsafe_offset=i] = sms_reservoir_init()
+                sms_buf_b[unsafe_offset=i] = sms_reservoir_init()
             sms_read = sms_buf_a
             sms_write = sms_buf_b
         if use_vol_restir_reuse:
@@ -1864,8 +1864,8 @@ def render_interactive(
             vol_buf_a = alloc[VolReservoir](n_pixels)
             vol_buf_b = alloc[VolReservoir](n_pixels)
             for i in range(n_pixels):
-                vol_buf_a[i] = vol_reservoir_init()
-                vol_buf_b[i] = vol_reservoir_init()
+                vol_buf_a[unsafe_offset=i] = vol_reservoir_init()
+                vol_buf_b[unsafe_offset=i] = vol_reservoir_init()
             vol_read = vol_buf_a
             vol_write = vol_buf_b
 
@@ -1905,22 +1905,22 @@ def render_interactive(
                         # both buffers -- which one is "read" vs "write" is
                         # irrelevant right after both are identically empty.
                         for i in range(n_pixels):
-                            restir_buf_a[i] = di_reservoir_init()
-                            restir_buf_b[i] = di_reservoir_init()
+                            restir_buf_a[unsafe_offset=i] = di_reservoir_init()
+                            restir_buf_b[unsafe_offset=i] = di_reservoir_init()
                         if use_restir_gi:
                             for i in range(n_pixels):
-                                gi_buf_a[i] = gi_reservoir_init()
-                                gi_buf_b[i] = gi_reservoir_init()
+                                gi_buf_a[unsafe_offset=i] = gi_reservoir_init()
+                                gi_buf_b[unsafe_offset=i] = gi_reservoir_init()
                     if use_sms_restir:
                         # Same identity-reprojection invalidation rule,
                         # independent of use_restir.
                         for i in range(n_pixels):
-                            sms_buf_a[i] = sms_reservoir_init()
-                            sms_buf_b[i] = sms_reservoir_init()
+                            sms_buf_a[unsafe_offset=i] = sms_reservoir_init()
+                            sms_buf_b[unsafe_offset=i] = sms_reservoir_init()
                     if use_vol_restir_reuse:
                         for i in range(n_pixels):
-                            vol_buf_a[i] = vol_reservoir_init()
-                            vol_buf_b[i] = vol_reservoir_init()
+                            vol_buf_a[unsafe_offset=i] = vol_reservoir_init()
+                            vol_buf_b[unsafe_offset=i] = vol_reservoir_init()
         # headless: camera is never polled, so it never "changes" -- every
         # frame accumulates onto the same static view, exactly the
         # steady-state case temporal reuse (Phase 2.3) needs to be verified
@@ -1935,15 +1935,15 @@ def render_interactive(
                 si, Int32(log2spp_i), Int32(n_base4_i),
                 UInt32(0), UInt32(0),
                 UInt32(frame_count & 0xFFFFFFFF), UInt32(0),
-                Int64(n_pixels), psc[0].max_depth,
+                Int64(n_pixels), psc[unsafe_offset=0].max_depth,
                 use_restir=use_restir, frame_index=frame_count,
                 use_vol_restir_reuse=use_vol_restir_reuse,
             )
             frame_count += 1
             gpu_atrous_denoise(handle, denoised.unsafe_ptr(), Int64(n_pixels),
                                     Int32(frame_count),
-                                    psc[0].film_iso, psc[0].film_max_comp)
-            apply_film_sensor(denoised.unsafe_ptr(), n_pixels, psc[0].film_exposuretime, psc[0].film_wb)
+                                    psc[unsafe_offset=0].film_iso, psc[unsafe_offset=0].film_max_comp)
+            apply_film_sensor(denoised.unsafe_ptr(), n_pixels, psc[unsafe_offset=0].film_exposuretime, psc[unsafe_offset=0].film_wb)
         else:
             sp_int[] = TileSamplerParams_C(
                 sobolMatrices=sobol,
@@ -1952,13 +1952,13 @@ def render_interactive(
                 log2SamplesPerPixel=Int32(0),
                 nBase4Digits=Int32(1),
                 samplesPerPixel=Int32(1),
-                filterSigma=psc[0].filter_sigma,
-                filterSupportX=psc[0].filter_support_x,
-                filterSupportY=psc[0].filter_support_y,
-                filterNormX=psc[0].filter_norm_x,
-                filterNormY=psc[0].filter_norm_y,
-                filterWeight=psc[0].filter_weight,
-                filterType=psc[0].filter_type,
+                filterSigma=psc[unsafe_offset=0].filter_sigma,
+                filterSupportX=psc[unsafe_offset=0].filter_support_x,
+                filterSupportY=psc[unsafe_offset=0].filter_support_y,
+                filterNormX=psc[unsafe_offset=0].filter_norm_x,
+                filterNormY=psc[unsafe_offset=0].filter_norm_y,
+                filterWeight=psc[unsafe_offset=0].filter_weight,
+                filterType=psc[unsafe_offset=0].filter_type,
                 sampleIndexOffset=Int32(0),
             )
             for i in range(n_pixels):
@@ -1978,14 +1978,14 @@ def render_interactive(
                 # rejects, so spatial reuse silently did nothing.
                 if use_restir or use_restir_gi or use_sms_restir or use_vol_restir_reuse:
                     render_aux_buffers(
-                        psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
+                        psc[unsafe_offset=0].raster_to_camera, c2w_buf.unsafe_ptr(),
                         Int32(0), Int32(0), fw, fh, sd,
                         normals_int.unsafe_ptr(), depth_int.unsafe_ptr(),
                         world_pos_out=world_pos_int.unsafe_ptr(),
                         material_id_out=material_id_int.unsafe_ptr())
                 else:
                     render_aux_buffers(
-                        psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
+                        psc[unsafe_offset=0].raster_to_camera, c2w_buf.unsafe_ptr(),
                         Int32(0), Int32(0), fw, fh, sd,
                         normals_int.unsafe_ptr(), depth_int.unsafe_ptr())
             var restir_io = reservoir_io_null()
@@ -2036,10 +2036,10 @@ def render_interactive(
                 vol_io.frame_w = fw
                 vol_io.frame_h = fh
             render_all_tiles(
-                psc[0].raster_to_camera, c2w_buf.unsafe_ptr(),
+                psc[unsafe_offset=0].raster_to_camera, c2w_buf.unsafe_ptr(),
                 Int32(0), Int32(0), fw, fh,
                 Int32(32), Int32(32),
-                sp_int.unsafe_ptr(), sd, results.unsafe_ptr(), psc[0].max_depth, True,
+                sp_int.unsafe_ptr(), sd, results.unsafe_ptr(), psc[unsafe_offset=0].max_depth, True,
                 guide_read=null_guide(), write_guides=UnsafePointer[GuideGrid, MutExternalOrigin].unsafe_dangling(),
                 n_write_guides=0, use_restir=use_restir, frame_w=fw, restir_io=restir_io,
                 use_gi=use_restir_gi, gi_io=gi_io,
@@ -2072,9 +2072,9 @@ def render_interactive(
             var albedo_frame = List[Float32](capacity=n_pixels * 3)
             for _ in range(n_pixels * 3): beauty_frame.append(Float32(0)); albedo_frame.append(Float32(0))
             normalize_film(results.unsafe_ptr(), Int32(n_pixels),
-                                psc[0].film_iso, psc[0].film_max_comp,
+                                psc[unsafe_offset=0].film_iso, psc[unsafe_offset=0].film_max_comp,
                                 beauty_frame.unsafe_ptr(), albedo_frame.unsafe_ptr())
-            apply_film_sensor(beauty_frame.unsafe_ptr(), n_pixels, psc[0].film_exposuretime, psc[0].film_wb)
+            apply_film_sensor(beauty_frame.unsafe_ptr(), n_pixels, psc[unsafe_offset=0].film_exposuretime, psc[unsafe_offset=0].film_wb)
             frame_count += 1
             var w = Float32(1) / Float32(frame_count)
             if frame_count == 1:
@@ -2098,7 +2098,7 @@ def render_interactive(
 
     if headless:
         _ = write_image_cropped(denoised.unsafe_ptr(), fw, fh, Int32(0), Int32(0), fw, fh,
-                                 psc[0].film_filename, Int32(32), Int32(32))
+                                 psc[unsafe_offset=0].film_filename, Int32(32), Int32(32))
 
     # results, beauty, albedo, denoised, c2w_buf, cam_buf, sp_int freed automatically
     if use_gpu:

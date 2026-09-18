@@ -33,7 +33,7 @@ struct TriangleSceneFixture(Movable):
     def intersect(self, ray: Ray_C, tMax: Float32) -> Intersection_C:
         var result = alloc[Intersection_C](1)
         traverse_bvh2_core(self.bvh_nodes, self.prim_ids, self.meshes, self.curves, ray, tMax, result)
-        var r = result[0]
+        var r = result[unsafe_offset=0]
         result.unsafe_free()
         return r
 
@@ -52,17 +52,17 @@ def make_triangle_scene(verts: List[Point3f]) -> TriangleSceneFixture:
 
     var points = alloc[Float32](n_verts * 4)
     for i in range(n_verts):
-        points[i*4+0] = verts[i].x
-        points[i*4+1] = verts[i].y
-        points[i*4+2] = verts[i].z
-        points[i*4+3] = Float32(1.0)
+        points[unsafe_offset=i*4+0] = verts[i].x
+        points[unsafe_offset=i*4+1] = verts[i].y
+        points[unsafe_offset=i*4+2] = verts[i].z
+        points[unsafe_offset=i*4+3] = Float32(1.0)
 
     var vertex_indices = alloc[Int64](n_verts)
     for i in range(n_verts):
-        vertex_indices[i] = Int64(i)
+        vertex_indices[unsafe_offset=i] = Int64(i)
 
     var meshes = alloc[TriangleMesh_C](1)
-    meshes[0] = TriangleMesh_C(
+    meshes[unsafe_offset=0] = TriangleMesh_C(
         points,
         UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(),  # faceIndices, unused
         vertex_indices,
@@ -73,12 +73,12 @@ def make_triangle_scene(verts: List[Point3f]) -> TriangleSceneFixture:
     var bounds = alloc[Float32](Int(n_tris) * 6)
     for t in range(Int(n_tris)):
         var p0 = verts[t*3+0]; var p1 = verts[t*3+1]; var p2 = verts[t*3+2]
-        bounds[t*6+0] = min(p0.x, min(p1.x, p2.x))
-        bounds[t*6+1] = min(p0.y, min(p1.y, p2.y))
-        bounds[t*6+2] = min(p0.z, min(p1.z, p2.z))
-        bounds[t*6+3] = max(p0.x, max(p1.x, p2.x))
-        bounds[t*6+4] = max(p0.y, max(p1.y, p2.y))
-        bounds[t*6+5] = max(p0.z, max(p1.z, p2.z))
+        bounds[unsafe_offset=t*6+0] = min(p0.x, min(p1.x, p2.x))
+        bounds[unsafe_offset=t*6+1] = min(p0.y, min(p1.y, p2.y))
+        bounds[unsafe_offset=t*6+2] = min(p0.z, min(p1.z, p2.z))
+        bounds[unsafe_offset=t*6+3] = max(p0.x, max(p1.x, p2.x))
+        bounds[unsafe_offset=t*6+4] = max(p0.y, max(p1.y, p2.y))
+        bounds[unsafe_offset=t*6+5] = max(p0.z, max(p1.z, p2.z))
 
     var max_nodes = Int(n_tris) * 2 + 4
     var bvh_nodes = alloc[BVH2Node](max_nodes)
@@ -88,12 +88,12 @@ def make_triangle_scene(verts: List[Point3f]) -> TriangleSceneFixture:
 
     var prim_ids = alloc[PrimId_C](Int(n_tris))
     for k in range(Int(n_tris)):
-        var orig = Int(order[k])
-        prim_ids[k] = PrimId_C(Int64(0), Int64(orig * 3), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+        var orig = Int(order[unsafe_offset=k])
+        prim_ids[unsafe_offset=k] = PrimId_C(Int64(0), Int64(orig * 3), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     order.unsafe_free()
 
     var materials = alloc[Material_C](1)
-    materials[0] = Material_C(
+    materials[unsafe_offset=0] = Material_C(
         MatKind.diffuse, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.8)),           # albedo
         RGB(Float32(0.0)),           # emission

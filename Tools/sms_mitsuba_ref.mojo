@@ -90,8 +90,8 @@ def cstr(s: String) -> UnsafePointer[UInt8, MutExternalOrigin]:
     var n = len(b)
     var p = alloc[UInt8](n + 1)
     for i in range(n):
-        p[i] = b[i]
-    p[n] = UInt8(0)
+        p[unsafe_offset=i] = b[i]
+    p[unsafe_offset=n] = UInt8(0)
     return p.unsafe_origin_cast[MutExternalOrigin]()
 
 @always_inline
@@ -253,7 +253,7 @@ struct Normalmap(Movable):
         var pixels_ptr = alloc[UnsafePointer[Float32, MutExternalOrigin]](1)
         var w_out = alloc[Int32](1)
         var h_out = alloc[Int32](1)
-        w_out[0] = Int32(0); h_out[0] = Int32(0)
+        w_out[unsafe_offset=0] = Int32(0); h_out[unsafe_offset=0] = Int32(0)
         var fname = cstr(filename)
         var ok = external_call["load_texture_rgb", Int32,
             UnsafePointer[UInt8, MutExternalOrigin],
@@ -262,21 +262,21 @@ struct Normalmap(Movable):
             Int32](
             fname, pixels_ptr, w_out, h_out, Int32(1))
         fname.unsafe_free()
-        var w = Int(w_out[0]); var h = Int(h_out[0])
+        var w = Int(w_out[unsafe_offset=0]); var h = Int(h_out[unsafe_offset=0])
         w_out.unsafe_free(); h_out.unsafe_free()
         if ok == Int32(0) or w <= 0 or w != h:
             raise Error("Normalmap: failed to load or non-square: " + filename)
-        var src = pixels_ptr[0]
+        var src = pixels_ptr[unsafe_offset=0]
         self.res = w
         self.slopes = alloc[Float32](2 * w * w)
         for i in range(w * w):
-            var nx = Float32(2.0) * src[i*3 + 0] - Float32(1.0)
-            var ny = Float32(2.0) * src[i*3 + 1] - Float32(1.0)
-            var nz = Float32(2.0) * src[i*3 + 2] - Float32(1.0)
+            var nx = Float32(2.0) * src[unsafe_offset=i*3 + 0] - Float32(1.0)
+            var ny = Float32(2.0) * src[unsafe_offset=i*3 + 1] - Float32(1.0)
+            var nz = Float32(2.0) * src[unsafe_offset=i*3 + 2] - Float32(1.0)
             var inv = Float32(1.0) / sqrt(nx*nx + ny*ny + nz*nz)
             nx *= inv; ny *= inv; nz *= inv
-            self.slopes[i*2 + 0] = -nx / nz
-            self.slopes[i*2 + 1] = -ny / nz
+            self.slopes[unsafe_offset=i*2 + 0] = -nx / nz
+            self.slopes[unsafe_offset=i*2 + 1] = -ny / nz
         pixels_ptr.unsafe_free()
 
     def __deinit__(deinit self):
@@ -304,7 +304,7 @@ struct Normalmap(Movable):
     @always_inline
     def _slope(self, x: Int, y: Int) -> SIMD[DType.float32, 2]:
         var i = (y * self.res + x) * 2
-        return SIMD[DType.float32, 2](self.slopes[i], self.slopes[i + 1])
+        return SIMD[DType.float32, 2](self.slopes[unsafe_offset=i], self.slopes[unsafe_offset=i + 1])
 
     def eval_normal(self, u: Float32, v: Float32) -> Vec3f:
         var a = self._addr(u, v)
@@ -339,7 +339,7 @@ struct ColorTexture(Movable):
         var pixels_ptr = alloc[UnsafePointer[Float32, MutExternalOrigin]](1)
         var w_out = alloc[Int32](1)
         var h_out = alloc[Int32](1)
-        w_out[0] = Int32(0); h_out[0] = Int32(0)
+        w_out[unsafe_offset=0] = Int32(0); h_out[unsafe_offset=0] = Int32(0)
         var fname = cstr(filename)
         var ok = external_call["load_texture_rgb", Int32,
             UnsafePointer[UInt8, MutExternalOrigin],
@@ -348,14 +348,14 @@ struct ColorTexture(Movable):
             Int32](
             fname, pixels_ptr, w_out, h_out, Int32(0))   # raw=0 -> sRGB decoded to linear
         fname.unsafe_free()
-        self.w = Int(w_out[0]); self.h = Int(h_out[0])
+        self.w = Int(w_out[unsafe_offset=0]); self.h = Int(h_out[unsafe_offset=0])
         w_out.unsafe_free(); h_out.unsafe_free()
         if ok == Int32(0) or self.w <= 0:
             raise Error("ColorTexture: failed to load " + filename)
-        var src = pixels_ptr[0]
+        var src = pixels_ptr[unsafe_offset=0]
         self.data = alloc[Float32](3 * self.w * self.h)
         for i in range(3 * self.w * self.h):
-            self.data[i] = src[i]
+            self.data[unsafe_offset=i] = src[unsafe_offset=i]
         pixels_ptr.unsafe_free()
 
     def __deinit__(deinit self):
@@ -371,7 +371,7 @@ struct ColorTexture(Movable):
         if x >= self.w: x = self.w - 1
         if y >= self.h: y = self.h - 1
         var i = (y * self.w + x) * 3
-        return v3(self.data[i], self.data[i+1], self.data[i+2])
+        return v3(self.data[unsafe_offset=i], self.data[unsafe_offset=i+1], self.data[unsafe_offset=i+2])
 
 # ── Scene ───────────────────────────────────────────────────────────────────
 # Three primitives, all analytic: sphere (caustic caster), floor rectangle
@@ -1253,8 +1253,8 @@ def main() raises:
 
     var pixels = alloc[Float32](3 * width * height)
     var n_pixels = width * height
-    var solved_total = alloc[Int](1); solved_total[0] = 0
-    var trials_total = alloc[Int](1); trials_total[0] = 0
+    var solved_total = alloc[Int](1); solved_total[unsafe_offset=0] = 0
+    var trials_total = alloc[Int](1); trials_total[unsafe_offset=0] = 0
 
     @parameter
     def render_row(row: Int):
@@ -1330,17 +1330,17 @@ def main() raises:
                     prev_specular = True
             var o = (row * width + col) * 3
             var inv = Float32(1.0) / Float32(spp)
-            pixels[o + 0] = acc.x * inv
-            pixels[o + 1] = acc.y * inv
-            pixels[o + 2] = acc.z * inv
-        solved_total[0] += solved
-        trials_total[0] += trials
+            pixels[unsafe_offset=o + 0] = acc.x * inv
+            pixels[unsafe_offset=o + 1] = acc.y * inv
+            pixels[unsafe_offset=o + 2] = acc.z * inv
+        solved_total[unsafe_offset=0] += solved
+        trials_total[unsafe_offset=0] += trials
 
     parallelize[render_row](height)
 
-    print("solved paths:", solved_total[0], " bernoulli iterations:", trials_total[0])
-    if solved_total[0] > 0:
-        print("mean T:", Float64(trials_total[0]) / Float64(solved_total[0]))
+    print("solved paths:", solved_total[unsafe_offset=0], " bernoulli iterations:", trials_total[unsafe_offset=0])
+    if solved_total[unsafe_offset=0] > 0:
+        print("mean T:", Float64(trials_total[unsafe_offset=0]) / Float64(solved_total[unsafe_offset=0]))
 
     var name = cstr(out_path)
     var rc = external_call["write_image_rgb", Int32,

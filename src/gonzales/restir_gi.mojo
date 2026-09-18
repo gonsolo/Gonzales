@@ -215,7 +215,7 @@ def gi_temporal_spatial_combine(
     var nb_seen = 0
     var m_same_domain = Float32(0.0)
     if has_temporal:
-        var prev = gi_io.read[pixel_idx]
+        var prev = gi_io.read[unsafe_offset=pixel_idx]
         if prev.valid != Int8(0) and prev.recon_is_delta == Int8(0):
             var p_hat_prev_here = gi_target_pdf(hit_point, normal, alb, prev.recon_point, prev.recon_normal, prev.lo)
             var accept = reservoir_combine(res.state, prev.state, p_hat_prev_here, pcg.next_float())
@@ -231,8 +231,8 @@ def gi_temporal_spatial_combine(
         if _is_real_ptr(gi_io.gbuf_normal) and gi_io.frame_w > Int32(0) and gi_io.frame_h > Int32(0):
             var self_px = Int32(pixel_idx) % gi_io.frame_w
             var self_py = Int32(pixel_idx) // gi_io.frame_w
-            var self_depth = gi_io.gbuf_depth[pixel_idx]
-            var self_mat = gi_io.gbuf_material_id[pixel_idx]
+            var self_depth = gi_io.gbuf_depth[unsafe_offset=pixel_idx]
+            var self_mat = gi_io.gbuf_material_id[unsafe_offset=pixel_idx]
             for _ in range(GI_SPATIAL_NEIGHBORS):
                 var ang = pcg.next_float() * Float32(6.283185307)
                 var rad = sqrt(pcg.next_float()) * GI_SPATIAL_RADIUS_PX
@@ -245,15 +245,15 @@ def gi_temporal_spatial_combine(
                     continue
                 var n_off = n_idx * 3
                 var n_normal = Vec3f(
-                    gi_io.gbuf_normal[n_off], gi_io.gbuf_normal[n_off + 1], gi_io.gbuf_normal[n_off + 2])
+                    gi_io.gbuf_normal[unsafe_offset=n_off], gi_io.gbuf_normal[unsafe_offset=n_off + 1], gi_io.gbuf_normal[unsafe_offset=n_off + 2])
                 if dot(n_normal, normal) < GI_SPATIAL_NORMAL_DOT_MIN:
                     continue
-                var n_depth = gi_io.gbuf_depth[n_idx]
+                var n_depth = gi_io.gbuf_depth[unsafe_offset=n_idx]
                 if self_depth <= Float32(0.0) or abs(n_depth - self_depth) > GI_SPATIAL_DEPTH_REL_MAX * self_depth:
                     continue
-                if gi_io.gbuf_material_id[n_idx] != self_mat:
+                if gi_io.gbuf_material_id[unsafe_offset=n_idx] != self_mat:
                     continue
-                var nb = gi_io.read[n_idx]
+                var nb = gi_io.read[unsafe_offset=n_idx]
                 if nb.valid == Int8(0) or nb.recon_is_delta != Int8(0):
                     continue
                 var p_hat_nb_here = gi_target_pdf(hit_point, normal, alb, nb.recon_point, nb.recon_normal, nb.lo)
@@ -280,9 +280,9 @@ def gi_temporal_spatial_combine(
         for i in range(nb_seen):
             var np_off = Int(nb_px_seen[i]) * 3
             var n_hit = Vec3f(
-                gi_io.gbuf_world_pos[np_off], gi_io.gbuf_world_pos[np_off + 1], gi_io.gbuf_world_pos[np_off + 2])
+                gi_io.gbuf_world_pos[unsafe_offset=np_off], gi_io.gbuf_world_pos[unsafe_offset=np_off + 1], gi_io.gbuf_world_pos[unsafe_offset=np_off + 2])
             var n_nrm = Vec3f(
-                gi_io.gbuf_normal[np_off], gi_io.gbuf_normal[np_off + 1], gi_io.gbuf_normal[np_off + 2])
+                gi_io.gbuf_normal[unsafe_offset=np_off], gi_io.gbuf_normal[unsafe_offset=np_off + 1], gi_io.gbuf_normal[unsafe_offset=np_off + 2])
             if gi_target_pdf(n_hit, n_nrm, alb, res.recon_point, res.recon_normal, res.lo) > Float32(0.0):
                 z += nb_m_seen[i]
         z_norm = z
@@ -312,4 +312,4 @@ def gi_temporal_spatial_combine(
         # di_temporal_step uses and for the same reason (capping first would
         # shrink this frame's own W incorrectly).
         reservoir_cap_confidence(res.state, GI_TEMPORAL_M_CAP)
-        gi_io.write[pixel_idx] = res
+        gi_io.write[unsafe_offset=pixel_idx] = res

@@ -104,9 +104,9 @@ def guide_create(bounds: Bounds3f) -> GuideGrid:
     Zero energy/sample_count everywhere -- ready to record into directly."""
     var snodes = alloc[SNode](1)
     var dnodes = alloc[DNode](1)
-    snodes[0] = SNode(split_axis=Int32(-1), split_pos=Float32(0), depth=Int32(0),
+    snodes[unsafe_offset=0] = SNode(split_axis=Int32(-1), split_pos=Float32(0), depth=Int32(0),
                        child0=Int32(-1), child1=Int32(-1), dtree_root=Int32(0), sample_count=Int32(0))
-    dnodes[0] = DNode(energy=Float32(0), depth=Int32(0),
+    dnodes[unsafe_offset=0] = DNode(energy=Float32(0), depth=Int32(0),
                        child0=Int32(-1), child1=Int32(-1), child2=Int32(-1), child3=Int32(-1))
     return GuideGrid(snodes=snodes, n_snodes=Int32(1), dnodes=dnodes, n_dnodes=Int32(1), bounds=bounds)
 
@@ -127,12 +127,12 @@ def guide_clone_empty(g: GuideGrid) -> GuideGrid:
     var snodes = alloc[SNode](Int(g.n_snodes))
     var dnodes = alloc[DNode](Int(g.n_dnodes))
     for i in range(Int(g.n_snodes)):
-        var n = g.snodes[i]
-        snodes[i] = SNode(split_axis=n.split_axis, split_pos=n.split_pos, depth=n.depth,
+        var n = g.snodes[unsafe_offset=i]
+        snodes[unsafe_offset=i] = SNode(split_axis=n.split_axis, split_pos=n.split_pos, depth=n.depth,
                            child0=n.child0, child1=n.child1, dtree_root=n.dtree_root, sample_count=Int32(0))
     for i in range(Int(g.n_dnodes)):
-        var n = g.dnodes[i]
-        dnodes[i] = DNode(energy=Float32(0), depth=n.depth,
+        var n = g.dnodes[unsafe_offset=i]
+        dnodes[unsafe_offset=i] = DNode(energy=Float32(0), depth=n.depth,
                            child0=n.child0, child1=n.child1, child2=n.child2, child3=n.child3)
     return GuideGrid(snodes=snodes, n_snodes=g.n_snodes, dnodes=dnodes, n_dnodes=g.n_dnodes, bounds=g.bounds)
 
@@ -142,10 +142,10 @@ def guide_merge(dst: GuideGrid, src: GuideGrid):
     guide_clone_empty of the same tree, or dst is that tree itself
     absorbing an already-merged shard of matching shape)."""
     for i in range(Int(dst.n_dnodes)):
-        dst.dnodes[i].energy += src.dnodes[i].energy
+        dst.dnodes[unsafe_offset=i].energy += src.dnodes[unsafe_offset=i].energy
     for i in range(Int(dst.n_snodes)):
-        if dst.snodes[i].child0 < Int32(0):
-            dst.snodes[i].sample_count += src.snodes[i].sample_count
+        if dst.snodes[unsafe_offset=i].child0 < Int32(0):
+            dst.snodes[unsafe_offset=i].sample_count += src.snodes[unsafe_offset=i].sample_count
 
 # ── Spatial leaf lookup ─────────────────────────────────────────────────────
 
@@ -164,8 +164,8 @@ def guide_pos_to_cell(g: GuideGrid, p: Point3f) -> Int:
     if p.z < g.bounds.min.z or p.z >= g.bounds.max.z:
         return -1
     var idx = 0
-    while g.snodes[idx].child0 >= Int32(0):
-        var n = g.snodes[idx]
+    while g.snodes[unsafe_offset=idx].child0 >= Int32(0):
+        var n = g.snodes[unsafe_offset=idx]
         var coord: Float32
         if n.split_axis == Int32(0):
             coord = p.x
@@ -189,8 +189,8 @@ def _dtree_leaf_for_uv(g: GuideGrid, droot: Int32, u_in: Float32, v_in: Float32)
     var u = u_in
     var v = v_in
     var idx = droot
-    while g.dnodes[Int(idx)].child0 >= Int32(0):
-        var n = g.dnodes[Int(idx)]
+    while g.dnodes[unsafe_offset=Int(idx)].child0 >= Int32(0):
+        var n = g.dnodes[unsafe_offset=Int(idx)]
         if u < Float32(0.5):
             if v < Float32(0.5):
                 idx = n.child0; u = u * Float32(2); v = v * Float32(2)
@@ -224,15 +224,15 @@ def guide_record(
     Also bumps the spatial leaf's per-iteration sample_count."""
     if cell_idx < 0:
         return
-    g.snodes[cell_idx].sample_count += Int32(1)
-    var droot = g.snodes[cell_idx].dtree_root
+    g.snodes[unsafe_offset=cell_idx].sample_count += Int32(1)
+    var droot = g.snodes[unsafe_offset=cell_idx].dtree_root
     var uv = _equal_area_sphere_to_square(dx, dy, dz)
     var u = uv[0]
     var v = uv[1]
     var idx = droot
-    g.dnodes[Int(idx)].energy += weight
-    while g.dnodes[Int(idx)].child0 >= Int32(0):
-        var n = g.dnodes[Int(idx)]
+    g.dnodes[unsafe_offset=Int(idx)].energy += weight
+    while g.dnodes[unsafe_offset=Int(idx)].child0 >= Int32(0):
+        var n = g.dnodes[unsafe_offset=Int(idx)]
         if u < Float32(0.5):
             if v < Float32(0.5):
                 idx = n.child0; u = u * Float32(2); v = v * Float32(2)
@@ -243,7 +243,7 @@ def guide_record(
                 idx = n.child1; u = (u - Float32(0.5)) * Float32(2); v = v * Float32(2)
             else:
                 idx = n.child3; u = (u - Float32(0.5)) * Float32(2); v = (v - Float32(0.5)) * Float32(2)
-        g.dnodes[Int(idx)].energy += weight
+        g.dnodes[unsafe_offset=Int(idx)].energy += weight
 
 @always_inline
 def guide_cell_has_data(g: GuideGrid, cell_idx: Int) -> Bool:
@@ -255,24 +255,24 @@ def guide_cell_has_data(g: GuideGrid, cell_idx: Int) -> Bool:
     fixed-bin grid's max-bin-fraction check."""
     if cell_idx < 0:
         return False
-    var droot = g.snodes[cell_idx].dtree_root
-    var total = g.dnodes[Int(droot)].energy
+    var droot = g.snodes[unsafe_offset=cell_idx].dtree_root
+    var total = g.dnodes[unsafe_offset=Int(droot)].energy
     if total < Float32(1e-4):
         return False
-    return g.dnodes[Int(droot)].child0 >= Int32(0)
+    return g.dnodes[unsafe_offset=Int(droot)].child0 >= Int32(0)
 
 def guide_pdf(g: GuideGrid, cell_idx: Int, dx: Float32, dy: Float32, dz: Float32) -> Float32:
     """PDF (per steradian) for direction (dx,dy,dz) at cell_idx.
     Falls back to uniform (1/4π) when the leaf has no recorded energy."""
     if cell_idx < 0:
         return Float32(1.0) / FOUR_PI_F
-    var droot = g.snodes[cell_idx].dtree_root
-    var total = g.dnodes[Int(droot)].energy
+    var droot = g.snodes[unsafe_offset=cell_idx].dtree_root
+    var total = g.dnodes[unsafe_offset=Int(droot)].energy
     if total < Float32(1e-6):
         return Float32(1.0) / FOUR_PI_F
     var uv = _equal_area_sphere_to_square(dx, dy, dz)
     var leaf_idx = _dtree_leaf_for_uv(g, droot, uv[0], uv[1])
-    var leaf = g.dnodes[Int(leaf_idx)]
+    var leaf = g.dnodes[unsafe_offset=Int(leaf_idx)]
     var p_bin = leaf.energy / total
     var solid_angle = FOUR_PI_F / _four_pow(leaf.depth)
     return max(p_bin / solid_angle, Float32(1e-7))
@@ -288,8 +288,8 @@ def guide_sample(
     (fall back to BSDF)."""
     if cell_idx < 0:
         return (Float32(0), Float32(0), Float32(1), Float32(1.0) / FOUR_PI_F, False)
-    var droot = g.snodes[cell_idx].dtree_root
-    var total = g.dnodes[Int(droot)].energy
+    var droot = g.snodes[unsafe_offset=cell_idx].dtree_root
+    var total = g.dnodes[unsafe_offset=Int(droot)].energy
     if total < Float32(1e-6):
         return (Float32(0), Float32(0), Float32(1), Float32(1.0) / FOUR_PI_F, False)
     var target = u * total
@@ -297,11 +297,11 @@ def guide_sample(
     var u0 = Float32(0.0)
     var v0 = Float32(0.0)
     var size = Float32(1.0)
-    while g.dnodes[Int(idx)].child0 >= Int32(0):
-        var n = g.dnodes[Int(idx)]
-        var e0 = g.dnodes[Int(n.child0)].energy
-        var e1 = g.dnodes[Int(n.child1)].energy
-        var e2 = g.dnodes[Int(n.child2)].energy
+    while g.dnodes[unsafe_offset=Int(idx)].child0 >= Int32(0):
+        var n = g.dnodes[unsafe_offset=Int(idx)]
+        var e0 = g.dnodes[unsafe_offset=Int(n.child0)].energy
+        var e1 = g.dnodes[unsafe_offset=Int(n.child1)].energy
+        var e2 = g.dnodes[unsafe_offset=Int(n.child2)].energy
         var half = size * Float32(0.5)
         if target < e0:
             idx = n.child0
@@ -318,7 +318,7 @@ def guide_sample(
             target -= (e0 + e1 + e2)
             idx = n.child3; u0 += half; v0 += half
         size = half
-    var leaf = g.dnodes[Int(idx)]
+    var leaf = g.dnodes[unsafe_offset=Int(idx)]
     var p_bin = leaf.energy / total
     var solid_angle = FOUR_PI_F / _four_pow(leaf.depth)
     var pdf = max(p_bin / solid_angle, Float32(1e-7))
@@ -332,7 +332,7 @@ def guide_sample(
 # ── Refinement (between training iterations, single-threaded) ──────────────
 
 def _count_dtree_growth(dnodes: UnsafePointer[DNode, MutExternalOrigin], node_idx: Int32, root_total: Float32, depth: Int32) -> Int:
-    var n = dnodes[Int(node_idx)]
+    var n = dnodes[unsafe_offset=Int(node_idx)]
     if n.child0 >= Int32(0):
         return (_count_dtree_growth(dnodes, n.child0, root_total, depth + Int32(1))
               + _count_dtree_growth(dnodes, n.child1, root_total, depth + Int32(1))
@@ -352,7 +352,7 @@ def _grow_dtree(dnodes: UnsafePointer[DNode, MutExternalOrigin], node_idx: Int32
     still too concentrated after that will qualify again on the NEXT
     refine, once it has re-accumulated enough energy at the new depth --
     deliberately simpler than growing multiple levels in a single pass."""
-    var n = dnodes[Int(node_idx)]
+    var n = dnodes[unsafe_offset=Int(node_idx)]
     if n.child0 >= Int32(0):
         _grow_dtree(dnodes, n.child0, root_total, depth + Int32(1), next_free)
         _grow_dtree(dnodes, n.child1, root_total, depth + Int32(1), next_free)
@@ -369,14 +369,14 @@ def _grow_dtree(dnodes: UnsafePointer[DNode, MutExternalOrigin], node_idx: Int32
     var c2 = next_free + Int32(2)
     var c3 = next_free + Int32(3)
     var cd = depth + Int32(1)
-    dnodes[Int(c0)] = DNode(energy=child_e, depth=cd, child0=Int32(-1), child1=Int32(-1), child2=Int32(-1), child3=Int32(-1))
-    dnodes[Int(c1)] = DNode(energy=child_e, depth=cd, child0=Int32(-1), child1=Int32(-1), child2=Int32(-1), child3=Int32(-1))
-    dnodes[Int(c2)] = DNode(energy=child_e, depth=cd, child0=Int32(-1), child1=Int32(-1), child2=Int32(-1), child3=Int32(-1))
-    dnodes[Int(c3)] = DNode(energy=child_e, depth=cd, child0=Int32(-1), child1=Int32(-1), child2=Int32(-1), child3=Int32(-1))
-    dnodes[Int(node_idx)].child0 = c0
-    dnodes[Int(node_idx)].child1 = c1
-    dnodes[Int(node_idx)].child2 = c2
-    dnodes[Int(node_idx)].child3 = c3
+    dnodes[unsafe_offset=Int(c0)] = DNode(energy=child_e, depth=cd, child0=Int32(-1), child1=Int32(-1), child2=Int32(-1), child3=Int32(-1))
+    dnodes[unsafe_offset=Int(c1)] = DNode(energy=child_e, depth=cd, child0=Int32(-1), child1=Int32(-1), child2=Int32(-1), child3=Int32(-1))
+    dnodes[unsafe_offset=Int(c2)] = DNode(energy=child_e, depth=cd, child0=Int32(-1), child1=Int32(-1), child2=Int32(-1), child3=Int32(-1))
+    dnodes[unsafe_offset=Int(c3)] = DNode(energy=child_e, depth=cd, child0=Int32(-1), child1=Int32(-1), child2=Int32(-1), child3=Int32(-1))
+    dnodes[unsafe_offset=Int(node_idx)].child0 = c0
+    dnodes[unsafe_offset=Int(node_idx)].child1 = c1
+    dnodes[unsafe_offset=Int(node_idx)].child2 = c2
+    dnodes[unsafe_offset=Int(node_idx)].child3 = c3
     next_free += Int32(4)
 
 @fieldwise_init
@@ -403,7 +403,7 @@ def _axis_mid(lo: Point3f, hi: Point3f, axis: Int32) -> Float32:
     return (lo.z + hi.z) * Float32(0.5)
 
 def _collect_spatial_splits(snodes: UnsafePointer[SNode, MutExternalOrigin], idx: Int32, lo: Point3f, hi: Point3f, mut out: List[_SplitCandidate]):
-    var n = snodes[Int(idx)]
+    var n = snodes[unsafe_offset=Int(idx)]
     if n.child0 >= Int32(0):
         if n.split_axis == Int32(0):
             _collect_spatial_splits(snodes, n.child0, lo, Point3f(n.split_pos, hi.y, hi.z), out)
@@ -434,18 +434,18 @@ def guide_refine(g: GuideGrid) -> GuideGrid:
     # ── Phase 1: grow directional quadtrees for existing spatial leaves ──
     var extra_d = 0
     for i in range(Int(g.n_snodes)):
-        if g.snodes[i].child0 < Int32(0):
-            var droot = g.snodes[i].dtree_root
-            extra_d += _count_dtree_growth(g.dnodes, droot, g.dnodes[Int(droot)].energy, Int32(0))
+        if g.snodes[unsafe_offset=i].child0 < Int32(0):
+            var droot = g.snodes[unsafe_offset=i].dtree_root
+            extra_d += _count_dtree_growth(g.dnodes, droot, g.dnodes[unsafe_offset=Int(droot)].energy, Int32(0))
     var n_dnodes1 = Int(g.n_dnodes) + extra_d
     var dnodes1 = alloc[DNode](n_dnodes1)
     for i in range(Int(g.n_dnodes)):
-        dnodes1[i] = g.dnodes[i]
+        dnodes1[unsafe_offset=i] = g.dnodes[unsafe_offset=i]
     var next_free_d = g.n_dnodes
     for i in range(Int(g.n_snodes)):
-        if g.snodes[i].child0 < Int32(0):
-            var droot = g.snodes[i].dtree_root
-            _grow_dtree(dnodes1, droot, dnodes1[Int(droot)].energy, Int32(0), next_free_d)
+        if g.snodes[unsafe_offset=i].child0 < Int32(0):
+            var droot = g.snodes[unsafe_offset=i].dtree_root
+            _grow_dtree(dnodes1, droot, dnodes1[unsafe_offset=Int(droot)].energy, Int32(0), next_free_d)
     g.dnodes.unsafe_free()
 
     # ── Phase 2: split spatial leaves with enough samples this iteration ──
@@ -457,9 +457,9 @@ def guide_refine(g: GuideGrid) -> GuideGrid:
     var snodes2 = alloc[SNode](n_snodes2)
     var dnodes2 = alloc[DNode](n_dnodes2)
     for i in range(Int(g.n_snodes)):
-        snodes2[i] = g.snodes[i]
+        snodes2[unsafe_offset=i] = g.snodes[unsafe_offset=i]
     for i in range(Int(next_free_d)):
-        dnodes2[i] = dnodes1[i]
+        dnodes2[unsafe_offset=i] = dnodes1[unsafe_offset=i]
     dnodes1.unsafe_free()
     g.snodes.unsafe_free()
 
@@ -469,27 +469,27 @@ def guide_refine(g: GuideGrid) -> GuideGrid:
         var cand = to_split[k]
         var axis = _longest_axis(cand.lo, cand.hi)
         var pos = _axis_mid(cand.lo, cand.hi, axis)
-        var leaf = snodes2[Int(cand.leaf_idx)]
+        var leaf = snodes2[unsafe_offset=Int(cand.leaf_idx)]
         var c0 = next_s
         var c1 = next_s + Int32(1)
         var d0 = next_d
         var d1 = next_d + Int32(1)
-        dnodes2[Int(d0)] = DNode(energy=Float32(0), depth=Int32(0), child0=Int32(-1), child1=Int32(-1), child2=Int32(-1), child3=Int32(-1))
-        dnodes2[Int(d1)] = DNode(energy=Float32(0), depth=Int32(0), child0=Int32(-1), child1=Int32(-1), child2=Int32(-1), child3=Int32(-1))
-        snodes2[Int(c0)] = SNode(split_axis=Int32(-1), split_pos=Float32(0), depth=leaf.depth + Int32(1),
+        dnodes2[unsafe_offset=Int(d0)] = DNode(energy=Float32(0), depth=Int32(0), child0=Int32(-1), child1=Int32(-1), child2=Int32(-1), child3=Int32(-1))
+        dnodes2[unsafe_offset=Int(d1)] = DNode(energy=Float32(0), depth=Int32(0), child0=Int32(-1), child1=Int32(-1), child2=Int32(-1), child3=Int32(-1))
+        snodes2[unsafe_offset=Int(c0)] = SNode(split_axis=Int32(-1), split_pos=Float32(0), depth=leaf.depth + Int32(1),
                                   child0=Int32(-1), child1=Int32(-1), dtree_root=d0, sample_count=Int32(0))
-        snodes2[Int(c1)] = SNode(split_axis=Int32(-1), split_pos=Float32(0), depth=leaf.depth + Int32(1),
+        snodes2[unsafe_offset=Int(c1)] = SNode(split_axis=Int32(-1), split_pos=Float32(0), depth=leaf.depth + Int32(1),
                                   child0=Int32(-1), child1=Int32(-1), dtree_root=d1, sample_count=Int32(0))
-        snodes2[Int(cand.leaf_idx)].split_axis = axis
-        snodes2[Int(cand.leaf_idx)].split_pos = pos
-        snodes2[Int(cand.leaf_idx)].child0 = c0
-        snodes2[Int(cand.leaf_idx)].child1 = c1
+        snodes2[unsafe_offset=Int(cand.leaf_idx)].split_axis = axis
+        snodes2[unsafe_offset=Int(cand.leaf_idx)].split_pos = pos
+        snodes2[unsafe_offset=Int(cand.leaf_idx)].child0 = c0
+        snodes2[unsafe_offset=Int(cand.leaf_idx)].child1 = c1
         next_s += Int32(2)
         next_d += Int32(2)
 
     # ── Phase 3: reset the per-iteration spatial statistic only ──────────
     for i in range(Int(next_s)):
-        if snodes2[i].child0 < Int32(0):
-            snodes2[i].sample_count = Int32(0)
+        if snodes2[unsafe_offset=i].child0 < Int32(0):
+            snodes2[unsafe_offset=i].sample_count = Int32(0)
 
     return GuideGrid(snodes=snodes2, n_snodes=next_s, dnodes=dnodes2, n_dnodes=next_d, bounds=g.bounds)

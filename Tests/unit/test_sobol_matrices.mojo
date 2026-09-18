@@ -33,7 +33,7 @@ def test_dimension_1_matrix_is_not_all_zero() raises:
     var m = opt.value()
     var nonzero = 0
     for i in range(N_BITS):
-        if m[N_BITS + i] != UInt32(0):
+        if m[unsafe_offset=N_BITS + i] != UInt32(0):
             nonzero += 1
     assert_true(nonzero > 0, "dimension 1 matrix is entirely zero")
     m.unsafe_free()
@@ -48,10 +48,10 @@ def test_dimension_1_columns_match_joe_kuo_first_row() raises:
     var opt = _generate_sobol_matrices(DATA)
     assert_true(Bool(opt), "Sobol data file failed to load")
     var m = opt.value()
-    assert_equal(m[N_BITS + 0], UInt32(1) << UInt32(31))
+    assert_equal(m[unsafe_offset=N_BITS + 0], UInt32(1) << UInt32(31))
     for i in range(1, N_BITS):
-        var prev = m[N_BITS + i - 1]
-        assert_equal(m[N_BITS + i], prev ^ (prev >> UInt32(1)))
+        var prev = m[unsafe_offset=N_BITS + i - 1]
+        assert_equal(m[unsafe_offset=N_BITS + i], prev ^ (prev >> UInt32(1)))
     m.unsafe_free()
 
 def test_sobol_sample_dimension_1_varies_and_is_uniform() raises:
@@ -90,7 +90,7 @@ def test_dimension_0_is_identity_and_differs_from_1() raises:
     assert_true(Bool(opt), "Sobol data file failed to load")
     var m = opt.value()
     for j in range(N_BITS):
-        assert_equal(m[j], UInt32(1) << UInt32(31 - j))
+        assert_equal(m[unsafe_offset=j], UInt32(1) << UInt32(31 - j))
     var differing = 0
     for i in range(64):
         var u0 = sobol_sample(i, 0, UInt32(0x12345678), m)

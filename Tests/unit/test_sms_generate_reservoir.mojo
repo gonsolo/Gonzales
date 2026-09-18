@@ -30,11 +30,11 @@ def _close(a: Float32, b: Float32) -> Bool:
 
 def _make_triangle_mesh(p0: Vec3f, p1: Vec3f, p2: Vec3f) -> TriangleMesh_C:
     var points = alloc[Float32](4 * 3)
-    points[0*4+0] = p0[0]; points[0*4+1] = p0[1]; points[0*4+2] = p0[2]; points[0*4+3] = Float32(0.0)
-    points[1*4+0] = p1[0]; points[1*4+1] = p1[1]; points[1*4+2] = p1[2]; points[1*4+3] = Float32(0.0)
-    points[2*4+0] = p2[0]; points[2*4+1] = p2[1]; points[2*4+2] = p2[2]; points[2*4+3] = Float32(0.0)
+    points[unsafe_offset=0*4+0] = p0[0]; points[unsafe_offset=0*4+1] = p0[1]; points[unsafe_offset=0*4+2] = p0[2]; points[unsafe_offset=0*4+3] = Float32(0.0)
+    points[unsafe_offset=1*4+0] = p1[0]; points[unsafe_offset=1*4+1] = p1[1]; points[unsafe_offset=1*4+2] = p1[2]; points[unsafe_offset=1*4+3] = Float32(0.0)
+    points[unsafe_offset=2*4+0] = p2[0]; points[unsafe_offset=2*4+1] = p2[1]; points[unsafe_offset=2*4+2] = p2[2]; points[unsafe_offset=2*4+3] = Float32(0.0)
     var vidx = alloc[Int64](3)
-    vidx[0] = 0; vidx[1] = 1; vidx[2] = 2
+    vidx[unsafe_offset=0] = 0; vidx[unsafe_offset=1] = 1; vidx[unsafe_offset=2] = 2
     return TriangleMesh_C(
         points, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), vidx,
         UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
@@ -127,9 +127,9 @@ def test_sms_generate_curve_light_returns_empty() raises:
     _mnee_area_light_contribute's own scope restriction -- no BVH probing
     even attempted."""
     var cdf = alloc[Float32](2)
-    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var area_lights = alloc[AreaLight_C](1)
-    area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0)), Float32(0.000002), Int8(1), Int8(0), Int8(0), Int8(0))
+    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0)), Float32(0.000002), Int8(1), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx(
         UnsafePointer[BVH2Node, MutExternalOrigin].unsafe_dangling(),
         UnsafePointer[PrimId_C, MutExternalOrigin].unsafe_dangling(),
@@ -142,7 +142,7 @@ def test_sms_generate_curve_light_returns_empty() raises:
         ctx, Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0), RGB(Float32(0.8)),
         Vec3f(0.0, 0.0, 1.0), Float32(4.0), Vec3f(0.3, -0.2, 4.0),
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
-        area_lights[0], Float32(1.0), pcg)
+        area_lights[unsafe_offset=0], Float32(1.0), pcg)
     assert_true(gen_result[0] == False)
     assert_true(gen_result[1].n_vertices == Int32(0))
     area_lights.unsafe_free(); cdf.unsafe_free()
@@ -152,15 +152,15 @@ def test_sms_generate_no_glass_in_the_way_returns_empty() raises:
     return an empty reservoir, matching _mnee_area_light_contribute's own
     `dielectric_found=False` early return."""
     var cdf = alloc[Float32](2)
-    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var bvh = alloc[BVH2Node](1)
-    bvh[0] = _make_one_leaf_bvh(Vec3f(1000.0, 1000.0, 1000.0), Vec3f(1001.0, 1001.0, 1001.0))
+    bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(1000.0, 1000.0, 1000.0), Vec3f(1001.0, 1001.0, 1001.0))
     var primIds = alloc[PrimId_C](1)
-    primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    primIds[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = alloc[TriangleMesh_C](1)
-    meshes[0] = _make_light_mesh()
+    meshes[unsafe_offset=0] = _make_light_mesh()
     var area_lights = alloc[AreaLight_C](1)
-    area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx(bvh, primIds, meshes,
         UnsafePointer[Material_C, MutExternalOrigin].unsafe_dangling(),
         area_lights, 1, cdf)
@@ -170,11 +170,11 @@ def test_sms_generate_no_glass_in_the_way_returns_empty() raises:
         ctx, Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0), RGB(Float32(0.8)),
         Vec3f(0.0, 0.0, 1.0), Float32(4.0), Vec3f(0.3, -0.2, 4.0),
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
-        area_lights[0], Float32(1.0), pcg)
+        area_lights[unsafe_offset=0], Float32(1.0), pcg)
     assert_true(gen_result[0] == False)
     assert_true(gen_result[1].n_vertices == Int32(0))
 
-    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free(); meshes.unsafe_free()
+    meshes[unsafe_offset=0].points.unsafe_free(); meshes[unsafe_offset=0].vertexIndices.unsafe_free(); meshes.unsafe_free()
     area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free()
 
 def test_sms_generate_real_glass_produces_a_streamed_candidate() raises:
@@ -184,17 +184,17 @@ def test_sms_generate_real_glass_produces_a_streamed_candidate() raises:
     be a real, streamed (m=1) candidate with n_vertices=1 and a populated
     chain/light payload."""
     var cdf = alloc[Float32](2)
-    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var bvh = alloc[BVH2Node](1)
-    bvh[0] = _make_one_leaf_bvh(Vec3f(-5.0, -5.0, Float32(0.9)), Vec3f(15.0, 15.0, Float32(1.1)))
+    bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(-5.0, -5.0, Float32(0.9)), Vec3f(15.0, 15.0, Float32(1.1)))
     var primIds = alloc[PrimId_C](1)
-    primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    primIds[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = alloc[TriangleMesh_C](1)
-    meshes[0] = _make_glass_mesh()
+    meshes[unsafe_offset=0] = _make_glass_mesh()
     var materials = alloc[Material_C](1)
-    materials[0] = _make_dielectric(Float32(1.5))
+    materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
     var area_lights = alloc[AreaLight_C](1)
-    area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx(bvh, primIds, meshes, materials, area_lights, 1, cdf)
 
     var hit_point = Vec3f(0.0, 0.0, 0.0)
@@ -209,7 +209,7 @@ def test_sms_generate_real_glass_produces_a_streamed_candidate() raises:
         ctx, hit_point, normal, RGB(Float32(0.8)),
         shadow_dir, shadow_dist, light_point,
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
-        area_lights[0], Float32(1.0), pcg)
+        area_lights[unsafe_offset=0], Float32(1.0), pcg)
     var res = gen_result[1].copy()
 
     assert_true(gen_result[0] == True)
@@ -219,7 +219,7 @@ def test_sms_generate_real_glass_produces_a_streamed_candidate() raises:
     assert_true(_close(res.le.r, Float32(200.0)))
     assert_true(_close(res.light_point[2], Float32(4.0)))
 
-    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free(); meshes.unsafe_free()
+    meshes[unsafe_offset=0].points.unsafe_free(); meshes[unsafe_offset=0].vertexIndices.unsafe_free(); meshes.unsafe_free()
     materials.unsafe_free(); area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free()
 
 # ── sms_resolve ──────────────────────────────────────────────────────────────
@@ -238,19 +238,19 @@ def test_sms_resolve_on_empty_reservoir_is_a_noop() raises:
     """N_vertices=0 must return immediately without touching estimate or
     crashing on the dangling glass-chain data."""
     var bvh = alloc[BVH2Node](1)
-    bvh[0] = _make_one_leaf_bvh(Vec3f(1000.0, 1000.0, 1000.0), Vec3f(1001.0, 1001.0, 1001.0))
+    bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(1000.0, 1000.0, 1000.0), Vec3f(1001.0, 1001.0, 1001.0))
     var primIds = alloc[PrimId_C](1)
-    primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    primIds[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = alloc[TriangleMesh_C](1)
-    meshes[0] = _make_light_mesh()
+    meshes[unsafe_offset=0] = _make_light_mesh()
     var cdf = alloc[Float32](1)
-    cdf[0] = Float32(0.0)
+    cdf[unsafe_offset=0] = Float32(0.0)
     var ctx = _make_ctx(bvh, primIds, meshes,
         UnsafePointer[Material_C, MutExternalOrigin].unsafe_dangling(),
         UnsafePointer[AreaLight_C, MutExternalOrigin].unsafe_dangling(), 0, cdf)
 
     var path_arr = alloc[PathState_C](1)
-    path_arr[0] = _make_path()
+    path_arr[unsafe_offset=0] = _make_path()
     var pcg_gen0 = PCG32(UInt64(1), UInt64(1))
     var gen_result0 = sms_generate_reservoir(
         ctx, Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0), RGB(Float32(0.8)),
@@ -262,26 +262,26 @@ def test_sms_resolve_on_empty_reservoir_is_a_noop() raises:
     assert_true(res.n_vertices == Int32(0))
 
     sms_resolve(path_arr, ctx, Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0), RGB(Float32(0.8)), res)
-    assert_true(_close(path_arr[0].estimate.v0, Float32(0.0)))
+    assert_true(_close(path_arr[unsafe_offset=0].estimate.v0, Float32(0.0)))
 
-    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free(); meshes.unsafe_free()
+    meshes[unsafe_offset=0].points.unsafe_free(); meshes[unsafe_offset=0].vertexIndices.unsafe_free(); meshes.unsafe_free()
     primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free(); path_arr.unsafe_free()
 
 def test_sms_resolve_on_real_glass_adds_positive_contribution() raises:
     """A real, unshadowed streamed candidate must finalize to state.w > 0
     and add a strictly positive contribution to path_ptr[].estimate."""
     var cdf = alloc[Float32](2)
-    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var bvh = alloc[BVH2Node](1)
-    bvh[0] = _make_one_leaf_bvh(Vec3f(-5.0, -5.0, Float32(0.9)), Vec3f(15.0, 15.0, Float32(1.1)))
+    bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(-5.0, -5.0, Float32(0.9)), Vec3f(15.0, 15.0, Float32(1.1)))
     var primIds = alloc[PrimId_C](1)
-    primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    primIds[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = alloc[TriangleMesh_C](1)
-    meshes[0] = _make_glass_mesh()
+    meshes[unsafe_offset=0] = _make_glass_mesh()
     var materials = alloc[Material_C](1)
-    materials[0] = _make_dielectric(Float32(1.5))
+    materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
     var area_lights = alloc[AreaLight_C](1)
-    area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx(bvh, primIds, meshes, materials, area_lights, 1, cdf)
 
     var hit_point = Vec3f(0.0, 0.0, 0.0)
@@ -296,19 +296,19 @@ def test_sms_resolve_on_real_glass_adds_positive_contribution() raises:
     var gen_result = sms_generate_reservoir(
         ctx, hit_point, normal, alb, shadow_dir, shadow_dist, light_point,
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
-        area_lights[0], Float32(1.0), pcg_gen)
+        area_lights[unsafe_offset=0], Float32(1.0), pcg_gen)
     var res = gen_result[1].copy()
     assert_true(res.n_vertices == Int32(1))
 
     var path_arr = alloc[PathState_C](1)
-    path_arr[0] = _make_path()
+    path_arr[unsafe_offset=0] = _make_path()
     sms_resolve(path_arr, ctx, hit_point, normal, alb, res)
     assert_true(res.state.w > Float32(0.0))
-    assert_true(path_arr[0].estimate.v0 > Float32(0.0))
-    assert_true(path_arr[0].estimate.v1 > Float32(0.0))
-    assert_true(path_arr[0].estimate.v2 > Float32(0.0))
+    assert_true(path_arr[unsafe_offset=0].estimate.v0 > Float32(0.0))
+    assert_true(path_arr[unsafe_offset=0].estimate.v1 > Float32(0.0))
+    assert_true(path_arr[unsafe_offset=0].estimate.v2 > Float32(0.0))
 
-    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free(); meshes.unsafe_free()
+    meshes[unsafe_offset=0].points.unsafe_free(); meshes[unsafe_offset=0].vertexIndices.unsafe_free(); meshes.unsafe_free()
     materials.unsafe_free(); area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free(); path_arr.unsafe_free()
 
 # ── sms_temporal_step ────────────────────────────────────────────────────────
@@ -318,17 +318,17 @@ def test_sms_temporal_step_without_io_still_resolves_like_batch_mode() raises:
     a single-frame candidate (the batch/non-interactive fallback), matching
     di_temporal_step's own documented fallback behavior."""
     var cdf = alloc[Float32](2)
-    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var bvh = alloc[BVH2Node](1)
-    bvh[0] = _make_one_leaf_bvh(Vec3f(-5.0, -5.0, Float32(0.9)), Vec3f(15.0, 15.0, Float32(1.1)))
+    bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(-5.0, -5.0, Float32(0.9)), Vec3f(15.0, 15.0, Float32(1.1)))
     var primIds = alloc[PrimId_C](1)
-    primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    primIds[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = alloc[TriangleMesh_C](1)
-    meshes[0] = _make_glass_mesh()
+    meshes[unsafe_offset=0] = _make_glass_mesh()
     var materials = alloc[Material_C](1)
-    materials[0] = _make_dielectric(Float32(1.5))
+    materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
     var area_lights = alloc[AreaLight_C](1)
-    area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx(bvh, primIds, meshes, materials, area_lights, 1, cdf)
 
     var hit_point = Vec3f(0.0, 0.0, 0.0)
@@ -341,15 +341,15 @@ def test_sms_temporal_step_without_io_still_resolves_like_batch_mode() raises:
     var pcg = PCG32(UInt64(1), UInt64(1))
 
     var path_arr = alloc[PathState_C](1)
-    path_arr[0] = _make_path()
+    path_arr[unsafe_offset=0] = _make_path()
     var found = sms_temporal_step(
         path_arr, ctx, hit_point, normal, alb, shadow_dir, shadow_dist, light_point,
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
-        area_lights[0], Float32(1.0), pcg)
+        area_lights[unsafe_offset=0], Float32(1.0), pcg)
     assert_true(found == True)
-    assert_true(path_arr[0].estimate.v0 > Float32(0.0))
+    assert_true(path_arr[unsafe_offset=0].estimate.v0 > Float32(0.0))
 
-    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free(); meshes.unsafe_free()
+    meshes[unsafe_offset=0].points.unsafe_free(); meshes[unsafe_offset=0].vertexIndices.unsafe_free(); meshes.unsafe_free()
     materials.unsafe_free(); area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free(); path_arr.unsafe_free()
 
 def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
@@ -358,17 +358,17 @@ def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
     confidence (state.m) than a single frame alone, confirming temporal
     reservoir_combine actually ran (not just independent per-frame solves)."""
     var cdf = alloc[Float32](2)
-    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var bvh = alloc[BVH2Node](1)
-    bvh[0] = _make_one_leaf_bvh(Vec3f(-5.0, -5.0, Float32(0.9)), Vec3f(15.0, 15.0, Float32(1.1)))
+    bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(-5.0, -5.0, Float32(0.9)), Vec3f(15.0, 15.0, Float32(1.1)))
     var primIds = alloc[PrimId_C](1)
-    primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    primIds[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = alloc[TriangleMesh_C](1)
-    meshes[0] = _make_glass_mesh()
+    meshes[unsafe_offset=0] = _make_glass_mesh()
     var materials = alloc[Material_C](1)
-    materials[0] = _make_dielectric(Float32(1.5))
+    materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
     var area_lights = alloc[AreaLight_C](1)
-    area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx(bvh, primIds, meshes, materials, area_lights, 1, cdf)
 
     var hit_point = Vec3f(0.0, 0.0, 0.0)
@@ -387,8 +387,8 @@ def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
         AreaLight_C(Int32(0), Int32(1), RGB(Float32(0.0)), Float32(0.0), Int8(0), Int8(0), Int8(0), Int8(0)),
         Float32(1.0), pcg_seed)
-    buf_a[0] = res_empty[1].copy()
-    buf_b[0] = res_empty[1].copy()
+    buf_a[unsafe_offset=0] = res_empty[1].copy()
+    buf_b[unsafe_offset=0] = res_empty[1].copy()
 
     var path_arr = alloc[PathState_C](1)
 
@@ -399,14 +399,14 @@ def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
         gbuf_material_id=UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
         gbuf_world_pos=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0))
-    path_arr[0] = _make_path()
+    path_arr[unsafe_offset=0] = _make_path()
     var pcg0 = PCG32(UInt64(1), UInt64(1))
     _ = sms_temporal_step(
         path_arr, ctx, hit_point, normal, alb, shadow_dir, shadow_dist, light_point,
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
-        area_lights[0], Float32(1.0), pcg0, io0, 0)
-    var m_after_frame0 = buf_b[0].state.m
-    assert_true(buf_b[0].n_vertices == Int32(1))
+        area_lights[unsafe_offset=0], Float32(1.0), pcg0, io0, 0)
+    var m_after_frame0 = buf_b[unsafe_offset=0].state.m
+    assert_true(buf_b[unsafe_offset=0].n_vertices == Int32(1))
     assert_true(m_after_frame0 > Float32(0.0))
 
     # Frame 1: read=buf_b (frame 0's result), write=buf_a -- mirrors
@@ -417,19 +417,19 @@ def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
         gbuf_material_id=UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
         gbuf_world_pos=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0))
-    path_arr[0] = _make_path()
+    path_arr[unsafe_offset=0] = _make_path()
     var pcg1 = PCG32(UInt64(2), UInt64(1))
     _ = sms_temporal_step(
         path_arr, ctx, hit_point, normal, alb, shadow_dir, shadow_dist, light_point,
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
-        area_lights[0], Float32(1.0), pcg1, io1, 0)
-    var m_after_frame1 = buf_a[0].state.m
+        area_lights[unsafe_offset=0], Float32(1.0), pcg1, io1, 0)
+    var m_after_frame1 = buf_a[unsafe_offset=0].state.m
 
-    assert_true(buf_a[0].n_vertices == Int32(1))
+    assert_true(buf_a[unsafe_offset=0].n_vertices == Int32(1))
     assert_true(m_after_frame1 > m_after_frame0)
-    assert_true(path_arr[0].estimate.v0 > Float32(0.0))
+    assert_true(path_arr[unsafe_offset=0].estimate.v0 > Float32(0.0))
 
-    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free(); meshes.unsafe_free()
+    meshes[unsafe_offset=0].points.unsafe_free(); meshes[unsafe_offset=0].vertexIndices.unsafe_free(); meshes.unsafe_free()
     materials.unsafe_free(); area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free()
     path_arr.unsafe_free(); buf_a.unsafe_free(); buf_b.unsafe_free()
 
@@ -442,21 +442,21 @@ def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
 
 def test_shade_diffuse_nee_sms_wiring_accumulates_confidence_across_frames() raises:
     var cdf = alloc[Float32](2)
-    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var bvh = alloc[BVH2Node](1)
-    bvh[0] = _make_one_leaf_bvh(Vec3f(-5.0, -5.0, Float32(0.9)), Vec3f(15.0, 15.0, Float32(1.1)))
+    bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(-5.0, -5.0, Float32(0.9)), Vec3f(15.0, 15.0, Float32(1.1)))
     # primId references mesh index 1 (the glass) -- mesh index 0 is the
     # light, sampled directly via ctx.meshes[al.meshIdx], never through
     # the BVH at all.
     var primIds = alloc[PrimId_C](1)
-    primIds[0] = PrimId_C(Int64(1), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    primIds[unsafe_offset=0] = PrimId_C(Int64(1), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = alloc[TriangleMesh_C](2)
-    meshes[0] = _make_light_mesh()
-    meshes[1] = _make_glass_mesh()
+    meshes[unsafe_offset=0] = _make_light_mesh()
+    meshes[unsafe_offset=1] = _make_glass_mesh()
     var materials = alloc[Material_C](1)
-    materials[0] = _make_dielectric(Float32(1.5))
+    materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
     var area_lights = alloc[AreaLight_C](1)
-    area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx(bvh, primIds, meshes, materials, area_lights, 1, cdf)
 
     var hit_point = Vec3f(0.0, 0.0, 0.0)
@@ -474,8 +474,8 @@ def test_shade_diffuse_nee_sms_wiring_accumulates_confidence_across_frames() rai
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
         AreaLight_C(Int32(0), Int32(1), RGB(Float32(0.0)), Float32(0.0), Int8(0), Int8(0), Int8(0), Int8(0)),
         Float32(1.0), pcg_seed)
-    buf_a[0] = res_empty[1].copy()
-    buf_b[0] = res_empty[1].copy()
+    buf_a[unsafe_offset=0] = res_empty[1].copy()
+    buf_b[unsafe_offset=0] = res_empty[1].copy()
 
     var path_arr = alloc[PathState_C](1)
 
@@ -486,16 +486,16 @@ def test_shade_diffuse_nee_sms_wiring_accumulates_confidence_across_frames() rai
         gbuf_material_id=UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
         gbuf_world_pos=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0))
-    path_arr[0] = _make_path()
+    path_arr[unsafe_offset=0] = _make_path()
     var pcg0 = PCG32(UInt64(1), UInt64(1))
     _shade_diffuse_nee[False, False](
         path_arr, ctx, normal, hit_point, alb, Vec3f(0.0, 0.0, -1.0),
         Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5),
         pcg0, null_guide(), reservoir_io_null(), 0, io0)
-    var m_after_frame0 = buf_b[0].state.m
-    assert_true(buf_b[0].n_vertices == Int32(1))
+    var m_after_frame0 = buf_b[unsafe_offset=0].state.m
+    assert_true(buf_b[unsafe_offset=0].n_vertices == Int32(1))
     assert_true(m_after_frame0 > Float32(0.0))
-    assert_true(path_arr[0].estimate.v0 > Float32(0.0))
+    assert_true(path_arr[unsafe_offset=0].estimate.v0 > Float32(0.0))
 
     # Frame 1: read=buf_b (frame 0's result), write=buf_a.
     var io1 = SMSReservoirIO(read=buf_b, write=buf_a,
@@ -504,20 +504,20 @@ def test_shade_diffuse_nee_sms_wiring_accumulates_confidence_across_frames() rai
         gbuf_material_id=UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
         gbuf_world_pos=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
         frame_w=Int32(0), frame_h=Int32(0))
-    path_arr[0] = _make_path()
+    path_arr[unsafe_offset=0] = _make_path()
     var pcg1 = PCG32(UInt64(2), UInt64(1))
     _shade_diffuse_nee[False, False](
         path_arr, ctx, normal, hit_point, alb, Vec3f(0.0, 0.0, -1.0),
         Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5),
         pcg1, null_guide(), reservoir_io_null(), 0, io1)
-    var m_after_frame1 = buf_a[0].state.m
+    var m_after_frame1 = buf_a[unsafe_offset=0].state.m
 
-    assert_true(buf_a[0].n_vertices == Int32(1))
+    assert_true(buf_a[unsafe_offset=0].n_vertices == Int32(1))
     assert_true(m_after_frame1 > m_after_frame0)
-    assert_true(path_arr[0].estimate.v0 > Float32(0.0))
+    assert_true(path_arr[unsafe_offset=0].estimate.v0 > Float32(0.0))
 
-    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free()
-    meshes[1].points.unsafe_free(); meshes[1].vertexIndices.unsafe_free()
+    meshes[unsafe_offset=0].points.unsafe_free(); meshes[unsafe_offset=0].vertexIndices.unsafe_free()
+    meshes[unsafe_offset=1].points.unsafe_free(); meshes[unsafe_offset=1].vertexIndices.unsafe_free()
     meshes.unsafe_free()
     materials.unsafe_free(); area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free()
     path_arr.unsafe_free(); buf_a.unsafe_free(); buf_b.unsafe_free()
@@ -528,18 +528,18 @@ def test_shade_diffuse_nee_sms_io_inactive_at_bounce_1_uses_plain_mnee() raises:
     null sentinel), even though a real buffer was passed in. Confirms the
     bounce-0-only gate actually gates, not just that it compiles."""
     var cdf = alloc[Float32](2)
-    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var bvh = alloc[BVH2Node](1)
-    bvh[0] = _make_one_leaf_bvh(Vec3f(-5.0, -5.0, Float32(0.9)), Vec3f(15.0, 15.0, Float32(1.1)))
+    bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(-5.0, -5.0, Float32(0.9)), Vec3f(15.0, 15.0, Float32(1.1)))
     var primIds = alloc[PrimId_C](1)
-    primIds[0] = PrimId_C(Int64(1), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    primIds[unsafe_offset=0] = PrimId_C(Int64(1), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = alloc[TriangleMesh_C](2)
-    meshes[0] = _make_light_mesh()
-    meshes[1] = _make_glass_mesh()
+    meshes[unsafe_offset=0] = _make_light_mesh()
+    meshes[unsafe_offset=1] = _make_glass_mesh()
     var materials = alloc[Material_C](1)
-    materials[0] = _make_dielectric(Float32(1.5))
+    materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
     var area_lights = alloc[AreaLight_C](1)
-    area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx(bvh, primIds, meshes, materials, area_lights, 1, cdf)
 
     var hit_point = Vec3f(0.0, 0.0, 0.0)
@@ -561,12 +561,12 @@ def test_shade_diffuse_nee_sms_io_inactive_at_bounce_1_uses_plain_mnee() raises:
     # was accepted or not (Le=0 here forces rejection, but m still moves to
     # 1.0) -- the seed reservoir's m is 1.0, not 0.0.
     var seed_m = res_empty[1].state.m
-    buf_a[0] = res_empty[1].copy()
-    buf_b[0] = res_empty[1].copy()
+    buf_a[unsafe_offset=0] = res_empty[1].copy()
+    buf_b[unsafe_offset=0] = res_empty[1].copy()
 
     var path_arr = alloc[PathState_C](1)
-    path_arr[0] = _make_path()
-    path_arr[0].bounce = Int32(1)
+    path_arr[unsafe_offset=0] = _make_path()
+    path_arr[unsafe_offset=0].bounce = Int32(1)
     var io0 = SMSReservoirIO(read=buf_a, write=buf_b,
         gbuf_normal=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
         gbuf_depth=UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
@@ -580,12 +580,12 @@ def test_shade_diffuse_nee_sms_io_inactive_at_bounce_1_uses_plain_mnee() raises:
         pcg0, null_guide(), reservoir_io_null(), 0, io0)
     # buf_b was never written to (sms_io_this_bounce forced null at bounce 1) --
     # still holds exactly its seeded value, unchanged.
-    assert_true(_close(buf_b[0].state.m, seed_m))
+    assert_true(_close(buf_b[unsafe_offset=0].state.m, seed_m))
     # The refracted contribution should still appear via plain MNEE.
-    assert_true(path_arr[0].estimate.v0 > Float32(0.0))
+    assert_true(path_arr[unsafe_offset=0].estimate.v0 > Float32(0.0))
 
-    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free()
-    meshes[1].points.unsafe_free(); meshes[1].vertexIndices.unsafe_free()
+    meshes[unsafe_offset=0].points.unsafe_free(); meshes[unsafe_offset=0].vertexIndices.unsafe_free()
+    meshes[unsafe_offset=1].points.unsafe_free(); meshes[unsafe_offset=1].vertexIndices.unsafe_free()
     meshes.unsafe_free()
     materials.unsafe_free(); area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free()
     path_arr.unsafe_free(); buf_a.unsafe_free(); buf_b.unsafe_free()

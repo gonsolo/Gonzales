@@ -456,7 +456,7 @@ def vol_temporal_spatial_combine(
     var keep_recv_vertex = shift_mode == VolShiftMode.retarget
 
     if has_temporal:
-        var prev = vol_io.read[pixel_idx]
+        var prev = vol_io.read[unsafe_offset=pixel_idx]
         if prev.valid != Int8(0) and prev.medium_idx == medium_idx:
             var (ok_prev, pt_prev) = vol_shift_scatter_vertex(
                 shift_mode, prev.scatter_point, ray_origin, ray_dir, recv_vertex)
@@ -482,7 +482,7 @@ def vol_temporal_spatial_combine(
         if _is_real_ptr(vol_io.gbuf_depth) and vol_io.frame_w > Int32(0) and vol_io.frame_h > Int32(0):
             var self_px = Int32(pixel_idx) % vol_io.frame_w
             var self_py = Int32(pixel_idx) // vol_io.frame_w
-            var self_depth = vol_io.gbuf_depth[pixel_idx]
+            var self_depth = vol_io.gbuf_depth[unsafe_offset=pixel_idx]
             for _ in range(VOL_SPATIAL_NEIGHBORS):
                 var ang = pcg.next_float() * Float32(6.283185307)
                 var rad = sqrt(pcg.next_float()) * VOL_SPATIAL_RADIUS_PX
@@ -493,10 +493,10 @@ def vol_temporal_spatial_combine(
                 var n_idx = Int(ny * vol_io.frame_w + nx)
                 if n_idx == pixel_idx:
                     continue
-                var n_depth = vol_io.gbuf_depth[n_idx]
+                var n_depth = vol_io.gbuf_depth[unsafe_offset=n_idx]
                 if self_depth <= Float32(0.0) or abs(n_depth - self_depth) > VOL_SPATIAL_DEPTH_REL_MAX * self_depth:
                     continue
-                var nb = vol_io.read[n_idx]
+                var nb = vol_io.read[unsafe_offset=n_idx]
                 if nb.valid == Int8(0) or nb.medium_idx != medium_idx:
                     continue
                 var (ok_nb, pt_nb) = vol_shift_scatter_vertex(
@@ -534,9 +534,9 @@ def vol_temporal_spatial_combine(
         for i in range(nb_seen):
             var np_off = Int(nb_px_seen[i]) * 3
             var n_hit = Vec3f(
-                vol_io.gbuf_world_pos[np_off],
-                vol_io.gbuf_world_pos[np_off + 1],
-                vol_io.gbuf_world_pos[np_off + 2])
+                vol_io.gbuf_world_pos[unsafe_offset=np_off],
+                vol_io.gbuf_world_pos[unsafe_offset=np_off + 1],
+                vol_io.gbuf_world_pos[unsafe_offset=np_off + 2])
             var n_seg = n_hit - ray_origin
             var n_len_sq = n_seg.length_sq()
             if n_len_sq < Float32(1e-12):
@@ -564,4 +564,4 @@ def vol_temporal_spatial_combine(
         # renormalized only W, never m) -- cap AFTER finalize, the same
         # ordering and reason as DI's and GI's own combines.
         reservoir_cap_confidence(res.state, VOL_TEMPORAL_M_CAP)
-        vol_io.write[pixel_idx] = res
+        vol_io.write[unsafe_offset=pixel_idx] = res

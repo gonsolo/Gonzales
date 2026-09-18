@@ -40,22 +40,22 @@ def _spd_interp(
     a steep tail can drive eta or k negative, which is unphysical."""
     if n <= 0:
         return Float32(0.0)
-    if lam <= lambdas[0]:
-        return values[0]
-    if lam >= lambdas[n - 1]:
-        return values[n - 1]
+    if lam <= lambdas[unsafe_offset=0]:
+        return values[unsafe_offset=0]
+    if lam >= lambdas[unsafe_offset=n - 1]:
+        return values[unsafe_offset=n - 1]
     var lo = 0
     var hi = n - 1
     while hi - lo > 1:
         var mid = (lo + hi) // 2
-        if lambdas[mid] <= lam:
+        if lambdas[unsafe_offset=mid] <= lam:
             lo = mid
         else:
             hi = mid
-    var span = lambdas[hi] - lambdas[lo]
+    var span = lambdas[unsafe_offset=hi] - lambdas[unsafe_offset=lo]
     if span <= Float32(0.0):
-        return values[lo]
-    var t = (lam - lambdas[lo]) / span
+        return values[unsafe_offset=lo]
+    var t = (lam - lambdas[unsafe_offset=lo]) / span
     var v_lo = values[unsafe_offset=lo]
     return v_lo + t * (values[unsafe_offset=hi] - v_lo)
 
@@ -100,8 +100,8 @@ def load_spd_rgb(path: String) -> Tuple[RGB, Bool]:
             try:
                 var lam = Float32(Float64(String(parts[0])))
                 var val = Float32(Float64(String(parts[1])))
-                lambdas[n] = lam
-                values[n] = val
+                lambdas[unsafe_offset=n] = lam
+                values[unsafe_offset=n] = val
                 n += 1
             except:
                 # A malformed row is skipped rather than aborting the file:
@@ -201,8 +201,8 @@ def load_spd_rgb_at(path: String, lr: Float32, lg: Float32, lb: Float32) -> Tupl
             if len(parts) < 2:
                 continue
             try:
-                lambdas[n] = Float32(Float64(String(parts[0])))
-                values[n] = Float32(Float64(String(parts[1])))
+                lambdas[unsafe_offset=n] = Float32(Float64(String(parts[0])))
+                values[unsafe_offset=n] = Float32(Float64(String(parts[1])))
                 n += 1
             except:
                 continue

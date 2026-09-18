@@ -61,8 +61,8 @@ def _mxml_make_string(buf: UnsafePointer[UInt8, MutExternalOrigin], start: Int, 
     var n = end - start
     var tmp = alloc[UInt8](n + 1)
     for i in range(n):
-        tmp[i] = buf[start + i]
-    tmp[n] = UInt8(0)
+        tmp[unsafe_offset=i] = buf[unsafe_offset=start + i]
+    tmp[unsafe_offset=n] = UInt8(0)
     var s = String(unsafe_from_utf8_ptr=tmp.as_imm())
     tmp.unsafe_free()
     return s
@@ -131,71 +131,71 @@ def tokenize_mitsuba_xml(buf: UnsafePointer[UInt8, MutExternalOrigin], length: I
     var tags = List[MitsubaTag]()
     var pos = 0
     while pos < length:
-        while pos < length and buf[pos] != UInt8(60):  # '<'
+        while pos < length and buf[unsafe_offset=pos] != UInt8(60):  # '<'
             pos += 1
         if pos >= length:
             break
-        if pos + 1 < length and buf[pos + 1] == UInt8(63):  # '<?' ... '?>'
+        if pos + 1 < length and buf[unsafe_offset=pos + 1] == UInt8(63):  # '<?' ... '?>'
             pos += 2
-            while pos + 1 < length and not (buf[pos] == UInt8(63) and buf[pos + 1] == UInt8(62)):
+            while pos + 1 < length and not (buf[unsafe_offset=pos] == UInt8(63) and buf[unsafe_offset=pos + 1] == UInt8(62)):
                 pos += 1
             pos += 2
             continue
-        if pos + 3 < length and buf[pos + 1] == UInt8(33) and buf[pos + 2] == UInt8(45) and buf[pos + 3] == UInt8(45):
+        if pos + 3 < length and buf[unsafe_offset=pos + 1] == UInt8(33) and buf[unsafe_offset=pos + 2] == UInt8(45) and buf[unsafe_offset=pos + 3] == UInt8(45):
             # '<!--' ... '-->'
             pos += 4
-            while pos + 2 < length and not (buf[pos] == UInt8(45) and buf[pos + 1] == UInt8(45) and buf[pos + 2] == UInt8(62)):
+            while pos + 2 < length and not (buf[unsafe_offset=pos] == UInt8(45) and buf[unsafe_offset=pos + 1] == UInt8(45) and buf[unsafe_offset=pos + 2] == UInt8(62)):
                 pos += 1
             pos += 3
             continue
-        if pos + 1 < length and buf[pos + 1] == UInt8(33):  # other '<! ... >'
+        if pos + 1 < length and buf[unsafe_offset=pos + 1] == UInt8(33):  # other '<! ... >'
             pos += 2
-            while pos < length and buf[pos] != UInt8(62):
+            while pos < length and buf[unsafe_offset=pos] != UInt8(62):
                 pos += 1
             pos += 1
             continue
 
         var is_close = False
         pos += 1  # consume '<'
-        if pos < length and buf[pos] == UInt8(47):  # '/'
+        if pos < length and buf[unsafe_offset=pos] == UInt8(47):  # '/'
             is_close = True
             pos += 1
         var name_start = pos
-        while pos < length and not is_whitespace(buf[pos]) and buf[pos] != UInt8(62) and buf[pos] != UInt8(47):
+        while pos < length and not is_whitespace(buf[unsafe_offset=pos]) and buf[unsafe_offset=pos] != UInt8(62) and buf[unsafe_offset=pos] != UInt8(47):
             pos += 1
         var tag = MitsubaTag(_mxml_make_string(buf, name_start, pos), is_close, False)
 
         while True:
-            while pos < length and is_whitespace(buf[pos]):
+            while pos < length and is_whitespace(buf[unsafe_offset=pos]):
                 pos += 1
             if pos >= length:
                 break
-            if buf[pos] == UInt8(47):  # '/>'
+            if buf[unsafe_offset=pos] == UInt8(47):  # '/>'
                 tag.is_self_close = True
                 pos += 1
-                while pos < length and buf[pos] != UInt8(62):
+                while pos < length and buf[unsafe_offset=pos] != UInt8(62):
                     pos += 1
                 pos += 1
                 break
-            if buf[pos] == UInt8(62):  # '>'
+            if buf[unsafe_offset=pos] == UInt8(62):  # '>'
                 pos += 1
                 break
             var aname_start = pos
-            while pos < length and buf[pos] != UInt8(61) and not is_whitespace(buf[pos]) and buf[pos] != UInt8(62) and buf[pos] != UInt8(47):
+            while pos < length and buf[unsafe_offset=pos] != UInt8(61) and not is_whitespace(buf[unsafe_offset=pos]) and buf[unsafe_offset=pos] != UInt8(62) and buf[unsafe_offset=pos] != UInt8(47):
                 pos += 1
             var aname = _mxml_make_string(buf, aname_start, pos)
-            while pos < length and is_whitespace(buf[pos]):
+            while pos < length and is_whitespace(buf[unsafe_offset=pos]):
                 pos += 1
             var aval = String("")
-            if pos < length and buf[pos] == UInt8(61):  # '='
+            if pos < length and buf[unsafe_offset=pos] == UInt8(61):  # '='
                 pos += 1
-                while pos < length and is_whitespace(buf[pos]):
+                while pos < length and is_whitespace(buf[unsafe_offset=pos]):
                     pos += 1
-                if pos < length and (buf[pos] == UInt8(34) or buf[pos] == UInt8(39)):  # quote
-                    var q = buf[pos]
+                if pos < length and (buf[unsafe_offset=pos] == UInt8(34) or buf[unsafe_offset=pos] == UInt8(39)):  # quote
+                    var q = buf[unsafe_offset=pos]
                     pos += 1
                     var vstart = pos
-                    while pos < length and buf[pos] != q:
+                    while pos < length and buf[unsafe_offset=pos] != q:
                         pos += 1
                     aval = _mxml_make_string(buf, vstart, pos)
                     if pos < length:
@@ -288,8 +288,8 @@ def _mit_string_from(s: String, start: Int) -> String:
     var n = len(bytes)
     var buf = alloc[UInt8](n - start + 1)
     for i in range(start, n):
-        buf[i - start] = bytes[i]
-    buf[n - start] = UInt8(0)
+        buf[unsafe_offset=i - start] = bytes[i]
+    buf[unsafe_offset=n - start] = UInt8(0)
     var r = String(unsafe_from_utf8_ptr=buf.as_imm())
     buf.unsafe_free()
     return r
@@ -547,11 +547,11 @@ def _mit_process_sensor(tags: List[MitsubaTag], start: Int, end: Int,
         c2w_col[2] = -c2w_col[2]
         var c2w_arr = alloc[Float32](16)
         for k in range(16):
-            c2w_arr[k] = c2w_col[k]
+            c2w_arr[unsafe_offset=k] = c2w_col[k]
         var w2c = alloc[Float32](16)
         _ = matrix_invert(c2w_arr, w2c)
         for k in range(16):
-            s_ptr[0].cam2w_raw[k] = w2c[k]
+            s_ptr[unsafe_offset=0].cam2w_raw[k] = w2c[unsafe_offset=k]
         c2w_arr.unsafe_free(); w2c.unsafe_free()
 
     var fov_val = Float32(30)
@@ -565,8 +565,8 @@ def _mit_process_sensor(tags: List[MitsubaTag], start: Int, end: Int,
     if axis_idx >= 0:
         fov_axis = _mxml_find_attr(tags[axis_idx], "value")
 
-    var film_w = s_ptr[0].film_w
-    var film_h = s_ptr[0].film_h
+    var film_w = s_ptr[unsafe_offset=0].film_w
+    var film_h = s_ptr[unsafe_offset=0].film_h
     var film_idx = _mit_find_child(tags, start, end, "film")
     if film_idx >= 0:
         var film_end = _mit_block_end(tags, film_idx)
@@ -589,13 +589,13 @@ def _mit_process_sensor(tags: List[MitsubaTag], start: Int, end: Int,
             var coy = _mit_parse_float(_mxml_find_attr(tags[coy_idx], "value")) if coy_idx >= 0 else Float32(0)
             var cw  = _mit_parse_float(_mxml_find_attr(tags[cw_idx], "value"))  if cw_idx  >= 0 else Float32(film_w)
             var ch  = _mit_parse_float(_mxml_find_attr(tags[ch_idx], "value"))  if ch_idx  >= 0 else Float32(film_h)
-            s_ptr[0].crop_x0 = cox / Float32(film_w)
-            s_ptr[0].crop_x1 = (cox + cw) / Float32(film_w)
-            s_ptr[0].crop_y0 = coy / Float32(film_h)
-            s_ptr[0].crop_y1 = (coy + ch) / Float32(film_h)
-    s_ptr[0].film_w = film_w
-    s_ptr[0].film_h = film_h
-    s_ptr[0].camera_fov = _mit_shorter_axis_fov(fov_val, fov_axis, film_w, film_h)
+            s_ptr[unsafe_offset=0].crop_x0 = cox / Float32(film_w)
+            s_ptr[unsafe_offset=0].crop_x1 = (cox + cw) / Float32(film_w)
+            s_ptr[unsafe_offset=0].crop_y0 = coy / Float32(film_h)
+            s_ptr[unsafe_offset=0].crop_y1 = (coy + ch) / Float32(film_h)
+    s_ptr[unsafe_offset=0].film_w = film_w
+    s_ptr[unsafe_offset=0].film_h = film_h
+    s_ptr[unsafe_offset=0].camera_fov = _mit_shorter_axis_fov(fov_val, fov_axis, film_w, film_h)
 
     var sampler_idx = _mit_find_child(tags, start, end, "sampler")
     if sampler_idx >= 0:
@@ -604,7 +604,7 @@ def _mit_process_sensor(tags: List[MitsubaTag], start: Int, end: Int,
         if spp_idx < 0:
             spp_idx = _mit_find_child_by_attr(tags, sampler_idx, sampler_end, "integer", "name", "sample_count")
         if spp_idx >= 0:
-            s_ptr[0].samples_per_pixel = Int32(_mit_parse_float(_mxml_find_attr(tags[spp_idx], "value")))
+            s_ptr[unsafe_offset=0].samples_per_pixel = Int32(_mit_parse_float(_mxml_find_attr(tags[spp_idx], "value")))
 
 # ── BSDF -> NamedMaterial ────────────────────────────────────────────────────
 
@@ -625,10 +625,10 @@ def _mit_build_named_material(tags: List[MitsubaTag], open_idx: Int, end: Int,
     if eff_type == "normalmap" or eff_type == "bumpmap":
         var nm_fname_idx = _mit_find_child_by_attr(tags, open_idx, end, "string", "name", "filename")
         if nm_fname_idx >= 0:
-            var nm_file = s_ptr[0].scene_dir + _mxml_find_attr(tags[nm_fname_idx], "value")
-            normal_tex_idx_for_mat = Int32(len(s_ptr[0].tex_names))
-            s_ptr[0].tex_names.append(String("__normalmap"))
-            s_ptr[0].tex_files.append(nm_file)
+            var nm_file = s_ptr[unsafe_offset=0].scene_dir + _mxml_find_attr(tags[nm_fname_idx], "value")
+            normal_tex_idx_for_mat = Int32(len(s_ptr[unsafe_offset=0].tex_names))
+            s_ptr[unsafe_offset=0].tex_names.append(String("__normalmap"))
+            s_ptr[unsafe_offset=0].tex_files.append(nm_file)
         var nested_idx = _mit_find_child(tags, open_idx + 1, end, "bsdf")
         if nested_idx >= 0:
             eff_start = nested_idx
@@ -650,10 +650,10 @@ def _mit_build_named_material(tags: List[MitsubaTag], open_idx: Int, end: Int,
             var refl_end = _mit_block_end(tags, refl_idx)
             var bmp_fname_idx = _mit_find_child_by_attr(tags, refl_idx, refl_end, "string", "name", "filename")
             if bmp_fname_idx >= 0:
-                var bmp_file = s_ptr[0].scene_dir + _mxml_find_attr(tags[bmp_fname_idx], "value")
-                nm.tex_idx = Int32(len(s_ptr[0].tex_names))
-                s_ptr[0].tex_names.append(String("__mitsuba_bitmap"))
-                s_ptr[0].tex_files.append(bmp_file)
+                var bmp_file = s_ptr[unsafe_offset=0].scene_dir + _mxml_find_attr(tags[bmp_fname_idx], "value")
+                nm.tex_idx = Int32(len(s_ptr[unsafe_offset=0].tex_names))
+                s_ptr[unsafe_offset=0].tex_names.append(String("__mitsuba_bitmap"))
+                s_ptr[unsafe_offset=0].tex_files.append(bmp_file)
                 var to_uv_idx = _mit_find_child_by_attr(tags, refl_idx, refl_end, "transform", "name", "to_uv")
                 if to_uv_idx >= 0:
                     var to_uv_end = _mit_block_end(tags, to_uv_idx)
@@ -704,14 +704,14 @@ def _mit_resolve_material_idx(tags: List[MitsubaTag], shape_idx: Int, end: Int,
         var ib_end = _mit_block_end(tags, inline_bsdf_idx)
         var mtype = _mxml_find_attr(tags[inline_bsdf_idx], "type")
         var nm = _mit_build_named_material(tags, inline_bsdf_idx, ib_end, String(""), mtype, s_ptr)
-        s_ptr[0].named_materials.append(nm^)
-        mat_idx_result = Int32(len(s_ptr[0].named_materials) - 1)
+        s_ptr[unsafe_offset=0].named_materials.append(nm^)
+        mat_idx_result = Int32(len(s_ptr[unsafe_offset=0].named_materials) - 1)
     else:
         var ref_idx = _mit_find_child_by_attr(tags, shape_idx, end, "ref", "name", "bsdf")
         if ref_idx >= 0:
             var ref_id = _mxml_find_attr(tags[ref_idx], "id")
-            for k in range(len(s_ptr[0].named_materials)):
-                if s_ptr[0].named_materials[k].name == ref_id:
+            for k in range(len(s_ptr[unsafe_offset=0].named_materials)):
+                if s_ptr[unsafe_offset=0].named_materials[k].name == ref_id:
                     mat_idx_result = Int32(k)
                     break
     return mat_idx_result
@@ -758,7 +758,7 @@ def _mit_process_sphere(tags: List[MitsubaTag], shape_idx: Int, end: Int,
     if radius_idx >= 0:
         s_radius = _mit_parse_float(_mxml_find_attr(tags[radius_idx], "value"))
 
-    var ctm = s_ptr[0].ctm.copy()
+    var ctm = s_ptr[unsafe_offset=0].ctm.copy()
     var cx = ctm[0]*s_center_obj[0] + ctm[4]*s_center_obj[1] + ctm[8]*s_center_obj[2]  + ctm[12]
     var cy = ctm[1]*s_center_obj[0] + ctm[5]*s_center_obj[1] + ctm[9]*s_center_obj[2]  + ctm[13]
     var cz = ctm[2]*s_center_obj[0] + ctm[6]*s_center_obj[1] + ctm[10]*s_center_obj[2] + ctm[14]
@@ -770,15 +770,15 @@ def _mit_process_sphere(tags: List[MitsubaTag], shape_idx: Int, end: Int,
     var mat_idx_result = _mit_resolve_material_idx(tags, shape_idx, end, s_ptr)
     var em = _mit_resolve_emitter(tags, shape_idx, end)
 
-    s_ptr[0].spheres_cx.append(cx)
-    s_ptr[0].spheres_cy.append(cy)
-    s_ptr[0].spheres_cz.append(cz)
-    s_ptr[0].spheres_r.append(radius)
-    s_ptr[0].spheres_mat.append(mat_idx_result)
-    s_ptr[0].spheres_inside_med.append(Int32(-1))
-    s_ptr[0].spheres_outside_med.append(Int32(-1))
-    s_ptr[0].spheres_al.append(em[0])
-    s_ptr[0].spheres_rgb.append(em[1])
+    s_ptr[unsafe_offset=0].spheres_cx.append(cx)
+    s_ptr[unsafe_offset=0].spheres_cy.append(cy)
+    s_ptr[unsafe_offset=0].spheres_cz.append(cz)
+    s_ptr[unsafe_offset=0].spheres_r.append(radius)
+    s_ptr[unsafe_offset=0].spheres_mat.append(mat_idx_result)
+    s_ptr[unsafe_offset=0].spheres_inside_med.append(Int32(-1))
+    s_ptr[unsafe_offset=0].spheres_outside_med.append(Int32(-1))
+    s_ptr[unsafe_offset=0].spheres_al.append(em[0])
+    s_ptr[unsafe_offset=0].spheres_rgb.append(em[1])
 
 def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
                        s_ptr: UnsafePointer[SceneParseState, MutExternalOrigin]):
@@ -787,9 +787,9 @@ def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
     var tf_idx = _mit_find_transform(tags, shape_idx, end)
     if tf_idx >= 0:
         var tf_end = _mit_block_end(tags, tf_idx)
-        s_ptr[0].ctm = _mit_matrix_rowmajor_to_ctm(_mit_parse_transform_block(tags, tf_idx, tf_end))
+        s_ptr[unsafe_offset=0].ctm = _mit_matrix_rowmajor_to_ctm(_mit_parse_transform_block(tags, tf_idx, tf_end))
     else:
-        s_ptr[0].ctm = _mit_identity_ctm()
+        s_ptr[unsafe_offset=0].ctm = _mit_identity_ctm()
 
     if shape_type == "sphere":
         # Native analytic Sphere_C (see _mit_process_sphere) -- appends to
@@ -812,7 +812,7 @@ def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
         if fname_idx < 0:
             print("Warning: Mitsuba 'serialized' shape with no filename -- skipped.")
             return
-        var full_path = s_ptr[0].scene_dir + _mxml_find_attr(tags[fname_idx], "value")
+        var full_path = s_ptr[unsafe_offset=0].scene_dir + _mxml_find_attr(tags[fname_idx], "value")
         var mesh = load_mitsuba_serialized(full_path)
         if mesh.n_verts == Int32(0):
             print("Warning: failed to load Mitsuba mesh:", full_path)
@@ -821,10 +821,10 @@ def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
         nt = mesh.n_tris
         tmp_f = alloc[Float32](Int(nv) * 3)
         for k in range(Int(nv) * 3):
-            tmp_f[k] = mesh.positions[k]
+            tmp_f[unsafe_offset=k] = mesh.positions[k]
         tmp_i = alloc[Int32](Int(nt) * 3)
         for k in range(Int(nt) * 3):
-            tmp_i[k] = mesh.indices[k]
+            tmp_i[unsafe_offset=k] = mesh.indices[k]
         uvs = mesh.uvs.copy()
         normals = mesh.normals.copy()
     elif shape_type == "rectangle":
@@ -834,13 +834,13 @@ def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
         nv = Int32(4)
         nt = Int32(2)
         tmp_f = alloc[Float32](12)
-        tmp_f[0]  = Float32(-1); tmp_f[1]  = Float32(-1); tmp_f[2]  = Float32(0)
-        tmp_f[3]  = Float32(1);  tmp_f[4]  = Float32(-1); tmp_f[5]  = Float32(0)
-        tmp_f[6]  = Float32(1);  tmp_f[7]  = Float32(1);  tmp_f[8]  = Float32(0)
-        tmp_f[9]  = Float32(-1); tmp_f[10] = Float32(1);  tmp_f[11] = Float32(0)
+        tmp_f[unsafe_offset=0]  = Float32(-1); tmp_f[unsafe_offset=1]  = Float32(-1); tmp_f[unsafe_offset=2]  = Float32(0)
+        tmp_f[unsafe_offset=3]  = Float32(1);  tmp_f[unsafe_offset=4]  = Float32(-1); tmp_f[unsafe_offset=5]  = Float32(0)
+        tmp_f[unsafe_offset=6]  = Float32(1);  tmp_f[unsafe_offset=7]  = Float32(1);  tmp_f[unsafe_offset=8]  = Float32(0)
+        tmp_f[unsafe_offset=9]  = Float32(-1); tmp_f[unsafe_offset=10] = Float32(1);  tmp_f[unsafe_offset=11] = Float32(0)
         tmp_i = alloc[Int32](6)
-        tmp_i[0] = Int32(0); tmp_i[1] = Int32(1); tmp_i[2] = Int32(2)
-        tmp_i[3] = Int32(0); tmp_i[4] = Int32(2); tmp_i[5] = Int32(3)
+        tmp_i[unsafe_offset=0] = Int32(0); tmp_i[unsafe_offset=1] = Int32(1); tmp_i[unsafe_offset=2] = Int32(2)
+        tmp_i[unsafe_offset=3] = Int32(0); tmp_i[unsafe_offset=4] = Int32(2); tmp_i[unsafe_offset=5] = Int32(3)
         # Natural unit-square UVs matching the vertex order above -- scaled
         # below (once the material's bitmap `to_uv` scale, if any, is known)
         # for a tiled floor texture like sphere_sms.xml's own.
@@ -854,13 +854,13 @@ def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
         return
 
     var mat_idx_result = _mit_resolve_material_idx(tags, shape_idx, end, s_ptr)
-    s_ptr[0].cur_attr.mat_idx = mat_idx_result
+    s_ptr[unsafe_offset=0].cur_attr.mat_idx = mat_idx_result
     var em = _mit_resolve_emitter(tags, shape_idx, end)
-    s_ptr[0].cur_attr.is_alight = em[0]
-    s_ptr[0].cur_attr.al_rgb = em[1]
+    s_ptr[unsafe_offset=0].cur_attr.is_alight = em[0]
+    s_ptr[unsafe_offset=0].cur_attr.al_rgb = em[1]
 
     if mat_idx_result >= Int32(0) and len(uvs) > 0:
-        var mnm = s_ptr[0].named_materials[Int(mat_idx_result)]
+        var mnm = s_ptr[unsafe_offset=0].named_materials[Int(mat_idx_result)]
         if mnm.tex_uscale != Float32(1) or mnm.tex_vscale != Float32(1):
             for k in range(len(uvs) // 2):
                 uvs[k*2]   *= mnm.tex_uscale
@@ -870,24 +870,24 @@ def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
     tmp_f.unsafe_free()
     tmp_i.unsafe_free()
 
-    var last = len(s_ptr[0].meshes) - 1
+    var last = len(s_ptr[unsafe_offset=0].meshes) - 1
     if len(uvs) > 0:
-        s_ptr[0].meshes[last].uvs.reserve(len(uvs))
+        s_ptr[unsafe_offset=0].meshes[last].uvs.reserve(len(uvs))
         for k in range(len(uvs)):
-            s_ptr[0].meshes[last].uvs.append(uvs[k])
+            s_ptr[unsafe_offset=0].meshes[last].uvs.append(uvs[k])
 
     if len(normals) > 0:
         var nrm_obj = alloc[Float32](Int(nv) * 3)
         for k in range(Int(nv) * 3):
-            nrm_obj[k] = normals[k]
+            nrm_obj[unsafe_offset=k] = normals[k]
         var ctm_inv = alloc[Float32](16)
-        _ = matrix_invert(s_ptr[0].ctm.unsafe_ptr(), ctm_inv)
+        _ = matrix_invert(s_ptr[unsafe_offset=0].ctm.unsafe_ptr(), ctm_inv)
         var nrm_world = alloc[Float32](Int(nv) * 3)
         transform_normals(ctm_inv, nrm_obj, nv, nrm_world)
-        ref last_mesh = s_ptr[0].meshes[last]
+        ref last_mesh = s_ptr[unsafe_offset=0].meshes[last]
         last_mesh.normals.reserve(Int(nv) * 3)
         for ni in range(Int(nv)):
-            var nx = nrm_world[ni * 3 + 0]; var ny = nrm_world[ni * 3 + 1]; var nz = nrm_world[ni * 3 + 2]
+            var nx = nrm_world[unsafe_offset=ni * 3 + 0]; var ny = nrm_world[unsafe_offset=ni * 3 + 1]; var nz = nrm_world[unsafe_offset=ni * 3 + 2]
             var nlen = sqrt(nx * nx + ny * ny + nz * nz)
             if nlen > Float32(1e-12):
                 var invn = Float32(1) / nlen
@@ -912,18 +912,18 @@ def mojo_parse_mitsuba_scene(path: UnsafePointer[UInt8, MutExternalOrigin],
     var path_str = String(unsafe_from_utf8_ptr=path.as_imm())
 
     var pi = 0
-    while path[pi] != UInt8(0):
+    while path[unsafe_offset=pi] != UInt8(0):
         pi += 1
     var last_slash = -1
     for ki in range(pi):
-        if path[ki] == UInt8(47):
+        if path[unsafe_offset=ki] == UInt8(47):
             last_slash = ki
     var scene_dir = String("")
     if last_slash >= 0:
         var dir_tmp = alloc[UInt8](last_slash + 2)
         for ki in range(last_slash + 1):
-            dir_tmp[ki] = path[ki]
-        dir_tmp[last_slash + 1] = UInt8(0)
+            dir_tmp[unsafe_offset=ki] = path[unsafe_offset=ki]
+        dir_tmp[unsafe_offset=last_slash + 1] = UInt8(0)
         scene_dir = String(unsafe_from_utf8_ptr=dir_tmp.as_imm())
         dir_tmp.unsafe_free()
 
@@ -939,7 +939,7 @@ def mojo_parse_mitsuba_scene(path: UnsafePointer[UInt8, MutExternalOrigin],
     var n = len(byte_list)
     var buf = alloc[UInt8](n)
     for i in range(n):
-        buf[i] = byte_list[i]
+        buf[unsafe_offset=i] = byte_list[i]
     var tags = tokenize_mitsuba_xml(buf, n)
     buf.unsafe_free()
     _mit_apply_defaults(tags)
@@ -955,7 +955,7 @@ def mojo_parse_mitsuba_scene(path: UnsafePointer[UInt8, MutExternalOrigin],
 
     var s_ptr = alloc[SceneParseState](1)
     s_ptr.init_pointee_move(SceneParseState())
-    s_ptr[0].scene_dir = scene_dir
+    s_ptr[unsafe_offset=0].scene_dir = scene_dir
 
     var scene_end = _mit_block_end(tags, scene_idx)
     var i = scene_idx + 1
@@ -969,7 +969,7 @@ def mojo_parse_mitsuba_scene(path: UnsafePointer[UInt8, MutExternalOrigin],
             _mit_process_sensor(tags, i, blk_end, s_ptr)
         elif t.name == "bsdf":
             var nm = _mit_build_named_material(tags, i, blk_end, _mxml_find_attr(t, "id"), _mxml_find_attr(t, "type"), s_ptr)
-            s_ptr[0].named_materials.append(nm^)
+            s_ptr[unsafe_offset=0].named_materials.append(nm^)
         elif t.name == "shape":
             _mit_process_shape(tags, i, blk_end, s_ptr)
         i = blk_end

@@ -65,7 +65,7 @@ def _clear_film_gpu_body(ctx: DeviceContext) raises:
     with buf.map_to_host() as host:
         var p = host.unsafe_ptr()
         for i in range(n_pixels * 3):
-            assert_true(p[i] == Float32(0.0))
+            assert_true(p[unsafe_offset=i] == Float32(0.0))
 
 def _accumulate_film_gpu_body(ctx: DeviceContext) raises:
     """Accumulate_film_gpu does film[px] += path.estimate (and albedo_film
@@ -80,7 +80,7 @@ def _accumulate_film_gpu_body(ctx: DeviceContext) raises:
         var paths = host.unsafe_ptr().unsafe_bitcast[PathState_C]()
         for i in range(n):
             var f = Float32(i)
-            paths[i] = _dummy_path(
+            paths[unsafe_offset=i] = _dummy_path(
                 SpectralSample(f * Float32(0.1), f * Float32(0.2), f * Float32(0.3), Float32(0.0)),
                 RGB(f * Float32(0.01), f * Float32(0.02), f * Float32(0.03)),
             )
@@ -111,12 +111,12 @@ def _accumulate_film_gpu_body(ctx: DeviceContext) raises:
             var alb = ah.unsafe_ptr()
             for i in range(n):
                 var f = Float32(i)
-                assert_true(_close(film[i*3+0], Float32(10.0) + f * Float32(0.1)))
-                assert_true(_close(film[i*3+1], Float32(10.0) + f * Float32(0.2)))
-                assert_true(_close(film[i*3+2], Float32(10.0) + f * Float32(0.3)))
-                assert_true(_close(alb[i*3+0], Float32(1.0) + f * Float32(0.01)))
-                assert_true(_close(alb[i*3+1], Float32(1.0) + f * Float32(0.02)))
-                assert_true(_close(alb[i*3+2], Float32(1.0) + f * Float32(0.03)))
+                assert_true(_close(film[unsafe_offset=i*3+0], Float32(10.0) + f * Float32(0.1)))
+                assert_true(_close(film[unsafe_offset=i*3+1], Float32(10.0) + f * Float32(0.2)))
+                assert_true(_close(film[unsafe_offset=i*3+2], Float32(10.0) + f * Float32(0.3)))
+                assert_true(_close(alb[unsafe_offset=i*3+0], Float32(1.0) + f * Float32(0.01)))
+                assert_true(_close(alb[unsafe_offset=i*3+1], Float32(1.0) + f * Float32(0.02)))
+                assert_true(_close(alb[unsafe_offset=i*3+2], Float32(1.0) + f * Float32(0.03)))
 
 def test_clear_film_gpu_and_accumulate_film_gpu() raises:
     """Both real kernels in this file, run against ONE shared DeviceContext

@@ -46,7 +46,7 @@ def disabled_test_shade_core_area_light_hit_adds_emission() raises:
     var fx = make_triangle_scene([
         Point3f(0.0, 0.0, 0.0), Point3f(1.0, 0.0, 0.0), Point3f(0.0, 1.0, 0.0),
     ])
-    fx.materials[0] = Material_C(
+    fx.materials[unsafe_offset=0] = Material_C(
         MatKind.area_light, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.0)),                                  # albedo (unused for area_light)
         RGB(Float32(2.0), Float32(3.0), Float32(4.0)),      # emission
@@ -61,16 +61,16 @@ def disabled_test_shade_core_area_light_hit_adds_emission() raises:
 
     var paths = alloc[PathState_C](1)
     var intersections = alloc[Intersection_C](1)
-    paths[0] = _dummy_path(ray, SpectralSample(Float32(0.5)))
-    intersections[0] = inter
+    paths[unsafe_offset=0] = _dummy_path(ray, SpectralSample(Float32(0.5)))
+    intersections[unsafe_offset=0] = inter
 
     shade_core(paths, intersections, fx.meshes, fx.materials, null_spectral_handle(), 0)
 
     # estimate += throughput * emission = 0.5*(2,3,4) = (1,1.5,2); path retires.
-    assert_true(_close(paths[0].estimate.v0, Float32(1.0)))
-    assert_true(_close(paths[0].estimate.v1, Float32(1.5)))
-    assert_true(_close(paths[0].estimate.v2, Float32(2.0)))
-    assert_true(Int(paths[0].active) == 0)
+    assert_true(_close(paths[unsafe_offset=0].estimate.v0, Float32(1.0)))
+    assert_true(_close(paths[unsafe_offset=0].estimate.v1, Float32(1.5)))
+    assert_true(_close(paths[unsafe_offset=0].estimate.v2, Float32(2.0)))
+    assert_true(Int(paths[unsafe_offset=0].active) == 0)
     paths.unsafe_free(); intersections.unsafe_free()
 
 def test_shade_core_miss_deactivates_path() raises:
@@ -85,13 +85,13 @@ def test_shade_core_miss_deactivates_path() raises:
 
     var paths = alloc[PathState_C](1)
     var intersections = alloc[Intersection_C](1)
-    paths[0] = _dummy_path(ray, SpectralSample(Float32(1.0)))
-    intersections[0] = inter
+    paths[unsafe_offset=0] = _dummy_path(ray, SpectralSample(Float32(1.0)))
+    intersections[unsafe_offset=0] = inter
 
     shade_core(paths, intersections, fx.meshes, fx.materials, null_spectral_handle(), 0)
 
-    assert_true(Int(paths[0].active) == 0)
-    assert_true(_close(paths[0].estimate.v0, Float32(0.0)))
+    assert_true(Int(paths[unsafe_offset=0].active) == 0)
+    assert_true(_close(paths[unsafe_offset=0].estimate.v0, Float32(0.0)))
     paths.unsafe_free(); intersections.unsafe_free()
 
 def main() raises:

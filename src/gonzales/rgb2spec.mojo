@@ -169,7 +169,7 @@ def _cie_interp_ptr(table: UnsafePointer[Float64, MutExternalOrigin], lambda_nm:
     if offset > CIE_SAMPLES - 2:
         offset = CIE_SAMPLES - 2
     var weight = x - Float64(offset)
-    return (Float64(1.0) - weight) * table[offset] + weight * table[offset + 1]
+    return (Float64(1.0) - weight) * table[unsafe_offset=offset] + weight * table[unsafe_offset=offset + 1]
 
 def _cie_d65(lambda_nm: Float64) -> Float64:
     """One-time-setup only (see _cie_interp's docstring) — rebuilds the
@@ -563,7 +563,7 @@ def save_spectrum_table(table: List[Float32], res: Int, path: String) raises:
     var res32 = Int32(res)
     var res_bytes = UnsafePointer(to=res32).unsafe_bitcast[UInt8]()
     for i in range(4):
-        header.append(res_bytes[i])
+        header.append(res_bytes[unsafe_offset=i])
     f.write_bytes(Span(header))
 
     var count = len(table)
@@ -571,7 +571,7 @@ def save_spectrum_table(table: List[Float32], res: Int, path: String) raises:
     for i in range(count):
         var v = table[i]
         var vp = UnsafePointer(to=v).unsafe_bitcast[UInt8]()
-        data.append(vp[0]); data.append(vp[1]); data.append(vp[2]); data.append(vp[3])
+        data.append(vp[unsafe_offset=0]); data.append(vp[unsafe_offset=1]); data.append(vp[unsafe_offset=2]); data.append(vp[unsafe_offset=3])
     f.write_bytes(Span(data))
     f.close()
 
@@ -589,15 +589,15 @@ def load_spectrum_table(path: String) -> Tuple[Bool, Int, List[Float32]]:
             return (False, 0, empty^)
         var buf = alloc[UInt8](n)
         for i in range(n):
-            buf[i] = bytes[i]
-        var res = Int((buf + 4).unsafe_bitcast[Int32]()[0])
+            buf[unsafe_offset=i] = bytes[i]
+        var res = Int((buf.unsafe_offset(4)).unsafe_bitcast[Int32]()[unsafe_offset=0])
         var expected_count = 3 * res * res * res * 3
         if n != 8 + expected_count * 4:
             buf.unsafe_free()
             return (False, 0, empty^)
         var out = List[Float32](capacity=expected_count)
         for i in range(expected_count):
-            out.append((buf + 8 + i * 4).unsafe_bitcast[Float32]()[0])
+            out.append((buf.unsafe_offset(8).unsafe_offset(i * 4)).unsafe_bitcast[Float32]()[unsafe_offset=0])
         buf.unsafe_free()
         return (True, res, out^)
     except:
@@ -747,9 +747,9 @@ def rgb_to_coeffs_table_lookup_ptr(table: UnsafePointer[Float32, MutExternalOrig
         if w == Float32(0.0):
             continue
         var base = (((maxc * res + ki) * res + ji) * res + ii) * 3
-        acc0 += w * table[base + 0]
-        acc1 += w * table[base + 1]
-        acc2 += w * table[base + 2]
+        acc0 += w * table[unsafe_offset=base + 0]
+        acc1 += w * table[unsafe_offset=base + 1]
+        acc2 += w * table[unsafe_offset=base + 2]
 
     return RGBSigmoidCoeffs(acc0, acc1, acc2)
 
@@ -764,7 +764,7 @@ def _cie_interp_ptr_f32(table: UnsafePointer[Float32, MutExternalOrigin], lambda
     if offset > CIE_SAMPLES - 2:
         offset = CIE_SAMPLES - 2
     var weight = x - Float32(offset)
-    return (Float32(1.0) - weight) * table[offset] + weight * table[offset + 1]
+    return (Float32(1.0) - weight) * table[unsafe_offset=offset] + weight * table[unsafe_offset=offset + 1]
 
 def cie_xyz_at_ptr(
     x_tbl: UnsafePointer[Float32, MutExternalOrigin],

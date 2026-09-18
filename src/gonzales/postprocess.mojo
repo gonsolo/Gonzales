@@ -92,18 +92,18 @@ def _clamp_fireflies[Ob: Origin[mut=True]](
                         continue
                     has_neighbor = True
                     var ni = (ny * w + nx) * 3
-                    var lum_n = RGB(beauty[ni], beauty[ni + 1], beauty[ni + 2]).luma()
+                    var lum_n = RGB(beauty[unsafe_offset=ni], beauty[unsafe_offset=ni + 1], beauty[unsafe_offset=ni + 2]).luma()
                     if lum_n > max_n:
                         max_n = lum_n
-                    if beauty[ni + 0] > max_n_r: max_n_r = beauty[ni + 0]
-                    if beauty[ni + 1] > max_n_g: max_n_g = beauty[ni + 1]
-                    if beauty[ni + 2] > max_n_b: max_n_b = beauty[ni + 2]
+                    if beauty[unsafe_offset=ni + 0] > max_n_r: max_n_r = beauty[unsafe_offset=ni + 0]
+                    if beauty[unsafe_offset=ni + 1] > max_n_g: max_n_g = beauty[unsafe_offset=ni + 1]
+                    if beauty[unsafe_offset=ni + 2] > max_n_b: max_n_b = beauty[unsafe_offset=ni + 2]
             var c = _firefly_clamp_pixel(
-                beauty[ci + 0], beauty[ci + 1], beauty[ci + 2],
+                beauty[unsafe_offset=ci + 0], beauty[unsafe_offset=ci + 1], beauty[unsafe_offset=ci + 2],
                 max_n, max_n_r, max_n_g, max_n_b, has_neighbor)
-            out[ci + 0] = c.r
-            out[ci + 1] = c.g
-            out[ci + 2] = c.b
+            out[unsafe_offset=ci + 0] = c.r
+            out[unsafe_offset=ci + 1] = c.g
+            out[unsafe_offset=ci + 2] = c.b
     return out
 
 @always_inline
@@ -212,12 +212,12 @@ def denoise[Ob: Origin[mut=True], Oa: Origin[mut=True], On: Origin[mut=True], Od
                     if nx < 0 or nx >= w or ny < 0 or ny >= h:
                         continue
                     var ni = (ny * w + nx) * 3
-                    var l = RGB(clamped[ni], clamped[ni + 1], clamped[ni + 2]).luma()
+                    var l = RGB(clamped[unsafe_offset=ni], clamped[unsafe_offset=ni + 1], clamped[unsafe_offset=ni + 2]).luma()
                     mean += l; mean_sq += l * l; count += 1
             var fc = Float32(count)
             mean /= fc; mean_sq /= fc
             var v = mean_sq - mean * mean
-            variance[pi] = v if v > Float32(0) else Float32(0)
+            variance[unsafe_offset=pi] = v if v > Float32(0) else Float32(0)
 
     var ping = clamped
     var pong = alloc[Float32](n * 3)
@@ -230,14 +230,14 @@ def denoise[Ob: Origin[mut=True], Oa: Origin[mut=True], On: Origin[mut=True], Od
             for px in range(w):
                 var ci = (py * w + px) * 3
                 var pi = py * w + px
-                var c = RGB(src[ci], src[ci + 1], src[ci + 2])
+                var c = RGB(src[unsafe_offset=ci], src[unsafe_offset=ci + 1], src[unsafe_offset=ci + 2])
                 var cl = c.luma()
-                var var_p = variance[pi]
-                var a0 = RGB(albedo[ci + 0], albedo[ci + 1], albedo[ci + 2])
-                var n0x = normals[ci + 0]
-                var n0y = normals[ci + 1]
-                var n0z = normals[ci + 2]
-                var d0_clamped = min(depth[pi], Float32(1e18))
+                var var_p = variance[unsafe_offset=pi]
+                var a0 = RGB(albedo[unsafe_offset=ci + 0], albedo[unsafe_offset=ci + 1], albedo[unsafe_offset=ci + 2])
+                var n0x = normals[unsafe_offset=ci + 0]
+                var n0y = normals[unsafe_offset=ci + 1]
+                var n0z = normals[unsafe_offset=ci + 2]
+                var d0_clamped = min(depth[unsafe_offset=pi], Float32(1e18))
                 var d0_sq = max(d0_clamped * d0_clamped, Float32(1e-6))
 
                 var acc = RGB(Float32(0))
@@ -250,25 +250,25 @@ def denoise[Ob: Origin[mut=True], Oa: Origin[mut=True], On: Origin[mut=True], Od
                             continue
                         var ni = (ny * w + nx) * 3
                         var npi = ny * w + nx
-                        var qc = RGB(src[ni], src[ni + 1], src[ni + 2])
+                        var qc = RGB(src[unsafe_offset=ni], src[unsafe_offset=ni + 1], src[unsafe_offset=ni + 2])
                         var dl = qc.luma() - cl
-                        var dalb = RGB(albedo[ni + 0], albedo[ni + 1], albedo[ni + 2]) - a0
-                        var ndot = normals[ni+0]*n0x + normals[ni+1]*n0y + normals[ni+2]*n0z
-                        var ddiff = min(depth[npi], Float32(1e18)) - d0_clamped
+                        var dalb = RGB(albedo[unsafe_offset=ni + 0], albedo[unsafe_offset=ni + 1], albedo[unsafe_offset=ni + 2]) - a0
+                        var ndot = normals[unsafe_offset=ni+0]*n0x + normals[unsafe_offset=ni+1]*n0y + normals[unsafe_offset=ni+2]*n0z
+                        var ddiff = min(depth[unsafe_offset=npi], Float32(1e18)) - d0_clamped
                         var wt = _atrous_spatial_weight(dx, dy) * _atrous_tap_weight(
-                            dl, var_p, variance[npi], dalb, ndot, ddiff, d0_sq,
+                            dl, var_p, variance[unsafe_offset=npi], dalb, ndot, ddiff, d0_sq,
                             sigma_l, sigma_a, sigma_n, sigma_d)
                         acc += qc * wt
                         acc_w += wt
 
                 var result = (acc / acc_w) if acc_w > Float32(0) else c
-                dst[ci + 0] = result.r
-                dst[ci + 1] = result.g
-                dst[ci + 2] = result.b
+                dst[unsafe_offset=ci + 0] = result.r
+                dst[unsafe_offset=ci + 1] = result.g
+                dst[unsafe_offset=ci + 2] = result.b
 
     var result_buf = pong if np % 2 == 1 else ping
     for i in range(n * 3):
-        output[i] = result_buf[i]
+        output[unsafe_offset=i] = result_buf[unsafe_offset=i]
     variance.unsafe_free()
     clamped.unsafe_free()
     pong.unsafe_free()
@@ -337,9 +337,9 @@ def write_image_cropped[Opx: Origin[mut=True]](
         for col in range(Int(crop_w)):
             var s = (src_row_off + col) * 3
             var d = (dst_row_off + col) * 3
-            cropped[d + 0] = pixels[s + 0]
-            cropped[d + 1] = pixels[s + 1]
-            cropped[d + 2] = pixels[s + 2]
+            cropped[unsafe_offset=d + 0] = pixels[unsafe_offset=s + 0]
+            cropped[unsafe_offset=d + 1] = pixels[unsafe_offset=s + 1]
+            cropped[unsafe_offset=d + 2] = pixels[unsafe_offset=s + 2]
     var ret = write_image_windowed(cropped, crop_w, crop_h, full_w, full_h, crop_x0, crop_y0,
                                     filename, tile_w, tile_h)
     cropped.unsafe_free()

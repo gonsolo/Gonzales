@@ -355,7 +355,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
     var lvc = alloc[BDPTVertex](1)
-    lvc[0] = lv
+    lvc[unsafe_offset=0] = lv
     var scratch = alloc[Intersection_C](1)
 
     var result = _bdpt_connect_to_cache(cv, sd, False, scratch, lvc, 0, 1, Float32(0))

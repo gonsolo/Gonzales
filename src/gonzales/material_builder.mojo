@@ -68,29 +68,29 @@ def _resolve_affine_rgb(s: UnsafePointer[SceneParseState, MutExternalOrigin],
     if depth > 8:
         return _affine_fail()
 
-    for ti in range(len(s[0].tex_names)):
-        if s[0].tex_names[ti] == name:
+    for ti in range(len(s[unsafe_offset=0].tex_names)):
+        if s[unsafe_offset=0].tex_names[ti] == name:
             return _AffineTex(True, Int32(ti), RGB(Float32(1)), RGB(Float32(0)))
 
-    for ci in range(len(s[0].const_tex_names)):
-        if s[0].const_tex_names[ci] == name:
-            return _affine_const(RGB(s[0].const_tex_rgb[ci*3+0],
-                                     s[0].const_tex_rgb[ci*3+1],
-                                     s[0].const_tex_rgb[ci*3+2]))
+    for ci in range(len(s[unsafe_offset=0].const_tex_names)):
+        if s[unsafe_offset=0].const_tex_names[ci] == name:
+            return _affine_const(RGB(s[unsafe_offset=0].const_tex_rgb[ci*3+0],
+                                     s[unsafe_offset=0].const_tex_rgb[ci*3+1],
+                                     s[unsafe_offset=0].const_tex_rgb[ci*3+2]))
 
-    for si in range(len(s[0].scale_tex_names)):
-        if s[0].scale_tex_names[si] == name:
-            var bn = s[0].scale_tex_base[si]
-            var base = _affine_const(RGB(s[0].scale_tex_base_rgb[si*3+0],
-                                         s[0].scale_tex_base_rgb[si*3+1],
-                                         s[0].scale_tex_base_rgb[si*3+2]))
+    for si in range(len(s[unsafe_offset=0].scale_tex_names)):
+        if s[unsafe_offset=0].scale_tex_names[si] == name:
+            var bn = s[unsafe_offset=0].scale_tex_base[si]
+            var base = _affine_const(RGB(s[unsafe_offset=0].scale_tex_base_rgb[si*3+0],
+                                         s[unsafe_offset=0].scale_tex_base_rgb[si*3+1],
+                                         s[unsafe_offset=0].scale_tex_base_rgb[si*3+2]))
             if bn != "":
                 base = _resolve_affine_rgb(s, bn, depth + 1)
             if not base.ok:
                 return _affine_fail()
-            var sn = s[0].scale_tex_scale_name[si]
+            var sn = s[unsafe_offset=0].scale_tex_scale_name[si]
             if sn == "":
-                var k = s[0].scale_tex_scale[si]
+                var k = s[unsafe_offset=0].scale_tex_scale[si]
                 return _AffineTex(True, base.tex_idx, base.scale * k, base.bias * k)
             # Texture-valued multiplier. base * (sM*T + bM) stays affine only
             # if at most one of the two operands actually varies -- otherwise
@@ -107,13 +107,13 @@ def _resolve_affine_rgb(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                                   base.scale * mul.bias, base.bias * mul.bias)
             return _affine_fail()
 
-    for mi in range(len(s[0].mix_tex_names)):
-        if s[0].mix_tex_names[mi] == name:
-            var c1 = RGB(s[0].mix_tex1_rgb[mi*3+0], s[0].mix_tex1_rgb[mi*3+1], s[0].mix_tex1_rgb[mi*3+2])
-            var c2 = RGB(s[0].mix_tex2_rgb[mi*3+0], s[0].mix_tex2_rgb[mi*3+1], s[0].mix_tex2_rgb[mi*3+2])
-            var n1 = s[0].mix_tex1_name[mi]
-            var n2 = s[0].mix_tex2_name[mi]
-            var na = s[0].mix_amount_name[mi]
+    for mi in range(len(s[unsafe_offset=0].mix_tex_names)):
+        if s[unsafe_offset=0].mix_tex_names[mi] == name:
+            var c1 = RGB(s[unsafe_offset=0].mix_tex1_rgb[mi*3+0], s[unsafe_offset=0].mix_tex1_rgb[mi*3+1], s[unsafe_offset=0].mix_tex1_rgb[mi*3+2])
+            var c2 = RGB(s[unsafe_offset=0].mix_tex2_rgb[mi*3+0], s[unsafe_offset=0].mix_tex2_rgb[mi*3+1], s[unsafe_offset=0].mix_tex2_rgb[mi*3+2])
+            var n1 = s[unsafe_offset=0].mix_tex1_name[mi]
+            var n2 = s[unsafe_offset=0].mix_tex2_name[mi]
+            var na = s[unsafe_offset=0].mix_amount_name[mi]
 
             var r1 = _affine_const(c1)
             if n1 != "":
@@ -128,7 +128,7 @@ def _resolve_affine_rgb(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                 # Constant blend factor: pbrt's (1-a)*tex1 + a*tex2. Both
                 # sides are already affine, so the result is affine unless
                 # they ride on two *different* imagemaps.
-                var a = s[0].mix_amount_val[mi]
+                var a = s[unsafe_offset=0].mix_amount_val[mi]
                 var w1 = Float32(1) - a
                 var bias = r1.bias * w1 + r2.bias * a
                 if r1.tex_idx < 0 and r2.tex_idx < 0:
@@ -297,20 +297,20 @@ def _sss_reflectance(s: UnsafePointer[SceneParseState, MutExternalOrigin],
     var tname = params.get_string("reflectance", "")
     if tname == "":
         return RGB(Float32(0.5))
-    for ci in range(len(s[0].const_tex_names)):
-        if s[0].const_tex_names[ci] == tname:
-            return RGB(s[0].const_tex_rgb[ci*3+0], s[0].const_tex_rgb[ci*3+1], s[0].const_tex_rgb[ci*3+2])
-    for ti in range(len(s[0].tex_names)):
-        if s[0].tex_names[ti] == tname:
-            var fstr = s[0].tex_files[ti]
+    for ci in range(len(s[unsafe_offset=0].const_tex_names)):
+        if s[unsafe_offset=0].const_tex_names[ci] == tname:
+            return RGB(s[unsafe_offset=0].const_tex_rgb[ci*3+0], s[unsafe_offset=0].const_tex_rgb[ci*3+1], s[unsafe_offset=0].const_tex_rgb[ci*3+2])
+    for ti in range(len(s[unsafe_offset=0].tex_names)):
+        if s[unsafe_offset=0].tex_names[ti] == tname:
+            var fstr = s[unsafe_offset=0].tex_files[ti]
             var flen = fstr.byte_length()
             var fbuf = alloc[UInt8](flen + 1)
-            for k in range(flen): fbuf[k] = fstr.unsafe_ptr()[k]
-            fbuf[flen] = UInt8(0)
+            for k in range(flen): fbuf[unsafe_offset=k] = fstr.unsafe_ptr()[unsafe_offset=k]
+            fbuf[unsafe_offset=flen] = UInt8(0)
             var data_out = alloc[UnsafePointer[Float32, MutExternalOrigin]](1)
             var w_out = alloc[Int32](1)
             var h_out = alloc[Int32](1)
-            w_out[0] = Int32(0); h_out[0] = Int32(0)
+            w_out[unsafe_offset=0] = Int32(0); h_out[unsafe_offset=0] = Int32(0)
             var ok = external_call["load_texture_rgb", Int32,
                 UnsafePointer[UInt8, MutExternalOrigin],
                 UnsafePointer[UnsafePointer[Float32, MutExternalOrigin], MutExternalOrigin],
@@ -318,12 +318,12 @@ def _sss_reflectance(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                 UnsafePointer[Int32, MutExternalOrigin],
                 Int32](fbuf, data_out, w_out, h_out, Int32(0))
             var out = RGB(Float32(0.5))
-            if ok != 0 and Int(w_out[0]) > 0 and Int(h_out[0]) > 0:
-                var n = Int(w_out[0]) * Int(h_out[0])
-                var ptr = data_out[0]
+            if ok != 0 and Int(w_out[unsafe_offset=0]) > 0 and Int(h_out[unsafe_offset=0]) > 0:
+                var n = Int(w_out[unsafe_offset=0]) * Int(h_out[unsafe_offset=0])
+                var ptr = data_out[unsafe_offset=0]
                 var sr = Float64(0); var sg = Float64(0); var sb = Float64(0)
                 for k in range(n):
-                    sr += Float64(ptr[k*3+0]); sg += Float64(ptr[k*3+1]); sb += Float64(ptr[k*3+2])
+                    sr += Float64(ptr[unsafe_offset=k*3+0]); sg += Float64(ptr[unsafe_offset=k*3+1]); sb += Float64(ptr[unsafe_offset=k*3+2])
                 var inv = Float64(1) / Float64(n)
                 out = RGB(Float32(sr*inv), Float32(sg*inv), Float32(sb*inv))
                 print("Note: subsurface \"reflectance\" is the texture '" + tname +
@@ -519,14 +519,14 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
                 if g_ok:
                     mat_ior = g_ior
                 elif eta_name.endswith(".spd"):
-                    var (f_eta, f_ok) = load_spd_rgb(s[0].scene_dir + eta_name)
+                    var (f_eta, f_ok) = load_spd_rgb(s[unsafe_offset=0].scene_dir + eta_name)
                     if f_ok:
                         metal_eta = f_eta
                         has_spectral_conductor = True
                     else:
                         print("SPD load FAILED (cannot open/parse), material '"
                               + String(unsafe_from_utf8_ptr=mat_name.as_imm())
-                              + "' eta falls back to 0.5:", s[0].scene_dir + eta_name)
+                              + "' eta falls back to 0.5:", s[unsafe_offset=0].scene_dir + eta_name)
                 elif eta_name != "":
                     print("Warning: unknown named spectrum '" + eta_name
                           + "' for eta — falling back to 0.5. Supported: metal-{Ag,Al,Au,Cu,CuZn,TiO2,MgO}-*, glass-{BK7,BAF10,FK51A,LASF9,F5,F10,F11}, or a .spd file path.")
@@ -548,14 +548,14 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
                 metal_k = m_k
                 has_spectral_conductor = True
             elif k_name.endswith(".spd"):
-                var (f_k, fk_ok) = load_spd_rgb(s[0].scene_dir + k_name)
+                var (f_k, fk_ok) = load_spd_rgb(s[unsafe_offset=0].scene_dir + k_name)
                 if fk_ok:
                     metal_k = f_k
                     has_spectral_conductor = True
                 else:
                     print("SPD load FAILED (cannot open/parse), material '"
                           + String(unsafe_from_utf8_ptr=mat_name.as_imm())
-                          + "' k falls back to 0.5:", s[0].scene_dir + k_name)
+                          + "' k falls back to 0.5:", s[unsafe_offset=0].scene_dir + k_name)
             elif k_name != "":
                 print("Warning: unknown named spectrum '" + k_name
                       + "' for k — falling back to 0.5. Supported: metal-{Ag,Al,Au,Cu,CuZn,TiO2,MgO}-*, or a .spd file path.")
@@ -584,29 +584,29 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
             var tex_name = params.get_string("reflectance", "")
             if tex_name != "":
                 var matched_tex = False
-                for ti in range(len(s[0].tex_names)):
-                    if s[0].tex_names[ti] == tex_name:
+                for ti in range(len(s[unsafe_offset=0].tex_names)):
+                    if s[unsafe_offset=0].tex_names[ti] == tex_name:
                         tex_idx_for_mat = Int32(ti)
                         matched_tex = True
                         break
                 if not matched_tex:
-                    for ci in range(len(s[0].const_tex_names)):
-                        if s[0].const_tex_names[ci] == tex_name:
-                            rgb = RGB(s[0].const_tex_rgb[ci*3+0], s[0].const_tex_rgb[ci*3+1], s[0].const_tex_rgb[ci*3+2])
+                    for ci in range(len(s[unsafe_offset=0].const_tex_names)):
+                        if s[unsafe_offset=0].const_tex_names[ci] == tex_name:
+                            rgb = RGB(s[unsafe_offset=0].const_tex_rgb[ci*3+0], s[unsafe_offset=0].const_tex_rgb[ci*3+1], s[unsafe_offset=0].const_tex_rgb[ci*3+2])
                             matched_tex = True
                             break
                 if not matched_tex:
-                    for ki in range(len(s[0].checker_tex_names)):
-                        if s[0].checker_tex_names[ki] == tex_name:
+                    for ki in range(len(s[unsafe_offset=0].checker_tex_names)):
+                        if s[unsafe_offset=0].checker_tex_names[ki] == tex_name:
                             # -2 marks the material as using the embedded
                             # procedural checkerboard fields below (see
                             # shading.mojo's _tex_lookup) rather than the
                             # imagemap texture table.
                             tex_idx_for_mat = Int32(-2)
-                            checker_tex1 = RGB(s[0].checker_tex1[ki*3+0], s[0].checker_tex1[ki*3+1], s[0].checker_tex1[ki*3+2])
-                            checker_tex2 = RGB(s[0].checker_tex2[ki*3+0], s[0].checker_tex2[ki*3+1], s[0].checker_tex2[ki*3+2])
-                            checker_uscale = s[0].checker_uscale[ki]
-                            checker_vscale = s[0].checker_vscale[ki]
+                            checker_tex1 = RGB(s[unsafe_offset=0].checker_tex1[ki*3+0], s[unsafe_offset=0].checker_tex1[ki*3+1], s[unsafe_offset=0].checker_tex1[ki*3+2])
+                            checker_tex2 = RGB(s[unsafe_offset=0].checker_tex2[ki*3+0], s[unsafe_offset=0].checker_tex2[ki*3+1], s[unsafe_offset=0].checker_tex2[ki*3+2])
+                            checker_uscale = s[unsafe_offset=0].checker_uscale[ki]
+                            checker_vscale = s[unsafe_offset=0].checker_vscale[ki]
                             matched_tex = True
                             break
                 if not matched_tex:
@@ -626,13 +626,13 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
                         matched_tex = True
                 if not matched_tex:
                     var is_known = False
-                    for mi in range(len(s[0].mix_tex_names)):
-                        if s[0].mix_tex_names[mi] == tex_name:
+                    for mi in range(len(s[unsafe_offset=0].mix_tex_names)):
+                        if s[unsafe_offset=0].mix_tex_names[mi] == tex_name:
                             is_known = True
                             break
                     if not is_known:
-                        for si in range(len(s[0].scale_tex_names)):
-                            if s[0].scale_tex_names[si] == tex_name:
+                        for si in range(len(s[unsafe_offset=0].scale_tex_names)):
+                            if s[unsafe_offset=0].scale_tex_names[si] == tex_name:
                                 is_known = True
                                 break
                     if is_known:
@@ -704,8 +704,8 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
         # texture isn't a pattern seen in practice).
         var rough_tex = params.get_string("roughness", "")
         if rough_tex != "":
-            for ti in range(len(s[0].tex_names)):
-                if s[0].tex_names[ti] == rough_tex:
+            for ti in range(len(s[unsafe_offset=0].tex_names)):
+                if s[unsafe_offset=0].tex_names[ti] == rough_tex:
                     rough_tex_idx_for_mat = Int32(ti)
                     break
     var urough_f = params.get_floats("uroughness")
@@ -714,8 +714,8 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
     else:
         var urough_tex = params.get_string("uroughness", "")
         if urough_tex != "":
-            for ti in range(len(s[0].tex_names)):
-                if s[0].tex_names[ti] == urough_tex:
+            for ti in range(len(s[unsafe_offset=0].tex_names)):
+                if s[unsafe_offset=0].tex_names[ti] == urough_tex:
                     rough_tex_idx_for_mat = Int32(ti)
                     break
     var vrough_f = params.get_floats("vroughness")
@@ -742,7 +742,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
     # is flipped to route through MatKind.measured (Stage 2).
     var measured_bsdf_path = String("")
     if is_measured and params.has("filename"):
-        var bsdf_path = s[0].scene_dir + params.get_string("filename", "")
+        var bsdf_path = s[unsafe_offset=0].scene_dir + params.get_string("filename", "")
         measured_bsdf_path = bsdf_path
         var (bsdf_ok, mean_lum) = load_measured_bsdf_reflectance(bsdf_path)
         if bsdf_ok:
@@ -854,16 +854,16 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
         # -- is the participating-media machinery that already exists, and is
         # entirely unaware this particular medium happens to be an object's
         # interior.
-        sss_medium_idx = Int32(len(s[0].med_names))
-        s[0].med_names.append(String("__sss_interior"))
-        s[0].med_sa.append(sig_a.r * sss_scale); s[0].med_sa.append(sig_a.g * sss_scale); s[0].med_sa.append(sig_a.b * sss_scale)
-        s[0].med_ss.append(sig_s.r * sss_scale); s[0].med_ss.append(sig_s.g * sss_scale); s[0].med_ss.append(sig_s.b * sss_scale)
-        s[0].med_g.append(sss_g)
-        s[0].med_grid_idx.append(Int32(-1))
-        s[0].med_nvdb_idx.append(Int32(-1))
-        s[0].med_nvdb_temp_idx.append(Int32(-1))
-        s[0].med_le_scale.append(Float32(0)); s[0].med_temp_offset.append(Float32(0)); s[0].med_temp_scale.append(Float32(1))
-        s[0].med_is_sss.append(Int32(1))
+        sss_medium_idx = Int32(len(s[unsafe_offset=0].med_names))
+        s[unsafe_offset=0].med_names.append(String("__sss_interior"))
+        s[unsafe_offset=0].med_sa.append(sig_a.r * sss_scale); s[unsafe_offset=0].med_sa.append(sig_a.g * sss_scale); s[unsafe_offset=0].med_sa.append(sig_a.b * sss_scale)
+        s[unsafe_offset=0].med_ss.append(sig_s.r * sss_scale); s[unsafe_offset=0].med_ss.append(sig_s.g * sss_scale); s[unsafe_offset=0].med_ss.append(sig_s.b * sss_scale)
+        s[unsafe_offset=0].med_g.append(sss_g)
+        s[unsafe_offset=0].med_grid_idx.append(Int32(-1))
+        s[unsafe_offset=0].med_nvdb_idx.append(Int32(-1))
+        s[unsafe_offset=0].med_nvdb_temp_idx.append(Int32(-1))
+        s[unsafe_offset=0].med_le_scale.append(Float32(0)); s[unsafe_offset=0].med_temp_offset.append(Float32(0)); s[unsafe_offset=0].med_temp_scale.append(Float32(1))
+        s[unsafe_offset=0].med_is_sss.append(Int32(1))
 
         # An inline `Material "subsurface"` takes effect immediately, so bind
         # the interior to the live attribute state here -- shapes declared
@@ -871,7 +871,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
         # `MediumInterface "interior" ""`. The MakeNamedMaterial form binds
         # later instead, when `NamedMaterial` activates it.
         if inline_type:
-            s[0].cur_attr.inside_medium = sss_medium_idx
+            s[unsafe_offset=0].cur_attr.inside_medium = sss_medium_idx
 
     # "normalmap"/"bumpmap": register the file as an (unnamed) imagemap
     # texture and point the material's normal_tex_idx at it — same path as a
@@ -881,10 +881,10 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
     if normalmap_file == "":
         normalmap_file = params.get_string("bumpmap", "")
     if normalmap_file != "":
-        var nm_file = s[0].scene_dir + normalmap_file
-        normal_tex_idx_for_mat = Int32(len(s[0].tex_names))
-        s[0].tex_names.append(String("__normalmap"))
-        s[0].tex_files.append(nm_file)
+        var nm_file = s[unsafe_offset=0].scene_dir + normalmap_file
+        normal_tex_idx_for_mat = Int32(len(s[unsafe_offset=0].tex_names))
+        s[unsafe_offset=0].tex_names.append(String("__normalmap"))
+        s[unsafe_offset=0].tex_files.append(nm_file)
 
     # "displacement": bump map. The named texture is resolved to an
     # imagemap index either directly (a plain `Texture "x" "float"
@@ -898,8 +898,8 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
     var disp_tex = params.get_string("displacement", "")
     if disp_tex != "":
         var matched_disp = False
-        for ti in range(len(s[0].tex_names)):
-            if s[0].tex_names[ti] == disp_tex:
+        for ti in range(len(s[unsafe_offset=0].tex_names)):
+            if s[unsafe_offset=0].tex_names[ti] == disp_tex:
                 bump_tex_idx_for_mat = Int32(ti)
                 matched_disp = True
                 break
@@ -988,7 +988,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
     nm.mix_amount     = mix_amount
     nm.measured_bsdf_path = measured_bsdf_path
     nm.sss_medium_idx = sss_medium_idx
-    s[0].named_materials.append(nm^)
+    s[unsafe_offset=0].named_materials.append(nm^)
 
     mat_name.unsafe_free()
 
@@ -996,18 +996,18 @@ def _psc_handle_named_material(handle: UnsafePointer[PbrtScanner, MutExternalOri
                                s: UnsafePointer[SceneParseState, MutExternalOrigin]):
     var mat_name = alloc[UInt8](PSC_NAME_MAX)
     _ = scanner_parse_quoted_string(handle, mat_name, PSC_NAME_MAX)
-    s[0].cur_attr.mat_idx = Int32(-1)
+    s[unsafe_offset=0].cur_attr.mat_idx = Int32(-1)
     var name_str = String(unsafe_from_utf8_ptr=mat_name.as_imm())
-    for i in range(len(s[0].named_materials)):
-        if s[0].named_materials[i].name == name_str:
-            s[0].cur_attr.mat_idx = Int32(i)
+    for i in range(len(s[unsafe_offset=0].named_materials)):
+        if s[unsafe_offset=0].named_materials[i].name == name_str:
+            s[unsafe_offset=0].cur_attr.mat_idx = Int32(i)
             # A `subsurface` material carries an interior medium with it (see
             # _psc_handle_make_named_material). Activating the material has to
             # bind that interior to the live attribute state too, or shapes
             # using it would get the dielectric shell with vacuum inside and
             # render as clear glass. The inline `Material` form binds at
             # declaration instead, since it takes effect immediately.
-            if s[0].named_materials[i].sss_medium_idx >= Int32(0):
-                s[0].cur_attr.inside_medium = s[0].named_materials[i].sss_medium_idx
+            if s[unsafe_offset=0].named_materials[i].sss_medium_idx >= Int32(0):
+                s[unsafe_offset=0].cur_attr.inside_medium = s[unsafe_offset=0].named_materials[i].sss_medium_idx
             break
     mat_name.unsafe_free()

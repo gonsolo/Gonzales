@@ -10,25 +10,25 @@ def _close(a: Float32, b: Float32) -> Bool:
 
 def _identity(m: UnsafePointer[Float32, MutExternalOrigin]):
     for i in range(16):
-        m[i] = Float32(0)
-    m[0] = Float32(1)
-    m[5] = Float32(1)
-    m[10] = Float32(1)
-    m[15] = Float32(1)
+        m[unsafe_offset=i] = Float32(0)
+    m[unsafe_offset=0] = Float32(1)
+    m[unsafe_offset=5] = Float32(1)
+    m[unsafe_offset=10] = Float32(1)
+    m[unsafe_offset=15] = Float32(1)
 
 def _translation(m: UnsafePointer[Float32, MutExternalOrigin], tx: Float32, ty: Float32, tz: Float32):
     # Column-major: flat[col*4+row] = matrix[row,col]. Translation lives in
     # column 3 (indices 12,13,14) — matches _psc_handle_translate in pbrt_parser.mojo.
     _identity(m)
-    m[12] = tx; m[13] = ty; m[14] = tz
+    m[unsafe_offset=12] = tx; m[unsafe_offset=13] = ty; m[unsafe_offset=14] = tz
 
 def _scale(m: UnsafePointer[Float32, MutExternalOrigin], sx: Float32, sy: Float32, sz: Float32):
     _identity(m)
-    m[0] = sx; m[5] = sy; m[10] = sz
+    m[unsafe_offset=0] = sx; m[unsafe_offset=5] = sy; m[unsafe_offset=10] = sz
 
 def _mat_close(a: UnsafePointer[Float32, MutExternalOrigin], b: UnsafePointer[Float32, MutExternalOrigin]) -> Bool:
     for i in range(16):
-        if not _close(a[i], b[i]):
+        if not _close(a[unsafe_offset=i], b[unsafe_offset=i]):
             return False
     return True
 
@@ -61,16 +61,16 @@ def test_matrix_multiply_matches_hand_computed_case() raises:
     shortcut, to pin down the column-major index arithmetic itself."""
     # a = row-major [[1,2,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]] stored column-major
     var a = alloc[Float32](16); _identity(a)
-    a[4] = Float32(2.0)  # row0,col1 = 2  -> flat[col*4+row] = flat[1*4+0] = flat[4]
+    a[unsafe_offset=4] = Float32(2.0)  # row0,col1 = 2  -> flat[col*4+row] = flat[1*4+0] = flat[4]
     var b = alloc[Float32](16); _identity(b)
-    b[12] = Float32(3.0); b[13] = Float32(5.0); b[14] = Float32(7.0)
+    b[unsafe_offset=12] = Float32(3.0); b[unsafe_offset=13] = Float32(5.0); b[unsafe_offset=14] = Float32(7.0)
     var result = alloc[Float32](16)
     matrix_multiply(a, b, result)
     # Expect: a * b = translate by (3 + 2*5, 5, 7) = (13, 5, 7) in col 3,
     # since row0 of a is [1,2,0,0] dotted with b's translation column (3,5,7,1).
     var expected = alloc[Float32](16); _identity(expected)
-    expected[4] = Float32(2.0)
-    expected[12] = Float32(13.0); expected[13] = Float32(5.0); expected[14] = Float32(7.0)
+    expected[unsafe_offset=4] = Float32(2.0)
+    expected[unsafe_offset=12] = Float32(13.0); expected[unsafe_offset=13] = Float32(5.0); expected[unsafe_offset=14] = Float32(7.0)
     assert_true(_mat_close(result, expected))
     a.unsafe_free(); b.unsafe_free(); result.unsafe_free(); expected.unsafe_free()
 
@@ -130,7 +130,7 @@ def test_matrix_invert_singular_writes_identity_and_reports_failure() raises:
     identity in `result`, never garbage — callers rely on this fallback."""
     var singular = alloc[Float32](16)
     for i in range(16):
-        singular[i] = Float32(0)
+        singular[unsafe_offset=i] = Float32(0)
     var result = alloc[Float32](16)
     var ok = matrix_invert(singular, result)
     assert_true(ok == Int32(0))
@@ -143,38 +143,38 @@ def test_matrix_invert_singular_writes_identity_and_reports_failure() raises:
 def test_transform_points_identity_leaves_points_unchanged() raises:
     var id = alloc[Float32](16); _identity(id)
     var pts_in = alloc[Float32](4)
-    pts_in[0] = Float32(1.0); pts_in[1] = Float32(2.0); pts_in[2] = Float32(3.0); pts_in[3] = Float32(1.0)
+    pts_in[unsafe_offset=0] = Float32(1.0); pts_in[unsafe_offset=1] = Float32(2.0); pts_in[unsafe_offset=2] = Float32(3.0); pts_in[unsafe_offset=3] = Float32(1.0)
     var pts_out = alloc[Float32](4)
     transform_points(id, pts_in, Int32(1), pts_out)
-    assert_true(_close(pts_out[0], Float32(1.0)))
-    assert_true(_close(pts_out[1], Float32(2.0)))
-    assert_true(_close(pts_out[2], Float32(3.0)))
+    assert_true(_close(pts_out[unsafe_offset=0], Float32(1.0)))
+    assert_true(_close(pts_out[unsafe_offset=1], Float32(2.0)))
+    assert_true(_close(pts_out[unsafe_offset=2], Float32(3.0)))
     id.unsafe_free(); pts_in.unsafe_free(); pts_out.unsafe_free()
 
 def test_transform_points_translation_moves_by_exact_vector() raises:
     var t = alloc[Float32](16); _translation(t, Float32(10.0), Float32(-5.0), Float32(2.0))
     var pts_in = alloc[Float32](4)
-    pts_in[0] = Float32(1.0); pts_in[1] = Float32(1.0); pts_in[2] = Float32(1.0); pts_in[3] = Float32(1.0)
+    pts_in[unsafe_offset=0] = Float32(1.0); pts_in[unsafe_offset=1] = Float32(1.0); pts_in[unsafe_offset=2] = Float32(1.0); pts_in[unsafe_offset=3] = Float32(1.0)
     var pts_out = alloc[Float32](4)
     transform_points(t, pts_in, Int32(1), pts_out)
-    assert_true(_close(pts_out[0], Float32(11.0)))
-    assert_true(_close(pts_out[1], Float32(-4.0)))
-    assert_true(_close(pts_out[2], Float32(3.0)))
+    assert_true(_close(pts_out[unsafe_offset=0], Float32(11.0)))
+    assert_true(_close(pts_out[unsafe_offset=1], Float32(-4.0)))
+    assert_true(_close(pts_out[unsafe_offset=2], Float32(3.0)))
     t.unsafe_free(); pts_in.unsafe_free(); pts_out.unsafe_free()
 
 def test_transform_points_scale_scales_coordinates_exactly() raises:
     var s = alloc[Float32](16); _scale(s, Float32(2.0), Float32(3.0), Float32(-1.0))
     var pts_in = alloc[Float32](8)
-    pts_in[0] = Float32(1.0); pts_in[1] = Float32(2.0); pts_in[2] = Float32(3.0); pts_in[3] = Float32(1.0)
-    pts_in[4] = Float32(-2.0); pts_in[5] = Float32(0.5); pts_in[6] = Float32(4.0); pts_in[7] = Float32(1.0)
+    pts_in[unsafe_offset=0] = Float32(1.0); pts_in[unsafe_offset=1] = Float32(2.0); pts_in[unsafe_offset=2] = Float32(3.0); pts_in[unsafe_offset=3] = Float32(1.0)
+    pts_in[unsafe_offset=4] = Float32(-2.0); pts_in[unsafe_offset=5] = Float32(0.5); pts_in[unsafe_offset=6] = Float32(4.0); pts_in[unsafe_offset=7] = Float32(1.0)
     var pts_out = alloc[Float32](8)
     transform_points(s, pts_in, Int32(2), pts_out)
-    assert_true(_close(pts_out[0], Float32(2.0)))
-    assert_true(_close(pts_out[1], Float32(6.0)))
-    assert_true(_close(pts_out[2], Float32(-3.0)))
-    assert_true(_close(pts_out[4], Float32(-4.0)))
-    assert_true(_close(pts_out[5], Float32(1.5)))
-    assert_true(_close(pts_out[6], Float32(-4.0)))
+    assert_true(_close(pts_out[unsafe_offset=0], Float32(2.0)))
+    assert_true(_close(pts_out[unsafe_offset=1], Float32(6.0)))
+    assert_true(_close(pts_out[unsafe_offset=2], Float32(-3.0)))
+    assert_true(_close(pts_out[unsafe_offset=4], Float32(-4.0)))
+    assert_true(_close(pts_out[unsafe_offset=5], Float32(1.5)))
+    assert_true(_close(pts_out[unsafe_offset=6], Float32(-4.0)))
     s.unsafe_free(); pts_in.unsafe_free(); pts_out.unsafe_free()
 
 # ── transform_normals ────────────────────────────────────────────────────────
@@ -184,12 +184,12 @@ def test_transform_normals_identity_leaves_normal_unchanged() raises:
     identity transform the inverse is itself, so the normal passes through."""
     var id = alloc[Float32](16); _identity(id)
     var n_in = alloc[Float32](3)
-    n_in[0] = Float32(0.0); n_in[1] = Float32(1.0); n_in[2] = Float32(0.0)
+    n_in[unsafe_offset=0] = Float32(0.0); n_in[unsafe_offset=1] = Float32(1.0); n_in[unsafe_offset=2] = Float32(0.0)
     var n_out = alloc[Float32](3)
     transform_normals(id, n_in, Int32(1), n_out)
-    assert_true(_close(n_out[0], Float32(0.0)))
-    assert_true(_close(n_out[1], Float32(1.0)))
-    assert_true(_close(n_out[2], Float32(0.0)))
+    assert_true(_close(n_out[unsafe_offset=0], Float32(0.0)))
+    assert_true(_close(n_out[unsafe_offset=1], Float32(1.0)))
+    assert_true(_close(n_out[unsafe_offset=2], Float32(0.0)))
     id.unsafe_free(); n_in.unsafe_free(); n_out.unsafe_free()
 
 def test_transform_normals_uniform_scale_inverse_rescales_normal() raises:
@@ -199,12 +199,12 @@ def test_transform_normals_uniform_scale_inverse_rescales_normal() raises:
     var k = Float32(2.0)
     var inv_s = alloc[Float32](16); _scale(inv_s, Float32(1.0) / k, Float32(1.0) / k, Float32(1.0) / k)
     var n_in = alloc[Float32](3)
-    n_in[0] = Float32(0.0); n_in[1] = Float32(0.0); n_in[2] = Float32(1.0)
+    n_in[unsafe_offset=0] = Float32(0.0); n_in[unsafe_offset=1] = Float32(0.0); n_in[unsafe_offset=2] = Float32(1.0)
     var n_out = alloc[Float32](3)
     transform_normals(inv_s, n_in, Int32(1), n_out)
-    assert_true(_close(n_out[0], Float32(0.0)))
-    assert_true(_close(n_out[1], Float32(0.0)))
-    assert_true(_close(n_out[2], Float32(0.5)))
+    assert_true(_close(n_out[unsafe_offset=0], Float32(0.0)))
+    assert_true(_close(n_out[unsafe_offset=1], Float32(0.0)))
+    assert_true(_close(n_out[unsafe_offset=2], Float32(0.5)))
     inv_s.unsafe_free(); n_in.unsafe_free(); n_out.unsafe_free()
 
 def main() raises:

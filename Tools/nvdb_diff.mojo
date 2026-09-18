@@ -40,8 +40,8 @@ def main() raises:
     var slen = path.byte_length()
     var cpath = alloc[UInt8](slen + 1)
     for ci in range(slen):
-        cpath[ci] = path.unsafe_ptr()[ci]
-    cpath[slen] = UInt8(0)
+        cpath[unsafe_offset=ci] = path.unsafe_ptr()[unsafe_offset=ci]
+    cpath[unsafe_offset=slen] = UInt8(0)
     var h = nvdb_load(cpath, Int32(0))
     if Int(h) == 0:
         print("FAIL: could not load", path)
@@ -67,14 +67,14 @@ def main() raises:
     var idx = Int64(0)
     while idx < n_active:
         nvdb_active_coord(h, idx, coord)
-        var expect = nvdb_get_value_ref(h, coord[0], coord[1], coord[2])
-        var got = nvdb_sample_index(blob, coord[0], coord[1], coord[2])
+        var expect = nvdb_get_value_ref(h, coord[unsafe_offset=0], coord[unsafe_offset=1], coord[unsafe_offset=2])
+        var got = nvdb_sample_index(blob, coord[unsafe_offset=0], coord[unsafe_offset=1], coord[unsafe_offset=2])
         checked += 1
         if expect != Float32(0): nonzero_ref += 1
         if expect != got:
             mismatches += 1
             if first_bad_shown < 5:
-                print("    MISMATCH at (", coord[0], coord[1], coord[2], ") ref=", expect, " got=", got)
+                print("    MISMATCH at (", coord[unsafe_offset=0], coord[unsafe_offset=1], coord[unsafe_offset=2], ") ref=", expect, " got=", got)
                 first_bad_shown += 1
         idx += stride
 
@@ -116,7 +116,7 @@ def main() raises:
     while lf_i < n_active:
         nvdb_active_coord(h, lf_i, coord)
         lf_i += lf_stride
-        var lx = coord[0]; var ly = coord[1]; var lz = coord[2]
+        var lx = coord[unsafe_offset=0]; var ly = coord[unsafe_offset=1]; var lz = coord[unsafe_offset=2]
         if (lx & Int32(7)) >= Int32(7) or (ly & Int32(7)) >= Int32(7) or (lz & Int32(7)) >= Int32(7):
             continue
         var lb = nvdb_leaf_base(blob, lx, ly, lz)
@@ -150,7 +150,7 @@ def main() raises:
         var ci = Int64(probe) * (n_active // Int64(400) + Int64(1))
         if ci >= n_active: break
         nvdb_active_coord(h, ci, coord)
-        var bx = coord[0]; var by = coord[1]; var bz = coord[2]
+        var bx = coord[unsafe_offset=0]; var by = coord[unsafe_offset=1]; var bz = coord[unsafe_offset=2]
         var mr = nvdb_majorant_at(blob, bx, by, bz)
         var bound = mr[0]
         var dim = Int32(mr[1])

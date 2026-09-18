@@ -11,10 +11,10 @@ def mojo_parse_scene_any(path: UnsafePointer[UInt8, MutExternalOrigin],
                          verbose: Bool = False,
                         ) -> UnsafePointer[ParsedScene_Mojo, MutExternalOrigin]:
     var pi = 0
-    while path[pi] != UInt8(0):
+    while path[unsafe_offset=pi] != UInt8(0):
         pi += 1
-    var is_xml = (pi >= 4 and path[pi - 4] == UInt8(46) and path[pi - 3] == UInt8(120)
-                  and path[pi - 2] == UInt8(109) and path[pi - 1] == UInt8(108))
+    var is_xml = (pi >= 4 and path[unsafe_offset=pi - 4] == UInt8(46) and path[unsafe_offset=pi - 3] == UInt8(120)
+                  and path[unsafe_offset=pi - 2] == UInt8(109) and path[unsafe_offset=pi - 1] == UInt8(108))
     if is_xml:
         return mojo_parse_mitsuba_scene(path, verbose)
     return mojo_parse_scene(path, verbose)

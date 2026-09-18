@@ -298,8 +298,8 @@ def sms_spatial_combine(
 
     var self_px = Int32(pixel_idx) % sms_io.frame_w
     var self_py = Int32(pixel_idx) // sms_io.frame_w
-    var self_depth = sms_io.gbuf_depth[pixel_idx]
-    var self_mat = sms_io.gbuf_material_id[pixel_idx]
+    var self_depth = sms_io.gbuf_depth[unsafe_offset=pixel_idx]
+    var self_mat = sms_io.gbuf_material_id[unsafe_offset=pixel_idx]
 
     for _ in range(SMS_SPATIAL_NEIGHBORS):
         var ang = pcg.next_float() * Float32(6.283185307)
@@ -313,21 +313,21 @@ def sms_spatial_combine(
             continue
         var n_off = n_idx * 3
         var n_normal = Vec3f(
-            sms_io.gbuf_normal[n_off], sms_io.gbuf_normal[n_off + 1], sms_io.gbuf_normal[n_off + 2])
+            sms_io.gbuf_normal[unsafe_offset=n_off], sms_io.gbuf_normal[unsafe_offset=n_off + 1], sms_io.gbuf_normal[unsafe_offset=n_off + 2])
         if dot(n_normal, normal) < SMS_SPATIAL_NORMAL_DOT_MIN:
             continue
-        var n_depth = sms_io.gbuf_depth[n_idx]
+        var n_depth = sms_io.gbuf_depth[unsafe_offset=n_idx]
         if self_depth <= Float32(0.0) or abs(n_depth - self_depth) > SMS_SPATIAL_DEPTH_REL_MAX * self_depth:
             continue
-        if sms_io.gbuf_material_id[n_idx] != self_mat:
+        if sms_io.gbuf_material_id[unsafe_offset=n_idx] != self_mat:
             continue
 
-        var nb = sms_io.read[n_idx].copy()
+        var nb = sms_io.read[unsafe_offset=n_idx].copy()
         var n_v = Int(nb.n_vertices)
         if n_v <= 0:
             continue
         var nb_x0 = Vec3f(
-            sms_io.gbuf_world_pos[n_off], sms_io.gbuf_world_pos[n_off + 1], sms_io.gbuf_world_pos[n_off + 2])
+            sms_io.gbuf_world_pos[unsafe_offset=n_off], sms_io.gbuf_world_pos[unsafe_offset=n_off + 1], sms_io.gbuf_world_pos[unsafe_offset=n_off + 2])
 
         var sh = sms_shift(
             hit_point, dst_light_point, dst_ldp_du, dst_ldp_dv,
@@ -371,9 +371,9 @@ def sms_spatial_combine(
         for i in range(nb_seen):
             var np_off = Int(nb_px_seen[i]) * 3
             var n_hit = Vec3f(
-                sms_io.gbuf_world_pos[np_off], sms_io.gbuf_world_pos[np_off + 1],
-                sms_io.gbuf_world_pos[np_off + 2])
-            var nb_i = sms_io.read[Int(nb_px_seen[i])].copy()
+                sms_io.gbuf_world_pos[unsafe_offset=np_off], sms_io.gbuf_world_pos[unsafe_offset=np_off + 1],
+                sms_io.gbuf_world_pos[unsafe_offset=np_off + 2])
+            var nb_i = sms_io.read[unsafe_offset=Int(nb_px_seen[i])].copy()
             # Shift the winner BACK into tap i's domain -- the exact
             # "could this domain have produced x?" test.
             var back = sms_shift(

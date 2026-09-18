@@ -43,7 +43,7 @@ def _dummy_path(ray: Ray_C, throughput: SpectralSample) -> PathState_C:
 
 def test_emissive_curve_hit_adds_emission_and_retires_path() raises:
     var materials = alloc[Material_C](1)
-    materials[0] = Material_C(
+    materials[unsafe_offset=0] = Material_C(
         MatKind.area_light, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.0)),                                  # albedo
         RGB(Float32(200.0), Float32(80.0), Float32(20.0)),  # emission
@@ -61,8 +61,8 @@ def test_emissive_curve_hit_adds_emission_and_retires_path() raises:
 
     var paths = alloc[PathState_C](1)
     var intersections = alloc[Intersection_C](1)
-    paths[0] = _dummy_path(ray, SpectralSample(Float32(0.5)))
-    intersections[0] = inter
+    paths[unsafe_offset=0] = _dummy_path(ray, SpectralSample(Float32(0.5)))
+    intersections[unsafe_offset=0] = inter
 
     shade_core_cpu_nee(
         paths, intersections,
@@ -84,10 +84,10 @@ def test_emissive_curve_hit_adds_emission_and_retires_path() raises:
     )
 
     # estimate += throughput(0.5) * emission(200,80,20) = (100,40,10); path retires.
-    assert_true(_close(paths[0].estimate.v0, Float32(100.0)))
-    assert_true(_close(paths[0].estimate.v1, Float32(40.0)))
-    assert_true(_close(paths[0].estimate.v2, Float32(10.0)))
-    assert_true(Int(paths[0].active) == 0)
+    assert_true(_close(paths[unsafe_offset=0].estimate.v0, Float32(100.0)))
+    assert_true(_close(paths[unsafe_offset=0].estimate.v1, Float32(40.0)))
+    assert_true(_close(paths[unsafe_offset=0].estimate.v2, Float32(10.0)))
+    assert_true(Int(paths[unsafe_offset=0].active) == 0)
     paths.unsafe_free(); intersections.unsafe_free(); materials.unsafe_free()
 
 def test_nonemissive_curve_hit_does_not_self_terminate_via_the_arealight_path() raises:
@@ -96,7 +96,7 @@ def test_nonemissive_curve_hit_does_not_self_terminate_via_the_arealight_path() 
     through unchanged. This test only checks it doesn't take the emissive
     shortcut (estimate stays 0); it doesn't exercise shade_hair itself."""
     var materials = alloc[Material_C](1)
-    materials[0] = Material_C(
+    materials[unsafe_offset=0] = Material_C(
         MatKind.hair, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.3)), RGB(Float32(1.55), Float32(0.0), Float32(0.0)),
         Int32(-1), Float32(0.3), Float32(0.3), Int32(-1), Int32(-1), Float32(1.0), Int32(-1), Int32(-1),
@@ -104,7 +104,7 @@ def test_nonemissive_curve_hit_does_not_self_terminate_via_the_arealight_path() 
         RGB(Float32(1.0)), RGB(Float32(0.0)),
         RGB(Float32(1.0)),   # sss_mean_refl (inert)
     )
-    assert_true(materials[0].type != MatKind.area_light)
+    assert_true(materials[unsafe_offset=0].type != MatKind.area_light)
 
 # ── Curve lights are now explicitly NEE-sampled too (task #60-65) ───────────
 # Once an emissive curve has its own AreaLight_C entry (kind==1) in the
@@ -122,7 +122,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
         Float32(0.2), Float32(0.2), Int32(0), Int32(1),
     )
     var curves = alloc[Curve_C](1)
-    curves[0] = curve
+    curves[unsafe_offset=0] = curve
 
     # Reconstruct the same geometric normal shade_nee_core's new branch
     # computes from (u=h, v) at h=0 -- geo_normal reduces to exactly b_perp0.
@@ -135,7 +135,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
     var ray_dir = -b_perp0  # cos_l = -dot(geo_normal, ray_dir) = 1 (straight-on hit)
 
     var materials = alloc[Material_C](1)
-    materials[0] = Material_C(
+    materials[unsafe_offset=0] = Material_C(
         MatKind.area_light, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.0)), RGB(Float32(200.0), Float32(80.0), Float32(20.0)),
         Int32(-1), Float32(0.0), Float32(0.0), Int32(-1), Int32(-1), Float32(1.0), Int32(-1), Int32(-1),
@@ -146,10 +146,10 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
 
     var total_area = curve_light_tube_area(curve)
     var area_lights = alloc[AreaLight_C](1)
-    area_lights[0] = AreaLight_C(Int32(0), Int32(0), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), total_area, Int8(1), Int8(0), Int8(0), Int8(0))
+    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(0), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), total_area, Int8(1), Int8(0), Int8(0), Int8(0))
 
     var cdf = alloc[Float32](2)
-    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var light_sampler = LightSampler_C(cdf, Int32(1), Int32(0))
 
     var t_hit: Float32 = 5.0
@@ -162,7 +162,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
 
     var paths = alloc[PathState_C](1)
     var intersections = alloc[Intersection_C](1)
-    paths[0] = PathState_C(
+    paths[unsafe_offset=0] = PathState_C(
         ray, SpectralSample(Float32(0.5)), SpectralSample(Float32(0.0)), RGB(Float32(0.0)),
         Int32(1),  # bounce > 0: NOT the "camera sees light directly" shortcut
         UInt64(1), UInt64(1), Int8(1), Int8(0),  # specularBounce = 0
@@ -170,7 +170,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
         Float32(0.0),   # mis_null_dist
     )
-    intersections[0] = inter
+    intersections[unsafe_offset=0] = inter
 
     shade_core_cpu_nee(
         paths, intersections,
@@ -198,7 +198,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
     # pdf_light = 25 / 1.1327173 = 22.070820, w = pdf_bsdf^2/(pdf_bsdf^2+pdf_light^2)
     # = 0.4^2/(0.4^2+22.070820^2) = 0.00032835258, estimate.r = 0.5*200*w =
     # 0.0328353 -- strictly less than the full-credit 100.0 this replaced.
-    assert_true(_close(paths[0].estimate.v0, Float32(0.0328353)))
+    assert_true(_close(paths[unsafe_offset=0].estimate.v0, Float32(0.0328353)))
     paths.unsafe_free(); intersections.unsafe_free(); materials.unsafe_free()
     curves.unsafe_free(); area_lights.unsafe_free(); cdf.unsafe_free()
 

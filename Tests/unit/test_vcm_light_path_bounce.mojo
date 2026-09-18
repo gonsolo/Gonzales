@@ -63,15 +63,15 @@ def _build_scene() -> SceneDescriptor2_C:
         Point3f(-10000.0, -10000.0, 0.0), Point3f(10000.0, -10000.0, 0.0), Point3f(0.0, 10000.0, 0.0),
     ]
     for i in range(n_verts):
-        points[i*4+0] = verts[i].x
-        points[i*4+1] = verts[i].y
-        points[i*4+2] = verts[i].z
-        points[i*4+3] = Float32(1.0)
+        points[unsafe_offset=i*4+0] = verts[i].x
+        points[unsafe_offset=i*4+1] = verts[i].y
+        points[unsafe_offset=i*4+2] = verts[i].z
+        points[unsafe_offset=i*4+3] = Float32(1.0)
     var vertex_indices = alloc[Int64](n_verts)
     for i in range(n_verts):
-        vertex_indices[i] = Int64(i)
+        vertex_indices[unsafe_offset=i] = Int64(i)
     var meshes = alloc[TriangleMesh_C](1)
-    meshes[0] = TriangleMesh_C(
+    meshes[unsafe_offset=0] = TriangleMesh_C(
         points, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), vertex_indices,
         UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
         UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
@@ -81,8 +81,8 @@ def _build_scene() -> SceneDescriptor2_C:
     var bounds = alloc[Float32](n_tris * 6)
     for t in range(n_tris):
         var p0 = verts[t*3+0]; var p1 = verts[t*3+1]; var p2 = verts[t*3+2]
-        bounds[t*6+0] = min(p0.x, min(p1.x, p2.x)); bounds[t*6+1] = min(p0.y, min(p1.y, p2.y)); bounds[t*6+2] = min(p0.z, min(p1.z, p2.z))
-        bounds[t*6+3] = max(p0.x, max(p1.x, p2.x)); bounds[t*6+4] = max(p0.y, max(p1.y, p2.y)); bounds[t*6+5] = max(p0.z, max(p1.z, p2.z))
+        bounds[unsafe_offset=t*6+0] = min(p0.x, min(p1.x, p2.x)); bounds[unsafe_offset=t*6+1] = min(p0.y, min(p1.y, p2.y)); bounds[unsafe_offset=t*6+2] = min(p0.z, min(p1.z, p2.z))
+        bounds[unsafe_offset=t*6+3] = max(p0.x, max(p1.x, p2.x)); bounds[unsafe_offset=t*6+4] = max(p0.y, max(p1.y, p2.y)); bounds[unsafe_offset=t*6+5] = max(p0.z, max(p1.z, p2.z))
     var max_nodes = n_tris * 2 + 4
     var bvh_nodes = alloc[BVH2Node](max_nodes)
     var order = alloc[Int32](n_tris)
@@ -90,12 +90,12 @@ def _build_scene() -> SceneDescriptor2_C:
     bounds.unsafe_free()
     var prim_ids = alloc[PrimId_C](n_tris)
     for k in range(n_tris):
-        var orig = Int(order[k])
-        prim_ids[k] = PrimId_C(Int64(0), Int64(orig * 3), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+        var orig = Int(order[unsafe_offset=k])
+        prim_ids[unsafe_offset=k] = PrimId_C(Int64(0), Int64(orig * 3), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     order.unsafe_free()
 
     var materials = alloc[Material_C](1)
-    materials[0] = Material_C(
+    materials[unsafe_offset=0] = Material_C(
         MatKind.diffuse, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.8)), RGB(Float32(0.0)), Int32(-1),
         Float32(0.0), Float32(0.0), Int32(-1), Int32(-1), Float32(1.0), Int32(-1), Int32(-1),
@@ -105,7 +105,7 @@ def _build_scene() -> SceneDescriptor2_C:
 
     var area_lights = alloc[AreaLight_C](1)
     # Light triangle area = 0.5 * |cross((0,1,0),(1,0,0))| = 0.5.
-    area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(1.0)), Float32(0.5), Int8(0), Int8(0), Int8(0), Int8(0))
+    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(1.0)), Float32(0.5), Int8(0), Int8(0), Int8(0), Int8(0))
 
     return SceneDescriptor2_C(
         bvh_nodes, prim_ids, meshes, Int64(1),
@@ -150,7 +150,7 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
     var lvc_new = alloc[BDPTVertex](_BDPT_MAX_VERTS)
     var lvc_path_len_new = alloc[Int32](1)
     var state = _bdpt_light_path_init[False](sd, pcg_new, Int32(-1), 0, lvc_new, lvc_path_len_new, Float32(0), _TEST_PASS_WL)
-    lvc_path_len_new[0] = state.n_verts
+    lvc_path_len_new[unsafe_offset=0] = state.n_verts
 
     var pcg_bounce = PCG32(UInt64(0), UInt64(0))
     pcg_bounce.state = state.pcg_state
@@ -178,9 +178,9 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
         n_iters += 1
         var ray = Ray_C(ro, rd)
         var scratch_new = alloc[Intersection_C](1)
-        scratch_new[0].hit = Int8(0)
+        scratch_new[unsafe_offset=0].hit = Int8(0)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch_new)
-        var inter = scratch_new[0]
+        var inter = scratch_new[unsafe_offset=0]
         scratch_new.unsafe_free()
 
         var cont = _bdpt_light_path_bounce[False](
@@ -190,13 +190,13 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
             current_dielectric_ior, previous_dielectric_ior, wavelengths,
         )
         active = Int8(1) if cont else Int8(0)
-        lvc_path_len_new[0] = Int32(n_verts)
+        lvc_path_len_new[unsafe_offset=0] = Int32(n_verts)
 
-    assert_true(lvc_path_len_old[0] == lvc_path_len_new[0])
-    var n = Int(lvc_path_len_old[0])
+    assert_true(lvc_path_len_old[unsafe_offset=0] == lvc_path_len_new[unsafe_offset=0])
+    var n = Int(lvc_path_len_old[unsafe_offset=0])
     assert_true(n >= 1)  # sanity: the receiver is huge enough that at least the light vertex was stored
     for i in range(n):
-        assert_true(_vertex_close(lvc_old[i], lvc_new[i]))
+        assert_true(_vertex_close(lvc_old[unsafe_offset=i], lvc_new[unsafe_offset=i]))
 
     scratch_old.unsafe_free(); lvc_old.unsafe_free(); lvc_path_len_old.unsafe_free()
     lvc_new.unsafe_free(); lvc_path_len_new.unsafe_free()

@@ -30,11 +30,11 @@ def _close(a: Float32, b: Float32) -> Bool:
 
 def _make_triangle_mesh(p0: Vec3f, p1: Vec3f, p2: Vec3f) -> TriangleMesh_C:
     var points = alloc[Float32](4 * 3)
-    points[0*4+0] = p0[0]; points[0*4+1] = p0[1]; points[0*4+2] = p0[2]; points[0*4+3] = Float32(0.0)
-    points[1*4+0] = p1[0]; points[1*4+1] = p1[1]; points[1*4+2] = p1[2]; points[1*4+3] = Float32(0.0)
-    points[2*4+0] = p2[0]; points[2*4+1] = p2[1]; points[2*4+2] = p2[2]; points[2*4+3] = Float32(0.0)
+    points[unsafe_offset=0*4+0] = p0[0]; points[unsafe_offset=0*4+1] = p0[1]; points[unsafe_offset=0*4+2] = p0[2]; points[unsafe_offset=0*4+3] = Float32(0.0)
+    points[unsafe_offset=1*4+0] = p1[0]; points[unsafe_offset=1*4+1] = p1[1]; points[unsafe_offset=1*4+2] = p1[2]; points[unsafe_offset=1*4+3] = Float32(0.0)
+    points[unsafe_offset=2*4+0] = p2[0]; points[unsafe_offset=2*4+1] = p2[1]; points[unsafe_offset=2*4+2] = p2[2]; points[unsafe_offset=2*4+3] = Float32(0.0)
     var vidx = alloc[Int64](3)
-    vidx[0] = 0; vidx[1] = 1; vidx[2] = 2
+    vidx[unsafe_offset=0] = 0; vidx[unsafe_offset=1] = 1; vidx[unsafe_offset=2] = 2
     return TriangleMesh_C(
         points, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), vidx,
         UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
@@ -107,13 +107,13 @@ def _make_light_mesh() -> TriangleMesh_C:
 
 def test_gi_generate_no_area_lights_returns_invalid() raises:
     var cdf = alloc[Float32](2)
-    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var bvh = alloc[BVH2Node](1)
-    bvh[0] = _make_one_leaf_bvh(Vec3f(1000.0, 1000.0, 1000.0), Vec3f(1001.0, 1001.0, 1001.0))
+    bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(1000.0, 1000.0, 1000.0), Vec3f(1001.0, 1001.0, 1001.0))
     var primIds = alloc[PrimId_C](1)
-    primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    primIds[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = alloc[TriangleMesh_C](1)
-    meshes[0] = _make_light_mesh()
+    meshes[unsafe_offset=0] = _make_light_mesh()
     var ctx = _make_ctx_with_light(bvh, primIds, meshes,
         UnsafePointer[AreaLight_C, MutExternalOrigin].unsafe_dangling(), 0, cdf)
 
@@ -122,22 +122,22 @@ def test_gi_generate_no_area_lights_returns_invalid() raises:
         Vec3f(0.0, 1.0, 0.0), RGB(Float32(0.8)), pcg)
     assert_true(res.valid == Int8(0))
 
-    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free(); meshes.unsafe_free()
+    meshes[unsafe_offset=0].points.unsafe_free(); meshes[unsafe_offset=0].vertexIndices.unsafe_free(); meshes.unsafe_free()
     primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free()
 
 def test_gi_generate_surface_facing_away_from_light_returns_invalid() raises:
     """X2's own normal faces -Y (away from the light at y=10) -- cos_s <= 0
     must be rejected before any shadow ray is even considered."""
     var cdf = alloc[Float32](2)
-    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var bvh = alloc[BVH2Node](1)
-    bvh[0] = _make_one_leaf_bvh(Vec3f(1000.0, 1000.0, 1000.0), Vec3f(1001.0, 1001.0, 1001.0))
+    bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(1000.0, 1000.0, 1000.0), Vec3f(1001.0, 1001.0, 1001.0))
     var primIds = alloc[PrimId_C](1)
-    primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    primIds[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = alloc[TriangleMesh_C](1)
-    meshes[0] = _make_light_mesh()
+    meshes[unsafe_offset=0] = _make_light_mesh()
     var area_lights = alloc[AreaLight_C](1)
-    area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx_with_light(bvh, primIds, meshes, area_lights, 1, cdf)
 
     var pcg = PCG32(UInt64(1), UInt64(1))
@@ -145,7 +145,7 @@ def test_gi_generate_surface_facing_away_from_light_returns_invalid() raises:
         Vec3f(0.0, -1.0, 0.0), RGB(Float32(0.8)), pcg)
     assert_true(res.valid == Int8(0))
 
-    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free(); meshes.unsafe_free()
+    meshes[unsafe_offset=0].points.unsafe_free(); meshes[unsafe_offset=0].vertexIndices.unsafe_free(); meshes.unsafe_free()
     area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free()
 
 def test_gi_generate_unoccluded_light_gives_valid_positive_lo() raises:
@@ -155,15 +155,15 @@ def test_gi_generate_unoccluded_light_gives_valid_positive_lo() raises:
     normal, with recon_point/recon_normal echoing x2's own (matching
     gi_target_pdf's expectation that x2's data, not x1's, lives here)."""
     var cdf = alloc[Float32](2)
-    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var bvh = alloc[BVH2Node](1)
-    bvh[0] = _make_one_leaf_bvh(Vec3f(1000.0, 1000.0, 1000.0), Vec3f(1001.0, 1001.0, 1001.0))
+    bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(1000.0, 1000.0, 1000.0), Vec3f(1001.0, 1001.0, 1001.0))
     var primIds = alloc[PrimId_C](1)
-    primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    primIds[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = alloc[TriangleMesh_C](1)
-    meshes[0] = _make_light_mesh()
+    meshes[unsafe_offset=0] = _make_light_mesh()
     var area_lights = alloc[AreaLight_C](1)
-    area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx_with_light(bvh, primIds, meshes, area_lights, 1, cdf)
 
     var hit_point = Vec3f(0.0, 0.0, 0.0)
@@ -181,7 +181,7 @@ def test_gi_generate_unoccluded_light_gives_valid_positive_lo() raises:
     # is responsible for the reservoir_update step, not this function.
     assert_true(_close(res.state.m, Float32(0.0)))
 
-    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free(); meshes.unsafe_free()
+    meshes[unsafe_offset=0].points.unsafe_free(); meshes[unsafe_offset=0].vertexIndices.unsafe_free(); meshes.unsafe_free()
     area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free()
 
 def test_gi_generate_occluded_light_gives_valid_zero_lo() raises:
@@ -190,23 +190,23 @@ def test_gi_generate_occluded_light_gives_valid_zero_lo() raises:
     but lo=0 exactly, matching ordinary NEE's own treatment of occlusion
     (a real zero contribution, not an invalid draw)."""
     var cdf = alloc[Float32](2)
-    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var bvh = alloc[BVH2Node](1)
-    bvh[0] = _make_one_leaf_bvh(Vec3f(-1.0, 4.9, -1.0), Vec3f(2.0, 5.1, 2.0))
+    bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(-1.0, 4.9, -1.0), Vec3f(2.0, 5.1, 2.0))
     var primIds = alloc[PrimId_C](1)
-    primIds[0] = PrimId_C(Int64(1), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    primIds[unsafe_offset=0] = PrimId_C(Int64(1), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = alloc[TriangleMesh_C](2)
-    meshes[0] = _make_light_mesh()
+    meshes[unsafe_offset=0] = _make_light_mesh()
     # Occluder: right triangle with the right-angle corner at (-1,5,-1),
     # legs to (2,5,-1) and (-1,5,2) -- contains (0,5,0) (barycentric
     # s=t=1/3, s+t=2/3<=1), which is exactly where the ~straight-up shadow
     # ray crosses y=5.
-    meshes[1] = _make_triangle_mesh(
+    meshes[unsafe_offset=1] = _make_triangle_mesh(
         Vec3f(-1.0, 5.0, -1.0),
         Vec3f(2.0, 5.0, -1.0),
         Vec3f(-1.0, 5.0, 2.0))
     var area_lights = alloc[AreaLight_C](1)
-    area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx_with_light(bvh, primIds, meshes, area_lights, 1, cdf)
 
     var pcg = PCG32(UInt64(1), UInt64(1))
@@ -217,8 +217,8 @@ def test_gi_generate_occluded_light_gives_valid_zero_lo() raises:
     assert_true(_close(res.lo.g, Float32(0.0)))
     assert_true(_close(res.lo.b, Float32(0.0)))
 
-    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free()
-    meshes[1].points.unsafe_free(); meshes[1].vertexIndices.unsafe_free()
+    meshes[unsafe_offset=0].points.unsafe_free(); meshes[unsafe_offset=0].vertexIndices.unsafe_free()
+    meshes[unsafe_offset=1].points.unsafe_free(); meshes[unsafe_offset=1].vertexIndices.unsafe_free()
     meshes.unsafe_free()
     area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free()
 
@@ -245,25 +245,25 @@ def _make_path(org: Vec3f, dir: Vec3f) -> PathState_C:
 
 def _run_two_bounce(gi_active: Bool) -> SpectralSample:
     var cdf = alloc[Float32](2)
-    cdf[0] = Float32(0.0); cdf[1] = Float32(1.0)
+    cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var bvh = alloc[BVH2Node](1)
-    bvh[0] = _make_one_leaf_bvh(Vec3f(1000.0, 1000.0, 1000.0), Vec3f(1001.0, 1001.0, 1001.0))
+    bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(1000.0, 1000.0, 1000.0), Vec3f(1001.0, 1001.0, 1001.0))
     var primIds = alloc[PrimId_C](1)
-    primIds[0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    primIds[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = alloc[TriangleMesh_C](1)
-    meshes[0] = _make_light_mesh()
+    meshes[unsafe_offset=0] = _make_light_mesh()
     var area_lights = alloc[AreaLight_C](1)
-    area_lights[0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
 
     var gi_pending_buf = alloc[GIPendingX1](1)
-    gi_pending_buf[0] = gi_pending_x1_init()
+    gi_pending_buf[unsafe_offset=0] = gi_pending_x1_init()
     var real_gi_pending = gi_pending_buf if gi_active else UnsafePointer[GIPendingX1, MutExternalOrigin].unsafe_dangling()
 
     # ctx0 (bounce 0, x1): zero area lights -- di_temporal_step's own RIS
     # loop draws nothing and di_resolve returns immediately (res.light_idx
     # stays < 0), so it never touches path_ptr[].estimate.
     var no_lights_cdf = alloc[Float32](1)
-    no_lights_cdf[0] = Float32(0.0)
+    no_lights_cdf[unsafe_offset=0] = Float32(0.0)
     var ctx0 = _make_ctx_with_light(
         UnsafePointer[BVH2Node, MutExternalOrigin].unsafe_dangling(),
         UnsafePointer[PrimId_C, MutExternalOrigin].unsafe_dangling(),
@@ -278,7 +278,7 @@ def _run_two_bounce(gi_active: Bool) -> SpectralSample:
         use_restir=True, gi_pending=real_gi_pending)
 
     var path_arr = alloc[PathState_C](1)
-    path_arr[0] = _make_path(Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, -1.0))
+    path_arr[unsafe_offset=0] = _make_path(Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, -1.0))
 
     var x1_hit = Vec3f(0.0, 3.0, -4.0)
     var x1_normal = Vec3f(0.0, -0.6, 0.8)
@@ -307,10 +307,10 @@ def _run_two_bounce(gi_active: Bool) -> SpectralSample:
     # null spectral handle carries R/G/B on lanes v0/v1/v2 (see
     # rgb_to_spectral_sample's table-less fallback), so the per-channel
     # multiply is expressed lane-wise here.
-    path_arr[0].throughput = path_arr[0].throughput * SpectralSample(
+    path_arr[unsafe_offset=0].throughput = path_arr[unsafe_offset=0].throughput * SpectralSample(
         x1_alb.r, x1_alb.g, x1_alb.b, Float32(0.0))
 
-    path_arr[0].bounce = Int32(1)
+    path_arr[unsafe_offset=0].bounce = Int32(1)
     var x2_hit = Vec3f(0.0, 0.0, 0.0)
     var x2_normal = Vec3f(0.0, 1.0, 0.0)
     var x2_alb = RGB(Float32(0.8))
@@ -320,9 +320,9 @@ def _run_two_bounce(gi_active: Bool) -> SpectralSample:
         Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5),
         pcg1, null_guide(), reservoir_io_null(), -1)
 
-    var result = path_arr[0].estimate
+    var result = path_arr[unsafe_offset=0].estimate
 
-    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free(); meshes.unsafe_free()
+    meshes[unsafe_offset=0].points.unsafe_free(); meshes[unsafe_offset=0].vertexIndices.unsafe_free(); meshes.unsafe_free()
     area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free(); no_lights_cdf.unsafe_free()
     gi_pending_buf.unsafe_free(); path_arr.unsafe_free()
     return result

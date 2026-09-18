@@ -36,8 +36,8 @@ comptime WAVEFRONT_BATCH: Int = 8
 def _cstr_eq(a: UnsafePointer[UInt8, MutExternalOrigin], b: UnsafePointer[UInt8, MutExternalOrigin]) -> Bool:
     var i = 0
     while True:
-        var ca = a[i]
-        var cb = b[i]
+        var ca = a[unsafe_offset=i]
+        var cb = b[unsafe_offset=i]
         if ca != cb:
             return False
         if ca == UInt8(0):
@@ -70,11 +70,11 @@ def _nearest_lut_byte(lut: UnsafePointer[Float32, MutExternalOrigin], v: Float32
     var lo = 0; var hi = 255
     while lo < hi:
         var mid = (lo + hi) // 2
-        if lut[mid] < v:
+        if lut[unsafe_offset=mid] < v:
             lo = mid + 1
         else:
             hi = mid
-    if lo > 0 and v - lut[lo - 1] <= lut[lo] - v:
+    if lo > 0 and v - lut[unsafe_offset=lo - 1] <= lut[unsafe_offset=lo] - v:
         return UInt8(lo - 1)
     return UInt8(lo)
 
@@ -88,7 +88,7 @@ def _dist(a: Float32, b: Float32) -> Float32:
 # each of _INV_LUT_SIZE evenly spaced values in [0, 1].
 def _build_inverse_lut(lut: UnsafePointer[Float32, MutExternalOrigin], inv: UnsafePointer[UInt8, MutExternalOrigin]):
     for q in range(_INV_LUT_SIZE):
-        inv[q] = _nearest_lut_byte(lut, Float32(q) / Float32(_INV_LUT_SIZE - 1))
+        inv[unsafe_offset=q] = _nearest_lut_byte(lut, Float32(q) / Float32(_INV_LUT_SIZE - 1))
 
 # Same byte as _nearest_lut_byte(lut, v), in O(1). The grid is far finer than
 # the LUT spacing, so the candidate is the nearest byte or a neighbour of it;
@@ -101,10 +101,10 @@ def _quantize_to_lut_byte(
     var q = Int(v * Float32(_INV_LUT_SIZE - 1) + Float32(0.5))
     if q < 0: q = 0
     if q > _INV_LUT_SIZE - 1: q = _INV_LUT_SIZE - 1
-    var b = Int(inv[q])
-    while b < 255 and _dist(lut[b + 1], v) < _dist(lut[b], v):
+    var b = Int(inv[unsafe_offset=q])
+    while b < 255 and _dist(lut[unsafe_offset=b + 1], v) < _dist(lut[unsafe_offset=b], v):
         b += 1
-    while b > 0 and _dist(lut[b - 1], v) <= _dist(lut[b], v):
+    while b > 0 and _dist(lut[unsafe_offset=b - 1], v) <= _dist(lut[unsafe_offset=b], v):
         b -= 1
     return UInt8(b)
 
@@ -121,7 +121,7 @@ def _fill_u8_mips(
     unsafe_memcpy(dest=pyr, src=src, count=tw * th * c)
     var prev = alloc[Float32](tw * th * c)
     for i in range(tw * th * c):
-        prev[i] = lut[Int(src[i])]
+        prev[unsafe_offset=i] = lut[unsafe_offset=Int(src[unsafe_offset=i])]
     var cur = alloc[Float32](max(1, tw // 2) * max(1, th // 2) * c)
     var off_cur = tw * th * c
     var pw = tw; var ph = th
@@ -132,10 +132,10 @@ def _fill_u8_mips(
                 var x0 = 2 * x; var x1 = min(2 * x + 1, pw - 1)
                 var y0 = 2 * y; var y1 = min(2 * y + 1, ph - 1)
                 for k in range(c):
-                    var avg = (prev[(y0 * pw + x0) * c + k] + prev[(y0 * pw + x1) * c + k]
-                               + prev[(y1 * pw + x0) * c + k] + prev[(y1 * pw + x1) * c + k]) * Float32(0.25)
-                    cur[(y * cw + x) * c + k] = avg
-                    pyr[off_cur + (y * cw + x) * c + k] = _quantize_to_lut_byte(lut, inv, avg)
+                    var avg = (prev[unsafe_offset=(y0 * pw + x0) * c + k] + prev[unsafe_offset=(y0 * pw + x1) * c + k]
+                               + prev[unsafe_offset=(y1 * pw + x0) * c + k] + prev[unsafe_offset=(y1 * pw + x1) * c + k]) * Float32(0.25)
+                    cur[unsafe_offset=(y * cw + x) * c + k] = avg
+                    pyr[unsafe_offset=off_cur + (y * cw + x) * c + k] = _quantize_to_lut_byte(lut, inv, avg)
         off_cur += cw * ch * c
         var tmp = prev; prev = cur; cur = tmp
         pw = cw; ph = ch
@@ -158,11 +158,11 @@ def _fill_f32_mips(
                 var x0 = 2 * x; var x1 = min(2 * x + 1, pw - 1)
                 var y0 = 2 * y; var y1 = min(2 * y + 1, ph - 1)
                 for k in range(3):
-                    var a = pyr[off_prev + (y0 * pw + x0) * 3 + k]
-                    var b = pyr[off_prev + (y0 * pw + x1) * 3 + k]
-                    var cc = pyr[off_prev + (y1 * pw + x0) * 3 + k]
-                    var d = pyr[off_prev + (y1 * pw + x1) * 3 + k]
-                    pyr[off_cur + (y * cw + x) * 3 + k] = (a + b + cc + d) * Float32(0.25)
+                    var a = pyr[unsafe_offset=off_prev + (y0 * pw + x0) * 3 + k]
+                    var b = pyr[unsafe_offset=off_prev + (y0 * pw + x1) * 3 + k]
+                    var cc = pyr[unsafe_offset=off_prev + (y1 * pw + x0) * 3 + k]
+                    var d = pyr[unsafe_offset=off_prev + (y1 * pw + x1) * 3 + k]
+                    pyr[unsafe_offset=off_cur + (y * cw + x) * 3 + k] = (a + b + cc + d) * Float32(0.25)
         off_prev = off_cur; off_cur += cw * ch * 3
         pw = cw; ph = ch
 
@@ -194,7 +194,7 @@ def _load_host_texture(
                               Int32(0), Int32(0), Int32(0), Int32(0), Int32(GpuTexture_C.FORMAT_F32), Int32(0))
     var w_out = alloc[Int32](1); var h_out = alloc[Int32](1)
     var c_out = alloc[Int32](1); var srgb_out = alloc[Int32](1)
-    w_out[0] = Int32(0); h_out[0] = Int32(0)
+    w_out[unsafe_offset=0] = Int32(0); h_out[unsafe_offset=0] = Int32(0)
     var u8_out = alloc[UnsafePointer[UInt8, MutExternalOrigin]](1)
     var ok_u8 = external_call["load_texture_u8", Int32,
         UnsafePointer[UInt8, MutExternalOrigin], Int32,
@@ -202,35 +202,35 @@ def _load_host_texture(
         UnsafePointer[Int32, MutExternalOrigin], UnsafePointer[Int32, MutExternalOrigin],
         UnsafePointer[Int32, MutExternalOrigin], UnsafePointer[Int32, MutExternalOrigin]](
         filename, raw_flag, u8_out, w_out, h_out, c_out, srgb_out)
-    if ok_u8 != 0 and Int(w_out[0]) > 0:
-        var tw = Int(w_out[0]); var th = Int(h_out[0]); var c = Int(c_out[0])
-        var lut_off = 256 if srgb_out[0] != Int32(0) else 0
+    if ok_u8 != 0 and Int(w_out[unsafe_offset=0]) > 0:
+        var tw = Int(w_out[unsafe_offset=0]); var th = Int(h_out[unsafe_offset=0]); var c = Int(c_out[unsafe_offset=0])
+        var lut_off = 256 if srgb_out[unsafe_offset=0] != Int32(0) else 0
         var (nlev, texels) = _mip_texel_count(tw, th)
         var pyr = alloc[UInt8](texels * c)
-        _fill_u8_mips(pyr, u8_out[0], tw, th, c, lut + lut_off,
-                      inv + (_INV_LUT_SIZE if lut_off != 0 else 0))
+        _fill_u8_mips(pyr, u8_out[unsafe_offset=0], tw, th, c, lut.unsafe_offset(lut_off),
+                      inv.unsafe_offset((_INV_LUT_SIZE if lut_off != 0 else 0)))
         result = _HostTexture(pyr.unsafe_origin_cast[MutExternalOrigin](), texels * c, Int32(tw), Int32(th),
                               Int32(nlev), Int32(c), Int32(GpuTexture_C.FORMAT_U8), Int32(lut_off))
-        _ = external_call["free_texture_u8", Int32, UnsafePointer[UInt8, MutExternalOrigin]](u8_out[0])
+        _ = external_call["free_texture_u8", Int32, UnsafePointer[UInt8, MutExternalOrigin]](u8_out[unsafe_offset=0])
     else:
         if ok_u8 != 0:
-            _ = external_call["free_texture_u8", Int32, UnsafePointer[UInt8, MutExternalOrigin]](u8_out[0])
+            _ = external_call["free_texture_u8", Int32, UnsafePointer[UInt8, MutExternalOrigin]](u8_out[unsafe_offset=0])
         var data_out = alloc[UnsafePointer[Float32, MutExternalOrigin]](1)
-        w_out[0] = Int32(0); h_out[0] = Int32(0)
+        w_out[unsafe_offset=0] = Int32(0); h_out[unsafe_offset=0] = Int32(0)
         var ok = external_call["load_texture_rgb", Int32,
             UnsafePointer[UInt8, MutExternalOrigin],
             UnsafePointer[UnsafePointer[Float32, MutExternalOrigin], MutExternalOrigin],
             UnsafePointer[Int32, MutExternalOrigin],
             UnsafePointer[Int32, MutExternalOrigin],
             Int32](filename, data_out, w_out, h_out, raw_flag)
-        if ok != 0 and Int(w_out[0]) > 0:
-            var tw = Int(w_out[0]); var th = Int(h_out[0])
+        if ok != 0 and Int(w_out[unsafe_offset=0]) > 0:
+            var tw = Int(w_out[unsafe_offset=0]); var th = Int(h_out[unsafe_offset=0])
             var (nlev, texels) = _mip_texel_count(tw, th)
             var pyr = alloc[Float32](texels * 3)
-            _fill_f32_mips(pyr, data_out[0], tw, th)
+            _fill_f32_mips(pyr, data_out[unsafe_offset=0], tw, th)
             result = _HostTexture(pyr.unsafe_bitcast[UInt8]().unsafe_origin_cast[MutExternalOrigin](), texels * 3 * 4,
                                   Int32(tw), Int32(th), Int32(nlev), Int32(3), Int32(GpuTexture_C.FORMAT_F32), Int32(0))
-            _ = external_call["free_texture_rgb", Int32, UnsafePointer[Float32, MutExternalOrigin]](data_out[0])
+            _ = external_call["free_texture_rgb", Int32, UnsafePointer[Float32, MutExternalOrigin]](data_out[unsafe_offset=0])
         data_out.unsafe_free()
     w_out.unsafe_free(); h_out.unsafe_free(); c_out.unsafe_free(); srgb_out.unsafe_free(); u8_out.unsafe_free()
     return result
@@ -633,9 +633,9 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             # Estimate total mesh data
             var mesh_data_bytes = 0
             for i in range(Int(meshCount)):
-                mesh_data_bytes += Int(meshPointsCounts[i]) * 4       # Float32
-                mesh_data_bytes += Int(meshFaceIndicesCounts[i]) * 8  # Int64
-                mesh_data_bytes += Int(meshVertexIndicesCounts[i]) * 8 # Int64
+                mesh_data_bytes += Int(meshPointsCounts[unsafe_offset=i]) * 4       # Float32
+                mesh_data_bytes += Int(meshFaceIndicesCounts[unsafe_offset=i]) * 8  # Int64
+                mesh_data_bytes += Int(meshVertexIndicesCounts[unsafe_offset=i]) * 8 # Int64
 
             var total_scene_bytes = bvh_bytes + prim_bytes + mesh_struct_bytes + mesh_data_bytes
             var free_mb = free_bytes // (1024 * 1024)
@@ -663,10 +663,10 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var blas_nodes_ptrs_host = alloc[UnsafePointer[UInt8, MutExternalOrigin]](max(n_blas_int, 1))
             var blas_primids_ptrs_host = alloc[UnsafePointer[UInt8, MutExternalOrigin]](max(n_blas_int, 1))
             for bi in range(n_blas_int):
-                blas_nodes_ptrs_host[bi] = _gpu_upload_owned[BVH2Node](
-                    ctx, blas_nodes_bufs, blasNodesArr[bi], Int(blasNodeCounts[bi])).unsafe_bitcast[UInt8]()
-                blas_primids_ptrs_host[bi] = _gpu_upload_owned[PrimId_C](
-                    ctx, blas_primids_bufs, blasPrimIdsArr[bi], Int(blasPrimidCounts[bi])).unsafe_bitcast[UInt8]()
+                blas_nodes_ptrs_host[unsafe_offset=bi] = _gpu_upload_owned[BVH2Node](
+                    ctx, blas_nodes_bufs, blasNodesArr[unsafe_offset=bi], Int(blasNodeCounts[unsafe_offset=bi])).unsafe_bitcast[UInt8]()
+                blas_primids_ptrs_host[unsafe_offset=bi] = _gpu_upload_owned[PrimId_C](
+                    ctx, blas_primids_bufs, blasPrimIdsArr[unsafe_offset=bi], Int(blasPrimidCounts[unsafe_offset=bi])).unsafe_bitcast[UInt8]()
 
             var blas_nodes_ptrs_buf = _gpu_upload_array[UnsafePointer[UInt8, MutExternalOrigin]](
                 ctx, blas_nodes_ptrs_host, n_blas_int)
@@ -688,28 +688,28 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var mesh_structs_host = alloc[TriangleMesh_C](max(Int(meshCount), 1))
 
             for i in range(Int(meshCount)):
-                var host_mesh = meshes[i]
+                var host_mesh = meshes[unsafe_offset=i]
 
                 # Points (Float32), face and vertex indices (Int64), then UVs (2 floats
                 # per vertex) and shading normals (3 per vertex), each a zeroed
                 # 4-byte buffer when the mesh has none.
-                var pts_dptr = _gpu_upload_owned[Float32](ctx, points_bufs, host_mesh.points, Int(meshPointsCounts[i]))
-                var fi_dptr = _gpu_upload_owned[Int64](ctx, face_bufs, host_mesh.faceIndices, Int(meshFaceIndicesCounts[i]))
-                var vi_dptr = _gpu_upload_owned[Int64](ctx, vert_bufs, host_mesh.vertexIndices, Int(meshVertexIndicesCounts[i]))
-                var uv_n = Int(meshUvNVerts[i])
+                var pts_dptr = _gpu_upload_owned[Float32](ctx, points_bufs, host_mesh.points, Int(meshPointsCounts[unsafe_offset=i]))
+                var fi_dptr = _gpu_upload_owned[Int64](ctx, face_bufs, host_mesh.faceIndices, Int(meshFaceIndicesCounts[unsafe_offset=i]))
+                var vi_dptr = _gpu_upload_owned[Int64](ctx, vert_bufs, host_mesh.vertexIndices, Int(meshVertexIndicesCounts[unsafe_offset=i]))
+                var uv_n = Int(meshUvNVerts[unsafe_offset=i])
                 var uv_dptr: UnsafePointer[Float32, MutExternalOrigin]
                 if uv_n > 0:
                     uv_dptr = _gpu_upload_owned[Float32](ctx, uv_bufs, host_mesh.uvs, uv_n * 2)
                 else:
                     uv_dptr = _gpu_zeros_owned[Float32](ctx, uv_bufs, 1)
-                var nrm_n = Int(meshNrmNVerts[i])
+                var nrm_n = Int(meshNrmNVerts[unsafe_offset=i])
                 var nrm_dptr = UnsafePointer[Float32, MutExternalOrigin](unsafe_from_address=1)   # "no normals"
                 if nrm_n > 0:
                     nrm_dptr = _gpu_upload_owned[Float32](ctx, nrm_bufs, host_mesh.normals, nrm_n * 3)
                 else:
                     _ = _gpu_zeros_owned[Float32](ctx, nrm_bufs, 1)
 
-                mesh_structs_host[i] = TriangleMesh_C(pts_dptr, fi_dptr, vi_dptr, uv_dptr, nrm_dptr)
+                mesh_structs_host[unsafe_offset=i] = TriangleMesh_C(pts_dptr, fi_dptr, vi_dptr, uv_dptr, nrm_dptr)
 
             # Upload mesh struct array
             var meshes_buf = _gpu_upload_array[TriangleMesh_C](ctx, mesh_structs_host, Int(meshCount))
@@ -742,7 +742,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             # host pool, ~1 s of page faults.)
             var ls_entries = Int(lightSamplerN) + 1
             var ls_host = alloc[Float32](max(ls_entries, 2))
-            ls_host[1] = Float32(0)
+            ls_host[unsafe_offset=1] = Float32(0)
             unsafe_memcpy(dest=ls_host, src=lightSamplerCdf, count=ls_entries)
             var ls_buf = _gpu_upload_array[Float32](ctx, ls_host, max(ls_entries, 2))
             ctx.synchronize()   # ls_host is freed next
@@ -755,7 +755,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var il_w2l_bufs    = List[DeviceBuffer[DType.uint8]]()
             var il_patched = alloc[InfiniteLight_C](max(il_count, 1))
             for ii in range(il_count):
-                var il = infiniteLights[ii]
+                var il = infiniteLights[unsafe_offset=ii]
                 # world_to_light matrix (16 floats), then pixels + CDF when textured.
                 il.world_to_light = _gpu_upload_owned[Float32](ctx, il_w2l_bufs, il.world_to_light, 16)
                 if il.cdf_w > Int32(0) and _is_real_ptr(il.pixels_ptr):
@@ -763,7 +763,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                     # Pixels: iw × ih × 3 floats. CDF: (ih+1) marginal rows + ih×(iw+1) conditional entries.
                     il.pixels_ptr = _gpu_upload_owned[Float32](ctx, il_pixels_bufs, il.pixels_ptr, iw * ih * 3)
                     il.cdf_ptr = _gpu_upload_owned[Float32](ctx, il_cdf_bufs, il.cdf_ptr, (ih + 1) + ih * (iw + 1))
-                il_patched[ii] = il
+                il_patched[unsafe_offset=ii] = il
             var il_buf = _gpu_upload_array[InfiniteLight_C](ctx, il_patched, il_count)
             ctx.synchronize()   # il_patched is freed next
             il_patched.unsafe_free()
@@ -776,7 +776,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             # reading it back off the device later would need a sync.
             var has_sss_med = False
             for mi in range(Int(mediumCount)):
-                if mediums[mi].is_sss != Int32(0):
+                if mediums[unsafe_offset=mi].is_sss != Int32(0):
                     has_sss_med = True
                     break
 
@@ -791,9 +791,9 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var n_grids_int = Int(gridCount)
             var grid_structs_host = alloc[Grid_C](max(n_grids_int, 1))
             for gi in range(n_grids_int):
-                var host_grid = grids[gi]
+                var host_grid = grids[unsafe_offset=gi]
                 var n_voxels = Int(host_grid.nx) * Int(host_grid.ny) * Int(host_grid.nz)
-                grid_structs_host[gi] = Grid_C(
+                grid_structs_host[unsafe_offset=gi] = Grid_C(
                     _gpu_upload_owned[Float32](ctx, grid_density_bufs, host_grid.density, n_voxels),
                     host_grid.nx, host_grid.ny, host_grid.nz,
                     host_grid.p0, host_grid.p1,
@@ -812,8 +812,8 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var n_nvdb_grids_int = Int(nvdbGridCount)
             var nvdb_structs_host = alloc[NvdbGrid_C](max(n_nvdb_grids_int, 1))
             for gi in range(n_nvdb_grids_int):
-                var host_nvdb = nvdbGrids[gi]
-                nvdb_structs_host[gi] = NvdbGrid_C(
+                var host_nvdb = nvdbGrids[unsafe_offset=gi]
+                nvdb_structs_host[unsafe_offset=gi] = NvdbGrid_C(
                     _gpu_upload_owned[UInt8](ctx, nvdb_blob_bufs, host_nvdb.blob, Int(host_nvdb.blob_size)),
                     host_nvdb.blob_size,
                     host_nvdb.world_to_medium, host_nvdb.inv_map, host_nvdb.map_vec,
@@ -839,7 +839,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var n_measured_int = Int(measuredBrdfCount)
             var measured_structs_host = alloc[MeasuredBRDF_C](max(n_measured_int, 1))
             for mi in range(n_measured_int):
-                var hm = measured_brdfs[mi]
+                var hm = measured_brdfs[unsafe_offset=mi]
                 var slices2 = Int(hm.n_phi_i) * Int(hm.n_theta_i)
                 var slices3 = slices2 * Int(hm.n_wavelengths)
                 var vndf_n = slices2 * Int(hm.vndf_xs) * Int(hm.vndf_ys)
@@ -858,7 +858,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                 var spectra_dptr = _gpu_upload_owned[Float32](
                     ctx, measured_field_bufs, hm.spectra_data, slices3 * Int(hm.spectra_xs) * Int(hm.spectra_ys))
 
-                measured_structs_host[mi] = MeasuredBRDF_C(
+                measured_structs_host[unsafe_offset=mi] = MeasuredBRDF_C(
                     hm.isotropic, hm.n_theta_i, hm.n_phi_i, hm.n_wavelengths,
                     theta_i_dptr, phi_i_dptr, wavelengths_dptr,
                     ndf_dptr, hm.ndf_xs, hm.ndf_ys,
@@ -935,11 +935,11 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             # sRGB-decoded on load. Mark those indices by scanning the materials.
             var tex_is_raw = alloc[Bool](max(n_textures_int, 1))
             for ti in range(n_textures_int):
-                tex_is_raw[ti] = False
+                tex_is_raw[unsafe_offset=ti] = False
             for mi in range(Int(materialCount)):
-                var nidx = Int(materials[mi].normal_tex_idx)
+                var nidx = Int(materials[unsafe_offset=mi].normal_tex_idx)
                 if nidx >= 0 and nidx < n_textures_int:
-                    tex_is_raw[nidx] = True
+                    tex_is_raw[unsafe_offset=nidx] = True
             # Many scenes (e.g. landscape) declare a separate named Texture per
             # instance even when several instances share the same underlying
             # image file (batch-exported "-renamed-N" duplicates). Dedup by
@@ -947,11 +947,11 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             # and uploaded to the GPU once, instead of once per declaration.
             var dup_of = alloc[Int32](max(n_textures_int, 1))
             for ti in range(n_textures_int):
-                dup_of[ti] = Int32(-1)
+                dup_of[unsafe_offset=ti] = Int32(-1)
                 for tj in range(ti):
-                    if dup_of[tj] == Int32(-1) and tex_is_raw[tj] == tex_is_raw[ti] and \
-                       _cstr_eq(tex_filenames[ti], tex_filenames[tj]):
-                        dup_of[ti] = Int32(tj)
+                    if dup_of[unsafe_offset=tj] == Int32(-1) and tex_is_raw[unsafe_offset=tj] == tex_is_raw[unsafe_offset=ti] and \
+                       _cstr_eq(tex_filenames[unsafe_offset=ti], tex_filenames[unsafe_offset=tj]):
+                        dup_of[unsafe_offset=ti] = Int32(tj)
                         break
             var tex_data_bufs = List[DeviceBuffer[DType.uint8]]()
             var gpu_textures_host = alloc[GpuTexture_C](max(n_textures_int, 1))
@@ -960,13 +960,13 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             # exactly as load_texture_rgb decodes, so level 0 matches the float path.
             var lut_host = alloc[Float32](512)
             _ = external_call["texture_uint8_lut", NoneType, Int32, UnsafePointer[Float32, MutExternalOrigin]](Int32(0), lut_host)
-            _ = external_call["texture_uint8_lut", NoneType, Int32, UnsafePointer[Float32, MutExternalOrigin]](Int32(1), lut_host + 256)
+            _ = external_call["texture_uint8_lut", NoneType, Int32, UnsafePointer[Float32, MutExternalOrigin]](Int32(1), lut_host.unsafe_offset(256))
             var lut_buf = ctx.enqueue_create_buffer[DType.float32](512)
             ctx.enqueue_copy(lut_buf, lut_host)
             var lut_dev = lut_buf.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin]()
             var inv_host = alloc[UInt8](2 * _INV_LUT_SIZE)
             _build_inverse_lut(lut_host, inv_host)
-            _build_inverse_lut(lut_host + 256, inv_host + _INV_LUT_SIZE)
+            _build_inverse_lut(lut_host.unsafe_offset(256), inv_host.unsafe_offset(_INV_LUT_SIZE))
             # Decoding and mip building are independent per file and dominate
             # startup on texture-heavy scenes (Bistro), so run them on every core,
             # workers claiming the next texture from a shared cursor (file sizes
@@ -974,7 +974,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             # receives exactly the buffers a serial loop would build.
             var host_tex = alloc[_HostTexture](max(n_textures_int, 1))
             var next_tex = alloc[Int32](1)
-            next_tex[0] = Int32(0)
+            next_tex[unsafe_offset=0] = Int32(0)
 
             @parameter
             def decode_worker(_worker_idx: Int):
@@ -982,9 +982,9 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                     var ti = Int(Atomic.fetch_add(next_tex, Int32(1)))
                     if ti >= n_textures_int:
                         break
-                    if dup_of[ti] == Int32(-1):
-                        var raw_flag = Int32(1) if tex_is_raw[ti] else Int32(0)
-                        host_tex[ti] = _load_host_texture(tex_filenames[ti], raw_flag, lut_host, inv_host)
+                    if dup_of[unsafe_offset=ti] == Int32(-1):
+                        var raw_flag = Int32(1) if tex_is_raw[unsafe_offset=ti] else Int32(0)
+                        host_tex[unsafe_offset=ti] = _load_host_texture(tex_filenames[unsafe_offset=ti], raw_flag, lut_host, inv_host)
 
             if n_textures_int > 0:
                 parallelize[decode_worker](min(num_performance_cores(), n_textures_int))
@@ -992,32 +992,32 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
 
             var tex_bytes = 0
             for ti in range(n_textures_int):
-                if dup_of[ti] != Int32(-1):
-                    gpu_textures_host[ti] = gpu_textures_host[Int(dup_of[ti])]
+                if dup_of[unsafe_offset=ti] != Int32(-1):
+                    gpu_textures_host[unsafe_offset=ti] = gpu_textures_host[unsafe_offset=Int(dup_of[unsafe_offset=ti])]
                     continue
-                var ht = host_tex[ti]
+                var ht = host_tex[unsafe_offset=ti]
                 if ht.n_bytes == 0:
-                    gpu_textures_host[ti] = GpuTexture_C(UnsafePointer[UInt8, MutExternalOrigin].unsafe_dangling(),
+                    gpu_textures_host[unsafe_offset=ti] = GpuTexture_C(UnsafePointer[UInt8, MutExternalOrigin].unsafe_dangling(),
                         UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
                         Int32(0), Int32(0), Int32(0), Int32(0), Int32(GpuTexture_C.FORMAT_F32))
                     continue
                 var lut = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
                 if Int(ht.format) == GpuTexture_C.FORMAT_U8:
-                    lut = lut_dev + Int(ht.lut_off)
-                gpu_textures_host[ti] = GpuTexture_C(_gpu_upload_owned[UInt8](ctx, tex_data_bufs, ht.data, ht.n_bytes),
+                    lut = lut_dev.unsafe_offset(Int(ht.lut_off))
+                gpu_textures_host[unsafe_offset=ti] = GpuTexture_C(_gpu_upload_owned[UInt8](ctx, tex_data_bufs, ht.data, ht.n_bytes),
                     lut, ht.width, ht.height, ht.n_levels, ht.channels, ht.format)
                 tex_bytes += ht.n_bytes
             var textures_gpu_buf = _gpu_upload_array[GpuTexture_C](ctx, gpu_textures_host, n_textures_int)
             # The uploads above are asynchronous; free their host sources once they're done.
             ctx.synchronize()
             for ti in range(n_textures_int):
-                if dup_of[ti] == Int32(-1) and host_tex[ti].n_bytes > 0:
-                    host_tex[ti].data.unsafe_free()
+                if dup_of[unsafe_offset=ti] == Int32(-1) and host_tex[unsafe_offset=ti].n_bytes > 0:
+                    host_tex[unsafe_offset=ti].data.unsafe_free()
             host_tex.unsafe_free()
             lut_host.unsafe_free(); inv_host.unsafe_free()
             var n_unique_tex = 0
             for ti in range(n_textures_int):
-                if dup_of[ti] == Int32(-1):
+                if dup_of[unsafe_offset=ti] == Int32(-1):
                     n_unique_tex += 1
             gpu_textures_host.unsafe_free()
             tex_is_raw.unsafe_free()
@@ -1242,10 +1242,10 @@ def shade_nee_preamble_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    var path_ptr = paths + tid
+    var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].active == 0:
         return
-    var inter = intersections[tid]
+    var inter = intersections[unsafe_offset=tid]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     # Do NOT early-exit on miss — shade_nee_core adds env-light contribution there.
     var ctx_no_shadow = ShadeContext(
@@ -1336,12 +1336,12 @@ def shade_diffuse_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    var path_ptr = paths + tid
+    var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.diffuse:
         return
     path_ptr[].pending_mat = Int8(0)
-    var inter = intersections[tid]
-    var mat = materials[Int(inter.primId.materialIndex)]
+    var inter = intersections[unsafe_offset=tid]
+    var mat = materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var restir_on = use_restir != Int32(0)
     var ctx = ShadeContext(
@@ -1425,12 +1425,12 @@ def shade_coated_diffuse_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    var path_ptr = paths + tid
+    var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.coated_diffuse:
         return
     path_ptr[].pending_mat = Int8(0)
-    var inter = intersections[tid]
-    var mat = materials[Int(inter.primId.materialIndex)]
+    var inter = intersections[unsafe_offset=tid]
+    var mat = materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
@@ -1500,11 +1500,11 @@ def shade_diffuse_transmit_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    var path_ptr = paths + tid
+    var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.diffuse_transmit:
         return
     path_ptr[].pending_mat = Int8(0)
-    var inter = intersections[tid]
+    var inter = intersections[unsafe_offset=tid]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
@@ -1567,11 +1567,11 @@ def shade_mix_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    var path_ptr = paths + tid
+    var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.mix:
         return
-    var inter = intersections[tid]
-    var mat = materials[Int(inter.primId.materialIndex)]
+    var inter = intersections[unsafe_offset=tid]
+    var mat = materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var packed = mat.tex_idx
     var idx1 = Int(packed & Int32(0xFFFF))
     var idx2 = Int((packed >> 16) & Int32(0xFFFF))
@@ -1579,10 +1579,10 @@ def shade_mix_gpu(
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var chosen_idx = idx2 if pcg.next_float() < amount else idx1
     path_ptr[].pcgState = pcg.state
-    var sub_type = materials[chosen_idx].type
+    var sub_type = materials[unsafe_offset=chosen_idx].type
     if sub_type == MatKind.mix:
         sub_type = MatKind.diffuse  # guard against mix-of-mix cycle, matches shade_mix (shading.mojo)
-    intersections[tid].primId.materialIndex = Int64(chosen_idx)
+    intersections[unsafe_offset=tid].primId.materialIndex = Int64(chosen_idx)
     path_ptr[].pending_mat = sub_type
 
 
@@ -1634,12 +1634,12 @@ def shade_conductor_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    var path_ptr = paths + tid
+    var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.conductor:
         return
     path_ptr[].pending_mat = Int8(0)
-    var inter = intersections[tid]
-    var mat = materials[Int(inter.primId.materialIndex)]
+    var inter = intersections[unsafe_offset=tid]
+    var mat = materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
@@ -1710,12 +1710,12 @@ def shade_measured_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    var path_ptr = paths + tid
+    var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.measured:
         return
     path_ptr[].pending_mat = Int8(0)
-    var inter = intersections[tid]
-    var mat = materials[Int(inter.primId.materialIndex)]
+    var inter = intersections[unsafe_offset=tid]
+    var mat = materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
@@ -1752,12 +1752,12 @@ def shade_dielectric_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    var path_ptr = paths + tid
+    var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.dielectric:
         return
     path_ptr[].pending_mat = Int8(0)
-    var inter = intersections[tid]
-    var mat = materials[Int(inter.primId.materialIndex)]
+    var inter = intersections[unsafe_offset=tid]
+    var mat = materials[unsafe_offset=Int(inter.primId.materialIndex)]
     # textures/px_scale are here only so a dielectric carrying "texture
     # displacement"/"normalmap" gets it applied (barcelona-pavilion's water).
     # tex_filenames is CPU-only (GPU samples the uploaded texture table), so
@@ -1779,12 +1779,12 @@ def shade_thin_dielectric_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    var path_ptr = paths + tid
+    var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.thin_dielectric:
         return
     path_ptr[].pending_mat = Int8(0)
-    var inter = intersections[tid]
-    var mat = materials[Int(inter.primId.materialIndex)]
+    var inter = intersections[unsafe_offset=tid]
+    var mat = materials[unsafe_offset=Int(inter.primId.materialIndex)]
     shade_thin_dielectric(path_ptr, inter, meshes, mat, spheres)
 
 
@@ -1836,12 +1836,12 @@ def shade_coated_conductor_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    var path_ptr = paths + tid
+    var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.coated_conductor:
         return
     path_ptr[].pending_mat = Int8(0)
-    var inter = intersections[tid]
-    var mat = materials[Int(inter.primId.materialIndex)]
+    var inter = intersections[unsafe_offset=tid]
+    var mat = materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
@@ -1877,11 +1877,11 @@ def shade_interface_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    var path_ptr = paths + tid
+    var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.interface:
         return
     path_ptr[].pending_mat = Int8(0)
-    var inter = intersections[tid]
+    var inter = intersections[unsafe_offset=tid]
     shade_interface(path_ptr, inter)
 
 
@@ -1901,16 +1901,16 @@ def update_medium_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    var path_ptr = paths + tid
+    var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].active == 0:
         return
-    var inter = intersections[tid]
+    var inter = intersections[unsafe_offset=tid]
     if inter.hit == 0:
         return
-    var mat = materials[Int(inter.primId.materialIndex)]
+    var mat = materials[unsafe_offset=Int(inter.primId.materialIndex)]
     if mat.medium_interface_idx < Int32(0):
         return
-    var iface = medium_ifaces[Int(mat.medium_interface_idx)]
+    var iface = medium_ifaces[unsafe_offset=Int(mat.medium_interface_idx)]
     var ray_dir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
     var geom_n: Vec3f
     if inter.primId.type == 4:
@@ -1918,7 +1918,7 @@ def update_medium_gpu(
         # volumes (e.g. smoke-plume's "MediumInterface .. Shape sphere")
         # are commonly a big invisible sphere, so this case matters even
         # though spheres otherwise rarely carry materials with real shading.
-        var sph = spheres[Int(inter.primId.id1)]
+        var sph = spheres[unsafe_offset=Int(inter.primId.id1)]
         # ray.origin is ALREADY the hit point -- this kernel runs after all
         # material shaders (see the docstring above), and each shader rewrites
         # path.ray to the outgoing ray whose origin sits on the surface.
@@ -1940,13 +1940,13 @@ def update_medium_gpu(
             bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
         else:
             return
-        var m = meshes[mi]
-        var v0 = Int(m.vertexIndices[bv])
-        var v1 = Int(m.vertexIndices[bv + 1])
-        var v2 = Int(m.vertexIndices[bv + 2])
-        var p0 = Vec3f(m.points[v0*4], m.points[v0*4+1], m.points[v0*4+2])
-        var p1 = Vec3f(m.points[v1*4], m.points[v1*4+1], m.points[v1*4+2])
-        var p2 = Vec3f(m.points[v2*4], m.points[v2*4+1], m.points[v2*4+2])
+        var m = meshes[unsafe_offset=mi]
+        var v0 = Int(m.vertexIndices[unsafe_offset=bv])
+        var v1 = Int(m.vertexIndices[unsafe_offset=bv + 1])
+        var v2 = Int(m.vertexIndices[unsafe_offset=bv + 2])
+        var p0 = Vec3f(m.points[unsafe_offset=v0*4], m.points[unsafe_offset=v0*4+1], m.points[unsafe_offset=v0*4+2])
+        var p1 = Vec3f(m.points[unsafe_offset=v1*4], m.points[unsafe_offset=v1*4+1], m.points[unsafe_offset=v1*4+2])
+        var p2 = Vec3f(m.points[unsafe_offset=v2*4], m.points[unsafe_offset=v2*4+1], m.points[unsafe_offset=v2*4+2])
         geom_n = cross(p1 - p0, p2 - p0)
     if dot(ray_dir, geom_n) > Float32(0.0):
         path_ptr[].current_medium_idx = iface.outside_medium_idx
@@ -2174,16 +2174,16 @@ def _sample_medium_core(
     band-picking (see spectrum.mojo's rgb_bands_to_spectral_sample) — real
     chromatic extinction is the same unimplemented, separate piece of work.
     """
-    var path_ptr = paths + i
+    var path_ptr = paths.unsafe_offset(i)
     if path_ptr[].active == 0:
         return
     var med_idx = Int(path_ptr[].current_medium_idx)
     if med_idx < 0 or med_idx >= n_mediums:
         return
-    var inter = intersections[i]
+    var inter = intersections[unsafe_offset=i]
     if inter.hit == 0:
         return
-    var med = mediums[med_idx]
+    var med = mediums[unsafe_offset=med_idx]
     var sigma_t = med.sigma_a + med.sigma_s
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var t_surf = inter.tHit
@@ -2430,18 +2430,18 @@ def _sample_medium_core(
                 var ls_result = light_sampler_sample(ls, u_nee)
                 var light_idx = ls_result[0]
                 var light_sel_pdf = ls_result[1]
-                var al = areaLights[light_idx]
-                var lmesh = meshes[Int(al.meshIdx)]
+                var al = areaLights[unsafe_offset=light_idx]
+                var lmesh = meshes[unsafe_offset=Int(al.meshIdx)]
                 var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
                 var r1 = pcg.next_float()
                 var r2 = pcg.next_float()
                 var lb = lti * 3
-                var lv0 = Int(lmesh.vertexIndices[lb])
-                var lv1 = Int(lmesh.vertexIndices[lb + 1])
-                var lv2 = Int(lmesh.vertexIndices[lb + 2])
-                var lp0 = Vec3f(lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
-                var lp1 = Vec3f(lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
-                var lp2 = Vec3f(lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
+                var lv0 = Int(lmesh.vertexIndices[unsafe_offset=lb])
+                var lv1 = Int(lmesh.vertexIndices[unsafe_offset=lb + 1])
+                var lv2 = Int(lmesh.vertexIndices[unsafe_offset=lb + 2])
+                var lp0 = Vec3f(lmesh.points[unsafe_offset=lv0*4], lmesh.points[unsafe_offset=lv0*4+1], lmesh.points[unsafe_offset=lv0*4+2])
+                var lp1 = Vec3f(lmesh.points[unsafe_offset=lv1*4], lmesh.points[unsafe_offset=lv1*4+1], lmesh.points[unsafe_offset=lv1*4+2])
+                var lp2 = Vec3f(lmesh.points[unsafe_offset=lv2*4], lmesh.points[unsafe_offset=lv2*4+1], lmesh.points[unsafe_offset=lv2*4+2])
                 var sqrt_r1 = sqrt(r1)
                 var light_point = lp0 * (Float32(1) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1) - r2)) + lp2 * (sqrt_r1 * r2)
                 var lcross = cross(lp1 - lp0, lp2 - lp0)
@@ -2518,9 +2518,9 @@ def _sample_medium_core(
             # mutually exclusive here, on a premise that turned out to be
             # backwards -- see the shift-mode choice below).
             var vol_reuse_ok = (pixel_idx >= 0 and _is_real_ptr(vol_read)
-                and _is_real_ptr(vol_used) and vol_used[i] == Int8(0))
+                and _is_real_ptr(vol_used) and vol_used[unsafe_offset=i] == Int8(0))
             if vol_reuse_ok:
-                vol_used[i] = Int8(1)
+                vol_used[unsafe_offset=i] = Int8(1)
                 var vol_io = vol_reservoir_io_null()
                 vol_io.read = vol_read
                 vol_io.write = vol_write
@@ -2608,11 +2608,11 @@ def _sample_medium_core(
                             # exits the medium -- same dual-source dispatch as
                             # the free-flight sampling above.
                             var use_nvdb_s = med.nvdb_idx >= Int32(0)
-                            var grid_s = grids[Int(med.grid_idx)] if not use_nvdb_s else Grid_C(
+                            var grid_s = grids[unsafe_offset=Int(med.grid_idx)] if not use_nvdb_s else Grid_C(
                                 UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), Int32(0), Int32(0), Int32(0),
                                 Point3f(Float32(0), Float32(0), Float32(0)), Point3f(Float32(0), Float32(0), Float32(0)),
                                 SIMD[DType.float32, 16](0), Float32(0))
-                            var nvdb_grid_s = nvdb_grids[Int(med.nvdb_idx)] if use_nvdb_s else NvdbGrid_C(
+                            var nvdb_grid_s = nvdb_grids[unsafe_offset=Int(med.nvdb_idx)] if use_nvdb_s else NvdbGrid_C(
                                 UnsafePointer[UInt8, MutExternalOrigin].unsafe_dangling(), Int64(0), SIMD[DType.float32, 16](0),
                                 SIMD[DType.float32, 16](0), Vec3f(Float32(0), Float32(0), Float32(0)),
                                 Point3f(Float32(0), Float32(0), Float32(0)), Point3f(Float32(0), Float32(0), Float32(0)), Float32(0))
@@ -2685,7 +2685,7 @@ def _sample_medium_core(
                                 PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
                                 Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
                             var exit_ptr = _exit_inter.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin]()
-                            exit_ptr[0].hit = Int8(0)
+                            exit_ptr[unsafe_offset=0].hit = Int8(0)
                             traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, shad_ray,
                                                shad_tmax, exit_ptr, blasNodesArr, blasPrimIdsArr, instances)
                             test_spheres(spheres, n_spheres, shad_ray, exit_ptr)
@@ -2693,10 +2693,10 @@ def _sample_medium_core(
                             # an already-recorded closer hit), so a sphere past
                             # the light would otherwise set t_med > dist and
                             # over-attenuate instead of under-.
-                            if exit_ptr[0].hit != Int8(0) and exit_ptr[0].tHit <= shad_tmax:
-                                var exit_mat = materials[Int(exit_ptr[0].primId.materialIndex)]
+                            if exit_ptr[unsafe_offset=0].hit != Int8(0) and exit_ptr[unsafe_offset=0].tHit <= shad_tmax:
+                                var exit_mat = materials[unsafe_offset=Int(exit_ptr[unsafe_offset=0].primId.materialIndex)]
                                 if exit_mat.type == MatKind.interface:
-                                    t_med = exit_ptr[0].tHit
+                                    t_med = exit_ptr[unsafe_offset=0].tHit
                             T = RGB(exp(-sigma_t.r * t_med), exp(-sigma_t.g * t_med), exp(-sigma_t.b * t_med))
                         # The old `geom` also carried al.total_area/light_sel_pdf,
                         # i.e. 1/q -- that now lives inside res.state.w, so the
@@ -2716,9 +2716,9 @@ def _sample_medium_core(
                         # solid angle. pdf_light is deliberately spelled exactly
                         # as the emitter-hit side spells it -- MIS is only
                         # correct if both halves agree on the pdf.
-                        var al_win = areaLights[Int(res.light_idx)]
-                        var sel_lo = lightSamplerCdf[Int(res.light_idx)]
-                        var sel_hi = lightSamplerCdf[Int(res.light_idx) + 1]
+                        var al_win = areaLights[unsafe_offset=Int(res.light_idx)]
+                        var sel_lo = lightSamplerCdf[unsafe_offset=Int(res.light_idx)]
+                        var sel_hi = lightSamplerCdf[unsafe_offset=Int(res.light_idx) + 1]
                         var sel_pdf_win = max(sel_hi - sel_lo, Float32(1e-6))
                         var mis_w = Float32(1.0)
                         if al_win.total_area > Float32(0.0):
@@ -2764,22 +2764,22 @@ def _sample_medium_core(
             var scatter_w = scatter_pt.to_simd()
             var wo_v = -ray_dir
             for dl_i in range(n_distant_lights):
-                _volume_nee_light(path_ptr, _sample_distant_light_nee(distantLights[dl_i]),
+                _volume_nee_light(path_ptr, _sample_distant_light_nee(distantLights[unsafe_offset=dl_i]),
                     scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
                     bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
                     instances, spheres, n_spheres, materials,
                     spectral_coeffs, spectral_res, spectral_cie_x,
                     spectral_cie_y, spectral_cie_z, spectral_d65)
             for pl_i in range(n_point_lights):
-                _volume_nee_light(path_ptr, _sample_point_light_nee(pointLights[pl_i], scatter_w),
+                _volume_nee_light(path_ptr, _sample_point_light_nee(pointLights[unsafe_offset=pl_i], scatter_w),
                     scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
                     bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
                     instances, spheres, n_spheres, materials,
                     spectral_coeffs, spectral_res, spectral_cie_x,
                     spectral_cie_y, spectral_cie_z, spectral_d65)
             for sph_i in range(n_spheres):
-                if spheres[sph_i].isAreaLight == Int8(1):
-                    _volume_nee_light(path_ptr, _sample_sphere_light_nee(spheres[sph_i], n_spheres, scatter_w, pcg),
+                if spheres[unsafe_offset=sph_i].isAreaLight == Int8(1):
+                    _volume_nee_light(path_ptr, _sample_sphere_light_nee(spheres[unsafe_offset=sph_i], n_spheres, scatter_w, pcg),
                         scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
                         bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
                         instances, spheres, n_spheres, materials,
@@ -2787,7 +2787,7 @@ def _sample_medium_core(
                         spectral_cie_y, spectral_cie_z, spectral_d65)
             for inf_i in range(n_infinite_lights):
                 _volume_nee_light(path_ptr,
-                    _sample_infinite_light_nee(infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float())),
+                    _sample_infinite_light_nee(infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float())),
                     scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
                     bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
                     instances, spheres, n_spheres, materials,
@@ -2824,7 +2824,7 @@ def _sample_medium_core(
         # (see _SSS_WALK_ROUNDS in rendering.mojo / gpu.mojo).
         if med.is_sss == Int32(0):
             path_ptr[].bounce += 1
-        intersections[i].hit = Int8(0)  # no surface hit this bounce
+        intersections[unsafe_offset=i].hit = Int8(0)  # no surface hit this bounce
     else:
         # Absorbed
         path_ptr[].pcgState = pcg.state
@@ -2956,12 +2956,12 @@ def shade_hair_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    var path_ptr = paths + tid
+    var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.hair:
         return
     path_ptr[].pending_mat = Int8(0)
-    var inter = intersections[tid]
-    var mat = materials[Int(inter.primId.materialIndex)]
+    var inter = intersections[unsafe_offset=tid]
+    var mat = materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
     var ctx = ShadeContext(
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
@@ -3014,11 +3014,11 @@ def shade_enqueue_shadow_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    shadow_tasks[tid].active = Int32(0)
-    var path_ptr = paths + tid
+    shadow_tasks[unsafe_offset=tid].active = Int32(0)
+    var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].active == 0:
         return
-    var inter = intersections[tid]
+    var inter = intersections[unsafe_offset=tid]
     # Do NOT early-exit on miss — shade_nee_core adds env-light contribution there.
     var ls_shadow = LightSampler_C(UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(), Int32(0), Int32(0))
     var ctx_shadow = ShadeContext(
@@ -3056,7 +3056,7 @@ def reset_shadow_tasks_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    shadow_tasks[tid].active = Int32(0)
+    shadow_tasks[unsafe_offset=tid].active = Int32(0)
 
 def reset_restir_reservoirs_gpu(
     reservoirs: UnsafePointer[DIReservoir, MutExternalOrigin],
@@ -3072,7 +3072,7 @@ def reset_restir_reservoirs_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    reservoirs[tid] = di_reservoir_init()
+    reservoirs[unsafe_offset=tid] = di_reservoir_init()
 
 def reset_restir_vol_reservoirs_gpu(
     reservoirs: UnsafePointer[VolReservoir, MutExternalOrigin],
@@ -3085,7 +3085,7 @@ def reset_restir_vol_reservoirs_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    reservoirs[tid] = vol_reservoir_init()
+    reservoirs[unsafe_offset=tid] = vol_reservoir_init()
 
 
 def reset_vol_used_gpu(
@@ -3101,7 +3101,7 @@ def reset_vol_used_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    used[tid] = Int8(0)
+    used[unsafe_offset=tid] = Int8(0)
 
 
 def traverse_shadow_rays_gpu(
@@ -3124,12 +3124,12 @@ def traverse_shadow_rays_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    var task = shadow_tasks[tid]
+    var task = shadow_tasks[unsafe_offset=tid]
     if task.active == 0:
         return
     var shadow_ray = Ray_C(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
     if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shadow_ray, task.tmax, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres, materials=materials):
-        paths[tid].estimate += task.contrib
+        paths[unsafe_offset=tid].estimate += task.contrib
 
 
 def accumulate_film_gpu(
@@ -3151,13 +3151,13 @@ def accumulate_film_gpu(
     # ── Output boundary: spectral transport -> RGB film ──────────────────
     var _e = spectral_sample_to_rgb(spectral_coeffs, Int(spectral_res_dp),
         spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-        paths[tid].estimate, paths[tid].wavelengths)
-    film[tid*3+0] += _e[0]
-    film[tid*3+1] += _e[1]
-    film[tid*3+2] += _e[2]
-    albedo_film[tid*3+0] += paths[tid].albedo.r
-    albedo_film[tid*3+1] += paths[tid].albedo.g
-    albedo_film[tid*3+2] += paths[tid].albedo.b
+        paths[unsafe_offset=tid].estimate, paths[unsafe_offset=tid].wavelengths)
+    film[unsafe_offset=tid*3+0] += _e[0]
+    film[unsafe_offset=tid*3+1] += _e[1]
+    film[unsafe_offset=tid*3+2] += _e[2]
+    albedo_film[unsafe_offset=tid*3+0] += paths[unsafe_offset=tid].albedo.r
+    albedo_film[unsafe_offset=tid*3+1] += paths[unsafe_offset=tid].albedo.g
+    albedo_film[unsafe_offset=tid*3+2] += paths[unsafe_offset=tid].albedo.b
 
 
 def clear_film_gpu(film: UnsafePointer[Float32, MutExternalOrigin], n_pixels_dp: Int64):
@@ -3165,9 +3165,9 @@ def clear_film_gpu(film: UnsafePointer[Float32, MutExternalOrigin], n_pixels_dp:
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= n_pixels:
         return
-    film[tid*3+0] = Float32(0)
-    film[tid*3+1] = Float32(0)
-    film[tid*3+2] = Float32(0)
+    film[unsafe_offset=tid*3+0] = Float32(0)
+    film[unsafe_offset=tid*3+1] = Float32(0)
+    film[unsafe_offset=tid*3+2] = Float32(0)
 
 
 # Wavefront accumulation: thread px sums actual_batch samples from path_buf layout
@@ -3192,14 +3192,14 @@ def accumulate_film_wavefront_gpu(
     var r = Float32(0); var g = Float32(0); var b = Float32(0)
     var ar = Float32(0); var ag = Float32(0); var ab = Float32(0)
     for si in range(actual_batch):
-        var p = paths[si * n_pixels + px]
+        var p = paths[unsafe_offset=si * n_pixels + px]
         var _pe = spectral_sample_to_rgb(spectral_coeffs, Int(spectral_res_dp),
             spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
             p.estimate, p.wavelengths)
         r += _pe[0]; g += _pe[1]; b += _pe[2]
         ar += p.albedo.r;  ag += p.albedo.g;  ab += p.albedo.b
-    film[px*3+0] += r; film[px*3+1] += g; film[px*3+2] += b
-    albedo_film[px*3+0] += ar; albedo_film[px*3+1] += ag; albedo_film[px*3+2] += ab
+    film[unsafe_offset=px*3+0] += r; film[unsafe_offset=px*3+1] += g; film[unsafe_offset=px*3+2] += b
+    albedo_film[unsafe_offset=px*3+0] += ar; albedo_film[unsafe_offset=px*3+1] += ag; albedo_film[unsafe_offset=px*3+2] += ab
 
 
 # Wavefront primary-ray generation: thread ti → pixel (ti % n_pixels), sample (si_start + ti // n_pixels).
@@ -3238,7 +3238,7 @@ def gen_primary_rays_wavefront_gpu(
         filter_norm_y, filter_support_y,
         filter_type,
     )
-    paths[ti] = PathState_C(
+    paths[unsafe_offset=ti] = PathState_C(
         ray,
         SpectralSample(Float32(1.0)),
         SpectralSample(Float32(0.0)),
@@ -3278,15 +3278,15 @@ def traverse_paths_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    if paths[tid].active == 0:
+    if paths[unsafe_offset=tid].active == 0:
         return
-    curve_cand_count[tid] = Int32(0)
+    curve_cand_count[unsafe_offset=tid] = Int32(0)
     traverse_bvh2_core_defer_curves(
-        bvh2Nodes, primIds, meshes, curves, paths[tid].ray, Float32(1.0e38), results + tid,
-        curve_cand_prim + tid * CURVE_DEFER_K, curve_cand_count + tid,
+        bvh2Nodes, primIds, meshes, curves, paths[unsafe_offset=tid].ray, Float32(1.0e38), results.unsafe_offset(tid),
+        curve_cand_prim.unsafe_offset(tid * CURVE_DEFER_K), curve_cand_count.unsafe_offset(tid),
         blasNodesArr, blasPrimIdsArr, instances,
     )
-    test_spheres(spheres, n_spheres, paths[tid].ray, results + tid)
+    test_spheres(spheres, n_spheres, paths[unsafe_offset=tid].ray, results.unsafe_offset(tid))
 
 
 # Task #163 stage 3: GPU-resident replacement for the `traverse_paths_gpu`
@@ -3314,16 +3314,16 @@ def vulkaninterop_pack_rays_kernel(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    var ray = paths[tid].ray
+    var ray = paths[unsafe_offset=tid].ray
     var idx = tid * 8
-    rays[idx + 0] = ray.origin.x
-    rays[idx + 1] = ray.origin.y
-    rays[idx + 2] = ray.origin.z
-    rays[idx + 3] = Float32(1e-4)
-    rays[idx + 4] = ray.direction.x
-    rays[idx + 5] = ray.direction.y
-    rays[idx + 6] = ray.direction.z
-    rays[idx + 7] = Float32(1.0e8)
+    rays[unsafe_offset=idx + 0] = ray.origin.x
+    rays[unsafe_offset=idx + 1] = ray.origin.y
+    rays[unsafe_offset=idx + 2] = ray.origin.z
+    rays[unsafe_offset=idx + 3] = Float32(1e-4)
+    rays[unsafe_offset=idx + 4] = ray.direction.x
+    rays[unsafe_offset=idx + 5] = ray.direction.y
+    rays[unsafe_offset=idx + 6] = ray.direction.z
+    rays[unsafe_offset=idx + 7] = Float32(1.0e8)
 
 # Unpack the interop-shared results buffer (written by Vulkan's ray-query
 # dispatch) directly into inter_buf's Intersection_C layout -- no host
@@ -3360,33 +3360,33 @@ def vulkaninterop_unpack_results_kernel(
         return
     var idx = tid * 8
     var iresults = results.unsafe_bitcast[Int32]()
-    var hitFlag = iresults[idx + 6]
+    var hitFlag = iresults[unsafe_offset=idx + 6]
     if hitFlag == Int32(1):
-        var raw_idx = Int(iresults[idx + 4])
-        var tri = iresults[idx + 5]
-        var geometry_idx = iresults[idx + 7]
+        var raw_idx = Int(iresults[unsafe_offset=idx + 4])
+        var tri = iresults[unsafe_offset=idx + 5]
+        var geometry_idx = iresults[unsafe_offset=idx + 7]
         var instance_idx = Int32(-1)
         var mi = raw_idx
         if raw_idx >= n_meshes and _is_real_ptr(instance_base_mesh):
             instance_idx = Int32(raw_idx - n_meshes)
-            mi = Int(instance_base_mesh[Int(instance_idx)]) + Int(geometry_idx)
+            mi = Int(instance_base_mesh[unsafe_offset=Int(instance_idx)]) + Int(geometry_idx)
         var mat_idx = Int64(0)
         var al = Int32(-1)
         if mi >= 0 and mi < n_meshes:
-            mat_idx = mesh_material_idx[mi]
+            mat_idx = mesh_material_idx[unsafe_offset=mi]
             if instance_idx < Int32(0):
-                al = mesh_al_idx[mi]
-        var hitT = results[idx + 0]
-        var u = results[idx + 1]
-        var v = results[idx + 2]
+                al = mesh_al_idx[unsafe_offset=mi]
+        var hitT = results[unsafe_offset=idx + 0]
+        var u = results[unsafe_offset=idx + 1]
+        var v = results[unsafe_offset=idx + 2]
         if al >= Int32(0):
-            inter[tid] = Intersection_C(
+            inter[unsafe_offset=tid] = Intersection_C(
                 PrimId_C(Int64(al), (Int64(mi) << 32) | Int64(tri), mat_idx, Int32(-1),
                          Int8(3), Int8(0), Int8(0), Int8(0)),
                 hitT, u, v, Int8(1), Int8(0), Int8(0), Int8(0),
             )
         else:
-            inter[tid] = Intersection_C(
+            inter[unsafe_offset=tid] = Intersection_C(
                 PrimId_C(Int64(mi), Int64(tri) * 3, mat_idx, instance_idx,
                          Int8(0), Int8(0), Int8(0), Int8(0)),
                 hitT, u, v, Int8(1), Int8(0), Int8(0), Int8(0),
@@ -3400,13 +3400,13 @@ def vulkaninterop_unpack_results_kernel(
         # (see vulkaninterop_rt_create_scene's docstring), so this is a
         # straight repack, no lookups needed. u/v here are intersect_curve's
         # own (h, v) outputs, not barycentrics.
-        var curve_idx = Int64(iresults[idx + 4])
-        var piece_info = Int64(iresults[idx + 5])
-        var mat_idx = Int64(iresults[idx + 7])
-        var hitT = results[idx + 0]
-        var h = results[idx + 1]
-        var v = results[idx + 2]
-        inter[tid] = Intersection_C(
+        var curve_idx = Int64(iresults[unsafe_offset=idx + 4])
+        var piece_info = Int64(iresults[unsafe_offset=idx + 5])
+        var mat_idx = Int64(iresults[unsafe_offset=idx + 7])
+        var hitT = results[unsafe_offset=idx + 0]
+        var h = results[unsafe_offset=idx + 1]
+        var v = results[unsafe_offset=idx + 2]
+        inter[unsafe_offset=tid] = Intersection_C(
             PrimId_C(curve_idx, piece_info, mat_idx, Int32(-1), Int8(5), Int8(0), Int8(0), Int8(0)),
             hitT, h, v, Int8(1), Int8(0), Int8(0), Int8(0),
         )
@@ -3419,7 +3419,7 @@ def vulkaninterop_unpack_results_kernel(
         # reject a real closer sphere hit as "farther than the (stale)
         # current best".
         var dummy_id = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-        inter[tid] = Intersection_C(dummy_id, Float32(1.0e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+        inter[unsafe_offset=tid] = Intersection_C(dummy_id, Float32(1.0e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
 
 # Analytic sphere test as a SEPARATE pass after the Vulkan-RT-traced mesh/
 # instance hit above -- exactly mirrors how traverse_paths_gpu (the pure-
@@ -3443,9 +3443,9 @@ def vulkaninterop_test_spheres_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    if paths[tid].active == 0:
+    if paths[unsafe_offset=tid].active == 0:
         return
-    test_spheres(spheres, n_spheres, paths[tid].ray, inter + tid)
+    test_spheres(spheres, n_spheres, paths[unsafe_offset=tid].ray, inter.unsafe_offset(tid))
 
 # Host driver: enqueues pack -> interop ray-query dispatch -> unpack, ALL
 # on ctx.stream() in strict program order, with NO ctx.synchronize()
@@ -3535,7 +3535,7 @@ def vulkaninterop_rt_traverse_paths_gpu(
 
 def reset_curve_counter_gpu(counter: UnsafePointer[Int32, MutExternalOrigin]):
     if block_idx.x == 0 and thread_idx.x == 0:
-        counter[0] = Int32(0)
+        counter[unsafe_offset=0] = Int32(0)
 
 # The CUDA-native path (traverse_bvh2_core_defer_curves) always writes
 # curve candidates at tid*CURVE_DEFER_K -- this reproduces that formula once
@@ -3551,7 +3551,7 @@ def init_curve_cand_offset_gpu(offset_buf: UnsafePointer[Int32, MutExternalOrigi
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= n:
         return
-    offset_buf[tid] = Int32(tid * CURVE_DEFER_K)
+    offset_buf[unsafe_offset=tid] = Int32(tid * CURVE_DEFER_K)
 
 def compact_curve_paths_gpu(
     curve_cand_count: UnsafePointer[Int32, MutExternalOrigin],
@@ -3563,9 +3563,9 @@ def compact_curve_paths_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= n:
         return
-    if curve_cand_count[tid] > Int32(0):
+    if curve_cand_count[unsafe_offset=tid] > Int32(0):
         var pos = Atomic.fetch_add(compact_counter, Int32(1))
-        compact_pathIds[Int(pos)] = Int32(tid)
+        compact_pathIds[unsafe_offset=Int(pos)] = Int32(tid)
 
 def resolve_curve_candidates_gpu(
     compact_pathIds: UnsafePointer[Int32, MutExternalOrigin],
@@ -3583,17 +3583,17 @@ def resolve_curve_candidates_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= n:
         return
-    if tid >= Int(compact_counter[0]):
+    if tid >= Int(compact_counter[unsafe_offset=0]):
         return
-    var pathId = Int(compact_pathIds[tid])
-    var n_cand = Int(curve_cand_count[pathId])
+    var pathId = Int(compact_pathIds[unsafe_offset=tid])
+    var n_cand = Int(curve_cand_count[unsafe_offset=pathId])
     if n_cand == 0:
         return
-    var base = Int(curve_cand_offset[pathId])
-    var ray = paths[pathId].ray
+    var base = Int(curve_cand_offset[unsafe_offset=pathId])
+    var ray = paths[unsafe_offset=pathId].ray
     var ray_org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
     var ray_dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
-    var res = results[pathId]
+    var res = results[unsafe_offset=pathId]
     var best_t = res.tHit
     var best_u = res.u
     var best_v = res.v
@@ -3601,9 +3601,9 @@ def resolve_curve_candidates_gpu(
     var best_hit = res.hit
     var changed = False
     for i in range(n_cand):
-        var primIdx = Int(curve_cand_prim[base + i])
-        var prim = primIds[primIdx]
-        var curve = curves[Int(prim.id1)]
+        var primIdx = Int(curve_cand_prim[unsafe_offset=base + i])
+        var prim = primIds[unsafe_offset=primIdx]
+        var curve = curves[unsafe_offset=Int(prim.id1)]
         var curve_hit = intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, best_t)
         if curve_hit[0]:
             best_t = curve_hit[1]
@@ -3613,7 +3613,7 @@ def resolve_curve_candidates_gpu(
             best_hit = Int8(1)
             changed = True
     if changed:
-        results[pathId] = Intersection_C(best_prim, best_t, best_u, best_v, best_hit, 0, 0, 0)
+        results[unsafe_offset=pathId] = Intersection_C(best_prim, best_t, best_u, best_v, best_hit, 0, 0, 0)
 
 
 # GPU kernel: generate primary PathState_C for every pixel in one pass.
@@ -3648,7 +3648,7 @@ def gen_primary_rays_gpu(
         filter_norm_y, filter_support_y,
         filter_type,
     )
-    paths[tid] = PathState_C(
+    paths[unsafe_offset=tid] = PathState_C(
         ray,
         SpectralSample(Float32(1.0)),
         SpectralSample(Float32(0.0)),
@@ -3700,10 +3700,10 @@ def gen_aux_buffers_gpu(
     var filmY = Float32(py) + Float32(0.5)
 
     # Raster → camera
-    var cx = r2c[0]*filmX + r2c[4]*filmY + r2c[12]
-    var cy = r2c[1]*filmX + r2c[5]*filmY + r2c[13]
-    var cz = r2c[2]*filmX + r2c[6]*filmY + r2c[14]
-    var cw = r2c[3]*filmX + r2c[7]*filmY + r2c[15]
+    var cx = r2c[unsafe_offset=0]*filmX + r2c[unsafe_offset=4]*filmY + r2c[unsafe_offset=12]
+    var cy = r2c[unsafe_offset=1]*filmX + r2c[unsafe_offset=5]*filmY + r2c[unsafe_offset=13]
+    var cz = r2c[unsafe_offset=2]*filmX + r2c[unsafe_offset=6]*filmY + r2c[unsafe_offset=14]
+    var cw = r2c[unsafe_offset=3]*filmX + r2c[unsafe_offset=7]*filmY + r2c[unsafe_offset=15]
     if cw != Float32(0.0) and cw != Float32(1.0):
         cx /= cw; cy /= cw; cz /= cw
     var cl = sqrt(cx*cx + cy*cy + cz*cz)
@@ -3711,36 +3711,36 @@ def gen_aux_buffers_gpu(
 
     # Camera → world
     var dir = Vec3f(
-        c2w[0]*cx + c2w[4]*cy + c2w[8]*cz,
-        c2w[1]*cx + c2w[5]*cy + c2w[9]*cz,
-        c2w[2]*cx + c2w[6]*cy + c2w[10]*cz,
+        c2w[unsafe_offset=0]*cx + c2w[unsafe_offset=4]*cy + c2w[unsafe_offset=8]*cz,
+        c2w[unsafe_offset=1]*cx + c2w[unsafe_offset=5]*cy + c2w[unsafe_offset=9]*cz,
+        c2w[unsafe_offset=2]*cx + c2w[unsafe_offset=6]*cy + c2w[unsafe_offset=10]*cz,
     )
     var dl = dir.length()
     if dl > Float32(0): dir = dir / dl
-    var org = Point3f(c2w[12], c2w[13], c2w[14])
+    var org = Point3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
 
     var ray = Ray_C(org, dir)
     var dummy_id = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    isects_tmp[tid] = Intersection_C(dummy_id, Float32(1e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
-    traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), isects_tmp + tid, blasNodesArr, blasPrimIdsArr, instances)
-    test_spheres(spheres, n_spheres, ray, isects_tmp + tid)
+    isects_tmp[unsafe_offset=tid] = Intersection_C(dummy_id, Float32(1e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+    traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), isects_tmp.unsafe_offset(tid), blasNodesArr, blasPrimIdsArr, instances)
+    test_spheres(spheres, n_spheres, ray, isects_tmp.unsafe_offset(tid))
 
     var normal = Vec3f(Float32(0), Float32(0), Float32(1))
     var d = Float32(1e38)
 
-    if isects_tmp[tid].hit != Int8(0):
-        d = isects_tmp[tid].tHit
-        var typ = Int(isects_tmp[tid].primId.type)
+    if isects_tmp[unsafe_offset=tid].hit != Int8(0):
+        d = isects_tmp[unsafe_offset=tid].tHit
+        var typ = Int(isects_tmp[unsafe_offset=tid].primId.type)
         if typ == 4:
-            var si = Int(isects_tmp[tid].primId.id1)
-            normal = sphere_outward_normal(org + dir*d, spheres[si].center)
+            var si = Int(isects_tmp[unsafe_offset=tid].primId.id1)
+            normal = sphere_outward_normal(org + dir*d, spheres[unsafe_offset=si].center)
         elif typ == 5:
             # Approximate outward normal for the denoiser G-buffer: h alone
             # (stored in isects_tmp.u) doesn't uniquely fix the azimuthal sign,
             # so this picks one consistent side — fine for denoising, not used
             # for shading (shade_hair derives its own frame independently).
-            var curve = curves[Int(isects_tmp[tid].primId.id1)]
-            var piece = min(Int(curve.n_pieces) - 1, Int(isects_tmp[tid].v * Float32(curve.n_pieces)))
+            var curve = curves[unsafe_offset=Int(isects_tmp[unsafe_offset=tid].primId.id1)]
+            var piece = min(Int(curve.n_pieces) - 1, Int(isects_tmp[unsafe_offset=tid].v * Float32(curve.n_pieces)))
             var (cq0, cq1, _, _) = curve_piece_endpoints(curve, piece)
             var caxis = cq1 - cq0
             var calen = sqrt(dot(caxis, caxis))
@@ -3748,7 +3748,7 @@ def gen_aux_buffers_gpu(
                 var ctangent = caxis * (Float32(1.0) / calen)
                 var cu = _curve_perp_axis(ctangent)
                 var cb = cross(ctangent, cu)
-                var ch = isects_tmp[tid].u
+                var ch = isects_tmp[unsafe_offset=tid].u
                 var cs = sqrt(max(Float32(0.0), Float32(1.0) - ch*ch))
                 var cn = cu*ch + cb*cs
                 normal = vec3f(cn)
@@ -3756,23 +3756,23 @@ def gen_aux_buffers_gpu(
             var mesh_idx: Int
             var base_vidx: Int
             if typ == 0:
-                mesh_idx  = Int(isects_tmp[tid].primId.id1)
-                base_vidx = Int(isects_tmp[tid].primId.id2)
+                mesh_idx  = Int(isects_tmp[unsafe_offset=tid].primId.id1)
+                base_vidx = Int(isects_tmp[unsafe_offset=tid].primId.id2)
             else:
-                mesh_idx  = Int(isects_tmp[tid].primId.id2 >> 32)
-                base_vidx = Int(isects_tmp[tid].primId.id2 & 0xFFFFFFFF) * 3
-            var mesh = meshes[mesh_idx]
-            var vi0 = Int(mesh.vertexIndices[base_vidx])
-            var vi1 = Int(mesh.vertexIndices[base_vidx + 1])
-            var vi2 = Int(mesh.vertexIndices[base_vidx + 2])
-            var p0 = Point3f(mesh.points[vi0*4], mesh.points[vi0*4+1], mesh.points[vi0*4+2])
-            var p1 = Point3f(mesh.points[vi1*4], mesh.points[vi1*4+1], mesh.points[vi1*4+2])
-            var p2 = Point3f(mesh.points[vi2*4], mesh.points[vi2*4+1], mesh.points[vi2*4+2])
+                mesh_idx  = Int(isects_tmp[unsafe_offset=tid].primId.id2 >> 32)
+                base_vidx = Int(isects_tmp[unsafe_offset=tid].primId.id2 & 0xFFFFFFFF) * 3
+            var mesh = meshes[unsafe_offset=mesh_idx]
+            var vi0 = Int(mesh.vertexIndices[unsafe_offset=base_vidx])
+            var vi1 = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 1])
+            var vi2 = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 2])
+            var p0 = Point3f(mesh.points[unsafe_offset=vi0*4], mesh.points[unsafe_offset=vi0*4+1], mesh.points[unsafe_offset=vi0*4+2])
+            var p1 = Point3f(mesh.points[unsafe_offset=vi1*4], mesh.points[unsafe_offset=vi1*4+1], mesh.points[unsafe_offset=vi1*4+2])
+            var p2 = Point3f(mesh.points[unsafe_offset=vi2*4], mesh.points[unsafe_offset=vi2*4+1], mesh.points[unsafe_offset=vi2*4+2])
             var e1 = p1 - p0; var e2 = p2 - p0
             normal = Vec3f(e1.y*e2.z - e1.z*e2.y, e1.z*e2.x - e1.x*e2.z, e1.x*e2.y - e1.y*e2.x)
-            var inst_idx = isects_tmp[tid].primId.instanceIdx
+            var inst_idx = isects_tmp[unsafe_offset=tid].primId.instanceIdx
             if inst_idx >= Int32(0):
-                var n_world = transform_normal_by_instance(instances[Int(inst_idx)].worldToObj, normal.to_simd())
+                var n_world = transform_normal_by_instance(instances[unsafe_offset=Int(inst_idx)].worldToObj, normal.to_simd())
                 normal = vec3f(n_world)
             var nl = normal.length()
             if nl > Float32(0): normal = normal / nl
@@ -3782,13 +3782,13 @@ def gen_aux_buffers_gpu(
         if normal.dot(-dir) < Float32(0):
             normal = -normal
 
-    normals_out[tid*3+0] = normal.x
-    normals_out[tid*3+1] = normal.y
-    normals_out[tid*3+2] = normal.z
-    depth_out[tid] = d
-    curve_mask_out[tid] = Float32(1.0) if (isects_tmp[tid].hit != Int8(0) and Int(isects_tmp[tid].primId.type) == 5) else Float32(0.0)
+    normals_out[unsafe_offset=tid*3+0] = normal.x
+    normals_out[unsafe_offset=tid*3+1] = normal.y
+    normals_out[unsafe_offset=tid*3+2] = normal.z
+    depth_out[unsafe_offset=tid] = d
+    curve_mask_out[unsafe_offset=tid] = Float32(1.0) if (isects_tmp[unsafe_offset=tid].hit != Int8(0) and Int(isects_tmp[unsafe_offset=tid].primId.type) == 5) else Float32(0.0)
     store_vec3(world_pos_out, tid, (org + dir*d).to_simd())
-    material_id_out[tid] = Int32(isects_tmp[tid].primId.materialIndex) if isects_tmp[tid].hit != Int8(0) else Int32(-1)
+    material_id_out[unsafe_offset=tid] = Int32(isects_tmp[unsafe_offset=tid].primId.materialIndex) if isects_tmp[unsafe_offset=tid].hit != Int8(0) else Int32(-1)
 
 
 def gpu_gen_aux_buffers[Oc: Origin[mut=True]](
@@ -3862,8 +3862,8 @@ def deactivate_paths_past_maxdepth_gpu(
         return
     # Marks, does not kill -- see rendering.mojo's twin of this for why the
     # segment leaving the last allowed vertex must still be traced.
-    if paths[tid].active != Int8(0) and paths[tid].bounce >= max_depth:
-        paths[tid].at_cap = Int8(1)
+    if paths[unsafe_offset=tid].active != Int8(0) and paths[unsafe_offset=tid].bounce >= max_depth:
+        paths[unsafe_offset=tid].at_cap = Int8(1)
 
 def _gpu_bounce_kernels(
     handle: UnsafePointer[GpuSceneHandle, MutExternalOrigin],
@@ -4730,9 +4730,9 @@ def normalize_beauty_albedo_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= n_pixels:
         return
-    var lr = film[tid*3+0] * inv_weight * iso_scale
-    var lg = film[tid*3+1] * inv_weight * iso_scale
-    var lb = film[tid*3+2] * inv_weight * iso_scale
+    var lr = film[unsafe_offset=tid*3+0] * inv_weight * iso_scale
+    var lg = film[unsafe_offset=tid*3+1] * inv_weight * iso_scale
+    var lb = film[unsafe_offset=tid*3+2] * inv_weight * iso_scale
     if lr != lr or lr < Float32(0): lr = Float32(0)
     if lg != lg or lg < Float32(0): lg = Float32(0)
     if lb != lb or lb < Float32(0): lb = Float32(0)
@@ -4742,12 +4742,12 @@ def normalize_beauty_albedo_gpu(
         if lb > mx: mx = lb
         if mx > max_comp:
             scale = max_comp / mx
-    beauty_out[tid*3+0] = lr * scale
-    beauty_out[tid*3+1] = lg * scale
-    beauty_out[tid*3+2] = lb * scale
-    albedo_out[tid*3+0] = albedo_film[tid*3+0] * inv_weight
-    albedo_out[tid*3+1] = albedo_film[tid*3+1] * inv_weight
-    albedo_out[tid*3+2] = albedo_film[tid*3+2] * inv_weight
+    beauty_out[unsafe_offset=tid*3+0] = lr * scale
+    beauty_out[unsafe_offset=tid*3+1] = lg * scale
+    beauty_out[unsafe_offset=tid*3+2] = lb * scale
+    albedo_out[unsafe_offset=tid*3+0] = albedo_film[unsafe_offset=tid*3+0] * inv_weight
+    albedo_out[unsafe_offset=tid*3+1] = albedo_film[unsafe_offset=tid*3+1] * inv_weight
+    albedo_out[unsafe_offset=tid*3+2] = albedo_film[unsafe_offset=tid*3+2] * inv_weight
 
 
 def estimate_variance_gpu(
@@ -4771,12 +4771,12 @@ def estimate_variance_gpu(
             if nx < 0 or nx >= fw or ny < 0 or ny >= fh:
                 continue
             var ni = (ny * fw + nx) * 3
-            var l = Float32(0.2126)*beauty[ni] + Float32(0.7152)*beauty[ni+1] + Float32(0.0722)*beauty[ni+2]
+            var l = Float32(0.2126)*beauty[unsafe_offset=ni] + Float32(0.7152)*beauty[unsafe_offset=ni+1] + Float32(0.0722)*beauty[unsafe_offset=ni+2]
             mean += l; mean_sq += l * l; count += 1
     var fc = Float32(count)
     mean /= fc; mean_sq /= fc
     var v = mean_sq - mean * mean
-    variance_out[tid] = v if v > Float32(0) else Float32(0)
+    variance_out[unsafe_offset=tid] = v if v > Float32(0) else Float32(0)
 
 
 def firefly_clamp_gpu(
@@ -4814,19 +4814,19 @@ def firefly_clamp_gpu(
                 continue
             has_neighbor = True
             var ni = (ny * fw + nx) * 3
-            var lum_n = RGB(beauty[ni], beauty[ni + 1], beauty[ni + 2]).luma()
+            var lum_n = RGB(beauty[unsafe_offset=ni], beauty[unsafe_offset=ni + 1], beauty[unsafe_offset=ni + 2]).luma()
             if lum_n > max_n:
                 max_n = lum_n
-            if beauty[ni + 0] > max_n_r: max_n_r = beauty[ni + 0]
-            if beauty[ni + 1] > max_n_g: max_n_g = beauty[ni + 1]
-            if beauty[ni + 2] > max_n_b: max_n_b = beauty[ni + 2]
+            if beauty[unsafe_offset=ni + 0] > max_n_r: max_n_r = beauty[unsafe_offset=ni + 0]
+            if beauty[unsafe_offset=ni + 1] > max_n_g: max_n_g = beauty[unsafe_offset=ni + 1]
+            if beauty[unsafe_offset=ni + 2] > max_n_b: max_n_b = beauty[unsafe_offset=ni + 2]
     var ci = tid * 3
     var c = _firefly_clamp_pixel(
-        beauty[ci + 0], beauty[ci + 1], beauty[ci + 2],
+        beauty[unsafe_offset=ci + 0], beauty[unsafe_offset=ci + 1], beauty[unsafe_offset=ci + 2],
         max_n, max_n_r, max_n_g, max_n_b, has_neighbor)
-    output[ci + 0] = c.r
-    output[ci + 1] = c.g
-    output[ci + 2] = c.b
+    output[unsafe_offset=ci + 0] = c.r
+    output[unsafe_offset=ci + 1] = c.g
+    output[unsafe_offset=ci + 2] = c.b
 
 
 def atrous_filter_gpu(
@@ -4850,21 +4850,21 @@ def atrous_filter_gpu(
         return
     var px = tid % fw; var py = tid // fw
 
-    var c = RGB(input[tid*3], input[tid*3+1], input[tid*3+2])
-    if curve_mask[tid] > Float32(0.5):
+    var c = RGB(input[unsafe_offset=tid*3], input[unsafe_offset=tid*3+1], input[unsafe_offset=tid*3+2])
+    if curve_mask[unsafe_offset=tid] > Float32(0.5):
         # Hair/fur: strand-to-strand self-shadowing has no reliable correlate in
         # albedo/normal/depth (adjacent strands share material and similar
         # orientation/distance), so à-trous can't tell real occlusion from noise
         # and blurs it into a flat blob. Passing raw beauty through here matches
         # pbrt's own un-denoised look for hair instead of erasing strand detail.
-        output[tid*3] = c.r; output[tid*3+1] = c.g; output[tid*3+2] = c.b
+        output[unsafe_offset=tid*3] = c.r; output[unsafe_offset=tid*3+1] = c.g; output[unsafe_offset=tid*3+2] = c.b
         return
     var cl = c.luma()
-    var var_p = variance[tid]
-    var ca = RGB(albedo[tid*3], albedo[tid*3+1], albedo[tid*3+2])
-    var cn = Vec3f(normals[tid*3], normals[tid*3+1], normals[tid*3+2])
+    var var_p = variance[unsafe_offset=tid]
+    var ca = RGB(albedo[unsafe_offset=tid*3], albedo[unsafe_offset=tid*3+1], albedo[unsafe_offset=tid*3+2])
+    var cn = Vec3f(normals[unsafe_offset=tid*3], normals[unsafe_offset=tid*3+1], normals[unsafe_offset=tid*3+2])
     # Clamp depth before squaring to avoid Float32 overflow (background sentinel=1e38).
-    var cd_clamped = min(depth[tid], Float32(1e18))
+    var cd_clamped = min(depth[unsafe_offset=tid], Float32(1e18))
     var cd_sq = max(cd_clamped * cd_clamped, Float32(1e-6))
 
     var acc = RGB(Float32(0))
@@ -4882,24 +4882,24 @@ def atrous_filter_gpu(
                 continue
             var ni = (ny * fw + nx) * 3
             var ni1 = ny * fw + nx
-            if curve_mask[ni1] > Float32(0.5):
+            if curve_mask[unsafe_offset=ni1] > Float32(0.5):
                 continue
-            var qc = RGB(input[ni], input[ni+1], input[ni+2])
+            var qc = RGB(input[unsafe_offset=ni], input[unsafe_offset=ni+1], input[unsafe_offset=ni+2])
             var dl = qc.luma() - cl
-            var dalb = RGB(albedo[ni], albedo[ni+1], albedo[ni+2]) - ca
-            var ndot = normals[ni]*cn.x + normals[ni+1]*cn.y + normals[ni+2]*cn.z
-            var dd = min(depth[ni1], Float32(1e18)) - cd_clamped
+            var dalb = RGB(albedo[unsafe_offset=ni], albedo[unsafe_offset=ni+1], albedo[unsafe_offset=ni+2]) - ca
+            var ndot = normals[unsafe_offset=ni]*cn.x + normals[unsafe_offset=ni+1]*cn.y + normals[unsafe_offset=ni+2]*cn.z
+            var dd = min(depth[unsafe_offset=ni1], Float32(1e18)) - cd_clamped
             var w = _atrous_spatial_weight(dx, dy) * _atrous_tap_weight(
-                dl, var_p, variance[ni1], dalb, ndot, dd, cd_sq,
+                dl, var_p, variance[unsafe_offset=ni1], dalb, ndot, dd, cd_sq,
                 sigma_l, sigma_a, sigma_n, sigma_d)
             acc += qc * w
             acc_w += w
 
     if acc_w > Float32(0):
         var o = acc / acc_w
-        output[tid*3] = o.r; output[tid*3+1] = o.g; output[tid*3+2] = o.b
+        output[unsafe_offset=tid*3] = o.r; output[unsafe_offset=tid*3+1] = o.g; output[unsafe_offset=tid*3+2] = o.b
     else:
-        output[tid*3] = c.r; output[tid*3+1] = c.g; output[tid*3+2] = c.b
+        output[unsafe_offset=tid*3] = c.r; output[unsafe_offset=tid*3+1] = c.g; output[unsafe_offset=tid*3+2] = c.b
 
 
 def gpu_atrous_denoise[Oo: Origin[mut=True]](

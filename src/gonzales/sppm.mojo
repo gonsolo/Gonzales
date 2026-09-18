@@ -218,19 +218,19 @@ def _geom_normal(
     elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
         mi = Int(inter.primId.id2 >> 32); bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
     elif inter.primId.type == Int8(4) and _is_real_ptr[Sphere_C](spheres):
-        return sphere_outward_normal(Point3f(hit[0], hit[1], hit[2]), spheres[Int(inter.primId.id1)].center)
+        return sphere_outward_normal(Point3f(hit[0], hit[1], hit[2]), spheres[unsafe_offset=Int(inter.primId.id1)].center)
     else:
         return Vec3f(Float32(0), Float32(1), Float32(0))
-    var m = meshes[mi]
-    var v0 = Int(m.vertexIndices[bv])
-    var v1 = Int(m.vertexIndices[bv + 1])
-    var v2 = Int(m.vertexIndices[bv + 2])
-    var p0 = Vec3f(m.points[v0*4], m.points[v0*4+1], m.points[v0*4+2])
-    var p1 = Vec3f(m.points[v1*4], m.points[v1*4+1], m.points[v1*4+2])
-    var p2 = Vec3f(m.points[v2*4], m.points[v2*4+1], m.points[v2*4+2])
+    var m = meshes[unsafe_offset=mi]
+    var v0 = Int(m.vertexIndices[unsafe_offset=bv])
+    var v1 = Int(m.vertexIndices[unsafe_offset=bv + 1])
+    var v2 = Int(m.vertexIndices[unsafe_offset=bv + 2])
+    var p0 = Vec3f(m.points[unsafe_offset=v0*4], m.points[unsafe_offset=v0*4+1], m.points[unsafe_offset=v0*4+2])
+    var p1 = Vec3f(m.points[unsafe_offset=v1*4], m.points[unsafe_offset=v1*4+1], m.points[unsafe_offset=v1*4+2])
+    var p2 = Vec3f(m.points[unsafe_offset=v2*4], m.points[unsafe_offset=v2*4+1], m.points[unsafe_offset=v2*4+2])
     var n = cross(p1 - p0, p2 - p0)
     if inter.primId.instanceIdx >= Int32(0):
-        n = transform_normal_by_instance(instances[Int(inter.primId.instanceIdx)].worldToObj, n)
+        n = transform_normal_by_instance(instances[unsafe_offset=Int(inter.primId.instanceIdx)].worldToObj, n)
     var l = dot(n, n)
     if l > Float32(0.0):
         n = n * (Float32(1.0) / sqrt(l))
@@ -265,31 +265,31 @@ def _shading_normal_at(
     elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
         mi = Int(inter.primId.id2 >> 32); bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
     elif inter.primId.type == Int8(4) and _is_real_ptr[Sphere_C](spheres):
-        return sphere_outward_normal(hit, spheres[Int(inter.primId.id1)].center)
+        return sphere_outward_normal(hit, spheres[unsafe_offset=Int(inter.primId.id1)].center)
     else:
         return Vec3f(Float32(0), Float32(1), Float32(0))
-    var m = meshes[mi]
-    var v0 = Int(m.vertexIndices[bv])
-    var v1 = Int(m.vertexIndices[bv + 1])
-    var v2 = Int(m.vertexIndices[bv + 2])
-    var p0 = Vec3f(m.points[v0*4], m.points[v0*4+1], m.points[v0*4+2])
-    var p1 = Vec3f(m.points[v1*4], m.points[v1*4+1], m.points[v1*4+2])
-    var p2 = Vec3f(m.points[v2*4], m.points[v2*4+1], m.points[v2*4+2])
+    var m = meshes[unsafe_offset=mi]
+    var v0 = Int(m.vertexIndices[unsafe_offset=bv])
+    var v1 = Int(m.vertexIndices[unsafe_offset=bv + 1])
+    var v2 = Int(m.vertexIndices[unsafe_offset=bv + 2])
+    var p0 = Vec3f(m.points[unsafe_offset=v0*4], m.points[unsafe_offset=v0*4+1], m.points[unsafe_offset=v0*4+2])
+    var p1 = Vec3f(m.points[unsafe_offset=v1*4], m.points[unsafe_offset=v1*4+1], m.points[unsafe_offset=v1*4+2])
+    var p2 = Vec3f(m.points[unsafe_offset=v2*4], m.points[unsafe_offset=v2*4+1], m.points[unsafe_offset=v2*4+2])
     var gn = cross(p1 - p0, p2 - p0)
     if inter.primId.instanceIdx >= Int32(0):
-        gn = transform_normal_by_instance(instances[Int(inter.primId.instanceIdx)].worldToObj, gn)
+        gn = transform_normal_by_instance(instances[unsafe_offset=Int(inter.primId.instanceIdx)].worldToObj, gn)
     var gl = dot(gn, gn)
     if gl > Float32(0.0): gn = gn * (Float32(1.0) / sqrt(gl))
     # No per-vertex normals → flat normal (sentinel addr <= 4, see GPU-nullable convention).
     if Int(m.normals) <= 4:
         return gn
     var w0 = Float32(1.0) - inter.u - inter.v
-    var n0 = Vec3f(m.normals[v0*3], m.normals[v0*3+1], m.normals[v0*3+2])
-    var n1 = Vec3f(m.normals[v1*3], m.normals[v1*3+1], m.normals[v1*3+2])
-    var n2 = Vec3f(m.normals[v2*3], m.normals[v2*3+1], m.normals[v2*3+2])
+    var n0 = Vec3f(m.normals[unsafe_offset=v0*3], m.normals[unsafe_offset=v0*3+1], m.normals[unsafe_offset=v0*3+2])
+    var n1 = Vec3f(m.normals[unsafe_offset=v1*3], m.normals[unsafe_offset=v1*3+1], m.normals[unsafe_offset=v1*3+2])
+    var n2 = Vec3f(m.normals[unsafe_offset=v2*3], m.normals[unsafe_offset=v2*3+1], m.normals[unsafe_offset=v2*3+2])
     var sn = n0 * w0 + n1 * inter.u + n2 * inter.v
     if inter.primId.instanceIdx >= Int32(0):
-        sn = transform_normal_by_instance(instances[Int(inter.primId.instanceIdx)].worldToObj, sn)
+        sn = transform_normal_by_instance(instances[unsafe_offset=Int(inter.primId.instanceIdx)].worldToObj, sn)
     var sl = dot(sn, sn)
     if sl <= Float32(1e-12):
         return gn
@@ -436,9 +436,9 @@ def sample_area_light_uniform(
     piece + point on a curve's swept tube (kind==1, `curves` must be a real
     pointer whenever any curve lights exist)."""
     var li = Int(pcg.next_uint() % UInt32(n_lights))
-    var al = areaLights[li]
+    var al = areaLights[unsafe_offset=li]
     if al.kind == Int8(1):
-        var curve = curves[Int(al.meshIdx)]
+        var curve = curves[unsafe_offset=Int(al.meshIdx)]
         var piece = Int(pcg.next_uint() % UInt32(max(Int(curve.n_pieces), 1)))
         var (q0, q1, r0, r1) = curve_piece_endpoints(curve, piece)
         var axis = q1 - q0
@@ -454,14 +454,14 @@ def sample_area_light_uniform(
         var radial = u_perp * cos(theta) + v_perp * sin(theta)
         var point = q0 + axis_dir * (axis_len * ru1) + radial * r
         return AreaLightSample(al, point, radial)
-    var lmesh = meshes[Int(al.meshIdx)]
+    var lmesh = meshes[unsafe_offset=Int(al.meshIdx)]
     var n_tris = Int(max(Int(al.n_tris), 1))
     var ti = Int(pcg.next_uint() % UInt32(n_tris))
     var lb = ti * 3
-    var lv0 = Int(lmesh.vertexIndices[lb]); var lv1 = Int(lmesh.vertexIndices[lb+1]); var lv2 = Int(lmesh.vertexIndices[lb+2])
-    var lp0 = Vec3f(lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
-    var lp1 = Vec3f(lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
-    var lp2 = Vec3f(lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
+    var lv0 = Int(lmesh.vertexIndices[unsafe_offset=lb]); var lv1 = Int(lmesh.vertexIndices[unsafe_offset=lb+1]); var lv2 = Int(lmesh.vertexIndices[unsafe_offset=lb+2])
+    var lp0 = Vec3f(lmesh.points[unsafe_offset=lv0*4], lmesh.points[unsafe_offset=lv0*4+1], lmesh.points[unsafe_offset=lv0*4+2])
+    var lp1 = Vec3f(lmesh.points[unsafe_offset=lv1*4], lmesh.points[unsafe_offset=lv1*4+1], lmesh.points[unsafe_offset=lv1*4+2])
+    var lp2 = Vec3f(lmesh.points[unsafe_offset=lv2*4], lmesh.points[unsafe_offset=lv2*4+1], lmesh.points[unsafe_offset=lv2*4+2])
     var ru1 = pcg.next_float(); var ru2 = pcg.next_float(); var sr1 = sqrt(ru1)
     var lp  = lp0*(Float32(1)-sr1) + lp1*(sr1*(Float32(1)-ru2)) + lp2*(sr1*ru2)
     var ln  = cross(lp1-lp0, lp2-lp0)
@@ -469,9 +469,9 @@ def sample_area_light_uniform(
     if lnl > Float32(0): ln = ln*(Float32(1)/sqrt(lnl))
     # Use shading normals when provided — they give the correct emission hemisphere.
     if Int(lmesh.normals) > 4:
-        var sn0 = Vec3f(lmesh.normals[lv0*3], lmesh.normals[lv0*3+1], lmesh.normals[lv0*3+2])
-        var sn1 = Vec3f(lmesh.normals[lv1*3], lmesh.normals[lv1*3+1], lmesh.normals[lv1*3+2])
-        var sn2 = Vec3f(lmesh.normals[lv2*3], lmesh.normals[lv2*3+1], lmesh.normals[lv2*3+2])
+        var sn0 = Vec3f(lmesh.normals[unsafe_offset=lv0*3], lmesh.normals[unsafe_offset=lv0*3+1], lmesh.normals[unsafe_offset=lv0*3+2])
+        var sn1 = Vec3f(lmesh.normals[unsafe_offset=lv1*3], lmesh.normals[unsafe_offset=lv1*3+1], lmesh.normals[unsafe_offset=lv1*3+2])
+        var sn2 = Vec3f(lmesh.normals[unsafe_offset=lv2*3], lmesh.normals[unsafe_offset=lv2*3+1], lmesh.normals[unsafe_offset=lv2*3+2])
         var sn_avg = (sn0 + sn1 + sn2) / Float32(3)
         var snl = sn_avg.length()
         if snl > Float32(0): ln = (sn_avg / snl).to_simd()
@@ -505,7 +505,7 @@ def medium_after_crossing(
     earlier that day (see project_volume_area_light_nee_bug defect 3)."""
     if mat.medium_interface_idx < Int32(0) or sd.mediumIfaceCount == Int64(0):
         return Int32(-1)  # stays vacuum; caller keeps existing idx if needed
-    var iface = sd.mediumInterfaces[Int(mat.medium_interface_idx)]
+    var iface = sd.mediumInterfaces[unsafe_offset=Int(mat.medium_interface_idx)]
     var n = _geom_normal(inter, meshes, sd.instances, sd.spheres, hit.to_simd())
     var md = ray_dir[0]*n.x + ray_dir[1]*n.y + ray_dir[2]*n.z
     return iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
@@ -531,7 +531,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     `scratch` is caller-owned (no internal alloc/free) so this is safe to
     call from a GPU kernel thread, same convention as bdpt.mojo's shared
     subpath tracers."""
-    var org = Point3f(c2w[12], c2w[13], c2w[14])
+    var org = Point3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
     var has_media = Int(sd.mediumCount) > 0
 
     # One hero-wavelength sample for this VP's own camera subpath, carrying
@@ -565,18 +565,18 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     # vp_samples independent samples lands on.
     var fX = Float32(px) + pcg.next_float()
     var fY = Float32(py) + pcg.next_float()
-    var cx = r2c[0]*fX + r2c[4]*fY + r2c[12]
-    var cy = r2c[1]*fX + r2c[5]*fY + r2c[13]
-    var cz = r2c[2]*fX + r2c[6]*fY + r2c[14]
-    var cw = r2c[3]*fX + r2c[7]*fY + r2c[15]
+    var cx = r2c[unsafe_offset=0]*fX + r2c[unsafe_offset=4]*fY + r2c[unsafe_offset=12]
+    var cy = r2c[unsafe_offset=1]*fX + r2c[unsafe_offset=5]*fY + r2c[unsafe_offset=13]
+    var cz = r2c[unsafe_offset=2]*fX + r2c[unsafe_offset=6]*fY + r2c[unsafe_offset=14]
+    var cw = r2c[unsafe_offset=3]*fX + r2c[unsafe_offset=7]*fY + r2c[unsafe_offset=15]
     if cw != Float32(0.0) and cw != Float32(1.0):
         cx /= cw; cy /= cw; cz /= cw
     var cl = sqrt(cx*cx + cy*cy + cz*cz)
     if cl > Float32(0.0): cx /= cl; cy /= cl; cz /= cl
     var rd = Vec3f(
-        c2w[0]*cx + c2w[4]*cy + c2w[8]*cz,
-        c2w[1]*cx + c2w[5]*cy + c2w[9]*cz,
-        c2w[2]*cx + c2w[6]*cy + c2w[10]*cz,
+        c2w[unsafe_offset=0]*cx + c2w[unsafe_offset=4]*cy + c2w[unsafe_offset=8]*cz,
+        c2w[unsafe_offset=1]*cx + c2w[unsafe_offset=5]*cy + c2w[unsafe_offset=9]*cz,
+        c2w[unsafe_offset=2]*cx + c2w[unsafe_offset=6]*cy + c2w[unsafe_offset=10]*cz,
     )
     var dl = rd.length()
     if dl > Float32(0.0): rd = rd / dl
@@ -613,7 +613,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         # volume-scatter path that matters most.
         bounce += 1
         var ray = Ray_C(ro, rd)
-        scratch[0].hit = Int8(0)
+        scratch[unsafe_offset=0].hit = Int8(0)
         # sd.spheres/sphereCount are REQUIRED: analytic spheres live in their
         # own flat array, not the mesh/curve BVH this walks, so omitting them
         # makes every `Shape "sphere"` invisible to SPPM -- which is exactly
@@ -622,20 +622,20 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), scratch,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                            sd.spheres, Int(sd.sphereCount))
-        if scratch[0].hit == Int8(0):
+        if scratch[unsafe_offset=0].hit == Int8(0):
             for inf_i in range(Int(sd.infiniteLightCount)):
-                var ilight = sd.infiniteLights[inf_i]
+                var ilight = sd.infiniteLights[unsafe_offset=inf_i]
                 var (Le, _pdf_unused) = _eval_infinite_light_and_pdf(ilight, rd)
                 vp.env += vp.beta * Le
             break
 
-        var inter = scratch[0]
+        var inter = scratch[unsafe_offset=0]
         var ray_dir = rd.to_simd()
         var t_hit = inter.tHit
 
         # ── Volume free-flight ────────────────────────────────────────────
         if has_media and Int(cur_med_idx) >= 0:
-            var med = sd.mediums[Int(cur_med_idx)]
+            var med = sd.mediums[unsafe_offset=Int(cur_med_idx)]
             # ONE shared sampler for both medium kinds (geometry.mojo):
             # homogeneous closed form, or delta tracking against the real
             # density field. This call site used to be the homogeneous one
@@ -673,7 +673,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 vp.beta *= ff.weight
 
         var mat_idx = Int(inter.primId.materialIndex)
-        var mat = sd.materials[mat_idx]
+        var mat = sd.materials[unsafe_offset=mat_idx]
         var hit = ro + rd * t_hit
 
         # Direct hit on an emissive analytic sphere — checked BEFORE material
@@ -687,7 +687,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         # sample, same reasoning as the infinite-light miss-escape case
         # below, so there's no competing strategy to double-count against.
         if inter.primId.type == Int8(4):
-            var sph_hit = sd.spheres[Int(inter.primId.id1)]
+            var sph_hit = sd.spheres[unsafe_offset=Int(inter.primId.id1)]
             if sph_hit.isAreaLight != Int8(0):
                 vp.env += vp.beta * sph_hit.emission
                 break
@@ -699,7 +699,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var mix_idx2 = Int((mat.tex_idx >> 16) & Int32(0xFFFF))
             var mix_amount = mat.roughU
             var mix_chosen = mix_idx2 if pcg.next_float() < mix_amount else mix_idx1
-            mat = sd.materials[mix_chosen]
+            mat = sd.materials[unsafe_offset=mix_chosen]
             mat_idx = mix_chosen  # keep in sync with the resolved sub-material (hair needs the real index to re-fetch at gather/NEE time)
             if mat.type == MatKind.mix:
                 mat.type = MatKind.diffuse
@@ -712,7 +712,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # Facing check: a one-sided area light emits nothing from its
             # back face (spheres above need no such check — always hit from
             # outside, always the front/emitting face).
-            var al_hit = sd.areaLights[Int(inter.primId.id1)]
+            var al_hit = sd.areaLights[unsafe_offset=Int(inter.primId.id1)]
             var gn_al_hit = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if -dot(gn_al_hit, ray_dir) > Float32(0):
                 vp.env += vp.beta * al_hit.emission
@@ -996,7 +996,7 @@ def _sppm_camera_pass(
         var px = pix % Int(fw)
         var py = pix // Int(fw)
         var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
-        vps[combined] = _sppm_trace_visible_point[False](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, scratch + combined, maxdepth)
+        vps[unsafe_offset=combined] = _sppm_trace_visible_point[False](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, scratch.unsafe_offset(combined), maxdepth)
 
     parallelize[trace_one](n_pix * vp_samples)
 
@@ -1019,12 +1019,12 @@ def _sppm_store_photon[use_gpu: Bool](
     comptime if use_gpu:
         var slot = Int(Atomic.fetch_add(counter, Int32(1)))
         if slot < max_photons:
-            photons[slot] = ph
+            photons[unsafe_offset=slot] = ph
     else:
-        var slot = Int(counter[0])
-        counter[0] = Int32(slot + 1)
+        var slot = Int(counter[unsafe_offset=0])
+        counter[unsafe_offset=0] = Int32(slot + 1)
         if slot < max_photons:
-            photons[slot] = ph
+            photons[unsafe_offset=slot] = ph
 
 
 def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
@@ -1099,7 +1099,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     # that way -- the fog ball kept its directly-lit rim and lost its glow.
     var n_sphere = 0
     for i in range(Int(sd.sphereCount)):
-        if sd.spheres[i].isAreaLight != Int8(0):
+        if sd.spheres[unsafe_offset=i].isAreaLight != Int8(0):
             n_sphere += 1
     var n_distant = Int(sd.distantLightCount)
     var n_infinite = Int(sd.infiniteLightCount)
@@ -1152,12 +1152,12 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         var si_e = 0
         var seen = 0
         for i in range(Int(sd.sphereCount)):
-            if sd.spheres[i].isAreaLight != Int8(0):
+            if sd.spheres[unsafe_offset=i].isAreaLight != Int8(0):
                 if seen == want:
                     si_e = i
                     break
                 seen += 1
-        var sph_e = sd.spheres[si_e]
+        var sph_e = sd.spheres[unsafe_offset=si_e]
         var us1 = pcg.next_float(); var us2 = pcg.next_float()
         var cz = Float32(1) - Float32(2) * us1
         var sz = sqrt(max(Float32(0), Float32(1) - cz * cz))
@@ -1171,7 +1171,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         ro = sph_e.center + sn * sph_e.radius * Float32(1.0001)
         rd = vec3f(_cosine_hemisphere_sample(sn, du1e, du2e))
     elif light_pick < n_area + n_sphere + n_distant:
-        var dl = sd.distantLights[light_pick - n_area - n_sphere]
+        var dl = sd.distantLights[unsafe_offset=light_pick - n_area - n_sphere]
         var (center, radius) = _scene_bounding_sphere(sd)
         var dir = Vec3f(dl.direction.x, dl.direction.y, dl.direction.z)
         var disk_pt = _sample_disk_perpendicular(dir, center, radius, Point2f(pcg.next_float(), pcg.next_float()))
@@ -1179,7 +1179,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         ro = disk_pt
         rd = dir
     elif light_pick < n_area + n_sphere + n_distant + n_infinite:
-        var il = sd.infiniteLights[light_pick - n_area - n_sphere - n_distant]
+        var il = sd.infiniteLights[unsafe_offset=light_pick - n_area - n_sphere - n_distant]
         var (center, radius) = _scene_bounding_sphere(sd)
         # _sample_infinite_light_dir returns env_dir in the NEE convention
         # ("direction FROM a shading point TOWARD the light"). A photon
@@ -1197,7 +1197,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         # bounding-sphere disk trick needed — emit directly from it, uniform
         # over the sphere (isotropic point light). pdf_dir = 1/(4π), so
         # flux = intensity × 4π × n_lights / n_emit (pdf_dir cancels).
-        var pll = sd.pointLights[light_pick - n_area - n_sphere - n_distant - n_infinite]
+        var pll = sd.pointLights[unsafe_offset=light_pick - n_area - n_sphere - n_distant - n_infinite]
         var u1p = pcg.next_float(); var u2p = pcg.next_float()
         var cos_p = Float32(1) - Float32(2) * u1p
         var sin_p = sqrt(max(Float32(0), Float32(1) - cos_p * cos_p))
@@ -1237,7 +1237,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         # volume-scatter path that matters most.
         bounce += 1
         var ray = Ray_C(ro, rd)
-        scratch[0].hit = Int8(0)
+        scratch[unsafe_offset=0].hit = Int8(0)
         # sd.spheres/sphereCount are REQUIRED: analytic spheres live in their
         # own flat array, not the mesh/curve BVH this walks, so omitting them
         # makes every `Shape "sphere"` invisible to SPPM -- which is exactly
@@ -1246,16 +1246,16 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), scratch,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                            sd.spheres, Int(sd.sphereCount))
-        if scratch[0].hit == Int8(0):
+        if scratch[unsafe_offset=0].hit == Int8(0):
             break  # miss
 
-        var inter = scratch[0]
+        var inter = scratch[unsafe_offset=0]
         var ray_dir = rd.to_simd()
         var t_hit = inter.tHit
 
         # ── Volume free-flight ────────────────────────────────────────────
         if has_media and Int(cur_med_idx) >= 0:
-            var med = sd.mediums[Int(cur_med_idx)]
+            var med = sd.mediums[unsafe_offset=Int(cur_med_idx)]
             # ONE shared sampler for both medium kinds (geometry.mojo):
             # homogeneous closed form, or delta tracking against the real
             # density field. This call site used to be the homogeneous one
@@ -1315,7 +1315,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                     spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
 
         var mat_idx = Int(inter.primId.materialIndex)
-        var mat = sd.materials[mat_idx]
+        var mat = sd.materials[unsafe_offset=mat_idx]
         var hit = ro + rd * t_hit
 
         if mat.type == MatKind.mix:
@@ -1323,7 +1323,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var mix_idx2 = Int((mat.tex_idx >> 16) & Int32(0xFFFF))
             var mix_amount = mat.roughU
             var mix_chosen = mix_idx2 if pcg.next_float() < mix_amount else mix_idx1
-            mat = sd.materials[mix_chosen]
+            mat = sd.materials[unsafe_offset=mix_chosen]
             mat_idx = mix_chosen  # keep in sync with the resolved sub-material (hair needs the real index to re-fetch at gather/NEE time)
             if mat.type == MatKind.mix:
                 mat.type = MatKind.diffuse
@@ -1541,7 +1541,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var frm_m = Frame.from_z(Vec3f(gn_m[0], gn_m[1], gn_m[2]))
             var tangent_m = Vec3f(frm_m.x.x, frm_m.x.y, frm_m.x.z)
             var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
-            var mb_m = sd.measuredBrdfs[Int(mat.measured_idx)]
+            var mb_m = sd.measuredBrdfs[unsafe_offset=Int(mat.measured_idx)]
             var wo_l_m = Vec3f(dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, gn_m))
             var uml1 = pcg.next_float(); var uml2 = pcg.next_float()
             var (wi_l_m, f_m, pdf_m, valid_m) = bxdf_sample_measured(mb_m, wo_l_m, uml1, uml2, ph_wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
@@ -1588,7 +1588,7 @@ def _sppm_has_sphere_lights(ref sd: SceneDescriptor2_C) -> Bool:
     treating "no emittable lights" as "no lights at all" and skipping NEE
     for a scene lit purely by sphere lights."""
     for i in range(Int(sd.sphereCount)):
-        if sd.spheres[i].isAreaLight != Int8(0):
+        if sd.spheres[unsafe_offset=i].isAreaLight != Int8(0):
             return True
     return False
 
@@ -1612,7 +1612,7 @@ def _sppm_photon_pass(
     # across CPU threads too.
     var scratch = alloc[Intersection_C](max(n_emit, 1))
     var counter = alloc[Int32](1)
-    counter[0] = Int32(0)
+    counter[unsafe_offset=0] = Int32(0)
 
     # Determine the "default" starting medium for photons emitted into a medium.
     # Convention: photon is cosine-sampled from ln, so dot(pdir,ln)>0 always.
@@ -1620,7 +1620,7 @@ def _sppm_photon_pass(
     var default_emit_med = Int32(-1)
     if Int(sd.mediumCount) > 0 and Int(sd.mediumIfaceCount) > 0:
         for mi in range(Int(sd.mediumIfaceCount)):
-            var iface = sd.mediumInterfaces[mi]
+            var iface = sd.mediumInterfaces[unsafe_offset=mi]
             if Int(iface.outside_medium_idx) >= 0:
                 default_emit_med = iface.outside_medium_idx
                 break
@@ -1634,13 +1634,13 @@ def _sppm_photon_pass(
     @parameter
     def emit_one(k: Int):
         var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
-        _sppm_trace_photon[True, False](sd, pcg, scratch + k, n_emit, photons, max_photons, counter, default_emit_med, maxdepth,
+        _sppm_trace_photon[True, False](sd, pcg, scratch.unsafe_offset(k), n_emit, photons, max_photons, counter, default_emit_med, maxdepth,
             sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y,
             sd.spectral.cie_z, sd.spectral.d65, pass_wavelengths(pass_idx))
 
     parallelize[emit_one](n_emit)
 
-    var n_stored = min(Int(counter[0]), max_photons)
+    var n_stored = min(Int(counter[unsafe_offset=0]), max_photons)
     counter.unsafe_free()
     scratch.unsafe_free()
     return n_stored
@@ -1649,7 +1649,7 @@ def _sppm_photon_pass(
 # ── Hash grid ─────────────────────────────────────────────────────────────────
 
 def _sppm_reset_grid_cell(heads: UnsafePointer[Int32, MutExternalOrigin], h: Int):
-    heads[h] = Int32(-1)
+    heads[unsafe_offset=h] = Int32(-1)
 
 
 def _sppm_insert_photon[use_gpu: Bool](
@@ -1661,16 +1661,16 @@ def _sppm_insert_photon[use_gpu: Bool](
     """Insert stored photon `k` into the hash grid. Comptime-branches only on
     the bucket-head update primitive (atomic exchange for racing GPU threads
     vs. a plain read-modify-write for the serial CPU loop)."""
-    var ix = Int(floor(photons[k].pos.x * inv_cell))
-    var iy = Int(floor(photons[k].pos.y * inv_cell))
-    var iz = Int(floor(photons[k].pos.z * inv_cell))
+    var ix = Int(floor(photons[unsafe_offset=k].pos.x * inv_cell))
+    var iy = Int(floor(photons[unsafe_offset=k].pos.y * inv_cell))
+    var iz = Int(floor(photons[unsafe_offset=k].pos.z * inv_cell))
     var h = _hash_cell(ix, iy, iz)
     comptime if use_gpu:
-        var old = Atomic._xchg(heads + h, Int32(k))
-        photons[k].nxt = old
+        var old = Atomic._xchg(heads.unsafe_offset(h), Int32(k))
+        photons[unsafe_offset=k].nxt = old
     else:
-        photons[k].nxt = heads[h]
-        heads[h] = Int32(k)
+        photons[unsafe_offset=k].nxt = heads[unsafe_offset=h]
+        heads[unsafe_offset=h] = Int32(k)
 
 
 def _build_grid(
@@ -1744,9 +1744,9 @@ def _sppm_gather_one(
     ever touches its own vps[i]. `sd` is only dereferenced for a mat_kind=2
     (hair) VP, to re-fetch the material + curve data _hair_precompute needs
     (see SPPMPixel's docstring for why that's not stored inline)."""
-    if vps[i].valid == Int32(0):
+    if vps[unsafe_offset=i].valid == Int32(0):
         return
-    var vp = vps[i]
+    var vp = vps[unsafe_offset=i]
     var r2 = vp.r2
 
     # Accumulate contributions from photons in 3x3x3 neighborhood
@@ -1766,7 +1766,7 @@ def _sppm_gather_one(
     var bssrdf_sa = RGB(Float32(0))
     var bssrdf_g  = Float32(0)
     if bssrdf_ok:
-        var mb0 = med_arr[Int(vp.med_idx)]
+        var mb0 = med_arr[unsafe_offset=Int(vp.med_idx)]
         bssrdf_ss = mb0.sigma_s
         bssrdf_sa = mb0.sigma_a
         bssrdf_g  = mb0.g
@@ -1783,9 +1783,9 @@ def _sppm_gather_one(
         for ddy in range(-1, 2):
             for ddz in range(-1, 2):
                 var h = _hash_cell(cix + ddx, ciy + ddy, ciz + ddz)
-                var k = Int(heads[h])
+                var k = Int(heads[unsafe_offset=h])
                 while k != -1:
-                    var ph = photons[k]
+                    var ph = photons[unsafe_offset=k]
                     var e = ph.pos - vp.pos
                     var dist2 = e.length_sq()
                     # A BSSRDF visible point gathers only BSSRDF surface
@@ -1883,7 +1883,7 @@ def _sppm_gather_one(
                             # missed.
                             var ok_med = (mi_v >= 0 and mi_v < med_count
                                           and _is_real_ptr[Medium_C](med_arr))
-                            var medv = med_arr[mi_v] if ok_med else Medium_C(
+                            var medv = med_arr[unsafe_offset=mi_v] if ok_med else Medium_C(
                                 sigma_a=RGB(Float32(0)), sigma_s=RGB(Float32(1)),
                                 g=Float32(0), grid_idx=Int32(-1), nvdb_idx=Int32(-1),
                                 nvdb_temp_idx=Int32(-1), le_scale=Float32(0),
@@ -1926,7 +1926,7 @@ def _sppm_gather_one(
                             var f_c = bxdf_eval_conductor_ggx(vp.normal.to_simd(), vp.wo.to_simd(), wi_c, vp.alpha, vp.alb)
                             phi += spec_refl(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f_c.r, f_c.g, f_c.b, ph.wavelengths) * ph.flux
                         elif vp.mat_kind == LobeKind.hair:
-                            var mat_h = sd.materials[Int(vp.mat_idx)]
+                            var mat_h = sd.materials[unsafe_offset=Int(vp.mat_idx)]
                             var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, vp.wo.to_simd())
                             var wi_h = (-ph.dir_in).to_simd()
                             var (_, f_h, _) = _hair_eval_lobes(
@@ -1953,7 +1953,7 @@ def _sppm_gather_one(
     if M > Float32(0.0):
         var N = vp.N_acc
         var ratio = (N + _ALPHA * M) / (N + M)
-        vps[i].r2  = r2 * ratio
+        vps[unsafe_offset=i].r2  = r2 * ratio
         var (phi_r, phi_g, phi_b) = spectral_sample_to_rgb(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, phi, pass_wl)
         # tau must be rescaled by the KERNEL's own dimension, because tau is
         # later divided by that kernel. pbrt scales by Sqr(rNew)/Sqr(radius)
@@ -1970,8 +1970,8 @@ def _sppm_gather_one(
         # radius in its estimator at all.
         var tau_scale = Float32(1.0) if vp.mat_kind == LobeKind.bssrdf else (
             ratio * sqrt(ratio) if vp.is_volume == PhotonKind.volume else ratio)
-        vps[i].tau = (vp.tau + RGB(phi_r, phi_g, phi_b)) * tau_scale
-        vps[i].N_acc = N + _ALPHA * M
+        vps[unsafe_offset=i].tau = (vp.tau + RGB(phi_r, phi_g, phi_b)) * tau_scale
+        vps[unsafe_offset=i].N_acc = N + _ALPHA * M
 
 
 def _gather_update(
@@ -2018,7 +2018,7 @@ def _sppm_vp_brdf(
     if vp.mat_kind == LobeKind.ggx:
         return bxdf_eval_conductor_ggx(vn, vp.wo.to_simd(), wi, vp.alpha, vp.alb)
     if vp.mat_kind == LobeKind.hair:
-        var mat_h = sd.materials[Int(vp.mat_idx)]
+        var mat_h = sd.materials[unsafe_offset=Int(vp.mat_idx)]
         var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, vp.wo.to_simd())
         var (_, f_h, _) = _hair_eval_lobes(
             wi, hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
@@ -2033,8 +2033,8 @@ def _sppm_vp_brdf(
         # indexed by wavelength) -- does its own spectral eval + RGB
         # conversion internally using vp.wavelengths, same as bdpt.mojo's
         # _eval_vertex mat_kind=3 branch.
-        var mat_m = sd.materials[Int(vp.mat_idx)]
-        var mb_m = sd.measuredBrdfs[Int(mat_m.measured_idx)]
+        var mat_m = sd.materials[unsafe_offset=Int(vp.mat_idx)]
+        var mb_m = sd.measuredBrdfs[unsafe_offset=Int(mat_m.measured_idx)]
         var frm_m = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
         var tangent_m = Vec3f(frm_m.x.x, frm_m.x.y, frm_m.x.z)
         var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
@@ -2068,7 +2068,7 @@ def _sppm_shadow_transmittance(
     f79999f4 (see project_volume_area_light_nee_bug)."""
     if Int(vp.med_idx) < 0 or Int(sd.mediumCount) == 0:
         return RGB(Float32(1))
-    var med = sd.mediums[Int(vp.med_idx)]
+    var med = sd.mediums[unsafe_offset=Int(vp.med_idx)]
     if med.grid_idx >= Int32(0) or med.nvdb_idx >= Int32(0):
         # Heterogeneous: needs ratio tracking, not a closed form. SPPM only
         # ever samples homogeneous free flight today (see
@@ -2125,15 +2125,15 @@ def _sppm_nee_weight(
                               ls.Li.r, ls.Li.g, ls.Li.b, vp.wavelengths)
         return ph_v * li_v * (Float32(1.0) / ls.pdf)
     if vp.mat_kind == LobeKind.hair:
-        var mat_h = sd.materials[Int(vp.mat_idx)]
+        var mat_h = sd.materials[unsafe_offset=Int(vp.mat_idx)]
         var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, wo)
         # Hair's three lobes are RGB-authored, so this crosses the boundary
         # here rather than being evaluated per wavelength.
         var w_h = _nee_weight_hair(ls, hc)
         return spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_h.r, w_h.g, w_h.b, vp.wavelengths)
     if vp.mat_kind == LobeKind.measured:
-        var mat_m = sd.materials[Int(vp.mat_idx)]
-        var mb_m = sd.measuredBrdfs[Int(mat_m.measured_idx)]
+        var mat_m = sd.materials[unsafe_offset=Int(vp.mat_idx)]
+        var mb_m = sd.measuredBrdfs[unsafe_offset=Int(mat_m.measured_idx)]
         var frm_m = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
         var tangent_m = Vec3f(frm_m.x.x, frm_m.x.y, frm_m.x.z)
         var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
@@ -2156,7 +2156,7 @@ def _sppm_vp_shadow_eps(vp: SPPMPixel, ref sd: SceneDescriptor2_C, wo: Vec3f) ->
     triangle/sphere hits was too coarse relative to a curve's own radius.
     Triangle/sphere-hit VPs are unaffected, unchanged fixed epsilon."""
     if vp.mat_kind == LobeKind.hair:
-        var mat_h = sd.materials[Int(vp.mat_idx)]
+        var mat_h = sd.materials[unsafe_offset=Int(vp.mat_idx)]
         var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, wo)
         return curve_offset_eps(hc.radius)
     return Float32(0.0001)
@@ -2188,15 +2188,15 @@ def _sppm_sample_simple_light(
     var nd = Int(sd.distantLightCount)
     var np_ = Int(sd.pointLightCount)
     if i < nd:
-        var ls_d = _sample_distant_light_nee(sd.distantLights[i])
+        var ls_d = _sample_distant_light_nee(sd.distantLights[unsafe_offset=i])
         var d = ls_d.dist
         return (ls_d^, d)
     if i < nd + np_:
-        var ls_p = _sample_point_light_nee(sd.pointLights[i - nd], hit_point)
+        var ls_p = _sample_point_light_nee(sd.pointLights[unsafe_offset=i - nd], hit_point)
         var d = ls_p.dist * Float32(0.9999)
         return (ls_p^, d)
     var si = i - nd - np_
-    var ls_s = _sample_sphere_light_nee(sd.spheres[si], Int(sd.sphereCount), hit_point, pcg)
+    var ls_s = _sample_sphere_light_nee(sd.spheres[unsafe_offset=si], Int(sd.sphereCount), hit_point, pcg)
     var d = ls_s.dist * Float32(0.9999)
     return (ls_s^, d)
 
@@ -2219,7 +2219,7 @@ def _sppm_nee_one(
     own miss-escape env contribution (vp.env) only fires when it didn't —
     mutually exclusive per sample, so there's no competing strategy to
     double-count against."""
-    var vp = vps[i]
+    var vp = vps[unsafe_offset=i]
     if vp.valid == Int32(0):
         return
     var is_vol = vp.is_volume == PhotonKind.volume
@@ -2298,20 +2298,20 @@ def _sppm_nee_one(
                     if is_vol:
                         # Isotropic phase (albedo/4pi), matching the photon
                         # gather's own volume-VP convention.
-                        vps[i].ld += (spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
+                        vps[unsafe_offset=i].ld += (spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
                                                 vp.alb.r * INV_FOUR_PI, vp.alb.g * INV_FOUR_PI, vp.alb.b * INV_FOUR_PI, vp.wavelengths)
                                       * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
                                       * geom)
                     elif vp.mat_kind == LobeKind.hair or vp.mat_kind == LobeKind.measured or sd.spectral.res <= 0:
                         var brdf = _sppm_vp_brdf(vp, sd, vn, wi)
-                        vps[i].ld += (spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, brdf.r, brdf.g, brdf.b, vp.wavelengths)
+                        vps[unsafe_offset=i].ld += (spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, brdf.r, brdf.g, brdf.b, vp.wavelengths)
                                       * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
                                       * geom)
                     else:
                         var mat_kind_simple = LobeKind.ggx if vp.mat_kind == LobeKind.ggx else LobeKind.lambertian
                         var (f_spec, _) = bxdf_eval_any_spectral(mat_kind_simple, vp.alb, vp.alpha, vn, wo, wi, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths)
                         var light_spec = rgb_illuminant_to_spectral_sample(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
-                        vps[i].ld += f_spec * light_spec * geom
+                        vps[unsafe_offset=i].ld += f_spec * light_spec * geom
 
     # Distant/point/sphere/infinite NEE — via the shared Light interface
     # (bvh.mojo's LightSample samplers) + BxDF interface (_sppm_nee_weight
@@ -2335,10 +2335,10 @@ def _sppm_nee_one(
                                   sd.spheres, Int(sd.sphereCount),
                                   materials=sd.materials):
                 var tr_s = _sppm_shadow_transmittance(vp, sd, shadow_org, ls.wi, ls.dist)
-                vps[i].ld += w * tr_s.r
+                vps[unsafe_offset=i].ld += w * tr_s.r
 
     for inf_i in range(Int(sd.infiniteLightCount)):
-        var ls_e = _sample_infinite_light_nee(sd.infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
+        var ls_e = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
         var w_e = _sppm_nee_weight(vp, sd, vn, wo, ls_e)
         if not w_e.is_black():
             var shadow_ray_e = Ray_C(shadow_org, vec3f(ls_e.wi))
@@ -2347,7 +2347,7 @@ def _sppm_nee_one(
                                   sd.spheres, Int(sd.sphereCount),
                                   materials=sd.materials):
                 var tr_e = _sppm_shadow_transmittance(vp, sd, shadow_org, ls_e.wi, ls_e.dist)
-                vps[i].ld += w_e * tr_e.r
+                vps[unsafe_offset=i].ld += w_e * tr_e.r
 
 
 def _sppm_nee_update(
@@ -2387,7 +2387,7 @@ def _sppm_finalize_albedo_one_pixel(
     (sppm_finalize_gpu)."""
     var acc = RGB(Float32(0))
     for vs in range(vp_samples):
-        var vp = vps[i * vp_samples + vs]
+        var vp = vps[unsafe_offset=i * vp_samples + vs]
         if vp.valid != Int32(0):
             acc += vp.alb
     return acc / Float32(vp_samples)
@@ -2413,7 +2413,7 @@ def _sppm_finalize_one_pixel(
     GPU kernel (sppm_finalize_gpu)."""
     var acc = RGB(Float32(0))
     for vs in range(vp_samples):
-        var vp = vps[i * vp_samples + vs]
+        var vp = vps[unsafe_offset=i * vp_samples + vs]
         if vp.valid == Int32(0):
             # No surface hit — either a dead sample, or the traced ray
             # escaped the scene into an infinite (environment) light, whose
@@ -2501,11 +2501,11 @@ def _sppm_render_core(
     mirroring the old function's `Int32(-1)` early return. Same buffer
     contract as `_bdpt_render_core` (bdpt.mojo): caller-owned `n_pix*3`
     Float32 arrays, iso-scaled/max_comp-clamped, NOT yet denoised."""
-    var fw = Int(psc[0].film_w)
-    var fh = Int(psc[0].film_h)
+    var fw = Int(psc[unsafe_offset=0].film_w)
+    var fh = Int(psc[unsafe_offset=0].film_h)
     var n_pix = fw * fh
-    var iso_scale = psc[0].film_iso / Float32(100)
-    var max_comp = psc[0].film_max_comp
+    var iso_scale = psc[unsafe_offset=0].film_iso / Float32(100)
+    var max_comp = psc[unsafe_offset=0].film_max_comp
 
     if Int(sd.areaLightCount) + Int(sd.distantLightCount) + Int(sd.infiniteLightCount) + Int(sd.pointLightCount) == 0 and not _sppm_has_sphere_lights(sd):
         print("SPPM: no lights in scene, cannot emit photons")
@@ -2544,7 +2544,7 @@ def _sppm_render_core(
     # reintroducing a cap -- don't just trust the old claim.
     var n_vps    = n_pix * _VP_SAMPLES
     var vps     = alloc[SPPMPixel](n_vps)
-    var max_bounces_per_photon = min(Int(psc[0].max_depth), _MAX_B)
+    var max_bounces_per_photon = min(Int(psc[unsafe_offset=0].max_depth), _MAX_B)
     # A subsurface interior blows this budget wide open: its random-walk steps
     # are deliberately NOT charged to maxdepth (see _sppm_trace_photon's loop
     # header), so one photon entering skin deposits at every scatter for as
@@ -2557,7 +2557,7 @@ def _sppm_render_core(
     # failure the comment above describes, with a different cause.
     var has_sss_medium = False
     for mi in range(Int(sd.mediumCount)):
-        if sd.mediums[mi].is_sss != Int32(0):
+        if sd.mediums[unsafe_offset=mi].is_sss != Int32(0):
             has_sss_medium = True
             break
     if has_sss_medium:
@@ -2574,8 +2574,8 @@ def _sppm_render_core(
     # unlike a density estimate the radius does not scale the answer.
     var eff_radius = initial_radius
     for _mi in range(Int(sd.mediumCount)):
-        if sd.mediums[_mi].is_sss != Int32(0):
-            var _rq = dipole_max_radius(sd.mediums[_mi].sigma_s, sd.mediums[_mi].sigma_a, sd.mediums[_mi].g)
+        if sd.mediums[unsafe_offset=_mi].is_sss != Int32(0):
+            var _rq = dipole_max_radius(sd.mediums[unsafe_offset=_mi].sigma_s, sd.mediums[unsafe_offset=_mi].sigma_a, sd.mediums[unsafe_offset=_mi].g)
             if _rq > eff_radius:
                 eff_radius = _rq
     # init_r2 stays on the SCENE's radius -- widening it would blur every
@@ -2588,26 +2588,26 @@ def _sppm_render_core(
     # Trace the camera/visible-point samples ONCE for the whole render — see
     # _sppm_camera_pass's docstring for why a per-pass re-trace (the old
     # design) breaks SPPM's convergence guarantee.
-    var cam_seed = psc[0].rng_seed ^ UInt64(0x9E3779B97F4A7C15 + 7)
+    var cam_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(0x9E3779B97F4A7C15 + 7)
     _sppm_camera_pass(
-        vps, n_pix, _VP_SAMPLES, psc[0].film_w,
-        psc[0].raster_to_camera, psc[0].camera_to_world,
-        sd, init_r2, cam_seed, Int(psc[0].max_depth),
+        vps, n_pix, _VP_SAMPLES, psc[unsafe_offset=0].film_w,
+        psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
+        sd, init_r2, cam_seed, Int(psc[unsafe_offset=0].max_depth),
     )
     if verbose:
         var n_valid = 0
         for i in range(n_vps):
-            if vps[i].valid != Int32(0): n_valid += 1
+            if vps[unsafe_offset=i].valid != Int32(0): n_valid += 1
         print("SPPM: " + String(n_valid) + "/" + String(n_vps) + " visible points found")
 
     # Photon passes
     for pass_idx in range(n_passes):
-        var pass_seed = psc[0].rng_seed ^ UInt64(pass_idx * 2654435761 + 1)
-        var n_stored = _sppm_photon_pass(photons, n_photons_per_pass, max_photons, sd, pass_seed, pass_idx, Int(psc[0].max_depth))
+        var pass_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(pass_idx * 2654435761 + 1)
+        var n_stored = _sppm_photon_pass(photons, n_photons_per_pass, max_photons, sd, pass_seed, pass_idx, Int(psc[unsafe_offset=0].max_depth))
         if n_stored > 0:
             _build_grid(photons, n_stored, heads, inv_cell)
             _gather_update(vps, n_vps, photons, heads, inv_cell, sd, pass_wavelengths(pass_idx))
-        var nee_seed = psc[0].rng_seed ^ UInt64(pass_idx * 0xBF58476D1CE4E5B9 + 3)
+        var nee_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(pass_idx * 0xBF58476D1CE4E5B9 + 3)
         _sppm_nee_update(vps, n_vps, sd, nee_seed, pass_idx)
         if verbose or (pass_idx + 1) % 10 == 0:
             print("SPPM: pass " + String(pass_idx + 1) + "/" + String(n_passes)
@@ -2632,13 +2632,13 @@ def _sppm_render_core(
         var acc = _sppm_finalize_one_pixel(vps, i, _VP_SAMPLES, Int32(n_passes), iso_scale, max_comp,
                                          sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
                                          sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-        out_pixels[i * 3 + 0] = acc.r
-        out_pixels[i * 3 + 1] = acc.g
-        out_pixels[i * 3 + 2] = acc.b
+        out_pixels[unsafe_offset=i * 3 + 0] = acc.r
+        out_pixels[unsafe_offset=i * 3 + 1] = acc.g
+        out_pixels[unsafe_offset=i * 3 + 2] = acc.b
         var alb = _sppm_finalize_albedo_one_pixel(vps, i, _VP_SAMPLES)
-        albedo_pixels[i * 3 + 0] = alb.r
-        albedo_pixels[i * 3 + 1] = alb.g
-        albedo_pixels[i * 3 + 2] = alb.b
+        albedo_pixels[unsafe_offset=i * 3 + 0] = alb.r
+        albedo_pixels[unsafe_offset=i * 3 + 1] = alb.g
+        albedo_pixels[unsafe_offset=i * 3 + 2] = alb.b
 
     parallelize[finalize_one](n_pix)
 
@@ -2666,23 +2666,23 @@ def sppm_render(
     if not ok:
         return Int32(-1)
 
-    var n_pix = Int(psc[0].film_w) * Int(psc[0].film_h)
+    var n_pix = Int(psc[unsafe_offset=0].film_w) * Int(psc[unsafe_offset=0].film_h)
     var normals = alloc[Float32](n_pix * 3)
     var depth = alloc[Float32](n_pix)
     var sd_local = sd
-    render_aux_buffers(psc[0].raster_to_camera, psc[0].camera_to_world, Int32(0), Int32(0),
-                        psc[0].film_w, psc[0].film_h, UnsafePointer(to=sd_local), normals, depth)
+    render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world, Int32(0), Int32(0),
+                        psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, UnsafePointer(to=sd_local), normals, depth)
 
     var denoised = alloc[Float32](n_pix * 3)
     if no_denoise:
-        for i in range(n_pix * 3): denoised[i] = out_pixels[i]
+        for i in range(n_pix * 3): denoised[unsafe_offset=i] = out_pixels[unsafe_offset=i]
     else:
-        denoise(out_pixels, albedo_pixels, normals, depth, psc[0].film_w, psc[0].film_h,
+        denoise(out_pixels, albedo_pixels, normals, depth, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h,
                 denoised, Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
 
-    _ = write_image_cropwindow(denoised, psc[0].film_w, psc[0].film_h,
-        psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
-        psc[0].film_filename, Int32(32), Int32(32))
+    _ = write_image_cropwindow(denoised, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h,
+        psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0, psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1,
+        psc[unsafe_offset=0].film_filename, Int32(32), Int32(32))
 
     out_pixels.unsafe_free(); albedo_pixels.unsafe_free(); normals.unsafe_free(); depth.unsafe_free(); denoised.unsafe_free()
     return Int32(0)

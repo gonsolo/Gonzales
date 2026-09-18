@@ -269,7 +269,7 @@ def _visible_transmittance(
     for _ in range(8):
         if remaining < Float32(1e-4): break
         var ray = Ray_C(org, Vec3f(dir[0], dir[1], dir[2]))
-        inter_mem[0].hit = Int8(0)
+        inter_mem[unsafe_offset=0].hit = Int8(0)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, remaining * Float32(0.9995), inter_mem,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         # test_spheres (analytic spheres, e.g. the caustic sphere) aren't part of
@@ -278,10 +278,10 @@ def _visible_transmittance(
         # nothing, so test_spheres's own internal tMax (it only bounds itself by
         # result[0].tHit when result[0].hit is already set) respects the shadow
         # ray's segment length instead of defaulting to unbounded (1e38).
-        var had_bvh_hit = inter_mem[0].hit != Int8(0)
+        var had_bvh_hit = inter_mem[unsafe_offset=0].hit != Int8(0)
         if not had_bvh_hit:
-            inter_mem[0].hit = Int8(1)
-            inter_mem[0].tHit = remaining * Float32(0.9995)
+            inter_mem[unsafe_offset=0].hit = Int8(1)
+            inter_mem[unsafe_offset=0].tHit = remaining * Float32(0.9995)
             # Clear the primId along with the sentinel. `scratch` is a
             # caller-owned slot reused across bounces, samples and (on GPU)
             # threads, so on a BVH miss the primId still holds STALE data
@@ -291,27 +291,27 @@ def _visible_transmittance(
             # masquerade as a sphere hit, falling through to
             # sd.spheres[stale id1] and sd.materials[stale materialIndex]:
             # an out-of-bounds read on any scene with no spheres.
-            inter_mem[0].primId.type = Int8(0)
+            inter_mem[unsafe_offset=0].primId.type = Int8(0)
         test_spheres(sd.spheres, Int(sd.sphereCount), ray, inter_mem)
-        if not had_bvh_hit and inter_mem[0].primId.type != Int8(4):
-            inter_mem[0].hit = Int8(0)
-        if inter_mem[0].hit == Int8(0):
+        if not had_bvh_hit and inter_mem[unsafe_offset=0].primId.type != Int8(4):
+            inter_mem[unsafe_offset=0].hit = Int8(0)
+        if inter_mem[unsafe_offset=0].hit == Int8(0):
             # Nothing between here and destination: apply remaining Beer-Lambert
             if Int(cur_med) >= 0:
-                var med = sd.mediums[Int(cur_med)]
+                var med = sd.mediums[unsafe_offset=Int(cur_med)]
                 var st_spec = medium_sigma_t_spectral(med, wl, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
                 Tr *= SpectralSample(exp(-st_spec.v0*remaining), exp(-st_spec.v1*remaining), exp(-st_spec.v2*remaining), exp(-st_spec.v3*remaining))
             break
 
-        var inter = inter_mem[0]
+        var inter = inter_mem[unsafe_offset=0]
         var t_hit = inter.tHit
         var mat_idx = Int(inter.primId.materialIndex)
-        var mat = sd.materials[mat_idx]
+        var mat = sd.materials[unsafe_offset=mat_idx]
         var hit = org + Vec3f(dir[0], dir[1], dir[2]) * t_hit
 
         # Beer-Lambert through medium segment up to hit
         if Int(cur_med) >= 0:
-            var med = sd.mediums[Int(cur_med)]
+            var med = sd.mediums[unsafe_offset=Int(cur_med)]
             var st_spec = medium_sigma_t_spectral(med, wl, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
             Tr *= SpectralSample(exp(-st_spec.v0*t_hit), exp(-st_spec.v1*t_hit), exp(-st_spec.v2*t_hit), exp(-st_spec.v3*t_hit))
 
@@ -330,7 +330,7 @@ def _visible_transmittance(
                 return SpectralSample(Float32(0))
             # Update medium after crossing glass surface
             if mat.medium_interface_idx >= Int32(0) and sd.mediumIfaceCount > Int64(0):
-                var iface = sd.mediumInterfaces[Int(mat.medium_interface_idx)]
+                var iface = sd.mediumInterfaces[unsafe_offset=Int(mat.medium_interface_idx)]
                 var md = dir[0]*gn[0]+dir[1]*gn[1]+dir[2]*gn[2]
                 cur_med = iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
             org = hit + Vec3f(dir[0], dir[1], dir[2]) * Float32(0.0002)
@@ -339,7 +339,7 @@ def _visible_transmittance(
         elif mat.type == MatKind.interface:
             # Pure medium boundary: update medium, continue
             if mat.medium_interface_idx >= Int32(0) and sd.mediumIfaceCount > Int64(0):
-                var iface = sd.mediumInterfaces[Int(mat.medium_interface_idx)]
+                var iface = sd.mediumInterfaces[unsafe_offset=Int(mat.medium_interface_idx)]
                 # An ANALYTIC SPHERE boundary has no mesh to read a normal
                 # from -- _geom_normal would index sd.meshes with a sphere's
                 # primId fields and return garbage, making the inside/outside
@@ -398,13 +398,13 @@ def _bdpt_sample_simple_light(
     var nd = Int(sd.distantLightCount)
     var np_ = Int(sd.pointLightCount)
     if i < nd:
-        var ls_d = _sample_distant_light_nee(sd.distantLights[i])
+        var ls_d = _sample_distant_light_nee(sd.distantLights[unsafe_offset=i])
         return ls_d^
     if i < nd + np_:
-        var ls_p = _sample_point_light_nee(sd.pointLights[i - nd], hit_point)
+        var ls_p = _sample_point_light_nee(sd.pointLights[unsafe_offset=i - nd], hit_point)
         return ls_p^
     var si = i - nd - np_
-    var ls_s = _sample_sphere_light_nee(sd.spheres[si], Int(sd.sphereCount), hit_point, pcg)
+    var ls_s = _sample_sphere_light_nee(sd.spheres[unsafe_offset=si], Int(sd.sphereCount), hit_point, pcg)
     return ls_s^
 
 
@@ -484,17 +484,17 @@ def _bdpt_mnee_diffuse_area_light(
     if n_area <= 0:
         return SpectralSample(Float32(0))
     var li = Int(pcg.next_uint() % UInt32(n_area))
-    var al = sd.areaLights[li]
+    var al = sd.areaLights[unsafe_offset=li]
     if al.kind == Int8(1):
         return SpectralSample(Float32(0))
-    var lmesh = sd.meshes[Int(al.meshIdx)]
+    var lmesh = sd.meshes[unsafe_offset=Int(al.meshIdx)]
     var n_tris = Int(max(Int(al.n_tris), 1))
     var ti = Int(pcg.next_uint() % UInt32(n_tris))
     var lb = ti * 3
-    var lv0 = Int(lmesh.vertexIndices[lb]); var lv1 = Int(lmesh.vertexIndices[lb+1]); var lv2 = Int(lmesh.vertexIndices[lb+2])
-    var lp0 = Vec3f(lmesh.points[lv0*4], lmesh.points[lv0*4+1], lmesh.points[lv0*4+2])
-    var lp1 = Vec3f(lmesh.points[lv1*4], lmesh.points[lv1*4+1], lmesh.points[lv1*4+2])
-    var lp2 = Vec3f(lmesh.points[lv2*4], lmesh.points[lv2*4+1], lmesh.points[lv2*4+2])
+    var lv0 = Int(lmesh.vertexIndices[unsafe_offset=lb]); var lv1 = Int(lmesh.vertexIndices[unsafe_offset=lb+1]); var lv2 = Int(lmesh.vertexIndices[unsafe_offset=lb+2])
+    var lp0 = Vec3f(lmesh.points[unsafe_offset=lv0*4], lmesh.points[unsafe_offset=lv0*4+1], lmesh.points[unsafe_offset=lv0*4+2])
+    var lp1 = Vec3f(lmesh.points[unsafe_offset=lv1*4], lmesh.points[unsafe_offset=lv1*4+1], lmesh.points[unsafe_offset=lv1*4+2])
+    var lp2 = Vec3f(lmesh.points[unsafe_offset=lv2*4], lmesh.points[unsafe_offset=lv2*4+1], lmesh.points[unsafe_offset=lv2*4+2])
     var ru1 = pcg.next_float(); var ru2 = pcg.next_float(); var sr1 = sqrt(ru1)
     var light_point = lp0*(Float32(1)-sr1) + lp1*(sr1*(Float32(1)-ru2)) + lp2*(sr1*ru2)
     var ldp_du = lp1 - lp0
@@ -519,16 +519,16 @@ def _bdpt_mnee_diffuse_area_light(
     var probe_inter = probe_store[0]
     if probe_inter.hit == Int8(0) or probe_inter.primId.type != Int8(0):
         return SpectralSample(Float32(0))
-    var probe_mat = sd.materials[Int(probe_inter.primId.materialIndex)]
+    var probe_mat = sd.materials[unsafe_offset=Int(probe_inter.primId.materialIndex)]
     if probe_mat.type != MatKind.dielectric and probe_mat.type != MatKind.thin_dielectric:
         return SpectralSample(Float32(0))
 
     var (pmesh, pv0, pv1, pv2, ptok) = _get_tri_verts(probe_inter, sd.meshes)
     if not ptok:
         return SpectralSample(Float32(0))
-    var pp0 = Vec3f(pmesh.points[pv0*4], pmesh.points[pv0*4+1], pmesh.points[pv0*4+2])
-    var pp1 = Vec3f(pmesh.points[pv1*4], pmesh.points[pv1*4+1], pmesh.points[pv1*4+2])
-    var pp2 = Vec3f(pmesh.points[pv2*4], pmesh.points[pv2*4+1], pmesh.points[pv2*4+2])
+    var pp0 = Vec3f(pmesh.points[unsafe_offset=pv0*4], pmesh.points[unsafe_offset=pv0*4+1], pmesh.points[unsafe_offset=pv0*4+2])
+    var pp1 = Vec3f(pmesh.points[unsafe_offset=pv1*4], pmesh.points[unsafe_offset=pv1*4+1], pmesh.points[unsafe_offset=pv1*4+2])
+    var pp2 = Vec3f(pmesh.points[unsafe_offset=pv2*4], pmesh.points[unsafe_offset=pv2*4+1], pmesh.points[unsafe_offset=pv2*4+2])
     var pdp_du = pp1 - pp0
     var pdp_dv = pp2 - pp0
     var pgeo_n3 = cross(pdp_du, pdp_dv)
@@ -558,15 +558,15 @@ def _bdpt_mnee_diffuse_area_light(
         probe2_inter = probe2_store[0]
 
     if probe2_inter.hit != Int8(0) and probe2_inter.primId.type == Int8(0):
-        var probe2_mat = sd.materials[Int(probe2_inter.primId.materialIndex)]
+        var probe2_mat = sd.materials[unsafe_offset=Int(probe2_inter.primId.materialIndex)]
         if probe2_mat.type == MatKind.dielectric or probe2_mat.type == MatKind.thin_dielectric:
             # --- 2-vertex MNEE ---
             var (p2mesh, p2v0, p2v1, p2v2, p2ok) = _get_tri_verts(probe2_inter, sd.meshes)
             if not p2ok:
                 return SpectralSample(Float32(0))
-            var p2p0 = Vec3f(p2mesh.points[p2v0*4], p2mesh.points[p2v0*4+1], p2mesh.points[p2v0*4+2])
-            var p2p1 = Vec3f(p2mesh.points[p2v1*4], p2mesh.points[p2v1*4+1], p2mesh.points[p2v1*4+2])
-            var p2p2 = Vec3f(p2mesh.points[p2v2*4], p2mesh.points[p2v2*4+1], p2mesh.points[p2v2*4+2])
+            var p2p0 = Vec3f(p2mesh.points[unsafe_offset=p2v0*4], p2mesh.points[unsafe_offset=p2v0*4+1], p2mesh.points[unsafe_offset=p2v0*4+2])
+            var p2p1 = Vec3f(p2mesh.points[unsafe_offset=p2v1*4], p2mesh.points[unsafe_offset=p2v1*4+1], p2mesh.points[unsafe_offset=p2v1*4+2])
+            var p2p2 = Vec3f(p2mesh.points[unsafe_offset=p2v2*4], p2mesh.points[unsafe_offset=p2v2*4+1], p2mesh.points[unsafe_offset=p2v2*4+2])
             var pdp_du2 = p2p1 - p2p0; var pdp_dv2 = p2p2 - p2p0
             var pgeo_n3_2 = cross(pdp_du2, pdp_dv2)
             var pgeo_n_len2 = sqrt(dot(pgeo_n3_2, pgeo_n3_2))
@@ -762,7 +762,7 @@ def _bdpt_mnee_sphere_light(
     light special case). Kept even though the loop-wrapping hypothesis
     turned out not to be the real bug, since unrolling is harmless and
     was already in place before the real cause was found."""
-    var sph = sd.spheres[sph_idx]
+    var sph = sd.spheres[unsafe_offset=sph_idx]
     if sph.isAreaLight == Int8(0):
         return SpectralSample(Float32(0))
     var u1 = pcg.next_float(); var u2 = pcg.next_float()
@@ -799,16 +799,16 @@ def _bdpt_mnee_sphere_light(
     var probe_inter = probe_store[0]
     if probe_inter.hit == Int8(0) or probe_inter.primId.type != Int8(0):
         return SpectralSample(Float32(0))
-    var probe_mat = sd.materials[Int(probe_inter.primId.materialIndex)]
+    var probe_mat = sd.materials[unsafe_offset=Int(probe_inter.primId.materialIndex)]
     if probe_mat.type != MatKind.dielectric and probe_mat.type != MatKind.thin_dielectric:
         return SpectralSample(Float32(0))
 
     var (pmesh, pv0, pv1, pv2, ptok) = _get_tri_verts(probe_inter, sd.meshes)
     if not ptok:
         return SpectralSample(Float32(0))
-    var pp0 = Vec3f(pmesh.points[pv0*4], pmesh.points[pv0*4+1], pmesh.points[pv0*4+2])
-    var pp1 = Vec3f(pmesh.points[pv1*4], pmesh.points[pv1*4+1], pmesh.points[pv1*4+2])
-    var pp2 = Vec3f(pmesh.points[pv2*4], pmesh.points[pv2*4+1], pmesh.points[pv2*4+2])
+    var pp0 = Vec3f(pmesh.points[unsafe_offset=pv0*4], pmesh.points[unsafe_offset=pv0*4+1], pmesh.points[unsafe_offset=pv0*4+2])
+    var pp1 = Vec3f(pmesh.points[unsafe_offset=pv1*4], pmesh.points[unsafe_offset=pv1*4+1], pmesh.points[unsafe_offset=pv1*4+2])
+    var pp2 = Vec3f(pmesh.points[unsafe_offset=pv2*4], pmesh.points[unsafe_offset=pv2*4+1], pmesh.points[unsafe_offset=pv2*4+2])
     var pdp_du = pp1 - pp0
     var pdp_dv = pp2 - pp0
     var pgeo_n3 = cross(pdp_du, pdp_dv)
@@ -838,15 +838,15 @@ def _bdpt_mnee_sphere_light(
         probe2_inter = probe2_store[0]
 
     if probe2_inter.hit != Int8(0) and probe2_inter.primId.type == Int8(0):
-        var probe2_mat = sd.materials[Int(probe2_inter.primId.materialIndex)]
+        var probe2_mat = sd.materials[unsafe_offset=Int(probe2_inter.primId.materialIndex)]
         if probe2_mat.type == MatKind.dielectric or probe2_mat.type == MatKind.thin_dielectric:
             # --- 2-vertex MNEE ---
             var (p2mesh, p2v0, p2v1, p2v2, p2ok) = _get_tri_verts(probe2_inter, sd.meshes)
             if not p2ok:
                 return SpectralSample(Float32(0))
-            var p2p0 = Vec3f(p2mesh.points[p2v0*4], p2mesh.points[p2v0*4+1], p2mesh.points[p2v0*4+2])
-            var p2p1 = Vec3f(p2mesh.points[p2v1*4], p2mesh.points[p2v1*4+1], p2mesh.points[p2v1*4+2])
-            var p2p2 = Vec3f(p2mesh.points[p2v2*4], p2mesh.points[p2v2*4+1], p2mesh.points[p2v2*4+2])
+            var p2p0 = Vec3f(p2mesh.points[unsafe_offset=p2v0*4], p2mesh.points[unsafe_offset=p2v0*4+1], p2mesh.points[unsafe_offset=p2v0*4+2])
+            var p2p1 = Vec3f(p2mesh.points[unsafe_offset=p2v1*4], p2mesh.points[unsafe_offset=p2v1*4+1], p2mesh.points[unsafe_offset=p2v1*4+2])
+            var p2p2 = Vec3f(p2mesh.points[unsafe_offset=p2v2*4], p2mesh.points[unsafe_offset=p2v2*4+1], p2mesh.points[unsafe_offset=p2v2*4+2])
             var pdp_du2 = p2p1 - p2p0; var pdp_dv2 = p2p2 - p2p0
             var pgeo_n3_2 = cross(pdp_du2, pdp_dv2)
             var pgeo_n_len2 = sqrt(dot(pgeo_n3_2, pgeo_n3_2))
@@ -999,7 +999,7 @@ def _bdpt_store_lvc_vertex(
     project_vcm_stage2_mis_derivation memory). Bonus: since each light
     path now owns a non-contended slice, no atomics are needed here at
     all, on CPU or GPU."""
-    lvc[lp_idx * _BDPT_MAX_VERTS + local_idx] = v
+    lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS + local_idx] = v
 
 # ── LVC connection scale factor ──────────────────────────────────────────────
 
@@ -1026,9 +1026,9 @@ def _bdpt_world_to_raster(
     ok=False when the point is behind the camera or lands off-film."""
     # world -> camera
     var px = p_world[0]; var py = p_world[1]; var pz = p_world[2]
-    var cx = w2c[0]*px + w2c[4]*py + w2c[8]*pz  + w2c[12]
-    var cy = w2c[1]*px + w2c[5]*py + w2c[9]*pz  + w2c[13]
-    var cz = w2c[2]*px + w2c[6]*py + w2c[10]*pz + w2c[14]
+    var cx = w2c[unsafe_offset=0]*px + w2c[unsafe_offset=4]*py + w2c[unsafe_offset=8]*pz  + w2c[unsafe_offset=12]
+    var cy = w2c[unsafe_offset=1]*px + w2c[unsafe_offset=5]*py + w2c[unsafe_offset=9]*pz  + w2c[unsafe_offset=13]
+    var cz = w2c[unsafe_offset=2]*px + w2c[unsafe_offset=6]*py + w2c[unsafe_offset=10]*pz + w2c[unsafe_offset=14]
     if cz <= Float32(1e-6):
         return (False, Float32(0), Float32(0), Float32(0))   # behind the lens
     var clen = sqrt(cx*cx + cy*cy + cz*cz)
@@ -1036,9 +1036,9 @@ def _bdpt_world_to_raster(
         return (False, Float32(0), Float32(0), Float32(0))
     var cos_theta = cz / clen                                # forward axis is +z
     # camera-space direction -> (filmX, filmY): q = C2R . c, then divide
-    var q0 = c2r[0]*cx + c2r[1]*cy + c2r[2]*cz
-    var q1 = c2r[3]*cx + c2r[4]*cy + c2r[5]*cz
-    var q2 = c2r[6]*cx + c2r[7]*cy + c2r[8]*cz
+    var q0 = c2r[unsafe_offset=0]*cx + c2r[unsafe_offset=1]*cy + c2r[unsafe_offset=2]*cz
+    var q1 = c2r[unsafe_offset=3]*cx + c2r[unsafe_offset=4]*cy + c2r[unsafe_offset=5]*cz
+    var q2 = c2r[unsafe_offset=6]*cx + c2r[unsafe_offset=7]*cy + c2r[unsafe_offset=8]*cz
     if abs(q2) <= Float32(1e-12):
         return (False, Float32(0), Float32(0), Float32(0))
     var fx = q0 / q2
@@ -1206,7 +1206,7 @@ def _bdpt_connect_to_cache(
     # vertices is the same over-count from the other side.
     var took_unweighted = False
     for local in range(path_len):
-        var lv = lvc[lp_idx * _BDPT_MAX_VERTS + local]
+        var lv = lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS + local]
         if not _bdpt_connect_pair_weighted(cv, lv):
             if took_unweighted:
                 continue
@@ -1244,33 +1244,33 @@ def _bdpt_connect_to_cache_deferred(
     var took_unweighted = False
     for local in range(_BDPT_MAX_VERTS):
         if local >= path_len:
-            shadow_valid[base + local] = Int8(0)
+            shadow_valid[unsafe_offset=base + local] = Int8(0)
             continue
-        var lv = lvc[base + local]
+        var lv = lvc[unsafe_offset=base + local]
         if not _bdpt_connect_pair_weighted(cv, lv):
             if took_unweighted:
-                shadow_valid[base + local] = Int8(0)
+                shadow_valid[unsafe_offset=base + local] = Int8(0)
                 continue
             took_unweighted = True
         var (contrib, valid) = _connect_unweighted(cv, lv, sd, mis_vm_weight_factor)
         if not valid:
-            shadow_valid[base + local] = Int8(0)
+            shadow_valid[unsafe_offset=base + local] = Int8(0)
             continue
         var d3 = lv.pos - cv.pos
         var dist = sqrt(d3.length_sq())
         var dir = d3.to_simd() / dist
         var idx8 = (base + local) * 8
-        shadow_rays[idx8 + 0] = cv.pos.x
-        shadow_rays[idx8 + 1] = cv.pos.y
-        shadow_rays[idx8 + 2] = cv.pos.z
-        shadow_rays[idx8 + 3] = Float32(1e-4)
-        shadow_rays[idx8 + 4] = dir[0]
-        shadow_rays[idx8 + 5] = dir[1]
-        shadow_rays[idx8 + 6] = dir[2]
-        shadow_rays[idx8 + 7] = dist * Float32(0.9995)
-        shadow_pending[base + local] = contrib
-        shadow_seg_med[base + local] = cv.med_idx
-        shadow_valid[base + local] = Int8(1)
+        shadow_rays[unsafe_offset=idx8 + 0] = cv.pos.x
+        shadow_rays[unsafe_offset=idx8 + 1] = cv.pos.y
+        shadow_rays[unsafe_offset=idx8 + 2] = cv.pos.z
+        shadow_rays[unsafe_offset=idx8 + 3] = Float32(1e-4)
+        shadow_rays[unsafe_offset=idx8 + 4] = dir[0]
+        shadow_rays[unsafe_offset=idx8 + 5] = dir[1]
+        shadow_rays[unsafe_offset=idx8 + 6] = dir[2]
+        shadow_rays[unsafe_offset=idx8 + 7] = dist * Float32(0.9995)
+        shadow_pending[unsafe_offset=base + local] = contrib
+        shadow_seg_med[unsafe_offset=base + local] = cv.med_idx
+        shadow_valid[unsafe_offset=base + local] = Int8(1)
 
 # ── VCM vertex merging: spatial hash grid over the LVC ───────────────────────
 # Mirrors sppm.mojo's photon hash grid (_build_grid/_sppm_insert_photon/
@@ -1282,7 +1282,7 @@ def _bdpt_connect_to_cache_deferred(
 # reason for the grid math itself to differ between the two use sites.
 
 def _bdpt_reset_merge_cell(heads: UnsafePointer[Int32, MutExternalOrigin], h: Int):
-    heads[h] = Int32(-1)
+    heads[unsafe_offset=h] = Int32(-1)
 
 def _bdpt_insert_merge_vertex[use_gpu: Bool](
     k: Int,
@@ -1300,18 +1300,18 @@ def _bdpt_insert_merge_vertex[use_gpu: Bool](
     primitive -- identical pattern to sppm.mojo's _sppm_insert_photon[use_gpu]."""
     var lp_idx = k // _BDPT_MAX_VERTS
     var local_idx = k % _BDPT_MAX_VERTS
-    if local_idx >= Int(lvc_path_len[lp_idx]):
+    if local_idx >= Int(lvc_path_len[unsafe_offset=lp_idx]):
         return
-    var ix = Int(floor(lvc[k].pos.x * inv_cell))
-    var iy = Int(floor(lvc[k].pos.y * inv_cell))
-    var iz = Int(floor(lvc[k].pos.z * inv_cell))
+    var ix = Int(floor(lvc[unsafe_offset=k].pos.x * inv_cell))
+    var iy = Int(floor(lvc[unsafe_offset=k].pos.y * inv_cell))
+    var iz = Int(floor(lvc[unsafe_offset=k].pos.z * inv_cell))
     var h = _hash_cell(ix, iy, iz)
     comptime if use_gpu:
-        var old = Atomic._xchg(heads + h, Int32(k))
-        merge_next[k] = old
+        var old = Atomic._xchg(heads.unsafe_offset(h), Int32(k))
+        merge_next[unsafe_offset=k] = old
     else:
-        merge_next[k] = heads[h]
-        heads[h] = Int32(k)
+        merge_next[unsafe_offset=k] = heads[unsafe_offset=h]
+        heads[unsafe_offset=h] = Int32(k)
 
 def _bdpt_build_merge_grid(
     lvc: UnsafePointer[BDPTVertex, MutExternalOrigin],
@@ -1390,9 +1390,9 @@ def _bdpt_merge_from_cache(
         for ddy in range(-1, 2):
             for ddz in range(-1, 2):
                 var h = _hash_cell(cix + ddx, ciy + ddy, ciz + ddz)
-                var k = Int(heads[h])
+                var k = Int(heads[unsafe_offset=h])
                 while k != -1:
-                    var lv = lvc[k]
+                    var lv = lvc[unsafe_offset=k]
                     # is_light==1 vertices are the light SOURCE's own point
                     # (the s=1 connection strategy): their beta is 1/pdf_area
                     # ONLY, with the actual emitted radiance held separately
@@ -1420,7 +1420,7 @@ def _bdpt_merge_from_cache(
                                 var w_camera = cv.dVCM * mis_vc_weight_factor + cv.dVM * camera_bsdf_rev_pdf_w
                                 w = Float32(1) / (w_light + Float32(1) + w_camera)
                             total += f_cv * lv.beta * w
-                    k = Int(merge_next[k])
+                    k = Int(merge_next[unsafe_offset=k])
     return total * cv.beta * norm
 
 # ── Trace one camera subpath, connecting to the shared cache inline ─────────
@@ -1509,14 +1509,14 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
         # The same intersect step _bdpt_camera_path_intersect_gpu performs;
         # kept at the call site because it is the Vulkan RT swap point.
         var ray = Ray_C(ro, rd)
-        scratch[0].hit = Int8(0)
+        scratch[unsafe_offset=0].hit = Int8(0)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         test_spheres(sd.spheres, Int(sd.sphereCount), ray, scratch)
         # A miss (including its infinite-light escape credit) is handled
         # inside the step, so the old top-of-loop miss block is gone.
         if not _bdpt_camera_path_bounce[use_gpu](
-            sd, pcg, has_med, scratch[0], scratch, lvc, lp_idx, path_len,
+            sd, pcg, has_med, scratch[unsafe_offset=0], scratch, lvc, lp_idx, path_len,
             merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
             mis_vc_weight_factor, mis_vm_weight_factor,
             ro, rd, beta, total, first_alb, n_verts, n_bounces, cur_med_idx,
@@ -1590,22 +1590,22 @@ def _bdpt_camera_path_init[use_gpu: Bool](
     edge case the original code silently tolerates) -- `active` is always 1."""
     var fX = Float32(px) + Float32(0.5)
     var fY = Float32(py) + Float32(0.5)
-    var cx = r2c[0]*fX + r2c[4]*fY + r2c[12]
-    var cy = r2c[1]*fX + r2c[5]*fY + r2c[13]
-    var cz = r2c[2]*fX + r2c[6]*fY + r2c[14]
-    var cw = r2c[3]*fX + r2c[7]*fY + r2c[15]
+    var cx = r2c[unsafe_offset=0]*fX + r2c[unsafe_offset=4]*fY + r2c[unsafe_offset=12]
+    var cy = r2c[unsafe_offset=1]*fX + r2c[unsafe_offset=5]*fY + r2c[unsafe_offset=13]
+    var cz = r2c[unsafe_offset=2]*fX + r2c[unsafe_offset=6]*fY + r2c[unsafe_offset=14]
+    var cw = r2c[unsafe_offset=3]*fX + r2c[unsafe_offset=7]*fY + r2c[unsafe_offset=15]
     if cw != Float32(0.0) and cw != Float32(1.0):
         cx /= cw; cy /= cw; cz /= cw
     var cl = sqrt(cx*cx + cy*cy + cz*cz)
     if cl > Float32(0.0): cx /= cl; cy /= cl; cz /= cl
     var rd = Vec3f(
-        c2w[0]*cx + c2w[4]*cy + c2w[8]*cz,
-        c2w[1]*cx + c2w[5]*cy + c2w[9]*cz,
-        c2w[2]*cx + c2w[6]*cy + c2w[10]*cz,
+        c2w[unsafe_offset=0]*cx + c2w[unsafe_offset=4]*cy + c2w[unsafe_offset=8]*cz,
+        c2w[unsafe_offset=1]*cx + c2w[unsafe_offset=5]*cy + c2w[unsafe_offset=9]*cz,
+        c2w[unsafe_offset=2]*cx + c2w[unsafe_offset=6]*cy + c2w[unsafe_offset=10]*cz,
     )
     var dl = rd.length()
     if dl > Float32(0.0): rd = rd / dl
-    var ro = Point3f(c2w[12], c2w[13], c2w[14])
+    var ro = Point3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
 
     # VCM Stage 2b: real per-vertex MIS state for the eye subpath (see
     # project_vcm_stage2_mis_derivation memory). cameraPdfW derived by
@@ -1758,7 +1758,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             return False   # mirrors the original loop's top-of-iteration guard
         if inter.hit == Int8(0):
             for inf_i in range(Int(sd.infiniteLightCount)):
-                var ilight = sd.infiniteLights[inf_i]
+                var ilight = sd.infiniteLights[unsafe_offset=inf_i]
                 var (Le, pdf_light_here) = _eval_infinite_light_and_pdf(ilight, rd)
                 var mis_w = Float32(1)
                 if last_bsdf_pdf >= Float32(0) and pdf_light_here > Float32(0):
@@ -1778,7 +1778,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
 
         # Volume free-flight
         if has_med and Int(cur_med_idx) >= 0:
-            var med = sd.mediums[Int(cur_med_idx)]
+            var med = sd.mediums[unsafe_offset=Int(cur_med_idx)]
             # ONE shared sampler for both medium kinds (geometry.mojo):
             # homogeneous closed form, or delta tracking against the real
             # density field. This call site used to be the homogeneous one
@@ -1876,7 +1876,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                         var w_v = phase_alb_v * li_spec_v * (mis_v / ls_v.pdf)
                         total += _bdpt_nee_contribute(beta, w_v, ls_v, sp, Vec3f(Float32(0)), cur_med_idx, sd, scratch, wavelengths, Float32(0))
                 for inf_v in range(Int(sd.infiniteLightCount)):
-                    var ls_infv = _sample_infinite_light_nee(sd.infiniteLights[inf_v], Point2f(pcg.next_float(), pcg.next_float()))
+                    var ls_infv = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_v], Point2f(pcg.next_float(), pcg.next_float()))
                     if ls_infv.valid and ls_infv.pdf > Float32(0):
                         var li_spec_infv = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ls_infv.Li).r, (ls_infv.Li).g, (ls_infv.Li).b, wavelengths)
                         var mis_infv = Float32(1) if ls_infv.is_delta else power_heuristic(ls_infv.pdf, INV_FOUR_PI)
@@ -1917,7 +1917,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 dvcm_carry *= exp(ff_exp)
 
         var mat_idx = Int(inter.primId.materialIndex)
-        var mat = sd.materials[mat_idx]
+        var mat = sd.materials[unsafe_offset=mat_idx]
         var hit = ro + rd*t_hit
 
         # Direct hit on an emissive analytic sphere — checked BEFORE material
@@ -1932,7 +1932,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
         # an analytic sphere is only ever hit from outside, always the
         # front (emitting) face, unlike a one-sided triangle area light.
         if inter.primId.type == Int8(4):
-            var sph_hit = sd.spheres[Int(inter.primId.id1)]
+            var sph_hit = sd.spheres[unsafe_offset=Int(inter.primId.id1)]
             if sph_hit.isAreaLight != Int8(0):
                 var mis_w_sph_hit = Float32(1)
                 if last_bsdf_pdf >= Float32(0):
@@ -1986,7 +1986,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var mix_idx2 = Int((mat.tex_idx >> 16) & Int32(0xFFFF))
             var mix_amount = mat.roughU
             var mix_chosen = mix_idx2 if pcg.next_float() < mix_amount else mix_idx1
-            mat = sd.materials[mix_chosen]
+            mat = sd.materials[unsafe_offset=mix_chosen]
             mat_idx = mix_chosen  # keep in sync with the resolved sub-material (hair needs the real index to re-fetch at connect time)
             if mat.type == MatKind.mix:
                 mat.type = MatKind.diffuse
@@ -1996,7 +1996,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # last_bsdf_pdf treatment as the sphere case above. id1 is the
             # AreaLight_C index directly for a type==3 (area-light-triangle)
             # hit, per pbrt_parser.mojo's own PrimId_C encoding.
-            var al_hit = sd.areaLights[Int(inter.primId.id1)]
+            var al_hit = sd.areaLights[unsafe_offset=Int(inter.primId.id1)]
             var gn_al_hit = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             var cos_l_hit = -dot(gn_al_hit, ray_dir)
             if cos_l_hit > Float32(0):
@@ -2105,7 +2105,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var w_i = _nee_weight_simple_spectral(ls_i, LobeKind.lambertian, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                 total += _bdpt_nee_contribute(beta, w_i, ls_i, hit, gn, cur_med_idx, sd, scratch, wavelengths)
             for inf_i in range(Int(sd.infiniteLightCount)):
-                var ls_e = _sample_infinite_light_nee(sd.infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
+                var ls_e = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
                 var w_e = _nee_weight_simple_spectral(ls_e, LobeKind.lambertian, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                 total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn, cur_med_idx, sd, scratch, wavelengths)
             # Real MNEE for area lights behind glass (task #161) -- see
@@ -2196,7 +2196,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var w_ic = _nee_weight_coated_coat_lobe(ls_ic, ior, coat_alpha, gn, wo)
                     total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_ic.r, w_ic.g, w_ic.b, wavelengths), ls_ic, hit, gn, cur_med_idx, sd, scratch, wavelengths)
                 for inf_ic in range(Int(sd.infiniteLightCount)):
-                    var ls_infc = _sample_infinite_light_nee(sd.infiniteLights[inf_ic], Point2f(pcg.next_float(), pcg.next_float()))
+                    var ls_infc = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_ic], Point2f(pcg.next_float(), pcg.next_float()))
                     var w_infc = _nee_weight_coated_coat_lobe(ls_infc, ior, coat_alpha, gn, wo)
                     total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_infc.r, w_infc.g, w_infc.b, wavelengths), ls_infc, hit, gn, cur_med_idx, sd, scratch, wavelengths)
 
@@ -2273,7 +2273,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var w_ib = _nee_weight_coated_diffuse_base[True](ls_ib, eff_alb, ior, gn, coat_alpha)
                     total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_ib.r, w_ib.g, w_ib.b, wavelengths), ls_ib, hit, gn, cur_med_idx, sd, scratch, wavelengths)
                 for inf_i in range(Int(sd.infiniteLightCount)):
-                    var ls_inf = _sample_infinite_light_nee(sd.infiniteLights[inf_i], Point2f(pcg.next_float(), pcg.next_float()))
+                    var ls_inf = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
                     var w_inf = _nee_weight_coated_diffuse_base[True](ls_inf, eff_alb, ior, gn, coat_alpha)
                     total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_inf.r, w_inf.g, w_inf.b, wavelengths), ls_inf, hit, gn, cur_med_idx, sd, scratch, wavelengths)
 
@@ -2416,7 +2416,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var w_icc = _nee_weight_simple_spectral(ls_icc, LobeKind.ggx, mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                     total += _bdpt_nee_contribute(beta, w_icc, ls_icc, hit, gn_c, cur_med_idx, sd, scratch, wavelengths)
                 for inf_ic in range(Int(sd.infiniteLightCount)):
-                    var ls_ec = _sample_infinite_light_nee(sd.infiniteLights[inf_ic], Point2f(pcg.next_float(), pcg.next_float()))
+                    var ls_ec = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_ic], Point2f(pcg.next_float(), pcg.next_float()))
                     var w_ec = _nee_weight_simple_spectral(ls_ec, LobeKind.ggx, mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                     total += _bdpt_nee_contribute(beta, w_ec, ls_ec, hit, gn_c, cur_med_idx, sd, scratch, wavelengths)
 
@@ -2506,7 +2506,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var w_ih = _nee_weight_hair(ls_ih, hc)
                 total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_ih.r, w_ih.g, w_ih.b, wavelengths), ls_ih, hit, hc.geo_normal, cur_med_idx, sd, scratch, wavelengths, hair_eps)
             for inf_ih in range(Int(sd.infiniteLightCount)):
-                var ls_eh = _sample_infinite_light_nee(sd.infiniteLights[inf_ih], Point2f(pcg.next_float(), pcg.next_float()))
+                var ls_eh = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_ih], Point2f(pcg.next_float(), pcg.next_float()))
                 var w_eh = _nee_weight_hair(ls_eh, hc)
                 total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_eh.r, w_eh.g, w_eh.b, wavelengths), ls_eh, hit, hc.geo_normal, cur_med_idx, sd, scratch, wavelengths, hair_eps)
 
@@ -2564,7 +2564,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var frm_m = Frame.from_z(Vec3f(gn_m[0], gn_m[1], gn_m[2]))
             var tangent_m = Vec3f(frm_m.x.x, frm_m.x.y, frm_m.x.z)
             var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
-            var mb = sd.measuredBrdfs[Int(mat.measured_idx)]
+            var mb = sd.measuredBrdfs[unsafe_offset=Int(mat.measured_idx)]
 
             # VCM Stage 2b: measured BxDF has a real standalone pdf -- in
             # MIS scope this pass, same real treatment as diffuse.
@@ -2608,7 +2608,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var w_im = _nee_weight_measured(ls_im, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
                 total += _bdpt_nee_contribute(beta, w_im, ls_im, hit, gn_m, cur_med_idx, sd, scratch, wavelengths)
             for inf_im in range(Int(sd.infiniteLightCount)):
-                var ls_em = _sample_infinite_light_nee(sd.infiniteLights[inf_im], Point2f(pcg.next_float(), pcg.next_float()))
+                var ls_em = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_im], Point2f(pcg.next_float(), pcg.next_float()))
                 var w_em = _nee_weight_measured(ls_em, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
                 total += _bdpt_nee_contribute(beta, w_em, ls_em, hit, gn_m, cur_med_idx, sd, scratch, wavelengths)
 
@@ -2703,7 +2703,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                         w_x = w_x * bssrdf_exit_ft(dot(n_o, ls_x.wi), eta_e)
                         total += _bdpt_nee_contribute(beta, w_x, ls_x, x_o, n_o, cur_med_idx, sd, scratch, wavelengths)
                     for inf_x in range(Int(sd.infiniteLightCount)):
-                        var ls_xe = _sample_infinite_light_nee(sd.infiniteLights[inf_x], Point2f(pcg.next_float(), pcg.next_float()))
+                        var ls_xe = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_x], Point2f(pcg.next_float(), pcg.next_float()))
                         var w_xe = _nee_weight_simple_spectral(ls_xe, LobeKind.lambertian, RGB(Float32(1)), Float32(0), n_o, n_o, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                         w_xe = w_xe * bssrdf_exit_ft(dot(n_o, ls_xe.wi), eta_e)
                         total += _bdpt_nee_contribute(beta, w_xe, ls_xe, x_o, n_o, cur_med_idx, sd, scratch, wavelengths)
@@ -2840,7 +2840,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
     var n_infinite = Int(sd.infiniteLightCount)
     var n_point = Int(sd.pointLightCount)
     var n_lights = n_area + n_distant + n_infinite + n_point
-    lvc_path_len[lp_idx] = Int32(0)
+    lvc_path_len[unsafe_offset=lp_idx] = Int32(0)
     if n_lights == 0:
         return _null_light_path_state()   # no lights in the scene
 
@@ -2931,7 +2931,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         rd = vec3f(pdir)
         n_verts = 1  # vertex 0 is the light point itself
     elif light_pick < n_area + n_distant:
-        var dl = sd.distantLights[light_pick - n_area]
+        var dl = sd.distantLights[unsafe_offset=light_pick - n_area]
         var (center, radius) = _scene_bounding_sphere(sd)
         var dir = Vec3f(dl.direction.x, dl.direction.y, dl.direction.z)
         var disk_pt = _sample_disk_perpendicular(dir, center, radius, Point2f(pcg.next_float(), pcg.next_float()))
@@ -2942,7 +2942,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         rd = dir
         n_verts = 0  # no finite light point to store as a cache vertex
     elif light_pick < n_area + n_distant + n_infinite:
-        var il = sd.infiniteLights[light_pick - n_area - n_distant]
+        var il = sd.infiniteLights[unsafe_offset=light_pick - n_area - n_distant]
         var (center, radius) = _scene_bounding_sphere(sd)
         # _sample_infinite_light_dir returns env_dir in the NEE convention
         # ("direction FROM a shading point TOWARD the light" — same as
@@ -2968,7 +2968,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         # per-vertex point-light NEE instead). Emits uniformly over the
         # sphere (isotropic point light); pdf_dir = 1/(4π), so
         # flux = intensity × 4π × n_lights (pdf_dir cancels).
-        var pll = sd.pointLights[light_pick - n_area - n_distant - n_infinite]
+        var pll = sd.pointLights[unsafe_offset=light_pick - n_area - n_distant - n_infinite]
         var u1p = pcg.next_float(); var u2p = pcg.next_float()
         var cos_p = Float32(1) - Float32(2) * u1p
         var sin_p = sqrt(max(Float32(0), Float32(1) - cos_p * cos_p))
@@ -3071,7 +3071,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
 
         # Volume free-flight
         if has_med and Int(cur_med_idx) >= 0:
-            var med = sd.mediums[Int(cur_med_idx)]
+            var med = sd.mediums[unsafe_offset=Int(cur_med_idx)]
             # ONE shared sampler for both medium kinds (geometry.mojo):
             # homogeneous closed form, or delta tracking against the real
             # density field. This call site used to be the homogeneous one
@@ -3137,7 +3137,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 dvcm_carry *= exp(ff_exp_l)
 
         var mat_idx = Int(inter.primId.materialIndex)
-        var mat = sd.materials[mat_idx]
+        var mat = sd.materials[unsafe_offset=mat_idx]
         var hit = ro + rd*t_hit
 
         if mat.type == MatKind.mix:
@@ -3145,7 +3145,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             var mix_idx2 = Int((mat.tex_idx >> 16) & Int32(0xFFFF))
             var mix_amount = mat.roughU
             var mix_chosen = mix_idx2 if pcg.next_float() < mix_amount else mix_idx1
-            mat = sd.materials[mix_chosen]
+            mat = sd.materials[unsafe_offset=mix_chosen]
             mat_idx = mix_chosen  # keep in sync with the resolved sub-material (hair needs the real index to re-fetch at connect time)
             if mat.type == MatKind.mix:
                 mat.type = MatKind.diffuse
@@ -3438,7 +3438,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             var frm_m = Frame.from_z(Vec3f(gn_m[0], gn_m[1], gn_m[2]))
             var tangent_m = Vec3f(frm_m.x.x, frm_m.x.y, frm_m.x.z)
             var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
-            var mb = sd.measuredBrdfs[Int(mat.measured_idx)]
+            var mb = sd.measuredBrdfs[unsafe_offset=Int(mat.measured_idx)]
             var wo_l_m = Vec3f(dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, gn_m))
             var uml1 = pcg.next_float(); var uml2 = pcg.next_float()
             var (wi_l_m, f_m, pdf_m, valid_m) = bxdf_sample_measured(mb, wo_l_m, uml1, uml2, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
@@ -3669,21 +3669,21 @@ def _bdpt_trace_light_path[use_gpu: Bool](
         # kept here rather than inside the bounce because this one step is
         # the eventual Vulkan RT swap point on the wavefront side.
         var ray = Ray_C(ro, rd)
-        scratch[0].hit = Int8(0)
+        scratch[unsafe_offset=0].hit = Int8(0)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         test_spheres(sd.spheres, Int(sd.sphereCount), ray, scratch)
         # A miss is handled inside the step (returns False), so the old
         # top-of-loop `if scratch[0].hit == 0: break` is no longer needed.
         if not _bdpt_light_path_bounce[use_gpu](
-            sd, pcg, has_med, scratch[0], lvc, lp_idx,
+            sd, pcg, has_med, scratch[unsafe_offset=0], lvc, lp_idx,
             mis_vc_weight_factor, mis_vm_weight_factor,
             ro, rd, flux, n_verts, dvcm_carry, dvc_carry, dvm_carry,
             is_finite_origin, cur_med_idx, n_lbounces,
             current_dielectric_ior, previous_dielectric_ior, wavelengths):
             break
 
-    lvc_path_len[lp_idx] = Int32(n_verts)
+    lvc_path_len[unsafe_offset=lp_idx] = Int32(n_verts)
     return
 
 # ── BSDF/phase evaluation at a vertex ────────────────────────────────────────
@@ -3775,7 +3775,7 @@ def _bdpt_sample_bssrdf_exit(
     by value, one call deeper than the light loop's own traversal, the probe
     traversal faulted with CUDA_ERROR_ILLEGAL_ADDRESS in
     _bdpt_emit_light_paths_gpu."""
-    var med = sd.mediums[med_idx]
+    var med = sd.mediums[unsafe_offset=med_idx]
     var fail = BssrdfExitSample(False, hit, n_in, RGB(Float32(0)), Float32(0))
     var ft_in = bssrdf_exit_ft(cos_in, eta)
     if ft_in <= Float32(0.0):
@@ -3801,23 +3801,23 @@ def _bdpt_sample_bssrdf_exit(
         PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
         Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
     var probe_scratch = _probe_slot.unsafe_ptr().unsafe_origin_cast[MutExternalOrigin]()
-    probe_scratch[0].hit = Int8(0)
+    probe_scratch[unsafe_offset=0].hit = Int8(0)
     var probe_ray = Ray_C(probe_org, probe_dir)
     traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe_ray, seg_len, probe_scratch,
                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
     test_spheres(sd.spheres, Int(sd.sphereCount), probe_ray, probe_scratch)
-    if probe_scratch[0].hit == Int8(0):
+    if probe_scratch[unsafe_offset=0].hit == Int8(0):
         return fail
-    var pi = probe_scratch[0]
+    var pi = probe_scratch[unsafe_offset=0]
     # The exit must be on a subsurface boundary too, or the profile does not
     # describe what happens there.
-    var pmat = sd.materials[Int(pi.primId.materialIndex)]
+    var pmat = sd.materials[unsafe_offset=Int(pi.primId.materialIndex)]
     if pmat.sss_boundary == Int8(0):
         return fail
     var x_o = probe_org + probe_dir * pi.tHit
     var n_o: Vec3f
     if pi.primId.type == Int8(4):
-        n_o = sphere_outward_normal(x_o, sd.spheres[Int(pi.primId.id1)].center)
+        n_o = sphere_outward_normal(x_o, sd.spheres[unsafe_offset=Int(pi.primId.id1)].center)
     else:
         n_o = _geom_normal(pi, sd.meshes, sd.instances, sd.spheres, x_o.to_simd())
     if dot(n_o, n_in) < Float32(0.0):
@@ -3882,7 +3882,7 @@ def _eval_vertex_spectral(
         var vwo = v.wo.to_simd()
         return _eval_conductor_ggx_spectral(vn, vwo, dir_to_other, v.pdf_bwd, v.alb, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
     if v.mat_kind == LobeKind.hair:
-        var mat = sd.materials[Int(v.mat_idx)]
+        var mat = sd.materials[unsafe_offset=Int(v.mat_idx)]
         var hc = _hair_precompute(mat, sd.curves, Int(v.hair_curve_idx), v.hair_v, v.hair_h, v.wo.to_simd())
         var (cos_ti, f_val, _) = _hair_eval_lobes(
             dir_to_other, hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
@@ -3894,8 +3894,8 @@ def _eval_vertex_spectral(
         var hair_spec = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f_val.r, f_val.g, f_val.b, wavelengths)
         return hair_spec * cos_ti
     if v.mat_kind == LobeKind.measured:
-        var vmat = sd.materials[Int(v.mat_idx)]
-        var mb = sd.measuredBrdfs[Int(vmat.measured_idx)]
+        var vmat = sd.materials[unsafe_offset=Int(v.mat_idx)]
+        var mb = sd.measuredBrdfs[unsafe_offset=Int(vmat.measured_idx)]
         var vwo_m = v.wo.to_simd()
         var frm_ev = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
         var tangent_ev = Vec3f(frm_ev.x.x, frm_ev.x.y, frm_ev.x.z)
@@ -4005,7 +4005,7 @@ def _bdpt_vertex_pdfs(
             bxdf_pdf_conductor_ggx(n, dir_to_other, wo, alpha),
         )
     if v.mat_kind == LobeKind.hair:
-        var mat_h = sd.materials[Int(v.mat_idx)]
+        var mat_h = sd.materials[unsafe_offset=Int(v.mat_idx)]
         var hc_fwd = _hair_precompute(mat_h, sd.curves, Int(v.hair_curve_idx), v.hair_v, v.hair_h, v.wo.to_simd())
         var (cos_ti_fwd, _, pdf_oc_fwd) = _hair_eval_lobes(
             dir_to_other, hc_fwd.tangent, hc_fwd.b_perp, hc_fwd.n_perp, hc_fwd.phi_o,
@@ -4031,8 +4031,8 @@ def _bdpt_vertex_pdfs(
         var wo_m = v.wo.to_simd()
         var wo_l = Vec3f(dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, n_m))
         var dir_l = Vec3f(dot(dir_to_other, tangent_m), dot(dir_to_other, bitangent_m), dot(dir_to_other, n_m))
-        var mat_m = sd.materials[Int(v.mat_idx)]
-        var mb_m = sd.measuredBrdfs[Int(mat_m.measured_idx)]
+        var mat_m = sd.materials[unsafe_offset=Int(v.mat_idx)]
+        var mb_m = sd.measuredBrdfs[unsafe_offset=Int(mat_m.measured_idx)]
         return (
             bxdf_pdf_measured(mb_m, wo_l, dir_l),
             bxdf_pdf_measured(mb_m, dir_l, wo_l),
@@ -4360,16 +4360,16 @@ def _bdpt_render_core(
     see this file's opening VCM comment for the combined estimator and
     `_bdpt_connect_to_cache`/`_bdpt_merge_from_cache`'s own docstrings for
     each technique's per-candidate MIS weight."""
-    var fw = Int(psc[0].film_w)
-    var fh = Int(psc[0].film_h)
+    var fw = Int(psc[unsafe_offset=0].film_w)
+    var fh = Int(psc[unsafe_offset=0].film_h)
     var n_pix = fw * fh
-    var iso_scale = psc[0].film_iso / Float32(100)
-    var max_comp  = psc[0].film_max_comp
+    var iso_scale = psc[unsafe_offset=0].film_iso / Float32(100)
+    var max_comp  = psc[unsafe_offset=0].film_max_comp
     # VCM Stage 2b: world-space size of one pixel at unit distance along the
     # camera forward axis -- same quantity the plain path tracer's mip LOD
     # uses (pipeline.mojo), reused here for the camera-origin cameraPdfW
     # derivation (see project_vcm_stage2_mis_derivation memory).
-    var px_scale = Float32(2.0) * tan(psc[0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(fh)
+    var px_scale = Float32(2.0) * tan(psc[unsafe_offset=0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(fh)
 
     var n_light_paths_merge = max(n_photons_req, n_pix)
     print("VCM: " + String(fw) + "x" + String(fh) + "  " + String(n_spp) + " spp  "
@@ -4381,7 +4381,7 @@ def _bdpt_render_core(
     var default_emit_med = Int32(-1)
     if has_med and Int(sd.mediumIfaceCount) > 0:
         for mi in range(Int(sd.mediumIfaceCount)):
-            var iface = sd.mediumInterfaces[mi]
+            var iface = sd.mediumInterfaces[unsafe_offset=mi]
             if Int(iface.outside_medium_idx) >= 0:
                 default_emit_med = iface.outside_medium_idx
                 break
@@ -4391,12 +4391,12 @@ def _bdpt_render_core(
     var buf = alloc[RGB](n_pix)
     var albedo_buf = alloc[RGB](n_pix)
     for i in range(n_pix):
-        buf[i] = RGB(Float32(0))
-        albedo_buf[i] = RGB(Float32(0))
+        buf[unsafe_offset=i] = RGB(Float32(0))
+        albedo_buf[unsafe_offset=i] = RGB(Float32(0))
 
-    var r2c = psc[0].raster_to_camera
-    var c2w = psc[0].camera_to_world
-    var base_seed = psc[0].rng_seed
+    var r2c = psc[unsafe_offset=0].raster_to_camera
+    var c2w = psc[unsafe_offset=0].camera_to_world
+    var base_seed = psc[unsafe_offset=0].rng_seed
 
     # ── t=1 light tracing: camera-projection matrices ────────────────────
     # w2c = inverse(cameraToWorld). c2r inverts the 3x3 that
@@ -4404,18 +4404,18 @@ def _bdpt_render_core(
     # camera-space direction -- rasterToCamera's columns 0, 1 and 3.
     var w2c = alloc[Float32](16)
     _ = matrix_invert(c2w, w2c)
-    var a0 = r2c[0]; var a1 = r2c[4]; var a2 = r2c[12]
-    var b0 = r2c[1]; var b1 = r2c[5]; var b2 = r2c[13]
-    var g0 = r2c[2]; var g1 = r2c[6]; var g2 = r2c[14]
+    var a0 = r2c[unsafe_offset=0]; var a1 = r2c[unsafe_offset=4]; var a2 = r2c[unsafe_offset=12]
+    var b0 = r2c[unsafe_offset=1]; var b1 = r2c[unsafe_offset=5]; var b2 = r2c[unsafe_offset=13]
+    var g0 = r2c[unsafe_offset=2]; var g1 = r2c[unsafe_offset=6]; var g2 = r2c[unsafe_offset=14]
     var d0 = b1*g2 - b2*g1
     var d1 = b0*g2 - b2*g0
     var d2 = b0*g1 - b1*g0
     var det = a0*d0 - a1*d1 + a2*d2
     var idet = Float32(1) / det if abs(det) > Float32(1e-20) else Float32(0)
     var c2r = alloc[Float32](9)
-    c2r[0] =  d0*idet;                 c2r[1] = -(a1*g2 - a2*g1)*idet; c2r[2] =  (a1*b2 - a2*b1)*idet
-    c2r[3] = -d1*idet;                 c2r[4] =  (a0*g2 - a2*g0)*idet; c2r[5] = -(a0*b2 - a2*b0)*idet
-    c2r[6] =  d2*idet;                 c2r[7] = -(a0*g1 - a1*g0)*idet; c2r[8] =  (a0*b1 - a1*b0)*idet
+    c2r[unsafe_offset=0] =  d0*idet;                 c2r[unsafe_offset=1] = -(a1*g2 - a2*g1)*idet; c2r[unsafe_offset=2] =  (a1*b2 - a2*b1)*idet
+    c2r[unsafe_offset=3] = -d1*idet;                 c2r[unsafe_offset=4] =  (a0*g2 - a2*g0)*idet; c2r[unsafe_offset=5] = -(a0*b2 - a2*b0)*idet
+    c2r[unsafe_offset=6] =  d2*idet;                 c2r[unsafe_offset=7] = -(a0*g1 - a1*g0)*idet; c2r[unsafe_offset=8] =  (a0*b1 - a1*b0)*idet
 
 
     # The first n_pix light paths are DETERMINISTICALLY paired with that
@@ -4454,7 +4454,7 @@ def _bdpt_render_core(
     # t=1 splat records: one slot per potential light vertex.
     var splat_pix = alloc[Int32](max(n_light_paths_merge * _BDPT_MAX_VERTS, 1))
     var splat_val = alloc[SpectralSample](max(n_light_paths_merge * _BDPT_MAX_VERTS, 1))
-    var cam_pos = Vec3f(c2w[12], c2w[13], c2w[14])
+    var cam_pos = Vec3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
 
     for si in range(n_spp):
         # Stage 2c progressive radius: r_i = r_1 / (i+1)^(0.5*(1-alpha))
@@ -4495,7 +4495,7 @@ def _bdpt_render_core(
             var lpcg = PCG32(base_seed ^ UInt64(lp_idx * 6364136223846793005 + 1442695040888963407),
                               UInt64(si * 2654435761 + 1))
             _bdpt_trace_light_path[False](sd, lpcg, has_med, default_emit_med,
-                                         scratch_light + lp_idx, lvc, lp_idx, lvc_path_len,
+                                         scratch_light.unsafe_offset(lp_idx), lvc, lp_idx, lvc_path_len,
                                          mis_vc_weight_factor, mis_vm_weight_factor, pass_wl)
 
         parallelize[emit_light_path](n_light_paths_merge)
@@ -4514,24 +4514,24 @@ def _bdpt_render_core(
         @parameter
         def splat_light_path(lp_idx: Int):
             var base = lp_idx * _BDPT_MAX_VERTS
-            for local in range(Int(lvc_path_len[lp_idx])):
+            for local in range(Int(lvc_path_len[unsafe_offset=lp_idx])):
                 var r = _bdpt_connect_to_camera(
-                    lvc[base + local], sd, scratch_light + lp_idx, cam_pos,
+                    lvc[unsafe_offset=base + local], sd, scratch_light.unsafe_offset(lp_idx), cam_pos,
                     w2c, c2r, Int32(fw), Int32(fh), px_scale,
                     Float32(n_light_paths_merge), mis_vm_weight_factor)
-                splat_pix[base + local] = r[1] if r[0] else Int32(-1)
-                splat_val[base + local] = r[2]
-            for local in range(Int(lvc_path_len[lp_idx]), _BDPT_MAX_VERTS):
-                splat_pix[base + local] = Int32(-1)
+                splat_pix[unsafe_offset=base + local] = r[1] if r[0] else Int32(-1)
+                splat_val[unsafe_offset=base + local] = r[2]
+            for local in range(Int(lvc_path_len[unsafe_offset=lp_idx]), _BDPT_MAX_VERTS):
+                splat_pix[unsafe_offset=base + local] = Int32(-1)
 
         parallelize[splat_light_path](n_light_paths_merge)
 
         # ── Output boundary: spectral splat -> RGB film ──────────────────
         for k in range(n_light_paths_merge * _BDPT_MAX_VERTS):
-            var sp = splat_pix[k]
+            var sp = splat_pix[unsafe_offset=k]
             if sp >= Int32(0):
-                var (sr, sg, sb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, splat_val[k], lvc[k].wavelengths)
-                buf[Int(sp)] += RGB(sr, sg, sb)
+                var (sr, sg, sb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, splat_val[unsafe_offset=k], lvc[unsafe_offset=k].wavelengths)
+                buf[unsafe_offset=Int(sp)] += RGB(sr, sg, sb)
 
         # ── Phase 2: trace each pixel's camera path and connect ──────────────
         # Each worker only ever writes its own buf[pix] slot and only reads
@@ -4546,13 +4546,13 @@ def _bdpt_render_core(
             var cpcg = PCG32(base_seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
                               UInt64(si * 2654435761 + 1))
             var (contrib, alb) = _bdpt_trace_camera_and_connect[False](
-                r2c, c2w, px, py, sd, cpcg, has_med, scratch_cam + pix, lvc, pix, Int(lvc_path_len[pix]),
+                r2c, c2w, px, py, sd, cpcg, has_med, scratch_cam.unsafe_offset(pix), lvc, pix, Int(lvc_path_len[unsafe_offset=pix]),
                 merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
                 px_scale, mis_vc_weight_factor, mis_vm_weight_factor, Float32(n_light_paths_merge), pass_wl)
             # ── Output boundary: spectral transport -> RGB film ──────────
             var (cr, cg, cb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, contrib, pass_wl)
-            buf[pix] += RGB(cr, cg, cb)
-            albedo_buf[pix] += alb
+            buf[unsafe_offset=pix] += RGB(cr, cg, cb)
+            albedo_buf[unsafe_offset=pix] += alb
 
         parallelize[camera_connect](n_pix)
 
@@ -4567,23 +4567,23 @@ def _bdpt_render_core(
     var inv_spp = iso_scale / Float32(n_spp)
     var pixels = alloc[Float32](n_pix * 3)
     for i in range(n_pix):
-        var c = buf[i] * inv_spp
+        var c = buf[unsafe_offset=i] * inv_spp
         if max_comp > Float32(0):
             c.r = c.r if c.r < max_comp else max_comp
             c.g = c.g if c.g < max_comp else max_comp
             c.b = c.b if c.b < max_comp else max_comp
-        pixels[i*3]   = c.r
-        pixels[i*3+1] = c.g
-        pixels[i*3+2] = c.b
+        pixels[unsafe_offset=i*3]   = c.r
+        pixels[unsafe_offset=i*3+1] = c.g
+        pixels[unsafe_offset=i*3+2] = c.b
     buf.unsafe_free()
 
     var albedo_pixels = alloc[Float32](n_pix * 3)
     var inv_spp_alb = Float32(1) / Float32(n_spp)
     for i in range(n_pix):
-        var a = albedo_buf[i] * inv_spp_alb
-        albedo_pixels[i*3]   = a.r
-        albedo_pixels[i*3+1] = a.g
-        albedo_pixels[i*3+2] = a.b
+        var a = albedo_buf[unsafe_offset=i] * inv_spp_alb
+        albedo_pixels[unsafe_offset=i*3]   = a.r
+        albedo_pixels[unsafe_offset=i*3+1] = a.g
+        albedo_pixels[unsafe_offset=i*3+2] = a.b
     albedo_buf.unsafe_free()
 
     return Tuple[UnsafePointer[Float32, MutExternalOrigin], UnsafePointer[Float32, MutExternalOrigin]](pixels, albedo_pixels)
@@ -4606,25 +4606,25 @@ def vcm_render(
     `--vcm-photons` if given, else n_pix) is the merge side's light-path
     budget per pass, decoupled from n_pix; see _bdpt_render_core's
     docstring."""
-    var n_pix = Int(psc[0].film_w) * Int(psc[0].film_h)
+    var n_pix = Int(psc[unsafe_offset=0].film_w) * Int(psc[unsafe_offset=0].film_h)
     var (pixels, albedo_pixels) = _bdpt_render_core(psc, sd, n_spp, n_photons, verbose)
 
     var normals = alloc[Float32](n_pix * 3)
     var depth = alloc[Float32](n_pix)
     var sd_local = sd
-    render_aux_buffers(psc[0].raster_to_camera, psc[0].camera_to_world, Int32(0), Int32(0),
-                        psc[0].film_w, psc[0].film_h, UnsafePointer(to=sd_local), normals, depth)
+    render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world, Int32(0), Int32(0),
+                        psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, UnsafePointer(to=sd_local), normals, depth)
 
     var denoised = alloc[Float32](n_pix * 3)
     if no_denoise:
-        for i in range(n_pix * 3): denoised[i] = pixels[i]
+        for i in range(n_pix * 3): denoised[unsafe_offset=i] = pixels[unsafe_offset=i]
     else:
-        denoise(pixels, albedo_pixels, normals, depth, psc[0].film_w, psc[0].film_h,
+        denoise(pixels, albedo_pixels, normals, depth, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h,
                 denoised, Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
 
-    _ = write_image_cropwindow(denoised, psc[0].film_w, psc[0].film_h,
-        psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
-        psc[0].film_filename, Int32(32), Int32(32))
+    _ = write_image_cropwindow(denoised, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h,
+        psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0, psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1,
+        psc[unsafe_offset=0].film_filename, Int32(32), Int32(32))
     pixels.unsafe_free(); albedo_pixels.unsafe_free(); normals.unsafe_free(); depth.unsafe_free(); denoised.unsafe_free()
     return Int32(0)
 
@@ -4726,7 +4726,7 @@ def _bdpt_emit_light_paths_gpu(
     )
     var has_med = mediumCount > Int64(0)
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
-    var scratch = inter_scratch + k
+    var scratch = inter_scratch.unsafe_offset(k)
     var pass_wl = pass_wavelengths(pass_idx)
     _bdpt_trace_light_path[True](sd, pcg, has_med, default_emit_med, scratch, lvc, k, lvc_path_len,
                                  mis_vc_weight_factor, mis_vm_weight_factor, pass_wl)
@@ -4817,14 +4817,14 @@ def _bdpt_splat_light_paths_gpu(
         measuredBrdfs, measuredBrdfCount,
         gpuTextures, gpuTextureCount,
     )
-    var cam_pos = Vec3f(c2w[12], c2w[13], c2w[14])
-    var scratch = inter_scratch + k
+    var cam_pos = Vec3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
+    var scratch = inter_scratch.unsafe_offset(k)
     var base = k * _BDPT_MAX_VERTS
     var n_pix_k = Int(fw_dp) * Int(fh_dp)
-    var n_verts = Int(lvc_path_len[k])
+    var n_verts = Int(lvc_path_len[unsafe_offset=k])
     for local in range(min(n_verts, _BDPT_MAX_VERTS)):
         var r = _bdpt_connect_to_camera(
-            lvc[base + local], sd, scratch, cam_pos,
+            lvc[unsafe_offset=base + local], sd, scratch, cam_pos,
             w2c, c2r, Int32(Int(fw_dp)), Int32(Int(fh_dp)), px_scale,
             Float32(n_light_paths), mis_vm_weight_factor)
         if r[0]:
@@ -4836,10 +4836,10 @@ def _bdpt_splat_light_paths_gpu(
                 # ── Output boundary: spectral splat -> RGB film ──────────
                 var (cr, cg, cb) = spectral_sample_to_rgb(
                     spectral_coeffs, Int(spectral_res_dp), spectral_cie_x, spectral_cie_y,
-                    spectral_cie_z, spectral_d65, r[2], lvc[base + local].wavelengths)
-                _ = Atomic[DType.float32].fetch_add(accum + (pix * 3 + 0), cr)
-                _ = Atomic[DType.float32].fetch_add(accum + (pix * 3 + 1), cg)
-                _ = Atomic[DType.float32].fetch_add(accum + (pix * 3 + 2), cb)
+                    spectral_cie_z, spectral_d65, r[2], lvc[unsafe_offset=base + local].wavelengths)
+                _ = Atomic[DType.float32].fetch_add(accum.unsafe_offset((pix * 3 + 0)), cr)
+                _ = Atomic[DType.float32].fetch_add(accum.unsafe_offset((pix * 3 + 1)), cg)
+                _ = Atomic[DType.float32].fetch_add(accum.unsafe_offset((pix * 3 + 2)), cb)
 
 def _bdpt_camera_connect_gpu(
     accum: UnsafePointer[Float32, MutExternalOrigin],
@@ -4940,22 +4940,22 @@ def _bdpt_camera_connect_gpu(
     var py = pix // fw
     var pcg = PCG32(seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
                      UInt64(pass_idx * 2654435761 + 1))
-    var scratch = inter_scratch + pix
+    var scratch = inter_scratch.unsafe_offset(pix)
     var pass_wl = pass_wavelengths(pass_idx)
     var (contrib, alb) = _bdpt_trace_camera_and_connect[True](
-        r2c, c2w, px, py, sd, pcg, has_med, scratch, lvc, pix, Int(lvc_path_len[pix]),
+        r2c, c2w, px, py, sd, pcg, has_med, scratch, lvc, pix, Int(lvc_path_len[unsafe_offset=pix]),
         merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
         px_scale, mis_vc_weight_factor, mis_vm_weight_factor, n_light_paths_f, pass_wl)
     # ── Output boundary: spectral transport -> RGB film ──────────────────
     var (cr, cg, cb) = spectral_sample_to_rgb(
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, contrib, pass_wl)
-    accum[pix*3]   += cr
-    accum[pix*3+1] += cg
-    accum[pix*3+2] += cb
-    albedo_accum[pix*3]   += alb.r
-    albedo_accum[pix*3+1] += alb.g
-    albedo_accum[pix*3+2] += alb.b
+    accum[unsafe_offset=pix*3]   += cr
+    accum[unsafe_offset=pix*3+1] += cg
+    accum[unsafe_offset=pix*3+2] += cb
+    albedo_accum[unsafe_offset=pix*3]   += alb.r
+    albedo_accum[unsafe_offset=pix*3+1] += alb.g
+    albedo_accum[unsafe_offset=pix*3+2] += alb.b
 
 
 # ── Task #163 stage 4, part 3: wavefront-staged GPU kernels ─────────────────
@@ -5051,7 +5051,7 @@ def _bdpt_light_path_init_gpu(
     )
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
     var pass_wl = pass_wavelengths(pass_idx)
-    states[k] = _bdpt_light_path_init[True](sd, pcg, default_emit_med, k, lvc, lvc_path_len, mis_vc_weight_factor, pass_wl)
+    states[unsafe_offset=k] = _bdpt_light_path_init[True](sd, pcg, default_emit_med, k, lvc, lvc_path_len, mis_vc_weight_factor, pass_wl)
 
 def _bdpt_light_path_intersect_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
@@ -5077,13 +5077,13 @@ def _bdpt_light_path_intersect_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    if states[tid].active == Int8(0):
+    if states[unsafe_offset=tid].active == Int8(0):
         return
-    var ray = Ray_C(states[tid].ro, states[tid].rd)
-    results[tid].hit = Int8(0)
-    traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), results + tid,
+    var ray = Ray_C(states[unsafe_offset=tid].ro, states[unsafe_offset=tid].rd)
+    results[unsafe_offset=tid].hit = Int8(0)
+    traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), results.unsafe_offset(tid),
                         blasNodesArr, blasPrimIdsArr, instances)
-    test_spheres(spheres, n_spheres, ray, results + tid)
+    test_spheres(spheres, n_spheres, ray, results.unsafe_offset(tid))
 
 def _bdpt_light_path_bounce_gpu(
     states: UnsafePointer[VCMLightPathState_C, MutExternalOrigin],
@@ -5145,7 +5145,7 @@ def _bdpt_light_path_bounce_gpu(
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
     if k >= n_light_paths:
         return
-    if states[k].active == Int8(0):
+    if states[unsafe_offset=k].active == Int8(0):
         return
     var sd = _mk_sd_full(
         bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
@@ -5161,43 +5161,43 @@ def _bdpt_light_path_bounce_gpu(
     )
     var has_med = mediumCount > Int64(0)
     var pcg = PCG32(UInt64(0), UInt64(0))
-    pcg.state = states[k].pcg_state
-    pcg.inc = states[k].pcg_inc
-    var ro = states[k].ro
-    var rd = states[k].rd
-    var flux = states[k].flux
-    var n_verts = Int(states[k].n_verts)
-    var dvcm_carry = states[k].dvcm
-    var dvc_carry = states[k].dvc
-    var dvm_carry = states[k].dvm
-    var is_finite_origin = states[k].is_finite_origin == Int8(1)
-    var cur_med_idx = states[k].cur_med_idx
-    var n_lbounces = Int(states[k].n_lbounces)
-    var current_dielectric_ior = states[k].current_dielectric_ior
-    var previous_dielectric_ior = states[k].previous_dielectric_ior
-    var wavelengths = SampledWavelengths(states[k].wl0, states[k].wl1, states[k].wl2, states[k].wl3, states[k].wl_pdf)
+    pcg.state = states[unsafe_offset=k].pcg_state
+    pcg.inc = states[unsafe_offset=k].pcg_inc
+    var ro = states[unsafe_offset=k].ro
+    var rd = states[unsafe_offset=k].rd
+    var flux = states[unsafe_offset=k].flux
+    var n_verts = Int(states[unsafe_offset=k].n_verts)
+    var dvcm_carry = states[unsafe_offset=k].dvcm
+    var dvc_carry = states[unsafe_offset=k].dvc
+    var dvm_carry = states[unsafe_offset=k].dvm
+    var is_finite_origin = states[unsafe_offset=k].is_finite_origin == Int8(1)
+    var cur_med_idx = states[unsafe_offset=k].cur_med_idx
+    var n_lbounces = Int(states[unsafe_offset=k].n_lbounces)
+    var current_dielectric_ior = states[unsafe_offset=k].current_dielectric_ior
+    var previous_dielectric_ior = states[unsafe_offset=k].previous_dielectric_ior
+    var wavelengths = SampledWavelengths(states[unsafe_offset=k].wl0, states[unsafe_offset=k].wl1, states[unsafe_offset=k].wl2, states[unsafe_offset=k].wl3, states[unsafe_offset=k].wl_pdf)
 
     var cont = _bdpt_light_path_bounce[True](
-        sd, pcg, has_med, results[k], lvc, k, mis_vc_weight_factor, mis_vm_weight_factor,
+        sd, pcg, has_med, results[unsafe_offset=k], lvc, k, mis_vc_weight_factor, mis_vm_weight_factor,
         ro, rd, flux, n_verts, dvcm_carry, dvc_carry, dvm_carry,
         is_finite_origin, cur_med_idx, n_lbounces,
         current_dielectric_ior, previous_dielectric_ior, wavelengths,
     )
-    lvc_path_len[k] = Int32(n_verts)
-    states[k].active = Int8(1) if cont else Int8(0)
-    states[k].ro = ro
-    states[k].rd = rd
-    states[k].flux = flux
-    states[k].n_verts = Int32(n_verts)
-    states[k].dvcm = dvcm_carry
-    states[k].dvc = dvc_carry
-    states[k].dvm = dvm_carry
-    states[k].cur_med_idx = cur_med_idx
-    states[k].n_lbounces = Int32(n_lbounces)
-    states[k].current_dielectric_ior = current_dielectric_ior
-    states[k].previous_dielectric_ior = previous_dielectric_ior
-    states[k].pcg_state = pcg.state
-    states[k].pcg_inc = pcg.inc
+    lvc_path_len[unsafe_offset=k] = Int32(n_verts)
+    states[unsafe_offset=k].active = Int8(1) if cont else Int8(0)
+    states[unsafe_offset=k].ro = ro
+    states[unsafe_offset=k].rd = rd
+    states[unsafe_offset=k].flux = flux
+    states[unsafe_offset=k].n_verts = Int32(n_verts)
+    states[unsafe_offset=k].dvcm = dvcm_carry
+    states[unsafe_offset=k].dvc = dvc_carry
+    states[unsafe_offset=k].dvm = dvm_carry
+    states[unsafe_offset=k].cur_med_idx = cur_med_idx
+    states[unsafe_offset=k].n_lbounces = Int32(n_lbounces)
+    states[unsafe_offset=k].current_dielectric_ior = current_dielectric_ior
+    states[unsafe_offset=k].previous_dielectric_ior = previous_dielectric_ior
+    states[unsafe_offset=k].pcg_state = pcg.state
+    states[unsafe_offset=k].pcg_inc = pcg.inc
 
 def _bdpt_camera_path_init_gpu(
     states: UnsafePointer[VCMCameraPathState_C, MutExternalOrigin],
@@ -5225,7 +5225,7 @@ def _bdpt_camera_path_init_gpu(
     var pcg = PCG32(seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
                      UInt64(pass_idx * 2654435761 + 1))
     var pass_wl = pass_wavelengths(pass_idx)
-    states[pix] = _bdpt_camera_path_init[True](r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl)
+    states[unsafe_offset=pix] = _bdpt_camera_path_init[True](r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl)
 
 def _bdpt_camera_path_intersect_gpu(
     bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
@@ -5248,13 +5248,13 @@ def _bdpt_camera_path_intersect_gpu(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    if states[tid].active == Int8(0):
+    if states[unsafe_offset=tid].active == Int8(0):
         return
-    var ray = Ray_C(states[tid].ro, states[tid].rd)
-    results[tid].hit = Int8(0)
-    traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), results + tid,
+    var ray = Ray_C(states[unsafe_offset=tid].ro, states[unsafe_offset=tid].rd)
+    results[unsafe_offset=tid].hit = Int8(0)
+    traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), results.unsafe_offset(tid),
                         blasNodesArr, blasPrimIdsArr, instances)
-    test_spheres(spheres, n_spheres, ray, results + tid)
+    test_spheres(spheres, n_spheres, ray, results.unsafe_offset(tid))
 
 def _bdpt_camera_path_bounce_gpu(
     states: UnsafePointer[VCMCameraPathState_C, MutExternalOrigin],
@@ -5331,7 +5331,7 @@ def _bdpt_camera_path_bounce_gpu(
     var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
     if pix >= n_pix:
         return
-    if states[pix].active == Int8(0):
+    if states[unsafe_offset=pix].active == Int8(0):
         return
     var sd = _mk_sd_full(
         bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
@@ -5347,27 +5347,27 @@ def _bdpt_camera_path_bounce_gpu(
     )
     var has_med = mediumCount > Int64(0)
     var pcg = PCG32(UInt64(0), UInt64(0))
-    pcg.state = states[pix].pcg_state
-    pcg.inc = states[pix].pcg_inc
-    var ro = states[pix].ro
-    var rd = states[pix].rd
-    var beta = states[pix].beta
-    var total = states[pix].total
-    var first_alb = states[pix].first_alb
-    var n_verts = Int(states[pix].n_verts)
-    var n_bounces = Int(states[pix].n_bounces)
-    var cur_med_idx = states[pix].cur_med_idx
-    var dvcm_carry = states[pix].dvcm
-    var dvc_carry = states[pix].dvc
-    var dvm_carry = states[pix].dvm
-    var last_bsdf_pdf = states[pix].last_bsdf_pdf
-    var mis_null_dist = states[pix].mis_null_dist
-    var current_dielectric_ior = states[pix].current_dielectric_ior
-    var previous_dielectric_ior = states[pix].previous_dielectric_ior
-    var wavelengths = SampledWavelengths(states[pix].wl0, states[pix].wl1, states[pix].wl2, states[pix].wl3, states[pix].wl_pdf)
+    pcg.state = states[unsafe_offset=pix].pcg_state
+    pcg.inc = states[unsafe_offset=pix].pcg_inc
+    var ro = states[unsafe_offset=pix].ro
+    var rd = states[unsafe_offset=pix].rd
+    var beta = states[unsafe_offset=pix].beta
+    var total = states[unsafe_offset=pix].total
+    var first_alb = states[unsafe_offset=pix].first_alb
+    var n_verts = Int(states[unsafe_offset=pix].n_verts)
+    var n_bounces = Int(states[unsafe_offset=pix].n_bounces)
+    var cur_med_idx = states[unsafe_offset=pix].cur_med_idx
+    var dvcm_carry = states[unsafe_offset=pix].dvcm
+    var dvc_carry = states[unsafe_offset=pix].dvc
+    var dvm_carry = states[unsafe_offset=pix].dvm
+    var last_bsdf_pdf = states[unsafe_offset=pix].last_bsdf_pdf
+    var mis_null_dist = states[unsafe_offset=pix].mis_null_dist
+    var current_dielectric_ior = states[unsafe_offset=pix].current_dielectric_ior
+    var previous_dielectric_ior = states[unsafe_offset=pix].previous_dielectric_ior
+    var wavelengths = SampledWavelengths(states[unsafe_offset=pix].wl0, states[unsafe_offset=pix].wl1, states[unsafe_offset=pix].wl2, states[unsafe_offset=pix].wl3, states[unsafe_offset=pix].wl_pdf)
 
     var cont = _bdpt_camera_path_bounce[True](
-        sd, pcg, has_med, results[pix], results + pix, lvc, pix, Int(lvc_path_len[pix]),
+        sd, pcg, has_med, results[unsafe_offset=pix], results.unsafe_offset(pix), lvc, pix, Int(lvc_path_len[unsafe_offset=pix]),
         merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
         mis_vc_weight_factor, mis_vm_weight_factor,
         ro, rd, beta, total, first_alb, n_verts, n_bounces, cur_med_idx,
@@ -5375,24 +5375,24 @@ def _bdpt_camera_path_bounce_gpu(
         current_dielectric_ior, previous_dielectric_ior, wavelengths,
         defer_shadow_rays != Int8(0), shadow_rays, shadow_pending, shadow_valid, shadow_seg_med,
     )
-    states[pix].active = Int8(1) if cont else Int8(0)
-    states[pix].ro = ro
-    states[pix].rd = rd
-    states[pix].beta = beta
-    states[pix].total = total
-    states[pix].first_alb = first_alb
-    states[pix].n_verts = Int32(n_verts)
-    states[pix].n_bounces = Int32(n_bounces)
-    states[pix].cur_med_idx = cur_med_idx
-    states[pix].dvcm = dvcm_carry
-    states[pix].dvc = dvc_carry
-    states[pix].dvm = dvm_carry
-    states[pix].last_bsdf_pdf = last_bsdf_pdf
-    states[pix].mis_null_dist = mis_null_dist
-    states[pix].current_dielectric_ior = current_dielectric_ior
-    states[pix].previous_dielectric_ior = previous_dielectric_ior
-    states[pix].pcg_state = pcg.state
-    states[pix].pcg_inc = pcg.inc
+    states[unsafe_offset=pix].active = Int8(1) if cont else Int8(0)
+    states[unsafe_offset=pix].ro = ro
+    states[unsafe_offset=pix].rd = rd
+    states[unsafe_offset=pix].beta = beta
+    states[unsafe_offset=pix].total = total
+    states[unsafe_offset=pix].first_alb = first_alb
+    states[unsafe_offset=pix].n_verts = Int32(n_verts)
+    states[unsafe_offset=pix].n_bounces = Int32(n_bounces)
+    states[unsafe_offset=pix].cur_med_idx = cur_med_idx
+    states[unsafe_offset=pix].dvcm = dvcm_carry
+    states[unsafe_offset=pix].dvc = dvc_carry
+    states[unsafe_offset=pix].dvm = dvm_carry
+    states[unsafe_offset=pix].last_bsdf_pdf = last_bsdf_pdf
+    states[unsafe_offset=pix].mis_null_dist = mis_null_dist
+    states[unsafe_offset=pix].current_dielectric_ior = current_dielectric_ior
+    states[unsafe_offset=pix].previous_dielectric_ior = previous_dielectric_ior
+    states[unsafe_offset=pix].pcg_state = pcg.state
+    states[unsafe_offset=pix].pcg_inc = pcg.inc
 
 def _bdpt_camera_path_accumulate_gpu(
     states: UnsafePointer[VCMCameraPathState_C, MutExternalOrigin],
@@ -5417,17 +5417,17 @@ def _bdpt_camera_path_accumulate_gpu(
     if pix >= n_pix:
         return
     # ── Output boundary: spectral transport -> RGB film ──────────────────
-    var wl_acc = SampledWavelengths(states[pix].wl0, states[pix].wl1,
-                                    states[pix].wl2, states[pix].wl3, states[pix].wl_pdf)
+    var wl_acc = SampledWavelengths(states[unsafe_offset=pix].wl0, states[unsafe_offset=pix].wl1,
+                                    states[unsafe_offset=pix].wl2, states[unsafe_offset=pix].wl3, states[unsafe_offset=pix].wl_pdf)
     var (tr, tg, tb) = spectral_sample_to_rgb(
         spectral_coeffs, Int(spectral_res_dp), spectral_cie_x, spectral_cie_y,
-        spectral_cie_z, spectral_d65, states[pix].total, wl_acc)
-    accum[pix*3]   += tr
-    accum[pix*3+1] += tg
-    accum[pix*3+2] += tb
-    albedo_accum[pix*3]   += states[pix].first_alb.r
-    albedo_accum[pix*3+1] += states[pix].first_alb.g
-    albedo_accum[pix*3+2] += states[pix].first_alb.b
+        spectral_cie_z, spectral_d65, states[unsafe_offset=pix].total, wl_acc)
+    accum[unsafe_offset=pix*3]   += tr
+    accum[unsafe_offset=pix*3+1] += tg
+    accum[unsafe_offset=pix*3+2] += tb
+    albedo_accum[unsafe_offset=pix*3]   += states[unsafe_offset=pix].first_alb.r
+    albedo_accum[unsafe_offset=pix*3+1] += states[unsafe_offset=pix].first_alb.g
+    albedo_accum[unsafe_offset=pix*3+2] += states[unsafe_offset=pix].first_alb.b
 
 # ── Task #163 stage 4 part 4: Vulkan RT interop intersect for VCM ───────────
 # Swaps _bdpt_light_path_intersect_gpu/_bdpt_camera_path_intersect_gpu's
@@ -5453,17 +5453,17 @@ def vulkaninterop_pack_light_rays_kernel(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    var ro = states[tid].ro
-    var rd = states[tid].rd
+    var ro = states[unsafe_offset=tid].ro
+    var rd = states[unsafe_offset=tid].rd
     var idx = tid * 8
-    rays[idx + 0] = ro.x
-    rays[idx + 1] = ro.y
-    rays[idx + 2] = ro.z
-    rays[idx + 3] = Float32(1e-4)
-    rays[idx + 4] = rd.x
-    rays[idx + 5] = rd.y
-    rays[idx + 6] = rd.z
-    rays[idx + 7] = Float32(1.0e8)
+    rays[unsafe_offset=idx + 0] = ro.x
+    rays[unsafe_offset=idx + 1] = ro.y
+    rays[unsafe_offset=idx + 2] = ro.z
+    rays[unsafe_offset=idx + 3] = Float32(1e-4)
+    rays[unsafe_offset=idx + 4] = rd.x
+    rays[unsafe_offset=idx + 5] = rd.y
+    rays[unsafe_offset=idx + 6] = rd.z
+    rays[unsafe_offset=idx + 7] = Float32(1.0e8)
 
 def vulkaninterop_pack_camera_rays_kernel(
     states: UnsafePointer[VCMCameraPathState_C, MutExternalOrigin],
@@ -5474,17 +5474,17 @@ def vulkaninterop_pack_camera_rays_kernel(
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    var ro = states[tid].ro
-    var rd = states[tid].rd
+    var ro = states[unsafe_offset=tid].ro
+    var rd = states[unsafe_offset=tid].rd
     var idx = tid * 8
-    rays[idx + 0] = ro.x
-    rays[idx + 1] = ro.y
-    rays[idx + 2] = ro.z
-    rays[idx + 3] = Float32(1e-4)
-    rays[idx + 4] = rd.x
-    rays[idx + 5] = rd.y
-    rays[idx + 6] = rd.z
-    rays[idx + 7] = Float32(1.0e8)
+    rays[unsafe_offset=idx + 0] = ro.x
+    rays[unsafe_offset=idx + 1] = ro.y
+    rays[unsafe_offset=idx + 2] = ro.z
+    rays[unsafe_offset=idx + 3] = Float32(1e-4)
+    rays[unsafe_offset=idx + 4] = rd.x
+    rays[unsafe_offset=idx + 5] = rd.y
+    rays[unsafe_offset=idx + 6] = rd.z
+    rays[unsafe_offset=idx + 7] = Float32(1.0e8)
 
 def vulkaninterop_rt_traverse_light_paths_gpu(
     ctx: DeviceContext,
@@ -5589,24 +5589,24 @@ def vulkaninterop_pack_all_shadow_rays_kernel(
     if tid >= count:
         return
     var idx8 = tid * 8
-    if shadow_valid[tid] == Int8(0):
-        out_rays[idx8 + 0] = Float32(0)
-        out_rays[idx8 + 1] = Float32(0)
-        out_rays[idx8 + 2] = Float32(0)
-        out_rays[idx8 + 3] = Float32(0)
-        out_rays[idx8 + 4] = Float32(0)
-        out_rays[idx8 + 5] = Float32(0)
-        out_rays[idx8 + 6] = Float32(1)
-        out_rays[idx8 + 7] = Float32(0)
+    if shadow_valid[unsafe_offset=tid] == Int8(0):
+        out_rays[unsafe_offset=idx8 + 0] = Float32(0)
+        out_rays[unsafe_offset=idx8 + 1] = Float32(0)
+        out_rays[unsafe_offset=idx8 + 2] = Float32(0)
+        out_rays[unsafe_offset=idx8 + 3] = Float32(0)
+        out_rays[unsafe_offset=idx8 + 4] = Float32(0)
+        out_rays[unsafe_offset=idx8 + 5] = Float32(0)
+        out_rays[unsafe_offset=idx8 + 6] = Float32(1)
+        out_rays[unsafe_offset=idx8 + 7] = Float32(0)
         return
-    out_rays[idx8 + 0] = shadow_rays[idx8 + 0]
-    out_rays[idx8 + 1] = shadow_rays[idx8 + 1]
-    out_rays[idx8 + 2] = shadow_rays[idx8 + 2]
-    out_rays[idx8 + 3] = shadow_rays[idx8 + 3]
-    out_rays[idx8 + 4] = shadow_rays[idx8 + 4]
-    out_rays[idx8 + 5] = shadow_rays[idx8 + 5]
-    out_rays[idx8 + 6] = shadow_rays[idx8 + 6]
-    out_rays[idx8 + 7] = shadow_rays[idx8 + 7]
+    out_rays[unsafe_offset=idx8 + 0] = shadow_rays[unsafe_offset=idx8 + 0]
+    out_rays[unsafe_offset=idx8 + 1] = shadow_rays[unsafe_offset=idx8 + 1]
+    out_rays[unsafe_offset=idx8 + 2] = shadow_rays[unsafe_offset=idx8 + 2]
+    out_rays[unsafe_offset=idx8 + 3] = shadow_rays[unsafe_offset=idx8 + 3]
+    out_rays[unsafe_offset=idx8 + 4] = shadow_rays[unsafe_offset=idx8 + 4]
+    out_rays[unsafe_offset=idx8 + 5] = shadow_rays[unsafe_offset=idx8 + 5]
+    out_rays[unsafe_offset=idx8 + 6] = shadow_rays[unsafe_offset=idx8 + 6]
+    out_rays[unsafe_offset=idx8 + 7] = shadow_rays[unsafe_offset=idx8 + 7]
 
 def vulkaninterop_rt_traverse_shadow_gpu(
     # Perf (2026-07-13): pack -> trace only, no unpack step -- the caller's
@@ -5682,11 +5682,11 @@ def vcm_render_gpu(
     budget, decoupled from n_pix -- see _bdpt_render_core's (CPU)
     docstring for the full derivation; this function mirrors that same
     n_light_paths_merge = max(n_photons_req, n_pix) split."""
-    var fw = Int(psc[0].film_w)
-    var fh = Int(psc[0].film_h)
+    var fw = Int(psc[unsafe_offset=0].film_w)
+    var fh = Int(psc[unsafe_offset=0].film_h)
     var n_pix = fw * fh
-    var iso_scale = psc[0].film_iso / Float32(100)
-    var max_comp  = psc[0].film_max_comp
+    var iso_scale = psc[unsafe_offset=0].film_iso / Float32(100)
+    var max_comp  = psc[unsafe_offset=0].film_max_comp
     var n_light_paths_merge = max(n_photons_req, n_pix)
 
     print("VCM (GPU): " + String(fw) + "x" + String(fh) + "  " + String(n_spp) + " spp  "
@@ -5696,13 +5696,13 @@ def vcm_render_gpu(
     var default_emit_med = Int32(-1)
     if has_med and Int(sd.mediumIfaceCount) > 0:
         for mi in range(Int(sd.mediumIfaceCount)):
-            var iface = sd.mediumInterfaces[mi]
+            var iface = sd.mediumInterfaces[unsafe_offset=mi]
             if Int(iface.outside_medium_idx) >= 0:
                 default_emit_med = iface.outside_medium_idx
                 break
 
     var lvc_cap = n_light_paths_merge * _BDPT_MAX_VERTS
-    var base_seed = psc[0].rng_seed
+    var base_seed = psc[unsafe_offset=0].rng_seed
 
     var ret = Int32(0)
     comptime if has_accelerator():
@@ -5722,57 +5722,57 @@ def vcm_render_gpu(
             with accum_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 for i in range(n_pix * 3):
-                    dst[i] = Float32(0)
+                    dst[unsafe_offset=i] = Float32(0)
             var albedo_accum_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
             with albedo_accum_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 for i in range(n_pix * 3):
-                    dst[i] = Float32(0)
+                    dst[unsafe_offset=i] = Float32(0)
 
             var r2c_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
             with r2c_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
-                var src = psc[0].raster_to_camera.unsafe_bitcast[UInt8]()
+                var src = psc[unsafe_offset=0].raster_to_camera.unsafe_bitcast[UInt8]()
                 for i in range(16 * size_of[Float32]()):
-                    dst[i] = src[i]
+                    dst[unsafe_offset=i] = src[unsafe_offset=i]
             var c2w_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
             with c2w_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
-                var src = psc[0].camera_to_world.unsafe_bitcast[UInt8]()
+                var src = psc[unsafe_offset=0].camera_to_world.unsafe_bitcast[UInt8]()
                 for i in range(16 * size_of[Float32]()):
-                    dst[i] = src[i]
+                    dst[unsafe_offset=i] = src[unsafe_offset=i]
 
             # t=1 light tracing needs the same two camera-projection
             # matrices vcm_render builds on the CPU (see its matching
             # comment): w2c = inverse(cameraToWorld), and c2r inverting the
             # 3x3 that turns (filmX, filmY, 1) into a camera-space direction.
             var w2c_host = alloc[Float32](16)
-            _ = matrix_invert(psc[0].camera_to_world, w2c_host)
-            var _r2c_h = psc[0].raster_to_camera
-            var a0 = _r2c_h[0]; var a1 = _r2c_h[4]; var a2 = _r2c_h[12]
-            var b0 = _r2c_h[1]; var b1 = _r2c_h[5]; var b2 = _r2c_h[13]
-            var g0 = _r2c_h[2]; var g1 = _r2c_h[6]; var g2 = _r2c_h[14]
+            _ = matrix_invert(psc[unsafe_offset=0].camera_to_world, w2c_host)
+            var _r2c_h = psc[unsafe_offset=0].raster_to_camera
+            var a0 = _r2c_h[unsafe_offset=0]; var a1 = _r2c_h[unsafe_offset=4]; var a2 = _r2c_h[unsafe_offset=12]
+            var b0 = _r2c_h[unsafe_offset=1]; var b1 = _r2c_h[unsafe_offset=5]; var b2 = _r2c_h[unsafe_offset=13]
+            var g0 = _r2c_h[unsafe_offset=2]; var g1 = _r2c_h[unsafe_offset=6]; var g2 = _r2c_h[unsafe_offset=14]
             var d0 = b1*g2 - b2*g1
             var d1 = b0*g2 - b2*g0
             var d2 = b0*g1 - b1*g0
             var det = a0*d0 - a1*d1 + a2*d2
             var idet = Float32(1) / det if abs(det) > Float32(1e-20) else Float32(0)
             var c2r_host = alloc[Float32](9)
-            c2r_host[0] =  d0*idet; c2r_host[1] = -(a1*g2 - a2*g1)*idet; c2r_host[2] =  (a1*b2 - a2*b1)*idet
-            c2r_host[3] = -d1*idet; c2r_host[4] =  (a0*g2 - a2*g0)*idet; c2r_host[5] = -(a0*b2 - a2*b0)*idet
-            c2r_host[6] =  d2*idet; c2r_host[7] = -(a0*g1 - a1*g0)*idet; c2r_host[8] =  (a0*b1 - a1*b0)*idet
+            c2r_host[unsafe_offset=0] =  d0*idet; c2r_host[unsafe_offset=1] = -(a1*g2 - a2*g1)*idet; c2r_host[unsafe_offset=2] =  (a1*b2 - a2*b1)*idet
+            c2r_host[unsafe_offset=3] = -d1*idet; c2r_host[unsafe_offset=4] =  (a0*g2 - a2*g0)*idet; c2r_host[unsafe_offset=5] = -(a0*b2 - a2*b0)*idet
+            c2r_host[unsafe_offset=6] =  d2*idet; c2r_host[unsafe_offset=7] = -(a0*g1 - a1*g0)*idet; c2r_host[unsafe_offset=8] =  (a0*b1 - a1*b0)*idet
             var w2c_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
             with w2c_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
                 var src = w2c_host.unsafe_bitcast[UInt8]()
                 for i in range(16 * size_of[Float32]()):
-                    dst[i] = src[i]
+                    dst[unsafe_offset=i] = src[unsafe_offset=i]
             var c2r_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](9 * size_of[Float32]())
             with c2r_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
                 var src = c2r_host.unsafe_bitcast[UInt8]()
                 for i in range(9 * size_of[Float32]()):
-                    dst[i] = src[i]
+                    dst[unsafe_offset=i] = src[unsafe_offset=i]
             w2c_host.unsafe_free()
             c2r_host.unsafe_free()
             var w2c_ptr = w2c_buf.unsafe_ptr().unsafe_bitcast[Float32]()
@@ -5833,7 +5833,7 @@ def vcm_render_gpu(
             var (_scene_center, scene_radius) = _scene_bounding_sphere(sd)
             var merge_radius_1 = scene_radius * Float32(0.03)
             comptime _VCM_RADIUS_ALPHA = Float32(2.0) / Float32(3.0)
-            var px_scale = Float32(2.0) * tan(psc[0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(fh)
+            var px_scale = Float32(2.0) * tan(psc[unsafe_offset=0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(fh)
             var n_light_paths_f = Float32(n_light_paths_merge)
 
             var grid_merge_ins = ceildiv(max(lvc_cap, 1), block_size)
@@ -5879,7 +5879,7 @@ def vcm_render_gpu(
                     grid_dim=grid_merge_ins, block_dim=block_size)
 
                 handle[].ctx.enqueue_function[_bdpt_camera_connect_gpu](
-                    accum_ptr, albedo_accum_ptr, Int64(n_pix), Int64(Int(psc[0].film_w)), r2c_ptr, c2w_ptr, inter_cam_ptr,
+                    accum_ptr, albedo_accum_ptr, Int64(n_pix), Int64(Int(psc[unsafe_offset=0].film_w)), r2c_ptr, c2w_ptr, inter_cam_ptr,
                     lvc_ptr, path_len_ptr,
                     merge_next_ptr, merge_heads_ptr, merge_inv_cell, merge_r2, merge_norm,
                     px_scale, mis_vc_weight_factor, mis_vm_weight_factor, n_light_paths_f,
@@ -5926,14 +5926,14 @@ def vcm_render_gpu(
                 var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 var inv_spp = iso_scale / Float32(n_spp)
                 for i in range(n_pix):
-                    var r = src[i*3]   * inv_spp
-                    var g = src[i*3+1] * inv_spp
-                    var b = src[i*3+2] * inv_spp
+                    var r = src[unsafe_offset=i*3]   * inv_spp
+                    var g = src[unsafe_offset=i*3+1] * inv_spp
+                    var b = src[unsafe_offset=i*3+2] * inv_spp
                     if max_comp > Float32(0):
                         r = r if r < max_comp else max_comp
                         g = g if g < max_comp else max_comp
                         b = b if b < max_comp else max_comp
-                    pixels[i*3] = r; pixels[i*3+1] = g; pixels[i*3+2] = b
+                    pixels[unsafe_offset=i*3] = r; pixels[unsafe_offset=i*3+1] = g; pixels[unsafe_offset=i*3+2] = b
 
             # Denoise (never wired up before -- no_denoise was a dead
             # parameter): read back the albedo AOV accumulated above, run
@@ -5946,24 +5946,24 @@ def vcm_render_gpu(
                 var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 var inv_spp_alb = Float32(1) / Float32(n_spp)
                 for i in range(n_pix * 3):
-                    albedo_pixels[i] = src[i] * inv_spp_alb
+                    albedo_pixels[unsafe_offset=i] = src[unsafe_offset=i] * inv_spp_alb
 
             var normals = alloc[Float32](n_pix * 3)
             var depth = alloc[Float32](n_pix)
             var sd_local = sd
-            render_aux_buffers(psc[0].raster_to_camera, psc[0].camera_to_world, Int32(0), Int32(0),
-                                psc[0].film_w, psc[0].film_h, UnsafePointer(to=sd_local), normals, depth)
+            render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world, Int32(0), Int32(0),
+                                psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, UnsafePointer(to=sd_local), normals, depth)
 
             var denoised = alloc[Float32](n_pix * 3)
             if no_denoise:
-                for i in range(n_pix * 3): denoised[i] = pixels[i]
+                for i in range(n_pix * 3): denoised[unsafe_offset=i] = pixels[unsafe_offset=i]
             else:
-                denoise(pixels, albedo_pixels, normals, depth, psc[0].film_w, psc[0].film_h,
+                denoise(pixels, albedo_pixels, normals, depth, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h,
                         denoised, Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
 
-            _ = write_image_cropwindow(denoised, psc[0].film_w, psc[0].film_h,
-        psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
-        psc[0].film_filename, Int32(32), Int32(32))
+            _ = write_image_cropwindow(denoised, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h,
+        psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0, psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1,
+        psc[unsafe_offset=0].film_filename, Int32(32), Int32(32))
             pixels.unsafe_free(); albedo_pixels.unsafe_free(); normals.unsafe_free(); depth.unsafe_free(); denoised.unsafe_free()
         except e:
             print("VCM GPU render failed: " + String(e))
@@ -6018,7 +6018,7 @@ def reset_shadow_valid_gpu(
         return
     var base = pix * _BDPT_MAX_VERTS
     for local in range(_BDPT_MAX_VERTS):
-        shadow_valid[base + local] = Int8(0)
+        shadow_valid[unsafe_offset=base + local] = Int8(0)
 
 def resolve_shadow_connect_gpu(
     # Perf (2026-07-13, task #163 stage 5 follow-up): ONE dispatch over
@@ -6095,7 +6095,7 @@ def resolve_shadow_connect_gpu(
     if tid >= count:
         return
     var idx = tid
-    if shadow_valid[idx] == Int8(0):
+    if shadow_valid[unsafe_offset=idx] == Int8(0):
         return
     var sd = _mk_sd_full(
         bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
@@ -6109,15 +6109,15 @@ def resolve_shadow_connect_gpu(
         gpuTextures, gpuTextureCount,
     )
 
-    var seg_med = shadow_seg_med[idx]
+    var seg_med = shadow_seg_med[unsafe_offset=idx]
     var idx8 = idx * 8
-    var org = Point3f(shadow_rays[idx8 + 0], shadow_rays[idx8 + 1], shadow_rays[idx8 + 2])
-    var dir = Vec3f(shadow_rays[idx8 + 4], shadow_rays[idx8 + 5], shadow_rays[idx8 + 6])
-    var dist = shadow_rays[idx8 + 7] / Float32(0.9995)
+    var org = Point3f(shadow_rays[unsafe_offset=idx8 + 0], shadow_rays[unsafe_offset=idx8 + 1], shadow_rays[unsafe_offset=idx8 + 2])
+    var dir = Vec3f(shadow_rays[unsafe_offset=idx8 + 4], shadow_rays[unsafe_offset=idx8 + 5], shadow_rays[unsafe_offset=idx8 + 6])
+    var dist = shadow_rays[unsafe_offset=idx8 + 7] / Float32(0.9995)
 
     var ridx = tid * 8
     var iresults = shadow_results.unsafe_bitcast[Int32]()
-    var hitFlag = iresults[ridx + 6]
+    var hitFlag = iresults[unsafe_offset=ridx + 6]
 
     var needs_fallback = False
     if hitFlag != Int32(1):
@@ -6126,16 +6126,16 @@ def resolve_shadow_connect_gpu(
         # else: fully visible (Tr=1), pending already holds the correct
         # unweighted contribution -- nothing to multiply.
     else:
-        var mi = Int(iresults[ridx + 4])
+        var mi = Int(iresults[unsafe_offset=ridx + 4])
         var mat_idx = Int64(0)
         if mi >= 0 and mi < n_meshes_vk:
-            mat_idx = mesh_material_idx[mi]
-        var mat = sd.materials[Int(mat_idx)]
+            mat_idx = mesh_material_idx[unsafe_offset=mi]
+        var mat = sd.materials[unsafe_offset=Int(mat_idx)]
         if seg_med >= Int32(0) or mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric or mat.type == MatKind.interface:
             needs_fallback = True
         else:
             # Opaque hit, no medium: fully occluded.
-            shadow_pending[idx] = SpectralSample(Float32(0))
+            shadow_pending[unsafe_offset=idx] = SpectralSample(Float32(0))
 
     if needs_fallback:
         # Per-thread scratch slot (offset by `tid`) -- matches the
@@ -6146,11 +6146,11 @@ def resolve_shadow_connect_gpu(
         # actually enters this fallback path (no dielectric/medium), but
         # fixed now while this kernel is being rewritten anyway.
         var dst = org + dir * dist
-        var cst = cam_states[idx // _BDPT_MAX_VERTS]
+        var cst = cam_states[unsafe_offset=idx // _BDPT_MAX_VERTS]
         var wl_sp = SampledWavelengths(cst.wl0, cst.wl1, cst.wl2, cst.wl3, cst.wl_pdf)
-        var Tr = _visible_transmittance(org, dst, seg_med, sd, scratch + tid, wl_sp)
-        var p = shadow_pending[idx]
-        shadow_pending[idx] = p * Tr
+        var Tr = _visible_transmittance(org, dst, seg_med, sd, scratch.unsafe_offset(tid), wl_sp)
+        var p = shadow_pending[unsafe_offset=idx]
+        shadow_pending[unsafe_offset=idx] = p * Tr
 
 def sum_shadow_connect_gpu(
     states: UnsafePointer[VCMCameraPathState_C, MutExternalOrigin],
@@ -6165,9 +6165,9 @@ def sum_shadow_connect_gpu(
     var base = pix * _BDPT_MAX_VERTS
     var sum = SpectralSample(Float32(0))
     for local in range(_BDPT_MAX_VERTS):
-        if shadow_valid[base + local] != Int8(0):
-            sum += shadow_pending[base + local]
-    states[pix].total += sum
+        if shadow_valid[unsafe_offset=base + local] != Int8(0):
+            sum += shadow_pending[unsafe_offset=base + local]
+    states[unsafe_offset=pix].total += sum
 
 def vcm_render_gpu_wavefront(
     handlePtr: UnsafePointer[GpuSceneHandle, MutExternalOrigin],
@@ -6215,11 +6215,11 @@ def vcm_render_gpu_wavefront(
     ever Vulkan-RT-traced. See vcm_render_gpu's own docstring for the
     shared algorithm-level documentation (n_photons_req/n_light_paths_merge
     derivation etc.), not repeated here."""
-    var fw = Int(psc[0].film_w)
-    var fh = Int(psc[0].film_h)
+    var fw = Int(psc[unsafe_offset=0].film_w)
+    var fh = Int(psc[unsafe_offset=0].film_h)
     var n_pix = fw * fh
-    var iso_scale = psc[0].film_iso / Float32(100)
-    var max_comp  = psc[0].film_max_comp
+    var iso_scale = psc[unsafe_offset=0].film_iso / Float32(100)
+    var max_comp  = psc[unsafe_offset=0].film_max_comp
     var n_light_paths_merge = max(n_photons_req, n_pix)
 
     print("VCM (GPU wavefront): " + String(fw) + "x" + String(fh) + "  " + String(n_spp) + " spp  "
@@ -6229,13 +6229,13 @@ def vcm_render_gpu_wavefront(
     var default_emit_med = Int32(-1)
     if has_med and Int(sd.mediumIfaceCount) > 0:
         for mi in range(Int(sd.mediumIfaceCount)):
-            var iface = sd.mediumInterfaces[mi]
+            var iface = sd.mediumInterfaces[unsafe_offset=mi]
             if Int(iface.outside_medium_idx) >= 0:
                 default_emit_med = iface.outside_medium_idx
                 break
 
     var lvc_cap = n_light_paths_merge * _BDPT_MAX_VERTS
-    var base_seed = psc[0].rng_seed
+    var base_seed = psc[unsafe_offset=0].rng_seed
 
     var ret = Int32(0)
     comptime if has_accelerator():
@@ -6273,25 +6273,25 @@ def vcm_render_gpu_wavefront(
             with accum_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 for i in range(n_pix * 3):
-                    dst[i] = Float32(0)
+                    dst[unsafe_offset=i] = Float32(0)
             var albedo_accum_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
             with albedo_accum_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 for i in range(n_pix * 3):
-                    dst[i] = Float32(0)
+                    dst[unsafe_offset=i] = Float32(0)
 
             var r2c_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
             with r2c_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
-                var src = psc[0].raster_to_camera.unsafe_bitcast[UInt8]()
+                var src = psc[unsafe_offset=0].raster_to_camera.unsafe_bitcast[UInt8]()
                 for i in range(16 * size_of[Float32]()):
-                    dst[i] = src[i]
+                    dst[unsafe_offset=i] = src[unsafe_offset=i]
             var c2w_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
             with c2w_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
-                var src = psc[0].camera_to_world.unsafe_bitcast[UInt8]()
+                var src = psc[unsafe_offset=0].camera_to_world.unsafe_bitcast[UInt8]()
                 for i in range(16 * size_of[Float32]()):
-                    dst[i] = src[i]
+                    dst[unsafe_offset=i] = src[unsafe_offset=i]
 
             var lvc_ptr     = lvc_buf.unsafe_ptr().unsafe_bitcast[BDPTVertex]()
             var path_len_ptr = path_len_buf.unsafe_ptr().unsafe_bitcast[Int32]()
@@ -6333,32 +6333,32 @@ def vcm_render_gpu_wavefront(
             # comment): w2c = inverse(cameraToWorld), and c2r inverting the
             # 3x3 that turns (filmX, filmY, 1) into a camera-space direction.
             var w2c_host = alloc[Float32](16)
-            _ = matrix_invert(psc[0].camera_to_world, w2c_host)
-            var _r2c_h = psc[0].raster_to_camera
-            var a0 = _r2c_h[0]; var a1 = _r2c_h[4]; var a2 = _r2c_h[12]
-            var b0 = _r2c_h[1]; var b1 = _r2c_h[5]; var b2 = _r2c_h[13]
-            var g0 = _r2c_h[2]; var g1 = _r2c_h[6]; var g2 = _r2c_h[14]
+            _ = matrix_invert(psc[unsafe_offset=0].camera_to_world, w2c_host)
+            var _r2c_h = psc[unsafe_offset=0].raster_to_camera
+            var a0 = _r2c_h[unsafe_offset=0]; var a1 = _r2c_h[unsafe_offset=4]; var a2 = _r2c_h[unsafe_offset=12]
+            var b0 = _r2c_h[unsafe_offset=1]; var b1 = _r2c_h[unsafe_offset=5]; var b2 = _r2c_h[unsafe_offset=13]
+            var g0 = _r2c_h[unsafe_offset=2]; var g1 = _r2c_h[unsafe_offset=6]; var g2 = _r2c_h[unsafe_offset=14]
             var d0 = b1*g2 - b2*g1
             var d1 = b0*g2 - b2*g0
             var d2 = b0*g1 - b1*g0
             var det = a0*d0 - a1*d1 + a2*d2
             var idet = Float32(1) / det if abs(det) > Float32(1e-20) else Float32(0)
             var c2r_host = alloc[Float32](9)
-            c2r_host[0] =  d0*idet; c2r_host[1] = -(a1*g2 - a2*g1)*idet; c2r_host[2] =  (a1*b2 - a2*b1)*idet
-            c2r_host[3] = -d1*idet; c2r_host[4] =  (a0*g2 - a2*g0)*idet; c2r_host[5] = -(a0*b2 - a2*b0)*idet
-            c2r_host[6] =  d2*idet; c2r_host[7] = -(a0*g1 - a1*g0)*idet; c2r_host[8] =  (a0*b1 - a1*b0)*idet
+            c2r_host[unsafe_offset=0] =  d0*idet; c2r_host[unsafe_offset=1] = -(a1*g2 - a2*g1)*idet; c2r_host[unsafe_offset=2] =  (a1*b2 - a2*b1)*idet
+            c2r_host[unsafe_offset=3] = -d1*idet; c2r_host[unsafe_offset=4] =  (a0*g2 - a2*g0)*idet; c2r_host[unsafe_offset=5] = -(a0*b2 - a2*b0)*idet
+            c2r_host[unsafe_offset=6] =  d2*idet; c2r_host[unsafe_offset=7] = -(a0*g1 - a1*g0)*idet; c2r_host[unsafe_offset=8] =  (a0*b1 - a1*b0)*idet
             var w2c_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
             with w2c_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
                 var src = w2c_host.unsafe_bitcast[UInt8]()
                 for i in range(16 * size_of[Float32]()):
-                    dst[i] = src[i]
+                    dst[unsafe_offset=i] = src[unsafe_offset=i]
             var c2r_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](9 * size_of[Float32]())
             with c2r_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
                 var src = c2r_host.unsafe_bitcast[UInt8]()
                 for i in range(9 * size_of[Float32]()):
-                    dst[i] = src[i]
+                    dst[unsafe_offset=i] = src[unsafe_offset=i]
             w2c_host.unsafe_free()
             c2r_host.unsafe_free()
             var w2c_ptr = w2c_buf.unsafe_ptr().unsafe_bitcast[Float32]()
@@ -6408,7 +6408,7 @@ def vcm_render_gpu_wavefront(
             var (_scene_center, scene_radius) = _scene_bounding_sphere(sd)
             var merge_radius_1 = scene_radius * Float32(0.03)
             comptime _VCM_RADIUS_ALPHA = Float32(2.0) / Float32(3.0)
-            var px_scale = Float32(2.0) * tan(psc[0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(fh)
+            var px_scale = Float32(2.0) * tan(psc[unsafe_offset=0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(fh)
             var n_light_paths_f = Float32(n_light_paths_merge)
 
             var grid_merge_ins = ceildiv(max(lvc_cap, 1), block_size)
@@ -6495,7 +6495,7 @@ def vcm_render_gpu_wavefront(
                     with path_len_buf.map_to_host() as host_buf:
                         var pl = host_buf.unsafe_ptr().unsafe_bitcast[Int32]()
                         for pli in range(n_light_paths_merge):
-                            sum_pl += Int(pl[pli])
+                            sum_pl += Int(pl[unsafe_offset=pli])
                     var occupancy = (Float64(sum_pl) / Float64(n_light_paths_merge)) / Float64(_BDPT_MAX_VERTS)
                     if occupancy < 0.2:
                         shadow_batch_enabled = False
@@ -6532,7 +6532,7 @@ def vcm_render_gpu_wavefront(
                 # _bdpt_camera_connect_gpu's single mega-kernel already ran
                 # them -- only the primary/bounce ray intersect moved out.
                 handle[].ctx.enqueue_function[_bdpt_camera_path_init_gpu](
-                    cam_states_ptr, r2c_ptr, c2w_ptr, Int64(n_pix), Int64(Int(psc[0].film_w)),
+                    cam_states_ptr, r2c_ptr, c2w_ptr, Int64(n_pix), Int64(Int(psc[unsafe_offset=0].film_w)),
                     px_scale, n_light_paths_f, base_seed, Int64(si),
                     grid_dim=grid_pix, block_dim=block_size)
 
@@ -6642,14 +6642,14 @@ def vcm_render_gpu_wavefront(
                 var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 var inv_spp = iso_scale / Float32(n_spp)
                 for i in range(n_pix):
-                    var r = src[i*3]   * inv_spp
-                    var g = src[i*3+1] * inv_spp
-                    var b = src[i*3+2] * inv_spp
+                    var r = src[unsafe_offset=i*3]   * inv_spp
+                    var g = src[unsafe_offset=i*3+1] * inv_spp
+                    var b = src[unsafe_offset=i*3+2] * inv_spp
                     if max_comp > Float32(0):
                         r = r if r < max_comp else max_comp
                         g = g if g < max_comp else max_comp
                         b = b if b < max_comp else max_comp
-                    pixels[i*3] = r; pixels[i*3+1] = g; pixels[i*3+2] = b
+                    pixels[unsafe_offset=i*3] = r; pixels[unsafe_offset=i*3+1] = g; pixels[unsafe_offset=i*3+2] = b
 
             # Denoise (never wired up before -- no_denoise was a dead
             # parameter): read back the albedo AOV accumulated above, run
@@ -6662,24 +6662,24 @@ def vcm_render_gpu_wavefront(
                 var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 var inv_spp_alb = Float32(1) / Float32(n_spp)
                 for i in range(n_pix * 3):
-                    albedo_pixels[i] = src[i] * inv_spp_alb
+                    albedo_pixels[unsafe_offset=i] = src[unsafe_offset=i] * inv_spp_alb
 
             var normals = alloc[Float32](n_pix * 3)
             var depth = alloc[Float32](n_pix)
             var sd_local = sd
-            render_aux_buffers(psc[0].raster_to_camera, psc[0].camera_to_world, Int32(0), Int32(0),
-                                psc[0].film_w, psc[0].film_h, UnsafePointer(to=sd_local), normals, depth)
+            render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world, Int32(0), Int32(0),
+                                psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, UnsafePointer(to=sd_local), normals, depth)
 
             var denoised = alloc[Float32](n_pix * 3)
             if no_denoise:
-                for i in range(n_pix * 3): denoised[i] = pixels[i]
+                for i in range(n_pix * 3): denoised[unsafe_offset=i] = pixels[unsafe_offset=i]
             else:
-                denoise(pixels, albedo_pixels, normals, depth, psc[0].film_w, psc[0].film_h,
+                denoise(pixels, albedo_pixels, normals, depth, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h,
                         denoised, Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
 
-            _ = write_image_cropwindow(denoised, psc[0].film_w, psc[0].film_h,
-        psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
-        psc[0].film_filename, Int32(32), Int32(32))
+            _ = write_image_cropwindow(denoised, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h,
+        psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0, psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1,
+        psc[unsafe_offset=0].film_filename, Int32(32), Int32(32))
             pixels.unsafe_free(); albedo_pixels.unsafe_free(); normals.unsafe_free(); depth.unsafe_free(); denoised.unsafe_free()
         except e:
             print("VCM GPU wavefront render failed: " + String(e))
@@ -6727,7 +6727,7 @@ def vcm_render_gpu_wavefront(
 
 def sppm_reset_i32_gpu(counter: UnsafePointer[Int32, MutExternalOrigin]):
     if block_idx.x == 0 and thread_idx.x == 0:
-        counter[0] = Int32(0)
+        counter[unsafe_offset=0] = Int32(0)
 
 
 def sppm_gen_vp_gpu(
@@ -6795,7 +6795,7 @@ def sppm_gen_vp_gpu(
         grids=grids, gridCount=n_grids, nvdbGrids=nvdb_grids, nvdbGridCount=n_nvdb_grids,
     )
     var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
-    vps[combined] = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch + combined, Int(max_depth_dp))
+    vps[unsafe_offset=combined] = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch.unsafe_offset(combined), Int(max_depth_dp))
 
 
 def sppm_emit_photons_gpu(
@@ -6890,7 +6890,7 @@ def sppm_emit_photons_gpu(
         grids=grids, gridCount=n_grids, nvdbGrids=nvdb_grids, nvdbGridCount=n_nvdb_grids,
     )
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
-    _sppm_trace_photon[True, True](sd, pcg, inter_scratch + k, n_emit, photons, max_photons, stored_counter, default_emit_med, Int(max_depth_dp),
+    _sppm_trace_photon[True, True](sd, pcg, inter_scratch.unsafe_offset(k), n_emit, photons, max_photons, stored_counter, default_emit_med, Int(max_depth_dp),
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, pass_wavelengths(pass_idx))
 
@@ -7072,13 +7072,13 @@ def sppm_finalize_gpu(
     var acc = _sppm_finalize_one_pixel(vps, i, vp_samples, n_passes, iso_scale, max_comp,
                                        spectral_coeffs, Int(spectral_res_dp), spectral_cie_x,
                                        spectral_cie_y, spectral_cie_z, spectral_d65)
-    out_pixels[i * 3 + 0] = acc.r
-    out_pixels[i * 3 + 1] = acc.g
-    out_pixels[i * 3 + 2] = acc.b
+    out_pixels[unsafe_offset=i * 3 + 0] = acc.r
+    out_pixels[unsafe_offset=i * 3 + 1] = acc.g
+    out_pixels[unsafe_offset=i * 3 + 2] = acc.b
     var alb = _sppm_finalize_albedo_one_pixel(vps, i, vp_samples)
-    albedo_out[i * 3 + 0] = alb.r
-    albedo_out[i * 3 + 1] = alb.g
-    albedo_out[i * 3 + 2] = alb.b
+    albedo_out[unsafe_offset=i * 3 + 0] = alb.r
+    albedo_out[unsafe_offset=i * 3 + 1] = alb.g
+    albedo_out[unsafe_offset=i * 3 + 2] = alb.b
 
 
 # ── GPU host driver ───────────────────────────────────────────────────────────
@@ -7103,11 +7103,11 @@ def sppm_render_gpu(
         print("SPPM: no lights in scene, cannot emit photons")
         return Int32(-1)
 
-    var fw = Int(psc[0].film_w)
-    var fh = Int(psc[0].film_h)
+    var fw = Int(psc[unsafe_offset=0].film_w)
+    var fh = Int(psc[unsafe_offset=0].film_h)
     var n_pix = fw * fh
-    var iso_scale = psc[0].film_iso / Float32(100)
-    var max_comp = psc[0].film_max_comp
+    var iso_scale = psc[unsafe_offset=0].film_iso / Float32(100)
+    var max_comp = psc[unsafe_offset=0].film_max_comp
 
     print("SPPM (GPU): " + String(fw) + "x" + String(fh)
           + " " + String(n_passes) + " passes x "
@@ -7116,7 +7116,7 @@ def sppm_render_gpu(
     var default_emit_med = Int32(-1)
     if Int(sd.mediumCount) > 0 and Int(sd.mediumIfaceCount) > 0:
         for mi in range(Int(sd.mediumIfaceCount)):
-            var iface = sd.mediumInterfaces[mi]
+            var iface = sd.mediumInterfaces[unsafe_offset=mi]
             if Int(iface.outside_medium_idx) >= 0:
                 default_emit_med = iface.outside_medium_idx
                 break
@@ -7130,8 +7130,8 @@ def sppm_render_gpu(
     # unlike a density estimate the radius does not scale the answer.
     var eff_radius = initial_radius
     for _mi in range(Int(sd.mediumCount)):
-        if sd.mediums[_mi].is_sss != Int32(0):
-            var _rq = dipole_max_radius(sd.mediums[_mi].sigma_s, sd.mediums[_mi].sigma_a, sd.mediums[_mi].g)
+        if sd.mediums[unsafe_offset=_mi].is_sss != Int32(0):
+            var _rq = dipole_max_radius(sd.mediums[unsafe_offset=_mi].sigma_s, sd.mediums[unsafe_offset=_mi].sigma_a, sd.mediums[unsafe_offset=_mi].g)
             if _rq > eff_radius:
                 eff_radius = _rq
     # init_r2 stays on the SCENE's radius -- widening it would blur every
@@ -7155,7 +7155,7 @@ def sppm_render_gpu(
             # max_photons must scale with the per-photon bounce budget, not
             # just n_photons_per_pass (one emitted path can store up to
             # min(maxdepth, _MAX_B) - 1 deposits, not one).
-            var max_bounces_per_photon = min(Int(psc[0].max_depth), _MAX_B)
+            var max_bounces_per_photon = min(Int(psc[unsafe_offset=0].max_depth), _MAX_B)
             # A subsurface interior blows this budget wide open: its random-walk
             # steps are deliberately NOT charged to maxdepth (see
             # _sppm_trace_photon's loop header), so one photon entering skin
@@ -7168,7 +7168,7 @@ def sppm_render_gpu(
             # inflated. Mirrors the same sizing in sppm.mojo's CPU driver.
             var has_sss_medium = False
             for mi in range(Int(sd.mediumCount)):
-                if sd.mediums[mi].is_sss != Int32(0):
+                if sd.mediums[unsafe_offset=mi].is_sss != Int32(0):
                     has_sss_medium = True
                     break
             # (The "--sppm + subsurface is unsupported" warning that stood here
@@ -7193,15 +7193,15 @@ def sppm_render_gpu(
             var r2c_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
             with r2c_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
-                var src = psc[0].raster_to_camera.unsafe_bitcast[UInt8]()
+                var src = psc[unsafe_offset=0].raster_to_camera.unsafe_bitcast[UInt8]()
                 for i in range(16 * size_of[Float32]()):
-                    dst[i] = src[i]
+                    dst[unsafe_offset=i] = src[unsafe_offset=i]
             var c2w_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
             with c2w_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
-                var src = psc[0].camera_to_world.unsafe_bitcast[UInt8]()
+                var src = psc[unsafe_offset=0].camera_to_world.unsafe_bitcast[UInt8]()
                 for i in range(16 * size_of[Float32]()):
-                    dst[i] = src[i]
+                    dst[unsafe_offset=i] = src[unsafe_offset=i]
 
             var vps_ptr    = vps_buf.unsafe_ptr().unsafe_bitcast[SPPMPixel]().unsafe_origin_cast[MutExternalOrigin]()
             var photons_ptr = photons_buf.unsafe_ptr().unsafe_bitcast[SPPMPhoton]().unsafe_origin_cast[MutExternalOrigin]()
@@ -7259,10 +7259,10 @@ def sppm_render_gpu(
             # render, not per SPPM pass — see _sppm_trace_visible_point's
             # docstring for why a per-pass re-trace breaks SPPM's
             # convergence guarantee.
-            var cam_seed = psc[0].rng_seed ^ UInt64(0x9E3779B97F4A7C15 + 7)
+            var cam_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(0x9E3779B97F4A7C15 + 7)
             handle[].ctx.enqueue_function[sppm_gen_vp_gpu](
-                vps_ptr, inter_cam_ptr, Int64(n_pix), Int64(_VP_SAMPLES), psc[0].film_w, r2c_ptr, c2w_ptr,
-                init_r2, cam_seed, Int64(psc[0].max_depth),
+                vps_ptr, inter_cam_ptr, Int64(n_pix), Int64(_VP_SAMPLES), psc[unsafe_offset=0].film_w, r2c_ptr, c2w_ptr,
+                init_r2, cam_seed, Int64(psc[unsafe_offset=0].max_depth),
                 bvh2Nodes, primIds, meshes, materials,
                 areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
                 mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
@@ -7276,11 +7276,11 @@ def sppm_render_gpu(
                 handle[].ctx.enqueue_function[sppm_reset_i32_gpu](
                     counter_ptr, grid_dim=1, block_dim=1)
 
-                var pass_seed = psc[0].rng_seed ^ UInt64(pass_idx * 2654435761 + 1)
+                var pass_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(pass_idx * 2654435761 + 1)
                 var grid_emit = ceildiv(max(n_photons_per_pass, 1), block_size)
                 handle[].ctx.enqueue_function[sppm_emit_photons_gpu](
                     photons_ptr, Int64(n_photons_per_pass), Int64(max_photons), inter_ph_ptr, counter_ptr,
-                    default_emit_med, pass_seed, Int64(pass_idx), Int64(psc[0].max_depth),
+                    default_emit_med, pass_seed, Int64(pass_idx), Int64(psc[unsafe_offset=0].max_depth),
                     bvh2Nodes, primIds, meshes, materials,
                     areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
                     mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
@@ -7297,7 +7297,7 @@ def sppm_render_gpu(
                 var n_stored_raw: Int32
                 with counter_buf.map_to_host() as host_buf:
                     var src = host_buf.unsafe_ptr().unsafe_bitcast[Int32]()
-                    n_stored_raw = src[0]
+                    n_stored_raw = src[unsafe_offset=0]
                 # A silent clamp is how dropped deposits stay invisible: the
                 # estimator still divides by the FULL emitted count, so the
                 # render just comes out patchy and dark with nothing in the
@@ -7326,7 +7326,7 @@ def sppm_render_gpu(
                         mediums, n_mediums, grids_dev, nvdb_grids_dev,
                         grid_dim=grid_vps, block_dim=block_size)
 
-                var nee_seed = psc[0].rng_seed ^ UInt64(pass_idx * 0xBF58476D1CE4E5B9 + 3)
+                var nee_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(pass_idx * 0xBF58476D1CE4E5B9 + 3)
                 handle[].ctx.enqueue_function[sppm_nee_gpu](
                     vps_ptr, Int64(n_vps), nee_seed, Int64(pass_idx),
                     bvh2Nodes, primIds, meshes, materials,
@@ -7364,7 +7364,7 @@ def sppm_render_gpu(
                         var any_phot = False
                         var any_light = False
                         for s_i in range(_VP_SAMPLES):
-                            var v = vp_host[pi * _VP_SAMPLES + s_i]
+                            var v = vp_host[unsafe_offset=pi * _VP_SAMPLES + s_i]
                             if v.valid != Int32(0):
                                 any_valid = True
                                 if v.N_acc > Float32(0): any_phot = True
@@ -7372,7 +7372,7 @@ def sppm_render_gpu(
                             if (v.env.r + v.env.g + v.env.b) > Float32(1e-12): any_light = True
                         n_tot += 1
                         for s_i in range(_VP_SAMPLES):
-                            var v2 = vp_host[pi * _VP_SAMPLES + s_i]
+                            var v2 = vp_host[unsafe_offset=pi * _VP_SAMPLES + s_i]
                             if v2.mat_kind == LobeKind.bssrdf and v2.valid != Int32(0):
                                 n_bssrdf += 1
                                 var ts = v2.tau.r + v2.tau.g + v2.tau.b
@@ -7392,7 +7392,7 @@ def sppm_render_gpu(
                     var ph_host = ph_h.unsafe_ptr().unsafe_bitcast[SPPMPhoton]()
                     var n_scan = min(max_photons, 200000)
                     for k in range(n_scan):
-                        var kind = Int(ph_host[k].is_volume)
+                        var kind = Int(ph_host[unsafe_offset=k].is_volume)
                         if kind == 0: n_ph_surf += 1
                         elif kind == 1: n_ph_vol += 1
                         elif kind == 2: n_ph_bssrdf += 1
@@ -7421,7 +7421,7 @@ def sppm_render_gpu(
                 var src = host_buf.unsafe_ptr()
                 var dst = out_pixels.unsafe_bitcast[UInt8]()
                 for i in range(n_pix * 3 * size_of[Float32]()):
-                    dst[i] = src[i]
+                    dst[unsafe_offset=i] = src[unsafe_offset=i]
 
             # Denoise (never wired up before -- no_denoise was a dead
             # parameter): read back the albedo AOV finalized above, run a
@@ -7433,24 +7433,24 @@ def sppm_render_gpu(
                 var src = host_buf.unsafe_ptr()
                 var dst = albedo_pixels.unsafe_bitcast[UInt8]()
                 for i in range(n_pix * 3 * size_of[Float32]()):
-                    dst[i] = src[i]
+                    dst[unsafe_offset=i] = src[unsafe_offset=i]
 
             var normals = alloc[Float32](n_pix * 3)
             var depth = alloc[Float32](n_pix)
             var sd_local = sd
-            render_aux_buffers(psc[0].raster_to_camera, psc[0].camera_to_world, Int32(0), Int32(0),
-                                psc[0].film_w, psc[0].film_h, UnsafePointer(to=sd_local), normals, depth)
+            render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world, Int32(0), Int32(0),
+                                psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, UnsafePointer(to=sd_local), normals, depth)
 
             var denoised = alloc[Float32](n_pix * 3)
             if no_denoise:
-                for i in range(n_pix * 3): denoised[i] = out_pixels[i]
+                for i in range(n_pix * 3): denoised[unsafe_offset=i] = out_pixels[unsafe_offset=i]
             else:
-                denoise(out_pixels, albedo_pixels, normals, depth, psc[0].film_w, psc[0].film_h,
+                denoise(out_pixels, albedo_pixels, normals, depth, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h,
                         denoised, Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
 
-            _ = write_image_cropwindow(denoised, psc[0].film_w, psc[0].film_h,
-                psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
-                psc[0].film_filename, Int32(32), Int32(32))
+            _ = write_image_cropwindow(denoised, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h,
+                psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0, psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1,
+                psc[unsafe_offset=0].film_filename, Int32(32), Int32(32))
             out_pixels.unsafe_free(); albedo_pixels.unsafe_free(); normals.unsafe_free(); depth.unsafe_free(); denoised.unsafe_free()
         except e:
             print("SPPM GPU render failed: " + String(e))

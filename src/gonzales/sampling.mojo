@@ -223,7 +223,7 @@ def sobol_sample(
     var base = dim * 52
     for bit in range(52):
         if cur & 1 != 0:
-            acc ^= matrices[base + bit]
+            acc ^= matrices[unsafe_offset=base + bit]
         cur >>= 1
         if cur == 0:
             break
@@ -337,10 +337,10 @@ def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutExternalOrigin](
     var filmY = Float32(py) + Float32(0.5) + deltaY
 
     # rasterToCamera (column-major 4×4)
-    var cx = r2c[0]*filmX + r2c[4]*filmY + r2c[12]
-    var cy = r2c[1]*filmX + r2c[5]*filmY + r2c[13]
-    var cz = r2c[2]*filmX + r2c[6]*filmY + r2c[14]
-    var cw = r2c[3]*filmX + r2c[7]*filmY + r2c[15]
+    var cx = r2c[unsafe_offset=0]*filmX + r2c[unsafe_offset=4]*filmY + r2c[unsafe_offset=12]
+    var cy = r2c[unsafe_offset=1]*filmX + r2c[unsafe_offset=5]*filmY + r2c[unsafe_offset=13]
+    var cz = r2c[unsafe_offset=2]*filmX + r2c[unsafe_offset=6]*filmY + r2c[unsafe_offset=14]
+    var cw = r2c[unsafe_offset=3]*filmX + r2c[unsafe_offset=7]*filmY + r2c[unsafe_offset=15]
     if cw != Float32(0.0) and cw != Float32(1.0):
         cx /= cw; cy /= cw; cz /= cw
     var camLen = sqrt(cx*cx + cy*cy + cz*cz)
@@ -348,14 +348,14 @@ def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutExternalOrigin](
         cx /= camLen; cy /= camLen; cz /= camLen
 
     # cameraToWorld rotation (upper-left 3×3 of col-major 4×4)
-    var dx = c2w[0]*cx + c2w[4]*cy + c2w[8]*cz
-    var dy = c2w[1]*cx + c2w[5]*cy + c2w[9]*cz
-    var dz = c2w[2]*cx + c2w[6]*cy + c2w[10]*cz
+    var dx = c2w[unsafe_offset=0]*cx + c2w[unsafe_offset=4]*cy + c2w[unsafe_offset=8]*cz
+    var dy = c2w[unsafe_offset=1]*cx + c2w[unsafe_offset=5]*cy + c2w[unsafe_offset=9]*cz
+    var dz = c2w[unsafe_offset=2]*cx + c2w[unsafe_offset=6]*cy + c2w[unsafe_offset=10]*cz
     var dirLen = sqrt(dx*dx + dy*dy + dz*dz)
     if dirLen > Float32(0.0):
         dx /= dirLen; dy /= dirLen; dz /= dirLen
 
-    var orgX = c2w[12]; var orgY = c2w[13]; var orgZ = c2w[14]
+    var orgX = c2w[unsafe_offset=12]; var orgY = c2w[unsafe_offset=13]; var orgZ = c2w[unsafe_offset=14]
     var (pcg_state, pcg_inc) = derive_pcg_seeds(px, py, si, rng_seed)
 
     # Hero-wavelength sample — its own Sobol dimension (2), reserved once per

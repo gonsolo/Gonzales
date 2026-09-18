@@ -12,10 +12,10 @@ def _psc_handle_area_light_source(handle: UnsafePointer[PbrtScanner, MutExternal
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
     sbuf.unsafe_free()
     var params = _psc_collect_params(handle)
-    s[0].cur_attr.is_alight = True
+    s[unsafe_offset=0].cur_attr.is_alight = True
     var rgb = params.get_rgb_or_blackbody("L", RGB(Float32(1)))
     var scale = params.get_float("scale", Float32(1.0))
-    s[0].cur_attr.al_rgb = rgb * scale
+    s[unsafe_offset=0].cur_attr.al_rgb = rgb * scale
 
 def handle_light_source(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                              s: UnsafePointer[SceneParseState, MutExternalOrigin]):
@@ -46,51 +46,51 @@ def handle_light_source(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         var dfrom = params.get_rgb("from", RGB(Float32(0), Float32(0), Float32(0)))
         var dto   = params.get_rgb("to",   RGB(Float32(0), Float32(0), Float32(1)))
         var draw = alloc[Float32](8)
-        draw[0] = dfrom.r; draw[1] = dfrom.g; draw[2] = dfrom.b; draw[3] = Float32(1)
-        draw[4] = dto.r;   draw[5] = dto.g;   draw[6] = dto.b;   draw[7] = Float32(1)
+        draw[unsafe_offset=0] = dfrom.r; draw[unsafe_offset=1] = dfrom.g; draw[unsafe_offset=2] = dfrom.b; draw[unsafe_offset=3] = Float32(1)
+        draw[unsafe_offset=4] = dto.r;   draw[unsafe_offset=5] = dto.g;   draw[unsafe_offset=6] = dto.b;   draw[unsafe_offset=7] = Float32(1)
         var dfin = alloc[Float32](8)
-        transform_points(s[0].ctm.unsafe_ptr(), draw, Int32(2), dfin)
-        var ddx = dfin[4] - dfin[0]
-        var ddy = dfin[5] - dfin[1]
-        var ddz = dfin[6] - dfin[2]
+        transform_points(s[unsafe_offset=0].ctm.unsafe_ptr(), draw, Int32(2), dfin)
+        var ddx = dfin[unsafe_offset=4] - dfin[unsafe_offset=0]
+        var ddy = dfin[unsafe_offset=5] - dfin[unsafe_offset=1]
+        var ddz = dfin[unsafe_offset=6] - dfin[unsafe_offset=2]
         draw.unsafe_free(); dfin.unsafe_free()
         var dlen = sqrt(ddx*ddx + ddy*ddy + ddz*ddz)
         if dlen < Float32(0.0001):
             ddx = Float32(0); ddy = Float32(0); ddz = Float32(1); dlen = Float32(1)
         # stored as the direction of TRAVEL; _sample_distant_light_nee negates
         # it to get the direction toward the light.
-        s[0].distant_dirs.append(ddx / dlen)
-        s[0].distant_dirs.append(ddy / dlen)
-        s[0].distant_dirs.append(ddz / dlen)
-        s[0].distant_rgbs.append(rgb.r * scale)
-        s[0].distant_rgbs.append(rgb.g * scale)
-        s[0].distant_rgbs.append(rgb.b * scale)
+        s[unsafe_offset=0].distant_dirs.append(ddx / dlen)
+        s[unsafe_offset=0].distant_dirs.append(ddy / dlen)
+        s[unsafe_offset=0].distant_dirs.append(ddz / dlen)
+        s[unsafe_offset=0].distant_rgbs.append(rgb.r * scale)
+        s[unsafe_offset=0].distant_rgbs.append(rgb.g * scale)
+        s[unsafe_offset=0].distant_rgbs.append(rgb.b * scale)
     elif _psc_streq(ltype, "point"):
         # Apply current CTM to position
         var raw = alloc[Float32](4)
-        raw[0] = xyz.r; raw[1] = xyz.g; raw[2] = xyz.b; raw[3] = Float32(1)
+        raw[unsafe_offset=0] = xyz.r; raw[unsafe_offset=1] = xyz.g; raw[unsafe_offset=2] = xyz.b; raw[unsafe_offset=3] = Float32(1)
         var fin = alloc[Float32](4)
-        transform_points(s[0].ctm.unsafe_ptr(), raw, Int32(1), fin)
-        s[0].point_pos.append(fin[0])
-        s[0].point_pos.append(fin[1])
-        s[0].point_pos.append(fin[2])
-        s[0].point_rgbs.append(rgb.r * scale)
-        s[0].point_rgbs.append(rgb.g * scale)
-        s[0].point_rgbs.append(rgb.b * scale)
+        transform_points(s[unsafe_offset=0].ctm.unsafe_ptr(), raw, Int32(1), fin)
+        s[unsafe_offset=0].point_pos.append(fin[unsafe_offset=0])
+        s[unsafe_offset=0].point_pos.append(fin[unsafe_offset=1])
+        s[unsafe_offset=0].point_pos.append(fin[unsafe_offset=2])
+        s[unsafe_offset=0].point_rgbs.append(rgb.r * scale)
+        s[unsafe_offset=0].point_rgbs.append(rgb.g * scale)
+        s[unsafe_offset=0].point_rgbs.append(rgb.b * scale)
         raw.unsafe_free(); fin.unsafe_free()
     elif _psc_streq(ltype, "infinite"):
         if filename != "":
-            var file_str = s[0].scene_dir + filename
-            s[0].tex_names.append(String("__inf"))
-            s[0].tex_files.append(file_str)
-            s[0].inf_tex_idx.append(Int32(len(s[0].tex_names) - 1))
+            var file_str = s[unsafe_offset=0].scene_dir + filename
+            s[unsafe_offset=0].tex_names.append(String("__inf"))
+            s[unsafe_offset=0].tex_files.append(file_str)
+            s[unsafe_offset=0].inf_tex_idx.append(Int32(len(s[unsafe_offset=0].tex_names) - 1))
         else:
-            s[0].inf_tex_idx.append(Int32(-1))
-        s[0].inf_rgb.append(rgb.r * scale)
-        s[0].inf_rgb.append(rgb.g * scale)
-        s[0].inf_rgb.append(rgb.b * scale)
+            s[unsafe_offset=0].inf_tex_idx.append(Int32(-1))
+        s[unsafe_offset=0].inf_rgb.append(rgb.r * scale)
+        s[unsafe_offset=0].inf_rgb.append(rgb.g * scale)
+        s[unsafe_offset=0].inf_rgb.append(rgb.b * scale)
         # Store the light's CTM for env-map direction transform
         for ci in range(16):
-            s[0].inf_ctm.append(s[0].ctm[ci])
+            s[unsafe_offset=0].inf_ctm.append(s[unsafe_offset=0].ctm[ci])
 
     ltype.unsafe_free()

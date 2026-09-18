@@ -60,15 +60,15 @@ def _build_scene() -> SceneDescriptor2_C:
         Point3f(-10000.0, -10000.0, 10.0), Point3f(10000.0, -10000.0, 10.0), Point3f(0.0, 10000.0, 10.0),
     ]
     for i in range(n_verts):
-        points[i*4+0] = verts[i].x
-        points[i*4+1] = verts[i].y
-        points[i*4+2] = verts[i].z
-        points[i*4+3] = Float32(1.0)
+        points[unsafe_offset=i*4+0] = verts[i].x
+        points[unsafe_offset=i*4+1] = verts[i].y
+        points[unsafe_offset=i*4+2] = verts[i].z
+        points[unsafe_offset=i*4+3] = Float32(1.0)
     var vertex_indices = alloc[Int64](n_verts)
     for i in range(n_verts):
-        vertex_indices[i] = Int64(i)
+        vertex_indices[unsafe_offset=i] = Int64(i)
     var meshes = alloc[TriangleMesh_C](1)
-    meshes[0] = TriangleMesh_C(
+    meshes[unsafe_offset=0] = TriangleMesh_C(
         points, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), vertex_indices,
         UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
         UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
@@ -77,8 +77,8 @@ def _build_scene() -> SceneDescriptor2_C:
     var n_tris = 1
     var bounds = alloc[Float32](n_tris * 6)
     var p0 = verts[0]; var p1 = verts[1]; var p2 = verts[2]
-    bounds[0] = min(p0.x, min(p1.x, p2.x)); bounds[1] = min(p0.y, min(p1.y, p2.y)); bounds[2] = min(p0.z, min(p1.z, p2.z))
-    bounds[3] = max(p0.x, max(p1.x, p2.x)); bounds[4] = max(p0.y, max(p1.y, p2.y)); bounds[5] = max(p0.z, max(p1.z, p2.z))
+    bounds[unsafe_offset=0] = min(p0.x, min(p1.x, p2.x)); bounds[unsafe_offset=1] = min(p0.y, min(p1.y, p2.y)); bounds[unsafe_offset=2] = min(p0.z, min(p1.z, p2.z))
+    bounds[unsafe_offset=3] = max(p0.x, max(p1.x, p2.x)); bounds[unsafe_offset=4] = max(p0.y, max(p1.y, p2.y)); bounds[unsafe_offset=5] = max(p0.z, max(p1.z, p2.z))
     var max_nodes = n_tris * 2 + 4
     var bvh_nodes = alloc[BVH2Node](max_nodes)
     var order = alloc[Int32](n_tris)
@@ -86,12 +86,12 @@ def _build_scene() -> SceneDescriptor2_C:
     bounds.unsafe_free()
     var prim_ids = alloc[PrimId_C](n_tris)
     for k in range(n_tris):
-        var orig = Int(order[k])
-        prim_ids[k] = PrimId_C(Int64(0), Int64(orig * 3), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+        var orig = Int(order[unsafe_offset=k])
+        prim_ids[unsafe_offset=k] = PrimId_C(Int64(0), Int64(orig * 3), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     order.unsafe_free()
 
     var materials = alloc[Material_C](1)
-    materials[0] = Material_C(
+    materials[unsafe_offset=0] = Material_C(
         MatKind.diffuse, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.8)), RGB(Float32(0.0)), Int32(-1),
         Float32(0.0), Float32(0.0), Int32(-1), Int32(-1), Float32(1.0), Int32(-1), Int32(-1),
@@ -130,12 +130,12 @@ def _identity_camera_matrices() -> Tuple[UnsafePointer[Float32, MutExternalOrigi
     # (columns 0/1 are all zero), independent of realistic raster-to-camera
     # semantics -- see this file's module docstring.
     var r2c = alloc[Float32](16)
-    for i in range(16): r2c[i] = Float32(0.0)
-    r2c[14] = Float32(1.0)
-    r2c[15] = Float32(1.0)
+    for i in range(16): r2c[unsafe_offset=i] = Float32(0.0)
+    r2c[unsafe_offset=14] = Float32(1.0)
+    r2c[unsafe_offset=15] = Float32(1.0)
     var c2w = alloc[Float32](16)
-    for i in range(16): c2w[i] = Float32(0.0)
-    c2w[0] = Float32(1.0); c2w[5] = Float32(1.0); c2w[10] = Float32(1.0); c2w[15] = Float32(1.0)
+    for i in range(16): c2w[unsafe_offset=i] = Float32(0.0)
+    c2w[unsafe_offset=0] = Float32(1.0); c2w[unsafe_offset=5] = Float32(1.0); c2w[unsafe_offset=10] = Float32(1.0); c2w[unsafe_offset=15] = Float32(1.0)
     return (r2c, c2w)
 
 # Both subpath halves of a VCM pass share one hero-wavelength set (see
@@ -190,11 +190,11 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
     while active == Int8(1) and n_iters < Int(_BDPT_MAX_DEPTH):
         n_iters += 1
         var ray_o = ro; var ray_d = rd
-        scratch_new[0].hit = Int8(0)
+        scratch_new[unsafe_offset=0].hit = Int8(0)
         var ray = Ray_C(ray_o, ray_d)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch_new)
         test_spheres(sd.spheres, Int(sd.sphereCount), ray, scratch_new)
-        var inter = scratch_new[0]
+        var inter = scratch_new[unsafe_offset=0]
 
         var cont = _bdpt_camera_path_bounce[False](
             sd, pcg_bounce, False, inter, scratch_new,

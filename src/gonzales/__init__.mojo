@@ -244,8 +244,8 @@ def main() raises:
     var path_len = scene_path.byte_length()
     var path_cstr = alloc[UInt8](path_len + 1)
     for k in range(path_len):
-        path_cstr[k] = scene_path.as_bytes()[k]
-    path_cstr[path_len] = UInt8(0)
+        path_cstr[unsafe_offset=k] = scene_path.as_bytes()[k]
+    path_cstr[unsafe_offset=path_len] = UInt8(0)
 
     if pixel_x >= 0 and pixel_y >= 0:
         debug_trace_pixel(path_cstr, pixel_x, pixel_y, override_w=override_w, override_h=override_h)

@@ -47,16 +47,16 @@ struct MitsubaMesh(Movable):
 
 
 def _mit_ser_u32(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int:
-    return Int((buf + pos).unsafe_bitcast[UInt32]()[0])
+    return Int((buf.unsafe_offset(pos)).unsafe_bitcast[UInt32]()[unsafe_offset=0])
 
 def _mit_ser_u64(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int:
-    return Int((buf + pos).unsafe_bitcast[UInt64]()[0])
+    return Int((buf.unsafe_offset(pos)).unsafe_bitcast[UInt64]()[unsafe_offset=0])
 
 def _mit_ser_f32(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float32:
-    return (buf + pos).unsafe_bitcast[Float32]()[0]
+    return (buf.unsafe_offset(pos)).unsafe_bitcast[Float32]()[unsafe_offset=0]
 
 def _mit_ser_f64(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float64:
-    return (buf + pos).unsafe_bitcast[Float64]()[0]
+    return (buf.unsafe_offset(pos)).unsafe_bitcast[Float64]()[unsafe_offset=0]
 
 
 def load_mitsuba_serialized(path: String) -> MitsubaMesh:
@@ -74,8 +74,8 @@ def load_mitsuba_serialized(path: String) -> MitsubaMesh:
         return mesh^
     var raw = alloc[UInt8](raw_n)
     for i in range(raw_n):
-        raw[i] = raw_list[i]
-    var version = Int(raw.unsafe_bitcast[UInt16]()[1])
+        raw[unsafe_offset=i] = raw_list[i]
+    var version = Int(raw.unsafe_bitcast[UInt16]()[unsafe_offset=1])
     raw.unsafe_free()
 
     var inflated_path = path + ".inflated"
@@ -101,7 +101,7 @@ def load_mitsuba_serialized(path: String) -> MitsubaMesh:
         return mesh^
     var body = alloc[UInt8](n)
     for i in range(n):
-        body[i] = body_list[i]
+        body[unsafe_offset=i] = body_list[i]
 
     var off = 0
     var flags = _mit_ser_u32(body, off); off += 4
@@ -111,7 +111,7 @@ def load_mitsuba_serialized(path: String) -> MitsubaMesh:
     var is_double   = (flags & 0x2000) != 0
 
     if version == 4:
-        while off < n and body[off] != UInt8(0):
+        while off < n and body[unsafe_offset=off] != UInt8(0):
             off += 1
         off += 1
 

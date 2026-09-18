@@ -31,34 +31,34 @@ def test_vulkaninterop_rt_trace_matches_known_geometry() raises:
     var pts0 = alloc[Float32](12)
     var tri0 = [Float32(0), 0, 0, 1,  1, 0, 0, 1,  0, 1, 0, 1]
     for i in range(12):
-        pts0[i] = tri0[i]
+        pts0[unsafe_offset=i] = tri0[i]
     var idx0 = alloc[Int64](3)
-    idx0[0] = 0; idx0[1] = 1; idx0[2] = 2
+    idx0[unsafe_offset=0] = 0; idx0[unsafe_offset=1] = 1; idx0[unsafe_offset=2] = 2
 
     # Mesh 1: triangle (5,0,0)-(6,0,0)-(5,1,0) at z=0, far away in x.
     var pts1 = alloc[Float32](12)
     var tri1 = [Float32(5), 0, 0, 1,  6, 0, 0, 1,  5, 1, 0, 1]
     for i in range(12):
-        pts1[i] = tri1[i]
+        pts1[unsafe_offset=i] = tri1[i]
     var idx1 = alloc[Int64](3)
-    idx1[0] = 0; idx1[1] = 1; idx1[2] = 2
+    idx1[unsafe_offset=0] = 0; idx1[unsafe_offset=1] = 1; idx1[unsafe_offset=2] = 2
 
     var meshes = alloc[TriangleMesh_C](2)
-    meshes[0] = TriangleMesh_C(
+    meshes[unsafe_offset=0] = TriangleMesh_C(
         pts0, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), idx0,
         UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
         UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     )
-    meshes[1] = TriangleMesh_C(
+    meshes[unsafe_offset=1] = TriangleMesh_C(
         pts1, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), idx1,
         UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
         UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     )
 
     var point_counts = alloc[Int64](2)
-    point_counts[0] = 3; point_counts[1] = 3
+    point_counts[unsafe_offset=0] = 3; point_counts[unsafe_offset=1] = 3
     var idx_counts = alloc[Int64](2)
-    idx_counts[0] = 3; idx_counts[1] = 3
+    idx_counts[unsafe_offset=0] = 3; idx_counts[unsafe_offset=1] = 3
 
     comptime maxRays = 16
     var no_templates = UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling()
@@ -102,20 +102,20 @@ def test_vulkaninterop_rt_trace_matches_known_geometry() raises:
 
         # ray 0: hits mesh 0's triangle at u=v=0.25 (Moller-Trumbore
         # convention, same as vulkanrt.mojo's own verified barycentrics).
-        assert_true(iptr[0*8 + 6] == 1)          # hitFlag
-        assert_true(iptr[0*8 + 4] == 0)          # hitMesh
-        assert_true(iptr[0*8 + 5] == 0)          # hitTriangle
-        assert_true(fptr[0*8 + 0] > Float32(0.9) and fptr[0*8 + 0] < Float32(1.1))  # hitT ~ 1.0
-        assert_true(fptr[0*8 + 1] > Float32(0.2) and fptr[0*8 + 1] < Float32(0.3))  # u ~ 0.25
-        assert_true(fptr[0*8 + 2] > Float32(0.2) and fptr[0*8 + 2] < Float32(0.3))  # v ~ 0.25
+        assert_true(iptr[unsafe_offset=0*8 + 6] == 1)          # hitFlag
+        assert_true(iptr[unsafe_offset=0*8 + 4] == 0)          # hitMesh
+        assert_true(iptr[unsafe_offset=0*8 + 5] == 0)          # hitTriangle
+        assert_true(fptr[unsafe_offset=0*8 + 0] > Float32(0.9) and fptr[unsafe_offset=0*8 + 0] < Float32(1.1))  # hitT ~ 1.0
+        assert_true(fptr[unsafe_offset=0*8 + 1] > Float32(0.2) and fptr[unsafe_offset=0*8 + 1] < Float32(0.3))  # u ~ 0.25
+        assert_true(fptr[unsafe_offset=0*8 + 2] > Float32(0.2) and fptr[unsafe_offset=0*8 + 2] < Float32(0.3))  # v ~ 0.25
 
         # ray 1: hits mesh 1's triangle.
-        assert_true(iptr[1*8 + 6] == 1)
-        assert_true(iptr[1*8 + 4] == 1)
-        assert_true(iptr[1*8 + 5] == 0)
+        assert_true(iptr[unsafe_offset=1*8 + 6] == 1)
+        assert_true(iptr[unsafe_offset=1*8 + 4] == 1)
+        assert_true(iptr[unsafe_offset=1*8 + 5] == 0)
 
         # ray 2: misses both.
-        assert_true(iptr[2*8 + 6] == 0)
+        assert_true(iptr[unsafe_offset=2*8 + 6] == 0)
 
     vulkaninterop_rt_destroy_scene(scene)
 
@@ -140,32 +140,32 @@ def test_vulkaninterop_rt_instancing_places_template_correctly() raises:
     var pts0 = alloc[Float32](12)
     var tri0 = [Float32(0), 0, 0, 1,  1, 0, 0, 1,  0, 1, 0, 1]
     for i in range(12):
-        pts0[i] = tri0[i]
+        pts0[unsafe_offset=i] = tri0[i]
     var idx0 = alloc[Int64](3)
-    idx0[0] = 0; idx0[1] = 1; idx0[2] = 2
+    idx0[unsafe_offset=0] = 0; idx0[unsafe_offset=1] = 1; idx0[unsafe_offset=2] = 2
 
     var meshes = alloc[TriangleMesh_C](1)
-    meshes[0] = TriangleMesh_C(
+    meshes[unsafe_offset=0] = TriangleMesh_C(
         pts0, UnsafePointer[Int64, MutExternalOrigin].unsafe_dangling(), idx0,
         UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
         UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling(),
     )
     var point_counts = alloc[Int64](1)
-    point_counts[0] = 3
+    point_counts[unsafe_offset=0] = 3
     var idx_counts = alloc[Int64](1)
-    idx_counts[0] = 3
+    idx_counts[unsafe_offset=0] = 3
 
-    var template_start = alloc[Int64](1); template_start[0] = 0
-    var template_end   = alloc[Int64](1); template_end[0] = 1
+    var template_start = alloc[Int64](1); template_start[unsafe_offset=0] = 0
+    var template_end   = alloc[Int64](1); template_end[unsafe_offset=0] = 1
 
     # Column-major 4x4 identity and +5-in-x translation (gonzales's own
     # transform.mojo convention: M[col*4+row], translation in column 3).
     var o2w = alloc[Float32](32)
-    for i in range(32): o2w[i] = Float32(0)
-    o2w[0] = 1; o2w[5] = 1; o2w[10] = 1; o2w[15] = 1               # instance 0: identity
-    o2w[16] = 1; o2w[21] = 1; o2w[26] = 1; o2w[31] = 1; o2w[28] = 5  # instance 1: +5 in x
+    for i in range(32): o2w[unsafe_offset=i] = Float32(0)
+    o2w[unsafe_offset=0] = 1; o2w[unsafe_offset=5] = 1; o2w[unsafe_offset=10] = 1; o2w[unsafe_offset=15] = 1               # instance 0: identity
+    o2w[unsafe_offset=16] = 1; o2w[unsafe_offset=21] = 1; o2w[unsafe_offset=26] = 1; o2w[unsafe_offset=31] = 1; o2w[unsafe_offset=28] = 5  # instance 1: +5 in x
     var inst_tmpl_idx = alloc[Int32](2)
-    inst_tmpl_idx[0] = 0; inst_tmpl_idx[1] = 0
+    inst_tmpl_idx[unsafe_offset=0] = 0; inst_tmpl_idx[unsafe_offset=1] = 0
 
     comptime maxRays = 16
     var no_curve_aabbs = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
@@ -205,20 +205,20 @@ def test_vulkaninterop_rt_instancing_places_template_correctly() raises:
         var iptr = fptr.unsafe_bitcast[Int32]()
 
         # ray 0 -> instance 0: instanceCustomIndex = mesh_count(1) + 0 = 1.
-        assert_true(iptr[0*8 + 6] == 1)              # hitFlag
-        assert_true(iptr[0*8 + 4] == 1)               # hitMesh (raw instanceCustomIndex)
-        assert_true(iptr[0*8 + 5] == 0)               # hitTriangle
-        assert_true(iptr[0*8 + 7] == 0)               # geometryIndex (template has 1 mesh)
-        assert_true(fptr[0*8 + 0] > Float32(0.9) and fptr[0*8 + 0] < Float32(1.1))  # hitT ~ 1.0
+        assert_true(iptr[unsafe_offset=0*8 + 6] == 1)              # hitFlag
+        assert_true(iptr[unsafe_offset=0*8 + 4] == 1)               # hitMesh (raw instanceCustomIndex)
+        assert_true(iptr[unsafe_offset=0*8 + 5] == 0)               # hitTriangle
+        assert_true(iptr[unsafe_offset=0*8 + 7] == 0)               # geometryIndex (template has 1 mesh)
+        assert_true(fptr[unsafe_offset=0*8 + 0] > Float32(0.9) and fptr[unsafe_offset=0*8 + 0] < Float32(1.1))  # hitT ~ 1.0
 
         # ray 1 -> instance 1: instanceCustomIndex = mesh_count(1) + 1 = 2.
-        assert_true(iptr[1*8 + 6] == 1)
-        assert_true(iptr[1*8 + 4] == 2)
-        assert_true(iptr[1*8 + 5] == 0)
-        assert_true(iptr[1*8 + 7] == 0)
+        assert_true(iptr[unsafe_offset=1*8 + 6] == 1)
+        assert_true(iptr[unsafe_offset=1*8 + 4] == 2)
+        assert_true(iptr[unsafe_offset=1*8 + 5] == 0)
+        assert_true(iptr[unsafe_offset=1*8 + 7] == 0)
 
         # ray 2: misses both instances.
-        assert_true(iptr[2*8 + 6] == 0)
+        assert_true(iptr[unsafe_offset=2*8 + 6] == 0)
 
     vulkaninterop_rt_destroy_scene(scene)
 

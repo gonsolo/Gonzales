@@ -260,7 +260,7 @@ def test_guide_merge_sums_energy_elementwise() raises:
     for _ in range(4):
         guide_record(src, 0, q0[0], q0[1], q0[2], Float32(1.0))
     guide_merge(dst, src)
-    var total = dst.dnodes[0].energy
+    var total = dst.dnodes[unsafe_offset=0].energy
     guide_free(dst)
     guide_free(src)
     assert_true(_close(total, Float32(7.0)))

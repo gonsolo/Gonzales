@@ -198,9 +198,9 @@ def store_vec3[O: Origin[mut=True]](dst: UnsafePointer[Float32, O], slot: Int, v
     Float32 buffer at `slot` -- i.e. dst[slot*3 : slot*3+3] -- replacing the
     dst[slot*3+0]=v.x; dst[slot*3+1]=v.y; dst[slot*3+2]=v.z pattern repeated
     at per-pixel G-buffer-style write sites."""
-    dst[slot*3+0] = v[0]
-    dst[slot*3+1] = v[1]
-    dst[slot*3+2] = v[2]
+    dst[unsafe_offset=slot*3+0] = v[0]
+    dst[unsafe_offset=slot*3+1] = v[1]
+    dst[unsafe_offset=slot*3+2] = v[2]
 
 # <</listing>>
 
@@ -1474,7 +1474,7 @@ def _grid_density_at(grid: Grid_C, xi: Int, yi: Int, zi: Int) -> Float32:
     var cx = max(0, min(Int(grid.nx) - 1, xi))
     var cy = max(0, min(Int(grid.ny) - 1, yi))
     var cz = max(0, min(Int(grid.nz) - 1, zi))
-    return grid.density[(cz * Int(grid.ny) + cy) * Int(grid.nx) + cx]
+    return grid.density[unsafe_offset=(cz * Int(grid.ny) + cy) * Int(grid.nx) + cx]
 
 @always_inline
 def grid_sample_density(grid: Grid_C, p_world: Vec3f) -> Float32:
@@ -2011,11 +2011,11 @@ def light_sampler_sample(ls: LightSampler_C, u: Float32) -> Tuple[Int, Float32]:
     var hi = Int(ls.n) - 1
     while lo < hi:
         var mid = (lo + hi) >> 1
-        if ls.cdf[mid + 1] <= u:
+        if ls.cdf[unsafe_offset=mid + 1] <= u:
             lo = mid + 1
         else:
             hi = mid
-    var pdf = ls.cdf[lo + 1] - ls.cdf[lo]
+    var pdf = ls.cdf[unsafe_offset=lo + 1] - ls.cdf[unsafe_offset=lo]
     return (lo, max(pdf, Float32(1e-6)))
 
 @always_inline
@@ -2025,7 +2025,7 @@ def light_sampler_pdf(ls: LightSampler_C, light_idx: Int32) -> Float32:
     specific light's pdf without redrawing it (e.g. ReSTIR DI's MIS weight
     for an already-chosen reservoir winner, restir_di.mojo)."""
     var i = Int(light_idx)
-    return max(ls.cdf[i + 1] - ls.cdf[i], Float32(1e-6))
+    return max(ls.cdf[unsafe_offset=i + 1] - ls.cdf[unsafe_offset=i], Float32(1e-6))
 
 
 @fieldwise_init
@@ -2349,7 +2349,7 @@ def medium_grid_for(
             Point3f(Float32(0), Float32(0), Float32(0)),
             Point3f(Float32(0), Float32(0), Float32(0)),
             SIMD[DType.float32, 16](0), Float32(0))
-    return grids[Int(med.grid_idx)]
+    return grids[unsafe_offset=Int(med.grid_idx)]
 
 @always_inline
 def medium_nvdb_for(
@@ -2363,7 +2363,7 @@ def medium_nvdb_for(
             Vec3f(Float32(0), Float32(0), Float32(0)),
             Point3f(Float32(0), Float32(0), Float32(0)),
             Point3f(Float32(0), Float32(0), Float32(0)), Float32(0))
-    return nvdb_grids[Int(med.nvdb_idx)]
+    return nvdb_grids[unsafe_offset=Int(med.nvdb_idx)]
 
 @always_inline
 def medium_emission_spectral(
@@ -2495,7 +2495,7 @@ def sample_free_flight(
         # unchanged. Non-emissive media take the nvdb_temp_idx < 0 branch and
         # pay nothing.
         if med.nvdb_temp_idx >= Int32(0) and med.le_scale > Float32(0.0):
-            var tgrid = nvdb_grids[Int(med.nvdb_temp_idx)]
+            var tgrid = nvdb_grids[unsafe_offset=Int(med.nvdb_temp_idx)]
             var tk = (nvdb_sample_density(tgrid, p_world) - med.temp_offset) * med.temp_scale
             if tk > Float32(100.0):
                 var sigma_a_real = density * med.sigma_a.r

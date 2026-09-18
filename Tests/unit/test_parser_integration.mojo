@@ -19,13 +19,13 @@ def _scanner_from_string(s: String) -> UnsafePointer[PbrtScanner, MutExternalOri
     var n = s.byte_length()
     var buf = alloc[UInt8](n + 1)
     for i in range(n):
-        buf[i] = s.as_bytes()[i]
-    buf[n] = UInt8(0)
+        buf[unsafe_offset=i] = s.as_bytes()[i]
+    buf[unsafe_offset=n] = UInt8(0)
     var handle = alloc[PbrtScanner](1)
-    handle[0].buffer = buf
-    handle[0].total_bytes = Int32(n)
-    handle[0].cursor = Int32(0)
-    handle[0].is_at_end = Int32(0)
+    handle[unsafe_offset=0].buffer = buf
+    handle[unsafe_offset=0].total_bytes = Int32(n)
+    handle[unsafe_offset=0].cursor = Int32(0)
+    handle[unsafe_offset=0].is_at_end = Int32(0)
     return handle
 
 # ── handle_curve_shape: cp_cap growth past the old fixed 512-point cap ──────
@@ -49,10 +49,10 @@ def test_curve_shape_grows_past_default_control_point_cap() raises:
     handle_curve_shape(handle, s_ptr)
 
     var expected_segments = N_POINTS - 3
-    assert_true(len(s_ptr[0].curves_w0) == expected_segments)
-    assert_true(len(s_ptr[0].curves_w1) == expected_segments)
+    assert_true(len(s_ptr[unsafe_offset=0].curves_w0) == expected_segments)
+    assert_true(len(s_ptr[unsafe_offset=0].curves_w1) == expected_segments)
     # 4 control points per segment, 3 floats each
-    assert_true(len(s_ptr[0].curves_cp) == expected_segments * 4 * 3)
+    assert_true(len(s_ptr[unsafe_offset=0].curves_cp) == expected_segments * 4 * 3)
     scanner_free(handle)
     _ = s_ptr.take_pointee(); s_ptr.unsafe_free()
 
@@ -77,16 +77,16 @@ def test_named_medium_bracket_wrapped_type_does_not_desync() raises:
     s_ptr.init_pointee_move(SceneParseState())
     handle_named_medium(handle, s_ptr)
 
-    assert_true(len(s_ptr[0].med_names) == 1)
-    assert_true(s_ptr[0].med_names[0] == String("fog"))
-    assert_true(s_ptr[0].grid_nx[0] == Int32(2))
-    assert_true(s_ptr[0].grid_ny[0] == Int32(2))
-    assert_true(s_ptr[0].grid_nz[0] == Int32(2))
-    assert_true(_close(s_ptr[0].med_sa[0], Float32(1.0)))
-    assert_true(_close(s_ptr[0].med_ss[0], Float32(2.0)))
-    assert_true(len(s_ptr[0].grid_density) == 8)
-    assert_true(_close(s_ptr[0].grid_density[0], Float32(0.1)))
-    assert_true(_close(s_ptr[0].grid_density[7], Float32(0.8)))
+    assert_true(len(s_ptr[unsafe_offset=0].med_names) == 1)
+    assert_true(s_ptr[unsafe_offset=0].med_names[0] == String("fog"))
+    assert_true(s_ptr[unsafe_offset=0].grid_nx[0] == Int32(2))
+    assert_true(s_ptr[unsafe_offset=0].grid_ny[0] == Int32(2))
+    assert_true(s_ptr[unsafe_offset=0].grid_nz[0] == Int32(2))
+    assert_true(_close(s_ptr[unsafe_offset=0].med_sa[0], Float32(1.0)))
+    assert_true(_close(s_ptr[unsafe_offset=0].med_ss[0], Float32(2.0)))
+    assert_true(len(s_ptr[unsafe_offset=0].grid_density) == 8)
+    assert_true(_close(s_ptr[unsafe_offset=0].grid_density[0], Float32(0.1)))
+    assert_true(_close(s_ptr[unsafe_offset=0].grid_density[7], Float32(0.8)))
     scanner_free(handle)
     _ = s_ptr.take_pointee(); s_ptr.unsafe_free()
 
@@ -117,10 +117,10 @@ def test_named_material_long_normalmap_path_is_not_truncated() raises:
     s_ptr.init_pointee_move(SceneParseState())
     _psc_handle_make_named_material(handle, s_ptr, False)
 
-    assert_true(len(s_ptr[0].named_materials) == 1)
-    assert_true(s_ptr[0].named_materials[0].normal_tex_idx == Int32(0))
-    assert_true(len(s_ptr[0].tex_files) == 1)
-    assert_true(s_ptr[0].tex_files[0].endswith(long_name))
+    assert_true(len(s_ptr[unsafe_offset=0].named_materials) == 1)
+    assert_true(s_ptr[unsafe_offset=0].named_materials[0].normal_tex_idx == Int32(0))
+    assert_true(len(s_ptr[unsafe_offset=0].tex_files) == 1)
+    assert_true(s_ptr[unsafe_offset=0].tex_files[0].endswith(long_name))
     scanner_free(handle)
     _ = s_ptr.take_pointee(); s_ptr.unsafe_free()
 

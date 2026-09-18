@@ -110,11 +110,11 @@ def _fill_boxes(bounds: UnsafePointer[Float32, MutExternalOrigin], n: Int, seed:
     var cc = alloc[Float32](max(clusters, 1) * 3)
     for k in range(max(clusters, 1) * 3):
         s = s * UInt64(6364136223846793005) + UInt64(1442695040888963407)
-        cc[k] = Float32(s >> 40) / Float32(1 << 24) * Float32(100.0)
+        cc[unsafe_offset=k] = Float32(s >> 40) / Float32(1 << 24) * Float32(100.0)
     for i in range(n):
         if dup_every > 0 and i > 0 and i % dup_every == 0:
             for a in range(6):
-                bounds[i * 6 + a] = bounds[(i - 1) * 6 + a]
+                bounds[unsafe_offset=i * 6 + a] = bounds[unsafe_offset=(i - 1) * 6 + a]
             continue
         var r = InlineArray[Float32, 4](fill=Float32(0))
         for a in range(4):
@@ -124,9 +124,9 @@ def _fill_boxes(bounds: UnsafePointer[Float32, MutExternalOrigin], n: Int, seed:
         for a in range(3):
             var c = r[a] * Float32(100.0)
             if clusters > 0:
-                c = cc[(i % clusters) * 3 + a] + (r[a] - Float32(0.5)) * Float32(4.0)
-            bounds[i * 6 + a] = c - half
-            bounds[i * 6 + 3 + a] = c + half
+                c = cc[unsafe_offset=(i % clusters) * 3 + a] + (r[a] - Float32(0.5)) * Float32(4.0)
+            bounds[unsafe_offset=i * 6 + a] = c - half
+            bounds[unsafe_offset=i * 6 + 3 + a] = c + half
     cc.unsafe_free()
 
 # A small subtree size makes the parallel build split many levels near the
@@ -146,13 +146,13 @@ def _check_parallel_matches_serial(n: Int, seed: UInt64, clusters: Int, dup_ever
     assert_equal(serial_count, parallel_count)
     var mismatches = 0
     for i in range(Int(serial_count)):
-        var a = serial_nodes[i]; var b = parallel_nodes[i]
+        var a = serial_nodes[unsafe_offset=i]; var b = parallel_nodes[unsafe_offset=i]
         if a.offset != b.offset or a.count != b.count or \
            a.min.x != b.min.x or a.min.y != b.min.y or a.min.z != b.min.z or \
            a.max.x != b.max.x or a.max.y != b.max.y or a.max.z != b.max.z:
             mismatches += 1
     for i in range(n):
-        if serial_order[i] != parallel_order[i]:
+        if serial_order[unsafe_offset=i] != parallel_order[unsafe_offset=i]:
             mismatches += 1
     assert_equal(mismatches, 0)
     bounds.unsafe_free(); serial_nodes.unsafe_free(); parallel_nodes.unsafe_free()

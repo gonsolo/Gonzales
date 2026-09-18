@@ -7,11 +7,11 @@ from .geometry import Vec3f
 
 def _write_identity(result: UnsafePointer[Float32, MutExternalOrigin]) -> Int32:
     for i in range(16):
-        result[i] = Float32(0)
-    result[0] = Float32(1)
-    result[5] = Float32(1)
-    result[10] = Float32(1)
-    result[15] = Float32(1)
+        result[unsafe_offset=i] = Float32(0)
+    result[unsafe_offset=0] = Float32(1)
+    result[unsafe_offset=5] = Float32(1)
+    result[unsafe_offset=10] = Float32(1)
+    result[unsafe_offset=15] = Float32(1)
     return Int32(0)
 
 
@@ -25,8 +25,8 @@ def matrix_multiply(
         for i in range(4):
             var s = Float32(0)
             for k in range(4):
-                s += a[k * 4 + i] * b[j * 4 + k]
-            result[j * 4 + i] = s
+                s += a[unsafe_offset=k * 4 + i] * b[unsafe_offset=j * 4 + k]
+            result[unsafe_offset=j * 4 + i] = s
 
 
 def matrix_invert(
@@ -37,7 +37,7 @@ def matrix_invert(
     # On a singular matrix, writes the identity and returns 0.
     var minv = InlineArray[Float32, 16](fill=0)
     for i in range(16):
-        minv[i] = m[i]
+        minv[i] = m[unsafe_offset=i]
     var indxc = InlineArray[Int, 4](fill=0)
     var indxr = InlineArray[Int, 4](fill=0)
     var ipiv = InlineArray[Int, 4](fill=0)
@@ -91,7 +91,7 @@ def matrix_invert(
                 minv[cs * 4 + rowIndex] = tmp
 
     for i in range(16):
-        result[i] = minv[i]
+        result[unsafe_offset=i] = minv[i]
     return Int32(1)
 
 
@@ -105,13 +105,13 @@ def transform_points(
     count: Int32,
     points_out: UnsafePointer[Float32, MutExternalOrigin],
 ):
-    var m0 = matrix[0];  var m1 = matrix[1];  var m2 = matrix[2];  var m3 = matrix[3]
-    var m4 = matrix[4];  var m5 = matrix[5];  var m6 = matrix[6];  var m7 = matrix[7]
-    var m8 = matrix[8];  var m9 = matrix[9];  var m10 = matrix[10]; var m11 = matrix[11]
-    var m12 = matrix[12]; var m13 = matrix[13]; var m14 = matrix[14]; var m15 = matrix[15]
+    var m0 = matrix[unsafe_offset=0];  var m1 = matrix[unsafe_offset=1];  var m2 = matrix[unsafe_offset=2];  var m3 = matrix[unsafe_offset=3]
+    var m4 = matrix[unsafe_offset=4];  var m5 = matrix[unsafe_offset=5];  var m6 = matrix[unsafe_offset=6];  var m7 = matrix[unsafe_offset=7]
+    var m8 = matrix[unsafe_offset=8];  var m9 = matrix[unsafe_offset=9];  var m10 = matrix[unsafe_offset=10]; var m11 = matrix[unsafe_offset=11]
+    var m12 = matrix[unsafe_offset=12]; var m13 = matrix[unsafe_offset=13]; var m14 = matrix[unsafe_offset=14]; var m15 = matrix[unsafe_offset=15]
     for i in range(Int(count)):
         var b = i * 4
-        var px = points_in[b];  var py = points_in[b+1];  var pz = points_in[b+2]
+        var px = points_in[unsafe_offset=b];  var py = points_in[unsafe_offset=b+1];  var pz = points_in[unsafe_offset=b+2]
         var rx = m0*px + m4*py + m8*pz + m12
         var ry = m1*px + m5*py + m9*pz + m13
         var rz = m2*px + m6*py + m10*pz + m14
@@ -119,7 +119,7 @@ def transform_points(
         if rw != Float32(1) and rw != Float32(0):
             var inv_rw = Float32(1) / rw
             rx *= inv_rw; ry *= inv_rw; rz *= inv_rw
-        points_out[b] = rx;  points_out[b+1] = ry;  points_out[b+2] = rz;  points_out[b+3] = Float32(1)
+        points_out[unsafe_offset=b] = rx;  points_out[unsafe_offset=b+1] = ry;  points_out[unsafe_offset=b+2] = rz;  points_out[unsafe_offset=b+3] = Float32(1)
 
 
 @always_inline
@@ -151,12 +151,12 @@ def transform_normals(
     # directly with no transpose -- a no-op difference for symmetric inputs
     # (identity, uniform scale) but wrong for any real rotation, silently
     # applying the inverse rotation instead of the forward one.
-    var i0 = inv_matrix[0]; var i1 = inv_matrix[1]; var i2 = inv_matrix[2]
-    var i4 = inv_matrix[4]; var i5 = inv_matrix[5]; var i6 = inv_matrix[6]
-    var i8 = inv_matrix[8]; var i9 = inv_matrix[9]; var i10 = inv_matrix[10]
+    var i0 = inv_matrix[unsafe_offset=0]; var i1 = inv_matrix[unsafe_offset=1]; var i2 = inv_matrix[unsafe_offset=2]
+    var i4 = inv_matrix[unsafe_offset=4]; var i5 = inv_matrix[unsafe_offset=5]; var i6 = inv_matrix[unsafe_offset=6]
+    var i8 = inv_matrix[unsafe_offset=8]; var i9 = inv_matrix[unsafe_offset=9]; var i10 = inv_matrix[unsafe_offset=10]
     for i in range(Int(count)):
         var b = i * 3
-        var nx = normals_in[b];  var ny = normals_in[b+1];  var nz = normals_in[b+2]
-        normals_out[b]   = i0*nx + i1*ny + i2*nz
-        normals_out[b+1] = i4*nx + i5*ny + i6*nz
-        normals_out[b+2] = i8*nx + i9*ny + i10*nz
+        var nx = normals_in[unsafe_offset=b];  var ny = normals_in[unsafe_offset=b+1];  var nz = normals_in[unsafe_offset=b+2]
+        normals_out[unsafe_offset=b]   = i0*nx + i1*ny + i2*nz
+        normals_out[unsafe_offset=b+1] = i4*nx + i5*ny + i6*nz
+        normals_out[unsafe_offset=b+2] = i8*nx + i9*ny + i10*nz

@@ -277,7 +277,7 @@ def _scene_bounding_sphere(ref sd: SceneDescriptor2_C) -> Tuple[Point3f, Float32
     _sample_disk_perpendicular) centered on the scene gives every emitted
     ray a chance to actually enter the scene, same technique pbrt uses
     (DistantLight::SampleLe / ImageInfiniteLight::SampleLe)."""
-    var root = sd.bvh2Nodes[0]
+    var root = sd.bvh2Nodes[unsafe_offset=0]
     var diag = root.max - root.min
     var center = root.min + diag * Float32(0.5)
     var radius = diag.length() * Float32(0.5)
@@ -352,7 +352,7 @@ def _lower_bound_bvh(arr: UnsafePointer[Float32, MutExternalOrigin], lo: Int, hi
     var l = lo; var h = hi
     while l < h:
         var mid = (l + h) // 2
-        if arr[mid] < val:
+        if arr[unsafe_offset=mid] < val:
             l = mid + 1
         else:
             h = mid
@@ -382,11 +382,11 @@ def _sample_infinite_light_textured(
     var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
     var row_idx = _lower_bound_bvh(ilight.cdf_ptr, 0, ih, u.x) - 1
     row_idx = max(0, min(row_idx, ih - 1))
-    var dp_row = ilight.cdf_ptr[row_idx + 1] - ilight.cdf_ptr[row_idx]
+    var dp_row = ilight.cdf_ptr[unsafe_offset=row_idx + 1] - ilight.cdf_ptr[unsafe_offset=row_idx]
     var cond_base = (ih + 1) + row_idx * (iw + 1)
     var col_idx = _lower_bound_bvh(ilight.cdf_ptr, cond_base, cond_base + iw, u.y) - cond_base - 1
     col_idx = max(0, min(col_idx, iw - 1))
-    var dp_col = ilight.cdf_ptr[cond_base + col_idx + 1] - ilight.cdf_ptr[cond_base + col_idx]
+    var dp_col = ilight.cdf_ptr[unsafe_offset=cond_base + col_idx + 1] - ilight.cdf_ptr[unsafe_offset=cond_base + col_idx]
 
     var sample_u = (Float32(col_idx) + Float32(0.5)) / Float32(iw)
     var sample_v = (Float32(row_idx) + Float32(0.5)) / Float32(ih)
@@ -394,16 +394,16 @@ def _sample_infinite_light_textured(
     var local_d = Vec3f(local_d_s[0], local_d_s[1], local_d_s[2])
 
     var env_dir = Vec3f(
-        w2l[0]*local_d.x + w2l[1]*local_d.y + w2l[2]*local_d.z,
-        w2l[4]*local_d.x + w2l[5]*local_d.y + w2l[6]*local_d.z,
-        w2l[8]*local_d.x + w2l[9]*local_d.y + w2l[10]*local_d.z,
+        w2l[unsafe_offset=0]*local_d.x + w2l[unsafe_offset=1]*local_d.y + w2l[unsafe_offset=2]*local_d.z,
+        w2l[unsafe_offset=4]*local_d.x + w2l[unsafe_offset=5]*local_d.y + w2l[unsafe_offset=6]*local_d.z,
+        w2l[unsafe_offset=8]*local_d.x + w2l[unsafe_offset=9]*local_d.y + w2l[unsafe_offset=10]*local_d.z,
     )
 
     var px = min(iw - 1, max(0, Int(sample_u * Float32(iw))))
     var py = min(ih - 1, max(0, Int(sample_v * Float32(ih))))
-    var pr = ilight.pixels_ptr[(py*iw+px)*3+0]
-    var pg = ilight.pixels_ptr[(py*iw+px)*3+1]
-    var pb = ilight.pixels_ptr[(py*iw+px)*3+2]
+    var pr = ilight.pixels_ptr[unsafe_offset=(py*iw+px)*3+0]
+    var pg = ilight.pixels_ptr[unsafe_offset=(py*iw+px)*3+1]
+    var pb = ilight.pixels_ptr[unsafe_offset=(py*iw+px)*3+2]
     var env_rgb = RGB(pr, pg, pb) * ilight.scale
 
     var pdf_light: Float32
@@ -620,21 +620,21 @@ def _eval_infinite_light_and_pdf(ilight: InfiniteLight_C, dir_world: Vec3f) -> T
         return (ilight.scale, Float32(1) / (Float32(4) * PI))
     var w2l = ilight.world_to_light
     var local_dir = Vec3f(
-        w2l[0]*dir_world.x + w2l[4]*dir_world.y + w2l[8]*dir_world.z,
-        w2l[1]*dir_world.x + w2l[5]*dir_world.y + w2l[9]*dir_world.z,
-        w2l[2]*dir_world.x + w2l[6]*dir_world.y + w2l[10]*dir_world.z,
+        w2l[unsafe_offset=0]*dir_world.x + w2l[unsafe_offset=4]*dir_world.y + w2l[unsafe_offset=8]*dir_world.z,
+        w2l[unsafe_offset=1]*dir_world.x + w2l[unsafe_offset=5]*dir_world.y + w2l[unsafe_offset=9]*dir_world.z,
+        w2l[unsafe_offset=2]*dir_world.x + w2l[unsafe_offset=6]*dir_world.y + w2l[unsafe_offset=10]*dir_world.z,
     )
     var uv = _equal_area_sphere_to_square(local_dir.x, local_dir.y, local_dir.z)
     var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
     var px = min(iw - 1, max(0, Int(uv[0] * Float32(iw))))
     var py = min(ih - 1, max(0, Int(uv[1] * Float32(ih))))
-    var pr = ilight.pixels_ptr[(py*iw+px)*3+0]
-    var pg = ilight.pixels_ptr[(py*iw+px)*3+1]
-    var pb = ilight.pixels_ptr[(py*iw+px)*3+2]
+    var pr = ilight.pixels_ptr[unsafe_offset=(py*iw+px)*3+0]
+    var pg = ilight.pixels_ptr[unsafe_offset=(py*iw+px)*3+1]
+    var pb = ilight.pixels_ptr[unsafe_offset=(py*iw+px)*3+2]
     var radiance = RGB(pr, pg, pb) * ilight.scale
-    var dp_row = ilight.cdf_ptr[py + 1] - ilight.cdf_ptr[py]
+    var dp_row = ilight.cdf_ptr[unsafe_offset=py + 1] - ilight.cdf_ptr[unsafe_offset=py]
     var cond_base = (ih + 1) + py * (iw + 1)
-    var dp_col = ilight.cdf_ptr[cond_base + px + 1] - ilight.cdf_ptr[cond_base + px]
+    var dp_col = ilight.cdf_ptr[unsafe_offset=cond_base + px + 1] - ilight.cdf_ptr[unsafe_offset=cond_base + px]
     var pdf: Float32
     if dp_row > Float32(0) and dp_col > Float32(0):
         pdf = dp_row * dp_col * Float32(iw * ih) / (Float32(4) * PI)
@@ -805,7 +805,7 @@ def _hair_precompute(
     bdpt.mojo/sppm.mojo's connectible-vertex/gather/NEE evaluation of a
     stored hair vertex."""
     var h = max(Float32(-0.99), min(Float32(0.99), h_raw))
-    var curve = curves[curve_idx]
+    var curve = curves[unsafe_offset=curve_idx]
     var piece = min(Int(curve.n_pieces) - 1, max(0, Int(v_global * Float32(curve.n_pieces))))
     var (q0, q1, r0, r1) = curve_piece_endpoints(curve, piece)
     var radius = (r0 + r1) * Float32(0.5)
@@ -1046,18 +1046,18 @@ def test_spheres(
     Sets primId.type = 4 and primId.id1 = sphere_index on a sphere hit.
     """
     var t_max = Float32(1.0e38)
-    if result[0].hit != Int8(0):
-        t_max = result[0].tHit
+    if result[unsafe_offset=0].hit != Int8(0):
+        t_max = result[unsafe_offset=0].tHit
     for i in range(n_spheres):
-        var t = ray_sphere_hit(spheres[i].center, spheres[i].radius, ray, Float32(1e-4), t_max)
+        var t = ray_sphere_hit(spheres[unsafe_offset=i].center, spheres[unsafe_offset=i].radius, ray, Float32(1e-4), t_max)
         if t > Float32(0.0):
             t_max = t
-            result[0].hit = Int8(1)
-            result[0].tHit = t
-            result[0].primId.type = Int8(4)
-            result[0].primId.id1 = Int64(i)
-            result[0].primId.materialIndex = Int64(spheres[i].materialIndex)
-            result[0].primId.instanceIdx = Int32(-1)  # spheres are never instanced; clear any stale value
+            result[unsafe_offset=0].hit = Int8(1)
+            result[unsafe_offset=0].tHit = t
+            result[unsafe_offset=0].primId.type = Int8(4)
+            result[unsafe_offset=0].primId.id1 = Int64(i)
+            result[unsafe_offset=0].primId.materialIndex = Int64(spheres[unsafe_offset=i].materialIndex)
+            result[unsafe_offset=0].primId.instanceIdx = Int32(-1)  # spheres are never instanced; clear any stale value
 
 # ── Object-instance BLAS walk ──────────────────────────────────────────────
 # A BLAS only ever contains ordinary type==0 triangles (built by finalize_scene
@@ -1098,23 +1098,23 @@ def _traverse_blas_triangles(
     var current = 0
 
     while True:
-        var node = blasNodes[current]
+        var node = blasNodes[unsafe_offset=current]
         if node.count > 0:
             var offset = Int(node.offset)
             var count = Int(node.count)
             for j in range(count):
-                var prim = blasPrimIds[offset + j]
+                var prim = blasPrimIds[unsafe_offset=offset + j]
                 if prim.type != Int8(0):
                     continue
                 var mesh_idx = Int(prim.id1)
                 var base_vidx = Int(prim.id2)
-                var mesh = meshes[mesh_idx]
-                var v0 = Int(mesh.vertexIndices[base_vidx])
-                var v1 = Int(mesh.vertexIndices[base_vidx + 1])
-                var v2 = Int(mesh.vertexIndices[base_vidx + 2])
-                var p0 = Vec3f(mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
-                var p1 = Vec3f(mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
-                var p2 = Vec3f(mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+                var mesh = meshes[unsafe_offset=mesh_idx]
+                var v0 = Int(mesh.vertexIndices[unsafe_offset=base_vidx])
+                var v1 = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 1])
+                var v2 = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 2])
+                var p0 = Vec3f(mesh.points[unsafe_offset=v0*4], mesh.points[unsafe_offset=v0*4+1], mesh.points[unsafe_offset=v0*4+2])
+                var p1 = Vec3f(mesh.points[unsafe_offset=v1*4], mesh.points[unsafe_offset=v1*4+1], mesh.points[unsafe_offset=v1*4+2])
+                var p2 = Vec3f(mesh.points[unsafe_offset=v2*4], mesh.points[unsafe_offset=v2*4+1], mesh.points[unsafe_offset=v2*4+2])
                 var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
                 if hit_res[0]:
                     localTHit = hit_res[1]
@@ -1125,12 +1125,12 @@ def _traverse_blas_triangles(
             if toVisit == 0:
                 break
             toVisit -= 1
-            current = Int(stack_ptr[toVisit])
+            current = Int(stack_ptr[unsafe_offset=toVisit])
         else:
             var leftIdx = current + 1
             var rightIdx = Int(node.offset)
-            var leftNode = blasNodes[leftIdx]
-            var rightNode = blasNodes[rightIdx]
+            var leftNode = blasNodes[unsafe_offset=leftIdx]
+            var rightNode = blasNodes[unsafe_offset=rightIdx]
             var leftHit = intersect_aabb(
                 leftNode.min, leftNode.max,
                 rdir, org,
@@ -1146,10 +1146,10 @@ def _traverse_blas_triangles(
             if leftIsHit and rightIsHit:
                 if leftHit[1] <= rightHit[1]:
                     current = leftIdx
-                    stack_ptr[toVisit] = Int32(rightIdx)
+                    stack_ptr[unsafe_offset=toVisit] = Int32(rightIdx)
                 else:
                     current = rightIdx
-                    stack_ptr[toVisit] = Int32(leftIdx)
+                    stack_ptr[unsafe_offset=toVisit] = Int32(leftIdx)
                 toVisit += 1
             elif leftIsHit:
                 current = leftIdx
@@ -1159,7 +1159,7 @@ def _traverse_blas_triangles(
                 if toVisit == 0:
                     break
                 toVisit -= 1
-                current = Int(stack_ptr[toVisit])
+                current = Int(stack_ptr[unsafe_offset=toVisit])
 
     return (hasHit, localTHit, bestU, bestV, hitPrim)
 
@@ -1189,10 +1189,10 @@ def _traverse_instance_leaf(
     if Int(instances) <= 4 or Int(blasNodesArr) <= 4 or Int(blasPrimIdsArr) <= 4:
         return (False, tMax, Float32(0), Float32(0), dummy)
     var inst_idx = Int(prim.id1)
-    var inst = instances[inst_idx]
+    var inst = instances[unsafe_offset=inst_idx]
     var (o_org, o_dir) = _transform_ray_to_instance_space(inst.worldToObj, ray_org, ray_dir)
-    var blas_nodes = blasNodesArr[Int(inst.blasIdx)]
-    var blas_prim_ids = blasPrimIdsArr[Int(inst.blasIdx)]
+    var blas_nodes = blasNodesArr[unsafe_offset=Int(inst.blasIdx)]
+    var blas_prim_ids = blasPrimIdsArr[unsafe_offset=Int(inst.blasIdx)]
     var sub = _traverse_blas_triangles(blas_nodes, blas_prim_ids, meshes, o_org, o_dir, tMax)
     if sub[0]:
         var hit_prim = sub[4]
@@ -1275,14 +1275,14 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
     var ray_dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
 
     while True:
-        var node = bvh2Nodes[current]
+        var node = bvh2Nodes[unsafe_offset=current]
 
         if node.count > 0:
             # Leaf node — intersect primitives
             var offset = Int(node.offset)
             var count = Int(node.count)
             for j in range(count):
-                var prim = primIds[offset + j]
+                var prim = primIds[unsafe_offset=offset + j]
                 var mesh_idx: Int
                 var base_vidx: Int
 
@@ -1295,7 +1295,7 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
                     mesh_idx = Int(prim.id2 >> 32)
                     base_vidx = Int(prim.id2 & 0xFFFFFFFF) * 3
                 elif prim.type == 5:
-                    var curve = curves[Int(prim.id1)]
+                    var curve = curves[unsafe_offset=Int(prim.id1)]
                     var curve_hit = intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, localTHit)
                     if curve_hit[0]:
                         localTHit = curve_hit[1]
@@ -1316,25 +1316,25 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
                 else:
                     continue
 
-                var mesh = meshes[mesh_idx]
-                var v0_idx = Int(mesh.vertexIndices[base_vidx])
-                var v1_idx = Int(mesh.vertexIndices[base_vidx + 1])
-                var v2_idx = Int(mesh.vertexIndices[base_vidx + 2])
+                var mesh = meshes[unsafe_offset=mesh_idx]
+                var v0_idx = Int(mesh.vertexIndices[unsafe_offset=base_vidx])
+                var v1_idx = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 1])
+                var v2_idx = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 2])
 
                 var p0 = Vec3f(
-                    mesh.points[v0_idx * 4],
-                    mesh.points[v0_idx * 4 + 1],
-                    mesh.points[v0_idx * 4 + 2]
+                    mesh.points[unsafe_offset=v0_idx * 4],
+                    mesh.points[unsafe_offset=v0_idx * 4 + 1],
+                    mesh.points[unsafe_offset=v0_idx * 4 + 2]
                 )
                 var p1 = Vec3f(
-                    mesh.points[v1_idx * 4],
-                    mesh.points[v1_idx * 4 + 1],
-                    mesh.points[v1_idx * 4 + 2]
+                    mesh.points[unsafe_offset=v1_idx * 4],
+                    mesh.points[unsafe_offset=v1_idx * 4 + 1],
+                    mesh.points[unsafe_offset=v1_idx * 4 + 2]
                 )
                 var p2 = Vec3f(
-                    mesh.points[v2_idx * 4],
-                    mesh.points[v2_idx * 4 + 1],
-                    mesh.points[v2_idx * 4 + 2]
+                    mesh.points[unsafe_offset=v2_idx * 4],
+                    mesh.points[unsafe_offset=v2_idx * 4 + 1],
+                    mesh.points[unsafe_offset=v2_idx * 4 + 2]
                 )
 
                 var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
@@ -1349,14 +1349,14 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
             if toVisit == 0:
                 break
             toVisit -= 1
-            current = Int(stack_ptr[toVisit])
+            current = Int(stack_ptr[unsafe_offset=toVisit])
         else:
             # Interior node — test both children, visit nearer first
             var leftIdx = current + 1
             var rightIdx = Int(node.offset)
 
-            var leftNode = bvh2Nodes[leftIdx]
-            var rightNode = bvh2Nodes[rightIdx]
+            var leftNode = bvh2Nodes[unsafe_offset=leftIdx]
+            var rightNode = bvh2Nodes[unsafe_offset=rightIdx]
 
             var leftHit = intersect_aabb(
                 leftNode.min, leftNode.max,
@@ -1383,12 +1383,12 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
                 if leftTNear <= rightTNear:
                     current = leftIdx
                     if toVisit < 64:
-                        stack_ptr[toVisit] = Int32(rightIdx)
+                        stack_ptr[unsafe_offset=toVisit] = Int32(rightIdx)
                         toVisit += 1
                 else:
                     current = rightIdx
                     if toVisit < 64:
-                        stack_ptr[toVisit] = Int32(leftIdx)
+                        stack_ptr[unsafe_offset=toVisit] = Int32(leftIdx)
                         toVisit += 1
             elif leftIsHit:
                 current = leftIdx
@@ -1399,27 +1399,27 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
                 if toVisit == 0:
                     break
                 toVisit -= 1
-                current = Int(stack_ptr[toVisit])
+                current = Int(stack_ptr[unsafe_offset=toVisit])
 
     var sphereHit = False
     var sphereIdx = -1
     for i in range(n_spheres):
-        var t = ray_sphere_hit(spheres[i].center, spheres[i].radius, ray, Float32(1e-4), localTHit)
+        var t = ray_sphere_hit(spheres[unsafe_offset=i].center, spheres[unsafe_offset=i].radius, ray, Float32(1e-4), localTHit)
         if t > Float32(0.0):
             localTHit = t
             sphereHit = True
             sphereIdx = i
 
     if sphereHit:
-        var spId = PrimId_C(Int64(sphereIdx), Int64(-1), Int64(spheres[sphereIdx].materialIndex), Int32(-1), Int8(4), Int8(0), Int8(0), Int8(0))
-        resultPtr[0] = Intersection_C(spId, localTHit, Float32(0), Float32(0), Int8(1), 0, 0, 0)
+        var spId = PrimId_C(Int64(sphereIdx), Int64(-1), Int64(spheres[unsafe_offset=sphereIdx].materialIndex), Int32(-1), Int8(4), Int8(0), Int8(0), Int8(0))
+        resultPtr[unsafe_offset=0] = Intersection_C(spId, localTHit, Float32(0), Float32(0), Int8(1), 0, 0, 0)
     elif instHit:
-        resultPtr[0] = Intersection_C(instHitPrim, localTHit, bestU, bestV, Int8(1), 0, 0, 0)
+        resultPtr[unsafe_offset=0] = Intersection_C(instHitPrim, localTHit, bestU, bestV, Int8(1), 0, 0, 0)
     elif hitIndex != -1:
-        resultPtr[0] = Intersection_C(primIds[hitIndex], localTHit, bestU, bestV, Int8(1), 0, 0, 0)
+        resultPtr[unsafe_offset=0] = Intersection_C(primIds[unsafe_offset=hitIndex], localTHit, bestU, bestV, Int8(1), 0, 0, 0)
     else:
         var dummyId = PrimId_C(-1, -1, 0, -1, 0, 0, 0, 0)
-        resultPtr[0] = Intersection_C(dummyId, tMax, 0.0, 0.0, Int8(0), 0, 0, 0)
+        resultPtr[unsafe_offset=0] = Intersection_C(dummyId, tMax, 0.0, 0.0, Int8(0), 0, 0, 0)
 
 
 # Divergence-mitigation experiment for traverse_paths_gpu: identical traversal to
@@ -1473,14 +1473,14 @@ def traverse_bvh2_core_defer_curves(
     var ray_dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
 
     while True:
-        var node = bvh2Nodes[current]
+        var node = bvh2Nodes[unsafe_offset=current]
 
         if node.count > 0:
             # Leaf node — intersect primitives
             var offset = Int(node.offset)
             var count = Int(node.count)
             for j in range(count):
-                var prim = primIds[offset + j]
+                var prim = primIds[unsafe_offset=offset + j]
                 var mesh_idx: Int
                 var base_vidx: Int
 
@@ -1493,12 +1493,12 @@ def traverse_bvh2_core_defer_curves(
                     mesh_idx = Int(prim.id2 >> 32)
                     base_vidx = Int(prim.id2 & 0xFFFFFFFF) * 3
                 elif prim.type == 5:
-                    var slot = curve_cand_count[0]
+                    var slot = curve_cand_count[unsafe_offset=0]
                     if slot < Int32(CURVE_DEFER_K):
-                        curve_cand_prim[Int(slot)] = Int32(offset + j)
-                        curve_cand_count[0] = slot + Int32(1)
+                        curve_cand_prim[unsafe_offset=Int(slot)] = Int32(offset + j)
+                        curve_cand_count[unsafe_offset=0] = slot + Int32(1)
                     else:
-                        var curve = curves[Int(prim.id1)]
+                        var curve = curves[unsafe_offset=Int(prim.id1)]
                         var curve_hit = intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, localTHit)
                         if curve_hit[0]:
                             localTHit = curve_hit[1]
@@ -1519,25 +1519,25 @@ def traverse_bvh2_core_defer_curves(
                 else:
                     continue
 
-                var mesh = meshes[mesh_idx]
-                var v0_idx = Int(mesh.vertexIndices[base_vidx])
-                var v1_idx = Int(mesh.vertexIndices[base_vidx + 1])
-                var v2_idx = Int(mesh.vertexIndices[base_vidx + 2])
+                var mesh = meshes[unsafe_offset=mesh_idx]
+                var v0_idx = Int(mesh.vertexIndices[unsafe_offset=base_vidx])
+                var v1_idx = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 1])
+                var v2_idx = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 2])
 
                 var p0 = Vec3f(
-                    mesh.points[v0_idx * 4],
-                    mesh.points[v0_idx * 4 + 1],
-                    mesh.points[v0_idx * 4 + 2]
+                    mesh.points[unsafe_offset=v0_idx * 4],
+                    mesh.points[unsafe_offset=v0_idx * 4 + 1],
+                    mesh.points[unsafe_offset=v0_idx * 4 + 2]
                 )
                 var p1 = Vec3f(
-                    mesh.points[v1_idx * 4],
-                    mesh.points[v1_idx * 4 + 1],
-                    mesh.points[v1_idx * 4 + 2]
+                    mesh.points[unsafe_offset=v1_idx * 4],
+                    mesh.points[unsafe_offset=v1_idx * 4 + 1],
+                    mesh.points[unsafe_offset=v1_idx * 4 + 2]
                 )
                 var p2 = Vec3f(
-                    mesh.points[v2_idx * 4],
-                    mesh.points[v2_idx * 4 + 1],
-                    mesh.points[v2_idx * 4 + 2]
+                    mesh.points[unsafe_offset=v2_idx * 4],
+                    mesh.points[unsafe_offset=v2_idx * 4 + 1],
+                    mesh.points[unsafe_offset=v2_idx * 4 + 2]
                 )
 
                 var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
@@ -1552,14 +1552,14 @@ def traverse_bvh2_core_defer_curves(
             if toVisit == 0:
                 break
             toVisit -= 1
-            current = Int(stack_ptr[toVisit])
+            current = Int(stack_ptr[unsafe_offset=toVisit])
         else:
             # Interior node — test both children, visit nearer first
             var leftIdx = current + 1
             var rightIdx = Int(node.offset)
 
-            var leftNode = bvh2Nodes[leftIdx]
-            var rightNode = bvh2Nodes[rightIdx]
+            var leftNode = bvh2Nodes[unsafe_offset=leftIdx]
+            var rightNode = bvh2Nodes[unsafe_offset=rightIdx]
 
             var leftHit = intersect_aabb(
                 leftNode.min, leftNode.max,
@@ -1586,12 +1586,12 @@ def traverse_bvh2_core_defer_curves(
                 if leftTNear <= rightTNear:
                     current = leftIdx
                     if toVisit < 64:
-                        stack_ptr[toVisit] = Int32(rightIdx)
+                        stack_ptr[unsafe_offset=toVisit] = Int32(rightIdx)
                         toVisit += 1
                 else:
                     current = rightIdx
                     if toVisit < 64:
-                        stack_ptr[toVisit] = Int32(leftIdx)
+                        stack_ptr[unsafe_offset=toVisit] = Int32(leftIdx)
                         toVisit += 1
             elif leftIsHit:
                 current = leftIdx
@@ -1602,15 +1602,15 @@ def traverse_bvh2_core_defer_curves(
                 if toVisit == 0:
                     break
                 toVisit -= 1
-                current = Int(stack_ptr[toVisit])
+                current = Int(stack_ptr[unsafe_offset=toVisit])
 
     if instHit:
-        resultPtr[0] = Intersection_C(instHitPrim, localTHit, bestU, bestV, Int8(1), 0, 0, 0)
+        resultPtr[unsafe_offset=0] = Intersection_C(instHitPrim, localTHit, bestU, bestV, Int8(1), 0, 0, 0)
     elif hitIndex != -1:
-        resultPtr[0] = Intersection_C(primIds[hitIndex], localTHit, bestU, bestV, Int8(1), 0, 0, 0)
+        resultPtr[unsafe_offset=0] = Intersection_C(primIds[unsafe_offset=hitIndex], localTHit, bestU, bestV, Int8(1), 0, 0, 0)
     else:
         var dummyId = PrimId_C(-1, -1, 0, -1, 0, 0, 0, 0)
-        resultPtr[0] = Intersection_C(dummyId, tMax, 0.0, 0.0, Int8(0), 0, 0, 0)
+        resultPtr[unsafe_offset=0] = Intersection_C(dummyId, tMax, 0.0, 0.0, Int8(0), 0, 0, 0)
 
 
 # Shadow-ray traversal: returns True if anything is hit within tMax (early exit).
@@ -1635,7 +1635,7 @@ def _shadow_is_null_material(
         return False
     if mat_idx < Int64(0):
         return False
-    return materials[Int(mat_idx)].type == MatKind.interface
+    return materials[unsafe_offset=Int(mat_idx)].type == MatKind.interface
 
 def any_hit_bvh2_core(
     bvh2Nodes: UnsafePointer[BVH2Node, MutExternalOrigin],
@@ -1677,13 +1677,13 @@ def any_hit_bvh2_core(
     # `sphere_sms.xml` (see project_sms_restir_phase6 memory).
     for i in range(n_spheres):
         if ignore_sphere_radius >= Float32(0.0):
-            var sc = Vec3f(spheres[i].center.x, spheres[i].center.y, spheres[i].center.z)
+            var sc = Vec3f(spheres[unsafe_offset=i].center.x, spheres[unsafe_offset=i].center.y, spheres[unsafe_offset=i].center.z)
             var dc = sc - ignore_sphere_center
-            if abs(spheres[i].radius - ignore_sphere_radius) < Float32(1e-4) and dot(dc, dc) < Float32(1e-4):
+            if abs(spheres[unsafe_offset=i].radius - ignore_sphere_radius) < Float32(1e-4) and dot(dc, dc) < Float32(1e-4):
                 continue
-        if _shadow_is_null_material(materials, Int64(spheres[i].materialIndex)):
+        if _shadow_is_null_material(materials, Int64(spheres[unsafe_offset=i].materialIndex)):
             continue
-        if ray_sphere_hit(spheres[i].center, spheres[i].radius, ray, Float32(1e-4), tMax) > Float32(0.0):
+        if ray_sphere_hit(spheres[unsafe_offset=i].center, spheres[unsafe_offset=i].radius, ray, Float32(1e-4), tMax) > Float32(0.0):
             return True
     var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
     var org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
@@ -1697,12 +1697,12 @@ def any_hit_bvh2_core(
     var ray_org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
     var ray_dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
     while True:
-        var node = bvh2Nodes[current]
+        var node = bvh2Nodes[unsafe_offset=current]
         if node.count > 0:
             var offset = Int(node.offset)
             var count = Int(node.count)
             for j in range(count):
-                var prim = primIds[offset + j]
+                var prim = primIds[unsafe_offset=offset + j]
                 # pbrt "interface" (null) material: no BSDF, medium boundary
                 # only -- must not occlude. See _shadow_is_null_material.
                 if _shadow_is_null_material(materials, prim.materialIndex):
@@ -1718,7 +1718,7 @@ def any_hit_bvh2_core(
                     mesh_idx = Int(prim.id2 >> 32)
                     base_vidx = Int(prim.id2 & 0xFFFFFFFF) * 3
                 elif prim.type == 5:
-                    var curve = curves[Int(prim.id1)]
+                    var curve = curves[unsafe_offset=Int(prim.id1)]
                     if intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, tMax)[0]:
                         return True
                     continue
@@ -1728,24 +1728,24 @@ def any_hit_bvh2_core(
                     continue
                 else:
                     continue
-                var mesh = meshes[mesh_idx]
-                var v0 = Int(mesh.vertexIndices[base_vidx])
-                var v1 = Int(mesh.vertexIndices[base_vidx + 1])
-                var v2 = Int(mesh.vertexIndices[base_vidx + 2])
-                var p0 = Vec3f(mesh.points[v0*4], mesh.points[v0*4+1], mesh.points[v0*4+2])
-                var p1 = Vec3f(mesh.points[v1*4], mesh.points[v1*4+1], mesh.points[v1*4+2])
-                var p2 = Vec3f(mesh.points[v2*4], mesh.points[v2*4+1], mesh.points[v2*4+2])
+                var mesh = meshes[unsafe_offset=mesh_idx]
+                var v0 = Int(mesh.vertexIndices[unsafe_offset=base_vidx])
+                var v1 = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 1])
+                var v2 = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 2])
+                var p0 = Vec3f(mesh.points[unsafe_offset=v0*4], mesh.points[unsafe_offset=v0*4+1], mesh.points[unsafe_offset=v0*4+2])
+                var p1 = Vec3f(mesh.points[unsafe_offset=v1*4], mesh.points[unsafe_offset=v1*4+1], mesh.points[unsafe_offset=v1*4+2])
+                var p2 = Vec3f(mesh.points[unsafe_offset=v2*4], mesh.points[unsafe_offset=v2*4+1], mesh.points[unsafe_offset=v2*4+2])
                 if intersect_triangle(ray_org, ray_dir, p0, p1, p2, tMax)[0]:
                     return True
             if toVisit == 0:
                 break
             toVisit -= 1
-            current = Int(stack_ptr[toVisit])
+            current = Int(stack_ptr[unsafe_offset=toVisit])
         else:
             var leftIdx = current + 1
             var rightIdx = Int(node.offset)
-            var leftNode = bvh2Nodes[leftIdx]
-            var rightNode = bvh2Nodes[rightIdx]
+            var leftNode = bvh2Nodes[unsafe_offset=leftIdx]
+            var rightNode = bvh2Nodes[unsafe_offset=rightIdx]
             var leftHit = intersect_aabb(
                 leftNode.min, leftNode.max,
                 rdir, org,
@@ -1759,10 +1759,10 @@ def any_hit_bvh2_core(
             if leftIsHit and rightIsHit:
                 if leftHit[1] <= rightHit[1]:
                     current = leftIdx
-                    stack_ptr[toVisit] = Int32(rightIdx)
+                    stack_ptr[unsafe_offset=toVisit] = Int32(rightIdx)
                 else:
                     current = rightIdx
-                    stack_ptr[toVisit] = Int32(leftIdx)
+                    stack_ptr[unsafe_offset=toVisit] = Int32(leftIdx)
                 toVisit += 1
             elif leftIsHit:
                 current = leftIdx
@@ -1772,15 +1772,15 @@ def any_hit_bvh2_core(
                 if toVisit == 0:
                     break
                 toVisit -= 1
-                current = Int(stack_ptr[toVisit])
+                current = Int(stack_ptr[unsafe_offset=toVisit])
     return False
 
 
 # ── CPU entry point ─────────────────────────────────────────────────────────
 
 def traverse_bvh2(scenePtr: UnsafePointer[SceneDescriptor2_C, MutExternalOrigin], rayPtr: UnsafePointer[Ray_C, MutExternalOrigin], tMax: Float32, resultPtr: UnsafePointer[Intersection_C, MutExternalOrigin]):
-    var scene = scenePtr[0]
-    var ray = rayPtr[0]
+    var scene = scenePtr[unsafe_offset=0]
+    var ray = rayPtr[unsafe_offset=0]
     # spheres/sphereCount are passed explicitly: omitting them defaults
     # n_spheres=0, which silently makes every analytic sphere invisible to the
     # traversal. That omission is a recurring bug class in this codebase (see
@@ -1800,10 +1800,10 @@ def _bvh_swap(
     wmax: UnsafePointer[Float32, MutExternalOrigin],
     i: Int, j: Int,
 ):
-    var ti = widx[i]; widx[i] = widx[j]; widx[j] = ti
+    var ti = widx[unsafe_offset=i]; widx[unsafe_offset=i] = widx[unsafe_offset=j]; widx[unsafe_offset=j] = ti
     for a in range(3):
-        var mn = wmin[i*3+a]; wmin[i*3+a] = wmin[j*3+a]; wmin[j*3+a] = mn
-        var mx = wmax[i*3+a]; wmax[i*3+a] = wmax[j*3+a]; wmax[j*3+a] = mx
+        var mn = wmin[unsafe_offset=i*3+a]; wmin[unsafe_offset=i*3+a] = wmin[unsafe_offset=j*3+a]; wmin[unsafe_offset=j*3+a] = mn
+        var mx = wmax[unsafe_offset=i*3+a]; wmax[unsafe_offset=i*3+a] = wmax[unsafe_offset=j*3+a]; wmax[unsafe_offset=j*3+a] = mx
 
 @fieldwise_init
 struct _BVHSplit(TrivialRegisterPassable):
@@ -1830,8 +1830,8 @@ def _bvh_split(
     var cminx = INF; var cminy = INF; var cminz = INF
     var cmaxx = -INF; var cmaxy = -INF; var cmaxz = -INF
     for i in range(start, end):
-        var mnx = wmin[i*3+0]; var mny = wmin[i*3+1]; var mnz = wmin[i*3+2]
-        var mxx = wmax[i*3+0]; var mxy = wmax[i*3+1]; var mxz = wmax[i*3+2]
+        var mnx = wmin[unsafe_offset=i*3+0]; var mny = wmin[unsafe_offset=i*3+1]; var mnz = wmin[unsafe_offset=i*3+2]
+        var mxx = wmax[unsafe_offset=i*3+0]; var mxy = wmax[unsafe_offset=i*3+1]; var mxz = wmax[unsafe_offset=i*3+2]
         bminx = min(bminx, mnx); bminy = min(bminy, mny); bminz = min(bminz, mnz)
         bmaxx = max(bmaxx, mxx); bmaxy = max(bmaxy, mxy); bmaxz = max(bmaxz, mxz)
         var cx = Float32(0.5)*(mnx+mxx); var cy = Float32(0.5)*(mny+mxy)
@@ -1864,8 +1864,8 @@ def _bvh_split(
     if count <= 2:
         # Order the (at most two) primitives along `dim`; split in the middle.
         if count == 2:
-            var c0 = Float32(0.5)*(wmin[start*3+dim] + wmax[start*3+dim])
-            var c1 = Float32(0.5)*(wmin[(start+1)*3+dim] + wmax[(start+1)*3+dim])
+            var c0 = Float32(0.5)*(wmin[unsafe_offset=start*3+dim] + wmax[unsafe_offset=start*3+dim])
+            var c1 = Float32(0.5)*(wmin[unsafe_offset=(start+1)*3+dim] + wmax[unsafe_offset=(start+1)*3+dim])
             if c1 < c0:
                 _bvh_swap(widx, wmin, wmax, start, start+1)
         mid = start + count // 2
@@ -1880,17 +1880,17 @@ def _bvh_split(
         var bk_maxz = InlineArray[Float32, nBuckets](fill=-INF)
         var inv_d = Float32(1.0) / (cmax_d - cmin_d)
         for i in range(start, end):
-            var ci = Float32(0.5)*(wmin[i*3+dim] + wmax[i*3+dim])
+            var ci = Float32(0.5)*(wmin[unsafe_offset=i*3+dim] + wmax[unsafe_offset=i*3+dim])
             var b = Int(Float32(nBuckets) * ((ci - cmin_d) * inv_d))
             if b == nBuckets: b = nBuckets - 1
             if b < 0: b = 0
             bk_cnt[b] += 1
-            bk_minx[b] = min(bk_minx[b], wmin[i*3+0])
-            bk_miny[b] = min(bk_miny[b], wmin[i*3+1])
-            bk_minz[b] = min(bk_minz[b], wmin[i*3+2])
-            bk_maxx[b] = max(bk_maxx[b], wmax[i*3+0])
-            bk_maxy[b] = max(bk_maxy[b], wmax[i*3+1])
-            bk_maxz[b] = max(bk_maxz[b], wmax[i*3+2])
+            bk_minx[b] = min(bk_minx[b], wmin[unsafe_offset=i*3+0])
+            bk_miny[b] = min(bk_miny[b], wmin[unsafe_offset=i*3+1])
+            bk_minz[b] = min(bk_minz[b], wmin[unsafe_offset=i*3+2])
+            bk_maxx[b] = max(bk_maxx[b], wmax[unsafe_offset=i*3+0])
+            bk_maxy[b] = max(bk_maxy[b], wmax[unsafe_offset=i*3+1])
+            bk_maxz[b] = max(bk_maxz[b], wmax[unsafe_offset=i*3+2])
 
         comptime nSplits = nBuckets - 1
         var costs = InlineArray[Float32, nSplits](fill=Float32(0.0))
@@ -1938,7 +1938,7 @@ def _bvh_split(
             # Partition: "below" (bucket <= minBucket) first, "above" after.
             var l = start
             for r in range(start, end):
-                var ci = Float32(0.5)*(wmin[r*3+dim] + wmax[r*3+dim])
+                var ci = Float32(0.5)*(wmin[unsafe_offset=r*3+dim] + wmax[unsafe_offset=r*3+dim])
                 var b = Int(Float32(nBuckets) * ((ci - cmin_d) * inv_d))
                 if b == nBuckets: b = nBuckets - 1
                 if b < 0: b = 0
@@ -1965,17 +1965,17 @@ def build_bvh2_node(
 ) -> Int32:
     """Build the subtree over [start, end) depth-first: this node, then the
     left subtree at my+1, then the right one, whose index the node stores."""
-    var my = Int(node_count[0])
-    node_count[0] = node_count[0] + 1
+    var my = Int(node_count[unsafe_offset=0])
+    node_count[unsafe_offset=0] = node_count[unsafe_offset=0] + 1
     var sp = _bvh_split(widx, wmin, wmax, start, end, prims_per_node)
     if sp.mid < 0:
-        out_nodes[my] = BVH2Node(sp.bmin, sp.bmax, Int32(start), Int32(end - start))
+        out_nodes[unsafe_offset=my] = BVH2Node(sp.bmin, sp.bmax, Int32(start), Int32(end - start))
         return Int32(my)
     _ = build_bvh2_node(widx, wmin, wmax, start, sp.mid,
                         out_nodes, node_count, prims_per_node)
     var right = build_bvh2_node(widx, wmin, wmax, sp.mid, end,
                                 out_nodes, node_count, prims_per_node)
-    out_nodes[my] = BVH2Node(sp.bmin, sp.bmax, right, Int32(0))
+    out_nodes[unsafe_offset=my] = BVH2Node(sp.bmin, sp.bmax, right, Int32(0))
     return Int32(my)
 
 
@@ -2012,20 +2012,20 @@ def _bvh_emit(
     """Lay task `i` out depth-first exactly where build_bvh2_node would have put
     it. A subtree is copied as one block, its right-child offsets rebased;
     leaf offsets index the shared primitive order and stay as they are."""
-    var my = Int(node_count[0])
-    var t = tasks[i]
+    var my = Int(node_count[unsafe_offset=0])
+    var t = tasks[unsafe_offset=i]
     if t.left < 0:
         for j in range(t.n_nodes):
-            var nd = t.nodes[j]
+            var nd = t.nodes[unsafe_offset=j]
             if nd.count == Int32(0):
                 nd.offset += Int32(my)
-            out_nodes[my + j] = nd
-        node_count[0] = Int32(my + t.n_nodes)
+            out_nodes[unsafe_offset=my + j] = nd
+        node_count[unsafe_offset=0] = Int32(my + t.n_nodes)
         return Int32(my)
-    node_count[0] = Int32(my + 1)
+    node_count[unsafe_offset=0] = Int32(my + 1)
     _ = _bvh_emit(tasks, t.left, out_nodes, node_count)
     var right = _bvh_emit(tasks, t.right, out_nodes, node_count)
-    out_nodes[my] = BVH2Node(t.bmin, t.bmax, right, Int32(0))
+    out_nodes[unsafe_offset=my] = BVH2Node(t.bmin, t.bmax, right, Int32(0))
     return Int32(my)
 
 def _build_bvh2_parallel(
@@ -2041,37 +2041,37 @@ def _build_bvh2_parallel(
     cores. Every split only reorders its own range of the work arrays, so the
     same splits in any order give the same arrays and the same nodes."""
     var tasks = alloc[_BVHTask](_BVH_MAX_TASKS)
-    tasks[0] = _bvh_subtree_task(0, n)
+    tasks[unsafe_offset=0] = _bvh_subtree_task(0, n)
     var n_tasks = 1
 
     # 1. Split the top of the tree level by level, each level's ranges in parallel.
     var level = alloc[Int](_BVH_MAX_TASKS)
     var next_level = alloc[Int](_BVH_MAX_TASKS)
     var splits = alloc[_BVHSplit](_BVH_MAX_TASKS)
-    level[0] = 0
+    level[unsafe_offset=0] = 0
     var n_level = 1
     while n_level > 0 and n_tasks + 2 * n_level <= _BVH_MAX_TASKS:
         @parameter
         def split_one(k: Int):
-            var t = tasks[level[k]]
+            var t = tasks[unsafe_offset=level[unsafe_offset=k]]
             if t.end - t.start > subtree_prims:
-                splits[k] = _bvh_split(widx, wmin, wmax, t.start, t.end, 4)
+                splits[unsafe_offset=k] = _bvh_split(widx, wmin, wmax, t.start, t.end, 4)
             else:
-                splits[k] = _BVHSplit(t.bmin, t.bmax, -1)   # small enough: a subtree build
+                splits[unsafe_offset=k] = _BVHSplit(t.bmin, t.bmax, -1)   # small enough: a subtree build
 
         parallelize[split_one](n_level)
         var n_next = 0
         for k in range(n_level):
-            var sp = splits[k]
+            var sp = splits[unsafe_offset=k]
             if sp.mid < 0:
                 continue   # stays a subtree task (a leaf split is redone there, cheaply)
-            var i = level[k]
-            var t = tasks[i]
-            tasks[n_tasks] = _bvh_subtree_task(t.start, sp.mid)
-            tasks[n_tasks + 1] = _bvh_subtree_task(sp.mid, t.end)
-            tasks[i] = _BVHTask(t.start, t.end, n_tasks, n_tasks + 1, sp.bmin, sp.bmax, t.nodes, 0)
-            next_level[n_next] = n_tasks
-            next_level[n_next + 1] = n_tasks + 1
+            var i = level[unsafe_offset=k]
+            var t = tasks[unsafe_offset=i]
+            tasks[unsafe_offset=n_tasks] = _bvh_subtree_task(t.start, sp.mid)
+            tasks[unsafe_offset=n_tasks + 1] = _bvh_subtree_task(sp.mid, t.end)
+            tasks[unsafe_offset=i] = _BVHTask(t.start, t.end, n_tasks, n_tasks + 1, sp.bmin, sp.bmax, t.nodes, 0)
+            next_level[unsafe_offset=n_next] = n_tasks
+            next_level[unsafe_offset=n_next + 1] = n_tasks + 1
             n_tasks += 2
             n_next += 2
         var tmp = level; level = next_level; next_level = tmp
@@ -2081,11 +2081,11 @@ def _build_bvh2_parallel(
     var subtrees = alloc[Int](n_tasks)
     var n_subtrees = 0
     for i in range(n_tasks):
-        if tasks[i].left < 0:
-            subtrees[n_subtrees] = i
+        if tasks[unsafe_offset=i].left < 0:
+            subtrees[unsafe_offset=n_subtrees] = i
             n_subtrees += 1
     var next_subtree = alloc[Int32](1)
-    next_subtree[0] = Int32(0)
+    next_subtree[unsafe_offset=0] = Int32(0)
 
     @parameter
     def build_worker(_worker_idx: Int):
@@ -2093,25 +2093,25 @@ def _build_bvh2_parallel(
             var k = Int(Atomic.fetch_add(next_subtree, Int32(1)))
             if k >= n_subtrees:
                 break
-            var i = subtrees[k]
-            var t = tasks[i]
+            var i = subtrees[unsafe_offset=k]
+            var t = tasks[unsafe_offset=i]
             var nodes = alloc[BVH2Node](2 * (t.end - t.start))
             var cnt = alloc[Int32](1)
-            cnt[0] = Int32(0)
+            cnt[unsafe_offset=0] = Int32(0)
             _ = build_bvh2_node(widx, wmin, wmax, t.start, t.end, nodes, cnt, 4)
             t.nodes = nodes.unsafe_origin_cast[MutExternalOrigin]()
-            t.n_nodes = Int(cnt[0])
-            tasks[i] = t
+            t.n_nodes = Int(cnt[unsafe_offset=0])
+            tasks[unsafe_offset=i] = t
             cnt.unsafe_free()
 
     parallelize[build_worker](min(num_performance_cores(), n_subtrees))
 
     # 3. Lay everything out depth-first.
-    node_count[0] = Int32(0)
+    node_count[unsafe_offset=0] = Int32(0)
     _ = _bvh_emit(tasks, 0, out_nodes, node_count)
 
     for k in range(n_subtrees):
-        tasks[subtrees[k]].nodes.unsafe_free()
+        tasks[unsafe_offset=subtrees[unsafe_offset=k]].nodes.unsafe_free()
     tasks.unsafe_free(); level.unsafe_free(); next_level.unsafe_free(); splits.unsafe_free()
     subtrees.unsafe_free(); next_subtree.unsafe_free()
 
@@ -2132,25 +2132,25 @@ def build_bvh2(
     var wmin = alloc[Float32](n * 3)
     var wmax = alloc[Float32](n * 3)
     for i in range(n):
-        widx[i] = Int32(i)
-        wmin[i*3+0] = primBounds[i*6+0]
-        wmin[i*3+1] = primBounds[i*6+1]
-        wmin[i*3+2] = primBounds[i*6+2]
-        wmax[i*3+0] = primBounds[i*6+3]
-        wmax[i*3+1] = primBounds[i*6+4]
-        wmax[i*3+2] = primBounds[i*6+5]
+        widx[unsafe_offset=i] = Int32(i)
+        wmin[unsafe_offset=i*3+0] = primBounds[unsafe_offset=i*6+0]
+        wmin[unsafe_offset=i*3+1] = primBounds[unsafe_offset=i*6+1]
+        wmin[unsafe_offset=i*3+2] = primBounds[unsafe_offset=i*6+2]
+        wmax[unsafe_offset=i*3+0] = primBounds[unsafe_offset=i*6+3]
+        wmax[unsafe_offset=i*3+1] = primBounds[unsafe_offset=i*6+4]
+        wmax[unsafe_offset=i*3+2] = primBounds[unsafe_offset=i*6+5]
 
     var node_count = alloc[Int32](1)
-    node_count[0] = 0
+    node_count[unsafe_offset=0] = 0
     if parallel and n > 4 * subtree_prims:
         _build_bvh2_parallel(widx, wmin, wmax, n, outNodes, node_count, subtree_prims)
     else:
         _ = build_bvh2_node(widx, wmin, wmax, 0, n, outNodes, node_count, 4)
 
     for k in range(n):
-        outOrder[k] = widx[k]
+        outOrder[unsafe_offset=k] = widx[unsafe_offset=k]
 
-    var result = node_count[0]
+    var result = node_count[unsafe_offset=0]
     widx.unsafe_free(); wmin.unsafe_free(); wmax.unsafe_free(); node_count.unsafe_free()
     return result
 
@@ -2181,8 +2181,8 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
     var w  = Int(max_x - min_x)
     var h  = Int(max_y - min_y)
     var n_pixels = w * h
-    var sd = scene[0]
-    var org = Point3f(cameraToWorld[12], cameraToWorld[13], cameraToWorld[14])
+    var sd = scene[unsafe_offset=0]
+    var org = Point3f(cameraToWorld[unsafe_offset=12], cameraToWorld[unsafe_offset=13], cameraToWorld[unsafe_offset=14])
     var isects = alloc[Intersection_C](n_pixels)
 
     @parameter
@@ -2193,10 +2193,10 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
         var filmY = Float32(Int(min_y) + py) + Float32(0.5)
 
         # rasterToCamera (column-major 4×4), no filter offset
-        var cx = rasterToCamera[0]*filmX + rasterToCamera[4]*filmY + rasterToCamera[12]
-        var cy = rasterToCamera[1]*filmX + rasterToCamera[5]*filmY + rasterToCamera[13]
-        var cz = rasterToCamera[2]*filmX + rasterToCamera[6]*filmY + rasterToCamera[14]
-        var cw = rasterToCamera[3]*filmX + rasterToCamera[7]*filmY + rasterToCamera[15]
+        var cx = rasterToCamera[unsafe_offset=0]*filmX + rasterToCamera[unsafe_offset=4]*filmY + rasterToCamera[unsafe_offset=12]
+        var cy = rasterToCamera[unsafe_offset=1]*filmX + rasterToCamera[unsafe_offset=5]*filmY + rasterToCamera[unsafe_offset=13]
+        var cz = rasterToCamera[unsafe_offset=2]*filmX + rasterToCamera[unsafe_offset=6]*filmY + rasterToCamera[unsafe_offset=14]
+        var cw = rasterToCamera[unsafe_offset=3]*filmX + rasterToCamera[unsafe_offset=7]*filmY + rasterToCamera[unsafe_offset=15]
         if cw != Float32(0.0) and cw != Float32(1.0):
             cx /= cw; cy /= cw; cz /= cw
         var cl = sqrt(cx*cx + cy*cy + cz*cz)
@@ -2204,9 +2204,9 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
 
         # cameraToWorld rotation (upper-left 3×3)
         var dir = Vec3f(
-            cameraToWorld[0]*cx + cameraToWorld[4]*cy + cameraToWorld[8]*cz,
-            cameraToWorld[1]*cx + cameraToWorld[5]*cy + cameraToWorld[9]*cz,
-            cameraToWorld[2]*cx + cameraToWorld[6]*cy + cameraToWorld[10]*cz,
+            cameraToWorld[unsafe_offset=0]*cx + cameraToWorld[unsafe_offset=4]*cy + cameraToWorld[unsafe_offset=8]*cz,
+            cameraToWorld[unsafe_offset=1]*cx + cameraToWorld[unsafe_offset=5]*cy + cameraToWorld[unsafe_offset=9]*cz,
+            cameraToWorld[unsafe_offset=2]*cx + cameraToWorld[unsafe_offset=6]*cy + cameraToWorld[unsafe_offset=10]*cz,
         )
         var dl = dir.length()
         if dl > Float32(0): dir = dir / dl
@@ -2219,33 +2219,33 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
         # empty tree before this scene: skip it outright rather than trust
         # an edge case this function has never had to handle.
         if Int(sd.meshCount) > 0 or Int(sd.curveCount) > 0 or Int(sd.instanceCount) > 0:
-            traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), isects + i,
+            traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), isects.unsafe_offset(i),
                                sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         else:
-            isects[i] = Intersection_C(PrimId_C(-1, -1, 0, -1, 0, 0, 0, 0), Float32(1e38), 0.0, 0.0, Int8(0), 0, 0, 0)
+            isects[unsafe_offset=i] = Intersection_C(PrimId_C(-1, -1, 0, -1, 0, 0, 0, 0), Float32(1e38), 0.0, 0.0, Int8(0), 0, 0, 0)
         if Int(sd.sphereCount) > 0:
-            test_spheres(sd.spheres, Int(sd.sphereCount), ray, isects + i)
+            test_spheres(sd.spheres, Int(sd.sphereCount), ray, isects.unsafe_offset(i))
 
         var normal = Vec3f(Float32(0), Float32(0), Float32(1))   # background
         var d  = Float32(1e38)
 
-        if isects[i].hit != Int8(0):
-            d = isects[i].tHit
-            var typ = Int(isects[i].primId.type)
+        if isects[unsafe_offset=i].hit != Int8(0):
+            d = isects[unsafe_offset=i].tHit
+            var typ = Int(isects[unsafe_offset=i].primId.type)
             if typ == 4:
                 # Sphere: normal = normalize(hit_point - center)
-                var si  = Int(isects[i].primId.id1)
+                var si  = Int(isects[unsafe_offset=i].primId.id1)
                 if si >= 0 and si < Int(sd.sphereCount):
-                    normal = sphere_outward_normal(org + dir*d, sd.spheres[si].center)
+                    normal = sphere_outward_normal(org + dir*d, sd.spheres[unsafe_offset=si].center)
             elif typ == 5:
                 # Native curve: reconstruct the geometric normal the same way
                 # shade_hair does (shading.mojo) — h/v come straight from
                 # intersect_curve via Intersection_C.u/.v, no tessellated mesh.
-                var curve_idx = Int(isects[i].primId.id1)
+                var curve_idx = Int(isects[unsafe_offset=i].primId.id1)
                 if curve_idx >= 0 and curve_idx < Int(sd.curveCount):
-                    var curve = sd.curves[curve_idx]
-                    var h = max(Float32(-0.99), min(Float32(0.99), isects[i].u))
-                    var piece = min(Int(curve.n_pieces) - 1, max(0, Int(isects[i].v * Float32(curve.n_pieces))))
+                    var curve = sd.curves[unsafe_offset=curve_idx]
+                    var h = max(Float32(-0.99), min(Float32(0.99), isects[unsafe_offset=i].u))
+                    var piece = min(Int(curve.n_pieces) - 1, max(0, Int(isects[unsafe_offset=i].v * Float32(curve.n_pieces))))
                     var (q0, q1, _, _) = curve_piece_endpoints(curve, piece)
                     var seg_axis = q1 - q0
                     var seg_len = sqrt(dot(seg_axis, seg_axis))
@@ -2265,23 +2265,23 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
                 var mesh_idx: Int
                 var base_vidx: Int
                 if typ == 0:
-                    mesh_idx  = Int(isects[i].primId.id1)
-                    base_vidx = Int(isects[i].primId.id2)
+                    mesh_idx  = Int(isects[unsafe_offset=i].primId.id1)
+                    base_vidx = Int(isects[unsafe_offset=i].primId.id2)
                 else:
-                    mesh_idx  = Int(isects[i].primId.id2 >> 32)
-                    base_vidx = Int(isects[i].primId.id2 & 0xFFFFFFFF) * 3
+                    mesh_idx  = Int(isects[unsafe_offset=i].primId.id2 >> 32)
+                    base_vidx = Int(isects[unsafe_offset=i].primId.id2 & 0xFFFFFFFF) * 3
                 # Bounds-check before dereferencing sd.meshes -- defensive,
                 # same as the sphere/curve branches above: fail open (leave
                 # `normal` at its background default) rather than trust an
                 # index this function never validated before.
                 if mesh_idx >= 0 and mesh_idx < Int(sd.meshCount):
-                    var mesh = sd.meshes[mesh_idx]
-                    var vi0 = Int(mesh.vertexIndices[base_vidx])
-                    var vi1 = Int(mesh.vertexIndices[base_vidx + 1])
-                    var vi2 = Int(mesh.vertexIndices[base_vidx + 2])
-                    var p0 = Point3f(mesh.points[vi0*4], mesh.points[vi0*4+1], mesh.points[vi0*4+2])
-                    var p1 = Point3f(mesh.points[vi1*4], mesh.points[vi1*4+1], mesh.points[vi1*4+2])
-                    var p2 = Point3f(mesh.points[vi2*4], mesh.points[vi2*4+1], mesh.points[vi2*4+2])
+                    var mesh = sd.meshes[unsafe_offset=mesh_idx]
+                    var vi0 = Int(mesh.vertexIndices[unsafe_offset=base_vidx])
+                    var vi1 = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 1])
+                    var vi2 = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 2])
+                    var p0 = Point3f(mesh.points[unsafe_offset=vi0*4], mesh.points[unsafe_offset=vi0*4+1], mesh.points[unsafe_offset=vi0*4+2])
+                    var p1 = Point3f(mesh.points[unsafe_offset=vi1*4], mesh.points[unsafe_offset=vi1*4+1], mesh.points[unsafe_offset=vi1*4+2])
+                    var p2 = Point3f(mesh.points[unsafe_offset=vi2*4], mesh.points[unsafe_offset=vi2*4+1], mesh.points[unsafe_offset=vi2*4+2])
                     var e1 = p1 - p0; var e2 = p2 - p0
                     normal = Vec3f(e1.y*e2.z - e1.z*e2.y, e1.z*e2.x - e1.x*e2.z, e1.x*e2.y - e1.y*e2.x)
                     var nl = normal.length()
@@ -2295,14 +2295,14 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
             if normal.dot(-dir) < Float32(0):
                 normal = -normal
 
-        normals_out[i*3 + 0] = normal.x
-        normals_out[i*3 + 1] = normal.y
-        normals_out[i*3 + 2] = normal.z
-        depth_out[i] = d
+        normals_out[unsafe_offset=i*3 + 0] = normal.x
+        normals_out[unsafe_offset=i*3 + 1] = normal.y
+        normals_out[unsafe_offset=i*3 + 2] = normal.z
+        depth_out[unsafe_offset=i] = d
         if _is_real_ptr(world_pos_out):
             store_vec3(world_pos_out, i, (org + dir*d).to_simd())
         if _is_real_ptr(material_id_out):
-            material_id_out[i] = Int32(isects[i].primId.materialIndex) if isects[i].hit != Int8(0) else Int32(-1)
+            material_id_out[unsafe_offset=i] = Int32(isects[unsafe_offset=i].primId.materialIndex) if isects[unsafe_offset=i].hit != Int8(0) else Int32(-1)
 
     parallelize[trace_pixel](n_pixels)
     isects.unsafe_free()

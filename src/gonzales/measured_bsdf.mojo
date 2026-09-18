@@ -20,25 +20,25 @@ from .geometry import MeasuredBRDF_C
 
 @always_inline
 def _mbsdf_u16(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int:
-    return Int((buf + pos).unsafe_bitcast[UInt16]()[0])
+    return Int((buf.unsafe_offset(pos)).unsafe_bitcast[UInt16]()[unsafe_offset=0])
 
 @always_inline
 def _mbsdf_u32(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int:
-    return Int((buf + pos).unsafe_bitcast[UInt32]()[0])
+    return Int((buf.unsafe_offset(pos)).unsafe_bitcast[UInt32]()[unsafe_offset=0])
 
 @always_inline
 def _mbsdf_u64(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int:
-    return Int((buf + pos).unsafe_bitcast[UInt64]()[0])
+    return Int((buf.unsafe_offset(pos)).unsafe_bitcast[UInt64]()[unsafe_offset=0])
 
 @always_inline
 def _mbsdf_f32(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float32:
-    return (buf + pos).unsafe_bitcast[Float32]()[0]
+    return (buf.unsafe_offset(pos)).unsafe_bitcast[Float32]()[unsafe_offset=0]
 
 def _mbsdf_field_eq(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int, length: Int, literal: StringLiteral) -> Bool:
     var lp = literal.unsafe_ptr()
     var j = 0
-    while lp[j] != UInt8(0):
-        if j >= length or buf[pos + j] != lp[j]:
+    while lp[unsafe_offset=j] != UInt8(0):
+        if j >= length or buf[unsafe_offset=pos + j] != lp[unsafe_offset=j]:
             return False
         j += 1
     return j == length
@@ -60,17 +60,17 @@ def load_measured_bsdf_reflectance(path: String) -> Tuple[Bool, Float32]:
             return (False, Float32(0.0))
         file_buf = alloc[UInt8](file_size)
         for i in range(file_size):
-            file_buf[i] = bytes[i]
+            file_buf[unsafe_offset=i] = bytes[i]
     except:
         return (False, Float32(0.0))
 
     # 12-byte magic is "tensor_file" (11 chars) + one trailing null byte —
     # checked separately since _mbsdf_field_eq's comparison loop stops at its
     # own literal's null terminator and can't see past it.
-    if not _mbsdf_field_eq(file_buf, 0, 11, "tensor_file") or file_buf[11] != UInt8(0):
+    if not _mbsdf_field_eq(file_buf, 0, 11, "tensor_file") or file_buf[unsafe_offset=11] != UInt8(0):
         file_buf.unsafe_free()
         return (False, Float32(0.0))
-    if file_buf[12] != UInt8(1):  # version major must be 1
+    if file_buf[unsafe_offset=12] != UInt8(1):  # version major must be 1
         file_buf.unsafe_free()
         return (False, Float32(0.0))
 
@@ -87,7 +87,7 @@ def load_measured_bsdf_reflectance(path: String) -> Tuple[Bool, Float32]:
         if pos + 2 + 1 + 8 > file_size:
             break
         var ndim = _mbsdf_u16(file_buf, pos); pos += 2
-        var dtype = Int(file_buf[pos]); pos += 1
+        var dtype = Int(file_buf[unsafe_offset=pos]); pos += 1
         var data_offset = _mbsdf_u64(file_buf, pos); pos += 8
         var count = 1
         for d in range(ndim):
@@ -170,7 +170,7 @@ def _mbsdf_scan_fields(file_buf: UnsafePointer[UInt8, MutExternalOrigin], file_s
         if pos + 2 + 1 + 8 > file_size:
             break
         var ndim = _mbsdf_u16(file_buf, pos); pos += 2
-        var dtype = Int(file_buf[pos]); pos += 1
+        var dtype = Int(file_buf[unsafe_offset=pos]); pos += 1
         var data_offset = _mbsdf_u64(file_buf, pos); pos += 8
         var shape = List[Int]()
         var ok_shape = True
@@ -213,7 +213,7 @@ def _mbsdf_scan_fields(file_buf: UnsafePointer[UInt8, MutExternalOrigin], file_s
 def _mbsdf_copy_f32(file_buf: UnsafePointer[UInt8, MutExternalOrigin], offset: Int, count: Int) -> UnsafePointer[Float32, MutExternalOrigin]:
     var out = alloc[Float32](max(count, 1))
     for i in range(count):
-        out[i] = _mbsdf_f32(file_buf, offset + i * 4)
+        out[unsafe_offset=i] = _mbsdf_f32(file_buf, offset + i * 4)
     return out
 
 # ── PiecewiseLinear2D construction (util/sampling.h:1336-1438) ──────────────
@@ -244,24 +244,24 @@ def _pl2d_build_cdf(
         for y in range(ys):
             var sum = Float64(0.0)
             var i = y * xs
-            conditional[base + i] = Float32(0.0)
+            conditional[unsafe_offset=base + i] = Float32(0.0)
             for _x in range(xs - 1):
-                sum += Float64(0.5) * (Float64(raw[base + i]) + Float64(raw[base + i + 1]))
-                conditional[base + i + 1] = Float32(sum)
+                sum += Float64(0.5) * (Float64(raw[unsafe_offset=base + i]) + Float64(raw[unsafe_offset=base + i + 1]))
+                conditional[unsafe_offset=base + i + 1] = Float32(sum)
                 i += 1
-        marginal[mbase] = Float32(0.0)
+        marginal[unsafe_offset=mbase] = Float32(0.0)
         var msum = Float64(0.0)
         for y in range(ys - 1):
-            msum += Float64(0.5) * (Float64(conditional[base + (y + 1) * xs - 1]) +
-                                     Float64(conditional[base + (y + 2) * xs - 1]))
-            marginal[mbase + y + 1] = Float32(msum)
-        var norm = Float32(1.0) / marginal[mbase + ys - 1]
+            msum += Float64(0.5) * (Float64(conditional[unsafe_offset=base + (y + 1) * xs - 1]) +
+                                     Float64(conditional[unsafe_offset=base + (y + 2) * xs - 1]))
+            marginal[unsafe_offset=mbase + y + 1] = Float32(msum)
+        var norm = Float32(1.0) / marginal[unsafe_offset=mbase + ys - 1]
         for i in range(n_values):
-            conditional[base + i] *= norm
+            conditional[unsafe_offset=base + i] *= norm
         for i in range(ys):
-            marginal[mbase + i] *= norm
+            marginal[unsafe_offset=mbase + i] *= norm
         for i in range(n_values):
-            data_out[base + i] = raw[base + i] * norm
+            data_out[unsafe_offset=base + i] = raw[unsafe_offset=base + i] * norm
     return (data_out, marginal, conditional)
 
 def _pl2d_build_scaled_verbatim(
@@ -274,7 +274,7 @@ def _pl2d_build_scaled_verbatim(
     var data_out = alloc[Float32](slices * n_values)
     var norm = Float32(1.0) / (Float32(xs - 1) * Float32(ys - 1))
     for i in range(slices * n_values):
-        data_out[i] = raw[i] * norm
+        data_out[unsafe_offset=i] = raw[unsafe_offset=i] * norm
     return data_out
 
 @always_inline
@@ -336,14 +336,14 @@ def load_measured_brdf_full(path: String) -> Tuple[Bool, MeasuredBRDF_C]:
             return _fail()
         file_buf = alloc[UInt8](file_size)
         for i in range(file_size):
-            file_buf[i] = bytes[i]
+            file_buf[unsafe_offset=i] = bytes[i]
     except:
         return _fail()
 
-    if not _mbsdf_field_eq(file_buf, 0, 11, "tensor_file") or file_buf[11] != UInt8(0):
+    if not _mbsdf_field_eq(file_buf, 0, 11, "tensor_file") or file_buf[unsafe_offset=11] != UInt8(0):
         file_buf.unsafe_free()
         return _fail()
-    if file_buf[12] != UInt8(1):
+    if file_buf[unsafe_offset=12] != UInt8(1):
         file_buf.unsafe_free()
         return _fail()
 

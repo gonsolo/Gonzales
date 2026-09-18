@@ -22,13 +22,13 @@ def _scanner_from_string(body: String) -> UnsafePointer[PbrtScanner, MutExternal
     var n = body.byte_length()
     var buf = alloc[UInt8](n + 1)
     for i in range(n):
-        buf[i] = body.as_bytes()[i]
-    buf[n] = UInt8(0)
+        buf[unsafe_offset=i] = body.as_bytes()[i]
+    buf[unsafe_offset=n] = UInt8(0)
     var handle = alloc[PbrtScanner](1)
-    handle[0].buffer = buf
-    handle[0].total_bytes = Int32(n)
-    handle[0].cursor = Int32(0)
-    handle[0].is_at_end = Int32(0)
+    handle[unsafe_offset=0].buffer = buf
+    handle[unsafe_offset=0].total_bytes = Int32(n)
+    handle[unsafe_offset=0].cursor = Int32(0)
+    handle[unsafe_offset=0].is_at_end = Int32(0)
     return handle
 
 
@@ -59,7 +59,7 @@ def test_plain_imagemap_is_identity_affine() raises:
     var s = _state()
     _tex(s, '"img" "spectrum" "imagemap" "string filename" [ "t.png" ]')
     _mat(s, '"m" "string type" [ "diffuse" ] "texture reflectance" [ "img" ]')
-    var nm = s[0].named_materials[0]
+    var nm = s[unsafe_offset=0].named_materials[0]
     assert_true(nm.tex_idx == Int32(0))
     assert_true(_close(nm.tex_scale.r, Float32(1)))
     assert_true(_close(nm.tex_bias.r, Float32(0)))
@@ -72,7 +72,7 @@ def test_scale_of_imagemap_folds_into_scale() raises:
     _tex(s, '"img" "spectrum" "imagemap" "string filename" [ "t.png" ]')
     _tex(s, '"sc" "spectrum" "scale" "texture tex" [ "img" ] "float scale" [ 0.5 ]')
     _mat(s, '"m" "string type" [ "diffuse" ] "texture reflectance" [ "sc" ]')
-    var nm = s[0].named_materials[0]
+    var nm = s[unsafe_offset=0].named_materials[0]
     assert_true(nm.tex_idx == Int32(0))
     assert_true(_close(nm.tex_scale.r, Float32(0.5)))
     assert_true(_close(nm.tex_bias.r, Float32(0)))
@@ -89,7 +89,7 @@ def test_mix_texture_with_constant_matches_pbrt_lerp() raises:
     _tex(s, '"mx" "spectrum" "mix" "texture tex1" [ "img" ]'
             + ' "rgb tex2" [ 0.8 0.4 0.2 ] "float amount" [ 0.25 ]')
     _mat(s, '"m" "string type" [ "diffuse" ] "texture reflectance" [ "mx" ]')
-    var nm = s[0].named_materials[0]
+    var nm = s[unsafe_offset=0].named_materials[0]
     assert_true(nm.tex_idx == Int32(0))
     assert_true(_close(nm.tex_scale.r, Float32(0.75)))
     assert_true(_close(nm.tex_bias.r, Float32(0.25) * Float32(0.8)))
@@ -106,7 +106,7 @@ def test_mix_argument_order_is_not_symmetric() raises:
     _tex(s, '"mx" "spectrum" "mix" "rgb tex1" [ 0.8 0.4 0.2 ]'
             + ' "texture tex2" [ "img" ] "float amount" [ 0.25 ]')
     _mat(s, '"m" "string type" [ "diffuse" ] "texture reflectance" [ "mx" ]')
-    var nm = s[0].named_materials[0]
+    var nm = s[unsafe_offset=0].named_materials[0]
     assert_true(nm.tex_idx == Int32(0))
     # Texture is now tex2, so it carries weight `amount`, not `1 - amount`.
     assert_true(_close(nm.tex_scale.r, Float32(0.25)))
@@ -124,7 +124,7 @@ def test_mix_of_constants_driven_by_texture() raises:
     _tex(s, '"mx" "spectrum" "mix" "rgb tex1" [ 0.1 0.2 0.3 ]'
             + ' "rgb tex2" [ 0.9 0.7 0.5 ] "texture amount" [ "amt" ]')
     _mat(s, '"m" "string type" [ "diffuse" ] "texture reflectance" [ "mx" ]')
-    var nm = s[0].named_materials[0]
+    var nm = s[unsafe_offset=0].named_materials[0]
     assert_true(nm.tex_idx == Int32(0))
     assert_true(_close(nm.tex_scale.r, Float32(0.8)))
     assert_true(_close(nm.tex_scale.g, Float32(0.5)))
@@ -143,7 +143,7 @@ def test_constant_tinted_by_texture_scale() raises:
     _tex(s, '"cover" "spectrum" "scale" "rgb tex" [ 0.4 0.3 0.2 ]'
             + ' "texture scale" [ "proj" ]')
     _mat(s, '"m" "string type" [ "diffuse" ] "texture reflectance" [ "cover" ]')
-    var nm = s[0].named_materials[0]
+    var nm = s[unsafe_offset=0].named_materials[0]
     assert_true(nm.tex_idx == Int32(0))
     assert_true(_close(nm.tex_scale.r, Float32(0.4)))
     assert_true(_close(nm.tex_scale.g, Float32(0.3)))
@@ -160,7 +160,7 @@ def test_nested_scale_of_mix_composes() raises:
     _tex(s, '"mx" "spectrum" "mix" "texture tex1" [ "sc" ]'
             + ' "rgb tex2" [ 1.0 1.0 1.0 ] "float amount" [ 0.5 ]')
     _mat(s, '"m" "string type" [ "diffuse" ] "texture reflectance" [ "mx" ]')
-    var nm = s[0].named_materials[0]
+    var nm = s[unsafe_offset=0].named_materials[0]
     assert_true(nm.tex_idx == Int32(0))
     # 0.5 * (2 * texel) + 0.5 * 1
     assert_true(_close(nm.tex_scale.r, Float32(1.0)))
@@ -178,7 +178,7 @@ def test_product_of_two_textures_refuses_to_resolve() raises:
     _tex(s, '"b" "float" "imagemap" "string filename" [ "b.png" ]')
     _tex(s, '"prod" "spectrum" "scale" "texture tex" [ "a" ] "texture scale" [ "b" ]')
     _mat(s, '"m" "string type" [ "diffuse" ] "texture reflectance" [ "prod" ]')
-    var nm = s[0].named_materials[0]
+    var nm = s[unsafe_offset=0].named_materials[0]
     assert_true(nm.tex_idx == Int32(-1))
     _ = s.take_pointee(); s.unsafe_free()
 
@@ -192,7 +192,7 @@ def test_mix_over_two_different_textures_refuses_to_resolve() raises:
     _tex(s, '"mx" "spectrum" "mix" "texture tex1" [ "a" ]'
             + ' "texture tex2" [ "b" ] "float amount" [ 0.5 ]')
     _mat(s, '"m" "string type" [ "diffuse" ] "texture reflectance" [ "mx" ]')
-    var nm = s[0].named_materials[0]
+    var nm = s[unsafe_offset=0].named_materials[0]
     assert_true(nm.tex_idx == Int32(-1))
     _ = s.take_pointee(); s.unsafe_free()
 
@@ -204,7 +204,7 @@ def test_mix_of_two_constants_collapses_to_flat_albedo() raises:
     _tex(s, '"mx" "spectrum" "mix" "rgb tex1" [ 0.0 0.0 0.0 ]'
             + ' "rgb tex2" [ 1.0 0.5 0.25 ] "float amount" [ 0.5 ]')
     _mat(s, '"m" "string type" [ "diffuse" ] "texture reflectance" [ "mx" ]')
-    var nm = s[0].named_materials[0]
+    var nm = s[unsafe_offset=0].named_materials[0]
     assert_true(nm.tex_idx == Int32(-1))
     assert_true(_close(nm.albedo.r, Float32(0.5)))
     assert_true(_close(nm.albedo.g, Float32(0.25)))

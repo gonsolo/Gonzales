@@ -51,10 +51,10 @@ def test_build_scaled_verbatim_uses_inv_patch_size_normalization() raises:
     "verbatim copy" would actually be caught."""
     var raw = alloc[Float32](3 * 4)  # xs=4, ys=3 -> norm = 1/((4-1)*(3-1)) = 1/6
     for i in range(12):
-        raw[i] = Float32(6.0)
+        raw[unsafe_offset=i] = Float32(6.0)
     var out = _pl2d_build_scaled_verbatim(raw, 4, 3, 1)
     for i in range(12):
-        assert_true(_close(out[i], Float32(1.0)))
+        assert_true(_close(out[unsafe_offset=i], Float32(1.0)))
     raw.unsafe_free(); out.unsafe_free()
 
 def test_build_cdf_marginal_ends_at_one_and_is_monotonic() raises:
@@ -67,19 +67,19 @@ def test_build_cdf_marginal_ends_at_one_and_is_monotonic() raises:
     # Arbitrary nonnegative density, not uniform -- exercises real weighting.
     for y in range(ys):
         for x in range(xs):
-            raw[y * xs + x] = Float32(1.0 + Float64(x)) * Float32(1.0 + Float64(y))
+            raw[unsafe_offset=y * xs + x] = Float32(1.0 + Float64(x)) * Float32(1.0 + Float64(y))
     var (data_out, marginal, conditional) = _pl2d_build_cdf(raw, xs, ys, 1)
 
-    assert_true(_close(marginal[ys - 1], Float32(1.0)))
+    assert_true(_close(marginal[unsafe_offset=ys - 1], Float32(1.0)))
     for y in range(ys - 1):
-        assert_true(marginal[y + 1] >= marginal[y] - EPS)
+        assert_true(marginal[unsafe_offset=y + 1] >= marginal[unsafe_offset=y] - EPS)
     # Conditional CDF's last column of each row must also end at exactly
     # what the marginal step for that row implies -- weaker, cheaper check:
     # just confirm every row's conditional CDF is itself monotonic.
     for y in range(ys):
         for x in range(xs - 1):
             var i = y * xs + x
-            assert_true(conditional[i + 1] >= conditional[i] - EPS)
+            assert_true(conditional[unsafe_offset=i + 1] >= conditional[unsafe_offset=i] - EPS)
 
     raw.unsafe_free(); data_out.unsafe_free(); marginal.unsafe_free(); conditional.unsafe_free()
 
@@ -91,10 +91,10 @@ def test_build_cdf_handles_multiple_slices_independently() raises:
     var xs = 3; var ys = 3
     var raw = alloc[Float32](xs * ys * 2)
     for i in range(xs * ys * 2):
-        raw[i] = Float32(1.0 + Float32(i))
+        raw[unsafe_offset=i] = Float32(1.0 + Float32(i))
     var (data_out, marginal, conditional) = _pl2d_build_cdf(raw, xs, ys, 2)
-    assert_true(_close(marginal[ys - 1], Float32(1.0)))
-    assert_true(_close(marginal[ys + ys - 1], Float32(1.0)))
+    assert_true(_close(marginal[unsafe_offset=ys - 1], Float32(1.0)))
+    assert_true(_close(marginal[unsafe_offset=ys + ys - 1], Float32(1.0)))
     raw.unsafe_free(); data_out.unsafe_free(); marginal.unsafe_free(); conditional.unsafe_free()
 
 # ── Full tensor-file loader (load_measured_brdf_full) ────────────────────────
@@ -108,24 +108,24 @@ def test_build_cdf_handles_multiple_slices_independently() raises:
 
 def _put_u16(mut buf: List[UInt8], v: UInt16):
     var p = UnsafePointer(to=v).unsafe_bitcast[UInt8]()
-    buf.append(p[0]); buf.append(p[1])
+    buf.append(p[unsafe_offset=0]); buf.append(p[unsafe_offset=1])
 
 def _put_u32(mut buf: List[UInt8], v: UInt32):
     var p = UnsafePointer(to=v).unsafe_bitcast[UInt8]()
-    for i in range(4): buf.append(p[i])
+    for i in range(4): buf.append(p[unsafe_offset=i])
 
 def _put_u64(mut buf: List[UInt8], v: UInt64):
     var p = UnsafePointer(to=v).unsafe_bitcast[UInt8]()
-    for i in range(8): buf.append(p[i])
+    for i in range(8): buf.append(p[unsafe_offset=i])
 
 def _put_f32(mut buf: List[UInt8], v: Float32):
     var p = UnsafePointer(to=v).unsafe_bitcast[UInt8]()
-    for i in range(4): buf.append(p[i])
+    for i in range(4): buf.append(p[unsafe_offset=i])
 
 def _lit_len(s: StringLiteral) -> Int:
     var p = s.unsafe_ptr()
     var n = 0
-    while p[n] != UInt8(0):
+    while p[unsafe_offset=n] != UInt8(0):
         n += 1
     return n
 
@@ -134,7 +134,7 @@ def _put_name(mut buf: List[UInt8], name: StringLiteral):
     var np = name.unsafe_ptr()
     _put_u16(buf, UInt16(n))
     for i in range(n):
-        buf.append(np[i])
+        buf.append(np[unsafe_offset=i])
 
 def _write_synthetic_bsdf(path: String) raises:
     """Minimal valid isotropic file: Nphi=1, Ntheta=2, Nlambda=2, ndf/sigma
@@ -146,7 +146,7 @@ def _write_synthetic_bsdf(path: String) raises:
     comptime magic_lit = "tensor_file"
     var magic_p = magic_lit.unsafe_ptr()
     for i in range(_lit_len(magic_lit)):
-        header.append(magic_p[i])
+        header.append(magic_p[unsafe_offset=i])
     header.append(UInt8(0))
     header.append(UInt8(1)); header.append(UInt8(0))  # version 1.0
     _put_u32(header, UInt32(9))  # n_fields
@@ -259,14 +259,14 @@ def test_load_measured_brdf_full_parses_synthetic_file() raises:
     assert_equal(Int(mb.n_theta_i), 2)
     assert_equal(Int(mb.n_phi_i), 1)
     assert_equal(Int(mb.n_wavelengths), 2)
-    assert_true(_close(mb.theta_i[0], Float32(0.0)))
-    assert_true(_close(mb.theta_i[1], Float32(1.0)))
-    assert_true(_close(mb.wavelengths[0], Float32(400.0)))
+    assert_true(_close(mb.theta_i[unsafe_offset=0], Float32(0.0)))
+    assert_true(_close(mb.theta_i[unsafe_offset=1], Float32(1.0)))
+    assert_true(_close(mb.wavelengths[unsafe_offset=0], Float32(400.0)))
     # vndf/luminance CDFs must be normalized (marginal ends at 1.0) for each
     # of the slices*ys entries -- slices = n_phi_i*n_theta_i = 2 here.
-    assert_true(_close(mb.vndf_marg[mb.vndf_ys - 1], Float32(1.0)))
-    assert_true(_close(mb.vndf_marg[2 * mb.vndf_ys - 1], Float32(1.0)))
-    assert_true(_close(mb.lum_marg[mb.lum_ys - 1], Float32(1.0)))
+    assert_true(_close(mb.vndf_marg[unsafe_offset=mb.vndf_ys - 1], Float32(1.0)))
+    assert_true(_close(mb.vndf_marg[unsafe_offset=2 * mb.vndf_ys - 1], Float32(1.0)))
+    assert_true(_close(mb.lum_marg[unsafe_offset=mb.lum_ys - 1], Float32(1.0)))
 
 def test_load_measured_brdf_full_fails_gracefully_on_missing_file() raises:
     var (ok, _mb) = load_measured_brdf_full("/tmp/gonzales_test_measured_does_not_exist.bsdf")

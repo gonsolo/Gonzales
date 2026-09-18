@@ -68,8 +68,8 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
     # whole reuse path off.
     vol_io: VolReservoirIO = vol_reservoir_io_null(),
 ):
-    var sp = samplerParamsPtr[0]
-    var scene = scenePtr[0]
+    var sp = samplerParamsPtr[unsafe_offset=0]
+    var scene = scenePtr[unsafe_offset=0]
     # `maxD` (the outer loop's iteration budget) is padded beyond the scene's
     # own `maxDepth` -- see the deactivation check inside the loop for why.
     # Cheap and safe for a scene with no participating media: a null
@@ -90,7 +90,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
     # and each extra round then costs one cheap inactive-path scan.
     var has_sss = False
     for mi in range(Int(scene.mediumCount)):
-        if scene.mediums[mi].is_sss != Int32(0):
+        if scene.mediums[unsafe_offset=mi].is_sss != Int32(0):
             has_sss = True
             break
     if has_sss:
@@ -132,7 +132,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
     # own `_is_real_ptr(vol_read)` check gates the whole path off first).
     var vol_used_buf = alloc[Int8](n)
     for vu_i in range(n):
-        vol_used_buf[vu_i] = Int8(0)
+        vol_used_buf[unsafe_offset=vu_i] = Int8(0)
 
     # Phase 4's per-path-slot scratch (GIPendingX1), tile-call-local like
     # `paths`/`intersections` above -- NOT frame-wide like gi_io.
@@ -144,7 +144,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
     if use_gi:
         gi_pending_buf = alloc[GIPendingX1](n)
         for gi_i in range(n):
-            gi_pending_buf[gi_i] = gi_pending_x1_init()
+            gi_pending_buf[unsafe_offset=gi_i] = gi_pending_x1_init()
 
     # Generate primary rays from Sobol film samples
     var idx = 0
@@ -164,7 +164,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     sp.filterNormY, sp.filterSupportY,
                     sp.filterType,
                 )
-                paths[idx] = PathState_C(
+                paths[unsafe_offset=idx] = PathState_C(
                     ray,
                     SpectralSample(Float32(1.0)),
                     SpectralSample(Float32(0.0)),
@@ -180,7 +180,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     wavelengths,
                     Float32(0.0),   # mis_null_dist
                 )
-                pixel_idx_buf[idx] = this_pixel_idx
+                pixel_idx_buf[unsafe_offset=idx] = this_pixel_idx
                 idx += 1
 
     # Multi-bounce path trace
@@ -209,22 +209,22 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
             # when it is close, where MIS gives BSDF sampling nearly all the
             # weight. `at_cap` is consumed by _shade_dispatch and
             # _sample_medium_core, which refuse NEE and refuse to scatter.
-            if paths[i].active != 0 and paths[i].bounce >= Int32(trueMaxDepth):
-                paths[i].at_cap = Int8(1)
-            if paths[i].active != 0:
+            if paths[unsafe_offset=i].active != 0 and paths[unsafe_offset=i].bounce >= Int32(trueMaxDepth):
+                paths[unsafe_offset=i].at_cap = Int8(1)
+            if paths[unsafe_offset=i].active != 0:
                 anyActive = True
         if not anyActive:
             break
         for i in range(n):
-            if paths[i].active == 0:
+            if paths[unsafe_offset=i].active == 0:
                 continue
             traverse_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves,
-                               paths[i].ray, Float32(1.0e38), intersections + i,
+                               paths[unsafe_offset=i].ray, Float32(1.0e38), intersections.unsafe_offset(i),
                                scene.blasNodesArr, scene.blasPrimIdsArr, scene.instances)
             if scene.sphereCount > 0:
-                test_spheres(scene.spheres, Int(scene.sphereCount), paths[i].ray, intersections + i)
+                test_spheres(scene.spheres, Int(scene.sphereCount), paths[unsafe_offset=i].ray, intersections.unsafe_offset(i))
         for i in range(n):
-            if paths[i].active == 0:
+            if paths[unsafe_offset=i].active == 0:
                 continue
             # ── Volume transmittance sampling ──────────────────────────
             # Shared with the GPU wavefront path (gpu.mojo's
@@ -250,10 +250,10 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                 scene.distantLights, Int(scene.distantLightCount),
                 scene.pointLights, Int(scene.pointLightCount),
                 vol_read=vol_io.read, vol_write=vol_io.write,
-                pixel_idx=pixel_idx_buf[i], vol_used=vol_used_buf,
+                pixel_idx=pixel_idx_buf[unsafe_offset=i], vol_used=vol_used_buf,
             )
         for i in range(n):
-            if paths[i].active == 0:
+            if paths[unsafe_offset=i].active == 0:
                 continue
             shade_core_cpu_nee(paths, intersections, scene.bvh2Nodes, scene.primIds,
                                scene.meshes, scene.curves, scene.materials,
@@ -267,29 +267,29 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                                blasNodesArr=scene.blasNodesArr, blasPrimIdsArr=scene.blasPrimIdsArr,
                                instances=scene.instances, guide_write=guide_write, spectral=scene.spectral,
                                measured_brdfs=scene.measuredBrdfs, use_restir=use_restir,
-                               restir_io=restir_io, pixel_idx=pixel_idx_buf[i],
+                               restir_io=restir_io, pixel_idx=pixel_idx_buf[unsafe_offset=i],
                                gi_pending=gi_pending_buf, gi_io=gi_io, sms_io=sms_io,
                                nmaps=scene.normalSlopeMaps)
         # ── Medium interface transitions ──────────────────────────
         for i in range(n):
-            if paths[i].active == 0:
+            if paths[unsafe_offset=i].active == 0:
                 continue
-            if intersections[i].hit == Int8(0):
+            if intersections[unsafe_offset=i].hit == Int8(0):
                 continue
-            var mi_mat_idx = Int(intersections[i].primId.materialIndex)
+            var mi_mat_idx = Int(intersections[unsafe_offset=i].primId.materialIndex)
             if mi_mat_idx < 0 or scene.mediumIfaceCount == Int64(0):
                 continue
-            var mi_mat = scene.materials[mi_mat_idx]
+            var mi_mat = scene.materials[unsafe_offset=mi_mat_idx]
             if mi_mat.medium_interface_idx < Int32(0):
                 continue
-            var iface = scene.mediumInterfaces[Int(mi_mat.medium_interface_idx)]
+            var iface = scene.mediumInterfaces[unsafe_offset=Int(mi_mat.medium_interface_idx)]
             var mi_n: Vec3f
-            if intersections[i].primId.type == 4:
+            if intersections[unsafe_offset=i].primId.type == 4:
                 # Sphere: outward normal = hit point - center. Medium-bounding
                 # volumes are commonly a big invisible sphere (e.g.
                 # smoke-plume's MediumInterface .. Shape sphere), so this
                 # case matters even though spheres rarely carry real shading.
-                var mi_sph = scene.spheres[Int(intersections[i].primId.id1)]
+                var mi_sph = scene.spheres[unsafe_offset=Int(intersections[unsafe_offset=i].primId.id1)]
                 # paths[i].ray.origin is ALREADY the hit point: this loop runs
                 # AFTER the material shaders, and every shader (shade_interface
                 # included) rewrites path.ray to the outgoing ray whose origin
@@ -305,31 +305,31 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                 # from the vertices, not from a reconstructed hit point --
                 # which is why only sphere-bounded media (the common case for
                 # a "MediumInterface .. Shape sphere" volume) showed it.
-                var mi_hit = paths[i].ray.origin
+                var mi_hit = paths[unsafe_offset=i].ray.origin
                 mi_n = sphere_outward_normal(mi_hit, mi_sph.center)
             else:
                 var mi_mesh_idx: Int
                 var mi_base_vidx: Int
-                if intersections[i].primId.type == 0:
-                    mi_mesh_idx = Int(intersections[i].primId.id1)
-                    mi_base_vidx = Int(intersections[i].primId.id2)
+                if intersections[unsafe_offset=i].primId.type == 0:
+                    mi_mesh_idx = Int(intersections[unsafe_offset=i].primId.id1)
+                    mi_base_vidx = Int(intersections[unsafe_offset=i].primId.id2)
                 else:
-                    mi_mesh_idx = Int(intersections[i].primId.id2 >> 32)
-                    mi_base_vidx = Int(intersections[i].primId.id2 & 0xFFFFFFFF) * 3
-                var mi_m = scene.meshes[mi_mesh_idx]
-                var mi_vi0 = Int(mi_m.vertexIndices[mi_base_vidx])
-                var mi_vi1 = Int(mi_m.vertexIndices[mi_base_vidx + 1])
-                var mi_vi2 = Int(mi_m.vertexIndices[mi_base_vidx + 2])
-                var mi_p0 = Point3f(mi_m.points[mi_vi0*4], mi_m.points[mi_vi0*4+1], mi_m.points[mi_vi0*4+2])
-                var mi_p1 = Point3f(mi_m.points[mi_vi1*4], mi_m.points[mi_vi1*4+1], mi_m.points[mi_vi1*4+2])
-                var mi_p2 = Point3f(mi_m.points[mi_vi2*4], mi_m.points[mi_vi2*4+1], mi_m.points[mi_vi2*4+2])
+                    mi_mesh_idx = Int(intersections[unsafe_offset=i].primId.id2 >> 32)
+                    mi_base_vidx = Int(intersections[unsafe_offset=i].primId.id2 & 0xFFFFFFFF) * 3
+                var mi_m = scene.meshes[unsafe_offset=mi_mesh_idx]
+                var mi_vi0 = Int(mi_m.vertexIndices[unsafe_offset=mi_base_vidx])
+                var mi_vi1 = Int(mi_m.vertexIndices[unsafe_offset=mi_base_vidx + 1])
+                var mi_vi2 = Int(mi_m.vertexIndices[unsafe_offset=mi_base_vidx + 2])
+                var mi_p0 = Point3f(mi_m.points[unsafe_offset=mi_vi0*4], mi_m.points[unsafe_offset=mi_vi0*4+1], mi_m.points[unsafe_offset=mi_vi0*4+2])
+                var mi_p1 = Point3f(mi_m.points[unsafe_offset=mi_vi1*4], mi_m.points[unsafe_offset=mi_vi1*4+1], mi_m.points[unsafe_offset=mi_vi1*4+2])
+                var mi_p2 = Point3f(mi_m.points[unsafe_offset=mi_vi2*4], mi_m.points[unsafe_offset=mi_vi2*4+1], mi_m.points[unsafe_offset=mi_vi2*4+2])
                 var mi_e1 = mi_p1 - mi_p0; var mi_e2 = mi_p2 - mi_p0
                 mi_n = Vec3f(mi_e1.y*mi_e2.z - mi_e1.z*mi_e2.y, mi_e1.z*mi_e2.x - mi_e1.x*mi_e2.z, mi_e1.x*mi_e2.y - mi_e1.y*mi_e2.x)
-            var mi_dot = paths[i].ray.direction.x * mi_n.x + paths[i].ray.direction.y * mi_n.y + paths[i].ray.direction.z * mi_n.z
+            var mi_dot = paths[unsafe_offset=i].ray.direction.x * mi_n.x + paths[unsafe_offset=i].ray.direction.y * mi_n.y + paths[unsafe_offset=i].ray.direction.z * mi_n.z
             if mi_dot > Float32(0):
-                paths[i].current_medium_idx = iface.outside_medium_idx
+                paths[unsafe_offset=i].current_medium_idx = iface.outside_medium_idx
             else:
-                paths[i].current_medium_idx = iface.inside_medium_idx
+                paths[unsafe_offset=i].current_medium_idx = iface.inside_medium_idx
 
     # Accumulate the spp samples per pixel and emit one result per pixel.
     idx = 0
@@ -351,12 +351,12 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     scene.spectral.coeffs, scene.spectral.res,
                     scene.spectral.cie_x, scene.spectral.cie_y,
                     scene.spectral.cie_z, scene.spectral.d65,
-                    paths[idx].estimate, paths[idx].wavelengths)
+                    paths[unsafe_offset=idx].estimate, paths[unsafe_offset=idx].wavelengths)
                 sumL += RGB(est_rgb[0], est_rgb[1], est_rgb[2])
-                sumA += paths[idx].albedo
+                sumA += paths[unsafe_offset=idx].albedo
                 sumW += sp.filterWeight
                 idx += 1
-            resultsPtr[out] = TileResult_C(sumL, sumA, sumW, px, py)
+            resultsPtr[unsafe_offset=out] = TileResult_C(sumL, sumA, sumW, px, py)
             out += 1
 
     intersections.unsafe_free()
@@ -431,7 +431,7 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
 
     # Progress counter — incremented after each tile (racy, display-only).
     var done_ptr = alloc[Int32](1)
-    done_ptr[0] = Int32(0)
+    done_ptr[unsafe_offset=0] = Int32(0)
     var t0 = perf_counter_ns()
     # Print every ~5% of tiles (at least every 1 tile).
     var print_step = max(n_tiles // 20, 1)
@@ -446,7 +446,7 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
         var ty_max = Int32(min(ty + th, Int(max_y)))
         var tw_actual = Int(tx_max) - tx
         var th_actual = Int(ty_max) - ty
-        var tile_buf = tile_bufs + tile_idx * max_tile_pixels
+        var tile_buf = tile_bufs.unsafe_offset(tile_idx * max_tile_pixels)
         var gw = null_guide()
         if n_write_guides > 0:
             # Range-based assignment: tiles [k*stride, (k+1)*stride) → write_guides[k].
@@ -454,7 +454,7 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
             # ever write to the same shard, eliminating all cross-core cache ping-pong.
             var stride = max(n_tiles // n_write_guides, 1)
             var shard_idx = min(tile_idx // stride, n_write_guides - 1)
-            gw = write_guides[shard_idx]
+            gw = write_guides[unsafe_offset=shard_idx]
         render_tile(
             raster_to_camera, camera_to_world,
             Int32(tx), Int32(ty), tx_max, ty_max,
@@ -464,9 +464,9 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
             for ix in range(tw_actual):
                 var src = iy * tw_actual + ix
                 var dst = (ty + iy - Int(min_y)) * res_x + (tx + ix - Int(min_x))
-                results[dst] = tile_buf[src]
-        done_ptr[0] += Int32(1)
-        var d = Int(done_ptr[0])
+                results[unsafe_offset=dst] = tile_buf[unsafe_offset=src]
+        done_ptr[unsafe_offset=0] += Int32(1)
+        var d = Int(done_ptr[unsafe_offset=0])
         if not quiet and (d % print_step == 0 or d == n_tiles):
             var elapsed = Float64(perf_counter_ns() - t0) / 1.0e9
             print(progress_str(d, n_tiles, elapsed, "tiles"), end="\r")
@@ -495,7 +495,7 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
         parallelize[render_one](n_tiles)
     else:
         var next_tile = alloc[Int32](1)
-        next_tile[0] = Int32(0)
+        next_tile[unsafe_offset=0] = Int32(0)
 
         @parameter
         def tile_worker(_worker_idx: Int):
@@ -512,7 +512,7 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
     # Merge per-tile-group write guides into [0] so caller gets unified result.
     if n_write_guides > 1:
         for i in range(1, n_write_guides):
-            guide_merge(write_guides[0], write_guides[i])
+            guide_merge(write_guides[unsafe_offset=0], write_guides[unsafe_offset=i])
     if not quiet:
         var total_s = Float64(perf_counter_ns() - t0) / 1.0e9
         print("Rendering: " + String(n_tiles) + " / " + String(n_tiles)
@@ -550,17 +550,17 @@ def apply_film_sensor[Ob: Origin[mut=True]](
     if wb_identity and exposure_time == Float32(1.0):
         return
     for i in range(n_pixels):
-        var r = buf[i*3+0] * exposure_time
-        var g = buf[i*3+1] * exposure_time
-        var b = buf[i*3+2] * exposure_time
+        var r = buf[unsafe_offset=i*3+0] * exposure_time
+        var g = buf[unsafe_offset=i*3+1] * exposure_time
+        var b = buf[unsafe_offset=i*3+2] * exposure_time
         if not wb_identity:
             var nr = wb[0]*r + wb[1]*g + wb[2]*b
             var ng = wb[3]*r + wb[4]*g + wb[5]*b
             var nb = wb[6]*r + wb[7]*g + wb[8]*b
             r = nr; g = ng; b = nb
-        buf[i*3+0] = max(Float32(0), r)
-        buf[i*3+1] = max(Float32(0), g)
-        buf[i*3+2] = max(Float32(0), b)
+        buf[unsafe_offset=i*3+0] = max(Float32(0), r)
+        buf[unsafe_offset=i*3+1] = max(Float32(0), g)
+        buf[unsafe_offset=i*3+2] = max(Float32(0), b)
 
 
 def normalize_film[Ores: Origin[mut=True], Obo: Origin[mut=True], Oao: Origin[mut=True]](
@@ -573,15 +573,15 @@ def normalize_film[Ores: Origin[mut=True], Obo: Origin[mut=True], Oao: Origin[mu
 ):
     var scale = iso / Float32(100)
     for i in range(Int(count)):
-        var r = results[i]
+        var r = results[unsafe_offset=i]
         var w = r.filterWeight
         if w == Float32(0):
-            beauty_out[i * 3 + 0] = Float32(0)
-            beauty_out[i * 3 + 1] = Float32(0)
-            beauty_out[i * 3 + 2] = Float32(0)
-            albedo_out[i * 3 + 0] = Float32(0)
-            albedo_out[i * 3 + 1] = Float32(0)
-            albedo_out[i * 3 + 2] = Float32(0)
+            beauty_out[unsafe_offset=i * 3 + 0] = Float32(0)
+            beauty_out[unsafe_offset=i * 3 + 1] = Float32(0)
+            beauty_out[unsafe_offset=i * 3 + 2] = Float32(0)
+            albedo_out[unsafe_offset=i * 3 + 0] = Float32(0)
+            albedo_out[unsafe_offset=i * 3 + 1] = Float32(0)
+            albedo_out[unsafe_offset=i * 3 + 2] = Float32(0)
             continue
         var b = RGB(r.estimate.r / w * scale, r.estimate.g / w * scale, r.estimate.b / w * scale)
         if b.r != b.r or b.r < Float32(0): b.r = Float32(0)
@@ -591,11 +591,11 @@ def normalize_film[Ores: Origin[mut=True], Obo: Origin[mut=True], Oao: Origin[mu
             var mx = max(b.r, max(b.g, b.b))
             if mx > max_component_value:
                 b *= max_component_value / mx
-        beauty_out[i * 3 + 0] = b.r
-        beauty_out[i * 3 + 1] = b.g
-        beauty_out[i * 3 + 2] = b.b
+        beauty_out[unsafe_offset=i * 3 + 0] = b.r
+        beauty_out[unsafe_offset=i * 3 + 1] = b.g
+        beauty_out[unsafe_offset=i * 3 + 2] = b.b
         var a = r.albedo / w
-        albedo_out[i * 3 + 0] = a.r
-        albedo_out[i * 3 + 1] = a.g
-        albedo_out[i * 3 + 2] = a.b
+        albedo_out[unsafe_offset=i * 3 + 0] = a.r
+        albedo_out[unsafe_offset=i * 3 + 1] = a.g
+        albedo_out[unsafe_offset=i * 3 + 2] = a.b
 
