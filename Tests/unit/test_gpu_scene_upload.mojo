@@ -97,7 +97,7 @@ def test_gpu_upload_scene_round_trips_mesh_and_material_data() raises:
     # not the literal scene text, since e.g. checker/mix fields might differ.
     var cpu_mat = psc[0].materials[0]
     with handle[].materials_buf.map_to_host() as h:
-        var gpu_mat = h.unsafe_ptr().bitcast[Material_C]()[0]
+        var gpu_mat = h.unsafe_ptr().unsafe_bitcast[Material_C]()[0]
         assert_true(gpu_mat.type == cpu_mat.type)
         assert_true(_close(gpu_mat.albedo.r, cpu_mat.albedo.r))
         assert_true(_close(gpu_mat.albedo.g, cpu_mat.albedo.g))
@@ -106,7 +106,7 @@ def test_gpu_upload_scene_round_trips_mesh_and_material_data() raises:
     # Mesh point data round-trip (stride-4 floats per vertex: x,y,z,w=1).
     var n_floats = Int(psc[0].mesh_n_verts[0]) * 4
     with handle[].meshes.points_bufs[0].map_to_host() as h:
-        var gpu_pts = h.unsafe_ptr().bitcast[Float32]()
+        var gpu_pts = h.unsafe_ptr().unsafe_bitcast[Float32]()
         var cpu_pts = psc[0].meshes[0].points
         for i in range(n_floats):
             assert_true(_close(gpu_pts[i], cpu_pts[i]))
@@ -119,7 +119,7 @@ def test_gpu_upload_scene_round_trips_mesh_and_material_data() raises:
     assert_true(n_bvh_bytes > 0)
     with handle[].bvh.nodes_buf.map_to_host() as h:
         var gpu_bytes = h.unsafe_ptr()
-        var cpu_bytes = psc[0].bvh_nodes_cpu.bitcast[UInt8]()
+        var cpu_bytes = psc[0].bvh_nodes_cpu.unsafe_bitcast[UInt8]()
         var mismatch = False
         for i in range(n_bvh_bytes):
             if gpu_bytes[i] != cpu_bytes[i]:
@@ -129,11 +129,11 @@ def test_gpu_upload_scene_round_trips_mesh_and_material_data() raises:
 
     # Camera matrices and the Sobol table round-trip too.
     with handle[].r2c_buf.map_to_host() as h:
-        var gpu_r2c = h.unsafe_ptr().bitcast[Float32]()
+        var gpu_r2c = h.unsafe_ptr().unsafe_bitcast[Float32]()
         for i in range(16):
             assert_true(_close(gpu_r2c[i], psc[0].raster_to_camera[i]))
     with handle[].sobol_buf.map_to_host() as h:
-        var gpu_sobol = h.unsafe_ptr().bitcast[UInt32]()
+        var gpu_sobol = h.unsafe_ptr().unsafe_bitcast[UInt32]()
         assert_true(gpu_sobol[0] == UInt32(3))
         assert_true(gpu_sobol[1] == UInt32(10))
         assert_true(gpu_sobol[N_SOBOL_GPU_WORDS - 1] == sobol[N_SOBOL_GPU_WORDS - 1])

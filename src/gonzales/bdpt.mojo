@@ -5502,7 +5502,7 @@ def vulkaninterop_rt_traverse_light_paths_gpu(
     var grid = ceildiv(n_total, block_size)
 
     ctx.enqueue_function[vulkaninterop_pack_light_rays_kernel](
-        state_buf.unsafe_ptr().bitcast[VCMLightPathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        state_buf.unsafe_ptr().unsafe_bitcast[VCMLightPathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         interop_rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         Int64(n_total),
         grid_dim=grid, block_dim=block_size,
@@ -5518,9 +5518,9 @@ def vulkaninterop_rt_traverse_light_paths_gpu(
     # this is always the inert dangling default.
     ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
         interop_results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        mesh_material_idx_buf.unsafe_ptr().bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        mesh_al_idx_buf.unsafe_ptr().bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        mesh_material_idx_buf.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         Int64(n_meshes),
         Int64(n_total),
         UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
@@ -5543,7 +5543,7 @@ def vulkaninterop_rt_traverse_camera_paths_gpu(
     var grid = ceildiv(n_total, block_size)
 
     ctx.enqueue_function[vulkaninterop_pack_camera_rays_kernel](
-        state_buf.unsafe_ptr().bitcast[VCMCameraPathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        state_buf.unsafe_ptr().unsafe_bitcast[VCMCameraPathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         interop_rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         Int64(n_total),
         grid_dim=grid, block_dim=block_size,
@@ -5559,9 +5559,9 @@ def vulkaninterop_rt_traverse_camera_paths_gpu(
     # this is always the inert dangling default.
     ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
         interop_results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        mesh_material_idx_buf.unsafe_ptr().bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        mesh_al_idx_buf.unsafe_ptr().bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        mesh_material_idx_buf.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         Int64(n_meshes),
         Int64(n_total),
         UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling(),
@@ -5628,8 +5628,8 @@ def vulkaninterop_rt_traverse_shadow_gpu(
     var grid = ceildiv(count, block_size)
 
     ctx.enqueue_function[vulkaninterop_pack_all_shadow_rays_kernel](
-        shadow_rays_buf.unsafe_ptr().bitcast[Float32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        shadow_valid_buf.unsafe_ptr().bitcast[Int8]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        shadow_rays_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        shadow_valid_buf.unsafe_ptr().unsafe_bitcast[Int8]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         interop_rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         Int64(count),
         grid_dim=grid, block_dim=block_size,
@@ -5720,25 +5720,25 @@ def vcm_render_gpu(
             var inter_cam_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection_C]())
             var accum_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
             with accum_buf.map_to_host() as host_buf:
-                var dst = host_buf.unsafe_ptr().bitcast[Float32]()
+                var dst = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 for i in range(n_pix * 3):
                     dst[i] = Float32(0)
             var albedo_accum_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
             with albedo_accum_buf.map_to_host() as host_buf:
-                var dst = host_buf.unsafe_ptr().bitcast[Float32]()
+                var dst = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 for i in range(n_pix * 3):
                     dst[i] = Float32(0)
 
             var r2c_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
             with r2c_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
-                var src = psc[0].raster_to_camera.bitcast[UInt8]()
+                var src = psc[0].raster_to_camera.unsafe_bitcast[UInt8]()
                 for i in range(16 * size_of[Float32]()):
                     dst[i] = src[i]
             var c2w_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
             with c2w_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
-                var src = psc[0].camera_to_world.bitcast[UInt8]()
+                var src = psc[0].camera_to_world.unsafe_bitcast[UInt8]()
                 for i in range(16 * size_of[Float32]()):
                     dst[i] = src[i]
 
@@ -5764,30 +5764,30 @@ def vcm_render_gpu(
             var w2c_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
             with w2c_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
-                var src = w2c_host.bitcast[UInt8]()
+                var src = w2c_host.unsafe_bitcast[UInt8]()
                 for i in range(16 * size_of[Float32]()):
                     dst[i] = src[i]
             var c2r_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](9 * size_of[Float32]())
             with c2r_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
-                var src = c2r_host.bitcast[UInt8]()
+                var src = c2r_host.unsafe_bitcast[UInt8]()
                 for i in range(9 * size_of[Float32]()):
                     dst[i] = src[i]
             w2c_host.free()
             c2r_host.free()
-            var w2c_ptr = w2c_buf.unsafe_ptr().bitcast[Float32]()
-            var c2r_ptr = c2r_buf.unsafe_ptr().bitcast[Float32]()
+            var w2c_ptr = w2c_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+            var c2r_ptr = c2r_buf.unsafe_ptr().unsafe_bitcast[Float32]()
 
-            var lvc_ptr     = lvc_buf.unsafe_ptr().bitcast[BDPTVertex]()
-            var path_len_ptr = path_len_buf.unsafe_ptr().bitcast[Int32]()
-            var merge_heads_ptr = merge_heads_buf.unsafe_ptr().bitcast[Int32]()
-            var merge_next_ptr  = merge_next_buf.unsafe_ptr().bitcast[Int32]()
-            var inter_light_ptr = inter_light_buf.unsafe_ptr().bitcast[Intersection_C]()
-            var inter_cam_ptr   = inter_cam_buf.unsafe_ptr().bitcast[Intersection_C]()
-            var accum_ptr   = accum_buf.unsafe_ptr().bitcast[Float32]()
-            var albedo_accum_ptr = albedo_accum_buf.unsafe_ptr().bitcast[Float32]()
-            var r2c_ptr = r2c_buf.unsafe_ptr().bitcast[Float32]()
-            var c2w_ptr = c2w_buf.unsafe_ptr().bitcast[Float32]()
+            var lvc_ptr     = lvc_buf.unsafe_ptr().unsafe_bitcast[BDPTVertex]()
+            var path_len_ptr = path_len_buf.unsafe_ptr().unsafe_bitcast[Int32]()
+            var merge_heads_ptr = merge_heads_buf.unsafe_ptr().unsafe_bitcast[Int32]()
+            var merge_next_ptr  = merge_next_buf.unsafe_ptr().unsafe_bitcast[Int32]()
+            var inter_light_ptr = inter_light_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]()
+            var inter_cam_ptr   = inter_cam_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]()
+            var accum_ptr   = accum_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+            var albedo_accum_ptr = albedo_accum_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+            var r2c_ptr = r2c_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+            var c2w_ptr = c2w_buf.unsafe_ptr().unsafe_bitcast[Float32]()
 
             var bvh2Nodes = handle[].bvh.nodes_ptr()
             var primIds = handle[].bvh.prim_ids_ptr()
@@ -5795,17 +5795,17 @@ def vcm_render_gpu(
             var curves = handle[].curves.curves_ptr()
             var blasNodesArr = handle[].blas.nodes_arr()
             var blasPrimIdsArr = handle[].blas.primids_arr()
-            var instances = handle[].instances_buf.unsafe_ptr().bitcast[Instance_C]()
-            var materials = handle[].materials_buf.unsafe_ptr().bitcast[Material_C]()
-            var mediums = handle[].mediums_buf.unsafe_ptr().bitcast[Medium_C]()
+            var instances = handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance_C]()
+            var materials = handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C]()
+            var mediums = handle[].mediums_buf.unsafe_ptr().unsafe_bitcast[Medium_C]()
             # Device-resident density fields for the free-flight sampler. These
             # were never handed to the VCM/SPPM kernels before, which is exactly
             # why those integrators sampled every heterogeneous medium as uniform
             # density-1 fog -- see geometry.mojo's sample_free_flight.
-            var grids_dev = handle[].grids_buf.unsafe_ptr().bitcast[Grid_C]()
-            var nvdb_grids_dev = handle[].nvdb_grids_buf.unsafe_ptr().bitcast[NvdbGrid_C]()
-            var mediumInterfaces = handle[].medium_ifaces_buf.unsafe_ptr().bitcast[MediumInterface_C]()
-            var spheres = handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C]()
+            var grids_dev = handle[].grids_buf.unsafe_ptr().unsafe_bitcast[Grid_C]()
+            var nvdb_grids_dev = handle[].nvdb_grids_buf.unsafe_ptr().unsafe_bitcast[NvdbGrid_C]()
+            var mediumInterfaces = handle[].medium_ifaces_buf.unsafe_ptr().unsafe_bitcast[MediumInterface_C]()
+            var spheres = handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C]()
             var areaLights = handle[].lights.area_lights_ptr()
             var distantLights = handle[].lights.distant_lights_ptr()
             var infiniteLights = handle[].lights.infinite_lights_ptr()
@@ -5821,7 +5821,7 @@ def vcm_render_gpu(
             var n_blas = Int64(handle[].blas.n_blas)
             var n_instances = Int64(handle[].n_instances)
             var (spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) = handle[].spectral.unsafe_ptrs()
-            var measured_brdfs = handle[].measured_brdfs_buf.unsafe_ptr().bitcast[MeasuredBRDF_C]()
+            var measured_brdfs = handle[].measured_brdfs_buf.unsafe_ptr().unsafe_bitcast[MeasuredBRDF_C]()
             var n_measured_brdfs = Int64(handle[].n_measured_brdfs)
             var gpu_textures = handle[].textures.textures_ptr()
             var n_gpu_textures = Int64(handle[].textures.n_textures)
@@ -5923,7 +5923,7 @@ def vcm_render_gpu(
 
             var pixels = alloc[Float32](n_pix * 3)
             with accum_buf.map_to_host() as host_buf:
-                var src = host_buf.unsafe_ptr().bitcast[Float32]()
+                var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 var inv_spp = iso_scale / Float32(n_spp)
                 for i in range(n_pix):
                     var r = src[i*3]   * inv_spp
@@ -5943,7 +5943,7 @@ def vcm_render_gpu(
             # same CPU denoise() the CPU BDPT path uses.
             var albedo_pixels = alloc[Float32](n_pix * 3)
             with albedo_accum_buf.map_to_host() as host_buf:
-                var src = host_buf.unsafe_ptr().bitcast[Float32]()
+                var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 var inv_spp_alb = Float32(1) / Float32(n_spp)
                 for i in range(n_pix * 3):
                     albedo_pixels[i] = src[i] * inv_spp_alb
@@ -6116,7 +6116,7 @@ def resolve_shadow_connect_gpu(
     var dist = shadow_rays[idx8 + 7] / Float32(0.9995)
 
     var ridx = tid * 8
-    var iresults = shadow_results.bitcast[Int32]()
+    var iresults = shadow_results.unsafe_bitcast[Int32]()
     var hitFlag = iresults[ridx + 6]
 
     var needs_fallback = False
@@ -6271,41 +6271,41 @@ def vcm_render_gpu_wavefront(
             var shadow_scratch_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(shadow_cap, 1) * size_of[Intersection_C]())
             var accum_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
             with accum_buf.map_to_host() as host_buf:
-                var dst = host_buf.unsafe_ptr().bitcast[Float32]()
+                var dst = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 for i in range(n_pix * 3):
                     dst[i] = Float32(0)
             var albedo_accum_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
             with albedo_accum_buf.map_to_host() as host_buf:
-                var dst = host_buf.unsafe_ptr().bitcast[Float32]()
+                var dst = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 for i in range(n_pix * 3):
                     dst[i] = Float32(0)
 
             var r2c_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
             with r2c_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
-                var src = psc[0].raster_to_camera.bitcast[UInt8]()
+                var src = psc[0].raster_to_camera.unsafe_bitcast[UInt8]()
                 for i in range(16 * size_of[Float32]()):
                     dst[i] = src[i]
             var c2w_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
             with c2w_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
-                var src = psc[0].camera_to_world.bitcast[UInt8]()
+                var src = psc[0].camera_to_world.unsafe_bitcast[UInt8]()
                 for i in range(16 * size_of[Float32]()):
                     dst[i] = src[i]
 
-            var lvc_ptr     = lvc_buf.unsafe_ptr().bitcast[BDPTVertex]()
-            var path_len_ptr = path_len_buf.unsafe_ptr().bitcast[Int32]()
-            var merge_heads_ptr = merge_heads_buf.unsafe_ptr().bitcast[Int32]()
-            var merge_next_ptr  = merge_next_buf.unsafe_ptr().bitcast[Int32]()
-            var inter_light_ptr = inter_light_buf.unsafe_ptr().bitcast[Intersection_C]()
-            var inter_cam_ptr   = inter_cam_buf.unsafe_ptr().bitcast[Intersection_C]()
-            var light_states_ptr = light_states_buf.unsafe_ptr().bitcast[VCMLightPathState_C]()
-            var cam_states_ptr   = cam_states_buf.unsafe_ptr().bitcast[VCMCameraPathState_C]()
-            var shadow_rays_ptr    = shadow_rays_buf.unsafe_ptr().bitcast[Float32]()
-            var shadow_pending_ptr = shadow_pending_buf.unsafe_ptr().bitcast[SpectralSample]()
-            var shadow_valid_ptr   = shadow_valid_buf.unsafe_ptr().bitcast[Int8]()
-            var shadow_seg_med_ptr = shadow_seg_med_buf.unsafe_ptr().bitcast[Int32]()
-            var shadow_scratch_ptr = shadow_scratch_buf.unsafe_ptr().bitcast[Intersection_C]()
+            var lvc_ptr     = lvc_buf.unsafe_ptr().unsafe_bitcast[BDPTVertex]()
+            var path_len_ptr = path_len_buf.unsafe_ptr().unsafe_bitcast[Int32]()
+            var merge_heads_ptr = merge_heads_buf.unsafe_ptr().unsafe_bitcast[Int32]()
+            var merge_next_ptr  = merge_next_buf.unsafe_ptr().unsafe_bitcast[Int32]()
+            var inter_light_ptr = inter_light_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]()
+            var inter_cam_ptr   = inter_cam_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]()
+            var light_states_ptr = light_states_buf.unsafe_ptr().unsafe_bitcast[VCMLightPathState_C]()
+            var cam_states_ptr   = cam_states_buf.unsafe_ptr().unsafe_bitcast[VCMCameraPathState_C]()
+            var shadow_rays_ptr    = shadow_rays_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+            var shadow_pending_ptr = shadow_pending_buf.unsafe_ptr().unsafe_bitcast[SpectralSample]()
+            var shadow_valid_ptr   = shadow_valid_buf.unsafe_ptr().unsafe_bitcast[Int8]()
+            var shadow_seg_med_ptr = shadow_seg_med_buf.unsafe_ptr().unsafe_bitcast[Int32]()
+            var shadow_scratch_ptr = shadow_scratch_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]()
             # Task #163 stage 5 perf fix #3 (2026-07-13): scene-adaptive
             # shadow-ray batching. Investigation (dragon vs cornell-box)
             # found the one-shot n_pix*_BDPT_MAX_VERTS dispatch (perf fix
@@ -6324,10 +6324,10 @@ def vcm_render_gpu_wavefront(
             # points (cornell-box/dragon), not a rigorously derived
             # constant -- revisit if a 3rd scene disagrees.
             var shadow_batch_enabled = use_vk
-            var accum_ptr   = accum_buf.unsafe_ptr().bitcast[Float32]()
-            var albedo_accum_ptr = albedo_accum_buf.unsafe_ptr().bitcast[Float32]()
-            var r2c_ptr = r2c_buf.unsafe_ptr().bitcast[Float32]()
-            var c2w_ptr = c2w_buf.unsafe_ptr().bitcast[Float32]()
+            var accum_ptr   = accum_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+            var albedo_accum_ptr = albedo_accum_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+            var r2c_ptr = r2c_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+            var c2w_ptr = c2w_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             # t=1 light tracing needs the same two camera-projection
             # matrices vcm_render / vcm_render_gpu build (see vcm_render's
             # comment): w2c = inverse(cameraToWorld), and c2r inverting the
@@ -6350,19 +6350,19 @@ def vcm_render_gpu_wavefront(
             var w2c_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
             with w2c_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
-                var src = w2c_host.bitcast[UInt8]()
+                var src = w2c_host.unsafe_bitcast[UInt8]()
                 for i in range(16 * size_of[Float32]()):
                     dst[i] = src[i]
             var c2r_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](9 * size_of[Float32]())
             with c2r_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
-                var src = c2r_host.bitcast[UInt8]()
+                var src = c2r_host.unsafe_bitcast[UInt8]()
                 for i in range(9 * size_of[Float32]()):
                     dst[i] = src[i]
             w2c_host.free()
             c2r_host.free()
-            var w2c_ptr = w2c_buf.unsafe_ptr().bitcast[Float32]()
-            var c2r_ptr = c2r_buf.unsafe_ptr().bitcast[Float32]()
+            var w2c_ptr = w2c_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+            var c2r_ptr = c2r_buf.unsafe_ptr().unsafe_bitcast[Float32]()
 
             var bvh2Nodes = handle[].bvh.nodes_ptr()
             var primIds = handle[].bvh.prim_ids_ptr()
@@ -6370,17 +6370,17 @@ def vcm_render_gpu_wavefront(
             var curves = handle[].curves.curves_ptr()
             var blasNodesArr = handle[].blas.nodes_arr()
             var blasPrimIdsArr = handle[].blas.primids_arr()
-            var instances = handle[].instances_buf.unsafe_ptr().bitcast[Instance_C]()
-            var materials = handle[].materials_buf.unsafe_ptr().bitcast[Material_C]()
-            var mediums = handle[].mediums_buf.unsafe_ptr().bitcast[Medium_C]()
+            var instances = handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance_C]()
+            var materials = handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C]()
+            var mediums = handle[].mediums_buf.unsafe_ptr().unsafe_bitcast[Medium_C]()
             # Device-resident density fields for the free-flight sampler. These
             # were never handed to the VCM/SPPM kernels before, which is exactly
             # why those integrators sampled every heterogeneous medium as uniform
             # density-1 fog -- see geometry.mojo's sample_free_flight.
-            var grids_dev = handle[].grids_buf.unsafe_ptr().bitcast[Grid_C]()
-            var nvdb_grids_dev = handle[].nvdb_grids_buf.unsafe_ptr().bitcast[NvdbGrid_C]()
-            var mediumInterfaces = handle[].medium_ifaces_buf.unsafe_ptr().bitcast[MediumInterface_C]()
-            var spheres = handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C]()
+            var grids_dev = handle[].grids_buf.unsafe_ptr().unsafe_bitcast[Grid_C]()
+            var nvdb_grids_dev = handle[].nvdb_grids_buf.unsafe_ptr().unsafe_bitcast[NvdbGrid_C]()
+            var mediumInterfaces = handle[].medium_ifaces_buf.unsafe_ptr().unsafe_bitcast[MediumInterface_C]()
+            var spheres = handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C]()
             var areaLights = handle[].lights.area_lights_ptr()
             var distantLights = handle[].lights.distant_lights_ptr()
             var infiniteLights = handle[].lights.infinite_lights_ptr()
@@ -6396,7 +6396,7 @@ def vcm_render_gpu_wavefront(
             var n_blas = Int64(handle[].blas.n_blas)
             var n_instances = Int64(handle[].n_instances)
             var (spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) = handle[].spectral.unsafe_ptrs()
-            var measured_brdfs = handle[].measured_brdfs_buf.unsafe_ptr().bitcast[MeasuredBRDF_C]()
+            var measured_brdfs = handle[].measured_brdfs_buf.unsafe_ptr().unsafe_bitcast[MeasuredBRDF_C]()
             var n_measured_brdfs = Int64(handle[].n_measured_brdfs)
             var gpu_textures = handle[].textures.textures_ptr()
             var n_gpu_textures = Int64(handle[].textures.n_textures)
@@ -6493,7 +6493,7 @@ def vcm_render_gpu_wavefront(
                 if use_vk and si == 0:
                     var sum_pl = 0
                     with path_len_buf.map_to_host() as host_buf:
-                        var pl = host_buf.unsafe_ptr().bitcast[Int32]()
+                        var pl = host_buf.unsafe_ptr().unsafe_bitcast[Int32]()
                         for pli in range(n_light_paths_merge):
                             sum_pl += Int(pl[pli])
                     var occupancy = (Float64(sum_pl) / Float64(n_light_paths_merge)) / Float64(_BDPT_MAX_VERTS)
@@ -6588,7 +6588,7 @@ def vcm_render_gpu_wavefront(
                             shadow_cap)
                         handle[].ctx.enqueue_function[resolve_shadow_connect_gpu](
                             interop_results_buf.value().unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-                            mesh_material_idx_buf.value().unsafe_ptr().bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+                            mesh_material_idx_buf.value().unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
                             Int64(n_meshes_vk),
                             cam_states_ptr, shadow_pending_ptr, shadow_valid_ptr, shadow_seg_med_ptr, shadow_rays_ptr,
                             shadow_scratch_ptr, Int64(shadow_cap),
@@ -6639,7 +6639,7 @@ def vcm_render_gpu_wavefront(
 
             var pixels = alloc[Float32](n_pix * 3)
             with accum_buf.map_to_host() as host_buf:
-                var src = host_buf.unsafe_ptr().bitcast[Float32]()
+                var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 var inv_spp = iso_scale / Float32(n_spp)
                 for i in range(n_pix):
                     var r = src[i*3]   * inv_spp
@@ -6659,7 +6659,7 @@ def vcm_render_gpu_wavefront(
             # same CPU denoise() the CPU BDPT path uses.
             var albedo_pixels = alloc[Float32](n_pix * 3)
             with albedo_accum_buf.map_to_host() as host_buf:
-                var src = host_buf.unsafe_ptr().bitcast[Float32]()
+                var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 var inv_spp_alb = Float32(1) / Float32(n_spp)
                 for i in range(n_pix * 3):
                     albedo_pixels[i] = src[i] * inv_spp_alb
@@ -7193,26 +7193,26 @@ def sppm_render_gpu(
             var r2c_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
             with r2c_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
-                var src = psc[0].raster_to_camera.bitcast[UInt8]()
+                var src = psc[0].raster_to_camera.unsafe_bitcast[UInt8]()
                 for i in range(16 * size_of[Float32]()):
                     dst[i] = src[i]
             var c2w_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
             with c2w_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr()
-                var src = psc[0].camera_to_world.bitcast[UInt8]()
+                var src = psc[0].camera_to_world.unsafe_bitcast[UInt8]()
                 for i in range(16 * size_of[Float32]()):
                     dst[i] = src[i]
 
-            var vps_ptr    = vps_buf.unsafe_ptr().bitcast[SPPMPixel]().unsafe_origin_cast[MutExternalOrigin]()
-            var photons_ptr = photons_buf.unsafe_ptr().bitcast[SPPMPhoton]().unsafe_origin_cast[MutExternalOrigin]()
-            var heads_ptr  = heads_buf.unsafe_ptr().bitcast[Int32]().unsafe_origin_cast[MutExternalOrigin]()
-            var inter_cam_ptr = inter_cam_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_origin_cast[MutExternalOrigin]()
-            var inter_ph_ptr  = inter_ph_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_origin_cast[MutExternalOrigin]()
-            var counter_ptr = counter_buf.unsafe_ptr().bitcast[Int32]().unsafe_origin_cast[MutExternalOrigin]()
-            var out_ptr     = out_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
-            var albedo_out_ptr = albedo_out_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
-            var r2c_ptr = r2c_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
-            var c2w_ptr = c2w_buf.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
+            var vps_ptr    = vps_buf.unsafe_ptr().unsafe_bitcast[SPPMPixel]().unsafe_origin_cast[MutExternalOrigin]()
+            var photons_ptr = photons_buf.unsafe_ptr().unsafe_bitcast[SPPMPhoton]().unsafe_origin_cast[MutExternalOrigin]()
+            var heads_ptr  = heads_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_origin_cast[MutExternalOrigin]()
+            var inter_cam_ptr = inter_cam_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_origin_cast[MutExternalOrigin]()
+            var inter_ph_ptr  = inter_ph_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_origin_cast[MutExternalOrigin]()
+            var counter_ptr = counter_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_origin_cast[MutExternalOrigin]()
+            var out_ptr     = out_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
+            var albedo_out_ptr = albedo_out_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
+            var r2c_ptr = r2c_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
+            var c2w_ptr = c2w_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin]()
 
             var bvh2Nodes = handle[].bvh.nodes_ptr()
             var primIds = handle[].bvh.prim_ids_ptr()
@@ -7220,17 +7220,17 @@ def sppm_render_gpu(
             var curves = handle[].curves.curves_ptr()
             var blasNodesArr = handle[].blas.nodes_arr()
             var blasPrimIdsArr = handle[].blas.primids_arr()
-            var instances = handle[].instances_buf.unsafe_ptr().bitcast[Instance_C]()
-            var materials = handle[].materials_buf.unsafe_ptr().bitcast[Material_C]()
-            var mediums = handle[].mediums_buf.unsafe_ptr().bitcast[Medium_C]()
+            var instances = handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance_C]()
+            var materials = handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C]()
+            var mediums = handle[].mediums_buf.unsafe_ptr().unsafe_bitcast[Medium_C]()
             # Device-resident density fields for the free-flight sampler. These
             # were never handed to the VCM/SPPM kernels before, which is exactly
             # why those integrators sampled every heterogeneous medium as uniform
             # density-1 fog -- see geometry.mojo's sample_free_flight.
-            var grids_dev = handle[].grids_buf.unsafe_ptr().bitcast[Grid_C]()
-            var nvdb_grids_dev = handle[].nvdb_grids_buf.unsafe_ptr().bitcast[NvdbGrid_C]()
-            var mediumInterfaces = handle[].medium_ifaces_buf.unsafe_ptr().bitcast[MediumInterface_C]()
-            var spheres = handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C]()
+            var grids_dev = handle[].grids_buf.unsafe_ptr().unsafe_bitcast[Grid_C]()
+            var nvdb_grids_dev = handle[].nvdb_grids_buf.unsafe_ptr().unsafe_bitcast[NvdbGrid_C]()
+            var mediumInterfaces = handle[].medium_ifaces_buf.unsafe_ptr().unsafe_bitcast[MediumInterface_C]()
+            var spheres = handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C]()
             var areaLights = handle[].lights.area_lights_ptr()
             var distantLights = handle[].lights.distant_lights_ptr()
             var infiniteLights = handle[].lights.infinite_lights_ptr()
@@ -7246,7 +7246,7 @@ def sppm_render_gpu(
             var n_blas = Int64(handle[].blas.n_blas)
             var n_instances = Int64(handle[].n_instances)
             var (spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) = handle[].spectral.unsafe_ptrs()
-            var measured_brdfs = handle[].measured_brdfs_buf.unsafe_ptr().bitcast[MeasuredBRDF_C]()
+            var measured_brdfs = handle[].measured_brdfs_buf.unsafe_ptr().unsafe_bitcast[MeasuredBRDF_C]()
             var n_measured_brdfs = Int64(handle[].n_measured_brdfs)
             var gpu_textures = handle[].textures.textures_ptr()
             var n_gpu_textures = Int64(handle[].textures.n_textures)
@@ -7296,7 +7296,7 @@ def sppm_render_gpu(
                 handle[].ctx.synchronize()
                 var n_stored_raw: Int32
                 with counter_buf.map_to_host() as host_buf:
-                    var src = host_buf.unsafe_ptr().bitcast[Int32]()
+                    var src = host_buf.unsafe_ptr().unsafe_bitcast[Int32]()
                     n_stored_raw = src[0]
                 # A silent clamp is how dropped deposits stay invisible: the
                 # estimator still divides by the FULL emitted count, so the
@@ -7358,7 +7358,7 @@ def sppm_render_gpu(
             if verbose:
                 var n_novp = 0; var n_nophot = 0; var n_dark = 0; var n_tot = 0; var n_envonly = 0; var n_bssrdf = 0; var n_bssrdf_lit = 0; var n_bssrdf_nan = 0
                 with vps_buf.map_to_host() as vh:
-                    var vp_host = vh.unsafe_ptr().bitcast[SPPMPixel]()
+                    var vp_host = vh.unsafe_ptr().unsafe_bitcast[SPPMPixel]()
                     for pi in range(n_pix):
                         var any_valid = False
                         var any_phot = False
@@ -7389,7 +7389,7 @@ def sppm_render_gpu(
                         elif not any_phot: n_nophot += 1
                 var n_ph_surf = 0; var n_ph_vol = 0; var n_ph_bssrdf = 0
                 with photons_buf.map_to_host() as ph_h:
-                    var ph_host = ph_h.unsafe_ptr().bitcast[SPPMPhoton]()
+                    var ph_host = ph_h.unsafe_ptr().unsafe_bitcast[SPPMPhoton]()
                     var n_scan = min(max_photons, 200000)
                     for k in range(n_scan):
                         var kind = Int(ph_host[k].is_volume)
@@ -7419,7 +7419,7 @@ def sppm_render_gpu(
             var out_pixels = alloc[Float32](n_pix * 3)
             with out_buf.map_to_host() as host_buf:
                 var src = host_buf.unsafe_ptr()
-                var dst = out_pixels.bitcast[UInt8]()
+                var dst = out_pixels.unsafe_bitcast[UInt8]()
                 for i in range(n_pix * 3 * size_of[Float32]()):
                     dst[i] = src[i]
 
@@ -7431,7 +7431,7 @@ def sppm_render_gpu(
             var albedo_pixels = alloc[Float32](n_pix * 3)
             with albedo_out_buf.map_to_host() as host_buf:
                 var src = host_buf.unsafe_ptr()
-                var dst = albedo_pixels.bitcast[UInt8]()
+                var dst = albedo_pixels.unsafe_bitcast[UInt8]()
                 for i in range(n_pix * 3 * size_of[Float32]()):
                     dst[i] = src[i]
 

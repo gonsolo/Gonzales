@@ -20,19 +20,19 @@ from .geometry import MeasuredBRDF_C
 
 @always_inline
 def _mbsdf_u16(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int:
-    return Int((buf + pos).bitcast[UInt16]()[0])
+    return Int((buf + pos).unsafe_bitcast[UInt16]()[0])
 
 @always_inline
 def _mbsdf_u32(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int:
-    return Int((buf + pos).bitcast[UInt32]()[0])
+    return Int((buf + pos).unsafe_bitcast[UInt32]()[0])
 
 @always_inline
 def _mbsdf_u64(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int:
-    return Int((buf + pos).bitcast[UInt64]()[0])
+    return Int((buf + pos).unsafe_bitcast[UInt64]()[0])
 
 @always_inline
 def _mbsdf_f32(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float32:
-    return (buf + pos).bitcast[Float32]()[0]
+    return (buf + pos).unsafe_bitcast[Float32]()[0]
 
 def _mbsdf_field_eq(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int, length: Int, literal: StringLiteral) -> Bool:
     var lp = literal.unsafe_ptr()

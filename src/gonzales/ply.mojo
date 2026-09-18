@@ -131,11 +131,11 @@ def _ply_type_size(line: UnsafePointer[UInt8, MutExternalOrigin], word_n: Int) -
 
 @always_inline
 def _ply_f32_le(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float32:
-    return (buf + pos).bitcast[Float32]()[0]
+    return (buf + pos).unsafe_bitcast[Float32]()[0]
 
 @always_inline
 def _ply_i32_le(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int32:
-    return (buf + pos).bitcast[Int32]()[0]
+    return (buf + pos).unsafe_bitcast[Int32]()[0]
 
 @always_inline
 def _ply_u8_at(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int:
@@ -145,7 +145,7 @@ def _ply_f32_be(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float
     var tmp = alloc[UInt8](4)
     tmp[0] = buf[pos + 3]; tmp[1] = buf[pos + 2]
     tmp[2] = buf[pos + 1]; tmp[3] = buf[pos + 0]
-    var v = tmp.bitcast[Float32]()[0]
+    var v = tmp.unsafe_bitcast[Float32]()[0]
     tmp.free()
     return v
 
@@ -153,7 +153,7 @@ def _ply_i32_be(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int32
     var tmp = alloc[UInt8](4)
     tmp[0] = buf[pos + 3]; tmp[1] = buf[pos + 2]
     tmp[2] = buf[pos + 1]; tmp[3] = buf[pos + 0]
-    var v = tmp.bitcast[Int32]()[0]
+    var v = tmp.unsafe_bitcast[Int32]()[0]
     tmp.free()
     return v
 
@@ -162,7 +162,7 @@ def _ply_f64_le(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float
     var tmp = alloc[UInt8](8)
     for k in range(8):
         tmp[k] = buf[pos + k]
-    var d = tmp.bitcast[Float64]()[0]
+    var d = tmp.unsafe_bitcast[Float64]()[0]
     tmp.free()
     return Float32(d)
 
@@ -170,7 +170,7 @@ def _ply_f64_be(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float
     var tmp = alloc[UInt8](8)
     for k in range(8):
         tmp[k] = buf[pos + 7 - k]
-    var d = tmp.bitcast[Float64]()[0]
+    var d = tmp.unsafe_bitcast[Float64]()[0]
     tmp.free()
     return Float32(d)
 
@@ -180,7 +180,7 @@ def _ply_read_count(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int, type
         return Int(buf[pos])
     if type_size == 2:
         if le:
-            return Int((buf + pos).bitcast[UInt16]()[0])
+            return Int((buf + pos).unsafe_bitcast[UInt16]()[0])
         else:
             return Int(UInt16(buf[pos]) << 8 | UInt16(buf[pos + 1]))
     # 4-byte count
@@ -382,7 +382,7 @@ def load_ply(
             elif face_idx_size == 4:
                 face_idx[fi] = _ply_i32_le(file_buf, pos) if is_le else _ply_i32_be(file_buf, pos)
             elif face_idx_size == 2:
-                face_idx[fi] = Int32((file_buf + pos).bitcast[Int16]()[0]) if is_le else Int32(Int16(file_buf[pos]) << 8 | Int16(file_buf[pos+1]))
+                face_idx[fi] = Int32((file_buf + pos).unsafe_bitcast[Int16]()[0]) if is_le else Int32(Int16(file_buf[pos]) << 8 | Int16(file_buf[pos+1]))
             else:
                 face_idx[fi] = Int32(file_buf[pos])
             if not is_ascii:

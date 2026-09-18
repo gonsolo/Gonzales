@@ -50,10 +50,10 @@ def typed_ptr[T: AnyType](mut buf: DeviceBuffer[DType.uint8]) -> UnsafePointer[T
     with an origin that can escape the caller (unsafe_ptr() alone ties the
     origin to the buffer's local scope; MutExternalOrigin is required for
     GpuSceneHandle's buffer accessor methods, whose return values are used
-    well past that scope). Collapses the buf.unsafe_ptr().bitcast[T]()
+    well past that scope). Collapses the buf.unsafe_ptr().unsafe_bitcast[T]()
     .unsafe_origin_cast[MutExternalOrigin]() chain repeated at every
     GpuSceneHandle sub-struct's accessor into one call."""
-    return buf.unsafe_ptr().bitcast[T]().unsafe_origin_cast[MutExternalOrigin]()
+    return buf.unsafe_ptr().unsafe_bitcast[T]().unsafe_origin_cast[MutExternalOrigin]()
 
 # (levels, total texels) of a full mip pyramid down to 1x1.
 def _mip_texel_count(tw: Int, th: Int) -> Tuple[Int, Int]:
@@ -228,7 +228,7 @@ def _load_host_texture(
             var (nlev, texels) = _mip_texel_count(tw, th)
             var pyr = alloc[Float32](texels * 3)
             _fill_f32_mips(pyr, data_out[0], tw, th)
-            result = _HostTexture(pyr.bitcast[UInt8]().unsafe_origin_cast[MutExternalOrigin](), texels * 3 * 4,
+            result = _HostTexture(pyr.unsafe_bitcast[UInt8]().unsafe_origin_cast[MutExternalOrigin](), texels * 3 * 4,
                                   Int32(tw), Int32(th), Int32(nlev), Int32(3), Int32(GpuTexture_C.FORMAT_F32), Int32(0))
             _ = external_call["free_texture_rgb", Int32, UnsafePointer[Float32, MutExternalOrigin]](data_out[0])
         data_out.free()
@@ -517,7 +517,7 @@ def _gpu_upload_array[T: AnyType](
 ) raises -> DeviceBuffer[DType.uint8]:
     var buf = ctx.enqueue_create_buffer[DType.uint8](max(count, 1) * size_of[T]())
     if count > 0:
-        ctx.enqueue_copy(buf, src.bitcast[UInt8]())
+        ctx.enqueue_copy(buf, src.unsafe_bitcast[UInt8]())
     return buf^
 
 # _gpu_upload_array into a buffer that `bufs` keeps alive; returns its device
@@ -664,9 +664,9 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var blas_primids_ptrs_host = alloc[UnsafePointer[UInt8, MutExternalOrigin]](max(n_blas_int, 1))
             for bi in range(n_blas_int):
                 blas_nodes_ptrs_host[bi] = _gpu_upload_owned[BVH2Node](
-                    ctx, blas_nodes_bufs, blasNodesArr[bi], Int(blasNodeCounts[bi])).bitcast[UInt8]()
+                    ctx, blas_nodes_bufs, blasNodesArr[bi], Int(blasNodeCounts[bi])).unsafe_bitcast[UInt8]()
                 blas_primids_ptrs_host[bi] = _gpu_upload_owned[PrimId_C](
-                    ctx, blas_primids_bufs, blasPrimIdsArr[bi], Int(blasPrimidCounts[bi])).bitcast[UInt8]()
+                    ctx, blas_primids_bufs, blasPrimIdsArr[bi], Int(blasPrimidCounts[bi])).unsafe_bitcast[UInt8]()
 
             var blas_nodes_ptrs_buf = _gpu_upload_array[UnsafePointer[UInt8, MutExternalOrigin]](
                 ctx, blas_nodes_ptrs_host, n_blas_int)
@@ -919,7 +919,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var r_curve_cand_count_buf  = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * 4)
             var r_curve_cand_offset_buf = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * 4)
             ctx.enqueue_function[init_curve_cand_offset_gpu](
-                r_curve_cand_offset_buf.unsafe_ptr().bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+                r_curve_cand_offset_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
                 Int64(n_curve_paths),
                 grid_dim=ceildiv(n_curve_paths, 256), block_dim=256,
             )
@@ -1166,7 +1166,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             ))
 
             print("GPU: scene uploaded")
-            return handle.bitcast[GpuSceneHandle]()
+            return handle.unsafe_bitcast[GpuSceneHandle]()
         except e:
             var msg = String(e)
             if "libnvidia" in msg or "nvidia-ml" in msg:
@@ -3359,7 +3359,7 @@ def vulkaninterop_unpack_results_kernel(
     if tid >= count:
         return
     var idx = tid * 8
-    var iresults = results.bitcast[Int32]()
+    var iresults = results.unsafe_bitcast[Int32]()
     var hitFlag = iresults[idx + 6]
     if hitFlag == Int32(1):
         var raw_idx = Int(iresults[idx + 4])
@@ -3479,7 +3479,7 @@ def vulkaninterop_rt_traverse_paths_gpu(
     var grid = ceildiv(n_total, block_size)
 
     ctx.enqueue_function[vulkaninterop_pack_rays_kernel](
-        path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         interop_rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         Int64(n_total),
         grid_dim=grid, block_dim=block_size,
@@ -3490,13 +3490,13 @@ def vulkaninterop_rt_traverse_paths_gpu(
 
     var instance_base_mesh_ptr = UnsafePointer[Int32, MutExternalOrigin].unsafe_dangling()
     if instance_base_mesh_buf:
-        instance_base_mesh_ptr = instance_base_mesh_buf.value().unsafe_ptr().bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin]()
+        instance_base_mesh_ptr = instance_base_mesh_buf.value().unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin]()
 
     ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
         interop_results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        mesh_material_idx_buf.unsafe_ptr().bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        mesh_al_idx_buf.unsafe_ptr().bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        mesh_material_idx_buf.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         Int64(n_meshes),
         Int64(n_total),
         instance_base_mesh_ptr,
@@ -3510,8 +3510,8 @@ def vulkaninterop_rt_traverse_paths_gpu(
 
     if n_spheres > 0:
         ctx.enqueue_function[vulkaninterop_test_spheres_gpu](
-            path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-            inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+            path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+            inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
             spheres,
             Int64(n_spheres),
             Int64(n_total),
@@ -3803,27 +3803,27 @@ def gpu_gen_aux_buffers[Oc: Origin[mut=True]](
     comptime if has_accelerator():
         try:
             var handle = handlePtr
-            handle[].ctx.enqueue_copy(handle[].c2w_buf, c2w.bitcast[UInt8]())
+            handle[].ctx.enqueue_copy(handle[].c2w_buf, c2w.unsafe_bitcast[UInt8]())
             comptime block_size = 256
             var grid_n = ceildiv(n_pix, block_size)
             handle[].ctx.enqueue_function[gen_aux_buffers_gpu](
-                handle[].r2c_buf.unsafe_ptr().bitcast[Float32](),
-                handle[].c2w_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].r2c_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].c2w_buf.unsafe_ptr().unsafe_bitcast[Float32](),
                 handle[].bvh.nodes_ptr(),
                 handle[].bvh.prim_ids_ptr(),
                 handle[].meshes.meshes_ptr(),
                 handle[].curves.curves_ptr(),
                 handle[].blas.nodes_arr(),
                 handle[].blas.primids_arr(),
-                handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
-                handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+                handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance_C](),
+                handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C](),
                 Int64(handle[].n_spheres),
-                handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-                handle[].atrous_normals_buf.unsafe_ptr().bitcast[Float32](),
-                handle[].atrous_depth_buf.unsafe_ptr().bitcast[Float32](),
-                handle[].atrous_curve_mask_buf.unsafe_ptr().bitcast[Float32](),
-                handle[].gbuf_worldpos_buf.unsafe_ptr().bitcast[Float32](),
-                handle[].gbuf_material_id_buf.unsafe_ptr().bitcast[Int32](),
+                handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+                handle[].atrous_normals_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].atrous_depth_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].atrous_curve_mask_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].gbuf_worldpos_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].gbuf_material_id_buf.unsafe_ptr().unsafe_bitcast[Int32](),
                 Int64(handle[].film.width), Int64(handle[].film.height),
                 grid_dim=grid_n, block_dim=block_size,
             )
@@ -3904,7 +3904,7 @@ def _gpu_bounce_kernels(
 ) raises:
     comptime block_size = 256
     handle[].ctx.enqueue_function[deactivate_paths_past_maxdepth_gpu](
-        handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         Int64(n), max_depth,
         grid_dim=grid_dim, block_dim=block_size,
     )
@@ -3921,7 +3921,7 @@ def _gpu_bounce_kernels(
             n_meshes_vk,
             n,
             instance_base_mesh_buf,
-            handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+            handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C](),
             handle[].n_spheres,
         )
     else:
@@ -3932,11 +3932,11 @@ def _gpu_bounce_kernels(
             handle[].curves.curves_ptr(),
             handle[].blas.nodes_arr(),
             handle[].blas.primids_arr(),
-            handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
-            handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+            handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance_C](),
+            handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C](),
             Int64(handle[].n_spheres),
-            handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-            handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+            handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+            handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
             handle[].curves.cand_prim_ptr(),
             handle[].curves.cand_count_ptr(),
             Int64(n),
@@ -3971,39 +3971,39 @@ def _gpu_bounce_kernels(
             handle[].curves.cand_offset_ptr(),
             handle[].bvh.prim_ids_ptr(),
             handle[].curves.curves_ptr(),
-            handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-            handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+            handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+            handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
             Int64(n),
             grid_dim=grid_dim, block_dim=block_size,
         )
     handle[].ctx.enqueue_function[sample_medium_gpu](
-        handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].mediums_buf.unsafe_ptr().bitcast[Medium_C](),
+        handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].mediums_buf.unsafe_ptr().unsafe_bitcast[Medium_C](),
         Int64(handle[].n_mediums),
-        handle[].grids_buf.unsafe_ptr().bitcast[Grid_C](),
-        handle[].nvdb_grids_buf.unsafe_ptr().bitcast[NvdbGrid_C](),
+        handle[].grids_buf.unsafe_ptr().unsafe_bitcast[Grid_C](),
+        handle[].nvdb_grids_buf.unsafe_ptr().unsafe_bitcast[NvdbGrid_C](),
         handle[].bvh.nodes_ptr(),
         handle[].bvh.prim_ids_ptr(),
         handle[].meshes.meshes_ptr(),
         handle[].curves.curves_ptr(),
         handle[].blas.nodes_arr(),
         handle[].blas.primids_arr(),
-        handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
+        handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance_C](),
         handle[].lights.area_lights_ptr(),
         Int64(handle[].lights.n_area_lights),
         handle[].lights.light_sampler_ptr(),
         Int64(handle[].lights.n_light_sampler),
         Int64(n),
-        handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+        handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C](),
         Int64(handle[].n_spheres),
-        handle[].spectral.coeffs_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.coeffs_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         Int64(handle[].spectral.res),
-        handle[].spectral.cie_x_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_y_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_z_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.d65_buf.unsafe_ptr().bitcast[Float32](),
-                handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+        handle[].spectral.cie_x_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_y_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_z_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.d65_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C](),
                 handle[].lights.infinite_lights_ptr(),
         Int64(handle[].lights.n_infinite_lights),
                 handle[].lights.distant_lights_ptr(),
@@ -4017,16 +4017,16 @@ def _gpu_bounce_kernels(
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_nee_preamble_gpu](
-        handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].bvh.nodes_ptr(),
         handle[].bvh.prim_ids_ptr(),
         handle[].meshes.meshes_ptr(),
         handle[].curves.curves_ptr(),
         handle[].blas.nodes_arr(),
         handle[].blas.primids_arr(),
-        handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
-        handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+        handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance_C](),
+        handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C](),
         handle[].lights.area_lights_ptr(),
         Int64(handle[].lights.n_area_lights),
         handle[].textures.textures_ptr(),
@@ -4039,16 +4039,16 @@ def _gpu_bounce_kernels(
         Int64(handle[].lights.n_light_sampler),
         handle[].lights.infinite_lights_ptr(),
         Int64(handle[].lights.n_infinite_lights),
-        handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+        handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C](),
         Int64(handle[].n_spheres),
-        handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
+        handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n), px_scale,
-        handle[].spectral.coeffs_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.coeffs_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         Int64(handle[].spectral.res),
-        handle[].spectral.cie_x_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_y_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_z_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.d65_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_x_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_y_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_z_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.d65_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         grid_dim=grid_dim, block_dim=block_size,
     )
     # mix is a pure selector (see shade_mix_gpu's docstring) -- enqueued
@@ -4056,9 +4056,9 @@ def _gpu_bounce_kernels(
     # redirect is visible to whichever real kernel the sub-material resolves
     # to, later in this SAME launch-ordered sequence.
     handle[].ctx.enqueue_function[shade_mix_gpu](
-        handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+        handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C](),
         Int64(n),
         grid_dim=grid_dim, block_dim=block_size,
     )
@@ -4090,21 +4090,21 @@ def _gpu_bounce_kernels(
     # simultaneous light types, currently 5) with accumulate semantics, or
     # (b) restricting deferral to a genuinely single-candidate call site.
     handle[].ctx.enqueue_function[reset_shadow_tasks_gpu](
-        handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
+        handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask_C](),
         Int64(n),
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_diffuse_gpu](
-        handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].bvh.nodes_ptr(),
         handle[].bvh.prim_ids_ptr(),
         handle[].meshes.meshes_ptr(),
         handle[].curves.curves_ptr(),
         handle[].blas.nodes_arr(),
         handle[].blas.primids_arr(),
-        handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
-        handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+        handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance_C](),
+        handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C](),
         handle[].lights.area_lights_ptr(),
         Int64(handle[].lights.n_area_lights),
         handle[].textures.textures_ptr(),
@@ -4117,38 +4117,38 @@ def _gpu_bounce_kernels(
         Int64(handle[].lights.n_light_sampler),
         handle[].lights.infinite_lights_ptr(),
         Int64(handle[].lights.n_infinite_lights),
-        handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+        handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C](),
         Int64(handle[].n_spheres),
-        handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
+        handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n), px_scale,
-        handle[].spectral.coeffs_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.coeffs_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         Int64(handle[].spectral.res),
-        handle[].spectral.cie_x_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_y_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_z_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.d65_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_x_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_y_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_z_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.d65_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         Int32(1) if use_restir else Int32(0),
         restir_read,
         restir_write,
-        handle[].atrous_normals_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].atrous_depth_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].gbuf_material_id_buf.unsafe_ptr().bitcast[Int32](),
-        handle[].gbuf_worldpos_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].atrous_normals_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].atrous_depth_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].gbuf_material_id_buf.unsafe_ptr().unsafe_bitcast[Int32](),
+        handle[].gbuf_worldpos_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         handle[].film.width,
         handle[].film.height,
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_coated_diffuse_gpu](
-        handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].bvh.nodes_ptr(),
         handle[].bvh.prim_ids_ptr(),
         handle[].meshes.meshes_ptr(),
         handle[].curves.curves_ptr(),
         handle[].blas.nodes_arr(),
         handle[].blas.primids_arr(),
-        handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
-        handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+        handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance_C](),
+        handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C](),
         handle[].lights.area_lights_ptr(),
         Int64(handle[].lights.n_area_lights),
         handle[].textures.textures_ptr(),
@@ -4161,30 +4161,30 @@ def _gpu_bounce_kernels(
         Int64(handle[].lights.n_light_sampler),
         handle[].lights.infinite_lights_ptr(),
         Int64(handle[].lights.n_infinite_lights),
-        handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+        handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C](),
         Int64(handle[].n_spheres),
-        handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
+        handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n), px_scale,
-        handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
-        handle[].spectral.coeffs_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask_C](),
+        handle[].spectral.coeffs_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         Int64(handle[].spectral.res),
-        handle[].spectral.cie_x_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_y_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_z_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.d65_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_x_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_y_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_z_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.d65_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_diffuse_transmit_gpu](
-        handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].bvh.nodes_ptr(),
         handle[].bvh.prim_ids_ptr(),
         handle[].meshes.meshes_ptr(),
         handle[].curves.curves_ptr(),
         handle[].blas.nodes_arr(),
         handle[].blas.primids_arr(),
-        handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
-        handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+        handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance_C](),
+        handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C](),
         handle[].lights.area_lights_ptr(),
         Int64(handle[].lights.n_area_lights),
         handle[].textures.textures_ptr(),
@@ -4197,30 +4197,30 @@ def _gpu_bounce_kernels(
         Int64(handle[].lights.n_light_sampler),
         handle[].lights.infinite_lights_ptr(),
         Int64(handle[].lights.n_infinite_lights),
-        handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+        handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C](),
         Int64(handle[].n_spheres),
-        handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
+        handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n), px_scale,
-        handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
-        handle[].spectral.coeffs_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask_C](),
+        handle[].spectral.coeffs_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         Int64(handle[].spectral.res),
-        handle[].spectral.cie_x_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_y_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_z_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.d65_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_x_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_y_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_z_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.d65_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_conductor_gpu](
-        handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].bvh.nodes_ptr(),
         handle[].bvh.prim_ids_ptr(),
         handle[].meshes.meshes_ptr(),
         handle[].curves.curves_ptr(),
         handle[].blas.nodes_arr(),
         handle[].blas.primids_arr(),
-        handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
-        handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+        handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance_C](),
+        handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C](),
         handle[].lights.area_lights_ptr(),
         Int64(handle[].lights.n_area_lights),
         handle[].textures.textures_ptr(),
@@ -4233,30 +4233,30 @@ def _gpu_bounce_kernels(
         Int64(handle[].lights.n_light_sampler),
         handle[].lights.infinite_lights_ptr(),
         Int64(handle[].lights.n_infinite_lights),
-        handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+        handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C](),
         Int64(handle[].n_spheres),
-        handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
+        handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n), px_scale,
-        handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
-        handle[].spectral.coeffs_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask_C](),
+        handle[].spectral.coeffs_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         Int64(handle[].spectral.res),
-        handle[].spectral.cie_x_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_y_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_z_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.d65_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_x_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_y_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_z_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.d65_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_measured_gpu](
-        handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].bvh.nodes_ptr(),
         handle[].bvh.prim_ids_ptr(),
         handle[].meshes.meshes_ptr(),
         handle[].curves.curves_ptr(),
         handle[].blas.nodes_arr(),
         handle[].blas.primids_arr(),
-        handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
-        handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+        handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance_C](),
+        handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C](),
         handle[].lights.area_lights_ptr(),
         Int64(handle[].lights.n_area_lights),
         handle[].textures.textures_ptr(),
@@ -4269,51 +4269,51 @@ def _gpu_bounce_kernels(
         Int64(handle[].lights.n_light_sampler),
         handle[].lights.infinite_lights_ptr(),
         Int64(handle[].lights.n_infinite_lights),
-        handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+        handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C](),
         Int64(handle[].n_spheres),
-        handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
+        handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n), px_scale,
-        handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
-        handle[].measured_brdfs_buf.unsafe_ptr().bitcast[MeasuredBRDF_C](),
-        handle[].spectral.coeffs_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask_C](),
+        handle[].measured_brdfs_buf.unsafe_ptr().unsafe_bitcast[MeasuredBRDF_C](),
+        handle[].spectral.coeffs_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         Int64(handle[].spectral.res),
-        handle[].spectral.cie_x_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_y_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_z_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.d65_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_x_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_y_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_z_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.d65_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_dielectric_gpu](
-        handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].meshes.meshes_ptr(),
-        handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
-        handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+        handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C](),
+        handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C](),
         Int64(n),
         handle[].textures.textures_ptr(),
         Int64(handle[].textures.n_textures), px_scale,
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_thin_dielectric_gpu](
-        handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].meshes.meshes_ptr(),
-        handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
-        handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+        handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C](),
+        handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C](),
         Int64(n),
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_coated_conductor_gpu](
-        handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].bvh.nodes_ptr(),
         handle[].bvh.prim_ids_ptr(),
         handle[].meshes.meshes_ptr(),
         handle[].curves.curves_ptr(),
         handle[].blas.nodes_arr(),
         handle[].blas.primids_arr(),
-        handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
-        handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+        handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance_C](),
+        handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C](),
         handle[].lights.area_lights_ptr(),
         Int64(handle[].lights.n_area_lights),
         handle[].textures.textures_ptr(),
@@ -4326,49 +4326,49 @@ def _gpu_bounce_kernels(
         Int64(handle[].lights.n_light_sampler),
         handle[].lights.infinite_lights_ptr(),
         Int64(handle[].lights.n_infinite_lights),
-        handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+        handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C](),
         Int64(handle[].n_spheres),
-        handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
+        handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n), px_scale,
-        handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
-        handle[].spectral.coeffs_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask_C](),
+        handle[].spectral.coeffs_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         Int64(handle[].spectral.res),
-        handle[].spectral.cie_x_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_y_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_z_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.d65_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_x_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_y_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_z_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.d65_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_interface_gpu](
-        handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].meshes.meshes_ptr(),
-        handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
-        handle[].medium_ifaces_buf.unsafe_ptr().bitcast[MediumInterface_C](),
+        handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C](),
+        handle[].medium_ifaces_buf.unsafe_ptr().unsafe_bitcast[MediumInterface_C](),
         Int64(n),
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[update_medium_gpu](
-        handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].meshes.meshes_ptr(),
-        handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
-        handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
-        handle[].medium_ifaces_buf.unsafe_ptr().bitcast[MediumInterface_C](),
+        handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C](),
+        handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C](),
+        handle[].medium_ifaces_buf.unsafe_ptr().unsafe_bitcast[MediumInterface_C](),
         Int64(n),
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_hair_gpu](
-        handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].inter_buf.unsafe_ptr().bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
         handle[].bvh.nodes_ptr(),
         handle[].bvh.prim_ids_ptr(),
         handle[].meshes.meshes_ptr(),
         handle[].curves.curves_ptr(),
         handle[].blas.nodes_arr(),
         handle[].blas.primids_arr(),
-        handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
-        handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+        handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance_C](),
+        handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C](),
         handle[].lights.area_lights_ptr(),
         Int64(handle[].lights.n_area_lights),
         handle[].textures.textures_ptr(),
@@ -4381,17 +4381,17 @@ def _gpu_bounce_kernels(
         Int64(handle[].lights.n_light_sampler),
         handle[].lights.infinite_lights_ptr(),
         Int64(handle[].lights.n_infinite_lights),
-        handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+        handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C](),
         Int64(handle[].n_spheres),
-        handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
+        handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n), px_scale,
-        handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
-        handle[].spectral.coeffs_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask_C](),
+        handle[].spectral.coeffs_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         Int64(handle[].spectral.res),
-        handle[].spectral.cie_x_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_y_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_z_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.d65_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_x_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_y_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_z_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.d65_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         grid_dim=grid_dim, block_dim=block_size,
     )
     # Phase 0.4: resolve whatever shadow rays this bounce's per-material
@@ -4411,13 +4411,13 @@ def _gpu_bounce_kernels(
         handle[].curves.curves_ptr(),
         handle[].blas.nodes_arr(),
         handle[].blas.primids_arr(),
-        handle[].instances_buf.unsafe_ptr().bitcast[Instance_C](),
-        handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-        handle[].shadow_buf.unsafe_ptr().bitcast[ShadowTask_C](),
+        handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance_C](),
+        handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+        handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask_C](),
         Int64(n),
-        handle[].spheres_buf.unsafe_ptr().bitcast[Sphere_C](),
+        handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C](),
         Int64(handle[].n_spheres),
-        handle[].materials_buf.unsafe_ptr().bitcast[Material_C](),
+        handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C](),
         grid_dim=grid_dim, block_dim=block_size,
     )
 
@@ -4444,15 +4444,15 @@ def gpu_render_sample[Oc: Origin[mut=True]](
         try:
             var handle = handlePtr
             # Update c2w for this frame
-            handle[].ctx.enqueue_copy(handle[].c2w_buf, c2w.bitcast[UInt8]())
+            handle[].ctx.enqueue_copy(handle[].c2w_buf, c2w.unsafe_bitcast[UInt8]())
             comptime block_size = 256
             var grid_dim = ceildiv(n_int, block_size)
             # Generate primary rays on GPU
             handle[].ctx.enqueue_function[gen_primary_rays_gpu](
-                handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
-                handle[].r2c_buf.unsafe_ptr().bitcast[Float32](),
-                handle[].c2w_buf.unsafe_ptr().bitcast[Float32](),
-                handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+                handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
+                handle[].r2c_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].c2w_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
                 Int64(handle[].film.width), Int64(handle[].film.height),
                 si, log2spp, n_base4,
                 seed_dim0, seed_dim1,
@@ -4471,8 +4471,8 @@ def gpu_render_sample[Oc: Origin[mut=True]](
             var restir_rd = UnsafePointer[DIReservoir, MutExternalOrigin].unsafe_dangling()
             var restir_wr = UnsafePointer[DIReservoir, MutExternalOrigin].unsafe_dangling()
             if use_restir:
-                var buf_a = handle[].restir_a_buf.unsafe_ptr().bitcast[DIReservoir]()
-                var buf_b = handle[].restir_b_buf.unsafe_ptr().bitcast[DIReservoir]()
+                var buf_a = handle[].restir_a_buf.unsafe_ptr().unsafe_bitcast[DIReservoir]()
+                var buf_b = handle[].restir_b_buf.unsafe_ptr().unsafe_bitcast[DIReservoir]()
                 if frame_index % 2 == 0:
                     restir_rd = buf_a; restir_wr = buf_b
                 else:
@@ -4490,21 +4490,21 @@ def gpu_render_sample[Oc: Origin[mut=True]](
             var vol_fw = Int32(0)
             var vol_fh = Int32(0)
             if use_vol_restir_reuse:
-                var vbuf_a = handle[].restir_vol_a_buf.unsafe_ptr().bitcast[VolReservoir]()
-                var vbuf_b = handle[].restir_vol_b_buf.unsafe_ptr().bitcast[VolReservoir]()
+                var vbuf_a = handle[].restir_vol_a_buf.unsafe_ptr().unsafe_bitcast[VolReservoir]()
+                var vbuf_b = handle[].restir_vol_b_buf.unsafe_ptr().unsafe_bitcast[VolReservoir]()
                 if frame_index % 2 == 0:
                     vol_rd = vbuf_a; vol_wr = vbuf_b
                 else:
                     vol_rd = vbuf_b; vol_wr = vbuf_a
-                vol_used_ptr = handle[].restir_vol_used_buf.unsafe_ptr().bitcast[Int8]()
+                vol_used_ptr = handle[].restir_vol_used_buf.unsafe_ptr().unsafe_bitcast[Int8]()
                 handle[].ctx.enqueue_function[reset_vol_used_gpu](
                     vol_used_ptr, Int64(n_int), grid_dim=grid_dim, block_dim=block_size,
                 )
                 # Spatial reuse: the SAME G-buffers DI's own spatial reuse
                 # already reads (gen_aux_buffers_gpu populates them
                 # unconditionally every frame, see gpu_gen_aux_buffers).
-                vol_gbuf_depth_ptr = handle[].atrous_depth_buf.unsafe_ptr().bitcast[Float32]()
-                vol_gbuf_world_pos_ptr = handle[].gbuf_worldpos_buf.unsafe_ptr().bitcast[Float32]()
+                vol_gbuf_depth_ptr = handle[].atrous_depth_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+                vol_gbuf_world_pos_ptr = handle[].gbuf_worldpos_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 vol_fw = handle[].film.width
                 vol_fh = handle[].film.height
             # Padding is CONDITIONAL on the scene actually containing a
@@ -4542,16 +4542,16 @@ def gpu_render_sample[Oc: Origin[mut=True]](
                                     restir_vol_gbuf_world_pos=vol_gbuf_world_pos_ptr,
                                     restir_vol_frame_w=vol_fw, restir_vol_frame_h=vol_fh)
             handle[].ctx.enqueue_function[accumulate_film_gpu](
-                handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-                handle[].film_buf.unsafe_ptr().bitcast[Float32](),
-                handle[].albedo_film_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+                handle[].film_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].albedo_film_buf.unsafe_ptr().unsafe_bitcast[Float32](),
                 Int64(n_int),
-                        handle[].spectral.coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                        handle[].spectral.coeffs_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         Int64(handle[].spectral.res),
-        handle[].spectral.cie_x_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_y_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_z_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.d65_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_x_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_y_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_z_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.d65_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         grid_dim=grid_dim,
                 block_dim=block_size,
             )
@@ -4607,15 +4607,15 @@ def gpu_render_wavefront(
     comptime if has_accelerator():
         try:
             var handle = handlePtr
-            handle[].ctx.enqueue_copy(handle[].c2w_buf, c2w.bitcast[UInt8]())
+            handle[].ctx.enqueue_copy(handle[].c2w_buf, c2w.unsafe_bitcast[UInt8]())
             comptime block_size = 256
             var grid_total = ceildiv(n_total, block_size)
             var grid_pix   = ceildiv(n_pix, block_size)
             handle[].ctx.enqueue_function[gen_primary_rays_wavefront_gpu](
-                handle[].sobol_buf.unsafe_ptr().bitcast[UInt32](),
-                handle[].r2c_buf.unsafe_ptr().bitcast[Float32](),
-                handle[].c2w_buf.unsafe_ptr().bitcast[Float32](),
-                handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+                handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
+                handle[].r2c_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].c2w_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
                 Int64(handle[].film.width), Int64(handle[].film.height),
                 si_start, log2spp, n_base4,
                 seed_dim0, seed_dim1, rng_seed_lo, rng_seed_hi,
@@ -4658,16 +4658,16 @@ def gpu_render_wavefront(
                     instance_base_mesh_buf=instance_base_mesh_buf,
                 )
             handle[].ctx.enqueue_function[accumulate_film_wavefront_gpu](
-                handle[].path_buf.unsafe_ptr().bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
-                handle[].film_buf.unsafe_ptr().bitcast[Float32](),
-                handle[].albedo_film_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutExternalOrigin](),
+                handle[].film_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].albedo_film_buf.unsafe_ptr().unsafe_bitcast[Float32](),
                 Int64(n_pix), Int64(batch),
-                        handle[].spectral.coeffs_buf.unsafe_ptr().bitcast[Float32](),
+                        handle[].spectral.coeffs_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         Int64(handle[].spectral.res),
-        handle[].spectral.cie_x_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_y_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.cie_z_buf.unsafe_ptr().bitcast[Float32](),
-        handle[].spectral.d65_buf.unsafe_ptr().bitcast[Float32](),
+        handle[].spectral.cie_x_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_y_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.cie_z_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].spectral.d65_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         grid_dim=grid_pix,
                 block_dim=block_size,
             )
@@ -4689,7 +4689,7 @@ def gpu_download_film(
             # Straight device-to-host copy: map_to_host would pin a ~1.3 GiB host
             # pool on first use (~1 s of page faults). film holds n_int*3 floats,
             # the size of film_buf.
-            handle[].ctx.enqueue_copy(film.bitcast[UInt8](), handle[].film_buf)
+            handle[].ctx.enqueue_copy(film.unsafe_bitcast[UInt8](), handle[].film_buf)
             handle[].ctx.synchronize()
         except e:
             print("GPU download film failed: " + String(e))
@@ -4707,7 +4707,7 @@ def gpu_download_albedo[Of: Origin[mut=True]](
         try:
             var handle = handlePtr
             # See gpu_download_film.
-            handle[].ctx.enqueue_copy(film.bitcast[UInt8](), handle[].albedo_film_buf)
+            handle[].ctx.enqueue_copy(film.unsafe_bitcast[UInt8](), handle[].albedo_film_buf)
             handle[].ctx.synchronize()
         except e:
             print("GPU download albedo failed: " + String(e))
@@ -4924,17 +4924,17 @@ def gpu_atrous_denoise[Oo: Origin[mut=True]](
             var iso_scale = film_iso / Float32(100.0)
 
             handle[].ctx.enqueue_function[normalize_beauty_albedo_gpu](
-                handle[].film_buf.unsafe_ptr().bitcast[Float32](),
-                handle[].albedo_film_buf.unsafe_ptr().bitcast[Float32](),
-                handle[].atrous_ping_buf.unsafe_ptr().bitcast[Float32](),
-                handle[].atrous_albedo_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].film_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].albedo_film_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].atrous_ping_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].atrous_albedo_buf.unsafe_ptr().unsafe_bitcast[Float32](),
                 Int64(n_pix), inv_weight, iso_scale, film_max_comp,
                 grid_dim=grid_n, block_dim=block_size,
             )
             # --no-denoise: emit the normalized beauty (atrous_ping_buf) without
             # the à-trous blur passes, so the written image is the raw render.
             if not apply_denoise:
-                handle[].ctx.enqueue_copy(output.bitcast[UInt8](), handle[].atrous_ping_buf)
+                handle[].ctx.enqueue_copy(output.unsafe_bitcast[UInt8](), handle[].atrous_ping_buf)
                 handle[].ctx.synchronize()
                 return
             # Firefly pre-clamp -- matches CPU's denoise() (postprocess.mojo),
@@ -4947,26 +4947,26 @@ def gpu_atrous_denoise[Oo: Origin[mut=True]](
             # change, tracked explicitly via clamp_dst_ptr below rather than
             # implicitly through the i%2 alternation.
             handle[].ctx.enqueue_function[firefly_clamp_gpu](
-                handle[].atrous_ping_buf.unsafe_ptr().bitcast[Float32](),
-                handle[].atrous_pong_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].atrous_ping_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].atrous_pong_buf.unsafe_ptr().unsafe_bitcast[Float32](),
                 Int64(fw), Int64(fh),
                 grid_dim=grid_n, block_dim=block_size,
             )
-            var clamp_dst_ptr = handle[].atrous_pong_buf.unsafe_ptr().bitcast[Float32]()
+            var clamp_dst_ptr = handle[].atrous_pong_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             handle[].ctx.enqueue_function[estimate_variance_gpu](
                 clamp_dst_ptr,
-                handle[].atrous_variance_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].atrous_variance_buf.unsafe_ptr().unsafe_bitcast[Float32](),
                 Int64(fw), Int64(fh),
                 grid_dim=grid_n, block_dim=block_size,
             )
 
-            var ping_ptr = handle[].atrous_ping_buf.unsafe_ptr().bitcast[Float32]()
-            var pong_ptr = handle[].atrous_pong_buf.unsafe_ptr().bitcast[Float32]()
-            var alb_ptr  = handle[].atrous_albedo_buf.unsafe_ptr().bitcast[Float32]()
-            var var_ptr  = handle[].atrous_variance_buf.unsafe_ptr().bitcast[Float32]()
-            var nrm_ptr  = handle[].atrous_normals_buf.unsafe_ptr().bitcast[Float32]()
-            var dep_ptr  = handle[].atrous_depth_buf.unsafe_ptr().bitcast[Float32]()
-            var cmask_ptr = handle[].atrous_curve_mask_buf.unsafe_ptr().bitcast[Float32]()
+            var ping_ptr = handle[].atrous_ping_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+            var pong_ptr = handle[].atrous_pong_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+            var alb_ptr  = handle[].atrous_albedo_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+            var var_ptr  = handle[].atrous_variance_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+            var nrm_ptr  = handle[].atrous_normals_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+            var dep_ptr  = handle[].atrous_depth_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+            var cmask_ptr = handle[].atrous_curve_mask_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             # Ramp passes with frame_count: 1 pass at fc=1, 5 passes at fc>=5.
             # Prevents the large effective radius (31px at 5 passes) from averaging
             # lit pixels with unlit ones during fast camera movement.
@@ -4986,9 +4986,9 @@ def gpu_atrous_denoise[Oo: Origin[mut=True]](
                 )
             # Result is in ping if n_passes is odd, pong if even (start=pong).
             if n_passes % 2 == 1:
-                handle[].ctx.enqueue_copy(output.bitcast[UInt8](), handle[].atrous_ping_buf)
+                handle[].ctx.enqueue_copy(output.unsafe_bitcast[UInt8](), handle[].atrous_ping_buf)
             else:
-                handle[].ctx.enqueue_copy(output.bitcast[UInt8](), handle[].atrous_pong_buf)
+                handle[].ctx.enqueue_copy(output.unsafe_bitcast[UInt8](), handle[].atrous_pong_buf)
             handle[].ctx.synchronize()
         except e:
             print("GPU atrous denoise failed: " + String(e))
@@ -5007,13 +5007,13 @@ def gpu_clear_film(
             comptime block_size = 256
             var grid_dim = ceildiv(n_int, block_size)
             handle[].ctx.enqueue_function[clear_film_gpu](
-                handle[].film_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].film_buf.unsafe_ptr().unsafe_bitcast[Float32](),
                 Int64(n_int),
                 grid_dim=grid_dim,
                 block_dim=block_size,
             )
             handle[].ctx.enqueue_function[clear_film_gpu](
-                handle[].albedo_film_buf.unsafe_ptr().bitcast[Float32](),
+                handle[].albedo_film_buf.unsafe_ptr().unsafe_bitcast[Float32](),
                 Int64(n_int),
                 grid_dim=grid_dim,
                 block_dim=block_size,
@@ -5040,11 +5040,11 @@ def gpu_clear_restir(
             comptime block_size = 256
             var grid_dim = ceildiv(n_int, block_size)
             handle[].ctx.enqueue_function[reset_restir_reservoirs_gpu](
-                handle[].restir_a_buf.unsafe_ptr().bitcast[DIReservoir](),
+                handle[].restir_a_buf.unsafe_ptr().unsafe_bitcast[DIReservoir](),
                 Int64(n_int), grid_dim=grid_dim, block_dim=block_size,
             )
             handle[].ctx.enqueue_function[reset_restir_reservoirs_gpu](
-                handle[].restir_b_buf.unsafe_ptr().bitcast[DIReservoir](),
+                handle[].restir_b_buf.unsafe_ptr().unsafe_bitcast[DIReservoir](),
                 Int64(n_int), grid_dim=grid_dim, block_dim=block_size,
             )
             handle[].ctx.synchronize()
@@ -5068,11 +5068,11 @@ def gpu_clear_restir_vol(
             comptime block_size = 256
             var grid_dim = ceildiv(n_int, block_size)
             handle[].ctx.enqueue_function[reset_restir_vol_reservoirs_gpu](
-                handle[].restir_vol_a_buf.unsafe_ptr().bitcast[VolReservoir](),
+                handle[].restir_vol_a_buf.unsafe_ptr().unsafe_bitcast[VolReservoir](),
                 Int64(n_int), grid_dim=grid_dim, block_dim=block_size,
             )
             handle[].ctx.enqueue_function[reset_restir_vol_reservoirs_gpu](
-                handle[].restir_vol_b_buf.unsafe_ptr().bitcast[VolReservoir](),
+                handle[].restir_vol_b_buf.unsafe_ptr().unsafe_bitcast[VolReservoir](),
                 Int64(n_int), grid_dim=grid_dim, block_dim=block_size,
             )
             handle[].ctx.synchronize()
@@ -5084,4 +5084,4 @@ def gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutExternalOrigin]):
     if Int(handlePtr) == 0:
         return
     handlePtr.destroy_pointee()
-    handlePtr.bitcast[GpuSceneHandle]().free()
+    handlePtr.unsafe_bitcast[GpuSceneHandle]().free()

@@ -561,7 +561,7 @@ def save_spectrum_table(table: List[Float32], res: Int, path: String) raises:
     var header = List[UInt8](capacity=8)
     header.append(UInt8(83)); header.append(UInt8(80)); header.append(UInt8(84)); header.append(UInt8(66))  # "SPTB"
     var res32 = Int32(res)
-    var res_bytes = UnsafePointer(to=res32).bitcast[UInt8]()
+    var res_bytes = UnsafePointer(to=res32).unsafe_bitcast[UInt8]()
     for i in range(4):
         header.append(res_bytes[i])
     f.write_bytes(Span(header))
@@ -570,7 +570,7 @@ def save_spectrum_table(table: List[Float32], res: Int, path: String) raises:
     var data = List[UInt8](capacity=count * 4)
     for i in range(count):
         var v = table[i]
-        var vp = UnsafePointer(to=v).bitcast[UInt8]()
+        var vp = UnsafePointer(to=v).unsafe_bitcast[UInt8]()
         data.append(vp[0]); data.append(vp[1]); data.append(vp[2]); data.append(vp[3])
     f.write_bytes(Span(data))
     f.close()
@@ -590,14 +590,14 @@ def load_spectrum_table(path: String) -> Tuple[Bool, Int, List[Float32]]:
         var buf = alloc[UInt8](n)
         for i in range(n):
             buf[i] = bytes[i]
-        var res = Int((buf + 4).bitcast[Int32]()[0])
+        var res = Int((buf + 4).unsafe_bitcast[Int32]()[0])
         var expected_count = 3 * res * res * res * 3
         if n != 8 + expected_count * 4:
             buf.free()
             return (False, 0, empty^)
         var out = List[Float32](capacity=expected_count)
         for i in range(expected_count):
-            out.append((buf + 8 + i * 4).bitcast[Float32]()[0])
+            out.append((buf + 8 + i * 4).unsafe_bitcast[Float32]()[0])
         buf.free()
         return (True, res, out^)
     except:

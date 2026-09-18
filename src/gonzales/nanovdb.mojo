@@ -185,19 +185,19 @@ comptime NVDB_LEAF_OFF_TABLE = 96
 
 @always_inline
 def _nvdb_u32(blob: UnsafePointer[UInt8, MutExternalOrigin], off: Int) -> UInt32:
-    return (blob + off).bitcast[UInt32]()[0]
+    return (blob + off).unsafe_bitcast[UInt32]()[0]
 
 @always_inline
 def _nvdb_u64(blob: UnsafePointer[UInt8, MutExternalOrigin], off: Int) -> UInt64:
-    return (blob + off).bitcast[UInt64]()[0]
+    return (blob + off).unsafe_bitcast[UInt64]()[0]
 
 @always_inline
 def _nvdb_i64(blob: UnsafePointer[UInt8, MutExternalOrigin], off: Int) -> Int64:
-    return (blob + off).bitcast[Int64]()[0]
+    return (blob + off).unsafe_bitcast[Int64]()[0]
 
 @always_inline
 def _nvdb_f32(blob: UnsafePointer[UInt8, MutExternalOrigin], off: Int) -> Float32:
-    return (blob + off).bitcast[Float32]()[0]
+    return (blob + off).unsafe_bitcast[Float32]()[0]
 
 @always_inline
 def _nvdb_coord_to_key(i: Int32, j: Int32, k: Int32) -> UInt64:

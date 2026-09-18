@@ -245,7 +245,7 @@ def _texel(tex: GpuTexture_C, i: Int) -> RGB:
             return RGB(l, l, l)
         var j = i * 3
         return RGB(tex.lut[Int(tex.data[j])], tex.lut[Int(tex.data[j + 1])], tex.lut[Int(tex.data[j + 2])])
-    var f = tex.data.bitcast[Float32]()
+    var f = tex.data.unsafe_bitcast[Float32]()
     var k = i * 3
     return RGB(f[k], f[k + 1], f[k + 2])
 

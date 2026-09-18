@@ -1064,14 +1064,14 @@ def parse_and_render(
 
                         var mmi_buf_vcm = handle[].ctx.enqueue_create_buffer[DType.uint8](n_meshes_alloc_vcm * size_of[Int64]())
                         with mmi_buf_vcm.map_to_host() as h:
-                            var dst = h.unsafe_ptr().bitcast[Int64]()
+                            var dst = h.unsafe_ptr().unsafe_bitcast[Int64]()
                             for i in range(n_meshes_vk_vcm):
                                 dst[i] = mesh_material_idx_vcm[i]
                         mesh_material_idx_buf_vcm = mmi_buf_vcm^
 
                         var mai_buf_vcm = handle[].ctx.enqueue_create_buffer[DType.uint8](n_meshes_alloc_vcm * size_of[Int32]())
                         with mai_buf_vcm.map_to_host() as h2:
-                            var dst2 = h2.unsafe_ptr().bitcast[Int32]()
+                            var dst2 = h2.unsafe_ptr().unsafe_bitcast[Int32]()
                             for i in range(n_meshes_vk_vcm):
                                 dst2[i] = mesh_al_idx_vcm[i]
                         mesh_al_idx_buf_vcm = mai_buf_vcm^
@@ -1252,14 +1252,14 @@ def parse_and_render(
 
                 var mmi_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_meshes_alloc * size_of[Int64]())
                 with mmi_buf.map_to_host() as h:
-                    var dst = h.unsafe_ptr().bitcast[Int64]()
+                    var dst = h.unsafe_ptr().unsafe_bitcast[Int64]()
                     for i in range(n_meshes_vk):
                         dst[i] = mesh_material_idx[i]
                 mesh_material_idx_buf_opt = mmi_buf^
 
                 var mai_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_meshes_alloc * size_of[Int32]())
                 with mai_buf.map_to_host() as h2:
-                    var dst2 = h2.unsafe_ptr().bitcast[Int32]()
+                    var dst2 = h2.unsafe_ptr().unsafe_bitcast[Int32]()
                     for i in range(n_meshes_vk):
                         dst2[i] = mesh_al_idx[i]
                 mesh_al_idx_buf_opt = mai_buf^
@@ -1270,7 +1270,7 @@ def parse_and_render(
                 if n_instances_vk > 0:
                     var ibm_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_instances_vk * size_of[Int32]())
                     with ibm_buf.map_to_host() as h3:
-                        var dst3 = h3.unsafe_ptr().bitcast[Int32]()
+                        var dst3 = h3.unsafe_ptr().unsafe_bitcast[Int32]()
                         for k in range(n_instances_vk):
                             dst3[k] = instance_base_mesh_host[k]
                     instance_base_mesh_buf_opt = ibm_buf^

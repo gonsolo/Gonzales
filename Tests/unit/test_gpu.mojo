@@ -77,7 +77,7 @@ def _accumulate_film_gpu_body(ctx: DeviceContext) raises:
     var path_bytes = n * size_of[PathState_C]()
     var path_buf = ctx.enqueue_create_buffer[DType.uint8](path_bytes)
     with path_buf.map_to_host() as host:
-        var paths = host.unsafe_ptr().bitcast[PathState_C]()
+        var paths = host.unsafe_ptr().unsafe_bitcast[PathState_C]()
         for i in range(n):
             var f = Float32(i)
             paths[i] = _dummy_path(
@@ -98,7 +98,7 @@ def _accumulate_film_gpu_body(ctx: DeviceContext) raises:
     # exactly the per-channel values this fixture wrote into `estimate`.
     var null_tbl = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
     ctx.enqueue_function[accumulate_film_gpu](
-        path_buf.unsafe_ptr().bitcast[PathState_C](),
+        path_buf.unsafe_ptr().unsafe_bitcast[PathState_C](),
         film_buf.unsafe_ptr(), albedo_buf.unsafe_ptr(), Int64(n),
         null_tbl, Int64(0), null_tbl, null_tbl, null_tbl, null_tbl,
         grid_dim=1, block_dim=n,

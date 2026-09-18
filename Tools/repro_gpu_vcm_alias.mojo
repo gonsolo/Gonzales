@@ -149,27 +149,27 @@ def main() raises:
     ctx.synchronize()
     var mesh_d = ctx.enqueue_create_buffer[DType.uint8](size_of[TriangleMesh_C]())
     with mesh_d.map_to_host() as h:
-        h.unsafe_ptr().bitcast[TriangleMesh_C]()[0] = TriangleMesh_C(
-            pts_d.unsafe_ptr().bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin](),
-            vi_d.unsafe_ptr().bitcast[Int64]().unsafe_origin_cast[MutExternalOrigin](),
-            vi_d.unsafe_ptr().bitcast[Int64]().unsafe_origin_cast[MutExternalOrigin](),
+        h.unsafe_ptr().unsafe_bitcast[TriangleMesh_C]()[0] = TriangleMesh_C(
+            pts_d.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutExternalOrigin](),
+            vi_d.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_origin_cast[MutExternalOrigin](),
+            vi_d.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_origin_cast[MutExternalOrigin](),
             UnsafePointer[Float32, MutExternalOrigin](unsafe_from_address=1),
             UnsafePointer[Float32, MutExternalOrigin](unsafe_from_address=1))
     var prim_d = ctx.enqueue_create_buffer[DType.uint8](size_of[PrimId_C]())
     with prim_d.map_to_host() as h:
-        h.unsafe_ptr().bitcast[PrimId_C]()[0] = prim_h[0]
+        h.unsafe_ptr().unsafe_bitcast[PrimId_C]()[0] = prim_h[0]
     var bvh_d = ctx.enqueue_create_buffer[DType.uint8](size_of[BVH2Node]())
     with bvh_d.map_to_host() as h:
-        h.unsafe_ptr().bitcast[BVH2Node]()[0] = bvh_h[0]
+        h.unsafe_ptr().unsafe_bitcast[BVH2Node]()[0] = bvh_h[0]
     var scr_d = ctx.enqueue_create_buffer[DType.uint8](size_of[Intersection_C]())
     var out_d = ctx.enqueue_create_buffer[DType.float32](2)
     out_d.enqueue_fill(Float32(-99))
     ctx.synchronize()
 
-    var B = bvh_d.unsafe_ptr().bitcast[BVH2Node]()
-    var P = prim_d.unsafe_ptr().bitcast[PrimId_C]()
-    var M = mesh_d.unsafe_ptr().bitcast[TriangleMesh_C]()
-    var S = scr_d.unsafe_ptr().bitcast[Intersection_C]()
+    var B = bvh_d.unsafe_ptr().unsafe_bitcast[BVH2Node]()
+    var P = prim_d.unsafe_ptr().unsafe_bitcast[PrimId_C]()
+    var M = mesh_d.unsafe_ptr().unsafe_bitcast[TriangleMesh_C]()
+    var S = scr_d.unsafe_ptr().unsafe_bitcast[Intersection_C]()
     var O = out_d.unsafe_ptr()
 
     print("mode:", mode)

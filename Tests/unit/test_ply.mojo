@@ -22,40 +22,40 @@ def _append_str(mut data: List[UInt8], s: String):
 
 def _append_f32_le(mut data: List[UInt8], v: Float32):
     var tmp = alloc[UInt8](4)
-    tmp.bitcast[Float32]()[0] = v
+    tmp.unsafe_bitcast[Float32]()[0] = v
     for i in range(4):
         data.append(tmp[i])
     tmp.free()
 
 def _append_f32_be(mut data: List[UInt8], v: Float32):
     var tmp = alloc[UInt8](4)
-    tmp.bitcast[Float32]()[0] = v
+    tmp.unsafe_bitcast[Float32]()[0] = v
     data.append(tmp[3]); data.append(tmp[2]); data.append(tmp[1]); data.append(tmp[0])
     tmp.free()
 
 def _append_f64_le(mut data: List[UInt8], v: Float64):
     var tmp = alloc[UInt8](8)
-    tmp.bitcast[Float64]()[0] = v
+    tmp.unsafe_bitcast[Float64]()[0] = v
     for i in range(8):
         data.append(tmp[i])
     tmp.free()
 
 def _append_i32_le(mut data: List[UInt8], v: Int32):
     var tmp = alloc[UInt8](4)
-    tmp.bitcast[Int32]()[0] = v
+    tmp.unsafe_bitcast[Int32]()[0] = v
     for i in range(4):
         data.append(tmp[i])
     tmp.free()
 
 def _append_i32_be(mut data: List[UInt8], v: Int32):
     var tmp = alloc[UInt8](4)
-    tmp.bitcast[Int32]()[0] = v
+    tmp.unsafe_bitcast[Int32]()[0] = v
     data.append(tmp[3]); data.append(tmp[2]); data.append(tmp[1]); data.append(tmp[0])
     tmp.free()
 
 def _append_u16_le(mut data: List[UInt8], v: UInt16):
     var tmp = alloc[UInt8](2)
-    tmp.bitcast[UInt16]()[0] = v
+    tmp.unsafe_bitcast[UInt16]()[0] = v
     data.append(tmp[0]); data.append(tmp[1])
     tmp.free()
 

@@ -98,7 +98,7 @@ def test_vulkaninterop_rt_trace_matches_known_geometry() raises:
     ctx.synchronize()
     with resultsBuf.map_to_host() as host:
         var fptr = host.unsafe_ptr()
-        var iptr = fptr.bitcast[Int32]()
+        var iptr = fptr.unsafe_bitcast[Int32]()
 
         # ray 0: hits mesh 0's triangle at u=v=0.25 (Moller-Trumbore
         # convention, same as vulkanrt.mojo's own verified barycentrics).
@@ -202,7 +202,7 @@ def test_vulkaninterop_rt_instancing_places_template_correctly() raises:
     ctx.synchronize()
     with resultsBuf.map_to_host() as host:
         var fptr = host.unsafe_ptr()
-        var iptr = fptr.bitcast[Int32]()
+        var iptr = fptr.unsafe_bitcast[Int32]()
 
         # ray 0 -> instance 0: instanceCustomIndex = mesh_count(1) + 0 = 1.
         assert_true(iptr[0*8 + 6] == 1)              # hitFlag

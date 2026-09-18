@@ -47,16 +47,16 @@ struct MitsubaMesh(Movable):
 
 
 def _mit_ser_u32(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int:
-    return Int((buf + pos).bitcast[UInt32]()[0])
+    return Int((buf + pos).unsafe_bitcast[UInt32]()[0])
 
 def _mit_ser_u64(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int:
-    return Int((buf + pos).bitcast[UInt64]()[0])
+    return Int((buf + pos).unsafe_bitcast[UInt64]()[0])
 
 def _mit_ser_f32(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float32:
-    return (buf + pos).bitcast[Float32]()[0]
+    return (buf + pos).unsafe_bitcast[Float32]()[0]
 
 def _mit_ser_f64(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float64:
-    return (buf + pos).bitcast[Float64]()[0]
+    return (buf + pos).unsafe_bitcast[Float64]()[0]
 
 
 def load_mitsuba_serialized(path: String) -> MitsubaMesh:
@@ -75,7 +75,7 @@ def load_mitsuba_serialized(path: String) -> MitsubaMesh:
     var raw = alloc[UInt8](raw_n)
     for i in range(raw_n):
         raw[i] = raw_list[i]
-    var version = Int(raw.bitcast[UInt16]()[1])
+    var version = Int(raw.unsafe_bitcast[UInt16]()[1])
     raw.free()
 
     var inflated_path = path + ".inflated"
