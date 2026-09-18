@@ -662,6 +662,77 @@ struct CoatWalk(TrivialRegisterPassable):
     var depth:     Int32
 
 @always_inline
+@always_inline
+def coat_exit_norm(ior: Float32) -> Float32:
+    """Z = the fraction of base-sampled directions that escape the coat, i.e.
+    the dielectric interface's directional albedo for transmission:
+
+        Z = int_H (cos/pi) (1 - F(cos)) dw = 2 int_0^1 mu (1 - F(mu)) dmu
+
+    This is the normalizer of `bxdf_pdf_coated_exit`; see that function for
+    why the exit distribution needs it. Midpoint quadrature (dielectric
+    Fresnel has no closed form), but restricted to [mu_c, 1] where mu_c is
+    the total-internal-reflection critical angle cos, sqrt(1 - 1/ior^2):
+    below it F == 1 exactly, so the integrand is identically zero and the
+    full-interval integrand has a JUMP at mu_c. Quadrature across that jump
+    converges at O(1/N) and left the pdf ~0.6% off normalization at
+    ior 1.2 -- integrating only the live interval restores fast convergence
+    and is why test_pdf_integrates_to_one holds to 2e-3."""
+    comptime N = 64
+    var inv_ior = Float32(1.0) / ior
+    var mu_c = sqrt(max(Float32(0.0), Float32(1.0) - inv_ior * inv_ior))
+    var span = Float32(1.0) - mu_c
+    if span <= Float32(0.0):
+        return Float32(0.0)
+    var acc = Float32(0.0)
+    for i in range(N):
+        var mu = mu_c + span * (Float32(i) + Float32(0.5)) / Float32(N)
+        acc += mu * (Float32(1.0) - fr_dielectric(mu, inv_ior))
+    return Float32(2.0) * span * acc / Float32(N)
+
+@always_inline
+def bxdf_pdf_coated_exit(cos_out: Float32, ior: Float32) -> Float32:
+    """Solid-angle pdf of a SMOOTH coateddiffuse walk's exit direction.
+
+    `coat_walk_scatter` was annotated "layered exit pdf is intractable" and
+    stores pdf=0, which is why coateddiffuse is excluded from VCM's real MIS
+    scope (_bdpt_vertex_mis_scoped) and gets one unweighted connection
+    instead. For a SMOOTH coat it is not intractable, because the exit
+    direction's distribution does not depend on how many internal recycles
+    happened: every recycle ends in another INDEPENDENT cosine sample of the
+    Lambertian base, so the exit is always "cosine-sample the base, accept
+    with probability 1-F(cos_up), refract out". Hence
+
+        p_up(w_up)  = [cos_up/pi * (1 - F(cos_up))] / Z
+        p_out(w_out) = p_up(w_up) * |dw_up/dw_out|
+
+    with the etendue Jacobian |dw_up/dw_out| = cos_out / (ior^2 cos_up),
+    in which cos_up cancels:
+
+        p_out(w_out) = (1 - F(cos_up)) * cos_out / (pi * Z * ior^2)
+
+    cos_up is recovered from cos_out by Snell (sin_up = sin_out / ior).
+    Integrates to exactly 1 over the outside hemisphere -- substitute the
+    same Jacobian back and it collapses to (1/Z) * int (cos/pi)(1-F) = 1.
+
+    It is also INDEPENDENT of wo, so the forward and reverse pdfs a BDPT
+    connection needs are the same function evaluated at the two directions.
+
+    Rough coats additionally convolve with the exit microfacet's VNDF and
+    are NOT covered: callers must check the coat is smooth first."""
+    if cos_out <= Float32(0.0):
+        return Float32(0.0)
+    var sin2_out = max(Float32(0.0), Float32(1.0) - cos_out * cos_out)
+    var sin2_up = sin2_out / (ior * ior)
+    if sin2_up >= Float32(1.0):
+        return Float32(0.0)
+    var cos_up = sqrt(Float32(1.0) - sin2_up)
+    var f_exit = fr_dielectric(cos_up, Float32(1.0) / ior)
+    var z = coat_exit_norm(ior)
+    if z <= Float32(1e-9):
+        return Float32(0.0)
+    return (Float32(1.0) - f_exit) * cos_out / (PI * z * ior * ior)
+
 def coat_walk_begin(
     gn:    Vec3f,
     wo:    Vec3f,
