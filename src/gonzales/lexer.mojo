@@ -714,7 +714,7 @@ struct ParamScanner(Movable):
         if self.is_array:
             _ = scanner_scan_char(handle, UInt8(93))  # ']'
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         self.type_buf.unsafe_free()
         self.name_buf.unsafe_free()
         self.ia.unsafe_free()

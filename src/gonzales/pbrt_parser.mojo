@@ -3276,7 +3276,7 @@ def mojo_parse_scene(path: Pointer[UInt8, MutUntrackedOrigin],
         return Pointer[ParsedScene_Mojo, MutUntrackedOrigin].unsafe_dangling()
 
     var s_ptr = unsafe_alloc[SceneParseState](1)
-    s_ptr.init_pointee_move(SceneParseState())
+    s_ptr.unsafe_write(SceneParseState())
     var pi = 0
     while path[unsafe_offset=pi] != UInt8(0):
         pi += 1
@@ -3296,7 +3296,7 @@ def mojo_parse_scene(path: Pointer[UInt8, MutUntrackedOrigin],
 
     var psc = unsafe_alloc[ParsedScene_Mojo](1)
     finalize_scene(s_ptr, psc, verbose)
-    _ = s_ptr.take_pointee()
+    _ = s_ptr.unsafe_take_pointee()
     s_ptr.unsafe_free()
     return psc
 

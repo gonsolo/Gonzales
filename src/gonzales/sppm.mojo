@@ -2454,17 +2454,16 @@ def _sppm_finalize_one_pixel(
             elif vp.is_volume == PhotonKind.volume:
                 denom = (Float32(4.0) / Float32(3.0)) * PI * vp.r2 * sqrt(vp.r2) * Float32(n_passes)
             acc += vp.beta * (vp.tau / denom)
-        if True:
-            # Direct (NEE) term — pbrt's "pixel.Ld", resampled once per
-            # pass, averaged over n_passes. Applies to volume VPs too: this
-            # was gated on `is_volume == 0` until 2026-09-09, so a volume
-            # scatter point's direct lighting was computed and then thrown
-            # away -- the third of three independent gates that each had to
-            # be opened for fog to receive any direct light at all.
-            var (dr, dg, db) = spectral_sample_to_rgb(
-                spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
-                spectral_cie_z, spectral_d65, vp.ld / Float32(n_passes), vp.wavelengths)
-            acc += vp.beta * RGB(dr, dg, db)
+        # Direct (NEE) term — pbrt's "pixel.Ld", resampled once per
+        # pass, averaged over n_passes. Applies to volume VPs too: this
+        # was gated on `is_volume == 0` until 2026-09-09, so a volume
+        # scatter point's direct lighting was computed and then thrown
+        # away -- the third of three independent gates that each had to
+        # be opened for fog to receive any direct light at all.
+        var (dr, dg, db) = spectral_sample_to_rgb(
+            spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
+            spectral_cie_z, spectral_d65, vp.ld / Float32(n_passes), vp.wavelengths)
+        acc += vp.beta * RGB(dr, dg, db)
     acc = acc / Float32(vp_samples)
 
     # ISO exposure compensation (matches normalize_film)

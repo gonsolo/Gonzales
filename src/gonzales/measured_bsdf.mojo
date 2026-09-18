@@ -90,7 +90,7 @@ def load_measured_bsdf_reflectance(path: String) -> Tuple[Bool, Float32]:
         var dtype = Int(file_buf[unsafe_offset=pos]); pos += 1
         var data_offset = _mbsdf_u64(file_buf, pos); pos += 8
         var count = 1
-        for d in range(ndim):
+        for _ in range(ndim):
             if pos + 8 > file_size:
                 break
             count *= _mbsdf_u64(file_buf, pos)

@@ -1055,7 +1055,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
 
             # Allocate handle on heap
             var handle = unsafe_alloc[GpuSceneHandle](1)
-            handle.init_pointee_move(GpuSceneHandle(
+            handle.unsafe_write(GpuSceneHandle(
                 ctx=ctx^,
                 bvh=BvhBuffers(
                     nodes_buf=bvh_buf^,
@@ -2759,39 +2759,38 @@ def _sample_medium_core(
         # this function does not know -- so it keeps its previous behavior
         # rather than getting a subtly wrong transmittance. That remains a
         # real, pre-existing gap for homogeneous media.
-        if True:
-            var scatter_w = scatter_pt.to_simd()
-            var wo_v = -ray_dir
-            for dl_i in range(n_distant_lights):
-                _volume_nee_light(path_ptr, _sample_distant_light_nee(distantLights[unsafe_offset=dl_i]),
+        var scatter_w = scatter_pt.to_simd()
+        var wo_v = -ray_dir
+        for dl_i in range(n_distant_lights):
+            _volume_nee_light(path_ptr, _sample_distant_light_nee(distantLights[unsafe_offset=dl_i]),
+                scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
+                bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
+                instances, spheres, n_spheres, materials,
+                spectral_coeffs, spectral_res, spectral_cie_x,
+                spectral_cie_y, spectral_cie_z, spectral_d65)
+        for pl_i in range(n_point_lights):
+            _volume_nee_light(path_ptr, _sample_point_light_nee(pointLights[unsafe_offset=pl_i], scatter_w),
+                scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
+                bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
+                instances, spheres, n_spheres, materials,
+                spectral_coeffs, spectral_res, spectral_cie_x,
+                spectral_cie_y, spectral_cie_z, spectral_d65)
+        for sph_i in range(n_spheres):
+            if spheres[unsafe_offset=sph_i].isAreaLight == Int8(1):
+                _volume_nee_light(path_ptr, _sample_sphere_light_nee(spheres[unsafe_offset=sph_i], n_spheres, scatter_w, pcg),
                     scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
                     bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
                     instances, spheres, n_spheres, materials,
                     spectral_coeffs, spectral_res, spectral_cie_x,
                     spectral_cie_y, spectral_cie_z, spectral_d65)
-            for pl_i in range(n_point_lights):
-                _volume_nee_light(path_ptr, _sample_point_light_nee(pointLights[unsafe_offset=pl_i], scatter_w),
-                    scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
-                    bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
-                    instances, spheres, n_spheres, materials,
-                    spectral_coeffs, spectral_res, spectral_cie_x,
-                    spectral_cie_y, spectral_cie_z, spectral_d65)
-            for sph_i in range(n_spheres):
-                if spheres[unsafe_offset=sph_i].isAreaLight == Int8(1):
-                    _volume_nee_light(path_ptr, _sample_sphere_light_nee(spheres[unsafe_offset=sph_i], n_spheres, scatter_w, pcg),
-                        scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
-                        bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
-                        instances, spheres, n_spheres, materials,
-                        spectral_coeffs, spectral_res, spectral_cie_x,
-                        spectral_cie_y, spectral_cie_z, spectral_d65)
-            for inf_i in range(n_infinite_lights):
-                _volume_nee_light(path_ptr,
-                    _sample_infinite_light_nee(infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float())),
-                    scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
-                    bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
-                    instances, spheres, n_spheres, materials,
-                    spectral_coeffs, spectral_res, spectral_cie_x,
-                    spectral_cie_y, spectral_cie_z, spectral_d65)
+        for inf_i in range(n_infinite_lights):
+            _volume_nee_light(path_ptr,
+                _sample_infinite_light_nee(infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float())),
+                scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
+                bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
+                instances, spheres, n_spheres, materials,
+                spectral_coeffs, spectral_res, spectral_cie_x,
+                spectral_cie_y, spectral_cie_z, spectral_d65)
         # Sample the scatter direction from the medium's Henyey-Greenstein
         # phase function. `g` was parsed into Medium_C all along but never
         # used: scattering was hardcoded isotropic (uniform sphere), so a
@@ -5080,5 +5079,5 @@ def gpu_clear_restir_vol(
 def gpu_free_scene(handlePtr: Pointer[GpuSceneHandle, MutUntrackedOrigin]):
     if Int(handlePtr) == 0:
         return
-    handlePtr.destroy_pointee()
+    handlePtr.unsafe_deinit_pointee()
     handlePtr.unsafe_bitcast[GpuSceneHandle]().unsafe_free()
