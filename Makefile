@@ -317,6 +317,13 @@ endif
 # reference's, and raising passes/photons does not move it (2.03 at 8 passes,
 # 2.06 at 16, 2.11 at 32) -- so it is a systematic difference, not noise.
 CAUSTIC_REF_DIR ?= $(HOME)/src/bitterli
+# Renders on the GPU, like every other check here. It could not until
+# 2026-09-18: SPPM's volume photon gather was dead on the GPU (it read the
+# medium table from a kernel whose descriptor carries a dangling one), so the
+# volumetric caustic simply did not exist there -- GPU beam excess 0.96
+# (ABSENT) against CPU's 2.20 (PRESENT). With that fixed the GPU scores 2.25,
+# so the one check in this repo that looks for a FEATURE rather than an energy
+# level now covers the backend everything actually renders with.
 CAUSTIC_PASSES  ?= 8
 CAUSTIC_PHOTONS ?= 100000
 caustics: causticstest
@@ -328,7 +335,7 @@ causticstest: release
 	else \
 		sed 's/volumetric-caustic\.png/caustictest-vc.exr/' "$$vc/scene-v4.pbrt" > build/caustictest-vc.pbrt; \
 		rm -f caustictest-vc.exr; \
-		./build/gonzales --sppm --sppm-passes $(CAUSTIC_PASSES) --sppm-photons $(CAUSTIC_PHOTONS) \
+		./build/gonzales --gpu --sppm --sppm-passes $(CAUSTIC_PASSES) --sppm-photons $(CAUSTIC_PHOTONS) \
 			build/caustictest-vc.pbrt > build/caustictest-vc.log 2>&1 || true; \
 		if [ ! -f caustictest-vc.exr ]; then \
 			echo "FAIL volumetric-caustic: no output written"; rc=1; \
