@@ -16,7 +16,7 @@ from .geometry import (
     TriangleMesh_C, Material_C, MatKind, LobeKind, PhotonKind, AreaLight_C, Sphere_C, Medium_C, MediumInterface_C,
     Instance_C, dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI, Frame,
     Curve_C, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, InfiniteLight_C, PointLight_C,
-    MeasuredBRDF_C, GpuTexture_C, _is_real_ptr, Grid_C, NvdbGrid_C, dielectric_normals_point_inward,
+    MeasuredBRDF_C, GpuTexture_C, _is_real_ptr, Grid_C, NvdbGrid_C,
     FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS,
     medium_transmittance_ratio_spectral, spectral_free_flight_weight,
 )
@@ -375,10 +375,8 @@ def _dielectric_bounce(
     mut pcg: PCG32,
     current_ior: Float32 = Float32(1.0),    # IOR of the medium the ray is ALREADY in; 1.0 = vacuum
     previous_ior: Float32 = Float32(1.0),   # IOR one level below current_ior (what exiting restores)
-    normals_point_inward: Bool = False,     # geometry.mojo's dielectric_normals_point_inward
 ) -> Tuple[Vec3f, Vec3f, Float32, Float32, Float32]:
-    var di = dielectric_interface(geom_normal, ray_dir, ior, force_entering, current_ior, previous_ior,
-                                  normals_point_inward)
+    var di = dielectric_interface(geom_normal, ray_dir, ior, force_entering, current_ior, previous_ior)
     var normal = di.normal
     var entering = di.entering
     var eta = di.eta
@@ -849,8 +847,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var ior = mat.albedo.r
             var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
             var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
-                ray_dir, hit.to_simd(), gn, ior, n_events == 1 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior,
-                    dielectric_normals_point_inward(mat))
+                ray_dir, hit.to_simd(), gn, ior, n_events == 1 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior)
             current_dielectric_ior = new_cur_ior
             previous_dielectric_ior = new_prev_ior
             vp.beta *= radiance_scale  # camera-path (Radiance mode): apply non-symmetric-scattering correction
@@ -1464,8 +1461,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var ior = mat.albedo.r
             var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
             var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
-                ray_dir, hit.to_simd(), gn, ior, n_events == 1 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior,
-                    dielectric_normals_point_inward(mat))
+                ray_dir, hit.to_simd(), gn, ior, n_events == 1 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior)
             current_dielectric_ior = new_cur_ior
             previous_dielectric_ior = new_prev_ior
             # Light path (TransportMode::Importance): do NOT apply the
