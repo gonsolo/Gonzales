@@ -269,9 +269,9 @@ def denoise[Ob: Origin[mut=True], Oa: Origin[mut=True], On: Origin[mut=True], Od
     var result_buf = pong if np % 2 == 1 else ping
     for i in range(n * 3):
         output[i] = result_buf[i]
-    variance.free()
-    clamped.free()
-    pong.free()
+    variance.unsafe_free()
+    clamped.unsafe_free()
+    pong.unsafe_free()
 
 
 # Write a float RGB buffer via the OpenImageIO bridge.
@@ -342,7 +342,7 @@ def write_image_cropped[Opx: Origin[mut=True]](
             cropped[d + 2] = pixels[s + 2]
     var ret = write_image_windowed(cropped, crop_w, crop_h, full_w, full_h, crop_x0, crop_y0,
                                     filename, tile_w, tile_h)
-    cropped.free()
+    cropped.unsafe_free()
     return ret
 
 

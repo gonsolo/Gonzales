@@ -333,7 +333,7 @@ def _sss_reflectance(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             else:
                 print("Warning: subsurface \"reflectance\" texture '" + tname +
                       "' (" + fstr + ") failed to load — falling back to grey 0.5, which will render colourless.")
-            fbuf.free(); data_out.free(); w_out.free(); h_out.free()
+            fbuf.unsafe_free(); data_out.unsafe_free(); w_out.unsafe_free(); h_out.unsafe_free()
             return out
     print("Warning: subsurface \"reflectance\" names texture '" + tname +
           "', which is not a constant or imagemap — using grey 0.5.")
@@ -990,7 +990,7 @@ def _psc_handle_make_named_material(handle: UnsafePointer[PbrtScanner, MutExtern
     nm.sss_medium_idx = sss_medium_idx
     s[0].named_materials.append(nm^)
 
-    mat_name.free()
+    mat_name.unsafe_free()
 
 def _psc_handle_named_material(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                                s: UnsafePointer[SceneParseState, MutExternalOrigin]):
@@ -1010,4 +1010,4 @@ def _psc_handle_named_material(handle: UnsafePointer[PbrtScanner, MutExternalOri
             if s[0].named_materials[i].sss_medium_idx >= Int32(0):
                 s[0].cur_attr.inside_medium = s[0].named_materials[i].sss_medium_idx
             break
-    mat_name.free()
+    mat_name.unsafe_free()

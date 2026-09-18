@@ -73,7 +73,7 @@ def test_world_to_raster_round_trips_the_camera_transform() raises:
             var e = max(abs(pr[1] - fx0), abs(pr[2] - fy0))
             if e > worst: worst = e
     assert_true(worst < Float32(1e-3))
-    r2c.free(); w2c.free(); c2r.free()
+    r2c.unsafe_free(); w2c.unsafe_free(); c2r.unsafe_free()
 
 def test_world_to_raster_rejects_points_behind_the_camera() raises:
     var (r2c, w2c, c2r) = _make_camera()
@@ -81,7 +81,7 @@ def test_world_to_raster_rejects_points_behind_the_camera() raises:
     assert_true(not behind[0])
     var off = _bdpt_world_to_raster(Vec3f(Float32(50), Float32(0), Float32(1)), w2c, c2r, FW, FH)
     assert_true(not off[0])
-    r2c.free(); w2c.free(); c2r.free()
+    r2c.unsafe_free(); w2c.unsafe_free(); c2r.unsafe_free()
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

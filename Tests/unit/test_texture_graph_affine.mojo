@@ -63,7 +63,7 @@ def test_plain_imagemap_is_identity_affine() raises:
     assert_true(nm.tex_idx == Int32(0))
     assert_true(_close(nm.tex_scale.r, Float32(1)))
     assert_true(_close(nm.tex_bias.r, Float32(0)))
-    _ = s.take_pointee(); s.free()
+    _ = s.take_pointee(); s.unsafe_free()
 
 
 def test_scale_of_imagemap_folds_into_scale() raises:
@@ -76,7 +76,7 @@ def test_scale_of_imagemap_folds_into_scale() raises:
     assert_true(nm.tex_idx == Int32(0))
     assert_true(_close(nm.tex_scale.r, Float32(0.5)))
     assert_true(_close(nm.tex_bias.r, Float32(0)))
-    _ = s.take_pointee(); s.free()
+    _ = s.take_pointee(); s.unsafe_free()
 
 
 def test_mix_texture_with_constant_matches_pbrt_lerp() raises:
@@ -95,7 +95,7 @@ def test_mix_texture_with_constant_matches_pbrt_lerp() raises:
     assert_true(_close(nm.tex_bias.r, Float32(0.25) * Float32(0.8)))
     assert_true(_close(nm.tex_bias.g, Float32(0.25) * Float32(0.4)))
     assert_true(_close(nm.tex_bias.b, Float32(0.25) * Float32(0.2)))
-    _ = s.take_pointee(); s.free()
+    _ = s.take_pointee(); s.unsafe_free()
 
 
 def test_mix_argument_order_is_not_symmetric() raises:
@@ -111,7 +111,7 @@ def test_mix_argument_order_is_not_symmetric() raises:
     # Texture is now tex2, so it carries weight `amount`, not `1 - amount`.
     assert_true(_close(nm.tex_scale.r, Float32(0.25)))
     assert_true(_close(nm.tex_bias.r, Float32(0.75) * Float32(0.8)))
-    _ = s.take_pointee(); s.free()
+    _ = s.take_pointee(); s.unsafe_free()
 
 
 def test_mix_of_constants_driven_by_texture() raises:
@@ -131,7 +131,7 @@ def test_mix_of_constants_driven_by_texture() raises:
     assert_true(_close(nm.tex_scale.b, Float32(0.2)))
     assert_true(_close(nm.tex_bias.r, Float32(0.1)))
     assert_true(_close(nm.tex_bias.b, Float32(0.3)))
-    _ = s.take_pointee(); s.free()
+    _ = s.take_pointee(); s.unsafe_free()
 
 
 def test_constant_tinted_by_texture_scale() raises:
@@ -148,7 +148,7 @@ def test_constant_tinted_by_texture_scale() raises:
     assert_true(_close(nm.tex_scale.r, Float32(0.4)))
     assert_true(_close(nm.tex_scale.g, Float32(0.3)))
     assert_true(_close(nm.tex_bias.r, Float32(0)))
-    _ = s.take_pointee(); s.free()
+    _ = s.take_pointee(); s.unsafe_free()
 
 
 def test_nested_scale_of_mix_composes() raises:
@@ -165,7 +165,7 @@ def test_nested_scale_of_mix_composes() raises:
     # 0.5 * (2 * texel) + 0.5 * 1
     assert_true(_close(nm.tex_scale.r, Float32(1.0)))
     assert_true(_close(nm.tex_bias.r, Float32(0.5)))
-    _ = s.take_pointee(); s.free()
+    _ = s.take_pointee(); s.unsafe_free()
 
 
 def test_product_of_two_textures_refuses_to_resolve() raises:
@@ -180,7 +180,7 @@ def test_product_of_two_textures_refuses_to_resolve() raises:
     _mat(s, '"m" "string type" [ "diffuse" ] "texture reflectance" [ "prod" ]')
     var nm = s[0].named_materials[0]
     assert_true(nm.tex_idx == Int32(-1))
-    _ = s.take_pointee(); s.free()
+    _ = s.take_pointee(); s.unsafe_free()
 
 
 def test_mix_over_two_different_textures_refuses_to_resolve() raises:
@@ -194,7 +194,7 @@ def test_mix_over_two_different_textures_refuses_to_resolve() raises:
     _mat(s, '"m" "string type" [ "diffuse" ] "texture reflectance" [ "mx" ]')
     var nm = s[0].named_materials[0]
     assert_true(nm.tex_idx == Int32(-1))
-    _ = s.take_pointee(); s.free()
+    _ = s.take_pointee(); s.unsafe_free()
 
 
 def test_mix_of_two_constants_collapses_to_flat_albedo() raises:
@@ -209,7 +209,7 @@ def test_mix_of_two_constants_collapses_to_flat_albedo() raises:
     assert_true(_close(nm.albedo.r, Float32(0.5)))
     assert_true(_close(nm.albedo.g, Float32(0.25)))
     assert_true(_close(nm.albedo.b, Float32(0.125)))
-    _ = s.take_pointee(); s.free()
+    _ = s.take_pointee(); s.unsafe_free()
 
 
 def main() raises:

@@ -80,10 +80,10 @@ def test_vulkanrt_build_scene_traces_correct_mesh_and_triangle() raises:
 
     vulkanrt_destroy_scene(scene)
 
-    out_t.free(); out_mesh.free(); out_tri.free()
-    point_counts.free(); idx_counts.free()
-    meshes.free()
-    pts0.free(); idx0.free(); pts1.free(); idx1.free()
+    out_t.unsafe_free(); out_mesh.unsafe_free(); out_tri.unsafe_free()
+    point_counts.unsafe_free(); idx_counts.unsafe_free()
+    meshes.unsafe_free()
+    pts0.unsafe_free(); idx0.unsafe_free(); pts1.unsafe_free(); idx1.unsafe_free()
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

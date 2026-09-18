@@ -68,7 +68,7 @@ def test_normalize_film_zero_filter_weight_gives_zero_output() raises:
     for i in range(3):
         assert_true(_close(beauty[i], Float32(0.0)))
         assert_true(_close(albedo[i], Float32(0.0)))
-    results.free(); beauty.free(); albedo.free()
+    results.unsafe_free(); beauty.unsafe_free(); albedo.unsafe_free()
 
 def test_normalize_film_scales_beauty_by_iso_but_leaves_albedo_unscaled() raises:
     """Beauty = estimate/weight * (iso/100); albedo = albedo_sum/weight with
@@ -87,7 +87,7 @@ def test_normalize_film_scales_beauty_by_iso_but_leaves_albedo_unscaled() raises
     assert_true(_close(albedo[0], Float32(0.25)))
     assert_true(_close(albedo[1], Float32(0.125)))
     assert_true(_close(albedo[2], Float32(0.375)))
-    results.free(); beauty.free(); albedo.free()
+    results.unsafe_free(); beauty.unsafe_free(); albedo.unsafe_free()
 
 def test_normalize_film_clamps_negative_beauty_to_zero() raises:
     var results = alloc[TileResult_C](1)
@@ -98,7 +98,7 @@ def test_normalize_film_clamps_negative_beauty_to_zero() raises:
     assert_true(_close(beauty[0], Float32(0.0)))
     assert_true(_close(beauty[1], Float32(3.0)))
     assert_true(_close(beauty[2], Float32(0.0)))
-    results.free(); beauty.free(); albedo.free()
+    results.unsafe_free(); beauty.unsafe_free(); albedo.unsafe_free()
 
 def test_normalize_film_clamps_nan_beauty_to_zero() raises:
     """A NaN component (e.g. propagated from an earlier 0/0) fails self-
@@ -114,7 +114,7 @@ def test_normalize_film_clamps_nan_beauty_to_zero() raises:
     assert_true(_close(beauty[0], Float32(0.0)))
     assert_true(_close(beauty[1], Float32(1.0)))
     assert_true(_close(beauty[2], Float32(1.0)))
-    results.free(); beauty.free(); albedo.free()
+    results.unsafe_free(); beauty.unsafe_free(); albedo.unsafe_free()
 
 def test_normalize_film_max_component_clamp_preserves_color_ratio() raises:
     """When the brightest channel exceeds max_component_value, ALL channels
@@ -129,7 +129,7 @@ def test_normalize_film_max_component_clamp_preserves_color_ratio() raises:
     assert_true(_close(beauty[0], Float32(2.0)))
     assert_true(_close(beauty[1], Float32(4.0)))
     assert_true(_close(beauty[2], Float32(1.0)))
-    results.free(); beauty.free(); albedo.free()
+    results.unsafe_free(); beauty.unsafe_free(); albedo.unsafe_free()
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

@@ -138,7 +138,7 @@ struct Scene(Movable):
         for i in range(len(self.infinite_lights)):
             var il = self.infinite_lights[i]
             if Int(il.cdf_ptr) != 0:
-                il.cdf_ptr.free()
+                il.cdf_ptr.unsafe_free()
             _ = external_call["free_texture_rgb", Int32,
                 UnsafePointer[Float32, MutExternalOrigin]](il.pixels_ptr)
         # All List[T] fields are freed automatically after __del__ body.

@@ -122,8 +122,8 @@ def test_gi_generate_no_area_lights_returns_invalid() raises:
         Vec3f(0.0, 1.0, 0.0), RGB(Float32(0.8)), pcg)
     assert_true(res.valid == Int8(0))
 
-    meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
-    primIds.free(); bvh.free(); cdf.free()
+    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free(); meshes.unsafe_free()
+    primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free()
 
 def test_gi_generate_surface_facing_away_from_light_returns_invalid() raises:
     """X2's own normal faces -Y (away from the light at y=10) -- cos_s <= 0
@@ -145,8 +145,8 @@ def test_gi_generate_surface_facing_away_from_light_returns_invalid() raises:
         Vec3f(0.0, -1.0, 0.0), RGB(Float32(0.8)), pcg)
     assert_true(res.valid == Int8(0))
 
-    meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
-    area_lights.free(); primIds.free(); bvh.free(); cdf.free()
+    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free(); meshes.unsafe_free()
+    area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free()
 
 def test_gi_generate_unoccluded_light_gives_valid_positive_lo() raises:
     """No occluder (the one BVH leaf is a decoy AABB far outside the shadow
@@ -181,8 +181,8 @@ def test_gi_generate_unoccluded_light_gives_valid_positive_lo() raises:
     # is responsible for the reservoir_update step, not this function.
     assert_true(_close(res.state.m, Float32(0.0)))
 
-    meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
-    area_lights.free(); primIds.free(); bvh.free(); cdf.free()
+    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free(); meshes.unsafe_free()
+    area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free()
 
 def test_gi_generate_occluded_light_gives_valid_zero_lo() raises:
     """A real occluder triangle crosses the straight-up shadow ray at
@@ -217,10 +217,10 @@ def test_gi_generate_occluded_light_gives_valid_zero_lo() raises:
     assert_true(_close(res.lo.g, Float32(0.0)))
     assert_true(_close(res.lo.b, Float32(0.0)))
 
-    meshes[0].points.free(); meshes[0].vertexIndices.free()
-    meshes[1].points.free(); meshes[1].vertexIndices.free()
-    meshes.free()
-    area_lights.free(); primIds.free(); bvh.free(); cdf.free()
+    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free()
+    meshes[1].points.unsafe_free(); meshes[1].vertexIndices.unsafe_free()
+    meshes.unsafe_free()
+    area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free()
 
 # ── End-to-end wiring: _shade_diffuse_nee's bounce-0-mark / bounce-1-
 # generate+combine+resolve chain (Phase 4.1, full path) ─────────────────────
@@ -322,9 +322,9 @@ def _run_two_bounce(gi_active: Bool) -> SpectralSample:
 
     var result = path_arr[0].estimate
 
-    meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
-    area_lights.free(); primIds.free(); bvh.free(); cdf.free(); no_lights_cdf.free()
-    gi_pending_buf.free(); path_arr.free()
+    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free(); meshes.unsafe_free()
+    area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free(); no_lights_cdf.unsafe_free()
+    gi_pending_buf.unsafe_free(); path_arr.unsafe_free()
     return result
 
 def test_shade_diffuse_nee_gi_wiring_adds_positive_reconnection_contribution() raises:

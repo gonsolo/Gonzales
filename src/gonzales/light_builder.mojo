@@ -10,7 +10,7 @@ def _psc_handle_area_light_source(handle: UnsafePointer[PbrtScanner, MutExternal
                                  s: UnsafePointer[SceneParseState, MutExternalOrigin]):
     var sbuf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
-    sbuf.free()
+    sbuf.unsafe_free()
     var params = _psc_collect_params(handle)
     s[0].cur_attr.is_alight = True
     var rgb = params.get_rgb_or_blackbody("L", RGB(Float32(1)))
@@ -53,7 +53,7 @@ def handle_light_source(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         var ddx = dfin[4] - dfin[0]
         var ddy = dfin[5] - dfin[1]
         var ddz = dfin[6] - dfin[2]
-        draw.free(); dfin.free()
+        draw.unsafe_free(); dfin.unsafe_free()
         var dlen = sqrt(ddx*ddx + ddy*ddy + ddz*ddz)
         if dlen < Float32(0.0001):
             ddx = Float32(0); ddy = Float32(0); ddz = Float32(1); dlen = Float32(1)
@@ -77,7 +77,7 @@ def handle_light_source(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         s[0].point_rgbs.append(rgb.r * scale)
         s[0].point_rgbs.append(rgb.g * scale)
         s[0].point_rgbs.append(rgb.b * scale)
-        raw.free(); fin.free()
+        raw.unsafe_free(); fin.unsafe_free()
     elif _psc_streq(ltype, "infinite"):
         if filename != "":
             var file_str = s[0].scene_dir + filename
@@ -93,4 +93,4 @@ def handle_light_source(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         for ci in range(16):
             s[0].inf_ctm.append(s[0].ctm[ci])
 
-    ltype.free()
+    ltype.unsafe_free()

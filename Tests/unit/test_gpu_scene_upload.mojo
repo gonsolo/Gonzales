@@ -64,8 +64,8 @@ def _parse_minimal_scene() -> UnsafePointer[ParsedScene_Mojo, MutExternalOrigin]
 
     var psc = alloc[ParsedScene_Mojo](1)
     finalize_scene(s_ptr, psc, False)
-    _ = s_ptr.take_pointee(); s_ptr.free()
-    handle[0].buffer.free(); handle.free()
+    _ = s_ptr.take_pointee(); s_ptr.unsafe_free()
+    handle[0].buffer.unsafe_free(); handle.unsafe_free()
     return psc
 
 def test_gpu_upload_scene_round_trips_mesh_and_material_data() raises:
@@ -138,7 +138,7 @@ def test_gpu_upload_scene_round_trips_mesh_and_material_data() raises:
         assert_true(gpu_sobol[1] == UInt32(10))
         assert_true(gpu_sobol[N_SOBOL_GPU_WORDS - 1] == sobol[N_SOBOL_GPU_WORDS - 1])
 
-    sobol.free()
+    sobol.unsafe_free()
     mojo_parsed_free(psc)
 
 def main() raises:

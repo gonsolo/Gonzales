@@ -261,9 +261,9 @@ struct Normalmap(Movable):
             UnsafePointer[Int32, MutExternalOrigin], UnsafePointer[Int32, MutExternalOrigin],
             Int32](
             fname, pixels_ptr, w_out, h_out, Int32(1))
-        fname.free()
+        fname.unsafe_free()
         var w = Int(w_out[0]); var h = Int(h_out[0])
-        w_out.free(); h_out.free()
+        w_out.unsafe_free(); h_out.unsafe_free()
         if ok == Int32(0) or w <= 0 or w != h:
             raise Error("Normalmap: failed to load or non-square: " + filename)
         var src = pixels_ptr[0]
@@ -277,10 +277,10 @@ struct Normalmap(Movable):
             nx *= inv; ny *= inv; nz *= inv
             self.slopes[i*2 + 0] = -nx / nz
             self.slopes[i*2 + 1] = -ny / nz
-        pixels_ptr.free()
+        pixels_ptr.unsafe_free()
 
     def __deinit__(deinit self):
-        self.slopes.free()
+        self.slopes.unsafe_free()
 
     # render/normalmap.h: the shared bilinear addressing of eval_normal /
     # eval_normal_derivatives (clamp-to-edge, half-texel offset, no V flip).
@@ -347,19 +347,19 @@ struct ColorTexture(Movable):
             UnsafePointer[Int32, MutExternalOrigin], UnsafePointer[Int32, MutExternalOrigin],
             Int32](
             fname, pixels_ptr, w_out, h_out, Int32(0))   # raw=0 -> sRGB decoded to linear
-        fname.free()
+        fname.unsafe_free()
         self.w = Int(w_out[0]); self.h = Int(h_out[0])
-        w_out.free(); h_out.free()
+        w_out.unsafe_free(); h_out.unsafe_free()
         if ok == Int32(0) or self.w <= 0:
             raise Error("ColorTexture: failed to load " + filename)
         var src = pixels_ptr[0]
         self.data = alloc[Float32](3 * self.w * self.h)
         for i in range(3 * self.w * self.h):
             self.data[i] = src[i]
-        pixels_ptr.free()
+        pixels_ptr.unsafe_free()
 
     def __deinit__(deinit self):
-        self.data.free()
+        self.data.unsafe_free()
 
     def eval(self, u_in: Float32, v_in: Float32) -> Vec3f:
         var u = u_in - floor(u_in)
@@ -1352,7 +1352,7 @@ def main() raises:
     if rc == Int32(0):
         raise Error("failed to write " + out_path)
     print("wrote", out_path, width, "x", height, "@", spp, "spp")
-    pixels.free()
-    solved_total.free()
-    trials_total.free()
+    pixels.unsafe_free()
+    solved_total.unsafe_free()
+    trials_total.unsafe_free()
     _ = n_pixels

@@ -351,7 +351,7 @@ def sample_texture[use_gpu: Bool](
                     UnsafePointer[UInt8, MutExternalOrigin], Float32, Float32,
                     UnsafePointer[Float32, MutExternalOrigin]](filename, su, tv, tr)
                 var rr = tr[0]; var gg = tr[1]; var bb = tr[2]
-                tr.free()
+                tr.unsafe_free()
                 found = True
                 if raw:
                     return RGB(rr, gg, bb)
@@ -422,7 +422,7 @@ def _tex_lookup[use_gpu: Bool](
                     UnsafePointer[UInt8, MutExternalOrigin], Float32, Float32,
                     UnsafePointer[Float32, MutExternalOrigin]](filename, su, tv, tr)
                 var result = RGB(_srgb_to_linear(tr[0]), _srgb_to_linear(tr[1]), _srgb_to_linear(tr[2]))
-                tr.free()
+                tr.unsafe_free()
                 return RGB(mat.tex_bias.r + mat.tex_scale.r * result.r,
                            mat.tex_bias.g + mat.tex_scale.g * result.g,
                            mat.tex_bias.b + mat.tex_scale.b * result.b)
@@ -4572,7 +4572,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                             UnsafePointer[UInt8, MutExternalOrigin], Float32, Float32,
                             UnsafePointer[Float32, MutExternalOrigin]](fname, u, v, tr)
                         env_rgb = RGB(tr[0], tr[1], tr[2]) * ilight.scale
-                        tr.free()
+                        tr.unsafe_free()
                     else:
                         env_rgb = ilight.scale
                 else:

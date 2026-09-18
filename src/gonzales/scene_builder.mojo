@@ -36,7 +36,7 @@ def store_mesh[Of: Origin[mut=True], Oi: Origin[mut=True]](
         raw_pts[v*4+3] = Float32(1)
     var fin_pts = alloc[Float32](Int(n_verts) * 4)
     transform_points(s[0].ctm.unsafe_ptr(), raw_pts, n_verts, fin_pts)
-    raw_pts.free()
+    raw_pts.unsafe_free()
     var ma = MeshAccum(
         s[0].cur_attr.mat_idx,
         s[0].cur_attr.inside_medium,
@@ -47,7 +47,7 @@ def store_mesh[Of: Origin[mut=True], Oi: Origin[mut=True]](
     ma.points.reserve(Int(n_verts) * 4)
     for v in range(Int(n_verts) * 4):
         ma.points.append(fin_pts[v])
-    fin_pts.free()
+    fin_pts.unsafe_free()
     ma.vert_idxs.reserve(Int(n_tris) * 3)
     ma.face_idxs.reserve(Int(n_tris))
     var rev = s[0].cur_attr.reverse_orient

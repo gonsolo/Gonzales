@@ -181,8 +181,8 @@ def main() raises:
         if bound > Float32(0):
             maj_total_ratio += Float64(truemax / bound)
 
-    coord.free()
-    cpath.free()
+    coord.unsafe_free()
+    cpath.unsafe_free()
     nvdb_free(h)
 
     print("  majorant: checked", maj_checked, "regions,", maj_bad, "invalid;",

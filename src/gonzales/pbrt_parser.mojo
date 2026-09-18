@@ -166,7 +166,7 @@ def _psc_ctm_concat(s: UnsafePointer[SceneParseState, MutExternalOrigin],
     matrix_multiply(s[0].ctm.unsafe_ptr(), t, result)
     for i in range(16):
         s[0].ctm[i] = result[i]
-    result.free()
+    result.unsafe_free()
 
 def _psc_row_to_col(col_out: UnsafePointer[Float32, MutExternalOrigin],
                    row_in:  UnsafePointer[Float32, MutExternalOrigin]):
@@ -188,7 +188,7 @@ def _psc_handle_translate(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     _psc_identity(t)
     t[12] = v[0]; t[13] = v[1]; t[14] = v[2]   # col-major: col3 = (tx,ty,tz,1)
     _psc_ctm_concat(s, t)
-    v.free(); t.free()
+    v.unsafe_free(); t.unsafe_free()
 
 def _psc_handle_scale_kw(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                         s: UnsafePointer[SceneParseState, MutExternalOrigin]):
@@ -202,7 +202,7 @@ def _psc_handle_scale_kw(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     _psc_identity(t)
     t[0] = v[0]; t[5] = v[1]; t[10] = v[2]     # col-major: diagonal
     _psc_ctm_concat(s, t)
-    v.free(); t.free()
+    v.unsafe_free(); t.unsafe_free()
 
 def _psc_handle_rotate(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                       s: UnsafePointer[SceneParseState, MutExternalOrigin]):
@@ -226,7 +226,7 @@ def _psc_handle_rotate(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     t[8]  = ax*az*mc + ay*sv;   t[9]  = ay*az*mc - ax*sv;   t[10] = c + az*az*mc;        t[11] = Float32(0)
     t[12] = Float32(0);         t[13] = Float32(0);          t[14] = Float32(0);          t[15] = Float32(1)
     _psc_ctm_concat(s, t)
-    rv.free(); t.free()
+    rv.unsafe_free(); t.unsafe_free()
 
 def _psc_handle_lookat(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                       s: UnsafePointer[SceneParseState, MutExternalOrigin]):
@@ -237,7 +237,7 @@ def _psc_handle_lookat(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     var ex = v[0]; var ey = v[1]; var ez = v[2]
     var lx = v[3]; var ly = v[4]; var lz = v[5]
     var ux = v[6]; var uy = v[7]; var uz = v[8]
-    v.free()
+    v.unsafe_free()
 
     var dx = lx - ex; var dy = ly - ey; var dz = lz - ez
     var dl = _sqrt(dx*dx + dy*dy + dz*dz)
@@ -264,7 +264,7 @@ def _psc_handle_lookat(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     t[14] = -(dx*ex + dy*ey + dz*ez)
     t[15] = Float32(1)
     _psc_ctm_concat(s, t)
-    t.free()
+    t.unsafe_free()
 
 # ── Directive handlers ────────────────────────────────────────────────────────
 
@@ -272,7 +272,7 @@ def _psc_handle_integrator(handle: UnsafePointer[PbrtScanner, MutExternalOrigin]
                           s: UnsafePointer[SceneParseState, MutExternalOrigin]):
     var sbuf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
-    sbuf.free()
+    sbuf.unsafe_free()
     var params = _psc_collect_params(handle)
     s[0].max_depth = params.get_int("maxdepth", s[0].max_depth)
     s[0].sppm_radius = params.get_float("radius", s[0].sppm_radius)
@@ -282,7 +282,7 @@ def _psc_handle_sampler(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                        s: UnsafePointer[SceneParseState, MutExternalOrigin]):
     var sbuf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
-    sbuf.free()
+    sbuf.unsafe_free()
     var params = _psc_collect_params(handle)
     s[0].samples_per_pixel = params.get_int("pixelsamples", s[0].samples_per_pixel)
     s[0].samples_per_pixel = params.get_int("samples", s[0].samples_per_pixel)
@@ -297,7 +297,7 @@ def _psc_handle_filter(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         s[0].filter_type = Int32(2)
     else:
         s[0].filter_type = Int32(0)  # gaussian (default)
-    sbuf.free()
+    sbuf.unsafe_free()
     var params = _psc_collect_params(handle)
     s[0].filter_support_x = params.get_float("xradius", s[0].filter_support_x)
     s[0].filter_support_y = params.get_float("yradius", s[0].filter_support_y)
@@ -313,7 +313,7 @@ def _psc_handle_film(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     # which gonzales does not. Say so rather than let a scene author believe
     # those channels were produced -- watercolor and kroken both ask for it.
     var is_gbuf = _psc_streq(sbuf, "gbuffer")
-    sbuf.free()
+    sbuf.unsafe_free()
     if is_gbuf:
         print("Warning: Film \"gbuffer\" — rendering as \"rgb\"; the auxiliary"
               + " G-buffer channels (albedo/normal/depth/variance) are NOT"
@@ -345,7 +345,7 @@ def _psc_handle_camera(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                       s: UnsafePointer[SceneParseState, MutExternalOrigin]):
     var sbuf = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
-    sbuf.free()
+    sbuf.unsafe_free()
     # Copy current CTM into cam2w_raw
     for i in range(16): s[0].cam2w_raw[i] = s[0].ctm[i]
     var params = _psc_collect_params(handle)
@@ -358,7 +358,7 @@ def _psc_handle_transform(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     for i in range(16):
         _ = scanner_scan_float(handle, tmp)
         s[0].ctm[i] = tmp[0]
-    tmp.free()
+    tmp.unsafe_free()
     _ = scanner_scan_char(handle, UInt8(93))  # ']'
 
 def _psc_handle_world_begin(s: UnsafePointer[SceneParseState, MutExternalOrigin]):
@@ -579,7 +579,7 @@ def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         raw4[i*4+0] = cp_list[i*3+0]; raw4[i*4+1] = cp_list[i*3+1]
         raw4[i*4+2] = cp_list[i*3+2]; raw4[i*4+3] = Float32(1)
     transform_points(s[0].ctm.unsafe_ptr(), raw4, Int32(n_raw), xfm4)
-    raw4.free()
+    raw4.unsafe_free()
 
     # Split into (n_cp - 3) local B-spline segments: window i uses raw
     # control points [i, i+1, i+2, i+3] — matches the standard uniform
@@ -599,7 +599,7 @@ def handle_curve_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         s[0].curves_mat.append(mat_idx)
         s[0].curves_al.append(s[0].cur_attr.is_alight)
         s[0].curves_al_rgb.append(s[0].cur_attr.al_rgb)
-    xfm4.free()
+    xfm4.unsafe_free()
 
 # ── Medium handlers ───────────────────────────────────────────────────────────
 
@@ -879,7 +879,7 @@ def handle_named_medium(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         warn_unsupported_in("medium type", type_str, "medium", bad_name,
                             "it is DROPPED, so any MediumInterface naming it renders as empty space",
                             "homogeneous, uniformgrid, nanovdb, cloud")
-    name_buf.free()
+    name_buf.unsafe_free()
 
 def lookup_medium(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                   name: UnsafePointer[UInt8, MutExternalOrigin]) -> Int32:
@@ -899,7 +899,7 @@ def handle_medium_interface(handle: UnsafePointer[PbrtScanner, MutExternalOrigin
     _ = scanner_parse_quoted_string(handle, outside_buf, 64)
     s[0].cur_attr.inside_medium  = lookup_medium(s, inside_buf)
     s[0].cur_attr.outside_medium = lookup_medium(s, outside_buf)
-    inside_buf.free(); outside_buf.free()
+    inside_buf.unsafe_free(); outside_buf.unsafe_free()
 
 # ── Shape handlers ────────────────────────────────────────────────────────────
 
@@ -1120,7 +1120,7 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     var is_disk = _psc_streq(shape_type, "disk")
     var is_bilinearmesh = _psc_streq(shape_type, "bilinearmesh")
     var shape_type_name = String(unsafe_from_utf8_ptr=shape_type.as_imm())
-    shape_type.free()
+    shape_type.unsafe_free()
 
     if is_disk:
         # Tessellated into a mesh (handle_disk_shape above), so it goes
@@ -1252,26 +1252,26 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                 if not exists(ap_str):
                     print("PLY gunzip FAILED (is `gzip` installed?):", gz_str)
             ok = load_ply(ap, ply_pts, ply_nv, ply_idx, ply_nt, ply_uvs, ply_has_uvs, ply_nrm, ply_has_nrm)
-            ap.free()
+            ap.unsafe_free()
         if ok == 0:
             ok = load_ply(full_path, ply_pts, ply_nv, ply_idx, ply_nt, ply_uvs, ply_has_uvs, ply_nrm, ply_has_nrm)
         if ok == 0:
             print("PLY load FAILED:", String(unsafe_from_utf8_ptr=full_path.as_imm()))
-            full_path.free()
-            ply_pts.free(); ply_nv.free(); ply_idx.free(); ply_nt.free()
-            ply_uvs.free(); ply_has_uvs.free(); ply_nrm.free(); ply_has_nrm.free()
+            full_path.unsafe_free()
+            ply_pts.unsafe_free(); ply_nv.unsafe_free(); ply_idx.unsafe_free(); ply_nt.unsafe_free()
+            ply_uvs.unsafe_free(); ply_has_uvs.unsafe_free(); ply_nrm.unsafe_free(); ply_has_nrm.unsafe_free()
             return
-        full_path.free()
+        full_path.unsafe_free()
         var nv = ply_nv[0]
         var nt = ply_nt[0]
         if nv <= 0 or nt <= 0:
-            ply_pts[0].free(); ply_idx[0].free()
+            ply_pts[0].unsafe_free(); ply_idx[0].unsafe_free()
             if ply_has_uvs[0] != 0:
-                ply_uvs[0].free()
+                ply_uvs[0].unsafe_free()
             if ply_has_nrm[0] != 0:
-                ply_nrm[0].free()
-            ply_pts.free(); ply_nv.free(); ply_idx.free(); ply_nt.free()
-            ply_uvs.free(); ply_has_uvs.free(); ply_nrm.free(); ply_has_nrm.free()
+                ply_nrm[0].unsafe_free()
+            ply_pts.unsafe_free(); ply_nv.unsafe_free(); ply_idx.unsafe_free(); ply_nt.unsafe_free()
+            ply_uvs.unsafe_free(); ply_has_uvs.unsafe_free(); ply_nrm.unsafe_free(); ply_has_nrm.unsafe_free()
             return
         var tmp_f2 = ply_pts[0]
         var tmp_i2 = ply_idx[0]
@@ -1281,7 +1281,7 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
             var n_uv_floats = Int(nv) * 2
             for uvi in range(n_uv_floats):
                 s[0].meshes[len(s[0].meshes) - 1].uvs.append(uv_ptr[uvi])
-            uv_ptr.free()
+            uv_ptr.unsafe_free()
         if ply_has_nrm[0] != 0:
             var nrm_ptr = ply_nrm[0]
             var ctm_inv = alloc[Float32](16)
@@ -1299,10 +1299,10 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                 last_mesh.normals.append(nx)
                 last_mesh.normals.append(ny)
                 last_mesh.normals.append(nz)
-            nrm_world.free(); ctm_inv.free(); nrm_ptr.free()
-        tmp_f2.free(); tmp_i2.free()
-        ply_pts.free(); ply_nv.free(); ply_idx.free(); ply_nt.free()
-        ply_uvs.free(); ply_has_uvs.free(); ply_nrm.free(); ply_has_nrm.free()
+            nrm_world.unsafe_free(); ctm_inv.unsafe_free(); nrm_ptr.unsafe_free()
+        tmp_f2.unsafe_free(); tmp_i2.unsafe_free()
+        ply_pts.unsafe_free(); ply_nv.unsafe_free(); ply_idx.unsafe_free(); ply_nt.unsafe_free()
+        ply_uvs.unsafe_free(); ply_has_uvs.unsafe_free(); ply_nrm.unsafe_free(); ply_has_nrm.unsafe_free()
         return
 
     # take_floats/take_ints move each bulk array's buffer straight out of the
@@ -1346,7 +1346,7 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         var nrm_src = alloc[Float32](Int(n_verts) * 3)
         for ni in range(Int(n_verts) * 3): nrm_src[ni] = n_list[ni]
         transform_normals(ctm_inv, nrm_src, n_verts, nrm_world)
-        nrm_src.free()
+        nrm_src.unsafe_free()
         ref nm = s[0].meshes[len(s[0].meshes) - 1]
         nm.normals.reserve(Int(n_verts) * 3)
         for ni in range(Int(n_verts)):
@@ -1358,7 +1358,7 @@ def handle_shape(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
             nm.normals.append(nx)
             nm.normals.append(ny)
             nm.normals.append(nz)
-        nrm_world.free(); ctm_inv.free()
+        nrm_world.unsafe_free(); ctm_inv.unsafe_free()
 
 # ── Texture handler ───────────────────────────────────────────────────────────
 
@@ -1426,10 +1426,10 @@ def handle_texture(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
     var tex_class = alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, tex_class, 64)
     var name_str = String(unsafe_from_utf8_ptr=tex_name.as_imm())
-    tex_name.free()
+    tex_name.unsafe_free()
 
     if _psc_streq(tex_class, "constant"):
-        tex_type.free(); tex_class.free()
+        tex_type.unsafe_free(); tex_class.unsafe_free()
         var params = _psc_collect_params(handle)
         var crgb = _psc_get_float_or_rgb(params, "value", RGB(Float32(0.5)))
         s[0].const_tex_names.append(name_str)
@@ -1438,7 +1438,7 @@ def handle_texture(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         s[0].const_tex_rgb.append(crgb.b)
         return
     if _psc_streq(tex_class, "checkerboard"):
-        tex_type.free(); tex_class.free()
+        tex_type.unsafe_free(); tex_class.unsafe_free()
         var params = _psc_collect_params(handle)
         # pbrt defaults: tex1=1 (white), tex2=0 (black), uscale=vscale=1.
         var ktex1 = _psc_get_float_or_rgb(params, "tex1", RGB(Float32(1.0)))
@@ -1452,7 +1452,7 @@ def handle_texture(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         s[0].checker_vscale.append(kvscale)
         return
     if _psc_streq(tex_class, "scale"):
-        tex_type.free(); tex_class.free()
+        tex_type.unsafe_free(); tex_class.unsafe_free()
         var params = _psc_collect_params(handle)
         # Both operands may be a nested texture or a literal -- see the
         # scale_tex_* comment in parse_types.mojo. get_string returns "" when
@@ -1470,7 +1470,7 @@ def handle_texture(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         s[0].scale_tex_scale_name.append(scale_name)
         return
     if _psc_streq(tex_class, "mix"):
-        tex_type.free(); tex_class.free()
+        tex_type.unsafe_free(); tex_class.unsafe_free()
         var params = _psc_collect_params(handle)
         # Each slot is either a nested texture reference (lands in the
         # dictionary's `strs` -- `"texture tex1" "name"`) or a literal
@@ -1504,11 +1504,11 @@ def handle_texture(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
         warn_unsupported_in("texture class", class_str + " (" + type_str + ")",
                             "texture", name_str, "it renders as a flat default",
                             "imagemap, scale, mix, checkerboard, constant")
-        tex_type.free(); tex_class.free()
+        tex_type.unsafe_free(); tex_class.unsafe_free()
         _psc_skip_params(handle)
         return
 
-    tex_type.free(); tex_class.free()
+    tex_type.unsafe_free(); tex_class.unsafe_free()
     var params = _psc_collect_params(handle)
     var filename = params.get_string("filename", "")
     if filename != "":
@@ -1573,7 +1573,7 @@ def _psc_emit_object_instance(s: UnsafePointer[SceneParseState, MutExternalOrigi
         s[0].instance_obj_to_world.append(obj_to_world[ci])
         s[0].instance_world_to_obj.append(world_to_obj[ci])
 
-    mdef.free(); mdef_inv.free(); obj_to_world.free(); world_to_obj.free()
+    mdef.unsafe_free(); mdef_inv.unsafe_free(); obj_to_world.unsafe_free(); world_to_obj.unsafe_free()
 
 # ── Main parse loop ───────────────────────────────────────────────────────────
 
@@ -1630,7 +1630,7 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                 s[0].pending_object_name  = String(unsafe_from_utf8_ptr=obj_name.as_imm())
                 s[0].pending_object_start = Int32(len(s[0].meshes))
                 s[0].pending_object_ctm   = s[0].ctm.copy()
-            obj_name.free()
+            obj_name.unsafe_free()
             s[0].object_depth += 1
         elif _psc_streq(kw_buf, "ObjectEnd"):
             if s[0].object_depth > 0:
@@ -1641,7 +1641,7 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
             var obj_name = alloc[UInt8](PSC_NAME_MAX)
             _ = scanner_parse_quoted_string(handle, obj_name, PSC_NAME_MAX)
             var inst_name = String(unsafe_from_utf8_ptr=obj_name.as_imm())
-            obj_name.free()
+            obj_name.unsafe_free()
             _psc_emit_object_instance(s, inst_name)
         elif _psc_streq(kw_buf, "Shape"):
             # Shapes inside an ObjectBegin/ObjectEnd block ARE parsed (into a
@@ -1729,7 +1729,7 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                     merged[inc_len + mi] = handle[0].buffer[rest_start + mi]
                 merged[merged_len] = UInt8(0)
                 if _is_real_ptr(handle[0].buffer):
-                    handle[0].buffer.free()
+                    handle[0].buffer.unsafe_free()
                 handle[0].buffer = merged
                 handle[0].total_bytes = Int32(merged_len)
                 handle[0].cursor = Int32(0)
@@ -1744,8 +1744,8 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
                     print("Warning: cannot open include:", inc_str)
             scanner_free(sub_handle)
             if ends_gz:
-                stripped.free()
-            inc_name.free(); inc_path.free()
+                stripped.unsafe_free()
+            inc_name.unsafe_free(); inc_path.unsafe_free()
         elif _psc_streq(kw_buf, "Material"):
             _psc_handle_make_named_material(handle, s, True)
             s[0].cur_attr.mat_idx = Int32(len(s[0].named_materials)) - Int32(1)
@@ -1763,13 +1763,13 @@ def parse_scene_file(handle: UnsafePointer[PbrtScanner, MutExternalOrigin],
             matrix_multiply(s[0].ctm.unsafe_ptr(), tmp, result)
             for i in range(16):
                 s[0].ctm[i] = result[i]
-            tmp.free(); result.free()
+            tmp.unsafe_free(); result.unsafe_free()
         else:
             _ = scanner_parse_quoted_string(handle, kw_buf, 256)
             _psc_skip_params(handle)
 
-    kw_buf.free()
-    ws_delims.free()
+    kw_buf.unsafe_free()
+    ws_delims.unsafe_free()
 
 # ── Camera/film matrix helpers ────────────────────────────────────────────────
 
@@ -1965,7 +1965,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
     var cam2w_tmp = alloc[Float32](16)
     for i in range(16): cam2w_tmp[i] = s[0].cam2w_raw[i]
     _ = matrix_invert(cam2w_tmp, c2w)
-    cam2w_tmp.free()
+    cam2w_tmp.unsafe_free()
     psc[0].camera_to_world = c2w
 
     if verbose:
@@ -2004,7 +2004,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
     matrix_multiply(cts_inv, rts, r2c)
     psc[0].raster_to_camera = r2c
 
-    cts.free(); str_mat.free(); rts.free(); cts_inv.free()
+    cts.unsafe_free(); str_mat.unsafe_free(); rts.unsafe_free(); cts_inv.unsafe_free()
 
     # ---- Materials ----
     # A Shape parsed with no active Material directive keeps cur_attr.mat_idx at
@@ -2312,7 +2312,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
         var new_mats = alloc[Material_C](expanded_n)
         for ci in range(n_mats):
             new_mats[ci] = mats[ci]
-        mats.free()
+        mats.unsafe_free()
         mats = new_mats
 
         var iface_buf = alloc[MediumInterface_C](n_with_mi)
@@ -2476,7 +2476,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             var b = (Int(total_tris) + global_group) * 6
             prim_bounds[b+0] = xmin; prim_bounds[b+1] = ymin; prim_bounds[b+2] = zmin
             prim_bounds[b+3] = xmax; prim_bounds[b+4] = ymax; prim_bounds[b+5] = zmax
-    group_first_scratch.free(); group_count_scratch.free(); count_pass_scratch.free()
+    group_first_scratch.unsafe_free(); group_count_scratch.unsafe_free(); count_pass_scratch.unsafe_free()
 
     # ---- Object instancing: one BLAS per template, then a TLAS instance leaf
     # (transform + BLAS reference) per ObjectInstance placement — see
@@ -2532,7 +2532,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
         var t_nodes = alloc[BVH2Node](t_max_nodes)
         var t_order = alloc[Int32](max(Int(t_tris), 1))
         var t_node_count = build_bvh2(t_bounds, t_tris, t_nodes, t_order)
-        t_bounds.free()
+        t_bounds.unsafe_free()
         var t_prim_ids = alloc[PrimId_C](max(Int(t_tris), 1))
         for k in range(Int(t_tris)):
             var orig = Int(t_order[k])
@@ -2541,7 +2541,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             var mat_idx = Int(s[0].meshes[mi].mat_idx)
             var mat_idx_r = mat_idx if mat_idx >= 0 else Int(default_mat_idx)
             t_prim_ids[k] = PrimId_C(Int64(mi), Int64(ti * 3), Int64(mat_idx_r), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-        t_mesh.free(); t_local.free(); t_order.free()
+        t_mesh.unsafe_free(); t_local.unsafe_free(); t_order.unsafe_free()
         blas_nodes_arr[tmpl]   = t_nodes
         blas_primids_arr[tmpl] = t_prim_ids
         blas_node_counts[tmpl]   = t_node_count
@@ -2610,7 +2610,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
         bvh_order = alloc[Int32](Int(total_prims))
         node_count = build_bvh2(prim_bounds, total_prims, bvh_nodes, bvh_order)
 
-    prim_bounds.free()
+    prim_bounds.unsafe_free()
 
     var prim_ids_gpu = alloc[PrimId_C](Int(total_prims_gpu))
     var prim_ids = prim_ids_gpu
@@ -2697,10 +2697,10 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
         prim_ids[k]._pad2 = Int8(0)
 
     if not shared_tlas:
-        bvh_order.free()
-    tri_mesh.free(); tri_local.free(); bvh_order_gpu.free(); mesh_al_idx.free()
-    curve_al_mat_idx.free()
-    curve_group_base.free(); group_curve_idx.free(); group_id2.free()
+        bvh_order.unsafe_free()
+    tri_mesh.unsafe_free(); tri_local.unsafe_free(); bvh_order_gpu.unsafe_free(); mesh_al_idx.unsafe_free()
+    curve_al_mat_idx.unsafe_free()
+    curve_group_base.unsafe_free(); group_curve_idx.unsafe_free(); group_id2.unsafe_free()
 
     # ---- Sampler params ----
     var spp = s[0].samples_per_pixel
@@ -2854,7 +2854,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                     Int32](
                     tex_ptrs[nti], np_ptr, nw_out, nh_out, Int32(1))   # raw=1: no sRGB decode
                 var nw = Int(nw_out[0]); var nh = Int(nh_out[0])
-                nw_out.free(); nh_out.free()
+                nw_out.unsafe_free(); nh_out.unsafe_free()
                 if nm_ok != Int32(0) and nw > 0 and nw == nh:
                     var src = np_ptr[0]
                     var slopes = alloc[Float32](2 * nw * nh)
@@ -2880,7 +2880,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                     nonsquare[k * 2] = Int32(nw); nonsquare[k * 2 + 1] = Int32(nh)
                     _ = external_call["free_texture_rgb", Int32,
                         UnsafePointer[Float32, MutExternalOrigin]](np_ptr[0])
-                np_ptr.free()
+                np_ptr.unsafe_free()
 
         if n_nm > 0:
             parallelize[nmap_worker](min(num_performance_cores(), n_nm))
@@ -2888,7 +2888,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             if nonsquare[k * 2] > Int32(0):
                 print("warning: normal map is not square (", Int(nonsquare[k * 2]), "x", Int(nonsquare[k * 2 + 1]),
                       "), SMS manifold walk will treat this surface as smooth")
-        is_nmap.free(); nm_idx.free(); nonsquare.free(); next_nm.free()
+        is_nmap.unsafe_free(); nm_idx.unsafe_free(); nonsquare.unsafe_free(); next_nm.unsafe_free()
         psc[0].nmaps = nmaps
 
     # ---- Non-area lights ----
@@ -2941,7 +2941,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                     Int32](
                     fname2, pixels_ptr, iw_out, ih_out, Int32(0))
                 var iw = Int(iw_out[0]); var ih = Int(ih_out[0])
-                iw_out.free(); ih_out.free()
+                iw_out.unsafe_free(); ih_out.unsafe_free()
                 if load_ok != Int32(0) and iw > 0 and ih > 0:
                     var pixels = pixels_ptr[0]
                     # Do NOT vertically flip here (removed a flip added in
@@ -2986,10 +2986,10 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                             var inv_rt = Float32(1.0) / row_total
                             for rx in range(iw + 1):
                                 cdf_buf[base + rx] *= inv_rt
-                    row_sums.free()
+                    row_sums.unsafe_free()
                     cdf_ptr = cdf_buf
                     cdf_w = Int32(iw); cdf_h = Int32(ih)
-                pixels_ptr.free()
+                pixels_ptr.unsafe_free()
             var w2l = alloc[Float32](16)
             var light_ctm_base = i * 16
             var is_identity = True
@@ -3004,7 +3004,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                 var light_ctm_tmp = alloc[Float32](16)
                 for ci in range(16): light_ctm_tmp[ci] = s[0].inf_ctm[light_ctm_base + ci]
                 _ = matrix_invert(light_ctm_tmp, w2l)
-                light_ctm_tmp.free()
+                light_ctm_tmp.unsafe_free()
             il_buf[i] = InfiniteLight_C(sc, tidx, cdf_w, cdf_h, cdf_ptr, raw_pixels, w2l)
         psc[0].infinite_lights = il_buf
     else:
@@ -3052,7 +3052,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
     else:
         psc[0].curves = UnsafePointer[Curve_C, MutExternalOrigin].unsafe_dangling()
     psc[0].curve_count = Int32(nc)
-    curve_n_pieces.free()
+    curve_n_pieces.unsafe_free()
 
     # ---- Curve area light NEE entries (al_list[n_al_mesh:]) ----
     # Mirrors the mesh area-light loop above, but needs curve_buf/n_pieces
@@ -3096,7 +3096,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                 Point3f(s[0].grid_p0[i*3], s[0].grid_p0[i*3+1], s[0].grid_p0[i*3+2]),
                 Point3f(s[0].grid_p1[i*3], s[0].grid_p1[i*3+1], s[0].grid_p1[i*3+2]),
                 w2m_simd, max_d)
-            ctm_tmp.free(); w2m.free()
+            ctm_tmp.unsafe_free(); w2m.unsafe_free()
         psc[0].grids = grid_buf
     else:
         psc[0].grids = UnsafePointer[Grid_C, MutExternalOrigin].unsafe_dangling()
@@ -3135,8 +3135,8 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             # "first grid by index" rather than failing the whole medium.
             if Int(handle) == 0 and glen > 0 and gname == "density":
                 handle = nvdb_load(cpath, Int32(0))
-            cname.free()
-            cpath.free()
+            cname.unsafe_free()
+            cpath.unsafe_free()
 
             var blob: UnsafePointer[UInt8, MutExternalOrigin]
             var blob_size_v = Int64(0)
@@ -3166,19 +3166,19 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
                 nvdb_index_bbox(handle, ibbmin, ibbmax)
                 idx_min = Point3f(Float32(ibbmin[0]), Float32(ibbmin[1]), Float32(ibbmin[2]))
                 idx_max = Point3f(Float32(ibbmax[0]), Float32(ibbmax[1]), Float32(ibbmax[2]))
-                ibbmin.free(); ibbmax.free()
+                ibbmin.unsafe_free(); ibbmax.unsafe_free()
                 var lo = alloc[Float32](1); var hi = alloc[Float32](1)
                 lo[0] = Float32(0); hi[0] = Float32(0)
                 nvdb_value_range(handle, lo, hi)
                 max_d = hi[0]
-                lo.free(); hi.free()
+                lo.unsafe_free(); hi.unsafe_free()
                 var im9 = alloc[Float32](9); var v3 = alloc[Float32](3)
                 nvdb_map_invmatf(handle, im9); nvdb_map_vecf(handle, v3)
                 imat = SIMD[DType.float32, 16](
                     im9[0], im9[1], im9[2], im9[3], im9[4], im9[5], im9[6], im9[7], im9[8],
                     Float32(0), Float32(0), Float32(0), Float32(0), Float32(0), Float32(0), Float32(0))
                 mvec = Vec3f(v3[0], v3[1], v3[2])
-                im9.free(); v3.free()
+                im9.unsafe_free(); v3.unsafe_free()
                 nvdb_free(handle)
 
             var ctm_tmp2 = alloc[Float32](16)
@@ -3189,7 +3189,7 @@ def finalize_scene(s: UnsafePointer[SceneParseState, MutExternalOrigin],
             var w2m2_simd = SIMD[DType.float32, 16](
                 w2m2[0], w2m2[1], w2m2[2], w2m2[3], w2m2[4], w2m2[5], w2m2[6], w2m2[7],
                 w2m2[8], w2m2[9], w2m2[10], w2m2[11], w2m2[12], w2m2[13], w2m2[14], w2m2[15])
-            ctm_tmp2.free(); w2m2.free()
+            ctm_tmp2.unsafe_free(); w2m2.unsafe_free()
 
             nvdb_buf[i] = NvdbGrid_C(blob, blob_size_v, w2m2_simd, imat, mvec, idx_min, idx_max, max_d)
         psc[0].nvdb_grids = nvdb_buf
@@ -3258,11 +3258,11 @@ def resize_film(psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
     var cts_inv = alloc[Float32](16)
     _ = matrix_invert(cts, cts_inv)
     if Int(psc[0].raster_to_camera) > 1:
-        psc[0].raster_to_camera.free()
+        psc[0].raster_to_camera.unsafe_free()
     var r2c = alloc[Float32](16)
     matrix_multiply(cts_inv, rts, r2c)
     psc[0].raster_to_camera = r2c
-    cts.free(); str_mat.free(); rts.free(); cts_inv.free()
+    cts.unsafe_free(); str_mat.unsafe_free(); rts.unsafe_free(); cts_inv.unsafe_free()
 
 def mojo_parse_scene(path: UnsafePointer[UInt8, MutExternalOrigin],
                      verbose: Bool = False,
@@ -3289,14 +3289,14 @@ def mojo_parse_scene(path: UnsafePointer[UInt8, MutExternalOrigin],
             dir_tmp[ki] = path[ki]
         dir_tmp[last_slash + 1] = UInt8(0)
         s_ptr[0].scene_dir = String(unsafe_from_utf8_ptr=dir_tmp.as_imm())
-        dir_tmp.free()
+        dir_tmp.unsafe_free()
     parse_scene_file(handle, s_ptr)
     scanner_free(handle)
 
     var psc = alloc[ParsedScene_Mojo](1)
     finalize_scene(s_ptr, psc, verbose)
     _ = s_ptr.take_pointee()
-    s_ptr.free()
+    s_ptr.unsafe_free()
     return psc
 
 def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin]):
@@ -3304,114 +3304,114 @@ def mojo_parsed_free(psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin]):
         return
     var n = Int(psc[0].mesh_count)
     for i in range(n):
-        psc[0].mesh_pts[i].free()
-        psc[0].mesh_vis[i].free()
-        psc[0].mesh_fis[i].free()
+        psc[0].mesh_pts[i].unsafe_free()
+        psc[0].mesh_vis[i].unsafe_free()
+        psc[0].mesh_fis[i].unsafe_free()
         if psc[0].mesh_uv_n_verts[i] > Int32(0):
-            psc[0].meshes[i].uvs.free()
+            psc[0].meshes[i].uvs.unsafe_free()
         if psc[0].mesh_nrm_n_verts[i] > Int32(0):
-            psc[0].meshes[i].normals.free()
+            psc[0].meshes[i].normals.unsafe_free()
     if psc[0].mesh_count > 0:
-        psc[0].mesh_pts.free()
-        psc[0].mesh_vis.free()
-        psc[0].mesh_fis.free()
-        psc[0].mesh_n_verts.free()
-        psc[0].mesh_n_tris.free()
-        psc[0].mesh_uv_n_verts.free()
-        psc[0].mesh_nrm_n_verts.free()
-        psc[0].meshes.free()
+        psc[0].mesh_pts.unsafe_free()
+        psc[0].mesh_vis.unsafe_free()
+        psc[0].mesh_fis.unsafe_free()
+        psc[0].mesh_n_verts.unsafe_free()
+        psc[0].mesh_n_tris.unsafe_free()
+        psc[0].mesh_uv_n_verts.unsafe_free()
+        psc[0].mesh_nrm_n_verts.unsafe_free()
+        psc[0].meshes.unsafe_free()
     if psc[0].material_count > 0:
-        psc[0].materials.free()
+        psc[0].materials.unsafe_free()
     if psc[0].area_light_count > 0:
-        psc[0].area_lights.free()
+        psc[0].area_lights.unsafe_free()
     if psc[0].bvh_node_count > 0:
-        psc[0].bvh_nodes.free()
+        psc[0].bvh_nodes.unsafe_free()
     if psc[0].prim_count > 0:
-        psc[0].prim_ids.free()
+        psc[0].prim_ids.unsafe_free()
     # Without instances the CPU TLAS shares the GPU one's arrays (freed above).
     if psc[0].bvh_node_count_cpu > 0 and Int(psc[0].bvh_nodes_cpu) != Int(psc[0].bvh_nodes):
-        psc[0].bvh_nodes_cpu.free()
+        psc[0].bvh_nodes_cpu.unsafe_free()
     if psc[0].prim_count_cpu > 0 and Int(psc[0].prim_ids_cpu) != Int(psc[0].prim_ids):
-        psc[0].prim_ids_cpu.free()
+        psc[0].prim_ids_cpu.unsafe_free()
     if Int(psc[0].raster_to_camera) > 4:
-        psc[0].raster_to_camera.free()
+        psc[0].raster_to_camera.unsafe_free()
     if Int(psc[0].camera_to_world) > 4:
-        psc[0].camera_to_world.free()
+        psc[0].camera_to_world.unsafe_free()
     if Int(psc[0].film_filename) > 1:
-        psc[0].film_filename.free()
+        psc[0].film_filename.unsafe_free()
     if psc[0].tex_count > 0:
         var nt = Int(psc[0].tex_count)
         for ti in range(nt):
-            psc[0].tex_filenames[ti].free()
+            psc[0].tex_filenames[ti].unsafe_free()
         for ti in range(nt):
             if psc[0].nmaps[ti].res > Int32(0):
-                psc[0].nmaps[ti].slopes.free()
-        psc[0].nmaps.free()
-        psc[0].tex_filenames.free()
+                psc[0].nmaps[ti].slopes.unsafe_free()
+        psc[0].nmaps.unsafe_free()
+        psc[0].tex_filenames.unsafe_free()
     if psc[0].distant_count > 0:
-        psc[0].distant_lights.free()
+        psc[0].distant_lights.unsafe_free()
     if psc[0].point_count > 0:
-        psc[0].point_lights.free()
+        psc[0].point_lights.unsafe_free()
     if psc[0].infinite_count > 0:
         var ni = Int(psc[0].infinite_count)
         for ii in range(ni):
             var il = psc[0].infinite_lights[ii]
             if _is_real_ptr(il.cdf_ptr):
-                il.cdf_ptr.free()
+                il.cdf_ptr.unsafe_free()
             if _is_real_ptr(il.pixels_ptr):
                 _ = external_call["free_texture_rgb", Int32,
                     UnsafePointer[Float32, MutExternalOrigin]](il.pixels_ptr)
-            il.world_to_light.free()
-        psc[0].infinite_lights.free()
+            il.world_to_light.unsafe_free()
+        psc[0].infinite_lights.unsafe_free()
     if psc[0].sphere_count > 0:
-        psc[0].spheres.free()
+        psc[0].spheres.unsafe_free()
     if psc[0].curve_count > 0:
-        psc[0].curves.free()
+        psc[0].curves.unsafe_free()
     if psc[0].measured_count > 0:
         # Per-pointer sentinel-address guards (matches light_sampler.cdf's
         # convention above): a MeasuredBRDF_C for a file that FAILED to load
         # has every pointer field set via unsafe_dangling() (see
         # measured_bsdf.mojo's _fail()), which must never be passed to
-        # .free() directly.
+        # .unsafe_free() directly.
         for mi in range(Int(psc[0].measured_count)):
             var mb = psc[0].measured_brdfs[mi]
-            if Int(mb.theta_i) > 4: mb.theta_i.free()
-            if Int(mb.phi_i) > 4: mb.phi_i.free()
-            if Int(mb.wavelengths) > 4: mb.wavelengths.free()
-            if Int(mb.ndf_data) > 4: mb.ndf_data.free()
-            if Int(mb.sigma_data) > 4: mb.sigma_data.free()
-            if Int(mb.vndf_data) > 4: mb.vndf_data.free()
-            if Int(mb.vndf_marg) > 4: mb.vndf_marg.free()
-            if Int(mb.vndf_cond) > 4: mb.vndf_cond.free()
-            if Int(mb.lum_data) > 4: mb.lum_data.free()
-            if Int(mb.lum_marg) > 4: mb.lum_marg.free()
-            if Int(mb.lum_cond) > 4: mb.lum_cond.free()
-            if Int(mb.spectra_data) > 4: mb.spectra_data.free()
-        psc[0].measured_brdfs.free()
+            if Int(mb.theta_i) > 4: mb.theta_i.unsafe_free()
+            if Int(mb.phi_i) > 4: mb.phi_i.unsafe_free()
+            if Int(mb.wavelengths) > 4: mb.wavelengths.unsafe_free()
+            if Int(mb.ndf_data) > 4: mb.ndf_data.unsafe_free()
+            if Int(mb.sigma_data) > 4: mb.sigma_data.unsafe_free()
+            if Int(mb.vndf_data) > 4: mb.vndf_data.unsafe_free()
+            if Int(mb.vndf_marg) > 4: mb.vndf_marg.unsafe_free()
+            if Int(mb.vndf_cond) > 4: mb.vndf_cond.unsafe_free()
+            if Int(mb.lum_data) > 4: mb.lum_data.unsafe_free()
+            if Int(mb.lum_marg) > 4: mb.lum_marg.unsafe_free()
+            if Int(mb.lum_cond) > 4: mb.lum_cond.unsafe_free()
+            if Int(mb.spectra_data) > 4: mb.spectra_data.unsafe_free()
+        psc[0].measured_brdfs.unsafe_free()
     if psc[0].grid_count > 0:
         for gi in range(Int(psc[0].grid_count)):
-            psc[0].grids[gi].density.free()
-        psc[0].grids.free()
+            psc[0].grids[gi].density.unsafe_free()
+        psc[0].grids.unsafe_free()
     if psc[0].nvdb_grid_count > 0:
         for gi in range(Int(psc[0].nvdb_grid_count)):
             if Int(psc[0].nvdb_grids[gi].blob) > 4:
-                psc[0].nvdb_grids[gi].blob.free()
-        psc[0].nvdb_grids.free()
+                psc[0].nvdb_grids[gi].blob.unsafe_free()
+        psc[0].nvdb_grids.unsafe_free()
     if Int(psc[0].light_sampler.cdf) > 4:
-        psc[0].light_sampler.cdf.free()
+        psc[0].light_sampler.cdf.unsafe_free()
     # blas_nodes_arr/blas_primids_arr/instances are always real allocations
     # (min size 1, see finalize_scene) regardless of blas_count/instance_count.
     for bi in range(Int(psc[0].blas_count)):
-        psc[0].blas_nodes_arr[bi].free()
-        psc[0].blas_primids_arr[bi].free()
-    psc[0].blas_nodes_arr.free()
-    psc[0].blas_primids_arr.free()
-    psc[0].blas_node_counts.free()
-    psc[0].blas_primid_counts.free()
-    psc[0].instances.free()
-    psc[0].template_mesh_start.free()
-    psc[0].template_mesh_end.free()
-    psc.free()
+        psc[0].blas_nodes_arr[bi].unsafe_free()
+        psc[0].blas_primids_arr[bi].unsafe_free()
+    psc[0].blas_nodes_arr.unsafe_free()
+    psc[0].blas_primids_arr.unsafe_free()
+    psc[0].blas_node_counts.unsafe_free()
+    psc[0].blas_primid_counts.unsafe_free()
+    psc[0].instances.unsafe_free()
+    psc[0].template_mesh_start.unsafe_free()
+    psc[0].template_mesh_end.unsafe_free()
+    psc.unsafe_free()
 
 def mojo_apply_overrides(
     psc: UnsafePointer[ParsedScene_Mojo, MutExternalOrigin],
@@ -3468,7 +3468,7 @@ def mojo_apply_overrides(
         var cts_inv = alloc[Float32](16)
         _ = matrix_invert(cts, cts_inv)
         matrix_multiply(cts_inv, rts, psc[0].raster_to_camera)
-        cts.free(); str_mat.free(); rts.free(); cts_inv.free()
+        cts.unsafe_free(); str_mat.unsafe_free(); rts.unsafe_free(); cts_inv.unsafe_free()
 
         var log2_spp = psc[0].log2_spp
         var log4_spp = (log2_spp + Int32(1)) / Int32(2)

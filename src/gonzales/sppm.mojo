@@ -1000,7 +1000,7 @@ def _sppm_camera_pass(
 
     parallelize[trace_one](n_pix * vp_samples)
 
-    scratch.free()
+    scratch.unsafe_free()
 
 
 # ── Photon pass ───────────────────────────────────────────────────────────────
@@ -1641,8 +1641,8 @@ def _sppm_photon_pass(
     parallelize[emit_one](n_emit)
 
     var n_stored = min(Int(counter[0]), max_photons)
-    counter.free()
-    scratch.free()
+    counter.unsafe_free()
+    scratch.unsafe_free()
     return n_stored
 
 
@@ -2642,9 +2642,9 @@ def _sppm_render_core(
 
     parallelize[finalize_one](n_pix)
 
-    heads.free()
-    photons.free()
-    vps.free()
+    heads.unsafe_free()
+    photons.unsafe_free()
+    vps.unsafe_free()
     return Tuple[Bool, UnsafePointer[Float32, MutExternalOrigin], UnsafePointer[Float32, MutExternalOrigin]](
         True, out_pixels, albedo_pixels)
 
@@ -2684,6 +2684,6 @@ def sppm_render(
         psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
         psc[0].film_filename, Int32(32), Int32(32))
 
-    out_pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
+    out_pixels.unsafe_free(); albedo_pixels.unsafe_free(); normals.unsafe_free(); depth.unsafe_free(); denoised.unsafe_free()
     return Int32(0)
 

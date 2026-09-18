@@ -108,17 +108,17 @@ def load_spd_rgb(path: String) -> Tuple[RGB, Bool]:
                 # some .spd files in the wild carry a trailing text footer.
                 continue
     except:
-        lambdas.free(); values.free()
+        lambdas.unsafe_free(); values.unsafe_free()
         return (RGB(Float32(0.0)), False)
 
     if n == 0:
-        lambdas.free(); values.free()
+        lambdas.unsafe_free(); values.unsafe_free()
         return (RGB(Float32(0.0)), False)
 
     var r = _spd_interp(lambdas, values, n, SPD_LAMBDA_R)
     var g = _spd_interp(lambdas, values, n, SPD_LAMBDA_G)
     var b = _spd_interp(lambdas, values, n, SPD_LAMBDA_B)
-    lambdas.free(); values.free()
+    lambdas.unsafe_free(); values.unsafe_free()
     return (RGB(r, g, b), True)
 
 
@@ -207,13 +207,13 @@ def load_spd_rgb_at(path: String, lr: Float32, lg: Float32, lb: Float32) -> Tupl
             except:
                 continue
     except:
-        lambdas.free(); values.free()
+        lambdas.unsafe_free(); values.unsafe_free()
         return (RGB(Float32(0.0)), False)
     if n == 0:
-        lambdas.free(); values.free()
+        lambdas.unsafe_free(); values.unsafe_free()
         return (RGB(Float32(0.0)), False)
     var r = _spd_interp(lambdas, values, n, lr)
     var g = _spd_interp(lambdas, values, n, lg)
     var b = _spd_interp(lambdas, values, n, lb)
-    lambdas.free(); values.free()
+    lambdas.unsafe_free(); values.unsafe_free()
     return (RGB(r, g, b), True)

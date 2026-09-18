@@ -130,12 +130,12 @@ def test_vulkanrt_trace_rays_batches_and_matches_cpu_barycentrics() raises:
 
     vulkanrt_destroy_scene(scene)
 
-    out_t.free(); out_u.free(); out_v.free()
-    out_mesh.free(); out_tri.free(); out_hit.free()
-    rays.free()
-    point_counts.free(); idx_counts.free()
-    meshes.free()
-    pts0.free(); idx0.free(); pts1.free(); idx1.free()
+    out_t.unsafe_free(); out_u.unsafe_free(); out_v.unsafe_free()
+    out_mesh.unsafe_free(); out_tri.unsafe_free(); out_hit.unsafe_free()
+    rays.unsafe_free()
+    point_counts.unsafe_free(); idx_counts.unsafe_free()
+    meshes.unsafe_free()
+    pts0.unsafe_free(); idx0.unsafe_free(); pts1.unsafe_free(); idx1.unsafe_free()
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

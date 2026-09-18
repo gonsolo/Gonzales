@@ -147,8 +147,8 @@ def test_get_tri_verts_type0_decodes_second_triangle_correctly() raises:
     assert_true(v1 == 21)
     assert_true(v2 == 22)
 
-    meshes[0].vertexIndices.free()
-    meshes.free()
+    meshes[0].vertexIndices.unsafe_free()
+    meshes.unsafe_free()
 
 def test_get_tri_verts_non_triangle_prim_returns_not_ok() raises:
     """PrimId.type==4 is a sphere hit (see shading.mojo's shade dispatch and
@@ -164,8 +164,8 @@ def test_get_tri_verts_non_triangle_prim_returns_not_ok() raises:
     var (_, _, _, _, ok) = _get_tri_verts(inter, meshes)
     assert_false(ok)
 
-    meshes[0].vertexIndices.free()
-    meshes.free()
+    meshes[0].vertexIndices.unsafe_free()
+    meshes.unsafe_free()
 
 # ── _apply_normal_map ─────────────────────────────────────────────────────────
 # Only the documented "no normal map" fast path (mat.normal_tex_idx < 0) is
@@ -245,11 +245,11 @@ def test_build_geom_context_full_matches_closed_form_for_axis_aligned_hit() rais
     assert_true(_simd_close(gc.tangent, Vec3f(1.0, 0.0, 0.0)))
     assert_true(_simd_close(gc.bitangent, Vec3f(0.0, 1.0, 0.0)))
 
-    meshes[0].points.free()
-    meshes[0].vertexIndices.free()
-    meshes.free()
-    materials.free()
-    path_arr.free()
+    meshes[0].points.unsafe_free()
+    meshes[0].vertexIndices.unsafe_free()
+    meshes.unsafe_free()
+    materials.unsafe_free()
+    path_arr.unsafe_free()
 
 def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() raises:
     """Sphere hit (primId.type==4) must return ok=True with the exact
@@ -325,12 +325,12 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
     assert_true(_close(gc.alb.g, albedo.g))
     assert_true(_close(gc.alb.b, albedo.b))
 
-    meshes[0].points.free()
-    meshes[0].vertexIndices.free()
-    meshes.free()
-    materials.free()
-    spheres.free()
-    path_arr.free()
+    meshes[0].points.unsafe_free()
+    meshes[0].vertexIndices.unsafe_free()
+    meshes.unsafe_free()
+    materials.unsafe_free()
+    spheres.unsafe_free()
+    path_arr.unsafe_free()
 
 # ── _shadow_contribute[enqueue_shadow=False] ─────────────────────────────────
 # The direct-evaluation branch: fires a real shadow ray through a one-leaf
@@ -373,13 +373,13 @@ def test_shadow_contribute_direct_adds_contribution_when_unoccluded() raises:
     assert_true(_close(path_arr[0].estimate.v1, contrib.v1))
     assert_true(_close(path_arr[0].estimate.v2, contrib.v2))
 
-    meshes[0].points.free()
-    meshes[0].vertexIndices.free()
-    meshes.free()
-    primIds.free()
-    bvh.free()
-    materials.free()
-    path_arr.free()
+    meshes[0].points.unsafe_free()
+    meshes[0].vertexIndices.unsafe_free()
+    meshes.unsafe_free()
+    primIds.unsafe_free()
+    bvh.unsafe_free()
+    materials.unsafe_free()
+    path_arr.unsafe_free()
 
 def test_shadow_contribute_direct_skips_when_occluded() raises:
     """Same scene, but the shadow ray is fired straight at the occluder: the
@@ -409,13 +409,13 @@ def test_shadow_contribute_direct_skips_when_occluded() raises:
     assert_true(_close(path_arr[0].estimate.v1, Float32(0.0)))
     assert_true(_close(path_arr[0].estimate.v2, Float32(0.0)))
 
-    meshes[0].points.free()
-    meshes[0].vertexIndices.free()
-    meshes.free()
-    primIds.free()
-    bvh.free()
-    materials.free()
-    path_arr.free()
+    meshes[0].points.unsafe_free()
+    meshes[0].vertexIndices.unsafe_free()
+    meshes.unsafe_free()
+    primIds.unsafe_free()
+    bvh.unsafe_free()
+    materials.unsafe_free()
+    path_arr.unsafe_free()
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

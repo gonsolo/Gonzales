@@ -127,7 +127,7 @@ def _fill_boxes(bounds: UnsafePointer[Float32, MutExternalOrigin], n: Int, seed:
                 c = cc[(i % clusters) * 3 + a] + (r[a] - Float32(0.5)) * Float32(4.0)
             bounds[i * 6 + a] = c - half
             bounds[i * 6 + 3 + a] = c + half
-    cc.free()
+    cc.unsafe_free()
 
 # A small subtree size makes the parallel build split many levels near the
 # root and build hundreds of subtrees, on inputs small enough to test quickly.
@@ -155,8 +155,8 @@ def _check_parallel_matches_serial(n: Int, seed: UInt64, clusters: Int, dup_ever
         if serial_order[i] != parallel_order[i]:
             mismatches += 1
     assert_equal(mismatches, 0)
-    bounds.free(); serial_nodes.free(); parallel_nodes.free()
-    serial_order.free(); parallel_order.free()
+    bounds.unsafe_free(); serial_nodes.unsafe_free(); parallel_nodes.unsafe_free()
+    serial_order.unsafe_free(); parallel_order.unsafe_free()
 
 def test_build_bvh2_parallel_matches_serial_uniform() raises:
     _check_parallel_matches_serial(5000, UInt64(1), 0, 0)

@@ -36,7 +36,7 @@ def test_dimension_1_matrix_is_not_all_zero() raises:
         if m[N_BITS + i] != UInt32(0):
             nonzero += 1
     assert_true(nonzero > 0, "dimension 1 matrix is entirely zero")
-    m.free()
+    m.unsafe_free()
 
 def test_dimension_1_columns_match_joe_kuo_first_row() raises:
     """The file's first data row is `2 1 0 1`: d=2 (=> 0-indexed dim 1),
@@ -52,7 +52,7 @@ def test_dimension_1_columns_match_joe_kuo_first_row() raises:
     for i in range(1, N_BITS):
         var prev = m[N_BITS + i - 1]
         assert_equal(m[N_BITS + i], prev ^ (prev >> UInt32(1)))
-    m.free()
+    m.unsafe_free()
 
 def test_sobol_sample_dimension_1_varies_and_is_uniform() raises:
     """Dimension 1 must actually vary over [0,1) -- the property the pixel
@@ -75,7 +75,7 @@ def test_sobol_sample_dimension_1_varies_and_is_uniform() raises:
         else: hi += 1
         if u < vmin: vmin = u
         if u > vmax: vmax = u
-    m.free()
+    m.unsafe_free()
     assert_true(vmax - vmin > Float32(0.9), "dimension 1 barely varies")
     var mean = total / Float32(n)
     assert_true(mean > Float32(0.4) and mean < Float32(0.6), "mean far from 0.5")
@@ -96,7 +96,7 @@ def test_dimension_0_is_identity_and_differs_from_1() raises:
         var u0 = sobol_sample(i, 0, UInt32(0x12345678), m)
         var u1 = sobol_sample(i, 1, UInt32(0x9e3779b9), m)
         if u0 != u1: differing += 1
-    m.free()
+    m.unsafe_free()
     assert_true(differing > 32, "dimensions 0 and 1 are suspiciously alike")
 
 def main() raises:

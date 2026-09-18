@@ -54,7 +54,7 @@ def test_curve_shape_grows_past_default_control_point_cap() raises:
     # 4 control points per segment, 3 floats each
     assert_true(len(s_ptr[0].curves_cp) == expected_segments * 4 * 3)
     scanner_free(handle)
-    _ = s_ptr.take_pointee(); s_ptr.free()
+    _ = s_ptr.take_pointee(); s_ptr.unsafe_free()
 
 # ── handle_named_medium: bracket-wrapped "string type" desync ──────────────
 # Pre-existing bug (documented inline at handle_named_medium): "string type"
@@ -88,7 +88,7 @@ def test_named_medium_bracket_wrapped_type_does_not_desync() raises:
     assert_true(_close(s_ptr[0].grid_density[0], Float32(0.1)))
     assert_true(_close(s_ptr[0].grid_density[7], Float32(0.8)))
     scanner_free(handle)
-    _ = s_ptr.take_pointee(); s_ptr.free()
+    _ = s_ptr.take_pointee(); s_ptr.unsafe_free()
 
 # ── MakeNamedMaterial: normalmap filename buffer overflow ──────────────────
 # Pre-existing bug (fixed separately from the ParamScanner dedup): str_val
@@ -122,7 +122,7 @@ def test_named_material_long_normalmap_path_is_not_truncated() raises:
     assert_true(len(s_ptr[0].tex_files) == 1)
     assert_true(s_ptr[0].tex_files[0].endswith(long_name))
     scanner_free(handle)
-    _ = s_ptr.take_pointee(); s_ptr.free()
+    _ = s_ptr.take_pointee(); s_ptr.unsafe_free()
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

@@ -593,12 +593,12 @@ def load_spectrum_table(path: String) -> Tuple[Bool, Int, List[Float32]]:
         var res = Int((buf + 4).unsafe_bitcast[Int32]()[0])
         var expected_count = 3 * res * res * res * 3
         if n != 8 + expected_count * 4:
-            buf.free()
+            buf.unsafe_free()
             return (False, 0, empty^)
         var out = List[Float32](capacity=expected_count)
         for i in range(expected_count):
             out.append((buf + 8 + i * 4).unsafe_bitcast[Float32]()[0])
-        buf.free()
+        buf.unsafe_free()
         return (True, res, out^)
     except:
         return (False, 0, empty^)

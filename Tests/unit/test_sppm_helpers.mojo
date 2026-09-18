@@ -302,10 +302,10 @@ def test_sample_area_light_uniform_point_is_a_convex_combination_of_vertices() r
     var s = sample_area_light_uniform(lights, meshes, 1, pcg)
     assert_true(_simd_close(s.point, expected))
 
-    meshes[0].points.free()
-    meshes[0].vertexIndices.free()
-    meshes.free()
-    lights.free()
+    meshes[0].points.unsafe_free()
+    meshes[0].vertexIndices.unsafe_free()
+    meshes.unsafe_free()
+    lights.unsafe_free()
 
 def test_sample_area_light_uniform_normal_matches_geometric_normal_when_no_shading_normals() raises:
     """With no per-vertex normals on the light mesh (sentinel pointer), the
@@ -325,10 +325,10 @@ def test_sample_area_light_uniform_normal_matches_geometric_normal_when_no_shadi
     var s = sample_area_light_uniform(lights, meshes, 1, pcg)
     assert_true(_simd_close(s.normal, Vec3f(0.0, 0.0, 1.0)))
 
-    meshes[0].points.free()
-    meshes[0].vertexIndices.free()
-    meshes.free()
-    lights.free()
+    meshes[0].points.unsafe_free()
+    meshes[0].vertexIndices.unsafe_free()
+    meshes.unsafe_free()
+    lights.unsafe_free()
 
 # ── _geom_normal / _shading_normal_at ────────────────────────────────────────
 
@@ -351,9 +351,9 @@ def test_geom_normal_matches_cross_product_of_the_triangle_edges() raises:
     var n = _geom_normal(inter, meshes)
     assert_true(_simd_close(n, Vec3f(0.0, 0.0, 1.0)))
 
-    meshes[0].points.free()
-    meshes[0].vertexIndices.free()
-    meshes.free()
+    meshes[0].points.unsafe_free()
+    meshes[0].vertexIndices.unsafe_free()
+    meshes.unsafe_free()
 
 def test_shading_normal_at_falls_back_to_geometric_when_no_vertex_normals() raises:
     var p0 = Vec3f(0.0, 0.0, 0.0)
@@ -367,9 +367,9 @@ def test_shading_normal_at_falls_back_to_geometric_when_no_vertex_normals() rais
     var sn = _shading_normal_at(inter, meshes)
     assert_true(_simd_close(sn, Vec3f(0.0, 0.0, 1.0)))
 
-    meshes[0].points.free()
-    meshes[0].vertexIndices.free()
-    meshes.free()
+    meshes[0].points.unsafe_free()
+    meshes[0].vertexIndices.unsafe_free()
+    meshes.unsafe_free()
 
 def test_shading_normal_at_interpolates_per_vertex_normals_barycentrically() raises:
     """With per-vertex normals present, the shading normal must be the
@@ -402,10 +402,10 @@ def test_shading_normal_at_interpolates_per_vertex_normals_barycentrically() rai
     var sn = _shading_normal_at(inter, meshes)
     assert_true(_simd_close(sn, expected))
 
-    meshes[0].points.free()
-    meshes[0].vertexIndices.free()
-    meshes[0].normals.free()
-    meshes.free()
+    meshes[0].points.unsafe_free()
+    meshes[0].vertexIndices.unsafe_free()
+    meshes[0].normals.unsafe_free()
+    meshes.unsafe_free()
 
 # ── _dielectric_bounce ───────────────────────────────────────────────────────
 

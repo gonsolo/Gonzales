@@ -359,12 +359,12 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
             resultsPtr[out] = TileResult_C(sumL, sumA, sumW, px, py)
             out += 1
 
-    intersections.free()
-    paths.free()
-    pixel_idx_buf.free()
-    vol_used_buf.free()
+    intersections.unsafe_free()
+    paths.unsafe_free()
+    pixel_idx_buf.unsafe_free()
+    vol_used_buf.unsafe_free()
     if use_gi:
-        gi_pending_buf.free()
+        gi_pending_buf.unsafe_free()
 
 
 
@@ -508,7 +508,7 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
         # One worker per core; each drains the queue, so the count only needs
         # to be enough to saturate the machine, not to match the tile count.
         parallelize[tile_worker](min(num_performance_cores(), n_tiles))
-        next_tile.free()
+        next_tile.unsafe_free()
     # Merge per-tile-group write guides into [0] so caller gets unified result.
     if n_write_guides > 1:
         for i in range(1, n_write_guides):
@@ -517,8 +517,8 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
         var total_s = Float64(perf_counter_ns() - t0) / 1.0e9
         print("Rendering: " + String(n_tiles) + " / " + String(n_tiles)
             + " tiles (100.0%) | Done: " + fmt_time(total_s) + "                ")
-    done_ptr.free()
-    tile_bufs.free()
+    done_ptr.unsafe_free()
+    tile_bufs.unsafe_free()
 
 
 # Shoot one unjittered center ray per pixel; record geometric normal and depth.

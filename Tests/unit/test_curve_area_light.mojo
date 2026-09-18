@@ -88,7 +88,7 @@ def test_emissive_curve_hit_adds_emission_and_retires_path() raises:
     assert_true(_close(paths[0].estimate.v1, Float32(40.0)))
     assert_true(_close(paths[0].estimate.v2, Float32(10.0)))
     assert_true(Int(paths[0].active) == 0)
-    paths.free(); intersections.free(); materials.free()
+    paths.unsafe_free(); intersections.unsafe_free(); materials.unsafe_free()
 
 def test_nonemissive_curve_hit_does_not_self_terminate_via_the_arealight_path() raises:
     """A curve with a real (non-area-light) material — e.g. MatKind.hair —
@@ -199,8 +199,8 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
     # = 0.4^2/(0.4^2+22.070820^2) = 0.00032835258, estimate.r = 0.5*200*w =
     # 0.0328353 -- strictly less than the full-credit 100.0 this replaced.
     assert_true(_close(paths[0].estimate.v0, Float32(0.0328353)))
-    paths.free(); intersections.free(); materials.free()
-    curves.free(); area_lights.free(); cdf.free()
+    paths.unsafe_free(); intersections.unsafe_free(); materials.unsafe_free()
+    curves.unsafe_free(); area_lights.unsafe_free(); cdf.unsafe_free()
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

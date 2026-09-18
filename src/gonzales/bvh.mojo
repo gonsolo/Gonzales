@@ -2102,7 +2102,7 @@ def _build_bvh2_parallel(
             t.nodes = nodes.unsafe_origin_cast[MutExternalOrigin]()
             t.n_nodes = Int(cnt[0])
             tasks[i] = t
-            cnt.free()
+            cnt.unsafe_free()
 
     parallelize[build_worker](min(num_performance_cores(), n_subtrees))
 
@@ -2111,9 +2111,9 @@ def _build_bvh2_parallel(
     _ = _bvh_emit(tasks, 0, out_nodes, node_count)
 
     for k in range(n_subtrees):
-        tasks[subtrees[k]].nodes.free()
-    tasks.free(); level.free(); next_level.free(); splits.free()
-    subtrees.free(); next_subtree.free()
+        tasks[subtrees[k]].nodes.unsafe_free()
+    tasks.unsafe_free(); level.unsafe_free(); next_level.unsafe_free(); splits.unsafe_free()
+    subtrees.unsafe_free(); next_subtree.unsafe_free()
 
 
 def build_bvh2(
@@ -2151,7 +2151,7 @@ def build_bvh2(
         outOrder[k] = widx[k]
 
     var result = node_count[0]
-    widx.free(); wmin.free(); wmax.free(); node_count.free()
+    widx.unsafe_free(); wmin.unsafe_free(); wmax.unsafe_free(); node_count.unsafe_free()
     return result
 
 # ── Unjittered normals/depth pass, for the denoiser's guide buffers ─────────
@@ -2305,4 +2305,4 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
             material_id_out[i] = Int32(isects[i].primId.materialIndex) if isects[i].hit != Int8(0) else Int32(-1)
 
     parallelize[trace_pixel](n_pixels)
-    isects.free()
+    isects.unsafe_free()

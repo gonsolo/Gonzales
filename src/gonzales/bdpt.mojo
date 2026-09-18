@@ -4559,8 +4559,8 @@ def _bdpt_render_core(
         if verbose:
             print("VCM: sample " + String(si + 1) + "/" + String(n_spp))
 
-    scratch_light.free(); scratch_cam.free(); lvc.free(); lvc_path_len.free()
-    merge_heads.free(); merge_next.free()
+    scratch_light.unsafe_free(); scratch_cam.unsafe_free(); lvc.unsafe_free(); lvc_path_len.unsafe_free()
+    merge_heads.unsafe_free(); merge_next.unsafe_free()
 
     # Clamp into caller-owned output buffers (no denoise/write here -- see
     # vcm_render/vcm_render_gpu, this function's two callers, for the tail).
@@ -4575,7 +4575,7 @@ def _bdpt_render_core(
         pixels[i*3]   = c.r
         pixels[i*3+1] = c.g
         pixels[i*3+2] = c.b
-    buf.free()
+    buf.unsafe_free()
 
     var albedo_pixels = alloc[Float32](n_pix * 3)
     var inv_spp_alb = Float32(1) / Float32(n_spp)
@@ -4584,7 +4584,7 @@ def _bdpt_render_core(
         albedo_pixels[i*3]   = a.r
         albedo_pixels[i*3+1] = a.g
         albedo_pixels[i*3+2] = a.b
-    albedo_buf.free()
+    albedo_buf.unsafe_free()
 
     return Tuple[UnsafePointer[Float32, MutExternalOrigin], UnsafePointer[Float32, MutExternalOrigin]](pixels, albedo_pixels)
 
@@ -4625,7 +4625,7 @@ def vcm_render(
     _ = write_image_cropwindow(denoised, psc[0].film_w, psc[0].film_h,
         psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
         psc[0].film_filename, Int32(32), Int32(32))
-    pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
+    pixels.unsafe_free(); albedo_pixels.unsafe_free(); normals.unsafe_free(); depth.unsafe_free(); denoised.unsafe_free()
     return Int32(0)
 
 # ── GPU port ───────────────────────────────────────────────────────────────
@@ -5773,8 +5773,8 @@ def vcm_render_gpu(
                 var src = c2r_host.unsafe_bitcast[UInt8]()
                 for i in range(9 * size_of[Float32]()):
                     dst[i] = src[i]
-            w2c_host.free()
-            c2r_host.free()
+            w2c_host.unsafe_free()
+            c2r_host.unsafe_free()
             var w2c_ptr = w2c_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             var c2r_ptr = c2r_buf.unsafe_ptr().unsafe_bitcast[Float32]()
 
@@ -5964,7 +5964,7 @@ def vcm_render_gpu(
             _ = write_image_cropwindow(denoised, psc[0].film_w, psc[0].film_h,
         psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
         psc[0].film_filename, Int32(32), Int32(32))
-            pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
+            pixels.unsafe_free(); albedo_pixels.unsafe_free(); normals.unsafe_free(); depth.unsafe_free(); denoised.unsafe_free()
         except e:
             print("VCM GPU render failed: " + String(e))
             ret = Int32(-1)
@@ -6359,8 +6359,8 @@ def vcm_render_gpu_wavefront(
                 var src = c2r_host.unsafe_bitcast[UInt8]()
                 for i in range(9 * size_of[Float32]()):
                     dst[i] = src[i]
-            w2c_host.free()
-            c2r_host.free()
+            w2c_host.unsafe_free()
+            c2r_host.unsafe_free()
             var w2c_ptr = w2c_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             var c2r_ptr = c2r_buf.unsafe_ptr().unsafe_bitcast[Float32]()
 
@@ -6680,7 +6680,7 @@ def vcm_render_gpu_wavefront(
             _ = write_image_cropwindow(denoised, psc[0].film_w, psc[0].film_h,
         psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
         psc[0].film_filename, Int32(32), Int32(32))
-            pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
+            pixels.unsafe_free(); albedo_pixels.unsafe_free(); normals.unsafe_free(); depth.unsafe_free(); denoised.unsafe_free()
         except e:
             print("VCM GPU wavefront render failed: " + String(e))
             ret = Int32(-1)
@@ -7451,7 +7451,7 @@ def sppm_render_gpu(
             _ = write_image_cropwindow(denoised, psc[0].film_w, psc[0].film_h,
                 psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
                 psc[0].film_filename, Int32(32), Int32(32))
-            out_pixels.free(); albedo_pixels.free(); normals.free(); depth.free(); denoised.free()
+            out_pixels.unsafe_free(); albedo_pixels.unsafe_free(); normals.unsafe_free(); depth.unsafe_free(); denoised.unsafe_free()
         except e:
             print("SPPM GPU render failed: " + String(e))
             ret = Int32(-1)

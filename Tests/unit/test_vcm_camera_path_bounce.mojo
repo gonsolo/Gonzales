@@ -83,12 +83,12 @@ def _build_scene() -> SceneDescriptor2_C:
     var bvh_nodes = alloc[BVH2Node](max_nodes)
     var order = alloc[Int32](n_tris)
     _ = build_bvh2(bounds, Int32(n_tris), bvh_nodes, order)
-    bounds.free()
+    bounds.unsafe_free()
     var prim_ids = alloc[PrimId_C](n_tris)
     for k in range(n_tris):
         var orig = Int(order[k])
         prim_ids[k] = PrimId_C(Int64(0), Int64(orig * 3), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    order.free()
+    order.unsafe_free()
 
     var materials = alloc[Material_C](1)
     materials[0] = Material_C(
@@ -220,9 +220,9 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
     assert_true(n_verts >= 1)  # sanity: the floor is huge enough to guarantee a hit + a stored vertex
     assert_true(_close(first_alb.r, Float32(0.8)))  # sanity: the stored vertex's albedo is the real material, not a stale zero
 
-    scratch_old.free(); scratch_new.free()
-    r2c.free(); c2w.free()
-    sd.bvh2Nodes.free(); sd.primIds.free(); sd.meshes.free(); sd.materials.free()
+    scratch_old.unsafe_free(); scratch_new.unsafe_free()
+    r2c.unsafe_free(); c2w.unsafe_free()
+    sd.bvh2Nodes.unsafe_free(); sd.primIds.unsafe_free(); sd.meshes.unsafe_free(); sd.materials.unsafe_free()
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

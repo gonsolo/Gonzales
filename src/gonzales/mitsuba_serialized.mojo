@@ -76,7 +76,7 @@ def load_mitsuba_serialized(path: String) -> MitsubaMesh:
     for i in range(raw_n):
         raw[i] = raw_list[i]
     var version = Int(raw.unsafe_bitcast[UInt16]()[1])
-    raw.free()
+    raw.unsafe_free()
 
     var inflated_path = path + ".inflated"
     if not exists(inflated_path):
@@ -155,5 +155,5 @@ def load_mitsuba_serialized(path: String) -> MitsubaMesh:
         mesh.indices.append(Int32(_mit_ser_u32(body, off)))
         off += 4
 
-    body.free()
+    body.unsafe_free()
     return mesh^

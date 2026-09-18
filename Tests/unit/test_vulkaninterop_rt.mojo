@@ -119,9 +119,9 @@ def test_vulkaninterop_rt_trace_matches_known_geometry() raises:
 
     vulkaninterop_rt_destroy_scene(scene)
 
-    point_counts.free(); idx_counts.free()
-    meshes.free()
-    pts0.free(); idx0.free(); pts1.free(); idx1.free()
+    point_counts.unsafe_free(); idx_counts.unsafe_free()
+    meshes.unsafe_free()
+    pts0.unsafe_free(); idx0.unsafe_free(); pts1.unsafe_free(); idx1.unsafe_free()
 
 def test_vulkaninterop_rt_instancing_places_template_correctly() raises:
     comptime if not has_accelerator():
@@ -222,11 +222,11 @@ def test_vulkaninterop_rt_instancing_places_template_correctly() raises:
 
     vulkaninterop_rt_destroy_scene(scene)
 
-    point_counts.free(); idx_counts.free()
-    meshes.free()
-    pts0.free(); idx0.free()
-    template_start.free(); template_end.free()
-    o2w.free(); inst_tmpl_idx.free()
+    point_counts.unsafe_free(); idx_counts.unsafe_free()
+    meshes.unsafe_free()
+    pts0.unsafe_free(); idx0.unsafe_free()
+    template_start.unsafe_free(); template_end.unsafe_free()
+    o2w.unsafe_free(); inst_tmpl_idx.unsafe_free()
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

@@ -112,9 +112,9 @@ def guide_create(bounds: Bounds3f) -> GuideGrid:
 
 def guide_free(g: GuideGrid):
     if _is_real_ptr(g.snodes):
-        g.snodes.free()
+        g.snodes.unsafe_free()
     if _is_real_ptr(g.dnodes):
-        g.dnodes.free()
+        g.dnodes.unsafe_free()
 
 def guide_clone_empty(g: GuideGrid) -> GuideGrid:
     """Copy g's current tree STRUCTURE (spatial splits, directional splits,
@@ -446,7 +446,7 @@ def guide_refine(g: GuideGrid) -> GuideGrid:
         if g.snodes[i].child0 < Int32(0):
             var droot = g.snodes[i].dtree_root
             _grow_dtree(dnodes1, droot, dnodes1[Int(droot)].energy, Int32(0), next_free_d)
-    g.dnodes.free()
+    g.dnodes.unsafe_free()
 
     # ── Phase 2: split spatial leaves with enough samples this iteration ──
     var to_split = List[_SplitCandidate]()
@@ -460,8 +460,8 @@ def guide_refine(g: GuideGrid) -> GuideGrid:
         snodes2[i] = g.snodes[i]
     for i in range(Int(next_free_d)):
         dnodes2[i] = dnodes1[i]
-    dnodes1.free()
-    g.snodes.free()
+    dnodes1.unsafe_free()
+    g.snodes.unsafe_free()
 
     var next_s = g.n_snodes
     var next_d = next_free_d

@@ -55,7 +55,7 @@ def test_build_scaled_verbatim_uses_inv_patch_size_normalization() raises:
     var out = _pl2d_build_scaled_verbatim(raw, 4, 3, 1)
     for i in range(12):
         assert_true(_close(out[i], Float32(1.0)))
-    raw.free(); out.free()
+    raw.unsafe_free(); out.unsafe_free()
 
 def test_build_cdf_marginal_ends_at_one_and_is_monotonic() raises:
     """Per pbrt's construction (util/sampling.h:1398-1405): the marginal CDF
@@ -81,7 +81,7 @@ def test_build_cdf_marginal_ends_at_one_and_is_monotonic() raises:
             var i = y * xs + x
             assert_true(conditional[i + 1] >= conditional[i] - EPS)
 
-    raw.free(); data_out.free(); marginal.free(); conditional.free()
+    raw.unsafe_free(); data_out.unsafe_free(); marginal.unsafe_free(); conditional.unsafe_free()
 
 def test_build_cdf_handles_multiple_slices_independently() raises:
     """Slices>1 (the vndf/luminance real case, sliced by phi*theta): each
@@ -95,7 +95,7 @@ def test_build_cdf_handles_multiple_slices_independently() raises:
     var (data_out, marginal, conditional) = _pl2d_build_cdf(raw, xs, ys, 2)
     assert_true(_close(marginal[ys - 1], Float32(1.0)))
     assert_true(_close(marginal[ys + ys - 1], Float32(1.0)))
-    raw.free(); data_out.free(); marginal.free(); conditional.free()
+    raw.unsafe_free(); data_out.unsafe_free(); marginal.unsafe_free(); conditional.unsafe_free()
 
 # ── Full tensor-file loader (load_measured_brdf_full) ────────────────────────
 # Builds a minimal-but-structurally-valid synthetic ".bsdf" tensor file

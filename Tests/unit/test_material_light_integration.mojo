@@ -50,7 +50,7 @@ def test_light_source_distant_direction_and_rgb() raises:
     assert_true(_close(s_ptr[0].distant_rgbs[1], Float32(3.0)))
     assert_true(_close(s_ptr[0].distant_rgbs[2], Float32(4.0)))
     scanner_free(handle)
-    _ = s_ptr.take_pointee(); s_ptr.free()
+    _ = s_ptr.take_pointee(); s_ptr.unsafe_free()
 
 # ── handle_light_source: point ──────────────────────────────────────────────
 # "from" position is passed through the current CTM; a freshly-constructed
@@ -73,7 +73,7 @@ def test_light_source_point_position_and_rgb() raises:
     assert_true(_close(s_ptr[0].point_rgbs[1], Float32(0.5)))
     assert_true(_close(s_ptr[0].point_rgbs[2], Float32(0.5)))
     scanner_free(handle)
-    _ = s_ptr.take_pointee(); s_ptr.free()
+    _ = s_ptr.take_pointee(); s_ptr.unsafe_free()
 
 # ── handle_light_source: infinite, no filename ──────────────────────────────
 # Without a filename, inf_tex_idx must be -1 (constant-color env light) and
@@ -92,7 +92,7 @@ def test_light_source_infinite_no_filename() raises:
     assert_true(_close(s_ptr[0].inf_rgb[1], Float32(0.2)))
     assert_true(_close(s_ptr[0].inf_rgb[2], Float32(0.3)))
     scanner_free(handle)
-    _ = s_ptr.take_pointee(); s_ptr.free()
+    _ = s_ptr.take_pointee(); s_ptr.unsafe_free()
 
 # ── handle_light_source: infinite, with filename ────────────────────────────
 # With a filename, a "__inf" texture entry is registered and inf_tex_idx
@@ -114,7 +114,7 @@ def test_light_source_infinite_with_filename() raises:
     assert_true(s_ptr[0].tex_files[0] == String("textures/sky.exr"))
     assert_true(_close(s_ptr[0].inf_rgb[0], Float32(1.0)))
     scanner_free(handle)
-    _ = s_ptr.take_pointee(); s_ptr.free()
+    _ = s_ptr.take_pointee(); s_ptr.unsafe_free()
 
 # ── _psc_handle_area_light_source: rgb L combined with float scale ─────────
 
@@ -130,7 +130,7 @@ def test_area_light_source_rgb_l_scaled() raises:
     assert_true(_close(s_ptr[0].cur_attr.al_rgb.g, Float32(2.0)))
     assert_true(_close(s_ptr[0].cur_attr.al_rgb.b, Float32(3.0)))
     scanner_free(handle)
-    _ = s_ptr.take_pointee(); s_ptr.free()
+    _ = s_ptr.take_pointee(); s_ptr.unsafe_free()
 
 # ── _psc_handle_make_named_material: conductor with explicit rgb eta/k ─────
 # has_spectral_conductor path computes per-channel Fresnel F0 = ((eta-1)^2+k^2)
@@ -152,7 +152,7 @@ def test_named_material_conductor_rgb_eta_k_fresnel() raises:
     assert_true(_close(s_ptr[0].named_materials[0].albedo.g, Float32(0.634888)))
     assert_true(_close(s_ptr[0].named_materials[0].albedo.b, Float32(0.476813)))
     scanner_free(handle)
-    _ = s_ptr.take_pointee(); s_ptr.free()
+    _ = s_ptr.take_pointee(); s_ptr.unsafe_free()
 
 # ── _psc_handle_make_named_material: dielectric with float eta ─────────────
 
@@ -167,7 +167,7 @@ def test_named_material_dielectric_float_eta() raises:
     assert_true(s_ptr[0].named_materials[0].kind == MatKind.dielectric)
     assert_true(_close(s_ptr[0].named_materials[0].ior, Float32(1.33)))
     scanner_free(handle)
-    _ = s_ptr.take_pointee(); s_ptr.free()
+    _ = s_ptr.take_pointee(); s_ptr.unsafe_free()
 
 # ── _psc_handle_make_named_material: mix of two named materials ────────────
 
@@ -187,7 +187,7 @@ def test_named_material_mix_names_and_amount() raises:
     assert_true(s_ptr[0].named_materials[0].mix_name2 == String("matB"))
     assert_true(_close(s_ptr[0].named_materials[0].mix_amount, Float32(0.25)))
     scanner_free(handle)
-    _ = s_ptr.take_pointee(); s_ptr.free()
+    _ = s_ptr.take_pointee(); s_ptr.unsafe_free()
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

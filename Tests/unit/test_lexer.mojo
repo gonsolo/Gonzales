@@ -64,7 +64,7 @@ def test_scan_int_positive() raises:
     assert_true(ok == Int32(1))
     assert_true(result[0] == Int32(42))
     assert_true(cur[0] == Int32(2))
-    buf.free(); cur.free(); result.free()
+    buf.unsafe_free(); cur.unsafe_free(); result.unsafe_free()
 
 def test_scan_int_negative() raises:
     var buf = _buf("-17")
@@ -73,7 +73,7 @@ def test_scan_int_negative() raises:
     var ok = scan_int(buf, Int32(3), cur, result)
     assert_true(ok == Int32(1))
     assert_true(result[0] == Int32(-17))
-    buf.free(); cur.free(); result.free()
+    buf.unsafe_free(); cur.unsafe_free(); result.unsafe_free()
 
 def test_scan_int_skips_leading_whitespace() raises:
     var buf = _buf("   7")
@@ -82,7 +82,7 @@ def test_scan_int_skips_leading_whitespace() raises:
     var ok = scan_int(buf, Int32(4), cur, result)
     assert_true(ok == Int32(1))
     assert_true(result[0] == Int32(7))
-    buf.free(); cur.free(); result.free()
+    buf.unsafe_free(); cur.unsafe_free(); result.unsafe_free()
 
 def test_scan_int_failure_leaves_cursor_unchanged() raises:
     """On failure (no digit found), the cursor must stay exactly where it
@@ -94,7 +94,7 @@ def test_scan_int_failure_leaves_cursor_unchanged() raises:
     var ok = scan_int(buf, Int32(3), cur, result)
     assert_true(ok == Int32(0))
     assert_true(cur[0] == Int32(0))
-    buf.free(); cur.free(); result.free()
+    buf.unsafe_free(); cur.unsafe_free(); result.unsafe_free()
 
 # ── scan_float ───────────────────────────────────────────────────────────
 
@@ -105,7 +105,7 @@ def test_scan_float_decimal() raises:
     var ok = scan_float(buf, Int32(4), cur, result)
     assert_true(ok == Int32(1))
     assert_true(_close(result[0], Float32(3.14)))
-    buf.free(); cur.free(); result.free()
+    buf.unsafe_free(); cur.unsafe_free(); result.unsafe_free()
 
 def test_scan_float_negative() raises:
     var buf = _buf("-0.5")
@@ -114,7 +114,7 @@ def test_scan_float_negative() raises:
     var ok = scan_float(buf, Int32(4), cur, result)
     assert_true(ok == Int32(1))
     assert_true(_close(result[0], Float32(-0.5)))
-    buf.free(); cur.free(); result.free()
+    buf.unsafe_free(); cur.unsafe_free(); result.unsafe_free()
 
 def test_scan_float_exponent() raises:
     var buf = _buf("1.5e-2")
@@ -123,7 +123,7 @@ def test_scan_float_exponent() raises:
     var ok = scan_float(buf, Int32(6), cur, result)
     assert_true(ok == Int32(1))
     assert_true(_close(result[0], Float32(0.015)))
-    buf.free(); cur.free(); result.free()
+    buf.unsafe_free(); cur.unsafe_free(); result.unsafe_free()
 
 def test_scan_float_bare_integer() raises:
     var buf = _buf("42")
@@ -132,7 +132,7 @@ def test_scan_float_bare_integer() raises:
     var ok = scan_float(buf, Int32(2), cur, result)
     assert_true(ok == Int32(1))
     assert_true(_close(result[0], Float32(42.0)))
-    buf.free(); cur.free(); result.free()
+    buf.unsafe_free(); cur.unsafe_free(); result.unsafe_free()
 
 # ── count_floats / scan_floats (and the truncation semantics behind #42) ────
 
@@ -153,7 +153,7 @@ def test_scan_floats_reads_all_when_capacity_suffices() raises:
     assert_true(_close(dst[1], Float32(2.5)))
     assert_true(_close(dst[2], Float32(3.5)))
     assert_true(cur[0] == Int32(11))  # cursor lands at end of buffer
-    buf.free(); cur.free(); dst.free()
+    buf.unsafe_free(); cur.unsafe_free(); dst.unsafe_free()
 
 def test_scan_floats_truncates_at_max_count_and_leaves_cursor_mid_buffer() raises:
     """Pins down the exact truncation behavior that made the pre-fix
@@ -172,7 +172,7 @@ def test_scan_floats_truncates_at_max_count_and_leaves_cursor_mid_buffer() raise
     assert_true(_close(dst[1], Float32(2.5)))
     assert_true(cur[0] < Int32(11))       # did NOT reach the end...
     assert_true(cur[0] == Int32(7))       # ...cursor sits right before "3.5"
-    buf.free(); cur.free(); dst.free()
+    buf.unsafe_free(); cur.unsafe_free(); dst.unsafe_free()
 
 # ── count_ints / scan_ints ──────────────────────────────────────────────────
 
@@ -190,7 +190,7 @@ def test_scan_ints_truncates_at_max_count() raises:
     assert_true(dst[0] == Int32(1))
     assert_true(dst[1] == Int32(2))
     assert_true(cur[0] < Int32(7))
-    buf.free(); cur.free(); dst.free()
+    buf.unsafe_free(); cur.unsafe_free(); dst.unsafe_free()
 
 # ── scan_char ────────────────────────────────────────────────────────────
 
@@ -200,7 +200,7 @@ def test_scan_char_matches_and_advances() raises:
     var ok = scan_char(buf, Int32(7), cur, UInt8(93))  # ']'
     assert_true(ok == Int32(1))
     assert_true(cur[0] == Int32(3))
-    buf.free(); cur.free()
+    buf.unsafe_free(); cur.unsafe_free()
 
 def test_scan_char_no_match_advances_past_whitespace_only() raises:
     """On a non-match, whitespace before the checked position is still
@@ -211,7 +211,7 @@ def test_scan_char_no_match_advances_past_whitespace_only() raises:
     var ok = scan_char(buf, Int32(3), cur, UInt8(93))  # ']', buffer has 'x'
     assert_true(ok == Int32(0))
     assert_true(cur[0] == Int32(2))
-    buf.free(); cur.free()
+    buf.unsafe_free(); cur.unsafe_free()
 
 # ── scan_token ───────────────────────────────────────────────────────────
 
@@ -224,7 +224,7 @@ def test_scan_token_reads_until_delimiter() raises:
     assert_true(n == Int32(5))
     assert_true(String(unsafe_from_utf8_ptr=out.as_immutable()) == String("hello"))
     assert_true(cur[0] == Int32(5))
-    buf.free(); cur.free(); delims.free(); out.free()
+    buf.unsafe_free(); cur.unsafe_free(); delims.unsafe_free(); out.unsafe_free()
 
 def test_scan_token_at_end_returns_negative() raises:
     var buf = _buf("")
@@ -233,7 +233,7 @@ def test_scan_token_at_end_returns_negative() raises:
     var out = alloc[UInt8](8)
     var n = scan_token(buf, Int32(0), cur, delims, Int32(1), out, Int32(8))
     assert_true(n == Int32(-1))
-    buf.free(); cur.free(); delims.free(); out.free()
+    buf.unsafe_free(); cur.unsafe_free(); delims.unsafe_free(); out.unsafe_free()
 
 # ── parse_quoted_string ──────────────────────────────────────────────────
 
@@ -245,7 +245,7 @@ def test_parse_quoted_string_basic() raises:
     assert_true(n == Int32(5))
     assert_true(String(unsafe_from_utf8_ptr=out.as_immutable()) == String("hello"))
     assert_true(cur[0] == Int32(7))
-    buf.free(); cur.free(); out.free()
+    buf.unsafe_free(); cur.unsafe_free(); out.unsafe_free()
 
 def test_parse_quoted_string_requires_opening_quote() raises:
     var buf = _buf("hello")
@@ -253,7 +253,7 @@ def test_parse_quoted_string_requires_opening_quote() raises:
     var out = alloc[UInt8](32)
     var n = parse_quoted_string(buf, Int32(5), cur, out, Int32(32))
     assert_true(n == Int32(-1))
-    buf.free(); cur.free(); out.free()
+    buf.unsafe_free(); cur.unsafe_free(); out.unsafe_free()
 
 def test_parse_quoted_string_truncates_at_max_buf() raises:
     var buf = _buf('"abcdef"')
@@ -262,19 +262,19 @@ def test_parse_quoted_string_truncates_at_max_buf() raises:
     var n = parse_quoted_string(buf, Int32(8), cur, out, Int32(4))
     assert_true(n == Int32(6))  # reports the true length...
     assert_true(String(unsafe_from_utf8_ptr=out.as_immutable()) == String("abc"))  # ...but out is capped
-    buf.free(); cur.free(); out.free()
+    buf.unsafe_free(); cur.unsafe_free(); out.unsafe_free()
 
 # ── _psc_streq ───────────────────────────────────────────────────────────
 
 def test_psc_streq_equal_strings_match() raises:
     var buf = _buf0("hello")
     assert_true(_psc_streq(buf, "hello"))
-    buf.free()
+    buf.unsafe_free()
 
 def test_psc_streq_different_strings_do_not_match() raises:
     var buf = _buf0("hello")
     assert_false(_psc_streq(buf, "world"))
-    buf.free()
+    buf.unsafe_free()
 
 def test_psc_streq_stops_at_null_terminator() raises:
     """_psc_streq must stop comparing as soon as it hits the buffer's null
@@ -289,7 +289,7 @@ def test_psc_streq_stops_at_null_terminator() raises:
     buf[4] = UInt8(88)   # 'X'
     buf[5] = UInt8(0)
     assert_true(_psc_streq(buf, "hi"))
-    buf.free()
+    buf.unsafe_free()
 
 # ── _psc_strncmp ─────────────────────────────────────────────────────────
 
@@ -298,12 +298,12 @@ def test_psc_strncmp_zero_when_first_n_bytes_match() raises:
     though a's full string continues on past what the literal describes."""
     var buf = _buf0("hello world")
     assert_true(_psc_strncmp(buf, "hello", 5) == 0)
-    buf.free()
+    buf.unsafe_free()
 
 def test_psc_strncmp_nonzero_when_bytes_differ_within_n() raises:
     var buf = _buf0("hexlo")
     assert_true(_psc_strncmp(buf, "hello", 5) != 0)
-    buf.free()
+    buf.unsafe_free()
 
 # ── _psc_strncpy ─────────────────────────────────────────────────────────
 
@@ -316,7 +316,7 @@ def test_psc_strncpy_truncates_and_null_terminates() raises:
     assert_true(dst[0] == UInt8(104))  # 'h'
     assert_true(dst[1] == UInt8(101))  # 'e'
     assert_true(dst[2] == UInt8(0))
-    src.free(); dst.free()
+    src.unsafe_free(); dst.unsafe_free()
 
 def test_psc_strncpy_full_copy_when_capacity_suffices() raises:
     var src = _buf0("hi")
@@ -325,53 +325,53 @@ def test_psc_strncpy_full_copy_when_capacity_suffices() raises:
     assert_true(dst[0] == UInt8(104))  # 'h'
     assert_true(dst[1] == UInt8(105))  # 'i'
     assert_true(dst[2] == UInt8(0))
-    src.free(); dst.free()
+    src.unsafe_free(); dst.unsafe_free()
 
 # ── _psc_type_is_* ───────────────────────────────────────────────────────
 
 def test_psc_type_is_float_recognizes_float_like_tags() raises:
     """Every one of these tags names a param type stored as 3 floats (or 1,
     for plain 'float'); 'sp' is the 2-byte prefix of 'spectrum'."""
-    var b_f = _buf0("float"); assert_true(_psc_type_is_float(b_f)); b_f.free()
-    var b_r = _buf0("rgb"); assert_true(_psc_type_is_float(b_r)); b_r.free()
-    var b_c = _buf0("color"); assert_true(_psc_type_is_float(b_c)); b_c.free()
-    var b_n = _buf0("normal"); assert_true(_psc_type_is_float(b_n)); b_n.free()
-    var b_p = _buf0("point3"); assert_true(_psc_type_is_float(b_p)); b_p.free()
-    var b_v = _buf0("vector3"); assert_true(_psc_type_is_float(b_v)); b_v.free()
-    var b_sp = _buf0("spectrum"); assert_true(_psc_type_is_float(b_sp)); b_sp.free()
+    var b_f = _buf0("float"); assert_true(_psc_type_is_float(b_f)); b_f.unsafe_free()
+    var b_r = _buf0("rgb"); assert_true(_psc_type_is_float(b_r)); b_r.unsafe_free()
+    var b_c = _buf0("color"); assert_true(_psc_type_is_float(b_c)); b_c.unsafe_free()
+    var b_n = _buf0("normal"); assert_true(_psc_type_is_float(b_n)); b_n.unsafe_free()
+    var b_p = _buf0("point3"); assert_true(_psc_type_is_float(b_p)); b_p.unsafe_free()
+    var b_v = _buf0("vector3"); assert_true(_psc_type_is_float(b_v)); b_v.unsafe_free()
+    var b_sp = _buf0("spectrum"); assert_true(_psc_type_is_float(b_sp)); b_sp.unsafe_free()
 
 def test_psc_type_is_float_rejects_unrelated_tags() raises:
     """'blackbody' is intentionally excluded (1 float, not 3) per the inline
     NOTE in lexer.mojo, as are 'integer' and 'string'."""
-    var b_i = _buf0("integer"); assert_false(_psc_type_is_float(b_i)); b_i.free()
-    var b_s = _buf0("string"); assert_false(_psc_type_is_float(b_s)); b_s.free()
-    var b_bb = _buf0("blackbody"); assert_false(_psc_type_is_float(b_bb)); b_bb.free()
+    var b_i = _buf0("integer"); assert_false(_psc_type_is_float(b_i)); b_i.unsafe_free()
+    var b_s = _buf0("string"); assert_false(_psc_type_is_float(b_s)); b_s.unsafe_free()
+    var b_bb = _buf0("blackbody"); assert_false(_psc_type_is_float(b_bb)); b_bb.unsafe_free()
 
 def test_psc_type_is_int_recognizes_integer_tag() raises:
     var buf = _buf0("integer")
     assert_true(_psc_type_is_int(buf))
-    buf.free()
+    buf.unsafe_free()
 
 def test_psc_type_is_int_rejects_unrelated_tags() raises:
-    var b_f = _buf0("float"); assert_false(_psc_type_is_int(b_f)); b_f.free()
-    var b_s = _buf0("string"); assert_false(_psc_type_is_int(b_s)); b_s.free()
+    var b_f = _buf0("float"); assert_false(_psc_type_is_int(b_f)); b_f.unsafe_free()
+    var b_s = _buf0("string"); assert_false(_psc_type_is_int(b_s)); b_s.unsafe_free()
 
 def test_psc_type_is_str_recognizes_string_and_texture_tags() raises:
-    var b_s = _buf0("string"); assert_true(_psc_type_is_str(b_s)); b_s.free()
-    var b_t = _buf0("texture"); assert_true(_psc_type_is_str(b_t)); b_t.free()
+    var b_s = _buf0("string"); assert_true(_psc_type_is_str(b_s)); b_s.unsafe_free()
+    var b_t = _buf0("texture"); assert_true(_psc_type_is_str(b_t)); b_t.unsafe_free()
 
 def test_psc_type_is_str_rejects_unrelated_tags() raises:
-    var b_f = _buf0("float"); assert_false(_psc_type_is_str(b_f)); b_f.free()
-    var b_i = _buf0("integer"); assert_false(_psc_type_is_str(b_i)); b_i.free()
+    var b_f = _buf0("float"); assert_false(_psc_type_is_str(b_f)); b_f.unsafe_free()
+    var b_i = _buf0("integer"); assert_false(_psc_type_is_str(b_i)); b_i.unsafe_free()
 
 def test_psc_type_is_blackbody_recognizes_tag() raises:
     var buf = _buf0("blackbody")
     assert_true(_psc_type_is_blackbody(buf))
-    buf.free()
+    buf.unsafe_free()
 
 def test_psc_type_is_blackbody_rejects_unrelated_tags() raises:
-    var b_f = _buf0("float"); assert_false(_psc_type_is_blackbody(b_f)); b_f.free()
-    var b_s = _buf0("string"); assert_false(_psc_type_is_blackbody(b_s)); b_s.free()
+    var b_f = _buf0("float"); assert_false(_psc_type_is_blackbody(b_f)); b_f.unsafe_free()
+    var b_s = _buf0("string"); assert_false(_psc_type_is_blackbody(b_s)); b_s.unsafe_free()
 
 # ── _psc_blackbody_to_rgb ────────────────────────────────────────────────
 
@@ -382,7 +382,7 @@ def test_psc_blackbody_to_rgb_low_temp_is_red_dominant() raises:
     var rgb = alloc[Float32](3)
     _psc_blackbody_to_rgb(Float32(1000.0), rgb)
     assert_true(rgb[0] > rgb[2])
-    rgb.free()
+    rgb.unsafe_free()
 
 def test_psc_blackbody_to_rgb_high_temp_is_blue_dominant() raises:
     """~10000K+ sits at the cool end; unlike the low-temp case, blue should
@@ -391,7 +391,7 @@ def test_psc_blackbody_to_rgb_high_temp_is_blue_dominant() raises:
     var rgb = alloc[Float32](3)
     _psc_blackbody_to_rgb(Float32(12000.0), rgb)
     assert_true(rgb[2] >= rgb[0])
-    rgb.free()
+    rgb.unsafe_free()
 
 # ── ParamScanner ─────────────────────────────────────────────────────────
 

@@ -381,7 +381,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
     # Keep it alive through the whole test, not a style nicety.
     _ = fixture^
 
-    lvc.free(); scratch.free()
+    lvc.unsafe_free(); scratch.unsafe_free()
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

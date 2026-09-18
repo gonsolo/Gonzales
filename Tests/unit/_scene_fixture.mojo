@@ -34,16 +34,16 @@ struct TriangleSceneFixture(Movable):
         var result = alloc[Intersection_C](1)
         traverse_bvh2_core(self.bvh_nodes, self.prim_ids, self.meshes, self.curves, ray, tMax, result)
         var r = result[0]
-        result.free()
+        result.unsafe_free()
         return r
 
     def __del__(deinit self):
-        self.points.free()
-        self.vertex_indices.free()
-        self.meshes.free()
-        self.bvh_nodes.free()
-        self.prim_ids.free()
-        self.materials.free()
+        self.points.unsafe_free()
+        self.vertex_indices.unsafe_free()
+        self.meshes.unsafe_free()
+        self.bvh_nodes.unsafe_free()
+        self.prim_ids.unsafe_free()
+        self.materials.unsafe_free()
 
 def make_triangle_scene(verts: List[Point3f]) -> TriangleSceneFixture:
     """verts must be a flat list of 3*N points (N triangles, CCW winding)."""
@@ -84,13 +84,13 @@ def make_triangle_scene(verts: List[Point3f]) -> TriangleSceneFixture:
     var bvh_nodes = alloc[BVH2Node](max_nodes)
     var order = alloc[Int32](Int(n_tris))
     _ = build_bvh2(bounds, n_tris, bvh_nodes, order)
-    bounds.free()
+    bounds.unsafe_free()
 
     var prim_ids = alloc[PrimId_C](Int(n_tris))
     for k in range(Int(n_tris)):
         var orig = Int(order[k])
         prim_ids[k] = PrimId_C(Int64(0), Int64(orig * 3), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    order.free()
+    order.unsafe_free()
 
     var materials = alloc[Material_C](1)
     materials[0] = Material_C(

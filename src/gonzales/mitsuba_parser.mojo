@@ -64,7 +64,7 @@ def _mxml_make_string(buf: UnsafePointer[UInt8, MutExternalOrigin], start: Int, 
         tmp[i] = buf[start + i]
     tmp[n] = UInt8(0)
     var s = String(unsafe_from_utf8_ptr=tmp.as_imm())
-    tmp.free()
+    tmp.unsafe_free()
     return s
 
 def _mxml_find_attr(tag: MitsubaTag, name: String) -> String:
@@ -291,7 +291,7 @@ def _mit_string_from(s: String, start: Int) -> String:
         buf[i - start] = bytes[i]
     buf[n - start] = UInt8(0)
     var r = String(unsafe_from_utf8_ptr=buf.as_imm())
-    buf.free()
+    buf.unsafe_free()
     return r
 
 def _mit_apply_defaults(mut tags: List[MitsubaTag]):
@@ -552,7 +552,7 @@ def _mit_process_sensor(tags: List[MitsubaTag], start: Int, end: Int,
         _ = matrix_invert(c2w_arr, w2c)
         for k in range(16):
             s_ptr[0].cam2w_raw[k] = w2c[k]
-        c2w_arr.free(); w2c.free()
+        c2w_arr.unsafe_free(); w2c.unsafe_free()
 
     var fov_val = Float32(30)
     var fov_idx = _mit_find_child_by_attr(tags, start, end, "float", "name", "fov")
@@ -867,8 +867,8 @@ def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
                 uvs[k*2+1] *= mnm.tex_vscale
 
     store_mesh(s_ptr, tmp_f, tmp_i, nv, nt)
-    tmp_f.free()
-    tmp_i.free()
+    tmp_f.unsafe_free()
+    tmp_i.unsafe_free()
 
     var last = len(s_ptr[0].meshes) - 1
     if len(uvs) > 0:
@@ -895,7 +895,7 @@ def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
             last_mesh.normals.append(nx)
             last_mesh.normals.append(ny)
             last_mesh.normals.append(nz)
-        nrm_world.free(); ctm_inv.free(); nrm_obj.free()
+        nrm_world.unsafe_free(); ctm_inv.unsafe_free(); nrm_obj.unsafe_free()
 
 # ── Top-level entry point ────────────────────────────────────────────────────
 
@@ -925,7 +925,7 @@ def mojo_parse_mitsuba_scene(path: UnsafePointer[UInt8, MutExternalOrigin],
             dir_tmp[ki] = path[ki]
         dir_tmp[last_slash + 1] = UInt8(0)
         scene_dir = String(unsafe_from_utf8_ptr=dir_tmp.as_imm())
-        dir_tmp.free()
+        dir_tmp.unsafe_free()
 
     var byte_list: List[UInt8]
     try:
@@ -941,7 +941,7 @@ def mojo_parse_mitsuba_scene(path: UnsafePointer[UInt8, MutExternalOrigin],
     for i in range(n):
         buf[i] = byte_list[i]
     var tags = tokenize_mitsuba_xml(buf, n)
-    buf.free()
+    buf.unsafe_free()
     _mit_apply_defaults(tags)
 
     var scene_idx = -1
@@ -977,5 +977,5 @@ def mojo_parse_mitsuba_scene(path: UnsafePointer[UInt8, MutExternalOrigin],
     var psc = alloc[ParsedScene_Mojo](1)
     finalize_scene(s_ptr, psc, verbose)
     _ = s_ptr.take_pointee()
-    s_ptr.free()
+    s_ptr.unsafe_free()
     return psc

@@ -146,7 +146,7 @@ def _ply_f32_be(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float
     tmp[0] = buf[pos + 3]; tmp[1] = buf[pos + 2]
     tmp[2] = buf[pos + 1]; tmp[3] = buf[pos + 0]
     var v = tmp.unsafe_bitcast[Float32]()[0]
-    tmp.free()
+    tmp.unsafe_free()
     return v
 
 def _ply_i32_be(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int32:
@@ -154,7 +154,7 @@ def _ply_i32_be(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Int32
     tmp[0] = buf[pos + 3]; tmp[1] = buf[pos + 2]
     tmp[2] = buf[pos + 1]; tmp[3] = buf[pos + 0]
     var v = tmp.unsafe_bitcast[Int32]()[0]
-    tmp.free()
+    tmp.unsafe_free()
     return v
 
 # Read a 64-bit double and return as Float32 (for double-precision PLY positions).
@@ -163,7 +163,7 @@ def _ply_f64_le(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float
     for k in range(8):
         tmp[k] = buf[pos + k]
     var d = tmp.unsafe_bitcast[Float64]()[0]
-    tmp.free()
+    tmp.unsafe_free()
     return Float32(d)
 
 def _ply_f64_be(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float32:
@@ -171,7 +171,7 @@ def _ply_f64_be(buf: UnsafePointer[UInt8, MutExternalOrigin], pos: Int) -> Float
     for k in range(8):
         tmp[k] = buf[pos + 7 - k]
     var d = tmp.unsafe_bitcast[Float64]()[0]
-    tmp.free()
+    tmp.unsafe_free()
     return Float32(d)
 
 # Read a count from a face list field. type_size is 1, 2, or 4.
@@ -232,7 +232,7 @@ def load_ply(
             print("PLY load FAILED (file is still gzip-compressed):", path_str)
         else:
             print("PLY load FAILED (missing 'ply' magic, not a PLY file):", path_str)
-        line_buf.free(); file_buf.free()
+        line_buf.unsafe_free(); file_buf.unsafe_free()
         return Int32(0)
 
     var is_le = True       # little-endian
@@ -302,8 +302,8 @@ def load_ply(
     if n_verts <= 0 or n_faces <= 0:
         print("PLY load FAILED (header declares", n_verts, "vertices and",
               n_faces, "faces):", path_str)
-        line_buf.free(); prop_roles.free(); prop_sizes.free()
-        prop_is_double.free(); file_buf.free()
+        line_buf.unsafe_free(); prop_roles.unsafe_free(); prop_sizes.unsafe_free()
+        prop_is_double.unsafe_free(); file_buf.unsafe_free()
         return Int32(0)
 
     var pts     = alloc[Float32](n_verts * 3)
@@ -393,10 +393,10 @@ def load_ply(
                 idx_buf[n_tris*3+1] = face_idx[ti + 1]
                 idx_buf[n_tris*3+2] = face_idx[ti + 2]
                 n_tris += 1
-        face_idx.free()
+        face_idx.unsafe_free()
 
-    line_buf.free(); prop_roles.free(); prop_sizes.free()
-    prop_is_double.free(); file_buf.free()
+    line_buf.unsafe_free(); prop_roles.unsafe_free(); prop_sizes.unsafe_free()
+    prop_is_double.unsafe_free(); file_buf.unsafe_free()
 
     out_pts[0]     = pts
     out_n_verts[0] = Int32(n_verts)
@@ -407,7 +407,7 @@ def load_ply(
         out_uvs[0]     = uvs_buf
         out_has_uvs[0] = Int32(1)
     else:
-        uvs_buf.free()
+        uvs_buf.unsafe_free()
         out_uvs[0]     = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
         out_has_uvs[0] = Int32(0)
 
@@ -415,7 +415,7 @@ def load_ply(
         out_normals[0]     = nrm_buf
         out_has_normals[0] = Int32(1)
     else:
-        nrm_buf.free()
+        nrm_buf.unsafe_free()
         out_normals[0]     = UnsafePointer[Float32, MutExternalOrigin].unsafe_dangling()
         out_has_normals[0] = Int32(0)
 

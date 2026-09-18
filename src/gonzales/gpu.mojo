@@ -139,7 +139,7 @@ def _fill_u8_mips(
         off_cur += cw * ch * c
         var tmp = prev; prev = cur; cur = tmp
         pw = cw; ph = ch
-    prev.free(); cur.free()
+    prev.unsafe_free(); cur.unsafe_free()
 
 # Fill `pyr` with a Float32 RGB mip pyramid of `src` (tw x th, linear RGB): level 0
 # copied, each coarser level the 2x2 box average of the one before -- the float
@@ -231,8 +231,8 @@ def _load_host_texture(
             result = _HostTexture(pyr.unsafe_bitcast[UInt8]().unsafe_origin_cast[MutExternalOrigin](), texels * 3 * 4,
                                   Int32(tw), Int32(th), Int32(nlev), Int32(3), Int32(GpuTexture_C.FORMAT_F32), Int32(0))
             _ = external_call["free_texture_rgb", Int32, UnsafePointer[Float32, MutExternalOrigin]](data_out[0])
-        data_out.free()
-    w_out.free(); h_out.free(); c_out.free(); srgb_out.free(); u8_out.free()
+        data_out.unsafe_free()
+    w_out.unsafe_free(); h_out.unsafe_free(); c_out.unsafe_free(); srgb_out.unsafe_free(); u8_out.unsafe_free()
     return result
 
 @fieldwise_init
@@ -673,7 +673,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var blas_primids_ptrs_buf = _gpu_upload_array[UnsafePointer[UInt8, MutExternalOrigin]](
                 ctx, blas_primids_ptrs_host, n_blas_int)
             ctx.synchronize()   # the host pointer arrays are freed next
-            blas_nodes_ptrs_host.free(); blas_primids_ptrs_host.free()
+            blas_nodes_ptrs_host.unsafe_free(); blas_primids_ptrs_host.unsafe_free()
 
             var n_instances_int = Int(instanceCount)
             var instances_gpu_buf = _gpu_upload_array[Instance_C](ctx, instances, n_instances_int)
@@ -714,7 +714,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             # Upload mesh struct array
             var meshes_buf = _gpu_upload_array[TriangleMesh_C](ctx, mesh_structs_host, Int(meshCount))
             ctx.synchronize()   # mesh_structs_host is freed next
-            mesh_structs_host.free()
+            mesh_structs_host.unsafe_free()
 
             # Upload materials array (>= 1 elem to avoid a zero-size buffer)
             var mat_buf = _gpu_upload_array[Material_C](ctx, materials, Int(materialCount))
@@ -746,7 +746,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             unsafe_memcpy(dest=ls_host, src=lightSamplerCdf, count=ls_entries)
             var ls_buf = _gpu_upload_array[Float32](ctx, ls_host, max(ls_entries, 2))
             ctx.synchronize()   # ls_host is freed next
-            ls_host.free()
+            ls_host.unsafe_free()
 
             # Upload infinite/environment lights with GPU-resident pixel/CDF data
             var il_count = Int(infiniteLightCount)
@@ -766,7 +766,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                 il_patched[ii] = il
             var il_buf = _gpu_upload_array[InfiniteLight_C](ctx, il_patched, il_count)
             ctx.synchronize()   # il_patched is freed next
-            il_patched.free()
+            il_patched.unsafe_free()
             print("GPU: " + String(il_count) + " infinite light(s) uploaded")
 
             # Upload participating media (small array; >= 1 elem to avoid zero-size buffer)
@@ -800,7 +800,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                     host_grid.world_to_medium, host_grid.max_density)
             var grids_buf = _gpu_upload_array[Grid_C](ctx, grid_structs_host, n_grids_int)
             ctx.synchronize()   # grid_structs_host is freed next
-            grid_structs_host.free()
+            grid_structs_host.unsafe_free()
             if n_grids_int > 0:
                 print("GPU: " + String(n_grids_int) + " heterogeneous density grid(s) uploaded")
 
@@ -820,7 +820,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                     host_nvdb.index_min, host_nvdb.index_max, host_nvdb.max_density)
             var nvdb_grids_buf = _gpu_upload_array[NvdbGrid_C](ctx, nvdb_structs_host, n_nvdb_grids_int)
             ctx.synchronize()   # nvdb_structs_host is freed next
-            nvdb_structs_host.free()
+            nvdb_structs_host.unsafe_free()
             if n_nvdb_grids_int > 0:
                 print("GPU: " + String(n_nvdb_grids_int) + " sparse (nanovdb) density grid(s) uploaded")
 
@@ -871,7 +871,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                 )
             var measured_brdfs_buf = _gpu_upload_array[MeasuredBRDF_C](ctx, measured_structs_host, n_measured_int)
             ctx.synchronize()   # measured_structs_host is freed next
-            measured_structs_host.free()
+            measured_structs_host.unsafe_free()
             if n_measured_int > 0:
                 print("GPU: " + String(n_measured_int) + " measured BRDF(s) uploaded")
 
@@ -988,7 +988,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
 
             if n_textures_int > 0:
                 parallelize[decode_worker](min(num_performance_cores(), n_textures_int))
-            next_tex.free()
+            next_tex.unsafe_free()
 
             var tex_bytes = 0
             for ti in range(n_textures_int):
@@ -1012,16 +1012,16 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             ctx.synchronize()
             for ti in range(n_textures_int):
                 if dup_of[ti] == Int32(-1) and host_tex[ti].n_bytes > 0:
-                    host_tex[ti].data.free()
-            host_tex.free()
-            lut_host.free(); inv_host.free()
+                    host_tex[ti].data.unsafe_free()
+            host_tex.unsafe_free()
+            lut_host.unsafe_free(); inv_host.unsafe_free()
             var n_unique_tex = 0
             for ti in range(n_textures_int):
                 if dup_of[ti] == Int32(-1):
                     n_unique_tex += 1
-            gpu_textures_host.free()
-            tex_is_raw.free()
-            dup_of.free()
+            gpu_textures_host.unsafe_free()
+            tex_is_raw.unsafe_free()
+            dup_of.unsafe_free()
             print("GPU: " + String(n_textures_int) + " texture(s) uploaded ("
                   + String(n_unique_tex) + " unique file(s) loaded, "
                   + String(tex_bytes // (1024 * 1024)) + " MB)")
@@ -5084,4 +5084,4 @@ def gpu_free_scene(handlePtr: UnsafePointer[GpuSceneHandle, MutExternalOrigin]):
     if Int(handlePtr) == 0:
         return
     handlePtr.destroy_pointee()
-    handlePtr.unsafe_bitcast[GpuSceneHandle]().free()
+    handlePtr.unsafe_bitcast[GpuSceneHandle]().unsafe_free()

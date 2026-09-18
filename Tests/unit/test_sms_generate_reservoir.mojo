@@ -145,7 +145,7 @@ def test_sms_generate_curve_light_returns_empty() raises:
         area_lights[0], Float32(1.0), pcg)
     assert_true(gen_result[0] == False)
     assert_true(gen_result[1].n_vertices == Int32(0))
-    area_lights.free(); cdf.free()
+    area_lights.unsafe_free(); cdf.unsafe_free()
 
 def test_sms_generate_no_glass_in_the_way_returns_empty() raises:
     """No dielectric intervenes (empty scene beyond the light) -- must
@@ -174,8 +174,8 @@ def test_sms_generate_no_glass_in_the_way_returns_empty() raises:
     assert_true(gen_result[0] == False)
     assert_true(gen_result[1].n_vertices == Int32(0))
 
-    meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
-    area_lights.free(); primIds.free(); bvh.free(); cdf.free()
+    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free(); meshes.unsafe_free()
+    area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free()
 
 def test_sms_generate_real_glass_produces_a_streamed_candidate() raises:
     """A real flat glass plane sits between hit_point and the light -- the
@@ -219,8 +219,8 @@ def test_sms_generate_real_glass_produces_a_streamed_candidate() raises:
     assert_true(_close(res.le.r, Float32(200.0)))
     assert_true(_close(res.light_point[2], Float32(4.0)))
 
-    meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
-    materials.free(); area_lights.free(); primIds.free(); bvh.free(); cdf.free()
+    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free(); meshes.unsafe_free()
+    materials.unsafe_free(); area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free()
 
 # ── sms_resolve ──────────────────────────────────────────────────────────────
 
@@ -264,8 +264,8 @@ def test_sms_resolve_on_empty_reservoir_is_a_noop() raises:
     sms_resolve(path_arr, ctx, Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0), RGB(Float32(0.8)), res)
     assert_true(_close(path_arr[0].estimate.v0, Float32(0.0)))
 
-    meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
-    primIds.free(); bvh.free(); cdf.free(); path_arr.free()
+    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free(); meshes.unsafe_free()
+    primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free(); path_arr.unsafe_free()
 
 def test_sms_resolve_on_real_glass_adds_positive_contribution() raises:
     """A real, unshadowed streamed candidate must finalize to state.w > 0
@@ -308,8 +308,8 @@ def test_sms_resolve_on_real_glass_adds_positive_contribution() raises:
     assert_true(path_arr[0].estimate.v1 > Float32(0.0))
     assert_true(path_arr[0].estimate.v2 > Float32(0.0))
 
-    meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
-    materials.free(); area_lights.free(); primIds.free(); bvh.free(); cdf.free(); path_arr.free()
+    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free(); meshes.unsafe_free()
+    materials.unsafe_free(); area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free(); path_arr.unsafe_free()
 
 # ── sms_temporal_step ────────────────────────────────────────────────────────
 
@@ -349,8 +349,8 @@ def test_sms_temporal_step_without_io_still_resolves_like_batch_mode() raises:
     assert_true(found == True)
     assert_true(path_arr[0].estimate.v0 > Float32(0.0))
 
-    meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
-    materials.free(); area_lights.free(); primIds.free(); bvh.free(); cdf.free(); path_arr.free()
+    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free(); meshes.unsafe_free()
+    materials.unsafe_free(); area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free(); path_arr.unsafe_free()
 
 def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
     """Two consecutive frames at the SAME pixel with a real SMSReservoirIO
@@ -429,9 +429,9 @@ def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
     assert_true(m_after_frame1 > m_after_frame0)
     assert_true(path_arr[0].estimate.v0 > Float32(0.0))
 
-    meshes[0].points.free(); meshes[0].vertexIndices.free(); meshes.free()
-    materials.free(); area_lights.free(); primIds.free(); bvh.free(); cdf.free()
-    path_arr.free(); buf_a.free(); buf_b.free()
+    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free(); meshes.unsafe_free()
+    materials.unsafe_free(); area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free()
+    path_arr.unsafe_free(); buf_a.unsafe_free(); buf_b.unsafe_free()
 
 # ── End-to-end wiring: _shade_diffuse_nee -> _nee_area_lights -> ───────────
 # sms_temporal_step, mirroring test_restir_gi_generation.mojo's own
@@ -516,11 +516,11 @@ def test_shade_diffuse_nee_sms_wiring_accumulates_confidence_across_frames() rai
     assert_true(m_after_frame1 > m_after_frame0)
     assert_true(path_arr[0].estimate.v0 > Float32(0.0))
 
-    meshes[0].points.free(); meshes[0].vertexIndices.free()
-    meshes[1].points.free(); meshes[1].vertexIndices.free()
-    meshes.free()
-    materials.free(); area_lights.free(); primIds.free(); bvh.free(); cdf.free()
-    path_arr.free(); buf_a.free(); buf_b.free()
+    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free()
+    meshes[1].points.unsafe_free(); meshes[1].vertexIndices.unsafe_free()
+    meshes.unsafe_free()
+    materials.unsafe_free(); area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free()
+    path_arr.unsafe_free(); buf_a.unsafe_free(); buf_b.unsafe_free()
 
 def test_shade_diffuse_nee_sms_io_inactive_at_bounce_1_uses_plain_mnee() raises:
     """Sms_io is only threaded through at bounce 0 -- at bounce 1 it must
@@ -584,11 +584,11 @@ def test_shade_diffuse_nee_sms_io_inactive_at_bounce_1_uses_plain_mnee() raises:
     # The refracted contribution should still appear via plain MNEE.
     assert_true(path_arr[0].estimate.v0 > Float32(0.0))
 
-    meshes[0].points.free(); meshes[0].vertexIndices.free()
-    meshes[1].points.free(); meshes[1].vertexIndices.free()
-    meshes.free()
-    materials.free(); area_lights.free(); primIds.free(); bvh.free(); cdf.free()
-    path_arr.free(); buf_a.free(); buf_b.free()
+    meshes[0].points.unsafe_free(); meshes[0].vertexIndices.unsafe_free()
+    meshes[1].points.unsafe_free(); meshes[1].vertexIndices.unsafe_free()
+    meshes.unsafe_free()
+    materials.unsafe_free(); area_lights.unsafe_free(); primIds.unsafe_free(); bvh.unsafe_free(); cdf.unsafe_free()
+    path_arr.unsafe_free(); buf_a.unsafe_free(); buf_b.unsafe_free()
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

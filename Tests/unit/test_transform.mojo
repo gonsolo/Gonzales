@@ -43,7 +43,7 @@ def test_matrix_multiply_identity_is_neutral() raises:
     var result = alloc[Float32](16)
     matrix_multiply(id, m, result)
     assert_true(_mat_close(result, m))
-    id.free(); m.free(); result.free()
+    id.unsafe_free(); m.unsafe_free(); result.unsafe_free()
 
 def test_matrix_multiply_translation_composition() raises:
     """T(a) * T(b) must equal T(a+b) — translations compose additively."""
@@ -54,7 +54,7 @@ def test_matrix_multiply_translation_composition() raises:
     var expected = alloc[Float32](16)
     _translation(expected, Float32(5.0), Float32(1.0), Float32(3.5))
     assert_true(_mat_close(result, expected))
-    t1.free(); t2.free(); result.free(); expected.free()
+    t1.unsafe_free(); t2.unsafe_free(); result.unsafe_free(); expected.unsafe_free()
 
 def test_matrix_multiply_matches_hand_computed_case() raises:
     """A hand-computed 4x4 * 4x4 case, independent of any translate/scale
@@ -72,7 +72,7 @@ def test_matrix_multiply_matches_hand_computed_case() raises:
     expected[4] = Float32(2.0)
     expected[12] = Float32(13.0); expected[13] = Float32(5.0); expected[14] = Float32(7.0)
     assert_true(_mat_close(result, expected))
-    a.free(); b.free(); result.free(); expected.free()
+    a.unsafe_free(); b.unsafe_free(); result.unsafe_free(); expected.unsafe_free()
 
 # ── matrix_invert ────────────────────────────────────────────────────────────
 
@@ -82,7 +82,7 @@ def test_matrix_invert_of_identity_is_identity() raises:
     var ok = matrix_invert(id, result)
     assert_true(ok == Int32(1))
     assert_true(_mat_close(result, id))
-    id.free(); result.free()
+    id.unsafe_free(); result.unsafe_free()
 
 def test_matrix_invert_translation() raises:
     """Inverse of T(tx,ty,tz) is exactly T(-tx,-ty,-tz)."""
@@ -92,7 +92,7 @@ def test_matrix_invert_translation() raises:
     assert_true(ok == Int32(1))
     var expected = alloc[Float32](16); _translation(expected, Float32(-2.0), Float32(3.0), Float32(-5.0))
     assert_true(_mat_close(inv, expected))
-    t.free(); inv.free(); expected.free()
+    t.unsafe_free(); inv.unsafe_free(); expected.unsafe_free()
 
 def test_matrix_invert_round_trip_matches_original() raises:
     """Matrix_invert(matrix_invert(M)) == M for an invertible translate+scale
@@ -108,7 +108,7 @@ def test_matrix_invert_round_trip_matches_original() raises:
     var ok2 = matrix_invert(inv1, inv2)
     assert_true(ok2 == Int32(1))
     assert_true(_mat_close(inv2, m))
-    s.free(); t.free(); m.free(); inv1.free(); inv2.free()
+    s.unsafe_free(); t.unsafe_free(); m.unsafe_free(); inv1.unsafe_free(); inv2.unsafe_free()
 
 def test_matrix_invert_times_original_is_identity() raises:
     """M * M^-1 == identity, the defining property of matrix inversion."""
@@ -123,7 +123,7 @@ def test_matrix_invert_times_original_is_identity() raises:
     matrix_multiply(m, inv, product)
     var id = alloc[Float32](16); _identity(id)
     assert_true(_mat_close(product, id))
-    s.free(); t.free(); m.free(); inv.free(); product.free(); id.free()
+    s.unsafe_free(); t.unsafe_free(); m.unsafe_free(); inv.unsafe_free(); product.unsafe_free(); id.unsafe_free()
 
 def test_matrix_invert_singular_writes_identity_and_reports_failure() raises:
     """A singular (all-zero) matrix must fail cleanly: return 0 and leave the
@@ -136,7 +136,7 @@ def test_matrix_invert_singular_writes_identity_and_reports_failure() raises:
     assert_true(ok == Int32(0))
     var id = alloc[Float32](16); _identity(id)
     assert_true(_mat_close(result, id))
-    singular.free(); result.free(); id.free()
+    singular.unsafe_free(); result.unsafe_free(); id.unsafe_free()
 
 # ── transform_points ─────────────────────────────────────────────────────────
 
@@ -149,7 +149,7 @@ def test_transform_points_identity_leaves_points_unchanged() raises:
     assert_true(_close(pts_out[0], Float32(1.0)))
     assert_true(_close(pts_out[1], Float32(2.0)))
     assert_true(_close(pts_out[2], Float32(3.0)))
-    id.free(); pts_in.free(); pts_out.free()
+    id.unsafe_free(); pts_in.unsafe_free(); pts_out.unsafe_free()
 
 def test_transform_points_translation_moves_by_exact_vector() raises:
     var t = alloc[Float32](16); _translation(t, Float32(10.0), Float32(-5.0), Float32(2.0))
@@ -160,7 +160,7 @@ def test_transform_points_translation_moves_by_exact_vector() raises:
     assert_true(_close(pts_out[0], Float32(11.0)))
     assert_true(_close(pts_out[1], Float32(-4.0)))
     assert_true(_close(pts_out[2], Float32(3.0)))
-    t.free(); pts_in.free(); pts_out.free()
+    t.unsafe_free(); pts_in.unsafe_free(); pts_out.unsafe_free()
 
 def test_transform_points_scale_scales_coordinates_exactly() raises:
     var s = alloc[Float32](16); _scale(s, Float32(2.0), Float32(3.0), Float32(-1.0))
@@ -175,7 +175,7 @@ def test_transform_points_scale_scales_coordinates_exactly() raises:
     assert_true(_close(pts_out[4], Float32(-4.0)))
     assert_true(_close(pts_out[5], Float32(1.5)))
     assert_true(_close(pts_out[6], Float32(-4.0)))
-    s.free(); pts_in.free(); pts_out.free()
+    s.unsafe_free(); pts_in.unsafe_free(); pts_out.unsafe_free()
 
 # ── transform_normals ────────────────────────────────────────────────────────
 
@@ -190,7 +190,7 @@ def test_transform_normals_identity_leaves_normal_unchanged() raises:
     assert_true(_close(n_out[0], Float32(0.0)))
     assert_true(_close(n_out[1], Float32(1.0)))
     assert_true(_close(n_out[2], Float32(0.0)))
-    id.free(); n_in.free(); n_out.free()
+    id.unsafe_free(); n_in.unsafe_free(); n_out.unsafe_free()
 
 def test_transform_normals_uniform_scale_inverse_rescales_normal() raises:
     """Normals transform by (M^-1)^T. For a uniform scale S=diag(k,k,k), the
@@ -205,7 +205,7 @@ def test_transform_normals_uniform_scale_inverse_rescales_normal() raises:
     assert_true(_close(n_out[0], Float32(0.0)))
     assert_true(_close(n_out[1], Float32(0.0)))
     assert_true(_close(n_out[2], Float32(0.5)))
-    inv_s.free(); n_in.free(); n_out.free()
+    inv_s.unsafe_free(); n_in.unsafe_free(); n_out.unsafe_free()
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

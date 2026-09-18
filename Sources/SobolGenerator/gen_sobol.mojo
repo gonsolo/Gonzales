@@ -48,8 +48,8 @@ fn run(in_path: String, out_path: String) -> Int:
     var in_cstr = make_cstr(in_path)
     var rb_mode = make_cstr("rb")
     var fp_in = open_file(in_cstr, rb_mode)
-    in_cstr.free()
-    rb_mode.free()
+    in_cstr.unsafe_free()
+    rb_mode.unsafe_free()
     if not fp_in:
         print("Error: cannot open", in_path)
         return 1
@@ -117,33 +117,33 @@ fn run(in_path: String, out_path: String) -> Int:
             for jdx in range(1, s):
                 if (a >> (s - 1 - jdx)) & 1 == 1:
                     v[idx] = v[idx] ^ v[idx - jdx]
-        m.free()
+        m.unsafe_free()
 
         # store as matrix columns for this dimension
         var base = (dim + 1) * MATRIX_SIZE
         for idx in range(MATRIX_SIZE):
             matrices[base + idx] = v[idx + 1]
-        v.free()
+        v.unsafe_free()
         dim += 1
 
-    text.free()
+    text.unsafe_free()
 
     # ── write binary output (little-endian UInt32 values) ──
     var out_cstr = make_cstr(out_path)
     var wb_mode = make_cstr("wb")
     var fp_out = open_file(out_cstr, wb_mode)
-    out_cstr.free()
-    wb_mode.free()
+    out_cstr.unsafe_free()
+    wb_mode.unsafe_free()
     if not fp_out:
         print("Error: cannot open", out_path)
-        matrices.free()
+        matrices.unsafe_free()
         return 1
 
     var written = external_call["fwrite", Int,
         UnsafePointer[UInt32, MutAnyOrigin], Int, Int, UnsafePointer[UInt8, MutAnyOrigin]](
         matrices, 4, n_total, fp_out)
     _ = external_call["fclose", Int32, UnsafePointer[UInt8, MutAnyOrigin]](fp_out)
-    matrices.free()
+    matrices.unsafe_free()
 
     if written != n_total:
         print("Error: wrote", written, "of", n_total, "entries")

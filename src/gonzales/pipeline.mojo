@@ -243,7 +243,7 @@ def _generate_sobol_matrices(path: String) -> Optional[UnsafePointer[UInt32, Mut
 
         dim += 1
 
-    file_buf.free()
+    file_buf.unsafe_free()
 
     if dim < 2:
         print("Warning: Sobol file had fewer dimensions than expected")
@@ -388,7 +388,7 @@ def _build_mesh_light_info(
             if mi >= 0 and mi < n_meshes and seen[mi] == UInt8(0):
                 mat_idx[mi] = p.materialIndex
                 seen[mi] = UInt8(1)
-    seen.free()
+    seen.unsafe_free()
     return (mat_idx, al_idx)
 
 def debug_trace_pixel(
@@ -548,7 +548,7 @@ def debug_trace_pixel(
                 print("        REFLECT dir", rfx, rfy, rfz, "-> envmap uv", uv2[0], uv2[1], "rgb", rs)
             else:
                 print("        REFLECT dir", rfx, rfy, rfz, "-> hits mesh (occluded), matType", Int(psc[0].materials[Int(rint[0].primId.materialIndex)].type) if rint[0].hit != Int8(0) else -1)
-            rint.free()
+            rint.unsafe_free()
             # Follow transmit branch (what pbrt did) if possible, else reflect
             if tir:
                 var rl = dx*nx + dy*ny + dz*nz
@@ -590,7 +590,7 @@ def debug_trace_pixel(
                 var ptype5 = Int(rint5[0].primId.type)
                 var pmatidx5 = Int(rint5[0].primId.materialIndex)
                 print("        COAT REFLECT dir", rfx5, rfy5, rfz5, "-> hit primType", ptype5, "matType", Int(psc[0].materials[pmatidx5].type), "matIdx", pmatidx5, "t", rint5[0].tHit)
-            rint5.free()
+            rint5.unsafe_free()
             print("        STOP (coateddiffuse probe only, not following further)")
             break
         elif Int(mat.type) == 3:
@@ -615,7 +615,7 @@ def debug_trace_pixel(
                 var ptype3 = Int(rint3[0].primId.type)
                 var pmatidx3 = Int(rint3[0].primId.materialIndex)
                 print("        REFLECT dir", rfx3, rfy3, rfz3, "-> hit primType", ptype3, "matType", Int(psc[0].materials[pmatidx3].type), "matIdx", pmatidx3, "t", rint3[0].tHit)
-            rint3.free()
+            rint3.unsafe_free()
             print("        STOP (conductor probe only, not following further)")
             break
         elif Int(mat.type) == 1:
@@ -657,7 +657,7 @@ def debug_trace_pixel(
         else:
             print("        STOP (non-glass material)")
             break
-    inter.free()
+    inter.unsafe_free()
     mojo_parsed_free(psc)
 
 
@@ -714,7 +714,7 @@ def debug_render_vulkanrt(
     var scene = vulkanrt_build_scene(vmeshes, Int64(n_meshes), point_counts, vidx_counts)
     if Int(scene) == 0:
         print("vulkanrt_build_scene FAILED -- see stderr for diagnostics")
-        vmeshes.free(); point_counts.free(); vidx_counts.free()
+        vmeshes.unsafe_free(); point_counts.unsafe_free(); vidx_counts.unsafe_free()
         mojo_parsed_free(psc)
         return
 
@@ -758,10 +758,10 @@ def debug_render_vulkanrt(
                                   out_mesh, out_tri, out_hit)
     if Int(rc) == 0:
         print("vulkanrt_trace_rays FAILED -- see stderr for diagnostics")
-        out_t.free(); out_u.free(); out_v.free(); out_mesh.free(); out_tri.free(); out_hit.free()
-        rays.free()
+        out_t.unsafe_free(); out_u.unsafe_free(); out_v.unsafe_free(); out_mesh.unsafe_free(); out_tri.unsafe_free(); out_hit.unsafe_free()
+        rays.unsafe_free()
         vulkanrt_destroy_scene(scene)
-        vmeshes.free(); point_counts.free(); vidx_counts.free()
+        vmeshes.unsafe_free(); point_counts.unsafe_free(); vidx_counts.unsafe_free()
         mojo_parsed_free(psc)
         return
 
@@ -828,14 +828,14 @@ def debug_render_vulkanrt(
     out_cstr[out_path.byte_length()] = UInt8(0)
     _ = write_image(img, Int32(w), Int32(h), out_cstr, Int32(32), Int32(32))
     print("  wrote", out_path)
-    out_cstr.free()
+    out_cstr.unsafe_free()
 
-    inter.free()
-    img.free()
-    out_t.free(); out_u.free(); out_v.free(); out_mesh.free(); out_tri.free(); out_hit.free()
-    rays.free()
+    inter.unsafe_free()
+    img.unsafe_free()
+    out_t.unsafe_free(); out_u.unsafe_free(); out_v.unsafe_free(); out_mesh.unsafe_free(); out_tri.unsafe_free(); out_hit.unsafe_free()
+    rays.unsafe_free()
     vulkanrt_destroy_scene(scene)
-    vmeshes.free(); point_counts.free(); vidx_counts.free()
+    vmeshes.unsafe_free(); point_counts.unsafe_free(); vidx_counts.unsafe_free()
     mojo_parsed_free(psc)
 
 
@@ -963,7 +963,7 @@ def parse_and_render(
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
         var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
         if not _is_real_ptr(handle):
-            sd.free()
+            sd.unsafe_free()
             mojo_parsed_free(psc)
             return Int32(-1)
         var resolved = _resolve_sppm_params(psc, sd[0], sppm_photons, sppm_radius)
@@ -973,14 +973,14 @@ def parse_and_render(
             no_denoise, verbose,
         )
         gpu_free_scene(handle)
-        sd.free()
+        sd.unsafe_free()
         mojo_parsed_free(psc)
         return ret
     elif use_gpu and use_vcm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
         var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
         if not _is_real_ptr(handle):
-            sd.free()
+            sd.unsafe_free()
             mojo_parsed_free(psc)
             return Int32(-1)
         var n_photons = _resolve_vcm_photons(vcm_photons, n_pixels)
@@ -1047,7 +1047,7 @@ def parse_and_render(
                         no_curve_i32_vcm, no_curve_i32_vcm, no_curve_i32_vcm,
                         Int64(0), no_curve_data_vcm, no_curve_i32_vcm,
                         Int64(max_rays_vk_vcm))
-                    vmeshes_vcm.free(); point_counts_vcm.free(); vidx_counts_vcm.free()
+                    vmeshes_vcm.unsafe_free(); point_counts_vcm.unsafe_free(); vidx_counts_vcm.unsafe_free()
                     if Int(interop_scene_vcm) == 0:
                         print("WARNING: vulkaninterop_rt_create_scene FAILED -- falling back to CUDA intersection")
                         use_vk_vcm = False
@@ -1076,8 +1076,8 @@ def parse_and_render(
                                 dst2[i] = mesh_al_idx_vcm[i]
                         mesh_al_idx_buf_vcm = mai_buf_vcm^
 
-                        mesh_material_idx_vcm.free()
-                        mesh_al_idx_vcm.free()
+                        mesh_material_idx_vcm.unsafe_free()
+                        mesh_al_idx_vcm.unsafe_free()
 
             ret = vcm_render_gpu_wavefront(
                 handle, psc, sd[0], resolved_vcm_spp, n_photons, no_denoise, verbose,
@@ -1089,7 +1089,7 @@ def parse_and_render(
         else:
             ret = vcm_render_gpu(handle, psc, sd[0], resolved_vcm_spp, n_photons, no_denoise, verbose)
         gpu_free_scene(handle)
-        sd.free()
+        sd.unsafe_free()
         mojo_parsed_free(psc)
         return ret
     elif use_gpu:
@@ -1229,16 +1229,16 @@ def parse_and_render(
                 curve_leaf_curve_idx_vk, curve_leaf_piece_info_vk, curve_leaf_mat_idx_vk,
                 Int64(n_curves_vk), curve_data_vk, curve_n_pieces_vk,
                 max_rays_vk)
-            vmeshes.free(); point_counts.free(); vidx_counts.free()
-            template_mesh_start_vk.free(); template_mesh_end_vk.free()
-            instance_o2w_vk.free(); instance_tmpl_idx_vk.free()
-            curve_leaf_aabbs_vk.free()
-            curve_leaf_curve_idx_vk.free(); curve_leaf_piece_info_vk.free(); curve_leaf_mat_idx_vk.free()
-            curve_data_vk.free(); curve_n_pieces_vk.free()
+            vmeshes.unsafe_free(); point_counts.unsafe_free(); vidx_counts.unsafe_free()
+            template_mesh_start_vk.unsafe_free(); template_mesh_end_vk.unsafe_free()
+            instance_o2w_vk.unsafe_free(); instance_tmpl_idx_vk.unsafe_free()
+            curve_leaf_aabbs_vk.unsafe_free()
+            curve_leaf_curve_idx_vk.unsafe_free(); curve_leaf_piece_info_vk.unsafe_free(); curve_leaf_mat_idx_vk.unsafe_free()
+            curve_data_vk.unsafe_free(); curve_n_pieces_vk.unsafe_free()
             if Int(interop_scene) == 0:
                 print("WARNING: vulkaninterop_rt_create_scene FAILED -- falling back to CUDA intersection")
                 use_vk = False
-                instance_base_mesh_host.free()
+                instance_base_mesh_host.unsafe_free()
             else:
                 var raysPtr = vulkaninterop_rt_get_rays_ptr(interop_scene)
                 var resultsPtr = vulkaninterop_rt_get_results_ptr(interop_scene)
@@ -1264,8 +1264,8 @@ def parse_and_render(
                         dst2[i] = mesh_al_idx[i]
                 mesh_al_idx_buf_opt = mai_buf^
 
-                mesh_material_idx.free()
-                mesh_al_idx.free()
+                mesh_material_idx.unsafe_free()
+                mesh_al_idx.unsafe_free()
 
                 if n_instances_vk > 0:
                     var ibm_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_instances_vk * size_of[Int32]())
@@ -1274,7 +1274,7 @@ def parse_and_render(
                         for k in range(n_instances_vk):
                             dst3[k] = instance_base_mesh_host[k]
                     instance_base_mesh_buf_opt = ibm_buf^
-                instance_base_mesh_host.free()
+                instance_base_mesh_host.unsafe_free()
 
         var hash_bits = UInt64(mix_bits_u64(UInt64(0)))
         var seed_dim0 = UInt32(hash_bits & UInt64(0xFFFFFFFF))
@@ -1377,7 +1377,7 @@ def parse_and_render(
         _ = write_image_cropwindow(albedo_gpu.unsafe_ptr(), fw, fh,
                                  psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
                                  albedo_name_buf.unsafe_origin_cast[MutExternalOrigin](), Int32(32), Int32(32))
-        albedo_name_buf.free()
+        albedo_name_buf.unsafe_free()
         # denoised_gpu, albedo_gpu, and results freed automatically
         mojo_parsed_free(psc)
         return Int32(0)
@@ -1394,7 +1394,7 @@ def parse_and_render(
         var n_photons = _resolve_vcm_photons(vcm_photons, n_pixels)
         var resolved_vcm_spp = _resolve_vcm_spp(vcm_spp, psc[0].samples_per_pixel)
         var ret = vcm_render(psc, sd[0], resolved_vcm_spp, n_photons, no_denoise, verbose)
-        sd.free()
+        sd.unsafe_free()
         mojo_parsed_free(psc)
         return ret
     elif use_sppm:
@@ -1405,7 +1405,7 @@ def parse_and_render(
             Int(sppm_passes), Int(resolved[0]), resolved[1],
             no_denoise, verbose,
         )
-        sd.free()
+        sd.unsafe_free()
         mojo_parsed_free(psc)
         return ret
     else:
@@ -1514,7 +1514,7 @@ def parse_and_render(
             var total_g = Float64(perf_counter_ns() - t0_g) / 1.0e9
             print("Path guiding done in " + fmt_time(total_g) + "                ")
             guide_free(tree)
-            write_guides.free()
+            write_guides.unsafe_free()
         else:
             # ── Standard single-call rendering ───────────────────────────────
             var sp = TileSamplerParams_C(
@@ -1553,7 +1553,7 @@ def parse_and_render(
             psc[0].raster_to_camera, psc[0].camera_to_world,
             Int32(0), Int32(0), fw, fh, sd,
             normals.unsafe_ptr(), dept.unsafe_ptr())
-        sd.free()
+        sd.unsafe_free()
 
         # Normalize → beauty/albedo → denoise with normals+depth → write
         var beauty   = List[Float32](capacity=n_pixels * 3)
@@ -1583,7 +1583,7 @@ def parse_and_render(
         _ = write_image_cropwindow(albedo.unsafe_ptr(), fw, fh,
                                  psc[0].crop_x0, psc[0].crop_y0, psc[0].crop_x1, psc[0].crop_y1,
                                  albedo_name_buf.unsafe_origin_cast[MutExternalOrigin](), Int32(32), Int32(32))
-        albedo_name_buf.free()
+        albedo_name_buf.unsafe_free()
         # beauty, albedo, denoised, normals, dept freed automatically
     mojo_parsed_free(psc)
     return Int32(0)
@@ -1676,7 +1676,7 @@ def render_interactive(
         title_buf[i] = ts[i]
     title_buf[title_len] = UInt8(0)
     var v = viewer_create(fw, fh, title_buf, Int32(1) if fullscreen else Int32(0))
-    title_buf.free()
+    title_buf.unsafe_free()
     if Int(v) == 0:
         print("Failed to create viewer window")
         if use_gpu:
@@ -2105,18 +2105,18 @@ def render_interactive(
         gpu_free_scene(handle)
     else:
         # accum, albedo_acc, sd freed automatically (accum/albedo_acc are List)
-        sd.free()
+        sd.unsafe_free()
         if use_restir:
-            restir_buf_a.free()
-            restir_buf_b.free()
+            restir_buf_a.unsafe_free()
+            restir_buf_b.unsafe_free()
             if use_restir_gi:
-                gi_buf_a.free()
-                gi_buf_b.free()
+                gi_buf_a.unsafe_free()
+                gi_buf_b.unsafe_free()
         if use_sms_restir:
-            sms_buf_a.free()
-            sms_buf_b.free()
+            sms_buf_a.unsafe_free()
+            sms_buf_b.unsafe_free()
         if use_vol_restir_reuse:
-            vol_buf_a.free()
-            vol_buf_b.free()
+            vol_buf_a.unsafe_free()
+            vol_buf_b.unsafe_free()
     mojo_parsed_free(psc)
     viewer_destroy(v)

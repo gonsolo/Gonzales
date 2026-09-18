@@ -87,12 +87,12 @@ def _build_scene() -> SceneDescriptor2_C:
     var bvh_nodes = alloc[BVH2Node](max_nodes)
     var order = alloc[Int32](n_tris)
     _ = build_bvh2(bounds, Int32(n_tris), bvh_nodes, order)
-    bounds.free()
+    bounds.unsafe_free()
     var prim_ids = alloc[PrimId_C](n_tris)
     for k in range(n_tris):
         var orig = Int(order[k])
         prim_ids[k] = PrimId_C(Int64(0), Int64(orig * 3), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    order.free()
+    order.unsafe_free()
 
     var materials = alloc[Material_C](1)
     materials[0] = Material_C(
@@ -181,7 +181,7 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
         scratch_new[0].hit = Int8(0)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch_new)
         var inter = scratch_new[0]
-        scratch_new.free()
+        scratch_new.unsafe_free()
 
         var cont = _bdpt_light_path_bounce[False](
             sd, pcg_bounce, False, inter, lvc_new, 0, Float32(0), Float32(0),
@@ -198,9 +198,9 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
     for i in range(n):
         assert_true(_vertex_close(lvc_old[i], lvc_new[i]))
 
-    scratch_old.free(); lvc_old.free(); lvc_path_len_old.free()
-    lvc_new.free(); lvc_path_len_new.free()
-    sd.bvh2Nodes.free(); sd.primIds.free(); sd.meshes.free(); sd.materials.free(); sd.areaLights.free()
+    scratch_old.unsafe_free(); lvc_old.unsafe_free(); lvc_path_len_old.unsafe_free()
+    lvc_new.unsafe_free(); lvc_path_len_new.unsafe_free()
+    sd.bvh2Nodes.unsafe_free(); sd.primIds.unsafe_free(); sd.meshes.unsafe_free(); sd.materials.unsafe_free(); sd.areaLights.unsafe_free()
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

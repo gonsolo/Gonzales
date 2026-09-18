@@ -68,10 +68,10 @@ def load_measured_bsdf_reflectance(path: String) -> Tuple[Bool, Float32]:
     # checked separately since _mbsdf_field_eq's comparison loop stops at its
     # own literal's null terminator and can't see past it.
     if not _mbsdf_field_eq(file_buf, 0, 11, "tensor_file") or file_buf[11] != UInt8(0):
-        file_buf.free()
+        file_buf.unsafe_free()
         return (False, Float32(0.0))
     if file_buf[12] != UInt8(1):  # version major must be 1
-        file_buf.free()
+        file_buf.unsafe_free()
         return (False, Float32(0.0))
 
     var n_fields = _mbsdf_u32(file_buf, 14)
@@ -102,16 +102,16 @@ def load_measured_bsdf_reflectance(path: String) -> Tuple[Bool, Float32]:
             break
 
     if found_offset < 0 or found_dtype != MEASURED_BSDF_DTYPE_FLOAT32 or found_count <= 0:
-        file_buf.free()
+        file_buf.unsafe_free()
         return (False, Float32(0.0))
     if found_offset + found_count * 4 > file_size:
-        file_buf.free()
+        file_buf.unsafe_free()
         return (False, Float32(0.0))
 
     var total = Float32(0.0)
     for i in range(found_count):
         total += _mbsdf_f32(file_buf, found_offset + i * 4)
-    file_buf.free()
+    file_buf.unsafe_free()
     return (True, total / Float32(found_count))
 
 # ── Full tensor-file field-table parse ───────────────────────────────────────
@@ -341,10 +341,10 @@ def load_measured_brdf_full(path: String) -> Tuple[Bool, MeasuredBRDF_C]:
         return _fail()
 
     if not _mbsdf_field_eq(file_buf, 0, 11, "tensor_file") or file_buf[11] != UInt8(0):
-        file_buf.free()
+        file_buf.unsafe_free()
         return _fail()
     if file_buf[12] != UInt8(1):
-        file_buf.free()
+        file_buf.unsafe_free()
         return _fail()
 
     var fields = _mbsdf_scan_fields(file_buf, file_size)
@@ -363,7 +363,7 @@ def load_measured_brdf_full(path: String) -> Tuple[Bool, MeasuredBRDF_C]:
         fields.jacobian.found and len(fields.jacobian.shape) == 1 and fields.jacobian.shape[0] == 1 and fields.jacobian.dtype == MEASURED_BSDF_DTYPE_UINT8
     )
     if not ok:
-        file_buf.free()
+        file_buf.unsafe_free()
         return _fail()
 
     var n_phi_i = fields.phi_i.shape[0]
@@ -381,12 +381,12 @@ def load_measured_brdf_full(path: String) -> Tuple[Bool, MeasuredBRDF_C]:
         fields.luminance.shape[3] == fields.spectra.shape[4]
     )
     if not ok:
-        file_buf.free()
+        file_buf.unsafe_free()
         return _fail()
 
     if n_phi_i > 2:
         # Anisotropic .bsdf file -- not supported yet (see docstring).
-        file_buf.free()
+        file_buf.unsafe_free()
         return _fail()
 
     var theta_i = _mbsdf_copy_f32(file_buf, fields.theta_i.offset, n_theta_i)
@@ -398,12 +398,12 @@ def load_measured_brdf_full(path: String) -> Tuple[Bool, MeasuredBRDF_C]:
     var ndf_xs = fields.ndf.shape[1]; var ndf_ys = fields.ndf.shape[0]
     var ndf_raw = _mbsdf_copy_f32(file_buf, fields.ndf.offset, ndf_xs * ndf_ys)
     var ndf_data = _pl2d_build_scaled_verbatim(ndf_raw, ndf_xs, ndf_ys, 1)
-    ndf_raw.free()
+    ndf_raw.unsafe_free()
 
     var sigma_xs = fields.sigma.shape[1]; var sigma_ys = fields.sigma.shape[0]
     var sigma_raw = _mbsdf_copy_f32(file_buf, fields.sigma.offset, sigma_xs * sigma_ys)
     var sigma_data = _pl2d_build_scaled_verbatim(sigma_raw, sigma_xs, sigma_ys, 1)
-    sigma_raw.free()
+    sigma_raw.unsafe_free()
 
     # vndf / luminance: PiecewiseLinear2D<2>, param axes (phi_i, theta_i).
     # xSize=shape[3], ySize=shape[2] (bxdfs.cpp:957-966).
@@ -413,12 +413,12 @@ def load_measured_brdf_full(path: String) -> Tuple[Bool, MeasuredBRDF_C]:
     var vndf_xs = fields.vndf.shape[3]; var vndf_ys = fields.vndf.shape[2]
     var vndf_raw = _mbsdf_copy_f32(file_buf, fields.vndf.offset, slices2 * vndf_xs * vndf_ys)
     var (vndf_data, vndf_marg, vndf_cond) = _pl2d_build_cdf(vndf_raw, vndf_xs, vndf_ys, slices2)
-    vndf_raw.free()
+    vndf_raw.unsafe_free()
 
     var lum_xs = fields.luminance.shape[3]; var lum_ys = fields.luminance.shape[2]
     var lum_raw = _mbsdf_copy_f32(file_buf, fields.luminance.offset, slices2 * lum_xs * lum_ys)
     var (lum_data, lum_marg, lum_cond) = _pl2d_build_cdf(lum_raw, lum_xs, lum_ys, slices2)
-    lum_raw.free()
+    lum_raw.unsafe_free()
 
     # spectra: PiecewiseLinear2D<3>, param axes (phi_i, theta_i, wavelengths).
     # xSize=shape[4], ySize=shape[3] (bxdfs.cpp:975-980).
@@ -428,9 +428,9 @@ def load_measured_brdf_full(path: String) -> Tuple[Bool, MeasuredBRDF_C]:
     var spectra_xs = fields.spectra.shape[4]; var spectra_ys = fields.spectra.shape[3]
     var spectra_raw = _mbsdf_copy_f32(file_buf, fields.spectra.offset, slices3 * spectra_xs * spectra_ys)
     var spectra_data = _pl2d_build_scaled_verbatim(spectra_raw, spectra_xs, spectra_ys, slices3)
-    spectra_raw.free()
+    spectra_raw.unsafe_free()
 
-    file_buf.free()
+    file_buf.unsafe_free()
 
     var mb = MeasuredBRDF_C(
         Int32(1), Int32(n_theta_i), Int32(n_phi_i), Int32(n_wavelengths),

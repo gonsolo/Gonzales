@@ -258,8 +258,8 @@ def main() raises:
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
         if rc != Int32(0):
-            path_cstr.free()
-            sobol.free()
+            path_cstr.unsafe_free()
+            sobol.unsafe_free()
             exit(Int(rc))
 
     # Keep the owning SpectralContext alive until every render path above
@@ -278,5 +278,5 @@ def main() raises:
     # Same pattern, in the tests, was fixed in 06a08d1f.
     _ = spectral_ctx^
 
-    path_cstr.free()
-    sobol.free()
+    path_cstr.unsafe_free()
+    sobol.unsafe_free()

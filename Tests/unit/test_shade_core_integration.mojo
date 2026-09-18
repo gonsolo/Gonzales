@@ -71,7 +71,7 @@ def disabled_test_shade_core_area_light_hit_adds_emission() raises:
     assert_true(_close(paths[0].estimate.v1, Float32(1.5)))
     assert_true(_close(paths[0].estimate.v2, Float32(2.0)))
     assert_true(Int(paths[0].active) == 0)
-    paths.free(); intersections.free()
+    paths.unsafe_free(); intersections.unsafe_free()
 
 def test_shade_core_miss_deactivates_path() raises:
     """A ray that misses the fixture's triangle entirely — shade_core must
@@ -92,7 +92,7 @@ def test_shade_core_miss_deactivates_path() raises:
 
     assert_true(Int(paths[0].active) == 0)
     assert_true(_close(paths[0].estimate.v0, Float32(0.0)))
-    paths.free(); intersections.free()
+    paths.unsafe_free(); intersections.unsafe_free()
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()
