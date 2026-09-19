@@ -1338,6 +1338,29 @@ def _bdpt_build_merge_grid(
         _bdpt_insert_merge_vertex[True](k, lvc, lvc_path_len, merge_next, heads, inv_cell)
     parallelize[insert_one](n_light_paths * _BDPT_MAX_VERTS)
 
+comptime _VCM_RADIUS_FRACTION = Float32(0.03)   # initial radius as a fraction of the scene bounding sphere
+comptime _VCM_RADIUS_ALPHA = Float32(2.0) / Float32(3.0)  # Georgiev 2012's typical choice
+
+@always_inline
+def vcm_merge_radius(scene_radius: Float32, si: Int) -> Float32:
+    """The progressive VCM merge radius for sample `si` (0-based).
+
+        r_i = 0.03 * scene_radius / (i+1)^(0.5*(1-alpha))
+
+    Hachisuka & Jensen 2008 via Georgiev et al. 2012 Eq. 11: ONE global
+    radius shared by every pixel this sample, shrinking monotonically --
+    distinct from sppm.mojo's per-pixel Knaus-Zwicker scheme.
+
+    Shared because this was written out THREE times (the CPU driver and
+    two GPU drivers) with the fraction and the exponent hand-copied into
+    each. That is not hypothetical drift: an experiment that changed only
+    the CPU copy produced a perfect no-op and nearly sent the 2026-09-18
+    merge-leak investigation down the wrong path, because the --gpu render
+    under test was reading a different constant entirely."""
+    return (scene_radius * _VCM_RADIUS_FRACTION
+            / pow(Float32(si + 1), Float32(0.5) * (Float32(1) - _VCM_RADIUS_ALPHA)))
+
+
 @always_inline
 def _bdpt_merge_from_cache(
     cv: BDPTVertex,
@@ -4450,8 +4473,6 @@ def _bdpt_render_core(
     # each `si` below from `merge_radius_1`, the same initial 3%-of-scene-
     # diameter value Stage 1 used as its (then-fixed) radius.
     var (_scene_center, scene_radius) = _scene_bounding_sphere(sd)
-    var merge_radius_1 = scene_radius * Float32(0.03)
-    comptime _VCM_RADIUS_ALPHA = Float32(2.0) / Float32(3.0)  # Georgiev 2012's typical choice
     var merge_heads = unsafe_alloc[Int32](_HSIZE)
     var merge_next = unsafe_alloc[Int32](max(lvc_cap, 1))
     # t=1 splat records: one slot per potential light vertex.
@@ -4465,7 +4486,7 @@ def _bdpt_render_core(
         # single GLOBAL radius shared by every pixel this sample, shrinking
         # monotonically across samples -- distinct from sppm.mojo's
         # per-pixel Knaus-Zwicker scheme (see this file's opening comment).
-        var radius_i = merge_radius_1 / pow(Float32(si + 1), Float32(0.5) * (Float32(1) - _VCM_RADIUS_ALPHA))
+        var radius_i = vcm_merge_radius(scene_radius, si)
         var merge_r2 = radius_i * radius_i
         var merge_inv_cell = Float32(1.0) / max(radius_i, Float32(1e-6))
         var merge_norm = Float32(1.0) / (Float32(n_light_paths_merge) * PI * max(merge_r2, Float32(1e-12)))
@@ -5834,8 +5855,6 @@ def vcm_render_gpu(
             var grid_hsize = ceildiv(_HSIZE, block_size)
 
             var (_scene_center, scene_radius) = _scene_bounding_sphere(sd)
-            var merge_radius_1 = scene_radius * Float32(0.03)
-            comptime _VCM_RADIUS_ALPHA = Float32(2.0) / Float32(3.0)
             var px_scale = Float32(2.0) * tan(psc[unsafe_offset=0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(fh)
             var n_light_paths_f = Float32(n_light_paths_merge)
 
@@ -5844,7 +5863,7 @@ def vcm_render_gpu(
             for si in range(n_spp):
                 # Stage 2c progressive radius -- see vcm_render (CPU)'s
                 # matching per-sample loop for the full derivation comment.
-                var radius_i = merge_radius_1 / pow(Float32(si + 1), Float32(0.5) * (Float32(1) - _VCM_RADIUS_ALPHA))
+                var radius_i = vcm_merge_radius(scene_radius, si)
                 var merge_r2 = radius_i * radius_i
                 var merge_inv_cell = Float32(1.0) / max(radius_i, Float32(1e-6))
                 var merge_norm = Float32(1.0) / (Float32(n_light_paths_merge) * PI * max(merge_r2, Float32(1e-12)))
@@ -6409,8 +6428,6 @@ def vcm_render_gpu_wavefront(
             var grid_hsize = ceildiv(_HSIZE, block_size)
 
             var (_scene_center, scene_radius) = _scene_bounding_sphere(sd)
-            var merge_radius_1 = scene_radius * Float32(0.03)
-            comptime _VCM_RADIUS_ALPHA = Float32(2.0) / Float32(3.0)
             var px_scale = Float32(2.0) * tan(psc[unsafe_offset=0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(fh)
             var n_light_paths_f = Float32(n_light_paths_merge)
 
@@ -6419,7 +6436,7 @@ def vcm_render_gpu_wavefront(
             for si in range(n_spp):
                 # Stage 2c progressive radius -- see vcm_render (CPU)'s
                 # matching per-sample loop for the full derivation comment.
-                var radius_i = merge_radius_1 / pow(Float32(si + 1), Float32(0.5) * (Float32(1) - _VCM_RADIUS_ALPHA))
+                var radius_i = vcm_merge_radius(scene_radius, si)
                 var merge_r2 = radius_i * radius_i
                 var merge_inv_cell = Float32(1.0) / max(radius_i, Float32(1e-6))
                 var merge_norm = Float32(1.0) / (Float32(n_light_paths_merge) * PI * max(merge_r2, Float32(1e-12)))
