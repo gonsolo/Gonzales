@@ -6,13 +6,14 @@ MERGE. The merge half was added 2026-09-20 to settle the volume carry
 magnitudes by derivation rather than by tuning a render; the connection half
 predates it and still passes to 4e-16.
 
-STATUS: connections exact (4.4e-16) with merging present. Volume merges are
-exact when the merge vertex's neighbours are also volume (SVVVS: 6e-05), and
-WRONG by ~16x when a volume merge vertex is adjacent to a SURFACE (SSVVSS).
-So dVM's free-flight handling across a KIND-CHANGING edge is the remaining
-error -- the same edge-crossing the dVC comment below describes, where the
-exponentials cancel and only sigma_t survives. dVC gets it right; dVM does
-not. That is the next thing to derive.
+STATUS: connections AND merges both exact (worst 4.4e-16), including every
+mixed surface/volume path.
+
+The result that got merging exact: with a per-vertex kernel measure, dVM
+must NOT be accumulated independently -- it is dVC divided by eta at the
+MERGE vertex. See recursion_merge_weight. The accumulated form is off by up
+to 16x on mixed paths and is exactly right on uniform ones, which is why a
+constant-eta renderer never notices.
 
 Two things this harness established that are easy to get wrong, both of
 which were errors in its own first draft:
@@ -333,8 +334,8 @@ def recursion_merge_weight(xs, k, sigma_t, p_light_area, p_cam_area):
         w        = 1 / (w_light + 1 + w_camera)
     """
     n = len(xs) - 1
-    lv_dVCM, _lc, lv_dVM = light_carries(xs, sigma_t, p_light_area, k)
-    cv_dVCM, _cc, cv_dVM = camera_carries(xs, sigma_t, p_cam_area, k)
+    lv_dVCM, lv_dVC, _lvm = light_carries(xs, sigma_t, p_light_area, k)
+    cv_dVCM, cv_dVC, _cvm = camera_carries(xs, sigma_t, p_cam_area, k)
     eta = eta_vcm(xs[k])
 
     # Direction the camera subpath would scatter into to continue toward the
@@ -344,8 +345,17 @@ def recursion_merge_weight(xs, k, sigma_t, p_light_area, p_cam_area):
     pdf_fwd = p_dir(xs[k], w_to_light)
     pdf_rev = p_dir(xs[k], w_to_cam)
 
-    w_light = lv_dVCM / eta + lv_dVM * pdf_fwd
-    w_camera = cv_dVCM / eta + cv_dVM * pdf_rev
+    # dVM is NOT an independent accumulator once eta varies per vertex.
+    # With a CONSTANT eta the two recursions satisfy dVM == dVC/eta
+    # identically (substitute and compare), which is why standard VCM can
+    # carry dVM separately. When the kernel measure differs per vertex --
+    # a DISK on a surface, a BALL in a medium -- accumulating dVM inline
+    # bakes each vertex's own eta in at the wrong point. Taking dVC and
+    # dividing by eta at the MERGE vertex evaluates the kernel measure
+    # where it actually belongs, and is exact (3.8e-16) on every mixed
+    # surface/volume path here, where the accumulated form is off by 16x.
+    w_light = (lv_dVCM + lv_dVC * pdf_fwd) / eta
+    w_camera = (cv_dVCM + cv_dVC * pdf_rev) / eta
     return 1.0 / (w_light + 1.0 + w_camera)
 
 
@@ -410,8 +420,8 @@ def main():
         worst_conn = max(worst_conn, wc)
         worst_merge = max(worst_merge, wm)
     print(f"\nworst CONNECTION error: {worst_conn:.3e}   <- the verified half")
-    print(f"worst MERGE error:      {worst_merge:.3e}   <- dVM, still wrong across")
-    print( "                                         kind-changing edges (see SSVVSS)")
+    print(f"worst MERGE error:      {worst_merge:.3e}   <- needs dVC/eta_k, NOT an")
+    print( "                                         independently accumulated dVM")
     print(f"worst overall:          {worst_all:.3e}")
 
     print("\n=== anti-vacuity: corrupt the volume Jacobian (add a bogus cosine) ===")
