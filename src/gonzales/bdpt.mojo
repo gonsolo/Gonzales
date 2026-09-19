@@ -1411,7 +1411,14 @@ def _bdpt_merge_from_cache(
                     if lv.is_delta == Int32(0) and lv.is_surface == Int32(1) and lv.is_light == Int32(0) and lv.mat_kind != LobeKind.bssrdf:
                         var e = lv.pos - cv.pos
                         var dist2 = e.length_sq()
-                        if dist2 <= r2:
+                        # Surface-compatibility guard: a distance-only gather
+                        # counts a photon lying on a DIFFERENT surface (the
+                        # adjacent wall, the far side of a thin panel) as if
+                        # it were on this one. The leak grows with the gather
+                        # radius, which here is 3% of the scene bounding
+                        # sphere -- large in a room-sized scene.
+                        var _ncmp = dot(cv.normal.to_simd(), lv.normal.to_simd())
+                        if dist2 <= r2 and _ncmp > Float32(0.7):
                             var f_cv = _eval_vertex_spectral(cv, lv.wo.to_simd(), sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, cv.wavelengths)
                             var w = Float32(1)
                             if _bdpt_vertex_mis_scoped(cv) and _bdpt_vertex_mis_scoped(lv):
