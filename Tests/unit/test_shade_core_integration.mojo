@@ -23,6 +23,7 @@ def _dummy_path(ray: Ray_C, throughput: SpectralSample) -> PathState_C:
         Float32(0.0), Int32(-1), Float32(1.0), Float32(1.0), Float32(1.0), Int32(0), UInt64(0),
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
         Float32(0.0),   # mis_null_dist
+        Float32(0.0),   # lastEnvNeePdf
     )
 
 # ── shade_core, exercised against a REAL BVH hit (via _scene_fixture) ───────

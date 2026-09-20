@@ -705,8 +705,30 @@ struct PathState_C(TrivialRegisterPassable):
     # real distance. A null interface never bends the ray, so accumulating
     # scalar distance is exact, however many boundaries are crossed.
     var mis_null_dist: Float32
+    # Solid-angle pdf that THIS path's last scattering material would have
+    # assigned, via its own env-light NEE sampler, to the direction it
+    # actually scattered into -- the MIS partner for an escape that leaves
+    # the scene and hits an untextured infinite light.
+    #
+    # It has to be carried rather than recomputed at the escape, because
+    # there are TWO env NEE samplers and the miss handler cannot tell which
+    # one ran: `diffuse` samples the env cosine-weighted (_nee_infinite_light,
+    # a deliberate diffuse-only optimization), every other material samples it
+    # uniformly over the sphere (_sample_infinite_light_nee, pdf INV_FOUR_PI).
+    # The miss handler used to hardcode the cosine case as `pdf_light =
+    # pdf_bsdf`, which is exact for diffuse -- cosine NEE and cosine BSDF
+    # sampling really do share a pdf -- and wrong for everyone else, forcing
+    # the power heuristic to a flat 0.5 on every escape while their NEE
+    # partner kept using the true INV_FOUR_PI. The two strategies then no
+    # longer partitioned unity. A near-mirror conductor has ~no response
+    # toward a uniform-sphere direction, so its NEE contributed nothing and
+    # the escape alone carried 0.5: the furnace test read 0.5023 where energy
+    # conservation demands 1.0, and diffusetransmission read 0.6766.
+    # Textured envs are unaffected -- the miss handler overrides this from
+    # the CDF, which is the pdf both samplers share once one exists.
+    var lastEnvNeePdf: Float32
 # <</listing>>
-# PathState_C layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+4+4+4+4+8+20+4 = 140 bytes (was 136 -- +4 for previous_dielectric_ior);
+# PathState_C layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+4+4+4+4+8+20+4+4 = 144 bytes (was 140 -- +4 for lastEnvNeePdf);
 # size is computed via size_of[PathState_C]() everywhere (GPU buffer sizing included), not hardcoded.
 
 # ── Lights ────────────────────────────────────────────────────────────────────

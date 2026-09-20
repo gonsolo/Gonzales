@@ -179,6 +179,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     Int32(3), sobol_idx,
                     wavelengths,
                     Float32(0.0),   # mis_null_dist
+                    INV_FOUR_PI,    # lastEnvNeePdf (see PathState_C)
                 )
                 pixel_idx_buf[unsafe_offset=idx] = this_pixel_idx
                 idx += 1

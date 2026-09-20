@@ -64,6 +64,16 @@ for _m in ("diffuse", "dielectric", "thindielectric", "coateddiffuse",
 # compensation term exists. The SHAPE of the curve is the diagnostic -- a
 # monotone falloff growing with alpha is GGX behaving as theory predicts;
 # anything else is ours.
+#
+# That diagnostic earned its keep. The curve first read 0.50 at alpha=0.002
+# and then rose to 0.62 before falling -- a step at the delta/rough threshold
+# plus a non-monotonicity, so: ours. It was an MIS bug, not the microfacet
+# model (PathState_C.lastEnvNeePdf), and it had been costing a near-mirror
+# conductor exactly half its energy. Post-fix the sweep is monotone
+# (0.987 / 0.944 / 0.794 / 0.542 / 0.327 over alpha 0.1..1.0), which is the
+# shape theory predicts -- so what is left here is now genuinely the model,
+# and Kulla-Conty compensation is the right next step rather than a way to
+# paper over a 2x defect.
 for _a in ("00", "01", "02", "04", "07", "10"):
     CASES["furnace-conductor-a" + _a] = dict(
         scene="Scenes/furnace/conductor-a%s.pbrt" % _a, expect=1.0, res="64x64",

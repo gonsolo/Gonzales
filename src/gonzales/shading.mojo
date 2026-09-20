@@ -4397,6 +4397,12 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].albedo = alb
     # Store mixture PDF for next-bounce MIS (area light hit, env light miss)
     path_ptr[].lastBsdfPdf = pdf_mix
+    # `diffuse` is the ONE material whose env NEE samples cosine-weighted
+    # (_nee_infinite_light's no-CDF fallback, a deliberate diffuse-only
+    # optimization), so its MIS partner for an escape is cos(theta)/pi --
+    # NOT pdf_mix, which also carries the guide lobe, and not the
+    # INV_FOUR_PI the dispatch defaulted it to for every other material.
+    path_ptr[].lastEnvNeePdf = cos_theta * INV_PI
     path_ptr[].specularBounce = Int8(0)
     # Weight = f·cosθ / pdf_mix = (alb/π)·cosθ / pdf_mix.
     # MIS balance heuristic is unbiased — no cap needed here.
@@ -4467,6 +4473,15 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     # cannot be forgotten when a new material is added.
     if mat.type != MatKind.interface:
         path_ptr[].mis_null_dist = Float32(0.0)
+        # Same reasoning, same one place: default the escape's env-NEE MIS
+        # partner to the material-agnostic sampler (_sample_infinite_light_nee,
+        # uniform sphere) that every material but `diffuse` uses, and let
+        # shade_diffuse override it once it knows its scattered direction.
+        # Defaulting HERE rather than at each scatter site means a material
+        # added later inherits the right pdf instead of silently keeping the
+        # previous bounce's -- and means forgetting it cannot reproduce the
+        # flat-0.5 escape weight documented on PathState_C.lastEnvNeePdf.
+        path_ptr[].lastEnvNeePdf = INV_FOUR_PI
     if mat.type == MatKind.diffuse:
         shade_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat, guide_write, restir_io, pixel_idx, sms_io)
     # Delta BSDFs (dielectric variants) need only triangle geometry — no NEE,
@@ -4595,10 +4610,14 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             # test, which this file already documents.
             if path_ptr[].specularBounce == Int8(0) and path_ptr[].lastBsdfPdf > Float32(0.0):
                 var pdf_bsdf = path_ptr[].lastBsdfPdf
-                # Uniform env: NEE cosine-hemisphere samples it, so the light pdf
-                # for this (cosine-sampled) direction equals pdf_bsdf -> MIS 0.5.
-                # (Was INV_FOUR_PI, inconsistent with the NEE sampler.)
-                var pdf_light = pdf_bsdf
+                # Untextured env: the MIS partner is whatever pdf the last
+                # scattering material's OWN env NEE sampler assigns to this
+                # direction, carried on the path because there are two such
+                # samplers and this handler cannot tell which one ran. See
+                # PathState_C.lastEnvNeePdf for the full story -- hardcoding
+                # `pdf_bsdf` here (exact for diffuse, wrong for everyone
+                # else) pinned every other material's escape at MIS 0.5.
+                var pdf_light = path_ptr[].lastEnvNeePdf
                 # Use CDF-based pdf when available (env-map importance sampling)
                 if ilight.cdf_w > Int32(0) and ilight.cdf_h > Int32(0):
                         var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)

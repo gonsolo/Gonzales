@@ -3258,6 +3258,7 @@ def gen_primary_rays_wavefront_gpu(
         Int32(3), sobol_idx,
         wavelengths,
         Float32(0.0),   # mis_null_dist
+        INV_FOUR_PI,    # lastEnvNeePdf (gated by lastBsdfPdf > 0; set at each scatter)
     )
 
 
@@ -3667,6 +3668,7 @@ def gen_primary_rays_gpu(
         Int32(3), sobol_idx,
         wavelengths,
         Float32(0.0),   # mis_null_dist
+        INV_FOUR_PI,    # lastEnvNeePdf (gated by lastBsdfPdf > 0; set at each scatter)
     )
 
 

@@ -241,6 +241,7 @@ def _make_path(org: Vec3f, dir: Vec3f) -> PathState_C:
         Float32(0.0), Int32(-1), Float32(1.0), Float32(1.0), Float32(1.0), Int32(0), UInt64(0),
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
         Float32(0.0),   # mis_null_dist
+        Float32(0.0),   # lastEnvNeePdf
     )
 
 def _run_two_bounce(gi_active: Bool) -> SpectralSample:
