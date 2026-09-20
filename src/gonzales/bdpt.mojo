@@ -17,6 +17,7 @@ from .geometry import (
     Sphere_C, Curve_C, PrimId_C, Instance_C, DistantLight_C, InfiniteLight_C, PointLight_C,
     MeasuredBRDF_C, GpuTexture_C,
     dot, cross, fr_dielectric, sphere_outward_normal, refract, PI, INV_FOUR_PI, INV_PI,
+    cos_theta_t_dielectric, coat_beer_lambert_tr, DEFAULT_COAT_THICKNESS,
     FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, SSS_WALK_ROUNDS,
     Grid_C, NvdbGrid_C,
     spectral_free_flight_weight,
@@ -2329,6 +2330,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     v.beta = beta
                     v.alb = eff_alb
                     v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.coated_walk
+                    v.mat_idx = Int32(mat_idx)   # the coat evaluator reads ior from it
+                    v.pdf_bwd = coat_alpha       # smooth-vs-rough, as ggx stores alpha
                     v.wo = vec3f(wo)
                     v.pdf_fwd = Float32(1)
                     v.med_idx = cur_med_idx
@@ -2433,6 +2436,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             v.beta = beta
             v.alb = eff_alb
             v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.coated_walk
+            v.mat_idx = Int32(mat_idx)   # the coat evaluator reads ior from it
+            v.pdf_bwd = coat_alpha       # smooth-vs-rough, as ggx stores alpha
             v.wo = vec3f(wo)
             v.pdf_fwd = Float32(1)
             v.med_idx = cur_med_idx
@@ -3404,6 +3409,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     v.beta = flux
                     v.alb = eff_alb
                     v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.coated_walk
+                    v.mat_idx = Int32(mat_idx)   # the coat evaluator reads ior from it
+                    v.pdf_bwd = coat_alpha       # smooth-vs-rough, as ggx stores alpha
                     v.wo = vec3f(wo)
                     v.pdf_fwd = Float32(1)
                     v.med_idx = cur_med_idx
@@ -3450,6 +3457,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             v.beta = flux
             v.alb = eff_alb
             v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.coated_walk
+            v.mat_idx = Int32(mat_idx)   # the coat evaluator reads ior from it
+            v.pdf_bwd = coat_alpha       # smooth-vs-rough, as ggx stores alpha
             v.wo = vec3f(wo)
             v.pdf_fwd = Float32(1)
             v.med_idx = cur_med_idx
@@ -4032,6 +4041,35 @@ def _eval_vertex_spectral(
         var alb_spec = rgb_bands_to_spectral_sample(v.alb.r, v.alb.g, v.alb.b, wavelengths)
         return alb_spec * INV_FOUR_PI
     var vn = v.normal.to_simd()
+    if v.mat_kind == LobeKind.coated_walk:
+        # The coat-walk EXIT lobe. mat_kind 4 had NO branch here at all, so it
+        # fell through to the plain Lambertian one below: every merge, connect
+        # and t=1 splat against a coateddiffuse vertex evaluated it as if the
+        # coat were not there, dropping the entry Fresnel, the coat's
+        # Beer-Lambert attenuation and the 1/eta^2 radiance compression.
+        #
+        # Same factorization _nee_weight_coated_diffuse_base uses on the NEE
+        # side, and it has to STAY the same, which is why this reads the
+        # material instead of re-deriving constants:
+        #
+        #     f*cos = alb/pi * cos * (1 - F(cos)) * Tr(cos_internal) / eta^2
+        #
+        # The view-side transmittance is deliberately absent: it is implicit
+        # in the walk having reached the base at all, the entry coin flip
+        # being its estimator. Applying it again is the double count written
+        # up in project_coateddiffuse_eta2_bug.
+        var mat_cw = sd.materials[unsafe_offset=Int(v.mat_idx)]
+        var ior_cw = mat_cw.emission.r
+        var cos_cw = dot(dir_to_other, vn)
+        var cos_wo_cw = dot(v.wo.to_simd(), vn)
+        if cos_cw <= Float32(0) or cos_wo_cw <= Float32(0):
+            return SpectralSample(Float32(0))
+        var t_l_cw = Float32(1.0) - fr_dielectric(cos_cw, ior_cw)
+        var tr_l_cw = coat_beer_lambert_tr(
+            cos_theta_t_dielectric(cos_cw, ior_cw), DEFAULT_COAT_THICKNESS)
+        var t_both_cw = t_l_cw * tr_l_cw / max(ior_cw * ior_cw, Float32(1e-6))
+        var alb_cw = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, v.alb.r, v.alb.g, v.alb.b, wavelengths)
+        return alb_cw * (INV_PI * cos_cw * t_both_cw)
     if v.mat_kind == LobeKind.bssrdf:
         # BSSRDF exit lobe Ft(cos)/pi (eta in pdf_bwd). Spectrally flat: the
         # material's colour already rode in on the hop weight R_d/p_A.
