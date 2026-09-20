@@ -45,7 +45,7 @@ from .sppm import (
     _sppm_trace_visible_point, _sppm_store_photon, _sppm_trace_photon,
 )
 from .shading import _tex_lookup, _get_tri_verts, _mnee_walk, _mnee_walk2
-from .bxdf import bxdf_pdf_coated_exit, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
+from .bxdf import coat_eval_smooth, bxdf_pdf_coated_exit, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured, bxdf_pdf_measured
 from .gpu import GpuSceneHandle, vulkaninterop_unpack_results_kernel
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
@@ -2410,6 +2410,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # to be broken ESTIMATORS rather than weights -- so the
                     # next step is the isolation diagnostic on merging at a
                     # coated vertex, not another weight.
+                    # A scoped smooth coat has competitors now (merging,
+                    # t=1), so its NEE takes a balance share instead of full
+                    # weight. A rough coat is still unscoped and still sole.
                     _ = pol_ib
                     var w_inf = _nee_weight_coated_diffuse_base[True](ls_inf, eff_alb, ior, gn, coat_alpha)
                     total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_inf.r, w_inf.g, w_inf.b, wavelengths), ls_inf, hit, gn, cur_med_idx, sd, scratch, wavelengths)
@@ -4148,11 +4151,19 @@ def _lobe_eval[want_pdfs: Bool = True](
         var cos_cw = dot(dir_to_other, vn)
         if cos_cw <= Float32(0) or dot(vwo, vn) <= Float32(0):
             return LobeEval(ZERO, Float32(1), Float32(0), Float32(0), False)
-        var t_l_cw = Float32(1.0) - fr_dielectric(cos_cw, ior_cw)
-        var tr_l_cw = coat_beer_lambert_tr(
-            cos_theta_t_dielectric(cos_cw, ior_cw), DEFAULT_COAT_THICKNESS)
-        var t_both_cw = t_l_cw * tr_l_cw / max(ior_cw * ior_cw, Float32(1e-6))
-        var alb_cw = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, v.alb.r, v.alb.g, v.alb.b, wavelengths)
+        # THE evaluator: f(wo, wi) for this lobe, both transmissions and the
+        # whole TIR recycling series in closed form (coat_eval_smooth). This
+        # used to be a single-scatter approximation that disagreed with the
+        # per-iteration NEE beside it.
+        # Upsample the true REFLECTANCE and carry the rest as a scalar:
+        # rgb_to_spectral_sample's domain is a bounded reflectance, and a BSDF
+        # value is not one ("a coefficient is not a color",
+        # docs/02_spectra_and_color.md). The series is averaged over channels
+        # here -- exact for a grey base, approximate for a saturated one.
+        var f_cw = coat_eval_smooth(vn, vwo, dir_to_other, RGB(Float32(1.0)), ior_cw)
+        var avg_cw = (v.alb.r + v.alb.g + v.alb.b) * Float32(1.0 / 3.0)
+        var gain_cw = f_cw.r / max(Float32(1.0) - avg_cw * fdr_moment(ior_cw), Float32(1e-4)) * max(Float32(1.0) - fdr_moment(ior_cw), Float32(1e-4))
+        var alb_cw = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, v.alb.r, v.alb.g, v.alb.b, wavelengths) * gain_cw
         # A SMOOTH coat's exit density IS tractable -- bxdf_pdf_coated_exit,
         # histogram-verified against the real walk in 27152093 -- and is
         # symmetric in the exit cosine, so the reverse density is the same
@@ -4165,7 +4176,7 @@ def _lobe_eval[want_pdfs: Bool = True](
             if scoped_cw:
                 fwd_cw = bxdf_pdf_coated_exit(cos_cw, ior_cw)
                 rev_cw = bxdf_pdf_coated_exit(abs(dot(vwo, vn)), ior_cw)
-        return LobeEval(alb_cw * (INV_PI * cos_cw * t_both_cw), cos_cw,
+        return LobeEval(alb_cw * cos_cw, cos_cw,
                         fwd_cw, rev_cw, scoped_cw)
 
     if v.mat_kind == LobeKind.bssrdf:

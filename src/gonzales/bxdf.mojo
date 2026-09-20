@@ -1,5 +1,6 @@
 from std.math import sqrt
 from .geometry import RGB, MatKind, LobeKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS, Frame, refract
+from .bssrdf import fdr_moment
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world, power_heuristic
 from .vcm_mis import MisPolicy, mis_policy_power, nee_mis_weight
 from .rng import PCG32
@@ -691,6 +692,55 @@ def coat_exit_norm(ior: Float32) -> Float32:
         var mu = mu_c + span * (Float32(i) + Float32(0.5)) / Float32(N)
         acc += mu * (Float32(1.0) - fr_dielectric(mu, inv_ior))
     return Float32(2.0) * span * acc / Float32(N)
+
+@always_inline
+def coat_eval_smooth(n: Vec3f, wo: Vec3f, wi: Vec3f, alb: RGB, ior: Float32) -> RGB:
+    """f(wo, wi) for a SMOOTH coat over a Lambertian base -- the evaluator
+    gonzales never had.
+
+    CoatWalk is a SAMPLER: `wi` is an output, and there is no way to ask it
+    what the BSDF is for a given pair of directions. pbrt's LayeredBxDF is a
+    full BxDF -- f(), Sample_f() AND PDF() -- and its f() runs a stochastic
+    walk to answer exactly that question (Guo, Hasan & Zhao 2018). gonzales
+    ported the sampling and not the evaluation, so every consumer that needs
+    f(wo, wi) -- NEE, connections, vertex merging -- had to approximate it,
+    and each approximated it differently.
+
+    For THIS stack the stochastic walk is unnecessary: one smooth dielectric
+    interface over a Lambertian base has a closed form, and it is exact
+    rather than approximate, because a Lambertian base re-randomises to
+    cosine at every bounce -- precisely the assumption the closed form makes.
+    Scenes/coateddiffuse_analytic_check.py already validates the renderer
+    against it:
+
+        f = rho (1 - F(cos_o)) (1 - F(cos_i)) / (pi eta^2 (1 - rho F_di))
+
+    The 1/(1 - rho*F_di) factor IS the TIR recycling series, summed in closed
+    form. A merge sees one vertex and cannot sum that series by repetition
+    the way per-iteration NEE does, which is why merging at a coated vertex
+    measured 3x short without it.
+
+    BOTH transmissions are explicit here. The sampled walk leaves the
+    view-side one implicit because reaching the base at all costs an entry
+    coin flip whose probability IS that factor (project_coateddiffuse_eta2_bug
+    -- applying it twice there cost 56% at grazing exit). An evaluator has no
+    coin flip, so it must carry both."""
+    var cos_o = abs(dot(wo, n))
+    var cos_i = abs(dot(wi, n))
+    if cos_o <= Float32(1e-6) or cos_i <= Float32(1e-6):
+        return RGB(Float32(0.0))
+    var t_o = (Float32(1.0) - fr_dielectric(cos_o, ior)) * coat_beer_lambert_tr(
+        cos_theta_t_dielectric(cos_o, ior), DEFAULT_COAT_THICKNESS)
+    var t_i = (Float32(1.0) - fr_dielectric(cos_i, ior)) * coat_beer_lambert_tr(
+        cos_theta_t_dielectric(cos_i, ior), DEFAULT_COAT_THICKNESS)
+    var f_di = fdr_moment(ior)
+    var k = t_o * t_i * INV_PI / max(ior * ior, Float32(1e-6))
+    # The series is per-channel: a saturated base recycles more in the
+    # channel it reflects most.
+    return RGB(alb.r * k / max(Float32(1.0) - alb.r * f_di, Float32(1e-4)),
+               alb.g * k / max(Float32(1.0) - alb.g * f_di, Float32(1e-4)),
+               alb.b * k / max(Float32(1.0) - alb.b * f_di, Float32(1e-4)))
+
 
 @always_inline
 def bxdf_pdf_coated_exit(cos_out: Float32, ior: Float32) -> Float32:
