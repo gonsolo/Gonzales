@@ -1,0 +1,26 @@
+# FURNACE TEST -- mix
+#
+# A quad of this material under a CONSTANT environment of radiance L=1, with
+# the material set to absorb nothing. Energy conservation then forces
+#
+#     Lo = L = 1.0  (a blend of two rho=1 diffuse materials is still rho=1)
+#
+# No reference render: the answer is arithmetic. See Scripts/analytic_check.py.
+# Catches: a blend that does not preserve energy, e.g. double-counting a
+# sub-material or normalising the amount wrongly.
+
+Integrator "path" "integer maxdepth" [ 32 ]
+Sampler "halton" "integer pixelsamples" [ 64 ]
+Film "rgb" "string filename" [ "furnace-mix.exr" ]
+    "integer xresolution" [ 64 ] "integer yresolution" [ 64 ]
+LookAt 0 0 -4   0 0 0   0 1 0
+Camera "perspective" "float fov" [ 30 ]
+WorldBegin
+LightSource "infinite" "rgb L" [ 1 1 1 ]
+MakeNamedMaterial "A" "string type" [ "diffuse" ] "rgb reflectance" [ 1 1 1 ]
+MakeNamedMaterial "B" "string type" [ "diffuse" ] "rgb reflectance" [ 1 1 1 ]
+Material "mix" "string materials" [ "A" "B" ] "float amount" [ 0.5 ]
+Shape "trianglemesh"
+    "integer indices" [ 0 1 2 0 2 3 ]
+    "point3 P" [ -3 -3 0   3 -3 0   3 3 0   -3 3 0 ]
+    "normal N" [ 0 0 -1  0 0 -1  0 0 -1  0 0 -1 ]

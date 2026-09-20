@@ -1,0 +1,25 @@
+# FURNACE TEST -- dielectric
+#
+# A sphere of this material under a CONSTANT environment of radiance L=1, with
+# the material set to absorb nothing. Energy conservation then forces
+#
+#     Lo = L = 1.0  (Fresnel reflect + transmit sum to 1; no absorption)
+#
+# No reference render: the answer is arithmetic. See Scripts/analytic_check.py.
+# Catches: a Fresnel reflect/transmit split that does not sum to 1, and TIR leaks.
+
+Integrator "path" "integer maxdepth" [ 32 ]
+Sampler "halton" "integer pixelsamples" [ 64 ]
+Film "rgb" "string filename" [ "furnace-dielectric.exr" ]
+    "integer xresolution" [ 64 ] "integer yresolution" [ 64 ]
+LookAt 0 0 -4   0 0 0   0 1 0
+Camera "perspective" "float fov" [ 30 ]
+WorldBegin
+LightSource "infinite" "rgb L" [ 1 1 1 ]
+Material "dielectric" "float eta" [ 1.5 ]
+# A CLOSED shape, deliberately: a single flat quad is not a valid dielectric
+# object. The ray refracts IN and never refracts OUT, so the eta^2 radiance
+# compression is never undone and the quad reads 1/eta^2 = 0.444 no matter how
+# correct the renderer is. A sphere lets light enter and leave, and the two
+# eta^2 factors cancel.
+Shape "sphere" "float radius" [ 1.2 ]

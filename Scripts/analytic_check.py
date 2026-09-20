@@ -41,13 +41,35 @@ MODES = {"pt": [], "vcm": ["--vcm"], "sppm": ["--sppm"]}
 CASES = {
     "closed-cavity": dict(
         scene="Scenes/closed-cavity-equilibrium.pbrt", expect=1.0, res="32x32",
-        crop=None,
+        crop=None, strict=True,
         why="sealed rho=1 cavity, emitter L=1 -> equilibrium radiance L"),
     "env-furnace": dict(
         scene="Scenes/env-furnace-analytic.pbrt", expect=0.5, res="64x64",
-        crop=(16, 48),
+        crop=(16, 48), strict=True,
         why="diffuse quad rho=0.5 under constant env L=1 -> Lo = rho*L"),
 }
+# Per-material furnace tests: a quad of each material under a constant
+# environment, set to absorb nothing, so energy conservation forces Lo = L.
+# `strict` marks the materials that MUST conserve exactly -- for those a
+# deviation is unambiguously an implementation bug.
+for _m in ("diffuse", "dielectric", "thindielectric", "coateddiffuse",
+           "diffusetransmission", "mix"):
+    CASES["furnace-" + _m] = dict(
+        scene="Scenes/furnace/%s.pbrt" % _m, expect=1.0, res="64x64",
+        crop=(16, 48), strict=True,
+        why="%s, nothing absorbed -> Lo = L" % _m)
+# Conductor is swept over roughness and NOT asserted at 1.0: single-scattering
+# GGX is lossy by construction (it drops multi-bounce microfacet paths), so the
+# deviation is the model, not the code, until a Kulla-Conty/Turquin
+# compensation term exists. The SHAPE of the curve is the diagnostic -- a
+# monotone falloff growing with alpha is GGX behaving as theory predicts;
+# anything else is ours.
+for _a in ("00", "01", "02", "04", "07", "10"):
+    CASES["furnace-conductor-a" + _a] = dict(
+        scene="Scenes/furnace/conductor-a%s.pbrt" % _a, expect=1.0, res="64x64",
+        crop=(16, 48), strict=False,
+        why="conductor alpha=%s.%s; GGX single-scattering loss is EXPECTED" % (_a[0], _a[1]))
+
 # A cell may legitimately miss the analytic answer today. Record the gap so the
 # suite catches a REGRESSION without pretending the renderer is correct: the
 # recorded number is a known defect, never a target. TOL is how much worse a

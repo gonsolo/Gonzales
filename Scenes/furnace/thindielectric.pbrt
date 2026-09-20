@@ -1,0 +1,23 @@
+# FURNACE TEST -- thindielectric
+#
+# A quad of this material under a CONSTANT environment of radiance L=1, with
+# the material set to absorb nothing. Energy conservation then forces
+#
+#     Lo = L = 1.0  (thin slab: the reflect/transmit series must sum to 1)
+#
+# No reference render: the answer is arithmetic. See Scripts/analytic_check.py.
+# Catches: a truncated or mis-weighted thin-slab interreflection series.
+
+Integrator "path" "integer maxdepth" [ 32 ]
+Sampler "halton" "integer pixelsamples" [ 64 ]
+Film "rgb" "string filename" [ "furnace-thindielectric.exr" ]
+    "integer xresolution" [ 64 ] "integer yresolution" [ 64 ]
+LookAt 0 0 -4   0 0 0   0 1 0
+Camera "perspective" "float fov" [ 30 ]
+WorldBegin
+LightSource "infinite" "rgb L" [ 1 1 1 ]
+Material "thindielectric" "float eta" [ 1.5 ]
+Shape "trianglemesh"
+    "integer indices" [ 0 1 2 0 2 3 ]
+    "point3 P" [ -3 -3 0   3 -3 0   3 3 0   -3 3 0 ]
+    "normal N" [ 0 0 -1  0 0 -1  0 0 -1  0 0 -1 ]
