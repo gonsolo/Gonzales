@@ -1,7 +1,7 @@
 from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
-from .geometry import RGB, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, LobeKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, ShadowTask_C, LightSampler_C, light_sampler_sample, light_sampler_pdf, Instance_C, MeasuredBRDF_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
+from .geometry import RGB, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, LobeKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, ShadowTask_C, LightSampler_C, light_sampler_sample, light_sampler_pdf, Instance_C, MeasuredBRDF_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI, PDF_DROP_DIRECT, _is_real_ptr, _atan2f
 from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
 from .rng import PCG32
@@ -1037,12 +1037,21 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
 
     path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(exit_dir[0], exit_dir[1], exit_dir[2]))
     # NEE-only for direct lighting: the layered exit ray's true pdf is
-    # intractable (refracted, multi-bounce) so it can't be MIS-combined with
-    # NEE. Setting lastBsdfPdf = 0 makes the miss/emitter handlers drop this
-    # ray's *direct* light contribution (mis_weight → 0); NEE supplies direct
-    # lighting while the exit ray still carries indirect bounces. Avoids the
-    # double-count between the multi-scatter exit and single-scatter NEE.
-    path_ptr[].lastBsdfPdf = Float32(0.0)
+    # intractable to combine here (refracted, multi-bounce), so this ray's
+    # *direct* light contribution must be DROPPED -- NEE supplies direct
+    # lighting at every walk iteration while the exit ray carries only the
+    # indirect bounces. Otherwise the multi-scatter exit and the
+    # single-scatter NEE both report the same direct term.
+    #
+    # PDF_DROP_DIRECT, not 0.0. The sphere/area/curve emitter handlers gate
+    # on `pdf_bsdf > 0` and so drop either way, but the env MISS handler
+    # defaults mis_weight to 1.0 and only OVERRIDES it when pdf > 0 -- that
+    # default exists for the camera ray, which also has lastBsdfPdf == 0 and
+    # must take the full background. A zero here was therefore indistinguish-
+    # able from "no scatter yet" and took FULL env radiance on top of NEE:
+    # the white-furnace test read 1.3008 where energy conservation demands
+    # 1.0, the excess being exactly this ray's 1/eta^2 throughput.
+    path_ptr[].lastBsdfPdf = PDF_DROP_DIRECT
     path_ptr[].specularBounce = Int8(0)
     # 1/eta^2 radiance compression leaving the coat for air -- see
     # docs/05_reflection_models.md. Applied here on the exit ray AND inside
@@ -4582,6 +4591,13 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                     env_rgb = ilight.scale
             miss_albedo += env_rgb
             var mis_weight = Float32(1.0)
+            # A scatter whose direct-light term NEE has already reported (the
+            # layered coat exit; see PDF_DROP_DIRECT) must contribute only its
+            # indirect bounces here. The 1.0 default above is for the CAMERA
+            # ray, whose lastBsdfPdf is also 0 and which must take the full
+            # background -- hence a negative sentinel rather than a zero.
+            if path_ptr[].lastBsdfPdf == PDF_DROP_DIRECT:
+                mis_weight = Float32(0.0)
             # env_rgb_contrib defaults to the bilinear-filtered env_rgb (smooth
             # sky appearance for direct/specular escapes, where mis_weight stays
             # 1.0 and no pdf is involved). For MIS-weighted indirect escapes

@@ -1,14 +1,24 @@
 # FURNACE TEST -- coateddiffuse
 #
 # A quad of this material under a CONSTANT environment of radiance L=1, with
-# the material set to absorb nothing. Energy conservation then forces
+# the BASE set to absorb nothing (rho=1).
 #
-#     Lo = L = 1.0  (rho=1 base, non-absorbing coat)
+# Unlike its sibling furnace scenes this one does NOT have to reach Lo = 1.0,
+# and the difference is physics, not a defect: the coat is a Beer-Lambert
+# absorbing slab of thickness 0.01 (pbrt's default, hardcoded in gonzales as
+# DEFAULT_COAT_THICKNESS -- `thickness` is not parsed). Every traversal
+# attenuates and a TIR recycle costs two of them, so a few percent is
+# genuinely absorbed. Measured: 0.9128 here, and 0.9934 with
+# DEFAULT_COAT_THICKNESS rebuilt to 0 -- so the shortfall is the coat, and
+# only ~0.7% is the COAT_MAX_DEPTH truncation.
+#
+# It is still worth running, as a one-sided guard: the coat can only LOSE
+# energy, so anything at or above 1.0 is a bug. That is what it caught --
+# this scene read 1.3008 because the layered exit ray took full environment
+# radiance on top of the NEE that had already reported it (e9944964's
+# sibling; see PDF_DROP_DIRECT).
 #
 # No reference render: the answer is arithmetic. See Scripts/analytic_check.py.
-# Catches: energy lost or created by the layered coat walk. This is the one
-# to watch -- the coat's exit pdf was labelled intractable until 27152093,
-# and vertex merging double counts through it (6615f001).
 
 Integrator "path" "integer maxdepth" [ 32 ]
 Sampler "halton" "integer pixelsamples" [ 64 ]

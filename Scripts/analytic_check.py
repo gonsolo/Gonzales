@@ -52,12 +52,27 @@ CASES = {
 # environment, set to absorb nothing, so energy conservation forces Lo = L.
 # `strict` marks the materials that MUST conserve exactly -- for those a
 # deviation is unambiguously an implementation bug.
-for _m in ("diffuse", "dielectric", "thindielectric", "coateddiffuse",
+for _m in ("diffuse", "dielectric", "thindielectric",
            "diffusetransmission", "mix"):
     CASES["furnace-" + _m] = dict(
         scene="Scenes/furnace/%s.pbrt" % _m, expect=1.0, res="64x64",
         crop=(16, 48), strict=True,
         why="%s, nothing absorbed -> Lo = L" % _m)
+
+# coateddiffuse is the one material here that does NOT have to reach 1.0, and
+# the reason is physics rather than a defect: the coat is a Beer-Lambert
+# absorbing slab of thickness DEFAULT_COAT_THICKNESS (0.01, pbrt's default,
+# hardcoded -- gonzales does not parse `thickness`). Every coat traversal
+# attenuates, and the TIR recycle costs two, so a rho=1 base still loses a few
+# percent. Verified rather than assumed: setting DEFAULT_COAT_THICKNESS to 0
+# and rebuilding gives 0.9934, i.e. the whole 0.0872 shortfall is the coat,
+# and only ~0.7% is the COAT_MAX_DEPTH truncation. Keep the recorded gap as a
+# REGRESSION guard -- it caught the +30% double count that used to sit here --
+# but do not read it as an energy-conservation failure.
+CASES["furnace-coateddiffuse"] = dict(
+    scene="Scenes/furnace/coateddiffuse.pbrt", expect=1.0, res="64x64",
+    crop=(16, 48), strict=False,
+    why="coateddiffuse; coat absorbs at thickness 0.01, so Lo < L is CORRECT")
 # Conductor is swept over roughness and NOT asserted at 1.0: single-scattering
 # GGX is lossy by construction (it drops multi-bounce microfacet paths), so the
 # deviation is the model, not the code, until a Kulla-Conty/Turquin

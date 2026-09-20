@@ -26,6 +26,14 @@ comptime TWO_PI     : Float32 = 6.28318530717958647692
 comptime INV_PI     : Float32 = 0.31830988618379067154
 comptime INV_TWO_PI : Float32 = 0.15915494309189533577
 comptime INV_FOUR_PI: Float32 = 0.07957747154594766788
+
+# PathState_C.lastBsdfPdf sentinel: "a real scatter happened here, but its
+# direct-light term was already reported by NEE, so every emitter/miss
+# handler must contribute ZERO for it and let the ray carry indirect light
+# only." Used by the layered coat exit, whose true pdf is intractable to
+# MIS-combine. It has to be distinguishable from 0.0, because a CAMERA ray
+# also carries lastBsdfPdf == 0 and must take the full background instead.
+comptime PDF_DROP_DIRECT: Float32 = -1.0
 comptime SQRT2      : Float32 = 1.41421356237309504880
 # <</listing>>
 
