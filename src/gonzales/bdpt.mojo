@@ -23,7 +23,7 @@ from .geometry import (
     spectral_free_flight_weight,
 )
 from .bssrdf import dipole_max_radius, dipole_rd, dipole_mis_sigma_tr, dipole_sample_radius, bssrdf_probe_offset, bssrdf_exit_pdf_area, bssrdf_exit_ft
-from .vcm_mis import vcm_arrival_carries, vcm_scatter_carries, bssrdf_hop_carries, bssrdf_exit_scatter_carries, vcm_env_nee_weight, vcm_env_escape_weight
+from .vcm_mis import vcm_arrival_carries, vcm_scatter_carries, bssrdf_hop_carries, bssrdf_exit_scatter_carries, vcm_env_nee_weight, vcm_env_escape_weight, MisPolicy
 from .bvh import (
     BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres, _mk_sd_full,
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _is_real_ptr,
@@ -2202,24 +2202,19 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 total += _bdpt_nee_contribute(beta, w_i, ls_i, hit, gn, cur_med_idx, sd, scratch, wavelengths)
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ls_e = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-                # NOT _nee_weight_simple_spectral: its power heuristic knows
-                # only NEE vs BSDF sampling and leaves no share for merging or
-                # t=1 (vcm_env_nee_weight). Lambertian here, so both BSDF
-                # densities are closed form: forward cos(n,wi)/pi, reverse
-                # cos(n,wo)/pi. These are the ARRIVAL carries at this vertex,
-                # one step earlier than the escape's -- see vcm_mis.mojo.
-                var cos_e = dot(gn, ls_e.wi)
-                if ls_e.valid and cos_e > Float32(0.0) and ls_e.pdf > Float32(0.0):
-                    var (_c_nee, r_nee) = _scene_bounding_sphere(sd)
-                    var emis_nee = ls_e.pdf / max(PI * r_nee * r_nee, Float32(1e-12))
-                    var mis_e = vcm_env_nee_weight(
-                        cos_e * INV_PI, max(dot(gn, wo_d), Float32(0.0)) * INV_PI,
-                        ls_e.pdf, emis_nee, cos_e,
-                        mis_vm_weight_factor, dvcm_carry, dvc_carry)
-                    var f_e = rgb_to_spectral_sample(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, eff_alb.r, eff_alb.g, eff_alb.b, wavelengths) * INV_PI
-                    var li_e = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, ls_e.Li.r, ls_e.Li.g, ls_e.Li.b, wavelengths)
-                    var w_e = (f_e * li_e) * (cos_e * mis_e / ls_e.pdf)
-                    total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn, cur_med_idx, sd, scratch, wavelengths)
+                # The SAME shared helper every other material uses -- the
+                # only difference is the MIS policy handed to it. Before
+                # MisPolicy existed the weight was welded inside the helper,
+                # so getting VCM's correct weight here meant hand-inlining
+                # the whole throughput computation at this one site while the
+                # other seven kept the path tracer's two-strategy heuristic.
+                var (_c_e, r_e) = _scene_bounding_sphere(sd)
+                var le_e = _lobe_eval[want_pdfs=True](v, ls_e.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                var pol_e = MisPolicy(True, mis_vm_weight_factor, dvcm_carry, dvc_carry,
+                                      ls_e.pdf / max(PI * r_e * r_e, Float32(1e-12)),
+                                      le_e.pdf_rev)
+                var w_e = _nee_weight_simple_spectral(ls_e, LobeKind.lambertian, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, pol_e)
+                total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn, cur_med_idx, sd, scratch, wavelengths)
             # Real MNEE for area lights behind glass (task #161) -- see
             # _bdpt_mnee_diffuse_area_light's docstring. Ordinary (non-glass)
             # area lights are deliberately left to connect/merge, unchanged.
@@ -2549,7 +2544,14 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     total += _bdpt_nee_contribute(beta, w_icc, ls_icc, hit, gn_c, cur_med_idx, sd, scratch, wavelengths)
                 for inf_ic in range(Int(sd.infiniteLightCount)):
                     var ls_ec = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_ic], Point2f(pcg.next_float(), pcg.next_float()))
-                    var w_ec = _nee_weight_simple_spectral(ls_ec, LobeKind.ggx, mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                    # One policy expression, and `scoped` decides: a kind with real
+                    # densities gets VCM's balance weight over all four strategies, a
+                    # kind without keeps the path tracer's two-strategy heuristic.
+                    var (_c_ec, r_ec) = _scene_bounding_sphere(sd)
+                    var le_ec = _lobe_eval[want_pdfs=True](v, ls_ec.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                    var pol_ec = MisPolicy(le_ec.scoped, mis_vm_weight_factor, dvcm_carry, dvc_carry,
+                                          ls_ec.pdf / max(PI * r_ec * r_ec, Float32(1e-12)), le_ec.pdf_rev)
+                    var w_ec = _nee_weight_simple_spectral(ls_ec, LobeKind.ggx, mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, pol_ec)
                     total += _bdpt_nee_contribute(beta, w_ec, ls_ec, hit, gn_c, cur_med_idx, sd, scratch, wavelengths)
 
             beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (bs_c.f).r, (bs_c.f).g, (bs_c.f).b, wavelengths)
@@ -2645,7 +2647,14 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_ih.r, w_ih.g, w_ih.b, wavelengths), ls_ih, hit, hc.geo_normal, cur_med_idx, sd, scratch, wavelengths, hair_eps)
             for inf_ih in range(Int(sd.infiniteLightCount)):
                 var ls_eh = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_ih], Point2f(pcg.next_float(), pcg.next_float()))
-                var w_eh = _nee_weight_hair(ls_eh, hc)
+                # One policy expression, and `scoped` decides: a kind with real
+                # densities gets VCM's balance weight over all four strategies, a
+                # kind without keeps the path tracer's two-strategy heuristic.
+                var (_c_eh, r_eh) = _scene_bounding_sphere(sd)
+                var le_eh = _lobe_eval[want_pdfs=True](v_h, ls_eh.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                var pol_eh = MisPolicy(le_eh.scoped, mis_vm_weight_factor, dvcm_carry, dvc_carry,
+                                      ls_eh.pdf / max(PI * r_eh * r_eh, Float32(1e-12)), le_eh.pdf_rev)
+                var w_eh = _nee_weight_hair(ls_eh, hc, pol_eh)
                 total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_eh.r, w_eh.g, w_eh.b, wavelengths), ls_eh, hit, hc.geo_normal, cur_med_idx, sd, scratch, wavelengths, hair_eps)
 
             var (wi_hs, f_hs, pdf_hs, cos_ti_hs2) = _hair_sample_dir(hc, pcg)

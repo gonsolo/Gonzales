@@ -1,6 +1,7 @@
 from std.math import sqrt
 from .geometry import RGB, MatKind, LobeKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS, Frame, refract
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world, power_heuristic
+from .vcm_mis import MisPolicy, mis_policy_power, nee_mis_weight
 from .rng import PCG32
 from .bvh import LightSample, HairLobeConstants, _hair_eval_lobes
 from .spectrum import SampledWavelengths, SpectralSample, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb
@@ -553,6 +554,7 @@ def _nee_weight_simple(
     alpha: Float32,
     n:     Vec3f,
     wo:    Vec3f,
+    mis: MisPolicy = mis_policy_power(),
 ) -> RGB:
     """NEE contribution weight (throughput NOT yet applied — caller does
     `throughput * result`) for one LightSample against a diffuse or
@@ -573,7 +575,7 @@ def _nee_weight_simple(
         return RGB(Float32(0.0))
     if ls.is_delta:
         return f * ls.Li * cos_s
-    var mis_w = power_heuristic(ls.pdf, pdf_bsdf)
+    var mis_w = nee_mis_weight(mis, ls.pdf, pdf_bsdf, cos_s)
     return f * ls.Li * (cos_s * mis_w / ls.pdf)
 
 # ── Coateddiffuse: THE layered-BSDF walk, shared by every integrator ─────────
@@ -887,6 +889,7 @@ def _nee_weight_coated_coat_lobe(
     coat_alpha: Float32,
     n:          Vec3f,
     wo:         Vec3f,
+    mis: MisPolicy = mis_policy_power(),
 ) -> RGB:
     """NEE weight (throughput not applied) for a coateddiffuse/coated_conductor
     coat's own glossy GGX lobe (D*G2*F/(4*cos_o)) against ONE LightSample --
@@ -917,7 +920,7 @@ def _nee_weight_coated_coat_lobe(
     if ls.pdf <= Float32(0.0):
         return RGB(Float32(0.0))
     var pdf_bsdf = ggx_vndf_pdf(cos_o, cos_wm, d, coat_alpha)
-    var w = power_heuristic(ls.pdf, pdf_bsdf)
+    var w = nee_mis_weight(mis, ls.pdf, pdf_bsdf, cos_s)
     return ls.Li * (f_cos * w / ls.pdf)
 
 @always_inline
@@ -927,6 +930,7 @@ def _nee_weight_coated_diffuse_base[nee_is_sole_strategy: Bool = False](
     ior: Float32,
     n:   Vec3f,
     coat_alpha: Float32 = Float32(0.0),
+    mis: MisPolicy = mis_policy_power(),
 ) -> RGB:
     """NEE weight (throughput AND the walk's `beta` not applied) for a
     coateddiffuse base against ONE LightSample -- see
@@ -996,7 +1000,7 @@ def _nee_weight_coated_diffuse_base[nee_is_sole_strategy: Bool = False](
     # 1/pdf of the light sample itself is always required.
     var w = Float32(1.0)
     comptime if not nee_is_sole_strategy:
-        w = power_heuristic(ls.pdf, cos_s / PI)
+        w = nee_mis_weight(mis, ls.pdf, cos_s / PI, cos_s)
     return alb * ls.Li * (cos_s * t_both * w / (ls.pdf * PI))
 
 # ── Spectral siblings (staged rollout, see project_spectral_rendering memory
@@ -1063,6 +1067,7 @@ def _nee_weight_simple_spectral(
     spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
     spectral_d65: Pointer[Float32, MutUntrackedOrigin],
     wavelengths: SampledWavelengths,
+    mis: MisPolicy = mis_policy_power(),
 ) -> SpectralSample:
     """Spectral counterpart of _nee_weight_simple — same formula, but the
     material color and light color are each converted to a SpectralSample at
@@ -1081,11 +1086,14 @@ def _nee_weight_simple_spectral(
     var li_spectral = rgb_illuminant_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, ls.Li.r, ls.Li.g, ls.Li.b, wavelengths)
     if ls.is_delta:
         return f * li_spectral * cos_s
-    var mis_w = power_heuristic(ls.pdf, pdf_bsdf)
+    var mis_w = nee_mis_weight(mis, ls.pdf, pdf_bsdf, cos_s)
     return (f * li_spectral) * (cos_s * mis_w / ls.pdf)
 
 @always_inline
-def _nee_weight_hair(ls: LightSample, hc: HairLobeConstants) -> RGB:
+def _nee_weight_hair(
+    ls: LightSample, hc: HairLobeConstants,
+    mis: MisPolicy = mis_policy_power(),
+) -> RGB:
     """Hair's own version of _nee_weight_simple above — hair's BRDF needs
     the full precomputed per-hit HairLobeConstants (Marschner R/TT/TRT lobe
     state) rather than a flat (alb, alpha) pair, so it can't share
@@ -1103,5 +1111,8 @@ def _nee_weight_hair(ls: LightSample, hc: HairLobeConstants) -> RGB:
     if ls.is_delta:
         return f_val * cos_ti * ls.Li
     var pdf_bsdf = max(cos_ti * pdf_over_cos, Float32(1e-6))
-    var mis_w = power_heuristic(ls.pdf, pdf_bsdf)
+    # `cos_ti` is the FIBRE cosine, not |n.wi| -- hair's lobe has no surface
+    # normal to take one against. Same distinction LobeEval.cos_used exists
+    # for in bdpt.mojo, and the reason a caller must never guess it.
+    var mis_w = nee_mis_weight(mis, ls.pdf, pdf_bsdf, cos_ti)
     return f_val * cos_ti * ls.Li * (mis_w / ls.pdf)
