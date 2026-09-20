@@ -1000,7 +1000,11 @@ def _nee_weight_coated_diffuse_base[nee_is_sole_strategy: Bool = False](
     # 1/pdf of the light sample itself is always required.
     var w = Float32(1.0)
     comptime if not nee_is_sole_strategy:
-        w = nee_mis_weight(mis, ls.pdf, cos_s / PI, cos_s)
+        # The competing BSDF strategy here is the coat walk's EXIT, whose
+        # density is bxdf_pdf_coated_exit -- not the bare cosine lobe of the
+        # base underneath it. Passing cos/pi understates the competitor and
+        # so overstates this sample's share.
+        w = nee_mis_weight(mis, ls.pdf, bxdf_pdf_coated_exit(cos_s, ior), cos_s)
     return alb * ls.Li * (cos_s * t_both * w / (ls.pdf * PI))
 
 # ── Spectral siblings (staged rollout, see project_spectral_rendering memory

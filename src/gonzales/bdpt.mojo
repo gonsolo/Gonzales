@@ -2387,6 +2387,30 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_ib.r, w_ib.g, w_ib.b, wavelengths), ls_ib, hit, gn, cur_med_idx, sd, scratch, wavelengths)
                 for inf_i in range(Int(sd.infiniteLightCount)):
                     var ls_inf = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
+                    # Now that a smooth coat walk is MIS-scoped, its NEE has
+                    # to be weighted against the strategies that compete with
+                    # it -- merging and t=1 -- like every other scoped kind.
+                    # The reverse density is the same exit function of wo.
+                    var (_c_ib, r_ib) = _scene_bounding_sphere(sd)
+                    var pol_ib = MisPolicy(
+                        not is_rough_coat, mis_vm_weight_factor, dvcm_carry, dvc_carry,
+                        ls_inf.pdf / max(PI * r_ib * r_ib, Float32(1e-12)),
+                        bxdf_pdf_coated_exit(abs(dot(wo, gn)), ior))
+                    # `[True]` means nee_is_sole_strategy -- the helper skips
+                    # MIS and takes full weight. That WAS right while the coat
+                    # walk never merged. A scoped smooth coat has competitors
+                    # now, so it must take its balance share instead; a rough
+                    # one is still unscoped and still sole.
+                    # MEASURED, and left as-is deliberately: handing this NEE
+                    # its balance share (the [False] instantiation with
+                    # pol_ib) collapses the furnace to 0.6149 against an
+                    # analytic 1.0, because the share it gives up is reserved
+                    # for merging and merging does not deliver it. Same
+                    # signature as the env case, where the cause turned out
+                    # to be broken ESTIMATORS rather than weights -- so the
+                    # next step is the isolation diagnostic on merging at a
+                    # coated vertex, not another weight.
+                    _ = pol_ib
                     var w_inf = _nee_weight_coated_diffuse_base[True](ls_inf, eff_alb, ior, gn, coat_alpha)
                     total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_inf.r, w_inf.g, w_inf.b, wavelengths), ls_inf, hit, gn, cur_med_idx, sd, scratch, wavelengths)
 
@@ -2477,7 +2501,21 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
             if path_len > 0:
                 total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
-            dvcm_carry = Float32(0)
+            # Propagate the carries THROUGH the coat, exactly as every other
+            # material does after it scatters. This used to be
+            # `dvcm_carry = 0`, which left the whole REST of the path with no
+            # MIS state -- so an earlier attempt that gave this vertex real
+            # carries still measured worse, because every downstream vertex
+            # was still broken. The vertex and the path have to be fixed
+            # together or neither measurement means anything.
+            if smooth_coat:
+                (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
+                    dvcm_carry, dvc_carry, dvm_carry,
+                    cos_x_c / max(pdf_x_c, Float32(1e-9)), pdf_x_c,
+                    bxdf_pdf_coated_exit(abs(dot(wo, gn)), ior),
+                    mis_vc_weight_factor, mis_vm_weight_factor)
+            else:
+                dvcm_carry = Float32(0)
 
         elif mat.type == MatKind.conductor or mat.type == MatKind.coated_conductor:
             var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
@@ -4279,7 +4317,7 @@ def _lobe_scoped(v: BDPTVertex) -> Bool:
     treatment is its own task (the elegance backlog's item 9). Until then it
     connects, unweighted, and does not merge."""
     if v.mat_kind == LobeKind.coated_walk:
-        return False
+        return v.is_surface == Int32(1) and v.pdf_bwd <= Float32(0.001)
     return _bdpt_vertex_mis_scoped_kinds(v)
 
 
