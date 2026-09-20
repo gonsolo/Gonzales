@@ -1,0 +1,36 @@
+# Analytic env-lighting test. ONE diffuse quad under a CONSTANT environment.
+#
+#   irradiance E  = pi * L
+#   outgoing  Lo  = (rho/pi) * E = rho * L
+#
+# With L = 1 and rho = 0.5 the centre of the quad must read EXACTLY 0.5, at any
+# maxdepth (a single one-sided quad has no interreflection). No reference render
+# and no pbrt needed -- the answer is arithmetic.
+#
+# Measured 2026-09-20, 64x64/64spp, --gpu, centre 32x32 crop:
+#     PT    0.4995  (1.000)   correct
+#     VCM   0.6701  (1.340)   vertex merging double-counts the NEE path
+#     SPPM  0.0882  (0.176)   separate, severe env-lighting deficit
+#
+# Component decomposition of VCM's 0.6701 (disable one estimator at a time):
+#     BSDF-sample + miss-escape   0.414
+#     env NEE                     0.090   <- these two sum to 0.504 = correct
+#     vertex merging              0.103   <- pure double count
+#     connect-to-cache            0.000   (coplanar: contributes nothing here)
+#
+Integrator "path" "integer maxdepth" [ 5 ]
+Sampler "halton" "integer pixelsamples" [ 64 ]
+Film "rgb" "string filename" [ "envfurnace.exr" ]
+    "integer xresolution" [ 64 ] "integer yresolution" [ 64 ]
+LookAt 0 0 -4   0 0 0   0 1 0
+Camera "perspective" "float fov" [ 30 ]
+WorldBegin
+# Constant environment, radiance 1 in every direction
+LightSource "infinite" "rgb L" [ 1 1 1 ]
+# One diffuse quad facing the camera, albedo 0.5.
+# Analytic: irradiance = pi*L, outgoing radiance = (rho/pi)*pi*L = rho*L = 0.5
+Material "diffuse" "rgb reflectance" [ 0.5 0.5 0.5 ]
+Shape "trianglemesh"
+    "integer indices" [ 0 1 2 0 2 3 ]
+    "point3 P" [ -3 -3 0   3 -3 0   3 3 0   -3 3 0 ]
+    "normal N" [ 0 0 -1  0 0 -1  0 0 -1  0 0 -1 ]
