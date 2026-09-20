@@ -1,16 +1,24 @@
-# FURNACE TEST -- conductor, roughness 1.0
+# FURNACE TEST -- conductor, alpha 1.0 (remaproughness false)
 #
 # A quad of this material under a CONSTANT environment of radiance L=1, with
 # the material set to absorb nothing. Energy conservation then forces
 #
 #     Lo <= L; deviation from 1.0 IS the single-scattering energy loss
 #
+# MEASURED 2026-09-20: the loss is NOT the GGX multiple-scattering deficit.
+# PT reads 0.9999 at alpha<=0.0005 and 0.5023 at alpha=0.002 -- energy HALVES
+# at the alpha>0.001 delta/rough code-path threshold, where a near-mirror must
+# still read ~1.0. The curve is also non-monotonic (0.50 -> 0.62 at alpha=0.2
+# -> 0.33 at alpha=1.0) where real GGX albedo falls monotonically from 1.0.
+# So: a missing factor of ~2 in the rough path. Do NOT add Kulla-Conty
+# compensation until this is fixed -- it would mask the bug.
+#
 # No reference render: the answer is arithmetic. See Scripts/analytic_check.py.
 # NOT expected to reach 1.0. Single-scattering GGX is lossy BY CONSTRUCTION:
 # it ignores light bouncing multiple times between microfacets, so energy
 # falls off with roughness unless a multiple-scattering compensation term
 # (Kulla-Conty / Turquin) is present. This sweep RECORDS the loss curve --
-# the shape is the diagnostic, not any single value. alpha = 1.0.
+# the shape is the diagnostic, not any single value. alpha = 1.0 (remap disabled, so roughness IS alpha).
 
 Integrator "path" "integer maxdepth" [ 32 ]
 Sampler "halton" "integer pixelsamples" [ 64 ]
@@ -20,7 +28,7 @@ LookAt 0 0 -4   0 0 0   0 1 0
 Camera "perspective" "float fov" [ 30 ]
 WorldBegin
 LightSource "infinite" "rgb L" [ 1 1 1 ]
-Material "conductor" "rgb reflectance" [ 1 1 1 ] "float roughness" [ 1.0 ]
+Material "conductor" "rgb reflectance" [ 1 1 1 ] "float roughness" [ 1.0 ] "bool remaproughness" false
 Shape "trianglemesh"
     "integer indices" [ 0 1 2 0 2 3 ]
     "point3 P" [ -3 -3 0   3 -3 0   3 3 0   -3 3 0 ]
