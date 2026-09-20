@@ -1,5 +1,5 @@
 from std.math import sqrt
-from .geometry import RGB, MatKind, LobeKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS, Frame, refract, INV_FOUR_PI
+from .geometry import RGB, MatKind, LobeKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS, Frame, refract, INV_FOUR_PI, Curve_C, MeasuredBRDF_C
 from .bssrdf import fdr_moment, bssrdf_exit_ft
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world, power_heuristic
 from .vcm_mis import MisPolicy, mis_policy_power, nee_mis_weight
@@ -781,7 +781,9 @@ def lobe_scoped(c: LobeCtx) -> Bool:
 def lobe_eval[want_pdfs: Bool = True](
     c:   LobeCtx,
     dir_to_other:  Vec3f,
-    ref sd:  SceneDescriptor2_C,
+    materials: Pointer[Material_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
+    measured_brdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin],
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
     spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
     spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
@@ -789,7 +791,15 @@ def lobe_eval[want_pdfs: Bool = True](
     spectral_d65: Pointer[Float32, MutUntrackedOrigin],
     wavelengths: SampledWavelengths,
 ) -> LobeEval:
-    """THE lobe dispatch. `want_pdfs=False` skips the density half, which for
+    """THE lobe dispatch.
+
+    Takes the three tables it actually reads rather than a scene descriptor,
+    because the integrators do not agree on a descriptor type: VCM has
+    SceneDescriptor2_C, the path tracer has ShadeContext. Depending on one of
+    them would have locked this to one integrator again, which is the whole
+    condition this interface exists to remove.
+
+    `want_pdfs=False` skips the density half, which for
     hair is an entire second `_hair_precompute` -- not a micro-optimisation."""
     var ZERO = SpectralSample(Float32(0))
     if c.is_delta:
@@ -809,7 +819,7 @@ def lobe_eval[want_pdfs: Bool = True](
         # from the material so the two cannot drift. The view-side
         # transmittance is deliberately absent -- implicit in the walk having
         # reached the base at all (project_coateddiffuse_eta2_bug).
-        var mat_cw = sd.materials[unsafe_offset=Int(c.mat_idx)]
+        var mat_cw = materials[unsafe_offset=Int(c.mat_idx)]
         var ior_cw = mat_cw.emission.r
         var cos_cw = dot(dir_to_other, vn)
         if cos_cw <= Float32(0) or dot(vwo, vn) <= Float32(0):
@@ -862,8 +872,8 @@ def lobe_eval[want_pdfs: Bool = True](
     if c.kind == LobeKind.hair:
         # Hair's cosine is the FIBRE's cos_ti, not |n.wi| -- the case a caller
         # dividing by |cos(dir,n)| gets silently wrong.
-        var mat_h = sd.materials[unsafe_offset=Int(c.mat_idx)]
-        var hc = _hair_precompute(mat_h, sd.curves, Int(c.hair_curve_idx), c.hair_v, c.hair_h, vwo)
+        var mat_h = materials[unsafe_offset=Int(c.mat_idx)]
+        var hc = _hair_precompute(mat_h, curves, Int(c.hair_curve_idx), c.hair_v, c.hair_h, vwo)
         var (cos_ti, f_val, pdf_oc_fwd) = _hair_eval_lobes(
             dir_to_other, hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
             hc.dphi0, hc.dphi1, hc.dphi2,
@@ -874,7 +884,7 @@ def lobe_eval[want_pdfs: Bool = True](
         var hair_spec = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f_val.r, f_val.g, f_val.b, wavelengths)
         var rev_h = Float32(0)
         comptime if want_pdfs:
-            var hc_rev = _hair_precompute(mat_h, sd.curves, Int(c.hair_curve_idx), c.hair_v, c.hair_h, dir_to_other)
+            var hc_rev = _hair_precompute(mat_h, curves, Int(c.hair_curve_idx), c.hair_v, c.hair_h, dir_to_other)
             var (cos_ti_rev, _, pdf_oc_rev) = _hair_eval_lobes(
                 vwo, hc_rev.tangent, hc_rev.b_perp, hc_rev.n_perp, hc_rev.phi_o,
                 hc_rev.dphi0, hc_rev.dphi1, hc_rev.dphi2,
@@ -886,8 +896,8 @@ def lobe_eval[want_pdfs: Bool = True](
         return LobeEval(hair_spec * cos_ti, cos_ti, cos_ti * pdf_oc_fwd, rev_h, True)
 
     if c.kind == LobeKind.measured:
-        var vmat = sd.materials[unsafe_offset=Int(c.mat_idx)]
-        var mb = sd.measuredBrdfs[unsafe_offset=Int(vmat.measured_idx)]
+        var vmat = materials[unsafe_offset=Int(c.mat_idx)]
+        var mb = measured_brdfs[unsafe_offset=Int(vmat.measured_idx)]
         var frm = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
         var tangent = Vec3f(frm.x.x, frm.x.y, frm.x.z)
         var bitangent = Vec3f(frm.y.x, frm.y.y, frm.y.z)
@@ -1388,6 +1398,9 @@ def _nee_weight_simple_spectral(
     spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
     spectral_d65: Pointer[Float32, MutUntrackedOrigin],
     wavelengths: SampledWavelengths,
+    materials: Pointer[Material_C, MutUntrackedOrigin],
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
+    measured_brdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin],
     mis: MisPolicy = mis_policy_power(),
 ) -> SpectralSample:
     """Spectral counterpart of _nee_weight_simple — same formula, but the
@@ -1401,14 +1414,29 @@ def _nee_weight_simple_spectral(
     var cos_s = dot(n, ls.wi)
     if cos_s <= Float32(0.0):
         return SpectralSample(Float32(0.0))
-    var (f, pdf_bsdf) = bxdf_eval_any_spectral(mat_kind, alb, alpha, n, wo, ls.wi, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
+    # THE shared evaluator -- see LobeCtx. This used to call
+    # bxdf_eval_any_spectral, a SECOND dispatch over LobeKind that covered
+    # two kinds and returned a BARE f where the vertex-side one returned
+    # f*cos. The two agreed only because this function multiplied by cos_s
+    # afterwards; nothing in either signature said so.
+    var le = lobe_eval[want_pdfs=True](
+        LobeCtx(mat_kind, True, False, n, wo, alb, Int32(-1), alpha,
+                Float32(0), Int32(-1), Float32(0), Float32(0)),
+        ls.wi, materials, curves, measured_brdfs,
+        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
+        spectral_cie_z, spectral_d65, wavelengths)
+    var f = le.f_cos
+    var pdf_bsdf = le.pdf_fwd
     if f.v0 <= Float32(0.0) and f.v1 <= Float32(0.0) and f.v2 <= Float32(0.0) and f.v3 <= Float32(0.0):
         return SpectralSample(Float32(0.0))
     var li_spectral = rgb_illuminant_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, ls.Li.r, ls.Li.g, ls.Li.b, wavelengths)
+    # `f` is f*cos already (LobeEval.f_cos), so the cosine is NOT applied
+    # again here -- that double application is exactly the 2/3 energy loss
+    # vertex merging had before cos_used made the convention explicit.
     if ls.is_delta:
-        return f * li_spectral * cos_s
+        return f * li_spectral
     var mis_w = nee_mis_weight(mis, ls.pdf, pdf_bsdf, cos_s)
-    return (f * li_spectral) * (cos_s * mis_w / ls.pdf)
+    return (f * li_spectral) * (mis_w / ls.pdf)
 
 @always_inline
 def _nee_weight_hair(

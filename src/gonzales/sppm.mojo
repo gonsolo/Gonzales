@@ -2143,7 +2143,7 @@ def _sppm_nee_weight(
     # converts back to RGB (with a variance clamp) purely because `ld` was
     # RGB. `ld` is spectral now, so that round trip -- and the clamp -- are
     # gone.
-    return _nee_weight_simple_spectral(ls, mat_kind_simple, vp.alb, vp.alpha, vn, wo, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths)
+    return _nee_weight_simple_spectral(ls, mat_kind_simple, vp.alb, vp.alpha, vn, wo, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths, sd.materials, sd.curves, sd.measuredBrdfs)
 
 @always_inline
 def _sppm_vp_shadow_eps(vp: SPPMPixel, ref sd: SceneDescriptor2_C, wo: Vec3f) -> Float32:

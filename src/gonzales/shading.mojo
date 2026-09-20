@@ -760,7 +760,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
                                      null_guide(), lobe_w)
     for inf_i in range(ctx.lights.infinite_count):
         var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-        var w_e = _nee_weight_simple_spectral(ls_e, LobeKind.lambertian, lobe_alb, Float32(0), bounce_normal, wo_dt, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths) * lobe_w
+        var w_e = _nee_weight_simple_spectral(ls_e, LobeKind.lambertian, lobe_alb, Float32(0), bounce_normal, wo_dt, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths, ctx.materials, ctx.curves, ctx.measured_brdfs) * lobe_w
         if not w_e.is_black():
             var contrib_e = path_ptr[].throughput * w_e
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_e.wi, ls_e.dist, contrib_e)
@@ -1430,7 +1430,7 @@ def _nee_loop_simple[enqueue_shadow: Bool](
         var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
         var ls = res[0].copy()
         var tmax = res[1]
-        var w = _nee_weight_simple_spectral(ls, mat_kind, alb, alpha, normal, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths) * lobe_w
+        var w = _nee_weight_simple_spectral(ls, mat_kind, alb, alpha, normal, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths, ctx.materials, ctx.curves, ctx.measured_brdfs) * lobe_w
         if not w.is_black():
             var contrib = path_ptr[].throughput * w
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls.wi, tmax, contrib, guide_write)
@@ -1467,7 +1467,7 @@ def _shade_conductor_nee[enqueue_shadow: Bool](
     area-light NEE at all (a pre-existing, explicitly documented gap; see
     project_light_bxdf_interfaces memory)."""
     var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
-    var w_area = _nee_weight_simple_spectral(ls_area, LobeKind.ggx, f0, alpha, n, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths)
+    var w_area = _nee_weight_simple_spectral(ls_area, LobeKind.ggx, f0, alpha, n, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths, ctx.materials, ctx.curves, ctx.measured_brdfs)
     if not w_area.is_black():
         var contrib_area = path_ptr[].throughput * w_area
         _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_area.wi, ls_area.dist * Float32(0.9999), contrib_area)
@@ -1476,7 +1476,7 @@ def _shade_conductor_nee[enqueue_shadow: Bool](
 
     for inf_i in range(ctx.lights.infinite_count):
         var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-        var w_e = _nee_weight_simple_spectral(ls_e, LobeKind.ggx, f0, alpha, n, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths)
+        var w_e = _nee_weight_simple_spectral(ls_e, LobeKind.ggx, f0, alpha, n, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths, ctx.materials, ctx.curves, ctx.measured_brdfs)
         if not w_e.is_black():
             var contrib_e = path_ptr[].throughput * w_e
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_e.wi, ls_e.dist, contrib_e)
