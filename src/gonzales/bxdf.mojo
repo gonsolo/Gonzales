@@ -695,6 +695,25 @@ def coat_exit_norm(ior: Float32) -> Float32:
     return Float32(2.0) * span * acc / Float32(N)
 
 @fieldwise_init
+struct LobeTables(TrivialRegisterPassable):
+    """The three scene tables a lobe evaluation can read, and nothing else.
+
+    lobe_eval took these as three loose pointers because the integrators do
+    not share a context type: VCM has SceneDescriptor2_C (39 fields, passed
+    by ref), the path tracer has ShadeContext (23 fields, passed by value),
+    and they carry ELEVEN of the same scene pointers between them.
+
+    Merging those two is a ~979-site rename across by-value GPU structs with
+    a documented crash history (vcm_mat_kind_and_sd_by_value_traps), so this
+    takes the narrow win instead: one named thing to pass, produced from
+    either context by a one-line accessor. If the two contexts are ever
+    reconciled, this is what they should agree on first."""
+    var materials:      Pointer[Material_C, MutUntrackedOrigin]
+    var curves:         Pointer[Curve_C, MutUntrackedOrigin]
+    var measured_brdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin]
+
+
+@fieldwise_init
 struct LobeCtx(TrivialRegisterPassable):
     """Everything the ONE lobe evaluator needs about a shading point, and
     nothing about which integrator is asking.
@@ -781,9 +800,7 @@ def lobe_scoped(c: LobeCtx) -> Bool:
 def lobe_eval[want_pdfs: Bool = True](
     c:   LobeCtx,
     dir_to_other:  Vec3f,
-    materials: Pointer[Material_C, MutUntrackedOrigin],
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    measured_brdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin],
+    tab: LobeTables,
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
     spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
     spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
@@ -819,7 +836,7 @@ def lobe_eval[want_pdfs: Bool = True](
         # from the material so the two cannot drift. The view-side
         # transmittance is deliberately absent -- implicit in the walk having
         # reached the base at all (project_coateddiffuse_eta2_bug).
-        var mat_cw = materials[unsafe_offset=Int(c.mat_idx)]
+        var mat_cw = tab.materials[unsafe_offset=Int(c.mat_idx)]
         var ior_cw = mat_cw.emission.r
         var cos_cw = dot(dir_to_other, vn)
         if cos_cw <= Float32(0) or dot(vwo, vn) <= Float32(0):
@@ -872,8 +889,8 @@ def lobe_eval[want_pdfs: Bool = True](
     if c.kind == LobeKind.hair:
         # Hair's cosine is the FIBRE's cos_ti, not |n.wi| -- the case a caller
         # dividing by |cos(dir,n)| gets silently wrong.
-        var mat_h = materials[unsafe_offset=Int(c.mat_idx)]
-        var hc = _hair_precompute(mat_h, curves, Int(c.hair_curve_idx), c.hair_v, c.hair_h, vwo)
+        var mat_h = tab.materials[unsafe_offset=Int(c.mat_idx)]
+        var hc = _hair_precompute(mat_h, tab.curves, Int(c.hair_curve_idx), c.hair_v, c.hair_h, vwo)
         var (cos_ti, f_val, pdf_oc_fwd) = _hair_eval_lobes(
             dir_to_other, hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
             hc.dphi0, hc.dphi1, hc.dphi2,
@@ -884,7 +901,7 @@ def lobe_eval[want_pdfs: Bool = True](
         var hair_spec = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f_val.r, f_val.g, f_val.b, wavelengths)
         var rev_h = Float32(0)
         comptime if want_pdfs:
-            var hc_rev = _hair_precompute(mat_h, curves, Int(c.hair_curve_idx), c.hair_v, c.hair_h, dir_to_other)
+            var hc_rev = _hair_precompute(mat_h, tab.curves, Int(c.hair_curve_idx), c.hair_v, c.hair_h, dir_to_other)
             var (cos_ti_rev, _, pdf_oc_rev) = _hair_eval_lobes(
                 vwo, hc_rev.tangent, hc_rev.b_perp, hc_rev.n_perp, hc_rev.phi_o,
                 hc_rev.dphi0, hc_rev.dphi1, hc_rev.dphi2,
@@ -896,8 +913,8 @@ def lobe_eval[want_pdfs: Bool = True](
         return LobeEval(hair_spec * cos_ti, cos_ti, cos_ti * pdf_oc_fwd, rev_h, True)
 
     if c.kind == LobeKind.measured:
-        var vmat = materials[unsafe_offset=Int(c.mat_idx)]
-        var mb = measured_brdfs[unsafe_offset=Int(vmat.measured_idx)]
+        var vmat = tab.materials[unsafe_offset=Int(c.mat_idx)]
+        var mb = tab.measured_brdfs[unsafe_offset=Int(vmat.measured_idx)]
         var frm = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
         var tangent = Vec3f(frm.x.x, frm.x.y, frm.x.z)
         var bitangent = Vec3f(frm.y.x, frm.y.y, frm.y.z)
@@ -1371,9 +1388,7 @@ def _nee_weight_simple_spectral(
     spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
     spectral_d65: Pointer[Float32, MutUntrackedOrigin],
     wavelengths: SampledWavelengths,
-    materials: Pointer[Material_C, MutUntrackedOrigin],
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    measured_brdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin],
+    tab: LobeTables,
     mis: MisPolicy = mis_policy_power(),
 ) -> SpectralSample:
     """Spectral counterpart of _nee_weight_simple — same formula, but the
@@ -1395,7 +1410,7 @@ def _nee_weight_simple_spectral(
     var le = lobe_eval[want_pdfs=True](
         LobeCtx(mat_kind, True, False, n, wo, alb, Int32(-1), alpha,
                 Float32(0), Int32(-1), Float32(0), Float32(0)),
-        ls.wi, materials, curves, measured_brdfs,
+        ls.wi, tab,
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, wavelengths)
     var f = le.f_cos

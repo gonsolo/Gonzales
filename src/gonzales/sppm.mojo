@@ -28,7 +28,7 @@ from .bvh import (
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
     render_aux_buffers,
 )
-from .bxdf import dielectric_interface, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, LobeCtx, lobe_eval
+from .bxdf import dielectric_interface, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, LobeCtx, lobe_eval, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured
 from .shading import _tex_lookup, _get_tri_verts
 from .sampling import power_heuristic
@@ -2143,7 +2143,7 @@ def _sppm_nee_weight(
     # converts back to RGB (with a variance clamp) purely because `ld` was
     # RGB. `ld` is spectral now, so that round trip -- and the clamp -- are
     # gone.
-    return _nee_weight_simple_spectral(ls, mat_kind_simple, vp.alb, vp.alpha, vn, wo, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths, sd.materials, sd.curves, sd.measuredBrdfs)
+    return _nee_weight_simple_spectral(ls, mat_kind_simple, vp.alb, vp.alpha, vn, wo, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs))
 
 @always_inline
 def _sppm_vp_shadow_eps(vp: SPPMPixel, ref sd: SceneDescriptor2_C, wo: Vec3f) -> Float32:
@@ -2318,7 +2318,7 @@ def _sppm_nee_one(
                             LobeCtx(mat_kind_simple, True, False, vn, wo, vp.alb,
                                     Int32(-1), vp.alpha, Float32(0), Int32(-1),
                                     Float32(0), Float32(0)),
-                            wi, sd.materials, sd.curves, sd.measuredBrdfs,
+                            wi, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs),
                             sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
                             sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
                             vp.wavelengths)

@@ -6,7 +6,7 @@ from std.math import abs
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, INV_PI, Vec3f, Material_C, Curve_C, MeasuredBRDF_C
 from gonzales.bxdf import (
-    bxdf_eval_conductor_ggx, bxdf_eval_any, LobeCtx, lobe_eval,
+    bxdf_eval_conductor_ggx, bxdf_eval_any, LobeCtx, LobeTables, lobe_eval,
     _nee_weight_simple, _nee_weight_simple_spectral,
 )
 from gonzales.bvh import LightSample
@@ -81,7 +81,7 @@ def _eval_any_spectral(kind: Int32, alb: RGB, alpha: Float32, n: Vec3f,
     var le = lobe_eval[want_pdfs=True](
         LobeCtx(kind, True, False, n, wo, alb, Int32(-1), alpha, Float32(0),
                 Int32(-1), Float32(0), Float32(0)),
-        wi, _mats, _curves, _mbrdfs, coeffs, res, cx, cy, cz, d65, wl)
+        wi, LobeTables(_mats, _curves, _mbrdfs), coeffs, res, cx, cy, cz, d65, wl)
     if le.cos_used <= Float32(1e-6):
         return (SpectralSample(Float32(0.0)), le.pdf_fwd)
     return (le.f_cos * (Float32(1.0) / le.cos_used), le.pdf_fwd)
@@ -167,7 +167,7 @@ def test_nee_weight_simple_spectral_invalid_sample_is_zero() raises:
     var ls = LightSample(Vec3f(0.0, 0.0, 1.0), RGB(Float32(5.0)), Float32(1.0), Float32(1.0), False, False)
     var n = Vec3f(0.0, 0.0, 1.0)
     var wo = Vec3f(0.0, 0.0, 1.0)
-    var result = _nee_weight_simple_spectral(ls, Int32(0), RGB(Float32(0.5)), Float32(0.0), n, wo, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl, _mats, _curves, _mbrdfs)
+    var result = _nee_weight_simple_spectral(ls, Int32(0), RGB(Float32(0.5)), Float32(0.0), n, wo, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl, LobeTables(_mats, _curves, _mbrdfs))
     assert_true(_close(result.v0, Float32(0.0)) and _close(result.v1, Float32(0.0)))
     # Keep `ctx` alive: `handle` holds raw MutUntrackedOrigin pointers INTO
     # ctx's own Lists, and that origin erasure hides the dependency, so ASAP
@@ -183,7 +183,7 @@ def test_nee_weight_simple_spectral_backfacing_is_zero() raises:
     var ls = LightSample(Vec3f(0.0, 0.0, -1.0), RGB(Float32(5.0)), Float32(1.0), Float32(1.0), True, True)
     var n = Vec3f(0.0, 0.0, 1.0)
     var wo = Vec3f(0.0, 0.0, 1.0)
-    var result = _nee_weight_simple_spectral(ls, Int32(0), RGB(Float32(0.5)), Float32(0.0), n, wo, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl, _mats, _curves, _mbrdfs)
+    var result = _nee_weight_simple_spectral(ls, Int32(0), RGB(Float32(0.5)), Float32(0.0), n, wo, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl, LobeTables(_mats, _curves, _mbrdfs))
     assert_true(_close(result.v0, Float32(0.0)) and _close(result.v1, Float32(0.0)))
     # Keep `ctx` alive: `handle` holds raw MutUntrackedOrigin pointers INTO
     # ctx's own Lists, and that origin erasure hides the dependency, so ASAP
@@ -211,7 +211,7 @@ def test_nee_weight_simple_spectral_delta_light_matches_rgb_after_roundtrip() ra
     for i in range(N_TRIALS):
         var u = (Float32(i) + Float32(0.5)) / Float32(N_TRIALS)
         var wl = sample_wavelengths_uniform(u)
-        var result = _nee_weight_simple_spectral(ls_rgb, Int32(0), alb, Float32(0.0), n, wo, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl, _mats, _curves, _mbrdfs)
+        var result = _nee_weight_simple_spectral(ls_rgb, Int32(0), alb, Float32(0.0), n, wo, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl, LobeTables(_mats, _curves, _mbrdfs))
         var (rr, gg, bb) = spectral_sample_to_rgb(handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, result, wl)
         accR += rr; accG += gg; accB += bb
     accR /= Float32(N_TRIALS); accG /= Float32(N_TRIALS); accB /= Float32(N_TRIALS)
