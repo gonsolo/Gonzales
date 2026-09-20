@@ -2988,6 +2988,33 @@ def _bdpt_light_path_init[use_gpu: Bool](
         ro = disk_pt
         rd = emit_dir
         n_verts = 0
+        # VCM Stage 2b MIS origin for a NON-FINITE (environment) light.
+        # SmallVCM vertexcm.hxx GenerateLightSample, background branch:
+        #     directPdfW   = pdf_dir * lightPickProb
+        #     emissionPdfW = directPdfW / diskArea
+        #     dVCM = directPdfW / emissionPdfW = diskArea
+        #     dVC  = usedCosLight / emissionPdfW, usedCosLight = 1 (not finite)
+        #     dVM  = dVC * mis_vc_weight_factor
+        # lightPickProb = 1/n_lights cancels out of dVCM and appears in dVC
+        # as the n_lights factor, exactly as in `flux` just above.
+        #
+        # These used to be left at 0 -- the scoped simplification the block
+        # comment at the top of this function describes. Zero carries collapse
+        # every MIS denominator to 1, so both light-side techniques took FULL
+        # credit for illumination the camera side had already reported through
+        # its env NEE. Measured on env-furnace (analytic answer 0.5): correct
+        # at 0.5037 with both disabled, 0.5676 with t=1 splatting re-enabled
+        # (+12.8%), 0.6701 with merging too (+20.5%) -- the whole of VCM's
+        # +34% on every env-lit scene. Area lights were never affected (they
+        # get real carries above), which is why only env-lit cells showed it.
+        #
+        # `is_finite_origin` deliberately stays False: that is what suppresses
+        # the first-segment dist^2 factor below, correct here because the disk
+        # is a sampling device, not a real emitter position.
+        var disk_area = PI * radius * radius
+        dvcm_carry = disk_area
+        dvc_carry = disk_area * Float32(n_lights) / pdf_dir
+        dvm_carry = dvc_carry * mis_vc_weight_factor
     else:
         # Point light: a real finite position (unlike distant/infinite), but
         # still no NEE-equivalent cache vertex — see this function's own
