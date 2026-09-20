@@ -1467,7 +1467,8 @@ def _bdpt_merge_from_cache(
                         # sphere -- large in a room-sized scene.
                         var _ncmp = dot(cv.normal.to_simd(), lv.normal.to_simd())
                         if dist2 <= r2 and _ncmp > Float32(0.7):
-                            var f_cv = _eval_vertex_spectral(cv, lv.wo.to_simd(), sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, cv.wavelengths)
+                            var le_cv = _lobe_eval[want_pdfs=False](cv, lv.wo.to_simd(), sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, cv.wavelengths)
+                            var f_cv = le_cv.f_cos
                             # MERGING TAKES THE BARE BSDF, NOT f*cos.
                             # _eval_vertex_spectral returns f*|cos| because
                             # that is what a CONNECTION needs -- the cosine
@@ -1482,9 +1483,13 @@ def _bdpt_merge_from_cache(
                             # furnace's analytic answer. SmallVCM splits it
                             # the same way: RangeQuery::Process uses the bare
                             # bsdfFactor, connections multiply by cosThetaGen.
-                            var cos_merge = abs(dot(lv.wo.to_simd(), cv.normal.to_simd()))
-                            if cos_merge > Float32(1e-6):
-                                f_cv = f_cv * (Float32(1.0) / cos_merge)
+                            # ... and THIS lobe's own cosine, which is not
+                            # always |cos(dir, n)|: hair carries the FIBRE
+                            # cosine and a volume carries none. Guessing it
+                            # here -- as this did before _lobe_eval existed --
+                            # divides hair by the wrong quantity entirely.
+                            if le_cv.cos_used > Float32(1e-6):
+                                f_cv = f_cv * (Float32(1.0) / le_cv.cos_used)
                             else:
                                 f_cv = SpectralSample(Float32(0.0))
                             var w = Float32(1)
@@ -4002,6 +4007,162 @@ def _bdpt_sample_bssrdf_exit(
     return BssrdfExitSample(True, x_o, n_o, RGB(rd.r * k, rd.g * k, rd.b * k), p_area)
 
 
+@fieldwise_init
+struct LobeEval(TrivialRegisterPassable):
+    """One vertex lobe, evaluated ONCE: throughput, the cosine that throughput
+    already contains, both densities, and whether it has real densities at all.
+
+    This exists because the same dispatch over LobeKind was written out THREE
+    times -- `_eval_vertex_spectral` (f*cos), `_bdpt_vertex_pdfs`
+    (forward/reverse densities) and `_bdpt_vertex_mis_scoped` (which kinds
+    have densities) -- and the three lists drifted apart. Every VCM defect
+    found on 2026-09-20 lived in that drift:
+
+      * `coated_walk` appeared in the scope test and had NO branch in the
+        evaluator, so a coateddiffuse vertex was silently evaluated as bare
+        diffuse -- no entry Fresnel, no coat absorption, no 1/eta^2.
+      * the evaluator returned f*cos while photon-density estimation needs the
+        BARE f, and nothing in the signature said which -- merging applied the
+        cosine twice and lost exactly (2pi/3)/pi = 2/3 of its energy.
+      * the opaque-Lambertian fallback had no sidedness test, so a photon that
+        landed on the BACK of a surface reflected out of the front; t=1 light
+        tracing alone came out 2.04x its analytic answer.
+
+    `cos_used` answers the second one structurally: a density estimator
+    divides it out EXPLICITLY instead of a caller guessing the convention. It
+    is not always |cos(dir,n)| -- hair carries the FIBRE cosine and a volume
+    carries none -- which a caller cannot know and kept getting wrong.
+    `scoped` answers the first: one list, not three."""
+    var f_cos:    SpectralSample   # BSDF (or phase) * the cosine this lobe uses
+    var cos_used: Float32          # that cosine; 1 where the lobe has none
+    var pdf_fwd:  Float32          # solid-angle density INTO dir_to_other
+    var pdf_rev:  Float32          # ... and back toward v.wo (adjoint)
+    var scoped:   Bool             # real densities exist -> may take part in MIS
+
+
+@always_inline
+def _lobe_eval[want_pdfs: Bool = True](
+    v:   BDPTVertex,
+    dir_to_other:  Vec3f,
+    ref sd:  SceneDescriptor2_C,
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
+    wavelengths: SampledWavelengths,
+) -> LobeEval:
+    """THE lobe dispatch. `want_pdfs=False` skips the density half, which for
+    hair is an entire second `_hair_precompute` -- not a micro-optimisation."""
+    var ZERO = SpectralSample(Float32(0))
+    if v.is_delta != Int32(0):
+        return LobeEval(ZERO, Float32(1), Float32(0), Float32(0), False)
+
+    if v.is_surface == Int32(0):
+        # Volume: isotropic phase, no surface, and so NO cosine at all.
+        var alb_v = rgb_bands_to_spectral_sample(v.alb.r, v.alb.g, v.alb.b, wavelengths)
+        return LobeEval(alb_v * INV_FOUR_PI, Float32(1), INV_FOUR_PI, INV_FOUR_PI, False)
+
+    var vn = v.normal.to_simd()
+    var vwo = v.wo.to_simd()
+
+    if v.mat_kind == LobeKind.coated_walk:
+        # coateddiffuse's coat-walk EXIT lobe. Same factorization
+        # _nee_weight_coated_diffuse_base uses on the NEE side, reading ior
+        # from the material so the two cannot drift. The view-side
+        # transmittance is deliberately absent -- implicit in the walk having
+        # reached the base at all (project_coateddiffuse_eta2_bug).
+        var mat_cw = sd.materials[unsafe_offset=Int(v.mat_idx)]
+        var ior_cw = mat_cw.emission.r
+        var cos_cw = dot(dir_to_other, vn)
+        if cos_cw <= Float32(0) or dot(vwo, vn) <= Float32(0):
+            return LobeEval(ZERO, Float32(1), Float32(0), Float32(0), False)
+        var t_l_cw = Float32(1.0) - fr_dielectric(cos_cw, ior_cw)
+        var tr_l_cw = coat_beer_lambert_tr(
+            cos_theta_t_dielectric(cos_cw, ior_cw), DEFAULT_COAT_THICKNESS)
+        var t_both_cw = t_l_cw * tr_l_cw / max(ior_cw * ior_cw, Float32(1e-6))
+        var alb_cw = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, v.alb.r, v.alb.g, v.alb.b, wavelengths)
+        # NOT scoped: the exit density is only tractable for a SMOOTH coat
+        # (bxdf_pdf_coated_exit, 27152093) and these vertices still carry
+        # placeholder dVCM/dVC/dVM. Scoping it is its own task.
+        return LobeEval(alb_cw * (INV_PI * cos_cw * t_both_cw), cos_cw,
+                        Float32(0), Float32(0), False)
+
+    if v.mat_kind == LobeKind.bssrdf:
+        var cos_x = abs(dot(dir_to_other, vn))
+        return LobeEval(SpectralSample(bssrdf_exit_ft(cos_x, v.pdf_bwd) * INV_PI * cos_x),
+                        cos_x, cos_x * INV_PI, v.pdf_fwd, False)
+
+    if v.mat_kind == LobeKind.ggx:
+        # _eval_conductor_ggx_spectral folds in cos(dir_to_other, n) via its
+        # `k * cos_i`, so that -- not 1 -- is this lobe's cosine.
+        var f_g = _eval_conductor_ggx_spectral(vn, vwo, dir_to_other, v.pdf_bwd, v.alb, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
+        var cos_g = abs(dot(dir_to_other, vn))
+        var fwd_g = Float32(0)
+        var rev_g = Float32(0)
+        comptime if want_pdfs:
+            fwd_g = bxdf_pdf_conductor_ggx(vn, vwo, dir_to_other, v.pdf_bwd)
+            rev_g = bxdf_pdf_conductor_ggx(vn, dir_to_other, vwo, v.pdf_bwd)
+        return LobeEval(f_g, cos_g, fwd_g, rev_g, True)
+
+    if v.mat_kind == LobeKind.hair:
+        # Hair's cosine is the FIBRE's cos_ti, not |n.wi| -- the case a caller
+        # dividing by |cos(dir,n)| gets silently wrong.
+        var mat_h = sd.materials[unsafe_offset=Int(v.mat_idx)]
+        var hc = _hair_precompute(mat_h, sd.curves, Int(v.hair_curve_idx), v.hair_v, v.hair_h, vwo)
+        var (cos_ti, f_val, pdf_oc_fwd) = _hair_eval_lobes(
+            dir_to_other, hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
+            hc.dphi0, hc.dphi1, hc.dphi2,
+            hc.cos_tp0_o, hc.sin_tp0_o, hc.cos_tp1_o, hc.sin_tp1_o, hc.cos_tp2_o, hc.sin_tp2_o,
+            hc.cos_theta_o, hc.sin_theta_o, hc.inv_vm0, hc.inv_vm1, hc.inv_vm2, hc.mp_c0, hc.mp_c1, hc.mp_c2, hc.s,
+            hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
+        )
+        var hair_spec = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f_val.r, f_val.g, f_val.b, wavelengths)
+        var rev_h = Float32(0)
+        comptime if want_pdfs:
+            var hc_rev = _hair_precompute(mat_h, sd.curves, Int(v.hair_curve_idx), v.hair_v, v.hair_h, dir_to_other)
+            var (cos_ti_rev, _, pdf_oc_rev) = _hair_eval_lobes(
+                vwo, hc_rev.tangent, hc_rev.b_perp, hc_rev.n_perp, hc_rev.phi_o,
+                hc_rev.dphi0, hc_rev.dphi1, hc_rev.dphi2,
+                hc_rev.cos_tp0_o, hc_rev.sin_tp0_o, hc_rev.cos_tp1_o, hc_rev.sin_tp1_o, hc_rev.cos_tp2_o, hc_rev.sin_tp2_o,
+                hc_rev.cos_theta_o, hc_rev.sin_theta_o, hc_rev.inv_vm0, hc_rev.inv_vm1, hc_rev.inv_vm2, hc_rev.mp_c0, hc_rev.mp_c1, hc_rev.mp_c2, hc_rev.s,
+                hc_rev.A0, hc_rev.A1, hc_rev.A2, hc_rev.A3, hc_rev.lum0, hc_rev.lum1, hc_rev.lum2, hc_rev.lum3, hc_rev.total_lum,
+            )
+            rev_h = cos_ti_rev * pdf_oc_rev
+        return LobeEval(hair_spec * cos_ti, cos_ti, cos_ti * pdf_oc_fwd, rev_h, True)
+
+    if v.mat_kind == LobeKind.measured:
+        var vmat = sd.materials[unsafe_offset=Int(v.mat_idx)]
+        var mb = sd.measuredBrdfs[unsafe_offset=Int(vmat.measured_idx)]
+        var frm = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
+        var tangent = Vec3f(frm.x.x, frm.x.y, frm.x.z)
+        var bitangent = Vec3f(frm.y.x, frm.y.y, frm.y.z)
+        var wo_l = Vec3f(dot(vwo, tangent), dot(vwo, bitangent), dot(vwo, vn))
+        var wi_l = Vec3f(dot(dir_to_other, tangent), dot(dir_to_other, bitangent), dot(dir_to_other, vn))
+        var (fr_spec, _) = bxdf_eval_measured(mb, wo_l, wi_l, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+        var cos_m = abs(dot(dir_to_other, vn))
+        var fwd_m = Float32(0)
+        var rev_m = Float32(0)
+        comptime if want_pdfs:
+            fwd_m = bxdf_pdf_measured(mb, wo_l, wi_l)
+            rev_m = bxdf_pdf_measured(mb, wi_l, wo_l)
+        return LobeEval(fr_spec * cos_m, cos_m, fwd_m, rev_m, True)
+
+    # Opaque Lambertian, and the coated base's fallback. ZERO across the
+    # surface: `v.wo` is the direction the subpath ARRIVED from, so an opaque
+    # lobe transports only to wo's own side of the normal. Returning |cos|
+    # unconditionally made diffuse two-sided and TRANSMISSIVE. A degenerate wo
+    # carries no sidedness information, so it falls back rather than silently
+    # zeroing every contribution.
+    var cos_o = dot(dir_to_other, vn)
+    if dot(vwo, vwo) > Float32(1e-8) and cos_o * dot(vwo, vn) <= Float32(0):
+        return LobeEval(ZERO, Float32(1), Float32(0), Float32(0), True)
+    var cos_l = abs(cos_o)
+    var alb_l = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, v.alb.r, v.alb.g, v.alb.b, wavelengths)
+    return LobeEval(alb_l * (INV_PI * cos_l), cos_l,
+                    cos_l * INV_PI, abs(dot(vwo, vn)) * INV_PI, True)
+
+
 @always_inline
 def _eval_vertex_spectral(
     v:   BDPTVertex,
@@ -4014,115 +4175,13 @@ def _eval_vertex_spectral(
     spectral_d65: Pointer[Float32, MutUntrackedOrigin],
     wavelengths: SampledWavelengths,
 ) -> SpectralSample:
-    """BSDF (or phase) x cos at vertex `v` toward `dir_to_other`, in the
-    spectral domain. Covers EVERY mat_kind -- this replaced the RGB
-    `_eval_vertex` outright when BDPT/VCM transport went spectral, because a
-    connection now multiplies two spectral betas and there is no longer an
-    RGB product for an RGB evaluator to feed.
-
-    `sd` is needed for mat_kind 2 (hair, to re-fetch the material + curve
-    data _hair_precompute wants -- v carries only small indices) and 3
-    (measured, for the tabulated BRDF). Hair's three lobes are evaluated in
-    RGB and upsampled as a REFLECTANCE, a scoped approximation: the
-    Marschner model here is authored per-RGB-channel, so there is no
-    per-wavelength form to evaluate. Measured is genuinely spectral already
-    -- bxdf_eval_measured's tabulated `spectra` tensor is indexed by
-    wavelength -- and is now consumed without the round trip back to RGB
-    that the RGB caller used to force on it."""
-    if v.is_delta != Int32(0):
-        return SpectralSample(Float32(0))
-    if v.is_surface == Int32(0):
-        # A volume vertex's alb is the single-scattering albedo
-        # sigma_s/sigma_t -- a per-channel COEFFICIENT, not a reflectance.
-        # rgb_to_spectral_sample (the Jakob-Hanika reflectance upsampler) was
-        # used here: RGB(a,a,a) does not come back as a in every lane, so a
-        # grey medium acquired a D65-shaped tint at every connect/merge. See
-        # docs/02_spectra_and_color.md, "A coefficient is not a color".
-        var alb_spec = rgb_bands_to_spectral_sample(v.alb.r, v.alb.g, v.alb.b, wavelengths)
-        return alb_spec * INV_FOUR_PI
-    var vn = v.normal.to_simd()
-    if v.mat_kind == LobeKind.coated_walk:
-        # The coat-walk EXIT lobe. mat_kind 4 had NO branch here at all, so it
-        # fell through to the plain Lambertian one below: every merge, connect
-        # and t=1 splat against a coateddiffuse vertex evaluated it as if the
-        # coat were not there, dropping the entry Fresnel, the coat's
-        # Beer-Lambert attenuation and the 1/eta^2 radiance compression.
-        #
-        # Same factorization _nee_weight_coated_diffuse_base uses on the NEE
-        # side, and it has to STAY the same, which is why this reads the
-        # material instead of re-deriving constants:
-        #
-        #     f*cos = alb/pi * cos * (1 - F(cos)) * Tr(cos_internal) / eta^2
-        #
-        # The view-side transmittance is deliberately absent: it is implicit
-        # in the walk having reached the base at all, the entry coin flip
-        # being its estimator. Applying it again is the double count written
-        # up in project_coateddiffuse_eta2_bug.
-        var mat_cw = sd.materials[unsafe_offset=Int(v.mat_idx)]
-        var ior_cw = mat_cw.emission.r
-        var cos_cw = dot(dir_to_other, vn)
-        var cos_wo_cw = dot(v.wo.to_simd(), vn)
-        if cos_cw <= Float32(0) or cos_wo_cw <= Float32(0):
-            return SpectralSample(Float32(0))
-        var t_l_cw = Float32(1.0) - fr_dielectric(cos_cw, ior_cw)
-        var tr_l_cw = coat_beer_lambert_tr(
-            cos_theta_t_dielectric(cos_cw, ior_cw), DEFAULT_COAT_THICKNESS)
-        var t_both_cw = t_l_cw * tr_l_cw / max(ior_cw * ior_cw, Float32(1e-6))
-        var alb_cw = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, v.alb.r, v.alb.g, v.alb.b, wavelengths)
-        return alb_cw * (INV_PI * cos_cw * t_both_cw)
-    if v.mat_kind == LobeKind.bssrdf:
-        # BSSRDF exit lobe Ft(cos)/pi (eta in pdf_bwd). Spectrally flat: the
-        # material's colour already rode in on the hop weight R_d/p_A.
-        var cos_x = abs(dot(dir_to_other, vn))
-        return SpectralSample(bssrdf_exit_ft(cos_x, v.pdf_bwd) * INV_PI * cos_x)
-    if v.mat_kind == LobeKind.ggx:
-        var vwo = v.wo.to_simd()
-        return _eval_conductor_ggx_spectral(vn, vwo, dir_to_other, v.pdf_bwd, v.alb, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
-    if v.mat_kind == LobeKind.hair:
-        var mat = sd.materials[unsafe_offset=Int(v.mat_idx)]
-        var hc = _hair_precompute(mat, sd.curves, Int(v.hair_curve_idx), v.hair_v, v.hair_h, v.wo.to_simd())
-        var (cos_ti, f_val, _) = _hair_eval_lobes(
-            dir_to_other, hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
-            hc.dphi0, hc.dphi1, hc.dphi2,
-            hc.cos_tp0_o, hc.sin_tp0_o, hc.cos_tp1_o, hc.sin_tp1_o, hc.cos_tp2_o, hc.sin_tp2_o,
-            hc.cos_theta_o, hc.sin_theta_o, hc.inv_vm0, hc.inv_vm1, hc.inv_vm2, hc.mp_c0, hc.mp_c1, hc.mp_c2, hc.s,
-            hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
-        )
-        var hair_spec = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f_val.r, f_val.g, f_val.b, wavelengths)
-        return hair_spec * cos_ti
-    if v.mat_kind == LobeKind.measured:
-        var vmat = sd.materials[unsafe_offset=Int(v.mat_idx)]
-        var mb = sd.measuredBrdfs[unsafe_offset=Int(vmat.measured_idx)]
-        var vwo_m = v.wo.to_simd()
-        var frm_ev = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
-        var tangent_ev = Vec3f(frm_ev.x.x, frm_ev.x.y, frm_ev.x.z)
-        var bitangent_ev = Vec3f(frm_ev.y.x, frm_ev.y.y, frm_ev.y.z)
-        var wo_l_ev = Vec3f(dot(vwo_m, tangent_ev), dot(vwo_m, bitangent_ev), dot(vwo_m, vn))
-        var wi_l_ev = Vec3f(dot(dir_to_other, tangent_ev), dot(dir_to_other, bitangent_ev), dot(dir_to_other, vn))
-        var (fr_spec_ev, _) = bxdf_eval_measured(mb, wo_l_ev, wi_l_ev, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
-        var cos_o_ev = dot(dir_to_other, vn)
-        if cos_o_ev < Float32(0): cos_o_ev = -cos_o_ev
-        return fr_spec_ev * cos_o_ev
-    # Surface: OPAQUE Lambertian -- f = alb/pi * |cos|, and ZERO across the
-    # surface. This used to return |cos| unconditionally, making a diffuse
-    # base two-sided and TRANSMISSIVE: a photon landing on the BACK of a
-    # surface reflected out of the front. Both light-side techniques evaluate
-    # through here, and on a one-sided quad with an environment on both sides
-    # that doubled their energy exactly -- t=1 alone, unweighted, rendered the
-    # white furnace at 2.04x its analytic answer, flat across resolution and
-    # spp. `v.wo` is the direction the subpath ARRIVED from, so an opaque lobe
-    # transports only to directions on wo's own side of the normal. A
-    # degenerate wo (unset, length 0) carries no sidedness information, so it
-    # falls back to the old behaviour rather than silently zeroing.
-    var cos_o = dot(dir_to_other, vn)
-    var wo_v = v.wo.to_simd()
-    if dot(wo_v, wo_v) > Float32(1e-8) and cos_o * dot(wo_v, vn) <= Float32(0):
-        return SpectralSample(Float32(0.0))
-    if cos_o < Float32(0): cos_o = -cos_o
-    var alb_spec = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, v.alb.r, v.alb.g, v.alb.b, wavelengths)
-    return alb_spec * (INV_PI * cos_o)
-
-# ── Geometry term ─────────────────────────────────────────────────────────────
+    """Throughput at `v` toward `dir_to_other`: the BSDF (or phase function)
+    times this lobe's OWN cosine. A thin view onto _lobe_eval -- see
+    LobeEval for why the dispatch it used to duplicate now lives in one
+    place."""
+    return _lobe_eval[want_pdfs=False](
+        v, dir_to_other, sd, spectral_coeffs, spectral_res, spectral_cie_x,
+        spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths).f_cos
 
 @always_inline
 def _geom_term(
@@ -4152,104 +4211,18 @@ def _geom_term(
 def _bdpt_vertex_pdfs(
     v: BDPTVertex, dir_to_other: Vec3f, ref sd: SceneDescriptor2_C,
 ) -> Tuple[Float32, Float32]:
-    """Real forward/reverse solid-angle BSDF pdfs for a VCM-MIS-scoped
-    vertex (diffuse mat_kind=0, rough conductor/coated_conductor mat_kind=1,
-    measured mat_kind=3, hair mat_kind=2 -- light-source vertices use their
-    own cosine-weighted-emission formula at the call site instead, see
-    _connect's docstring). Returns (dir_pdf_w, rev_pdf_w):
+    """Forward/reverse solid-angle densities at `v` toward `dir_to_other`.
 
-    - dir_pdf_w: the pdf of v's own BSDF sampling `dir_to_other` as the
-      outgoing direction, continuing FROM v.
-    - rev_pdf_w: the pdf of sampling v's own `wo` (back toward its
-      predecessor) as if the path had instead been traced starting FROM
-      `dir_to_other` -- i.e. the same pdf function with wo/wi swapped,
-      matching SmallVCM's Pdf(..., adjoint=true) reverse-evaluation
-      convention (vertexcm.hxx's SampleScattering).
-
-    For conductor, both directions route through bxdf_pdf_conductor_ggx
-    (Heitz 2018 VNDF sampling pdf, already used standalone by shading.mojo's
-    NEE-MIS path) -- v.wo/v.normal/v.pdf_bwd (GGX alpha) are exactly the
-    fields _eval_vertex's own mat_kind=1 branch already reads, so no new
-    per-vertex state is needed. For measured, both directions route through
-    bxdf_pdf_measured (Dupuy & Jakob tabulated pdf, bxdfs.cpp:1087-1120) --
-    needs a reconstructed local tangent frame (Frame.from_z(v.normal), same
-    pattern _eval_vertex's own mat_kind=3 branch already uses) to convert
-    world-space wo/dir_to_other into the local-frame directions
-    bxdf_pdf_measured expects; `sd` is only needed for this measured lookup
-    (sd.materials[v.mat_idx].measured_idx -> sd.measuredBrdfs[...]).
-    Measured's PER-BOUNCE dVCM/dVC/dVM carry-through already used this same
-    real pdf since Stage 2b (see _bdpt_trace_camera_and_connect's/
-    _bdpt_trace_light_path's measured branches) -- this was the one
-    remaining gap, connect/merge-TIME weighting, not the recursive update
-    itself. For hair, `_hair_precompute` rebuilds the Marschner fiber-frame
-    constants (HairLobeConstants) from the vertex's own small persisted
-    state (mat_idx/hair_curve_idx/hair_h/hair_v/wo) -- the SAME reconstruct
-    _eval_vertex's own mat_kind=2 branch already does -- then
-    `_hair_eval_lobes` gives back `(cos_ti, f, pdf_over_cos)`, where
-    `cos_ti * pdf_over_cos` is the real solid-angle pdf (per that
-    function's own docstring, and exactly the quantity _nee_weight_hair
-    already trusts for NEE MIS in bxdf.mojo). Unlike conductor/measured
-    (whose underlying pdf functions take wo/wi as plain arguments, so the
-    reverse direction is just a swapped call), hair's "wo" is baked INTO
-    the precomputed constants at reconstruction time -- so the reverse
-    pdf needs a SECOND `_hair_precompute` call with dir_to_other in wo's
-    role, then evaluates at v.wo. Diffuse's cos/π formula is unchanged
-    from Stage 2b. Only ever called on vertices already known non-delta
-    (both _connect and _bdpt_merge_from_cache reject cv.is_delta/
-    lv.is_delta before reaching any weight computation, and hair itself
-    has no delta lobe at all -- Marschner is a 3-lobe glossy model), so
-    bxdf_pdf_conductor_ggx's/bxdf_pdf_measured's/_hair_eval_lobes' own
-    internal guards are the only "this direction is impossible under the
-    sampling scheme" cases they need to handle."""
-    if v.mat_kind == LobeKind.bssrdf:
-        # Exit vertex: cosine lobe forward; the REVERSE density toward its
-        # predecessor is the hop's own area pdf p_A (in pdf_fwd), not a
-        # direction pdf -- machine-checked, Scenes/vcm_bssrdf_mis_derivation.py.
-        return (abs(dot(dir_to_other, v.normal.to_simd())) * INV_PI, v.pdf_fwd)
-    if v.mat_kind == LobeKind.ggx:
-        var n = v.normal.to_simd()
-        var wo = v.wo.to_simd()
-        var alpha = v.pdf_bwd
-        return (
-            bxdf_pdf_conductor_ggx(n, wo, dir_to_other, alpha),
-            bxdf_pdf_conductor_ggx(n, dir_to_other, wo, alpha),
-        )
-    if v.mat_kind == LobeKind.hair:
-        var mat_h = sd.materials[unsafe_offset=Int(v.mat_idx)]
-        var hc_fwd = _hair_precompute(mat_h, sd.curves, Int(v.hair_curve_idx), v.hair_v, v.hair_h, v.wo.to_simd())
-        var (cos_ti_fwd, _, pdf_oc_fwd) = _hair_eval_lobes(
-            dir_to_other, hc_fwd.tangent, hc_fwd.b_perp, hc_fwd.n_perp, hc_fwd.phi_o,
-            hc_fwd.dphi0, hc_fwd.dphi1, hc_fwd.dphi2,
-            hc_fwd.cos_tp0_o, hc_fwd.sin_tp0_o, hc_fwd.cos_tp1_o, hc_fwd.sin_tp1_o, hc_fwd.cos_tp2_o, hc_fwd.sin_tp2_o,
-            hc_fwd.cos_theta_o, hc_fwd.sin_theta_o, hc_fwd.inv_vm0, hc_fwd.inv_vm1, hc_fwd.inv_vm2, hc_fwd.mp_c0, hc_fwd.mp_c1, hc_fwd.mp_c2, hc_fwd.s,
-            hc_fwd.A0, hc_fwd.A1, hc_fwd.A2, hc_fwd.A3, hc_fwd.lum0, hc_fwd.lum1, hc_fwd.lum2, hc_fwd.lum3, hc_fwd.total_lum,
-        )
-        var hc_rev = _hair_precompute(mat_h, sd.curves, Int(v.hair_curve_idx), v.hair_v, v.hair_h, dir_to_other)
-        var (cos_ti_rev, _, pdf_oc_rev) = _hair_eval_lobes(
-            v.wo.to_simd(), hc_rev.tangent, hc_rev.b_perp, hc_rev.n_perp, hc_rev.phi_o,
-            hc_rev.dphi0, hc_rev.dphi1, hc_rev.dphi2,
-            hc_rev.cos_tp0_o, hc_rev.sin_tp0_o, hc_rev.cos_tp1_o, hc_rev.sin_tp1_o, hc_rev.cos_tp2_o, hc_rev.sin_tp2_o,
-            hc_rev.cos_theta_o, hc_rev.sin_theta_o, hc_rev.inv_vm0, hc_rev.inv_vm1, hc_rev.inv_vm2, hc_rev.mp_c0, hc_rev.mp_c1, hc_rev.mp_c2, hc_rev.s,
-            hc_rev.A0, hc_rev.A1, hc_rev.A2, hc_rev.A3, hc_rev.lum0, hc_rev.lum1, hc_rev.lum2, hc_rev.lum3, hc_rev.total_lum,
-        )
-        return (cos_ti_fwd * pdf_oc_fwd, cos_ti_rev * pdf_oc_rev)
-    if v.mat_kind == LobeKind.measured:
-        var n_m = v.normal.to_simd()
-        var frm_m = Frame.from_z(Vec3f(n_m[0], n_m[1], n_m[2]))
-        var tangent_m = Vec3f(frm_m.x.x, frm_m.x.y, frm_m.x.z)
-        var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
-        var wo_m = v.wo.to_simd()
-        var wo_l = Vec3f(dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, n_m))
-        var dir_l = Vec3f(dot(dir_to_other, tangent_m), dot(dir_to_other, bitangent_m), dot(dir_to_other, n_m))
-        var mat_m = sd.materials[unsafe_offset=Int(v.mat_idx)]
-        var mb_m = sd.measuredBrdfs[unsafe_offset=Int(mat_m.measured_idx)]
-        return (
-            bxdf_pdf_measured(mb_m, wo_l, dir_l),
-            bxdf_pdf_measured(mb_m, dir_l, wo_l),
-        )
-    var cos_dir = abs(dot(dir_to_other, v.normal.to_simd()))
-    var cos_wo = abs(dot(v.wo.to_simd(), v.normal.to_simd()))
-    return (cos_dir * INV_PI, cos_wo * INV_PI)
+    A thin view onto _lobe_eval, which is now the single dispatch over
+    LobeKind. This was one of three hand-maintained copies of that dispatch
+    -- see LobeEval. Wavelengths come off the vertex because the density half
+    never uses them; only the throughput half does, and that is what this
+    call discards."""
+    var le = _lobe_eval[want_pdfs=True](
+        v, dir_to_other, sd, sd.spectral.coeffs, sd.spectral.res,
+        sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z,
+        sd.spectral.d65, v.wavelengths)
+    return (le.pdf_fwd, le.pdf_rev)
 
 @always_inline
 def _bdpt_vertex_mis_scoped(v: BDPTVertex) -> Bool:
