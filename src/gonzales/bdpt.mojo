@@ -45,7 +45,7 @@ from .sppm import (
     _sppm_trace_visible_point, _sppm_store_photon, _sppm_trace_photon,
 )
 from .shading import _tex_lookup, _get_tri_verts, _mnee_walk, _mnee_walk2
-from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
+from .bxdf import bxdf_pdf_coated_exit, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured, bxdf_pdf_measured
 from .gpu import GpuSceneHandle, vulkaninterop_unpack_results_kernel
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
@@ -2422,7 +2422,14 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
 
             rd = vec3f(exit_dir)
             ro = hit + rd*Float32(0.0002)
-            last_bsdf_pdf = Float32(0)  # NEE-only: exit ray's true pdf is intractable
+            # A smooth coat's exit density is known (bxdf_pdf_coated_exit),
+            # so this vertex gets REAL carries and joins MIS instead of the
+            # placeholder zeros it used to store. Rough coats keep the old
+            # NEE-only behaviour -- no closed form for their exit.
+            var cos_x_c = abs(dot(exit_dir, gn))
+            var smooth_coat = coat_alpha <= Float32(0.001)
+            var pdf_x_c = bxdf_pdf_coated_exit(cos_x_c, ior) if smooth_coat else Float32(0)
+            last_bsdf_pdf = pdf_x_c if smooth_coat else Float32(0)
             # 1/eta^2: the exit ray leaves the dense coat for air, so its
             # radiance is compressed by the squared IOR ratio -- see
             # shading.mojo's twin of this line and
@@ -2439,10 +2446,19 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             v.mat_idx = Int32(mat_idx)   # the coat evaluator reads ior from it
             v.pdf_bwd = coat_alpha       # smooth-vs-rough, as ggx stores alpha
             v.wo = vec3f(wo)
-            v.pdf_fwd = Float32(1)
+            v.pdf_fwd = pdf_x_c if smooth_coat else Float32(1)
             v.med_idx = cur_med_idx
             v.wavelengths = wavelengths
-            v.dVCM = Float32(0); v.dVC = Float32(0); v.dVM = Float32(0)
+            # Real carries. The arrival half was already computed for this
+            # hit at the top of the branch and then thrown away; a smooth
+            # coat now keeps it. A rough coat has no exit density, so it
+            # stays at zero AND out of scope -- the two must agree, because
+            # scope without carries is the documented volume-mis failure:
+            # MIS reserves share that no strategy then delivers.
+            if smooth_coat:
+                v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
+            else:
+                v.dVCM = Float32(0); v.dVC = Float32(0); v.dVM = Float32(0)
             if n_verts == 0: first_alb = eff_alb
             n_verts += 1
             # BUG (found 2026-09-15): same missing connect/merge call as the
@@ -4091,11 +4107,20 @@ def _lobe_eval[want_pdfs: Bool = True](
             cos_theta_t_dielectric(cos_cw, ior_cw), DEFAULT_COAT_THICKNESS)
         var t_both_cw = t_l_cw * tr_l_cw / max(ior_cw * ior_cw, Float32(1e-6))
         var alb_cw = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, v.alb.r, v.alb.g, v.alb.b, wavelengths)
-        # NOT scoped: the exit density is only tractable for a SMOOTH coat
-        # (bxdf_pdf_coated_exit, 27152093) and these vertices still carry
-        # placeholder dVCM/dVC/dVM. Scoping it is its own task.
+        # A SMOOTH coat's exit density IS tractable -- bxdf_pdf_coated_exit,
+        # histogram-verified against the real walk in 27152093 -- and is
+        # symmetric in the exit cosine, so the reverse density is the same
+        # function of wo. A rough coat has no such closed form and stays out
+        # of scope.
+        var scoped_cw = _lobe_scoped(v)
+        var fwd_cw = Float32(0)
+        var rev_cw = Float32(0)
+        comptime if want_pdfs:
+            if scoped_cw:
+                fwd_cw = bxdf_pdf_coated_exit(cos_cw, ior_cw)
+                rev_cw = bxdf_pdf_coated_exit(abs(dot(vwo, vn)), ior_cw)
         return LobeEval(alb_cw * (INV_PI * cos_cw * t_both_cw), cos_cw,
-                        Float32(0), Float32(0), False)
+                        fwd_cw, rev_cw, scoped_cw)
 
     if v.mat_kind == LobeKind.bssrdf:
         var cos_x = abs(dot(dir_to_other, vn))
@@ -4234,7 +4259,38 @@ def _bdpt_vertex_pdfs(
     return (le.pdf_fwd, le.pdf_rev)
 
 @always_inline
+def _lobe_scoped(v: BDPTVertex) -> Bool:
+    """Does this lobe have REAL forward/reverse densities, i.e. may it take
+    part in MIS at all?
+
+    THE one list. _lobe_eval reports it as LobeEval.scoped and
+    _bdpt_vertex_mis_scoped is this function, so a kind cannot be in MIS scope
+    for one consumer and out of it for another -- which is exactly how
+    coated_walk ended up being merged with weight 1 while having no evaluator
+    branch.
+
+    coateddiffuse's coat walk is OUT of scope, and that is a measurement, not
+    an oversight. Its smooth-coat exit density IS known
+    (bxdf_pdf_coated_exit, 27152093), so scoping it looks reasonable -- but
+    tried, with real arrival carries, the white furnace went 1.3089 -> 1.4544
+    against an analytic 1.0. An exit density is not enough: the walk is a
+    multi-bounce process whose MIS partner set is not that of a single lobe,
+    so MIS reserves share the strategies do not deliver. Giving it a correct
+    treatment is its own task (the elegance backlog's item 9). Until then it
+    connects, unweighted, and does not merge."""
+    if v.mat_kind == LobeKind.coated_walk:
+        return False
+    return _bdpt_vertex_mis_scoped_kinds(v)
+
+
+@always_inline
 def _bdpt_vertex_mis_scoped(v: BDPTVertex) -> Bool:
+    """Alias kept for call sites; see _lobe_scoped."""
+    return _lobe_scoped(v)
+
+
+@always_inline
+def _bdpt_vertex_mis_scoped_kinds(v: BDPTVertex) -> Bool:
     """True for vertex kinds _bdpt_vertex_pdfs has a real pdf for: diffuse
     (mat_kind=0, real surface -- excludes volume vertices, which default
     to mat_kind=0 too, see _connect's matching comment), rough
