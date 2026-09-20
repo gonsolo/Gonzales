@@ -1,3 +1,28 @@
+# ANALYTIC test, including unbounded interreflection.
+#
+# A CLOSED cavity whose walls are perfectly reflecting (rho = 1) containing a
+# blackbody emitter of radiance L reaches thermal equilibrium at uniform
+# radiance L everywhere (Kirchhoff). With "rgb L" [1 1 1] below:
+#
+#     EVERY PIXEL MUST READ EXACTLY 1.0
+#
+# No reference render needed. Unlike env-furnace-analytic.pbrt (which tests a
+# SINGLE bounce), this exercises an infinite interreflection series, so it is
+# the stronger of the two: any per-bounce energy error compounds instead of
+# cancelling.
+#
+# Measured 2026-09-20 (32x32/64spp, --gpu), mean over the frame:
+#     PT    0.9962   correct (0.4% low = maxdepth-32 truncation)
+#     SPPM  0.8747   12.5% DARK
+#     VCM   0.6325   37% DARK
+#
+# NOTE the sign: VCM is 37% DARK here and 34% BRIGHT on
+# env-furnace-analytic.pbrt. Those are two DIFFERENT defects.
+#
+# Scripts/smoke_matrix.json pins the measured values, including the wrong
+# ones -- it is a DRIFT detector, not a correctness check. The number to fix
+# against is 1.0, not the pin.
+#
 Integrator "path" "integer maxdepth" [ 32 ]
 Sampler "sobol" "integer pixelsamples" [ 64 ]
 Film "rgb"
