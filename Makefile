@@ -326,6 +326,18 @@ CAUSTIC_REF_DIR ?= $(HOME)/src/bitterli
 # level now covers the backend everything actually renders with.
 CAUSTIC_PASSES  ?= 8
 CAUSTIC_PHOTONS ?= 100000
+# Scenes whose answer is ARITHMETIC, checked against it. Unlike smoketest
+# (pinned values) and causticstest (a feature's presence), a disagreement here
+# is a defect rather than drift, because nothing the renderer produced was used
+# to decide what "right" means. Needs a GPU like every other render test.
+analytic: analytictest
+analytictest: release
+ifeq ($(HAVE_CUDA),)
+	@echo "skip analytictest (no CUDA toolkit -- render tests are GPU-only)"
+else
+	@python3 Scripts/analytic_check.py
+endif
+
 caustics: causticstest
 causticstest: release
 	@rc=0; \

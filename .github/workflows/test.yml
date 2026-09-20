@@ -39,3 +39,14 @@ jobs:
       - name: Unit tests
         run: |
           make unittest
+
+      # Scenes whose radiance is known in closed form, compared against it.
+      # Every other render check in this repo compares the renderer against
+      # something the renderer produced -- a pinned value, a converged
+      # reference -- so all of them detect drift and none can say the output
+      # is WRONG. This one can: the closed cavity must read exactly 1.0, and
+      # the smoke matrix was happily pinning VCM's 0.63 there as "expected".
+      # Self-skips without a CUDA toolkit, since render tests are GPU-only.
+      - name: Analytic scenes
+        run: |
+          make analytictest
