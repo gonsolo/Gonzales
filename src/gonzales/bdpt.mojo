@@ -1414,6 +1414,21 @@ def _bdpt_merge_from_cache(
     # shielding them by accident.
     if not (_is_real_ptr(heads) and _is_real_ptr(merge_next) and _is_real_ptr(lvc)):
         return SpectralSample(Float32(0))
+    # A vertex kind with no real pdf has no real MIS weight either -- the
+    # weight below falls back to 1, and an unweighted merge summed with an
+    # unweighted connect estimates 2I, not I. So such a vertex must not merge
+    # AT ALL; connect alone is already its complete, correct estimate. The
+    # volume branch of _bdpt_camera_path_bounce has always said exactly this
+    # and gated its own call; the other call sites relied on `path_len > 0`
+    # to do it by accident, and hoisting that gate (correctly, merging does
+    # not depend on the paired light path) exposed them. coateddiffuse is the
+    # one that bites: its coat-walk vertex is stored with dVCM = dVC = dVM = 0
+    # and pdf_fwd = 1 placeholders, so it is deliberately out of scope --
+    # furnace-coateddiffuse.vcm read 1.64 against an analytic 1.0 with it
+    # merging unweighted. Giving that vertex REAL carries is its own task
+    # (see the elegance backlog's item 9); until then it does not merge.
+    if not _bdpt_vertex_mis_scoped(cv):
+        return SpectralSample(Float32(0))
     var total = SpectralSample(Float32(0))
     var cix = Int(floor(cv.pos.x * inv_cell))
     var ciy = Int(floor(cv.pos.y * inv_cell))
