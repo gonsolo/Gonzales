@@ -22,10 +22,10 @@ from .geometry import (
     spectral_free_flight_weight,
 )
 from .bssrdf import dipole_max_radius, dipole_rd, dipole_mis_sigma_tr, dipole_sample_radius, bssrdf_probe_offset, bssrdf_exit_pdf_area, bssrdf_exit_ft
-from .vcm_mis import vcm_arrival_carries, vcm_scatter_carries, bssrdf_hop_carries, bssrdf_exit_scatter_carries
+from .vcm_mis import vcm_arrival_carries, vcm_scatter_carries, bssrdf_hop_carries, bssrdf_exit_scatter_carries, vcm_env_nee_weight, vcm_env_escape_weight
 from .bvh import (
     BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres, _mk_sd_full,
-    _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf,
+    _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _is_real_ptr,
     HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps,
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
     render_aux_buffers,
@@ -1405,6 +1405,15 @@ def _bdpt_merge_from_cache(
     weight, for the same reason (see that function's docstring)."""
     if cv.is_delta != Int32(0) or cv.is_surface == Int32(0):
         return SpectralSample(Float32(0))
+    # The merge GRID is what this needs, so test the grid -- not, as the call
+    # sites used to, whether THIS pixel's own paired light path happened to
+    # store a vertex. Those are different questions, and conflating them cost
+    # merging most of its energy (see the call sites). A caller that never
+    # intends to merge passes dangling sentinels here, the _is_real_ptr
+    # convention from geometry.mojo, and the old `path_len > 0` guard was
+    # shielding them by accident.
+    if not (_is_real_ptr(heads) and _is_real_ptr(merge_next) and _is_real_ptr(lvc)):
+        return SpectralSample(Float32(0))
     var total = SpectralSample(Float32(0))
     var cix = Int(floor(cv.pos.x * inv_cell))
     var ciy = Int(floor(cv.pos.y * inv_cell))
@@ -1443,6 +1452,25 @@ def _bdpt_merge_from_cache(
                         var _ncmp = dot(cv.normal.to_simd(), lv.normal.to_simd())
                         if dist2 <= r2 and _ncmp > Float32(0.7):
                             var f_cv = _eval_vertex_spectral(cv, lv.wo.to_simd(), sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, cv.wavelengths)
+                            # MERGING TAKES THE BARE BSDF, NOT f*cos.
+                            # _eval_vertex_spectral returns f*|cos| because
+                            # that is what a CONNECTION needs -- the cosine
+                            # belongs to its geometry term. A photon-density
+                            # estimate must not apply it: the incident cosine
+                            # is already carried by the photon AREAL DENSITY,
+                            # grazing arrivals being proportionally rarer per
+                            # unit area. Applying it again integrates cos^2
+                            # where the reflection integral wants cos -- over
+                            # a hemisphere exactly (2pi/3)/pi = 2/3, and
+                            # merging alone measured 0.685 of the white
+                            # furnace's analytic answer. SmallVCM splits it
+                            # the same way: RangeQuery::Process uses the bare
+                            # bsdfFactor, connections multiply by cosThetaGen.
+                            var cos_merge = abs(dot(lv.wo.to_simd(), cv.normal.to_simd()))
+                            if cos_merge > Float32(1e-6):
+                                f_cv = f_cv * (Float32(1.0) / cos_merge)
+                            else:
+                                f_cv = SpectralSample(Float32(0.0))
                             var w = Float32(1)
                             if _bdpt_vertex_mis_scoped(cv) and _bdpt_vertex_mis_scoped(lv):
                                 var (camera_bsdf_dir_pdf_w, camera_bsdf_rev_pdf_w) = _bdpt_vertex_pdfs(cv, lv.wo.to_simd(), sd)
@@ -1792,7 +1820,18 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var (Le, pdf_light_here) = _eval_infinite_light_and_pdf(ilight, rd)
                 var mis_w = Float32(1)
                 if last_bsdf_pdf >= Float32(0) and pdf_light_here > Float32(0):
-                    mis_w = power_heuristic(last_bsdf_pdf, pdf_light_here)
+                    # Balance heuristic over EVERY strategy, matching the rest
+                    # of this file -- vcm_env_escape_weight, derived exactly in
+                    # Scenes/vcm_env_mis_derivation.py. The power heuristic it
+                    # replaces gave the escape 0.80 where balance over all
+                    # strategies gives 0.54, leaving no share for merging or
+                    # t=1. dvcm/dvc_carry are the POST-SCATTER carries from the
+                    # last real vertex (this handler runs before the per-hit
+                    # arrival update), which is exactly what that weight wants.
+                    var (_c_esc, r_esc) = _scene_bounding_sphere(sd)
+                    var emis_esc = pdf_light_here / max(PI * r_esc * r_esc, Float32(1e-12))
+                    mis_w = vcm_env_escape_weight(pdf_light_here, emis_esc,
+                                                  dvcm_carry, dvc_carry)
                 total += beta * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (Le).r, (Le).g, (Le).b, wavelengths) * mis_w
             return False   # nothing hit -- path escapes the scene
         var t_hit = inter.tHit
@@ -2100,8 +2139,14 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
             if n_verts == 0: first_alb = eff_alb
             n_verts += 1
+            # Merging queries the GLOBAL photon grid and does not use this
+            # pixel's own paired light path, so unlike the connect below it
+            # must NOT be gated on that path having stored anything. It was,
+            # and in a white furnace only ~32% of light paths hit the quad at
+            # all, so ~68% of pixels skipped merging entirely: the estimator
+            # delivered 0.109 against an analytic 0.5.
+            total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
             if path_len > 0:
-                total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
                 # Task #163 stage 5: the diffuse branch's connect shadow
                 # rays are the single highest-volume, cleanest shadow-ray
                 # call site in VCM (always exactly one ray per stored
@@ -2136,8 +2181,24 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 total += _bdpt_nee_contribute(beta, w_i, ls_i, hit, gn, cur_med_idx, sd, scratch, wavelengths)
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ls_e = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-                var w_e = _nee_weight_simple_spectral(ls_e, LobeKind.lambertian, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
-                total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn, cur_med_idx, sd, scratch, wavelengths)
+                # NOT _nee_weight_simple_spectral: its power heuristic knows
+                # only NEE vs BSDF sampling and leaves no share for merging or
+                # t=1 (vcm_env_nee_weight). Lambertian here, so both BSDF
+                # densities are closed form: forward cos(n,wi)/pi, reverse
+                # cos(n,wo)/pi. These are the ARRIVAL carries at this vertex,
+                # one step earlier than the escape's -- see vcm_mis.mojo.
+                var cos_e = dot(gn, ls_e.wi)
+                if ls_e.valid and cos_e > Float32(0.0) and ls_e.pdf > Float32(0.0):
+                    var (_c_nee, r_nee) = _scene_bounding_sphere(sd)
+                    var emis_nee = ls_e.pdf / max(PI * r_nee * r_nee, Float32(1e-12))
+                    var mis_e = vcm_env_nee_weight(
+                        cos_e * INV_PI, max(dot(gn, wo_d), Float32(0.0)) * INV_PI,
+                        ls_e.pdf, emis_nee, cos_e,
+                        mis_vm_weight_factor, dvcm_carry, dvc_carry)
+                    var f_e = rgb_to_spectral_sample(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, eff_alb.r, eff_alb.g, eff_alb.b, wavelengths) * INV_PI
+                    var li_e = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, ls_e.Li.r, ls_e.Li.g, ls_e.Li.b, wavelengths)
+                    var w_e = (f_e * li_e) * (cos_e * mis_e / ls_e.pdf)
+                    total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn, cur_med_idx, sd, scratch, wavelengths)
             # Real MNEE for area lights behind glass (task #161) -- see
             # _bdpt_mnee_diffuse_area_light's docstring. Ordinary (non-glass)
             # area lights are deliberately left to connect/merge, unchanged.
@@ -2276,8 +2337,14 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # when the light is glass-obscured -- a scene lit purely
                     # by an area light through a coateddiffuse surface had
                     # NO way to receive any light at all.
+                    # Merging queries the GLOBAL photon grid and does not use this
+                    # pixel's own paired light path, so unlike the connect below it
+                    # must NOT be gated on that path having stored anything. It was,
+                    # and in a white furnace only ~32% of light paths hit the quad at
+                    # all, so ~68% of pixels skipped merging entirely: the estimator
+                    # delivered 0.109 against an analytic 0.5.
+                    total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
                     if path_len > 0:
-                        total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
                         total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
                 else:
                     last_bsdf_pdf = Float32(-1)  # smooth mirror coat: delta, no MIS at destination
@@ -2365,8 +2432,14 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # coateddiffuse-eta-probe.pbrt rendering solid black under
             # --vcm (a coateddiffuse surface lit only by an unobstructed
             # area light had no path to receive any light at all).
+            # Merging queries the GLOBAL photon grid and does not use this
+            # pixel's own paired light path, so unlike the connect below it
+            # must NOT be gated on that path having stored anything. It was,
+            # and in a white furnace only ~32% of light paths hit the quad at
+            # all, so ~68% of pixels skipped merging entirely: the estimator
+            # delivered 0.109 against an analytic 0.5.
+            total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
             if path_len > 0:
-                total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
                 total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
             dvcm_carry = Float32(0)
 
@@ -2426,8 +2499,14 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
                 if n_verts == 0: first_alb = mat.albedo
                 n_verts += 1
+                # Merging queries the GLOBAL photon grid and does not use this
+                # pixel's own paired light path, so unlike the connect below it
+                # must NOT be gated on that path having stored anything. It was,
+                # and in a white furnace only ~32% of light paths hit the quad at
+                # all, so ~68% of pixels skipped merging entirely: the estimator
+                # delivered 0.109 against an analytic 0.5.
+                total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
                 if path_len > 0:
-                    total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
                     total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
 
                 # Distant/point/sphere/infinite NEE, via the shared Light
@@ -2516,8 +2595,14 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             v_h.dVCM = dvcm_carry; v_h.dVC = dvc_carry; v_h.dVM = dvm_carry
             if n_verts == 0: first_alb = mat.albedo
             n_verts += 1
+            # Merging queries the GLOBAL photon grid and does not use this
+            # pixel's own paired light path, so unlike the connect below it
+            # must NOT be gated on that path having stored anything. It was,
+            # and in a white furnace only ~32% of light paths hit the quad at
+            # all, so ~68% of pixels skipped merging entirely: the estimator
+            # delivered 0.109 against an analytic 0.5.
+            total += _bdpt_merge_from_cache(v_h, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
             if path_len > 0:
-                total += _bdpt_merge_from_cache(v_h, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
                 total += _bdpt_connect_to_cache(v_h, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
 
             # Distant/point/sphere/infinite NEE, via the shared Light
@@ -2717,8 +2802,14 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
                     if n_verts == 0: first_alb = mat.sss_mean_refl
                     n_verts += 1
+                    # Merging queries the GLOBAL photon grid and does not use this
+                    # pixel's own paired light path, so unlike the connect below it
+                    # must NOT be gated on that path having stored anything. It was,
+                    # and in a white furnace only ~32% of light paths hit the quad at
+                    # all, so ~68% of pixels skipped merging entirely: the estimator
+                    # delivered 0.109 against an analytic 0.5.
+                    total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
                     if path_len > 0:
-                        total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
                         if defer_shadow_rays:
                             _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med)
                         else:
@@ -3959,8 +4050,21 @@ def _eval_vertex_spectral(
         var cos_o_ev = dot(dir_to_other, vn)
         if cos_o_ev < Float32(0): cos_o_ev = -cos_o_ev
         return fr_spec_ev * cos_o_ev
-    # Surface: Lambertian f = alb/π × |cos(wo,n)|
+    # Surface: OPAQUE Lambertian -- f = alb/pi * |cos|, and ZERO across the
+    # surface. This used to return |cos| unconditionally, making a diffuse
+    # base two-sided and TRANSMISSIVE: a photon landing on the BACK of a
+    # surface reflected out of the front. Both light-side techniques evaluate
+    # through here, and on a one-sided quad with an environment on both sides
+    # that doubled their energy exactly -- t=1 alone, unweighted, rendered the
+    # white furnace at 2.04x its analytic answer, flat across resolution and
+    # spp. `v.wo` is the direction the subpath ARRIVED from, so an opaque lobe
+    # transports only to directions on wo's own side of the normal. A
+    # degenerate wo (unset, length 0) carries no sidedness information, so it
+    # falls back to the old behaviour rather than silently zeroing.
     var cos_o = dot(dir_to_other, vn)
+    var wo_v = v.wo.to_simd()
+    if dot(wo_v, wo_v) > Float32(1e-8) and cos_o * dot(wo_v, vn) <= Float32(0):
+        return SpectralSample(Float32(0.0))
     if cos_o < Float32(0): cos_o = -cos_o
     var alb_spec = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, v.alb.r, v.alb.g, v.alb.b, wavelengths)
     return alb_spec * (INV_PI * cos_o)
