@@ -22,7 +22,7 @@ from .geometry import (
     Grid_C, NvdbGrid_C,
     spectral_free_flight_weight,
 )
-from .bssrdf import dipole_max_radius, dipole_rd, dipole_mis_sigma_tr, dipole_sample_radius, bssrdf_probe_offset, bssrdf_exit_pdf_area, bssrdf_exit_ft
+from .bssrdf import dipole_max_radius, dipole_rd, dipole_mis_sigma_tr, dipole_sample_radius, bssrdf_probe_offset, bssrdf_exit_pdf_area, bssrdf_exit_ft, fdr_moment
 from .vcm_mis import vcm_arrival_carries, vcm_scatter_carries, bssrdf_hop_carries, bssrdf_exit_scatter_carries, vcm_env_nee_weight, vcm_env_escape_weight, MisPolicy
 from .bvh import (
     BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres, _mk_sd_full,
@@ -2460,11 +2460,19 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # _nee_weight_coated_diffuse_base, which carries the NEE side's
             # own copy. Missing on both, it was worth eta^2 (2.3x at 1.5).
             var _coat_exit = Float32(1) / max(ior * ior, Float32(1e-6))
+            # The vertex's beta is the throughput arriving BEFORE the coat,
+            # because a connection or a merge at this vertex supplies the coat
+            # transport itself through the coat-exit lobe. Storing the
+            # post-walk beta applies the coat TWICE -- and every one of those
+            # factors is < 1 (entry Fresnel, Beer-Lambert, 1/eta^2 = 0.44 at
+            # eta 1.5), so the double application reads as far too DARK, not
+            # too bright. The continuing ray still takes the post-walk beta.
+            var beta_pre_coat = beta
             beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (cw.beta).r * _coat_exit, (cw.beta).g * _coat_exit, (cw.beta).b * _coat_exit, wavelengths)
             var v = _null_vertex()
             v.pos = hit
             v.normal = vec3f(gn)
-            v.beta = beta
+            v.beta = beta_pre_coat
             v.alb = eff_alb
             v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.coated_walk
             v.mat_idx = Int32(mat_idx)   # the coat evaluator reads ior from it
@@ -4317,7 +4325,7 @@ def _lobe_scoped(v: BDPTVertex) -> Bool:
     treatment is its own task (the elegance backlog's item 9). Until then it
     connects, unweighted, and does not merge."""
     if v.mat_kind == LobeKind.coated_walk:
-        return v.is_surface == Int32(1) and v.pdf_bwd <= Float32(0.001)
+        return False
     return _bdpt_vertex_mis_scoped_kinds(v)
 
 
