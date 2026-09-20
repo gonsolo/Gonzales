@@ -1358,33 +1358,6 @@ def _nee_weight_coated_diffuse_base[nee_is_sole_strategy: Bool = False](
 # ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z,
 # ctx.spectral.d65.
 @always_inline
-def bxdf_eval_any_spectral(
-    mat_kind: Int32,
-    alb:      RGB,             # diffuse albedo, or conductor f0
-    alpha:    Float32,         # conductor GGX roughness; unused for diffuse
-    n:        Vec3f,
-    wo:       Vec3f,
-    wi:       Vec3f,
-    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
-    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
-    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
-    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
-    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
-    wavelengths: SampledWavelengths,
-) -> Tuple[SpectralSample, Float32]:
-    var alb_spectral = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, alb.r, alb.g, alb.b, wavelengths)
-    if mat_kind == LobeKind.ggx:
-        var (valid, k, schlick) = _ggx_conductor_shape_terms(n, wo, wi, alpha)
-        if not valid:
-            return (SpectralSample(Float32(0.0)), bxdf_pdf_conductor_ggx(n, wo, wi, alpha))
-        # fr = f0 + (1-f0)*schlick, expressed without SpectralSample.__sub__
-        # (not defined): fr = f0*(1-schlick) + 1*schlick.
-        var fr_spectral = alb_spectral * (Float32(1.0) - schlick) + SpectralSample(schlick)
-        return (fr_spectral * k, bxdf_pdf_conductor_ggx(n, wo, wi, alpha))
-    var cos_wi = dot(n, wi)
-    return (alb_spectral * INV_PI, bxdf_pdf_diffuse(cos_wi))
-
-@always_inline
 def _nee_weight_simple_spectral(
     ls:    LightSample,
     mat_kind: Int32,
