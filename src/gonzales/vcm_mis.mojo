@@ -103,3 +103,80 @@ def bssrdf_exit_scatter_carries(dvcm: Float32, dvc: Float32, dvm: Float32,
     measure, symmetric), not a direction pdf."""
     return vcm_scatter_carries(dvcm, dvc, dvm, PI, cos_out / PI, p_area,
                                mis_vc_weight_factor, mis_vm_weight_factor)
+
+
+# ── The two CAMERA-side weights for an ENVIRONMENT light ────────────────────
+# Everything above carries MIS state along a subpath. These two spend it, at
+# the only two places a camera path can see an infinite light: it samples one
+# (NEE) or it escapes into one.
+#
+# Both were a bare `power_heuristic(pdf_a, pdf_b)` -- a TWO-strategy weight,
+# beta=2, that knows only about NEE and BSDF sampling. Every other strategy
+# here is combined with the BALANCE heuristic (bdpt.mojo's opening line: "MIS:
+# balance heuristic over all valid connection strategies"), and the two
+# families cannot partition unity: NEE and the escape divided a full 1.0
+# between themselves, leaving no share for vertex merging or t=1 light
+# tracing, which then added theirs on top.
+#
+# Derived and verified in Scenes/vcm_env_mis_derivation.py (exact to 1e-16
+# against a direct enumeration of every strategy's path density). At one
+# surface vertex there:
+#
+#     strategy          correct   power heuristic gave
+#     escape (s=0)       0.5400   0.7995
+#     NEE    (s=1)       0.2107   0.2005
+#     t=1                0.0442
+#     merging            0.2050
+#
+# The ESCAPE is the dominant error: the 0.26 it takes too much is almost
+# exactly merging + t=1's combined share, 0.249.
+#
+# Both take `cos_at_light = 1`: an environment light is NOT finite, so it has
+# no surface to take a cosine at -- the same "usedCosLight" case the light
+# subpath's own origin takes when it seeds these carries.
+
+
+@always_inline
+def vcm_env_nee_weight(pdf_bsdf_dir_w: Float32, pdf_bsdf_rev_w: Float32,
+                       direct_pdf_w: Float32, emission_pdf_w: Float32,
+                       cos_out: Float32, mis_vm_weight_factor: Float32,
+                       dvcm: Float32, dvc: Float32) -> Float32:
+    """Balance-heuristic weight for NEE from a camera vertex to an env light.
+
+        w_light  = pdf_bsdf_dir / direct_pdf
+        w_camera = (emission_pdf * cos_out / direct_pdf)
+                   * (w_vm + dVCM + dVC * pdf_bsdf_rev)
+        weight   = 1 / (w_light + 1 + w_camera)
+
+    `w_light` is the BSDF-sampling strategy that could have found this same
+    direction; `w_camera` is every strategy the camera subpath carries --
+    crucially including `mis_vm_weight_factor`, merging's share, which the old
+    two-strategy weight had no way to express.
+
+    Takes the ARRIVAL carries at this vertex (d^2 and cos already applied),
+    which is what the caller holds while shading it."""
+    if direct_pdf_w <= Float32(1e-12):
+        return Float32(0.0)
+    var w_light = pdf_bsdf_dir_w / direct_pdf_w
+    var w_camera = (emission_pdf_w * cos_out / direct_pdf_w) * (
+        mis_vm_weight_factor + dvcm + dvc * pdf_bsdf_rev_w)
+    return Float32(1.0) / (w_light + Float32(1.0) + w_camera)
+
+
+@always_inline
+def vcm_env_escape_weight(direct_pdf_w: Float32, emission_pdf_w: Float32,
+                          dvcm_post_scatter: Float32,
+                          dvc_post_scatter: Float32) -> Float32:
+    """Balance-heuristic weight for a camera ray that ESCAPES into an env light.
+
+        weight = 1 / (1 + direct_pdf * dVCM + emission_pdf * dVC)
+
+    TRAP, and the single error that made the first attempt at this render 20%
+    dark: these are the POST-SCATTER carries at the last real vertex -- one
+    step LATER than the NEE weight at that same vertex -- and they take no
+    d^2/cos, because nothing was arrived at and an environment light is at
+    infinity. Passing the arrival carries instead is 20% low at one bounce and
+    73% low at two (measured in the derivation harness)."""
+    return Float32(1.0) / (Float32(1.0)
+                           + direct_pdf_w * dvcm_post_scatter
+                           + emission_pdf_w * dvc_post_scatter)
