@@ -734,6 +734,16 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             vp.pos = hit
             vp.normal = vec3f(gn)
             vp.alb = eff_alb
+            # A diffuse_transmit VP must record that it HAS a transmit lobe,
+            # and the material index the transmittance lives in. Storing
+            # neither is what made SPPM and VCM read exactly HALF on
+            # furnace-diffusetransmission while the path tracer read 1.0:
+            # every stored vertex fell through to lobe_eval's opaque
+            # Lambertian branch, which transports to one side only.
+            if mat.type == MatKind.diffuse_transmit:
+                vp.mat_kind = LobeKind.diffuse_transmit
+                vp.mat_idx = Int32(mat_idx)
+                vp.wo = vec3f((-rd).to_simd())
             vp.is_volume = PhotonKind.surface
             vp.med_idx = cur_med_idx
             vp.valid = Int32(1)
@@ -2157,7 +2167,13 @@ def _sppm_nee_weight(
         var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
         var w_m = _nee_weight_measured(ls, mb_m, tangent_m, bitangent_m, vn, wo, vp.wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
         return w_m
-    var mat_kind_simple = LobeKind.ggx if vp.mat_kind == LobeKind.ggx else LobeKind.lambertian
+    var mat_kind_simple = LobeKind.lambertian
+    if vp.mat_kind == LobeKind.ggx:
+        mat_kind_simple = LobeKind.ggx
+    elif vp.mat_kind == LobeKind.diffuse_transmit:
+        # carries its own kind through; collapsing it to
+        # lambertian drops the transmit lobe, half the energy
+        mat_kind_simple = LobeKind.diffuse_transmit
     # Straight to a SpectralSample: this used to go through
     # _nee_weight_simple_spectral, which evaluates spectrally and
     # converts back to RGB (with a variance clamp) purely because `ld` was
@@ -2168,7 +2184,7 @@ def _sppm_nee_weight(
     # the map, so NEE is the only estimator of direct light here. The volume
     # branch above has always said so; this one inherited the default and
     # deleted ln(17)/16 of every env-lit surface. See mis_policy_sole.
-    return _nee_weight_simple_spectral(ls, mat_kind_simple, vp.alb, vp.alpha, vn, wo, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), mis_policy_sole())
+    return _nee_weight_simple_spectral(ls, mat_kind_simple, vp.alb, vp.alpha, vn, wo, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), mis_policy_sole(), vp.mat_idx)
 
 @always_inline
 def _sppm_vp_shadow_eps(vp: SPPMPixel, ref sd: SceneDescriptor2_C, wo: Vec3f) -> Float32:
@@ -2268,6 +2284,15 @@ def _sppm_nee_one(
     # is what this mirrors.
     var shadow_org = vp.pos + vp.normal * shadow_eps
     var spos = shadow_org.to_simd()
+    # A two-sided lobe transports to BOTH sides, so the shadow-ray offset has
+    # to follow the LIGHT DIRECTION rather than the normal. Offsetting along
+    # +n for a direction on the -n side starts the ray on the wrong side and
+    # it self-occludes on the surface it just left -- which is why adding the
+    # diffuse_transmit lobe changed the furnace by EXACTLY nothing at first:
+    # the evaluator returned the right value and visibility threw it away.
+    # One-sided lobes only ever see cos > 0, so this is a no-op for them.
+    var two_sided_vp = vp.mat_kind == LobeKind.diffuse_transmit
+    var shadow_org_back = vp.pos + vp.normal * (-shadow_eps)
 
     var n_area = Int(sd.areaLightCount)
     if n_area > 0:
@@ -2330,7 +2355,13 @@ def _sppm_nee_one(
                                       * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
                                       * geom)
                     else:
-                        var mat_kind_simple = LobeKind.ggx if vp.mat_kind == LobeKind.ggx else LobeKind.lambertian
+                        var mat_kind_simple = LobeKind.lambertian
+                        if vp.mat_kind == LobeKind.ggx:
+                            mat_kind_simple = LobeKind.ggx
+                        elif vp.mat_kind == LobeKind.diffuse_transmit:
+                            # carries its own kind through; collapsing it to
+                            # lambertian drops the transmit lobe, half the energy
+                            mat_kind_simple = LobeKind.diffuse_transmit
                         # THE shared evaluator (bxdf.mojo). SPPM's NEE uses the
                         # BARE BRDF -- the surface cosine is already inside
                         # `geom`, the convention _sppm_vp_brdf's docstring
@@ -2341,7 +2372,7 @@ def _sppm_nee_one(
                         # applied.
                         var le_vp = lobe_eval[want_pdfs=False](
                             LobeCtx(mat_kind_simple, True, False, vn, wo, vp.alb,
-                                    Int32(-1), vp.alpha, Float32(0), Int32(-1),
+                                    vp.mat_idx, vp.alpha, Float32(0), Int32(-1),
                                     Float32(0), Float32(0), True),
                             wi, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs),
                             sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
@@ -2369,24 +2400,26 @@ def _sppm_nee_one(
         var tmax = res[1]
         var w = _sppm_nee_weight(vp, sd, vn, wo, ls)
         if not w.is_black():
-            var shadow_ray = Ray_C(shadow_org, vec3f(ls.wi))
+            var s_org = shadow_org_back if (two_sided_vp and dot(vp.normal.to_simd(), ls.wi) < Float32(0)) else shadow_org
+            var shadow_ray = Ray_C(s_org, vec3f(ls.wi))
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, tmax,
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                                   sd.spheres, Int(sd.sphereCount),
                                   materials=sd.materials):
-                var tr_s = _sppm_shadow_transmittance(vp, sd, shadow_org, ls.wi, ls.dist)
+                var tr_s = _sppm_shadow_transmittance(vp, sd, s_org, ls.wi, ls.dist)
                 vps[unsafe_offset=i].ld += w * tr_s.r
 
     for inf_i in range(Int(sd.infiniteLightCount)):
         var ls_e = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
         var w_e = _sppm_nee_weight(vp, sd, vn, wo, ls_e)
         if not w_e.is_black():
-            var shadow_ray_e = Ray_C(shadow_org, vec3f(ls_e.wi))
+            var s_org_e = shadow_org_back if (two_sided_vp and dot(vp.normal.to_simd(), ls_e.wi) < Float32(0)) else shadow_org
+            var shadow_ray_e = Ray_C(s_org_e, vec3f(ls_e.wi))
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_e, ls_e.dist,
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                                   sd.spheres, Int(sd.sphereCount),
                                   materials=sd.materials):
-                var tr_e = _sppm_shadow_transmittance(vp, sd, shadow_org, ls_e.wi, ls_e.dist)
+                var tr_e = _sppm_shadow_transmittance(vp, sd, s_org_e, ls_e.wi, ls_e.dist)
                 vps[unsafe_offset=i].ld += w_e * tr_e.r
 
 

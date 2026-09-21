@@ -1156,6 +1156,52 @@ def lobe_eval[want_pdfs: Bool = True](
             rev_m = bxdf_pdf_measured(mb, wi_l, wo_l)
         return LobeEval(fr_spec * cos_m, cos_m, fwd_m, rev_m, True)
 
+    if c.kind == LobeKind.diffuse_transmit:
+        # TWO cosine lobes, one on each side of the surface. Until this
+        # existed there was no LobeKind for diffuse transmission at all, so
+        # every stored vertex of a `diffusetransmission` material fell
+        # through to the opaque Lambertian branch below and lost its
+        # transmit lobe outright -- exactly half the energy, in SPPM and VCM
+        # alike, while the path tracer stayed correct because it shades via
+        # bxdf_sample_diffuse_transmit directly and never round-trips a
+        # stored vertex. The textbook PT-only feature gap.
+        #
+        # Crossing the surface is the POINT here, so the opaque sidedness
+        # test below must NOT apply: `same_side` SELECTS the lobe rather
+        # than rejecting the direction.
+        var cos_dt = dot(dir_to_other, vn)
+        var cos_wo_dt = dot(vwo, vn)
+        if abs(cos_dt) <= Float32(1e-9) or abs(cos_wo_dt) <= Float32(1e-9):
+            return LobeEval(ZERO, Float32(1), Float32(0), Float32(0), True)
+        var same_side = cos_dt * cos_wo_dt > Float32(0)
+        # The transmittance lives in the MATERIAL (Material_C.emission, see
+        # shade_diffuse_transmission), so it needs a real mat_idx. Callers
+        # that have none pass -1, and a -1 here would index the table out of
+        # bounds -- so fall back to a symmetric lobe rather than read it.
+        # One texture slot serves both lobes when textured, matching
+        # shade_diffuse_transmission; c.alb is already the resolved one.
+        var trans_dt = c.alb
+        if Int(c.mat_idx) >= 0:
+            var mat_dt = tab.materials[unsafe_offset=Int(c.mat_idx)]
+            if Int(mat_dt.tex_idx) == -1:
+                trans_dt = mat_dt.emission
+        var lobe_alb_dt = c.alb if same_side else trans_dt
+        # The SAME luminance split bxdf_sample_diffuse_transmit samples with.
+        # Deriving the density any other way lets MIS drift against the
+        # sampler, which is the drift this interface exists to prevent.
+        var pr_dt = c.alb.luma()
+        var pt_dt = trans_dt.luma()
+        var tot_dt = max(pr_dt + pt_dt, Float32(1e-9))
+        var p_lobe_dt = (pr_dt if same_side else pt_dt) / tot_dt
+        var cos_a_dt = abs(cos_dt)
+        var alb_dt = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, lobe_alb_dt.r, lobe_alb_dt.g, lobe_alb_dt.b, wavelengths)
+        var fwd_dt = Float32(0)
+        var rev_dt = Float32(0)
+        comptime if want_pdfs:
+            fwd_dt = p_lobe_dt * cos_a_dt * INV_PI
+            rev_dt = p_lobe_dt * abs(cos_wo_dt) * INV_PI
+        return LobeEval(alb_dt * (INV_PI * cos_a_dt), cos_a_dt, fwd_dt, rev_dt, True)
+
     # Opaque Lambertian, and the coated base's fallback. ZERO across the
     # surface: `c.wo` is the direction the subpath ARRIVED from, so an opaque
     # lobe transports only to wo's own side of the normal. Returning |cos|
@@ -1626,6 +1672,7 @@ def _nee_weight_simple_spectral(
     wavelengths: SampledWavelengths,
     tab: LobeTables,
     mis: MisPolicy = mis_policy_power(),
+    mat_idx: Int32 = Int32(-1),
 ) -> SpectralSample:
     """Spectral counterpart of _nee_weight_simple — same formula, but the
     material color and light color are each converted to a SpectralSample at
@@ -1636,7 +1683,11 @@ def _nee_weight_simple_spectral(
     if not ls.valid:
         return SpectralSample(Float32(0.0))
     var cos_s = dot(n, ls.wi)
-    if cos_s <= Float32(0.0):
+    # diffuse_transmit is the one kind here that transports to BOTH sides,
+    # so rejecting cos_s <= 0 would discard its transmit lobe -- which is
+    # exactly half its energy. Every other kind is opaque and still rejects.
+    var two_sided = mat_kind == LobeKind.diffuse_transmit
+    if (cos_s <= Float32(0.0) and not two_sided) or (two_sided and abs(cos_s) <= Float32(0.0)):
         return SpectralSample(Float32(0.0))
     # THE shared evaluator -- see LobeCtx. This used to call
     # bxdf_eval_any_spectral, a SECOND dispatch over LobeKind that covered
@@ -1644,7 +1695,7 @@ def _nee_weight_simple_spectral(
     # f*cos. The two agreed only because this function multiplied by cos_s
     # afterwards; nothing in either signature said so.
     var le = lobe_eval[want_pdfs=True](
-        LobeCtx(mat_kind, True, False, n, wo, alb, Int32(-1), alpha,
+        LobeCtx(mat_kind, True, False, n, wo, alb, mat_idx, alpha,
                 Float32(0), Int32(-1), Float32(0), Float32(0), True),
         ls.wi, tab,
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
@@ -1667,7 +1718,7 @@ def _nee_weight_simple_spectral(
         if not mis.is_vcm:
             return f * li_spectral
         return f * li_spectral * nee_mis_weight(mis, Float32(1.0), Float32(0.0), cos_s)
-    var mis_w = nee_mis_weight(mis, ls.pdf, pdf_bsdf, cos_s)
+    var mis_w = nee_mis_weight(mis, ls.pdf, pdf_bsdf, abs(cos_s))
     return (f * li_spectral) * (mis_w / ls.pdf)
 
 @always_inline

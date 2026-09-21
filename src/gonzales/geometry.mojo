@@ -417,6 +417,7 @@ struct LobeKind:
     comptime measured    = Int32(3)
     comptime coated_walk = Int32(4)   # coateddiffuse walk outcome, Lambertian fallback in VCM
     comptime bssrdf      = Int32(5)   # subsurface: exit lobe Ft(cos)/pi (VCM), diffusion gather (SPPM)
+    comptime diffuse_transmit = Int32(6)   # two cosine lobes, one per side
 
 struct PhotonKind:
     """What an SPPM photon (or visible point) was deposited on. A gather only
