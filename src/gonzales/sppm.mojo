@@ -908,12 +908,26 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             if dot(gn_c, ray_dir) > Float32(0.0):
                 gn_c = gn_c * Float32(-1.0)
             var wo_c = (-rd).to_simd()
+            # Real image-texture F0, exactly as the diffuse branch does for
+            # reflectance. Without it a TEXTURED conductor was stored/weighted
+            # with its flat `mat.albedo` -- the scaffolding default for many
+            # corpus materials -- so it rendered as one colour with no image.
+            # kroken's framed wall pictures came out BLACK for this reason
+            # (that scene has 6 coatedconductor + 3 conductor materials, and
+            # this branch serves both). Same defect the diffuse branch fixed
+            # under task #150/#151; the fix never reached conductor. BOTH the
+            # camera and photon sides need it, or the two disagree on the
+            # surface's own colour.
+            var eff_alb_c = mat.albedo
+            var (tmc, tvc0, tvc1, tvc2, tex_ok_c) = _get_tri_verts(inter, sd.meshes)
+            if tex_ok_c:
+                eff_alb_c = _tex_lookup[use_gpu](mat, inter, tvc0, tvc1, tvc2, tmc, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
             var gc_c = GeomContext(
                 normal=gn_c, geo_normal=gn_c, hit_point=hit.to_simd(), wo=wo_c,
                 tangent=Vec3f(frm_c.x.x, frm_c.x.y, frm_c.x.z),
                 bitangent=Vec3f(frm_c.y.x, frm_c.y.y, frm_c.y.z),
-                alb=mat.albedo, pixel_uv=Float32(0),
+                alb=eff_alb_c, pixel_uv=Float32(0),
             )
             var uc1 = pcg.next_float(); var uc2 = pcg.next_float()
             var bs_c: BxDFSample
@@ -944,7 +958,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             if not bxdf_is_delta(bs_c.flags):
                 vp.pos = hit
                 vp.normal = vec3f(gn_c)
-                vp.alb = mat.albedo
+                vp.alb = eff_alb_c
                 vp.mat_kind = LobeKind.ggx
                 vp.wo = vec3f(wo_c)
                 vp.alpha = max(mat.roughU, mat.roughV)
@@ -1536,12 +1550,26 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             if dot(gn_c, ray_dir) > Float32(0.0):
                 gn_c = gn_c * Float32(-1.0)
             var wo_c = (-rd).to_simd()
+            # Real image-texture F0, exactly as the diffuse branch does for
+            # reflectance. Without it a TEXTURED conductor was stored/weighted
+            # with its flat `mat.albedo` -- the scaffolding default for many
+            # corpus materials -- so it rendered as one colour with no image.
+            # kroken's framed wall pictures came out BLACK for this reason
+            # (that scene has 6 coatedconductor + 3 conductor materials, and
+            # this branch serves both). Same defect the diffuse branch fixed
+            # under task #150/#151; the fix never reached conductor. BOTH the
+            # camera and photon sides need it, or the two disagree on the
+            # surface's own colour.
+            var eff_alb_c = mat.albedo
+            var (tmc, tvc0, tvc1, tvc2, tex_ok_c) = _get_tri_verts(inter, sd.meshes)
+            if tex_ok_c:
+                eff_alb_c = _tex_lookup[use_gpu](mat, inter, tvc0, tvc1, tvc2, tmc, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
             var gc_c = GeomContext(
                 normal=gn_c, geo_normal=gn_c, hit_point=hit.to_simd(), wo=wo_c,
                 tangent=Vec3f(frm_c.x.x, frm_c.x.y, frm_c.x.z),
                 bitangent=Vec3f(frm_c.y.x, frm_c.y.y, frm_c.y.z),
-                alb=mat.albedo, pixel_uv=Float32(0),
+                alb=eff_alb_c, pixel_uv=Float32(0),
             )
             var uc1 = pcg.next_float(); var uc2 = pcg.next_float()
             var bs_c: BxDFSample
