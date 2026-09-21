@@ -1,9 +1,12 @@
 from std.math import sqrt
-from .geometry import RGB, MatKind, LobeKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS, Frame, refract
+from .geometry import RGB, MatKind, LobeKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS, Frame, refract, INV_FOUR_PI, Curve_C, MeasuredBRDF_C
+from .bssrdf import fdr_moment, bssrdf_exit_ft
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world, power_heuristic
+from .vcm_mis import MisPolicy, mis_policy_power, nee_mis_weight
 from .rng import PCG32
-from .bvh import LightSample, HairLobeConstants, _hair_eval_lobes
-from .spectrum import SampledWavelengths, SpectralSample, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb
+from .measured_bxdf_eval import bxdf_eval_measured, bxdf_pdf_measured
+from .bvh import LightSample, HairLobeConstants, _hair_eval_lobes, SceneDescriptor2_C, _hair_precompute
+from .spectrum import SampledWavelengths, SpectralSample, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb, rgb_bands_to_spectral_sample
 
 # ── Isotropic GGX (Trowbridge-Reitz) evaluation ───────────────────────────────
 # Companion to sample_ggx_vndf: that function only *samples* a half-vector: NEE
@@ -553,6 +556,7 @@ def _nee_weight_simple(
     alpha: Float32,
     n:     Vec3f,
     wo:    Vec3f,
+    mis: MisPolicy = mis_policy_power(),
 ) -> RGB:
     """NEE contribution weight (throughput NOT yet applied — caller does
     `throughput * result`) for one LightSample against a diffuse or
@@ -573,7 +577,7 @@ def _nee_weight_simple(
         return RGB(Float32(0.0))
     if ls.is_delta:
         return f * ls.Li * cos_s
-    var mis_w = power_heuristic(ls.pdf, pdf_bsdf)
+    var mis_w = nee_mis_weight(mis, ls.pdf, pdf_bsdf, cos_s)
     return f * ls.Li * (cos_s * mis_w / ls.pdf)
 
 # ── Coateddiffuse: THE layered-BSDF walk, shared by every integrator ─────────
@@ -689,6 +693,371 @@ def coat_exit_norm(ior: Float32) -> Float32:
         var mu = mu_c + span * (Float32(i) + Float32(0.5)) / Float32(N)
         acc += mu * (Float32(1.0) - fr_dielectric(mu, inv_ior))
     return Float32(2.0) * span * acc / Float32(N)
+
+@fieldwise_init
+struct LobeTables(TrivialRegisterPassable):
+    """The three scene tables a lobe evaluation can read, and nothing else.
+
+    lobe_eval took these as three loose pointers because the integrators do
+    not share a context type: VCM has SceneDescriptor2_C (39 fields, passed
+    by ref), the path tracer has ShadeContext (23 fields, passed by value),
+    and they carry ELEVEN of the same scene pointers between them.
+
+    Merging those two is a ~979-site rename across by-value GPU structs with
+    a documented crash history (vcm_mat_kind_and_sd_by_value_traps), so this
+    takes the narrow win instead: one named thing to pass, produced from
+    either context by a one-line accessor. If the two contexts are ever
+    reconciled, this is what they should agree on first."""
+    var materials:      Pointer[Material_C, MutUntrackedOrigin]
+    var curves:         Pointer[Curve_C, MutUntrackedOrigin]
+    var measured_brdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin]
+
+
+@fieldwise_init
+struct LobeCtx(TrivialRegisterPassable):
+    """Everything the ONE lobe evaluator needs about a shading point, and
+    nothing about which integrator is asking.
+
+    This is the BxDF interface's input. A path tracer builds one from its
+    local shading variables, VCM from a stored BDPTVertex, SPPM from a
+    visible point -- and they all then get the same f, the same densities and
+    the same answer to "is this lobe MIS-scoped". Before it existed each
+    integrator carried its own dispatch over LobeKind and they drifted; every
+    VCM defect found on 2026-09-20 lived in that drift.
+
+    `param` is the per-kind scalar, the way BDPTVertex already overloaded
+    pdf_bwd: GGX alpha for a conductor, eta for a BSSRDF exit, coat alpha for
+    a coat walk."""
+    var kind:           Int32
+    var is_surface:     Bool
+    var is_delta:       Bool
+    var n:              Vec3f
+    var wo:             Vec3f
+    var alb:            RGB
+    var mat_idx:        Int32
+    var param:          Float32
+    var pdf_fwd:        Float32
+    var hair_curve_idx: Int32
+    var hair_h:         Float32
+    var hair_v:         Float32
+    # True when the caller has already oriented `n` for the lobe it wants, so
+    # `wo` may legitimately sit on the far side -- which is how
+    # shade_diffuse_transmission addresses its TRANSMITTED lobe. The opaque
+    # sidedness test below must not fire there: it exists for stored vertices,
+    # where `wo` really is the direction the subpath arrived from.
+    var pre_oriented:   Bool
+
+
+@fieldwise_init
+struct LobeEval(TrivialRegisterPassable):
+    """One vertex lobe, evaluated ONCE: throughput, the cosine that throughput
+    already contains, both densities, and whether it has real densities at all.
+
+    This exists because the same dispatch over LobeKind was written out THREE
+    times -- `_eval_vertex_spectral` (f*cos), `_bdpt_vertex_pdfs`
+    (forward/reverse densities) and `_bdpt_vertex_mis_scoped` (which kinds
+    have densities) -- and the three lists drifted apart. Every VCM defect
+    found on 2026-09-20 lived in that drift:
+
+      * `coated_walk` appeared in the scope test and had NO branch in the
+        evaluator, so a coateddiffuse vertex was silently evaluated as bare
+        diffuse -- no entry Fresnel, no coat absorption, no 1/eta^2.
+      * the evaluator returned f*cos while photon-density estimation needs the
+        BARE f, and nothing in the signature said which -- merging applied the
+        cosine twice and lost exactly (2pi/3)/pi = 2/3 of its energy.
+      * the opaque-Lambertian fallback had no sidedness test, so a photon that
+        landed on the BACK of a surface reflected out of the front; t=1 light
+        tracing alone came out 2.04x its analytic answer.
+
+    `cos_used` answers the second one structurally: a density estimator
+    divides it out EXPLICITLY instead of a caller guessing the convention. It
+    is not always |cos(dir,n)| -- hair carries the FIBRE cosine and a volume
+    carries none -- which a caller cannot know and kept getting wrong.
+    `scoped` answers the first: one list, not three."""
+    var f_cos:    SpectralSample   # BSDF (or phase) * the cosine this lobe uses
+    var cos_used: Float32          # that cosine; 1 where the lobe has none
+    var pdf_fwd:  Float32          # solid-angle density INTO dir_to_other
+    var pdf_rev:  Float32          # ... and back toward v.wo (adjoint)
+    var scoped:   Bool             # real densities exist -> may take part in MIS
+
+
+@always_inline
+def lobe_scoped(c: LobeCtx) -> Bool:
+    """Does this lobe have REAL forward/reverse densities, i.e. may it take
+    part in MIS? THE one list -- lobe_eval reports it as LobeEval.scoped and
+    every integrator asks this, so a kind cannot be in scope for one consumer
+    and out of it for another.
+
+    coateddiffuse's coat walk is IN scope when the coat is SMOOTH, and out when
+    rough. Smooth: bxdf_pdf_coated_exit is its real exit density, coat_eval_smooth
+    is its real f(wo,wi), both subpaths' coat vertices carry real MIS state
+    (6ec79292 camera side, and the light side in the same change as this
+    docstring), and its NEE is single-shot so every strategy sees ONE model of
+    the vertex. With all of that -- and the sampled exit ray no longer carrying
+    a 1/eta^2 the refraction Jacobian already cancels -- the white furnace reads
+    0.9188 against PT's 0.9128. Every one of those pieces was needed; the
+    earlier attempts that scoped it with any of them missing measured worse
+    than unscoped, and the numbers are in project_coateddiffuse_eta2_bug.
+    Rough: no closed form for the exit density, so it stays a sole-strategy
+    NEE vertex (its exit ray drops direct via PDF_DROP_DIRECT, like PT).
+    Dielectrics are genuinely delta and never will be in scope."""
+    if c.kind == LobeKind.coated_walk:
+        # Rough coats are in scope too, on an APPROXIMATE density:
+        # bxdf_pdf_coated_exit is derived for a smooth coat and takes no
+        # alpha, so for a rough one it is the right shape with the wrong
+        # width. That is legitimate -- an approximated pdf used for MIS does
+        # not bias the estimator (pbrt, Reflection Models / Further Reading),
+        # it only moves variance between strategies. Leaving rough coats OUT
+        # was the worse option: their NEE then takes sole-strategy weight 1
+        # while merging and t=1 splat at the same vertices with fabricated
+        # zero-carry weights, which is a real double count rather than a
+        # variance trade.
+        return c.is_surface
+    if not c.is_surface or c.is_delta:
+        return False
+    return (c.kind == LobeKind.lambertian or c.kind == LobeKind.ggx
+            or c.kind == LobeKind.hair or c.kind == LobeKind.measured)
+
+
+@always_inline
+def lobe_eval[want_pdfs: Bool = True](
+    c:   LobeCtx,
+    dir_to_other:  Vec3f,
+    tab: LobeTables,
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
+    wavelengths: SampledWavelengths,
+) -> LobeEval:
+    """THE lobe dispatch.
+
+    Takes the three tables it actually reads rather than a scene descriptor,
+    because the integrators do not agree on a descriptor type: VCM has
+    SceneDescriptor2_C, the path tracer has ShadeContext. Depending on one of
+    them would have locked this to one integrator again, which is the whole
+    condition this interface exists to remove.
+
+    `want_pdfs=False` skips the density half, which for
+    hair is an entire second `_hair_precompute` -- not a micro-optimisation."""
+    var ZERO = SpectralSample(Float32(0))
+    if c.is_delta:
+        return LobeEval(ZERO, Float32(1), Float32(0), Float32(0), False)
+
+    if not c.is_surface:
+        # Volume: isotropic phase, no surface, and so NO cosine at all.
+        var alb_v = rgb_bands_to_spectral_sample(c.alb.r, c.alb.g, c.alb.b, wavelengths)
+        return LobeEval(alb_v * INV_FOUR_PI, Float32(1), INV_FOUR_PI, INV_FOUR_PI, False)
+
+    var vn = c.n
+    var vwo = c.wo
+
+    if c.kind == LobeKind.coated_walk:
+        # coateddiffuse's coat-walk EXIT lobe. Same factorization
+        # _nee_weight_coated_diffuse_base uses on the NEE side, reading ior
+        # from the material so the two cannot drift. The view-side
+        # transmittance is deliberately absent -- implicit in the walk having
+        # reached the base at all (project_coateddiffuse_eta2_bug).
+        var mat_cw = tab.materials[unsafe_offset=Int(c.mat_idx)]
+        var ior_cw = mat_cw.emission.r
+        var cos_cw = dot(dir_to_other, vn)
+        if cos_cw <= Float32(0) or dot(vwo, vn) <= Float32(0):
+            return LobeEval(ZERO, Float32(1), Float32(0), Float32(0), False)
+        # THE evaluator: f(wo, wi) for this lobe, both transmissions and the
+        # whole TIR recycling series in closed form (coat_eval_smooth). This
+        # used to be a single-scatter approximation that disagreed with the
+        # per-iteration NEE beside it.
+        # Upsample the true REFLECTANCE and carry the rest as a scalar:
+        # rgb_to_spectral_sample's domain is a bounded reflectance, and a BSDF
+        # value is not one ("a coefficient is not a color",
+        # docs/02_spectra_and_color.md). The series is averaged over channels
+        # here -- exact for a grey base, approximate for a saturated one.
+        var f_cw = coat_eval_smooth(vn, vwo, dir_to_other, RGB(Float32(1.0)), ior_cw)
+        var avg_cw = (c.alb.r + c.alb.g + c.alb.b) * Float32(1.0 / 3.0)
+        var gain_cw = f_cw.r / max(Float32(1.0) - avg_cw * fdr_moment(ior_cw), Float32(1e-4)) * max(Float32(1.0) - fdr_moment(ior_cw), Float32(1e-4))
+        var alb_cw = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, c.alb.r, c.alb.g, c.alb.b, wavelengths) * gain_cw
+        # A SMOOTH coat's exit density IS tractable -- bxdf_pdf_coated_exit,
+        # histogram-verified against the real walk in 27152093 -- and is
+        # symmetric in the exit cosine, so the reverse density is the same
+        # function of wo. A rough coat has no such closed form and stays out
+        # of scope.
+        var scoped_cw = lobe_scoped(c)
+        var fwd_cw = Float32(0)
+        var rev_cw = Float32(0)
+        comptime if want_pdfs:
+            if scoped_cw:
+                fwd_cw = bxdf_pdf_coated_exit(cos_cw, ior_cw)
+                rev_cw = bxdf_pdf_coated_exit(abs(dot(vwo, vn)), ior_cw)
+        return LobeEval(alb_cw * cos_cw, cos_cw,
+                        fwd_cw, rev_cw, scoped_cw)
+
+    if c.kind == LobeKind.bssrdf:
+        var cos_x = abs(dot(dir_to_other, vn))
+        return LobeEval(SpectralSample(bssrdf_exit_ft(cos_x, c.param) * INV_PI * cos_x),
+                        cos_x, cos_x * INV_PI, c.pdf_fwd, False)
+
+    if c.kind == LobeKind.ggx:
+        # _eval_conductor_ggx_spectral folds in cos(dir_to_other, n) via its
+        # `k * cos_i`, so that -- not 1 -- is this lobe's cosine.
+        var f_g = _eval_conductor_ggx_spectral(vn, vwo, dir_to_other, c.param, c.alb, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
+        var cos_g = abs(dot(dir_to_other, vn))
+        var fwd_g = Float32(0)
+        var rev_g = Float32(0)
+        comptime if want_pdfs:
+            fwd_g = bxdf_pdf_conductor_ggx(vn, vwo, dir_to_other, c.param)
+            rev_g = bxdf_pdf_conductor_ggx(vn, dir_to_other, vwo, c.param)
+        return LobeEval(f_g, cos_g, fwd_g, rev_g, True)
+
+    if c.kind == LobeKind.hair:
+        # Hair's cosine is the FIBRE's cos_ti, not |n.wi| -- the case a caller
+        # dividing by |cos(dir,n)| gets silently wrong.
+        var mat_h = tab.materials[unsafe_offset=Int(c.mat_idx)]
+        var hc = _hair_precompute(mat_h, tab.curves, Int(c.hair_curve_idx), c.hair_v, c.hair_h, vwo)
+        var (cos_ti, f_val, pdf_oc_fwd) = _hair_eval_lobes(
+            dir_to_other, hc.tangent, hc.b_perp, hc.n_perp, hc.phi_o,
+            hc.dphi0, hc.dphi1, hc.dphi2,
+            hc.cos_tp0_o, hc.sin_tp0_o, hc.cos_tp1_o, hc.sin_tp1_o, hc.cos_tp2_o, hc.sin_tp2_o,
+            hc.cos_theta_o, hc.sin_theta_o, hc.inv_vm0, hc.inv_vm1, hc.inv_vm2, hc.mp_c0, hc.mp_c1, hc.mp_c2, hc.s,
+            hc.A0, hc.A1, hc.A2, hc.A3, hc.lum0, hc.lum1, hc.lum2, hc.lum3, hc.total_lum,
+        )
+        var hair_spec = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f_val.r, f_val.g, f_val.b, wavelengths)
+        var rev_h = Float32(0)
+        comptime if want_pdfs:
+            var hc_rev = _hair_precompute(mat_h, tab.curves, Int(c.hair_curve_idx), c.hair_v, c.hair_h, dir_to_other)
+            var (cos_ti_rev, _, pdf_oc_rev) = _hair_eval_lobes(
+                vwo, hc_rev.tangent, hc_rev.b_perp, hc_rev.n_perp, hc_rev.phi_o,
+                hc_rev.dphi0, hc_rev.dphi1, hc_rev.dphi2,
+                hc_rev.cos_tp0_o, hc_rev.sin_tp0_o, hc_rev.cos_tp1_o, hc_rev.sin_tp1_o, hc_rev.cos_tp2_o, hc_rev.sin_tp2_o,
+                hc_rev.cos_theta_o, hc_rev.sin_theta_o, hc_rev.inv_vm0, hc_rev.inv_vm1, hc_rev.inv_vm2, hc_rev.mp_c0, hc_rev.mp_c1, hc_rev.mp_c2, hc_rev.s,
+                hc_rev.A0, hc_rev.A1, hc_rev.A2, hc_rev.A3, hc_rev.lum0, hc_rev.lum1, hc_rev.lum2, hc_rev.lum3, hc_rev.total_lum,
+            )
+            rev_h = cos_ti_rev * pdf_oc_rev
+        return LobeEval(hair_spec * cos_ti, cos_ti, cos_ti * pdf_oc_fwd, rev_h, True)
+
+    if c.kind == LobeKind.measured:
+        var vmat = tab.materials[unsafe_offset=Int(c.mat_idx)]
+        var mb = tab.measured_brdfs[unsafe_offset=Int(vmat.measured_idx)]
+        var frm = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
+        var tangent = Vec3f(frm.x.x, frm.x.y, frm.x.z)
+        var bitangent = Vec3f(frm.y.x, frm.y.y, frm.y.z)
+        var wo_l = Vec3f(dot(vwo, tangent), dot(vwo, bitangent), dot(vwo, vn))
+        var wi_l = Vec3f(dot(dir_to_other, tangent), dot(dir_to_other, bitangent), dot(dir_to_other, vn))
+        var (fr_spec, _) = bxdf_eval_measured(mb, wo_l, wi_l, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+        var cos_m = abs(dot(dir_to_other, vn))
+        var fwd_m = Float32(0)
+        var rev_m = Float32(0)
+        comptime if want_pdfs:
+            fwd_m = bxdf_pdf_measured(mb, wo_l, wi_l)
+            rev_m = bxdf_pdf_measured(mb, wi_l, wo_l)
+        return LobeEval(fr_spec * cos_m, cos_m, fwd_m, rev_m, True)
+
+    # Opaque Lambertian, and the coated base's fallback. ZERO across the
+    # surface: `c.wo` is the direction the subpath ARRIVED from, so an opaque
+    # lobe transports only to wo's own side of the normal. Returning |cos|
+    # unconditionally made diffuse two-sided and TRANSMISSIVE. A degenerate wo
+    # carries no sidedness information, so it falls back rather than silently
+    # zeroing every contribution.
+    var cos_o = dot(dir_to_other, vn)
+    if (not c.pre_oriented) and dot(vwo, vwo) > Float32(1e-8) and cos_o * dot(vwo, vn) <= Float32(0):
+        return LobeEval(ZERO, Float32(1), Float32(0), Float32(0), True)
+    var cos_l = abs(cos_o)
+    var alb_l = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, c.alb.r, c.alb.g, c.alb.b, wavelengths)
+    return LobeEval(alb_l * (INV_PI * cos_l), cos_l,
+                    cos_l * INV_PI, abs(dot(vwo, vn)) * INV_PI, True)
+
+
+# Moved here from bdpt.mojo so that the ONE lobe evaluator can live below
+# every integrator rather than inside one of them. It was the only piece
+# of the dispatch that still lived above bxdf.
+@always_inline
+def _eval_conductor_ggx_spectral(
+    n:     Vec3f,
+    wo:    Vec3f,
+    wi:    Vec3f,
+    alpha: Float32,
+    f0: RGB,
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
+    wavelengths: SampledWavelengths,
+) -> SpectralSample:
+    """Spectral counterpart of _eval_conductor_ggx — same GGX/Schlick math,
+    f0 converted to a SpectralSample (reflectance convention) before the
+    Schlick blend instead of blending plain RGB triples."""
+    var cos_o = dot(wo, n)
+    var cos_i = dot(wi, n)
+    if cos_o <= Float32(0) or cos_i <= Float32(0):
+        return SpectralSample(Float32(0))
+    var wh = wo + wi
+    var whl = dot(wh, wh)
+    if whl <= Float32(0):
+        return SpectralSample(Float32(0))
+    wh = wh * (Float32(1) / sqrt(whl))
+    var cos_h = dot(wh, n)
+    var cos_wo_h = dot(wo, wh)
+    if cos_wo_h < Float32(0): cos_wo_h = -cos_wo_h
+    var d = ggx_D(cos_h, alpha)
+    var g = ggx_G2(cos_o, cos_i, alpha)
+    var one_m = Float32(1) - cos_wo_h
+    var one_m2 = one_m * one_m
+    var schlick = one_m2 * one_m2 * one_m
+    var f0_spec = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f0.r, f0.g, f0.b, wavelengths)
+    var fr_spec = f0_spec * (Float32(1) - schlick) + SpectralSample(schlick)
+    var k = d * g / (Float32(4) * cos_o * cos_i) * cos_i
+    return fr_spec * k
+
+
+@always_inline
+def coat_eval_smooth(n: Vec3f, wo: Vec3f, wi: Vec3f, alb: RGB, ior: Float32) -> RGB:
+    """f(wo, wi) for a SMOOTH coat over a Lambertian base -- the evaluator
+    gonzales never had.
+
+    CoatWalk is a SAMPLER: `wi` is an output, and there is no way to ask it
+    what the BSDF is for a given pair of directions. pbrt's LayeredBxDF is a
+    full BxDF -- f(), Sample_f() AND PDF() -- and its f() runs a stochastic
+    walk to answer exactly that question (Guo, Hasan & Zhao 2018). gonzales
+    ported the sampling and not the evaluation, so every consumer that needs
+    f(wo, wi) -- NEE, connections, vertex merging -- had to approximate it,
+    and each approximated it differently.
+
+    For THIS stack the stochastic walk is unnecessary: one smooth dielectric
+    interface over a Lambertian base has a closed form, and it is exact
+    rather than approximate, because a Lambertian base re-randomises to
+    cosine at every bounce -- precisely the assumption the closed form makes.
+    Scenes/coateddiffuse_analytic_check.py already validates the renderer
+    against it:
+
+        f = rho (1 - F(cos_o)) (1 - F(cos_i)) / (pi eta^2 (1 - rho F_di))
+
+    The 1/(1 - rho*F_di) factor IS the TIR recycling series, summed in closed
+    form. A merge sees one vertex and cannot sum that series by repetition
+    the way per-iteration NEE does, which is why merging at a coated vertex
+    measured 3x short without it.
+
+    BOTH transmissions are explicit here. The sampled walk leaves the
+    view-side one implicit because reaching the base at all costs an entry
+    coin flip whose probability IS that factor (project_coateddiffuse_eta2_bug
+    -- applying it twice there cost 56% at grazing exit). An evaluator has no
+    coin flip, so it must carry both."""
+    var cos_o = abs(dot(wo, n))
+    var cos_i = abs(dot(wi, n))
+    if cos_o <= Float32(1e-6) or cos_i <= Float32(1e-6):
+        return RGB(Float32(0.0))
+    var t_o = (Float32(1.0) - fr_dielectric(cos_o, ior)) * coat_beer_lambert_tr(
+        cos_theta_t_dielectric(cos_o, ior), DEFAULT_COAT_THICKNESS)
+    var t_i = (Float32(1.0) - fr_dielectric(cos_i, ior)) * coat_beer_lambert_tr(
+        cos_theta_t_dielectric(cos_i, ior), DEFAULT_COAT_THICKNESS)
+    var f_di = fdr_moment(ior)
+    var k = t_o * t_i * INV_PI / max(ior * ior, Float32(1e-6))
+    # The series is per-channel: a saturated base recycles more in the
+    # channel it reflects most.
+    return RGB(alb.r * k / max(Float32(1.0) - alb.r * f_di, Float32(1e-4)),
+               alb.g * k / max(Float32(1.0) - alb.g * f_di, Float32(1e-4)),
+               alb.b * k / max(Float32(1.0) - alb.b * f_di, Float32(1e-4)))
+
 
 @always_inline
 def bxdf_pdf_coated_exit(cos_out: Float32, ior: Float32) -> Float32:
@@ -887,6 +1256,7 @@ def _nee_weight_coated_coat_lobe(
     coat_alpha: Float32,
     n:          Vec3f,
     wo:         Vec3f,
+    mis: MisPolicy = mis_policy_power(),
 ) -> RGB:
     """NEE weight (throughput not applied) for a coateddiffuse/coated_conductor
     coat's own glossy GGX lobe (D*G2*F/(4*cos_o)) against ONE LightSample --
@@ -917,7 +1287,7 @@ def _nee_weight_coated_coat_lobe(
     if ls.pdf <= Float32(0.0):
         return RGB(Float32(0.0))
     var pdf_bsdf = ggx_vndf_pdf(cos_o, cos_wm, d, coat_alpha)
-    var w = power_heuristic(ls.pdf, pdf_bsdf)
+    var w = nee_mis_weight(mis, ls.pdf, pdf_bsdf, cos_s)
     return ls.Li * (f_cos * w / ls.pdf)
 
 @always_inline
@@ -927,6 +1297,7 @@ def _nee_weight_coated_diffuse_base[nee_is_sole_strategy: Bool = False](
     ior: Float32,
     n:   Vec3f,
     coat_alpha: Float32 = Float32(0.0),
+    mis: MisPolicy = mis_policy_power(),
 ) -> RGB:
     """NEE weight (throughput AND the walk's `beta` not applied) for a
     coateddiffuse base against ONE LightSample -- see
@@ -996,7 +1367,11 @@ def _nee_weight_coated_diffuse_base[nee_is_sole_strategy: Bool = False](
     # 1/pdf of the light sample itself is always required.
     var w = Float32(1.0)
     comptime if not nee_is_sole_strategy:
-        w = power_heuristic(ls.pdf, cos_s / PI)
+        # The competing BSDF strategy here is the coat walk's EXIT, whose
+        # density is bxdf_pdf_coated_exit -- not the bare cosine lobe of the
+        # base underneath it. Passing cos/pi understates the competitor and
+        # so overstates this sample's share.
+        w = nee_mis_weight(mis, ls.pdf, bxdf_pdf_coated_exit(cos_s, ior), cos_s)
     return alb * ls.Li * (cos_s * t_both * w / (ls.pdf * PI))
 
 # ── Spectral siblings (staged rollout, see project_spectral_rendering memory
@@ -1023,33 +1398,6 @@ def _nee_weight_coated_diffuse_base[nee_is_sole_strategy: Bool = False](
 # ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z,
 # ctx.spectral.d65.
 @always_inline
-def bxdf_eval_any_spectral(
-    mat_kind: Int32,
-    alb:      RGB,             # diffuse albedo, or conductor f0
-    alpha:    Float32,         # conductor GGX roughness; unused for diffuse
-    n:        Vec3f,
-    wo:       Vec3f,
-    wi:       Vec3f,
-    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
-    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
-    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
-    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
-    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
-    wavelengths: SampledWavelengths,
-) -> Tuple[SpectralSample, Float32]:
-    var alb_spectral = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, alb.r, alb.g, alb.b, wavelengths)
-    if mat_kind == LobeKind.ggx:
-        var (valid, k, schlick) = _ggx_conductor_shape_terms(n, wo, wi, alpha)
-        if not valid:
-            return (SpectralSample(Float32(0.0)), bxdf_pdf_conductor_ggx(n, wo, wi, alpha))
-        # fr = f0 + (1-f0)*schlick, expressed without SpectralSample.__sub__
-        # (not defined): fr = f0*(1-schlick) + 1*schlick.
-        var fr_spectral = alb_spectral * (Float32(1.0) - schlick) + SpectralSample(schlick)
-        return (fr_spectral * k, bxdf_pdf_conductor_ggx(n, wo, wi, alpha))
-    var cos_wi = dot(n, wi)
-    return (alb_spectral * INV_PI, bxdf_pdf_diffuse(cos_wi))
-
-@always_inline
 def _nee_weight_simple_spectral(
     ls:    LightSample,
     mat_kind: Int32,
@@ -1063,6 +1411,8 @@ def _nee_weight_simple_spectral(
     spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
     spectral_d65: Pointer[Float32, MutUntrackedOrigin],
     wavelengths: SampledWavelengths,
+    tab: LobeTables,
+    mis: MisPolicy = mis_policy_power(),
 ) -> SpectralSample:
     """Spectral counterpart of _nee_weight_simple — same formula, but the
     material color and light color are each converted to a SpectralSample at
@@ -1075,17 +1425,43 @@ def _nee_weight_simple_spectral(
     var cos_s = dot(n, ls.wi)
     if cos_s <= Float32(0.0):
         return SpectralSample(Float32(0.0))
-    var (f, pdf_bsdf) = bxdf_eval_any_spectral(mat_kind, alb, alpha, n, wo, ls.wi, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
+    # THE shared evaluator -- see LobeCtx. This used to call
+    # bxdf_eval_any_spectral, a SECOND dispatch over LobeKind that covered
+    # two kinds and returned a BARE f where the vertex-side one returned
+    # f*cos. The two agreed only because this function multiplied by cos_s
+    # afterwards; nothing in either signature said so.
+    var le = lobe_eval[want_pdfs=True](
+        LobeCtx(mat_kind, True, False, n, wo, alb, Int32(-1), alpha,
+                Float32(0), Int32(-1), Float32(0), Float32(0), True),
+        ls.wi, tab,
+        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
+        spectral_cie_z, spectral_d65, wavelengths)
+    var f = le.f_cos
+    var pdf_bsdf = le.pdf_fwd
     if f.v0 <= Float32(0.0) and f.v1 <= Float32(0.0) and f.v2 <= Float32(0.0) and f.v3 <= Float32(0.0):
         return SpectralSample(Float32(0.0))
     var li_spectral = rgb_illuminant_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, ls.Li.r, ls.Li.g, ls.Li.b, wavelengths)
+    # `f` is f*cos already (LobeEval.f_cos), so the cosine is NOT applied
+    # again here -- that double application is exactly the 2/3 energy loss
+    # vertex merging had before cos_used made the convention explicit.
     if ls.is_delta:
-        return f * li_spectral * cos_s
-    var mis_w = power_heuristic(ls.pdf, pdf_bsdf)
-    return (f * li_spectral) * (cos_s * mis_w / ls.pdf)
+        # A delta light cannot be found by BSDF sampling, so a path tracer
+        # gives its NEE full weight. VCM cannot: merging and t=1 light tracing
+        # still compete for that photon, so the sample takes its balance
+        # share with the BSDF term absent -- SmallVCM's DirectIllumination has
+        # wLight = 0 for a delta light and wCamera intact. Weight 1 here was a
+        # straight double count against every sun photon in the cache.
+        if not mis.is_vcm:
+            return f * li_spectral
+        return f * li_spectral * nee_mis_weight(mis, Float32(1.0), Float32(0.0), cos_s)
+    var mis_w = nee_mis_weight(mis, ls.pdf, pdf_bsdf, cos_s)
+    return (f * li_spectral) * (mis_w / ls.pdf)
 
 @always_inline
-def _nee_weight_hair(ls: LightSample, hc: HairLobeConstants) -> RGB:
+def _nee_weight_hair(
+    ls: LightSample, hc: HairLobeConstants,
+    mis: MisPolicy = mis_policy_power(),
+) -> RGB:
     """Hair's own version of _nee_weight_simple above — hair's BRDF needs
     the full precomputed per-hit HairLobeConstants (Marschner R/TT/TRT lobe
     state) rather than a flat (alb, alpha) pair, so it can't share
@@ -1103,5 +1479,8 @@ def _nee_weight_hair(ls: LightSample, hc: HairLobeConstants) -> RGB:
     if ls.is_delta:
         return f_val * cos_ti * ls.Li
     var pdf_bsdf = max(cos_ti * pdf_over_cos, Float32(1e-6))
-    var mis_w = power_heuristic(ls.pdf, pdf_bsdf)
+    # `cos_ti` is the FIBRE cosine, not |n.wi| -- hair's lobe has no surface
+    # normal to take one against. Same distinction LobeEval.cos_used exists
+    # for in bdpt.mojo, and the reason a caller must never guess it.
+    var mis_w = nee_mis_weight(mis, ls.pdf, pdf_bsdf, cos_ti)
     return f_val * cos_ti * ls.Li * (mis_w / ls.pdf)

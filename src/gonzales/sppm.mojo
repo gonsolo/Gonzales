@@ -28,7 +28,7 @@ from .bvh import (
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
     render_aux_buffers,
 )
-from .bxdf import dielectric_interface, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, bxdf_eval_any_spectral, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral
+from .bxdf import dielectric_interface, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, LobeCtx, lobe_eval, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured
 from .shading import _tex_lookup, _get_tri_verts
 from .sampling import power_heuristic
@@ -2143,7 +2143,7 @@ def _sppm_nee_weight(
     # converts back to RGB (with a variance clamp) purely because `ld` was
     # RGB. `ld` is spectral now, so that round trip -- and the clamp -- are
     # gone.
-    return _nee_weight_simple_spectral(ls, mat_kind_simple, vp.alb, vp.alpha, vn, wo, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths)
+    return _nee_weight_simple_spectral(ls, mat_kind_simple, vp.alb, vp.alpha, vn, wo, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs))
 
 @always_inline
 def _sppm_vp_shadow_eps(vp: SPPMPixel, ref sd: SceneDescriptor2_C, wo: Vec3f) -> Float32:
@@ -2306,7 +2306,25 @@ def _sppm_nee_one(
                                       * geom)
                     else:
                         var mat_kind_simple = LobeKind.ggx if vp.mat_kind == LobeKind.ggx else LobeKind.lambertian
-                        var (f_spec, _) = bxdf_eval_any_spectral(mat_kind_simple, vp.alb, vp.alpha, vn, wo, wi, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths)
+                        # THE shared evaluator (bxdf.mojo). SPPM's NEE uses the
+                        # BARE BRDF -- the surface cosine is already inside
+                        # `geom`, the convention _sppm_vp_brdf's docstring
+                        # states -- so it divides out the lobe's own cosine
+                        # rather than assuming which one that is. Connections
+                        # want f*cos and merging wants bare f; three consumers,
+                        # three conventions, one evaluator that says which it
+                        # applied.
+                        var le_vp = lobe_eval[want_pdfs=False](
+                            LobeCtx(mat_kind_simple, True, False, vn, wo, vp.alb,
+                                    Int32(-1), vp.alpha, Float32(0), Int32(-1),
+                                    Float32(0), Float32(0), True),
+                            wi, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs),
+                            sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
+                            sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
+                            vp.wavelengths)
+                        var f_spec = (le_vp.f_cos * (Float32(1.0) / le_vp.cos_used)
+                                      if le_vp.cos_used > Float32(1e-6)
+                                      else SpectralSample(Float32(0.0)))
                         var light_spec = rgb_illuminant_to_spectral_sample(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
                         vps[unsafe_offset=i].ld += f_spec * light_spec * geom
 

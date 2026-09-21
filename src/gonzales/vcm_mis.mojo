@@ -20,6 +20,7 @@ project_vcm_stage2_mis_derivation; that gap is documented, not an oversight
 of this module.
 """
 from .geometry import PI
+from .sampling import power_heuristic
 
 
 @always_inline
@@ -180,3 +181,53 @@ def vcm_env_escape_weight(direct_pdf_w: Float32, emission_pdf_w: Float32,
     return Float32(1.0) / (Float32(1.0)
                            + direct_pdf_w * dvcm_post_scatter
                            + emission_pdf_w * dvc_post_scatter)
+
+
+# ── ONE MIS policy for next-event estimation ────────────────────────────────
+# Every _nee_weight_* helper in bxdf.mojo used to end the same way:
+#
+#     var mis_w = power_heuristic(ls.pdf, pdf_bsdf)
+#     return f * Li * (cos * mis_w / ls.pdf)
+#
+# -- five near-identical copies, differing only in which lobe they evaluate.
+# That is why giving VCM its correct balance-heuristic weight meant editing
+# eight separate call sites, and why only one of them ever got edited: the
+# weight was welded into each helper instead of being a parameter.
+#
+# MisPolicy makes it a parameter. A path tracer passes the default and gets
+# byte-identical behaviour; VCM passes its carries and gets the weight that
+# actually partitions unity across connection, merging and light tracing.
+
+
+@fieldwise_init
+struct MisPolicy(TrivialRegisterPassable):
+    """How a NEE sample is weighted against the strategies competing with it.
+
+    `is_vcm = False` is the two-strategy power heuristic (NEE vs BSDF
+    sampling), which is correct for a path tracer: those ARE the only two
+    strategies it runs. VCM runs four, so it needs the balance weight over all
+    of them -- see vcm_env_nee_weight, derived exactly in
+    Scenes/vcm_env_mis_derivation.py."""
+    var is_vcm:         Bool
+    var vm_weight:      Float32   # mis_vm_weight_factor: merging's share
+    var dvcm:           Float32   # camera subpath carries, at THIS vertex
+    var dvc:            Float32
+    var emission_pdf_w: Float32   # the light's emission density
+    var pdf_rev_w:      Float32   # this lobe's reverse density toward wo
+
+
+@always_inline
+def mis_policy_power() -> MisPolicy:
+    """The path tracer's policy: NEE vs BSDF sampling, nothing else exists."""
+    return MisPolicy(False, Float32(0), Float32(0), Float32(0), Float32(0), Float32(0))
+
+
+@always_inline
+def nee_mis_weight(p: MisPolicy, ls_pdf: Float32, pdf_bsdf_w: Float32,
+                   cos_out: Float32) -> Float32:
+    """The MIS weight for one NEE sample, under whichever policy applies."""
+    if not p.is_vcm:
+        return power_heuristic(ls_pdf, pdf_bsdf_w)
+    return vcm_env_nee_weight(pdf_bsdf_w, p.pdf_rev_w, ls_pdf,
+                              p.emission_pdf_w, cos_out, p.vm_weight,
+                              p.dvcm, p.dvc)

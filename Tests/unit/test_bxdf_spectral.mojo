@@ -4,15 +4,23 @@
 # rendering rollout, see project_spectral_rendering memory.
 from std.math import abs
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import RGB, INV_PI, Vec3f
+from gonzales.geometry import RGB, INV_PI, Vec3f, Material_C, Curve_C, MeasuredBRDF_C
 from gonzales.bxdf import (
-    bxdf_eval_conductor_ggx, bxdf_eval_any, bxdf_eval_any_spectral,
+    bxdf_eval_conductor_ggx, bxdf_eval_any, LobeCtx, LobeTables, lobe_eval,
     _nee_weight_simple, _nee_weight_simple_spectral,
 )
 from gonzales.bvh import LightSample
+
+# These tests only exercise the lambertian/ggx kinds, which never touch the
+# material tables -- lobe_eval reads them for hair and measured only. Dangling
+# sentinels make that explicit rather than allocating tables a test does not use.
+comptime _mats = Pointer[Material_C, MutUntrackedOrigin].unsafe_dangling()
+comptime _curves = Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling()
+comptime _mbrdfs = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling()
 from gonzales.spectrum import (
     SampledWavelengths, sample_wavelengths_uniform, spectral_sample_to_rgb,
     rgb_illuminant_to_spectral_sample, SpectralContext, SpectralHandle, spectral_handle,
+    SpectralSample,
 )
 from gonzales.rgb2spec import build_spectrum_table, build_cie_xyz_tables, SpectrumTable
 
@@ -53,6 +61,31 @@ def test_conductor_ggx_grazing_still_zero_after_refactor() raises:
     var result = bxdf_eval_conductor_ggx(n, wo, wi, Float32(0.3), f0)
     assert_true(_close(result.r, Float32(0.0)) and _close(result.g, Float32(0.0)) and _close(result.b, Float32(0.0)))
 
+
+
+# `bxdf_eval_any_spectral` is gone: it was a SECOND dispatch over LobeKind,
+# covering two kinds where the shared one covers six and returning a BARE f
+# where the shared one returns f*cos. These tests still assert exactly what
+# they did -- the shim divides out the lobe's own cosine (LobeEval.cos_used)
+# to recover the bare f they were written against, which is the whole point
+# of that field: a consumer says which convention it wants instead of
+# guessing.
+def _eval_any_spectral(kind: Int32, alb: RGB, alpha: Float32, n: Vec3f,
+                       wo: Vec3f, wi: Vec3f,
+                       coeffs: Pointer[Float32, MutUntrackedOrigin], res: Int,
+                       cx: Pointer[Float32, MutUntrackedOrigin],
+                       cy: Pointer[Float32, MutUntrackedOrigin],
+                       cz: Pointer[Float32, MutUntrackedOrigin],
+                       d65: Pointer[Float32, MutUntrackedOrigin],
+                       wl: SampledWavelengths) -> Tuple[SpectralSample, Float32]:
+    var le = lobe_eval[want_pdfs=True](
+        LobeCtx(kind, True, False, n, wo, alb, Int32(-1), alpha, Float32(0),
+                Int32(-1), Float32(0), Float32(0), True),
+        wi, LobeTables(_mats, _curves, _mbrdfs), coeffs, res, cx, cy, cz, d65, wl)
+    if le.cos_used <= Float32(1e-6):
+        return (SpectralSample(Float32(0.0)), le.pdf_fwd)
+    return (le.f_cos * (Float32(1.0) / le.cos_used), le.pdf_fwd)
+
 # ── bxdf_eval_any_spectral ───────────────────────────────────────────────────
 
 def test_bxdf_eval_any_spectral_diffuse_matches_rgb_after_roundtrip() raises:
@@ -72,7 +105,7 @@ def test_bxdf_eval_any_spectral_diffuse_matches_rgb_after_roundtrip() raises:
     for i in range(N_TRIALS):
         var u = (Float32(i) + Float32(0.5)) / Float32(N_TRIALS)
         var wl = sample_wavelengths_uniform(u)
-        var (f_spec, pdf_spec) = bxdf_eval_any_spectral(Int32(0), alb, Float32(0.0), n, wo, wi, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl)
+        var (f_spec, pdf_spec) = _eval_any_spectral(Int32(0), alb, Float32(0.0), n, wo, wi, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl)
         # Pair against a neutral reference white light so the reflectance
         # round-trips (see test_spectrum.mojo's _roundtrip docstring for why
         # a bare reflectance needs this).
@@ -101,7 +134,7 @@ def test_bxdf_eval_any_spectral_conductor_pdf_matches_rgb() raises:
     var wi = Vec3f(0.0, 0.0, 1.0)
     var wl = sample_wavelengths_uniform(Float32(0.5))
     var (_, pdf_rgb) = bxdf_eval_any(Int32(1), f0, Float32(0.3), n, wo, wi)
-    var (_, pdf_spec) = bxdf_eval_any_spectral(Int32(1), f0, Float32(0.3), n, wo, wi, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl)
+    var (_, pdf_spec) = _eval_any_spectral(Int32(1), f0, Float32(0.3), n, wo, wi, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl)
     assert_true(_close(pdf_spec, pdf_rgb))
     # Keep `ctx` alive: `handle` holds raw MutUntrackedOrigin pointers INTO
     # ctx's own Lists, and that origin erasure hides the dependency, so ASAP
@@ -117,7 +150,7 @@ def test_bxdf_eval_any_spectral_values_nonnegative() raises:
     var wo = Vec3f(0.0, 0.0, 1.0)
     var wi = Vec3f(0.267261, 0.534522, 0.801784)
     var wl = sample_wavelengths_uniform(Float32(0.3))
-    var (f, _) = bxdf_eval_any_spectral(Int32(0), alb, Float32(0.0), n, wo, wi, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl)
+    var (f, _) = _eval_any_spectral(Int32(0), alb, Float32(0.0), n, wo, wi, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl)
     assert_true(f.v0 >= Float32(0.0) and f.v1 >= Float32(0.0) and f.v2 >= Float32(0.0) and f.v3 >= Float32(0.0))
 
 # ── _nee_weight_simple_spectral ──────────────────────────────────────────────
@@ -134,7 +167,7 @@ def test_nee_weight_simple_spectral_invalid_sample_is_zero() raises:
     var ls = LightSample(Vec3f(0.0, 0.0, 1.0), RGB(Float32(5.0)), Float32(1.0), Float32(1.0), False, False)
     var n = Vec3f(0.0, 0.0, 1.0)
     var wo = Vec3f(0.0, 0.0, 1.0)
-    var result = _nee_weight_simple_spectral(ls, Int32(0), RGB(Float32(0.5)), Float32(0.0), n, wo, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl)
+    var result = _nee_weight_simple_spectral(ls, Int32(0), RGB(Float32(0.5)), Float32(0.0), n, wo, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl, LobeTables(_mats, _curves, _mbrdfs))
     assert_true(_close(result.v0, Float32(0.0)) and _close(result.v1, Float32(0.0)))
     # Keep `ctx` alive: `handle` holds raw MutUntrackedOrigin pointers INTO
     # ctx's own Lists, and that origin erasure hides the dependency, so ASAP
@@ -150,7 +183,7 @@ def test_nee_weight_simple_spectral_backfacing_is_zero() raises:
     var ls = LightSample(Vec3f(0.0, 0.0, -1.0), RGB(Float32(5.0)), Float32(1.0), Float32(1.0), True, True)
     var n = Vec3f(0.0, 0.0, 1.0)
     var wo = Vec3f(0.0, 0.0, 1.0)
-    var result = _nee_weight_simple_spectral(ls, Int32(0), RGB(Float32(0.5)), Float32(0.0), n, wo, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl)
+    var result = _nee_weight_simple_spectral(ls, Int32(0), RGB(Float32(0.5)), Float32(0.0), n, wo, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl, LobeTables(_mats, _curves, _mbrdfs))
     assert_true(_close(result.v0, Float32(0.0)) and _close(result.v1, Float32(0.0)))
     # Keep `ctx` alive: `handle` holds raw MutUntrackedOrigin pointers INTO
     # ctx's own Lists, and that origin erasure hides the dependency, so ASAP
@@ -178,7 +211,7 @@ def test_nee_weight_simple_spectral_delta_light_matches_rgb_after_roundtrip() ra
     for i in range(N_TRIALS):
         var u = (Float32(i) + Float32(0.5)) / Float32(N_TRIALS)
         var wl = sample_wavelengths_uniform(u)
-        var result = _nee_weight_simple_spectral(ls_rgb, Int32(0), alb, Float32(0.0), n, wo, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl)
+        var result = _nee_weight_simple_spectral(ls_rgb, Int32(0), alb, Float32(0.0), n, wo, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl, LobeTables(_mats, _curves, _mbrdfs))
         var (rr, gg, bb) = spectral_sample_to_rgb(handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, result, wl)
         accR += rr; accG += gg; accB += bb
     accR /= Float32(N_TRIALS); accG /= Float32(N_TRIALS); accB /= Float32(N_TRIALS)
