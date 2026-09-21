@@ -454,18 +454,32 @@ def test_dielectric_bounce_tir_radiance_scale_is_exactly_one() raises:
 
 def test_dielectric_bounce_transmit_radiance_scale_matches_inverse_eta_squared() raises:
     """On transmission (entering ior=1.5 from vacuum: eta = eta_i/eta_t =
-    1/1.5), radiance_scale must equal 1/eta^2 = ior^2 = 2.25 -- the PBRT
-    SpecularTransmission `mode == Radiance` correction factor. Whichever
-    branch pcg actually picks (reflect vs. transmit) is checked via new_dir's
-    z-sign (transmit continues in roughly the same direction as ray_dir;
-    reflect flips it), so this test is not tied to one specific pcg draw."""
+    1/1.5), radiance_scale must equal eta^2 = 1/ior^2 = 0.4444.
+
+    This test previously asserted 2.25, the RECIPROCAL, and its docstring
+    claimed that was "the PBRT SpecularTransmission mode == Radiance factor".
+    It is not. pbrt's Refract() sets *etap = eta_t/eta_i = 1.5 when entering
+    (util/scattering.h), and bxdfs.cpp:111 does `ft /= Sqr(etap)` -- a
+    multiply by 1/2.25. Since our `eta` IS eta_i/eta_t, that factor is
+    eta*eta, not its inverse. bxdf_sample_dielectric (bxdf.mojo) already
+    carries exactly this fix for the path tracer, found via a staircase2
+    firefly repro; _dielectric_bounce kept the inverted form.
+
+    A CLOSED dielectric cancels the two crossings, so this was invisible to
+    furnace-dielectric (1.0000 either way) and to every balanced-crossing
+    path. barcelona's water is a single OPEN plane -- the camera refracts in
+    and never out -- and read eta^4 too bright there.
+
+    Whichever branch pcg actually picks (reflect vs. transmit) is checked via
+    new_dir's z-sign (transmit continues in roughly the same direction as
+    ray_dir; reflect flips it), so this test is not tied to one pcg draw."""
     var geom_normal = Vec3f(0.0, 0.0, 1.0)
     var ray_dir = Vec3f(0.0, 0.0, -1.0)  # normal incidence, entering
     var pcg = PCG32(UInt64(1), UInt64(1))
     var (new_dir, _, radiance_scale, _, _) = _dielectric_bounce(ray_dir, Vec3f(0.0), geom_normal, Float32(1.5), True, pcg)
     var transmitted = new_dir[2] < Float32(0.0)  # continued downward == transmit; flipped upward == reflect
     if transmitted:
-        assert_true(_close(radiance_scale, Float32(2.25)))
+        assert_true(_close(radiance_scale, Float32(1.0) / Float32(2.25)))
     else:
         assert_true(_close(radiance_scale, Float32(1.0)))
 

@@ -433,7 +433,18 @@ def _dielectric_bounce(
         # limitation as bxdf_sample_dielectric).
         var new_current_ior = ior if entering else previous_ior
         var new_previous_ior = current_ior if entering else Float32(1.0)
-        return (refr, hit_point - normal * Float32(0.0001), Float32(1.0) / (eta * eta), new_current_ior, new_previous_ior)
+        # Radiance compression, and the direction of it matters. `eta` here is
+        # eta_i/eta_t (see dielectric_interface), so pbrt's radiance-mode
+        # `ft /= Sqr(etap)` with etap = eta_t/eta_i IS eta*eta -- not its
+        # reciprocal. Entering a denser medium the camera path must be scaled
+        # DOWN (L/n^2 is the invariant), and this returned it scaled UP.
+        #
+        # A CLOSED dielectric cancels the two crossings, which is why
+        # furnace-dielectric reads 1.0000 either way and never caught it --
+        # that scene's own comment says a flat quad cannot test this. An OPEN
+        # dielectric (barcelona's water is a single plane: the camera refracts
+        # in and never out) exposes it in full, at eta^4.
+        return (refr, hit_point - normal * Float32(0.0001), eta * eta, new_current_ior, new_previous_ior)
 
 
 
