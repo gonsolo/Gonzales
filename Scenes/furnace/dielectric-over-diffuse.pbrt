@@ -1,0 +1,59 @@
+# COMPARISON SCENE -- diffuse surface seen THROUGH a flat dielectric sheet
+#
+# NOT an analytic cell. Do NOT add it to Scripts/analytic_check.py with
+# expect=1.0. I wrote it intending exactly that -- rho=1 diffuse quad,
+# non-absorbing dielectric sheet, constant environment L=1, so radiative
+# equilibrium should force Lo = L = 1.0 -- and then checked it against real
+# pbrt, which reads 0.7732. The equilibrium argument does not survive a
+# ONE-SIDED sheet plus a finite maxdepth: a ray that refracts in is inside
+# glass with no second interface to leave by, and the floor/sheet TIR ladder
+# is truncated at maxdepth 32. pbrt loses 23% to that truncation, so 1.0 is
+# not the answer here and pinning it would have been a false test.
+#
+# Remove the sheet and the furnace works exactly as it should, which is the
+# control that proves the machinery is sound rather than the scene:
+#
+#     no sheet, uniform env:  gonzales PT 1.000532   real pbrt 0.999986
+#     with sheet,  uniform env: gonzales PT 0.4664   real pbrt 0.7732
+#
+# WHAT THIS SCENE IS FOR: that second row. gonzales reads 0.60x pbrt on an
+# open/one-sided dielectric -- a real defect, minimally reproduced, and very
+# likely the same root cause as dambreak-0 and transparent-machines rendering
+# opaque (see project_dambreak_opaque_pt memory). 64x64 and sub-second, so it
+# is a far better place to chase that than a 40-material scene.
+#
+# WHAT IT IS NOT FOR: it does NOT reproduce SPPM's barcelona pool excess.
+# Here SPPM and PT agree to 0.4% (0.4683 vs 0.4664). Swapping the floor to
+# coateddiffuse makes SPPM DARKER (0.2265 vs PT 0.4173), matching the known
+# furnace-coateddiffuse.sppm gap -- also not the pool's +64%.
+#
+# Kept because furnace-dielectric cannot see any of this: it uses a SPHERE, so
+# every path crosses the boundary an even number of times and the eta^2
+# radiance compression applied on entry is undone on exit. The two factors
+# cancel whether they are right, inverted or missing -- which is why that cell
+# read 1.0000 all the way through commit 1a862f86, where SPPM's copy of the
+# factor turned out to be inverted and barcelona's pool read 7.5x.
+
+Integrator "path" "integer maxdepth" [ 32 ]
+Sampler "halton" "integer pixelsamples" [ 64 ]
+Film "rgb" "string filename" [ "furnace-dielectric-over-diffuse.exr" ]
+    "integer xresolution" [ 64 ] "integer yresolution" [ 64 ]
+LookAt 0 0 -4   0 0 0   0 1 0
+Camera "perspective" "float fov" [ 30 ]
+WorldBegin
+LightSource "infinite" "rgb L" [ 1 1 1 ]
+
+# The sheet, between camera and floor. Wider than the view frustum at z=-1 so
+# every camera ray crosses it.
+Material "dielectric" "float eta" [ 1.5 ]
+Shape "trianglemesh"
+    "integer indices" [ 0 1 2 0 2 3 ]
+    "point3 P" [ -4 -4 -1   4 -4 -1   4 4 -1   -4 4 -1 ]
+    "normal N" [ 0 0 -1  0 0 -1  0 0 -1  0 0 -1 ]
+
+# The diffuse floor behind it.
+Material "diffuse" "rgb reflectance" [ 1 1 1 ]
+Shape "trianglemesh"
+    "integer indices" [ 0 1 2 0 2 3 ]
+    "point3 P" [ -3 -3 0   3 -3 0   3 3 0   -3 3 0 ]
+    "normal N" [ 0 0 -1  0 0 -1  0 0 -1  0 0 -1 ]
