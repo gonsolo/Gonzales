@@ -2233,7 +2233,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var le_i = _lobe_eval[want_pdfs=True](v, ls_i.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                     pol_i = MisPolicy(le_i.scoped, mis_vm_weight_factor, dvcm_carry, dvc_carry,
                                       Float32(1.0) / max(_bdpt_n_lights(sd) * PI * r_i * r_i, Float32(1e-12)),
-                                      le_i.pdf_rev)
+                                      le_i.pdf_rev, False)
                 var w_i = _nee_weight_simple_spectral(ls_i, LobeKind.lambertian, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_i)
                 total += _bdpt_nee_contribute(beta, w_i, ls_i, hit, gn, cur_med_idx, sd, scratch, wavelengths)
             for inf_i in range(Int(sd.infiniteLightCount)):
@@ -2248,7 +2248,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var le_e = _lobe_eval[want_pdfs=True](v, ls_e.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                 var pol_e = MisPolicy(True, mis_vm_weight_factor, dvcm_carry, dvc_carry,
                                       ls_e.pdf / max(_bdpt_n_lights(sd) * PI * r_e * r_e, Float32(1e-12)),
-                                      le_e.pdf_rev)
+                                      le_e.pdf_rev, False)
                 var w_e = _nee_weight_simple_spectral(ls_e, LobeKind.lambertian, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_e)
                 total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn, cur_med_idx, sd, scratch, wavelengths)
             # Real MNEE for area lights behind glass (task #161) -- see
@@ -2437,7 +2437,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var pol_ib = MisPolicy(
                         not is_rough_coat, mis_vm_weight_factor, dvcm_carry, dvc_carry,
                         ls_inf.pdf / max(_bdpt_n_lights(sd) * PI * r_ib * r_ib, Float32(1e-12)),
-                        bxdf_pdf_coated_exit(abs(dot(wo, gn)), ior))
+                        bxdf_pdf_coated_exit(abs(dot(wo, gn)), ior), False)
                     # `[True]` means nee_is_sole_strategy -- the helper skips
                     # MIS and takes full weight. That WAS right while the coat
                     # walk never merged. A scoped smooth coat has competitors
@@ -2570,7 +2570,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                         var (_cd, r_d) = _scene_bounding_sphere(sd)
                         var emis_d = (Float32(1.0) / max(_bdpt_n_lights(sd) * PI * r_d * r_d, Float32(1e-12))
                                       if li_s < Int(sd.distantLightCount) else Float32(0))
-                        var pol_d = MisPolicy(le_d.scoped, mis_vm_weight_factor, dvcm_carry, dvc_carry, emis_d, le_d.pdf_rev)
+                        var pol_d = MisPolicy(le_d.scoped, mis_vm_weight_factor, dvcm_carry, dvc_carry, emis_d, le_d.pdf_rev, False)
                         # The SAME evaluator the infinite-light shot and
                         # merging use. _nee_weight_coated_diffuse_base is the
                         # single-scatter form and omits the TIR series that
@@ -2692,7 +2692,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var (_c_ec, r_ec) = _scene_bounding_sphere(sd)
                     var le_ec = _lobe_eval[want_pdfs=True](v, ls_ec.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                     var pol_ec = MisPolicy(le_ec.scoped, mis_vm_weight_factor, dvcm_carry, dvc_carry,
-                                          ls_ec.pdf / max(_bdpt_n_lights(sd) * PI * r_ec * r_ec, Float32(1e-12)), le_ec.pdf_rev)
+                                          ls_ec.pdf / max(_bdpt_n_lights(sd) * PI * r_ec * r_ec, Float32(1e-12)), le_ec.pdf_rev, False)
                     var w_ec = _nee_weight_simple_spectral(ls_ec, LobeKind.ggx, mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_ec)
                     total += _bdpt_nee_contribute(beta, w_ec, ls_ec, hit, gn_c, cur_med_idx, sd, scratch, wavelengths)
 
@@ -2795,7 +2795,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var (_c_eh, r_eh) = _scene_bounding_sphere(sd)
                 var le_eh = _lobe_eval[want_pdfs=True](v_h, ls_eh.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                 var pol_eh = MisPolicy(le_eh.scoped, mis_vm_weight_factor, dvcm_carry, dvc_carry,
-                                      ls_eh.pdf / max(_bdpt_n_lights(sd) * PI * r_eh * r_eh, Float32(1e-12)), le_eh.pdf_rev)
+                                      ls_eh.pdf / max(_bdpt_n_lights(sd) * PI * r_eh * r_eh, Float32(1e-12)), le_eh.pdf_rev, False)
                 var w_eh = _nee_weight_hair(ls_eh, hc, pol_eh)
                 total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_eh.r, w_eh.g, w_eh.b, wavelengths), ls_eh, hit, hc.geo_normal, cur_med_idx, sd, scratch, wavelengths, hair_eps)
 

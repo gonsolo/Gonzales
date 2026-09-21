@@ -28,6 +28,7 @@ from .bvh import (
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
     render_aux_buffers,
 )
+from .vcm_mis import mis_policy_sole
 from .bxdf import dielectric_interface, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, LobeCtx, lobe_eval, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured
 from .shading import _tex_lookup, _get_tri_verts
@@ -2127,7 +2128,7 @@ def _sppm_nee_weight(
         var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, wo)
         # Hair's three lobes are RGB-authored, so this crosses the boundary
         # here rather than being evaluated per wavelength.
-        var w_h = _nee_weight_hair(ls, hc)
+        var w_h = _nee_weight_hair(ls, hc, mis_policy_sole())
         return spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_h.r, w_h.g, w_h.b, vp.wavelengths)
     if vp.mat_kind == LobeKind.measured:
         var mat_m = sd.materials[unsafe_offset=Int(vp.mat_idx)]
@@ -2143,7 +2144,12 @@ def _sppm_nee_weight(
     # converts back to RGB (with a variance clamp) purely because `ld` was
     # RGB. `ld` is spectral now, so that round trip -- and the clamp -- are
     # gone.
-    return _nee_weight_simple_spectral(ls, mat_kind_simple, vp.alb, vp.alpha, vn, wo, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs))
+    # mis_policy_sole(), NOT the power-heuristic default: an SPPM visible
+    # point terminates the camera path, and direct photons are gated out of
+    # the map, so NEE is the only estimator of direct light here. The volume
+    # branch above has always said so; this one inherited the default and
+    # deleted ln(17)/16 of every env-lit surface. See mis_policy_sole.
+    return _nee_weight_simple_spectral(ls, mat_kind_simple, vp.alb, vp.alpha, vn, wo, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, vp.wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), mis_policy_sole())
 
 @always_inline
 def _sppm_vp_shadow_eps(vp: SPPMPixel, ref sd: SceneDescriptor2_C, wo: Vec3f) -> Float32:

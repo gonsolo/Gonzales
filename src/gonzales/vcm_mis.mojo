@@ -214,18 +214,49 @@ struct MisPolicy(TrivialRegisterPassable):
     var dvc:            Float32
     var emission_pdf_w: Float32   # the light's emission density
     var pdf_rev_w:      Float32   # this lobe's reverse density toward wo
+    var sole:           Bool      # NEE is the ONLY strategy -- weight is 1
 
 
 @always_inline
 def mis_policy_power() -> MisPolicy:
     """The path tracer's policy: NEE vs BSDF sampling, nothing else exists."""
-    return MisPolicy(False, Float32(0), Float32(0), Float32(0), Float32(0), Float32(0))
+    return MisPolicy(False, Float32(0), Float32(0), Float32(0), Float32(0), Float32(0), False)
+
+
+@always_inline
+def mis_policy_sole() -> MisPolicy:
+    """SPPM's policy at a visible point: NEE is the ONLY strategy there is.
+
+    An MIS weight exists to stop two strategies double-counting the same
+    path. Applying one where no second strategy exists does not redistribute
+    the discarded share -- it deletes it. That is not a tuning error, it is
+    an unbiasedness error, and it is worth stating loudly because the value
+    it deletes looks plausible: an SPPM visible point TERMINATES the camera
+    path (_sppm_trace_visible_point stores and breaks), and direct photons
+    are gated out of the map (`n_events > 1`), so direct light at a VP has
+    exactly one estimator and must carry full weight.
+
+    Measured before this existed: every env-lit furnace read 0.1765 of its
+    analytic answer. That number is derivable -- for a uniform environment
+    (pdf_l = 1/4pi) against a diffuse lobe (pdf_b = mu/pi) the power
+    heuristic collapses to 1/(1 + 16 mu^2), and
+
+        2 * integral_0^1 mu / (1 + 16 mu^2) dmu  =  ln(17)/16  =  0.17708
+
+    which is the measured 0.1765 to four figures. _sppm_nee_weight's VOLUME
+    branch had always documented this and passed no weight; the SURFACE
+    branch silently inherited _nee_weight_simple_spectral's power-heuristic
+    default, so it applied to every sphere and infinite light SPPM ever
+    shaded."""
+    return MisPolicy(False, Float32(0), Float32(0), Float32(0), Float32(0), Float32(0), True)
 
 
 @always_inline
 def nee_mis_weight(p: MisPolicy, ls_pdf: Float32, pdf_bsdf_w: Float32,
                    cos_out: Float32) -> Float32:
     """The MIS weight for one NEE sample, under whichever policy applies."""
+    if p.sole:
+        return Float32(1.0)
     if not p.is_vcm:
         return power_heuristic(ls_pdf, pdf_bsdf_w)
     return vcm_env_nee_weight(pdf_bsdf_w, p.pdf_rev_w, ls_pdf,
