@@ -181,8 +181,8 @@ Phases 1-8 each deliver standalone value and do **not** depend on Phase 9.
 | 4 | ReSTIR GI (path reuse) | 3 | Engineering | Done (diffuse x1/x2 only) |
 | 5 | SMS (generalize MNEE) | — (parallel from 0) | Eng. + some research | Done (`sms.mojo`) |
 | 6 | SMS-ReSTIR (manifold shift reservoir) | 4, 5 | Research-flavored | Core done, `--sms-restir` (temporal only, no spatial) |
-| 7 | Volumetric ReSTIR machinery (SPPM retirement is gated separately — §4a) | 4 | Research-flavored | Done: light RIS (7.1/7.2) wired CPU+GPU; distance resampling (default **on**); temporal reuse (opt-in, `--vol-restir-reuse`); spatial reuse measured as no consistent win, shipped disabled |
-| 8 | ReSTIR BDPT machinery (VCM retirement is gated separately — §4a) | 4 | Hard | 8.1 MIS-weight recovery derived from gonzales's own dVCM/dVC and machine-checked (`restir_bdpt.mojo`); reconnection Jacobian + reservoir plumbing not started; 8.2/8.3 not started |
+| 7 | Volumetric ReSTIR machinery (SPPM retirement is gated separately — §4a, Gates S/B/C/D) | 4 | Research-flavored | Done: light RIS (7.1/7.2) wired CPU+GPU; distance resampling (default **on**); temporal reuse (opt-in, `--vol-restir-reuse`); spatial reuse measured as no consistent win, shipped disabled |
+| 8 | ReSTIR BDPT machinery (VCM retirement is gated separately — §4a, Gates V/B/C/D) | 4 | Hard | 8.1 MIS-weight recovery derived from gonzales's own dVCM/dVC and machine-checked (`restir_bdpt.mojo`); reconnection Jacobian + reservoir plumbing not started; 8.2/8.3 not started |
 | 9 | Common currency: joint reservoir | 6, 7, 8 | **Open research** | Investigated, not implemented |
 | 10 | Cost-aware weights + throttling | 9 | **Open research** | Investigated, not implemented |
 
@@ -388,6 +388,78 @@ participating media handled, which ReSTIR BDPT does not do.
 
 Until a gate is met, "Phase N is complete" means the machinery shipped —
 never that the integrator can be removed.
+
+**Gate B — the incumbent must be CORRECT before it is a baseline.**
+Added 2026-09-21, from evidence, and it is the gate this section was
+missing. Gates S and V ask whether every effect the old integrator uniquely
+reaches has an in-framework substitute. That silently assumes the incumbent
+reaches those effects *correctly* — because the incumbent is what you would
+compare the substitute against.
+
+On 2026-09-21 that assumption was false by a wide margin. SPPM read **0.18
+of the analytic answer on EVERY env-lit scene** (an MIS weight applied where
+no competing strategy exists, deleting `ln(17)/16` of the energy), **~0.15
+on rough conductors** (a throwaway classification sample whose below-horizon
+rejection abandoned the pixel), and **2.20 on thin dielectrics** (a thin
+slab rendered as thick glass — `eta²`, the entry radiance compression that
+never got its exit partner). VCM was 2.21 on thin dielectrics and lost
+exactly half of every `diffusetransmission` surface. Eight such cells, all
+PT-correct and SPPM/VCM-wrong, found in one day.
+
+Anyone who had compared ReSTIR against SPPM during that window to decide
+retirement would have concluded ReSTIR was better for entirely the wrong
+reason — or, worse, tuned ReSTIR to match a broken baseline. So:
+
+> **An integrator must pass `make analytictest` before its output may be
+> used as the comparison baseline for retiring it.** A recorded gap in
+> `Scripts/analytic_gaps.json` is a KNOWN DEFECT, never a target, and never
+> a reference value.
+
+**Gate C — coverage the furnace suite structurally cannot give you.**
+Every scene in `Scenes/furnace/` renders ONE FLAT QUAD VIEWED HEAD-ON, so
+`mu_o ~ 1` across the whole crop. Any defect that vanishes at normal
+incidence is invisible to that suite at any tolerance. Two real ones were,
+on 2026-09-21: `sample_ggx_vndf` used a non-Heitz visible-hemisphere squash
+AND an arbitrary Duff frame for a squash that is anisotropic and must align
+with the macro-normal. Both collapse to the correct branch at `vh.z == 1`;
+off-normal they cost **~30% of a grazing rough conductor's energy**, in a
+sampler the coat walk shares.
+
+The fix pattern exists and should be generalised before any gate leans on
+the analytic suite: `Tests/unit/test_conductor_energy.mojo` puts the white
+furnace on the **BxDF itself** and sweeps `mu_o`, checking (a) the
+quadrature of `f`, (b) `E[weight]` over the sampler, and (c)
+`weight == f*cos/pdf`, separately — when (a) and (c) pass and (b) fails, the
+sampled density disagrees with the pdf and nothing else can be true.
+
+Note also *which integrator is the better witness*: the path tracer combines
+NEE with BSDF sampling under MIS, so an error in one strategy is partly
+masked by the other. SPPM has no second strategy at a visible point and
+reads an evaluator RAW. A 15% bias invisible in PT was obvious in SPPM.
+
+**Gate D — a (LobeKind x integrator) coverage matrix.**
+The two largest defects of 2026-09-21 were MISSING CELLS, not wrong math,
+and both were statically detectable without rendering anything:
+
+- `diffusetransmission` had **no `LobeKind` at all**, so every stored SPPM
+  visible point and VCM vertex fell through to the opaque Lambertian branch
+  and lost its transmit lobe — exactly half the energy, in both integrators,
+  while the path tracer was correct because it shades inline and never
+  round-trips a stored vertex.
+- `thindielectric` had no SPPM/VCM path and was funnelled into
+  `_dielectric_bounce` (refract, bend, `1/eta²`, switch ior).
+
+This is THE recurring bug shape in this codebase (see
+`project_pt_only_feature_gaps`), and it is precisely what a migration must
+re-home: retiring an integrator means moving every one of those cells into
+the replacement. Build the matrix — every `LobeKind` x {PT, SPPM, VCM,
+ReSTIR} with a pass/fail — before Phase 8 wiring, not after.
+
+Related trap found the same day: `_bdpt_vertex_connectible`'s whitelist
+ENUMERATES lobe kinds, so a newly added kind silently falls outside it and
+the vertex disappears from connections and merging. `LobeKind`'s own
+docstring warns about numbering *collisions*; **omission** is the failure
+mode nothing catches. Check that whitelist whenever a kind is added.
 
 ### Phase 0 — Infrastructure
 
