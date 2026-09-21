@@ -2413,6 +2413,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # A scoped smooth coat has competitors now (merging,
                     # t=1), so its NEE takes a balance share instead of full
                     # weight. A rough coat is still unscoped and still sole.
+                    # A scoped smooth coat has competitors (merging, t=1), so
+                    # its NEE takes a balance share. A rough coat is unscoped
+                    # and still the sole strategy.
                     _ = pol_ib
                     var w_inf = _nee_weight_coated_diffuse_base[True](ls_inf, eff_alb, ior, gn, coat_alpha)
                     total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_inf.r, w_inf.g, w_inf.b, wavelengths), ls_inf, hit, gn, cur_med_idx, sd, scratch, wavelengths)
@@ -3529,11 +3532,18 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             # gap noted elsewhere in this file). Guessing a sign here
             # without that connection-weight context fixed first risks
             # trading one silent bias for another; left alone, not ignored.
+            # The stored PHOTON carries the flux arriving BEFORE the coat, because a
+            # merge or connection at this vertex supplies the coat transport itself
+            # through coat_eval_smooth. Storing the post-walk flux applies the coat
+            # TWICE -- the light-side twin of the camera-side double application fixed
+            # in ba3ea22b. Every factor in it is < 1, so it reads as too DARK.
+            # The continuing photon still carries the post-walk flux.
+            var flux_pre_coat = flux
             flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (cw.beta).r, (cw.beta).g, (cw.beta).b, wavelengths)
             var v = _null_vertex()
             v.pos = hit
             v.normal = vec3f(gn)
-            v.beta = flux
+            v.beta = flux_pre_coat
             v.alb = eff_alb
             v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.coated_walk
             v.mat_idx = Int32(mat_idx)   # the coat evaluator reads ior from it
