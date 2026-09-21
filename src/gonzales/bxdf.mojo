@@ -788,14 +788,21 @@ def lobe_scoped(c: LobeCtx) -> Bool:
     every integrator asks this, so a kind cannot be in scope for one consumer
     and out of it for another.
 
-    coateddiffuse's coat walk is OUT, and that is a measurement, not an
-    oversight: it now has a real evaluator (coat_eval_smooth) and a known
-    smooth-coat exit density, yet scoping it measures 1.2345 on the white
-    furnace against 1.1423 unscoped, because merging there is still 1.3x
-    short of delivering the share MIS would reserve. Dielectrics are
-    genuinely delta and never will be in scope."""
+    coateddiffuse's coat walk is IN scope when the coat is SMOOTH, and out when
+    rough. Smooth: bxdf_pdf_coated_exit is its real exit density, coat_eval_smooth
+    is its real f(wo,wi), both subpaths' coat vertices carry real MIS state
+    (6ec79292 camera side, and the light side in the same change as this
+    docstring), and its NEE is single-shot so every strategy sees ONE model of
+    the vertex. With all of that -- and the sampled exit ray no longer carrying
+    a 1/eta^2 the refraction Jacobian already cancels -- the white furnace reads
+    0.9188 against PT's 0.9128. Every one of those pieces was needed; the
+    earlier attempts that scoped it with any of them missing measured worse
+    than unscoped, and the numbers are in project_coateddiffuse_eta2_bug.
+    Rough: no closed form for the exit density, so it stays a sole-strategy
+    NEE vertex (its exit ray drops direct via PDF_DROP_DIRECT, like PT).
+    Dielectrics are genuinely delta and never will be in scope."""
     if c.kind == LobeKind.coated_walk:
-        return False
+        return c.is_surface and c.param <= Float32(0.001)
     if not c.is_surface or c.is_delta:
         return False
     return (c.kind == LobeKind.lambertian or c.kind == LobeKind.ggx
@@ -1428,7 +1435,15 @@ def _nee_weight_simple_spectral(
     # again here -- that double application is exactly the 2/3 energy loss
     # vertex merging had before cos_used made the convention explicit.
     if ls.is_delta:
-        return f * li_spectral
+        # A delta light cannot be found by BSDF sampling, so a path tracer
+        # gives its NEE full weight. VCM cannot: merging and t=1 light tracing
+        # still compete for that photon, so the sample takes its balance
+        # share with the BSDF term absent -- SmallVCM's DirectIllumination has
+        # wLight = 0 for a delta light and wCamera intact. Weight 1 here was a
+        # straight double count against every sun photon in the cache.
+        if not mis.is_vcm:
+            return f * li_spectral
+        return f * li_spectral * nee_mis_weight(mis, Float32(1.0), Float32(0.0), cos_s)
     var mis_w = nee_mis_weight(mis, ls.pdf, pdf_bsdf, cos_s)
     return (f * li_spectral) * (mis_w / ls.pdf)
 

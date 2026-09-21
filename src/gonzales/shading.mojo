@@ -1053,10 +1053,19 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     # 1.0, the excess being exactly this ray's 1/eta^2 throughput.
     path_ptr[].lastBsdfPdf = PDF_DROP_DIRECT
     path_ptr[].specularBounce = Int8(0)
-    # 1/eta^2 radiance compression leaving the coat for air -- see
-    # docs/05_reflection_models.md. Applied here on the exit ray AND inside
-    # _nee_weight_coated_diffuse_base on the NEE side; both are required.
-    path_ptr[].throughput *= _to_spec_refl(ctx, cw.beta * (Float32(1.0) / max(ior * ior, Float32(1e-6))), path_ptr[].wavelengths)
+    # NO 1/eta^2 on the SAMPLED exit ray. The walk samples its exit direction
+    # by cosine-sampling inside the coat and refracting out, and that
+    # refraction's solid-angle Jacobian is exactly eta^2 -- it cancels the
+    # BTDF's 1/eta^2 radiance compression. NEE evaluates a GIVEN direction with
+    # no sampling Jacobian, so _nee_weight_coated_diffuse_base keeps its
+    # explicit 1/eta^2; the two consumers differ, and "once per consumer" was
+    # only half right. Applying it here made the exit ray 1/eta^2 too dark:
+    # escape-alone on the white furnace read 0.699/0.469/0.352 of the answer at
+    # eta 1.2/1.5/2.0 and reads 1.003/1.001/0.995 without it. Invisible in the
+    # furnace itself because this ray's DIRECT term is dropped (PDF_DROP_DIRECT)
+    # and NEE supplies it -- but every coated surface's INDIRECT lighting in
+    # the corpus was carrying the deficit.
+    path_ptr[].throughput *= _to_spec_refl(ctx, cw.beta, path_ptr[].wavelengths)
     path_ptr[].bounce += 1
 
     var u_rr = pcg.next_float()

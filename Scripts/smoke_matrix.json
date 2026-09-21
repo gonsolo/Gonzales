@@ -25,8 +25,8 @@
     "tol": 0.03
   },
   "baseline-diffuse.vcm": {
-    "mean": 0.182795,
-    "median": 0.038294,
+    "mean": 0.186455,
+    "median": 0.041591,
     "tol": 0.03
   },
   "chromatic-medium.pt": {
@@ -55,8 +55,8 @@
     "tol": 0.03
   },
   "closed-cavity.vcm": {
-    "mean": 0.632506,
-    "median": 0.62859,
+    "mean": 0.713089,
+    "median": 0.70726,
     "tol": 0.03
   },
   "curves-hair.pt": {
@@ -70,8 +70,8 @@
     "tol": 0.03
   },
   "curves-hair.vcm": {
-    "mean": 2.236402,
-    "median": 0.031512,
+    "mean": 2.256388,
+    "median": 0.038254,
     "tol": 0.03
   },
   "many-lights.pt": {
@@ -85,8 +85,8 @@
     "tol": 0.03
   },
   "many-lights.vcm": {
-    "mean": 0.707833,
-    "median": 0.386263,
+    "mean": 0.766957,
+    "median": 0.494702,
     "tol": 0.03
   },
   "medium-sphere-light.pt": {
@@ -105,8 +105,8 @@
     "tol": 0.03
   },
   "mnee-through-glass.pt": {
-    "mean": 0.20575,
-    "median": 0.116446,
+    "mean": 0.205605,
+    "median": 0.116625,
     "tol": 0.03
   },
   "mnee-through-glass.sppm": {
@@ -115,8 +115,8 @@
     "tol": 0.03
   },
   "mnee-through-glass.vcm": {
-    "mean": 0.303306,
-    "median": 0.078926,
+    "mean": 0.309233,
+    "median": 0.085868,
     "tol": 0.03
   },
   "normal-map.pt": {
@@ -130,8 +130,8 @@
     "tol": 0.03
   },
   "normal-map.vcm": {
-    "mean": 0.15443,
-    "median": 0.016238,
+    "mean": 0.155586,
+    "median": 0.017514,
     "tol": 0.03
   },
   "sss-slab.pt": {
@@ -145,13 +145,13 @@
     "tol": 0.03
   },
   "sss-slab.vcm": {
-    "mean": 11.316481,
-    "median": 11.124714,
+    "mean": 14.874449,
+    "median": 13.964989,
     "tol": 0.03
   },
   "subsurface-coated.pt": {
-    "mean": 0.108399,
-    "median": 0.041778,
+    "mean": 0.109185,
+    "median": 0.042451,
     "tol": 0.03
   },
   "subsurface-coated.sppm": {
@@ -160,8 +160,8 @@
     "tol": 0.03
   },
   "subsurface-coated.vcm": {
-    "mean": 0.172922,
-    "median": 0.029252,
+    "mean": 0.179846,
+    "median": 0.035335,
     "tol": 0.03
   }
 }

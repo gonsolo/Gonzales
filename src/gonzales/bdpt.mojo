@@ -17,13 +17,14 @@ from .geometry import (
     Sphere_C, Curve_C, PrimId_C, Instance_C, DistantLight_C, InfiniteLight_C, PointLight_C,
     MeasuredBRDF_C, GpuTexture_C,
     dot, cross, fr_dielectric, sphere_outward_normal, refract, PI, INV_FOUR_PI, INV_PI,
+    PDF_DROP_DIRECT, PDF_VOL_PHASE_HIT,
     cos_theta_t_dielectric, coat_beer_lambert_tr, DEFAULT_COAT_THICKNESS,
     FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, SSS_WALK_ROUNDS,
     Grid_C, NvdbGrid_C,
     spectral_free_flight_weight,
 )
 from .bssrdf import dipole_max_radius, dipole_rd, dipole_mis_sigma_tr, dipole_sample_radius, bssrdf_probe_offset, bssrdf_exit_pdf_area, bssrdf_exit_ft, fdr_moment
-from .vcm_mis import vcm_arrival_carries, vcm_scatter_carries, bssrdf_hop_carries, bssrdf_exit_scatter_carries, vcm_env_nee_weight, vcm_env_escape_weight, MisPolicy
+from .vcm_mis import mis_policy_power, vcm_arrival_carries, vcm_scatter_carries, bssrdf_hop_carries, bssrdf_exit_scatter_carries, vcm_env_nee_weight, vcm_env_escape_weight, MisPolicy
 from .bvh import (
     BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres, _mk_sd_full,
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _is_real_ptr,
@@ -65,7 +66,7 @@ from .spectrum import (
 # be MIS-weighted against it with the isotropic phase pdf 1/(4pi). It stays
 # negative so the infinite-light miss handler keeps giving full weight: volume
 # vertices do no environment NEE in this integrator, so nothing competes there.
-comptime _VOL_PHASE_HIT: Float32 = Float32(-2.0)
+comptime _VOL_PHASE_HIT: Float32 = PDF_VOL_PHASE_HIT   # geometry.mojo owns the sentinel space
 comptime _BDPT_MAX_DEPTH = 40  # max surface/medium interactions per subpath (incl.
                                 # non-stored delta/dielectric bounces — glass-of-water's
                                 # nested water/ice/glass interfaces need ~30 crossings
@@ -1466,7 +1467,20 @@ def _bdpt_merge_from_cache(
                         # radius, which here is 3% of the scene bounding
                         # sphere -- large in a room-sized scene.
                         var _ncmp = dot(cv.normal.to_simd(), lv.normal.to_simd())
-                        if dist2 <= r2 and _ncmp > Float32(0.7):
+                        # Gather in the tangent DISK, not the ball. The normal
+                        # test above rejects a photon on a differently-oriented
+                        # surface; it cannot reject one on a PARALLEL surface
+                        # inside the radius -- a desk top over a shelf, a sill
+                        # over a floor. Two lit parallel surfaces in one ball
+                        # sum both their photons and normalise by ONE disk,
+                        # pi r^2: up to 2x, radius-dependent, and impossible on
+                        # a single flat quad, which is why the white furnace
+                        # stayed exact while classroom read 2.5x pbrt with
+                        # merging on and 0.985x with it off. A photon on THIS
+                        # surface sits on its tangent plane to float precision;
+                        # a tenth of the radius is generous.
+                        var _off_n = dot(e.to_simd(), cv.normal.to_simd())
+                        if dist2 <= r2 and _ncmp > Float32(0.7) and _off_n * _off_n <= r2 * Float32(0.01):
                             var le_cv = _lobe_eval[want_pdfs=False](cv, lv.wo.to_simd(), sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, cv.wavelengths)
                             var f_cv = le_cv.f_cos
                             # MERGING TAKES THE BARE BSDF, NOT f*cos.
@@ -1840,7 +1854,14 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var ilight = sd.infiniteLights[unsafe_offset=inf_i]
                 var (Le, pdf_light_here) = _eval_infinite_light_and_pdf(ilight, rd)
                 var mis_w = Float32(1)
-                if last_bsdf_pdf >= Float32(0) and pdf_light_here > Float32(0):
+                if last_bsdf_pdf == PDF_DROP_DIRECT:
+                    # A scatter whose direct term NEE already reported (the
+                    # rough-coat exit ray): indirect only. Same contract PT's
+                    # handlers keep; bdpt's gate below let this through as a
+                    # zero pdf at near-full weight, double-counting against
+                    # the coat's full-weight per-iteration NEE.
+                    mis_w = Float32(0)
+                elif last_bsdf_pdf >= Float32(0) and pdf_light_here > Float32(0):
                     # Balance heuristic over EVERY strategy, matching the rest
                     # of this file -- vcm_env_escape_weight, derived exactly in
                     # Scenes/vcm_env_mis_derivation.py. The power heuristic it
@@ -1850,7 +1871,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # last real vertex (this handler runs before the per-hit
                     # arrival update), which is exactly what that weight wants.
                     var (_c_esc, r_esc) = _scene_bounding_sphere(sd)
-                    var emis_esc = pdf_light_here / max(PI * r_esc * r_esc, Float32(1e-12))
+                    var emis_esc = pdf_light_here / max(_bdpt_n_lights(sd) * PI * r_esc * r_esc, Float32(1e-12))
                     mis_w = vcm_env_escape_weight(pdf_light_here, emis_esc,
                                                   dvcm_carry, dvc_carry)
                 total += beta * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (Le).r, (Le).g, (Le).b, wavelengths) * mis_w
@@ -2025,7 +2046,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var sph_hit = sd.spheres[unsafe_offset=Int(inter.primId.id1)]
             if sph_hit.isAreaLight != Int8(0):
                 var mis_w_sph_hit = Float32(1)
-                if last_bsdf_pdf >= Float32(0):
+                if last_bsdf_pdf == PDF_DROP_DIRECT:
+                    pass  # direct term already reported by NEE -- see the env miss handler
+                elif last_bsdf_pdf >= Float32(0):
                     # The competing NEE strategy was taken at the vertex that
                     # GENERATED this ray, so its cone pdf must be measured from
                     # there -- `ro` -- exactly as the area-light case below
@@ -2091,7 +2114,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var cos_l_hit = -dot(gn_al_hit, ray_dir)
             if cos_l_hit > Float32(0):
                 var mis_w_al_hit = Float32(1)
-                if last_bsdf_pdf >= Float32(0):
+                if last_bsdf_pdf == PDF_DROP_DIRECT:
+                    pass  # direct term already reported by NEE -- see the env miss handler
+                elif last_bsdf_pdf >= Float32(0):
                     var dist2_hit = t_hit * t_hit
                     var n_area_hit = Float32(max(Int(sd.areaLightCount), 1))
                     var pdf_light_al = dist2_hit / (cos_l_hit * n_area_hit * al_hit.total_area)
@@ -2198,7 +2223,18 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # order was already distant,point,sphere, matching the iterator).
             for li_d in range(_bdpt_simple_light_count(sd)):
                 var ls_i = _bdpt_sample_simple_light(sd, li_d, hit.to_simd(), pcg)
-                var w_i = _nee_weight_simple_spectral(ls_i, LobeKind.lambertian, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs))
+                # Distant lights get the VCM policy (emission = the disk's area
+                # pdf over the pick, direct = 1 for a delta). Point and sphere
+                # lights keep the default until their emission densities are
+                # written down the same way -- noted, not silently assumed.
+                var pol_i = mis_policy_power()
+                if li_d < Int(sd.distantLightCount):
+                    var (_c_i, r_i) = _scene_bounding_sphere(sd)
+                    var le_i = _lobe_eval[want_pdfs=True](v, ls_i.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                    pol_i = MisPolicy(le_i.scoped, mis_vm_weight_factor, dvcm_carry, dvc_carry,
+                                      Float32(1.0) / max(_bdpt_n_lights(sd) * PI * r_i * r_i, Float32(1e-12)),
+                                      le_i.pdf_rev)
+                var w_i = _nee_weight_simple_spectral(ls_i, LobeKind.lambertian, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_i)
                 total += _bdpt_nee_contribute(beta, w_i, ls_i, hit, gn, cur_med_idx, sd, scratch, wavelengths)
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ls_e = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
@@ -2211,7 +2247,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var (_c_e, r_e) = _scene_bounding_sphere(sd)
                 var le_e = _lobe_eval[want_pdfs=True](v, ls_e.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                 var pol_e = MisPolicy(True, mis_vm_weight_factor, dvcm_carry, dvc_carry,
-                                      ls_e.pdf / max(PI * r_e * r_e, Float32(1e-12)),
+                                      ls_e.pdf / max(_bdpt_n_lights(sd) * PI * r_e * r_e, Float32(1e-12)),
                                       le_e.pdf_rev)
                 var w_e = _nee_weight_simple_spectral(ls_e, LobeKind.lambertian, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_e)
                 total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn, cur_med_idx, sd, scratch, wavelengths)
@@ -2385,7 +2421,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var ls_ib = _bdpt_sample_simple_light(sd, li_b, hit.to_simd(), pcg)
                     var w_ib = _nee_weight_coated_diffuse_base[True](ls_ib, eff_alb, ior, gn, coat_alpha)
                     total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_ib.r, w_ib.g, w_ib.b, wavelengths), ls_ib, hit, gn, cur_med_idx, sd, scratch, wavelengths)
-                for inf_i in range(Int(sd.infiniteLightCount)):
+                for inf_i in range(Int(sd.infiniteLightCount) if is_rough_coat else 0):
                     var ls_inf = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
                     # Now that a smooth coat walk is MIS-scoped, its NEE has
                     # to be weighted against the strategies that compete with
@@ -2394,7 +2430,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var (_c_ib, r_ib) = _scene_bounding_sphere(sd)
                     var pol_ib = MisPolicy(
                         not is_rough_coat, mis_vm_weight_factor, dvcm_carry, dvc_carry,
-                        ls_inf.pdf / max(PI * r_ib * r_ib, Float32(1e-12)),
+                        ls_inf.pdf / max(_bdpt_n_lights(sd) * PI * r_ib * r_ib, Float32(1e-12)),
                         bxdf_pdf_coated_exit(abs(dot(wo, gn)), ior))
                     # `[True]` means nee_is_sole_strategy -- the helper skips
                     # MIS and takes full weight. That WAS right while the coat
@@ -2459,13 +2495,16 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var cos_x_c = abs(dot(exit_dir, gn))
             var smooth_coat = coat_alpha <= Float32(0.001)
             var pdf_x_c = bxdf_pdf_coated_exit(cos_x_c, ior) if smooth_coat else Float32(0)
-            last_bsdf_pdf = pdf_x_c if smooth_coat else Float32(0)
+            last_bsdf_pdf = pdf_x_c if smooth_coat else PDF_DROP_DIRECT
             # 1/eta^2: the exit ray leaves the dense coat for air, so its
             # radiance is compressed by the squared IOR ratio -- see
             # shading.mojo's twin of this line and
             # _nee_weight_coated_diffuse_base, which carries the NEE side's
             # own copy. Missing on both, it was worth eta^2 (2.3x at 1.5).
-            var _coat_exit = Float32(1) / max(ior * ior, Float32(1e-6))
+            # No 1/eta^2 on the SAMPLED exit ray -- the exit refraction's
+            # eta^2 Jacobian cancels it (see shading.mojo's twin of this line
+            # for the sweep that settled it). coat_eval_smooth keeps its
+            # 1/eta^2 because it evaluates a GIVEN direction.
             # The vertex's beta is the throughput arriving BEFORE the coat,
             # because a connection or a merge at this vertex supplies the coat
             # transport itself through the coat-exit lobe. Storing the
@@ -2474,7 +2513,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # eta 1.5), so the double application reads as far too DARK, not
             # too bright. The continuing ray still takes the post-walk beta.
             var beta_pre_coat = beta
-            beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (cw.beta).r * _coat_exit, (cw.beta).g * _coat_exit, (cw.beta).b * _coat_exit, wavelengths)
+            beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (cw.beta).r, (cw.beta).g, (cw.beta).b, wavelengths)
             var v = _null_vertex()
             v.pos = hit
             v.normal = vec3f(gn)
@@ -2515,6 +2554,16 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
             if path_len > 0:
                 total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
+            if not is_rough_coat:
+                for inf_s in range(Int(sd.infiniteLightCount)):
+                    var ls_s = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_s], Point2f(pcg.next_float(), pcg.next_float()))
+                    var cos_s_c = dot(gn, ls_s.wi)
+                    if ls_s.valid and cos_s_c > Float32(0) and ls_s.pdf > Float32(0):
+                        var le_s = _lobe_eval[want_pdfs=True](v, ls_s.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                        var (_cc, r_s) = _scene_bounding_sphere(sd)
+                        var mis_s = vcm_env_nee_weight(le_s.pdf_fwd, le_s.pdf_rev, ls_s.pdf, ls_s.pdf / max(_bdpt_n_lights(sd) * PI * r_s * r_s, Float32(1e-12)), cos_s_c, mis_vm_weight_factor, dvcm_carry, dvc_carry)
+                        var li_s = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, ls_s.Li.r, ls_s.Li.g, ls_s.Li.b, wavelengths)
+                        total += _bdpt_nee_contribute(beta_pre_coat, le_s.f_cos * li_s * (mis_s / ls_s.pdf), ls_s, hit, gn, cur_med_idx, sd, scratch, wavelengths)
             # Propagate the carries THROUGH the coat, exactly as every other
             # material does after it scatters. This used to be
             # `dvcm_carry = 0`, which left the whole REST of the path with no
@@ -2618,7 +2667,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var (_c_ec, r_ec) = _scene_bounding_sphere(sd)
                     var le_ec = _lobe_eval[want_pdfs=True](v, ls_ec.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                     var pol_ec = MisPolicy(le_ec.scoped, mis_vm_weight_factor, dvcm_carry, dvc_carry,
-                                          ls_ec.pdf / max(PI * r_ec * r_ec, Float32(1e-12)), le_ec.pdf_rev)
+                                          ls_ec.pdf / max(_bdpt_n_lights(sd) * PI * r_ec * r_ec, Float32(1e-12)), le_ec.pdf_rev)
                     var w_ec = _nee_weight_simple_spectral(ls_ec, LobeKind.ggx, mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_ec)
                     total += _bdpt_nee_contribute(beta, w_ec, ls_ec, hit, gn_c, cur_med_idx, sd, scratch, wavelengths)
 
@@ -2721,7 +2770,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var (_c_eh, r_eh) = _scene_bounding_sphere(sd)
                 var le_eh = _lobe_eval[want_pdfs=True](v_h, ls_eh.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                 var pol_eh = MisPolicy(le_eh.scoped, mis_vm_weight_factor, dvcm_carry, dvc_carry,
-                                      ls_eh.pdf / max(PI * r_eh * r_eh, Float32(1e-12)), le_eh.pdf_rev)
+                                      ls_eh.pdf / max(_bdpt_n_lights(sd) * PI * r_eh * r_eh, Float32(1e-12)), le_eh.pdf_rev)
                 var w_eh = _nee_weight_hair(ls_eh, hc, pol_eh)
                 total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_eh.r, w_eh.g, w_eh.b, wavelengths), ls_eh, hit, hc.geo_normal, cur_med_idx, sd, scratch, wavelengths, hair_eps)
 
@@ -3162,6 +3211,21 @@ def _bdpt_light_path_init[use_gpu: Bool](
         ro = disk_pt
         rd = dir
         n_verts = 0  # no finite light point to store as a cache vertex
+        # Real MIS origin for a DISTANT light -- the third instance of the
+        # zero-carries bug: c1f2e10f fixed the infinite branch and left this
+        # one at 0 ("scoped simplification"). Zero carries collapse every
+        # merge-with and t=1 weight for a sun photon to near-full credit while
+        # the camera's delta-light NEE ALSO takes full weight: classroom (sun +
+        # env) read 2x pbrt with merging on, 0.985x with it off, and none of
+        # the exact scenes could see it because none has a distant light.
+        # SmallVCM's directional case: directPdfW = 1 (delta), emissionPdfW =
+        # the disk's area pdf, so dVCM = diskArea and dVC = dVM = 0 (a delta
+        # light has no cosine and no BSDF-sampleable direction). n_lights
+        # multiplies dVCM because the CAMERA's NEE loops every light with no
+        # pick while this path picked one with probability 1/n_lights.
+        dvcm_carry = PI * radius * radius * Float32(n_lights)
+        dvc_carry = Float32(0)
+        dvm_carry = Float32(0)
     elif light_pick < n_area + n_distant + n_infinite:
         var il = sd.infiniteLights[unsafe_offset=light_pick - n_area - n_distant]
         var (center, radius) = _scene_bounding_sphere(sd)
@@ -3205,7 +3269,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         # the first-segment dist^2 factor below, correct here because the disk
         # is a sampling device, not a real emitter position.
         var disk_area = PI * radius * radius
-        dvcm_carry = disk_area
+        dvcm_carry = disk_area * Float32(n_lights)
         dvc_carry = disk_area * Float32(n_lights) / pdf_dir
         dvm_carry = dvc_carry * mis_vc_weight_factor
     else:
@@ -3538,6 +3602,12 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             # TWICE -- the light-side twin of the camera-side double application fixed
             # in ba3ea22b. Every factor in it is < 1, so it reads as too DARK.
             # The continuing photon still carries the post-walk flux.
+            # Light-side twin of 6ec79292: a smooth coat's exit density is known,
+            # so this photon gets REAL carries and its path keeps them. Zero carries
+            # here made every merge-with and t=1 weight at a coated vertex too large.
+            var cos_x_l = abs(dot(exit_dir, gn))
+            var smooth_coat_l = coat_alpha <= Float32(0.001)
+            var pdf_x_l = bxdf_pdf_coated_exit(cos_x_l, ior) if smooth_coat_l else Float32(0)
             var flux_pre_coat = flux
             flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (cw.beta).r, (cw.beta).g, (cw.beta).b, wavelengths)
             var v = _null_vertex()
@@ -3549,13 +3619,23 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             v.mat_idx = Int32(mat_idx)   # the coat evaluator reads ior from it
             v.pdf_bwd = coat_alpha       # smooth-vs-rough, as ggx stores alpha
             v.wo = vec3f(wo)
-            v.pdf_fwd = Float32(1)
+            v.pdf_fwd = pdf_x_l if smooth_coat_l else Float32(1)
             v.med_idx = cur_med_idx
             v.wavelengths = wavelengths
-            v.dVCM = Float32(0); v.dVC = Float32(0); v.dVM = Float32(0)
+            if smooth_coat_l:
+                v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
+            else:
+                v.dVCM = Float32(0); v.dVC = Float32(0); v.dVM = Float32(0)
             n_verts += 1
             _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
-            dvcm_carry = Float32(0)
+            if smooth_coat_l:
+                (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
+                    dvcm_carry, dvc_carry, dvm_carry,
+                    cos_x_l / max(pdf_x_l, Float32(1e-9)), pdf_x_l,
+                    bxdf_pdf_coated_exit(abs(dot(wo, gn)), ior),
+                    mis_vc_weight_factor, mis_vm_weight_factor)
+            else:
+                dvcm_carry = Float32(0)
 
         elif mat.type == MatKind.conductor or mat.type == MatKind.coated_conductor:
             var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
@@ -4051,6 +4131,15 @@ def _bdpt_sample_bssrdf_exit(
     var k = ft_in / p_area
     return BssrdfExitSample(True, x_o, n_o, RGB(rd.r * k, rd.g * k, rd.b * k), p_area)
 
+
+
+@always_inline
+def _bdpt_n_lights(ref sd: SceneDescriptor2_C) -> Float32:
+    """The light-pick denominator the light path used, needed on the camera
+    side because its NEE loops every light with no pick: the MIS densities
+    must describe the same experiment on both subpaths."""
+    return Float32(Int(sd.areaLightCount) + Int(sd.distantLightCount)
+                   + Int(sd.infiniteLightCount) + Int(sd.pointLightCount))
 
 @always_inline
 def _vertex_ctx(v: BDPTVertex) -> LobeCtx:
