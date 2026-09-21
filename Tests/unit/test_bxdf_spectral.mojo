@@ -7,6 +7,7 @@ from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, INV_PI, Vec3f, Material_C, Curve_C, MeasuredBRDF_C
 from gonzales.bxdf import (
     bxdf_eval_conductor_ggx, bxdf_eval_any, LobeCtx, LobeTables, lobe_eval,
+    ggx_D, ggx_G2, ggx_albedo_avg, ggx_ms_shape, ggx_ms_tint,
     _nee_weight_simple, _nee_weight_simple_spectral,
 )
 from gonzales.bvh import LightSample
@@ -38,20 +39,39 @@ def _test_ctx() -> SpectralContext:
 
 # ── _ggx_conductor_shape_terms extraction: bxdf_eval_conductor_ggx unchanged ─
 
-def test_conductor_ggx_refactor_matches_hand_computed_case() raises:
-    """Regression check for the _ggx_conductor_shape_terms extraction --
-    bxdf_eval_conductor_ggx's output must be unchanged from before the
-    refactor for a simple normal-incidence case."""
+def test_conductor_ggx_normal_incidence_is_ss_plus_ms() raises:
+    """bxdf_eval_conductor_ggx at normal incidence == f_ss + f_ms, closed form.
+
+    This test used to assert that the result's channel RATIOS equal f0's
+    ratios, on the reasoning that at wo=wi=wh=n the Schlick term vanishes and
+    Fresnel reduces to exactly F0. That was right for single-scattering GGX
+    and is WRONG now, and the difference is physics rather than bookkeeping:
+    the Kulla-Conty lobe carries light that bounced off the microsurface more
+    than once, so it is tinted more than once. Turquin's colour term
+    k = F_avg^2 E_avg / (1 - F_avg(1 - E_avg)) is a NONLINEAR function of F0
+    per channel, so a saturated conductor comes back MORE saturated in the
+    compensation lobe than in the single-scattering one, and the total is no
+    longer proportional to F0 at any angle.
+
+    So the assertion is now the sum itself, built from the same primitives.
+    The old ratio check is kept below as an explicit INEQUALITY: the red/green
+    ratio must exceed f0's, which is the direction the extra tinting pushes
+    it. That keeps the test honest about what changed instead of quietly
+    loosening a tolerance until it passes."""
     var n = Vec3f(0.0, 0.0, 1.0)
-    var wo = Vec3f(0.0, 0.0, 1.0)
-    var wi = Vec3f(0.0, 0.0, 1.0)
+    var alpha = Float32(0.3)
     var f0 = RGB(Float32(0.9), Float32(0.6), Float32(0.2))
-    var result = bxdf_eval_conductor_ggx(n, wo, wi, Float32(0.3), f0)
-    # At normal incidence wo=wi=wh=n, so cos_wo_h=1, schlick=(1-1)^5=0 -> fr=f0 exactly.
-    assert_true(result.r > Float32(0.0) and result.g > Float32(0.0) and result.b > Float32(0.0))
-    # Result should be proportional to f0's own ratios (fr=f0 at this angle).
-    assert_true(_close(result.r / result.g, f0.r / f0.g, Float32(0.01)))
-    assert_true(_close(result.g / result.b, f0.g / f0.b, Float32(0.01)))
+    var result = bxdf_eval_conductor_ggx(n, n, n, alpha, f0)
+    var k = ggx_D(Float32(1.0), alpha) * ggx_G2(Float32(1.0), Float32(1.0), alpha) / Float32(4.0)
+    var eavg = ggx_albedo_avg(alpha)
+    var shape = ggx_ms_shape(Float32(1.0), Float32(1.0), alpha)
+    assert_true(_close(result.r, k * f0.r + shape * ggx_ms_tint(f0.r, eavg), Float32(1e-3)))
+    assert_true(_close(result.g, k * f0.g + shape * ggx_ms_tint(f0.g, eavg), Float32(1e-3)))
+    assert_true(_close(result.b, k * f0.b + shape * ggx_ms_tint(f0.b, eavg), Float32(1e-3)))
+    # Multiple scattering SATURATES: the total is pushed away from f0's ratio,
+    # never toward it.
+    assert_true(result.r / result.g > f0.r / f0.g)
+    assert_true(result.g / result.b > f0.g / f0.b)
 
 def test_conductor_ggx_grazing_still_zero_after_refactor() raises:
     var n = Vec3f(0.0, 0.0, 1.0)

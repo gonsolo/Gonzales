@@ -9,7 +9,7 @@ from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
 from .transform import transform_normal_by_instance
 from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide, guide_is_active
-from .spectrum import SpectralHandle, null_spectral_handle, SpectralSample, SampledWavelengths, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb, rgb_bands_to_spectral_sample
+from .spectrum import spec_refl_unbounded, SpectralHandle, null_spectral_handle, SpectralSample, SampledWavelengths, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb, rgb_bands_to_spectral_sample
 from .reservoir import ReservoirState, reservoir_update, reservoir_finalize, reservoir_combine, reservoir_cap_confidence
 from .restir_di import DIReservoir, di_reservoir_init, di_target_pdf, ReservoirIO, reservoir_io_null
 from .restir_gi import GIReservoir, gi_reservoir_init, gi_target_pdf, GIReservoirIO, gi_reservoir_io_null, gi_temporal_spatial_combine
@@ -634,6 +634,26 @@ def _to_spec_refl(ctx: ShadeContext, c: RGB, wl: SampledWavelengths) -> Spectral
         ctx.spectral.d65, c.r, c.g, c.b, wl)
 
 @always_inline
+def _to_spec_weight(ctx: ShadeContext, c: RGB, wl: SampledWavelengths) -> SpectralSample:
+    """A BxDF SAMPLING WEIGHT (f*cos/pdf) -> spectral -- the THIRD converter
+    at this boundary, and the one the conductor was missing.
+
+    A weight is not a reflectance even though both arrive as an RGB triple
+    off a material: a reflectance is bounded by 1 and _to_spec_refl CLAMPS
+    to that, because the sigmoid table's domain is a bounded reflectance. A
+    weight is a throughput multiplier and is routinely larger -- Kulla-Conty's
+    compensation lobe reaches ~1.7 wherever its cosine branch is sampled
+    toward grazing, and all of that excess was being deleted on the way into
+    the spectral path. The conductor furnace read 0.81 instead of 1.0 from
+    this clamp alone, with the compensation itself already correct.
+
+    spec_refl_unbounded is that converter and it already existed; the bug was
+    never a missing capability, only the wrong one of three being called."""
+    return spec_refl_unbounded(ctx.spectral.coeffs, ctx.spectral.res,
+        ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z,
+        ctx.spectral.d65, c.r, c.g, c.b, wl)
+
+@always_inline
 def _to_spec_illum(ctx: ShadeContext, c: RGB, wl: SampledWavelengths) -> SpectralSample:
     """RGB EMISSION -> spectral, at the light boundary. Uses the ILLUMINANT
     upsampling (unbounded, energy-normalised for light spectra), which is a
@@ -1065,7 +1085,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     # furnace itself because this ray's DIRECT term is dropped (PDF_DROP_DIRECT)
     # and NEE supplies it -- but every coated surface's INDIRECT lighting in
     # the corpus was carrying the deficit.
-    path_ptr[].throughput *= _to_spec_refl(ctx, cw.beta, path_ptr[].wavelengths)
+    path_ptr[].throughput *= _to_spec_weight(ctx, cw.beta, path_ptr[].wavelengths)
     path_ptr[].bounce += 1
 
     var u_rr = pcg.next_float()
@@ -1600,14 +1620,14 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
             path_ptr[].albedo = mat_eff.albedo
-        path_ptr[].throughput *= _to_spec_refl(ctx, bs.f, path_ptr[].wavelengths)
+        path_ptr[].throughput *= _to_spec_weight(ctx, bs.f, path_ptr[].wavelengths)
         path_ptr[].specularBounce = Int8(0)
         path_ptr[].lastBsdfPdf = bxdf_pdf_conductor_ggx(normal, wo, bs.wi, alpha_iso)
         path_ptr[].bounce += 1
         var u_rr = pcg.next_float()
         _apply_russian_roulette(path_ptr, pcg, u_rr)
     else:
-        _finish_delta_bounce(path_ptr, pcg, bs, _to_spec_refl(ctx, bs.f, path_ptr[].wavelengths), hit_point, mat_eff.albedo)
+        _finish_delta_bounce(path_ptr, pcg, bs, _to_spec_weight(ctx, bs.f, path_ptr[].wavelengths), hit_point, mat_eff.albedo)
 
 
 # ── Measured (tabulated Dupuy & Jakob BxDF) ──────────────────────────────────
@@ -1844,14 +1864,14 @@ def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
             path_ptr[].albedo = mat.albedo
-        path_ptr[].throughput *= _to_spec_refl(ctx, bs.f, path_ptr[].wavelengths)
+        path_ptr[].throughput *= _to_spec_weight(ctx, bs.f, path_ptr[].wavelengths)
         path_ptr[].specularBounce = Int8(0)
         path_ptr[].lastBsdfPdf = bxdf_pdf_conductor_ggx(normal, wo, bs.wi, alpha_cc)
         path_ptr[].bounce += 1
         var u_rr = pcg.next_float()
         _apply_russian_roulette(path_ptr, pcg, u_rr)
     else:
-        _finish_delta_bounce(path_ptr, pcg, bs, _to_spec_refl(ctx, bs.f, path_ptr[].wavelengths), hit_point, mat.albedo)
+        _finish_delta_bounce(path_ptr, pcg, bs, _to_spec_weight(ctx, bs.f, path_ptr[].wavelengths), hit_point, mat.albedo)
 
 
 # Mix material: randomly select one of two sub-materials using amount as probability.

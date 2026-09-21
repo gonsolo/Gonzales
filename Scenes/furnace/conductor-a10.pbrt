@@ -3,22 +3,46 @@
 # A quad of this material under a CONSTANT environment of radiance L=1, with
 # the material set to absorb nothing. Energy conservation then forces
 #
-#     Lo <= L; deviation from 1.0 IS the single-scattering energy loss
+#     Lo = 1.0 at EVERY roughness. This cell is STRICT.
 #
-# MEASURED 2026-09-20: the loss is NOT the GGX multiple-scattering deficit.
-# PT reads 0.9999 at alpha<=0.0005 and 0.5023 at alpha=0.002 -- energy HALVES
-# at the alpha>0.001 delta/rough code-path threshold, where a near-mirror must
-# still read ~1.0. The curve is also non-monotonic (0.50 -> 0.62 at alpha=0.2
-# -> 0.33 at alpha=1.0) where real GGX albedo falls monotonically from 1.0.
-# So: a missing factor of ~2 in the rough path. Do NOT add Kulla-Conty
-# compensation until this is fixed -- it would mask the bug.
+# It was not strict until 2026-09-21, and what it took to get here is worth
+# reading before trusting any furnace number. FOUR defects sat on top of each
+# other, and each one's curve looked like the next one's explanation:
+#
+#   1. An MIS bug (PathState_C.lastEnvNeePdf) cost a near-mirror conductor
+#      half its energy and made the sweep NON-MONOTONIC -- 0.50 at
+#      alpha=0.002, up to 0.62 at alpha=0.2, down to 0.33 at 1.0. Real GGX
+#      albedo falls monotonically, so the SHAPE alone convicted it.
+#   2. bxdf_sample_conductor's glossy weight was the bare Fresnel with G2/G1
+#      dropped. Isolating the strategy (NEE off, MIS forced to 1) made it
+#      read P(wi above the horizon), 0.99/0.96/0.86/0.67/0.50 over
+#      alpha 0.1..1.0, where the directional albedo it must read is
+#      0.99/0.95/0.79/0.50/0.31 -- up to 1.6x too bright. The MIS mix with a
+#      CORRECT NEE strategy hid it: the render read 0.33 at alpha=1, close
+#      enough to the true single-scattering albedo 0.31 to pass as model loss.
+#   3. The sampling WEIGHT was upsampled through the REFLECTANCE converter,
+#      which clamps to 1 because the sigmoid table's domain is bounded. The
+#      compensation lobe legitimately reaches ~1.7 toward grazing, and all of
+#      that excess was deleted. spec_refl_unbounded already existed.
+#   4. sample_ggx_vndf was wrong TWICE -- a non-Heitz visible-hemisphere
+#      squash, and an arbitrary Duff frame for a squash that is anisotropic
+#      and must align with the macro-normal. Both vanish at vh.z == 1.
+#
+# That last one is why this header is long. Every furnace scene here views
+# its quad HEAD-ON, so mu_o ~ 1, and at mu_o = 1 all of defect 4 is silent.
+# It cost 30 percent of a grazing rough conductor's energy corpus-wide, in a
+# SHARED sampler the coat walk calls too, and no scene in this directory
+# could see it. Tests/unit/test_conductor_energy.mojo sweeps mu_o for that
+# reason; when this file disagrees with that one, believe that one first.
+#
+# Kulla-Conty (SIGGRAPH 2017) + Turquin (2019) colour then adds the real
+# single-scattering deficit back. Measured after all four:
+# 0.9999 / 0.9985 / 0.9937 / 0.9808 / 0.9651 / 0.9674 over
+# alpha 0.0 / 0.1 / 0.2 / 0.4 / 0.7 / 1.0, from
+# 0.9999 / 0.9871 / 0.9445 / 0.7945 / 0.5422 / 0.3265 before.
 #
 # No reference render: the answer is arithmetic. See Scripts/analytic_check.py.
-# NOT expected to reach 1.0. Single-scattering GGX is lossy BY CONSTRUCTION:
-# it ignores light bouncing multiple times between microfacets, so energy
-# falls off with roughness unless a multiple-scattering compensation term
-# (Kulla-Conty / Turquin) is present. This sweep RECORDS the loss curve --
-# the shape is the diagnostic, not any single value. alpha = 1.0 (remap disabled, so roughness IS alpha).
+# alpha = 1.0 (remap disabled, so roughness IS alpha).
 
 Integrator "path" "integer maxdepth" [ 32 ]
 Sampler "halton" "integer pixelsamples" [ 64 ]

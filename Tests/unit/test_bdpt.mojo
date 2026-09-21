@@ -23,7 +23,7 @@ from gonzales.geometry import (
     NormalSlopeMap_C,
 )
 from gonzales.bvh import SceneDescriptor2_C, BVH2Node
-from gonzales.bxdf import ggx_D, ggx_G2
+from gonzales.bxdf import ggx_D, ggx_G2, ggx_albedo_avg, ggx_ms_shape, ggx_ms_tint
 from gonzales.bdpt import (
     BDPTVertex, _pdf_solid_to_area, _geom_term, _eval_vertex_spectral,
     _eval_conductor_ggx_spectral, _bdpt_connect_to_cache,
@@ -274,17 +274,33 @@ def test_eval_conductor_ggx_grazing_wi_returns_zero() raises:
 def test_eval_conductor_ggx_normal_incidence_matches_closed_form() raises:
     """At wo=wi=n (normal incidence, half-vector = n exactly), cos_wo_h=1 so
     the Schlick term (1-cos_wo_h)^5 vanishes and Fresnel reduces to exactly
-    F0. The remaining factor is D(1,alpha)*G2(1,1,alpha)/(4*1*1)*1 -- checked
-    by calling the same ggx_D/ggx_G2 primitives (already independently unit-
-    tested in test_bxdf.mojo) and combining them exactly as
-    _eval_conductor_ggx_spectral's k/fr formula does."""
+    F0. The single-scattering factor is then D(1,alpha)*G2(1,1,alpha)/(4*1*1)
+    -- checked by calling the same ggx_D/ggx_G2 primitives (already
+    independently unit-tested in test_bxdf.mojo) and combining them exactly
+    as _eval_conductor_ggx_spectral's k/fr formula does.
+
+    Since Kulla-Conty landed there is a SECOND term. It is built here from
+    the same ggx_ms_shape/ggx_ms_tint primitives rather than pasted as a
+    number, so this stays a closed-form check: if the compensation lobe's
+    shape or its Turquin colour changes, this test follows the formula
+    instead of going red for a value nobody can re-derive.
+
+    _eval_cond passes null_spectral_handle(), whose upsampler is the RGB
+    passthrough (v0,v1,v2 = r,g,b), so comparing the first three spectral
+    components against an RGB triple is exact rather than approximate."""
     var n = Vec3f(0.0, 0.0, 1.0)
     var alpha = Float32(0.2)
     var f0 = RGB(Float32(0.5), Float32(0.6), Float32(0.7))
     var d = ggx_D(Float32(1.0), alpha)
     var g = ggx_G2(Float32(1.0), Float32(1.0), alpha)
     var k = d * g / Float32(4.0)
-    var expected = Vec3f(k * f0.r, k * f0.g, k * f0.b)
+    # cos_i = 1 here, so ggx_ms_shape's f_ms and the evaluator's f_ms*cos_i
+    # coincide -- no cosine to carry.
+    var eavg = ggx_albedo_avg(alpha)
+    var shape = ggx_ms_shape(Float32(1.0), Float32(1.0), alpha)
+    var expected = Vec3f(k * f0.r + shape * ggx_ms_tint(f0.r, eavg),
+                         k * f0.g + shape * ggx_ms_tint(f0.g, eavg),
+                         k * f0.b + shape * ggx_ms_tint(f0.b, eavg))
     var result = _eval_cond(n, n, n, alpha, f0)
     assert_true(_spec_close(result, expected))
 

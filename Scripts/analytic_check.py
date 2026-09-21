@@ -73,27 +73,31 @@ CASES["furnace-coateddiffuse"] = dict(
     scene="Scenes/furnace/coateddiffuse.pbrt", expect=1.0, res="64x64",
     crop=(16, 48), strict=False,
     why="coateddiffuse; coat absorbs at thickness 0.01, so Lo < L is CORRECT")
-# Conductor is swept over roughness and NOT asserted at 1.0: single-scattering
-# GGX is lossy by construction (it drops multi-bounce microfacet paths), so the
-# deviation is the model, not the code, until a Kulla-Conty/Turquin
-# compensation term exists. The SHAPE of the curve is the diagnostic -- a
-# monotone falloff growing with alpha is GGX behaving as theory predicts;
-# anything else is ours.
+# Conductor is swept over roughness and IS asserted at 1.0 -- as of
+# 2026-09-21 it conserves energy at every roughness. It did not used to, and
+# the reason it now does is four separate defects deep; the scene headers in
+# Scenes/furnace/conductor-a*.pbrt carry the full account. The two worth
+# repeating here, because they are about THIS SUITE rather than about GGX:
 #
-# That diagnostic earned its keep. The curve first read 0.50 at alpha=0.002
-# and then rose to 0.62 before falling -- a step at the delta/rough threshold
-# plus a non-monotonicity, so: ours. It was an MIS bug, not the microfacet
-# model (PathState_C.lastEnvNeePdf), and it had been costing a near-mirror
-# conductor exactly half its energy. Post-fix the sweep is monotone
-# (0.987 / 0.944 / 0.794 / 0.542 / 0.327 over alpha 0.1..1.0), which is the
-# shape theory predicts -- so what is left here is now genuinely the model,
-# and Kulla-Conty compensation is the right next step rather than a way to
-# paper over a 2x defect.
+#   * The curve's SHAPE was the diagnostic that cracked the first one. It
+#     read 0.50 at alpha=0.002, rose to 0.62, then fell -- a step at the
+#     delta/rough threshold plus a non-monotonicity, where real GGX albedo
+#     falls monotonically. That convicted the renderer without any reference
+#     image, which is the whole point of an analytic scene.
+#
+#   * But the last one, a broken sample_ggx_vndf costing 30 percent of a
+#     GRAZING rough conductor's energy, this suite structurally COULD NOT
+#     see: every furnace scene in this directory views its quad head-on, and
+#     the bug vanishes at normal incidence. It took a unit test sweeping mu_o
+#     (Tests/unit/test_conductor_energy.mojo) to find it. Treat that as a
+#     standing limitation of these scenes, not a one-off -- an analytic scene
+#     only proves the renderer correct on the configuration it renders, and
+#     every scene here renders one flat quad seen head-on.
 for _a in ("00", "01", "02", "04", "07", "10"):
     CASES["furnace-conductor-a" + _a] = dict(
         scene="Scenes/furnace/conductor-a%s.pbrt" % _a, expect=1.0, res="64x64",
-        crop=(16, 48), strict=False,
-        why="conductor alpha=%s.%s; GGX single-scattering loss is EXPECTED" % (_a[0], _a[1]))
+        crop=(16, 48), strict=True,
+        why="conductor alpha=%s.%s; Kulla-Conty compensated, must conserve" % (_a[0], _a[1]))
 
 # A cell may legitimately miss the analytic answer today. Record the gap so the
 # suite catches a REGRESSION without pretending the renderer is correct: the
@@ -113,7 +117,15 @@ def render(case, mode):
     cmd = [os.path.join(REPO, "build", "gonzales"), "--gpu", "--no-denoise",
            "--spp", "64", "--resolution", c["res"], "--seed", "1",
            *MODES[mode], os.path.join(REPO, c["scene"])]
-    proc = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
+    # A per-render timeout, because without one a single hung render stalls
+    # the suite forever and is indistinguishable from "still going" -- which
+    # cost 15 minutes of staring at a blank log once. 300s is ~600x the
+    # slowest cell here, so it can only fire on a genuine hang.
+    try:
+        proc = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True,
+                              timeout=300)
+    except subprocess.TimeoutExpired:
+        return None, ["TIMED OUT after 300s"]
     written = [f for f in os.listdir(REPO) if f.endswith(".exr") and "albedo" not in f]
     try:
         if proc.returncode != 0 or len(written) != 1:

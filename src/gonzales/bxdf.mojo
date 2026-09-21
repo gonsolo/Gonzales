@@ -73,7 +73,156 @@ def bxdf_eval_conductor_ggx(
     if not valid:
         return RGB(Float32(0))
     var fr = f0 + (RGB(Float32(1)) - f0) * schlick
-    return RGB(k * fr.r, k * fr.g, k * fr.b)
+    var ms = ggx_ms_lobe(dot(wo, n), dot(wi, n), alpha, f0)
+    return RGB(k * fr.r + ms.r, k * fr.g + ms.g, k * fr.b + ms.b)
+
+# ── Kulla-Conty multiple-scattering energy compensation ─────────────────────
+# Single-scattering GGX models light that strikes ONE microfacet and leaves.
+# Light that bounces between microfacets before escaping is simply dropped, so
+# a rough conductor loses energy that a real one keeps, and the loss grows
+# with roughness. Measured here on the white furnace before this existed:
+# 0.987 / 0.944 / 0.794 / 0.542 / 0.327 at alpha 0.1 / 0.2 / 0.4 / 0.7 / 1.0,
+# where the answer is 1.0 at every roughness.
+#
+# Kulla & Conty (Revisiting Physically Based Shading, SIGGRAPH 2017 course)
+# add the missing energy back as a second, reciprocal lobe:
+#
+#     f_ms(mu_o, mu_i) = (1 - E(mu_o)) (1 - E(mu_i)) / (pi (1 - E_avg))
+#
+# with E the single-scattering directional albedo and E_avg its
+# cosine-weighted mean. f_ss + f_ms integrates to exactly 1 for a white
+# surface: each angle's deficit becomes that lobe's strength.
+
+
+@always_inline
+def ggx_albedo(mu: Float32, alpha: Float32) -> Float32:
+    """E(mu, alpha): directional albedo of single-scattering GGX at F = 1 --
+    the fraction of incident energy one GGX bounce actually carries away, and
+    therefore 1 - E is exactly what the compensation lobe has to put back.
+
+    Fitted to a DETERMINISTIC QUADRATURE of the renderer's own f_ss, computed
+    in the half-vector domain through the exact GGX NDF inverse CDF, 3000 x
+    600 cells per (mu, alpha) over a 41 x 50 grid. Deterministic matters more
+    than it sounds: the first version of this table was generated as
+    E[G2/G1] over VNDF SAMPLES, which silently inherited a bug in
+    sample_ggx_vndf and produced a table that was right only at mu = 1 -- so
+    the compensation was correct head-on and wrong everywhere else, and the
+    furnace SCENES could not see it because they all view their quad head-on.
+    A quadrature cannot inherit a sampler's bug because it never calls one.
+
+    E is NOT monotone in mu: it dips around mu ~ 0.4 and rises again toward
+    grazing (0.307 / 0.379 / 0.499 / 0.760 at alpha = 1 for mu = 1 / 0.7 /
+    0.4 / 0.1). A plain polynomial in mu cannot hold that shape, and forcing
+    one to try is what produced coefficients in the millions with catastrophic
+    fp32 cancellation. This is a degree 7x7 CHEBYSHEV fit in (2mu - 1,
+    2sqrt(alpha) - 1) instead: every coefficient is below 0.24, the recurrence
+    is stable, and the error at the angles that matter is under 0.13%. sqrt is
+    the right variable for alpha because the deficit grows like sqrt(alpha)
+    near zero.
+
+    Accuracy is the ONLY thing standing between this and an exact furnace:
+    with E_avg defined as the cosine-weighted mean of THIS fit (see
+    ggx_albedo_avg), the compensation lobe's normalisation is exact, so the
+    white furnace reads 1 + (E_true(mu_o) - E_fit(mu_o)) -- the pointwise fit
+    error, nothing else. Measured worst case 0.4%.
+    Pinned by Tests/unit/test_conductor_energy.mojo."""
+    var m = min(max(mu, Float32(0.0)), Float32(1.0))
+    var a = min(max(alpha, Float32(0.0)), Float32(1.0))
+    var x = Float32(2.0) * m - Float32(1.0)
+    var y = Float32(2.0) * sqrt(a) - Float32(1.0)
+    var x0 = Float32(1.0)
+    var x1 = x
+    var x2 = Float32(2.0) * x * x1 - x0
+    var x3 = Float32(2.0) * x * x2 - x1
+    var x4 = Float32(2.0) * x * x3 - x2
+    var x5 = Float32(2.0) * x * x4 - x3
+    var x6 = Float32(2.0) * x * x5 - x4
+    var x7 = Float32(2.0) * x * x6 - x5
+    var y0 = Float32(1.0)
+    var y1 = y
+    var y2 = Float32(2.0) * y * y1 - y0
+    var y3 = Float32(2.0) * y * y2 - y1
+    var y4 = Float32(2.0) * y * y3 - y2
+    var y5 = Float32(2.0) * y * y4 - y3
+    var y6 = Float32(2.0) * y * y5 - y4
+    var y7 = Float32(2.0) * y * y6 - y5
+    var s0 = Float32(0.1799031) * y0 + Float32(0.2346308) * y1 + Float32(0.0651005) * y2 + -Float32(0.0026610) * y3 + -Float32(0.0104297) * y4 + Float32(0.0017012) * y5 + -Float32(0.0003267) * y6 + Float32(0.0005651) * y7
+    var s1 = Float32(0.0824428) * y0 + Float32(0.1673271) * y1 + Float32(0.0655683) * y2 + -Float32(0.0152530) * y3 + -Float32(0.0057621) * y4 + -Float32(0.0042224) * y5 + Float32(0.0044000) * y6 + -Float32(0.0012006) * y7
+    var s2 = -Float32(0.0340425) * y0 + -Float32(0.0627857) * y1 + Float32(0.0015742) * y2 + Float32(0.0126882) * y3 + -Float32(0.0133245) * y4 + Float32(0.0033451) * y5 + -Float32(0.0003205) * y6 + Float32(0.0006203) * y7
+    var s3 = Float32(0.0118549) * y0 + Float32(0.0273742) * y1 + -Float32(0.0102168) * y2 + Float32(0.0000819) * y3 + Float32(0.0118832) * y4 + -Float32(0.0103083) * y5 + Float32(0.0034849) * y6 + -Float32(0.0001592) * y7
+    var s4 = -Float32(0.0025948) * y0 + -Float32(0.0158656) * y1 + Float32(0.0094135) * y2 + -Float32(0.0040777) * y3 + -Float32(0.0064109) * y4 + Float32(0.0107764) * y5 + -Float32(0.0072839) * y6 + Float32(0.0022995) * y7
+    var s5 = -Float32(0.0000513) * y0 + Float32(0.0094167) * y1 + -Float32(0.0064788) * y2 + Float32(0.0039060) * y3 + Float32(0.0024465) * y4 + -Float32(0.0073229) * y5 + Float32(0.0067780) * y6 + -Float32(0.0032536) * y7
+    var s6 = Float32(0.0002302) * y0 + -Float32(0.0045547) * y1 + Float32(0.0033563) * y2 + -Float32(0.0024166) * y3 + -Float32(0.0004979) * y4 + Float32(0.0035747) * y5 + -Float32(0.0040240) * y6 + Float32(0.0023914) * y7
+    var s7 = Float32(0.0001859) * y0 + Float32(0.0015979) * y1 + -Float32(0.0013145) * y2 + Float32(0.0013160) * y3 + -Float32(0.0003611) * y4 + -Float32(0.0011990) * y5 + Float32(0.0018070) * y6 + -Float32(0.0013354) * y7
+    var deficit = s0 * x0 + s1 * x1 + s2 * x2 + s3 * x3 + s4 * x4 + s5 * x5 + s6 * x6 + s7 * x7
+    return min(max(Float32(1.0) - deficit, Float32(1e-3)), Float32(1.0))
+
+
+@always_inline
+def ggx_albedo_avg(alpha: Float32) -> Float32:
+    """E_avg(alpha) = 2 * integral of E(mu, alpha) mu dmu over [0,1].
+
+    Deliberately fitted to the cosine-weighted mean of ggx_albedo's FIT, not
+    of the quadrature truth. That sounds backwards and is the whole trick:
+    the compensation lobe is normalised by 1/(pi(1 - E_avg)), so f_ms
+    integrates to exactly 1 - E(mu_o) only when E_avg is the mean of the very
+    same E the lobe's shape uses. Fitting both independently to truth leaves
+    a residual that shows up as a furnace error twice the size of either.
+    Degree 6 in alpha, max error 0.0004 against that mean.
+    test_ggx_albedo_table_is_consistent pins the relationship itself."""
+    var a = min(max(alpha, Float32(0.0)), Float32(1.0))
+    var e = Float32(1.0003924) + a * (-Float32(0.0735147) + a * (-Float32(2.5279152) + a * (Float32(4.8253712) + a * (-Float32(5.0972079) + a * (Float32(3.0991620) + a * (-Float32(0.8173428)))))))
+    return min(max(e, Float32(1e-3)), Float32(1.0))
+
+
+@always_inline
+def ggx_ms_shape(cos_o: Float32, cos_i: Float32, alpha: Float32) -> Float32:
+    """The white, uncolored Kulla-Conty lobe
+
+        (1 - E(mu_o)) (1 - E(mu_i)) / (pi (1 - E_avg))
+
+    -- reciprocal by construction, and normalised so that for a perfectly
+    reflective surface f_ss + f_ms integrates to exactly 1 at every mu_o."""
+    var eavg = ggx_albedo_avg(alpha)
+    var denom = max(Float32(1.0) - eavg, Float32(1e-4))
+    return ((Float32(1.0) - ggx_albedo(cos_o, alpha))
+            * (Float32(1.0) - ggx_albedo(cos_i, alpha)) * INV_PI / denom)
+
+
+@always_inline
+def ggx_ms_tint(f0: Float32, eavg: Float32) -> Float32:
+    """Turquin (2019) colour term for one channel: the multiply-scattered
+    lobe has bounced off the conductor more than once, so it is tinted by
+    more than one Fresnel reflection. F_avg is the Fresnel average under
+    Schlick (F0 + (1-F0)/21 in closed form); the geometric series over the
+    unknown number of bounces sums to
+
+        k = F_avg^2 E_avg / (1 - F_avg (1 - E_avg))
+
+    which is 1 for a white conductor -- so this never changes the energy the
+    white furnace measures, only the hue of a coloured one."""
+    var favg = f0 + (Float32(1.0) - f0) * (Float32(1.0) / Float32(21.0))
+    return favg * favg * eavg / max(Float32(1.0) - favg * (Float32(1.0) - eavg), Float32(1e-4))
+
+
+@always_inline
+def ggx_ms_lobe(cos_o: Float32, cos_i: Float32, alpha: Float32, f0: RGB) -> RGB:
+    """The Kulla-Conty compensation lobe f_ms(wo, wi), cosine NOT applied.
+
+    The colour term is Turquin's (Practical multiple scattering compensation
+    for microfacet models, 2019): a multi-bounce path inside the microsurface
+    is tinted once per bounce, so it cannot simply reuse F0.
+
+        k = F_avg^2 E_avg / (1 - F_avg (1 - E_avg)),  F_avg = F0 + (1-F0)/21
+
+    At F0 = 1 this is exactly 1, which is what makes the white furnace the
+    honest test of the energy half on its own."""
+    var eavg = ggx_albedo_avg(alpha)
+    var shape = ggx_ms_shape(cos_o, cos_i, alpha)
+    return RGB(shape * ggx_ms_tint(f0.r, eavg),
+               shape * ggx_ms_tint(f0.g, eavg),
+               shape * ggx_ms_tint(f0.b, eavg))
+
 
 @always_inline
 def _ggx_conductor_shape_terms(
@@ -134,7 +283,13 @@ def bxdf_pdf_conductor_ggx(
     wh = wh * (Float32(1) / sqrt(whl))
     var cos_wm = dot(wh, n)
     var d = ggx_D(cos_wm, alpha)
-    return ggx_vndf_pdf(cos_o, cos_wm, d, alpha)
+    # Two lobes are now sampled (see bxdf_sample_conductor), so the MIS
+    # partner density is their mixture. The split probability is the energy
+    # the single-scattering lobe fails to carry at this mu_o, which is what
+    # makes the mixture spend samples where the compensation actually is.
+    var p_ms = Float32(1.0) - ggx_albedo(cos_o, alpha)
+    return (p_ms * cos_i * INV_PI
+            + (Float32(1.0) - p_ms) * ggx_vndf_pdf(cos_o, cos_wm, d, alpha))
 
 # ── BxDF flags ────────────────────────────────────────────────────────────────
 struct BxDFFlags:
@@ -226,25 +381,74 @@ def bxdf_sample_conductor(
         var fresnel_rgb = mat.albedo + (white - mat.albedo) * schlick
         return BxDFSample(wi, fresnel_rgb, Float32(1.0), BxDFFlags.delta | BxDFFlags.reflect, Int8(1), Int8(0), Int8(0))
 
-    var wo_l = Vec3f(dot(gc.wo, gc.tangent), dot(gc.wo, gc.bitangent), dot(gc.wo, gc.normal))
-    var wh_l = sample_ggx_vndf(wo_l, alpha_x, alpha_y, u1, u2)
-    var wh = gc.tangent * wh_l.x + gc.bitangent * wh_l.y + gc.normal * wh_l.z
-    var whlen = dot(wh, wh)
-    if whlen > Float32(0.0):
-        wh = wh * (Float32(1.0) / sqrt(whlen))
-    var wo_dot_wh = dot(gc.wo, wh)
-    var wi = wh * (Float32(2.0) * wo_dot_wh) - gc.wo
-    var wilen = dot(wi, wi)
-    if wilen > Float32(0.0):
-        wi = wi * (Float32(1.0) / sqrt(wilen))
-    if dot(wi, gc.normal) <= Float32(0.0):
+    # Two lobes: the single-scattering GGX one, and the Kulla-Conty
+    # compensation lobe that carries the energy GGX drops. u1 selects between
+    # them and is then RESCALED back to [0,1) rather than a third random
+    # number being drawn -- the sampler hands out a fixed Sobol pair per
+    # bounce (SobolSamples8.scat1/scat2), and stratification survives the
+    # affine remap.
+    var cos_o_s = dot(gc.wo, gc.normal)
+    var alpha_iso = max(alpha_x, alpha_y)
+    var p_ms = Float32(1.0) - ggx_albedo(cos_o_s, alpha_iso)
+    var u_sel = u1
+    var wi: Vec3f
+    if u_sel < p_ms:
+        var ur = u_sel / max(p_ms, Float32(1e-6))
+        var cs = sample_cosine_hemisphere_world(min(ur, Float32(0.9999)), u2, gc.normal)
+        wi = cs[0]
+    else:
+        var ur = (u_sel - p_ms) / max(Float32(1.0) - p_ms, Float32(1e-6))
+        var wo_l = Vec3f(dot(gc.wo, gc.tangent), dot(gc.wo, gc.bitangent), dot(gc.wo, gc.normal))
+        var wh_l = sample_ggx_vndf(wo_l, alpha_x, alpha_y, min(ur, Float32(0.9999)), u2)
+        var wh_s = gc.tangent * wh_l.x + gc.bitangent * wh_l.y + gc.normal * wh_l.z
+        var whlen = dot(wh_s, wh_s)
+        if whlen > Float32(0.0):
+            wh_s = wh_s * (Float32(1.0) / sqrt(whlen))
+        wi = wh_s * (Float32(2.0) * dot(gc.wo, wh_s)) - gc.wo
+        var wilen = dot(wi, wi)
+        if wilen > Float32(0.0):
+            wi = wi * (Float32(1.0) / sqrt(wilen))
+    var cos_i_s = dot(wi, gc.normal)
+    if cos_i_s <= Float32(0.0) or cos_o_s <= Float32(0.0):
         return BxDFSample(wi, RGB(Float32(0.0)), Float32(1.0), BxDFFlags.glossy | BxDFFlags.reflect, Int8(0), Int8(0), Int8(0))
-    var cos_wh = max(Float32(0.0), wo_dot_wh)
+
+    # f_ss * cos_i and its own density, from the half-vector this pair
+    # implies -- computed rather than carried, because the cosine branch has
+    # no half-vector of its own.
+    var wh = gc.wo + wi
+    var whl2 = dot(wh, wh)
+    if whl2 <= Float32(0.0):
+        return BxDFSample(wi, RGB(Float32(0.0)), Float32(1.0), BxDFFlags.glossy | BxDFFlags.reflect, Int8(0), Int8(0), Int8(0))
+    wh = wh * (Float32(1.0) / sqrt(whl2))
+    var cos_wm = dot(wh, gc.normal)
+    var cos_wh = max(Float32(0.0), dot(gc.wo, wh))
+    var d = ggx_D(cos_wm, alpha_iso)
+    var g2 = ggx_G2(cos_o_s, cos_i_s, alpha_iso)
     var one_m = Float32(1.0) - cos_wh
     var one_m2 = one_m * one_m
     var schlick = one_m2 * one_m2 * one_m
     var fresnel_rgb = mat.albedo + (white - mat.albedo) * schlick
-    return BxDFSample(wi, fresnel_rgb, Float32(1.0), BxDFFlags.glossy | BxDFFlags.reflect, Int8(1), Int8(0), Int8(0))
+    # NOTE the 1/(4 cos_o) and NOT 1/(4 cos_o cos_i): this is f_ss * cos_i.
+    # The old code returned the bare Fresnel here, i.e. f_ss*cos_i/pdf_vndf
+    # with the G2/G1 DROPPED, so a rough conductor's BSDF-sampled bounce was
+    # too bright by G1/G2 -- 1.6x at alpha=1. Measured on the white furnace
+    # with NEE disabled and MIS forced to 1: the strategy read P(wi above the
+    # horizon) (0.99/0.96/0.86/0.67/0.50 over alpha 0.1..1.0) where the GGX
+    # directional albedo it should read is 0.99/0.95/0.79/0.50/0.31. The coat
+    # walk in this same file always had the factor (coat_walk_scatter's
+    # `w.beta *= ggx_G2(...) / ggx_G1(...)`); the plain conductor never did.
+    var f_ss_cos = d * g2 / (Float32(4.0) * cos_o_s)
+    var eavg = ggx_albedo_avg(alpha_iso)
+    var ms_shape_cos = ggx_ms_shape(cos_o_s, cos_i_s, alpha_iso) * cos_i_s
+    var pdf_mix = (p_ms * cos_i_s * INV_PI
+                   + (Float32(1.0) - p_ms) * ggx_vndf_pdf(cos_o_s, cos_wm, d, alpha_iso))
+    if pdf_mix <= Float32(0.0):
+        return BxDFSample(wi, RGB(Float32(0.0)), Float32(1.0), BxDFFlags.glossy | BxDFFlags.reflect, Int8(0), Int8(0), Int8(0))
+    var inv_pdf = Float32(1.0) / pdf_mix
+    var w = RGB((f_ss_cos * fresnel_rgb.r + ms_shape_cos * ggx_ms_tint(mat.albedo.r, eavg)) * inv_pdf,
+                (f_ss_cos * fresnel_rgb.g + ms_shape_cos * ggx_ms_tint(mat.albedo.g, eavg)) * inv_pdf,
+                (f_ss_cos * fresnel_rgb.b + ms_shape_cos * ggx_ms_tint(mat.albedo.b, eavg)) * inv_pdf)
+    return BxDFSample(wi, w, Float32(1.0), BxDFFlags.glossy | BxDFFlags.reflect, Int8(1), Int8(0), Int8(0))
 
 # ── CoatedConductor: dielectric clearcoat over GGX conductor ─────────────────
 # Schlick Fresnel at the air/coat interface selects: specular reflection off
@@ -1007,7 +1211,16 @@ def _eval_conductor_ggx_spectral(
     var f0_spec = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, f0.r, f0.g, f0.b, wavelengths)
     var fr_spec = f0_spec * (Float32(1) - schlick) + SpectralSample(schlick)
     var k = d * g / (Float32(4) * cos_o * cos_i) * cos_i
-    return fr_spec * k
+    # Kulla-Conty, tinted per hero wavelength rather than per RGB channel --
+    # ggx_ms_lobe's own body, with f0_spec's four components in place of f0's
+    # three. Multiplied by cos_i because this evaluator returns f*cos.
+    var eavg = ggx_albedo_avg(alpha)
+    var shape = ggx_ms_shape(cos_o, cos_i, alpha) * cos_i
+    var ms = SpectralSample(shape * ggx_ms_tint(f0_spec.v0, eavg),
+                            shape * ggx_ms_tint(f0_spec.v1, eavg),
+                            shape * ggx_ms_tint(f0_spec.v2, eavg),
+                            shape * ggx_ms_tint(f0_spec.v3, eavg))
+    return fr_spec * k + ms
 
 
 @always_inline

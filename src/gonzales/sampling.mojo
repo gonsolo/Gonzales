@@ -1,6 +1,6 @@
 from std.math import sqrt, log, exp, cos, sin, atan2, acos
 from std.memory.alloc import unsafe_alloc
-from .geometry import Vec3f, Ray_C, Point3f, dot, Frame, PI, TWO_PI, INV_PI
+from .geometry import Vec3f, Ray_C, Point3f, dot, cross, Frame, PI, TWO_PI, INV_PI
 from .spectrum import SampledWavelengths, sample_wavelengths_uniform
 
 # ── Multiple-importance sampling ───────────────────────────────────────────────
@@ -92,18 +92,44 @@ def sample_ggx_vndf(
     var wos_len = wos.length()
     var vh = wos * (Float32(1.0) / wos_len) if wos_len > Float32(0.0) else Vec3f(0.0, 0.0, 1.0)
 
-    # 2. Orthonormal basis around the stretched half-vector (Duff et al. 2017)
-    var vh_frame = Frame.from_z(vh)
-    var bt1 = vh_frame.x
-    var bt2 = vh_frame.y
+    # 2. Orthonormal basis around the stretched half-vector. This frame is
+    # NOT free to be any basis perpendicular to vh, which is why the
+    # general-purpose Frame.from_z that used to stand here was wrong: step 3
+    # squashes the disk ANISOTROPICALLY, and the axis it squashes along has
+    # to be the one pointing back toward the macro-normal. Heitz builds it
+    # as T1 = normalize(cross(z, vh)) -- perpendicular to both -- leaving
+    # T2 = cross(vh, T1) in the plane that contains z and vh, which is the
+    # axis the squash means. A Duff frame is perpendicular to vh but at an
+    # arbitrary azimuth, so it rotated the squash by an arbitrary angle.
+    # Same blind spot as the squash formula below: at vh.z -> 1 the squash
+    # vanishes, so both were invisible to every head-on furnace scene.
+    var bt1: Vec3f
+    var lensq = vh.x * vh.x + vh.y * vh.y
+    if lensq > Float32(1e-12):
+        var inv = Float32(1.0) / sqrt(lensq)
+        bt1 = Vec3f(-vh.y * inv, vh.x * inv, Float32(0.0))
+    else:
+        bt1 = Vec3f(Float32(1.0), Float32(0.0), Float32(0.0))
+    var bt2 = cross(vh, bt1)
 
     # 3. Sample point on visible hemisphere disk
     var r_disk = sqrt(u1)
     var phi    = TWO_PI * u2
     var tx     = r_disk * cos(phi)
     var ty_raw = r_disk * sin(phi)
+    # Heitz 2018 eq. (Listing 3): squash the disk's LOWER half onto the
+    # visible hemisphere -- lerp(sqrt(1 - tx^2), ty, s), NOT a sqrt-weighted
+    # blend of tx and ty. Both forms collapse to ty = ty_raw at vh.z == 1,
+    # which is exactly why this stood for so long: every furnace scene in
+    # Scenes/furnace views its quad head-on, so mu_o ~ 1 and the wrong branch
+    # was never exercised. Off-normal it is badly wrong -- the strategy
+    # delivered 0.348 where the GGX directional albedo is 0.499 at alpha=1,
+    # mu_o=0.4, i.e. 30% of a grazing rough conductor's energy simply gone,
+    # and sample_ggx_vndf is shared, so the coat walk lost it too.
+    # Tests/unit/test_conductor_energy.mojo sweeps mu_o for this reason.
     var s_corr = Float32(0.5) * (Float32(1.0) + vh.z)
-    var ty     = tx * sqrt(Float32(1.0) - s_corr) + ty_raw * sqrt(s_corr)
+    var tx2    = Float32(1.0) - tx * tx
+    var ty     = (Float32(1.0) - s_corr) * sqrt(tx2 if tx2 > Float32(0.0) else Float32(0.0)) + s_corr * ty_raw
     var tz_sq  = Float32(1.0) - tx * tx - ty * ty
     var tz     = sqrt(tz_sq if tz_sq > Float32(0.0) else Float32(0.0))
     var nh_local = bt1 * tx + bt2 * ty + vh * tz
