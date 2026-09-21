@@ -2112,6 +2112,18 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         mats[unsafe_offset=i].tex_bias = nm3.tex_bias
         mats[unsafe_offset=i].rough_tex_idx = nm3.rough_tex_idx
         mats[unsafe_offset=i].medium_interface_idx = Int32(-1)
+        # `mats` comes from unsafe_alloc, which does NOT zero. Every other
+        # field is assigned below, but sss_boundary was only ever written on
+        # the medium-interface duplication path further down -- so a material
+        # with no medium kept whatever byte happened to be on the heap, and
+        # that byte differs per process run. It is read as a plain
+        # `!= 0` flag, so ~2/3 of this corpus's materials claimed to be
+        # subsurface boundaries at random. See
+        # project_sppm_nondeterministic_photon_pass memory: barcelona's water
+        # flipped between refracting and absorbing every photon on it.
+        mats[unsafe_offset=i].sss_boundary = Int8(0)
+        mats[unsafe_offset=i]._pad1 = Int8(0)
+        mats[unsafe_offset=i]._pad2 = Int8(0)
         if nm3.measured_bsdf_path == "":
             mats[unsafe_offset=i].measured_idx = Int32(-1)
         else:

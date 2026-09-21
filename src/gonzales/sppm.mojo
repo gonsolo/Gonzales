@@ -1505,7 +1505,13 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             # head.pbrt is lit by an environment map, so nearly every photon
             # reaches the skin on its FIRST segment: with the gate, essentially
             # nothing was deposited and the render came out pure black.
-            if mat.sss_boundary != Int8(0) and Int(cur_med_idx) < 0:
+            # `has_media` matters: a BSSRDF deposit TERMINATES the photon, so
+            # without a subsurface medium to terminate into this branch just
+            # eats the photon. The camera side already required a real interior
+            # (medium_after_crossing >= 0) and VCM already required `has_med`;
+            # this one tested sss_boundary alone, which is what let the
+            # uninitialised flag above reach anything at all.
+            if has_media and mat.sss_boundary != Int8(0) and Int(cur_med_idx) < 0:
                 var gn_b = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
                 var cos_in = dot(gn_b, rd)
                 if cos_in > Float32(0.0):
