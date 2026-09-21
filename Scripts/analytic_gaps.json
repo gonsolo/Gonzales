@@ -39,6 +39,6 @@
   "furnace-mix.sppm": 0.9964,
   "furnace-mix.vcm": 1.0105,
   "furnace-thindielectric.pt": 0.9999,
-  "furnace-thindielectric.sppm": 2.2021,
-  "furnace-thindielectric.vcm": 2.2154
+  "furnace-thindielectric.sppm": 1.0,
+  "furnace-thindielectric.vcm": 1.0069
 }

@@ -376,10 +376,38 @@ def _dielectric_bounce(
     mut pcg: PCG32,
     current_ior: Float32 = Float32(1.0),    # IOR of the medium the ray is ALREADY in; 1.0 = vacuum
     previous_ior: Float32 = Float32(1.0),   # IOR one level below current_ior (what exiting restores)
+    is_thin: Bool = False,                  # `thindielectric`: both interfaces at once
 ) -> Tuple[Vec3f, Vec3f, Float32, Float32, Float32]:
     var di = dielectric_interface(geom_normal, ray_dir, ior, force_entering, current_ior, previous_ior)
     var normal = di.normal
     var entering = di.entering
+    # A THIN dielectric models a slab so thin its two interfaces coincide,
+    # so it never refracts, never enters a medium, and never picks up a
+    # radiance compression: it reflects with the DOUBLED-interface Fresnel
+    # 2R/(1+R) or passes straight through, weight 1, iors untouched.
+    #
+    # It lives HERE rather than in each integrator's dielectric branch
+    # because SPPM and VCM both funnelled `thindielectric` into this
+    # function and so rendered a thin slab as THICK GLASS: the furnace read
+    # 2.20 (SPPM) and 2.21 (VCM) where energy conservation demands 1.0, and
+    # 2.2 is just eta^2 = 1.5^2, the entry compression that never got its
+    # exit partner. The path tracer was right all along via
+    # bxdf_sample_thin_dielectric. One fix, four call sites.
+    if is_thin:
+        var entering_t = dot(ray_dir, geom_normal) < Float32(0.0)
+        var n_t = geom_normal if entering_t else -geom_normal
+        var cos_t = max(Float32(0.0), -dot(ray_dir, n_t))
+        var r1 = fr_dielectric(cos_t, ior)
+        var r_thin = r1
+        if r1 < Float32(1.0):
+            r_thin = Float32(2.0) * r1 / (Float32(1.0) + r1)
+        if pcg.next_float() < r_thin:
+            var refl_t = ray_dir + n_t * (Float32(2.0) * cos_t)
+            var rl = dot(refl_t, refl_t)
+            if rl > Float32(0.0):
+                refl_t = refl_t * (Float32(1.0) / sqrt(rl))
+            return (refl_t, hit_point + n_t * Float32(0.0001), Float32(1.0), current_ior, previous_ior)
+        return (ray_dir, hit_point - n_t * Float32(0.0001), Float32(1.0), current_ior, previous_ior)
     var eta = di.eta
     var cos_i = di.cos_i
     var sin2_t = di.sin2_t
@@ -858,7 +886,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var ior = mat.albedo.r
             var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
             var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
-                ray_dir, hit.to_simd(), gn, ior, n_events == 1 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior)
+                ray_dir, hit.to_simd(), gn, ior, n_events == 1 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric)
             current_dielectric_ior = new_cur_ior
             previous_dielectric_ior = new_prev_ior
             vp.beta *= radiance_scale  # camera-path (Radiance mode): apply non-symmetric-scattering correction
@@ -1485,7 +1513,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var ior = mat.albedo.r
             var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
             var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
-                ray_dir, hit.to_simd(), gn, ior, n_events == 1 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior)
+                ray_dir, hit.to_simd(), gn, ior, n_events == 1 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric)
             current_dielectric_ior = new_cur_ior
             previous_dielectric_ior = new_prev_ior
             # Light path (TransportMode::Importance): do NOT apply the
