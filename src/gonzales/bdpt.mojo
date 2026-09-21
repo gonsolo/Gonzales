@@ -4047,7 +4047,7 @@ def _vertex_ctx(v: BDPTVertex) -> LobeCtx:
     """A stored VCM vertex, as the shared BxDF interface sees it."""
     return LobeCtx(v.mat_kind, v.is_surface == Int32(1), v.is_delta != Int32(0),
                    v.normal.to_simd(), v.wo.to_simd(), v.alb, v.mat_idx,
-                   v.pdf_bwd, v.pdf_fwd, v.hair_curve_idx, v.hair_h, v.hair_v)
+                   v.pdf_bwd, v.pdf_fwd, v.hair_curve_idx, v.hair_h, v.hair_v, False)
 
 
 @always_inline

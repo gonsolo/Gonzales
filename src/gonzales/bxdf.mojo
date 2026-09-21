@@ -740,6 +740,12 @@ struct LobeCtx(TrivialRegisterPassable):
     var hair_curve_idx: Int32
     var hair_h:         Float32
     var hair_v:         Float32
+    # True when the caller has already oriented `n` for the lobe it wants, so
+    # `wo` may legitimately sit on the far side -- which is how
+    # shade_diffuse_transmission addresses its TRANSMITTED lobe. The opaque
+    # sidedness test below must not fire there: it exists for stored vertices,
+    # where `wo` really is the direction the subpath arrived from.
+    var pre_oriented:   Bool
 
 
 @fieldwise_init
@@ -936,7 +942,7 @@ def lobe_eval[want_pdfs: Bool = True](
     # carries no sidedness information, so it falls back rather than silently
     # zeroing every contribution.
     var cos_o = dot(dir_to_other, vn)
-    if dot(vwo, vwo) > Float32(1e-8) and cos_o * dot(vwo, vn) <= Float32(0):
+    if (not c.pre_oriented) and dot(vwo, vwo) > Float32(1e-8) and cos_o * dot(vwo, vn) <= Float32(0):
         return LobeEval(ZERO, Float32(1), Float32(0), Float32(0), True)
     var cos_l = abs(cos_o)
     var alb_l = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, c.alb.r, c.alb.g, c.alb.b, wavelengths)
@@ -1409,7 +1415,7 @@ def _nee_weight_simple_spectral(
     # afterwards; nothing in either signature said so.
     var le = lobe_eval[want_pdfs=True](
         LobeCtx(mat_kind, True, False, n, wo, alb, Int32(-1), alpha,
-                Float32(0), Int32(-1), Float32(0), Float32(0)),
+                Float32(0), Int32(-1), Float32(0), Float32(0), True),
         ls.wi, tab,
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, wavelengths)

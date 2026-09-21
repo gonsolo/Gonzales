@@ -80,7 +80,7 @@ def _eval_any_spectral(kind: Int32, alb: RGB, alpha: Float32, n: Vec3f,
                        wl: SampledWavelengths) -> Tuple[SpectralSample, Float32]:
     var le = lobe_eval[want_pdfs=True](
         LobeCtx(kind, True, False, n, wo, alb, Int32(-1), alpha, Float32(0),
-                Int32(-1), Float32(0), Float32(0)),
+                Int32(-1), Float32(0), Float32(0), True),
         wi, LobeTables(_mats, _curves, _mbrdfs), coeffs, res, cx, cy, cz, d65, wl)
     if le.cos_used <= Float32(1e-6):
         return (SpectralSample(Float32(0.0)), le.pdf_fwd)

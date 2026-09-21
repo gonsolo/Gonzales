@@ -2317,7 +2317,7 @@ def _sppm_nee_one(
                         var le_vp = lobe_eval[want_pdfs=False](
                             LobeCtx(mat_kind_simple, True, False, vn, wo, vp.alb,
                                     Int32(-1), vp.alpha, Float32(0), Int32(-1),
-                                    Float32(0), Float32(0)),
+                                    Float32(0), Float32(0), True),
                             wi, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs),
                             sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
                             sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
