@@ -888,8 +888,21 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 var ior_c = mat.emission.r if mat.emission.r > Float32(1) else Float32(1.5)
                 var usplit_c = pcg.next_float()
                 bs_c = bxdf_sample_coated_conductor(gc_c, mat, ior_c, usplit_c, uc1, uc2)
-            if bs_c.is_valid == Int8(0):
-                break
+            # Delta-vs-glossy is a property of the MATERIAL; bs_c is drawn
+            # only to classify the lobe, and a GLOSSY vertex never consumes
+            # it -- the VP stores and the camera path stops. So the validity
+            # test belongs AFTER the classification, guarding only the delta
+            # continuation that actually uses bs_c.wi.
+            #
+            # Testing it first abandoned the pixel whenever that throwaway
+            # sample happened to land below the horizon, which discards
+            # exactly the VNDF rejection rate. Measured on the conductor
+            # furnace: SPPM read 0.986/0.956/0.888/0.833/0.844 over
+            # alpha 0.1..1.0 where the analytic answer is 1.0, and
+            # 1 - (1 - p_ms) * P(below horizon) predicts
+            # 0.990/0.964/0.892/0.835/0.847 -- the whole curve, to 0.4%.
+            # The deficit was flat in passes AND photons, which is what
+            # ruled out variance and made it worth chasing.
             if not bxdf_is_delta(bs_c.flags):
                 vp.pos = hit
                 vp.normal = vec3f(gn_c)
@@ -900,6 +913,8 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 vp.is_volume = PhotonKind.surface
                 vp.med_idx = cur_med_idx
                 vp.valid = Int32(1)
+                break
+            if bs_c.is_valid == Int8(0):
                 break
             vp.beta *= bs_c.f
             rd = vec3f(bs_c.wi)
@@ -1498,12 +1513,16 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 var ior_c = mat.emission.r if mat.emission.r > Float32(1) else Float32(1.5)
                 var usplit_c = pcg.next_float()
                 bs_c = bxdf_sample_coated_conductor(gc_c, mat, ior_c, usplit_c, uc1, uc2)
-            if bs_c.is_valid == Int8(0):
-                break
+            # Same ordering as the camera side above, same reason: this
+            # photon has ALREADY ARRIVED at the surface, so it must be
+            # deposited whether or not its OUTGOING sample is valid. Only
+            # the continuation below consumes bs_c.
             if not bxdf_is_delta(bs_c.flags) and n_events > 1:
                 _sppm_store_photon[use_gpu](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
+            if bs_c.is_valid == Int8(0):
+                break
             flux *= spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (bs_c.f).r, (bs_c.f).g, (bs_c.f).b, ph_wavelengths)
             rd = vec3f(bs_c.wi)
             ro = hit + rd * Float32(0.0002)

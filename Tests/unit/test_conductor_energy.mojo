@@ -32,8 +32,16 @@ from gonzales.rng import PCG32
 from gonzales.bxdf import (
     GeomContext, Material_C,
     bxdf_sample_conductor, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx,
-    ggx_albedo, ggx_albedo_avg,
+    ggx_albedo, ggx_albedo_avg, _eval_conductor_ggx_spectral,
 )
+from gonzales.spectrum import SampledWavelengths, null_spectral_handle
+
+# All-equal wavelengths + null_spectral_handle: the upsampler degrades to the
+# RGB passthrough (v0,v1,v2 = r,g,b), so a white f0 comes back as exactly 1
+# on every lane and the spectral evaluator's furnace integral is directly
+# comparable to the RGB one's.
+comptime NULL_WL = SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0),
+                                      Float32(0.0), Float32(0.0))
 
 # Plain functions rather than comptime arrays: a comptime Array[Float32, N]
 # is not ImplicitlyCopyable, so indexing it from a runtime loop will not
@@ -104,6 +112,44 @@ def test_conductor_eval_white_furnace() raises:
             # 5%: the quadrature itself is the loose end at low alpha, not
             # the BxDF -- a 64-cell cos(theta) grid cannot resolve a lobe
             # whose width is alpha.
+            assert_true(abs(total - Float32(1.0)) < Float32(0.05))
+
+
+def test_conductor_eval_spectral_white_furnace() raises:
+    """The SPECTRAL evaluator must conserve energy too -- it is a SECOND
+    implementation of f_ss + f_ms, not a wrapper over the RGB one.
+
+    It earned its own test the hard way. After Kulla-Conty landed, SPPM's
+    conductor furnace sat at 0.84 with the deficit FLAT across passes and
+    photon counts, i.e. bias, while the RGB evaluator's own furnace test
+    passed. The path tracer hid it: PT combines this evaluator's NEE with
+    BSDF sampling under MIS, so an error in one strategy is partly masked by
+    the other. SPPM has no second strategy at a visible point, so it reads
+    the spectral evaluator RAW -- which is exactly why SPPM is the better
+    witness for this function and why the furnace belongs on it directly."""
+    var n = Vec3f(Float32(0.0), Float32(0.0), Float32(1.0))
+    var h = null_spectral_handle()
+    comptime NT = 64
+    comptime NP = 256
+    for ai in range(5):
+        var alpha = _alpha_at(ai)
+        for mi in range(3):
+            var wo = _wo_at(_mu_o_at(mi))
+            var total = Float32(0.0)
+            for ti in range(NT):
+                var mu_i = (Float32(ti) + Float32(0.5)) / Float32(NT)
+                var st = sqrt(max(Float32(0.0), Float32(1.0) - mu_i * mu_i))
+                for pi_ in range(NP):
+                    var phi = Float32(2.0) * PI * (Float32(pi_) + Float32(0.5)) / Float32(NP)
+                    var wi = Vec3f(st * cos(phi), st * sin(phi), mu_i)
+                    # returns f*cos already -- no cosine applied here
+                    var fs = _eval_conductor_ggx_spectral(
+                        n, wo, wi, alpha, RGB(Float32(1.0)), h.coeffs, h.res,
+                        h.cie_x, h.cie_y, h.cie_z, h.d65, NULL_WL)
+                    total += fs.v0
+            total *= (Float32(2.0) * PI) / (Float32(NT) * Float32(NP))
+            if abs(total - Float32(1.0)) >= Float32(0.05):
+                print("  SPECTRAL alpha", alpha, " mu_o", _mu_o_at(mi), " integral", total)
             assert_true(abs(total - Float32(1.0)) < Float32(0.05))
 
 
