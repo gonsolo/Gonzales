@@ -234,6 +234,13 @@ $(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULK
 nvdb_diff: $(MOJO_SRCS) $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(NVDB_BRIDGE_LIB) Tools/nvdb_diff.mojo
 	uv run mojo build Tools/nvdb_diff.mojo -I src -o $(BUILD_DIR)/nvdb_diff $(MOJO_LINK_FLAGS)
 
+# Runs OUR a-trous denoiser on buffers from another renderer, so the gallery's
+# pbrt reference can get the same treatment as the gonzales columns instead of
+# being shown raw next to denoised images. See Tools/denoise_buffers.mojo.
+denoise_buffers: $(MOJO_SRCS) $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(NVDB_BRIDGE_LIB) Tools/denoise_buffers.mojo
+	@mkdir -p $(BUILD_DIR)
+	uv run mojo build Tools/denoise_buffers.mojo -I src -o $(BUILD_DIR)/denoise_buffers $(MOJO_LINK_FLAGS)
+
 sms_mitsuba_ref: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) Tools/sms_mitsuba_ref.mojo
 	@mkdir -p $(BUILD_DIR)
 	uv run mojo build Tools/sms_mitsuba_ref.mojo -I src -o $(BUILD_DIR)/sms_mitsuba_ref $(MOJO_LINK_FLAGS)
