@@ -160,8 +160,8 @@
     "tol": 0.03
   },
   "subsurface-coated.vcm": {
-    "mean": 0.179846,
-    "median": 0.035335,
+    "mean": 0.174726,
+    "median": 0.029284,
     "tol": 0.03
   }
 }

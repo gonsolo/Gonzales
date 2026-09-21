@@ -802,7 +802,17 @@ def lobe_scoped(c: LobeCtx) -> Bool:
     NEE vertex (its exit ray drops direct via PDF_DROP_DIRECT, like PT).
     Dielectrics are genuinely delta and never will be in scope."""
     if c.kind == LobeKind.coated_walk:
-        return c.is_surface and c.param <= Float32(0.001)
+        # Rough coats are in scope too, on an APPROXIMATE density:
+        # bxdf_pdf_coated_exit is derived for a smooth coat and takes no
+        # alpha, so for a rough one it is the right shape with the wrong
+        # width. That is legitimate -- an approximated pdf used for MIS does
+        # not bias the estimator (pbrt, Reflection Models / Further Reading),
+        # it only moves variance between strategies. Leaving rough coats OUT
+        # was the worse option: their NEE then takes sole-strategy weight 1
+        # while merging and t=1 splat at the same vertices with fabricated
+        # zero-carry weights, which is a real double count rather than a
+        # variance trade.
+        return c.is_surface
     if not c.is_surface or c.is_delta:
         return False
     return (c.kind == LobeKind.lambertian or c.kind == LobeKind.ggx
