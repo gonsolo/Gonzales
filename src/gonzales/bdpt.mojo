@@ -422,6 +422,7 @@ def _bdpt_nee_contribute(
     scratch: Pointer[Intersection_C, MutUntrackedOrigin],
     wl: SampledWavelengths,
     eps: Float32 = Float32(0.0001),
+    two_sided: Bool = False,
 ) -> SpectralSample:
     """BDPT-side NEE glue shared by every per-material light loop below:
     given a LightSample + material weight (from the shared Light interface
@@ -435,7 +436,15 @@ def _bdpt_nee_contribute(
     curve_offset_eps(hc.radius) instead (see bvh.mojo)."""
     if w.is_black():
         return SpectralSample(Float32(0))
-    var shadow_org = hit + vec3f(gn) * eps
+    # For a TWO-SIDED lobe the offset must follow the light direction:
+    # +gn for a direction on the -gn side starts the ray inside the surface
+    # it just left. Opt-in, NOT automatic -- MNEE connects THROUGH GLASS, so
+    # a one-sided lobe CAN arrive here with cos < 0 and a non-black weight,
+    # and flipping the offset there would push its ray to the wrong side.
+    var side_eps = eps
+    if two_sided and dot(gn, Vec3f(ls.wi[0], ls.wi[1], ls.wi[2])) < Float32(0):
+        side_eps = -eps
+    var shadow_org = hit + vec3f(gn) * side_eps
     var shadow_end = shadow_org + Vec3f(ls.wi[0], ls.wi[1], ls.wi[2]) * ls.dist
     var Tr = _visible_transmittance(shadow_org, shadow_end, cur_med_idx, sd, scratch, wl)
     if not Tr.is_black():
@@ -2178,6 +2187,13 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             v.beta = beta
             v.alb = eff_alb
             v.is_surface = Int32(1); v.is_delta = Int32(0)
+            # diffusetransmission has a transmit lobe; without its own
+            # LobeKind the vertex is re-evaluated as opaque Lambertian and
+            # loses exactly half its energy. mat_idx is required: the
+            # transmittance lives in Material_C.emission, not on the vertex.
+            if mat.type == MatKind.diffuse_transmit:
+                v.mat_kind = LobeKind.diffuse_transmit
+                v.mat_idx = Int32(mat_idx)
             v.pdf_fwd = Float32(1)  # unused by the uniform-subsample estimator
             v.wo = vec3f(-ray_dir)  # VCM Stage 2b: needed for _connect's reverse-pdf eval
             v.med_idx = cur_med_idx
@@ -2234,8 +2250,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     pol_i = MisPolicy(le_i.scoped, mis_vm_weight_factor, dvcm_carry, dvc_carry,
                                       Float32(1.0) / max(_bdpt_n_lights(sd) * PI * r_i * r_i, Float32(1e-12)),
                                       le_i.pdf_rev, False)
-                var w_i = _nee_weight_simple_spectral(ls_i, LobeKind.lambertian, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_i)
-                total += _bdpt_nee_contribute(beta, w_i, ls_i, hit, gn, cur_med_idx, sd, scratch, wavelengths)
+                var w_i = _nee_weight_simple_spectral(ls_i, v.mat_kind, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_i, v.mat_idx)
+                total += _bdpt_nee_contribute(beta, w_i, ls_i, hit, gn, cur_med_idx, sd, scratch, wavelengths, Float32(0.0001), v.mat_kind == LobeKind.diffuse_transmit)
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ls_e = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
                 # The SAME shared helper every other material uses -- the
@@ -2249,8 +2265,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var pol_e = MisPolicy(True, mis_vm_weight_factor, dvcm_carry, dvc_carry,
                                       ls_e.pdf / max(_bdpt_n_lights(sd) * PI * r_e * r_e, Float32(1e-12)),
                                       le_e.pdf_rev, False)
-                var w_e = _nee_weight_simple_spectral(ls_e, LobeKind.lambertian, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_e)
-                total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn, cur_med_idx, sd, scratch, wavelengths)
+                var w_e = _nee_weight_simple_spectral(ls_e, v.mat_kind, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_e, v.mat_idx)
+                total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn, cur_med_idx, sd, scratch, wavelengths, Float32(0.0001), v.mat_kind == LobeKind.diffuse_transmit)
             # Real MNEE for area lights behind glass (task #161) -- see
             # _bdpt_mnee_diffuse_area_light's docstring. Ordinary (non-glass)
             # area lights are deliberately left to connect/merge, unchanged.
@@ -2275,18 +2291,43 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
 
             # Cosine-weighted scatter direction
             var u1 = pcg.next_float(); var u2 = pcg.next_float()
-            rd = vec3f(_cosine_hemisphere_sample(gn, u1, u2))
+            # diffusetransmission scatters to BOTH sides, with the lobe
+            # picked by luminance -- the SAME split lobe_eval reports as the
+            # density. Sampling one-sidedly while evaluating two-sidedly
+            # leaves VCM's carries describing a path that was never built.
+            # p_sel == 1 for every other material, so this is a no-op there
+            # (and draws no extra random number).
+            var p_sel = Float32(1.0)
+            var bounce_n = gn
+            var lobe_alb_dt = eff_alb
+            if mat.type == MatKind.diffuse_transmit:
+                var trans_dt = eff_alb if Int(mat.tex_idx) != -1 else mat.emission
+                var pr_dt = eff_alb.luma()
+                var pt_dt = trans_dt.luma()
+                var tot_dt = max(pr_dt + pt_dt, Float32(1e-9))
+                var take_refl = pcg.next_float() < pr_dt / tot_dt
+                p_sel = max((pr_dt if take_refl else pt_dt) / tot_dt, Float32(1e-6))
+                bounce_n = gn if take_refl else (gn * Float32(-1.0))
+                lobe_alb_dt = eff_alb if take_refl else trans_dt
+            rd = vec3f(_cosine_hemisphere_sample(bounce_n, u1, u2))
             ro = hit + rd*Float32(0.0002)
-            last_bsdf_pdf = bxdf_pdf_diffuse(dot(gn, rd.to_simd()))
-            # Update beta: f/pdf for Lambertian = (alb/π) / (cosθ/π) = alb
-            beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (eff_alb).r, (eff_alb).g, (eff_alb).b, wavelengths)
+            last_bsdf_pdf = bxdf_pdf_diffuse(abs(dot(bounce_n, rd.to_simd()))) * p_sel
+            # Update beta: f*cos/pdf = (alb/π)cos / (p_sel cos/π) = alb / p_sel.
+            # The COLOUR stays a bounded reflectance and 1/p_sel rides along
+            # as a plain scalar -- pushing alb/p_sel through spec_refl would
+            # hit its [0,1] clamp (the same trap as _to_spec_weight).
+            beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (lobe_alb_dt).r, (lobe_alb_dt).g, (lobe_alb_dt).b, wavelengths) * (Float32(1.0) / p_sel)
             # VCM Stage 2b: recursive continuation for the NEXT bounce --
             # see _bdpt_trace_light_path's matching diffuse-branch comment.
-            var cos_theta_out = abs(dot(rd.to_simd(), gn))
-            var bsdf_rev_pdf_w = cos_fix / PI
-            var bsdf_dir_pdf_w = cos_theta_out / PI
+            var cos_theta_out = abs(dot(rd.to_simd(), bounce_n))
+            # Both densities carry p_sel: the reverse of a transmission is a
+            # transmission, so the same lobe probability applies each way --
+            # which is exactly what lobe_eval's branch returns for fwd/rev.
+            # cosThetaOut/bsdfDirPdfW is then PI/p_sel, not PI.
+            var bsdf_rev_pdf_w = p_sel * cos_fix / PI
+            var bsdf_dir_pdf_w = p_sel * cos_theta_out / PI
             (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
-                dvcm_carry, dvc_carry, dvm_carry, PI, bsdf_dir_pdf_w, bsdf_rev_pdf_w,
+                dvcm_carry, dvc_carry, dvm_carry, PI / p_sel, bsdf_dir_pdf_w, bsdf_rev_pdf_w,
                 mis_vc_weight_factor, mis_vm_weight_factor)
 
         elif mat.type == MatKind.coated_diffuse:
@@ -3511,6 +3552,13 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             v.beta = flux
             v.alb = eff_alb
             v.is_surface = Int32(1); v.is_delta = Int32(0)
+            # diffusetransmission has a transmit lobe; without its own
+            # LobeKind the vertex is re-evaluated as opaque Lambertian and
+            # loses exactly half its energy. mat_idx is required: the
+            # transmittance lives in Material_C.emission, not on the vertex.
+            if mat.type == MatKind.diffuse_transmit:
+                v.mat_kind = LobeKind.diffuse_transmit
+                v.mat_idx = Int32(mat_idx)
             v.pdf_fwd = Float32(1); v.med_idx = cur_med_idx
             v.wo = vec3f(-ray_dir)  # VCM Stage 2b: needed for _connect's reverse-pdf eval
             v.wavelengths = wavelengths
@@ -3519,19 +3567,39 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
             # Scatter
             var u1 = pcg.next_float(); var u2 = pcg.next_float()
-            rd = vec3f(_cosine_hemisphere_sample(gn, u1, u2))
+            # diffusetransmission scatters to BOTH sides, with the lobe
+            # picked by luminance -- the SAME split lobe_eval reports as the
+            # density. Sampling one-sidedly while evaluating two-sidedly
+            # leaves VCM's carries describing a path that was never built.
+            # p_sel == 1 for every other material, so this is a no-op there
+            # (and draws no extra random number).
+            var p_sel = Float32(1.0)
+            var bounce_n = gn
+            var lobe_alb_dt = eff_alb
+            if mat.type == MatKind.diffuse_transmit:
+                var trans_dt = eff_alb if Int(mat.tex_idx) != -1 else mat.emission
+                var pr_dt = eff_alb.luma()
+                var pt_dt = trans_dt.luma()
+                var tot_dt = max(pr_dt + pt_dt, Float32(1e-9))
+                var take_refl = pcg.next_float() < pr_dt / tot_dt
+                p_sel = max((pr_dt if take_refl else pt_dt) / tot_dt, Float32(1e-6))
+                bounce_n = gn if take_refl else (gn * Float32(-1.0))
+                lobe_alb_dt = eff_alb if take_refl else trans_dt
+            rd = vec3f(_cosine_hemisphere_sample(bounce_n, u1, u2))
             ro = hit + rd*Float32(0.0002)
-            flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (eff_alb).r, (eff_alb).g, (eff_alb).b, wavelengths)
+            flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (lobe_alb_dt).r, (lobe_alb_dt).g, (lobe_alb_dt).b, wavelengths) * (Float32(1.0) / p_sel)
             # VCM Stage 2b: recursive continuation for the NEXT bounce
             # (cosThetaOut/bsdfDirPdfW simplifies to PI exactly for
             # cosine-weighted diffuse sampling; bsdfRevPdfW reuses cos_fix,
             # the same incoming cosine just used above -- see the memory
             # file for the full derivation).
-            var cos_theta_out = abs(dot(rd.to_simd(), gn))
-            var bsdf_rev_pdf_w = cos_fix / PI
-            var bsdf_dir_pdf_w = cos_theta_out / PI
+            var cos_theta_out = abs(dot(rd.to_simd(), bounce_n))
+            # See the camera-side twin: p_sel on both densities, PI/p_sel for
+            # cosThetaOut/bsdfDirPdfW.
+            var bsdf_rev_pdf_w = p_sel * cos_fix / PI
+            var bsdf_dir_pdf_w = p_sel * cos_theta_out / PI
             (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
-                dvcm_carry, dvc_carry, dvm_carry, PI, bsdf_dir_pdf_w, bsdf_rev_pdf_w,
+                dvcm_carry, dvc_carry, dvm_carry, PI / p_sel, bsdf_dir_pdf_w, bsdf_rev_pdf_w,
                 mis_vc_weight_factor, mis_vm_weight_factor)
 
         elif mat.type == MatKind.coated_diffuse:
@@ -4278,7 +4346,8 @@ def _bdpt_vertex_mis_scoped_kinds(v: BDPTVertex) -> Bool:
     if v.is_surface != Int32(1):
         return False
     return (v.mat_kind == LobeKind.lambertian or v.mat_kind == LobeKind.ggx or v.mat_kind == LobeKind.hair
-            or v.mat_kind == LobeKind.measured or v.mat_kind == LobeKind.bssrdf)
+            or v.mat_kind == LobeKind.measured or v.mat_kind == LobeKind.bssrdf
+            or v.mat_kind == LobeKind.diffuse_transmit)
 
 @always_inline
 def _bdpt_connect_pair_weighted(cv: BDPTVertex, lv: BDPTVertex) -> Bool:
