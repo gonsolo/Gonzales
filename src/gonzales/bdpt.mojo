@@ -3971,7 +3971,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             if not did_bssrdf_hop:
                 var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
                 var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
-                    ray_dir, hit.to_simd(), gn, mat.albedo.r, n_lbounces == 0 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric)
+                    ray_dir, hit.to_simd(), gn, mat.albedo.r, n_lbounces == 0 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric, radiance_mode=False)
                 current_dielectric_ior = new_cur_ior
                 previous_dielectric_ior = new_prev_ior
                 n_lbounces += 1

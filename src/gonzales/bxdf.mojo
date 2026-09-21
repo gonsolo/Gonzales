@@ -570,6 +570,12 @@ def bxdf_sample_dielectric(
     u_reflect: Float32,
     current_ior: Float32 = Float32(1.0),    # IOR of the medium the ray is ALREADY in; 1.0 = vacuum
     previous_ior: Float32 = Float32(1.0),   # IOR one level below current_ior (what exiting restores)
+    # pbrt's TransportMode, made explicit. A CAMERA/radiance path takes the
+    # eta^2 non-symmetry correction on transmission; a LIGHT/photon path does
+    # not. This used to be an unwritten assumption ("this function is only
+    # ever reached from camera-path contexts"), which is exactly what let
+    # SPPM keep a second, inverted copy of the factor. See _dielectric_bounce.
+    radiance_mode: Bool = True,
 ) -> Tuple[BxDFSample, Vec3f, Float32, Float32]:
     """Third/fourth return values are the CALLER'S new current_ior/
     previous_ior to store (path state) for the next dielectric interaction
@@ -634,7 +640,7 @@ def bxdf_sample_dielectric(
     # multiplicatively bounce over bounce -- observed as throughput
     # inflating past 1e11 by bounce ~30 on a maxdepth=65 scene with several
     # glass surfaces, producing extreme, denoiser-smeared fireflies.
-    var radiance_transmit = white * (eta * eta)
+    var radiance_transmit = (white * (eta * eta)) if radiance_mode else white
     var new_current_ior = ior if entering else previous_ior
     var new_previous_ior = current_ior if entering else Float32(1.0)
     return (BxDFSample(refr, radiance_transmit, Float32(1.0), BxDFFlags.delta | BxDFFlags.transmit, Int8(1), Int8(0), Int8(0)), normal, new_current_ior, new_previous_ior)

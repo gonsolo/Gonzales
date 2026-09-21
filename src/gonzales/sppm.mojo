@@ -29,7 +29,7 @@ from .bvh import (
     render_aux_buffers,
 )
 from .vcm_mis import mis_policy_sole
-from .bxdf import dielectric_interface, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, LobeCtx, lobe_eval, LobeTables
+from .bxdf import dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, LobeCtx, lobe_eval, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured
 from .shading import _tex_lookup, _get_tri_verts
 from .sampling import power_heuristic
@@ -371,81 +371,54 @@ def _dielectric_bounce(
     # whole interior walk and every boundary hit from INSIDE would be forced
     # to "entering", refracting inward again so light could never leave. The
     # caller knows whether it is in a medium; it passes the real question.
-    # Same expression the path tracer uses (shading.mojo's force_entering).
     force_entering: Bool,
     mut pcg: PCG32,
     current_ior: Float32 = Float32(1.0),    # IOR of the medium the ray is ALREADY in; 1.0 = vacuum
     previous_ior: Float32 = Float32(1.0),   # IOR one level below current_ior (what exiting restores)
     is_thin: Bool = False,                  # `thindielectric`: both interfaces at once
+    radiance_mode: Bool = True,             # camera path; False for a photon/light path
 ) -> Tuple[Vec3f, Vec3f, Float32, Float32, Float32]:
-    var di = dielectric_interface(geom_normal, ray_dir, ior, force_entering, current_ior, previous_ior)
-    var normal = di.normal
-    var entering = di.entering
-    # A THIN dielectric models a slab so thin its two interfaces coincide,
-    # so it never refracts, never enters a medium, and never picks up a
-    # radiance compression: it reflects with the DOUBLED-interface Fresnel
-    # 2R/(1+R) or passes straight through, weight 1, iors untouched.
-    #
-    # It lives HERE rather than in each integrator's dielectric branch
-    # because SPPM and VCM both funnelled `thindielectric` into this
-    # function and so rendered a thin slab as THICK GLASS: the furnace read
-    # 2.20 (SPPM) and 2.21 (VCM) where energy conservation demands 1.0, and
-    # 2.2 is just eta^2 = 1.5^2, the entry compression that never got its
-    # exit partner. The path tracer was right all along via
-    # bxdf_sample_thin_dielectric. One fix, four call sites.
+    """SPPM/VCM's dielectric bounce: a RAY-LEVEL adapter over the path
+    tracer's BxDFs, holding no scattering physics of its own.
+
+    It used to reimplement the reflect/refract/TIR split, the thin-slab
+    Fresnel and the radiance correction. Every one of those drifted from the
+    path tracer's copy and had to be fixed twice:
+
+      * the touching-dielectric IOR stack (fixed in bxdf_sample_dielectric,
+        then again here),
+      * the thin-slab 2R/(1+R) branch (bxdf_sample_thin_dielectric had it;
+        SPPM and VCM rendered a thin slab as thick glass, furnace 2.20),
+      * the eta^2 radiance compression, which this file had INVERTED long
+        after bxdf_sample_dielectric was corrected -- barcelona's pool, whose
+        water is a single OPEN plane so the entering and exiting factors
+        never cancel, read 7.5x the reference.
+
+    The comment that used to sit here even predicted the failure: "BDPT and
+    SPPM call this same function (unlike the plain path tracer, which has its
+    own independent bxdf_sample_dielectric) -- so they still carried both
+    original bugs after bxdf_sample_dielectric was fixed." Two copies of one
+    physics is the bug; there is now one.
+
+    What legitimately lives here is the part that is NOT physics: drawing the
+    lobe-selection sample from `pcg`, and offsetting the continuation ray's
+    origin off the surface it just left (+n on reflect, -n on transmit).
+    `radiance_mode` is pbrt's TransportMode, passed through."""
+    var u = pcg.next_float()
     if is_thin:
-        var entering_t = dot(ray_dir, geom_normal) < Float32(0.0)
-        var n_t = geom_normal if entering_t else -geom_normal
-        var cos_t = max(Float32(0.0), -dot(ray_dir, n_t))
-        var r1 = fr_dielectric(cos_t, ior)
-        var r_thin = r1
-        if r1 < Float32(1.0):
-            r_thin = Float32(2.0) * r1 / (Float32(1.0) + r1)
-        if pcg.next_float() < r_thin:
-            var refl_t = ray_dir + n_t * (Float32(2.0) * cos_t)
-            var rl = dot(refl_t, refl_t)
-            if rl > Float32(0.0):
-                refl_t = refl_t * (Float32(1.0) / sqrt(rl))
-            return (refl_t, hit_point + n_t * Float32(0.0001), Float32(1.0), current_ior, previous_ior)
-        return (ray_dir, hit_point - n_t * Float32(0.0001), Float32(1.0), current_ior, previous_ior)
-    var eta = di.eta
-    var cos_i = di.cos_i
-    var sin2_t = di.sin2_t
-    var tir = di.tir
-    var fresnel = di.fresnel
-
-    if tir or pcg.next_float() < fresnel:
-        # Reflect: r = d + 2*cos_i*n -- still in the same medium.
-        var refl = ray_dir + normal * (Float32(2.0) * cos_i)
-        var rl = dot(refl, refl)
-        if rl > Float32(0.0): refl = refl * (Float32(1.0) / sqrt(rl))
-        return (refl, hit_point + normal * Float32(0.0001), Float32(1.0), current_ior, previous_ior)
-    else:
-        # Refract: t = eta*d + (eta*cos_i - sqrt(1 - sin2_t))*n
-        var cos_t = sqrt(max(Float32(0.0), Float32(1.0) - sin2_t))
-        var refr = ray_dir * eta + normal * (eta * cos_i - cos_t)
-        var rl = dot(refr, refr)
-        if rl > Float32(0.0): refr = refr * (Float32(1.0) / sqrt(rl))
-        # Entering: push (current becomes this surface's ior, previous
-        # remembers the old current so the matching exit can restore it).
-        # Exiting: pop (current restores the saved previous, previous resets
-        # to vacuum -- depth-2 stack, same scoped one-level-deeper
-        # limitation as bxdf_sample_dielectric).
-        var new_current_ior = ior if entering else previous_ior
-        var new_previous_ior = current_ior if entering else Float32(1.0)
-        # Radiance compression, and the direction of it matters. `eta` here is
-        # eta_i/eta_t (see dielectric_interface), so pbrt's radiance-mode
-        # `ft /= Sqr(etap)` with etap = eta_t/eta_i IS eta*eta -- not its
-        # reciprocal. Entering a denser medium the camera path must be scaled
-        # DOWN (L/n^2 is the invariant), and this returned it scaled UP.
-        #
-        # A CLOSED dielectric cancels the two crossings, which is why
-        # furnace-dielectric reads 1.0000 either way and never caught it --
-        # that scene's own comment says a flat quad cannot test this. An OPEN
-        # dielectric (barcelona's water is a single plane: the camera refracts
-        # in and never out) exposes it in full, at eta^4.
-        return (refr, hit_point - normal * Float32(0.0001), eta * eta, new_current_ior, new_previous_ior)
-
+        # A thin slab's two interfaces coincide: no bend, no medium entry and
+        # no radiance compression, so the ior stack is untouched and the mode
+        # does not matter.
+        var (bs_t, n_t) = bxdf_sample_thin_dielectric(geom_normal, ray_dir, ior, u)
+        var off_t = n_t if (Int(bs_t.flags) & Int(BxDFFlags.reflect)) != 0 else -n_t
+        return (bs_t.wi, hit_point + off_t * Float32(0.0001), bs_t.f.r,
+                current_ior, previous_ior)
+    var (bs, normal, new_current_ior, new_previous_ior) = bxdf_sample_dielectric(
+        geom_normal, ray_dir, ior, force_entering, u, current_ior, previous_ior,
+        radiance_mode)
+    var off = normal if (Int(bs.flags) & Int(BxDFFlags.reflect)) != 0 else -normal
+    return (bs.wi, hit_point + off * Float32(0.0001), bs.f.r,
+            new_current_ior, new_previous_ior)
 
 
 # ── Uniform area-light sampling ───────────────────────────────────────────────
@@ -1544,7 +1517,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var ior = mat.albedo.r
             var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
             var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
-                ray_dir, hit.to_simd(), gn, ior, n_events == 1 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric)
+                ray_dir, hit.to_simd(), gn, ior, n_events == 1 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric, radiance_mode=False)
             current_dielectric_ior = new_cur_ior
             previous_dielectric_ior = new_prev_ior
             # Light path (TransportMode::Importance): do NOT apply the
