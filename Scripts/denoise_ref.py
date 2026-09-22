@@ -95,7 +95,11 @@ def main():
     tmp_in, tmp_out = out + ".in.blob", out + ".out.blob"
     with open(tmp_in, "wb") as f:
         f.write(blob)
-    r = subprocess.run([TOOL, tmp_in, tmp_out], capture_output=True, text=True)
+    # cwd=REPO: denoise_buffers resolves liboiiobridge.so by a RELATIVE path,
+    # exactly as gonzales does, so it only runs from the repo root. Invoked
+    # from anywhere else it dies in the dynamic loader before main().
+    r = subprocess.run([TOOL, tmp_in, tmp_out], cwd=REPO,
+                       capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(tmp_out):
         raise SystemExit(f"denoise_buffers failed: {r.stdout}{r.stderr}")
 
