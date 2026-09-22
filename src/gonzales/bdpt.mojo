@@ -47,7 +47,7 @@ from .sppm import (
     _sppm_cam_pos, _sppm_photon_px_scale,
 )
 from .shading import _tex_lookup, _get_tri_verts, _mnee_walk, _mnee_walk2, \
-    apply_surface_maps_at_hit, _camera_approx_footprint
+    apply_surface_maps_at_hit, _camera_approx_footprint, area_light_hit_cos, curve_light_hit
 from .bxdf import LobeCtx, LobeEval, lobe_eval, lobe_scoped, _eval_conductor_ggx_spectral, coat_eval_smooth, bxdf_pdf_coated_exit, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured, bxdf_pdf_measured
 from .gpu import GpuSceneHandle, vulkaninterop_unpack_results_kernel
@@ -1155,7 +1155,8 @@ def _bdpt_connect_to_camera(
     imageToSolidAngle is used here WITHOUT it -- multiplying both would
     square the cosine and darken grazing geometry.
 
-    Only MIS-scoped (or light-source) vertices are connected. An unscoped
+    Only MIS-scoped vertices are connected, and never the light-source
+    vertex (see the gate below for why that one is excluded). An unscoped
     vertex gets `weight = 1` from `_connect`, which that function documents
     as already being the complete estimate for its kind; splatting such a
     vertex too would double-count it.
@@ -1163,7 +1164,25 @@ def _bdpt_connect_to_camera(
     Returns (ok, pixel_index, contribution)."""
     if lv.is_delta != Int32(0) or lv.is_surface == Int32(0):
         return (False, Int32(-1), SpectralSample(Float32(0)))
-    if not (lv.is_light == Int32(1) or _bdpt_vertex_mis_scoped(lv)):
+    # The light-source vertex itself is NEVER splatted. Connecting the
+    # emission point straight to the camera builds the length-1 path
+    # "camera sees the emitter", which the camera path already credits in
+    # full: its primary ray starts with last_bsdf_pdf = -1, so a direct hit on
+    # an area light takes weight 1. Both claimed the whole emitter -- every
+    # directly visible light rendered at exactly 2x (cornell-box's emitter
+    # pixels read 1.978x the path tracer while the rest of the image matched).
+    #
+    # SmallVCM makes the same choice for the same reason: its light paths
+    # connect to the camera only from their first BOUNCE onward, which is
+    # precisely why its GetLightRadiance can return weight 1 at path length 1.
+    # This keeps that pairing instead of re-weighting the camera hit, and it
+    # is also the lower-variance estimator of the two -- every pixel that sees
+    # the emitter sees it on its own camera ray, with no noise from where
+    # light paths happened to start.
+    #
+    # lv0 stays in the light-vertex cache: CAMERA-VERTEX connections to it are
+    # the s=1 strategy at path length >= 2, a different thing entirely.
+    if lv.is_light == Int32(1) or not _bdpt_vertex_mis_scoped(lv):
         return (False, Int32(-1), SpectralSample(Float32(0)))
 
     var lp = lv.pos.to_simd()
@@ -1181,23 +1200,9 @@ def _bdpt_connect_to_camera(
     if cos_at_camera <= Float32(1e-6):
         return (False, Int32(-1), SpectralSample(Float32(0)))
 
-    # A light-source vertex is evaluated the way `_connect` evaluates one:
-    # f = Le, with NO cosine and no 1/pi -- its cosine is supplied by the
-    # geometry factor, and emission only leaves the front face. Routing it
-    # through `_eval_vertex` instead would apply a diffuse BSDF to an
-    # emitter and silently lose that vertex's share.
-    var cos_signed = dot(lv.normal.to_simd(), dir_to_cam)
     var wl = lv.wavelengths
-    var f: SpectralSample
-    var cos_to_camera: Float32
-    if lv.is_light == Int32(1):
-        if cos_signed <= Float32(0):
-            return (False, Int32(-1), SpectralSample(Float32(0)))
-        cos_to_camera = cos_signed
-        f = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, lv.alb.r, lv.alb.g, lv.alb.b, wl) * cos_to_camera
-    else:
-        cos_to_camera = abs(cos_signed)
-        f = _eval_vertex_spectral(lv, Vec3f(dir_to_cam[0], dir_to_cam[1], dir_to_cam[2]), sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
+    var cos_to_camera = abs(dot(lv.normal.to_simd(), dir_to_cam))
+    var f = _eval_vertex_spectral(lv, Vec3f(dir_to_cam[0], dir_to_cam[1], dir_to_cam[2]), sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
     if f.is_black():
         return (False, Int32(-1), SpectralSample(Float32(0)))
     if cos_to_camera <= Float32(1e-8):
@@ -1224,12 +1229,7 @@ def _bdpt_connect_to_camera(
     #   wLight = (cameraPdfA / lightSubPathCount)
     #            * (misVmWeightFactor + dVCM + dVC * bsdfRevPdfW)
     #   weight = 1 / (wLight + 1)
-    var rev_pdf_w: Float32
-    if lv.is_light == Int32(1):
-        rev_pdf_w = cos_to_camera * INV_PI
-    else:
-        var (_dp, _rp) = _bdpt_vertex_pdfs(lv, Vec3f(dir_to_cam[0], dir_to_cam[1], dir_to_cam[2]), sd)
-        rev_pdf_w = _rp
+    var (_dp, rev_pdf_w) = _bdpt_vertex_pdfs(lv, Vec3f(dir_to_cam[0], dir_to_cam[1], dir_to_cam[2]), sd)
     var camera_pdf_a = image_to_surface
     var w_light = (camera_pdf_a * inv_n) * (mis_vm_weight_factor + lv.dVCM + lv.dVC * rev_pdf_w)
     var mis_weight = Float32(1) / (w_light + Float32(1))
@@ -2174,7 +2174,10 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             if sph_hit.isAreaLight != Int8(0):
                 var mis_w_sph_hit = Float32(1)
                 if last_bsdf_pdf == PDF_DROP_DIRECT:
-                    pass  # direct term already reported by NEE -- see the env miss handler
+                    # Direct term already reported by NEE: indirect only, so
+                    # this hit contributes nothing. Was `pass`, which left the
+                    # weight at 1 -- see the area-light handler below.
+                    mis_w_sph_hit = Float32(0)
                 elif last_bsdf_pdf >= Float32(0):
                     # The competing NEE strategy was taken at the vertex that
                     # GENERATED this ray, so its cone pdf must be measured from
@@ -2236,18 +2239,51 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # last_bsdf_pdf treatment as the sphere case above. id1 is the
             # AreaLight_C index directly for a type==3 (area-light-triangle)
             # hit, per pbrt_parser.mojo's own PrimId_C encoding.
-            var al_hit = sd.areaLights[unsafe_offset=Int(inter.primId.id1)]
-            var gn_al_hit = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-            var cos_l_hit = -dot(gn_al_hit, ray_dir)
-            if cos_l_hit > Float32(0):
+            # Which light, what it emits, and which side of it is lit all come
+            # from the SHARED resolvers (shading.mojo's area_light_hit_cos /
+            # curve_light_hit), not from _geom_normal and areaLights[id1]. See
+            # their header: the raw winding normal disagreed with the side the
+            # light sampler emits from, and for a curve id1 is not an
+            # AreaLight_C index at all.
+            var al_emission: RGB
+            var al_area = Float32(0)
+            var cos_l_hit: Float32
+            var is_curve = inter.primId.type == Int8(5)
+            if is_curve:
+                var (al_ci, cos_c) = curve_light_hit(inter, sd.curves, sd.areaLights,
+                                                     Int(sd.areaLightCount), ray_dir)
+                al_emission = mat.emission     # the curve's own emitter slot
+                cos_l_hit = cos_c
+                if al_ci >= 0:
+                    al_area = sd.areaLights[unsafe_offset=al_ci].total_area
+            else:
+                var al_hit = sd.areaLights[unsafe_offset=Int(inter.primId.id1)]
+                al_emission = al_hit.emission
+                al_area = al_hit.total_area
+                cos_l_hit = area_light_hit_cos(inter, sd.meshes, sd.instances, ray_dir)
+            # A curve is a closed tube, so an unweighted (primary/delta) hit is
+            # always on its outside -- credited regardless of the reconstructed
+            # radial cosine, exactly as the path tracer does. A triangle light
+            # is one-sided.
+            if cos_l_hit > Float32(0) or (is_curve and last_bsdf_pdf < Float32(0) and last_bsdf_pdf != PDF_DROP_DIRECT):
                 var mis_w_al_hit = Float32(1)
                 if last_bsdf_pdf == PDF_DROP_DIRECT:
-                    pass  # direct term already reported by NEE -- see the env miss handler
+                    # NEE already reported this ray's direct term (the rough
+                    # coat's exit ray) -- geometry.mojo's contract for this
+                    # sentinel is "contribute indirect only", and an emitter
+                    # hit IS the direct term. This used to `pass`, leaving the
+                    # weight at 1: a full double count on every coat exit that
+                    # landed on an emitter, which the env miss handler had
+                    # already been fixed for.
+                    mis_w_al_hit = Float32(0)
                 elif last_bsdf_pdf >= Float32(0):
-                    var dist2_hit = t_hit * t_hit
-                    var n_area_hit = Float32(max(Int(sd.areaLightCount), 1))
-                    var pdf_light_al = dist2_hit / (cos_l_hit * n_area_hit * al_hit.total_area)
-                    mis_w_al_hit = power_heuristic(last_bsdf_pdf, pdf_light_al)
+                    if cos_l_hit > Float32(0) and al_area > Float32(0):
+                        var dist2_hit = t_hit * t_hit
+                        var n_area_hit = Float32(max(Int(sd.areaLightCount), 1))
+                        var pdf_light_al = dist2_hit / (cos_l_hit * n_area_hit * al_area)
+                        mis_w_al_hit = power_heuristic(last_bsdf_pdf, pdf_light_al)
+                    else:
+                        mis_w_al_hit = Float32(0)
                 elif last_bsdf_pdf == _VOL_PHASE_HIT:
                     # The competing strategy is the volume vertex's s=1
                     # connection to the light-source vertex, whose area pdf is
@@ -2259,9 +2295,12 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var d_vol = t_hit + mis_null_dist
                     var n_lights_hit = Float32(max(Int(sd.areaLightCount) + Int(sd.distantLightCount)
                                                    + Int(sd.infiniteLightCount) + Int(sd.pointLightCount), 1))
-                    var pdf_light_vol = d_vol * d_vol / (cos_l_hit * n_lights_hit * al_hit.total_area)
-                    mis_w_al_hit = power_heuristic(INV_FOUR_PI, pdf_light_vol)
-                total += beta * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (al_hit.emission).r, (al_hit.emission).g, (al_hit.emission).b, wavelengths) * mis_w_al_hit
+                    if cos_l_hit > Float32(0) and al_area > Float32(0):
+                        var pdf_light_vol = d_vol * d_vol / (cos_l_hit * n_lights_hit * al_area)
+                        mis_w_al_hit = power_heuristic(INV_FOUR_PI, pdf_light_vol)
+                    else:
+                        mis_w_al_hit = Float32(0)
+                total += beta * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al_emission.r, al_emission.g, al_emission.b, wavelengths) * mis_w_al_hit
             return False   # direct hit on an area-light triangle/curve -- terminates the path
 
         # Every arm of the dispatch below except a null interface is a real

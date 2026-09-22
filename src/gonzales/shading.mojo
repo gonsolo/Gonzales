@@ -194,6 +194,88 @@ def _emitter_face_normal(
         return -gn
     return gn
 
+# ── Emitter hits, resolved ONCE for all three integrators ─────────────────────
+# Both helpers below were inline blocks in the path tracer's emitter handler.
+# SPPM and VCM wrote their own and got both wrong, silently:
+#
+#  * Facing. They tested the RAW WINDING normal, while the light sampler
+#    (sample_area_light_uniform) orients emission by the mesh's DECLARED
+#    normals, as pbrt does. An emitter whose winding disagrees with its "N" --
+#    the ceiling-light case that sampler's docstring cites -- then emitted into
+#    the room for NEE and light paths, yet a camera ray looking straight at it
+#    saw a back face and got nothing. sss-backlit-slab's emitter fills most of
+#    the frame: the path tracer's median is 57 (L = 60), SPPM's was 0, and
+#    VCM's lit it only through the light-source splat that was double-counting
+#    every visible emitter.
+#  * Curves. For a curve hit primId.id1 is the CURVE index, not an AreaLight_C
+#    index, but both indexed areaLights with it, and _geom_normal returns a
+#    +Y placeholder for a curve.
+#
+# One definition, so the three integrators cannot disagree about which side of
+# a light is lit.
+
+@always_inline
+def area_light_hit_cos(
+    inter: Intersection_C,
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    instances: Pointer[Instance_C, MutUntrackedOrigin],
+    ray_dir: Vec3f,
+) -> Float32:
+    """Cosine between an area-light TRIANGLE's emitting face and the ray that
+    hit it (primId.type 3): > 0 on the emitting front, <= 0 on the back. The
+    emitting face is _emitter_face_normal's -- the winding normal flipped to
+    agree with the interpolated declared normal, pbrt's rule. Unit-length, so
+    it also serves as the area -> solid-angle Jacobian's cosine."""
+    var (m, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
+    if not ok:
+        return Float32(0)
+    var p0 = Vec3f(m.points[unsafe_offset=v0*4], m.points[unsafe_offset=v0*4+1], m.points[unsafe_offset=v0*4+2])
+    var p1 = Vec3f(m.points[unsafe_offset=v1*4], m.points[unsafe_offset=v1*4+1], m.points[unsafe_offset=v1*4+2])
+    var p2 = Vec3f(m.points[unsafe_offset=v2*4], m.points[unsafe_offset=v2*4+1], m.points[unsafe_offset=v2*4+2])
+    var en = _emitter_face_normal(m, v0, v1, v2, inter.u, inter.v, p0, p1, p2,
+                                  inter.primId.instanceIdx, instances)
+    var l2 = dot(en, en)
+    if l2 <= Float32(0.0):
+        return Float32(0)
+    return -dot(en, ray_dir) / sqrt(l2)
+
+@always_inline
+def curve_light_hit(
+    inter: Intersection_C,
+    curves: Pointer[Curve_C, MutUntrackedOrigin],
+    area_lights: Pointer[AreaLight_C, MutUntrackedOrigin],
+    n_area_lights: Int,
+    ray_dir: Vec3f,
+) -> Tuple[Int, Float32]:
+    """(al_idx, cos_l) for a ray hitting an emissive CURVE (primId.type 5).
+
+    al_idx is the curve's AreaLight_C slot (kind 1), -1 if it has none. Curve
+    lights are rare -- a handful of emissive strands at most -- so a linear
+    scan beats threading a reverse index through PrimId_C. cos_l is taken
+    against the outward radial normal at the hit, reconstructed from (u, v)
+    exactly as shade_hair does. The EMISSION is not returned: it lives in the
+    curve's own material slot (mat.emission), which the caller already has."""
+    var curve_idx = Int(inter.primId.id1)
+    var al_idx = -1
+    for li in range(n_area_lights):
+        var cand = area_lights[unsafe_offset=li]
+        if cand.kind == Int8(1) and Int(cand.meshIdx) == curve_idx:
+            al_idx = li
+            break
+    var curve = curves[unsafe_offset=curve_idx]
+    var h = max(Float32(-0.99), min(Float32(0.99), inter.u))
+    var piece = min(Int(curve.n_pieces) - 1, max(0, Int(inter.v * Float32(curve.n_pieces))))
+    var (q0, q1, _, _) = curve_piece_endpoints(curve, piece)
+    var seg_axis = q1 - q0
+    var seg_len = sqrt(dot(seg_axis, seg_axis))
+    var tangent = Vec3f(Float32(1.0), Float32(0.0), Float32(0.0))
+    if seg_len > Float32(1e-8):
+        tangent = seg_axis * (Float32(1.0) / seg_len)
+    var n_perp = _curve_perp_axis(tangent)
+    var b_perp0 = cross(tangent, n_perp)
+    var geo_normal = n_perp * h + b_perp0 * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
+    return (al_idx, -dot(geo_normal, ray_dir))
+
 @always_inline
 def _shading_normal(
     mesh: TriangleMesh_C,
@@ -4849,16 +4931,8 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         # to honour regardless.
         var e_front = True
         if inter.primId.type == Int8(3):
-            var (efm, ev0, ev1, ev2, e_ok) = _get_tri_verts(inter, ctx.meshes)
-            if e_ok:
-                var ep0 = Vec3f(efm.points[unsafe_offset=ev0*4], efm.points[unsafe_offset=ev0*4+1], efm.points[unsafe_offset=ev0*4+2])
-                var ep1 = Vec3f(efm.points[unsafe_offset=ev1*4], efm.points[unsafe_offset=ev1*4+1], efm.points[unsafe_offset=ev1*4+2])
-                var ep2 = Vec3f(efm.points[unsafe_offset=ev2*4], efm.points[unsafe_offset=ev2*4+1], efm.points[unsafe_offset=ev2*4+2])
-                var en = _emitter_face_normal(efm, ev0, ev1, ev2, inter.u, inter.v,
-                                              ep0, ep1, ep2,
-                                              inter.primId.instanceIdx, ctx.instances)
-                var edir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-                e_front = -dot(en, edir) > Float32(0.0)
+            var edir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+            e_front = area_light_hit_cos(inter, ctx.meshes, ctx.instances, edir) > Float32(0.0)
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
             if e_front:
                 path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths)
@@ -4907,36 +4981,12 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         else:
             var pdf_bsdf = path_ptr[].lastBsdfPdf
             if pdf_bsdf > Float32(0.0):
-                var curve_idx = Int(inter.primId.id1)
-                # Curve lights are rare (a handful of emissive strands at
-                # most), so a linear scan for this curve's al_list slot is
-                # cheap — no reverse index is threaded through PrimId_C.
-                var al_idx = -1
-                for li in range(ctx.lights.area_light_count):
-                    var cand = ctx.lights.area_lights[unsafe_offset=li]
-                    if cand.kind == Int8(1) and Int(cand.meshIdx) == curve_idx:
-                        al_idx = li
-                        break
+                var ray_dir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+                var (al_idx, cos_l) = curve_light_hit(inter, ctx.curves, ctx.lights.area_lights,
+                                                      Int(ctx.lights.area_light_count), ray_dir)
                 if al_idx >= 0:
                     var al = ctx.lights.area_lights[unsafe_offset=al_idx]
                     if al.total_area > Float32(0.0):
-                        # Reconstruct the outward radial normal at the actual
-                        # hit point from (u, v) — same formula shade_hair uses.
-                        var curve = ctx.curves[unsafe_offset=curve_idx]
-                        var h = max(Float32(-0.99), min(Float32(0.99), inter.u))
-                        var v_global = inter.v
-                        var piece = min(Int(curve.n_pieces) - 1, max(0, Int(v_global * Float32(curve.n_pieces))))
-                        var (q0, q1, _, _) = curve_piece_endpoints(curve, piece)
-                        var seg_axis = q1 - q0
-                        var seg_len = sqrt(dot(seg_axis, seg_axis))
-                        var tangent = Vec3f(Float32(1.0), Float32(0.0), Float32(0.0))
-                        if seg_len > Float32(1e-8):
-                            tangent = seg_axis * (Float32(1.0) / seg_len)
-                        var n_perp = _curve_perp_axis(tangent)
-                        var b_perp0 = cross(tangent, n_perp)
-                        var geo_normal = n_perp * h + b_perp0 * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
-                        var ray_dir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
-                        var cos_l = -dot(geo_normal, ray_dir)
                         var dist2 = inter.tHit * inter.tHit
                         if cos_l > Float32(0.0):
                             var ls = ctx.lights.light_sampler

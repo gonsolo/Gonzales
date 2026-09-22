@@ -32,7 +32,7 @@ from .vcm_mis import mis_policy_sole
 from .bxdf import dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, LobeCtx, lobe_eval, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured
 from .shading import _tex_lookup, _get_tri_verts, _apply_surface_maps, \
-    apply_surface_maps_at_hit, _camera_approx_footprint
+    apply_surface_maps_at_hit, _camera_approx_footprint, area_light_hit_cos
 from .sampling import power_heuristic, camera_ray_from_film_xy
 from .transform import transform_normal_by_instance
 from .rng import PCG32
@@ -736,10 +736,20 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # Facing check: a one-sided area light emits nothing from its
             # back face (spheres above need no such check — always hit from
             # outside, always the front/emitting face).
-            var al_hit = sd.areaLights[unsafe_offset=Int(inter.primId.id1)]
-            var gn_al_hit = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-            if -dot(gn_al_hit, ray_dir) > Float32(0):
-                vp.env += vp.beta * al_hit.emission
+            #
+            # Emission and facing come from the SHARED resolvers the path
+            # tracer and VCM use (shading.mojo). Testing the raw winding normal
+            # here disagreed with the side sample_area_light_uniform emits from
+            # whenever a mesh's declared normals oppose its winding, so SPPM saw
+            # such an emitter as a back face and rendered it black --
+            # sss-backlit-slab's emitter fills most of the frame and SPPM's
+            # median there was 0. For a curve, id1 is the curve index, not an
+            # AreaLight_C index, and the curve's emission lives in its own
+            # material slot; a closed tube is always hit on its outside.
+            if inter.primId.type == Int8(5):
+                vp.env += vp.beta * mat.emission
+            elif area_light_hit_cos(inter, sd.meshes, sd.instances, ray_dir) > Float32(0):
+                vp.env += vp.beta * sd.areaLights[unsafe_offset=Int(inter.primId.id1)].emission
             break
 
         if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit:
