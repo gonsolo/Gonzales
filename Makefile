@@ -666,3 +666,10 @@ cw: compare_wall
 compare_wall: test_wall test_wall_pbrt
 	python3 Scripts/compare_exr.py $(WALL_IMAGE_GONZALES) $(WALL_IMAGE_PBRT)
 
+
+# Generator for the rough-coat energy compensation table (bxdf.mojo's
+# coat_rough_energy). Not part of any build or test target: run by hand when
+# the coat walk changes, then refit. See Tools/coat_energy_table.mojo.
+coat_energy_table: $(MOJO_SRCS) $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(NVDB_BRIDGE_LIB) Tools/coat_energy_table.mojo
+	@mkdir -p $(BUILD_DIR)
+	uv run mojo build Tools/coat_energy_table.mojo -I src -o $(BUILD_DIR)/coat_energy_table $(MOJO_LINK_FLAGS)
