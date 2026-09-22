@@ -59,6 +59,18 @@ for _m in ("diffuse", "dielectric", "thindielectric",
         crop=(16, 48), strict=True,
         why="%s, nothing absorbed -> Lo = L" % _m)
 
+# A dielectric sheet with eta=1 is not there, so this is `furnace-diffuse` with
+# an extra surface that must do nothing. It is strict on purpose: it is the
+# first cell in this suite that exercises the DELTA branch on a path that also
+# has a real diffuse vertex, and it caught VCM counting that transport twice
+# (1.1708 at the default light-path count, converging to 1.9665 as that count
+# rises). `Material "none"` in the same geometry is correct, so it is the delta
+# carry handling and not the extra surface. Full account in the scene header.
+CASES["furnace-dielectric-inert"] = dict(
+    scene="Scenes/furnace/dielectric-inert.pbrt", expect=1.0, res="64x64",
+    crop=(16, 48), strict=True,
+    why="dielectric at eta=1 is optically absent -> Lo = L")
+
 # coateddiffuse is the one material here that does NOT have to reach 1.0, and
 # the reason is physics rather than a defect: the coat is a Beer-Lambert
 # absorbing slab of thickness DEFAULT_COAT_THICKNESS (0.01, pbrt's default,

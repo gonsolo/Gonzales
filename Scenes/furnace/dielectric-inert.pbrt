@@ -1,0 +1,78 @@
+# ANALYTIC: a dielectric sheet with eta = 1 is NOT THERE, so Lo = L = 1.0.
+#
+# Same geometry as dielectric-over-diffuse.pbrt -- rho=1 diffuse floor under a
+# constant environment L=1, with a sheet between it and the camera -- but the
+# sheet's eta is 1.0001 instead of 1.5. At eta=1 Snell's law bends nothing,
+# Fresnel reflects nothing and there is no total internal reflection, so the
+# sheet is optically absent and the scene IS `furnace/diffuse.pbrt`. That is
+# what makes this one analytic where its eta=1.5 sibling deliberately is not:
+# the sibling's answer is spoiled by a ONE-SIDED sheet plus a maxdepth-32 TIR
+# ladder (real pbrt reads 0.7732 there, not 1.0, and pinning 1.0 would have
+# been a false test -- see that file's header). Neither effect exists at eta=1.
+#
+# Verified rather than assumed: the path tracer reads 1.0013 here, and
+# furnace/diffuse.pbrt (the same scene with the sheet deleted) reads 0.9997.
+#
+# WHAT IT CATCHES, and why it is worth its own file (2026-09-22): VCM reads
+# 1.1708 at the default light-path count and converges to 1.9665 as that count
+# rises -- it counts this transport TWICE. The doubling needs the crossing to
+# go through the DELTA branch; it is not about having an extra surface in the
+# way:
+#
+#     sheet material        N=10k     N=400k    N=6.4M
+#     dielectric eta 1.0001  1.3259    1.9215    1.9665
+#     thindielectric  "      1.5433    1.9939
+#     Material "none"        0.9059    1.0378
+#
+# `Material "none"` is the control: a pure pass-through that leaves the MIS
+# carries untouched, and it is correct. The dielectric branch zeroes dvcm_carry
+# and rescales dvc/dvm (bdpt.mojo, both subpaths, matching SmallVCM
+# vertexcm.hxx:977-982 textually), and doubles.
+#
+# TWO THINGS THE DOUBLING IS NOT, both checked:
+#  - Not the eta^2 radiance/importance correction. An eta sweep 1.0001..2.0
+#    shows the error is LARGEST at eta=1, where that factor is exactly 1, and
+#    it shrinks monotonically as eta rises. An eta-power error would do the
+#    opposite.
+#  - Not a missing 1/N normalisation. It SATURATES at 2.0 rather than scaling
+#    with N, and furnace/diffuse.pbrt and env-furnace-analytic.pbrt are both
+#    flat (1.0024->1.0103 and 0.5012->0.5051) across the same 400x range, so
+#    VCM's normalisation is sound in general.
+#
+# The N dependence is itself an unexplained clue: a pure double count should
+# not care how many light paths exist. `--vcm-photons` feeds eta_vcm = pi r^2 N,
+# which enters EVERY MIS weight, so N moves the weights as well as the
+# sampling density -- that coupling is where to look next.
+#
+# SPPM is nearly right here (~1.01 once the photon count is raised; 1.08 at the
+# default radius, shrinking as the radius shrinks, i.e. ordinary density-
+# estimation bias). So this scene does NOT reproduce SPPM's barcelona pool
+# excess -- that is a separate defect.
+#
+# Keep as a strict cell. If it ever reads 1.0 for VCM, the defect is fixed.
+
+Integrator "path" "integer maxdepth" [ 32 ]
+Sampler "halton" "integer pixelsamples" [ 64 ]
+Film "rgb" "string filename" [ "furnace-dielectric-inert.exr" ]
+    "integer xresolution" [ 64 ] "integer yresolution" [ 64 ]
+LookAt 0 0 -4   0 0 0   0 1 0
+Camera "perspective" "float fov" [ 30 ]
+WorldBegin
+LightSource "infinite" "rgb L" [ 1 1 1 ]
+
+# The inert sheet. Wider than the view frustum at z=-1 so every camera ray
+# crosses it. eta is 1.0001 rather than exactly 1.0 so the material still
+# resolves as a real dielectric and takes the delta branch -- the whole point
+# is to exercise that branch while making it physically do nothing.
+Material "dielectric" "float eta" [ 1.0001 ]
+Shape "trianglemesh"
+    "integer indices" [ 0 1 2 0 2 3 ]
+    "point3 P" [ -4 -4 -1   4 -4 -1   4 4 -1   -4 4 -1 ]
+    "normal N" [ 0 0 -1  0 0 -1  0 0 -1  0 0 -1 ]
+
+# The diffuse floor behind it.
+Material "diffuse" "rgb reflectance" [ 1 1 1 ]
+Shape "trianglemesh"
+    "integer indices" [ 0 1 2 0 2 3 ]
+    "point3 P" [ -3 -3 0   3 -3 0   3 3 0   -3 3 0 ]
+    "normal N" [ 0 0 -1  0 0 -1  0 0 -1  0 0 -1 ]
