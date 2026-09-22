@@ -10,7 +10,7 @@ from .rendering import render_all_tiles, normalize_film, apply_film_sensor, fmt_
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, Ray_C, dot, TriangleMesh_C, _is_real_ptr, Curve_C, curve_piece_bounds, FilmDims, FilterParams
 from .postprocess import denoise, write_image, write_image_cropped, write_image_cropwindow
-from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds
+from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, camera_ray_from_film_xy
 from .bvh import BVH2Node, SceneDescriptor2_C, render_aux_buffers, _scene_bounding_sphere
 from .sppm import sppm_render
 from .bdpt import vcm_render, vcm_render_gpu, vcm_render_gpu_wavefront, _BDPT_MAX_VERTS, sppm_render_gpu
@@ -452,20 +452,18 @@ def debug_trace_pixel(
     var c2w = psc[unsafe_offset=0].camera_to_world
     var fX = Float32(px) + Float32(0.5)
     var fY = Float32(py) + Float32(0.5)
-    var cx = r2c[unsafe_offset=0]*fX + r2c[unsafe_offset=4]*fY + r2c[unsafe_offset=12]
-    var cy = r2c[unsafe_offset=1]*fX + r2c[unsafe_offset=5]*fY + r2c[unsafe_offset=13]
-    var cz = r2c[unsafe_offset=2]*fX + r2c[unsafe_offset=6]*fY + r2c[unsafe_offset=14]
-    var cw = r2c[unsafe_offset=3]*fX + r2c[unsafe_offset=7]*fY + r2c[unsafe_offset=15]
-    if cw != Float32(0.0) and cw != Float32(1.0):
-        cx /= cw; cy /= cw; cz /= cw
-    var cl = _dbg_vlen(cx, cy, cz)
-    if cl > Float32(0.0): cx /= cl; cy /= cl; cz /= cl
-    var dx = c2w[unsafe_offset=0]*cx + c2w[unsafe_offset=4]*cy + c2w[unsafe_offset=8]*cz
-    var dy = c2w[unsafe_offset=1]*cx + c2w[unsafe_offset=5]*cy + c2w[unsafe_offset=9]*cz
-    var dz = c2w[unsafe_offset=2]*cx + c2w[unsafe_offset=6]*cy + c2w[unsafe_offset=10]*cz
-    var dl = _dbg_vlen(dx, dy, dz)
-    if dl > Float32(0.0): dx /= dl; dy /= dl; dz /= dl
-    var ox = c2w[unsafe_offset=12]; var oy = c2w[unsafe_offset=13]; var oz = c2w[unsafe_offset=14]
+    var (dir1, org1, _cl1) = camera_ray_from_film_xy(fX, fY, r2c, c2w)
+    # Decomposed to scalars for the bounce loop below, which pre-dates
+    # camera_ray_from_film_xy and hand-rolls dot/reflect/refract in every
+    # material branch rather than using Point3f/Vec3f's own operators
+    # (__add__, __sub__, dot() all already exist -- see geometry.mojo). That
+    # is real duplication too, just not this commit's: it is 250 lines with
+    # several material branches, no automated coverage (a debug tool reached
+    # only via --pixel), and a transcription slip in the middle of a
+    # reflect/refract branch would have nothing to catch it. Left alone here
+    # rather than risked inline; worth its own pass.
+    var ox = org1.x; var oy = org1.y; var oz = org1.z
+    var dx = dir1.x; var dy = dir1.y; var dz = dir1.z
     print("PIXEL", px, py, "ray.o", ox, oy, oz, "ray.d", dx, dy, dz)
 
     var inter = unsafe_alloc[Intersection_C](1)
@@ -749,23 +747,10 @@ def debug_render_vulkanrt(
         for px in range(w):
             var fX = Float32(px) + Float32(0.5)
             var fY = Float32(py) + Float32(0.5)
-            var cx = r2c[unsafe_offset=0]*fX + r2c[unsafe_offset=4]*fY + r2c[unsafe_offset=12]
-            var cy = r2c[unsafe_offset=1]*fX + r2c[unsafe_offset=5]*fY + r2c[unsafe_offset=13]
-            var cz = r2c[unsafe_offset=2]*fX + r2c[unsafe_offset=6]*fY + r2c[unsafe_offset=14]
-            var cw = r2c[unsafe_offset=3]*fX + r2c[unsafe_offset=7]*fY + r2c[unsafe_offset=15]
-            if cw != Float32(0.0) and cw != Float32(1.0):
-                cx /= cw; cy /= cw; cz /= cw
-            var cl = sqrt(cx*cx + cy*cy + cz*cz)
-            if cl > Float32(0.0): cx /= cl; cy /= cl; cz /= cl
-            var dx = c2w[unsafe_offset=0]*cx + c2w[unsafe_offset=4]*cy + c2w[unsafe_offset=8]*cz
-            var dy = c2w[unsafe_offset=1]*cx + c2w[unsafe_offset=5]*cy + c2w[unsafe_offset=9]*cz
-            var dz = c2w[unsafe_offset=2]*cx + c2w[unsafe_offset=6]*cy + c2w[unsafe_offset=10]*cz
-            var dl = sqrt(dx*dx + dy*dy + dz*dz)
-            if dl > Float32(0.0): dx /= dl; dy /= dl; dz /= dl
-            var ox = c2w[unsafe_offset=12]; var oy = c2w[unsafe_offset=13]; var oz = c2w[unsafe_offset=14]
+            var (dir2, org2, _cl2) = camera_ray_from_film_xy(fX, fY, r2c, c2w)
             var idx = (py * w + px) * 8
-            rays[unsafe_offset=idx+0] = ox; rays[unsafe_offset=idx+1] = oy; rays[unsafe_offset=idx+2] = oz; rays[unsafe_offset=idx+3] = Float32(0.001)
-            rays[unsafe_offset=idx+4] = dx; rays[unsafe_offset=idx+5] = dy; rays[unsafe_offset=idx+6] = dz; rays[unsafe_offset=idx+7] = Float32(1.0e8)
+            rays[unsafe_offset=idx+0] = org2.x; rays[unsafe_offset=idx+1] = org2.y; rays[unsafe_offset=idx+2] = org2.z; rays[unsafe_offset=idx+3] = Float32(0.001)
+            rays[unsafe_offset=idx+4] = dir2.x; rays[unsafe_offset=idx+5] = dir2.y; rays[unsafe_offset=idx+6] = dir2.z; rays[unsafe_offset=idx+7] = Float32(1.0e8)
 
     var out_t = unsafe_alloc[Float32](n_pix)
     var out_u = unsafe_alloc[Float32](n_pix)

@@ -328,6 +328,53 @@ def triangle_sample_1d(u: Float32, radius: Float32) -> Float32:
 # Returns the world-space Ray_C and the PCG seed pair for the path.
 # px/py are integer pixel coords; si is the sample index (Int32).
 @always_inline
+@always_inline
+def camera_ray_from_film_xy[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
+    filmX: Float32, filmY: Float32,
+    r2c: Pointer[Float32, MutUntrackedOrigin],   # rasterToCamera  (16 Float32, col-major)
+    c2w: Pointer[Float32, Oc2w],                 # cameraToWorld   (16 Float32, col-major)
+) -> Tuple[Vec3f, Point3f, Float32]:
+    """The raster->camera->world transform alone: film-space (filmX, filmY)
+    to a normalized world-space ray direction, the camera's world origin, and
+    the PRE-normalize camera-space direction length (camLen below) -- a
+    texture-footprint cone needs that to turn r2c's own per-pixel derivative
+    into a pixel angle (|r2c[0..2]| / camLen; camLen is preserved by c2w's
+    rotation, so the camera-space and world-space lengths are the same
+    scalar). Callers that only want the ray discard it.
+
+    Deliberately just the matrix math, not primary-ray generation as a whole
+    -- gen_primary_ray_state below wraps this with Sobol sampling, the scene's
+    reconstruction filter and hero-wavelength selection, which SPPM/VCM/the
+    --pixel and Vulkan-RT debug paths each want done differently (uniform PCG
+    jitter, a bare pixel centre, or none at all). Pulling in the whole thing
+    would force gen_primary_ray_state's Sobol+filter+wavelength conventions
+    onto callers that deliberately use different ones.
+    
+    Was this same ~12-line block copy-pasted at four sites (sppm.mojo,
+    bdpt.mojo, and twice in pipeline.mojo -- one of which said so in its own
+    comment: "same raster_to_camera/camera_to_world math as debug_trace_pixel
+    above") with no shared function, despite one existing one call away."""
+    var cx = r2c[unsafe_offset=0]*filmX + r2c[unsafe_offset=4]*filmY + r2c[unsafe_offset=12]
+    var cy = r2c[unsafe_offset=1]*filmX + r2c[unsafe_offset=5]*filmY + r2c[unsafe_offset=13]
+    var cz = r2c[unsafe_offset=2]*filmX + r2c[unsafe_offset=6]*filmY + r2c[unsafe_offset=14]
+    var cw = r2c[unsafe_offset=3]*filmX + r2c[unsafe_offset=7]*filmY + r2c[unsafe_offset=15]
+    if cw != Float32(0.0) and cw != Float32(1.0):
+        cx /= cw; cy /= cw; cz /= cw
+    var camLen = sqrt(cx*cx + cy*cy + cz*cz)
+    if camLen > Float32(0.0):
+        cx /= camLen; cy /= camLen; cz /= camLen
+
+    var dx = c2w[unsafe_offset=0]*cx + c2w[unsafe_offset=4]*cy + c2w[unsafe_offset=8]*cz
+    var dy = c2w[unsafe_offset=1]*cx + c2w[unsafe_offset=5]*cy + c2w[unsafe_offset=9]*cz
+    var dz = c2w[unsafe_offset=2]*cx + c2w[unsafe_offset=6]*cy + c2w[unsafe_offset=10]*cz
+    var dirLen = sqrt(dx*dx + dy*dy + dz*dz)
+    if dirLen > Float32(0.0):
+        dx /= dirLen; dy /= dirLen; dz /= dirLen
+
+    var org = Point3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
+    return (Vec3f(dx, dy, dz), org, camLen)
+
+
 def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     px: Int32, py: Int32, si: Int32,
     log2spp: Int, n_base4: Int,
@@ -362,26 +409,9 @@ def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     var filmX = Float32(px) + Float32(0.5) + deltaX
     var filmY = Float32(py) + Float32(0.5) + deltaY
 
-    # rasterToCamera (column-major 4×4)
-    var cx = r2c[unsafe_offset=0]*filmX + r2c[unsafe_offset=4]*filmY + r2c[unsafe_offset=12]
-    var cy = r2c[unsafe_offset=1]*filmX + r2c[unsafe_offset=5]*filmY + r2c[unsafe_offset=13]
-    var cz = r2c[unsafe_offset=2]*filmX + r2c[unsafe_offset=6]*filmY + r2c[unsafe_offset=14]
-    var cw = r2c[unsafe_offset=3]*filmX + r2c[unsafe_offset=7]*filmY + r2c[unsafe_offset=15]
-    if cw != Float32(0.0) and cw != Float32(1.0):
-        cx /= cw; cy /= cw; cz /= cw
-    var camLen = sqrt(cx*cx + cy*cy + cz*cz)
-    if camLen > Float32(0.0):
-        cx /= camLen; cy /= camLen; cz /= camLen
-
-    # cameraToWorld rotation (upper-left 3×3 of col-major 4×4)
-    var dx = c2w[unsafe_offset=0]*cx + c2w[unsafe_offset=4]*cy + c2w[unsafe_offset=8]*cz
-    var dy = c2w[unsafe_offset=1]*cx + c2w[unsafe_offset=5]*cy + c2w[unsafe_offset=9]*cz
-    var dz = c2w[unsafe_offset=2]*cx + c2w[unsafe_offset=6]*cy + c2w[unsafe_offset=10]*cz
-    var dirLen = sqrt(dx*dx + dy*dy + dz*dz)
-    if dirLen > Float32(0.0):
-        dx /= dirLen; dy /= dirLen; dz /= dirLen
-
-    var orgX = c2w[unsafe_offset=12]; var orgY = c2w[unsafe_offset=13]; var orgZ = c2w[unsafe_offset=14]
+    var (dir, org, _camLen) = camera_ray_from_film_xy(filmX, filmY, r2c, c2w)
+    var dx = dir.x; var dy = dir.y; var dz = dir.z
+    var orgX = org.x; var orgY = org.y; var orgZ = org.z
     var (pcg_state, pcg_inc) = derive_pcg_seeds(px, py, si, rng_seed)
 
     # Hero-wavelength sample — its own Sobol dimension (2), reserved once per

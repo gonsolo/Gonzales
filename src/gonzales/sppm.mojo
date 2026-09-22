@@ -32,7 +32,7 @@ from .vcm_mis import mis_policy_sole
 from .bxdf import dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, LobeCtx, lobe_eval, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured
 from .shading import _tex_lookup, _get_tri_verts, _apply_surface_maps
-from .sampling import power_heuristic
+from .sampling import power_heuristic, camera_ray_from_film_xy
 from .transform import transform_normal_by_instance
 from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
@@ -578,22 +578,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     # vp_samples independent samples lands on.
     var fX = Float32(px) + pcg.next_float()
     var fY = Float32(py) + pcg.next_float()
-    var cx = r2c[unsafe_offset=0]*fX + r2c[unsafe_offset=4]*fY + r2c[unsafe_offset=12]
-    var cy = r2c[unsafe_offset=1]*fX + r2c[unsafe_offset=5]*fY + r2c[unsafe_offset=13]
-    var cz = r2c[unsafe_offset=2]*fX + r2c[unsafe_offset=6]*fY + r2c[unsafe_offset=14]
-    var cw = r2c[unsafe_offset=3]*fX + r2c[unsafe_offset=7]*fY + r2c[unsafe_offset=15]
-    if cw != Float32(0.0) and cw != Float32(1.0):
-        cx /= cw; cy /= cw; cz /= cw
-    var cl = sqrt(cx*cx + cy*cy + cz*cz)
-    if cl > Float32(0.0): cx /= cl; cy /= cl; cz /= cl
-    var rd = Vec3f(
-        c2w[unsafe_offset=0]*cx + c2w[unsafe_offset=4]*cy + c2w[unsafe_offset=8]*cz,
-        c2w[unsafe_offset=1]*cx + c2w[unsafe_offset=5]*cy + c2w[unsafe_offset=9]*cz,
-        c2w[unsafe_offset=2]*cx + c2w[unsafe_offset=6]*cy + c2w[unsafe_offset=10]*cz,
-    )
-    var dl = rd.length()
-    if dl > Float32(0.0): rd = rd / dl
-    var ro = org
+    var (rd, ro, cl) = camera_ray_from_film_xy(fX, fY, r2c, c2w)
 
     # Texture/bump footprint for this camera path, derived here rather than
     # plumbed: r2c's first column IS the per-pixel derivative of the
@@ -2207,6 +2192,27 @@ def _sppm_shadow_transmittance(
     return RGB(exp(-sigma_t.r * span), exp(-sigma_t.g * span), exp(-sigma_t.b * span))
 
 @always_inline
+@always_inline
+def _sppm_mat_kind_simple(vp_mat_kind: Int32) -> Int32:
+    """Collapse a visible point's LobeKind to what lobe_eval's simple-lobe
+    path accepts (lambertian/ggx/diffuse_transmit) -- hair/measured/coated
+    are handled by their own branches before either call site reaches this.
+
+    Was a 6-line if/elif copy-pasted at both call sites (direct NEE and the
+    photon-gather NEE), identical down to the comment. That already cost a
+    real bug once: ab01801a had to remember to fix BOTH copies for
+    diffuse-transmission NEE, because fixing only one would have left direct
+    light two-sided and indirect one-sided. One function instead of two
+    copies that must be kept in sync by memory."""
+    if vp_mat_kind == LobeKind.ggx:
+        return LobeKind.ggx
+    if vp_mat_kind == LobeKind.diffuse_transmit:
+        # carries its own kind through; collapsing it to lambertian would
+        # drop the transmit lobe, half the energy.
+        return LobeKind.diffuse_transmit
+    return LobeKind.lambertian
+
+
 def _sppm_nee_weight(
     vp: SPPMPixel,
     ref sd: SceneDescriptor2_C,
@@ -2258,13 +2264,7 @@ def _sppm_nee_weight(
         var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
         var w_m = _nee_weight_measured(ls, mb_m, tangent_m, bitangent_m, vn, wo, vp.wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
         return w_m
-    var mat_kind_simple = LobeKind.lambertian
-    if vp.mat_kind == LobeKind.ggx:
-        mat_kind_simple = LobeKind.ggx
-    elif vp.mat_kind == LobeKind.diffuse_transmit:
-        # carries its own kind through; collapsing it to
-        # lambertian drops the transmit lobe, half the energy
-        mat_kind_simple = LobeKind.diffuse_transmit
+    var mat_kind_simple = _sppm_mat_kind_simple(vp.mat_kind)
     # Straight to a SpectralSample: this used to go through
     # _nee_weight_simple_spectral, which evaluates spectrally and
     # converts back to RGB (with a variance clamp) purely because `ld` was
@@ -2446,13 +2446,7 @@ def _sppm_nee_one(
                                       * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
                                       * geom)
                     else:
-                        var mat_kind_simple = LobeKind.lambertian
-                        if vp.mat_kind == LobeKind.ggx:
-                            mat_kind_simple = LobeKind.ggx
-                        elif vp.mat_kind == LobeKind.diffuse_transmit:
-                            # carries its own kind through; collapsing it to
-                            # lambertian drops the transmit lobe, half the energy
-                            mat_kind_simple = LobeKind.diffuse_transmit
+                        var mat_kind_simple = _sppm_mat_kind_simple(vp.mat_kind)
                         # THE shared evaluator (bxdf.mojo). SPPM's NEE uses the
                         # BARE BRDF -- the surface cosine is already inside
                         # `geom`, the convention _sppm_vp_brdf's docstring

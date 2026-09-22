@@ -32,7 +32,7 @@ from .bvh import (
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
     render_aux_buffers,
 )
-from .sampling import power_heuristic, sample_ggx_vndf, sample_cosine_hemisphere_world, mix_bits_u64
+from .sampling import power_heuristic, sample_ggx_vndf, sample_cosine_hemisphere_world, mix_bits_u64, camera_ray_from_film_xy
 from .rng import PCG32
 from .transform import matrix_invert
 from .pbrt_parser import ParsedScene_Mojo
@@ -1714,22 +1714,7 @@ def _bdpt_camera_path_init[use_gpu: Bool](
     # all three on the real filter is the follow-up.
     var fX = Float32(px) + pcg.next_float()
     var fY = Float32(py) + pcg.next_float()
-    var cx = r2c[unsafe_offset=0]*fX + r2c[unsafe_offset=4]*fY + r2c[unsafe_offset=12]
-    var cy = r2c[unsafe_offset=1]*fX + r2c[unsafe_offset=5]*fY + r2c[unsafe_offset=13]
-    var cz = r2c[unsafe_offset=2]*fX + r2c[unsafe_offset=6]*fY + r2c[unsafe_offset=14]
-    var cw = r2c[unsafe_offset=3]*fX + r2c[unsafe_offset=7]*fY + r2c[unsafe_offset=15]
-    if cw != Float32(0.0) and cw != Float32(1.0):
-        cx /= cw; cy /= cw; cz /= cw
-    var cl = sqrt(cx*cx + cy*cy + cz*cz)
-    if cl > Float32(0.0): cx /= cl; cy /= cl; cz /= cl
-    var rd = Vec3f(
-        c2w[unsafe_offset=0]*cx + c2w[unsafe_offset=4]*cy + c2w[unsafe_offset=8]*cz,
-        c2w[unsafe_offset=1]*cx + c2w[unsafe_offset=5]*cy + c2w[unsafe_offset=9]*cz,
-        c2w[unsafe_offset=2]*cx + c2w[unsafe_offset=6]*cy + c2w[unsafe_offset=10]*cz,
-    )
-    var dl = rd.length()
-    if dl > Float32(0.0): rd = rd / dl
-    var ro = Point3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
+    var (rd, ro, _cl) = camera_ray_from_film_xy(fX, fY, r2c, c2w)
 
     # VCM Stage 2b: real per-vertex MIS state for the eye subpath (see
     # project_vcm_stage2_mis_derivation memory). cameraPdfW derived by
@@ -1738,9 +1723,13 @@ def _bdpt_camera_path_init[use_gpu: Bool](
     # the camera forward axis — same quantity the plain path tracer's mip
     # LOD already uses, pipeline.mojo) as the "pixel area at distance 1"
     # convention: cameraPdfW = 1/(px_scale² × cosθ³), cosθ = angle between
-    # this ray and the camera forward axis. cz here is already normalized
-    # (post `cl` division above) so |cz| IS that cosine directly.
-    var cos_theta_at_camera = abs(cz)
+    # this ray and the camera forward axis. c2w's rotation preserves dot
+    # products, so dotting the WORLD-space direction with the camera's own
+    # forward axis in world space (c2w's z-column) equals what the raw
+    # camera-space z-component would have been before that rotation -- no
+    # need to keep the pre-rotation cx/cy/cz around just for this.
+    var cos_theta_at_camera = abs(
+        rd.x * c2w[unsafe_offset=8] + rd.y * c2w[unsafe_offset=9] + rd.z * c2w[unsafe_offset=10])
     var camera_pdf_w = Float32(1) / max(
         px_scale * px_scale * cos_theta_at_camera * cos_theta_at_camera * cos_theta_at_camera,
         Float32(1e-12))
