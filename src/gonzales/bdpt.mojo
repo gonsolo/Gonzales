@@ -2421,10 +2421,26 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     v.mat_idx = Int32(mat_idx)   # the coat evaluator reads ior from it
                     v.pdf_bwd = coat_alpha       # smooth-vs-rough, as ggx stores alpha
                     v.wo = vec3f(wo)
-                    v.pdf_fwd = Float32(1)
+                    # REAL forward density and REAL carries, as the smooth
+                    # exit vertex below already stores. These were
+                    # `pdf_fwd = 1` and dVCM/dVC/dVM = 0 placeholders, valid
+                    # only while lobe_scoped() still excluded a rough coat
+                    # and _bdpt_merge_from_cache's scope gate therefore
+                    # dropped this vertex. lobe_scoped now returns
+                    # `c.is_surface` for EVERY coated_walk, rough included,
+                    # so the gate stopped firing and this vertex began
+                    # merging and connecting with fabricated weights: zero
+                    # carries shrink the MIS denominator, so each strategy
+                    # took a near-1 share and their sum over-counted.
+                    # cw.pdf is the density actually sampled, which is what
+                    # the dVCM recursion wants (SmallVCM does the same);
+                    # the reverse half comes from the evaluator that
+                    # merge/connect will themselves query at this vertex,
+                    # so the recursion and the estimators agree.
+                    v.pdf_fwd = cw.pdf
                     v.med_idx = cur_med_idx
                     v.wavelengths = wavelengths
-                    v.dVCM = Float32(0); v.dVC = Float32(0); v.dVM = Float32(0)
+                    v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
                     if n_verts == 0: first_alb = eff_alb
                     n_verts += 1
                     # BUG (found 2026-09-15, chasing coateddiffuse-eta-probe
@@ -2452,9 +2468,25 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
                     if path_len > 0:
                         total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
+                    # Propagate the carries THROUGH this bounce, as every
+                    # scoped material does after it scatters. This used to
+                    # fall through to the `dvcm_carry = 0` below, which left
+                    # the whole REST of the path with no MIS state -- the
+                    # smooth exit vertex's own comment records that giving a
+                    # vertex real carries while the path downstream stays
+                    # broken measures WORSE than leaving both alone, so the
+                    # two have to move together.
+                    var cos_out_cr = abs(dot(refl, gn))
+                    var (_pf_cr, pdf_rev_cr) = _bdpt_vertex_pdfs(v, vec3f(refl), sd)
+                    (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
+                        dvcm_carry, dvc_carry, dvm_carry,
+                        cos_out_cr / max(cw.pdf, Float32(1e-9)), cw.pdf, pdf_rev_cr,
+                        mis_vc_weight_factor, mis_vm_weight_factor)
                 else:
                     last_bsdf_pdf = Float32(-1)  # smooth mirror coat: delta, no MIS at destination
-                dvcm_carry = Float32(0)  # out of MIS scope, same reset convention as volume scatter
+                    # Genuinely delta: dVCM resets, same convention as the
+                    # dielectric branch and as volume scatter.
+                    dvcm_carry = Float32(0)
                 return True   # coat-reflect (rough): vertex already stored above, path continues
 
             # Transmitted into the coat: random-walk the base/coat-underside
@@ -3662,13 +3694,26 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     v.mat_idx = Int32(mat_idx)   # the coat evaluator reads ior from it
                     v.pdf_bwd = coat_alpha       # smooth-vs-rough, as ggx stores alpha
                     v.wo = vec3f(wo)
-                    v.pdf_fwd = Float32(1)
+                    # Real density and real carries -- the camera side's twin
+                    # of this vertex carries the full story. This half is the
+                    # one that reaches the photon cache, so fabricated carries
+                    # here corrupt the weight of every MERGE that gathers this
+                    # vertex, not just this subpath's own connections.
+                    v.pdf_fwd = cw.pdf
                     v.med_idx = cur_med_idx
                     v.wavelengths = wavelengths
-                    v.dVCM = Float32(0); v.dVC = Float32(0); v.dVM = Float32(0)
+                    v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
                     n_verts += 1
                     _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
-                dvcm_carry = Float32(0)
+                    var cos_out_lr = abs(dot(refl, gn))
+                    var (_pf_lr, pdf_rev_lr) = _bdpt_vertex_pdfs(v, vec3f(refl), sd)
+                    (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
+                        dvcm_carry, dvc_carry, dvm_carry,
+                        cos_out_lr / max(cw.pdf, Float32(1e-9)), cw.pdf, pdf_rev_lr,
+                        mis_vc_weight_factor, mis_vm_weight_factor)
+                else:
+                    # Genuinely delta (smooth mirror coat): dVCM resets.
+                    dvcm_carry = Float32(0)
                 return True   # coat-reflect (rough): vertex already stored above, path continues
 
             # Entry attenuation already applied by coat_walk_enter. The light

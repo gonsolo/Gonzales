@@ -1,0 +1,47 @@
+# FURNACE TEST -- coateddiffuse, ROUGH coat (alpha 0.1)
+#
+# A quad of this material under a CONSTANT environment of radiance L=1, with
+# the BASE set to absorb nothing (rho=1).
+#
+# Unlike its sibling furnace scenes this one does NOT have to reach Lo = 1.0,
+# and the difference is physics, not a defect: the coat is a Beer-Lambert
+# absorbing slab of thickness 0.01 (pbrt's default, hardcoded in gonzales as
+# DEFAULT_COAT_THICKNESS -- `thickness` is not parsed). Every traversal
+# attenuates and a TIR recycle costs two of them, so a few percent is
+# genuinely absorbed. Measured: 0.9128 here, and 0.9934 with
+# DEFAULT_COAT_THICKNESS rebuilt to 0 -- so the shortfall is the coat, and
+# only ~0.7% is the COAT_MAX_DEPTH truncation.
+#
+# It is still worth running, as a one-sided guard: the coat can only LOSE
+# energy, so anything at or above 1.0 is a bug. That is what it caught --
+# this scene read 1.3008 because the layered exit ray took full environment
+# radiance on top of the NEE that had already reported it (e9944964's
+# sibling; see PDF_DROP_DIRECT).
+#
+# ROUGH VARIANT (roughness 0.1, the barcelona deck's value). The smooth
+# sibling was for a long time the ONLY coateddiffuse case in the suite, which
+# is why "rough coats" stayed its named remainder: nothing tested them. A
+# rough coat takes a DIFFERENT code path in every integrator -- the coat walk
+# has no closed-form exit density, so bxdf_pdf_coated_exit (derived for a
+# SMOOTH coat) stands in for it, and that number feeds VCM's dVCM recursion.
+#
+# Same one-sided guard as the smooth case: the coat can only LOSE energy, so
+# anything at or above 1.0 is a bug. Expect slightly MORE loss than the smooth
+# case, since a rough exit facet can refract back below the surface and
+# recycle, costing extra coat traversals.
+#
+# No reference render: the answer is arithmetic. See Scripts/analytic_check.py.
+
+Integrator "path" "integer maxdepth" [ 32 ]
+Sampler "halton" "integer pixelsamples" [ 64 ]
+Film "rgb" "string filename" [ "furnace-coateddiffuse-rough.exr" ]
+    "integer xresolution" [ 64 ] "integer yresolution" [ 64 ]
+LookAt 0 0 -4   0 0 0   0 1 0
+Camera "perspective" "float fov" [ 30 ]
+WorldBegin
+LightSource "infinite" "rgb L" [ 1 1 1 ]
+Material "coateddiffuse" "rgb reflectance" [ 1 1 1 ] "float roughness" [ 0.1 ]
+Shape "trianglemesh"
+    "integer indices" [ 0 1 2 0 2 3 ]
+    "point3 P" [ -3 -3 0   3 -3 0   3 3 0   -3 3 0 ]
+    "normal N" [ 0 0 -1  0 0 -1  0 0 -1  0 0 -1 ]
