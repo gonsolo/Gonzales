@@ -31,7 +31,8 @@ from .bvh import (
 from .vcm_mis import mis_policy_sole
 from .bxdf import dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, LobeCtx, lobe_eval, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured
-from .shading import _tex_lookup, _get_tri_verts, _apply_surface_maps
+from .shading import _tex_lookup, _get_tri_verts, _apply_surface_maps, \
+    apply_surface_maps_at_hit, _camera_approx_footprint
 from .sampling import power_heuristic, camera_ray_from_film_xy
 from .transform import transform_normal_by_instance
 from .rng import PCG32
@@ -899,6 +900,17 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 bounce -= 1
             var ior = mat.albedo.r
             var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
+            # Bump/normal maps. barcelona's water is a `dielectric` with a
+            # "texture displacement", so this is the branch the corpus cares
+            # about most. `orient_to` is the RAW interpolated normal, NOT a
+            # face-forwarded one: _dielectric_bounce decides entering vs
+            # exiting from dot(ray_dir, n) < 0, and flipping the perturbed
+            # normal toward the ray would make that test tautological and
+            # resurrect the 1/eta^4 transmission loss (same rule as
+            # shading.mojo's dielectric site).
+            gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
+                gn, gn, ray_dir, px_scale * cone_len,
+                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
                 ray_dir, hit.to_simd(), gn, ior, n_events == 1 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric)
             current_dielectric_ior = new_cur_ior
@@ -921,6 +933,11 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_c, ray_dir) > Float32(0.0):
                 gn_c = gn_c * Float32(-1.0)
+            # Bump/normal maps -- the diffuse/coateddiffuse branches above have had
+            # these since 2026-09-22 and this one was simply missed.
+            gn_c = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
+                gn_c, gn_c, ray_dir, px_scale * cone_len,
+                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var wo_c = (-rd).to_simd()
             # Real image-texture F0, exactly as the diffuse branch does for
             # reflectance. Without it a TEXTURED conductor was stored/weighted
@@ -1015,6 +1032,11 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_m, ray_dir) > Float32(0.0):
                 gn_m = gn_m * Float32(-1.0)
+            # Bump/normal maps -- the diffuse/coateddiffuse branches above have had
+            # these since 2026-09-22 and this one was simply missed.
+            gn_m = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
+                gn_m, gn_m, ray_dir, px_scale * cone_len,
+                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             if mat.measured_idx < Int32(0):
                 # Load failure fallback -- stop this path, matches
                 # shading.mojo's shade_measured.
@@ -1109,6 +1131,34 @@ def _sppm_store_photon[use_gpu: Bool](
             photons[unsafe_offset=slot] = ph
 
 
+# The photon pass's bump/normal-map footprint reference, derived from the same
+# camera the visible-point pass derives ITS footprint from -- so a photon and
+# the visible point it will be gathered by filter the surface the same way.
+#
+# _sppm_trace_visible_point computes the identical quantity per pixel, where
+# `cl` (the camera-space direction's length before normalising) varies a little
+# across the film; a photon belongs to no pixel, so this takes the film centre
+# and uses it for the whole pass. The max(0.125, 1/sqrt(n)) factor is pbrt's
+# (cpu/integrators.cpp:251) and is repeated here on purpose: the right filter
+# width is the SAMPLE spacing, not the whole pixel.
+@always_inline
+def _sppm_photon_px_scale(
+    r2c: Pointer[Float32, MutUntrackedOrigin],
+    c2w: Pointer[Float32, MutUntrackedOrigin],
+    fw: Int, fh: Int,
+) -> Float32:
+    var (_rd, _ro, cl) = camera_ray_from_film_xy(
+        Float32(fw) * Float32(0.5), Float32(fh) * Float32(0.5), r2c, c2w)
+    var _pxs = sqrt(r2c[unsafe_offset=0]*r2c[unsafe_offset=0]
+                  + r2c[unsafe_offset=1]*r2c[unsafe_offset=1]
+                  + r2c[unsafe_offset=2]*r2c[unsafe_offset=2])
+    return (_pxs / cl if cl > Float32(0.0) else Float32(0.0)) * max(
+        Float32(0.125), Float32(1.0) / sqrt(Float32(_VP_SAMPLES)))
+
+@always_inline
+def _sppm_cam_pos(c2w: Pointer[Float32, MutUntrackedOrigin]) -> Vec3f:
+    return Vec3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
+
 def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     ref sd:               SceneDescriptor2_C,
     mut pcg:          PCG32,
@@ -1119,6 +1169,16 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     counter:          Pointer[Int32, MutUntrackedOrigin],
     default_emit_med: Int32,
     maxdepth: Int,
+    # Bump/normal-map footprint reference for this photon's hits. A photon has
+    # no ray cone -- the camera-side walk derives one from r2c, and there is no
+    # equivalent on the light side -- so this is pbrt's own fallback for a
+    # vertex without differentials (Camera::Approximate_dp_dxy): footprint =
+    # pixel angular size x distance from the camera. See
+    # shading.mojo's _camera_approx_footprint for why zero is NOT an option
+    # here, and project_surface_maps_photon_side_gap for the more accurate
+    # routes (Photon Differentials, LEADR) deliberately not taken yet.
+    cam_pos: Vec3f,
+    px_scale: Float32,
     # Decomposed spectral tables rather than reading sd.spectral. `sd` is a
     # SceneDescriptor2_C passed BY VALUE, and it contains a SpectralHandle --
     # the 6-field TrivialRegisterPassable struct suspected (modular/modular#6759,
@@ -1430,6 +1490,17 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var gn_cd = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_cd, ray_dir) > Float32(0.0):
                 gn_cd = gn_cd * Float32(-1.0)
+            # Bump/normal maps -- the PHOTON pass ignored them entirely while the
+            # visible-point pass has applied them since 2026-09-22, so
+            # SPPM's two halves stood on different geometry: a visible
+            # point on a perturbed surface gathering photons that had
+            # scattered off a flat one. Footprint from the camera-distance
+            # approximation (pbrt's own answer for a vertex with no
+            # differentials), so a photon and the visible point that
+            # gathers it filter the surface identically.
+            gn_cd = apply_surface_maps_at_hit[tex_gpu](mat, inter, sd.meshes,
+                gn_cd, gn_cd, ray_dir, _camera_approx_footprint(hit, cam_pos, px_scale),
+                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var cw = coat_walk_begin(gn_cd, -ray_dir, eff_alb_cd, mat.emission.r, max(mat.roughU, mat.roughV), pcg)
             coat_walk_enter(cw, pcg)
             if cw.event == COAT_ABSORB:
@@ -1497,6 +1568,10 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0.0):
                 gn = gn * Float32(-1.0)
+            # Bump/normal maps -- see the coateddiffuse branch above.
+            gn = apply_surface_maps_at_hit[tex_gpu](mat, inter, sd.meshes,
+                gn, gn, ray_dir, _camera_approx_footprint(hit, cam_pos, px_scale),
+                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var new_dir = _cosine_hemisphere_sample(gn, pcg.next_float(), pcg.next_float())
             flux *= spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (eff_alb / rr_prob).r, (eff_alb / rr_prob).g, (eff_alb / rr_prob).b, ph_wavelengths)
             rd = vec3f(new_dir)
@@ -1546,6 +1621,17 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 bounce -= 1
             var ior = mat.albedo.r
             var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
+            # Bump/normal maps. barcelona's water is a `dielectric` with a
+            # "texture displacement", so this is the branch the corpus cares
+            # about most. `orient_to` is the RAW interpolated normal, NOT a
+            # face-forwarded one: _dielectric_bounce decides entering vs
+            # exiting from dot(ray_dir, n) < 0, and flipping the perturbed
+            # normal toward the ray would make that test tautological and
+            # resurrect the 1/eta^4 transmission loss (same rule as
+            # shading.mojo's dielectric site).
+            gn = apply_surface_maps_at_hit[tex_gpu](mat, inter, sd.meshes,
+                gn, gn, ray_dir, _camera_approx_footprint(hit, cam_pos, px_scale),
+                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
                 ray_dir, hit.to_simd(), gn, ior, n_events == 1 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric, radiance_mode=False)
             current_dielectric_ior = new_cur_ior
@@ -1569,6 +1655,10 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_c, ray_dir) > Float32(0.0):
                 gn_c = gn_c * Float32(-1.0)
+            # Bump/normal maps -- see the coateddiffuse branch above.
+            gn_c = apply_surface_maps_at_hit[tex_gpu](mat, inter, sd.meshes,
+                gn_c, gn_c, ray_dir, _camera_approx_footprint(hit, cam_pos, px_scale),
+                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var wo_c = (-rd).to_simd()
             # Real image-texture F0, exactly as the diffuse branch does for
             # reflectance. Without it a TEXTURED conductor was stored/weighted
@@ -1639,6 +1729,10 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_m, ray_dir) > Float32(0.0):
                 gn_m = gn_m * Float32(-1.0)
+            # Bump/normal maps -- see the coateddiffuse branch above.
+            gn_m = apply_surface_maps_at_hit[tex_gpu](mat, inter, sd.meshes,
+                gn_m, gn_m, ray_dir, _camera_approx_footprint(hit, cam_pos, px_scale),
+                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             if mat.measured_idx < Int32(0):
                 break
             var wo_m = (-rd).to_simd()
@@ -1704,6 +1798,8 @@ def _sppm_photon_pass(
     seed:         UInt64,
     pass_idx:     Int,
     maxdepth:     Int,
+    cam_pos:      Vec3f,
+    px_scale:     Float32,
 ) -> Int:
     """CPU driver: emit n_emit photon paths, returning the number actually
     stored (clamped to max_photons)."""
@@ -1739,6 +1835,7 @@ def _sppm_photon_pass(
     def emit_one(k: Int):
         var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
         _sppm_trace_photon[True, False](sd, pcg, scratch.unsafe_offset(k), n_emit, photons, max_photons, counter, default_emit_med, maxdepth,
+            cam_pos, px_scale,
             sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y,
             sd.spectral.cie_z, sd.spectral.d65, pass_wavelengths(pass_idx))
 
@@ -2760,7 +2857,11 @@ def _sppm_render_core(
     # Photon passes
     for pass_idx in range(n_passes):
         var pass_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(pass_idx * 2654435761 + 1)
-        var n_stored = _sppm_photon_pass(photons, n_photons_per_pass, max_photons, sd, pass_seed, pass_idx, Int(psc[unsafe_offset=0].max_depth))
+        var n_stored = _sppm_photon_pass(photons, n_photons_per_pass, max_photons, sd, pass_seed, pass_idx, Int(psc[unsafe_offset=0].max_depth),
+                                         _sppm_cam_pos(psc[unsafe_offset=0].camera_to_world),
+                                         _sppm_photon_px_scale(
+                                             psc[unsafe_offset=0].raster_to_camera,
+                                             psc[unsafe_offset=0].camera_to_world, fw, fh))
         if n_stored > 0:
             _build_grid(photons, n_stored, heads, inv_cell)
             _gather_update(vps, n_vps, photons, heads, inv_cell, sd, pass_wavelengths(pass_idx))

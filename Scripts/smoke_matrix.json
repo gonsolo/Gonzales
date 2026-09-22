@@ -20,7 +20,7 @@
     "tol": 0.03
   },
   "baseline-diffuse.sppm": {
-    "mean": 0.111965,
+    "mean": 0.11197,
     "median": 0.050548,
     "tol": 0.03
   },
@@ -55,7 +55,7 @@
     "tol": 0.03
   },
   "closed-cavity.vcm": {
-    "mean": 0.713353,
+    "mean": 0.713354,
     "median": 0.706639,
     "tol": 0.03
   },
@@ -65,13 +65,13 @@
     "tol": 0.03
   },
   "curves-hair.sppm": {
-    "mean": 1.754784,
-    "median": 0.024666,
+    "mean": 1.754777,
+    "median": 0.024645,
     "tol": 0.03
   },
   "curves-hair.vcm": {
-    "mean": 2.314577,
-    "median": 0.036344,
+    "mean": 2.313744,
+    "median": 0.036393,
     "tol": 0.03
   },
   "many-lights.pt": {
@@ -85,8 +85,8 @@
     "tol": 0.03
   },
   "many-lights.vcm": {
-    "mean": 0.7609,
-    "median": 0.499748,
+    "mean": 0.761004,
+    "median": 0.499536,
     "tol": 0.03
   },
   "medium-sphere-light.pt": {
@@ -110,28 +110,28 @@
     "tol": 0.03
   },
   "mnee-through-glass.sppm": {
-    "mean": 0.219909,
+    "mean": 0.219914,
     "median": 0.117574,
     "tol": 0.03
   },
   "mnee-through-glass.vcm": {
-    "mean": 0.290468,
-    "median": 0.098697,
+    "mean": 0.28854,
+    "median": 0.095738,
     "tol": 0.03
   },
   "normal-map.pt": {
-    "mean": 0.077757,
-    "median": 0.023497,
+    "mean": 0.077713,
+    "median": 0.023315,
     "tol": 0.03
   },
   "normal-map.sppm": {
-    "mean": 0.073611,
-    "median": 0.022981,
+    "mean": 0.07326,
+    "median": 0.023098,
     "tol": 0.03
   },
   "normal-map.vcm": {
-    "mean": 0.110169,
-    "median": 0.017801,
+    "mean": 0.108649,
+    "median": 0.016926,
     "tol": 0.03
   },
   "sss-slab.pt": {
@@ -150,18 +150,18 @@
     "tol": 0.03
   },
   "subsurface-coated.pt": {
-    "mean": 0.109859,
-    "median": 0.042736,
+    "mean": 0.110324,
+    "median": 0.043214,
     "tol": 0.03
   },
   "subsurface-coated.sppm": {
-    "mean": 0.099817,
-    "median": 0.037317,
+    "mean": 0.100238,
+    "median": 0.037526,
     "tol": 0.03
   },
   "subsurface-coated.vcm": {
-    "mean": 0.129348,
-    "median": 0.029808,
+    "mean": 0.129296,
+    "median": 0.029811,
     "tol": 0.03
   }
 }

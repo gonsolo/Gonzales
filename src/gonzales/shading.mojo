@@ -2236,6 +2236,68 @@ def _apply_surface_maps[use_gpu: Bool](
         n = -n
     return n
 
+# Footprint width for a vertex that has NO ray cone of its own -- every vertex
+# on a LIGHT subpath (SPPM's photons, VCM's light path), plus VCM's camera
+# path, which does not track a cone.
+#
+# Why this is needed at all: the bump map's finite-difference step is `pixel_uv
+# * 0.5`, and _apply_bump_map falls back to a FIXED 0.0005 when handed zero.
+# That fixed epsilon is exactly what made barcelona's water worse (1.682x ->
+# 1.804x) the first time bump mapping was attempted -- see that function's
+# docstring. So "just pass 0 on the light side" is not an option: a light-side
+# vertex needs a real footprint or it must not bump at all.
+#
+# This is pbrt-v4's own answer, not an invention here: when a
+# SurfaceInteraction has no ray differentials, pbrt calls
+# Camera::Approximate_dp_dxy(), which estimates the footprint as if the point
+# were being viewed by the camera -- pixel angular size times distance from the
+# camera. pbrt's SPPM and BDPT both take that path for their light-subpath
+# vertices. Using it here has the property that actually matters for a photon
+# estimator: a light vertex and a camera vertex landing on the SAME point get
+# the SAME footprint, so the two halves of the estimator filter the surface
+# identically. See project_surface_maps_photon_side_gap memory for the more
+# accurate routes deliberately not taken yet (Path/Photon Differentials for a
+# true light-side footprint, LEAN/LEADR for filtering the map itself).
+@always_inline
+def _camera_approx_footprint(p: Point3f, cam_pos: Vec3f, px_scale: Float32) -> Float32:
+    """`px_scale` is the world-space size of one pixel at unit distance, the
+    same quantity the camera walks multiply by their cone length."""
+    var d = Vec3f(p[0] - cam_pos[0], p[1] - cam_pos[1], p[2] - cam_pos[2])
+    return px_scale * sqrt(dot(d, d))
+
+# Resolve the hit's triangle and apply its normal/bump maps, in one call.
+#
+# Exists because every caller of _apply_surface_maps outside this file has to
+# do the same three steps -- _get_tri_verts, test `ok`, call through -- and
+# getting that wrong is silent: a missed site renders a plausible image with
+# the map simply absent, which is how SPPM's photon pass and ALL of bdpt.mojo
+# went without bump/normal maps while the path tracer had them since 2026-09.
+# One helper, so a new integrator branch is one line and the `ok` test cannot
+# be forgotten. Returns `shading_normal` unchanged for a non-triangle hit (an
+# analytic sphere: _get_tri_verts reports type 4 as not-ok) and for a material
+# with neither map.
+@always_inline
+def apply_surface_maps_at_hit[use_gpu: Bool](
+    mat: Material_C,
+    inter: Intersection_C,
+    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    shading_normal: Vec3f,
+    orient_to: Vec3f,
+    ray_dir: Vec3f,
+    cone_w: Float32,
+    tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
+    textures: Pointer[GpuTexture_C, MutUntrackedOrigin],
+    n_textures: Int,
+) -> Vec3f:
+    if mat.normal_tex_idx < Int32(0) and mat.bump_tex_idx < Int32(0):
+        return shading_normal
+    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
+    if not ok:
+        return shading_normal
+    return _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter,
+        shading_normal, orient_to, ray_dir, cone_w,
+        tex_filenames, textures, n_textures)
+
 # Full context for NEE materials (diffuse, diffuse_transmit, coated_diffuse).
 # Computes pixel_uv, applies normal map, looks up albedo texture.
 # hit_point offset uses the bumped shading normal (matches shade_diffuse convention).
@@ -2273,8 +2335,14 @@ def _build_geom_context_full[use_gpu: Bool](
                                      ctx.px_scale * path_ptr[].cone_len)
 
     var normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances)
+    # `* cone_len`, like the five other call sites and like the `pixel_uv`
+    # computed three lines up from the SAME quantity. Without it this site --
+    # the ORIGINAL one, and the only one shade_diffuse reaches -- passed a
+    # bare px_scale, i.e. a footprint for a surface exactly one world unit
+    # from the camera, so every diffuse bump map was differentiated at the
+    # wrong step: far too fine in a large scene, far too coarse in a small one.
     normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, ng_ff, ray_dir,
-        ctx.px_scale, ctx.tex_filenames, ctx.textures, ctx.n_textures)
+        ctx.px_scale * path_ptr[].cone_len, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
     var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
     var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
