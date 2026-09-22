@@ -31,7 +31,7 @@ from .bvh import (
 from .vcm_mis import mis_policy_sole
 from .bxdf import dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, LobeCtx, lobe_eval, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured
-from .shading import _tex_lookup, _get_tri_verts
+from .shading import _tex_lookup, _get_tri_verts, _apply_surface_maps
 from .sampling import power_heuristic
 from .transform import transform_normal_by_instance
 from .rng import PCG32
@@ -595,6 +595,30 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     if dl > Float32(0.0): rd = rd / dl
     var ro = org
 
+    # Texture/bump footprint for this camera path, derived here rather than
+    # plumbed: r2c's first column IS the per-pixel derivative of the
+    # camera-space direction, so the pixel's angular size is |r2c[0..2]| / cl
+    # (cl = that direction's length before normalising). No new parameter on
+    # four call levels for a quantity the matrix already carries.
+    #
+    # Scaled by pbrt's max(0.125, 1/sqrt(n)) with n = _VP_SAMPLES, the
+    # independent camera samples per pixel here -- same reasoning as the path
+    # tracer's (cpu/integrators.cpp:251): the right filter width is the
+    # SAMPLE SPACING, not the whole pixel.
+    var _pxs = sqrt(r2c[unsafe_offset=0]*r2c[unsafe_offset=0]
+                  + r2c[unsafe_offset=1]*r2c[unsafe_offset=1]
+                  + r2c[unsafe_offset=2]*r2c[unsafe_offset=2])
+    var px_scale = (_pxs / cl if cl > Float32(0.0) else Float32(0.0)) * max(
+        Float32(0.125), Float32(1.0) / sqrt(Float32(_VP_SAMPLES)))
+    # Total path length along the SPECULAR chain only -- a cone tracks the
+    # camera's footprint, which survives refraction (the pool floor seen
+    # through water) but means nothing after a diffuse scatter. Mirrors
+    # accumulate_cone_gpu.
+    # No specular gate is needed here, unlike the path tracer's: every
+    # non-specular branch of this walk STORES a visible point and breaks, so
+    # any segment that continues is specular by construction.
+    var cone_len = Float32(0.0)
+
     var cur_med_idx = Int32(-1)  # camera starts in vacuum
     # Touching-dielectric IOR stack for _dielectric_bounce -- see that
     # function's docstring. Both start at vacuum (1.0).
@@ -645,6 +669,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         var inter = scratch[unsafe_offset=0]
         var ray_dir = rd.to_simd()
         var t_hit = inter.tHit
+        cone_len += t_hit
 
         # ── Volume free-flight ────────────────────────────────────────────
         if has_media and Int(cur_med_idx) >= 0:
@@ -743,6 +768,16 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
             if tex_ok:
                 eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+                # Bump/normal maps, which SPPM ignored entirely -- `grep bump
+                # sppm.mojo` was empty -- while the path tracer applied them.
+                # barcelona's deck (`pavet`) and pool floor both carry one, and
+                # disabling it in the PT brightens that deck 1.335x -> 1.62x,
+                # so ignoring it here was worth ~20% on exactly the surfaces
+                # SPPM renders too bright. Same helper the PT uses; it early-
+                # outs when the material has neither map.
+                gn = _apply_surface_maps[use_gpu](
+                    mat, tv0, tv1, tv2, tex_mesh, inter, gn, gn, ray_dir,
+                    px_scale * cone_len, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             vp.pos = hit
             vp.normal = vec3f(gn)
             vp.alb = eff_alb
@@ -790,6 +825,16 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
             if tex_ok:
                 eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+                # Bump/normal maps, which SPPM ignored entirely -- `grep bump
+                # sppm.mojo` was empty -- while the path tracer applied them.
+                # barcelona's deck (`pavet`) and pool floor both carry one, and
+                # disabling it in the PT brightens that deck 1.335x -> 1.62x,
+                # so ignoring it here was worth ~20% on exactly the surfaces
+                # SPPM renders too bright. Same helper the PT uses; it early-
+                # outs when the material has neither map.
+                gn = _apply_surface_maps[use_gpu](
+                    mat, tv0, tv1, tv2, tex_mesh, inter, gn, gn, ray_dir,
+                    px_scale * cone_len, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var ior_cd = mat.emission.r
             var cw = coat_walk_begin(gn, -ray_dir, eff_alb, ior_cd, max(mat.roughU, mat.roughV), pcg)
             coat_walk_enter(cw, pcg)
