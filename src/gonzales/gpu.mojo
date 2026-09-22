@@ -3290,6 +3290,7 @@ def gen_primary_rays_wavefront_gpu(
         wavelengths,
         Float32(0.0),   # mis_null_dist
         INV_FOUR_PI,    # lastEnvNeePdf (gated by lastBsdfPdf > 0; set at each scatter)
+        Float32(0.0),   # cone_len: total path length, accumulated per bounce
     )
 
 
@@ -3497,6 +3498,41 @@ def vulkaninterop_test_spheres_gpu(
 # sphere pass (see vulkaninterop_test_spheres_gpu) -- meshes, instances,
 # spheres, AND curves are all supported now (see vulkaninterop_rt_create_
 # scene's docstring for how curves are represented).
+def accumulate_cone_gpu(
+    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    results: Pointer[Intersection_C, MutUntrackedOrigin],
+    count_dp: Int64,
+):
+    """Grow each path's texture-footprint cone by the segment just traced.
+
+    Its own kernel, enqueued after WHICHEVER traversal ran, because there are
+    two (the CUDA `traverse_paths_gpu` and the Vulkan-RT one, whose unpack
+    kernel never sees `paths`). Putting it inside a material's shading instead
+    would skip exactly the paths that matter: a camera ray refracting through
+    water onto a textured floor never touches the diffuse material's geometry
+    builder on the way through the water.
+    """
+    var count = Int(count_dp)
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    if paths[unsafe_offset=tid].active == 0:
+        return
+    if results[unsafe_offset=tid].hit == Int8(0):
+        return
+    # ONLY along a specular chain. A ray cone tracks the CAMERA's footprint,
+    # and that survives mirror reflection and refraction -- but at a diffuse
+    # scatter the outgoing direction is random and the cone stops meaning
+    # anything about the camera. Growing it there would blur deeper bounces
+    # without bound and without justification; pbrt carries differentials for
+    # camera rays and specular chains for the same reason. After the first
+    # non-specular scatter the cone FREEZES at its last valid width, so those
+    # bounces keep the footprint they legitimately had.
+    if paths[unsafe_offset=tid].bounce == Int32(0) or paths[unsafe_offset=tid].specularBounce != Int8(0):
+        paths[unsafe_offset=tid].cone_len += results[unsafe_offset=tid].tHit
+
+
+
 def vulkaninterop_rt_traverse_paths_gpu(
     ctx: DeviceContext,
     path_buf: DeviceBuffer[DType.uint8],
@@ -3700,6 +3736,7 @@ def gen_primary_rays_gpu(
         wavelengths,
         Float32(0.0),   # mis_null_dist
         INV_FOUR_PI,    # lastEnvNeePdf (gated by lastBsdfPdf > 0; set at each scatter)
+        Float32(0.0),   # cone_len: total path length, accumulated per bounce
     )
 
 
@@ -3980,6 +4017,15 @@ def _gpu_bounce_kernels(
             grid_dim=grid_dim,
             block_dim=block_size,
         )
+    # Both traversal branches converge here: grow the texture-footprint cone
+    # by the segment just traced, before any material shading reads it.
+    handle[].ctx.enqueue_function[accumulate_cone_gpu](
+        handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        Int64(n),
+        grid_dim=grid_dim,
+        block_dim=block_size,
+    )
     # Deferred-candidate curve resolution only applies to the CUDA-native
     # intersection path (traverse_paths_gpu above, which defers candidates
     # into handle[]'s own curve_cand_* buffers). A Vulkan-RT render never

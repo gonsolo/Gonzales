@@ -724,7 +724,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
         # vertex shading normal either -- it perturbs the face-forwarded
         # geometric normal directly, which is a separate pre-existing gap.
         normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, normal, ray_dir,
-            ctx.px_scale, ctx.tex_filenames, ctx.textures, ctx.n_textures)
+            ctx.px_scale * path_ptr[].cone_len, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
     # "texture reflectance"/"texture transmittance" (e.g. a leaf.tga imagemap)
     # both resolve to the same mat.tex_idx (Material_C has one texture slot,
@@ -849,7 +849,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         # Use interpolated shading normal (geometric normal still drives hit-point offset)
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances)
         normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_normal, ray_dir,
-            ctx.px_scale, ctx.tex_filenames, ctx.textures, ctx.n_textures)
+            ctx.px_scale * path_ptr[].cone_len, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
     var hit_point = ray_org + ray_dir * inter.tHit + geo_normal * Float32(0.0001)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
@@ -1232,7 +1232,7 @@ def shade_dielectric[use_gpu: Bool](
         # perturbed normal toward the ray would make it tautologically true and
         # bring back the 1/eta^4 loss this branch exists to prevent.
         geom_normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, geom_normal, raw_gn, ray_dir,
-            px_scale, tex_filenames, textures, n_textures)
+            px_scale * path_ptr[].cone_len, tex_filenames, textures, n_textures)
     else:
         # `_hit_geom`/`_sphere_geom_normal_and_ray` returns a FACE-FORWARDED
         # normal (always flipped to oppose the incoming ray) -- correct for
@@ -1572,7 +1572,7 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         # Use interpolated shading normal for smooth specular reflections
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
         normal = _apply_surface_maps[use_gpu](mat_eff, v0, v1, v2, mesh, inter, normal, geo_normal, ray_dir,
-            ctx.px_scale, ctx.tex_filenames, ctx.textures, ctx.n_textures)
+            ctx.px_scale * path_ptr[].cone_len, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
         # roughU/V already hold the resolved GGX alpha — no squaring here.
         alpha_x = max(mat_eff.roughU, Float32(0.0001))
@@ -1728,7 +1728,7 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
         # Before the grazing fallback below, so a bump-perturbed normal that
         # lands on the wrong side of wo is caught by it like any other.
         normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_normal, ray_dir,
-            ctx.px_scale, ctx.tex_filenames, ctx.textures, ctx.n_textures)
+            ctx.px_scale * path_ptr[].cone_len, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
         # Silhouette-grazing shading-normal fallback: geo_normal is guaranteed
         # face-forwarded toward wo (_geom_normal_and_ray), but the INTERPOLATED
@@ -2156,9 +2156,13 @@ def _apply_normal_map_sphere[use_gpu: Bool](
 def _pixel_uv_for_hit(
     mesh: TriangleMesh_C, v0: Int, v1: Int, v2: Int,
     p0: Vec3f, p1: Vec3f, p2: Vec3f,
-    ng: Vec3f, ray_dir: Vec3f, t_hit: Float32, px_scale: Float32,
+    ng: Vec3f, ray_dir: Vec3f, cone_w: Float32,
 ) -> Float32:
-    if px_scale <= Float32(0.0) or Int(mesh.uvs) <= 1:
+    """`cone_w` is the ray cone's WIDTH at this hit: px_scale * the TOTAL
+    path length, not px_scale * this segment. It used to be the latter, so the
+    footprint reset to zero at every bounce and a surface seen through water
+    or a mirror was filtered as if the camera sat at the last scatter point."""
+    if cone_w <= Float32(0.0) or Int(mesh.uvs) <= 1:
         return Float32(0.0)
     var fu1 = mesh.uvs[unsafe_offset=v1*2] - mesh.uvs[unsafe_offset=v0*2]; var fv1 = mesh.uvs[unsafe_offset=v1*2+1] - mesh.uvs[unsafe_offset=v0*2+1]
     var fu2 = mesh.uvs[unsafe_offset=v2*2] - mesh.uvs[unsafe_offset=v0*2]; var fv2 = mesh.uvs[unsafe_offset=v2*2+1] - mesh.uvs[unsafe_offset=v0*2+1]
@@ -2173,7 +2177,7 @@ def _pixel_uv_for_hit(
     var rc = dot(ng, ray_dir)
     if rc < Float32(0.0): rc = -rc
     if rc < Float32(0.05): rc = Float32(0.05)
-    return (t_hit * px_scale / rc) / dpdu_len
+    return (cone_w / rc) / dpdu_len
 
 # Apply normal + bump maps to an already-interpolated shading normal.
 #
@@ -2206,7 +2210,7 @@ def _apply_surface_maps[use_gpu: Bool](
     shading_normal: Vec3f,
     orient_to: Vec3f,
     ray_dir: Vec3f,
-    px_scale: Float32,
+    cone_w: Float32,   # px_scale * TOTAL path length (see _pixel_uv_for_hit)
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
     textures: Pointer[GpuTexture_C, MutUntrackedOrigin],
     n_textures: Int,
@@ -2216,7 +2220,7 @@ def _apply_surface_maps[use_gpu: Bool](
     var p0 = Vec3f(mesh.points[unsafe_offset=v0*4], mesh.points[unsafe_offset=v0*4+1], mesh.points[unsafe_offset=v0*4+2])
     var p1 = Vec3f(mesh.points[unsafe_offset=v1*4], mesh.points[unsafe_offset=v1*4+1], mesh.points[unsafe_offset=v1*4+2])
     var p2 = Vec3f(mesh.points[unsafe_offset=v2*4], mesh.points[unsafe_offset=v2*4+1], mesh.points[unsafe_offset=v2*4+2])
-    var pixel_uv = _pixel_uv_for_hit(mesh, v0, v1, v2, p0, p1, p2, orient_to, ray_dir, inter.tHit, px_scale)
+    var pixel_uv = _pixel_uv_for_hit(mesh, v0, v1, v2, p0, p1, p2, orient_to, ray_dir, cone_w)
     # Normal map at LOD 0, like pbrt's NormalMap() (a plain bilerp of the
     # full-resolution image, no mip chain). A box-filtered mip of encoded
     # normals averages toward the flat (0,0,1) texel, so at a distant or
@@ -2265,7 +2269,8 @@ def _build_geom_context_full[use_gpu: Bool](
     var p1 = Vec3f(mesh.points[unsafe_offset=v1*4], mesh.points[unsafe_offset=v1*4+1], mesh.points[unsafe_offset=v1*4+2])
     var p2 = Vec3f(mesh.points[unsafe_offset=v2*4], mesh.points[unsafe_offset=v2*4+1], mesh.points[unsafe_offset=v2*4+2])
 
-    var pixel_uv = _pixel_uv_for_hit(mesh, v0, v1, v2, p0, p1, p2, ng_ff, ray_dir, inter.tHit, ctx.px_scale)
+    var pixel_uv = _pixel_uv_for_hit(mesh, v0, v1, v2, p0, p1, p2, ng_ff, ray_dir,
+                                     ctx.px_scale * path_ptr[].cone_len)
 
     var normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances)
     normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, ng_ff, ray_dir,

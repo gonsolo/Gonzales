@@ -30,6 +30,7 @@ def _dummy_path(ray: Ray_C, throughput: SpectralSample) -> PathState_C:
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
         Float32(0.0),   # mis_null_dist
         Float32(0.0),   # lastEnvNeePdf
+        Float32(0.0),   # cone_len
     )
 
 # ── Curve area lights (task #59: glowing_hair.pbrt used to render black) ───
@@ -171,6 +172,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
         Float32(0.0),   # mis_null_dist
         Float32(0.0),   # lastEnvNeePdf
+        Float32(0.0),   # cone_len
     )
     intersections[unsafe_offset=0] = inter
 

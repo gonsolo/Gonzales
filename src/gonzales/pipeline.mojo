@@ -1117,6 +1117,16 @@ def parse_and_render(
         # World units spanned by one pixel per unit distance (for mip LOD):
         # 2*tan(fov/2)/height. fov is in degrees along the shorter axis.
         var px_scale = Float32(2.0) * tan(psc[unsafe_offset=0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(Int(fh))
+        # Scale by the sampling rate, as pbrt does: integrators.cpp does
+        # `rayDiffScale = max(0.125, 1/sqrt(spp))` before ScaleDifferentials.
+        # The reason is that the FOOTPRINT a texture lookup should filter over
+        # is not the whole pixel -- it is the spacing between samples, because
+        # the spp samples themselves resolve everything finer than that.
+        # Without this we filtered over the full pixel at every sample count,
+        # i.e. 8x too wide at 64spp (three mip levels too coarse) on every
+        # textured surface, which is the wrong direction to be wrong in: it
+        # throws away texture detail that the samples had already paid for.
+        px_scale *= max(Float32(0.125), Float32(1.0) / sqrt(Float32(max(spp, 1))))
         var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
         if not _is_real_ptr(handle):
             mojo_parsed_free(psc)

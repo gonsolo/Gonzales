@@ -180,6 +180,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     wavelengths,
                     Float32(0.0),   # mis_null_dist
                     INV_FOUR_PI,    # lastEnvNeePdf (see PathState_C)
+                    Float32(0.0),   # cone_len: total path length, accumulated per bounce
                 )
                 pixel_idx_buf[unsafe_offset=idx] = this_pixel_idx
                 idx += 1
@@ -224,6 +225,12 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                                scene.blasNodesArr, scene.blasPrimIdsArr, scene.instances)
             if scene.sphereCount > 0:
                 test_spheres(scene.spheres, Int(scene.sphereCount), paths[unsafe_offset=i].ray, intersections.unsafe_offset(i))
+            # Same per-bounce cone growth the GPU does in accumulate_cone_gpu,
+            # including the specular-chain gate (see that kernel's comment).
+            if intersections[unsafe_offset=i].hit != Int8(0) and (
+                    paths[unsafe_offset=i].bounce == Int32(0)
+                    or paths[unsafe_offset=i].specularBounce != Int8(0)):
+                paths[unsafe_offset=i].cone_len += intersections[unsafe_offset=i].tHit
         for i in range(n):
             if paths[unsafe_offset=i].active == 0:
                 continue

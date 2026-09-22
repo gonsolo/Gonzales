@@ -43,6 +43,7 @@ def _dummy_path(estimate: SpectralSample, albedo: RGB) -> PathState_C:
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),  # wavelengths
         Float32(0.0),   # mis_null_dist
         Float32(0.0),   # lastEnvNeePdf
+        Float32(0.0),   # cone_len
     )
 
 def _clear_film_gpu_body(ctx: DeviceContext) raises:

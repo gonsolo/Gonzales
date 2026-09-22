@@ -233,6 +233,7 @@ def _make_path() -> PathState_C:
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
         Float32(0.0),   # mis_null_dist
         Float32(0.0),   # lastEnvNeePdf
+        Float32(0.0),   # cone_len
     )
 
 def test_sms_resolve_on_empty_reservoir_is_a_noop() raises:

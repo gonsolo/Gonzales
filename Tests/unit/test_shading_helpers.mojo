@@ -114,6 +114,7 @@ def _make_path(org: Vec3f, dir: Vec3f) -> PathState_C:
         SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
         Float32(0.0),   # mis_null_dist
         Float32(0.0),   # lastEnvNeePdf
+        Float32(0.0),   # cone_len
     )
 
 # ── _get_tri_verts ────────────────────────────────────────────────────────────
