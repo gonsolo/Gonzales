@@ -73,6 +73,31 @@ CASES["furnace-coateddiffuse"] = dict(
     scene="Scenes/furnace/coateddiffuse.pbrt", expect=1.0, res="64x64",
     crop=(16, 48), strict=False,
     why="coateddiffuse; coat absorbs at thickness 0.01, so Lo < L is CORRECT")
+# The ROUGH sibling, and the reason it exists: furnace-coateddiffuse above is
+# roughness 0, so until 2026-09-22 the suite had NEVER tested a rough coat --
+# the mechanical reason "rough coats" stayed its named remainder. The rough
+# case is far worse than the smooth one, and the loss grows with roughness on
+# a material whose coat can only absorb a few percent:
+#
+#     roughness   alpha    PT       VCM
+#     0.0         0.000    0.9149   0.9166
+#     0.1         0.316    0.7853   0.8305
+#     1.0         1.000    0.6292   0.6608
+#
+# (alpha = sqrt(roughness): pbrt's remaproughness, material_builder.mojo.)
+# That shape -- fine at alpha 0, ~35% gone by alpha 1 -- is the signature of
+# uncompensated single-scattering loss at the coat's rough interface, the
+# same defect ggx_ms_lobe already fixes for conductors, whose numbers before
+# that existed were strikingly similar (0.794 at alpha 0.4, 0.327 at 1.0;
+# see bxdf.mojo's Kulla-Conty header). It is NOT a VCM defect: PT is worse
+# than VCM at every roughness, so any "make VCM match PT" comparison on a
+# rough coat is calibrating against the more wrong of the two.
+CASES["furnace-coateddiffuse-rough"] = dict(
+    scene="Scenes/furnace/coateddiffuse-rough.pbrt", expect=1.0, res="64x64",
+    crop=(16, 48), strict=False,
+    why="coateddiffuse at roughness 0.1; a rough coat loses far more than the "
+        "coat's own absorption -- tracked as a KNOWN DEFECT, see the header "
+        "above and project_vcm_rough_coat_mis")
 # Conductor is swept over roughness and IS asserted at 1.0 -- as of
 # 2026-09-21 it conserves energy at every roughness. It did not used to, and
 # the reason it now does is four separate defects deep; the scene headers in
