@@ -161,13 +161,15 @@ struct BDPTVertex(TrivialRegisterPassable):
     """A vertex on a camera or light subpath."""
     var pos:    Point3f  # world position
     # THE GEOMETRIC normal (0 for volume). Keep it geometric: it is what
-    # _geom_term's area Jacobian and _connect's solid-angle -> area pdf
-    # conversions are built on, and a perturbed normal there is a real bias,
-    # not a shading choice. See shading_normal below.
+    # _connect's solid-angle -> area pdf conversions (pbrt's ConvertDensity)
+    # are built on, and a perturbed normal there is a real bias, not a
+    # shading choice. See shading_normal below.
     var normal: Vec3f
     # The SHADING normal -- `normal` after bump/normal maps. Only the BxDF
     # interface reads it (via _vertex_ctx), which is the split pbrt keeps as
-    # Vertex::ng vs Vertex::ns.
+    # Vertex::ng vs Vertex::ns. A connection's cosine at each endpoint comes
+    # out of that BxDF evaluation (f_cos), so this is also the normal that
+    # cosine is taken against.
     #
     # This field exists because of a measured mistake: the first version of
     # the light/photon-side surface-map work wrote the PERTURBED normal into
@@ -2306,7 +2308,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # approximation, the same one the light side uses, so a merge
             # pair filters the surface identically.
             # Saved BEFORE the perturbation: the stored vertex keeps this as its
-            # GEOMETRIC normal, because _geom_term and _connect's area-pdf
+            # GEOMETRIC normal, because _connect's solid-angle -> area pdf
             # conversions are built on it. See BDPTVertex.shading_normal.
             var gn_geo = gn
             gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
@@ -2487,7 +2489,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             # Bump/normal maps -- see the diffuse branch above.
             # Saved BEFORE the perturbation: the stored vertex keeps this as its
-            # GEOMETRIC normal, because _geom_term and _connect's area-pdf
+            # GEOMETRIC normal, because _connect's solid-angle -> area pdf
             # conversions are built on it. See BDPTVertex.shading_normal.
             var gn_geo = gn
             gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
@@ -2844,7 +2846,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             if dot(gn_c, ray_dir) > Float32(0): gn_c = gn_c * Float32(-1)
             # Bump/normal maps -- see the diffuse branch.
             # Saved BEFORE the perturbation: the stored vertex keeps this as its
-            # GEOMETRIC normal, because _geom_term and _connect's area-pdf
+            # GEOMETRIC normal, because _connect's solid-angle -> area pdf
             # conversions are built on it. See BDPTVertex.shading_normal.
             var gn_c_geo = gn_c
             gn_c = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
@@ -3091,7 +3093,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             if dot(gn_m, ray_dir) > Float32(0): gn_m = gn_m * Float32(-1)
             # Bump/normal maps -- see the diffuse branch.
             # Saved BEFORE the perturbation: the stored vertex keeps this as its
-            # GEOMETRIC normal, because _geom_term and _connect's area-pdf
+            # GEOMETRIC normal, because _connect's solid-angle -> area pdf
             # conversions are built on it. See BDPTVertex.shading_normal.
             var gn_m_geo = gn_m
             gn_m = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
@@ -3785,7 +3787,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             # Bump/normal maps -- see the camera-side diffuse branch.
             # Saved BEFORE the perturbation: the stored vertex keeps this as its
-            # GEOMETRIC normal, because _geom_term and _connect's area-pdf
+            # GEOMETRIC normal, because _connect's solid-angle -> area pdf
             # conversions are built on it. See BDPTVertex.shading_normal.
             var gn_geo = gn
             gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
@@ -3870,7 +3872,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             # Bump/normal maps -- see the diffuse branch above.
             # Saved BEFORE the perturbation: the stored vertex keeps this as its
-            # GEOMETRIC normal, because _geom_term and _connect's area-pdf
+            # GEOMETRIC normal, because _connect's solid-angle -> area pdf
             # conversions are built on it. See BDPTVertex.shading_normal.
             var gn_geo = gn
             gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
@@ -4004,7 +4006,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             if dot(gn_c, ray_dir) > Float32(0): gn_c = gn_c * Float32(-1)
             # Bump/normal maps -- see the diffuse branch.
             # Saved BEFORE the perturbation: the stored vertex keeps this as its
-            # GEOMETRIC normal, because _geom_term and _connect's area-pdf
+            # GEOMETRIC normal, because _connect's solid-angle -> area pdf
             # conversions are built on it. See BDPTVertex.shading_normal.
             var gn_c_geo = gn_c
             gn_c = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
@@ -4144,7 +4146,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             if dot(gn_m, ray_dir) > Float32(0): gn_m = gn_m * Float32(-1)
             # Bump/normal maps -- see the diffuse branch.
             # Saved BEFORE the perturbation: the stored vertex keeps this as its
-            # GEOMETRIC normal, because _geom_term and _connect's area-pdf
+            # GEOMETRIC normal, because _connect's solid-angle -> area pdf
             # conversions are built on it. See BDPTVertex.shading_normal.
             var gn_m_geo = gn_m
             gn_m = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
@@ -4595,42 +4597,6 @@ def _eval_vertex_spectral(
         spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths).f_cos
 
 @always_inline
-def _geom_term(
-    a: BDPTVertex, b: BDPTVertex,
-) -> Float32:
-    """Geometry factor G(a,b) = |cos_a| × |cos_b| / dist².
-
-    SHADING normals, deliberately, and this is pbrt's split rather than an
-    approximation: G here is not the area Jacobian, it is where the two
-    BSDFs' cosine factors live (`_eval_vertex` returns f with no cosine of
-    its own), so it takes the normal the BSDF is defined against. pbrt-v4's
-    own G() reads v.ns() for exactly this reason, and puts ng() in
-    Vertex::ConvertDensity instead -- which is _connect's cos_cv/cos_lv, and
-    those DO use the geometric normal. Getting this backwards is not a
-    subtlety: on a diffuse vertex the BSDF is constant, so G is the ONLY
-    place a normal map can act at a connection, and using the geometric
-    normal here made VCM ignore normal maps entirely again (measured:
-    cornell-box-normalmap map/no-map back to 1.0001)."""
-    var d3 = b.pos - a.pos
-    var dist2 = d3.length_sq()
-    if dist2 < Float32(1e-8): return Float32(0)
-    var d = sqrt(dist2)
-    var dir = d3.to_simd() / d
-    var cos_a: Float32
-    if a.is_surface == Int32(1):
-        cos_a = dot(dir, a.shading_normal.to_simd())
-        if cos_a < Float32(0): cos_a = -cos_a
-    else:
-        cos_a = Float32(1)   # volume: no cosine
-    var cos_b: Float32
-    if b.is_surface == Int32(1):
-        cos_b = dot(dir, b.shading_normal.to_simd())
-        if cos_b < Float32(0): cos_b = -cos_b
-    else:
-        cos_b = Float32(1)
-    return cos_a * cos_b / dist2
-
-@always_inline
 def _bdpt_vertex_pdfs(
     v: BDPTVertex, dir_to_other: Vec3f, ref sd: SceneDescriptor2_C,
 ) -> Tuple[Float32, Float32]:
@@ -4723,101 +4689,21 @@ def _connect(
     at all (never stored as LVC vertices, see this file's opening VCM
     comment) -- both deliberately scoped boundaries, not silent
     omissions."""
-    if cv.is_delta != Int32(0) or lv.is_delta != Int32(0):
+    # THE connection estimator lives in _connect_unweighted; this is that
+    # times visibility. They used to be two byte-for-byte copies (one for the
+    # deferred Vulkan-RT shadow-ray path, which resolves visibility later),
+    # and a copy is how a fix lands in one and not the other -- see
+    # feedback_unify_while_fixing. Evaluating the BSDFs first also skips the
+    # shadow ray entirely for a connection that is zero anyway.
+    var (contrib, valid) = _connect_unweighted(cv, lv, sd, mis_vm_weight_factor)
+    if not valid or contrib.is_black():
         return SpectralSample(Float32(0))
-
-    var d3 = lv.pos - cv.pos
-    var dist2 = d3.length_sq()
-    if dist2 < Float32(1e-8):
-        return SpectralSample(Float32(0))
-    var dist = sqrt(dist2)
-
-    # Determine medium for the shadow segment.
-    # Use camera vertex's medium (both should agree in a well-defined scene).
-    var seg_med = cv.med_idx
-    var wl = cv.wavelengths
-    var Tr = _visible_transmittance(cv.pos, lv.pos, seg_med, sd, scratch, wl)
+    # Medium for the shadow segment: the camera vertex's (both endpoints agree
+    # in a well-defined scene).
+    var Tr = _visible_transmittance(cv.pos, lv.pos, cv.med_idx, sd, scratch, cv.wavelengths)
     if Tr.is_black():
         return SpectralSample(Float32(0))
-
-    var dir = d3.to_simd() / dist
-    var neg_dir = -dir
-
-    # Both endpoints evaluate in the spectral domain and multiply there --
-    # the product of two spectra, not the product of two RGB triples, which
-    # is the entire point. This used to be a dual RGB/spectral path whose
-    # spectral branch evaluated at the LIGHT vertex's own wavelengths and
-    # discarded the camera subpath's, because LVC vertices each carried an
-    # independent wavelength draw and there was no consistent basis to
-    # multiply in. Every subpath in a pass now shares one wavelength set
-    # (see _bdpt_pass_wavelengths), so cv and lv are guaranteed to agree and
-    # the fallback is gone -- including for hair and measured, which the old
-    # spectral branch had to route around.
-    var f_cam_spec = _eval_vertex_spectral(cv, dir, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
-    var f_lgt_spec: SpectralSample
-    if lv.is_light == Int32(1):
-        # Light emission: f_lgt = Le, no cosine here (_geom_term supplies
-        # cos_l at the light surface) and emission only leaves the front face.
-        var ln = lv.normal.to_simd()
-        var cos_l = dot(neg_dir, ln)
-        if cos_l <= Float32(0):
-            return SpectralSample(Float32(0))
-        f_lgt_spec = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, lv.alb.r, lv.alb.g, lv.alb.b, wl)
-    else:
-        f_lgt_spec = _eval_vertex_spectral(lv, neg_dir, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
-    var f_combined = f_cam_spec * f_lgt_spec
-
-    # Geometry term G = |cos_cv| × |cos_lv| / dist²
-    var G = _geom_term(cv, lv)
-
-    var contrib = (cv.beta * lv.beta * f_combined * G * Tr)
-
-    # VCM Stage 2b/2d: real MIS weight for diffuse/conductor/light-source
-    # connections (see this function's docstring + _bdpt_vertex_pdfs'/
-    # project_vcm_stage2_mis_derivation memory for the full derivation and
-    # its "not independently verified" caveats). cos_cv/cos_lv reuse the
-    # same geometry _geom_term computed internally, recomputed here since
-    # that helper doesn't expose them.
-    #
-    # GEOMETRIC normals here, unlike _geom_term's: these are the solid-angle
-    # -> area density conversion (pbrt's Vertex::ConvertDensity, which reads
-    # ng()), not a BSDF cosine. A perturbed normal in a density is a bias.
-    if _bdpt_vertex_mis_scoped(cv) and (lv.is_light == Int32(1) or _bdpt_vertex_mis_scoped(lv)):
-        var cos_cv = abs(dot(dir, cv.normal.to_simd()))
-        var cos_lv = abs(dot(neg_dir, lv.normal.to_simd()))
-        var (camera_bsdf_dir_pdf_w, camera_bsdf_rev_pdf_w) = _bdpt_vertex_pdfs(cv, dir, sd)
-        # Light-source vertex: forward and reverse pdf are the SAME
-        # cosine-weighted-emission formula (no real "wo" to distinguish a
-        # direction from, unlike a genuine BSDF bounce) -- REASONED, not
-        # independently verified against a reference light-source-specific
-        # connect path.
-        var light_bsdf_dir_pdf_w: Float32
-        var light_bsdf_rev_pdf_w: Float32
-        if lv.is_light == Int32(1):
-            light_bsdf_dir_pdf_w = cos_lv / PI
-            light_bsdf_rev_pdf_w = cos_lv / PI
-        else:
-            var (ldp, lrp) = _bdpt_vertex_pdfs(lv, neg_dir, sd)
-            light_bsdf_dir_pdf_w = ldp
-            light_bsdf_rev_pdf_w = lrp
-        var camera_bsdf_dir_pdf_a = camera_bsdf_dir_pdf_w * cos_lv / dist2
-        var light_bsdf_dir_pdf_a = light_bsdf_dir_pdf_w * cos_cv / dist2
-        var w_light = camera_bsdf_dir_pdf_a * (mis_vm_weight_factor + lv.dVCM + lv.dVC * light_bsdf_rev_pdf_w)
-        var w_camera = light_bsdf_dir_pdf_a * (mis_vm_weight_factor + cv.dVCM + cv.dVC * camera_bsdf_rev_pdf_w)
-        var mis_weight = Float32(1) / (w_light + Float32(1) + w_camera)
-        contrib *= mis_weight
-    elif cv.is_surface == Int32(0) and lv.is_light == Int32(1) and lv.pdf_fwd > Float32(0):
-        # Volume vertex -> light source: MIS against the phase-hit strategy
-        # (the camera path continuing by uniform-sphere sampling and landing
-        # on this emitter), whose pdf is the isotropic phase pdf 1/(4pi).
-        # lv.pdf_fwd is the light point's area pdf; convert to solid angle at
-        # cv. The hit side computes the same pdf in the same measure.
-        var cos_lv_vol = abs(dot(neg_dir, lv.normal.to_simd()))
-        if cos_lv_vol > Float32(1e-8):
-            var pdf_light_w_vol = lv.pdf_fwd * dist2 / cos_lv_vol
-            contrib *= power_heuristic(pdf_light_w_vol, INV_FOUR_PI)
-
-    return contrib
+    return contrib * Tr
 
 def _connect_unweighted(
     cv: BDPTVertex,  # camera-subpath vertex
@@ -4884,32 +4770,49 @@ def _connect_unweighted(
     var f_cam_spec = _eval_vertex_spectral(cv, dir, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
     var f_lgt_spec: SpectralSample
     if lv.is_light == Int32(1):
-        # Light emission: f_lgt = Le, no cosine here (_geom_term supplies
-        # cos_l at the light surface) and emission only leaves the front face.
+        # Light emission: Le carries no cosine of its own, so the emitting
+        # surface's cosine is applied HERE, explicitly -- see the geometry
+        # note below for why it can no longer come from a shared G.
         var ln = lv.normal.to_simd()
         var cos_l = dot(neg_dir, ln)
         if cos_l <= Float32(0):
             return (SpectralSample(Float32(0)), False)
-        f_lgt_spec = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, lv.alb.r, lv.alb.g, lv.alb.b, wl)
+        f_lgt_spec = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, lv.alb.r, lv.alb.g, lv.alb.b, wl) * cos_l
     else:
         f_lgt_spec = _eval_vertex_spectral(lv, neg_dir, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
     var f_combined = f_cam_spec * f_lgt_spec
 
-    # Geometry term G = |cos_cv| × |cos_lv| / dist²
-    var G = _geom_term(cv, lv)
-
-    var contrib = cv.beta * lv.beta * f_combined * G
+    # GEOMETRY: 1/d^2 ONLY. Each endpoint's cosine is already inside its f_cos.
+    #
+    # This used to be G = |cos_cv| |cos_lv| / d^2, on top of two
+    # _eval_vertex_spectral values that are f*cos -- so every connection
+    # applied each endpoint's surface cosine TWICE and delivered roughly half
+    # its MIS share. It hid for a long time because the white-furnace cells
+    # cannot see it: there the camera and light vertices lie on one plane, G
+    # is ~0 and connections contribute nothing at all. The closed cavity,
+    # where connections carry most of the answer, read 0.638 at the default
+    # light-path count against an analytic 1.0 -- and the per-strategy split
+    # showed the deficit tracking connect's own contribution almost exactly
+    # (0.356 delivered / 0.35 missing at N=1024, 0.261 / 0.25 at N=4096).
+    #
+    # Same mistake LobeEval's docstring records merging having made (f*cos
+    # where the estimator wanted bare f); this is its connection-side twin.
+    # Putting the cosines in f_cos rather than dividing them back out keeps
+    # the lobe's OWN cosine at each end, which is not always |cos(dir, n)| --
+    # hair carries the fibre cosine and a volume none -- so this is right for
+    # every lobe kind, where `f_cos / cos_used * cos*cos` would not be. It is
+    # exactly the form _bdpt_connect_to_camera (t=1) already uses.
+    var contrib = cv.beta * lv.beta * f_combined * (Float32(1) / dist2)
 
     # VCM Stage 2b/2d: real MIS weight for diffuse/conductor/light-source
     # connections (see this function's docstring + _bdpt_vertex_pdfs'/
     # project_vcm_stage2_mis_derivation memory for the full derivation and
-    # its "not independently verified" caveats). cos_cv/cos_lv reuse the
-    # same geometry _geom_term computed internally, recomputed here since
-    # that helper doesn't expose them.
+    # its "not independently verified" caveats).
     #
-    # GEOMETRIC normals here, unlike _geom_term's: these are the solid-angle
-    # -> area density conversion (pbrt's Vertex::ConvertDensity, which reads
-    # ng()), not a BSDF cosine. A perturbed normal in a density is a bias.
+    # GEOMETRIC normals here, unlike the shading normal the two f_cos above
+    # were evaluated against: these are the solid-angle -> area density
+    # conversion (pbrt's Vertex::ConvertDensity, which reads ng()), not a
+    # BSDF cosine. A perturbed normal in a density is a bias.
     if _bdpt_vertex_mis_scoped(cv) and (lv.is_light == Int32(1) or _bdpt_vertex_mis_scoped(lv)):
         var cos_cv = abs(dot(dir, cv.normal.to_simd()))
         var cos_lv = abs(dot(neg_dir, lv.normal.to_simd()))
