@@ -25,7 +25,7 @@ from .restir_vol import (
 from .reservoir import reservoir_update, reservoir_finalize
 from .restir_gi import gi_reservoir_io_null
 from .postprocess import _firefly_clamp_pixel, _atrous_tap_weight, _atrous_spatial_weight
-from .sampling import power_heuristic, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gen_primary_ray_state
+from .sampling import power_heuristic, encode_morton2, sobol_get_sample_index, sobol_sample, derive_pcg_seeds, gen_primary_ray_state
 from .spectrum import SampledWavelengths, SpectralSample, SpectralHandle, null_spectral_handle, rgb_illuminant_to_spectral_sample, rgb_bands_to_spectral_sample, spectral_sample_to_rgb, spec_refl_unbounded
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
 from max.gpu.host._nvidia_cuda import CUDA

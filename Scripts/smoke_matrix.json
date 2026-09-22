@@ -1,167 +1,167 @@
 {
   "analytic-sphere.pt": {
-    "mean": 0.002876,
+    "mean": 0.002868,
     "median": 0.0,
     "tol": 0.03
   },
   "analytic-sphere.sppm": {
-    "mean": 0.002816,
+    "mean": 0.002784,
     "median": 0.0,
     "tol": 0.03
   },
   "analytic-sphere.vcm": {
-    "mean": 0.002881,
+    "mean": 0.002871,
     "median": 0.0,
     "tol": 0.03
   },
   "baseline-diffuse.pt": {
-    "mean": 0.11072,
-    "median": 0.051433,
+    "mean": 0.111511,
+    "median": 0.052575,
     "tol": 0.03
   },
   "baseline-diffuse.sppm": {
-    "mean": 0.11197,
-    "median": 0.050548,
+    "mean": 0.107345,
+    "median": 0.050823,
     "tol": 0.03
   },
   "baseline-diffuse.vcm": {
-    "mean": 0.113124,
-    "median": 0.052347,
+    "mean": 0.110325,
+    "median": 0.052152,
     "tol": 0.03
   },
   "chromatic-medium.pt": {
-    "mean": 0.355735,
-    "median": 0.341726,
+    "mean": 0.355716,
+    "median": 0.341678,
     "tol": 0.03
   },
   "chromatic-medium.sppm": {
-    "mean": 0.398296,
-    "median": 0.39528,
+    "mean": 0.397897,
+    "median": 0.395243,
     "tol": 0.03
   },
   "chromatic-medium.vcm": {
-    "mean": 0.353292,
-    "median": 0.338068,
+    "mean": 0.3532,
+    "median": 0.337976,
     "tol": 0.03
   },
   "closed-cavity.pt": {
-    "mean": 0.99621,
-    "median": 0.984992,
+    "mean": 0.996428,
+    "median": 0.98585,
     "tol": 0.03
   },
   "closed-cavity.sppm": {
-    "mean": 0.874706,
-    "median": 0.869947,
+    "mean": 0.874877,
+    "median": 0.868667,
     "tol": 0.03
   },
   "closed-cavity.vcm": {
-    "mean": 0.992531,
-    "median": 0.988167,
+    "mean": 0.992626,
+    "median": 0.989431,
     "tol": 0.03
   },
   "curves-hair.pt": {
-    "mean": 2.979038,
-    "median": 0.079173,
+    "mean": 2.950261,
+    "median": 0.070521,
     "tol": 0.03
   },
   "curves-hair.sppm": {
-    "mean": 3.081274,
-    "median": 0.04514,
+    "mean": 3.062146,
+    "median": 0.072297,
     "tol": 0.03
   },
   "curves-hair.vcm": {
-    "mean": 3.038206,
-    "median": 0.04492,
+    "mean": 3.046377,
+    "median": 0.086584,
     "tol": 0.03
   },
   "many-lights.pt": {
-    "mean": 0.664903,
-    "median": 0.477812,
+    "mean": 0.663592,
+    "median": 0.473472,
     "tol": 0.03
   },
   "many-lights.sppm": {
-    "mean": 0.677577,
-    "median": 0.5174,
+    "mean": 0.664534,
+    "median": 0.526008,
     "tol": 0.03
   },
   "many-lights.vcm": {
-    "mean": 0.675775,
-    "median": 0.530278,
+    "mean": 0.675257,
+    "median": 0.548825,
     "tol": 0.03
   },
   "medium-sphere-light.pt": {
-    "mean": 0.0249,
-    "median": 0.009003,
+    "mean": 0.024909,
+    "median": 0.008998,
     "tol": 0.03
   },
   "medium-sphere-light.sppm": {
-    "mean": 0.027625,
-    "median": 0.006008,
+    "mean": 0.027621,
+    "median": 0.006433,
     "tol": 0.03
   },
   "medium-sphere-light.vcm": {
-    "mean": 0.026421,
-    "median": 0.011011,
+    "mean": 0.026429,
+    "median": 0.011419,
     "tol": 0.03
   },
   "mnee-through-glass.pt": {
-    "mean": 0.205605,
-    "median": 0.116625,
+    "mean": 0.207605,
+    "median": 0.116855,
     "tol": 0.03
   },
   "mnee-through-glass.sppm": {
-    "mean": 0.219914,
-    "median": 0.117574,
+    "mean": 0.203453,
+    "median": 0.115735,
     "tol": 0.03
   },
   "mnee-through-glass.vcm": {
-    "mean": 0.233673,
-    "median": 0.124434,
+    "mean": 0.22037,
+    "median": 0.122656,
     "tol": 0.03
   },
   "normal-map.pt": {
-    "mean": 0.077713,
-    "median": 0.023315,
+    "mean": 0.077427,
+    "median": 0.023384,
     "tol": 0.03
   },
   "normal-map.sppm": {
-    "mean": 0.07326,
-    "median": 0.023098,
+    "mean": 0.0742,
+    "median": 0.022797,
     "tol": 0.03
   },
   "normal-map.vcm": {
-    "mean": 0.074615,
-    "median": 0.021508,
+    "mean": 0.075112,
+    "median": 0.021571,
     "tol": 0.03
   },
   "sss-slab.pt": {
-    "mean": 49.626854,
-    "median": 57.067177,
+    "mean": 49.630264,
+    "median": 57.083824,
     "tol": 0.03
   },
   "sss-slab.sppm": {
-    "mean": 41.505878,
+    "mean": 41.487793,
     "median": 60.0,
     "tol": 0.03
   },
   "sss-slab.vcm": {
-    "mean": 42.674332,
+    "mean": 42.693863,
     "median": 60.414257,
     "tol": 0.03
   },
   "subsurface-coated.pt": {
-    "mean": 0.110324,
-    "median": 0.043214,
+    "mean": 0.109893,
+    "median": 0.043221,
     "tol": 0.03
   },
   "subsurface-coated.sppm": {
-    "mean": 0.100238,
-    "median": 0.037526,
+    "mean": 0.101145,
+    "median": 0.039043,
     "tol": 0.03
   },
   "subsurface-coated.vcm": {
-    "mean": 0.098246,
-    "median": 0.035288,
+    "mean": 0.098602,
+    "median": 0.0361,
     "tol": 0.03
   }
 }

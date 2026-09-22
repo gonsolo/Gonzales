@@ -274,12 +274,140 @@ def gaussian_erfinv(y: Float32) -> Float32:
     else:
         return Float32(3.4e38) if y > Float32(0.0) else Float32(-3.4e38)
 
-# Importance-sample a 1D Gaussian filter.
+# ── Pixel reconstruction filters: THE film-filter implementation ─────────────
+# One definition for all three integrators. The path tracer used to be the
+# only one to apply a filter at all -- SPPM and VCM jittered uniformly inside
+# the pixel, silently ignoring the scene's PixelFilter -- and its Gaussian was
+# not pbrt's. That second point is why gonzales' path tracer looked visibly
+# SOFTER than pbrt with identical parameters (measured on cornell-box, sigma
+# 2.5 / radius 5: blurring VCM's unfiltered emitter with pbrt's kernel
+# reproduces pbrt's render row by row, RMS 0.040; with the old kernel it
+# reproduces the old path tracer, RMS 0.058; the cross-matches are 0.29/0.34).
+#
+# Filter types follow the parser: 0 = gaussian, 1 = triangle, 2 = box.
+
 @always_inline
-def gaussian_sample_1d(u: Float32, norm: Float32, sigma: Float32, radius: Float32) -> Float32:
+def gaussian_filter_sample_1d(u: Float32, sigma: Float32, radius: Float32) -> Float32:
+    """Sample one axis of pbrt-v4's GaussianFilter, whose kernel is
+
+        f(x) = max(0, g(x) - g(radius)),   g(x) = exp(-x^2 / (2 sigma^2))
+
+    on [-radius, radius]. The `- g(radius)` term is what the old sampler here
+    left out: it takes the kernel smoothly to zero at its edge, and with a
+    wide filter it removes a LOT -- g(r)/g(0) is e^-2 = 13.5% at sigma 2.5,
+    radius 5, and 84% for glowing_hair's sigma 2.5, radius 1.5. A plain
+    Gaussian truncated at the radius keeps those tails and blurs visibly more.
+
+    The CDF has a closed form but no closed-form inverse, so it is inverted by
+    Newton's method with a bisection bracket: every step stays inside
+    [lo, hi], and a step that would leave it, or a near-zero density at the
+    edges, falls back to bisection. It converges in a handful of iterations
+    from the truncated-Gaussian inverse as the starting point. Exact, so the
+    sample weight f/pdf is constant -- the film needs no per-sample weights."""
+    if radius <= Float32(0.0) or sigma <= Float32(0.0):
+        return Float32(0.0)
+    var s2 = sigma * sqrt(Float32(2.0))
+    var inv2s2 = Float32(1.0) / (Float32(2.0) * sigma * sigma)
+    var gr = exp(-(radius * radius) * inv2s2)
+    var c = sigma * Float32(1.2533141373155003)   # sigma * sqrt(pi/2)
+    var er = _erf(radius / s2)
+    var z = Float32(2.0) * (c * er - gr * radius)  # integral of f over [-r, r]
+    if z <= Float32(1e-12):
+        return (u - Float32(0.5)) * Float32(2.0) * radius
+    var target = u * z
+    var lo = -radius
+    var hi = radius
+    # Start from the truncated-Gaussian inverse: close whenever g(r) is small,
+    # and always inside the bracket.
+    var norm = Float32(0.5) * (Float32(1.0) + er)
     var u_s = (Float32(1.0) - norm) + u * (Float32(2.0) * norm - Float32(1.0))
-    var x = sigma * sqrt(Float32(2.0)) * gaussian_erfinv(Float32(2.0) * u_s - Float32(1.0))
-    return max(-radius, min(radius, x))
+    var x = max(lo, min(hi, s2 * gaussian_erfinv(Float32(2.0) * u_s - Float32(1.0))))
+    for _ in range(16):
+        var fcdf = c * (_erf(x / s2) + er) - gr * (x + radius) - target
+        if fcdf > Float32(0.0):
+            hi = x
+        else:
+            lo = x
+        var dens = exp(-(x * x) * inv2s2) - gr
+        var xn: Float32
+        if dens > Float32(1e-7):
+            xn = x - fcdf / dens
+        else:
+            xn = Float32(0.5) * (lo + hi)
+        if xn <= lo or xn >= hi:
+            xn = Float32(0.5) * (lo + hi)
+        var step = xn - x
+        x = xn
+        if abs(step) < Float32(1e-6) * radius:
+            break
+    return x
+
+@always_inline
+def filter_sample_2d(u0: Float32, u1: Float32, filter_type: Int32, sigma: Float32,
+                     radius_x: Float32, radius_y: Float32) -> Tuple[Float32, Float32]:
+    """Film-plane offset from the pixel CENTRE for one camera sample, drawn in
+    proportion to the scene's PixelFilter. THE one filter sampler: the path
+    tracer's primary rays, SPPM's visible points and VCM's camera subpaths all
+    call this, so they cannot disagree about how sharp an image is."""
+    if filter_type == Int32(1):
+        return (triangle_sample_1d(u0, radius_x), triangle_sample_1d(u1, radius_y))
+    elif filter_type == Int32(2):
+        return ((u0 - Float32(0.5)) * Float32(2.0) * radius_x,
+                (u1 - Float32(0.5)) * Float32(2.0) * radius_y)
+    return (gaussian_filter_sample_1d(u0, sigma, radius_x),
+            gaussian_filter_sample_1d(u1, sigma, radius_y))
+
+# The film filter as ONE value: (type, sigma, radius_x, radius_y), type as a
+# float. One SIMD argument threads through every camera-ray kernel instead of
+# four scalars -- fewer places for a call site to pass them in the wrong
+# order, and a GPU kernel argument that is DevicePassable as-is. Deliberately
+# never defaulted anywhere: a camera-ray site that forgets it must fail to
+# compile, not silently box-filter (which is exactly how SPPM and VCM ignored
+# the scene's PixelFilter for their whole history).
+comptime FilmFilter = SIMD[DType.float32, 4]
+
+@always_inline
+def film_filter_of(filter_type: Int32, sigma: Float32, radius_x: Float32,
+                   radius_y: Float32) -> FilmFilter:
+    return FilmFilter(Float32(filter_type), sigma, radius_x, radius_y)
+
+@always_inline
+def film_filter_offset(u0: Float32, u1: Float32, ff: FilmFilter) -> Tuple[Float32, Float32]:
+    """filter_sample_2d on a packed FilmFilter."""
+    return filter_sample_2d(u0, u1, ff[0].cast[DType.int32](), ff[1], ff[2], ff[3])
+
+@always_inline
+def filter_eval_2d(dx: Float32, dy: Float32, filter_type: Int32, sigma: Float32,
+                   radius_x: Float32, radius_y: Float32) -> Float32:
+    """The filter kernel itself at offset (dx, dy), unnormalised -- the same
+    shape filter_sample_2d samples. Used to spread a light-traced splat over
+    the pixels its footprint covers (pbrt's RGBFilm::AddSplat); divide by
+    filter_integral_2d for a normalised weight."""
+    if abs(dx) >= radius_x or abs(dy) >= radius_y:
+        return Float32(0.0)
+    if filter_type == Int32(1):
+        return (radius_x - abs(dx)) * (radius_y - abs(dy))
+    elif filter_type == Int32(2):
+        return Float32(1.0)
+    var inv2s2 = Float32(1.0) / (Float32(2.0) * sigma * sigma)
+    var fx = exp(-(dx * dx) * inv2s2) - exp(-(radius_x * radius_x) * inv2s2)
+    var fy = exp(-(dy * dy) * inv2s2) - exp(-(radius_y * radius_y) * inv2s2)
+    return max(fx, Float32(0.0)) * max(fy, Float32(0.0))
+
+@always_inline
+def filter_integral_2d(filter_type: Int32, sigma: Float32, radius_x: Float32,
+                       radius_y: Float32) -> Float32:
+    """Integral of filter_eval_2d over its support (pbrt's Filter::Integral)."""
+    if filter_type == Int32(1):
+        return radius_x * radius_x * radius_y * radius_y
+    elif filter_type == Int32(2):
+        return Float32(4.0) * radius_x * radius_y
+    var s2 = sigma * sqrt(Float32(2.0))
+    var c = sigma * Float32(1.2533141373155003)
+    var inv2s2 = Float32(1.0) / (Float32(2.0) * sigma * sigma)
+    var ix = Float32(2.0) * (c * _erf(radius_x / s2) - exp(-(radius_x * radius_x) * inv2s2) * radius_x)
+    var iy = Float32(2.0) * (c * _erf(radius_y / s2) - exp(-(radius_y * radius_y) * inv2s2) * radius_y)
+    return ix * iy
 
 # erf via Abramowitz & Stegun 7.1.26 (max error ≤ 1.5e-7).
 def _erf(x: Float32) -> Float32:
@@ -395,17 +523,12 @@ def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     var sobol_idx   = sobol_get_sample_index(morton_idx, 0, log2spp, n_base4)
     var u0 = sobol_sample(Int(sobol_idx), 0, seed_dim0, sobol_matrices)
     var u1 = sobol_sample(Int(sobol_idx), 1, seed_dim1, sobol_matrices)
-    var deltaX: Float32
-    var deltaY: Float32
-    if filter_type == Int32(1):
-        deltaX = triangle_sample_1d(u0, filter_support_x)
-        deltaY = triangle_sample_1d(u1, filter_support_y)
-    elif filter_type == Int32(2):
-        deltaX = (u0 - Float32(0.5)) * Float32(2.0) * filter_support_x
-        deltaY = (u1 - Float32(0.5)) * Float32(2.0) * filter_support_y
-    else:
-        deltaX = gaussian_sample_1d(u0, filter_norm_x, filter_sigma, filter_support_x)
-        deltaY = gaussian_sample_1d(u1, filter_norm_y, filter_sigma, filter_support_y)
+    # filter_norm_x/_y are no longer read: they normalised the old truncated
+    # Gaussian, and filter_sample_2d computes pbrt's kernel from sigma and the
+    # radii directly. Left in the signature so the GPU kernels that forward
+    # them keep their argument layout.
+    var (deltaX, deltaY) = filter_sample_2d(u0, u1, filter_type, filter_sigma,
+                                            filter_support_x, filter_support_y)
     var filmX = Float32(px) + Float32(0.5) + deltaX
     var filmY = Float32(py) + Float32(0.5) + deltaY
 

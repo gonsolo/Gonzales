@@ -8,7 +8,7 @@ from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, sphere_outward_normal
 from .bvh import SceneDescriptor2_C, traverse_bvh2_core, test_spheres, any_hit_bvh2_core
 from .shading import shade_core_cpu_nee, GIPendingX1, gi_pending_x1_init
 from .rng import PCG32
-from .sampling import TileSamplerParams_C, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, gaussian_norm, mix_bits_u64, gen_primary_ray_state
+from .sampling import TileSamplerParams_C, encode_morton2, sobol_get_sample_index, sobol_sample, derive_pcg_seeds, gaussian_norm, mix_bits_u64, gen_primary_ray_state
 from .guide import GuideGrid, guide_merge, null_guide
 from .spectrum import SampledWavelengths, SpectralSample, spectral_sample_to_rgb
 from .gpu import _sample_medium_core

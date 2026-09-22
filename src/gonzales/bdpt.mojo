@@ -32,7 +32,8 @@ from .bvh import (
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
     render_aux_buffers,
 )
-from .sampling import power_heuristic, sample_ggx_vndf, sample_cosine_hemisphere_world, mix_bits_u64, camera_ray_from_film_xy
+from .sampling import power_heuristic, sample_ggx_vndf, sample_cosine_hemisphere_world, mix_bits_u64, camera_ray_from_film_xy, \
+    FilmFilter, film_filter_of, film_filter_offset, filter_eval_2d, filter_integral_2d
 from .rng import PCG32
 from .transform import matrix_invert
 from .pbrt_parser import ParsedScene_Mojo
@@ -1113,6 +1114,48 @@ def _bdpt_world_to_raster(
         return (False, Float32(0), Float32(0), Float32(0))
     return (True, fx, fy, cos_theta)
 
+@always_inline
+def _bdpt_splat_filtered[use_atomics: Bool](
+    accum: Pointer[Float32, MutUntrackedOrigin],   # 3 floats per pixel
+    fx: Float32, fy: Float32,                     # continuous raster position
+    rgb_r: Float32, rgb_g: Float32, rgb_b: Float32,
+    fw: Int, fh: Int,
+    ff: FilmFilter,
+):
+    """Spread one t=1 splat over every pixel its PixelFilter footprint covers,
+    weighted f(p - pixel centre) / integral(f) -- pbrt-v4's RGBFilm::AddSplat,
+    which normalises the splat by the filter integral at output time.
+
+    Splats used to land on the single pixel containing p. That is a box
+    filter, so while the camera half of VCM now reconstructs through the
+    scene's PixelFilter, its light-traced half would have stayed box-sharp --
+    the two halves of one image filtered differently. For a half-pixel box this
+    is exactly the old behaviour: weight 1, one pixel. Energy is conserved in
+    expectation, since the weights over the footprint sum to integral(f)."""
+    var ftype = ff[0].cast[DType.int32]()
+    var rx = ff[2]
+    var ry = ff[3]
+    var inv_int = Float32(1.0) / max(filter_integral_2d(ftype, ff[1], rx, ry), Float32(1e-12))
+    var x0 = max(0, Int(floor(fx + Float32(0.5) - rx)))
+    var x1 = min(fw - 1, Int(floor(fx + Float32(0.5) + rx)))
+    var y0 = max(0, Int(floor(fy + Float32(0.5) - ry)))
+    var y1 = min(fh - 1, Int(floor(fy + Float32(0.5) + ry)))
+    for py in range(y0, y1 + 1):
+        for px in range(x0, x1 + 1):
+            var w = filter_eval_2d(fx - (Float32(px) + Float32(0.5)), fy - (Float32(py) + Float32(0.5)),
+                                   ftype, ff[1], rx, ry) * inv_int
+            if w <= Float32(0.0):
+                continue
+            var o = (py * fw + px) * 3
+            comptime if use_atomics:
+                _ = Atomic[DType.float32].fetch_add(accum.unsafe_offset(o + 0), rgb_r * w)
+                _ = Atomic[DType.float32].fetch_add(accum.unsafe_offset(o + 1), rgb_g * w)
+                _ = Atomic[DType.float32].fetch_add(accum.unsafe_offset(o + 2), rgb_b * w)
+            else:
+                accum[unsafe_offset=o + 0] += rgb_r * w
+                accum[unsafe_offset=o + 1] += rgb_g * w
+                accum[unsafe_offset=o + 2] += rgb_b * w
+
 def _bdpt_connect_to_camera(
     lv: BDPTVertex,
     ref sd: SceneDescriptor2_C,
@@ -1124,9 +1167,11 @@ def _bdpt_connect_to_camera(
     px_scale: Float32,
     n_light_paths_f: Float32,
     mis_vm_weight_factor: Float32,
-) -> Tuple[Bool, Int32, SpectralSample]:
+) -> Tuple[Bool, Float32, Float32, SpectralSample]:
     """The t=1 strategy: connect a LIGHT-subpath vertex directly to the
-    camera and return the film pixel it lands on plus its contribution.
+    camera and return the continuous raster position it lands on plus its
+    contribution. The caller spreads it over the filter footprint
+    (_bdpt_splat_filtered), as pbrt's RGBFilm::AddSplat does.
     Ported from SmallVCM's `ConnectToCamera` (vertexcm.hxx), the same
     reference the rest of this file's MIS quantities came from.
 
@@ -1163,7 +1208,7 @@ def _bdpt_connect_to_camera(
 
     Returns (ok, pixel_index, contribution)."""
     if lv.is_delta != Int32(0) or lv.is_surface == Int32(0):
-        return (False, Int32(-1), SpectralSample(Float32(0)))
+        return (False, Float32(-1), Float32(-1), SpectralSample(Float32(0)))
     # The light-source vertex itself is NEVER splatted. Connecting the
     # emission point straight to the camera builds the length-1 path
     # "camera sees the emitter", which the camera path already credits in
@@ -1183,35 +1228,35 @@ def _bdpt_connect_to_camera(
     # lv0 stays in the light-vertex cache: CAMERA-VERTEX connections to it are
     # the s=1 strategy at path length >= 2, a different thing entirely.
     if lv.is_light == Int32(1) or not _bdpt_vertex_mis_scoped(lv):
-        return (False, Int32(-1), SpectralSample(Float32(0)))
+        return (False, Float32(-1), Float32(-1), SpectralSample(Float32(0)))
 
     var lp = lv.pos.to_simd()
     var d3 = cam_pos - lp
     var dist2 = dot(d3, d3)
     if dist2 < Float32(1e-8):
-        return (False, Int32(-1), SpectralSample(Float32(0)))
+        return (False, Float32(-1), Float32(-1), SpectralSample(Float32(0)))
     var dist = sqrt(dist2)
     var dir_to_cam = d3 * (Float32(1) / dist)
 
     var pr = _bdpt_world_to_raster(lp, w2c, c2r, fw, fh)
     if not pr[0]:
-        return (False, Int32(-1), SpectralSample(Float32(0)))
+        return (False, Float32(-1), Float32(-1), SpectralSample(Float32(0)))
     var cos_at_camera = pr[3]
     if cos_at_camera <= Float32(1e-6):
-        return (False, Int32(-1), SpectralSample(Float32(0)))
+        return (False, Float32(-1), Float32(-1), SpectralSample(Float32(0)))
 
     var wl = lv.wavelengths
     var cos_to_camera = abs(dot(lv.normal.to_simd(), dir_to_cam))
     var f = _eval_vertex_spectral(lv, Vec3f(dir_to_cam[0], dir_to_cam[1], dir_to_cam[2]), sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
     if f.is_black():
-        return (False, Int32(-1), SpectralSample(Float32(0)))
+        return (False, Float32(-1), Float32(-1), SpectralSample(Float32(0)))
     if cos_to_camera <= Float32(1e-8):
-        return (False, Int32(-1), SpectralSample(Float32(0)))
+        return (False, Float32(-1), Float32(-1), SpectralSample(Float32(0)))
 
     var Tr = _visible_transmittance(
         lv.pos, Point3f(cam_pos[0], cam_pos[1], cam_pos[2]), lv.med_idx, sd, scratch, wl)
     if Tr.is_black():
-        return (False, Int32(-1), SpectralSample(Float32(0)))
+        return (False, Float32(-1), Float32(-1), SpectralSample(Float32(0)))
 
     var image_plane_dist = Float32(1) / max(px_scale, Float32(1e-12))
     var ipcd = image_plane_dist / cos_at_camera
@@ -1235,8 +1280,7 @@ def _bdpt_connect_to_camera(
     var mis_weight = Float32(1) / (w_light + Float32(1))
     contrib = contrib * mis_weight
 
-    var pix = Int32(Int(pr[2]) * Int(fw) + Int(pr[1]))
-    return (True, pix, contrib)
+    return (True, pr[1], pr[2], contrib)
 
 def _bdpt_connect_to_cache(
     cv: BDPTVertex,
@@ -1617,6 +1661,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     mis_vm_weight_factor: Float32,
     n_light_paths_f: Float32,
     pass_wl: SampledWavelengths,
+    film_filter: FilmFilter,
     start_med_idx: Int32 = Int32(-1),
 ) -> Tuple[SpectralSample, RGB]:
     """Trace one camera subpath from pixel (px,py). At each non-delta vertex,
@@ -1655,7 +1700,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     # once per depth level with the loop-carried state -- including the
     # `total`/`first_alb` accumulators -- parked in a VCMCameraPathState_C.
     var st = _bdpt_camera_path_init[use_gpu](
-        r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl, start_med_idx)
+        r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl, film_filter, start_med_idx)
     var ro = st.ro
     var rd = st.rd
     var beta = st.beta
@@ -1748,6 +1793,7 @@ def _bdpt_camera_path_init[use_gpu: Bool](
     px_scale: Float32,
     n_light_paths_f: Float32,
     pass_wl: SampledWavelengths,
+    film_filter: FilmFilter,
     start_med_idx: Int32 = Int32(-1),
 ) -> VCMCameraPathState_C:
     """Task #163 stage 4: camera-ray generation + MIS-origin setup half of
@@ -1781,8 +1827,16 @@ def _bdpt_camera_path_init[use_gpu: Bool](
     # into this kernel, and SPPM already boxes, so this leaves VCM consistent
     # with one of the two rather than inventing a third behaviour. Unifying
     # all three on the real filter is the follow-up.
-    var fX = Float32(px) + pcg.next_float()
-    var fY = Float32(py) + pcg.next_float()
+    #
+    # FOLLOW-UP DONE: all three integrators now draw the sub-pixel position
+    # through the scene's PixelFilter with the same sampler (sampling.mojo's
+    # filter_sample_2d, pbrt-v4's kernel shapes). The t=1 splats are spread
+    # over the same footprint, see _bdpt_splat_filtered.
+    var u_fx = pcg.next_float()
+    var u_fy = pcg.next_float()
+    var (dfx, dfy) = film_filter_offset(u_fx, u_fy, film_filter)
+    var fX = Float32(px) + Float32(0.5) + dfx
+    var fY = Float32(py) + Float32(0.5) + dfy
     var (rd, ro, _cl) = camera_ray_from_film_xy(fX, fY, r2c, c2w)
 
     # VCM Stage 2b: real per-vertex MIS state for the eye subpath (see
@@ -5018,7 +5072,13 @@ def _bdpt_render_core(
     var merge_heads = unsafe_alloc[Int32](_HSIZE)
     var merge_next = unsafe_alloc[Int32](max(lvc_cap, 1))
     # t=1 splat records: one slot per potential light vertex.
-    var splat_pix = unsafe_alloc[Int32](max(n_light_paths_merge * _BDPT_MAX_VERTS, 1))
+    # Continuous raster position per splat record (x < 0 marks an empty slot)
+    # -- a position, not a pixel, because the splat is spread over the filter
+    # footprint at accumulation time (_bdpt_splat_filtered).
+    var splat_fx = unsafe_alloc[Float32](max(n_light_paths_merge * _BDPT_MAX_VERTS, 1))
+    var splat_fy = unsafe_alloc[Float32](max(n_light_paths_merge * _BDPT_MAX_VERTS, 1))
+    var film_filter_cpu = film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
+                                         psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y)
     var splat_val = unsafe_alloc[SpectralSample](max(n_light_paths_merge * _BDPT_MAX_VERTS, 1))
     var cam_pos = Vec3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
 
@@ -5086,19 +5146,24 @@ def _bdpt_render_core(
                     lvc[unsafe_offset=base + local], sd, scratch_light.unsafe_offset(lp_idx), cam_pos,
                     w2c, c2r, Int32(fw), Int32(fh), px_scale,
                     Float32(n_light_paths_merge), mis_vm_weight_factor)
-                splat_pix[unsafe_offset=base + local] = r[1] if r[0] else Int32(-1)
-                splat_val[unsafe_offset=base + local] = r[2]
+                splat_fx[unsafe_offset=base + local] = r[1] if r[0] else Float32(-1)
+                splat_fy[unsafe_offset=base + local] = r[2]
+                splat_val[unsafe_offset=base + local] = r[3]
             for local in range(Int(lvc_path_len[unsafe_offset=lp_idx]), _BDPT_MAX_VERTS):
-                splat_pix[unsafe_offset=base + local] = Int32(-1)
+                splat_fx[unsafe_offset=base + local] = Float32(-1)
 
         parallelize[splat_light_path](n_light_paths_merge)
 
         # ── Output boundary: spectral splat -> RGB film ──────────────────
+        # buf is RGB[n_pix]; the splatter takes 3 packed floats per pixel.
+        comptime assert size_of[RGB]() == 3 * size_of[Float32](), "RGB must be 3 packed Float32"
+        var buf_f = buf.unsafe_bitcast[Float32]()
         for k in range(n_light_paths_merge * _BDPT_MAX_VERTS):
-            var sp = splat_pix[unsafe_offset=k]
-            if sp >= Int32(0):
+            var sfx = splat_fx[unsafe_offset=k]
+            if sfx >= Float32(0):
                 var (sr, sg, sb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, splat_val[unsafe_offset=k], lvc[unsafe_offset=k].wavelengths)
-                buf[unsafe_offset=Int(sp)] += RGB(sr, sg, sb)
+                _bdpt_splat_filtered[False](buf_f, sfx, splat_fy[unsafe_offset=k], sr, sg, sb,
+                                            fw, fh, film_filter_cpu)
 
         # ── Phase 2: trace each pixel's camera path and connect ──────────────
         # Each worker only ever writes its own buf[pix] slot and only reads
@@ -5115,7 +5180,9 @@ def _bdpt_render_core(
             var (contrib, alb) = _bdpt_trace_camera_and_connect[False](
                 r2c, c2w, px, py, sd, cpcg, has_med, scratch_cam.unsafe_offset(pix), lvc, pix, Int(lvc_path_len[unsafe_offset=pix]),
                 merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
-                px_scale, mis_vc_weight_factor, mis_vm_weight_factor, Float32(n_light_paths_merge), pass_wl)
+                px_scale, mis_vc_weight_factor, mis_vm_weight_factor, Float32(n_light_paths_merge), pass_wl,
+                film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
+                               psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y))
             # ── Output boundary: spectral transport -> RGB film ──────────
             var (cr, cg, cb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, contrib, pass_wl)
             buf[unsafe_offset=pix] += RGB(cr, cg, cb)
@@ -5128,6 +5195,8 @@ def _bdpt_render_core(
 
     scratch_light.unsafe_free(); scratch_cam.unsafe_free(); lvc.unsafe_free(); lvc_path_len.unsafe_free()
     merge_heads.unsafe_free(); merge_next.unsafe_free()
+    # Were never freed (the old splat_pix leaked the same way), once per render.
+    splat_fx.unsafe_free(); splat_fy.unsafe_free(); splat_val.unsafe_free()
 
     # Clamp into caller-owned output buffers (no denoise/write here -- see
     # vcm_render/vcm_render_gpu, this function's two callers, for the tail).
@@ -5320,6 +5389,10 @@ def _bdpt_splat_light_paths_gpu(
     fw_dp: Int64, fh_dp: Int64,
     px_scale: Float32,
     mis_vm_weight_factor: Float32,
+    # The scene's PixelFilter: each splat is spread over its footprint
+    # (_bdpt_splat_filtered) so the light-traced half of the image is
+    # reconstructed the same way as the camera half.
+    film_filter: FilmFilter,
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     primIds: Pointer[PrimId_C, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
@@ -5397,7 +5470,6 @@ def _bdpt_splat_light_paths_gpu(
     var cam_pos = Vec3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
     var scratch = inter_scratch.unsafe_offset(k)
     var base = k * _BDPT_MAX_VERTS
-    var n_pix_k = Int(fw_dp) * Int(fh_dp)
     var n_verts = Int(lvc_path_len[unsafe_offset=k])
     for local in range(min(n_verts, _BDPT_MAX_VERTS)):
         var r = _bdpt_connect_to_camera(
@@ -5405,18 +5477,11 @@ def _bdpt_splat_light_paths_gpu(
             w2c, c2r, Int32(Int(fw_dp)), Int32(Int(fh_dp)), px_scale,
             Float32(n_light_paths), mis_vm_weight_factor)
         if r[0]:
-            var pix = Int(r[1])
-            # _bdpt_world_to_raster already rejects off-film rasters, so this
-            # is belt-and-braces -- but an out-of-range pix here would be an
-            # unbounded scatter into device memory, not a wrong pixel.
-            if pix >= 0 and pix < n_pix_k:
-                # ── Output boundary: spectral splat -> RGB film ──────────
-                var (cr, cg, cb) = spectral_sample_to_rgb(
-                    spectral_coeffs, Int(spectral_res_dp), spectral_cie_x, spectral_cie_y,
-                    spectral_cie_z, spectral_d65, r[2], lvc[unsafe_offset=base + local].wavelengths)
-                _ = Atomic[DType.float32].fetch_add(accum.unsafe_offset((pix * 3 + 0)), cr)
-                _ = Atomic[DType.float32].fetch_add(accum.unsafe_offset((pix * 3 + 1)), cg)
-                _ = Atomic[DType.float32].fetch_add(accum.unsafe_offset((pix * 3 + 2)), cb)
+            var (cr, cg, cb) = spectral_sample_to_rgb(
+                spectral_coeffs, Int(spectral_res_dp), spectral_cie_x, spectral_cie_y,
+                spectral_cie_z, spectral_d65, r[3], lvc[unsafe_offset=base + local].wavelengths)
+            _bdpt_splat_filtered[True](accum, r[1], r[2], cr, cg, cb,
+                                       Int(fw_dp), Int(fh_dp), film_filter)
 
 def _bdpt_camera_connect_gpu(
     accum: Pointer[Float32, MutUntrackedOrigin],
@@ -5437,6 +5502,7 @@ def _bdpt_camera_connect_gpu(
     mis_vc_weight_factor: Float32,
     mis_vm_weight_factor: Float32,
     n_light_paths_f: Float32,
+    film_filter: FilmFilter,
     seed: UInt64,
     pass_idx_dp: Int64,
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
@@ -5522,7 +5588,7 @@ def _bdpt_camera_connect_gpu(
     var (contrib, alb) = _bdpt_trace_camera_and_connect[True](
         r2c, c2w, px, py, sd, pcg, has_med, scratch, lvc, pix, Int(lvc_path_len[unsafe_offset=pix]),
         merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
-        px_scale, mis_vc_weight_factor, mis_vm_weight_factor, n_light_paths_f, pass_wl)
+        px_scale, mis_vc_weight_factor, mis_vm_weight_factor, n_light_paths_f, pass_wl, film_filter)
     # ── Output boundary: spectral transport -> RGB film ──────────────────
     var (cr, cg, cb) = spectral_sample_to_rgb(
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
@@ -5789,6 +5855,7 @@ def _bdpt_camera_path_init_gpu(
     fw_dp: Int64,
     px_scale: Float32,
     n_light_paths_f: Float32,
+    film_filter: FilmFilter,
     seed: UInt64,
     pass_idx_dp: Int64,
 ):
@@ -5807,7 +5874,7 @@ def _bdpt_camera_path_init_gpu(
     var pcg = PCG32(seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
                      UInt64(pass_idx * 2654435761 + 1))
     var pass_wl = pass_wavelengths(pass_idx)
-    states[unsafe_offset=pix] = _bdpt_camera_path_init[True](r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl)
+    states[unsafe_offset=pix] = _bdpt_camera_path_init[True](r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl, film_filter)
 
 def _bdpt_camera_path_intersect_gpu(
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
@@ -6469,6 +6536,8 @@ def vcm_render_gpu(
                     lvc_ptr, path_len_ptr,
                     merge_next_ptr, merge_heads_ptr, merge_inv_cell, merge_r2, merge_norm,
                     px_scale, mis_vc_weight_factor, mis_vm_weight_factor, n_light_paths_f,
+                    film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
+                                   psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y),
                     base_seed, Int64(si),
                     bvh2Nodes, primIds, meshes, materials,
                     areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
@@ -6491,6 +6560,8 @@ def vcm_render_gpu(
                     accum_ptr, lvc_ptr, path_len_ptr, Int64(n_light_paths_merge),
                     inter_light_ptr, w2c_ptr, c2r_ptr, c2w_ptr,
                     Int64(fw), Int64(fh), px_scale, mis_vm_weight_factor,
+                    film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
+                                   psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y),
                     bvh2Nodes, primIds, meshes, materials,
                     areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
                     mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
@@ -7118,7 +7189,10 @@ def vcm_render_gpu_wavefront(
                 # them -- only the primary/bounce ray intersect moved out.
                 handle[].ctx.enqueue_function[_bdpt_camera_path_init_gpu](
                     cam_states_ptr, r2c_ptr, c2w_ptr, Int64(n_pix), Int64(Int(psc[unsafe_offset=0].film_w)),
-                    px_scale, n_light_paths_f, base_seed, Int64(si),
+                    px_scale, n_light_paths_f,
+                    film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
+                                   psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y),
+                    base_seed, Int64(si),
                     grid_dim=grid_pix, block_dim=block_size)
 
                 for _bounce_i in range(_BDPT_MAX_DEPTH):
@@ -7207,6 +7281,8 @@ def vcm_render_gpu_wavefront(
                     accum_ptr, lvc_ptr, path_len_ptr, Int64(n_light_paths_merge),
                     inter_light_ptr, w2c_ptr, c2r_ptr, c2w_ptr,
                     Int64(fw), Int64(fh), px_scale, mis_vm_weight_factor,
+                    film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
+                                   psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y),
                     bvh2Nodes, primIds, meshes, materials,
                     areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
                     mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
@@ -7327,6 +7403,7 @@ def sppm_gen_vp_gpu(
     init_r2: Float32,
     seed: UInt64,
     max_depth_dp: Int64,
+    film_filter: FilmFilter,
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     primIds: Pointer[PrimId_C, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
@@ -7381,7 +7458,7 @@ def sppm_gen_vp_gpu(
         grids=grids, gridCount=n_grids, nvdbGrids=nvdb_grids, nvdbGridCount=n_nvdb_grids,
     )
     var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
-    vps[unsafe_offset=combined] = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch.unsafe_offset(combined), Int(max_depth_dp))
+    vps[unsafe_offset=combined] = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch.unsafe_offset(combined), Int(max_depth_dp), film_filter)
 
 
 def sppm_emit_photons_gpu(
@@ -7863,6 +7940,8 @@ def sppm_render_gpu(
             handle[].ctx.enqueue_function[sppm_gen_vp_gpu](
                 vps_ptr, inter_cam_ptr, Int64(n_pix), Int64(_VP_SAMPLES), psc[unsafe_offset=0].film_w, r2c_ptr, c2w_ptr,
                 init_r2, cam_seed, Int64(psc[unsafe_offset=0].max_depth),
+                film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
+                               psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y),
                 bvh2Nodes, primIds, meshes, materials,
                 areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
                 mediums, n_mediums, mediumInterfaces, n_medium_ifaces,

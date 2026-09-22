@@ -33,7 +33,7 @@ from .bxdf import dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured
 from .shading import _tex_lookup, _get_tri_verts, _apply_surface_maps, \
     apply_surface_maps_at_hit, _camera_approx_footprint, area_light_hit_cos
-from .sampling import power_heuristic, camera_ray_from_film_xy
+from .sampling import power_heuristic, camera_ray_from_film_xy, FilmFilter, film_filter_of, film_filter_offset
 from .transform import transform_normal_by_instance
 from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
@@ -534,6 +534,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     init_r2:  Float32,
     scratch:  Pointer[Intersection_C, MutUntrackedOrigin],
     maxdepth: Int,
+    film_filter: FilmFilter,
 ) -> SPPMPixel:
     """Trace one primary ray for pixel (px,py), returning its visible point.
     Shared verbatim between the CPU driver (_sppm_camera_pass, [False]) and
@@ -574,11 +575,17 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         med_idx=Int32(-1),
     )
 
-    # Sub-pixel jitter — diversifies which point on a dielectric-obscured
-    # surface (e.g. the caustic floor seen through the water) each of the
-    # vp_samples independent samples lands on.
-    var fX = Float32(px) + pcg.next_float()
-    var fY = Float32(py) + pcg.next_float()
+    # Sub-pixel position, drawn through the scene's PixelFilter -- the SAME
+    # sampler the path tracer's primary rays use (sampling.mojo). This was a
+    # uniform `px + rand` box, so SPPM ignored the filter entirely and rendered
+    # visibly sharper than both the path tracer and pbrt. Still diversifies
+    # which point on a dielectric-obscured surface (the caustic floor seen
+    # through water) each of the vp_samples independent samples lands on.
+    var u_fx = pcg.next_float()
+    var u_fy = pcg.next_float()
+    var (dfx, dfy) = film_filter_offset(u_fx, u_fy, film_filter)
+    var fX = Float32(px) + Float32(0.5) + dfx
+    var fY = Float32(py) + Float32(0.5) + dfy
     var (rd, ro, cl) = camera_ray_from_film_xy(fX, fY, r2c, c2w)
 
     # Texture/bump footprint for this camera path, derived here rather than
@@ -1086,6 +1093,7 @@ def _sppm_camera_pass(
     init_r2:  Float32,
     seed:     UInt64,
     maxdepth: Int,
+    film_filter: FilmFilter,
 ):
     """Trace `vp_samples` independent primary rays per pixel, ONCE for the
     whole render (not once per SPPM pass — see sppm_render's docstring for
@@ -1110,7 +1118,7 @@ def _sppm_camera_pass(
         var px = pix % Int(fw)
         var py = pix // Int(fw)
         var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
-        vps[unsafe_offset=combined] = _sppm_trace_visible_point[False](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, scratch.unsafe_offset(combined), maxdepth)
+        vps[unsafe_offset=combined] = _sppm_trace_visible_point[False](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, scratch.unsafe_offset(combined), maxdepth, film_filter)
 
     parallelize[trace_one](n_pix * vp_samples)
 
@@ -2857,6 +2865,8 @@ def _sppm_render_core(
         vps, n_pix, _VP_SAMPLES, psc[unsafe_offset=0].film_w,
         psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
         sd, init_r2, cam_seed, Int(psc[unsafe_offset=0].max_depth),
+        film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
+                       psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y),
     )
     if verbose:
         var n_valid = 0

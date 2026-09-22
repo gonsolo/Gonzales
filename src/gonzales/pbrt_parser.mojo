@@ -292,16 +292,30 @@ def _psc_handle_filter(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                       s: Pointer[SceneParseState, MutUntrackedOrigin]):
     var sbuf = unsafe_alloc[UInt8](64)
     _ = scanner_parse_quoted_string(handle, sbuf, 64)
+    # Default radius PER TYPE, as pbrt-v4 has it (filters.cpp): box 0.5,
+    # triangle 2, gaussian 1.5. Every type used to inherit the Gaussian's 1.5,
+    # so a bare `PixelFilter "box"` blurred over 3 pixels instead of 1.
+    var default_radius = Float32(1.5)
     if _psc_streq(sbuf, "triangle") or _psc_streq(sbuf, "tent"):
         s[unsafe_offset=0].filter_type = Int32(1)
+        default_radius = Float32(2.0)
     elif _psc_streq(sbuf, "box"):
         s[unsafe_offset=0].filter_type = Int32(2)
+        default_radius = Float32(0.5)
     else:
-        s[unsafe_offset=0].filter_type = Int32(0)  # gaussian (default)
+        # Anything else renders as a Gaussian. Say so, rather than let a
+        # scene asking for mitchell/lanczos/sinc believe it got one -- nothing
+        # in the corpus does today, which is exactly when a silent fallback
+        # goes unnoticed.
+        if not _psc_streq(sbuf, "gaussian"):
+            print("Warning: PixelFilter type not implemented -- rendering with"
+                  + " a Gaussian filter instead. Supported: gaussian, box,"
+                  + " triangle.")
+        s[unsafe_offset=0].filter_type = Int32(0)
     sbuf.unsafe_free()
     var params = _psc_collect_params(handle)
-    s[unsafe_offset=0].filter_support_x = params.get_float("xradius", s[unsafe_offset=0].filter_support_x)
-    s[unsafe_offset=0].filter_support_y = params.get_float("yradius", s[unsafe_offset=0].filter_support_y)
+    s[unsafe_offset=0].filter_support_x = params.get_float("xradius", default_radius)
+    s[unsafe_offset=0].filter_support_y = params.get_float("yradius", default_radius)
     s[unsafe_offset=0].filter_sigma = params.get_float("sigma", s[unsafe_offset=0].filter_sigma)
 
 def _psc_handle_film(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
