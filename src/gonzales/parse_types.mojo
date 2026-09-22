@@ -1,4 +1,28 @@
 from .geometry import RGB
+from std.os.path import exists
+
+
+def scene_path(scene_dir: String, name: String, what: String) -> String:
+    """THE way a filename written in a scene file becomes a path on disk.
+
+    An ABSOLUTE name is used as-is; a relative one is resolved against the
+    scene's own directory, as pbrt does. Every asset site used to write
+    `scene_dir + name` by hand -- nine of them, some by raw byte copying -- so
+    an absolute path became `<scene_dir>//abs/path`, failed to load, and the
+    asset silently fell back to a flat default. For an environment map that
+    means a uniform white sky: a test scene lit by barcelona's sky.exr through
+    an absolute path rendered ~3.9x brighter than pbrt in all three
+    integrators, with nothing in the log but OIIO's own stderr noise.
+
+    It also checks the file exists and WARNS if not, naming what it was for
+    (`what`, e.g. "environment map") -- at parse time, so the warning fires
+    the same way for every asset type, integrator and backend, instead of
+    depending on whichever loader happens to touch the file later."""
+    var path = name if name.startswith("/") else scene_dir + name
+    if name.byte_length() > 0 and not exists(path):
+        print("Warning: " + what + " file not found: '" + path
+              + "' -- it will render as a flat default instead.")
+    return path
 
 # ── ParsedScene constants ─────────────────────────────────────────────────────
 

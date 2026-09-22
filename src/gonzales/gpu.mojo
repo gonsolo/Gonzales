@@ -234,6 +234,13 @@ def _load_host_texture(
             _ = external_call["free_texture_rgb", Int32, Pointer[Float32, MutUntrackedOrigin]](data_out[unsafe_offset=0])
         data_out.unsafe_free()
     w_out.unsafe_free(); h_out.unsafe_free(); c_out.unsafe_free(); srgb_out.unsafe_free(); u8_out.unsafe_free()
+    if result.n_bytes == 0:
+        # A missing file is already reported at parse time (parse_types.mojo,
+        # scene_path); this is the one that exists and still will not decode.
+        # It used to be counted in "N unique file(s) loaded" and then render
+        # as the material's or light's flat default without a word.
+        print("Warning: could not decode texture '" + String(unsafe_from_utf8_ptr=filename.as_imm())
+              + "' -- it renders as a flat default instead.")
     return result
 
 @fieldwise_init

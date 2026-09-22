@@ -45,7 +45,7 @@ from .sppm import (
     _sppm_finalize_albedo_one_pixel, _sppm_finalize_one_pixel,
     _VP_SAMPLES, _sppm_has_sphere_lights, _MAX_B,
     _sppm_trace_visible_point, _sppm_store_photon, _sppm_trace_photon,
-    _sppm_cam_pos, _sppm_photon_px_scale,
+    _sppm_cam_pos, _sppm_photon_px_scale, gather_disk_contains,
 )
 from .shading import _tex_lookup, _get_tri_verts, _mnee_walk, _mnee_walk2, \
     apply_surface_maps_at_hit, _camera_approx_footprint, area_light_hit_cos, curve_light_hit
@@ -1600,8 +1600,9 @@ def _bdpt_merge_from_cache(
                         # merging on and 0.985x with it off. A photon on THIS
                         # surface sits on its tangent plane to float precision;
                         # a tenth of the radius is generous.
-                        var _off_n = dot(e.to_simd(), cv.normal.to_simd())
-                        if dist2 <= r2 and _ncmp > Float32(0.7) and _off_n * _off_n <= r2 * Float32(0.01):
+                        # Disk-not-ball: the SHARED test, sppm.mojo's
+                        # gather_disk_contains -- SPPM's gather now uses it too.
+                        if _ncmp > Float32(0.7) and gather_disk_contains(e.to_simd(), dist2, r2, cv.normal.to_simd()):
                             var le_cv = _lobe_eval[want_pdfs=False](cv, lv.wo.to_simd(), sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, cv.wavelengths)
                             var f_cv = le_cv.f_cos
                             # MERGING TAKES THE BARE BSDF, NOT f*cos.

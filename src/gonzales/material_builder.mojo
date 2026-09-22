@@ -3,7 +3,7 @@ from std.ffi import external_call
 from std.math import sqrt, exp, max, abs
 from .diagnostics import warn_unsupported
 from .lexer import (PbrtScanner, scanner_parse_quoted_string, _psc_collect_params, ParameterDictionary)
-from .parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX
+from .parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX, scene_path
 from .geometry import RGB, MatKind
 from .measured_bsdf import load_measured_bsdf_reflectance
 from .spd import load_spd_rgb, named_metal_rgb, named_glass_ior
@@ -519,14 +519,14 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
                 if g_ok:
                     mat_ior = g_ior
                 elif eta_name.endswith(".spd"):
-                    var (f_eta, f_ok) = load_spd_rgb(s[unsafe_offset=0].scene_dir + eta_name)
+                    var (f_eta, f_ok) = load_spd_rgb(scene_path(s[unsafe_offset=0].scene_dir, eta_name, "conductor eta spectrum"))
                     if f_ok:
                         metal_eta = f_eta
                         has_spectral_conductor = True
                     else:
                         print("SPD load FAILED (cannot open/parse), material '"
                               + String(unsafe_from_utf8_ptr=mat_name.as_imm())
-                              + "' eta falls back to 0.5:", s[unsafe_offset=0].scene_dir + eta_name)
+                              + "' eta falls back to 0.5:", scene_path(s[unsafe_offset=0].scene_dir, eta_name, "conductor eta spectrum"))
                 elif eta_name != "":
                     print("Warning: unknown named spectrum '" + eta_name
                           + "' for eta — falling back to 0.5. Supported: metal-{Ag,Al,Au,Cu,CuZn,TiO2,MgO}-*, glass-{BK7,BAF10,FK51A,LASF9,F5,F10,F11}, or a .spd file path.")
@@ -548,14 +548,14 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
                 metal_k = m_k
                 has_spectral_conductor = True
             elif k_name.endswith(".spd"):
-                var (f_k, fk_ok) = load_spd_rgb(s[unsafe_offset=0].scene_dir + k_name)
+                var (f_k, fk_ok) = load_spd_rgb(scene_path(s[unsafe_offset=0].scene_dir, k_name, "conductor k spectrum"))
                 if fk_ok:
                     metal_k = f_k
                     has_spectral_conductor = True
                 else:
                     print("SPD load FAILED (cannot open/parse), material '"
                           + String(unsafe_from_utf8_ptr=mat_name.as_imm())
-                          + "' k falls back to 0.5:", s[unsafe_offset=0].scene_dir + k_name)
+                          + "' k falls back to 0.5:", scene_path(s[unsafe_offset=0].scene_dir, k_name, "conductor k spectrum"))
             elif k_name != "":
                 print("Warning: unknown named spectrum '" + k_name
                       + "' for k — falling back to 0.5. Supported: metal-{Ag,Al,Au,Cu,CuZn,TiO2,MgO}-*, or a .spd file path.")
@@ -742,7 +742,7 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
     # is flipped to route through MatKind.measured (Stage 2).
     var measured_bsdf_path = String("")
     if is_measured and params.has("filename"):
-        var bsdf_path = s[unsafe_offset=0].scene_dir + params.get_string("filename", "")
+        var bsdf_path = scene_path(s[unsafe_offset=0].scene_dir, params.get_string("filename", ""), "measured BSDF")
         measured_bsdf_path = bsdf_path
         var (bsdf_ok, mean_lum) = load_measured_bsdf_reflectance(bsdf_path)
         if bsdf_ok:
@@ -881,7 +881,7 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
     if normalmap_file == "":
         normalmap_file = params.get_string("bumpmap", "")
     if normalmap_file != "":
-        var nm_file = s[unsafe_offset=0].scene_dir + normalmap_file
+        var nm_file = scene_path(s[unsafe_offset=0].scene_dir, normalmap_file, "normal map")
         normal_tex_idx_for_mat = Int32(len(s[unsafe_offset=0].tex_names))
         s[unsafe_offset=0].tex_names.append(String("__normalmap"))
         s[unsafe_offset=0].tex_files.append(nm_file)

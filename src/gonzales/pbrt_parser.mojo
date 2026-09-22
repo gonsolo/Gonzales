@@ -15,7 +15,7 @@ from .lexer import (PbrtScanner, scanner_open, scanner_free, scanner_is_at_end,
                     _psc_streq,
                     _psc_scan_spectrum_scalar, _psc_collect_params, ParameterDictionary,
                     _psc_skip_params, _psc_skip_line)
-from .parse_types import (SceneParseState, MeshAccum, NamedMaterial,
+from .parse_types import (SceneParseState, MeshAccum, NamedMaterial, scene_path,
                            ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX)
 from .geometry import (RGB, Point3f, Vec3f, Material_C, MatKind, AreaLight_C,
                         Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area, dot, DistantLight_C, PointLight_C, InfiniteLight_C,
@@ -853,7 +853,7 @@ def handle_named_medium(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         # -- do that resolution here, at parse time, same as every other
         # filename param, but defer the actual load).
         var nvdb_rel = params.get_string("filename", "")
-        var nvdb_full = s[unsafe_offset=0].scene_dir + nvdb_rel
+        var nvdb_full = scene_path(s[unsafe_offset=0].scene_dir, nvdb_rel, "NanoVDB medium")
         var density_name = params.get_string("densityname", "density")
         s[unsafe_offset=0].nvdb_filenames.append(nvdb_full)
         s[unsafe_offset=0].nvdb_gridnames.append(density_name)
@@ -1214,16 +1214,14 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         var ply_filename_str = params.get_string("filename", "")
 
         var full_path = unsafe_alloc[UInt8](PSC_FILE_MAX * 2)
-        var dir_len = s[unsafe_offset=0].scene_dir.byte_length()
-        for ki in range(dir_len):
-            full_path[unsafe_offset=ki] = s[unsafe_offset=0].scene_dir.unsafe_ptr()[unsafe_offset=ki]
-        var fn_bytes = ply_filename_str.unsafe_ptr()
-        var fn_len = ply_filename_str.byte_length()
+        var ply_path = scene_path(s[unsafe_offset=0].scene_dir, ply_filename_str, "PLY mesh")
+        var fn_bytes = ply_path.unsafe_ptr()
+        var fn_len = ply_path.byte_length()
         var fn_i = 0
-        while fn_i < fn_len and dir_len + fn_i < PSC_FILE_MAX * 2 - 1:
-            full_path[unsafe_offset=dir_len + fn_i] = fn_bytes[unsafe_offset=fn_i]
+        while fn_i < fn_len and fn_i < PSC_FILE_MAX * 2 - 1:
+            full_path[unsafe_offset=fn_i] = fn_bytes[unsafe_offset=fn_i]
             fn_i += 1
-        full_path[unsafe_offset=dir_len + fn_i] = UInt8(0)
+        full_path[unsafe_offset=fn_i] = UInt8(0)
 
         var ply_pts     = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](1)
         var ply_nv      = unsafe_alloc[Int32](1)
@@ -1527,7 +1525,7 @@ def handle_texture(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
     var params = _psc_collect_params(handle)
     var filename = params.get_string("filename", "")
     if filename != "":
-        var file_str = s[unsafe_offset=0].scene_dir + filename
+        var file_str = scene_path(s[unsafe_offset=0].scene_dir, filename, "image texture")
         s[unsafe_offset=0].tex_names.append(name_str)
         s[unsafe_offset=0].tex_files.append(file_str)
 
@@ -1689,14 +1687,15 @@ def parse_scene_file(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
             var inc_name = unsafe_alloc[UInt8](PSC_FILE_MAX)
             _ = scanner_parse_quoted_string(handle, inc_name, PSC_FILE_MAX)
             var inc_path = unsafe_alloc[UInt8](PSC_FILE_MAX * 2)
-            var dlen = s[unsafe_offset=0].scene_dir.byte_length()
-            for ki in range(dlen):
-                inc_path[unsafe_offset=ki] = s[unsafe_offset=0].scene_dir.unsafe_ptr()[unsafe_offset=ki]
+            var inc_resolved = scene_path(s[unsafe_offset=0].scene_dir,
+                                          String(unsafe_from_utf8_ptr=inc_name.as_imm()), "Include")
+            var inc_bytes = inc_resolved.unsafe_ptr()
+            var inc_len = inc_resolved.byte_length()
             var fi = 0
-            while inc_name[unsafe_offset=fi] != UInt8(0) and dlen + fi < PSC_FILE_MAX * 2 - 1:
-                inc_path[unsafe_offset=dlen + fi] = inc_name[unsafe_offset=fi]
+            while fi < inc_len and fi < PSC_FILE_MAX * 2 - 1:
+                inc_path[unsafe_offset=fi] = inc_bytes[unsafe_offset=fi]
                 fi += 1
-            inc_path[unsafe_offset=dlen + fi] = UInt8(0)
+            inc_path[unsafe_offset=fi] = UInt8(0)
 
             # `.pbrt.gz` includes (e.g. pbrt-v4-scenes' curve/hair geometry)
             # are NOT decompressed by the tokenizer -- without this, the
@@ -1706,7 +1705,7 @@ def parse_scene_file(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
             # sibling next to the source (mirrors the pre-existing ".ply.gz"
             # sibling-file convention above), then open that instead.
             var open_path: Pointer[UInt8, MutUntrackedOrigin] = inc_path
-            var inc_path_len = dlen + fi
+            var inc_path_len = fi
             var ends_gz = (inc_path_len >= 3 and
                            inc_path[unsafe_offset=inc_path_len-3] == UInt8(46) and
                            inc_path[unsafe_offset=inc_path_len-2] == UInt8(103) and

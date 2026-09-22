@@ -2,7 +2,7 @@ from std.memory.alloc import unsafe_alloc
 from std.math import sqrt
 from .lexer import (PbrtScanner, scanner_parse_quoted_string, _psc_collect_params,
                     _psc_streq)
-from .parse_types import SceneParseState
+from .parse_types import SceneParseState, scene_path
 from .geometry import RGB
 from .transform import transform_points
 
@@ -80,7 +80,7 @@ def handle_light_source(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         raw.unsafe_free(); fin.unsafe_free()
     elif _psc_streq(ltype, "infinite"):
         if filename != "":
-            var file_str = s[unsafe_offset=0].scene_dir + filename
+            var file_str = scene_path(s[unsafe_offset=0].scene_dir, filename, "environment map")
             s[unsafe_offset=0].tex_names.append(String("__inf"))
             s[unsafe_offset=0].tex_files.append(file_str)
             s[unsafe_offset=0].inf_tex_idx.append(Int32(len(s[unsafe_offset=0].tex_names) - 1))

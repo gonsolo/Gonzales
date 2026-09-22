@@ -76,7 +76,18 @@ comptime _VP_SAMPLES = 16
 struct SPPMPixel(TrivialRegisterPassable):
     """Visible point from one camera ray + SPPM accumulators."""
     var pos:    Point3f
+    # The SHADING normal -- after bump/normal maps. What the BRDF is evaluated
+    # against.
     var normal: Vec3f
+    # The GEOMETRIC normal, for the gather's density tests (tangent disk and
+    # which side a photon arrived from). Kept separate for the same reason as
+    # BDPTVertex.normal/shading_normal: a density test against a PERTURBED
+    # normal is a bias. With a normal tilted by theta, a photon genuinely on
+    # the same flat surface sits |e| sin(theta) off the tangent plane, so the
+    # disk test (one tenth of the radius) rejected every valid photon on any
+    # bump steeper than ~5.7 degrees -- cornell-box-normalmap's SPPM cell
+    # dropped 0.8% the moment the disk test went in, which is how it showed.
+    var geo_normal: Vec3f
     # Camera-subpath throughput, RGB. It is the one transport quantity here
     # that deliberately stays RGB, because it has nowhere spectral to go: it
     # multiplies `tau`, which sums gathers from many passes at many
@@ -560,6 +571,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     var vp = SPPMPixel(
         pos=Point3f(Float32(0)),
         normal=Vec3f(Float32(0), Float32(1), Float32(0)),
+        geo_normal=Vec3f(Float32(0), Float32(1), Float32(0)),
         beta=RGB(Float32(1)),
         alb=RGB(Float32(0)),
         tau=RGB(Float32(0)),
@@ -689,6 +701,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 # See Scenes/media-chromatic-scatter.pbrt.
                 vp.pos = ro + rd * ff.t_free
                 vp.normal = Vec3f(Float32(0), Float32(1), Float32(0))
+                vp.geo_normal = Vec3f(Float32(0), Float32(1), Float32(0))
                 vp.alb = ff.albedo
                 vp.is_volume = PhotonKind.volume
                 # wo is what an anisotropic (HG) phase function would need;
@@ -763,6 +776,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0.0):
                 gn = gn * Float32(-1.0)
+            var gn_geo = gn   # before any bump/normal map -- see SPPMPixel.geo_normal
             # Real image-texture reflectance -- see bdpt.mojo's matching
             # diffuse-branch comment (task #150/#151): before this,
             # mat.albedo's flat 0.5-grey scaffolding default was always
@@ -783,6 +797,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                     px_scale * cone_len, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             vp.pos = hit
             vp.normal = vec3f(gn)
+            vp.geo_normal = vec3f(gn_geo)
             vp.alb = eff_alb
             # A diffuse_transmit VP must record that it HAS a transmit lobe,
             # and the material index the transmittance lives in. Storing
@@ -824,6 +839,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0.0):
                 gn = gn * Float32(-1.0)
+            var gn_geo = gn   # before any bump/normal map -- see SPPMPixel.geo_normal
             var eff_alb = mat.albedo
             var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
             if tex_ok:
@@ -873,6 +889,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 vp.beta *= cw.beta * (Float32(1.0) / max(ior_cd * ior_cd, Float32(1e-6)))
                 vp.pos = hit
                 vp.normal = vec3f(gn)
+                vp.geo_normal = vec3f(gn_geo)
                 vp.alb = eff_alb
                 vp.is_volume = PhotonKind.surface
                 vp.med_idx = cur_med_idx
@@ -901,6 +918,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 if inside_idx >= Int32(0):
                     vp.pos = hit
                     vp.normal = vec3f(gn_s)
+                    vp.geo_normal = vec3f(gn_s)
                     vp.wo = vec3f((-rd).to_simd())
                     vp.alb = RGB(Float32(1))
                     vp.mat_kind = LobeKind.bssrdf          # BSSRDF
@@ -950,6 +968,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_c, ray_dir) > Float32(0.0):
                 gn_c = gn_c * Float32(-1.0)
+            var gn_c_geo = gn_c   # before any bump/normal map -- see SPPMPixel.geo_normal
             # Bump/normal maps -- the diffuse/coateddiffuse branches above have had
             # these since 2026-09-22 and this one was simply missed.
             gn_c = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
@@ -1006,6 +1025,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             if not bxdf_is_delta(bs_c.flags):
                 vp.pos = hit
                 vp.normal = vec3f(gn_c)
+                vp.geo_normal = vec3f(gn_c_geo)
                 vp.alb = eff_alb_c
                 vp.mat_kind = LobeKind.ggx
                 vp.wo = vec3f(wo_c)
@@ -1029,6 +1049,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var hc = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wo_h)
             vp.pos = hit
             vp.normal = vec3f(hc.geo_normal)
+            vp.geo_normal = vec3f(hc.geo_normal)
             vp.alb = mat.albedo
             vp.mat_kind = LobeKind.hair
             vp.wo = vec3f(wo_h)
@@ -1049,6 +1070,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_m, ray_dir) > Float32(0.0):
                 gn_m = gn_m * Float32(-1.0)
+            var gn_m_geo = gn_m   # before any bump/normal map -- see SPPMPixel.geo_normal
             # Bump/normal maps -- the diffuse/coateddiffuse branches above have had
             # these since 2026-09-22 and this one was simply missed.
             gn_m = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
@@ -1060,6 +1082,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 break
             vp.pos = hit
             vp.normal = vec3f(gn_m)
+            vp.geo_normal = vec3f(gn_m_geo)
             vp.alb = mat.albedo
             vp.mat_kind = LobeKind.measured
             vp.wo = vec3f((-rd).to_simd())
@@ -1915,6 +1938,53 @@ def _build_grid(
 
 # ── Gather + SPPM update ──────────────────────────────────────────────────────
 
+@always_inline
+def gather_disk_contains(e: Vec3f, dist2: Float32, r2: Float32, n: Vec3f) -> Bool:
+    """Does a photon at offset `e` from a gather point lie inside the gather
+    DISK -- radius sqrt(r2), on the tangent plane with normal `n` -- rather
+    than merely inside the BALL of that radius?
+
+    THE photon-acceptance test for a surface density estimate, shared by
+    SPPM's gather and VCM's merge. A surface estimate divides the photons it
+    finds by one disk's area, pi r^2, so it is only right if the photons came
+    from that disk. A ball also sweeps in photons lying on OTHER surfaces
+    within reach -- an adjacent wall, a step, the parallel surface below a
+    shelf -- and sums them against the same single disk. VCM found this first
+    (classroom read 2.5x pbrt with merging on, 0.985x with it off) and grew
+    this guard; SPPM never did, and its gather radius in a room-sized scene is
+    large (0.51 scene units in barcelona-pavilion, around its pool). A photon
+    on this surface sits on the tangent plane to float precision, so a tenth
+    of the radius is generous."""
+    if dist2 > r2:
+        return False
+    var off = dot(e, n)
+    return off * off <= r2 * Float32(0.01)
+
+@always_inline
+def _sppm_photon_on_vp_surface(vp_is_volume: Int32, vp_mat_kind: Int32, vp_normal: Vec3f,
+                               e: Vec3f, dist2: Float32, r2: Float32, dir_in: Vec3f,
+                               bssrdf_ok: Bool) -> Bool:
+    """Whether a photon inside the gather ball may count toward a SURFACE
+    visible point at all. Kinds whose estimate is not a flat-disk one are
+    exempt: BSSRDF (diffusion reaches across curved skin), hair (a fibre has
+    no tangent plane), and volume points (a 3-D estimate by construction).
+
+    An opaque Lambertian point also requires the photon to have ARRIVED from
+    the side the point faces -- its f = alb/pi is pulled out of the sum as
+    angle-independent, so without this a photon on the back of a thin panel
+    lit the front. A transmission lobe legitimately takes both sides, and the
+    GGX/measured branches evaluate their BRDF per photon, which is already
+    ~0 for a direction below the surface."""
+    if vp_is_volume != PhotonKind.surface or bssrdf_ok:
+        return True
+    if vp_mat_kind == LobeKind.hair or vp_mat_kind == LobeKind.bssrdf:
+        return True
+    if not gather_disk_contains(e, dist2, r2, vp_normal):
+        return False
+    if vp_mat_kind == LobeKind.lambertian:
+        return dot(dir_in, vp_normal) < Float32(0.0)
+    return True
+
 def _sppm_gather_one(
     vps:      Pointer[SPPMPixel, MutUntrackedOrigin],
     i:        Int,
@@ -2014,7 +2084,9 @@ def _sppm_gather_one(
                     # material property, not a bias parameter.
                     var want_kind = PhotonKind.bssrdf if bssrdf_ok else vp.is_volume
                     var reach2 = bssrdf_r2 if bssrdf_ok else r2
-                    if dist2 <= reach2 and ph.is_volume == want_kind:
+                    if dist2 <= reach2 and ph.is_volume == want_kind and _sppm_photon_on_vp_surface(
+                            Int32(vp.is_volume), Int32(vp.mat_kind), vp.geo_normal.to_simd(), e.to_simd(), dist2, r2,
+                            ph.dir_in.to_simd(), bssrdf_ok):
                         # Volume VP: isotropic phase f=alb/(4π). Surface VP:
                         # Lambertian f=alb/π (angle-independent, pulled out
                         # of the sum) or, for a conductor VP, the raw GGX

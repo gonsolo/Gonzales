@@ -3,7 +3,7 @@ from std.math import tan, atan2, sqrt, cos, sin
 from std.ffi import external_call
 from .diagnostics import warn_unsupported
 from .lexer import is_whitespace
-from .parse_types import SceneParseState, NamedMaterial
+from .parse_types import SceneParseState, NamedMaterial, scene_path
 from .geometry import RGB, MatKind, PI, Vec3f
 from .transform import matrix_invert, transform_normals
 from .scene_builder import store_mesh
@@ -625,7 +625,7 @@ def _mit_build_named_material(tags: List[MitsubaTag], open_idx: Int, end: Int,
     if eff_type == "normalmap" or eff_type == "bumpmap":
         var nm_fname_idx = _mit_find_child_by_attr(tags, open_idx, end, "string", "name", "filename")
         if nm_fname_idx >= 0:
-            var nm_file = s_ptr[unsafe_offset=0].scene_dir + _mxml_find_attr(tags[nm_fname_idx], "value")
+            var nm_file = scene_path(s_ptr[unsafe_offset=0].scene_dir, _mxml_find_attr(tags[nm_fname_idx], "value"), "normal map")
             normal_tex_idx_for_mat = Int32(len(s_ptr[unsafe_offset=0].tex_names))
             s_ptr[unsafe_offset=0].tex_names.append(String("__normalmap"))
             s_ptr[unsafe_offset=0].tex_files.append(nm_file)
@@ -650,7 +650,7 @@ def _mit_build_named_material(tags: List[MitsubaTag], open_idx: Int, end: Int,
             var refl_end = _mit_block_end(tags, refl_idx)
             var bmp_fname_idx = _mit_find_child_by_attr(tags, refl_idx, refl_end, "string", "name", "filename")
             if bmp_fname_idx >= 0:
-                var bmp_file = s_ptr[unsafe_offset=0].scene_dir + _mxml_find_attr(tags[bmp_fname_idx], "value")
+                var bmp_file = scene_path(s_ptr[unsafe_offset=0].scene_dir, _mxml_find_attr(tags[bmp_fname_idx], "value"), "bitmap texture")
                 nm.tex_idx = Int32(len(s_ptr[unsafe_offset=0].tex_names))
                 s_ptr[unsafe_offset=0].tex_names.append(String("__mitsuba_bitmap"))
                 s_ptr[unsafe_offset=0].tex_files.append(bmp_file)
@@ -812,7 +812,7 @@ def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
         if fname_idx < 0:
             print("Warning: Mitsuba 'serialized' shape with no filename -- skipped.")
             return
-        var full_path = s_ptr[unsafe_offset=0].scene_dir + _mxml_find_attr(tags[fname_idx], "value")
+        var full_path = scene_path(s_ptr[unsafe_offset=0].scene_dir, _mxml_find_attr(tags[fname_idx], "value"), "Mitsuba mesh")
         var mesh = load_mitsuba_serialized(full_path)
         if mesh.n_verts == Int32(0):
             print("Warning: failed to load Mitsuba mesh:", full_path)
