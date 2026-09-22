@@ -66,7 +66,7 @@ comptime SQRT2      : Float32 = 1.41421356237309504880
 
 @fieldwise_init
 # <<listing: Point3f>>
-struct Point3f(TrivialRegisterPassable):
+struct Point3f(TrivialRegisterPassable, Writable):
     """An affine point in 3D space (position, not a direction)."""
     var x: Float32
     var y: Float32
@@ -110,7 +110,7 @@ struct Point3f(TrivialRegisterPassable):
 
 @fieldwise_init
 # <</listing>>
-struct Vec3f(TrivialRegisterPassable):
+struct Vec3f(TrivialRegisterPassable, Writable):
 # <<listing: Vec3f>>
     """A free vector in 3D space (direction, displacement, or surface normal)."""
     var x: Float32

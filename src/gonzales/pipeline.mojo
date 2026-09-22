@@ -10,6 +10,7 @@ from .rendering import render_all_tiles, normalize_film, apply_film_sensor, fmt_
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, Ray_C, dot, TriangleMesh_C, _is_real_ptr, Curve_C, curve_piece_bounds, FilmDims, FilterParams
 from .postprocess import denoise, write_image, write_image_cropped, write_image_cropwindow
+from .transform import Mat4
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, gaussian_sample_1d, derive_pcg_seeds, camera_ray_from_film_xy
 from .bvh import BVH2Node, SceneDescriptor2_C, render_aux_buffers, _scene_bounding_sphere
 from .sppm import sppm_render
@@ -464,7 +465,7 @@ def debug_trace_pixel(
     # rather than risked inline; worth its own pass.
     var ox = org1.x; var oy = org1.y; var oz = org1.z
     var dx = dir1.x; var dy = dir1.y; var dz = dir1.z
-    print("PIXEL", px, py, "ray.o", ox, oy, oz, "ray.d", dx, dy, dz)
+    print("PIXEL", px, py, "ray.o", org1, "ray.d", dir1)
 
     var inter = unsafe_alloc[Intersection_C](1)
     var current_ior = Float32(1.0)   # mirrors PathState_C.current_dielectric_ior
@@ -480,11 +481,8 @@ def debug_trace_pixel(
             # envmap miss
             if psc[unsafe_offset=0].infinite_count > 0:
                 var il = psc[unsafe_offset=0].infinite_lights[unsafe_offset=0]
-                var w2l = il.world_to_light
-                var ldx = w2l[unsafe_offset=0]*dx + w2l[unsafe_offset=4]*dy + w2l[unsafe_offset=8]*dz
-                var ldy = w2l[unsafe_offset=1]*dx + w2l[unsafe_offset=5]*dy + w2l[unsafe_offset=9]*dz
-                var ldz = w2l[unsafe_offset=2]*dx + w2l[unsafe_offset=6]*dy + w2l[unsafe_offset=10]*dz
-                var uv = _equal_area_sphere_to_square(ldx, ldy, ldz)
+                var ldir = Mat4.load(il.world_to_light) * Vec3f(dx, dy, dz)
+                var uv = _equal_area_sphere_to_square(ldir.x, ldir.y, ldir.z)
                 var rgb_str = String("(no pixels)")
                 if _is_real_ptr(il.pixels_ptr) and il.cdf_w > Int32(0):
                     var iw = Int(il.cdf_w); var ih = Int(il.cdf_h)
@@ -494,7 +492,7 @@ def debug_trace_pixel(
                     var gg = il.pixels_ptr[unsafe_offset=(pye*iw+pxe)*3+1]
                     var bb = il.pixels_ptr[unsafe_offset=(pye*iw+pxe)*3+2]
                     rgb_str = String(rr) + " " + String(gg) + " " + String(bb)
-                print("  bounce", bounce, "MISS -> envmap localdir", ldx, ldy, ldz, "uv", uv[0], uv[1], "rgb", rgb_str)
+                print("  bounce", bounce, "MISS -> envmap localdir", ldir, "uv", uv, "rgb", rgb_str)
             else:
                 print("  bounce", bounce, "MISS (no envmap)")
             break

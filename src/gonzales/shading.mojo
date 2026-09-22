@@ -7,7 +7,7 @@ from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_p
 from .rng import PCG32
 from .bvh import BVH2Node, SceneDescriptor2_C, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core, HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_square_to_sphere, _equal_area_sphere_to_square
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
-from .transform import transform_normal_by_instance
+from .transform import transform_normal_by_instance, Mat4
 from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide, guide_is_active
 from .spectrum import spec_refl_unbounded, SpectralHandle, null_spectral_handle, SpectralSample, SampledWavelengths, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb, rgb_bands_to_spectral_sample
 from .reservoir import ReservoirState, reservoir_update, reservoir_finalize, reservoir_combine, reservoir_cap_confidence
@@ -4580,11 +4580,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         for inf_i in range(ctx.lights.infinite_count):
             var ilight = ctx.lights.infinite_lights[unsafe_offset=inf_i]
             # Transform world-space ray direction into light's local frame
-            var w2l = ilight.world_to_light
-            var ld_x = w2l[unsafe_offset=0]*ray_dir[0] + w2l[unsafe_offset=4]*ray_dir[1] + w2l[unsafe_offset=8]*ray_dir[2]
-            var ld_y = w2l[unsafe_offset=1]*ray_dir[0] + w2l[unsafe_offset=5]*ray_dir[1] + w2l[unsafe_offset=9]*ray_dir[2]
-            var ld_z = w2l[unsafe_offset=2]*ray_dir[0] + w2l[unsafe_offset=6]*ray_dir[1] + w2l[unsafe_offset=10]*ray_dir[2]
-            var local_dir = Vec3f(ld_x, ld_y, ld_z)
+            var local_dir = Mat4.load(ilight.world_to_light) * ray_dir
             var env_rgb: RGB
             if ilight.tex_idx >= Int32(0) and _is_real_ptr(ilight.pixels_ptr) and ilight.cdf_w > Int32(0):
                 # Bilinear lookup in GPU/CPU-resident pixels (cdf_w × cdf_h, 3 floats/pixel)

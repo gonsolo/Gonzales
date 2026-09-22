@@ -1,9 +1,72 @@
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
-from .geometry import Vec3f
+from .geometry import Vec3f, Point3f
 
 # Matrix math. 4x4 matrices are 16 Float32 in column-major order:
 # flat[col*4 + row] = matrix[row, col], matching Transform.columnMajorFloats().
+
+
+@fieldwise_init
+struct Mat4(TrivialRegisterPassable):
+    """A 4x4 col-major matrix as a value, for the world_to_light/raster_to_
+    camera/camera_to_world family -- the transforms this codebase keeps
+    hand-rolling inline (element-by-element against a raw Pointer[Float32] or
+    SIMD[DType.float32, 16]) instead of calling one shared type.
+
+    NOT the only matrix representation in this codebase, and deliberately
+    not trying to be: Instance_C.objToWorld/worldToObj are already
+    SIMD[DType.float32, 16] for GPU throughput reasons of their own (many
+    per scene, TrivialRegisterPassable so they cross kernel boundaries by
+    value), and transform.mojo's transform_points/transform_normals below
+    stay array-in/array-out for bulk mesh preprocessing. Mat4 is for the
+    single-point/single-vector call sites -- camera rays, per-sample env
+    light transforms -- that had no shared type at all and so reimplemented
+    the same handful of lines repeatedly, each a chance to drift.
+
+    Two multiplies, not one, because they are NOT interchangeable and a
+    single overloaded `*` would hide which one a call site means:
+      - `mat * v`            ordinary forward multiply (rotation part only,
+                              no translation): world_to_light * dir_world,
+                              turning a WORLD direction into the light's
+                              local frame.
+      - `mat.transpose_mul(v)` the TRANSPOSE multiply: for an orthogonal
+                              (rotation) matrix, M^T == M^-1, so this is how
+                              bvh.mojo already recovers light_to_world from
+                              world_to_light without storing a second matrix
+                              -- local light-space direction back to world,
+                              e.g. photon emission. Conflating the two once
+                              already produced a scene-dependent sign/axis
+                              bug class in this codebase's history
+                              (env-map shadow-direction row-flip, see
+                              project_infinite_light_shadows); keeping them
+                              as differently-named operations makes that
+                              mistake a type-level question again, not a
+                              silent one.
+    """
+    var m: SIMD[DType.float32, 16]
+
+    @staticmethod
+    def load(ptr: Pointer[Float32, MutUntrackedOrigin]) -> Mat4:
+        var v = SIMD[DType.float32, 16](0)
+        for i in range(16):
+            v[i] = ptr[unsafe_offset=i]
+        return Mat4(v)
+
+    @always_inline
+    def __mul__(self, v: Vec3f) -> Vec3f:
+        return Vec3f(
+            self.m[0]*v.x + self.m[4]*v.y + self.m[8]*v.z,
+            self.m[1]*v.x + self.m[5]*v.y + self.m[9]*v.z,
+            self.m[2]*v.x + self.m[6]*v.y + self.m[10]*v.z,
+        )
+
+    @always_inline
+    def transpose_mul(self, v: Vec3f) -> Vec3f:
+        return Vec3f(
+            self.m[0]*v.x + self.m[1]*v.y + self.m[2]*v.z,
+            self.m[4]*v.x + self.m[5]*v.y + self.m[6]*v.z,
+            self.m[8]*v.x + self.m[9]*v.y + self.m[10]*v.z,
+        )
 
 def _write_identity(result: Pointer[Float32, MutUntrackedOrigin]) -> Int32:
     for i in range(16):

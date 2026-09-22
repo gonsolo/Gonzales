@@ -3,6 +3,7 @@ from std.math import sqrt, cos, sin, max, min, exp, floor, log
 from max.algorithm import parallelize
 from std.atomic import Atomic
 from std.sys.info import num_performance_cores
+from .transform import Mat4
 from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, MatKind, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, _is_real_ptr, store_vec3, _atan2f
 from .rng import PCG32
 from .spectrum import SpectralHandle
@@ -393,11 +394,7 @@ def _sample_infinite_light_textured(
     var local_d_s = _equal_area_square_to_sphere(sample_u, sample_v)
     var local_d = Vec3f(local_d_s[0], local_d_s[1], local_d_s[2])
 
-    var env_dir = Vec3f(
-        w2l[unsafe_offset=0]*local_d.x + w2l[unsafe_offset=1]*local_d.y + w2l[unsafe_offset=2]*local_d.z,
-        w2l[unsafe_offset=4]*local_d.x + w2l[unsafe_offset=5]*local_d.y + w2l[unsafe_offset=6]*local_d.z,
-        w2l[unsafe_offset=8]*local_d.x + w2l[unsafe_offset=9]*local_d.y + w2l[unsafe_offset=10]*local_d.z,
-    )
+    var env_dir = Mat4.load(w2l).transpose_mul(local_d)
 
     var px = min(iw - 1, max(0, Int(sample_u * Float32(iw))))
     var py = min(ih - 1, max(0, Int(sample_v * Float32(ih))))
@@ -618,12 +615,7 @@ def _eval_infinite_light_and_pdf(ilight: InfiniteLight_C, dir_world: Vec3f) -> T
     [[project_infinite_light_shadows]])."""
     if ilight.tex_idx < Int32(0) or not _is_real_ptr(ilight.pixels_ptr) or ilight.cdf_w <= Int32(0):
         return (ilight.scale, Float32(1) / (Float32(4) * PI))
-    var w2l = ilight.world_to_light
-    var local_dir = Vec3f(
-        w2l[unsafe_offset=0]*dir_world.x + w2l[unsafe_offset=4]*dir_world.y + w2l[unsafe_offset=8]*dir_world.z,
-        w2l[unsafe_offset=1]*dir_world.x + w2l[unsafe_offset=5]*dir_world.y + w2l[unsafe_offset=9]*dir_world.z,
-        w2l[unsafe_offset=2]*dir_world.x + w2l[unsafe_offset=6]*dir_world.y + w2l[unsafe_offset=10]*dir_world.z,
-    )
+    var local_dir = Mat4.load(ilight.world_to_light) * dir_world
     var uv = _equal_area_sphere_to_square(local_dir.x, local_dir.y, local_dir.z)
     var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
     var px = min(iw - 1, max(0, Int(uv[0] * Float32(iw))))
