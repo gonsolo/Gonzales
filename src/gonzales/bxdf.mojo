@@ -1547,12 +1547,29 @@ def _nee_weight_coated_coat_lobe(
     var g2 = ggx_G2(cos_o, cos_s, coat_alpha)
     var f = fr_dielectric(cos_wm, ior)
     var f_cos = d * g2 * f / (Float32(4.0) * cos_o)
+    # This lobe's REVERSE density, toward wo -- the same VNDF density with the
+    # two directions swapped. Only VCM's policy reads it (it is the dVC term's
+    # multiplier); the path tracer's power heuristic never looks.
+    var mis_l = mis
+    if mis.is_vcm:
+        mis_l.pdf_rev_w = ggx_vndf_pdf(cos_s, dot(ls.wi, wm), d, coat_alpha)
     if ls.is_delta:
-        return ls.Li * f_cos
+        # A delta light cannot be found by BSDF sampling, so for a PATH TRACER
+        # this is the sole strategy and weight 1 is right -- and stays right,
+        # since the default policy makes nee_mis_weight return
+        # power_heuristic(1, 0) = 1. It is NOT right for VCM: merging and t=1
+        # light tracing reach this same vertex and compete for the same
+        # photons, exactly as the coat EXIT vertex's own simple-light NEE
+        # already documents ("The sun is delta ... so it takes a balance share
+        # rather than weight 1"). This lobe returned before ever consulting
+        # `mis`, so it took FULL weight beside strategies that had already
+        # reserved their share -- and it fires ONLY for a rough coat, which is
+        # the roughness-gated excess measured on barcelona-pavilion.
+        return ls.Li * (f_cos * nee_mis_weight(mis_l, Float32(1.0), Float32(0.0), cos_s))
     if ls.pdf <= Float32(0.0):
         return RGB(Float32(0.0))
     var pdf_bsdf = ggx_vndf_pdf(cos_o, cos_wm, d, coat_alpha)
-    var w = nee_mis_weight(mis, ls.pdf, pdf_bsdf, cos_s)
+    var w = nee_mis_weight(mis_l, ls.pdf, pdf_bsdf, cos_s)
     return ls.Li * (f_cos * w / ls.pdf)
 
 @always_inline

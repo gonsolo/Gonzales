@@ -2399,13 +2399,24 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # covers them, same scope as every other NEE block in this
             # function).
             if is_rough_coat and cos_o > Float32(0):
+                var (_cc_c, r_cc) = _scene_bounding_sphere(sd)
+                var inv_scene_c = Float32(1.0) / max(_bdpt_n_lights(sd) * PI * r_cc * r_cc, Float32(1e-12))
                 for li_c in range(_bdpt_simple_light_count(sd)):
                     var ls_ic = _bdpt_sample_simple_light(sd, li_c, hit.to_simd(), pcg)
-                    var w_ic = _nee_weight_coated_coat_lobe(ls_ic, ior, coat_alpha, gn, wo)
+                    # VCM's four-strategy balance share, not the path tracer's
+                    # two-strategy power heuristic. Merging and t=1 reach this
+                    # vertex too; taking weight 1 here double-counts, and this
+                    # block runs ONLY for a rough coat.
+                    var emis_c = inv_scene_c if li_c < Int(sd.distantLightCount) else Float32(0)
+                    var pol_c = MisPolicy(True, mis_vm_weight_factor, dvcm_carry, dvc_carry,
+                                          emis_c, Float32(0), False)
+                    var w_ic = _nee_weight_coated_coat_lobe(ls_ic, ior, coat_alpha, gn, wo, pol_c)
                     total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_ic.r, w_ic.g, w_ic.b, wavelengths), ls_ic, hit, gn, cur_med_idx, sd, scratch, wavelengths)
                 for inf_ic in range(Int(sd.infiniteLightCount)):
                     var ls_infc = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_ic], Point2f(pcg.next_float(), pcg.next_float()))
-                    var w_infc = _nee_weight_coated_coat_lobe(ls_infc, ior, coat_alpha, gn, wo)
+                    var pol_ic = MisPolicy(True, mis_vm_weight_factor, dvcm_carry, dvc_carry,
+                                           ls_infc.pdf * inv_scene_c, Float32(0), False)
+                    var w_infc = _nee_weight_coated_coat_lobe(ls_infc, ior, coat_alpha, gn, wo, pol_ic)
                     total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_infc.r, w_infc.g, w_infc.b, wavelengths), ls_infc, hit, gn, cur_med_idx, sd, scratch, wavelengths)
 
             coat_walk_enter(cw, pcg)
