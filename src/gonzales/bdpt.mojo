@@ -1466,7 +1466,20 @@ def _bdpt_merge_from_cache(
                     # BSSRDF exits excluded: a light-side exit vertex has no
                     # incoming ray (it was reached by a hop), so there is no
                     # photon direction to evaluate the camera vertex against.
-                    if lv.is_delta == Int32(0) and lv.is_surface == Int32(1) and lv.is_light == Int32(0) and lv.mat_kind != LobeKind.bssrdf:
+                    # ... and the LIGHT vertex must be MIS-scoped too, for the
+                    # reason this function's own docstring already gives about
+                    # the CAMERA vertex: a kind with no real pdf has no real
+                    # MIS weight, the weight below falls back to 1, and an
+                    # unweighted merge summed with a weighted connect
+                    # estimates more than I. That gate was enforced on cv (an
+                    # early return) but not on lv, so the asymmetry let an
+                    # unscoped light vertex merge at FULL weight. Reachable in
+                    # practice: lobe_scoped's list is lambertian/ggx/hair/
+                    # measured/coated_walk, so a diffuse_transmit photon is
+                    # unscoped -- and barcelona-pavilion's foliage is 5
+                    # diffusetransmission materials, sitting exactly over the
+                    # shadowed regions that measured 2-3x too bright.
+                    if lv.is_delta == Int32(0) and lv.is_surface == Int32(1) and lv.is_light == Int32(0) and lv.mat_kind != LobeKind.bssrdf and _bdpt_vertex_mis_scoped(lv):
                         var e = lv.pos - cv.pos
                         var dist2 = e.length_sq()
                         # Surface-compatibility guard: a distance-only gather
