@@ -1690,8 +1690,30 @@ def _bdpt_camera_path_init[use_gpu: Bool](
     `_bdpt_light_path_init`, there is no early-inactive case (a camera
     subpath always starts active, even in the degenerate zero-length-ray
     edge case the original code silently tolerates) -- `active` is always 1."""
-    var fX = Float32(px) + Float32(0.5)
-    var fY = Float32(py) + Float32(0.5)
+    # JITTER. This was `px + 0.5` -- the pixel CENTRE, identically for every
+    # sample. VCM was the only integrator that did not jitter: the path tracer
+    # uses `px + 0.5 + deltaX` through the scene's reconstruction filter
+    # (sampling.mojo, gen_primary_ray_state) and SPPM uses
+    # `px + pcg.next_float()` (sppm.mojo). So VCM had no anti-aliasing at all
+    # and all of its spp were perfectly correlated in the film dimension.
+    #
+    # It also turned any first-hit-determined black into a PERMANENT black
+    # pixel, since all 64 samples traced the identical ray. On
+    # barcelona-pavilion that was 1587 pixels (1.98% of the lit image) stuck
+    # at exactly 0.0, identical under --seed 1 and --seed 7 -- foliage, where
+    # the centre ray lands on a leaf whose alpha cut-out we do not parse (see
+    # `Shape "texture alpha"`, still unimplemented) so the quad is opaque
+    # black. Rendering at 2x and downsampling drops that count to ZERO, which
+    # is what identified the sampling as the amplifier rather than a
+    # geometric hole or a NaN.
+    #
+    # Uniform jitter, matching SPPM. NOT the path tracer's Gaussian
+    # reconstruction filter: sharing that needs the filter parameters plumbed
+    # into this kernel, and SPPM already boxes, so this leaves VCM consistent
+    # with one of the two rather than inventing a third behaviour. Unifying
+    # all three on the real filter is the follow-up.
+    var fX = Float32(px) + pcg.next_float()
+    var fY = Float32(py) + pcg.next_float()
     var cx = r2c[unsafe_offset=0]*fX + r2c[unsafe_offset=4]*fY + r2c[unsafe_offset=12]
     var cy = r2c[unsafe_offset=1]*fX + r2c[unsafe_offset=5]*fY + r2c[unsafe_offset=13]
     var cz = r2c[unsafe_offset=2]*fX + r2c[unsafe_offset=6]*fY + r2c[unsafe_offset=14]

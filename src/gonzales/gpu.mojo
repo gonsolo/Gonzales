@@ -3138,11 +3138,39 @@ def traverse_shadow_rays_gpu(
         paths[unsafe_offset=tid].estimate += task.contrib
 
 
+
+@always_inline
+def _clamp_sample_rgb(r: Float32, g: Float32, b: Float32, lim: Float32
+                      ) -> Tuple[Float32, Float32, Float32]:
+    """pbrt's `maxcomponentvalue`, applied to ONE SAMPLE as pbrt applies it.
+
+    RGBFilm::AddSample clamps each sample's sensor RGB before it enters the
+    filter accumulator. normalize_film used to be our only clamp, and it runs
+    on the FINISHED pixel -- a 64-sample mean almost never crosses the
+    threshold, so the clamp removed essentially nothing while pbrt was
+    removing real energy from every spiky sample. Measured on
+    barcelona-pavilion, where the scene asks for maxcomponentvalue 50 at iso
+    500: the lit deck read 1.410x the reference, and 1.197x with the clamp
+    taken out of BOTH renderers -- i.e. this asymmetry owned most of that gap.
+
+    `lim` is already divided by the film's iso scale, because normalize_film
+    multiplies by iso/100 after the fact and pbrt clamps post-sensor.
+    lim <= 0 disables it."""
+    if lim <= Float32(0):
+        return (r, g, b)
+    var mx = max(r, max(g, b))
+    if mx <= lim:
+        return (r, g, b)
+    var k = lim / mx
+    return (r * k, g * k, b * k)
+
+
 def accumulate_film_gpu(
     paths: Pointer[PathState_C, MutUntrackedOrigin],
     film: Pointer[Float32, MutUntrackedOrigin],
     albedo_film: Pointer[Float32, MutUntrackedOrigin],
     count_dp: Int64,
+    sample_clamp: Float32 = Float32(0.0),
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_res_dp: Int64 = Int64(0),
     spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
@@ -3158,9 +3186,10 @@ def accumulate_film_gpu(
     var _e = spectral_sample_to_rgb(spectral_coeffs, Int(spectral_res_dp),
         spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
         paths[unsafe_offset=tid].estimate, paths[unsafe_offset=tid].wavelengths)
-    film[unsafe_offset=tid*3+0] += _e[0]
-    film[unsafe_offset=tid*3+1] += _e[1]
-    film[unsafe_offset=tid*3+2] += _e[2]
+    var (_cr, _cg, _cb) = _clamp_sample_rgb(_e[0], _e[1], _e[2], sample_clamp)
+    film[unsafe_offset=tid*3+0] += _cr
+    film[unsafe_offset=tid*3+1] += _cg
+    film[unsafe_offset=tid*3+2] += _cb
     albedo_film[unsafe_offset=tid*3+0] += paths[unsafe_offset=tid].albedo.r
     albedo_film[unsafe_offset=tid*3+1] += paths[unsafe_offset=tid].albedo.g
     albedo_film[unsafe_offset=tid*3+2] += paths[unsafe_offset=tid].albedo.b
@@ -3183,6 +3212,7 @@ def accumulate_film_wavefront_gpu(
     film: Pointer[Float32, MutUntrackedOrigin],
     albedo_film: Pointer[Float32, MutUntrackedOrigin],
     n_pixels_dp: Int64, actual_batch_dp: Int64,
+    sample_clamp: Float32 = Float32(0.0),
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_res_dp: Int64 = Int64(0),
     spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
@@ -3202,7 +3232,8 @@ def accumulate_film_wavefront_gpu(
         var _pe = spectral_sample_to_rgb(spectral_coeffs, Int(spectral_res_dp),
             spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
             p.estimate, p.wavelengths)
-        r += _pe[0]; g += _pe[1]; b += _pe[2]
+        var (_qr, _qg, _qb) = _clamp_sample_rgb(_pe[0], _pe[1], _pe[2], sample_clamp)
+        r += _qr; g += _qg; b += _qb
         ar += p.albedo.r;  ag += p.albedo.g;  ab += p.albedo.b
     film[unsafe_offset=px*3+0] += r; film[unsafe_offset=px*3+1] += g; film[unsafe_offset=px*3+2] += b
     albedo_film[unsafe_offset=px*3+0] += ar; albedo_film[unsafe_offset=px*3+1] += ag; albedo_film[unsafe_offset=px*3+2] += ab
@@ -4439,6 +4470,7 @@ def gpu_render_sample[Oc: Origin[mut=True]](
     n: Int64,
     maxDepth: Int32,
     px_scale: Float32 = Float32(0.0),
+    sample_clamp: Float32 = Float32(0.0),   # pbrt's per-sample maxcomponentvalue, iso-divided
     use_restir: Bool = False,
     frame_index: Int = 0,
     use_vol_restir_reuse: Bool = False,
@@ -4551,7 +4583,7 @@ def gpu_render_sample[Oc: Origin[mut=True]](
                 handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
                 handle[].film_buf.unsafe_ptr().unsafe_bitcast[Float32](),
                 handle[].albedo_film_buf.unsafe_ptr().unsafe_bitcast[Float32](),
-                Int64(n_int),
+                Int64(n_int), sample_clamp,
                         handle[].spectral.coeffs_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         Int64(handle[].spectral.res),
         handle[].spectral.cie_x_buf.unsafe_ptr().unsafe_bitcast[Float32](),
@@ -4578,6 +4610,7 @@ def gpu_render_wavefront(
     n: Int64,
     maxDepth: Int32,
     px_scale: Float32 = Float32(0.0),
+    sample_clamp: Float32 = Float32(0.0),   # pbrt's per-sample maxcomponentvalue, iso-divided
     # Task #163 stage 3: when use_vulkan_rt, every bounce's primary
     # intersection test is routed through the CUDA/Vulkan interop RT
     # backend (vulkaninterop_rt_traverse_paths_gpu, zero CPU sync) instead
@@ -4667,7 +4700,7 @@ def gpu_render_wavefront(
                 handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
                 handle[].film_buf.unsafe_ptr().unsafe_bitcast[Float32](),
                 handle[].albedo_film_buf.unsafe_ptr().unsafe_bitcast[Float32](),
-                Int64(n_pix), Int64(batch),
+                Int64(n_pix), Int64(batch), sample_clamp,
                         handle[].spectral.coeffs_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         Int64(handle[].spectral.res),
         handle[].spectral.cie_x_buf.unsafe_ptr().unsafe_bitcast[Float32](),

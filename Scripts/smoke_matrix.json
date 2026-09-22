@@ -5,12 +5,12 @@
     "tol": 0.03
   },
   "analytic-sphere.sppm": {
-    "mean": 0.002814,
+    "mean": 0.002816,
     "median": 0.0,
     "tol": 0.03
   },
   "analytic-sphere.vcm": {
-    "mean": 0.0027,
+    "mean": 0.002881,
     "median": 0.0,
     "tol": 0.03
   },
@@ -25,8 +25,8 @@
     "tol": 0.03
   },
   "baseline-diffuse.vcm": {
-    "mean": 0.186455,
-    "median": 0.041591,
+    "mean": 0.140918,
+    "median": 0.041062,
     "tol": 0.03
   },
   "chromatic-medium.pt": {
@@ -40,8 +40,8 @@
     "tol": 0.03
   },
   "chromatic-medium.vcm": {
-    "mean": 0.355547,
-    "median": 0.340495,
+    "mean": 0.353894,
+    "median": 0.339022,
     "tol": 0.03
   },
   "closed-cavity.pt": {
@@ -55,8 +55,8 @@
     "tol": 0.03
   },
   "closed-cavity.vcm": {
-    "mean": 0.713089,
-    "median": 0.70726,
+    "mean": 0.713353,
+    "median": 0.706639,
     "tol": 0.03
   },
   "curves-hair.pt": {
@@ -70,8 +70,8 @@
     "tol": 0.03
   },
   "curves-hair.vcm": {
-    "mean": 2.256388,
-    "median": 0.038254,
+    "mean": 2.314577,
+    "median": 0.036344,
     "tol": 0.03
   },
   "many-lights.pt": {
@@ -85,8 +85,8 @@
     "tol": 0.03
   },
   "many-lights.vcm": {
-    "mean": 0.766957,
-    "median": 0.494702,
+    "mean": 0.7609,
+    "median": 0.499748,
     "tol": 0.03
   },
   "medium-sphere-light.pt": {
@@ -100,8 +100,8 @@
     "tol": 0.03
   },
   "medium-sphere-light.vcm": {
-    "mean": 0.026269,
-    "median": 0.010068,
+    "mean": 0.026421,
+    "median": 0.011011,
     "tol": 0.03
   },
   "mnee-through-glass.pt": {
@@ -115,8 +115,8 @@
     "tol": 0.03
   },
   "mnee-through-glass.vcm": {
-    "mean": 0.319374,
-    "median": 0.097864,
+    "mean": 0.290468,
+    "median": 0.098697,
     "tol": 0.03
   },
   "normal-map.pt": {
@@ -130,8 +130,8 @@
     "tol": 0.03
   },
   "normal-map.vcm": {
-    "mean": 0.155586,
-    "median": 0.017514,
+    "mean": 0.110169,
+    "median": 0.017801,
     "tol": 0.03
   },
   "sss-slab.pt": {
@@ -145,23 +145,23 @@
     "tol": 0.03
   },
   "sss-slab.vcm": {
-    "mean": 14.874449,
-    "median": 13.964989,
+    "mean": 14.927404,
+    "median": 14.014008,
     "tol": 0.03
   },
   "subsurface-coated.pt": {
-    "mean": 0.109185,
-    "median": 0.042451,
+    "mean": 0.109859,
+    "median": 0.042736,
     "tol": 0.03
   },
   "subsurface-coated.sppm": {
-    "mean": 0.099831,
-    "median": 0.037653,
+    "mean": 0.099817,
+    "median": 0.037317,
     "tol": 0.03
   },
   "subsurface-coated.vcm": {
-    "mean": 0.174726,
-    "median": 0.029284,
+    "mean": 0.129348,
+    "median": 0.029808,
     "tol": 0.03
   }
 }

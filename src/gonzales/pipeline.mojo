@@ -59,6 +59,25 @@ comptime SPPM_DEFAULT_RADIUS_FRACTION = Float32(0.006)
 #
 # Scaling by the scene's bounding sphere makes the default mean the same thing
 # at every scale. An explicit CLI or scene-file radius still wins outright.
+
+@always_inline
+def _sample_clamp(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> Float32:
+    """`maxcomponentvalue` expressed in the units the accumulation kernels see.
+
+    pbrt clamps each SAMPLE's sensor RGB (RGBFilm::AddSample); normalize_film
+    clamps the finished pixel, which almost never trips and so removed
+    essentially nothing. The kernels accumulate pre-iso radiance and
+    normalize_film multiplies by iso/100 afterwards, so the per-sample limit
+    has to be divided by that same scale to mean the same thing."""
+    var mcv = psc[unsafe_offset=0].film_max_comp
+    if mcv <= Float32(0):
+        return Float32(0)
+    var scale = psc[unsafe_offset=0].film_iso / Float32(100)
+    if scale <= Float32(0):
+        return Float32(0)
+    return mcv / scale
+
+
 def _resolve_sppm_params(
     psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
     ref sd: SceneDescriptor2_C,
@@ -1323,6 +1342,7 @@ def parse_and_render(
                     UInt32(psc[unsafe_offset=0].rng_seed >> UInt64(32)),
                     Int64(n_pixels), psc[unsafe_offset=0].max_depth,
                     px_scale,
+                    sample_clamp=_sample_clamp(psc),
                     use_restir=use_restir, frame_index=si,
                     use_vol_restir_reuse=use_vol_restir_reuse,
                 )
@@ -1341,7 +1361,7 @@ def parse_and_render(
                     UInt32(psc[unsafe_offset=0].rng_seed & UInt64(0xFFFFFFFF)),
                     UInt32(psc[unsafe_offset=0].rng_seed >> UInt64(32)),
                     Int64(n_pixels), psc[unsafe_offset=0].max_depth,
-                    px_scale,
+                    px_scale, _sample_clamp(psc),
                     use_vk, interop_scene, interop_rays_buf_opt, interop_results_buf_opt,
                     mesh_material_idx_buf_opt, mesh_al_idx_buf_opt, n_meshes_vk,
                     instance_base_mesh_buf_opt,

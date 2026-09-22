@@ -101,6 +101,8 @@ def _accumulate_film_gpu_body(ctx: DeviceContext) raises:
     ctx.enqueue_function[accumulate_film_gpu](
         path_buf.unsafe_ptr().unsafe_bitcast[PathState_C](),
         film_buf.unsafe_ptr(), albedo_buf.unsafe_ptr(), Int64(n),
+        Float32(0.0),   # sample_clamp disabled: this test checks accumulation,
+                        # not pbrt's per-sample maxcomponentvalue clamp
         null_tbl, Int64(0), null_tbl, null_tbl, null_tbl, null_tbl,
         grid_dim=1, block_dim=n,
     )
