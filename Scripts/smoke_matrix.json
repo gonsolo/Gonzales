@@ -55,7 +55,7 @@
     "tol": 0.03
   },
   "closed-cavity.vcm": {
-    "mean": 0.713354,
+    "mean": 0.713353,
     "median": 0.706639,
     "tol": 0.03
   },
@@ -130,8 +130,8 @@
     "tol": 0.03
   },
   "normal-map.vcm": {
-    "mean": 0.108649,
-    "median": 0.016926,
+    "mean": 0.110115,
+    "median": 0.017263,
     "tol": 0.03
   },
   "sss-slab.pt": {

@@ -160,7 +160,29 @@ comptime _MNEE_MAX_SPHERES = 4  # cap on sphere-light MNEE call sites, unrolled 
 struct BDPTVertex(TrivialRegisterPassable):
     """A vertex on a camera or light subpath."""
     var pos:    Point3f  # world position
-    var normal: Vec3f    # geometric normal (0 for volume)
+    # THE GEOMETRIC normal (0 for volume). Keep it geometric: it is what
+    # _geom_term's area Jacobian and _connect's solid-angle -> area pdf
+    # conversions are built on, and a perturbed normal there is a real bias,
+    # not a shading choice. See shading_normal below.
+    var normal: Vec3f
+    # The SHADING normal -- `normal` after bump/normal maps. Only the BxDF
+    # interface reads it (via _vertex_ctx), which is the split pbrt keeps as
+    # Vertex::ng vs Vertex::ns.
+    #
+    # This field exists because of a measured mistake: the first version of
+    # the light/photon-side surface-map work wrote the PERTURBED normal into
+    # `normal` alone, so every connection's G and its two area-pdf
+    # conversions silently used it. The signature was VCM reacting to a
+    # normal map about twice as strongly as the path tracer (barcelona whole
+    # image 0.9009 -> 0.8498 against a pbrt BDPT reference, i.e. moving away
+    # from the path tracer's 0.9851, where a shading-only change should have
+    # moved it toward). Two cosines per connection, each wrong, is exactly a
+    # factor of two.
+    #
+    # Set it at EVERY store site, including the ones with no map, where it is
+    # simply equal to `normal` -- a vertex left with the _null_vertex default
+    # here is shaded against a normal that has nothing to do with its surface.
+    var shading_normal: Vec3f
     var beta: SpectralSample  # throughput to here, at THIS PASS's hero wavelengths
     var alb:  RGB  # BSDF albedo (F0 for conductor)
     var pdf_fwd: Float32  # area PDF forward (from previous vertex) -- unused by the
@@ -213,6 +235,7 @@ def _null_vertex() -> BDPTVertex:
     return BDPTVertex(
         pos=Point3f(Float32(0)),
         normal=Vec3f(Float32(0), Float32(1), Float32(0)),
+        shading_normal=Vec3f(Float32(0), Float32(1), Float32(0)),
         beta=SpectralSample(Float32(0)),
         alb=RGB(Float32(0)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
@@ -2252,13 +2275,18 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # on a flat one. Footprint from the camera-distance
             # approximation, the same one the light side uses, so a merge
             # pair filters the surface identically.
+            # Saved BEFORE the perturbation: the stored vertex keeps this as its
+            # GEOMETRIC normal, because _geom_term and _connect's area-pdf
+            # conversions are built on it. See BDPTVertex.shading_normal.
+            var gn_geo = gn
             gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
                 gn, gn, ray_dir,
                 _camera_approx_footprint(hit, cam_pos, px_scale),
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var v = _null_vertex()
             v.pos = hit
-            v.normal = vec3f(gn)
+            v.normal = vec3f(gn_geo)
+            v.shading_normal = vec3f(gn)
             v.beta = beta
             v.alb = eff_alb
             v.is_surface = Int32(1); v.is_delta = Int32(0)
@@ -2428,6 +2456,10 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             if tex_ok:
                 eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             # Bump/normal maps -- see the diffuse branch above.
+            # Saved BEFORE the perturbation: the stored vertex keeps this as its
+            # GEOMETRIC normal, because _geom_term and _connect's area-pdf
+            # conversions are built on it. See BDPTVertex.shading_normal.
+            var gn_geo = gn
             gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
                 gn, gn, ray_dir,
                 _camera_approx_footprint(hit, cam_pos, px_scale),
@@ -2494,7 +2526,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     last_bsdf_pdf = cw.pdf
                     var v = _null_vertex()
                     v.pos = hit
-                    v.normal = vec3f(gn)
+                    v.normal = vec3f(gn_geo)
+                    v.shading_normal = vec3f(gn)
                     v.beta = beta
                     v.alb = eff_alb
                     # coated_REFLECT, not coated_walk: this is the coat's own
@@ -2692,7 +2725,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (cw.beta).r, (cw.beta).g, (cw.beta).b, wavelengths)
             var v = _null_vertex()
             v.pos = hit
-            v.normal = vec3f(gn)
+            v.normal = vec3f(gn_geo)
+            v.shading_normal = vec3f(gn)
             v.beta = beta_pre_coat
             v.alb = eff_alb
             v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.coated_walk
@@ -2779,6 +2813,10 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_c, ray_dir) > Float32(0): gn_c = gn_c * Float32(-1)
             # Bump/normal maps -- see the diffuse branch.
+            # Saved BEFORE the perturbation: the stored vertex keeps this as its
+            # GEOMETRIC normal, because _geom_term and _connect's area-pdf
+            # conversions are built on it. See BDPTVertex.shading_normal.
+            var gn_c_geo = gn_c
             gn_c = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
                 gn_c, gn_c, ray_dir,
                 _camera_approx_footprint(hit, cam_pos, px_scale),
@@ -2824,7 +2862,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             if not bxdf_is_delta(bs_c.flags):
                 var v = _null_vertex()
                 v.pos = hit
-                v.normal = vec3f(gn_c)
+                v.normal = vec3f(gn_c_geo)
+                v.shading_normal = vec3f(gn_c)
                 v.beta = beta
                 v.alb = mat.albedo
                 v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.ggx
@@ -2925,6 +2964,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var v_h = _null_vertex()
             v_h.pos = hit
             v_h.normal = vec3f(hc.geo_normal)
+            v_h.shading_normal = vec3f(hc.geo_normal)
             v_h.beta = beta
             v_h.alb = mat.albedo
             v_h.is_surface = Int32(1); v_h.is_delta = Int32(0); v_h.mat_kind = LobeKind.hair
@@ -3020,6 +3060,10 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_m, ray_dir) > Float32(0): gn_m = gn_m * Float32(-1)
             # Bump/normal maps -- see the diffuse branch.
+            # Saved BEFORE the perturbation: the stored vertex keeps this as its
+            # GEOMETRIC normal, because _geom_term and _connect's area-pdf
+            # conversions are built on it. See BDPTVertex.shading_normal.
+            var gn_m_geo = gn_m
             gn_m = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
                 gn_m, gn_m, ray_dir,
                 _camera_approx_footprint(hit, cam_pos, px_scale),
@@ -3043,7 +3087,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
 
             var v_m = _null_vertex()
             v_m.pos = hit
-            v_m.normal = vec3f(gn_m)
+            v_m.normal = vec3f(gn_m_geo)
+            v_m.shading_normal = vec3f(gn_m)
             v_m.beta = beta
             v_m.alb = mat.albedo
             v_m.is_surface = Int32(1); v_m.is_delta = Int32(0); v_m.mat_kind = LobeKind.measured
@@ -3146,6 +3191,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var v = _null_vertex()
                     v.pos = x_o
                     v.normal = vec3f(n_o)
+                    v.shading_normal = vec3f(n_o)
                     v.beta = beta
                     v.alb = RGB(Float32(1))
                     v.is_surface = Int32(1); v.is_delta = Int32(0)
@@ -3378,6 +3424,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         var lv0_vert = _null_vertex()
         lv0_vert.pos = point3f(lp)
         lv0_vert.normal = vec3f(ln)
+        lv0_vert.shading_normal = vec3f(ln)
         lv0_vert.beta = SpectralSample(area_weight)
         lv0_vert.alb = al.emission
         lv0_vert.is_surface = Int32(1); lv0_vert.is_light = Int32(1)
@@ -3707,13 +3754,18 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             if tex_ok:
                 eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             # Bump/normal maps -- see the camera-side diffuse branch.
+            # Saved BEFORE the perturbation: the stored vertex keeps this as its
+            # GEOMETRIC normal, because _geom_term and _connect's area-pdf
+            # conversions are built on it. See BDPTVertex.shading_normal.
+            var gn_geo = gn
             gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
                 gn, gn, ray_dir,
                 _camera_approx_footprint(hit, cam_pos, px_scale),
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var v = _null_vertex()
             v.pos = hit
-            v.normal = vec3f(gn)
+            v.normal = vec3f(gn_geo)
+            v.shading_normal = vec3f(gn)
             v.beta = flux
             v.alb = eff_alb
             v.is_surface = Int32(1); v.is_delta = Int32(0)
@@ -3787,6 +3839,10 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             if tex_ok:
                 eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             # Bump/normal maps -- see the diffuse branch above.
+            # Saved BEFORE the perturbation: the stored vertex keeps this as its
+            # GEOMETRIC normal, because _geom_term and _connect's area-pdf
+            # conversions are built on it. See BDPTVertex.shading_normal.
+            var gn_geo = gn
             gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
                 gn, gn, ray_dir,
                 _camera_approx_footprint(hit, cam_pos, px_scale),
@@ -3814,7 +3870,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     flux *= cw.beta.r
                     var v = _null_vertex()
                     v.pos = hit
-                    v.normal = vec3f(gn)
+                    v.normal = vec3f(gn_geo)
+                    v.shading_normal = vec3f(gn)
                     v.beta = flux
                     v.alb = eff_alb
                     # coated_REFLECT -- the light side's twin of the camera
@@ -3892,7 +3949,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (cw.beta).r, (cw.beta).g, (cw.beta).b, wavelengths)
             var v = _null_vertex()
             v.pos = hit
-            v.normal = vec3f(gn)
+            v.normal = vec3f(gn_geo)
+            v.shading_normal = vec3f(gn)
             v.beta = flux_pre_coat
             v.alb = eff_alb
             v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.coated_walk
@@ -3915,6 +3973,10 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_c, ray_dir) > Float32(0): gn_c = gn_c * Float32(-1)
             # Bump/normal maps -- see the diffuse branch.
+            # Saved BEFORE the perturbation: the stored vertex keeps this as its
+            # GEOMETRIC normal, because _geom_term and _connect's area-pdf
+            # conversions are built on it. See BDPTVertex.shading_normal.
+            var gn_c_geo = gn_c
             gn_c = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
                 gn_c, gn_c, ray_dir,
                 _camera_approx_footprint(hit, cam_pos, px_scale),
@@ -3949,7 +4011,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             if not bxdf_is_delta(bs_c.flags):
                 var v = _null_vertex()
                 v.pos = hit
-                v.normal = vec3f(gn_c)
+                v.normal = vec3f(gn_c_geo)
+                v.shading_normal = vec3f(gn_c)
                 v.beta = flux
                 v.alb = mat.albedo
                 v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.ggx
@@ -3998,6 +4061,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             var v_h = _null_vertex()
             v_h.pos = hit
             v_h.normal = vec3f(hc.geo_normal)
+            v_h.shading_normal = vec3f(hc.geo_normal)
             v_h.beta = flux
             v_h.alb = mat.albedo
             v_h.is_surface = Int32(1); v_h.is_delta = Int32(0); v_h.mat_kind = LobeKind.hair
@@ -4049,6 +4113,10 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             var gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_m, ray_dir) > Float32(0): gn_m = gn_m * Float32(-1)
             # Bump/normal maps -- see the diffuse branch.
+            # Saved BEFORE the perturbation: the stored vertex keeps this as its
+            # GEOMETRIC normal, because _geom_term and _connect's area-pdf
+            # conversions are built on it. See BDPTVertex.shading_normal.
+            var gn_m_geo = gn_m
             gn_m = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
                 gn_m, gn_m, ray_dir,
                 _camera_approx_footprint(hit, cam_pos, px_scale),
@@ -4074,7 +4142,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 dvcm_carry, dvc_carry, dvm_carry, cos_fix_m)
             var v_m = _null_vertex()
             v_m.pos = hit
-            v_m.normal = vec3f(gn_m)
+            v_m.normal = vec3f(gn_m_geo)
+            v_m.shading_normal = vec3f(gn_m)
             v_m.beta = flux
             v_m.alb = mat.albedo
             v_m.is_surface = Int32(1); v_m.is_delta = Int32(0); v_m.mat_kind = LobeKind.measured
@@ -4140,6 +4209,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     var v = _null_vertex()
                     v.pos = ex.x_o
                     v.normal = vec3f(n_o)
+                    v.shading_normal = vec3f(n_o)
                     v.beta = flux
                     v.alb = RGB(Float32(1))
                     v.is_surface = Int32(1); v.is_delta = Int32(0)
@@ -4452,7 +4522,7 @@ def _bdpt_n_lights(ref sd: SceneDescriptor2_C) -> Float32:
 def _vertex_ctx(v: BDPTVertex) -> LobeCtx:
     """A stored VCM vertex, as the shared BxDF interface sees it."""
     return LobeCtx(v.mat_kind, v.is_surface == Int32(1), v.is_delta != Int32(0),
-                   v.normal.to_simd(), v.wo.to_simd(), v.alb, v.mat_idx,
+                   v.shading_normal.to_simd(), v.wo.to_simd(), v.alb, v.mat_idx,
                    v.pdf_bwd, v.pdf_fwd, v.hair_curve_idx, v.hair_h, v.hair_v, False)
 
 
@@ -4498,7 +4568,19 @@ def _eval_vertex_spectral(
 def _geom_term(
     a: BDPTVertex, b: BDPTVertex,
 ) -> Float32:
-    """Geometry factor G(a,b) = |cos_a| × |cos_b| / dist²."""
+    """Geometry factor G(a,b) = |cos_a| × |cos_b| / dist².
+
+    SHADING normals, deliberately, and this is pbrt's split rather than an
+    approximation: G here is not the area Jacobian, it is where the two
+    BSDFs' cosine factors live (`_eval_vertex` returns f with no cosine of
+    its own), so it takes the normal the BSDF is defined against. pbrt-v4's
+    own G() reads v.ns() for exactly this reason, and puts ng() in
+    Vertex::ConvertDensity instead -- which is _connect's cos_cv/cos_lv, and
+    those DO use the geometric normal. Getting this backwards is not a
+    subtlety: on a diffuse vertex the BSDF is constant, so G is the ONLY
+    place a normal map can act at a connection, and using the geometric
+    normal here made VCM ignore normal maps entirely again (measured:
+    cornell-box-normalmap map/no-map back to 1.0001)."""
     var d3 = b.pos - a.pos
     var dist2 = d3.length_sq()
     if dist2 < Float32(1e-8): return Float32(0)
@@ -4506,13 +4588,13 @@ def _geom_term(
     var dir = d3.to_simd() / d
     var cos_a: Float32
     if a.is_surface == Int32(1):
-        cos_a = dot(dir, a.normal.to_simd())
+        cos_a = dot(dir, a.shading_normal.to_simd())
         if cos_a < Float32(0): cos_a = -cos_a
     else:
         cos_a = Float32(1)   # volume: no cosine
     var cos_b: Float32
     if b.is_surface == Int32(1):
-        cos_b = dot(dir, b.normal.to_simd())
+        cos_b = dot(dir, b.shading_normal.to_simd())
         if cos_b < Float32(0): cos_b = -cos_b
     else:
         cos_b = Float32(1)
@@ -4666,6 +4748,10 @@ def _connect(
     # its "not independently verified" caveats). cos_cv/cos_lv reuse the
     # same geometry _geom_term computed internally, recomputed here since
     # that helper doesn't expose them.
+    #
+    # GEOMETRIC normals here, unlike _geom_term's: these are the solid-angle
+    # -> area density conversion (pbrt's Vertex::ConvertDensity, which reads
+    # ng()), not a BSDF cosine. A perturbed normal in a density is a bias.
     if _bdpt_vertex_mis_scoped(cv) and (lv.is_light == Int32(1) or _bdpt_vertex_mis_scoped(lv)):
         var cos_cv = abs(dot(dir, cv.normal.to_simd()))
         var cos_lv = abs(dot(neg_dir, lv.normal.to_simd()))
@@ -4790,6 +4876,10 @@ def _connect_unweighted(
     # its "not independently verified" caveats). cos_cv/cos_lv reuse the
     # same geometry _geom_term computed internally, recomputed here since
     # that helper doesn't expose them.
+    #
+    # GEOMETRIC normals here, unlike _geom_term's: these are the solid-angle
+    # -> area density conversion (pbrt's Vertex::ConvertDensity, which reads
+    # ng()), not a BSDF cosine. A perturbed normal in a density is a bias.
     if _bdpt_vertex_mis_scoped(cv) and (lv.is_light == Int32(1) or _bdpt_vertex_mis_scoped(lv)):
         var cos_cv = abs(dot(dir, cv.normal.to_simd()))
         var cos_lv = abs(dot(neg_dir, lv.normal.to_simd()))
