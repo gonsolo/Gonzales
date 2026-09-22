@@ -317,7 +317,35 @@ def _visible_transmittance(
             var st_spec = medium_sigma_t_spectral(med, wl, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
             Tr *= SpectralSample(exp(-st_spec.v0*t_hit), exp(-st_spec.v1*t_hit), exp(-st_spec.v2*t_hit), exp(-st_spec.v3*t_hit))
 
-        if mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
+        if mat.type == MatKind.thin_dielectric or (
+                mat.type == MatKind.dielectric and mat.sss_boundary != Int8(0)):
+            # ... and a SUBSURFACE boundary, which is a dielectric too but
+            # whose transport the BSSRDF models separately -- blocking it
+            # costs sss-slab.vcm 48% of its energy (a pinned smoke cell),
+            # so the straight-line crossing is load-bearing there.
+            # A THIN dielectric only. Straight-line pass-through is valid
+            # here because a thin slab's entry and exit refractions cancel --
+            # the ray leaves parallel to how it arrived, so the shadow ray's
+            # geometry is right and only the Fresnel attenuation is needed.
+            #
+            # A THICK dielectric used to pass through here too, and that was
+            # wrong: light REFRACTS at a thick refractor, so a straight shot
+            # through it is not a physical path at all. NEE was therefore
+            # manufacturing transport that no sampling strategy can generate,
+            # and MIS cannot cancel what it never sees. Measured on
+            # barcelona-pavilion-day, whose pool is a water plane over a
+            # coateddiffuse bottom: the bottom third of the frame read 2.243x
+            # a pbrt BDPT reference with this pass-through and 1.461x without
+            # -- by far the largest single error in that scene, and confined
+            # to exactly the region where a shadow ray must cross the water.
+            # The path tracer never had this bug: its shadow ray is a binary
+            # any_hit test, so the water blocks it outright, which is
+            # accidentally correct for a thick refractor. pbrt blocks it too.
+            #
+            # What legitimately DOES get through a thick refractor is the
+            # bent path, and finding that is MNEE's job
+            # (_bdpt_mnee_diffuse_area_light, which fires precisely for the
+            # glass-obscured case) -- not this straight line.
             # Pass through glass with Fresnel transmittance
             var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             var facing = dot(dir, gn) < Float32(0)
