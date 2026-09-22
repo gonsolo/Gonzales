@@ -1956,7 +1956,37 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # zero pdf at near-full weight, double-counting against
                     # the coat's full-weight per-iteration NEE.
                     mis_w = Float32(0)
-                elif last_bsdf_pdf >= Float32(0) and pdf_light_here > Float32(0):
+                elif n_verts > 0 and pdf_light_here > Float32(0):
+                    # NOT `last_bsdf_pdf >= 0`, which is what this used to be.
+                    # That test excluded every path whose last event was DELTA
+                    # (the dielectric branch sets last_bsdf_pdf = -1), handing
+                    # the escape a hard-coded weight of 1 -- while the diffuse
+                    # vertex further back had already reported the same
+                    # transport through connect/merge. Both counted in full:
+                    # Scenes/furnace/dielectric-inert.pbrt read 1.1708 at the
+                    # default light-path count and converged to 1.9665, against
+                    # an analytic 1.0.
+                    #
+                    # No specular special case is needed, and SmallVCM does not
+                    # have one either (GetLightRadiance weights unconditionally
+                    # past the first hit): a delta bounce sets dvcm_carry = 0,
+                    # and a zero dVCM already removes the NEE term from the
+                    # weight below on its own, while dVC keeps discounting
+                    # connect and merge -- which is the part the old gate threw
+                    # away. `n_verts > 0` now carries the one case that IS
+                    # unweighted: NO REAL VERTEX HAS BEEN STORED YET, so no
+                    # other strategy can have reported this transport -- a
+                    # primary ray straight into the environment, or one that
+                    # only ever hit DELTA surfaces (mirror, glass), neither of
+                    # which stores a vertex. That is a weight-1 case, not a
+                    # "no pdf" case, and conflating the two is what hid the bug.
+                    #
+                    # It must be n_verts and NOT n_bounces: the diffuse branch
+                    # stores a vertex without incrementing n_bounces, so an
+                    # n_bounces test reads an ordinary diffuse path as a
+                    # primary ray and hands every furnace escape weight 1 --
+                    # measured, every VCM env-lit furnace cell went ~1.01 to
+                    # ~1.45 before this was corrected.
                     # Balance heuristic over EVERY strategy, matching the rest
                     # of this file -- vcm_env_escape_weight, derived exactly in
                     # Scenes/vcm_env_mis_derivation.py. The power heuristic it
