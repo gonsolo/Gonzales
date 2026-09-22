@@ -1,0 +1,82 @@
+# REGRESSION GUARD -- surface maps on the LIGHT/PHOTON side.
+#
+# A diffuse floor seen through a one-sided dielectric sheet that carries a
+# DISPLACEMENT map (barcelona's own water ripple image; its "water" material
+# is dielectric + texture displacement, and this stands in for it).
+#
+# WHAT IT DEMONSTRATES: _apply_surface_maps is called from shading.mojo (the
+# path tracer, 7 sites) and from _sppm_trace_visible_point (2 sites) and
+# NOWHERE else. SPPM's PHOTON pass has none; bdpt.mojo/VCM has none at all.
+# So SPPM's camera half stands on a rippled sheet while its photons refract
+# through a flat one, and VCM treats it as flat on both sides. Measured here,
+# flat sheet vs this one, 64x64 256spp:
+#
+#     PT    0.4673 -> 0.4675     (moves: it applies the map)
+#     SPPM  0.4684 -> 0.4684     (BIT-IDENTICAL: photon half ignores it)
+#     VCM   0.5442 -> 0.5442     (BIT-IDENTICAL: ignores it entirely)
+#
+# Those bit-identical columns are the assertion. When the photon side learns
+# surface maps they must move.
+#
+# WHAT IT DOES *NOT* SHOW, despite being built to: barcelona's pool excess
+# (SPPM 1.37x, VCM 1.46x vs a pbrt BDPT reference). PT moves by 0.04% here,
+# so the asymmetry -- though real -- is far too small to be that cause. The
+# bump hypothesis for the pool was raised and REFUTED by this scene.
+#
+# Do NOT read the absolute numbers as a quality signal either: on this
+# geometry real pbrt reads 0.7728 and ALL THREE gonzales integrators are far
+# below it (PT 0.605x, SPPM 0.606x, VCM 0.704x) from the separate one-sided
+# dielectric defect -- see project_dambreak_opaque_pt. VCM being 1.165x PT
+# here is PT being dark, NOT VCM being bright.
+#
+# TWO TRAPS, both worth keeping:
+#  - "point2 uv" is REQUIRED. Without it the sheet has no parameterisation,
+#    the bump lookup has no gradient, and displaced renders bit-identically
+#    to flat -- which looks exactly like a renderer bug and is not one.
+#  - A procedural displacement (`wrinkled`, `fbm`, ...) is a no-op here:
+#    gonzales resolves `displacement` to an IMAGEMAP index and implements
+#    only `checkerboard` among procedural float textures. It DOES warn.
+#
+# NOT an analytic cell -- a one-sided sheet plus finite maxdepth means
+# radiative equilibrium does not force Lo = 1.0. See the flat sibling.
+
+Integrator "path" "integer maxdepth" [ 32 ]
+Sampler "halton" "integer pixelsamples" [ 64 ]
+Film "rgb" "string filename" [ "furnace-dielectric-displaced.exr" ]
+    "integer xresolution" [ 64 ] "integer yresolution" [ 64 ]
+LookAt 0 0 -4   0 0 0   0 1 0
+Camera "perspective" "float fov" [ 30 ]
+WorldBegin
+LightSource "infinite" "rgb L" [ 1 1 1 ]
+
+# The sheet, between camera and floor. Wider than the view frustum at z=-1 so
+# every camera ray crosses it.
+# An IMAGEMAP, not a procedural: gonzales resolves "displacement" to an
+# imagemap texture index (material_builder.mojo), and of the procedural float
+# textures it implements only "checkerboard". A `wrinkled` displacement here
+# was silently DROPPED -- flat and displaced renders came out bit-identical in
+# all three integrators, which is how this was caught. Reusing barcelona's own
+# water ripple map so the probe matches the scene it stands in for.
+Texture "ripple" "float" "imagemap"
+    "string filename" [ "../pbrt-v4-scenes/barcelona-pavilion/textures/water-raindrop.png" ]
+Texture "ripple-scaled" "float" "scale"
+    "texture tex" [ "ripple" ] "float scale" [ 0.05 ]
+Material "dielectric" "float eta" [ 1.5 ]
+    "texture displacement" [ "ripple-scaled" ]
+# UVs are REQUIRED here. Without "point2 uv" the sheet has no texture
+# parameterisation, so the bump lookup has no gradient to differentiate and
+# the displacement is a silent no-op -- flat and displaced render
+# bit-identically. Several tiles across the sheet so the ripples are small
+# relative to it, as they are on the real water.
+Shape "trianglemesh"
+    "integer indices" [ 0 1 2 0 2 3 ]
+    "point3 P" [ -4 -4 -1   4 -4 -1   4 4 -1   -4 4 -1 ]
+    "normal N" [ 0 0 -1  0 0 -1  0 0 -1  0 0 -1 ]
+    "point2 uv" [ 0 0   8 0   8 8   0 8 ]
+
+# The diffuse floor behind it.
+Material "diffuse" "rgb reflectance" [ 1 1 1 ]
+Shape "trianglemesh"
+    "integer indices" [ 0 1 2 0 2 3 ]
+    "point3 P" [ -3 -3 0   3 -3 0   3 3 0   -3 3 0 ]
+    "normal N" [ 0 0 -1  0 0 -1  0 0 -1  0 0 -1 ]
