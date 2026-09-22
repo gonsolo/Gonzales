@@ -36,6 +36,14 @@ PT-vs-connections probe rather than against this table's own numbers.
 
 ratio -> 1 as alpha -> 0 is the built-in self-check: at alpha 0 the walk and
 the smooth closed form model the same material.
+
+A fifth column, `corr = E_walk(mu,alpha) / E_walk(mu,0)`, is the actual
+compensation factor to bake into lobe_eval's coated_walk branch: normalising
+by the alpha=0 column (not by E_eval) is what keeps a SMOOTH coat bit-
+unchanged and only corrects the ROUGH excess. mu and alpha are both a
+UNIFORM 0.0..1.0 grid, 11 points each, so the GPU-side lookup can index with
+plain floor(mu*10)/floor(alpha*10) instead of searching unevenly spaced
+knots.
 """
 from std.math import sqrt, sin, cos, min, max
 from gonzales.geometry import Vec3f, RGB, dot, PI
@@ -47,7 +55,7 @@ from gonzales.bxdf import (
 )
 
 comptime IOR = Float32(1.5)
-comptime N_WALK = 200000        # Monte Carlo trials per grid cell
+comptime N_WALK = 400000        # Monte Carlo trials per grid cell
 comptime N_THETA = 256          # quadrature resolution, polar
 comptime N_PHI = 64             # quadrature resolution, azimuth
 
@@ -103,22 +111,31 @@ def eval_albedo(mu_o: Float32) -> Float32:
     return acc
 
 
+comptime N_GRID = 11   # UNIFORM 0.0, 0.1, ..., 1.0 on both axes -- an O(1)
+                       # GPU lookup indexes with floor(mu*10)/floor(alpha*10)
+                       # and needs no search through unevenly spaced knots.
+
+
 def main():
-    var mus = [Float32(1.0), Float32(0.9), Float32(0.8), Float32(0.7),
-               Float32(0.6), Float32(0.5), Float32(0.4), Float32(0.3),
-               Float32(0.2), Float32(0.1), Float32(0.05)]
-    var alphas = [Float32(0.0), Float32(0.02), Float32(0.05), Float32(0.1),
-                  Float32(0.15), Float32(0.2), Float32(0.3), Float32(0.4),
-                  Float32(0.5), Float32(0.7), Float32(1.0)]
-    print("mu,alpha,E_walk,E_eval,ratio")
+    # mu=0.0 is geometrically degenerate (wo exactly grazing); nudge that one
+    # grid point to 0.02 so the walk still runs, matching how the LOOKUP
+    # will clamp mu to >= a small epsilon before indexing anyway.
+    print("mu,alpha,E_walk,E_eval,ratio,corr")
     var s = UInt64(12345)
-    for i in range(len(mus)):
-        var mu = mus[i]
+    for i in range(N_GRID):
+        var mu_nom = Float32(i) / Float32(N_GRID - 1)
+        var mu = mu_nom if mu_nom > Float32(0.001) else Float32(0.02)
         var ee = eval_albedo(mu)
-        for j in range(len(alphas)):
-            var a = alphas[j]
+        var ew0 = Float32(0)
+        for j in range(N_GRID):
+            var a = Float32(j) / Float32(N_GRID - 1)
             s += 7919
             var ew = walk_albedo(mu, a, s)
+            if j == 0: ew0 = ew
             var r = ew / max(ee, Float32(1e-9))
-            print(String(mu), ",", String(a), ",", String(ew), ",",
-                  String(ee), ",", String(r), sep="")
+            # corr = E_walk(mu,alpha) / E_walk(mu,0): what lobe_eval's
+            # coated_walk branch must be multiplied by so a SMOOTH coat
+            # (alpha=0) is bit-unchanged and only the ROUGH excess moves.
+            var corr = ew / max(ew0, Float32(1e-9))
+            print(String(mu_nom), ",", String(a), ",", String(ew), ",",
+                  String(ee), ",", String(r), ",", String(corr), sep="")
