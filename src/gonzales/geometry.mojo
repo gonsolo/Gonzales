@@ -415,9 +415,18 @@ struct LobeKind:
     comptime ggx         = Int32(1)
     comptime hair        = Int32(2)
     comptime measured    = Int32(3)
-    comptime coated_walk = Int32(4)   # coateddiffuse walk outcome, Lambertian fallback in VCM
+    comptime coated_walk = Int32(4)   # coateddiffuse walk EXIT: base seen through the coat
     comptime bssrdf      = Int32(5)   # subsurface: exit lobe Ft(cos)/pi (VCM), diffusion gather (SPPM)
     comptime diffuse_transmit = Int32(6)   # two cosine lobes, one per side
+    # The coat's OWN glossy reflection off the top interface -- a different
+    # physical event from coated_walk, which is the base seen THROUGH the
+    # coat. Both outcomes of the same walk, so both were stored as
+    # coated_walk until this existed, and lobe_eval then evaluated the
+    # glossy bounce with coat_eval_smooth -- the base-transmission model,
+    # complete with the base's albedo, for a reflection that never reaches
+    # the base at all. Splitting them is what lets each have its own
+    # evaluator; see lobe_eval's two branches.
+    comptime coated_reflect = Int32(7)
 
 struct PhotonKind:
     """What an SPPM photon (or visible point) was deposited on. A gather only

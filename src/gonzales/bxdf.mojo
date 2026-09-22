@@ -1025,8 +1025,15 @@ def lobe_scoped(c: LobeCtx) -> Bool:
         return c.is_surface
     if not c.is_surface or c.is_delta:
         return False
+    # coated_reflect is the coat's own glossy GGX lobe, so unlike the
+    # coated_walk EXIT above it has a genuinely EXACT density -- the same
+    # ggx_vndf_pdf that sampled it in coat_walk_enter, no approximation and
+    # no missing alpha. It is only ever STORED for a rough coat (a smooth
+    # coat's reflect branch is a delta mirror and stores no vertex at all),
+    # so reaching here already implies the lobe is non-delta.
     return (c.kind == LobeKind.lambertian or c.kind == LobeKind.ggx
-            or c.kind == LobeKind.hair or c.kind == LobeKind.measured)
+            or c.kind == LobeKind.hair or c.kind == LobeKind.measured
+            or c.kind == LobeKind.coated_reflect)
 
 
 @always_inline
@@ -1101,6 +1108,47 @@ def lobe_eval[want_pdfs: Bool = True](
                 rev_cw = bxdf_pdf_coated_exit(abs(dot(vwo, vn)), ior_cw)
         return LobeEval(alb_cw * cos_cw, cos_cw,
                         fwd_cw, rev_cw, scoped_cw)
+
+    if c.kind == LobeKind.coated_reflect:
+        # The coat's OWN glossy reflection off the top interface. THE SAME
+        # model _nee_weight_coated_coat_lobe uses for this lobe's NEE --
+        # D*G2*F/(4 cos_o), a dielectric-Fresnel GGX -- so the evaluated and
+        # the NEE side cannot drift, exactly the reason lobe_eval exists.
+        #
+        # Until coated_reflect had its own LobeKind this fell into the
+        # coated_walk branch above and was evaluated with coat_eval_smooth:
+        # the BASE TRANSMISSION model, carrying the base's albedo and both
+        # coat crossings, for a bounce that never enters the coat at all.
+        # Achromatic by construction -- a dielectric coat's Fresnel tints
+        # nothing -- hence the scalar SpectralSample rather than an upsample
+        # of c.alb, which belongs to the base and must NOT appear here.
+        var mat_cr = tab.materials[unsafe_offset=Int(c.mat_idx)]
+        var ior_cr = mat_cr.emission.r
+        var cos_o_cr = dot(vwo, vn)
+        var cos_i_cr = dot(dir_to_other, vn)
+        if cos_o_cr <= Float32(0) or cos_i_cr <= Float32(0):
+            return LobeEval(ZERO, Float32(1), Float32(0), Float32(0), False)
+        var wm_cr = vwo + dir_to_other
+        var wmlen_cr = dot(wm_cr, wm_cr)
+        if wmlen_cr <= Float32(0):
+            return LobeEval(ZERO, Float32(1), Float32(0), Float32(0), False)
+        wm_cr = wm_cr * (Float32(1.0) / sqrt(wmlen_cr))
+        var cos_wm_cr = dot(vwo, wm_cr)
+        if cos_wm_cr <= Float32(0):
+            return LobeEval(ZERO, Float32(1), Float32(0), Float32(0), False)
+        var d_cr = ggx_D(dot(vn, wm_cr), c.param)
+        var g2_cr = ggx_G2(cos_o_cr, cos_i_cr, c.param)
+        var fr_cr = fr_dielectric(cos_wm_cr, ior_cr)
+        var f_cr = d_cr * g2_cr * fr_cr / (Float32(4.0) * cos_o_cr)
+        var fwd_cr = Float32(0)
+        var rev_cr = Float32(0)
+        comptime if want_pdfs:
+            # EXACT, unlike the coated_walk exit's approximation: this is the
+            # very density coat_walk_enter sampled the bounce with.
+            fwd_cr = ggx_vndf_pdf(cos_o_cr, cos_wm_cr, d_cr, c.param)
+            rev_cr = ggx_vndf_pdf(cos_i_cr, dot(dir_to_other, wm_cr), d_cr, c.param)
+        return LobeEval(SpectralSample(f_cr * cos_i_cr), cos_i_cr,
+                        fwd_cr, rev_cr, True)
 
     if c.kind == LobeKind.bssrdf:
         var cos_x = abs(dot(dir_to_other, vn))
@@ -1322,6 +1370,7 @@ def coat_eval_smooth(n: Vec3f, wo: Vec3f, wi: Vec3f, alb: RGB, ior: Float32) -> 
     return RGB(alb.r * k / max(Float32(1.0) - alb.r * f_di, Float32(1e-4)),
                alb.g * k / max(Float32(1.0) - alb.g * f_di, Float32(1e-4)),
                alb.b * k / max(Float32(1.0) - alb.b * f_di, Float32(1e-4)))
+
 
 
 @always_inline

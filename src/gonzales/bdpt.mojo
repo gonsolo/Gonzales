@@ -2441,7 +2441,13 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     v.normal = vec3f(gn)
                     v.beta = beta
                     v.alb = eff_alb
-                    v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.coated_walk
+                    # coated_REFLECT, not coated_walk: this is the coat's own
+                    # glossy bounce off the top interface, which never reaches
+                    # the base. Stored as coated_walk it was re-evaluated by
+                    # connect/merge through coat_eval_smooth -- the base
+                    # transmission model, carrying the base's albedo -- for a
+                    # path that never touched the base.
+                    v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.coated_reflect
                     v.mat_idx = Int32(mat_idx)   # the coat evaluator reads ior from it
                     v.pdf_bwd = coat_alpha       # smooth-vs-rough, as ggx stores alpha
                     v.wo = vec3f(wo)
@@ -3714,7 +3720,11 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     v.normal = vec3f(gn)
                     v.beta = flux
                     v.alb = eff_alb
-                    v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.coated_walk
+                    # coated_REFLECT -- the light side's twin of the camera
+                    # branch above; this half reaches the photon cache, so a
+                    # wrong evaluator here misweights every merge that
+                    # gathers it.
+                    v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.coated_reflect
                     v.mat_idx = Int32(mat_idx)   # the coat evaluator reads ior from it
                     v.pdf_bwd = coat_alpha       # smooth-vs-rough, as ggx stores alpha
                     v.wo = vec3f(wo)
