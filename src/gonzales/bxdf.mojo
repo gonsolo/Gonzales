@@ -1485,6 +1485,202 @@ def coat_walk_enter(mut w: CoatWalk, mut pcg: PCG32):
     w.beta = RGB(coat_beer_lambert_tr(cos_theta_t_dielectric(w.cos_wm, w.ior), DEFAULT_COAT_THICKNESS))
     if w.is_rough:
         w.beta *= ggx_G2(w.cos_o, cos_theta_t_dielectric(w.cos_o, w.ior), w.alpha) / ggx_G1(w.cos_o, w.alpha)
+        # ... and put back the multiple-scattering energy that G2/G1, being a
+        # single-scattering model, just dropped. SQRT because this is ONE of
+        # the TWO crossings every complete path makes (in, then out -- whether
+        # the way out is the walk's own exit or a light-side NEE crossing), and
+        # coat_rough_ms_boost measures the deficit of the PAIR. Two sqrts at
+        # the same angle multiply back to exactly the measured factor.
+        w.beta *= sqrt(coat_rough_ms_boost(w.cos_o, w.alpha))
+
+# ── Rough-coat multiple-scattering compensation ─────────────────────────────
+# A rough coat's interface crossings are SINGLE-scattering: coat_walk_enter
+# and coat_walk_scatter each weight a crossing by Smith G2/G1, which drops the
+# light a microfacet masks. In reality that light bounces among the
+# microfacets and mostly still gets through, so dropping it loses energy that
+# grows with roughness -- on the uniform-env furnace with a WHITE base, where
+# the coat can only absorb a few percent, BOTH integrators read:
+#
+#     roughness   alpha    PT       VCM
+#     0.0         0.000    0.9149   0.9166      <- the coat's real absorption
+#     0.1         0.316    0.7853   0.8305
+#     1.0         1.000    0.6292   0.6608      <- a THIRD of the energy gone
+#
+# (alpha = sqrt(roughness), pbrt's remaproughness -- material_builder.mojo.)
+# That is the same defect, and very nearly the same curve, that GGX
+# conductors had before ggx_ms_lobe above: 0.794 at alpha 0.4, 0.327 at 1.0.
+# Kulla-Conty restores it there as a second lobe; a WALK is a sampler and has
+# no lobe to add, so the restoration is a weight on beta instead.
+#
+# The factor is E_walk(mu, 0) / E_walk(mu, alpha) -- the measured deficit of
+# the ROUGH walk against the SMOOTH one at the same angle, so a rough coat
+# ends up transporting what a smooth one does, which is the right target: the
+# coat's absorption is a Beer-Lambert path-length effect that roughness
+# barely moves, so roughness must not change the total. Exactly 1.0 at
+# alpha 0, hence a true no-op for a smooth coat.
+#
+# FOOTGUN: Tools/coat_energy_table.mojo measures the RAW walk, so the table
+# below is only valid while the walk is UNcompensated. Regenerating it with
+# this compensation live measures a walk that already has it and converges to
+# all-ones. Disable the call in coat_walk_enter before running the generator.
+#
+# Same uniform 11x11 grid and the same mu >= 0.1 clamp as elsewhere: below
+# that the alpha=0 baseline collapses toward zero (near-total Fresnel
+# reflection at grazing for a smooth coat) and the ratio to it is a division
+# by nearly nothing. Clamped to [0.25, 4] for the same reason.
+comptime _COAT_MS_GRID = 11
+
+
+@always_inline
+def _coat_ms_table() -> InlineArray[Float32, 121]:
+    """E_walk(mu,0)/E_walk(mu,alpha), mu-major (row i = mu = i/10, col
+    j = alpha = j/10). Stack-built per call -- 121 stores, negligible beside
+    the walk itself, and needs no mutable global state in a GPU kernel."""
+    var t = InlineArray[Float32, 121](fill=Float32(1.0))
+    t[0] = Float32(1.000000)
+    t[1] = Float32(0.250000)
+    t[2] = Float32(0.250000)
+    t[3] = Float32(0.250000)
+    t[4] = Float32(0.250000)
+    t[5] = Float32(0.250000)
+    t[6] = Float32(0.250000)
+    t[7] = Float32(0.250000)
+    t[8] = Float32(0.250000)
+    t[9] = Float32(0.250000)
+    t[10] = Float32(0.250000)
+    t[11] = Float32(1.000000)
+    t[12] = Float32(0.717138)
+    t[13] = Float32(0.625403)
+    t[14] = Float32(0.609905)
+    t[15] = Float32(0.616769)
+    t[16] = Float32(0.631687)
+    t[17] = Float32(0.648426)
+    t[18] = Float32(0.667088)
+    t[19] = Float32(0.685697)
+    t[20] = Float32(0.705562)
+    t[21] = Float32(0.724739)
+    t[22] = Float32(1.000000)
+    t[23] = Float32(0.946205)
+    t[24] = Float32(0.911996)
+    t[25] = Float32(0.918184)
+    t[26] = Float32(0.940042)
+    t[27] = Float32(0.968321)
+    t[28] = Float32(1.000965)
+    t[29] = Float32(1.034693)
+    t[30] = Float32(1.068275)
+    t[31] = Float32(1.101814)
+    t[32] = Float32(1.134503)
+    t[33] = Float32(1.000000)
+    t[34] = Float32(1.006469)
+    t[35] = Float32(1.029312)
+    t[36] = Float32(1.065174)
+    t[37] = Float32(1.106075)
+    t[38] = Float32(1.149551)
+    t[39] = Float32(1.194478)
+    t[40] = Float32(1.240522)
+    t[41] = Float32(1.286249)
+    t[42] = Float32(1.329670)
+    t[43] = Float32(1.374753)
+    t[44] = Float32(1.000000)
+    t[45] = Float32(1.024713)
+    t[46] = Float32(1.074430)
+    t[47] = Float32(1.131595)
+    t[48] = Float32(1.189044)
+    t[49] = Float32(1.245468)
+    t[50] = Float32(1.300614)
+    t[51] = Float32(1.355156)
+    t[52] = Float32(1.405805)
+    t[53] = Float32(1.459711)
+    t[54] = Float32(1.512809)
+    t[55] = Float32(1.000000)
+    t[56] = Float32(1.028966)
+    t[57] = Float32(1.089427)
+    t[58] = Float32(1.156497)
+    t[59] = Float32(1.224540)
+    t[60] = Float32(1.289931)
+    t[61] = Float32(1.353489)
+    t[62] = Float32(1.410740)
+    t[63] = Float32(1.468193)
+    t[64] = Float32(1.528492)
+    t[65] = Float32(1.586866)
+    t[66] = Float32(1.000000)
+    t[67] = Float32(1.028664)
+    t[68] = Float32(1.091026)
+    t[69] = Float32(1.162684)
+    t[70] = Float32(1.235521)
+    t[71] = Float32(1.304995)
+    t[72] = Float32(1.369158)
+    t[73] = Float32(1.432779)
+    t[74] = Float32(1.496579)
+    t[75] = Float32(1.553246)
+    t[76] = Float32(1.616279)
+    t[77] = Float32(1.000000)
+    t[78] = Float32(1.027641)
+    t[79] = Float32(1.089746)
+    t[80] = Float32(1.162199)
+    t[81] = Float32(1.235738)
+    t[82] = Float32(1.305877)
+    t[83] = Float32(1.372563)
+    t[84] = Float32(1.437023)
+    t[85] = Float32(1.499389)
+    t[86] = Float32(1.557651)
+    t[87] = Float32(1.623460)
+    t[88] = Float32(1.000000)
+    t[89] = Float32(1.026828)
+    t[90] = Float32(1.088567)
+    t[91] = Float32(1.159786)
+    t[92] = Float32(1.231028)
+    t[93] = Float32(1.299952)
+    t[94] = Float32(1.366017)
+    t[95] = Float32(1.431906)
+    t[96] = Float32(1.492814)
+    t[97] = Float32(1.552165)
+    t[98] = Float32(1.611242)
+    t[99] = Float32(1.000000)
+    t[100] = Float32(1.026108)
+    t[101] = Float32(1.085727)
+    t[102] = Float32(1.153428)
+    t[103] = Float32(1.223461)
+    t[104] = Float32(1.290412)
+    t[105] = Float32(1.353791)
+    t[106] = Float32(1.414750)
+    t[107] = Float32(1.476199)
+    t[108] = Float32(1.534264)
+    t[109] = Float32(1.594724)
+    t[110] = Float32(1.000000)
+    t[111] = Float32(1.025541)
+    t[112] = Float32(1.082160)
+    t[113] = Float32(1.149588)
+    t[114] = Float32(1.217673)
+    t[115] = Float32(1.282852)
+    t[116] = Float32(1.345987)
+    t[117] = Float32(1.405809)
+    t[118] = Float32(1.466820)
+    t[119] = Float32(1.523606)
+    t[120] = Float32(1.580431)
+    return t^
+
+
+@always_inline
+def coat_rough_ms_boost(mu: Float32, alpha: Float32) -> Float32:
+    """Bilinear lookup into the compensation grid. Exactly 1.0 for a smooth
+    coat, so applying it unconditionally costs one multiply and changes
+    nothing there."""
+    var t = _coat_ms_table()
+    var mc = min(max(mu, Float32(0.1)), Float32(1.0))
+    var ac = min(max(alpha, Float32(0.0)), Float32(1.0))
+    var fm = mc * Float32(_COAT_MS_GRID - 1)
+    var fa = ac * Float32(_COAT_MS_GRID - 1)
+    var i0 = Int(fm)
+    var j0 = Int(fa)
+    var i1 = min(i0 + 1, _COAT_MS_GRID - 1)
+    var j1 = min(j0 + 1, _COAT_MS_GRID - 1)
+    var tm = fm - Float32(i0)
+    var ta = fa - Float32(j0)
+    var v0 = t[i0 * _COAT_MS_GRID + j0] * (Float32(1.0) - ta) + t[i0 * _COAT_MS_GRID + j1] * ta
+    var v1 = t[i1 * _COAT_MS_GRID + j0] * (Float32(1.0) - ta) + t[i1 * _COAT_MS_GRID + j1] * ta
+    return v0 * (Float32(1.0) - tm) + v1 * tm
+
 
 @always_inline
 def coat_walk_at_base(mut w: CoatWalk, mut pcg: PCG32) -> Bool:
@@ -1553,6 +1749,8 @@ def coat_walk_scatter(mut w: CoatWalk, mut pcg: PCG32):
                 if w.is_rough:
                     var cos_up_n = dot(w_up, w.gn)
                     w.beta *= ggx_G2(cos_up_n, dot(exit_dir, w.gn), w.alpha) / ggx_G1(cos_up_n, w.alpha)
+                    # The second crossing -- see coat_walk_enter's sqrt note.
+                    w.beta *= sqrt(coat_rough_ms_boost(dot(exit_dir, w.gn), w.alpha))
                 w.wi = exit_dir
                 w.pdf = Float32(0.0)   # layered exit pdf is intractable -- NEE-only
                 w.event = COAT_EXIT
@@ -1687,6 +1885,10 @@ def _nee_weight_coated_diffuse_base[nee_is_sole_strategy: Bool = False](
         # Rough transmission weight G2(wo,wi)/G1(wo), same as every other
         # rough crossing in shade_coated_diffuse.
         t_light *= ggx_G2(cos_s, cos_s_internal, coat_alpha) / ggx_G1(cos_s, coat_alpha)
+        # The light-side crossing is the OTHER of the two a NEE path makes --
+        # the walk's entry is the first. Same sqrt split; see
+        # coat_walk_enter's note.
+        t_light *= sqrt(coat_rough_ms_boost(cos_s, coat_alpha))
     var t_both = t_light * tr_light / max(ior * ior, Float32(1e-6))
     if ls.is_delta:
         return alb * ls.Li * (cos_s * t_both / PI)
