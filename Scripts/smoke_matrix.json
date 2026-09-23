@@ -15,13 +15,13 @@
     "tol": 0.03
   },
   "baseline-diffuse.pt": {
-    "mean": 0.111511,
-    "median": 0.052575,
+    "mean": 0.113361,
+    "median": 0.054782,
     "tol": 0.03
   },
   "baseline-diffuse.sppm": {
-    "mean": 0.107126,
-    "median": 0.050801,
+    "mean": 0.107102,
+    "median": 0.050691,
     "tol": 0.03
   },
   "baseline-diffuse.vcm": {

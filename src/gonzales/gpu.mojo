@@ -4598,16 +4598,39 @@ def gpu_render_sample[Oc: Origin[mut=True]](
                 vol_gbuf_world_pos_ptr = handle[].gbuf_worldpos_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 vol_fw = handle[].film.width
                 vol_fh = handle[].film.height
-            # Padding is CONDITIONAL on the scene actually containing a
-            # medium: for the vast majority of scenes (no participating
-            # media), a null interface never occurs, every path already
-            # reaches its true maxDepth at round maxDepth exactly, and there
-            # is no per-round host sync here (unlike the CPU loop's cheap
-            # `anyActive` early-exit) to make extra rounds free -- each one
-            # is a real, unconditional dispatch of every kernel in
-            # _gpu_bounce_kernels. Keeping the loop bound exactly `maxDepth`
-            # when handle[].n_mediums == 0 makes this fix a complete no-op,
-            # performance-wise, for every non-volumetric scene.
+            # A capped path still gets ONE MORE round: rendering.mojo's
+            # `at_cap` mechanism (the "terminal segment" fix, 583a3390) MARKS
+            # a path once bounce reaches maxDepth rather than killing it, so
+            # the ray already fired from its last real scatter can still
+            # land on -- or escape to -- an emitter and be collected, exactly
+            # matching pbrt's own `depth++ >= maxDepth` ordering (emission
+            # collected, THEN the check, THEN NEE/scatter refused). That
+            # grace period needs a ROUND TO RUN IN. This loop used to bound
+            # itself at exactly `maxDepth` for every non-volumetric scene, on
+            # the mistaken assumption that "every path already reaches its
+            # true maxDepth at round maxDepth exactly" -- true of the BOUNCE
+            # COUNT, false of the ROUND COUNT: the terminal segment is round
+            # maxDepth+1 (0-indexed: rounds 0..maxDepth-1 are the real
+            # bounces, round maxDepth is the escape-or-collect grace), which
+            # this loop never ran. A PURE SURFACE delta chain (dielectric +
+            # conductor, no medium at all) needing exactly maxDepth real
+            # bounces to reach an emitter lost that emitter outright --
+            # confirmed on barcelona-pavilion-day: a glass/mullion/glass
+            # window needing 5 real bounces to reach the sky read 0.010 vs
+            # pbrt's 0.438 at maxdepth=5, jumping to 0.430 at maxdepth=6 (the
+            # accidental extra round), one bounce short every time. This is
+            # UNCONDITIONAL and universal (every scene has vertices that can
+            # reach their cap on a real scatter, not just volumetric ones) --
+            # unlike the two conditional margins below, which are for a
+            # DIFFERENT reason (free null-interface rounds / the SSS walk)
+            # and stay scene-gated.
+            var gpu_max_rounds = Int(maxDepth) + 1
+            # Padding beyond the +1 above is CONDITIONAL on the scene
+            # actually containing a medium: a null interface never occurs
+            # otherwise, and there is no per-round host sync here (unlike
+            # the CPU loop's cheap `anyActive` early-exit) to make extra
+            # rounds free -- each one is a real, unconditional dispatch of
+            # every kernel in _gpu_bounce_kernels.
             comptime _MEDIUM_INTERFACE_MARGIN = 8
             # An SSS interior is walked one scattering event per round and
             # those steps are not charged to maxDepth (Medium_C.is_sss), so
@@ -4617,7 +4640,6 @@ def gpu_render_sample[Oc: Origin[mut=True]](
             # dispatch. Gated on the scene actually containing an SSS medium
             # so no other scene pays for it.
             comptime _SSS_WALK_ROUNDS = 256
-            var gpu_max_rounds = Int(maxDepth)
             if handle[].n_mediums > 0:
                 gpu_max_rounds += _MEDIUM_INTERFACE_MARGIN
             if handle[].has_sss_medium:
@@ -4718,16 +4740,39 @@ def gpu_render_wavefront(
                 grid_dim=grid_total,
                 block_dim=block_size,
             )
-            # Padding is CONDITIONAL on the scene actually containing a
-            # medium: for the vast majority of scenes (no participating
-            # media), a null interface never occurs, every path already
-            # reaches its true maxDepth at round maxDepth exactly, and there
-            # is no per-round host sync here (unlike the CPU loop's cheap
-            # `anyActive` early-exit) to make extra rounds free -- each one
-            # is a real, unconditional dispatch of every kernel in
-            # _gpu_bounce_kernels. Keeping the loop bound exactly `maxDepth`
-            # when handle[].n_mediums == 0 makes this fix a complete no-op,
-            # performance-wise, for every non-volumetric scene.
+            # A capped path still gets ONE MORE round: rendering.mojo's
+            # `at_cap` mechanism (the "terminal segment" fix, 583a3390) MARKS
+            # a path once bounce reaches maxDepth rather than killing it, so
+            # the ray already fired from its last real scatter can still
+            # land on -- or escape to -- an emitter and be collected, exactly
+            # matching pbrt's own `depth++ >= maxDepth` ordering (emission
+            # collected, THEN the check, THEN NEE/scatter refused). That
+            # grace period needs a ROUND TO RUN IN. This loop used to bound
+            # itself at exactly `maxDepth` for every non-volumetric scene, on
+            # the mistaken assumption that "every path already reaches its
+            # true maxDepth at round maxDepth exactly" -- true of the BOUNCE
+            # COUNT, false of the ROUND COUNT: the terminal segment is round
+            # maxDepth+1 (0-indexed: rounds 0..maxDepth-1 are the real
+            # bounces, round maxDepth is the escape-or-collect grace), which
+            # this loop never ran. A PURE SURFACE delta chain (dielectric +
+            # conductor, no medium at all) needing exactly maxDepth real
+            # bounces to reach an emitter lost that emitter outright --
+            # confirmed on barcelona-pavilion-day: a glass/mullion/glass
+            # window needing 5 real bounces to reach the sky read 0.010 vs
+            # pbrt's 0.438 at maxdepth=5, jumping to 0.430 at maxdepth=6 (the
+            # accidental extra round), one bounce short every time. This is
+            # UNCONDITIONAL and universal (every scene has vertices that can
+            # reach their cap on a real scatter, not just volumetric ones) --
+            # unlike the two conditional margins below, which are for a
+            # DIFFERENT reason (free null-interface rounds / the SSS walk)
+            # and stay scene-gated.
+            var gpu_max_rounds = Int(maxDepth) + 1
+            # Padding beyond the +1 above is CONDITIONAL on the scene
+            # actually containing a medium: a null interface never occurs
+            # otherwise, and there is no per-round host sync here (unlike
+            # the CPU loop's cheap `anyActive` early-exit) to make extra
+            # rounds free -- each one is a real, unconditional dispatch of
+            # every kernel in _gpu_bounce_kernels.
             comptime _MEDIUM_INTERFACE_MARGIN = 8
             # An SSS interior is walked one scattering event per round and
             # those steps are not charged to maxDepth (Medium_C.is_sss), so
@@ -4737,7 +4782,6 @@ def gpu_render_wavefront(
             # dispatch. Gated on the scene actually containing an SSS medium
             # so no other scene pays for it.
             comptime _SSS_WALK_ROUNDS = 256
-            var gpu_max_rounds = Int(maxDepth)
             if handle[].n_mediums > 0:
                 gpu_max_rounds += _MEDIUM_INTERFACE_MARGIN
             if handle[].has_sss_medium:

@@ -470,7 +470,7 @@ def debug_trace_pixel(
     var inter = unsafe_alloc[Intersection_C](1)
     var current_ior = Float32(1.0)   # mirrors PathState_C.current_dielectric_ior
     var previous_ior = Float32(1.0)  # mirrors PathState_C.previous_dielectric_ior
-    for bounce in range(8):
+    for bounce in range(20):
         var ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
         inter[unsafe_offset=0].hit = Int8(0)
         traverse_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, ray, Float32(1.0e38), inter,
@@ -607,8 +607,9 @@ def debug_trace_pixel(
                 var pmatidx5 = Int(rint5[unsafe_offset=0].primId.materialIndex)
                 print("        COAT REFLECT dir", rfx5, rfy5, rfz5, "-> hit primType", ptype5, "matType", Int(psc[unsafe_offset=0].materials[unsafe_offset=pmatidx5].type), "matIdx", pmatidx5, "t", rint5[unsafe_offset=0].tHit)
             rint5.unsafe_free()
-            print("        STOP (coateddiffuse probe only, not following further)")
-            break
+            ox = hx+nx5*Float32(0.0001); oy = hy+ny5*Float32(0.0001); oz = hz+nz5*Float32(0.0001)
+            dx = rfx5; dy = rfy5; dz = rfz5
+            print("        -> FOLLOW coat reflection (probe, ignores roughness)")
         elif Int(mat.type) == 3:
             # Conductor — mirror reflection only (ignore roughness for this probe).
             var facing3 = (dx*gnx + dy*gny + dz*gnz) < Float32(0.0)
@@ -632,8 +633,9 @@ def debug_trace_pixel(
                 var pmatidx3 = Int(rint3[unsafe_offset=0].primId.materialIndex)
                 print("        REFLECT dir", rfx3, rfy3, rfz3, "-> hit primType", ptype3, "matType", Int(psc[unsafe_offset=0].materials[unsafe_offset=pmatidx3].type), "matIdx", pmatidx3, "t", rint3[unsafe_offset=0].tHit)
             rint3.unsafe_free()
-            print("        STOP (conductor probe only, not following further)")
-            break
+            ox = hx+nx3*Float32(0.0001); oy = hy+ny3*Float32(0.0001); oz = hz+nz3*Float32(0.0001)
+            dx = rfx3; dy = rfy3; dz = rfz3
+            print("        -> FOLLOW conductor reflection (probe, ignores roughness)")
         elif Int(mat.type) == 1:
             # Diffuse — occlusion probe toward every light in the scene, offset
             # along the geometric normal like a real shadow ray would be.
