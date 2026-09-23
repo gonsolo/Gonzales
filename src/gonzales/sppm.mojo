@@ -2508,7 +2508,12 @@ def _sppm_nee_weight(
         var frm_m = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
         var tangent_m = Vec3f(frm_m.x.x, frm_m.x.y, frm_m.x.z)
         var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
-        var w_m = _nee_weight_measured(ls, mb_m, tangent_m, bitangent_m, vn, wo, vp.wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+        # mis_policy_sole(): an SPPM visible point terminates the camera
+        # path, so there is no competing BSDF-sampling strategy for the
+        # power heuristic to split credit with -- see mis_policy_sole's
+        # docstring. Every other material already gets this; measured never
+        # did (barcelona-pavilion-day's shadowed-chair deficit).
+        var w_m = _nee_weight_measured(ls, mb_m, tangent_m, bitangent_m, vn, wo, vp.wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, mis_policy_sole())
         return w_m
     var mat_kind_simple = _sppm_mat_kind_simple(vp.mat_kind)
     # Straight to a SpectralSample: this used to go through

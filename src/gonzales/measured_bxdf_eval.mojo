@@ -39,7 +39,7 @@ from .spectrum import SampledWavelengths, SpectralSample, spectral_sample_to_rgb
 from .rgb2spec import cie_d65_runtime
 from .bvh import LightSample
 from .geometry import _atan2f
-from .sampling import power_heuristic
+from .vcm_mis import MisPolicy, mis_policy_power, nee_mis_weight
 
 # ── Local-frame warps (bxdfs.h:1058-1065) ────────────────────────────────────
 
@@ -743,6 +743,7 @@ def _nee_weight_measured(
     spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
     spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
     spectral_d65: Pointer[Float32, MutUntrackedOrigin],
+    mis: MisPolicy = mis_policy_power(),
 ) -> SpectralSample:
     """Measured's own version of _nee_weight_simple (bxdf.mojo) — can't share
     that function's flat (mat_kind, alb, alpha) signature since it needs the
@@ -762,7 +763,16 @@ def _nee_weight_measured(
     and (b) reconstructs a SMOOTH Jakob-Hanika sigmoid, which cannot represent
     the sharp spectrum that IS a measured material's iridescence. The sampling
     path (bxdf_sample_measured) was freed of the same round trip in f0df724a;
-    this is its NEE counterpart."""
+    this is its NEE counterpart.
+
+    `mis` (added retroactively -- see barcelona-pavilion-day's shadowed-chair
+    deficit investigation): every OTHER material's NEE weight was migrated
+    from the path tracer's hardcoded two-strategy power_heuristic to a
+    caller-supplied MisPolicy (see mis_policy_sole's docstring for the
+    canonical derivation of why that matters for SPPM). Measured was the one
+    material left behind. Defaults to mis_policy_power() -- the path
+    tracer's own two-strategy heuristic, exactly the old hardcoded
+    behavior -- so shading.mojo's call sites are unaffected."""
     if not ls.valid:
         return SpectralSample(Float32(0.0))
     var cos_s = dot(normal, ls.wi)
@@ -776,8 +786,10 @@ def _nee_weight_measured(
     var li_spectral = rgb_illuminant_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, ls.Li.r, ls.Li.g, ls.Li.b, wavelengths)
     var f_times_li = fr_spectral * li_spectral
     if ls.is_delta:
-        return f_times_li * cos_s
+        if not mis.is_vcm:
+            return f_times_li * cos_s
+        return f_times_li * cos_s * nee_mis_weight(mis, Float32(1.0), Float32(0.0), cos_s)
     if ls.pdf <= Float32(0.0):
         return SpectralSample(Float32(0.0))
-    var mis_w = power_heuristic(ls.pdf, pdf_bsdf)
+    var mis_w = nee_mis_weight(mis, ls.pdf, pdf_bsdf, cos_s)
     return f_times_li * (cos_s * mis_w / ls.pdf)
