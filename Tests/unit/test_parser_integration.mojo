@@ -45,7 +45,7 @@ def test_curve_shape_grows_past_default_control_point_cap() raises:
 
     var handle = _scanner_from_string(body)
     var s_ptr = unsafe_alloc[SceneParseState](1)
-    s_ptr.init_pointee_move(SceneParseState())
+    s_ptr.unsafe_write(SceneParseState())
     handle_curve_shape(handle, s_ptr)
 
     var expected_segments = N_POINTS - 3
@@ -74,7 +74,7 @@ def test_named_medium_bracket_wrapped_type_does_not_desync() raises:
     )
     var handle = _scanner_from_string(body)
     var s_ptr = unsafe_alloc[SceneParseState](1)
-    s_ptr.init_pointee_move(SceneParseState())
+    s_ptr.unsafe_write(SceneParseState())
     handle_named_medium(handle, s_ptr)
 
     assert_true(len(s_ptr[unsafe_offset=0].med_names) == 1)
@@ -114,7 +114,7 @@ def test_named_material_long_normalmap_path_is_not_truncated() raises:
     )
     var handle = _scanner_from_string(body)
     var s_ptr = unsafe_alloc[SceneParseState](1)
-    s_ptr.init_pointee_move(SceneParseState())
+    s_ptr.unsafe_write(SceneParseState())
     _psc_handle_make_named_material(handle, s_ptr, False)
 
     assert_true(len(s_ptr[unsafe_offset=0].named_materials) == 1)

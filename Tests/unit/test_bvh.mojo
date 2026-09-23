@@ -1,3 +1,4 @@
+from std.collections import Array
 from std.math import abs, max
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, assert_equal, TestSuite
@@ -116,7 +117,7 @@ def _fill_boxes(bounds: Pointer[Float32, MutUntrackedOrigin], n: Int, seed: UInt
             for a in range(6):
                 bounds[unsafe_offset=i * 6 + a] = bounds[unsafe_offset=(i - 1) * 6 + a]
             continue
-        var r = InlineArray[Float32, 4](fill=Float32(0))
+        var r = Array[Float32, 4](fill=Float32(0))
         for a in range(4):
             s = s * UInt64(6364136223846793005) + UInt64(1442695040888963407)
             r[a] = Float32(s >> 40) / Float32(1 << 24)

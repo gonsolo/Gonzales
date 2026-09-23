@@ -1,3 +1,4 @@
+from std.collections import Array
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
 from .geometry import Vec3f, Point3f
@@ -98,12 +99,12 @@ def matrix_invert(
 ) -> Int32:
     # Gauss-Jordan elimination with full pivoting (mirrors Matrix.invert).
     # On a singular matrix, writes the identity and returns 0.
-    var minv = InlineArray[Float32, 16](fill=0)
+    var minv = Array[Float32, 16](fill=0)
     for i in range(16):
         minv[i] = m[unsafe_offset=i]
-    var indxc = InlineArray[Int, 4](fill=0)
-    var indxr = InlineArray[Int, 4](fill=0)
-    var ipiv = InlineArray[Int, 4](fill=0)
+    var indxc = Array[Int, 4](fill=0)
+    var indxr = Array[Int, 4](fill=0)
+    var ipiv = Array[Int, 4](fill=0)
 
     for iteration in range(4):
         var big = Float32(0)

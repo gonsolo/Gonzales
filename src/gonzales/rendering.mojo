@@ -444,8 +444,7 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
     # Print every ~5% of tiles (at least every 1 tile).
     var print_step = max(n_tiles // 20, 1)
 
-    @parameter
-    def render_one(tile_idx: Int):
+    def render_one(tile_idx: Int) {imm}:
         var ty_i = tile_idx // n_tiles_x
         var tx_i = tile_idx % n_tiles_x
         var tx = Int(min_x) + tx_i * tw
@@ -500,13 +499,12 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
     # means sharding per WORKER, which needs at least as many shards as
     # workers -- worth doing, but it belongs with --guide, not here.
     if n_write_guides > 0:
-        parallelize[render_one](n_tiles)
+        parallelize(render_one, n_tiles)
     else:
         var next_tile = unsafe_alloc[Int32](1)
         next_tile[unsafe_offset=0] = Int32(0)
 
-        @parameter
-        def tile_worker(_worker_idx: Int):
+        def tile_worker(_worker_idx: Int) {imm}:
             while True:
                 var idx = Int(Atomic.fetch_add(next_tile, Int32(1)))
                 if idx >= n_tiles:
@@ -515,7 +513,7 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
 
         # One worker per core; each drains the queue, so the count only needs
         # to be enough to saturate the machine, not to match the tile count.
-        parallelize[tile_worker](min(num_performance_cores(), n_tiles))
+        parallelize(tile_worker, min(num_performance_cores(), n_tiles))
         next_tile.unsafe_free()
     # Merge per-tile-group write guides into [0] so caller gets unified result.
     if n_write_guides > 1:

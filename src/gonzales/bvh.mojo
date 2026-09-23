@@ -1,3 +1,4 @@
+from std.collections import Array
 from std.memory.alloc import unsafe_alloc
 from std.math import sqrt, cos, sin, max, min, exp, floor, log
 from max.algorithm import parallelize
@@ -1084,7 +1085,7 @@ def _traverse_blas_triangles(
     var bestU: Float32 = 0.0
     var bestV: Float32 = 0.0
 
-    var stack = InlineArray[Int32, 64](fill=Int32(0))
+    var stack = Array[Int32, 64](fill=Int32(0))
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
     var current = 0
@@ -1258,7 +1259,7 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
     var instHit = False
     var instHitPrim = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
 
-    var stack = InlineArray[Int32, 64](fill=Int32(0))
+    var stack = Array[Int32, 64](fill=Int32(0))
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
     var current = 0
@@ -1369,7 +1370,7 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
                 var leftTNear = leftHit[1]
                 var rightTNear = rightHit[1]
                 # Bound the push against the 64-entry stack. Overflowing it
-                # writes past the InlineArray and corrupts whatever follows
+                # writes past the Array and corrupts whatever follows
                 # it in the frame; dropping the far child instead can only
                 # cost a missed intersection, never memory corruption.
                 if leftTNear <= rightTNear:
@@ -1456,7 +1457,7 @@ def traverse_bvh2_core_defer_curves(
     var instHit = False
     var instHitPrim = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
 
-    var stack = InlineArray[Int32, 64](fill=Int32(0))
+    var stack = Array[Int32, 64](fill=Int32(0))
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
     var current = 0
@@ -1572,7 +1573,7 @@ def traverse_bvh2_core_defer_curves(
                 var leftTNear = leftHit[1]
                 var rightTNear = rightHit[1]
                 # Bound the push against the 64-entry stack. Overflowing it
-                # writes past the InlineArray and corrupts whatever follows
+                # writes past the Array and corrupts whatever follows
                 # it in the frame; dropping the far child instead can only
                 # cost a missed intersection, never memory corruption.
                 if leftTNear <= rightTNear:
@@ -1682,7 +1683,7 @@ def any_hit_bvh2_core(
     var nearXIsMin = rdir.x >= Float32(0.0)
     var nearYIsMin = rdir.y >= Float32(0.0)
     var nearZIsMin = rdir.z >= Float32(0.0)
-    var stack = InlineArray[Int32, 64](fill=Int32(0))
+    var stack = Array[Int32, 64](fill=Int32(0))
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
     var current = 0
@@ -1863,13 +1864,13 @@ def _bvh_split(
         mid = start + count // 2
     else:
         comptime nBuckets = 12
-        var bk_cnt = InlineArray[Int32, nBuckets](fill=Int32(0))
-        var bk_minx = InlineArray[Float32, nBuckets](fill=INF)
-        var bk_miny = InlineArray[Float32, nBuckets](fill=INF)
-        var bk_minz = InlineArray[Float32, nBuckets](fill=INF)
-        var bk_maxx = InlineArray[Float32, nBuckets](fill=-INF)
-        var bk_maxy = InlineArray[Float32, nBuckets](fill=-INF)
-        var bk_maxz = InlineArray[Float32, nBuckets](fill=-INF)
+        var bk_cnt = Array[Int32, nBuckets](fill=Int32(0))
+        var bk_minx = Array[Float32, nBuckets](fill=INF)
+        var bk_miny = Array[Float32, nBuckets](fill=INF)
+        var bk_minz = Array[Float32, nBuckets](fill=INF)
+        var bk_maxx = Array[Float32, nBuckets](fill=-INF)
+        var bk_maxy = Array[Float32, nBuckets](fill=-INF)
+        var bk_maxz = Array[Float32, nBuckets](fill=-INF)
         var inv_d = Float32(1.0) / (cmax_d - cmin_d)
         for i in range(start, end):
             var ci = Float32(0.5)*(wmin[unsafe_offset=i*3+dim] + wmax[unsafe_offset=i*3+dim])
@@ -1885,7 +1886,7 @@ def _bvh_split(
             bk_maxz[b] = max(bk_maxz[b], wmax[unsafe_offset=i*3+2])
 
         comptime nSplits = nBuckets - 1
-        var costs = InlineArray[Float32, nSplits](fill=Float32(0.0))
+        var costs = Array[Float32, nSplits](fill=Float32(0.0))
         # Prefix pass: cost of the "below" set for each split.
         var cntBelow = 0
         var pminx = INF; var pminy = INF; var pminz = INF
@@ -2043,15 +2044,14 @@ def _build_bvh2_parallel(
     level[unsafe_offset=0] = 0
     var n_level = 1
     while n_level > 0 and n_tasks + 2 * n_level <= _BVH_MAX_TASKS:
-        @parameter
-        def split_one(k: Int):
+        def split_one(k: Int) {imm}:
             var t = tasks[unsafe_offset=level[unsafe_offset=k]]
             if t.end - t.start > subtree_prims:
                 splits[unsafe_offset=k] = _bvh_split(widx, wmin, wmax, t.start, t.end, 4)
             else:
                 splits[unsafe_offset=k] = _BVHSplit(t.bmin, t.bmax, -1)   # small enough: a subtree build
 
-        parallelize[split_one](n_level)
+        parallelize(split_one, n_level)
         var n_next = 0
         for k in range(n_level):
             var sp = splits[unsafe_offset=k]
@@ -2079,8 +2079,7 @@ def _build_bvh2_parallel(
     var next_subtree = unsafe_alloc[Int32](1)
     next_subtree[unsafe_offset=0] = Int32(0)
 
-    @parameter
-    def build_worker(_worker_idx: Int):
+    def build_worker(_worker_idx: Int) {imm}:
         while True:
             var k = Int(Atomic.fetch_add(next_subtree, Int32(1)))
             if k >= n_subtrees:
@@ -2096,7 +2095,7 @@ def _build_bvh2_parallel(
             tasks[unsafe_offset=i] = t
             cnt.unsafe_free()
 
-    parallelize[build_worker](min(num_performance_cores(), n_subtrees))
+    parallelize(build_worker, min(num_performance_cores(), n_subtrees))
 
     # 3. Lay everything out depth-first.
     node_count[unsafe_offset=0] = Int32(0)
@@ -2177,8 +2176,7 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
     var org = Point3f(cameraToWorld[unsafe_offset=12], cameraToWorld[unsafe_offset=13], cameraToWorld[unsafe_offset=14])
     var isects = unsafe_alloc[Intersection_C](n_pixels)
 
-    @parameter
-    def trace_pixel(i: Int):
+    def trace_pixel(i: Int) {imm}:
         var py = i // w
         var px = i % w
         var filmX = Float32(Int(min_x) + px) + Float32(0.5)
@@ -2296,5 +2294,5 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
         if _is_real_ptr(material_id_out):
             material_id_out[unsafe_offset=i] = Int32(isects[unsafe_offset=i].primId.materialIndex) if isects[unsafe_offset=i].hit != Int8(0) else Int32(-1)
 
-    parallelize[trace_pixel](n_pixels)
+    parallelize(trace_pixel, n_pixels)
     isects.unsafe_free()

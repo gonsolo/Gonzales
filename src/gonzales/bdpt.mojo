@@ -3,9 +3,10 @@
 # Strategies: t >= 1, s >= 1 only (no lens sampling for s=0).
 # MIS: balance heuristic over all valid connection strategies.
 
+from std.collections import Array
 from std.sys import has_accelerator
 from std.sys.info import size_of
-from std.gpu import block_idx, thread_idx, block_dim
+from max.gpu import block_idx, thread_idx, block_dim
 from max.gpu.host import DeviceContext, DeviceBuffer
 from max.algorithm import parallelize
 from std.math import sqrt, cos, sin, tan, floor, log, exp, max, min, abs, ceildiv, pow
@@ -293,7 +294,7 @@ def _visible_transmittance(
     # Private local slot instead of the caller's `scratch`. The caller's slot
     # is simultaneously live in the enclosing traversal that called us, and
     # writing through both aliases is what the GPU build faults on.
-    var _local_inter = InlineArray[Intersection_C, 1](fill=Intersection_C(
+    var _local_inter = Array[Intersection_C, 1](fill=Intersection_C(
         PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
         Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
     var inter_mem = _local_inter.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
@@ -584,7 +585,7 @@ def _bdpt_mnee_diffuse_area_light(
     var probe_tmax = dist * Float32(0.9995)
     var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var dummy_inter = Intersection_C(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
-    var probe_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
+    var probe_store = Array[Intersection_C, 1](fill=dummy_inter)
     traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr(),
                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
     var probe_inter = probe_store[0]
@@ -623,7 +624,7 @@ def _bdpt_mnee_diffuse_area_light(
     var probe2_inter = dummy_inter
     if probe2_rem > Float32(0.001):
         var probe2_ray = Ray_C(Point3f(probe2_org[0], probe2_org[1], probe2_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-        var probe2_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
+        var probe2_store = Array[Intersection_C, 1](fill=dummy_inter)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr(),
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         probe2_inter = probe2_store[0]
@@ -803,7 +804,7 @@ def _bdpt_mnee_sphere_light(
     help -- still crashed identically, ruling out "too many chained
     multiplies in one expression" as the mechanism. This is consistent
     with the general shape of the anomaly logged in
-    `reference_mojo_compiler_bug_6759.md` (heavy, `InlineArray`-using,
+    `reference_mojo_compiler_bug_6759.md` (heavy, `Array`-using,
     multiple early returns, BVH traversal, under this scene's specific
     complexity) -- though that report was later retracted by its own
     author as unreproducible, so this crash stands on its own bisection
@@ -864,7 +865,7 @@ def _bdpt_mnee_sphere_light(
     var probe_tmax = dist * Float32(0.9995)
     var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var dummy_inter = Intersection_C(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
-    var probe_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
+    var probe_store = Array[Intersection_C, 1](fill=dummy_inter)
     traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr(),
                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
     var probe_inter = probe_store[0]
@@ -903,7 +904,7 @@ def _bdpt_mnee_sphere_light(
     var probe2_inter = dummy_inter
     if probe2_rem > Float32(0.001):
         var probe2_ray = Ray_C(Point3f(probe2_org[0], probe2_org[1], probe2_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-        var probe2_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
+        var probe2_store = Array[Intersection_C, 1](fill=dummy_inter)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr(),
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         probe2_inter = probe2_store[0]
@@ -1152,9 +1153,9 @@ def _bdpt_splat_filtered[use_atomics: Bool](
                 continue
             var o = (py * fw + px) * 3
             comptime if use_atomics:
-                _ = Atomic[DType.float32].fetch_add(accum.unsafe_offset(o + 0), rgb_r * w)
-                _ = Atomic[DType.float32].fetch_add(accum.unsafe_offset(o + 1), rgb_g * w)
-                _ = Atomic[DType.float32].fetch_add(accum.unsafe_offset(o + 2), rgb_b * w)
+                _ = Atomic[Float32].fetch_add(accum.unsafe_offset(o + 0), rgb_r * w)
+                _ = Atomic[Float32].fetch_add(accum.unsafe_offset(o + 1), rgb_g * w)
+                _ = Atomic[Float32].fetch_add(accum.unsafe_offset(o + 2), rgb_b * w)
             else:
                 accum[unsafe_offset=o + 0] += rgb_r * w
                 accum[unsafe_offset=o + 1] += rgb_g * w
@@ -1442,15 +1443,13 @@ def _bdpt_build_merge_grid(
     `n_light_paths * _BDPT_MAX_VERTS` capacity;
     `_bdpt_insert_merge_vertex` itself skips each path's unused tail slots
     via `lvc_path_len`."""
-    @parameter
-    def reset_one(i: Int):
+    def reset_one(i: Int) {imm}:
         _bdpt_reset_merge_cell(heads, i)
-    parallelize[reset_one](_HSIZE)
+    parallelize(reset_one, _HSIZE)
 
-    @parameter
-    def insert_one(k: Int):
+    def insert_one(k: Int) {imm}:
         _bdpt_insert_merge_vertex[True](k, lvc, lvc_path_len, merge_next, heads, inv_cell)
-    parallelize[insert_one](n_light_paths * _BDPT_MAX_VERTS)
+    parallelize(insert_one, n_light_paths * _BDPT_MAX_VERTS)
 
 comptime _VCM_RADIUS_FRACTION = Float32(0.03)   # initial radius as a fraction of the scene bounding sphere
 comptime _VCM_RADIUS_ALPHA = Float32(2.0) / Float32(3.0)  # Georgiev 2012's typical choice
@@ -4658,7 +4657,7 @@ def _bdpt_sample_bssrdf_exit(
     var probe_dir = n_in * Float32(-1.0)
     # Private probe slot: the caller's scratch still holds the intersection
     # the enclosing path loop is shading.
-    var _probe_slot = InlineArray[Intersection_C, 1](fill=Intersection_C(
+    var _probe_slot = Array[Intersection_C, 1](fill=Intersection_C(
         PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
         Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
     var probe_scratch = _probe_slot.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
@@ -5177,8 +5176,7 @@ def _bdpt_render_core(
         # the first n_pix of them pixel-paired, see above) ───────────────────
         # No atomics needed: light path lp_idx writes only its own dedicated
         # slice of lvc (see _bdpt_store_lvc_vertex's docstring).
-        @parameter
-        def emit_light_path(lp_idx: Int):
+        def emit_light_path(lp_idx: Int) {imm}:
             var lpcg = PCG32(base_seed ^ UInt64(lp_idx * 6364136223846793005 + 1442695040888963407),
                               UInt64(si * 2654435761 + 1))
             _bdpt_trace_light_path[False](sd, lpcg, has_med, default_emit_med,
@@ -5186,7 +5184,7 @@ def _bdpt_render_core(
                                          mis_vc_weight_factor, mis_vm_weight_factor, pass_wl,
                                          cam_pos, px_scale)
 
-        parallelize[emit_light_path](n_light_paths_merge)
+        parallelize(emit_light_path, n_light_paths_merge)
 
         _bdpt_build_merge_grid(lvc, lvc_path_len, n_light_paths_merge, merge_next, merge_heads, merge_inv_cell)
 
@@ -5199,8 +5197,7 @@ def _bdpt_render_core(
         # per-slot record array, and the cheap accumulation is then a
         # serial pass. That also keeps the result deterministic, which
         # atomics on floats would not.
-        @parameter
-        def splat_light_path(lp_idx: Int):
+        def splat_light_path(lp_idx: Int) {imm}:
             var base = lp_idx * _BDPT_MAX_VERTS
             for local in range(Int(lvc_path_len[unsafe_offset=lp_idx])):
                 var r = _bdpt_connect_to_camera(
@@ -5213,7 +5210,7 @@ def _bdpt_render_core(
             for local in range(Int(lvc_path_len[unsafe_offset=lp_idx]), _BDPT_MAX_VERTS):
                 splat_fx[unsafe_offset=base + local] = Float32(-1)
 
-        parallelize[splat_light_path](n_light_paths_merge)
+        parallelize(splat_light_path, n_light_paths_merge)
 
         # ── Output boundary: spectral splat -> RGB film ──────────────────
         # buf is RGB[n_pix]; the splatter takes 3 packed floats per pixel.
@@ -5233,8 +5230,7 @@ def _bdpt_render_core(
         # the first n_pix of n_light_paths_merge total light paths, one
         # dedicated light path per pixel -- unaffected by task #152's extra
         # merge-only paths beyond n_pix).
-        @parameter
-        def camera_connect(pix: Int):
+        def camera_connect(pix: Int) {imm}:
             var px = pix % fw; var py = pix // fw
             var cpcg = PCG32(base_seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
                               UInt64(si * 2654435761 + 1))
@@ -5249,7 +5245,7 @@ def _bdpt_render_core(
             buf[unsafe_offset=pix] += RGB(cr, cg, cb)
             albedo_buf[unsafe_offset=pix] += alb
 
-        parallelize[camera_connect](n_pix)
+        parallelize(camera_connect, n_pix)
 
         if verbose:
             print("VCM: sample " + String(si + 1) + "/" + String(n_spp))

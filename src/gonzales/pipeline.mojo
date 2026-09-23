@@ -1,6 +1,6 @@
 from std.memory.alloc import unsafe_alloc
 from std.memory import OwnedPointer
-from std.collections import List
+from std.collections import List, Array
 from std.math import sqrt, tan, ceil
 from std.sys.info import size_of
 from max.gpu.host import DeviceBuffer
@@ -222,7 +222,7 @@ def _generate_sobol_matrices(path: String) -> Optional[Pointer[UInt32, MutUntrac
             pos += 1
 
         # m values
-        var m = InlineArray[UInt32, 52](fill=UInt32(0))
+        var m = Array[UInt32, 52](fill=UInt32(0))
         var num_m = Int(s)
         if num_m > N_BITS:
             num_m = N_BITS

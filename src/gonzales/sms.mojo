@@ -32,6 +32,7 @@
 # _mnee_walk2's own formulas at n=2 (see test_sms.mojo's regression tests
 # against _mnee_walk/_mnee_walk2 output).
 
+from std.collections import Array
 from std.math import sqrt, abs, max, min, cos, sin, acos
 from .geometry import RGB, dot, cross, fr_dielectric, Frame, Vec3f, Point3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Curve_C, Instance_C, Sphere_C, NormalSlopeMap_C, normal_slope_map_none, _atan2f, PI, TWO_PI
 from .rng import PCG32
@@ -575,7 +576,7 @@ def _sms_reproject_onto_sphere_anchored(
             var occl_ray = Ray_C(Point3f(occl_org[0], occl_org[1], occl_org[2]), Vec3f(dir[0], dir[1], dir[2]))
             var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
             var dummy_inter = Intersection_C(dummy_prim, occl_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
-            var store = InlineArray[Intersection_C, 1](fill=dummy_inter)
+            var store = Array[Intersection_C, 1](fill=dummy_inter)
             traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, occl_ray, occl_tmax, store.unsafe_ptr(),
                                 blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
             if store[0].hit != Int8(0) and store[0].tHit < (t - occl_eps) - radius * Float32(1e-4):
@@ -792,7 +793,7 @@ def _sms_eval_bad() -> SMSVertexEval:
 @always_inline
 def _sms_eval_vertex(
     x0: Vec3f, xL: Vec3f,
-    verts: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int, i: Int,
+    verts: Array[SMSVertex, MAX_SMS_VERTICES], n: Int, i: Int,
 ) -> SMSVertexEval:
     var prev_pos = x0 if i == 0 else verts[i-1].pos
     var next_pos = xL if i == n-1 else verts[i+1].pos
@@ -866,7 +867,7 @@ def _sms_eval_vertex(
 
 def sms_walk(
     x0: Vec3f, xL: Vec3f,
-    verts_init: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int,
+    verts_init: Array[SMSVertex, MAX_SMS_VERTICES], n: Int,
     ldp_du: Vec3f, ldp_dv: Vec3f,
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin] = Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
     primIds: Pointer[PrimId_C, MutUntrackedOrigin] = Pointer[PrimId_C, MutUntrackedOrigin].unsafe_dangling(),
@@ -877,7 +878,7 @@ def sms_walk(
     instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
     spheres: Pointer[Sphere_C, MutUntrackedOrigin] = Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
-) -> Tuple[Bool, InlineArray[Vec3f, MAX_SMS_VERTICES], Float32, Float32]:
+) -> Tuple[Bool, Array[Vec3f, MAX_SMS_VERTICES], Float32, Float32]:
     """N-vertex generalization of _mnee_walk/_mnee_walk2 (kept in
     shading.mojo as fast paths for n=1/2 -- Phase 5.4). Newton iteration on
     a chain of `n` specular vertices via a block-tridiagonal solve of the
@@ -916,8 +917,8 @@ def sms_walk(
         # generalized half-vector constraint, which is what the coupled
         # N-vertex block-tridiagonal system is built on and the only form
         # that generalizes to it.
-        var dx = InlineArray[SIMD[DType.float32, 2], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 2](Float32(0.0)))
-        var wol = InlineArray[Float32, MAX_SMS_VERTICES](fill=Float32(0.0))
+        var dx = Array[SIMD[DType.float32, 2], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 2](Float32(0.0)))
+        var wol = Array[Float32, MAX_SMS_VERTICES](fill=Float32(0.0))
         var err: Float32
         if use_anglediff:
             var st = _sms_step_anglediff(x0, xL, verts[0])
@@ -930,7 +931,7 @@ def sms_walk(
             var wv = xL - verts[0].pos
             wol[0] = sqrt(dot(wv, wv))
         else:
-            var ev = InlineArray[SMSVertexEval, MAX_SMS_VERTICES](fill=_sms_eval_bad())
+            var ev = Array[SMSVertexEval, MAX_SMS_VERTICES](fill=_sms_eval_bad())
             var bad = False
             for i in range(n):
                 ev[i] = _sms_eval_vertex(x0, xL, verts, n, i)
@@ -956,8 +957,8 @@ def sms_walk(
             if err < SMS_SOLVER_THRESHOLD:
                 converged = True; break
             # ── Block tridiagonal forward sweep ────────────────────────────────
-            var cprime = InlineArray[SIMD[DType.float32, 4], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 4](Float32(0.0)))
-            var dprime = InlineArray[SIMD[DType.float32, 2], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 2](Float32(0.0)))
+            var cprime = Array[SIMD[DType.float32, 4], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 4](Float32(0.0)))
+            var dprime = Array[SIMD[DType.float32, 2], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 2](Float32(0.0)))
             var (Li0, det0) = mat22_inv(ev[0].b)
             if det0 == Float32(0.0):
                 break
@@ -974,7 +975,7 @@ def sms_walk(
             if solve_failed:
                 break
             # ── Back substitution ───────────────────────────────────────────────
-            dx = InlineArray[SIMD[DType.float32, 2], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 2](Float32(0.0)))
+            dx = Array[SIMD[DType.float32, 2], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 2](Float32(0.0)))
             dx[n-1] = dprime[n-1]
             for ridx in range(n-1):
                 var i = n-2-ridx
@@ -1068,7 +1069,7 @@ def sms_walk(
                         else:
                             bad2 = True
                 else:
-                    var ev2 = InlineArray[SMSVertexEval, MAX_SMS_VERTICES](fill=_sms_eval_bad())
+                    var ev2 = Array[SMSVertexEval, MAX_SMS_VERTICES](fill=_sms_eval_bad())
                     for i in range(n):
                         if bad2:
                             break
@@ -1086,7 +1087,7 @@ def sms_walk(
                 scale *= Float32(0.5)
             if not applied:
                 break
-    var zero_positions = InlineArray[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
+    var zero_positions = Array[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
     if not converged:
         return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
     # Post-solve validity check, straight from the reference
@@ -1116,12 +1117,12 @@ def sms_walk(
         if dot(gn, wx) * dot(gn, wy) >= Float32(0.0):
             return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
     # ── Final recompute: BSDF product + light-Jacobian chain ────────────────
-    var evf = InlineArray[SMSVertexEval, MAX_SMS_VERTICES](fill=_sms_eval_bad())
+    var evf = Array[SMSVertexEval, MAX_SMS_VERTICES](fill=_sms_eval_bad())
     for i in range(n):
         evf[i] = _sms_eval_vertex(x0, xL, verts, n, i)
         if evf[i].ok == Int8(0):
             return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
-    var cprimef = InlineArray[SIMD[DType.float32, 4], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 4](Float32(0.0)))
+    var cprimef = Array[SIMD[DType.float32, 4], MAX_SMS_VERTICES](fill=SIMD[DType.float32, 4](Float32(0.0)))
     var (Li0f, det0f) = mat22_inv(evf[0].b)
     if det0f == Float32(0.0):
         return (False, zero_positions.copy(), Float32(0.0), Float32(0.0))
@@ -1184,7 +1185,7 @@ def sms_walk(
         # one idealized bend -- see _sms_probe_and_solve) exposes it.
         var eta_o = Float32(1.0) / verts[i].eta
         bsdf_product *= (Float32(1.0)-F)*cosHI/max(cosNI*cosTM*cosTM, Float32(1e-6)) * eta_o*eta_o
-    var out_positions = InlineArray[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
+    var out_positions = Array[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
     for i in range(n):
         out_positions[i] = verts[i].pos
     return (True, out_positions.copy(), bsdf_product, dx1_dxlight)
@@ -1192,7 +1193,7 @@ def sms_walk(
 # ── Random seeding + Bernoulli-trial reciprocal estimator (5.2/5.3) ─────────
 
 @always_inline
-def sms_refresh_solved_frames(mut verts: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int):
+def sms_refresh_solved_frames(mut verts: Array[SMSVertex, MAX_SMS_VERTICES], n: Int):
     """Re-derive each curved vertex's frame at its SOLVED position.
 
     `sms_walk` returns only the solved POSITIONS -- its own updated vertex
@@ -1217,7 +1218,7 @@ def sms_refresh_solved_frames(mut verts: InlineArray[SMSVertex, MAX_SMS_VERTICES
                 verts[i].pos, verts[i].sphere_center, verts[i].sphere_radius))
 
 @always_inline
-def sms_seed_randomize(x0: Vec3f, mut verts: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int, mut pcg: PCG32, jitter_scale: Float32):
+def sms_seed_randomize(x0: Vec3f, mut verts: Array[SMSVertex, MAX_SMS_VERTICES], n: Int, mut pcg: PCG32, jitter_scale: Float32):
     """5.2: draw a fresh random Newton seed for each vertex of the chain.
 
     A FLAT vertex is perturbed within its own triangle's tangent plane by a
@@ -1274,8 +1275,8 @@ def sms_seed_randomize(x0: Vec3f, mut verts: InlineArray[SMSVertex, MAX_SMS_VERT
 @always_inline
 def sms_same_solution(
     x0: Vec3f,
-    a: InlineArray[Vec3f, MAX_SMS_VERTICES],
-    b: InlineArray[Vec3f, MAX_SMS_VERTICES], n: Int,
+    a: Array[Vec3f, MAX_SMS_VERTICES],
+    b: Array[Vec3f, MAX_SMS_VERTICES], n: Int,
 ) -> Bool:
     """Do two solved chains represent the SAME specular root? Compares the
     directions x0->x_i (see SMS_UNIQUENESS_COS_EPS for why direction rather
@@ -1294,7 +1295,7 @@ def sms_same_solution(
 
 def sms_solve_bernoulli(
     x0: Vec3f, xL: Vec3f,
-    verts_seed: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int,
+    verts_seed: Array[SMSVertex, MAX_SMS_VERTICES], n: Int,
     ldp_du: Vec3f, ldp_dv: Vec3f,
     jitter_scale: Float32, mut pcg: PCG32,
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin] = Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
@@ -1306,7 +1307,7 @@ def sms_solve_bernoulli(
     instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
     spheres: Pointer[Sphere_C, MutUntrackedOrigin] = Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
-) -> Tuple[Bool, InlineArray[Vec3f, MAX_SMS_VERTICES], Float32, Float32, Float32]:
+) -> Tuple[Bool, Array[Vec3f, MAX_SMS_VERTICES], Float32, Float32, Float32]:
     """5.3: Zeltner et al. 2020's Bernoulli-trial reciprocal estimator.
     Solves once from a randomly-jittered seed to fix the primary candidate
     solution X* (the one whose contribution this call reports), then draws
@@ -1335,7 +1336,7 @@ def sms_solve_bernoulli(
     var bsdf0 = _walk0[2]
     var jac0 = _walk0[3]
     if not ok0:
-        var zero_positions = InlineArray[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
+        var zero_positions = Array[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
         return (False, zero_positions.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
     var trials = Float32(0.0)
     var matched = False

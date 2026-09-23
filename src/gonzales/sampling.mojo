@@ -1,3 +1,4 @@
+from std.collections import Array
 from std.math import sqrt, log, exp, cos, sin, atan2, acos
 from std.memory.alloc import unsafe_alloc
 from .geometry import Vec3f, Ray_C, Point3f, dot, cross, Frame, PI, TWO_PI, INV_PI
@@ -208,7 +209,7 @@ def encode_morton2(x: UInt32, y: UInt32) -> UInt64:
 # Compact permutation encoding: each of 24 permutations of {0,1,2,3} stored in one UInt8.
 @always_inline
 def sobol_perm_lookup(p_idx: Int, digit: Int) -> Int:
-    var enc = InlineArray[UInt8, 24](fill=UInt8(0))
+    var enc = Array[UInt8, 24](fill=UInt8(0))
     enc[ 0]=27; enc[ 1]=30; enc[ 2]=39; enc[ 3]=45; enc[ 4]=57; enc[ 5]=54
     enc[ 6]=75; enc[ 7]=78; enc[ 8]=99; enc[ 9]=108; enc[10]=120; enc[11]=114
     enc[12]=147; enc[13]=156; enc[14]=135; enc[15]=141; enc[16]=177; enc[17]=180

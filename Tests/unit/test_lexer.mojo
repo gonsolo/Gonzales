@@ -222,7 +222,7 @@ def test_scan_token_reads_until_delimiter() raises:
     var out = unsafe_alloc[UInt8](32)
     var n = scan_token(buf, Int32(11), cur, delims, Int32(1), out, Int32(32))
     assert_true(n == Int32(5))
-    assert_true(String(unsafe_from_utf8_ptr=out.as_immutable()) == String("hello"))
+    assert_true(String(unsafe_from_utf8_ptr=out.as_imm()) == String("hello"))
     assert_true(cur[unsafe_offset=0] == Int32(5))
     buf.unsafe_free(); cur.unsafe_free(); delims.unsafe_free(); out.unsafe_free()
 
@@ -243,7 +243,7 @@ def test_parse_quoted_string_basic() raises:
     var out = unsafe_alloc[UInt8](32)
     var n = parse_quoted_string(buf, Int32(7), cur, out, Int32(32))
     assert_true(n == Int32(5))
-    assert_true(String(unsafe_from_utf8_ptr=out.as_immutable()) == String("hello"))
+    assert_true(String(unsafe_from_utf8_ptr=out.as_imm()) == String("hello"))
     assert_true(cur[unsafe_offset=0] == Int32(7))
     buf.unsafe_free(); cur.unsafe_free(); out.unsafe_free()
 
@@ -261,7 +261,7 @@ def test_parse_quoted_string_truncates_at_max_buf() raises:
     var out = unsafe_alloc[UInt8](4)
     var n = parse_quoted_string(buf, Int32(8), cur, out, Int32(4))
     assert_true(n == Int32(6))  # reports the true length...
-    assert_true(String(unsafe_from_utf8_ptr=out.as_immutable()) == String("abc"))  # ...but out is capped
+    assert_true(String(unsafe_from_utf8_ptr=out.as_imm()) == String("abc"))  # ...but out is capped
     buf.unsafe_free(); cur.unsafe_free(); out.unsafe_free()
 
 # ── _psc_streq ───────────────────────────────────────────────────────────

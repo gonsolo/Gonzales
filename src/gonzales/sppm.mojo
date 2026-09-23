@@ -5,7 +5,7 @@
 
 from std.sys import has_accelerator
 from std.sys.info import size_of
-from std.gpu import block_idx, thread_idx, block_dim
+from max.gpu import block_idx, thread_idx, block_dim
 from max.gpu.host import DeviceContext, DeviceBuffer
 from max.algorithm import parallelize
 from std.math import sqrt, cos, sin, floor, log, exp, max, min, ceildiv
@@ -1151,15 +1151,14 @@ def _sppm_camera_pass(
     # runs across CPU threads too, not just GPU ones.
     var scratch = unsafe_alloc[Intersection_C](max(n_pix * vp_samples, 1))
 
-    @parameter
-    def trace_one(combined: Int):
+    def trace_one(combined: Int) {imm}:
         var pix = combined // vp_samples
         var px = pix % Int(fw)
         var py = pix // Int(fw)
         var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
         vps[unsafe_offset=combined] = _sppm_trace_visible_point[False](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, scratch.unsafe_offset(combined), maxdepth, film_filter)
 
-    parallelize[trace_one](n_pix * vp_samples)
+    parallelize(trace_one, n_pix * vp_samples)
 
     scratch.unsafe_free()
 
@@ -1936,15 +1935,14 @@ def _sppm_photon_pass(
     # of which backend is actually running. tex_gpu=False: this driver IS
     # actually CPU, so _tex_lookup must use the CPU tex_filenames path
     # (see _sppm_trace_photon's docstring for why these are separate params).
-    @parameter
-    def emit_one(k: Int):
+    def emit_one(k: Int) {imm}:
         var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
         _sppm_trace_photon[True, False](sd, pcg, scratch.unsafe_offset(k), n_emit, photons, max_photons, counter, default_emit_med, maxdepth,
             cam_pos, px_scale,
             sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y,
             sd.spectral.cie_z, sd.spectral.d65, pass_wavelengths(pass_idx))
 
-    parallelize[emit_one](n_emit)
+    parallelize(emit_one, n_emit)
 
     var n_stored = min(Int(counter[unsafe_offset=0]), max_photons)
     counter.unsafe_free()
@@ -1985,19 +1983,17 @@ def _build_grid(
     heads:    Pointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
 ):
-    @parameter
-    def reset_one(i: Int):
+    def reset_one(i: Int) {imm}:
         _sppm_reset_grid_cell(heads, i)
 
-    parallelize[reset_one](_HSIZE)
+    parallelize(reset_one, _HSIZE)
 
     # [True]: parallel CPU workers race on the same bucket heads a GPU
     # kernel's threads would, so need the same atomic-exchange insert.
-    @parameter
-    def insert_one(k: Int):
+    def insert_one(k: Int) {imm}:
         _sppm_insert_photon[True](k, photons, heads, inv_cell)
 
-    parallelize[insert_one](n_phot)
+    parallelize(insert_one, n_phot)
 
 
 # ── Gather + SPPM update ──────────────────────────────────────────────────────
@@ -2338,14 +2334,13 @@ def _gather_update(
     ref sd:       SceneDescriptor2_C,
     pass_wl:  SampledWavelengths,
 ):
-    @parameter
-    def gather_one(i: Int):
+    def gather_one(i: Int) {imm}:
         _sppm_gather_one(vps, i, photons, heads, inv_cell, sd, sd.mediums, Int(sd.mediumCount),
                          sd.grids, sd.nvdbGrids,
                          sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y,
                          sd.spectral.cie_z, sd.spectral.d65, pass_wl)
 
-    parallelize[gather_one](n_pix)
+    parallelize(gather_one, n_pix)
 
 
 # ── Direct (NEE) lighting update ──────────────────────────────────────────────
@@ -2773,12 +2768,11 @@ def _sppm_nee_update(
     if n_lights == 0 and not _sppm_has_sphere_lights(sd):
         return
 
-    @parameter
-    def nee_one(i: Int):
+    def nee_one(i: Int) {imm}:
         var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + i), UInt64(11))
         _sppm_nee_one(vps, i, sd, pcg)
 
-    parallelize[nee_one](n_vps)
+    parallelize(nee_one, n_vps)
 
 
 # ── Finalize ──────────────────────────────────────────────────────────────────
@@ -3044,8 +3038,7 @@ def _sppm_render_core(
     var out_pixels = unsafe_alloc[Float32](n_pix * 3)
     var albedo_pixels = unsafe_alloc[Float32](n_pix * 3)
 
-    @parameter
-    def finalize_one(i: Int):
+    def finalize_one(i: Int) {imm}:
         var acc = _sppm_finalize_one_pixel(vps, i, _VP_SAMPLES, Int32(n_passes), iso_scale, max_comp,
                                          sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
                                          sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
@@ -3057,7 +3050,7 @@ def _sppm_render_core(
         albedo_pixels[unsafe_offset=i * 3 + 1] = alb.g
         albedo_pixels[unsafe_offset=i * 3 + 2] = alb.b
 
-    parallelize[finalize_one](n_pix)
+    parallelize(finalize_one, n_pix)
 
     heads.unsafe_free()
     photons.unsafe_free()

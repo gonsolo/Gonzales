@@ -35,6 +35,7 @@
 # first vertex (not raw vertex positions -- direction-based comparison is
 # scale-invariant between near/far solutions).
 
+from std.collections import Array
 from std.math import sqrt, abs, min, cos, sin
 from .geometry import RGB, dot, INV_PI, Vec3f, _is_real_ptr
 from .reservoir import ReservoirState, reservoir_state_init
@@ -67,9 +68,9 @@ struct SMSReservoir(Copyable, Movable):
     sentinel).
 
     Note: unlike DIReservoir/GIReservoir, this struct is NOT
-    TrivialRegisterPassable -- Mojo's InlineArray never conforms to
+    TrivialRegisterPassable -- Mojo's Array never conforms to
     TrivialRegisterPassable regardless of element type (verified
-    empirically: even InlineArray[SIMD[...], N] fails the same check),
+    empirically: even Array[SIMD[...], N] fails the same check),
     so a struct embedding one must fall back to plain Copyable/Movable.
     Copies need explicit `.copy()`.
 
@@ -91,7 +92,7 @@ struct SMSReservoir(Copyable, Movable):
     quantities are properties of the chain's own vertices relative to
     ITS x0/light_point endpoints, which haven't moved."""
     var n_vertices:   Int32
-    var verts:        InlineArray[SMSVertex, MAX_SMS_VERTICES]
+    var verts:        Array[SMSVertex, MAX_SMS_VERTICES]
     var light_point:  Vec3f
     var ldp_du:       Vec3f
     var ldp_dv:       Vec3f
@@ -105,7 +106,7 @@ def sms_reservoir_init() -> SMSReservoir:
     var z3 = Vec3f(Float32(0.0))
     return SMSReservoir(
         n_vertices=Int32(0),
-        verts=InlineArray[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init()),
+        verts=Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init()),
         light_point=z3, ldp_du=z3, ldp_dv=z3,
         le=RGB(Float32(0.0)),
         bsdf_product=Float32(0.0), dx1_dxlight=Float32(0.0),
@@ -152,8 +153,8 @@ def sms_shift(
     dst_ldp_du: Vec3f, dst_ldp_dv: Vec3f,
     src_x0: Vec3f, src_light_point: Vec3f,
     src_ldp_du: Vec3f, src_ldp_dv: Vec3f,
-    src_verts: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int,
-) -> Tuple[Bool, InlineArray[Vec3f, MAX_SMS_VERTICES], Float32, Float32]:
+    src_verts: Array[SMSVertex, MAX_SMS_VERTICES], n: Int,
+) -> Tuple[Bool, Array[Vec3f, MAX_SMS_VERTICES], Float32, Float32]:
     """Manifold shift (Hong et al. 2025 Section 5.2): reuse a neighbor's
     (`src`) admissible specular chain at the current pixel (`dst`) by
     re-walking it seeded from the neighbor's own solution, then verifying
@@ -173,7 +174,7 @@ def sms_shift(
     abs(dot(original_dir, base_dir) - 1.0) <= SMS_UNIQUENESS_THRESHOLD.
     Direction-based (not raw position distance) so the check is scale-
     invariant between near and far solutions."""
-    var zero_positions = InlineArray[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
+    var zero_positions = Array[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
     var src_first = src_verts[0].pos
     var orig_dir_v = src_first - src_x0
     var orig_dir_len = sqrt(dot(orig_dir_v, orig_dir_v))
@@ -292,8 +293,8 @@ def sms_spatial_combine(
         return
 
     var m_same_domain = res.state.m
-    var nb_px_seen = InlineArray[Int32, SMS_SPATIAL_SLOTS](fill=Int32(-1))
-    var nb_m_seen = InlineArray[Float32, SMS_SPATIAL_SLOTS](fill=Float32(0.0))
+    var nb_px_seen = Array[Int32, SMS_SPATIAL_SLOTS](fill=Int32(-1))
+    var nb_m_seen = Array[Float32, SMS_SPATIAL_SLOTS](fill=Float32(0.0))
     var nb_seen = 0
 
     var self_px = Int32(pixel_idx) % sms_io.frame_w

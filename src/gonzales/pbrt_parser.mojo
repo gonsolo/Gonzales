@@ -1,3 +1,4 @@
+from std.collections import Array
 from std.ffi import external_call
 from std.time import perf_counter_ns
 from std.memory.alloc import unsafe_alloc
@@ -1844,7 +1845,7 @@ def _curve_greedy_groups(
     have capacity >= n_pieces) with (first_piece, piece_count) per group; if
     write=False the out pointers are ignored — used for a cheap first pass
     to size the final arrays before allocating them."""
-    var pts = InlineArray[Vec3f, CURVE_N_PIECES + 1](fill=Vec3f(0, 0, 0))
+    var pts = Array[Vec3f, CURVE_N_PIECES + 1](fill=Vec3f(0, 0, 0))
     for k in range(n_pieces + 1):
         pts[k] = curve_bspline_point(curve, Float32(k) / Float32(n_pieces))
     var maxw = max(curve.width0, curve.width1)
@@ -1912,50 +1913,50 @@ def _film_white_balance_matrix(temp_k: Float32) -> SIMD[DType.float32, 16]:
         x = -2.0064e9/(t*t*t) + 1.9018e6/(t*t) + 0.24748e3/t + 0.237040
     var y = -3.000*x*x + 2.870*x - 0.275
 
-    var src = InlineArray[Float64, 3](fill=0.0)
+    var src = Array[Float64, 3](fill=0.0)
     src[0] = x/y; src[1] = 1.0; src[2] = (1.0 - x - y)/y
-    var dst = InlineArray[Float64, 3](fill=0.0)
+    var dst = Array[Float64, 3](fill=0.0)
     var dx = 0.3127; var dy = 0.3290          # sRGB white (D65)
     dst[0] = dx/dy; dst[1] = 1.0; dst[2] = (1.0 - dx - dy)/dy
 
     # Bradford LMS<->XYZ, the same matrices pbrt uses.
-    var L = InlineArray[Float64, 9](fill=0.0)
+    var L = Array[Float64, 9](fill=0.0)
     L[0]= 0.8951; L[1]= 0.2664; L[2]=-0.1614
     L[3]=-0.7502; L[4]= 1.7135; L[5]= 0.0367
     L[6]= 0.0389; L[7]=-0.0685; L[8]= 1.0296
-    var Li = InlineArray[Float64, 9](fill=0.0)
+    var Li = Array[Float64, 9](fill=0.0)
     Li[0]= 0.986993;   Li[1]=-0.147054;  Li[2]= 0.159963
     Li[3]= 0.432305;   Li[4]= 0.51836;   Li[5]= 0.0492912
     Li[6]=-0.00852866; Li[7]= 0.0400428; Li[8]= 0.968487
     # sRGB primaries.
-    var XR = InlineArray[Float64, 9](fill=0.0)
+    var XR = Array[Float64, 9](fill=0.0)
     XR[0]=0.4124564; XR[1]=0.3575761; XR[2]=0.1804375
     XR[3]=0.2126729; XR[4]=0.7151522; XR[5]=0.0721750
     XR[6]=0.0193339; XR[7]=0.1191920; XR[8]=0.9503041
-    var RX = InlineArray[Float64, 9](fill=0.0)
+    var RX = Array[Float64, 9](fill=0.0)
     RX[0]= 3.2404542; RX[1]=-1.5371385; RX[2]=-0.4985314
     RX[3]=-0.9692660; RX[4]= 1.8760108; RX[5]= 0.0415560
     RX[6]= 0.0556434; RX[7]=-0.2040259; RX[8]= 1.0572252
 
-    var sl = InlineArray[Float64, 3](fill=0.0)
-    var dl = InlineArray[Float64, 3](fill=0.0)
+    var sl = Array[Float64, 3](fill=0.0)
+    var dl = Array[Float64, 3](fill=0.0)
     for r in range(3):
         sl[r] = L[r*3]*src[0] + L[r*3+1]*src[1] + L[r*3+2]*src[2]
         dl[r] = L[r*3]*dst[0] + L[r*3+1]*dst[1] + L[r*3+2]*dst[2]
 
     # M = RGBfromXYZ * (XYZfromLMS * diag(dl/sl) * LMSfromXYZ) * XYZfromRGB
-    var A = InlineArray[Float64, 9](fill=0.0)     # XYZfromLMS * diag
+    var A = Array[Float64, 9](fill=0.0)     # XYZfromLMS * diag
     for r in range(3):
         for c in range(3):
             var g = dl[c] / sl[c] if sl[c] != 0.0 else 1.0
             A[r*3+c] = Li[r*3+c] * g
-    var B = InlineArray[Float64, 9](fill=0.0)     # A * LMSfromXYZ
+    var B = Array[Float64, 9](fill=0.0)     # A * LMSfromXYZ
     for r in range(3):
         for c in range(3):
             var acc = 0.0
             for k in range(3): acc += A[r*3+k] * L[k*3+c]
             B[r*3+c] = acc
-    var C = InlineArray[Float64, 9](fill=0.0)     # B * XYZfromRGB
+    var C = Array[Float64, 9](fill=0.0)     # B * XYZfromRGB
     for r in range(3):
         for c in range(3):
             var acc = 0.0
@@ -2348,8 +2349,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         # An interface whose INTERIOR is a subsurface medium marks its
         # material, so shade_dielectric can keep the resulting boundary
         # events off the maxdepth budget (see Material_C.sss_boundary).
-        @parameter
-        def _ins_is_sss(ins: Int32) -> Int8:
+        def _ins_is_sss(ins: Int32) {imm} -> Int8:
             if ins < Int32(0): return Int8(0)
             if Int(ins) >= len(s[unsafe_offset=0].med_is_sss): return Int8(0)
             return Int8(1) if s[unsafe_offset=0].med_is_sss[Int(ins)] != Int32(0) else Int8(0)
@@ -2862,8 +2862,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         var next_nm = unsafe_alloc[Int32](1)
         next_nm[unsafe_offset=0] = Int32(0)
 
-        @parameter
-        def nmap_worker(_worker_idx: Int):
+        def nmap_worker(_worker_idx: Int) {imm}:
             while True:
                 var k = Int(Atomic.fetch_add(next_nm, Int32(1)))
                 if k >= n_nm:
@@ -2909,7 +2908,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 np_ptr.unsafe_free()
 
         if n_nm > 0:
-            parallelize[nmap_worker](min(num_performance_cores(), n_nm))
+            parallelize(nmap_worker, min(num_performance_cores(), n_nm))
         for k in range(n_nm):
             if nonsquare[unsafe_offset=k * 2] > Int32(0):
                 print("warning: normal map is not square (", Int(nonsquare[unsafe_offset=k * 2]), "x", Int(nonsquare[unsafe_offset=k * 2 + 1]),

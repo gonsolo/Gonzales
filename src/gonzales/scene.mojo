@@ -1,4 +1,4 @@
-from std.collections import List
+from std.collections import List, Array
 from std.ffi import external_call
 from .geometry import (
     RGB, Point3f, Vec3f,
@@ -40,8 +40,8 @@ struct FilmSettings(Copyable, Movable):
 
 @fieldwise_init
 struct CameraSettings(Copyable, Movable):
-    var raster_to_camera: InlineArray[Float32, 16]  # column-major 4×4
-    var camera_to_world:  InlineArray[Float32, 16]  # column-major 4×4
+    var raster_to_camera: Array[Float32, 16]  # column-major 4×4
+    var camera_to_world:  Array[Float32, 16]  # column-major 4×4
     var fov_degrees:      Float32
 
 @fieldwise_init

@@ -34,7 +34,7 @@ def _scanner_from_string(body: String) -> Pointer[PbrtScanner, MutUntrackedOrigi
 
 def _state() -> Pointer[SceneParseState, MutUntrackedOrigin]:
     var s_ptr = unsafe_alloc[SceneParseState](1)
-    s_ptr.init_pointee_move(SceneParseState())
+    s_ptr.unsafe_write(SceneParseState())
     return s_ptr
 
 

@@ -59,7 +59,7 @@ def _parse_minimal_scene() -> Pointer[ParsedScene_Mojo, MutUntrackedOrigin]:
     scene_text += String("WorldEnd\n")
     var handle = _scanner_from_string(scene_text)
     var s_ptr = unsafe_alloc[SceneParseState](1)
-    s_ptr.init_pointee_move(SceneParseState())
+    s_ptr.unsafe_write(SceneParseState())
     parse_scene_file(handle, s_ptr)
 
     var psc = unsafe_alloc[ParsedScene_Mojo](1)

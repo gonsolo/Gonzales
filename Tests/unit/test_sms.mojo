@@ -1,3 +1,4 @@
+from std.collections import Array
 from std.math import abs, sqrt
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import dot, cross, Vec3f
@@ -20,12 +21,12 @@ def _flat_vert(pos: Vec3f, eta: Float32) -> SMSVertex:
         eta,
     )
 
-def _empty_verts() -> InlineArray[SMSVertex, MAX_SMS_VERTICES]:
-    return InlineArray[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
+def _empty_verts() -> Array[SMSVertex, MAX_SMS_VERTICES]:
+    return Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
 
 def _snell_residual(
     x0: Vec3f, xL: Vec3f,
-    verts: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int,
+    verts: Array[SMSVertex, MAX_SMS_VERTICES], n: Int,
 ) -> Float32:
     """Max |tangential component of the generalized half-vector| across all
     n vertices -- zero iff every vertex exactly satisfies Snell's law.
@@ -374,8 +375,8 @@ def test_sms_same_solution_detects_match_and_mismatch() raises:
     trial count) and across it (a genuinely different root)."""
     var verts = _empty_verts()
     var x0 = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
-    var a = InlineArray[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
-    var b = InlineArray[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
+    var a = Array[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
+    var b = Array[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
     a[0] = Vec3f(Float32(0.0), Float32(0.0), Float32(10.0))
     b[0] = Vec3f(Float32(0.0), Float32(0.0), Float32(10.0))
     assert_true(sms_same_solution(x0, a, b, 1))

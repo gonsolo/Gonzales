@@ -1,5 +1,5 @@
 from std.ffi import external_call
-from std.gpu import block_idx, thread_idx, block_dim
+from max.gpu import block_idx, thread_idx, block_dim
 from max.gpu.host import DeviceContext, DeviceBuffer
 from max.gpu.host._nvidia_cuda import CUDA, CUstream
 from .geometry import TriangleMesh_C

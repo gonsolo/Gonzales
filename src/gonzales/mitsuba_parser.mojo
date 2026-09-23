@@ -1,3 +1,4 @@
+from std.collections import Array
 from std.memory.alloc import unsafe_alloc
 from std.math import tan, atan2, sqrt, cos, sin
 from std.ffi import external_call
@@ -327,12 +328,12 @@ def _mit_apply_defaults(mut tags: List[MitsubaTag]):
 
 # ── Matrix helpers ───────────────────────────────────────────────────────────
 
-def _mit_identity_ctm() -> InlineArray[Float32, 16]:
-    var m = InlineArray[Float32, 16](fill=Float32(0))
+def _mit_identity_ctm() -> Array[Float32, 16]:
+    var m = Array[Float32, 16](fill=Float32(0))
     m[0] = Float32(1); m[5] = Float32(1); m[10] = Float32(1); m[15] = Float32(1)
     return m^
 
-def _mit_matrix_rowmajor_to_ctm(vals: List[Float32]) -> InlineArray[Float32, 16]:
+def _mit_matrix_rowmajor_to_ctm(vals: List[Float32]) -> Array[Float32, 16]:
     """Mitsuba XML <matrix value="..."> is row-major 16 floats
     (flat[row*4+col]); gonzales's CTM is column-major (flat[col*4+row]) --
     see transform.mojo:4-5. A plain transpose is enough for a shape's
@@ -340,7 +341,7 @@ def _mit_matrix_rowmajor_to_ctm(vals: List[Float32]) -> InlineArray[Float32, 16]
     needed, same semantics as pbrt's CTM for Shape directives)."""
     if len(vals) < 16:
         return _mit_identity_ctm()
-    var m = InlineArray[Float32, 16](fill=Float32(0))
+    var m = Array[Float32, 16](fill=Float32(0))
     for r in range(4):
         for c in range(4):
             m[c * 4 + r] = vals[r * 4 + c]

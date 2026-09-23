@@ -1,3 +1,4 @@
+from std.collections import Array
 from std.math import sqrt
 from .geometry import RGB, MatKind, LobeKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS, Frame, refract, INV_FOUR_PI, Curve_C, MeasuredBRDF_C
 from .bssrdf import fdr_moment, bssrdf_exit_ft
@@ -1532,11 +1533,11 @@ comptime _COAT_MS_GRID = 11
 
 
 @always_inline
-def _coat_ms_table() -> InlineArray[Float32, 121]:
+def _coat_ms_table() -> Array[Float32, 121]:
     """E_walk(mu,0)/E_walk(mu,alpha), mu-major (row i = mu = i/10, col
     j = alpha = j/10). Stack-built per call -- 121 stores, negligible beside
     the walk itself, and needs no mutable global state in a GPU kernel."""
-    var t = InlineArray[Float32, 121](fill=Float32(1.0))
+    var t = Array[Float32, 121](fill=Float32(1.0))
     t[0] = Float32(1.000000)
     t[1] = Float32(0.250000)
     t[2] = Float32(0.250000)

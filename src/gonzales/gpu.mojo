@@ -1,6 +1,7 @@
+from std.collections import Array
 from std.sys import has_accelerator, has_nvidia_gpu_accelerator
 from std.sys.info import size_of, num_performance_cores
-from std.gpu import block_idx, thread_idx, block_dim
+from max.gpu import block_idx, thread_idx, block_dim
 from max.gpu.host import DeviceContext, DeviceBuffer
 from max.algorithm import parallelize
 from std.atomic import Atomic
@@ -982,8 +983,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var next_tex = unsafe_alloc[Int32](1)
             next_tex[unsafe_offset=0] = Int32(0)
 
-            @parameter
-            def decode_worker(_worker_idx: Int):
+            def decode_worker(_worker_idx: Int) {imm}:
                 while True:
                     var ti = Int(Atomic.fetch_add(next_tex, Int32(1)))
                     if ti >= n_textures_int:
@@ -993,7 +993,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                         host_tex[unsafe_offset=ti] = _load_host_texture(tex_filenames[unsafe_offset=ti], raw_flag, lut_host, inv_host)
 
             if n_textures_int > 0:
-                parallelize[decode_worker](min(num_performance_cores(), n_textures_int))
+                parallelize(decode_worker, min(num_performance_cores(), n_textures_int))
             next_tex.unsafe_free()
 
             var tex_bytes = 0
@@ -2695,7 +2695,7 @@ def _sample_medium_core(
                             # written to fix -- that fix just never covered the
                             # sphere-bounded case.
                             var t_med = dist
-                            var _exit_inter = InlineArray[Intersection_C, 1](fill=Intersection_C(
+                            var _exit_inter = Array[Intersection_C, 1](fill=Intersection_C(
                                 PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
                                 Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
                             var exit_ptr = _exit_inter.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()

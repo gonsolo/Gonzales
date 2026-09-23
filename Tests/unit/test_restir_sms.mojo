@@ -1,3 +1,4 @@
+from std.collections import Array
 from std.math import abs, sqrt
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, dot, cross, Vec3f
@@ -17,12 +18,12 @@ def _flat_vert(pos: Vec3f, eta: Float32) -> SMSVertex:
         eta,
     )
 
-def _empty_verts() -> InlineArray[SMSVertex, MAX_SMS_VERTICES]:
-    return InlineArray[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
+def _empty_verts() -> Array[SMSVertex, MAX_SMS_VERTICES]:
+    return Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
 
 def _snell_residual(
     x0: Vec3f, xL: Vec3f,
-    verts: InlineArray[SMSVertex, MAX_SMS_VERTICES], n: Int,
+    verts: Array[SMSVertex, MAX_SMS_VERTICES], n: Int,
 ) -> Float32:
     var worst = Float32(0.0)
     for i in range(n):

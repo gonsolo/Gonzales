@@ -1,3 +1,4 @@
+from std.collections import Array
 from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
@@ -3013,7 +3014,7 @@ def _sms_probe_glass_chain(
     shadow_dir: Vec3f,
     start_remaining: Float32,
     max_count: Int,
-) -> Tuple[Int, InlineArray[Intersection_C, MAX_SMS_VERTICES], InlineArray[Vec3f, MAX_SMS_VERTICES]]:
+) -> Tuple[Int, Array[Intersection_C, MAX_SMS_VERTICES], Array[Vec3f, MAX_SMS_VERTICES]]:
     """Probes forward from `start_point` along `shadow_dir` for up to
     `max_count` MORE consecutive dielectric surfaces (Phase 5.1's
     generalization of _mnee_area_light_contribute's own hardcoded
@@ -3029,8 +3030,8 @@ def _sms_probe_glass_chain(
     origins[k] + shadow_dir*hits[k].tHit."""
     var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var dummy_inter = Intersection_C(dummy_prim, Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
-    var hits = InlineArray[Intersection_C, MAX_SMS_VERTICES](fill=dummy_inter)
-    var origins = InlineArray[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
+    var hits = Array[Intersection_C, MAX_SMS_VERTICES](fill=dummy_inter)
+    var origins = Array[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
     var count = 0
     var seg_org = start_point
     var seg_remaining = start_remaining
@@ -3040,7 +3041,7 @@ def _sms_probe_glass_chain(
             break
         var pk_org = seg_org + shadow_dir * Float32(0.0005)
         var pk_ray = Ray_C(Point3f(pk_org[0], pk_org[1], pk_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-        var pk_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
+        var pk_store = Array[Intersection_C, 1](fill=dummy_inter)
         traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, pk_ray, pk_tmax, pk_store.unsafe_ptr(),
                            ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                            ctx.lights.spheres, ctx.lights.sphere_count)
@@ -3077,7 +3078,7 @@ def _sms_probe_and_solve(
     ldp_du_v: Vec3f,
     ldp_dv_v: Vec3f,
     mut pcg: PCG32,
-) -> Tuple[Bool, Bool, Int, InlineArray[SMSVertex, MAX_SMS_VERTICES], Float32, Float32, Float32]:
+) -> Tuple[Bool, Bool, Int, Array[SMSVertex, MAX_SMS_VERTICES], Float32, Float32, Float32]:
     """Probe for up to MAX_SMS_VERTICES glass surfaces between `hit_point`
     and `light_point` and, if found, solve the resulting specular chain --
     pure geometry/Newton-solve logic shared by `_mnee_area_light_contribute`
@@ -3100,7 +3101,7 @@ def _sms_probe_and_solve(
     converged). `trials` is always 1.0 for the 1-/2-vertex MNEE fast path
     (Phase 5.4, no Bernoulli-trial estimator there) and
     sms_solve_bernoulli's own trial count for N>=3 chains (Phase 5.3)."""
-    var zero_verts = InlineArray[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
+    var zero_verts = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
     # MNEE: probe for up to 2 glass surfaces between hit_point and light.
     # For each probe hit we detect entering/exiting from dot(n_raw, probe_dir).
     var probe_org = hit_point + shadow_dir * Float32(0.0002)
@@ -3110,7 +3111,7 @@ def _sms_probe_and_solve(
     var probe_tmax = dist * Float32(0.9995)
     var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var dummy_inter = Intersection_C(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
-    var probe_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
+    var probe_store = Array[Intersection_C, 1](fill=dummy_inter)
     traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr(),
                        ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                        ctx.lights.spheres, ctx.lights.sphere_count)
@@ -3167,7 +3168,7 @@ def _sms_probe_and_solve(
         var probe2_ray = Ray_C(
             Point3f(probe2_org[0], probe2_org[1], probe2_org[2]),
             Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-        var probe2_store = InlineArray[Intersection_C, 1](fill=dummy_inter)
+        var probe2_store = Array[Intersection_C, 1](fill=dummy_inter)
         traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr(),
                    ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                    ctx.lights.spheres, ctx.lights.sphere_count)
@@ -3178,7 +3179,7 @@ def _sms_probe_and_solve(
         has_second_glass = (probe2_mat_c.type == MatKind.dielectric or probe2_mat_c.type == MatKind.thin_dielectric)
 
     if not has_second_glass:
-        var verts1 = InlineArray[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
+        var verts1 = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
         verts1[0] = v1
         if is_sphere1:
             # A curved caster needs sms_walk's general (curvature-aware)
@@ -3288,7 +3289,7 @@ def _sms_probe_and_solve(
 
     if extra_count == 0 and not is_sphere1 and not is_sphere2:
         # --- 2-vertex MNEE (unchanged fast path, Phase 5.4) ---
-        var verts2 = InlineArray[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
+        var verts2 = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
         verts2[0] = sms_vertex_flat(x1_init, pgeo_n, pdp_du, pdp_dv, eta1)
         verts2[1] = sms_vertex_flat(x2_init, pgeo_n2, pdp_du2, pdp_dv2, eta2)
         var (ok2, x1_f2, x2_f2, bsdf_prod, dx1_dxl2) = _mnee_walk2(
@@ -3306,7 +3307,7 @@ def _sms_probe_and_solve(
         # --- 2-vertex chain with at least one curved (sphere) caster:
         # route through sms_walk's general, curvature-aware solve instead
         # of the flat-only _mnee_walk2 fast path. ---
-        var verts2c = InlineArray[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
+        var verts2c = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
         verts2c[0] = v1
         verts2c[1] = v2
         var _walk2c = sms_walk(hit_point, light_point, verts2c.copy(), 2, ldp_du_v, ldp_dv_v,
@@ -3361,7 +3362,7 @@ def _sms_probe_and_solve(
 
     # --- N-vertex SMS (Phase 5.1/5.2/5.3, sms.mojo) ---
     var n_total = 2 + extra_count
-    var verts = InlineArray[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
+    var verts = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
     verts[0] = v1
     verts[1] = v2
     var chain_ok = True
@@ -4255,8 +4256,8 @@ def di_temporal_step(
     # pass below runs after the reuse block closes: which neighbour domains
     # took part, each one's confidence, and the confidence contributed by
     # domains identical to this pixel's own (see where it is assigned).
-    var nb_px_seen = InlineArray[Int32, DI_SPATIAL_SLOTS](fill=Int32(-1))
-    var nb_m_seen = InlineArray[Float32, DI_SPATIAL_SLOTS](fill=Float32(0))
+    var nb_px_seen = Array[Int32, DI_SPATIAL_SLOTS](fill=Int32(-1))
+    var nb_m_seen = Array[Float32, DI_SPATIAL_SLOTS](fill=Float32(0))
     var nb_seen = 0
     var m_same_domain = Float32(0.0)
     if has_temporal:
@@ -4888,7 +4889,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 var pr_ray = Ray_C(Point3f(pr_org[0], pr_org[1], pr_org[2]),
                                    Vec3f(seg_dir[0], seg_dir[1], seg_dir[2]))
                 var pr_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-                var pr_store = InlineArray[Intersection_C, 1](fill=Intersection_C(
+                var pr_store = Array[Intersection_C, 1](fill=Intersection_C(
                     pr_prim, Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
                 traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, pr_ray,
                                    seg_len * Float32(0.999), pr_store.unsafe_ptr(),

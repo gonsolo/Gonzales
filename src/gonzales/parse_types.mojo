@@ -1,3 +1,4 @@
+from std.collections import Array
 from .geometry import RGB
 from std.os.path import exists
 
@@ -169,8 +170,8 @@ struct MeshAccum(Copyable, Movable):
 
 struct SceneParseState(Movable):
     # Current transform matrix and stack
-    var ctm:       InlineArray[Float32, 16]
-    var ctm_stack: List[InlineArray[Float32, 16]]
+    var ctm:       Array[Float32, 16]
+    var ctm_stack: List[Array[Float32, 16]]
 
     # Attribute stack (material, area-light, medium per nesting level)
     var attr_stack: List[AttributeState]
@@ -337,7 +338,7 @@ struct SceneParseState(Movable):
     var filter_type:      Int32      # 0=gaussian 1=triangle 2=box
     var samples_per_pixel: Int32
     var camera_fov:       Float32
-    var cam2w_raw:        InlineArray[Float32, 16]
+    var cam2w_raw:        Array[Float32, 16]
     var max_depth:        Int32
     var scene_dir:        String
     var object_depth:     Int32
@@ -361,7 +362,7 @@ struct SceneParseState(Movable):
     # Pending (currently-open) ObjectBegin block, valid only while object_depth > 0.
     var pending_object_name:  String
     var pending_object_start: Int32
-    var pending_object_ctm:   InlineArray[Float32, 16]
+    var pending_object_ctm:   Array[Float32, 16]
     # Recorded placements: parallel arrays, one entry per ObjectInstance.
     # template_idx indexes object_names/object_mesh_start/object_mesh_end
     # (and, 1:1 in the same order, the BLAS built from each template at
@@ -373,10 +374,10 @@ struct SceneParseState(Movable):
 
     def __init__(out self):
         # Identity CTM
-        self.ctm = InlineArray[Float32, 16](fill=Float32(0))
+        self.ctm = Array[Float32, 16](fill=Float32(0))
         self.ctm[0] = Float32(1); self.ctm[5] = Float32(1)
         self.ctm[10] = Float32(1); self.ctm[15] = Float32(1)
-        self.ctm_stack = List[InlineArray[Float32, 16]]()
+        self.ctm_stack = List[Array[Float32, 16]]()
 
         self.cur_attr  = AttributeState(Int32(-1), False,
                              RGB(Float32(0),Float32(0),Float32(0)),
@@ -479,7 +480,7 @@ struct SceneParseState(Movable):
         self.filter_type      = Int32(0)
         self.samples_per_pixel = Int32(1)
         self.camera_fov       = Float32(30)
-        self.cam2w_raw        = InlineArray[Float32, 16](fill=Float32(0))
+        self.cam2w_raw        = Array[Float32, 16](fill=Float32(0))
         self.cam2w_raw[0] = Float32(1); self.cam2w_raw[5] = Float32(1)
         self.cam2w_raw[10] = Float32(1); self.cam2w_raw[15] = Float32(1)
         self.max_depth  = Int32(5)
@@ -494,7 +495,7 @@ struct SceneParseState(Movable):
         self.object_ctm        = List[Float32]()
         self.pending_object_name  = String("")
         self.pending_object_start = Int32(0)
-        self.pending_object_ctm   = InlineArray[Float32, 16](fill=Float32(0))
+        self.pending_object_ctm   = Array[Float32, 16](fill=Float32(0))
         self.instance_template_idx = List[Int32]()
         self.instance_obj_to_world = List[Float32]()
         self.instance_world_to_obj = List[Float32]()

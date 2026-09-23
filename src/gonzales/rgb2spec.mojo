@@ -28,6 +28,7 @@
 # (replacing spectrum.mojo's RGB<->spectral conversion) is separate,
 # not-yet-done follow-up work.
 
+from std.collections import Array
 from std.math import sqrt, exp, sin, asin
 from std.memory.alloc import unsafe_alloc
 
@@ -329,7 +330,7 @@ def _gauss_newton_core(r: Float64, g: Float64, b: Float64, tables: _QuadratureTa
         var (r0, r1, r2) = _eval_residual(c0, c1, c2, tl, ta, tb, tables)
 
         # Finite-difference Jacobian (central difference, matches pbrt).
-        var jac = InlineArray[Float64, 9](fill=Float64(0.0))
+        var jac = Array[Float64, 9](fill=Float64(0.0))
         for k in range(3):
             var p0 = c0; var p1 = c1; var p2 = c2
             var m0 = c0; var m1 = c1; var m2 = c2

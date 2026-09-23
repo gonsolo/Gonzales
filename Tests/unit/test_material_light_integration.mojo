@@ -39,7 +39,7 @@ def test_light_source_distant_direction_and_rgb() raises:
     )
     var handle = _scanner_from_string(body)
     var s_ptr = unsafe_alloc[SceneParseState](1)
-    s_ptr.init_pointee_move(SceneParseState())
+    s_ptr.unsafe_write(SceneParseState())
     handle_light_source(handle, s_ptr)
 
     assert_true(len(s_ptr[unsafe_offset=0].distant_dirs) == 3)
@@ -62,7 +62,7 @@ def test_light_source_point_position_and_rgb() raises:
     )
     var handle = _scanner_from_string(body)
     var s_ptr = unsafe_alloc[SceneParseState](1)
-    s_ptr.init_pointee_move(SceneParseState())
+    s_ptr.unsafe_write(SceneParseState())
     handle_light_source(handle, s_ptr)
 
     assert_true(len(s_ptr[unsafe_offset=0].point_pos) == 3)
@@ -83,7 +83,7 @@ def test_light_source_infinite_no_filename() raises:
     var body = String('"infinite" "rgb L" [ 0.1 0.2 0.3 ]')
     var handle = _scanner_from_string(body)
     var s_ptr = unsafe_alloc[SceneParseState](1)
-    s_ptr.init_pointee_move(SceneParseState())
+    s_ptr.unsafe_write(SceneParseState())
     handle_light_source(handle, s_ptr)
 
     assert_true(len(s_ptr[unsafe_offset=0].inf_tex_idx) == 1)
@@ -105,7 +105,7 @@ def test_light_source_infinite_with_filename() raises:
     )
     var handle = _scanner_from_string(body)
     var s_ptr = unsafe_alloc[SceneParseState](1)
-    s_ptr.init_pointee_move(SceneParseState())
+    s_ptr.unsafe_write(SceneParseState())
     handle_light_source(handle, s_ptr)
 
     assert_true(len(s_ptr[unsafe_offset=0].inf_tex_idx) == 1)
@@ -122,7 +122,7 @@ def test_area_light_source_rgb_l_scaled() raises:
     var body = String('"diffuse" "rgb L" [ 2 4 6 ] "float scale" [ 0.5 ]')
     var handle = _scanner_from_string(body)
     var s_ptr = unsafe_alloc[SceneParseState](1)
-    s_ptr.init_pointee_move(SceneParseState())
+    s_ptr.unsafe_write(SceneParseState())
     _psc_handle_area_light_source(handle, s_ptr)
 
     assert_true(s_ptr[unsafe_offset=0].cur_attr.is_alight)
@@ -143,7 +143,7 @@ def test_named_material_conductor_rgb_eta_k_fresnel() raises:
     )
     var handle = _scanner_from_string(body)
     var s_ptr = unsafe_alloc[SceneParseState](1)
-    s_ptr.init_pointee_move(SceneParseState())
+    s_ptr.unsafe_write(SceneParseState())
     _psc_handle_make_named_material(handle, s_ptr, False)
 
     assert_true(len(s_ptr[unsafe_offset=0].named_materials) == 1)
@@ -160,7 +160,7 @@ def test_named_material_dielectric_float_eta() raises:
     var body = '"glass" "string type" [ "dielectric" ] "float eta" [ 1.33 ]'
     var handle = _scanner_from_string(body)
     var s_ptr = unsafe_alloc[SceneParseState](1)
-    s_ptr.init_pointee_move(SceneParseState())
+    s_ptr.unsafe_write(SceneParseState())
     _psc_handle_make_named_material(handle, s_ptr, False)
 
     assert_true(len(s_ptr[unsafe_offset=0].named_materials) == 1)
@@ -178,7 +178,7 @@ def test_named_material_mix_names_and_amount() raises:
     )
     var handle = _scanner_from_string(body)
     var s_ptr = unsafe_alloc[SceneParseState](1)
-    s_ptr.init_pointee_move(SceneParseState())
+    s_ptr.unsafe_write(SceneParseState())
     _psc_handle_make_named_material(handle, s_ptr, False)
 
     assert_true(len(s_ptr[unsafe_offset=0].named_materials) == 1)

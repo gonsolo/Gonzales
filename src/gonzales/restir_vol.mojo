@@ -37,6 +37,7 @@
 # _sample_medium_core, next to the medium sampler that owns the ray -- exactly
 # as DI's generation half lives in shading.mojo.
 
+from std.collections import Array
 from std.math import sqrt, cos, sin, abs
 from .geometry import RGB, dot, hg_phase, _is_real_ptr, Vec3f
 from .reservoir import ReservoirState, reservoir_state_init, reservoir_combine, reservoir_finalize, reservoir_cap_confidence
@@ -438,8 +439,8 @@ def vol_temporal_spatial_combine(
     that only want the combine math (as this file's unit tests do) can call
     it directly on synthetic reservoirs with no rendering involved."""
     var has_temporal = pixel_idx >= 0 and _is_real_ptr(vol_io.read)
-    var nb_px_seen = InlineArray[Int32, VOL_SPATIAL_SLOTS](fill=Int32(-1))
-    var nb_m_seen = InlineArray[Float32, VOL_SPATIAL_SLOTS](fill=Float32(0))
+    var nb_px_seen = Array[Int32, VOL_SPATIAL_SLOTS](fill=Int32(-1))
+    var nb_m_seen = Array[Float32, VOL_SPATIAL_SLOTS](fill=Float32(0))
     var nb_seen = 0
     var m_same_domain = Float32(0.0)
 

@@ -29,6 +29,7 @@
 # exactly analogous to how Phase 2's light reconnection re-evaluates x1's
 # BSDF toward a fixed light point while reusing the light's own Le verbatim.
 
+from std.collections import Array
 from std.math import sqrt, cos, sin, abs
 from .geometry import RGB, dot, INV_PI, _is_real_ptr, Vec3f
 from .reservoir import ReservoirState, reservoir_state_init, reservoir_combine, reservoir_finalize, reservoir_cap_confidence
@@ -210,8 +211,8 @@ def gi_temporal_spatial_combine(
     this file's own unit tests do) can call this directly on synthetic
     reservoirs with no rendering involved."""
     var has_temporal = pixel_idx >= 0 and _is_real_ptr(gi_io.read)
-    var nb_px_seen = InlineArray[Int32, GI_SPATIAL_SLOTS](fill=Int32(-1))
-    var nb_m_seen = InlineArray[Float32, GI_SPATIAL_SLOTS](fill=Float32(0))
+    var nb_px_seen = Array[Int32, GI_SPATIAL_SLOTS](fill=Int32(-1))
+    var nb_m_seen = Array[Float32, GI_SPATIAL_SLOTS](fill=Float32(0))
     var nb_seen = 0
     var m_same_domain = Float32(0.0)
     if has_temporal:
