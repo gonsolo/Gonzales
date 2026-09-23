@@ -1624,12 +1624,46 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
             if tex_ok:
                 eff_alb = _tex_lookup[tex_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            # diffusetransmission has a REFLECT lobe (eff_alb, computed
+            # above) and a TRANSMIT lobe (mat.emission, or eff_alb again
+            # when textured -- "texture reflectance"/"texture transmittance"
+            # share one texture slot, see shading.mojo's matching comment),
+            # picked stochastically by luminance, same convention as the
+            # shared bxdf.mojo:bxdf_sample_diffuse_transmit the path tracer
+            # uses and bdpt.mojo's two camera/light-path copies (see
+            # project_photon_estimator_energy_gap memory for the 1e-6-clamp
+            # bug those two had and its fix, d2a3cd84 -- NOT reproduced
+            # here). Before this, the photon pass ignored the transmit lobe
+            # entirely and always reflected off the ray-facing side, so a
+            # photon could never pass THROUGH a leaf: any indirect light
+            # that should reach a shadowed point by transmitting through
+            # backlit foliage was simply absent from the photon map (only
+            # SPPM's own single-bounce direct NEE could ever see it).
+            # `p_sel == 1, bounce_n == gn, lobe_alb == eff_alb` for every
+            # other material -- a no-op, no extra random draw.
+            var p_sel = Float32(1.0)
+            var bounce_side = Float32(1.0)   # flips to -1 for the transmit lobe
+            var lobe_alb = eff_alb
+            if mat.type == MatKind.diffuse_transmit:
+                var trans_dt = eff_alb if Int(mat.tex_idx) != -1 else mat.emission
+                var pr_dt = eff_alb.luma()
+                var pt_dt = trans_dt.luma()
+                # Nothing to scatter -- see bdpt.mojo's matching comment
+                # (d2a3cd84) for why this must TERMINATE, not force a lobe.
+                if pr_dt + pt_dt <= Float32(1e-9):
+                    break
+                var tot_dt = pr_dt + pt_dt
+                var take_refl = pcg.next_float() < pr_dt / tot_dt
+                p_sel = max((pr_dt if take_refl else pt_dt) / tot_dt, Float32(1e-6))
+                bounce_side = Float32(1.0) if take_refl else Float32(-1.0)
+                lobe_alb = eff_alb if take_refl else trans_dt
             # Russian-roulette continuation for indirect diffuse-diffuse
             # bounces (color bleeding) — without this, photons always
             # terminated at the first diffuse hit, so light could never
             # bounce off one diffuse surface onto another (e.g. a red
-            # wall tinting a nearby box's facing side).
-            var rr_prob = max(eff_alb.r, max(eff_alb.g, eff_alb.b))
+            # wall tinting a nearby box's facing side). Uses the CHOSEN
+            # lobe's own albedo (== eff_alb, unchanged, for plain diffuse).
+            var rr_prob = max(lobe_alb.r, max(lobe_alb.g, lobe_alb.b))
             if rr_prob <= Float32(0.0) or pcg.next_float() >= rr_prob:
                 break
             var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
@@ -1640,8 +1674,9 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 gn, gn, ray_dir, _camera_approx_footprint(hit, cam_pos, px_scale),
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
+            gn = gn * bounce_side   # flip to the transmit side, chosen above
             var new_dir = _cosine_hemisphere_sample(gn, pcg.next_float(), pcg.next_float())
-            flux *= spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (eff_alb / rr_prob).r, (eff_alb / rr_prob).g, (eff_alb / rr_prob).b, ph_wavelengths)
+            flux *= spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (lobe_alb / (rr_prob * p_sel)).r, (lobe_alb / (rr_prob * p_sel)).g, (lobe_alb / (rr_prob * p_sel)).b, ph_wavelengths)
             rd = vec3f(new_dir)
             ro = hit + rd * Float32(0.0002)   # along rd: gn may face into the surface (face_toward)
             continue
