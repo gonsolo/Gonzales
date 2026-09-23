@@ -12,7 +12,7 @@ from std.math import sqrt, cos, sin, floor, log, exp, max, min, ceildiv
 from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
 from .geometry import (
-    face_toward,
+    face_toward, TERMINAL_SEGMENT_GRACE_ROUNDS,
     RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, PrimId_C,
     TriangleMesh_C, Material_C, MatKind, LobeKind, PhotonKind, AreaLight_C, Sphere_C, Medium_C, MediumInterface_C,
     Instance_C, dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI, Frame,
@@ -647,7 +647,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     var max_charged = min(maxdepth, _MAX_B)
     var bounce = 0
     var n_events = 0   # interactions so far, charged or not
-    while bounce < max_charged and n_events < max_charged + SSS_WALK_ROUNDS:
+    while bounce < max_charged + TERMINAL_SEGMENT_GRACE_ROUNDS and n_events < max_charged + SSS_WALK_ROUNDS + TERMINAL_SEGMENT_GRACE_ROUNDS:
         n_events += 1
         # Charged up front, and the two subsurface-exempt branches below undo
         # it locally. Deliberately NOT a `charge_depth` flag applied at the
@@ -771,6 +771,17 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 vp.env += vp.beta * mat.emission
             elif area_light_hit_cos(inter, sd.meshes, sd.instances, ray_dir) > Float32(0):
                 vp.env += vp.beta * sd.areaLights[unsafe_offset=Int(inter.primId.id1)].emission
+            break
+
+        # See geometry.mojo's TERMINAL_SEGMENT_GRACE_ROUNDS: the loop bound
+        # above was widened so the ray fired from the LAST charged bounce --
+        # which may simply escape to an infinite light, already handled
+        # above -- still gets traced and its emission (if any) collected.
+        # That grace round must not become a real bounce of its own: once
+        # `bounce` exceeds `max_charged`, a non-emissive hit here refuses to
+        # scatter further (no VP store, no continuing dielectric/conductor
+        # bounce), exactly as pbrt's own capped path does.
+        if bounce > max_charged:
             break
 
         if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit:
@@ -1416,7 +1427,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     var max_charged = min(maxdepth, _MAX_B)
     var bounce = 0
     var n_events = 0   # interactions so far, charged or not
-    while bounce < max_charged and n_events < max_charged + SSS_WALK_ROUNDS:
+    while bounce < max_charged + TERMINAL_SEGMENT_GRACE_ROUNDS and n_events < max_charged + SSS_WALK_ROUNDS + TERMINAL_SEGMENT_GRACE_ROUNDS:
         n_events += 1
         # Charged up front, and the two subsurface-exempt branches below undo
         # it locally. Deliberately NOT a `charge_depth` flag applied at the
@@ -1583,6 +1594,15 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             rd = vec3f(cw.wi)
             ro = hit + rd * Float32(0.0002)
             continue
+
+        # See geometry.mojo's TERMINAL_SEGMENT_GRACE_ROUNDS and the matching
+        # guard in _sppm_trace_visible_point above. A photon that simply
+        # escapes deposits nothing either way, but without this guard a
+        # photon could still scatter off a real material one bounce past
+        # maxdepth in the grace round -- kept for consistency with the
+        # camera side, not from an isolated repro.
+        if bounce > max_charged:
+            break
 
         if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit:
             # n_events > 1: skip storing a photon at a surface directly hit

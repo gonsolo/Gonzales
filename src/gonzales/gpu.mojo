@@ -7,7 +7,7 @@ from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory.alloc import unsafe_alloc
 from std.memory import unsafe_memcpy
-from .geometry import RGB, Point3f, Point2f, FilmDims, FilterParams, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, NvdbGrid_C, nvdb_sample_density, nvdb_ray_range, grid_ray_range, nvdb_index_ray, nvdb_node_exit_t, nvdb_majorant_at_world, hg_phase, hg_sample, blackbody_rgb, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_grid_for, medium_nvdb_for, medium_emission_spectral, MEDIUM_TRACK_MAX_ITERS, medium_transmittance_ratio_spectral, medium_sigma_s_spectral, medium_sigma_t_spectral
+from .geometry import RGB, Point3f, Point2f, FilmDims, FilterParams, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, NvdbGrid_C, nvdb_sample_density, nvdb_ray_range, grid_ray_range, nvdb_index_ray, nvdb_node_exit_t, nvdb_majorant_at_world, hg_phase, hg_sample, blackbody_rgb, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_grid_for, medium_nvdb_for, medium_emission_spectral, MEDIUM_TRACK_MAX_ITERS, medium_transmittance_ratio_spectral, medium_sigma_s_spectral, medium_sigma_t_spectral, TERMINAL_SEGMENT_GRACE_ROUNDS
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres, LightSample, _sample_infinite_light_nee, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee
 from .transform import transform_normal_by_instance
@@ -4598,33 +4598,13 @@ def gpu_render_sample[Oc: Origin[mut=True]](
                 vol_gbuf_world_pos_ptr = handle[].gbuf_worldpos_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 vol_fw = handle[].film.width
                 vol_fh = handle[].film.height
-            # A capped path still gets ONE MORE round: rendering.mojo's
-            # `at_cap` mechanism (the "terminal segment" fix, 583a3390) MARKS
-            # a path once bounce reaches maxDepth rather than killing it, so
-            # the ray already fired from its last real scatter can still
-            # land on -- or escape to -- an emitter and be collected, exactly
-            # matching pbrt's own `depth++ >= maxDepth` ordering (emission
-            # collected, THEN the check, THEN NEE/scatter refused). That
-            # grace period needs a ROUND TO RUN IN. This loop used to bound
-            # itself at exactly `maxDepth` for every non-volumetric scene, on
-            # the mistaken assumption that "every path already reaches its
-            # true maxDepth at round maxDepth exactly" -- true of the BOUNCE
-            # COUNT, false of the ROUND COUNT: the terminal segment is round
-            # maxDepth+1 (0-indexed: rounds 0..maxDepth-1 are the real
-            # bounces, round maxDepth is the escape-or-collect grace), which
-            # this loop never ran. A PURE SURFACE delta chain (dielectric +
-            # conductor, no medium at all) needing exactly maxDepth real
-            # bounces to reach an emitter lost that emitter outright --
-            # confirmed on barcelona-pavilion-day: a glass/mullion/glass
-            # window needing 5 real bounces to reach the sky read 0.010 vs
-            # pbrt's 0.438 at maxdepth=5, jumping to 0.430 at maxdepth=6 (the
-            # accidental extra round), one bounce short every time. This is
-            # UNCONDITIONAL and universal (every scene has vertices that can
-            # reach their cap on a real scatter, not just volumetric ones) --
-            # unlike the two conditional margins below, which are for a
-            # DIFFERENT reason (free null-interface rounds / the SSS walk)
-            # and stay scene-gated.
-            var gpu_max_rounds = Int(maxDepth) + 1
+            # See geometry.mojo's TERMINAL_SEGMENT_GRACE_ROUNDS: a maxdepth-
+            # capped path still needs one more round to trace the ray from
+            # its last real scatter and collect whatever it lands on or
+            # escapes to. UNCONDITIONAL and universal, unlike the two
+            # conditional margins below (a different reason: free null-
+            # interface rounds / the SSS walk), which stay scene-gated.
+            var gpu_max_rounds = Int(maxDepth) + TERMINAL_SEGMENT_GRACE_ROUNDS
             # Padding beyond the +1 above is CONDITIONAL on the scene
             # actually containing a medium: a null interface never occurs
             # otherwise, and there is no per-round host sync here (unlike
@@ -4740,33 +4720,13 @@ def gpu_render_wavefront(
                 grid_dim=grid_total,
                 block_dim=block_size,
             )
-            # A capped path still gets ONE MORE round: rendering.mojo's
-            # `at_cap` mechanism (the "terminal segment" fix, 583a3390) MARKS
-            # a path once bounce reaches maxDepth rather than killing it, so
-            # the ray already fired from its last real scatter can still
-            # land on -- or escape to -- an emitter and be collected, exactly
-            # matching pbrt's own `depth++ >= maxDepth` ordering (emission
-            # collected, THEN the check, THEN NEE/scatter refused). That
-            # grace period needs a ROUND TO RUN IN. This loop used to bound
-            # itself at exactly `maxDepth` for every non-volumetric scene, on
-            # the mistaken assumption that "every path already reaches its
-            # true maxDepth at round maxDepth exactly" -- true of the BOUNCE
-            # COUNT, false of the ROUND COUNT: the terminal segment is round
-            # maxDepth+1 (0-indexed: rounds 0..maxDepth-1 are the real
-            # bounces, round maxDepth is the escape-or-collect grace), which
-            # this loop never ran. A PURE SURFACE delta chain (dielectric +
-            # conductor, no medium at all) needing exactly maxDepth real
-            # bounces to reach an emitter lost that emitter outright --
-            # confirmed on barcelona-pavilion-day: a glass/mullion/glass
-            # window needing 5 real bounces to reach the sky read 0.010 vs
-            # pbrt's 0.438 at maxdepth=5, jumping to 0.430 at maxdepth=6 (the
-            # accidental extra round), one bounce short every time. This is
-            # UNCONDITIONAL and universal (every scene has vertices that can
-            # reach their cap on a real scatter, not just volumetric ones) --
-            # unlike the two conditional margins below, which are for a
-            # DIFFERENT reason (free null-interface rounds / the SSS walk)
-            # and stay scene-gated.
-            var gpu_max_rounds = Int(maxDepth) + 1
+            # See geometry.mojo's TERMINAL_SEGMENT_GRACE_ROUNDS: a maxdepth-
+            # capped path still needs one more round to trace the ray from
+            # its last real scatter and collect whatever it lands on or
+            # escapes to. UNCONDITIONAL and universal, unlike the two
+            # conditional margins below (a different reason: free null-
+            # interface rounds / the SSS walk), which stay scene-gated.
+            var gpu_max_rounds = Int(maxDepth) + TERMINAL_SEGMENT_GRACE_ROUNDS
             # Padding beyond the +1 above is CONDITIONAL on the scene
             # actually containing a medium: a null interface never occurs
             # otherwise, and there is no per-round host sync here (unlike

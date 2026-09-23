@@ -53,6 +53,26 @@ comptime INV_FOUR_PI: Float32 = 0.07957747154594766788
 comptime PDF_DELTA_FULL:    Float32 = -1.0
 comptime PDF_VOL_PHASE_HIT: Float32 = -2.0
 comptime PDF_DROP_DIRECT:   Float32 = -3.0
+
+# A maxdepth cap does not kill a path outright: pbrt checks `depth++ >=
+# maxDepth` AFTER collecting this vertex's own emission and BEFORE sampling
+# a new direction (integrators.cpp), so a path already at its full bounce
+# budget still gets ONE MORE segment traced -- the ray already fired from
+# its last real scatter -- which may simply escape to an infinite light or
+# land on an emitter, before refusing to scatter again. That grace period
+# needs a round/iteration to run in; it is not automatic. Three call sites
+# each enforce it in their own loop's native shape (there is no shared
+# control flow to factor it into -- rendering.mojo's CPU host loop marks a
+# per-path `at_cap` flag consumed by _shade_dispatch, gpu.mojo's GPU round
+# budget just needs +1 dispatched round, sppm.mojo's monolithic bounce+
+# dispatch loop needs an inline `bounce > max_charged` guard before its
+# material dispatch), but they all owe their existence to this one constant
+# and this one reason -- see project_gpu_pt_terminal_round_bug memory for
+# the repro (barcelona's double-glazed window, needing exactly 5 real
+# bounces to reach the sky) that found the GPU PT and SPPM instances of a
+# bug rendering.mojo's CPU path had already fixed once (583a3390).
+comptime TERMINAL_SEGMENT_GRACE_ROUNDS = 1
+
 comptime SQRT2      : Float32 = 1.41421356237309504880
 # <</listing>>
 
