@@ -2317,6 +2317,28 @@ def dot(a: Vec3f, b: Vec3f) -> Float32:
     var prod = a * b
     return prod[0] + prod[1] + prod[2]
 
+# pbrt's two-sided reflection rule, as a frame choice. pbrt keeps the shading
+# normal where the geometry puts it and makes every REFLECTION BxDF two-sided
+# about it: DiffuseBxDF/ConductorBxDF return zero unless SameHemisphere(wo, wi)
+# and use |cos|, LayeredBxDF (twoSided) mirrors wo/wi when wo.z < 0. Turning
+# the shading normal toward wo is the same function with one line at the frame
+# instead of a sign test in every BxDF.
+#
+# NOT for dielectrics: their normal must keep its raw orientation, because
+# entering-vs-exiting is read from its sign (see shade_dielectric).
+#
+# What this replaced, and why it mattered: the shading sites used to fall back
+# to the GEOMETRIC normal whenever a bump/normal map (or plain vertex-normal
+# interpolation) tilted the shading normal past wo. At a grazing view about
+# half a bump map's slopes do that, so half the relief was silently flattened:
+# barcelona's displaced deck at ~4 degrees read 0.834 of pbrt, 1.002 with
+# this rule.
+@always_inline
+def face_toward(n: Vec3f, w: Vec3f) -> Vec3f:
+    if dot(n, w) < Float32(0.0):
+        return -n
+    return n
+
 @always_inline
 def intersect_triangle(
     ray_org: Vec3f,

@@ -12,6 +12,7 @@ from std.math import sqrt, cos, sin, tan, floor, log, exp, max, min, abs, ceildi
 from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
 from .geometry import (
+    face_toward,
     RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, Frame,
     TriangleMesh_C, Material_C, MatKind, LobeKind, PhotonKind, AreaLight_C, Medium_C, MediumInterface_C,
     Sphere_C, Curve_C, PrimId_C, Instance_C, DistantLight_C, InfiniteLight_C, PointLight_C,
@@ -492,6 +493,9 @@ def _bdpt_nee_contribute(
     curve_offset_eps(hc.radius) instead (see bvh.mojo)."""
     if w.is_black():
         return SpectralSample(Float32(0))
+    # `gn` is the GEOMETRIC normal (pbrt's OffsetRayOrigin), never the shading
+    # one: that is turned toward wo (face_toward) and can point into the
+    # surface, which would start the shadow ray underneath it.
     # For a TWO-SIDED lobe the offset must follow the light direction:
     # +gn for a direction on the -gn side starts the ray inside the surface
     # it just left. Opt-in, NOT automatic -- MNEE connects THROUGH GLASS, so
@@ -2409,6 +2413,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 gn, gn, ray_dir,
                 _camera_approx_footprint(hit, cam_pos, px_scale),
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
             var v = _null_vertex()
             v.pos = hit
             v.normal = vec3f(gn_geo)
@@ -2480,7 +2485,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                                       Float32(1.0) / max(_bdpt_n_lights(sd) * PI * r_i * r_i, Float32(1e-12)),
                                       le_i.pdf_rev, False)
                 var w_i = _nee_weight_simple_spectral(ls_i, v.mat_kind, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_i, v.mat_idx)
-                total += _bdpt_nee_contribute(beta, w_i, ls_i, hit, gn, cur_med_idx, sd, scratch, wavelengths, Float32(0.0001), v.mat_kind == LobeKind.diffuse_transmit)
+                total += _bdpt_nee_contribute(beta, w_i, ls_i, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, Float32(0.0001), v.mat_kind == LobeKind.diffuse_transmit)
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ls_e = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
                 # The SAME shared helper every other material uses -- the
@@ -2495,7 +2500,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                                       ls_e.pdf / max(_bdpt_n_lights(sd) * PI * r_e * r_e, Float32(1e-12)),
                                       le_e.pdf_rev, False)
                 var w_e = _nee_weight_simple_spectral(ls_e, v.mat_kind, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_e, v.mat_idx)
-                total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn, cur_med_idx, sd, scratch, wavelengths, Float32(0.0001), v.mat_kind == LobeKind.diffuse_transmit)
+                total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, Float32(0.0001), v.mat_kind == LobeKind.diffuse_transmit)
             # Real MNEE for area lights behind glass (task #161) -- see
             # _bdpt_mnee_diffuse_area_light's docstring. Ordinary (non-glass)
             # area lights are deliberately left to connect/merge, unchanged.
@@ -2590,6 +2595,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 gn, gn, ray_dir,
                 _camera_approx_footprint(hit, cam_pos, px_scale),
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
 
             var ior = mat.emission.r
             var coat_alpha = max(mat.roughU, mat.roughV)
@@ -2625,13 +2631,13 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var pol_c = MisPolicy(True, mis_vm_weight_factor, dvcm_carry, dvc_carry,
                                           emis_c, Float32(0), False)
                     var w_ic = _nee_weight_coated_coat_lobe(ls_ic, ior, coat_alpha, gn, wo, pol_c)
-                    total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_ic.r, w_ic.g, w_ic.b, wavelengths), ls_ic, hit, gn, cur_med_idx, sd, scratch, wavelengths)
+                    total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_ic.r, w_ic.g, w_ic.b, wavelengths), ls_ic, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths)
                 for inf_ic in range(Int(sd.infiniteLightCount)):
                     var ls_infc = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_ic], Point2f(pcg.next_float(), pcg.next_float()))
                     var pol_ic = MisPolicy(True, mis_vm_weight_factor, dvcm_carry, dvc_carry,
                                            ls_infc.pdf * inv_scene_c, Float32(0), False)
                     var w_infc = _nee_weight_coated_coat_lobe(ls_infc, ior, coat_alpha, gn, wo, pol_ic)
-                    total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_infc.r, w_infc.g, w_infc.b, wavelengths), ls_infc, hit, gn, cur_med_idx, sd, scratch, wavelengths)
+                    total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_infc.r, w_infc.g, w_infc.b, wavelengths), ls_infc, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths)
 
             coat_walk_enter(cw, pcg)
 
@@ -2755,7 +2761,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 for li_b in range(0):
                     var ls_ib = _bdpt_sample_simple_light(sd, li_b, hit.to_simd(), pcg)
                     var w_ib = _nee_weight_coated_diffuse_base[True](ls_ib, eff_alb, ior, gn, coat_alpha)
-                    total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_ib.r, w_ib.g, w_ib.b, wavelengths), ls_ib, hit, gn, cur_med_idx, sd, scratch, wavelengths)
+                    total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_ib.r, w_ib.g, w_ib.b, wavelengths), ls_ib, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths)
                 for inf_i in range(0):
                     var ls_inf = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
                     # Now that a smooth coat walk is MIS-scoped, its NEE has
@@ -2789,7 +2795,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # and still the sole strategy.
                     _ = pol_ib
                     var w_inf = _nee_weight_coated_diffuse_base[True](ls_inf, eff_alb, ior, gn, coat_alpha)
-                    total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_inf.r, w_inf.g, w_inf.b, wavelengths), ls_inf, hit, gn, cur_med_idx, sd, scratch, wavelengths)
+                    total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_inf.r, w_inf.g, w_inf.b, wavelengths), ls_inf, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths)
 
                 # Task #161 follow-up (2026-07-13): MNEE for area lights
                 # behind glass, extended to coateddiffuse's base layer --
@@ -2912,7 +2918,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                                      else nee_mis_weight(pol_d, Float32(1.0), Float32(0.0), cos_d))
                         var inv_pd = Float32(1.0) if ls_d.is_delta else (Float32(1.0) / ls_d.pdf)
                         var li_d = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, ls_d.Li.r, ls_d.Li.g, ls_d.Li.b, wavelengths)
-                        total += _bdpt_nee_contribute(beta_pre_coat, le_d.f_cos * li_d * (mis_d * inv_pd), ls_d, hit, gn, cur_med_idx, sd, scratch, wavelengths)
+                        total += _bdpt_nee_contribute(beta_pre_coat, le_d.f_cos * li_d * (mis_d * inv_pd), ls_d, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths)
                 for inf_s in range(Int(sd.infiniteLightCount)):
                     var ls_s = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_s], Point2f(pcg.next_float(), pcg.next_float()))
                     var cos_s_c = dot(gn, ls_s.wi)
@@ -2921,7 +2927,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                         var (_cc, r_s) = _scene_bounding_sphere(sd)
                         var mis_s = vcm_env_nee_weight(le_s.pdf_fwd, le_s.pdf_rev, ls_s.pdf, ls_s.pdf / max(_bdpt_n_lights(sd) * PI * r_s * r_s, Float32(1e-12)), cos_s_c, mis_vm_weight_factor, dvcm_carry, dvc_carry)
                         var li_s = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, ls_s.Li.r, ls_s.Li.g, ls_s.Li.b, wavelengths)
-                        total += _bdpt_nee_contribute(beta_pre_coat, le_s.f_cos * li_s * (mis_s / ls_s.pdf), ls_s, hit, gn, cur_med_idx, sd, scratch, wavelengths)
+                        total += _bdpt_nee_contribute(beta_pre_coat, le_s.f_cos * li_s * (mis_s / ls_s.pdf), ls_s, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths)
             # Propagate the carries THROUGH the coat, exactly as every other
             # material does after it scatters. This used to be
             # `dvcm_carry = 0`, which left the whole REST of the path with no
@@ -2947,6 +2953,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 gn_c, gn_c, ray_dir,
                 _camera_approx_footprint(hit, cam_pos, px_scale),
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            gn_c = face_toward(gn_c, -ray_dir)   # pbrt two-sided reflection, see face_toward
             var wo_c = (-rd).to_simd()
             var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
             var gc_c = GeomContext(
@@ -3023,7 +3030,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 for li_cc in range(_bdpt_simple_light_count(sd)):
                     var ls_icc = _bdpt_sample_simple_light(sd, li_cc, hit.to_simd(), pcg)
                     var w_icc = _nee_weight_simple_spectral(ls_icc, LobeKind.ggx, mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs))
-                    total += _bdpt_nee_contribute(beta, w_icc, ls_icc, hit, gn_c, cur_med_idx, sd, scratch, wavelengths)
+                    total += _bdpt_nee_contribute(beta, w_icc, ls_icc, hit, gn_c_geo, cur_med_idx, sd, scratch, wavelengths)
                 for inf_ic in range(Int(sd.infiniteLightCount)):
                     var ls_ec = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_ic], Point2f(pcg.next_float(), pcg.next_float()))
                     # One policy expression, and `scoped` decides: a kind with real
@@ -3034,7 +3041,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var pol_ec = MisPolicy(le_ec.scoped, mis_vm_weight_factor, dvcm_carry, dvc_carry,
                                           ls_ec.pdf / max(_bdpt_n_lights(sd) * PI * r_ec * r_ec, Float32(1e-12)), le_ec.pdf_rev, False)
                     var w_ec = _nee_weight_simple_spectral(ls_ec, LobeKind.ggx, mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_ec)
-                    total += _bdpt_nee_contribute(beta, w_ec, ls_ec, hit, gn_c, cur_med_idx, sd, scratch, wavelengths)
+                    total += _bdpt_nee_contribute(beta, w_ec, ls_ec, hit, gn_c_geo, cur_med_idx, sd, scratch, wavelengths)
 
             beta *= spec_refl_unbounded(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (bs_c.f).r, (bs_c.f).g, (bs_c.f).b, wavelengths)
             rd = vec3f(bs_c.wi)
@@ -3194,6 +3201,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 gn_m, gn_m, ray_dir,
                 _camera_approx_footprint(hit, cam_pos, px_scale),
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            gn_m = face_toward(gn_m, -ray_dir)   # pbrt two-sided reflection, see face_toward
             if mat.measured_idx < Int32(0):
                 # Load failure fallback (see material_builder.mojo) -- matches
                 # shading.mojo's shade_measured: stop this path rather than
@@ -3246,11 +3254,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             for li_m in range(_bdpt_simple_light_count(sd)):
                 var ls_im = _bdpt_sample_simple_light(sd, li_m, hit.to_simd(), pcg)
                 var w_im = _nee_weight_measured(ls_im, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-                total += _bdpt_nee_contribute(beta, w_im, ls_im, hit, gn_m, cur_med_idx, sd, scratch, wavelengths)
+                total += _bdpt_nee_contribute(beta, w_im, ls_im, hit, gn_m_geo, cur_med_idx, sd, scratch, wavelengths)
             for inf_im in range(Int(sd.infiniteLightCount)):
                 var ls_em = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_im], Point2f(pcg.next_float(), pcg.next_float()))
                 var w_em = _nee_weight_measured(ls_em, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-                total += _bdpt_nee_contribute(beta, w_em, ls_em, hit, gn_m, cur_med_idx, sd, scratch, wavelengths)
+                total += _bdpt_nee_contribute(beta, w_em, ls_em, hit, gn_m_geo, cur_med_idx, sd, scratch, wavelengths)
 
             var wo_l_m = Vec3f(dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, gn_m))
             var um1 = pcg.next_float(); var um2 = pcg.next_float()
@@ -3888,6 +3896,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 gn, gn, ray_dir,
                 _camera_approx_footprint(hit, cam_pos, px_scale),
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
             var v = _null_vertex()
             v.pos = hit
             v.normal = vec3f(gn_geo)
@@ -3973,6 +3982,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 gn, gn, ray_dir,
                 _camera_approx_footprint(hit, cam_pos, px_scale),
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
 
             var ior = mat.emission.r
             var coat_alpha = max(mat.roughU, mat.roughV)
@@ -4107,6 +4117,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 gn_c, gn_c, ray_dir,
                 _camera_approx_footprint(hit, cam_pos, px_scale),
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            gn_c = face_toward(gn_c, -ray_dir)   # pbrt two-sided reflection, see face_toward
             var wo_c = (-rd).to_simd()
             var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
             var gc_c = GeomContext(
@@ -4247,6 +4258,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 gn_m, gn_m, ray_dir,
                 _camera_approx_footprint(hit, cam_pos, px_scale),
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            gn_m = face_toward(gn_m, -ray_dir)   # pbrt two-sided reflection, see face_toward
             if mat.measured_idx < Int32(0):
                 return False   # measured: no tabulated BRDF for this material
             var wo_m = (-rd).to_simd()

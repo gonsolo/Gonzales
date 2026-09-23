@@ -486,11 +486,21 @@ def camera_ray_from_film_xy[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     var cy = r2c[unsafe_offset=1]*filmX + r2c[unsafe_offset=5]*filmY + r2c[unsafe_offset=13]
     var cz = r2c[unsafe_offset=2]*filmX + r2c[unsafe_offset=6]*filmY + r2c[unsafe_offset=14]
     var cw = r2c[unsafe_offset=3]*filmX + r2c[unsafe_offset=7]*filmY + r2c[unsafe_offset=15]
+    var w_div = Float32(1.0)
     if cw != Float32(0.0) and cw != Float32(1.0):
         cx /= cw; cy /= cw; cz /= cw
+        w_div = abs(cw)
     var camLen = sqrt(cx*cx + cy*cy + cz*cz)
     if camLen > Float32(0.0):
         cx /= camLen; cy /= camLen; cz /= camLen
+    # The length returned is the PRE-divide one. r2c is projective (pbrt's
+    # rasterToCamera lands on the near plane, z = 0.01), and its first column
+    # is the per-pixel derivative BEFORE the divide by w, so a pixel's angle
+    # is |r2c[0..2]| / (camLen * w). Returning the post-divide camLen made
+    # that ratio 1/near = 100x too large: SPPM's bump footprint (its only
+    # consumer) spanned whole texture tiles, and barcelona's displaced deck
+    # rendered as smooth blobs instead of gravel.
+    var camLenPre = camLen * w_div
 
     var dx = c2w[unsafe_offset=0]*cx + c2w[unsafe_offset=4]*cy + c2w[unsafe_offset=8]*cz
     var dy = c2w[unsafe_offset=1]*cx + c2w[unsafe_offset=5]*cy + c2w[unsafe_offset=9]*cz
@@ -500,7 +510,7 @@ def camera_ray_from_film_xy[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
         dx /= dirLen; dy /= dirLen; dz /= dirLen
 
     var org = Point3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
-    return (Vec3f(dx, dy, dz), org, camLen)
+    return (Vec3f(dx, dy, dz), org, camLenPre)
 
 
 def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](

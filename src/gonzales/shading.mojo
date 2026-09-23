@@ -1,7 +1,7 @@
 from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
-from .geometry import RGB, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, LobeKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, ShadowTask_C, LightSampler_C, light_sampler_sample, light_sampler_pdf, Instance_C, MeasuredBRDF_C, dot, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI, PDF_DROP_DIRECT, _is_real_ptr, _atan2f
+from .geometry import RGB, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, LobeKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, ShadowTask_C, LightSampler_C, light_sampler_sample, light_sampler_pdf, Instance_C, MeasuredBRDF_C, dot, face_toward, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI, PDF_DROP_DIRECT, _is_real_ptr, _atan2f
 from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
 from .rng import PCG32
@@ -800,6 +800,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     if not ok:
         path_ptr[].active = 0
         return
+    var geo_n = normal   # face-forwarded geometric normal, for the ray offset
     if not is_sphere:
         # 146 corpus diffusetransmission materials carry "texture displacement"
         # (foliage cards in sanmiguel, etc). NOTE this path never interpolates a
@@ -807,6 +808,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
         # geometric normal directly, which is a separate pre-existing gap.
         normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, normal, ray_dir,
             ctx.px_scale * path_ptr[].cone_len, ctx.tex_filenames, ctx.textures, ctx.n_textures)
+        normal = face_toward(normal, -ray_dir)   # reflect lobe on wo's side
 
     # "texture reflectance"/"texture transmittance" (e.g. a leaf.tga imagemap)
     # both resolve to the same mat.tex_idx (Material_C has one texture slot,
@@ -831,7 +833,10 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].pcgState = pcg.state
         return
 
-    var hit_point = ray_org + ray_dir * inter.tHit + bounce_normal * Float32(0.0001)
+    # Offset along the GEOMETRIC normal, to the chosen lobe's side (pbrt's
+    # OffsetRayOrigin): the shading normal can point into the surface.
+    var off_n = geo_n if dot(bounce_normal, -ray_dir) > Float32(0.0) else -geo_n
+    var hit_point = ray_org + ray_dir * inter.tHit + off_n * Float32(0.0001)
 
     # ── NEE direct light sampling (MIS weighted, with MNEE glass caustics) ─────
     # Shares _nee_area_lights with plain diffuse — including its MNEE probe for
@@ -932,6 +937,8 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances)
         normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_normal, ray_dir,
             ctx.px_scale * path_ptr[].cone_len, ctx.tex_filenames, ctx.textures, ctx.n_textures)
+        # pbrt's LayeredBxDF is twoSided: see face_toward.
+        normal = face_toward(normal, -ray_dir)
 
     var hit_point = ray_org + ray_dir * inter.tHit + geo_normal * Float32(0.0001)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
@@ -1655,6 +1662,7 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
         normal = _apply_surface_maps[use_gpu](mat_eff, v0, v1, v2, mesh, inter, normal, geo_normal, ray_dir,
             ctx.px_scale * path_ptr[].cone_len, ctx.tex_filenames, ctx.textures, ctx.n_textures)
+        normal = face_toward(normal, -ray_dir)   # before the tangent frame below
 
         # roughU/V already hold the resolved GGX alpha — no squaring here.
         alpha_x = max(mat_eff.roughU, Float32(0.0001))
@@ -1802,35 +1810,21 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
     var hit_normal = geo_normal
 
     if is_sphere:
-        # Analytic sphere: exact normal, no interpolation artifact so the
-        # silhouette-grazing fallback below doesn't apply.
+        # Analytic sphere: exact normal, never tilted past wo.
         normal = geo_normal
     else:
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
-        # Before the grazing fallback below, so a bump-perturbed normal that
-        # lands on the wrong side of wo is caught by it like any other.
         normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_normal, ray_dir,
             ctx.px_scale * path_ptr[].cone_len, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
-        # Silhouette-grazing shading-normal fallback: geo_normal is guaranteed
-        # face-forwarded toward wo (_geom_normal_and_ray), but the INTERPOLATED
-        # shading normal isn't -- on a curved/low-poly mesh viewed near-edge-on
-        # (e.g. the car body silhouette), it can end up on the opposite side of
-        # wo from geo_normal even though _shading_normal aligned it to
-        # geo_normal's hemisphere overall. When that happens, wo lands on the
-        # "back" (z<0) side of the (tangent,bitangent,normal) frame while a
-        # perfectly valid, physically-illuminating light direction wi lands on
-        # the front (z>0) side -- MeasuredBxDF's same-hemisphere gate
-        # (wo.z*wi.z<=0) then hard-zeros f for every light sample, discarding
-        # all direct illumination at exactly these pixels (confirmed against the
-        # pbrt reference: gonzales renders solid black here, pbrt shows lit sky
-        # reflection). Falling back to geo_normal for shading removes the
-        # artifact at its root, matching the standard fix (pbrt determines
-        # reflect/transmit-side membership from the geometric, not shading,
-        # normal) without touching the general shading-normal interpolation
-        # path other materials still rely on for smooth appearance.
-        if dot(normal, -ray_dir) <= Float32(0.0):
-            normal = geo_normal
+        # A shading normal tilted past wo (a silhouette of a low-poly mesh, or
+        # a bump map at a grazing view) used to fall back to geo_normal here,
+        # on the claim that pbrt picks the side from the geometric normal. It
+        # does not: pbrt-v4's MeasuredBxDF mirrors wo/wi into the upper
+        # hemisphere of the SHADING frame -- see face_toward. The black
+        # car-silhouette pixels that fallback fixed are fixed by this too:
+        # wo is never below the frame.
+        normal = face_toward(normal, -ray_dir)
 
     var hit_point = ray_org + ray_dir * inter.tHit + hit_normal * Float32(0.0001)
     var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])
@@ -2382,8 +2376,8 @@ def apply_surface_maps_at_hit[use_gpu: Bool](
 
 # Full context for NEE materials (diffuse, diffuse_transmit, coated_diffuse).
 # Computes pixel_uv, applies normal map, looks up albedo texture.
-# hit_point offset uses the bumped shading normal (matches shade_diffuse convention).
-# Does NOT perform the backface check — caller must check dot(gc.normal, gc.wo) > 0.
+# hit_point is offset along the geometric normal.
+# The shading normal comes back turned toward wo (face_toward).
 @always_inline
 def _build_geom_context_full[use_gpu: Bool](
     path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
@@ -2425,10 +2419,13 @@ def _build_geom_context_full[use_gpu: Bool](
     # wrong step: far too fine in a large scene, far too coarse in a small one.
     normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, ng_ff, ray_dir,
         ctx.px_scale * path_ptr[].cone_len, ctx.tex_filenames, ctx.textures, ctx.n_textures)
-
-    var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
-    var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
     var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])
+    normal = face_toward(normal, wo)
+
+    # Offset along the GEOMETRIC normal (pbrt's OffsetRayOrigin): the shading
+    # normal just turned toward wo can point into the surface.
+    var hit_point = ray_org + ray_dir * inter.tHit + ng_ff * Float32(0.0001)
+    var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
     var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
     var tangent   = Vec3f(frame.x.x, frame.x.y, frame.x.z)
     var bitangent = Vec3f(frame.y.x, frame.y.y, frame.y.z)
@@ -4493,20 +4490,9 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     if not ok:
         path_ptr[].active = 0
         return
-    var normal = gc.normal
+    var normal = gc.normal   # already turned toward wo, see face_toward
     var hit_point = gc.hit_point
     var alb = gc.alb
-
-    # pbrt's diffuse BRDF is zero when the viewer and the lit direction are in
-    # opposite hemispheres of the SHADING normal (SameHemisphere). A normal map
-    # (or, on low-poly meshes, plain vertex-normal interpolation) can tilt the
-    # shading normal past the viewer at grazing angles. Falling back to the
-    # geometric normal (always front-facing to wo, see GeomContext.geo_normal)
-    # keeps these points lit instead of going black — this matters for any
-    # textured infinite light (env map), not just the uniform-color case a
-    # closed-form ambient add could shortcut.
-    if dot(normal, gc.wo) <= Float32(0.0):
-        normal = gc.geo_normal
 
     # Sampler design: diffuse uses Sobol for key visible decisions (light selection,
     # barycentrics, env direction, scatter, RR) and PCG for auxiliary draws that

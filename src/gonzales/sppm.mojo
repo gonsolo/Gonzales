@@ -12,6 +12,7 @@ from std.math import sqrt, cos, sin, floor, log, exp, max, min, ceildiv
 from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
 from .geometry import (
+    face_toward,
     RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, PrimId_C,
     TriangleMesh_C, Material_C, MatKind, LobeKind, PhotonKind, AreaLight_C, Sphere_C, Medium_C, MediumInterface_C,
     Instance_C, dot, cross, fr_dielectric, sphere_outward_normal, PI, INV_FOUR_PI, Frame,
@@ -795,6 +796,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 gn = _apply_surface_maps[use_gpu](
                     mat, tv0, tv1, tv2, tex_mesh, inter, gn, gn, ray_dir,
                     px_scale * cone_len, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+                gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
             vp.pos = hit
             vp.normal = vec3f(gn)
             vp.geo_normal = vec3f(gn_geo)
@@ -854,6 +856,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 gn = _apply_surface_maps[use_gpu](
                     mat, tv0, tv1, tv2, tex_mesh, inter, gn, gn, ray_dir,
                     px_scale * cone_len, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+                gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
             var ior_cd = mat.emission.r
             var cw = coat_walk_begin(gn, -ray_dir, eff_alb, ior_cd, max(mat.roughU, mat.roughV), pcg)
             coat_walk_enter(cw, pcg)
@@ -974,6 +977,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             gn_c = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
                 gn_c, gn_c, ray_dir, px_scale * cone_len,
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            gn_c = face_toward(gn_c, -ray_dir)   # pbrt two-sided reflection, see face_toward
             var wo_c = (-rd).to_simd()
             # Real image-texture F0, exactly as the diffuse branch does for
             # reflectance. Without it a TEXTURED conductor was stored/weighted
@@ -1076,6 +1080,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             gn_m = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
                 gn_m, gn_m, ray_dir, px_scale * cone_len,
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            gn_m = face_toward(gn_m, -ray_dir)   # pbrt two-sided reflection, see face_toward
             if mat.measured_idx < Int32(0):
                 # Load failure fallback -- stop this path, matches
                 # shading.mojo's shade_measured.
@@ -1542,6 +1547,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             gn_cd = apply_surface_maps_at_hit[tex_gpu](mat, inter, sd.meshes,
                 gn_cd, gn_cd, ray_dir, _camera_approx_footprint(hit, cam_pos, px_scale),
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            gn_cd = face_toward(gn_cd, -ray_dir)   # pbrt two-sided reflection, see face_toward
             var cw = coat_walk_begin(gn_cd, -ray_dir, eff_alb_cd, mat.emission.r, max(mat.roughU, mat.roughV), pcg)
             coat_walk_enter(cw, pcg)
             if cw.event == COAT_ABSORB:
@@ -1613,10 +1619,11 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             gn = apply_surface_maps_at_hit[tex_gpu](mat, inter, sd.meshes,
                 gn, gn, ray_dir, _camera_approx_footprint(hit, cam_pos, px_scale),
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
             var new_dir = _cosine_hemisphere_sample(gn, pcg.next_float(), pcg.next_float())
             flux *= spec_refl_unbounded(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, (eff_alb / rr_prob).r, (eff_alb / rr_prob).g, (eff_alb / rr_prob).b, ph_wavelengths)
             rd = vec3f(new_dir)
-            ro = hit + vec3f(gn) * Float32(0.0001)
+            ro = hit + rd * Float32(0.0002)   # along rd: gn may face into the surface (face_toward)
             continue
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
@@ -1700,6 +1707,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             gn_c = apply_surface_maps_at_hit[tex_gpu](mat, inter, sd.meshes,
                 gn_c, gn_c, ray_dir, _camera_approx_footprint(hit, cam_pos, px_scale),
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            gn_c = face_toward(gn_c, -ray_dir)   # pbrt two-sided reflection, see face_toward
             var wo_c = (-rd).to_simd()
             # Real image-texture F0, exactly as the diffuse branch does for
             # reflectance. Without it a TEXTURED conductor was stored/weighted
@@ -1774,6 +1782,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             gn_m = apply_surface_maps_at_hit[tex_gpu](mat, inter, sd.meshes,
                 gn_m, gn_m, ray_dir, _camera_approx_footprint(hit, cam_pos, px_scale),
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            gn_m = face_toward(gn_m, -ray_dir)   # pbrt two-sided reflection, see face_toward
             if mat.measured_idx < Int32(0):
                 break
             var wo_m = (-rd).to_simd()
@@ -2560,7 +2569,10 @@ def _sppm_nee_one(
     # as the volume NEE one fixed in f79999f4; shading.mojo's surface NEE
     # avoids it by passing its own offset `hit_point` to the samplers, which
     # is what this mirrors.
-    var shadow_org = vp.pos + vp.normal * shadow_eps
+    # Offset along the GEOMETRIC normal, like pbrt's OffsetRayOrigin: the
+    # shading normal is turned toward wo (face_toward) and can point into the
+    # surface, which would start every shadow ray underneath it.
+    var shadow_org = vp.pos + vp.geo_normal * shadow_eps
     var spos = shadow_org.to_simd()
     # A two-sided lobe transports to BOTH sides, so the shadow-ray offset has
     # to follow the LIGHT DIRECTION rather than the normal. Offsetting along
@@ -2570,7 +2582,7 @@ def _sppm_nee_one(
     # the evaluator returned the right value and visibility threw it away.
     # One-sided lobes only ever see cos > 0, so this is a no-op for them.
     var two_sided_vp = vp.mat_kind == LobeKind.diffuse_transmit
-    var shadow_org_back = vp.pos + vp.normal * (-shadow_eps)
+    var shadow_org_back = vp.pos + vp.geo_normal * (-shadow_eps)
 
     var n_area = Int(sd.areaLightCount)
     if n_area > 0:
@@ -2672,7 +2684,7 @@ def _sppm_nee_one(
         var tmax = res[1]
         var w = _sppm_nee_weight(vp, sd, vn, wo, ls)
         if not w.is_black():
-            var s_org = shadow_org_back if (two_sided_vp and dot(vp.normal.to_simd(), ls.wi) < Float32(0)) else shadow_org
+            var s_org = shadow_org_back if (two_sided_vp and dot(vp.geo_normal.to_simd(), ls.wi) < Float32(0)) else shadow_org
             var shadow_ray = Ray_C(s_org, vec3f(ls.wi))
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, tmax,
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
@@ -2685,7 +2697,7 @@ def _sppm_nee_one(
         var ls_e = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
         var w_e = _sppm_nee_weight(vp, sd, vn, wo, ls_e)
         if not w_e.is_black():
-            var s_org_e = shadow_org_back if (two_sided_vp and dot(vp.normal.to_simd(), ls_e.wi) < Float32(0)) else shadow_org
+            var s_org_e = shadow_org_back if (two_sided_vp and dot(vp.geo_normal.to_simd(), ls_e.wi) < Float32(0)) else shadow_org
             var shadow_ray_e = Ray_C(s_org_e, vec3f(ls_e.wi))
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_e, ls_e.dist,
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
