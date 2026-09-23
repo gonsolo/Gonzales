@@ -2538,7 +2538,31 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var trans_dt = eff_alb if Int(mat.tex_idx) != -1 else mat.emission
                 var pr_dt = eff_alb.luma()
                 var pt_dt = trans_dt.luma()
-                var tot_dt = max(pr_dt + pt_dt, Float32(1e-9))
+                # A texel where BOTH lobes are ~black (a leaf texture's alpha-
+                # cutout/vein-shadow regions, common on tree materials) used
+                # to fall through to the 1e-9 floor below and then get a
+                # lobe FORCED on it anyway via the 1e-6 p_sel clamp further
+                # down -- inflating `beta`/`flux` by up to 1e6x for a vertex
+                # whose true contribution is zero, AND (independently of
+                # beta) feeding that same 1/p_sel into vcm_scatter_carries's
+                # cos_over_pdf, which does not care about beta's magnitude:
+                # confirmed by instrumentation on barcelona-pavilion-day,
+                # ~19% of pixels at spp=1 hit exactly this clamp (its
+                # cos_over_pdf output was IDENTICAL every time -- PI/1e-6 --
+                # not a per-sample-varying value, the signature of a floor
+                # being hit routinely, not a genuinely rare event). Once hit,
+                # dVC/dVCM at every later vertex on that camera path inherit
+                # the ~1e6-8e13 blowup, which collapses every later env-NEE
+                # weight (vcm_env_nee_weight's w_camera term) to ~1e-9 --
+                # exactly the shadowed-vs-sunlit chair deficit pattern
+                # (project_photon_estimator_energy_gap memory): more bounces
+                # through foliage before reaching a point = more chances to
+                # hit this and poison everything downstream. A vertex with
+                # no real reflectance OR transmittance has nothing to
+                # scatter -- terminate here instead of inventing a lobe.
+                if pr_dt + pt_dt <= Float32(1e-9):
+                    return False
+                var tot_dt = pr_dt + pt_dt
                 var take_refl = pcg.next_float() < pr_dt / tot_dt
                 p_sel = max((pr_dt if take_refl else pt_dt) / tot_dt, Float32(1e-6))
                 bounce_n = gn if take_refl else (gn * Float32(-1.0))
@@ -3932,7 +3956,31 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 var trans_dt = eff_alb if Int(mat.tex_idx) != -1 else mat.emission
                 var pr_dt = eff_alb.luma()
                 var pt_dt = trans_dt.luma()
-                var tot_dt = max(pr_dt + pt_dt, Float32(1e-9))
+                # A texel where BOTH lobes are ~black (a leaf texture's alpha-
+                # cutout/vein-shadow regions, common on tree materials) used
+                # to fall through to the 1e-9 floor below and then get a
+                # lobe FORCED on it anyway via the 1e-6 p_sel clamp further
+                # down -- inflating `beta`/`flux` by up to 1e6x for a vertex
+                # whose true contribution is zero, AND (independently of
+                # beta) feeding that same 1/p_sel into vcm_scatter_carries's
+                # cos_over_pdf, which does not care about beta's magnitude:
+                # confirmed by instrumentation on barcelona-pavilion-day,
+                # ~19% of pixels at spp=1 hit exactly this clamp (its
+                # cos_over_pdf output was IDENTICAL every time -- PI/1e-6 --
+                # not a per-sample-varying value, the signature of a floor
+                # being hit routinely, not a genuinely rare event). Once hit,
+                # dVC/dVCM at every later vertex on that camera path inherit
+                # the ~1e6-8e13 blowup, which collapses every later env-NEE
+                # weight (vcm_env_nee_weight's w_camera term) to ~1e-9 --
+                # exactly the shadowed-vs-sunlit chair deficit pattern
+                # (project_photon_estimator_energy_gap memory): more bounces
+                # through foliage before reaching a point = more chances to
+                # hit this and poison everything downstream. A vertex with
+                # no real reflectance OR transmittance has nothing to
+                # scatter -- terminate here instead of inventing a lobe.
+                if pr_dt + pt_dt <= Float32(1e-9):
+                    return False
+                var tot_dt = pr_dt + pt_dt
                 var take_refl = pcg.next_float() < pr_dt / tot_dt
                 p_sel = max((pr_dt if take_refl else pt_dt) / tot_dt, Float32(1e-6))
                 bounce_n = gn if take_refl else (gn * Float32(-1.0))
