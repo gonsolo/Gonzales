@@ -1451,14 +1451,22 @@ def _bdpt_build_merge_grid(
         _bdpt_insert_merge_vertex[True](k, lvc, lvc_path_len, merge_next, heads, inv_cell)
     parallelize(insert_one, n_light_paths * _BDPT_MAX_VERTS)
 
-comptime _VCM_RADIUS_FRACTION = Float32(0.03)   # initial radius as a fraction of the scene bounding sphere
+# Initial merge radius as a fraction of the scene bounding sphere: SmallVCM's
+# own default (config.hxx, mRadiusFactor = 0.003). It was 0.03 here -- 100x the
+# gather AREA -- which in a large scene makes the disk far wider than the
+# surface under it (barcelona: r ~ 1-2.5 m over a 0.5 m^2 chair seat), and a
+# density estimate normalised by the whole disk reads low there. Harmless while
+# merging carried little weight; once NEE is weighted correctly the balance
+# heuristic hands direct sun to merging and that bias IS the image: the chairs
+# read 0.54 (shadowed) / 0.33 (sunlit) of pbrt at 0.03, 1.02 / 0.97 at 0.003.
+comptime _VCM_RADIUS_FRACTION = Float32(0.003)
 comptime _VCM_RADIUS_ALPHA = Float32(2.0) / Float32(3.0)  # Georgiev 2012's typical choice
 
 @always_inline
 def vcm_merge_radius(scene_radius: Float32, si: Int) -> Float32:
     """The progressive VCM merge radius for sample `si` (0-based).
 
-        r_i = 0.03 * scene_radius / (i+1)^(0.5*(1-alpha))
+        r_i = _VCM_RADIUS_FRACTION * scene_radius / (i+1)^(0.5*(1-alpha))
 
     Hachisuka & Jensen 2008 via Georgiev et al. 2012 Eq. 11: ONE global
     radius shared by every pixel this sample, shrinking monotonically --
@@ -1588,8 +1596,8 @@ def _bdpt_merge_from_cache(
                         # counts a photon lying on a DIFFERENT surface (the
                         # adjacent wall, the far side of a thin panel) as if
                         # it were on this one. The leak grows with the gather
-                        # radius, which here is 3% of the scene bounding
-                        # sphere -- large in a room-sized scene.
+                        # radius (_VCM_RADIUS_FRACTION of the scene bounding
+                        # sphere).
                         var _ncmp = dot(cv.normal.to_simd(), lv.normal.to_simd())
                         # Gather in the tangent DISK, not the ball. The normal
                         # test above rejects a photon on a differently-oriented
@@ -3257,17 +3265,14 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             v_m.dVCM = dvcm_carry; v_m.dVC = dvc_carry; v_m.dVM = dvm_carry
             if n_verts == 0: first_alb = mat.albedo
             n_verts += 1
+            # Merging queries the GLOBAL photon grid, so it must not be gated
+            # on this pixel's own paired light path -- see the diffuse
+            # branch. This site kept that gate after the diffuse fix and
+            # merged at only the ~1/3 of vertices whose paired path stored
+            # anything: a measured quad under a constant sky read 0.36 of
+            # pbrt once merging carried the weight.
+            total += _bdpt_merge_from_cache(v_m, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
             if path_len > 0:
-                # Measured is now IN MIS scope (task #153 closed the
-                # connect/merge-time reverse-pdf local-frame gap -- see
-                # _bdpt_vertex_pdfs' mat_kind=3 branch), so this check is
-                # always True here; kept for symmetry with the volume
-                # branch's matching guard against merge+connect double-
-                # counting for any future out-of-scope kind (only volume
-                # and delta dielectric remain out of scope now that hair
-                # is closed too).
-                if _bdpt_vertex_mis_scoped(v_m):
-                    total += _bdpt_merge_from_cache(v_m, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor)
                 total += _bdpt_connect_to_cache(v_m, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor)
 
             # Distant/point/sphere/infinite NEE, via the shared Light
@@ -3280,7 +3285,12 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 total += _bdpt_nee_contribute(beta, w_im, ls_im, hit, gn_m_geo, cur_med_idx, sd, scratch, wavelengths)
             for inf_im in range(Int(sd.infiniteLightCount)):
                 var ls_em = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_im], Point2f(pcg.next_float(), pcg.next_float()))
-                var w_em = _nee_weight_measured(ls_em, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+                var (_c_em, r_em) = _scene_bounding_sphere(sd)
+                var le_em = _lobe_eval[want_pdfs=True](v_m, ls_em.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                var pol_em = MisPolicy(True, mis_vm_weight_factor, dvcm_carry, dvc_carry,
+                                       ls_em.pdf / max(_bdpt_n_lights(sd) * PI * r_em * r_em, Float32(1e-12)),
+                                       le_em.pdf_rev, False)
+                var w_em = _nee_weight_measured(ls_em, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, pol_em)
                 total += _bdpt_nee_contribute(beta, w_em, ls_em, hit, gn_m_geo, cur_med_idx, sd, scratch, wavelengths)
 
             var wo_l_m = Vec3f(dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, gn_m))
@@ -4313,11 +4323,6 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             var tangent_m = Vec3f(frm_m.x.x, frm_m.x.y, frm_m.x.z)
             var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
             var mb = sd.measuredBrdfs[unsafe_offset=Int(mat.measured_idx)]
-            var wo_l_m = Vec3f(dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, gn_m))
-            var uml1 = pcg.next_float(); var uml2 = pcg.next_float()
-            var (wi_l_m, f_m, pdf_m, valid_m) = bxdf_sample_measured(mb, wo_l_m, uml1, uml2, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-            if not valid_m or pdf_m <= Float32(0):
-                return False   # measured: invalid sample
             # VCM Stage 2b: measured BxDF DOES have a real standalone pdf
             # (bxdf_pdf_measured, unlike conductor/hair) -- in MIS scope
             # this pass, same real treatment as diffuse (see that branch's
@@ -4339,7 +4344,17 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             v_m.wavelengths = wavelengths
             v_m.dVCM = dvcm_carry; v_m.dVC = dvc_carry; v_m.dVM = dvm_carry
             n_verts += 1
+            # Stored BEFORE sampling the continuation: the photon ARRIVED here
+            # whether or not the next bounce's sample is valid. Sampling first
+            # dropped every photon whose reflection happened to land below the
+            # horizon, and merging at measured surfaces delivered ~36% of the
+            # right answer (measured-quad VCM light-path sweep vs real pbrt).
             _bdpt_store_lvc_vertex(v_m, lvc, lp_idx, n_verts - 1)
+            var wo_l_m = Vec3f(dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, gn_m))
+            var uml1 = pcg.next_float(); var uml2 = pcg.next_float()
+            var (wi_l_m, f_m, pdf_m, valid_m) = bxdf_sample_measured(mb, wo_l_m, uml1, uml2, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
+            if not valid_m or pdf_m <= Float32(0):
+                return False   # measured: invalid sample
             var wi_m = tangent_m * wi_l_m[0] + bitangent_m * wi_l_m[1] + gn_m * wi_l_m[2]
             var wilen_m = dot(wi_m, wi_m)
             if wilen_m > Float32(0):
