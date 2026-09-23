@@ -39,6 +39,7 @@ from gonzales.geometry import (
 )
 from gonzales.bvh import SceneDescriptor2_C, BVH2Node, build_bvh2, traverse_bvh2_core, test_spheres
 from gonzales.rng import PCG32
+from gonzales.sampling import film_filter_of
 from gonzales.spectrum import sample_wavelengths_uniform, null_spectral_handle, SampledWavelengths
 from gonzales.bdpt import (
     BDPTVertex, _bdpt_trace_camera_and_connect, _bdpt_camera_path_init,
@@ -143,6 +144,10 @@ def _identity_camera_matrices() -> Tuple[Pointer[Float32, MutUntrackedOrigin], P
 # directly, so it supplies that set itself.
 comptime _TEST_PASS_WL = sample_wavelengths_uniform(Float32(0.5))
 
+# Box, pbrt's default radius 0.5: the test compares two implementations of
+# the same camera path, so any filter works as long as both get it.
+comptime _TEST_FILTER = film_filter_of(Int32(2), Float32(0.5), Float32(0.5), Float32(0.5))
+
 def test_wavefront_split_matches_original_camera_path_closely() raises:
     var sd = _build_scene()
     var (r2c, c2w) = _identity_camera_matrices()
@@ -157,12 +162,12 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         Float32(0), Float32(0), Float32(0),
-        px_scale, Float32(0), Float32(0), n_light_paths_f, _TEST_PASS_WL,
+        px_scale, Float32(0), Float32(0), n_light_paths_f, _TEST_PASS_WL, _TEST_FILTER,
     )
 
     var pcg_new = PCG32(UInt64(999), UInt64(3))
     var scratch_new = unsafe_alloc[Intersection_C](1)
-    var state = _bdpt_camera_path_init[False](r2c, c2w, 0, 0, pcg_new, px_scale, n_light_paths_f, _TEST_PASS_WL)
+    var state = _bdpt_camera_path_init[False](r2c, c2w, 0, 0, pcg_new, px_scale, n_light_paths_f, _TEST_PASS_WL, _TEST_FILTER)
 
     var pcg_bounce = PCG32(UInt64(0), UInt64(0))
     pcg_bounce.state = state.pcg_state
@@ -205,6 +210,9 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
             ro, rd, beta, total, first_alb, n_verts, n_bounces, cur_med_idx,
             dvcm, dvc, dvm, last_bsdf_pdf, mis_null_dist,
             current_dielectric_ior, previous_dielectric_ior, wavelengths,
+            # Bump footprint reference; the camera sits at the origin
+            # (identity c2w), and the scene has no bump/normal maps anyway.
+            Vec3f(Float32(0)), px_scale,
         )
         active = Int8(1) if cont else Int8(0)
 

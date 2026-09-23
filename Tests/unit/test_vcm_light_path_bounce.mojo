@@ -137,6 +137,11 @@ def _build_scene() -> SceneDescriptor2_C:
 # so it supplies that set itself.
 comptime _TEST_PASS_WL = sample_wavelengths_uniform(Float32(0.5))
 
+# Bump-footprint reference (cam_pos, px_scale). The test scene has no
+# bump/normal maps, so no footprint is ever evaluated; both halves get the
+# same values either way.
+comptime _NO_CAM = Vec3f(Float32(0), Float32(0), Float32(0))
+
 def test_wavefront_split_matches_original_light_path_exactly() raises:
     var sd = _build_scene()
 
@@ -144,7 +149,7 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
     var scratch_old = unsafe_alloc[Intersection_C](1)
     var lvc_old = unsafe_alloc[BDPTVertex](_BDPT_MAX_VERTS)
     var lvc_path_len_old = unsafe_alloc[Int32](1)
-    _bdpt_trace_light_path[False](sd, pcg_old, False, Int32(-1), scratch_old, lvc_old, 0, lvc_path_len_old, Float32(0), Float32(0), _TEST_PASS_WL)
+    _bdpt_trace_light_path[False](sd, pcg_old, False, Int32(-1), scratch_old, lvc_old, 0, lvc_path_len_old, Float32(0), Float32(0), _TEST_PASS_WL, _NO_CAM, Float32(0))
 
     var pcg_new = PCG32(UInt64(12345), UInt64(7))
     var lvc_new = unsafe_alloc[BDPTVertex](_BDPT_MAX_VERTS)
@@ -188,6 +193,7 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
             ro, rd, flux, n_verts, dvcm, dvc, dvm,
             is_finite_origin, cur_med_idx, n_lbounces,
             current_dielectric_ior, previous_dielectric_ior, wavelengths,
+            _NO_CAM, Float32(0),
         )
         active = Int8(1) if cont else Int8(0)
         lvc_path_len_new[unsafe_offset=0] = Int32(n_verts)

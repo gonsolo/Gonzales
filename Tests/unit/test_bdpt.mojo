@@ -25,7 +25,7 @@ from gonzales.geometry import (
 from gonzales.bvh import SceneDescriptor2_C, BVH2Node
 from gonzales.bxdf import ggx_D, ggx_G2, ggx_albedo_avg, ggx_ms_shape, ggx_ms_tint
 from gonzales.bdpt import (
-    BDPTVertex, _pdf_solid_to_area, _geom_term, _eval_vertex_spectral,
+    BDPTVertex, _pdf_solid_to_area, _eval_vertex_spectral,
     _eval_conductor_ggx_spectral, _bdpt_connect_to_cache,
 )
 from gonzales.spectrum import SampledWavelengths, SpectralSample, null_spectral_handle
@@ -85,7 +85,7 @@ def _eval_cond(n: Vec3f, wo: Vec3f, wi: Vec3f, alpha: Float32, f0: RGB) -> Spect
 
 def _make_vertex(pos: Point3f, normal: Vec3f, is_surface: Int32) -> BDPTVertex:
     return BDPTVertex(
-        pos=pos, normal=normal, beta=SpectralSample(Float32(0)), alb=RGB(Float32(0)),
+        pos=pos, normal=normal, shading_normal=normal, beta=SpectralSample(Float32(0)), alb=RGB(Float32(0)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=is_surface, is_delta=Int32(0), is_light=Int32(0),
@@ -146,30 +146,6 @@ def test_pdf_solid_to_area_degenerate_distance_returns_zero() raises:
     var result = _pdf_solid_to_area(Float32(5.0), Float32(0.5), Float32(1e-10))
     assert_true(_close(result, Float32(0.0)))
 
-# ── _geom_term ────────────────────────────────────────────────────────────────
-# G(a,b) = |cos_a| * |cos_b| / dist^2.
-
-def test_geom_term_matches_closed_form_between_two_surfaces() raises:
-    var a = _make_vertex(Point3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0), Int32(1))
-    var b = _make_vertex(Point3f(0.0, 0.0, 3.0), Vec3f(0.0, 0.0, -1.0), Int32(1))
-    var g = _geom_term(a, b)
-    # dist=3, cos_a=|dot((0,0,1),(0,0,1))|=1, cos_b=|dot((0,0,1),(0,0,-1))|=1
-    assert_true(_close(g, Float32(1.0) / Float32(9.0)))
-
-def test_geom_term_coincident_points_return_zero() raises:
-    var a = _make_vertex(Point3f(1.0, 2.0, 3.0), Vec3f(0.0, 0.0, 1.0), Int32(1))
-    var b = _make_vertex(Point3f(1.0, 2.0, 3.0), Vec3f(0.0, 1.0, 0.0), Int32(1))
-    assert_true(_close(_geom_term(a, b), Float32(0.0)))
-
-def test_geom_term_volume_vertex_has_no_cosine_factor() raises:
-    """A volume-scatter vertex (is_surface=0) has no surface normal, so its
-    cosine factor is fixed at 1 regardless of connection direction -- only
-    the surface vertex's own cosine and the 1/dist^2 falloff remain."""
-    var a = _make_vertex(Point3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0), Int32(0))
-    var b = _make_vertex(Point3f(0.0, 0.0, 2.0), Vec3f(0.0, 0.0, -1.0), Int32(1))
-    var g = _geom_term(a, b)
-    assert_true(_close(g, Float32(1.0) / Float32(4.0)))
-
 # ── _eval_vertex_spectral ──────────────────────────────────────────────────────────────
 
 def test_eval_vertex_delta_vertex_is_always_zero() raises:
@@ -177,7 +153,7 @@ def test_eval_vertex_delta_vertex_is_always_zero() raises:
     via a shadow ray -- _eval_vertex_spectral must return 0 regardless of mat_kind or
     albedo."""
     var v = BDPTVertex(
-        pos=Point3f(Float32(0)), normal=Vec3f(0.0, 0.0, 1.0),
+        pos=Point3f(Float32(0)), normal=Vec3f(0.0, 0.0, 1.0), shading_normal=Vec3f(0.0, 0.0, 1.0),
         beta=SpectralSample(Float32(0)), alb=RGB(Float32(1.0), Float32(1.0), Float32(1.0)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
@@ -193,7 +169,7 @@ def test_eval_vertex_volume_scatter_matches_isotropic_phase_function() raises:
     """A volume-scatter vertex (is_surface=0) uses the isotropic phase
     function alb/(4*pi) -- no cosine term at all, unlike the surface case."""
     var v = BDPTVertex(
-        pos=Point3f(Float32(0)), normal=Vec3f(0.0, 1.0, 0.0),
+        pos=Point3f(Float32(0)), normal=Vec3f(0.0, 1.0, 0.0), shading_normal=Vec3f(0.0, 1.0, 0.0),
         beta=SpectralSample(Float32(0)), alb=RGB(Float32(0.3), Float32(0.4), Float32(0.5)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
@@ -215,7 +191,7 @@ def test_eval_vertex_volume_scatter_matches_isotropic_phase_function() raises:
 def test_eval_vertex_lambertian_matches_closed_form() raises:
     """Surface Lambertian: f = (alb/pi) * |cos(dir_to_other, normal)|."""
     var v = BDPTVertex(
-        pos=Point3f(Float32(0)), normal=Vec3f(0.0, 0.0, 1.0),
+        pos=Point3f(Float32(0)), normal=Vec3f(0.0, 0.0, 1.0), shading_normal=Vec3f(0.0, 0.0, 1.0),
         beta=SpectralSample(Float32(0)), alb=RGB(Float32(0.2), Float32(0.4), Float32(0.6)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
@@ -242,7 +218,7 @@ def test_eval_vertex_conductor_dispatches_to_eval_conductor_ggx_with_own_fields(
     var alpha = Float32(0.2)
     var f0 = RGB(Float32(0.5), Float32(0.6), Float32(0.7))
     var v = BDPTVertex(
-        pos=Point3f(Float32(0)), normal=Vec3f(0.0, 0.0, 1.0),
+        pos=Point3f(Float32(0)), normal=Vec3f(0.0, 0.0, 1.0), shading_normal=Vec3f(0.0, 0.0, 1.0),
         beta=SpectralSample(Float32(0)), alb=f0,
         pdf_fwd=Float32(0), pdf_bwd=alpha,
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
@@ -313,7 +289,7 @@ def test_eval_conductor_ggx_normal_incidence_matches_closed_form() raises:
 # single-vertex path (path_len=1) the expected total is exactly
 # _connect(cv, the_one_light_vertex, ..., mis_vm_weight_factor=0), computed
 # here independently via _connect's own constituent pieces (_eval_vertex,
-# _geom_term) rather than by re-deriving _connect's formula. mis_vm_weight_
+# the 1/d^2 falloff) rather than by re-deriving _connect's formula. mis_vm_weight_
 # factor=0 keeps _connect's own real-MIS weight (both endpoints are
 # diffuse/light-source here, so it would otherwise activate) at exactly 1,
 # since cv/lv's dVCM/dVC/dVM are all 0 here -- see _connect's docstring.
@@ -351,7 +327,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
     )
 
     var cv = BDPTVertex(
-        pos=Point3f(5.0, 5.0, 10.0), normal=Vec3f(0.0, 0.0, 1.0),
+        pos=Point3f(5.0, 5.0, 10.0), normal=Vec3f(0.0, 0.0, 1.0), shading_normal=Vec3f(0.0, 0.0, 1.0),
         beta=SpectralSample(Float32(3.0)), alb=RGB(Float32(0.5)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
@@ -361,7 +337,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
     var lv = BDPTVertex(
-        pos=Point3f(5.0, 5.0, 20.0), normal=Vec3f(0.0, 0.0, -1.0),
+        pos=Point3f(5.0, 5.0, 20.0), normal=Vec3f(0.0, 0.0, -1.0), shading_normal=Vec3f(0.0, 0.0, -1.0),
         beta=SpectralSample(Float32(2.0)), alb=RGB(Float32(1.0)),
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
@@ -382,7 +358,9 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
     var dir_to_light = Vec3f(0.0, 0.0, 1.0)
     var f_cam = _eval_v(cv, dir_to_light, sd)  # Lambertian: alb/pi * cos
     var f_lgt = Vec3f(lv.alb.r, lv.alb.g, lv.alb.b)  # is_light: Le, no cosine
-    var g = _geom_term(cv, lv)  # 1*1/10^2
+    # _connect = f*cos at each endpoint (inside f_cam / the light's Le here,
+    # both cosines 1) times the bare 1/d^2 between them -- no separate G term.
+    var g = Float32(1.0) / Float32(100.0)
     var beta_prod = Float32(3.0) * Float32(2.0)
     var expected = f_cam.v0 * f_lgt[0] * g * beta_prod  # unoccluded, Tr=1; all channels equal here
 
