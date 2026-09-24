@@ -1252,7 +1252,7 @@ def _bdpt_connect_to_camera(
 
     var wl = lv.wavelengths
     var cos_to_camera = abs(dot(lv.normal.to_simd(), dir_to_cam))
-    var f = _eval_vertex_spectral(lv, Vec3f(dir_to_cam[0], dir_to_cam[1], dir_to_cam[2]), sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
+    var f = _eval_vertex_spectral(lv, Vec3f(dir_to_cam[0], dir_to_cam[1], dir_to_cam[2]), sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl, adjoint=True)
     if f.is_black():
         return (False, Float32(-1), Float32(-1), SpectralSample(Float32(0)))
     if cos_to_camera <= Float32(1e-8):
@@ -4362,8 +4362,12 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             var cos_wi_m = dot(wi_m, gn_m)
             if cos_wi_m <= Float32(0):
                 return False   # measured: sampled direction below the surface
-            # f_m is already spectral -- no RGB round trip.
-            flux *= f_m * (cos_wi_m / pdf_m)
+            # The ADJOINT BRDF (see LobeCtx.adjoint): the sampler conditions on
+            # the light direction, which leaves the sample and its pdf valid,
+            # but radiance needs f(toward camera, toward light). f_m is the
+            # other order, and this table is not reciprocal near grazing.
+            var f_adj_m = bxdf_eval_measured(mb, wi_l_m, wo_l_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)[0]
+            flux *= f_adj_m * (cos_wi_m / pdf_m)
             rd = vec3f(wi_m)
             ro = hit + rd*Float32(0.0002)
             # VCM Stage 2b: recursive continuation, real forward/reverse pdf
@@ -4719,11 +4723,13 @@ def _bdpt_n_lights(ref sd: SceneDescriptor2_C) -> Float32:
                    + Int(sd.infiniteLightCount) + Int(sd.pointLightCount))
 
 @always_inline
-def _vertex_ctx(v: BDPTVertex) -> LobeCtx:
-    """A stored VCM vertex, as the shared BxDF interface sees it."""
+def _vertex_ctx(v: BDPTVertex, adjoint: Bool = False) -> LobeCtx:
+    """A stored VCM vertex, as the shared BxDF interface sees it. `adjoint`
+    for a light-subpath vertex -- see LobeCtx.adjoint."""
     return LobeCtx(v.mat_kind, v.is_surface == Int32(1), v.is_delta != Int32(0),
                    v.shading_normal.to_simd(), v.wo.to_simd(), v.alb, v.mat_idx,
-                   v.pdf_bwd, v.pdf_fwd, v.hair_curve_idx, v.hair_h, v.hair_v, False)
+                   v.pdf_bwd, v.pdf_fwd, v.hair_curve_idx, v.hair_h, v.hair_v, False,
+                   adjoint)
 
 
 @always_inline
@@ -4737,9 +4743,10 @@ def _lobe_eval[want_pdfs: Bool = True](
     spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
     spectral_d65: Pointer[Float32, MutUntrackedOrigin],
     wavelengths: SampledWavelengths,
+    adjoint: Bool = False,
 ) -> LobeEval:
     """VCM's view of the shared lobe evaluator (bxdf.mojo)."""
-    return lobe_eval[want_pdfs](_vertex_ctx(v), dir_to_other,
+    return lobe_eval[want_pdfs](_vertex_ctx(v, adjoint), dir_to_other,
         LobeTables(sd.materials, sd.curves, sd.measuredBrdfs),
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, wavelengths)
@@ -4755,14 +4762,15 @@ def _eval_vertex_spectral(
     spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
     spectral_d65: Pointer[Float32, MutUntrackedOrigin],
     wavelengths: SampledWavelengths,
+    adjoint: Bool = False,
 ) -> SpectralSample:
     """Throughput at `v` toward `dir_to_other`: the BSDF (or phase function)
     times this lobe's OWN cosine. A thin view onto _lobe_eval -- see
     LobeEval for why the dispatch it used to duplicate now lives in one
-    place."""
+    place. Pass `adjoint=True` for a light-subpath vertex."""
     return _lobe_eval[want_pdfs=False](
         v, dir_to_other, sd, spectral_coeffs, spectral_res, spectral_cie_x,
-        spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths).f_cos
+        spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths, adjoint).f_cos
 
 @always_inline
 def _bdpt_vertex_pdfs(
@@ -4947,7 +4955,7 @@ def _connect_unweighted(
             return (SpectralSample(Float32(0)), False)
         f_lgt_spec = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, lv.alb.r, lv.alb.g, lv.alb.b, wl) * cos_l
     else:
-        f_lgt_spec = _eval_vertex_spectral(lv, neg_dir, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl)
+        f_lgt_spec = _eval_vertex_spectral(lv, neg_dir, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wl, adjoint=True)
     var f_combined = f_cam_spec * f_lgt_spec
 
     # GEOMETRY: 1/d^2 ONLY. Each endpoint's cosine is already inside its f_cos.

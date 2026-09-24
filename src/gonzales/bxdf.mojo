@@ -957,6 +957,16 @@ struct LobeCtx(TrivialRegisterPassable):
     # sidedness test below must not fire there: it exists for stored vertices,
     # where `wo` really is the direction the subpath arrived from.
     var pre_oriented:   Bool
+    # True at a LIGHT-subpath vertex, where `wo` points back toward the light
+    # and the direction evaluated points toward the camera side. Radiance
+    # needs f(toward camera, toward light) there too -- the ADJOINT
+    # f*(a, b) = f(b, a). Every analytic lobe here is reciprocal, so only the
+    # tabulated measured BRDF reads it: its table is indexed by the FIRST
+    # argument (pbrt's MeasuredBxDF::f), and near grazing it is far from
+    # reciprocal -- cm_white_spec.bsdf at 83 deg: f(cam,light) 20.2 vs
+    # f(light,cam) 1.7. Mixing the two orders across VCM's strategies made
+    # MIS blend estimates of two different integrands.
+    var adjoint:        Bool
 
 
 @fieldwise_init
@@ -1202,7 +1212,11 @@ def lobe_eval[want_pdfs: Bool = True](
         var bitangent = Vec3f(frm.y.x, frm.y.y, frm.y.z)
         var wo_l = Vec3f(dot(vwo, tangent), dot(vwo, bitangent), dot(vwo, vn))
         var wi_l = Vec3f(dot(dir_to_other, tangent), dot(dir_to_other, bitangent), dot(dir_to_other, vn))
-        var (fr_spec, _) = bxdf_eval_measured(mb, wo_l, wi_l, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+        var fr_spec = SpectralSample(Float32(0))
+        if c.adjoint:
+            fr_spec = bxdf_eval_measured(mb, wi_l, wo_l, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)[0]
+        else:
+            fr_spec = bxdf_eval_measured(mb, wo_l, wi_l, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)[0]
         var cos_m = abs(dot(dir_to_other, vn))
         var fwd_m = Float32(0)
         var rev_m = Float32(0)
@@ -1971,7 +1985,7 @@ def _nee_weight_simple_spectral(
     # afterwards; nothing in either signature said so.
     var le = lobe_eval[want_pdfs=True](
         LobeCtx(mat_kind, True, False, n, wo, alb, mat_idx, alpha,
-                Float32(0), Int32(-1), Float32(0), Float32(0), True),
+                Float32(0), Int32(-1), Float32(0), Float32(0), True, False),
         ls.wi, tab,
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, wavelengths)

@@ -1845,14 +1845,17 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
             var mb_m = sd.measuredBrdfs[unsafe_offset=Int(mat.measured_idx)]
             var wo_l_m = Vec3f(dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, gn_m))
-            var uml1 = pcg.next_float(); var uml2 = pcg.next_float()
-            var (wi_l_m, f_m, pdf_m, valid_m) = bxdf_sample_measured(mb_m, wo_l_m, uml1, uml2, ph_wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
-            if not valid_m or pdf_m <= Float32(0):
-                break
+            # Deposited BEFORE sampling the continuation, like the conductor
+            # branch: the photon arrived whether or not its outgoing sample
+            # is valid.
             if n_events > 1:
                 _sppm_store_photon[use_gpu](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
+            var uml1 = pcg.next_float(); var uml2 = pcg.next_float()
+            var (wi_l_m, f_m, pdf_m, valid_m) = bxdf_sample_measured(mb_m, wo_l_m, uml1, uml2, ph_wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+            if not valid_m or pdf_m <= Float32(0):
+                break
             var wi_m = tangent_m * wi_l_m[0] + bitangent_m * wi_l_m[1] + gn_m * wi_l_m[2]
             var wilen_m = dot(wi_m, wi_m)
             if wilen_m > Float32(0):
@@ -1860,8 +1863,11 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var cos_wi_m = dot(wi_m, gn_m)
             if cos_wi_m <= Float32(0):
                 break
-            # f_m is already spectral -- no RGB round trip.
-            flux *= f_m * (cos_wi_m / pdf_m)
+            # The ADJOINT BRDF, as in bdpt.mojo's light path (LobeCtx.adjoint):
+            # a photon needs f(toward camera, toward light); f_m is the other
+            # order, and this table is not reciprocal near grazing.
+            var f_adj_m = bxdf_eval_measured(mb_m, wi_l_m, wo_l_m, ph_wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)[0]
+            flux *= f_adj_m * (cos_wi_m / pdf_m)
             rd = vec3f(wi_m)
             ro = hit + rd * Float32(0.0002)
 
@@ -2712,7 +2718,7 @@ def _sppm_nee_one(
                         var le_vp = lobe_eval[want_pdfs=False](
                             LobeCtx(mat_kind_simple, True, False, vn, wo, vp.alb,
                                     vp.mat_idx, vp.alpha, Float32(0), Int32(-1),
-                                    Float32(0), Float32(0), True),
+                                    Float32(0), Float32(0), True, False),
                             wi, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs),
                             sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
                             sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
