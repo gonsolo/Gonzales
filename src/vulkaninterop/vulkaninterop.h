@@ -80,6 +80,11 @@ typedef struct {
     const int64_t* vertexIndices;
     const float* uvs;
     const float* normals;
+    const uint8_t* alpha;   // alpha cut-out mask: unused here, layout only
+    int32_t alpha_w;
+    int32_t alpha_h;
+    float alpha_const;
+    int32_t alpha_pad;
 } VulkanInteropMesh;
 
 // Builds an interop-AND-ray-query-capable Vulkan device, a real BLAS/TLAS

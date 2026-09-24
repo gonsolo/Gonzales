@@ -411,6 +411,51 @@ int load_texture_u8(const char *filename, int raw, unsigned char **data, int *wi
         return 1;
 }
 
+// pbrt-v4 GPU's single-channel ("float") image texture, which is what a
+// `Shape "texture alpha"` reads (textures.cpp, the lumTextureCache path): an
+// RGBA image whose alpha is not all ones contributes its A channel, anything
+// else the average of R, G, B; bytes are taken raw (cudaReadModeNormalizedFloat,
+// no sRGB decode). pbrt's CPU build differs -- it reads channel 0 (red) of the
+// sRGB-decoded image -- and the GPU rule is the one that treats a leaf PNG's
+// alpha channel as its cut-out, so it is the one followed. malloc'd, one byte
+// per texel -- free with free_texture_u8.
+int load_alpha_mask(const char *filename, unsigned char **data, int *width, int *height) {
+        auto in = OIIO::ImageInput::open(filename);
+        if (!in) return 0;
+        const OIIO::ImageSpec &spec = in->spec();
+        const int w = spec.width, h = spec.height, nc = spec.nchannels;
+        if (nc < 1) {
+                in->close();
+                return 0;
+        }
+        const int64_t n = int64_t(w) * h;
+        std::vector<unsigned char> buf(n * nc);
+        if (!in->read_image(0, 0, 0, nc, OIIO::TypeDesc::UINT8, buf.data())) {
+                in->close();
+                return 0;
+        }
+        in->close();
+        auto *mask = static_cast<unsigned char *>(malloc(n));
+        if (!mask) return 0;
+        bool use_alpha = false;
+        if (nc >= 4)
+                for (int64_t i = 0; i < n && !use_alpha; ++i)
+                        use_alpha = buf[i * nc + 3] != 255;
+        for (int64_t i = 0; i < n; ++i) {
+                const unsigned char *p = buf.data() + i * nc;
+                if (use_alpha)
+                        mask[i] = p[3];
+                else if (nc >= 3)
+                        mask[i] = (unsigned char)((int(p[0]) + int(p[1]) + int(p[2]) + 1) / 3);
+                else
+                        mask[i] = p[0];
+        }
+        *data = mask;
+        *width = w;
+        *height = h;
+        return 1;
+}
+
 int free_texture_u8(unsigned char *data) {
         free(data);
         return 0;

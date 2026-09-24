@@ -8,17 +8,23 @@ extern "C" {
 #endif
 
 // Mirrors gonzales/geometry.mojo's TriangleMesh_C field-for-field (5
-// pointers, same order, no padding on either side) -- a
+// pointers + the alpha cut-out mask, same order, no padding) -- a
 // UnsafePointer[TriangleMesh_C] from Mojo can be reinterpreted directly as
 // a `const VulkanRtMesh*` with no conversion. faceIndices/uvs/normals are
 // accepted for layout compatibility but unused by the scene builder below
-// (it only needs points + vertexIndices for BLAS geometry).
+// (it only needs points + vertexIndices for BLAS geometry). The alpha fields
+// are likewise unused: this backend does not cut out alpha-textured shapes.
 typedef struct {
     const float* points;
     const int64_t* faceIndices;
     const int64_t* vertexIndices;
     const float* uvs;
     const float* normals;
+    const uint8_t* alpha;
+    int32_t alpha_w;
+    int32_t alpha_h;
+    float alpha_const;
+    int32_t alpha_pad;
 } VulkanRtMesh;
 
 // Task #162 step 1 smoke test: stand up a headless Vulkan instance/device

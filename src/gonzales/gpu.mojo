@@ -323,6 +323,7 @@ struct MeshBuffers(Movable):
     var vertexIndices_bufs: List[DeviceBuffer[DType.uint8]]
     var uv_bufs: List[DeviceBuffer[DType.uint8]]
     var nrm_bufs: List[DeviceBuffer[DType.uint8]]
+    var alpha_bufs: List[DeviceBuffer[DType.uint8]]   # one per distinct alpha mask
 
     @always_inline
     def meshes_ptr(mut self) -> Pointer[TriangleMesh_C, MutUntrackedOrigin]:
@@ -691,6 +692,11 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var vert_bufs = List[DeviceBuffer[DType.uint8]]()
             var uv_bufs   = List[DeviceBuffer[DType.uint8]]()
             var nrm_bufs  = List[DeviceBuffer[DType.uint8]]()
+            # Alpha masks are shared between meshes on the host (one per
+            # file); upload each once, keyed by its host address.
+            var alpha_bufs = List[DeviceBuffer[DType.uint8]]()
+            var alpha_host_keys = List[Int]()
+            var alpha_dev_ptrs = List[Pointer[UInt8, MutUntrackedOrigin]]()
 
             var mesh_structs_host = unsafe_alloc[TriangleMesh_C](max(Int(meshCount), 1))
 
@@ -716,7 +722,22 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                 else:
                     _ = _gpu_zeros_owned[Float32](ctx, nrm_bufs, 1)
 
-                mesh_structs_host[unsafe_offset=i] = TriangleMesh_C(pts_dptr, fi_dptr, vi_dptr, uv_dptr, nrm_dptr)
+                var alpha_dptr = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling()
+                if host_mesh.alpha_w > Int32(0):
+                    var key = Int(host_mesh.alpha)
+                    var found = -1
+                    for ai in range(len(alpha_host_keys)):
+                        if alpha_host_keys[ai] == key:
+                            found = ai
+                            break
+                    if found < 0:
+                        found = len(alpha_host_keys)
+                        alpha_host_keys.append(key)
+                        alpha_dev_ptrs.append(_gpu_upload_owned[UInt8](ctx, alpha_bufs, host_mesh.alpha,
+                            Int(host_mesh.alpha_w) * Int(host_mesh.alpha_h)))
+                    alpha_dptr = alpha_dev_ptrs[found]
+                mesh_structs_host[unsafe_offset=i] = TriangleMesh_C(pts_dptr, fi_dptr, vi_dptr, uv_dptr, nrm_dptr,
+                    alpha_dptr, host_mesh.alpha_w, host_mesh.alpha_h, host_mesh.alpha_const)
 
             # Upload mesh struct array
             var meshes_buf = _gpu_upload_array[TriangleMesh_C](ctx, mesh_structs_host, Int(meshCount))
@@ -1085,6 +1106,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                     vertexIndices_bufs=vert_bufs^,
                     uv_bufs=uv_bufs^,
                     nrm_bufs=nrm_bufs^,
+                    alpha_bufs=alpha_bufs^,
                 ),
                 materials_buf=mat_buf^,
                 material_count=Int(materialCount),

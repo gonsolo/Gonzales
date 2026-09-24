@@ -1123,6 +1123,55 @@ def handle_bilinearmesh_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
     var n_tris = Int32(len(idx) // 3)
     store_mesh(s, p.unsafe_ptr(), idx.unsafe_ptr(), n_pts, n_tris)
 
+def _psc_apply_shape_alpha(s: Pointer[SceneParseState, MutUntrackedOrigin],
+                           params: ParameterDictionary):
+    """Attach a shape's `"texture alpha"` / `"float alpha"` cut-out to the
+    mesh store_mesh just appended. Unimplemented until 2026-09-24, which left
+    every leaf card opaque: barcelona-pavilion's birch and lime canopies read
+    0.79 of pbrt, and matched it to 0.999 once pbrt's own alpha lines were
+    deleted from the scene."""
+    ref ma = s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1]
+    var tex_name = params.get_string("alpha", "")
+    if tex_name == "":
+        ma.alpha_const = params.get_float("alpha", Float32(1.0))
+        return
+    # Latest definition wins, as with every named texture.
+    var file = String("")
+    var ti = len(s[unsafe_offset=0].tex_names) - 1
+    while ti >= 0:
+        if s[unsafe_offset=0].tex_names[ti] == tex_name:
+            file = s[unsafe_offset=0].tex_files[ti]
+            break
+        ti -= 1
+    if file == "":
+        warn_unsupported("alpha texture", tex_name,
+                         "only an imagemap can cut out a shape, so it renders opaque", "imagemap")
+        return
+    for mi in range(len(s[unsafe_offset=0].alpha_mask_files)):
+        if s[unsafe_offset=0].alpha_mask_files[mi] == file:
+            ma.alpha_mask = Int32(mi)
+            return
+    var data = unsafe_alloc[Pointer[UInt8, MutUntrackedOrigin]](1)
+    var wh = unsafe_alloc[Int32](2)
+    var flen = file.byte_length()
+    var fname = unsafe_alloc[UInt8](flen + 1)
+    for ci in range(flen): fname[unsafe_offset=ci] = file.unsafe_ptr()[unsafe_offset=ci]
+    fname[unsafe_offset=flen] = UInt8(0)
+    var ok = external_call["load_alpha_mask", Int32,
+        Pointer[UInt8, MutUntrackedOrigin], Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
+        Pointer[Int32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin]](
+        fname, data, wh, wh + 1)
+    fname.unsafe_free()
+    if ok != Int32(0):
+        ma.alpha_mask = Int32(len(s[unsafe_offset=0].alpha_mask_files))
+        s[unsafe_offset=0].alpha_mask_files.append(file)
+        s[unsafe_offset=0].alpha_mask_data.append(data[unsafe_offset=0])
+        s[unsafe_offset=0].alpha_mask_w.append(wh[unsafe_offset=0])
+        s[unsafe_offset=0].alpha_mask_h.append(wh[unsafe_offset=1])
+    else:
+        print("Warning: could not load alpha texture", file, "-- the shape renders opaque")
+    data.unsafe_free(); wh.unsafe_free()
+
 def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                      s: Pointer[SceneParseState, MutUntrackedOrigin]):
     var shape_type = unsafe_alloc[UInt8](64)
@@ -1192,6 +1241,7 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         var n_verts = Int32(len(fin_p) // 3)
         var n_tris = Int32(len(fin_i) // 3)
         store_mesh(s, fin_p.unsafe_ptr(), fin_i.unsafe_ptr(), n_verts, n_tris)
+        _psc_apply_shape_alpha(s, ls_params)
         return
 
     if not is_tri and not is_ply:
@@ -1290,6 +1340,7 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         var tmp_f2 = ply_pts[unsafe_offset=0]
         var tmp_i2 = ply_idx[unsafe_offset=0]
         store_mesh(s, tmp_f2, tmp_i2, nv, nt)
+        _psc_apply_shape_alpha(s, params)
         if ply_has_uvs[unsafe_offset=0] != 0:
             var uv_ptr = ply_uvs[unsafe_offset=0]
             var n_uv_floats = Int(nv) * 2
@@ -1340,6 +1391,7 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         return
 
     store_mesh(s, p_list.unsafe_ptr(), i_list.unsafe_ptr(), n_verts, n_tris)
+    _psc_apply_shape_alpha(s, params)
     if Int32(len(uv_list)) >= n_verts * Int32(2):
         for ui in range(Int(n_verts) * 2):
             s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1].uvs.append(uv_list[ui])
@@ -2245,6 +2297,17 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         else:
             meshes[unsafe_offset=i].uvs = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
             out_uv_nv[unsafe_offset=i] = Int32(0)
+        meshes[unsafe_offset=i].alpha_const = ma.alpha_const
+        meshes[unsafe_offset=i]._alpha_pad = Int32(0)
+        if ma.alpha_mask >= Int32(0):
+            var am = Int(ma.alpha_mask)
+            meshes[unsafe_offset=i].alpha   = s[unsafe_offset=0].alpha_mask_data[am]
+            meshes[unsafe_offset=i].alpha_w = s[unsafe_offset=0].alpha_mask_w[am]
+            meshes[unsafe_offset=i].alpha_h = s[unsafe_offset=0].alpha_mask_h[am]
+        else:
+            meshes[unsafe_offset=i].alpha   = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling()
+            meshes[unsafe_offset=i].alpha_w = Int32(0)
+            meshes[unsafe_offset=i].alpha_h = Int32(0)
         if len(ma.normals) >= nv * 3:
             var nrm_c = unsafe_alloc[Float32](nv * 3)
             for ni in range(nv * 3): nrm_c[unsafe_offset=ni] = ma.normals[ni]

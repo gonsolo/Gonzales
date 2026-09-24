@@ -5,7 +5,7 @@ from max.algorithm import parallelize
 from std.atomic import Atomic
 from std.sys.info import num_performance_cores
 from .transform import Mat4
-from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, MatKind, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, _is_real_ptr, store_vec3, _atan2f
+from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, alpha_killed, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, MatKind, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, _is_real_ptr, store_vec3, _atan2f
 from .rng import PCG32
 from .spectrum import SpectralHandle
 
@@ -1109,7 +1109,8 @@ def _traverse_blas_triangles(
                 var p1 = Vec3f(mesh.points[unsafe_offset=v1*4], mesh.points[unsafe_offset=v1*4+1], mesh.points[unsafe_offset=v1*4+2])
                 var p2 = Vec3f(mesh.points[unsafe_offset=v2*4], mesh.points[unsafe_offset=v2*4+1], mesh.points[unsafe_offset=v2*4+2])
                 var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
-                if hit_res[0]:
+                if hit_res[0] and not alpha_killed(mesh, v0, v1, v2, hit_res[2], hit_res[3],
+                                                   ray_org, ray_dir, (mesh_idx << 32) | base_vidx):
                     localTHit = hit_res[1]
                     bestU = hit_res[2]
                     bestV = hit_res[3]
@@ -1331,7 +1332,8 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
                 )
 
                 var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
-                if hit_res[0]:
+                if hit_res[0] and not alpha_killed(mesh, v0_idx, v1_idx, v2_idx, hit_res[2], hit_res[3],
+                                                   ray_org, ray_dir, (mesh_idx << 32) | base_vidx):
                     localTHit = hit_res[1]
                     bestU = hit_res[2]
                     bestV = hit_res[3]
@@ -1534,7 +1536,8 @@ def traverse_bvh2_core_defer_curves(
                 )
 
                 var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
-                if hit_res[0]:
+                if hit_res[0] and not alpha_killed(mesh, v0_idx, v1_idx, v2_idx, hit_res[2], hit_res[3],
+                                                   ray_org, ray_dir, (mesh_idx << 32) | base_vidx):
                     localTHit = hit_res[1]
                     bestU = hit_res[2]
                     bestV = hit_res[3]
@@ -1728,7 +1731,9 @@ def any_hit_bvh2_core(
                 var p0 = Vec3f(mesh.points[unsafe_offset=v0*4], mesh.points[unsafe_offset=v0*4+1], mesh.points[unsafe_offset=v0*4+2])
                 var p1 = Vec3f(mesh.points[unsafe_offset=v1*4], mesh.points[unsafe_offset=v1*4+1], mesh.points[unsafe_offset=v1*4+2])
                 var p2 = Vec3f(mesh.points[unsafe_offset=v2*4], mesh.points[unsafe_offset=v2*4+1], mesh.points[unsafe_offset=v2*4+2])
-                if intersect_triangle(ray_org, ray_dir, p0, p1, p2, tMax)[0]:
+                var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, tMax)
+                if hit_res[0] and not alpha_killed(mesh, v0, v1, v2, hit_res[2], hit_res[3],
+                                                   ray_org, ray_dir, (mesh_idx << 32) | base_vidx):
                     return True
             if toVisit == 0:
                 break

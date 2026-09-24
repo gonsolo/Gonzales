@@ -26,6 +26,11 @@ int load_texture_u8(const char *filename, int raw, unsigned char **data, int *wi
                     int *channels, int *srgb);
 int free_texture_u8(unsigned char *data);
 
+// Load an image as a one-byte-per-texel alpha mask with pbrt-v4 GPU's float
+// image-texture channel rule (A if the alpha is not all ones, else the RGB
+// average; raw bytes). malloc'd -- free with free_texture_u8.
+int load_alpha_mask(const char *filename, unsigned char **data, int *width, int *height);
+
 // --- New Tiled Image Writing Functions ---
 
 // Returns an opaque pointer (OIIO::ImageOutput* in C++)

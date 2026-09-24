@@ -154,6 +154,10 @@ struct MeshAccum(Copyable, Movable):
     # top-level primitive list — they're only reachable via a per-template
     # BLAS referenced by Instance_C placements (see pbrt_parser.mojo).
     var is_object_template: Bool
+    # pbrt `Shape "texture alpha"` / `"float alpha"`: index into
+    # SceneParseState.alpha_mask_* (-1 = none), else the constant alpha.
+    var alpha_mask:  Int32
+    var alpha_const: Float32
 
     def __init__(out self, mat_idx: Int32, inside_medium: Int32, outside_medium: Int32):
         self.points        = List[Float32]()
@@ -167,6 +171,8 @@ struct MeshAccum(Copyable, Movable):
         self.inside_medium  = inside_medium
         self.outside_medium = outside_medium
         self.is_object_template = False
+        self.alpha_mask    = -1
+        self.alpha_const   = 1.0
 
 struct SceneParseState(Movable):
     # Current transform matrix and stack
@@ -272,6 +278,13 @@ struct SceneParseState(Movable):
     # Textures
     var tex_names: List[String]
     var tex_files: List[String]
+    # Alpha cut-out masks (see TriangleMesh_C.alpha), one per distinct file,
+    # loaded once however many shapes name it. MeshAccum.alpha_mask indexes
+    # these; the byte buffers are owned by the parsed scene for its lifetime.
+    var alpha_mask_files: List[String]
+    var alpha_mask_data:  List[Pointer[UInt8, MutUntrackedOrigin]]
+    var alpha_mask_w:     List[Int32]
+    var alpha_mask_h:     List[Int32]
     # Constant textures: name -> RGB value (3 floats per entry, parallel to names)
     var const_tex_names: List[String]
     var const_tex_rgb: List[Float32]
@@ -442,6 +455,10 @@ struct SceneParseState(Movable):
 
         self.tex_names = List[String]()
         self.tex_files = List[String]()
+        self.alpha_mask_files = List[String]()
+        self.alpha_mask_data  = List[Pointer[UInt8, MutUntrackedOrigin]]()
+        self.alpha_mask_w     = List[Int32]()
+        self.alpha_mask_h     = List[Int32]()
         self.const_tex_names = List[String]()
         self.const_tex_rgb = List[Float32]()
         self.checker_tex_names = List[String]()
