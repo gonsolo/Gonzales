@@ -42,6 +42,10 @@ CASES = {
     "closed-cavity": dict(
         scene="Scenes/closed-cavity-equilibrium.pbrt", expect=1.0, res="32x32",
         crop=None, strict=True,
+        # VCM reads PT's maxdepth-9 value (0.84), not 1: every VCM strategy is
+        # limited to the same full-path length min(maxdepth, 9) (bdpt.mojo's
+        # _vcm_depth), and this cavity needs ~30 bounces. At maxdepth <= 9 VCM
+        # matches PT to 0.3%. The old 0.98 came from inconsistent limits.
         why="sealed rho=1 cavity, emitter L=1 -> equilibrium radiance L"),
     "env-furnace": dict(
         scene="Scenes/env-furnace-analytic.pbrt", expect=0.5, res="64x64",

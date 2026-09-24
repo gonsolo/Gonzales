@@ -125,6 +125,7 @@ def _dummy_sd() -> SceneDescriptor2_C:
         null_spectral_handle(),
         Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Float32(0), Float32(1), Int32(9),
     )
 
 # ── _pdf_solid_to_area ────────────────────────────────────────────────────────
@@ -324,6 +325,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         null_spectral_handle(),
         Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Float32(0), Float32(1), Int32(9),
     )
 
     var cv = BDPTVertex(
@@ -339,7 +341,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
     var lv = BDPTVertex(
         pos=Point3f(5.0, 5.0, 20.0), normal=Vec3f(0.0, 0.0, -1.0), shading_normal=Vec3f(0.0, 0.0, -1.0),
         beta=SpectralSample(Float32(2.0)), alb=RGB(Float32(1.0)),
-        pdf_fwd=Float32(0), pdf_bwd=Float32(0),
+        pdf_fwd=Float32(0.25), pdf_bwd=Float32(0),   # a real light origin: 1 / (area * n_lights)
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(1), is_delta=Int32(0), is_light=Int32(1),
         med_idx=Int32(-1), mat_kind=LobeKind.lambertian, wo=Vec3f(Float32(0)),
@@ -350,7 +352,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
     lvc[unsafe_offset=0] = lv
     var scratch = unsafe_alloc[Intersection_C](1)
 
-    var result = _bdpt_connect_to_cache(cv, sd, False, scratch, lvc, 0, 1, Float32(0))
+    var result = _bdpt_connect_to_cache(cv, sd, False, scratch, lvc, 0, 1, Float32(0), 1)
 
     # Independently compute the single-connection value _connect would
     # produce, then verify the exhaustive-sum-over-the-path wrapper against
@@ -362,7 +364,11 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
     # both cosines 1) times the bare 1/d^2 between them -- no separate G term.
     var g = Float32(1.0) / Float32(100.0)
     var beta_prod = Float32(3.0) * Float32(2.0)
-    var expected = f_cam.v0 * f_lgt[0] * g * beta_prod  # unoccluded, Tr=1; all channels equal here
+    # s=1 MIS (SmallVCM DirectIllumination): the only competitor with these
+    # zero camera carries is the camera BSDF hitting the light, so
+    # w = 1 / (1 + pdfA_bsdf / p_A), pdfA_bsdf = (cos/pi) * cos_l / d^2.
+    var w_s1 = Float32(1.0) / (Float32(1.0) + (Float32(1.0) / Float32(3.14159265) / Float32(100.0)) / Float32(0.25))
+    var expected = f_cam.v0 * f_lgt[0] * g * beta_prod * w_s1  # unoccluded, Tr=1; all channels equal here
 
     assert_true(_close(result.v0, expected))
     assert_true(_close(result.v1, expected))

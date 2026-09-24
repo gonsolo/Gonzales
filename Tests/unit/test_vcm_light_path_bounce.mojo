@@ -130,6 +130,7 @@ def _build_scene() -> SceneDescriptor2_C:
         null_spectral_handle(),
         Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Float32(0), Float32(1), Int32(9),
     )
 
 # Both subpath halves of a VCM pass share one hero-wavelength set (see

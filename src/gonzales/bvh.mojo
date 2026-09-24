@@ -147,6 +147,18 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
     # checking `res` first.
     var normalSlopeMaps: Pointer[NormalSlopeMap_C, MutUntrackedOrigin]
 
+    # VCM's variance-aware merge MIS (bdpt.mojo's _vcm_keep): the PREVIOUS
+    # pass's per-bucket light-vertex counts, the cell size they were hashed
+    # with, and the factor that rescales a count to this pass's radius.
+    # Dangling for every non-VCM caller and for a VCM pass with no previous
+    # pass yet, in which case every keep-probability reads as 1.
+    var vcmKeepCounts:  Pointer[Int32, MutUntrackedOrigin]
+    var vcmKeepInvCell: Float32
+    var vcmKeepScale:   Float32
+    # VCM's full-path length limit: every strategy produces only paths with at
+    # most this many non-delta interior vertices (bdpt.mojo's _vcm_depth).
+    var vcmMaxDepth:    Int32
+
 @always_inline
 def _mk_sd_full(
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
@@ -207,6 +219,10 @@ def _mk_sd_full(
     gridCount: Int64 = Int64(0),
     nvdbGrids: Pointer[NvdbGrid_C, MutUntrackedOrigin] = Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
     nvdbGridCount: Int64 = Int64(0),
+    vcmKeepCounts: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+    vcmKeepInvCell: Float32 = Float32(0),
+    vcmKeepScale: Float32 = Float32(1),
+    vcmMaxDepth: Int32 = Int32(9),
 ) -> SceneDescriptor2_C:
     """Builds a complete SceneDescriptor2_C from raw GPU device pointers so
     the SAME `sd.field`-based traversal code a CPU-side function already
@@ -260,6 +276,7 @@ def _mk_sd_full(
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         gpuTextures=gpuTextures, gpuTextureCount=gpuTextureCount,
         normalSlopeMaps=Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
+        vcmKeepCounts=vcmKeepCounts, vcmKeepInvCell=vcmKeepInvCell, vcmKeepScale=vcmKeepScale, vcmMaxDepth=vcmMaxDepth,
     )
 
 # ── Infinite/distant-light emission + NEE sampling (shared by bdpt.mojo and

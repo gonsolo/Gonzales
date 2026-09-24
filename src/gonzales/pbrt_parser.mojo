@@ -3600,6 +3600,10 @@ def mojo_parsed_scene_descriptor(
     sd[unsafe_offset=0].textures         = psc[unsafe_offset=0].tex_filenames
     sd[unsafe_offset=0].textureCount     = Int64(psc[unsafe_offset=0].tex_count)
     sd[unsafe_offset=0].normalSlopeMaps  = psc[unsafe_offset=0].nmaps
+    sd[unsafe_offset=0].vcmKeepCounts    = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
+    sd[unsafe_offset=0].vcmKeepInvCell   = Float32(0)
+    sd[unsafe_offset=0].vcmKeepScale     = Float32(1)
+    sd[unsafe_offset=0].vcmMaxDepth      = psc[unsafe_offset=0].max_depth
     sd[unsafe_offset=0].distantLights    = psc[unsafe_offset=0].distant_lights
     sd[unsafe_offset=0].distantLightCount = Int64(psc[unsafe_offset=0].distant_count)
     sd[unsafe_offset=0].pointLights      = psc[unsafe_offset=0].point_lights
