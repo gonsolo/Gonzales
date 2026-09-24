@@ -76,18 +76,31 @@ def pass_wavelengths(pass_idx: Int) -> SampledWavelengths:
     Measured: 4% CPU/GPU chroma mismatch on cornell-box, collapsing to 0.3%
     (ordinary atomics-ordering noise) once fixed.
 
-    TRAP 2: must be a HASH of the pass index, not a low-discrepancy
-    sequence over it -- sample_wavelengths_uniform is itself a lattice
-    (Wilkie et al. hero sampling at fixed span/4 strides), so a second
-    regular lattice on top of it aliases against the CIE curves instead of
-    covering them. Measured chroma error vs pbrt: 0.0135 (golden-ratio),
-    0.0120 (Halton-style), 0.0026 (this hash).
+    TRAP 2: a plain low-discrepancy sequence over u aliases:
+    sample_wavelengths_uniform is itself a lattice (Wilkie et al. hero
+    sampling at fixed span/4 strides), so u and u + 1/4 give the same set,
+    and e.g. a base-2 radical inverse of u repeats each set for 4 passes.
+    A hash avoids that but leaves an O(1/sqrt(N)) error that is the SAME
+    for every seed and scales the whole image: -3.7% luminance, -8% blue
+    at 128 spp on the white furnace. The sequence goes on frac(4u)
+    instead: within 0.1% per channel at every spp from 32 to 512.
 
     Consequence: the wavelength schedule is the same for every --seed,
     which is fine -- everything else in the render is still seeded, and a
     fixed schedule is one fewer thing that could differ between backends."""
+    # The 4 lanes are a span/4 lattice, so u and u + 1/4 give the same SET
+    # of wavelengths: only frac(4u) matters. It is a base-2 radical inverse
+    # of the pass index, so N passes cover the sets at O(1/N); the hashed
+    # quarter only rotates which lane is the hero.
+    var r = UInt32(pass_idx)
+    r = (r << 16) | (r >> 16)
+    r = ((r & 0x00FF00FF) << 8) | ((r & 0xFF00FF00) >> 8)
+    r = ((r & 0x0F0F0F0F) << 4) | ((r & 0xF0F0F0F0) >> 4)
+    r = ((r & 0x33333333) << 2) | ((r & 0xCCCCCCCC) >> 2)
+    r = ((r & 0x55555555) << 1) | ((r & 0xAAAAAAAA) >> 1)
     var h = mix_bits_u64(UInt64(pass_idx) + UInt64(0x9E3779B97F4A7C15))
-    var u = Float32(h >> UInt32(8)) * Float32(1.0 / 16777216.0)
+    var quarter = Float32(h & UInt32(3))
+    var u = (Float32(r >> UInt32(8)) * Float32(1.0 / 16777216.0) + quarter) * Float32(0.25)
     return sample_wavelengths_uniform(u)
 
 # ── Spectral radiance sample (4-wide, tied to one SampledWavelengths) ──────

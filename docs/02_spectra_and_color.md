@@ -61,19 +61,23 @@ and pinning one shared wavelength set collapsed that to 0.3% residual
 (ordinary atomic-accumulation ordering noise).
 
 **A second subtlety: how the pass-to-wavelength schedule is generated
-matters more than it looks.** The natural choice — a low-discrepancy
-sequence (golden-ratio or Halton-style strides) over the pass index — turns
-out to alias against the hero-sampling stride itself: hero sampling is
-already a lattice (four wavelengths at fixed span/4 offsets), so stacking a
-second regular lattice on top of it produces a doubly-regular pattern that
-systematically under- or over-samples parts of the CIE curves rather than
-covering them. A hash of the pass index avoids this. Measured chroma error
-against a reference, on a saturated test scene: 0.0135 for a golden-ratio
-sequence, 0.0120 for a Halton-style one, 0.0026 for a hash — an order of
-magnitude better, from simply not being regular. One consequence worth
-knowing: the wavelength schedule is therefore the same across every
-`--seed`, which is fine (everything else in the render is still seeded, and
-a fixed schedule is one fewer thing that could differ between CPU and GPU).
+matters more than it looks.** Hero sampling is already a lattice: four
+wavelengths at fixed span/4 offsets, so a sample `u` and `u + 1/4` produce
+the same set. A low-discrepancy sequence placed directly on `u` stacks a
+second regular lattice on top of the first. A base-2 radical inverse, for
+example, repeats each wavelength set for four passes. Measured chroma error
+on a saturated scene: 0.0135 for a golden-ratio sequence on `u`, 0.0120 for
+a Halton-style one, 0.0026 for a hash.
+
+A hash has its own flaw. The schedule depends only on the pass index, so its
+O(1/√N) error is the same for every `--seed` and scales the whole image. At
+128 spp the white furnace read 0.963 in luminance and 0.917 in blue, with
+the same error on every seed. The fix is to put the sequence where the
+lattice can't alias: `frac(4u)` picks the set and gets a radical inverse of
+the pass index, and the remaining quarter only rotates which lane is the
+hero. The furnace then reads within 0.1% per channel at every spp from 32
+to 512. The schedule is still the same across seeds, which is fine: it no
+longer carries an error that seeds would need to average out.
 
 ## RGB ↔ Spectrum Conversion
 
