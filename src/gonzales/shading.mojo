@@ -1017,7 +1017,8 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     if cw.event == COAT_REFLECT:
         # Glossy reflection off the coat (rough ⇒ GGX lobe, smooth ⇒ mirror).
         var refl = cw.wi
-        path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(refl[0], refl[1], refl[2]))
+        var org_r = spawn_origin(hit_point, geo_normal, refl)
+        path_ptr[].ray = Ray_C(Point3f(org_r[0], org_r[1], org_r[2]), Vec3f(refl[0], refl[1], refl[2]))
         # cw.beta already carries the rough lobe's G2(wo,wi)/G1(wo)
         # masking-shadowing weight (1 for a smooth coat). Scalar multiply,
         # not a spectral upsample: on the REFLECT path beta is achromatic by
@@ -1145,7 +1146,8 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].pcgState = pcg.state
         return
 
-    path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(exit_dir[0], exit_dir[1], exit_dir[2]))
+    var org_x = spawn_origin(hit_point, geo_normal, exit_dir)
+    path_ptr[].ray = Ray_C(Point3f(org_x[0], org_x[1], org_x[2]), Vec3f(exit_dir[0], exit_dir[1], exit_dir[2]))
     # NEE-only for direct lighting: the layered exit ray's true pdf is
     # intractable to combine here (refracted, multi-bounce), so this ray's
     # *direct* light contribution must be DROPPED -- NEE supplies direct
@@ -1228,6 +1230,23 @@ def _apply_russian_roulette(
 # happens once those are known. bs.is_valid is always 1 for the two dielectric
 # variants, so the early-return there is a harmless no-op for them.
 @always_inline
+@always_inline
+def spawn_origin(hit_point: Vec3f, geo_n: Vec3f, dir: Vec3f) -> Vec3f:
+    """Origin for a ray leaving a surface along `dir`, pbrt's SpawnRay rule:
+    offset to whichever side of the GEOMETRIC surface `dir` points to.
+
+    `hit_point` is the usual front-side point (surface + geo_n * 1e-4). A bump
+    or normal map tilts the shading normal, so a direction sampled around it
+    can point below the geometric surface. Launched from the front-side point,
+    such a ray re-hit the same surface from above and re-scattered upward,
+    keeping light that pbrt's ray -- spawned below, into the geometry -- loses:
+    barcelona-pavilion-day's bump-mapped deck and water read 4-10% bright in
+    every indirect bounce (exact once the bump maps were removed)."""
+    if dot(dir, geo_n) < Float32(0.0):
+        return hit_point - geo_n * Float32(0.0002)
+    return hit_point
+
+
 def _finish_delta_bounce(
     path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     mut pcg: PCG32,
@@ -1236,13 +1255,15 @@ def _finish_delta_bounce(
     hit_point: Vec3f,
     default_albedo: RGB,
     charge_depth: Bool = True,
+    geo_n: Vec3f = Vec3f(0),   # REFLECTIVE callers pass it (see spawn_origin); dielectrics already chose a side
 ):
     if bs.is_valid == Int8(0):
         path_ptr[].active = 0
         path_ptr[].pcgState = pcg.state
         return
 
-    path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
+    var org = spawn_origin(hit_point, geo_n, bs.wi) if dot(geo_n, geo_n) > Float32(0.0) else hit_point
+    path_ptr[].ray = Ray_C(Point3f(org[0], org[1], org[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
         path_ptr[].albedo = default_albedo
     path_ptr[].throughput *= f_spec
@@ -1708,7 +1729,8 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         var alpha_iso = max(alpha_x, alpha_y)
         _shade_conductor_nee[enqueue_shadow](path_ptr, ctx, normal, wo, hit_point, mat_eff.albedo, alpha_iso, pcg)
         path_ptr[].pcgState = pcg.state
-        path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
+        var org_c = spawn_origin(hit_point, geo_normal, bs.wi)
+        path_ptr[].ray = Ray_C(Point3f(org_c[0], org_c[1], org_c[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
             path_ptr[].albedo = mat_eff.albedo
         path_ptr[].throughput *= _to_spec_weight(ctx, bs.f, path_ptr[].wavelengths)
@@ -1718,7 +1740,7 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         var u_rr = pcg.next_float()
         _apply_russian_roulette(path_ptr, pcg, u_rr)
     else:
-        _finish_delta_bounce(path_ptr, pcg, bs, _to_spec_weight(ctx, bs.f, path_ptr[].wavelengths), hit_point, mat_eff.albedo)
+        _finish_delta_bounce(path_ptr, pcg, bs, _to_spec_weight(ctx, bs.f, path_ptr[].wavelengths), hit_point, mat_eff.albedo, geo_n=geo_normal)
 
 
 # ── Measured (tabulated Dupuy & Jakob BxDF) ──────────────────────────────────
@@ -1871,7 +1893,8 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].active = 0
         return
 
-    path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(wi[0], wi[1], wi[2]))
+    var org_m = spawn_origin(hit_point, hit_normal, wi)
+    path_ptr[].ray = Ray_C(Point3f(org_m[0], org_m[1], org_m[2]), Vec3f(wi[0], wi[1], wi[2]))
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
         # Denoiser AOV only -- albedo is a colour-space quantity, so the RGB
         # conversion is legitimate here (and only here). Transport stays
@@ -1938,7 +1961,8 @@ def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         var alpha_cc = (max(mat.roughU, Float32(0.0001)) + max(mat.roughV, Float32(0.0001))) * Float32(0.5)
         _shade_conductor_nee[enqueue_shadow](path_ptr, ctx, normal, wo, hit_point, mat.albedo, alpha_cc, pcg)
         path_ptr[].pcgState = pcg.state
-        path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
+        var org_cc = spawn_origin(hit_point, normal, bs.wi)
+        path_ptr[].ray = Ray_C(Point3f(org_cc[0], org_cc[1], org_cc[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
             path_ptr[].albedo = mat.albedo
         path_ptr[].throughput *= _to_spec_weight(ctx, bs.f, path_ptr[].wavelengths)
@@ -1948,7 +1972,7 @@ def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         var u_rr = pcg.next_float()
         _apply_russian_roulette(path_ptr, pcg, u_rr)
     else:
-        _finish_delta_bounce(path_ptr, pcg, bs, _to_spec_weight(ctx, bs.f, path_ptr[].wavelengths), hit_point, mat.albedo)
+        _finish_delta_bounce(path_ptr, pcg, bs, _to_spec_weight(ctx, bs.f, path_ptr[].wavelengths), hit_point, mat.albedo, geo_n=normal)
 
 
 # Mix material: randomly select one of two sub-materials using amount as probability.
@@ -4572,7 +4596,8 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         cos_theta = bsdf_s[1] * PI  # cos_theta = pdf * π
         pdf_mix = bsdf_s[1]
 
-    path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(dir[0], dir[1], dir[2]))
+    var org_d = spawn_origin(hit_point, gc.geo_normal, dir)
+    path_ptr[].ray = Ray_C(Point3f(org_d[0], org_d[1], org_d[2]), Vec3f(dir[0], dir[1], dir[2]))
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
         path_ptr[].albedo = alb
     # Store mixture PDF for next-bounce MIS (area light hit, env light miss)
