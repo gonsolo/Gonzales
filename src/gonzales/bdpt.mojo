@@ -11,6 +11,7 @@ from max.gpu.host import DeviceContext, DeviceBuffer
 from max.algorithm import parallelize
 from std.math import sqrt, cos, sin, tan, floor, log, exp, max, min, abs, ceildiv, pow
 from std.memory.alloc import unsafe_alloc
+from std.memory import bitcast
 from std.atomic import Atomic
 from .geometry import (
     face_toward,
@@ -1396,8 +1397,76 @@ def _bdpt_connect_to_cache_deferred(
 # sppm.mojo's _HSIZE bucket count and _hash_cell function directly -- no
 # reason for the grid math itself to differ between the two use sites.
 
+# Stochastic merge thinning. The bucket table is 2 * _HSIZE Int32s: heads[h]
+# is bucket h's chain head, heads[_HSIZE + h] how many light vertices fell
+# into it before thinning. A bucket holding n > cap of them keeps each with
+# probability cap / n, and the gather scales every survivor by n / cap --
+# Russian roulette on photons, so the merge estimate's expectation is
+# unchanged and the MIS weights (which never see the count) still sum to one.
+# Only over-full buckets pay variance for it.
+#
+# Prior art, photon mapping only: Hachisuka & Jensen 2010's "stochastic
+# hashing" (cap 1), made unbiased by Davidovic et al. 2014 ("rectified
+# stochastic hash grid", TOG 33(3) s6.2), and Kern et al. 2023 (JCGT 12(1)
+# s4.1), which reservoir-samples cap photons per cell and weights n/cap. This
+# is the Bernoulli form of the same idea, applied to VCM's merge grid.
+#
+# Why: every light path starting at one tiny bright emitter piles its
+# vertices into a handful of cells. barcelona-pavilion-night's candle
+# lanterns did exactly that, and walking those chains at every nearby camera
+# vertex was 92% of the render (745 s at 640x340/64 spp against 38 s for the
+# day scene). With the cap: 134 s. A cap sweep (320x170, 16 spp, same seed)
+# took 37 / 18 / 13 / 12 / 11.5 s for none / 1024 / 256 / 64 / 16; the noise
+# thinning added at 256 was ~7% of the render's own seed-to-seed noise in the
+# lantern zone. Below 256 the gain flattens (merging stops being the cost).
+comptime _VCM_MERGE_BUCKET_CAP = Int32(256)
+
 def _bdpt_reset_merge_cell(heads: Pointer[Int32, MutUntrackedOrigin], h: Int):
     heads[unsafe_offset=h] = Int32(-1)
+    heads[unsafe_offset=_HSIZE + h] = Int32(0)
+
+@always_inline
+def _bdpt_merge_bucket_weight(heads: Pointer[Int32, MutUntrackedOrigin], h: Int) -> Float32:
+    """1 / keep-probability of bucket h's surviving light vertices."""
+    var n = heads[unsafe_offset=_HSIZE + h]
+    if n <= _VCM_MERGE_BUCKET_CAP:
+        return Float32(1)
+    return Float32(n) / Float32(_VCM_MERGE_BUCKET_CAP)
+
+@always_inline
+def _bdpt_merge_slot_bucket(
+    k: Int,
+    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
+    lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
+    inv_cell: Float32,
+) -> Int:
+    """Hash bucket of LVC slot `k`, or -1 for an unused tail slot of its
+    light path's per-path slice (VCM Stage 2b storage layout, see
+    _bdpt_store_lvc_vertex's docstring -- `k` ranges over the full
+    `n_light_paths * _BDPT_MAX_VERTS` capacity, not just the vertices
+    actually stored)."""
+    var lp_idx = k // _BDPT_MAX_VERTS
+    var local_idx = k % _BDPT_MAX_VERTS
+    if local_idx >= Int(lvc_path_len[unsafe_offset=lp_idx]):
+        return -1
+    var ix = Int(floor(lvc[unsafe_offset=k].pos.x * inv_cell))
+    var iy = Int(floor(lvc[unsafe_offset=k].pos.y * inv_cell))
+    var iz = Int(floor(lvc[unsafe_offset=k].pos.z * inv_cell))
+    return _hash_cell(ix, iy, iz)
+
+@always_inline
+def _bdpt_count_merge_vertex(
+    k: Int,
+    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
+    lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
+    heads: Pointer[Int32, MutUntrackedOrigin],
+    inv_cell: Float32,
+):
+    """First pass of the grid build: tally slot `k` into its bucket's count."""
+    var h = _bdpt_merge_slot_bucket(k, lvc, lvc_path_len, inv_cell)
+    if h < 0:
+        return
+    _ = Atomic.fetch_add(heads.unsafe_offset(_HSIZE + h), Int32(1))
 
 def _bdpt_insert_merge_vertex[use_gpu: Bool](
     k: Int,
@@ -1407,20 +1476,26 @@ def _bdpt_insert_merge_vertex[use_gpu: Bool](
     heads: Pointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
 ):
-    """Insert LVC slot `k` into the merge hash grid, unless it's an unused
-    tail slot of its light path's per-path slice (VCM Stage 2b storage
-    layout, see _bdpt_store_lvc_vertex's docstring — `k` ranges over the
-    full `n_light_paths * _BDPT_MAX_VERTS` capacity, not just the vertices
-    actually stored). Comptime-branches only on the bucket-head update
-    primitive -- identical pattern to sppm.mojo's _sppm_insert_photon[use_gpu]."""
-    var lp_idx = k // _BDPT_MAX_VERTS
-    var local_idx = k % _BDPT_MAX_VERTS
-    if local_idx >= Int(lvc_path_len[unsafe_offset=lp_idx]):
+    """Second pass of the grid build: insert LVC slot `k` into the merge hash
+    grid, unless it's an unused tail slot or thinned out of an over-full
+    bucket (see _VCM_MERGE_BUCKET_CAP). Comptime-branches only on the
+    bucket-head update primitive -- identical pattern to sppm.mojo's
+    _sppm_insert_photon[use_gpu]."""
+    var h = _bdpt_merge_slot_bucket(k, lvc, lvc_path_len, inv_cell)
+    if h < 0:
         return
-    var ix = Int(floor(lvc[unsafe_offset=k].pos.x * inv_cell))
-    var iy = Int(floor(lvc[unsafe_offset=k].pos.y * inv_cell))
-    var iz = Int(floor(lvc[unsafe_offset=k].pos.z * inv_cell))
-    var h = _hash_cell(ix, iy, iz)
+    var n = heads[unsafe_offset=_HSIZE + h]
+    if n > _VCM_MERGE_BUCKET_CAP:
+        # Keep with probability cap / n. The coin hashes the slot and its
+        # position, so it is fresh every pass and blind to the photon's flux.
+        var pos = lvc[unsafe_offset=k].pos
+        var bits = bitcast[DType.uint32, 4](SIMD[DType.float32, 4](pos.x, pos.y, pos.z, Float32(0)))
+        var z = UInt64(k) * UInt64(0x9E3779B97F4A7C15) ^ (UInt64(bits[0]) << 32 | UInt64(bits[1])) ^ UInt64(bits[2])
+        z = (z ^ (z >> 30)) * UInt64(0xBF58476D1CE4E5B9)
+        z = (z ^ (z >> 27)) * UInt64(0x94D049BB133111EB)
+        z ^= z >> 31
+        if UInt64(z >> 32) * UInt64(n) >= UInt64(_VCM_MERGE_BUCKET_CAP) << 32:
+            return
     comptime if use_gpu:
         var old = Atomic._xchg(heads.unsafe_offset(h), Int32(k))
         merge_next[unsafe_offset=k] = old
@@ -1446,6 +1521,10 @@ def _bdpt_build_merge_grid(
     def reset_one(i: Int) {imm}:
         _bdpt_reset_merge_cell(heads, i)
     parallelize(reset_one, _HSIZE)
+
+    def count_one(k: Int) {imm}:
+        _bdpt_count_merge_vertex(k, lvc, lvc_path_len, heads, inv_cell)
+    parallelize(count_one, n_light_paths * _BDPT_MAX_VERTS)
 
     def insert_one(k: Int) {imm}:
         _bdpt_insert_merge_vertex[True](k, lvc, lvc_path_len, merge_next, heads, inv_cell)
@@ -1558,6 +1637,7 @@ def _bdpt_merge_from_cache(
         for ddy in range(-1, 2):
             for ddz in range(-1, 2):
                 var h = _hash_cell(cix + ddx, ciy + ddy, ciz + ddz)
+                var bucket_w = _bdpt_merge_bucket_weight(heads, h)
                 var k = Int(heads[unsafe_offset=h])
                 while k != -1:
                     var lv = lvc[unsafe_offset=k]
@@ -1661,7 +1741,7 @@ def _bdpt_merge_from_cache(
                                 var w_light = lv.dVCM * mis_vc_weight_factor + lv.dVM * camera_bsdf_dir_pdf_w
                                 var w_camera = cv.dVCM * mis_vc_weight_factor + cv.dVM * camera_bsdf_rev_pdf_w
                                 w = Float32(1) / (w_light + Float32(1) + w_camera)
-                            total += f_cv * lv.beta * w
+                            total += f_cv * lv.beta * (w * bucket_w)
                     k = Int(merge_next[unsafe_offset=k])
     return total * cv.beta * norm
 
@@ -5186,7 +5266,7 @@ def _bdpt_render_core(
     # each `si` below from `merge_radius_1`, the same initial 3%-of-scene-
     # diameter value Stage 1 used as its (then-fixed) radius.
     var (_scene_center, scene_radius) = _scene_bounding_sphere(sd)
-    var merge_heads = unsafe_alloc[Int32](_HSIZE)
+    var merge_heads = unsafe_alloc[Int32](2 * _HSIZE)   # heads | counts, see _VCM_MERGE_BUCKET_CAP
     var merge_next = unsafe_alloc[Int32](max(lvc_cap, 1))
     # t=1 splat records: one slot per potential light vertex.
     # Continuous raster position per splat record (x < 0 marks an empty slot)
@@ -6414,6 +6494,19 @@ def bdpt_merge_grid_reset_gpu(heads: Pointer[Int32, MutUntrackedOrigin], hsize_d
     _bdpt_reset_merge_cell(heads, tid)
 
 
+def bdpt_merge_grid_count_gpu(
+    lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
+    lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
+    lvc_cap_dp: Int64,
+    heads: Pointer[Int32, MutUntrackedOrigin],
+    inv_cell: Float32,
+):
+    var k = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if k >= Int(lvc_cap_dp):
+        return
+    _bdpt_count_merge_vertex(k, lvc, lvc_path_len, heads, inv_cell)
+
+
 def bdpt_merge_grid_insert_gpu(
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
     lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
@@ -6482,7 +6575,7 @@ def vcm_render_gpu(
             var path_len_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[Int32]())
             # VCM vertex merging (Stage 1) grid buffers — see vcm_render's
             # matching CPU allocation for the merge_r2/merge_norm derivation.
-            var merge_heads_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](_HSIZE * size_of[Int32]())
+            var merge_heads_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](2 * _HSIZE * size_of[Int32]())   # heads | counts
             var merge_next_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(lvc_cap, 1) * size_of[Int32]())
             var inter_light_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[Intersection_C]())
             var inter_cam_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection_C]())
@@ -6641,6 +6734,9 @@ def vcm_render_gpu(
                 # without an explicit synchronize() here.
                 handle[].ctx.enqueue_function[bdpt_merge_grid_reset_gpu](
                     merge_heads_ptr, Int64(_HSIZE), grid_dim=grid_hsize, block_dim=block_size)
+                handle[].ctx.enqueue_function[bdpt_merge_grid_count_gpu](
+                    lvc_ptr, path_len_ptr, Int64(lvc_cap), merge_heads_ptr, merge_inv_cell,
+                    grid_dim=grid_merge_ins, block_dim=block_size)
                 handle[].ctx.enqueue_function[bdpt_merge_grid_insert_gpu](
                     lvc_ptr, path_len_ptr, Int64(lvc_cap), merge_next_ptr, merge_heads_ptr, merge_inv_cell,
                     grid_dim=grid_merge_ins, block_dim=block_size)
@@ -7018,7 +7114,7 @@ def vcm_render_gpu_wavefront(
             var path_len_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[Int32]())
             # VCM vertex merging (Stage 1) grid buffers — see vcm_render's
             # matching CPU allocation for the merge_r2/merge_norm derivation.
-            var merge_heads_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](_HSIZE * size_of[Int32]())
+            var merge_heads_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](2 * _HSIZE * size_of[Int32]())   # heads | counts
             var merge_next_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(lvc_cap, 1) * size_of[Int32]())
             var inter_light_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[Intersection_C]())
             var inter_cam_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection_C]())
@@ -7256,6 +7352,9 @@ def vcm_render_gpu_wavefront(
                 # without an explicit synchronize() here.
                 handle[].ctx.enqueue_function[bdpt_merge_grid_reset_gpu](
                     merge_heads_ptr, Int64(_HSIZE), grid_dim=grid_hsize, block_dim=block_size)
+                handle[].ctx.enqueue_function[bdpt_merge_grid_count_gpu](
+                    lvc_ptr, path_len_ptr, Int64(lvc_cap), merge_heads_ptr, merge_inv_cell,
+                    grid_dim=grid_merge_ins, block_dim=block_size)
                 handle[].ctx.enqueue_function[bdpt_merge_grid_insert_gpu](
                     lvc_ptr, path_len_ptr, Int64(lvc_cap), merge_next_ptr, merge_heads_ptr, merge_inv_cell,
                     grid_dim=grid_merge_ins, block_dim=block_size)

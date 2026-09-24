@@ -111,6 +111,11 @@ def _resolve_sppm_params(
 # lower bound because SPPM has no per-pixel light-path pairing at all.
 def _resolve_vcm_photons(vcm_photons_cli: Int32, n_pix: Int) -> Int:
     if vcm_photons_cli > Int32(0):
+        if Int(vcm_photons_cli) < n_pix:
+            # Said out loud: a silently raised count made a light-path sweep
+            # below n_pix look like "the light pass costs nothing".
+            print("Warning: --vcm-photons " + String(vcm_photons_cli) + " is below one light path per pixel; using "
+                  + String(n_pix) + " (connections pair every pixel with its own light path)")
         return max(Int(vcm_photons_cli), n_pix)
     return n_pix
 
