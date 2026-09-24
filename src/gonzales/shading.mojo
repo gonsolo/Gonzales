@@ -3,6 +3,7 @@ from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
 from .geometry import RGB, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, LobeKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, ShadowTask_C, LightSampler_C, light_sampler_sample, light_sampler_pdf, Instance_C, MeasuredBRDF_C, dot, face_toward, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI, PDF_DROP_DIRECT, _is_real_ptr, _atan2f, area_light_pick_triangle
+from .layered import layered_f, layered_sample, layered_pdf
 from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
 from .rng import PCG32
@@ -947,249 +948,83 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
         path_ptr[].albedo = alb
 
-    # Layered BSDF: smooth/rough dielectric coat over a Lambertian base, as a
-    # stochastic random walk -- see docs/05_reflection_models.md ("Coated and
-    # Layered BSDFs") for the model, the eta^2 derivation, and why gonzales's
-    # decorrelated-per-bounce NEE differs from PBRT's correlated LayeredBxDF.
     var ior = mat.emission.r            # coat IOR (eta_coat/eta_air), set at parse
-    # roughU/V already hold the resolved GGX alpha (remaproughness handling).
-    # 0 = smooth mirror coat (car paint); larger = soft sheen (tyres ~0.4).
     var coat_alpha = max(mat.roughU, mat.roughV)
-    var is_rough_coat = coat_alpha > Float32(0.001)
     var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])  # toward viewer
 
-    # THE shared layered-BSDF walk (bxdf.mojo). This function used to hand-roll
-    # it inline, and so did bdpt.mojo's two path branches -- three copies that
-    # drifted apart until 2026-09-15's audit found a different missing term in
-    # each. The walk now lives in one place; what stays HERE is this
-    # integrator's own bookkeeping (NEE at each recycle depth, path state,
-    # Russian roulette, the radiance-transport eta^2), which is exactly the
-    # split the stepper API exists to allow. See bxdf.mojo's CoatWalk block
-    # comment for why it is a stepper and not a single walk() call.
-    var cw = coat_walk_begin(normal, wo, alb, ior, coat_alpha, pcg)
-    var cos_o = cw.cos_o
+    # pbrt's LayeredBxDF (layered.mojo), in the shading frame. It replaced a
+    # coat walk whose rough-coat transmission was an analytic approximation:
+    # exact for a smooth coat, +14-16% on the base light through a rough one
+    # (barcelona-pavilion-day's travertine floors lit the ceiling 7% bright).
+    var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
+    var tx = Vec3f(frame.x.x, frame.x.y, frame.x.z)
+    var ty = Vec3f(frame.y.x, frame.y.y, frame.y.z)
+    var wo_l = Vec3f(dot(wo, tx), dot(wo, ty), dot(wo, normal))
+    var R = _to_spec_refl(ctx, alb, path_ptr[].wavelengths)
 
-    # Coat's own glossy NEE, evaluated unconditionally here -- TRAP: do NOT
-    # gate this on the reflect-vs-transmit coin flip below. It is the coat's
-    # BRDF response, independent of which lobe the continuation ray follows;
-    # gating it double-counts the interface Fresnel term (once via the
-    # gate's own probability, once via the half-vector Fresnel here) and
-    # silently biases low. Skipped for a smooth coat: a delta reflection
-    # can never land on a stochastic light sample.
-    if is_rough_coat and cos_o > Float32(0.0):
-        var ls_area_c = _sample_area_light_nee(ctx, hit_point, pcg)
-        var w_area_c = _nee_weight_coated_coat_lobe(ls_area_c, ior, coat_alpha, normal, wo)
-        if not w_area_c.is_black():
-            var contrib_area_c = path_ptr[].throughput * _to_spec_illum(ctx, w_area_c, path_ptr[].wavelengths)
-            # See _albedo_highlight_boost: NEE shadow rays never otherwise
-            # touch albedo, so a sharp specular highlight looks identical to
-            # its dark neighbours in the denoiser's guide buffer and gets
-            # smoothed away without this.
-            path_ptr[].albedo = _albedo_highlight_boost(path_ptr[].albedo, contrib_area_c)
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_area_c.wi, ls_area_c.dist * Float32(0.9999), contrib_area_c)
+    # NEE: every light type through the same layered f, MIS'd against the
+    # layered pdf (pbrt's PathIntegrator: power heuristic, NEE vs BSDF).
+    var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
+    _layered_nee[enqueue_shadow](path_ptr, ctx, hit_point, ls_area, ls_area.dist * Float32(0.9999), wo_l, tx, ty, normal, R, ior, coat_alpha)
+    for li in range(_nee_simple_light_count(ctx)):
+        var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
+        var ls = res[0].copy()
+        _layered_nee[enqueue_shadow](path_ptr, ctx, hit_point, ls, res[1], wo_l, tx, ty, normal, R, ior, coat_alpha)
+    for inf_i in range(ctx.lights.infinite_count):
+        var ls_inf = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
+        _layered_nee[enqueue_shadow](path_ptr, ctx, hit_point, ls_inf, ls_inf.dist, wo_l, tx, ty, normal, R, ior, coat_alpha)
 
-        # distant/point/sphere via the shared sampler. TRAP: sphere is the only
-        # pcg-consuming type of the 3 -- it must keep firing immediately after
-        # area/before infinite (below) if this loop's position ever changes,
-        # or the pcg sequence (and every render since) shifts.
-        for li_coat in range(_nee_simple_light_count(ctx)):
-            var res_coat = _nee_sample_simple_light(ctx, li_coat, hit_point, pcg)
-            var ls_coat = res_coat[0].copy()
-            var tmax_coat = res_coat[1]
-            var w_coat = _nee_weight_coated_coat_lobe(ls_coat, ior, coat_alpha, normal, wo)
-            if not w_coat.is_black():
-                var contrib_coat = path_ptr[].throughput * _to_spec_illum(ctx, w_coat, path_ptr[].wavelengths)
-                path_ptr[].albedo = _albedo_highlight_boost(path_ptr[].albedo, contrib_coat)
-                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_coat.wi, tmax_coat, contrib_coat)
-
-        for inf_i_coat in range(ctx.lights.infinite_count):
-            var ls_inf_coat = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i_coat], Point2f(pcg.next_float(), pcg.next_float()))
-            var w_inf_coat = _nee_weight_coated_coat_lobe(ls_inf_coat, ior, coat_alpha, normal, wo)
-            if not w_inf_coat.is_black():
-                var contrib_inf_coat = path_ptr[].throughput * _to_spec_illum(ctx, w_inf_coat, path_ptr[].wavelengths)
-                path_ptr[].albedo = _albedo_highlight_boost(path_ptr[].albedo, contrib_inf_coat)
-                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_inf_coat.wi, ls_inf_coat.dist, contrib_inf_coat)
-
-    # Reflect-vs-transmit coin flip, and (on transmit) the entry crossing's
-    # attenuation -- all inside the shared walk now.
-    coat_walk_enter(cw, pcg)
-
-    if cw.event == COAT_REFLECT:
-        # Glossy reflection off the coat (rough ⇒ GGX lobe, smooth ⇒ mirror).
-        var refl = cw.wi
-        var org_r = spawn_origin(hit_point, geo_normal, refl)
-        path_ptr[].ray = Ray_C(Point3f(org_r[0], org_r[1], org_r[2]), Vec3f(refl[0], refl[1], refl[2]))
-        # cw.beta already carries the rough lobe's G2(wo,wi)/G1(wo)
-        # masking-shadowing weight (1 for a smooth coat). Scalar multiply,
-        # not a spectral upsample: on the REFLECT path beta is achromatic by
-        # construction (see CoatWalk.beta's docs -- only scalar weights are
-        # applied before the base layer is ever touched), and pushing a bare
-        # weight through the reflectance upsampler does NOT come back
-        # unchanged per lane (docs/02_spectra_and_color.md, "A coefficient is
-        # not a color").
-        path_ptr[].throughput = path_ptr[].throughput * cw.beta.r
-        if is_rough_coat:
-            # MIS-gate the reflected ray against the NEE above (real pdf_bsdf,
-            # specularBounce=0) instead of the delta-lobe full-credit path.
-            path_ptr[].specularBounce = Int8(0)
-            path_ptr[].lastBsdfPdf = cw.pdf
-        else:
-            # Smooth mirror coat: single-strategy lobe (no NEE) ⇒
-            # specularBounce=1 takes full light on miss/hit, pdf is irrelevant.
-            path_ptr[].specularBounce = Int8(1)
-            path_ptr[].lastBsdfPdf = Float32(0.0)
-        path_ptr[].bounce += 1
-        path_ptr[].pcgState = pcg.state
-        return
-
-    if cw.event == COAT_ABSORB:
-        path_ptr[].active = 0              # reflected below the surface — discard
-        path_ptr[].pcgState = pcg.state
-        return
-
-    # Transmitted into the coat: random-walk the base/coat-underside layers.
-
-    while cw.event == COAT_WALKING:
-        # Russian-roulette the recycling walk itself once `beta` (the base
-        # albedo raised to the number of prior internal-reflection bounces at
-        # THIS hit point) has decayed enough that further bounces contribute
-        # negligibly — mirrors PBRT LayeredBxDF::f()'s own `depth>3` RR gate.
-        # Needed because NEE now fires every iteration (see below), not just
-        # the first, so an unbounded walk would mean unbounded shadow rays.
-        # Lives in the shared walk (coat_walk_at_base) so every integrator
-        # gets the same gate at the same point in the RNG stream.
-        if not coat_walk_at_base(cw, pcg):
-            break
-        var beta = cw.beta
-
-        # Diffuse base NEE, fired every recycle iteration -- see
-        # docs/05_reflection_models.md for why. `beta` (accumulated recycled-
-        # albedo attenuation) is applied by the CALLER here, not inside the
-        # weight function, since it's walk state the flat per-LightSample
-        # interface can't hold. Infinite lights (below) deliberately keep
-        # their own textured-CDF/cosine-hemisphere sampling rather than this
-        # generic path -- see project_light_bxdf_interfaces memory.
-        var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
-        var w_area = _nee_weight_coated_diffuse_base[True](ls_area, alb, ior, normal, coat_alpha)
-        if not w_area.is_black():
-            var contrib_area = path_ptr[].throughput * _to_spec_refl(ctx, beta, path_ptr[].wavelengths) * _to_spec_illum(ctx, w_area, path_ptr[].wavelengths)
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_area.wi, ls_area.dist * Float32(0.9999), contrib_area)
-
-        # distant/point/sphere via the shared sampler -- same TRAP as the
-        # coat-lobe block above (sphere must stay the last pcg-consuming
-        # type before infinite).
-        for li in range(_nee_simple_light_count(ctx)):
-            var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
-            var ls = res[0].copy()
-            var tmax = res[1]
-            var w = _nee_weight_coated_diffuse_base[True](ls, alb, ior, normal, coat_alpha)
-            if not w.is_black():
-                var contrib = path_ptr[].throughput * _to_spec_refl(ctx, beta, path_ptr[].wavelengths) * _to_spec_illum(ctx, w, path_ptr[].wavelengths)
-                _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls.wi, tmax, contrib)
-
-        # ── Env-map (infinite light) NEE at the base, every bounce (see area
-        #    lights above). Light enters via the coat so the contribution is
-        #    weighted by 1 - F(cos_env). The view-side coat transmittance is
-        #    implicit in reaching this branch (and, for depth>0, in `beta`). ──
-        if ctx.lights.infinite_count > 0:
-            for inf_i in range(ctx.lights.infinite_count):
-                var ilight = ctx.lights.infinite_lights[unsafe_offset=inf_i]
-                var env_dir: Vec3f
-                var env_rgb: RGB
-                var pdf_light: Float32
-                if ilight.tex_idx >= Int32(0) and _is_real_ptr(ilight.pixels_ptr) and _is_real_ptr(ilight.cdf_ptr) and ilight.cdf_w > Int32(0):
-                    var u1_env = pcg.next_float()
-                    var u2_env = pcg.next_float()
-                    var (dir_v, rgb_v, pdf_v) = _sample_infinite_light_textured(ilight, Point2f(u1_env, u2_env))
-                    env_dir = dir_v.to_simd()
-                    env_rgb = rgb_v
-                    pdf_light = pdf_v
-                else:
-                    var _env_s = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), normal)
-                    env_dir = _env_s[0]
-                    pdf_light = _env_s[1]
-                    env_rgb = ilight.scale
-                # The coat-transfer math itself (Fresnel, coat thickness,
-                # 1/eta^2, rough-facet G2/G1, MIS convention) is the SHARED
-                # one every other light type at this vertex goes through --
-                # only the sampling above stays bespoke. This branch used to
-                # inline its own copy of that formula and had silently
-                # dropped the 1/eta^2 factor (eta^2 = 2.25x too bright at
-                # eta 1.5, on every env-lit coateddiffuse surface) while the
-                # shared function had it right all along; sharing the math
-                # is what makes that class of drift impossible, so resist
-                # re-inlining it. `alb` is passed as 1 and applied by the
-                # caller below instead, so it keeps going through
-                # _to_spec_refl (a reflectance) rather than being bundled
-                # into the illuminant upsample with the light's radiance.
-                var ls_env = LightSample(env_dir, env_rgb, pdf_light,
-                                         Float32(100000.0), False, True)
-                var w_env = _nee_weight_coated_diffuse_base[True](
-                    ls_env, RGB(Float32(1.0)), ior, normal, coat_alpha)
-                if not w_env.is_black():
-                    var contrib_e = path_ptr[].throughput * _to_spec_refl(ctx, beta * alb, path_ptr[].wavelengths) * _to_spec_illum(ctx, w_env, path_ptr[].wavelengths)
-                    var t_max_env = Float32(100000.0)
-                    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, env_dir, t_max_env, contrib_e)
-
-        # Distant light NEE is now folded into the shared sweep above.
-
-        # One base bounce + the attempt to leave the coat (cosine-sampled base
-        # direction, albedo attenuation, chrominance floor, underside facet,
-        # Beer-Lambert per crossing, exit-or-recycle) -- all shared.
-        coat_walk_scatter(cw, pcg)
-
-    var exited = cw.event == COAT_EXIT
-    var exit_dir = cw.wi
-
-    if not exited:
+    # Continue with a layered sample. Its pdf is only proportional (pbrt's
+    # pdfIsProportional): the throughput uses it, MIS uses layered_pdf.
+    var bs = layered_sample(wo_l, pcg.next_float(), pcg.next_float(), pcg.next_float(), R, ior, coat_alpha, True)
+    if not bs.valid or bs.pdf <= Float32(0.0):
         path_ptr[].active = 0
         path_ptr[].pcgState = pcg.state
         return
-
-    var org_x = spawn_origin(hit_point, geo_normal, exit_dir)
-    path_ptr[].ray = Ray_C(Point3f(org_x[0], org_x[1], org_x[2]), Vec3f(exit_dir[0], exit_dir[1], exit_dir[2]))
-    # NEE-only for direct lighting: the layered exit ray's true pdf is
-    # intractable to combine here (refracted, multi-bounce), so this ray's
-    # *direct* light contribution must be DROPPED -- NEE supplies direct
-    # lighting at every walk iteration while the exit ray carries only the
-    # indirect bounces. Otherwise the multi-scatter exit and the
-    # single-scatter NEE both report the same direct term.
-    #
-    # PDF_DROP_DIRECT, not 0.0. The sphere/area/curve emitter handlers gate
-    # on `pdf_bsdf > 0` and so drop either way, but the env MISS handler
-    # defaults mis_weight to 1.0 and only OVERRIDES it when pdf > 0 -- that
-    # default exists for the camera ray, which also has lastBsdfPdf == 0 and
-    # must take the full background. A zero here was therefore indistinguish-
-    # able from "no scatter yet" and took FULL env radiance on top of NEE:
-    # the white-furnace test read 1.3008 where energy conservation demands
-    # 1.0, the excess being exactly this ray's 1/eta^2 throughput.
-    path_ptr[].lastBsdfPdf = PDF_DROP_DIRECT
-    path_ptr[].specularBounce = Int8(0)
-    # NO 1/eta^2 on the SAMPLED exit ray. The walk samples its exit direction
-    # by cosine-sampling inside the coat and refracting out, and that
-    # refraction's solid-angle Jacobian is exactly eta^2 -- it cancels the
-    # BTDF's 1/eta^2 radiance compression. NEE evaluates a GIVEN direction with
-    # no sampling Jacobian, so _nee_weight_coated_diffuse_base keeps its
-    # explicit 1/eta^2; the two consumers differ, and "once per consumer" was
-    # only half right. Applying it here made the exit ray 1/eta^2 too dark:
-    # escape-alone on the white furnace read 0.699/0.469/0.352 of the answer at
-    # eta 1.2/1.5/2.0 and reads 1.003/1.001/0.995 without it. Invisible in the
-    # furnace itself because this ray's DIRECT term is dropped (PDF_DROP_DIRECT)
-    # and NEE supplies it -- but every coated surface's INDIRECT lighting in
-    # the corpus was carrying the deficit.
-    path_ptr[].throughput *= _to_spec_weight(ctx, cw.beta, path_ptr[].wavelengths)
+    var wi = tx * bs.wi.x + ty * bs.wi.y + normal * bs.wi.z
+    var org = spawn_origin(hit_point, geo_normal, wi)
+    path_ptr[].ray = Ray_C(Point3f(org[0], org[1], org[2]), Vec3f(wi[0], wi[1], wi[2]))
+    path_ptr[].throughput *= bs.f * (abs(bs.wi.z) / bs.pdf)
+    if bs.specular:
+        path_ptr[].specularBounce = Int8(1)
+        path_ptr[].lastBsdfPdf = Float32(0.0)
+    else:
+        path_ptr[].specularBounce = Int8(0)
+        path_ptr[].lastBsdfPdf = layered_pdf(wo_l, bs.wi, ior, coat_alpha, True)
     path_ptr[].bounce += 1
 
     var u_rr = pcg.next_float()
     _apply_russian_roulette(path_ptr, pcg, u_rr)
 
 
-# Cap on throughput luminance after each RR survival compensation -- see
-# "Numerical hygiene" in docs/05_reflection_models.md for the general
-# technique (also used by coateddiffuse's chrominance floor above). 32x is
-# generous relative to a well-behaved path's throughput (~1 after RR) while
-# still cutting off blowups from a rare streak of TIR-bounce survivals many
-# orders of magnitude larger.
+@always_inline
+def _layered_nee[enqueue_shadow: Bool](
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    ctx: ShadeContext,
+    hit_point: Vec3f,
+    ls: LightSample,
+    tmax: Float32,
+    wo_l: Vec3f, tx: Vec3f, ty: Vec3f, n: Vec3f,
+    R: SpectralSample, ior: Float32, alpha: Float32,
+):
+    """One NEE sample against the layered coateddiffuse BSDF."""
+    if not ls.valid:
+        return
+    var wi_l = Vec3f(dot(ls.wi, tx), dot(ls.wi, ty), dot(ls.wi, n))
+    if wi_l.z * wo_l.z <= Float32(0.0):
+        return
+    var f = layered_f(wo_l, wi_l, R, ior, alpha, True)
+    if f.is_black():
+        return
+    var w = abs(wi_l.z)
+    if not ls.is_delta:
+        if ls.pdf <= Float32(0.0):
+            return
+        w *= power_heuristic(ls.pdf, layered_pdf(wo_l, wi_l, ior, alpha, True)) / ls.pdf
+    var contrib = path_ptr[].throughput * f * _to_spec_illum(ctx, ls.Li, path_ptr[].wavelengths) * w
+    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls.wi, tmax, contrib)
+
+
 comptime RR_THROUGHPUT_CLAMP: Float32 = 32.0
 
 # Russian roulette after the first bounce, then save PCG state -- the same

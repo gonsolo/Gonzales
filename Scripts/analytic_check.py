@@ -85,10 +85,16 @@ CASES["furnace-dielectric-inert"] = dict(
 # and only ~0.7% is the COAT_MAX_DEPTH truncation. Keep the recorded gap as a
 # REGRESSION guard -- it caught the +30% double count that used to sit here --
 # but do not read it as an energy-conservation failure.
+#
+# 2026-09-24: coateddiffuse is now pbrt's own LayeredBxDF (layered.mojo), so
+# the answer both coat cells are held to is PBRT's furnace value, rendered
+# from these same scenes with `pbrt --gpu` -- not 1.0. pbrt's layered model
+# loses energy by design (the coat's absorption, single-scattering loss at a
+# rough interface, the 10-bounce cap), and matching pbrt is the target.
 CASES["furnace-coateddiffuse"] = dict(
-    scene="Scenes/furnace/coateddiffuse.pbrt", expect=1.0, res="64x64",
+    scene="Scenes/furnace/coateddiffuse.pbrt", expect=0.8651, res="64x64",
     crop=(16, 48), strict=False,
-    why="coateddiffuse; coat absorbs at thickness 0.01, so Lo < L is CORRECT")
+    why="coateddiffuse, smooth coat; expect = pbrt-v4 --gpu's own furnace value")
 # The ROUGH sibling, and the reason it exists: furnace-coateddiffuse above is
 # roughness 0, so until 2026-09-22 the suite had NEVER tested a rough coat --
 # the mechanical reason "rough coats" stayed its named remainder. The rough
@@ -109,11 +115,11 @@ CASES["furnace-coateddiffuse"] = dict(
 # than VCM at every roughness, so any "make VCM match PT" comparison on a
 # rough coat is calibrating against the more wrong of the two.
 CASES["furnace-coateddiffuse-rough"] = dict(
-    scene="Scenes/furnace/coateddiffuse-rough.pbrt", expect=1.0, res="64x64",
+    scene="Scenes/furnace/coateddiffuse-rough.pbrt", expect=0.6462, res="64x64",
     crop=(16, 48), strict=False,
-    why="coateddiffuse at roughness 0.1; a rough coat loses far more than the "
-        "coat's own absorption -- tracked as a KNOWN DEFECT, see the header "
-        "above and project_vcm_rough_coat_mis")
+    why="coateddiffuse, roughness 0.1; expect = pbrt-v4 --gpu's own furnace value "
+        "(the table above predates the layered port: those losses were the old "
+        "coat model, and pbrt's model genuinely ends at 0.646)")
 # Conductor is swept over roughness and IS asserted at 1.0 -- as of
 # 2026-09-21 it conserves energy at every roughness. It did not used to, and
 # the reason it now does is four separate defects deep; the scene headers in
