@@ -158,6 +158,14 @@ struct SceneDescriptor2_C(TrivialRegisterPassable):
     # VCM's full-path length limit: every strategy produces only paths with at
     # most this many non-delta interior vertices (bdpt.mojo's _vcm_depth).
     var vcmMaxDepth:    Int32
+    # VCM's per-vertex merge radius (bdpt.mojo's _vcm_merge_radius_at): the
+    # camera position, the world size of `_VCM_FOOTPRINT_PIXELS` pixels at unit
+    # distance (0 = off, one global radius), and this pass's global radius.
+    var vcmCamX:        Float32
+    var vcmCamY:        Float32
+    var vcmCamZ:        Float32
+    var vcmFootprint:   Float32
+    var vcmMergeR:      Float32
 
 @always_inline
 def _mk_sd_full(
@@ -223,6 +231,8 @@ def _mk_sd_full(
     vcmKeepInvCell: Float32 = Float32(0),
     vcmKeepScale: Float32 = Float32(1),
     vcmMaxDepth: Int32 = Int32(9),
+    vcmCamX: Float32 = Float32(0), vcmCamY: Float32 = Float32(0), vcmCamZ: Float32 = Float32(0),
+    vcmFootprint: Float32 = Float32(0), vcmMergeR: Float32 = Float32(0),
 ) -> SceneDescriptor2_C:
     """Builds a complete SceneDescriptor2_C from raw GPU device pointers so
     the SAME `sd.field`-based traversal code a CPU-side function already
@@ -277,6 +287,7 @@ def _mk_sd_full(
         gpuTextures=gpuTextures, gpuTextureCount=gpuTextureCount,
         normalSlopeMaps=Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
         vcmKeepCounts=vcmKeepCounts, vcmKeepInvCell=vcmKeepInvCell, vcmKeepScale=vcmKeepScale, vcmMaxDepth=vcmMaxDepth,
+        vcmCamX=vcmCamX, vcmCamY=vcmCamY, vcmCamZ=vcmCamZ, vcmFootprint=vcmFootprint, vcmMergeR=vcmMergeR,
     )
 
 # ── Infinite/distant-light emission + NEE sampling (shared by bdpt.mojo and

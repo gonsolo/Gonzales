@@ -124,6 +124,7 @@ def _build_scene() -> SceneDescriptor2_C:
         Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Float32(0), Float32(1), Int32(9),
+        Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
     )
 
 def _identity_camera_matrices() -> Tuple[Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]]:

@@ -1283,7 +1283,7 @@ def _bdpt_connect_to_camera(
     #   weight = 1 / (wLight + 1)
     var (_dp, rev_pdf_w) = _bdpt_vertex_pdfs(lv, Vec3f(dir_to_cam[0], dir_to_cam[1], dir_to_cam[2]), sd)
     var camera_pdf_a = image_to_surface
-    var w_light = (camera_pdf_a * inv_n) * (mis_vm_weight_factor * _vcm_keep(sd, lv.pos.x, lv.pos.y, lv.pos.z)
+    var w_light = (camera_pdf_a * inv_n) * (mis_vm_weight_factor * _vcm_eta_scale(sd, lv.pos.x, lv.pos.y, lv.pos.z)
                                             + lv.dVCM + lv.dVC * rev_pdf_w)
     var mis_weight = Float32(1) / (w_light + Float32(1))
     contrib = contrib * mis_weight
@@ -1500,6 +1500,43 @@ def _vcm_keep(ref sd: SceneDescriptor2_C, x: Float32, y: Float32, z: Float32) ->
         return Float32(1)
     return Float32(_VCM_MERGE_BUCKET_CAP) / n
 
+# Merge radius per camera vertex, in pixels of image footprint. A global
+# radius sized to the scene (SmallVCM's 0.003 * scene radius) is ~0.24 m on
+# barcelona-pavilion, as wide as the candle lanterns: the gather disk hangs off
+# the surface, the photons on the neighbouring faces are rightly rejected, and
+# the estimate -- normalised by the whole disk -- reads low. Merging then gets
+# the MOST weight exactly where photons are densest.
+comptime _VCM_FOOTPRINT_PIXELS = Float32(2.0)
+
+
+@always_inline
+def _vcm_merge_radius_at(ref sd: SceneDescriptor2_C, x: Float32, y: Float32, z: Float32) -> Float32:
+    """Merge radius at (x, y, z): _VCM_FOOTPRINT_PIXELS of image footprint at
+    that point's distance from the camera, never more than this pass's global
+    radius (which sets the grid cells) and shrinking with it pass by pass.
+
+    A function of POSITION only, like _vcm_keep, so every strategy of a path
+    agrees on merging's density at each vertex: eta(x) = N pi r(x)^2."""
+    if sd.vcmFootprint <= Float32(0) or sd.vcmMergeR <= Float32(0):
+        return sd.vcmMergeR
+    var dx = x - sd.vcmCamX
+    var dy = y - sd.vcmCamY
+    var dz = z - sd.vcmCamZ
+    var r = sd.vcmFootprint * sqrt(dx * dx + dy * dy + dz * dz)
+    return min(sd.vcmMergeR, max(r, sd.vcmMergeR * Float32(1e-3)))
+
+
+@always_inline
+def _vcm_eta_scale(ref sd: SceneDescriptor2_C, x: Float32, y: Float32, z: Float32) -> Float32:
+    """eta(x) / eta: merging's MIS density at (x, y, z) relative to the global
+    N pi r_pass^2 -- thinning's keep probability times the radius shrink."""
+    var s = _vcm_keep(sd, x, y, z)
+    if sd.vcmFootprint > Float32(0) and sd.vcmMergeR > Float32(0):
+        var q = _vcm_merge_radius_at(sd, x, y, z) / sd.vcmMergeR
+        s *= q * q
+    return s
+
+
 @always_inline
 def _bdpt_merge_slot_bucket(
     k: Int,
@@ -1645,8 +1682,8 @@ def _bdpt_merge_from_cache(
     merge_next: Pointer[Int32, MutUntrackedOrigin],
     heads: Pointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
-    r2: Float32,
-    norm: Float32,
+    r2_pass: Float32,
+    norm_pass: Float32,
     mis_vc_weight_factor: Float32,
     cam_count: Int,   # cv's non-delta interior-vertex count (see _vcm_depth)
 ) -> SpectralSample:
@@ -1708,6 +1745,14 @@ def _bdpt_merge_from_cache(
         return SpectralSample(Float32(0))
     var total = SpectralSample(Float32(0))
     var d_len = _vcm_depth(sd)
+    # This query's own radius (see _vcm_merge_radius_at); r2/norm arrive as the
+    # pass's global values and the grid cells are sized to that radius.
+    var r2 = r2_pass
+    var norm = norm_pass
+    if sd.vcmFootprint > Float32(0) and sd.vcmMergeR > Float32(0):
+        var rq = _vcm_merge_radius_at(sd, cv.pos.x, cv.pos.y, cv.pos.z)
+        r2 = rq * rq
+        norm = norm_pass * (r2_pass / max(r2, Float32(1e-20)))
     var cix = Int(floor(cv.pos.x * inv_cell))
     var ciy = Int(floor(cv.pos.y * inv_cell))
     var ciz = Int(floor(cv.pos.z * inv_cell))
@@ -1825,7 +1870,7 @@ def _bdpt_merge_from_cache(
                                 # eta that held by construction (the carried dVM); with
                                 # the variance-aware eta(x) it has to be formed here,
                                 # at the camera vertex that defines the merged path.
-                                var inv_eta_x = mis_vc_weight_factor / _vcm_keep(sd, cv.pos.x, cv.pos.y, cv.pos.z)
+                                var inv_eta_x = mis_vc_weight_factor / _vcm_eta_scale(sd, cv.pos.x, cv.pos.y, cv.pos.z)
                                 var w_light = (lv.dVCM + lv.dVC * camera_bsdf_dir_pdf_w) * inv_eta_x
                                 var w_camera = (cv.dVCM + cv.dVC * camera_bsdf_rev_pdf_w) * inv_eta_x
                                 w = Float32(1) / (w_light + Float32(1) + w_camera)
@@ -2407,7 +2452,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[unsafe_offset=mat_idx]
         var hit = ro + rd*t_hit
-        var eta_x = mis_vm_weight_factor * _vcm_keep(sd, hit.x, hit.y, hit.z)   # merging's MIS density HERE
+        var eta_x = mis_vm_weight_factor * _vcm_eta_scale(sd, hit.x, hit.y, hit.z)   # merging's MIS density HERE
 
         # Direct hit on an emissive analytic sphere — checked BEFORE material
         # dispatch since the sphere's own material is often an inert
@@ -3622,7 +3667,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     beta *= SpectralSample(bssrdf_exit_ft(cos_out_x, eta_e))
                     var (c0, c1, c2) = bssrdf_exit_scatter_carries(
                         dvcm_carry, dvc_carry, dvm_carry, ex.p_area, cos_out_x,
-                        mis_vc_weight_factor, mis_vm_weight_factor * _vcm_keep(sd, x_o.x, x_o.y, x_o.z))
+                        mis_vc_weight_factor, mis_vm_weight_factor * _vcm_eta_scale(sd, x_o.x, x_o.y, x_o.z))
                     dvcm_carry = c0
                     dvc_carry = c1
                     dvm_carry = c2
@@ -4117,7 +4162,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[unsafe_offset=mat_idx]
         var hit = ro + rd*t_hit
-        var eta_x = mis_vm_weight_factor * _vcm_keep(sd, hit.x, hit.y, hit.z)   # merging's MIS density HERE
+        var eta_x = mis_vm_weight_factor * _vcm_eta_scale(sd, hit.x, hit.y, hit.z)   # merging's MIS density HERE
 
         if mat.type == MatKind.mix:
             var mix_idx1 = Int(mat.tex_idx & Int32(0xFFFF))
@@ -4660,7 +4705,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     flux *= SpectralSample(bssrdf_exit_ft(cos_out_x, eta_e))
                     var (c0, c1, c2) = bssrdf_exit_scatter_carries(
                         dvcm_carry, dvc_carry, dvm_carry, ex.p_area, cos_out_x,
-                        mis_vc_weight_factor, mis_vm_weight_factor * _vcm_keep(sd, ex.x_o.x, ex.x_o.y, ex.x_o.z))
+                        mis_vc_weight_factor, mis_vm_weight_factor * _vcm_eta_scale(sd, ex.x_o.x, ex.x_o.y, ex.x_o.z))
                     dvcm_carry = c0
                     dvc_carry = c1
                     dvm_carry = c2
@@ -5254,7 +5299,7 @@ def _connect_unweighted(
             light_bsdf_rev_pdf_w = lrp
         var camera_bsdf_dir_pdf_a = camera_bsdf_dir_pdf_w * cos_lv / dist2
         var light_bsdf_dir_pdf_a = light_bsdf_dir_pdf_w * cos_cv / dist2
-        var eta_cv = mis_vm_weight_factor * _vcm_keep(sd, cv.pos.x, cv.pos.y, cv.pos.z)
+        var eta_cv = mis_vm_weight_factor * _vcm_eta_scale(sd, cv.pos.x, cv.pos.y, cv.pos.z)
         var w_light: Float32
         if lv.is_light == Int32(1):
             # s=1: this connection IS VCM's direct-light strategy for an area
@@ -5269,7 +5314,7 @@ def _connect_unweighted(
             # was already exact.
             w_light = camera_bsdf_dir_pdf_a / max(lv.pdf_fwd, Float32(1e-30))
         else:
-            var eta_lv = mis_vm_weight_factor * _vcm_keep(sd, lv.pos.x, lv.pos.y, lv.pos.z)
+            var eta_lv = mis_vm_weight_factor * _vcm_eta_scale(sd, lv.pos.x, lv.pos.y, lv.pos.z)
             w_light = camera_bsdf_dir_pdf_a * (eta_lv + lv.dVCM + lv.dVC * light_bsdf_rev_pdf_w)
         var w_camera = light_bsdf_dir_pdf_a * (eta_cv + cv.dVCM + cv.dVC * camera_bsdf_rev_pdf_w)
         var mis_weight = Float32(1) / (w_light + Float32(1) + w_camera)
@@ -5687,6 +5732,8 @@ def _bdpt_emit_light_paths_gpu(
     vcm_keep_inv_cell: Float32 = Float32(0),
     vcm_keep_scale: Float32 = Float32(1),
     vcm_max_depth: Int32 = Int32(9),
+    vcm_cam_x: Float32 = Float32(0), vcm_cam_y: Float32 = Float32(0), vcm_cam_z: Float32 = Float32(0),
+    vcm_footprint: Float32 = Float32(0), vcm_merge_r: Float32 = Float32(0),
 ):
     """One thread per light path, each writing only its own dedicated
     per-path slice of `lvc` (VCM Stage 2b, see _bdpt_store_lvc_vertex's
@@ -5713,6 +5760,7 @@ def _bdpt_emit_light_paths_gpu(
         gpuTextures, gpuTextureCount,
         grids=grids, gridCount=n_grids, nvdbGrids=nvdb_grids, nvdbGridCount=n_nvdb_grids,
         vcmKeepCounts=vcm_keep_counts, vcmKeepInvCell=vcm_keep_inv_cell, vcmKeepScale=vcm_keep_scale, vcmMaxDepth=vcm_max_depth,
+        vcmCamX=vcm_cam_x, vcmCamY=vcm_cam_y, vcmCamZ=vcm_cam_z, vcmFootprint=vcm_footprint, vcmMergeR=vcm_merge_r,
     )
     var has_med = mediumCount > Int64(0)
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
@@ -5778,6 +5826,8 @@ def _bdpt_splat_light_paths_gpu(
     vcm_keep_inv_cell: Float32 = Float32(0),
     vcm_keep_scale: Float32 = Float32(1),
     vcm_max_depth: Int32 = Int32(9),
+    vcm_cam_x: Float32 = Float32(0), vcm_cam_y: Float32 = Float32(0), vcm_cam_z: Float32 = Float32(0),
+    vcm_footprint: Float32 = Float32(0), vcm_merge_r: Float32 = Float32(0),
 ):
     """GPU t=1 light tracing: one thread per light path, splatting each of
     its vertices onto the film through the same `_bdpt_connect_to_camera`
@@ -5817,6 +5867,7 @@ def _bdpt_splat_light_paths_gpu(
         measuredBrdfs, measuredBrdfCount,
         gpuTextures, gpuTextureCount,
         vcmKeepCounts=vcm_keep_counts, vcmKeepInvCell=vcm_keep_inv_cell, vcmKeepScale=vcm_keep_scale, vcmMaxDepth=vcm_max_depth,
+        vcmCamX=vcm_cam_x, vcmCamY=vcm_cam_y, vcmCamZ=vcm_cam_z, vcmFootprint=vcm_footprint, vcmMergeR=vcm_merge_r,
     )
     var cam_pos = Vec3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
     var scratch = inter_scratch.unsafe_offset(k)
@@ -5901,6 +5952,8 @@ def _bdpt_camera_connect_gpu(
     vcm_keep_inv_cell: Float32 = Float32(0),
     vcm_keep_scale: Float32 = Float32(1),
     vcm_max_depth: Int32 = Int32(9),
+    vcm_cam_x: Float32 = Float32(0), vcm_cam_y: Float32 = Float32(0), vcm_cam_z: Float32 = Float32(0),
+    vcm_footprint: Float32 = Float32(0), vcm_merge_r: Float32 = Float32(0),
 ):
     """One thread per pixel. Thin wrapper: build sd, seed this thread's own
     PCG32 (same seed formula vcm_render's CPU driver uses, keyed by pixel
@@ -5933,6 +5986,7 @@ def _bdpt_camera_connect_gpu(
         gpuTextures, gpuTextureCount,
         grids=grids, gridCount=n_grids, nvdbGrids=nvdb_grids, nvdbGridCount=n_nvdb_grids,
         vcmKeepCounts=vcm_keep_counts, vcmKeepInvCell=vcm_keep_inv_cell, vcmKeepScale=vcm_keep_scale, vcmMaxDepth=vcm_max_depth,
+        vcmCamX=vcm_cam_x, vcmCamY=vcm_cam_y, vcmCamZ=vcm_cam_z, vcmFootprint=vcm_footprint, vcmMergeR=vcm_merge_r,
     )
     var has_med = mediumCount > Int64(0)
     var px = pix % fw
@@ -6142,6 +6196,8 @@ def _bdpt_light_path_bounce_gpu(
     vcm_keep_inv_cell: Float32 = Float32(0),
     vcm_keep_scale: Float32 = Float32(1),
     vcm_max_depth: Int32 = Int32(9),
+    vcm_cam_x: Float32 = Float32(0), vcm_cam_y: Float32 = Float32(0), vcm_cam_z: Float32 = Float32(0),
+    vcm_footprint: Float32 = Float32(0), vcm_merge_r: Float32 = Float32(0),
 ):
     """One bounce's material dispatch for one light path, reading the
     Intersection_C _bdpt_light_path_intersect_gpu already computed this
@@ -6166,6 +6222,7 @@ def _bdpt_light_path_bounce_gpu(
         gpuTextures, gpuTextureCount,
         grids=grids, gridCount=n_grids, nvdbGrids=nvdb_grids, nvdbGridCount=n_nvdb_grids,
         vcmKeepCounts=vcm_keep_counts, vcmKeepInvCell=vcm_keep_inv_cell, vcmKeepScale=vcm_keep_scale, vcmMaxDepth=vcm_max_depth,
+        vcmCamX=vcm_cam_x, vcmCamY=vcm_cam_y, vcmCamZ=vcm_cam_z, vcmFootprint=vcm_footprint, vcmMergeR=vcm_merge_r,
     )
     var has_med = mediumCount > Int64(0)
     var pcg = PCG32(UInt64(0), UInt64(0))
@@ -6338,6 +6395,8 @@ def _bdpt_camera_path_bounce_gpu(
     vcm_keep_inv_cell: Float32 = Float32(0),
     vcm_keep_scale: Float32 = Float32(1),
     vcm_max_depth: Int32 = Int32(9),
+    vcm_cam_x: Float32 = Float32(0), vcm_cam_y: Float32 = Float32(0), vcm_cam_z: Float32 = Float32(0),
+    vcm_footprint: Float32 = Float32(0), vcm_merge_r: Float32 = Float32(0),
 ):
     """One bounce's material dispatch (incl. NEE/connect/merge/MNEE, all
     still on the existing software-BVH `results + pix` scratch slot -- see
@@ -6363,6 +6422,7 @@ def _bdpt_camera_path_bounce_gpu(
         gpuTextures, gpuTextureCount,
         grids=grids, gridCount=n_grids, nvdbGrids=nvdb_grids, nvdbGridCount=n_nvdb_grids,
         vcmKeepCounts=vcm_keep_counts, vcmKeepInvCell=vcm_keep_inv_cell, vcmKeepScale=vcm_keep_scale, vcmMaxDepth=vcm_max_depth,
+        vcmCamX=vcm_cam_x, vcmCamY=vcm_cam_y, vcmCamZ=vcm_cam_z, vcmFootprint=vcm_footprint, vcmMergeR=vcm_merge_r,
     )
     var has_med = mediumCount > Int64(0)
     var pcg = PCG32(UInt64(0), UInt64(0))
@@ -6869,6 +6929,9 @@ def vcm_render_gpu(
             var (_scene_center, scene_radius) = _scene_bounding_sphere(sd)
             var px_scale = Float32(2.0) * tan(psc[unsafe_offset=0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(fh)
             var vcm_max_depth = psc[unsafe_offset=0].max_depth   # clamped in _vcm_depth
+            var c2w_h = psc[unsafe_offset=0].camera_to_world
+            var vcm_cam = SIMD[DType.float32, 4](c2w_h[unsafe_offset=12], c2w_h[unsafe_offset=13], c2w_h[unsafe_offset=14], Float32(0))
+            var vcm_radius_0 = vcm_merge_radius(scene_radius, 0)
             var n_light_paths_f = Float32(n_light_paths_merge)
 
             var grid_merge_ins = ceildiv(max(lvc_cap, 1), block_size)
@@ -6877,6 +6940,8 @@ def vcm_render_gpu(
                 # Stage 2c progressive radius -- see vcm_render (CPU)'s
                 # matching per-sample loop for the full derivation comment.
                 var radius_i = vcm_merge_radius(scene_radius, si)
+                # Footprint radius shrinks on the same schedule as the global one.
+                var vcm_footprint = _VCM_FOOTPRINT_PIXELS * px_scale * (radius_i / max(vcm_radius_0, Float32(1e-20)))
                 var merge_heads_ptr = merge_heads_ptr_a if si % 2 == 0 else merge_heads_ptr_b
                 # Variance-aware merge MIS reads the OTHER table: last pass's
                 # counts, rescaled from its (larger) cells to this radius.
@@ -6913,6 +6978,7 @@ def vcm_render_gpu(
                     gpu_textures, n_gpu_textures,
                     grids_dev, Int64(handle[].n_grids), nvdb_grids_dev, Int64(handle[].n_nvdb_grids),
                     vcm_keep_ptr, vcm_keep_inv_cell, vcm_keep_scale, vcm_max_depth,
+                    vcm_cam[0], vcm_cam[1], vcm_cam[2], vcm_footprint, radius_i,
                     grid_dim=grid_light, block_dim=block_size)
 
                 # VCM Stage 2b: light paths are deterministically paired with
@@ -6949,6 +7015,7 @@ def vcm_render_gpu(
                     gpu_textures, n_gpu_textures,
                     grids_dev, Int64(handle[].n_grids), nvdb_grids_dev, Int64(handle[].n_nvdb_grids),
                     vcm_keep_ptr, vcm_keep_inv_cell, vcm_keep_scale, vcm_max_depth,
+                    vcm_cam[0], vcm_cam[1], vcm_cam[2], vcm_footprint, radius_i,
                     grid_dim=grid_pix, block_dim=block_size)
 
                 # Phase 1.5: t=1 light tracing, the GPU counterpart of
@@ -6972,6 +7039,7 @@ def vcm_render_gpu(
                     measured_brdfs, n_measured_brdfs,
                     gpu_textures, n_gpu_textures,
                     vcm_keep_ptr, vcm_keep_inv_cell, vcm_keep_scale, vcm_max_depth,
+                    vcm_cam[0], vcm_cam[1], vcm_cam[2], vcm_footprint, radius_i,
                     grid_dim=grid_light, block_dim=block_size)
 
                 if verbose:
@@ -7469,6 +7537,9 @@ def vcm_render_gpu_wavefront(
             var (_scene_center, scene_radius) = _scene_bounding_sphere(sd)
             var px_scale = Float32(2.0) * tan(psc[unsafe_offset=0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(fh)
             var vcm_max_depth = psc[unsafe_offset=0].max_depth   # clamped in _vcm_depth
+            var c2w_h = psc[unsafe_offset=0].camera_to_world
+            var vcm_cam = SIMD[DType.float32, 4](c2w_h[unsafe_offset=12], c2w_h[unsafe_offset=13], c2w_h[unsafe_offset=14], Float32(0))
+            var vcm_radius_0 = vcm_merge_radius(scene_radius, 0)
             var n_light_paths_f = Float32(n_light_paths_merge)
 
             var grid_merge_ins = ceildiv(max(lvc_cap, 1), block_size)
@@ -7477,6 +7548,8 @@ def vcm_render_gpu_wavefront(
                 # Stage 2c progressive radius -- see vcm_render (CPU)'s
                 # matching per-sample loop for the full derivation comment.
                 var radius_i = vcm_merge_radius(scene_radius, si)
+                # Footprint radius shrinks on the same schedule as the global one.
+                var vcm_footprint = _VCM_FOOTPRINT_PIXELS * px_scale * (radius_i / max(vcm_radius_0, Float32(1e-20)))
                 var merge_heads_ptr = merge_heads_ptr_a if si % 2 == 0 else merge_heads_ptr_b
                 # Variance-aware merge MIS reads the OTHER table: last pass's
                 # counts, rescaled from its (larger) cells to this radius.
@@ -7550,6 +7623,7 @@ def vcm_render_gpu_wavefront(
                         gpu_textures, n_gpu_textures,
                         grids_dev, Int64(handle[].n_grids), nvdb_grids_dev, Int64(handle[].n_nvdb_grids),
                         vcm_keep_ptr, vcm_keep_inv_cell, vcm_keep_scale, vcm_max_depth,
+                    vcm_cam[0], vcm_cam[1], vcm_cam[2], vcm_footprint, radius_i,
                         grid_dim=grid_light, block_dim=block_size)
 
                 # VCM Stage 2b: light paths are deterministically paired with
@@ -7650,6 +7724,7 @@ def vcm_render_gpu_wavefront(
                         Int8(1) if shadow_batch_enabled else Int8(0), shadow_rays_ptr, shadow_pending_ptr, shadow_valid_ptr, shadow_seg_med_ptr,
                         grids_dev, Int64(handle[].n_grids), nvdb_grids_dev, Int64(handle[].n_nvdb_grids),
                         vcm_keep_ptr, vcm_keep_inv_cell, vcm_keep_scale, vcm_max_depth,
+                    vcm_cam[0], vcm_cam[1], vcm_cam[2], vcm_footprint, radius_i,
                         grid_dim=grid_pix, block_dim=block_size)
 
                     # Task #163 stage 5 perf follow-up (2026-07-13): resolve
@@ -7715,6 +7790,7 @@ def vcm_render_gpu_wavefront(
                     measured_brdfs, n_measured_brdfs,
                     gpu_textures, n_gpu_textures,
                     vcm_keep_ptr, vcm_keep_inv_cell, vcm_keep_scale, vcm_max_depth,
+                    vcm_cam[0], vcm_cam[1], vcm_cam[2], vcm_footprint, radius_i,
                     grid_dim=grid_light, block_dim=block_size)
 
                 if verbose:

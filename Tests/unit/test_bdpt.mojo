@@ -126,6 +126,7 @@ def _dummy_sd() -> SceneDescriptor2_C:
         Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Float32(0), Float32(1), Int32(9),
+        Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
     )
 
 # ── _pdf_solid_to_area ────────────────────────────────────────────────────────
@@ -326,6 +327,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Float32(0), Float32(1), Int32(9),
+        Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
     )
 
     var cv = BDPTVertex(
