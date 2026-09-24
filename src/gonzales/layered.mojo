@@ -16,6 +16,13 @@ interfaces -- so matching pbrt means running the same walk.
 pbrt seeds that walk from a hash of the directions, making f(wo, wi) a
 deterministic function; the same is done here, so MIS weights that call f and
 PDF twice for one direction pair see one value.
+
+One deliberate departure: layered_f's exit-NEE MIS weight. pbrt pairs
+bs.pdf with exitInterface.PDF(-w, wi), a density over OUTSIDE directions;
+the competing wis strategy's density of the same inside direction is
+PDF(wi, -w). With pbrt's weight f integrates to 0.698 where its own
+Sample_f gives 0.646 (white base, rough coat); corrected, 0.6453. See
+docs/05_reflection_models.md.
 """
 from std.math import sqrt, cos, sin, exp, abs, min, max
 from std.memory import bitcast
@@ -354,8 +361,10 @@ def layered_f(wo_in: Vec3f, wi_in: Vec3f, R: SpectralSample, eta: Float32, alpha
             if not top_specular:
                 var fexit = diel_f(-w, wi, eta, alpha, radiance)
                 if fexit > Float32(0):
-                    var exit_pdf = diel_pdf(-w, wi, eta, alpha, False, True)
-                    f += beta * (_tr(bs.wi) * fexit * _power(bs.pdf, exit_pdf))
+                    # wis's density of this inside direction, not pbrt's
+                    # PDF(-w, wi) -- see the module docstring.
+                    var wis_pdf_here = diel_pdf(wi, -w, eta, alpha, False, True)
+                    f += beta * (_tr(bs.wi) * fexit * _power(bs.pdf, wis_pdf_here))
     return f
 
 

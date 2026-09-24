@@ -64,45 +64,64 @@ glossy reflections.
 ## Coated and Layered BSDFs
 
 Real materials often have multiple layers — a clear coat over diffuse paint,
-lacquer over wood, a wet or oxidized metal surface. `shade_coated_diffuse`
-models the common case: a smooth or rough dielectric coat (car paint, gloss
-varnish) over a Lambertian base. It follows the same shape as PBRT's
-`LayeredBxDF`, but resolves it as one continuous stochastic random walk
-rather than a closed-form integral.
+lacquer over wood, a wet or oxidized metal surface. `coateddiffuse` is a
+smooth or rough dielectric coat over a Lambertian base, and
+`src/gonzales/layered.mojo` is a line-by-line port of PBRT's `LayeredBxDF`
+for it: the rough `DielectricBxDF`, the Trowbridge-Reitz distribution, coat
+thickness 0.01 with `exp(−thickness/|cos θ|)` attenuation per crossing, and
+a random walk of at most ten interface events. All three integrators use it
+as one lobe (`LobeKind.layered`) with a real `f` and forward and reverse
+densities, so a coated vertex takes part in every MIS decision.
 
 ### The random walk
 
-At the coat's air interface, the exact dielectric Fresnel term splits the
-ray probabilistically: reflect off the coat as a glossy (or, for a smooth
-coat like fresh lacquer, mirror) lobe, or transmit into the coat toward the
-base. A transmitted ray enters a loop, capped at ten iterations:
+The layered BSDF has no closed form, so both halves of its interface are
+estimators:
 
-1. **Scatter off the diffuse base.** NEE samples every light type against
-   the base's Lambertian response, attenuated by how much of that light's
-   own incoming and outgoing directions actually make it through the coat
-   (see below). Sample a new, cosine-weighted outgoing direction.
-2. **Hit the coat's underside from inside.** The dielectric Fresnel term
-   (now evaluated from inside the denser medium, hence `1/η`) again splits
-   probabilistically: escape through the coat into air, or total-internally
-   reflect and recycle back down to the base for another bounce.
+- **`layered_sample`** follows one analog path: sample the coat, and if the
+  ray transmits, bounce between base and coat until it leaves through the
+  top. The path's throughput is exactly `f·|cos|/pdf`, and its pdf is only
+  proportional, so MIS weights call `layered_pdf` instead.
+- **`layered_f`** evaluates `f(wo, wi)` for one given pair, by a short walk
+  that at each base bounce does NEE in both directions: along a
+  pre-sampled inside direction `wis` (from `wi` through the coat), and
+  along the base's own sampled direction through the exit. The two
+  estimates are combined with the power heuristic. The walk is seeded from
+  a hash of the two directions, so `f` is a deterministic function and
+  every strategy that asks for one pair gets one value.
+- **`layered_pdf`** is a similar stochastic estimate, mixed 90/10 with a
+  uniform density. It integrates to about 2, not 1, which is harmless for
+  MIS because only ratios of densities enter it.
 
-Each recycled bounce multiplies an accumulator `beta` by the base albedo, so
-after `n` bounces the light carries `albedo^n` — this is what saturates a
-coated material's color relative to the same albedo left uncoated: light
-that would have escaped after one bounce on a bare diffuse surface instead
-gets a second, third, or further chance to pick up the base's tint before
-it finally exits. A textured base makes this compounding sensitive to a
-single texel's own color imbalance (see "Numerical hygiene" below).
+**Where gonzales departs from PBRT: the exit-NEE MIS weight.** PBRT weights
+the base-sampled exit term with `PowerHeuristic(bs.pdf,
+exitInterface.PDF(-w, wi))`. The competing strategy is `wis`, whose density
+lives on *inside* directions and is `exitInterface.PDF(wi, -w)` (sampled
+from `wi` toward `-w`). PBRT's second argument is a density over *outside*
+directions given the inside one, so the two weights for one path don't sum
+to 1. The two densities differ by the refraction Jacobian, which is never 1
+for a rough coat. As a result, PBRT's `f` disagrees with its own `Sample_f`.
+White base, rough coat (roughness 0.1), view near normal:
 
-Where gonzales's walk differs deliberately from PBRT's: `LayeredBxDF::f()`
-reuses *one* correlated light sample across every recycled bounce to
-evaluate the whole `TRT`, `TRTRT`, ... series in one pass. Gonzales instead
-draws an independent, fresh light sample at every iteration and fires NEE
-every time — the same expected energy, decorrelated, and simpler to reason
-about at the cost of one shadow ray per recycle bounce (bounded by a
-Russian-roulette gate once `beta` has decayed past a few bounces, so a
-low-albedo coat's walk terminates quickly and a high-albedo one doesn't
-flood the renderer with shadow rays).
+| Estimate | Albedo |
+|---|---|
+| `∫ f cos` with PBRT's weight | 0.698 |
+| Analog walk (`Sample_f`) | 0.646 |
+| `∫ f cos` with the corrected weight | 0.6453 |
+
+PBRT's own `simplepath` integrator with `samplelights false` never calls
+`f`, so it is an independent referee. On a coated floor under an area light,
+it reads 0.0517. PBRT's `volpath` (which evaluates `f` in NEE) reads 0.0540
+(+4%), `randomwalk` (`f` only) 0.0544, and gonzales 0.0522. The error only
+matters where `f` carries the estimate: NEE from small or delta lights, and
+VCM's connections and merges. Under uniform light, BSDF sampling holds most
+of the MIS weight, so the white furnace can't see it. In VCM it produced a
+brightness that grew with the light-path count (1.028 → 1.048 of the true
+value from 4k to 512k paths), because merging evaluates `f` and gains MIS
+weight as paths are added.
+
+A consequence for comparisons: where sunlight or a point light hits a rough
+coat directly, gonzales is now a few percent darker than PBRT, by design.
 
 ### Radiance compression: the η² factor
 
@@ -187,9 +206,10 @@ That same check settles a standing 4.5% gap against PBRT: PBRT's
 `coateddiffuse` defaults to `thickness 0.01` and attenuates by
 `exp(−thickness/cos θ)` on entry, exit, and every internal bounce. Set
 PBRT's thickness to zero and it lands within 0.24% of the closed form.
-Gonzales does not model coat thickness at all — so the discrepancy is a
-missing *parameter*, not a wrong *transport*, and it is worth knowing which
-of those you are looking at before trying to "fix" a number.
+The old gonzales coat model had no thickness at all, so that gap was a
+missing *parameter*, not a wrong *transport*. It is worth knowing which of
+those you are looking at before trying to "fix" a number. The
+`LayeredBxDF` port now models the thickness exactly as PBRT does.
 
 Evaluated on the same test geometry, PBRT and Mitsuba disagree with each
 other by up to 8% at η = 2 — a real difference between two published,
