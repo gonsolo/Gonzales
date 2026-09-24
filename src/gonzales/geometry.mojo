@@ -448,6 +448,7 @@ struct LobeKind:
     # the base at all. Splitting them is what lets each have its own
     # evaluator; see lobe_eval's two branches.
     comptime coated_reflect = Int32(7)
+    comptime layered = Int32(8)   # coateddiffuse as pbrt's LayeredBxDF (layered.mojo): f, pdf_fwd, pdf_rev all real
 
 struct PhotonKind:
     """What an SPPM photon (or visible point) was deposited on. A gather only

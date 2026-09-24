@@ -1,5 +1,6 @@
 from std.collections import Array
 from std.math import sqrt
+from .layered import layered_f, layered_pdf
 from .geometry import RGB, MatKind, LobeKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS, Frame, refract, INV_FOUR_PI, Curve_C, MeasuredBRDF_C
 from .bssrdf import fdr_moment, bssrdf_exit_ft
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world, power_heuristic
@@ -1022,6 +1023,8 @@ def lobe_scoped(c: LobeCtx) -> Bool:
     Rough: no closed form for the exit density, so it stays a sole-strategy
     NEE vertex (its exit ray drops direct via PDF_DROP_DIRECT, like PT).
     Dielectrics are genuinely delta and never will be in scope."""
+    if c.kind == LobeKind.layered:
+        return c.is_surface
     if c.kind == LobeKind.coated_walk:
         # Rough coats are in scope too, on an APPROXIMATE density:
         # bxdf_pdf_coated_exit is derived for a smooth coat and takes no
@@ -1081,6 +1084,29 @@ def lobe_eval[want_pdfs: Bool = True](
     var vn = c.n
     var vwo = c.wo
 
+    if c.kind == LobeKind.layered:
+        # pbrt's LayeredBxDF (layered.mojo). Everything is real: f, and the
+        # pdf estimator both ways, which is a deterministic function of the
+        # directions (hash-seeded), so every strategy that asks gets one value.
+        # Light-side vertices evaluate the adjoint (importance transport).
+        var mat_ly = tab.materials[unsafe_offset=Int(c.mat_idx)]
+        var ior_ly = mat_ly.emission.r
+        var alpha_ly = max(mat_ly.roughU, mat_ly.roughV)
+        var fr_ly = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
+        var tx_ly = Vec3f(fr_ly.x.x, fr_ly.x.y, fr_ly.x.z)
+        var ty_ly = Vec3f(fr_ly.y.x, fr_ly.y.y, fr_ly.y.z)
+        var wo_ly = Vec3f(dot(vwo, tx_ly), dot(vwo, ty_ly), dot(vwo, vn))
+        var wi_ly = Vec3f(dot(dir_to_other, tx_ly), dot(dir_to_other, ty_ly), dot(dir_to_other, vn))
+        var rad_ly = not c.adjoint
+        var R_ly = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, c.alb.r, c.alb.g, c.alb.b, wavelengths)
+        var f_ly = layered_f(wo_ly, wi_ly, R_ly, ior_ly, alpha_ly, rad_ly)
+        var cos_ly = abs(wi_ly.z)
+        var fwd_ly = Float32(0)
+        var rev_ly = Float32(0)
+        comptime if want_pdfs:
+            fwd_ly = layered_pdf(wo_ly, wi_ly, ior_ly, alpha_ly, rad_ly)
+            rev_ly = layered_pdf(wi_ly, wo_ly, ior_ly, alpha_ly, not rad_ly)
+        return LobeEval(f_ly * cos_ly, cos_ly, fwd_ly, rev_ly, True)
     if c.kind == LobeKind.coated_walk:
         # coateddiffuse's coat-walk EXIT lobe. Same factorization
         # _nee_weight_coated_diffuse_base uses on the NEE side, reading ior

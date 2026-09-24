@@ -12,6 +12,7 @@ from max.algorithm import parallelize
 from std.math import sqrt, cos, sin, tan, floor, log, exp, max, min, abs, ceildiv, pow
 from std.memory.alloc import unsafe_alloc
 from std.memory import bitcast
+from .layered import layered_sample, layered_pdf
 from std.atomic import Atomic
 from .geometry import (
     area_light_pick_triangle,
@@ -2139,6 +2140,41 @@ def _bdpt_camera_path_init[use_gpu: Bool](
         Float32(1.0), Float32(1.0),   # current_dielectric_ior, previous_dielectric_ior (vacuum)
     )
 
+@always_inline
+def _bdpt_layered_scatter(
+    n: Vec3f, wo: Vec3f, alb: RGB, mat: Material_C, radiance: Bool,
+    mut pcg: PCG32, ref sd: SceneDescriptor2_C, wavelengths: SampledWavelengths,
+) -> Tuple[Bool, Vec3f, SpectralSample, Bool, Float32, Float32, Float32]:
+    """Sample a coateddiffuse vertex's LayeredBxDF (layered.mojo) for both
+    subpaths: (valid, wi, f*|cos|/pdf, specular, pdf_fwd, pdf_rev, |cos|).
+
+    The sample's own pdf is only proportional (pbrt's pdfIsProportional), so
+    it sets the throughput while the MIS carries take layered_pdf both ways --
+    the same deterministic estimate lobe_eval hands every other strategy.
+    `radiance` is False on the light subpath (importance transport)."""
+    var eta = mat.emission.r
+    var alpha = max(mat.roughU, mat.roughV)
+    var fr = Frame.from_z(n)
+    var tx = Vec3f(fr.x.x, fr.x.y, fr.x.z)
+    var ty = Vec3f(fr.y.x, fr.y.y, fr.y.z)
+    var wo_l = Vec3f(dot(wo, tx), dot(wo, ty), dot(wo, n))
+    var R = spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, alb.r, alb.g, alb.b, wavelengths)
+    var bs = layered_sample(wo_l, pcg.next_float(), pcg.next_float(), pcg.next_float(), R, eta, alpha, radiance)
+    var ZERO = SpectralSample(Float32(0))
+    if not bs.valid or bs.pdf <= Float32(0):
+        return (False, Vec3f(Float32(0)), ZERO, False, Float32(0), Float32(0), Float32(0))
+    var wi = tx * bs.wi.x + ty * bs.wi.y + n * bs.wi.z
+    var cos_out = abs(bs.wi.z)
+    var w = bs.f * (cos_out / bs.pdf)
+    if bs.specular:
+        return (True, wi, w, True, Float32(0), Float32(0), cos_out)
+    var pf = layered_pdf(wo_l, bs.wi, eta, alpha, radiance)
+    var pr = layered_pdf(bs.wi, wo_l, eta, alpha, not radiance)
+    if pf <= Float32(0):
+        return (False, Vec3f(Float32(0)), ZERO, False, Float32(0), Float32(0), Float32(0))
+    return (True, wi, w, False, pf, pr, cos_out)
+
+
 def _bdpt_camera_path_bounce[use_gpu: Bool](
     ref sd:      SceneDescriptor2_C,
     mut pcg: PCG32,
@@ -2847,18 +2883,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 mis_vc_weight_factor, eta_x)
 
         elif mat.type == MatKind.coated_diffuse:
-            # VCM: coateddiffuse is a stochastic multi-bounce recycling walk
-            # (see shading.mojo's shade_coated_diffuse, ported here almost
-            # verbatim) with no closed-form joint pdf -- task #158, user
-            # chose "full multi-tap recycling walk, left unweighted": ported
-            # exactly so VCM's appearance matches the plain path tracer, but
-            # every outcome (coat reflect, rough or smooth, and the base
-            # exit) is stored/continued as mat_kind=4, which
-            # _bdpt_vertex_mis_scoped deliberately excludes (same documented
-            # gap as dielectric/volume) -- connect/merge still reach these
-            # vertices via _eval_vertex's generic Lambertian fallback
-            # (weight=1, no real MIS), never a full "no connection at all"
-            # exclusion.
+            # coateddiffuse as pbrt's LayeredBxDF (layered.mojo): one real lobe
+            # with real f, forward and reverse densities (LobeKind.layered), so
+            # it takes part in every strategy's MIS like a diffuse vertex. It
+            # replaced a coat walk that split the vertex into a coat-reflect and
+            # a base-exit lobe on an approximate density.
             var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             var cos_fix = abs(dot(-ray_dir, gn))
@@ -2868,364 +2897,70 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
             if tex_ok:
                 eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-            # Bump/normal maps -- see the diffuse branch above.
-            # Saved BEFORE the perturbation: the stored vertex keeps this as its
-            # GEOMETRIC normal, because _connect's solid-angle -> area pdf
-            # conversions are built on it. See BDPTVertex.shading_normal.
             var gn_geo = gn
             gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
                 gn, gn, ray_dir,
                 _camera_approx_footprint(hit, cam_pos, px_scale),
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-            gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
-
-            var ior = mat.emission.r
-            var coat_alpha = max(mat.roughU, mat.roughV)
-            var is_rough_coat = coat_alpha > Float32(0.001)
-            var wo = -ray_dir
-            # THE shared layered-BSDF walk (bxdf.mojo) -- this branch used to
-            # carry its own copy, which is how it ended up missing the coat
-            # thickness, the rough G2/G1 and the chrominance floor the path
-            # tracer had. Integrator bookkeeping (NEE per recycle depth, LVC
-            # vertex storage, connect/merge, MIS carries, the
-            # radiance-transport eta^2) stays here; only the material's own
-            # behaviour moved out.
-            var cw = coat_walk_begin(gn, wo, eff_alb, ior, coat_alpha, pcg)
-            var cos_o = cw.cos_o
-
-            # Coat's own glossy dielectric lobe NEE -- fired unconditionally
-            # for a rough coat (independent of the reflect/transmit coin
-            # flip below), matching shade_coated_diffuse's own rationale:
-            # gating on the coin flip would double-count the interface
-            # Fresnel term. Area lights skipped (LVC connect/merge already
-            # covers them, same scope as every other NEE block in this
-            # function).
-            if is_rough_coat and cos_o > Float32(0):
-                var (_cc_c, r_cc) = _scene_bounding_sphere(sd)
-                var inv_scene_c = Float32(1.0) / max(_bdpt_n_lights(sd) * PI * r_cc * r_cc, Float32(1e-12))
-                for li_c in range(_bdpt_simple_light_count(sd)):
-                    var ls_ic = _bdpt_sample_simple_light(sd, li_c, hit.to_simd(), pcg)
-                    # VCM's four-strategy balance share, not the path tracer's
-                    # two-strategy power heuristic. Merging and t=1 reach this
-                    # vertex too; taking weight 1 here double-counts, and this
-                    # block runs ONLY for a rough coat.
-                    var emis_c = inv_scene_c if li_c < Int(sd.distantLightCount) else Float32(0)
-                    var pol_c = MisPolicy(True, eta_x, dvcm_carry, dvc_carry,
-                                          emis_c, Float32(0), False, abs(dot(ls_ic.wi, gn_geo)))
-                    var w_ic = _nee_weight_coated_coat_lobe(ls_ic, ior, coat_alpha, gn, wo, pol_c)
-                    total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_ic.r, w_ic.g, w_ic.b, wavelengths), ls_ic, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths)
-                for inf_ic in range(Int(sd.infiniteLightCount)):
-                    var ls_infc = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_ic], Point2f(pcg.next_float(), pcg.next_float()))
-                    var pol_ic = MisPolicy(True, eta_x, dvcm_carry, dvc_carry,
-                                           ls_infc.pdf * inv_scene_c, Float32(0), False, abs(dot(ls_infc.wi, gn_geo)))
-                    var w_infc = _nee_weight_coated_coat_lobe(ls_infc, ior, coat_alpha, gn, wo, pol_ic)
-                    total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_infc.r, w_infc.g, w_infc.b, wavelengths), ls_infc, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths)
-
-            coat_walk_enter(cw, pcg)
-
-            if cw.event == COAT_ABSORB:
-                return False   # coat total-internal-reflection-like case: terminate
-
-            if cw.event == COAT_REFLECT:
-                # Glossy reflection off the coat (rough => GGX lobe, smooth => mirror).
-                var refl = cw.wi
-                rd = vec3f(refl)
-                ro = hit + rd*Float32(0.0002)
-                if is_rough_coat:
-                    # cw.beta carries the rough lobe's G2(wo,wi)/G1(wo)
-                    # masking-shadowing weight. Achromatic by construction on
-                    # this path (see CoatWalk.beta), hence the scalar multiply
-                    # rather than a spectral upsample of a bare weight.
-                    beta *= cw.beta.r
-                    last_bsdf_pdf = cw.pdf
-                    var v = _null_vertex()
-                    v.pos = hit
-                    v.normal = vec3f(gn_geo)
-                    v.shading_normal = vec3f(gn)
-                    v.beta = beta
-                    v.alb = eff_alb
-                    # coated_REFLECT, not coated_walk: this is the coat's own
-                    # glossy bounce off the top interface, which never reaches
-                    # the base. Stored as coated_walk it was re-evaluated by
-                    # connect/merge through coat_eval_smooth -- the base
-                    # transmission model, carrying the base's albedo -- for a
-                    # path that never touched the base.
-                    v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.coated_reflect
-                    v.mat_idx = Int32(mat_idx)   # the coat evaluator reads ior from it
-                    v.pdf_bwd = coat_alpha       # smooth-vs-rough, as ggx stores alpha
-                    v.wo = vec3f(wo)
-                    # REAL forward density and REAL carries, as the smooth
-                    # exit vertex below already stores. These were
-                    # `pdf_fwd = 1` and dVCM/dVC/dVM = 0 placeholders, valid
-                    # only while lobe_scoped() still excluded a rough coat
-                    # and _bdpt_merge_from_cache's scope gate therefore
-                    # dropped this vertex. lobe_scoped now returns
-                    # `c.is_surface` for EVERY coated_walk, rough included,
-                    # so the gate stopped firing and this vertex began
-                    # merging and connecting with fabricated weights: zero
-                    # carries shrink the MIS denominator, so each strategy
-                    # took a near-1 share and their sum over-counted.
-                    # cw.pdf is the density actually sampled, which is what
-                    # the dVCM recursion wants (SmallVCM does the same);
-                    # the reverse half comes from the evaluator that
-                    # merge/connect will themselves query at this vertex,
-                    # so the recursion and the estimators agree.
-                    v.pdf_fwd = cw.pdf
-                    v.med_idx = cur_med_idx
-                    v.wavelengths = wavelengths
-                    v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
-                    if n_verts == 0: first_alb = eff_alb
-                    if n_verts >= _vcm_depth(sd):
-                        return False   # a vertex past d starts no strategy (see _vcm_depth)
-                    n_verts += 1
-                    # BUG (found 2026-09-15, chasing coateddiffuse-eta-probe
-                    # rendering solid black under --vcm): every OTHER
-                    # material branch in this function connects/merges its
-                    # vertex against the light-path cache right after
-                    # storing it (see the diffuse/conductor/hair/measured
-                    # branches' identical `if path_len > 0:` block). This
-                    # coateddiffuse vertex never did -- confirmed via direct
-                    # instrumentation: the exit vertex below was reached
-                    # with a perfectly valid nonzero walk_beta every time,
-                    # but _connect was never once called for it. Since
-                    # coateddiffuse also has no NEE path to an (unobstructed)
-                    # area light -- only distant/point/sphere/infinite via
-                    # _bdpt_simple_light_count, plus MNEE which only fires
-                    # when the light is glass-obscured -- a scene lit purely
-                    # by an area light through a coateddiffuse surface had
-                    # NO way to receive any light at all.
-                    # Merging queries the GLOBAL photon grid and does not use this
-                    # pixel's own paired light path, so unlike the connect below it
-                    # must NOT be gated on that path having stored anything. It was,
-                    # and in a white furnace only ~32% of light paths hit the quad at
-                    # all, so ~68% of pixels skipped merging entirely: the estimator
-                    # delivered 0.109 against an analytic 0.5.
-                    total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts)
-                    if path_len > 0:
-                        total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, n_verts)
-                    # Propagate the carries THROUGH this bounce, as every
-                    # scoped material does after it scatters. This used to
-                    # fall through to the `dvcm_carry = 0` below, which left
-                    # the whole REST of the path with no MIS state -- the
-                    # smooth exit vertex's own comment records that giving a
-                    # vertex real carries while the path downstream stays
-                    # broken measures WORSE than leaving both alone, so the
-                    # two have to move together.
-                    var cos_out_cr = abs(dot(refl, gn))
-                    var (_pf_cr, pdf_rev_cr) = _bdpt_vertex_pdfs(v, vec3f(refl), sd)
-                    (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
-                        dvcm_carry, dvc_carry, dvm_carry,
-                        cos_out_cr / max(cw.pdf, Float32(1e-9)), cw.pdf, pdf_rev_cr,
-                        mis_vc_weight_factor, eta_x)
-                else:
-                    last_bsdf_pdf = Float32(-1)  # smooth mirror coat: delta, no MIS at destination
-                    # Genuinely delta: dVCM resets, same convention as the
-                    # dielectric branch and as volume scatter.
-                    dvcm_carry = Float32(0)
-                return True   # coat-reflect (rough): vertex already stored above, path continues
-
-            # Transmitted into the coat: random-walk the base/coat-underside
-            # layers. Entry attenuation already applied by coat_walk_enter.
-            while cw.event == COAT_WALKING:
-                if not coat_walk_at_base(cw, pcg):
-                    break
-                var walk_beta = cw.beta
-
-                # coat_alpha (rough-coat G2/G1) and nee_is_sole_strategy=True
-                # (this walk's exit ray always sets last_bsdf_pdf=0 below --
-                # see _nee_weight_coated_diffuse_base's own docstring for
-                # why the caller's continuation-ray convention decides this)
-                # match shading.mojo's identical NEE calls exactly.
-                # Per-iteration NEE is gone for every coat, not just smooth
-                # ones: it sums the TIR series by REPETITION, a multi-vertex
-                # model, while merging/t=1/the escape all model this vertex
-                # once with coat_eval_smooth summing that series in closed
-                # form. Two models of one vertex cannot partition unity. The
-                # single-shot replacement is below, after the vertex exists.
-                for li_b in range(0):
-                    var ls_ib = _bdpt_sample_simple_light(sd, li_b, hit.to_simd(), pcg)
-                    var w_ib = _nee_weight_coated_diffuse_base[True](ls_ib, eff_alb, ior, gn, coat_alpha)
-                    total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_ib.r, w_ib.g, w_ib.b, wavelengths), ls_ib, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths)
-                for inf_i in range(0):
-                    var ls_inf = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-                    # Now that a smooth coat walk is MIS-scoped, its NEE has
-                    # to be weighted against the strategies that compete with
-                    # it -- merging and t=1 -- like every other scoped kind.
-                    # The reverse density is the same exit function of wo.
-                    var (_c_ib, r_ib) = _scene_bounding_sphere(sd)
-                    var pol_ib = MisPolicy(
-                        not is_rough_coat, eta_x, dvcm_carry, dvc_carry,
-                        ls_inf.pdf / max(_bdpt_n_lights(sd) * PI * r_ib * r_ib, Float32(1e-12)),
-                        bxdf_pdf_coated_exit(abs(dot(wo, gn)), ior), False, abs(dot(ls_inf.wi, gn_geo)))
-                    # `[True]` means nee_is_sole_strategy -- the helper skips
-                    # MIS and takes full weight. That WAS right while the coat
-                    # walk never merged. A scoped smooth coat has competitors
-                    # now, so it must take its balance share instead; a rough
-                    # one is still unscoped and still sole.
-                    # MEASURED, and left as-is deliberately: handing this NEE
-                    # its balance share (the [False] instantiation with
-                    # pol_ib) collapses the furnace to 0.6149 against an
-                    # analytic 1.0, because the share it gives up is reserved
-                    # for merging and merging does not deliver it. Same
-                    # signature as the env case, where the cause turned out
-                    # to be broken ESTIMATORS rather than weights -- so the
-                    # next step is the isolation diagnostic on merging at a
-                    # coated vertex, not another weight.
-                    # A scoped smooth coat has competitors now (merging,
-                    # t=1), so its NEE takes a balance share instead of full
-                    # weight. A rough coat is still unscoped and still sole.
-                    # A scoped smooth coat has competitors (merging, t=1), so
-                    # its NEE takes a balance share. A rough coat is unscoped
-                    # and still the sole strategy.
-                    _ = pol_ib
-                    var w_inf = _nee_weight_coated_diffuse_base[True](ls_inf, eff_alb, ior, gn, coat_alpha)
-                    total += _bdpt_nee_contribute(beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_inf.r, w_inf.g, w_inf.b, wavelengths), ls_inf, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths)
-
-                # Task #161 follow-up (2026-07-13): MNEE for area lights
-                # behind glass, extended to coateddiffuse's base layer --
-                # see _bdpt_mnee_diffuse_area_light's docstring for why
-                # this only ever fires for the glass-obscured case (no
-                # double-count risk with the 4 NEE loops just above, which
-                # only ever reach UNobstructed lights). Fired once per
-                # recycling-walk iteration, matching those loops' own
-                # per-iteration cadence -- hit/gn never change across
-                # iterations (this walk is a fixed-position shading-space
-                # recycling, not a real geometric random walk), only
-                # walk_beta's attenuation does, so this models a genuinely
-                # different bounce each iteration, not a repeated estimate
-                # of the same one.
-                total += _bdpt_mnee_diffuse_area_light(sd, hit, gn, eff_alb, beta * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (walk_beta).r, (walk_beta).g, (walk_beta).b, wavelengths), pcg, wavelengths, ior)
-                # Sphere-shaped area lights are deliberately NOT MNEE'd
-                # from the coat's base: _bdpt_mnee_sphere_light no longer
-                # applies coat_t at all (see its docstring's "GPU codegen
-                # bug" section), so calling it with a non-1.0 ior would skip
-                # the coat's Fresnel attenuation and overestimate light
-                # through the coat. Re-enable by mirroring the plain-diffuse
-                # branch's unrolled call site once coat_t has a real fix.
-
-                # One base bounce + the attempt to leave the coat -- shared.
-                coat_walk_scatter(cw, pcg)
-
-            var exited = cw.event == COAT_EXIT
-            var exit_dir = cw.wi
-            if not exited:
-                return False   # coat recycling walk absorbed (RR-killed or ran out of depth)
-
-            rd = vec3f(exit_dir)
-            ro = hit + rd*Float32(0.0002)
-            # A smooth coat's exit density is known (bxdf_pdf_coated_exit),
-            # so this vertex gets REAL carries and joins MIS instead of the
-            # placeholder zeros it used to store. Rough coats keep the old
-            # NEE-only behaviour -- no closed form for their exit.
-            var cos_x_c = abs(dot(exit_dir, gn))
-            var smooth_coat = coat_alpha <= Float32(0.001)
-            var pdf_x_c = bxdf_pdf_coated_exit(cos_x_c, ior)
-            last_bsdf_pdf = pdf_x_c
-            # 1/eta^2: the exit ray leaves the dense coat for air, so its
-            # radiance is compressed by the squared IOR ratio -- see
-            # shading.mojo's twin of this line and
-            # _nee_weight_coated_diffuse_base, which carries the NEE side's
-            # own copy. Missing on both, it was worth eta^2 (2.3x at 1.5).
-            # No 1/eta^2 on the SAMPLED exit ray -- the exit refraction's
-            # eta^2 Jacobian cancels it (see shading.mojo's twin of this line
-            # for the sweep that settled it). coat_eval_smooth keeps its
-            # 1/eta^2 because it evaluates a GIVEN direction.
-            # The vertex's beta is the throughput arriving BEFORE the coat,
-            # because a connection or a merge at this vertex supplies the coat
-            # transport itself through the coat-exit lobe. Storing the
-            # post-walk beta applies the coat TWICE -- and every one of those
-            # factors is < 1 (entry Fresnel, Beer-Lambert, 1/eta^2 = 0.44 at
-            # eta 1.5), so the double application reads as far too DARK, not
-            # too bright. The continuing ray still takes the post-walk beta.
-            var beta_pre_coat = beta
-            beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (cw.beta).r, (cw.beta).g, (cw.beta).b, wavelengths)
+            gn = face_toward(gn, -ray_dir)
             var v = _null_vertex()
             v.pos = hit
             v.normal = vec3f(gn_geo)
             v.shading_normal = vec3f(gn)
-            v.beta = beta_pre_coat
+            v.beta = beta
             v.alb = eff_alb
-            v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.coated_walk
-            v.mat_idx = Int32(mat_idx)   # the coat evaluator reads ior from it
-            v.pdf_bwd = coat_alpha       # smooth-vs-rough, as ggx stores alpha
-            v.wo = vec3f(wo)
-            v.pdf_fwd = pdf_x_c
-            v.med_idx = cur_med_idx
+            v.is_surface = Int32(1); v.is_delta = Int32(0)
+            v.mat_kind = LobeKind.layered
+            v.mat_idx = Int32(mat_idx)
+            v.pdf_fwd = Float32(1); v.med_idx = cur_med_idx
+            v.wo = vec3f(-ray_dir)
             v.wavelengths = wavelengths
-            # Real carries. The arrival half was already computed for this
-            # hit at the top of the branch and then thrown away; a smooth
-            # coat now keeps it. A rough coat has no exit density, so it
-            # stays at zero AND out of scope -- the two must agree, because
-            # scope without carries is the documented volume-mis failure:
-            # MIS reserves share that no strategy then delivers.
             v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
             if n_verts == 0: first_alb = eff_alb
             if n_verts >= _vcm_depth(sd):
                 return False   # a vertex past d starts no strategy (see _vcm_depth)
             n_verts += 1
-            # BUG (found 2026-09-15): same missing connect/merge call as the
-            # coat-reflect vertex above -- see that site's comment for the
-            # full story. This exit vertex is the ONE both smooth and rough
-            # coats always reach, so this was THE fix for
-            # coateddiffuse-eta-probe.pbrt rendering solid black under
-            # --vcm (a coateddiffuse surface lit only by an unobstructed
-            # area light had no path to receive any light at all).
-            # Merging queries the GLOBAL photon grid and does not use this
-            # pixel's own paired light path, so unlike the connect below it
-            # must NOT be gated on that path having stored anything. It was,
-            # and in a white furnace only ~32% of light paths hit the quad at
-            # all, so ~68% of pixels skipped merging entirely: the estimator
-            # delivered 0.109 against an analytic 0.5.
             total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts)
             if path_len > 0:
                 total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, n_verts)
-            if True:
-                # Simple lights (distant/point/sphere) single-shot too. The
-                # sun is delta: its NEE cannot be found by BSDF sampling, but
-                # merging and t=1 still compete for its photons, so it takes
-                # a balance share rather than weight 1.
-                for li_s in range(_bdpt_simple_light_count(sd)):
-                    var ls_d = _bdpt_sample_simple_light(sd, li_s, hit.to_simd(), pcg)
-                    var cos_d = dot(gn, ls_d.wi)
-                    if ls_d.valid and cos_d > Float32(0):
-                        var le_d = _lobe_eval[want_pdfs=True](v, ls_d.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
-                        var (_cd, r_d) = _scene_bounding_sphere(sd)
-                        var emis_d = (Float32(1.0) / max(_bdpt_n_lights(sd) * PI * r_d * r_d, Float32(1e-12))
-                                      if li_s < Int(sd.distantLightCount) else Float32(0))
-                        var pol_d = MisPolicy(le_d.scoped, eta_x, dvcm_carry, dvc_carry, emis_d, le_d.pdf_rev, False, abs(dot(ls_d.wi, gn_geo)))
-                        # The SAME evaluator the infinite-light shot and
-                        # merging use. _nee_weight_coated_diffuse_base is the
-                        # single-scatter form and omits the TIR series that
-                        # coat_eval_smooth sums -- using it here would put two
-                        # models of this vertex back in, which is the very
-                        # thing the single-shot rewrite removed.
-                        var mis_d = (nee_mis_weight(pol_d, ls_d.pdf, le_d.pdf_fwd, cos_d)
-                                     if not ls_d.is_delta
-                                     else nee_mis_weight(pol_d, Float32(1.0), Float32(0.0), cos_d))
-                        var inv_pd = Float32(1.0) if ls_d.is_delta else (Float32(1.0) / ls_d.pdf)
-                        var li_d = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, ls_d.Li.r, ls_d.Li.g, ls_d.Li.b, wavelengths)
-                        total += _bdpt_nee_contribute(beta_pre_coat, le_d.f_cos * li_d * (mis_d * inv_pd), ls_d, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths)
-                for inf_s in range(Int(sd.infiniteLightCount)):
-                    var ls_s = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_s], Point2f(pcg.next_float(), pcg.next_float()))
-                    var cos_s_c = dot(gn, ls_s.wi)
-                    if ls_s.valid and cos_s_c > Float32(0) and ls_s.pdf > Float32(0):
-                        var le_s = _lobe_eval[want_pdfs=True](v, ls_s.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
-                        var (_cc, r_s) = _scene_bounding_sphere(sd)
-                        var mis_s = vcm_env_nee_weight(le_s.pdf_fwd, le_s.pdf_rev, ls_s.pdf, ls_s.pdf / max(_bdpt_n_lights(sd) * PI * r_s * r_s, Float32(1e-12)), cos_s_c, eta_x, dvcm_carry, dvc_carry)
-                        var li_s = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, ls_s.Li.r, ls_s.Li.g, ls_s.Li.b, wavelengths)
-                        total += _bdpt_nee_contribute(beta_pre_coat, le_s.f_cos * li_s * (mis_s / ls_s.pdf), ls_s, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths)
-            # Propagate the carries THROUGH the coat, exactly as every other
-            # material does after it scatters. This used to be
-            # `dvcm_carry = 0`, which left the whole REST of the path with no
-            # MIS state -- so an earlier attempt that gave this vertex real
-            # carries still measured worse, because every downstream vertex
-            # was still broken. The vertex and the path have to be fixed
-            # together or neither measurement means anything.
-            (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
-                dvcm_carry, dvc_carry, dvm_carry,
-                cos_x_c / max(pdf_x_c, Float32(1e-9)), pdf_x_c,
-                bxdf_pdf_coated_exit(abs(dot(wo, gn)), ior),
-                mis_vc_weight_factor, eta_x)
+            var wo_d = -ray_dir
+            for li_d in range(_bdpt_simple_light_count(sd)):
+                var ls_i = _bdpt_sample_simple_light(sd, li_d, hit.to_simd(), pcg)
+                var pol_i = mis_policy_power()
+                if li_d < Int(sd.distantLightCount):
+                    var (_c_i, r_i) = _scene_bounding_sphere(sd)
+                    var le_i = _lobe_eval[want_pdfs=True](v, ls_i.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                    pol_i = MisPolicy(le_i.scoped, eta_x, dvcm_carry, dvc_carry,
+                                      Float32(1.0) / max(_bdpt_n_lights(sd) * PI * r_i * r_i, Float32(1e-12)),
+                                      le_i.pdf_rev, False, abs(dot(ls_i.wi, gn_geo)))
+                var w_i = _nee_weight_simple_spectral(ls_i, v.mat_kind, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_i, v.mat_idx)
+                total += _bdpt_nee_contribute(beta, w_i, ls_i, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, Float32(0.0001), False)
+            for inf_i in range(Int(sd.infiniteLightCount)):
+                var ls_e = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
+                var (_c_e, r_e) = _scene_bounding_sphere(sd)
+                var le_e = _lobe_eval[want_pdfs=True](v, ls_e.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                var pol_e = MisPolicy(True, eta_x, dvcm_carry, dvc_carry,
+                                      ls_e.pdf / max(_bdpt_n_lights(sd) * PI * r_e * r_e, Float32(1e-12)),
+                                      le_e.pdf_rev, False, abs(dot(ls_e.wi, gn_geo)))
+                var w_e = _nee_weight_simple_spectral(ls_e, v.mat_kind, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_e, v.mat_idx)
+                total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, Float32(0.0001), False)
+            var (ok_l, wi_l, w_l, spec_l, pf_l, pr_l, cos_l) = _bdpt_layered_scatter(
+                vec3f(gn), vec3f(wo_d), eff_alb, mat, True, pcg, sd, wavelengths)
+            if not ok_l:
+                return False
+            rd = wi_l
+            ro = hit + rd*Float32(0.0002)
+            beta *= w_l
+            if spec_l:
+                last_bsdf_pdf = Float32(-1)   # the smooth coat's mirror: a delta bounce
+                dvcm_carry = Float32(0)
+                dvc_carry *= cos_l
+                dvm_carry *= cos_l
+            else:
+                last_bsdf_pdf = pf_l
+                (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
+                    dvcm_carry, dvc_carry, dvm_carry, cos_l / pf_l, pf_l, pr_l,
+                    mis_vc_weight_factor, eta_x)
 
         elif mat.type == MatKind.conductor or mat.type == MatKind.coated_conductor:
             var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
@@ -4284,15 +4019,11 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 mis_vc_weight_factor, eta_x)
 
         elif mat.type == MatKind.coated_diffuse:
-            # VCM light-side coateddiffuse (task #158) -- same sampling
-            # geometry as the camera-side branch above (coat reflect vs
-            # transmit-into-coat recycling walk), but WITHOUT any NEE: light
-            # subpaths in this LVC architecture never do their own NEE (see
-            # every other light-side material branch in this function --
-            # only camera vertices call _bdpt_nee_contribute), so only the
-            # walk's continuation direction + flux attenuation matter here.
-            # Stored vertices use mat_kind=4, same unweighted scope as the
-            # camera side.
+            # coateddiffuse as pbrt's LayeredBxDF (layered.mojo): one real lobe
+            # with real f, forward and reverse densities (LobeKind.layered), so
+            # it takes part in every strategy's MIS like a diffuse vertex. It
+            # replaced a coat walk that split the vertex into a coat-reflect and
+            # a base-exit lobe on an approximate density.
             var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             var cos_fix = abs(dot(-ray_dir, gn))
@@ -4302,137 +4033,42 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
             if tex_ok:
                 eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-            # Bump/normal maps -- see the diffuse branch above.
-            # Saved BEFORE the perturbation: the stored vertex keeps this as its
-            # GEOMETRIC normal, because _connect's solid-angle -> area pdf
-            # conversions are built on it. See BDPTVertex.shading_normal.
             var gn_geo = gn
             gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
                 gn, gn, ray_dir,
                 _camera_approx_footprint(hit, cam_pos, px_scale),
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-            gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
-
-            var ior = mat.emission.r
-            var coat_alpha = max(mat.roughU, mat.roughV)
-            var is_rough_coat = coat_alpha > Float32(0.001)
-            var wo = -ray_dir
-            # THE shared layered-BSDF walk (bxdf.mojo) -- see the camera-side
-            # branch above. This light-side copy is gone too; only the LVC
-            # vertex storage and the deliberate absence of eta^2 stay here.
-            var cw = coat_walk_begin(gn, wo, eff_alb, ior, coat_alpha, pcg)
-            coat_walk_enter(cw, pcg)
-
-            if cw.event == COAT_ABSORB:
-                return False   # coat total-internal-reflection-like case: terminate
-
-            if cw.event == COAT_REFLECT:
-                var refl = cw.wi
-                rd = vec3f(refl)
-                ro = hit + rd*Float32(0.0002)
-                if is_rough_coat:
-                    # cw.beta carries G2(wo,wi)/G1(wo); achromatic here.
-                    flux *= cw.beta.r
-                    var v = _null_vertex()
-                    v.pos = hit
-                    v.normal = vec3f(gn_geo)
-                    v.shading_normal = vec3f(gn)
-                    v.beta = flux
-                    v.alb = eff_alb
-                    # coated_REFLECT -- the light side's twin of the camera
-                    # branch above; this half reaches the photon cache, so a
-                    # wrong evaluator here misweights every merge that
-                    # gathers it.
-                    v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.coated_reflect
-                    v.mat_idx = Int32(mat_idx)   # the coat evaluator reads ior from it
-                    v.pdf_bwd = coat_alpha       # smooth-vs-rough, as ggx stores alpha
-                    v.wo = vec3f(wo)
-                    # Real density and real carries -- the camera side's twin
-                    # of this vertex carries the full story. This half is the
-                    # one that reaches the photon cache, so fabricated carries
-                    # here corrupt the weight of every MERGE that gathers this
-                    # vertex, not just this subpath's own connections.
-                    v.pdf_fwd = cw.pdf
-                    v.med_idx = cur_med_idx
-                    v.wavelengths = wavelengths
-                    v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
-                    n_verts += 1
-                    _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
-                    var cos_out_lr = abs(dot(refl, gn))
-                    var (_pf_lr, pdf_rev_lr) = _bdpt_vertex_pdfs(v, vec3f(refl), sd)
-                    (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
-                        dvcm_carry, dvc_carry, dvm_carry,
-                        cos_out_lr / max(cw.pdf, Float32(1e-9)), cw.pdf, pdf_rev_lr,
-                        mis_vc_weight_factor, eta_x)
-                else:
-                    # Genuinely delta (smooth mirror coat): dVCM resets.
-                    dvcm_carry = Float32(0)
-                return True   # coat-reflect (rough): vertex already stored above, path continues
-
-            # Entry attenuation already applied by coat_walk_enter. The light
-            # subpath does no NEE of its own, so this loop is just the walk.
-            while cw.event == COAT_WALKING:
-                if not coat_walk_at_base(cw, pcg):
-                    break
-                coat_walk_scatter(cw, pcg)
-
-            var exited = cw.event == COAT_EXIT
-            var exit_dir = cw.wi
-            if not exited:
-                return False   # coat recycling walk failed to find an exit direction
-
-            rd = vec3f(exit_dir)
-            ro = hit + rd*Float32(0.0002)
-            # NO 1/eta^2 here, unlike the camera-side exit -- deliberately.
-            # The camera-side factor accounts for radiance compression
-            # leaving a denser medium under RADIANCE transport; a light
-            # subpath carries IMPORTANCE, whose non-symmetric scattering
-            # correction runs the other way (see Veach ch. 5 / pbrt's
-            # TransportMode::Importance BTDF branch) and is entangled with
-            # this codebase's own documented, already-accepted gap for
-            # coateddiffuse BDPT vertices: they're stored as mat_kind=4,
-            # which _bdpt_vertex_mis_scoped excludes from real per-vertex
-            # MIS, so connect/merge reach them through _eval_vertex's
-            # generic unweighted fallback rather than a proper eta-aware
-            # BDPT connection weight (same shape as the dielectric/volume
-            # gap noted elsewhere in this file). Guessing a sign here
-            # without that connection-weight context fixed first risks
-            # trading one silent bias for another; left alone, not ignored.
-            # The stored PHOTON carries the flux arriving BEFORE the coat, because a
-            # merge or connection at this vertex supplies the coat transport itself
-            # through coat_eval_smooth. Storing the post-walk flux applies the coat
-            # TWICE -- the light-side twin of the camera-side double application fixed
-            # in ba3ea22b. Every factor in it is < 1, so it reads as too DARK.
-            # The continuing photon still carries the post-walk flux.
-            # Light-side twin of 6ec79292: a smooth coat's exit density is known,
-            # so this photon gets REAL carries and its path keeps them. Zero carries
-            # here made every merge-with and t=1 weight at a coated vertex too large.
-            var cos_x_l = abs(dot(exit_dir, gn))
-            var smooth_coat_l = coat_alpha <= Float32(0.001)
-            var pdf_x_l = bxdf_pdf_coated_exit(cos_x_l, ior)
-            var flux_pre_coat = flux
-            flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (cw.beta).r, (cw.beta).g, (cw.beta).b, wavelengths)
+            gn = face_toward(gn, -ray_dir)
             var v = _null_vertex()
             v.pos = hit
             v.normal = vec3f(gn_geo)
             v.shading_normal = vec3f(gn)
-            v.beta = flux_pre_coat
+            v.beta = flux
             v.alb = eff_alb
-            v.is_surface = Int32(1); v.is_delta = Int32(0); v.mat_kind = LobeKind.coated_walk
-            v.mat_idx = Int32(mat_idx)   # the coat evaluator reads ior from it
-            v.pdf_bwd = coat_alpha       # smooth-vs-rough, as ggx stores alpha
-            v.wo = vec3f(wo)
-            v.pdf_fwd = pdf_x_l
-            v.med_idx = cur_med_idx
+            v.is_surface = Int32(1); v.is_delta = Int32(0)
+            v.mat_kind = LobeKind.layered
+            v.mat_idx = Int32(mat_idx)
+            v.pdf_fwd = Float32(1); v.med_idx = cur_med_idx
+            v.wo = vec3f(-ray_dir)
             v.wavelengths = wavelengths
             v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
             n_verts += 1
             _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
-            (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
-                dvcm_carry, dvc_carry, dvm_carry,
-                cos_x_l / max(pdf_x_l, Float32(1e-9)), pdf_x_l,
-                bxdf_pdf_coated_exit(abs(dot(wo, gn)), ior),
-                mis_vc_weight_factor, eta_x)
+            var (ok_l, wi_l, w_l, spec_l, pf_l, pr_l, cos_l) = _bdpt_layered_scatter(
+                vec3f(gn), vec3f(-ray_dir), eff_alb, mat, False, pcg, sd, wavelengths)
+            if not ok_l:
+                return False
+            rd = wi_l
+            ro = hit + rd*Float32(0.0002)
+            flux *= w_l
+            if spec_l:
+                dvcm_carry = Float32(0)
+                dvc_carry *= cos_l
+                dvm_carry *= cos_l
+            else:
+                (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
+                    dvcm_carry, dvc_carry, dvm_carry, cos_l / pf_l, pf_l, pr_l,
+                    mis_vc_weight_factor, eta_x)
 
         elif mat.type == MatKind.conductor or mat.type == MatKind.coated_conductor:
             var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
