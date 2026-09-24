@@ -2321,6 +2321,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             var al_idx = Int(al_count)
             var em = ma.al_rgb
             var t_area  = Float32(0.0)
+            var tri_cdf = unsafe_alloc[Float32](max(nt, 1))   # see AreaLight_C.tri_cdf
             for ti in range(nt):
                 var vi0 = Int(vis_c[unsafe_offset=ti*3+0]) * 4
                 var vi1 = Int(vis_c[unsafe_offset=ti*3+1]) * 4
@@ -2335,6 +2336,12 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 var cyv = ez*fx - ex*fz
                 var czv = ex*fy - ey*fx
                 t_area += Float32(0.5) * sqrt(cxv*cxv + cyv*cyv + czv*czv)
+                tri_cdf[unsafe_offset=ti] = t_area
+            for ti in range(nt):
+                tri_cdf[unsafe_offset=ti] = tri_cdf[unsafe_offset=ti] / t_area if t_area > Float32(0) else Float32(ti + 1) / Float32(nt)
+            if nt > 0:
+                tri_cdf[unsafe_offset=nt - 1] = Float32(1)   # exact, whatever the rounding
+            al_list[unsafe_offset=al_idx].tri_cdf    = tri_cdf
             al_list[unsafe_offset=al_idx].meshIdx    = Int32(i)
             al_list[unsafe_offset=al_idx].n_tris     = Int32(nt)
             al_list[unsafe_offset=al_idx].emission   = em
@@ -3151,6 +3158,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             var idx = n_al_mesh + Int(cl_running)
             al_list[unsafe_offset=idx].meshIdx    = Int32(i)
             al_list[unsafe_offset=idx].n_tris     = Int32(0)
+            al_list[unsafe_offset=idx].tri_cdf    = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
             al_list[unsafe_offset=idx].emission   = s[unsafe_offset=0].curves_al_rgb[i]
             al_list[unsafe_offset=idx].total_area = curve_light_tube_area(psc[unsafe_offset=0].curves[unsafe_offset=i])
             al_list[unsafe_offset=idx].kind       = Int8(1)

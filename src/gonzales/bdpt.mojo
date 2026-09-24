@@ -14,6 +14,7 @@ from std.memory.alloc import unsafe_alloc
 from std.memory import bitcast
 from std.atomic import Atomic
 from .geometry import (
+    area_light_pick_triangle,
     face_toward,
     RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Ray_C, Intersection_C, Frame,
     TriangleMesh_C, Material_C, MatKind, LobeKind, PhotonKind, AreaLight_C, Medium_C, MediumInterface_C,
@@ -562,7 +563,7 @@ def _bdpt_mnee_diffuse_area_light(
         return SpectralSample(Float32(0))
     var lmesh = sd.meshes[unsafe_offset=Int(al.meshIdx)]
     var n_tris = Int(max(Int(al.n_tris), 1))
-    var ti = Int(pcg.next_uint() % UInt32(n_tris))
+    var ti = area_light_pick_triangle(al, pcg.next_float())
     var lb = ti * 3
     var lv0 = Int(lmesh.vertexIndices[unsafe_offset=lb]); var lv1 = Int(lmesh.vertexIndices[unsafe_offset=lb+1]); var lv2 = Int(lmesh.vertexIndices[unsafe_offset=lb+2])
     var lp0 = Vec3f(lmesh.points[unsafe_offset=lv0*4], lmesh.points[unsafe_offset=lv0*4+1], lmesh.points[unsafe_offset=lv0*4+2])

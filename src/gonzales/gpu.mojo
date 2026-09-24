@@ -8,7 +8,7 @@ from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory.alloc import unsafe_alloc
 from std.memory import unsafe_memcpy
-from .geometry import RGB, Point3f, Point2f, FilmDims, FilterParams, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, NvdbGrid_C, nvdb_sample_density, nvdb_ray_range, grid_ray_range, nvdb_index_ray, nvdb_node_exit_t, nvdb_majorant_at_world, hg_phase, hg_sample, blackbody_rgb, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_grid_for, medium_nvdb_for, medium_emission_spectral, MEDIUM_TRACK_MAX_ITERS, medium_transmittance_ratio_spectral, medium_sigma_s_spectral, medium_sigma_t_spectral, TERMINAL_SEGMENT_GRACE_ROUNDS
+from .geometry import RGB, Point3f, Point2f, FilmDims, FilterParams, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, light_sampler_sample, MatKind, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, NvdbGrid_C, nvdb_sample_density, nvdb_ray_range, grid_ray_range, nvdb_index_ray, nvdb_node_exit_t, nvdb_majorant_at_world, hg_phase, hg_sample, blackbody_rgb, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_grid_for, medium_nvdb_for, medium_emission_spectral, MEDIUM_TRACK_MAX_ITERS, medium_transmittance_ratio_spectral, medium_sigma_s_spectral, medium_sigma_t_spectral, TERMINAL_SEGMENT_GRACE_ROUNDS, area_light_pick_triangle
 from std.ffi import external_call
 from .bvh import BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, traverse_bvh2_core_defer_curves, any_hit_bvh2_core, test_spheres, LightSample, _sample_infinite_light_nee, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee
 from .transform import transform_normal_by_instance
@@ -342,8 +342,9 @@ struct TextureBuffers(Movable):
 
 @fieldwise_init
 struct LightBuffers(Movable):
-    var area_lights_buf: DeviceBuffer[DType.uint8]  # n_lights × sizeof(AreaLight_C) = 24
+    var area_lights_buf: DeviceBuffer[DType.uint8]  # n_lights × sizeof(AreaLight_C)
     var n_area_lights: Int
+    var area_light_cdf_bufs: List[DeviceBuffer[DType.uint8]]   # each mesh light's tri_cdf
     var distant_lights_buf: DeviceBuffer[DType.uint8]  # n_distant × sizeof(DistantLight_C) = 32
     var n_distant_lights: Int
     var point_lights_buf: DeviceBuffer[DType.uint8]    # n_point × sizeof(PointLight_C) = 16
@@ -749,8 +750,21 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
 
             ctx.synchronize()
 
-            # Upload area lights
-            var al_buf = _gpu_upload_array[AreaLight_C](ctx, areaLights, Int(areaLightCount))
+            # Upload area lights. tri_cdf is a HOST pointer in the parsed
+            # lights, so each mesh light's CDF goes up on its own and the
+            # device copy of the struct points at that.
+            var al_cdf_bufs = List[DeviceBuffer[DType.uint8]]()
+            var al_host = unsafe_alloc[AreaLight_C](max(Int(areaLightCount), 1))
+            for ali in range(Int(areaLightCount)):
+                var al_i = areaLights[unsafe_offset=ali]
+                if al_i.kind == Int8(0) and _is_real_ptr(al_i.tri_cdf) and al_i.n_tris > Int32(0):
+                    al_i.tri_cdf = _gpu_upload_owned[Float32](ctx, al_cdf_bufs, al_i.tri_cdf, Int(al_i.n_tris))
+                else:
+                    al_i.tri_cdf = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
+                al_host[unsafe_offset=ali] = al_i
+            var al_buf = _gpu_upload_array[AreaLight_C](ctx, al_host, Int(areaLightCount))
+            ctx.synchronize()   # al_host is freed next
+            al_host.unsafe_free()
 
             # Upload spheres (analytical sphere primitives + sphere area lights)
             var sphere_buf = _gpu_upload_array[Sphere_C](ctx, spheres, Int(sphereCount))
@@ -1118,6 +1132,7 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                 ),
                 lights=LightBuffers(
                     area_lights_buf=al_buf^,
+                    area_light_cdf_bufs=al_cdf_bufs^,
                     n_area_lights=Int(areaLightCount),
                     distant_lights_buf=dl_buf^,
                     n_distant_lights=Int(distantLightCount),
@@ -2468,7 +2483,7 @@ def _sample_medium_core(
                 var light_sel_pdf = ls_result[1]
                 var al = areaLights[unsafe_offset=light_idx]
                 var lmesh = meshes[unsafe_offset=Int(al.meshIdx)]
-                var lti = Int(pcg.next_uint() % UInt32(max(Int(al.n_tris), 1)))
+                var lti = area_light_pick_triangle(al, pcg.next_float())
                 var r1 = pcg.next_float()
                 var r2 = pcg.next_float()
                 var lb = lti * 3

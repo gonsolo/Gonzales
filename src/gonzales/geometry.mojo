@@ -837,16 +837,14 @@ struct PathState_C(TrivialRegisterPassable):
 # ── Lights ────────────────────────────────────────────────────────────────────
 # See: docs/06_lights_and_materials.md
 
-@fieldwise_init
 struct AreaLight_C(TrivialRegisterPassable):
     """A sampleable area light. kind==0: a triangle mesh (meshIdx indexes
     TriangleMesh_C, n_tris triangles, total_area = mesh surface area).
     kind==1: a native curve (meshIdx reused as the curve's index into the
     scene's Curve_C array; n_tris unused; total_area = the curve's tube
-    lateral surface area, see curve_light_tube_area). Both kinds are sampled
-    uniformly-by-primitive (random triangle, or random curve piece) rather
-    than area-weighted — see sample_area_light_uniform (sppm.mojo) and
-    shading.mojo's NEE area-light sampling."""
+    lateral surface area, see curve_light_tube_area). A mesh light's triangle
+    is picked area-weighted (area_light_pick_triangle); a curve light's piece
+    is still picked uniformly -- see sample_area_light_uniform (sppm.mojo)."""
     var meshIdx: Int32
     var n_tris: Int32       # number of triangles in this light mesh (kind==0 only)
     var emission: RGB
@@ -855,6 +853,52 @@ struct AreaLight_C(TrivialRegisterPassable):
     var _pad0: Int8
     var _pad1: Int8
     var _pad2: Int8
+    # Cumulative triangle areas / total_area, n_tris entries ending at 1:
+    # area_light_pick_triangle draws a triangle in PROPORTION TO ITS AREA, so
+    # a uniform point on it has density exactly 1 / total_area -- the density
+    # every consumer (PT NEE, VCM light paths and MIS, SPPM photons) divides
+    # by. Dangling (curves, hand-built fixtures) falls back to a uniform pick,
+    # which is only right when the triangles are equal.
+    var tri_cdf: Pointer[Float32, MutUntrackedOrigin]
+
+    def __init__(out self, meshIdx: Int32, n_tris: Int32, emission: RGB, total_area: Float32,
+                 kind: Int8, _pad0: Int8, _pad1: Int8, _pad2: Int8,
+                 tri_cdf: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()):
+        self.meshIdx = meshIdx
+        self.n_tris = n_tris
+        self.emission = emission
+        self.total_area = total_area
+        self.kind = kind
+        self._pad0 = _pad0
+        self._pad1 = _pad1
+        self._pad2 = _pad2
+        self.tri_cdf = tri_cdf
+
+
+@always_inline
+def area_light_pick_triangle(al: AreaLight_C, u: Float32) -> Int:
+    """Triangle index of mesh light `al` for a uniform u in [0,1), picked in
+    proportion to triangle area (binary search of al.tri_cdf).
+
+    Picking uniformly BY INDEX instead -- as every call site did until
+    2026-09-24 -- gives a point on triangle t the density 1/(n_tris * A_t),
+    while every weight and flux assumed 1/total_area: small triangles
+    over-emitted per unit area. On barcelona-pavilion-night's candle flame
+    (1984 triangles, areas spread 9x) the light-side VCM strategies then
+    disagreed with the camera side in expectation, which is what made MIS
+    weight changes move the mean at the lanterns."""
+    var n = Int(max(Int(al.n_tris), 1))
+    if not _is_real_ptr(al.tri_cdf):
+        return min(Int(u * Float32(n)), n - 1)
+    var lo = 0
+    var hi = n - 1
+    while lo < hi:
+        var mid = (lo + hi) // 2
+        if al.tri_cdf[unsafe_offset=mid] > u:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
 
 @fieldwise_init
 struct Sphere_C(TrivialRegisterPassable):
