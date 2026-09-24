@@ -3453,7 +3453,15 @@ def mojo_apply_overrides(
     # any comparison of two builds is measuring noise unless the seed is
     # pinned. `--seed` pins it.
     if seed_override >= Int64(0):
-        psc[unsafe_offset=0].rng_seed = UInt64(seed_override)
+        # Hashed (splitmix64), not used raw. Every consumer builds its PCG
+        # state by XOR-ing this seed with small counters, all on shared
+        # streams, so a small raw seed made the RNGs structurally related:
+        # seeded VCM runs were not distributed like unseeded ones (exact
+        # flat-mirror glint: 20.2 seeded vs 22.6 unseeded vs 22.15 exact).
+        var z = UInt64(seed_override) + UInt64(0x9E3779B97F4A7C15)
+        z = (z ^ (z >> 30)) * UInt64(0xBF58476D1CE4E5B9)
+        z = (z ^ (z >> 27)) * UInt64(0x94D049BB133111EB)
+        psc[unsafe_offset=0].rng_seed = z ^ (z >> 31)
     if spp_override > Int32(0):
         var spp = spp_override
         var log2_spp = Int32(0)
