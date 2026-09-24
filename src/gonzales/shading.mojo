@@ -4635,17 +4635,6 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     pixel_idx: Int = -1,
     sms_io: SMSReservoirIO = sms_reservoir_io_null(),
 ):
-    # A path that has used its full maxdepth budget dies HERE, at the next
-    # real scattering event -- after any emission this segment landed on has
-    # already been collected upstream, and before this vertex would do NEE or
-    # sample a new direction. That is exactly pbrt's ordering (integrators.cpp:
-    # emission, then `if (depth++ >= maxDepth) return L;`, then SampleLd).
-    # A null interface is NOT a scattering event, so a capped path is still
-    # allowed to cross it and keep looking for an emitter beyond.
-    if path_ptr[].at_cap != Int8(0) and mat.type != MatKind.interface:
-        path_ptr[].active = 0
-        return
-
     # Any material other than a null interface is a REAL scattering event, so
     # the null-interface distance accumulated on the way here has served its
     # purpose and must not leak into the next segment's MIS. Reset here rather
@@ -4981,6 +4970,22 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                             var pdf_light = dist2 * max(al_sel_pdf, Float32(1e-6)) / (cos_l * al.total_area)
                             var w = power_heuristic(pdf_bsdf, pdf_light)
                             path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths) * w
+        path_ptr[].active = 0
+        return
+
+    # A path that has used its full maxdepth budget dies HERE, at the next
+    # real scattering event -- after any emission this segment landed on has
+    # been collected above, and before this vertex would do NEE or sample a
+    # new direction. That is exactly pbrt's ordering (integrators.cpp:
+    # emission, then `if (depth++ >= maxDepth) return L;`, then SampleLd).
+    # A null interface is NOT a scattering event, so a capped path is still
+    # allowed to cross it and keep looking for an emitter beyond.
+    # It sits here, ahead of BOTH handoffs, because it used to live only in
+    # the CPU's _shade_dispatch: the GPU's per-material kernels never saw it,
+    # so once the GPU round budget grew by the terminal-segment grace round
+    # every GPU path tracer render ran one extra shaded bounce (cornell-box at
+    # maxdepth 1 read pbrt's maxdepth-2 value).
+    if path_ptr[].at_cap != Int8(0) and mat.type != MatKind.interface:
         path_ptr[].active = 0
         return
 
