@@ -215,12 +215,19 @@ struct MisPolicy(TrivialRegisterPassable):
     var emission_pdf_w: Float32   # the light's emission density
     var pdf_rev_w:      Float32   # this lobe's reverse density toward wo
     var sole:           Bool      # NEE is the ONLY strategy -- weight is 1
+    # |cos| between the light sample and the GEOMETRIC normal, or 0 when the
+    # vertex has none (hair). vcm_env_nee_weight's cos_out converts the
+    # light's emission density to an area density at the surface -- a
+    # density, so it wants the geometric normal, while the BSDF cosine the
+    # NEE helpers compute is the SHADING one. Mixing them made NEE disagree
+    # with merging and light tracing wherever a bump map tilts ns.
+    var cos_geo:        Float32
 
 
 @always_inline
 def mis_policy_power() -> MisPolicy:
     """The path tracer's policy: NEE vs BSDF sampling, nothing else exists."""
-    return MisPolicy(False, Float32(0), Float32(0), Float32(0), Float32(0), Float32(0), False)
+    return MisPolicy(False, Float32(0), Float32(0), Float32(0), Float32(0), Float32(0), False, Float32(0))
 
 
 @always_inline
@@ -248,7 +255,7 @@ def mis_policy_sole() -> MisPolicy:
     branch silently inherited _nee_weight_simple_spectral's power-heuristic
     default, so it applied to every sphere and infinite light SPPM ever
     shaded."""
-    return MisPolicy(False, Float32(0), Float32(0), Float32(0), Float32(0), Float32(0), True)
+    return MisPolicy(False, Float32(0), Float32(0), Float32(0), Float32(0), Float32(0), True, Float32(0))
 
 
 @always_inline
@@ -259,6 +266,7 @@ def nee_mis_weight(p: MisPolicy, ls_pdf: Float32, pdf_bsdf_w: Float32,
         return Float32(1.0)
     if not p.is_vcm:
         return power_heuristic(ls_pdf, pdf_bsdf_w)
+    var cos_dens = p.cos_geo if p.cos_geo > Float32(0) else cos_out
     return vcm_env_nee_weight(pdf_bsdf_w, p.pdf_rev_w, ls_pdf,
-                              p.emission_pdf_w, cos_out, p.vm_weight,
+                              p.emission_pdf_w, cos_dens, p.vm_weight,
                               p.dvcm, p.dvc)
