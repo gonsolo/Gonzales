@@ -115,8 +115,8 @@
     "tol": 0.03
   },
   "mnee-through-glass.vcm": {
-    "mean": 0.229604,
-    "median": 0.131945,
+    "mean": 0.213035,
+    "median": 0.120523,
     "tol": 0.03
   },
   "normal-map.pt": {

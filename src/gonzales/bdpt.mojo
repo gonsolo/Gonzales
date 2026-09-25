@@ -4727,29 +4727,6 @@ def _bdpt_vertex_mis_scoped(v: BDPTVertex) -> Bool:
 
 
 @always_inline
-def _bdpt_vertex_mis_scoped_kinds(v: BDPTVertex) -> Bool:
-    """True for vertex kinds _bdpt_vertex_pdfs has a real pdf for: diffuse
-    (mat_kind=0, real surface -- excludes volume vertices, which default
-    to mat_kind=0 too, see _connect's matching comment), rough
-    conductor/coated_conductor (mat_kind=1, always non-delta by
-    construction -- delta conductor bounces are never stored as
-    connectible vertices at all, see _bdpt_trace_camera_and_connect's
-    conductor branch), hair (mat_kind=2, Marschner 3-lobe -- also always
-    non-delta, no specular lobe exists in this model), and measured
-    (mat_kind=3). Dielectric/thin_dielectric are NOT in this list and
-    never will be without first adding rough-dielectric support -- they're
-    genuinely delta/specular in this codebase (true reflect-or-refract,
-    not an approximation), so they're never even stored as LVC vertices
-    at all (see _bdpt_trace_camera_and_connect's/_bdpt_trace_light_path's
-    dielectric branches), making this function unreachable for them by
-    construction, not merely False."""
-    if v.is_surface != Int32(1):
-        return False
-    return (v.mat_kind == LobeKind.lambertian or v.mat_kind == LobeKind.ggx or v.mat_kind == LobeKind.hair
-            or v.mat_kind == LobeKind.measured or v.mat_kind == LobeKind.bssrdf
-            or v.mat_kind == LobeKind.diffuse_transmit)
-
-@always_inline
 def _bdpt_connect_pair_weighted(cv: BDPTVertex, lv: BDPTVertex) -> Bool:
     """True when _connect applies a real per-pair MIS weight to (cv, lv).
 

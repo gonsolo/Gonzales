@@ -1045,9 +1045,15 @@ def lobe_scoped(c: LobeCtx) -> Bool:
     # no missing alpha. It is only ever STORED for a rough coat (a smooth
     # coat's reflect branch is a delta mirror and stores no vertex at all),
     # so reaching here already implies the lobe is non-delta.
+    # diffuse_transmit: lobe_eval returns its real two-lobe densities (the
+    # luminance split times each side's cosine). It was missing here while
+    # lobe_eval hard-coded True for it, so VCM's NEE at a leaf weighted
+    # itself against connections that _connect then ran UNWEIGHTED: floor
+    # lit only through a diffusetransmission panel read 1.8x pbrt.
     return (c.kind == LobeKind.lambertian or c.kind == LobeKind.ggx
             or c.kind == LobeKind.hair or c.kind == LobeKind.measured
-            or c.kind == LobeKind.coated_reflect)
+            or c.kind == LobeKind.coated_reflect
+            or c.kind == LobeKind.diffuse_transmit)
 
 
 @always_inline
@@ -1267,7 +1273,7 @@ def lobe_eval[want_pdfs: Bool = True](
         var cos_dt = dot(dir_to_other, vn)
         var cos_wo_dt = dot(vwo, vn)
         if abs(cos_dt) <= Float32(1e-9) or abs(cos_wo_dt) <= Float32(1e-9):
-            return LobeEval(ZERO, Float32(1), Float32(0), Float32(0), True)
+            return LobeEval(ZERO, Float32(1), Float32(0), Float32(0), lobe_scoped(c))
         var same_side = cos_dt * cos_wo_dt > Float32(0)
         # The transmittance lives in the MATERIAL (Material_C.emission, see
         # shade_diffuse_transmission), so it needs a real mat_idx. Callers
@@ -1295,7 +1301,7 @@ def lobe_eval[want_pdfs: Bool = True](
         comptime if want_pdfs:
             fwd_dt = p_lobe_dt * cos_a_dt * INV_PI
             rev_dt = p_lobe_dt * abs(cos_wo_dt) * INV_PI
-        return LobeEval(alb_dt * (INV_PI * cos_a_dt), cos_a_dt, fwd_dt, rev_dt, True)
+        return LobeEval(alb_dt * (INV_PI * cos_a_dt), cos_a_dt, fwd_dt, rev_dt, lobe_scoped(c))
 
     # Opaque Lambertian, and the coated base's fallback. ZERO across the
     # surface: `c.wo` is the direction the subpath ARRIVED from, so an opaque
