@@ -978,7 +978,21 @@ def _hair_sample_dir(
     baked in (see _hair_eval_lobes), so the correct importance-sampling
     throughput update is `beta *= f / pdf_over_cos` — cos_ti cancels, same
     as shade_hair's own `throughput *= f * (1/pdf)`."""
-    var r_lobe = pcg.next_float() * hc.total_lum
+    var u_lobe = pcg.next_float()
+    var u_th = pcg.next_float()
+    var u_phi_v = pcg.next_float()
+    var u3 = pcg.next_float()
+    return _hair_sample_dir_u(hc, u_lobe, u_th, u_phi_v, u3)
+
+
+def _hair_sample_dir_u(
+    hc: HairLobeConstants,
+    u_lobe: Float32, u_th_in: Float32, u_phi_v: Float32, u3_in: Float32,
+) -> Tuple[Vec3f, RGB, Float32, Float32]:
+    """_hair_sample_dir with its four random numbers passed in, in the same
+    order (lobe, theta, phi_v, logistic phi), so bxdf.mojo's lobe_sample can
+    drive it."""
+    var r_lobe = u_lobe * hc.total_lum
     var vm_p: Float32
     var e2vm_p: Float32
     var dphi_p: Float32
@@ -999,8 +1013,7 @@ def _hair_sample_dir(
         sin_tp_o_s = hc.sin_theta_o; cos_tp_o_s = hc.cos_theta_o
         uniform_phi_s = True
 
-    var u_th = max(pcg.next_float(), Float32(1e-6))
-    var u_phi_v = pcg.next_float()
+    var u_th = max(u_th_in, Float32(1e-6))
     var cos_th = Float32(1.0) + vm_p * log(u_th + (Float32(1.0) - u_th) * e2vm_p)
     cos_th = max(Float32(-1.0), min(Float32(1.0), cos_th))
     var sin_th = safe_sqrt(Float32(1.0) - cos_th * cos_th)
@@ -1009,7 +1022,7 @@ def _hair_sample_dir(
     var cos_ti_s = safe_sqrt(Float32(1.0) - sin_ti_s * sin_ti_s)
     cos_ti_s = max(cos_ti_s, Float32(1e-5))
 
-    var u3 = max(pcg.next_float(), Float32(1e-6))
+    var u3 = max(u3_in, Float32(1e-6))
     var phi_i_s: Float32
     if uniform_phi_s:
         phi_i_s = hc.phi_o + TWO_PI * u3 - PI

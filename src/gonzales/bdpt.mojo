@@ -54,7 +54,7 @@ from .sppm import (
 )
 from .shading import _tex_lookup, _get_tri_verts, _mnee_walk, _mnee_walk2, \
     apply_surface_maps_at_hit, _camera_approx_footprint, area_light_hit_cos, curve_light_hit
-from .bxdf import LobeCtx, LobeEval, lobe_eval, lobe_scoped, lobe_sample, LobeSample, lobe_kind_of, lobe_param_of, lobe_is_delta_of, lobe_is_available_of, _eval_conductor_ggx_spectral, coat_eval_smooth, bxdf_pdf_coated_exit, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
+from .bxdf import LobeCtx, LobeEval, lobe_eval, lobe_scoped, lobe_sample, LobeSample, lobe_kind_of, lobe_param_of, lobe_is_delta_of, lobe_is_available_of, nee_weight_lobe, _eval_conductor_ggx_spectral, coat_eval_smooth, bxdf_pdf_coated_exit, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured, bxdf_pdf_measured
 from .gpu import GpuSceneHandle, vulkaninterop_unpack_results_kernel
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
@@ -2156,7 +2156,7 @@ def _vcm_scatter(
     Taking the vertex's own LobeCtx means the carries describe exactly the
     densities lobe_eval hands connect, merge and NEE. A delta event (a
     smooth coat's mirror) zeroes dVCM and scales the rest by its cosine."""
-    var s = lobe_sample(_vertex_ctx(v, adjoint), pcg.next_float(), pcg.next_float(), pcg.next_float(),
+    var s = lobe_sample(_vertex_ctx(v, adjoint), pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg.next_float(),
         LobeTables(sd.materials, sd.curves, sd.measuredBrdfs),
         sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y,
         sd.spectral.cie_z, sd.spectral.d65, wavelengths)
@@ -2665,10 +2665,20 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
         if mat.type != MatKind.interface:
             mis_null_dist = Float32(0)
 
-        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured:
+        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair:
             if not lobe_is_available_of(mat):
                 return False   # e.g. a measured table that failed to load
-            var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+            # GEOMETRY, not material: a curve hit has its own normal and spawn
+            # offset (curve_offset_eps), and no texture or bump map.
+            var on_curve = inter.primId.type == Int8(5)
+            var spawn_eps = Float32(0.0001)
+            var gn: Vec3f
+            if on_curve:
+                var hc_g = _hair_precompute(mat, sd.curves, Int(inter.primId.id1), inter.v, inter.u, (-ray_dir).to_simd())
+                gn = hc_g.geo_normal
+                spawn_eps = curve_offset_eps(hc_g.radius)
+            else:
+                gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             # VCM Stage 2b: finish the per-bounce MIS correction (dist²
             # portion already applied above) -- see
@@ -2686,7 +2696,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # regression, for flat-color materials.
             var eff_alb = mat.albedo
             var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
-            if tex_ok:
+            if tex_ok and not on_curve:
                 eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             # Bump/normal maps. bdpt.mojo applied NONE of them, on either
             # subpath, while the path tracer has since 2026-09 -- a textbook
@@ -2700,10 +2710,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # GEOMETRIC normal, because _connect's solid-angle -> area pdf
             # conversions are built on it. See BDPTVertex.shading_normal.
             var gn_geo = gn
-            gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
-                gn, gn, ray_dir,
-                _camera_approx_footprint(hit, cam_pos, px_scale),
-                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            if not on_curve:
+                gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
+                    gn, gn, ray_dir,
+                    _camera_approx_footprint(hit, cam_pos, px_scale),
+                    sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
             var v = _null_vertex()
             v.pos = hit
@@ -2721,6 +2732,10 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # A smooth conductor is a mirror: it scatters, but stores no
             # vertex and starts no strategy.
             v.is_delta = Int32(1) if lobe_is_delta_of(mat) else Int32(0)
+            if on_curve:
+                v.hair_curve_idx = Int32(inter.primId.id1)
+                v.hair_h = inter.u
+                v.hair_v = inter.v
             v.pdf_fwd = Float32(1)  # unused by the uniform-subsample estimator
             v.wo = vec3f(-ray_dir)  # VCM Stage 2b: needed for _connect's reverse-pdf eval
             v.med_idx = cur_med_idx
@@ -2780,8 +2795,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                         pol_i = MisPolicy(le_i.scoped, eta_x, dvcm_carry, dvc_carry,
                                           Float32(1.0) / max(_bdpt_n_lights(sd) * PI * r_i * r_i, Float32(1e-12)),
                                           le_i.pdf_rev, False, abs(dot(ls_i.wi, gn_geo)))
-                    var w_i = _nee_weight_simple_spectral(ls_i, v.mat_kind, eff_alb, v.pdf_bwd, gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_i, v.mat_idx)
-                    total += _bdpt_nee_contribute(beta, w_i, ls_i, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, Float32(0.0001), v.mat_kind == LobeKind.diffuse_transmit)
+                    var w_i = nee_weight_lobe(ls_i, _vertex_ctx(v), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, pol_i)
+                    total += _bdpt_nee_contribute(beta, w_i, ls_i, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, v.mat_kind == LobeKind.diffuse_transmit or v.mat_kind == LobeKind.hair)
                 for inf_i in range(Int(sd.infiniteLightCount)):
                     var ls_e = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
                     # The SAME shared helper every other material uses -- the
@@ -2795,8 +2810,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var pol_e = MisPolicy(True, eta_x, dvcm_carry, dvc_carry,
                                           ls_e.pdf / max(_bdpt_n_lights(sd) * PI * r_e * r_e, Float32(1e-12)),
                                           le_e.pdf_rev, False, abs(dot(ls_e.wi, gn_geo)))
-                    var w_e = _nee_weight_simple_spectral(ls_e, v.mat_kind, eff_alb, v.pdf_bwd, gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_e, v.mat_idx)
-                    total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, Float32(0.0001), v.mat_kind == LobeKind.diffuse_transmit)
+                    var w_e = nee_weight_lobe(ls_e, _vertex_ctx(v), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, pol_e)
+                    total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, v.mat_kind == LobeKind.diffuse_transmit or v.mat_kind == LobeKind.hair)
                 # MNEE's receiver evaluates albedo/pi itself (see
                 # _bdpt_mnee_diffuse_area_light), so only Lambertian lobes can
                 # host it -- a limitation of MNEE, not a material branch.
@@ -2829,7 +2844,10 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             if not sc.valid:
                 return False
             rd = vec3f(sc.wi)
-            ro = hit + rd*Float32(0.0002)
+            if on_curve:
+                ro = hit + vec3f(gn_geo) * (spawn_eps if dot(sc.wi, gn_geo) >= Float32(0) else -spawn_eps)
+            else:
+                ro = hit + rd*Float32(0.0002)
             beta *= sc.weight
             last_bsdf_pdf = Float32(-1) if sc.is_delta else sc.pdf_fwd
 
@@ -2966,115 +2984,6 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     dvcm_carry = Float32(0)
                     dvc_carry = Float32(0)
                     dvm_carry = Float32(0)
-
-        elif mat.type == MatKind.hair:
-            # Marschner 3-lobe hair BSDF — no delta lobe, so always store a
-            # connectible vertex (unlike conductor's mirror-vs-rough split)
-            # and always importance-sample a continuation direction, mirroring
-            # shading.mojo's own shade_hair (via the shared bvh.mojo helpers).
-            var curve_idx_h = Int(inter.primId.id1)
-            var wo_h = (-rd).to_simd()
-            var hc = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wo_h)
-            var hair_eps = curve_offset_eps(hc.radius)
-            # VCM: hair DOES have a real standalone pdf (_hair_eval_lobes,
-            # same one _nee_weight_hair already trusts for NEE MIS) -- see
-            # _bdpt_vertex_pdfs' mat_kind=2 branch, which closes the
-            # connect/merge-time weighting. This cos_fix is the same
-            # distance²/area-measure correction diffuse/conductor apply.
-            var cos_fix_h = abs(dot(-ray_dir, hc.geo_normal))
-            if cos_fix_h > Float32(1e-6):
-                dvc_carry /= cos_fix_h
-                dvm_carry /= cos_fix_h
-            var v_h = _null_vertex()
-            v_h.pos = hit
-            v_h.normal = vec3f(hc.geo_normal)
-            v_h.shading_normal = vec3f(hc.geo_normal)
-            v_h.beta = beta
-            v_h.alb = mat.albedo
-            v_h.is_surface = Int32(1); v_h.is_delta = Int32(0); v_h.mat_kind = LobeKind.hair
-            v_h.wo = vec3f(wo_h)
-            v_h.mat_idx = Int32(mat_idx)
-            v_h.hair_curve_idx = Int32(curve_idx_h)
-            v_h.hair_h = inter.u
-            v_h.hair_v = inter.v
-            v_h.pdf_fwd = Float32(1)
-            v_h.med_idx = cur_med_idx
-            v_h.wavelengths = wavelengths
-            v_h.dVCM = dvcm_carry; v_h.dVC = dvc_carry; v_h.dVM = dvm_carry
-            if n_verts == 0: first_alb = mat.albedo
-            if n_verts >= _vcm_depth(sd):
-                return False   # a vertex past d starts no strategy (see _vcm_depth)
-            n_verts += 1
-            # Merging queries the GLOBAL photon grid and does not use this
-            # pixel's own paired light path, so unlike the connect below it
-            # must NOT be gated on that path having stored anything. It was,
-            # and in a white furnace only ~32% of light paths hit the quad at
-            # all, so ~68% of pixels skipped merging entirely: the estimator
-            # delivered 0.109 against an analytic 0.5.
-            total += _bdpt_merge_from_cache(v_h, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts)
-            if path_len > 0:
-                total += _bdpt_connect_to_cache(v_h, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, n_verts)
-
-            # Distant/point/sphere/infinite NEE, via the shared Light
-            # interface + BxDF interface (_nee_weight_hair, using `hc`) +
-            # _bdpt_nee_contribute glue — replacing 3 formerly hand-inlined
-            # blocks also duplicated in shading.mojo's shade_hair; hair has
-            # no delta lobe, so this always applies. Shadow-ray origin stays
-            # a fixed +geo_normal offset (no sign-flip toward wi, unlike
-            # shading.mojo's shade_hair) — preserves this file's own
-            # existing convention. Sphere-light NEE is new (this branch
-            # previously had none).
-            for li_h in range(_bdpt_simple_light_count(sd)):
-                var ls_ih = _bdpt_sample_simple_light(sd, li_h, hit.to_simd(), pcg)
-                var w_ih = _nee_weight_hair(ls_ih, hc)
-                total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_ih.r, w_ih.g, w_ih.b, wavelengths), ls_ih, hit, hc.geo_normal, cur_med_idx, sd, scratch, wavelengths, hair_eps)
-            for inf_ih in range(Int(sd.infiniteLightCount)):
-                var ls_eh = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_ih], Point2f(pcg.next_float(), pcg.next_float()))
-                # One policy expression, and `scoped` decides: a kind with real
-                # densities gets VCM's balance weight over all four strategies, a
-                # kind without keeps the path tracer's two-strategy heuristic.
-                var (_c_eh, r_eh) = _scene_bounding_sphere(sd)
-                var le_eh = _lobe_eval[want_pdfs=True](v_h, ls_eh.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
-                var pol_eh = MisPolicy(le_eh.scoped, eta_x, dvcm_carry, dvc_carry,
-                                      ls_eh.pdf / max(_bdpt_n_lights(sd) * PI * r_eh * r_eh, Float32(1e-12)), le_eh.pdf_rev, False, Float32(0))
-                var w_eh = _nee_weight_hair(ls_eh, hc, pol_eh)
-                total += _bdpt_nee_contribute(beta, spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, w_eh.r, w_eh.g, w_eh.b, wavelengths), ls_eh, hit, hc.geo_normal, cur_med_idx, sd, scratch, wavelengths, hair_eps)
-
-            var (wi_hs, f_hs, pdf_hs, cos_ti_hs2) = _hair_sample_dir(hc, pcg)
-            beta *= spec_refl_unbounded(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (f_hs / pdf_hs).r, (f_hs / pdf_hs).g, (f_hs / pdf_hs).b, wavelengths)
-            rd = vec3f(wi_hs)
-            var hsign = Float32(1) if dot(wi_hs, hc.geo_normal) >= Float32(0) else Float32(-1)
-            ro = hit + vec3f(hc.geo_normal) * hair_eps * hsign
-            last_bsdf_pdf = pdf_hs * cos_ti_hs2  # solid-angle pdf (pdf_hs already has /cos_ti baked in)
-            var cos_theta_out_h = abs(dot(wi_hs, hc.geo_normal))
-            # VCM: real non-specular recursive update, mirroring conductor's
-            # Stage 2d treatment -- see _bdpt_trace_light_path's matching
-            # branch for the general (cosThetaOut/bsdfDirPdfW) form.
-            # bsdf_dir_pdf_w_h is exactly last_bsdf_pdf, just computed
-            # already above; the REVERSE pdf needs hair's lobes
-            # re-evaluated with wo_h/wi_hs swapped -- same "second
-            # precompute with wo=dir_to_other" pattern _bdpt_vertex_pdfs'
-            # own hair branch uses, since hair's "wo" is baked into the
-            # precomputed HairLobeConstants rather than passed per-call.
-            var bsdf_dir_pdf_w_h = last_bsdf_pdf
-            if bsdf_dir_pdf_w_h > Float32(1e-8):
-                var hc_rev_h = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wi_hs)
-                var (cos_ti_rev_h, _, pdf_oc_rev_h) = _hair_eval_lobes(
-                    wo_h, hc_rev_h.tangent, hc_rev_h.b_perp, hc_rev_h.n_perp, hc_rev_h.phi_o,
-                    hc_rev_h.dphi0, hc_rev_h.dphi1, hc_rev_h.dphi2,
-                    hc_rev_h.cos_tp0_o, hc_rev_h.sin_tp0_o, hc_rev_h.cos_tp1_o, hc_rev_h.sin_tp1_o, hc_rev_h.cos_tp2_o, hc_rev_h.sin_tp2_o,
-                    hc_rev_h.cos_theta_o, hc_rev_h.sin_theta_o, hc_rev_h.inv_vm0, hc_rev_h.inv_vm1, hc_rev_h.inv_vm2, hc_rev_h.mp_c0, hc_rev_h.mp_c1, hc_rev_h.mp_c2, hc_rev_h.s,
-                    hc_rev_h.A0, hc_rev_h.A1, hc_rev_h.A2, hc_rev_h.A3, hc_rev_h.lum0, hc_rev_h.lum1, hc_rev_h.lum2, hc_rev_h.lum3, hc_rev_h.total_lum,
-                )
-                var bsdf_rev_pdf_w_h = cos_ti_rev_h * pdf_oc_rev_h
-                var inv_pdf_h = cos_theta_out_h / bsdf_dir_pdf_w_h
-                (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
-                    dvcm_carry, dvc_carry, dvm_carry, inv_pdf_h, bsdf_dir_pdf_w_h, bsdf_rev_pdf_w_h,
-                    mis_vc_weight_factor, eta_x)
-            else:
-                dvcm_carry = Float32(0)
-                dvc_carry = Float32(0)
-                dvm_carry = Float32(0)
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var did_bssrdf_hop = False
@@ -3669,10 +3578,20 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             if mat.type == MatKind.mix:
                 mat.type = MatKind.diffuse
 
-        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured:
+        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair:
             if not lobe_is_available_of(mat):
                 return False   # e.g. a measured table that failed to load
-            var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+            # GEOMETRY, not material: a curve hit has its own normal and spawn
+            # offset (curve_offset_eps), and no texture or bump map.
+            var on_curve = inter.primId.type == Int8(5)
+            var spawn_eps = Float32(0.0001)
+            var gn: Vec3f
+            if on_curve:
+                var hc_g = _hair_precompute(mat, sd.curves, Int(inter.primId.id1), inter.v, inter.u, (-ray_dir).to_simd())
+                gn = hc_g.geo_normal
+                spawn_eps = curve_offset_eps(hc_g.radius)
+            else:
+                gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             # VCM Stage 2b: finish the per-bounce MIS correction (the
             # dist² portion was already applied above, shared across
@@ -3687,17 +3606,18 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             # vertex, since both must agree on this bounce's actual albedo.
             var eff_alb = mat.albedo
             var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
-            if tex_ok:
+            if tex_ok and not on_curve:
                 eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             # Bump/normal maps -- see the camera-side diffuse branch.
             # Saved BEFORE the perturbation: the stored vertex keeps this as its
             # GEOMETRIC normal, because _connect's solid-angle -> area pdf
             # conversions are built on it. See BDPTVertex.shading_normal.
             var gn_geo = gn
-            gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
-                gn, gn, ray_dir,
-                _camera_approx_footprint(hit, cam_pos, px_scale),
-                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            if not on_curve:
+                gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
+                    gn, gn, ray_dir,
+                    _camera_approx_footprint(hit, cam_pos, px_scale),
+                    sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
             var v = _null_vertex()
             v.pos = hit
@@ -3712,6 +3632,10 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             # A smooth conductor is a mirror: it scatters, but stores no
             # vertex and starts no strategy.
             v.is_delta = Int32(1) if lobe_is_delta_of(mat) else Int32(0)
+            if on_curve:
+                v.hair_curve_idx = Int32(inter.primId.id1)
+                v.hair_h = inter.u
+                v.hair_v = inter.v
             v.pdf_fwd = Float32(1); v.med_idx = cur_med_idx
             v.wo = vec3f(-ray_dir)  # VCM Stage 2b: needed for _connect's reverse-pdf eval
             v.wavelengths = wavelengths
@@ -3723,7 +3647,10 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             if not sc.valid:
                 return False
             rd = vec3f(sc.wi)
-            ro = hit + rd*Float32(0.0002)
+            if on_curve:
+                ro = hit + vec3f(gn_geo) * (spawn_eps if dot(sc.wi, gn_geo) >= Float32(0) else -spawn_eps)
+            else:
+                ro = hit + rd*Float32(0.0002)
             flux *= sc.weight
 
         elif mat.type == MatKind.coated_conductor:
@@ -3801,65 +3728,6 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     dvcm_carry = Float32(0)
                     dvc_carry = Float32(0)
                     dvm_carry = Float32(0)
-
-        elif mat.type == MatKind.hair:
-            var curve_idx_h = Int(inter.primId.id1)
-            var wo_h = (-rd).to_simd()
-            var hc = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wo_h)
-            # VCM: hair DOES have a real standalone pdf -- see the camera-
-            # side hair branch's matching comment and _bdpt_vertex_pdfs'
-            # mat_kind=2 branch for the full derivation.
-            var cos_fix_h = abs(dot(-ray_dir, hc.geo_normal))
-            if cos_fix_h > Float32(1e-6):
-                dvc_carry /= cos_fix_h
-                dvm_carry /= cos_fix_h
-            var v_h = _null_vertex()
-            v_h.pos = hit
-            v_h.normal = vec3f(hc.geo_normal)
-            v_h.shading_normal = vec3f(hc.geo_normal)
-            v_h.beta = flux
-            v_h.alb = mat.albedo
-            v_h.is_surface = Int32(1); v_h.is_delta = Int32(0); v_h.mat_kind = LobeKind.hair
-            v_h.wo = vec3f(wo_h)
-            v_h.mat_idx = Int32(mat_idx)
-            v_h.hair_curve_idx = Int32(curve_idx_h)
-            v_h.hair_h = inter.u
-            v_h.hair_v = inter.v
-            v_h.pdf_fwd = Float32(1)
-            v_h.med_idx = cur_med_idx
-            v_h.wavelengths = wavelengths
-            v_h.dVCM = dvcm_carry; v_h.dVC = dvc_carry; v_h.dVM = dvm_carry
-            n_verts += 1
-            _bdpt_store_lvc_vertex(v_h, lvc, lp_idx, n_verts - 1)
-            var (wi_hs, f_hs, pdf_hs, cos_ti_hs2) = _hair_sample_dir(hc, pcg)
-            flux *= spec_refl_unbounded(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (f_hs / pdf_hs).r, (f_hs / pdf_hs).g, (f_hs / pdf_hs).b, wavelengths)
-            rd = vec3f(wi_hs)
-            var hsign = Float32(1) if dot(wi_hs, hc.geo_normal) >= Float32(0) else Float32(-1)
-            ro = hit + vec3f(hc.geo_normal) * curve_offset_eps(hc.radius) * hsign
-            var cos_theta_out_h = abs(dot(wi_hs, hc.geo_normal))
-            # VCM: real non-specular recursive update -- see the camera-side
-            # hair branch's matching comment for the full derivation (same
-            # formula, light-path variant: no last_bsdf_pdf bookkeeping here
-            # since light paths don't do infinite-light-miss MIS).
-            var bsdf_dir_pdf_w_h = pdf_hs * cos_ti_hs2
-            if bsdf_dir_pdf_w_h > Float32(1e-8):
-                var hc_rev_h = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wi_hs)
-                var (cos_ti_rev_h, _, pdf_oc_rev_h) = _hair_eval_lobes(
-                    wo_h, hc_rev_h.tangent, hc_rev_h.b_perp, hc_rev_h.n_perp, hc_rev_h.phi_o,
-                    hc_rev_h.dphi0, hc_rev_h.dphi1, hc_rev_h.dphi2,
-                    hc_rev_h.cos_tp0_o, hc_rev_h.sin_tp0_o, hc_rev_h.cos_tp1_o, hc_rev_h.sin_tp1_o, hc_rev_h.cos_tp2_o, hc_rev_h.sin_tp2_o,
-                    hc_rev_h.cos_theta_o, hc_rev_h.sin_theta_o, hc_rev_h.inv_vm0, hc_rev_h.inv_vm1, hc_rev_h.inv_vm2, hc_rev_h.mp_c0, hc_rev_h.mp_c1, hc_rev_h.mp_c2, hc_rev_h.s,
-                    hc_rev_h.A0, hc_rev_h.A1, hc_rev_h.A2, hc_rev_h.A3, hc_rev_h.lum0, hc_rev_h.lum1, hc_rev_h.lum2, hc_rev_h.lum3, hc_rev_h.total_lum,
-                )
-                var bsdf_rev_pdf_w_h = cos_ti_rev_h * pdf_oc_rev_h
-                var inv_pdf_h = cos_theta_out_h / bsdf_dir_pdf_w_h
-                (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
-                    dvcm_carry, dvc_carry, dvm_carry, inv_pdf_h, bsdf_dir_pdf_w_h, bsdf_rev_pdf_w_h,
-                    mis_vc_weight_factor, eta_x)
-            else:
-                dvcm_carry = Float32(0)
-                dvc_carry = Float32(0)
-                dvm_carry = Float32(0)
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             # ── Subsurface boundary: the light subpath's half of the hop ───

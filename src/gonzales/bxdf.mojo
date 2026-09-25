@@ -7,7 +7,7 @@ from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world, power_heu
 from .vcm_mis import MisPolicy, mis_policy_power, mis_policy_sole, nee_mis_weight
 from .rng import PCG32
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_pdf_measured, bxdf_sample_measured
-from .bvh import LightSample, HairLobeConstants, _hair_eval_lobes, SceneDescriptor2_C, _hair_precompute
+from .bvh import LightSample, HairLobeConstants, _hair_eval_lobes, SceneDescriptor2_C, _hair_precompute, _hair_sample_dir_u
 from .spectrum import SampledWavelengths, SpectralSample, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb, rgb_bands_to_spectral_sample
 
 # ── Isotropic GGX (Trowbridge-Reitz) evaluation ───────────────────────────────
@@ -1321,6 +1321,8 @@ def lobe_kind_of(mat_type: Int8) -> Int32:
         return LobeKind.ggx
     if mat_type == MatKind.measured:
         return LobeKind.measured
+    if mat_type == MatKind.hair:
+        return LobeKind.hair
     return LobeKind.lambertian
 
 
@@ -1398,6 +1400,7 @@ def lobe_sample(
     uc:  Float32,
     u0:  Float32,
     u1:  Float32,
+    u2:  Float32,
     tab: LobeTables,
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
     spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
@@ -1407,7 +1410,8 @@ def lobe_sample(
     wavelengths: SampledWavelengths,
 ) -> LobeSample:
     """THE lobe sampler: the same LobeCtx lobe_eval takes, so the two see one
-    vertex. `uc` picks among lobes, (u0, u1) the direction. Kinds not yet
+    vertex. `uc` picks among lobes, (u0, u1) the direction, and u2 is a
+    fourth number only hair's logistic azimuth draws. Kinds not yet
     covered return valid=False; callers must not fall back to a sampler of
     their own, which is the drift this exists to end."""
     if not c.is_surface:
@@ -1452,6 +1456,19 @@ def lobe_sample(
 
     if c.is_delta:
         return _lobe_sample_invalid()
+
+    if c.kind == LobeKind.hair:
+        # The 3-lobe Marschner sampler (bvh.mojo). Its density is the fibre
+        # cosine times pdf_over_cos, which is lobe_eval's pdf_fwd exactly.
+        var mat_h = tab.materials[unsafe_offset=Int(c.mat_idx)]
+        var hc = _hair_precompute(mat_h, tab.curves, Int(c.hair_curve_idx), c.hair_v, c.hair_h, vwo)
+        var sh = _hair_sample_dir_u(hc, uc, u0, u1, u2)
+        var le_h = lobe_eval[want_pdfs=True](c, sh[0], tab, spectral_coeffs, spectral_res,
+            spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
+        if le_h.pdf_fwd <= Float32(0):
+            return _lobe_sample_invalid()
+        return LobeSample(True, sh[0], le_h.f_cos * (Float32(1) / le_h.pdf_fwd), False,
+                          le_h.pdf_fwd, le_h.pdf_rev, le_h.cos_used, lobe_scoped(c))
 
     if c.kind == LobeKind.measured:
         # pbrt's MeasuredBxDF::Sample_f, in the same local frame lobe_eval
@@ -2181,6 +2198,59 @@ def _nee_weight_coated_diffuse_base[nee_is_sole_strategy: Bool = False](
 # ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z,
 # ctx.spectral.d65.
 @always_inline
+def nee_weight_lobe(
+    ls:    LightSample,
+    c:     LobeCtx,
+    tab:   LobeTables,
+    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
+    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
+    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
+    wavelengths: SampledWavelengths,
+    mis: MisPolicy = mis_policy_power(),
+) -> SpectralSample:
+    """THE NEE weight: f*cos*Li/pdf times the MIS weight, for any lobe, from
+    the same LobeCtx lobe_eval and lobe_sample take -- so a stored vertex's
+    NEE, connections and merges all see one vertex (hair's curve fields
+    included, which a flat (kind, alb, alpha) signature cannot carry).
+
+    Opaque lobes reject a light behind the shading normal; diffuse_transmit
+    and hair transport to both sides, so for them lobe_eval decides."""
+    if not ls.valid:
+        return SpectralSample(Float32(0.0))
+    var cos_s = dot(c.n, ls.wi)
+    var two_sided = c.kind == LobeKind.diffuse_transmit or c.kind == LobeKind.hair
+    if (cos_s <= Float32(0.0) and not two_sided) or (two_sided and abs(cos_s) <= Float32(0.0) and c.kind != LobeKind.hair):
+        return SpectralSample(Float32(0.0))
+    var le = lobe_eval[want_pdfs=True](c, ls.wi, tab,
+        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
+        spectral_cie_z, spectral_d65, wavelengths)
+    var f = le.f_cos
+    var pdf_bsdf = le.pdf_fwd
+    if f.v0 <= Float32(0.0) and f.v1 <= Float32(0.0) and f.v2 <= Float32(0.0) and f.v3 <= Float32(0.0):
+        return SpectralSample(Float32(0.0))
+    var li_spectral = rgb_illuminant_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, ls.Li.r, ls.Li.g, ls.Li.b, wavelengths)
+    # `f` is f*cos already (LobeEval.f_cos), so the cosine is NOT applied
+    # again here -- that double application is exactly the 2/3 energy loss
+    # vertex merging had before cos_used made the convention explicit.
+    # The MIS cosine is the lobe's own (hair: the fibre cosine).
+    var cos_mis = le.cos_used if c.kind == LobeKind.hair else abs(cos_s)
+    if ls.is_delta:
+        # A delta light cannot be found by BSDF sampling, so a path tracer
+        # gives its NEE full weight. VCM cannot: merging and t=1 light tracing
+        # still compete for that photon, so the sample takes its balance
+        # share with the BSDF term absent -- SmallVCM's DirectIllumination has
+        # wLight = 0 for a delta light and wCamera intact. Weight 1 here was a
+        # straight double count against every sun photon in the cache.
+        if not mis.is_vcm:
+            return f * li_spectral
+        return f * li_spectral * nee_mis_weight(mis, Float32(1.0), Float32(0.0), cos_mis)
+    var mis_w = nee_mis_weight(mis, ls.pdf, pdf_bsdf, cos_mis)
+    return (f * li_spectral) * (mis_w / ls.pdf)
+
+
+@always_inline
 def _nee_weight_simple_spectral(
     ls:    LightSample,
     mat_kind: Int32,
@@ -2204,46 +2274,12 @@ def _nee_weight_simple_spectral(
     rgb_illuminant_to_spectral_sample for the light's unbounded radiance/
     intensity) before multiplying, instead of multiplying plain RGB
     triples."""
-    if not ls.valid:
-        return SpectralSample(Float32(0.0))
-    var cos_s = dot(n, ls.wi)
-    # diffuse_transmit is the one kind here that transports to BOTH sides,
-    # so rejecting cos_s <= 0 would discard its transmit lobe -- which is
-    # exactly half its energy. Every other kind is opaque and still rejects.
-    var two_sided = mat_kind == LobeKind.diffuse_transmit
-    if (cos_s <= Float32(0.0) and not two_sided) or (two_sided and abs(cos_s) <= Float32(0.0)):
-        return SpectralSample(Float32(0.0))
-    # THE shared evaluator -- see LobeCtx. This used to call
-    # bxdf_eval_any_spectral, a SECOND dispatch over LobeKind that covered
-    # two kinds and returned a BARE f where the vertex-side one returned
-    # f*cos. The two agreed only because this function multiplied by cos_s
-    # afterwards; nothing in either signature said so.
-    var le = lobe_eval[want_pdfs=True](
+    return nee_weight_lobe(ls,
         LobeCtx(mat_kind, True, False, n, wo, alb, mat_idx, alpha,
                 Float32(0), Int32(-1), Float32(0), Float32(0), True, False),
-        ls.wi, tab,
-        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
-        spectral_cie_z, spectral_d65, wavelengths)
-    var f = le.f_cos
-    var pdf_bsdf = le.pdf_fwd
-    if f.v0 <= Float32(0.0) and f.v1 <= Float32(0.0) and f.v2 <= Float32(0.0) and f.v3 <= Float32(0.0):
-        return SpectralSample(Float32(0.0))
-    var li_spectral = rgb_illuminant_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, ls.Li.r, ls.Li.g, ls.Li.b, wavelengths)
-    # `f` is f*cos already (LobeEval.f_cos), so the cosine is NOT applied
-    # again here -- that double application is exactly the 2/3 energy loss
-    # vertex merging had before cos_used made the convention explicit.
-    if ls.is_delta:
-        # A delta light cannot be found by BSDF sampling, so a path tracer
-        # gives its NEE full weight. VCM cannot: merging and t=1 light tracing
-        # still compete for that photon, so the sample takes its balance
-        # share with the BSDF term absent -- SmallVCM's DirectIllumination has
-        # wLight = 0 for a delta light and wCamera intact. Weight 1 here was a
-        # straight double count against every sun photon in the cache.
-        if not mis.is_vcm:
-            return f * li_spectral
-        return f * li_spectral * nee_mis_weight(mis, Float32(1.0), Float32(0.0), cos_s)
-    var mis_w = nee_mis_weight(mis, ls.pdf, pdf_bsdf, abs(cos_s))
-    return (f * li_spectral) * (mis_w / ls.pdf)
+        tab, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
+        spectral_cie_z, spectral_d65, wavelengths, mis)
+
 
 @always_inline
 def _nee_weight_hair(

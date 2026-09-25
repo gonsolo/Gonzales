@@ -69,7 +69,7 @@ def _check_consistency(name: String, c: LobeCtx, tab: LobeTables) raises:
     var uniform = Float64(0)
     var worst_pdf = Float32(0)
     for _ in range(N):
-        var s = lobe_sample(c, rng.next_float(), rng.next_float(), rng.next_float(), tab,
+        var s = lobe_sample(c, rng.next_float(), rng.next_float(), rng.next_float(), rng.next_float(), tab,
                             h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, wl)
         if s.valid and not s.is_delta:
             sampled += Float64(s.weight.v0)
@@ -127,7 +127,7 @@ def test_ggx_mirror_is_delta() raises:
     var wl = sample_wavelengths_uniform(Float32(0.37))
     var c = _ctx(LobeKind.ggx, -1, RGB(Float32(0.9)), Float32(0.6), False)
     c.param = Float32(0)
-    var s = lobe_sample(c, Float32(0.5), Float32(0.5), Float32(0.5), tab, h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, wl)
+    var s = lobe_sample(c, Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5), tab, h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, wl)
     assert_true(s.valid and s.is_delta, "a smooth conductor samples a delta mirror")
     # mirror of wo about +z
     assert_true(abs(s.wi[0] + c.wo[0]) < Float32(1e-5) and abs(s.wi[2] - c.wo[2]) < Float32(1e-5), "mirror direction")
