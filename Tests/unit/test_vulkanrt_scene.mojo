@@ -1,7 +1,7 @@
 from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import TriangleMesh_C
+from gonzales.primitives import TriangleMesh_C
 from gonzales.vulkanrt import vulkanrt_build_scene, vulkanrt_trace_ray, vulkanrt_destroy_scene
 
 # Task #162 step 2: proves vulkanrt_build_scene/vulkanrt_trace_ray produce a

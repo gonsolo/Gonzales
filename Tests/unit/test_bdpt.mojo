@@ -14,7 +14,9 @@
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import LobeKind, RGB, Point3f, Vec3f, Intersection_C, INV_FOUR_PI, INV_PI, Sphere_C, PrimId_C, Instance_C, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C
+from gonzales.geometry import LobeKind, RGB, Point3f, Vec3f, INV_FOUR_PI, INV_PI, MeasuredBRDF_C
+from gonzales.render_state import GpuTexture_C, NormalSlopeMap_C
+from gonzales.primitives import Intersection_C, Sphere_C, PrimId_C, Instance_C
 from gonzales.media import Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C
 from gonzales.lights import LightSampler_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C
 from gonzales.bvh import SceneDescriptor2_C, BVH2Node

@@ -1,6 +1,7 @@
 from std.math import abs, sqrt
 from std.testing import assert_true, assert_false, TestSuite
-from gonzales.geometry import Vec3f, Point3f, Frame, RGB, reflect, refract, schlick_fresnel, fr_dielectric, safe_sqrt, sphere_outward_normal, dot, cross, spherical_direction, vec3f, point3f
+from gonzales.geometry import Vec3f, Point3f, Frame, RGB, reflect, refract, schlick_fresnel, fr_dielectric, safe_sqrt, dot, cross, spherical_direction, vec3f, point3f
+from gonzales.primitives import sphere_outward_normal
 from gonzales.curves import Curve_C, curve_bspline_point, curve_light_tube_area
 
 comptime EPS: Float32 = 1e-4

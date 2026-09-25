@@ -8,7 +8,9 @@ from std.atomic import Atomic
 from std.math import ceildiv, sqrt, cos, sin, log, exp
 from std.memory.alloc import unsafe_alloc
 from std.memory import unsafe_memcpy
-from .geometry import RGB, Point3f, Point2f, FilmDims, FilterParams, Vec3f, vec3f, point3f, store_vec3, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, Sphere_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, MatKind, Instance_C, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr, TERMINAL_SEGMENT_GRACE_ROUNDS
+from .geometry import RGB, Point3f, Point2f, Vec3f, vec3f, point3f, store_vec3, Material_C, MatKind, MeasuredBRDF_C, dot, cross, INV_PI, INV_FOUR_PI, _is_real_ptr, TERMINAL_SEGMENT_GRACE_ROUNDS
+from .render_state import FilmDims, FilterParams, PathState_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C
+from .primitives import sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Sphere_C, Instance_C
 from .media import Medium_C, MediumInterface_C, Grid_C, grid_sample_density, NvdbGrid_C, nvdb_sample_density, nvdb_ray_range, grid_ray_range, nvdb_index_ray, nvdb_node_exit_t, nvdb_majorant_at_world, hg_phase, hg_sample, blackbody_rgb, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_grid_for, medium_nvdb_for, medium_emission_spectral, MEDIUM_TRACK_MAX_ITERS, medium_transmittance_ratio_spectral, medium_sigma_s_spectral, medium_sigma_t_spectral
 from .lights import AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, LightSampler_C, light_sampler_sample, area_light_pick_triangle
 from .curves import Curve_C, CURVE_N_PIECES, CURVE_DEFER_K, curve_piece_endpoints, _curve_perp_axis, intersect_curve

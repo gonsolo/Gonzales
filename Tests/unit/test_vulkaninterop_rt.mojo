@@ -3,7 +3,7 @@ from std.sys import has_accelerator
 from max.gpu.host import DeviceContext, DeviceBuffer
 from max.gpu.host._nvidia_cuda import CUDA
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import TriangleMesh_C
+from gonzales.primitives import TriangleMesh_C
 from gonzales.vulkaninterop import (
     vulkaninterop_rt_create_scene, vulkaninterop_rt_get_rays_ptr,
     vulkaninterop_rt_get_results_ptr, vulkaninterop_rt_trace,

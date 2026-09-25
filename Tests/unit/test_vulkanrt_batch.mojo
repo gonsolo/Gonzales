@@ -2,7 +2,8 @@ from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator
 from std.testing import assert_true, TestSuite
 from std.math import abs
-from gonzales.geometry import TriangleMesh_C, intersect_triangle, Vec3f
+from gonzales.geometry import Vec3f
+from gonzales.primitives import TriangleMesh_C, intersect_triangle
 from gonzales.vulkanrt import (
     vulkanrt_build_scene, vulkanrt_trace_rays, vulkanrt_destroy_scene,
 )

@@ -1,6 +1,7 @@
 from std.math import abs
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import Point3f, Vec3f, Ray_C
+from gonzales.geometry import Point3f, Vec3f
+from gonzales.primitives import Ray_C
 from _scene_fixture import make_triangle_scene
 
 comptime EPS: Float32 = 1e-3

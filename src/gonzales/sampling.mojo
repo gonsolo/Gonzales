@@ -1,7 +1,8 @@
 from std.collections import Array
 from std.math import sqrt, log, exp, cos, sin, atan2, acos
 from std.memory.alloc import unsafe_alloc
-from .geometry import Vec3f, Ray_C, Point3f, dot, cross, Frame, PI, TWO_PI, INV_PI
+from .geometry import Vec3f, Point3f, dot, cross, Frame, PI, TWO_PI, INV_PI
+from .primitives import Ray_C
 from .spectrum import SampledWavelengths, sample_wavelengths_uniform
 
 # ── Multiple-importance sampling ───────────────────────────────────────────────

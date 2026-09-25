@@ -1,7 +1,9 @@
 from std.math import abs, sqrt
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import Point3f, Vec3f, RGB, Ray_C, Intersection_C, PrimId_C, PathState_C, Material_C, MatKind, TriangleMesh_C, Sphere_C, dot, cross
+from gonzales.geometry import Point3f, Vec3f, RGB, Material_C, MatKind, dot, cross
+from gonzales.render_state import PathState_C
+from gonzales.primitives import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Sphere_C
 from gonzales.lights import AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, LightSampler_C
 from gonzales.curves import Curve_C, curve_bspline_point, curve_light_tube_area, _curve_perp_axis
 from gonzales.spectrum import SpectralSample, SampledWavelengths
