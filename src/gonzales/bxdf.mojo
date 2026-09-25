@@ -1317,7 +1317,26 @@ def lobe_kind_of(mat_type: Int8) -> Int32:
         return LobeKind.diffuse_transmit
     if mat_type == MatKind.coated_diffuse:
         return LobeKind.layered
+    if mat_type == MatKind.conductor:
+        return LobeKind.ggx
     return LobeKind.lambertian
+
+
+@always_inline
+def lobe_param_of(mat: Material_C) -> Float32:
+    """LobeCtx.param for lobe_kind_of(mat.type): the GGX alpha of a conductor
+    (isotropic, as lobe_eval evaluates it), 0 for kinds that take none."""
+    if mat.type == MatKind.conductor:
+        return max(mat.roughU, mat.roughV)
+    return Float32(0)
+
+
+@always_inline
+def lobe_is_delta_of(mat: Material_C) -> Bool:
+    """A smooth conductor is a mirror: lobe_sample returns a delta event and
+    no vertex may be stored for it (the same threshold as
+    bxdf_sample_conductor)."""
+    return mat.type == MatKind.conductor and max(mat.roughU, mat.roughV) <= Float32(0.001)
 
 
 @always_inline
@@ -1381,10 +1400,48 @@ def lobe_sample(
     vertex. `uc` picks among lobes, (u0, u1) the direction. Kinds not yet
     covered return valid=False; callers must not fall back to a sampler of
     their own, which is the drift this exists to end."""
-    if c.is_delta or not c.is_surface:
+    if not c.is_surface:
         return _lobe_sample_invalid()
     var vn = c.n
     var vwo = c.wo
+
+    if c.kind == LobeKind.ggx:
+        var cos_o = dot(vwo, vn)
+        if cos_o <= Float32(0):
+            return _lobe_sample_invalid()
+        if c.is_delta or c.param <= Float32(0.001):
+            # Smooth conductor: a mirror, with the same Schlick-on-f0 Fresnel
+            # the rough lobe uses.
+            var wi_m = vn * (Float32(2) * cos_o) - vwo
+            var one_m = Float32(1) - cos_o
+            var sch = one_m * one_m * one_m * one_m * one_m
+            var f0 = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, c.alb.r, c.alb.g, c.alb.b, wavelengths)
+            return LobeSample(True, wi_m, f0 * (Float32(1) - sch) + SpectralSample(sch), True,
+                              Float32(0), Float32(0), cos_o, lobe_scoped(c))
+        # Rough: the multiple-scattering cosine lobe or a VNDF reflection,
+        # mixed exactly as bxdf_pdf_conductor_ggx (lobe_eval's density) says.
+        var p_ms = Float32(1) - ggx_albedo(cos_o, c.param)
+        var wi_g: Vec3f
+        if uc < p_ms:
+            wi_g = sample_cosine_hemisphere_world(u0, u1, vn)[0]
+        else:
+            var fr_g = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
+            var tx_g = Vec3f(fr_g.x.x, fr_g.x.y, fr_g.x.z)
+            var ty_g = Vec3f(fr_g.y.x, fr_g.y.y, fr_g.y.z)
+            var wo_l = Vec3f(dot(vwo, tx_g), dot(vwo, ty_g), cos_o)
+            var wh_l = sample_ggx_vndf(wo_l, c.param, c.param, min(u0, Float32(0.9999)), u1)
+            var wh = tx_g * wh_l.x + ty_g * wh_l.y + vn * wh_l.z
+            wh = wh * (Float32(1) / sqrt(max(dot(wh, wh), Float32(1e-20))))
+            wi_g = wh * (Float32(2) * dot(vwo, wh)) - vwo
+        var le_g = lobe_eval[want_pdfs=True](c, wi_g, tab, spectral_coeffs, spectral_res,
+            spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
+        if le_g.pdf_fwd <= Float32(0):
+            return _lobe_sample_invalid()
+        return LobeSample(True, wi_g, le_g.f_cos * (Float32(1) / le_g.pdf_fwd), False,
+                          le_g.pdf_fwd, le_g.pdf_rev, le_g.cos_used, lobe_scoped(c))
+
+    if c.is_delta:
+        return _lobe_sample_invalid()
 
     if c.kind == LobeKind.layered:
         var mat_ly = tab.materials[unsafe_offset=Int(c.mat_idx)]

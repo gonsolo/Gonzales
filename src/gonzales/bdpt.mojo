@@ -54,7 +54,7 @@ from .sppm import (
 )
 from .shading import _tex_lookup, _get_tri_verts, _mnee_walk, _mnee_walk2, \
     apply_surface_maps_at_hit, _camera_approx_footprint, area_light_hit_cos, curve_light_hit
-from .bxdf import LobeCtx, LobeEval, lobe_eval, lobe_scoped, lobe_sample, LobeSample, lobe_kind_of, _eval_conductor_ggx_spectral, coat_eval_smooth, bxdf_pdf_coated_exit, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
+from .bxdf import LobeCtx, LobeEval, lobe_eval, lobe_scoped, lobe_sample, LobeSample, lobe_kind_of, lobe_param_of, lobe_is_delta_of, _eval_conductor_ggx_spectral, coat_eval_smooth, bxdf_pdf_coated_exit, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured, bxdf_pdf_measured
 from .gpu import GpuSceneHandle, vulkaninterop_unpack_results_kernel
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
@@ -2665,7 +2665,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
         if mat.type != MatKind.interface:
             mis_null_dist = Float32(0)
 
-        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse:
+        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor:
             var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             # VCM Stage 2b: finish the per-bounce MIS correction (dist²
@@ -2715,106 +2715,111 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # lobe_sample, so this branch never asks which material it is.
             v.mat_kind = lobe_kind_of(mat.type)
             v.mat_idx = Int32(mat_idx)
+            v.pdf_bwd = lobe_param_of(mat)   # LobeCtx.param: a conductor's GGX alpha
+            # A smooth conductor is a mirror: it scatters, but stores no
+            # vertex and starts no strategy.
+            v.is_delta = Int32(1) if lobe_is_delta_of(mat) else Int32(0)
             v.pdf_fwd = Float32(1)  # unused by the uniform-subsample estimator
             v.wo = vec3f(-ray_dir)  # VCM Stage 2b: needed for _connect's reverse-pdf eval
             v.med_idx = cur_med_idx
             v.wavelengths = wavelengths
             v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
-            if n_verts == 0: first_alb = eff_alb
-            if n_verts >= _vcm_depth(sd):
-                return False   # a vertex past d starts no strategy (see _vcm_depth)
-            n_verts += 1
-            # Merging queries the GLOBAL photon grid and does not use this
-            # pixel's own paired light path, so unlike the connect below it
-            # must NOT be gated on that path having stored anything. It was,
-            # and in a white furnace only ~32% of light paths hit the quad at
-            # all, so ~68% of pixels skipped merging entirely: the estimator
-            # delivered 0.109 against an analytic 0.5.
-            total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts)
-            if path_len > 0:
-                # Task #163 stage 5: the diffuse branch's connect shadow
-                # rays are the single highest-volume, cleanest shadow-ray
-                # call site in VCM (always exactly one ray per stored
-                # light-path vertex, present in every diffuse-heavy scene
-                # regardless of light types used) -- when defer_shadow_rays
-                # is set, queue them into the shadow-ray buffers instead of
-                # resolving inline, for a later batched Vulkan RT dispatch.
-                # Every other material branch's connect (and all NEE/MNEE
-                # shadow rays) stays on the unchanged, inline,
-                # software-BVH _bdpt_connect_to_cache path either way.
-                if defer_shadow_rays:
-                    _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, n_verts)
-                else:
-                    total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, n_verts)
+            if v.is_delta == Int32(0):
+                if n_verts == 0: first_alb = eff_alb
+                if n_verts >= _vcm_depth(sd):
+                    return False   # a vertex past d starts no strategy (see _vcm_depth)
+                n_verts += 1
+                # Merging queries the GLOBAL photon grid and does not use this
+                # pixel's own paired light path, so unlike the connect below it
+                # must NOT be gated on that path having stored anything. It was,
+                # and in a white furnace only ~32% of light paths hit the quad at
+                # all, so ~68% of pixels skipped merging entirely: the estimator
+                # delivered 0.109 against an analytic 0.5.
+                total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts)
+                if path_len > 0:
+                    # Task #163 stage 5: the diffuse branch's connect shadow
+                    # rays are the single highest-volume, cleanest shadow-ray
+                    # call site in VCM (always exactly one ray per stored
+                    # light-path vertex, present in every diffuse-heavy scene
+                    # regardless of light types used) -- when defer_shadow_rays
+                    # is set, queue them into the shadow-ray buffers instead of
+                    # resolving inline, for a later batched Vulkan RT dispatch.
+                    # Every other material branch's connect (and all NEE/MNEE
+                    # shadow rays) stays on the unchanged, inline,
+                    # software-BVH _bdpt_connect_to_cache path either way.
+                    if defer_shadow_rays:
+                        _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, n_verts)
+                    else:
+                        total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, n_verts)
 
-            # NEE to distant/point/sphere/infinite lights, via the shared
-            # Light interface (bvh.mojo's LightSample samplers) + BxDF
-            # interface (bxdf.mojo's _nee_weight_simple) + this file's own
-            # _bdpt_nee_contribute glue (media-aware transmittance test) —
-            # replacing 4 formerly hand-inlined blocks also duplicated in
-            # the conductor branch below and in _bdpt_trace_light_path. Area
-            # lights are NOT covered: the LVC cache-connection strategy
-            # above already handles them — see _bdpt_trace_light_path's
-            # docstring for why distant/infinite/point/sphere need this
-            # separate direct term instead.
-            var wo_d = -ray_dir
-            # distant/point/sphere via the shared sampler (pure loop collapse --
-            # order was already distant,point,sphere, matching the iterator).
-            for li_d in range(_bdpt_simple_light_count(sd)):
-                var ls_i = _bdpt_sample_simple_light(sd, li_d, hit.to_simd(), pcg)
-                # Distant lights get the VCM policy (emission = the disk's area
-                # pdf over the pick, direct = 1 for a delta). Point and sphere
-                # lights keep the default until their emission densities are
-                # written down the same way -- noted, not silently assumed.
-                var pol_i = mis_policy_power()
-                if li_d < Int(sd.distantLightCount):
-                    var (_c_i, r_i) = _scene_bounding_sphere(sd)
-                    var le_i = _lobe_eval[want_pdfs=True](v, ls_i.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
-                    pol_i = MisPolicy(le_i.scoped, eta_x, dvcm_carry, dvc_carry,
-                                      Float32(1.0) / max(_bdpt_n_lights(sd) * PI * r_i * r_i, Float32(1e-12)),
-                                      le_i.pdf_rev, False, abs(dot(ls_i.wi, gn_geo)))
-                var w_i = _nee_weight_simple_spectral(ls_i, v.mat_kind, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_i, v.mat_idx)
-                total += _bdpt_nee_contribute(beta, w_i, ls_i, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, Float32(0.0001), v.mat_kind == LobeKind.diffuse_transmit)
-            for inf_i in range(Int(sd.infiniteLightCount)):
-                var ls_e = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-                # The SAME shared helper every other material uses -- the
-                # only difference is the MIS policy handed to it. Before
-                # MisPolicy existed the weight was welded inside the helper,
-                # so getting VCM's correct weight here meant hand-inlining
-                # the whole throughput computation at this one site while the
-                # other seven kept the path tracer's two-strategy heuristic.
-                var (_c_e, r_e) = _scene_bounding_sphere(sd)
-                var le_e = _lobe_eval[want_pdfs=True](v, ls_e.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
-                var pol_e = MisPolicy(True, eta_x, dvcm_carry, dvc_carry,
-                                      ls_e.pdf / max(_bdpt_n_lights(sd) * PI * r_e * r_e, Float32(1e-12)),
-                                      le_e.pdf_rev, False, abs(dot(ls_e.wi, gn_geo)))
-                var w_e = _nee_weight_simple_spectral(ls_e, v.mat_kind, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_e, v.mat_idx)
-                total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, Float32(0.0001), v.mat_kind == LobeKind.diffuse_transmit)
-            # MNEE's receiver evaluates albedo/pi itself (see
-            # _bdpt_mnee_diffuse_area_light), so only Lambertian lobes can
-            # host it -- a limitation of MNEE, not a material branch.
-            if v.mat_kind == LobeKind.lambertian or v.mat_kind == LobeKind.diffuse_transmit:
-                # Real MNEE for area lights behind glass (task #161) -- see
-                # _bdpt_mnee_diffuse_area_light's docstring. Ordinary (non-glass)
-                # area lights are deliberately left to connect/merge, unchanged.
-                total += _bdpt_mnee_diffuse_area_light(sd, hit, gn, eff_alb, beta, pcg, wavelengths)
-                # Sphere-shaped area lights (task #161 follow-up, 2026-07-13):
-                # a completely separate list from sd.areaLights (see
-                # _bdpt_mnee_sphere_light's docstring). Deliberately NOT a
-                # `for` loop -- see that function's own investigation note for
-                # the real GPU codegen bug (CUDA_ERROR_ILLEGAL_ADDRESS) a loop
-                # here triggers on this task's own target scene. Manually
-                # unrolled instead, capped at _MNEE_MAX_SPHERES (currently 4
-                # -- update both together if that constant ever changes).
-                var n_sph_mnee = Int(sd.sphereCount)
-                if 0 < n_sph_mnee:
-                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 0, n_sph_mnee, wavelengths)
-                if 1 < n_sph_mnee:
-                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 1, n_sph_mnee, wavelengths)
-                if 2 < n_sph_mnee:
-                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 2, n_sph_mnee, wavelengths)
-                if 3 < n_sph_mnee:
-                    total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 3, n_sph_mnee, wavelengths)
+                # NEE to distant/point/sphere/infinite lights, via the shared
+                # Light interface (bvh.mojo's LightSample samplers) + BxDF
+                # interface (bxdf.mojo's _nee_weight_simple) + this file's own
+                # _bdpt_nee_contribute glue (media-aware transmittance test) —
+                # replacing 4 formerly hand-inlined blocks also duplicated in
+                # the conductor branch below and in _bdpt_trace_light_path. Area
+                # lights are NOT covered: the LVC cache-connection strategy
+                # above already handles them — see _bdpt_trace_light_path's
+                # docstring for why distant/infinite/point/sphere need this
+                # separate direct term instead.
+                var wo_d = -ray_dir
+                # distant/point/sphere via the shared sampler (pure loop collapse --
+                # order was already distant,point,sphere, matching the iterator).
+                for li_d in range(_bdpt_simple_light_count(sd)):
+                    var ls_i = _bdpt_sample_simple_light(sd, li_d, hit.to_simd(), pcg)
+                    # Distant lights get the VCM policy (emission = the disk's area
+                    # pdf over the pick, direct = 1 for a delta). Point and sphere
+                    # lights keep the default until their emission densities are
+                    # written down the same way -- noted, not silently assumed.
+                    var pol_i = mis_policy_power()
+                    if li_d < Int(sd.distantLightCount):
+                        var (_c_i, r_i) = _scene_bounding_sphere(sd)
+                        var le_i = _lobe_eval[want_pdfs=True](v, ls_i.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                        pol_i = MisPolicy(le_i.scoped, eta_x, dvcm_carry, dvc_carry,
+                                          Float32(1.0) / max(_bdpt_n_lights(sd) * PI * r_i * r_i, Float32(1e-12)),
+                                          le_i.pdf_rev, False, abs(dot(ls_i.wi, gn_geo)))
+                    var w_i = _nee_weight_simple_spectral(ls_i, v.mat_kind, eff_alb, v.pdf_bwd, gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_i, v.mat_idx)
+                    total += _bdpt_nee_contribute(beta, w_i, ls_i, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, Float32(0.0001), v.mat_kind == LobeKind.diffuse_transmit)
+                for inf_i in range(Int(sd.infiniteLightCount)):
+                    var ls_e = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
+                    # The SAME shared helper every other material uses -- the
+                    # only difference is the MIS policy handed to it. Before
+                    # MisPolicy existed the weight was welded inside the helper,
+                    # so getting VCM's correct weight here meant hand-inlining
+                    # the whole throughput computation at this one site while the
+                    # other seven kept the path tracer's two-strategy heuristic.
+                    var (_c_e, r_e) = _scene_bounding_sphere(sd)
+                    var le_e = _lobe_eval[want_pdfs=True](v, ls_e.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+                    var pol_e = MisPolicy(True, eta_x, dvcm_carry, dvc_carry,
+                                          ls_e.pdf / max(_bdpt_n_lights(sd) * PI * r_e * r_e, Float32(1e-12)),
+                                          le_e.pdf_rev, False, abs(dot(ls_e.wi, gn_geo)))
+                    var w_e = _nee_weight_simple_spectral(ls_e, v.mat_kind, eff_alb, v.pdf_bwd, gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_e, v.mat_idx)
+                    total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, Float32(0.0001), v.mat_kind == LobeKind.diffuse_transmit)
+                # MNEE's receiver evaluates albedo/pi itself (see
+                # _bdpt_mnee_diffuse_area_light), so only Lambertian lobes can
+                # host it -- a limitation of MNEE, not a material branch.
+                if v.mat_kind == LobeKind.lambertian or v.mat_kind == LobeKind.diffuse_transmit:
+                    # Real MNEE for area lights behind glass (task #161) -- see
+                    # _bdpt_mnee_diffuse_area_light's docstring. Ordinary (non-glass)
+                    # area lights are deliberately left to connect/merge, unchanged.
+                    total += _bdpt_mnee_diffuse_area_light(sd, hit, gn, eff_alb, beta, pcg, wavelengths)
+                    # Sphere-shaped area lights (task #161 follow-up, 2026-07-13):
+                    # a completely separate list from sd.areaLights (see
+                    # _bdpt_mnee_sphere_light's docstring). Deliberately NOT a
+                    # `for` loop -- see that function's own investigation note for
+                    # the real GPU codegen bug (CUDA_ERROR_ILLEGAL_ADDRESS) a loop
+                    # here triggers on this task's own target scene. Manually
+                    # unrolled instead, capped at _MNEE_MAX_SPHERES (currently 4
+                    # -- update both together if that constant ever changes).
+                    var n_sph_mnee = Int(sd.sphereCount)
+                    if 0 < n_sph_mnee:
+                        total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 0, n_sph_mnee, wavelengths)
+                    if 1 < n_sph_mnee:
+                        total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 1, n_sph_mnee, wavelengths)
+                    if 2 < n_sph_mnee:
+                        total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 2, n_sph_mnee, wavelengths)
+                    if 3 < n_sph_mnee:
+                        total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 3, n_sph_mnee, wavelengths)
 
             # Scatter through THE lobe sampler -- the same LobeCtx connect,
             # merge and NEE evaluate this vertex with (see _vcm_scatter).
@@ -2826,7 +2831,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             beta *= sc.weight
             last_bsdf_pdf = Float32(-1) if sc.is_delta else sc.pdf_fwd
 
-        elif mat.type == MatKind.conductor or mat.type == MatKind.coated_conductor:
+        elif mat.type == MatKind.coated_conductor:
             var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_c, ray_dir) > Float32(0): gn_c = gn_c * Float32(-1)
             # Bump/normal maps -- see the diffuse branch.
@@ -2849,22 +2854,19 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             )
             var uc1 = pcg.next_float(); var uc2 = pcg.next_float()
             var bs_c: BxDFSample
-            if mat.type == MatKind.conductor:
-                bs_c = bxdf_sample_conductor(gc_c, mat, uc1, uc2)
-            else:
-                # Coated conductor: dielectric clearcoat over GGX conductor —
-                # bxdf_sample_coated_conductor's own u_split picks coat-vs-
-                # conductor lobe; its delta (coat-reflect) branch is treated
-                # exactly like mirror conductor/dielectric elsewhere in this
-                # function (no stored vertex), its glossy (conductor) branch
-                # exactly like plain conductor (approximation: connections
-                # reuse conductor's own GGX eval/f0, ignoring the coat's own
-                # (1-f_coat) attenuation and its separate luma-Fresnel blend
-                # — same approximation shading.mojo's sampling side already
-                # makes for this material).
-                var ior_c = mat.emission.r if mat.emission.r > Float32(1) else Float32(1.5)
-                var usplit_c = pcg.next_float()
-                bs_c = bxdf_sample_coated_conductor(gc_c, mat, ior_c, usplit_c, uc1, uc2)
+            # Coated conductor: dielectric clearcoat over GGX conductor —
+            # bxdf_sample_coated_conductor's own u_split picks coat-vs-
+            # conductor lobe; its delta (coat-reflect) branch is treated
+            # exactly like mirror conductor/dielectric elsewhere in this
+            # function (no stored vertex), its glossy (conductor) branch
+            # exactly like plain conductor (approximation: connections
+            # reuse conductor's own GGX eval/f0, ignoring the coat's own
+            # (1-f_coat) attenuation and its separate luma-Fresnel blend
+            # — same approximation shading.mojo's sampling side already
+            # makes for this material).
+            var ior_c = mat.emission.r if mat.emission.r > Float32(1) else Float32(1.5)
+            var usplit_c = pcg.next_float()
+            bs_c = bxdf_sample_coated_conductor(gc_c, mat, ior_c, usplit_c, uc1, uc2)
             if bs_c.is_valid == Int8(0):
                 return False   # conductor/coated_conductor sample invalid
             var alpha_c = max(mat.roughU, mat.roughV)
@@ -3773,7 +3775,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             if mat.type == MatKind.mix:
                 mat.type = MatKind.diffuse
 
-        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse:
+        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor:
             var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             # VCM Stage 2b: finish the per-bounce MIS correction (the
@@ -3810,12 +3812,17 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             v.is_surface = Int32(1); v.is_delta = Int32(0)
             v.mat_kind = lobe_kind_of(mat.type)   # see the camera subpath
             v.mat_idx = Int32(mat_idx)
+            v.pdf_bwd = lobe_param_of(mat)   # LobeCtx.param: a conductor's GGX alpha
+            # A smooth conductor is a mirror: it scatters, but stores no
+            # vertex and starts no strategy.
+            v.is_delta = Int32(1) if lobe_is_delta_of(mat) else Int32(0)
             v.pdf_fwd = Float32(1); v.med_idx = cur_med_idx
             v.wo = vec3f(-ray_dir)  # VCM Stage 2b: needed for _connect's reverse-pdf eval
             v.wavelengths = wavelengths
             v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
-            n_verts += 1
-            _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
+            if v.is_delta == Int32(0):
+                n_verts += 1
+                _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
             var sc = _vcm_scatter(v, True, pcg, sd, wavelengths, dvcm_carry, dvc_carry, dvm_carry, mis_vc_weight_factor, eta_x)
             if not sc.valid:
                 return False
@@ -3823,7 +3830,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             ro = hit + rd*Float32(0.0002)
             flux *= sc.weight
 
-        elif mat.type == MatKind.conductor or mat.type == MatKind.coated_conductor:
+        elif mat.type == MatKind.coated_conductor:
             var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_c, ray_dir) > Float32(0): gn_c = gn_c * Float32(-1)
             # Bump/normal maps -- see the diffuse branch.
@@ -3846,12 +3853,9 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             )
             var uc1 = pcg.next_float(); var uc2 = pcg.next_float()
             var bs_c: BxDFSample
-            if mat.type == MatKind.conductor:
-                bs_c = bxdf_sample_conductor(gc_c, mat, uc1, uc2)
-            else:
-                var ior_c = mat.emission.r if mat.emission.r > Float32(1) else Float32(1.5)
-                var usplit_c = pcg.next_float()
-                bs_c = bxdf_sample_coated_conductor(gc_c, mat, ior_c, usplit_c, uc1, uc2)
+            var ior_c = mat.emission.r if mat.emission.r > Float32(1) else Float32(1.5)
+            var usplit_c = pcg.next_float()
+            bs_c = bxdf_sample_coated_conductor(gc_c, mat, ior_c, usplit_c, uc1, uc2)
             if bs_c.is_valid == Int8(0):
                 return False   # conductor/coated_conductor sample invalid
             # VCM Stage 2d: rough conductor DOES have a real standalone pdf

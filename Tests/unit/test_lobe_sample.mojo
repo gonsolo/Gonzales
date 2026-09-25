@@ -109,6 +109,32 @@ def test_layered_sample_matches_eval() raises:
             _check_consistency("layered smooth", _ctx(LobeKind.layered, MAT_COAT_SMOOTH, RGB(Float32(0.8)), cos_o, adjoint), tab)
 
 
+def test_ggx_sample_matches_eval() raises:
+    var tab = _tables()
+    # alpha >= 0.25: a narrower lobe makes the uniform-sphere reference
+    # itself too noisy to judge (at 0.1 it misses the lobe ~99.5% of the time).
+    for alpha in [Float32(0.25), Float32(0.5)]:
+        for cos_o in [Float32(0.9), Float32(0.4)]:
+            var c = _ctx(LobeKind.ggx, -1, RGB(Float32(0.9), Float32(0.6), Float32(0.3)), cos_o, False)
+            c.param = alpha
+            _check_consistency("ggx alpha " + String(alpha), c, tab)
+
+
+def test_ggx_mirror_is_delta() raises:
+    var tab = _tables()
+    var ctx = _test_ctx()
+    var h = spectral_handle(ctx)
+    var wl = sample_wavelengths_uniform(Float32(0.37))
+    var c = _ctx(LobeKind.ggx, -1, RGB(Float32(0.9)), Float32(0.6), False)
+    c.param = Float32(0)
+    var s = lobe_sample(c, Float32(0.5), Float32(0.5), Float32(0.5), tab, h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, wl)
+    assert_true(s.valid and s.is_delta, "a smooth conductor samples a delta mirror")
+    # mirror of wo about +z
+    assert_true(abs(s.wi[0] + c.wo[0]) < Float32(1e-5) and abs(s.wi[2] - c.wo[2]) < Float32(1e-5), "mirror direction")
+    assert_true(s.pdf_fwd == Float32(0) and s.pdf_rev == Float32(0), "a delta event carries no density")
+    _ = ctx^
+
+
 def test_eval_scoped_is_lobe_scoped() raises:
     """lobe_eval's scoped flag must be lobe_scoped's answer, for every kind:
     VCM's NEE reads the former and _connect the latter, and when they
