@@ -4,7 +4,7 @@ from .geometry import _is_real_ptr
 from .guide import null_guide
 from .lights import AreaLight, DistantLight, InfiniteLight, LightSampler, PointLight
 from .materials import MatKind, Material_C, MeasuredBRDF_C
-from .media import MediumInterface_C
+from .media import MediumInterface
 from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh
 from .render_state import GpuTexture_C, NormalSlopeMap_C, PathState_C, ShadowTask_C
 from .restir_di import DIReservoir, ReservoirIO, reservoir_io_null

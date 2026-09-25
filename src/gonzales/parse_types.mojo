@@ -233,7 +233,7 @@ struct SceneParseState(Movable):
     var med_le_scale: List[Float32]     # 1 per medium (pbrt "Lescale")
     var med_temp_offset: List[Float32]  # 1 per medium ("temperatureoffset"/"temperaturecutoff")
     var med_temp_scale: List[Float32]   # 1 per medium ("temperaturescale")
-    var med_is_sss:  List[Int32]        # 1 per medium; 1 = subsurface interior (Medium_C.is_sss)
+    var med_is_sss:  List[Int32]        # 1 per medium; 1 = subsurface interior (Medium.is_sss)
 
     # Heterogeneous density grids ("uniformgrid" media). One record per grid;
     # med_grid_idx above points into these by index.

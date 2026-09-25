@@ -7,7 +7,7 @@ from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, dot, cross, INV_FOUR_PI
 from .render_state import PathState_C, TileResult_C
 from .primitives import sphere_outward_normal, Ray, Intersection, PrimId, Sphere
-from .media import Medium_C, MediumInterface_C, Grid_C, grid_sample_density, SSS_WALK_ROUNDS
+from .media import Medium, MediumInterface, Grid, grid_sample_density, SSS_WALK_ROUNDS
 from .lights import AreaLight, LightSampler, light_sampler_sample
 from .curves import curve_piece_endpoints, _curve_perp_axis
 from .bvh import SceneDescriptor2_C, traverse_bvh2_core, test_spheres, any_hit_bvh2_core

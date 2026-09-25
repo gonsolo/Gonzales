@@ -10,7 +10,7 @@ from .geometry import dot, cross, Point3f, Point2f, Vec3f, Frame, RGB, PI, TWO_P
 from .materials import Material_C, MatKind, fr_dielectric, MeasuredBRDF_C
 from .render_state import PathState_C, TileResult_C, GpuTexture_C, NormalSlopeMap_C
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, intersect_triangle, alpha_killed, Instance, sphere_outward_normal
-from .media import Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C
+from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
 from .curves import Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis
 from .rng import PCG32
@@ -129,13 +129,13 @@ struct SceneDescriptor2_C(TrivialRegisterPassable, DevicePassable):
     var sphereCount: Int64
     var curves: Pointer[Curve_C, MutUntrackedOrigin]
     var curveCount: Int64
-    var mediums: Pointer[Medium_C, MutUntrackedOrigin]
+    var mediums: Pointer[Medium, MutUntrackedOrigin]
     var mediumCount: Int64
-    var mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin]
+    var mediumInterfaces: Pointer[MediumInterface, MutUntrackedOrigin]
     var mediumIfaceCount: Int64
-    var grids: Pointer[Grid_C, MutUntrackedOrigin]
+    var grids: Pointer[Grid, MutUntrackedOrigin]
     var gridCount: Int64
-    var nvdbGrids: Pointer[NvdbGrid_C, MutUntrackedOrigin]
+    var nvdbGrids: Pointer[NvdbGrid, MutUntrackedOrigin]
     var nvdbGridCount: Int64
     var lightSampler: LightSampler
 

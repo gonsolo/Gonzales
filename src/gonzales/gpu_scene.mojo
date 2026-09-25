@@ -3,7 +3,7 @@ from .curves import CURVE_DEFER_K, Curve_C
 from .geometry import _is_real_ptr
 from .lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSampler
 from .materials import Material_C, MeasuredBRDF_C
-from .media import Grid_C, MediumInterface_C, Medium_C, NvdbGrid_C
+from .media import Grid, MediumInterface, Medium, NvdbGrid
 from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh
 from .render_state import FilmDims, FilterParams, GpuTexture_C, NormalSlopeMap_C, PathState_C, ShadowTask_C
 from .spectrum import SpectralHandle
@@ -734,22 +734,22 @@ struct CurveBuffers(Movable):
 
 @fieldwise_init
 struct MediaBuffers(Movable):
-    var mediums_buf: DeviceBuffer[DType.uint8]        # n_mediums × sizeof(Medium_C)
+    var mediums_buf: DeviceBuffer[DType.uint8]        # n_mediums × sizeof(Medium)
     var n_mediums: Int
     var has_sss_medium: Bool
-    var medium_ifaces_buf: DeviceBuffer[DType.uint8]  # n_medium_ifaces × sizeof(MediumInterface_C)
+    var medium_ifaces_buf: DeviceBuffer[DType.uint8]  # n_medium_ifaces × sizeof(MediumInterface)
     var n_medium_ifaces: Int
-    var grids_buf: DeviceBuffer[DType.uint8]          # n_grids × sizeof(Grid_C); Grid_C.density points into grid_density_bufs
+    var grids_buf: DeviceBuffer[DType.uint8]          # n_grids × sizeof(Grid); Grid.density points into grid_density_bufs
     var n_grids: Int
     var grid_density_bufs: List[DeviceBuffer[DType.uint8]]  # kept alive; one per grid's density array
-    var nvdb_grids_buf: DeviceBuffer[DType.uint8]     # n_nvdb_grids × sizeof(NvdbGrid_C); NvdbGrid_C.blob points into nvdb_blob_bufs
+    var nvdb_grids_buf: DeviceBuffer[DType.uint8]     # n_nvdb_grids × sizeof(NvdbGrid); NvdbGrid.blob points into nvdb_blob_bufs
     var n_nvdb_grids: Int
     var nvdb_blob_bufs: List[DeviceBuffer[DType.uint8]]  # kept alive; one per grid's decompressed .nvdb blob
 
     @staticmethod
     def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo) raises -> Self:
         # Upload participating media (small array; >= 1 elem to avoid zero-size buffer)
-        var med_buf = _gpu_upload_array[Medium_C](ctx, s.mediums, Int(s.medium_count))
+        var med_buf = _gpu_upload_array[Medium](ctx, s.mediums, Int(s.medium_count))
         # Read the SSS flag off the host copy while it is still in reach --
         # the round-budget decision this feeds is made on the host, and
         # reading it back off the device later would need a sync.
@@ -760,24 +760,24 @@ struct MediaBuffers(Movable):
                 break
 
         # Upload medium interfaces
-        var miface_buf = _gpu_upload_array[MediumInterface_C](ctx, s.medium_ifaces, Int(s.medium_iface_count))
+        var miface_buf = _gpu_upload_array[MediumInterface](ctx, s.medium_ifaces, Int(s.medium_iface_count))
 
         # Upload heterogeneous density grids ("uniformgrid" media). Each
         # grid's (potentially large) density array gets its own device
-        # buffer, mirroring the per-mesh points_bufs pattern; the Grid_C
+        # buffer, mirroring the per-mesh points_bufs pattern; the Grid
         # struct array embeds device-resident pointers into those buffers.
         var grid_density_bufs = List[DeviceBuffer[DType.uint8]]()
         var n_grids_int = Int(s.grid_count)
-        var grid_structs_host = unsafe_alloc[Grid_C](max(n_grids_int, 1))
+        var grid_structs_host = unsafe_alloc[Grid](max(n_grids_int, 1))
         for gi in range(n_grids_int):
             var host_grid = s.grids[unsafe_offset=gi]
             var n_voxels = Int(host_grid.nx) * Int(host_grid.ny) * Int(host_grid.nz)
-            grid_structs_host[unsafe_offset=gi] = Grid_C(
+            grid_structs_host[unsafe_offset=gi] = Grid(
                 _gpu_upload_owned[Float32](ctx, grid_density_bufs, host_grid.density, n_voxels),
                 host_grid.nx, host_grid.ny, host_grid.nz,
                 host_grid.p0, host_grid.p1,
                 host_grid.world_to_medium, host_grid.max_density)
-        var grids_buf = _gpu_upload_array[Grid_C](ctx, grid_structs_host, n_grids_int)
+        var grids_buf = _gpu_upload_array[Grid](ctx, grid_structs_host, n_grids_int)
         ctx.synchronize()   # grid_structs_host is freed next
         grid_structs_host.unsafe_free()
         if n_grids_int > 0:
@@ -785,19 +785,19 @@ struct MediaBuffers(Movable):
 
         # Upload sparse density grids ("nanovdb" media). Same shape as
         # the dense-grid upload just above: each grid's decompressed
-        # blob gets its own device buffer, and the NvdbGrid_C struct
+        # blob gets its own device buffer, and the NvdbGrid struct
         # array embeds device-resident pointers into those buffers.
         var nvdb_blob_bufs = List[DeviceBuffer[DType.uint8]]()
         var n_nvdb_grids_int = Int(s.nvdb_grid_count)
-        var nvdb_structs_host = unsafe_alloc[NvdbGrid_C](max(n_nvdb_grids_int, 1))
+        var nvdb_structs_host = unsafe_alloc[NvdbGrid](max(n_nvdb_grids_int, 1))
         for gi in range(n_nvdb_grids_int):
             var host_nvdb = s.nvdb_grids[unsafe_offset=gi]
-            nvdb_structs_host[unsafe_offset=gi] = NvdbGrid_C(
+            nvdb_structs_host[unsafe_offset=gi] = NvdbGrid(
                 _gpu_upload_owned[UInt8](ctx, nvdb_blob_bufs, host_nvdb.blob, Int(host_nvdb.blob_size)),
                 host_nvdb.blob_size,
                 host_nvdb.world_to_medium, host_nvdb.inv_map, host_nvdb.map_vec,
                 host_nvdb.index_min, host_nvdb.index_max, host_nvdb.max_density)
-        var nvdb_grids_buf = _gpu_upload_array[NvdbGrid_C](ctx, nvdb_structs_host, n_nvdb_grids_int)
+        var nvdb_grids_buf = _gpu_upload_array[NvdbGrid](ctx, nvdb_structs_host, n_nvdb_grids_int)
         ctx.synchronize()   # nvdb_structs_host is freed next
         nvdb_structs_host.unsafe_free()
         if n_nvdb_grids_int > 0:
@@ -959,10 +959,10 @@ struct GpuSceneHandle(Movable):
             infiniteLights=self.lights.infinite_lights_ptr(), infiniteLightCount=Int64(self.lights.n_infinite_lights),
             spheres=typed_ptr[Sphere](self.spheres_buf), sphereCount=Int64(self.n_spheres),
             curves=self.curves.curves_ptr(), curveCount=Int64(self.curves.n_curves),
-            mediums=typed_ptr[Medium_C](self.media.mediums_buf), mediumCount=Int64(self.media.n_mediums),
-            mediumInterfaces=typed_ptr[MediumInterface_C](self.media.medium_ifaces_buf), mediumIfaceCount=Int64(self.media.n_medium_ifaces),
-            grids=typed_ptr[Grid_C](self.media.grids_buf), gridCount=Int64(self.media.n_grids),
-            nvdbGrids=typed_ptr[NvdbGrid_C](self.media.nvdb_grids_buf), nvdbGridCount=Int64(self.media.n_nvdb_grids),
+            mediums=typed_ptr[Medium](self.media.mediums_buf), mediumCount=Int64(self.media.n_mediums),
+            mediumInterfaces=typed_ptr[MediumInterface](self.media.medium_ifaces_buf), mediumIfaceCount=Int64(self.media.n_medium_ifaces),
+            grids=typed_ptr[Grid](self.media.grids_buf), gridCount=Int64(self.media.n_grids),
+            nvdbGrids=typed_ptr[NvdbGrid](self.media.nvdb_grids_buf), nvdbGridCount=Int64(self.media.n_nvdb_grids),
             lightSampler=LightSampler(cdf=self.lights.light_sampler_ptr(), n=Int32(self.lights.n_light_sampler), _pad=Int32(0)),
             blasNodesArr=self.blas.nodes_arr(), blasPrimIdsArr=self.blas.primids_arr(), blasCount=Int64(self.blas.n_blas),
             instances=typed_ptr[Instance](self.instances_buf), instanceCount=Int64(self.n_instances),

@@ -3,7 +3,7 @@ from std.ffi import external_call
 from .geometry import RGB, Point3f, Vec3f
 from .materials import Material_C
 from .primitives import TriangleMesh, PrimId, Sphere
-from .media import Medium_C, MediumInterface_C
+from .media import Medium, MediumInterface
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight
 from .bvh import BVH2Node, SceneDescriptor2_C
 
@@ -85,8 +85,8 @@ struct Scene(Movable):
     var spheres:         List[Sphere]
 
     # Media
-    var mediums:      List[Medium_C]
-    var medium_ifaces: List[MediumInterface_C]
+    var mediums:      List[Medium]
+    var medium_ifaces: List[MediumInterface]
 
     # Textures (file paths, loaded on demand by the renderer)
     var tex_filenames: List[String]
@@ -108,8 +108,8 @@ struct Scene(Movable):
         point_lights: List[PointLight],
         infinite_lights: List[InfiniteLight],
         spheres: List[Sphere],
-        mediums: List[Medium_C],
-        medium_ifaces: List[MediumInterface_C],
+        mediums: List[Medium],
+        medium_ifaces: List[MediumInterface],
         tex_filenames: List[String],
     ):
         self.camera  = camera^

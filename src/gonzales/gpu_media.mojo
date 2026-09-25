@@ -3,7 +3,7 @@ from .curves import Curve_C
 from .geometry import Point2f, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, point3f, vec3f
 from .lights import AreaLight, DistantLight, InfiniteLight, LightSampler, PointLight, area_light_pick_triangle, light_sampler_sample
 from .materials import MatKind, Material_C
-from .media import Grid_C, MEDIUM_TRACK_MAX_ITERS, MediumInterface_C, Medium_C, NvdbGrid_C, grid_ray_range, grid_sample_density, hg_phase, hg_sample, medium_emission_spectral, medium_grid_for, medium_nvdb_for, medium_sigma_s_spectral, medium_sigma_t_spectral, medium_transmittance_ratio_spectral, nvdb_index_ray, nvdb_majorant_at_world, nvdb_node_exit_t, nvdb_ray_range, nvdb_sample_density, sample_free_flight
+from .media import Grid, MEDIUM_TRACK_MAX_ITERS, MediumInterface, Medium, NvdbGrid, grid_ray_range, grid_sample_density, hg_phase, hg_sample, medium_emission_spectral, medium_grid_for, medium_nvdb_for, medium_sigma_s_spectral, medium_sigma_t_spectral, medium_transmittance_ratio_spectral, nvdb_index_ray, nvdb_majorant_at_world, nvdb_node_exit_t, nvdb_ray_range, nvdb_sample_density, sample_free_flight
 from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, sphere_outward_normal
 from .render_state import PathState_C
 from .reservoir import reservoir_finalize, reservoir_update
@@ -94,8 +94,8 @@ def _volume_nee_light(
     mut pcg: PCG32,
     use_nvdb: Bool,
     use_dense: Bool,
-    grid: Grid_C,
-    nvdb_grid: NvdbGrid_C,
+    grid: Grid,
+    nvdb_grid: NvdbGrid,
     sigma_maj: Float32,
     sigma_t_r: Float32,
     ref sd: SceneDescriptor2_C,
@@ -210,7 +210,7 @@ def _volume_area_light_nee(
     path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     ref sd: SceneDescriptor2_C,
     i: Int,
-    med: Medium_C,
+    med: Medium,
     med_idx: Int,
     sigma_t: RGB,
     use_nvdb: Bool,
@@ -505,11 +505,11 @@ def _volume_area_light_nee(
                         # exits the medium -- same dual-source dispatch as
                         # the free-flight sampling above.
                         var use_nvdb_s = med.nvdb_idx >= Int32(0)
-                        var grid_s = sd.grids[unsafe_offset=Int(med.grid_idx)] if not use_nvdb_s else Grid_C(
+                        var grid_s = sd.grids[unsafe_offset=Int(med.grid_idx)] if not use_nvdb_s else Grid(
                             Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0), Int32(0),
                             Point3f(Float32(0), Float32(0), Float32(0)), Point3f(Float32(0), Float32(0), Float32(0)),
                             SIMD[DType.float32, 16](0), Float32(0))
-                        var nvdb_grid_s = sd.nvdbGrids[unsafe_offset=Int(med.nvdb_idx)] if use_nvdb_s else NvdbGrid_C(
+                        var nvdb_grid_s = sd.nvdbGrids[unsafe_offset=Int(med.nvdb_idx)] if use_nvdb_s else NvdbGrid(
                             Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Int64(0), SIMD[DType.float32, 16](0),
                             SIMD[DType.float32, 16](0), Vec3f(Float32(0), Float32(0), Float32(0)),
                             Point3f(Float32(0), Float32(0), Float32(0)), Point3f(Float32(0), Float32(0), Float32(0)), Float32(0))
@@ -901,7 +901,7 @@ def _sample_medium_core(
                 scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
                 sd)
         # Sample the scatter direction from the medium's Henyey-Greenstein
-        # phase function. `g` was parsed into Medium_C all along but never
+        # phase function. `g` was parsed into Medium all along but never
         # used: scattering was hardcoded isotropic (uniform sphere), so a
         # strongly forward-scattering medium -- disney-cloud sets g=0.877 --
         # diffused light instead of forwarding it and rendered far too dark.

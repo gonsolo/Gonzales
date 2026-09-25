@@ -1,6 +1,6 @@
 from .geometry import TERMINAL_SEGMENT_GRACE_ROUNDS
 from .materials import Material_C, MeasuredBRDF_C
-from .media import Grid_C, MediumInterface_C, Medium_C, NvdbGrid_C
+from .media import Grid, MediumInterface, Medium, NvdbGrid
 from .primitives import Instance, Intersection, Sphere
 from .render_state import PathState_C, ShadowTask_C
 from .restir_di import DIReservoir
@@ -438,7 +438,7 @@ def gpu_render_sample[Oc: Origin[mut=True]](
             # every kernel in _gpu_bounce_kernels.
             comptime _MEDIUM_INTERFACE_MARGIN = 8
             # An SSS interior is walked one scattering event per round and
-            # those steps are not charged to maxDepth (Medium_C.is_sss), so
+            # those steps are not charged to maxDepth (Medium.is_sss), so
             # the round count is what actually bounds the walk. Unlike the
             # margin above this is a large budget, and unlike the CPU loop
             # there is no `anyActive` early exit here -- every round is a real
@@ -560,7 +560,7 @@ def gpu_render_wavefront(
             # every kernel in _gpu_bounce_kernels.
             comptime _MEDIUM_INTERFACE_MARGIN = 8
             # An SSS interior is walked one scattering event per round and
-            # those steps are not charged to maxDepth (Medium_C.is_sss), so
+            # those steps are not charged to maxDepth (Medium.is_sss), so
             # the round count is what actually bounds the walk. Unlike the
             # margin above this is a large budget, and unlike the CPU loop
             # there is no `anyActive` early exit here -- every round is a real

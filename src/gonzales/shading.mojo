@@ -1114,7 +1114,7 @@ def _finish_delta_bounce(
     # (Material_C.sss_boundary). Entry, exit and total internal reflection
     # there are all parts of ONE BSSRDF scattering event, so charging them to
     # maxdepth kills TIR-trapped light before it can escape -- the interior
-    # walk steps are already exempt for exactly this reason (Medium_C.is_sss).
+    # walk steps are already exempt for exactly this reason (Medium.is_sss).
     # Termination still comes from absorption, Russian roulette and the
     # render loop's round budget.
     if charge_depth:
@@ -4637,7 +4637,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             # path (a non-delta bounce sets both; a delta one zeroes the pdf
             # and is excluded by specularBounce anyway). They diverge for a
             # SUBSURFACE interior, whose walk is deliberately not charged to
-            # `bounce` (Material_C.sss_boundary / Medium_C.is_sss): `bounce`
+            # `bounce` (Material_C.sss_boundary / Medium.is_sss): `bounce`
             # stays 0 for hundreds of real phase-sampled scatters, so every
             # ray that escaped the skin and hit the sky took FULL weight
             # instead of its MIS weight -- double-counting against the volume

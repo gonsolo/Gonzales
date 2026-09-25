@@ -22,7 +22,7 @@ from .geometry import RGB, Point3f, Vec3f, dot, PI, _is_real_ptr
 from .materials import Material_C, MatKind, MeasuredBRDF_C
 from .render_state import GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none
 from .primitives import Sphere, TriangleMesh, PrimId, Instance
-from .media import Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C
+from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
 from .curves import Curve_C, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area
 from .nanovdb import nvdb_load, nvdb_load_named, nvdb_data, nvdb_size, nvdb_free, nvdb_index_bbox, nvdb_value_range, nvdb_map_invmatf, nvdb_map_vecf
@@ -115,13 +115,13 @@ struct ParsedScene_Mojo:
     var sphere_count:     Int32
     var curves:           Pointer[Curve_C, MutUntrackedOrigin]
     var curve_count:      Int32
-    var mediums:          Pointer[Medium_C, MutUntrackedOrigin]
+    var mediums:          Pointer[Medium, MutUntrackedOrigin]
     var medium_count:     Int32
-    var medium_ifaces:    Pointer[MediumInterface_C, MutUntrackedOrigin]
+    var medium_ifaces:    Pointer[MediumInterface, MutUntrackedOrigin]
     var medium_iface_count: Int32
-    var grids:            Pointer[Grid_C, MutUntrackedOrigin]
+    var grids:            Pointer[Grid, MutUntrackedOrigin]
     var grid_count:       Int32
-    var nvdb_grids:       Pointer[NvdbGrid_C, MutUntrackedOrigin]
+    var nvdb_grids:       Pointer[NvdbGrid, MutUntrackedOrigin]
     var nvdb_grid_count:  Int32
     var light_sampler:    LightSampler
     # Object instancing: one BLAS (private BVH2, over `meshes` above) per
@@ -2415,7 +2415,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         mats.unsafe_free()
         mats = new_mats
 
-        var iface_buf = unsafe_alloc[MediumInterface_C](n_with_mi)
+        var iface_buf = unsafe_alloc[MediumInterface](n_with_mi)
         var dup_idx = n_mats
         var iface_idx = 0
 
@@ -2436,7 +2436,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             mats[unsafe_offset=dup_idx] = mats[unsafe_offset=orig_mat]
             mats[unsafe_offset=dup_idx].medium_interface_idx = Int32(iface_idx)
             mats[unsafe_offset=dup_idx].sss_boundary = _ins_is_sss(ins)
-            iface_buf[unsafe_offset=iface_idx] = MediumInterface_C(ins, out)
+            iface_buf[unsafe_offset=iface_idx] = MediumInterface(ins, out)
             s[unsafe_offset=0].meshes[mi].mat_idx = Int32(dup_idx)
             dup_idx += 1
             iface_idx += 1
@@ -2450,7 +2450,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             mats[unsafe_offset=dup_idx] = mats[unsafe_offset=orig_mat]
             mats[unsafe_offset=dup_idx].medium_interface_idx = Int32(iface_idx)
             mats[unsafe_offset=dup_idx].sss_boundary = _ins_is_sss(ins)
-            iface_buf[unsafe_offset=iface_idx] = MediumInterface_C(ins, out)
+            iface_buf[unsafe_offset=iface_idx] = MediumInterface(ins, out)
             s[unsafe_offset=0].spheres_mat[si] = Int32(dup_idx)
             dup_idx += 1
             iface_idx += 1
@@ -2459,7 +2459,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         psc[unsafe_offset=0].medium_ifaces = iface_buf
         psc[unsafe_offset=0].medium_iface_count = Int32(iface_idx)
     else:
-        psc[unsafe_offset=0].medium_ifaces = Pointer[MediumInterface_C, MutUntrackedOrigin].unsafe_dangling()
+        psc[unsafe_offset=0].medium_ifaces = Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling()
         psc[unsafe_offset=0].medium_iface_count = Int32(0)
 
     var total_tris = Int32(0)
@@ -3171,7 +3171,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # ---- Heterogeneous density grids ("uniformgrid" media) ----
     var ng = len(s[unsafe_offset=0].grid_nx)
     if ng > 0:
-        var grid_buf = unsafe_alloc[Grid_C](ng)
+        var grid_buf = unsafe_alloc[Grid](ng)
         for i in range(ng):
             var nx = s[unsafe_offset=0].grid_nx[i]; var ny = s[unsafe_offset=0].grid_ny[i]; var nz = s[unsafe_offset=0].grid_nz[i]
             var n_voxels = Int(nx) * Int(ny) * Int(nz)
@@ -3190,7 +3190,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             var w2m_simd = SIMD[DType.float32, 16](
                 w2m[unsafe_offset=0], w2m[unsafe_offset=1], w2m[unsafe_offset=2], w2m[unsafe_offset=3], w2m[unsafe_offset=4], w2m[unsafe_offset=5], w2m[unsafe_offset=6], w2m[unsafe_offset=7],
                 w2m[unsafe_offset=8], w2m[unsafe_offset=9], w2m[unsafe_offset=10], w2m[unsafe_offset=11], w2m[unsafe_offset=12], w2m[unsafe_offset=13], w2m[unsafe_offset=14], w2m[unsafe_offset=15])
-            grid_buf[unsafe_offset=i] = Grid_C(
+            grid_buf[unsafe_offset=i] = Grid(
                 density_buf, nx, ny, nz,
                 Point3f(s[unsafe_offset=0].grid_p0[i*3], s[unsafe_offset=0].grid_p0[i*3+1], s[unsafe_offset=0].grid_p0[i*3+2]),
                 Point3f(s[unsafe_offset=0].grid_p1[i*3], s[unsafe_offset=0].grid_p1[i*3+1], s[unsafe_offset=0].grid_p1[i*3+2]),
@@ -3198,7 +3198,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             ctm_tmp.unsafe_free(); w2m.unsafe_free()
         psc[unsafe_offset=0].grids = grid_buf
     else:
-        psc[unsafe_offset=0].grids = Pointer[Grid_C, MutUntrackedOrigin].unsafe_dangling()
+        psc[unsafe_offset=0].grids = Pointer[Grid, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].grid_count = Int32(ng)
 
     # ---- Sparse density grids ("nanovdb" media) ----
@@ -3214,7 +3214,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # never unsafe, and `print`ed so it isn't silent in the log.
     var nvg = len(s[unsafe_offset=0].nvdb_filenames)
     if nvg > 0:
-        var nvdb_buf = unsafe_alloc[NvdbGrid_C](nvg)
+        var nvdb_buf = unsafe_alloc[NvdbGrid](nvg)
         for i in range(nvg):
             var path_str = s[unsafe_offset=0].nvdb_filenames[i]
             var plen = path_str.byte_length()
@@ -3290,27 +3290,27 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 w2m2[unsafe_offset=8], w2m2[unsafe_offset=9], w2m2[unsafe_offset=10], w2m2[unsafe_offset=11], w2m2[unsafe_offset=12], w2m2[unsafe_offset=13], w2m2[unsafe_offset=14], w2m2[unsafe_offset=15])
             ctm_tmp2.unsafe_free(); w2m2.unsafe_free()
 
-            nvdb_buf[unsafe_offset=i] = NvdbGrid_C(blob, blob_size_v, w2m2_simd, imat, mvec, idx_min, idx_max, max_d)
+            nvdb_buf[unsafe_offset=i] = NvdbGrid(blob, blob_size_v, w2m2_simd, imat, mvec, idx_min, idx_max, max_d)
         psc[unsafe_offset=0].nvdb_grids = nvdb_buf
     else:
-        psc[unsafe_offset=0].nvdb_grids = Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling()
+        psc[unsafe_offset=0].nvdb_grids = Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].nvdb_grid_count = Int32(nvg)
 
     # ---- Media ----
     var nm = len(s[unsafe_offset=0].med_g)
     if nm > 0:
-        var med_buf = unsafe_alloc[Medium_C](nm)
+        var med_buf = unsafe_alloc[Medium](nm)
         for i in range(nm):
             var sa = RGB(s[unsafe_offset=0].med_sa[i*3], s[unsafe_offset=0].med_sa[i*3+1], s[unsafe_offset=0].med_sa[i*3+2])
             var ss = RGB(s[unsafe_offset=0].med_ss[i*3], s[unsafe_offset=0].med_ss[i*3+1], s[unsafe_offset=0].med_ss[i*3+2])
-            med_buf[unsafe_offset=i] = Medium_C(sa, ss, s[unsafe_offset=0].med_g[i],
+            med_buf[unsafe_offset=i] = Medium(sa, ss, s[unsafe_offset=0].med_g[i],
                                   s[unsafe_offset=0].med_grid_idx[i], s[unsafe_offset=0].med_nvdb_idx[i],
                                   s[unsafe_offset=0].med_nvdb_temp_idx[i], s[unsafe_offset=0].med_le_scale[i],
                                   s[unsafe_offset=0].med_temp_offset[i], s[unsafe_offset=0].med_temp_scale[i],
                                   s[unsafe_offset=0].med_is_sss[i])
         psc[unsafe_offset=0].mediums = med_buf
     else:
-        psc[unsafe_offset=0].mediums = Pointer[Medium_C, MutUntrackedOrigin].unsafe_dangling()
+        psc[unsafe_offset=0].mediums = Pointer[Medium, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].medium_count = Int32(nm)
 
     # ---- Build power-weighted area light CDF ----

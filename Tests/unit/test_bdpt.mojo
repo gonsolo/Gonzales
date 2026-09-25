@@ -18,7 +18,7 @@ from gonzales.geometry import RGB, Point3f, Vec3f, INV_FOUR_PI, INV_PI
 from gonzales.materials import LobeKind, MeasuredBRDF_C
 from gonzales.render_state import GpuTexture_C, NormalSlopeMap_C
 from gonzales.primitives import Intersection, Sphere, PrimId, Instance
-from gonzales.media import Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C
+from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
 from gonzales.bvh import SceneDescriptor2_C, BVH2Node
 from gonzales.bxdf import ggx_D, ggx_G2, ggx_albedo_avg, ggx_ms_shape, ggx_ms_tint
@@ -110,10 +110,10 @@ def _dummy_sd() -> SceneDescriptor2_C:
         Pointer[InfiniteLight, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         fixture.curves, Int64(0),
-        Pointer[Medium_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[MediumInterface_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
         Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
@@ -311,10 +311,10 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         Pointer[InfiniteLight, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         fixture.curves, Int64(0),
-        Pointer[Medium_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[MediumInterface_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
         Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),

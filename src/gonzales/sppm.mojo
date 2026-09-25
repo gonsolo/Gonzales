@@ -15,7 +15,7 @@ from .geometry import face_toward, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, 
 from .materials import Material_C, MatKind, LobeKind, PhotonKind, fr_dielectric, MeasuredBRDF_C
 from .render_state import GpuTexture_C
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, sphere_outward_normal
-from .media import Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, medium_transmittance_ratio_spectral, spectral_free_flight_weight
+from .media import Medium, MediumInterface, Grid, NvdbGrid, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, medium_transmittance_ratio_spectral, spectral_free_flight_weight
 from .lights import area_light_pick_triangle, AreaLight, DistantLight, InfiniteLight, PointLight
 from .curves import Curve_C, curve_piece_endpoints, _curve_perp_axis
 from .bssrdf import dipole_rd, dipole_max_radius
@@ -637,7 +637,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     # path entering skin died after ~2 scatters and no subsurface transport
     # happened at all (SPPM rendered the head flat white; the path tracer,
     # which has had this exemption, renders it correctly). Same rule and same
-    # reasoning as shading.mojo's `charge_depth` / Medium_C.is_sss.
+    # reasoning as shading.mojo's `charge_depth` / Medium.is_sss.
     #
     # `rounds` is only a safety bound so an exempt event cannot loop forever;
     # for a scene with no subsurface medium every event charges, so `bounce`
@@ -858,7 +858,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # actually works.
             #
             # Needs no new SPPMPixel fields: `med_idx` already reaches the
-            # interior Medium_C for sigma_s/sigma_a/g, and `alpha` is unused
+            # interior Medium for sigma_s/sigma_a/g, and `alpha` is unused
             # for this visible-point kind so it carries the boundary IOR.
             if mat.sss_boundary != Int8(0) and Int(cur_med_idx) < 0:
                 var gn_s = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
@@ -1218,7 +1218,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     # path entering skin died after ~2 scatters and no subsurface transport
     # happened at all (SPPM rendered the head flat white; the path tracer,
     # which has had this exemption, renders it correctly). Same rule and same
-    # reasoning as shading.mojo's `charge_depth` / Medium_C.is_sss.
+    # reasoning as shading.mojo's `charge_depth` / Medium.is_sss.
     #
     # `rounds` is only a safety bound so an exempt event cannot loop forever;
     # for a scene with no subsurface medium every event charges, so `bounce`
@@ -1265,7 +1265,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             if ff.collided:
                 # A scattering event INSIDE a subsurface interior is a step of
                 # the BSSRDF random walk, not a path bounce, so it is not
-                # charged to maxdepth -- the same exemption Medium_C.is_sss
+                # charged to maxdepth -- the same exemption Medium.is_sss
                 # buys the path tracer. Skin1 at the scale sssdragon/head use
                 # needs tens to hundreds of these before a photon escapes or is
                 # absorbed; charging them ends the walk almost immediately.
@@ -1836,13 +1836,13 @@ def _sppm_gather_one(
     # held the real count, so every BSSRDF visible point silently fell back to
     # looking for SURFACE photons on a surface that only has BSSRDF ones, and
     # gathered nothing at all.
-    med_arr:   Pointer[Medium_C, MutUntrackedOrigin],
+    med_arr:   Pointer[Medium, MutUntrackedOrigin],
     med_count: Int,
     # Density fields, decomposed for the same reason: the gather kernel's own
     # `sd` carries dangling grid pointers, so a heterogeneous medium's density
     # lookup must not go through it.
-    grids_arr: Pointer[Grid_C, MutUntrackedOrigin],
-    nvdb_arr:  Pointer[NvdbGrid_C, MutUntrackedOrigin],
+    grids_arr: Pointer[Grid, MutUntrackedOrigin],
+    nvdb_arr:  Pointer[NvdbGrid, MutUntrackedOrigin],
     # Decomposed spectral tables rather than reading sd.spectral. `sd` is a
     # SceneDescriptor2_C passed BY VALUE, and it contains a SpectralHandle --
     # the 6-field TrivialRegisterPassable struct suspected (modular/modular#6759,
@@ -1888,7 +1888,7 @@ def _sppm_gather_one(
     # unguarded sd.mediums[...] per photon is an illegal access on the GPU the
     # moment med_idx is out of range, and it aborted every --sppm run.
     var bssrdf_ok = (vp.mat_kind == LobeKind.bssrdf and Int(vp.med_idx) >= 0
-                     and Int(vp.med_idx) < med_count and _is_real_ptr[Medium_C](med_arr))
+                     and Int(vp.med_idx) < med_count and _is_real_ptr[Medium](med_arr))
     var bssrdf_ss = RGB(Float32(0))
     var bssrdf_sa = RGB(Float32(0))
     var bssrdf_g  = Float32(0)
@@ -2011,8 +2011,8 @@ def _sppm_gather_one(
                             # had for this exact reason; the volume branch was
                             # missed.
                             var ok_med = (mi_v >= 0 and mi_v < med_count
-                                          and _is_real_ptr[Medium_C](med_arr))
-                            var medv = med_arr[unsafe_offset=mi_v] if ok_med else Medium_C(
+                                          and _is_real_ptr[Medium](med_arr))
+                            var medv = med_arr[unsafe_offset=mi_v] if ok_med else Medium(
                                 sigma_a=RGB(Float32(0)), sigma_s=RGB(Float32(1)),
                                 g=Float32(0), grid_idx=Int32(-1), nvdb_idx=Int32(-1),
                                 nvdb_temp_idx=Int32(-1), le_scale=Float32(0),
@@ -2023,7 +2023,7 @@ def _sppm_gather_one(
                                 spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
                             # Heterogeneous media author sigma per UNIT DENSITY,
                             # so the extinction actually in force at the VP is
-                            # density(x) * sigma_t (same rule Medium_C documents).
+                            # density(x) * sigma_t (same rule Medium documents).
                             var dens = Float32(1.0)
                             if medium_is_heterogeneous(medv):
                                 var gvol = medium_grid_for(medv, grids_arr)

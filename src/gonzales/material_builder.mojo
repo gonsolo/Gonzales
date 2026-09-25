@@ -442,7 +442,7 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
             # medium for real. The random walk converges to ground truth and
             # gets thin-geometry translucency the diffusion approximation
             # cannot, at the cost of many scattering events per path -- which
-            # is why Medium_C.is_sss exists (those events must not be charged
+            # is why Medium.is_sss exists (those events must not be charged
             # to the path's maxdepth budget). Same approach as Cycles.
             mat_type = MatKind.dielectric
             is_subsurface = True

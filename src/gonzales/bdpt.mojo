@@ -19,7 +19,7 @@ from .render_state import PDF_DROP_DIRECT, PDF_VOL_PHASE_HIT
 from .materials import Material_C, MatKind, LobeKind, PhotonKind, MeasuredBRDF_C, fr_dielectric, cos_theta_t_dielectric, coat_beer_lambert_tr, DEFAULT_COAT_THICKNESS
 from .render_state import GpuTexture_C
 from .primitives import Ray, Intersection, TriangleMesh, Sphere, PrimId, Instance, sphere_outward_normal
-from .media import Medium_C, MediumInterface_C, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, SSS_WALK_ROUNDS, Grid_C, NvdbGrid_C, spectral_free_flight_weight
+from .media import Medium, MediumInterface, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, SSS_WALK_ROUNDS, Grid, NvdbGrid, spectral_free_flight_weight
 from .lights import area_light_pick_triangle, AreaLight, DistantLight, InfiniteLight, PointLight
 from .curves import Curve_C
 from .bssrdf import dipole_max_radius, dipole_rd, dipole_mis_sigma_tr, dipole_sample_radius, bssrdf_probe_offset, bssrdf_exit_pdf_area, bssrdf_exit_ft, fdr_moment
@@ -6609,10 +6609,10 @@ def sppm_gather_gpu(
     inv_cell: Float32,
     sd: SceneDescriptor2_C,
     pass_idx_dp: Int64 = Int64(0),
-    med_arr_dp: Pointer[Medium_C, MutUntrackedOrigin] = Pointer[Medium_C, MutUntrackedOrigin].unsafe_dangling(),
+    med_arr_dp: Pointer[Medium, MutUntrackedOrigin] = Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(),
     med_count_dp: Int64 = Int64(0),
-    grids_dp: Pointer[Grid_C, MutUntrackedOrigin] = Pointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
-    nvdb_grids_dp: Pointer[NvdbGrid_C, MutUntrackedOrigin] = Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
+    grids_dp: Pointer[Grid, MutUntrackedOrigin] = Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(),
+    nvdb_grids_dp: Pointer[NvdbGrid, MutUntrackedOrigin] = Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
 ):
     """One thread per visible point."""
     var spectral_coeffs = sd.spectral.coeffs
@@ -6836,9 +6836,9 @@ def sppm_render_gpu(
                 psc[unsafe_offset=0].camera_to_world,
                 Int(psc[unsafe_offset=0].film_w), Int(psc[unsafe_offset=0].film_h))
 
-            var mediums = handle[].media.mediums_buf.unsafe_ptr().unsafe_bitcast[Medium_C]()
-            var grids_dev = handle[].media.grids_buf.unsafe_ptr().unsafe_bitcast[Grid_C]()
-            var nvdb_grids_dev = handle[].media.nvdb_grids_buf.unsafe_ptr().unsafe_bitcast[NvdbGrid_C]()
+            var mediums = handle[].media.mediums_buf.unsafe_ptr().unsafe_bitcast[Medium]()
+            var grids_dev = handle[].media.grids_buf.unsafe_ptr().unsafe_bitcast[Grid]()
+            var nvdb_grids_dev = handle[].media.nvdb_grids_buf.unsafe_ptr().unsafe_bitcast[NvdbGrid]()
             var n_mediums = Int64(handle[].media.n_mediums)
             var (spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) = handle[].spectral.unsafe_ptrs()
             var gsd = handle[].scene_descriptor()

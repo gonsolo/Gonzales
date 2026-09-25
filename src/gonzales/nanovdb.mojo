@@ -97,7 +97,7 @@ def nvdb_active_coord(handle: Pointer[UInt8, MutUntrackedOrigin], n: Int64,
     returns background would pass such a test vacuously."""
     external_call["nvdb_active_coord", NoneType](handle, n, out3)
 
-# ── Metadata needed to plug an .nvdb grid into a Medium_C (host only) ────
+# ── Metadata needed to plug an .nvdb grid into a Medium (host only) ────
 
 def nvdb_load_named(path: Pointer[UInt8, MutUntrackedOrigin],
                     grid_name: Pointer[UInt8, MutUntrackedOrigin]) -> Pointer[UInt8, MutUntrackedOrigin]:

@@ -1,6 +1,6 @@
 """Participating media, split out of geometry.mojo (the per-cluster module
-split; see project_geometry_module_split memory). Medium_C through
-MediumInterface_C, and the later "one free-flight sampler for every
+split; see project_geometry_module_split memory). Medium through
+MediumInterface, and the later "one free-flight sampler for every
 integrator" section (which had drifted far from the rest of the medium code
 in geometry.mojo, separated by Frame/the geometry helpers/the SIMD math
 helpers), were the two ranges that made up this cluster -- both depend only
@@ -15,12 +15,12 @@ from gonzales.rng import PCG32
 from .geometry import Point3f, Vec3f, RGB, Frame, INV_FOUR_PI, TWO_PI
 
 @fieldwise_init
-struct Medium_C(TrivialRegisterPassable):
+struct Medium(TrivialRegisterPassable):
     """Participating medium (PBRT-v4 HomogeneousMedium / GridMedium "uniformgrid").
     sigma_a + sigma_s are pre-scaled by 'scale'. For a heterogeneous medium
     (grid_idx >= 0), sigma_a/sigma_s are the PER-UNIT-DENSITY coefficients —
     actual extinction at a point is density(point) * (sigma_a + sigma_s), see
-    Grid_C/grid_sample_density below.
+    Grid/grid_sample_density below.
     g = Henyey-Greenstein anisotropy in [-1, 1]; 0 = isotropic.
     """
     var sigma_a: RGB   # absorption coefficient (1/m), per unit density if grid_idx >= 0
@@ -30,7 +30,7 @@ struct Medium_C(TrivialRegisterPassable):
     var nvdb_idx: Int32            # -1 = none; >=0 = index into scene.nvdb_grids (sparse "nanovdb")
     # Emissive volumes (pbrt NanoVDBMedium): a SECOND nanovdb grid, named
     # "temperature", read from the same file and stored as an ordinary entry in
-    # the same scene.nvdb_grids array -- so it reuses NvdbGrid_C, its upload,
+    # the same scene.nvdb_grids array -- so it reuses NvdbGrid, its upload,
     # and nvdb_sample_density unchanged. -1 = not emissive. Emitted radiance at
     # a point follows pbrt exactly: temp = (grid(p) - temp_offset) *
     # temp_scale, no emission at or below 100 K, then
@@ -54,7 +54,7 @@ struct Medium_C(TrivialRegisterPassable):
     var is_sss:      Int32
 
 # Extra loop rounds a renderer must allow when the scene contains a subsurface
-# interior (`Medium_C.is_sss` above). Those interior random-walk steps and the
+# interior (`Medium.is_sss` above). Those interior random-walk steps and the
 # boundary crossings bracketing them are ONE BSSRDF event and are deliberately
 # NOT charged to the path's maxdepth, so the depth budget alone would never
 # end the walk -- a dense preset like Skin1 needs tens to hundreds of steps
@@ -71,7 +71,7 @@ comptime SSS_WALK_ROUNDS: Int = 256
 # (not in a higher-level integrator file) precisely so gpu.mojo can reach it
 # too: geometry.mojo already sits below every integrator module and already
 # imports spectrum.mojo (for SampledWavelengths/SpectralSample) and defines
-# Medium_C/RGB, so it is the one place all three consumers can import from
+# Medium/RGB, so it is the one place all three consumers can import from
 # without a circular dependency (sppm.mojo imports gpu.mojo, so gpu.mojo can
 # never import sppm.mojo's functions directly).
 #
@@ -220,7 +220,7 @@ def _ff_pick_lane(sig: SpectralSample, n: Int, mut pcg: PCG32) -> Float32:
 
 
 def sample_homogeneous_free_flight(
-    med: Medium_C, t_surf: Float32, mut pcg: PCG32,
+    med: Medium, t_surf: Float32, mut pcg: PCG32,
     # Hero-wavelength MIS. Supply these and the free flight is drawn from the
     # uniform MIXTURE over the 4 hero lanes' exponentials instead of from red
     # alone, which bounds every resulting weight by the lane count. Omit them
@@ -333,7 +333,7 @@ def sample_homogeneous_free_flight(
 # sampled or its acceptance probability -- no change to path continuation).
 @always_inline
 def medium_sigma_t_spectral(
-    med: Medium_C, wavelengths: SampledWavelengths,
+    med: Medium, wavelengths: SampledWavelengths,
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
     spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
     spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
@@ -354,7 +354,7 @@ def medium_sigma_t_spectral(
         sig_t.r, sig_t.g, sig_t.b, wavelengths)
 
 def medium_sigma_s_spectral(
-    med: Medium_C, wavelengths: SampledWavelengths,
+    med: Medium, wavelengths: SampledWavelengths,
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
     spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
     spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
@@ -401,7 +401,7 @@ def medium_sigma_s_spectral(
 
 @always_inline
 def medium_transmittance_ratio_spectral(
-    med: Medium_C, t: Float32, pdf: Float32, wavelengths: SampledWavelengths,
+    med: Medium, t: Float32, pdf: Float32, wavelengths: SampledWavelengths,
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
     spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
     spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
@@ -436,7 +436,7 @@ def medium_transmittance_ratio_spectral(
 
 @always_inline
 def spectral_free_flight_weight(
-    med: Medium_C, ff: FreeFlight, t_surf: Float32, wavelengths: SampledWavelengths,
+    med: Medium, ff: FreeFlight, t_surf: Float32, wavelengths: SampledWavelengths,
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
     spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
     spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
@@ -465,7 +465,7 @@ def spectral_free_flight_weight(
     # back at 1 and the correct spectral weight is 1 too. Guarding HERE rather
     # than at all five consumers (bdpt.mojo x4, sppm.mojo x1) keeps the rule in
     # the one place that owns it -- and it matters: sigma_a/sigma_s are
-    # PER-UNIT-DENSITY coefficients for such a medium (see Medium_C), so
+    # PER-UNIT-DENSITY coefficients for such a medium (see Medium), so
     # feeding them to the Beer-Lambert exponential below would weight by an
     # extinction the sampler never used. Real chromatic extinction in a density
     # field is the same separate, unimplemented piece of work the path tracer's
@@ -504,8 +504,8 @@ def spectral_free_flight_weight(
 
 
 @fieldwise_init
-struct Grid_C(TrivialRegisterPassable):
-    """Dense heterogeneous density grid backing a Medium_C (PBRT-v4
+struct Grid(TrivialRegisterPassable):
+    """Dense heterogeneous density grid backing a Medium (PBRT-v4
     "uniformgrid" — a flat array of nx*ny*nz density samples spanning the
     axis-aligned box [p0,p1] in the medium's own local space). density(x) is
     a unitless multiplier: real sigma_t at a world point = grid_sample_density(x)
@@ -524,14 +524,14 @@ struct Grid_C(TrivialRegisterPassable):
     var max_density: Float32
 
 @always_inline
-def _grid_density_at(grid: Grid_C, xi: Int, yi: Int, zi: Int) -> Float32:
+def _grid_density_at(grid: Grid, xi: Int, yi: Int, zi: Int) -> Float32:
     var cx = max(0, min(Int(grid.nx) - 1, xi))
     var cy = max(0, min(Int(grid.ny) - 1, yi))
     var cz = max(0, min(Int(grid.nz) - 1, zi))
     return grid.density[unsafe_offset=(cz * Int(grid.ny) + cy) * Int(grid.nx) + cx]
 
 @always_inline
-def grid_sample_density(grid: Grid_C, p_world: Vec3f) -> Float32:
+def grid_sample_density(grid: Grid, p_world: Vec3f) -> Float32:
     """Trilinearly-interpolated density at a world-space point; 0 outside
     the grid's local bounds [p0,p1]."""
     var m = grid.world_to_medium
@@ -570,30 +570,30 @@ def grid_sample_density(grid: Grid_C, p_world: Vec3f) -> Float32:
     return d0 * (Float32(1.0) - fz) + d1 * fz
 
 @fieldwise_init
-struct NvdbGrid_C(TrivialRegisterPassable):
-    """Sparse heterogeneous density grid backing a Medium_C (PBRT-v4
+struct NvdbGrid(TrivialRegisterPassable):
+    """Sparse heterogeneous density grid backing a Medium (PBRT-v4
     "nanovdb" -- a decompressed .nvdb blob, sampled via nvdb_sample_index).
-    Sibling to Grid_C, not a variant of it: NanoVDB's own index space has a
+    Sibling to Grid, not a variant of it: NanoVDB's own index space has a
     DIFFERENT coordinate convention (integer voxel index, own affine map)
-    from Grid_C's dense-array [p0,p1]-box convention, so this is its own
-    struct rather than a `kind` flag bolted onto Grid_C.
+    from Grid's dense-array [p0,p1]-box convention, so this is its own
+    struct rather than a `kind` flag bolted onto Grid.
 
     Two transforms compose to go from pbrt world space to an nvdb voxel
     index, mirroring the two-stage pipeline pbrt-v4 itself uses for nanovdb
     media: world_to_medium (this medium's own pbrt CTM inverse, same 4x4
-    column-major convention as Grid_C's field of the same name) maps pbrt
+    column-major convention as Grid's field of the same name) maps pbrt
     world space into the .nvdb file's OWN embedded world space, and
     inv_map/map_vec (that file's PNanoVDB "Map", read once from the blob
     at parse time) maps that into fractional index space:
         world_to_index(x) = inv_map * (x - map_vec)
     (matches pnanovdb_map_apply_inverse exactly; inv_map is row-major 3x3,
-    packed into a SIMD16 with 7 unused padding lanes to reuse Grid_C's own
+    packed into a SIMD16 with 7 unused padding lanes to reuse Grid's own
     storage convention rather than invent a 9-wide one).
 
     index_min/index_max are the blob's indexBBox (nvdb_index_bbox), for a
     cheap reject before touching the blob at all. max_density is the
     majorant (root-node max, nvdb_value_range) used for delta-tracking free
-    -flight sampling, same role as Grid_C.max_density -- coarser than a
+    -flight sampling, same role as Grid.max_density -- coarser than a
     per-leaf majorant would be, a documented, deliberate v1 scope choice.
     """
     var blob: Pointer[UInt8, MutUntrackedOrigin]
@@ -609,7 +609,7 @@ struct NvdbGrid_C(TrivialRegisterPassable):
     var max_density: Float32
 
 @always_inline
-def nvdb_sample_density(grid: NvdbGrid_C, p_world: Vec3f) -> Float32:
+def nvdb_sample_density(grid: NvdbGrid, p_world: Vec3f) -> Float32:
     """Point-sampled (NOT trilinear -- v1 scope, see project_nanovdb_media
     memory) density at a world-space point; 0 outside the grid's index
     bounds. Same "0 outside bounds" contract as grid_sample_density, so a
@@ -633,7 +633,7 @@ def nvdb_sample_density(grid: NvdbGrid_C, p_world: Vec3f) -> Float32:
     # nanovdb's SampleFromVoxels<..., 1, false> (order 1 = trilinear). NanoVDB's
     # convention places voxel VALUES at integer index coordinates, so the base
     # cell is floor(p) and the weights are the fractional part -- this is NOT
-    # the half-integer cell-centre convention Grid_C's dense sampler uses, and
+    # the half-integer cell-centre convention Grid's dense sampler uses, and
     # getting that wrong shifts the field by half a voxel.
     #
     # Point sampling (the original v1 scope) is not merely noisier: on a sparse
@@ -714,7 +714,7 @@ def _slab_range(o: Vec3f, d: Vec3f, bmin: Vec3f, bmax: Vec3f) -> SIMD[DType.floa
     return SIMD[DType.float32, 2](t0, t1)
 
 @always_inline
-def nvdb_ray_range(grid: NvdbGrid_C, org: Vec3f, dir: Vec3f) -> SIMD[DType.float32, 2]:
+def nvdb_ray_range(grid: NvdbGrid, org: Vec3f, dir: Vec3f) -> SIMD[DType.float32, 2]:
     """(t_enter, t_exit) of the ray against this grid's index bbox, in WORLD t
     units. Needed because an infinite (environment) light's shadow ray has no
     finite distance to march: ratio-tracking it at the majorant step rate to a
@@ -744,7 +744,7 @@ def nvdb_ray_range(grid: NvdbGrid_C, org: Vec3f, dir: Vec3f) -> SIMD[DType.float
         Vec3f(grid.index_max.x + Float32(1), grid.index_max.y + Float32(1), grid.index_max.z + Float32(1)))
 
 @always_inline
-def nvdb_index_ray(grid: NvdbGrid_C, org: Vec3f, dir: Vec3f) -> SIMD[DType.float32, 8]:
+def nvdb_index_ray(grid: NvdbGrid, org: Vec3f, dir: Vec3f) -> SIMD[DType.float32, 8]:
     """The world ray expressed in the grid's INDEX space, as
     (ox,oy,oz,|d|, dx,dy,dz,unused). Both transforms are affine and the
     direction is carried as a vector, so the ray parameter t is IDENTICAL in
@@ -809,7 +809,7 @@ def nvdb_node_exit_t(iray: SIMD[DType.float32, 8], t_now: Float32, dim: Float32)
     return t_exit + eps
 
 @always_inline
-def nvdb_majorant_at_world(grid: NvdbGrid_C, p_world: Vec3f) -> SIMD[DType.float32, 2]:
+def nvdb_majorant_at_world(grid: NvdbGrid, p_world: Vec3f) -> SIMD[DType.float32, 2]:
     """LOCAL majorant (max, extent) at a WORLD-space point -- thin wrapper
     over nanovdb.mojo's nvdb_majorant_at that applies the same two-stage
     world->medium->index transform nvdb_sample_density uses."""
@@ -827,7 +827,7 @@ def nvdb_majorant_at_world(grid: NvdbGrid_C, p_world: Vec3f) -> SIMD[DType.float
     return nvdb_majorant_at(grid.blob, Int32(floor(ix)), Int32(floor(iy)), Int32(floor(iz)))
 
 @always_inline
-def grid_ray_range(grid: Grid_C, org: Vec3f, dir: Vec3f) -> SIMD[DType.float32, 2]:
+def grid_ray_range(grid: Grid, org: Vec3f, dir: Vec3f) -> SIMD[DType.float32, 2]:
     """(t_enter, t_exit) of the ray against a dense grid's [p0,p1] box, in
     WORLD t units. Same purpose as nvdb_ray_range -- see that docstring."""
     var m = grid.world_to_medium
@@ -956,7 +956,7 @@ def hg_sample(wo: Vec3f, g: Float32, u1: Float32, u2: Float32) -> SIMD[DType.flo
     return SIMD[DType.float32, 4](wi[0], wi[1], wi[2], hg_phase(cos_theta, g))
 
 @fieldwise_init
-struct MediumInterface_C(TrivialRegisterPassable):
+struct MediumInterface(TrivialRegisterPassable):
     """Binds inside/outside media to a surface. -1 = vacuum."""
     var inside_medium_idx:  Int32
     var outside_medium_idx: Int32
@@ -972,7 +972,7 @@ struct MediumInterface_C(TrivialRegisterPassable):
 # SPPM (sppm.mojo) and BDPT/VCM (bdpt.mojo) called
 # `sample_homogeneous_free_flight` UNCONDITIONALLY, so for any "uniformgrid",
 # "nanovdb" or procedural-"cloud" medium they used sigma_a/sigma_s -- which are
-# PER-UNIT-DENSITY coefficients for such a medium, see Medium_C -- as if they
+# PER-UNIT-DENSITY coefficients for such a medium, see Medium -- as if they
 # were the absolute extinction, i.e. density identically 1 everywhere inside the
 # bounding shape. bunny-cloud rendered as a featureless fog-filled sphere with no
 # bunny in it, and clouds as flat noise, under both integrators (2026-09-16, found
@@ -982,7 +982,7 @@ struct MediumInterface_C(TrivialRegisterPassable):
 comptime MEDIUM_TRACK_MAX_ITERS: Int = 10000  # delta/ratio-tracking loop safety bound
 
 @always_inline
-def medium_is_heterogeneous(med: Medium_C) -> Bool:
+def medium_is_heterogeneous(med: Medium) -> Bool:
     """True if this medium's extinction is modulated by a density field, from
     EITHER source -- dense "uniformgrid" (grid_idx) or sparse "nanovdb"
     (nvdb_idx); the parser never sets both. The one place that question is
@@ -992,15 +992,15 @@ def medium_is_heterogeneous(med: Medium_C) -> Bool:
 
 @always_inline
 def medium_grid_for(
-    med: Medium_C, grids: Pointer[Grid_C, MutUntrackedOrigin]
-) -> Grid_C:
+    med: Medium, grids: Pointer[Grid, MutUntrackedOrigin]
+) -> Grid:
     """`grids[med.grid_idx]`, or an inert zero-extent placeholder when this
     medium has no dense grid -- a homogeneous or nanovdb medium has
     grid_idx == -1 and must never index that array. Exists so the placeholder
-    literal is written ONCE instead of at every site that needs a Grid_C in
+    literal is written ONCE instead of at every site that needs a Grid in
     scope (free-flight sampling, NEE ratio tracking, shadow rays)."""
     if med.grid_idx < Int32(0):
-        return Grid_C(
+        return Grid(
             Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
             Int32(0), Int32(0), Int32(0),
             Point3f(Float32(0), Float32(0), Float32(0)),
@@ -1010,11 +1010,11 @@ def medium_grid_for(
 
 @always_inline
 def medium_nvdb_for(
-    med: Medium_C, nvdb_grids: Pointer[NvdbGrid_C, MutUntrackedOrigin]
-) -> NvdbGrid_C:
+    med: Medium, nvdb_grids: Pointer[NvdbGrid, MutUntrackedOrigin]
+) -> NvdbGrid:
     """`nvdb_grids[med.nvdb_idx]`, or an inert placeholder. See medium_grid_for."""
     if med.nvdb_idx < Int32(0):
-        return NvdbGrid_C(
+        return NvdbGrid(
             Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
             SIMD[DType.float32, 16](0), SIMD[DType.float32, 16](0),
             Vec3f(Float32(0), Float32(0), Float32(0)),
@@ -1042,9 +1042,9 @@ def medium_emission_spectral(
         spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, c.r, c.g, c.b, wl)
 
 def sample_free_flight(
-    med: Medium_C,
-    grids: Pointer[Grid_C, MutUntrackedOrigin],
-    nvdb_grids: Pointer[NvdbGrid_C, MutUntrackedOrigin],
+    med: Medium,
+    grids: Pointer[Grid, MutUntrackedOrigin],
+    nvdb_grids: Pointer[NvdbGrid, MutUntrackedOrigin],
     ray_org: Vec3f,
     ray_dir: Vec3f,
     t_surf: Float32,
