@@ -1933,7 +1933,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     # 978, 599 identical non-comment lines). Both designs now run the same
     # step: this one loops over it inline, the wavefront driver launches it
     # once per depth level with the loop-carried state -- including the
-    # `total`/`first_alb` accumulators -- parked in a VCMCameraPathState_C.
+    # `total`/`first_alb` accumulators -- parked in a VCMCameraPathState.
     var st = _bdpt_camera_path_init[use_gpu](
         r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl, film_filter, start_med_idx)
     var ro = st.ro
@@ -1978,11 +1978,11 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     return (total, first_alb)
 
 @fieldwise_init
-struct VCMCameraPathState_C(TrivialRegisterPassable):
+struct VCMCameraPathState(TrivialRegisterPassable):
     """Task #163 stage 4: persistent per-camera-path state carried across
     separate wavefront-staged GPU kernel launches (`_bdpt_camera_path_init`
     then one `_bdpt_camera_path_bounce` call per bounce), the camera-path
-    counterpart to `VCMLightPathState_C` (see that struct's docstring for
+    counterpart to `VCMLightPathState` (see that struct's docstring for
     the general convention). Unlike the light-path side, `total`/`first_alb`
     are running ACCUMULATORS carried across every bounce, not just
     per-bounce scratch -- the host loop reads them once `active` drops to 0,
@@ -2030,10 +2030,10 @@ def _bdpt_camera_path_init[use_gpu: Bool](
     pass_wl: SampledWavelengths,
     film_filter: FilmFilter,
     start_med_idx: Int32 = Int32(-1),
-) -> VCMCameraPathState_C:
+) -> VCMCameraPathState:
     """Task #163 stage 4: camera-ray generation + MIS-origin setup half of
     `_bdpt_trace_camera_and_connect` (bdpt.mojo:830-886), split out to seed
-    a `VCMCameraPathState_C` for the wavefront-staged bounce loop instead of
+    a `VCMCameraPathState` for the wavefront-staged bounce loop instead of
     falling straight into an inline `for` loop. Byte-for-byte copy of that
     function's pre-loop body -- see its own docstring/VCM Stage 2b comments
     for the cameraPdfW derivation, not repeated here. Unlike
@@ -2124,7 +2124,7 @@ def _bdpt_camera_path_init[use_gpu: Bool](
     var last_bsdf_pdf = Float32(-1)
 
 
-    return VCMCameraPathState_C(
+    return VCMCameraPathState(
         ro, rd, beta, total, first_alb, dvcm_carry, dvc_carry, dvm_carry,
         Int32(n_verts), Int32(n_bounces), cur_med_idx, last_bsdf_pdf, Int8(1),
         pcg.state, pcg.inc,
@@ -3118,7 +3118,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
             ro = hit + rd*Float32(0.0002)
-            mis_null_dist += t_hit + Float32(0.0002)   # see VCMCameraPathState_C.mis_null_dist
+            mis_null_dist += t_hit + Float32(0.0002)   # see VCMCameraPathState.mis_null_dist
             # VCM Stage 2b: pure pass-through, carry unchanged (see
             # _bdpt_trace_light_path's matching interface-branch comment).
 
@@ -3132,7 +3132,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
 
 
 @fieldwise_init
-struct VCMLightPathState_C(TrivialRegisterPassable):
+struct VCMLightPathState(TrivialRegisterPassable):
     """Task #163 stage 4: persistent per-light-path state carried across
     separate wavefront-staged GPU kernel launches (`_bdpt_light_path_init_gpu`
     then one `_bdpt_light_path_bounce_gpu` call per bounce), the light-path
@@ -3161,12 +3161,12 @@ struct VCMLightPathState_C(TrivialRegisterPassable):
     var wl_pdf: Float32
     # Touching-dielectric IOR depth-2 stack for _dielectric_bounce (see that
     # function's docstring, sppm.mojo) -- same role and convention as
-    # VCMCameraPathState_C's matching fields. Both start at vacuum (1.0).
+    # VCMCameraPathState's matching fields. Both start at vacuum (1.0).
     var current_dielectric_ior: Float32
     var previous_dielectric_ior: Float32
 
-def _null_light_path_state() -> VCMLightPathState_C:
-    return VCMLightPathState_C(
+def _null_light_path_state() -> VCMLightPathState:
+    return VCMLightPathState(
         Point3f(Float32(0), Float32(0), Float32(0)),
         Vec3f(Float32(0), Float32(0), Float32(0)),
         SpectralSample(Float32(0)),
@@ -3186,10 +3186,10 @@ def _bdpt_light_path_init[use_gpu: Bool](
     lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
     mis_vc_weight_factor: Float32,
     pass_wl: SampledWavelengths,
-) -> VCMLightPathState_C:
+) -> VCMLightPathState:
     """Task #163 stage 4: light-emission setup half of
     `_bdpt_trace_light_path` (bdpt.mojo:1734-1880), split out to seed a
-    `VCMLightPathState_C` for the wavefront-staged bounce loop instead of
+    `VCMLightPathState` for the wavefront-staged bounce loop instead of
     falling straight into an inline `for` loop. Byte-for-byte copy of that
     function's pre-loop body -- see its own docstring/VCM Stage 2b comments
     for the MIS derivation, not repeated here. The only changes are the two
@@ -3387,7 +3387,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
     var cur_med_idx = default_emit_med
     var n_lbounces = 1  # counts all surface hits (1 = not-the-primary-ray, matches area-light convention — see _dielectric_bounce's bounce==0 special case)
 
-    return VCMLightPathState_C(
+    return VCMLightPathState(
         ro, rd, flux, dvcm_carry, dvc_carry, dvm_carry,
         Int8(1) if is_finite_origin else Int8(0),
         cur_med_idx, Int32(n_lbounces), Int32(n_verts), Int8(1),
@@ -3453,7 +3453,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
       - `n_verts`/loop-carried locals are `mut` PARAMETERS instead of
         function-local variables persisted implicitly across loop
         iterations -- the caller is a persistent per-light-path state
-        struct (`VCMLightPathState_C`) that survives across separate kernel
+        struct (`VCMLightPathState`) that survives across separate kernel
         launches, one call to this function per bounce.
       - `lvc_path_len[lp_idx]` is NOT written here (unlike the original,
         which wrote it once after the loop) -- the caller writes
@@ -3904,7 +3904,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
     # still lacks the t=1 splat and the Vulkan RT coverage fixes. Both
     # designs now run the SAME step: this one loops over it inline, the
     # wavefront driver launches it once per depth level with the loop-carried
-    # state parked in a VCMLightPathState_C between launches.
+    # state parked in a VCMLightPathState between launches.
     var st = _bdpt_light_path_init[use_gpu](
         sd, pcg, default_emit_med, lp_idx, lvc, lvc_path_len, mis_vc_weight_factor, pass_wl)
     if st.active == Int8(0):
@@ -4922,7 +4922,7 @@ def _bdpt_camera_connect_gpu(
 # next piece of work once this staging is itself verified correct.
 
 def _bdpt_light_path_init_gpu(
-    states: Pointer[VCMLightPathState_C, MutUntrackedOrigin],
+    states: Pointer[VCMLightPathState, MutUntrackedOrigin],
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
     lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
     mis_vc_weight_factor: Float32,
@@ -4934,7 +4934,7 @@ def _bdpt_light_path_init_gpu(
 ):
     """One thread per light path: seed this thread's own PCG32 (same seed
     formula _bdpt_emit_light_paths_gpu uses), call _bdpt_light_path_init,
-    store the resulting VCMLightPathState_C. Mirrors
+    store the resulting VCMLightPathState. Mirrors
     _bdpt_emit_light_paths_gpu's docstring for why `has_med` isn't a kernel
     parameter -- not needed here since init doesn't touch media."""
     var spectral_res_dp = Int64(sd.spectral.res)
@@ -4950,7 +4950,7 @@ def _bdpt_light_path_init_gpu(
 
 def _bdpt_light_path_intersect_gpu(
     sd: SceneDescriptor2_C,
-    states: Pointer[VCMLightPathState_C, MutUntrackedOrigin],
+    states: Pointer[VCMLightPathState, MutUntrackedOrigin],
     results: Pointer[Intersection, MutUntrackedOrigin],
     count_dp: Int64,
 ):
@@ -4972,7 +4972,7 @@ def _bdpt_light_path_intersect_gpu(
     test_spheres(sd.spheres, Int(sd.sphereCount), ray, results.unsafe_offset(tid))
 
 def _bdpt_light_path_bounce_gpu(
-    states: Pointer[VCMLightPathState_C, MutUntrackedOrigin],
+    states: Pointer[VCMLightPathState, MutUntrackedOrigin],
     results: Pointer[Intersection, MutUntrackedOrigin],
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
     lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
@@ -5040,7 +5040,7 @@ def _bdpt_light_path_bounce_gpu(
     states[unsafe_offset=k].pcg_inc = pcg.inc
 
 def _bdpt_camera_path_init_gpu(
-    states: Pointer[VCMCameraPathState_C, MutUntrackedOrigin],
+    states: Pointer[VCMCameraPathState, MutUntrackedOrigin],
     r2c: Pointer[Float32, MutUntrackedOrigin],
     c2w: Pointer[Float32, MutUntrackedOrigin],
     n_pix_dp: Int64,
@@ -5053,7 +5053,7 @@ def _bdpt_camera_path_init_gpu(
 ):
     """One thread per pixel: seed this thread's own PCG32 (same seed formula
     _bdpt_camera_connect_gpu uses), call _bdpt_camera_path_init, store the
-    resulting VCMCameraPathState_C. No scene params needed -- camera-ray
+    resulting VCMCameraPathState. No scene params needed -- camera-ray
     generation doesn't touch the scene."""
     var n_pix = Int(n_pix_dp)
     var fw = Int(fw_dp)
@@ -5070,7 +5070,7 @@ def _bdpt_camera_path_init_gpu(
 
 def _bdpt_camera_path_intersect_gpu(
     sd: SceneDescriptor2_C,
-    states: Pointer[VCMCameraPathState_C, MutUntrackedOrigin],
+    states: Pointer[VCMCameraPathState, MutUntrackedOrigin],
     results: Pointer[Intersection, MutUntrackedOrigin],
     count_dp: Int64,
 ):
@@ -5089,7 +5089,7 @@ def _bdpt_camera_path_intersect_gpu(
     test_spheres(sd.spheres, Int(sd.sphereCount), ray, results.unsafe_offset(tid))
 
 def _bdpt_camera_path_bounce_gpu(
-    states: Pointer[VCMCameraPathState_C, MutUntrackedOrigin],
+    states: Pointer[VCMCameraPathState, MutUntrackedOrigin],
     results: Pointer[Intersection, MutUntrackedOrigin],
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
     lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
@@ -5181,7 +5181,7 @@ def _bdpt_camera_path_bounce_gpu(
     states[unsafe_offset=pix].pcg_inc = pcg.inc
 
 def _bdpt_camera_path_accumulate_gpu(
-    states: Pointer[VCMCameraPathState_C, MutUntrackedOrigin],
+    states: Pointer[VCMCameraPathState, MutUntrackedOrigin],
     accum: Pointer[Float32, MutUntrackedOrigin],
     albedo_accum: Pointer[Float32, MutUntrackedOrigin],
     n_pix_dp: Int64,
@@ -5222,7 +5222,7 @@ def _bdpt_camera_path_accumulate_gpu(
 # real GPU-side ray-query tracing through shared CUDA/Vulkan memory, no
 # CPU round trip. Mirrors gpu.mojo's vulkaninterop_pack_rays_kernel/
 # vulkaninterop_rt_traverse_paths_gpu exactly, just reading ro/rd from
-# VCMLightPathState_C/VCMCameraPathState_C instead of PathState.ray --
+# VCMLightPathState/VCMCameraPathState instead of PathState.ray --
 # vulkaninterop_unpack_results_kernel itself is reused UNCHANGED from
 # gpu.mojo for both (its output is always a plain Intersection, with no
 # dependency on which subpath produced the ray). Scope: triangle geometry
@@ -5231,7 +5231,7 @@ def _bdpt_camera_path_accumulate_gpu(
 # debug_render_vulkanrt/--vulkan-rt-shade already enforce).
 
 def vulkaninterop_pack_light_rays_kernel(
-    states: Pointer[VCMLightPathState_C, MutUntrackedOrigin],
+    states: Pointer[VCMLightPathState, MutUntrackedOrigin],
     rays: Pointer[Float32, MutUntrackedOrigin],
     count_dp: Int64,
 ):
@@ -5252,7 +5252,7 @@ def vulkaninterop_pack_light_rays_kernel(
     rays[unsafe_offset=idx + 7] = Float32(1.0e8)
 
 def vulkaninterop_pack_camera_rays_kernel(
-    states: Pointer[VCMCameraPathState_C, MutUntrackedOrigin],
+    states: Pointer[VCMCameraPathState, MutUntrackedOrigin],
     rays: Pointer[Float32, MutUntrackedOrigin],
     count_dp: Int64,
 ):
@@ -5288,7 +5288,7 @@ def vulkaninterop_rt_traverse_light_paths_gpu(
     var grid = ceildiv(n_total, block_size)
 
     ctx.enqueue_function[vulkaninterop_pack_light_rays_kernel](
-        state_buf.unsafe_ptr().unsafe_bitcast[VCMLightPathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        state_buf.unsafe_ptr().unsafe_bitcast[VCMLightPathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         interop_rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         Int64(n_total),
         grid_dim=grid, block_dim=block_size,
@@ -5329,7 +5329,7 @@ def vulkaninterop_rt_traverse_camera_paths_gpu(
     var grid = ceildiv(n_total, block_size)
 
     ctx.enqueue_function[vulkaninterop_pack_camera_rays_kernel](
-        state_buf.unsafe_ptr().unsafe_bitcast[VCMCameraPathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        state_buf.unsafe_ptr().unsafe_bitcast[VCMCameraPathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         interop_rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         Int64(n_total),
         grid_dim=grid, block_dim=block_size,
@@ -5849,7 +5849,7 @@ def resolve_shadow_connect_gpu(
     shadow_results: Pointer[Float32, MutUntrackedOrigin],
     mesh_material_idx: Pointer[Int64, MutUntrackedOrigin],
     n_meshes_vk_dp: Int64,
-    cam_states: Pointer[VCMCameraPathState_C, MutUntrackedOrigin],
+    cam_states: Pointer[VCMCameraPathState, MutUntrackedOrigin],
     shadow_pending: Pointer[SpectralSample, MutUntrackedOrigin],
     shadow_valid: Pointer[Int8, MutUntrackedOrigin],
     shadow_seg_med: Pointer[Int32, MutUntrackedOrigin],
@@ -5913,7 +5913,7 @@ def resolve_shadow_connect_gpu(
         shadow_pending[unsafe_offset=idx] = p * Tr
 
 def sum_shadow_connect_gpu(
-    states: Pointer[VCMCameraPathState_C, MutUntrackedOrigin],
+    states: Pointer[VCMCameraPathState, MutUntrackedOrigin],
     shadow_pending: Pointer[SpectralSample, MutUntrackedOrigin],
     shadow_valid: Pointer[Int8, MutUntrackedOrigin],
     n_pix_dp: Int64,
@@ -6013,8 +6013,8 @@ def vcm_render_gpu_wavefront(
             var merge_next_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(lvc_cap, 1) * size_of[Int32]())
             var inter_light_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[Intersection]())
             var inter_cam_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection]())
-            var light_states_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[VCMLightPathState_C]())
-            var cam_states_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[VCMCameraPathState_C]())
+            var light_states_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[VCMLightPathState]())
+            var cam_states_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[VCMCameraPathState]())
             # Task #163 stage 5: diffuse-branch connect shadow-ray queue,
             # strided _BDPT_MAX_VERTS slots per pixel -- see
             # _bdpt_connect_to_cache_deferred/resolve_shadow_connect_gpu.
@@ -6062,8 +6062,8 @@ def vcm_render_gpu_wavefront(
             var merge_next_ptr  = merge_next_buf.unsafe_ptr().unsafe_bitcast[Int32]()
             var inter_light_ptr = inter_light_buf.unsafe_ptr().unsafe_bitcast[Intersection]()
             var inter_cam_ptr   = inter_cam_buf.unsafe_ptr().unsafe_bitcast[Intersection]()
-            var light_states_ptr = light_states_buf.unsafe_ptr().unsafe_bitcast[VCMLightPathState_C]()
-            var cam_states_ptr   = cam_states_buf.unsafe_ptr().unsafe_bitcast[VCMCameraPathState_C]()
+            var light_states_ptr = light_states_buf.unsafe_ptr().unsafe_bitcast[VCMLightPathState]()
+            var cam_states_ptr   = cam_states_buf.unsafe_ptr().unsafe_bitcast[VCMCameraPathState]()
             var shadow_rays_ptr    = shadow_rays_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             var shadow_pending_ptr = shadow_pending_buf.unsafe_ptr().unsafe_bitcast[SpectralSample]()
             var shadow_valid_ptr   = shadow_valid_buf.unsafe_ptr().unsafe_bitcast[Int8]()
