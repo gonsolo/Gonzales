@@ -6,7 +6,7 @@ from .lights import AreaLight, DistantLight, InfiniteLight, LightSampler, PointL
 from .materials import MatKind, Material_C, MeasuredBRDF_C
 from .media import MediumInterface
 from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh
-from .render_state import GpuTexture_C, NormalSlopeMap_C, PathState_C, ShadowTask_C
+from .render_state import GpuTexture, NormalSlopeMap, PathState, ShadowTask
 from .restir_di import DIReservoir, ReservoirIO, reservoir_io_null
 from .restir_gi import gi_reservoir_io_null
 from .rng import PCG32
@@ -22,14 +22,14 @@ def _shade_context(
     px_scale: Float32,
     path_idx: Int = 0,
     use_restir: Bool = False,
-    shadow_tasks: Pointer[ShadowTask_C, MutUntrackedOrigin] = Pointer[ShadowTask_C, MutUntrackedOrigin].unsafe_dangling(),
+    shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin] = Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
 ) -> ShadeContext:
     return ShadeContext(
         path_idx=path_idx, bvh2Nodes=sd.bvh2Nodes, primIds=sd.primIds, meshes=sd.meshes, curves=sd.curves,
         materials=sd.materials,
         tex_filenames=Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         textures=sd.gpuTextures, n_textures=Int(sd.gpuTextureCount),
-        nmaps=Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
+        nmaps=Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
         shadow_tasks=shadow_tasks,
         px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(), use_restir=use_restir,
         blasNodesArr=sd.blasNodesArr, blasPrimIdsArr=sd.blasPrimIdsArr, instances=sd.instances,
@@ -44,7 +44,7 @@ def _shade_context(
 
 
 def shade_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     materials: Pointer[Material_C, MutUntrackedOrigin],
@@ -60,7 +60,7 @@ def shade_gpu(
 
 
 def shade_nee_preamble_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneDescriptor2_C,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
@@ -85,7 +85,7 @@ def shade_nee_preamble_gpu(
 # Each kernel below checks pending_mat, clears it, and calls the shade function.
 
 def shade_diffuse_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneDescriptor2_C,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
@@ -138,13 +138,13 @@ def shade_diffuse_gpu(
 
 
 def shade_coated_diffuse_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneDescriptor2_C,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
     px_scale: Float32,
-    shadow_tasks: Pointer[ShadowTask_C, MutUntrackedOrigin],
+    shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
 ):
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -161,13 +161,13 @@ def shade_coated_diffuse_gpu(
 
 
 def shade_diffuse_transmit_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneDescriptor2_C,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
     px_scale: Float32,
-    shadow_tasks: Pointer[ShadowTask_C, MutUntrackedOrigin],
+    shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
 ):
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -214,7 +214,7 @@ def shade_diffuse_transmit_gpu(
 # the next bounce would just re-hit the same mix material and re-roll the
 # choice forever.
 def shade_mix_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneDescriptor2_C,
     count_dp: Int64,
@@ -243,13 +243,13 @@ def shade_mix_gpu(
 
 
 def shade_conductor_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneDescriptor2_C,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
     px_scale: Float32,
-    shadow_tasks: Pointer[ShadowTask_C, MutUntrackedOrigin],
+    shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
 ):
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -266,13 +266,13 @@ def shade_conductor_gpu(
 
 
 def shade_measured_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneDescriptor2_C,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
     px_scale: Float32,
-    shadow_tasks: Pointer[ShadowTask_C, MutUntrackedOrigin],
+    shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
 ):
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -289,7 +289,7 @@ def shade_measured_gpu(
 
 
 def shade_dielectric_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneDescriptor2_C,
     count_dp: Int64,
@@ -315,7 +315,7 @@ def shade_dielectric_gpu(
 
 
 def shade_thin_dielectric_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneDescriptor2_C,
     count_dp: Int64,
@@ -334,13 +334,13 @@ def shade_thin_dielectric_gpu(
 
 
 def shade_coated_conductor_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneDescriptor2_C,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
     px_scale: Float32,
-    shadow_tasks: Pointer[ShadowTask_C, MutUntrackedOrigin],
+    shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
 ):
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -357,7 +357,7 @@ def shade_coated_conductor_gpu(
 
 
 def shade_interface_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneDescriptor2_C,
     count_dp: Int64,
@@ -377,13 +377,13 @@ def shade_interface_gpu(
 
 
 def shade_hair_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneDescriptor2_C,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
     px_scale: Float32,
-    shadow_tasks: Pointer[ShadowTask_C, MutUntrackedOrigin],
+    shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
 ):
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -400,7 +400,7 @@ def shade_hair_gpu(
 
 
 def shade_enqueue_shadow_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     primIds: Pointer[PrimId, MutUntrackedOrigin],
@@ -412,13 +412,13 @@ def shade_enqueue_shadow_gpu(
     materials: Pointer[Material_C, MutUntrackedOrigin],
     areaLights: Pointer[AreaLight, MutUntrackedOrigin],
     areaLightCount: Int,
-    textures: Pointer[GpuTexture_C, MutUntrackedOrigin],
+    textures: Pointer[GpuTexture, MutUntrackedOrigin],
     n_textures: Int,
     infiniteLights: Pointer[InfiniteLight, MutUntrackedOrigin],
     n_infinite_lights: Int,
     spheres: Pointer[Sphere, MutUntrackedOrigin],
     n_spheres: Int,
-    shadow_tasks: Pointer[ShadowTask_C, MutUntrackedOrigin],
+    shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
     count: Int,
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_res: Int = 0,
@@ -441,7 +441,7 @@ def shade_enqueue_shadow_gpu(
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin](),
         textures=textures, n_textures=n_textures,
-        nmaps=Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
+        nmaps=Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
         shadow_tasks=shadow_tasks,
         px_scale=Float32(0.0), sobol_matrices=Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(), guide=null_guide(), use_restir=False,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,

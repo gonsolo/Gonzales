@@ -5,7 +5,7 @@ from std.memory.alloc import unsafe_alloc
 from .geometry import RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, safe_sqrt, reflect, refract, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from .render_state import PDF_DROP_DIRECT
 from .materials import Material_C, MatKind, LobeKind, MeasuredBRDF_C, schlick_fresnel, fr_dielectric
-from .render_state import PathState_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, ShadowTask_C
+from .render_state import PathState, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, light_sampler_sample, light_sampler_pdf, area_light_pick_triangle
 from .curves import Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis
@@ -102,18 +102,18 @@ struct ShadeContext:
     var curves:           Pointer[Curve_C, MutUntrackedOrigin]
     var materials:        Pointer[Material_C, MutUntrackedOrigin]
     var tex_filenames:    Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin]
-    var textures:         Pointer[GpuTexture_C, MutUntrackedOrigin]
+    var textures:         Pointer[GpuTexture, MutUntrackedOrigin]
     var n_textures:       Int
     # Slope-space copies of the normal maps, indexed exactly like
     # `tex_filenames`/`textures` (so a Material_C's `normal_tex_idx`
     # addresses all three). Read ONLY by the SMS/MNEE manifold walk, which
     # needs the normal's derivatives and not just the normal -- see
-    # geometry.mojo's NormalSlopeMap_C. Dangling on the GPU call sites (the
+    # geometry.mojo's NormalSlopeMap. Dangling on the GPU call sites (the
     # device-side scene upload has no slope maps yet, so a normal-mapped
     # caustic caster falls back to its smooth surface there, exactly as it
     # did before these existed).
-    var nmaps:            Pointer[NormalSlopeMap_C, MutUntrackedOrigin]
-    var shadow_tasks:     Pointer[ShadowTask_C, MutUntrackedOrigin]
+    var nmaps:            Pointer[NormalSlopeMap, MutUntrackedOrigin]
+    var shadow_tasks:     Pointer[ShadowTask, MutUntrackedOrigin]
     var px_scale:         Float32
     var sobol_matrices:   Pointer[UInt32, MutUntrackedOrigin]
     var guide:            GuideGrid
@@ -328,8 +328,8 @@ def _srgb_to_linear(c: Float32) -> Float32:
 # textures decode each channel through tex.lut, so every blend happens in
 # linear space; single-channel textures replicate into all three channels.
 @always_inline
-def _texel(tex: GpuTexture_C, i: Int) -> RGB:
-    if Int(tex.format) == GpuTexture_C.FORMAT_U8:
+def _texel(tex: GpuTexture, i: Int) -> RGB:
+    if Int(tex.format) == GpuTexture.FORMAT_U8:
         if Int(tex.channels) == 1:
             var l = tex.lut[unsafe_offset=Int(tex.data[unsafe_offset=i])]
             return RGB(l, l, l)
@@ -342,7 +342,7 @@ def _texel(tex: GpuTexture_C, i: Int) -> RGB:
 # Bilinear sample of ONE mip level: `off` = texel offset of the level in
 # tex.data, (lw, lh) = that level's dimensions. Pixel centres at +0.5, wrap.
 @always_inline
-def _sample_level(tex: GpuTexture_C, off: Int, lw: Int, lh: Int, u: Float32, v: Float32) -> RGB:
+def _sample_level(tex: GpuTexture, off: Int, lw: Int, lh: Int, u: Float32, v: Float32) -> RGB:
     var s = u - Float32(Int(u))
     if s < Float32(0.0): s += Float32(1.0)
     var t = v - Float32(Int(v))
@@ -368,7 +368,7 @@ def _sample_level(tex: GpuTexture_C, off: Int, lw: Int, lh: Int, u: Float32, v: 
 # Trilinear mip sample. lod 0 = base level (full res); higher = coarser.
 # With a 1-level texture (no pyramid) this is plain bilinear on the base.
 @always_inline
-def _sample_tex(tex: GpuTexture_C, u: Float32, v: Float32, lod: Float32 = Float32(0.0)) -> RGB:
+def _sample_tex(tex: GpuTexture, u: Float32, v: Float32, lod: Float32 = Float32(0.0)) -> RGB:
     var nl = Int(tex.n_levels)
     if nl <= 1:
         return _sample_level(tex, 0, Int(tex.width), Int(tex.height), u, v)
@@ -394,14 +394,14 @@ def _sample_tex(tex: GpuTexture_C, u: Float32, v: Float32, lod: Float32 = Float3
 # LOD = log2(texels covered by one pixel). pixel_uv is the uv footprint;
 # * width converts to texels.
 @always_inline
-def _footprint_lod(tex: GpuTexture_C, pixel_uv: Float32) -> Float32:
+def _footprint_lod(tex: GpuTexture, pixel_uv: Float32) -> Float32:
     var texels = pixel_uv * Float32(tex.width)
     if texels > Float32(1.0):
         return log2(texels)
     return Float32(0.0)
 
 # Unified 2D-texture fetch — the single use_gpu seam for texture sampling.
-# GPU reads the uploaded GpuTexture_C table; CPU reads via OIIO by filename.
+# GPU reads the uploaded GpuTexture table; CPU reads via OIIO by filename.
 # (u, v) are the interpolated, NOT-yet-V-flipped coords; this applies pbrt's
 # V-flip (1 - v) and (CPU) wrap. raw=True skips the sRGB decode (normal maps).
 # Sets `found` False when there is no texture/data (caller uses its fallback).
@@ -412,7 +412,7 @@ def sample_texture[use_gpu: Bool](
     raw: Bool,
     pixel_uv: Float32,   # texture-space footprint of one pixel (uv units); <=0 => LOD 0
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
-    textures: Pointer[GpuTexture_C, MutUntrackedOrigin],
+    textures: Pointer[GpuTexture, MutUntrackedOrigin],
     n_textures: Int,
     mut found: Bool,
 ) -> RGB:
@@ -455,7 +455,7 @@ def _tex_lookup[use_gpu: Bool](
     v0: Int, v1: Int, v2: Int,
     mesh: TriangleMesh,
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
-    textures: Pointer[GpuTexture_C, MutUntrackedOrigin],
+    textures: Pointer[GpuTexture, MutUntrackedOrigin],
     n_textures: Int,
     pixel_uv: Float32 = Float32(0.0),
 ) -> RGB:
@@ -521,7 +521,7 @@ def _tex_lookup[use_gpu: Bool](
 
 @always_inline
 def shade_core(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     materials: Pointer[Material_C, MutUntrackedOrigin],
@@ -626,7 +626,7 @@ def _get_tri_verts(
 # Returns (geom_normal_ff, ray_dir, ray_org).
 @always_inline
 def _geom_normal_and_ray(
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     p0: Vec3f,
     p1: Vec3f,
     p2: Vec3f,
@@ -659,7 +659,7 @@ def _geom_normal_and_ray(
 # unlike the triangle path there is no object/world transform to apply.
 @always_inline
 def _sphere_geom_normal_and_ray(
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     spheres: Pointer[Sphere, MutUntrackedOrigin],
 ) -> Tuple[Vec3f, Vec3f, Vec3f]:
@@ -691,7 +691,7 @@ def _sphere_geom_normal_and_ray(
 # False the caller must deactivate the path without reading anything else.
 @always_inline
 def _hit_geom(
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     spheres: Pointer[Sphere, MutUntrackedOrigin],
@@ -756,7 +756,7 @@ def _to_spec_illum(ctx: ShadeContext, c: RGB, wl: SampledWavelengths) -> Spectra
 
 @always_inline
 def _shadow_contribute[enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     origin: Vec3f,
     dir: Vec3f,
@@ -765,7 +765,7 @@ def _shadow_contribute[enqueue_shadow: Bool](
     guide_write: GuideGrid = null_guide(),
 ):
     comptime if enqueue_shadow:
-        ctx.shadow_tasks[unsafe_offset=ctx.path_idx] = ShadowTask_C(
+        ctx.shadow_tasks[unsafe_offset=ctx.path_idx] = ShadowTask(
             Point3f(origin[0], origin[1], origin[2]),
             Vec3f(dir[0], dir[1], dir[2]),
             tmax, contrib, Int32(1), Int32(0))
@@ -798,7 +798,7 @@ def _shadow_contribute[enqueue_shadow: Bool](
 # ── DiffuseTransmission branch ────────────────────────────────────────────────
 @always_inline
 def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     ctx: ShadeContext,
 ):
@@ -921,7 +921,7 @@ def _albedo_highlight_boost(albedo: RGB, contrib: SpectralSample) -> RGB:
 
 @always_inline
 def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     ctx: ShadeContext,
     mat: Material_C,
@@ -1005,7 +1005,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
 
 @always_inline
 def _layered_nee[enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     hit_point: Vec3f,
     ls: LightSample,
@@ -1039,7 +1039,7 @@ comptime RR_THROUGHPUT_CLAMP: Float32 = 32.0
 # the same bounce for other purposes and must not draw a second one.
 @always_inline
 def _apply_russian_roulette(
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     pcg: PCG32,
     u_rr: Float32,
 ):
@@ -1051,7 +1051,7 @@ def _apply_russian_roulette(
         # pbrt-v4's `rrBeta = beta * etaScale` (PathIntegrator::Li). Without
         # this, RR reads that compression as real attenuation and kills
         # paths that were about to be restored to full brightness on exit --
-        # see PathState_C.eta_scale's docstring.
+        # see PathState.eta_scale's docstring.
         var rr_lum = path_ptr[].throughput.luma() * path_ptr[].eta_scale
         var q = Float32(1.0) - (rr_lum if rr_lum < Float32(0.95) else Float32(0.95))
         if u_rr < q:
@@ -1089,7 +1089,7 @@ def spawn_origin(hit_point: Vec3f, geo_n: Vec3f, dir: Vec3f) -> Vec3f:
 
 
 def _finish_delta_bounce(
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     mut pcg: PCG32,
     bs: BxDFSample,
     f_spec: SpectralSample,
@@ -1127,13 +1127,13 @@ def _finish_delta_bounce(
 # ── Dielectric (glass) branch ─────────────────────────────────────────────────
 @always_inline
 def shade_dielectric[use_gpu: Bool](
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     mat: Material_C,
     spheres: Pointer[Sphere, MutUntrackedOrigin],
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    textures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
+    textures: Pointer[GpuTexture, MutUntrackedOrigin] = Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(),
     n_textures: Int = 0,
     px_scale: Float32 = Float32(0.0),
 ):
@@ -1252,7 +1252,7 @@ def shade_dielectric[use_gpu: Bool](
         # `ior` by the matching entry) and new_dielectric_ior becomes the OLD
         # previous_ior. So this reconstructs eta from the ior transition
         # alone in both cases, no extra return value needed. See
-        # PathState_C.eta_scale's docstring for why RR needs this decoupled
+        # PathState.eta_scale's docstring for why RR needs this decoupled
         # from the real throughput.
         # new/current, NOT current/new: this has to UNDO the eta^2 the
         # throughput just took, so it is the RECIPROCAL of that factor
@@ -1315,7 +1315,7 @@ def shade_dielectric[use_gpu: Bool](
 # soap bubbles, thin films. IOR stored in mat.albedo.r like regular dielectric.
 @always_inline
 def shade_thin_dielectric(
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     mat: Material_C,
@@ -1382,7 +1382,7 @@ def _nee_sample_simple_light(
 
 @always_inline
 def _nee_loop_simple[enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     normal: Vec3f,
     hit_point: Vec3f,
@@ -1418,7 +1418,7 @@ def _nee_loop_simple[enqueue_shadow: Bool](
 
 @always_inline
 def _shade_conductor_nee[enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     n: Vec3f,
     wo: Vec3f,
@@ -1465,7 +1465,7 @@ def _shade_conductor_nee[enqueue_shadow: Bool](
 
 @always_inline
 def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     ctx: ShadeContext,
     mat: Material_C,
@@ -1618,7 +1618,7 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
 # bisection trail, including the earlier wrong kernel-size and by-value-struct
 # hypotheses.
 def _shade_measured_nee[enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     measured_brdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin],
     measured_idx: Int32,
@@ -1660,7 +1660,7 @@ def _shade_measured_nee[enqueue_shadow: Bool](
 
 @always_inline
 def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     ctx: ShadeContext,
     mat: Material_C,
@@ -1768,7 +1768,7 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
 # This is an energy-conserving two-lobe approximation of pbrt's LayeredBxDF.
 @always_inline
 def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     ctx: ShadeContext,
     mat: Material_C,
@@ -1821,7 +1821,7 @@ def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
 # mat.roughU = blend amount (probability of picking mat2).
 # Not @always_inline: shade_mix ↔ _shade_dispatch would form an always_inline recursion.
 def shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     ctx: ShadeContext,
     mat: Material_C,
@@ -1868,7 +1868,7 @@ def _apply_normal_map[use_gpu: Bool](
     p1: Vec3f,
     p2: Vec3f,
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
-    textures: Pointer[GpuTexture_C, MutUntrackedOrigin],
+    textures: Pointer[GpuTexture, MutUntrackedOrigin],
     n_textures: Int,
     pixel_uv: Float32 = Float32(0.0),
 ) -> Vec3f:
@@ -1924,7 +1924,7 @@ def _apply_bump_map[use_gpu: Bool](
     p1: Vec3f,
     p2: Vec3f,
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
-    textures: Pointer[GpuTexture_C, MutUntrackedOrigin],
+    textures: Pointer[GpuTexture, MutUntrackedOrigin],
     n_textures: Int,
     pixel_uv: Float32 = Float32(0.0),
 ) -> Vec3f:
@@ -2012,7 +2012,7 @@ def _apply_normal_map_sphere[use_gpu: Bool](
     hit_point: Vec3f,
     geom_normal: Vec3f,
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
-    textures: Pointer[GpuTexture_C, MutUntrackedOrigin],
+    textures: Pointer[GpuTexture, MutUntrackedOrigin],
     n_textures: Int,
 ) -> Vec3f:
     """Analytic-sphere counterpart to `_apply_normal_map` -- no mesh/UVs
@@ -2156,7 +2156,7 @@ def _apply_surface_maps[use_gpu: Bool](
     ray_dir: Vec3f,
     cone_w: Float32,   # px_scale * TOTAL path length (see _pixel_uv_for_hit)
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
-    textures: Pointer[GpuTexture_C, MutUntrackedOrigin],
+    textures: Pointer[GpuTexture, MutUntrackedOrigin],
     n_textures: Int,
 ) -> Vec3f:
     if mat.normal_tex_idx < Int32(0) and mat.bump_tex_idx < Int32(0):
@@ -2230,7 +2230,7 @@ def apply_surface_maps_at_hit[use_gpu: Bool](
     ray_dir: Vec3f,
     cone_w: Float32,
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
-    textures: Pointer[GpuTexture_C, MutUntrackedOrigin],
+    textures: Pointer[GpuTexture, MutUntrackedOrigin],
     n_textures: Int,
 ) -> Vec3f:
     if mat.normal_tex_idx < Int32(0) and mat.bump_tex_idx < Int32(0):
@@ -2248,7 +2248,7 @@ def apply_surface_maps_at_hit[use_gpu: Bool](
 # The shading normal comes back turned toward wo (face_toward).
 @always_inline
 def _build_geom_context_full[use_gpu: Bool](
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     mat: Material_C,
     ctx: ShadeContext,
@@ -2303,7 +2303,7 @@ def _build_geom_context_full[use_gpu: Bool](
 # the path's sampler_dim counter.
 @always_inline
 def _draw_sobol_8(
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
 ) -> SobolSamples8:
     var _sidx = Int(path_ptr[].sobol_idx)
@@ -2329,7 +2329,7 @@ def _draw_sobol_8(
 
 # ── Marschner/Chiang hair BSDF (3-lobe: R, TT, TRT) ─────────────────────────
 def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     ctx: ShadeContext,
     mat: Material_C,
@@ -2651,7 +2651,7 @@ def _mnee_walk(
 
 @always_inline
 def _nee_infinite_light[enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     ilight: InfiniteLight,
     normal: Vec3f,
@@ -3264,7 +3264,7 @@ def _sms_probe_and_solve(
 
 @always_inline
 def _mnee_area_light_contribute(
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     normal: Vec3f,
     hit_point: Vec3f,
@@ -3494,7 +3494,7 @@ comptime SMS_MAX_FINALIZED_WEIGHT: Float32 = Float32(10.0)
 comptime SMS_TEMPORAL_M_CAP: Float32 = Float32(64.0)
 
 def sms_resolve(
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin], ctx: ShadeContext,
+    path_ptr: Pointer[PathState, MutUntrackedOrigin], ctx: ShadeContext,
     hit_point: Vec3f, normal: Vec3f, alb: RGB,
     mut res: SMSReservoir,
 ):
@@ -3551,7 +3551,7 @@ def sms_resolve(
     path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, contrib, path_ptr[].wavelengths)
 
 def sms_temporal_step(
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin], ctx: ShadeContext,
+    path_ptr: Pointer[PathState, MutUntrackedOrigin], ctx: ShadeContext,
     hit_point: Vec3f, normal: Vec3f, alb: RGB,
     shadow_dir: Vec3f, dist: Float32, light_point: Vec3f,
     ldp_du_v: Vec3f, ldp_dv_v: Vec3f,
@@ -3611,7 +3611,7 @@ def sms_temporal_step(
     return dielectric_found
 
 def _nee_area_lights[enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     normal: Vec3f,
     hit_point: Vec3f,
@@ -3679,7 +3679,7 @@ def _nee_area_lights[enqueue_shadow: Bool](
                 # so a later BSDF-sampled arrival at the emitter through a
                 # specular chain -- the SAME path family this strategy just
                 # sampled -- is not counted a second time. See
-                # PathState_C.sms_covered.
+                # PathState.sms_covered.
                 var used_mnee = _mnee_area_light_contribute(
                     path_ptr, ctx, normal, hit_point, alb, shadow_dir, dist,
                     light_point, ldp_du_v, ldp_dv_v, al,
@@ -3790,7 +3790,7 @@ def di_generate_reservoir(
     return res
 
 def di_resolve(
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin], ctx: ShadeContext,
+    path_ptr: Pointer[PathState, MutUntrackedOrigin], ctx: ShadeContext,
     hit_point: Vec3f, normal: Vec3f, alb: RGB,
     mut res: DIReservoir,
     z_norm: Float32 = Float32(-1.0),
@@ -3943,7 +3943,7 @@ def _gi_generate_recon_candidate(
     return res
 
 def gi_resolve(
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin], ctx: ShadeContext,
+    path_ptr: Pointer[PathState, MutUntrackedOrigin], ctx: ShadeContext,
     hit_point: Vec3f, normal: Vec3f, alb: RGB,
     throughput: SpectralSample,
     res: GIReservoir,
@@ -4090,7 +4090,7 @@ comptime DI_SPATIAL_DEPTH_REL_MAX: Float32 = Float32(0.1)
 comptime DI_MAX_FINALIZED_WEIGHT: Float32 = Float32(10.0)
 
 def di_temporal_step(
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin], ctx: ShadeContext,
+    path_ptr: Pointer[PathState, MutUntrackedOrigin], ctx: ShadeContext,
     hit_point: Vec3f, normal: Vec3f, alb: RGB,
     mut pcg: PCG32,
     restir_io: ReservoirIO = reservoir_io_null(),
@@ -4238,7 +4238,7 @@ def di_temporal_step(
         restir_io.write[unsafe_offset=pixel_idx] = res
 
 def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     normal: Vec3f,
     hit_point: Vec3f,
@@ -4342,10 +4342,10 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
 
 
 # Unified NEE core — comptime-specialized for CPU (use_gpu=False) and GPU (use_gpu=True).
-# Texture lookup uses OIIO external_call on CPU and device-resident GpuTexture_C on GPU.
+# Texture lookup uses OIIO external_call on CPU and device-resident GpuTexture on GPU.
 @always_inline
 def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     ctx: ShadeContext,
     mat: Material_C,
@@ -4463,7 +4463,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
 
 @always_inline
 def shade_interface(
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
 ):
     """Interface (null/passthrough) material: advance the ray through the surface.
@@ -4487,7 +4487,7 @@ def shade_interface(
     # Crossing a null interface moves the ray ORIGIN without being a scattering
     # event, so remember how far it moved -- the emitter-hit MIS downstream
     # needs the distance back to the real scattering vertex, not to here.
-    # See PathState_C.mis_null_dist.
+    # See PathState.mis_null_dist.
     path_ptr[].mis_null_dist += inter.tHit + Float32(0.0002)
     path_ptr[].ray = Ray(Point3f(hit_point[0], hit_point[1], hit_point[2]), path_ptr[].ray.direction)
 
@@ -4495,7 +4495,7 @@ def shade_interface(
 @always_inline
 def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     mat: Material_C,
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     ctx: ShadeContext,
     guide_write: GuideGrid = null_guide(),
@@ -4517,7 +4517,7 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
         # Defaulting HERE rather than at each scatter site means a material
         # added later inherits the right pdf instead of silently keeping the
         # previous bounce's -- and means forgetting it cannot reproduce the
-        # flat-0.5 escape weight documented on PathState_C.lastEnvNeePdf.
+        # flat-0.5 escape weight documented on PathState.lastEnvNeePdf.
         path_ptr[].lastEnvNeePdf = INV_FOUR_PI
     if mat.type == MatKind.diffuse:
         shade_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat, guide_write, restir_io, pixel_idx, sms_io)
@@ -4552,10 +4552,10 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
 
 
 # Unified NEE core — comptime-specialized for CPU (use_gpu=False) and GPU (use_gpu=True).
-# Texture lookup uses OIIO external_call on CPU and device-resident GpuTexture_C on GPU.
+# Texture lookup uses OIIO external_call on CPU and device-resident GpuTexture on GPU.
 @always_inline
 def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     ctx: ShadeContext,
     guide_write: GuideGrid = null_guide(),
@@ -4654,7 +4654,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 # scattering material's OWN env NEE sampler assigns to this
                 # direction, carried on the path because there are two such
                 # samplers and this handler cannot tell which one ran. See
-                # PathState_C.lastEnvNeePdf for the full story -- hardcoding
+                # PathState.lastEnvNeePdf for the full story -- hardcoding
                 # `pdf_bsdf` here (exact for diffuse, wrong for everyone
                 # else) pinned every other material's escape at MIS 0.5.
                 var pdf_light = path_ptr[].lastEnvNeePdf
@@ -4733,7 +4733,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             # given emitter point exactly when a dielectric intervenes on it,
             # so ask that same question here, for the point actually hit: if
             # glass is in the way, MNEE already sampled this path family and
-            # counting it again double-counts (see PathState_C.sms_covered).
+            # counting it again double-counts (see PathState.sms_covered).
             # If not, MNEE never had it and BSDF sampling is the only
             # strategy that does -- keep it.
             var hp = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z) \
@@ -4800,7 +4800,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 var cos_l = -dot(lnorm, ray_dir)
                 # Distance from the vertex whose sample generated this
                 # direction, NOT from the current ray origin -- those differ by
-                # every null interface crossed in between (PathState_C.mis_null_dist).
+                # every null interface crossed in between (PathState.mis_null_dist).
                 var dist  = inter.tHit + path_ptr[].mis_null_dist
                 var dist2 = dist * dist
                 if cos_l > Float32(0.0) and al.total_area > Float32(0.0):
@@ -4866,7 +4866,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
 
 @always_inline
 def shade_core_cpu_nee(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     primIds: Pointer[PrimId, MutUntrackedOrigin],
@@ -4900,7 +4900,7 @@ def shade_core_cpu_nee(
     gi_pending: Pointer[GIPendingX1, MutUntrackedOrigin] = Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
     gi_io: GIReservoirIO = gi_reservoir_io_null(),
     sms_io: SMSReservoirIO = sms_reservoir_io_null(),
-    nmaps: Pointer[NormalSlopeMap_C, MutUntrackedOrigin] = Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
+    nmaps: Pointer[NormalSlopeMap, MutUntrackedOrigin] = Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
 ):
     var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].active == 0:
@@ -4909,9 +4909,9 @@ def shade_core_cpu_nee(
     var ctx = ShadeContext(
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=tex_filenames,
-        textures=Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), n_textures=0,
+        textures=Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), n_textures=0,
         nmaps=nmaps,
-        shadow_tasks=Pointer[ShadowTask_C, MutUntrackedOrigin].unsafe_dangling(),
+        shadow_tasks=Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
         px_scale=Float32(0.0), sobol_matrices=sobol_matrices, guide=guide, use_restir=use_restir,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=spectral, measured_brdfs=measured_brdfs,

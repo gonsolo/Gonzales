@@ -13,7 +13,7 @@ from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
 from .geometry import face_toward, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
 from .materials import Material_C, MatKind, LobeKind, PhotonKind, fr_dielectric, MeasuredBRDF_C
-from .render_state import GpuTexture_C
+from .render_state import GpuTexture
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, sphere_outward_normal
 from .media import Medium, MediumInterface, Grid, NvdbGrid, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, medium_transmittance_ratio_spectral, spectral_free_flight_weight
 from .lights import area_light_pick_triangle, AreaLight, DistantLight, InfiniteLight, PointLight
@@ -354,7 +354,7 @@ def _cosine_hemisphere_sample(n: Vec3f, u1: Float32, u2: Float32) -> Vec3f:
 #
 # `current_ior`/`previous_ior` are the same depth-2 touching-dielectric-IOR
 # stack bxdf_sample_dielectric (bxdf.mojo, the plain path tracer's dielectric
-# core) carries on PathState_C — see PathState_C.current_dielectric_ior/
+# core) carries on PathState — see PathState.current_dielectric_ior/
 # previous_dielectric_ior's docstrings (geometry.mojo) for the full
 # derivation and the transparent-machines repro that exposed both bugs this
 # mirrors: entering used to assume vacuum unconditionally (eta = 1/ior),
@@ -1075,7 +1075,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     comment), while `tex_gpu` means "actually running on a GPU device"
     (real CPU/GPU divergence for _tex_lookup's texture-format dispatch,
     task #151). Conflating them would make the CPU driver wrongly try to
-    read a GPU-only GpuTexture_C array.
+    read a GPU-only GpuTexture array.
 
     Lights are chosen uniformly across ALL light types (area + distant +
     infinite) — `n_lights` below is this combined total. Distant/infinite

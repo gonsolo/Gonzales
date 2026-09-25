@@ -1,9 +1,9 @@
 """Render-pipeline state structs, split out of geometry.mojo (the
 per-cluster module split; see project_geometry_module_split memory).
-FilmDims/FilterParams, and PathState_C through TileResult_C, were two
+FilmDims/FilterParams, and PathState through TileResult, were two
 separate ranges in geometry.mojo. Depends on the core
 (Point3f/Vec3f/RGB/SpectralSample/SampledWavelengths) and on primitives.mojo
-(PathState_C holds a Ray) -- the one real cross-cluster dependency a
+(PathState holds a Ray) -- the one real cross-cluster dependency a
 symbol-reference scan of the whole file found before this split, everywhere
 else was comments matching a name."""
 from gonzales.spectrum import SpectralSample, SampledWavelengths
@@ -35,8 +35,8 @@ struct FilterParams(TrivialRegisterPassable):
 # See: docs/07_path_tracing.md
 
 @fieldwise_init
-struct PathState_C(TrivialRegisterPassable):
-# <<listing: PathState_C>>
+struct PathState(TrivialRegisterPassable):
+# <<listing: PathState>>
     var ray: Ray
     # Path TRANSPORT is spectral: these carry radiance/weight at this path's
     # own 4 hero wavelengths, and RGB appears only at the boundaries (light
@@ -212,13 +212,13 @@ struct PathState_C(TrivialRegisterPassable):
     # differential would cost in GPU path state.
     var cone_len: Float32
 # <</listing>>
-# PathState_C layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+4+4+4+4+8+20+4+4+4 = 148 bytes (was 144 -- +4 for cone_len);
-# size is computed via size_of[PathState_C]() everywhere (GPU buffer sizing included), not hardcoded.
+# PathState layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+4+4+4+4+8+20+4+4+4 = 148 bytes (was 144 -- +4 for cone_len);
+# size is computed via size_of[PathState]() everywhere (GPU buffer sizing included), not hardcoded.
 
 # ── GPU / render pipeline helpers ─────────────────────────────────────────────
 
 @fieldwise_init
-struct GpuTexture_C(TrivialRegisterPassable):
+struct GpuTexture(TrivialRegisterPassable):
     comptime FORMAT_F32 = 0   # data holds Float32 linear RGB
     comptime FORMAT_U8 = 1    # data holds UInt8, decoded to linear through lut
     var data: Pointer[UInt8, MutUntrackedOrigin]    # device pointer: full mip pyramid, contiguous
@@ -230,7 +230,7 @@ struct GpuTexture_C(TrivialRegisterPassable):
     var format: Int32                                    # FORMAT_F32 or FORMAT_U8
 
 @fieldwise_init
-struct NormalSlopeMap_C(TrivialRegisterPassable):
+struct NormalSlopeMap(TrivialRegisterPassable):
     """A normal map in LEAN SLOPE space, level 0 only -- the representation
     the reference SMS renderer's manifold walk reads (render/normalmap.h
     `eval_normal`/`eval_normal_derivatives` with `use_slopes=true`).
@@ -257,11 +257,11 @@ struct NormalSlopeMap_C(TrivialRegisterPassable):
     var res:    Int32                                      # 0 => absent
 
 @always_inline
-def normal_slope_map_none() -> NormalSlopeMap_C:
-    return NormalSlopeMap_C(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0))
+def normal_slope_map_none() -> NormalSlopeMap:
+    return NormalSlopeMap(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0))
 
 @fieldwise_init
-struct ShadowTask_C(TrivialRegisterPassable):
+struct ShadowTask(TrivialRegisterPassable):
     """A deferred shadow ray with its pre-computed radiance contribution."""
     var origin: Point3f
     var direction: Vec3f
@@ -271,7 +271,7 @@ struct ShadowTask_C(TrivialRegisterPassable):
     var _pad: Int32
 
 @fieldwise_init
-struct TileResult_C(TrivialRegisterPassable):
+struct TileResult(TrivialRegisterPassable):
     var estimate: RGB
     var albedo: RGB
     var filterWeight: Float32
@@ -279,7 +279,7 @@ struct TileResult_C(TrivialRegisterPassable):
     var pixelY: Int32
 
 
-# PathState_C.lastBsdfPdf sentinel: "a real scatter happened here, but its
+# PathState.lastBsdfPdf sentinel: "a real scatter happened here, but its
 # direct-light term was already reported by NEE, so every emitter/miss
 # handler must contribute ZERO for it and let the ray carry indirect light
 # only." Used by the layered coat exit, whose true pdf is intractable to

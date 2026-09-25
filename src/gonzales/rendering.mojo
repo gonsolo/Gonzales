@@ -5,7 +5,7 @@ from std.atomic import Atomic
 from std.sys.info import num_performance_cores
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, dot, cross, INV_FOUR_PI
-from .render_state import PathState_C, TileResult_C
+from .render_state import PathState, TileResult
 from .primitives import sphere_outward_normal, Ray, Intersection, PrimId, Sphere
 from .media import Medium, MediumInterface, Grid, grid_sample_density, SSS_WALK_ROUNDS
 from .lights import AreaLight, LightSampler, light_sampler_sample
@@ -29,7 +29,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
     tileMinX: Int32, tileMinY: Int32, tileMaxX: Int32, tileMaxY: Int32,
     samplerParamsPtr: Pointer[TileSamplerParams_C, Osp],
     scenePtr: Pointer[SceneDescriptor2_C, MutUntrackedOrigin],
-    resultsPtr: Pointer[TileResult_C, MutUntrackedOrigin],
+    resultsPtr: Pointer[TileResult, MutUntrackedOrigin],
     maxDepth: Int32,
     guide_read: GuideGrid,
     guide_write: GuideGrid,
@@ -117,7 +117,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
     var hash_bits1 = UInt64(mix_bits_u64(UInt64(1) ^ UInt64(sp.sobolSeed)))
     var seed_dim1 = UInt32(hash_bits1 & UInt64(0xFFFFFFFF))
 
-    var paths = unsafe_alloc[PathState_C](n)
+    var paths = unsafe_alloc[PathState](n)
     var intersections = unsafe_alloc[Intersection](n)
     # Global (frame-wide) pixel index per path -- needed only for ReSTIR DI's
     # temporal reservoir buffer (Phase 2.3, docs/A2_restir_migration_plan.md),
@@ -169,7 +169,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     sp.filterNormY, sp.filterSupportY,
                     sp.filterType,
                 )
-                paths[unsafe_offset=idx] = PathState_C(
+                paths[unsafe_offset=idx] = PathState(
                     ray,
                     SpectralSample(Float32(1.0)),
                     SpectralSample(Float32(0.0)),
@@ -184,7 +184,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     Int32(3), sobol_idx,
                     wavelengths,
                     Float32(0.0),   # mis_null_dist
-                    INV_FOUR_PI,    # lastEnvNeePdf (see PathState_C)
+                    INV_FOUR_PI,    # lastEnvNeePdf (see PathState)
                     Float32(0.0),   # cone_len: total path length, accumulated per bounce
                 )
                 pixel_idx_buf[unsafe_offset=idx] = this_pixel_idx
@@ -360,7 +360,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                 sumA += paths[unsafe_offset=idx].albedo
                 sumW += sp.filterWeight
                 idx += 1
-            resultsPtr[unsafe_offset=out] = TileResult_C(sumL, sumA, sumW, px, py)
+            resultsPtr[unsafe_offset=out] = TileResult(sumL, sumA, sumW, px, py)
             out += 1
 
     intersections.unsafe_free()
@@ -406,7 +406,7 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
     tile_w: Int32, tile_h: Int32,
     sampler_params: Pointer[TileSamplerParams_C, Osp],
     scene: Pointer[SceneDescriptor2_C, MutUntrackedOrigin],
-    results: Pointer[TileResult_C, Ores],
+    results: Pointer[TileResult, Ores],
     max_depth: Int32,
     quiet: Bool = False,
     guide_read: GuideGrid = null_guide(),
@@ -431,7 +431,7 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
     var n_tiles = n_tiles_x * n_tiles_y
 
     # One scratch buffer per tile so threads never alias each other's writes.
-    var tile_bufs = unsafe_alloc[TileResult_C](n_tiles * max_tile_pixels)
+    var tile_bufs = unsafe_alloc[TileResult](n_tiles * max_tile_pixels)
 
     # Progress counter — incremented after each tile (racy, display-only).
     var done_ptr = unsafe_alloc[Int32](1)
@@ -526,7 +526,7 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
 # Shoot one unjittered center ray per pixel; record geometric normal and depth.
 # normals_out: n_pixels*3 floats (Nx,Ny,Nz unit vectors; background = (0,0,1)).
 # depth_out:   n_pixels floats (first-hit tHit; background = 1e38).
-# Normalize TileResult_C[] → per-pixel float RGB arrays.
+# Normalize TileResult[] → per-pixel float RGB arrays.
 def apply_film_sensor[Ob: Origin[mut=True]](
     buf: Pointer[Float32, Ob],
     n_pixels: Int,
@@ -566,7 +566,7 @@ def apply_film_sensor[Ob: Origin[mut=True]](
 
 
 def normalize_film[Ores: Origin[mut=True], Obo: Origin[mut=True], Oao: Origin[mut=True]](
-    results: Pointer[TileResult_C, Ores],
+    results: Pointer[TileResult, Ores],
     count: Int32,
     iso: Float32,
     max_component_value: Float32,

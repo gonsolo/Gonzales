@@ -1,6 +1,6 @@
 # Unit tests for pure formatting/normalization helpers in rendering.mojo:
 # _fmt_f1/fmt_time/progress_str (progress-bar string formatting) and
-# normalize_film (TileResult_C accumulator -> per-pixel beauty/albedo
+# normalize_film (TileResult accumulator -> per-pixel beauty/albedo
 # arrays). render_tile/render_all_tiles/render_aux_buffers all need a real
 # built BVH and SceneDescriptor2_C (and, for render_tile's medium sampling
 # branch, a full heterogeneous-media scene) and are out of scope here.
@@ -9,7 +9,7 @@ from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB
-from gonzales.render_state import TileResult_C
+from gonzales.render_state import TileResult
 from gonzales.rendering import _fmt_f1, fmt_time, progress_str, normalize_film
 
 comptime EPS: Float32 = 1e-4
@@ -55,13 +55,13 @@ def test_progress_str_zero_done_leaves_estimate_at_zero() raises:
 
 # ── normalize_film ────────────────────────────────────────────────────────────
 
-def _make_result(r: Float32, g: Float32, b: Float32, ar: Float32, ag: Float32, ab: Float32, w: Float32) -> TileResult_C:
-    return TileResult_C(estimate=RGB(r, g, b), albedo=RGB(ar, ag, ab), filterWeight=w, pixelX=Int32(0), pixelY=Int32(0))
+def _make_result(r: Float32, g: Float32, b: Float32, ar: Float32, ag: Float32, ab: Float32, w: Float32) -> TileResult:
+    return TileResult(estimate=RGB(r, g, b), albedo=RGB(ar, ag, ab), filterWeight=w, pixelX=Int32(0), pixelY=Int32(0))
 
 def test_normalize_film_zero_filter_weight_gives_zero_output() raises:
     """The w==0 early-out must zero BOTH beauty and albedo, even though the
     stored estimate/albedo are non-zero -- avoids a 0/0 division."""
-    var results = unsafe_alloc[TileResult_C](1)
+    var results = unsafe_alloc[TileResult](1)
     results[unsafe_offset=0] = _make_result(Float32(5.0), Float32(5.0), Float32(5.0), Float32(1.0), Float32(1.0), Float32(1.0), Float32(0.0))
     var beauty = unsafe_alloc[Float32](3)
     var albedo = unsafe_alloc[Float32](3)
@@ -75,7 +75,7 @@ def test_normalize_film_scales_beauty_by_iso_but_leaves_albedo_unscaled() raises
     """Beauty = estimate/weight * (iso/100); albedo = albedo_sum/weight with
     NO iso scaling at all -- these are genuinely different formulas, worth
     pinning down separately since they're easy to accidentally conflate."""
-    var results = unsafe_alloc[TileResult_C](1)
+    var results = unsafe_alloc[TileResult](1)
     results[unsafe_offset=0] = _make_result(Float32(2.0), Float32(4.0), Float32(6.0), Float32(0.5), Float32(0.25), Float32(0.75), Float32(2.0))
     var beauty = unsafe_alloc[Float32](3)
     var albedo = unsafe_alloc[Float32](3)
@@ -91,7 +91,7 @@ def test_normalize_film_scales_beauty_by_iso_but_leaves_albedo_unscaled() raises
     results.unsafe_free(); beauty.unsafe_free(); albedo.unsafe_free()
 
 def test_normalize_film_clamps_negative_beauty_to_zero() raises:
-    var results = unsafe_alloc[TileResult_C](1)
+    var results = unsafe_alloc[TileResult](1)
     results[unsafe_offset=0] = _make_result(Float32(-1.0), Float32(3.0), Float32(-5.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(1.0))
     var beauty = unsafe_alloc[Float32](3)
     var albedo = unsafe_alloc[Float32](3)
@@ -105,7 +105,7 @@ def test_normalize_film_clamps_nan_beauty_to_zero() raises:
     """A NaN component (e.g. propagated from an earlier 0/0) fails self-
     equality -- the function relies on exactly that (b.r != b.r) to detect
     and zero it, since a plain `< 0` check would let NaN through."""
-    var results = unsafe_alloc[TileResult_C](1)
+    var results = unsafe_alloc[TileResult](1)
     var zero = Float32(0.0)
     var nan_val = zero / zero
     results[unsafe_offset=0] = _make_result(nan_val, Float32(1.0), Float32(1.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(1.0))
@@ -121,7 +121,7 @@ def test_normalize_film_max_component_clamp_preserves_color_ratio() raises:
     """When the brightest channel exceeds max_component_value, ALL channels
     are scaled down by the same factor (max_component_value/mx) -- a hue-
     preserving clamp, not an independent per-channel clamp."""
-    var results = unsafe_alloc[TileResult_C](1)
+    var results = unsafe_alloc[TileResult](1)
     results[unsafe_offset=0] = _make_result(Float32(4.0), Float32(8.0), Float32(2.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(1.0))
     var beauty = unsafe_alloc[Float32](3)
     var albedo = unsafe_alloc[Float32](3)

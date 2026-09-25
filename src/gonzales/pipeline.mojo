@@ -9,7 +9,7 @@ from .scene_loader import mojo_parse_scene_any
 from .rendering import render_all_tiles, normalize_film, apply_film_sensor, fmt_time, progress_str
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, Bounds3f, dot, _is_real_ptr
-from .render_state import TileResult_C, PathState_C
+from .render_state import TileResult, PathState
 from .primitives import Ray, TriangleMesh
 from .curves import Curve_C, curve_piece_bounds
 from .postprocess import denoise, write_image, write_image_cropped, write_image_cropwindow
@@ -408,8 +408,8 @@ def debug_trace_pixel(
     print("PIXEL", px, py, "ray.o", org1, "ray.d", dir1)
 
     var inter = unsafe_alloc[Intersection](1)
-    var current_ior = Float32(1.0)   # mirrors PathState_C.current_dielectric_ior
-    var previous_ior = Float32(1.0)  # mirrors PathState_C.previous_dielectric_ior
+    var current_ior = Float32(1.0)   # mirrors PathState.current_dielectric_ior
+    var previous_ior = Float32(1.0)  # mirrors PathState.previous_dielectric_ior
     for bounce in range(20):
         var ray = Ray(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
         inter[unsafe_offset=0].hit = Int8(0)
@@ -882,7 +882,7 @@ def parse_and_render(
     var fw = psc[unsafe_offset=0].film_w
     var fh = psc[unsafe_offset=0].film_h
     var n_pixels = Int(fw) * Int(fh)
-    var results = List[TileResult_C](capacity=n_pixels)
+    var results = List[TileResult](capacity=n_pixels)
 
     # Film "float cropwindow" [x0 x1 y0 y1] pixel bounds — ceil() on both
     # ends matches pbrt's own Film pixel-bounds computation exactly (verified
@@ -1365,7 +1365,7 @@ def parse_and_render(
         mojo_parsed_free(psc)
         return ret
     else:
-        var zero = TileResult_C(
+        var zero = TileResult(
             estimate=RGB(Float32(0)),
             albedo=RGB(Float32(0)),
             filterWeight=Float32(0), pixelX=Int32(0), pixelY=Int32(0))
@@ -1434,7 +1434,7 @@ def parse_and_render(
                         psc[unsafe_offset=0].max_depth, False,
                         guide_read, write_guides, N_GUIDE_THREADS)
                 else:
-                    var iter_buf = List[TileResult_C](capacity=n_pixels)
+                    var iter_buf = List[TileResult](capacity=n_pixels)
                     for _ in range(n_pixels): iter_buf.append(zero)
                     render_all_tiles(
                         psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
@@ -1446,7 +1446,7 @@ def parse_and_render(
                     for i in range(n_pixels):
                         var p = results.unsafe_ptr()[unsafe_offset=i]
                         var m = iter_buf.unsafe_ptr()[unsafe_offset=i]
-                        results.unsafe_ptr()[unsafe_offset=i] = TileResult_C(
+                        results.unsafe_ptr()[unsafe_offset=i] = TileResult(
                             p.estimate + m.estimate,
                             p.albedo   + m.albedo,
                             p.filterWeight + m.filterWeight,
@@ -1659,12 +1659,12 @@ def render_interactive(
     var c2w_buf = List[Float32](capacity=16)
     for i in range(16): c2w_buf.append(c2w[unsafe_offset=i])
 
-    var results  = List[TileResult_C](capacity=n_pixels)
+    var results  = List[TileResult](capacity=n_pixels)
     var beauty   = List[Float32](capacity=n_pixels * 3)
     var albedo   = List[Float32](capacity=n_pixels * 3)
     var denoised = List[Float32](capacity=n_pixels * 3)
     for _ in range(n_pixels):
-        results.append(TileResult_C(
+        results.append(TileResult(
             estimate=RGB(Float32(0)),
             albedo=RGB(Float32(0)),
             filterWeight=Float32(0), pixelX=Int32(0), pixelY=Int32(0)))
@@ -1825,7 +1825,7 @@ def render_interactive(
             vol_read = vol_buf_a
             vol_write = vol_buf_b
 
-    var zero = TileResult_C(
+    var zero = TileResult(
         estimate=RGB(Float32(0)),
         albedo=RGB(Float32(0)),
         filterWeight=Float32(0), pixelX=Int32(0), pixelY=Int32(0))

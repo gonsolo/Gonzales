@@ -17,7 +17,7 @@ from std.atomic import Atomic
 from .geometry import face_toward, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Frame, dot, cross, refract, PI, INV_FOUR_PI, INV_PI
 from .render_state import PDF_DROP_DIRECT, PDF_VOL_PHASE_HIT
 from .materials import Material_C, MatKind, LobeKind, PhotonKind, MeasuredBRDF_C, fr_dielectric, cos_theta_t_dielectric, coat_beer_lambert_tr, DEFAULT_COAT_THICKNESS
-from .render_state import GpuTexture_C
+from .render_state import GpuTexture
 from .primitives import Ray, Intersection, TriangleMesh, Sphere, PrimId, Instance, sphere_outward_normal
 from .media import Medium, MediumInterface, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, SSS_WALK_ROUNDS, Grid, NvdbGrid, spectral_free_flight_weight
 from .lights import area_light_pick_triangle, AreaLight, DistantLight, InfiniteLight, PointLight
@@ -1903,14 +1903,14 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     connect inline/synchronously to the shared Light Vertex Cache via
     `_bdpt_connect_to_cache` — mirrors how every live GPU shading kernel in
     this codebase already does its shadow ray (any_hit test, straight into
-    the thread's own accumulator; gpu.mojo's queued ShadowTask_C mechanism
+    the thread's own accumulator; gpu.mojo's queued ShadowTask mechanism
     is dead code, never used by the live render loop). Returns (total, first_alb):
     this camera path's total contribution for one spp sample, and the material
     albedo at its first non-delta (stored) vertex — the same "first hit,
     skipping through mirrors/glass" convention shading.mojo's path.albedo AOV
     already uses, needed for the denoiser's albedo guide buffer (see
     vcm_render's docstring). `use_gpu` now genuinely matters: it selects
-    _tex_lookup's CPU (tex_filenames/OIIO) vs GPU (GpuTexture_C array)
+    _tex_lookup's CPU (tex_filenames/OIIO) vs GPU (GpuTexture array)
     texture-sampling branch for diffuse/coateddiffuse vertex albedo — CPU
     and GPU callers MUST pass the value matching their own reality (the
     CPU driver previously passed [False] here anyway, so this was already
@@ -2008,14 +2008,14 @@ struct VCMCameraPathState_C(TrivialRegisterPassable):
     var wl3: Float32
     var wl_pdf: Float32
     # Distance travelled through null interfaces since the last real
-    # scattering event -- same role as PathState_C.mis_null_dist. The
+    # scattering event -- same role as PathState.mis_null_dist. The
     # interface branch resets `ro` to the boundary it crossed, so a later
     # emitter hit's t_hit measures from the boundary, not from the vertex
     # whose sample generated the direction; the MIS pdf needs the latter.
     var mis_null_dist: Float32
     # Touching-dielectric IOR depth-2 stack for _dielectric_bounce (see that
     # function's docstring, sppm.mojo) -- same role and convention as
-    # PathState_C.current_dielectric_ior/previous_dielectric_ior
+    # PathState.current_dielectric_ior/previous_dielectric_ior
     # (geometry.mojo). Both start at vacuum (1.0).
     var current_dielectric_ior: Float32
     var previous_dielectric_ior: Float32
@@ -2199,7 +2199,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     wavelengths: SampledWavelengths,
     # Camera position + pixel angular size, for the bump/normal-map footprint
     # at each vertex (shading.mojo's _camera_approx_footprint). VCM tracks no
-    # ray cone of its own, unlike the path tracer's PathState_C.cone_len, so
+    # ray cone of its own, unlike the path tracer's PathState.cone_len, so
     # this is pbrt's Approximate_dp_dxy convention: footprint = pixel size x
     # distance from the camera. Using it on BOTH subpaths is what makes a
     # merge pair agree about the surface it is standing on.
@@ -3136,11 +3136,11 @@ struct VCMLightPathState_C(TrivialRegisterPassable):
     """Task #163 stage 4: persistent per-light-path state carried across
     separate wavefront-staged GPU kernel launches (`_bdpt_light_path_init_gpu`
     then one `_bdpt_light_path_bounce_gpu` call per bounce), the light-path
-    counterpart to gpu.mojo's `PathState_C` for the plain wavefront path
+    counterpart to gpu.mojo's `PathState` for the plain wavefront path
     tracer. `active=0` means the path is done (produced by
     `_null_light_path_state()` or by `_bdpt_light_path_bounce` returning
     False) -- the host loop stops calling the bounce kernel for a lane once
-    its `active` flag drops to 0, matching PathState_C's own convention."""
+    its `active` flag drops to 0, matching PathState's own convention."""
     var ro: Point3f
     var rd: Vec3f
     var flux: SpectralSample
@@ -5222,7 +5222,7 @@ def _bdpt_camera_path_accumulate_gpu(
 # real GPU-side ray-query tracing through shared CUDA/Vulkan memory, no
 # CPU round trip. Mirrors gpu.mojo's vulkaninterop_pack_rays_kernel/
 # vulkaninterop_rt_traverse_paths_gpu exactly, just reading ro/rd from
-# VCMLightPathState_C/VCMCameraPathState_C instead of PathState_C.ray --
+# VCMLightPathState_C/VCMCameraPathState_C instead of PathState.ray --
 # vulkaninterop_unpack_results_kernel itself is reused UNCHANGED from
 # gpu.mojo for both (its output is always a plain Intersection, with no
 # dependency on which subpath produced the ray). Scope: triangle geometry

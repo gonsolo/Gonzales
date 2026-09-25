@@ -20,7 +20,7 @@ from .parse_types import (SceneParseState, MeshAccum, NamedMaterial, scene_path,
                            ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX)
 from .geometry import RGB, Point3f, Vec3f, dot, PI, _is_real_ptr
 from .materials import Material_C, MatKind, MeasuredBRDF_C
-from .render_state import GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none
+from .render_state import GpuTexture, NormalSlopeMap, normal_slope_map_none
 from .primitives import Sphere, TriangleMesh, PrimId, Instance
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
@@ -102,9 +102,9 @@ struct ParsedScene_Mojo:
     var tex_count:        Int32
     # Parallel to `tex_filenames`: the slope-space form of every texture some
     # material uses as a NORMAL map, for the SMS/MNEE manifold walk (see
-    # geometry.mojo's NormalSlopeMap_C). Entries for other textures have
+    # geometry.mojo's NormalSlopeMap). Entries for other textures have
     # res == 0.
-    var nmaps:            Pointer[NormalSlopeMap_C, MutUntrackedOrigin]
+    var nmaps:            Pointer[NormalSlopeMap, MutUntrackedOrigin]
     var distant_lights:   Pointer[DistantLight, MutUntrackedOrigin]
     var distant_count:    Int32
     var point_lights:     Pointer[PointLight, MutUntrackedOrigin]
@@ -2909,11 +2909,11 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # the same file through the usual texture path. The walk additionally
     # needs the normal's analytic derivatives, which bilinear interpolation
     # of the raw RGB does not give consistently with the reference -- see
-    # geometry.mojo's NormalSlopeMap_C for the representation and
+    # geometry.mojo's NormalSlopeMap for the representation and
     # sms.mojo's nmap_eval/nmap_eval_derivs for the evaluation.
-    psc[unsafe_offset=0].nmaps = Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling()
+    psc[unsafe_offset=0].nmaps = Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling()
     if n_tex > 0:
-        var nmaps = unsafe_alloc[NormalSlopeMap_C](n_tex)
+        var nmaps = unsafe_alloc[NormalSlopeMap](n_tex)
         for ti in range(n_tex):
             nmaps[unsafe_offset=ti] = normal_slope_map_none()
         # Each map is decoded and converted independently, and a scene can have
@@ -2967,7 +2967,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                         else:
                             slopes[unsafe_offset=i*2+0] = Float32(0.0)
                             slopes[unsafe_offset=i*2+1] = Float32(0.0)
-                    nmaps[unsafe_offset=nti] = NormalSlopeMap_C(slopes, Int32(nw))
+                    nmaps[unsafe_offset=nti] = NormalSlopeMap(slopes, Int32(nw))
                     _ = external_call["free_texture_rgb", Int32,
                         Pointer[Float32, MutUntrackedOrigin]](src)
                 elif nm_ok != Int32(0) and nw > 0:
@@ -3641,6 +3641,6 @@ def mojo_parsed_scene_descriptor(
     # _tex_lookup[False] branch uses sd.textures/textureCount above
     # instead) -- dangling/0, same convention every other GPU-only field
     # here would use if this were a GPU builder.
-    sd[unsafe_offset=0].gpuTextures      = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling()
+    sd[unsafe_offset=0].gpuTextures      = Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling()
     sd[unsafe_offset=0].gpuTextureCount  = Int64(0)
     return sd

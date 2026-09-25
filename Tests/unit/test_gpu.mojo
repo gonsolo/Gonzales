@@ -5,7 +5,7 @@ from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from gonzales.gpu_wavefront import clear_film_gpu, accumulate_film_gpu
 from gonzales.geometry import RGB, Point3f, Vec3f
-from gonzales.render_state import PathState_C
+from gonzales.render_state import PathState
 from gonzales.primitives import Ray
 from gonzales.spectrum import SpectralSample, SampledWavelengths
 
@@ -14,13 +14,13 @@ comptime EPS: Float32 = 1e-4
 def _close(a: Float32, b: Float32) -> Bool:
     return abs(a - b) < EPS
 
-# Path transport is spectral (PathState_C.throughput/estimate are
+# Path transport is spectral (PathState.throughput/estimate are
 # SpectralSample). These fixtures use a null spectral handle, under which
 # spectrum.mojo's conversions carry plain R/G/B on lanes v0/v1/v2 (see
 # rgb_to_spectral_sample's table-less fallback) -- so the assertions below
 # read those lanes and mean exactly what the old RGB assertions meant.
-def _dummy_path(estimate: SpectralSample, albedo: RGB) -> PathState_C:
-    return PathState_C(
+def _dummy_path(estimate: SpectralSample, albedo: RGB) -> PathState:
+    return PathState(
         Ray(Point3f(0.0), Vec3f(0.0, 0.0, 1.0)),
         SpectralSample(Float32(1.0)),  # throughput
         estimate,
@@ -78,10 +78,10 @@ def _accumulate_film_gpu_body(ctx: DeviceContext) raises:
     each path a distinct estimate/albedo so a wrong-index bug would too."""
     var n = 4
 
-    var path_bytes = n * size_of[PathState_C]()
+    var path_bytes = n * size_of[PathState]()
     var path_buf = ctx.enqueue_create_buffer[DType.uint8](path_bytes)
     with path_buf.map_to_host() as host:
-        var paths = host.unsafe_ptr().unsafe_bitcast[PathState_C]()
+        var paths = host.unsafe_ptr().unsafe_bitcast[PathState]()
         for i in range(n):
             var f = Float32(i)
             paths[unsafe_offset=i] = _dummy_path(
@@ -102,7 +102,7 @@ def _accumulate_film_gpu_body(ctx: DeviceContext) raises:
     # exactly the per-channel values this fixture wrote into `estimate`.
     var null_tbl = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
     ctx.enqueue_function[accumulate_film_gpu](
-        path_buf.unsafe_ptr().unsafe_bitcast[PathState_C](),
+        path_buf.unsafe_ptr().unsafe_bitcast[PathState](),
         film_buf.unsafe_ptr(), albedo_buf.unsafe_ptr(), Int64(n),
         Float32(0.0),   # sample_clamp disabled: this test checks accumulation,
                         # not pbrt's per-sample maxcomponentvalue clamp

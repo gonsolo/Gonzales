@@ -8,7 +8,7 @@ from std.sys.info import num_performance_cores
 from .transform import Mat4
 from .geometry import dot, cross, Point3f, Point2f, Vec3f, Frame, RGB, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, _is_real_ptr, store_vec3, _atan2f, point3f
 from .materials import Material_C, MatKind, fr_dielectric, MeasuredBRDF_C
-from .render_state import PathState_C, TileResult_C, GpuTexture_C, NormalSlopeMap_C
+from .render_state import PathState, TileResult, GpuTexture, NormalSlopeMap
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, intersect_triangle, alpha_killed, Instance, sphere_outward_normal
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
@@ -165,7 +165,7 @@ struct SceneDescriptor2_C(TrivialRegisterPassable, DevicePassable):
     # a real loaded table.
     var spectral: SpectralHandle
 
-    # GPU-resident image textures (one GpuTexture_C per distinct file,
+    # GPU-resident image textures (one GpuTexture per distinct file,
     # mip-chained device buffers — see gpu.mojo's GpuSceneHandle.textures_buf,
     # the only real producer of this array). `textures`/`textureCount` above
     # are the CPU-only tex_filenames path (OIIO bridge lookups); this is the
@@ -173,20 +173,20 @@ struct SceneDescriptor2_C(TrivialRegisterPassable, DevicePassable):
     # Dangling/0 for BDPT/SPPM CPU callers (scene.mojo's scene_descriptor(),
     # which has no GPU buffers to offer) and any caller that never reaches a
     # material with an image-texture reflectance.
-    var gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin]
+    var gpuTextures: Pointer[GpuTexture, MutUntrackedOrigin]
     var gpuTextureCount: Int64
 
-    # One NormalSlopeMap_C per entry of `textures` (same indices, so a
+    # One NormalSlopeMap per entry of `textures` (same indices, so a
     # material's `normal_tex_idx` addresses both), built once at scene-build
     # time for every texture some material uses as a NORMAL map. Only the
     # SMS/MNEE manifold walk reads these -- ordinary shading samples the
     # normal map through the usual texture path; the walk additionally needs
     # the normal's analytic DERIVATIVES, which only the slope-space form
-    # provides (see geometry.mojo's NormalSlopeMap_C). Entries for textures
+    # provides (see geometry.mojo's NormalSlopeMap). Entries for textures
     # that are not normal maps have `res == 0`; the whole array is dangling
     # for callers that never built one, which every reader tolerates by
     # checking `res` first.
-    var normalSlopeMaps: Pointer[NormalSlopeMap_C, MutUntrackedOrigin]
+    var normalSlopeMaps: Pointer[NormalSlopeMap, MutUntrackedOrigin]
 
     # VCM's variance-aware merge MIS (bdpt.mojo's _vcm_keep): the PREVIOUS
     # pass's per-bucket light-vertex counts, the cell size they were hashed

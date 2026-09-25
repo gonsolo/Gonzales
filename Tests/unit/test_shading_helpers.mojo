@@ -13,7 +13,7 @@ from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, TestSuite
 from gonzales.geometry import RGB, Point3f, Vec3f, dot, cross
 from gonzales.materials import Material_C, MatKind, MeasuredBRDF_C
-from gonzales.render_state import GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, PathState_C
+from gonzales.render_state import GpuTexture, NormalSlopeMap, ShadowTask, PathState
 from gonzales.primitives import Ray, PrimId, Intersection, TriangleMesh, Instance, Sphere
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
 from gonzales.curves import Curve_C
@@ -88,9 +88,9 @@ def _make_ctx(
         Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
         materials,
         Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[ShadowTask_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
         px_scale,
         Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(),
         null_guide(),
@@ -105,8 +105,8 @@ def _make_ctx(
         gi_reservoir_io_null(),
     )
 
-def _make_path(org: Vec3f, dir: Vec3f) -> PathState_C:
-    return PathState_C(
+def _make_path(org: Vec3f, dir: Vec3f) -> PathState:
+    return PathState(
         Ray(Point3f(org[0], org[1], org[2]), Vec3f(dir[0], dir[1], dir[2])),
         SpectralSample(Float32(1.0)), SpectralSample(Float32(0.0)), RGB(Float32(0.0)),
         Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
@@ -192,7 +192,7 @@ def test_apply_normal_map_returns_geom_normal_unchanged_when_no_normal_map() rai
 
     var result = _apply_normal_map[False](mat, 0, 1, 2, mesh, inter, geom_normal, p0, p1, p2,
         Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), 0)
+        Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), 0)
     assert_true(_simd_close(result, geom_normal))
 
 # ── _build_geom_context_full ──────────────────────────────────────────────────
@@ -226,7 +226,7 @@ def test_build_geom_context_full_matches_closed_form_for_axis_aligned_hit() rais
     var org = Vec3f(0.0, 0.0, 5.0)
     var dir = Vec3f(0.0, 0.0, -1.0)
     var path = _make_path(org, dir)
-    var path_arr = unsafe_alloc[PathState_C](1)
+    var path_arr = unsafe_alloc[PathState](1)
     path_arr[unsafe_offset=0] = path
     var t_hit = Float32(5.0)
 
@@ -291,9 +291,9 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
         Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
         materials,
         Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[ShadowTask_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
         Float32(0.0),
         Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(),
         null_guide(),
@@ -311,7 +311,7 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
     var org = Vec3f(0.0, 0.0, 5.0)
     var dir = Vec3f(0.0, 0.0, -1.0)
     var path = _make_path(org, dir)
-    var path_arr = unsafe_alloc[PathState_C](1)
+    var path_arr = unsafe_alloc[PathState](1)
     path_arr[unsafe_offset=0] = path
 
     var pid = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(4), Int8(0), Int8(0), Int8(0))
@@ -338,7 +338,7 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
 # The direct-evaluation branch: fires a real shadow ray through a one-leaf
 # BVH2 and either adds `contrib` to path_ptr[].estimate (unoccluded) or
 # leaves it untouched (occluded). The enqueue_shadow=True branch just writes
-# a ShadowTask_C record and needs a real GPU queue, so it's not covered here.
+# a ShadowTask record and needs a real GPU queue, so it's not covered here.
 
 def _make_one_leaf_bvh(
     tri_min: Vec3f, tri_max: Vec3f,
@@ -365,7 +365,7 @@ def test_shadow_contribute_direct_adds_contribution_when_unoccluded() raises:
     materials[unsafe_offset=0] = _make_material(RGB(Float32(0.5)), Int32(-1))
     var ctx = _make_ctx(bvh, primIds, meshes, materials, Float32(0.0))
     var path = _make_path(Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0))
-    var path_arr = unsafe_alloc[PathState_C](1)
+    var path_arr = unsafe_alloc[PathState](1)
     path_arr[unsafe_offset=0] = path
 
     var contrib = SpectralSample(Float32(1.0), Float32(2.0), Float32(3.0), Float32(0.0))
@@ -401,7 +401,7 @@ def test_shadow_contribute_direct_skips_when_occluded() raises:
     materials[unsafe_offset=0] = _make_material(RGB(Float32(0.5)), Int32(-1))
     var ctx = _make_ctx(bvh, primIds, meshes, materials, Float32(0.0))
     var path = _make_path(Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, -1.0))
-    var path_arr = unsafe_alloc[PathState_C](1)
+    var path_arr = unsafe_alloc[PathState](1)
     path_arr[unsafe_offset=0] = path
 
     var contrib = SpectralSample(Float32(1.0), Float32(2.0), Float32(3.0), Float32(0.0))

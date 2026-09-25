@@ -8,7 +8,7 @@
 # Still not wired into any render path. What's deliberately NOT here:
 # candidate GENERATION (tracing a fresh continuation path from x1 to find a
 # reconnection vertex and its Lo -- needs real ray tracing/BSDF sampling via
-# PathState_C/ShadeContext, i.e. shading.mojo) and RESOLUTION (a shadow ray
+# PathState/ShadeContext, i.e. shading.mojo) and RESOLUTION (a shadow ray
 # between x1 and the winning x2, MIS against BSDF sampling, injecting the
 # result into the path's total -- also ctx-dependent, mirrors di_resolve).
 # Both are separate, later, larger commits -- see project_restir_migration

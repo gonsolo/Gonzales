@@ -3,7 +3,7 @@ per-cluster module split -- see project_geometry_module_split memory). Only
 depends on geometry.mojo's core (Point3f/Vec3f/cross/dot), confirmed by a
 symbol-reference scan of the code with comments and docstrings stripped
 before the split: geometry.mojo had zero real cross-cluster dependencies
-except one (PathState_C holding a Ray), so this and its five siblings
+except one (PathState holding a Ray), so this and its five siblings
 (primitives.mojo, materials.mojo, lights.mojo, media.mojo, render_state.mojo)
 extract cleanly with no cycles."""
 from std.math import sqrt, min, max, abs

@@ -591,7 +591,7 @@ def bxdf_sample_dielectric(
     previous_ior <- 1.0 (this is only a depth-2 stack: a third level of
     nesting loses the level below the one just popped -- a scoped,
     documented limitation, not an oversight; see
-    PathState_C.previous_dielectric_ior's docstring).
+    PathState.previous_dielectric_ior's docstring).
 
     `current_ior`/`previous_ior` default to vacuum so every OTHER caller
     (BDPT/SPPM's own separate _dielectric_bounce, and any test that doesn't

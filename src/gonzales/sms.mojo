@@ -36,7 +36,7 @@ from std.collections import Array
 from std.math import sqrt, abs, max, min, cos, sin, acos
 from .geometry import RGB, dot, cross, Frame, Vec3f, Point3f, _atan2f, PI, TWO_PI
 from .materials import fr_dielectric
-from .render_state import NormalSlopeMap_C, normal_slope_map_none
+from .render_state import NormalSlopeMap, normal_slope_map_none
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Instance, Sphere
 from .curves import Curve_C
 from .rng import PCG32
@@ -229,7 +229,7 @@ struct SMSVertex(TrivialRegisterPassable):
     # normal and a new pair of normal derivatives. A seed-time-only lookup
     # would solve the smooth surface's constraint while reporting the
     # perturbed surface's Jacobian.
-    var nmap:   NormalSlopeMap_C
+    var nmap:   NormalSlopeMap
     # The material's OWN relative IOR, unoriented. `eta` above is already
     # oriented for the half-vector constraint (see _sms_vertex_from_hit),
     # which is what that formulation and the BSDF product want, but the
@@ -267,7 +267,7 @@ def sms_vertex_sphere(
     center: Vec3f,
     radius: Float32,
     eta: Float32,
-    nmap: NormalSlopeMap_C = normal_slope_map_none(),
+    nmap: NormalSlopeMap = normal_slope_map_none(),
     eta_raw: Float32 = Float32(1.0),
 ) -> SMSVertex:
     """Constructs a sphere-caster SMSVertex from a probe hit's world-space
@@ -336,7 +336,7 @@ def _sms_sphere_frame_at(
 # camera-ray path's own normal-map lookup, stops there.
 #
 # All three come out of the same four texels of the LEAN slope map
-# (NormalSlopeMap_C), interpolated analytically, exactly as the reference
+# (NormalSlopeMap), interpolated analytically, exactly as the reference
 # does it (render/normalmap.h, `use_slopes=true`).
 
 @always_inline
@@ -359,12 +359,12 @@ def _nmap_addr(res: Int, u: Float32, v: Float32) -> Tuple[Int, Int, Int, Int, Fl
     return (x0, y0, x1, y1, px - Float32(x0), py - Float32(y0))
 
 @always_inline
-def _nmap_slope(m: NormalSlopeMap_C, x: Int, y: Int) -> SIMD[DType.float32, 2]:
+def _nmap_slope(m: NormalSlopeMap, x: Int, y: Int) -> SIMD[DType.float32, 2]:
     var i = (y * Int(m.res) + x) * 2
     return SIMD[DType.float32, 2](m.slopes[unsafe_offset=i], m.slopes[unsafe_offset=i + 1])
 
 @always_inline
-def nmap_eval(m: NormalSlopeMap_C, u: Float32, v: Float32) -> Vec3f:
+def nmap_eval(m: NormalSlopeMap, u: Float32, v: Float32) -> Vec3f:
     """Bilinearly interpolated slope, returned as the UNNORMALIZED local
     (tangent-space) normal `(-sx, -sy, 1)`."""
     var a = _nmap_addr(Int(m.res), u, v)
@@ -378,7 +378,7 @@ def nmap_eval(m: NormalSlopeMap_C, u: Float32, v: Float32) -> Vec3f:
     return Vec3f(-sl[0], -sl[1], Float32(1.0))
 
 @always_inline
-def nmap_eval_derivs(m: NormalSlopeMap_C, u: Float32, v: Float32) -> Tuple[Vec3f, Vec3f]:
+def nmap_eval_derivs(m: NormalSlopeMap, u: Float32, v: Float32) -> Tuple[Vec3f, Vec3f]:
     """d(local normal)/du and /dv -- the exact analytic derivative of
     `nmap_eval`'s bilinear interpolant, from the same four texels."""
     var a = _nmap_addr(Int(m.res), u, v)
@@ -393,7 +393,7 @@ def nmap_eval_derivs(m: NormalSlopeMap_C, u: Float32, v: Float32) -> Tuple[Vec3f
 
 @always_inline
 def _sms_sphere_nmap_frame(
-    m: NormalSlopeMap_C,
+    m: NormalSlopeMap,
     x_on_sphere: Vec3f,
     center: Vec3f,
     radius: Float32,

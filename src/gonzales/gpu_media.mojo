@@ -5,7 +5,7 @@ from .lights import AreaLight, DistantLight, InfiniteLight, LightSampler, PointL
 from .materials import MatKind, Material_C
 from .media import Grid, MEDIUM_TRACK_MAX_ITERS, MediumInterface, Medium, NvdbGrid, grid_ray_range, grid_sample_density, hg_phase, hg_sample, medium_emission_spectral, medium_grid_for, medium_nvdb_for, medium_sigma_s_spectral, medium_sigma_t_spectral, medium_transmittance_ratio_spectral, nvdb_index_ray, nvdb_majorant_at_world, nvdb_node_exit_t, nvdb_ray_range, nvdb_sample_density, sample_free_flight
 from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, sphere_outward_normal
-from .render_state import PathState_C
+from .render_state import PathState
 from .reservoir import reservoir_finalize, reservoir_update
 from .restir_vol import VolReservoir, VOL_RIS_CANDIDATES, VOL_RIS_DISTANCE, VOL_TR_UNIT, VolShiftMode, vol_reservoir_init, vol_reservoir_io_null, vol_target_pdf, vol_temporal_spatial_combine
 from .rng import PCG32
@@ -18,7 +18,7 @@ from .gpu_scene import GpuSceneHandle
 
 
 def update_medium_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneDescriptor2_C,
     count_dp: Int64,
@@ -86,7 +86,7 @@ def update_medium_gpu(
 
 @always_inline
 def _volume_nee_light(
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ls: LightSample,
     scatter_pt_w: Vec3f,
     wo: Vec3f,
@@ -207,7 +207,7 @@ def _volume_nee_light(
 
 @always_inline
 def _volume_area_light_nee(
-    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ref sd: SceneDescriptor2_C,
     i: Int,
     med: Medium,
@@ -630,7 +630,7 @@ def _volume_area_light_nee(
 # address, which copies the whole descriptor to local memory per thread.
 @always_inline
 def _sample_medium_core(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     i: Int,
     ref sd: SceneDescriptor2_C,
@@ -938,7 +938,7 @@ def _sample_medium_core(
         path_ptr[].active = Int8(0)
 
 def sample_medium_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneDescriptor2_C,
     count_dp: Int64,

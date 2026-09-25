@@ -16,7 +16,7 @@ from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, Point3f, Vec3f, INV_FOUR_PI, INV_PI
 from gonzales.materials import LobeKind, MeasuredBRDF_C
-from gonzales.render_state import GpuTexture_C, NormalSlopeMap_C
+from gonzales.render_state import GpuTexture, NormalSlopeMap
 from gonzales.primitives import Intersection, Sphere, PrimId, Instance
 from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
@@ -121,8 +121,8 @@ def _dummy_sd() -> SceneDescriptor2_C:
         Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         null_spectral_handle(),
-        Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Float32(0), Float32(1), Int32(9),
         Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
     )
@@ -322,8 +322,8 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         null_spectral_handle(),
-        Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Float32(0), Float32(1), Int32(9),
         Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
     )

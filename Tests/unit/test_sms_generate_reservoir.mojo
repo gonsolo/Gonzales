@@ -10,7 +10,7 @@ from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, Point3f, Vec3f
 from gonzales.materials import Material_C, MatKind, MeasuredBRDF_C
-from gonzales.render_state import GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, PathState_C
+from gonzales.render_state import GpuTexture, NormalSlopeMap, ShadowTask, PathState
 from gonzales.primitives import Ray, PrimId, TriangleMesh, Instance, Sphere
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
 from gonzales.curves import Curve_C
@@ -67,9 +67,9 @@ def _make_ctx(
         Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
         materials,
         Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[ShadowTask_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
         Float32(0.0),
         Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(),
         null_guide(),
@@ -224,8 +224,8 @@ def test_sms_generate_real_glass_produces_a_streamed_candidate() raises:
 
 # ── sms_resolve ──────────────────────────────────────────────────────────────
 
-def _make_path() -> PathState_C:
-    return PathState_C(
+def _make_path() -> PathState:
+    return PathState(
         Ray(Point3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0)),
         SpectralSample(Float32(1.0)), SpectralSample(Float32(0.0)), RGB(Float32(0.0)),
         Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
@@ -251,7 +251,7 @@ def test_sms_resolve_on_empty_reservoir_is_a_noop() raises:
         Pointer[Material_C, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[AreaLight, MutUntrackedOrigin].unsafe_dangling(), 0, cdf)
 
-    var path_arr = unsafe_alloc[PathState_C](1)
+    var path_arr = unsafe_alloc[PathState](1)
     path_arr[unsafe_offset=0] = _make_path()
     var pcg_gen0 = PCG32(UInt64(1), UInt64(1))
     var gen_result0 = sms_generate_reservoir(
@@ -302,7 +302,7 @@ def test_sms_resolve_on_real_glass_adds_positive_contribution() raises:
     var res = gen_result[1].copy()
     assert_true(res.n_vertices == Int32(1))
 
-    var path_arr = unsafe_alloc[PathState_C](1)
+    var path_arr = unsafe_alloc[PathState](1)
     path_arr[unsafe_offset=0] = _make_path()
     sms_resolve(path_arr, ctx, hit_point, normal, alb, res)
     assert_true(res.state.w > Float32(0.0))
@@ -342,7 +342,7 @@ def test_sms_temporal_step_without_io_still_resolves_like_batch_mode() raises:
     var alb = RGB(Float32(0.8))
     var pcg = PCG32(UInt64(1), UInt64(1))
 
-    var path_arr = unsafe_alloc[PathState_C](1)
+    var path_arr = unsafe_alloc[PathState](1)
     path_arr[unsafe_offset=0] = _make_path()
     var found = sms_temporal_step(
         path_arr, ctx, hit_point, normal, alb, shadow_dir, shadow_dist, light_point,
@@ -392,7 +392,7 @@ def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
     buf_a[unsafe_offset=0] = res_empty[1].copy()
     buf_b[unsafe_offset=0] = res_empty[1].copy()
 
-    var path_arr = unsafe_alloc[PathState_C](1)
+    var path_arr = unsafe_alloc[PathState](1)
 
     # Frame 0: read=buf_a (empty), write=buf_b.
     var io0 = SMSReservoirIO(read=buf_a, write=buf_b,
@@ -479,7 +479,7 @@ def test_shade_diffuse_nee_sms_wiring_accumulates_confidence_across_frames() rai
     buf_a[unsafe_offset=0] = res_empty[1].copy()
     buf_b[unsafe_offset=0] = res_empty[1].copy()
 
-    var path_arr = unsafe_alloc[PathState_C](1)
+    var path_arr = unsafe_alloc[PathState](1)
 
     # Frame 0, through the real _shade_diffuse_nee entry point.
     var io0 = SMSReservoirIO(read=buf_a, write=buf_b,
@@ -566,7 +566,7 @@ def test_shade_diffuse_nee_sms_io_inactive_at_bounce_1_uses_plain_mnee() raises:
     buf_a[unsafe_offset=0] = res_empty[1].copy()
     buf_b[unsafe_offset=0] = res_empty[1].copy()
 
-    var path_arr = unsafe_alloc[PathState_C](1)
+    var path_arr = unsafe_alloc[PathState](1)
     path_arr[unsafe_offset=0] = _make_path()
     path_arr[unsafe_offset=0].bounce = Int32(1)
     var io0 = SMSReservoirIO(read=buf_a, write=buf_b,

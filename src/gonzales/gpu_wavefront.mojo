@@ -3,7 +3,7 @@ from .curves import CURVE_DEFER_K, Curve_C, _curve_perp_axis, curve_piece_endpoi
 from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, store_vec3, vec3f
 from .materials import Material_C
 from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, sphere_outward_normal
-from .render_state import PathState_C, ShadowTask_C
+from .render_state import PathState, ShadowTask
 from .restir_di import DIReservoir, di_reservoir_init
 from .restir_vol import VolReservoir, vol_reservoir_init
 from .sampling import gen_primary_ray_state
@@ -20,7 +20,7 @@ from .gpu_scene import GpuSceneHandle
 
 
 def reset_shadow_tasks_gpu(
-    shadow_tasks: Pointer[ShadowTask_C, MutUntrackedOrigin],
+    shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
     count_dp: Int64,
 ):
     var count = Int(count_dp)
@@ -77,8 +77,8 @@ def reset_vol_used_gpu(
 
 def traverse_shadow_rays_gpu(
     sd: SceneDescriptor2_C,
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
-    shadow_tasks: Pointer[ShadowTask_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
+    shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
     count_dp: Int64,
 ):
     var n_spheres = Int(sd.sphereCount)
@@ -122,7 +122,7 @@ def _clamp_sample_rgb(r: Float32, g: Float32, b: Float32, lim: Float32
 
 
 def accumulate_film_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     film: Pointer[Float32, MutUntrackedOrigin],
     albedo_film: Pointer[Float32, MutUntrackedOrigin],
     count_dp: Int64,
@@ -164,7 +164,7 @@ def clear_film_gpu(film: Pointer[Float32, MutUntrackedOrigin], n_pixels_dp: Int6
 # Wavefront accumulation: thread px sums actual_batch samples from path_buf layout
 # path_buf[si * n_pixels + px] and adds to film[px].  No atomics needed (one thread per pixel).
 def accumulate_film_wavefront_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     film: Pointer[Float32, MutUntrackedOrigin],
     albedo_film: Pointer[Float32, MutUntrackedOrigin],
     n_pixels_dp: Int64, actual_batch_dp: Int64,
@@ -201,7 +201,7 @@ def gen_primary_rays_wavefront_gpu(
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     r2c: Pointer[Float32, MutUntrackedOrigin],
     c2w: Pointer[Float32, MutUntrackedOrigin],
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     fw_dp: Int64, fh_dp: Int64,
     si_start: Int32, log2spp: Int32, n_base4: Int32,
     seed_dim0: UInt32, seed_dim1: UInt32,
@@ -230,7 +230,7 @@ def gen_primary_rays_wavefront_gpu(
         filter_norm_y, filter_support_y,
         filter_type,
     )
-    paths[unsafe_offset=ti] = PathState_C(
+    paths[unsafe_offset=ti] = PathState(
         ray,
         SpectralSample(Float32(1.0)),
         SpectralSample(Float32(0.0)),
@@ -250,10 +250,10 @@ def gen_primary_rays_wavefront_gpu(
     )
 
 
-# Traversal kernel that reads rays directly from PathState_C (no separate ray buffer).
+# Traversal kernel that reads rays directly from PathState (no separate ray buffer).
 def traverse_paths_gpu(
     sd: SceneDescriptor2_C,
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     results: Pointer[Intersection, MutUntrackedOrigin],
     curve_cand_prim: Pointer[Int32, MutUntrackedOrigin],
     curve_cand_count: Pointer[Int32, MutUntrackedOrigin],
@@ -292,7 +292,7 @@ def traverse_paths_gpu(
 # -- no host copy, this kernel writes straight into CUDA-mapped memory
 # that a Vulkan compute shader also reads.
 def vulkaninterop_pack_rays_kernel(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     rays: Pointer[Float32, MutUntrackedOrigin],
     count_dp: Int64,
 ):
@@ -418,7 +418,7 @@ def vulkaninterop_unpack_results_kernel(
 # tessellated into the Vulkan BLAS/TLAS -- simpler, and free of any
 # tessellation-precision tradeoff.
 def vulkaninterop_test_spheres_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     inter: Pointer[Intersection, MutUntrackedOrigin],
     spheres: Pointer[Sphere, MutUntrackedOrigin],
     n_spheres_dp: Int64,
@@ -447,7 +447,7 @@ def vulkaninterop_test_spheres_gpu(
 # spheres, AND curves are all supported now (see vulkaninterop_rt_create_
 # scene's docstring for how curves are represented).
 def accumulate_cone_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     results: Pointer[Intersection, MutUntrackedOrigin],
     count_dp: Int64,
 ):
@@ -500,7 +500,7 @@ def vulkaninterop_rt_traverse_paths_gpu(
     var grid = ceildiv(n_total, block_size)
 
     ctx.enqueue_function[vulkaninterop_pack_rays_kernel](
-        path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         interop_rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         Int64(n_total),
         grid_dim=grid, block_dim=block_size,
@@ -531,7 +531,7 @@ def vulkaninterop_rt_traverse_paths_gpu(
 
     if n_spheres > 0:
         ctx.enqueue_function[vulkaninterop_test_spheres_gpu](
-            path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             spheres,
             Int64(n_spheres),
@@ -588,7 +588,7 @@ def resolve_curve_candidates_gpu(
     curve_cand_count: Pointer[Int32, MutUntrackedOrigin],
     curve_cand_offset: Pointer[Int32, MutUntrackedOrigin],
     sd: SceneDescriptor2_C,
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     results: Pointer[Intersection, MutUntrackedOrigin],
     n_dp: Int64,
 ):
@@ -629,13 +629,13 @@ def resolve_curve_candidates_gpu(
         results[unsafe_offset=pathId] = Intersection(best_prim, best_t, best_u, best_v, best_hit, 0, 0, 0)
 
 
-# GPU kernel: generate primary PathState_C for every pixel in one pass.
+# GPU kernel: generate primary PathState for every pixel in one pass.
 # Each thread handles one pixel.  All sampling is pure math — no host calls.
 def gen_primary_rays_gpu(
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     r2c: Pointer[Float32, MutUntrackedOrigin],
     c2w: Pointer[Float32, MutUntrackedOrigin],
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     fw_dp: Int64, fh_dp: Int64,
     si: Int32, log2spp: Int32, n_base4: Int32,
     seed_dim0: UInt32, seed_dim1: UInt32,
@@ -660,7 +660,7 @@ def gen_primary_rays_gpu(
         filter_norm_y, filter_support_y,
         filter_type,
     )
-    paths[unsafe_offset=tid] = PathState_C(
+    paths[unsafe_offset=tid] = PathState(
         ray,
         SpectralSample(Float32(1.0)),
         SpectralSample(Float32(0.0)),
@@ -854,7 +854,7 @@ def gpu_gen_aux_buffers[Oc: Origin[mut=True]](
 # actual kernel bodies elsewhere in this codebase (see bdpt.mojo's MNEE/
 # _connect duplication comments for that unrelated, still-real constraint).
 def deactivate_paths_past_maxdepth_gpu(
-    paths: Pointer[PathState_C, MutUntrackedOrigin],
+    paths: Pointer[PathState, MutUntrackedOrigin],
     n_dp: Int64, max_depth: Int32,
 ):
     """A NULL INTERFACE crossing (entering/leaving a medium) does not

@@ -11,7 +11,7 @@ from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, TestSuite
 from gonzales.geometry import RGB, Point3f, Vec3f
 from gonzales.materials import Material_C, MeasuredBRDF_C
-from gonzales.render_state import GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, PathState_C
+from gonzales.render_state import GpuTexture, NormalSlopeMap, ShadowTask, PathState
 from gonzales.primitives import Ray, PrimId, TriangleMesh, Instance, Sphere
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
 from gonzales.curves import Curve_C
@@ -67,9 +67,9 @@ def _make_ctx_with_light(
         Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Material_C, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[ShadowTask_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
         Float32(0.0),
         Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(),
         null_guide(),
@@ -224,7 +224,7 @@ def test_gi_generate_occluded_light_gives_valid_zero_lo() raises:
 
 # ── End-to-end wiring: _shade_diffuse_nee's bounce-0-mark / bounce-1-
 # generate+combine+resolve chain (Phase 4.1, full path) ─────────────────────
-# Drives _shade_diffuse_nee twice against one shared PathState_C (x1 at
+# Drives _shade_diffuse_nee twice against one shared PathState (x1 at
 # bounce 0, x2 at bounce 1), mirroring how the real per-bounce loop
 # (rendering.mojo) reuses one path slot across bounces. x1's own context
 # (ctx0) has ZERO area lights, so its bounce-0 di_temporal_step branch
@@ -233,8 +233,8 @@ def test_gi_generate_occluded_light_gives_valid_zero_lo() raises:
 # round numbers: x1=(0,3,-4) with normal=(0,-0.6,0.8) pointing exactly at
 # x2=(0,0,0) (cos_x1=1, dist=5), x2's normal=(0,1,0) giving cos_x2=0.6.
 
-def _make_path(org: Vec3f, dir: Vec3f) -> PathState_C:
-    return PathState_C(
+def _make_path(org: Vec3f, dir: Vec3f) -> PathState:
+    return PathState(
         Ray(Point3f(org[0], org[1], org[2]), Vec3f(dir[0], dir[1], dir[2])),
         SpectralSample(Float32(1.0)), SpectralSample(Float32(0.0)), RGB(Float32(0.0)),
         Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
@@ -279,7 +279,7 @@ def _run_two_bounce(gi_active: Bool) -> SpectralSample:
     var ctx1 = _make_ctx_with_light(bvh, primIds, meshes, area_lights, 1, cdf,
         use_restir=True, gi_pending=real_gi_pending)
 
-    var path_arr = unsafe_alloc[PathState_C](1)
+    var path_arr = unsafe_alloc[PathState](1)
     path_arr[unsafe_offset=0] = _make_path(Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, -1.0))
 
     var x1_hit = Vec3f(0.0, 3.0, -4.0)
