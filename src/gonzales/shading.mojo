@@ -4503,22 +4503,6 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     pixel_idx: Int = -1,
     sms_io: SMSReservoirIO = sms_reservoir_io_null(),
 ):
-    # Any material other than a null interface is a REAL scattering event, so
-    # the null-interface distance accumulated on the way here has served its
-    # purpose and must not leak into the next segment's MIS. Reset here rather
-    # than at each of the dozen sites that write lastBsdfPdf: one place, and it
-    # cannot be forgotten when a new material is added.
-    if mat.type != MatKind.interface:
-        path_ptr[].mis_null_dist = Float32(0.0)
-        # Same reasoning, same one place: default the escape's env-NEE MIS
-        # partner to the material-agnostic sampler (_sample_infinite_light_nee,
-        # uniform sphere) that every material but `diffuse` uses, and let
-        # shade_diffuse override it once it knows its scattered direction.
-        # Defaulting HERE rather than at each scatter site means a material
-        # added later inherits the right pdf instead of silently keeping the
-        # previous bounce's -- and means forgetting it cannot reproduce the
-        # flat-0.5 escape weight documented on PathState.lastEnvNeePdf.
-        path_ptr[].lastEnvNeePdf = INV_FOUR_PI
     if mat.type == MatKind.diffuse:
         shade_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat, guide_write, restir_io, pixel_idx, sms_io)
     # Delta BSDFs (dielectric variants) need only triangle geometry — no NEE,
@@ -4856,6 +4840,27 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     if path_ptr[].at_cap != Int8(0) and mat.type != MatKind.interface:
         path_ptr[].active = 0
         return
+
+    # Any material other than a null interface is a REAL scattering event, so
+    # the null-interface distance accumulated on the way here has served its
+    # purpose and must not leak into the next segment's MIS. Reset here rather
+    # than at each of the dozen sites that write lastBsdfPdf: one place, and it
+    # cannot be forgotten when a new material is added. It must sit ahead of
+    # BOTH handoffs below (same trap as at_cap above): in _shade_dispatch it
+    # never ran on the GPU, so a leaf hit after a diffuse floor kept the
+    # floor's cos/pi as its escape partner and the GPU path tracer lost 11%
+    # of the sky light transmitted through diffusetransmission foliage.
+    if mat.type != MatKind.interface:
+        path_ptr[].mis_null_dist = Float32(0.0)
+        # Same reasoning, same one place: default the escape's env-NEE MIS
+        # partner to the material-agnostic sampler (_sample_infinite_light_nee,
+        # uniform sphere) that every material but `diffuse` uses, and let
+        # shade_diffuse override it once it knows its scattered direction.
+        # Defaulting HERE rather than at each scatter site means a material
+        # added later inherits the right pdf instead of silently keeping the
+        # previous bounce's -- and means forgetting it cannot reproduce the
+        # flat-0.5 escape weight documented on PathState.lastEnvNeePdf.
+        path_ptr[].lastEnvNeePdf = INV_FOUR_PI
 
     comptime if use_gpu:
         # GPU: mark material for its dedicated per-material kernel
