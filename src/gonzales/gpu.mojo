@@ -431,11 +431,13 @@ def gpu_render_sample[Oc: Origin[mut=True]](
             # interface rounds / the SSS walk), which stay scene-gated.
             var gpu_max_rounds = Int(maxDepth) + TERMINAL_SEGMENT_GRACE_ROUNDS
             # Padding beyond the +1 above is CONDITIONAL on the scene
-            # actually containing a medium: a null interface never occurs
-            # otherwise, and there is no per-round host sync here (unlike
-            # the CPU loop's cheap `anyActive` early-exit) to make extra
-            # rounds free -- each one is a real, unconditional dispatch of
-            # every kernel in _gpu_bounce_kernels.
+            # containing a medium or an `interface` material -- the only
+            # things that make a null crossing -- because there is no
+            # per-round host sync here (unlike the CPU loop's cheap
+            # `anyActive` early-exit) to make extra rounds free: each one is a
+            # real, unconditional dispatch of every kernel in
+            # _gpu_bounce_kernels. Gating on media alone starved paths through
+            # medium-free interface glass (pavilion interior 0.945x pbrt).
             comptime _MEDIUM_INTERFACE_MARGIN = 8
             # An SSS interior is walked one scattering event per round and
             # those steps are not charged to maxDepth (Medium.is_sss), so
@@ -445,7 +447,7 @@ def gpu_render_sample[Oc: Origin[mut=True]](
             # dispatch. Gated on the scene actually containing an SSS medium
             # so no other scene pays for it.
             comptime _SSS_WALK_ROUNDS = 256
-            if handle[].media.n_mediums > 0:
+            if handle[].media.n_mediums > 0 or handle[].has_interface_material:
                 gpu_max_rounds += _MEDIUM_INTERFACE_MARGIN
             if handle[].media.has_sss_medium:
                 gpu_max_rounds += _SSS_WALK_ROUNDS
@@ -553,11 +555,13 @@ def gpu_render_wavefront(
             # interface rounds / the SSS walk), which stay scene-gated.
             var gpu_max_rounds = Int(maxDepth) + TERMINAL_SEGMENT_GRACE_ROUNDS
             # Padding beyond the +1 above is CONDITIONAL on the scene
-            # actually containing a medium: a null interface never occurs
-            # otherwise, and there is no per-round host sync here (unlike
-            # the CPU loop's cheap `anyActive` early-exit) to make extra
-            # rounds free -- each one is a real, unconditional dispatch of
-            # every kernel in _gpu_bounce_kernels.
+            # containing a medium or an `interface` material -- the only
+            # things that make a null crossing -- because there is no
+            # per-round host sync here (unlike the CPU loop's cheap
+            # `anyActive` early-exit) to make extra rounds free: each one is a
+            # real, unconditional dispatch of every kernel in
+            # _gpu_bounce_kernels. Gating on media alone starved paths through
+            # medium-free interface glass (pavilion interior 0.945x pbrt).
             comptime _MEDIUM_INTERFACE_MARGIN = 8
             # An SSS interior is walked one scattering event per round and
             # those steps are not charged to maxDepth (Medium.is_sss), so
@@ -567,7 +571,7 @@ def gpu_render_wavefront(
             # dispatch. Gated on the scene actually containing an SSS medium
             # so no other scene pays for it.
             comptime _SSS_WALK_ROUNDS = 256
-            if handle[].media.n_mediums > 0:
+            if handle[].media.n_mediums > 0 or handle[].has_interface_material:
                 gpu_max_rounds += _MEDIUM_INTERFACE_MARGIN
             if handle[].media.has_sss_medium:
                 gpu_max_rounds += _SSS_WALK_ROUNDS

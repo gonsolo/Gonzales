@@ -2,7 +2,7 @@ from .bvh import BVH2Node, SceneView
 from .curves import CURVE_DEFER_K, Curve
 from .geometry import _is_real_ptr
 from .lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSampler
-from .materials import Material, MeasuredBRDF
+from .materials import MatKind, Material, MeasuredBRDF
 from .media import Grid, MediumInterface, Medium, NvdbGrid
 from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh
 from .render_state import FilmDims, FilterParams, GpuTexture, NormalSlopeMap, PathState, ShadowTask
@@ -881,6 +881,9 @@ struct GpuSceneHandle(Movable):
     var meshes: MeshBuffers
     var materials_buf: DeviceBuffer[DType.uint8]
     var material_count: Int
+    # A null `interface` material can sit in a scene with no medium at all
+    # (glass stubbed out as "interface"); its crossings still need rounds.
+    var has_interface_material: Bool
     var textures: TextureBuffers
     var lights: LightBuffers
     var spheres_buf: DeviceBuffer[DType.uint8]   # n_spheres × sizeof(Sphere) = 36
@@ -1077,6 +1080,11 @@ def gpu_upload_scene(
             var meshes = MeshBuffers.upload(ctx, s)
             # >= 1 elem to avoid a zero-size buffer
             var mat_buf = _gpu_upload_array[Material](ctx, s.materials, Int(s.material_count))
+            var has_iface_mat = False
+            for mi in range(Int(s.material_count)):
+                if s.materials[unsafe_offset=mi].type == MatKind.interface:
+                    has_iface_mat = True
+                    break
             var lights = LightBuffers.upload(ctx, s)
             # analytical sphere primitives + sphere area lights
             var sphere_buf = _gpu_upload_array[Sphere](ctx, s.spheres, Int(s.sphere_count))
@@ -1137,6 +1145,7 @@ def gpu_upload_scene(
                 meshes=meshes^,
                 materials_buf=mat_buf^,
                 material_count=Int(s.material_count),
+                has_interface_material=has_iface_mat,
                 textures=textures^,
                 lights=lights^,
                 spheres_buf=sphere_buf^,
