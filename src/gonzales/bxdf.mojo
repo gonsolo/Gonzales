@@ -1309,6 +1309,18 @@ def lobe_eval[want_pdfs: Bool = True](
 
 
 @always_inline
+def lobe_kind_of(mat_type: Int8) -> Int32:
+    """THE material -> lobe map for the kinds whose whole scattering goes
+    through lobe_eval/lobe_sample. An integrator stores this on its vertex
+    and never branches on the material again."""
+    if mat_type == MatKind.diffuse_transmit:
+        return LobeKind.diffuse_transmit
+    if mat_type == MatKind.coated_diffuse:
+        return LobeKind.layered
+    return LobeKind.lambertian
+
+
+@always_inline
 def _dt_transmittance(c: LobeCtx, tab: LobeTables) -> RGB:
     """A diffusetransmission lobe's transmittance. It lives in the MATERIAL
     (Material_C.emission, see shade_diffuse_transmission), so it needs a real
