@@ -11,7 +11,8 @@
 from std.math import abs, sqrt
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, TestSuite
-from gonzales.geometry import RGB, Point3f, Vec3f, Ray_C, PrimId_C, Intersection_C, TriangleMesh_C, Material_C, MatKind, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, Instance_C, PathState_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, Sphere_C, MeasuredBRDF_C, dot, cross
+from gonzales.geometry import RGB, Point3f, Vec3f, Ray_C, PrimId_C, Intersection_C, TriangleMesh_C, Material_C, MatKind, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, Instance_C, PathState_C, Sphere_C, MeasuredBRDF_C, dot, cross
+from gonzales.lights import LightSampler_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C
 from gonzales.curves import Curve_C
 from gonzales.spectrum import SpectralSample, SampledWavelengths, null_spectral_handle
 from gonzales.bvh import BVH2Node

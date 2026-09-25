@@ -5,7 +5,8 @@ from max.algorithm import parallelize
 from std.atomic import Atomic
 from std.sys.info import num_performance_cores
 from .transform import Mat4
-from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, alpha_killed, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, MatKind, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, _is_real_ptr, store_vec3, _atan2f, point3f
+from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, Sphere_C, dot, cross, intersect_triangle, alpha_killed, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, MatKind, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, _is_real_ptr, store_vec3, _atan2f, point3f
+from .lights import AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, LightSampler_C
 from .curves import Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis
 from .rng import PCG32
 from .spectrum import SpectralHandle

@@ -1,11 +1,7 @@
 from std.collections import List, Array
 from std.ffi import external_call
-from .geometry import (
-    RGB, Point3f, Vec3f,
-    Material_C, AreaLight_C, TriangleMesh_C, PrimId_C,
-    Sphere_C, DistantLight_C, PointLight_C, InfiniteLight_C,
-    Medium_C, MediumInterface_C,
-)
+from .geometry import RGB, Point3f, Vec3f, Material_C, TriangleMesh_C, PrimId_C, Sphere_C, Medium_C, MediumInterface_C
+from .lights import AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C
 from .bvh import BVH2Node, SceneDescriptor2_C
 
 # ── Scene IR ──────────────────────────────────────────────────────────────────
