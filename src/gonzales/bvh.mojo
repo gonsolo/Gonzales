@@ -5,7 +5,7 @@ from max.algorithm import parallelize
 from std.atomic import Atomic
 from std.sys.info import num_performance_cores
 from .transform import Mat4
-from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, alpha_killed, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, MatKind, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, _is_real_ptr, store_vec3, _atan2f
+from .geometry import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, AreaLight_C, Sphere_C, Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, dot, cross, intersect_triangle, alpha_killed, PathState_C, TileResult_C, Point3f, Point2f, Vec3f, Frame, RGB, Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, MatKind, LightSampler_C, Instance_C, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, sphere_outward_normal, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, _is_real_ptr, store_vec3, _atan2f, point3f
 from .rng import PCG32
 from .spectrum import SpectralHandle
 
@@ -1247,14 +1247,10 @@ def _transform_ray_to_instance_space(
     re-based on it — this preserves the ray parameterization so a `tHit` found
     in object space is directly usable as the world-space `tHit` (same trick
     pbrt's TransformedPrimitive uses)."""
-    var m = worldToObj
-    var ox = m[0]*ray_org[0] + m[4]*ray_org[1] + m[8]*ray_org[2]  + m[12]
-    var oy = m[1]*ray_org[0] + m[5]*ray_org[1] + m[9]*ray_org[2]  + m[13]
-    var oz = m[2]*ray_org[0] + m[6]*ray_org[1] + m[10]*ray_org[2] + m[14]
-    var dx = m[0]*ray_dir[0] + m[4]*ray_dir[1] + m[8]*ray_dir[2]
-    var dy = m[1]*ray_dir[0] + m[5]*ray_dir[1] + m[9]*ray_dir[2]
-    var dz = m[2]*ray_dir[0] + m[6]*ray_dir[1] + m[10]*ray_dir[2]
-    return (Vec3f(ox, oy, oz), Vec3f(dx, dy, dz))
+    var m = Mat4(worldToObj)
+    var o = m.transform_point(point3f(ray_org))
+    var d = m * ray_dir
+    return (Vec3f(o.x, o.y, o.z), d)
 
 
 # ── Unified traversal core (CPU + GPU) ────────────────────────────────────────

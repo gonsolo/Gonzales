@@ -69,6 +69,26 @@ struct Mat4(TrivialRegisterPassable):
             self.m[8]*v.x + self.m[9]*v.y + self.m[10]*v.z,
         )
 
+    @always_inline
+    def transform_point(self, p: Point3f) -> Point3f:
+        """Forward transform of a POINT: the rotation/scale part `mat * v`
+        already provides, plus the translation column, plus the perspective
+        divide a projective matrix (raster_to_camera and friends) needs. The
+        missing half of what this struct's own docstring calls out --
+        `mat * v` and `transpose_mul` cover vectors, but every point-transform
+        call site (a hit position, a camera-ray origin, a light position)
+        still hand-rolled `m0*px + m4*py + m8*pz + m12` (and the w-divide)
+        itself. Mirrors transform_points' per-point math below exactly, so a
+        single point and a bulk array agree by construction."""
+        var rx = self.m[0]*p.x + self.m[4]*p.y + self.m[8]*p.z + self.m[12]
+        var ry = self.m[1]*p.x + self.m[5]*p.y + self.m[9]*p.z + self.m[13]
+        var rz = self.m[2]*p.x + self.m[6]*p.y + self.m[10]*p.z + self.m[14]
+        var rw = self.m[3]*p.x + self.m[7]*p.y + self.m[11]*p.z + self.m[15]
+        if rw != Float32(1) and rw != Float32(0):
+            var inv_rw = Float32(1) / rw
+            rx *= inv_rw; ry *= inv_rw; rz *= inv_rw
+        return Point3f(rx, ry, rz)
+
 def _write_identity(result: Pointer[Float32, MutUntrackedOrigin]) -> Int32:
     for i in range(16):
         result[unsafe_offset=i] = Float32(0)
