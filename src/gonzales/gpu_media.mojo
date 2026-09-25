@@ -205,6 +205,427 @@ def _volume_nee_light(
         sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65) * (Te * ph * mis / ls.pdf)
 
 
+@always_inline
+def _volume_area_light_nee(
+    path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
+    ref sd: SceneDescriptor2_C,
+    i: Int,
+    med: Medium_C,
+    med_idx: Int,
+    sigma_t: RGB,
+    use_nvdb: Bool,
+    use_dense: Bool,
+    ray_org: Vec3f,
+    ray_dir: Vec3f,
+    t_surf: Float32,
+    scatter_pt: Point3f,
+    mut pcg: PCG32,
+    vol_read: Pointer[VolReservoir, MutUntrackedOrigin],
+    vol_write: Pointer[VolReservoir, MutUntrackedOrigin],
+    pixel_idx: Int,
+    vol_used: Pointer[Int8, MutUntrackedOrigin],
+    vol_gbuf_depth: Pointer[Float32, MutUntrackedOrigin],
+    vol_gbuf_world_pos: Pointer[Float32, MutUntrackedOrigin],
+    vol_frame_w: Int32,
+    vol_frame_h: Int32,
+):
+    """Area-light NEE at a volume scatter vertex: RIS over VOL_RIS_CANDIDATES
+    light samples, optional volume-ReSTIR reuse, then one resolved shadow ray."""
+    var n_light_sampler = Int(sd.lightSampler.n)
+    var n_spheres = Int(sd.sphereCount)
+    # ── Volume scatter NEE — area light direct lighting ──────────────
+    # Phase 7.2 (docs/A2_restir_migration_plan.md): resampled importance
+    # sampling over VOL_RIS_CANDIDATES light samples instead of one.
+    #
+    # The whole point is the asymmetry between the two halves. Generating
+    # a candidate is cheap -- pick a light, a triangle, a barycentric
+    # point, evaluate the UNSHADOWED target -- while resolving one costs a
+    # visibility ray plus, in a heterogeneous medium, a whole
+    # ratio-tracking march for transmittance. So M candidates are
+    # generated and exactly ONE is resolved, which is why this can afford
+    # to look at many lights for barely more than the price of the single
+    # sample it replaces.
+    #
+    # `tr` is VOL_TR_UNIT at every target evaluation here on purpose: this
+    # is the resampling stage, and the target must not contain
+    # intermediate transmittance (restir_vol.mojo, seam 1). The real
+    # transmittance appears once below, in the resolve, along a ray that
+    # is actually traced.
+    #
+    # With VOL_RIS_CANDIDATES == 1 this reduces EXACTLY to the single-
+    # sample estimator it replaced: W = w_sum/(m*p_hat) = (p_hat/q)/p_hat
+    # = 1/q, and 1/q is precisely the `al.total_area / light_sel_pdf`
+    # factor the old `geom` term carried. That equivalence is the cheapest
+    # correctness check available here and is worth preserving.
+    if Int(sd.areaLightCount) > 0 and n_light_sampler > 0:
+        var ls = LightSampler_C(sd.lightSampler.cdf, Int32(n_light_sampler), Int32(0))
+        var scatter_pt_s = scatter_pt.to_simd()
+        var scatter_v = Vec3f(scatter_pt_s[0], scatter_pt_s[1], scatter_pt_s[2])
+        var res = vol_reservoir_init()
+        res.scatter_point = scatter_v
+        # sigma_s is a CONSTANT across every candidate at this fixed
+        # vertex, so it cancels between w_sum and p_hat(winner) and cannot
+        # affect the estimate. It is passed (rather than 1.0) so the
+        # payload field means what it says, for the distance-resampling
+        # half where vertices genuinely differ in density.
+        res.sigma_s = max(med.sigma_s.r, Float32(1e-30))
+        res.phase_g = med.g
+        res.medium_idx = Int32(med_idx)
+        var p_hat_win = Float32(0.0)
+
+        # ── Distance resampling (restir_vol.mojo's VOL_RIS_DISTANCE) ──
+        # Each candidate draws its own scatter distance as well as its own
+        # light, from the EXACT conditional collision density
+        # q(t) = sigma_t e^{-sigma_t t} / (1 - e^{-sigma_t t_surf}). That
+        # choice is what makes this cheap: q(t) cancels out of both the
+        # RIS weight and the resolve (see the derivation on
+        # VOL_RIS_DISTANCE), so nothing below changes except WHERE the
+        # target is evaluated and which point gets shadowed.
+        #
+        # Restricted to homogeneous, achromatic media. Homogeneous because
+        # only there is the conditional analytic (heterogeneous needs a
+        # rejection-conditioned delta-tracking walk per candidate --
+        # unbiased, no marches, but ~M walks per segment). Achromatic
+        # because the per-channel transmittance ratio applied to
+        # throughput above was computed at t_free, and a resampled vertex
+        # sits at a different optical depth; for a grey medium that factor
+        # is exactly 1, so the question does not arise. Both guards fail
+        # CLOSED -- a medium that does not qualify silently keeps 7.2's
+        # fixed-vertex behavior, which is always correct.
+        # VOL_RIS_DISTANCE is a compile-time kill switch, so it gates the
+        # whole test at compile time rather than sitting in the runtime
+        # `and` chain: with the flag off the qualification test is not
+        # emitted at all, instead of being evaluated and ANDed with False.
+        var dist_ris: Bool
+        comptime if VOL_RIS_DISTANCE:
+            dist_ris = ((not use_dense) and (not use_nvdb)
+                and sigma_t.r > Float32(0.0) and t_surf > Float32(0.0)
+                and sigma_t.g == sigma_t.r and sigma_t.b == sigma_t.r
+                and med.sigma_s.g == med.sigma_s.r and med.sigma_s.b == med.sigma_s.r)
+        else:
+            dist_ris = False
+        var pc_norm = Float32(0.0)
+        if dist_ris:
+            pc_norm = Float32(1.0) - exp(-sigma_t.r * t_surf)
+            # A segment with essentially no collision probability cannot
+            # produce a usable conditional draw; fall back rather than
+            # divide by a vanishing normalizer.
+            if pc_norm < Float32(1e-6):
+                dist_ris = False
+
+        for _cand in range(VOL_RIS_CANDIDATES):
+            # Candidate vertex. When distance resampling is off this is
+            # exactly the delta-tracking vertex, for every candidate --
+            # i.e. bit-identical to 7.2, no extra RNG draw taken.
+            var cand_v = scatter_v
+            if dist_ris:
+                var u_t = pcg.next_float()
+                # Inverse CDF of the truncated exponential: exact, cheap.
+                var t_c = -log(max(Float32(1.0) - u_t * pc_norm, Float32(1e-7))) / sigma_t.r
+                cand_v = ray_org + ray_dir * t_c
+            var u_nee = pcg.next_float()
+            var ls_result = light_sampler_sample(ls, u_nee)
+            var light_idx = ls_result[0]
+            var light_sel_pdf = ls_result[1]
+            var al = sd.areaLights[unsafe_offset=light_idx]
+            var lmesh = sd.meshes[unsafe_offset=Int(al.meshIdx)]
+            var lti = area_light_pick_triangle(al, pcg.next_float())
+            var r1 = pcg.next_float()
+            var r2 = pcg.next_float()
+            var lb = lti * 3
+            var lv0 = Int(lmesh.vertexIndices[unsafe_offset=lb])
+            var lv1 = Int(lmesh.vertexIndices[unsafe_offset=lb + 1])
+            var lv2 = Int(lmesh.vertexIndices[unsafe_offset=lb + 2])
+            var lp0 = Vec3f(lmesh.points[unsafe_offset=lv0*4], lmesh.points[unsafe_offset=lv0*4+1], lmesh.points[unsafe_offset=lv0*4+2])
+            var lp1 = Vec3f(lmesh.points[unsafe_offset=lv1*4], lmesh.points[unsafe_offset=lv1*4+1], lmesh.points[unsafe_offset=lv1*4+2])
+            var lp2 = Vec3f(lmesh.points[unsafe_offset=lv2*4], lmesh.points[unsafe_offset=lv2*4+1], lmesh.points[unsafe_offset=lv2*4+2])
+            var sqrt_r1 = sqrt(r1)
+            var light_point = lp0 * (Float32(1) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1) - r2)) + lp2 * (sqrt_r1 * r2)
+            var lcross = cross(lp1 - lp0, lp2 - lp0)
+            var lcross_len = sqrt(max(Float32(1e-14), dot(lcross, lcross)))
+            var light_normal = lcross * (Float32(1) / lcross_len)
+
+            # Every candidate must be streamed, including a rejected one:
+            # reservoir_update increments m unconditionally, and RIS's 1/M
+            # normalization is only right if m counts candidates CONSIDERED
+            # rather than candidates that happened to be usable.
+            var w_cand = Float32(0.0)
+            var p_hat_cand = Float32(0.0)
+            var to_light_c = light_point - cand_v
+            var dist_c = sqrt(dot(to_light_c, to_light_c))
+            if dist_c > Float32(0.0001) and al.total_area > Float32(0) and light_sel_pdf > Float32(0):
+                var lp_v = Vec3f(light_point[0], light_point[1], light_point[2])
+                var ln_v = Vec3f(light_normal[0], light_normal[1], light_normal[2])
+                p_hat_cand = vol_target_pdf(
+                    ray_dir, cand_v, res.sigma_s, med.g,
+                    lp_v, ln_v, al.emission, VOL_TR_UNIT)
+                if p_hat_cand > Float32(0.0):
+                    # q is the AREA-measure pdf of this sample: probability
+                    # of picking this light, times a uniform 1/total_area.
+                    var q_cand = light_sel_pdf / al.total_area
+                    w_cand = p_hat_cand / q_cand
+            if reservoir_update(res.state, w_cand, pcg.next_float()):
+                res.light_point = Vec3f(light_point[0], light_point[1], light_point[2])
+                res.light_normal = Vec3f(light_normal[0], light_normal[1], light_normal[2])
+                res.le = al.emission
+                res.light_idx = Int32(light_idx)
+                res.valid = Int8(1)
+                # The winning VERTEX travels with the winning light: the
+                # resolve below shadow-rays from here, and the payload is
+                # what a reusing pixel would read. Identical to scatter_v
+                # when distance resampling is off.
+                res.scatter_point = cand_v
+                p_hat_win = p_hat_cand
+
+        # Phase 7.3: temporal reuse when this call has a real per-pixel
+        # slot (gpu_render_sample only); otherwise the single-frame path
+        # 7.2 already shipped, unchanged. vol_temporal_spatial_combine
+        # finalizes res.state AND writes it back to vol_write[pixel_idx]
+        # internally -- no separate persistence step needed here. Spatial
+        # reuse is NOT enabled: gbuf_depth/gbuf_world_pos are left at
+        # their null-sentinel default inside vol_reservoir_io_null(), and
+        # vol_temporal_spatial_combine's spatial pass self-disables on
+        # that (see restir_vol.mojo's own null-safety contract).
+        # `vol_used[i]` (one entry per PATH SLOT for this dispatch/frame,
+        # NOT per pixel across frames -- that's vol_read/vol_write's job)
+        # guards a real bug found verifying the CPU wiring: a single
+        # path can have MULTIPLE real scatter events inside a dense
+        # medium within one frame (this scene's optical depth is ~8
+        # through the sphere, so 10+ scatters per sample is common) --
+        # _sample_medium_core runs once per bounce ROUND, so each of
+        # those events independently called vol_temporal_spatial_combine
+        # and overwrote vol_write[pixel_idx], leaving only the LAST
+        # in-frame scatter's result actually persisted. Traced live: the
+        # reservoir's state.m plateaued around 40 (never reaching
+        # VOL_TEMPORAL_M_CAP=64) and MSE-vs-a-16384spp-reference got
+        # WORSE from 16 to 256 accumulated frames instead of better --
+        # exactly the "stalled convergence = bias" signature documented
+        # in project_restir_migration's DI Bug 2 section. This affected
+        # the GPU-only commit (1685154c) too, silently, since that
+        # verification pass's methodology (fixed-budget MSE across 5
+        # seeds) didn't happen to expose it the way this session's CPU
+        # convergence-rate check did. Fix: only the path's FIRST real
+        # scatter this frame gets the temporal combine (mirrors DI's own
+        # "one NEE per pixel per frame" scoping, applied per-PATH since
+        # media have no fixed bounce-0 the way surfaces do); every later
+        # in-frame scatter falls back to the plain single-frame RIS
+        # estimator (7.2's original, always-correct behavior) instead of
+        # corrupting the persisted reservoir.
+        # Distance resampling and temporal reuse COMPOSE (they were once
+        # mutually exclusive here, on a premise that turned out to be
+        # backwards -- see the shift-mode choice below).
+        var vol_reuse_ok = (pixel_idx >= 0 and _is_real_ptr(vol_read)
+            and _is_real_ptr(vol_used) and vol_used[unsafe_offset=i] == Int8(0))
+        if vol_reuse_ok:
+            vol_used[unsafe_offset=i] = Int8(1)
+            var vol_io = vol_reservoir_io_null()
+            vol_io.read = vol_read
+            vol_io.write = vol_write
+            vol_io.gbuf_depth = vol_gbuf_depth
+            vol_io.gbuf_world_pos = vol_gbuf_world_pos
+            vol_io.frame_w = vol_frame_w
+            vol_io.frame_h = vol_frame_h
+            var ray_o_s = path_ptr[].ray.origin.to_simd()
+            var ray_d_s = path_ptr[].ray.direction.to_simd()
+            var ray_o = Vec3f(ray_o_s[0], ray_o_s[1], ray_o_s[2])
+            var ray_d = Vec3f(ray_d_s[0], ray_d_s[1], ray_d_s[2])
+            # Which shift is valid depends on how this frame's vertex was
+            # produced, and the two cases are opposites:
+            #
+            # dist_ris ON -> `identity`. The vertex came from q(t), which
+            # depends only on sigma_t and t_surf -- the same for every
+            # frame at this pixel -- so a donor's vertex is a draw from
+            # exactly our own proposal. Domains match, Jacobian 1.
+            #
+            # dist_ris OFF -> `retarget`. The vertex is delta-tracking's
+            # single t_free, a point mass that differs every frame; our
+            # proposal could never have produced the donor's. Import only
+            # the light sample and keep our own vertex, which is plain
+            # ReSTIR DI reuse.
+            #
+            # The guard that used to sit here had this backwards: it
+            # claimed `identity` re-targets onto this pixel's vertex and
+            # so could not survive distance resampling. `identity` does
+            # the opposite -- it keeps the DONOR's vertex verbatim -- so
+            # the configuration it permitted (dist_ris off + reuse) was
+            # the inconsistent one, and the configuration it forbade was
+            # the well-founded one. See the resolve below for the bug
+            # that inconsistency caused.
+            var vol_shift = VolShiftMode.identity if dist_ris else VolShiftMode.retarget
+            vol_temporal_spatial_combine(
+                res, ray_o, ray_d, Int32(med_idx), pcg,
+                vol_io, pixel_idx, vol_shift)
+        else:
+            reservoir_finalize(res.state, p_hat_win)
+
+        # ── Resolve: one visibility ray + one transmittance march, for
+        # the winner only.
+        if res.valid != Int8(0) and res.state.w > Float32(0.0):
+            var light_point = res.light_point.to_simd()
+            var light_normal = res.light_normal.to_simd()
+            # Shadow-ray from the WINNER's vertex, ALWAYS -- this is the
+            # one point that must agree with the target evaluation, since
+            # reservoir_finalize set W = w_sum/(m * p_hat(winner)) using
+            # p_hat at res.scatter_point. Tracing F from anywhere else
+            # multiplies an F from one vertex by a W from another and the
+            # RIS identity is gone.
+            #
+            # This used to read `res.scatter_point if dist_ris else
+            # scatter_pt_s`, which was a live bias whenever temporal reuse
+            # won with a donor sample: the donor's vertex went into p_hat
+            # (and into W) while the shadow ray still left from THIS
+            # frame's vertex. It stayed hidden because both points lie on
+            # the same camera ray in a homogeneous fog, so the two targets
+            # are close and the error is a quiet scale factor rather than
+            # anything visible.
+            #
+            # Equal to scatter_pt_s whenever nothing moved the vertex --
+            # every candidate writes cand_v, which is scatter_v itself
+            # unless distance resampling drew a new one -- so the default
+            # (no reuse, no distance resampling) path is unchanged.
+            var resolve_pt = res.scatter_point.to_simd()
+            var to_light = light_point - resolve_pt
+            var dist_sq = dot(to_light, to_light)
+            var dist = sqrt(dist_sq)
+            var shadow_dir = to_light * (Float32(1) / dist)
+            var cos_l = -dot(light_normal, shadow_dir)
+            if cos_l > Float32(0):
+                var shad_org = point3f(resolve_pt + shadow_dir * Float32(0.0002))
+                var shad_ray = Ray_C(shad_org, vec3f(shadow_dir))
+                var shad_tmax = max(dist - Float32(0.0002), Float32(0.0)) * Float32(0.9995)
+                if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shad_ray, shad_tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, n_spheres, materials=sd.materials):
+                    var T: RGB
+                    if med.grid_idx >= Int32(0) or med.nvdb_idx >= Int32(0):
+                        # Ratio-tracking transmittance through the grid (see
+                        # sample_medium_gpu's docstring). The density
+                        # lookup returns 0 past the grid's bounds for
+                        # EITHER source (grid_sample_density's [p0,p1] box,
+                        # nvdb_sample_density's index bbox), so this
+                        # naturally stops attenuating once the shadow ray
+                        # exits the medium -- same dual-source dispatch as
+                        # the free-flight sampling above.
+                        var use_nvdb_s = med.nvdb_idx >= Int32(0)
+                        var grid_s = sd.grids[unsafe_offset=Int(med.grid_idx)] if not use_nvdb_s else Grid_C(
+                            Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0), Int32(0),
+                            Point3f(Float32(0), Float32(0), Float32(0)), Point3f(Float32(0), Float32(0), Float32(0)),
+                            SIMD[DType.float32, 16](0), Float32(0))
+                        var nvdb_grid_s = sd.nvdbGrids[unsafe_offset=Int(med.nvdb_idx)] if use_nvdb_s else NvdbGrid_C(
+                            Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Int64(0), SIMD[DType.float32, 16](0),
+                            SIMD[DType.float32, 16](0), Vec3f(Float32(0), Float32(0), Float32(0)),
+                            Point3f(Float32(0), Float32(0), Float32(0)), Point3f(Float32(0), Float32(0), Float32(0)), Float32(0))
+                        var majorant_s = nvdb_grid_s.max_density if use_nvdb_s else grid_s.max_density
+                        var sigma_maj_s = majorant_s * sigma_t.r
+                        var Tval = Float32(1.0)
+                        if sigma_maj_s > Float32(0.0):
+                            var ts = Float32(0.0)
+                            var siters = 0
+                            while siters < MEDIUM_TRACK_MAX_ITERS:
+                                siters += 1
+                                var us = pcg.next_float()
+                                ts += -log(max(us, Float32(1e-7))) / sigma_maj_s
+                                if ts >= dist:
+                                    break
+                                var ps = resolve_pt + shadow_dir * ts
+                                var density_s = nvdb_sample_density(nvdb_grid_s, ps) if use_nvdb_s else grid_sample_density(grid_s, ps)
+                                Tval *= Float32(1.0) - (density_s * sigma_t.r) / sigma_maj_s
+                                if Tval < Float32(1e-4):
+                                    Tval = Float32(0.0)
+                                    break
+                        T = RGB(Tval, Tval, Tval)
+                    else:
+                        # Beer-Lambert over the part of the segment that is
+                        # actually INSIDE the medium, not the whole way to
+                        # the light.
+                        #
+                        # This used to attenuate over `dist` unconditionally,
+                        # which charges the vacuum between the medium's
+                        # boundary and the light for extinction it never
+                        # applies. The grid branch above is accidentally
+                        # immune -- its density lookup returns 0 outside the
+                        # grid, so ratio tracking simply stops attenuating --
+                        # which is why only homogeneous media showed it.
+                        # Measured on an area-lit slab: homogeneous read
+                        # 0.117x pbrt where uniformgrid read 0.954x at the
+                        # same geometry, against a predicted e^2 = 7.4x for
+                        # the 2 units of vacuum involved.
+                        #
+                        # The exit distance is the first interface surface
+                        # along the segment. Occlusion has already been
+                        # ruled out above, so any hit here is a non-opaque
+                        # boundary. Scope: this finds ONE exit, which is
+                        # exact for a ray leaving a single convex medium --
+                        # the case every medium scene in the corpus has --
+                        # and does not model re-entry or nested media. A
+                        # general version needs the medium-transition walk
+                        # bdpt.mojo's _visible_transmittance already does.
+                        #
+                        # test_spheres is REQUIRED here, not optional:
+                        # traverse_bvh2_core walks the mesh/curve BVH only,
+                        # and analytic sd.spheres live in their own flat array.
+                        # A `MediumInterface .. Shape "sphere"` boundary --
+                        # the single most common way to bound a medium, and
+                        # what every fog/cloud test scene here uses -- was
+                        # therefore never found, so t_med stayed at the FULL
+                        # distance to the light and Beer-Lambert charged the
+                        # vacuum outside the medium for extinction it never
+                        # applies. Measured on a tau=8 fog sphere lit by a
+                        # mesh quad: exp(-2.02*6) instead of exp(-2.02*2),
+                        # i.e. PT read 0.0000567 where the same scene with a
+                        # mesh-box boundary reads 0.0355 (574x too dark).
+                        # Same root cause and same shape as the sphere case
+                        # bdpt.mojo's _visible_transmittance needed, and as
+                        # the vacuum-attenuation bug this very branch was
+                        # written to fix -- that fix just never covered the
+                        # sphere-bounded case.
+                        var t_med = dist
+                        var _exit_inter = Array[Intersection_C, 1](fill=Intersection_C(
+                            PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
+                            Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
+                        var exit_ptr = _exit_inter.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+                        exit_ptr[unsafe_offset=0].hit = Int8(0)
+                        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shad_ray,
+                                           shad_tmax, exit_ptr, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+                        test_spheres(sd.spheres, n_spheres, shad_ray, exit_ptr)
+                        # test_spheres ignores shad_tmax (it bounds only by
+                        # an already-recorded closer hit), so a sphere past
+                        # the light would otherwise set t_med > dist and
+                        # over-attenuate instead of under-.
+                        if exit_ptr[unsafe_offset=0].hit != Int8(0) and exit_ptr[unsafe_offset=0].tHit <= shad_tmax:
+                            var exit_mat = sd.materials[unsafe_offset=Int(exit_ptr[unsafe_offset=0].primId.materialIndex)]
+                            if exit_mat.type == MatKind.interface:
+                                t_med = exit_ptr[unsafe_offset=0].tHit
+                        T = RGB(exp(-sigma_t.r * t_med), exp(-sigma_t.g * t_med), exp(-sigma_t.b * t_med))
+                    # The old `geom` also carried al.total_area/light_sel_pdf,
+                    # i.e. 1/q -- that now lives inside res.state.w, so the
+                    # geometry factor here is the bare cos_l/dist^2.
+                    var geom = cos_l / dist_sq
+                    var ph_a = hg_phase(dot(-ray_dir, shadow_dir), med.g)
+                    # MIS against phase sampling. A volume scatter sets
+                    # lastBsdfPdf to the phase pdf and specularBounce to 0,
+                    # so a phase-sampled ray that lands on this same emitter
+                    # is ALREADY weighted by power_heuristic(pdf_bsdf,
+                    # pdf_light) in shading.mojo's emitter-hit handler --
+                    # but this side carried no weight at all, so the two
+                    # strategies summed to more than one. Invisible for
+                    # small/distant lights, where phase sampling almost
+                    # never finds the emitter and this weight is ~1; it grew
+                    # to 1.70x too bright once the lights subtended a large
+                    # solid angle. pdf_light is deliberately spelled exactly
+                    # as the emitter-hit side spells it -- MIS is only
+                    # correct if both halves agree on the pdf.
+                    var al_win = sd.areaLights[unsafe_offset=Int(res.light_idx)]
+                    var sel_lo = sd.lightSampler.cdf[unsafe_offset=Int(res.light_idx)]
+                    var sel_hi = sd.lightSampler.cdf[unsafe_offset=Int(res.light_idx) + 1]
+                    var sel_pdf_win = max(sel_hi - sel_lo, Float32(1e-6))
+                    var mis_w = Float32(1.0)
+                    if al_win.total_area > Float32(0.0):
+                        var pdf_light = dist_sq * sel_pdf_win / (cos_l * al_win.total_area)
+                        mis_w = power_heuristic(pdf_light, ph_a)
+                    path_ptr[].estimate += path_ptr[].throughput * medium_emission_spectral(
+                        res.le * T, path_ptr[].wavelengths, sd.spectral.coeffs, sd.spectral.res,
+                        sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65) * (geom * ph_a * mis_w * res.state.w)
+
+
 # Inlined so `sd` stays in kernel param space: a non-inlined call needs its
 # address, which copies the whole descriptor to local memory per thread.
 @always_inline
@@ -264,7 +685,6 @@ def _sample_medium_core(
     band-picking (see spectrum.mojo's rgb_bands_to_spectral_sample) — real
     chromatic extinction is the same unimplemented, separate piece of work.
     """
-    var n_light_sampler = Int(sd.lightSampler.n)
     var n_spheres = Int(sd.sphereCount)
     var path_ptr = paths.unsafe_offset(i)
     if path_ptr[].active == 0:
@@ -436,411 +856,11 @@ def _sample_medium_core(
             return
         # Volume scatter: compute scatter point
         var scatter_pt = path_ptr[].ray.origin + path_ptr[].ray.direction * t_free
-        # ── Volume scatter NEE — area light direct lighting ──────────────
-        # Phase 7.2 (docs/A2_restir_migration_plan.md): resampled importance
-        # sampling over VOL_RIS_CANDIDATES light samples instead of one.
-        #
-        # The whole point is the asymmetry between the two halves. Generating
-        # a candidate is cheap -- pick a light, a triangle, a barycentric
-        # point, evaluate the UNSHADOWED target -- while resolving one costs a
-        # visibility ray plus, in a heterogeneous medium, a whole
-        # ratio-tracking march for transmittance. So M candidates are
-        # generated and exactly ONE is resolved, which is why this can afford
-        # to look at many lights for barely more than the price of the single
-        # sample it replaces.
-        #
-        # `tr` is VOL_TR_UNIT at every target evaluation here on purpose: this
-        # is the resampling stage, and the target must not contain
-        # intermediate transmittance (restir_vol.mojo, seam 1). The real
-        # transmittance appears once below, in the resolve, along a ray that
-        # is actually traced.
-        #
-        # With VOL_RIS_CANDIDATES == 1 this reduces EXACTLY to the single-
-        # sample estimator it replaced: W = w_sum/(m*p_hat) = (p_hat/q)/p_hat
-        # = 1/q, and 1/q is precisely the `al.total_area / light_sel_pdf`
-        # factor the old `geom` term carried. That equivalence is the cheapest
-        # correctness check available here and is worth preserving.
-        if Int(sd.areaLightCount) > 0 and n_light_sampler > 0:
-            var ls = LightSampler_C(sd.lightSampler.cdf, Int32(n_light_sampler), Int32(0))
-            var scatter_pt_s = scatter_pt.to_simd()
-            var scatter_v = Vec3f(scatter_pt_s[0], scatter_pt_s[1], scatter_pt_s[2])
-            var res = vol_reservoir_init()
-            res.scatter_point = scatter_v
-            # sigma_s is a CONSTANT across every candidate at this fixed
-            # vertex, so it cancels between w_sum and p_hat(winner) and cannot
-            # affect the estimate. It is passed (rather than 1.0) so the
-            # payload field means what it says, for the distance-resampling
-            # half where vertices genuinely differ in density.
-            res.sigma_s = max(med.sigma_s.r, Float32(1e-30))
-            res.phase_g = med.g
-            res.medium_idx = Int32(med_idx)
-            var p_hat_win = Float32(0.0)
+        _volume_area_light_nee(path_ptr, sd, i, med, med_idx, sigma_t, use_nvdb, use_dense,
+            ray_org, ray_dir, t_surf, scatter_pt, pcg,
+            vol_read, vol_write, pixel_idx, vol_used,
+            vol_gbuf_depth, vol_gbuf_world_pos, vol_frame_w, vol_frame_h)
 
-            # ── Distance resampling (restir_vol.mojo's VOL_RIS_DISTANCE) ──
-            # Each candidate draws its own scatter distance as well as its own
-            # light, from the EXACT conditional collision density
-            # q(t) = sigma_t e^{-sigma_t t} / (1 - e^{-sigma_t t_surf}). That
-            # choice is what makes this cheap: q(t) cancels out of both the
-            # RIS weight and the resolve (see the derivation on
-            # VOL_RIS_DISTANCE), so nothing below changes except WHERE the
-            # target is evaluated and which point gets shadowed.
-            #
-            # Restricted to homogeneous, achromatic media. Homogeneous because
-            # only there is the conditional analytic (heterogeneous needs a
-            # rejection-conditioned delta-tracking walk per candidate --
-            # unbiased, no marches, but ~M walks per segment). Achromatic
-            # because the per-channel transmittance ratio applied to
-            # throughput above was computed at t_free, and a resampled vertex
-            # sits at a different optical depth; for a grey medium that factor
-            # is exactly 1, so the question does not arise. Both guards fail
-            # CLOSED -- a medium that does not qualify silently keeps 7.2's
-            # fixed-vertex behavior, which is always correct.
-            # VOL_RIS_DISTANCE is a compile-time kill switch, so it gates the
-            # whole test at compile time rather than sitting in the runtime
-            # `and` chain: with the flag off the qualification test is not
-            # emitted at all, instead of being evaluated and ANDed with False.
-            var dist_ris: Bool
-            comptime if VOL_RIS_DISTANCE:
-                dist_ris = ((not use_dense) and (not use_nvdb)
-                    and sigma_t.r > Float32(0.0) and t_surf > Float32(0.0)
-                    and sigma_t.g == sigma_t.r and sigma_t.b == sigma_t.r
-                    and med.sigma_s.g == med.sigma_s.r and med.sigma_s.b == med.sigma_s.r)
-            else:
-                dist_ris = False
-            var pc_norm = Float32(0.0)
-            if dist_ris:
-                pc_norm = Float32(1.0) - exp(-sigma_t.r * t_surf)
-                # A segment with essentially no collision probability cannot
-                # produce a usable conditional draw; fall back rather than
-                # divide by a vanishing normalizer.
-                if pc_norm < Float32(1e-6):
-                    dist_ris = False
-
-            for _cand in range(VOL_RIS_CANDIDATES):
-                # Candidate vertex. When distance resampling is off this is
-                # exactly the delta-tracking vertex, for every candidate --
-                # i.e. bit-identical to 7.2, no extra RNG draw taken.
-                var cand_v = scatter_v
-                if dist_ris:
-                    var u_t = pcg.next_float()
-                    # Inverse CDF of the truncated exponential: exact, cheap.
-                    var t_c = -log(max(Float32(1.0) - u_t * pc_norm, Float32(1e-7))) / sigma_t.r
-                    cand_v = ray_org + ray_dir * t_c
-                var u_nee = pcg.next_float()
-                var ls_result = light_sampler_sample(ls, u_nee)
-                var light_idx = ls_result[0]
-                var light_sel_pdf = ls_result[1]
-                var al = sd.areaLights[unsafe_offset=light_idx]
-                var lmesh = sd.meshes[unsafe_offset=Int(al.meshIdx)]
-                var lti = area_light_pick_triangle(al, pcg.next_float())
-                var r1 = pcg.next_float()
-                var r2 = pcg.next_float()
-                var lb = lti * 3
-                var lv0 = Int(lmesh.vertexIndices[unsafe_offset=lb])
-                var lv1 = Int(lmesh.vertexIndices[unsafe_offset=lb + 1])
-                var lv2 = Int(lmesh.vertexIndices[unsafe_offset=lb + 2])
-                var lp0 = Vec3f(lmesh.points[unsafe_offset=lv0*4], lmesh.points[unsafe_offset=lv0*4+1], lmesh.points[unsafe_offset=lv0*4+2])
-                var lp1 = Vec3f(lmesh.points[unsafe_offset=lv1*4], lmesh.points[unsafe_offset=lv1*4+1], lmesh.points[unsafe_offset=lv1*4+2])
-                var lp2 = Vec3f(lmesh.points[unsafe_offset=lv2*4], lmesh.points[unsafe_offset=lv2*4+1], lmesh.points[unsafe_offset=lv2*4+2])
-                var sqrt_r1 = sqrt(r1)
-                var light_point = lp0 * (Float32(1) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1) - r2)) + lp2 * (sqrt_r1 * r2)
-                var lcross = cross(lp1 - lp0, lp2 - lp0)
-                var lcross_len = sqrt(max(Float32(1e-14), dot(lcross, lcross)))
-                var light_normal = lcross * (Float32(1) / lcross_len)
-
-                # Every candidate must be streamed, including a rejected one:
-                # reservoir_update increments m unconditionally, and RIS's 1/M
-                # normalization is only right if m counts candidates CONSIDERED
-                # rather than candidates that happened to be usable.
-                var w_cand = Float32(0.0)
-                var p_hat_cand = Float32(0.0)
-                var to_light_c = light_point - cand_v
-                var dist_c = sqrt(dot(to_light_c, to_light_c))
-                if dist_c > Float32(0.0001) and al.total_area > Float32(0) and light_sel_pdf > Float32(0):
-                    var lp_v = Vec3f(light_point[0], light_point[1], light_point[2])
-                    var ln_v = Vec3f(light_normal[0], light_normal[1], light_normal[2])
-                    p_hat_cand = vol_target_pdf(
-                        ray_dir, cand_v, res.sigma_s, med.g,
-                        lp_v, ln_v, al.emission, VOL_TR_UNIT)
-                    if p_hat_cand > Float32(0.0):
-                        # q is the AREA-measure pdf of this sample: probability
-                        # of picking this light, times a uniform 1/total_area.
-                        var q_cand = light_sel_pdf / al.total_area
-                        w_cand = p_hat_cand / q_cand
-                if reservoir_update(res.state, w_cand, pcg.next_float()):
-                    res.light_point = Vec3f(light_point[0], light_point[1], light_point[2])
-                    res.light_normal = Vec3f(light_normal[0], light_normal[1], light_normal[2])
-                    res.le = al.emission
-                    res.light_idx = Int32(light_idx)
-                    res.valid = Int8(1)
-                    # The winning VERTEX travels with the winning light: the
-                    # resolve below shadow-rays from here, and the payload is
-                    # what a reusing pixel would read. Identical to scatter_v
-                    # when distance resampling is off.
-                    res.scatter_point = cand_v
-                    p_hat_win = p_hat_cand
-
-            # Phase 7.3: temporal reuse when this call has a real per-pixel
-            # slot (gpu_render_sample only); otherwise the single-frame path
-            # 7.2 already shipped, unchanged. vol_temporal_spatial_combine
-            # finalizes res.state AND writes it back to vol_write[pixel_idx]
-            # internally -- no separate persistence step needed here. Spatial
-            # reuse is NOT enabled: gbuf_depth/gbuf_world_pos are left at
-            # their null-sentinel default inside vol_reservoir_io_null(), and
-            # vol_temporal_spatial_combine's spatial pass self-disables on
-            # that (see restir_vol.mojo's own null-safety contract).
-            # `vol_used[i]` (one entry per PATH SLOT for this dispatch/frame,
-            # NOT per pixel across frames -- that's vol_read/vol_write's job)
-            # guards a real bug found verifying the CPU wiring: a single
-            # path can have MULTIPLE real scatter events inside a dense
-            # medium within one frame (this scene's optical depth is ~8
-            # through the sphere, so 10+ scatters per sample is common) --
-            # _sample_medium_core runs once per bounce ROUND, so each of
-            # those events independently called vol_temporal_spatial_combine
-            # and overwrote vol_write[pixel_idx], leaving only the LAST
-            # in-frame scatter's result actually persisted. Traced live: the
-            # reservoir's state.m plateaued around 40 (never reaching
-            # VOL_TEMPORAL_M_CAP=64) and MSE-vs-a-16384spp-reference got
-            # WORSE from 16 to 256 accumulated frames instead of better --
-            # exactly the "stalled convergence = bias" signature documented
-            # in project_restir_migration's DI Bug 2 section. This affected
-            # the GPU-only commit (1685154c) too, silently, since that
-            # verification pass's methodology (fixed-budget MSE across 5
-            # seeds) didn't happen to expose it the way this session's CPU
-            # convergence-rate check did. Fix: only the path's FIRST real
-            # scatter this frame gets the temporal combine (mirrors DI's own
-            # "one NEE per pixel per frame" scoping, applied per-PATH since
-            # media have no fixed bounce-0 the way surfaces do); every later
-            # in-frame scatter falls back to the plain single-frame RIS
-            # estimator (7.2's original, always-correct behavior) instead of
-            # corrupting the persisted reservoir.
-            # Distance resampling and temporal reuse COMPOSE (they were once
-            # mutually exclusive here, on a premise that turned out to be
-            # backwards -- see the shift-mode choice below).
-            var vol_reuse_ok = (pixel_idx >= 0 and _is_real_ptr(vol_read)
-                and _is_real_ptr(vol_used) and vol_used[unsafe_offset=i] == Int8(0))
-            if vol_reuse_ok:
-                vol_used[unsafe_offset=i] = Int8(1)
-                var vol_io = vol_reservoir_io_null()
-                vol_io.read = vol_read
-                vol_io.write = vol_write
-                vol_io.gbuf_depth = vol_gbuf_depth
-                vol_io.gbuf_world_pos = vol_gbuf_world_pos
-                vol_io.frame_w = vol_frame_w
-                vol_io.frame_h = vol_frame_h
-                var ray_o_s = path_ptr[].ray.origin.to_simd()
-                var ray_d_s = path_ptr[].ray.direction.to_simd()
-                var ray_o = Vec3f(ray_o_s[0], ray_o_s[1], ray_o_s[2])
-                var ray_d = Vec3f(ray_d_s[0], ray_d_s[1], ray_d_s[2])
-                # Which shift is valid depends on how this frame's vertex was
-                # produced, and the two cases are opposites:
-                #
-                # dist_ris ON -> `identity`. The vertex came from q(t), which
-                # depends only on sigma_t and t_surf -- the same for every
-                # frame at this pixel -- so a donor's vertex is a draw from
-                # exactly our own proposal. Domains match, Jacobian 1.
-                #
-                # dist_ris OFF -> `retarget`. The vertex is delta-tracking's
-                # single t_free, a point mass that differs every frame; our
-                # proposal could never have produced the donor's. Import only
-                # the light sample and keep our own vertex, which is plain
-                # ReSTIR DI reuse.
-                #
-                # The guard that used to sit here had this backwards: it
-                # claimed `identity` re-targets onto this pixel's vertex and
-                # so could not survive distance resampling. `identity` does
-                # the opposite -- it keeps the DONOR's vertex verbatim -- so
-                # the configuration it permitted (dist_ris off + reuse) was
-                # the inconsistent one, and the configuration it forbade was
-                # the well-founded one. See the resolve below for the bug
-                # that inconsistency caused.
-                var vol_shift = VolShiftMode.identity if dist_ris else VolShiftMode.retarget
-                vol_temporal_spatial_combine(
-                    res, ray_o, ray_d, Int32(med_idx), pcg,
-                    vol_io, pixel_idx, vol_shift)
-            else:
-                reservoir_finalize(res.state, p_hat_win)
-
-            # ── Resolve: one visibility ray + one transmittance march, for
-            # the winner only.
-            if res.valid != Int8(0) and res.state.w > Float32(0.0):
-                var light_point = res.light_point.to_simd()
-                var light_normal = res.light_normal.to_simd()
-                # Shadow-ray from the WINNER's vertex, ALWAYS -- this is the
-                # one point that must agree with the target evaluation, since
-                # reservoir_finalize set W = w_sum/(m * p_hat(winner)) using
-                # p_hat at res.scatter_point. Tracing F from anywhere else
-                # multiplies an F from one vertex by a W from another and the
-                # RIS identity is gone.
-                #
-                # This used to read `res.scatter_point if dist_ris else
-                # scatter_pt_s`, which was a live bias whenever temporal reuse
-                # won with a donor sample: the donor's vertex went into p_hat
-                # (and into W) while the shadow ray still left from THIS
-                # frame's vertex. It stayed hidden because both points lie on
-                # the same camera ray in a homogeneous fog, so the two targets
-                # are close and the error is a quiet scale factor rather than
-                # anything visible.
-                #
-                # Equal to scatter_pt_s whenever nothing moved the vertex --
-                # every candidate writes cand_v, which is scatter_v itself
-                # unless distance resampling drew a new one -- so the default
-                # (no reuse, no distance resampling) path is unchanged.
-                var resolve_pt = res.scatter_point.to_simd()
-                var to_light = light_point - resolve_pt
-                var dist_sq = dot(to_light, to_light)
-                var dist = sqrt(dist_sq)
-                var shadow_dir = to_light * (Float32(1) / dist)
-                var cos_l = -dot(light_normal, shadow_dir)
-                if cos_l > Float32(0):
-                    var shad_org = point3f(resolve_pt + shadow_dir * Float32(0.0002))
-                    var shad_ray = Ray_C(shad_org, vec3f(shadow_dir))
-                    var shad_tmax = max(dist - Float32(0.0002), Float32(0.0)) * Float32(0.9995)
-                    if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shad_ray, shad_tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, n_spheres, materials=sd.materials):
-                        var T: RGB
-                        if med.grid_idx >= Int32(0) or med.nvdb_idx >= Int32(0):
-                            # Ratio-tracking transmittance through the grid (see
-                            # sample_medium_gpu's docstring). The density
-                            # lookup returns 0 past the grid's bounds for
-                            # EITHER source (grid_sample_density's [p0,p1] box,
-                            # nvdb_sample_density's index bbox), so this
-                            # naturally stops attenuating once the shadow ray
-                            # exits the medium -- same dual-source dispatch as
-                            # the free-flight sampling above.
-                            var use_nvdb_s = med.nvdb_idx >= Int32(0)
-                            var grid_s = sd.grids[unsafe_offset=Int(med.grid_idx)] if not use_nvdb_s else Grid_C(
-                                Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0), Int32(0),
-                                Point3f(Float32(0), Float32(0), Float32(0)), Point3f(Float32(0), Float32(0), Float32(0)),
-                                SIMD[DType.float32, 16](0), Float32(0))
-                            var nvdb_grid_s = sd.nvdbGrids[unsafe_offset=Int(med.nvdb_idx)] if use_nvdb_s else NvdbGrid_C(
-                                Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Int64(0), SIMD[DType.float32, 16](0),
-                                SIMD[DType.float32, 16](0), Vec3f(Float32(0), Float32(0), Float32(0)),
-                                Point3f(Float32(0), Float32(0), Float32(0)), Point3f(Float32(0), Float32(0), Float32(0)), Float32(0))
-                            var majorant_s = nvdb_grid_s.max_density if use_nvdb_s else grid_s.max_density
-                            var sigma_maj_s = majorant_s * sigma_t.r
-                            var Tval = Float32(1.0)
-                            if sigma_maj_s > Float32(0.0):
-                                var ts = Float32(0.0)
-                                var siters = 0
-                                while siters < MEDIUM_TRACK_MAX_ITERS:
-                                    siters += 1
-                                    var us = pcg.next_float()
-                                    ts += -log(max(us, Float32(1e-7))) / sigma_maj_s
-                                    if ts >= dist:
-                                        break
-                                    var ps = resolve_pt + shadow_dir * ts
-                                    var density_s = nvdb_sample_density(nvdb_grid_s, ps) if use_nvdb_s else grid_sample_density(grid_s, ps)
-                                    Tval *= Float32(1.0) - (density_s * sigma_t.r) / sigma_maj_s
-                                    if Tval < Float32(1e-4):
-                                        Tval = Float32(0.0)
-                                        break
-                            T = RGB(Tval, Tval, Tval)
-                        else:
-                            # Beer-Lambert over the part of the segment that is
-                            # actually INSIDE the medium, not the whole way to
-                            # the light.
-                            #
-                            # This used to attenuate over `dist` unconditionally,
-                            # which charges the vacuum between the medium's
-                            # boundary and the light for extinction it never
-                            # applies. The grid branch above is accidentally
-                            # immune -- its density lookup returns 0 outside the
-                            # grid, so ratio tracking simply stops attenuating --
-                            # which is why only homogeneous media showed it.
-                            # Measured on an area-lit slab: homogeneous read
-                            # 0.117x pbrt where uniformgrid read 0.954x at the
-                            # same geometry, against a predicted e^2 = 7.4x for
-                            # the 2 units of vacuum involved.
-                            #
-                            # The exit distance is the first interface surface
-                            # along the segment. Occlusion has already been
-                            # ruled out above, so any hit here is a non-opaque
-                            # boundary. Scope: this finds ONE exit, which is
-                            # exact for a ray leaving a single convex medium --
-                            # the case every medium scene in the corpus has --
-                            # and does not model re-entry or nested media. A
-                            # general version needs the medium-transition walk
-                            # bdpt.mojo's _visible_transmittance already does.
-                            #
-                            # test_spheres is REQUIRED here, not optional:
-                            # traverse_bvh2_core walks the mesh/curve BVH only,
-                            # and analytic sd.spheres live in their own flat array.
-                            # A `MediumInterface .. Shape "sphere"` boundary --
-                            # the single most common way to bound a medium, and
-                            # what every fog/cloud test scene here uses -- was
-                            # therefore never found, so t_med stayed at the FULL
-                            # distance to the light and Beer-Lambert charged the
-                            # vacuum outside the medium for extinction it never
-                            # applies. Measured on a tau=8 fog sphere lit by a
-                            # mesh quad: exp(-2.02*6) instead of exp(-2.02*2),
-                            # i.e. PT read 0.0000567 where the same scene with a
-                            # mesh-box boundary reads 0.0355 (574x too dark).
-                            # Same root cause and same shape as the sphere case
-                            # bdpt.mojo's _visible_transmittance needed, and as
-                            # the vacuum-attenuation bug this very branch was
-                            # written to fix -- that fix just never covered the
-                            # sphere-bounded case.
-                            var t_med = dist
-                            var _exit_inter = Array[Intersection_C, 1](fill=Intersection_C(
-                                PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
-                                Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
-                            var exit_ptr = _exit_inter.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-                            exit_ptr[unsafe_offset=0].hit = Int8(0)
-                            traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shad_ray,
-                                               shad_tmax, exit_ptr, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
-                            test_spheres(sd.spheres, n_spheres, shad_ray, exit_ptr)
-                            # test_spheres ignores shad_tmax (it bounds only by
-                            # an already-recorded closer hit), so a sphere past
-                            # the light would otherwise set t_med > dist and
-                            # over-attenuate instead of under-.
-                            if exit_ptr[unsafe_offset=0].hit != Int8(0) and exit_ptr[unsafe_offset=0].tHit <= shad_tmax:
-                                var exit_mat = sd.materials[unsafe_offset=Int(exit_ptr[unsafe_offset=0].primId.materialIndex)]
-                                if exit_mat.type == MatKind.interface:
-                                    t_med = exit_ptr[unsafe_offset=0].tHit
-                            T = RGB(exp(-sigma_t.r * t_med), exp(-sigma_t.g * t_med), exp(-sigma_t.b * t_med))
-                        # The old `geom` also carried al.total_area/light_sel_pdf,
-                        # i.e. 1/q -- that now lives inside res.state.w, so the
-                        # geometry factor here is the bare cos_l/dist^2.
-                        var geom = cos_l / dist_sq
-                        var ph_a = hg_phase(dot(-ray_dir, shadow_dir), med.g)
-                        # MIS against phase sampling. A volume scatter sets
-                        # lastBsdfPdf to the phase pdf and specularBounce to 0,
-                        # so a phase-sampled ray that lands on this same emitter
-                        # is ALREADY weighted by power_heuristic(pdf_bsdf,
-                        # pdf_light) in shading.mojo's emitter-hit handler --
-                        # but this side carried no weight at all, so the two
-                        # strategies summed to more than one. Invisible for
-                        # small/distant lights, where phase sampling almost
-                        # never finds the emitter and this weight is ~1; it grew
-                        # to 1.70x too bright once the lights subtended a large
-                        # solid angle. pdf_light is deliberately spelled exactly
-                        # as the emitter-hit side spells it -- MIS is only
-                        # correct if both halves agree on the pdf.
-                        var al_win = sd.areaLights[unsafe_offset=Int(res.light_idx)]
-                        var sel_lo = sd.lightSampler.cdf[unsafe_offset=Int(res.light_idx)]
-                        var sel_hi = sd.lightSampler.cdf[unsafe_offset=Int(res.light_idx) + 1]
-                        var sel_pdf_win = max(sel_hi - sel_lo, Float32(1e-6))
-                        var mis_w = Float32(1.0)
-                        if al_win.total_area > Float32(0.0):
-                            var pdf_light = dist_sq * sel_pdf_win / (cos_l * al_win.total_area)
-                            mis_w = power_heuristic(pdf_light, ph_a)
-                        path_ptr[].estimate += path_ptr[].throughput * medium_emission_spectral(
-                            res.le * T, path_ptr[].wavelengths, sd.spectral.coeffs, sd.spectral.res,
-                            sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65) * (geom * ph_a * mis_w * res.state.w)
-
-        # ── Volume scatter NEE — INFINITE (environment) light ────────────
-        # Without this a medium lit ONLY by a sky dome -- which is every
-        # nanovdb cloud scene in the pbrt-v4 corpus (bunny-cloud, explosion,
-        # disney-cloud) and any uniformgrid scene with no area light -- got
-        # NO direct lighting at scatter points at all: the block above is
-        # gated on Int(sd.areaLightCount) > 0 and samples triangle area lights only.
-        # Such a medium was then lit purely by phase-sampled paths that
-        # random-walk back out of it and happen to escape to the sky, which
-        # is both far too dark (measured on bunny-cloud: the cloud came out
-        # at ~0.49x the sky's radiance where the reference has it at
-        # ~1.0-1.8x, and a 0.952-albedo medium must be roughly sky-bright)
-        # and extremely high variance -- that is where the sparse bright
-        # "firefly" dots on those renders came from.
         # ── Volume scatter NEE — distant / point / sphere / infinite ─────
         # The block above samples triangle AREA lights only, and is gated on
         # Int(sd.areaLightCount) > 0. Every other light type contributed nothing at a
