@@ -6,18 +6,17 @@ from std.testing import assert_true, TestSuite
 from gonzales.lexer import PbrtScanner
 from gonzales.parse_types import SceneParseState
 from gonzales.pbrt_parser import parse_scene_file, finalize_scene, mojo_parsed_free, ParsedScene_Mojo
-from gonzales.pipeline import _gpu_upload_scene
-from gonzales.gpu_scene import GpuSceneHandle
+from gonzales.gpu_scene import GpuSceneHandle, gpu_upload_scene
 from gonzales.materials import Material_C, MatKind
 from gonzales.bvh import BVH2Node
 
 # ── Full SceneDescriptor2_C + GPU scene-upload fixture (task #58) ──────────
-# gpu_upload_scene (gpu.mojo) had zero automated coverage before this: every
-# one of its ~55 parameters and dozen-plus device-buffer uploads was only
+# gpu_upload_scene (gpu_scene.mojo) had zero automated coverage before this: every
+# its dozen-plus device-buffer uploads were only
 # ever exercised indirectly by manually rendering a real scene with --gpu.
 # This drives a real scene through the actual parser (parse_scene_file +
 # finalize_scene, the same functions mojo_parse_scene calls) — not a hand-
-# faked ParsedScene_Mojo — then uploads it via the same _gpu_upload_scene
+# faked ParsedScene_Mojo — then uploads it via the same gpu_upload_scene
 # helper pipeline.mojo's real render path uses, and reads several of the
 # resulting device buffers back to host to confirm the copies are correct,
 # not just crash-free.
@@ -83,7 +82,7 @@ def test_gpu_upload_scene_round_trips_mesh_and_material_data() raises:
         sobol[unsafe_offset=i] = UInt32(i * 7 + 3)
 
     var n_pixels = Int(psc[unsafe_offset=0].film_w) * Int(psc[unsafe_offset=0].film_h)
-    var handle = _gpu_upload_scene(psc, sobol, n_pixels)
+    var handle = gpu_upload_scene(psc, sobol, n_pixels)
     assert_true(Int(handle) != 0)
 
     assert_true(handle[].meshes.mesh_count == 1)

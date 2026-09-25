@@ -445,9 +445,9 @@ def gpu_render_sample[Oc: Origin[mut=True]](
             # dispatch. Gated on the scene actually containing an SSS medium
             # so no other scene pays for it.
             comptime _SSS_WALK_ROUNDS = 256
-            if handle[].n_mediums > 0:
+            if handle[].media.n_mediums > 0:
                 gpu_max_rounds += _MEDIUM_INTERFACE_MARGIN
-            if handle[].has_sss_medium:
+            if handle[].media.has_sss_medium:
                 gpu_max_rounds += _SSS_WALK_ROUNDS
             for _ in range(gpu_max_rounds):
                 _gpu_bounce_kernels(handle, n_int, grid_dim, px_scale, maxDepth,
@@ -567,9 +567,9 @@ def gpu_render_wavefront(
             # dispatch. Gated on the scene actually containing an SSS medium
             # so no other scene pays for it.
             comptime _SSS_WALK_ROUNDS = 256
-            if handle[].n_mediums > 0:
+            if handle[].media.n_mediums > 0:
                 gpu_max_rounds += _MEDIUM_INTERFACE_MARGIN
-            if handle[].has_sss_medium:
+            if handle[].media.has_sss_medium:
                 gpu_max_rounds += _SSS_WALK_ROUNDS
             for _ in range(gpu_max_rounds):
                 _gpu_bounce_kernels(

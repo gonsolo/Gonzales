@@ -6836,10 +6836,10 @@ def sppm_render_gpu(
                 psc[unsafe_offset=0].camera_to_world,
                 Int(psc[unsafe_offset=0].film_w), Int(psc[unsafe_offset=0].film_h))
 
-            var mediums = handle[].mediums_buf.unsafe_ptr().unsafe_bitcast[Medium_C]()
-            var grids_dev = handle[].grids_buf.unsafe_ptr().unsafe_bitcast[Grid_C]()
-            var nvdb_grids_dev = handle[].nvdb_grids_buf.unsafe_ptr().unsafe_bitcast[NvdbGrid_C]()
-            var n_mediums = Int64(handle[].n_mediums)
+            var mediums = handle[].media.mediums_buf.unsafe_ptr().unsafe_bitcast[Medium_C]()
+            var grids_dev = handle[].media.grids_buf.unsafe_ptr().unsafe_bitcast[Grid_C]()
+            var nvdb_grids_dev = handle[].media.nvdb_grids_buf.unsafe_ptr().unsafe_bitcast[NvdbGrid_C]()
+            var n_mediums = Int64(handle[].media.n_mediums)
             var (spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) = handle[].spectral.unsafe_ptrs()
             var gsd = handle[].scene_descriptor()
 

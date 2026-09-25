@@ -7,6 +7,7 @@ from .media import Grid_C, MediumInterface_C, Medium_C, NvdbGrid_C
 from .primitives import Instance_C, Intersection_C, PrimId_C, Sphere_C, TriangleMesh_C
 from .render_state import FilmDims, FilterParams, GpuTexture_C, NormalSlopeMap_C, PathState_C, ShadowTask_C
 from .spectrum import SpectralHandle
+from .pbrt_parser import ParsedScene_Mojo
 from .restir_di import DIReservoir
 from .restir_vol import VolReservoir
 from max.algorithm import parallelize
@@ -268,6 +269,32 @@ struct SpectralBuffers(Movable):
             typed_ptr[Float32](self.d65_buf),
         )
 
+    @staticmethod
+    def upload(
+        ctx: DeviceContext,
+        spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
+        spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
+        spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
+        spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
+        spectral_d65: Pointer[Float32, MutUntrackedOrigin],
+    ) raises -> Self:
+        # Upload the spectral (Jakob-Hanika) coefficient table + CIE
+        # X/Y/Z/D65 tables, if a real one was loaded (spectral.res > 0)
+        # — Stage 2c-1, see project_spectral_rendering memory. Dummy
+        # 1-element buffers otherwise (BDPT/SPPM GPU dispatch don't wire
+        # spectral yet — Stage 3/4 — same "at least 1 elem" convention
+        # already used above for zero-size scene data).
+        comptime CIE_N = 95
+        var spec_coeffs_count = (3 * spectral_res * spectral_res * spectral_res * 3) if spectral_res > 0 else 0
+        var spec_cie_count = CIE_N if spectral_res > 0 else 0
+        var spec_coeffs_gpu_buf = _gpu_upload_array[Float32](ctx, spectral_coeffs, spec_coeffs_count)
+        var spec_cie_x_gpu_buf = _gpu_upload_array[Float32](ctx, spectral_cie_x, spec_cie_count)
+        var spec_cie_y_gpu_buf = _gpu_upload_array[Float32](ctx, spectral_cie_y, spec_cie_count)
+        var spec_cie_z_gpu_buf = _gpu_upload_array[Float32](ctx, spectral_cie_z, spec_cie_count)
+        var spec_d65_gpu_buf   = _gpu_upload_array[Float32](ctx, spectral_d65, spec_cie_count)
+        return Self(coeffs_buf=spec_coeffs_gpu_buf^, cie_x_buf=spec_cie_x_gpu_buf^, cie_y_buf=spec_cie_y_gpu_buf^,
+                    cie_z_buf=spec_cie_z_gpu_buf^, d65_buf=spec_d65_gpu_buf^, res=spectral_res)
+
 @fieldwise_init
 struct BvhBuffers(Movable):
     var nodes_buf: DeviceBuffer[DType.uint8]
@@ -280,6 +307,15 @@ struct BvhBuffers(Movable):
     @always_inline
     def prim_ids_ptr(mut self) -> Pointer[PrimId_C, MutUntrackedOrigin]:
         return typed_ptr[PrimId_C](self.prim_ids_buf)
+
+    @staticmethod
+    def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo) raises -> Self:
+        # Upload BVH nodes and prim IDs (copy only the real bytes; the
+        # buffer may be a 1-element placeholder when the scene has no
+        # geometry).
+        var bvh_buf = _gpu_upload_array[BVH2Node](ctx, s.bvh_nodes_cpu, Int(s.bvh_node_count_cpu))
+        var prim_buf = _gpu_upload_array[PrimId_C](ctx, s.prim_ids_cpu, Int(s.prim_count_cpu))
+        return Self(nodes_buf=bvh_buf^, prim_ids_buf=prim_buf^)
 
 @fieldwise_init
 struct BlasBuffers(Movable):
@@ -301,6 +337,33 @@ struct BlasBuffers(Movable):
     def primids_arr(mut self) -> Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin]:
         return typed_ptr[Pointer[PrimId_C, MutUntrackedOrigin]](self.primids_ptrs_buf)
 
+    @staticmethod
+    def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo) raises -> Self:
+        # Upload object-instancing data: one device buffer per BLAS (its
+        # nodes + primids), then two small "array of device pointers"
+        # buffers so a kernel's blasNodesArr[i]/blasPrimIdsArr[i] resolves
+        # to the right BLAS — same two-level indirection as the CPU side
+        # (see bvh.mojo's _traverse_instance_leaf).
+        var n_blas_int = Int(s.blas_count)
+        var blas_nodes_bufs = List[DeviceBuffer[DType.uint8]]()
+        var blas_primids_bufs = List[DeviceBuffer[DType.uint8]]()
+        var blas_nodes_ptrs_host = unsafe_alloc[Pointer[UInt8, MutUntrackedOrigin]](max(n_blas_int, 1))
+        var blas_primids_ptrs_host = unsafe_alloc[Pointer[UInt8, MutUntrackedOrigin]](max(n_blas_int, 1))
+        for bi in range(n_blas_int):
+            blas_nodes_ptrs_host[unsafe_offset=bi] = _gpu_upload_owned[BVH2Node](
+                ctx, blas_nodes_bufs, s.blas_nodes_arr[unsafe_offset=bi], Int(s.blas_node_counts[unsafe_offset=bi])).unsafe_bitcast[UInt8]()
+            blas_primids_ptrs_host[unsafe_offset=bi] = _gpu_upload_owned[PrimId_C](
+                ctx, blas_primids_bufs, s.blas_primids_arr[unsafe_offset=bi], Int(s.blas_primid_counts[unsafe_offset=bi])).unsafe_bitcast[UInt8]()
+
+        var blas_nodes_ptrs_buf = _gpu_upload_array[Pointer[UInt8, MutUntrackedOrigin]](
+            ctx, blas_nodes_ptrs_host, n_blas_int)
+        var blas_primids_ptrs_buf = _gpu_upload_array[Pointer[UInt8, MutUntrackedOrigin]](
+            ctx, blas_primids_ptrs_host, n_blas_int)
+        ctx.synchronize()   # the host pointer arrays are freed next
+        blas_nodes_ptrs_host.unsafe_free(); blas_primids_ptrs_host.unsafe_free()
+        return Self(nodes_bufs=blas_nodes_bufs^, primids_bufs=blas_primids_bufs^, nodes_ptrs_buf=blas_nodes_ptrs_buf^,
+                    primids_ptrs_buf=blas_primids_ptrs_buf^, n_blas=n_blas_int)
+
 @fieldwise_init
 struct MeshBuffers(Movable):
     var meshes_buf: DeviceBuffer[DType.uint8]
@@ -317,6 +380,70 @@ struct MeshBuffers(Movable):
     def meshes_ptr(mut self) -> Pointer[TriangleMesh_C, MutUntrackedOrigin]:
         return typed_ptr[TriangleMesh_C](self.meshes_buf)
 
+    @staticmethod
+    def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo) raises -> Self:
+        # Upload per-mesh vertex/index/uv data and build device-side mesh structs
+        var points_bufs = List[DeviceBuffer[DType.uint8]]()
+        var face_bufs = List[DeviceBuffer[DType.uint8]]()
+        var vert_bufs = List[DeviceBuffer[DType.uint8]]()
+        var uv_bufs   = List[DeviceBuffer[DType.uint8]]()
+        var nrm_bufs  = List[DeviceBuffer[DType.uint8]]()
+        # Alpha masks are shared between meshes on the host (one per
+        # file); upload each once, keyed by its host address.
+        var alpha_bufs = List[DeviceBuffer[DType.uint8]]()
+        var alpha_host_keys = List[Int]()
+        var alpha_dev_ptrs = List[Pointer[UInt8, MutUntrackedOrigin]]()
+
+        var mesh_structs_host = unsafe_alloc[TriangleMesh_C](max(Int(s.mesh_count), 1))
+
+        for i in range(Int(s.mesh_count)):
+            var host_mesh = s.meshes[unsafe_offset=i]
+
+            # Points (Float32), face and vertex indices (Int64), then UVs (2 floats
+            # per vertex) and shading normals (3 per vertex), each a zeroed
+            # 4-byte buffer when the mesh has none.
+            # points are padded to 4 floats per vertex
+            var pts_dptr = _gpu_upload_owned[Float32](ctx, points_bufs, host_mesh.points, Int(s.mesh_n_verts[unsafe_offset=i]) * 4)
+            var fi_dptr = _gpu_upload_owned[Int64](ctx, face_bufs, host_mesh.faceIndices, Int(s.mesh_n_tris[unsafe_offset=i]))
+            var vi_dptr = _gpu_upload_owned[Int64](ctx, vert_bufs, host_mesh.vertexIndices, Int(s.mesh_n_tris[unsafe_offset=i]) * 3)
+            var uv_n = Int(s.mesh_uv_n_verts[unsafe_offset=i])
+            var uv_dptr: Pointer[Float32, MutUntrackedOrigin]
+            if uv_n > 0:
+                uv_dptr = _gpu_upload_owned[Float32](ctx, uv_bufs, host_mesh.uvs, uv_n * 2)
+            else:
+                uv_dptr = _gpu_zeros_owned[Float32](ctx, uv_bufs, 1)
+            var nrm_n = Int(s.mesh_nrm_n_verts[unsafe_offset=i])
+            var nrm_dptr = Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=1)   # "no normals"
+            if nrm_n > 0:
+                nrm_dptr = _gpu_upload_owned[Float32](ctx, nrm_bufs, host_mesh.normals, nrm_n * 3)
+            else:
+                _ = _gpu_zeros_owned[Float32](ctx, nrm_bufs, 1)
+
+            var alpha_dptr = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling()
+            if host_mesh.alpha_w > Int32(0):
+                var key = Int(host_mesh.alpha)
+                var found = -1
+                for ai in range(len(alpha_host_keys)):
+                    if alpha_host_keys[ai] == key:
+                        found = ai
+                        break
+                if found < 0:
+                    found = len(alpha_host_keys)
+                    alpha_host_keys.append(key)
+                    alpha_dev_ptrs.append(_gpu_upload_owned[UInt8](ctx, alpha_bufs, host_mesh.alpha,
+                        Int(host_mesh.alpha_w) * Int(host_mesh.alpha_h)))
+                alpha_dptr = alpha_dev_ptrs[found]
+            mesh_structs_host[unsafe_offset=i] = TriangleMesh_C(pts_dptr, fi_dptr, vi_dptr, uv_dptr, nrm_dptr,
+                alpha_dptr, host_mesh.alpha_w, host_mesh.alpha_h, host_mesh.alpha_const)
+
+        # Upload mesh struct array
+        var meshes_buf = _gpu_upload_array[TriangleMesh_C](ctx, mesh_structs_host, Int(s.mesh_count))
+        ctx.synchronize()   # mesh_structs_host is freed next
+        mesh_structs_host.unsafe_free()
+        return Self(meshes_buf=meshes_buf^, mesh_count=Int(s.mesh_count), points_bufs=points_bufs^,
+                    faceIndices_bufs=face_bufs^, vertexIndices_bufs=vert_bufs^, uv_bufs=uv_bufs^,
+                    nrm_bufs=nrm_bufs^, alpha_bufs=alpha_bufs^)
+
 @fieldwise_init
 struct TextureBuffers(Movable):
     var tex_data_bufs: List[DeviceBuffer[DType.uint8]]
@@ -327,6 +454,105 @@ struct TextureBuffers(Movable):
     @always_inline
     def textures_ptr(mut self) -> Pointer[GpuTexture_C, MutUntrackedOrigin]:
         return typed_ptr[GpuTexture_C](self.textures_buf)
+
+    @staticmethod
+    def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo) raises -> Self:
+        # Load and upload textures
+        var n_textures_int = Int(s.tex_count)
+        # Textures referenced as normal maps hold linear data and must NOT be
+        # sRGB-decoded on load. Mark those indices by scanning the materials.
+        var tex_is_raw = unsafe_alloc[Bool](max(n_textures_int, 1))
+        for ti in range(n_textures_int):
+            tex_is_raw[unsafe_offset=ti] = False
+        for mi in range(Int(s.material_count)):
+            var nidx = Int(s.materials[unsafe_offset=mi].normal_tex_idx)
+            if nidx >= 0 and nidx < n_textures_int:
+                tex_is_raw[unsafe_offset=nidx] = True
+        # Many scenes (e.g. landscape) declare a separate named Texture per
+        # instance even when several instances share the same underlying
+        # image file (batch-exported "-renamed-N" duplicates). Dedup by
+        # (filename, raw-ness) so each unique file is only loaded from disk
+        # and uploaded to the GPU once, instead of once per declaration.
+        var dup_of = unsafe_alloc[Int32](max(n_textures_int, 1))
+        for ti in range(n_textures_int):
+            dup_of[unsafe_offset=ti] = Int32(-1)
+            for tj in range(ti):
+                if dup_of[unsafe_offset=tj] == Int32(-1) and tex_is_raw[unsafe_offset=tj] == tex_is_raw[unsafe_offset=ti] and \
+                   _cstr_eq(s.tex_filenames[unsafe_offset=ti], s.tex_filenames[unsafe_offset=tj]):
+                    dup_of[unsafe_offset=ti] = Int32(tj)
+                    break
+        var tex_data_bufs = List[DeviceBuffer[DType.uint8]]()
+        var gpu_textures_host = unsafe_alloc[GpuTexture_C](max(n_textures_int, 1))
+        # 8-bit textures stay 8-bit on the GPU and decode through one of two
+        # 256-entry tables (linear at 0, sRGB at 256), built by the oiio bridge
+        # exactly as load_texture_rgb decodes, so level 0 matches the float path.
+        var lut_host = unsafe_alloc[Float32](512)
+        _ = external_call["texture_uint8_lut", NoneType, Int32, Pointer[Float32, MutUntrackedOrigin]](Int32(0), lut_host)
+        _ = external_call["texture_uint8_lut", NoneType, Int32, Pointer[Float32, MutUntrackedOrigin]](Int32(1), lut_host.unsafe_offset(256))
+        var lut_buf = ctx.enqueue_create_buffer[DType.float32](512)
+        ctx.enqueue_copy(lut_buf, lut_host)
+        var lut_dev = lut_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+        var inv_host = unsafe_alloc[UInt8](2 * _INV_LUT_SIZE)
+        _build_inverse_lut(lut_host, inv_host)
+        _build_inverse_lut(lut_host.unsafe_offset(256), inv_host.unsafe_offset(_INV_LUT_SIZE))
+        # Decoding and mip building are independent per file and dominate
+        # startup on texture-heavy scenes (Bistro), so run them on every core,
+        # workers claiming the next texture from a shared cursor (file sizes
+        # vary a lot). Uploads then happen here, in texture order, so the GPU
+        # receives exactly the buffers a serial loop would build.
+        var host_tex = unsafe_alloc[_HostTexture](max(n_textures_int, 1))
+        var next_tex = unsafe_alloc[Int32](1)
+        next_tex[unsafe_offset=0] = Int32(0)
+
+        def decode_worker(_worker_idx: Int) {imm}:
+            while True:
+                var ti = Int(Atomic.fetch_add(next_tex, Int32(1)))
+                if ti >= n_textures_int:
+                    break
+                if dup_of[unsafe_offset=ti] == Int32(-1):
+                    var raw_flag = Int32(1) if tex_is_raw[unsafe_offset=ti] else Int32(0)
+                    host_tex[unsafe_offset=ti] = _load_host_texture(s.tex_filenames[unsafe_offset=ti], raw_flag, lut_host, inv_host)
+
+        if n_textures_int > 0:
+            parallelize(decode_worker, min(num_performance_cores(), n_textures_int))
+        next_tex.unsafe_free()
+
+        var tex_bytes = 0
+        for ti in range(n_textures_int):
+            if dup_of[unsafe_offset=ti] != Int32(-1):
+                gpu_textures_host[unsafe_offset=ti] = gpu_textures_host[unsafe_offset=Int(dup_of[unsafe_offset=ti])]
+                continue
+            var ht = host_tex[unsafe_offset=ti]
+            if ht.n_bytes == 0:
+                gpu_textures_host[unsafe_offset=ti] = GpuTexture_C(Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
+                    Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+                    Int32(0), Int32(0), Int32(0), Int32(0), Int32(GpuTexture_C.FORMAT_F32))
+                continue
+            var lut = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
+            if Int(ht.format) == GpuTexture_C.FORMAT_U8:
+                lut = lut_dev.unsafe_offset(Int(ht.lut_off))
+            gpu_textures_host[unsafe_offset=ti] = GpuTexture_C(_gpu_upload_owned[UInt8](ctx, tex_data_bufs, ht.data, ht.n_bytes),
+                lut, ht.width, ht.height, ht.n_levels, ht.channels, ht.format)
+            tex_bytes += ht.n_bytes
+        var textures_gpu_buf = _gpu_upload_array[GpuTexture_C](ctx, gpu_textures_host, n_textures_int)
+        # The uploads above are asynchronous; free their host sources once they're done.
+        ctx.synchronize()
+        for ti in range(n_textures_int):
+            if dup_of[unsafe_offset=ti] == Int32(-1) and host_tex[unsafe_offset=ti].n_bytes > 0:
+                host_tex[unsafe_offset=ti].data.unsafe_free()
+        host_tex.unsafe_free()
+        lut_host.unsafe_free(); inv_host.unsafe_free()
+        var n_unique_tex = 0
+        for ti in range(n_textures_int):
+            if dup_of[unsafe_offset=ti] == Int32(-1):
+                n_unique_tex += 1
+        gpu_textures_host.unsafe_free()
+        tex_is_raw.unsafe_free()
+        dup_of.unsafe_free()
+        print("GPU: " + String(n_textures_int) + " texture(s) uploaded ("
+              + String(n_unique_tex) + " unique file(s) loaded, "
+              + String(tex_bytes // (1024 * 1024)) + " MB)")
+        return Self(tex_data_bufs=tex_data_bufs^, textures_buf=textures_gpu_buf^, lut_buf=lut_buf^, n_textures=n_textures_int)
 
 @fieldwise_init
 struct LightBuffers(Movable):
@@ -364,6 +590,68 @@ struct LightBuffers(Movable):
     @always_inline
     def infinite_lights_ptr(mut self) -> Pointer[InfiniteLight_C, MutUntrackedOrigin]:
         return typed_ptr[InfiniteLight_C](self.infinite_lights_buf)
+
+    @staticmethod
+    def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo) raises -> Self:
+        # Upload area lights. tri_cdf is a HOST pointer in the parsed
+        # lights, so each mesh light's CDF goes up on its own and the
+        # device copy of the struct points at that.
+        var al_cdf_bufs = List[DeviceBuffer[DType.uint8]]()
+        var al_host = unsafe_alloc[AreaLight_C](max(Int(s.area_light_count), 1))
+        for ali in range(Int(s.area_light_count)):
+            var al_i = s.area_lights[unsafe_offset=ali]
+            if al_i.kind == Int8(0) and _is_real_ptr(al_i.tri_cdf) and al_i.n_tris > Int32(0):
+                al_i.tri_cdf = _gpu_upload_owned[Float32](ctx, al_cdf_bufs, al_i.tri_cdf, Int(al_i.n_tris))
+            else:
+                al_i.tri_cdf = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
+            al_host[unsafe_offset=ali] = al_i
+        var al_buf = _gpu_upload_array[AreaLight_C](ctx, al_host, Int(s.area_light_count))
+        ctx.synchronize()   # al_host is freed next
+        al_host.unsafe_free()
+        # Upload distant (directional) lights
+        var dl_buf = _gpu_upload_array[DistantLight_C](ctx, s.distant_lights, Int(s.distant_count))
+
+        # Upload point lights
+        var pl_buf = _gpu_upload_array[PointLight_C](ctx, s.point_lights, Int(s.point_count))
+
+        # Upload light sampler CDF (n+1 Float32 entries), in a buffer of at
+        # least 2 entries: pad a host copy, since enqueue_copy copies the whole
+        # buffer. (No map_to_host anywhere here: its first use pins a ~1.3 GiB
+        # host pool, ~1 s of page faults.)
+        var ls_entries = Int(s.light_sampler.n) + 1
+        var ls_host = unsafe_alloc[Float32](max(ls_entries, 2))
+        ls_host[unsafe_offset=1] = Float32(0)
+        unsafe_memcpy(dest=ls_host, src=s.light_sampler.cdf, count=ls_entries)
+        var ls_buf = _gpu_upload_array[Float32](ctx, ls_host, max(ls_entries, 2))
+        ctx.synchronize()   # ls_host is freed next
+        ls_host.unsafe_free()
+
+        # Upload infinite/environment lights with GPU-resident pixel/CDF data
+        var il_count = Int(s.infinite_count)
+        var il_pixels_bufs = List[DeviceBuffer[DType.uint8]]()
+        var il_cdf_bufs    = List[DeviceBuffer[DType.uint8]]()
+        var il_w2l_bufs    = List[DeviceBuffer[DType.uint8]]()
+        var il_patched = unsafe_alloc[InfiniteLight_C](max(il_count, 1))
+        for ii in range(il_count):
+            var il = s.infinite_lights[unsafe_offset=ii]
+            # world_to_light matrix (16 floats), then pixels + CDF when textured.
+            il.world_to_light = _gpu_upload_owned[Float32](ctx, il_w2l_bufs, il.world_to_light, 16)
+            if il.cdf_w > Int32(0) and _is_real_ptr(il.pixels_ptr):
+                var iw = Int(il.cdf_w); var ih = Int(il.cdf_h)
+                # Pixels: iw × ih × 3 floats. CDF: (ih+1) marginal rows + ih×(iw+1) conditional entries.
+                il.pixels_ptr = _gpu_upload_owned[Float32](ctx, il_pixels_bufs, il.pixels_ptr, iw * ih * 3)
+                il.cdf_ptr = _gpu_upload_owned[Float32](ctx, il_cdf_bufs, il.cdf_ptr, (ih + 1) + ih * (iw + 1))
+            il_patched[unsafe_offset=ii] = il
+        var il_buf = _gpu_upload_array[InfiniteLight_C](ctx, il_patched, il_count)
+        ctx.synchronize()   # il_patched is freed next
+        il_patched.unsafe_free()
+        print("GPU: " + String(il_count) + " infinite light(s) uploaded")
+        return Self(area_lights_buf=al_buf^, area_light_cdf_bufs=al_cdf_bufs^, n_area_lights=Int(s.area_light_count),
+                    distant_lights_buf=dl_buf^, n_distant_lights=Int(s.distant_count),
+                    point_lights_buf=pl_buf^, n_point_lights=Int(s.point_count),
+                    light_sampler_buf=ls_buf^, n_light_sampler=Int(s.light_sampler.n),
+                    infinite_lights_buf=il_buf^, il_pixels_bufs=il_pixels_bufs^, il_cdf_bufs=il_cdf_bufs^,
+                    il_w2l_bufs=il_w2l_bufs^, n_infinite_lights=Int(s.infinite_count))
 
 @fieldwise_init
 struct CurveBuffers(Movable):
@@ -409,6 +697,178 @@ struct CurveBuffers(Movable):
     def compact_counter_ptr(mut self) -> Pointer[Int32, MutUntrackedOrigin]:
         return typed_ptr[Int32](self.compact_counter_buf)
 
+    @staticmethod
+    def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo, n_pix: Int) raises -> Self:
+        # Upload curves (native hair/fur primitives — control points only, no tessellation)
+        var curve_buf = _gpu_upload_array[Curve_C](ctx, s.curves, Int(s.curve_count))
+        # Curve-divergence-mitigation scratch. curve_cand_prim/curve_cand_count
+        # are indexed by every path's tid unconditionally inside
+        # traverse_paths_gpu (curve_cand_count[tid] = 0 runs for every active
+        # path regardless of whether the scene has curves — it's the reset
+        # before that ray's BVH walk), so they must always be sized for the
+        # full n_pix×WAVEFRONT_BATCH path range. Sizing them to a 1-element
+        # dummy for non-curve scenes (as a memory-saving measure) was an
+        # out-of-bounds GPU write for every tid > 0 on every one of the ~57
+        # non-curve scenes in the comparison suite — corrupting whatever
+        # else the allocator happened to place nearby, hence the scene-
+        # dependent dark/wrong-color regression this fixes.
+        # curve_compact_path_buf/curve_compact_counter_buf are only ever
+        # touched by compact_curve_paths_gpu/resolve_curve_candidates_gpu,
+        # both gated behind `if handle[].curves.n_curves > 0` at the dispatch site,
+        # so those two are still safe to leave dummy-sized.
+        var n_curve_paths = n_pix * WAVEFRONT_BATCH
+        var r_curve_cand_prim_buf   = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * CURVE_DEFER_K * 4)
+        var r_curve_cand_count_buf  = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * 4)
+        var r_curve_cand_offset_buf = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * 4)
+        ctx.enqueue_function[init_curve_cand_offset_gpu](
+            r_curve_cand_offset_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            Int64(n_curve_paths),
+            grid_dim=ceildiv(n_curve_paths, 256), block_dim=256,
+        )
+        var n_curve_compact_paths = n_curve_paths if Int(s.curve_count) > 0 else 1
+        var r_curve_compact_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_curve_compact_paths * 4)
+        var r_curve_compact_counter_buf = ctx.enqueue_create_buffer[DType.uint8](4)
+        return Self(curves_buf=curve_buf^, n_curves=Int(s.curve_count), cand_prim_buf=r_curve_cand_prim_buf^,
+                    cand_count_buf=r_curve_cand_count_buf^, cand_offset_buf=r_curve_cand_offset_buf^,
+                    compact_path_buf=r_curve_compact_path_buf^, compact_counter_buf=r_curve_compact_counter_buf^)
+
+@fieldwise_init
+struct MediaBuffers(Movable):
+    var mediums_buf: DeviceBuffer[DType.uint8]        # n_mediums × sizeof(Medium_C)
+    var n_mediums: Int
+    var has_sss_medium: Bool
+    var medium_ifaces_buf: DeviceBuffer[DType.uint8]  # n_medium_ifaces × sizeof(MediumInterface_C)
+    var n_medium_ifaces: Int
+    var grids_buf: DeviceBuffer[DType.uint8]          # n_grids × sizeof(Grid_C); Grid_C.density points into grid_density_bufs
+    var n_grids: Int
+    var grid_density_bufs: List[DeviceBuffer[DType.uint8]]  # kept alive; one per grid's density array
+    var nvdb_grids_buf: DeviceBuffer[DType.uint8]     # n_nvdb_grids × sizeof(NvdbGrid_C); NvdbGrid_C.blob points into nvdb_blob_bufs
+    var n_nvdb_grids: Int
+    var nvdb_blob_bufs: List[DeviceBuffer[DType.uint8]]  # kept alive; one per grid's decompressed .nvdb blob
+
+    @staticmethod
+    def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo) raises -> Self:
+        # Upload participating media (small array; >= 1 elem to avoid zero-size buffer)
+        var med_buf = _gpu_upload_array[Medium_C](ctx, s.mediums, Int(s.medium_count))
+        # Read the SSS flag off the host copy while it is still in reach --
+        # the round-budget decision this feeds is made on the host, and
+        # reading it back off the device later would need a sync.
+        var has_sss_med = False
+        for mi in range(Int(s.medium_count)):
+            if s.mediums[unsafe_offset=mi].is_sss != Int32(0):
+                has_sss_med = True
+                break
+
+        # Upload medium interfaces
+        var miface_buf = _gpu_upload_array[MediumInterface_C](ctx, s.medium_ifaces, Int(s.medium_iface_count))
+
+        # Upload heterogeneous density grids ("uniformgrid" media). Each
+        # grid's (potentially large) density array gets its own device
+        # buffer, mirroring the per-mesh points_bufs pattern; the Grid_C
+        # struct array embeds device-resident pointers into those buffers.
+        var grid_density_bufs = List[DeviceBuffer[DType.uint8]]()
+        var n_grids_int = Int(s.grid_count)
+        var grid_structs_host = unsafe_alloc[Grid_C](max(n_grids_int, 1))
+        for gi in range(n_grids_int):
+            var host_grid = s.grids[unsafe_offset=gi]
+            var n_voxels = Int(host_grid.nx) * Int(host_grid.ny) * Int(host_grid.nz)
+            grid_structs_host[unsafe_offset=gi] = Grid_C(
+                _gpu_upload_owned[Float32](ctx, grid_density_bufs, host_grid.density, n_voxels),
+                host_grid.nx, host_grid.ny, host_grid.nz,
+                host_grid.p0, host_grid.p1,
+                host_grid.world_to_medium, host_grid.max_density)
+        var grids_buf = _gpu_upload_array[Grid_C](ctx, grid_structs_host, n_grids_int)
+        ctx.synchronize()   # grid_structs_host is freed next
+        grid_structs_host.unsafe_free()
+        if n_grids_int > 0:
+            print("GPU: " + String(n_grids_int) + " heterogeneous density grid(s) uploaded")
+
+        # Upload sparse density grids ("nanovdb" media). Same shape as
+        # the dense-grid upload just above: each grid's decompressed
+        # blob gets its own device buffer, and the NvdbGrid_C struct
+        # array embeds device-resident pointers into those buffers.
+        var nvdb_blob_bufs = List[DeviceBuffer[DType.uint8]]()
+        var n_nvdb_grids_int = Int(s.nvdb_grid_count)
+        var nvdb_structs_host = unsafe_alloc[NvdbGrid_C](max(n_nvdb_grids_int, 1))
+        for gi in range(n_nvdb_grids_int):
+            var host_nvdb = s.nvdb_grids[unsafe_offset=gi]
+            nvdb_structs_host[unsafe_offset=gi] = NvdbGrid_C(
+                _gpu_upload_owned[UInt8](ctx, nvdb_blob_bufs, host_nvdb.blob, Int(host_nvdb.blob_size)),
+                host_nvdb.blob_size,
+                host_nvdb.world_to_medium, host_nvdb.inv_map, host_nvdb.map_vec,
+                host_nvdb.index_min, host_nvdb.index_max, host_nvdb.max_density)
+        var nvdb_grids_buf = _gpu_upload_array[NvdbGrid_C](ctx, nvdb_structs_host, n_nvdb_grids_int)
+        ctx.synchronize()   # nvdb_structs_host is freed next
+        nvdb_structs_host.unsafe_free()
+        if n_nvdb_grids_int > 0:
+            print("GPU: " + String(n_nvdb_grids_int) + " sparse (nanovdb) density grid(s) uploaded")
+        return Self(mediums_buf=med_buf^, n_mediums=Int(s.medium_count), has_sss_medium=has_sss_med,
+                    medium_ifaces_buf=miface_buf^, n_medium_ifaces=Int(s.medium_iface_count),
+                    grids_buf=grids_buf^, n_grids=n_grids_int, grid_density_bufs=grid_density_bufs^,
+                    nvdb_grids_buf=nvdb_grids_buf^, n_nvdb_grids=n_nvdb_grids_int, nvdb_blob_bufs=nvdb_blob_bufs^)
+
+
+@fieldwise_init
+struct MeasuredBuffers(Movable):
+    var brdfs_buf: DeviceBuffer[DType.uint8]  # n_brdfs × sizeof(MeasuredBRDF_C); each entry's 12 pointer fields point into field_bufs
+    var n_brdfs: Int
+    var field_bufs: List[DeviceBuffer[DType.uint8]]  # kept alive; 12 sub-array buffers per measured material
+
+    @staticmethod
+    def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo) raises -> Self:
+        # Upload MeasuredBxDF tabulated-BRDF tensors ("measured" material,
+        # see project_measured_bxdf memory / lovely-dazzling-meteor plan
+        # Stage 3). Each measured material owns 12 flat Float32 arrays
+        # (theta_i/phi_i/wavelengths + ndf/sigma/vndf/luminance/spectra
+        # data+CDFs); each gets its own device buffer, mirroring the
+        # per-mesh points_bufs / per-grid grid_density_bufs pattern. The
+        # patched MeasuredBRDF_C struct array embeds device-resident
+        # pointers into those buffers -- loaded from the array *inside*
+        # the GPU kernel (a load, not a cross-call by-value pass) and
+        # handed only to @always_inline helpers, per the by-value
+        # pointer-struct hazard already documented on MeasuredBRDF_C.
+        var measured_field_bufs = List[DeviceBuffer[DType.uint8]]()
+        var n_measured_int = Int(s.measured_count)
+        var measured_structs_host = unsafe_alloc[MeasuredBRDF_C](max(n_measured_int, 1))
+        for mi in range(n_measured_int):
+            var hm = s.measured_brdfs[unsafe_offset=mi]
+            var slices2 = Int(hm.n_phi_i) * Int(hm.n_theta_i)
+            var slices3 = slices2 * Int(hm.n_wavelengths)
+            var vndf_n = slices2 * Int(hm.vndf_xs) * Int(hm.vndf_ys)
+            var lum_n = slices2 * Int(hm.lum_xs) * Int(hm.lum_ys)
+            var theta_i_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.theta_i, Int(hm.n_theta_i))
+            var phi_i_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.phi_i, Int(hm.n_phi_i))
+            var wavelengths_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.wavelengths, Int(hm.n_wavelengths))
+            var ndf_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.ndf_data, Int(hm.ndf_xs) * Int(hm.ndf_ys))
+            var sigma_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.sigma_data, Int(hm.sigma_xs) * Int(hm.sigma_ys))
+            var vndf_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.vndf_data, vndf_n)
+            var vndf_marg_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.vndf_marg, slices2 * Int(hm.vndf_ys))
+            var vndf_cond_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.vndf_cond, vndf_n)
+            var lum_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.lum_data, lum_n)
+            var lum_marg_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.lum_marg, slices2 * Int(hm.lum_ys))
+            var lum_cond_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.lum_cond, lum_n)
+            var spectra_dptr = _gpu_upload_owned[Float32](
+                ctx, measured_field_bufs, hm.spectra_data, slices3 * Int(hm.spectra_xs) * Int(hm.spectra_ys))
+
+            measured_structs_host[unsafe_offset=mi] = MeasuredBRDF_C(
+                hm.isotropic, hm.n_theta_i, hm.n_phi_i, hm.n_wavelengths,
+                theta_i_dptr, phi_i_dptr, wavelengths_dptr,
+                ndf_dptr, hm.ndf_xs, hm.ndf_ys,
+                sigma_dptr, hm.sigma_xs, hm.sigma_ys,
+                vndf_dptr, vndf_marg_dptr, vndf_cond_dptr, hm.vndf_xs, hm.vndf_ys,
+                lum_dptr, lum_marg_dptr, lum_cond_dptr, hm.lum_xs, hm.lum_ys,
+                hm.stride2_phi, hm.stride2_theta,
+                spectra_dptr, hm.spectra_xs, hm.spectra_ys,
+                hm.stride3_phi, hm.stride3_theta, hm.stride3_lambda,
+            )
+        var measured_brdfs_buf = _gpu_upload_array[MeasuredBRDF_C](ctx, measured_structs_host, n_measured_int)
+        ctx.synchronize()   # measured_structs_host is freed next
+        measured_structs_host.unsafe_free()
+        if n_measured_int > 0:
+            print("GPU: " + String(n_measured_int) + " measured BRDF(s) uploaded")
+        return Self(brdfs_buf=measured_brdfs_buf^, n_brdfs=n_measured_int, field_bufs=measured_field_bufs^)
+
+
 # GPU scene handle — holds DeviceContext and device-resident scene buffers.
 # Allocated on the heap, returned as an opaque pointer.
 @fieldwise_init
@@ -426,24 +886,8 @@ struct GpuSceneHandle(Movable):
     var spheres_buf: DeviceBuffer[DType.uint8]   # n_spheres × sizeof(Sphere_C) = 36
     var n_spheres: Int
     var curves: CurveBuffers
-    var mediums_buf: DeviceBuffer[DType.uint8]        # n_mediums × sizeof(Medium_C)
-    var n_mediums: Int
-    # True if any medium is a `Material "subsurface"` interior. Read once on
-    # the host to size the bounce-round budget -- an interior random walk
-    # needs far more rounds than an ordinary path (see the round-count block
-    # in gpu_render_sample and Medium_C.is_sss).
-    var has_sss_medium: Bool
-    var medium_ifaces_buf: DeviceBuffer[DType.uint8]  # n_medium_ifaces × sizeof(MediumInterface_C)
-    var n_medium_ifaces: Int
-    var grids_buf: DeviceBuffer[DType.uint8]          # n_grids × sizeof(Grid_C); Grid_C.density points into grid_density_bufs
-    var n_grids: Int
-    var grid_density_bufs: List[DeviceBuffer[DType.uint8]]  # kept alive; one per grid's density array
-    var nvdb_grids_buf: DeviceBuffer[DType.uint8]     # n_nvdb_grids × sizeof(NvdbGrid_C); NvdbGrid_C.blob points into nvdb_blob_bufs
-    var n_nvdb_grids: Int
-    var nvdb_blob_bufs: List[DeviceBuffer[DType.uint8]]  # kept alive; one per grid's decompressed .nvdb blob
-    var measured_brdfs_buf: DeviceBuffer[DType.uint8]  # n_measured_brdfs × sizeof(MeasuredBRDF_C); each entry's 12 pointer fields point into measured_field_bufs
-    var n_measured_brdfs: Int
-    var measured_field_bufs: List[DeviceBuffer[DType.uint8]]  # kept alive; 12 sub-array buffers per measured material
+    var media: MediaBuffers
+    var measured: MeasuredBuffers
     # Persistent render buffers — sized for n_pixels × WAVEFRONT_BATCH (wavefront pass)
     # gpu_render_sample (interactive) only uses the first n_pixels slots.
     var path_buf: DeviceBuffer[DType.uint8]   # n_pixels × WAVEFRONT_BATCH × size_of[PathState_C]()
@@ -515,14 +959,14 @@ struct GpuSceneHandle(Movable):
             infiniteLights=self.lights.infinite_lights_ptr(), infiniteLightCount=Int64(self.lights.n_infinite_lights),
             spheres=typed_ptr[Sphere_C](self.spheres_buf), sphereCount=Int64(self.n_spheres),
             curves=self.curves.curves_ptr(), curveCount=Int64(self.curves.n_curves),
-            mediums=typed_ptr[Medium_C](self.mediums_buf), mediumCount=Int64(self.n_mediums),
-            mediumInterfaces=typed_ptr[MediumInterface_C](self.medium_ifaces_buf), mediumIfaceCount=Int64(self.n_medium_ifaces),
-            grids=typed_ptr[Grid_C](self.grids_buf), gridCount=Int64(self.n_grids),
-            nvdbGrids=typed_ptr[NvdbGrid_C](self.nvdb_grids_buf), nvdbGridCount=Int64(self.n_nvdb_grids),
+            mediums=typed_ptr[Medium_C](self.media.mediums_buf), mediumCount=Int64(self.media.n_mediums),
+            mediumInterfaces=typed_ptr[MediumInterface_C](self.media.medium_ifaces_buf), mediumIfaceCount=Int64(self.media.n_medium_ifaces),
+            grids=typed_ptr[Grid_C](self.media.grids_buf), gridCount=Int64(self.media.n_grids),
+            nvdbGrids=typed_ptr[NvdbGrid_C](self.media.nvdb_grids_buf), nvdbGridCount=Int64(self.media.n_nvdb_grids),
             lightSampler=LightSampler_C(cdf=self.lights.light_sampler_ptr(), n=Int32(self.lights.n_light_sampler), _pad=Int32(0)),
             blasNodesArr=self.blas.nodes_arr(), blasPrimIdsArr=self.blas.primids_arr(), blasCount=Int64(self.blas.n_blas),
             instances=typed_ptr[Instance_C](self.instances_buf), instanceCount=Int64(self.n_instances),
-            measuredBrdfs=typed_ptr[MeasuredBRDF_C](self.measured_brdfs_buf), measuredBrdfCount=Int64(self.n_measured_brdfs),
+            measuredBrdfs=typed_ptr[MeasuredBRDF_C](self.measured.brdfs_buf), measuredBrdfCount=Int64(self.measured.n_brdfs),
             spectral=SpectralHandle(sc, sres, sx, sy, sz, sd65),
             gpuTextures=self.textures.textures_ptr(), gpuTextureCount=Int64(self.textures.n_textures),
             normalSlopeMaps=Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
@@ -578,66 +1022,43 @@ def _gpu_zeros_owned[T: AnyType](
     bufs.append(buf^)
     return dptr
 
-def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origin[mut=True], Ouv: Origin[mut=True], Onv: Origin[mut=True]](
-    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    bvh2NodesCount: Int64,
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    primIdsCount: Int64,
-    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasNodeCounts: Pointer[Int32, MutUntrackedOrigin],
-    blasPrimidCounts: Pointer[Int32, MutUntrackedOrigin],
-    blasCount: Int64,
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
-    instanceCount: Int64,
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    meshCount: Int64,
-    meshPointsCounts: Pointer[Int64, Ompc],
-    meshFaceIndicesCounts: Pointer[Int64, Ofic],
-    meshVertexIndicesCounts: Pointer[Int64, Ovic],
-    meshUvNVerts: Pointer[Int64, Ouv],
-    meshNrmNVerts: Pointer[Int64, Onv],
-    tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
-    n_tex: Int32,
-    materials: Pointer[Material_C, MutUntrackedOrigin],
-    materialCount: Int64,
-    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
-    areaLightCount: Int64,
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
-    sphereCount: Int64,
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    curveCount: Int64,
-    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
-    distantLightCount: Int64,
-    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
-    pointLightCount: Int64,
-    lightSamplerCdf: Pointer[Float32, MutUntrackedOrigin],
-    lightSamplerN: Int64,
-    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
-    infiniteLightCount: Int64,
-    mediums: Pointer[Medium_C, MutUntrackedOrigin],
-    mediumCount: Int64,
-    medium_ifaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
-    medium_iface_count: Int64,
-    grids: Pointer[Grid_C, MutUntrackedOrigin],
-    gridCount: Int64,
-    nvdbGrids: Pointer[NvdbGrid_C, MutUntrackedOrigin],
-    nvdbGridCount: Int64,
-    measured_brdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin],
-    measuredBrdfCount: Int64,
-    n_pixels: Int64,
+def _report_gpu_memory(ctx: DeviceContext, ref s: ParsedScene_Mojo) raises:
+    # Check GPU memory
+    var mem_info = ctx.get_memory_info()
+    var free_bytes = mem_info[0]
+
+    # Guard against zero-size device buffers (scene with no geometry):
+    # a 0-byte enqueue_create_buffer yields a misaligned/invalid device
+    # pointer that crashes on use and on free. Allocate at least 1 elem.
+    var bvh_bytes = max(Int(s.bvh_node_count_cpu), 1) * size_of[BVH2Node]()
+    var prim_bytes = max(Int(s.prim_count_cpu), 1) * size_of[PrimId_C]()
+    var mesh_struct_bytes = max(Int(s.mesh_count), 1) * size_of[TriangleMesh_C]()
+
+    # Estimate total mesh data
+    var mesh_data_bytes = 0
+    for i in range(Int(s.mesh_count)):
+        mesh_data_bytes += Int(s.mesh_n_verts[unsafe_offset=i]) * 4 * 4       # Float32
+        mesh_data_bytes += Int(s.mesh_n_tris[unsafe_offset=i]) * 8  # Int64
+        mesh_data_bytes += Int(s.mesh_n_tris[unsafe_offset=i]) * 3 * 8 # Int64
+
+    var total_scene_bytes = bvh_bytes + prim_bytes + mesh_struct_bytes + mesh_data_bytes
+    var free_mb = free_bytes // (1024 * 1024)
+    var scene_mb = total_scene_bytes // (1024 * 1024)
+
+    print("GPU: " + String(ctx.name()) + " — " + String(free_mb) + " MB free")
+
+    if total_scene_bytes > Int(free_bytes):
+        print("WARNING: Scene (" + String(scene_mb) + " MB) may exceed available GPU memory (" + String(free_mb) + " MB)!")
+
+
+def gpu_upload_scene(
+    psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
-    r2c: Pointer[Float32, MutUntrackedOrigin],
-    c2w_init: Pointer[Float32, MutUntrackedOrigin],
-    filter: FilterParams,
-    film: FilmDims,
-    # Decomposed, NOT a single by-value `spectral: SpectralHandle` param --
-    # see spectrum.mojo's long comment on the confirmed by-value SpectralHandle
-    # miscompilation. This host function is part of the GPU-enabled
-    # compilation unit (--target-accelerator build), and passing the handle
-    # by value here reproduced the exact same corruption class (spectral_res
-    # read back as 0, coeffs pointer read back as a tiny garbage address) --
-    # see project_priority_backlog memory item 3 GPU-black-background bug.
+    n_pixels: Int,
+    # Decomposed rather than one by-value SpectralHandle: passing it by value
+    # here once read spectral_res back as 0 and coeffs as a garbage address.
+    # Never reproduced since (modular#6759 was closed unreproducible), but the
+    # decomposed form costs nothing.
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_res: Int = 0,
     spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
@@ -648,295 +1069,19 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
     comptime if has_accelerator():
         try:
             var ctx = DeviceContext()
-
-            # Check GPU memory
-            var mem_info = ctx.get_memory_info()
-            var free_bytes = mem_info[0]
-
-            # Guard against zero-size device buffers (scene with no geometry):
-            # a 0-byte enqueue_create_buffer yields a misaligned/invalid device
-            # pointer that crashes on use and on free. Allocate at least 1 elem.
-            var bvh_bytes = max(Int(bvh2NodesCount), 1) * size_of[BVH2Node]()
-            var prim_bytes = max(Int(primIdsCount), 1) * size_of[PrimId_C]()
-            var mesh_struct_bytes = max(Int(meshCount), 1) * size_of[TriangleMesh_C]()
-
-            # Estimate total mesh data
-            var mesh_data_bytes = 0
-            for i in range(Int(meshCount)):
-                mesh_data_bytes += Int(meshPointsCounts[unsafe_offset=i]) * 4       # Float32
-                mesh_data_bytes += Int(meshFaceIndicesCounts[unsafe_offset=i]) * 8  # Int64
-                mesh_data_bytes += Int(meshVertexIndicesCounts[unsafe_offset=i]) * 8 # Int64
-
-            var total_scene_bytes = bvh_bytes + prim_bytes + mesh_struct_bytes + mesh_data_bytes
-            var free_mb = free_bytes // (1024 * 1024)
-            var scene_mb = total_scene_bytes // (1024 * 1024)
-
-            print("GPU: " + String(ctx.name()) + " — " + String(free_mb) + " MB free")
-
-            if total_scene_bytes > Int(free_bytes):
-                print("WARNING: Scene (" + String(scene_mb) + " MB) may exceed available GPU memory (" + String(free_mb) + " MB)!")
-
-            # Upload BVH nodes and prim IDs (copy only the real bytes; the
-            # buffer may be a 1-element placeholder when the scene has no
-            # geometry).
-            var bvh_buf = _gpu_upload_array[BVH2Node](ctx, bvh2Nodes, Int(bvh2NodesCount))
-            var prim_buf = _gpu_upload_array[PrimId_C](ctx, primIds, Int(primIdsCount))
-
-            # Upload object-instancing data: one device buffer per BLAS (its
-            # nodes + primids), then two small "array of device pointers"
-            # buffers so a kernel's blasNodesArr[i]/blasPrimIdsArr[i] resolves
-            # to the right BLAS — same two-level indirection as the CPU side
-            # (see bvh.mojo's _traverse_instance_leaf).
-            var n_blas_int = Int(blasCount)
-            var blas_nodes_bufs = List[DeviceBuffer[DType.uint8]]()
-            var blas_primids_bufs = List[DeviceBuffer[DType.uint8]]()
-            var blas_nodes_ptrs_host = unsafe_alloc[Pointer[UInt8, MutUntrackedOrigin]](max(n_blas_int, 1))
-            var blas_primids_ptrs_host = unsafe_alloc[Pointer[UInt8, MutUntrackedOrigin]](max(n_blas_int, 1))
-            for bi in range(n_blas_int):
-                blas_nodes_ptrs_host[unsafe_offset=bi] = _gpu_upload_owned[BVH2Node](
-                    ctx, blas_nodes_bufs, blasNodesArr[unsafe_offset=bi], Int(blasNodeCounts[unsafe_offset=bi])).unsafe_bitcast[UInt8]()
-                blas_primids_ptrs_host[unsafe_offset=bi] = _gpu_upload_owned[PrimId_C](
-                    ctx, blas_primids_bufs, blasPrimIdsArr[unsafe_offset=bi], Int(blasPrimidCounts[unsafe_offset=bi])).unsafe_bitcast[UInt8]()
-
-            var blas_nodes_ptrs_buf = _gpu_upload_array[Pointer[UInt8, MutUntrackedOrigin]](
-                ctx, blas_nodes_ptrs_host, n_blas_int)
-            var blas_primids_ptrs_buf = _gpu_upload_array[Pointer[UInt8, MutUntrackedOrigin]](
-                ctx, blas_primids_ptrs_host, n_blas_int)
-            ctx.synchronize()   # the host pointer arrays are freed next
-            blas_nodes_ptrs_host.unsafe_free(); blas_primids_ptrs_host.unsafe_free()
-
-            var n_instances_int = Int(instanceCount)
-            var instances_gpu_buf = _gpu_upload_array[Instance_C](ctx, instances, n_instances_int)
-
-            # Upload per-mesh vertex/index/uv data and build device-side mesh structs
-            var points_bufs = List[DeviceBuffer[DType.uint8]]()
-            var face_bufs = List[DeviceBuffer[DType.uint8]]()
-            var vert_bufs = List[DeviceBuffer[DType.uint8]]()
-            var uv_bufs   = List[DeviceBuffer[DType.uint8]]()
-            var nrm_bufs  = List[DeviceBuffer[DType.uint8]]()
-            # Alpha masks are shared between meshes on the host (one per
-            # file); upload each once, keyed by its host address.
-            var alpha_bufs = List[DeviceBuffer[DType.uint8]]()
-            var alpha_host_keys = List[Int]()
-            var alpha_dev_ptrs = List[Pointer[UInt8, MutUntrackedOrigin]]()
-
-            var mesh_structs_host = unsafe_alloc[TriangleMesh_C](max(Int(meshCount), 1))
-
-            for i in range(Int(meshCount)):
-                var host_mesh = meshes[unsafe_offset=i]
-
-                # Points (Float32), face and vertex indices (Int64), then UVs (2 floats
-                # per vertex) and shading normals (3 per vertex), each a zeroed
-                # 4-byte buffer when the mesh has none.
-                var pts_dptr = _gpu_upload_owned[Float32](ctx, points_bufs, host_mesh.points, Int(meshPointsCounts[unsafe_offset=i]))
-                var fi_dptr = _gpu_upload_owned[Int64](ctx, face_bufs, host_mesh.faceIndices, Int(meshFaceIndicesCounts[unsafe_offset=i]))
-                var vi_dptr = _gpu_upload_owned[Int64](ctx, vert_bufs, host_mesh.vertexIndices, Int(meshVertexIndicesCounts[unsafe_offset=i]))
-                var uv_n = Int(meshUvNVerts[unsafe_offset=i])
-                var uv_dptr: Pointer[Float32, MutUntrackedOrigin]
-                if uv_n > 0:
-                    uv_dptr = _gpu_upload_owned[Float32](ctx, uv_bufs, host_mesh.uvs, uv_n * 2)
-                else:
-                    uv_dptr = _gpu_zeros_owned[Float32](ctx, uv_bufs, 1)
-                var nrm_n = Int(meshNrmNVerts[unsafe_offset=i])
-                var nrm_dptr = Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=1)   # "no normals"
-                if nrm_n > 0:
-                    nrm_dptr = _gpu_upload_owned[Float32](ctx, nrm_bufs, host_mesh.normals, nrm_n * 3)
-                else:
-                    _ = _gpu_zeros_owned[Float32](ctx, nrm_bufs, 1)
-
-                var alpha_dptr = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling()
-                if host_mesh.alpha_w > Int32(0):
-                    var key = Int(host_mesh.alpha)
-                    var found = -1
-                    for ai in range(len(alpha_host_keys)):
-                        if alpha_host_keys[ai] == key:
-                            found = ai
-                            break
-                    if found < 0:
-                        found = len(alpha_host_keys)
-                        alpha_host_keys.append(key)
-                        alpha_dev_ptrs.append(_gpu_upload_owned[UInt8](ctx, alpha_bufs, host_mesh.alpha,
-                            Int(host_mesh.alpha_w) * Int(host_mesh.alpha_h)))
-                    alpha_dptr = alpha_dev_ptrs[found]
-                mesh_structs_host[unsafe_offset=i] = TriangleMesh_C(pts_dptr, fi_dptr, vi_dptr, uv_dptr, nrm_dptr,
-                    alpha_dptr, host_mesh.alpha_w, host_mesh.alpha_h, host_mesh.alpha_const)
-
-            # Upload mesh struct array
-            var meshes_buf = _gpu_upload_array[TriangleMesh_C](ctx, mesh_structs_host, Int(meshCount))
-            ctx.synchronize()   # mesh_structs_host is freed next
-            mesh_structs_host.unsafe_free()
-
-            # Upload materials array (>= 1 elem to avoid a zero-size buffer)
-            var mat_buf = _gpu_upload_array[Material_C](ctx, materials, Int(materialCount))
-
-            ctx.synchronize()
-
-            # Upload area lights. tri_cdf is a HOST pointer in the parsed
-            # lights, so each mesh light's CDF goes up on its own and the
-            # device copy of the struct points at that.
-            var al_cdf_bufs = List[DeviceBuffer[DType.uint8]]()
-            var al_host = unsafe_alloc[AreaLight_C](max(Int(areaLightCount), 1))
-            for ali in range(Int(areaLightCount)):
-                var al_i = areaLights[unsafe_offset=ali]
-                if al_i.kind == Int8(0) and _is_real_ptr(al_i.tri_cdf) and al_i.n_tris > Int32(0):
-                    al_i.tri_cdf = _gpu_upload_owned[Float32](ctx, al_cdf_bufs, al_i.tri_cdf, Int(al_i.n_tris))
-                else:
-                    al_i.tri_cdf = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
-                al_host[unsafe_offset=ali] = al_i
-            var al_buf = _gpu_upload_array[AreaLight_C](ctx, al_host, Int(areaLightCount))
-            ctx.synchronize()   # al_host is freed next
-            al_host.unsafe_free()
-
-            # Upload spheres (analytical sphere primitives + sphere area lights)
-            var sphere_buf = _gpu_upload_array[Sphere_C](ctx, spheres, Int(sphereCount))
-
-            # Upload curves (native hair/fur primitives — control points only, no tessellation)
-            var curve_buf = _gpu_upload_array[Curve_C](ctx, curves, Int(curveCount))
-
-            # Upload distant (directional) lights
-            var dl_buf = _gpu_upload_array[DistantLight_C](ctx, distantLights, Int(distantLightCount))
-
-            # Upload point lights
-            var pl_buf = _gpu_upload_array[PointLight_C](ctx, pointLights, Int(pointLightCount))
-
-            # Upload light sampler CDF (n+1 Float32 entries), in a buffer of at
-            # least 2 entries: pad a host copy, since enqueue_copy copies the whole
-            # buffer. (No map_to_host anywhere here: its first use pins a ~1.3 GiB
-            # host pool, ~1 s of page faults.)
-            var ls_entries = Int(lightSamplerN) + 1
-            var ls_host = unsafe_alloc[Float32](max(ls_entries, 2))
-            ls_host[unsafe_offset=1] = Float32(0)
-            unsafe_memcpy(dest=ls_host, src=lightSamplerCdf, count=ls_entries)
-            var ls_buf = _gpu_upload_array[Float32](ctx, ls_host, max(ls_entries, 2))
-            ctx.synchronize()   # ls_host is freed next
-            ls_host.unsafe_free()
-
-            # Upload infinite/environment lights with GPU-resident pixel/CDF data
-            var il_count = Int(infiniteLightCount)
-            var il_pixels_bufs = List[DeviceBuffer[DType.uint8]]()
-            var il_cdf_bufs    = List[DeviceBuffer[DType.uint8]]()
-            var il_w2l_bufs    = List[DeviceBuffer[DType.uint8]]()
-            var il_patched = unsafe_alloc[InfiniteLight_C](max(il_count, 1))
-            for ii in range(il_count):
-                var il = infiniteLights[unsafe_offset=ii]
-                # world_to_light matrix (16 floats), then pixels + CDF when textured.
-                il.world_to_light = _gpu_upload_owned[Float32](ctx, il_w2l_bufs, il.world_to_light, 16)
-                if il.cdf_w > Int32(0) and _is_real_ptr(il.pixels_ptr):
-                    var iw = Int(il.cdf_w); var ih = Int(il.cdf_h)
-                    # Pixels: iw × ih × 3 floats. CDF: (ih+1) marginal rows + ih×(iw+1) conditional entries.
-                    il.pixels_ptr = _gpu_upload_owned[Float32](ctx, il_pixels_bufs, il.pixels_ptr, iw * ih * 3)
-                    il.cdf_ptr = _gpu_upload_owned[Float32](ctx, il_cdf_bufs, il.cdf_ptr, (ih + 1) + ih * (iw + 1))
-                il_patched[unsafe_offset=ii] = il
-            var il_buf = _gpu_upload_array[InfiniteLight_C](ctx, il_patched, il_count)
-            ctx.synchronize()   # il_patched is freed next
-            il_patched.unsafe_free()
-            print("GPU: " + String(il_count) + " infinite light(s) uploaded")
-
-            # Upload participating media (small array; >= 1 elem to avoid zero-size buffer)
-            var med_buf = _gpu_upload_array[Medium_C](ctx, mediums, Int(mediumCount))
-            # Read the SSS flag off the host copy while it is still in reach --
-            # the round-budget decision this feeds is made on the host, and
-            # reading it back off the device later would need a sync.
-            var has_sss_med = False
-            for mi in range(Int(mediumCount)):
-                if mediums[unsafe_offset=mi].is_sss != Int32(0):
-                    has_sss_med = True
-                    break
-
-            # Upload medium interfaces
-            var miface_buf = _gpu_upload_array[MediumInterface_C](ctx, medium_ifaces, Int(medium_iface_count))
-
-            # Upload heterogeneous density grids ("uniformgrid" media). Each
-            # grid's (potentially large) density array gets its own device
-            # buffer, mirroring the per-mesh points_bufs pattern; the Grid_C
-            # struct array embeds device-resident pointers into those buffers.
-            var grid_density_bufs = List[DeviceBuffer[DType.uint8]]()
-            var n_grids_int = Int(gridCount)
-            var grid_structs_host = unsafe_alloc[Grid_C](max(n_grids_int, 1))
-            for gi in range(n_grids_int):
-                var host_grid = grids[unsafe_offset=gi]
-                var n_voxels = Int(host_grid.nx) * Int(host_grid.ny) * Int(host_grid.nz)
-                grid_structs_host[unsafe_offset=gi] = Grid_C(
-                    _gpu_upload_owned[Float32](ctx, grid_density_bufs, host_grid.density, n_voxels),
-                    host_grid.nx, host_grid.ny, host_grid.nz,
-                    host_grid.p0, host_grid.p1,
-                    host_grid.world_to_medium, host_grid.max_density)
-            var grids_buf = _gpu_upload_array[Grid_C](ctx, grid_structs_host, n_grids_int)
-            ctx.synchronize()   # grid_structs_host is freed next
-            grid_structs_host.unsafe_free()
-            if n_grids_int > 0:
-                print("GPU: " + String(n_grids_int) + " heterogeneous density grid(s) uploaded")
-
-            # Upload sparse density grids ("nanovdb" media). Same shape as
-            # the dense-grid upload just above: each grid's decompressed
-            # blob gets its own device buffer, and the NvdbGrid_C struct
-            # array embeds device-resident pointers into those buffers.
-            var nvdb_blob_bufs = List[DeviceBuffer[DType.uint8]]()
-            var n_nvdb_grids_int = Int(nvdbGridCount)
-            var nvdb_structs_host = unsafe_alloc[NvdbGrid_C](max(n_nvdb_grids_int, 1))
-            for gi in range(n_nvdb_grids_int):
-                var host_nvdb = nvdbGrids[unsafe_offset=gi]
-                nvdb_structs_host[unsafe_offset=gi] = NvdbGrid_C(
-                    _gpu_upload_owned[UInt8](ctx, nvdb_blob_bufs, host_nvdb.blob, Int(host_nvdb.blob_size)),
-                    host_nvdb.blob_size,
-                    host_nvdb.world_to_medium, host_nvdb.inv_map, host_nvdb.map_vec,
-                    host_nvdb.index_min, host_nvdb.index_max, host_nvdb.max_density)
-            var nvdb_grids_buf = _gpu_upload_array[NvdbGrid_C](ctx, nvdb_structs_host, n_nvdb_grids_int)
-            ctx.synchronize()   # nvdb_structs_host is freed next
-            nvdb_structs_host.unsafe_free()
-            if n_nvdb_grids_int > 0:
-                print("GPU: " + String(n_nvdb_grids_int) + " sparse (nanovdb) density grid(s) uploaded")
-
-            # Upload MeasuredBxDF tabulated-BRDF tensors ("measured" material,
-            # see project_measured_bxdf memory / lovely-dazzling-meteor plan
-            # Stage 3). Each measured material owns 12 flat Float32 arrays
-            # (theta_i/phi_i/wavelengths + ndf/sigma/vndf/luminance/spectra
-            # data+CDFs); each gets its own device buffer, mirroring the
-            # per-mesh points_bufs / per-grid grid_density_bufs pattern. The
-            # patched MeasuredBRDF_C struct array embeds device-resident
-            # pointers into those buffers -- loaded from the array *inside*
-            # the GPU kernel (a load, not a cross-call by-value pass) and
-            # handed only to @always_inline helpers, per the by-value
-            # pointer-struct hazard already documented on MeasuredBRDF_C.
-            var measured_field_bufs = List[DeviceBuffer[DType.uint8]]()
-            var n_measured_int = Int(measuredBrdfCount)
-            var measured_structs_host = unsafe_alloc[MeasuredBRDF_C](max(n_measured_int, 1))
-            for mi in range(n_measured_int):
-                var hm = measured_brdfs[unsafe_offset=mi]
-                var slices2 = Int(hm.n_phi_i) * Int(hm.n_theta_i)
-                var slices3 = slices2 * Int(hm.n_wavelengths)
-                var vndf_n = slices2 * Int(hm.vndf_xs) * Int(hm.vndf_ys)
-                var lum_n = slices2 * Int(hm.lum_xs) * Int(hm.lum_ys)
-                var theta_i_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.theta_i, Int(hm.n_theta_i))
-                var phi_i_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.phi_i, Int(hm.n_phi_i))
-                var wavelengths_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.wavelengths, Int(hm.n_wavelengths))
-                var ndf_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.ndf_data, Int(hm.ndf_xs) * Int(hm.ndf_ys))
-                var sigma_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.sigma_data, Int(hm.sigma_xs) * Int(hm.sigma_ys))
-                var vndf_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.vndf_data, vndf_n)
-                var vndf_marg_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.vndf_marg, slices2 * Int(hm.vndf_ys))
-                var vndf_cond_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.vndf_cond, vndf_n)
-                var lum_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.lum_data, lum_n)
-                var lum_marg_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.lum_marg, slices2 * Int(hm.lum_ys))
-                var lum_cond_dptr = _gpu_upload_owned[Float32](ctx, measured_field_bufs, hm.lum_cond, lum_n)
-                var spectra_dptr = _gpu_upload_owned[Float32](
-                    ctx, measured_field_bufs, hm.spectra_data, slices3 * Int(hm.spectra_xs) * Int(hm.spectra_ys))
-
-                measured_structs_host[unsafe_offset=mi] = MeasuredBRDF_C(
-                    hm.isotropic, hm.n_theta_i, hm.n_phi_i, hm.n_wavelengths,
-                    theta_i_dptr, phi_i_dptr, wavelengths_dptr,
-                    ndf_dptr, hm.ndf_xs, hm.ndf_ys,
-                    sigma_dptr, hm.sigma_xs, hm.sigma_ys,
-                    vndf_dptr, vndf_marg_dptr, vndf_cond_dptr, hm.vndf_xs, hm.vndf_ys,
-                    lum_dptr, lum_marg_dptr, lum_cond_dptr, hm.lum_xs, hm.lum_ys,
-                    hm.stride2_phi, hm.stride2_theta,
-                    spectra_dptr, hm.spectra_xs, hm.spectra_ys,
-                    hm.stride3_phi, hm.stride3_theta, hm.stride3_lambda,
-                )
-            var measured_brdfs_buf = _gpu_upload_array[MeasuredBRDF_C](ctx, measured_structs_host, n_measured_int)
-            ctx.synchronize()   # measured_structs_host is freed next
-            measured_structs_host.unsafe_free()
-            if n_measured_int > 0:
-                print("GPU: " + String(n_measured_int) + " measured BRDF(s) uploaded")
+            ref s = psc[]
+            _report_gpu_memory(ctx, s)
+            var bvh = BvhBuffers.upload(ctx, s)
+            var blas = BlasBuffers.upload(ctx, s)
+            var instances_gpu_buf = _gpu_upload_array[Instance_C](ctx, s.instances, Int(s.instance_count))
+            var meshes = MeshBuffers.upload(ctx, s)
+            # >= 1 elem to avoid a zero-size buffer
+            var mat_buf = _gpu_upload_array[Material_C](ctx, s.materials, Int(s.material_count))
+            var lights = LightBuffers.upload(ctx, s)
+            # analytical sphere primitives + sphere area lights
+            var sphere_buf = _gpu_upload_array[Sphere_C](ctx, s.spheres, Int(s.sphere_count))
+            var media = MediaBuffers.upload(ctx, s)
+            var measured = MeasuredBuffers.upload(ctx, s)
 
             # Allocate persistent render buffers (zeroed film)
             var n_pix = max(Int(n_pixels), 1)
@@ -961,156 +1106,21 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[ShadowTask_C]() * WAVEFRONT_BATCH)
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](4)
             var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
-
-            # Curve-divergence-mitigation scratch. curve_cand_prim/curve_cand_count
-            # are indexed by every path's tid unconditionally inside
-            # traverse_paths_gpu (curve_cand_count[tid] = 0 runs for every active
-            # path regardless of whether the scene has curves — it's the reset
-            # before that ray's BVH walk), so they must always be sized for the
-            # full n_pix×WAVEFRONT_BATCH path range. Sizing them to a 1-element
-            # dummy for non-curve scenes (as a memory-saving measure) was an
-            # out-of-bounds GPU write for every tid > 0 on every one of the ~57
-            # non-curve scenes in the comparison suite — corrupting whatever
-            # else the allocator happened to place nearby, hence the scene-
-            # dependent dark/wrong-color regression this fixes.
-            # curve_compact_path_buf/curve_compact_counter_buf are only ever
-            # touched by compact_curve_paths_gpu/resolve_curve_candidates_gpu,
-            # both gated behind `if handle[].curves.n_curves > 0` at the dispatch site,
-            # so those two are still safe to leave dummy-sized.
-            var n_curve_paths = n_pix * WAVEFRONT_BATCH
-            var r_curve_cand_prim_buf   = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * CURVE_DEFER_K * 4)
-            var r_curve_cand_count_buf  = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * 4)
-            var r_curve_cand_offset_buf = ctx.enqueue_create_buffer[DType.uint8](n_curve_paths * 4)
-            ctx.enqueue_function[init_curve_cand_offset_gpu](
-                r_curve_cand_offset_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-                Int64(n_curve_paths),
-                grid_dim=ceildiv(n_curve_paths, 256), block_dim=256,
-            )
-            var n_curve_compact_paths = n_curve_paths if Int(curveCount) > 0 else 1
-            var r_curve_compact_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_curve_compact_paths * 4)
-            var r_curve_compact_counter_buf = ctx.enqueue_create_buffer[DType.uint8](4)
+            var curves = CurveBuffers.upload(ctx, s, n_pix)
             ctx.enqueue_memset(r_film_buf, UInt8(0))
             ctx.enqueue_memset(r_albedo_film_buf, UInt8(0))
-
-            # Load and upload textures
-            var n_textures_int = Int(n_tex)
-            # Textures referenced as normal maps hold linear data and must NOT be
-            # sRGB-decoded on load. Mark those indices by scanning the materials.
-            var tex_is_raw = unsafe_alloc[Bool](max(n_textures_int, 1))
-            for ti in range(n_textures_int):
-                tex_is_raw[unsafe_offset=ti] = False
-            for mi in range(Int(materialCount)):
-                var nidx = Int(materials[unsafe_offset=mi].normal_tex_idx)
-                if nidx >= 0 and nidx < n_textures_int:
-                    tex_is_raw[unsafe_offset=nidx] = True
-            # Many scenes (e.g. landscape) declare a separate named Texture per
-            # instance even when several instances share the same underlying
-            # image file (batch-exported "-renamed-N" duplicates). Dedup by
-            # (filename, raw-ness) so each unique file is only loaded from disk
-            # and uploaded to the GPU once, instead of once per declaration.
-            var dup_of = unsafe_alloc[Int32](max(n_textures_int, 1))
-            for ti in range(n_textures_int):
-                dup_of[unsafe_offset=ti] = Int32(-1)
-                for tj in range(ti):
-                    if dup_of[unsafe_offset=tj] == Int32(-1) and tex_is_raw[unsafe_offset=tj] == tex_is_raw[unsafe_offset=ti] and \
-                       _cstr_eq(tex_filenames[unsafe_offset=ti], tex_filenames[unsafe_offset=tj]):
-                        dup_of[unsafe_offset=ti] = Int32(tj)
-                        break
-            var tex_data_bufs = List[DeviceBuffer[DType.uint8]]()
-            var gpu_textures_host = unsafe_alloc[GpuTexture_C](max(n_textures_int, 1))
-            # 8-bit textures stay 8-bit on the GPU and decode through one of two
-            # 256-entry tables (linear at 0, sRGB at 256), built by the oiio bridge
-            # exactly as load_texture_rgb decodes, so level 0 matches the float path.
-            var lut_host = unsafe_alloc[Float32](512)
-            _ = external_call["texture_uint8_lut", NoneType, Int32, Pointer[Float32, MutUntrackedOrigin]](Int32(0), lut_host)
-            _ = external_call["texture_uint8_lut", NoneType, Int32, Pointer[Float32, MutUntrackedOrigin]](Int32(1), lut_host.unsafe_offset(256))
-            var lut_buf = ctx.enqueue_create_buffer[DType.float32](512)
-            ctx.enqueue_copy(lut_buf, lut_host)
-            var lut_dev = lut_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-            var inv_host = unsafe_alloc[UInt8](2 * _INV_LUT_SIZE)
-            _build_inverse_lut(lut_host, inv_host)
-            _build_inverse_lut(lut_host.unsafe_offset(256), inv_host.unsafe_offset(_INV_LUT_SIZE))
-            # Decoding and mip building are independent per file and dominate
-            # startup on texture-heavy scenes (Bistro), so run them on every core,
-            # workers claiming the next texture from a shared cursor (file sizes
-            # vary a lot). Uploads then happen here, in texture order, so the GPU
-            # receives exactly the buffers a serial loop would build.
-            var host_tex = unsafe_alloc[_HostTexture](max(n_textures_int, 1))
-            var next_tex = unsafe_alloc[Int32](1)
-            next_tex[unsafe_offset=0] = Int32(0)
-
-            def decode_worker(_worker_idx: Int) {imm}:
-                while True:
-                    var ti = Int(Atomic.fetch_add(next_tex, Int32(1)))
-                    if ti >= n_textures_int:
-                        break
-                    if dup_of[unsafe_offset=ti] == Int32(-1):
-                        var raw_flag = Int32(1) if tex_is_raw[unsafe_offset=ti] else Int32(0)
-                        host_tex[unsafe_offset=ti] = _load_host_texture(tex_filenames[unsafe_offset=ti], raw_flag, lut_host, inv_host)
-
-            if n_textures_int > 0:
-                parallelize(decode_worker, min(num_performance_cores(), n_textures_int))
-            next_tex.unsafe_free()
-
-            var tex_bytes = 0
-            for ti in range(n_textures_int):
-                if dup_of[unsafe_offset=ti] != Int32(-1):
-                    gpu_textures_host[unsafe_offset=ti] = gpu_textures_host[unsafe_offset=Int(dup_of[unsafe_offset=ti])]
-                    continue
-                var ht = host_tex[unsafe_offset=ti]
-                if ht.n_bytes == 0:
-                    gpu_textures_host[unsafe_offset=ti] = GpuTexture_C(Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
-                        Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-                        Int32(0), Int32(0), Int32(0), Int32(0), Int32(GpuTexture_C.FORMAT_F32))
-                    continue
-                var lut = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
-                if Int(ht.format) == GpuTexture_C.FORMAT_U8:
-                    lut = lut_dev.unsafe_offset(Int(ht.lut_off))
-                gpu_textures_host[unsafe_offset=ti] = GpuTexture_C(_gpu_upload_owned[UInt8](ctx, tex_data_bufs, ht.data, ht.n_bytes),
-                    lut, ht.width, ht.height, ht.n_levels, ht.channels, ht.format)
-                tex_bytes += ht.n_bytes
-            var textures_gpu_buf = _gpu_upload_array[GpuTexture_C](ctx, gpu_textures_host, n_textures_int)
-            # The uploads above are asynchronous; free their host sources once they're done.
-            ctx.synchronize()
-            for ti in range(n_textures_int):
-                if dup_of[unsafe_offset=ti] == Int32(-1) and host_tex[unsafe_offset=ti].n_bytes > 0:
-                    host_tex[unsafe_offset=ti].data.unsafe_free()
-            host_tex.unsafe_free()
-            lut_host.unsafe_free(); inv_host.unsafe_free()
-            var n_unique_tex = 0
-            for ti in range(n_textures_int):
-                if dup_of[unsafe_offset=ti] == Int32(-1):
-                    n_unique_tex += 1
-            gpu_textures_host.unsafe_free()
-            tex_is_raw.unsafe_free()
-            dup_of.unsafe_free()
-            print("GPU: " + String(n_textures_int) + " texture(s) uploaded ("
-                  + String(n_unique_tex) + " unique file(s) loaded, "
-                  + String(tex_bytes // (1024 * 1024)) + " MB)")
+            var textures = TextureBuffers.upload(ctx, s)
 
             # Upload Sobol matrices: first 1024 dimensions × 52 UInt32 = 212992 bytes
             comptime N_SOBOL_GPU_DIMS = 1024
             comptime N_SOBOL_GPU_WORDS = N_SOBOL_GPU_DIMS * 52
             var sobol_gpu_buf = _gpu_upload_array[UInt32](ctx, sobol_matrices, N_SOBOL_GPU_WORDS)
 
-            # Upload raster_to_camera and camera_to_world (16 floats each)
-            var r2c_gpu_buf = _gpu_upload_array[Float32](ctx, r2c, 16)
-            var c2w_gpu_buf = _gpu_upload_array[Float32](ctx, c2w_init, 16)
-
-            # Upload the spectral (Jakob-Hanika) coefficient table + CIE
-            # X/Y/Z/D65 tables, if a real one was loaded (spectral.res > 0)
-            # — Stage 2c-1, see project_spectral_rendering memory. Dummy
-            # 1-element buffers otherwise (BDPT/SPPM GPU dispatch don't wire
-            # spectral yet — Stage 3/4 — same "at least 1 elem" convention
-            # already used above for zero-size scene data).
-            comptime CIE_N = 95
-            var spec_coeffs_count = (3 * spectral_res * spectral_res * spectral_res * 3) if spectral_res > 0 else 0
-            var spec_cie_count = CIE_N if spectral_res > 0 else 0
-            var spec_coeffs_gpu_buf = _gpu_upload_array[Float32](ctx, spectral_coeffs, spec_coeffs_count)
-            var spec_cie_x_gpu_buf = _gpu_upload_array[Float32](ctx, spectral_cie_x, spec_cie_count)
-            var spec_cie_y_gpu_buf = _gpu_upload_array[Float32](ctx, spectral_cie_y, spec_cie_count)
-            var spec_cie_z_gpu_buf = _gpu_upload_array[Float32](ctx, spectral_cie_z, spec_cie_count)
-            var spec_d65_gpu_buf   = _gpu_upload_array[Float32](ctx, spectral_d65, spec_cie_count)
+            # raster_to_camera and camera_to_world (16 floats each)
+            var r2c_gpu_buf = _gpu_upload_array[Float32](ctx, s.raster_to_camera, 16)
+            var c2w_gpu_buf = _gpu_upload_array[Float32](ctx, s.camera_to_world, 16)
+            var spectral = SpectralBuffers.upload(ctx, spectral_coeffs, spectral_res,
+                spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
 
             # Every upload is asynchronous: finish them while the caller's host
             # arrays are still alive.
@@ -1120,78 +1130,20 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
             var handle = unsafe_alloc[GpuSceneHandle](1)
             handle.unsafe_write(GpuSceneHandle(
                 ctx=ctx^,
-                bvh=BvhBuffers(
-                    nodes_buf=bvh_buf^,
-                    prim_ids_buf=prim_buf^,
-                ),
-                blas=BlasBuffers(
-                    nodes_bufs=blas_nodes_bufs^,
-                    primids_bufs=blas_primids_bufs^,
-                    nodes_ptrs_buf=blas_nodes_ptrs_buf^,
-                    primids_ptrs_buf=blas_primids_ptrs_buf^,
-                    n_blas=n_blas_int,
-                ),
+                bvh=bvh^,
+                blas=blas^,
                 instances_buf=instances_gpu_buf^,
-                n_instances=n_instances_int,
-                meshes=MeshBuffers(
-                    meshes_buf=meshes_buf^,
-                    mesh_count=Int(meshCount),
-                    points_bufs=points_bufs^,
-                    faceIndices_bufs=face_bufs^,
-                    vertexIndices_bufs=vert_bufs^,
-                    uv_bufs=uv_bufs^,
-                    nrm_bufs=nrm_bufs^,
-                    alpha_bufs=alpha_bufs^,
-                ),
+                n_instances=Int(s.instance_count),
+                meshes=meshes^,
                 materials_buf=mat_buf^,
-                material_count=Int(materialCount),
-                textures=TextureBuffers(
-                    tex_data_bufs=tex_data_bufs^,
-                    textures_buf=textures_gpu_buf^,
-                    lut_buf=lut_buf^,
-                    n_textures=n_textures_int,
-                ),
-                lights=LightBuffers(
-                    area_lights_buf=al_buf^,
-                    area_light_cdf_bufs=al_cdf_bufs^,
-                    n_area_lights=Int(areaLightCount),
-                    distant_lights_buf=dl_buf^,
-                    n_distant_lights=Int(distantLightCount),
-                    point_lights_buf=pl_buf^,
-                    n_point_lights=Int(pointLightCount),
-                    light_sampler_buf=ls_buf^,
-                    n_light_sampler=Int(lightSamplerN),
-                    infinite_lights_buf=il_buf^,
-                    il_pixels_bufs=il_pixels_bufs^,
-                    il_cdf_bufs=il_cdf_bufs^,
-                    il_w2l_bufs=il_w2l_bufs^,
-                    n_infinite_lights=Int(infiniteLightCount),
-                ),
+                material_count=Int(s.material_count),
+                textures=textures^,
+                lights=lights^,
                 spheres_buf=sphere_buf^,
-                n_spheres=Int(sphereCount),
-                curves=CurveBuffers(
-                    curves_buf=curve_buf^,
-                    n_curves=Int(curveCount),
-                    cand_prim_buf=r_curve_cand_prim_buf^,
-                    cand_count_buf=r_curve_cand_count_buf^,
-                    cand_offset_buf=r_curve_cand_offset_buf^,
-                    compact_path_buf=r_curve_compact_path_buf^,
-                    compact_counter_buf=r_curve_compact_counter_buf^,
-                ),
-                mediums_buf=med_buf^,
-                n_mediums=Int(mediumCount),
-                has_sss_medium=has_sss_med,
-                medium_ifaces_buf=miface_buf^,
-                n_medium_ifaces=Int(medium_iface_count),
-                grids_buf=grids_buf^,
-                n_grids=n_grids_int,
-                grid_density_bufs=grid_density_bufs^,
-                nvdb_grids_buf=nvdb_grids_buf^,
-                n_nvdb_grids=n_nvdb_grids_int,
-                nvdb_blob_bufs=nvdb_blob_bufs^,
-                measured_brdfs_buf=measured_brdfs_buf^,
-                n_measured_brdfs=n_measured_int,
-                measured_field_bufs=measured_field_bufs^,
+                n_spheres=Int(s.sphere_count),
+                curves=curves^,
+                media=media^,
+                measured=measured^,
                 path_buf=r_path_buf^,
                 inter_buf=r_inter_buf^,
                 film_buf=r_film_buf^,
@@ -1217,16 +1169,10 @@ def gpu_upload_scene[Ompc: Origin[mut=True], Ofic: Origin[mut=True], Ovic: Origi
                 sobol_buf=sobol_gpu_buf^,
                 r2c_buf=r2c_gpu_buf^,
                 c2w_buf=c2w_gpu_buf^,
-                filter=filter,
-                film=film,
-                spectral=SpectralBuffers(
-                    coeffs_buf=spec_coeffs_gpu_buf^,
-                    cie_x_buf=spec_cie_x_gpu_buf^,
-                    cie_y_buf=spec_cie_y_gpu_buf^,
-                    cie_z_buf=spec_cie_z_gpu_buf^,
-                    d65_buf=spec_d65_gpu_buf^,
-                    res=spectral_res,
-                ),
+                filter=FilterParams(s.filter_sigma, s.filter_support_x, s.filter_support_y,
+                                    s.filter_norm_x, s.filter_norm_y, s.filter_type),
+                film=FilmDims(s.film_w, s.film_h),
+                spectral=spectral^,
             ))
 
             print("GPU: scene uploaded")

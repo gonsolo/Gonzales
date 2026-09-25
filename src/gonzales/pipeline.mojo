@@ -9,7 +9,7 @@ from .scene_loader import mojo_parse_scene_any
 from .rendering import render_all_tiles, normalize_film, apply_film_sensor, fmt_time, progress_str
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, Bounds3f, dot, _is_real_ptr
-from .render_state import TileResult_C, PathState_C, FilmDims, FilterParams
+from .render_state import TileResult_C, PathState_C
 from .primitives import Ray_C, TriangleMesh_C
 from .curves import Curve_C, curve_piece_bounds
 from .postprocess import denoise, write_image, write_image_cropped, write_image_cropwindow
@@ -280,79 +280,6 @@ def _generate_sobol_matrices(path: String) -> Optional[Pointer[UInt32, MutUntrac
     if dim < 2:
         print("Warning: Sobol file had fewer dimensions than expected")
     return Optional(matrices)
-
-
-def _gpu_upload_scene(
-    psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
-    sobol: Pointer[UInt32, MutUntrackedOrigin],
-    n_pixels: Int,
-    # Decomposed, NOT a single by-value `spectral: SpectralHandle` param --
-    # see spectrum.mojo's long comment on the confirmed by-value SpectralHandle
-    # miscompilation; this GPU-upload path reproduced the same corruption
-    # class (see project_priority_backlog memory item 3).
-    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_res: Int = 0,
-    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-) -> Pointer[GpuSceneHandle, MutUntrackedOrigin]:
-    var film = FilmDims(psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h)
-    var n_meshes = Int(psc[unsafe_offset=0].mesh_count)
-    var pts_counts = List[Int64](capacity=max(n_meshes, 1))
-    var fi_counts  = List[Int64](capacity=max(n_meshes, 1))
-    var vi_counts  = List[Int64](capacity=max(n_meshes, 1))
-    var uv_counts  = List[Int64](capacity=max(n_meshes, 1))
-    var nrm_counts = List[Int64](capacity=max(n_meshes, 1))
-    for _ in range(max(n_meshes, 1)):
-        pts_counts.append(Int64(0)); fi_counts.append(Int64(0))
-        vi_counts.append(Int64(0)); uv_counts.append(Int64(0))
-        nrm_counts.append(Int64(0))
-    for i in range(n_meshes):
-        pts_counts[i] = Int64(psc[unsafe_offset=0].mesh_n_verts[unsafe_offset=i]) * 4
-        fi_counts[i]  = Int64(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i])
-        vi_counts[i]  = Int64(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i]) * 3
-        uv_counts[i]  = Int64(psc[unsafe_offset=0].mesh_uv_n_verts[unsafe_offset=i])
-        nrm_counts[i] = Int64(psc[unsafe_offset=0].mesh_nrm_n_verts[unsafe_offset=i])
-    var handle = gpu_upload_scene(
-        # CPU-inclusive TLAS (tris+curves+instances) — now that GPU has
-        # BLAS/instance upload + traversal support, it uses the same TLAS
-        # SceneDescriptor2_C does rather than the instance-free one.
-        psc[unsafe_offset=0].bvh_nodes_cpu,      Int64(psc[unsafe_offset=0].bvh_node_count_cpu),
-        psc[unsafe_offset=0].prim_ids_cpu,       Int64(psc[unsafe_offset=0].prim_count_cpu),
-        psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr,
-        psc[unsafe_offset=0].blas_node_counts, psc[unsafe_offset=0].blas_primid_counts, Int64(psc[unsafe_offset=0].blas_count),
-        psc[unsafe_offset=0].instances, Int64(psc[unsafe_offset=0].instance_count),
-        psc[unsafe_offset=0].meshes,         Int64(n_meshes),
-        pts_counts.unsafe_ptr(), fi_counts.unsafe_ptr(),
-        vi_counts.unsafe_ptr(), uv_counts.unsafe_ptr(),
-        nrm_counts.unsafe_ptr(),
-        psc[unsafe_offset=0].tex_filenames,  psc[unsafe_offset=0].tex_count,
-        psc[unsafe_offset=0].materials,      Int64(psc[unsafe_offset=0].material_count),
-        psc[unsafe_offset=0].area_lights,    Int64(psc[unsafe_offset=0].area_light_count),
-        psc[unsafe_offset=0].spheres,        Int64(psc[unsafe_offset=0].sphere_count),
-        psc[unsafe_offset=0].curves,         Int64(psc[unsafe_offset=0].curve_count),
-        psc[unsafe_offset=0].distant_lights, Int64(psc[unsafe_offset=0].distant_count),
-        psc[unsafe_offset=0].point_lights,   Int64(psc[unsafe_offset=0].point_count),
-        psc[unsafe_offset=0].light_sampler.cdf, Int64(psc[unsafe_offset=0].light_sampler.n),
-        psc[unsafe_offset=0].infinite_lights, Int64(psc[unsafe_offset=0].infinite_count),
-        psc[unsafe_offset=0].mediums,         Int64(psc[unsafe_offset=0].medium_count),
-        psc[unsafe_offset=0].medium_ifaces,   Int64(psc[unsafe_offset=0].medium_iface_count),
-        psc[unsafe_offset=0].grids,           Int64(psc[unsafe_offset=0].grid_count),
-        psc[unsafe_offset=0].nvdb_grids,      Int64(psc[unsafe_offset=0].nvdb_grid_count),
-        psc[unsafe_offset=0].measured_brdfs, Int64(psc[unsafe_offset=0].measured_count),
-        Int64(n_pixels),
-        sobol,
-        psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
-        FilterParams(
-            psc[unsafe_offset=0].filter_sigma, psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y,
-            psc[unsafe_offset=0].filter_norm_x, psc[unsafe_offset=0].filter_norm_y, psc[unsafe_offset=0].filter_type,
-        ),
-        film,
-        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-    )
-    # pts_counts, fi_counts, vi_counts, uv_counts freed automatically
-    return handle
 
 
 def _dbg_vlen(x: Float32, y: Float32, z: Float32) -> Float32:
@@ -979,7 +906,7 @@ def parse_and_render(
 
     if use_gpu and use_sppm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
-        var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
+        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
         if not _is_real_ptr(handle):
             sd.unsafe_free()
             mojo_parsed_free(psc)
@@ -996,7 +923,7 @@ def parse_and_render(
         return ret
     elif use_gpu and use_vcm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
-        var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
+        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
         if not _is_real_ptr(handle):
             sd.unsafe_free()
             mojo_parsed_free(psc)
@@ -1125,7 +1052,7 @@ def parse_and_render(
         # textured surface, which is the wrong direction to be wrong in: it
         # throws away texture detail that the samples had already paid for.
         px_scale *= max(Float32(0.125), Float32(1.0) / sqrt(Float32(max(spp, 1))))
-        var handle = _gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
+        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
         if not _is_real_ptr(handle):
             mojo_parsed_free(psc)
             return Int32(-1)
@@ -1686,7 +1613,7 @@ def render_interactive(
 
     var handle = Pointer[GpuSceneHandle, MutUntrackedOrigin].unsafe_dangling()
     if use_gpu:
-        handle = _gpu_upload_scene(psc, sobol, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
+        handle = gpu_upload_scene(psc, sobol, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
         if not _is_real_ptr(handle):
             mojo_parsed_free(psc)
             return
