@@ -2324,8 +2324,7 @@ def _draw_sobol_8(
 # Live in bvh.mojo, not here — sppm.mojo/bdpt.mojo need them too (for
 # connectible-vertex/gather/NEE evaluation of a stored hair vertex), and
 # shading.mojo already imports FROM sppm.mojo, so sppm.mojo can't import back
-# from shading.mojo (same import-cycle constraint _mk_sd_full's own move
-# documented). See bvh.mojo's _hair_precompute/_hair_eval_lobes/
+# from shading.mojo. See bvh.mojo's _hair_precompute/_hair_eval_lobes/
 # _hair_sample_dir/HairLobeConstants.
 
 # ── Marschner/Chiang hair BSDF (3-lobe: R, TT, TRT) ─────────────────────────

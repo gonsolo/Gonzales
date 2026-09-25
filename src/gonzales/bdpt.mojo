@@ -25,7 +25,7 @@ from .curves import Curve_C
 from .bssrdf import dipole_max_radius, dipole_rd, dipole_mis_sigma_tr, dipole_sample_radius, bssrdf_probe_offset, bssrdf_exit_pdf_area, bssrdf_exit_ft, fdr_moment
 from .vcm_mis import mis_policy_power, vcm_arrival_carries, vcm_scatter_carries, bssrdf_hop_carries, bssrdf_exit_scatter_carries, vcm_env_nee_weight, vcm_env_escape_weight, MisPolicy, nee_mis_weight
 from .bvh import (
-    BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres, _mk_sd_full,
+    BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres,
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _is_real_ptr,
     HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps,
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
@@ -4710,11 +4710,8 @@ def vcm_render(
 # full renderer, as a template for eventually retrofitting SPPM the same way.
 
 # ── Kernels ───────────────────────────────────────────────────────────────
-# _mk_sd_full (builds a complete SceneDescriptor2_C from raw GPU device
-# pointers) now lives in bvh.mojo, next to SceneDescriptor2_C itself, since
-# sppm.mojo's own GPU kernels need the exact same helper and importing it
-# from here would create an import cycle (bdpt.mojo already imports shared
-# helpers from .sppm).
+# Every kernel takes the scene as one `sd: SceneDescriptor2_C`, built on the
+# host by GpuSceneHandle.scene_descriptor() (+ with_vcm() for a VCM pass).
 
 def _bdpt_emit_light_paths_gpu(
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
@@ -4734,53 +4731,7 @@ def _bdpt_emit_light_paths_gpu(
     # column is read here.
     c2w: Pointer[Float32, MutUntrackedOrigin],
     px_scale: Float32,
-    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: Pointer[Material_C, MutUntrackedOrigin],
-    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
-    areaLightCount: Int64,
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
-    sphereCount: Int64,
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    curveCount: Int64,
-    mediums: Pointer[Medium_C, MutUntrackedOrigin],
-    mediumCount: Int64,
-    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
-    mediumIfaceCount: Int64,
-    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasCount: Int64,
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
-    instanceCount: Int64,
-    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
-    distantLightCount: Int64,
-    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
-    infiniteLightCount: Int64,
-    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
-    pointLightCount: Int64,
-    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfCount: Int64 = Int64(0),
-    gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
-    gpuTextureCount: Int64 = Int64(0),
-    # Device-resident density fields, for the free-flight sampler (see the
-    # matching comment on the bounce kernels).
-    grids: Pointer[Grid_C, MutUntrackedOrigin] = Pointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_grids: Int64 = Int64(0),
-    nvdb_grids: Pointer[NvdbGrid_C, MutUntrackedOrigin] = Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_nvdb_grids: Int64 = Int64(0),
-    vcm_keep_counts: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-    vcm_keep_inv_cell: Float32 = Float32(0),
-    vcm_keep_scale: Float32 = Float32(1),
-    vcm_max_depth: Int32 = Int32(9),
-    vcm_cam_x: Float32 = Float32(0), vcm_cam_y: Float32 = Float32(0), vcm_cam_z: Float32 = Float32(0),
-    vcm_footprint: Float32 = Float32(0), vcm_merge_r: Float32 = Float32(0),
+    sd: SceneDescriptor2_C,
 ):
     """One thread per light path, each writing only its own dedicated
     per-path slice of `lvc` (VCM Stage 2b, see _bdpt_store_lvc_vertex's
@@ -4789,26 +4740,14 @@ def _bdpt_emit_light_paths_gpu(
     CPU driver calls (with [False] on CPU, [True] here). `has_med` isn't a
     kernel parameter (`Bool` isn't a `DevicePassable` type `enqueue_function`
     accepts) -- derived here from `mediumCount`, which already is."""
+    var mediumCount = sd.mediumCount
+    var spectral_res_dp = Int64(sd.spectral.res)
     var spectral_res = Int(spectral_res_dp)
     var n_light_paths = Int(n_light_paths_dp)
     var pass_idx = Int(pass_idx_dp)
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
     if k >= n_light_paths:
         return
-    var sd = _mk_sd_full(
-        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
-        areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
-        mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
-        blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
-        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
-        pointLights, pointLightCount,
-        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-        measuredBrdfs, measuredBrdfCount,
-        gpuTextures, gpuTextureCount,
-        grids=grids, gridCount=n_grids, nvdbGrids=nvdb_grids, nvdbGridCount=n_nvdb_grids,
-        vcmKeepCounts=vcm_keep_counts, vcmKeepInvCell=vcm_keep_inv_cell, vcmKeepScale=vcm_keep_scale, vcmMaxDepth=vcm_max_depth,
-        vcmCamX=vcm_cam_x, vcmCamY=vcm_cam_y, vcmCamZ=vcm_cam_z, vcmFootprint=vcm_footprint, vcmMergeR=vcm_merge_r,
-    )
     var has_med = mediumCount > Int64(0)
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
     var scratch = inter_scratch.unsafe_offset(k)
@@ -4834,47 +4773,7 @@ def _bdpt_splat_light_paths_gpu(
     # (_bdpt_splat_filtered) so the light-traced half of the image is
     # reconstructed the same way as the camera half.
     film_filter: FilmFilter,
-    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: Pointer[Material_C, MutUntrackedOrigin],
-    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
-    areaLightCount: Int64,
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
-    sphereCount: Int64,
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    curveCount: Int64,
-    mediums: Pointer[Medium_C, MutUntrackedOrigin],
-    mediumCount: Int64,
-    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
-    mediumIfaceCount: Int64,
-    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasCount: Int64,
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
-    instanceCount: Int64,
-    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
-    distantLightCount: Int64,
-    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
-    infiniteLightCount: Int64,
-    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
-    pointLightCount: Int64,
-    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfCount: Int64 = Int64(0),
-    gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
-    gpuTextureCount: Int64 = Int64(0),
-    vcm_keep_counts: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-    vcm_keep_inv_cell: Float32 = Float32(0),
-    vcm_keep_scale: Float32 = Float32(1),
-    vcm_max_depth: Int32 = Int32(9),
-    vcm_cam_x: Float32 = Float32(0), vcm_cam_y: Float32 = Float32(0), vcm_cam_z: Float32 = Float32(0),
-    vcm_footprint: Float32 = Float32(0), vcm_merge_r: Float32 = Float32(0),
+    sd: SceneDescriptor2_C,
 ):
     """GPU t=1 light tracing: one thread per light path, splatting each of
     its vertices onto the film through the same `_bdpt_connect_to_camera`
@@ -4899,23 +4798,16 @@ def _bdpt_splat_light_paths_gpu(
     kernel's non-atomic per-pixel `accum[pix*3] += ...` (race-free only
     because each of its threads owns one pixel) can never overlap these
     atomic adds."""
+    var spectral_coeffs = sd.spectral.coeffs
+    var spectral_res_dp = Int64(sd.spectral.res)
+    var spectral_cie_x = sd.spectral.cie_x
+    var spectral_cie_y = sd.spectral.cie_y
+    var spectral_cie_z = sd.spectral.cie_z
+    var spectral_d65 = sd.spectral.d65
     var n_light_paths = Int(n_light_paths_dp)
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
     if k >= n_light_paths:
         return
-    var sd = _mk_sd_full(
-        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
-        areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
-        mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
-        blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
-        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
-        pointLights, pointLightCount,
-        spectral_coeffs, Int(spectral_res_dp), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-        measuredBrdfs, measuredBrdfCount,
-        gpuTextures, gpuTextureCount,
-        vcmKeepCounts=vcm_keep_counts, vcmKeepInvCell=vcm_keep_inv_cell, vcmKeepScale=vcm_keep_scale, vcmMaxDepth=vcm_max_depth,
-        vcmCamX=vcm_cam_x, vcmCamY=vcm_cam_y, vcmCamZ=vcm_cam_z, vcmFootprint=vcm_footprint, vcmMergeR=vcm_merge_r,
-    )
     var cam_pos = Vec3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
     var scratch = inter_scratch.unsafe_offset(k)
     var base = k * _BDPT_MAX_VERTS
@@ -4954,53 +4846,7 @@ def _bdpt_camera_connect_gpu(
     film_filter: FilmFilter,
     seed: UInt64,
     pass_idx_dp: Int64,
-    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: Pointer[Material_C, MutUntrackedOrigin],
-    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
-    areaLightCount: Int64,
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
-    sphereCount: Int64,
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    curveCount: Int64,
-    mediums: Pointer[Medium_C, MutUntrackedOrigin],
-    mediumCount: Int64,
-    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
-    mediumIfaceCount: Int64,
-    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasCount: Int64,
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
-    instanceCount: Int64,
-    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
-    distantLightCount: Int64,
-    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
-    infiniteLightCount: Int64,
-    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
-    pointLightCount: Int64,
-    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfCount: Int64 = Int64(0),
-    gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
-    gpuTextureCount: Int64 = Int64(0),
-    # Device-resident density fields, for the free-flight sampler (see the
-    # matching comment on the bounce kernels).
-    grids: Pointer[Grid_C, MutUntrackedOrigin] = Pointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_grids: Int64 = Int64(0),
-    nvdb_grids: Pointer[NvdbGrid_C, MutUntrackedOrigin] = Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_nvdb_grids: Int64 = Int64(0),
-    vcm_keep_counts: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-    vcm_keep_inv_cell: Float32 = Float32(0),
-    vcm_keep_scale: Float32 = Float32(1),
-    vcm_max_depth: Int32 = Int32(9),
-    vcm_cam_x: Float32 = Float32(0), vcm_cam_y: Float32 = Float32(0), vcm_cam_z: Float32 = Float32(0),
-    vcm_footprint: Float32 = Float32(0), vcm_merge_r: Float32 = Float32(0),
+    sd: SceneDescriptor2_C,
 ):
     """One thread per pixel. Thin wrapper: build sd, seed this thread's own
     PCG32 (same seed formula vcm_render's CPU driver uses, keyed by pixel
@@ -5014,6 +4860,13 @@ def _bdpt_camera_connect_gpu(
     Stage 2c, see the module's opening VCM comment) -- the grid is built
     once per pass by vcm_render_gpu before this kernel launches, mirroring
     the LVC's own build-then-consume shape."""
+    var mediumCount = sd.mediumCount
+    var spectral_coeffs = sd.spectral.coeffs
+    var spectral_cie_x = sd.spectral.cie_x
+    var spectral_cie_y = sd.spectral.cie_y
+    var spectral_cie_z = sd.spectral.cie_z
+    var spectral_d65 = sd.spectral.d65
+    var spectral_res_dp = Int64(sd.spectral.res)
     var spectral_res = Int(spectral_res_dp)
     var n_pix = Int(n_pix_dp)
     var fw = Int(fw_dp)
@@ -5021,20 +4874,6 @@ def _bdpt_camera_connect_gpu(
     var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
     if pix >= n_pix:
         return
-    var sd = _mk_sd_full(
-        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
-        areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
-        mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
-        blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
-        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
-        pointLights, pointLightCount,
-        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-        measuredBrdfs, measuredBrdfCount,
-        gpuTextures, gpuTextureCount,
-        grids=grids, gridCount=n_grids, nvdbGrids=nvdb_grids, nvdbGridCount=n_nvdb_grids,
-        vcmKeepCounts=vcm_keep_counts, vcmKeepInvCell=vcm_keep_inv_cell, vcmKeepScale=vcm_keep_scale, vcmMaxDepth=vcm_max_depth,
-        vcmCamX=vcm_cam_x, vcmCamY=vcm_cam_y, vcmCamZ=vcm_cam_z, vcmFootprint=vcm_footprint, vcmMergeR=vcm_merge_r,
-    )
     var has_med = mediumCount > Int64(0)
     var px = pix % fw
     var py = pix // fw
@@ -5091,78 +4930,26 @@ def _bdpt_light_path_init_gpu(
     default_emit_med: Int32,
     seed: UInt64,
     pass_idx_dp: Int64,
-    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: Pointer[Material_C, MutUntrackedOrigin],
-    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
-    areaLightCount: Int64,
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
-    sphereCount: Int64,
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    curveCount: Int64,
-    mediums: Pointer[Medium_C, MutUntrackedOrigin],
-    mediumCount: Int64,
-    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
-    mediumIfaceCount: Int64,
-    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasCount: Int64,
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
-    instanceCount: Int64,
-    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
-    distantLightCount: Int64,
-    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
-    infiniteLightCount: Int64,
-    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
-    pointLightCount: Int64,
-    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfCount: Int64 = Int64(0),
-    gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
-    gpuTextureCount: Int64 = Int64(0),
+    sd: SceneDescriptor2_C,
 ):
     """One thread per light path: seed this thread's own PCG32 (same seed
     formula _bdpt_emit_light_paths_gpu uses), call _bdpt_light_path_init,
     store the resulting VCMLightPathState_C. Mirrors
     _bdpt_emit_light_paths_gpu's docstring for why `has_med` isn't a kernel
     parameter -- not needed here since init doesn't touch media."""
+    var spectral_res_dp = Int64(sd.spectral.res)
     var spectral_res = Int(spectral_res_dp)
     var n_light_paths = Int(n_light_paths_dp)
     var pass_idx = Int(pass_idx_dp)
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
     if k >= n_light_paths:
         return
-    var sd = _mk_sd_full(
-        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
-        areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
-        mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
-        blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
-        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
-        pointLights, pointLightCount,
-        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-        measuredBrdfs, measuredBrdfCount,
-        gpuTextures, gpuTextureCount,
-    )
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
     var pass_wl = pass_wavelengths(pass_idx)
     states[unsafe_offset=k] = _bdpt_light_path_init[True](sd, pcg, default_emit_med, k, lvc, lvc_path_len, mis_vc_weight_factor, pass_wl)
 
 def _bdpt_light_path_intersect_gpu(
-    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
-    n_spheres_dp: Int64,
+    sd: SceneDescriptor2_C,
     states: Pointer[VCMLightPathState_C, MutUntrackedOrigin],
     results: Pointer[Intersection_C, MutUntrackedOrigin],
     count_dp: Int64,
@@ -5172,7 +4959,6 @@ def _bdpt_light_path_intersect_gpu(
     _bdpt_light_path_bounce_gpu so this specific step (and only this step)
     is the eventual Vulkan RT swap point, matching the plain wavefront path
     tracer's traverse_paths_gpu/shade_*_gpu split."""
-    var n_spheres = Int(n_spheres_dp)
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -5181,9 +4967,9 @@ def _bdpt_light_path_intersect_gpu(
         return
     var ray = Ray_C(states[unsafe_offset=tid].ro, states[unsafe_offset=tid].rd)
     results[unsafe_offset=tid].hit = Int8(0)
-    traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), results.unsafe_offset(tid),
-                        blasNodesArr, blasPrimIdsArr, instances)
-    test_spheres(spheres, n_spheres, ray, results.unsafe_offset(tid))
+    traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), results.unsafe_offset(tid),
+                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+    test_spheres(sd.spheres, Int(sd.sphereCount), ray, results.unsafe_offset(tid))
 
 def _bdpt_light_path_bounce_gpu(
     states: Pointer[VCMLightPathState_C, MutUntrackedOrigin],
@@ -5197,59 +4983,14 @@ def _bdpt_light_path_bounce_gpu(
     # matching params (this is the wavefront-staged path to the same walk).
     c2w: Pointer[Float32, MutUntrackedOrigin],
     px_scale: Float32,
-    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: Pointer[Material_C, MutUntrackedOrigin],
-    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
-    areaLightCount: Int64,
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
-    sphereCount: Int64,
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    curveCount: Int64,
-    mediums: Pointer[Medium_C, MutUntrackedOrigin],
-    mediumCount: Int64,
-    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
-    mediumIfaceCount: Int64,
-    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasCount: Int64,
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
-    instanceCount: Int64,
-    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
-    distantLightCount: Int64,
-    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
-    infiniteLightCount: Int64,
-    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
-    pointLightCount: Int64,
-    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfCount: Int64 = Int64(0),
-    gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
-    gpuTextureCount: Int64 = Int64(0),
-    # Device-resident density fields, for the free-flight sampler. Without
-    # these the descriptor built below reports no density fields and every
-    # heterogeneous medium samples as uniform density-1 fog.
-    grids: Pointer[Grid_C, MutUntrackedOrigin] = Pointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_grids: Int64 = Int64(0),
-    nvdb_grids: Pointer[NvdbGrid_C, MutUntrackedOrigin] = Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_nvdb_grids: Int64 = Int64(0),
-    vcm_keep_counts: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-    vcm_keep_inv_cell: Float32 = Float32(0),
-    vcm_keep_scale: Float32 = Float32(1),
-    vcm_max_depth: Int32 = Int32(9),
-    vcm_cam_x: Float32 = Float32(0), vcm_cam_y: Float32 = Float32(0), vcm_cam_z: Float32 = Float32(0),
-    vcm_footprint: Float32 = Float32(0), vcm_merge_r: Float32 = Float32(0),
+    sd: SceneDescriptor2_C,
 ):
     """One bounce's material dispatch for one light path, reading the
     Intersection_C _bdpt_light_path_intersect_gpu already computed this
     depth level instead of tracing it inline -- see this section's opening
     comment."""
+    var mediumCount = sd.mediumCount
+    var spectral_res_dp = Int64(sd.spectral.res)
     var spectral_res = Int(spectral_res_dp)
     var n_light_paths = Int(n_light_paths_dp)
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -5257,20 +4998,6 @@ def _bdpt_light_path_bounce_gpu(
         return
     if states[unsafe_offset=k].active == Int8(0):
         return
-    var sd = _mk_sd_full(
-        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
-        areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
-        mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
-        blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
-        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
-        pointLights, pointLightCount,
-        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-        measuredBrdfs, measuredBrdfCount,
-        gpuTextures, gpuTextureCount,
-        grids=grids, gridCount=n_grids, nvdbGrids=nvdb_grids, nvdbGridCount=n_nvdb_grids,
-        vcmKeepCounts=vcm_keep_counts, vcmKeepInvCell=vcm_keep_inv_cell, vcmKeepScale=vcm_keep_scale, vcmMaxDepth=vcm_max_depth,
-        vcmCamX=vcm_cam_x, vcmCamY=vcm_cam_y, vcmCamZ=vcm_cam_z, vcmFootprint=vcm_footprint, vcmMergeR=vcm_merge_r,
-    )
     var has_med = mediumCount > Int64(0)
     var pcg = PCG32(UInt64(0), UInt64(0))
     pcg.state = states[unsafe_offset=k].pcg_state
@@ -5342,22 +5069,13 @@ def _bdpt_camera_path_init_gpu(
     states[unsafe_offset=pix] = _bdpt_camera_path_init[True](r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl, film_filter)
 
 def _bdpt_camera_path_intersect_gpu(
-    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
-    n_spheres_dp: Int64,
+    sd: SceneDescriptor2_C,
     states: Pointer[VCMCameraPathState_C, MutUntrackedOrigin],
     results: Pointer[Intersection_C, MutUntrackedOrigin],
     count_dp: Int64,
 ):
     """Camera-path counterpart to _bdpt_light_path_intersect_gpu -- see its
     docstring."""
-    var n_spheres = Int(n_spheres_dp)
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -5366,9 +5084,9 @@ def _bdpt_camera_path_intersect_gpu(
         return
     var ray = Ray_C(states[unsafe_offset=tid].ro, states[unsafe_offset=tid].rd)
     results[unsafe_offset=tid].hit = Int8(0)
-    traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), results.unsafe_offset(tid),
-                        blasNodesArr, blasPrimIdsArr, instances)
-    test_spheres(spheres, n_spheres, ray, results.unsafe_offset(tid))
+    traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), results.unsafe_offset(tid),
+                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+    test_spheres(sd.spheres, Int(sd.sphereCount), ray, results.unsafe_offset(tid))
 
 def _bdpt_camera_path_bounce_gpu(
     states: Pointer[VCMCameraPathState_C, MutUntrackedOrigin],
@@ -5387,41 +5105,7 @@ def _bdpt_camera_path_bounce_gpu(
     # matching params.
     c2w: Pointer[Float32, MutUntrackedOrigin],
     px_scale: Float32,
-    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: Pointer[Material_C, MutUntrackedOrigin],
-    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
-    areaLightCount: Int64,
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
-    sphereCount: Int64,
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    curveCount: Int64,
-    mediums: Pointer[Medium_C, MutUntrackedOrigin],
-    mediumCount: Int64,
-    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
-    mediumIfaceCount: Int64,
-    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasCount: Int64,
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
-    instanceCount: Int64,
-    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
-    distantLightCount: Int64,
-    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
-    infiniteLightCount: Int64,
-    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
-    pointLightCount: Int64,
-    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfCount: Int64 = Int64(0),
-    gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
-    gpuTextureCount: Int64 = Int64(0),
+    sd: SceneDescriptor2_C,
     # Task #163 stage 5: see _bdpt_camera_path_bounce's own matching
     # params -- forwarded through unchanged, except Bool -> Int8 (raw kernel
     # launch args must be DevicePassable; Bool doesn't conform, unlike a
@@ -5431,25 +5115,14 @@ def _bdpt_camera_path_bounce_gpu(
     shadow_pending: Pointer[SpectralSample, MutUntrackedOrigin] = Pointer[SpectralSample, MutUntrackedOrigin].unsafe_dangling(),
     shadow_valid: Pointer[Int8, MutUntrackedOrigin] = Pointer[Int8, MutUntrackedOrigin].unsafe_dangling(),
     shadow_seg_med: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-    # Device-resident density fields, for the free-flight sampler. Without
-    # these the descriptor built below reports no density fields and every
-    # heterogeneous medium samples as uniform density-1 fog.
-    grids: Pointer[Grid_C, MutUntrackedOrigin] = Pointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_grids: Int64 = Int64(0),
-    nvdb_grids: Pointer[NvdbGrid_C, MutUntrackedOrigin] = Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_nvdb_grids: Int64 = Int64(0),
-    vcm_keep_counts: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-    vcm_keep_inv_cell: Float32 = Float32(0),
-    vcm_keep_scale: Float32 = Float32(1),
-    vcm_max_depth: Int32 = Int32(9),
-    vcm_cam_x: Float32 = Float32(0), vcm_cam_y: Float32 = Float32(0), vcm_cam_z: Float32 = Float32(0),
-    vcm_footprint: Float32 = Float32(0), vcm_merge_r: Float32 = Float32(0),
 ):
     """One bounce's material dispatch (incl. NEE/connect/merge/MNEE, all
     still on the existing software-BVH `results + pix` scratch slot -- see
     this section's opening comment) for one camera path, reading the
     Intersection_C _bdpt_camera_path_intersect_gpu already computed this
     depth level."""
+    var mediumCount = sd.mediumCount
+    var spectral_res_dp = Int64(sd.spectral.res)
     var spectral_res = Int(spectral_res_dp)
     var n_pix = Int(n_pix_dp)
     var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -5457,20 +5130,6 @@ def _bdpt_camera_path_bounce_gpu(
         return
     if states[unsafe_offset=pix].active == Int8(0):
         return
-    var sd = _mk_sd_full(
-        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
-        areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
-        mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
-        blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
-        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
-        pointLights, pointLightCount,
-        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-        measuredBrdfs, measuredBrdfCount,
-        gpuTextures, gpuTextureCount,
-        grids=grids, gridCount=n_grids, nvdbGrids=nvdb_grids, nvdbGridCount=n_nvdb_grids,
-        vcmKeepCounts=vcm_keep_counts, vcmKeepInvCell=vcm_keep_inv_cell, vcmKeepScale=vcm_keep_scale, vcmMaxDepth=vcm_max_depth,
-        vcmCamX=vcm_cam_x, vcmCamY=vcm_cam_y, vcmCamZ=vcm_cam_z, vcmFootprint=vcm_footprint, vcmMergeR=vcm_merge_r,
-    )
     var has_med = mediumCount > Int64(0)
     var pcg = PCG32(UInt64(0), UInt64(0))
     pcg.state = states[unsafe_offset=pix].pcg_state
@@ -5932,42 +5591,7 @@ def vcm_render_gpu(
             var r2c_ptr = r2c_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             var c2w_ptr = c2w_buf.unsafe_ptr().unsafe_bitcast[Float32]()
 
-            var bvh2Nodes = handle[].bvh.nodes_ptr()
-            var primIds = handle[].bvh.prim_ids_ptr()
-            var meshes = handle[].meshes.meshes_ptr()
-            var curves = handle[].curves.curves_ptr()
-            var blasNodesArr = handle[].blas.nodes_arr()
-            var blasPrimIdsArr = handle[].blas.primids_arr()
-            var instances = handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance_C]()
-            var materials = handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C]()
-            var mediums = handle[].mediums_buf.unsafe_ptr().unsafe_bitcast[Medium_C]()
-            # Device-resident density fields for the free-flight sampler. These
-            # were never handed to the VCM/SPPM kernels before, which is exactly
-            # why those integrators sampled every heterogeneous medium as uniform
-            # density-1 fog -- see geometry.mojo's sample_free_flight.
-            var grids_dev = handle[].grids_buf.unsafe_ptr().unsafe_bitcast[Grid_C]()
-            var nvdb_grids_dev = handle[].nvdb_grids_buf.unsafe_ptr().unsafe_bitcast[NvdbGrid_C]()
-            var mediumInterfaces = handle[].medium_ifaces_buf.unsafe_ptr().unsafe_bitcast[MediumInterface_C]()
-            var spheres = handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C]()
-            var areaLights = handle[].lights.area_lights_ptr()
-            var distantLights = handle[].lights.distant_lights_ptr()
-            var infiniteLights = handle[].lights.infinite_lights_ptr()
-            var pointLights = handle[].lights.point_lights_ptr()
-            var n_mediums = Int64(handle[].n_mediums)
-            var n_medium_ifaces = Int64(handle[].n_medium_ifaces)
-            var n_spheres = Int64(handle[].n_spheres)
-            var n_curves = Int64(handle[].curves.n_curves)
-            var n_area_lights = Int64(handle[].lights.n_area_lights)
-            var n_distant_lights = Int64(handle[].lights.n_distant_lights)
-            var n_infinite_lights = Int64(handle[].lights.n_infinite_lights)
-            var n_point_lights = Int64(handle[].lights.n_point_lights)
-            var n_blas = Int64(handle[].blas.n_blas)
-            var n_instances = Int64(handle[].n_instances)
-            var (spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) = handle[].spectral.unsafe_ptrs()
-            var measured_brdfs = handle[].measured_brdfs_buf.unsafe_ptr().unsafe_bitcast[MeasuredBRDF_C]()
-            var n_measured_brdfs = Int64(handle[].n_measured_brdfs)
-            var gpu_textures = handle[].textures.textures_ptr()
-            var n_gpu_textures = Int64(handle[].textures.n_textures)
+            var gsd = handle[].scene_descriptor()
 
             var grid_light = ceildiv(max(n_light_paths_merge, 1), block_size)
             var grid_pix = ceildiv(n_pix, block_size)
@@ -6009,24 +5633,23 @@ def vcm_render_gpu(
                 var mis_vc_weight_factor = Float32(1.0) / eta_vcm
 
                 var pass_seed = base_seed ^ UInt64(si * 2654435761 + 1)
+                var vsd = gsd.with_vcm(vcm_keep_ptr, vcm_keep_inv_cell, vcm_keep_scale, vcm_max_depth, vcm_cam, vcm_footprint, radius_i)
                 handle[].ctx.enqueue_function[_bdpt_emit_light_paths_gpu](
-                    lvc_ptr, path_len_ptr, mis_vc_weight_factor, mis_vm_weight_factor,
-                    inter_light_ptr, Int64(n_light_paths_merge),
-                    default_emit_med, pass_seed, Int64(si),
-                    c2w_ptr, px_scale,
-                    bvh2Nodes, primIds, meshes, materials,
-                    areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
-                    mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
-                    blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
-                    distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
-                    pointLights, n_point_lights,
-                    spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-                    measured_brdfs, n_measured_brdfs,
-                    gpu_textures, n_gpu_textures,
-                    grids_dev, Int64(handle[].n_grids), nvdb_grids_dev, Int64(handle[].n_nvdb_grids),
-                    vcm_keep_ptr, vcm_keep_inv_cell, vcm_keep_scale, vcm_max_depth,
-                    vcm_cam[0], vcm_cam[1], vcm_cam[2], vcm_footprint, radius_i,
-                    grid_dim=grid_light, block_dim=block_size)
+                    lvc_ptr,
+                    path_len_ptr,
+                    mis_vc_weight_factor,
+                    mis_vm_weight_factor,
+                    inter_light_ptr,
+                    Int64(n_light_paths_merge),
+                    default_emit_med,
+                    pass_seed,
+                    Int64(si),
+                    c2w_ptr,
+                    px_scale,
+                    vsd,
+                    grid_dim=grid_light,
+                    block_dim=block_size,
+                )
 
                 # VCM Stage 2b: light paths are deterministically paired with
                 # pixels (the first n_pix of n_light_paths_merge total light
@@ -6043,27 +5666,34 @@ def vcm_render_gpu(
                     lvc_ptr, path_len_ptr, Int64(lvc_cap), merge_next_ptr, merge_heads_ptr, merge_inv_cell,
                     grid_dim=grid_merge_ins, block_dim=block_size)
 
+
                 handle[].ctx.enqueue_function[_bdpt_camera_connect_gpu](
-                    accum_ptr, albedo_accum_ptr, Int64(n_pix), Int64(Int(psc[unsafe_offset=0].film_w)), r2c_ptr, c2w_ptr, inter_cam_ptr,
-                    lvc_ptr, path_len_ptr,
-                    merge_next_ptr, merge_heads_ptr, merge_inv_cell, merge_r2, merge_norm,
-                    px_scale, mis_vc_weight_factor, mis_vm_weight_factor, n_light_paths_f,
+                    accum_ptr,
+                    albedo_accum_ptr,
+                    Int64(n_pix),
+                    Int64(Int(psc[unsafe_offset=0].film_w)),
+                    r2c_ptr,
+                    c2w_ptr,
+                    inter_cam_ptr,
+                    lvc_ptr,
+                    path_len_ptr,
+                    merge_next_ptr,
+                    merge_heads_ptr,
+                    merge_inv_cell,
+                    merge_r2,
+                    merge_norm,
+                    px_scale,
+                    mis_vc_weight_factor,
+                    mis_vm_weight_factor,
+                    n_light_paths_f,
                     film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
                                    psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y),
-                    base_seed, Int64(si),
-                    bvh2Nodes, primIds, meshes, materials,
-                    areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
-                    mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
-                    blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
-                    distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
-                    pointLights, n_point_lights,
-                    spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-                    measured_brdfs, n_measured_brdfs,
-                    gpu_textures, n_gpu_textures,
-                    grids_dev, Int64(handle[].n_grids), nvdb_grids_dev, Int64(handle[].n_nvdb_grids),
-                    vcm_keep_ptr, vcm_keep_inv_cell, vcm_keep_scale, vcm_max_depth,
-                    vcm_cam[0], vcm_cam[1], vcm_cam[2], vcm_footprint, radius_i,
-                    grid_dim=grid_pix, block_dim=block_size)
+                    base_seed,
+                    Int64(si),
+                    vsd,
+                    grid_dim=grid_pix,
+                    block_dim=block_size,
+                )
 
                 # Phase 1.5: t=1 light tracing, the GPU counterpart of
                 # vcm_render's splat pass. Same stream, launched AFTER the
@@ -6071,23 +5701,24 @@ def vcm_render_gpu(
                 # ordering matters and why this one uses atomics where the
                 # CPU path deliberately does not.
                 handle[].ctx.enqueue_function[_bdpt_splat_light_paths_gpu](
-                    accum_ptr, lvc_ptr, path_len_ptr, Int64(n_light_paths_merge),
-                    inter_light_ptr, w2c_ptr, c2r_ptr, c2w_ptr,
-                    Int64(fw), Int64(fh), px_scale, mis_vm_weight_factor,
+                    accum_ptr,
+                    lvc_ptr,
+                    path_len_ptr,
+                    Int64(n_light_paths_merge),
+                    inter_light_ptr,
+                    w2c_ptr,
+                    c2r_ptr,
+                    c2w_ptr,
+                    Int64(fw),
+                    Int64(fh),
+                    px_scale,
+                    mis_vm_weight_factor,
                     film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
                                    psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y),
-                    bvh2Nodes, primIds, meshes, materials,
-                    areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
-                    mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
-                    blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
-                    distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
-                    pointLights, n_point_lights,
-                    spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-                    measured_brdfs, n_measured_brdfs,
-                    gpu_textures, n_gpu_textures,
-                    vcm_keep_ptr, vcm_keep_inv_cell, vcm_keep_scale, vcm_max_depth,
-                    vcm_cam[0], vcm_cam[1], vcm_cam[2], vcm_footprint, radius_i,
-                    grid_dim=grid_light, block_dim=block_size)
+                    vsd,
+                    grid_dim=grid_light,
+                    block_dim=block_size,
+                )
 
                 if verbose:
                     print("VCM (GPU): sample " + String(si + 1) + "/" + String(n_spp))
@@ -6225,42 +5856,9 @@ def resolve_shadow_connect_gpu(
     shadow_rays: Pointer[Float32, MutUntrackedOrigin],
     scratch: Pointer[Intersection_C, MutUntrackedOrigin],
     count_dp: Int64,
-    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: Pointer[Material_C, MutUntrackedOrigin],
-    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
-    areaLightCount: Int64,
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
-    sphereCount: Int64,
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    curveCount: Int64,
-    mediums: Pointer[Medium_C, MutUntrackedOrigin],
-    mediumCount: Int64,
-    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
-    mediumIfaceCount: Int64,
-    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasCount: Int64,
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
-    instanceCount: Int64,
-    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
-    distantLightCount: Int64,
-    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
-    infiniteLightCount: Int64,
-    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
-    pointLightCount: Int64,
-    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfCount: Int64 = Int64(0),
-    gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
-    gpuTextureCount: Int64 = Int64(0),
+    sd: SceneDescriptor2_C,
 ):
+    var spectral_res_dp = Int64(sd.spectral.res)
     var spectral_res = Int(spectral_res_dp)
     var n_meshes_vk = Int(n_meshes_vk_dp)
     var count = Int(count_dp)
@@ -6270,17 +5868,6 @@ def resolve_shadow_connect_gpu(
     var idx = tid
     if shadow_valid[unsafe_offset=idx] == Int8(0):
         return
-    var sd = _mk_sd_full(
-        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
-        areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
-        mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
-        blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
-        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
-        pointLights, pointLightCount,
-        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-        measuredBrdfs, measuredBrdfCount,
-        gpuTextures, gpuTextureCount,
-    )
 
     var seg_med = shadow_seg_med[unsafe_offset=idx]
     var idx8 = idx * 8
@@ -6540,42 +6127,7 @@ def vcm_render_gpu_wavefront(
             var w2c_ptr = w2c_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             var c2r_ptr = c2r_buf.unsafe_ptr().unsafe_bitcast[Float32]()
 
-            var bvh2Nodes = handle[].bvh.nodes_ptr()
-            var primIds = handle[].bvh.prim_ids_ptr()
-            var meshes = handle[].meshes.meshes_ptr()
-            var curves = handle[].curves.curves_ptr()
-            var blasNodesArr = handle[].blas.nodes_arr()
-            var blasPrimIdsArr = handle[].blas.primids_arr()
-            var instances = handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance_C]()
-            var materials = handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C]()
-            var mediums = handle[].mediums_buf.unsafe_ptr().unsafe_bitcast[Medium_C]()
-            # Device-resident density fields for the free-flight sampler. These
-            # were never handed to the VCM/SPPM kernels before, which is exactly
-            # why those integrators sampled every heterogeneous medium as uniform
-            # density-1 fog -- see geometry.mojo's sample_free_flight.
-            var grids_dev = handle[].grids_buf.unsafe_ptr().unsafe_bitcast[Grid_C]()
-            var nvdb_grids_dev = handle[].nvdb_grids_buf.unsafe_ptr().unsafe_bitcast[NvdbGrid_C]()
-            var mediumInterfaces = handle[].medium_ifaces_buf.unsafe_ptr().unsafe_bitcast[MediumInterface_C]()
-            var spheres = handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C]()
-            var areaLights = handle[].lights.area_lights_ptr()
-            var distantLights = handle[].lights.distant_lights_ptr()
-            var infiniteLights = handle[].lights.infinite_lights_ptr()
-            var pointLights = handle[].lights.point_lights_ptr()
-            var n_mediums = Int64(handle[].n_mediums)
-            var n_medium_ifaces = Int64(handle[].n_medium_ifaces)
-            var n_spheres = Int64(handle[].n_spheres)
-            var n_curves = Int64(handle[].curves.n_curves)
-            var n_area_lights = Int64(handle[].lights.n_area_lights)
-            var n_distant_lights = Int64(handle[].lights.n_distant_lights)
-            var n_infinite_lights = Int64(handle[].lights.n_infinite_lights)
-            var n_point_lights = Int64(handle[].lights.n_point_lights)
-            var n_blas = Int64(handle[].blas.n_blas)
-            var n_instances = Int64(handle[].n_instances)
-            var (spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) = handle[].spectral.unsafe_ptrs()
-            var measured_brdfs = handle[].measured_brdfs_buf.unsafe_ptr().unsafe_bitcast[MeasuredBRDF_C]()
-            var n_measured_brdfs = Int64(handle[].n_measured_brdfs)
-            var gpu_textures = handle[].textures.textures_ptr()
-            var n_gpu_textures = Int64(handle[].textures.n_textures)
+            var gsd = handle[].scene_descriptor()
 
             var grid_light = ceildiv(max(n_light_paths_merge, 1), block_size)
             var grid_pix = ceildiv(n_pix, block_size)
@@ -6627,19 +6179,20 @@ def vcm_render_gpu_wavefront(
                 # -- running the full _BDPT_MAX_DEPTH iterations regardless
                 # of how many lanes are still active is the same fixed-
                 # iteration-count wavefront shape the plain path tracer uses.
+                var vsd = gsd.with_vcm(vcm_keep_ptr, vcm_keep_inv_cell, vcm_keep_scale, vcm_max_depth, vcm_cam, vcm_footprint, radius_i)
                 handle[].ctx.enqueue_function[_bdpt_light_path_init_gpu](
-                    light_states_ptr, lvc_ptr, path_len_ptr, mis_vc_weight_factor,
-                    Int64(n_light_paths_merge), default_emit_med, pass_seed, Int64(si),
-                    bvh2Nodes, primIds, meshes, materials,
-                    areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
-                    mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
-                    blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
-                    distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
-                    pointLights, n_point_lights,
-                    spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-                    measured_brdfs, n_measured_brdfs,
-                    gpu_textures, n_gpu_textures,
-                    grid_dim=grid_light, block_dim=block_size)
+                    light_states_ptr,
+                    lvc_ptr,
+                    path_len_ptr,
+                    mis_vc_weight_factor,
+                    Int64(n_light_paths_merge),
+                    default_emit_med,
+                    pass_seed,
+                    Int64(si),
+                    gsd,
+                    grid_dim=grid_light,
+                    block_dim=block_size,
+                )
 
                 for _bounce_i in range(_BDPT_MAX_DEPTH):
                     if use_vk:
@@ -6650,28 +6203,23 @@ def vcm_render_gpu_wavefront(
                             n_meshes_vk, n_light_paths_merge)
                     else:
                         handle[].ctx.enqueue_function[_bdpt_light_path_intersect_gpu](
-                            bvh2Nodes, primIds, meshes, curves,
-                            blasNodesArr, blasPrimIdsArr, instances,
-                            spheres, Int64(Int(n_spheres)),
+                            gsd,
                             light_states_ptr, inter_light_ptr, Int64(n_light_paths_merge),
                             grid_dim=grid_light, block_dim=block_size)
                     handle[].ctx.enqueue_function[_bdpt_light_path_bounce_gpu](
-                        light_states_ptr, inter_light_ptr, lvc_ptr, path_len_ptr,
-                        mis_vc_weight_factor, mis_vm_weight_factor, Int64(n_light_paths_merge),
-                        c2w_ptr, px_scale,
-                        bvh2Nodes, primIds, meshes, materials,
-                        areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
-                        mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
-                        blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
-                        distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
-                        pointLights, n_point_lights,
-                        spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-                        measured_brdfs, n_measured_brdfs,
-                        gpu_textures, n_gpu_textures,
-                        grids_dev, Int64(handle[].n_grids), nvdb_grids_dev, Int64(handle[].n_nvdb_grids),
-                        vcm_keep_ptr, vcm_keep_inv_cell, vcm_keep_scale, vcm_max_depth,
-                    vcm_cam[0], vcm_cam[1], vcm_cam[2], vcm_footprint, radius_i,
-                        grid_dim=grid_light, block_dim=block_size)
+                        light_states_ptr,
+                        inter_light_ptr,
+                        lvc_ptr,
+                        path_len_ptr,
+                        mis_vc_weight_factor,
+                        mis_vm_weight_factor,
+                        Int64(n_light_paths_merge),
+                        c2w_ptr,
+                        px_scale,
+                        vsd,
+                        grid_dim=grid_light,
+                        block_dim=block_size,
+                    )
 
                 # VCM Stage 2b: light paths are deterministically paired with
                 # pixels (the first n_pix of n_light_paths_merge total light
@@ -6746,33 +6294,36 @@ def vcm_render_gpu_wavefront(
                             n_meshes_vk, n_pix)
                     else:
                         handle[].ctx.enqueue_function[_bdpt_camera_path_intersect_gpu](
-                            bvh2Nodes, primIds, meshes, curves,
-                            blasNodesArr, blasPrimIdsArr, instances,
-                            spheres, Int64(Int(n_spheres)),
+                            gsd,
                             cam_states_ptr, inter_cam_ptr, Int64(n_pix),
                             grid_dim=grid_pix, block_dim=block_size)
                     if shadow_batch_enabled:
                         handle[].ctx.enqueue_function[reset_shadow_valid_gpu](
                             shadow_valid_ptr, Int64(n_pix), grid_dim=grid_pix, block_dim=block_size)
                     handle[].ctx.enqueue_function[_bdpt_camera_path_bounce_gpu](
-                        cam_states_ptr, inter_cam_ptr, lvc_ptr, path_len_ptr,
-                        merge_next_ptr, merge_heads_ptr, merge_inv_cell, merge_r2, merge_norm,
-                        mis_vc_weight_factor, mis_vm_weight_factor, Int64(n_pix),
-                        c2w_ptr, px_scale,
-                        bvh2Nodes, primIds, meshes, materials,
-                        areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
-                        mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
-                        blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
-                        distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
-                        pointLights, n_point_lights,
-                        spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-                        measured_brdfs, n_measured_brdfs,
-                        gpu_textures, n_gpu_textures,
-                        Int8(1) if shadow_batch_enabled else Int8(0), shadow_rays_ptr, shadow_pending_ptr, shadow_valid_ptr, shadow_seg_med_ptr,
-                        grids_dev, Int64(handle[].n_grids), nvdb_grids_dev, Int64(handle[].n_nvdb_grids),
-                        vcm_keep_ptr, vcm_keep_inv_cell, vcm_keep_scale, vcm_max_depth,
-                    vcm_cam[0], vcm_cam[1], vcm_cam[2], vcm_footprint, radius_i,
-                        grid_dim=grid_pix, block_dim=block_size)
+                        cam_states_ptr,
+                        inter_cam_ptr,
+                        lvc_ptr,
+                        path_len_ptr,
+                        merge_next_ptr,
+                        merge_heads_ptr,
+                        merge_inv_cell,
+                        merge_r2,
+                        merge_norm,
+                        mis_vc_weight_factor,
+                        mis_vm_weight_factor,
+                        Int64(n_pix),
+                        c2w_ptr,
+                        px_scale,
+                        vsd,
+                        Int8(1) if shadow_batch_enabled else Int8(0),
+                        shadow_rays_ptr,
+                        shadow_pending_ptr,
+                        shadow_valid_ptr,
+                        shadow_seg_med_ptr,
+                        grid_dim=grid_pix,
+                        block_dim=block_size,
+                    )
 
                     # Task #163 stage 5 perf follow-up (2026-07-13): resolve
                     # this bounce's diffuse-branch connect shadow rays in
@@ -6794,21 +6345,21 @@ def vcm_render_gpu_wavefront(
                             interop_results_buf.value().unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
                             mesh_material_idx_buf.value().unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
                             Int64(n_meshes_vk),
-                            cam_states_ptr, shadow_pending_ptr, shadow_valid_ptr, shadow_seg_med_ptr, shadow_rays_ptr,
-                            shadow_scratch_ptr, Int64(shadow_cap),
-                            bvh2Nodes, primIds, meshes, materials,
-                            areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
-                            mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
-                            blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
-                            distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
-                            pointLights, n_point_lights,
-                            spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-                            measured_brdfs, n_measured_brdfs,
-                            gpu_textures, n_gpu_textures,
-                            grid_dim=shadow_grid, block_dim=block_size)
+                            cam_states_ptr,
+                            shadow_pending_ptr,
+                            shadow_valid_ptr,
+                            shadow_seg_med_ptr,
+                            shadow_rays_ptr,
+                            shadow_scratch_ptr,
+                            Int64(shadow_cap),
+                            gsd,
+                            grid_dim=shadow_grid,
+                            block_dim=block_size,
+                        )
                         handle[].ctx.enqueue_function[sum_shadow_connect_gpu](
                             cam_states_ptr, shadow_pending_ptr, shadow_valid_ptr, Int64(n_pix),
                             grid_dim=grid_pix, block_dim=block_size)
+
 
                 handle[].ctx.enqueue_function[_bdpt_camera_path_accumulate_gpu](
                     cam_states_ptr, accum_ptr, albedo_accum_ptr, Int64(n_pix),
@@ -6822,23 +6373,24 @@ def vcm_render_gpu_wavefront(
                 # stream so that kernel's non-atomic per-pixel writes can
                 # never overlap these atomic adds.
                 handle[].ctx.enqueue_function[_bdpt_splat_light_paths_gpu](
-                    accum_ptr, lvc_ptr, path_len_ptr, Int64(n_light_paths_merge),
-                    inter_light_ptr, w2c_ptr, c2r_ptr, c2w_ptr,
-                    Int64(fw), Int64(fh), px_scale, mis_vm_weight_factor,
+                    accum_ptr,
+                    lvc_ptr,
+                    path_len_ptr,
+                    Int64(n_light_paths_merge),
+                    inter_light_ptr,
+                    w2c_ptr,
+                    c2r_ptr,
+                    c2w_ptr,
+                    Int64(fw),
+                    Int64(fh),
+                    px_scale,
+                    mis_vm_weight_factor,
                     film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
                                    psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y),
-                    bvh2Nodes, primIds, meshes, materials,
-                    areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
-                    mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
-                    blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
-                    distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
-                    pointLights, n_point_lights,
-                    spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-                    measured_brdfs, n_measured_brdfs,
-                    gpu_textures, n_gpu_textures,
-                    vcm_keep_ptr, vcm_keep_inv_cell, vcm_keep_scale, vcm_max_depth,
-                    vcm_cam[0], vcm_cam[1], vcm_cam[2], vcm_footprint, radius_i,
-                    grid_dim=grid_light, block_dim=block_size)
+                    vsd,
+                    grid_dim=grid_light,
+                    block_dim=block_size,
+                )
 
                 if verbose:
                     print("VCM (GPU wavefront): sample " + String(si + 1) + "/" + String(n_spp))
@@ -6925,8 +6477,8 @@ def vcm_render_gpu_wavefront(
 # been isolated; a smaller repro than "move all 735 lines" is the next step
 # for anyone retrying.
 # ── GPU kernels ───────────────────────────────────────────────────────────────
-# Each kernel is a thin wrapper: compute this thread's index, build a complete
-# SceneDescriptor2_C via _mk_sd_full (bvh.mojo), then call the EXACT SAME
+# Each kernel is a thin wrapper: compute this thread's index, then with the
+# host-built SceneDescriptor2_C `sd` call the EXACT SAME
 # shared function the CPU driver above calls (comptime[use_gpu]-branching
 # only at the two genuine concurrency-primitive divergence points: photon-
 # slot reservation and hash-grid bucket insertion) — mirrors bdpt.mojo's
@@ -6950,38 +6502,7 @@ def sppm_gen_vp_gpu(
     seed: UInt64,
     max_depth_dp: Int64,
     film_filter: FilmFilter,
-    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: Pointer[Material_C, MutUntrackedOrigin],
-    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
-    areaLightCount: Int64,
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
-    sphereCount: Int64,
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    curveCount: Int64,
-    mediums: Pointer[Medium_C, MutUntrackedOrigin],
-    mediumCount: Int64,
-    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
-    mediumIfaceCount: Int64,
-    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasCount: Int64,
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
-    instanceCount: Int64,
-    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
-    distantLightCount: Int64,
-    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
-    infiniteLightCount: Int64,
-    gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
-    gpuTextureCount: Int64 = Int64(0),
-    # Device-resident density fields, for the free-flight sampler. Without
-    # these the descriptor built below reports no density fields and every
-    # heterogeneous medium samples as uniform density-1 fog.
-    grids: Pointer[Grid_C, MutUntrackedOrigin] = Pointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_grids: Int64 = Int64(0),
-    nvdb_grids: Pointer[NvdbGrid_C, MutUntrackedOrigin] = Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_nvdb_grids: Int64 = Int64(0),
+    sd: SceneDescriptor2_C,
 ):
     """One thread per (pixel, vp_sample). Calls the SAME
     _sppm_trace_visible_point the CPU driver (_sppm_camera_pass) calls,
@@ -6994,15 +6515,6 @@ def sppm_gen_vp_gpu(
     var pix = combined // vp_samples
     var px = pix % Int(fw)
     var py = pix // Int(fw)
-    var sd = _mk_sd_full(
-        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
-        areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
-        mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
-        blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
-        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
-        gpuTextures=gpuTextures, gpuTextureCount=gpuTextureCount,
-        grids=grids, gridCount=n_grids, nvdbGrids=nvdb_grids, nvdbGridCount=n_nvdb_grids,
-    )
     var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
     vps[unsafe_offset=combined] = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch.unsafe_offset(combined), Int(max_depth_dp), film_filter)
 
@@ -7017,53 +6529,12 @@ def sppm_emit_photons_gpu(
     seed: UInt64,
     pass_idx_dp: Int64,
     max_depth_dp: Int64,
-    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: Pointer[Material_C, MutUntrackedOrigin],
-    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
-    areaLightCount: Int64,
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
-    sphereCount: Int64,
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    curveCount: Int64,
-    mediums: Pointer[Medium_C, MutUntrackedOrigin],
-    mediumCount: Int64,
-    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
-    mediumIfaceCount: Int64,
-    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasCount: Int64,
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
-    instanceCount: Int64,
-    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
-    distantLightCount: Int64,
-    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
-    infiniteLightCount: Int64,
-    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
-    pointLightCount: Int64,
+    sd: SceneDescriptor2_C,
     # camera_to_world + pixel angular size: a photon needs a bump/normal-map
     # footprint and has no ray cone, so it uses the camera-distance
     # approximation -- see _sppm_trace_photon's own params.
     c2w: Pointer[Float32, MutUntrackedOrigin],
     photon_px_scale: Float32,
-    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfCount: Int64 = Int64(0),
-    gpuTextures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
-    gpuTextureCount: Int64 = Int64(0),
-    # Device-resident density fields, for the free-flight sampler. Without
-    # these the descriptor built below reports no density fields and every
-    # heterogeneous medium samples as uniform density-1 fog.
-    grids: Pointer[Grid_C, MutUntrackedOrigin] = Pointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_grids: Int64 = Int64(0),
-    nvdb_grids: Pointer[NvdbGrid_C, MutUntrackedOrigin] = Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_nvdb_grids: Int64 = Int64(0),
 ):
     """One thread per emitted photon path. Calls the SAME _sppm_trace_photon
     the CPU driver (_sppm_photon_pass) calls, with use_gpu=True so
@@ -7077,6 +6548,17 @@ def sppm_emit_photons_gpu(
     (for the RGB conversion) and the measured-BRDF array -- unlike this
     kernel's other materials, which only draw a wavelength via PCG and
     never dereference sd.spectral."""
+    var areaLightCount = sd.areaLightCount
+    var sphereCount = sd.sphereCount
+    var distantLightCount = sd.distantLightCount
+    var infiniteLightCount = sd.infiniteLightCount
+    var pointLightCount = sd.pointLightCount
+    var spectral_coeffs = sd.spectral.coeffs
+    var spectral_cie_x = sd.spectral.cie_x
+    var spectral_cie_y = sd.spectral.cie_y
+    var spectral_cie_z = sd.spectral.cie_z
+    var spectral_d65 = sd.spectral.d65
+    var spectral_res_dp = Int64(sd.spectral.res)
     var spectral_res = Int(spectral_res_dp)
     var n_emit = Int(n_emit_dp)
     var max_photons = Int(max_photons_dp)
@@ -7091,18 +6573,6 @@ def sppm_emit_photons_gpu(
                        and infiniteLightCount == Int64(0) and pointLightCount == Int64(0)
                        and sphereCount == Int64(0)):
         return
-    var sd = _mk_sd_full(
-        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
-        areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
-        mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
-        blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
-        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
-        pointLights, pointLightCount,
-        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-        measuredBrdfs, measuredBrdfCount,
-        gpuTextures, gpuTextureCount,
-        grids=grids, gridCount=n_grids, nvdbGrids=nvdb_grids, nvdbGridCount=n_nvdb_grids,
-    )
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
     _sppm_trace_photon[True, True](sd, pcg, inter_scratch.unsafe_offset(k), n_emit, photons, max_photons, stored_counter, default_emit_med, Int(max_depth_dp),
         _sppm_cam_pos(c2w), photon_px_scale,
@@ -7137,55 +6607,25 @@ def sppm_gather_gpu(
     photons:  Pointer[SPPMPhoton, MutUntrackedOrigin],
     heads:    Pointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
-    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: Pointer[Material_C, MutUntrackedOrigin],
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    curveCount: Int64,
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
-    instanceCount: Int64,
-    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfCount: Int64 = Int64(0),
+    sd: SceneDescriptor2_C,
     pass_idx_dp: Int64 = Int64(0),
     med_arr_dp: Pointer[Medium_C, MutUntrackedOrigin] = Pointer[Medium_C, MutUntrackedOrigin].unsafe_dangling(),
     med_count_dp: Int64 = Int64(0),
     grids_dp: Pointer[Grid_C, MutUntrackedOrigin] = Pointer[Grid_C, MutUntrackedOrigin].unsafe_dangling(),
     nvdb_grids_dp: Pointer[NvdbGrid_C, MutUntrackedOrigin] = Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(),
 ):
-    """One thread per visible point. `sd` here only needs to be complete
-    enough for _sppm_gather_one's hair branch (sd.materials/sd.curves) —
-    plus, since measured BxDF support was added (see project_measured_bxdf
-    memory), its mat_kind=3 branch too (sd.measuredBrdfs + sd.spectral,
-    via _sppm_vp_brdf). Other SceneDescriptor2_C fields it builds are still
-    unused by gather, so stay zeroed/dangling exactly like sppm_nee_gpu's
-    own _mk_sd_full call."""
+    """One thread per visible point."""
+    var spectral_coeffs = sd.spectral.coeffs
+    var spectral_cie_x = sd.spectral.cie_x
+    var spectral_cie_y = sd.spectral.cie_y
+    var spectral_cie_z = sd.spectral.cie_z
+    var spectral_d65 = sd.spectral.d65
+    var spectral_res_dp = Int64(sd.spectral.res)
     var spectral_res = Int(spectral_res_dp)
     var n_pix = Int(n_pix_dp)
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= n_pix:
         return
-    var sd = _mk_sd_full(
-        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
-        Pointer[AreaLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0), curves, curveCount,
-        Pointer[Medium_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[MediumInterface_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        instances, instanceCount,
-        Pointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-        measuredBrdfs, measuredBrdfCount,
-    )
     _sppm_gather_one(vps, i, photons, heads, inv_cell, sd, med_arr_dp, Int(med_count_dp),
                      grids_dp, nvdb_grids_dp,
                      spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
@@ -7197,39 +6637,7 @@ def sppm_nee_gpu(
     n_vps_dp:  Int64,
     seed:   UInt64,
     pass_idx_dp: Int64,
-    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    materials: Pointer[Material_C, MutUntrackedOrigin],
-    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
-    areaLightCount: Int64,
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
-    sphereCount: Int64,
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    curveCount: Int64,
-    mediums: Pointer[Medium_C, MutUntrackedOrigin],
-    mediumCount: Int64,
-    mediumInterfaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
-    mediumIfaceCount: Int64,
-    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasCount: Int64,
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
-    instanceCount: Int64,
-    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
-    distantLightCount: Int64,
-    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
-    infiniteLightCount: Int64,
-    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
-    pointLightCount: Int64,
-    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
-    measuredBrdfCount: Int64 = Int64(0),
+    sd: SceneDescriptor2_C,
 ):
     """One thread per visible point. Calls the SAME _sppm_nee_one the CPU
     driver (_sppm_nee_update) calls. The only one of SPPM's 4 GPU kernels
@@ -7239,22 +6647,13 @@ def sppm_nee_gpu(
     only (no table lookup needed to draw a wavelength), and the gather pass
     stays RGB by design (see _sppm_gather_one's docstring) -- only this
     NEE pass's direct-lighting term actually dereferences sd.spectral."""
+    var spectral_res_dp = Int64(sd.spectral.res)
     var spectral_res = Int(spectral_res_dp)
     var n_vps = Int(n_vps_dp)
     var pass_idx = Int(pass_idx_dp)
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= n_vps:
         return
-    var sd = _mk_sd_full(
-        bvh2Nodes, primIds, meshes, Int64(0), materials, Int64(0),
-        areaLights, areaLightCount, spheres, sphereCount, curves, curveCount,
-        mediums, mediumCount, mediumInterfaces, mediumIfaceCount,
-        blasNodesArr, blasPrimIdsArr, blasCount, instances, instanceCount,
-        distantLights, distantLightCount, infiniteLights, infiniteLightCount,
-        pointLights, pointLightCount,
-        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-        measuredBrdfs, measuredBrdfCount,
-    )
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + i), UInt64(11))
     _sppm_nee_one(vps, i, sd, pcg)
 
@@ -7437,42 +6836,12 @@ def sppm_render_gpu(
                 psc[unsafe_offset=0].camera_to_world,
                 Int(psc[unsafe_offset=0].film_w), Int(psc[unsafe_offset=0].film_h))
 
-            var bvh2Nodes = handle[].bvh.nodes_ptr()
-            var primIds = handle[].bvh.prim_ids_ptr()
-            var meshes = handle[].meshes.meshes_ptr()
-            var curves = handle[].curves.curves_ptr()
-            var blasNodesArr = handle[].blas.nodes_arr()
-            var blasPrimIdsArr = handle[].blas.primids_arr()
-            var instances = handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance_C]()
-            var materials = handle[].materials_buf.unsafe_ptr().unsafe_bitcast[Material_C]()
             var mediums = handle[].mediums_buf.unsafe_ptr().unsafe_bitcast[Medium_C]()
-            # Device-resident density fields for the free-flight sampler. These
-            # were never handed to the VCM/SPPM kernels before, which is exactly
-            # why those integrators sampled every heterogeneous medium as uniform
-            # density-1 fog -- see geometry.mojo's sample_free_flight.
             var grids_dev = handle[].grids_buf.unsafe_ptr().unsafe_bitcast[Grid_C]()
             var nvdb_grids_dev = handle[].nvdb_grids_buf.unsafe_ptr().unsafe_bitcast[NvdbGrid_C]()
-            var mediumInterfaces = handle[].medium_ifaces_buf.unsafe_ptr().unsafe_bitcast[MediumInterface_C]()
-            var spheres = handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C]()
-            var areaLights = handle[].lights.area_lights_ptr()
-            var distantLights = handle[].lights.distant_lights_ptr()
-            var infiniteLights = handle[].lights.infinite_lights_ptr()
-            var pointLights = handle[].lights.point_lights_ptr()
             var n_mediums = Int64(handle[].n_mediums)
-            var n_medium_ifaces = Int64(handle[].n_medium_ifaces)
-            var n_spheres = Int64(handle[].n_spheres)
-            var n_curves = Int64(handle[].curves.n_curves)
-            var n_area_lights = Int64(handle[].lights.n_area_lights)
-            var n_distant_lights = Int64(handle[].lights.n_distant_lights)
-            var n_infinite_lights = Int64(handle[].lights.n_infinite_lights)
-            var n_point_lights = Int64(handle[].lights.n_point_lights)
-            var n_blas = Int64(handle[].blas.n_blas)
-            var n_instances = Int64(handle[].n_instances)
             var (spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) = handle[].spectral.unsafe_ptrs()
-            var measured_brdfs = handle[].measured_brdfs_buf.unsafe_ptr().unsafe_bitcast[MeasuredBRDF_C]()
-            var n_measured_brdfs = Int64(handle[].n_measured_brdfs)
-            var gpu_textures = handle[].textures.textures_ptr()
-            var n_gpu_textures = Int64(handle[].textures.n_textures)
+            var gsd = handle[].scene_descriptor()
 
             var grid_pix = ceildiv(n_pix, block_size)
             var grid_vps = ceildiv(n_vps, block_size)
@@ -7484,18 +6853,22 @@ def sppm_render_gpu(
             # convergence guarantee.
             var cam_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(0x9E3779B97F4A7C15 + 7)
             handle[].ctx.enqueue_function[sppm_gen_vp_gpu](
-                vps_ptr, inter_cam_ptr, Int64(n_pix), Int64(_VP_SAMPLES), psc[unsafe_offset=0].film_w, r2c_ptr, c2w_ptr,
-                init_r2, cam_seed, Int64(psc[unsafe_offset=0].max_depth),
+                vps_ptr,
+                inter_cam_ptr,
+                Int64(n_pix),
+                Int64(_VP_SAMPLES),
+                psc[unsafe_offset=0].film_w,
+                r2c_ptr,
+                c2w_ptr,
+                init_r2,
+                cam_seed,
+                Int64(psc[unsafe_offset=0].max_depth),
                 film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
                                psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y),
-                bvh2Nodes, primIds, meshes, materials,
-                areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
-                mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
-                blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
-                distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
-                gpu_textures, n_gpu_textures,
-                grids_dev, Int64(handle[].n_grids), nvdb_grids_dev, Int64(handle[].n_nvdb_grids),
-                grid_dim=grid_vps, block_dim=block_size)
+                gsd,
+                grid_dim=grid_vps,
+                block_dim=block_size,
+            )
 
             for pass_idx in range(n_passes):
                 handle[].ctx.enqueue_function[sppm_reset_i32_gpu](
@@ -7504,20 +6877,21 @@ def sppm_render_gpu(
                 var pass_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(pass_idx * 2654435761 + 1)
                 var grid_emit = ceildiv(max(n_photons_per_pass, 1), block_size)
                 handle[].ctx.enqueue_function[sppm_emit_photons_gpu](
-                    photons_ptr, Int64(n_photons_per_pass), Int64(max_photons), inter_ph_ptr, counter_ptr,
-                    default_emit_med, pass_seed, Int64(pass_idx), Int64(psc[unsafe_offset=0].max_depth),
-                    bvh2Nodes, primIds, meshes, materials,
-                    areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
-                    mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
-                    blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
-                    distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
-                    pointLights, n_point_lights,
-                    c2w_ptr, photon_px_scale,
-                    spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-                    measured_brdfs, n_measured_brdfs,
-                    gpu_textures, n_gpu_textures,
-                    grids_dev, Int64(handle[].n_grids), nvdb_grids_dev, Int64(handle[].n_nvdb_grids),
-                    grid_dim=grid_emit, block_dim=block_size)
+                    photons_ptr,
+                    Int64(n_photons_per_pass),
+                    Int64(max_photons),
+                    inter_ph_ptr,
+                    counter_ptr,
+                    default_emit_med,
+                    pass_seed,
+                    Int64(pass_idx),
+                    Int64(psc[unsafe_offset=0].max_depth),
+                    gsd,
+                    c2w_ptr,
+                    photon_px_scale,
+                    grid_dim=grid_emit,
+                    block_dim=block_size,
+                )
 
                 handle[].ctx.synchronize()
                 var n_stored_raw: Int32
@@ -7545,25 +6919,31 @@ def sppm_render_gpu(
                         photons_ptr, Int64(n_stored), heads_ptr, inv_cell,
                         grid_dim=grid_ins, block_dim=block_size)
                     handle[].ctx.enqueue_function[sppm_gather_gpu](
-                        vps_ptr, Int64(n_vps), photons_ptr, heads_ptr, inv_cell,
-                        bvh2Nodes, primIds, meshes, materials, curves, n_curves, instances, n_instances,
-                        spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-                        measured_brdfs, n_measured_brdfs, Int64(pass_idx),
-                        mediums, n_mediums, grids_dev, nvdb_grids_dev,
-                        grid_dim=grid_vps, block_dim=block_size)
+                        vps_ptr,
+                        Int64(n_vps),
+                        photons_ptr,
+                        heads_ptr,
+                        inv_cell,
+                        gsd,
+                        Int64(pass_idx),
+                        mediums,
+                        n_mediums,
+                        grids_dev,
+                        nvdb_grids_dev,
+                        grid_dim=grid_vps,
+                        block_dim=block_size,
+                    )
 
                 var nee_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(pass_idx * 0xBF58476D1CE4E5B9 + 3)
                 handle[].ctx.enqueue_function[sppm_nee_gpu](
-                    vps_ptr, Int64(n_vps), nee_seed, Int64(pass_idx),
-                    bvh2Nodes, primIds, meshes, materials,
-                    areaLights, n_area_lights, spheres, n_spheres, curves, n_curves,
-                    mediums, n_mediums, mediumInterfaces, n_medium_ifaces,
-                    blasNodesArr, blasPrimIdsArr, n_blas, instances, n_instances,
-                    distantLights, n_distant_lights, infiniteLights, n_infinite_lights,
-                    pointLights, n_point_lights,
-                    spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-                    measured_brdfs, n_measured_brdfs,
-                    grid_dim=grid_vps, block_dim=block_size)
+                    vps_ptr,
+                    Int64(n_vps),
+                    nee_seed,
+                    Int64(pass_idx),
+                    gsd,
+                    grid_dim=grid_vps,
+                    block_dim=block_size,
+                )
 
                 if verbose or (pass_idx + 1) % 10 == 0:
                     print("SPPM (GPU): pass " + String(pass_idx + 1) + "/" + String(n_passes)
