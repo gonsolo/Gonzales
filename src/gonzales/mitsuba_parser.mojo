@@ -5,8 +5,8 @@ from std.ffi import external_call
 from .diagnostics import warn_unsupported
 from .lexer import is_whitespace
 from .parse_types import SceneParseState, NamedMaterial, scene_path
-from .geometry import RGB, MatKind, PI, Vec3f
-from .transform import matrix_invert, transform_normals
+from .geometry import RGB, MatKind, PI, Vec3f, Point3f
+from .transform import matrix_invert, transform_normals, Mat4
 from .scene_builder import store_mesh
 from .mitsuba_serialized import load_mitsuba_serialized, MitsubaMesh
 from .pbrt_parser import ParsedScene_Mojo, finalize_scene
@@ -760,9 +760,13 @@ def _mit_process_sphere(tags: List[MitsubaTag], shape_idx: Int, end: Int,
         s_radius = _mit_parse_float(_mxml_find_attr(tags[radius_idx], "value"))
 
     var ctm = s_ptr[unsafe_offset=0].ctm.copy()
-    var cx = ctm[0]*s_center_obj[0] + ctm[4]*s_center_obj[1] + ctm[8]*s_center_obj[2]  + ctm[12]
-    var cy = ctm[1]*s_center_obj[0] + ctm[5]*s_center_obj[1] + ctm[9]*s_center_obj[2]  + ctm[13]
-    var cz = ctm[2]*s_center_obj[0] + ctm[6]*s_center_obj[1] + ctm[10]*s_center_obj[2] + ctm[14]
+    var ctm_simd = SIMD[DType.float32, 16](
+        ctm[0], ctm[1], ctm[2], ctm[3], ctm[4], ctm[5], ctm[6], ctm[7],
+        ctm[8], ctm[9], ctm[10], ctm[11], ctm[12], ctm[13], ctm[14], ctm[15])
+    var s_center_w = Mat4(ctm_simd).transform_point(Point3f(s_center_obj[0], s_center_obj[1], s_center_obj[2]))
+    var cx = s_center_w.x
+    var cy = s_center_w.y
+    var cz = s_center_w.z
     var sx = sqrt(ctm[0]*ctm[0] + ctm[1]*ctm[1] + ctm[2]*ctm[2])
     if sx < Float32(1e-6):
         sx = Float32(1.0)

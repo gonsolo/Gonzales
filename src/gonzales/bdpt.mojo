@@ -1284,7 +1284,7 @@ def _bdpt_connect_to_camera(
     #   weight = 1 / (wLight + 1)
     var (_dp, rev_pdf_w) = _bdpt_vertex_pdfs(lv, Vec3f(dir_to_cam[0], dir_to_cam[1], dir_to_cam[2]), sd)
     var camera_pdf_a = image_to_surface
-    var w_light = (camera_pdf_a * inv_n) * (mis_vm_weight_factor * _vcm_eta_scale(sd, lv.pos.x, lv.pos.y, lv.pos.z)
+    var w_light = (camera_pdf_a * inv_n) * (mis_vm_weight_factor * _vcm_eta_scale(sd, lv.pos)
                                             + lv.dVCM + lv.dVC * rev_pdf_w)
     var mis_weight = Float32(1) / (w_light + Float32(1))
     contrib = contrib * mis_weight
@@ -1478,9 +1478,9 @@ def _vcm_light_count(lvc: Pointer[BDPTVertex, MutUntrackedOrigin], lp_idx: Int, 
 
 
 @always_inline
-def _vcm_keep(ref sd: SceneDescriptor2_C, x: Float32, y: Float32, z: Float32) -> Float32:
+def _vcm_keep(ref sd: SceneDescriptor2_C, p: Point3f) -> Float32:
     """Variance-aware merge MIS: the probability that thinning keeps a light
-    vertex at (x, y, z), estimated from the PREVIOUS pass's bucket counts
+    vertex at `p`, estimated from the PREVIOUS pass's bucket counts
     (sd.vcmKeep*). Merging there really runs on keep * N photons, so its MIS
     density is keep * eta rather than eta, and the balance heuristic should
     lean on the other strategies exactly where photons were thinned.
@@ -1494,8 +1494,8 @@ def _vcm_keep(ref sd: SceneDescriptor2_C, x: Float32, y: Float32, z: Float32) ->
     dVC carries built. 1 when there is no previous pass."""
     if not _is_real_ptr(sd.vcmKeepCounts):
         return Float32(1)
-    var h = _hash_cell(Int(floor(x * sd.vcmKeepInvCell)), Int(floor(y * sd.vcmKeepInvCell)),
-                       Int(floor(z * sd.vcmKeepInvCell)))
+    var h = _hash_cell(Int(floor(p.x * sd.vcmKeepInvCell)), Int(floor(p.y * sd.vcmKeepInvCell)),
+                       Int(floor(p.z * sd.vcmKeepInvCell)))
     var n = Float32(sd.vcmKeepCounts[unsafe_offset=h]) * sd.vcmKeepScale
     if n <= Float32(_VCM_MERGE_BUCKET_CAP):
         return Float32(1)
@@ -1511,29 +1511,27 @@ comptime _VCM_FOOTPRINT_PIXELS = Float32(2.0)
 
 
 @always_inline
-def _vcm_merge_radius_at(ref sd: SceneDescriptor2_C, x: Float32, y: Float32, z: Float32) -> Float32:
-    """Merge radius at (x, y, z): _VCM_FOOTPRINT_PIXELS of image footprint at
-    that point's distance from the camera, never more than this pass's global
+def _vcm_merge_radius_at(ref sd: SceneDescriptor2_C, p: Point3f) -> Float32:
+    """Merge radius at `p`: _VCM_FOOTPRINT_PIXELS of image footprint at that
+    point's distance from the camera, never more than this pass's global
     radius (which sets the grid cells) and shrinking with it pass by pass.
 
     A function of POSITION only, like _vcm_keep, so every strategy of a path
     agrees on merging's density at each vertex: eta(x) = N pi r(x)^2."""
     if sd.vcmFootprint <= Float32(0) or sd.vcmMergeR <= Float32(0):
         return sd.vcmMergeR
-    var dx = x - sd.vcmCamX
-    var dy = y - sd.vcmCamY
-    var dz = z - sd.vcmCamZ
-    var r = sd.vcmFootprint * sqrt(dx * dx + dy * dy + dz * dz)
+    var d = p - Point3f(sd.vcmCamX, sd.vcmCamY, sd.vcmCamZ)
+    var r = sd.vcmFootprint * sqrt(d.x * d.x + d.y * d.y + d.z * d.z)
     return min(sd.vcmMergeR, max(r, sd.vcmMergeR * Float32(1e-3)))
 
 
 @always_inline
-def _vcm_eta_scale(ref sd: SceneDescriptor2_C, x: Float32, y: Float32, z: Float32) -> Float32:
-    """eta(x) / eta: merging's MIS density at (x, y, z) relative to the global
+def _vcm_eta_scale(ref sd: SceneDescriptor2_C, p: Point3f) -> Float32:
+    """eta(x) / eta: merging's MIS density at `p` relative to the global
     N pi r_pass^2 -- thinning's keep probability times the radius shrink."""
-    var s = _vcm_keep(sd, x, y, z)
+    var s = _vcm_keep(sd, p)
     if sd.vcmFootprint > Float32(0) and sd.vcmMergeR > Float32(0):
-        var q = _vcm_merge_radius_at(sd, x, y, z) / sd.vcmMergeR
+        var q = _vcm_merge_radius_at(sd, p) / sd.vcmMergeR
         s *= q * q
     return s
 
@@ -1751,7 +1749,7 @@ def _bdpt_merge_from_cache(
     var r2 = r2_pass
     var norm = norm_pass
     if sd.vcmFootprint > Float32(0) and sd.vcmMergeR > Float32(0):
-        var rq = _vcm_merge_radius_at(sd, cv.pos.x, cv.pos.y, cv.pos.z)
+        var rq = _vcm_merge_radius_at(sd, cv.pos)
         r2 = rq * rq
         norm = norm_pass * (r2_pass / max(r2, Float32(1e-20)))
     var cix = Int(floor(cv.pos.x * inv_cell))
@@ -1871,7 +1869,7 @@ def _bdpt_merge_from_cache(
                                 # eta that held by construction (the carried dVM); with
                                 # the variance-aware eta(x) it has to be formed here,
                                 # at the camera vertex that defines the merged path.
-                                var inv_eta_x = mis_vc_weight_factor / _vcm_eta_scale(sd, cv.pos.x, cv.pos.y, cv.pos.z)
+                                var inv_eta_x = mis_vc_weight_factor / _vcm_eta_scale(sd, cv.pos)
                                 var w_light = (lv.dVCM + lv.dVC * camera_bsdf_dir_pdf_w) * inv_eta_x
                                 var w_camera = (cv.dVCM + cv.dVC * camera_bsdf_rev_pdf_w) * inv_eta_x
                                 w = Float32(1) / (w_light + Float32(1) + w_camera)
@@ -2485,7 +2483,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[unsafe_offset=mat_idx]
         var hit = ro + rd*t_hit
-        var eta_x = mis_vm_weight_factor * _vcm_eta_scale(sd, hit.x, hit.y, hit.z)   # merging's MIS density HERE
+        var eta_x = mis_vm_weight_factor * _vcm_eta_scale(sd, hit)   # merging's MIS density HERE
 
         # Direct hit on an emissive analytic sphere — checked BEFORE material
         # dispatch since the sphere's own material is often an inert
@@ -3071,7 +3069,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     beta *= SpectralSample(bssrdf_exit_ft(cos_out_x, eta_e))
                     var (c0, c1, c2) = bssrdf_exit_scatter_carries(
                         dvcm_carry, dvc_carry, dvm_carry, ex.p_area, cos_out_x,
-                        mis_vc_weight_factor, mis_vm_weight_factor * _vcm_eta_scale(sd, x_o.x, x_o.y, x_o.z))
+                        mis_vc_weight_factor, mis_vm_weight_factor * _vcm_eta_scale(sd, x_o))
                     dvcm_carry = c0
                     dvc_carry = c1
                     dvm_carry = c2
@@ -3566,7 +3564,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[unsafe_offset=mat_idx]
         var hit = ro + rd*t_hit
-        var eta_x = mis_vm_weight_factor * _vcm_eta_scale(sd, hit.x, hit.y, hit.z)   # merging's MIS density HERE
+        var eta_x = mis_vm_weight_factor * _vcm_eta_scale(sd, hit)   # merging's MIS density HERE
 
         if mat.type == MatKind.mix:
             var mix_idx1 = Int(mat.tex_idx & Int32(0xFFFF))
@@ -3782,7 +3780,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     flux *= SpectralSample(bssrdf_exit_ft(cos_out_x, eta_e))
                     var (c0, c1, c2) = bssrdf_exit_scatter_carries(
                         dvcm_carry, dvc_carry, dvm_carry, ex.p_area, cos_out_x,
-                        mis_vc_weight_factor, mis_vm_weight_factor * _vcm_eta_scale(sd, ex.x_o.x, ex.x_o.y, ex.x_o.z))
+                        mis_vc_weight_factor, mis_vm_weight_factor * _vcm_eta_scale(sd, ex.x_o))
                     dvcm_carry = c0
                     dvc_carry = c1
                     dvm_carry = c2
@@ -4353,7 +4351,7 @@ def _connect_unweighted(
             light_bsdf_rev_pdf_w = lrp
         var camera_bsdf_dir_pdf_a = camera_bsdf_dir_pdf_w * cos_lv / dist2
         var light_bsdf_dir_pdf_a = light_bsdf_dir_pdf_w * cos_cv / dist2
-        var eta_cv = mis_vm_weight_factor * _vcm_eta_scale(sd, cv.pos.x, cv.pos.y, cv.pos.z)
+        var eta_cv = mis_vm_weight_factor * _vcm_eta_scale(sd, cv.pos)
         var w_light: Float32
         if lv.is_light == Int32(1):
             # s=1: this connection IS VCM's direct-light strategy for an area
@@ -4368,7 +4366,7 @@ def _connect_unweighted(
             # was already exact.
             w_light = camera_bsdf_dir_pdf_a / max(lv.pdf_fwd, Float32(1e-30))
         else:
-            var eta_lv = mis_vm_weight_factor * _vcm_eta_scale(sd, lv.pos.x, lv.pos.y, lv.pos.z)
+            var eta_lv = mis_vm_weight_factor * _vcm_eta_scale(sd, lv.pos)
             w_light = camera_bsdf_dir_pdf_a * (eta_lv + lv.dVCM + lv.dVC * light_bsdf_rev_pdf_w)
         var w_camera = light_bsdf_dir_pdf_a * (eta_cv + cv.dVCM + cv.dVC * camera_bsdf_rev_pdf_w)
         var mis_weight = Float32(1) / (w_light + Float32(1) + w_camera)
