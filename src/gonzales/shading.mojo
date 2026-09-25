@@ -2,7 +2,7 @@ from std.collections import Array
 from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
-from .geometry import RGB, Point3f, Point2f, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, LobeKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, ShadowTask_C, LightSampler_C, light_sampler_sample, light_sampler_pdf, Instance_C, MeasuredBRDF_C, dot, face_toward, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI, PDF_DROP_DIRECT, _is_real_ptr, _atan2f, area_light_pick_triangle
+from .geometry import RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Material_C, MatKind, LobeKind, AreaLight_C, Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, DistantLight_C, PointLight_C, InfiniteLight_C, PathState_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, ShadowTask_C, LightSampler_C, light_sampler_sample, light_sampler_pdf, Instance_C, MeasuredBRDF_C, dot, face_toward, cross, Frame, safe_sqrt, reflect, refract, schlick_fresnel, fr_dielectric, PI, TWO_PI, INV_PI, INV_FOUR_PI, PDF_DROP_DIRECT, _is_real_ptr, _atan2f, area_light_pick_triangle
 from .layered import layered_f, layered_sample, layered_pdf
 from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
@@ -1836,6 +1836,22 @@ def shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
 # rotates it into world space via UV-gradient tangent frame.
 # Returns geom_normal unchanged when normal_tex_idx < 0 or no UVs.
 @always_inline
+def _decode_tangent_normal(ns: RGB, tangent: Vec3f, bitangent: Vec3f, geom_normal: Vec3f) -> Vec3f:
+    """A normal-map texel, sampled raw ([0,1], no sRGB), decoded to a
+    tangent-space normal ([-1,1]) and rotated into world space -- the
+    identical tail both normal-map call sites in this file had (one for a
+    mesh's own UVs, one for an analytic sphere's Mitsuba-convention UVs);
+    falls back to `geom_normal` on a degenerate rotation, same as both did."""
+    var nx = ns.r * Float32(2.0) - Float32(1.0)
+    var ny = ns.g * Float32(2.0) - Float32(1.0)
+    var nz = ns.b * Float32(2.0) - Float32(1.0)
+    var world_n = tangent * nx + bitangent * ny + geom_normal * nz
+    var wn_len = dot(world_n, world_n)
+    if wn_len > Float32(0.0):
+        return world_n * (Float32(1.0) / sqrt(wn_len))
+    return geom_normal
+
+@always_inline
 def _apply_normal_map[use_gpu: Bool](
     mat: Material_C,
     v0: Int, v1: Int, v2: Int,
@@ -1888,14 +1904,7 @@ def _apply_normal_map[use_gpu: Bool](
     var found = False
     var ns = sample_texture[use_gpu](Int(mat.normal_tex_idx), uv_u, uv_v, True, pixel_uv, tex_filenames, textures, n_textures, found)
     if found:
-        var nx = ns.r * Float32(2.0) - Float32(1.0)
-        var ny = ns.g * Float32(2.0) - Float32(1.0)
-        var nz = ns.b * Float32(2.0) - Float32(1.0)
-        # Rotate tangent-space normal to world space
-        var world_n = tangent * nx + bitangent * ny + geom_normal * nz
-        var wn_len = dot(world_n, world_n)
-        if wn_len > Float32(0.0):
-            return world_n * (Float32(1.0) / sqrt(wn_len))
+        return _decode_tangent_normal(ns, tangent, bitangent, geom_normal)
     return geom_normal
 
 @always_inline
@@ -2065,14 +2074,7 @@ def _apply_normal_map_sphere[use_gpu: Bool](
     var ns = sample_texture[use_gpu](Int(mat.normal_tex_idx), u, Float32(1.0) - v, True, Float32(0.0), tex_filenames, textures, n_textures, found)
     if not found:
         return geom_normal
-    var nx = ns.r * Float32(2.0) - Float32(1.0)
-    var ny = ns.g * Float32(2.0) - Float32(1.0)
-    var nz = ns.b * Float32(2.0) - Float32(1.0)
-    var world_n = tangent * nx + bitangent * ny + geom_normal * nz
-    var wn_len = dot(world_n, world_n)
-    if wn_len > Float32(0.0):
-        return world_n * (Float32(1.0) / sqrt(wn_len))
-    return geom_normal
+    return _decode_tangent_normal(ns, tangent, bitangent, geom_normal)
 
 
 # ── Geometry context builders ─────────────────────────────────────────────────
@@ -4148,8 +4150,9 @@ def di_temporal_step(
             for _ in range(DI_SPATIAL_NEIGHBORS):
                 var ang = pcg.next_float() * Float32(6.283185307)
                 var rad = sqrt(pcg.next_float()) * DI_SPATIAL_RADIUS_PX
-                var nx = self_px + Int32(cos(ang) * rad)
-                var ny = self_py + Int32(sin(ang) * rad)
+                var nb_p = restir_jitter_pixel(Point2i(self_px, self_py), ang, rad)
+                var nx = nb_p.x
+                var ny = nb_p.y
                 if nx < Int32(0) or nx >= restir_io.frame_w or ny < Int32(0) or ny >= restir_io.frame_h:
                     continue
                 var n_idx = Int(ny * restir_io.frame_w + nx)
@@ -4580,14 +4583,14 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 var x1 = min(x0 + 1, iw - 1)
                 var y1 = min(y0 + 1, ih - 1)
                 var wx = fx - Float32(x0); var wy = fy - Float32(y0)
-                var r00 = ilight.pixels_ptr[unsafe_offset=(y0*iw+x0)*3+0]; var g00 = ilight.pixels_ptr[unsafe_offset=(y0*iw+x0)*3+1]; var b00 = ilight.pixels_ptr[unsafe_offset=(y0*iw+x0)*3+2]
-                var r10 = ilight.pixels_ptr[unsafe_offset=(y0*iw+x1)*3+0]; var g10 = ilight.pixels_ptr[unsafe_offset=(y0*iw+x1)*3+1]; var b10 = ilight.pixels_ptr[unsafe_offset=(y0*iw+x1)*3+2]
-                var r01 = ilight.pixels_ptr[unsafe_offset=(y1*iw+x0)*3+0]; var g01 = ilight.pixels_ptr[unsafe_offset=(y1*iw+x0)*3+1]; var b01 = ilight.pixels_ptr[unsafe_offset=(y1*iw+x0)*3+2]
-                var r11 = ilight.pixels_ptr[unsafe_offset=(y1*iw+x1)*3+0]; var g11 = ilight.pixels_ptr[unsafe_offset=(y1*iw+x1)*3+1]; var b11 = ilight.pixels_ptr[unsafe_offset=(y1*iw+x1)*3+2]
-                var tr = (Float32(1)-wx)*(Float32(1)-wy)*r00 + wx*(Float32(1)-wy)*r10 + (Float32(1)-wx)*wy*r01 + wx*wy*r11
-                var tg = (Float32(1)-wx)*(Float32(1)-wy)*g00 + wx*(Float32(1)-wy)*g10 + (Float32(1)-wx)*wy*g01 + wx*wy*g11
-                var tb = (Float32(1)-wx)*(Float32(1)-wy)*b00 + wx*(Float32(1)-wy)*b10 + (Float32(1)-wx)*wy*b01 + wx*wy*b11
-                env_rgb = RGB(tr, tg, tb) * ilight.scale
+                @always_inline
+                def texel(x: Int, y: Int) {imm} -> RGB:
+                    var o = (y*iw+x)*3
+                    return RGB(ilight.pixels_ptr[unsafe_offset=o], ilight.pixels_ptr[unsafe_offset=o+1], ilight.pixels_ptr[unsafe_offset=o+2])
+                var c00 = texel(x0, y0); var c10 = texel(x1, y0)
+                var c01 = texel(x0, y1); var c11 = texel(x1, y1)
+                env_rgb = (c00*(Float32(1)-wx) + c10*wx)*(Float32(1)-wy) + (c01*(Float32(1)-wx) + c11*wx)*wy
+                env_rgb = env_rgb * ilight.scale
             else:
                 comptime if not use_gpu:
                     if ilight.tex_idx >= Int32(0):
