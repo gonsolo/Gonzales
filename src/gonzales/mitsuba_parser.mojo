@@ -5,7 +5,8 @@ from std.ffi import external_call
 from .diagnostics import warn_unsupported
 from .lexer import is_whitespace
 from .parse_types import SceneParseState, NamedMaterial, scene_path
-from .geometry import RGB, MatKind, PI, Vec3f, Point3f
+from .geometry import RGB, PI, Vec3f, Point3f
+from .materials import MatKind
 from .transform import matrix_invert, transform_normals, Mat4
 from .scene_builder import store_mesh
 from .mitsuba_serialized import load_mitsuba_serialized, MitsubaMesh

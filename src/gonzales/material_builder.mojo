@@ -4,7 +4,8 @@ from std.math import sqrt, exp, max, abs
 from .diagnostics import warn_unsupported
 from .lexer import (PbrtScanner, scanner_parse_quoted_string, _psc_collect_params, ParameterDictionary)
 from .parse_types import NamedMaterial, SceneParseState, PSC_NAME_MAX, scene_path
-from .geometry import RGB, MatKind
+from .geometry import RGB
+from .materials import MatKind
 from .measured_bsdf import load_measured_bsdf_reflectance
 from .spd import load_spd_rgb, named_metal_rgb, named_glass_ior
 from .rng import PCG32

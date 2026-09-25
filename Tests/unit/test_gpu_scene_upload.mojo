@@ -8,7 +8,7 @@ from gonzales.parse_types import SceneParseState
 from gonzales.pbrt_parser import parse_scene_file, finalize_scene, mojo_parsed_free, ParsedScene_Mojo
 from gonzales.pipeline import _gpu_upload_scene
 from gonzales.gpu import GpuSceneHandle
-from gonzales.geometry import Material_C, MatKind
+from gonzales.materials import Material_C, MatKind
 from gonzales.bvh import BVH2Node
 
 # ── Full SceneDescriptor2_C + GPU scene-upload fixture (task #58) ──────────

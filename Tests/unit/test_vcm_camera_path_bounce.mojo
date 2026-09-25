@@ -31,7 +31,8 @@
 
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import RGB, Point3f, Vec3f, MeasuredBRDF_C, Material_C, MatKind
+from gonzales.geometry import RGB, Point3f, Vec3f
+from gonzales.materials import MeasuredBRDF_C, Material_C, MatKind
 from gonzales.render_state import GpuTexture_C, NormalSlopeMap_C
 from gonzales.primitives import Ray_C, Intersection_C, PrimId_C, Sphere_C, Instance_C, TriangleMesh_C
 from gonzales.media import Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C

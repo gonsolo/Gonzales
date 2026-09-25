@@ -26,7 +26,8 @@ docs/05_reflection_models.md.
 """
 from std.math import sqrt, cos, sin, exp, abs, min, max
 from std.memory import bitcast
-from .geometry import Vec3f, dot, cross, fr_dielectric, safe_sqrt, PI, INV_PI
+from .geometry import Vec3f, dot, cross, safe_sqrt, PI, INV_PI
+from .materials import fr_dielectric
 from .spectrum import SpectralSample
 from .rng import PCG32
 

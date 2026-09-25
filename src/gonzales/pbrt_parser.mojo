@@ -18,7 +18,8 @@ from .lexer import (PbrtScanner, scanner_open, scanner_free, scanner_is_at_end,
                     _psc_skip_params, _psc_skip_line)
 from .parse_types import (SceneParseState, MeshAccum, NamedMaterial, scene_path,
                            ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX)
-from .geometry import RGB, Point3f, Vec3f, Material_C, MatKind, dot, PI, MeasuredBRDF_C, _is_real_ptr
+from .geometry import RGB, Point3f, Vec3f, dot, PI, _is_real_ptr
+from .materials import Material_C, MatKind, MeasuredBRDF_C
 from .render_state import GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none
 from .primitives import Sphere_C, TriangleMesh_C, PrimId_C, Instance_C
 from .media import Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C

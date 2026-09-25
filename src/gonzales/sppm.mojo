@@ -11,7 +11,8 @@ from max.algorithm import parallelize
 from std.math import sqrt, cos, sin, floor, log, exp, max, min, ceildiv
 from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
-from .geometry import face_toward, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Material_C, MatKind, LobeKind, PhotonKind, dot, cross, fr_dielectric, PI, INV_FOUR_PI, Frame, MeasuredBRDF_C, _is_real_ptr
+from .geometry import face_toward, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
+from .materials import Material_C, MatKind, LobeKind, PhotonKind, fr_dielectric, MeasuredBRDF_C
 from .render_state import GpuTexture_C
 from .primitives import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Sphere_C, Instance_C, sphere_outward_normal
 from .media import Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, medium_transmittance_ratio_spectral, spectral_free_flight_weight

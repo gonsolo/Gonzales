@@ -14,7 +14,8 @@ from gonzales.bxdf import (
     coat_walk_begin, coat_walk_scatter, bxdf_pdf_coated_exit, coat_exit_norm,
     COAT_EXIT, COAT_WALKING,
 )
-from gonzales.geometry import Vec3f, RGB, dot, PI, fr_dielectric
+from gonzales.geometry import Vec3f, RGB, dot, PI
+from gonzales.materials import fr_dielectric
 from gonzales.rng import PCG32
 
 comptime NBINS = 16

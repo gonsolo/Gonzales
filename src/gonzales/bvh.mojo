@@ -5,7 +5,8 @@ from max.algorithm import parallelize
 from std.atomic import Atomic
 from std.sys.info import num_performance_cores
 from .transform import Mat4
-from .geometry import Material_C, dot, cross, Point3f, Point2f, Vec3f, Frame, RGB, MatKind, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, fr_dielectric, MeasuredBRDF_C, _is_real_ptr, store_vec3, _atan2f, point3f
+from .geometry import dot, cross, Point3f, Point2f, Vec3f, Frame, RGB, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, _is_real_ptr, store_vec3, _atan2f, point3f
+from .materials import Material_C, MatKind, fr_dielectric, MeasuredBRDF_C
 from .render_state import PathState_C, TileResult_C, GpuTexture_C, NormalSlopeMap_C
 from .primitives import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Sphere_C, intersect_triangle, alpha_killed, Instance_C, sphere_outward_normal
 from .media import Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C

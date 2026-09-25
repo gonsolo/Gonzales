@@ -34,7 +34,8 @@
 # corruption risk documented elsewhere (modular/modular#6759, later
 # retracted by its own author as unreproducible, but avoided defensively).
 from std.math import sqrt, sin, cos, acos, abs, min, max, floor
-from .geometry import RGB, MeasuredBRDF_C, safe_sqrt, PI, dot, Vec3f
+from .geometry import RGB, safe_sqrt, PI, dot, Vec3f
+from .materials import MeasuredBRDF_C
 from .spectrum import SampledWavelengths, SpectralSample, spectral_sample_to_rgb, rgb_illuminant_to_spectral_sample
 from .rgb2spec import cie_d65_runtime
 from .bvh import LightSample

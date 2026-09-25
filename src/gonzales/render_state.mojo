@@ -278,3 +278,30 @@ struct TileResult_C(TrivialRegisterPassable):
     var pixelX: Int32
     var pixelY: Int32
 
+
+# PathState_C.lastBsdfPdf sentinel: "a real scatter happened here, but its
+# direct-light term was already reported by NEE, so every emitter/miss
+# handler must contribute ZERO for it and let the ray carry indirect light
+# only." Used by the layered coat exit, whose true pdf is intractable to
+# MIS-combine. It has to be distinguishable from 0.0, because a CAMERA ray
+# also carries lastBsdfPdf == 0 and must take the full background instead.
+# The lastBsdfPdf / last_bsdf_pdf SENTINEL SPACE -- every negative value, in
+# ONE place, because they collided twice. A real pdf is >= 0; each negative
+# value below is a distinct instruction to the emitter/miss handlers, and the
+# two integrators must agree on all of them.
+#
+#   PDF_DELTA_FULL     bdpt: a delta bounce, no NEE happened at that vertex,
+#                      so an emitter hit takes FULL weight.
+#   PDF_VOL_PHASE_HIT  bdpt: a volume phase scatter hit an emitter; weight
+#                      against the phase pdf (INV_FOUR_PI), not a BSDF pdf.
+#   PDF_DROP_DIRECT    both: NEE already reported this ray's DIRECT term (the
+#                      layered coat's exit ray); contribute indirect only.
+#
+# History, so the next value is chosen by looking here rather than guessing:
+# PDF_DROP_DIRECT was first -1 (collided with PDF_DELTA_FULL: opposite
+# meanings), then -2 (collided with PDF_VOL_PHASE_HIT: at bdpt's emitter gates
+# the drop branch shadowed the phase branch, leaving its default weight of 1
+# -- a double count that read +93% on a medium lit by an emissive sphere).
+comptime PDF_DELTA_FULL:    Float32 = -1.0
+comptime PDF_VOL_PHASE_HIT: Float32 = -2.0
+comptime PDF_DROP_DIRECT:   Float32 = -3.0

@@ -1,7 +1,8 @@
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import Point3f, Vec3f, RGB, Material_C, MatKind
+from gonzales.geometry import Point3f, Vec3f, RGB
+from gonzales.materials import Material_C, MatKind
 from gonzales.render_state import PathState_C
 from gonzales.primitives import Ray_C, Intersection_C
 from gonzales.spectrum import SpectralSample, SampledWavelengths, null_spectral_handle

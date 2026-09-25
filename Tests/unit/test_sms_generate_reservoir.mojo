@@ -8,7 +8,8 @@
 from std.math import abs, sqrt
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import RGB, Point3f, Vec3f, Material_C, MatKind, MeasuredBRDF_C
+from gonzales.geometry import RGB, Point3f, Vec3f
+from gonzales.materials import Material_C, MatKind, MeasuredBRDF_C
 from gonzales.render_state import GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, PathState_C
 from gonzales.primitives import Ray_C, PrimId_C, TriangleMesh_C, Instance_C, Sphere_C
 from gonzales.lights import LightSampler_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C

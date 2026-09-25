@@ -429,7 +429,8 @@ def debug_trace_pixel(
     (hit mesh/material/normal/t, dielectric entering/eta/Fresnel decision,
     envmap lookup). For comparing against `pbrt --pixelmaterial`."""
     from .bvh import traverse_bvh2_core, test_spheres, any_hit_bvh2_core, _equal_area_sphere_to_square
-    from .geometry import Material_C, cross, fr_dielectric
+    from .geometry import cross
+    from .materials import Material_C, fr_dielectric
     from .primitives import Intersection_C, sphere_outward_normal
     from .bxdf import dielectric_interface
     from .sppm import _geom_normal
