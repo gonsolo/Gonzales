@@ -15,7 +15,7 @@ from .curves import Curve, curve_piece_bounds
 from .postprocess import denoise, write_image, write_image_cropped, write_image_cropwindow
 from .transform import Mat4
 from .sampling import TileSamplerParams, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, derive_pcg_seeds, camera_ray_from_film_xy
-from .bvh import BVH2Node, SceneDescriptor2_C, render_aux_buffers, _scene_bounding_sphere
+from .bvh import BVH2Node, SceneView, render_aux_buffers, _scene_bounding_sphere
 from .sppm import sppm_render
 from .bdpt import vcm_render, vcm_render_gpu, vcm_render_gpu_wavefront, _BDPT_MAX_VERTS, sppm_render_gpu
 from .guide import GuideGrid, guide_create, guide_free, guide_clone_empty, guide_refine, null_guide, guide_merge, guide_cell_has_data
@@ -87,7 +87,7 @@ def _sample_clamp(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> Float32
 
 def _resolve_sppm_params(
     psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
-    ref sd: SceneDescriptor2_C,
+    ref sd: SceneView,
     sppm_photons_cli: Int32,
     sppm_radius_cli: Float32,
 ) -> Tuple[Int32, Float32]:
@@ -1672,7 +1672,7 @@ def render_interactive(
     var frame_count = 0
 
     # Mode-specific buffers — dangling until allocated below
-    var sd           = Pointer[SceneDescriptor2_C, MutUntrackedOrigin].unsafe_dangling()
+    var sd           = Pointer[SceneView, MutUntrackedOrigin].unsafe_dangling()
     # Phase 2.3+2.5 (docs/A2_restir_migration_plan.md): two persistent
     # DIReservoir buffers per pixel, ping-ponged each frame -- CPU-only
     # (--restir has no GPU wiring yet, see restir_di.mojo's header).

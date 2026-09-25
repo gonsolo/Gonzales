@@ -25,7 +25,7 @@ from .curves import Curve
 from .bssrdf import dipole_max_radius, dipole_rd, dipole_mis_sigma_tr, dipole_sample_radius, bssrdf_probe_offset, bssrdf_exit_pdf_area, bssrdf_exit_ft, fdr_moment
 from .vcm_mis import mis_policy_power, vcm_arrival_carries, vcm_scatter_carries, bssrdf_hop_carries, bssrdf_exit_scatter_carries, vcm_env_nee_weight, vcm_env_escape_weight, MisPolicy, nee_mis_weight
 from .bvh import (
-    BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core, test_spheres,
+    BVH2Node, SceneView, traverse_bvh2_core, any_hit_bvh2_core, test_spheres,
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _is_real_ptr,
     HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps,
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
@@ -258,7 +258,7 @@ def _null_vertex() -> BDPTVertex:
 def _visible_transmittance(
     a: Point3f, b: Point3f,
     med_idx: Int32,
-    ref sd:      SceneDescriptor2_C,
+    ref sd:      SceneView,
     scratch: Pointer[Intersection, MutUntrackedOrigin],
     wl:      SampledWavelengths,
 ) -> SpectralSample:
@@ -421,7 +421,7 @@ def _visible_transmittance(
     return Tr
 
 @always_inline
-def _bdpt_simple_light_count(ref sd: SceneDescriptor2_C) -> Int:
+def _bdpt_simple_light_count(ref sd: SceneView) -> Int:
     """Number of lights reachable through _bdpt_sample_simple_light: distant +
     point + sphere, the three every BDPT material-loop samples the SAME way.
     Area and infinite are NOT covered -- area gets its own MNEE-capable
@@ -429,14 +429,14 @@ def _bdpt_simple_light_count(ref sd: SceneDescriptor2_C) -> Int:
     infinite draws its own 2 pcg floats via _sample_infinite_light_nee, so
     both stay written out at their call sites. Mirrors shading.mojo's
     _nee_simple_light_count, but there is no shared struct between the two
-    files' light contexts (ShadeContext vs SceneDescriptor2_C) to unify them
+    files' light contexts (ShadeContext vs SceneView) to unify them
     on, hence the parallel definition rather than a genuinely shared one."""
     return Int(sd.distantLightCount) + Int(sd.pointLightCount) + Int(sd.sphereCount)
 
 
 @always_inline
 def _bdpt_sample_simple_light(
-    ref sd: SceneDescriptor2_C, i: Int, hit_point: Vec3f, mut pcg: PCG32,
+    ref sd: SceneView, i: Int, hit_point: Vec3f, mut pcg: PCG32,
 ) -> LightSample:
     """The i-th distant/point/sphere light. Unlike shading.mojo's twin
     (_nee_sample_simple_light), this returns ONLY the LightSample -- BDPT's
@@ -474,7 +474,7 @@ def _bdpt_nee_contribute(
     hit: Point3f,
     gn: Vec3f,
     cur_med_idx: Int32,
-    ref sd: SceneDescriptor2_C,
+    ref sd: SceneView,
     scratch: Pointer[Intersection, MutUntrackedOrigin],
     wl: SampledWavelengths,
     eps: Float32 = Float32(0.0001),
@@ -511,7 +511,7 @@ def _bdpt_nee_contribute(
     return SpectralSample(Float32(0))
 
 def _bdpt_mnee_diffuse_area_light(
-    ref sd: SceneDescriptor2_C, hit: Point3f, gn: Vec3f, eff_alb: RGB,
+    ref sd: SceneView, hit: Point3f, gn: Vec3f, eff_alb: RGB,
     beta: SpectralSample, mut pcg: PCG32, wl: SampledWavelengths,
     ior: Float32 = Float32(1.0),
 ) -> SpectralSample:
@@ -749,7 +749,7 @@ def _bdpt_mnee_diffuse_area_light(
 
 
 def _bdpt_mnee_sphere_light(
-    ref sd: SceneDescriptor2_C, hit: Point3f, gn: Vec3f, eff_alb: RGB,
+    ref sd: SceneView, hit: Point3f, gn: Vec3f, eff_alb: RGB,
     beta: SpectralSample, mut pcg: PCG32, sph_idx: Int, n_spheres: Int,
     wl: SampledWavelengths, ior: Float32 = Float32(1.0),
 ) -> SpectralSample:
@@ -1161,7 +1161,7 @@ def _bdpt_splat_filtered[use_atomics: Bool](
 
 def _bdpt_connect_to_camera(
     lv: BDPTVertex,
-    ref sd: SceneDescriptor2_C,
+    ref sd: SceneView,
     scratch: Pointer[Intersection, MutUntrackedOrigin],
     cam_pos: Vec3f,
     w2c: Pointer[Float32, MutUntrackedOrigin],
@@ -1288,7 +1288,7 @@ def _bdpt_connect_to_camera(
 
 def _bdpt_connect_to_cache(
     cv: BDPTVertex,
-    ref sd: SceneDescriptor2_C,
+    ref sd: SceneView,
     has_med: Bool,
     scratch: Pointer[Intersection, MutUntrackedOrigin],
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
@@ -1334,7 +1334,7 @@ def _bdpt_connect_to_cache(
 
 def _bdpt_connect_to_cache_deferred(
     cv: BDPTVertex,
-    ref sd: SceneDescriptor2_C,
+    ref sd: SceneView,
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
     lp_idx: Int,
     path_len: Int,
@@ -1442,7 +1442,7 @@ def _bdpt_merge_bucket_weight(heads: Pointer[Int32, MutUntrackedOrigin], h: Int)
     return Float32(n) / Float32(_VCM_MERGE_BUCKET_CAP)
 
 @always_inline
-def _vcm_depth(ref sd: SceneDescriptor2_C) -> Int:
+def _vcm_depth(ref sd: SceneView) -> Int:
     """VCM's full-path length limit d: min(scene maxdepth, _BDPT_MAX_VERTS - 1).
 
     The balance weights assume every strategy that COULD produce a path does
@@ -1473,7 +1473,7 @@ def _vcm_light_count(lvc: Pointer[BDPTVertex, MutUntrackedOrigin], lp_idx: Int, 
 
 
 @always_inline
-def _vcm_keep(ref sd: SceneDescriptor2_C, p: Point3f) -> Float32:
+def _vcm_keep(ref sd: SceneView, p: Point3f) -> Float32:
     """Variance-aware merge MIS: the probability that thinning keeps a light
     vertex at `p`, estimated from the PREVIOUS pass's bucket counts
     (sd.vcmKeep*). Merging there really runs on keep * N photons, so its MIS
@@ -1506,7 +1506,7 @@ comptime _VCM_FOOTPRINT_PIXELS = Float32(2.0)
 
 
 @always_inline
-def _vcm_merge_radius_at(ref sd: SceneDescriptor2_C, p: Point3f) -> Float32:
+def _vcm_merge_radius_at(ref sd: SceneView, p: Point3f) -> Float32:
     """Merge radius at `p`: _VCM_FOOTPRINT_PIXELS of image footprint at that
     point's distance from the camera, never more than this pass's global
     radius (which sets the grid cells) and shrinking with it pass by pass.
@@ -1521,7 +1521,7 @@ def _vcm_merge_radius_at(ref sd: SceneDescriptor2_C, p: Point3f) -> Float32:
 
 
 @always_inline
-def _vcm_eta_scale(ref sd: SceneDescriptor2_C, p: Point3f) -> Float32:
+def _vcm_eta_scale(ref sd: SceneView, p: Point3f) -> Float32:
     """eta(x) / eta: merging's MIS density at `p` relative to the global
     N pi r_pass^2 -- thinning's keep probability times the radius shrink."""
     var s = _vcm_keep(sd, p)
@@ -1671,7 +1671,7 @@ def vcm_merge_radius(scene_radius: Float32, si: Int) -> Float32:
 @always_inline
 def _bdpt_merge_from_cache(
     cv: BDPTVertex,
-    ref sd: SceneDescriptor2_C,
+    ref sd: SceneView,
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
     merge_next: Pointer[Int32, MutUntrackedOrigin],
     heads: Pointer[Int32, MutUntrackedOrigin],
@@ -1879,7 +1879,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     r2c:     Pointer[Float32, MutUntrackedOrigin],
     c2w:     Pointer[Float32, MutUntrackedOrigin],
     px:      Int, py:      Int,
-    ref sd:      SceneDescriptor2_C,
+    ref sd:      SceneView,
     mut pcg: PCG32,
     has_med: Bool,
     scratch: Pointer[Intersection, MutUntrackedOrigin],
@@ -2134,7 +2134,7 @@ def _bdpt_camera_path_init[use_gpu: Bool](
     )
 
 def _vcm_scatter(
-    v: BDPTVertex, adjoint: Bool, mut pcg: PCG32, ref sd: SceneDescriptor2_C,
+    v: BDPTVertex, adjoint: Bool, mut pcg: PCG32, ref sd: SceneView,
     wavelengths: SampledWavelengths,
     mut dvcm: Float32, mut dvc: Float32, mut dvm: Float32,
     mis_vc_weight_factor: Float32, eta_x: Float32,
@@ -2166,7 +2166,7 @@ def _vcm_scatter(
     return s
 
 def _bdpt_camera_path_bounce[use_gpu: Bool](
-    ref sd:      SceneDescriptor2_C,
+    ref sd:      SceneView,
     mut pcg: PCG32,
     has_med: Bool,
     inter: Intersection,
@@ -3178,7 +3178,7 @@ def _null_light_path_state() -> VCMLightPathState:
     )
 
 def _bdpt_light_path_init[use_gpu: Bool](
-    ref sd: SceneDescriptor2_C,
+    ref sd: SceneView,
     mut pcg: PCG32,
     default_emit_med: Int32,
     lp_idx: Int,
@@ -3397,7 +3397,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
     )
 
 def _bdpt_light_path_bounce[use_gpu: Bool](
-    ref sd:      SceneDescriptor2_C,
+    ref sd:      SceneView,
     mut pcg: PCG32,
     has_med: Bool,
     inter: Intersection,
@@ -3842,7 +3842,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         return True   # bounce processed normally, path continues
 
 def _bdpt_trace_light_path[use_gpu: Bool](
-    ref sd:      SceneDescriptor2_C,
+    ref sd:      SceneView,
     mut pcg: PCG32,
     has_med: Bool,
     default_emit_med: Int32,
@@ -3973,7 +3973,7 @@ struct BssrdfExitSample(TrivialRegisterPassable):
 
 
 def _bdpt_sample_bssrdf_exit(
-    ref sd: SceneDescriptor2_C,
+    ref sd: SceneView,
     med_idx: Int,
     hit: Point3f,
     n_in: Vec3f,          # entry normal, facing the side the path arrived from
@@ -4057,7 +4057,7 @@ def _bdpt_sample_bssrdf_exit(
 
 
 @always_inline
-def _bdpt_n_lights(ref sd: SceneDescriptor2_C) -> Float32:
+def _bdpt_n_lights(ref sd: SceneView) -> Float32:
     """The light-pick denominator the light path used, needed on the camera
     side because its NEE loops every light with no pick: the MIS densities
     must describe the same experiment on both subpaths."""
@@ -4078,7 +4078,7 @@ def _vertex_ctx(v: BDPTVertex, adjoint: Bool = False) -> LobeCtx:
 def _lobe_eval[want_pdfs: Bool = True](
     v:   BDPTVertex,
     dir_to_other:  Vec3f,
-    ref sd:  SceneDescriptor2_C,
+    ref sd:  SceneView,
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
     spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
     spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
@@ -4115,7 +4115,7 @@ def _lobe_eval[want_pdfs: Bool = True](
 def _eval_vertex_spectral(
     v:   BDPTVertex,
     dir_to_other:  Vec3f,
-    ref sd:  SceneDescriptor2_C,
+    ref sd:  SceneView,
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
     spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
     spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
@@ -4134,7 +4134,7 @@ def _eval_vertex_spectral(
 
 @always_inline
 def _bdpt_vertex_pdfs(
-    v: BDPTVertex, dir_to_other: Vec3f, ref sd: SceneDescriptor2_C,
+    v: BDPTVertex, dir_to_other: Vec3f, ref sd: SceneView,
 ) -> Tuple[Float32, Float32]:
     """Forward/reverse solid-angle densities at `v` toward `dir_to_other`.
 
@@ -4176,7 +4176,7 @@ def _bdpt_connect_pair_weighted(cv: BDPTVertex, lv: BDPTVertex) -> Bool:
 def _connect(
     cv: BDPTVertex,  # camera-subpath vertex
     lv: BDPTVertex,  # light-subpath vertex (including light point itself)
-    ref sd: SceneDescriptor2_C,
+    ref sd: SceneView,
     has_med: Bool,
     scratch: Pointer[Intersection, MutUntrackedOrigin],
     mis_vm_weight_factor: Float32,
@@ -4221,7 +4221,7 @@ def _connect(
 def _connect_unweighted(
     cv: BDPTVertex,  # camera-subpath vertex
     lv: BDPTVertex,  # light-subpath vertex (including light point itself)
-    ref sd: SceneDescriptor2_C,
+    ref sd: SceneView,
     mis_vm_weight_factor: Float32,
 ) -> Tuple[SpectralSample, Bool]:
     """Task #163 stage 5: byte-for-byte copy of _connect's math (see that
@@ -4383,7 +4383,7 @@ def _connect_unweighted(
 
 def _bdpt_render_core(
     psc:      Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
-    ref sd:       SceneDescriptor2_C,
+    ref sd:       SceneView,
     n_spp:    Int,
     n_photons_req: Int,
     verbose:  Bool,
@@ -4659,7 +4659,7 @@ def _bdpt_render_core(
 
 def vcm_render(
     psc:      Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
-    ref sd:       SceneDescriptor2_C,
+    ref sd:       SceneView,
     n_spp:    Int,
     n_photons: Int,
     no_denoise: Bool,
@@ -4710,7 +4710,7 @@ def vcm_render(
 # full renderer, as a template for eventually retrofitting SPPM the same way.
 
 # ── Kernels ───────────────────────────────────────────────────────────────
-# Every kernel takes the scene as one `sd: SceneDescriptor2_C`, built on the
+# Every kernel takes the scene as one `sd: SceneView`, built on the
 # host by GpuSceneHandle.scene_descriptor() (+ with_vcm() for a VCM pass).
 
 def _bdpt_emit_light_paths_gpu(
@@ -4731,7 +4731,7 @@ def _bdpt_emit_light_paths_gpu(
     # column is read here.
     c2w: Pointer[Float32, MutUntrackedOrigin],
     px_scale: Float32,
-    sd: SceneDescriptor2_C,
+    sd: SceneView,
 ):
     """One thread per light path, each writing only its own dedicated
     per-path slice of `lvc` (VCM Stage 2b, see _bdpt_store_lvc_vertex's
@@ -4773,7 +4773,7 @@ def _bdpt_splat_light_paths_gpu(
     # (_bdpt_splat_filtered) so the light-traced half of the image is
     # reconstructed the same way as the camera half.
     film_filter: FilmFilter,
-    sd: SceneDescriptor2_C,
+    sd: SceneView,
 ):
     """GPU t=1 light tracing: one thread per light path, splatting each of
     its vertices onto the film through the same `_bdpt_connect_to_camera`
@@ -4846,7 +4846,7 @@ def _bdpt_camera_connect_gpu(
     film_filter: FilmFilter,
     seed: UInt64,
     pass_idx_dp: Int64,
-    sd: SceneDescriptor2_C,
+    sd: SceneView,
 ):
     """One thread per pixel. Thin wrapper: build sd, seed this thread's own
     PCG32 (same seed formula vcm_render's CPU driver uses, keyed by pixel
@@ -4930,7 +4930,7 @@ def _bdpt_light_path_init_gpu(
     default_emit_med: Int32,
     seed: UInt64,
     pass_idx_dp: Int64,
-    sd: SceneDescriptor2_C,
+    sd: SceneView,
 ):
     """One thread per light path: seed this thread's own PCG32 (same seed
     formula _bdpt_emit_light_paths_gpu uses), call _bdpt_light_path_init,
@@ -4949,7 +4949,7 @@ def _bdpt_light_path_init_gpu(
     states[unsafe_offset=k] = _bdpt_light_path_init[True](sd, pcg, default_emit_med, k, lvc, lvc_path_len, mis_vc_weight_factor, pass_wl)
 
 def _bdpt_light_path_intersect_gpu(
-    sd: SceneDescriptor2_C,
+    sd: SceneView,
     states: Pointer[VCMLightPathState, MutUntrackedOrigin],
     results: Pointer[Intersection, MutUntrackedOrigin],
     count_dp: Int64,
@@ -4983,7 +4983,7 @@ def _bdpt_light_path_bounce_gpu(
     # matching params (this is the wavefront-staged path to the same walk).
     c2w: Pointer[Float32, MutUntrackedOrigin],
     px_scale: Float32,
-    sd: SceneDescriptor2_C,
+    sd: SceneView,
 ):
     """One bounce's material dispatch for one light path, reading the
     Intersection _bdpt_light_path_intersect_gpu already computed this
@@ -5069,7 +5069,7 @@ def _bdpt_camera_path_init_gpu(
     states[unsafe_offset=pix] = _bdpt_camera_path_init[True](r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl, film_filter)
 
 def _bdpt_camera_path_intersect_gpu(
-    sd: SceneDescriptor2_C,
+    sd: SceneView,
     states: Pointer[VCMCameraPathState, MutUntrackedOrigin],
     results: Pointer[Intersection, MutUntrackedOrigin],
     count_dp: Int64,
@@ -5105,7 +5105,7 @@ def _bdpt_camera_path_bounce_gpu(
     # matching params.
     c2w: Pointer[Float32, MutUntrackedOrigin],
     px_scale: Float32,
-    sd: SceneDescriptor2_C,
+    sd: SceneView,
     # Task #163 stage 5: see _bdpt_camera_path_bounce's own matching
     # params -- forwarded through unchanged, except Bool -> Int8 (raw kernel
     # launch args must be DevicePassable; Bool doesn't conform, unlike a
@@ -5465,7 +5465,7 @@ def bdpt_merge_grid_insert_gpu(
 def vcm_render_gpu(
     handlePtr: Pointer[GpuSceneHandle, MutUntrackedOrigin],
     psc:      Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
-    ref sd:       SceneDescriptor2_C,
+    ref sd:       SceneView,
     n_spp:    Int,
     n_photons_req: Int,
     no_denoise: Bool,
@@ -5856,7 +5856,7 @@ def resolve_shadow_connect_gpu(
     shadow_rays: Pointer[Float32, MutUntrackedOrigin],
     scratch: Pointer[Intersection, MutUntrackedOrigin],
     count_dp: Int64,
-    sd: SceneDescriptor2_C,
+    sd: SceneView,
 ):
     var spectral_res_dp = Int64(sd.spectral.res)
     var spectral_res = Int(spectral_res_dp)
@@ -5932,7 +5932,7 @@ def sum_shadow_connect_gpu(
 def vcm_render_gpu_wavefront(
     handlePtr: Pointer[GpuSceneHandle, MutUntrackedOrigin],
     psc:      Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
-    ref sd:       SceneDescriptor2_C,
+    ref sd:       SceneView,
     n_spp:    Int,
     n_photons_req: Int,
     no_denoise: Bool,
@@ -6478,7 +6478,7 @@ def vcm_render_gpu_wavefront(
 # for anyone retrying.
 # ── GPU kernels ───────────────────────────────────────────────────────────────
 # Each kernel is a thin wrapper: compute this thread's index, then with the
-# host-built SceneDescriptor2_C `sd` call the EXACT SAME
+# host-built SceneView `sd` call the EXACT SAME
 # shared function the CPU driver above calls (comptime[use_gpu]-branching
 # only at the two genuine concurrency-primitive divergence points: photon-
 # slot reservation and hash-grid bucket insertion) — mirrors bdpt.mojo's
@@ -6502,7 +6502,7 @@ def sppm_gen_vp_gpu(
     seed: UInt64,
     max_depth_dp: Int64,
     film_filter: FilmFilter,
-    sd: SceneDescriptor2_C,
+    sd: SceneView,
 ):
     """One thread per (pixel, vp_sample). Calls the SAME
     _sppm_trace_visible_point the CPU driver (_sppm_camera_pass) calls,
@@ -6529,7 +6529,7 @@ def sppm_emit_photons_gpu(
     seed: UInt64,
     pass_idx_dp: Int64,
     max_depth_dp: Int64,
-    sd: SceneDescriptor2_C,
+    sd: SceneView,
     # camera_to_world + pixel angular size: a photon needs a bump/normal-map
     # footprint and has no ray cone, so it uses the camera-distance
     # approximation -- see _sppm_trace_photon's own params.
@@ -6607,7 +6607,7 @@ def sppm_gather_gpu(
     photons:  Pointer[SPPMPhoton, MutUntrackedOrigin],
     heads:    Pointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
-    sd: SceneDescriptor2_C,
+    sd: SceneView,
     pass_idx_dp: Int64 = Int64(0),
     med_arr_dp: Pointer[Medium, MutUntrackedOrigin] = Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(),
     med_count_dp: Int64 = Int64(0),
@@ -6637,7 +6637,7 @@ def sppm_nee_gpu(
     n_vps_dp:  Int64,
     seed:   UInt64,
     pass_idx_dp: Int64,
-    sd: SceneDescriptor2_C,
+    sd: SceneView,
 ):
     """One thread per visible point. Calls the SAME _sppm_nee_one the CPU
     driver (_sppm_nee_update) calls. The only one of SPPM's 4 GPU kernels
@@ -6700,7 +6700,7 @@ def sppm_finalize_gpu(
 def sppm_render_gpu(
     handlePtr: Pointer[GpuSceneHandle, MutUntrackedOrigin],
     psc:      Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
-    ref sd:       SceneDescriptor2_C,
+    ref sd:       SceneView,
     n_passes: Int,
     n_photons_per_pass: Int,
     initial_radius: Float32,

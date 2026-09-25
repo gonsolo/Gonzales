@@ -26,7 +26,7 @@ from gonzales.primitives import Ray, Intersection, PrimId, Sphere, Instance, Tri
 from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
 from gonzales.curves import Curve
-from gonzales.bvh import SceneDescriptor2_C, BVH2Node, build_bvh2, traverse_bvh2_core
+from gonzales.bvh import SceneView, BVH2Node, build_bvh2, traverse_bvh2_core
 from gonzales.rng import PCG32
 from gonzales.spectrum import null_spectral_handle, SampledWavelengths, SpectralSample, sample_wavelengths_uniform
 from gonzales.bdpt import (
@@ -53,7 +53,7 @@ def _vertex_close(a: BDPTVertex, b: BDPTVertex) -> Bool:
         _close(a.dVCM, b.dVCM) and _close(a.dVC, b.dVC) and _close(a.dVM, b.dVM)
     )
 
-def _build_scene() -> SceneDescriptor2_C:
+def _build_scene() -> SceneView:
     # Triangle 0: light, small, at z=10, CCW winding so cross(p1-p0,p2-p0)
     # points -Z (toward the receiver below).
     # Triangle 1: receiver, huge, at z=0, diffuse (materials[0]).
@@ -108,7 +108,7 @@ def _build_scene() -> SceneDescriptor2_C:
     # Light triangle area = 0.5 * |cross((0,1,0),(1,0,0))| = 0.5.
     area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(1), RGB(Float32(1.0)), Float32(0.5), Int8(0), Int8(0), Int8(0), Int8(0))
 
-    return SceneDescriptor2_C(
+    return SceneView(
         bvh_nodes, prim_ids, meshes, Int64(1),
         materials, Int64(1),
         area_lights, Int64(1),

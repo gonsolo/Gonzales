@@ -20,7 +20,7 @@ from gonzales.render_state import GpuTexture, NormalSlopeMap
 from gonzales.primitives import Intersection, Sphere, PrimId, Instance
 from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
-from gonzales.bvh import SceneDescriptor2_C, BVH2Node
+from gonzales.bvh import SceneView, BVH2Node
 from gonzales.bxdf import ggx_D, ggx_G2, ggx_albedo_avg, ggx_ms_shape, ggx_ms_tint
 from gonzales.bdpt import (
     BDPTVertex, _pdf_solid_to_area, _eval_vertex_spectral,
@@ -62,13 +62,13 @@ comptime BAND_WL = SampledWavelengths(Float32(600.0), Float32(550.0),
                                       Float32(1.0))
 
 @always_inline
-def _eval_v_bands(v: BDPTVertex, dir: Vec3f, sd: SceneDescriptor2_C) -> SpectralSample:
+def _eval_v_bands(v: BDPTVertex, dir: Vec3f, sd: SceneView) -> SpectralSample:
     var h = null_spectral_handle()
     return _eval_vertex_spectral(v, dir, sd, h.coeffs, h.res, h.cie_x, h.cie_y,
                                  h.cie_z, h.d65, BAND_WL)
 
 @always_inline
-def _eval_v(v: BDPTVertex, dir: Vec3f, sd: SceneDescriptor2_C) -> SpectralSample:
+def _eval_v(v: BDPTVertex, dir: Vec3f, sd: SceneView) -> SpectralSample:
     var h = null_spectral_handle()
     return _eval_vertex_spectral(v, dir, sd, h.coeffs, h.res, h.cie_x, h.cie_y,
                                  h.cie_z, h.d65, NULL_WL)
@@ -92,15 +92,15 @@ def _make_vertex(pos: Point3f, normal: Vec3f, is_surface: Int32) -> BDPTVertex:
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
 
-def _dummy_sd() -> SceneDescriptor2_C:
-    """A minimal (geometrically irrelevant) SceneDescriptor2_C for
+def _dummy_sd() -> SceneView:
+    """A minimal (geometrically irrelevant) SceneView for
     _eval_vertex_spectral calls that never exercise mat_kind=2 (hair) -- that's the
     only branch that dereferences sd.materials/sd.curves, so any valid
-    SceneDescriptor2_C works for the Lambertian/conductor/volume tests below."""
+    SceneView works for the Lambertian/conductor/volume tests below."""
     var fixture = make_triangle_scene([
         Point3f(100.0, 100.0, 100.0), Point3f(101.0, 100.0, 100.0), Point3f(100.0, 101.0, 100.0),
     ])
-    return SceneDescriptor2_C(
+    return SceneView(
         fixture.bvh_nodes, fixture.prim_ids, fixture.meshes, Int64(1),
         fixture.materials, Int64(1),
         Pointer[AreaLight, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
@@ -301,7 +301,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
     var fixture = make_triangle_scene([
         Point3f(100.0, 100.0, 100.0), Point3f(101.0, 100.0, 100.0), Point3f(100.0, 101.0, 100.0),
     ])
-    var sd = SceneDescriptor2_C(
+    var sd = SceneView(
         fixture.bvh_nodes, fixture.prim_ids, fixture.meshes, Int64(1),
         fixture.materials, Int64(1),
         Pointer[AreaLight, MutUntrackedOrigin].unsafe_dangling(), Int64(0),

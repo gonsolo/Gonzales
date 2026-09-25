@@ -73,7 +73,7 @@ def intersect_aabb(
     return (tNear <= tFar, tNear)
 
 @fieldwise_init
-struct SceneDescriptor2_C(TrivialRegisterPassable, DevicePassable):
+struct SceneView(TrivialRegisterPassable, DevicePassable):
     comptime device_type: AnyType = Self
 
     def _to_device_type(
@@ -83,7 +83,7 @@ struct SceneDescriptor2_C(TrivialRegisterPassable, DevicePassable):
 
     @staticmethod
     def get_type_name() -> String:
-        return "SceneDescriptor2_C"
+        return "SceneView"
 
     def with_vcm(
         self,
@@ -160,7 +160,7 @@ struct SceneDescriptor2_C(TrivialRegisterPassable, DevicePassable):
     # Staged spectral rendering rollout (see project_spectral_rendering memory
     # / lovely-dazzling-meteor plan, Stage 2c). Loaded once per render and
     # threaded through here so render_tile/shade_core_cpu_nee need no new
-    # parameter of their own — they already carry a SceneDescriptor2_C.
+    # parameter of their own — they already carry a SceneView.
     # Dangling (null_spectral_handle()) for test fixtures that don't supply
     # a real loaded table.
     var spectral: SpectralHandle
@@ -217,7 +217,7 @@ struct SceneDescriptor2_C(TrivialRegisterPassable, DevicePassable):
 #    here.) ────────────────────────────────────────────────────────────────
 
 @always_inline
-def _scene_bounding_sphere(ref sd: SceneDescriptor2_C) -> Tuple[Point3f, Float32]:
+def _scene_bounding_sphere(ref sd: SceneView) -> Tuple[Point3f, Float32]:
     """Scene bounding sphere derived from the top-level BVH's root AABB.
     Infinite/distant lights have no position of their own — emitting a
     light-path/photon from one requires an arbitrary point outside the
@@ -1731,7 +1731,7 @@ def any_hit_bvh2_core(
 
 # ── CPU entry point ─────────────────────────────────────────────────────────
 
-def traverse_bvh2(scenePtr: Pointer[SceneDescriptor2_C, MutUntrackedOrigin], rayPtr: Pointer[Ray, MutUntrackedOrigin], tMax: Float32, resultPtr: Pointer[Intersection, MutUntrackedOrigin]):
+def traverse_bvh2(scenePtr: Pointer[SceneView, MutUntrackedOrigin], rayPtr: Pointer[Ray, MutUntrackedOrigin], tMax: Float32, resultPtr: Pointer[Intersection, MutUntrackedOrigin]):
     var scene = scenePtr[unsafe_offset=0]
     var ray = rayPtr[unsafe_offset=0]
     # spheres/sphereCount are passed explicitly: omitting them defaults
@@ -2119,7 +2119,7 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
     rasterToCamera: Pointer[Float32, MutUntrackedOrigin],
     cameraToWorld:  Pointer[Float32, Oc2w],
     min_x: Int32, min_y: Int32, max_x: Int32, max_y: Int32,
-    scene: Pointer[SceneDescriptor2_C, Osc],
+    scene: Pointer[SceneView, Osc],
     normals_out: Pointer[Float32, Onm],
     depth_out:   Pointer[Float32, Odp],
     # G-buffer extension (Phase 0.3, docs/A2_restir_migration_plan.md), CPU

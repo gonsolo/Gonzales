@@ -363,7 +363,7 @@ def spectral_handle(mut ctx: SpectralContext) -> SpectralHandle:
 
 @always_inline
 def null_spectral_handle() -> SpectralHandle:
-    """Dangling-pointer sentinel (mirrors bvh.mojo's SceneDescriptor2_C
+    """Dangling-pointer sentinel (mirrors bvh.mojo's SceneView
     dangling-texture convention and guide.mojo's null_guide()) for call
     sites that don't have a real spectral table loaded yet (BDPT/SPPM,
     Stage 3/4; test fixtures) — never dereferenced by code that doesn't

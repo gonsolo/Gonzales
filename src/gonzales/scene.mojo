@@ -5,7 +5,7 @@ from .materials import Material
 from .primitives import TriangleMesh, PrimId, Sphere
 from .media import Medium, MediumInterface
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight
-from .bvh import BVH2Node, SceneDescriptor2_C
+from .bvh import BVH2Node, SceneView
 
 # ── Scene IR ──────────────────────────────────────────────────────────────────
 #
@@ -146,11 +146,11 @@ struct Scene(Movable):
         """Convenience: total pixel count."""
         return Int(self.film.width) * Int(self.film.height)
 
-    fn scene_descriptor(self) -> SceneDescriptor2_C:
+    fn scene_descriptor(self) -> SceneView:
         """Build the CPU-renderer scene handle (raw pointers into our Lists).
         Valid only while `self` is live.
         """
-        return SceneDescriptor2_C(
+        return SceneView(
             bvh2Nodes         = self.bvh_nodes.unsafe_ptr(),
             primIds           = self.prim_ids.unsafe_ptr(),
             meshes            = self.meshes.unsafe_ptr(),

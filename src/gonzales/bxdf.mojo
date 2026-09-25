@@ -9,7 +9,7 @@ from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world, power_heu
 from .vcm_mis import MisPolicy, mis_policy_power, mis_policy_sole, nee_mis_weight
 from .rng import PCG32
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_pdf_measured, bxdf_sample_measured
-from .bvh import LightSample, HairLobeConstants, _hair_eval_lobes, SceneDescriptor2_C, _hair_precompute, _hair_sample_dir_u
+from .bvh import LightSample, HairLobeConstants, _hair_eval_lobes, SceneView, _hair_precompute, _hair_sample_dir_u
 from .spectrum import SampledWavelengths, SpectralSample, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb, rgb_bands_to_spectral_sample
 
 # ── Isotropic GGX (Trowbridge-Reitz) evaluation ───────────────────────────────
@@ -913,7 +913,7 @@ struct LobeTables(TrivialRegisterPassable):
     """The three scene tables a lobe evaluation can read, and nothing else.
 
     lobe_eval took these as three loose pointers because the integrators do
-    not share a context type: VCM has SceneDescriptor2_C (39 fields, passed
+    not share a context type: VCM has SceneView (39 fields, passed
     by ref), the path tracer has ShadeContext (23 fields, passed by value),
     and they carry ELEVEN of the same scene pointers between them.
 
@@ -1074,7 +1074,7 @@ def lobe_eval[want_pdfs: Bool = True](
 
     Takes the three tables it actually reads rather than a scene descriptor,
     because the integrators do not agree on a descriptor type: VCM has
-    SceneDescriptor2_C, the path tracer has ShadeContext. Depending on one of
+    SceneView, the path tracer has ShadeContext. Depending on one of
     them would have locked this to one integrator again, which is the whole
     condition this interface exists to remove.
 

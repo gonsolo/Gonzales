@@ -16,7 +16,7 @@ struct PrimId(TrivialRegisterPassable):
     var id1: Int64
     var id2: Int64
     var materialIndex: Int64
-    var instanceIdx: Int32   # -1 = ordinary top-level prim; else index into SceneDescriptor2_C.instances
+    var instanceIdx: Int32   # -1 = ordinary top-level prim; else index into SceneView.instances
     var type: Int8
     var _pad0: Int8
     var _pad1: Int8
@@ -28,8 +28,8 @@ struct PrimId(TrivialRegisterPassable):
 struct Instance(TrivialRegisterPassable):
     """One placement of a template (BLAS). `objToWorld`/`worldToObj` are 16-float
     column-major matrices (same convention as transform.mojo). A TLAS leaf of
-    PrimId.type == 6 has id1 = index into SceneDescriptor2_C.instances.
-    `blasIdx` indexes SceneDescriptor2_C.blasNodesArr/blasPrimIdsArr (one
+    PrimId.type == 6 has id1 = index into SceneView.instances.
+    `blasIdx` indexes SceneView.blasNodesArr/blasPrimIdsArr (one
     private BVH2 per template, each a separate allocation — no shared-pool
     offset arithmetic needed). A BLAS's PrimId entries use ordinary type==0
     triangle encoding against the same global `meshes` array as the TLAS."""

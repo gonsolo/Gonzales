@@ -20,7 +20,7 @@ from .lights import area_light_pick_triangle, AreaLight, DistantLight, InfiniteL
 from .curves import Curve, curve_piece_endpoints, _curve_perp_axis
 from .bssrdf import dipole_rd, dipole_max_radius
 from .bvh import (
-    BVH2Node, SceneDescriptor2_C, traverse_bvh2_core, any_hit_bvh2_core,
+    BVH2Node, SceneView, traverse_bvh2_core, any_hit_bvh2_core,
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf,
     HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps,
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
@@ -510,7 +510,7 @@ def medium_after_crossing(
     inter: Intersection,
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     mat: Material,
-    ref sd: SceneDescriptor2_C,
+    ref sd: SceneView,
     hit: Point3f = Point3f(Float32(0)),
 ) -> Int32:
     """Return new current_medium_idx after crossing a surface with MediumInterface.
@@ -535,7 +535,7 @@ def medium_after_crossing(
     return iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
 
 def _sppm_trace_visible_point[use_gpu: Bool](
-    ref sd:       SceneDescriptor2_C,
+    ref sd:       SceneView,
     mut pcg:  PCG32,
     r2c:      Pointer[Float32, MutUntrackedOrigin],
     c2w:      Pointer[Float32, MutUntrackedOrigin],
@@ -928,7 +928,7 @@ def _sppm_camera_pass(
     fw:       Int32,
     r2c:      Pointer[Float32, MutUntrackedOrigin],
     c2w:      Pointer[Float32, MutUntrackedOrigin],
-    ref sd:       SceneDescriptor2_C,
+    ref sd:       SceneView,
     init_r2:  Float32,
     seed:     UInt64,
     maxdepth: Int,
@@ -1016,7 +1016,7 @@ def _sppm_cam_pos(c2w: Pointer[Float32, MutUntrackedOrigin]) -> Vec3f:
     return Vec3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
 
 def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
-    ref sd:               SceneDescriptor2_C,
+    ref sd:               SceneView,
     mut pcg:          PCG32,
     scratch:          Pointer[Intersection, MutUntrackedOrigin],
     n_emit:           Int,
@@ -1036,7 +1036,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     cam_pos: Vec3f,
     px_scale: Float32,
     # Decomposed spectral tables rather than reading sd.spectral. `sd` is a
-    # SceneDescriptor2_C passed BY VALUE, and it contains a SpectralHandle --
+    # SceneView passed BY VALUE, and it contains a SpectralHandle --
     # the 6-field TrivialRegisterPassable struct suspected (modular/modular#6759,
     # later retracted by its own author as unreproducible) of corrupting
     # under by-value passing across a real call boundary. Whatever the cause,
@@ -1656,7 +1656,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
 
 
 @always_inline
-def _sppm_has_sphere_lights(ref sd: SceneDescriptor2_C) -> Bool:
+def _sppm_has_sphere_lights(ref sd: SceneView) -> Bool:
     """Whether any analytic sphere is an area light. Cheap O(sphereCount)
     scan — sd.spheres holds ALL analytic spheres (light or not), not a
     pre-filtered lights-only array like every other light type, so this is
@@ -1676,7 +1676,7 @@ def _sppm_photon_pass(
     photons:      Pointer[SPPMPhoton, MutUntrackedOrigin],
     n_emit:       Int,
     max_photons:  Int,
-    ref sd:           SceneDescriptor2_C,
+    ref sd:           SceneView,
     seed:         UInt64,
     pass_idx:     Int,
     maxdepth:     Int,
@@ -1829,7 +1829,7 @@ def _sppm_gather_one(
     photons:  Pointer[SPPMPhoton, MutUntrackedOrigin],
     heads:    Pointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
-    ref sd:       SceneDescriptor2_C,
+    ref sd:       SceneView,
     # Decomposed for exactly the reason the spectral tables below are: `sd` is
     # passed BY VALUE and its struct members do not read back reliably inside
     # the GPU kernel. Reading sd.mediumCount here returned 0 while the driver
@@ -1844,7 +1844,7 @@ def _sppm_gather_one(
     grids_arr: Pointer[Grid, MutUntrackedOrigin],
     nvdb_arr:  Pointer[NvdbGrid, MutUntrackedOrigin],
     # Decomposed spectral tables rather than reading sd.spectral. `sd` is a
-    # SceneDescriptor2_C passed BY VALUE, and it contains a SpectralHandle --
+    # SceneView passed BY VALUE, and it contains a SpectralHandle --
     # the 6-field TrivialRegisterPassable struct suspected (modular/modular#6759,
     # later retracted by its own author as unreproducible) of corrupting
     # under by-value passing across a real call boundary. Whatever the cause,
@@ -2113,7 +2113,7 @@ def _gather_update(
     photons:  Pointer[SPPMPhoton, MutUntrackedOrigin],
     heads:    Pointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
-    ref sd:       SceneDescriptor2_C,
+    ref sd:       SceneView,
     pass_wl:  SampledWavelengths,
 ):
     def gather_one(i: Int) {imm}:
@@ -2139,7 +2139,7 @@ def _gather_update(
 @always_inline
 def _sppm_vp_brdf(
     vp: SPPMPixel,
-    ref sd: SceneDescriptor2_C,
+    ref sd: SceneView,
     vn: Vec3f,
     wi: Vec3f,
 ) -> RGB:
@@ -2181,7 +2181,7 @@ def _sppm_vp_brdf(
 @always_inline
 def _sppm_shadow_transmittance(
     vp: SPPMPixel,
-    ref sd: SceneDescriptor2_C,
+    ref sd: SceneView,
     org: Point3f,
     wi: Vec3f,
     dist: Float32,
@@ -2225,7 +2225,7 @@ def _sppm_shadow_transmittance(
 
 def _sppm_nee_weight(
     vp: SPPMPixel,
-    ref sd: SceneDescriptor2_C,
+    ref sd: SceneView,
     vn: Vec3f,
     wo: Vec3f,
     ls: LightSample,
@@ -2278,7 +2278,7 @@ def _sppm_nee_weight(
         vp.wavelengths, mis_policy_sole())
 
 @always_inline
-def _sppm_vp_shadow_eps(vp: SPPMPixel, ref sd: SceneDescriptor2_C, wo: Vec3f) -> Float32:
+def _sppm_vp_shadow_eps(vp: SPPMPixel, ref sd: SceneView, wo: Vec3f) -> Float32:
     """Shadow-ray self-intersection offset for a stored SPPM visible point.
     Hair vertices need the same curve-radius-scaled epsilon as the ray-bounce
     offsets in shading.mojo/bdpt.mojo/sppm.mojo's own photon pass (see
@@ -2292,10 +2292,10 @@ def _sppm_vp_shadow_eps(vp: SPPMPixel, ref sd: SceneDescriptor2_C, wo: Vec3f) ->
     return Float32(0.0001)
 
 @always_inline
-def _sppm_simple_light_count(ref sd: SceneDescriptor2_C) -> Int:
+def _sppm_simple_light_count(ref sd: SceneView) -> Int:
     """Sibling of shading.mojo's _nee_simple_light_count / bdpt.mojo's
     _bdpt_simple_light_count -- a third, independent definition rather than
-    a shared one, because sppm.mojo is typed against SceneDescriptor2_C (like
+    a shared one, because sppm.mojo is typed against SceneView (like
     bdpt.mojo) but needs the (LightSample, tmax) PAIRING (like shading.mojo's
     ShadeContext version), and bdpt.mojo already imports from sppm.mojo (for
     _sppm_trace_visible_point etc.), so importing back the other way would be
@@ -2306,7 +2306,7 @@ def _sppm_simple_light_count(ref sd: SceneDescriptor2_C) -> Int:
 
 @always_inline
 def _sppm_sample_simple_light(
-    ref sd: SceneDescriptor2_C, i: Int, hit_point: Vec3f, mut pcg: PCG32,
+    ref sd: SceneView, i: Int, hit_point: Vec3f, mut pcg: PCG32,
 ) -> Tuple[LightSample, Float32]:
     """The i-th distant/point/sphere light, plus the any_hit_bvh2_core tmax
     to use for it -- same pairing shading.mojo's _nee_sample_simple_light
@@ -2334,7 +2334,7 @@ def _sppm_sample_simple_light(
 def _sppm_nee_one(
     vps:     Pointer[SPPMPixel, MutUntrackedOrigin],
     i:       Int,
-    ref sd:      SceneDescriptor2_C,
+    ref sd:      SceneView,
     mut pcg: PCG32,
 ):
     """Direct (NEE) lighting update for visible point `i`. Shared verbatim
@@ -2521,7 +2521,7 @@ def _sppm_nee_one(
 def _sppm_nee_update(
     vps:     Pointer[SPPMPixel, MutUntrackedOrigin],
     n_vps:   Int,
-    ref sd:      SceneDescriptor2_C,
+    ref sd:      SceneView,
     seed:    UInt64,
     pass_idx: Int,
 ):
@@ -2654,7 +2654,7 @@ def _sppm_finalize_one_pixel(
 
 def _sppm_render_core(
     psc:      Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
-    ref sd:       SceneDescriptor2_C,
+    ref sd:       SceneView,
     n_passes: Int,
     n_photons_per_pass: Int,
     initial_radius: Float32,
@@ -2821,7 +2821,7 @@ def _sppm_render_core(
 
 def sppm_render(
     psc:      Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
-    ref sd:       SceneDescriptor2_C,
+    ref sd:       SceneView,
     n_passes: Int,
     n_photons_per_pass: Int,
     initial_radius: Float32,

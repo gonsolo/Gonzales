@@ -1,4 +1,4 @@
-from .bvh import BVH2Node, SceneDescriptor2_C
+from .bvh import BVH2Node, SceneView
 from .curves import CURVE_DEFER_K, Curve
 from .geometry import _is_real_ptr
 from .lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSampler
@@ -943,11 +943,11 @@ struct GpuSceneHandle(Movable):
     # 1-element buffers, BDPT/SPPM GPU dispatch, Stage 3/4 not wired yet).
     var spectral: SpectralBuffers
 
-    def scene_descriptor(mut self) -> SceneDescriptor2_C:
+    def scene_descriptor(mut self) -> SceneView:
         """The whole device-resident scene as ONE kernel argument. Kernels
         take this by value instead of ~40 decomposed pointer/count params."""
         var (sc, sres, sx, sy, sz, sd65) = self.spectral.unsafe_ptrs()
-        return SceneDescriptor2_C(
+        return SceneView(
             bvh2Nodes=self.bvh.nodes_ptr(), primIds=self.bvh.prim_ids_ptr(),
             meshes=self.meshes.meshes_ptr(), meshCount=Int64(self.meshes.mesh_count),
             materials=typed_ptr[Material](self.materials_buf), materialCount=Int64(self.material_count),

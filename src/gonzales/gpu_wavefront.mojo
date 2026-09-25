@@ -1,4 +1,4 @@
-from .bvh import BVH2Node, any_hit_bvh2_core, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneDescriptor2_C
+from .bvh import BVH2Node, any_hit_bvh2_core, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
 from .curves import CURVE_DEFER_K, Curve, _curve_perp_axis, curve_piece_endpoints, intersect_curve
 from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, store_vec3, vec3f
 from .materials import Material
@@ -76,7 +76,7 @@ def reset_vol_used_gpu(
 
 
 def traverse_shadow_rays_gpu(
-    sd: SceneDescriptor2_C,
+    sd: SceneView,
     paths: Pointer[PathState, MutUntrackedOrigin],
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
     count_dp: Int64,
@@ -252,7 +252,7 @@ def gen_primary_rays_wavefront_gpu(
 
 # Traversal kernel that reads rays directly from PathState (no separate ray buffer).
 def traverse_paths_gpu(
-    sd: SceneDescriptor2_C,
+    sd: SceneView,
     paths: Pointer[PathState, MutUntrackedOrigin],
     results: Pointer[Intersection, MutUntrackedOrigin],
     curve_cand_prim: Pointer[Int32, MutUntrackedOrigin],
@@ -587,7 +587,7 @@ def resolve_curve_candidates_gpu(
     curve_cand_prim: Pointer[Int32, MutUntrackedOrigin],
     curve_cand_count: Pointer[Int32, MutUntrackedOrigin],
     curve_cand_offset: Pointer[Int32, MutUntrackedOrigin],
-    sd: SceneDescriptor2_C,
+    sd: SceneView,
     paths: Pointer[PathState, MutUntrackedOrigin],
     results: Pointer[Intersection, MutUntrackedOrigin],
     n_dp: Int64,

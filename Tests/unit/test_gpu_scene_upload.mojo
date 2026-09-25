@@ -10,7 +10,7 @@ from gonzales.gpu_scene import GpuSceneHandle, gpu_upload_scene
 from gonzales.materials import Material, MatKind
 from gonzales.bvh import BVH2Node
 
-# ── Full SceneDescriptor2_C + GPU scene-upload fixture (task #58) ──────────
+# ── Full SceneView + GPU scene-upload fixture (task #58) ──────────
 # gpu_upload_scene (gpu_scene.mojo) had zero automated coverage before this: every
 # its dozen-plus device-buffer uploads were only
 # ever exercised indirectly by manually rendering a real scene with --gpu.

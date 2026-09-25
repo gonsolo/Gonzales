@@ -1,4 +1,4 @@
-from .bvh import BVH2Node, LightSample, _sample_distant_light_nee, _sample_infinite_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, any_hit_bvh2_core, test_spheres, traverse_bvh2_core, SceneDescriptor2_C
+from .bvh import BVH2Node, LightSample, _sample_distant_light_nee, _sample_infinite_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, any_hit_bvh2_core, test_spheres, traverse_bvh2_core, SceneView
 from .curves import Curve
 from .geometry import Point2f, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, point3f, vec3f
 from .lights import AreaLight, DistantLight, InfiniteLight, LightSampler, PointLight, area_light_pick_triangle, light_sampler_sample
@@ -20,7 +20,7 @@ from .gpu_scene import GpuSceneHandle
 def update_medium_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
-    sd: SceneDescriptor2_C,
+    sd: SceneView,
     count_dp: Int64,
 ):
     """Update current_medium_idx for any surface hit with a MediumInterface bound.
@@ -98,7 +98,7 @@ def _volume_nee_light(
     nvdb_grid: NvdbGrid,
     sigma_maj: Float32,
     sigma_t_r: Float32,
-    ref sd: SceneDescriptor2_C,
+    ref sd: SceneView,
 ):
     """One NEE sample from ONE non-area light toward a volume scatter point.
 
@@ -208,7 +208,7 @@ def _volume_nee_light(
 @always_inline
 def _volume_area_light_nee(
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
-    ref sd: SceneDescriptor2_C,
+    ref sd: SceneView,
     i: Int,
     med: Medium,
     med_idx: Int,
@@ -633,7 +633,7 @@ def _sample_medium_core(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     i: Int,
-    ref sd: SceneDescriptor2_C,
+    ref sd: SceneView,
     # Phase 7.3 (docs/A2_restir_migration_plan.md, project_restir_migration
     # memory): volume-scatter TEMPORAL reuse. Decomposed pointers, not one
     # `vol_io: VolReservoirIO` argument -- same defensive convention this
@@ -940,7 +940,7 @@ def _sample_medium_core(
 def sample_medium_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
-    sd: SceneDescriptor2_C,
+    sd: SceneView,
     count_dp: Int64,
     # Phase 7.3: only gpu_render_wavefront_kernels(...) callers that pass
     # use_vol_restir=1 AND real buffers get reuse -- see _sample_medium_core's

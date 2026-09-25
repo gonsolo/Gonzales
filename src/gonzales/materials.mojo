@@ -95,7 +95,7 @@ struct Material(TrivialRegisterPassable):
     var checker_uscale: Float32
     var checker_vscale: Float32
     var measured_idx: Int32  # -1 = not a "measured" material; >= 0 = index into
-                              # SceneDescriptor2_C.measuredBrdfs (see MeasuredBRDF)
+                              # SceneView.measuredBrdfs (see MeasuredBRDF)
     # Affine correction applied to tex_idx's looked-up value in shading.mojo's
     # _tex_lookup: `albedo = tex_bias + tex_scale * texture(uv)`, per channel.
     # Identity is scale=1, bias=0. This one form covers every texture-graph

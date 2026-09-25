@@ -2,7 +2,7 @@
 # _fmt_f1/fmt_time/progress_str (progress-bar string formatting) and
 # normalize_film (TileResult accumulator -> per-pixel beauty/albedo
 # arrays). render_tile/render_all_tiles/render_aux_buffers all need a real
-# built BVH and SceneDescriptor2_C (and, for render_tile's medium sampling
+# built BVH and SceneView (and, for render_tile's medium sampling
 # branch, a full heterogeneous-media scene) and are out of scope here.
 
 from std.math import abs

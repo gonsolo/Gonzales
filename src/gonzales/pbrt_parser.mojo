@@ -28,7 +28,7 @@ from .curves import Curve, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_poi
 from .nanovdb import nvdb_load, nvdb_load_named, nvdb_data, nvdb_size, nvdb_free, nvdb_index_bbox, nvdb_value_range, nvdb_map_invmatf, nvdb_map_vecf
 from .noise import _perlin_perm_table, cloud_density
 from .transform import matrix_multiply, matrix_invert, transform_points, transform_normals
-from .bvh import BVH2Node, SceneDescriptor2_C, build_bvh2
+from .bvh import BVH2Node, SceneView, build_bvh2
 from .spectrum import SpectralHandle
 from .sampling import gaussian_norm
 from .ply import load_ply
@@ -60,7 +60,7 @@ struct ParsedScene_Mojo:
     var bvh_node_count:   Int32
     var prim_count:       Int32
     # CPU-inclusive TLAS: tris+curves+instances. Used only by
-    # mojo_parsed_scene_descriptor (SceneDescriptor2_C, the CPU render path).
+    # mojo_parsed_scene_descriptor (SceneView, the CPU render path).
     # GPU's device-side upload always reads bvh_nodes/prim_ids above instead —
     # its traversal kernels have no BLAS/instance buffers to resolve a
     # PrimId.type==6 leaf, so one must never appear in its uploaded arrays
@@ -3590,8 +3590,8 @@ def mojo_apply_overrides(
 def mojo_parsed_scene_descriptor(
     psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
     spectral: SpectralHandle,
-) -> Pointer[SceneDescriptor2_C, MutUntrackedOrigin]:
-    var sd = unsafe_alloc[SceneDescriptor2_C](1)
+) -> Pointer[SceneView, MutUntrackedOrigin]:
+    var sd = unsafe_alloc[SceneView](1)
     sd[unsafe_offset=0].bvh2Nodes        = psc[unsafe_offset=0].bvh_nodes_cpu
     sd[unsafe_offset=0].primIds          = psc[unsafe_offset=0].prim_ids_cpu
     sd[unsafe_offset=0].meshes           = psc[unsafe_offset=0].meshes
