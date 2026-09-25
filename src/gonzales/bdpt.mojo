@@ -54,7 +54,7 @@ from .sppm import (
 )
 from .shading import _tex_lookup, _get_tri_verts, _mnee_walk, _mnee_walk2, \
     apply_surface_maps_at_hit, _camera_approx_footprint, area_light_hit_cos, curve_light_hit
-from .bxdf import LobeCtx, LobeEval, lobe_eval, lobe_scoped, _eval_conductor_ggx_spectral, coat_eval_smooth, bxdf_pdf_coated_exit, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
+from .bxdf import LobeCtx, LobeEval, lobe_eval, lobe_scoped, lobe_sample, LobeSample, _eval_conductor_ggx_spectral, coat_eval_smooth, bxdf_pdf_coated_exit, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured, bxdf_pdf_measured
 from .gpu import GpuSceneHandle, vulkaninterop_unpack_results_kernel
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
@@ -2140,40 +2140,37 @@ def _bdpt_camera_path_init[use_gpu: Bool](
         Float32(1.0), Float32(1.0),   # current_dielectric_ior, previous_dielectric_ior (vacuum)
     )
 
-@always_inline
-def _bdpt_layered_scatter(
-    n: Vec3f, wo: Vec3f, alb: RGB, mat: Material_C, radiance: Bool,
-    mut pcg: PCG32, ref sd: SceneDescriptor2_C, wavelengths: SampledWavelengths,
-) -> Tuple[Bool, Vec3f, SpectralSample, Bool, Float32, Float32, Float32]:
-    """Sample a coateddiffuse vertex's LayeredBxDF (layered.mojo) for both
-    subpaths: (valid, wi, f*|cos|/pdf, specular, pdf_fwd, pdf_rev, |cos|).
+def _vcm_scatter(
+    v: BDPTVertex, adjoint: Bool, mut pcg: PCG32, ref sd: SceneDescriptor2_C,
+    wavelengths: SampledWavelengths,
+    mut dvcm: Float32, mut dvc: Float32, mut dvm: Float32,
+    mis_vc_weight_factor: Float32, eta_x: Float32,
+) -> LobeSample:
+    """Scatter at a stored vertex through THE lobe sampler (bxdf.mojo's
+    lobe_sample) and advance VCM's carries. `adjoint` on the light subpath.
 
-    The sample's own pdf is only proportional (pbrt's pdfIsProportional), so
-    it sets the throughput while the MIS carries take layered_pdf both ways --
-    the same deterministic estimate lobe_eval hands every other strategy.
-    `radiance` is False on the light subpath (importance transport)."""
-    var eta = mat.emission.r
-    var alpha = max(mat.roughU, mat.roughV)
-    var fr = Frame.from_z(n)
-    var tx = Vec3f(fr.x.x, fr.x.y, fr.x.z)
-    var ty = Vec3f(fr.y.x, fr.y.y, fr.y.z)
-    var wo_l = Vec3f(dot(wo, tx), dot(wo, ty), dot(wo, n))
-    var R = spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, alb.r, alb.g, alb.b, wavelengths)
-    var bs = layered_sample(wo_l, pcg.next_float(), pcg.next_float(), pcg.next_float(), R, eta, alpha, radiance)
-    var ZERO = SpectralSample(Float32(0))
-    if not bs.valid or bs.pdf <= Float32(0):
-        return (False, Vec3f(Float32(0)), ZERO, False, Float32(0), Float32(0), Float32(0))
-    var wi = tx * bs.wi.x + ty * bs.wi.y + n * bs.wi.z
-    var cos_out = abs(bs.wi.z)
-    var w = bs.f * (cos_out / bs.pdf)
-    if bs.specular:
-        return (True, wi, w, True, Float32(0), Float32(0), cos_out)
-    var pf = layered_pdf(wo_l, bs.wi, eta, alpha, radiance)
-    var pr = layered_pdf(bs.wi, wo_l, eta, alpha, not radiance)
-    if pf <= Float32(0):
-        return (False, Vec3f(Float32(0)), ZERO, False, Float32(0), Float32(0), Float32(0))
-    return (True, wi, w, False, pf, pr, cos_out)
-
+    Both subpaths' diffuse, diffusetransmission and coateddiffuse branches
+    used to write this out by hand -- four copies of the lobe choice, the
+    densities and the carry update, one of which still held its own
+    transmittance lookup and a pre-bump cosine in the reverse density.
+    Taking the vertex's own LobeCtx means the carries describe exactly the
+    densities lobe_eval hands connect, merge and NEE. A delta event (a
+    smooth coat's mirror) zeroes dVCM and scales the rest by its cosine."""
+    var s = lobe_sample(_vertex_ctx(v, adjoint), pcg.next_float(), pcg.next_float(), pcg.next_float(),
+        LobeTables(sd.materials, sd.curves, sd.measuredBrdfs),
+        sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y,
+        sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+    if not s.valid:
+        return s
+    if s.is_delta:
+        dvcm = Float32(0)
+        dvc *= s.cos_out
+        dvm *= s.cos_out
+    else:
+        (dvcm, dvc, dvm) = vcm_scatter_carries(
+            dvcm, dvc, dvm, s.cos_out / s.pdf_fwd, s.pdf_fwd, s.pdf_rev,
+            mis_vc_weight_factor, eta_x)
+    return s
 
 def _bdpt_camera_path_bounce[use_gpu: Bool](
     ref sd:      SceneDescriptor2_C,
@@ -2817,70 +2814,15 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             if 3 < n_sph_mnee:
                 total += _bdpt_mnee_sphere_light(sd, hit, gn, eff_alb, beta, pcg, 3, n_sph_mnee, wavelengths)
 
-            # Cosine-weighted scatter direction
-            var u1 = pcg.next_float(); var u2 = pcg.next_float()
-            # diffusetransmission scatters to BOTH sides, with the lobe
-            # picked by luminance -- the SAME split lobe_eval reports as the
-            # density. Sampling one-sidedly while evaluating two-sidedly
-            # leaves VCM's carries describing a path that was never built.
-            # p_sel == 1 for every other material, so this is a no-op there
-            # (and draws no extra random number).
-            var p_sel = Float32(1.0)
-            var bounce_n = gn
-            var lobe_alb_dt = eff_alb
-            if mat.type == MatKind.diffuse_transmit:
-                var trans_dt = eff_alb if Int(mat.tex_idx) != -1 else mat.emission
-                var pr_dt = eff_alb.luma()
-                var pt_dt = trans_dt.luma()
-                # A texel where BOTH lobes are ~black (a leaf texture's alpha-
-                # cutout/vein-shadow regions, common on tree materials) used
-                # to fall through to the 1e-9 floor below and then get a
-                # lobe FORCED on it anyway via the 1e-6 p_sel clamp further
-                # down -- inflating `beta`/`flux` by up to 1e6x for a vertex
-                # whose true contribution is zero, AND (independently of
-                # beta) feeding that same 1/p_sel into vcm_scatter_carries's
-                # cos_over_pdf, which does not care about beta's magnitude:
-                # confirmed by instrumentation on barcelona-pavilion-day,
-                # ~19% of pixels at spp=1 hit exactly this clamp (its
-                # cos_over_pdf output was IDENTICAL every time -- PI/1e-6 --
-                # not a per-sample-varying value, the signature of a floor
-                # being hit routinely, not a genuinely rare event). Once hit,
-                # dVC/dVCM at every later vertex on that camera path inherit
-                # the ~1e6-8e13 blowup, which collapses every later env-NEE
-                # weight (vcm_env_nee_weight's w_camera term) to ~1e-9 --
-                # exactly the shadowed-vs-sunlit chair deficit pattern
-                # (project_photon_estimator_energy_gap memory): more bounces
-                # through foliage before reaching a point = more chances to
-                # hit this and poison everything downstream. A vertex with
-                # no real reflectance OR transmittance has nothing to
-                # scatter -- terminate here instead of inventing a lobe.
-                if pr_dt + pt_dt <= Float32(1e-9):
-                    return False
-                var tot_dt = pr_dt + pt_dt
-                var take_refl = pcg.next_float() < pr_dt / tot_dt
-                p_sel = max((pr_dt if take_refl else pt_dt) / tot_dt, Float32(1e-6))
-                bounce_n = gn if take_refl else (gn * Float32(-1.0))
-                lobe_alb_dt = eff_alb if take_refl else trans_dt
-            rd = vec3f(_cosine_hemisphere_sample(bounce_n, u1, u2))
+            # Scatter through THE lobe sampler -- the same LobeCtx connect,
+            # merge and NEE evaluate this vertex with (see _vcm_scatter).
+            var sc = _vcm_scatter(v, False, pcg, sd, wavelengths, dvcm_carry, dvc_carry, dvm_carry, mis_vc_weight_factor, eta_x)
+            if not sc.valid:
+                return False
+            rd = vec3f(sc.wi)
             ro = hit + rd*Float32(0.0002)
-            last_bsdf_pdf = bxdf_pdf_diffuse(abs(dot(bounce_n, rd.to_simd()))) * p_sel
-            # Update beta: f*cos/pdf = (alb/π)cos / (p_sel cos/π) = alb / p_sel.
-            # The COLOUR stays a bounded reflectance and 1/p_sel rides along
-            # as a plain scalar -- pushing alb/p_sel through spec_refl would
-            # hit its [0,1] clamp (the same trap as _to_spec_weight).
-            beta *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (lobe_alb_dt).r, (lobe_alb_dt).g, (lobe_alb_dt).b, wavelengths) * (Float32(1.0) / p_sel)
-            # VCM Stage 2b: recursive continuation for the NEXT bounce --
-            # see _bdpt_trace_light_path's matching diffuse-branch comment.
-            var cos_theta_out = abs(dot(rd.to_simd(), bounce_n))
-            # Both densities carry p_sel: the reverse of a transmission is a
-            # transmission, so the same lobe probability applies each way --
-            # which is exactly what lobe_eval's branch returns for fwd/rev.
-            # cosThetaOut/bsdfDirPdfW is then PI/p_sel, not PI.
-            var bsdf_rev_pdf_w = p_sel * cos_fix / PI
-            var bsdf_dir_pdf_w = p_sel * cos_theta_out / PI
-            (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
-                dvcm_carry, dvc_carry, dvm_carry, PI / p_sel, bsdf_dir_pdf_w, bsdf_rev_pdf_w,
-                mis_vc_weight_factor, eta_x)
+            beta *= sc.weight
+            last_bsdf_pdf = Float32(-1) if sc.is_delta else sc.pdf_fwd
 
         elif mat.type == MatKind.coated_diffuse:
             # coateddiffuse as pbrt's LayeredBxDF (layered.mojo): one real lobe
@@ -2944,23 +2886,15 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                                       le_e.pdf_rev, False, abs(dot(ls_e.wi, gn_geo)))
                 var w_e = _nee_weight_simple_spectral(ls_e, v.mat_kind, eff_alb, Float32(0), gn, wo_d, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_e, v.mat_idx)
                 total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, Float32(0.0001), False)
-            var (ok_l, wi_l, w_l, spec_l, pf_l, pr_l, cos_l) = _bdpt_layered_scatter(
-                vec3f(gn), vec3f(wo_d), eff_alb, mat, True, pcg, sd, wavelengths)
-            if not ok_l:
+            # Scatter through THE lobe sampler -- the same LobeCtx connect,
+            # merge and NEE evaluate this vertex with (see _vcm_scatter).
+            var sc = _vcm_scatter(v, False, pcg, sd, wavelengths, dvcm_carry, dvc_carry, dvm_carry, mis_vc_weight_factor, eta_x)
+            if not sc.valid:
                 return False
-            rd = wi_l
+            rd = vec3f(sc.wi)
             ro = hit + rd*Float32(0.0002)
-            beta *= w_l
-            if spec_l:
-                last_bsdf_pdf = Float32(-1)   # the smooth coat's mirror: a delta bounce
-                dvcm_carry = Float32(0)
-                dvc_carry *= cos_l
-                dvm_carry *= cos_l
-            else:
-                last_bsdf_pdf = pf_l
-                (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
-                    dvcm_carry, dvc_carry, dvm_carry, cos_l / pf_l, pf_l, pr_l,
-                    mis_vc_weight_factor, eta_x)
+            beta *= sc.weight
+            last_bsdf_pdf = Float32(-1) if sc.is_delta else sc.pdf_fwd
 
         elif mat.type == MatKind.conductor or mat.type == MatKind.coated_conductor:
             var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
@@ -3957,66 +3891,12 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
             n_verts += 1
             _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
-            # Scatter
-            var u1 = pcg.next_float(); var u2 = pcg.next_float()
-            # diffusetransmission scatters to BOTH sides, with the lobe
-            # picked by luminance -- the SAME split lobe_eval reports as the
-            # density. Sampling one-sidedly while evaluating two-sidedly
-            # leaves VCM's carries describing a path that was never built.
-            # p_sel == 1 for every other material, so this is a no-op there
-            # (and draws no extra random number).
-            var p_sel = Float32(1.0)
-            var bounce_n = gn
-            var lobe_alb_dt = eff_alb
-            if mat.type == MatKind.diffuse_transmit:
-                var trans_dt = eff_alb if Int(mat.tex_idx) != -1 else mat.emission
-                var pr_dt = eff_alb.luma()
-                var pt_dt = trans_dt.luma()
-                # A texel where BOTH lobes are ~black (a leaf texture's alpha-
-                # cutout/vein-shadow regions, common on tree materials) used
-                # to fall through to the 1e-9 floor below and then get a
-                # lobe FORCED on it anyway via the 1e-6 p_sel clamp further
-                # down -- inflating `beta`/`flux` by up to 1e6x for a vertex
-                # whose true contribution is zero, AND (independently of
-                # beta) feeding that same 1/p_sel into vcm_scatter_carries's
-                # cos_over_pdf, which does not care about beta's magnitude:
-                # confirmed by instrumentation on barcelona-pavilion-day,
-                # ~19% of pixels at spp=1 hit exactly this clamp (its
-                # cos_over_pdf output was IDENTICAL every time -- PI/1e-6 --
-                # not a per-sample-varying value, the signature of a floor
-                # being hit routinely, not a genuinely rare event). Once hit,
-                # dVC/dVCM at every later vertex on that camera path inherit
-                # the ~1e6-8e13 blowup, which collapses every later env-NEE
-                # weight (vcm_env_nee_weight's w_camera term) to ~1e-9 --
-                # exactly the shadowed-vs-sunlit chair deficit pattern
-                # (project_photon_estimator_energy_gap memory): more bounces
-                # through foliage before reaching a point = more chances to
-                # hit this and poison everything downstream. A vertex with
-                # no real reflectance OR transmittance has nothing to
-                # scatter -- terminate here instead of inventing a lobe.
-                if pr_dt + pt_dt <= Float32(1e-9):
-                    return False
-                var tot_dt = pr_dt + pt_dt
-                var take_refl = pcg.next_float() < pr_dt / tot_dt
-                p_sel = max((pr_dt if take_refl else pt_dt) / tot_dt, Float32(1e-6))
-                bounce_n = gn if take_refl else (gn * Float32(-1.0))
-                lobe_alb_dt = eff_alb if take_refl else trans_dt
-            rd = vec3f(_cosine_hemisphere_sample(bounce_n, u1, u2))
+            var sc = _vcm_scatter(v, True, pcg, sd, wavelengths, dvcm_carry, dvc_carry, dvm_carry, mis_vc_weight_factor, eta_x)
+            if not sc.valid:
+                return False
+            rd = vec3f(sc.wi)
             ro = hit + rd*Float32(0.0002)
-            flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (lobe_alb_dt).r, (lobe_alb_dt).g, (lobe_alb_dt).b, wavelengths) * (Float32(1.0) / p_sel)
-            # VCM Stage 2b: recursive continuation for the NEXT bounce
-            # (cosThetaOut/bsdfDirPdfW simplifies to PI exactly for
-            # cosine-weighted diffuse sampling; bsdfRevPdfW reuses cos_fix,
-            # the same incoming cosine just used above -- see the memory
-            # file for the full derivation).
-            var cos_theta_out = abs(dot(rd.to_simd(), bounce_n))
-            # See the camera-side twin: p_sel on both densities, PI/p_sel for
-            # cosThetaOut/bsdfDirPdfW.
-            var bsdf_rev_pdf_w = p_sel * cos_fix / PI
-            var bsdf_dir_pdf_w = p_sel * cos_theta_out / PI
-            (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
-                dvcm_carry, dvc_carry, dvm_carry, PI / p_sel, bsdf_dir_pdf_w, bsdf_rev_pdf_w,
-                mis_vc_weight_factor, eta_x)
+            flux *= sc.weight
 
         elif mat.type == MatKind.coated_diffuse:
             # coateddiffuse as pbrt's LayeredBxDF (layered.mojo): one real lobe
@@ -4054,21 +3934,12 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
             n_verts += 1
             _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
-            var (ok_l, wi_l, w_l, spec_l, pf_l, pr_l, cos_l) = _bdpt_layered_scatter(
-                vec3f(gn), vec3f(-ray_dir), eff_alb, mat, False, pcg, sd, wavelengths)
-            if not ok_l:
+            var sc = _vcm_scatter(v, True, pcg, sd, wavelengths, dvcm_carry, dvc_carry, dvm_carry, mis_vc_weight_factor, eta_x)
+            if not sc.valid:
                 return False
-            rd = wi_l
+            rd = vec3f(sc.wi)
             ro = hit + rd*Float32(0.0002)
-            flux *= w_l
-            if spec_l:
-                dvcm_carry = Float32(0)
-                dvc_carry *= cos_l
-                dvm_carry *= cos_l
-            else:
-                (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
-                    dvcm_carry, dvc_carry, dvm_carry, cos_l / pf_l, pf_l, pr_l,
-                    mis_vc_weight_factor, eta_x)
+            flux *= sc.weight
 
         elif mat.type == MatKind.conductor or mat.type == MatKind.coated_conductor:
             var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
