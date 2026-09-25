@@ -13,7 +13,7 @@ from .curves import curve_piece_endpoints, _curve_perp_axis
 from .bvh import SceneDescriptor2_C, traverse_bvh2_core, test_spheres, any_hit_bvh2_core
 from .shading import shade_core_cpu_nee, GIPendingX1, gi_pending_x1_init
 from .rng import PCG32
-from .sampling import TileSamplerParams_C, encode_morton2, sobol_get_sample_index, sobol_sample, derive_pcg_seeds, gaussian_norm, mix_bits_u64, gen_primary_ray_state
+from .sampling import TileSamplerParams, encode_morton2, sobol_get_sample_index, sobol_sample, derive_pcg_seeds, gaussian_norm, mix_bits_u64, gen_primary_ray_state
 from .guide import GuideGrid, guide_merge, null_guide
 from .spectrum import SampledWavelengths, SpectralSample, spectral_sample_to_rgb
 from .gpu_media import _sample_medium_core
@@ -27,7 +27,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
     rasterToCamera: Pointer[Float32, MutUntrackedOrigin],
     cameraToWorld: Pointer[Float32, Oc2w],
     tileMinX: Int32, tileMinY: Int32, tileMaxX: Int32, tileMaxY: Int32,
-    samplerParamsPtr: Pointer[TileSamplerParams_C, Osp],
+    samplerParamsPtr: Pointer[TileSamplerParams, Osp],
     scenePtr: Pointer[SceneDescriptor2_C, MutUntrackedOrigin],
     resultsPtr: Pointer[TileResult, MutUntrackedOrigin],
     maxDepth: Int32,
@@ -404,7 +404,7 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
     camera_to_world: Pointer[Float32, Oc2w],
     min_x: Int32, min_y: Int32, max_x: Int32, max_y: Int32,
     tile_w: Int32, tile_h: Int32,
-    sampler_params: Pointer[TileSamplerParams_C, Osp],
+    sampler_params: Pointer[TileSamplerParams, Osp],
     scene: Pointer[SceneDescriptor2_C, MutUntrackedOrigin],
     results: Pointer[TileResult, Ores],
     max_depth: Int32,

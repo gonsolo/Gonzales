@@ -145,7 +145,7 @@ def sample_ggx_vndf(
 # ── ZSobolSampler + GaussianFilter ──────────────────────────────────────────
 
 @fieldwise_init
-struct TileSamplerParams_C(TrivialRegisterPassable):
+struct TileSamplerParams(TrivialRegisterPassable):
     var sobolMatrices: Pointer[UInt32, MutUntrackedOrigin]
     var rngSeed: UInt64
     var sobolSeed: Int32

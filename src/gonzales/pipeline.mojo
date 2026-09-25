@@ -14,7 +14,7 @@ from .primitives import Ray, TriangleMesh
 from .curves import Curve, curve_piece_bounds
 from .postprocess import denoise, write_image, write_image_cropped, write_image_cropwindow
 from .transform import Mat4
-from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, derive_pcg_seeds, camera_ray_from_film_xy
+from .sampling import TileSamplerParams, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, derive_pcg_seeds, camera_ray_from_film_xy
 from .bvh import BVH2Node, SceneDescriptor2_C, render_aux_buffers, _scene_bounding_sphere
 from .sppm import sppm_render
 from .bdpt import vcm_render, vcm_render_gpu, vcm_render_gpu_wavefront, _BDPT_MAX_VERTS, sppm_render_gpu
@@ -1405,7 +1405,7 @@ def parse_and_render(
                     iter_spp = spp - offset  # absorb any remainder into the last iteration
                 for gi in range(N_GUIDE_THREADS):
                     write_guides[unsafe_offset=gi] = guide_clone_empty(tree)
-                var sp_iter = TileSamplerParams_C(
+                var sp_iter = TileSamplerParams(
                     sobolMatrices=sobol_matrices,
                     rngSeed=psc[unsafe_offset=0].rng_seed,
                     sobolSeed=Int32(0),
@@ -1421,7 +1421,7 @@ def parse_and_render(
                     filterType=psc[unsafe_offset=0].filter_type,
                     sampleIndexOffset=offset,
                 )
-                var sp_iter_ptr = OwnedPointer[TileSamplerParams_C](sp_iter)
+                var sp_iter_ptr = OwnedPointer[TileSamplerParams](sp_iter)
                 var guide_read = null_guide() if it == 0 else tree
                 if it == 0:
                     # First iteration writes straight into `results` (like the
@@ -1473,7 +1473,7 @@ def parse_and_render(
             write_guides.unsafe_free()
         else:
             # ── Standard single-call rendering ───────────────────────────────
-            var sp = TileSamplerParams_C(
+            var sp = TileSamplerParams(
                 sobolMatrices=sobol_matrices,
                 rngSeed=psc[unsafe_offset=0].rng_seed,
                 sobolSeed=Int32(0),
@@ -1489,7 +1489,7 @@ def parse_and_render(
                 filterType=psc[unsafe_offset=0].filter_type,
                 sampleIndexOffset=Int32(0),
             )
-            var sp_ptr = OwnedPointer[TileSamplerParams_C](sp)
+            var sp_ptr = OwnedPointer[TileSamplerParams](sp)
             render_all_tiles(
                 psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
                 Int32(0), Int32(0), fw, fh,
@@ -1746,7 +1746,7 @@ def render_interactive(
     # and so needs that point. Nothing else in render_interactive reads them.
     var material_id_int = List[Int32]()
     var world_pos_int   = List[Float32]()
-    var sp_int     = OwnedPointer[TileSamplerParams_C](TileSamplerParams_C(
+    var sp_int     = OwnedPointer[TileSamplerParams](TileSamplerParams(
         sobolMatrices=sobol,
         rngSeed=UInt64(0), sobolSeed=Int32(0),
         log2SamplesPerPixel=Int32(0), nBase4Digits=Int32(1),
@@ -1901,7 +1901,7 @@ def render_interactive(
                                     psc[unsafe_offset=0].film_iso, psc[unsafe_offset=0].film_max_comp)
             apply_film_sensor(denoised.unsafe_ptr(), n_pixels, psc[unsafe_offset=0].film_exposuretime, psc[unsafe_offset=0].film_wb)
         else:
-            sp_int[] = TileSamplerParams_C(
+            sp_int[] = TileSamplerParams(
                 sobolMatrices=sobol,
                 rngSeed=UInt64(frame_count),
                 sobolSeed=Int32(frame_count % 65536),
