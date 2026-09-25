@@ -1,6 +1,6 @@
 """Scene primitives, split out of geometry.mojo (the per-cluster module
-split; see project_geometry_module_split memory). PrimId_C/Instance_C,
-TriangleMesh_C/Ray_C/Intersection_C, Sphere_C+sphere_outward_normal, and
+split; see project_geometry_module_split memory). PrimId/Instance,
+TriangleMesh/Ray/Intersection, Sphere+sphere_outward_normal, and
 intersect_triangle/_alpha_hash/alpha_killed were four separate ranges in
 geometry.mojo; every external dependency is the core
 (Point3f/Vec3f/RGB/_is_real_ptr/cross/dot), confirmed by a symbol-reference
@@ -12,7 +12,7 @@ from .geometry import Point3f, Vec3f, RGB, _is_real_ptr, cross, dot
 # ── Scene primitives ───────────────────────────────────────────────────────────
 
 @fieldwise_init
-struct PrimId_C(TrivialRegisterPassable):
+struct PrimId(TrivialRegisterPassable):
     var id1: Int64
     var id2: Int64
     var materialIndex: Int64
@@ -25,20 +25,20 @@ struct PrimId_C(TrivialRegisterPassable):
 # ── Object instancing (two-level BVH: BLAS per template, TLAS instance leaves) ─
 
 @fieldwise_init
-struct Instance_C(TrivialRegisterPassable):
+struct Instance(TrivialRegisterPassable):
     """One placement of a template (BLAS). `objToWorld`/`worldToObj` are 16-float
     column-major matrices (same convention as transform.mojo). A TLAS leaf of
-    PrimId_C.type == 6 has id1 = index into SceneDescriptor2_C.instances.
+    PrimId.type == 6 has id1 = index into SceneDescriptor2_C.instances.
     `blasIdx` indexes SceneDescriptor2_C.blasNodesArr/blasPrimIdsArr (one
     private BVH2 per template, each a separate allocation — no shared-pool
-    offset arithmetic needed). A BLAS's PrimId_C entries use ordinary type==0
+    offset arithmetic needed). A BLAS's PrimId entries use ordinary type==0
     triangle encoding against the same global `meshes` array as the TLAS."""
     var objToWorld: SIMD[DType.float32, 16]
     var worldToObj: SIMD[DType.float32, 16]
     var blasIdx:    Int32
 
 
-struct TriangleMesh_C(TrivialRegisterPassable):
+struct TriangleMesh(TrivialRegisterPassable):
     var points: Pointer[Float32, MutUntrackedOrigin]
     var faceIndices: Pointer[Int64, MutUntrackedOrigin]
     var vertexIndices: Pointer[Int64, MutUntrackedOrigin]
@@ -84,18 +84,18 @@ struct TriangleMesh_C(TrivialRegisterPassable):
 # See: docs/03_shapes_and_acceleration.md
 
 @fieldwise_init
-struct Ray_C(TrivialRegisterPassable):
+struct Ray(TrivialRegisterPassable):
     """A ray: a world-space origin point and a unit direction vector."""
     var origin: Point3f
-# <<listing: Ray_C>>
+# <<listing: Ray>>
     var direction: Vec3f
 
 # ── Intersection ──────────────────────────────────────────────────────────────
 # <</listing>>
 
 @fieldwise_init
-struct Intersection_C(TrivialRegisterPassable):
-    var primId: PrimId_C
+struct Intersection(TrivialRegisterPassable):
+    var primId: PrimId
     var tHit: Float32
     var u: Float32
     var v: Float32
@@ -106,7 +106,7 @@ struct Intersection_C(TrivialRegisterPassable):
 
 
 @fieldwise_init
-struct Sphere_C(TrivialRegisterPassable):
+struct Sphere(TrivialRegisterPassable):
     """Analytical sphere primitive. Exact intersection, exact normals.
     isAreaLight == 1 → sphere emits light (NEE via solid-angle cone sampling).
     """
@@ -207,7 +207,7 @@ def _alpha_hash(ray_org: Vec3f, ray_dir: Vec3f, key: Int) -> Float32:
 
 
 @always_inline
-def alpha_killed(mesh: TriangleMesh_C, v0: Int, v1: Int, v2: Int, bu: Float32, bv: Float32,
+def alpha_killed(mesh: TriangleMesh, v0: Int, v1: Int, v2: Int, bu: Float32, bv: Float32,
                  ray_org: Vec3f, ray_dir: Vec3f, key: Int) -> Bool:
     """True when a hit at barycentrics (bu, bv) on this triangle is cut out by
     the shape's alpha and traversal must look past it. pbrt-v4's any-hit rule

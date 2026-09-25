@@ -10,7 +10,7 @@ from .rendering import render_all_tiles, normalize_film, apply_film_sensor, fmt_
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, Bounds3f, dot, _is_real_ptr
 from .render_state import TileResult_C, PathState_C
-from .primitives import Ray_C, TriangleMesh_C
+from .primitives import Ray, TriangleMesh
 from .curves import Curve_C, curve_piece_bounds
 from .postprocess import denoise, write_image, write_image_cropped, write_image_cropwindow
 from .transform import Mat4
@@ -287,12 +287,12 @@ def _dbg_vlen(x: Float32, y: Float32, z: Float32) -> Float32:
 
 # Task #163: gonzales assigns exactly one material per mesh at parse time
 # (see pbrt_parser.mojo's store_mesh/MeshAccum), but that mapping is only
-# recorded per-triangle inside PrimId_C entries, not as a standalone
+# recorded per-triangle inside PrimId entries, not as a standalone
 # per-mesh array -- vulkanrt_traverse_paths_gpu needs the latter (it gets
-# a (mesh, triangle) hit back from Vulkan RT, not a PrimId_C).
+# a (mesh, triangle) hit back from Vulkan RT, not a PrimId).
 #
 # Area-light meshes need special handling: finalize_scene (pbrt_parser.mojo)
-# encodes their triangles with PrimId_C.type == 3 (not the ordinary
+# encodes their triangles with PrimId.type == 3 (not the ordinary
 # type == 0), where id1 is the AREA-LIGHT index (not the mesh index) and
 # materialIndex points at a synthetic per-light material -- shade_nee_core's
 # direct-emission-credit path (shading.mojo ~2744) keys off exactly this
@@ -361,7 +361,7 @@ def debug_trace_pixel(
     from .bvh import traverse_bvh2_core, test_spheres, any_hit_bvh2_core, _equal_area_sphere_to_square
     from .geometry import cross
     from .materials import Material_C, fr_dielectric
-    from .primitives import Intersection_C, sphere_outward_normal
+    from .primitives import Intersection, sphere_outward_normal
     from .bxdf import dielectric_interface
     from .sppm import _geom_normal
 
@@ -407,11 +407,11 @@ def debug_trace_pixel(
     var dx = dir1.x; var dy = dir1.y; var dz = dir1.z
     print("PIXEL", px, py, "ray.o", org1, "ray.d", dir1)
 
-    var inter = unsafe_alloc[Intersection_C](1)
+    var inter = unsafe_alloc[Intersection](1)
     var current_ior = Float32(1.0)   # mirrors PathState_C.current_dielectric_ior
     var previous_ior = Float32(1.0)  # mirrors PathState_C.previous_dielectric_ior
     for bounce in range(20):
-        var ray = Ray_C(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
+        var ray = Ray(Point3f(ox, oy, oz), Vec3f(dx, dy, dz))
         inter[unsafe_offset=0].hit = Int8(0)
         traverse_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, ray, Float32(1.0e38), inter,
                             psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances)
@@ -484,8 +484,8 @@ def debug_trace_pixel(
             var rfz = dz - nz*Float32(2.0)*rcos
             var rfl = _dbg_vlen(rfx, rfy, rfz)
             if rfl > Float32(0.0): rfx /= rfl; rfy /= rfl; rfz /= rfl
-            var rray = Ray_C(Point3f(hx+nx*Float32(0.001), hy+ny*Float32(0.001), hz+nz*Float32(0.001)), Vec3f(rfx, rfy, rfz))
-            var rint = unsafe_alloc[Intersection_C](1); rint[unsafe_offset=0].hit = Int8(0)
+            var rray = Ray(Point3f(hx+nx*Float32(0.001), hy+ny*Float32(0.001), hz+nz*Float32(0.001)), Vec3f(rfx, rfy, rfz))
+            var rint = unsafe_alloc[Intersection](1); rint[unsafe_offset=0].hit = Int8(0)
             traverse_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, rray, Float32(1.0e38), rint,
                                 psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances)
             if rint[unsafe_offset=0].hit == Int8(0) and psc[unsafe_offset=0].infinite_count > 0:
@@ -536,8 +536,8 @@ def debug_trace_pixel(
             var rfz5 = dz - nz5*Float32(2.0)*rcos5
             var rfl5 = _dbg_vlen(rfx5, rfy5, rfz5)
             if rfl5 > Float32(0.0): rfx5 /= rfl5; rfy5 /= rfl5; rfz5 /= rfl5
-            var rray5 = Ray_C(Point3f(hx+nx5*Float32(0.001), hy+ny5*Float32(0.001), hz+nz5*Float32(0.001)), Vec3f(rfx5, rfy5, rfz5))
-            var rint5 = unsafe_alloc[Intersection_C](1); rint5[unsafe_offset=0].hit = Int8(0)
+            var rray5 = Ray(Point3f(hx+nx5*Float32(0.001), hy+ny5*Float32(0.001), hz+nz5*Float32(0.001)), Vec3f(rfx5, rfy5, rfz5))
+            var rint5 = unsafe_alloc[Intersection](1); rint5[unsafe_offset=0].hit = Int8(0)
             traverse_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, rray5, Float32(1.0e38), rint5,
                                 psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances)
             if rint5[unsafe_offset=0].hit == Int8(0):
@@ -562,8 +562,8 @@ def debug_trace_pixel(
             var rfz3 = dz - nz3*Float32(2.0)*rcos3
             var rfl3 = _dbg_vlen(rfx3, rfy3, rfz3)
             if rfl3 > Float32(0.0): rfx3 /= rfl3; rfy3 /= rfl3; rfz3 /= rfl3
-            var rray3 = Ray_C(Point3f(hx+nx3*Float32(0.001), hy+ny3*Float32(0.001), hz+nz3*Float32(0.001)), Vec3f(rfx3, rfy3, rfz3))
-            var rint3 = unsafe_alloc[Intersection_C](1); rint3[unsafe_offset=0].hit = Int8(0)
+            var rray3 = Ray(Point3f(hx+nx3*Float32(0.001), hy+ny3*Float32(0.001), hz+nz3*Float32(0.001)), Vec3f(rfx3, rfy3, rfz3))
+            var rint3 = unsafe_alloc[Intersection](1); rint3[unsafe_offset=0].hit = Int8(0)
             traverse_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, rray3, Float32(1.0e38), rint3,
                                 psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances)
             if rint3[unsafe_offset=0].hit == Int8(0):
@@ -586,7 +586,7 @@ def debug_trace_pixel(
                 var dl = psc[unsafe_offset=0].distant_lights[unsafe_offset=dli]
                 var ldx = -dl.direction.x; var ldy = -dl.direction.y; var ldz = -dl.direction.z
                 var cos_s = gnx*ldx + gny*ldy + gnz*ldz
-                var sray = Ray_C(Point3f(ox1, oy1, oz1), Vec3f(ldx, ldy, ldz))
+                var sray = Ray(Point3f(ox1, oy1, oz1), Vec3f(ldx, ldy, ldz))
                 var occluded = any_hit_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, sray, Float32(2000.0),
                                                   psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances,
                                                   psc[unsafe_offset=0].spheres, Int(psc[unsafe_offset=0].sphere_count))
@@ -605,7 +605,7 @@ def debug_trace_pixel(
                 if tdist > Float32(0.0):
                     tlx /= tdist; tly /= tdist; tlz /= tdist
                 var cos_sa = gnx*tlx + gny*tly + gnz*tlz
-                var sray2 = Ray_C(Point3f(ox1, oy1, oz1), Vec3f(tlx, tly, tlz))
+                var sray2 = Ray(Point3f(ox1, oy1, oz1), Vec3f(tlx, tly, tlz))
                 var occluded2 = any_hit_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, sray2, tdist * Float32(0.999),
                                                    psc[unsafe_offset=0].blas_nodes_arr, psc[unsafe_offset=0].blas_primids_arr, psc[unsafe_offset=0].instances,
                                                    psc[unsafe_offset=0].spheres, Int(psc[unsafe_offset=0].sphere_count))
@@ -633,14 +633,14 @@ def debug_render_vulkanrt(
 
     Scope: triangle geometry only (spheres/curves are never uploaded to
     the Vulkan scene, matching vulkanrt_build_scene's own scope) and no
-    object instancing (Instance_C placements are not applied -- an
+    object instancing (Instance placements are not applied -- an
     ObjectInstance template's mesh would appear once at its raw local-space
     location instead of at each placed instance's transform). Scenes using
     either feature will show real disagreement in the printed CPU-vs-GPU
     stats below -- an honest, known limitation of this validation pass,
     not a bug to chase; see project_vulkan_rt_backend memory."""
     from .bvh import traverse_bvh2_core
-    from .primitives import Intersection_C
+    from .primitives import Intersection
     from .vulkanrt import vulkanrt_build_scene, vulkanrt_trace_rays, vulkanrt_destroy_scene
     from std.math import abs
 
@@ -660,8 +660,8 @@ def debug_render_vulkanrt(
 
     # Build the Vulkan RT scene directly from the parsed meshes -- points/
     # vertexIndices pointers passed through as-is (vulkanrt.h's
-    # VulkanRtMesh is a field-for-field mirror of TriangleMesh_C).
-    var vmeshes = unsafe_alloc[TriangleMesh_C](n_meshes)
+    # VulkanRtMesh is a field-for-field mirror of TriangleMesh).
+    var vmeshes = unsafe_alloc[TriangleMesh](n_meshes)
     var point_counts = unsafe_alloc[Int64](n_meshes)
     var vidx_counts = unsafe_alloc[Int64](n_meshes)
     for i in range(n_meshes):
@@ -714,7 +714,7 @@ def debug_render_vulkanrt(
     # identical ray (step 5's image-level validation, folded into step 4),
     # and build an N.V-shaded visibility image from the GPU hits.
     var img = unsafe_alloc[Float32](n_pix * 3)
-    var inter = unsafe_alloc[Intersection_C](1)
+    var inter = unsafe_alloc[Intersection](1)
     var cpu_hits = 0
     var gpu_hits = 0
     var both_hit = 0
@@ -725,7 +725,7 @@ def debug_render_vulkanrt(
         for px in range(w):
             var pi = py * w + px
             var idx = pi * 8
-            var ray = Ray_C(Point3f(rays[unsafe_offset=idx+0], rays[unsafe_offset=idx+1], rays[unsafe_offset=idx+2]),
+            var ray = Ray(Point3f(rays[unsafe_offset=idx+0], rays[unsafe_offset=idx+1], rays[unsafe_offset=idx+2]),
                              Vec3f(rays[unsafe_offset=idx+4], rays[unsafe_offset=idx+5], rays[unsafe_offset=idx+6]))
             inter[unsafe_offset=0].hit = Int8(0)
             traverse_bvh2_core(psc[unsafe_offset=0].bvh_nodes, psc[unsafe_offset=0].prim_ids, psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].curves, ray, Float32(1.0e8), inter,
@@ -962,7 +962,7 @@ def parse_and_render(
                     # change needed to raise it.
                     var max_rays_vk_vcm = max(n_light_paths_merge_vk, n_pixels * _BDPT_MAX_VERTS)
                     n_meshes_vk_vcm = Int(psc[unsafe_offset=0].mesh_count)
-                    var vmeshes_vcm = unsafe_alloc[TriangleMesh_C](max(n_meshes_vk_vcm, 1))
+                    var vmeshes_vcm = unsafe_alloc[TriangleMesh](max(n_meshes_vk_vcm, 1))
                     var point_counts_vcm = unsafe_alloc[Int64](max(n_meshes_vk_vcm, 1))
                     var vidx_counts_vcm = unsafe_alloc[Int64](max(n_meshes_vk_vcm, 1))
                     for i in range(n_meshes_vk_vcm):
@@ -1080,7 +1080,7 @@ def parse_and_render(
         var max_rays_vk = Int64(n_pixels) * Int64(WAVEFRONT_BATCH)
         if use_vk:
             n_meshes_vk = Int(psc[unsafe_offset=0].mesh_count)
-            var vmeshes = unsafe_alloc[TriangleMesh_C](max(n_meshes_vk, 1))
+            var vmeshes = unsafe_alloc[TriangleMesh](max(n_meshes_vk, 1))
             var point_counts = unsafe_alloc[Int64](max(n_meshes_vk, 1))
             var vidx_counts = unsafe_alloc[Int64](max(n_meshes_vk, 1))
             for i in range(n_meshes_vk):

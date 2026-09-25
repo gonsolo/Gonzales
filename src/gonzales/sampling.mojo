@@ -2,7 +2,7 @@ from std.collections import Array
 from std.math import sqrt, log, exp, cos, sin, atan2, acos
 from std.memory.alloc import unsafe_alloc
 from .geometry import Vec3f, Point3f, dot, cross, Frame, PI, TWO_PI, INV_PI
-from .primitives import Ray_C
+from .primitives import Ray
 from .spectrum import SampledWavelengths, sample_wavelengths_uniform
 
 # ── Multiple-importance sampling ───────────────────────────────────────────────
@@ -455,7 +455,7 @@ def triangle_sample_1d(u: Float32, radius: Float32) -> Float32:
 # cameraToWorld math used by both the CPU tile renderer and the two GPU
 # gen_primary_rays kernels.
 #
-# Returns the world-space Ray_C and the PCG seed pair for the path.
+# Returns the world-space Ray and the PCG seed pair for the path.
 # px/py are integer pixel coords; si is the sample index (Int32).
 @always_inline
 @always_inline
@@ -526,7 +526,7 @@ def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     filter_norm_x: Float32, filter_sigma: Float32, filter_support_x: Float32,
     filter_norm_y: Float32, filter_support_y: Float32,
     filter_type: Int32 = Int32(0),
-) -> Tuple[Ray_C, UInt64, UInt64, UInt64, SampledWavelengths]:
+) -> Tuple[Ray, UInt64, UInt64, UInt64, SampledWavelengths]:
     """Shared Sobol + filter + camera-transform primary ray generator.
     Returns (ray, pcg_state, pcg_inc, sobol_idx, wavelengths).
     """
@@ -559,4 +559,4 @@ def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     var u_wave = sobol_sample(Int(sobol_idx), 2, mix_bits_u64(pcg_inc ^ UInt64(2)), sobol_matrices)
     var wavelengths = sample_wavelengths_uniform(u_wave)
 
-    return (Ray_C(Point3f(orgX, orgY, orgZ), Vec3f(dx, dy, dz)), pcg_state, pcg_inc, sobol_idx, wavelengths)
+    return (Ray(Point3f(orgX, orgY, orgZ), Vec3f(dx, dy, dz)), pcg_state, pcg_inc, sobol_idx, wavelengths)

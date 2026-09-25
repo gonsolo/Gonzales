@@ -2,7 +2,7 @@ from .bvh import BVH2Node, any_hit_bvh2_core, test_spheres, traverse_bvh2_core, 
 from .curves import CURVE_DEFER_K, Curve_C, _curve_perp_axis, curve_piece_endpoints, intersect_curve
 from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, store_vec3, vec3f
 from .materials import Material_C
-from .primitives import Instance_C, Intersection_C, PrimId_C, Ray_C, Sphere_C, TriangleMesh_C, sphere_outward_normal
+from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, sphere_outward_normal
 from .render_state import PathState_C, ShadowTask_C
 from .restir_di import DIReservoir, di_reservoir_init
 from .restir_vol import VolReservoir, vol_reservoir_init
@@ -89,7 +89,7 @@ def traverse_shadow_rays_gpu(
     var task = shadow_tasks[unsafe_offset=tid]
     if task.active == 0:
         return
-    var shadow_ray = Ray_C(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
+    var shadow_ray = Ray(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
     if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, n_spheres, materials=sd.materials):
         paths[unsafe_offset=tid].estimate += task.contrib
 
@@ -254,7 +254,7 @@ def gen_primary_rays_wavefront_gpu(
 def traverse_paths_gpu(
     sd: SceneDescriptor2_C,
     paths: Pointer[PathState_C, MutUntrackedOrigin],
-    results: Pointer[Intersection_C, MutUntrackedOrigin],
+    results: Pointer[Intersection, MutUntrackedOrigin],
     curve_cand_prim: Pointer[Int32, MutUntrackedOrigin],
     curve_cand_count: Pointer[Int32, MutUntrackedOrigin],
     count_dp: Int64,
@@ -312,8 +312,8 @@ def vulkaninterop_pack_rays_kernel(
     rays[unsafe_offset=idx + 7] = Float32(1.0e8)
 
 # Unpack the interop-shared results buffer (written by Vulkan's ray-query
-# dispatch) directly into inter_buf's Intersection_C layout -- no host
-# copy. Same materialIndex/area-light lookup and PrimId_C.type==3 encoding
+# dispatch) directly into inter_buf's Intersection layout -- no host
+# copy. Same materialIndex/area-light lookup and PrimId.type==3 encoding
 # as the retired host-loop version (see finalize_scene in pbrt_parser.mojo
 # for why area-light triangles need that special encoding, and
 # project_vulkan_rt_backend memory for the real-bug story behind it) --
@@ -332,7 +332,7 @@ def vulkaninterop_pack_rays_kernel(
 # the type==3 area-light encoding.
 def vulkaninterop_unpack_results_kernel(
     results: Pointer[Float32, MutUntrackedOrigin],
-    inter: Pointer[Intersection_C, MutUntrackedOrigin],
+    inter: Pointer[Intersection, MutUntrackedOrigin],
     mesh_material_idx: Pointer[Int64, MutUntrackedOrigin],
     mesh_al_idx: Pointer[Int32, MutUntrackedOrigin],
     n_meshes_dp: Int64,
@@ -366,14 +366,14 @@ def vulkaninterop_unpack_results_kernel(
         var u = results[unsafe_offset=idx + 1]
         var v = results[unsafe_offset=idx + 2]
         if al >= Int32(0):
-            inter[unsafe_offset=tid] = Intersection_C(
-                PrimId_C(Int64(al), (Int64(mi) << 32) | Int64(tri), mat_idx, Int32(-1),
+            inter[unsafe_offset=tid] = Intersection(
+                PrimId(Int64(al), (Int64(mi) << 32) | Int64(tri), mat_idx, Int32(-1),
                          Int8(3), Int8(0), Int8(0), Int8(0)),
                 hitT, u, v, Int8(1), Int8(0), Int8(0), Int8(0),
             )
         else:
-            inter[unsafe_offset=tid] = Intersection_C(
-                PrimId_C(Int64(mi), Int64(tri) * 3, mat_idx, instance_idx,
+            inter[unsafe_offset=tid] = Intersection(
+                PrimId(Int64(mi), Int64(tri) * 3, mat_idx, instance_idx,
                          Int8(0), Int8(0), Int8(0), Int8(0)),
                 hitT, u, v, Int8(1), Int8(0), Int8(0), Int8(0),
             )
@@ -381,7 +381,7 @@ def vulkaninterop_unpack_results_kernel(
         # Curve hit, resolved directly by intersect_batch.comp itself (real
         # ray-vs-curve narrow-phase test + rayQueryGenerateIntersectionEXT
         # on a valid hit) -- no candidate buffer, no separate CUDA resolve
-        # pass. hitMesh/hitTriangle/geometryIndex already carry PrimId_C's
+        # pass. hitMesh/hitTriangle/geometryIndex already carry PrimId's
         # id1 (curve index)/id2 (packed piece info)/materialIndex directly
         # (see vulkaninterop_rt_create_scene's docstring), so this is a
         # straight repack, no lookups needed. u/v here are intersect_curve's
@@ -392,8 +392,8 @@ def vulkaninterop_unpack_results_kernel(
         var hitT = results[unsafe_offset=idx + 0]
         var h = results[unsafe_offset=idx + 1]
         var v = results[unsafe_offset=idx + 2]
-        inter[unsafe_offset=tid] = Intersection_C(
-            PrimId_C(curve_idx, piece_info, mat_idx, Int32(-1), Int8(5), Int8(0), Int8(0), Int8(0)),
+        inter[unsafe_offset=tid] = Intersection(
+            PrimId(curve_idx, piece_info, mat_idx, Int32(-1), Int8(5), Int8(0), Int8(0), Int8(0)),
             hitT, h, v, Int8(1), Int8(0), Int8(0), Int8(0),
         )
     else:
@@ -404,8 +404,8 @@ def vulkaninterop_unpack_results_kernel(
         # whatever inter_buf held from an earlier bounce would silently
         # reject a real closer sphere hit as "farther than the (stale)
         # current best".
-        var dummy_id = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-        inter[unsafe_offset=tid] = Intersection_C(dummy_id, Float32(1.0e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+        var dummy_id = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+        inter[unsafe_offset=tid] = Intersection(dummy_id, Float32(1.0e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
 
 # Analytic sphere test as a SEPARATE pass after the Vulkan-RT-traced mesh/
 # instance hit above -- exactly mirrors how traverse_paths_gpu (the pure-
@@ -419,8 +419,8 @@ def vulkaninterop_unpack_results_kernel(
 # tessellation-precision tradeoff.
 def vulkaninterop_test_spheres_gpu(
     paths: Pointer[PathState_C, MutUntrackedOrigin],
-    inter: Pointer[Intersection_C, MutUntrackedOrigin],
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
+    inter: Pointer[Intersection, MutUntrackedOrigin],
+    spheres: Pointer[Sphere, MutUntrackedOrigin],
     n_spheres_dp: Int64,
     count_dp: Int64,
 ):
@@ -448,7 +448,7 @@ def vulkaninterop_test_spheres_gpu(
 # scene's docstring for how curves are represented).
 def accumulate_cone_gpu(
     paths: Pointer[PathState_C, MutUntrackedOrigin],
-    results: Pointer[Intersection_C, MutUntrackedOrigin],
+    results: Pointer[Intersection, MutUntrackedOrigin],
     count_dp: Int64,
 ):
     """Grow each path's texture-footprint cone by the segment just traced.
@@ -493,7 +493,7 @@ def vulkaninterop_rt_traverse_paths_gpu(
     n_meshes: Int,
     n_total: Int,
     instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]] = None,
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin] = Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(),
+    spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
 ) raises:
     comptime block_size = 256
@@ -515,7 +515,7 @@ def vulkaninterop_rt_traverse_paths_gpu(
 
     ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
         interop_results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         mesh_material_idx_buf.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         Int64(n_meshes),
@@ -532,7 +532,7 @@ def vulkaninterop_rt_traverse_paths_gpu(
     if n_spheres > 0:
         ctx.enqueue_function[vulkaninterop_test_spheres_gpu](
             path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-            inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             spheres,
             Int64(n_spheres),
             Int64(n_total),
@@ -589,7 +589,7 @@ def resolve_curve_candidates_gpu(
     curve_cand_offset: Pointer[Int32, MutUntrackedOrigin],
     sd: SceneDescriptor2_C,
     paths: Pointer[PathState_C, MutUntrackedOrigin],
-    results: Pointer[Intersection_C, MutUntrackedOrigin],
+    results: Pointer[Intersection, MutUntrackedOrigin],
     n_dp: Int64,
 ):
     var n = Int(n_dp)
@@ -626,7 +626,7 @@ def resolve_curve_candidates_gpu(
             best_hit = Int8(1)
             changed = True
     if changed:
-        results[unsafe_offset=pathId] = Intersection_C(best_prim, best_t, best_u, best_v, best_hit, 0, 0, 0)
+        results[unsafe_offset=pathId] = Intersection(best_prim, best_t, best_u, best_v, best_hit, 0, 0, 0)
 
 
 # GPU kernel: generate primary PathState_C for every pixel in one pass.
@@ -686,15 +686,15 @@ def gen_aux_buffers_gpu(
     r2c: Pointer[Float32, MutUntrackedOrigin],
     c2w: Pointer[Float32, MutUntrackedOrigin],
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    primIds: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     curves: Pointer[Curve_C, MutUntrackedOrigin],
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin],
+    instances: Pointer[Instance, MutUntrackedOrigin],
+    spheres: Pointer[Sphere, MutUntrackedOrigin],
     n_spheres_dp: Int64,
-    isects_tmp: Pointer[Intersection_C, MutUntrackedOrigin],
+    isects_tmp: Pointer[Intersection, MutUntrackedOrigin],
     normals_out: Pointer[Float32, MutUntrackedOrigin],
     depth_out: Pointer[Float32, MutUntrackedOrigin],
     curve_mask_out: Pointer[Float32, MutUntrackedOrigin],
@@ -733,9 +733,9 @@ def gen_aux_buffers_gpu(
     if dl > Float32(0): dir = dir / dl
     var org = Point3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
 
-    var ray = Ray_C(org, dir)
-    var dummy_id = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    isects_tmp[unsafe_offset=tid] = Intersection_C(dummy_id, Float32(1e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+    var ray = Ray(org, dir)
+    var dummy_id = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    isects_tmp[unsafe_offset=tid] = Intersection(dummy_id, Float32(1e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
     traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), isects_tmp.unsafe_offset(tid), blasNodesArr, blasPrimIdsArr, instances)
     test_spheres(spheres, n_spheres, ray, isects_tmp.unsafe_offset(tid))
 
@@ -829,10 +829,10 @@ def gpu_gen_aux_buffers[Oc: Origin[mut=True]](
                 handle[].curves.curves_ptr(),
                 handle[].blas.nodes_arr(),
                 handle[].blas.primids_arr(),
-                handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance_C](),
-                handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C](),
+                handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance](),
+                handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere](),
                 Int64(handle[].n_spheres),
-                handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+                handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
                 handle[].atrous_normals_buf.unsafe_ptr().unsafe_bitcast[Float32](),
                 handle[].atrous_depth_buf.unsafe_ptr().unsafe_bitcast[Float32](),
                 handle[].atrous_curve_mask_buf.unsafe_ptr().unsafe_bitcast[Float32](),

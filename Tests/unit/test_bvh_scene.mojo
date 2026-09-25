@@ -1,7 +1,7 @@
 from std.math import abs
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import Point3f, Vec3f
-from gonzales.primitives import Ray_C
+from gonzales.primitives import Ray
 from _scene_fixture import make_triangle_scene
 
 comptime EPS: Float32 = 1e-3
@@ -20,7 +20,7 @@ def test_single_triangle_hit_through_center() raises:
     var fx = make_triangle_scene([
         Point3f(0.0, 0.0, 0.0), Point3f(1.0, 0.0, 0.0), Point3f(0.0, 1.0, 0.0),
     ])
-    var ray = Ray_C(Point3f(0.2, 0.2, -5.0), Vec3f(0.0, 0.0, 1.0))
+    var ray = Ray(Point3f(0.2, 0.2, -5.0), Vec3f(0.0, 0.0, 1.0))
     var hit = fx.intersect(ray, Float32(100.0))
     assert_true(Int(hit.hit) == 1)
     assert_true(_close(hit.tHit, Float32(5.0)))
@@ -32,7 +32,7 @@ def test_single_triangle_miss_outside_edge() raises:
     var fx = make_triangle_scene([
         Point3f(0.0, 0.0, 0.0), Point3f(1.0, 0.0, 0.0), Point3f(0.0, 1.0, 0.0),
     ])
-    var ray = Ray_C(Point3f(0.9, 0.9, -5.0), Vec3f(0.0, 0.0, 1.0))
+    var ray = Ray(Point3f(0.9, 0.9, -5.0), Vec3f(0.0, 0.0, 1.0))
     var hit = fx.intersect(ray, Float32(100.0))
     assert_true(Int(hit.hit) == 0)
 
@@ -44,7 +44,7 @@ def test_two_triangles_picks_the_nearer_one() raises:
         Point3f(-1.0, -1.0, 5.0), Point3f(1.0, -1.0, 5.0), Point3f(0.0, 1.0, 5.0),  # far
         Point3f(-1.0, -1.0, 2.0), Point3f(1.0, -1.0, 2.0), Point3f(0.0, 1.0, 2.0),  # near
     ])
-    var ray = Ray_C(Point3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0))
+    var ray = Ray(Point3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0))
     var hit = fx.intersect(ray, Float32(100.0))
     assert_true(Int(hit.hit) == 1)
     assert_true(_close(hit.tHit, Float32(2.0)))
@@ -53,7 +53,7 @@ def test_tmax_cutoff_hides_a_real_hit() raises:
     var fx = make_triangle_scene([
         Point3f(0.0, 0.0, 0.0), Point3f(1.0, 0.0, 0.0), Point3f(0.0, 1.0, 0.0),
     ])
-    var ray = Ray_C(Point3f(0.2, 0.2, -5.0), Vec3f(0.0, 0.0, 1.0))
+    var ray = Ray(Point3f(0.2, 0.2, -5.0), Vec3f(0.0, 0.0, 1.0))
     var hit = fx.intersect(ray, Float32(2.0))  # true hit is at t=5
     assert_true(Int(hit.hit) == 0)
 

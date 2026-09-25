@@ -130,7 +130,7 @@ struct Material_C(TrivialRegisterPassable):
 # for construction and bxdf.mojo's bxdf_{eval,sample,pdf}_measured for the
 # consumers. Same struct reused for both the CPU host-pointer instance
 # (built by the loader) and the GPU device-pointer instance (built in
-# gpu.mojo's scene upload, Stage 3) — mirrors TriangleMesh_C/Curve_C's
+# gpu.mojo's scene upload, Stage 3) — mirrors TriangleMesh/Curve_C's
 # existing host-then-device-pointer-reuse convention.
 #
 # CAUTION: this struct has many pointer fields, so it must NEVER be passed BY

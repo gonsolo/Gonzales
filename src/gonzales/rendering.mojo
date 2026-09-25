@@ -6,7 +6,7 @@ from std.sys.info import num_performance_cores
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, dot, cross, INV_FOUR_PI
 from .render_state import PathState_C, TileResult_C
-from .primitives import sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, Sphere_C
+from .primitives import sphere_outward_normal, Ray, Intersection, PrimId, Sphere
 from .media import Medium_C, MediumInterface_C, Grid_C, grid_sample_density, SSS_WALK_ROUNDS
 from .lights import AreaLight_C, LightSampler_C, light_sampler_sample
 from .curves import curve_piece_endpoints, _curve_perp_axis
@@ -118,7 +118,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
     var seed_dim1 = UInt32(hash_bits1 & UInt64(0xFFFFFFFF))
 
     var paths = unsafe_alloc[PathState_C](n)
-    var intersections = unsafe_alloc[Intersection_C](n)
+    var intersections = unsafe_alloc[Intersection](n)
     # Global (frame-wide) pixel index per path -- needed only for ReSTIR DI's
     # temporal reservoir buffer (Phase 2.3, docs/A2_restir_migration_plan.md),
     # which persists across frames and so must be indexed by a stable,

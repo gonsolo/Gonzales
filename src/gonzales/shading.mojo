@@ -6,7 +6,7 @@ from .geometry import RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f
 from .render_state import PDF_DROP_DIRECT
 from .materials import Material_C, MatKind, LobeKind, MeasuredBRDF_C, schlick_fresnel, fr_dielectric
 from .render_state import PathState_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, ShadowTask_C
-from .primitives import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Sphere_C, Instance_C
+from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance
 from .lights import AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, LightSampler_C, light_sampler_sample, light_sampler_pdf, area_light_pick_triangle
 from .curves import Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis
 from .layered import layered_f, layered_sample, layered_pdf
@@ -86,7 +86,7 @@ struct LightContext(Copyable, Movable):
     var point_count:      Int
     var infinite_lights:  Pointer[InfiniteLight_C, MutUntrackedOrigin]
     var infinite_count:   Int
-    var spheres:          Pointer[Sphere_C, MutUntrackedOrigin]
+    var spheres:          Pointer[Sphere, MutUntrackedOrigin]
     var sphere_count:     Int
     var light_sampler:    LightSampler_C
 
@@ -97,8 +97,8 @@ struct ShadeContext:
     LightContext (step 7)."""
     var path_idx:         Int
     var bvh2Nodes:        Pointer[BVH2Node, MutUntrackedOrigin]
-    var primIds:          Pointer[PrimId_C, MutUntrackedOrigin]
-    var meshes:           Pointer[TriangleMesh_C, MutUntrackedOrigin]
+    var primIds:          Pointer[PrimId, MutUntrackedOrigin]
+    var meshes:           Pointer[TriangleMesh, MutUntrackedOrigin]
     var curves:           Pointer[Curve_C, MutUntrackedOrigin]
     var materials:        Pointer[Material_C, MutUntrackedOrigin]
     var tex_filenames:    Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin]
@@ -124,13 +124,13 @@ struct ShadeContext:
     # shadow-ray resolve (restir_di.mojo) instead of one direct NEE sample.
     var use_restir:       Bool
     var lights:           LightContext
-    # Object instancing (see geometry.mojo's Instance_C docs). GPU call sites
+    # Object instancing (see geometry.mojo's Instance docs). GPU call sites
     # pass dangling/zero-count values — GPU's own device-side scene upload
-    # never populates instance data, so no PrimId_C.type==6 leaf can appear
+    # never populates instance data, so no PrimId.type==6 leaf can appear
     # there and these are never dereferenced on that path.
     var blasNodesArr:   Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin]
-    var blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin]
-    var instances:      Pointer[Instance_C, MutUntrackedOrigin]
+    var blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin]
+    var instances:      Pointer[Instance, MutUntrackedOrigin]
     # Staged spectral rendering rollout (Stage 2c, see project_spectral_rendering
     # memory) — host pointers on CPU, device pointers on GPU (see gpu.mojo's
     # ShadeContext construction sites).
@@ -179,12 +179,12 @@ struct ShadeContext:
 # that need a unit vector normalize it themselves, exactly as before.
 @always_inline
 def _emitter_face_normal(
-    mesh: TriangleMesh_C,
+    mesh: TriangleMesh,
     v0: Int, v1: Int, v2: Int,
     bu: Float32, bv: Float32,
     p0: Vec3f, p1: Vec3f, p2: Vec3f,
     instance_idx: Int32 = Int32(-1),
-    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Vec3f:
     var gn = cross(p1 - p0, p2 - p0)
     if Int(mesh.normals) <= 4:
@@ -224,9 +224,9 @@ def _emitter_face_normal(
 
 @always_inline
 def area_light_hit_cos(
-    inter: Intersection_C,
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
+    inter: Intersection,
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    instances: Pointer[Instance, MutUntrackedOrigin],
     ray_dir: Vec3f,
 ) -> Float32:
     """Cosine between an area-light TRIANGLE's emitting face and the ray that
@@ -249,7 +249,7 @@ def area_light_hit_cos(
 
 @always_inline
 def curve_light_hit(
-    inter: Intersection_C,
+    inter: Intersection,
     curves: Pointer[Curve_C, MutUntrackedOrigin],
     area_lights: Pointer[AreaLight_C, MutUntrackedOrigin],
     n_area_lights: Int,
@@ -259,7 +259,7 @@ def curve_light_hit(
 
     al_idx is the curve's AreaLight_C slot (kind 1), -1 if it has none. Curve
     lights are rare -- a handful of emissive strands at most -- so a linear
-    scan beats threading a reverse index through PrimId_C. cos_l is taken
+    scan beats threading a reverse index through PrimId. cos_l is taken
     against the outward radial normal at the hit, reconstructed from (u, v)
     exactly as shade_hair does. The EMISSION is not returned: it lives in the
     curve's own material slot (mat.emission), which the caller already has."""
@@ -286,12 +286,12 @@ def curve_light_hit(
 
 @always_inline
 def _shading_normal(
-    mesh: TriangleMesh_C,
+    mesh: TriangleMesh,
     v0: Int, v1: Int, v2: Int,
     bu: Float32, bv: Float32,
     geo_normal: Vec3f,
     instance_idx: Int32 = Int32(-1),
-    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Vec3f:
     """Interpolate per-vertex shading normals with barycentric (bu, bv).
     Falls back to the geometric normal if the mesh has no shading normals.
@@ -451,9 +451,9 @@ def sample_texture[use_gpu: Bool](
 @always_inline
 def _tex_lookup[use_gpu: Bool](
     mat: Material_C,
-    inter: Intersection_C,
+    inter: Intersection,
     v0: Int, v1: Int, v2: Int,
-    mesh: TriangleMesh_C,
+    mesh: TriangleMesh,
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
     textures: Pointer[GpuTexture_C, MutUntrackedOrigin],
     n_textures: Int,
@@ -522,8 +522,8 @@ def _tex_lookup[use_gpu: Bool](
 @always_inline
 def shade_core(
     paths: Pointer[PathState_C, MutUntrackedOrigin],
-    intersections: Pointer[Intersection_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    intersections: Pointer[Intersection, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     materials: Pointer[Material_C, MutUntrackedOrigin],
     spectral: SpectralHandle,
     tid: Int,
@@ -586,7 +586,7 @@ def shade_core(
 
         # Update Ray
         var org = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z) + ray_dir * inter.tHit + normal * 0.0001
-        path_ptr[].ray = Ray_C(Point3f(org[0], org[1], org[2]), Vec3f(dir[0], dir[1], dir[2]))
+        path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(dir[0], dir[1], dir[2]))
 
         # Update Throughput (albedo)
         path_ptr[].throughput *= rgb_to_spectral_sample(
@@ -603,9 +603,9 @@ def shade_core(
 # non-triangle hits (caller should deactivate path and return).
 @always_inline
 def _get_tri_verts(
-    inter: Intersection_C,
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-) -> Tuple[TriangleMesh_C, Int, Int, Int, Bool]:
+    inter: Intersection,
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+) -> Tuple[TriangleMesh, Int, Int, Int, Bool]:
     var mi: Int
     var bv: Int
     if inter.primId.type == 0:
@@ -631,7 +631,7 @@ def _geom_normal_and_ray(
     p1: Vec3f,
     p2: Vec3f,
     instance_idx: Int32 = Int32(-1),
-    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Tuple[Vec3f, Vec3f, Vec3f]:
     """p0/p1/p2 come straight from `mesh.points` — object-space if this hit
     came from an instanced BLAS (instance_idx >= 0), so the resulting normal
@@ -655,13 +655,13 @@ def _geom_normal_and_ray(
 
 # Analytic-sphere counterpart of _geom_normal_and_ray: exact outward normal
 # at the hit point ((hit - center)/radius), face-forwarded toward the
-# incoming ray. Spheres are never instanced (see Instance_C's docs), so
+# incoming ray. Spheres are never instanced (see Instance's docs), so
 # unlike the triangle path there is no object/world transform to apply.
 @always_inline
 def _sphere_geom_normal_and_ray(
     path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
-    inter: Intersection_C,
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
+    inter: Intersection,
+    spheres: Pointer[Sphere, MutUntrackedOrigin],
 ) -> Tuple[Vec3f, Vec3f, Vec3f]:
     var sph = spheres[unsafe_offset=Int(inter.primId.id1)]
     var rd = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
@@ -681,10 +681,10 @@ def _sphere_geom_normal_and_ray(
 # Every material shader used to hand-roll its own "if primId.type==4: sphere
 # branch, else: _get_tri_verts + cross product" — the same handful of lines
 # copy-pasted into 8 different functions. This is the ONE place that decides
-# how to turn an Intersection_C into (geo_normal, ray_dir, ray_org), for
+# how to turn an Intersection into (geo_normal, ray_dir, ray_org), for
 # either primitive type; callers needing UV-dependent extras (textures,
 # normal maps, anisotropy tangents, shading-normal interpolation — all of
-# which have no sphere analogue, since Sphere_C has no UV parameterization)
+# which have no sphere analogue, since Sphere has no UV parameterization)
 # still branch on `is_sphere` themselves, but only for THAT material-specific
 # logic, not for re-deriving the normal/ray every time.
 # `mesh`/v0/v1/v2 are only meaningful when is_sphere is False; when ok is
@@ -692,12 +692,12 @@ def _sphere_geom_normal_and_ray(
 @always_inline
 def _hit_geom(
     path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
-    inter: Intersection_C,
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
+    inter: Intersection,
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    spheres: Pointer[Sphere, MutUntrackedOrigin],
     instance_idx: Int32 = Int32(-1),
-    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
-) -> Tuple[Bool, Bool, Vec3f, Vec3f, Vec3f, TriangleMesh_C, Int, Int, Int]:
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+) -> Tuple[Bool, Bool, Vec3f, Vec3f, Vec3f, TriangleMesh, Int, Int, Int]:
     """Returns (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2)."""
     if inter.primId.type == Int8(4):
         var sph_r = _sphere_geom_normal_and_ray(path_ptr, inter, spheres)
@@ -770,7 +770,7 @@ def _shadow_contribute[enqueue_shadow: Bool](
             Vec3f(dir[0], dir[1], dir[2]),
             tmax, contrib, Int32(1), Int32(0))
     else:
-        var shadow_ray = Ray_C(Point3f(origin[0], origin[1], origin[2]), Vec3f(dir[0], dir[1], dir[2]))
+        var shadow_ray = Ray(Point3f(origin[0], origin[1], origin[2]), Vec3f(dir[0], dir[1], dir[2]))
         if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, tmax,
                                   ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                                   ctx.lights.spheres, ctx.lights.sphere_count,
@@ -799,7 +799,7 @@ def _shadow_contribute[enqueue_shadow: Bool](
 @always_inline
 def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
-    inter: Intersection_C,
+    inter: Intersection,
     ctx: ShadeContext,
 ):
     var mat = ctx.materials[unsafe_offset=Int(inter.primId.materialIndex)]
@@ -881,7 +881,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls_e.wi, ls_e.dist, contrib_e)
 
     # ── BSDF scatter ───────────────────────────────────────────────────────────
-    path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
+    path_ptr[].ray = Ray(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
 
     # Throughput: lobe_alb / pdf_bsdf * lobe_selection_weight
     # = lobe_alb / (cos/π) * (total/p_lobe) → lobe_alb * π/cos * lobe_w
@@ -922,7 +922,7 @@ def _albedo_highlight_boost(albedo: RGB, contrib: SpectralSample) -> RGB:
 @always_inline
 def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
-    inter: Intersection_C,
+    inter: Intersection,
     ctx: ShadeContext,
     mat: Material_C,
 ):
@@ -989,7 +989,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         return
     var wi = tx * bs.wi.x + ty * bs.wi.y + normal * bs.wi.z
     var org = spawn_origin(hit_point, geo_normal, wi)
-    path_ptr[].ray = Ray_C(Point3f(org[0], org[1], org[2]), Vec3f(wi[0], wi[1], wi[2]))
+    path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(wi[0], wi[1], wi[2]))
     path_ptr[].throughput *= bs.f * (abs(bs.wi.z) / bs.pdf)
     if bs.specular:
         path_ptr[].specularBounce = Int8(1)
@@ -1104,7 +1104,7 @@ def _finish_delta_bounce(
         return
 
     var org = spawn_origin(hit_point, geo_n, bs.wi) if dot(geo_n, geo_n) > Float32(0.0) else hit_point
-    path_ptr[].ray = Ray_C(Point3f(org[0], org[1], org[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
+    path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
         path_ptr[].albedo = default_albedo
     path_ptr[].throughput *= f_spec
@@ -1128,10 +1128,10 @@ def _finish_delta_bounce(
 @always_inline
 def shade_dielectric[use_gpu: Bool](
     path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
-    inter: Intersection_C,
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    inter: Intersection,
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     mat: Material_C,
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere, MutUntrackedOrigin],
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
     textures: Pointer[GpuTexture_C, MutUntrackedOrigin] = Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(),
     n_textures: Int = 0,
@@ -1216,7 +1216,7 @@ def shade_dielectric[use_gpu: Bool](
             # this is what turns a smooth-lens refraction into the swirly
             # caustic pattern the reference renderer shows. See
             # _apply_normal_map_sphere's own docstring for the analytic
-            # sphere UV parameterization this needs (Sphere_C has none
+            # sphere UV parameterization this needs (Sphere has none
             # built in).
             geom_normal = _apply_normal_map_sphere[use_gpu](mat, center, hit_point_raw, geom_normal, tex_filenames, textures, n_textures)
 
@@ -1316,10 +1316,10 @@ def shade_dielectric[use_gpu: Bool](
 @always_inline
 def shade_thin_dielectric(
     path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
-    inter: Intersection_C,
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    inter: Intersection,
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     mat: Material_C,
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere, MutUntrackedOrigin],
 ):
     var (ok, _, geom_normal, ray_dir, ray_org, _, _, _, _) = _hit_geom(path_ptr, inter, meshes, spheres)
     if not ok:
@@ -1466,7 +1466,7 @@ def _shade_conductor_nee[enqueue_shadow: Bool](
 @always_inline
 def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
-    inter: Intersection_C,
+    inter: Intersection,
     ctx: ShadeContext,
     mat: Material_C,
 ):
@@ -1571,7 +1571,7 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         _shade_conductor_nee[enqueue_shadow](path_ptr, ctx, normal, wo, hit_point, mat_eff.albedo, alpha_iso, pcg)
         path_ptr[].pcgState = pcg.state
         var org_c = spawn_origin(hit_point, geo_normal, bs.wi)
-        path_ptr[].ray = Ray_C(Point3f(org_c[0], org_c[1], org_c[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
+        path_ptr[].ray = Ray(Point3f(org_c[0], org_c[1], org_c[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
             path_ptr[].albedo = mat_eff.albedo
         path_ptr[].throughput *= _to_spec_weight(ctx, bs.f, path_ptr[].wavelengths)
@@ -1661,7 +1661,7 @@ def _shade_measured_nee[enqueue_shadow: Bool](
 @always_inline
 def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
-    inter: Intersection_C,
+    inter: Intersection,
     ctx: ShadeContext,
     mat: Material_C,
 ):
@@ -1735,7 +1735,7 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
         return
 
     var org_m = spawn_origin(hit_point, hit_normal, wi)
-    path_ptr[].ray = Ray_C(Point3f(org_m[0], org_m[1], org_m[2]), Vec3f(wi[0], wi[1], wi[2]))
+    path_ptr[].ray = Ray(Point3f(org_m[0], org_m[1], org_m[2]), Vec3f(wi[0], wi[1], wi[2]))
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
         # Denoiser AOV only -- albedo is a colour-space quantity, so the RGB
         # conversion is legitimate here (and only here). Transport stays
@@ -1769,7 +1769,7 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
 @always_inline
 def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
-    inter: Intersection_C,
+    inter: Intersection,
     ctx: ShadeContext,
     mat: Material_C,
 ):
@@ -1803,7 +1803,7 @@ def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         _shade_conductor_nee[enqueue_shadow](path_ptr, ctx, normal, wo, hit_point, mat.albedo, alpha_cc, pcg)
         path_ptr[].pcgState = pcg.state
         var org_cc = spawn_origin(hit_point, normal, bs.wi)
-        path_ptr[].ray = Ray_C(Point3f(org_cc[0], org_cc[1], org_cc[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
+        path_ptr[].ray = Ray(Point3f(org_cc[0], org_cc[1], org_cc[2]), Vec3f(bs.wi[0], bs.wi[1], bs.wi[2]))
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
             path_ptr[].albedo = mat.albedo
         path_ptr[].throughput *= _to_spec_weight(ctx, bs.f, path_ptr[].wavelengths)
@@ -1822,7 +1822,7 @@ def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
 # Not @always_inline: shade_mix ↔ _shade_dispatch would form an always_inline recursion.
 def shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
-    inter: Intersection_C,
+    inter: Intersection,
     ctx: ShadeContext,
     mat: Material_C,
 ):
@@ -1861,8 +1861,8 @@ def _decode_tangent_normal(ns: RGB, tangent: Vec3f, bitangent: Vec3f, geom_norma
 def _apply_normal_map[use_gpu: Bool](
     mat: Material_C,
     v0: Int, v1: Int, v2: Int,
-    mesh: TriangleMesh_C,
-    inter: Intersection_C,
+    mesh: TriangleMesh,
+    inter: Intersection,
     geom_normal: Vec3f,
     p0: Vec3f,
     p1: Vec3f,
@@ -1917,8 +1917,8 @@ def _apply_normal_map[use_gpu: Bool](
 def _apply_bump_map[use_gpu: Bool](
     mat: Material_C,
     v0: Int, v1: Int, v2: Int,
-    mesh: TriangleMesh_C,
-    inter: Intersection_C,
+    mesh: TriangleMesh,
+    inter: Intersection,
     geom_normal: Vec3f,
     p0: Vec3f,
     p1: Vec3f,
@@ -2016,7 +2016,7 @@ def _apply_normal_map_sphere[use_gpu: Bool](
     n_textures: Int,
 ) -> Vec3f:
     """Analytic-sphere counterpart to `_apply_normal_map` -- no mesh/UVs
-    exist for a `Sphere_C`, so u/v and the tangent frame are derived from
+    exist for a `Sphere`, so u/v and the tangent frame are derived from
     the standard spherical parameterization instead of barycentrics.
     Matches Mitsuba's OWN `Sphere::compute_surface_interaction` convention
     exactly (`src/shapes/sphere.cpp`: `theta = unit_angle_z(local)` --
@@ -2029,7 +2029,7 @@ def _apply_normal_map_sphere[use_gpu: Bool](
     90 degrees relative to a real Mitsuba render of the same scene). Only
     correct when the sphere's own object-to-world transform is identity
     (true for `sphere_sms.xml` and any other `<shape type="sphere">` with
-    no `<transform>` block) -- `Sphere_C` stores no orientation, so a
+    no `<transform>` block) -- `Sphere` stores no orientation, so a
     rotated sphere's local Z axis can't be recovered here; out of scope,
     same "no non-uniform scale" limitation `_mit_process_sphere` already
     documents.
@@ -2098,7 +2098,7 @@ def _apply_normal_map_sphere[use_gpu: Bool](
 # its docstring for what a fixed epsilon did to barcelona's water).
 @always_inline
 def _pixel_uv_for_hit(
-    mesh: TriangleMesh_C, v0: Int, v1: Int, v2: Int,
+    mesh: TriangleMesh, v0: Int, v1: Int, v2: Int,
     p0: Vec3f, p1: Vec3f, p2: Vec3f,
     ng: Vec3f, ray_dir: Vec3f, cone_w: Float32,
 ) -> Float32:
@@ -2149,8 +2149,8 @@ def _pixel_uv_for_hit(
 def _apply_surface_maps[use_gpu: Bool](
     mat: Material_C,
     v0: Int, v1: Int, v2: Int,
-    mesh: TriangleMesh_C,
-    inter: Intersection_C,
+    mesh: TriangleMesh,
+    inter: Intersection,
     shading_normal: Vec3f,
     orient_to: Vec3f,
     ray_dir: Vec3f,
@@ -2223,8 +2223,8 @@ def _camera_approx_footprint(p: Point3f, cam_pos: Vec3f, px_scale: Float32) -> F
 @always_inline
 def apply_surface_maps_at_hit[use_gpu: Bool](
     mat: Material_C,
-    inter: Intersection_C,
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    inter: Intersection,
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     shading_normal: Vec3f,
     orient_to: Vec3f,
     ray_dir: Vec3f,
@@ -2249,7 +2249,7 @@ def apply_surface_maps_at_hit[use_gpu: Bool](
 @always_inline
 def _build_geom_context_full[use_gpu: Bool](
     path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
-    inter: Intersection_C,
+    inter: Intersection,
     mat: Material_C,
     ctx: ShadeContext,
 ) -> Tuple[GeomContext, Bool]:
@@ -2330,7 +2330,7 @@ def _draw_sobol_8(
 # ── Marschner/Chiang hair BSDF (3-lobe: R, TT, TRT) ─────────────────────────
 def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
-    inter: Intersection_C,
+    inter: Intersection,
     ctx: ShadeContext,
     mat: Material_C,
 ):
@@ -2342,7 +2342,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
 
     # ── Steps 1-10: geometry + optical + per-lobe precompute ─────────────────
     # h and v_global come straight from intersect_curve (geometry.mojo) via
-    # Intersection_C.u/.v — no tessellated mesh, no barycentric interpolation.
+    # Intersection.u/.v — no tessellated mesh, no barycentric interpolation.
     # Delegated to bvh.mojo's _hair_precompute (shared with bdpt.mojo/
     # sppm.mojo's connectible-vertex/gather/NEE evaluation of a stored hair
     # vertex) — same formulas as before this was extracted, just relocated.
@@ -2417,7 +2417,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     # for transmission rays that cross through the ribbon).
     var scatter_sign = Float32(1.0) if dot(wi_s, geo_normal) >= Float32(0.0) else Float32(-1.0)
     var scatter_org = hit_base + geo_normal * curve_eps * scatter_sign
-    path_ptr[].ray = Ray_C(
+    path_ptr[].ray = Ray(
         Point3f(scatter_org[0], scatter_org[1], scatter_org[2]),
         Vec3f(wi_s[0], wi_s[1], wi_s[2]))
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
@@ -2800,7 +2800,7 @@ def _sample_area_light_nee(
 @always_inline
 def _sms_vertex_from_hit(
     ctx: ShadeContext,
-    inter: Intersection_C,
+    inter: Intersection,
     ray_org: Vec3f,
     shadow_dir: Vec3f,
 ) -> Tuple[SMSVertex, Bool]:
@@ -2880,13 +2880,13 @@ def _sms_probe_glass_chain(
     shadow_dir: Vec3f,
     start_remaining: Float32,
     max_count: Int,
-) -> Tuple[Int, Array[Intersection_C, MAX_SMS_VERTICES], Array[Vec3f, MAX_SMS_VERTICES]]:
+) -> Tuple[Int, Array[Intersection, MAX_SMS_VERTICES], Array[Vec3f, MAX_SMS_VERTICES]]:
     """Probes forward from `start_point` along `shadow_dir` for up to
     `max_count` MORE consecutive dielectric surfaces (Phase 5.1's
     generalization of _mnee_area_light_contribute's own hardcoded
     probe/probe2 pair), stopping at the first non-glass hit or miss.
     Returns (count, hits, origins) -- `hits[0..count)` are valid
-    Intersection_C values from ctx's own BVH, same approximate remaining-
+    Intersection values from ctx's own BVH, same approximate remaining-
     distance bookkeeping the existing probe2 step already uses (each hit's
     tHit is measured from its own segment origin, not the original
     hit_point). `origins[k]` is the ray origin `hits[k].tHit` is measured
@@ -2894,9 +2894,9 @@ def _sms_probe_glass_chain(
     alone, but an analytic sphere hit's cannot (it carries no
     barycentrics), so the caller needs this to reconstruct it via
     origins[k] + shadow_dir*hits[k].tHit."""
-    var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    var dummy_inter = Intersection_C(dummy_prim, Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
-    var hits = Array[Intersection_C, MAX_SMS_VERTICES](fill=dummy_inter)
+    var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var dummy_inter = Intersection(dummy_prim, Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+    var hits = Array[Intersection, MAX_SMS_VERTICES](fill=dummy_inter)
     var origins = Array[Vec3f, MAX_SMS_VERTICES](fill=Vec3f(Float32(0.0)))
     var count = 0
     var seg_org = start_point
@@ -2906,8 +2906,8 @@ def _sms_probe_glass_chain(
         if pk_tmax <= Float32(0.001):
             break
         var pk_org = seg_org + shadow_dir * Float32(0.0005)
-        var pk_ray = Ray_C(Point3f(pk_org[0], pk_org[1], pk_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-        var pk_store = Array[Intersection_C, 1](fill=dummy_inter)
+        var pk_ray = Ray(Point3f(pk_org[0], pk_org[1], pk_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+        var pk_store = Array[Intersection, 1](fill=dummy_inter)
         traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, pk_ray, pk_tmax, pk_store.unsafe_ptr(),
                            ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                            ctx.lights.spheres, ctx.lights.sphere_count)
@@ -2971,13 +2971,13 @@ def _sms_probe_and_solve(
     # MNEE: probe for up to 2 glass surfaces between hit_point and light.
     # For each probe hit we detect entering/exiting from dot(n_raw, probe_dir).
     var probe_org = hit_point + shadow_dir * Float32(0.0002)
-    var probe_ray = Ray_C(
+    var probe_ray = Ray(
         Point3f(probe_org[0], probe_org[1], probe_org[2]),
         Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
     var probe_tmax = dist * Float32(0.9995)
-    var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    var dummy_inter = Intersection_C(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
-    var probe_store = Array[Intersection_C, 1](fill=dummy_inter)
+    var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var dummy_inter = Intersection(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+    var probe_store = Array[Intersection, 1](fill=dummy_inter)
     traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr(),
                        ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                        ctx.lights.spheres, ctx.lights.sphere_count)
@@ -3025,16 +3025,16 @@ def _sms_probe_and_solve(
     # routing it through the 1-vertex `sms_walk` path below -- already
     # validated correct and convergent (project_sms_restir_phase6 memory).
     # A flat 2-surface pane (an actual window, unrelated to this) is
-    # untouched -- `is_sphere1` only ever true for `Sphere_C`.
+    # untouched -- `is_sphere1` only ever true for `Sphere`.
     var probe2_t0 = probe_inter.tHit
     var probe2_rem = (dist - probe2_t0) * Float32(0.9995)
     var probe2_org = x1_init + shadow_dir * Float32(0.0005)
     var probe2_inter = dummy_inter
     if probe2_rem > Float32(0.001) and not is_sphere1:
-        var probe2_ray = Ray_C(
+        var probe2_ray = Ray(
             Point3f(probe2_org[0], probe2_org[1], probe2_org[2]),
             Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-        var probe2_store = Array[Intersection_C, 1](fill=dummy_inter)
+        var probe2_store = Array[Intersection, 1](fill=dummy_inter)
         traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr(),
                    ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                    ctx.lights.spheres, ctx.lights.sphere_count)
@@ -3379,7 +3379,7 @@ def _mnee_area_light_contribute(
         return True
     var wo_fn = wo_f * (Float32(1.0) / wo_len)
     var vis_org = last_vertex + wo_fn * Float32(0.001)
-    var vis_ray = Ray_C(Point3f(vis_org[0], vis_org[1], vis_org[2]), Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
+    var vis_ray = Ray(Point3f(vis_org[0], vis_org[1], vis_org[2]), Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
     # A sphere caustic caster's outgoing leg necessarily re-crosses its OWN
     # far side (the unmodeled exit refraction of the single-vertex model,
     # see any_hit_bvh2_core's own docstring) -- exclude just that one
@@ -3533,7 +3533,7 @@ def sms_resolve(
         return
     var wo_fn = wo_f * (Float32(1.0) / wo_len)
     var vis_org = last_vertex + wo_fn * Float32(0.001)
-    var vis_ray = Ray_C(Point3f(vis_org[0], vis_org[1], vis_org[2]), Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
+    var vis_ray = Ray(Point3f(vis_org[0], vis_org[1], vis_org[2]), Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
     # See _mnee_area_light_contribute's identical fix: a sphere caustic
     # caster's outgoing leg necessarily re-crosses its OWN far side, so
     # exclude just that one sphere from this occlusion test.
@@ -3928,7 +3928,7 @@ def _gi_generate_recon_candidate(
     if cos_s <= Float32(0.0):
         return gi_reservoir_init()
     var lo = RGB(Float32(0.0))
-    var shadow_ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(wi[0], wi[1], wi[2]))
+    var shadow_ray = Ray(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(wi[0], wi[1], wi[2]))
     if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, dist * Float32(0.9999),
                               ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                               ctx.lights.spheres, ctx.lights.sphere_count,
@@ -4346,7 +4346,7 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
 @always_inline
 def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
-    inter: Intersection_C,
+    inter: Intersection,
     ctx: ShadeContext,
     mat: Material_C,
     guide_write: GuideGrid = null_guide(),
@@ -4440,7 +4440,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         pdf_mix = bsdf_s[1]
 
     var org_d = spawn_origin(hit_point, gc.geo_normal, dir)
-    path_ptr[].ray = Ray_C(Point3f(org_d[0], org_d[1], org_d[2]), Vec3f(dir[0], dir[1], dir[2]))
+    path_ptr[].ray = Ray(Point3f(org_d[0], org_d[1], org_d[2]), Vec3f(dir[0], dir[1], dir[2]))
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
         path_ptr[].albedo = alb
     # Store mixture PDF for next-bounce MIS (area light hit, env light miss)
@@ -4464,7 +4464,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
 @always_inline
 def shade_interface(
     path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
-    inter: Intersection_C,
+    inter: Intersection,
 ):
     """Interface (null/passthrough) material: advance the ray through the surface.
     No scattering, no throughput change. Medium transition is handled externally:
@@ -4489,14 +4489,14 @@ def shade_interface(
     # needs the distance back to the real scattering vertex, not to here.
     # See PathState_C.mis_null_dist.
     path_ptr[].mis_null_dist += inter.tHit + Float32(0.0002)
-    path_ptr[].ray = Ray_C(Point3f(hit_point[0], hit_point[1], hit_point[2]), path_ptr[].ray.direction)
+    path_ptr[].ray = Ray(Point3f(hit_point[0], hit_point[1], hit_point[2]), path_ptr[].ray.direction)
 
 
 @always_inline
 def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     mat: Material_C,
     path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
-    inter: Intersection_C,
+    inter: Intersection,
     ctx: ShadeContext,
     guide_write: GuideGrid = null_guide(),
     restir_io: ReservoirIO = reservoir_io_null(),
@@ -4556,7 +4556,7 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
 @always_inline
 def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
-    inter: Intersection_C,
+    inter: Intersection,
     ctx: ShadeContext,
     guide_write: GuideGrid = null_guide(),
     restir_io: ReservoirIO = reservoir_io_null(),
@@ -4743,10 +4743,10 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             if seg_len > Float32(1e-6):
                 var seg_dir = seg * (Float32(1.0) / seg_len)
                 var pr_org = path_ptr[].last_ns_p + seg_dir * Float32(0.0001)
-                var pr_ray = Ray_C(Point3f(pr_org[0], pr_org[1], pr_org[2]),
+                var pr_ray = Ray(Point3f(pr_org[0], pr_org[1], pr_org[2]),
                                    Vec3f(seg_dir[0], seg_dir[1], seg_dir[2]))
-                var pr_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-                var pr_store = Array[Intersection_C, 1](fill=Intersection_C(
+                var pr_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+                var pr_store = Array[Intersection, 1](fill=Intersection(
                     pr_prim, Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
                 traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, pr_ray,
                                    seg_len * Float32(0.999), pr_store.unsafe_ptr(),
@@ -4867,10 +4867,10 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
 @always_inline
 def shade_core_cpu_nee(
     paths: Pointer[PathState_C, MutUntrackedOrigin],
-    intersections: Pointer[Intersection_C, MutUntrackedOrigin],
+    intersections: Pointer[Intersection, MutUntrackedOrigin],
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    primIds: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     curves: Pointer[Curve_C, MutUntrackedOrigin],
     materials: Pointer[Material_C, MutUntrackedOrigin],
     areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
@@ -4883,14 +4883,14 @@ def shade_core_cpu_nee(
     pointLightCount: Int,
     infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
     infiniteLightCount: Int,
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere, MutUntrackedOrigin],
     sphereCount: Int,
     light_sampler: LightSampler_C,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     guide: GuideGrid,
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
     guide_write: GuideGrid = null_guide(),
     spectral: SpectralHandle = null_spectral_handle(),
     measured_brdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),

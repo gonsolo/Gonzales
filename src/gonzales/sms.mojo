@@ -37,7 +37,7 @@ from std.math import sqrt, abs, max, min, cos, sin, acos
 from .geometry import RGB, dot, cross, Frame, Vec3f, Point3f, _atan2f, PI, TWO_PI
 from .materials import fr_dielectric
 from .render_state import NormalSlopeMap_C, normal_slope_map_none
-from .primitives import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Instance_C, Sphere_C
+from .primitives import Ray, Intersection, PrimId, TriangleMesh, Instance, Sphere
 from .curves import Curve_C
 from .rng import PCG32
 from .bvh import ray_sphere_hit, traverse_bvh2_core, BVH2Node
@@ -192,7 +192,7 @@ struct SMSVertex(TrivialRegisterPassable):
     caller from probe geometry exactly like _mnee_walk2's eta1/eta2.
 
     `is_sphere`/`sphere_center`/`sphere_radius`: when set, this vertex
-    lies on an analytic Sphere_C rather than a flat triangle. A flat
+    lies on an analytic Sphere rather than a flat triangle. A flat
     triangle's tangent plane IS its surface everywhere, so the ordinary
     Newton step (move within the fixed tangent plane) is exact; a
     sphere's tangent plane only agrees with the true surface at the point
@@ -515,13 +515,13 @@ def _sms_reproject_onto_sphere_anchored(
     radius: Float32,
     anchor_on_surface: Bool,
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin] = Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin] = Pointer[PrimId_C, MutUntrackedOrigin].unsafe_dangling(),
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin] = Pointer[TriangleMesh_C, MutUntrackedOrigin].unsafe_dangling(),
+    primIds: Pointer[PrimId, MutUntrackedOrigin] = Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin] = Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(),
     curves: Pointer[Curve_C, MutUntrackedOrigin] = Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin] = Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(),
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+    spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
 ) -> Tuple[Vec3f, Vec3f, Vec3f, Vec3f, Bool]:
     """Reprojects a raw Newton-step proposal onto the sphere by RAY-CASTING
@@ -559,7 +559,7 @@ def _sms_reproject_onto_sphere_anchored(
     var dir = dir_raw * (Float32(1.0) / dir_len)
     var t_min = radius * Float32(1e-4) if anchor_on_surface else Float32(1e-5)
     var t_max = radius * Float32(8.0) + dir_len
-    var ray = Ray_C(Point3f(anchor[0], anchor[1], anchor[2]), Vec3f(dir[0], dir[1], dir[2]))
+    var ray = Ray(Point3f(anchor[0], anchor[1], anchor[2]), Vec3f(dir[0], dir[1], dir[2]))
     var t = ray_sphere_hit(Point3f(center[0], center[1], center[2]), radius, ray, t_min, t_max)
     if t <= Float32(0.0):
         return (x_raw, Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), Vec3f(Float32(0.0)), False)
@@ -577,10 +577,10 @@ def _sms_reproject_onto_sphere_anchored(
         var occl_org = anchor + dir * occl_eps
         var occl_tmax = (t - occl_eps) + radius * Float32(1e-3)
         if occl_tmax > Float32(0.0):
-            var occl_ray = Ray_C(Point3f(occl_org[0], occl_org[1], occl_org[2]), Vec3f(dir[0], dir[1], dir[2]))
-            var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-            var dummy_inter = Intersection_C(dummy_prim, occl_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
-            var store = Array[Intersection_C, 1](fill=dummy_inter)
+            var occl_ray = Ray(Point3f(occl_org[0], occl_org[1], occl_org[2]), Vec3f(dir[0], dir[1], dir[2]))
+            var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+            var dummy_inter = Intersection(dummy_prim, occl_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+            var store = Array[Intersection, 1](fill=dummy_inter)
             traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, occl_ray, occl_tmax, store.unsafe_ptr(),
                                 blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres)
             if store[0].hit != Int8(0) and store[0].tHit < (t - occl_eps) - radius * Float32(1e-4):
@@ -874,13 +874,13 @@ def sms_walk(
     verts_init: Array[SMSVertex, MAX_SMS_VERTICES], n: Int,
     ldp_du: Vec3f, ldp_dv: Vec3f,
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin] = Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin] = Pointer[PrimId_C, MutUntrackedOrigin].unsafe_dangling(),
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin] = Pointer[TriangleMesh_C, MutUntrackedOrigin].unsafe_dangling(),
+    primIds: Pointer[PrimId, MutUntrackedOrigin] = Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin] = Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(),
     curves: Pointer[Curve_C, MutUntrackedOrigin] = Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin] = Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(),
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+    spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
 ) -> Tuple[Bool, Array[Vec3f, MAX_SMS_VERTICES], Float32, Float32]:
     """N-vertex generalization of _mnee_walk/_mnee_walk2 (kept in
@@ -1267,7 +1267,7 @@ def sms_seed_randomize(x0: Vec3f, mut verts: Array[SMSVertex, MAX_SMS_VERTICES],
                 var ctr = verts[i].sphere_center
                 var t_hit = ray_sphere_hit(
                     Point3f(ctr[0], ctr[1], ctr[2]), verts[i].sphere_radius,
-                    Ray_C(Point3f(x0[0], x0[1], x0[2]), Vec3f(d[0], d[1], d[2])),
+                    Ray(Point3f(x0[0], x0[1], x0[2]), Vec3f(d[0], d[1], d[2])),
                     Float32(1e-4), Float32(1e30))
                 if t_hit > Float32(0.0):
                     verts[i].pos = x0 + d * t_hit
@@ -1303,13 +1303,13 @@ def sms_solve_bernoulli(
     ldp_du: Vec3f, ldp_dv: Vec3f,
     jitter_scale: Float32, mut pcg: PCG32,
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin] = Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin] = Pointer[PrimId_C, MutUntrackedOrigin].unsafe_dangling(),
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin] = Pointer[TriangleMesh_C, MutUntrackedOrigin].unsafe_dangling(),
+    primIds: Pointer[PrimId, MutUntrackedOrigin] = Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin] = Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(),
     curves: Pointer[Curve_C, MutUntrackedOrigin] = Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin] = Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(),
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+    spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
 ) -> Tuple[Bool, Array[Vec3f, MAX_SMS_VERTICES], Float32, Float32, Float32]:
     """5.3: Zeltner et al. 2020's Bernoulli-trial reciprocal estimator.

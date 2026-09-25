@@ -22,7 +22,7 @@ from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, Point3f, Vec3f
 from gonzales.materials import MeasuredBRDF_C, Material_C, MatKind
 from gonzales.render_state import GpuTexture_C, NormalSlopeMap_C
-from gonzales.primitives import Ray_C, Intersection_C, PrimId_C, Sphere_C, Instance_C, TriangleMesh_C
+from gonzales.primitives import Ray, Intersection, PrimId, Sphere, Instance, TriangleMesh
 from gonzales.media import Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C
 from gonzales.lights import LightSampler_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C
 from gonzales.curves import Curve_C
@@ -71,8 +71,8 @@ def _build_scene() -> SceneDescriptor2_C:
     var vertex_indices = unsafe_alloc[Int64](n_verts)
     for i in range(n_verts):
         vertex_indices[unsafe_offset=i] = Int64(i)
-    var meshes = unsafe_alloc[TriangleMesh_C](1)
-    meshes[unsafe_offset=0] = TriangleMesh_C(
+    var meshes = unsafe_alloc[TriangleMesh](1)
+    meshes[unsafe_offset=0] = TriangleMesh(
         points, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), vertex_indices,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
@@ -89,10 +89,10 @@ def _build_scene() -> SceneDescriptor2_C:
     var order = unsafe_alloc[Int32](n_tris)
     _ = build_bvh2(bounds, Int32(n_tris), bvh_nodes, order)
     bounds.unsafe_free()
-    var prim_ids = unsafe_alloc[PrimId_C](n_tris)
+    var prim_ids = unsafe_alloc[PrimId](n_tris)
     for k in range(n_tris):
         var orig = Int(order[unsafe_offset=k])
-        prim_ids[unsafe_offset=k] = PrimId_C(Int64(0), Int64(orig * 3), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+        prim_ids[unsafe_offset=k] = PrimId(Int64(0), Int64(orig * 3), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     order.unsafe_free()
 
     var materials = unsafe_alloc[Material_C](1)
@@ -116,7 +116,7 @@ def _build_scene() -> SceneDescriptor2_C:
         Pointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[Medium_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[MediumInterface_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
@@ -124,9 +124,9 @@ def _build_scene() -> SceneDescriptor2_C:
         Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         LightSampler_C(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
         Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Int64(0),
-        Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         null_spectral_handle(),
         Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
@@ -149,7 +149,7 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
     var sd = _build_scene()
 
     var pcg_old = PCG32(UInt64(12345), UInt64(7))
-    var scratch_old = unsafe_alloc[Intersection_C](1)
+    var scratch_old = unsafe_alloc[Intersection](1)
     var lvc_old = unsafe_alloc[BDPTVertex](_BDPT_MAX_VERTS)
     var lvc_path_len_old = unsafe_alloc[Int32](1)
     _bdpt_trace_light_path[False](sd, pcg_old, False, Int32(-1), scratch_old, lvc_old, 0, lvc_path_len_old, Float32(0), Float32(0), _TEST_PASS_WL, _NO_CAM, Float32(0))
@@ -184,8 +184,8 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
     var active = state.active
     while active == Int8(1) and n_iters < Int(_BDPT_MAX_DEPTH):
         n_iters += 1
-        var ray = Ray_C(ro, rd)
-        var scratch_new = unsafe_alloc[Intersection_C](1)
+        var ray = Ray(ro, rd)
+        var scratch_new = unsafe_alloc[Intersection](1)
         scratch_new[unsafe_offset=0].hit = Int8(0)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch_new)
         var inter = scratch_new[unsafe_offset=0]

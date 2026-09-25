@@ -4,7 +4,7 @@ from std.testing import assert_true, TestSuite
 from gonzales.geometry import Point3f, Vec3f, RGB
 from gonzales.materials import Material_C, MatKind
 from gonzales.render_state import PathState_C
-from gonzales.primitives import Ray_C, Intersection_C
+from gonzales.primitives import Ray, Intersection
 from gonzales.spectrum import SpectralSample, SampledWavelengths, null_spectral_handle
 from gonzales.shading import shade_core
 from _scene_fixture import make_triangle_scene
@@ -19,7 +19,7 @@ def _close(a: Float32, b: Float32) -> Bool:
 # spectrum.mojo's conversions carry plain R/G/B on lanes v0/v1/v2 (see
 # rgb_to_spectral_sample's table-less fallback) -- so the assertions below
 # read those lanes and mean exactly what the old RGB assertions meant.
-def _dummy_path(ray: Ray_C, throughput: SpectralSample) -> PathState_C:
+def _dummy_path(ray: Ray, throughput: SpectralSample) -> PathState_C:
     return PathState_C(
         ray, throughput, SpectralSample(Float32(0.0)), RGB(Float32(0.0)),
         Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
@@ -32,10 +32,10 @@ def _dummy_path(ray: Ray_C, throughput: SpectralSample) -> PathState_C:
 
 # ── shade_core, exercised against a REAL BVH hit (via _scene_fixture) ───────
 # Previously shading.mojo's helpers were tested with hand-built
-# GeomContext/Intersection_C values (test_shading_helpers.mojo). This closes
+# GeomContext/Intersection values (test_shading_helpers.mojo). This closes
 # the loop one level further: build a real triangle + BVH, traverse a real
 # ray through traverse_bvh2_core, and feed the resulting genuine
-# Intersection_C into shade_core — the same data flow shade_core sees in an
+# Intersection into shade_core — the same data flow shade_core sees in an
 # actual render, not a synthetic approximation of it.
 
 # DISABLED (not renamed away lightly): this asserts shade_core credits a
@@ -60,12 +60,12 @@ def disabled_test_shade_core_area_light_hit_adds_emission() raises:
         RGB(Float32(1.0)),   # sss_mean_refl (inert)
     )
 
-    var ray = Ray_C(Point3f(0.2, 0.2, -5.0), Vec3f(0.0, 0.0, 1.0))
+    var ray = Ray(Point3f(0.2, 0.2, -5.0), Vec3f(0.0, 0.0, 1.0))
     var inter = fx.intersect(ray, Float32(100.0))
     assert_true(Int(inter.hit) == 1)
 
     var paths = unsafe_alloc[PathState_C](1)
-    var intersections = unsafe_alloc[Intersection_C](1)
+    var intersections = unsafe_alloc[Intersection](1)
     paths[unsafe_offset=0] = _dummy_path(ray, SpectralSample(Float32(0.5)))
     intersections[unsafe_offset=0] = inter
 
@@ -84,12 +84,12 @@ def test_shade_core_miss_deactivates_path() raises:
     var fx = make_triangle_scene([
         Point3f(0.0, 0.0, 0.0), Point3f(1.0, 0.0, 0.0), Point3f(0.0, 1.0, 0.0),
     ])
-    var ray = Ray_C(Point3f(50.0, 50.0, -5.0), Vec3f(0.0, 0.0, 1.0))
+    var ray = Ray(Point3f(50.0, 50.0, -5.0), Vec3f(0.0, 0.0, 1.0))
     var inter = fx.intersect(ray, Float32(100.0))
     assert_true(Int(inter.hit) == 0)
 
     var paths = unsafe_alloc[PathState_C](1)
-    var intersections = unsafe_alloc[Intersection_C](1)
+    var intersections = unsafe_alloc[Intersection](1)
     paths[unsafe_offset=0] = _dummy_path(ray, SpectralSample(Float32(1.0)))
     intersections[unsafe_offset=0] = inter
 

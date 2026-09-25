@@ -2,7 +2,7 @@ from std.collections import List, Array
 from std.ffi import external_call
 from .geometry import RGB, Point3f, Vec3f
 from .materials import Material_C
-from .primitives import TriangleMesh_C, PrimId_C, Sphere_C
+from .primitives import TriangleMesh, PrimId, Sphere
 from .media import Medium_C, MediumInterface_C
 from .lights import AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C
 from .bvh import BVH2Node, SceneDescriptor2_C
@@ -67,9 +67,9 @@ struct Scene(Movable):
 
     # Geometry
     var materials:    List[Material_C]
-    var meshes:       List[TriangleMesh_C]   # wire format kept for GPU upload
+    var meshes:       List[TriangleMesh]   # wire format kept for GPU upload
     var bvh_nodes:    List[BVH2Node]
-    var prim_ids:     List[PrimId_C]
+    var prim_ids:     List[PrimId]
 
     # Per-mesh geometry arrays (parallel to `meshes`)
     var mesh_points: List[List[Float32]]     # 4 floats per vertex (xyz + pad)
@@ -82,7 +82,7 @@ struct Scene(Movable):
     var distant_lights:  List[DistantLight_C]
     var point_lights:    List[PointLight_C]
     var infinite_lights: List[InfiniteLight_C]
-    var spheres:         List[Sphere_C]
+    var spheres:         List[Sphere]
 
     # Media
     var mediums:      List[Medium_C]
@@ -96,9 +96,9 @@ struct Scene(Movable):
         film: FilmSettings,
         sampler: SamplerSettings,
         materials: List[Material_C],
-        meshes: List[TriangleMesh_C],
+        meshes: List[TriangleMesh],
         bvh_nodes: List[BVH2Node],
-        prim_ids: List[PrimId_C],
+        prim_ids: List[PrimId],
         mesh_points: List[List[Float32]],
         mesh_vis: List[List[Int64]],
         mesh_fis: List[List[Int64]],
@@ -107,7 +107,7 @@ struct Scene(Movable):
         distant_lights: List[DistantLight_C],
         point_lights: List[PointLight_C],
         infinite_lights: List[InfiniteLight_C],
-        spheres: List[Sphere_C],
+        spheres: List[Sphere],
         mediums: List[Medium_C],
         medium_ifaces: List[MediumInterface_C],
         tex_filenames: List[String],

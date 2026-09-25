@@ -15,7 +15,7 @@ from std.sys.info import size_of
 from std.gpu import block_idx, thread_idx, block_dim
 from max.gpu.host import DeviceContext
 from gonzales.geometry import (
-    Point3f, Vec3f, Ray_C, PrimId_C, Intersection_C, TriangleMesh_C, Curve_C,
+    Point3f, Vec3f, Ray, PrimId, Intersection, TriangleMesh, Curve_C,
 )
 from gonzales.bvh import BVH2Node, traverse_bvh2_core
 from std.memory.alloc import unsafe_alloc
@@ -24,44 +24,44 @@ comptime NO_CURVES = Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling
 
 def _nested_shared(
     bvh: Pointer[BVH2Node, MutUntrackedOrigin],
-    prims: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    cell: Pointer[Intersection_C, MutUntrackedOrigin],
+    prims: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    cell: Pointer[Intersection, MutUntrackedOrigin],
     org: Point3f, dir: Vec3f,
 ) -> Float32:
     """Traverses through the CALLER'S cell -- the aliasing under test."""
-    var ray = Ray_C(org, dir)
+    var ray = Ray(org, dir)
     cell[unsafe_offset=0].hit = Int8(0)
     traverse_bvh2_core(bvh, prims, meshes, NO_CURVES(), ray, Float32(50), cell)
     return cell[unsafe_offset=0].tHit if cell[unsafe_offset=0].hit != Int8(0) else Float32(-1)
 
 def _nested_private(
     bvh: Pointer[BVH2Node, MutUntrackedOrigin],
-    prims: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    prims: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     org: Point3f, dir: Vec3f,
 ) -> Float32:
     """Same, but with its own local cell -- the fix."""
-    var mine = InlineArray[Intersection_C, 1](fill=Intersection_C(
-        PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
+    var mine = InlineArray[Intersection, 1](fill=Intersection(
+        PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
         Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
     var cell = mine.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-    var ray = Ray_C(org, dir)
+    var ray = Ray(org, dir)
     cell[unsafe_offset=0].hit = Int8(0)
     traverse_bvh2_core(bvh, prims, meshes, NO_CURVES(), ray, Float32(50), cell)
     return cell[unsafe_offset=0].tHit if cell[unsafe_offset=0].hit != Int8(0) else Float32(-1)
 
 def k_single(
     bvh: Pointer[BVH2Node, MutUntrackedOrigin],
-    prims: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    prims: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    scratch: Pointer[Intersection, MutUntrackedOrigin],
     out_buf: Pointer[Float32, MutUntrackedOrigin],
 ):
     if Int(block_idx.x * block_dim.x + thread_idx.x) != 0: return
     var org = Point3f(Float32(0), Float32(0), Float32(-2))
     var dir = Vec3f(Float32(0), Float32(0), Float32(1))
-    var ray = Ray_C(org, dir)
+    var ray = Ray(org, dir)
     scratch[unsafe_offset=0].hit = Int8(0)
     traverse_bvh2_core(bvh, prims, meshes, NO_CURVES(), ray, Float32(1e38), scratch)
     out_buf[unsafe_offset=0] = scratch[unsafe_offset=0].tHit if scratch[unsafe_offset=0].hit != Int8(0) else Float32(-1)
@@ -69,15 +69,15 @@ def k_single(
 
 def k_aliased(
     bvh: Pointer[BVH2Node, MutUntrackedOrigin],
-    prims: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    prims: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    scratch: Pointer[Intersection, MutUntrackedOrigin],
     out_buf: Pointer[Float32, MutUntrackedOrigin],
 ):
     if Int(block_idx.x * block_dim.x + thread_idx.x) != 0: return
     var org = Point3f(Float32(0), Float32(0), Float32(-2))
     var dir = Vec3f(Float32(0), Float32(0), Float32(1))
-    var ray = Ray_C(org, dir)
+    var ray = Ray(org, dir)
     scratch[unsafe_offset=0].hit = Int8(0)
     traverse_bvh2_core(bvh, prims, meshes, NO_CURVES(), ray, Float32(1e38), scratch)
     var inter = scratch[unsafe_offset=0]                     # copy out, as the renderer does
@@ -87,15 +87,15 @@ def k_aliased(
 
 def k_private(
     bvh: Pointer[BVH2Node, MutUntrackedOrigin],
-    prims: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    prims: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    scratch: Pointer[Intersection, MutUntrackedOrigin],
     out_buf: Pointer[Float32, MutUntrackedOrigin],
 ):
     if Int(block_idx.x * block_dim.x + thread_idx.x) != 0: return
     var org = Point3f(Float32(0), Float32(0), Float32(-2))
     var dir = Vec3f(Float32(0), Float32(0), Float32(1))
-    var ray = Ray_C(org, dir)
+    var ray = Ray(org, dir)
     scratch[unsafe_offset=0].hit = Int8(0)
     traverse_bvh2_core(bvh, prims, meshes, NO_CURVES(), ray, Float32(1e38), scratch)
     var inter = scratch[unsafe_offset=0]
@@ -116,18 +116,18 @@ def main() raises:
     pts[unsafe_offset=8]= 0.0; pts[unsafe_offset=9]= 1.0; pts[unsafe_offset=10]=0.0
     var vidx = unsafe_alloc[Int64](3)
     vidx[unsafe_offset=0]=0; vidx[unsafe_offset=1]=1; vidx[unsafe_offset=2]=2
-    var mesh_h = unsafe_alloc[TriangleMesh_C](1)
-    mesh_h[unsafe_offset=0] = TriangleMesh_C(pts, vidx, vidx,
+    var mesh_h = unsafe_alloc[TriangleMesh](1)
+    mesh_h[unsafe_offset=0] = TriangleMesh(pts, vidx, vidx,
         Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=1),
         Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=1))
-    var prim_h = unsafe_alloc[PrimId_C](1)
-    prim_h[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var prim_h = unsafe_alloc[PrimId](1)
+    prim_h[unsafe_offset=0] = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var bvh_h = unsafe_alloc[BVH2Node](1)
     bvh_h[unsafe_offset=0] = BVH2Node(Point3f(-1.1,-1.1,-0.1), Point3f(1.1,1.1,0.1), Int32(0), Int32(1))
 
     if mode == "cpu":
-        var cell = unsafe_alloc[Intersection_C](1)
-        var ray = Ray_C(Point3f(0,0,-2), Vec3f(0,0,1))
+        var cell = unsafe_alloc[Intersection](1)
+        var ray = Ray(Point3f(0,0,-2), Vec3f(0,0,1))
         cell[unsafe_offset=0].hit = Int8(0)
         traverse_bvh2_core(bvh_h, prim_h, mesh_h, NO_CURVES(), ray, Float32(1e38), cell)
         print("CPU: hit=", Int(cell[unsafe_offset=0].hit), " tHit=", cell[unsafe_offset=0].tHit, " (expect hit=1 tHit=2)")
@@ -148,29 +148,29 @@ def main() raises:
         var p = h.unsafe_ptr()
         for i in range(3): p[unsafe_offset=i] = vidx[unsafe_offset=i]
     ctx.synchronize()
-    var mesh_d = ctx.enqueue_create_buffer[DType.uint8](size_of[TriangleMesh_C]())
+    var mesh_d = ctx.enqueue_create_buffer[DType.uint8](size_of[TriangleMesh]())
     with mesh_d.map_to_host() as h:
-        h.unsafe_ptr().unsafe_bitcast[TriangleMesh_C]()[unsafe_offset=0] = TriangleMesh_C(
+        h.unsafe_ptr().unsafe_bitcast[TriangleMesh]()[unsafe_offset=0] = TriangleMesh(
             pts_d.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin](),
             vi_d.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_origin_cast[MutUntrackedOrigin](),
             vi_d.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_origin_cast[MutUntrackedOrigin](),
             Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=1),
             Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=1))
-    var prim_d = ctx.enqueue_create_buffer[DType.uint8](size_of[PrimId_C]())
+    var prim_d = ctx.enqueue_create_buffer[DType.uint8](size_of[PrimId]())
     with prim_d.map_to_host() as h:
-        h.unsafe_ptr().unsafe_bitcast[PrimId_C]()[unsafe_offset=0] = prim_h[unsafe_offset=0]
+        h.unsafe_ptr().unsafe_bitcast[PrimId]()[unsafe_offset=0] = prim_h[unsafe_offset=0]
     var bvh_d = ctx.enqueue_create_buffer[DType.uint8](size_of[BVH2Node]())
     with bvh_d.map_to_host() as h:
         h.unsafe_ptr().unsafe_bitcast[BVH2Node]()[unsafe_offset=0] = bvh_h[unsafe_offset=0]
-    var scr_d = ctx.enqueue_create_buffer[DType.uint8](size_of[Intersection_C]())
+    var scr_d = ctx.enqueue_create_buffer[DType.uint8](size_of[Intersection]())
     var out_d = ctx.enqueue_create_buffer[DType.float32](2)
     out_d.enqueue_fill(Float32(-99))
     ctx.synchronize()
 
     var B = bvh_d.unsafe_ptr().unsafe_bitcast[BVH2Node]()
-    var P = prim_d.unsafe_ptr().unsafe_bitcast[PrimId_C]()
-    var M = mesh_d.unsafe_ptr().unsafe_bitcast[TriangleMesh_C]()
-    var S = scr_d.unsafe_ptr().unsafe_bitcast[Intersection_C]()
+    var P = prim_d.unsafe_ptr().unsafe_bitcast[PrimId]()
+    var M = mesh_d.unsafe_ptr().unsafe_bitcast[TriangleMesh]()
+    var S = scr_d.unsafe_ptr().unsafe_bitcast[Intersection]()
     var O = out_d.unsafe_ptr()
 
     print("mode:", mode)
@@ -186,7 +186,7 @@ def main() raises:
         print("  outer t=", p[unsafe_offset=0], "  nested t=", p[unsafe_offset=1])
     print("  OK: no illegal access")
     # Keep-alives. Mojo destroys ASAP: pts_d and vi_d are last *used* when
-    # their device addresses get stored into mesh_d's TriangleMesh_C, so
+    # their device addresses get stored into mesh_d's TriangleMesh, so
     # without this the compiler is free to free those buffers before the
     # kernel runs, leaving those stored pointers dangling -- which faults as
     # CUDA_ERROR_ILLEGAL_ADDRESS and looks exactly like the bug under test.

@@ -4,17 +4,17 @@
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, TestSuite
 from gonzales.geometry import Vec3f
-from gonzales.primitives import TriangleMesh_C, alpha_killed
+from gonzales.primitives import TriangleMesh, alpha_killed
 
 
 def _mesh(mask: Pointer[UInt8, MutUntrackedOrigin], w: Int32, h: Int32,
-          alpha_const: Float32) -> TriangleMesh_C:
+          alpha_const: Float32) -> TriangleMesh:
     """One triangle with no UVs, so pbrt's default (0,0) (1,0) (1,1)
     parameterisation applies: barycentrics (bu, bv) land at
     uv = (bu + bv, bv)."""
     var vidx = unsafe_alloc[Int64](3)
     vidx[unsafe_offset=0] = 0; vidx[unsafe_offset=1] = 1; vidx[unsafe_offset=2] = 2
-    return TriangleMesh_C(
+    return TriangleMesh(
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), vidx,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),

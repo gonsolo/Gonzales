@@ -4,7 +4,7 @@ from std.testing import assert_true, TestSuite
 from gonzales.geometry import Point3f, Vec3f, RGB, dot, cross
 from gonzales.materials import Material_C, MatKind
 from gonzales.render_state import PathState_C
-from gonzales.primitives import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Sphere_C
+from gonzales.primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere
 from gonzales.lights import AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, LightSampler_C
 from gonzales.curves import Curve_C, curve_bspline_point, curve_light_tube_area, _curve_perp_axis
 from gonzales.spectrum import SpectralSample, SampledWavelengths
@@ -22,7 +22,7 @@ def _close(a: Float32, b: Float32) -> Bool:
 # spectrum.mojo's conversions carry plain R/G/B on lanes v0/v1/v2 (see
 # rgb_to_spectral_sample's table-less fallback) -- so the assertions below
 # read those lanes and mean exactly what the old RGB assertions meant.
-def _dummy_path(ray: Ray_C, throughput: SpectralSample) -> PathState_C:
+def _dummy_path(ray: Ray, throughput: SpectralSample) -> PathState_C:
     return PathState_C(
         ray, throughput, SpectralSample(Float32(0.0)), RGB(Float32(0.0)),
         Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
@@ -55,22 +55,22 @@ def test_emissive_curve_hit_adds_emission_and_retires_path() raises:
         RGB(Float32(1.0)),   # sss_mean_refl (inert)
     )
 
-    var ray = Ray_C(Point3f(0.2, 0.2, -5.0), Vec3f(0.0, 0.0, 1.0))
-    var inter = Intersection_C(
-        PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(5), Int8(0), Int8(0), Int8(0)),
+    var ray = Ray(Point3f(0.2, 0.2, -5.0), Vec3f(0.0, 0.0, 1.0))
+    var inter = Intersection(
+        PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(5), Int8(0), Int8(0), Int8(0)),
         Float32(5.0), Float32(0.0), Float32(0.5), Int8(1), Int8(0), Int8(0), Int8(0),
     )
 
     var paths = unsafe_alloc[PathState_C](1)
-    var intersections = unsafe_alloc[Intersection_C](1)
+    var intersections = unsafe_alloc[Intersection](1)
     paths[unsafe_offset=0] = _dummy_path(ray, SpectralSample(Float32(0.5)))
     intersections[unsafe_offset=0] = inter
 
     shade_core_cpu_nee(
         paths, intersections,
         Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[PrimId_C, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[TriangleMesh_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
         materials,
         Pointer[AreaLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
@@ -79,7 +79,7 @@ def test_emissive_curve_hit_adds_emission_and_retires_path() raises:
         Pointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
         Pointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
         Pointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), 0,
         LightSampler_C(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
         Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(),
         null_guide(),
@@ -156,14 +156,14 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
 
     var t_hit: Float32 = 5.0
     var pdf_bsdf: Float32 = 0.4
-    var ray = Ray_C(Point3f(0.0, 0.0, 0.0), Vec3f(ray_dir[0], ray_dir[1], ray_dir[2]))
-    var inter = Intersection_C(
-        PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(5), Int8(0), Int8(0), Int8(0)),
+    var ray = Ray(Point3f(0.0, 0.0, 0.0), Vec3f(ray_dir[0], ray_dir[1], ray_dir[2]))
+    var inter = Intersection(
+        PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(5), Int8(0), Int8(0), Int8(0)),
         t_hit, Float32(0.0), Float32(0.5), Int8(1), Int8(0), Int8(0), Int8(0),
     )
 
     var paths = unsafe_alloc[PathState_C](1)
-    var intersections = unsafe_alloc[Intersection_C](1)
+    var intersections = unsafe_alloc[Intersection](1)
     paths[unsafe_offset=0] = PathState_C(
         ray, SpectralSample(Float32(0.5)), SpectralSample(Float32(0.0)), RGB(Float32(0.0)),
         Int32(1),  # bounce > 0: NOT the "camera sees light directly" shortcut
@@ -179,8 +179,8 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
     shade_core_cpu_nee(
         paths, intersections,
         Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[PrimId_C, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[TriangleMesh_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(),
         curves,
         materials,
         area_lights, 1,
@@ -189,7 +189,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
         Pointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
         Pointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
         Pointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), 0,
         light_sampler,
         Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(),
         null_guide(),

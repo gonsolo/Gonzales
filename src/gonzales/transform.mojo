@@ -15,7 +15,7 @@ struct Mat4(TrivialRegisterPassable):
     SIMD[DType.float32, 16]) instead of calling one shared type.
 
     NOT the only matrix representation in this codebase, and deliberately
-    not trying to be: Instance_C.objToWorld/worldToObj are already
+    not trying to be: Instance.objToWorld/worldToObj are already
     SIMD[DType.float32, 16] for GPU throughput reasons of their own (many
     per scene, TrivialRegisterPassable so they cross kernel boundaries by
     value), and transform.mojo's transform_points/transform_normals below
@@ -212,7 +212,7 @@ def transform_normal_by_instance(
     n: Vec3f,
 ) -> Vec3f:
     """Same formula as transform_normals below (there: pointer-based, bulk;
-    here: a single normal via an Instance_C's worldToObj, which already IS
+    here: a single normal via an Instance's worldToObj, which already IS
     the "inverse" that function expects as its `inv_matrix` argument)."""
     var nx = n[0]; var ny = n[1]; var nz = n[2]
     var wx = world_to_obj[0]*nx + world_to_obj[4]*ny + world_to_obj[8]*nz

@@ -18,7 +18,7 @@ from .geometry import face_toward, RGB, Point3f, Point2f, Vec3f, vec3f, point3f,
 from .render_state import PDF_DROP_DIRECT, PDF_VOL_PHASE_HIT
 from .materials import Material_C, MatKind, LobeKind, PhotonKind, MeasuredBRDF_C, fr_dielectric, cos_theta_t_dielectric, coat_beer_lambert_tr, DEFAULT_COAT_THICKNESS
 from .render_state import GpuTexture_C
-from .primitives import Ray_C, Intersection_C, TriangleMesh_C, Sphere_C, PrimId_C, Instance_C, sphere_outward_normal
+from .primitives import Ray, Intersection, TriangleMesh, Sphere, PrimId, Instance, sphere_outward_normal
 from .media import Medium_C, MediumInterface_C, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, SSS_WALK_ROUNDS, Grid_C, NvdbGrid_C, spectral_free_flight_weight
 from .lights import area_light_pick_triangle, AreaLight_C, DistantLight_C, InfiniteLight_C, PointLight_C
 from .curves import Curve_C
@@ -259,12 +259,12 @@ def _visible_transmittance(
     a: Point3f, b: Point3f,
     med_idx: Int32,
     ref sd:      SceneDescriptor2_C,
-    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    scratch: Pointer[Intersection, MutUntrackedOrigin],
     wl:      SampledWavelengths,
 ) -> SpectralSample:
     """Returns transmittance along segment AB, spectrally, or black if
     occluded. Glass (dielectric) surfaces are passed through with Fresnel
-    transmittance. `scratch` is one caller-owned Intersection_C slot (no
+    transmittance. `scratch` is one caller-owned Intersection slot (no
     internal alloc/free) so this is safe to call from a GPU kernel thread —
     every existing GPU kernel in this codebase takes pre-allocated,
     thread-indexed scratch instead of allocating per-thread (see
@@ -292,13 +292,13 @@ def _visible_transmittance(
     # Private local slot instead of the caller's `scratch`. The caller's slot
     # is simultaneously live in the enclosing traversal that called us, and
     # writing through both aliases is what the GPU build faults on.
-    var _local_inter = Array[Intersection_C, 1](fill=Intersection_C(
-        PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
+    var _local_inter = Array[Intersection, 1](fill=Intersection(
+        PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
         Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
     var inter_mem = _local_inter.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
     for _ in range(8):
         if remaining < Float32(1e-4): break
-        var ray = Ray_C(org, Vec3f(dir[0], dir[1], dir[2]))
+        var ray = Ray(org, Vec3f(dir[0], dir[1], dir[2]))
         inter_mem[unsafe_offset=0].hit = Int8(0)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, remaining * Float32(0.9995), inter_mem,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
@@ -475,7 +475,7 @@ def _bdpt_nee_contribute(
     gn: Vec3f,
     cur_med_idx: Int32,
     ref sd: SceneDescriptor2_C,
-    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    scratch: Pointer[Intersection, MutUntrackedOrigin],
     wl: SampledWavelengths,
     eps: Float32 = Float32(0.0001),
     two_sided: Bool = False,
@@ -579,11 +579,11 @@ def _bdpt_mnee_diffuse_area_light(
     var shadow_dir = to_light * (Float32(1) / dist)
 
     var probe_org = hit_v + shadow_dir * Float32(0.0002)
-    var probe_ray = Ray_C(Point3f(probe_org[0], probe_org[1], probe_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+    var probe_ray = Ray(Point3f(probe_org[0], probe_org[1], probe_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
     var probe_tmax = dist * Float32(0.9995)
-    var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    var dummy_inter = Intersection_C(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
-    var probe_store = Array[Intersection_C, 1](fill=dummy_inter)
+    var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var dummy_inter = Intersection(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+    var probe_store = Array[Intersection, 1](fill=dummy_inter)
     traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr(),
                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
     var probe_inter = probe_store[0]
@@ -621,8 +621,8 @@ def _bdpt_mnee_diffuse_area_light(
     var probe2_org = x1_init + shadow_dir * Float32(0.0005)
     var probe2_inter = dummy_inter
     if probe2_rem > Float32(0.001):
-        var probe2_ray = Ray_C(Point3f(probe2_org[0], probe2_org[1], probe2_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-        var probe2_store = Array[Intersection_C, 1](fill=dummy_inter)
+        var probe2_ray = Ray(Point3f(probe2_org[0], probe2_org[1], probe2_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+        var probe2_store = Array[Intersection, 1](fill=dummy_inter)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr(),
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         probe2_inter = probe2_store[0]
@@ -673,7 +673,7 @@ def _bdpt_mnee_diffuse_area_light(
                 return SpectralSample(Float32(0))
             var wo2fn = wo2f * (Float32(1) / wo2fl)
             var vis2_org = x2_f2 + wo2fn * Float32(0.001)
-            var vis2_ray = Ray_C(Point3f(vis2_org[0], vis2_org[1], vis2_org[2]), Vec3f(wo2fn[0], wo2fn[1], wo2fn[2]))
+            var vis2_ray = Ray(Point3f(vis2_org[0], vis2_org[1], vis2_org[2]), Vec3f(wo2fn[0], wo2fn[1], wo2fn[2]))
             if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis2_ray, wo2fl * Float32(0.999),
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                                   sd.spheres, Int(sd.sphereCount)):
@@ -735,7 +735,7 @@ def _bdpt_mnee_diffuse_area_light(
         var bsdf_s = T_f * cosHI / max(cosNI * cosTM * cosTM, Float32(1e-6))
         var pdf_area_x2 = pdf_sel / al.total_area
         var vis_org = x1_f + wo_fn * Float32(0.001)
-        var vis_ray = Ray_C(Point3f(vis_org[0], vis_org[1], vis_org[2]), Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
+        var vis_ray = Ray(Point3f(vis_org[0], vis_org[1], vis_org[2]), Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
         if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis_ray, wo_len_f * Float32(0.999),
                               sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                               sd.spheres, Int(sd.sphereCount)):
@@ -859,11 +859,11 @@ def _bdpt_mnee_sphere_light(
     var shadow_dir = to_light * (Float32(1) / dist)
 
     var probe_org = hit_v + shadow_dir * Float32(0.0002)
-    var probe_ray = Ray_C(Point3f(probe_org[0], probe_org[1], probe_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+    var probe_ray = Ray(Point3f(probe_org[0], probe_org[1], probe_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
     var probe_tmax = dist * Float32(0.9995)
-    var dummy_prim = PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    var dummy_inter = Intersection_C(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
-    var probe_store = Array[Intersection_C, 1](fill=dummy_inter)
+    var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var dummy_inter = Intersection(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+    var probe_store = Array[Intersection, 1](fill=dummy_inter)
     traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr(),
                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
     var probe_inter = probe_store[0]
@@ -901,8 +901,8 @@ def _bdpt_mnee_sphere_light(
     var probe2_org = x1_init + shadow_dir * Float32(0.0005)
     var probe2_inter = dummy_inter
     if probe2_rem > Float32(0.001):
-        var probe2_ray = Ray_C(Point3f(probe2_org[0], probe2_org[1], probe2_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-        var probe2_store = Array[Intersection_C, 1](fill=dummy_inter)
+        var probe2_ray = Ray(Point3f(probe2_org[0], probe2_org[1], probe2_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+        var probe2_store = Array[Intersection, 1](fill=dummy_inter)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr(),
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         probe2_inter = probe2_store[0]
@@ -953,7 +953,7 @@ def _bdpt_mnee_sphere_light(
                 return SpectralSample(Float32(0))
             var wo2fn = wo2f * (Float32(1) / wo2fl)
             var vis2_org = x2_f2 + wo2fn * Float32(0.001)
-            var vis2_ray = Ray_C(Point3f(vis2_org[0], vis2_org[1], vis2_org[2]), Vec3f(wo2fn[0], wo2fn[1], wo2fn[2]))
+            var vis2_ray = Ray(Point3f(vis2_org[0], vis2_org[1], vis2_org[2]), Vec3f(wo2fn[0], wo2fn[1], wo2fn[2]))
             if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis2_ray, wo2fl * Float32(0.999),
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                                   sd.spheres, Int(sd.sphereCount)):
@@ -1024,7 +1024,7 @@ def _bdpt_mnee_sphere_light(
         var bsdf_s = T_f * cosHI / max(cosNI * cosTM * cosTM, Float32(1e-6))
         var pdf_area_x2 = pdf_sel / total_area
         var vis_org = x1_f + wo_fn * Float32(0.001)
-        var vis_ray = Ray_C(Point3f(vis_org[0], vis_org[1], vis_org[2]), Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
+        var vis_ray = Ray(Point3f(vis_org[0], vis_org[1], vis_org[2]), Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
         if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis_ray, wo_len_f * Float32(0.999),
                               sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                               sd.spheres, Int(sd.sphereCount)):
@@ -1162,7 +1162,7 @@ def _bdpt_splat_filtered[use_atomics: Bool](
 def _bdpt_connect_to_camera(
     lv: BDPTVertex,
     ref sd: SceneDescriptor2_C,
-    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    scratch: Pointer[Intersection, MutUntrackedOrigin],
     cam_pos: Vec3f,
     w2c: Pointer[Float32, MutUntrackedOrigin],
     c2r: Pointer[Float32, MutUntrackedOrigin],
@@ -1290,7 +1290,7 @@ def _bdpt_connect_to_cache(
     cv: BDPTVertex,
     ref sd: SceneDescriptor2_C,
     has_med: Bool,
-    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    scratch: Pointer[Intersection, MutUntrackedOrigin],
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
     lp_idx: Int,
     path_len: Int,
@@ -1882,7 +1882,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     ref sd:      SceneDescriptor2_C,
     mut pcg: PCG32,
     has_med: Bool,
-    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    scratch: Pointer[Intersection, MutUntrackedOrigin],
     lvc:     Pointer[BDPTVertex, MutUntrackedOrigin],
     lp_idx:  Int,
     path_len: Int,
@@ -1958,7 +1958,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     for _ in range(_BDPT_MAX_DEPTH):
         # The same intersect step _bdpt_camera_path_intersect_gpu performs;
         # kept at the call site because it is the Vulkan RT swap point.
-        var ray = Ray_C(ro, rd)
+        var ray = Ray(ro, rd)
         scratch[unsafe_offset=0].hit = Int8(0)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
@@ -2169,8 +2169,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     ref sd:      SceneDescriptor2_C,
     mut pcg: PCG32,
     has_med: Bool,
-    inter: Intersection_C,
-    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    inter: Intersection,
+    scratch: Pointer[Intersection, MutUntrackedOrigin],
     lvc:     Pointer[BDPTVertex, MutUntrackedOrigin],
     lp_idx:  Int,
     path_len: Int,
@@ -2484,7 +2484,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
         # dispatch since the sphere's own material is often an inert
         # placeholder (e.g. pbrt's "Null" material on AreaLightSource
         # spheres), so mat.type never reflects that this primitive emits;
-        # Sphere_C.isAreaLight is the only way to know. MIS-weighted against
+        # Sphere.isAreaLight is the only way to know. MIS-weighted against
         # last_bsdf_pdf — same bookkeeping already used for infinite-light
         # miss-escape, since a competing NEE strategy toward this SAME
         # sphere may have already been taken at the PREVIOUS vertex (see
@@ -2560,7 +2560,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # Direct hit on a triangle/curve area light — same MIS-against-
             # last_bsdf_pdf treatment as the sphere case above. id1 is the
             # AreaLight_C index directly for a type==3 (area-light-triangle)
-            # hit, per pbrt_parser.mojo's own PrimId_C encoding.
+            # hit, per pbrt_parser.mojo's own PrimId encoding.
             # Which light, what it emits, and which side of it is lit all come
             # from the SHARED resolvers (shading.mojo's area_light_hit_cos /
             # curve_light_hit), not from _geom_normal and areaLights[id1]. See
@@ -3400,7 +3400,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
     ref sd:      SceneDescriptor2_C,
     mut pcg: PCG32,
     has_med: Bool,
-    inter: Intersection_C,
+    inter: Intersection,
     lvc:      Pointer[BDPTVertex, MutUntrackedOrigin],
     lp_idx:   Int,
     mis_vc_weight_factor: Float32,
@@ -3846,7 +3846,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
     mut pcg: PCG32,
     has_med: Bool,
     default_emit_med: Int32,
-    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    scratch: Pointer[Intersection, MutUntrackedOrigin],
     lvc:      Pointer[BDPTVertex, MutUntrackedOrigin],
     lp_idx:   Int,
     lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
@@ -3927,7 +3927,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
         # The same intersect step _bdpt_light_path_intersect_gpu performs --
         # kept here rather than inside the bounce because this one step is
         # the eventual Vulkan RT swap point on the wavefront side.
-        var ray = Ray_C(ro, rd)
+        var ray = Ray(ro, rd)
         scratch[unsafe_offset=0].hit = Int8(0)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
@@ -4018,12 +4018,12 @@ def _bdpt_sample_bssrdf_exit(
     var probe_dir = n_in * Float32(-1.0)
     # Private probe slot: the caller's scratch still holds the intersection
     # the enclosing path loop is shading.
-    var _probe_slot = Array[Intersection_C, 1](fill=Intersection_C(
-        PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
+    var _probe_slot = Array[Intersection, 1](fill=Intersection(
+        PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
         Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
     var probe_scratch = _probe_slot.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
     probe_scratch[unsafe_offset=0].hit = Int8(0)
-    var probe_ray = Ray_C(probe_org, probe_dir)
+    var probe_ray = Ray(probe_org, probe_dir)
     traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe_ray, seg_len, probe_scratch,
                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
     test_spheres(sd.spheres, Int(sd.sphereCount), probe_ray, probe_scratch)
@@ -4178,7 +4178,7 @@ def _connect(
     lv: BDPTVertex,  # light-subpath vertex (including light point itself)
     ref sd: SceneDescriptor2_C,
     has_med: Bool,
-    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    scratch: Pointer[Intersection, MutUntrackedOrigin],
     mis_vm_weight_factor: Float32,
 ) -> SpectralSample:
     """Evaluate the contribution of connecting cv to lv via a shadow ray.
@@ -4489,13 +4489,13 @@ def _bdpt_render_core(
     var lvc_cap = n_light_paths_merge * _BDPT_MAX_VERTS
     var lvc = unsafe_alloc[BDPTVertex](max(lvc_cap, 1))
     var lvc_path_len = unsafe_alloc[Int32](max(n_light_paths_merge, 1))
-    # One scratch Intersection_C per concurrent worker (light path / pixel)
+    # One scratch Intersection per concurrent worker (light path / pixel)
     # instead of one shared slot — CPU threads now race on this exactly like
     # GPU threads already do (see _bdpt_emit_light_paths_gpu/
     # _bdpt_camera_connect_gpu's own per-thread inter_light_ptr+k/
     # inter_cam_ptr+pix), so it can no longer be a single reused buffer.
-    var scratch_light = unsafe_alloc[Intersection_C](max(n_light_paths_merge, 1))
-    var scratch_cam = unsafe_alloc[Intersection_C](max(n_pix, 1))
+    var scratch_light = unsafe_alloc[Intersection](max(n_light_paths_merge, 1))
+    var scratch_cam = unsafe_alloc[Intersection](max(n_pix, 1))
 
     # VCM vertex merging: grid buffers allocated once, rebuilt fresh every
     # spp sample (mirrors the LVC itself). Stage 2c: the radius itself is
@@ -4718,7 +4718,7 @@ def _bdpt_emit_light_paths_gpu(
     lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
     mis_vc_weight_factor: Float32,
     mis_vm_weight_factor: Float32,
-    inter_scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    inter_scratch: Pointer[Intersection, MutUntrackedOrigin],
     n_light_paths_dp: Int64,
     default_emit_med: Int32,
     seed: UInt64,
@@ -4762,7 +4762,7 @@ def _bdpt_splat_light_paths_gpu(
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
     lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
     n_light_paths_dp: Int64,
-    inter_scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    inter_scratch: Pointer[Intersection, MutUntrackedOrigin],
     w2c: Pointer[Float32, MutUntrackedOrigin],
     c2r: Pointer[Float32, MutUntrackedOrigin],
     c2w: Pointer[Float32, MutUntrackedOrigin],
@@ -4831,7 +4831,7 @@ def _bdpt_camera_connect_gpu(
     fw_dp: Int64,
     r2c: Pointer[Float32, MutUntrackedOrigin],
     c2w: Pointer[Float32, MutUntrackedOrigin],
-    inter_scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    inter_scratch: Pointer[Intersection, MutUntrackedOrigin],
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
     lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
     merge_next: Pointer[Int32, MutUntrackedOrigin],
@@ -4914,7 +4914,7 @@ def _bdpt_camera_connect_gpu(
 # `test_spheres` (NOT gpu.mojo's curve-deferred `traverse_bvh2_core_defer_
 # curves`/`traverse_paths_gpu` machinery) -- matching exactly what
 # `_bdpt_light_path_bounce`/`_bdpt_camera_path_bounce` themselves expect
-# (a single resolved Intersection_C, no deferred-curve candidate list) and
+# (a single resolved Intersection, no deferred-curve candidate list) and
 # what the CPU-side split functions' own equivalence tests already verified
 # against. This is a deliberate, first-pass scope match to
 # `_bdpt_emit_light_paths_gpu`'s existing intersect behavior -- swapping
@@ -4951,7 +4951,7 @@ def _bdpt_light_path_init_gpu(
 def _bdpt_light_path_intersect_gpu(
     sd: SceneDescriptor2_C,
     states: Pointer[VCMLightPathState_C, MutUntrackedOrigin],
-    results: Pointer[Intersection_C, MutUntrackedOrigin],
+    results: Pointer[Intersection, MutUntrackedOrigin],
     count_dp: Int64,
 ):
     """Batched-per-thread primary/bounce-ray intersect for one light-path
@@ -4965,7 +4965,7 @@ def _bdpt_light_path_intersect_gpu(
         return
     if states[unsafe_offset=tid].active == Int8(0):
         return
-    var ray = Ray_C(states[unsafe_offset=tid].ro, states[unsafe_offset=tid].rd)
+    var ray = Ray(states[unsafe_offset=tid].ro, states[unsafe_offset=tid].rd)
     results[unsafe_offset=tid].hit = Int8(0)
     traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), results.unsafe_offset(tid),
                         sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
@@ -4973,7 +4973,7 @@ def _bdpt_light_path_intersect_gpu(
 
 def _bdpt_light_path_bounce_gpu(
     states: Pointer[VCMLightPathState_C, MutUntrackedOrigin],
-    results: Pointer[Intersection_C, MutUntrackedOrigin],
+    results: Pointer[Intersection, MutUntrackedOrigin],
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
     lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
     mis_vc_weight_factor: Float32,
@@ -4986,7 +4986,7 @@ def _bdpt_light_path_bounce_gpu(
     sd: SceneDescriptor2_C,
 ):
     """One bounce's material dispatch for one light path, reading the
-    Intersection_C _bdpt_light_path_intersect_gpu already computed this
+    Intersection _bdpt_light_path_intersect_gpu already computed this
     depth level instead of tracing it inline -- see this section's opening
     comment."""
     var mediumCount = sd.mediumCount
@@ -5071,7 +5071,7 @@ def _bdpt_camera_path_init_gpu(
 def _bdpt_camera_path_intersect_gpu(
     sd: SceneDescriptor2_C,
     states: Pointer[VCMCameraPathState_C, MutUntrackedOrigin],
-    results: Pointer[Intersection_C, MutUntrackedOrigin],
+    results: Pointer[Intersection, MutUntrackedOrigin],
     count_dp: Int64,
 ):
     """Camera-path counterpart to _bdpt_light_path_intersect_gpu -- see its
@@ -5082,7 +5082,7 @@ def _bdpt_camera_path_intersect_gpu(
         return
     if states[unsafe_offset=tid].active == Int8(0):
         return
-    var ray = Ray_C(states[unsafe_offset=tid].ro, states[unsafe_offset=tid].rd)
+    var ray = Ray(states[unsafe_offset=tid].ro, states[unsafe_offset=tid].rd)
     results[unsafe_offset=tid].hit = Int8(0)
     traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), results.unsafe_offset(tid),
                         sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
@@ -5090,7 +5090,7 @@ def _bdpt_camera_path_intersect_gpu(
 
 def _bdpt_camera_path_bounce_gpu(
     states: Pointer[VCMCameraPathState_C, MutUntrackedOrigin],
-    results: Pointer[Intersection_C, MutUntrackedOrigin],
+    results: Pointer[Intersection, MutUntrackedOrigin],
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
     lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
     merge_next: Pointer[Int32, MutUntrackedOrigin],
@@ -5119,7 +5119,7 @@ def _bdpt_camera_path_bounce_gpu(
     """One bounce's material dispatch (incl. NEE/connect/merge/MNEE, all
     still on the existing software-BVH `results + pix` scratch slot -- see
     this section's opening comment) for one camera path, reading the
-    Intersection_C _bdpt_camera_path_intersect_gpu already computed this
+    Intersection _bdpt_camera_path_intersect_gpu already computed this
     depth level."""
     var mediumCount = sd.mediumCount
     var spectral_res_dp = Int64(sd.spectral.res)
@@ -5224,7 +5224,7 @@ def _bdpt_camera_path_accumulate_gpu(
 # vulkaninterop_rt_traverse_paths_gpu exactly, just reading ro/rd from
 # VCMLightPathState_C/VCMCameraPathState_C instead of PathState_C.ray --
 # vulkaninterop_unpack_results_kernel itself is reused UNCHANGED from
-# gpu.mojo for both (its output is always a plain Intersection_C, with no
+# gpu.mojo for both (its output is always a plain Intersection, with no
 # dependency on which subpath produced the ray). Scope: triangle geometry
 # only, matching vulkaninterop_rt_create_scene -- callers must only use
 # this for scenes with no curves/spheres/object instancing (same boundary
@@ -5304,7 +5304,7 @@ def vulkaninterop_rt_traverse_light_paths_gpu(
     # this is always the inert dangling default.
     ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
         interop_results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         mesh_material_idx_buf.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         Int64(n_meshes),
@@ -5345,7 +5345,7 @@ def vulkaninterop_rt_traverse_camera_paths_gpu(
     # this is always the inert dangling default.
     ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
         interop_results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         mesh_material_idx_buf.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         Int64(n_meshes),
@@ -5398,7 +5398,7 @@ def vulkaninterop_rt_traverse_shadow_gpu(
     # Perf (2026-07-13): pack -> trace only, no unpack step -- the caller's
     # resolve_shadow_connect_gpu reads interop_results_buf's raw float
     # layout directly (it only needs hit/material-index, not a full
-    # reconstructed Intersection_C). ONE dispatch over ALL
+    # reconstructed Intersection). ONE dispatch over ALL
     # n_pix*_BDPT_MAX_VERTS shadow-ray slots (see
     # vulkaninterop_pack_all_shadow_rays_kernel above) -- requires the
     # interop scene's ray capacity to have been sized for that (see
@@ -5517,8 +5517,8 @@ def vcm_render_gpu(
             # The previous pass's table, kept intact for _vcm_keep; the two swap each pass.
             var merge_heads_buf_prev = handle[].ctx.enqueue_create_buffer[DType.uint8](2 * _HSIZE * size_of[Int32]())
             var merge_next_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(lvc_cap, 1) * size_of[Int32]())
-            var inter_light_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[Intersection_C]())
-            var inter_cam_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection_C]())
+            var inter_light_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[Intersection]())
+            var inter_cam_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection]())
             var accum_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
             with accum_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
@@ -5584,8 +5584,8 @@ def vcm_render_gpu(
             var merge_heads_ptr_a = merge_heads_buf.unsafe_ptr().unsafe_bitcast[Int32]()
             var merge_heads_ptr_b = merge_heads_buf_prev.unsafe_ptr().unsafe_bitcast[Int32]()
             var merge_next_ptr  = merge_next_buf.unsafe_ptr().unsafe_bitcast[Int32]()
-            var inter_light_ptr = inter_light_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]()
-            var inter_cam_ptr   = inter_cam_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]()
+            var inter_light_ptr = inter_light_buf.unsafe_ptr().unsafe_bitcast[Intersection]()
+            var inter_cam_ptr   = inter_cam_buf.unsafe_ptr().unsafe_bitcast[Intersection]()
             var accum_ptr   = accum_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             var albedo_accum_ptr = albedo_accum_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             var r2c_ptr = r2c_buf.unsafe_ptr().unsafe_bitcast[Float32]()
@@ -5837,11 +5837,11 @@ def resolve_shadow_connect_gpu(
     #
     # Reads the RAW interop trace output directly (same idx*8 float layout
     # vulkaninterop_unpack_results_kernel consumes) instead of going
-    # through a separate unpack-into-Intersection_C kernel first -- this
+    # through a separate unpack-into-Intersection kernel first -- this
     # kernel only ever needs hit/material-index, not the full reconstructed
-    # Intersection_C (uv/mesh/tri/area-light-index).
+    # Intersection (uv/mesh/tri/area-light-index).
     #
-    # `scratch` is a SEPARATE Intersection_C buffer, sized for
+    # `scratch` is a SEPARATE Intersection buffer, sized for
     # n_pix*_BDPT_MAX_VERTS (one slot PER THREAD, offset by `tid` below) for
     # _visible_transmittance's own internal multi-round tracing in the
     # fallback path -- must not alias `shadow_pending`/`shadow_valid`/
@@ -5854,7 +5854,7 @@ def resolve_shadow_connect_gpu(
     shadow_valid: Pointer[Int8, MutUntrackedOrigin],
     shadow_seg_med: Pointer[Int32, MutUntrackedOrigin],
     shadow_rays: Pointer[Float32, MutUntrackedOrigin],
-    scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    scratch: Pointer[Intersection, MutUntrackedOrigin],
     count_dp: Int64,
     sd: SceneDescriptor2_C,
 ):
@@ -6011,8 +6011,8 @@ def vcm_render_gpu_wavefront(
             # The previous pass's table, kept intact for _vcm_keep; the two swap each pass.
             var merge_heads_buf_prev = handle[].ctx.enqueue_create_buffer[DType.uint8](2 * _HSIZE * size_of[Int32]())
             var merge_next_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(lvc_cap, 1) * size_of[Int32]())
-            var inter_light_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[Intersection_C]())
-            var inter_cam_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection_C]())
+            var inter_light_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[Intersection]())
+            var inter_cam_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection]())
             var light_states_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[VCMLightPathState_C]())
             var cam_states_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[VCMCameraPathState_C]())
             # Task #163 stage 5: diffuse-branch connect shadow-ray queue,
@@ -6025,12 +6025,12 @@ def vcm_render_gpu_wavefront(
             var shadow_pending_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(shadow_cap, 1) * size_of[SpectralSample]())
             var shadow_valid_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](max(shadow_cap, 1) * size_of[Int8]())
             var shadow_seg_med_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(shadow_cap, 1) * size_of[Int32]())
-            # One Intersection_C scratch slot PER THREAD (not per pixel) for
+            # One Intersection scratch slot PER THREAD (not per pixel) for
             # resolve_shadow_connect_gpu's _visible_transmittance fallback
             # call -- inter_light_buf (sized n_light_paths_merge) is too
             # small now that resolve dispatches n_pix*_BDPT_MAX_VERTS
             # threads in one go (2026-07-13 perf follow-up).
-            var shadow_scratch_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(shadow_cap, 1) * size_of[Intersection_C]())
+            var shadow_scratch_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(shadow_cap, 1) * size_of[Intersection]())
             var accum_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
             with accum_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
@@ -6060,15 +6060,15 @@ def vcm_render_gpu_wavefront(
             var merge_heads_ptr_a = merge_heads_buf.unsafe_ptr().unsafe_bitcast[Int32]()
             var merge_heads_ptr_b = merge_heads_buf_prev.unsafe_ptr().unsafe_bitcast[Int32]()
             var merge_next_ptr  = merge_next_buf.unsafe_ptr().unsafe_bitcast[Int32]()
-            var inter_light_ptr = inter_light_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]()
-            var inter_cam_ptr   = inter_cam_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]()
+            var inter_light_ptr = inter_light_buf.unsafe_ptr().unsafe_bitcast[Intersection]()
+            var inter_cam_ptr   = inter_cam_buf.unsafe_ptr().unsafe_bitcast[Intersection]()
             var light_states_ptr = light_states_buf.unsafe_ptr().unsafe_bitcast[VCMLightPathState_C]()
             var cam_states_ptr   = cam_states_buf.unsafe_ptr().unsafe_bitcast[VCMCameraPathState_C]()
             var shadow_rays_ptr    = shadow_rays_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             var shadow_pending_ptr = shadow_pending_buf.unsafe_ptr().unsafe_bitcast[SpectralSample]()
             var shadow_valid_ptr   = shadow_valid_buf.unsafe_ptr().unsafe_bitcast[Int8]()
             var shadow_seg_med_ptr = shadow_seg_med_buf.unsafe_ptr().unsafe_bitcast[Int32]()
-            var shadow_scratch_ptr = shadow_scratch_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]()
+            var shadow_scratch_ptr = shadow_scratch_buf.unsafe_ptr().unsafe_bitcast[Intersection]()
             # Task #163 stage 5 perf fix #3 (2026-07-13): scene-adaptive
             # shadow-ray batching. Investigation (dragon vs cornell-box)
             # found the one-shot n_pix*_BDPT_MAX_VERTS dispatch (perf fix
@@ -6492,7 +6492,7 @@ def sppm_reset_i32_gpu(counter: Pointer[Int32, MutUntrackedOrigin]):
 
 def sppm_gen_vp_gpu(
     vps: Pointer[SPPMPixel, MutUntrackedOrigin],
-    inter_scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    inter_scratch: Pointer[Intersection, MutUntrackedOrigin],
     n_pix_dp: Int64,
     vp_samples_dp: Int64,
     fw: Int32,
@@ -6523,7 +6523,7 @@ def sppm_emit_photons_gpu(
     photons: Pointer[SPPMPhoton, MutUntrackedOrigin],
     n_emit_dp: Int64,
     max_photons_dp: Int64,
-    inter_scratch: Pointer[Intersection_C, MutUntrackedOrigin],
+    inter_scratch: Pointer[Intersection, MutUntrackedOrigin],
     stored_counter: Pointer[Int32, MutUntrackedOrigin],
     default_emit_med: Int32,
     seed: UInt64,
@@ -6565,7 +6565,7 @@ def sppm_emit_photons_gpu(
     var pass_idx = Int(pass_idx_dp)
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
     # sphereCount is part of the test because an analytic sphere can BE the
-    # scene's only light (Sphere_C.isAreaLight); leaving it out made this
+    # scene's only light (Sphere.isAreaLight); leaving it out made this
     # kernel return before emitting a single photon there, so SPPM fell back
     # to visible-point NEE alone. _sppm_trace_photon does the exact
     # "is any sphere emitting" scan and returns on its own if none is.
@@ -6798,8 +6798,8 @@ def sppm_render_gpu(
             var vps_buf     = handle[].ctx.enqueue_create_buffer[DType.uint8](n_vps * size_of[SPPMPixel]())
             var photons_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(max_photons, 1) * size_of[SPPMPhoton]())
             var heads_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](_HSIZE * size_of[Int32]())
-            var inter_cam_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_vps * size_of[Intersection_C]())
-            var inter_ph_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_photons_per_pass, 1) * size_of[Intersection_C]())
+            var inter_cam_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_vps * size_of[Intersection]())
+            var inter_ph_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_photons_per_pass, 1) * size_of[Intersection]())
             var counter_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](size_of[Int32]())
             var out_buf     = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
             var albedo_out_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
@@ -6820,8 +6820,8 @@ def sppm_render_gpu(
             var vps_ptr    = vps_buf.unsafe_ptr().unsafe_bitcast[SPPMPixel]().unsafe_origin_cast[MutUntrackedOrigin]()
             var photons_ptr = photons_buf.unsafe_ptr().unsafe_bitcast[SPPMPhoton]().unsafe_origin_cast[MutUntrackedOrigin]()
             var heads_ptr  = heads_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_origin_cast[MutUntrackedOrigin]()
-            var inter_cam_ptr = inter_cam_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_origin_cast[MutUntrackedOrigin]()
-            var inter_ph_ptr  = inter_ph_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_origin_cast[MutUntrackedOrigin]()
+            var inter_cam_ptr = inter_cam_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_origin_cast[MutUntrackedOrigin]()
+            var inter_ph_ptr  = inter_ph_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_origin_cast[MutUntrackedOrigin]()
             var counter_ptr = counter_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_origin_cast[MutUntrackedOrigin]()
             var out_ptr     = out_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin]()
             var albedo_out_ptr = albedo_out_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin]()

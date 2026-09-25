@@ -11,7 +11,7 @@ from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, Point3f, Vec3f
 from gonzales.materials import Material_C, MatKind, MeasuredBRDF_C
 from gonzales.render_state import GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, PathState_C
-from gonzales.primitives import Ray_C, PrimId_C, TriangleMesh_C, Instance_C, Sphere_C
+from gonzales.primitives import Ray, PrimId, TriangleMesh, Instance, Sphere
 from gonzales.lights import LightSampler_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C
 from gonzales.curves import Curve_C
 from gonzales.spectrum import SpectralSample, null_spectral_handle, SampledWavelengths
@@ -28,14 +28,14 @@ comptime EPS: Float32 = 1e-4
 def _close(a: Float32, b: Float32) -> Bool:
     return abs(a - b) < EPS
 
-def _make_triangle_mesh(p0: Vec3f, p1: Vec3f, p2: Vec3f) -> TriangleMesh_C:
+def _make_triangle_mesh(p0: Vec3f, p1: Vec3f, p2: Vec3f) -> TriangleMesh:
     var points = unsafe_alloc[Float32](4 * 3)
     points[unsafe_offset=0*4+0] = p0[0]; points[unsafe_offset=0*4+1] = p0[1]; points[unsafe_offset=0*4+2] = p0[2]; points[unsafe_offset=0*4+3] = Float32(0.0)
     points[unsafe_offset=1*4+0] = p1[0]; points[unsafe_offset=1*4+1] = p1[1]; points[unsafe_offset=1*4+2] = p1[2]; points[unsafe_offset=1*4+3] = Float32(0.0)
     points[unsafe_offset=2*4+0] = p2[0]; points[unsafe_offset=2*4+1] = p2[1]; points[unsafe_offset=2*4+2] = p2[2]; points[unsafe_offset=2*4+3] = Float32(0.0)
     var vidx = unsafe_alloc[Int64](3)
     vidx[unsafe_offset=0] = 0; vidx[unsafe_offset=1] = 1; vidx[unsafe_offset=2] = 2
-    return TriangleMesh_C(
+    return TriangleMesh(
         points, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), vidx,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
@@ -55,8 +55,8 @@ def _make_dielectric(ior: Float32) -> Material_C:
 
 def _make_ctx(
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    primIds: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     materials: Pointer[Material_C, MutUntrackedOrigin],
     area_lights: Pointer[AreaLight_C, MutUntrackedOrigin],
     area_light_count: Int,
@@ -79,11 +79,11 @@ def _make_ctx(
             Pointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
             Pointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
             Pointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-            Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+            Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), 0,
             LightSampler_C(light_sampler_cdf, Int32(area_light_count), Int32(0))),
         Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
         null_spectral_handle(),
         Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
@@ -97,7 +97,7 @@ def _make_ctx(
 # (target-pdf evaluation + reservoir streaming + field population) on top
 # of it. ──────────────────────────────────────────────────────────────────
 
-def _make_light_mesh() -> TriangleMesh_C:
+def _make_light_mesh() -> TriangleMesh:
     # Winding chosen so cross(p1-p0, p2-p0) points -Z (roughly toward the
     # origin, where every fixture's hit_point sits) -- _nee_area_lights'
     # own cos_l = -dot(light_normal, shadow_dir) gate needs the light's
@@ -111,7 +111,7 @@ def _make_light_mesh() -> TriangleMesh_C:
         Vec3f(Float32(0.299), Float32(-0.199), Float32(4.0)),
         Vec3f(Float32(0.301), Float32(-0.201), Float32(4.0)))
 
-def _make_glass_mesh() -> TriangleMesh_C:
+def _make_glass_mesh() -> TriangleMesh:
     # A right triangle with generous legs (20 units) so the ray's crossing
     # point at (~0.075,~-0.05,1) sits comfortably inside (u+v~0.50), not
     # near the hypotenuse -- a first version of this fixture used 10-unit
@@ -132,8 +132,8 @@ def test_sms_generate_curve_light_returns_empty() raises:
     area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0)), Float32(0.000002), Int8(1), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx(
         Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[PrimId_C, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[TriangleMesh_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Material_C, MutUntrackedOrigin].unsafe_dangling(),
         area_lights, 1, cdf)
 
@@ -155,9 +155,9 @@ def test_sms_generate_no_glass_in_the_way_returns_empty() raises:
     cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var bvh = unsafe_alloc[BVH2Node](1)
     bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(1000.0, 1000.0, 1000.0), Vec3f(1001.0, 1001.0, 1001.0))
-    var primIds = unsafe_alloc[PrimId_C](1)
-    primIds[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    var meshes = unsafe_alloc[TriangleMesh_C](1)
+    var primIds = unsafe_alloc[PrimId](1)
+    primIds[unsafe_offset=0] = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = _make_light_mesh()
     var area_lights = unsafe_alloc[AreaLight_C](1)
     area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
@@ -187,9 +187,9 @@ def test_sms_generate_real_glass_produces_a_streamed_candidate() raises:
     cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var bvh = unsafe_alloc[BVH2Node](1)
     bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(-5.0, -5.0, Float32(0.9)), Vec3f(15.0, 15.0, Float32(1.1)))
-    var primIds = unsafe_alloc[PrimId_C](1)
-    primIds[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    var meshes = unsafe_alloc[TriangleMesh_C](1)
+    var primIds = unsafe_alloc[PrimId](1)
+    primIds[unsafe_offset=0] = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = _make_glass_mesh()
     var materials = unsafe_alloc[Material_C](1)
     materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
@@ -226,7 +226,7 @@ def test_sms_generate_real_glass_produces_a_streamed_candidate() raises:
 
 def _make_path() -> PathState_C:
     return PathState_C(
-        Ray_C(Point3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0)),
+        Ray(Point3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0)),
         SpectralSample(Float32(1.0)), SpectralSample(Float32(0.0)), RGB(Float32(0.0)),
         Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
         Float32(0.0), Int32(-1), Float32(1.0), Float32(1.0), Float32(1.0), Int32(0), UInt64(0),
@@ -241,9 +241,9 @@ def test_sms_resolve_on_empty_reservoir_is_a_noop() raises:
     crashing on the dangling glass-chain data."""
     var bvh = unsafe_alloc[BVH2Node](1)
     bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(1000.0, 1000.0, 1000.0), Vec3f(1001.0, 1001.0, 1001.0))
-    var primIds = unsafe_alloc[PrimId_C](1)
-    primIds[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    var meshes = unsafe_alloc[TriangleMesh_C](1)
+    var primIds = unsafe_alloc[PrimId](1)
+    primIds[unsafe_offset=0] = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = _make_light_mesh()
     var cdf = unsafe_alloc[Float32](1)
     cdf[unsafe_offset=0] = Float32(0.0)
@@ -276,9 +276,9 @@ def test_sms_resolve_on_real_glass_adds_positive_contribution() raises:
     cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var bvh = unsafe_alloc[BVH2Node](1)
     bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(-5.0, -5.0, Float32(0.9)), Vec3f(15.0, 15.0, Float32(1.1)))
-    var primIds = unsafe_alloc[PrimId_C](1)
-    primIds[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    var meshes = unsafe_alloc[TriangleMesh_C](1)
+    var primIds = unsafe_alloc[PrimId](1)
+    primIds[unsafe_offset=0] = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = _make_glass_mesh()
     var materials = unsafe_alloc[Material_C](1)
     materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
@@ -323,9 +323,9 @@ def test_sms_temporal_step_without_io_still_resolves_like_batch_mode() raises:
     cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var bvh = unsafe_alloc[BVH2Node](1)
     bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(-5.0, -5.0, Float32(0.9)), Vec3f(15.0, 15.0, Float32(1.1)))
-    var primIds = unsafe_alloc[PrimId_C](1)
-    primIds[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    var meshes = unsafe_alloc[TriangleMesh_C](1)
+    var primIds = unsafe_alloc[PrimId](1)
+    primIds[unsafe_offset=0] = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = _make_glass_mesh()
     var materials = unsafe_alloc[Material_C](1)
     materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
@@ -363,9 +363,9 @@ def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
     cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var bvh = unsafe_alloc[BVH2Node](1)
     bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(-5.0, -5.0, Float32(0.9)), Vec3f(15.0, 15.0, Float32(1.1)))
-    var primIds = unsafe_alloc[PrimId_C](1)
-    primIds[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    var meshes = unsafe_alloc[TriangleMesh_C](1)
+    var primIds = unsafe_alloc[PrimId](1)
+    primIds[unsafe_offset=0] = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = _make_glass_mesh()
     var materials = unsafe_alloc[Material_C](1)
     materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
@@ -450,9 +450,9 @@ def test_shade_diffuse_nee_sms_wiring_accumulates_confidence_across_frames() rai
     # primId references mesh index 1 (the glass) -- mesh index 0 is the
     # light, sampled directly via ctx.meshes[al.meshIdx], never through
     # the BVH at all.
-    var primIds = unsafe_alloc[PrimId_C](1)
-    primIds[unsafe_offset=0] = PrimId_C(Int64(1), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    var meshes = unsafe_alloc[TriangleMesh_C](2)
+    var primIds = unsafe_alloc[PrimId](1)
+    primIds[unsafe_offset=0] = PrimId(Int64(1), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var meshes = unsafe_alloc[TriangleMesh](2)
     meshes[unsafe_offset=0] = _make_light_mesh()
     meshes[unsafe_offset=1] = _make_glass_mesh()
     var materials = unsafe_alloc[Material_C](1)
@@ -533,9 +533,9 @@ def test_shade_diffuse_nee_sms_io_inactive_at_bounce_1_uses_plain_mnee() raises:
     cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
     var bvh = unsafe_alloc[BVH2Node](1)
     bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(-5.0, -5.0, Float32(0.9)), Vec3f(15.0, 15.0, Float32(1.1)))
-    var primIds = unsafe_alloc[PrimId_C](1)
-    primIds[unsafe_offset=0] = PrimId_C(Int64(1), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    var meshes = unsafe_alloc[TriangleMesh_C](2)
+    var primIds = unsafe_alloc[PrimId](1)
+    primIds[unsafe_offset=0] = PrimId(Int64(1), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var meshes = unsafe_alloc[TriangleMesh](2)
     meshes[unsafe_offset=0] = _make_light_mesh()
     meshes[unsafe_offset=1] = _make_glass_mesh()
     var materials = unsafe_alloc[Material_C](1)

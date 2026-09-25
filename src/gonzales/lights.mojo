@@ -13,7 +13,7 @@ from .geometry import Point3f, Vec3f, RGB, _is_real_ptr
 
 struct AreaLight_C(TrivialRegisterPassable):
     """A sampleable area light. kind==0: a triangle mesh (meshIdx indexes
-    TriangleMesh_C, n_tris triangles, total_area = mesh surface area).
+    TriangleMesh, n_tris triangles, total_area = mesh surface area).
     kind==1: a native curve (meshIdx reused as the curve's index into the
     scene's Curve_C array; n_tris unused; total_area = the curve's tube
     lateral surface area, see curve_light_tube_area). A mesh light's triangle

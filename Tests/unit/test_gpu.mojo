@@ -6,7 +6,7 @@ from max.gpu.host import DeviceContext
 from gonzales.gpu_wavefront import clear_film_gpu, accumulate_film_gpu
 from gonzales.geometry import RGB, Point3f, Vec3f
 from gonzales.render_state import PathState_C
-from gonzales.primitives import Ray_C
+from gonzales.primitives import Ray
 from gonzales.spectrum import SpectralSample, SampledWavelengths
 
 comptime EPS: Float32 = 1e-4
@@ -21,7 +21,7 @@ def _close(a: Float32, b: Float32) -> Bool:
 # read those lanes and mean exactly what the old RGB assertions meant.
 def _dummy_path(estimate: SpectralSample, albedo: RGB) -> PathState_C:
     return PathState_C(
-        Ray_C(Point3f(0.0), Vec3f(0.0, 0.0, 1.0)),
+        Ray(Point3f(0.0), Vec3f(0.0, 0.0, 1.0)),
         SpectralSample(Float32(1.0)),  # throughput
         estimate,
         albedo,

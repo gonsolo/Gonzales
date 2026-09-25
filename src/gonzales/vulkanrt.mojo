@@ -1,5 +1,5 @@
 from std.ffi import external_call
-from .primitives import TriangleMesh_C
+from .primitives import TriangleMesh
 
 # Task #162 step 1: Mojo-side FFI wrapper for the headless Vulkan
 # ray-query smoke test (src/vulkanrt/vulkanrt.cpp). Completes the
@@ -24,30 +24,30 @@ comptime VulkanRtSceneHandle = Pointer[UInt8, MutUntrackedOrigin]
 
 # Task #162 step 2: build a real Vulkan RT scene (one BLAS per mesh, one
 # TLAS instancing all of them with an identity transform) directly from
-# gonzales's own TriangleMesh_C data -- no repacking on the Mojo side, the
-# C++ bridge reads TriangleMesh_C's points/vertexIndices pointers as-is
+# gonzales's own TriangleMesh data -- no repacking on the Mojo side, the
+# C++ bridge reads TriangleMesh's points/vertexIndices pointers as-is
 # (see vulkanrt.h's VulkanRtMesh, a field-for-field mirror of
-# TriangleMesh_C). point_counts[i]/vertex_index_counts[i] give the vertex
+# TriangleMesh). point_counts[i]/vertex_index_counts[i] give the vertex
 # count and vertexIndices element count (3 * triangle count) for mesh i,
 # same convention gpu.mojo's gpu_upload_scene already uses.
 #
 # Returns a null handle on failure (extension unsupported, device creation
 # failed, AS build failed) -- check before calling vulkanrt_trace_ray.
 def vulkanrt_build_scene(
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     mesh_count: Int64,
     point_counts: Pointer[Int64, MutUntrackedOrigin],
     vertex_index_counts: Pointer[Int64, MutUntrackedOrigin],
 ) -> VulkanRtSceneHandle:
     return external_call["vulkanrt_build_scene", VulkanRtSceneHandle,
-        Pointer[TriangleMesh_C, MutUntrackedOrigin], Int64,
+        Pointer[TriangleMesh, MutUntrackedOrigin], Int64,
         Pointer[Int64, MutUntrackedOrigin], Pointer[Int64, MutUntrackedOrigin]](
         meshes, mesh_count, point_counts, vertex_index_counts)
 
 # Traces one ray against a scene built by vulkanrt_build_scene. Returns 1 on
 # a hit (out_t/out_mesh/out_triangle filled in: out_mesh is the 0-based
 # input mesh index, out_triangle the 0-based triangle index within that
-# mesh -- the same (mesh, triangle) numbering gonzales's own PrimId_C uses),
+# mesh -- the same (mesh, triangle) numbering gonzales's own PrimId uses),
 # 0 on a miss.
 def vulkanrt_trace_ray(
     scene: VulkanRtSceneHandle,
@@ -74,7 +74,7 @@ def vulkanrt_destroy_scene(scene: VulkanRtSceneHandle):
 # ever back a real renderer). `rays` is a flat array of ray_count * 8
 # floats, 8 per ray in order (ox, oy, oz, t_min, dx, dy, dz, t_max). Each
 # out_* array must have ray_count elements; out_hit[i] is 1 on a hit, 0 on
-# a miss (matching Intersection_C.hit's convention), with
+# a miss (matching Intersection.hit's convention), with
 # out_t/out_u/out_v/out_mesh/out_triangle only meaningful when out_hit[i]
 # is 1. out_u/out_v use the same barycentric convention as gonzales's own
 # Moller-Trumbore intersect_triangle (verified in

@@ -17,7 +17,7 @@ from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, Point3f, Vec3f, INV_FOUR_PI, INV_PI
 from gonzales.materials import LobeKind, MeasuredBRDF_C
 from gonzales.render_state import GpuTexture_C, NormalSlopeMap_C
-from gonzales.primitives import Intersection_C, Sphere_C, PrimId_C, Instance_C
+from gonzales.primitives import Intersection, Sphere, PrimId, Instance
 from gonzales.media import Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C
 from gonzales.lights import LightSampler_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C
 from gonzales.bvh import SceneDescriptor2_C, BVH2Node
@@ -108,7 +108,7 @@ def _dummy_sd() -> SceneDescriptor2_C:
         Pointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         fixture.curves, Int64(0),
         Pointer[Medium_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[MediumInterface_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
@@ -116,9 +116,9 @@ def _dummy_sd() -> SceneDescriptor2_C:
         Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         LightSampler_C(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
         Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Int64(0),
-        Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         null_spectral_handle(),
         Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
@@ -309,7 +309,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         Pointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         fixture.curves, Int64(0),
         Pointer[Medium_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[MediumInterface_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
@@ -317,9 +317,9 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         LightSampler_C(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
         Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Int64(0),
-        Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         null_spectral_handle(),
         Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
@@ -350,7 +350,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
     )
     var lvc = unsafe_alloc[BDPTVertex](1)
     lvc[unsafe_offset=0] = lv
-    var scratch = unsafe_alloc[Intersection_C](1)
+    var scratch = unsafe_alloc[Intersection](1)
 
     var result = _bdpt_connect_to_cache(cv, sd, False, scratch, lvc, 0, 1, Float32(0), 1)
 

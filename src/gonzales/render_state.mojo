@@ -3,12 +3,12 @@ per-cluster module split; see project_geometry_module_split memory).
 FilmDims/FilterParams, and PathState_C through TileResult_C, were two
 separate ranges in geometry.mojo. Depends on the core
 (Point3f/Vec3f/RGB/SpectralSample/SampledWavelengths) and on primitives.mojo
-(PathState_C holds a Ray_C) -- the one real cross-cluster dependency a
+(PathState_C holds a Ray) -- the one real cross-cluster dependency a
 symbol-reference scan of the whole file found before this split, everywhere
 else was comments matching a name."""
 from gonzales.spectrum import SpectralSample, SampledWavelengths
 from .geometry import Point3f, Vec3f, RGB
-from .primitives import Ray_C
+from .primitives import Ray
 
 @fieldwise_init
 struct FilmDims(TrivialRegisterPassable):
@@ -37,7 +37,7 @@ struct FilterParams(TrivialRegisterPassable):
 @fieldwise_init
 struct PathState_C(TrivialRegisterPassable):
 # <<listing: PathState_C>>
-    var ray: Ray_C
+    var ray: Ray
     # Path TRANSPORT is spectral: these carry radiance/weight at this path's
     # own 4 hero wavelengths, and RGB appears only at the boundaries (light
     # and material lookup on the way in, film splat on the way out).

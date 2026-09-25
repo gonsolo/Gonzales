@@ -14,7 +14,7 @@ from std.atomic import Atomic
 from .geometry import face_toward, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
 from .materials import Material_C, MatKind, LobeKind, PhotonKind, fr_dielectric, MeasuredBRDF_C
 from .render_state import GpuTexture_C
-from .primitives import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Sphere_C, Instance_C, sphere_outward_normal
+from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, sphere_outward_normal
 from .media import Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, medium_transmittance_ratio_spectral, spectral_free_flight_weight
 from .lights import area_light_pick_triangle, AreaLight_C, DistantLight_C, InfiniteLight_C, PointLight_C
 from .curves import Curve_C, curve_piece_endpoints, _curve_perp_axis
@@ -198,10 +198,10 @@ struct SPPMPhoton(TrivialRegisterPassable):
 
 @always_inline
 def _geom_normal(
-    inter: Intersection_C,
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin] = Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(),
+    inter: Intersection,
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+    spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
     hit: Vec3f = Vec3f(Float32(0), Float32(0), Float32(0)),
 ) -> Vec3f:
     """Normalized geometric normal from triangle cross product. If this hit
@@ -229,7 +229,7 @@ def _geom_normal(
         mi = Int(inter.primId.id1); bv = Int(inter.primId.id2)
     elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
         mi = Int(inter.primId.id2 >> 32); bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-    elif inter.primId.type == Int8(4) and _is_real_ptr[Sphere_C](spheres):
+    elif inter.primId.type == Int8(4) and _is_real_ptr[Sphere](spheres):
         return sphere_outward_normal(Point3f(hit[0], hit[1], hit[2]), spheres[unsafe_offset=Int(inter.primId.id1)].center)
     else:
         return Vec3f(Float32(0), Float32(1), Float32(0))
@@ -250,10 +250,10 @@ def _geom_normal(
 
 @always_inline
 def _shading_normal_at(
-    inter: Intersection_C,
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin] = Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(),
+    inter: Intersection,
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+    spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
     hit: Point3f = Point3f(Float32(0)),
 ) -> Vec3f:
     """Barycentrically-interpolated SMOOTH shading normal at a triangle hit,
@@ -276,7 +276,7 @@ def _shading_normal_at(
         mi = Int(inter.primId.id1); bv = Int(inter.primId.id2)
     elif inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
         mi = Int(inter.primId.id2 >> 32); bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
-    elif inter.primId.type == Int8(4) and _is_real_ptr[Sphere_C](spheres):
+    elif inter.primId.type == Int8(4) and _is_real_ptr[Sphere](spheres):
         return sphere_outward_normal(hit, spheres[unsafe_offset=Int(inter.primId.id1)].center)
     else:
         return Vec3f(Float32(0), Float32(1), Float32(0))
@@ -447,7 +447,7 @@ struct AreaLightSample(TrivialRegisterPassable):
 @always_inline
 def sample_area_light_uniform(
     areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
-    meshes:     Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    meshes:     Pointer[TriangleMesh, MutUntrackedOrigin],
     n_lights:   Int,
     mut pcg:    PCG32,
     curves:     Pointer[Curve_C, MutUntrackedOrigin] = Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
@@ -507,8 +507,8 @@ def sample_area_light_uniform(
 @always_inline
 def medium_after_crossing(
     ray_dir: Vec3f,
-    inter: Intersection_C,
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    inter: Intersection,
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     mat: Material_C,
     ref sd: SceneDescriptor2_C,
     hit: Point3f = Point3f(Float32(0)),
@@ -542,7 +542,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     px: Int, py: Int,
     pidx:     Int32,
     init_r2:  Float32,
-    scratch:  Pointer[Intersection_C, MutUntrackedOrigin],
+    scratch:  Pointer[Intersection, MutUntrackedOrigin],
     maxdepth: Int,
     film_filter: FilmFilter,
 ) -> SPPMPixel:
@@ -653,7 +653,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         # a bottom-of-loop increment is silently skipped for exactly the
         # volume-scatter path that matters most.
         bounce += 1
-        var ray = Ray_C(ro, rd)
+        var ray = Ray(ro, rd)
         scratch[unsafe_offset=0].hit = Int8(0)
         # sd.spheres/sphereCount are REQUIRED: analytic spheres live in their
         # own flat array, not the mesh/curve BVH this walks, so omitting them
@@ -723,7 +723,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         # dispatch since the sphere's own material is often an inert
         # placeholder (e.g. pbrt's "Null" material on AreaLightSource
         # spheres), so mat.type never reflects that this primitive emits;
-        # Sphere_C.isAreaLight is the only way to know. No MIS needed (unlike
+        # Sphere.isAreaLight is the only way to know. No MIS needed (unlike
         # bdpt.mojo's equivalent fix): this VP sample is either a direct
         # light hit (valid stays 0, credited here) XOR a real gatherable
         # surface that separately does its own NEE — mutually exclusive per
@@ -751,7 +751,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # Direct hit on a triangle/curve area light — same treatment as
             # the sphere case above (no MIS needed, same mutual-exclusivity
             # reasoning). id1 is the AreaLight_C index directly for a
-            # type==3 hit, per pbrt_parser.mojo's own PrimId_C encoding.
+            # type==3 hit, per pbrt_parser.mojo's own PrimId encoding.
             # Facing check: a one-sided area light emits nothing from its
             # back face (spheres above need no such check — always hit from
             # outside, always the front/emitting face).
@@ -945,11 +945,11 @@ def _sppm_camera_pass(
     crosses a dielectric surface makes a genuine random reflect-vs-refract
     choice each sample, so as long as vp_samples is large enough, at least
     some samples land on the diffuse floor even if others reflect away."""
-    # One scratch Intersection_C per worker (indexed by `combined`) instead
+    # One scratch Intersection per worker (indexed by `combined`) instead
     # of one shared slot — same convention the GPU kernel already uses
     # (inter_scratch + combined, one per thread) — needed now that this loop
     # runs across CPU threads too, not just GPU ones.
-    var scratch = unsafe_alloc[Intersection_C](max(n_pix * vp_samples, 1))
+    var scratch = unsafe_alloc[Intersection](max(n_pix * vp_samples, 1))
 
     def trace_one(combined: Int) {imm}:
         var pix = combined // vp_samples
@@ -1018,7 +1018,7 @@ def _sppm_cam_pos(c2w: Pointer[Float32, MutUntrackedOrigin]) -> Vec3f:
 def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     ref sd:               SceneDescriptor2_C,
     mut pcg:          PCG32,
-    scratch:          Pointer[Intersection_C, MutUntrackedOrigin],
+    scratch:          Pointer[Intersection, MutUntrackedOrigin],
     n_emit:           Int,
     photons:          Pointer[SPPMPhoton, MutUntrackedOrigin],
     max_photons:      Int,
@@ -1234,7 +1234,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         # a bottom-of-loop increment is silently skipped for exactly the
         # volume-scatter path that matters most.
         bounce += 1
-        var ray = Ray_C(ro, rd)
+        var ray = Ray(ro, rd)
         scratch[unsafe_offset=0].hit = Int8(0)
         # sd.spheres/sphereCount are REQUIRED: analytic spheres live in their
         # own flat array, not the mesh/curve BVH this walks, so omitting them
@@ -1689,10 +1689,10 @@ def _sppm_photon_pass(
     if n_lights == 0:
         return 0
 
-    # One scratch Intersection_C per worker (indexed by k), same convention
+    # One scratch Intersection per worker (indexed by k), same convention
     # as the GPU kernel's inter_scratch + k — needed now that this loop runs
     # across CPU threads too.
-    var scratch = unsafe_alloc[Intersection_C](max(n_emit, 1))
+    var scratch = unsafe_alloc[Intersection](max(n_emit, 1))
     var counter = unsafe_alloc[Int32](1)
     counter[unsafe_offset=0] = Int32(0)
 
@@ -2208,11 +2208,11 @@ def _sppm_shadow_transmittance(
         # be inside a homogeneous medium -- but fail open rather than
         # silently applying a wrong closed form if that ever changes.
         return RGB(Float32(1))
-    var exit_i = Intersection_C(
-        PrimId_C(Int64(0), Int64(0), Int64(-1), Int32(-1), Int8(0), 0, 0, 0),
+    var exit_i = Intersection(
+        PrimId(Int64(0), Int64(0), Int64(-1), Int32(-1), Int8(0), 0, 0, 0),
         Float32(0), Float32(0), Float32(0), Int8(0), 0, 0, 0)
     traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves,
-                       Ray_C(org, vec3f(wi)), dist, Pointer(to=exit_i),
+                       Ray(org, vec3f(wi)), dist, Pointer(to=exit_i),
                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                        sd.spheres, Int(sd.sphereCount))
     var span = dist if exit_i.hit == Int8(0) else exit_i.tHit
@@ -2408,7 +2408,7 @@ def _sppm_nee_one(
             var cos_light = -dot(ln, wi)
             if cos_surface > Float32(0.0) and cos_light > Float32(0.0):
                 # Shadow ray, offset from both ends to avoid self-intersection.
-                var shadow_ray = Ray_C(shadow_org, vec3f(wi))
+                var shadow_ray = Ray(shadow_org, vec3f(wi))
                 var t_max = dist * Float32(0.999)
                 if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, t_max,
                                       sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
@@ -2496,7 +2496,7 @@ def _sppm_nee_one(
         var w = _sppm_nee_weight(vp, sd, vn, wo, ls)
         if not w.is_black():
             var s_org = shadow_org_back if (two_sided_vp and dot(vp.geo_normal.to_simd(), ls.wi) < Float32(0)) else shadow_org
-            var shadow_ray = Ray_C(s_org, vec3f(ls.wi))
+            var shadow_ray = Ray(s_org, vec3f(ls.wi))
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, tmax,
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                                   sd.spheres, Int(sd.sphereCount),
@@ -2509,7 +2509,7 @@ def _sppm_nee_one(
         var w_e = _sppm_nee_weight(vp, sd, vn, wo, ls_e)
         if not w_e.is_black():
             var s_org_e = shadow_org_back if (two_sided_vp and dot(vp.geo_normal.to_simd(), ls_e.wi) < Float32(0)) else shadow_org
-            var shadow_ray_e = Ray_C(s_org_e, vec3f(ls_e.wi))
+            var shadow_ray_e = Ray(s_org_e, vec3f(ls_e.wi))
             if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_e, ls_e.dist,
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                                   sd.spheres, Int(sd.sphereCount),

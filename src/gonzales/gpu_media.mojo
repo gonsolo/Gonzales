@@ -4,7 +4,7 @@ from .geometry import Point2f, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, po
 from .lights import AreaLight_C, DistantLight_C, InfiniteLight_C, LightSampler_C, PointLight_C, area_light_pick_triangle, light_sampler_sample
 from .materials import MatKind, Material_C
 from .media import Grid_C, MEDIUM_TRACK_MAX_ITERS, MediumInterface_C, Medium_C, NvdbGrid_C, grid_ray_range, grid_sample_density, hg_phase, hg_sample, medium_emission_spectral, medium_grid_for, medium_nvdb_for, medium_sigma_s_spectral, medium_sigma_t_spectral, medium_transmittance_ratio_spectral, nvdb_index_ray, nvdb_majorant_at_world, nvdb_node_exit_t, nvdb_ray_range, nvdb_sample_density, sample_free_flight
-from .primitives import Instance_C, Intersection_C, PrimId_C, Ray_C, Sphere_C, TriangleMesh_C, sphere_outward_normal
+from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, sphere_outward_normal
 from .render_state import PathState_C
 from .reservoir import reservoir_finalize, reservoir_update
 from .restir_vol import VolReservoir, VOL_RIS_CANDIDATES, VOL_RIS_DISTANCE, VOL_TR_UNIT, VolShiftMode, vol_reservoir_init, vol_reservoir_io_null, vol_target_pdf, vol_temporal_spatial_combine
@@ -19,7 +19,7 @@ from .gpu_scene import GpuSceneHandle
 
 def update_medium_gpu(
     paths: Pointer[PathState_C, MutUntrackedOrigin],
-    intersections: Pointer[Intersection_C, MutUntrackedOrigin],
+    intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneDescriptor2_C,
     count_dp: Int64,
 ):
@@ -116,7 +116,7 @@ def _volume_nee_light(
         return
     var edir = Vec3f(ls.wi[0], ls.wi[1], ls.wi[2])
     var e_org = point3f(scatter_pt_w + edir * Float32(0.0002))
-    var e_ray = Ray_C(e_org, vec3f(edir))
+    var e_ray = Ray(e_org, vec3f(edir))
     # `ls.dist` is measured from scatter_pt_w but the ray starts 0.0002 FURTHER
     # ALONG it, so an untrimmed tmax of ls.dist reaches 0.0002 PAST the light
     # sample -- every time, at any distance. Harmless for a point/distant/
@@ -142,8 +142,8 @@ def _volume_nee_light(
         # know, so find it with a closest-hit query. Interface surfaces are
         # invisible to any_hit (they must not occlude), so this deliberately
         # uses the ordinary traversal, whose first hit IS that shell.
-        var exit_i = Intersection_C(
-            PrimId_C(Int64(0), Int64(0), Int64(-1), Int32(-1), Int8(0), 0, 0, 0),
+        var exit_i = Intersection(
+            PrimId(Int64(0), Int64(0), Int64(-1), Int32(-1), Int8(0), 0, 0, 0),
             Float32(0), Float32(0), Float32(0), Int8(0), 0, 0, 0)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, e_ray, ls.dist,
                            Pointer(to=exit_i), sd.blasNodesArr, sd.blasPrimIdsArr,
@@ -491,7 +491,7 @@ def _volume_area_light_nee(
             var cos_l = -dot(light_normal, shadow_dir)
             if cos_l > Float32(0):
                 var shad_org = point3f(resolve_pt + shadow_dir * Float32(0.0002))
-                var shad_ray = Ray_C(shad_org, vec3f(shadow_dir))
+                var shad_ray = Ray(shad_org, vec3f(shadow_dir))
                 var shad_tmax = max(dist - Float32(0.0002), Float32(0.0)) * Float32(0.9995)
                 if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shad_ray, shad_tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, n_spheres, materials=sd.materials):
                     var T: RGB
@@ -578,8 +578,8 @@ def _volume_area_light_nee(
                         # written to fix -- that fix just never covered the
                         # sphere-bounded case.
                         var t_med = dist
-                        var _exit_inter = Array[Intersection_C, 1](fill=Intersection_C(
-                            PrimId_C(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
+                        var _exit_inter = Array[Intersection, 1](fill=Intersection(
+                            PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
                             Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
                         var exit_ptr = _exit_inter.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
                         exit_ptr[unsafe_offset=0].hit = Int8(0)
@@ -631,7 +631,7 @@ def _volume_area_light_nee(
 @always_inline
 def _sample_medium_core(
     paths: Pointer[PathState_C, MutUntrackedOrigin],
-    intersections: Pointer[Intersection_C, MutUntrackedOrigin],
+    intersections: Pointer[Intersection, MutUntrackedOrigin],
     i: Int,
     ref sd: SceneDescriptor2_C,
     # Phase 7.3 (docs/A2_restir_migration_plan.md, project_restir_migration
@@ -911,7 +911,7 @@ def _sample_medium_core(
         var u2 = pcg.next_float()
         path_ptr[].pcgState = pcg.state
         var hs = hg_sample(-ray_dir, med.g, u1, u2)
-        path_ptr[].ray = Ray_C(scatter_pt, Vec3f(hs[0], hs[1], hs[2]))
+        path_ptr[].ray = Ray(scatter_pt, Vec3f(hs[0], hs[1], hs[2]))
         path_ptr[].specularBounce = Int8(0)
         path_ptr[].lastBsdfPdf = hs[3]
         path_ptr[].volume_scattered = Int8(1)
@@ -939,7 +939,7 @@ def _sample_medium_core(
 
 def sample_medium_gpu(
     paths: Pointer[PathState_C, MutUntrackedOrigin],
-    intersections: Pointer[Intersection_C, MutUntrackedOrigin],
+    intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneDescriptor2_C,
     count_dp: Int64,
     # Phase 7.3: only gpu_render_wavefront_kernels(...) callers that pass

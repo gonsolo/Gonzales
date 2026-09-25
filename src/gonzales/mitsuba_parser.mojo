@@ -735,7 +735,7 @@ def _mit_resolve_emitter(tags: List[MitsubaTag], shape_idx: Int, end: Int) -> Tu
 
 def _mit_process_sphere(tags: List[MitsubaTag], shape_idx: Int, end: Int,
                         s_ptr: Pointer[SceneParseState, MutUntrackedOrigin]):
-    """Native analytic Sphere_C for Mitsuba's built-in `sphere` shape --
+    """Native analytic Sphere for Mitsuba's built-in `sphere` shape --
     exact intersection and exact shading (see shading.mojo's
     primId.type==4 branches in shade_dielectric/shade_thin_dielectric/
     shade_conductor/_build_geom_context_full), no tessellation. Mirrors
@@ -749,7 +749,7 @@ def _mit_process_sphere(tags: List[MitsubaTag], shape_idx: Int, end: Int,
     more general than pbrt's translation-only sphere since Mitsuba allows
     a non-origin object-space center) and as a uniform-scale factor to the
     radius. Non-uniform scale would turn a sphere into an ellipsoid, which
-    Sphere_C can't represent -- out of scope, not used by any scene seen
+    Sphere can't represent -- out of scope, not used by any scene seen
     so far."""
     var s_center_obj = Vec3f(Float32(0), Float32(0), Float32(0))
     var center_idx = _mit_find_child_by_attr(tags, shape_idx, end, "point", "name", "center")
@@ -798,7 +798,7 @@ def _mit_process_shape(tags: List[MitsubaTag], shape_idx: Int, end: Int,
         s_ptr[unsafe_offset=0].ctm = _mit_identity_ctm()
 
     if shape_type == "sphere":
-        # Native analytic Sphere_C (see _mit_process_sphere) -- appends to
+        # Native analytic Sphere (see _mit_process_sphere) -- appends to
         # SceneParseState's spheres_* arrays directly, not store_mesh, so
         # this returns before the tmp_f/tmp_i/nv/nt declarations shared by
         # the serialized/rectangle branches below even come into scope,

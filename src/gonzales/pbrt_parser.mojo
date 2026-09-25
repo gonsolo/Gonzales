@@ -21,7 +21,7 @@ from .parse_types import (SceneParseState, MeshAccum, NamedMaterial, scene_path,
 from .geometry import RGB, Point3f, Vec3f, dot, PI, _is_real_ptr
 from .materials import Material_C, MatKind, MeasuredBRDF_C
 from .render_state import GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none
-from .primitives import Sphere_C, TriangleMesh_C, PrimId_C, Instance_C
+from .primitives import Sphere, TriangleMesh, PrimId, Instance
 from .media import Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C
 from .lights import AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, LightSampler_C
 from .curves import Curve_C, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area
@@ -46,7 +46,7 @@ struct ParsedScene_Mojo:
     var material_count:   Int32
     var area_lights:      Pointer[AreaLight_C, MutUntrackedOrigin]
     var area_light_count: Int32
-    var meshes:           Pointer[TriangleMesh_C, MutUntrackedOrigin]
+    var meshes:           Pointer[TriangleMesh, MutUntrackedOrigin]
     var mesh_pts:         Pointer[Pointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin]
     var mesh_vis:         Pointer[Pointer[Int64, MutUntrackedOrigin], MutUntrackedOrigin]
     var mesh_fis:         Pointer[Pointer[Int64, MutUntrackedOrigin], MutUntrackedOrigin]
@@ -56,17 +56,17 @@ struct ParsedScene_Mojo:
     var mesh_nrm_n_verts: Pointer[Int32, MutUntrackedOrigin]  # per-mesh normal vertex count; 0 = no shading normals
     var mesh_count:       Int32
     var bvh_nodes:        Pointer[BVH2Node, MutUntrackedOrigin]   # GPU-safe TLAS: tris+curves only, no instance leaves
-    var prim_ids:         Pointer[PrimId_C, MutUntrackedOrigin]
+    var prim_ids:         Pointer[PrimId, MutUntrackedOrigin]
     var bvh_node_count:   Int32
     var prim_count:       Int32
     # CPU-inclusive TLAS: tris+curves+instances. Used only by
     # mojo_parsed_scene_descriptor (SceneDescriptor2_C, the CPU render path).
     # GPU's device-side upload always reads bvh_nodes/prim_ids above instead —
     # its traversal kernels have no BLAS/instance buffers to resolve a
-    # PrimId_C.type==6 leaf, so one must never appear in its uploaded arrays
+    # PrimId.type==6 leaf, so one must never appear in its uploaded arrays
     # (confirmed via testing: it does not degrade gracefully, it crashes).
     var bvh_nodes_cpu:      Pointer[BVH2Node, MutUntrackedOrigin]
-    var prim_ids_cpu:       Pointer[PrimId_C, MutUntrackedOrigin]
+    var prim_ids_cpu:       Pointer[PrimId, MutUntrackedOrigin]
     var bvh_node_count_cpu: Int32
     var prim_count_cpu:     Int32
     var film_w:           Int32
@@ -111,7 +111,7 @@ struct ParsedScene_Mojo:
     var point_count:      Int32
     var infinite_lights:  Pointer[InfiniteLight_C, MutUntrackedOrigin]
     var infinite_count:   Int32
-    var spheres:          Pointer[Sphere_C, MutUntrackedOrigin]
+    var spheres:          Pointer[Sphere, MutUntrackedOrigin]
     var sphere_count:     Int32
     var curves:           Pointer[Curve_C, MutUntrackedOrigin]
     var curve_count:      Int32
@@ -125,13 +125,13 @@ struct ParsedScene_Mojo:
     var nvdb_grid_count:  Int32
     var light_sampler:    LightSampler_C
     # Object instancing: one BLAS (private BVH2, over `meshes` above) per
-    # ObjectBegin/ObjectEnd template, referenced by Instance_C.blasIdx.
+    # ObjectBegin/ObjectEnd template, referenced by Instance.blasIdx.
     var blas_nodes_arr:   Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin]
-    var blas_primids_arr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin]
+    var blas_primids_arr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin]
     var blas_node_counts:   Pointer[Int32, MutUntrackedOrigin]  # per-BLAS array length, needed for GPU upload
     var blas_primid_counts: Pointer[Int32, MutUntrackedOrigin]
     var blas_count:       Int32
-    var instances:        Pointer[Instance_C, MutUntrackedOrigin]
+    var instances:        Pointer[Instance, MutUntrackedOrigin]
     var instance_count:   Int32
     # Mesh-index range [start, end) each template's BLAS spans, into the SAME
     # `meshes` array above (a template can bundle several Shape calls, e.g.
@@ -1586,7 +1586,7 @@ def handle_texture(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         s[unsafe_offset=0].tex_files.append(file_str)
 
 # ── ObjectBegin/ObjectEnd/ObjectInstance (two-level BVH instancing) ──────────
-# See geometry.mojo's Instance_C docs and bvh.mojo's traverse_bvh2_core
+# See geometry.mojo's Instance docs and bvh.mojo's traverse_bvh2_core
 # type==6 branch for the traversal side. Design: geometry inside
 # ObjectBegin/ObjectEnd is parsed normally (baked at whatever CTM is active
 # during that block, "definition space") but tagged is_object_template=True so
@@ -1616,7 +1616,7 @@ def _psc_emit_object_instance(s: Pointer[SceneParseState, MutUntrackedOrigin], n
     """Called on ObjectInstance "name": look up the named template and record
     a placement (template index + obj_to_world/world_to_obj transforms,
     derived from the CTM active now vs. the CTM active at that template's
-    ObjectBegin) for finalize_scene to turn into an Instance_C."""
+    ObjectBegin) for finalize_scene to turn into an Instance."""
     var tmpl_idx = -1
     for i in range(len(s[unsafe_offset=0].object_names)):
         if s[unsafe_offset=0].object_names[i] == name:
@@ -2257,7 +2257,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
 
     # ---- Meshes + area lights ----
     var n_meshes = len(s[unsafe_offset=0].meshes)
-    var meshes   = unsafe_alloc[TriangleMesh_C](max(n_meshes, 1))
+    var meshes   = unsafe_alloc[TriangleMesh](max(n_meshes, 1))
     var out_pts  = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](max(n_meshes, 1))
     var out_vis  = unsafe_alloc[Pointer[Int64, MutUntrackedOrigin]](max(n_meshes, 1))
     var out_fis  = unsafe_alloc[Pointer[Int64, MutUntrackedOrigin]](max(n_meshes, 1))
@@ -2579,13 +2579,13 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
 
     # ---- Object instancing: one BLAS per template, then a TLAS instance leaf
     # (transform + BLAS reference) per ObjectInstance placement — see
-    # geometry.mojo's Instance_C docs. A BLAS is a private BVH2 built over
-    # just that template's own mesh range, with ordinary type==0 PrimId_C
+    # geometry.mojo's Instance docs. A BLAS is a private BVH2 built over
+    # just that template's own mesh range, with ordinary type==0 PrimId
     # entries referencing the SAME GLOBAL `meshes` array (no per-BLAS mesh
     # storage, no geometry duplication).
     var n_templates = len(s[unsafe_offset=0].object_names)
     var blas_nodes_arr   = unsafe_alloc[Pointer[BVH2Node, MutUntrackedOrigin]](max(n_templates, 1))
-    var blas_primids_arr = unsafe_alloc[Pointer[PrimId_C, MutUntrackedOrigin]](max(n_templates, 1))
+    var blas_primids_arr = unsafe_alloc[Pointer[PrimId, MutUntrackedOrigin]](max(n_templates, 1))
     # Per-BLAS array lengths — the CPU traversal side never needs these (it
     # just walks from node/primid index 0, self-describing via each node's
     # offset/count), but GPU upload does: it copies each BLAS's arrays into
@@ -2632,21 +2632,21 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         var t_order = unsafe_alloc[Int32](max(Int(t_tris), 1))
         var t_node_count = build_bvh2(t_bounds, t_tris, t_nodes, t_order)
         t_bounds.unsafe_free()
-        var t_prim_ids = unsafe_alloc[PrimId_C](max(Int(t_tris), 1))
+        var t_prim_ids = unsafe_alloc[PrimId](max(Int(t_tris), 1))
         for k in range(Int(t_tris)):
             var orig = Int(t_order[unsafe_offset=k])
             var mi = Int(t_mesh[unsafe_offset=orig])
             var ti = Int(t_local[unsafe_offset=orig])
             var mat_idx = Int(s[unsafe_offset=0].meshes[mi].mat_idx)
             var mat_idx_r = mat_idx if mat_idx >= 0 else Int(default_mat_idx)
-            t_prim_ids[unsafe_offset=k] = PrimId_C(Int64(mi), Int64(ti * 3), Int64(mat_idx_r), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+            t_prim_ids[unsafe_offset=k] = PrimId(Int64(mi), Int64(ti * 3), Int64(mat_idx_r), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
         t_mesh.unsafe_free(); t_local.unsafe_free(); t_order.unsafe_free()
         blas_nodes_arr[unsafe_offset=tmpl]   = t_nodes
         blas_primids_arr[unsafe_offset=tmpl] = t_prim_ids
         blas_node_counts[unsafe_offset=tmpl]   = t_node_count
         blas_primid_counts[unsafe_offset=tmpl] = t_tris
 
-    var instances_c = unsafe_alloc[Instance_C](max(Int(total_instances), 1))
+    var instances_c = unsafe_alloc[Instance](max(Int(total_instances), 1))
     for k in range(Int(total_instances)):
         var tmpl_idx = Int(s[unsafe_offset=0].instance_template_idx[k])
         var o2w = SIMD[DType.float32, 16](0.0)
@@ -2654,7 +2654,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         for ci in range(16):
             o2w[ci] = s[unsafe_offset=0].instance_obj_to_world[k*16+ci]
             w2o[ci] = s[unsafe_offset=0].instance_world_to_obj[k*16+ci]
-        instances_c[unsafe_offset=k] = Instance_C(o2w, w2o, Int32(tmpl_idx))
+        instances_c[unsafe_offset=k] = Instance(o2w, w2o, Int32(tmpl_idx))
 
         # World-space AABB for the TLAS leaf: transform the BLAS root's 8 corners.
         var root = blas_nodes_arr[unsafe_offset=tmpl_idx][unsafe_offset=0]
@@ -2679,7 +2679,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # directly and has no BLAS/instance buffers at all. Build it over just
     # the first `total_prims_gpu` entries of `prim_bounds` (the instance AABBs
     # live in the tail, past this count, and are simply never read here) so
-    # no PrimId_C.type==6 leaf can ever appear in GPU's uploaded arrays.
+    # no PrimId.type==6 leaf can ever appear in GPU's uploaded arrays.
     #
     # This used to be the ONLY top-level BVH build, shared by CPU and GPU —
     # splitting it in two was necessary after testing showed GPU crashing
@@ -2711,10 +2711,10 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
 
     prim_bounds.unsafe_free()
 
-    var prim_ids_gpu = unsafe_alloc[PrimId_C](Int(total_prims_gpu))
+    var prim_ids_gpu = unsafe_alloc[PrimId](Int(total_prims_gpu))
     var prim_ids = prim_ids_gpu
     if not shared_tlas:
-        prim_ids = unsafe_alloc[PrimId_C](Int(total_prims))
+        prim_ids = unsafe_alloc[PrimId](Int(total_prims))
 
     var mesh_al_idx = unsafe_alloc[Int32](max(n_meshes, 1))
     var running_al = Int32(0)
@@ -3112,14 +3112,14 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # ---- Analytical spheres ----
     var ns = len(s[unsafe_offset=0].spheres_cx)
     if ns > 0:
-        var sph_buf = unsafe_alloc[Sphere_C](ns)
+        var sph_buf = unsafe_alloc[Sphere](ns)
         for i in range(ns):
             var em = RGB(s[unsafe_offset=0].spheres_rgb[i].r, s[unsafe_offset=0].spheres_rgb[i].g, s[unsafe_offset=0].spheres_rgb[i].b)
             var al_flag = Int8(1) if s[unsafe_offset=0].spheres_al[i] else Int8(0)
             var sph_mat_idx = s[unsafe_offset=0].spheres_mat[i]
             if sph_mat_idx == Int32(-1) and not s[unsafe_offset=0].spheres_al[i]:
                 sph_mat_idx = default_mat_idx
-            sph_buf[unsafe_offset=i] = Sphere_C(
+            sph_buf[unsafe_offset=i] = Sphere(
                 Point3f(s[unsafe_offset=0].spheres_cx[i], s[unsafe_offset=0].spheres_cy[i], s[unsafe_offset=0].spheres_cz[i]),
                 s[unsafe_offset=0].spheres_r[i],
                 sph_mat_idx,
@@ -3128,7 +3128,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 em)
         psc[unsafe_offset=0].spheres = sph_buf
     else:
-        psc[unsafe_offset=0].spheres = Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling()
+        psc[unsafe_offset=0].spheres = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].sphere_count = Int32(ns)
 
     # ---- Native curves (hair/fur) ----

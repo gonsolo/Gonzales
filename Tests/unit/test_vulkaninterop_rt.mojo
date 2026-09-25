@@ -3,7 +3,7 @@ from std.sys import has_accelerator
 from max.gpu.host import DeviceContext, DeviceBuffer
 from max.gpu.host._nvidia_cuda import CUDA
 from std.testing import assert_true, TestSuite
-from gonzales.primitives import TriangleMesh_C
+from gonzales.primitives import TriangleMesh
 from gonzales.vulkaninterop import (
     vulkaninterop_rt_create_scene, vulkaninterop_rt_get_rays_ptr,
     vulkaninterop_rt_get_results_ptr, vulkaninterop_rt_trace,
@@ -43,13 +43,13 @@ def test_vulkaninterop_rt_trace_matches_known_geometry() raises:
     var idx1 = unsafe_alloc[Int64](3)
     idx1[unsafe_offset=0] = 0; idx1[unsafe_offset=1] = 1; idx1[unsafe_offset=2] = 2
 
-    var meshes = unsafe_alloc[TriangleMesh_C](2)
-    meshes[unsafe_offset=0] = TriangleMesh_C(
+    var meshes = unsafe_alloc[TriangleMesh](2)
+    meshes[unsafe_offset=0] = TriangleMesh(
         pts0, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), idx0,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
-    meshes[unsafe_offset=1] = TriangleMesh_C(
+    meshes[unsafe_offset=1] = TriangleMesh(
         pts1, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), idx1,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
@@ -144,8 +144,8 @@ def test_vulkaninterop_rt_instancing_places_template_correctly() raises:
     var idx0 = unsafe_alloc[Int64](3)
     idx0[unsafe_offset=0] = 0; idx0[unsafe_offset=1] = 1; idx0[unsafe_offset=2] = 2
 
-    var meshes = unsafe_alloc[TriangleMesh_C](1)
-    meshes[unsafe_offset=0] = TriangleMesh_C(
+    var meshes = unsafe_alloc[TriangleMesh](1)
+    meshes[unsafe_offset=0] = TriangleMesh(
         pts0, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), idx0,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),

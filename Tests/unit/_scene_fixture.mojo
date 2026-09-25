@@ -1,14 +1,14 @@
 from std.memory.alloc import unsafe_alloc
 from gonzales.geometry import Point3f, Vec3f, RGB
 from gonzales.materials import Material_C, MatKind
-from gonzales.primitives import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C
+from gonzales.primitives import Ray, Intersection, PrimId, TriangleMesh
 from gonzales.curves import Curve_C
 from gonzales.bvh import BVH2Node, build_bvh2, traverse_bvh2_core
 
 # ── Shared BVH-backed triangle-scene fixture ────────────────────────────────
 # Builds a REAL BVH (via the same build_bvh2 that finalize_scene calls) over
 # a small, caller-supplied set of triangles — not a hand-faked single leaf —
-# so tests exercise the actual BVH-build and BVH2Node/PrimId_C production
+# so tests exercise the actual BVH-build and BVH2Node/PrimId production
 # layout. Deliberately minimal: one mesh, no curves/instances/materials
 # beyond a single flat one, matching what traverse_bvh2_core alone needs
 # (see its own dangling-default params for blas/instances — a scene with no
@@ -18,7 +18,7 @@ from gonzales.bvh import BVH2Node, build_bvh2, traverse_bvh2_core
 #   var fx = make_triangle_scene([
 #       Point3f(0,0,0), Point3f(1,0,0), Point3f(0,1,0),   # triangle 0
 #   ])
-#   var ray = Ray_C(Point3f(0.2, 0.2, -5.0), Vec3f(0,0,1))
+#   var ray = Ray(Point3f(0.2, 0.2, -5.0), Vec3f(0,0,1))
 #   var hit = fx.intersect(ray, Float32(100.0))
 #   assert_true(Int(hit.hit) == 1)
 
@@ -26,15 +26,15 @@ from gonzales.bvh import BVH2Node, build_bvh2, traverse_bvh2_core
 struct TriangleSceneFixture(Movable):
     var points:         Pointer[Float32, MutUntrackedOrigin]
     var vertex_indices: Pointer[Int64, MutUntrackedOrigin]
-    var meshes:         Pointer[TriangleMesh_C, MutUntrackedOrigin]
+    var meshes:         Pointer[TriangleMesh, MutUntrackedOrigin]
     var bvh_nodes:      Pointer[BVH2Node, MutUntrackedOrigin]
-    var prim_ids:       Pointer[PrimId_C, MutUntrackedOrigin]
+    var prim_ids:       Pointer[PrimId, MutUntrackedOrigin]
     var curves:         Pointer[Curve_C, MutUntrackedOrigin]
     var materials:      Pointer[Material_C, MutUntrackedOrigin]
     var n_tris:          Int32
 
-    def intersect(self, ray: Ray_C, tMax: Float32) -> Intersection_C:
-        var result = unsafe_alloc[Intersection_C](1)
+    def intersect(self, ray: Ray, tMax: Float32) -> Intersection:
+        var result = unsafe_alloc[Intersection](1)
         traverse_bvh2_core(self.bvh_nodes, self.prim_ids, self.meshes, self.curves, ray, tMax, result)
         var r = result[unsafe_offset=0]
         result.unsafe_free()
@@ -64,8 +64,8 @@ def make_triangle_scene(verts: List[Point3f]) -> TriangleSceneFixture:
     for i in range(n_verts):
         vertex_indices[unsafe_offset=i] = Int64(i)
 
-    var meshes = unsafe_alloc[TriangleMesh_C](1)
-    meshes[unsafe_offset=0] = TriangleMesh_C(
+    var meshes = unsafe_alloc[TriangleMesh](1)
+    meshes[unsafe_offset=0] = TriangleMesh(
         points,
         Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(),  # faceIndices, unused
         vertex_indices,
@@ -89,10 +89,10 @@ def make_triangle_scene(verts: List[Point3f]) -> TriangleSceneFixture:
     _ = build_bvh2(bounds, n_tris, bvh_nodes, order)
     bounds.unsafe_free()
 
-    var prim_ids = unsafe_alloc[PrimId_C](Int(n_tris))
+    var prim_ids = unsafe_alloc[PrimId](Int(n_tris))
     for k in range(Int(n_tris)):
         var orig = Int(order[unsafe_offset=k])
-        prim_ids[unsafe_offset=k] = PrimId_C(Int64(0), Int64(orig * 3), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+        prim_ids[unsafe_offset=k] = PrimId(Int64(0), Int64(orig * 3), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     order.unsafe_free()
 
     var materials = unsafe_alloc[Material_C](1)

@@ -1,6 +1,6 @@
 # Unit tests for shared helper functions extracted from shading.mojo during
 # this session's H1/H2/H3-style dedup pass:
-#   - _get_tri_verts: decodes an Intersection_C's primId into (mesh,v0,v1,v2,ok)
+#   - _get_tri_verts: decodes an Intersection's primId into (mesh,v0,v1,v2,ok)
 #   - _apply_normal_map: tangent-space normal-map decode (no-normal-map fast path)
 #   - _build_geom_context_full: shared NEE-material GeomContext builder
 #   - _shadow_contribute: shared shadow-ray-or-direct-contribution helper
@@ -14,7 +14,7 @@ from std.testing import assert_true, assert_false, TestSuite
 from gonzales.geometry import RGB, Point3f, Vec3f, dot, cross
 from gonzales.materials import Material_C, MatKind, MeasuredBRDF_C
 from gonzales.render_state import GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, PathState_C
-from gonzales.primitives import Ray_C, PrimId_C, Intersection_C, TriangleMesh_C, Instance_C, Sphere_C
+from gonzales.primitives import Ray, PrimId, Intersection, TriangleMesh, Instance, Sphere
 from gonzales.lights import LightSampler_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C
 from gonzales.curves import Curve_C
 from gonzales.spectrum import SpectralSample, SampledWavelengths, null_spectral_handle
@@ -39,7 +39,7 @@ def _simd_len(v: Vec3f) -> Float32:
 
 # ── shared fixture builders ──────────────────────────────────────────────────
 
-def _make_triangle_mesh(p0: Vec3f, p1: Vec3f, p2: Vec3f) -> TriangleMesh_C:
+def _make_triangle_mesh(p0: Vec3f, p1: Vec3f, p2: Vec3f) -> TriangleMesh:
     """Mirrors test_sppm_helpers.mojo's fixture: a single-triangle mesh with
     no UVs/normals (sentinel dangling pointers -> fallback paths)."""
     var points = unsafe_alloc[Float32](4 * 3)
@@ -48,7 +48,7 @@ def _make_triangle_mesh(p0: Vec3f, p1: Vec3f, p2: Vec3f) -> TriangleMesh_C:
     points[unsafe_offset=2*4+0] = p2[0]; points[unsafe_offset=2*4+1] = p2[1]; points[unsafe_offset=2*4+2] = p2[2]; points[unsafe_offset=2*4+3] = Float32(0.0)
     var vidx = unsafe_alloc[Int64](3)
     vidx[unsafe_offset=0] = 0; vidx[unsafe_offset=1] = 1; vidx[unsafe_offset=2] = 2
-    return TriangleMesh_C(
+    return TriangleMesh(
         points, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), vidx,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
@@ -68,14 +68,14 @@ def _null_light_context() -> LightContext:
         Pointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
         Pointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
         Pointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), 0,
         LightSampler_C(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
     )
 
 def _make_ctx(
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    primIds: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     materials: Pointer[Material_C, MutUntrackedOrigin],
     px_scale: Float32,
 ) -> ShadeContext:
@@ -97,8 +97,8 @@ def _make_ctx(
         False,
         _null_light_context(),
         Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
         null_spectral_handle(),
         Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
@@ -107,7 +107,7 @@ def _make_ctx(
 
 def _make_path(org: Vec3f, dir: Vec3f) -> PathState_C:
     return PathState_C(
-        Ray_C(Point3f(org[0], org[1], org[2]), Vec3f(dir[0], dir[1], dir[2])),
+        Ray(Point3f(org[0], org[1], org[2]), Vec3f(dir[0], dir[1], dir[2])),
         SpectralSample(Float32(1.0)), SpectralSample(Float32(0.0)), RGB(Float32(0.0)),
         Int32(0), UInt64(1), UInt64(1), Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)),
         Float32(0.0), Int32(-1), Float32(1.0), Float32(1.0), Float32(1.0), Int32(0), UInt64(0),
@@ -118,15 +118,15 @@ def _make_path(org: Vec3f, dir: Vec3f) -> PathState_C:
     )
 
 # ── _get_tri_verts ────────────────────────────────────────────────────────────
-# Decodes an Intersection_C's primId into (mesh, v0, v1, v2, ok). Only the
+# Decodes an Intersection's primId into (mesh, v0, v1, v2, ok). Only the
 # vertex-index bookkeeping is under test -- point data is never touched by
 # this function, so meshes[].points can be left dangling.
 
-def _make_two_tri_mesh() -> TriangleMesh_C:
+def _make_two_tri_mesh() -> TriangleMesh:
     var vidx = unsafe_alloc[Int64](6)
     vidx[unsafe_offset=0] = 10; vidx[unsafe_offset=1] = 11; vidx[unsafe_offset=2] = 12
     vidx[unsafe_offset=3] = 20; vidx[unsafe_offset=4] = 21; vidx[unsafe_offset=5] = 22
-    return TriangleMesh_C(
+    return TriangleMesh(
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), vidx,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
@@ -138,10 +138,10 @@ def test_get_tri_verts_type0_decodes_second_triangle_correctly() raises:
     tri_idx*3, per pbrt_parser.mojo) -- NOT tri_idx, so this must select the
     *second* triangle's vertex-index triple (20,21,22), not (0,1,2)."""
     var mesh = _make_two_tri_mesh()
-    var meshes = unsafe_alloc[TriangleMesh_C](1)
+    var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = mesh
-    var pid = PrimId_C(Int64(0), Int64(3), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    var inter = Intersection_C(pid, Float32(1.0), Float32(0.0), Float32(0.0), Int8(1), Int8(0), Int8(0), Int8(0))
+    var pid = PrimId(Int64(0), Int64(3), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var inter = Intersection(pid, Float32(1.0), Float32(0.0), Float32(0.0), Int8(1), Int8(0), Int8(0), Int8(0))
 
     var (_, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
     assert_true(ok)
@@ -158,10 +158,10 @@ def test_get_tri_verts_non_triangle_prim_returns_not_ok() raises:
     callers deactivate the path instead of misreading sphere data as a
     triangle leaf."""
     var mesh = _make_two_tri_mesh()
-    var meshes = unsafe_alloc[TriangleMesh_C](1)
+    var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = mesh
-    var pid = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(4), Int8(0), Int8(0), Int8(0))
-    var inter = Intersection_C(pid, Float32(1.0), Float32(0.0), Float32(0.0), Int8(1), Int8(0), Int8(0), Int8(0))
+    var pid = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(4), Int8(0), Int8(0), Int8(0))
+    var inter = Intersection(pid, Float32(1.0), Float32(0.0), Float32(0.0), Int8(1), Int8(0), Int8(0), Int8(0))
 
     var (_, _, _, _, ok) = _get_tri_verts(inter, meshes)
     assert_false(ok)
@@ -176,15 +176,15 @@ def test_get_tri_verts_non_triangle_prim_returns_not_ok() raises:
 
 def test_apply_normal_map_returns_geom_normal_unchanged_when_no_normal_map() raises:
     var mat = _make_material(RGB(Float32(0.5)), Int32(-1))
-    var mesh = TriangleMesh_C(
+    var mesh = TriangleMesh(
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
-    var pid = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    var inter = Intersection_C(pid, Float32(1.0), Float32(0.25), Float32(0.25), Int8(1), Int8(0), Int8(0), Int8(0))
+    var pid = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var inter = Intersection(pid, Float32(1.0), Float32(0.25), Float32(0.25), Int8(1), Int8(0), Int8(0), Int8(0))
     var geom_normal = Vec3f(0.267261, 0.534522, 0.801784)  # normalize(1,2,3)
     var p0 = Vec3f(0.0, 0.0, 0.0)
     var p1 = Vec3f(1.0, 0.0, 0.0)
@@ -210,7 +210,7 @@ def test_build_geom_context_full_matches_closed_form_for_axis_aligned_hit() rais
     var p1 = Vec3f(1.0, 0.0, 0.0)
     var p2 = Vec3f(0.0, 1.0, 0.0)
     var mesh = _make_triangle_mesh(p0, p1, p2)
-    var meshes = unsafe_alloc[TriangleMesh_C](1)
+    var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = mesh
 
     var albedo = RGB(Float32(0.2), Float32(0.4), Float32(0.6))
@@ -220,7 +220,7 @@ def test_build_geom_context_full_matches_closed_form_for_axis_aligned_hit() rais
 
     var ctx = _make_ctx(
         Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[PrimId_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
         meshes, materials, Float32(0.0))
 
     var org = Vec3f(0.0, 0.0, 5.0)
@@ -230,8 +230,8 @@ def test_build_geom_context_full_matches_closed_form_for_axis_aligned_hit() rais
     path_arr[unsafe_offset=0] = path
     var t_hit = Float32(5.0)
 
-    var pid = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    var inter = Intersection_C(pid, t_hit, Float32(0.25), Float32(0.25), Int8(1), Int8(0), Int8(0), Int8(0))
+    var pid = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var inter = Intersection(pid, t_hit, Float32(0.25), Float32(0.25), Int8(1), Int8(0), Int8(0), Int8(0))
 
     var (gc, ok) = _build_geom_context_full[False](path_arr, inter, mat, ctx)
     assert_true(ok)
@@ -267,15 +267,15 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
         Vec3f(0.0, 0.0, 0.0),
         Vec3f(1.0, 0.0, 0.0),
         Vec3f(0.0, 1.0, 0.0))
-    var meshes = unsafe_alloc[TriangleMesh_C](1)
+    var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = mesh
     var albedo = RGB(Float32(0.5), Float32(0.3), Float32(0.1))
     var mat = _make_material(albedo, Int32(-1))
     var materials = unsafe_alloc[Material_C](1)
     materials[unsafe_offset=0] = mat
 
-    var spheres = unsafe_alloc[Sphere_C](1)
-    spheres[unsafe_offset=0] = Sphere_C(Point3f(0.0, 0.0, -1.0), Float32(1.0), Int32(-1),
+    var spheres = unsafe_alloc[Sphere](1)
+    spheres[unsafe_offset=0] = Sphere(Point3f(0.0, 0.0, -1.0), Float32(1.0), Int32(-1),
         Int8(0), Int8(0), Int8(0), Int8(0), RGB(Float32(0.0)))
     var lights = LightContext(
         Pointer[AreaLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
@@ -287,7 +287,7 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
     )
     var ctx = ShadeContext(
         0, Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[PrimId_C, MutUntrackedOrigin].unsafe_dangling(), meshes,
+        Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(), meshes,
         Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
         materials,
         Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
@@ -300,8 +300,8 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
         False,
         lights^,
         Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
         null_spectral_handle(),
         Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
@@ -314,8 +314,8 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
     var path_arr = unsafe_alloc[PathState_C](1)
     path_arr[unsafe_offset=0] = path
 
-    var pid = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(4), Int8(0), Int8(0), Int8(0))
-    var inter = Intersection_C(pid, Float32(5.0), Float32(0.0), Float32(0.0), Int8(1), Int8(0), Int8(0), Int8(0))
+    var pid = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(4), Int8(0), Int8(0), Int8(0))
+    var inter = Intersection(pid, Float32(5.0), Float32(0.0), Float32(0.0), Int8(1), Int8(0), Int8(0), Int8(0))
     var (gc, ok) = _build_geom_context_full[False](path_arr, inter, mat, ctx)
     assert_true(ok)
     var expected_n = Vec3f(0.0, 0.0, 1.0)
@@ -354,10 +354,10 @@ def test_shadow_contribute_direct_adds_contribution_when_unoccluded() raises:
         Vec3f(-1.0, -1.0, 5.0),
         Vec3f(1.0, -1.0, 5.0),
         Vec3f(0.0, 1.0, 5.0))
-    var meshes = unsafe_alloc[TriangleMesh_C](1)
+    var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = mesh
-    var primIds = unsafe_alloc[PrimId_C](1)
-    primIds[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var primIds = unsafe_alloc[PrimId](1)
+    primIds[unsafe_offset=0] = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var bvh = unsafe_alloc[BVH2Node](1)
     bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(-1.0, -1.0, 4.9), Vec3f(1.0, 1.0, 5.1))
 
@@ -390,10 +390,10 @@ def test_shadow_contribute_direct_skips_when_occluded() raises:
         Vec3f(-1.0, -1.0, 5.0),
         Vec3f(1.0, -1.0, 5.0),
         Vec3f(0.0, 1.0, 5.0))
-    var meshes = unsafe_alloc[TriangleMesh_C](1)
+    var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = mesh
-    var primIds = unsafe_alloc[PrimId_C](1)
-    primIds[unsafe_offset=0] = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var primIds = unsafe_alloc[PrimId](1)
+    primIds[unsafe_offset=0] = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var bvh = unsafe_alloc[BVH2Node](1)
     bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(-1.0, -1.0, 4.9), Vec3f(1.0, 1.0, 5.1))
 

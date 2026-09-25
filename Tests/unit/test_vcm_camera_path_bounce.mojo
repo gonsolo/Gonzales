@@ -34,7 +34,7 @@ from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, Point3f, Vec3f
 from gonzales.materials import MeasuredBRDF_C, Material_C, MatKind
 from gonzales.render_state import GpuTexture_C, NormalSlopeMap_C
-from gonzales.primitives import Ray_C, Intersection_C, PrimId_C, Sphere_C, Instance_C, TriangleMesh_C
+from gonzales.primitives import Ray, Intersection, PrimId, Sphere, Instance, TriangleMesh
 from gonzales.media import Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C
 from gonzales.lights import LightSampler_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C
 from gonzales.curves import Curve_C
@@ -69,8 +69,8 @@ def _build_scene() -> SceneDescriptor2_C:
     var vertex_indices = unsafe_alloc[Int64](n_verts)
     for i in range(n_verts):
         vertex_indices[unsafe_offset=i] = Int64(i)
-    var meshes = unsafe_alloc[TriangleMesh_C](1)
-    meshes[unsafe_offset=0] = TriangleMesh_C(
+    var meshes = unsafe_alloc[TriangleMesh](1)
+    meshes[unsafe_offset=0] = TriangleMesh(
         points, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), vertex_indices,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
@@ -86,10 +86,10 @@ def _build_scene() -> SceneDescriptor2_C:
     var order = unsafe_alloc[Int32](n_tris)
     _ = build_bvh2(bounds, Int32(n_tris), bvh_nodes, order)
     bounds.unsafe_free()
-    var prim_ids = unsafe_alloc[PrimId_C](n_tris)
+    var prim_ids = unsafe_alloc[PrimId](n_tris)
     for k in range(n_tris):
         var orig = Int(order[unsafe_offset=k])
-        prim_ids[unsafe_offset=k] = PrimId_C(Int64(0), Int64(orig * 3), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+        prim_ids[unsafe_offset=k] = PrimId(Int64(0), Int64(orig * 3), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     order.unsafe_free()
 
     var materials = unsafe_alloc[Material_C](1)
@@ -109,7 +109,7 @@ def _build_scene() -> SceneDescriptor2_C:
         Pointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[Medium_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[MediumInterface_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
@@ -117,9 +117,9 @@ def _build_scene() -> SceneDescriptor2_C:
         Pointer[NvdbGrid_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         LightSampler_C(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
         Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Int64(0),
-        Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         null_spectral_handle(),
         Pointer[GpuTexture_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
@@ -158,7 +158,7 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
     comptime n_light_paths_f = Float32(1.0)
 
     var pcg_old = PCG32(UInt64(999), UInt64(3))
-    var scratch_old = unsafe_alloc[Intersection_C](1)
+    var scratch_old = unsafe_alloc[Intersection](1)
     var (total_old, alb_old) = _bdpt_trace_camera_and_connect[False](
         r2c, c2w, 0, 0, sd, pcg_old, False, scratch_old,
         Pointer[BDPTVertex, MutUntrackedOrigin].unsafe_dangling(), 0, 0,
@@ -169,7 +169,7 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
     )
 
     var pcg_new = PCG32(UInt64(999), UInt64(3))
-    var scratch_new = unsafe_alloc[Intersection_C](1)
+    var scratch_new = unsafe_alloc[Intersection](1)
     var state = _bdpt_camera_path_init[False](r2c, c2w, 0, 0, pcg_new, px_scale, n_light_paths_f, _TEST_PASS_WL, _TEST_FILTER)
 
     var pcg_bounce = PCG32(UInt64(0), UInt64(0))
@@ -199,7 +199,7 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
         n_iters += 1
         var ray_o = ro; var ray_d = rd
         scratch_new[unsafe_offset=0].hit = Int8(0)
-        var ray = Ray_C(ray_o, ray_d)
+        var ray = Ray(ray_o, ray_d)
         traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch_new)
         test_spheres(sd.spheres, Int(sd.sphereCount), ray, scratch_new)
         var inter = scratch_new[unsafe_offset=0]

@@ -2,7 +2,7 @@ from std.ffi import external_call
 from max.gpu import block_idx, thread_idx, block_dim
 from max.gpu.host import DeviceContext, DeviceBuffer
 from max.gpu.host._nvidia_cuda import CUDA, CUstream
-from .primitives import TriangleMesh_C
+from .primitives import TriangleMesh
 
 # Task #163 stage 1: Mojo-side FFI wrapper for the CUDA/Vulkan GPU-side
 # interop bridge (src/vulkaninterop/vulkaninterop.cpp). Proves the whole
@@ -57,9 +57,9 @@ def vulkaninterop_fill_kernel_test(data: Pointer[Float32, MutUntrackedOrigin], n
 comptime VulkanInteropRtSceneHandle = Pointer[UInt8, MutUntrackedOrigin]
 
 # Builds an interop-AND-ray-query-capable scene from gonzales's own
-# TriangleMesh_C data (same field-for-field-mirror trick as vulkanrt.mojo's
+# TriangleMesh data (same field-for-field-mirror trick as vulkanrt.mojo's
 # vulkanrt_build_scene -- VulkanInteropMesh in vulkaninterop.h matches
-# TriangleMesh_C's layout exactly, no repacking needed) -- one real BLAS
+# TriangleMesh's layout exactly, no repacking needed) -- one real BLAS
 # per ordinary mesh (identity-transform TLAS instance) + one multi-geometry
 # BLAS per object-instancing template (template_mesh_start/end mark which
 # mesh-index ranges are template-only) + one TLAS instance per
@@ -78,14 +78,14 @@ comptime VulkanInteropRtSceneHandle = Pointer[UInt8, MutUntrackedOrigin]
 # curve geometry itself (curve_data/curve_n_pieces, one entry per curve) and
 # 3 parallel per-leaf arrays (curve_leaf_curve_idx/piece_info/mat_idx) the
 # shader uses to test a candidate and, on a hit, report enough for gpu.
-# mojo's vulkaninterop_unpack_results_kernel to reconstruct a full PrimId_C
+# mojo's vulkaninterop_unpack_results_kernel to reconstruct a full PrimId
 # with no further lookups. See vulkaninterop.h's own docstring for the
 # exact per-leaf/per-curve encoding (matches pbrt_parser.mojo's finalize_
 # scene exactly) and the hit-decode convention (hitFlag==2). Pass
 # n_curve_leaves=0/n_curves=0 for a scene with no curves -- byte-identical
 # to before curve support existed. Returns a null handle on failure.
 def vulkaninterop_rt_create_scene(
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     mesh_count: Int64,
     point_counts: Pointer[Int64, MutUntrackedOrigin],
     vertex_index_counts: Pointer[Int64, MutUntrackedOrigin],
@@ -106,7 +106,7 @@ def vulkaninterop_rt_create_scene(
     max_rays: Int64,
 ) -> VulkanInteropRtSceneHandle:
     return external_call["vulkaninterop_rt_create_scene", VulkanInteropRtSceneHandle,
-        Pointer[TriangleMesh_C, MutUntrackedOrigin], Int64,
+        Pointer[TriangleMesh, MutUntrackedOrigin], Int64,
         Pointer[Int64, MutUntrackedOrigin], Pointer[Int64, MutUntrackedOrigin],
         Int64, Pointer[Int64, MutUntrackedOrigin], Pointer[Int64, MutUntrackedOrigin],
         Int64, Pointer[Float32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin],

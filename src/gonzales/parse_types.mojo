@@ -152,7 +152,7 @@ struct MeshAccum(Copyable, Movable):
     # template): baked at the CTM active during that block, NOT at each
     # placement's CTM. finalize_scene excludes these from the ordinary
     # top-level primitive list — they're only reachable via a per-template
-    # BLAS referenced by Instance_C placements (see pbrt_parser.mojo).
+    # BLAS referenced by Instance placements (see pbrt_parser.mojo).
     var is_object_template: Bool
     # pbrt `Shape "texture alpha"` / `"float alpha"`: index into
     # SceneParseState.alpha_mask_* (-1 = none), else the constant alpha.
@@ -278,7 +278,7 @@ struct SceneParseState(Movable):
     # Textures
     var tex_names: List[String]
     var tex_files: List[String]
-    # Alpha cut-out masks (see TriangleMesh_C.alpha), one per distinct file,
+    # Alpha cut-out masks (see TriangleMesh.alpha), one per distinct file,
     # loaded once however many shapes name it. MeshAccum.alpha_mask indexes
     # these; the byte buffers are owned by the parsed scene for its lifetime.
     var alpha_mask_files: List[String]

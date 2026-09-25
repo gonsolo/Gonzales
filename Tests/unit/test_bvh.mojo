@@ -12,7 +12,7 @@ def _close(a: Float32, b: Float32) -> Bool:
 
 # ── intersect_aabb (hottest function in the renderer's BVH traversal) ────────
 # intersect_aabb takes precomputed `rdir` (1/direction) and `org` (the ray
-# origin) rather than a raw Ray_C — this mirrors the exact call-site
+# origin) rather than a raw Ray — this mirrors the exact call-site
 # convention used in traverse_bvh2_core, e.g.:
 #   var rdir = Vec3f(1/ray.direction.x, 1/ray.direction.y, 1/ray.direction.z)
 #   var org  = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)

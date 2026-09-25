@@ -9,7 +9,7 @@ from .transform import Mat4
 from .geometry import dot, cross, Point3f, Point2f, Vec3f, Frame, RGB, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, _is_real_ptr, store_vec3, _atan2f, point3f
 from .materials import Material_C, MatKind, fr_dielectric, MeasuredBRDF_C
 from .render_state import PathState_C, TileResult_C, GpuTexture_C, NormalSlopeMap_C
-from .primitives import Ray_C, Intersection_C, PrimId_C, TriangleMesh_C, Sphere_C, intersect_triangle, alpha_killed, Instance_C, sphere_outward_normal
+from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, intersect_triangle, alpha_killed, Instance, sphere_outward_normal
 from .media import Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C
 from .lights import AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, LightSampler_C
 from .curves import Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis
@@ -110,8 +110,8 @@ struct SceneDescriptor2_C(TrivialRegisterPassable, DevicePassable):
         return s
 
     var bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin]
-    var primIds: Pointer[PrimId_C, MutUntrackedOrigin]
-    var meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin]
+    var primIds: Pointer[PrimId, MutUntrackedOrigin]
+    var meshes: Pointer[TriangleMesh, MutUntrackedOrigin]
     var meshCount: Int64
     var materials: Pointer[Material_C, MutUntrackedOrigin]
     var materialCount: Int64
@@ -125,7 +125,7 @@ struct SceneDescriptor2_C(TrivialRegisterPassable, DevicePassable):
     var pointLightCount: Int64
     var infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin]
     var infiniteLightCount: Int64
-    var spheres: Pointer[Sphere_C, MutUntrackedOrigin]
+    var spheres: Pointer[Sphere, MutUntrackedOrigin]
     var sphereCount: Int64
     var curves: Pointer[Curve_C, MutUntrackedOrigin]
     var curveCount: Int64
@@ -140,15 +140,15 @@ struct SceneDescriptor2_C(TrivialRegisterPassable, DevicePassable):
     var lightSampler: LightSampler_C
 
     # Object instancing: one private BVH2 ("BLAS") per template, each a
-    # separate allocation reachable via Instance_C.blasIdx, plus TLAS instance
-    # placements. See geometry.mojo's Instance_C docs. instanceCount == 0 for
+    # separate allocation reachable via Instance.blasIdx, plus TLAS instance
+    # placements. See geometry.mojo's Instance docs. instanceCount == 0 for
     # scenes with no ObjectInstance usage (the blas*/instances pointers may
-    # then be dangling — never dereferenced since no PrimId_C.type==6 leaf
+    # then be dangling — never dereferenced since no PrimId.type==6 leaf
     # exists in that case).
     var blasNodesArr:   Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin]
-    var blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin]
+    var blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin]
     var blasCount:      Int64
-    var instances:      Pointer[Instance_C, MutUntrackedOrigin]
+    var instances:      Pointer[Instance, MutUntrackedOrigin]
     var instanceCount:  Int64
 
     # "measured" materials: one MeasuredBRDF_C per distinct .bsdf file
@@ -431,7 +431,7 @@ def _sample_point_light_nee(
 
 @always_inline
 def _sample_sphere_light_nee(
-    sph: Sphere_C,
+    sph: Sphere,
     n_sphere_lights: Int,
     hit_point: Vec3f,
     mut pcg: PCG32,
@@ -966,7 +966,7 @@ def _hair_sample_dir_u(
 
 @always_inline
 def ray_sphere_hit(center: Point3f, radius: Float32,
-                  ray: Ray_C, t_min: Float32, t_max: Float32) -> Float32:
+                  ray: Ray, t_min: Float32, t_max: Float32) -> Float32:
     """Exact ray-sphere intersection. Returns t of first hit in (t_min, t_max), or -1."""
     var ocx = ray.origin.x - center.x
     var ocy = ray.origin.y - center.y
@@ -989,10 +989,10 @@ def ray_sphere_hit(center: Point3f, radius: Float32,
 
 @always_inline
 def test_spheres(
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
+    spheres: Pointer[Sphere, MutUntrackedOrigin],
     n_spheres: Int,
-    ray: Ray_C,
-    result: Pointer[Intersection_C, MutUntrackedOrigin],
+    ray: Ray,
+    result: Pointer[Intersection, MutUntrackedOrigin],
 ):
     """Test all analytical spheres against the ray, updating result if closer.
     Sets primId.type = 4 and primId.id1 = sphere_index on a sphere hit.
@@ -1022,12 +1022,12 @@ def test_spheres(
 @always_inline
 def _traverse_blas_triangles(
     blasNodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    blasPrimIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    blasPrimIds: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     ray_org: Vec3f,
     ray_dir: Vec3f,
     tMax: Float32,
-) -> Tuple[Bool, Float32, Float32, Float32, PrimId_C]:
+) -> Tuple[Bool, Float32, Float32, Float32, PrimId]:
     """Returns (hit, tHit, u, v, primId) — primId is the winning BLAS-local
     type==0 entry as-is (mesh_idx/base_vidx/materialIndex already correct
     against the shared global `meshes` array); the caller overwrites its
@@ -1039,7 +1039,7 @@ def _traverse_blas_triangles(
     var nearZIsMin = rdir.z >= Float32(0.0)
 
     var hasHit = False
-    var hitPrim = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var hitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var localTHit = tMax
     var bestU: Float32 = 0.0
     var bestV: Float32 = 0.0
@@ -1119,16 +1119,16 @@ def _traverse_blas_triangles(
 
 @always_inline
 def _traverse_instance_leaf(
-    prim: PrimId_C,
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    prim: PrimId,
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin],
+    instances: Pointer[Instance, MutUntrackedOrigin],
     ray_org: Vec3f,
     ray_dir: Vec3f,
     tMax: Float32,
-) -> Tuple[Bool, Float32, Float32, Float32, PrimId_C]:
-    """Handle one PrimId_C.type==6 (instance) leaf: transform the ray into the
+) -> Tuple[Bool, Float32, Float32, Float32, PrimId]:
+    """Handle one PrimId.type==6 (instance) leaf: transform the ray into the
     instance's object space and walk its BLAS. Returns (hit, tHit, u, v,
     primId) with primId.instanceIdx already set to this instance's index.
     Shared by all three top-level traversal functions (traverse_bvh2_core,
@@ -1138,7 +1138,7 @@ def _traverse_instance_leaf(
     — e.g. GPU's own device-side scene upload, which reads the instance-free
     TLAS instead — pass dangling defaults; see [[project_object_instancing]]
     for why an unguarded dereference here previously crashed the GPU path)."""
-    var dummy = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var dummy = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     if Int(instances) <= 4 or Int(blasNodesArr) <= 4 or Int(blasPrimIdsArr) <= 4:
         return (False, tMax, Float32(0), Float32(0), dummy)
     var inst_idx = Int(prim.id1)
@@ -1176,19 +1176,19 @@ def _transform_ray_to_instance_space(
 @always_inline
 def traverse_bvh2_core[Or: Origin[mut=True]](
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    primIds: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     curves: Pointer[Curve_C, MutUntrackedOrigin],
-    ray: Ray_C,
+    ray: Ray,
     tMax: Float32,
-    resultPtr: Pointer[Intersection_C, Or],
+    resultPtr: Pointer[Intersection, Or],
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin] = Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(),
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+    spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
 ):
-    # Callers that never populate any PrimId_C.type==6 leaf (GPU kernels, which
+    # Callers that never populate any PrimId.type==6 leaf (GPU kernels, which
     # upload their own device-side scene copy with no instance data at all) can
     # omit blasNodesArr/blasPrimIdsArr/instances entirely — the dangling
     # defaults above are never dereferenced since no such leaf will exist.
@@ -1213,7 +1213,7 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
     var bestU: Float32 = 0.0
     var bestV: Float32 = 0.0
     var instHit = False
-    var instHitPrim = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var instHitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
 
     var stack = Array[Int32, 64](fill=Int32(0))
     var stack_ptr = stack.unsafe_ptr()
@@ -1361,15 +1361,15 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
             sphereIdx = i
 
     if sphereHit:
-        var spId = PrimId_C(Int64(sphereIdx), Int64(-1), Int64(spheres[unsafe_offset=sphereIdx].materialIndex), Int32(-1), Int8(4), Int8(0), Int8(0), Int8(0))
-        resultPtr[unsafe_offset=0] = Intersection_C(spId, localTHit, Float32(0), Float32(0), Int8(1), 0, 0, 0)
+        var spId = PrimId(Int64(sphereIdx), Int64(-1), Int64(spheres[unsafe_offset=sphereIdx].materialIndex), Int32(-1), Int8(4), Int8(0), Int8(0), Int8(0))
+        resultPtr[unsafe_offset=0] = Intersection(spId, localTHit, Float32(0), Float32(0), Int8(1), 0, 0, 0)
     elif instHit:
-        resultPtr[unsafe_offset=0] = Intersection_C(instHitPrim, localTHit, bestU, bestV, Int8(1), 0, 0, 0)
+        resultPtr[unsafe_offset=0] = Intersection(instHitPrim, localTHit, bestU, bestV, Int8(1), 0, 0, 0)
     elif hitIndex != -1:
-        resultPtr[unsafe_offset=0] = Intersection_C(primIds[unsafe_offset=hitIndex], localTHit, bestU, bestV, Int8(1), 0, 0, 0)
+        resultPtr[unsafe_offset=0] = Intersection(primIds[unsafe_offset=hitIndex], localTHit, bestU, bestV, Int8(1), 0, 0, 0)
     else:
-        var dummyId = PrimId_C(-1, -1, 0, -1, 0, 0, 0, 0)
-        resultPtr[unsafe_offset=0] = Intersection_C(dummyId, tMax, 0.0, 0.0, Int8(0), 0, 0, 0)
+        var dummyId = PrimId(-1, -1, 0, -1, 0, 0, 0, 0)
+        resultPtr[unsafe_offset=0] = Intersection(dummyId, tMax, 0.0, 0.0, Int8(0), 0, 0, 0)
 
 
 # Divergence-mitigation experiment for traverse_paths_gpu: identical traversal to
@@ -1388,17 +1388,17 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
 @always_inline
 def traverse_bvh2_core_defer_curves(
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    primIds: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     curves: Pointer[Curve_C, MutUntrackedOrigin],
-    ray: Ray_C,
+    ray: Ray,
     tMax: Float32,
-    resultPtr: Pointer[Intersection_C, MutUntrackedOrigin],
+    resultPtr: Pointer[Intersection, MutUntrackedOrigin],
     curve_cand_prim: Pointer[Int32, MutUntrackedOrigin],
     curve_cand_count: Pointer[Int32, MutUntrackedOrigin],
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
 ):
 
     var rdir = Vec3f(Float32(1.0) / ray.direction.x, Float32(1.0) / ray.direction.y, Float32(1.0) / ray.direction.z)
@@ -1412,7 +1412,7 @@ def traverse_bvh2_core_defer_curves(
     var bestU: Float32 = 0.0
     var bestV: Float32 = 0.0
     var instHit = False
-    var instHitPrim = PrimId_C(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var instHitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
 
     var stack = Array[Int32, 64](fill=Int32(0))
     var stack_ptr = stack.unsafe_ptr()
@@ -1556,12 +1556,12 @@ def traverse_bvh2_core_defer_curves(
                 current = Int(stack_ptr[unsafe_offset=toVisit])
 
     if instHit:
-        resultPtr[unsafe_offset=0] = Intersection_C(instHitPrim, localTHit, bestU, bestV, Int8(1), 0, 0, 0)
+        resultPtr[unsafe_offset=0] = Intersection(instHitPrim, localTHit, bestU, bestV, Int8(1), 0, 0, 0)
     elif hitIndex != -1:
-        resultPtr[unsafe_offset=0] = Intersection_C(primIds[unsafe_offset=hitIndex], localTHit, bestU, bestV, Int8(1), 0, 0, 0)
+        resultPtr[unsafe_offset=0] = Intersection(primIds[unsafe_offset=hitIndex], localTHit, bestU, bestV, Int8(1), 0, 0, 0)
     else:
-        var dummyId = PrimId_C(-1, -1, 0, -1, 0, 0, 0, 0)
-        resultPtr[unsafe_offset=0] = Intersection_C(dummyId, tMax, 0.0, 0.0, Int8(0), 0, 0, 0)
+        var dummyId = PrimId(-1, -1, 0, -1, 0, 0, 0, 0)
+        resultPtr[unsafe_offset=0] = Intersection(dummyId, tMax, 0.0, 0.0, Int8(0), 0, 0, 0)
 
 
 # Shadow-ray traversal: returns True if anything is hit within tMax (early exit).
@@ -1590,15 +1590,15 @@ def _shadow_is_null_material(
 
 def any_hit_bvh2_core(
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
+    primIds: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     curves: Pointer[Curve_C, MutUntrackedOrigin],
-    ray: Ray_C,
+    ray: Ray,
     tMax: Float32,
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    instances: Pointer[Instance_C, MutUntrackedOrigin] = Pointer[Instance_C, MutUntrackedOrigin].unsafe_dangling(),
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin] = Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(),
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+    spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
     ignore_sphere_center: Vec3f = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0)),
     ignore_sphere_radius: Float32 = Float32(-1.0),
@@ -1731,7 +1731,7 @@ def any_hit_bvh2_core(
 
 # ── CPU entry point ─────────────────────────────────────────────────────────
 
-def traverse_bvh2(scenePtr: Pointer[SceneDescriptor2_C, MutUntrackedOrigin], rayPtr: Pointer[Ray_C, MutUntrackedOrigin], tMax: Float32, resultPtr: Pointer[Intersection_C, MutUntrackedOrigin]):
+def traverse_bvh2(scenePtr: Pointer[SceneDescriptor2_C, MutUntrackedOrigin], rayPtr: Pointer[Ray, MutUntrackedOrigin], tMax: Float32, resultPtr: Pointer[Intersection, MutUntrackedOrigin]):
     var scene = scenePtr[unsafe_offset=0]
     var ray = rayPtr[unsafe_offset=0]
     # spheres/sphereCount are passed explicitly: omitting them defaults
@@ -2134,7 +2134,7 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
     var n_pixels = w * h
     var sd = scene[unsafe_offset=0]
     var org = Point3f(cameraToWorld[unsafe_offset=12], cameraToWorld[unsafe_offset=13], cameraToWorld[unsafe_offset=14])
-    var isects = unsafe_alloc[Intersection_C](n_pixels)
+    var isects = unsafe_alloc[Intersection](n_pixels)
 
     def trace_pixel(i: Int) {imm}:
         var py = i // w
@@ -2161,7 +2161,7 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
         var dl = dir.length()
         if dl > Float32(0): dir = dir / dl
 
-        var ray = Ray_C(org, dir)
+        var ray = Ray(org, dir)
         # A scene with literally zero mesh/curve/instance primitives (e.g.
         # clouds.pbrt -- one analytic sphere plus a heterogeneous medium, no
         # mesh Shape at all) still has *some* bvh2Nodes/primIds allocation,
@@ -2172,7 +2172,7 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
             traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), isects.unsafe_offset(i),
                                sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         else:
-            isects[unsafe_offset=i] = Intersection_C(PrimId_C(-1, -1, 0, -1, 0, 0, 0, 0), Float32(1e38), 0.0, 0.0, Int8(0), 0, 0, 0)
+            isects[unsafe_offset=i] = Intersection(PrimId(-1, -1, 0, -1, 0, 0, 0, 0), Float32(1e38), 0.0, 0.0, Int8(0), 0, 0, 0)
         if Int(sd.sphereCount) > 0:
             test_spheres(sd.spheres, Int(sd.sphereCount), ray, isects.unsafe_offset(i))
 
@@ -2190,7 +2190,7 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
             elif typ == 5:
                 # Native curve: reconstruct the geometric normal the same way
                 # shade_hair does (shading.mojo) — h/v come straight from
-                # intersect_curve via Intersection_C.u/.v, no tessellated mesh.
+                # intersect_curve via Intersection.u/.v, no tessellated mesh.
                 var curve_idx = Int(isects[unsafe_offset=i].primId.id1)
                 if curve_idx >= 0 and curve_idx < Int(sd.curveCount):
                     var curve = sd.curves[unsafe_offset=curve_idx]
@@ -2237,7 +2237,7 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
                     var nl = normal.length()
                     if nl > Float32(0): normal = normal / nl
             # else: unrecognized hit type (shouldn't occur for a real
-            # Intersection_C — type==6 only ever exists as a transient BVH
+            # Intersection — type==6 only ever exists as a transient BVH
             # leaf marker, resolved into type 0-3 with instanceIdx set before
             # traversal returns) — leave `normal` at its background default
             # rather than guessing.

@@ -1,7 +1,7 @@
 from .geometry import TERMINAL_SEGMENT_GRACE_ROUNDS
 from .materials import Material_C, MeasuredBRDF_C
 from .media import Grid_C, MediumInterface_C, Medium_C, NvdbGrid_C
-from .primitives import Instance_C, Intersection_C, Sphere_C
+from .primitives import Instance, Intersection, Sphere
 from .render_state import PathState_C, ShadowTask_C
 from .restir_di import DIReservoir
 from .restir_vol import VolReservoir
@@ -73,14 +73,14 @@ def _gpu_bounce_kernels(
             n_meshes_vk,
             n,
             instance_base_mesh_buf,
-            handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere_C](),
+            handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere](),
             handle[].n_spheres,
         )
     else:
         handle[].ctx.enqueue_function[traverse_paths_gpu](
             sd,
             handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-            handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             handle[].curves.cand_prim_ptr(),
             handle[].curves.cand_count_ptr(),
             Int64(n),
@@ -91,7 +91,7 @@ def _gpu_bounce_kernels(
     # by the segment just traced, before any material shading reads it.
     handle[].ctx.enqueue_function[accumulate_cone_gpu](
         handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         Int64(n),
         grid_dim=grid_dim,
         block_dim=block_size,
@@ -124,14 +124,14 @@ def _gpu_bounce_kernels(
             handle[].curves.cand_offset_ptr(),
             sd,
             handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-            handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             Int64(n),
             grid_dim=grid_dim,
             block_dim=block_size,
         )
     handle[].ctx.enqueue_function[sample_medium_gpu](
         handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         sd,
         Int64(n),
         Int32(1) if use_vol_restir_reuse else Int32(0),
@@ -147,7 +147,7 @@ def _gpu_bounce_kernels(
     )
     handle[].ctx.enqueue_function[shade_nee_preamble_gpu](
         handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
@@ -161,7 +161,7 @@ def _gpu_bounce_kernels(
     # to, later in this SAME launch-ordered sequence.
     handle[].ctx.enqueue_function[shade_mix_gpu](
         handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         sd,
         Int64(n),
         grid_dim=grid_dim,
@@ -201,7 +201,7 @@ def _gpu_bounce_kernels(
     )
     handle[].ctx.enqueue_function[shade_diffuse_gpu](
         handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
@@ -220,7 +220,7 @@ def _gpu_bounce_kernels(
     )
     handle[].ctx.enqueue_function[shade_coated_diffuse_gpu](
         handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
@@ -231,7 +231,7 @@ def _gpu_bounce_kernels(
     )
     handle[].ctx.enqueue_function[shade_diffuse_transmit_gpu](
         handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
@@ -242,7 +242,7 @@ def _gpu_bounce_kernels(
     )
     handle[].ctx.enqueue_function[shade_conductor_gpu](
         handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
@@ -253,7 +253,7 @@ def _gpu_bounce_kernels(
     )
     handle[].ctx.enqueue_function[shade_measured_gpu](
         handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
@@ -264,7 +264,7 @@ def _gpu_bounce_kernels(
     )
     handle[].ctx.enqueue_function[shade_dielectric_gpu](
         handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         sd,
         Int64(n),
         px_scale,
@@ -273,7 +273,7 @@ def _gpu_bounce_kernels(
     )
     handle[].ctx.enqueue_function[shade_thin_dielectric_gpu](
         handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         sd,
         Int64(n),
         grid_dim=grid_dim,
@@ -281,7 +281,7 @@ def _gpu_bounce_kernels(
     )
     handle[].ctx.enqueue_function[shade_coated_conductor_gpu](
         handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
@@ -292,7 +292,7 @@ def _gpu_bounce_kernels(
     )
     handle[].ctx.enqueue_function[shade_interface_gpu](
         handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         sd,
         Int64(n),
         grid_dim=grid_dim,
@@ -300,7 +300,7 @@ def _gpu_bounce_kernels(
     )
     handle[].ctx.enqueue_function[update_medium_gpu](
         handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         sd,
         Int64(n),
         grid_dim=grid_dim,
@@ -308,7 +308,7 @@ def _gpu_bounce_kernels(
     )
     handle[].ctx.enqueue_function[shade_hair_gpu](
         handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection_C]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),

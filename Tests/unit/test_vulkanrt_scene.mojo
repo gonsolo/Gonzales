@@ -1,14 +1,14 @@
 from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator
 from std.testing import assert_true, TestSuite
-from gonzales.primitives import TriangleMesh_C
+from gonzales.primitives import TriangleMesh
 from gonzales.vulkanrt import vulkanrt_build_scene, vulkanrt_trace_ray, vulkanrt_destroy_scene
 
 # Task #162 step 2: proves vulkanrt_build_scene/vulkanrt_trace_ray produce a
-# real Vulkan BLAS/TLAS from gonzales's own TriangleMesh_C data (not the
+# real Vulkan BLAS/TLAS from gonzales's own TriangleMesh data (not the
 # hardcoded single triangle test_vulkanrt_smoke.mojo exercises), and that
 # tracing against it reports the correct (mesh, triangle) hit -- the same
-# (meshIdx, triIdx) numbering gonzales's own PrimId_C uses.
+# (meshIdx, triIdx) numbering gonzales's own PrimId uses.
 #
 # Two separate meshes, one triangle each, placed far apart in x so a probe
 # ray can unambiguously land on one or the other (or neither).
@@ -34,13 +34,13 @@ def test_vulkanrt_build_scene_traces_correct_mesh_and_triangle() raises:
     var idx1 = unsafe_alloc[Int64](3)
     idx1[unsafe_offset=0] = 0; idx1[unsafe_offset=1] = 1; idx1[unsafe_offset=2] = 2
 
-    var meshes = unsafe_alloc[TriangleMesh_C](2)
-    meshes[unsafe_offset=0] = TriangleMesh_C(
+    var meshes = unsafe_alloc[TriangleMesh](2)
+    meshes[unsafe_offset=0] = TriangleMesh(
         pts0, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), idx0,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
-    meshes[unsafe_offset=1] = TriangleMesh_C(
+    meshes[unsafe_offset=1] = TriangleMesh(
         pts1, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), idx1,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),

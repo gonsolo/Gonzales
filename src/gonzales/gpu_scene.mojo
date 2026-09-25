@@ -4,7 +4,7 @@ from .geometry import _is_real_ptr
 from .lights import AreaLight_C, DistantLight_C, InfiniteLight_C, PointLight_C, LightSampler_C
 from .materials import Material_C, MeasuredBRDF_C
 from .media import Grid_C, MediumInterface_C, Medium_C, NvdbGrid_C
-from .primitives import Instance_C, Intersection_C, PrimId_C, Sphere_C, TriangleMesh_C
+from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh
 from .render_state import FilmDims, FilterParams, GpuTexture_C, NormalSlopeMap_C, PathState_C, ShadowTask_C
 from .spectrum import SpectralHandle
 from .pbrt_parser import ParsedScene_Mojo
@@ -305,8 +305,8 @@ struct BvhBuffers(Movable):
         return typed_ptr[BVH2Node](self.nodes_buf)
 
     @always_inline
-    def prim_ids_ptr(mut self) -> Pointer[PrimId_C, MutUntrackedOrigin]:
-        return typed_ptr[PrimId_C](self.prim_ids_buf)
+    def prim_ids_ptr(mut self) -> Pointer[PrimId, MutUntrackedOrigin]:
+        return typed_ptr[PrimId](self.prim_ids_buf)
 
     @staticmethod
     def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo) raises -> Self:
@@ -314,13 +314,13 @@ struct BvhBuffers(Movable):
         # buffer may be a 1-element placeholder when the scene has no
         # geometry).
         var bvh_buf = _gpu_upload_array[BVH2Node](ctx, s.bvh_nodes_cpu, Int(s.bvh_node_count_cpu))
-        var prim_buf = _gpu_upload_array[PrimId_C](ctx, s.prim_ids_cpu, Int(s.prim_count_cpu))
+        var prim_buf = _gpu_upload_array[PrimId](ctx, s.prim_ids_cpu, Int(s.prim_count_cpu))
         return Self(nodes_buf=bvh_buf^, prim_ids_buf=prim_buf^)
 
 @fieldwise_init
 struct BlasBuffers(Movable):
     """Object instancing (see [[project_object_instancing]]/geometry.mojo's
-    Instance_C docs): one device buffer per BLAS (kept alive here), plus two
+    Instance docs): one device buffer per BLAS (kept alive here), plus two
     small "array of device pointers" buffers so a kernel's
     blasNodesArr[i]/blasPrimIdsArr[i] resolves to the right BLAS's buffer."""
     var nodes_bufs: List[DeviceBuffer[DType.uint8]]
@@ -334,8 +334,8 @@ struct BlasBuffers(Movable):
         return typed_ptr[Pointer[BVH2Node, MutUntrackedOrigin]](self.nodes_ptrs_buf)
 
     @always_inline
-    def primids_arr(mut self) -> Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin]:
-        return typed_ptr[Pointer[PrimId_C, MutUntrackedOrigin]](self.primids_ptrs_buf)
+    def primids_arr(mut self) -> Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin]:
+        return typed_ptr[Pointer[PrimId, MutUntrackedOrigin]](self.primids_ptrs_buf)
 
     @staticmethod
     def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo) raises -> Self:
@@ -352,7 +352,7 @@ struct BlasBuffers(Movable):
         for bi in range(n_blas_int):
             blas_nodes_ptrs_host[unsafe_offset=bi] = _gpu_upload_owned[BVH2Node](
                 ctx, blas_nodes_bufs, s.blas_nodes_arr[unsafe_offset=bi], Int(s.blas_node_counts[unsafe_offset=bi])).unsafe_bitcast[UInt8]()
-            blas_primids_ptrs_host[unsafe_offset=bi] = _gpu_upload_owned[PrimId_C](
+            blas_primids_ptrs_host[unsafe_offset=bi] = _gpu_upload_owned[PrimId](
                 ctx, blas_primids_bufs, s.blas_primids_arr[unsafe_offset=bi], Int(s.blas_primid_counts[unsafe_offset=bi])).unsafe_bitcast[UInt8]()
 
         var blas_nodes_ptrs_buf = _gpu_upload_array[Pointer[UInt8, MutUntrackedOrigin]](
@@ -377,8 +377,8 @@ struct MeshBuffers(Movable):
     var alpha_bufs: List[DeviceBuffer[DType.uint8]]   # one per distinct alpha mask
 
     @always_inline
-    def meshes_ptr(mut self) -> Pointer[TriangleMesh_C, MutUntrackedOrigin]:
-        return typed_ptr[TriangleMesh_C](self.meshes_buf)
+    def meshes_ptr(mut self) -> Pointer[TriangleMesh, MutUntrackedOrigin]:
+        return typed_ptr[TriangleMesh](self.meshes_buf)
 
     @staticmethod
     def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo) raises -> Self:
@@ -394,7 +394,7 @@ struct MeshBuffers(Movable):
         var alpha_host_keys = List[Int]()
         var alpha_dev_ptrs = List[Pointer[UInt8, MutUntrackedOrigin]]()
 
-        var mesh_structs_host = unsafe_alloc[TriangleMesh_C](max(Int(s.mesh_count), 1))
+        var mesh_structs_host = unsafe_alloc[TriangleMesh](max(Int(s.mesh_count), 1))
 
         for i in range(Int(s.mesh_count)):
             var host_mesh = s.meshes[unsafe_offset=i]
@@ -433,11 +433,11 @@ struct MeshBuffers(Movable):
                     alpha_dev_ptrs.append(_gpu_upload_owned[UInt8](ctx, alpha_bufs, host_mesh.alpha,
                         Int(host_mesh.alpha_w) * Int(host_mesh.alpha_h)))
                 alpha_dptr = alpha_dev_ptrs[found]
-            mesh_structs_host[unsafe_offset=i] = TriangleMesh_C(pts_dptr, fi_dptr, vi_dptr, uv_dptr, nrm_dptr,
+            mesh_structs_host[unsafe_offset=i] = TriangleMesh(pts_dptr, fi_dptr, vi_dptr, uv_dptr, nrm_dptr,
                 alpha_dptr, host_mesh.alpha_w, host_mesh.alpha_h, host_mesh.alpha_const)
 
         # Upload mesh struct array
-        var meshes_buf = _gpu_upload_array[TriangleMesh_C](ctx, mesh_structs_host, Int(s.mesh_count))
+        var meshes_buf = _gpu_upload_array[TriangleMesh](ctx, mesh_structs_host, Int(s.mesh_count))
         ctx.synchronize()   # mesh_structs_host is freed next
         mesh_structs_host.unsafe_free()
         return Self(meshes_buf=meshes_buf^, mesh_count=Int(s.mesh_count), points_bufs=points_bufs^,
@@ -883,7 +883,7 @@ struct GpuSceneHandle(Movable):
     var material_count: Int
     var textures: TextureBuffers
     var lights: LightBuffers
-    var spheres_buf: DeviceBuffer[DType.uint8]   # n_spheres × sizeof(Sphere_C) = 36
+    var spheres_buf: DeviceBuffer[DType.uint8]   # n_spheres × sizeof(Sphere) = 36
     var n_spheres: Int
     var curves: CurveBuffers
     var media: MediaBuffers
@@ -957,7 +957,7 @@ struct GpuSceneHandle(Movable):
             distantLights=self.lights.distant_lights_ptr(), distantLightCount=Int64(self.lights.n_distant_lights),
             pointLights=self.lights.point_lights_ptr(), pointLightCount=Int64(self.lights.n_point_lights),
             infiniteLights=self.lights.infinite_lights_ptr(), infiniteLightCount=Int64(self.lights.n_infinite_lights),
-            spheres=typed_ptr[Sphere_C](self.spheres_buf), sphereCount=Int64(self.n_spheres),
+            spheres=typed_ptr[Sphere](self.spheres_buf), sphereCount=Int64(self.n_spheres),
             curves=self.curves.curves_ptr(), curveCount=Int64(self.curves.n_curves),
             mediums=typed_ptr[Medium_C](self.media.mediums_buf), mediumCount=Int64(self.media.n_mediums),
             mediumInterfaces=typed_ptr[MediumInterface_C](self.media.medium_ifaces_buf), mediumIfaceCount=Int64(self.media.n_medium_ifaces),
@@ -965,7 +965,7 @@ struct GpuSceneHandle(Movable):
             nvdbGrids=typed_ptr[NvdbGrid_C](self.media.nvdb_grids_buf), nvdbGridCount=Int64(self.media.n_nvdb_grids),
             lightSampler=LightSampler_C(cdf=self.lights.light_sampler_ptr(), n=Int32(self.lights.n_light_sampler), _pad=Int32(0)),
             blasNodesArr=self.blas.nodes_arr(), blasPrimIdsArr=self.blas.primids_arr(), blasCount=Int64(self.blas.n_blas),
-            instances=typed_ptr[Instance_C](self.instances_buf), instanceCount=Int64(self.n_instances),
+            instances=typed_ptr[Instance](self.instances_buf), instanceCount=Int64(self.n_instances),
             measuredBrdfs=typed_ptr[MeasuredBRDF_C](self.measured.brdfs_buf), measuredBrdfCount=Int64(self.measured.n_brdfs),
             spectral=SpectralHandle(sc, sres, sx, sy, sz, sd65),
             gpuTextures=self.textures.textures_ptr(), gpuTextureCount=Int64(self.textures.n_textures),
@@ -1031,8 +1031,8 @@ def _report_gpu_memory(ctx: DeviceContext, ref s: ParsedScene_Mojo) raises:
     # a 0-byte enqueue_create_buffer yields a misaligned/invalid device
     # pointer that crashes on use and on free. Allocate at least 1 elem.
     var bvh_bytes = max(Int(s.bvh_node_count_cpu), 1) * size_of[BVH2Node]()
-    var prim_bytes = max(Int(s.prim_count_cpu), 1) * size_of[PrimId_C]()
-    var mesh_struct_bytes = max(Int(s.mesh_count), 1) * size_of[TriangleMesh_C]()
+    var prim_bytes = max(Int(s.prim_count_cpu), 1) * size_of[PrimId]()
+    var mesh_struct_bytes = max(Int(s.mesh_count), 1) * size_of[TriangleMesh]()
 
     # Estimate total mesh data
     var mesh_data_bytes = 0
@@ -1073,20 +1073,20 @@ def gpu_upload_scene(
             _report_gpu_memory(ctx, s)
             var bvh = BvhBuffers.upload(ctx, s)
             var blas = BlasBuffers.upload(ctx, s)
-            var instances_gpu_buf = _gpu_upload_array[Instance_C](ctx, s.instances, Int(s.instance_count))
+            var instances_gpu_buf = _gpu_upload_array[Instance](ctx, s.instances, Int(s.instance_count))
             var meshes = MeshBuffers.upload(ctx, s)
             # >= 1 elem to avoid a zero-size buffer
             var mat_buf = _gpu_upload_array[Material_C](ctx, s.materials, Int(s.material_count))
             var lights = LightBuffers.upload(ctx, s)
             # analytical sphere primitives + sphere area lights
-            var sphere_buf = _gpu_upload_array[Sphere_C](ctx, s.spheres, Int(s.sphere_count))
+            var sphere_buf = _gpu_upload_array[Sphere](ctx, s.spheres, Int(s.sphere_count))
             var media = MediaBuffers.upload(ctx, s)
             var measured = MeasuredBuffers.upload(ctx, s)
 
             # Allocate persistent render buffers (zeroed film)
             var n_pix = max(Int(n_pixels), 1)
             var r_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[PathState_C]() * WAVEFRONT_BATCH)
-            var r_inter_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection_C]() * WAVEFRONT_BATCH)
+            var r_inter_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection]() * WAVEFRONT_BATCH)
             var r_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_albedo_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_atrous_ping_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
