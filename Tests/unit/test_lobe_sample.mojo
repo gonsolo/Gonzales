@@ -8,13 +8,13 @@ from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, Vec3f, PI
 from gonzales.materials import Material, MatKind, LobeKind, MeasuredBRDF
-from gonzales.curves import Curve_C
+from gonzales.curves import Curve
 from gonzales.bxdf import LobeCtx, LobeTables, lobe_eval, lobe_sample, lobe_scoped
 from gonzales.rng import PCG32
 from gonzales.spectrum import SampledWavelengths, sample_wavelengths_uniform, SpectralContext, spectral_handle
 from gonzales.rgb2spec import build_spectrum_table, build_cie_xyz_tables, SpectrumTable
 
-comptime _curves = Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling()
+comptime _curves = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling()
 comptime _mbrdfs = Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling()
 comptime TEST_RES = 16
 

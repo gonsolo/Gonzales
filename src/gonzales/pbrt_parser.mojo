@@ -24,7 +24,7 @@ from .render_state import GpuTexture, NormalSlopeMap, normal_slope_map_none
 from .primitives import Sphere, TriangleMesh, PrimId, Instance
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
-from .curves import Curve_C, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area
+from .curves import Curve, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area
 from .nanovdb import nvdb_load, nvdb_load_named, nvdb_data, nvdb_size, nvdb_free, nvdb_index_bbox, nvdb_value_range, nvdb_map_invmatf, nvdb_map_vecf
 from .noise import _perlin_perm_table, cloud_density
 from .transform import matrix_multiply, matrix_invert, transform_points, transform_normals
@@ -113,7 +113,7 @@ struct ParsedScene_Mojo:
     var infinite_count:   Int32
     var spheres:          Pointer[Sphere, MutUntrackedOrigin]
     var sphere_count:     Int32
-    var curves:           Pointer[Curve_C, MutUntrackedOrigin]
+    var curves:           Pointer[Curve, MutUntrackedOrigin]
     var curve_count:      Int32
     var mediums:          Pointer[Medium, MutUntrackedOrigin]
     var medium_count:     Int32
@@ -574,9 +574,9 @@ def _loopsubdiv_tessellate(
 
 def handle_curve_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                             s: Pointer[SceneParseState, MutUntrackedOrigin]):
-    """PBRT `Shape "curve"`: stored natively (no tessellation) as one Curve_C
+    """PBRT `Shape "curve"`: stored natively (no tessellation) as one Curve
     per local cubic B-spline segment, CTM-transformed at parse time. See
-    Curve_C / intersect_curve in geometry.mojo for the BVH-time intersection."""
+    Curve / intersect_curve in geometry.mojo for the BVH-time intersection."""
     var params = _psc_collect_params(handle)
     # take_floats moves "P"'s buffer out of the dictionary (List.pop, O(1) --
     # no copy); _psc_collect_params already scanned it straight into the
@@ -1889,7 +1889,7 @@ comptime CURVE_GROUP_MAX: Int = 2   # hard cap on pieces merged per BVH leaf —
 # typically costs 2-4 leaves instead of always exactly CURVE_N_PIECES.
 
 def _curve_greedy_groups(
-    curve: Curve_C,
+    curve: Curve,
     n_pieces: Int,
     out_first: Pointer[Int32, MutUntrackedOrigin],
     out_count: Pointer[Int32, MutUntrackedOrigin],
@@ -2468,7 +2468,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             total_tris += Int32(len(s[unsafe_offset=0].meshes[i].face_idxs))
 
     # Native curves: precompute per-curve piece count via the same flatness
-    # test used for the Curve_C upload below, then greedily merge adjacent
+    # test used for the Curve upload below, then greedily merge adjacent
     # flat-enough pieces of each curly curve into single BVH leaves (see
     # _curve_greedy_groups) so the leaf count stays close to the number of
     # visually-distinct bends, not always CURVE_N_PIECES.
@@ -2501,7 +2501,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         var maxw = max(s[unsafe_offset=0].curves_w0[i], s[unsafe_offset=0].curves_w1[i])
         curve_n_pieces[unsafe_offset=i] = Int32(1) if max_dev < maxw * Float32(0.5) else Int32(CURVE_N_PIECES)
 
-        var curve_i = Curve_C(
+        var curve_i = Curve(
             Point3f(s[unsafe_offset=0].curves_cp[cb+0], s[unsafe_offset=0].curves_cp[cb+1], s[unsafe_offset=0].curves_cp[cb+2]),
             Point3f(s[unsafe_offset=0].curves_cp[cb+3], s[unsafe_offset=0].curves_cp[cb+4], s[unsafe_offset=0].curves_cp[cb+5]),
             Point3f(s[unsafe_offset=0].curves_cp[cb+6], s[unsafe_offset=0].curves_cp[cb+7], s[unsafe_offset=0].curves_cp[cb+8]),
@@ -2554,7 +2554,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     var group_count_scratch = unsafe_alloc[Int32](CURVE_N_PIECES)
     for ci in range(Int(n_curves)):
         var base = ci * 12
-        var curve_i = Curve_C(
+        var curve_i = Curve(
             Point3f(s[unsafe_offset=0].curves_cp[base+0], s[unsafe_offset=0].curves_cp[base+1], s[unsafe_offset=0].curves_cp[base+2]),
             Point3f(s[unsafe_offset=0].curves_cp[base+3], s[unsafe_offset=0].curves_cp[base+4], s[unsafe_offset=0].curves_cp[base+5]),
             Point3f(s[unsafe_offset=0].curves_cp[base+6], s[unsafe_offset=0].curves_cp[base+7], s[unsafe_offset=0].curves_cp[base+8]),
@@ -3137,10 +3137,10 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # recomputing.
     var nc = len(s[unsafe_offset=0].curves_mat)
     if nc > 0:
-        var curve_buf = unsafe_alloc[Curve_C](nc)
+        var curve_buf = unsafe_alloc[Curve](nc)
         for i in range(nc):
             var cb = i * 12
-            curve_buf[unsafe_offset=i] = Curve_C(
+            curve_buf[unsafe_offset=i] = Curve(
                 Point3f(s[unsafe_offset=0].curves_cp[cb+0], s[unsafe_offset=0].curves_cp[cb+1], s[unsafe_offset=0].curves_cp[cb+2]),
                 Point3f(s[unsafe_offset=0].curves_cp[cb+3], s[unsafe_offset=0].curves_cp[cb+4], s[unsafe_offset=0].curves_cp[cb+5]),
                 Point3f(s[unsafe_offset=0].curves_cp[cb+6], s[unsafe_offset=0].curves_cp[cb+7], s[unsafe_offset=0].curves_cp[cb+8]),
@@ -3148,7 +3148,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 s[unsafe_offset=0].curves_w0[i], s[unsafe_offset=0].curves_w1[i], s[unsafe_offset=0].curves_mat[i], curve_n_pieces[unsafe_offset=i])
         psc[unsafe_offset=0].curves = curve_buf
     else:
-        psc[unsafe_offset=0].curves = Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling()
+        psc[unsafe_offset=0].curves = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].curve_count = Int32(nc)
     curve_n_pieces.unsafe_free()
 

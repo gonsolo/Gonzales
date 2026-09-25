@@ -18,7 +18,7 @@ from .geometry import Point3f, Vec3f, cross, dot
 # fixed-radius cylinders (see intersect_curve below).
 
 @fieldwise_init
-struct Curve_C(TrivialRegisterPassable):
+struct Curve(TrivialRegisterPassable):
     """One cubic B-spline curve segment. width0/width1 are the curve's full
     diameter at the segment's start/end (u=0/u=1 of THIS segment's local
     parameter range, not the whole original strand). n_pieces is a per-curve
@@ -68,7 +68,7 @@ def _curve_perp_axis(t: Vec3f) -> Vec3f:
     return Vec3f(Float32(1.0), Float32(0.0), Float32(0.0))
 
 @always_inline
-def curve_bspline_point(curve: Curve_C, t: Float32) -> Vec3f:
+def curve_bspline_point(curve: Curve, t: Float32) -> Vec3f:
     """Evaluate the uniform cubic B-spline segment at local parameter t in [0,1]."""
     var t2 = t * t
     var t3 = t2 * t
@@ -81,7 +81,7 @@ def curve_bspline_point(curve: Curve_C, t: Float32) -> Vec3f:
     return p0*b0 + p1*b1 + p2*b2 + p3*b3
 
 @always_inline
-def curve_piece_endpoints(curve: Curve_C, piece: Int) -> Tuple[Vec3f, Vec3f, Float32, Float32]:
+def curve_piece_endpoints(curve: Curve, piece: Int) -> Tuple[Vec3f, Vec3f, Float32, Float32]:
     """Sample points + radii bounding one of this curve's n_pieces locally-linear pieces."""
     var n = Float32(curve.n_pieces)
     var t0 = Float32(piece) / n
@@ -96,7 +96,7 @@ def curve_piece_endpoints(curve: Curve_C, piece: Int) -> Tuple[Vec3f, Vec3f, Flo
 def intersect_curve(
     ray_org: Vec3f,
     ray_dir: Vec3f,
-    curve: Curve_C,
+    curve: Curve,
     first_piece: Int,
     piece_count: Int,
     tMax: Float32,
@@ -179,7 +179,7 @@ def intersect_curve(
     return (best_hit, best_t, best_h, best_v)
 
 @always_inline
-def curve_piece_bounds(curve: Curve_C, piece: Int) -> Tuple[Float32, Float32, Float32, Float32, Float32, Float32]:
+def curve_piece_bounds(curve: Curve, piece: Int) -> Tuple[Float32, Float32, Float32, Float32, Float32, Float32]:
     """Tight AABB for one locally-linear piece: the segment q0..q1 thickened
     by max(r0,r1). Used as the BVH leaf bound now that leaves are per-piece
     instead of per-whole-curve (see intersect_curve)."""
@@ -194,7 +194,7 @@ def curve_piece_bounds(curve: Curve_C, piece: Int) -> Tuple[Float32, Float32, Fl
     return (xmin, ymin, zmin, xmax, ymax, zmax)
 
 @always_inline
-def curve_light_tube_area(curve: Curve_C) -> Float32:
+def curve_light_tube_area(curve: Curve) -> Float32:
     """Approximate lateral (side) surface area of a curve treated as a thin
     tube light: sum over each locally-linear piece of its lateral cylinder
     area (2*pi*avg_radius*piece_length). Used only to normalize NEE/light-

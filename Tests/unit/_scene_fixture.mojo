@@ -2,7 +2,7 @@ from std.memory.alloc import unsafe_alloc
 from gonzales.geometry import Point3f, Vec3f, RGB
 from gonzales.materials import Material, MatKind
 from gonzales.primitives import Ray, Intersection, PrimId, TriangleMesh
-from gonzales.curves import Curve_C
+from gonzales.curves import Curve
 from gonzales.bvh import BVH2Node, build_bvh2, traverse_bvh2_core
 
 # ── Shared BVH-backed triangle-scene fixture ────────────────────────────────
@@ -29,7 +29,7 @@ struct TriangleSceneFixture(Movable):
     var meshes:         Pointer[TriangleMesh, MutUntrackedOrigin]
     var bvh_nodes:      Pointer[BVH2Node, MutUntrackedOrigin]
     var prim_ids:       Pointer[PrimId, MutUntrackedOrigin]
-    var curves:         Pointer[Curve_C, MutUntrackedOrigin]
+    var curves:         Pointer[Curve, MutUntrackedOrigin]
     var materials:      Pointer[Material, MutUntrackedOrigin]
     var n_tris:          Int32
 
@@ -116,6 +116,6 @@ def make_triangle_scene(verts: List[Point3f]) -> TriangleSceneFixture:
 
     return TriangleSceneFixture(
         points, vertex_indices, meshes, bvh_nodes, prim_ids,
-        Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(),
         materials, n_tris,
     )

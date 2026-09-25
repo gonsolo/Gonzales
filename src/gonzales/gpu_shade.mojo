@@ -1,5 +1,5 @@
 from .bvh import BVH2Node, SceneDescriptor2_C
-from .curves import Curve_C
+from .curves import Curve
 from .geometry import _is_real_ptr
 from .guide import null_guide
 from .lights import AreaLight, DistantLight, InfiniteLight, LightSampler, PointLight
@@ -405,7 +405,7 @@ def shade_enqueue_shadow_gpu(
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     primIds: Pointer[PrimId, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
     blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin],
     instances: Pointer[Instance, MutUntrackedOrigin],

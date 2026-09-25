@@ -15,12 +15,12 @@ from std.sys.info import size_of
 from std.gpu import block_idx, thread_idx, block_dim
 from max.gpu.host import DeviceContext
 from gonzales.geometry import (
-    Point3f, Vec3f, Ray, PrimId, Intersection, TriangleMesh, Curve_C,
+    Point3f, Vec3f, Ray, PrimId, Intersection, TriangleMesh, Curve,
 )
 from gonzales.bvh import BVH2Node, traverse_bvh2_core
 from std.memory.alloc import unsafe_alloc
 
-comptime NO_CURVES = Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling
+comptime NO_CURVES = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling
 
 def _nested_shared(
     bvh: Pointer[BVH2Node, MutUntrackedOrigin],

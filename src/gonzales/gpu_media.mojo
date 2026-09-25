@@ -1,5 +1,5 @@
 from .bvh import BVH2Node, LightSample, _sample_distant_light_nee, _sample_infinite_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, any_hit_bvh2_core, test_spheres, traverse_bvh2_core, SceneDescriptor2_C
-from .curves import Curve_C
+from .curves import Curve
 from .geometry import Point2f, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, point3f, vec3f
 from .lights import AreaLight, DistantLight, InfiniteLight, LightSampler, PointLight, area_light_pick_triangle, light_sampler_sample
 from .materials import MatKind, Material

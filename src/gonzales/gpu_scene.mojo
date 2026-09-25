@@ -1,5 +1,5 @@
 from .bvh import BVH2Node, SceneDescriptor2_C
-from .curves import CURVE_DEFER_K, Curve_C
+from .curves import CURVE_DEFER_K, Curve
 from .geometry import _is_real_ptr
 from .lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSampler
 from .materials import Material, MeasuredBRDF
@@ -655,7 +655,7 @@ struct LightBuffers(Movable):
 
 @fieldwise_init
 struct CurveBuffers(Movable):
-    var curves_buf: DeviceBuffer[DType.uint8]    # n_curves × sizeof(Curve_C)
+    var curves_buf: DeviceBuffer[DType.uint8]    # n_curves × sizeof(Curve)
     var n_curves: Int
     # Curve-divergence-mitigation scratch (see traverse_bvh2_core_defer_curves).
     # Only meaningfully sized when n_curves > 0; otherwise 1-byte dummies.
@@ -674,8 +674,8 @@ struct CurveBuffers(Movable):
     var compact_counter_buf: DeviceBuffer[DType.uint8] # 1 × Int32
 
     @always_inline
-    def curves_ptr(mut self) -> Pointer[Curve_C, MutUntrackedOrigin]:
-        return typed_ptr[Curve_C](self.curves_buf)
+    def curves_ptr(mut self) -> Pointer[Curve, MutUntrackedOrigin]:
+        return typed_ptr[Curve](self.curves_buf)
 
     @always_inline
     def cand_prim_ptr(mut self) -> Pointer[Int32, MutUntrackedOrigin]:
@@ -700,7 +700,7 @@ struct CurveBuffers(Movable):
     @staticmethod
     def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo, n_pix: Int) raises -> Self:
         # Upload curves (native hair/fur primitives — control points only, no tessellation)
-        var curve_buf = _gpu_upload_array[Curve_C](ctx, s.curves, Int(s.curve_count))
+        var curve_buf = _gpu_upload_array[Curve](ctx, s.curves, Int(s.curve_count))
         # Curve-divergence-mitigation scratch. curve_cand_prim/curve_cand_count
         # are indexed by every path's tid unconditionally inside
         # traverse_paths_gpu (curve_cand_count[tid] = 0 runs for every active

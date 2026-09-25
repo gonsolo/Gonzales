@@ -12,7 +12,7 @@ from .render_state import PathState, TileResult, GpuTexture, NormalSlopeMap
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, intersect_triangle, alpha_killed, Instance, sphere_outward_normal
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
-from .curves import Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis
+from .curves import Curve, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis
 from .rng import PCG32
 from .spectrum import SpectralHandle
 
@@ -127,7 +127,7 @@ struct SceneDescriptor2_C(TrivialRegisterPassable, DevicePassable):
     var infiniteLightCount: Int64
     var spheres: Pointer[Sphere, MutUntrackedOrigin]
     var sphereCount: Int64
-    var curves: Pointer[Curve_C, MutUntrackedOrigin]
+    var curves: Pointer[Curve, MutUntrackedOrigin]
     var curveCount: Int64
     var mediums: Pointer[Medium, MutUntrackedOrigin]
     var mediumCount: Int64
@@ -729,7 +729,7 @@ struct HairLobeConstants(TrivialRegisterPassable):
 @always_inline
 def _hair_precompute(
     mat: Material,
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
     curve_idx: Int,
     v_global: Float32,
     h_raw: Float32,
@@ -1178,7 +1178,7 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     primIds: Pointer[PrimId, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
     ray: Ray,
     tMax: Float32,
     resultPtr: Pointer[Intersection, Or],
@@ -1390,7 +1390,7 @@ def traverse_bvh2_core_defer_curves(
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     primIds: Pointer[PrimId, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
     ray: Ray,
     tMax: Float32,
     resultPtr: Pointer[Intersection, MutUntrackedOrigin],
@@ -1592,7 +1592,7 @@ def any_hit_bvh2_core(
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     primIds: Pointer[PrimId, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
     ray: Ray,
     tMax: Float32,
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),

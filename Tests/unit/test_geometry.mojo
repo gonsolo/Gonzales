@@ -3,7 +3,7 @@ from std.testing import assert_true, assert_false, TestSuite
 from gonzales.geometry import Vec3f, Point3f, Frame, RGB, reflect, refract, safe_sqrt, dot, cross, spherical_direction, vec3f, point3f
 from gonzales.materials import schlick_fresnel, fr_dielectric
 from gonzales.primitives import sphere_outward_normal
-from gonzales.curves import Curve_C, curve_bspline_point, curve_light_tube_area
+from gonzales.curves import Curve, curve_bspline_point, curve_light_tube_area
 
 comptime EPS: Float32 = 1e-4
 
@@ -323,7 +323,7 @@ def test_curve_light_tube_area_single_piece_constant_radius() raises:
     assumed independently -- computed via the same curve_bspline_point this
     module already tests elsewhere isn't needed here, since any 4 control
     points work for a single piece spanning the whole [0,1] range)."""
-    var curve = Curve_C(
+    var curve = Curve(
         Point3f(0.0, 0.0, 0.0), Point3f(1.0, 2.0, 0.0),
         Point3f(2.0, -1.0, 0.0), Point3f(3.0, 0.0, 0.0),
         Float32(0.4), Float32(0.4), Int32(0), Int32(1),
@@ -339,12 +339,12 @@ def test_curve_light_tube_area_scales_with_radius() raises:
     """Doubling both endpoint widths must exactly double the tube area
     (area is linear in radius) -- catches an accidental use of r^2 or a
     missing 0.5 in the width-to-radius conversion."""
-    var curve_thin = Curve_C(
+    var curve_thin = Curve(
         Point3f(0.0, 0.0, 0.0), Point3f(1.0, 0.0, 0.0),
         Point3f(2.0, 0.0, 0.0), Point3f(3.0, 0.0, 0.0),
         Float32(0.1), Float32(0.1), Int32(0), Int32(1),
     )
-    var curve_thick = Curve_C(
+    var curve_thick = Curve(
         Point3f(0.0, 0.0, 0.0), Point3f(1.0, 0.0, 0.0),
         Point3f(2.0, 0.0, 0.0), Point3f(3.0, 0.0, 0.0),
         Float32(0.2), Float32(0.2), Int32(0), Int32(1),
@@ -354,12 +354,12 @@ def test_curve_light_tube_area_scales_with_radius() raises:
 def test_curve_light_tube_area_sums_across_pieces() raises:
     """n_pieces=4 must equal the sum of each individual piece's own lateral
     area -- catches an off-by-one in the piece-count loop bound."""
-    var curve1 = Curve_C(
+    var curve1 = Curve(
         Point3f(0.0, 0.0, 0.0), Point3f(1.0, 3.0, 0.0),
         Point3f(2.0, -2.0, 1.0), Point3f(3.0, 1.0, -1.0),
         Float32(0.3), Float32(0.1), Int32(0), Int32(1),
     )
-    var curve4 = Curve_C(
+    var curve4 = Curve(
         Point3f(0.0, 0.0, 0.0), Point3f(1.0, 3.0, 0.0),
         Point3f(2.0, -2.0, 1.0), Point3f(3.0, 1.0, -1.0),
         Float32(0.3), Float32(0.1), Int32(0), Int32(4),

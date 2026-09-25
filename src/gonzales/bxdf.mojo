@@ -3,7 +3,7 @@ from std.math import sqrt
 from .layered import layered_f, layered_pdf, layered_sample
 from .geometry import RGB, Vec3f, dot, INV_PI, PI, Frame, refract, INV_FOUR_PI
 from .materials import MatKind, LobeKind, Material, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS, MeasuredBRDF
-from .curves import Curve_C
+from .curves import Curve
 from .bssrdf import fdr_moment, bssrdf_exit_ft
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world, power_heuristic
 from .vcm_mis import MisPolicy, mis_policy_power, mis_policy_sole, nee_mis_weight
@@ -923,7 +923,7 @@ struct LobeTables(TrivialRegisterPassable):
     either context by a one-line accessor. If the two contexts are ever
     reconciled, this is what they should agree on first."""
     var materials:      Pointer[Material, MutUntrackedOrigin]
-    var curves:         Pointer[Curve_C, MutUntrackedOrigin]
+    var curves:         Pointer[Curve, MutUntrackedOrigin]
     var measured_brdfs: Pointer[MeasuredBRDF, MutUntrackedOrigin]
 
 

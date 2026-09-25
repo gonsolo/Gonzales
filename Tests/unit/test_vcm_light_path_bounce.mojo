@@ -25,7 +25,7 @@ from gonzales.render_state import GpuTexture, NormalSlopeMap
 from gonzales.primitives import Ray, Intersection, PrimId, Sphere, Instance, TriangleMesh
 from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
-from gonzales.curves import Curve_C
+from gonzales.curves import Curve
 from gonzales.bvh import SceneDescriptor2_C, BVH2Node, build_bvh2, traverse_bvh2_core
 from gonzales.rng import PCG32
 from gonzales.spectrum import null_spectral_handle, SampledWavelengths, SpectralSample, sample_wavelengths_uniform
@@ -117,7 +117,7 @@ def _build_scene() -> SceneDescriptor2_C:
         Pointer[PointLight, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[InfiniteLight, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Int64(0),

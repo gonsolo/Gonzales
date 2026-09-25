@@ -38,7 +38,7 @@ from .geometry import RGB, dot, cross, Frame, Vec3f, Point3f, _atan2f, PI, TWO_P
 from .materials import fr_dielectric
 from .render_state import NormalSlopeMap, normal_slope_map_none
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Instance, Sphere
-from .curves import Curve_C
+from .curves import Curve
 from .rng import PCG32
 from .bvh import ray_sphere_hit, traverse_bvh2_core, BVH2Node
 
@@ -517,7 +517,7 @@ def _sms_reproject_onto_sphere_anchored(
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin] = Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
     primIds: Pointer[PrimId, MutUntrackedOrigin] = Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin] = Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(),
-    curves: Pointer[Curve_C, MutUntrackedOrigin] = Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
+    curves: Pointer[Curve, MutUntrackedOrigin] = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(),
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
     blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
@@ -876,7 +876,7 @@ def sms_walk(
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin] = Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
     primIds: Pointer[PrimId, MutUntrackedOrigin] = Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin] = Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(),
-    curves: Pointer[Curve_C, MutUntrackedOrigin] = Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
+    curves: Pointer[Curve, MutUntrackedOrigin] = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(),
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
     blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
@@ -1305,7 +1305,7 @@ def sms_solve_bernoulli(
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin] = Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
     primIds: Pointer[PrimId, MutUntrackedOrigin] = Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin] = Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(),
-    curves: Pointer[Curve_C, MutUntrackedOrigin] = Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
+    curves: Pointer[Curve, MutUntrackedOrigin] = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(),
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
     blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),

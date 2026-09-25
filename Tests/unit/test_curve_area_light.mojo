@@ -6,7 +6,7 @@ from gonzales.materials import Material, MatKind
 from gonzales.render_state import PathState
 from gonzales.primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere
 from gonzales.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
-from gonzales.curves import Curve_C, curve_bspline_point, curve_light_tube_area, _curve_perp_axis
+from gonzales.curves import Curve, curve_bspline_point, curve_light_tube_area, _curve_perp_axis
 from gonzales.spectrum import SpectralSample, SampledWavelengths
 from gonzales.bvh import BVH2Node
 from gonzales.shading import shade_core_cpu_nee
@@ -71,7 +71,7 @@ def test_emissive_curve_hit_adds_emission_and_retires_path() raises:
         Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(),
         materials,
         Pointer[AreaLight, MutUntrackedOrigin].unsafe_dangling(), 0,
         Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
@@ -118,12 +118,12 @@ def test_nonemissive_curve_hit_does_not_self_terminate_via_the_arealight_path() 
 # == 5 branch computes, against an independently-computed expected value.
 
 def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raises:
-    var curve = Curve_C(
+    var curve = Curve(
         Point3f(0.0, 0.0, 0.0), Point3f(1.0, 2.0, 0.0),
         Point3f(2.0, -1.0, 0.0), Point3f(3.0, 0.0, 0.0),
         Float32(0.2), Float32(0.2), Int32(0), Int32(1),
     )
-    var curves = unsafe_alloc[Curve_C](1)
+    var curves = unsafe_alloc[Curve](1)
     curves[unsafe_offset=0] = curve
 
     # Reconstruct the same geometric normal shade_nee_core's new branch

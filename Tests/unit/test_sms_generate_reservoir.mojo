@@ -13,7 +13,7 @@ from gonzales.materials import Material, MatKind, MeasuredBRDF
 from gonzales.render_state import GpuTexture, NormalSlopeMap, ShadowTask, PathState
 from gonzales.primitives import Ray, PrimId, TriangleMesh, Instance, Sphere
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
-from gonzales.curves import Curve_C
+from gonzales.curves import Curve
 from gonzales.spectrum import SpectralSample, null_spectral_handle, SampledWavelengths
 from gonzales.bvh import BVH2Node
 from gonzales.guide import null_guide
@@ -64,7 +64,7 @@ def _make_ctx(
 ) -> ShadeContext:
     return ShadeContext(
         0, bvh2Nodes, primIds, meshes,
-        Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(),
         materials,
         Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), 0,

@@ -15,7 +15,7 @@ struct AreaLight(TrivialRegisterPassable):
     """A sampleable area light. kind==0: a triangle mesh (meshIdx indexes
     TriangleMesh, n_tris triangles, total_area = mesh surface area).
     kind==1: a native curve (meshIdx reused as the curve's index into the
-    scene's Curve_C array; n_tris unused; total_area = the curve's tube
+    scene's Curve array; n_tris unused; total_area = the curve's tube
     lateral surface area, see curve_light_tube_area). A mesh light's triangle
     is picked area-weighted (area_light_pick_triangle); a curve light's piece
     is still picked uniformly -- see sample_area_light_uniform (sppm.mojo)."""

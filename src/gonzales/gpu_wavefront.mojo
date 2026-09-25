@@ -1,5 +1,5 @@
 from .bvh import BVH2Node, any_hit_bvh2_core, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneDescriptor2_C
-from .curves import CURVE_DEFER_K, Curve_C, _curve_perp_axis, curve_piece_endpoints, intersect_curve
+from .curves import CURVE_DEFER_K, Curve, _curve_perp_axis, curve_piece_endpoints, intersect_curve
 from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, store_vec3, vec3f
 from .materials import Material
 from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, sphere_outward_normal
@@ -688,7 +688,7 @@ def gen_aux_buffers_gpu(
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     primIds: Pointer[PrimId, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
     blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin],
     instances: Pointer[Instance, MutUntrackedOrigin],

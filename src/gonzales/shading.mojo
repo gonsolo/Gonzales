@@ -8,7 +8,7 @@ from .materials import Material, MatKind, LobeKind, MeasuredBRDF, schlick_fresne
 from .render_state import PathState, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, light_sampler_sample, light_sampler_pdf, area_light_pick_triangle
-from .curves import Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis
+from .curves import Curve, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis
 from .layered import layered_f, layered_sample, layered_pdf
 from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
@@ -99,7 +99,7 @@ struct ShadeContext:
     var bvh2Nodes:        Pointer[BVH2Node, MutUntrackedOrigin]
     var primIds:          Pointer[PrimId, MutUntrackedOrigin]
     var meshes:           Pointer[TriangleMesh, MutUntrackedOrigin]
-    var curves:           Pointer[Curve_C, MutUntrackedOrigin]
+    var curves:           Pointer[Curve, MutUntrackedOrigin]
     var materials:        Pointer[Material, MutUntrackedOrigin]
     var tex_filenames:    Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin]
     var textures:         Pointer[GpuTexture, MutUntrackedOrigin]
@@ -250,7 +250,7 @@ def area_light_hit_cos(
 @always_inline
 def curve_light_hit(
     inter: Intersection,
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
     area_lights: Pointer[AreaLight, MutUntrackedOrigin],
     n_area_lights: Int,
     ray_dir: Vec3f,
@@ -4871,7 +4871,7 @@ def shade_core_cpu_nee(
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     primIds: Pointer[PrimId, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
     materials: Pointer[Material, MutUntrackedOrigin],
     areaLights: Pointer[AreaLight, MutUntrackedOrigin],
     areaLightCount: Int,
