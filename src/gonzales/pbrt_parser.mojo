@@ -18,10 +18,8 @@ from .lexer import (PbrtScanner, scanner_open, scanner_free, scanner_is_at_end,
                     _psc_skip_params, _psc_skip_line)
 from .parse_types import (SceneParseState, MeshAccum, NamedMaterial, scene_path,
                            ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX)
-from .geometry import (RGB, Point3f, Vec3f, Material_C, MatKind, AreaLight_C,
-                        Sphere_C, Curve_C, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area, dot, DistantLight_C, PointLight_C, InfiniteLight_C,
-                        TriangleMesh_C, PrimId_C, Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, PI,
-                        LightSampler_C, Instance_C, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, _is_real_ptr)
+from .geometry import RGB, Point3f, Vec3f, Material_C, MatKind, AreaLight_C, Sphere_C, dot, DistantLight_C, PointLight_C, InfiniteLight_C, TriangleMesh_C, PrimId_C, Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, PI, LightSampler_C, Instance_C, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, _is_real_ptr
+from .curves import Curve_C, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area
 from .nanovdb import nvdb_load, nvdb_load_named, nvdb_data, nvdb_size, nvdb_free, nvdb_index_bbox, nvdb_value_range, nvdb_map_invmatf, nvdb_map_vecf
 from .noise import _perlin_perm_table, cloud_density
 from .transform import matrix_multiply, matrix_invert, transform_points, transform_normals

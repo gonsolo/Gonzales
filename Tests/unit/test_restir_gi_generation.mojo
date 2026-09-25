@@ -9,12 +9,8 @@
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, TestSuite
-from gonzales.geometry import (
-    RGB, Point3f, Vec3f, Ray_C, PrimId_C, TriangleMesh_C, Material_C, Curve_C,
-    GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, Instance_C, AreaLight_C,
-    DistantLight_C, PointLight_C, InfiniteLight_C, Sphere_C, MeasuredBRDF_C,
-    PathState_C,
-)
+from gonzales.geometry import RGB, Point3f, Vec3f, Ray_C, PrimId_C, TriangleMesh_C, Material_C, GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, LightSampler_C, Instance_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, Sphere_C, MeasuredBRDF_C, PathState_C
+from gonzales.curves import Curve_C
 from gonzales.spectrum import SpectralSample, null_spectral_handle, SampledWavelengths
 from gonzales.bvh import BVH2Node
 from gonzales.guide import null_guide

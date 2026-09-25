@@ -1,7 +1,8 @@
 from std.collections import Array
 from std.math import sqrt
 from .layered import layered_f, layered_pdf, layered_sample
-from .geometry import RGB, MatKind, LobeKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS, Frame, refract, INV_FOUR_PI, Curve_C, MeasuredBRDF_C
+from .geometry import RGB, MatKind, LobeKind, Material_C, Vec3f, dot, INV_PI, PI, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS, Frame, refract, INV_FOUR_PI, MeasuredBRDF_C
+from .curves import Curve_C
 from .bssrdf import fdr_moment, bssrdf_exit_ft
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world, power_heuristic
 from .vcm_mis import MisPolicy, mis_policy_power, mis_policy_sole, nee_mis_weight

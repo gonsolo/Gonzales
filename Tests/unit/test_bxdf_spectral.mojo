@@ -4,7 +4,8 @@
 # rendering rollout, see project_spectral_rendering memory.
 from std.math import abs
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import RGB, INV_PI, Vec3f, Material_C, Curve_C, MeasuredBRDF_C
+from gonzales.geometry import RGB, INV_PI, Vec3f, Material_C, MeasuredBRDF_C
+from gonzales.curves import Curve_C
 from gonzales.bxdf import (
     bxdf_eval_conductor_ggx, bxdf_eval_any, LobeCtx, LobeTables, lobe_eval,
     ggx_D, ggx_G2, ggx_albedo_avg, ggx_ms_shape, ggx_ms_tint,

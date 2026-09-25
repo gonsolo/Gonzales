@@ -8,7 +8,8 @@ from .pbrt_parser import ParsedScene_Mojo, mojo_parsed_free, mojo_parsed_scene_d
 from .scene_loader import mojo_parse_scene_any
 from .rendering import render_all_tiles, normalize_film, apply_film_sensor, fmt_time, progress_str
 from std.time import perf_counter_ns
-from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, Ray_C, dot, TriangleMesh_C, _is_real_ptr, Curve_C, curve_piece_bounds, FilmDims, FilterParams
+from .geometry import RGB, Point3f, Vec3f, Bounds3f, TileResult_C, PathState_C, Ray_C, dot, TriangleMesh_C, _is_real_ptr, FilmDims, FilterParams
+from .curves import Curve_C, curve_piece_bounds
 from .postprocess import denoise, write_image, write_image_cropped, write_image_cropwindow
 from .transform import Mat4
 from .sampling import TileSamplerParams_C, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, derive_pcg_seeds, camera_ray_from_film_xy

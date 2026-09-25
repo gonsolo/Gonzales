@@ -4,7 +4,8 @@ from max.algorithm import parallelize
 from std.atomic import Atomic
 from std.sys.info import num_performance_cores
 from std.time import perf_counter_ns
-from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, PathState_C, TileResult_C, Sphere_C, AreaLight_C, LightSampler_C, light_sampler_sample, dot, cross, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, INV_FOUR_PI, curve_piece_endpoints, _curve_perp_axis, SSS_WALK_ROUNDS
+from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, sphere_outward_normal, Ray_C, Intersection_C, PrimId_C, PathState_C, TileResult_C, Sphere_C, AreaLight_C, LightSampler_C, light_sampler_sample, dot, cross, Medium_C, MediumInterface_C, Grid_C, grid_sample_density, INV_FOUR_PI, SSS_WALK_ROUNDS
+from .curves import curve_piece_endpoints, _curve_perp_axis
 from .bvh import SceneDescriptor2_C, traverse_bvh2_core, test_spheres, any_hit_bvh2_core
 from .shading import shade_core_cpu_nee, GIPendingX1, gi_pending_x1_init
 from .rng import PCG32

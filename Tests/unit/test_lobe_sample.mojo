@@ -6,7 +6,8 @@
 from std.math import abs, sqrt, cos, sin
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import RGB, Vec3f, Material_C, MatKind, LobeKind, Curve_C, MeasuredBRDF_C, PI
+from gonzales.geometry import RGB, Vec3f, Material_C, MatKind, LobeKind, MeasuredBRDF_C, PI
+from gonzales.curves import Curve_C
 from gonzales.bxdf import LobeCtx, LobeTables, lobe_eval, lobe_sample, lobe_scoped
 from gonzales.rng import PCG32
 from gonzales.spectrum import SampledWavelengths, sample_wavelengths_uniform, SpectralContext, spectral_handle
