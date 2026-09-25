@@ -1,4 +1,4 @@
-from .bvh import BVH2Node, LightSample, _sample_distant_light_nee, _sample_infinite_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, any_hit_bvh2_core, test_spheres, traverse_bvh2_core
+from .bvh import BVH2Node, LightSample, _sample_distant_light_nee, _sample_infinite_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, any_hit_bvh2_core, test_spheres, traverse_bvh2_core, SceneDescriptor2_C
 from .curves import Curve_C
 from .geometry import Point2f, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, point3f, vec3f
 from .lights import AreaLight_C, DistantLight_C, InfiniteLight_C, LightSampler_C, PointLight_C, area_light_pick_triangle, light_sampler_sample
@@ -20,10 +20,7 @@ from .gpu_scene import GpuSceneHandle
 def update_medium_gpu(
     paths: Pointer[PathState_C, MutUntrackedOrigin],
     intersections: Pointer[Intersection_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
-    materials: Pointer[Material_C, MutUntrackedOrigin],
-    medium_ifaces: Pointer[MediumInterface_C, MutUntrackedOrigin],
+    sd: SceneDescriptor2_C,
     count_dp: Int64,
 ):
     """Update current_medium_idx for any surface hit with a MediumInterface bound.
@@ -39,18 +36,18 @@ def update_medium_gpu(
     var inter = intersections[unsafe_offset=tid]
     if inter.hit == 0:
         return
-    var mat = materials[unsafe_offset=Int(inter.primId.materialIndex)]
+    var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     if mat.medium_interface_idx < Int32(0):
         return
-    var iface = medium_ifaces[unsafe_offset=Int(mat.medium_interface_idx)]
+    var iface = sd.mediumInterfaces[unsafe_offset=Int(mat.medium_interface_idx)]
     var ray_dir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
     var geom_n: Vec3f
     if inter.primId.type == 4:
         # Sphere: outward normal = hit point - center. Medium-bounding
         # volumes (e.g. smoke-plume's "MediumInterface .. Shape sphere")
         # are commonly a big invisible sphere, so this case matters even
-        # though spheres otherwise rarely carry materials with real shading.
-        var sph = spheres[unsafe_offset=Int(inter.primId.id1)]
+        # though sd.spheres otherwise rarely carry sd.materials with real shading.
+        var sph = sd.spheres[unsafe_offset=Int(inter.primId.id1)]
         # ray.origin is ALREADY the hit point -- this kernel runs after all
         # material shaders (see the docstring above), and each shader rewrites
         # path.ray to the outgoing ray whose origin sits on the surface.
@@ -72,7 +69,7 @@ def update_medium_gpu(
             bv = Int(inter.primId.id2 & 0xFFFFFFFF) * 3
         else:
             return
-        var m = meshes[unsafe_offset=mi]
+        var m = sd.meshes[unsafe_offset=mi]
         var v0 = Int(m.vertexIndices[unsafe_offset=bv])
         var v1 = Int(m.vertexIndices[unsafe_offset=bv + 1])
         var v2 = Int(m.vertexIndices[unsafe_offset=bv + 2])
@@ -101,21 +98,7 @@ def _volume_nee_light(
     nvdb_grid: NvdbGrid_C,
     sigma_maj: Float32,
     sigma_t_r: Float32,
-    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
-    n_spheres: Int,
-    materials: Pointer[Material_C, MutUntrackedOrigin],
-    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
-    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
-    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
-    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
-    spectral_d65: Pointer[Float32, MutUntrackedOrigin],
+    ref sd: SceneDescriptor2_C,
 ):
     """One NEE sample from ONE non-area light toward a volume scatter point.
 
@@ -128,6 +111,7 @@ def _volume_nee_light(
     phase-sampling strategy can hit them; the others are MIS-weighted against
     phase sampling, which shade_core's miss handler weights from the other
     side."""
+    var n_spheres = Int(sd.sphereCount)
     if not ls.valid or ls.pdf <= Float32(0.0):
         return
     var edir = Vec3f(ls.wi[0], ls.wi[1], ls.wi[2])
@@ -143,9 +127,9 @@ def _volume_nee_light(
     # sphere light over a homogeneous box: 0.39x pbrt. Same defect as the area
     # -light volume NEE one fixed in f79999f4.
     var e_tmax = max(ls.dist - Float32(0.0002), Float32(0.0)) * Float32(0.9995)
-    if any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, e_ray, e_tmax,
-                         blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres,
-                         materials=materials):
+    if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, e_ray, e_tmax,
+                         sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, n_spheres,
+                         materials=sd.materials):
         return
     # Ratio-track transmittance, but only across the span the ray actually
     # spends inside the density grid -- see nvdb_ray_range's docstring for why
@@ -161,16 +145,16 @@ def _volume_nee_light(
         var exit_i = Intersection_C(
             PrimId_C(Int64(0), Int64(0), Int64(-1), Int32(-1), Int8(0), 0, 0, 0),
             Float32(0), Float32(0), Float32(0), Int8(0), 0, 0, 0)
-        traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, e_ray, ls.dist,
-                           Pointer(to=exit_i), blasNodesArr, blasPrimIdsArr,
-                           instances, spheres, n_spheres)
+        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, e_ray, ls.dist,
+                           Pointer(to=exit_i), sd.blasNodesArr, sd.blasPrimIdsArr,
+                           sd.instances, sd.spheres, n_spheres)
         var span = ls.dist if exit_i.hit == Int8(0) else exit_i.tHit
         var Th = exp(-sigma_t_r * span)
         var ph_h = hg_phase(dot(wo, edir), g)
         var mis_h = Float32(1.0) if ls.is_delta else power_heuristic(ls.pdf, ph_h)
         path_ptr[].estimate += path_ptr[].throughput * medium_emission_spectral(
-        ls.Li, path_ptr[].wavelengths, spectral_coeffs, spectral_res,
-        spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) * (Th * ph_h * mis_h / ls.pdf)
+        ls.Li, path_ptr[].wavelengths, sd.spectral.coeffs, sd.spectral.res,
+        sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65) * (Th * ph_h * mis_h / ls.pdf)
         return
     var rng = nvdb_ray_range(nvdb_grid, scatter_pt_w, edir) if use_nvdb else grid_ray_range(grid, scatter_pt_w, edir)
     var t_lo = max(rng[0], Float32(0.0))
@@ -217,44 +201,18 @@ def _volume_nee_light(
     var ph = hg_phase(dot(wo, edir), g)
     var mis = Float32(1.0) if ls.is_delta else power_heuristic(ls.pdf, ph)
     path_ptr[].estimate += path_ptr[].throughput * medium_emission_spectral(
-        ls.Li, path_ptr[].wavelengths, spectral_coeffs, spectral_res,
-        spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) * (Te * ph * mis / ls.pdf)
+        ls.Li, path_ptr[].wavelengths, sd.spectral.coeffs, sd.spectral.res,
+        sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65) * (Te * ph * mis / ls.pdf)
 
 
+# Inlined so `sd` stays in kernel param space: a non-inlined call needs its
+# address, which copies the whole descriptor to local memory per thread.
+@always_inline
 def _sample_medium_core(
     paths: Pointer[PathState_C, MutUntrackedOrigin],
     intersections: Pointer[Intersection_C, MutUntrackedOrigin],
     i: Int,
-    mediums: Pointer[Medium_C, MutUntrackedOrigin],
-    n_mediums: Int,
-    grids: Pointer[Grid_C, MutUntrackedOrigin],
-    nvdb_grids: Pointer[NvdbGrid_C, MutUntrackedOrigin],
-    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
-    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
-    n_area_lights: Int,
-    lightSamplerCdf: Pointer[Float32, MutUntrackedOrigin],
-    n_light_sampler: Int,
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin] = Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_spheres: Int = 0,
-    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_res: Int = 0,
-    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    materials: Pointer[Material_C, MutUntrackedOrigin] = Pointer[Material_C, MutUntrackedOrigin].unsafe_dangling(),
-    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin] = Pointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_infinite_lights: Int = 0,
-    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin] = Pointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_distant_lights: Int = 0,
-    pointLights: Pointer[PointLight_C, MutUntrackedOrigin] = Pointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_point_lights: Int = 0,
+    ref sd: SceneDescriptor2_C,
     # Phase 7.3 (docs/A2_restir_migration_plan.md, project_restir_migration
     # memory): volume-scatter TEMPORAL reuse. Decomposed pointers, not one
     # `vol_io: VolReservoirIO` argument -- same defensive convention this
@@ -306,16 +264,18 @@ def _sample_medium_core(
     band-picking (see spectrum.mojo's rgb_bands_to_spectral_sample) — real
     chromatic extinction is the same unimplemented, separate piece of work.
     """
+    var n_light_sampler = Int(sd.lightSampler.n)
+    var n_spheres = Int(sd.sphereCount)
     var path_ptr = paths.unsafe_offset(i)
     if path_ptr[].active == 0:
         return
     var med_idx = Int(path_ptr[].current_medium_idx)
-    if med_idx < 0 or med_idx >= n_mediums:
+    if med_idx < 0 or med_idx >= Int(sd.mediumCount):
         return
     var inter = intersections[unsafe_offset=i]
     if inter.hit == 0:
         return
-    var med = mediums[unsafe_offset=med_idx]
+    var med = sd.mediums[unsafe_offset=med_idx]
     var sigma_t = med.sigma_a + med.sigma_s
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var t_surf = inter.tHit
@@ -337,15 +297,15 @@ def _sample_medium_core(
     # against the same grid and majorant.
     var use_nvdb = med.nvdb_idx >= Int32(0)
     var use_dense = med.grid_idx >= Int32(0)
-    var grid = medium_grid_for(med, grids)
-    var nvdb_grid = medium_nvdb_for(med, nvdb_grids)
+    var grid = medium_grid_for(med, sd.grids)
+    var nvdb_grid = medium_nvdb_for(med, sd.nvdbGrids)
     var majorant_density = nvdb_grid.max_density if use_nvdb else grid.max_density
     var sigma_maj = majorant_density * sigma_t.r
 
     var ff = sample_free_flight(
-        med, grids, nvdb_grids, ray_org, ray_dir, t_surf, pcg,
-        path_ptr[].wavelengths, spectral_coeffs, spectral_res,
-        spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+        med, sd.grids, sd.nvdbGrids, ray_org, ray_dir, t_surf, pcg,
+        path_ptr[].wavelengths, sd.spectral.coeffs, sd.spectral.res,
+        sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
     # Volumetric emission (pbrt NanoVDBMedium's temperature grid) accumulated
     # over every majorant candidate along the tracked segment, already spectral
     # and already weighted by each candidate's absorption fraction. Zero for a
@@ -387,7 +347,7 @@ def _sample_medium_core(
         # See docs/02_spectra_and_color.md, "Chromatic extinction".
         path_ptr[].throughput *= medium_transmittance_ratio_spectral(
             med, t_seg, ff.pdf, path_ptr[].wavelengths,
-            spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+            sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
         if ff.collided:
             # Chromatic scattering ratio; 1 for a grey medium.
             #
@@ -408,7 +368,7 @@ def _sample_medium_core(
             # conversions -- invisible at 2-3 scatters, hue-inverting over a
             # subsurface walk's hundreds (see medium_sigma_s_spectral).
             var ss_r = max(med.sigma_s.r, Float32(1e-30))
-            if spectral_res > 0:
+            if sd.spectral.res > 0:
                 # The scatter/absorb coin is ONE coin for all four lanes, so
                 # whichever albedo it is played on becomes the reference every
                 # lane is corrected against. Playing it on RED made that
@@ -425,11 +385,11 @@ def _sample_medium_core(
                 # so neither factor drifts. Unbiased either way -- E[.] is
                 # alpha_i per scatter for both -- this is purely variance.
                 var sig_t_spec = medium_sigma_t_spectral(
-                    med, path_ptr[].wavelengths, spectral_coeffs, spectral_res,
-                    spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+                    med, path_ptr[].wavelengths, sd.spectral.coeffs, sd.spectral.res,
+                    sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
                 var sig_s_spec = medium_sigma_s_spectral(
-                    med, path_ptr[].wavelengths, spectral_coeffs, spectral_res,
-                    spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+                    med, path_ptr[].wavelengths, sd.spectral.coeffs, sd.spectral.res,
+                    sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
                 var a0 = sig_s_spec.v0 / max(sig_t_spec.v0, Float32(1e-30))
                 var a1 = sig_s_spec.v1 / max(sig_t_spec.v1, Float32(1e-30))
                 var a2 = sig_s_spec.v2 / max(sig_t_spec.v2, Float32(1e-30))
@@ -445,8 +405,8 @@ def _sample_medium_core(
                 # No spectral table: lanes carry RGB, so red IS the reference
                 # and this is the original expression unchanged.
                 var sig_s_spec = medium_sigma_s_spectral(
-                    med, path_ptr[].wavelengths, spectral_coeffs, spectral_res,
-                    spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+                    med, path_ptr[].wavelengths, sd.spectral.coeffs, sd.spectral.res,
+                    sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
                 path_ptr[].throughput *= (sig_s_spec * (Float32(1.0) / ss_r)) * sigma_t.r
 
     if not ff.collided:
@@ -500,8 +460,8 @@ def _sample_medium_core(
         # = 1/q, and 1/q is precisely the `al.total_area / light_sel_pdf`
         # factor the old `geom` term carried. That equivalence is the cheapest
         # correctness check available here and is worth preserving.
-        if n_area_lights > 0 and n_light_sampler > 0:
-            var ls = LightSampler_C(lightSamplerCdf, Int32(n_light_sampler), Int32(0))
+        if Int(sd.areaLightCount) > 0 and n_light_sampler > 0:
+            var ls = LightSampler_C(sd.lightSampler.cdf, Int32(n_light_sampler), Int32(0))
             var scatter_pt_s = scatter_pt.to_simd()
             var scatter_v = Vec3f(scatter_pt_s[0], scatter_pt_s[1], scatter_pt_s[2])
             var res = vol_reservoir_init()
@@ -570,8 +530,8 @@ def _sample_medium_core(
                 var ls_result = light_sampler_sample(ls, u_nee)
                 var light_idx = ls_result[0]
                 var light_sel_pdf = ls_result[1]
-                var al = areaLights[unsafe_offset=light_idx]
-                var lmesh = meshes[unsafe_offset=Int(al.meshIdx)]
+                var al = sd.areaLights[unsafe_offset=light_idx]
+                var lmesh = sd.meshes[unsafe_offset=Int(al.meshIdx)]
                 var lti = area_light_pick_triangle(al, pcg.next_float())
                 var r1 = pcg.next_float()
                 var r2 = pcg.next_float()
@@ -736,7 +696,7 @@ def _sample_medium_core(
                     var shad_org = point3f(resolve_pt + shadow_dir * Float32(0.0002))
                     var shad_ray = Ray_C(shad_org, vec3f(shadow_dir))
                     var shad_tmax = max(dist - Float32(0.0002), Float32(0.0)) * Float32(0.9995)
-                    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shad_ray, shad_tmax, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres, materials=materials):
+                    if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shad_ray, shad_tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, n_spheres, materials=sd.materials):
                         var T: RGB
                         if med.grid_idx >= Int32(0) or med.nvdb_idx >= Int32(0):
                             # Ratio-tracking transmittance through the grid (see
@@ -748,11 +708,11 @@ def _sample_medium_core(
                             # exits the medium -- same dual-source dispatch as
                             # the free-flight sampling above.
                             var use_nvdb_s = med.nvdb_idx >= Int32(0)
-                            var grid_s = grids[unsafe_offset=Int(med.grid_idx)] if not use_nvdb_s else Grid_C(
+                            var grid_s = sd.grids[unsafe_offset=Int(med.grid_idx)] if not use_nvdb_s else Grid_C(
                                 Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0), Int32(0),
                                 Point3f(Float32(0), Float32(0), Float32(0)), Point3f(Float32(0), Float32(0), Float32(0)),
                                 SIMD[DType.float32, 16](0), Float32(0))
-                            var nvdb_grid_s = nvdb_grids[unsafe_offset=Int(med.nvdb_idx)] if use_nvdb_s else NvdbGrid_C(
+                            var nvdb_grid_s = sd.nvdbGrids[unsafe_offset=Int(med.nvdb_idx)] if use_nvdb_s else NvdbGrid_C(
                                 Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Int64(0), SIMD[DType.float32, 16](0),
                                 SIMD[DType.float32, 16](0), Vec3f(Float32(0), Float32(0), Float32(0)),
                                 Point3f(Float32(0), Float32(0), Float32(0)), Point3f(Float32(0), Float32(0), Float32(0)), Float32(0))
@@ -804,7 +764,7 @@ def _sample_medium_core(
                             #
                             # test_spheres is REQUIRED here, not optional:
                             # traverse_bvh2_core walks the mesh/curve BVH only,
-                            # and analytic spheres live in their own flat array.
+                            # and analytic sd.spheres live in their own flat array.
                             # A `MediumInterface .. Shape "sphere"` boundary --
                             # the single most common way to bound a medium, and
                             # what every fog/cloud test scene here uses -- was
@@ -826,15 +786,15 @@ def _sample_medium_core(
                                 Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
                             var exit_ptr = _exit_inter.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
                             exit_ptr[unsafe_offset=0].hit = Int8(0)
-                            traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, shad_ray,
-                                               shad_tmax, exit_ptr, blasNodesArr, blasPrimIdsArr, instances)
-                            test_spheres(spheres, n_spheres, shad_ray, exit_ptr)
+                            traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shad_ray,
+                                               shad_tmax, exit_ptr, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+                            test_spheres(sd.spheres, n_spheres, shad_ray, exit_ptr)
                             # test_spheres ignores shad_tmax (it bounds only by
                             # an already-recorded closer hit), so a sphere past
                             # the light would otherwise set t_med > dist and
                             # over-attenuate instead of under-.
                             if exit_ptr[unsafe_offset=0].hit != Int8(0) and exit_ptr[unsafe_offset=0].tHit <= shad_tmax:
-                                var exit_mat = materials[unsafe_offset=Int(exit_ptr[unsafe_offset=0].primId.materialIndex)]
+                                var exit_mat = sd.materials[unsafe_offset=Int(exit_ptr[unsafe_offset=0].primId.materialIndex)]
                                 if exit_mat.type == MatKind.interface:
                                     t_med = exit_ptr[unsafe_offset=0].tHit
                             T = RGB(exp(-sigma_t.r * t_med), exp(-sigma_t.g * t_med), exp(-sigma_t.b * t_med))
@@ -856,24 +816,24 @@ def _sample_medium_core(
                         # solid angle. pdf_light is deliberately spelled exactly
                         # as the emitter-hit side spells it -- MIS is only
                         # correct if both halves agree on the pdf.
-                        var al_win = areaLights[unsafe_offset=Int(res.light_idx)]
-                        var sel_lo = lightSamplerCdf[unsafe_offset=Int(res.light_idx)]
-                        var sel_hi = lightSamplerCdf[unsafe_offset=Int(res.light_idx) + 1]
+                        var al_win = sd.areaLights[unsafe_offset=Int(res.light_idx)]
+                        var sel_lo = sd.lightSampler.cdf[unsafe_offset=Int(res.light_idx)]
+                        var sel_hi = sd.lightSampler.cdf[unsafe_offset=Int(res.light_idx) + 1]
                         var sel_pdf_win = max(sel_hi - sel_lo, Float32(1e-6))
                         var mis_w = Float32(1.0)
                         if al_win.total_area > Float32(0.0):
                             var pdf_light = dist_sq * sel_pdf_win / (cos_l * al_win.total_area)
                             mis_w = power_heuristic(pdf_light, ph_a)
                         path_ptr[].estimate += path_ptr[].throughput * medium_emission_spectral(
-                            res.le * T, path_ptr[].wavelengths, spectral_coeffs, spectral_res,
-                            spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) * (geom * ph_a * mis_w * res.state.w)
+                            res.le * T, path_ptr[].wavelengths, sd.spectral.coeffs, sd.spectral.res,
+                            sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65) * (geom * ph_a * mis_w * res.state.w)
 
         # ── Volume scatter NEE — INFINITE (environment) light ────────────
         # Without this a medium lit ONLY by a sky dome -- which is every
         # nanovdb cloud scene in the pbrt-v4 corpus (bunny-cloud, explosion,
         # disney-cloud) and any uniformgrid scene with no area light -- got
         # NO direct lighting at scatter points at all: the block above is
-        # gated on n_area_lights > 0 and samples triangle area lights only.
+        # gated on Int(sd.areaLightCount) > 0 and samples triangle area lights only.
         # Such a medium was then lit purely by phase-sampled paths that
         # random-walk back out of it and happen to escape to the sky, which
         # is both far too dark (measured on bunny-cloud: the cloud came out
@@ -883,7 +843,7 @@ def _sample_medium_core(
         # "firefly" dots on those renders came from.
         # ── Volume scatter NEE — distant / point / sphere / infinite ─────
         # The block above samples triangle AREA lights only, and is gated on
-        # n_area_lights > 0. Every other light type contributed nothing at a
+        # Int(sd.areaLightCount) > 0. Every other light type contributed nothing at a
         # volume scatter point, so a medium lit by a sky dome and/or a sun --
         # which is every nanovdb cloud scene in the pbrt-v4 corpus
         # (bunny-cloud, explosion, disney-cloud), none of which has an area
@@ -902,36 +862,24 @@ def _sample_medium_core(
         # real, pre-existing gap for homogeneous media.
         var scatter_w = scatter_pt.to_simd()
         var wo_v = -ray_dir
-        for dl_i in range(n_distant_lights):
-            _volume_nee_light(path_ptr, _sample_distant_light_nee(distantLights[unsafe_offset=dl_i]),
+        for dl_i in range(Int(sd.distantLightCount)):
+            _volume_nee_light(path_ptr, _sample_distant_light_nee(sd.distantLights[unsafe_offset=dl_i]),
                 scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
-                bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
-                instances, spheres, n_spheres, materials,
-                spectral_coeffs, spectral_res, spectral_cie_x,
-                spectral_cie_y, spectral_cie_z, spectral_d65)
-        for pl_i in range(n_point_lights):
-            _volume_nee_light(path_ptr, _sample_point_light_nee(pointLights[unsafe_offset=pl_i], scatter_w),
+                sd)
+        for pl_i in range(Int(sd.pointLightCount)):
+            _volume_nee_light(path_ptr, _sample_point_light_nee(sd.pointLights[unsafe_offset=pl_i], scatter_w),
                 scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
-                bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
-                instances, spheres, n_spheres, materials,
-                spectral_coeffs, spectral_res, spectral_cie_x,
-                spectral_cie_y, spectral_cie_z, spectral_d65)
+                sd)
         for sph_i in range(n_spheres):
-            if spheres[unsafe_offset=sph_i].isAreaLight == Int8(1):
-                _volume_nee_light(path_ptr, _sample_sphere_light_nee(spheres[unsafe_offset=sph_i], n_spheres, scatter_w, pcg),
+            if sd.spheres[unsafe_offset=sph_i].isAreaLight == Int8(1):
+                _volume_nee_light(path_ptr, _sample_sphere_light_nee(sd.spheres[unsafe_offset=sph_i], n_spheres, scatter_w, pcg),
                     scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
-                    bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
-                    instances, spheres, n_spheres, materials,
-                    spectral_coeffs, spectral_res, spectral_cie_x,
-                    spectral_cie_y, spectral_cie_z, spectral_d65)
-        for inf_i in range(n_infinite_lights):
+                    sd)
+        for inf_i in range(Int(sd.infiniteLightCount)):
             _volume_nee_light(path_ptr,
-                _sample_infinite_light_nee(infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float())),
+                _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float())),
                 scatter_w, wo_v, med.g, pcg, use_nvdb, use_dense, grid, nvdb_grid, sigma_maj, sigma_t.r,
-                bvh2Nodes, primIds, meshes, curves, blasNodesArr, blasPrimIdsArr,
-                instances, spheres, n_spheres, materials,
-                spectral_coeffs, spectral_res, spectral_cie_x,
-                spectral_cie_y, spectral_cie_z, spectral_d65)
+                sd)
         # Sample the scatter direction from the medium's Henyey-Greenstein
         # phase function. `g` was parsed into Medium_C all along but never
         # used: scattering was hardcoded isotropic (uniform sphere), so a
@@ -972,37 +920,8 @@ def _sample_medium_core(
 def sample_medium_gpu(
     paths: Pointer[PathState_C, MutUntrackedOrigin],
     intersections: Pointer[Intersection_C, MutUntrackedOrigin],
-    mediums: Pointer[Medium_C, MutUntrackedOrigin],
-    n_mediums_dp: Int64,
-    grids: Pointer[Grid_C, MutUntrackedOrigin],
-    nvdb_grids: Pointer[NvdbGrid_C, MutUntrackedOrigin],
-    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
-    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
-    n_area_lights_dp: Int64,
-    lightSamplerCdf: Pointer[Float32, MutUntrackedOrigin],
-    n_light_sampler_dp: Int64,
+    sd: SceneDescriptor2_C,
     count_dp: Int64,
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin] = Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_spheres_dp: Int64 = Int64(0),
-    spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_res_dp: Int64 = Int64(0),
-    spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-    materials: Pointer[Material_C, MutUntrackedOrigin] = Pointer[Material_C, MutUntrackedOrigin].unsafe_dangling(),
-    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin] = Pointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_infinite_lights_dp: Int64 = Int64(0),
-    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin] = Pointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_distant_lights_dp: Int64 = Int64(0),
-    pointLights: Pointer[PointLight_C, MutUntrackedOrigin] = Pointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_point_lights_dp: Int64 = Int64(0),
     # Phase 7.3: only gpu_render_wavefront_kernels(...) callers that pass
     # use_vol_restir=1 AND real buffers get reuse -- see _sample_medium_core's
     # own comment for why these stay decomposed rather than one VolReservoirIO.
@@ -1017,11 +936,6 @@ def sample_medium_gpu(
 ):
     """GPU kernel wrapper: bounds-check, then call the SAME
     _sample_medium_core the CPU driver (render_all_tiles) calls."""
-    var n_spheres = Int(n_spheres_dp)
-    var spectral_res = Int(spectral_res_dp)
-    var n_mediums = Int(n_mediums_dp)
-    var n_area_lights = Int(n_area_lights_dp)
-    var n_light_sampler = Int(n_light_sampler_dp)
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -1031,17 +945,13 @@ def sample_medium_gpu(
     # mirroring shade_diffuse_gpu's identical restir_has_state contract.
     var vol_has_state = use_vol_restir != Int32(0) and _is_real_ptr(vol_read)
     _sample_medium_core(
-        paths, intersections, tid, mediums, n_mediums, grids, nvdb_grids,
-        bvh2Nodes, primIds, meshes, curves,
-        blasNodesArr, blasPrimIdsArr, instances,
-        areaLights, n_area_lights, lightSamplerCdf, n_light_sampler,
-        spheres, n_spheres,
-        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
-        materials, infiniteLights, Int(n_infinite_lights_dp),
-        distantLights, Int(n_distant_lights_dp), pointLights, Int(n_point_lights_dp),
-        vol_read=vol_read, vol_write=vol_write,
+        paths, intersections, tid, sd,
+        vol_read=vol_read,
+        vol_write=vol_write,
         pixel_idx=tid if vol_has_state else -1,
         vol_used=vol_used,
-        vol_gbuf_depth=vol_gbuf_depth, vol_gbuf_world_pos=vol_gbuf_world_pos,
-        vol_frame_w=vol_frame_w, vol_frame_h=vol_frame_h,
+        vol_gbuf_depth=vol_gbuf_depth,
+        vol_gbuf_world_pos=vol_gbuf_world_pos,
+        vol_frame_w=vol_frame_w,
+        vol_frame_h=vol_frame_h,
     )

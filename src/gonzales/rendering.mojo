@@ -250,20 +250,11 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
             # scatter-direction RNG draw order), not preserved as
             # intentional per-backend differences.
             _sample_medium_core(
-                paths, intersections, i,
-                scene.mediums, Int(scene.mediumCount), scene.grids, scene.nvdbGrids,
-                scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves,
-                scene.blasNodesArr, scene.blasPrimIdsArr, scene.instances,
-                scene.areaLights, Int(scene.areaLightCount),
-                scene.lightSampler.cdf, Int(scene.lightSampler.n),
-                scene.spheres, Int(scene.sphereCount),
-                scene.spectral.coeffs, scene.spectral.res,
-                scene.spectral.cie_x, scene.spectral.cie_y, scene.spectral.cie_z, scene.spectral.d65,
-                scene.materials, scene.infiniteLights, Int(scene.infiniteLightCount),
-                scene.distantLights, Int(scene.distantLightCount),
-                scene.pointLights, Int(scene.pointLightCount),
-                vol_read=vol_io.read, vol_write=vol_io.write,
-                pixel_idx=pixel_idx_buf[unsafe_offset=i], vol_used=vol_used_buf,
+                paths, intersections, i, scene,
+                vol_read=vol_io.read,
+                vol_write=vol_io.write,
+                pixel_idx=pixel_idx_buf[unsafe_offset=i],
+                vol_used=vol_used_buf,
             )
         for i in range(n):
             if paths[unsafe_offset=i].active == 0:

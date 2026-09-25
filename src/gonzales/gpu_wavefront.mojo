@@ -1,4 +1,4 @@
-from .bvh import BVH2Node, any_hit_bvh2_core, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves
+from .bvh import BVH2Node, any_hit_bvh2_core, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneDescriptor2_C
 from .curves import CURVE_DEFER_K, Curve_C, _curve_perp_axis, curve_piece_endpoints, intersect_curve
 from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, store_vec3, vec3f
 from .materials import Material_C
@@ -76,21 +76,12 @@ def reset_vol_used_gpu(
 
 
 def traverse_shadow_rays_gpu(
-    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
+    sd: SceneDescriptor2_C,
     paths: Pointer[PathState_C, MutUntrackedOrigin],
     shadow_tasks: Pointer[ShadowTask_C, MutUntrackedOrigin],
     count_dp: Int64,
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin] = Pointer[Sphere_C, MutUntrackedOrigin].unsafe_dangling(),
-    n_spheres_dp: Int64 = Int64(0),
-    materials: Pointer[Material_C, MutUntrackedOrigin] = Pointer[Material_C, MutUntrackedOrigin].unsafe_dangling(),
 ):
-    var n_spheres = Int(n_spheres_dp)
+    var n_spheres = Int(sd.sphereCount)
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -99,7 +90,7 @@ def traverse_shadow_rays_gpu(
     if task.active == 0:
         return
     var shadow_ray = Ray_C(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
-    if not any_hit_bvh2_core(bvh2Nodes, primIds, meshes, curves, shadow_ray, task.tmax, blasNodesArr, blasPrimIdsArr, instances, spheres, n_spheres, materials=materials):
+    if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, n_spheres, materials=sd.materials):
         paths[unsafe_offset=tid].estimate += task.contrib
 
 
@@ -261,22 +252,14 @@ def gen_primary_rays_wavefront_gpu(
 
 # Traversal kernel that reads rays directly from PathState_C (no separate ray buffer).
 def traverse_paths_gpu(
-    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin],
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
-    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
-    blasPrimIdsArr: Pointer[Pointer[PrimId_C, MutUntrackedOrigin], MutUntrackedOrigin],
-    instances: Pointer[Instance_C, MutUntrackedOrigin],
-    spheres: Pointer[Sphere_C, MutUntrackedOrigin],
-    n_spheres_dp: Int64,
+    sd: SceneDescriptor2_C,
     paths: Pointer[PathState_C, MutUntrackedOrigin],
     results: Pointer[Intersection_C, MutUntrackedOrigin],
     curve_cand_prim: Pointer[Int32, MutUntrackedOrigin],
     curve_cand_count: Pointer[Int32, MutUntrackedOrigin],
     count_dp: Int64,
 ):
-    var n_spheres = Int(n_spheres_dp)
+    var n_spheres = Int(sd.sphereCount)
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -285,11 +268,11 @@ def traverse_paths_gpu(
         return
     curve_cand_count[unsafe_offset=tid] = Int32(0)
     traverse_bvh2_core_defer_curves(
-        bvh2Nodes, primIds, meshes, curves, paths[unsafe_offset=tid].ray, Float32(1.0e38), results.unsafe_offset(tid),
+        sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, paths[unsafe_offset=tid].ray, Float32(1.0e38), results.unsafe_offset(tid),
         curve_cand_prim.unsafe_offset(tid * CURVE_DEFER_K), curve_cand_count.unsafe_offset(tid),
-        blasNodesArr, blasPrimIdsArr, instances,
+        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
     )
-    test_spheres(spheres, n_spheres, paths[unsafe_offset=tid].ray, results.unsafe_offset(tid))
+    test_spheres(sd.spheres, n_spheres, paths[unsafe_offset=tid].ray, results.unsafe_offset(tid))
 
 
 # Task #163 stage 3: GPU-resident replacement for the `traverse_paths_gpu`
@@ -604,8 +587,7 @@ def resolve_curve_candidates_gpu(
     curve_cand_prim: Pointer[Int32, MutUntrackedOrigin],
     curve_cand_count: Pointer[Int32, MutUntrackedOrigin],
     curve_cand_offset: Pointer[Int32, MutUntrackedOrigin],
-    primIds: Pointer[PrimId_C, MutUntrackedOrigin],
-    curves: Pointer[Curve_C, MutUntrackedOrigin],
+    sd: SceneDescriptor2_C,
     paths: Pointer[PathState_C, MutUntrackedOrigin],
     results: Pointer[Intersection_C, MutUntrackedOrigin],
     n_dp: Int64,
@@ -633,8 +615,8 @@ def resolve_curve_candidates_gpu(
     var changed = False
     for i in range(n_cand):
         var primIdx = Int(curve_cand_prim[unsafe_offset=base + i])
-        var prim = primIds[unsafe_offset=primIdx]
-        var curve = curves[unsafe_offset=Int(prim.id1)]
+        var prim = sd.primIds[unsafe_offset=primIdx]
+        var curve = sd.curves[unsafe_offset=Int(prim.id1)]
         var curve_hit = intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, best_t)
         if curve_hit[0]:
             best_t = curve_hit[1]

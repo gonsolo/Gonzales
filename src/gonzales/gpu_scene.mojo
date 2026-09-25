@@ -1,11 +1,12 @@
-from .bvh import BVH2Node
+from .bvh import BVH2Node, SceneDescriptor2_C
 from .curves import CURVE_DEFER_K, Curve_C
 from .geometry import _is_real_ptr
-from .lights import AreaLight_C, DistantLight_C, InfiniteLight_C, PointLight_C
+from .lights import AreaLight_C, DistantLight_C, InfiniteLight_C, PointLight_C, LightSampler_C
 from .materials import Material_C, MeasuredBRDF_C
 from .media import Grid_C, MediumInterface_C, Medium_C, NvdbGrid_C
 from .primitives import Instance_C, Intersection_C, PrimId_C, Sphere_C, TriangleMesh_C
-from .render_state import FilmDims, FilterParams, GpuTexture_C, PathState_C, ShadowTask_C
+from .render_state import FilmDims, FilterParams, GpuTexture_C, NormalSlopeMap_C, PathState_C, ShadowTask_C
+from .spectrum import SpectralHandle
 from .restir_di import DIReservoir
 from .restir_vol import VolReservoir
 from max.algorithm import parallelize
@@ -497,6 +498,39 @@ struct GpuSceneHandle(Movable):
     # SpectralHandle; spectral_res=0 means no real table was uploaded (dummy
     # 1-element buffers, BDPT/SPPM GPU dispatch, Stage 3/4 not wired yet).
     var spectral: SpectralBuffers
+
+    def scene_descriptor(mut self) -> SceneDescriptor2_C:
+        """The whole device-resident scene as ONE kernel argument. Kernels
+        take this by value instead of ~40 decomposed pointer/count params."""
+        var (sc, sres, sx, sy, sz, sd65) = self.spectral.unsafe_ptrs()
+        return SceneDescriptor2_C(
+            bvh2Nodes=self.bvh.nodes_ptr(), primIds=self.bvh.prim_ids_ptr(),
+            meshes=self.meshes.meshes_ptr(), meshCount=Int64(self.meshes.mesh_count),
+            materials=typed_ptr[Material_C](self.materials_buf), materialCount=Int64(self.material_count),
+            areaLights=self.lights.area_lights_ptr(), areaLightCount=Int64(self.lights.n_area_lights),
+            textures=Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+            textureCount=Int64(0),
+            distantLights=self.lights.distant_lights_ptr(), distantLightCount=Int64(self.lights.n_distant_lights),
+            pointLights=self.lights.point_lights_ptr(), pointLightCount=Int64(self.lights.n_point_lights),
+            infiniteLights=self.lights.infinite_lights_ptr(), infiniteLightCount=Int64(self.lights.n_infinite_lights),
+            spheres=typed_ptr[Sphere_C](self.spheres_buf), sphereCount=Int64(self.n_spheres),
+            curves=self.curves.curves_ptr(), curveCount=Int64(self.curves.n_curves),
+            mediums=typed_ptr[Medium_C](self.mediums_buf), mediumCount=Int64(self.n_mediums),
+            mediumInterfaces=typed_ptr[MediumInterface_C](self.medium_ifaces_buf), mediumIfaceCount=Int64(self.n_medium_ifaces),
+            grids=typed_ptr[Grid_C](self.grids_buf), gridCount=Int64(self.n_grids),
+            nvdbGrids=typed_ptr[NvdbGrid_C](self.nvdb_grids_buf), nvdbGridCount=Int64(self.n_nvdb_grids),
+            lightSampler=LightSampler_C(cdf=self.lights.light_sampler_ptr(), n=Int32(self.lights.n_light_sampler), _pad=Int32(0)),
+            blasNodesArr=self.blas.nodes_arr(), blasPrimIdsArr=self.blas.primids_arr(), blasCount=Int64(self.blas.n_blas),
+            instances=typed_ptr[Instance_C](self.instances_buf), instanceCount=Int64(self.n_instances),
+            measuredBrdfs=typed_ptr[MeasuredBRDF_C](self.measured_brdfs_buf), measuredBrdfCount=Int64(self.n_measured_brdfs),
+            spectral=SpectralHandle(sc, sres, sx, sy, sz, sd65),
+            gpuTextures=self.textures.textures_ptr(), gpuTextureCount=Int64(self.textures.n_textures),
+            normalSlopeMaps=Pointer[NormalSlopeMap_C, MutUntrackedOrigin].unsafe_dangling(),
+            vcmKeepCounts=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+            vcmKeepInvCell=Float32(0), vcmKeepScale=Float32(1), vcmMaxDepth=Int32(9),
+            vcmCamX=Float32(0), vcmCamY=Float32(0), vcmCamZ=Float32(0),
+            vcmFootprint=Float32(0), vcmMergeR=Float32(0),
+        )
 
 def gpu_available() -> Bool:
     return has_accelerator()

@@ -1,4 +1,5 @@
 from std.collections import Array
+from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.memory.alloc import unsafe_alloc
 from std.math import sqrt, cos, sin, max, min, exp, floor, log
 from max.algorithm import parallelize
@@ -72,7 +73,18 @@ def intersect_aabb(
     return (tNear <= tFar, tNear)
 
 @fieldwise_init
-struct SceneDescriptor2_C(TrivialRegisterPassable):
+struct SceneDescriptor2_C(TrivialRegisterPassable, DevicePassable):
+    comptime device_type: AnyType = Self
+
+    def _to_device_type(
+        self, mut encoder: Some[DeviceTypeEncoder], target: MutOpaquePointer[_]
+    ):
+        encoder.encode(self, target)
+
+    @staticmethod
+    def get_type_name() -> String:
+        return "SceneDescriptor2_C"
+
     var bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin]
     var primIds: Pointer[PrimId_C, MutUntrackedOrigin]
     var meshes: Pointer[TriangleMesh_C, MutUntrackedOrigin]
