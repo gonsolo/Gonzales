@@ -9,6 +9,7 @@ from std.sys.info import num_performance_cores
 from max.algorithm import parallelize
 from std.subprocess import run
 from std.os.path import exists
+from .footprint import camera_footprint
 from .diagnostics import warn_unsupported, warn_unsupported_in
 from .lexer import (PbrtScanner, scanner_open, scanner_free, scanner_is_at_end,
                     scanner_scan_token, scanner_parse_quoted_string,
@@ -3610,6 +3611,9 @@ def mojo_parsed_scene_descriptor(
     sd[unsafe_offset=0].vcmCamX = Float32(0); sd[unsafe_offset=0].vcmCamY = Float32(0); sd[unsafe_offset=0].vcmCamZ = Float32(0)
     sd[unsafe_offset=0].vcmFootprint     = Float32(0)   # CPU VCM: one global radius
     sd[unsafe_offset=0].vcmMergeR        = Float32(0)
+    sd[unsafe_offset=0].camFp            = camera_footprint(psc[unsafe_offset=0].raster_to_camera,
+        psc[unsafe_offset=0].camera_to_world, Int(psc[unsafe_offset=0].film_w), Int(psc[unsafe_offset=0].film_h),
+        Int(psc[unsafe_offset=0].samples_per_pixel))
     sd[unsafe_offset=0].distantLights    = psc[unsafe_offset=0].distant_lights
     sd[unsafe_offset=0].distantLightCount = Int64(psc[unsafe_offset=0].distant_count)
     sd[unsafe_offset=0].pointLights      = psc[unsafe_offset=0].point_lights

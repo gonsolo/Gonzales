@@ -18,7 +18,7 @@ from .gpu_wavefront import accumulate_cone_gpu, accumulate_film_gpu, accumulate_
 
 def _gpu_bounce_kernels(
     handle: Pointer[GpuSceneHandle, MutUntrackedOrigin],
-    n: Int, grid_dim: Int, px_scale: Float32,
+    n: Int, grid_dim: Int,
     max_depth: Int32,
     use_vulkan_rt: Bool = False,
     interop_scene: VulkanInteropRtSceneHandle = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
@@ -151,7 +151,6 @@ def _gpu_bounce_kernels(
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
-        px_scale,
         grid_dim=grid_dim,
         block_dim=block_size,
     )
@@ -205,7 +204,6 @@ def _gpu_bounce_kernels(
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
-        px_scale,
         Int32(1) if use_restir else Int32(0),
         restir_read,
         restir_write,
@@ -224,7 +222,6 @@ def _gpu_bounce_kernels(
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
-        px_scale,
         handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
         grid_dim=grid_dim,
         block_dim=block_size,
@@ -235,7 +232,6 @@ def _gpu_bounce_kernels(
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
-        px_scale,
         handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
         grid_dim=grid_dim,
         block_dim=block_size,
@@ -246,7 +242,6 @@ def _gpu_bounce_kernels(
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
-        px_scale,
         handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
         grid_dim=grid_dim,
         block_dim=block_size,
@@ -257,7 +252,6 @@ def _gpu_bounce_kernels(
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
-        px_scale,
         handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
         grid_dim=grid_dim,
         block_dim=block_size,
@@ -267,7 +261,6 @@ def _gpu_bounce_kernels(
         handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         sd,
         Int64(n),
-        px_scale,
         grid_dim=grid_dim,
         block_dim=block_size,
     )
@@ -285,7 +278,6 @@ def _gpu_bounce_kernels(
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
-        px_scale,
         handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
         grid_dim=grid_dim,
         block_dim=block_size,
@@ -312,7 +304,6 @@ def _gpu_bounce_kernels(
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
-        px_scale,
         handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
         grid_dim=grid_dim,
         block_dim=block_size,
@@ -347,7 +338,6 @@ def gpu_render_sample[Oc: Origin[mut=True]](
     rng_seed_lo: UInt32, rng_seed_hi: UInt32,
     n: Int64,
     maxDepth: Int32,
-    px_scale: Float32 = Float32(0.0),
     sample_clamp: Float32 = Float32(0.0),   # pbrt's per-sample maxcomponentvalue, iso-divided
     use_restir: Bool = False,
     frame_index: Int = 0,
@@ -452,7 +442,7 @@ def gpu_render_sample[Oc: Origin[mut=True]](
             if handle[].media.has_sss_medium:
                 gpu_max_rounds += _SSS_WALK_ROUNDS
             for _ in range(gpu_max_rounds):
-                _gpu_bounce_kernels(handle, n_int, grid_dim, px_scale, maxDepth,
+                _gpu_bounce_kernels(handle, n_int, grid_dim, maxDepth,
                                     use_restir=use_restir,
                                     restir_read=restir_rd, restir_write=restir_wr,
                                     use_vol_restir_reuse=use_vol_restir_reuse,
@@ -491,7 +481,6 @@ def gpu_render_wavefront(
     rng_seed_lo: UInt32, rng_seed_hi: UInt32,
     n: Int64,
     maxDepth: Int32,
-    px_scale: Float32 = Float32(0.0),
     sample_clamp: Float32 = Float32(0.0),   # pbrt's per-sample maxcomponentvalue, iso-divided
     # Task #163 stage 3: when use_vulkan_rt, every bounce's primary
     # intersection test is routed through the CUDA/Vulkan interop RT
@@ -577,7 +566,7 @@ def gpu_render_wavefront(
                 gpu_max_rounds += _SSS_WALK_ROUNDS
             for _ in range(gpu_max_rounds):
                 _gpu_bounce_kernels(
-                    handle, n_total, grid_total, px_scale, maxDepth,
+                    handle, n_total, grid_total, maxDepth,
                     use_vulkan_rt, interop_scene, interop_rays_buf, interop_results_buf,
                     mesh_material_idx_buf, mesh_al_idx_buf, n_meshes_vk,
                     instance_base_mesh_buf=instance_base_mesh_buf,

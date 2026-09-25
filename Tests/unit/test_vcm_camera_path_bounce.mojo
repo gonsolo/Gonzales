@@ -31,6 +31,7 @@
 
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
+from gonzales.footprint import CameraFootprint
 from gonzales.geometry import RGB, Point3f, Vec3f
 from gonzales.materials import MeasuredBRDF, Material, MatKind
 from gonzales.render_state import GpuTexture, NormalSlopeMap
@@ -126,6 +127,7 @@ def _build_scene() -> SceneView:
         Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Float32(0), Float32(1), Int32(9),
         Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
+        CameraFootprint.none(),
     )
 
 def _identity_camera_matrices() -> Tuple[Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]]:
@@ -191,6 +193,7 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
     var mis_null_dist = state.mis_null_dist
     var current_dielectric_ior = state.current_dielectric_ior
     var previous_dielectric_ior = state.previous_dielectric_ior
+    var cone_len = state.cone_len
     var wavelengths = SampledWavelengths(state.wl0, state.wl1, state.wl2, state.wl3, state.wl_pdf)
 
     var n_iters = 0
@@ -212,10 +215,7 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
             Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
             ro, rd, beta, total, first_alb, n_verts, n_bounces, cur_med_idx,
             dvcm, dvc, dvm, last_bsdf_pdf, mis_null_dist,
-            current_dielectric_ior, previous_dielectric_ior, wavelengths,
-            # Bump footprint reference; the camera sits at the origin
-            # (identity c2w), and the scene has no bump/normal maps anyway.
-            Vec3f(Float32(0)), px_scale,
+            current_dielectric_ior, previous_dielectric_ior, wavelengths, cone_len,
         )
         active = Int8(1) if cont else Int8(0)
 

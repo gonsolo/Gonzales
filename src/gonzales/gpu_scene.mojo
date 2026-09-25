@@ -3,6 +3,7 @@ from .curves import CURVE_DEFER_K, Curve
 from .geometry import _is_real_ptr
 from .lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSampler
 from .materials import MatKind, Material, MeasuredBRDF
+from .footprint import CameraFootprint
 from .media import Grid, MediumInterface, Medium, NvdbGrid
 from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh
 from .render_state import FilmDims, FilterParams, GpuTexture, NormalSlopeMap, PathState, ShadowTask
@@ -884,6 +885,8 @@ struct GpuSceneHandle(Movable):
     # A null `interface` material can sit in a scene with no medium at all
     # (glass stubbed out as "interface"); its crossings still need rounds.
     var has_interface_material: Bool
+    # Set by each render driver for its own spp (footprint.camera_footprint).
+    var cam_fp: CameraFootprint
     var textures: TextureBuffers
     var lights: LightBuffers
     var spheres_buf: DeviceBuffer[DType.uint8]   # n_spheres × sizeof(Sphere) = 36
@@ -976,7 +979,7 @@ struct GpuSceneHandle(Movable):
             vcmKeepCounts=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             vcmKeepInvCell=Float32(0), vcmKeepScale=Float32(1), vcmMaxDepth=Int32(9),
             vcmCamX=Float32(0), vcmCamY=Float32(0), vcmCamZ=Float32(0),
-            vcmFootprint=Float32(0), vcmMergeR=Float32(0),
+            vcmFootprint=Float32(0), vcmMergeR=Float32(0), camFp=self.cam_fp,
         )
 
 def gpu_available() -> Bool:
@@ -1146,6 +1149,7 @@ def gpu_upload_scene(
                 materials_buf=mat_buf^,
                 material_count=Int(s.material_count),
                 has_interface_material=has_iface_mat,
+                cam_fp=CameraFootprint.none(),
                 textures=textures^,
                 lights=lights^,
                 spheres_buf=sphere_buf^,

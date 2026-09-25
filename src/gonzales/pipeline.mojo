@@ -4,6 +4,7 @@ from std.collections import List, Array
 from std.math import sqrt, tan, ceil
 from std.sys.info import size_of
 from max.gpu.host import DeviceBuffer
+from .footprint import camera_footprint
 from .pbrt_parser import ParsedScene_Mojo, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film, mojo_apply_overrides
 from .scene_loader import mojo_parse_scene_any
 from .rendering import render_all_tiles, normalize_film, apply_film_sensor, fmt_time, progress_str
@@ -1039,23 +1040,12 @@ def parse_and_render(
         return ret
     elif use_gpu:
         var spp = Int(psc[unsafe_offset=0].samples_per_pixel)
-        # World units spanned by one pixel per unit distance (for mip LOD):
-        # 2*tan(fov/2)/height. fov is in degrees along the shorter axis.
-        var px_scale = Float32(2.0) * tan(psc[unsafe_offset=0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(Int(fh))
-        # Scale by the sampling rate, as pbrt does: integrators.cpp does
-        # `rayDiffScale = max(0.125, 1/sqrt(spp))` before ScaleDifferentials.
-        # The reason is that the FOOTPRINT a texture lookup should filter over
-        # is not the whole pixel -- it is the spacing between samples, because
-        # the spp samples themselves resolve everything finer than that.
-        # Without this we filtered over the full pixel at every sample count,
-        # i.e. 8x too wide at 64spp (three mip levels too coarse) on every
-        # textured surface, which is the wrong direction to be wrong in: it
-        # throws away texture detail that the samples had already paid for.
-        px_scale *= max(Float32(0.125), Float32(1.0) / sqrt(Float32(max(spp, 1))))
         var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
         if not _is_real_ptr(handle):
             mojo_parsed_free(psc)
             return Int32(-1)
+        handle[].cam_fp = camera_footprint(psc[unsafe_offset=0].raster_to_camera,
+            psc[unsafe_offset=0].camera_to_world, Int(fw), Int(fh), spp)
 
         # Task #163 stage 3: build the interop-AND-ray-query-capable Vulkan
         # RT scene once (if requested and the scene is within scope) and
@@ -1276,7 +1266,6 @@ def parse_and_render(
                     UInt32(psc[unsafe_offset=0].rng_seed & UInt64(0xFFFFFFFF)),
                     UInt32(psc[unsafe_offset=0].rng_seed >> UInt64(32)),
                     Int64(n_pixels), psc[unsafe_offset=0].max_depth,
-                    px_scale,
                     sample_clamp=_sample_clamp(psc),
                     use_restir=use_restir, frame_index=si,
                     use_vol_restir_reuse=use_vol_restir_reuse,
@@ -1296,7 +1285,7 @@ def parse_and_render(
                     UInt32(psc[unsafe_offset=0].rng_seed & UInt64(0xFFFFFFFF)),
                     UInt32(psc[unsafe_offset=0].rng_seed >> UInt64(32)),
                     Int64(n_pixels), psc[unsafe_offset=0].max_depth,
-                    px_scale, _sample_clamp(psc),
+                    _sample_clamp(psc),
                     use_vk, interop_scene, interop_rays_buf_opt, interop_results_buf_opt,
                     mesh_material_idx_buf_opt, mesh_al_idx_buf_opt, n_meshes_vk,
                     instance_base_mesh_buf_opt,

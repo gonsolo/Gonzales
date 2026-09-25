@@ -200,16 +200,11 @@ struct PathState(TrivialRegisterPassable):
     # Textured envs are unaffected -- the miss handler overrides this from
     # the CDF, which is the pdf both samplers share once one exists.
     var lastEnvNeePdf: Float32
-    # TOTAL path length so far, for the texture/bump footprint (a ray cone of
-    # constant spread `px_scale`). The footprint used to be computed from
-    # `inter.tHit` alone -- the CURRENT segment -- so it RESET TO ZERO at
-    # every bounce: a floor seen through water or a mirror was filtered as if
-    # the camera sat at the last scattering point. pbrt carries ray
-    # differentials for the same purpose; the texture sampler here consumes a
-    # single scalar LOD (_footprint_lod: texels = pixel_uv * width, then
-    # log2), so the differential's scalar projection -- a cone width -- is all
-    # that can be used, at 1 float instead of the 12 a full Igehy
-    # differential would cost in GPU path state.
+    # Path length along the camera ray's SPECULAR chain, for the texture/bump
+    # footprint (footprint.mojo): the ray cone standing in for pbrt's ray
+    # differentials, 1 float instead of a full differential's 12. -1 once a
+    # non-specular scatter has happened: pbrt then drops the differentials and
+    # uses Camera::Approximate_dp_dxy at every later hit.
     var cone_len: Float32
 # <</listing>>
 # PathState layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+4+4+4+4+8+20+4+4+4 = 148 bytes (was 144 -- +4 for cone_len);

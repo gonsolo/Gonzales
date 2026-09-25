@@ -9,6 +9,7 @@
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, TestSuite
+from gonzales.footprint import CameraFootprint
 from gonzales.geometry import RGB, Point3f, Vec3f
 from gonzales.materials import Material, MeasuredBRDF
 from gonzales.render_state import GpuTexture, NormalSlopeMap, ShadowTask, PathState
@@ -70,7 +71,7 @@ def _make_ctx_with_light(
         Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), 0,
         Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
-        Float32(0.0),
+        CameraFootprint.none(),
         Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(),
         null_guide(),
         use_restir,

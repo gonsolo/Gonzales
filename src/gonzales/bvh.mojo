@@ -14,6 +14,7 @@ from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
 from .curves import Curve, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis
 from .rng import PCG32
+from .footprint import CameraFootprint
 from .spectrum import SpectralHandle
 
 # ── BVH2 Compact Nodes (32 bytes per node, 1 cache line) ──────────────────────
@@ -84,6 +85,13 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     @staticmethod
     def get_type_name() -> String:
         return "SceneView"
+
+    def with_camera_footprint(self, cam: CameraFootprint) -> Self:
+        """This scene with the camera data every integrator's texture/bump
+        footprint needs (footprint.mojo), for one render's spp."""
+        var s = self
+        s.camFp = cam
+        return s
 
     def with_vcm(
         self,
@@ -207,6 +215,9 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     var vcmCamZ:        Float32
     var vcmFootprint:   Float32
     var vcmMergeR:      Float32
+    # pbrt's texture/bump footprint camera data (footprint.mojo); none() =
+    # every map at LOD 0 with pbrt's fixed bump step.
+    var camFp:          CameraFootprint
 
 # ── Infinite/distant-light emission + NEE sampling (shared by bdpt.mojo and
 #    sppm.mojo — lives here, not shading.mojo, to avoid an import cycle:

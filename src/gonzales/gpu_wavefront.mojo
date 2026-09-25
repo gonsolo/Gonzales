@@ -474,10 +474,14 @@ def accumulate_cone_gpu(
     # anything about the camera. Growing it there would blur deeper bounces
     # without bound and without justification; pbrt carries differentials for
     # camera rays and specular chains for the same reason. After the first
-    # non-specular scatter the cone FREEZES at its last valid width, so those
-    # bounces keep the footprint they legitimately had.
+    # non-specular scatter pbrt's ray carries no differentials at all and every
+    # later hit takes Camera::Approximate_dp_dxy; cone_len = -1 records that.
+    if paths[unsafe_offset=tid].cone_len < Float32(0.0):
+        return
     if paths[unsafe_offset=tid].bounce == Int32(0) or paths[unsafe_offset=tid].specularBounce != Int8(0):
         paths[unsafe_offset=tid].cone_len += results[unsafe_offset=tid].tHit
+    else:
+        paths[unsafe_offset=tid].cone_len = Float32(-1.0)
 
 
 

@@ -11,6 +11,7 @@
 from std.math import abs, sqrt
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, TestSuite
+from gonzales.footprint import CameraFootprint
 from gonzales.geometry import RGB, Point3f, Vec3f, dot, cross
 from gonzales.materials import Material, MatKind, MeasuredBRDF
 from gonzales.render_state import GpuTexture, NormalSlopeMap, ShadowTask, PathState
@@ -77,7 +78,6 @@ def _make_ctx(
     primIds: Pointer[PrimId, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     materials: Pointer[Material, MutUntrackedOrigin],
-    px_scale: Float32,
 ) -> ShadeContext:
     """A ShadeContext with every field the functions under test don't touch
     left as a dangling sentinel -- valid as long as the exercised code paths
@@ -91,7 +91,7 @@ def _make_ctx(
         Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), 0,
         Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
-        px_scale,
+        CameraFootprint.none(),
         Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(),
         null_guide(),
         False,
@@ -197,7 +197,7 @@ def test_apply_normal_map_returns_geom_normal_unchanged_when_no_normal_map() rai
 
 # ── _build_geom_context_full ──────────────────────────────────────────────────
 # Full NEE-material GeomContext builder. With tex_idx=-1, normal_tex_idx=-1,
-# and px_scale=0 the texture/normal-map/pixel-footprint branches are all
+# and no camera footprint the texture/normal-map/pixel-footprint branches are all
 # skipped, leaving a pure closed-form geometry computation to check against.
 
 def test_build_geom_context_full_matches_closed_form_for_axis_aligned_hit() raises:
@@ -221,7 +221,7 @@ def test_build_geom_context_full_matches_closed_form_for_axis_aligned_hit() rais
     var ctx = _make_ctx(
         Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
-        meshes, materials, Float32(0.0))
+        meshes, materials)
 
     var org = Vec3f(0.0, 0.0, 5.0)
     var dir = Vec3f(0.0, 0.0, -1.0)
@@ -294,7 +294,7 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
         Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), 0,
         Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
-        Float32(0.0),
+        CameraFootprint.none(),
         Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(),
         null_guide(),
         False,
@@ -363,7 +363,7 @@ def test_shadow_contribute_direct_adds_contribution_when_unoccluded() raises:
 
     var materials = unsafe_alloc[Material](1)
     materials[unsafe_offset=0] = _make_material(RGB(Float32(0.5)), Int32(-1))
-    var ctx = _make_ctx(bvh, primIds, meshes, materials, Float32(0.0))
+    var ctx = _make_ctx(bvh, primIds, meshes, materials)
     var path = _make_path(Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0))
     var path_arr = unsafe_alloc[PathState](1)
     path_arr[unsafe_offset=0] = path
@@ -399,7 +399,7 @@ def test_shadow_contribute_direct_skips_when_occluded() raises:
 
     var materials = unsafe_alloc[Material](1)
     materials[unsafe_offset=0] = _make_material(RGB(Float32(0.5)), Int32(-1))
-    var ctx = _make_ctx(bvh, primIds, meshes, materials, Float32(0.0))
+    var ctx = _make_ctx(bvh, primIds, meshes, materials)
     var path = _make_path(Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, -1.0))
     var path_arr = unsafe_alloc[PathState](1)
     path_arr[unsafe_offset=0] = path

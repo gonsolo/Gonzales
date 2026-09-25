@@ -13,6 +13,7 @@ from .layered import layered_f, layered_sample, layered_pdf
 from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
 from .rng import PCG32
+from .footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
 from .bvh import BVH2Node, SceneView, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core, HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_square_to_sphere, _equal_area_sphere_to_square
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
 from .transform import transform_normal_by_instance, Mat4
@@ -114,7 +115,7 @@ struct ShadeContext:
     # did before these existed).
     var nmaps:            Pointer[NormalSlopeMap, MutUntrackedOrigin]
     var shadow_tasks:     Pointer[ShadowTask, MutUntrackedOrigin]
-    var px_scale:         Float32
+    var cam_fp:           CameraFootprint   # pbrt texture/bump footprint (footprint.mojo)
     var sobol_matrices:   Pointer[UInt32, MutUntrackedOrigin]
     var guide:            GuideGrid
     # Phase 2 (docs/A2_restir_migration_plan.md): CPU-only today, like
@@ -391,13 +392,13 @@ def _sample_tex(tex: GpuTexture, u: Float32, v: Float32, lod: Float32 = Float32(
     var c1 = _sample_level(tex, off1, w1, h1, u, v)
     return c0 + (c1 - c0) * f
 
-# LOD = log2(texels covered by one pixel). pixel_uv is the uv footprint;
-# * width converts to texels.
+# pbrt's MIPMap level for its default "bilinear" filter: floor(nLevels - 1 +
+# log2(width)), one level, no blend. `width` is UVFootprint.width (uv units).
 @always_inline
-def _footprint_lod(tex: GpuTexture, pixel_uv: Float32) -> Float32:
-    var texels = pixel_uv * Float32(tex.width)
+def _footprint_lod(tex: GpuTexture, width: Float32) -> Float32:
+    var texels = width * Float32(max(Int(tex.width), Int(tex.height)))
     if texels > Float32(1.0):
-        return log2(texels)
+        return floor(log2(texels))
     return Float32(0.0)
 
 # Unified 2D-texture fetch — the single use_gpu seam for texture sampling.
@@ -410,7 +411,7 @@ def sample_texture[use_gpu: Bool](
     tex_idx: Int,
     u: Float32, v: Float32,
     raw: Bool,
-    pixel_uv: Float32,   # texture-space footprint of one pixel (uv units); <=0 => LOD 0
+    fp_width: Float32,   # UVFootprint.width (pbrt MIPMap filter width, uv units); <=0 => LOD 0
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
     textures: Pointer[GpuTexture, MutUntrackedOrigin],
     n_textures: Int,
@@ -426,7 +427,7 @@ def sample_texture[use_gpu: Bool](
             var tex = textures[unsafe_offset=tex_idx]
             if Int(tex.width) > 0:
                 found = True
-                return _sample_tex(tex, su, tv, _footprint_lod(tex, pixel_uv))
+                return _sample_tex(tex, su, tv, _footprint_lod(tex, fp_width))
     else:
         if Int(tex_filenames) > 1:
             var filename = tex_filenames[unsafe_offset=tex_idx]
@@ -457,7 +458,7 @@ def _tex_lookup[use_gpu: Bool](
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
     textures: Pointer[GpuTexture, MutUntrackedOrigin],
     n_textures: Int,
-    pixel_uv: Float32 = Float32(0.0),
+    fp_width: Float32 = Float32(0.0),   # UVFootprint.width; 0 = LOD 0
 ) -> RGB:
     var ti = Int(mat.tex_idx)
     if ti == -2:
@@ -490,7 +491,7 @@ def _tex_lookup[use_gpu: Bool](
                 # bias + scale*texel is pbrt's "scale"/"mix" texture graph
                 # folded into the lookup (scale=1, bias=0 when absent) --
                 # see material_builder.mojo's _resolve_affine_rgb.
-                var t = _sample_tex(tex, su, tv, _footprint_lod(tex, pixel_uv))
+                var t = _sample_tex(tex, su, tv, _footprint_lod(tex, fp_width))
                 return RGB(mat.tex_bias.r + mat.tex_scale.r * t.r,
                            mat.tex_bias.g + mat.tex_scale.g * t.g,
                            mat.tex_bias.b + mat.tex_scale.b * t.b)
@@ -809,13 +810,16 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].active = 0
         return
     var geo_n = normal   # face-forwarded geometric normal, for the ray offset
+    var dt_fp_width = Float32(0.0)
     if not is_sphere:
         # 146 corpus diffusetransmission materials carry "texture displacement"
         # (foliage cards in sanmiguel, etc). NOTE this path never interpolates a
         # vertex shading normal either -- it perturbs the face-forwarded
         # geometric normal directly, which is a separate pre-existing gap.
-        normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, normal, ray_dir,
-            ctx.px_scale * path_ptr[].cone_len, ctx.tex_filenames, ctx.textures, ctx.n_textures)
+        var (tri_dt, fp_dt) = _pt_hit_footprint(path_ptr, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
+        dt_fp_width = fp_dt.width
+        normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, normal,
+            tri_dt, fp_dt, ctx.tex_filenames, ctx.textures, ctx.n_textures)
         normal = face_toward(normal, -ray_dir)   # reflect lobe on wo's side
 
     # "texture reflectance"/"texture transmittance" (e.g. a leaf.tga imagemap)
@@ -829,7 +833,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     var refl = mat.albedo
     var trans = mat.emission
     if not is_sphere and Int(mat.tex_idx) != -1:
-        var tex_rgb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures)
+        var tex_rgb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, dt_fp_width)
         refl = tex_rgb
         trans = tex_rgb
 
@@ -940,11 +944,12 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         alb = mat.albedo
         normal = geo_normal
     else:
-        alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures)
+        var (tri_cd, fp_cd) = _pt_hit_footprint(path_ptr, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
+        alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, fp_cd.width)
         # Use interpolated shading normal (geometric normal still drives hit-point offset)
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances)
-        normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_normal, ray_dir,
-            ctx.px_scale * path_ptr[].cone_len, ctx.tex_filenames, ctx.textures, ctx.n_textures)
+        normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_normal,
+            tri_cd, fp_cd, ctx.tex_filenames, ctx.textures, ctx.n_textures)
         # pbrt's LayeredBxDF is twoSided: see face_toward.
         normal = face_toward(normal, -ray_dir)
 
@@ -1135,7 +1140,8 @@ def shade_dielectric[use_gpu: Bool](
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
     textures: Pointer[GpuTexture, MutUntrackedOrigin] = Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(),
     n_textures: Int = 0,
-    px_scale: Float32 = Float32(0.0),
+    cam: CameraFootprint = CameraFootprint.none(),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
 ):
     var (ok, is_sphere, geom_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, meshes, spheres)
     if not ok:
@@ -1183,8 +1189,9 @@ def shade_dielectric[use_gpu: Bool](
         # entering/exiting test below is `dot(ray_dir, n) < 0`, so flipping the
         # perturbed normal toward the ray would make it tautologically true and
         # bring back the 1/eta^4 loss this branch exists to prevent.
-        geom_normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, geom_normal, raw_gn, ray_dir,
-            px_scale * path_ptr[].cone_len, tex_filenames, textures, n_textures)
+        var (tri_de, fp_de) = _pt_hit_footprint(path_ptr, cam, instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
+        geom_normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, geom_normal, raw_gn,
+            tri_de, fp_de, tex_filenames, textures, n_textures)
     else:
         # `_hit_geom`/`_sphere_geom_normal_and_ray` returns a FACE-FORWARDED
         # normal (always flipped to oppose the incoming ray) -- correct for
@@ -1523,8 +1530,9 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
 
         # Use interpolated shading normal for smooth specular reflections
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
-        normal = _apply_surface_maps[use_gpu](mat_eff, v0, v1, v2, mesh, inter, normal, geo_normal, ray_dir,
-            ctx.px_scale * path_ptr[].cone_len, ctx.tex_filenames, ctx.textures, ctx.n_textures)
+        var (tri_co, fp_co) = _pt_hit_footprint(path_ptr, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
+        normal = _apply_surface_maps[use_gpu](mat_eff, v0, v1, v2, mesh, inter, normal, geo_normal,
+            tri_co, fp_co, ctx.tex_filenames, ctx.textures, ctx.n_textures)
         normal = face_toward(normal, -ray_dir)   # before the tangent frame below
 
         # roughU/V already hold the resolved GGX alpha — no squaring here.
@@ -1678,8 +1686,9 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
         normal = geo_normal
     else:
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
-        normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_normal, ray_dir,
-            ctx.px_scale * path_ptr[].cone_len, ctx.tex_filenames, ctx.textures, ctx.n_textures)
+        var (tri_me, fp_me) = _pt_hit_footprint(path_ptr, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
+        normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_normal,
+            tri_me, fp_me, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
         # A shading normal tilted past wo (a silhouette of a low-poly mesh, or
         # a bump map at a grazing view) used to fall back to geo_normal here,
@@ -1926,7 +1935,7 @@ def _apply_bump_map[use_gpu: Bool](
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
     textures: Pointer[GpuTexture, MutUntrackedOrigin],
     n_textures: Int,
-    pixel_uv: Float32 = Float32(0.0),
+    fp: UVFootprint = UVFootprint.none(),
 ) -> Vec3f:
     """PBRT-style bump map: perturb dpdu/dpdv by the finite-difference height
     gradient of `mat.bump_tex_idx` (scaled by `mat.bump_scale`), then rebuild
@@ -1936,9 +1945,8 @@ def _apply_bump_map[use_gpu: Bool](
     height gradient's magnitude must compose against their actual
     world-per-parametric-unit scale, not a unit direction.
 
-    The finite-difference step MUST scale with the ray footprint
-    (`pixel_uv`, already computed per-hit by the caller for texture LOD) --
-    never a fixed UV constant. A first attempt at this used a fixed epsilon
+    The finite-difference steps are pbrt's du/dv from the hit's footprint
+    (footprint.mojo) -- never a fixed UV constant. A first attempt at this used a fixed epsilon
     and made barcelona-pavilion's water WORSE (1.682x -> 1.804x pbrt): a
     fixed step over a heavily-tiled UV layout produces enormous gradients
     wherever texels are small in world space. Matches pbrt's own adaptive
@@ -1967,9 +1975,8 @@ def _apply_bump_map[use_gpu: Bool](
     var uv_u = bw0 * u0f + inter.u * u1f + inter.v * u2f
     var uv_v = bw0 * v0f + inter.u * v1f + inter.v * v2f  # unflipped; sample_texture applies its own V-flip consistently to every sample below
 
-    var h = pixel_uv * Float32(0.5)
-    if h <= Float32(1e-6):
-        h = Float32(0.0005)
+    var hu_step = fp.du if fp.du > Float32(0.0) else Float32(0.0005)
+    var hv_step = fp.dv if fp.dv > Float32(0.0) else Float32(0.0005)
 
     # raw=False: unlike a normal map (tangent-space vectors, never gamma
     # data), a height texture sourced from an 8-bit PNG is sRGB-encoded by
@@ -1983,13 +1990,13 @@ def _apply_bump_map[use_gpu: Bool](
     # gpu.mojo's upload only marks normal_tex_idx textures raw, so
     # bump_tex_idx defaults to the sRGB-decoded (non-raw) upload path.
     var found = False
-    var h0 = sample_texture[use_gpu](Int(mat.bump_tex_idx), uv_u, uv_v, False, pixel_uv, tex_filenames, textures, n_textures, found).r
+    var h0 = sample_texture[use_gpu](Int(mat.bump_tex_idx), uv_u, uv_v, False, fp.width, tex_filenames, textures, n_textures, found).r
     if not found:
         return geom_normal
-    var hu = sample_texture[use_gpu](Int(mat.bump_tex_idx), uv_u + h, uv_v, False, pixel_uv, tex_filenames, textures, n_textures, found).r
-    var hv = sample_texture[use_gpu](Int(mat.bump_tex_idx), uv_u, uv_v + h, False, pixel_uv, tex_filenames, textures, n_textures, found).r
-    var dhdu = (hu - h0) * (Float32(1.0) / h) * mat.bump_scale
-    var dhdv = (hv - h0) * (Float32(1.0) / h) * mat.bump_scale
+    var hu = sample_texture[use_gpu](Int(mat.bump_tex_idx), uv_u + hu_step, uv_v, False, fp.width, tex_filenames, textures, n_textures, found).r
+    var hv = sample_texture[use_gpu](Int(mat.bump_tex_idx), uv_u, uv_v + hv_step, False, fp.width, tex_filenames, textures, n_textures, found).r
+    var dhdu = (hu - h0) * (Float32(1.0) / hu_step) * mat.bump_scale
+    var dhdv = (hv - h0) * (Float32(1.0) / hv_step) * mat.bump_scale
 
     # newDpdu = dpdu + dh/du * n (dndu term dropped -- flat-shaded triangles
     # have no meaningful dn/du of their own; matches pbrt's BumpMap when the
@@ -2091,38 +2098,6 @@ def _apply_normal_map_sphere[use_gpu: Bool](
 # shade_conductor/shade_coated_conductor build their GeomContext inline instead of
 # sharing one minimal builder.
 
-# Ray-footprint estimate in UV units, for texture LOD and (critically) the bump
-# map's finite-difference step. Split out of _build_geom_context_full so the
-# shading paths that build their geometry inline can compute the same value --
-# _apply_bump_map's step MUST scale with this, never a fixed UV constant (see
-# its docstring for what a fixed epsilon did to barcelona's water).
-@always_inline
-def _pixel_uv_for_hit(
-    mesh: TriangleMesh, v0: Int, v1: Int, v2: Int,
-    p0: Vec3f, p1: Vec3f, p2: Vec3f,
-    ng: Vec3f, ray_dir: Vec3f, cone_w: Float32,
-) -> Float32:
-    """`cone_w` is the ray cone's WIDTH at this hit: px_scale * the TOTAL
-    path length, not px_scale * this segment. It used to be the latter, so the
-    footprint reset to zero at every bounce and a surface seen through water
-    or a mirror was filtered as if the camera sat at the last scatter point."""
-    if cone_w <= Float32(0.0) or Int(mesh.uvs) <= 1:
-        return Float32(0.0)
-    var fu1 = mesh.uvs[unsafe_offset=v1*2] - mesh.uvs[unsafe_offset=v0*2]; var fv1 = mesh.uvs[unsafe_offset=v1*2+1] - mesh.uvs[unsafe_offset=v0*2+1]
-    var fu2 = mesh.uvs[unsafe_offset=v2*2] - mesh.uvs[unsafe_offset=v0*2]; var fv2 = mesh.uvs[unsafe_offset=v2*2+1] - mesh.uvs[unsafe_offset=v0*2+1]
-    var det = fu1*fv2 - fu2*fv1
-    if det == Float32(0.0):
-        return Float32(0.0)
-    var inv = Float32(1.0) / det
-    var dpdu = (p1 - p0) * (fv2 * inv) - (p2 - p0) * (fv1 * inv)
-    var dpdu_len = sqrt(dot(dpdu, dpdu))
-    if dpdu_len <= Float32(0.0):
-        return Float32(0.0)
-    var rc = dot(ng, ray_dir)
-    if rc < Float32(0.0): rc = -rc
-    if rc < Float32(0.05): rc = Float32(0.05)
-    return (cone_w / rc) / dpdu_len
-
 # Apply normal + bump maps to an already-interpolated shading normal.
 #
 # WHY THIS EXISTS: _apply_normal_map/_apply_bump_map used to be called from
@@ -2153,18 +2128,15 @@ def _apply_surface_maps[use_gpu: Bool](
     inter: Intersection,
     shading_normal: Vec3f,
     orient_to: Vec3f,
-    ray_dir: Vec3f,
-    cone_w: Float32,   # px_scale * TOTAL path length (see _pixel_uv_for_hit)
+    tri: TriWorld,       # WORLD-space corners: the maps build tangents from them
+    fp: UVFootprint,
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
     textures: Pointer[GpuTexture, MutUntrackedOrigin],
     n_textures: Int,
 ) -> Vec3f:
     if mat.normal_tex_idx < Int32(0) and mat.bump_tex_idx < Int32(0):
         return shading_normal
-    var p0 = Vec3f(mesh.points[unsafe_offset=v0*4], mesh.points[unsafe_offset=v0*4+1], mesh.points[unsafe_offset=v0*4+2])
-    var p1 = Vec3f(mesh.points[unsafe_offset=v1*4], mesh.points[unsafe_offset=v1*4+1], mesh.points[unsafe_offset=v1*4+2])
-    var p2 = Vec3f(mesh.points[unsafe_offset=v2*4], mesh.points[unsafe_offset=v2*4+1], mesh.points[unsafe_offset=v2*4+2])
-    var pixel_uv = _pixel_uv_for_hit(mesh, v0, v1, v2, p0, p1, p2, orient_to, ray_dir, cone_w)
+    var p0 = tri.p0; var p1 = tri.p1; var p2 = tri.p2
     # Normal map at LOD 0, like pbrt's NormalMap() (a plain bilerp of the
     # full-resolution image, no mip chain). A box-filtered mip of encoded
     # normals averages toward the flat (0,0,1) texel, so at a distant or
@@ -2175,39 +2147,27 @@ def _apply_surface_maps[use_gpu: Bool](
     var n = _apply_normal_map[use_gpu](mat, v0, v1, v2, mesh, inter, shading_normal, p0, p1, p2,
         tex_filenames, textures, n_textures, Float32(0.0))
     n = _apply_bump_map[use_gpu](mat, v0, v1, v2, mesh, inter, n, p0, p1, p2,
-        tex_filenames, textures, n_textures, pixel_uv)
+        tex_filenames, textures, n_textures, fp)
     if dot(n, orient_to) < Float32(0.0):
         n = -n
     return n
 
-# Footprint width for a vertex that has NO ray cone of its own -- every vertex
-# on a LIGHT subpath (SPPM's photons, VCM's light path), plus VCM's camera
-# path, which does not track a cone.
-#
-# Why this is needed at all: the bump map's finite-difference step is `pixel_uv
-# * 0.5`, and _apply_bump_map falls back to a FIXED 0.0005 when handed zero.
-# That fixed epsilon is exactly what made barcelona's water worse (1.682x ->
-# 1.804x) the first time bump mapping was attempted -- see that function's
-# docstring. So "just pass 0 on the light side" is not an option: a light-side
-# vertex needs a real footprint or it must not bump at all.
-#
-# This is pbrt-v4's own answer, not an invention here: when a
-# SurfaceInteraction has no ray differentials, pbrt calls
-# Camera::Approximate_dp_dxy(), which estimates the footprint as if the point
-# were being viewed by the camera -- pixel angular size times distance from the
-# camera. pbrt's SPPM and BDPT both take that path for their light-subpath
-# vertices. Using it here has the property that actually matters for a photon
-# estimator: a light vertex and a camera vertex landing on the SAME point get
-# the SAME footprint, so the two halves of the estimator filter the surface
-# identically. See project_surface_maps_photon_side_gap memory for the more
-# accurate routes deliberately not taken yet (Path/Photon Differentials for a
-# true light-side footprint, LEAN/LEADR for filtering the map itself).
+# The path tracer's footprint at this hit: the specular-chain cone while
+# PathState.cone_len >= 0 (camera differentials), pbrt's camera approximation
+# once a non-specular scatter has cleared it to -1.
 @always_inline
-def _camera_approx_footprint(p: Point3f, cam_pos: Vec3f, px_scale: Float32) -> Float32:
-    """`px_scale` is the world-space size of one pixel at unit distance, the
-    same quantity the camera walks multiply by their cone length."""
-    var d = Vec3f(p[0] - cam_pos[0], p[1] - cam_pos[1], p[2] - cam_pos[2])
-    return px_scale * sqrt(dot(d, d))
+def _pt_hit_footprint(
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
+    cam: CameraFootprint,
+    instances: Pointer[Instance, MutUntrackedOrigin],
+    mesh: TriangleMesh, v0: Int, v1: Int, v2: Int,
+    inter: Intersection, ray_org: Vec3f, ray_dir: Vec3f,
+) -> Tuple[TriWorld, UVFootprint]:
+    var tri = tri_world(mesh, v0, v1, v2, inter.primId.instanceIdx, instances)
+    var cl = path_ptr[].cone_len
+    var cone_w = cam.cone_spread * cl if cl >= Float32(0.0) else Float32(-1.0)
+    var hit = ray_org + ray_dir * inter.tHit
+    return (tri, hit_uv_footprint(cam, tri, mesh, v0, v1, v2, hit, ray_dir, cone_w))
 
 # Resolve the hit's triangle and apply its normal/bump maps, in one call.
 #
@@ -2225,10 +2185,13 @@ def apply_surface_maps_at_hit[use_gpu: Bool](
     mat: Material,
     inter: Intersection,
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    instances: Pointer[Instance, MutUntrackedOrigin],
     shading_normal: Vec3f,
     orient_to: Vec3f,
+    hit: Vec3f,
     ray_dir: Vec3f,
-    cone_w: Float32,
+    cone_w: Float32,   # >= 0: specular-chain cone width here; < 0: camera approximation
+    cam: CameraFootprint,
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
     textures: Pointer[GpuTexture, MutUntrackedOrigin],
     n_textures: Int,
@@ -2238,12 +2201,33 @@ def apply_surface_maps_at_hit[use_gpu: Bool](
     var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
     if not ok:
         return shading_normal
+    var tri = tri_world(mesh, v0, v1, v2, inter.primId.instanceIdx, instances)
+    var fp = hit_uv_footprint(cam, tri, mesh, v0, v1, v2, hit, ray_dir, cone_w)
     return _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter,
-        shading_normal, orient_to, ray_dir, cone_w,
+        shading_normal, orient_to, tri, fp,
         tex_filenames, textures, n_textures)
 
+
+# The same footprint, for an albedo/texture lookup at a hit that resolves its
+# own maps elsewhere (0 = LOD 0 for a non-triangle hit).
+@always_inline
+def uv_footprint_at_hit(
+    inter: Intersection,
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    instances: Pointer[Instance, MutUntrackedOrigin],
+    hit: Vec3f,
+    ray_dir: Vec3f,
+    cone_w: Float32,
+    cam: CameraFootprint,
+) -> UVFootprint:
+    var (mesh, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
+    if not ok:
+        return UVFootprint.none()
+    return hit_uv_footprint(cam, tri_world(mesh, v0, v1, v2, inter.primId.instanceIdx, instances),
+        mesh, v0, v1, v2, hit, ray_dir, cone_w)
+
 # Full context for NEE materials (diffuse, diffuse_transmit, coated_diffuse).
-# Computes pixel_uv, applies normal map, looks up albedo texture.
+# Computes the hit footprint, applies normal/bump maps, looks up albedo texture.
 # hit_point is offset along the geometric normal.
 # The shading normal comes back turned toward wo (face_toward).
 @always_inline
@@ -2271,33 +2255,22 @@ def _build_geom_context_full[use_gpu: Bool](
         return (GeomContext(geo_normal, geo_normal, hit_point, wo, tangent, bitangent, mat.albedo, Float32(0.0)), True)
 
     var ng_ff = geo_normal
-    var p0 = Vec3f(mesh.points[unsafe_offset=v0*4], mesh.points[unsafe_offset=v0*4+1], mesh.points[unsafe_offset=v0*4+2])
-    var p1 = Vec3f(mesh.points[unsafe_offset=v1*4], mesh.points[unsafe_offset=v1*4+1], mesh.points[unsafe_offset=v1*4+2])
-    var p2 = Vec3f(mesh.points[unsafe_offset=v2*4], mesh.points[unsafe_offset=v2*4+1], mesh.points[unsafe_offset=v2*4+2])
-
-    var pixel_uv = _pixel_uv_for_hit(mesh, v0, v1, v2, p0, p1, p2, ng_ff, ray_dir,
-                                     ctx.px_scale * path_ptr[].cone_len)
+    var (tri, fp) = _pt_hit_footprint(path_ptr, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
 
     var normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances)
-    # `* cone_len`, like the five other call sites and like the `pixel_uv`
-    # computed three lines up from the SAME quantity. Without it this site --
-    # the ORIGINAL one, and the only one shade_diffuse reaches -- passed a
-    # bare px_scale, i.e. a footprint for a surface exactly one world unit
-    # from the camera, so every diffuse bump map was differentiated at the
-    # wrong step: far too fine in a large scene, far too coarse in a small one.
-    normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, ng_ff, ray_dir,
-        ctx.px_scale * path_ptr[].cone_len, ctx.tex_filenames, ctx.textures, ctx.n_textures)
+    normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, ng_ff,
+        tri, fp, ctx.tex_filenames, ctx.textures, ctx.n_textures)
     var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])
     normal = face_toward(normal, wo)
 
     # Offset along the GEOMETRIC normal (pbrt's OffsetRayOrigin): the shading
     # normal just turned toward wo can point into the surface.
     var hit_point = ray_org + ray_dir * inter.tHit + ng_ff * Float32(0.0001)
-    var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, pixel_uv)
+    var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, fp.width)
     var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
     var tangent   = Vec3f(frame.x.x, frame.x.y, frame.x.z)
     var bitangent = Vec3f(frame.y.x, frame.y.y, frame.y.z)
-    return (GeomContext(normal, ng_ff, hit_point, wo, tangent, bitangent, alb, pixel_uv), True)
+    return (GeomContext(normal, ng_ff, hit_point, wo, tangent, bitangent, alb, fp.width), True)
 
 # Extract 8 consecutive Sobol dimensions for one non-delta bounce and advance
 # the path's sampler_dim counter.
@@ -4513,7 +4486,7 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     elif mat.type == MatKind.conductor:
         shade_conductor[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.dielectric:
-        shade_dielectric[False](path_ptr, inter, ctx.meshes, mat, ctx.lights.spheres, ctx.tex_filenames, ctx.textures, ctx.n_textures, ctx.px_scale)
+        shade_dielectric[False](path_ptr, inter, ctx.meshes, mat, ctx.lights.spheres, ctx.tex_filenames, ctx.textures, ctx.n_textures, ctx.cam_fp, ctx.instances)
     elif mat.type == MatKind.coated_diffuse:
         shade_coated_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.diffuse_transmit:
@@ -4917,7 +4890,7 @@ def shade_core_cpu_nee(
         textures=Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), n_textures=0,
         nmaps=nmaps,
         shadow_tasks=Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
-        px_scale=Float32(0.0), sobol_matrices=sobol_matrices, guide=guide, use_restir=use_restir,
+        cam_fp=CameraFootprint.none(), sobol_matrices=sobol_matrices, guide=guide, use_restir=use_restir,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=spectral, measured_brdfs=measured_brdfs,
         gi_pending=gi_pending, gi_io=gi_io,

@@ -33,6 +33,7 @@ from .bvh import (
 )
 from .sampling import power_heuristic, sample_ggx_vndf, sample_cosine_hemisphere_world, mix_bits_u64, camera_ray_from_film_xy, \
     FilmFilter, film_filter_of, film_filter_offset, filter_eval_2d, filter_integral_2d
+from .footprint import camera_footprint
 from .rng import PCG32
 from .transform import matrix_invert
 from .pbrt_parser import ParsedScene_Mojo
@@ -44,10 +45,10 @@ from .sppm import (
     _sppm_finalize_albedo_one_pixel, _sppm_finalize_one_pixel,
     _VP_SAMPLES, _sppm_has_sphere_lights, _MAX_B,
     _sppm_trace_visible_point, _sppm_store_photon, _sppm_trace_photon,
-    _sppm_cam_pos, _sppm_photon_px_scale, gather_disk_contains,
+    gather_disk_contains,
 )
-from .shading import _tex_lookup, _get_tri_verts, _mnee_walk, _mnee_walk2, \
-    apply_surface_maps_at_hit, _camera_approx_footprint, area_light_hit_cos, curve_light_hit
+from .shading import uv_footprint_at_hit, _tex_lookup, _get_tri_verts, _mnee_walk, _mnee_walk2, \
+    apply_surface_maps_at_hit, area_light_hit_cos, curve_light_hit
 from .bxdf import LobeCtx, LobeEval, lobe_eval, lobe_scoped, lobe_sample, LobeSample, lobe_kind_of, lobe_param_of, lobe_is_delta_of, lobe_is_available_of, nee_weight_lobe, _eval_conductor_ggx_spectral, coat_eval_smooth, bxdf_pdf_coated_exit, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured, bxdf_pdf_measured
 from .gpu_scene import GpuSceneHandle
@@ -1951,6 +1952,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     var mis_null_dist = st.mis_null_dist
     var current_dielectric_ior = st.current_dielectric_ior
     var previous_dielectric_ior = st.previous_dielectric_ior
+    var cone_len = st.cone_len
     var wavelengths = SampledWavelengths(st.wl0, st.wl1, st.wl2, st.wl3, st.wl_pdf)
     if st.active == Int8(0):
         return (total, first_alb)
@@ -1971,8 +1973,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             mis_vc_weight_factor, mis_vm_weight_factor,
             ro, rd, beta, total, first_alb, n_verts, n_bounces, cur_med_idx,
             dvcm_carry, dvc_carry, dvm_carry, last_bsdf_pdf, mis_null_dist,
-            current_dielectric_ior, previous_dielectric_ior, wavelengths,
-            Vec3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14]), px_scale):
+            current_dielectric_ior, previous_dielectric_ior, wavelengths, cone_len):
             break
 
     return (total, first_alb)
@@ -2019,6 +2020,9 @@ struct VCMCameraPathState(TrivialRegisterPassable):
     # (geometry.mojo). Both start at vacuum (1.0).
     var current_dielectric_ior: Float32
     var previous_dielectric_ior: Float32
+    # Specular-chain path length for the texture/bump footprint, see
+    # _bdpt_camera_path_bounce's `cone_len`.
+    var cone_len: Float32
 
 def _bdpt_camera_path_init[use_gpu: Bool](
     r2c:     Pointer[Float32, MutUntrackedOrigin],
@@ -2131,6 +2135,7 @@ def _bdpt_camera_path_init[use_gpu: Bool](
         wavelengths.lambda0, wavelengths.lambda1, wavelengths.lambda2, wavelengths.lambda3, wavelengths.pdf,
         Float32(0.0),
         Float32(1.0), Float32(1.0),   # current_dielectric_ior, previous_dielectric_ior (vacuum)
+        Float32(0.0),                 # cone_len
     )
 
 def _vcm_scatter(
@@ -2197,14 +2202,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     mut current_dielectric_ior: Float32,
     mut previous_dielectric_ior: Float32,
     wavelengths: SampledWavelengths,
-    # Camera position + pixel angular size, for the bump/normal-map footprint
-    # at each vertex (shading.mojo's _camera_approx_footprint). VCM tracks no
-    # ray cone of its own, unlike the path tracer's PathState.cone_len, so
-    # this is pbrt's Approximate_dp_dxy convention: footprint = pixel size x
-    # distance from the camera. Using it on BOTH subpaths is what makes a
-    # merge pair agree about the surface it is standing on.
-    cam_pos: Vec3f,
-    px_scale: Float32,
+    # Path length along the camera ray's specular chain, the ray cone standing
+    # in for pbrt's camera differentials (footprint.mojo); only meaningful
+    # while no vertex is stored (n_verts == 0), exactly when pbrt still has
+    # differentials. Same role as PathState.cone_len.
+    mut cone_len: Float32,
     # Task #163 stage 5: when set, the DIFFUSE branch's connect step queues
     # its shadow rays into these buffers (one _BDPT_MAX_VERTS-sized slice
     # per pixel, indexed like the LVC itself) instead of resolving them
@@ -2326,6 +2328,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             return False   # nothing hit -- path escapes the scene
         var t_hit = inter.tHit
         var ray_dir = rd.to_simd()
+        if n_verts == 0:
+            cone_len += t_hit
+        var vcm_cone_w = sd.camFp.cone_spread * cone_len if n_verts == 0 else Float32(-1.0)
 
         # VCM Stage 2b: distance-squared portion of the per-bounce MIS
         # correction -- see _bdpt_trace_light_path's matching comment
@@ -2690,23 +2695,21 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             var eff_alb = mat.albedo
             var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
             if tex_ok and not on_curve:
-                eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+                eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount),
+                    uv_footprint_at_hit(inter, sd.meshes, sd.instances, hit.to_simd(), ray_dir, vcm_cone_w, sd.camFp).width)
             # Bump/normal maps. bdpt.mojo applied NONE of them, on either
             # subpath, while the path tracer has since 2026-09 -- a textbook
             # instance of project_pt_only_feature_gaps, and the one that left
             # VCM's two halves standing on different geometry: the camera
             # vertex on a perturbed surface, the light vertex it merges with
-            # on a flat one. Footprint from the camera-distance
-            # approximation, the same one the light side uses, so a merge
-            # pair filters the surface identically.
+            # on a flat one. Footprint: pbrt's, see footprint.mojo.
             # Saved BEFORE the perturbation: the stored vertex keeps this as its
             # GEOMETRIC normal, because _connect's solid-angle -> area pdf
             # conversions are built on it. See BDPTVertex.shading_normal.
             var gn_geo = gn
             if not on_curve:
-                gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
-                    gn, gn, ray_dir,
-                    _camera_approx_footprint(hit, cam_pos, px_scale),
+                gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,
+                    gn, gn, hit.to_simd(), ray_dir, vcm_cone_w, sd.camFp,
                     sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
             var v = _null_vertex()
@@ -2852,9 +2855,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # GEOMETRIC normal, because _connect's solid-angle -> area pdf
             # conversions are built on it. See BDPTVertex.shading_normal.
             var gn_c_geo = gn_c
-            gn_c = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
-                gn_c, gn_c, ray_dir,
-                _camera_approx_footprint(hit, cam_pos, px_scale),
+            gn_c = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,
+                gn_c, gn_c, hit.to_simd(), ray_dir, vcm_cone_w, sd.camFp,
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             gn_c = face_toward(gn_c, -ray_dir)   # pbrt two-sided reflection, see face_toward
             var wo_c = (-rd).to_simd()
@@ -3083,9 +3085,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # perturbed normal toward the ray would make that test
                 # tautological and resurrect the 1/eta^4 transmission loss
                 # (same rule as shading.mojo's dielectric site).
-                gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
-                    gn, gn, ray_dir,
-                    _camera_approx_footprint(hit, cam_pos, px_scale),
+                gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,
+                    gn, gn, hit.to_simd(), ray_dir, vcm_cone_w, sd.camFp,
                     sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
                 var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
                     ray_dir, hit.to_simd(), gn, mat.albedo.r, n_bounces == 0 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric)
@@ -3418,13 +3419,6 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
     mut current_dielectric_ior: Float32,
     mut previous_dielectric_ior: Float32,
     wavelengths: SampledWavelengths,
-    # Bump/normal-map footprint -- see _bdpt_camera_path_bounce's matching
-    # params. The camera reference is deliberate on a LIGHT subpath: it is
-    # pbrt's own choice for a vertex with no differentials, and it is the
-    # only one that makes this vertex filter the surface the same way the
-    # camera vertex it will be merged or connected with does.
-    cam_pos: Vec3f,
-    px_scale: Float32,
 ) -> Bool:
     """Task #163 stage 4: wavefront-staged variant of ONE bounce iteration of
     `_bdpt_trace_light_path`'s main loop (bdpt.mojo:1882-2383), split out so a
@@ -3600,16 +3594,16 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             var eff_alb = mat.albedo
             var (tex_mesh, tv0, tv1, tv2, tex_ok) = _get_tri_verts(inter, sd.meshes)
             if tex_ok and not on_curve:
-                eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+                eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount),
+                    uv_footprint_at_hit(inter, sd.meshes, sd.instances, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp).width)
             # Bump/normal maps -- see the camera-side diffuse branch.
             # Saved BEFORE the perturbation: the stored vertex keeps this as its
             # GEOMETRIC normal, because _connect's solid-angle -> area pdf
             # conversions are built on it. See BDPTVertex.shading_normal.
             var gn_geo = gn
             if not on_curve:
-                gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
-                    gn, gn, ray_dir,
-                    _camera_approx_footprint(hit, cam_pos, px_scale),
+                gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,
+                    gn, gn, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp,
                     sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
             var v = _null_vertex()
@@ -3654,9 +3648,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             # GEOMETRIC normal, because _connect's solid-angle -> area pdf
             # conversions are built on it. See BDPTVertex.shading_normal.
             var gn_c_geo = gn_c
-            gn_c = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
-                gn_c, gn_c, ray_dir,
-                _camera_approx_footprint(hit, cam_pos, px_scale),
+            gn_c = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,
+                gn_c, gn_c, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp,
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             gn_c = face_toward(gn_c, -ray_dir)   # pbrt two-sided reflection, see face_toward
             var wo_c = (-rd).to_simd()
@@ -3793,9 +3786,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 # perturbed normal toward the ray would make that test
                 # tautological and resurrect the 1/eta^4 transmission loss
                 # (same rule as shading.mojo's dielectric site).
-                gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
-                    gn, gn, ray_dir,
-                    _camera_approx_footprint(hit, cam_pos, px_scale),
+                gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,
+                    gn, gn, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp,
                     sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
                 var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
                     ray_dir, hit.to_simd(), gn, mat.albedo.r, n_lbounces == 0 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric, radiance_mode=False)
@@ -3853,14 +3845,6 @@ def _bdpt_trace_light_path[use_gpu: Bool](
     mis_vc_weight_factor: Float32,
     mis_vm_weight_factor: Float32,
     pass_wl: SampledWavelengths,
-    # Bump/normal-map footprint reference -- forwarded straight to
-    # _bdpt_light_path_bounce, see its own params. Deliberately NOT defaulted:
-    # a px_scale of 0 means "no footprint", which _apply_bump_map answers with
-    # a FIXED 0.0005 UV step -- the exact failure that made barcelona's water
-    # worse the first time bump mapping was tried. A missed call site must be
-    # a compile error, not a silently unbumped light subpath.
-    cam_pos: Vec3f,
-    px_scale: Float32,
 ):
     """Emit a photon from a random light and trace a light subpath, storing
     every non-delta vertex (including the light-source point itself, the
@@ -3939,8 +3923,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             mis_vc_weight_factor, mis_vm_weight_factor,
             ro, rd, flux, n_verts, dvcm_carry, dvc_carry, dvm_carry,
             is_finite_origin, cur_med_idx, n_lbounces,
-            current_dielectric_ior, previous_dielectric_ior, wavelengths,
-            cam_pos, px_scale):
+            current_dielectric_ior, previous_dielectric_ior, wavelengths):
             break
 
     lvc_path_len[unsafe_offset=lp_idx] = Int32(n_verts)
@@ -4557,8 +4540,7 @@ def _bdpt_render_core(
                               UInt64(si * 2654435761 + 1))
             _bdpt_trace_light_path[False](sd, lpcg, has_med, default_emit_med,
                                          scratch_light.unsafe_offset(lp_idx), lvc, lp_idx, lvc_path_len,
-                                         mis_vc_weight_factor, mis_vm_weight_factor, pass_wl,
-                                         cam_pos, px_scale)
+                                         mis_vc_weight_factor, mis_vm_weight_factor, pass_wl)
 
         parallelize(emit_light_path, n_light_paths_merge)
 
@@ -4753,9 +4735,7 @@ def _bdpt_emit_light_paths_gpu(
     var scratch = inter_scratch.unsafe_offset(k)
     var pass_wl = pass_wavelengths(pass_idx)
     _bdpt_trace_light_path[True](sd, pcg, has_med, default_emit_med, scratch, lvc, k, lvc_path_len,
-                                 mis_vc_weight_factor, mis_vm_weight_factor, pass_wl,
-                                 Vec3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14]),
-                                 px_scale)
+                                 mis_vc_weight_factor, mis_vm_weight_factor, pass_wl)
 
 def _bdpt_splat_light_paths_gpu(
     accum: Pointer[Float32, MutUntrackedOrigin],
@@ -5021,7 +5001,6 @@ def _bdpt_light_path_bounce_gpu(
         ro, rd, flux, n_verts, dvcm_carry, dvc_carry, dvm_carry,
         is_finite_origin, cur_med_idx, n_lbounces,
         current_dielectric_ior, previous_dielectric_ior, wavelengths,
-        Vec3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14]), px_scale,
     )
     lvc_path_len[unsafe_offset=k] = Int32(n_verts)
     states[unsafe_offset=k].active = Int8(1) if cont else Int8(0)
@@ -5149,6 +5128,7 @@ def _bdpt_camera_path_bounce_gpu(
     var mis_null_dist = states[unsafe_offset=pix].mis_null_dist
     var current_dielectric_ior = states[unsafe_offset=pix].current_dielectric_ior
     var previous_dielectric_ior = states[unsafe_offset=pix].previous_dielectric_ior
+    var cone_len = states[unsafe_offset=pix].cone_len
     var wavelengths = SampledWavelengths(states[unsafe_offset=pix].wl0, states[unsafe_offset=pix].wl1, states[unsafe_offset=pix].wl2, states[unsafe_offset=pix].wl3, states[unsafe_offset=pix].wl_pdf)
 
     var cont = _bdpt_camera_path_bounce[True](
@@ -5157,8 +5137,7 @@ def _bdpt_camera_path_bounce_gpu(
         mis_vc_weight_factor, mis_vm_weight_factor,
         ro, rd, beta, total, first_alb, n_verts, n_bounces, cur_med_idx,
         dvcm_carry, dvc_carry, dvm_carry, last_bsdf_pdf, mis_null_dist,
-        current_dielectric_ior, previous_dielectric_ior, wavelengths,
-        Vec3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14]), px_scale,
+        current_dielectric_ior, previous_dielectric_ior, wavelengths, cone_len,
         defer_shadow_rays != Int8(0), shadow_rays, shadow_pending, shadow_valid, shadow_seg_med,
     )
     states[unsafe_offset=pix].active = Int8(1) if cont else Int8(0)
@@ -5177,6 +5156,7 @@ def _bdpt_camera_path_bounce_gpu(
     states[unsafe_offset=pix].mis_null_dist = mis_null_dist
     states[unsafe_offset=pix].current_dielectric_ior = current_dielectric_ior
     states[unsafe_offset=pix].previous_dielectric_ior = previous_dielectric_ior
+    states[unsafe_offset=pix].cone_len = cone_len
     states[unsafe_offset=pix].pcg_state = pcg.state
     states[unsafe_offset=pix].pcg_inc = pcg.inc
 
@@ -5591,6 +5571,9 @@ def vcm_render_gpu(
             var r2c_ptr = r2c_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             var c2w_ptr = c2w_buf.unsafe_ptr().unsafe_bitcast[Float32]()
 
+            handle[].cam_fp = camera_footprint(psc[unsafe_offset=0].raster_to_camera,
+                psc[unsafe_offset=0].camera_to_world,
+                Int(psc[unsafe_offset=0].film_w), Int(psc[unsafe_offset=0].film_h), n_spp)
             var gsd = handle[].scene_descriptor()
 
             var grid_light = ceildiv(max(n_light_paths_merge, 1), block_size)
@@ -6127,6 +6110,9 @@ def vcm_render_gpu_wavefront(
             var w2c_ptr = w2c_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             var c2r_ptr = c2r_buf.unsafe_ptr().unsafe_bitcast[Float32]()
 
+            handle[].cam_fp = camera_footprint(psc[unsafe_offset=0].raster_to_camera,
+                psc[unsafe_offset=0].camera_to_world,
+                Int(psc[unsafe_offset=0].film_w), Int(psc[unsafe_offset=0].film_h), n_spp)
             var gsd = handle[].scene_descriptor()
 
             var grid_light = ceildiv(max(n_light_paths_merge, 1), block_size)
@@ -6530,11 +6516,6 @@ def sppm_emit_photons_gpu(
     pass_idx_dp: Int64,
     max_depth_dp: Int64,
     sd: SceneView,
-    # camera_to_world + pixel angular size: a photon needs a bump/normal-map
-    # footprint and has no ray cone, so it uses the camera-distance
-    # approximation -- see _sppm_trace_photon's own params.
-    c2w: Pointer[Float32, MutUntrackedOrigin],
-    photon_px_scale: Float32,
 ):
     """One thread per emitted photon path. Calls the SAME _sppm_trace_photon
     the CPU driver (_sppm_photon_pass) calls, with use_gpu=True so
@@ -6575,7 +6556,6 @@ def sppm_emit_photons_gpu(
         return
     var pcg = PCG32(seed ^ UInt64(pass_idx * 1000003 + k), UInt64(7))
     _sppm_trace_photon[True, True](sd, pcg, inter_scratch.unsafe_offset(k), n_emit, photons, max_photons, stored_counter, default_emit_med, Int(max_depth_dp),
-        _sppm_cam_pos(c2w), photon_px_scale,
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, pass_wavelengths(pass_idx))
 
@@ -6827,20 +6807,15 @@ def sppm_render_gpu(
             var albedo_out_ptr = albedo_out_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin]()
             var r2c_ptr = r2c_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin]()
             var c2w_ptr = c2w_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin]()
-            # Bump/normal-map footprint for the photon pass, computed HOST-side
-            # from the same matrices the visible-point pass uses -- see
-            # sppm.mojo's _sppm_photon_px_scale. The kernel gets the device
-            # c2w (for the camera position) plus this one scalar.
-            var photon_px_scale = _sppm_photon_px_scale(
-                psc[unsafe_offset=0].raster_to_camera,
-                psc[unsafe_offset=0].camera_to_world,
-                Int(psc[unsafe_offset=0].film_w), Int(psc[unsafe_offset=0].film_h))
 
             var mediums = handle[].media.mediums_buf.unsafe_ptr().unsafe_bitcast[Medium]()
             var grids_dev = handle[].media.grids_buf.unsafe_ptr().unsafe_bitcast[Grid]()
             var nvdb_grids_dev = handle[].media.nvdb_grids_buf.unsafe_ptr().unsafe_bitcast[NvdbGrid]()
             var n_mediums = Int64(handle[].media.n_mediums)
             var (spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) = handle[].spectral.unsafe_ptrs()
+            handle[].cam_fp = camera_footprint(psc[unsafe_offset=0].raster_to_camera,
+                psc[unsafe_offset=0].camera_to_world,
+                Int(psc[unsafe_offset=0].film_w), Int(psc[unsafe_offset=0].film_h), _VP_SAMPLES)
             var gsd = handle[].scene_descriptor()
 
             var grid_pix = ceildiv(n_pix, block_size)
@@ -6887,8 +6862,6 @@ def sppm_render_gpu(
                     Int64(pass_idx),
                     Int64(psc[unsafe_offset=0].max_depth),
                     gsd,
-                    c2w_ptr,
-                    photon_px_scale,
                     grid_dim=grid_emit,
                     block_dim=block_size,
                 )

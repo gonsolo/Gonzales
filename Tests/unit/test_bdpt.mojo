@@ -14,6 +14,7 @@
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
+from gonzales.footprint import CameraFootprint
 from gonzales.geometry import RGB, Point3f, Vec3f, INV_FOUR_PI, INV_PI
 from gonzales.materials import LobeKind, MeasuredBRDF
 from gonzales.render_state import GpuTexture, NormalSlopeMap
@@ -125,6 +126,7 @@ def _dummy_sd() -> SceneView:
         Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Float32(0), Float32(1), Int32(9),
         Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
+        CameraFootprint.none(),
     )
 
 # ── _pdf_solid_to_area ────────────────────────────────────────────────────────
@@ -326,6 +328,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Float32(0), Float32(1), Int32(9),
         Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
+        CameraFootprint.none(),
     )
 
     var cv = BDPTVertex(

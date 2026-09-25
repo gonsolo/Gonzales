@@ -19,6 +19,7 @@
 
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
+from gonzales.footprint import CameraFootprint
 from gonzales.geometry import RGB, Point3f, Vec3f
 from gonzales.materials import MeasuredBRDF, Material, MatKind
 from gonzales.render_state import GpuTexture, NormalSlopeMap
@@ -133,6 +134,7 @@ def _build_scene() -> SceneView:
         Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Float32(0), Float32(1), Int32(9),
         Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
+        CameraFootprint.none(),
     )
 
 # Both subpath halves of a VCM pass share one hero-wavelength set (see
@@ -140,10 +142,6 @@ def _build_scene() -> SceneView:
 # so it supplies that set itself.
 comptime _TEST_PASS_WL = sample_wavelengths_uniform(Float32(0.5))
 
-# Bump-footprint reference (cam_pos, px_scale). The test scene has no
-# bump/normal maps, so no footprint is ever evaluated; both halves get the
-# same values either way.
-comptime _NO_CAM = Vec3f(Float32(0), Float32(0), Float32(0))
 
 def test_wavefront_split_matches_original_light_path_exactly() raises:
     var sd = _build_scene()
@@ -152,7 +150,7 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
     var scratch_old = unsafe_alloc[Intersection](1)
     var lvc_old = unsafe_alloc[BDPTVertex](_BDPT_MAX_VERTS)
     var lvc_path_len_old = unsafe_alloc[Int32](1)
-    _bdpt_trace_light_path[False](sd, pcg_old, False, Int32(-1), scratch_old, lvc_old, 0, lvc_path_len_old, Float32(0), Float32(0), _TEST_PASS_WL, _NO_CAM, Float32(0))
+    _bdpt_trace_light_path[False](sd, pcg_old, False, Int32(-1), scratch_old, lvc_old, 0, lvc_path_len_old, Float32(0), Float32(0), _TEST_PASS_WL)
 
     var pcg_new = PCG32(UInt64(12345), UInt64(7))
     var lvc_new = unsafe_alloc[BDPTVertex](_BDPT_MAX_VERTS)
@@ -196,7 +194,6 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
             ro, rd, flux, n_verts, dvcm, dvc, dvm,
             is_finite_origin, cur_med_idx, n_lbounces,
             current_dielectric_ior, previous_dielectric_ior, wavelengths,
-            _NO_CAM, Float32(0),
         )
         active = Int8(1) if cont else Int8(0)
         lvc_path_len_new[unsafe_offset=0] = Int32(n_verts)

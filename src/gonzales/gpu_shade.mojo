@@ -10,6 +10,7 @@ from .render_state import GpuTexture, NormalSlopeMap, PathState, ShadowTask
 from .restir_di import DIReservoir, ReservoirIO, reservoir_io_null
 from .restir_gi import gi_reservoir_io_null
 from .rng import PCG32
+from .footprint import CameraFootprint
 from .shading import GIPendingX1, LightContext, ShadeContext, shade_coated_conductor, shade_coated_diffuse, shade_conductor, shade_core, shade_dielectric, shade_diffuse, shade_diffuse_transmission, shade_hair, shade_interface, shade_measured, shade_nee_core, shade_thin_dielectric
 from .spectrum import SpectralHandle
 from max.gpu import block_dim, block_idx, thread_idx
@@ -19,7 +20,6 @@ from .gpu_scene import GpuSceneHandle
 def _shade_context(
     sd: SceneView,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
-    px_scale: Float32,
     path_idx: Int = 0,
     use_restir: Bool = False,
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin] = Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
@@ -31,7 +31,7 @@ def _shade_context(
         textures=sd.gpuTextures, n_textures=Int(sd.gpuTextureCount),
         nmaps=Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
         shadow_tasks=shadow_tasks,
-        px_scale=px_scale, sobol_matrices=sobol_matrices, guide=null_guide(), use_restir=use_restir,
+        cam_fp=sd.camFp, sobol_matrices=sobol_matrices, guide=null_guide(), use_restir=use_restir,
         blasNodesArr=sd.blasNodesArr, blasPrimIdsArr=sd.blasPrimIdsArr, instances=sd.instances,
         spectral=sd.spectral, measured_brdfs=sd.measuredBrdfs,
         gi_pending=Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(), gi_io=gi_reservoir_io_null(),
@@ -65,7 +65,6 @@ def shade_nee_preamble_gpu(
     sd: SceneView,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
-    px_scale: Float32,
 ):
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -76,7 +75,7 @@ def shade_nee_preamble_gpu(
         return
     var inter = intersections[unsafe_offset=tid]
     # Do NOT early-exit on miss — shade_nee_core adds env-light contribution there.
-    var ctx_no_shadow = _shade_context(sd, sobol_matrices, px_scale)
+    var ctx_no_shadow = _shade_context(sd, sobol_matrices)
     shade_nee_core[True, False](path_ptr, inter, ctx_no_shadow)
 
 
@@ -90,7 +89,6 @@ def shade_diffuse_gpu(
     sd: SceneView,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
-    px_scale: Float32,
     # ReSTIR DI (Phase 2, --restir). Only gpu_render_sample ever passes
     # use_restir=True here -- gpu_render_wavefront has no ReSTIR concept at
     # all (see its own docstring: batch --restir renders via
@@ -120,7 +118,7 @@ def shade_diffuse_gpu(
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var restir_on = use_restir != Int32(0)
-    var ctx = _shade_context(sd, sobol_matrices, px_scale, use_restir=restir_on)
+    var ctx = _shade_context(sd, sobol_matrices, use_restir=restir_on)
     # tid IS the pixel index here: this kernel only ever sees use_restir=True
     # from gpu_render_sample, which runs exactly one path per pixel (see the
     # param block above -- gpu_render_wavefront never sets it). restir_on
@@ -143,7 +141,6 @@ def shade_coated_diffuse_gpu(
     sd: SceneView,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
-    px_scale: Float32,
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
 ):
     var count = Int(count_dp)
@@ -156,7 +153,7 @@ def shade_coated_diffuse_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
-    var ctx = _shade_context(sd, sobol_matrices, px_scale, path_idx=tid, shadow_tasks=shadow_tasks)
+    var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
     shade_coated_diffuse[True, False](path_ptr, inter, ctx, mat)
 
 
@@ -166,7 +163,6 @@ def shade_diffuse_transmit_gpu(
     sd: SceneView,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
-    px_scale: Float32,
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
 ):
     var count = Int(count_dp)
@@ -178,7 +174,7 @@ def shade_diffuse_transmit_gpu(
         return
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
-    var ctx = _shade_context(sd, sobol_matrices, px_scale, path_idx=tid, shadow_tasks=shadow_tasks)
+    var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
     shade_diffuse_transmission[True, False](path_ptr, inter, ctx)
 
 
@@ -248,7 +244,6 @@ def shade_conductor_gpu(
     sd: SceneView,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
-    px_scale: Float32,
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
 ):
     var count = Int(count_dp)
@@ -261,7 +256,7 @@ def shade_conductor_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
-    var ctx = _shade_context(sd, sobol_matrices, px_scale, path_idx=tid, shadow_tasks=shadow_tasks)
+    var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
     shade_conductor[True, False](path_ptr, inter, ctx, mat)
 
 
@@ -271,7 +266,6 @@ def shade_measured_gpu(
     sd: SceneView,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
-    px_scale: Float32,
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
 ):
     var count = Int(count_dp)
@@ -284,7 +278,7 @@ def shade_measured_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
-    var ctx = _shade_context(sd, sobol_matrices, px_scale, path_idx=tid, shadow_tasks=shadow_tasks)
+    var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
     shade_measured[True, False](path_ptr, inter, ctx, mat)
 
 
@@ -293,7 +287,6 @@ def shade_dielectric_gpu(
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneView,
     count_dp: Int64,
-    px_scale: Float32,
 ):
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -305,13 +298,13 @@ def shade_dielectric_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
-    # sd.gpuTextures/px_scale are here only so a dielectric carrying "texture
+    # sd.gpuTextures/camFp are here only so a dielectric carrying "texture
     # displacement"/"normalmap" gets it applied (barcelona-pavilion's water).
     # tex_filenames is CPU-only (GPU samples the uploaded texture table), so
     # the dangling default is correct on this path.
     shade_dielectric[True](path_ptr, inter, sd.meshes, mat, sd.spheres,
         Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        sd.gpuTextures, Int(sd.gpuTextureCount), px_scale)
+        sd.gpuTextures, Int(sd.gpuTextureCount), sd.camFp, sd.instances)
 
 
 def shade_thin_dielectric_gpu(
@@ -339,7 +332,6 @@ def shade_coated_conductor_gpu(
     sd: SceneView,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
-    px_scale: Float32,
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
 ):
     var count = Int(count_dp)
@@ -352,7 +344,7 @@ def shade_coated_conductor_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
-    var ctx = _shade_context(sd, sobol_matrices, px_scale, path_idx=tid, shadow_tasks=shadow_tasks)
+    var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
     shade_coated_conductor[True, False](path_ptr, inter, ctx, mat)
 
 
@@ -382,7 +374,6 @@ def shade_hair_gpu(
     sd: SceneView,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
-    px_scale: Float32,
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
 ):
     var count = Int(count_dp)
@@ -395,7 +386,7 @@ def shade_hair_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
-    var ctx = _shade_context(sd, sobol_matrices, px_scale, path_idx=tid, shadow_tasks=shadow_tasks)
+    var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
     shade_hair[True, False](path_ptr, inter, ctx, mat)
 
 
@@ -443,7 +434,7 @@ def shade_enqueue_shadow_gpu(
         textures=textures, n_textures=n_textures,
         nmaps=Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
         shadow_tasks=shadow_tasks,
-        px_scale=Float32(0.0), sobol_matrices=Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(), guide=null_guide(), use_restir=False,
+        cam_fp=CameraFootprint.none(), sobol_matrices=Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(), guide=null_guide(), use_restir=False,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         measured_brdfs=Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(),
