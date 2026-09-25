@@ -266,6 +266,29 @@ struct Point2f(TrivialRegisterPassable):
         self.x = v; self.y = v
 
 @fieldwise_init
+struct Point2i(TrivialRegisterPassable):
+    """A 2D INTEGER point: a pixel coordinate carried as one value instead of
+    two loose Int32s. Narrow in scope today (restir_jitter_pixel below is its
+    only producer) -- the flat `px = tid % fw; py = tid // fw` GPU
+    thread-index unpacks scattered through gpu.mojo/bdpt.mojo/sppm.mojo stay
+    scalar deliberately (they feed direct flat-array indexing in a hot
+    kernel), so this is not meant to replace those."""
+    var x: Int32
+    var y: Int32
+
+@always_inline
+def restir_jitter_pixel(center: Point2i, ang: Float32, rad: Float32) -> Point2i:
+    """One candidate neighbour pixel for spatial reuse: `center` plus a
+    disk-sampled offset at angle `ang`, radius `rad` (both already drawn by
+    the caller — e.g. `ang = u*2pi`, `rad = sqrt(u2)*radius_px`). Byte-for-
+    byte the same two lines that were independently copy-pasted into
+    restir_gi.mojo, restir_vol.mojo, restir_sms.mojo and shading.mojo's own
+    ReSTIR spatial-reuse loops -- the caller still does its own bounds check
+    and flat-index conversion, since those differ per call site's own G-buffer
+    layout."""
+    return Point2i(center.x + Int32(cos(ang) * rad), center.y + Int32(sin(ang) * rad))
+
+@fieldwise_init
 struct FilmDims(TrivialRegisterPassable):
     """Film/framebuffer resolution (width, height), replacing the separate
     fw/fh pair on GpuSceneHandle and gpu_upload_scene. GPU kernels still take

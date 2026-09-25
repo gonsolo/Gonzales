@@ -37,7 +37,7 @@
 
 from std.collections import Array
 from std.math import sqrt, abs, min, cos, sin
-from .geometry import RGB, dot, INV_PI, Vec3f, _is_real_ptr
+from .geometry import RGB, dot, INV_PI, Vec3f, _is_real_ptr, Point2i, restir_jitter_pixel
 from .reservoir import ReservoirState, reservoir_state_init
 from .sms import SMSVertex, MAX_SMS_VERTICES, sms_vertex_init, sms_walk, sms_refresh_solved_frames
 from .rng import PCG32
@@ -305,8 +305,9 @@ def sms_spatial_combine(
     for _ in range(SMS_SPATIAL_NEIGHBORS):
         var ang = pcg.next_float() * Float32(6.283185307)
         var rad = sqrt(pcg.next_float()) * SMS_SPATIAL_RADIUS_PX
-        var nx = self_px + Int32(cos(ang) * rad)
-        var ny = self_py + Int32(sin(ang) * rad)
+        var nb_p = restir_jitter_pixel(Point2i(self_px, self_py), ang, rad)
+        var nx = nb_p.x
+        var ny = nb_p.y
         if nx < Int32(0) or nx >= sms_io.frame_w or ny < Int32(0) or ny >= sms_io.frame_h:
             continue
         var n_idx = Int(ny * sms_io.frame_w + nx)

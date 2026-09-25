@@ -39,7 +39,7 @@
 
 from std.collections import Array
 from std.math import sqrt, cos, sin, abs
-from .geometry import RGB, dot, hg_phase, _is_real_ptr, Vec3f
+from .geometry import RGB, dot, hg_phase, _is_real_ptr, Vec3f, Point2i, restir_jitter_pixel
 from .reservoir import ReservoirState, reservoir_state_init, reservoir_combine, reservoir_finalize, reservoir_cap_confidence
 from .rng import PCG32
 
@@ -487,8 +487,9 @@ def vol_temporal_spatial_combine(
             for _ in range(VOL_SPATIAL_NEIGHBORS):
                 var ang = pcg.next_float() * Float32(6.283185307)
                 var rad = sqrt(pcg.next_float()) * VOL_SPATIAL_RADIUS_PX
-                var nx = self_px + Int32(cos(ang) * rad)
-                var ny = self_py + Int32(sin(ang) * rad)
+                var nb_p = restir_jitter_pixel(Point2i(self_px, self_py), ang, rad)
+                var nx = nb_p.x
+                var ny = nb_p.y
                 if nx < Int32(0) or nx >= vol_io.frame_w or ny < Int32(0) or ny >= vol_io.frame_h:
                     continue
                 var n_idx = Int(ny * vol_io.frame_w + nx)
