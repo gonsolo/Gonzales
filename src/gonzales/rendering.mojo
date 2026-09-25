@@ -16,7 +16,7 @@ from .rng import PCG32
 from .sampling import TileSamplerParams_C, encode_morton2, sobol_get_sample_index, sobol_sample, derive_pcg_seeds, gaussian_norm, mix_bits_u64, gen_primary_ray_state
 from .guide import GuideGrid, guide_merge, null_guide
 from .spectrum import SampledWavelengths, SpectralSample, spectral_sample_to_rgb
-from .gpu import _sample_medium_core
+from .gpu_media import _sample_medium_core
 from .restir_di import ReservoirIO, reservoir_io_null
 from .restir_gi import GIReservoirIO, gi_reservoir_io_null
 from .restir_sms import SMSReservoirIO, sms_reservoir_io_null

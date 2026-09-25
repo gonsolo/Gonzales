@@ -37,7 +37,7 @@ from .transform import transform_normal_by_instance
 from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, write_image_cropwindow, denoise
-from .gpu import GpuSceneHandle
+from .gpu_scene import GpuSceneHandle
 from .spectrum import (
     SampledWavelengths, SpectralSample, sample_wavelengths_uniform,
     rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb,

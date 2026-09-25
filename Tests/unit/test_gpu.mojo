@@ -3,7 +3,7 @@ from std.sys.info import size_of
 from std.testing import assert_true, TestSuite
 from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
-from gonzales.gpu import clear_film_gpu, accumulate_film_gpu
+from gonzales.gpu_wavefront import clear_film_gpu, accumulate_film_gpu
 from gonzales.geometry import RGB, Point3f, Vec3f
 from gonzales.render_state import PathState_C
 from gonzales.primitives import Ray_C
