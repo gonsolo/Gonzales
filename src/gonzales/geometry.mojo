@@ -25,7 +25,6 @@ def _is_real_ptr[T: AnyType, O: Origin[mut=True]](ptr: Pointer[T, O]) -> Bool:
 comptime PI         : Float32 = 3.14159265358979323846
 comptime TWO_PI     : Float32 = 6.28318530717958647692
 comptime INV_PI     : Float32 = 0.31830988618379067154
-comptime INV_TWO_PI : Float32 = 0.15915494309189533577
 comptime INV_FOUR_PI: Float32 = 0.07957747154594766788
 
 
@@ -48,7 +47,6 @@ comptime INV_FOUR_PI: Float32 = 0.07957747154594766788
 # bug rendering.mojo's CPU path had already fixed once (583a3390).
 comptime TERMINAL_SEGMENT_GRACE_ROUNDS = 1
 
-comptime SQRT2      : Float32 = 1.41421356237309504880
 # <</listing>>
 
 # ── Point3f / Vec3f ────────────────────────────────────────────────────────────
@@ -445,10 +443,6 @@ def spherical_direction(sin_theta: Float32, cos_theta: Float32, phi: Float32) ->
     cos_phi = cos(phi)
     return Vec3f(sin_theta * cos_phi, cos_theta, sin_theta * sin_phi)
 
-@always_inline
-def spherical_theta(v: Vec3f) -> Float32:
-    """Polar angle θ ∈ [0, π] of a unit vector (y = up convention)."""
-    return acos(max(Float32(-1.0), min(Float32(1.0), v.y)))
 
 @always_inline
 def _atan2f(y: Float32, x: Float32) -> Float32:
@@ -467,11 +461,6 @@ def _atan2f(y: Float32, x: Float32) -> Float32:
     if y < Float32(0.0): r = -r
     return r
 
-@always_inline
-def spherical_phi(v: Vec3f) -> Float32:
-    """Azimuthal angle φ ∈ [0, 2π] of a unit vector (y = up convention)."""
-    var p = _atan2f(v.z, v.x)
-    return p if p >= Float32(0.0) else p + TWO_PI
 
 # ── SIMD math helpers (used in BVH and shading hot paths) ────────────────────
 
