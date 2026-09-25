@@ -54,7 +54,7 @@ from .sppm import (
 )
 from .shading import _tex_lookup, _get_tri_verts, _mnee_walk, _mnee_walk2, \
     apply_surface_maps_at_hit, _camera_approx_footprint, area_light_hit_cos, curve_light_hit
-from .bxdf import LobeCtx, LobeEval, lobe_eval, lobe_scoped, lobe_sample, LobeSample, lobe_kind_of, lobe_param_of, lobe_is_delta_of, _eval_conductor_ggx_spectral, coat_eval_smooth, bxdf_pdf_coated_exit, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
+from .bxdf import LobeCtx, LobeEval, lobe_eval, lobe_scoped, lobe_sample, LobeSample, lobe_kind_of, lobe_param_of, lobe_is_delta_of, lobe_is_available_of, _eval_conductor_ggx_spectral, coat_eval_smooth, bxdf_pdf_coated_exit, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_diffuse, bxdf_pdf_diffuse, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured, bxdf_pdf_measured
 from .gpu import GpuSceneHandle, vulkaninterop_unpack_results_kernel
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
@@ -2665,7 +2665,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
         if mat.type != MatKind.interface:
             mis_null_dist = Float32(0)
 
-        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor:
+        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured:
+            if not lobe_is_available_of(mat):
+                return False   # e.g. a measured table that failed to load
             var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             # VCM Stage 2b: finish the per-bounce MIS correction (dist²
@@ -3073,114 +3075,6 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 dvcm_carry = Float32(0)
                 dvc_carry = Float32(0)
                 dvm_carry = Float32(0)
-
-        elif mat.type == MatKind.measured:
-            # Tabulated Dupuy & Jakob MeasuredBxDF -- the real algorithm
-            # (measured_bxdf_eval.mojo), not an approximation, via the same
-            # shared bxdf.mojo/measured_bxdf_eval.mojo interface
-            # shading.mojo's shade_measured already uses. Isotropic only (see
-            # the loader's scope note), so an arbitrary Frisvad tangent frame
-            # is fine -- no UV alignment needed, same reasoning as conductor.
-            var gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-            if dot(gn_m, ray_dir) > Float32(0): gn_m = gn_m * Float32(-1)
-            # Bump/normal maps -- see the diffuse branch.
-            # Saved BEFORE the perturbation: the stored vertex keeps this as its
-            # GEOMETRIC normal, because _connect's solid-angle -> area pdf
-            # conversions are built on it. See BDPTVertex.shading_normal.
-            var gn_m_geo = gn_m
-            gn_m = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
-                gn_m, gn_m, ray_dir,
-                _camera_approx_footprint(hit, cam_pos, px_scale),
-                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-            gn_m = face_toward(gn_m, -ray_dir)   # pbrt two-sided reflection, see face_toward
-            if mat.measured_idx < Int32(0):
-                # Load failure fallback (see material_builder.mojo) -- matches
-                # shading.mojo's shade_measured: stop this path rather than
-                # dereferencing a nonexistent measuredBrdfs entry.
-                return False   # measured: no tabulated BRDF for this material
-            var wo_m = (-rd).to_simd()
-            var frm_m = Frame.from_z(Vec3f(gn_m[0], gn_m[1], gn_m[2]))
-            var tangent_m = Vec3f(frm_m.x.x, frm_m.x.y, frm_m.x.z)
-            var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
-            var mb = sd.measuredBrdfs[unsafe_offset=Int(mat.measured_idx)]
-
-            # VCM Stage 2b: measured BxDF has a real standalone pdf -- in
-            # MIS scope this pass, same real treatment as diffuse.
-            var cos_fix_m = abs(dot(-ray_dir, gn_m))
-            (dvcm_carry, dvc_carry, dvm_carry) = vcm_arrival_carries(
-                dvcm_carry, dvc_carry, dvm_carry, cos_fix_m)
-
-            var v_m = _null_vertex()
-            v_m.pos = hit
-            v_m.normal = vec3f(gn_m_geo)
-            v_m.shading_normal = vec3f(gn_m)
-            v_m.beta = beta
-            v_m.alb = mat.albedo
-            v_m.is_surface = Int32(1); v_m.is_delta = Int32(0); v_m.mat_kind = LobeKind.measured
-            v_m.wo = vec3f(wo_m)
-            v_m.mat_idx = Int32(mat_idx)
-            v_m.pdf_fwd = Float32(1)
-            v_m.med_idx = cur_med_idx
-            v_m.wavelengths = wavelengths
-            v_m.dVCM = dvcm_carry; v_m.dVC = dvc_carry; v_m.dVM = dvm_carry
-            if n_verts == 0: first_alb = mat.albedo
-            if n_verts >= _vcm_depth(sd):
-                return False   # a vertex past d starts no strategy (see _vcm_depth)
-            n_verts += 1
-            # Merging queries the GLOBAL photon grid, so it must not be gated
-            # on this pixel's own paired light path -- see the diffuse
-            # branch. This site kept that gate after the diffuse fix and
-            # merged at only the ~1/3 of vertices whose paired path stored
-            # anything: a measured quad under a constant sky read 0.36 of
-            # pbrt once merging carried the weight.
-            total += _bdpt_merge_from_cache(v_m, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts)
-            if path_len > 0:
-                total += _bdpt_connect_to_cache(v_m, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, n_verts)
-
-            # Distant/point/sphere/infinite NEE, via the shared Light
-            # interface + BxDF interface (_nee_weight_measured) +
-            # _bdpt_nee_contribute glue -- same pattern as every other
-            # material branch above.
-            for li_m in range(_bdpt_simple_light_count(sd)):
-                var ls_im = _bdpt_sample_simple_light(sd, li_m, hit.to_simd(), pcg)
-                var w_im = _nee_weight_measured(ls_im, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-                total += _bdpt_nee_contribute(beta, w_im, ls_im, hit, gn_m_geo, cur_med_idx, sd, scratch, wavelengths)
-            for inf_im in range(Int(sd.infiniteLightCount)):
-                var ls_em = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_im], Point2f(pcg.next_float(), pcg.next_float()))
-                var (_c_em, r_em) = _scene_bounding_sphere(sd)
-                var le_em = _lobe_eval[want_pdfs=True](v_m, ls_em.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
-                var pol_em = MisPolicy(True, eta_x, dvcm_carry, dvc_carry,
-                                       ls_em.pdf / max(_bdpt_n_lights(sd) * PI * r_em * r_em, Float32(1e-12)),
-                                       le_em.pdf_rev, False, abs(dot(ls_em.wi, gn_m_geo)))
-                var w_em = _nee_weight_measured(ls_em, mb, tangent_m, bitangent_m, gn_m, wo_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, pol_em)
-                total += _bdpt_nee_contribute(beta, w_em, ls_em, hit, gn_m_geo, cur_med_idx, sd, scratch, wavelengths)
-
-            var wo_l_m = Vec3f(dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, gn_m))
-            var um1 = pcg.next_float(); var um2 = pcg.next_float()
-            var (wi_l_m, f_m, pdf_m, valid_m) = bxdf_sample_measured(mb, wo_l_m, um1, um2, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-            if not valid_m or pdf_m <= Float32(0):
-                return False   # measured: invalid sample
-            var wi_m = tangent_m * wi_l_m[0] + bitangent_m * wi_l_m[1] + gn_m * wi_l_m[2]
-            var wilen_m = dot(wi_m, wi_m)
-            if wilen_m > Float32(0):
-                wi_m = wi_m * (Float32(1.0) / sqrt(wilen_m))
-            var cos_wi_m = dot(wi_m, gn_m)
-            if cos_wi_m <= Float32(0):
-                return False   # measured: sampled direction below the surface
-            # f_m is already spectral -- no RGB round trip (see
-            # bxdf_sample_measured's docstring).
-            beta *= f_m * (cos_wi_m / pdf_m)
-            rd = vec3f(wi_m)
-            ro = hit + rd*Float32(0.0002)
-            last_bsdf_pdf = pdf_m
-            # VCM Stage 2b: recursive continuation, real forward/reverse pdf
-            # from bxdf_pdf_measured -- see _bdpt_trace_light_path's
-            # matching measured-branch comment (reverse-pdf convention
-            # ASSUMED, not independently verified).
-            var pdf_rev_m = bxdf_pdf_measured(mb, wi_l_m, wo_l_m)
-            (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
-                dvcm_carry, dvc_carry, dvm_carry, (cos_wi_m / pdf_m), pdf_m, pdf_rev_m,
-                mis_vc_weight_factor, eta_x)
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             var did_bssrdf_hop = False
@@ -3775,7 +3669,9 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             if mat.type == MatKind.mix:
                 mat.type = MatKind.diffuse
 
-        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor:
+        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured:
+            if not lobe_is_available_of(mat):
+                return False   # e.g. a measured table that failed to load
             var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
             # VCM Stage 2b: finish the per-bounce MIS correction (the
@@ -3964,86 +3860,6 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 dvcm_carry = Float32(0)
                 dvc_carry = Float32(0)
                 dvm_carry = Float32(0)
-
-        elif mat.type == MatKind.measured:
-            # Mirrors the camera-side measured branch above, minus the NEE
-            # loops (light subpaths don't do NEE against other lights) --
-            # see that branch's docstring for the shared-interface rationale.
-            var gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-            if dot(gn_m, ray_dir) > Float32(0): gn_m = gn_m * Float32(-1)
-            # Bump/normal maps -- see the diffuse branch.
-            # Saved BEFORE the perturbation: the stored vertex keeps this as its
-            # GEOMETRIC normal, because _connect's solid-angle -> area pdf
-            # conversions are built on it. See BDPTVertex.shading_normal.
-            var gn_m_geo = gn_m
-            gn_m = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes,
-                gn_m, gn_m, ray_dir,
-                _camera_approx_footprint(hit, cam_pos, px_scale),
-                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-            gn_m = face_toward(gn_m, -ray_dir)   # pbrt two-sided reflection, see face_toward
-            if mat.measured_idx < Int32(0):
-                return False   # measured: no tabulated BRDF for this material
-            var wo_m = (-rd).to_simd()
-            var frm_m = Frame.from_z(Vec3f(gn_m[0], gn_m[1], gn_m[2]))
-            var tangent_m = Vec3f(frm_m.x.x, frm_m.x.y, frm_m.x.z)
-            var bitangent_m = Vec3f(frm_m.y.x, frm_m.y.y, frm_m.y.z)
-            var mb = sd.measuredBrdfs[unsafe_offset=Int(mat.measured_idx)]
-            # VCM Stage 2b: measured BxDF DOES have a real standalone pdf
-            # (bxdf_pdf_measured, unlike conductor/hair) -- in MIS scope
-            # this pass, same real treatment as diffuse (see that branch's
-            # comments + project_vcm_stage2_mis_derivation memory).
-            var cos_fix_m = abs(dot(-ray_dir, gn_m))
-            (dvcm_carry, dvc_carry, dvm_carry) = vcm_arrival_carries(
-                dvcm_carry, dvc_carry, dvm_carry, cos_fix_m)
-            var v_m = _null_vertex()
-            v_m.pos = hit
-            v_m.normal = vec3f(gn_m_geo)
-            v_m.shading_normal = vec3f(gn_m)
-            v_m.beta = flux
-            v_m.alb = mat.albedo
-            v_m.is_surface = Int32(1); v_m.is_delta = Int32(0); v_m.mat_kind = LobeKind.measured
-            v_m.wo = vec3f(wo_m)
-            v_m.mat_idx = Int32(mat_idx)
-            v_m.pdf_fwd = Float32(1)
-            v_m.med_idx = cur_med_idx
-            v_m.wavelengths = wavelengths
-            v_m.dVCM = dvcm_carry; v_m.dVC = dvc_carry; v_m.dVM = dvm_carry
-            n_verts += 1
-            # Stored BEFORE sampling the continuation: the photon ARRIVED here
-            # whether or not the next bounce's sample is valid. Sampling first
-            # dropped every photon whose reflection happened to land below the
-            # horizon, and merging at measured surfaces delivered ~36% of the
-            # right answer (measured-quad VCM light-path sweep vs real pbrt).
-            _bdpt_store_lvc_vertex(v_m, lvc, lp_idx, n_verts - 1)
-            var wo_l_m = Vec3f(dot(wo_m, tangent_m), dot(wo_m, bitangent_m), dot(wo_m, gn_m))
-            var uml1 = pcg.next_float(); var uml2 = pcg.next_float()
-            var (wi_l_m, f_m, pdf_m, valid_m) = bxdf_sample_measured(mb, wo_l_m, uml1, uml2, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-            if not valid_m or pdf_m <= Float32(0):
-                return False   # measured: invalid sample
-            var wi_m = tangent_m * wi_l_m[0] + bitangent_m * wi_l_m[1] + gn_m * wi_l_m[2]
-            var wilen_m = dot(wi_m, wi_m)
-            if wilen_m > Float32(0):
-                wi_m = wi_m * (Float32(1.0) / sqrt(wilen_m))
-            var cos_wi_m = dot(wi_m, gn_m)
-            if cos_wi_m <= Float32(0):
-                return False   # measured: sampled direction below the surface
-            # The ADJOINT BRDF (see LobeCtx.adjoint): the sampler conditions on
-            # the light direction, which leaves the sample and its pdf valid,
-            # but radiance needs f(toward camera, toward light). f_m is the
-            # other order, and this table is not reciprocal near grazing.
-            var f_adj_m = bxdf_eval_measured(mb, wi_l_m, wo_l_m, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)[0]
-            flux *= f_adj_m * (cos_wi_m / pdf_m)
-            rd = vec3f(wi_m)
-            ro = hit + rd*Float32(0.0002)
-            # VCM Stage 2b: recursive continuation, real forward/reverse pdf
-            # from bxdf_pdf_measured (reverse = same call with wo/wi swapped
-            # -- ASSUMED convention, not independently verified against
-            # measured_bxdf_eval.mojo's exact semantics; flag if results look
-            # wrong on sportscar/measured-material scenes).
-            var pdf_rev_m = bxdf_pdf_measured(mb, wi_l_m, wo_l_m)
-            (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries(
-                dvcm_carry, dvc_carry, dvm_carry, (cos_wi_m / pdf_m), pdf_m, pdf_rev_m,
-                mis_vc_weight_factor, eta_x)
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             # ── Subsurface boundary: the light subpath's half of the hop ───

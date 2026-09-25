@@ -6,7 +6,7 @@ from .bssrdf import fdr_moment, bssrdf_exit_ft
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world, power_heuristic
 from .vcm_mis import MisPolicy, mis_policy_power, mis_policy_sole, nee_mis_weight
 from .rng import PCG32
-from .measured_bxdf_eval import bxdf_eval_measured, bxdf_pdf_measured
+from .measured_bxdf_eval import bxdf_eval_measured, bxdf_pdf_measured, bxdf_sample_measured
 from .bvh import LightSample, HairLobeConstants, _hair_eval_lobes, SceneDescriptor2_C, _hair_precompute
 from .spectrum import SampledWavelengths, SpectralSample, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb, rgb_bands_to_spectral_sample
 
@@ -1319,7 +1319,17 @@ def lobe_kind_of(mat_type: Int8) -> Int32:
         return LobeKind.layered
     if mat_type == MatKind.conductor:
         return LobeKind.ggx
+    if mat_type == MatKind.measured:
+        return LobeKind.measured
     return LobeKind.lambertian
+
+
+@always_inline
+def lobe_is_available_of(mat: Material_C) -> Bool:
+    """False when lobe_kind_of(mat.type) has no data to evaluate: a measured
+    material whose .bsdf table did not load (measured_idx -1, which lobe_eval
+    would otherwise index)."""
+    return not (mat.type == MatKind.measured and mat.measured_idx < Int32(0))
 
 
 @always_inline
@@ -1442,6 +1452,28 @@ def lobe_sample(
 
     if c.is_delta:
         return _lobe_sample_invalid()
+
+    if c.kind == LobeKind.measured:
+        # pbrt's MeasuredBxDF::Sample_f, in the same local frame lobe_eval
+        # evaluates the table in. The weight divides by the density the
+        # sampler actually drew from; f comes from lobe_eval, which applies
+        # the adjoint argument order on the light subpath.
+        var mb = tab.measured_brdfs[unsafe_offset=Int(tab.materials[unsafe_offset=Int(c.mat_idx)].measured_idx)]
+        var fr_m = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
+        var tx_m = Vec3f(fr_m.x.x, fr_m.x.y, fr_m.x.z)
+        var ty_m = Vec3f(fr_m.y.x, fr_m.y.y, fr_m.y.z)
+        var wo_l = Vec3f(dot(vwo, tx_m), dot(vwo, ty_m), dot(vwo, vn))
+        var (wi_l, _f_m, pdf_m, ok_m) = bxdf_sample_measured(mb, wo_l, u0, u1, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+        if not ok_m or pdf_m <= Float32(0):
+            return _lobe_sample_invalid()
+        var wi_m = tx_m * wi_l[0] + ty_m * wi_l[1] + vn * wi_l[2]
+        wi_m = wi_m * (Float32(1) / sqrt(max(dot(wi_m, wi_m), Float32(1e-20))))
+        if dot(wi_m, vn) <= Float32(0):
+            return _lobe_sample_invalid()
+        var le_m = lobe_eval[want_pdfs=True](c, wi_m, tab, spectral_coeffs, spectral_res,
+            spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
+        return LobeSample(True, wi_m, le_m.f_cos * (Float32(1) / pdf_m), False,
+                          pdf_m, le_m.pdf_rev, le_m.cos_used, lobe_scoped(c))
 
     if c.kind == LobeKind.layered:
         var mat_ly = tab.materials[unsafe_offset=Int(c.mat_idx)]
