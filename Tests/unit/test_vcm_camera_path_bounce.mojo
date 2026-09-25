@@ -31,7 +31,8 @@
 
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
-from gonzales.geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, Sphere_C, Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, Instance_C, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, TriangleMesh_C, Material_C, MatKind
+from gonzales.geometry import RGB, Point3f, Vec3f, Ray_C, Intersection_C, PrimId_C, Sphere_C, Instance_C, MeasuredBRDF_C, GpuTexture_C, NormalSlopeMap_C, TriangleMesh_C, Material_C, MatKind
+from gonzales.media import Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C
 from gonzales.lights import LightSampler_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C
 from gonzales.curves import Curve_C
 from gonzales.bvh import SceneDescriptor2_C, BVH2Node, build_bvh2, traverse_bvh2_core, test_spheres

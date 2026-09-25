@@ -7,7 +7,8 @@
 from std.math import abs, sqrt, log, exp
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, TestSuite
-from gonzales.geometry import RGB, Point3f, Vec3f, PrimId_C, Intersection_C, TriangleMesh_C, Medium_C, dot, cross, fr_dielectric, reflect, PI
+from gonzales.geometry import RGB, Point3f, Vec3f, PrimId_C, Intersection_C, TriangleMesh_C, dot, cross, fr_dielectric, reflect, PI
+from gonzales.media import Medium_C
 from gonzales.lights import AreaLight_C
 from gonzales.sppm import (
     _hash_cell, _cosine_hemisphere_sample, sample_homogeneous_free_flight,

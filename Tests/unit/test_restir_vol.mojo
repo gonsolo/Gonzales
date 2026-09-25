@@ -5,7 +5,8 @@
 
 from std.math import abs, sqrt
 from std.testing import assert_true, assert_false, TestSuite
-from gonzales.geometry import RGB, hg_phase, Vec3f
+from gonzales.geometry import RGB, Vec3f
+from gonzales.media import hg_phase
 from gonzales.reservoir import ReservoirState, reservoir_update
 from gonzales.restir_vol import (
     VolReservoir, vol_reservoir_init, vol_target_pdf, vol_shift_scatter_vertex,

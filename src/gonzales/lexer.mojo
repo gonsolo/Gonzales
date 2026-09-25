@@ -1,6 +1,7 @@
 from std.memory.alloc import unsafe_alloc
 from std.math import log as _log_math, pow as _pow_math
-from .geometry import RGB, _is_real_ptr, blackbody_rgb
+from .geometry import RGB, _is_real_ptr
+from .media import blackbody_rgb
 
 # ── pbrt Scanner Helpers ──────────────────────────────────────────────
 
