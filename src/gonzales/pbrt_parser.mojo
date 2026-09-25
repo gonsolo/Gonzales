@@ -19,7 +19,7 @@ from .lexer import (PbrtScanner, scanner_open, scanner_free, scanner_is_at_end,
 from .parse_types import (SceneParseState, MeshAccum, NamedMaterial, scene_path,
                            ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX)
 from .geometry import RGB, Point3f, Vec3f, dot, PI, _is_real_ptr
-from .materials import Material_C, MatKind, MeasuredBRDF_C
+from .materials import Material, MatKind, MeasuredBRDF
 from .render_state import GpuTexture, NormalSlopeMap, normal_slope_map_none
 from .primitives import Sphere, TriangleMesh, PrimId, Instance
 from .media import Medium, MediumInterface, Grid, NvdbGrid
@@ -42,7 +42,7 @@ from .scene_builder import store_mesh
 struct ParsedScene_Mojo:
     var raster_to_camera: Pointer[Float32, MutUntrackedOrigin]   # 16 floats, column-major
     var camera_to_world:  Pointer[Float32, MutUntrackedOrigin]   # 16 floats, column-major
-    var materials:        Pointer[Material_C, MutUntrackedOrigin]
+    var materials:        Pointer[Material, MutUntrackedOrigin]
     var material_count:   Int32
     var area_lights:      Pointer[AreaLight, MutUntrackedOrigin]
     var area_light_count: Int32
@@ -142,11 +142,11 @@ struct ParsedScene_Mojo:
     # per-template multi-geometry BLAS -- see [[project_vulkan_rt_backend]].
     var template_mesh_start: Pointer[Int32, MutUntrackedOrigin]
     var template_mesh_end:   Pointer[Int32, MutUntrackedOrigin]
-    # "measured" materials: one MeasuredBRDF_C per distinct .bsdf file
-    # (deduped by path), referenced by Material_C.measured_idx. Populated at
+    # "measured" materials: one MeasuredBRDF per distinct .bsdf file
+    # (deduped by path), referenced by Material.measured_idx. Populated at
     # final-scene-build time from named_materials[i].measured_bsdf_path -- see
     # the dedup+load loop near the materials array build below.
-    var measured_brdfs:  Pointer[MeasuredBRDF_C, MutUntrackedOrigin]
+    var measured_brdfs:  Pointer[MeasuredBRDF, MutUntrackedOrigin]
     var measured_count:  Int32
 
 # ── Matrix utilities ──────────────────────────────────────────────────────────
@@ -2140,7 +2140,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # Stage 2 can flip the switch without further parser changes.
     var measured_paths = List[String]()
     var measured_ok    = List[Bool]()
-    var measured_list  = List[MeasuredBRDF_C]()
+    var measured_list  = List[MeasuredBRDF]()
     for i in range(n_regular):
         var mpath = s[unsafe_offset=0].named_materials[i].measured_bsdf_path
         if mpath == "":
@@ -2159,12 +2159,12 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         measured_ok.append(mok)
         measured_list.append(mb)
     psc[unsafe_offset=0].measured_count = Int32(len(measured_list))
-    var measured_brdfs_buf = unsafe_alloc[MeasuredBRDF_C](max(len(measured_list), 1))
+    var measured_brdfs_buf = unsafe_alloc[MeasuredBRDF](max(len(measured_list), 1))
     for i in range(len(measured_list)):
         measured_brdfs_buf[unsafe_offset=i] = measured_list[i]
     psc[unsafe_offset=0].measured_brdfs = measured_brdfs_buf
 
-    var mats = unsafe_alloc[Material_C](max(n_mats, 1))
+    var mats = unsafe_alloc[Material](max(n_mats, 1))
     for i in range(n_regular):
         var nm3 = s[unsafe_offset=0].named_materials[i]
         var material_kind = nm3.kind
@@ -2409,7 +2409,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
 
     if n_with_mi > 0:
         var expanded_n = n_mats + n_with_mi
-        var new_mats = unsafe_alloc[Material_C](expanded_n)
+        var new_mats = unsafe_alloc[Material](expanded_n)
         for ci in range(n_mats):
             new_mats[unsafe_offset=ci] = mats[unsafe_offset=ci]
         mats.unsafe_free()
@@ -2421,7 +2421,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
 
         # An interface whose INTERIOR is a subsurface medium marks its
         # material, so shade_dielectric can keep the resulting boundary
-        # events off the maxdepth budget (see Material_C.sss_boundary).
+        # events off the maxdepth budget (see Material.sss_boundary).
         def _ins_is_sss(ins: Int32) {imm} -> Int8:
             if ins < Int32(0): return Int8(0)
             if Int(ins) >= len(s[unsafe_offset=0].med_is_sss): return Int8(0)
@@ -3468,7 +3468,7 @@ def mojo_parsed_free(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]):
         psc[unsafe_offset=0].curves.unsafe_free()
     if psc[unsafe_offset=0].measured_count > 0:
         # Per-pointer sentinel-address guards (matches light_sampler.cdf's
-        # convention above): a MeasuredBRDF_C for a file that FAILED to load
+        # convention above): a MeasuredBRDF for a file that FAILED to load
         # has every pointer field set via unsafe_dangling() (see
         # measured_bsdf.mojo's _fail()), which must never be passed to
         # .unsafe_free() directly.

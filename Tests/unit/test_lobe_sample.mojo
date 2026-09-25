@@ -7,7 +7,7 @@ from std.math import abs, sqrt, cos, sin
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, Vec3f, PI
-from gonzales.materials import Material_C, MatKind, LobeKind, MeasuredBRDF_C
+from gonzales.materials import Material, MatKind, LobeKind, MeasuredBRDF
 from gonzales.curves import Curve_C
 from gonzales.bxdf import LobeCtx, LobeTables, lobe_eval, lobe_sample, lobe_scoped
 from gonzales.rng import PCG32
@@ -15,7 +15,7 @@ from gonzales.spectrum import SampledWavelengths, sample_wavelengths_uniform, Sp
 from gonzales.rgb2spec import build_spectrum_table, build_cie_xyz_tables, SpectrumTable
 
 comptime _curves = Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling()
-comptime _mbrdfs = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling()
+comptime _mbrdfs = Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling()
 comptime TEST_RES = 16
 
 comptime MAT_DT = 0
@@ -29,15 +29,15 @@ def _test_ctx() -> SpectralContext:
     return SpectralContext(SpectrumTable(table^, TEST_RES), cie^)
 
 
-def _material(type: Int8, albedo: RGB, emission: RGB, rough: Float32) -> Material_C:
-    return Material_C(type, Int8(0), Int8(0), Int8(0), albedo, emission,
+def _material(type: Int8, albedo: RGB, emission: RGB, rough: Float32) -> Material:
+    return Material(type, Int8(0), Int8(0), Int8(0), albedo, emission,
         Int32(-1), rough, rough, Int32(-1), Int32(-1), Float32(1.0), Int32(-1), Int32(-1),
         RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0), Int32(-1),
         RGB(Float32(1.0)), RGB(Float32(0.0)), RGB(Float32(1.0)))
 
 
 def _tables() -> LobeTables:
-    var mats = unsafe_alloc[Material_C](3)
+    var mats = unsafe_alloc[Material](3)
     # diffusetransmission: reflectance 0.3, transmittance (in .emission) 0.5
     mats[unsafe_offset=MAT_DT] = _material(MatKind.diffuse_transmit, RGB(Float32(0.3)), RGB(Float32(0.5)), Float32(0))
     # coateddiffuse: eta in .emission.r, coat alpha in roughU/V

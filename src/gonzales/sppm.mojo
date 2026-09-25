@@ -12,7 +12,7 @@ from std.math import sqrt, cos, sin, floor, log, exp, max, min, ceildiv
 from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
 from .geometry import face_toward, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
-from .materials import Material_C, MatKind, LobeKind, PhotonKind, fr_dielectric, MeasuredBRDF_C
+from .materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, MeasuredBRDF
 from .render_state import GpuTexture
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, sphere_outward_normal
 from .media import Medium, MediumInterface, Grid, NvdbGrid, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, medium_transmittance_ratio_spectral, spectral_free_flight_weight
@@ -378,7 +378,7 @@ def _dielectric_bounce(
     # i.e. the primary/first segment in vacuum. Used to fix inward-normal
     # meshes. Was `bounce: Int` with an internal `bounce == 0` test, which
     # breaks the moment a caller stops charging bounces for subsurface
-    # boundaries (see Material_C.sss_boundary): `bounce` then stays 0 for the
+    # boundaries (see Material.sss_boundary): `bounce` then stays 0 for the
     # whole interior walk and every boundary hit from INSIDE would be forced
     # to "entering", refracting inward again so light could never leave. The
     # caller knows whether it is in a medium; it passes the real question.
@@ -509,7 +509,7 @@ def medium_after_crossing(
     ray_dir: Vec3f,
     inter: Intersection,
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
-    mat: Material_C,
+    mat: Material,
     ref sd: SceneDescriptor2_C,
     hit: Point3f = Point3f(Float32(0)),
 ) -> Int32:
@@ -880,7 +880,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # Entering, leaving or total-internal-reflecting at the boundary of
             # a subsurface interior is part of the ONE BSSRDF event the walk
             # inside it belongs to, so it is not charged to maxdepth. Same rule
-            # as the path tracer (Material_C.sss_boundary).
+            # as the path tracer (Material.sss_boundary).
             if mat.sss_boundary != Int8(0):
                 bounce -= 1
             var ior = mat.albedo.r
@@ -1490,7 +1490,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             # Entering, leaving or total-internal-reflecting at the boundary of
             # a subsurface interior is part of the ONE BSSRDF event the walk
             # inside it belongs to, so it is not charged to maxdepth. Same rule
-            # as the path tracer (Material_C.sss_boundary).
+            # as the path tracer (Material.sss_boundary).
             if mat.sss_boundary != Int8(0):
                 bounce -= 1
             var ior = mat.albedo.r

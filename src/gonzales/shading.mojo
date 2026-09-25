@@ -4,7 +4,7 @@ from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
 from .geometry import RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, safe_sqrt, reflect, refract, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from .render_state import PDF_DROP_DIRECT
-from .materials import Material_C, MatKind, LobeKind, MeasuredBRDF_C, schlick_fresnel, fr_dielectric
+from .materials import Material, MatKind, LobeKind, MeasuredBRDF, schlick_fresnel, fr_dielectric
 from .render_state import PathState, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, light_sampler_sample, light_sampler_pdf, area_light_pick_triangle
@@ -100,12 +100,12 @@ struct ShadeContext:
     var primIds:          Pointer[PrimId, MutUntrackedOrigin]
     var meshes:           Pointer[TriangleMesh, MutUntrackedOrigin]
     var curves:           Pointer[Curve_C, MutUntrackedOrigin]
-    var materials:        Pointer[Material_C, MutUntrackedOrigin]
+    var materials:        Pointer[Material, MutUntrackedOrigin]
     var tex_filenames:    Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin]
     var textures:         Pointer[GpuTexture, MutUntrackedOrigin]
     var n_textures:       Int
     # Slope-space copies of the normal maps, indexed exactly like
-    # `tex_filenames`/`textures` (so a Material_C's `normal_tex_idx`
+    # `tex_filenames`/`textures` (so a Material's `normal_tex_idx`
     # addresses all three). Read ONLY by the SMS/MNEE manifold walk, which
     # needs the normal's derivatives and not just the normal -- see
     # geometry.mojo's NormalSlopeMap. Dangling on the GPU call sites (the
@@ -135,11 +135,11 @@ struct ShadeContext:
     # memory) — host pointers on CPU, device pointers on GPU (see gpu.mojo's
     # ShadeContext construction sites).
     var spectral:       SpectralHandle
-    # "measured" materials: one MeasuredBRDF_C per distinct .bsdf file,
-    # indexed by Material_C.measured_idx (see measured_bsdf.mojo's loader).
+    # "measured" materials: one MeasuredBRDF per distinct .bsdf file,
+    # indexed by Material.measured_idx (see measured_bsdf.mojo's loader).
     # Host pointer on CPU; dangling on GPU call sites until Stage 3 uploads
     # these as device buffers.
-    var measured_brdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin]
+    var measured_brdfs: Pointer[MeasuredBRDF, MutUntrackedOrigin]
     # Phase 4 (docs/A2_restir_migration_plan.md), CPU-only, dead/unwired
     # (dangling/null on every call site except shade_core_cpu_nee's, which
     # is itself not called with real buffers by any render path yet -- see
@@ -450,7 +450,7 @@ def sample_texture[use_gpu: Bool](
 
 @always_inline
 def _tex_lookup[use_gpu: Bool](
-    mat: Material_C,
+    mat: Material,
     inter: Intersection,
     v0: Int, v1: Int, v2: Int,
     mesh: TriangleMesh,
@@ -462,7 +462,7 @@ def _tex_lookup[use_gpu: Bool](
     var ti = Int(mat.tex_idx)
     if ti == -2:
         # Procedural checkerboard (pbrt "checkerboard" texture class): evaluated
-        # analytically per-shading-point from Material_C's embedded checker_*
+        # analytically per-shading-point from Material's embedded checker_*
         # fields, identically on CPU and GPU — no image data or texture-table
         # index involved. See material_builder.mojo's "reflectance" handler.
         if Int(mesh.uvs) > 1:
@@ -524,7 +524,7 @@ def shade_core(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
-    materials: Pointer[Material_C, MutUntrackedOrigin],
+    materials: Pointer[Material, MutUntrackedOrigin],
     spectral: SpectralHandle,
     tid: Int,
 ):
@@ -819,7 +819,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
         normal = face_toward(normal, -ray_dir)   # reflect lobe on wo's side
 
     # "texture reflectance"/"texture transmittance" (e.g. a leaf.tga imagemap)
-    # both resolve to the same mat.tex_idx (Material_C has one texture slot,
+    # both resolve to the same mat.tex_idx (Material has one texture slot,
     # shared across kinds) — sample it once and use it for both lobes. Leaving
     # this at the flat mat.albedo/mat.emission default (as before) rendered
     # textured diffusetransmission foliage as a dull, wall-coloured grey blob
@@ -924,7 +924,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     ctx: ShadeContext,
-    mat: Material_C,
+    mat: Material,
 ):
     var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(
         path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances)
@@ -1111,7 +1111,7 @@ def _finish_delta_bounce(
     path_ptr[].specularBounce = Int8(1)
     path_ptr[].lastBsdfPdf = Float32(0.0)
     # `charge_depth` is False only at the boundary of a subsurface interior
-    # (Material_C.sss_boundary). Entry, exit and total internal reflection
+    # (Material.sss_boundary). Entry, exit and total internal reflection
     # there are all parts of ONE BSSRDF scattering event, so charging them to
     # maxdepth kills TIR-trapped light before it can escape -- the interior
     # walk steps are already exempt for exactly this reason (Medium.is_sss).
@@ -1130,7 +1130,7 @@ def shade_dielectric[use_gpu: Bool](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
-    mat: Material_C,
+    mat: Material,
     spheres: Pointer[Sphere, MutUntrackedOrigin],
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
     textures: Pointer[GpuTexture, MutUntrackedOrigin] = Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(),
@@ -1228,7 +1228,7 @@ def shade_dielectric[use_gpu: Bool](
     #
     # The `current_medium_idx < 0` half matters for subsurface boundaries,
     # whose events are deliberately not charged to `bounce` (see
-    # Material_C.sss_boundary): without it, `bounce` stays 0 for the whole
+    # Material.sss_boundary): without it, `bounce` stays 0 for the whole
     # interior walk and every boundary hit from INSIDE would be forced to
     # "entering", applying 1/eta^2 again and refracting as if into the medium
     # -- light could never leave. Being inside a medium is the physical fact
@@ -1273,7 +1273,7 @@ def shade_dielectric[use_gpu: Bool](
     var hit_point = ray_org + ray_dir * inter.tHit + offset
     # ── Spatially varying subsurface reflectance ──────────────────────────
     # The interior is ONE homogeneous medium, so a textured `reflectance` has
-    # to be collapsed to a mean to build it (Material_C.sss_mean_refl). But
+    # to be collapsed to a mean to build it (Material.sss_mean_refl). But
     # the diffuse reflectance a given point should show is its OWN texel, and
     # with the mean alone the head renders flat -- measured 23% less spatial
     # detail and 36% less red-channel hue variation than pbrt, with the
@@ -1318,7 +1318,7 @@ def shade_thin_dielectric(
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
-    mat: Material_C,
+    mat: Material,
     spheres: Pointer[Sphere, MutUntrackedOrigin],
 ):
     var (ok, _, geom_normal, ray_dir, ray_org, _, _, _, _) = _hit_geom(path_ptr, inter, meshes, spheres)
@@ -1468,13 +1468,13 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     ctx: ShadeContext,
-    mat: Material_C,
+    mat: Material,
 ):
     # Texture-driven roughness ("texture roughness"/"uroughness" — see
     # material_builder.mojo): resolve to a local mutable copy of `mat` here,
     # once, before anything reads roughU/V below, rather than threading a
     # texture lookup through every downstream GGX-alpha call site. Isotropic
-    # only (see Material_C.rough_tex_idx's docstring); falls back to the
+    # only (see Material.rough_tex_idx's docstring); falls back to the
     # parsed scalar roughU/V when there's no texture or no UVs.
     var mat_eff = mat
     var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres)
@@ -1598,8 +1598,8 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
 # code-size win kept on its own merits, but it turned out NOT to be the fix
 # for shade_measured_gpu's CUDA_ERROR_INVALID_PTX (see below).
 #
-# Takes `measured_brdfs` + an index rather than `mb: MeasuredBRDF_C` (loading
-# mb LOCALLY below instead) to avoid MeasuredBRDF_C -- a TrivialRegisterPassable
+# Takes `measured_brdfs` + an index rather than `mb: MeasuredBRDF` (loading
+# mb LOCALLY below instead) to avoid MeasuredBRDF -- a TrivialRegisterPassable
 # struct with 12 pointer fields -- crossing this now-real call boundary by
 # value, the same by-value hazard already documented on SpectralHandle (see
 # spectrum.mojo; filed as modular/modular#6759, later retracted by its own
@@ -1620,7 +1620,7 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
 def _shade_measured_nee[enqueue_shadow: Bool](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
-    measured_brdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin],
+    measured_brdfs: Pointer[MeasuredBRDF, MutUntrackedOrigin],
     measured_idx: Int32,
     tangent: Vec3f, bitangent: Vec3f, normal: Vec3f,
     wo: Vec3f,
@@ -1630,7 +1630,7 @@ def _shade_measured_nee[enqueue_shadow: Bool](
     """Distant + point + sphere + area + infinite-light NEE for a measured
     surface — same 5-light-type shape as _shade_conductor_nee, with
     _nee_weight_measured in place of _nee_weight_simple_spectral (which
-    can't take a MeasuredBRDF_C, same reason hair has its own NEE)."""
+    can't take a MeasuredBRDF, same reason hair has its own NEE)."""
     var mb = measured_brdfs[unsafe_offset=Int(measured_idx)]
     var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
     var w_area = _nee_weight_measured(ls_area, mb, tangent, bitangent, normal, wo, path_ptr[].wavelengths, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65)
@@ -1663,7 +1663,7 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     ctx: ShadeContext,
-    mat: Material_C,
+    mat: Material,
 ):
     var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres)
     if not ok:
@@ -1771,7 +1771,7 @@ def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     ctx: ShadeContext,
-    mat: Material_C,
+    mat: Material,
 ):
     # No shading-normal interpolation here (unlike conductor) — matches the
     # pre-existing coated_conductor behavior of using the flat geometric
@@ -1824,7 +1824,7 @@ def shade_mix[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     ctx: ShadeContext,
-    mat: Material_C,
+    mat: Material,
 ):
     var packed = mat.tex_idx
     var idx1 = Int(packed & Int32(0xFFFF))
@@ -1859,7 +1859,7 @@ def _decode_tangent_normal(ns: RGB, tangent: Vec3f, bitangent: Vec3f, geom_norma
 
 @always_inline
 def _apply_normal_map[use_gpu: Bool](
-    mat: Material_C,
+    mat: Material,
     v0: Int, v1: Int, v2: Int,
     mesh: TriangleMesh,
     inter: Intersection,
@@ -1915,7 +1915,7 @@ def _apply_normal_map[use_gpu: Bool](
 
 @always_inline
 def _apply_bump_map[use_gpu: Bool](
-    mat: Material_C,
+    mat: Material,
     v0: Int, v1: Int, v2: Int,
     mesh: TriangleMesh,
     inter: Intersection,
@@ -2007,7 +2007,7 @@ def _apply_bump_map[use_gpu: Bool](
 
 @always_inline
 def _apply_normal_map_sphere[use_gpu: Bool](
-    mat: Material_C,
+    mat: Material,
     center: Vec3f,
     hit_point: Vec3f,
     geom_normal: Vec3f,
@@ -2147,7 +2147,7 @@ def _pixel_uv_for_hit(
 # 1/eta^4 transmission loss documented in shade_dielectric.
 @always_inline
 def _apply_surface_maps[use_gpu: Bool](
-    mat: Material_C,
+    mat: Material,
     v0: Int, v1: Int, v2: Int,
     mesh: TriangleMesh,
     inter: Intersection,
@@ -2222,7 +2222,7 @@ def _camera_approx_footprint(p: Point3f, cam_pos: Vec3f, px_scale: Float32) -> F
 # with neither map.
 @always_inline
 def apply_surface_maps_at_hit[use_gpu: Bool](
-    mat: Material_C,
+    mat: Material,
     inter: Intersection,
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     shading_normal: Vec3f,
@@ -2250,7 +2250,7 @@ def apply_surface_maps_at_hit[use_gpu: Bool](
 def _build_geom_context_full[use_gpu: Bool](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
-    mat: Material_C,
+    mat: Material,
     ctx: ShadeContext,
 ) -> Tuple[GeomContext, Bool]:
     var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(
@@ -2332,7 +2332,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     ctx: ShadeContext,
-    mat: Material_C,
+    mat: Material,
 ):
     """3-lobe hair BSDF (Marschner R/TT/TRT). Material packing:
        albedo = sigma_a (RGB absorption), emission.r = eta (IOR),
@@ -4348,7 +4348,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     ctx: ShadeContext,
-    mat: Material_C,
+    mat: Material,
     guide_write: GuideGrid = null_guide(),
     restir_io: ReservoirIO = reservoir_io_null(),
     pixel_idx: Int = -1,
@@ -4494,7 +4494,7 @@ def shade_interface(
 
 @always_inline
 def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
-    mat: Material_C,
+    mat: Material,
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     ctx: ShadeContext,
@@ -4637,7 +4637,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             # path (a non-delta bounce sets both; a delta one zeroes the pdf
             # and is excluded by specularBounce anyway). They diverge for a
             # SUBSURFACE interior, whose walk is deliberately not charged to
-            # `bounce` (Material_C.sss_boundary / Medium.is_sss): `bounce`
+            # `bounce` (Material.sss_boundary / Medium.is_sss): `bounce`
             # stays 0 for hundreds of real phase-sampled scatters, so every
             # ray that escaped the skin and hit the sky took FULL weight
             # instead of its MIS weight -- double-counting against the volume
@@ -4872,7 +4872,7 @@ def shade_core_cpu_nee(
     primIds: Pointer[PrimId, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     curves: Pointer[Curve_C, MutUntrackedOrigin],
-    materials: Pointer[Material_C, MutUntrackedOrigin],
+    materials: Pointer[Material, MutUntrackedOrigin],
     areaLights: Pointer[AreaLight, MutUntrackedOrigin],
     areaLightCount: Int,
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
@@ -4893,7 +4893,7 @@ def shade_core_cpu_nee(
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
     guide_write: GuideGrid = null_guide(),
     spectral: SpectralHandle = null_spectral_handle(),
-    measured_brdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin] = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+    measured_brdfs: Pointer[MeasuredBRDF, MutUntrackedOrigin] = Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(),
     use_restir: Bool = False,
     restir_io: ReservoirIO = reservoir_io_null(),
     pixel_idx: Int = -1,

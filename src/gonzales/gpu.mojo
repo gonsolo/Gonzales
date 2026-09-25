@@ -1,5 +1,5 @@
 from .geometry import TERMINAL_SEGMENT_GRACE_ROUNDS
-from .materials import Material_C, MeasuredBRDF_C
+from .materials import Material, MeasuredBRDF
 from .media import Grid, MediumInterface, Medium, NvdbGrid
 from .primitives import Instance, Intersection, Sphere
 from .render_state import PathState, ShadowTask

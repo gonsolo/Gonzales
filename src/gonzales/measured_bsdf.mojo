@@ -14,9 +14,9 @@
 # /home/gonsolo/src/pbrt-v4/src/pbrt/{bxdfs.cpp,util/sampling.h} to keep this
 # a faithful port rather than a reconstruction from memory. See bxdf.mojo's
 # bxdf_eval_measured/bxdf_sample_measured/bxdf_pdf_measured (Stage 2) for the
-# consumers of the MeasuredBRDF_C this returns.
+# consumers of the MeasuredBRDF this returns.
 from std.memory.alloc import unsafe_alloc
-from .materials import MeasuredBRDF_C
+from .materials import MeasuredBRDF
 
 @always_inline
 def _mbsdf_u16(buf: Pointer[UInt8, MutUntrackedOrigin], pos: Int) -> Int:
@@ -301,19 +301,19 @@ def _pl2d_strides3(n_phi: Int, n_theta: Int, n_lambda: Int) -> Tuple[Int, Int, I
     var stride_phi = slices if n_phi > 1 else 0
     return (stride_phi, stride_theta, stride_lambda)
 
-def load_measured_brdf_full(path: String) -> Tuple[Bool, MeasuredBRDF_C]:
+def load_measured_brdf_full(path: String) -> Tuple[Bool, MeasuredBRDF]:
     """The real MeasuredBxDF tensor-file loader -- parses every field and
     builds the PiecewiseLinear2D CDF structures, matching
     MeasuredBxDFData::Create (bxdfs.cpp:889-988) exactly, including its
     field-shape validation. Returns (False, <dangling dummy>) on any
     parse/format/shape mismatch, OR on a non-isotropic file (phi_i.shape[0] >
     2) -- anisotropic support is deferred (see project plan); no scene in the
-    current corpus needs it. Caller must not use the returned MeasuredBRDF_C
+    current corpus needs it. Caller must not use the returned MeasuredBRDF
     when ok=False."""
 
-    def _fail() -> Tuple[Bool, MeasuredBRDF_C]:
+    def _fail() -> Tuple[Bool, MeasuredBRDF]:
         var dangling = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
-        return (False, MeasuredBRDF_C(
+        return (False, MeasuredBRDF(
             Int32(0), Int32(0), Int32(0), Int32(0),
             dangling, dangling, dangling,
             dangling, Int32(0), Int32(0),
@@ -432,7 +432,7 @@ def load_measured_brdf_full(path: String) -> Tuple[Bool, MeasuredBRDF_C]:
 
     file_buf.unsafe_free()
 
-    var mb = MeasuredBRDF_C(
+    var mb = MeasuredBRDF(
         Int32(1), Int32(n_theta_i), Int32(n_phi_i), Int32(n_wavelengths),
         theta_i, phi_i, wavelengths,
         ndf_data, Int32(ndf_xs), Int32(ndf_ys),

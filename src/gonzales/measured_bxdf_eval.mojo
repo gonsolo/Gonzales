@@ -3,7 +3,7 @@
 # from the real pbrt-v4 reference source
 # (/home/gonsolo/src/pbrt-v4/src/pbrt/{bxdfs.{h,cpp},util/sampling.h}) rather
 # than reconstructed from memory. See measured_bsdf.mojo for the loader that
-# builds the MeasuredBRDF_C this file consumes (theta_i/phi_i/wavelengths
+# builds the MeasuredBRDF this file consumes (theta_i/phi_i/wavelengths
 # grids, ndf/sigma/vndf/luminance/spectra tensors + vndf/luminance's derived
 # marginal/conditional CDFs).
 #
@@ -29,13 +29,13 @@
 # (std.math.atan2, not kernel size).
 #
 # These functions take only plain Pointer[Float32]/Int/Float32
-# arguments -- never MeasuredBRDF_C itself -- so making them real (non-
+# arguments -- never MeasuredBRDF itself -- so making them real (non-
 # inlined) calls carries none of the by-value TrivialRegisterPassable-struct
 # corruption risk documented elsewhere (modular/modular#6759, later
 # retracted by its own author as unreproducible, but avoided defensively).
 from std.math import sqrt, sin, cos, acos, abs, min, max, floor
 from .geometry import RGB, safe_sqrt, PI, dot, Vec3f
-from .materials import MeasuredBRDF_C
+from .materials import MeasuredBRDF
 from .spectrum import SampledWavelengths, SpectralSample, spectral_sample_to_rgb, rgb_illuminant_to_spectral_sample
 from .rgb2spec import cie_d65_runtime
 from .bvh import LightSample
@@ -433,8 +433,8 @@ def _bxdf_eval_measured_core(
     them once and returns (fr_spectral, pdf) together, matching
     bxdf_eval_any's shape. wo_l/wi_l are LOCAL-frame (z = shading normal).
 
-    Deliberately NOT @always_inline, and takes MeasuredBRDF_C's fields
-    unpacked (never the struct itself) rather than `mb: MeasuredBRDF_C` --
+    Deliberately NOT @always_inline, and takes MeasuredBRDF's fields
+    unpacked (never the struct itself) rather than `mb: MeasuredBRDF` --
     see bxdf_eval_measured's docstring below for why. Returns the RAW
     spectral reflectance-like value, NOT converted to RGB -- converting a
     bare reflectance spectrum to RGB in isolation implicitly assumes an
@@ -537,7 +537,7 @@ def _bxdf_eval_measured_core(
 
 @always_inline
 def bxdf_eval_measured(
-    mb: MeasuredBRDF_C,
+    mb: MeasuredBRDF,
     wo_l: Vec3f, wi_l: Vec3f,
     wavelengths: SampledWavelengths,
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin], spectral_res: Int,
@@ -549,10 +549,10 @@ def bxdf_eval_measured(
     """Thin @always_inline wrapper: unpacks `mb`'s fields (a plain local
     read, never a by-value cross-call pass -- safe under inlining, per the
     by-value TrivialRegisterPassable-struct hazard documented on
-    MeasuredBRDF_C / modular/modular#6759, later retracted by its own author
+    MeasuredBRDF / modular/modular#6759, later retracted by its own author
     as unreproducible but avoided defensively) and forwards to
     _bxdf_eval_measured_core, the real (non-inlined) implementation. Exists
-    so every call site keeps the ergonomic `mb: MeasuredBRDF_C` signature
+    so every call site keeps the ergonomic `mb: MeasuredBRDF` signature
     while the actual ~90-line body compiles once instead of once per call
     site -- shade_measured's NEE path alone calls this 5 times (one per
     light type), and @always_inline on the full body made shade_measured_gpu
@@ -576,7 +576,7 @@ def bxdf_eval_measured(
 
 @always_inline
 def bxdf_pdf_measured(
-    mb: MeasuredBRDF_C,
+    mb: MeasuredBRDF,
     wo_l: Vec3f, wi_l: Vec3f,
 ) -> Float32:
     """MeasuredBxDF::PDF alone (bxdfs.cpp:1087-1120), for MIS call sites that
@@ -617,7 +617,7 @@ def bxdf_pdf_measured(
 
 @always_inline
 def bxdf_sample_measured(
-    mb: MeasuredBRDF_C,
+    mb: MeasuredBRDF,
     wo_l: Vec3f,
     u0: Float32, u1: Float32,
     wavelengths: SampledWavelengths,
@@ -735,7 +735,7 @@ def bxdf_sample_measured(
 # that to 5 real calls instead.
 def _nee_weight_measured(
     ls: LightSample,
-    mb: MeasuredBRDF_C,
+    mb: MeasuredBRDF,
     tangent: Vec3f, bitangent: Vec3f, normal: Vec3f,
     wo: Vec3f,
     wavelengths: SampledWavelengths,
@@ -748,7 +748,7 @@ def _nee_weight_measured(
 ) -> SpectralSample:
     """Measured's own version of _nee_weight_simple (bxdf.mojo) — can't share
     that function's flat (mat_kind, alb, alpha) signature since it needs the
-    full MeasuredBRDF_C descriptor + wavelengths, same reason hair has its
+    full MeasuredBRDF descriptor + wavelengths, same reason hair has its
     own _nee_weight_hair. Projects wo/ls.wi into the local (tangent,
     bitangent, normal) frame bxdf_eval_measured expects.
 

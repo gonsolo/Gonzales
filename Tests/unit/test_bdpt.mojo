@@ -15,7 +15,7 @@ from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, Point3f, Vec3f, INV_FOUR_PI, INV_PI
-from gonzales.materials import LobeKind, MeasuredBRDF_C
+from gonzales.materials import LobeKind, MeasuredBRDF
 from gonzales.render_state import GpuTexture, NormalSlopeMap
 from gonzales.primitives import Intersection, Sphere, PrimId, Instance
 from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
@@ -119,7 +119,7 @@ def _dummy_sd() -> SceneDescriptor2_C:
         Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Int64(0),
         Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         null_spectral_handle(),
         Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
@@ -320,7 +320,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Int64(0),
         Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         null_spectral_handle(),
         Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),

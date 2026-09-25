@@ -32,7 +32,7 @@
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, Point3f, Vec3f
-from gonzales.materials import MeasuredBRDF_C, Material_C, MatKind
+from gonzales.materials import MeasuredBRDF, Material, MatKind
 from gonzales.render_state import GpuTexture, NormalSlopeMap
 from gonzales.primitives import Ray, Intersection, PrimId, Sphere, Instance, TriangleMesh
 from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
@@ -92,8 +92,8 @@ def _build_scene() -> SceneDescriptor2_C:
         prim_ids[unsafe_offset=k] = PrimId(Int64(0), Int64(orig * 3), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     order.unsafe_free()
 
-    var materials = unsafe_alloc[Material_C](1)
-    materials[unsafe_offset=0] = Material_C(
+    var materials = unsafe_alloc[Material](1)
+    materials[unsafe_offset=0] = Material(
         MatKind.diffuse, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.8)), RGB(Float32(0.0)), Int32(-1),
         Float32(0.0), Float32(0.0), Int32(-1), Int32(-1), Float32(1.0), Int32(-1), Int32(-1),
@@ -120,7 +120,7 @@ def _build_scene() -> SceneDescriptor2_C:
         Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Int64(0),
         Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
-        Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
+        Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         null_spectral_handle(),
         Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), Int64(0),
         Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),

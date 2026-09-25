@@ -9,7 +9,7 @@ from std.math import abs, sqrt
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, Point3f, Vec3f
-from gonzales.materials import Material_C, MatKind, MeasuredBRDF_C
+from gonzales.materials import Material, MatKind, MeasuredBRDF
 from gonzales.render_state import GpuTexture, NormalSlopeMap, ShadowTask, PathState
 from gonzales.primitives import Ray, PrimId, TriangleMesh, Instance, Sphere
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
@@ -45,8 +45,8 @@ def _make_one_leaf_bvh(tri_min: Vec3f, tri_max: Vec3f) -> BVH2Node:
     return BVH2Node(Point3f(tri_min[0], tri_min[1], tri_min[2]),
         Point3f(tri_max[0], tri_max[1], tri_max[2]), Int32(0), Int32(1))
 
-def _make_dielectric(ior: Float32) -> Material_C:
-    return Material_C(
+def _make_dielectric(ior: Float32) -> Material:
+    return Material(
         MatKind.dielectric, Int8(0), Int8(0), Int8(0),
         RGB(ior), RGB(Float32(0.0)),
         Int32(-1), Float32(0.0), Float32(0.0),
@@ -57,7 +57,7 @@ def _make_ctx(
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     primIds: Pointer[PrimId, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
-    materials: Pointer[Material_C, MutUntrackedOrigin],
+    materials: Pointer[Material, MutUntrackedOrigin],
     area_lights: Pointer[AreaLight, MutUntrackedOrigin],
     area_light_count: Int,
     light_sampler_cdf: Pointer[Float32, MutUntrackedOrigin],
@@ -85,7 +85,7 @@ def _make_ctx(
         Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
         null_spectral_handle(),
-        Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
         gi_reservoir_io_null(),
     )
@@ -134,7 +134,7 @@ def test_sms_generate_curve_light_returns_empty() raises:
         Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Material_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Material, MutUntrackedOrigin].unsafe_dangling(),
         area_lights, 1, cdf)
 
     var pcg = PCG32(UInt64(1), UInt64(1))
@@ -162,7 +162,7 @@ def test_sms_generate_no_glass_in_the_way_returns_empty() raises:
     var area_lights = unsafe_alloc[AreaLight](1)
     area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(1), RGB(Float32(200.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx(bvh, primIds, meshes,
-        Pointer[Material_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Material, MutUntrackedOrigin].unsafe_dangling(),
         area_lights, 1, cdf)
 
     var pcg = PCG32(UInt64(1), UInt64(1))
@@ -191,7 +191,7 @@ def test_sms_generate_real_glass_produces_a_streamed_candidate() raises:
     primIds[unsafe_offset=0] = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = _make_glass_mesh()
-    var materials = unsafe_alloc[Material_C](1)
+    var materials = unsafe_alloc[Material](1)
     materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
     var area_lights = unsafe_alloc[AreaLight](1)
     area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
@@ -248,7 +248,7 @@ def test_sms_resolve_on_empty_reservoir_is_a_noop() raises:
     var cdf = unsafe_alloc[Float32](1)
     cdf[unsafe_offset=0] = Float32(0.0)
     var ctx = _make_ctx(bvh, primIds, meshes,
-        Pointer[Material_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Material, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[AreaLight, MutUntrackedOrigin].unsafe_dangling(), 0, cdf)
 
     var path_arr = unsafe_alloc[PathState](1)
@@ -280,7 +280,7 @@ def test_sms_resolve_on_real_glass_adds_positive_contribution() raises:
     primIds[unsafe_offset=0] = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = _make_glass_mesh()
-    var materials = unsafe_alloc[Material_C](1)
+    var materials = unsafe_alloc[Material](1)
     materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
     var area_lights = unsafe_alloc[AreaLight](1)
     area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
@@ -327,7 +327,7 @@ def test_sms_temporal_step_without_io_still_resolves_like_batch_mode() raises:
     primIds[unsafe_offset=0] = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = _make_glass_mesh()
-    var materials = unsafe_alloc[Material_C](1)
+    var materials = unsafe_alloc[Material](1)
     materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
     var area_lights = unsafe_alloc[AreaLight](1)
     area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
@@ -367,7 +367,7 @@ def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
     primIds[unsafe_offset=0] = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = _make_glass_mesh()
-    var materials = unsafe_alloc[Material_C](1)
+    var materials = unsafe_alloc[Material](1)
     materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
     var area_lights = unsafe_alloc[AreaLight](1)
     area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
@@ -455,7 +455,7 @@ def test_shade_diffuse_nee_sms_wiring_accumulates_confidence_across_frames() rai
     var meshes = unsafe_alloc[TriangleMesh](2)
     meshes[unsafe_offset=0] = _make_light_mesh()
     meshes[unsafe_offset=1] = _make_glass_mesh()
-    var materials = unsafe_alloc[Material_C](1)
+    var materials = unsafe_alloc[Material](1)
     materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
     var area_lights = unsafe_alloc[AreaLight](1)
     area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
@@ -538,7 +538,7 @@ def test_shade_diffuse_nee_sms_io_inactive_at_bounce_1_uses_plain_mnee() raises:
     var meshes = unsafe_alloc[TriangleMesh](2)
     meshes[unsafe_offset=0] = _make_light_mesh()
     meshes[unsafe_offset=1] = _make_glass_mesh()
-    var materials = unsafe_alloc[Material_C](1)
+    var materials = unsafe_alloc[Material](1)
     materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
     var area_lights = unsafe_alloc[AreaLight](1)
     area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))

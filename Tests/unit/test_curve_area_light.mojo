@@ -2,7 +2,7 @@ from std.math import abs, sqrt
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import Point3f, Vec3f, RGB, dot, cross
-from gonzales.materials import Material_C, MatKind
+from gonzales.materials import Material, MatKind
 from gonzales.render_state import PathState
 from gonzales.primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere
 from gonzales.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
@@ -44,8 +44,8 @@ def _dummy_path(ray: Ray, throughput: SpectralSample) -> PathState:
 # hand-rolled approximation of it.
 
 def test_emissive_curve_hit_adds_emission_and_retires_path() raises:
-    var materials = unsafe_alloc[Material_C](1)
-    materials[unsafe_offset=0] = Material_C(
+    var materials = unsafe_alloc[Material](1)
+    materials[unsafe_offset=0] = Material(
         MatKind.area_light, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.0)),                                  # albedo
         RGB(Float32(200.0), Float32(80.0), Float32(20.0)),  # emission
@@ -97,8 +97,8 @@ def test_nonemissive_curve_hit_does_not_self_terminate_via_the_arealight_path() 
     must NOT be caught by the new type==5 area-light branch; it should fall
     through unchanged. This test only checks it doesn't take the emissive
     shortcut (estimate stays 0); it doesn't exercise shade_hair itself."""
-    var materials = unsafe_alloc[Material_C](1)
-    materials[unsafe_offset=0] = Material_C(
+    var materials = unsafe_alloc[Material](1)
+    materials[unsafe_offset=0] = Material(
         MatKind.hair, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.3)), RGB(Float32(1.55), Float32(0.0), Float32(0.0)),
         Int32(-1), Float32(0.3), Float32(0.3), Int32(-1), Int32(-1), Float32(1.0), Int32(-1), Int32(-1),
@@ -136,8 +136,8 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
     var b_perp0 = cross(tangent, n_perp)
     var ray_dir = -b_perp0  # cos_l = -dot(geo_normal, ray_dir) = 1 (straight-on hit)
 
-    var materials = unsafe_alloc[Material_C](1)
-    materials[unsafe_offset=0] = Material_C(
+    var materials = unsafe_alloc[Material](1)
+    materials[unsafe_offset=0] = Material(
         MatKind.area_light, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.0)), RGB(Float32(200.0), Float32(80.0), Float32(20.0)),
         Int32(-1), Float32(0.0), Float32(0.0), Int32(-1), Int32(-1), Float32(1.0), Int32(-1), Int32(-1),

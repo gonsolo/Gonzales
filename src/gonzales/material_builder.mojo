@@ -563,7 +563,7 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
 
     # "reflectance": either an RGB/float value, OR a texture reference --
     # looked up in tex_names (imagemap) first, then constant textures, then
-    # procedural checkerboard textures (which need Material_C's embedded
+    # procedural checkerboard textures (which need Material's embedded
     # checker_* fields and so can't participate in a texture graph), and
     # finally through _resolve_affine_rgb, which folds arbitrarily nested
     # "scale"/"mix" graphs over a single imagemap into one (scale, bias) pair.
@@ -830,7 +830,7 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
             var mfp = _mb_float_or_rgb(params, "mfp", RGB(Float32(1)))
             print("Note: subsurface \"reflectance\"/\"mfp\" inverted with the Christensen-Burley fit, not pbrt's tabulated SubsurfaceFromDiffuse — close in character, not bit-comparable.")
             # Remember what the medium was built from, so the shader can
-            # correct each point back to its own texel (Material_C.sss_mean_refl).
+            # correct each point back to its own texel (Material.sss_mean_refl).
             sss_mean_refl_for_mat = refl
             var ar = _sss_invert_alpha(refl.r, sss_eta, sss_g)
             var ag = _sss_invert_alpha(refl.g, sss_eta, sss_g)
@@ -962,7 +962,7 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
     # site can use mat.roughU/roughV directly. Only meaningful for the BSDF
     # kinds that use roughU/V as an alpha (conductor, dielectric, coated_diffuse's
     # coat, coated_conductor) — mix's "amount" and hair's beta_m/beta_n reuse the
-    # same Material_C fields for unrelated values and must pass through untouched.
+    # same Material fields for unrelated values and must pass through untouched.
     if mat_type == MatKind.conductor or mat_type == MatKind.dielectric or \
        mat_type == MatKind.coated_diffuse or mat_type == MatKind.coated_conductor:
         if mat_remap_roughness:

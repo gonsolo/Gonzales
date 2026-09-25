@@ -10,7 +10,7 @@ from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, TestSuite
 from gonzales.geometry import RGB, Point3f, Vec3f
-from gonzales.materials import Material_C, MeasuredBRDF_C
+from gonzales.materials import Material, MeasuredBRDF
 from gonzales.render_state import GpuTexture, NormalSlopeMap, ShadowTask, PathState
 from gonzales.primitives import Ray, PrimId, TriangleMesh, Instance, Sphere
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
@@ -65,7 +65,7 @@ def _make_ctx_with_light(
     return ShadeContext(
         0, bvh2Nodes, primIds, meshes,
         Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Material_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Material, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), 0,
         Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
@@ -85,7 +85,7 @@ def _make_ctx_with_light(
         Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
         null_spectral_handle(),
-        Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(),
         gi_pending,
         gi_reservoir_io_null(),
     )

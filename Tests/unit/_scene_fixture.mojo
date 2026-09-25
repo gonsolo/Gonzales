@@ -1,6 +1,6 @@
 from std.memory.alloc import unsafe_alloc
 from gonzales.geometry import Point3f, Vec3f, RGB
-from gonzales.materials import Material_C, MatKind
+from gonzales.materials import Material, MatKind
 from gonzales.primitives import Ray, Intersection, PrimId, TriangleMesh
 from gonzales.curves import Curve_C
 from gonzales.bvh import BVH2Node, build_bvh2, traverse_bvh2_core
@@ -30,7 +30,7 @@ struct TriangleSceneFixture(Movable):
     var bvh_nodes:      Pointer[BVH2Node, MutUntrackedOrigin]
     var prim_ids:       Pointer[PrimId, MutUntrackedOrigin]
     var curves:         Pointer[Curve_C, MutUntrackedOrigin]
-    var materials:      Pointer[Material_C, MutUntrackedOrigin]
+    var materials:      Pointer[Material, MutUntrackedOrigin]
     var n_tris:          Int32
 
     def intersect(self, ray: Ray, tMax: Float32) -> Intersection:
@@ -95,8 +95,8 @@ def make_triangle_scene(verts: List[Point3f]) -> TriangleSceneFixture:
         prim_ids[unsafe_offset=k] = PrimId(Int64(0), Int64(orig * 3), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     order.unsafe_free()
 
-    var materials = unsafe_alloc[Material_C](1)
-    materials[unsafe_offset=0] = Material_C(
+    var materials = unsafe_alloc[Material](1)
+    materials[unsafe_offset=0] = Material(
         MatKind.diffuse, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.8)),           # albedo
         RGB(Float32(0.0)),           # emission

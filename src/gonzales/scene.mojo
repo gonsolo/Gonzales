@@ -1,7 +1,7 @@
 from std.collections import List, Array
 from std.ffi import external_call
 from .geometry import RGB, Point3f, Vec3f
-from .materials import Material_C
+from .materials import Material
 from .primitives import TriangleMesh, PrimId, Sphere
 from .media import Medium, MediumInterface
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight
@@ -66,7 +66,7 @@ struct Scene(Movable):
     var sampler: SamplerSettings
 
     # Geometry
-    var materials:    List[Material_C]
+    var materials:    List[Material]
     var meshes:       List[TriangleMesh]   # wire format kept for GPU upload
     var bvh_nodes:    List[BVH2Node]
     var prim_ids:     List[PrimId]
@@ -95,7 +95,7 @@ struct Scene(Movable):
         camera: CameraSettings,
         film: FilmSettings,
         sampler: SamplerSettings,
-        materials: List[Material_C],
+        materials: List[Material],
         meshes: List[TriangleMesh],
         bvh_nodes: List[BVH2Node],
         prim_ids: List[PrimId],

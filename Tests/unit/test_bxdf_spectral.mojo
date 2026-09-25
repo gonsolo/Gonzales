@@ -5,7 +5,7 @@
 from std.math import abs
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, INV_PI, Vec3f
-from gonzales.materials import Material_C, MeasuredBRDF_C
+from gonzales.materials import Material, MeasuredBRDF
 from gonzales.curves import Curve_C
 from gonzales.bxdf import (
     bxdf_eval_conductor_ggx, bxdf_eval_any, LobeCtx, LobeTables, lobe_eval,
@@ -17,9 +17,9 @@ from gonzales.bvh import LightSample
 # These tests only exercise the lambertian/ggx kinds, which never touch the
 # material tables -- lobe_eval reads them for hair and measured only. Dangling
 # sentinels make that explicit rather than allocating tables a test does not use.
-comptime _mats = Pointer[Material_C, MutUntrackedOrigin].unsafe_dangling()
+comptime _mats = Pointer[Material, MutUntrackedOrigin].unsafe_dangling()
 comptime _curves = Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling()
-comptime _mbrdfs = Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling()
+comptime _mbrdfs = Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling()
 from gonzales.spectrum import (
     SampledWavelengths, sample_wavelengths_uniform, spectral_sample_to_rgb,
     rgb_illuminant_to_spectral_sample, SpectralContext, SpectralHandle, spectral_handle,

@@ -1,6 +1,6 @@
 """Materials, split out of geometry.mojo (the per-cluster module split; see
 project_geometry_module_split memory). MatKind/LobeKind/PhotonKind/
-Material_C/MeasuredBRDF_C, and schlick_fresnel/fr_dielectric/
+Material/MeasuredBRDF, and schlick_fresnel/fr_dielectric/
 DEFAULT_COAT_THICKNESS/coat_beer_lambert_tr/cos_theta_t_dielectric, were two
 separate ranges in geometry.mojo; both depend only on the core
 (RGB/safe_sqrt), confirmed by a symbol-reference scan of each block with
@@ -57,7 +57,7 @@ struct PhotonKind:
     comptime bssrdf  = Int32(2)   # photons on a subsurface boundary, for the diffusion gather
 
 @fieldwise_init
-struct Material_C(TrivialRegisterPassable):
+struct Material(TrivialRegisterPassable):
     var type: Int8
     # 1 when this material is the BOUNDARY of a subsurface interior (its
     # medium interface's inside medium has Medium.is_sss). Set by
@@ -69,7 +69,7 @@ struct Material_C(TrivialRegisterPassable):
     # Medium.is_sss. Charging them silently ate light trapped by TIR (a
     # white furnace lost 10.7% at eta 1.5 and 30% at eta 2.0); see
     # Scenes/sss_furnace_sweep.py. Occupies a former padding byte, so
-    # Material_C's size and every existing constructor call site are
+    # Material's size and every existing constructor call site are
     # unchanged.
     var sss_boundary: Int8
     var _pad1: Int8
@@ -95,7 +95,7 @@ struct Material_C(TrivialRegisterPassable):
     var checker_uscale: Float32
     var checker_vscale: Float32
     var measured_idx: Int32  # -1 = not a "measured" material; >= 0 = index into
-                              # SceneDescriptor2_C.measuredBrdfs (see MeasuredBRDF_C)
+                              # SceneDescriptor2_C.measuredBrdfs (see MeasuredBRDF)
     # Affine correction applied to tex_idx's looked-up value in shading.mojo's
     # _tex_lookup: `albedo = tex_bias + tex_scale * texture(uv)`, per channel.
     # Identity is scale=1, bias=0. This one form covers every texture-graph
@@ -140,7 +140,7 @@ struct Material_C(TrivialRegisterPassable):
 # unreproducible; kept as a defensive workaround regardless). Always load a
 # local `var mb = ...[idx]` and only hand it to @always_inline helpers.
 @fieldwise_init
-struct MeasuredBRDF_C(TrivialRegisterPassable):
+struct MeasuredBRDF(TrivialRegisterPassable):
     var isotropic:     Int32  # 1 if n_phi_i <= 2 (only isotropic supported today)
     var n_theta_i:     Int32
     var n_phi_i:       Int32
@@ -233,7 +233,7 @@ def fr_dielectric(cos_theta_i_in: Float32, eta_in: Float32) -> Float32:
 
 # pbrt's coateddiffuse/coatedconductor default when a scene doesn't set
 # "float thickness" explicitly (LayeredBxDF's own default). gonzales has no
-# per-material storage for this (Material_C has no thickness field -- adding
+# per-material storage for this (Material has no thickness field -- adding
 # one touches the GPU upload path/struct size, out of scope here), so every
 # coat uses this single default. Only 2 of the pbrt-v4 corpus's ~180
 # coateddiffuse/coatedconductor materials (both bistro_cafe coatedconductor

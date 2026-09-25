@@ -301,7 +301,7 @@ struct SceneParseState(Movable):
     # apply a height scale (e.g. `Texture "x" "float" "scale" "texture tex"
     # ["base"] "float scale" [0.005]`) -- resolved to an actual imagemap
     # index by material_builder.mojo's displacement handling, not stored as
-    # its own texture kind in Material_C.
+    # its own texture kind in Material.
     # "scale" textures. BOTH operands are independently either a nested
     # texture name or a literal, exactly like "mix" below: kroken's book
     # covers are `"rgb tex" [c] "texture scale" [t]` (a constant tinted by a

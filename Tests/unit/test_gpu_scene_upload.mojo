@@ -7,7 +7,7 @@ from gonzales.lexer import PbrtScanner
 from gonzales.parse_types import SceneParseState
 from gonzales.pbrt_parser import parse_scene_file, finalize_scene, mojo_parsed_free, ParsedScene_Mojo
 from gonzales.gpu_scene import GpuSceneHandle, gpu_upload_scene
-from gonzales.materials import Material_C, MatKind
+from gonzales.materials import Material, MatKind
 from gonzales.bvh import BVH2Node
 
 # ── Full SceneDescriptor2_C + GPU scene-upload fixture (task #58) ──────────
@@ -91,12 +91,12 @@ def test_gpu_upload_scene_round_trips_mesh_and_material_data() raises:
     assert_true(Int(handle[].film.width) == Int(psc[unsafe_offset=0].film_w))
     assert_true(Int(handle[].film.height) == Int(psc[unsafe_offset=0].film_h))
 
-    # Material bytes round-trip: read back the uploaded Material_C and
+    # Material bytes round-trip: read back the uploaded Material and
     # compare against what finalize_scene actually built on the CPU side --
     # not the literal scene text, since e.g. checker/mix fields might differ.
     var cpu_mat = psc[unsafe_offset=0].materials[unsafe_offset=0]
     with handle[].materials_buf.map_to_host() as h:
-        var gpu_mat = h.unsafe_ptr().unsafe_bitcast[Material_C]()[unsafe_offset=0]
+        var gpu_mat = h.unsafe_ptr().unsafe_bitcast[Material]()[unsafe_offset=0]
         assert_true(gpu_mat.type == cpu_mat.type)
         assert_true(_close(gpu_mat.albedo.r, cpu_mat.albedo.r))
         assert_true(_close(gpu_mat.albedo.g, cpu_mat.albedo.g))

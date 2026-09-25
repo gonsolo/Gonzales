@@ -2,7 +2,7 @@ from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import Point3f, Vec3f, RGB
-from gonzales.materials import Material_C, MatKind
+from gonzales.materials import Material, MatKind
 from gonzales.render_state import PathState
 from gonzales.primitives import Ray, Intersection
 from gonzales.spectrum import SpectralSample, SampledWavelengths, null_spectral_handle
@@ -51,7 +51,7 @@ def disabled_test_shade_core_area_light_hit_adds_emission() raises:
     var fx = make_triangle_scene([
         Point3f(0.0, 0.0, 0.0), Point3f(1.0, 0.0, 0.0), Point3f(0.0, 1.0, 0.0),
     ])
-    fx.materials[unsafe_offset=0] = Material_C(
+    fx.materials[unsafe_offset=0] = Material(
         MatKind.area_light, Int8(0), Int8(0), Int8(0),
         RGB(Float32(0.0)),                                  # albedo (unused for area_light)
         RGB(Float32(2.0), Float32(3.0), Float32(4.0)),      # emission

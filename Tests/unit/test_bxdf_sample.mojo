@@ -3,7 +3,7 @@ from std.testing import assert_true, assert_false, TestSuite
 from gonzales.geometry import RGB, Vec3f, reflect, PI, INV_PI
 from gonzales.materials import fr_dielectric
 from gonzales.bxdf import (
-    GeomContext, Material_C, BxDFFlags,
+    GeomContext, Material, BxDFFlags,
     bxdf_sample_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric,
     bxdf_sample_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse_transmit,
 )
@@ -19,8 +19,8 @@ def _simd_close(a: Vec3f, b: Vec3f) -> Bool:
 def _simd_len(v: Vec3f) -> Float32:
     return sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
 
-def _make_material(albedo: RGB, roughU: Float32, roughV: Float32) -> Material_C:
-    return Material_C(Int8(0), Int8(0), Int8(0), Int8(0), albedo, RGB(Float32(0.0)),
+def _make_material(albedo: RGB, roughU: Float32, roughV: Float32) -> Material:
+    return Material(Int8(0), Int8(0), Int8(0), Int8(0), albedo, RGB(Float32(0.0)),
         Int32(-1), roughU, roughV, Int32(-1), Int32(-1), Float32(1.0), Int32(-1), Int32(-1),
         RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0), Int32(-1),
         RGB(Float32(1.0)), RGB(Float32(0.0)), RGB(Float32(1.0)))

@@ -2,7 +2,7 @@ from .bvh import BVH2Node, SceneDescriptor2_C
 from .curves import CURVE_DEFER_K, Curve_C
 from .geometry import _is_real_ptr
 from .lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSampler
-from .materials import Material_C, MeasuredBRDF_C
+from .materials import Material, MeasuredBRDF
 from .media import Grid, MediumInterface, Medium, NvdbGrid
 from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh
 from .render_state import FilmDims, FilterParams, GpuTexture, NormalSlopeMap, PathState, ShadowTask
@@ -810,7 +810,7 @@ struct MediaBuffers(Movable):
 
 @fieldwise_init
 struct MeasuredBuffers(Movable):
-    var brdfs_buf: DeviceBuffer[DType.uint8]  # n_brdfs × sizeof(MeasuredBRDF_C); each entry's 12 pointer fields point into field_bufs
+    var brdfs_buf: DeviceBuffer[DType.uint8]  # n_brdfs × sizeof(MeasuredBRDF); each entry's 12 pointer fields point into field_bufs
     var n_brdfs: Int
     var field_bufs: List[DeviceBuffer[DType.uint8]]  # kept alive; 12 sub-array buffers per measured material
 
@@ -822,14 +822,14 @@ struct MeasuredBuffers(Movable):
         # (theta_i/phi_i/wavelengths + ndf/sigma/vndf/luminance/spectra
         # data+CDFs); each gets its own device buffer, mirroring the
         # per-mesh points_bufs / per-grid grid_density_bufs pattern. The
-        # patched MeasuredBRDF_C struct array embeds device-resident
+        # patched MeasuredBRDF struct array embeds device-resident
         # pointers into those buffers -- loaded from the array *inside*
         # the GPU kernel (a load, not a cross-call by-value pass) and
         # handed only to @always_inline helpers, per the by-value
-        # pointer-struct hazard already documented on MeasuredBRDF_C.
+        # pointer-struct hazard already documented on MeasuredBRDF.
         var measured_field_bufs = List[DeviceBuffer[DType.uint8]]()
         var n_measured_int = Int(s.measured_count)
-        var measured_structs_host = unsafe_alloc[MeasuredBRDF_C](max(n_measured_int, 1))
+        var measured_structs_host = unsafe_alloc[MeasuredBRDF](max(n_measured_int, 1))
         for mi in range(n_measured_int):
             var hm = s.measured_brdfs[unsafe_offset=mi]
             var slices2 = Int(hm.n_phi_i) * Int(hm.n_theta_i)
@@ -850,7 +850,7 @@ struct MeasuredBuffers(Movable):
             var spectra_dptr = _gpu_upload_owned[Float32](
                 ctx, measured_field_bufs, hm.spectra_data, slices3 * Int(hm.spectra_xs) * Int(hm.spectra_ys))
 
-            measured_structs_host[unsafe_offset=mi] = MeasuredBRDF_C(
+            measured_structs_host[unsafe_offset=mi] = MeasuredBRDF(
                 hm.isotropic, hm.n_theta_i, hm.n_phi_i, hm.n_wavelengths,
                 theta_i_dptr, phi_i_dptr, wavelengths_dptr,
                 ndf_dptr, hm.ndf_xs, hm.ndf_ys,
@@ -861,7 +861,7 @@ struct MeasuredBuffers(Movable):
                 spectra_dptr, hm.spectra_xs, hm.spectra_ys,
                 hm.stride3_phi, hm.stride3_theta, hm.stride3_lambda,
             )
-        var measured_brdfs_buf = _gpu_upload_array[MeasuredBRDF_C](ctx, measured_structs_host, n_measured_int)
+        var measured_brdfs_buf = _gpu_upload_array[MeasuredBRDF](ctx, measured_structs_host, n_measured_int)
         ctx.synchronize()   # measured_structs_host is freed next
         measured_structs_host.unsafe_free()
         if n_measured_int > 0:
@@ -950,7 +950,7 @@ struct GpuSceneHandle(Movable):
         return SceneDescriptor2_C(
             bvh2Nodes=self.bvh.nodes_ptr(), primIds=self.bvh.prim_ids_ptr(),
             meshes=self.meshes.meshes_ptr(), meshCount=Int64(self.meshes.mesh_count),
-            materials=typed_ptr[Material_C](self.materials_buf), materialCount=Int64(self.material_count),
+            materials=typed_ptr[Material](self.materials_buf), materialCount=Int64(self.material_count),
             areaLights=self.lights.area_lights_ptr(), areaLightCount=Int64(self.lights.n_area_lights),
             textures=Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
             textureCount=Int64(0),
@@ -966,7 +966,7 @@ struct GpuSceneHandle(Movable):
             lightSampler=LightSampler(cdf=self.lights.light_sampler_ptr(), n=Int32(self.lights.n_light_sampler), _pad=Int32(0)),
             blasNodesArr=self.blas.nodes_arr(), blasPrimIdsArr=self.blas.primids_arr(), blasCount=Int64(self.blas.n_blas),
             instances=typed_ptr[Instance](self.instances_buf), instanceCount=Int64(self.n_instances),
-            measuredBrdfs=typed_ptr[MeasuredBRDF_C](self.measured.brdfs_buf), measuredBrdfCount=Int64(self.measured.n_brdfs),
+            measuredBrdfs=typed_ptr[MeasuredBRDF](self.measured.brdfs_buf), measuredBrdfCount=Int64(self.measured.n_brdfs),
             spectral=SpectralHandle(sc, sres, sx, sy, sz, sd65),
             gpuTextures=self.textures.textures_ptr(), gpuTextureCount=Int64(self.textures.n_textures),
             normalSlopeMaps=Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
@@ -1076,7 +1076,7 @@ def gpu_upload_scene(
             var instances_gpu_buf = _gpu_upload_array[Instance](ctx, s.instances, Int(s.instance_count))
             var meshes = MeshBuffers.upload(ctx, s)
             # >= 1 elem to avoid a zero-size buffer
-            var mat_buf = _gpu_upload_array[Material_C](ctx, s.materials, Int(s.material_count))
+            var mat_buf = _gpu_upload_array[Material](ctx, s.materials, Int(s.material_count))
             var lights = LightBuffers.upload(ctx, s)
             # analytical sphere primitives + sphere area lights
             var sphere_buf = _gpu_upload_array[Sphere](ctx, s.spheres, Int(s.sphere_count))

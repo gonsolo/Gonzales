@@ -30,7 +30,7 @@ from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB, Vec3f, dot, PI, INV_PI
 from gonzales.rng import PCG32
 from gonzales.bxdf import (
-    GeomContext, Material_C,
+    GeomContext, Material,
     bxdf_sample_conductor, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx,
     ggx_albedo, ggx_albedo_avg, _eval_conductor_ggx_spectral,
 )
@@ -63,9 +63,9 @@ def _mu_o_at(i: Int) -> Float32:
     return Float32(0.4)
 
 
-def _white_material(alpha: Float32) -> Material_C:
+def _white_material(alpha: Float32) -> Material:
     """reflectance 1 -- the only setting for which the answer is arithmetic."""
-    return Material_C(Int8(0), Int8(0), Int8(0), Int8(0), RGB(Float32(1.0)),
+    return Material(Int8(0), Int8(0), Int8(0), Int8(0), RGB(Float32(1.0)),
         RGB(Float32(0.0)), Int32(-1), alpha, alpha, Int32(-1), Int32(-1),
         Float32(1.0), Int32(-1), Int32(-1), RGB(Float32(0.0)), RGB(Float32(0.0)),
         Float32(1.0), Float32(1.0), Int32(-1), RGB(Float32(1.0)),

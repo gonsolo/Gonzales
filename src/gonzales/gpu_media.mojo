@@ -2,7 +2,7 @@ from .bvh import BVH2Node, LightSample, _sample_distant_light_nee, _sample_infin
 from .curves import Curve_C
 from .geometry import Point2f, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, point3f, vec3f
 from .lights import AreaLight, DistantLight, InfiniteLight, LightSampler, PointLight, area_light_pick_triangle, light_sampler_sample
-from .materials import MatKind, Material_C
+from .materials import MatKind, Material
 from .media import Grid, MEDIUM_TRACK_MAX_ITERS, MediumInterface, Medium, NvdbGrid, grid_ray_range, grid_sample_density, hg_phase, hg_sample, medium_emission_spectral, medium_grid_for, medium_nvdb_for, medium_sigma_s_spectral, medium_sigma_t_spectral, medium_transmittance_ratio_spectral, nvdb_index_ray, nvdb_majorant_at_world, nvdb_node_exit_t, nvdb_ray_range, nvdb_sample_density, sample_free_flight
 from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, sphere_outward_normal
 from .render_state import PathState

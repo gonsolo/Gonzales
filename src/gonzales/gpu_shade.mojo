@@ -3,7 +3,7 @@ from .curves import Curve_C
 from .geometry import _is_real_ptr
 from .guide import null_guide
 from .lights import AreaLight, DistantLight, InfiniteLight, LightSampler, PointLight
-from .materials import MatKind, Material_C, MeasuredBRDF_C
+from .materials import MatKind, Material, MeasuredBRDF
 from .media import MediumInterface
 from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh
 from .render_state import GpuTexture, NormalSlopeMap, PathState, ShadowTask
@@ -47,7 +47,7 @@ def shade_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
-    materials: Pointer[Material_C, MutUntrackedOrigin],
+    materials: Pointer[Material, MutUntrackedOrigin],
     spectral: SpectralHandle,
     count_dp: Int64,
 ):
@@ -409,7 +409,7 @@ def shade_enqueue_shadow_gpu(
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
     blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin],
     instances: Pointer[Instance, MutUntrackedOrigin],
-    materials: Pointer[Material_C, MutUntrackedOrigin],
+    materials: Pointer[Material, MutUntrackedOrigin],
     areaLights: Pointer[AreaLight, MutUntrackedOrigin],
     areaLightCount: Int,
     textures: Pointer[GpuTexture, MutUntrackedOrigin],
@@ -446,7 +446,7 @@ def shade_enqueue_shadow_gpu(
         px_scale=Float32(0.0), sobol_matrices=Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(), guide=null_guide(), use_restir=False,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
-        measured_brdfs=Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+        measured_brdfs=Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(),
         gi_pending=Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(), gi_io=gi_reservoir_io_null(),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,

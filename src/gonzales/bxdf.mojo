@@ -2,7 +2,7 @@ from std.collections import Array
 from std.math import sqrt
 from .layered import layered_f, layered_pdf, layered_sample
 from .geometry import RGB, Vec3f, dot, INV_PI, PI, Frame, refract, INV_FOUR_PI
-from .materials import MatKind, LobeKind, Material_C, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS, MeasuredBRDF_C
+from .materials import MatKind, LobeKind, Material, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS, MeasuredBRDF
 from .curves import Curve_C
 from .bssrdf import fdr_moment, bssrdf_exit_ft
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world, power_heuristic
@@ -364,7 +364,7 @@ struct SobolSamples8(TrivialRegisterPassable):
 @always_inline
 def bxdf_sample_conductor(
     gc: GeomContext,
-    mat: Material_C,
+    mat: Material,
     u1: Float32, u2: Float32,
 ) -> BxDFSample:
     # roughU/V already hold the resolved GGX alpha (see _psc_handle_make_named_material's
@@ -462,7 +462,7 @@ def bxdf_sample_conductor(
 @always_inline
 def bxdf_sample_coated_conductor(
     gc: GeomContext,
-    mat: Material_C,
+    mat: Material,
     ior: Float32,
     u_split: Float32, u1: Float32, u2: Float32,
 ) -> BxDFSample:
@@ -922,9 +922,9 @@ struct LobeTables(TrivialRegisterPassable):
     takes the narrow win instead: one named thing to pass, produced from
     either context by a one-line accessor. If the two contexts are ever
     reconciled, this is what they should agree on first."""
-    var materials:      Pointer[Material_C, MutUntrackedOrigin]
+    var materials:      Pointer[Material, MutUntrackedOrigin]
     var curves:         Pointer[Curve_C, MutUntrackedOrigin]
-    var measured_brdfs: Pointer[MeasuredBRDF_C, MutUntrackedOrigin]
+    var measured_brdfs: Pointer[MeasuredBRDF, MutUntrackedOrigin]
 
 
 @fieldwise_init
@@ -1329,7 +1329,7 @@ def lobe_kind_of(mat_type: Int8) -> Int32:
 
 
 @always_inline
-def lobe_is_available_of(mat: Material_C) -> Bool:
+def lobe_is_available_of(mat: Material) -> Bool:
     """False when lobe_kind_of(mat.type) has no data to evaluate: a measured
     material whose .bsdf table did not load (measured_idx -1, which lobe_eval
     would otherwise index)."""
@@ -1337,7 +1337,7 @@ def lobe_is_available_of(mat: Material_C) -> Bool:
 
 
 @always_inline
-def lobe_param_of(mat: Material_C) -> Float32:
+def lobe_param_of(mat: Material) -> Float32:
     """LobeCtx.param for lobe_kind_of(mat.type): the GGX alpha of a conductor
     (isotropic, as lobe_eval evaluates it), 0 for kinds that take none."""
     if mat.type == MatKind.conductor:
@@ -1346,7 +1346,7 @@ def lobe_param_of(mat: Material_C) -> Float32:
 
 
 @always_inline
-def lobe_is_delta_of(mat: Material_C) -> Bool:
+def lobe_is_delta_of(mat: Material) -> Bool:
     """A smooth conductor is a mirror: lobe_sample returns a delta event and
     no vertex may be stored for it (the same threshold as
     bxdf_sample_conductor)."""
@@ -1356,7 +1356,7 @@ def lobe_is_delta_of(mat: Material_C) -> Bool:
 @always_inline
 def _dt_transmittance(c: LobeCtx, tab: LobeTables) -> RGB:
     """A diffusetransmission lobe's transmittance. It lives in the MATERIAL
-    (Material_C.emission, see shade_diffuse_transmission), so it needs a real
+    (Material.emission, see shade_diffuse_transmission), so it needs a real
     mat_idx; callers without one pass -1, which falls back to a symmetric
     lobe rather than index the table out of bounds. One texture slot serves
     both lobes when textured, matching shade_diffuse_transmission; c.alb is

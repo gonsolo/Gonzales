@@ -16,7 +16,7 @@ from .layered import layered_sample, layered_pdf
 from std.atomic import Atomic
 from .geometry import face_toward, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Frame, dot, cross, refract, PI, INV_FOUR_PI, INV_PI
 from .render_state import PDF_DROP_DIRECT, PDF_VOL_PHASE_HIT
-from .materials import Material_C, MatKind, LobeKind, PhotonKind, MeasuredBRDF_C, fr_dielectric, cos_theta_t_dielectric, coat_beer_lambert_tr, DEFAULT_COAT_THICKNESS
+from .materials import Material, MatKind, LobeKind, PhotonKind, MeasuredBRDF, fr_dielectric, cos_theta_t_dielectric, coat_beer_lambert_tr, DEFAULT_COAT_THICKNESS
 from .render_state import GpuTexture
 from .primitives import Ray, Intersection, TriangleMesh, Sphere, PrimId, Instance, sphere_outward_normal
 from .media import Medium, MediumInterface, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, SSS_WALK_ROUNDS, Grid, NvdbGrid, spectral_free_flight_weight

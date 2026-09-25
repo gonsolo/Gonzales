@@ -12,7 +12,7 @@ from std.math import abs, sqrt
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, TestSuite
 from gonzales.geometry import RGB, Point3f, Vec3f, dot, cross
-from gonzales.materials import Material_C, MatKind, MeasuredBRDF_C
+from gonzales.materials import Material, MatKind, MeasuredBRDF
 from gonzales.render_state import GpuTexture, NormalSlopeMap, ShadowTask, PathState
 from gonzales.primitives import Ray, PrimId, Intersection, TriangleMesh, Instance, Sphere
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
@@ -54,8 +54,8 @@ def _make_triangle_mesh(p0: Vec3f, p1: Vec3f, p2: Vec3f) -> TriangleMesh:
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
 
-def _make_material(albedo: RGB, normal_tex_idx: Int32) -> Material_C:
-    return Material_C(Int8(1), Int8(0), Int8(0), Int8(0), albedo, RGB(Float32(0.0)),
+def _make_material(albedo: RGB, normal_tex_idx: Int32) -> Material:
+    return Material(Int8(1), Int8(0), Int8(0), Int8(0), albedo, RGB(Float32(0.0)),
         Int32(-1), Float32(0.0), Float32(0.0), normal_tex_idx, Int32(-1), Float32(1.0), Int32(-1), Int32(-1),
         RGB(Float32(0.0)), RGB(Float32(0.0)), Float32(1.0), Float32(1.0), Int32(-1), RGB(Float32(1.0)), RGB(Float32(0.0)), RGB(Float32(1.0)))
 
@@ -76,7 +76,7 @@ def _make_ctx(
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     primIds: Pointer[PrimId, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
-    materials: Pointer[Material_C, MutUntrackedOrigin],
+    materials: Pointer[Material, MutUntrackedOrigin],
     px_scale: Float32,
 ) -> ShadeContext:
     """A ShadeContext with every field the functions under test don't touch
@@ -100,7 +100,7 @@ def _make_ctx(
         Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
         null_spectral_handle(),
-        Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
         gi_reservoir_io_null(),
     )
@@ -215,7 +215,7 @@ def test_build_geom_context_full_matches_closed_form_for_axis_aligned_hit() rais
 
     var albedo = RGB(Float32(0.2), Float32(0.4), Float32(0.6))
     var mat = _make_material(albedo, Int32(-1))
-    var materials = unsafe_alloc[Material_C](1)
+    var materials = unsafe_alloc[Material](1)
     materials[unsafe_offset=0] = mat
 
     var ctx = _make_ctx(
@@ -271,7 +271,7 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
     meshes[unsafe_offset=0] = mesh
     var albedo = RGB(Float32(0.5), Float32(0.3), Float32(0.1))
     var mat = _make_material(albedo, Int32(-1))
-    var materials = unsafe_alloc[Material_C](1)
+    var materials = unsafe_alloc[Material](1)
     materials[unsafe_offset=0] = mat
 
     var spheres = unsafe_alloc[Sphere](1)
@@ -303,7 +303,7 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
         Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
         null_spectral_handle(),
-        Pointer[MeasuredBRDF_C, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
         gi_reservoir_io_null(),
     )
@@ -361,7 +361,7 @@ def test_shadow_contribute_direct_adds_contribution_when_unoccluded() raises:
     var bvh = unsafe_alloc[BVH2Node](1)
     bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(-1.0, -1.0, 4.9), Vec3f(1.0, 1.0, 5.1))
 
-    var materials = unsafe_alloc[Material_C](1)
+    var materials = unsafe_alloc[Material](1)
     materials[unsafe_offset=0] = _make_material(RGB(Float32(0.5)), Int32(-1))
     var ctx = _make_ctx(bvh, primIds, meshes, materials, Float32(0.0))
     var path = _make_path(Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0))
@@ -397,7 +397,7 @@ def test_shadow_contribute_direct_skips_when_occluded() raises:
     var bvh = unsafe_alloc[BVH2Node](1)
     bvh[unsafe_offset=0] = _make_one_leaf_bvh(Vec3f(-1.0, -1.0, 4.9), Vec3f(1.0, 1.0, 5.1))
 
-    var materials = unsafe_alloc[Material_C](1)
+    var materials = unsafe_alloc[Material](1)
     materials[unsafe_offset=0] = _make_material(RGB(Float32(0.5)), Int32(-1))
     var ctx = _make_ctx(bvh, primIds, meshes, materials, Float32(0.0))
     var path = _make_path(Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, -1.0))

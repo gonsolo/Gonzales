@@ -7,7 +7,7 @@ from std.atomic import Atomic
 from std.sys.info import num_performance_cores
 from .transform import Mat4
 from .geometry import dot, cross, Point3f, Point2f, Vec3f, Frame, RGB, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, _is_real_ptr, store_vec3, _atan2f, point3f
-from .materials import Material_C, MatKind, fr_dielectric, MeasuredBRDF_C
+from .materials import Material, MatKind, fr_dielectric, MeasuredBRDF
 from .render_state import PathState, TileResult, GpuTexture, NormalSlopeMap
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, intersect_triangle, alpha_killed, Instance, sphere_outward_normal
 from .media import Medium, MediumInterface, Grid, NvdbGrid
@@ -113,7 +113,7 @@ struct SceneDescriptor2_C(TrivialRegisterPassable, DevicePassable):
     var primIds: Pointer[PrimId, MutUntrackedOrigin]
     var meshes: Pointer[TriangleMesh, MutUntrackedOrigin]
     var meshCount: Int64
-    var materials: Pointer[Material_C, MutUntrackedOrigin]
+    var materials: Pointer[Material, MutUntrackedOrigin]
     var materialCount: Int64
     var areaLights: Pointer[AreaLight, MutUntrackedOrigin]
     var areaLightCount: Int64
@@ -151,10 +151,10 @@ struct SceneDescriptor2_C(TrivialRegisterPassable, DevicePassable):
     var instances:      Pointer[Instance, MutUntrackedOrigin]
     var instanceCount:  Int64
 
-    # "measured" materials: one MeasuredBRDF_C per distinct .bsdf file
-    # (deduped at scene-build time), referenced by Material_C.measured_idx.
+    # "measured" materials: one MeasuredBRDF per distinct .bsdf file
+    # (deduped at scene-build time), referenced by Material.measured_idx.
     # See measured_bsdf.mojo's loader / pbrt_parser.mojo's finalize_scene.
-    var measuredBrdfs:      Pointer[MeasuredBRDF_C, MutUntrackedOrigin]
+    var measuredBrdfs:      Pointer[MeasuredBRDF, MutUntrackedOrigin]
     var measuredBrdfCount:  Int64
 
     # Staged spectral rendering rollout (see project_spectral_rendering memory
@@ -728,7 +728,7 @@ struct HairLobeConstants(TrivialRegisterPassable):
 
 @always_inline
 def _hair_precompute(
-    mat: Material_C,
+    mat: Material,
     curves: Pointer[Curve_C, MutUntrackedOrigin],
     curve_idx: Int,
     v_global: Float32,
@@ -1568,7 +1568,7 @@ def traverse_bvh2_core_defer_curves(
 @always_inline
 @always_inline
 def _shadow_is_null_material(
-    materials: Pointer[Material_C, MutUntrackedOrigin], mat_idx: Int64
+    materials: Pointer[Material, MutUntrackedOrigin], mat_idx: Int64
 ) -> Bool:
     """True if this primitive carries pbrt's "interface" (null) material, which
     has NO BSDF: it exists only to mark a medium boundary and must be invisible
@@ -1582,7 +1582,7 @@ def _shadow_is_null_material(
     `materials` is optional: callers that don't have the array pass nothing and
     get the old material-blind behavior, so this is opt-in per call site rather
     than a signature change rippling through all 17 callers."""
-    if not _is_real_ptr[Material_C](materials):
+    if not _is_real_ptr[Material](materials):
         return False
     if mat_idx < Int64(0):
         return False
@@ -1602,7 +1602,7 @@ def any_hit_bvh2_core(
     n_spheres: Int = 0,
     ignore_sphere_center: Vec3f = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0)),
     ignore_sphere_radius: Float32 = Float32(-1.0),
-    materials: Pointer[Material_C, MutUntrackedOrigin] = Pointer[Material_C, MutUntrackedOrigin].unsafe_dangling(),
+    materials: Pointer[Material, MutUntrackedOrigin] = Pointer[Material, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Bool:
     # Analytic spheres live in their own flat array, not the mesh/curve BVH
     # this function walks, so they need their own (cheap, since n_spheres
