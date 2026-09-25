@@ -198,7 +198,7 @@ def curve_light_tube_area(curve: Curve_C) -> Float32:
     """Approximate lateral (side) surface area of a curve treated as a thin
     tube light: sum over each locally-linear piece of its lateral cylinder
     area (2*pi*avg_radius*piece_length). Used only to normalize NEE/light-
-    sampler PDFs for emissive curves (AreaLight_C.kind==1) against the
+    sampler PDFs for emissive curves (AreaLight.kind==1) against the
     uniform-random-piece sampling used at runtime — see
     sample_area_light_uniform (sppm.mojo) and shading.mojo's curve NEE
     branch, which both pick pieces uniformly rather than area-weighted

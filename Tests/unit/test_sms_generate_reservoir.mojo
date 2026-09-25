@@ -12,7 +12,7 @@ from gonzales.geometry import RGB, Point3f, Vec3f
 from gonzales.materials import Material_C, MatKind, MeasuredBRDF_C
 from gonzales.render_state import GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, PathState_C
 from gonzales.primitives import Ray, PrimId, TriangleMesh, Instance, Sphere
-from gonzales.lights import LightSampler_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C
+from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
 from gonzales.curves import Curve_C
 from gonzales.spectrum import SpectralSample, null_spectral_handle, SampledWavelengths
 from gonzales.bvh import BVH2Node
@@ -58,7 +58,7 @@ def _make_ctx(
     primIds: Pointer[PrimId, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     materials: Pointer[Material_C, MutUntrackedOrigin],
-    area_lights: Pointer[AreaLight_C, MutUntrackedOrigin],
+    area_lights: Pointer[AreaLight, MutUntrackedOrigin],
     area_light_count: Int,
     light_sampler_cdf: Pointer[Float32, MutUntrackedOrigin],
 ) -> ShadeContext:
@@ -76,11 +76,11 @@ def _make_ctx(
         False,
         LightContext(
             area_lights, area_light_count,
-            Pointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-            Pointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-            Pointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+            Pointer[DistantLight, MutUntrackedOrigin].unsafe_dangling(), 0,
+            Pointer[PointLight, MutUntrackedOrigin].unsafe_dangling(), 0,
+            Pointer[InfiniteLight, MutUntrackedOrigin].unsafe_dangling(), 0,
             Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), 0,
-            LightSampler_C(light_sampler_cdf, Int32(area_light_count), Int32(0))),
+            LightSampler(light_sampler_cdf, Int32(area_light_count), Int32(0))),
         Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
@@ -128,8 +128,8 @@ def test_sms_generate_curve_light_returns_empty() raises:
     even attempted."""
     var cdf = unsafe_alloc[Float32](2)
     cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
-    var area_lights = unsafe_alloc[AreaLight_C](1)
-    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0)), Float32(0.000002), Int8(1), Int8(0), Int8(0), Int8(0))
+    var area_lights = unsafe_alloc[AreaLight](1)
+    area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(1), RGB(Float32(200.0)), Float32(0.000002), Int8(1), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx(
         Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
@@ -159,8 +159,8 @@ def test_sms_generate_no_glass_in_the_way_returns_empty() raises:
     primIds[unsafe_offset=0] = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = _make_light_mesh()
-    var area_lights = unsafe_alloc[AreaLight_C](1)
-    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    var area_lights = unsafe_alloc[AreaLight](1)
+    area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(1), RGB(Float32(200.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx(bvh, primIds, meshes,
         Pointer[Material_C, MutUntrackedOrigin].unsafe_dangling(),
         area_lights, 1, cdf)
@@ -193,8 +193,8 @@ def test_sms_generate_real_glass_produces_a_streamed_candidate() raises:
     meshes[unsafe_offset=0] = _make_glass_mesh()
     var materials = unsafe_alloc[Material_C](1)
     materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
-    var area_lights = unsafe_alloc[AreaLight_C](1)
-    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    var area_lights = unsafe_alloc[AreaLight](1)
+    area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx(bvh, primIds, meshes, materials, area_lights, 1, cdf)
 
     var hit_point = Vec3f(0.0, 0.0, 0.0)
@@ -249,7 +249,7 @@ def test_sms_resolve_on_empty_reservoir_is_a_noop() raises:
     cdf[unsafe_offset=0] = Float32(0.0)
     var ctx = _make_ctx(bvh, primIds, meshes,
         Pointer[Material_C, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[AreaLight_C, MutUntrackedOrigin].unsafe_dangling(), 0, cdf)
+        Pointer[AreaLight, MutUntrackedOrigin].unsafe_dangling(), 0, cdf)
 
     var path_arr = unsafe_alloc[PathState_C](1)
     path_arr[unsafe_offset=0] = _make_path()
@@ -258,7 +258,7 @@ def test_sms_resolve_on_empty_reservoir_is_a_noop() raises:
         ctx, Vec3f(0.0, 0.0, 0.0), Vec3f(0.0, 0.0, 1.0), RGB(Float32(0.8)),
         Vec3f(0.0, 0.0, 1.0), Float32(4.0), Vec3f(0.3, -0.2, 4.0),
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
-        AreaLight_C(Int32(0), Int32(1), RGB(Float32(0.0)), Float32(0.0), Int8(0), Int8(0), Int8(0), Int8(0)),
+        AreaLight(Int32(0), Int32(1), RGB(Float32(0.0)), Float32(0.0), Int8(0), Int8(0), Int8(0), Int8(0)),
         Float32(1.0), pcg_gen0)
     var res = gen_result0[1].copy()
     assert_true(res.n_vertices == Int32(0))
@@ -282,8 +282,8 @@ def test_sms_resolve_on_real_glass_adds_positive_contribution() raises:
     meshes[unsafe_offset=0] = _make_glass_mesh()
     var materials = unsafe_alloc[Material_C](1)
     materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
-    var area_lights = unsafe_alloc[AreaLight_C](1)
-    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    var area_lights = unsafe_alloc[AreaLight](1)
+    area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx(bvh, primIds, meshes, materials, area_lights, 1, cdf)
 
     var hit_point = Vec3f(0.0, 0.0, 0.0)
@@ -329,8 +329,8 @@ def test_sms_temporal_step_without_io_still_resolves_like_batch_mode() raises:
     meshes[unsafe_offset=0] = _make_glass_mesh()
     var materials = unsafe_alloc[Material_C](1)
     materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
-    var area_lights = unsafe_alloc[AreaLight_C](1)
-    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    var area_lights = unsafe_alloc[AreaLight](1)
+    area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx(bvh, primIds, meshes, materials, area_lights, 1, cdf)
 
     var hit_point = Vec3f(0.0, 0.0, 0.0)
@@ -369,8 +369,8 @@ def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
     meshes[unsafe_offset=0] = _make_glass_mesh()
     var materials = unsafe_alloc[Material_C](1)
     materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
-    var area_lights = unsafe_alloc[AreaLight_C](1)
-    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    var area_lights = unsafe_alloc[AreaLight](1)
+    area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx(bvh, primIds, meshes, materials, area_lights, 1, cdf)
 
     var hit_point = Vec3f(0.0, 0.0, 0.0)
@@ -387,7 +387,7 @@ def test_sms_temporal_step_second_frame_accumulates_confidence() raises:
     var res_empty = sms_generate_reservoir(
         ctx, hit_point, normal, alb, shadow_dir, shadow_dist, light_point,
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
-        AreaLight_C(Int32(0), Int32(1), RGB(Float32(0.0)), Float32(0.0), Int8(0), Int8(0), Int8(0), Int8(0)),
+        AreaLight(Int32(0), Int32(1), RGB(Float32(0.0)), Float32(0.0), Int8(0), Int8(0), Int8(0), Int8(0)),
         Float32(1.0), pcg_seed)
     buf_a[unsafe_offset=0] = res_empty[1].copy()
     buf_b[unsafe_offset=0] = res_empty[1].copy()
@@ -457,8 +457,8 @@ def test_shade_diffuse_nee_sms_wiring_accumulates_confidence_across_frames() rai
     meshes[unsafe_offset=1] = _make_glass_mesh()
     var materials = unsafe_alloc[Material_C](1)
     materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
-    var area_lights = unsafe_alloc[AreaLight_C](1)
-    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    var area_lights = unsafe_alloc[AreaLight](1)
+    area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx(bvh, primIds, meshes, materials, area_lights, 1, cdf)
 
     var hit_point = Vec3f(0.0, 0.0, 0.0)
@@ -474,7 +474,7 @@ def test_shade_diffuse_nee_sms_wiring_accumulates_confidence_across_frames() rai
     var res_empty = sms_generate_reservoir(
         ctx, hit_point, normal, alb, shadow_dir, shadow_dist, Vec3f(0.3, -0.2, 4.0),
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
-        AreaLight_C(Int32(0), Int32(1), RGB(Float32(0.0)), Float32(0.0), Int8(0), Int8(0), Int8(0), Int8(0)),
+        AreaLight(Int32(0), Int32(1), RGB(Float32(0.0)), Float32(0.0), Int8(0), Int8(0), Int8(0), Int8(0)),
         Float32(1.0), pcg_seed)
     buf_a[unsafe_offset=0] = res_empty[1].copy()
     buf_b[unsafe_offset=0] = res_empty[1].copy()
@@ -540,8 +540,8 @@ def test_shade_diffuse_nee_sms_io_inactive_at_bounce_1_uses_plain_mnee() raises:
     meshes[unsafe_offset=1] = _make_glass_mesh()
     var materials = unsafe_alloc[Material_C](1)
     materials[unsafe_offset=0] = _make_dielectric(Float32(1.5))
-    var area_lights = unsafe_alloc[AreaLight_C](1)
-    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    var area_lights = unsafe_alloc[AreaLight](1)
+    area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx(bvh, primIds, meshes, materials, area_lights, 1, cdf)
 
     var hit_point = Vec3f(0.0, 0.0, 0.0)
@@ -557,7 +557,7 @@ def test_shade_diffuse_nee_sms_io_inactive_at_bounce_1_uses_plain_mnee() raises:
     var res_empty = sms_generate_reservoir(
         ctx, hit_point, normal, alb, shadow_dir, shadow_dist, Vec3f(0.3, -0.2, 4.0),
         Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0),
-        AreaLight_C(Int32(0), Int32(1), RGB(Float32(0.0)), Float32(0.0), Int8(0), Int8(0), Int8(0), Int8(0)),
+        AreaLight(Int32(0), Int32(1), RGB(Float32(0.0)), Float32(0.0), Int8(0), Int8(0), Int8(0), Int8(0)),
         Float32(1.0), pcg_seed)
     # reservoir_update always increments state.m by 1 whether the candidate
     # was accepted or not (Le=0 here forces rejection, but m still moves to

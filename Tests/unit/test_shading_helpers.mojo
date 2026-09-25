@@ -15,7 +15,7 @@ from gonzales.geometry import RGB, Point3f, Vec3f, dot, cross
 from gonzales.materials import Material_C, MatKind, MeasuredBRDF_C
 from gonzales.render_state import GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, PathState_C
 from gonzales.primitives import Ray, PrimId, Intersection, TriangleMesh, Instance, Sphere
-from gonzales.lights import LightSampler_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C
+from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
 from gonzales.curves import Curve_C
 from gonzales.spectrum import SpectralSample, SampledWavelengths, null_spectral_handle
 from gonzales.bvh import BVH2Node
@@ -64,12 +64,12 @@ def _null_light_context() -> LightContext:
     touch ctx.lights at all (NEE light-sampling lives in the shade_* callers,
     not in these lower-level helpers)."""
     return LightContext(
-        Pointer[AreaLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[AreaLight, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[DistantLight, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[PointLight, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[InfiniteLight, MutUntrackedOrigin].unsafe_dangling(), 0,
         Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), 0,
-        LightSampler_C(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
+        LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
     )
 
 def _make_ctx(
@@ -278,12 +278,12 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
     spheres[unsafe_offset=0] = Sphere(Point3f(0.0, 0.0, -1.0), Float32(1.0), Int32(-1),
         Int8(0), Int8(0), Int8(0), Int8(0), RGB(Float32(0.0)))
     var lights = LightContext(
-        Pointer[AreaLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[AreaLight, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[DistantLight, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[PointLight, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[InfiniteLight, MutUntrackedOrigin].unsafe_dangling(), 0,
         spheres, 1,
-        LightSampler_C(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
+        LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
     )
     var ctx = ShadeContext(
         0, Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),

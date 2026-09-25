@@ -11,7 +11,7 @@ from gonzales.geometry import RGB, Point3f, Vec3f, dot, cross, reflect, PI
 from gonzales.materials import fr_dielectric
 from gonzales.primitives import PrimId, Intersection, TriangleMesh
 from gonzales.media import Medium_C
-from gonzales.lights import AreaLight_C
+from gonzales.lights import AreaLight
 from gonzales.sppm import (
     _hash_cell, _cosine_hemisphere_sample, sample_homogeneous_free_flight,
     sample_area_light_uniform, _geom_normal, _shading_normal_at, _dielectric_bounce,
@@ -285,8 +285,8 @@ def test_sample_area_light_uniform_point_is_a_convex_combination_of_vertices() r
     var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = mesh
 
-    var al = AreaLight_C(Int32(0), Int32(1), RGB(Float32(1.0)), Float32(3.0), Int8(0), Int8(0), Int8(0), Int8(0))
-    var lights = unsafe_alloc[AreaLight_C](1)
+    var al = AreaLight(Int32(0), Int32(1), RGB(Float32(1.0)), Float32(3.0), Int8(0), Int8(0), Int8(0), Int8(0))
+    var lights = unsafe_alloc[AreaLight](1)
     lights[unsafe_offset=0] = al
 
     var seed = UInt64(4242)
@@ -318,8 +318,8 @@ def test_sample_area_light_uniform_normal_matches_geometric_normal_when_no_shadi
     var mesh = _make_triangle_mesh(p0, p1, p2)
     var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = mesh
-    var al = AreaLight_C(Int32(0), Int32(1), RGB(Float32(1.0)), Float32(0.5), Int8(0), Int8(0), Int8(0), Int8(0))
-    var lights = unsafe_alloc[AreaLight_C](1)
+    var al = AreaLight(Int32(0), Int32(1), RGB(Float32(1.0)), Float32(0.5), Int8(0), Int8(0), Int8(0), Int8(0))
+    var lights = unsafe_alloc[AreaLight](1)
     lights[unsafe_offset=0] = al
 
     var pcg = PCG32(UInt64(88), UInt64(2))

@@ -5,7 +5,7 @@ from gonzales.geometry import Point3f, Vec3f, RGB, dot, cross
 from gonzales.materials import Material_C, MatKind
 from gonzales.render_state import PathState_C
 from gonzales.primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere
-from gonzales.lights import AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, LightSampler_C
+from gonzales.lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
 from gonzales.curves import Curve_C, curve_bspline_point, curve_light_tube_area, _curve_perp_axis
 from gonzales.spectrum import SpectralSample, SampledWavelengths
 from gonzales.bvh import BVH2Node
@@ -73,14 +73,14 @@ def test_emissive_curve_hit_adds_emission_and_retires_path() raises:
         Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Curve_C, MutUntrackedOrigin].unsafe_dangling(),
         materials,
-        Pointer[AreaLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[AreaLight, MutUntrackedOrigin].unsafe_dangling(), 0,
         Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         0,
-        Pointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[DistantLight, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[PointLight, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[InfiniteLight, MutUntrackedOrigin].unsafe_dangling(), 0,
         Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), 0,
-        LightSampler_C(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
+        LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0)),
         Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(),
         null_guide(),
     )
@@ -109,7 +109,7 @@ def test_nonemissive_curve_hit_does_not_self_terminate_via_the_arealight_path() 
     assert_true(materials[unsafe_offset=0].type != MatKind.area_light)
 
 # ── Curve lights are now explicitly NEE-sampled too (task #60-65) ───────────
-# Once an emissive curve has its own AreaLight_C entry (kind==1) in the
+# Once an emissive curve has its own AreaLight entry (kind==1) in the
 # light-sampler CDF, a camera/bounce ray that hits it directly must MIS-
 # weight against that light's own selection pdf instead of always crediting
 # full emission (the old self-emission-only behaviour exercised above) --
@@ -147,12 +147,12 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
     )
 
     var total_area = curve_light_tube_area(curve)
-    var area_lights = unsafe_alloc[AreaLight_C](1)
-    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(0), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), total_area, Int8(1), Int8(0), Int8(0), Int8(0))
+    var area_lights = unsafe_alloc[AreaLight](1)
+    area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(0), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), total_area, Int8(1), Int8(0), Int8(0), Int8(0))
 
     var cdf = unsafe_alloc[Float32](2)
     cdf[unsafe_offset=0] = Float32(0.0); cdf[unsafe_offset=1] = Float32(1.0)
-    var light_sampler = LightSampler_C(cdf, Int32(1), Int32(0))
+    var light_sampler = LightSampler(cdf, Int32(1), Int32(0))
 
     var t_hit: Float32 = 5.0
     var pdf_bsdf: Float32 = 0.4
@@ -186,9 +186,9 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
         area_lights, 1,
         Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         0,
-        Pointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-        Pointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[DistantLight, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[PointLight, MutUntrackedOrigin].unsafe_dangling(), 0,
+        Pointer[InfiniteLight, MutUntrackedOrigin].unsafe_dangling(), 0,
         Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), 0,
         light_sampler,
         Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(),

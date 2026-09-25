@@ -11,7 +11,7 @@ from .materials import Material_C, MatKind, fr_dielectric, MeasuredBRDF_C
 from .render_state import PathState_C, TileResult_C, GpuTexture_C, NormalSlopeMap_C
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, intersect_triangle, alpha_killed, Instance, sphere_outward_normal
 from .media import Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C
-from .lights import AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, LightSampler_C
+from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
 from .curves import Curve_C, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis
 from .rng import PCG32
 from .spectrum import SpectralHandle
@@ -115,15 +115,15 @@ struct SceneDescriptor2_C(TrivialRegisterPassable, DevicePassable):
     var meshCount: Int64
     var materials: Pointer[Material_C, MutUntrackedOrigin]
     var materialCount: Int64
-    var areaLights: Pointer[AreaLight_C, MutUntrackedOrigin]
+    var areaLights: Pointer[AreaLight, MutUntrackedOrigin]
     var areaLightCount: Int64
     var textures: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin]
     var textureCount: Int64
-    var distantLights: Pointer[DistantLight_C, MutUntrackedOrigin]
+    var distantLights: Pointer[DistantLight, MutUntrackedOrigin]
     var distantLightCount: Int64
-    var pointLights: Pointer[PointLight_C, MutUntrackedOrigin]
+    var pointLights: Pointer[PointLight, MutUntrackedOrigin]
     var pointLightCount: Int64
-    var infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin]
+    var infiniteLights: Pointer[InfiniteLight, MutUntrackedOrigin]
     var infiniteLightCount: Int64
     var spheres: Pointer[Sphere, MutUntrackedOrigin]
     var sphereCount: Int64
@@ -137,7 +137,7 @@ struct SceneDescriptor2_C(TrivialRegisterPassable, DevicePassable):
     var gridCount: Int64
     var nvdbGrids: Pointer[NvdbGrid_C, MutUntrackedOrigin]
     var nvdbGridCount: Int64
-    var lightSampler: LightSampler_C
+    var lightSampler: LightSampler
 
     # Object instancing: one private BVH2 ("BLAS") per template, each a
     # separate allocation reachable via Instance.blasIdx, plus TLAS instance
@@ -308,7 +308,7 @@ def _lower_bound_bvh(arr: Pointer[Float32, MutUntrackedOrigin], lo: Int, hi: Int
 
 @always_inline
 def _sample_infinite_light_textured(
-    ilight: InfiniteLight_C,
+    ilight: InfiniteLight,
     u: Point2f,
 ) -> Tuple[Vec3f, RGB, Float32]:
     """CDF-importance-sample a TEXTURED environment light, returning
@@ -359,7 +359,7 @@ def _sample_infinite_light_textured(
 
 @always_inline
 def _sample_infinite_light_dir(
-    ilight: InfiniteLight_C,
+    ilight: InfiniteLight,
     u: Point2f,
 ) -> Tuple[Vec3f, RGB, Float32]:
     """Sample an emission direction from an environment (infinite) light,
@@ -403,7 +403,7 @@ def _invalid_light_sample() -> LightSample:
     return LightSample(Vec3f(0, 0, 0), RGB(0.0), Float32(1.0), Float32(0.0), True, False)
 
 @always_inline
-def _sample_distant_light_nee(dl: DistantLight_C) -> LightSample:
+def _sample_distant_light_nee(dl: DistantLight) -> LightSample:
     """Distant (directional) light: delta position AND direction, same (wi,
     Li) everywhere in the scene. pdf=1 by convention (is_delta=True tells
     the caller to skip MIS entirely, so the value of pdf itself never
@@ -414,7 +414,7 @@ def _sample_distant_light_nee(dl: DistantLight_C) -> LightSample:
 
 @always_inline
 def _sample_point_light_nee(
-    pl: PointLight_C,
+    pl: PointLight,
     hit_point: Vec3f,
 ) -> LightSample:
     """Point light: delta position, 1/dist² falloff folded into Li so
@@ -501,7 +501,7 @@ def _sample_sphere_light_nee(
     return LightSample(wi, sph.emission, pdf_light, max(d_surf, Float32(0.0)), False, True)
 
 @always_inline
-def _sample_infinite_light_nee(ilight: InfiniteLight_C, u: Point2f) -> LightSample:
+def _sample_infinite_light_nee(ilight: InfiniteLight, u: Point2f) -> LightSample:
     """Thin LightSample-shaped wrapper over the existing shared
     _sample_infinite_light_dir, so infinite lights present the same
     interface as the other 3 non-area light types above."""
@@ -546,7 +546,7 @@ def _equal_area_sphere_to_square(dx: Float32, dy: Float32, dz: Float32) -> SIMD[
     return SIMD[DType.float32, 2](u, v)
 
 @always_inline
-def _eval_infinite_light_and_pdf(ilight: InfiniteLight_C, dir_world: Vec3f) -> Tuple[RGB, Float32]:
+def _eval_infinite_light_and_pdf(ilight: InfiniteLight, dir_world: Vec3f) -> Tuple[RGB, Float32]:
     """Radiance AND solid-angle sampling pdf an infinite (environment) light
     contributes along a ray travelling in `dir_world` — used for the
     camera-ray miss case (bdpt.mojo/sppm.mojo don't otherwise add any

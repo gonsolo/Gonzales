@@ -2,7 +2,7 @@ from .bvh import BVH2Node, SceneDescriptor2_C
 from .curves import Curve_C
 from .geometry import _is_real_ptr
 from .guide import null_guide
-from .lights import AreaLight_C, DistantLight_C, InfiniteLight_C, LightSampler_C, PointLight_C
+from .lights import AreaLight, DistantLight, InfiniteLight, LightSampler, PointLight
 from .materials import MatKind, Material_C, MeasuredBRDF_C
 from .media import MediumInterface_C
 from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh
@@ -410,11 +410,11 @@ def shade_enqueue_shadow_gpu(
     blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin],
     instances: Pointer[Instance, MutUntrackedOrigin],
     materials: Pointer[Material_C, MutUntrackedOrigin],
-    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
+    areaLights: Pointer[AreaLight, MutUntrackedOrigin],
     areaLightCount: Int,
     textures: Pointer[GpuTexture_C, MutUntrackedOrigin],
     n_textures: Int,
-    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
+    infiniteLights: Pointer[InfiniteLight, MutUntrackedOrigin],
     n_infinite_lights: Int,
     spheres: Pointer[Sphere, MutUntrackedOrigin],
     n_spheres: Int,
@@ -436,7 +436,7 @@ def shade_enqueue_shadow_gpu(
         return
     var inter = intersections[unsafe_offset=tid]
     # Do NOT early-exit on miss — shade_nee_core adds env-light contribution there.
-    var ls_shadow = LightSampler_C(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0))
+    var ls_shadow = LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0))
     var ctx_shadow = ShadeContext(
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin](),
@@ -450,8 +450,8 @@ def shade_enqueue_shadow_gpu(
         gi_pending=Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(), gi_io=gi_reservoir_io_null(),
         lights=LightContext(
             area_lights=areaLights, area_light_count=areaLightCount,
-            distant_lights=Pointer[DistantLight_C, MutUntrackedOrigin](), distant_count=0,
-            point_lights=Pointer[PointLight_C, MutUntrackedOrigin](), point_count=0,
+            distant_lights=Pointer[DistantLight, MutUntrackedOrigin](), distant_count=0,
+            point_lights=Pointer[PointLight, MutUntrackedOrigin](), point_count=0,
             infinite_lights=infiniteLights, infinite_count=n_infinite_lights,
             spheres=spheres, sphere_count=n_spheres, light_sampler=ls_shadow))
     shade_nee_core[True, True](path_ptr, inter, ctx_shadow)

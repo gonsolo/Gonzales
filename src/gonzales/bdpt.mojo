@@ -20,7 +20,7 @@ from .materials import Material_C, MatKind, LobeKind, PhotonKind, MeasuredBRDF_C
 from .render_state import GpuTexture_C
 from .primitives import Ray, Intersection, TriangleMesh, Sphere, PrimId, Instance, sphere_outward_normal
 from .media import Medium_C, MediumInterface_C, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, SSS_WALK_ROUNDS, Grid_C, NvdbGrid_C, spectral_free_flight_weight
-from .lights import area_light_pick_triangle, AreaLight_C, DistantLight_C, InfiniteLight_C, PointLight_C
+from .lights import area_light_pick_triangle, AreaLight, DistantLight, InfiniteLight, PointLight
 from .curves import Curve_C
 from .bssrdf import dipole_max_radius, dipole_rd, dipole_mis_sigma_tr, dipole_sample_radius, bssrdf_probe_offset, bssrdf_exit_pdf_area, bssrdf_exit_ft, fdr_moment
 from .vcm_mis import mis_policy_power, vcm_arrival_carries, vcm_scatter_carries, bssrdf_hop_carries, bssrdf_exit_scatter_carries, vcm_env_nee_weight, vcm_env_escape_weight, MisPolicy, nee_mis_weight
@@ -2559,14 +2559,14 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
         if mat.type == MatKind.area_light:
             # Direct hit on a triangle/curve area light — same MIS-against-
             # last_bsdf_pdf treatment as the sphere case above. id1 is the
-            # AreaLight_C index directly for a type==3 (area-light-triangle)
+            # AreaLight index directly for a type==3 (area-light-triangle)
             # hit, per pbrt_parser.mojo's own PrimId encoding.
             # Which light, what it emits, and which side of it is lit all come
             # from the SHARED resolvers (shading.mojo's area_light_hit_cos /
             # curve_light_hit), not from _geom_normal and areaLights[id1]. See
             # their header: the raw winding normal disagreed with the side the
             # light sampler emits from, and for a curve id1 is not an
-            # AreaLight_C index at all.
+            # AreaLight index at all.
             var al_emission: RGB
             var al_area = Float32(0)
             var cos_l_hit: Float32

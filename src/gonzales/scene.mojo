@@ -4,7 +4,7 @@ from .geometry import RGB, Point3f, Vec3f
 from .materials import Material_C
 from .primitives import TriangleMesh, PrimId, Sphere
 from .media import Medium_C, MediumInterface_C
-from .lights import AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C
+from .lights import AreaLight, DistantLight, PointLight, InfiniteLight
 from .bvh import BVH2Node, SceneDescriptor2_C
 
 # ── Scene IR ──────────────────────────────────────────────────────────────────
@@ -78,10 +78,10 @@ struct Scene(Movable):
     var mesh_uvs:    List[List[Float32]]     # UV coords (2 floats per vertex)
 
     # Lights
-    var area_lights:     List[AreaLight_C]
-    var distant_lights:  List[DistantLight_C]
-    var point_lights:    List[PointLight_C]
-    var infinite_lights: List[InfiniteLight_C]
+    var area_lights:     List[AreaLight]
+    var distant_lights:  List[DistantLight]
+    var point_lights:    List[PointLight]
+    var infinite_lights: List[InfiniteLight]
     var spheres:         List[Sphere]
 
     # Media
@@ -103,10 +103,10 @@ struct Scene(Movable):
         mesh_vis: List[List[Int64]],
         mesh_fis: List[List[Int64]],
         mesh_uvs: List[List[Float32]],
-        area_lights: List[AreaLight_C],
-        distant_lights: List[DistantLight_C],
-        point_lights: List[PointLight_C],
-        infinite_lights: List[InfiniteLight_C],
+        area_lights: List[AreaLight],
+        distant_lights: List[DistantLight],
+        point_lights: List[PointLight],
+        infinite_lights: List[InfiniteLight],
         spheres: List[Sphere],
         mediums: List[Medium_C],
         medium_ifaces: List[MediumInterface_C],
@@ -133,7 +133,7 @@ struct Scene(Movable):
         self.tex_filenames = tex_filenames^
 
     fn __del__(owned self):
-        # InfiniteLight_C has OIIO-managed pixel data that needs explicit free.
+        # InfiniteLight has OIIO-managed pixel data that needs explicit free.
         for i in range(len(self.infinite_lights)):
             var il = self.infinite_lights[i]
             if Int(il.cdf_ptr) != 0:

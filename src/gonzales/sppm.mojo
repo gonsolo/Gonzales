@@ -16,7 +16,7 @@ from .materials import Material_C, MatKind, LobeKind, PhotonKind, fr_dielectric,
 from .render_state import GpuTexture_C
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, sphere_outward_normal
 from .media import Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, medium_transmittance_ratio_spectral, spectral_free_flight_weight
-from .lights import area_light_pick_triangle, AreaLight_C, DistantLight_C, InfiniteLight_C, PointLight_C
+from .lights import area_light_pick_triangle, AreaLight, DistantLight, InfiniteLight, PointLight
 from .curves import Curve_C, curve_piece_endpoints, _curve_perp_axis
 from .bssrdf import dipole_rd, dipole_max_radius
 from .bvh import (
@@ -440,13 +440,13 @@ def _dielectric_bounce(
 
 @fieldwise_init
 struct AreaLightSample(TrivialRegisterPassable):
-    var light:  AreaLight_C
+    var light:  AreaLight
     var point:  Vec3f
     var normal: Vec3f
 
 @always_inline
 def sample_area_light_uniform(
-    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
+    areaLights: Pointer[AreaLight, MutUntrackedOrigin],
     meshes:     Pointer[TriangleMesh, MutUntrackedOrigin],
     n_lights:   Int,
     mut pcg:    PCG32,
@@ -750,7 +750,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         if mat.type == MatKind.area_light:
             # Direct hit on a triangle/curve area light — same treatment as
             # the sphere case above (no MIS needed, same mutual-exclusivity
-            # reasoning). id1 is the AreaLight_C index directly for a
+            # reasoning). id1 is the AreaLight index directly for a
             # type==3 hit, per pbrt_parser.mojo's own PrimId encoding.
             # Facing check: a one-sided area light emits nothing from its
             # back face (spheres above need no such check — always hit from
@@ -763,7 +763,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # such an emitter as a back face and rendered it black --
             # sss-backlit-slab's emitter fills most of the frame and SPPM's
             # median there was 0. For a curve, id1 is the curve index, not an
-            # AreaLight_C index, and the curve's emission lives in its own
+            # AreaLight index, and the curve's emission lives in its own
             # material slot; a closed tube is always hit on its outside.
             if inter.primId.type == Int8(5):
                 vp.env += vp.beta * mat.emission

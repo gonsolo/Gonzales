@@ -1,7 +1,7 @@
 from .bvh import BVH2Node, SceneDescriptor2_C
 from .curves import CURVE_DEFER_K, Curve_C
 from .geometry import _is_real_ptr
-from .lights import AreaLight_C, DistantLight_C, InfiniteLight_C, PointLight_C, LightSampler_C
+from .lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSampler
 from .materials import Material_C, MeasuredBRDF_C
 from .media import Grid_C, MediumInterface_C, Medium_C, NvdbGrid_C
 from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh
@@ -556,40 +556,40 @@ struct TextureBuffers(Movable):
 
 @fieldwise_init
 struct LightBuffers(Movable):
-    var area_lights_buf: DeviceBuffer[DType.uint8]  # n_lights × sizeof(AreaLight_C)
+    var area_lights_buf: DeviceBuffer[DType.uint8]  # n_lights × sizeof(AreaLight)
     var n_area_lights: Int
     var area_light_cdf_bufs: List[DeviceBuffer[DType.uint8]]   # each mesh light's tri_cdf
-    var distant_lights_buf: DeviceBuffer[DType.uint8]  # n_distant × sizeof(DistantLight_C) = 32
+    var distant_lights_buf: DeviceBuffer[DType.uint8]  # n_distant × sizeof(DistantLight) = 32
     var n_distant_lights: Int
-    var point_lights_buf: DeviceBuffer[DType.uint8]    # n_point × sizeof(PointLight_C) = 16
+    var point_lights_buf: DeviceBuffer[DType.uint8]    # n_point × sizeof(PointLight) = 16
     var n_point_lights: Int
     var light_sampler_buf: DeviceBuffer[DType.uint8]   # (n_area+1) × sizeof(Float32) CDF
     var n_light_sampler: Int                           # n_area lights (CDF has n+1 entries)
-    var infinite_lights_buf: DeviceBuffer[DType.uint8]  # n_infinite × sizeof(InfiniteLight_C) = 48
+    var infinite_lights_buf: DeviceBuffer[DType.uint8]  # n_infinite × sizeof(InfiniteLight) = 48
     var il_pixels_bufs: List[DeviceBuffer[DType.uint8]] # per-light HDR pixel data on GPU
     var il_cdf_bufs: List[DeviceBuffer[DType.uint8]]    # per-light 2D CDF on GPU
     var il_w2l_bufs: List[DeviceBuffer[DType.uint8]]    # per-light world_to_light matrix on GPU
     var n_infinite_lights: Int
 
     @always_inline
-    def area_lights_ptr(mut self) -> Pointer[AreaLight_C, MutUntrackedOrigin]:
-        return typed_ptr[AreaLight_C](self.area_lights_buf)
+    def area_lights_ptr(mut self) -> Pointer[AreaLight, MutUntrackedOrigin]:
+        return typed_ptr[AreaLight](self.area_lights_buf)
 
     @always_inline
-    def distant_lights_ptr(mut self) -> Pointer[DistantLight_C, MutUntrackedOrigin]:
-        return typed_ptr[DistantLight_C](self.distant_lights_buf)
+    def distant_lights_ptr(mut self) -> Pointer[DistantLight, MutUntrackedOrigin]:
+        return typed_ptr[DistantLight](self.distant_lights_buf)
 
     @always_inline
-    def point_lights_ptr(mut self) -> Pointer[PointLight_C, MutUntrackedOrigin]:
-        return typed_ptr[PointLight_C](self.point_lights_buf)
+    def point_lights_ptr(mut self) -> Pointer[PointLight, MutUntrackedOrigin]:
+        return typed_ptr[PointLight](self.point_lights_buf)
 
     @always_inline
     def light_sampler_ptr(mut self) -> Pointer[Float32, MutUntrackedOrigin]:
         return typed_ptr[Float32](self.light_sampler_buf)
 
     @always_inline
-    def infinite_lights_ptr(mut self) -> Pointer[InfiniteLight_C, MutUntrackedOrigin]:
-        return typed_ptr[InfiniteLight_C](self.infinite_lights_buf)
+    def infinite_lights_ptr(mut self) -> Pointer[InfiniteLight, MutUntrackedOrigin]:
+        return typed_ptr[InfiniteLight](self.infinite_lights_buf)
 
     @staticmethod
     def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo) raises -> Self:
@@ -597,7 +597,7 @@ struct LightBuffers(Movable):
         # lights, so each mesh light's CDF goes up on its own and the
         # device copy of the struct points at that.
         var al_cdf_bufs = List[DeviceBuffer[DType.uint8]]()
-        var al_host = unsafe_alloc[AreaLight_C](max(Int(s.area_light_count), 1))
+        var al_host = unsafe_alloc[AreaLight](max(Int(s.area_light_count), 1))
         for ali in range(Int(s.area_light_count)):
             var al_i = s.area_lights[unsafe_offset=ali]
             if al_i.kind == Int8(0) and _is_real_ptr(al_i.tri_cdf) and al_i.n_tris > Int32(0):
@@ -605,14 +605,14 @@ struct LightBuffers(Movable):
             else:
                 al_i.tri_cdf = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
             al_host[unsafe_offset=ali] = al_i
-        var al_buf = _gpu_upload_array[AreaLight_C](ctx, al_host, Int(s.area_light_count))
+        var al_buf = _gpu_upload_array[AreaLight](ctx, al_host, Int(s.area_light_count))
         ctx.synchronize()   # al_host is freed next
         al_host.unsafe_free()
         # Upload distant (directional) lights
-        var dl_buf = _gpu_upload_array[DistantLight_C](ctx, s.distant_lights, Int(s.distant_count))
+        var dl_buf = _gpu_upload_array[DistantLight](ctx, s.distant_lights, Int(s.distant_count))
 
         # Upload point lights
-        var pl_buf = _gpu_upload_array[PointLight_C](ctx, s.point_lights, Int(s.point_count))
+        var pl_buf = _gpu_upload_array[PointLight](ctx, s.point_lights, Int(s.point_count))
 
         # Upload light sampler CDF (n+1 Float32 entries), in a buffer of at
         # least 2 entries: pad a host copy, since enqueue_copy copies the whole
@@ -631,7 +631,7 @@ struct LightBuffers(Movable):
         var il_pixels_bufs = List[DeviceBuffer[DType.uint8]]()
         var il_cdf_bufs    = List[DeviceBuffer[DType.uint8]]()
         var il_w2l_bufs    = List[DeviceBuffer[DType.uint8]]()
-        var il_patched = unsafe_alloc[InfiniteLight_C](max(il_count, 1))
+        var il_patched = unsafe_alloc[InfiniteLight](max(il_count, 1))
         for ii in range(il_count):
             var il = s.infinite_lights[unsafe_offset=ii]
             # world_to_light matrix (16 floats), then pixels + CDF when textured.
@@ -642,7 +642,7 @@ struct LightBuffers(Movable):
                 il.pixels_ptr = _gpu_upload_owned[Float32](ctx, il_pixels_bufs, il.pixels_ptr, iw * ih * 3)
                 il.cdf_ptr = _gpu_upload_owned[Float32](ctx, il_cdf_bufs, il.cdf_ptr, (ih + 1) + ih * (iw + 1))
             il_patched[unsafe_offset=ii] = il
-        var il_buf = _gpu_upload_array[InfiniteLight_C](ctx, il_patched, il_count)
+        var il_buf = _gpu_upload_array[InfiniteLight](ctx, il_patched, il_count)
         ctx.synchronize()   # il_patched is freed next
         il_patched.unsafe_free()
         print("GPU: " + String(il_count) + " infinite light(s) uploaded")
@@ -963,7 +963,7 @@ struct GpuSceneHandle(Movable):
             mediumInterfaces=typed_ptr[MediumInterface_C](self.media.medium_ifaces_buf), mediumIfaceCount=Int64(self.media.n_medium_ifaces),
             grids=typed_ptr[Grid_C](self.media.grids_buf), gridCount=Int64(self.media.n_grids),
             nvdbGrids=typed_ptr[NvdbGrid_C](self.media.nvdb_grids_buf), nvdbGridCount=Int64(self.media.n_nvdb_grids),
-            lightSampler=LightSampler_C(cdf=self.lights.light_sampler_ptr(), n=Int32(self.lights.n_light_sampler), _pad=Int32(0)),
+            lightSampler=LightSampler(cdf=self.lights.light_sampler_ptr(), n=Int32(self.lights.n_light_sampler), _pad=Int32(0)),
             blasNodesArr=self.blas.nodes_arr(), blasPrimIdsArr=self.blas.primids_arr(), blasCount=Int64(self.blas.n_blas),
             instances=typed_ptr[Instance](self.instances_buf), instanceCount=Int64(self.n_instances),
             measuredBrdfs=typed_ptr[MeasuredBRDF_C](self.measured.brdfs_buf), measuredBrdfCount=Int64(self.measured.n_brdfs),

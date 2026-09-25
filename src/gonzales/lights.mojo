@@ -1,6 +1,6 @@
 """Lights, split out of geometry.mojo (the per-cluster module split; see
-project_geometry_module_split memory). AreaLight_C, DistantLight_C/
-PointLight_C/InfiniteLight_C and LightSampler_C were three physically
+project_geometry_module_split memory). AreaLight, DistantLight/
+PointLight/InfiniteLight and LightSampler were three physically
 separate ranges in geometry.mojo (the last two sitting inside what had grown
 into the media section, not their own) -- each depends only on the core
 (Point3f/Vec3f/RGB/_is_real_ptr), confirmed by scanning each block with
@@ -11,7 +11,7 @@ from .geometry import Point3f, Vec3f, RGB, _is_real_ptr
 # ── Lights ────────────────────────────────────────────────────────────────────
 # See: docs/06_lights_and_materials.md
 
-struct AreaLight_C(TrivialRegisterPassable):
+struct AreaLight(TrivialRegisterPassable):
     """A sampleable area light. kind==0: a triangle mesh (meshIdx indexes
     TriangleMesh, n_tris triangles, total_area = mesh surface area).
     kind==1: a native curve (meshIdx reused as the curve's index into the
@@ -50,7 +50,7 @@ struct AreaLight_C(TrivialRegisterPassable):
 
 
 @always_inline
-def area_light_pick_triangle(al: AreaLight_C, u: Float32) -> Int:
+def area_light_pick_triangle(al: AreaLight, u: Float32) -> Int:
     """Triangle index of mesh light `al` for a uniform u in [0,1), picked in
     proportion to triangle area (binary search of al.tri_cdf).
 
@@ -76,7 +76,7 @@ def area_light_pick_triangle(al: AreaLight_C, u: Float32) -> Int:
 
 
 @fieldwise_init
-struct DistantLight_C(TrivialRegisterPassable):
+struct DistantLight(TrivialRegisterPassable):
     """A directional (infinite-distance) light.
     `direction` points FROM the light TOWARD the scene (world space).
     """
@@ -86,7 +86,7 @@ struct DistantLight_C(TrivialRegisterPassable):
     var _pad2: Float32
 
 @fieldwise_init
-struct PointLight_C(TrivialRegisterPassable):
+struct PointLight(TrivialRegisterPassable):
     """An isotropic point light at a world-space position."""
     var position: Point3f
     var _pad: Float32
@@ -94,7 +94,7 @@ struct PointLight_C(TrivialRegisterPassable):
     var _pad2: Float32
 
 @fieldwise_init
-struct InfiniteLight_C(TrivialRegisterPassable):
+struct InfiniteLight(TrivialRegisterPassable):
     """An environment map (lat-long HDRI), importance-sampled via 2D CDF.
     See: docs/06_lights_and_materials.md — Infinite Area Lights.
     """
@@ -108,7 +108,7 @@ struct InfiniteLight_C(TrivialRegisterPassable):
 
 
 @fieldwise_init
-struct LightSampler_C(TrivialRegisterPassable):
+struct LightSampler(TrivialRegisterPassable):
     """Power-weighted CDF over area lights.
     cdf[0]=0, cdf[n]=1; pdf[i] = cdf[i+1] - cdf[i] = power_i / total_power.
     Built at parse time; on GPU the cdf pointer is patched to device memory.
@@ -118,7 +118,7 @@ struct LightSampler_C(TrivialRegisterPassable):
     var _pad: Int32
 
 @always_inline
-def light_sampler_sample(ls: LightSampler_C, u: Float32) -> Tuple[Int, Float32]:
+def light_sampler_sample(ls: LightSampler, u: Float32) -> Tuple[Int, Float32]:
     """Binary-search the CDF. Returns (light_index, selection_pdf)."""
     var lo = 0
     var hi = Int(ls.n) - 1
@@ -132,7 +132,7 @@ def light_sampler_sample(ls: LightSampler_C, u: Float32) -> Tuple[Int, Float32]:
     return (lo, max(pdf, Float32(1e-6)))
 
 @always_inline
-def light_sampler_pdf(ls: LightSampler_C, light_idx: Int32) -> Float32:
+def light_sampler_pdf(ls: LightSampler, light_idx: Int32) -> Float32:
     """Selection pdf for a KNOWN light index -- the inverse of
     light_sampler_sample's (index, pdf) draw, needed to re-evaluate a
     specific light's pdf without redrawing it (e.g. ReSTIR DI's MIS weight

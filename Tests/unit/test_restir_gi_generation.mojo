@@ -13,7 +13,7 @@ from gonzales.geometry import RGB, Point3f, Vec3f
 from gonzales.materials import Material_C, MeasuredBRDF_C
 from gonzales.render_state import GpuTexture_C, NormalSlopeMap_C, ShadowTask_C, PathState_C
 from gonzales.primitives import Ray, PrimId, TriangleMesh, Instance, Sphere
-from gonzales.lights import LightSampler_C, AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C
+from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
 from gonzales.curves import Curve_C
 from gonzales.spectrum import SpectralSample, null_spectral_handle, SampledWavelengths
 from gonzales.bvh import BVH2Node
@@ -49,7 +49,7 @@ def _make_ctx_with_light(
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     primIds: Pointer[PrimId, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
-    area_lights: Pointer[AreaLight_C, MutUntrackedOrigin],
+    area_lights: Pointer[AreaLight, MutUntrackedOrigin],
     area_light_count: Int,
     light_sampler_cdf: Pointer[Float32, MutUntrackedOrigin],
     use_restir: Bool = False,
@@ -76,11 +76,11 @@ def _make_ctx_with_light(
         use_restir,
         LightContext(
             area_lights, area_light_count,
-            Pointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-            Pointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
-            Pointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling(), 0,
+            Pointer[DistantLight, MutUntrackedOrigin].unsafe_dangling(), 0,
+            Pointer[PointLight, MutUntrackedOrigin].unsafe_dangling(), 0,
+            Pointer[InfiniteLight, MutUntrackedOrigin].unsafe_dangling(), 0,
             Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(), 0,
-            LightSampler_C(light_sampler_cdf, Int32(area_light_count), Int32(0))),
+            LightSampler(light_sampler_cdf, Int32(area_light_count), Int32(0))),
         Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
@@ -115,7 +115,7 @@ def test_gi_generate_no_area_lights_returns_invalid() raises:
     var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = _make_light_mesh()
     var ctx = _make_ctx_with_light(bvh, primIds, meshes,
-        Pointer[AreaLight_C, MutUntrackedOrigin].unsafe_dangling(), 0, cdf)
+        Pointer[AreaLight, MutUntrackedOrigin].unsafe_dangling(), 0, cdf)
 
     var pcg = PCG32(UInt64(1), UInt64(1))
     var res = _gi_generate_recon_candidate(ctx, Vec3f(0.0, 0.0, 0.0),
@@ -136,8 +136,8 @@ def test_gi_generate_surface_facing_away_from_light_returns_invalid() raises:
     primIds[unsafe_offset=0] = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = _make_light_mesh()
-    var area_lights = unsafe_alloc[AreaLight_C](1)
-    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    var area_lights = unsafe_alloc[AreaLight](1)
+    area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx_with_light(bvh, primIds, meshes, area_lights, 1, cdf)
 
     var pcg = PCG32(UInt64(1), UInt64(1))
@@ -162,8 +162,8 @@ def test_gi_generate_unoccluded_light_gives_valid_positive_lo() raises:
     primIds[unsafe_offset=0] = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = _make_light_mesh()
-    var area_lights = unsafe_alloc[AreaLight_C](1)
-    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    var area_lights = unsafe_alloc[AreaLight](1)
+    area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx_with_light(bvh, primIds, meshes, area_lights, 1, cdf)
 
     var hit_point = Vec3f(0.0, 0.0, 0.0)
@@ -205,8 +205,8 @@ def test_gi_generate_occluded_light_gives_valid_zero_lo() raises:
         Vec3f(-1.0, 5.0, -1.0),
         Vec3f(2.0, 5.0, -1.0),
         Vec3f(-1.0, 5.0, 2.0))
-    var area_lights = unsafe_alloc[AreaLight_C](1)
-    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    var area_lights = unsafe_alloc[AreaLight](1)
+    area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
     var ctx = _make_ctx_with_light(bvh, primIds, meshes, area_lights, 1, cdf)
 
     var pcg = PCG32(UInt64(1), UInt64(1))
@@ -254,8 +254,8 @@ def _run_two_bounce(gi_active: Bool) -> SpectralSample:
     primIds[unsafe_offset=0] = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = _make_light_mesh()
-    var area_lights = unsafe_alloc[AreaLight_C](1)
-    area_lights[unsafe_offset=0] = AreaLight_C(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
+    var area_lights = unsafe_alloc[AreaLight](1)
+    area_lights[unsafe_offset=0] = AreaLight(Int32(0), Int32(1), RGB(Float32(200.0), Float32(80.0), Float32(20.0)), Float32(0.000002), Int8(0), Int8(0), Int8(0), Int8(0))
 
     var gi_pending_buf = unsafe_alloc[GIPendingX1](1)
     gi_pending_buf[unsafe_offset=0] = gi_pending_x1_init()
@@ -270,7 +270,7 @@ def _run_two_bounce(gi_active: Bool) -> SpectralSample:
         Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[PrimId, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[AreaLight_C, MutUntrackedOrigin].unsafe_dangling(), 0, no_lights_cdf,
+        Pointer[AreaLight, MutUntrackedOrigin].unsafe_dangling(), 0, no_lights_cdf,
         use_restir=True, gi_pending=real_gi_pending)
     # ctx1 (bounce 1, x2): the real reconnection light, real BVH for both
     # GI's own shadow ray and _nee_area_lights' ordinary NEE (which also

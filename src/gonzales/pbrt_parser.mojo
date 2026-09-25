@@ -23,7 +23,7 @@ from .materials import Material_C, MatKind, MeasuredBRDF_C
 from .render_state import GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none
 from .primitives import Sphere, TriangleMesh, PrimId, Instance
 from .media import Medium_C, MediumInterface_C, Grid_C, NvdbGrid_C
-from .lights import AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, LightSampler_C
+from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
 from .curves import Curve_C, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area
 from .nanovdb import nvdb_load, nvdb_load_named, nvdb_data, nvdb_size, nvdb_free, nvdb_index_bbox, nvdb_value_range, nvdb_map_invmatf, nvdb_map_vecf
 from .noise import _perlin_perm_table, cloud_density
@@ -44,7 +44,7 @@ struct ParsedScene_Mojo:
     var camera_to_world:  Pointer[Float32, MutUntrackedOrigin]   # 16 floats, column-major
     var materials:        Pointer[Material_C, MutUntrackedOrigin]
     var material_count:   Int32
-    var area_lights:      Pointer[AreaLight_C, MutUntrackedOrigin]
+    var area_lights:      Pointer[AreaLight, MutUntrackedOrigin]
     var area_light_count: Int32
     var meshes:           Pointer[TriangleMesh, MutUntrackedOrigin]
     var mesh_pts:         Pointer[Pointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin]
@@ -105,11 +105,11 @@ struct ParsedScene_Mojo:
     # geometry.mojo's NormalSlopeMap_C). Entries for other textures have
     # res == 0.
     var nmaps:            Pointer[NormalSlopeMap_C, MutUntrackedOrigin]
-    var distant_lights:   Pointer[DistantLight_C, MutUntrackedOrigin]
+    var distant_lights:   Pointer[DistantLight, MutUntrackedOrigin]
     var distant_count:    Int32
-    var point_lights:     Pointer[PointLight_C, MutUntrackedOrigin]
+    var point_lights:     Pointer[PointLight, MutUntrackedOrigin]
     var point_count:      Int32
-    var infinite_lights:  Pointer[InfiniteLight_C, MutUntrackedOrigin]
+    var infinite_lights:  Pointer[InfiniteLight, MutUntrackedOrigin]
     var infinite_count:   Int32
     var spheres:          Pointer[Sphere, MutUntrackedOrigin]
     var sphere_count:     Int32
@@ -123,7 +123,7 @@ struct ParsedScene_Mojo:
     var grid_count:       Int32
     var nvdb_grids:       Pointer[NvdbGrid_C, MutUntrackedOrigin]
     var nvdb_grid_count:  Int32
-    var light_sampler:    LightSampler_C
+    var light_sampler:    LightSampler
     # Object instancing: one BLAS (private BVH2, over `meshes` above) per
     # ObjectBegin/ObjectEnd template, referenced by Instance.blasIdx.
     var blas_nodes_arr:   Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin]
@@ -2270,7 +2270,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # filled below) AND curve area lights (kind=1, appended once curve_buf
     # is built further down in "Native curves") — sized for both up front
     # since it's one contiguous allocation.
-    var al_list  = unsafe_alloc[AreaLight_C](max(n_al_mesh + n_al_curve, 1))
+    var al_list  = unsafe_alloc[AreaLight](max(n_al_mesh + n_al_curve, 1))
     var al_count = Int32(0)
     var al_mat_base = n_regular
 
@@ -2324,7 +2324,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             var al_idx = Int(al_count)
             var em = ma.al_rgb
             var t_area  = Float32(0.0)
-            var tri_cdf = unsafe_alloc[Float32](max(nt, 1))   # see AreaLight_C.tri_cdf
+            var tri_cdf = unsafe_alloc[Float32](max(nt, 1))   # see AreaLight.tri_cdf
             for ti in range(nt):
                 var vi0 = Int(vis_c[unsafe_offset=ti*3+0]) * 4
                 var vi1 = Int(vis_c[unsafe_offset=ti*3+1]) * 4
@@ -2370,7 +2370,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # ---- Curve area light material slots ----
     # Each emissive curve segment gets its own synthetic material slot here
     # (used by the direct-hit path in shade_nee_core), same as before. Their
-    # AreaLight_C/NEE entries (al_list[n_al_mesh:]) are appended further down
+    # AreaLight/NEE entries (al_list[n_al_mesh:]) are appended further down
     # in "Native curves" once curve_buf/curve_n_pieces exist — total_area
     # needs the curve's actual piece tessellation (curve_light_tube_area).
     var curve_al_mat_idx = unsafe_alloc[Int32](max(len(s[unsafe_offset=0].curves_al), 1))
@@ -2992,35 +2992,35 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # ---- Non-area lights ----
     var nd = len(s[unsafe_offset=0].distant_dirs) // 3
     if nd > 0:
-        var dl_buf = unsafe_alloc[DistantLight_C](nd)
+        var dl_buf = unsafe_alloc[DistantLight](nd)
         for i in range(nd):
-            dl_buf[unsafe_offset=i] = DistantLight_C(
+            dl_buf[unsafe_offset=i] = DistantLight(
                 Vec3f(s[unsafe_offset=0].distant_dirs[i*3+0], s[unsafe_offset=0].distant_dirs[i*3+1], s[unsafe_offset=0].distant_dirs[i*3+2]),
                 Float32(0),
                 RGB(s[unsafe_offset=0].distant_rgbs[i*3+0], s[unsafe_offset=0].distant_rgbs[i*3+1], s[unsafe_offset=0].distant_rgbs[i*3+2]),
                 Float32(0))
         psc[unsafe_offset=0].distant_lights = dl_buf
     else:
-        psc[unsafe_offset=0].distant_lights = Pointer[DistantLight_C, MutUntrackedOrigin].unsafe_dangling()
+        psc[unsafe_offset=0].distant_lights = Pointer[DistantLight, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].distant_count = Int32(nd)
 
     var np2 = len(s[unsafe_offset=0].point_pos) // 3
     if np2 > 0:
-        var pl_buf = unsafe_alloc[PointLight_C](np2)
+        var pl_buf = unsafe_alloc[PointLight](np2)
         for i in range(np2):
-            pl_buf[unsafe_offset=i] = PointLight_C(
+            pl_buf[unsafe_offset=i] = PointLight(
                 Point3f(s[unsafe_offset=0].point_pos[i*3+0], s[unsafe_offset=0].point_pos[i*3+1], s[unsafe_offset=0].point_pos[i*3+2]),
                 Float32(0),
                 RGB(s[unsafe_offset=0].point_rgbs[i*3+0], s[unsafe_offset=0].point_rgbs[i*3+1], s[unsafe_offset=0].point_rgbs[i*3+2]),
                 Float32(0))
         psc[unsafe_offset=0].point_lights = pl_buf
     else:
-        psc[unsafe_offset=0].point_lights = Pointer[PointLight_C, MutUntrackedOrigin].unsafe_dangling()
+        psc[unsafe_offset=0].point_lights = Pointer[PointLight, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].point_count = Int32(np2)
 
     var ni = len(s[unsafe_offset=0].inf_tex_idx)
     if ni > 0:
-        var il_buf = unsafe_alloc[InfiniteLight_C](ni)
+        var il_buf = unsafe_alloc[InfiniteLight](ni)
         for i in range(ni):
             var tidx = s[unsafe_offset=0].inf_tex_idx[i]
             var sc = RGB(s[unsafe_offset=0].inf_rgb[i*3+0], s[unsafe_offset=0].inf_rgb[i*3+1], s[unsafe_offset=0].inf_rgb[i*3+2])
@@ -3103,10 +3103,10 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 for ci in range(16): light_ctm_tmp[unsafe_offset=ci] = s[unsafe_offset=0].inf_ctm[light_ctm_base + ci]
                 _ = matrix_invert(light_ctm_tmp, w2l)
                 light_ctm_tmp.unsafe_free()
-            il_buf[unsafe_offset=i] = InfiniteLight_C(sc, tidx, cdf_w, cdf_h, cdf_ptr, raw_pixels, w2l)
+            il_buf[unsafe_offset=i] = InfiniteLight(sc, tidx, cdf_w, cdf_h, cdf_ptr, raw_pixels, w2l)
         psc[unsafe_offset=0].infinite_lights = il_buf
     else:
-        psc[unsafe_offset=0].infinite_lights = Pointer[InfiniteLight_C, MutUntrackedOrigin].unsafe_dangling()
+        psc[unsafe_offset=0].infinite_lights = Pointer[InfiniteLight, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].infinite_count = Int32(ni)
 
     # ---- Analytical spheres ----
@@ -3330,7 +3330,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     else:
         for i in range(1, ls_n + 1):
             ls_cdf[unsafe_offset=i] = Float32(i) / Float32(max(ls_n, 1))
-    psc[unsafe_offset=0].light_sampler = LightSampler_C(ls_cdf, Int32(ls_n), Int32(0))
+    psc[unsafe_offset=0].light_sampler = LightSampler(ls_cdf, Int32(ls_n), Int32(0))
 
 # ── Exported API ──────────────────────────────────────────────────────────────
 

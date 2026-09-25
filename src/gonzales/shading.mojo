@@ -7,7 +7,7 @@ from .render_state import PDF_DROP_DIRECT
 from .materials import Material_C, MatKind, LobeKind, MeasuredBRDF_C, schlick_fresnel, fr_dielectric
 from .render_state import PathState_C, GpuTexture_C, NormalSlopeMap_C, normal_slope_map_none, ShadowTask_C
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance
-from .lights import AreaLight_C, DistantLight_C, PointLight_C, InfiniteLight_C, LightSampler_C, light_sampler_sample, light_sampler_pdf, area_light_pick_triangle
+from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, light_sampler_sample, light_sampler_pdf, area_light_pick_triangle
 from .curves import Curve_C, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis
 from .layered import layered_f, layered_sample, layered_pdf
 from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
@@ -78,17 +78,17 @@ struct LightContext(Copyable, Movable):
     fields — construction call sites build this with keyword args precisely
     because several fields share the same Int/pointer type and a positional
     transposition wouldn't be caught by the type checker."""
-    var area_lights:      Pointer[AreaLight_C, MutUntrackedOrigin]
+    var area_lights:      Pointer[AreaLight, MutUntrackedOrigin]
     var area_light_count: Int
-    var distant_lights:   Pointer[DistantLight_C, MutUntrackedOrigin]
+    var distant_lights:   Pointer[DistantLight, MutUntrackedOrigin]
     var distant_count:    Int
-    var point_lights:     Pointer[PointLight_C, MutUntrackedOrigin]
+    var point_lights:     Pointer[PointLight, MutUntrackedOrigin]
     var point_count:      Int
-    var infinite_lights:  Pointer[InfiniteLight_C, MutUntrackedOrigin]
+    var infinite_lights:  Pointer[InfiniteLight, MutUntrackedOrigin]
     var infinite_count:   Int
     var spheres:          Pointer[Sphere, MutUntrackedOrigin]
     var sphere_count:     Int
-    var light_sampler:    LightSampler_C
+    var light_sampler:    LightSampler
 
 @fieldwise_init
 struct ShadeContext:
@@ -215,7 +215,7 @@ def _emitter_face_normal(
 #    the frame: the path tracer's median is 57 (L = 60), SPPM's was 0, and
 #    VCM's lit it only through the light-source splat that was double-counting
 #    every visible emitter.
-#  * Curves. For a curve hit primId.id1 is the CURVE index, not an AreaLight_C
+#  * Curves. For a curve hit primId.id1 is the CURVE index, not an AreaLight
 #    index, but both indexed areaLights with it, and _geom_normal returns a
 #    +Y placeholder for a curve.
 #
@@ -251,13 +251,13 @@ def area_light_hit_cos(
 def curve_light_hit(
     inter: Intersection,
     curves: Pointer[Curve_C, MutUntrackedOrigin],
-    area_lights: Pointer[AreaLight_C, MutUntrackedOrigin],
+    area_lights: Pointer[AreaLight, MutUntrackedOrigin],
     n_area_lights: Int,
     ray_dir: Vec3f,
 ) -> Tuple[Int, Float32]:
     """(al_idx, cos_l) for a ray hitting an emissive CURVE (primId.type 5).
 
-    al_idx is the curve's AreaLight_C slot (kind 1), -1 if it has none. Curve
+    al_idx is the curve's AreaLight slot (kind 1), -1 if it has none. Curve
     lights are rare -- a handful of emissive strands at most -- so a linear
     scan beats threading a reverse index through PrimId. cos_l is taken
     against the outward radial normal at the hit, reconstructed from (u, v)
@@ -2653,7 +2653,7 @@ def _mnee_walk(
 def _nee_infinite_light[enqueue_shadow: Bool](
     path_ptr: Pointer[PathState_C, MutUntrackedOrigin],
     ctx: ShadeContext,
-    ilight: InfiniteLight_C,
+    ilight: InfiniteLight,
     normal: Vec3f,
     hit_point: Vec3f,
     alb: RGB,
@@ -2700,7 +2700,7 @@ def _nee_infinite_light[enqueue_shadow: Bool](
 
 @always_inline
 def _sample_light_point_and_normal(
-    ctx: ShadeContext, al: AreaLight_C, u1: Float32, u2: Float32, mut pcg: PCG32,
+    ctx: ShadeContext, al: AreaLight, u1: Float32, u2: Float32, mut pcg: PCG32,
 ) -> Tuple[Vec3f, Vec3f, Vec3f, Vec3f]:
     """Point + outward normal on an area light's surface for NEE, plus the
     surface's own (dp_du, dp_dv) tangent basis (used only by
@@ -3274,7 +3274,7 @@ def _mnee_area_light_contribute(
     light_point: Vec3f,
     ldp_du_v: Vec3f,
     ldp_dv_v: Vec3f,
-    al: AreaLight_C,
+    al: AreaLight,
     inv_pdf_area: Float32,
     lobe_w: Float32,
 ) -> Bool:
@@ -3427,7 +3427,7 @@ def sms_generate_reservoir(
     hit_point: Vec3f, normal: Vec3f, alb: RGB,
     shadow_dir: Vec3f, dist: Float32, light_point: Vec3f,
     ldp_du_v: Vec3f, ldp_dv_v: Vec3f,
-    al: AreaLight_C, inv_pdf_area: Float32, mut pcg: PCG32,
+    al: AreaLight, inv_pdf_area: Float32, mut pcg: PCG32,
 ) -> Tuple[Bool, SMSReservoir]:
     """Phase 6's candidate generation: probe+solve for an admissible
     specular chain toward the given area-light sample (same scope
@@ -3555,7 +3555,7 @@ def sms_temporal_step(
     hit_point: Vec3f, normal: Vec3f, alb: RGB,
     shadow_dir: Vec3f, dist: Float32, light_point: Vec3f,
     ldp_du_v: Vec3f, ldp_dv_v: Vec3f,
-    al: AreaLight_C, inv_pdf_area: Float32, mut pcg: PCG32,
+    al: AreaLight, inv_pdf_area: Float32, mut pcg: PCG32,
     sms_io: SMSReservoirIO = sms_reservoir_io_null(),
     pixel_idx: Int = -1,
 ) -> Bool:
@@ -4722,7 +4722,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             return
 
     if inter.primId.type == Int8(3):
-        # Area light triangle hit — use emission from AreaLight_C directly so
+        # Area light triangle hit — use emission from AreaLight directly so
         # NamedMaterial area lights (mat.type == 1) also emit correctly.
         var al_idx = Int(inter.primId.id1)
         var al = ctx.lights.area_lights[unsafe_offset=al_idx]
@@ -4814,7 +4814,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
 
     if inter.primId.type == Int8(5) and mat.type == MatKind.area_light:
         # Emissive curve hit directly by the camera/bounce ray. Curves are
-        # now explicitly NEE-sampled too (AreaLight_C.kind==1, see al_list
+        # now explicitly NEE-sampled too (AreaLight.kind==1, see al_list
         # in finalize_scene) — symmetric with the type==3 triangle case
         # above, this MIS-weights against the curve's own selection pdf
         # instead of always crediting full emission (which would double-
@@ -4873,19 +4873,19 @@ def shade_core_cpu_nee(
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     curves: Pointer[Curve_C, MutUntrackedOrigin],
     materials: Pointer[Material_C, MutUntrackedOrigin],
-    areaLights: Pointer[AreaLight_C, MutUntrackedOrigin],
+    areaLights: Pointer[AreaLight, MutUntrackedOrigin],
     areaLightCount: Int,
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
     tid: Int,
-    distantLights: Pointer[DistantLight_C, MutUntrackedOrigin],
+    distantLights: Pointer[DistantLight, MutUntrackedOrigin],
     distantLightCount: Int,
-    pointLights: Pointer[PointLight_C, MutUntrackedOrigin],
+    pointLights: Pointer[PointLight, MutUntrackedOrigin],
     pointLightCount: Int,
-    infiniteLights: Pointer[InfiniteLight_C, MutUntrackedOrigin],
+    infiniteLights: Pointer[InfiniteLight, MutUntrackedOrigin],
     infiniteLightCount: Int,
     spheres: Pointer[Sphere, MutUntrackedOrigin],
     sphereCount: Int,
-    light_sampler: LightSampler_C,
+    light_sampler: LightSampler,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     guide: GuideGrid,
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
