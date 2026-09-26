@@ -153,6 +153,15 @@ for _a in ("00", "01", "02", "04", "07", "10"):
 TOL = 0.04
 
 
+# A render also writes <name>.albedo/.normal/.depth[/.noisy].exr sidecars
+# (outputs.mojo) and, from older builds, a bare albedo.exr; none is the image.
+_AUX_SUFFIXES = (".albedo.exr", ".normal.exr", ".depth.exr", ".noisy.exr")
+
+
+def _is_aux(f):
+    return f == "albedo.exr" or f.endswith(_AUX_SUFFIXES)
+
+
 def render(case, mode):
     """Render one case and return its mean radiance over the crop."""
     import numpy as np
@@ -173,11 +182,12 @@ def render(case, mode):
                               timeout=300)
     except subprocess.TimeoutExpired:
         return None, ["TIMED OUT after 300s"]
-    written = [f for f in os.listdir(REPO) if f.endswith(".exr") and "albedo" not in f]
+    written = [f for f in os.listdir(REPO) if f.endswith(".exr")]
+    beauty = [f for f in written if not _is_aux(f)]
     try:
-        if proc.returncode != 0 or len(written) != 1:
+        if proc.returncode != 0 or len(beauty) != 1:
             return None, (proc.stdout + proc.stderr).strip().splitlines()[-1:] or ["no output"]
-        img = oiio.ImageInput.open(os.path.join(REPO, written[0])).read_image("float")[..., :3]
+        img = oiio.ImageInput.open(os.path.join(REPO, beauty[0])).read_image("float")[..., :3]
         if c["crop"]:
             a, b = c["crop"]
             img = img[a:b, a:b]

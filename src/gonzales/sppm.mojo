@@ -41,6 +41,7 @@ from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, write_image_cropwindow, denoise
 from .gpu_scene import GpuSceneHandle
 from .progress import Progress
+from .outputs import finish_render
 from .spectrum import (
     SampledWavelengths, SpectralSample, sample_wavelengths,
     rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb,
@@ -2949,23 +2950,8 @@ def sppm_render(
         return Int32(-1)
 
     var n_pix = Int(psc[unsafe_offset=0].film_w) * Int(psc[unsafe_offset=0].film_h)
-    var normals = unsafe_alloc[Float32](n_pix * 3)
-    var depth = unsafe_alloc[Float32](n_pix)
-    var sd_local = sd
-    render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world, Int32(0), Int32(0),
-                        psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, Pointer(to=sd_local), normals, depth)
+    _ = finish_render(psc, sd, out_pixels, albedo_pixels, no_denoise)
 
-    var denoised = unsafe_alloc[Float32](n_pix * 3)
-    if no_denoise:
-        for i in range(n_pix * 3): denoised[unsafe_offset=i] = out_pixels[unsafe_offset=i]
-    else:
-        denoise(out_pixels, albedo_pixels, normals, depth, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h,
-                denoised, Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
-
-    _ = write_image_cropwindow(denoised, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h,
-        psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0, psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1,
-        psc[unsafe_offset=0].film_filename, Int32(32), Int32(32))
-
-    out_pixels.unsafe_free(); albedo_pixels.unsafe_free(); normals.unsafe_free(); depth.unsafe_free(); denoised.unsafe_free()
+    out_pixels.unsafe_free(); albedo_pixels.unsafe_free()
     return Int32(0)
 

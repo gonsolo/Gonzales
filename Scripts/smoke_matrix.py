@@ -48,6 +48,15 @@ FEATURES = {
 DEFAULT_TOL = 0.03
 
 
+# A render also writes <name>.albedo/.normal/.depth[/.noisy].exr sidecars
+# (outputs.mojo) and, from older builds, a bare albedo.exr; none is the image.
+_AUX_SUFFIXES = (".albedo.exr", ".normal.exr", ".depth.exr", ".noisy.exr")
+
+
+def _is_aux(f):
+    return f == "albedo.exr" or f.endswith(_AUX_SUFFIXES)
+
+
 def render_stats(scene, mode):
     """Render one cell and return (mean, median luminance), or None if it died."""
     import numpy as np
@@ -57,7 +66,7 @@ def render_stats(scene, mode):
     proc = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
     written = [f for f in os.listdir(REPO)
                if f.endswith(".exr") and os.path.getmtime(os.path.join(REPO, f)) >= start]
-    beauty = [f for f in written if "albedo" not in f]
+    beauty = [f for f in written if not _is_aux(f)]
     try:
         if proc.returncode != 0:
             return None, (proc.stdout + proc.stderr).strip().splitlines()[-1:] or ["exited %d" % proc.returncode]

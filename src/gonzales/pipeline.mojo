@@ -9,6 +9,7 @@ from .pbrt_parser import ParsedScene_Mojo, mojo_parsed_free, mojo_parsed_scene_d
 from .scene_loader import mojo_parse_scene_any
 from .rendering import render_all_tiles, normalize_film, apply_film_sensor
 from .progress import Progress, fmt_time
+from .outputs import write_render_outputs
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, Bounds3f, dot, _is_real_ptr
 from .render_state import TileResult, PathState
@@ -1306,24 +1307,33 @@ def parse_and_render(
                                 Int32(spp), psc[unsafe_offset=0].film_iso, psc[unsafe_offset=0].film_max_comp,
                                 apply_denoise=not no_denoise)
         apply_film_sensor(denoised_gpu.unsafe_ptr(), n_pixels, psc[unsafe_offset=0].film_exposuretime, psc[unsafe_offset=0].film_wb)
+        # The image before denoising, for the .noisy.exr sidecar: the same
+        # normalize pass without the a-trous blur (it only reads the film).
+        var noisy_gpu = List[Float32](capacity=n_pixels * 3)
+        for _ in range(n_pixels * 3): noisy_gpu.append(Float32(0))
+        if not no_denoise:
+            gpu_atrous_denoise(handle, noisy_gpu.unsafe_ptr(), Int64(n_pixels),
+                                    Int32(spp), psc[unsafe_offset=0].film_iso, psc[unsafe_offset=0].film_max_comp,
+                                    apply_denoise=False)
+            apply_film_sensor(noisy_gpu.unsafe_ptr(), n_pixels, psc[unsafe_offset=0].film_exposuretime, psc[unsafe_offset=0].film_wb)
         gpu_download_albedo(handle, albedo_gpu.unsafe_ptr(), Int64(n_pixels))
         var inv_spp = Float32(1.0) / Float32(spp)
         for i in range(n_pixels * 3):
             albedo_gpu[i] *= inv_spp
         gpu_free_scene(handle)
-        _ = write_image_cropwindow(denoised_gpu.unsafe_ptr(), fw, fh,
-                                 psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0, psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1,
-                                 psc[unsafe_offset=0].film_filename, Int32(32), Int32(32))
-        var albedo_name_buf = unsafe_alloc[UInt8](11)
-        var albedo_name_str = "albedo.exr"
-        var anp = albedo_name_str.unsafe_ptr()
-        for i in range(10): albedo_name_buf[unsafe_offset=i] = anp[unsafe_offset=i]
-        albedo_name_buf[unsafe_offset=10] = UInt8(0)
-        _ = write_image_cropwindow(albedo_gpu.unsafe_ptr(), fw, fh,
-                                 psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0, psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1,
-                                 albedo_name_buf.unsafe_origin_cast[MutUntrackedOrigin](), Int32(32), Int32(32))
-        albedo_name_buf.unsafe_free()
-        # denoised_gpu, albedo_gpu, and results freed automatically
+        # Normals and depth for the output layers: the same host first-hit
+        # pass every other driver uses (render_aux_buffers).
+        var sd_aux = mojo_parsed_scene_descriptor(psc, spectral)
+        var normals_gpu = List[Float32](capacity=n_pixels * 3)
+        var depth_gpu = List[Float32](capacity=n_pixels)
+        for _ in range(n_pixels * 3): normals_gpu.append(Float32(0))
+        for _ in range(n_pixels): depth_gpu.append(Float32(0))
+        render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
+                           Int32(0), Int32(0), fw, fh, sd_aux, normals_gpu.unsafe_ptr(), depth_gpu.unsafe_ptr())
+        sd_aux.unsafe_free()
+        _ = write_render_outputs(psc, denoised_gpu.unsafe_ptr(), noisy_gpu.unsafe_ptr(), not no_denoise,
+                                 albedo_gpu.unsafe_ptr(), normals_gpu.unsafe_ptr(), depth_gpu.unsafe_ptr())
+        # the buffers and results are freed automatically
         mojo_parsed_free(psc)
         return Int32(0)
     elif psc[unsafe_offset=0].prim_count == 0 and psc[unsafe_offset=0].sphere_count == 0:
@@ -1517,18 +1527,8 @@ def parse_and_render(
                     normals.unsafe_ptr(), dept.unsafe_ptr(),
                     fw, fh, denoised.unsafe_ptr(),
                     Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
-        _ = write_image_cropwindow(denoised.unsafe_ptr(), fw, fh,
-                                 psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0, psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1,
-                                 psc[unsafe_offset=0].film_filename, Int32(32), Int32(32))
-        var albedo_name_buf = unsafe_alloc[UInt8](11)
-        var albedo_name_str = "albedo.exr"
-        var anp2 = albedo_name_str.unsafe_ptr()
-        for i in range(10): albedo_name_buf[unsafe_offset=i] = anp2[unsafe_offset=i]
-        albedo_name_buf[unsafe_offset=10] = UInt8(0)
-        _ = write_image_cropwindow(albedo.unsafe_ptr(), fw, fh,
-                                 psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0, psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1,
-                                 albedo_name_buf.unsafe_origin_cast[MutUntrackedOrigin](), Int32(32), Int32(32))
-        albedo_name_buf.unsafe_free()
+        _ = write_render_outputs(psc, denoised.unsafe_ptr(), beauty.unsafe_ptr(), not no_denoise,
+                                 albedo.unsafe_ptr(), normals.unsafe_ptr(), dept.unsafe_ptr())
         # beauty, albedo, denoised, normals, dept freed automatically
     mojo_parsed_free(psc)
     return Int32(0)

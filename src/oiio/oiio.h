@@ -60,6 +60,13 @@ int write_image_rgb_windowed(const char *filename, const float *rgb, int width, 
                              int full_width, int full_height, int x, int y,
                              int tile_w, int tile_h);
 
+// n interleaved float channels, comma-separated `channel_names`, windowed like
+// write_image_rgb_windowed; LDR targets get the first three as tone-mapped RGB.
+int write_image_channels(const char *filename, const float *data, int width, int height,
+                         int nchannels, const char *channel_names,
+                         int full_width, int full_height, int x, int y,
+                         int tile_w, int tile_h);
+
 #ifdef __cplusplus
 }
 #endif

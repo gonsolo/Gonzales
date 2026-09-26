@@ -57,6 +57,7 @@ from .gpu_wavefront import vulkaninterop_unpack_results_kernel
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
 from max.gpu.host._nvidia_cuda import CUDA
 from .progress import Progress
+from .outputs import finish_render
 from .spectrum import (
     SampledWavelengths, SpectralSample, sample_wavelengths, SpectralHandle,
     pass_wavelengths,
@@ -4842,23 +4843,8 @@ def vcm_render(
     var n_pix = Int(psc[unsafe_offset=0].film_w) * Int(psc[unsafe_offset=0].film_h)
     var (pixels, albedo_pixels) = _bdpt_render_core(psc, sd, n_spp, n_photons, verbose)
 
-    var normals = unsafe_alloc[Float32](n_pix * 3)
-    var depth = unsafe_alloc[Float32](n_pix)
-    var sd_local = sd
-    render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world, Int32(0), Int32(0),
-                        psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, Pointer(to=sd_local), normals, depth)
-
-    var denoised = unsafe_alloc[Float32](n_pix * 3)
-    if no_denoise:
-        for i in range(n_pix * 3): denoised[unsafe_offset=i] = pixels[unsafe_offset=i]
-    else:
-        denoise(pixels, albedo_pixels, normals, depth, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h,
-                denoised, Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
-
-    _ = write_image_cropwindow(denoised, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h,
-        psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0, psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1,
-        psc[unsafe_offset=0].film_filename, Int32(32), Int32(32))
-    pixels.unsafe_free(); albedo_pixels.unsafe_free(); normals.unsafe_free(); depth.unsafe_free(); denoised.unsafe_free()
+    _ = finish_render(psc, sd, pixels, albedo_pixels, no_denoise)
+    pixels.unsafe_free(); albedo_pixels.unsafe_free()
     return Int32(0)
 
 # ── GPU port ───────────────────────────────────────────────────────────────
@@ -5995,23 +5981,8 @@ def vcm_render_gpu(
                 for i in range(n_pix * 3):
                     albedo_pixels[unsafe_offset=i] = src[unsafe_offset=i] * inv_spp_alb
 
-            var normals = unsafe_alloc[Float32](n_pix * 3)
-            var depth = unsafe_alloc[Float32](n_pix)
-            var sd_local = sd
-            render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world, Int32(0), Int32(0),
-                                psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, Pointer(to=sd_local), normals, depth)
-
-            var denoised = unsafe_alloc[Float32](n_pix * 3)
-            if no_denoise:
-                for i in range(n_pix * 3): denoised[unsafe_offset=i] = pixels[unsafe_offset=i]
-            else:
-                denoise(pixels, albedo_pixels, normals, depth, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h,
-                        denoised, Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
-
-            _ = write_image_cropwindow(denoised, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h,
-        psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0, psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1,
-        psc[unsafe_offset=0].film_filename, Int32(32), Int32(32))
-            pixels.unsafe_free(); albedo_pixels.unsafe_free(); normals.unsafe_free(); depth.unsafe_free(); denoised.unsafe_free()
+            _ = finish_render(psc, sd, pixels, albedo_pixels, no_denoise)
+            pixels.unsafe_free(); albedo_pixels.unsafe_free()
         except e:
             print("VCM GPU render failed: " + String(e))
             ret = Int32(-1)
@@ -6673,23 +6644,8 @@ def vcm_render_gpu_wavefront(
                 for i in range(n_pix * 3):
                     albedo_pixels[unsafe_offset=i] = src[unsafe_offset=i] * inv_spp_alb
 
-            var normals = unsafe_alloc[Float32](n_pix * 3)
-            var depth = unsafe_alloc[Float32](n_pix)
-            var sd_local = sd
-            render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world, Int32(0), Int32(0),
-                                psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, Pointer(to=sd_local), normals, depth)
-
-            var denoised = unsafe_alloc[Float32](n_pix * 3)
-            if no_denoise:
-                for i in range(n_pix * 3): denoised[unsafe_offset=i] = pixels[unsafe_offset=i]
-            else:
-                denoise(pixels, albedo_pixels, normals, depth, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h,
-                        denoised, Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
-
-            _ = write_image_cropwindow(denoised, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h,
-        psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0, psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1,
-        psc[unsafe_offset=0].film_filename, Int32(32), Int32(32))
-            pixels.unsafe_free(); albedo_pixels.unsafe_free(); normals.unsafe_free(); depth.unsafe_free(); denoised.unsafe_free()
+            _ = finish_render(psc, sd, pixels, albedo_pixels, no_denoise)
+            pixels.unsafe_free(); albedo_pixels.unsafe_free()
         except e:
             print("VCM GPU wavefront render failed: " + String(e))
             ret = Int32(-1)
@@ -7295,23 +7251,8 @@ def sppm_render_gpu(
                 for i in range(n_pix * 3 * size_of[Float32]()):
                     dst[unsafe_offset=i] = src[unsafe_offset=i]
 
-            var normals = unsafe_alloc[Float32](n_pix * 3)
-            var depth = unsafe_alloc[Float32](n_pix)
-            var sd_local = sd
-            render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world, Int32(0), Int32(0),
-                                psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h, Pointer(to=sd_local), normals, depth)
-
-            var denoised = unsafe_alloc[Float32](n_pix * 3)
-            if no_denoise:
-                for i in range(n_pix * 3): denoised[unsafe_offset=i] = out_pixels[unsafe_offset=i]
-            else:
-                denoise(out_pixels, albedo_pixels, normals, depth, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h,
-                        denoised, Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
-
-            _ = write_image_cropwindow(denoised, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h,
-                psc[unsafe_offset=0].crop_x0, psc[unsafe_offset=0].crop_y0, psc[unsafe_offset=0].crop_x1, psc[unsafe_offset=0].crop_y1,
-                psc[unsafe_offset=0].film_filename, Int32(32), Int32(32))
-            out_pixels.unsafe_free(); albedo_pixels.unsafe_free(); normals.unsafe_free(); depth.unsafe_free(); denoised.unsafe_free()
+            _ = finish_render(psc, sd, out_pixels, albedo_pixels, no_denoise)
+            out_pixels.unsafe_free(); albedo_pixels.unsafe_free()
         except e:
             print("SPPM GPU render failed: " + String(e))
             ret = Int32(-1)

@@ -556,6 +556,61 @@ int write_image_rgb_windowed(const char *filename, const float *rgb, int width, 
         return 1;
 }
 
+// n interleaved float channels with the given comma-separated names (e.g.
+// "R,G,B,Albedo.R,Albedo.G,Albedo.B,N.X,N.Y,N.Z,Z", pbrt-v4 GBufferFilm's
+// naming), tagged with the same dataWindow/displayWindow convention as
+// write_image_rgb_windowed. Float formats only: an LDR target (PNG, ...)
+// cannot hold arbitrary channels, so it gets the first three as a
+// tone-mapped RGB image, like write_image_rgb.
+int write_image_channels(const char *filename, const float *data, int width, int height,
+                         int nchannels, const char *channel_names,
+                         int full_width, int full_height, int x, int y,
+                         int tile_w, int tile_h) {
+        auto out = OIIO::ImageOutput::create(filename);
+        if (!out) {
+                std::cerr << "write_image_channels: cannot create writer for " << filename << std::endl;
+                return 0;
+        }
+        if (!is_hdr_ext(filename)) {
+                int n = width * height;
+                std::vector<uint8_t> ldr(n * 3);
+                for (int i = 0; i < n; ++i) {
+                        float rgb[3] = {data[i * nchannels], data[i * nchannels + (nchannels > 1 ? 1 : 0)],
+                                        data[i * nchannels + (nchannels > 2 ? 2 : 0)]};
+                        RGB::from(rgb).reinhard().to_srgb().store_u8(ldr.data() + i * 3);
+                }
+                OIIO::ImageSpec spec(width, height, 3, OIIO::TypeDesc::UINT8);
+                if (!out->open(filename, spec)) return 0;
+                out->write_image(OIIO::TypeDesc::UINT8, ldr.data());
+                out->close();
+                return 1;
+        }
+        OIIO::ImageSpec spec(width, height, nchannels, OIIO::TypeDesc::FLOAT);
+        std::vector<std::string> names;
+        std::string all(channel_names ? channel_names : "");
+        size_t start = 0;
+        while (start <= all.size()) {
+                size_t comma = all.find(',', start);
+                if (comma == std::string::npos) comma = all.size();
+                names.push_back(all.substr(start, comma - start));
+                start = comma + 1;
+        }
+        if ((int)names.size() == nchannels)
+                spec.channelnames = names;
+        spec.tile_width = tile_w;
+        spec.tile_height = tile_h;
+        spec.full_x = 0;
+        spec.full_y = 0;
+        spec.full_width = full_width;
+        spec.full_height = full_height;
+        spec.x = x;
+        spec.y = y;
+        if (!out->open(filename, spec)) return 0;
+        out->write_image(OIIO::TypeDesc::FLOAT, data);
+        out->close();
+        return 1;
+}
+
 #ifdef __cplusplus
 }
 #endif
