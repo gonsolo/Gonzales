@@ -1929,9 +1929,7 @@ def _apply_bump_map[use_gpu: Bool](
     mesh: TriangleMesh,
     inter: Intersection,
     geom_normal: Vec3f,
-    p0: Vec3f,
-    p1: Vec3f,
-    p2: Vec3f,
+    tri: TriWorld,
     tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
     textures: Pointer[GpuTexture, MutUntrackedOrigin],
     n_textures: Int,
@@ -1955,6 +1953,7 @@ def _apply_bump_map[use_gpu: Bool](
     project_barcelona_pavilion_mnee memory for the full history."""
     if mat.bump_tex_idx < Int32(0) or Int(mesh.uvs) <= 4:
         return geom_normal
+    var p0 = tri.p0; var p1 = tri.p1; var p2 = tri.p2
     var dp1 = p1 - p0; var dp2 = p2 - p0
     var u0f = mesh.uvs[unsafe_offset=v0*2]; var v0f = mesh.uvs[unsafe_offset=v0*2+1]
     var u1f = mesh.uvs[unsafe_offset=v1*2]; var v1f = mesh.uvs[unsafe_offset=v1*2+1]
@@ -1998,11 +1997,43 @@ def _apply_bump_map[use_gpu: Bool](
     var dhdu = (hu - h0) * (Float32(1.0) / hu_step) * mat.bump_scale
     var dhdv = (hv - h0) * (Float32(1.0) / hv_step) * mat.bump_scale
 
-    # newDpdu = dpdu + dh/du * n (dndu term dropped -- flat-shaded triangles
-    # have no meaningful dn/du of their own; matches pbrt's BumpMap when the
-    # base shading normal has no derivative to contribute).
-    var new_dpdu = dpdu + geom_normal * dhdu
-    var new_dpdv = dpdv + geom_normal * dhdv
+    # pbrt's BumpMap perturbs the SHADING frame, not the triangle's own
+    # derivatives. Without vertex normals the two are the same (dpdu, dpdv,
+    # the geometric normal). With them, pbrt's Triangle sets ss = dpdu made
+    # perpendicular to ns and ts = cross(ns, ss) -- so |ts| = |ss|, NOT |dpdv|,
+    # which changes the v-slope wherever the uv mapping is anisotropic -- and
+    # carries the vertex normals' dn/du, dn/dv as `displace * dndu`.
+    var ss = dpdu
+    var ts = dpdv
+    var dndu = Vec3f(Float32(0.0))
+    var dndv = Vec3f(Float32(0.0))
+    if tri.has_n:
+        var ns = geom_normal
+        ts = cross(ns, ss)
+        if dot(ts, ts) > Float32(0.0):
+            ss = cross(ts, ns)
+        else:
+            var fr = Frame.from_z(ns)
+            ss = Vec3f(fr.x.x, fr.x.y, fr.x.z)
+            ts = Vec3f(fr.y.x, fr.y.y, fr.y.z)
+        var dn1 = tri.n0 - tri.n2
+        var dn2 = tri.n1 - tri.n2
+        var du02 = u0f - u2f; var dv02 = v0f - v2f
+        var du12 = u1f - u2f; var dv12 = v1f - v2f
+        var uv_det = du02 * dv12 - dv02 * du12
+        if abs(uv_det) >= Float32(1e-32):
+            var inv_uv = Float32(1.0) / uv_det
+            dndu = (dn1 * dv12 - dn2 * dv02) * inv_uv
+            dndv = (dn2 * du02 - dn1 * du12) * inv_uv
+            # The vertex normals' orientation, not ns's: ns may have been
+            # turned toward the ray, and dn/du must turn with it.
+            var ni = tri.n0 * bw0 + tri.n1 * inter.u + tri.n2 * inter.v
+            if dot(ni, ns) < Float32(0.0):
+                dndu = -dndu
+                dndv = -dndv
+    var displace = h0 * mat.bump_scale
+    var new_dpdu = ss + geom_normal * dhdu + dndu * displace
+    var new_dpdv = ts + geom_normal * dhdv + dndv * displace
     var world_n = cross(new_dpdu, new_dpdv)
     var wn_len2 = dot(world_n, world_n)
     if wn_len2 <= Float32(0.0):
@@ -2144,10 +2175,15 @@ def _apply_surface_maps[use_gpu: Bool](
     # pavement pbrt's normal map darkens the ground ~10% and gonzales's
     # did nothing. The bump map keeps the footprint: pbrt's BumpMap()
     # evaluates a mipmapped FloatImageTexture.
-    var n = _apply_normal_map[use_gpu](mat, v0, v1, v2, mesh, inter, shading_normal, p0, p1, p2,
-        tex_filenames, textures, n_textures, Float32(0.0))
-    n = _apply_bump_map[use_gpu](mat, v0, v1, v2, mesh, inter, n, p0, p1, p2,
-        tex_filenames, textures, n_textures, fp)
+    # pbrt applies a normal map OR a displacement, never both: the normal map
+    # wins (SurfaceInteraction::GetBSDF).
+    var n: Vec3f
+    if mat.normal_tex_idx >= Int32(0):
+        n = _apply_normal_map[use_gpu](mat, v0, v1, v2, mesh, inter, shading_normal, p0, p1, p2,
+            tex_filenames, textures, n_textures, Float32(0.0))
+    else:
+        n = _apply_bump_map[use_gpu](mat, v0, v1, v2, mesh, inter, shading_normal, tri,
+            tex_filenames, textures, n_textures, fp)
     if dot(n, orient_to) < Float32(0.0):
         n = -n
     return n

@@ -14,7 +14,7 @@
 from std.math import sqrt, abs, max, min
 from .geometry import Vec3f, Point3f, dot, cross
 from .primitives import TriangleMesh, Instance
-from .transform import Mat4
+from .transform import Mat4, transform_normal
 
 
 @fieldwise_init
@@ -50,10 +50,15 @@ struct UVFootprint(TrivialRegisterPassable):
 
 @fieldwise_init
 struct TriWorld(TrivialRegisterPassable):
-    """A hit triangle's corners in WORLD space (instance transform applied)."""
+    """A hit triangle's corners, and its vertex normals when the mesh has
+    them (`has_n`), in WORLD space (instance transform applied)."""
     var p0: Vec3f
     var p1: Vec3f
     var p2: Vec3f
+    var n0: Vec3f
+    var n1: Vec3f
+    var n2: Vec3f
+    var has_n: Bool
 
 
 @always_inline
@@ -64,13 +69,24 @@ def tri_world(
     var p0 = Vec3f(mesh.points[unsafe_offset=v0*4], mesh.points[unsafe_offset=v0*4+1], mesh.points[unsafe_offset=v0*4+2])
     var p1 = Vec3f(mesh.points[unsafe_offset=v1*4], mesh.points[unsafe_offset=v1*4+1], mesh.points[unsafe_offset=v1*4+2])
     var p2 = Vec3f(mesh.points[unsafe_offset=v2*4], mesh.points[unsafe_offset=v2*4+1], mesh.points[unsafe_offset=v2*4+2])
+    var z = Vec3f(Float32(0), Float32(0), Float32(0))
+    var n0 = z; var n1 = z; var n2 = z
+    var has_n = Int(mesh.normals) > 4
+    if has_n:
+        n0 = Vec3f(mesh.normals[unsafe_offset=v0*3], mesh.normals[unsafe_offset=v0*3+1], mesh.normals[unsafe_offset=v0*3+2])
+        n1 = Vec3f(mesh.normals[unsafe_offset=v1*3], mesh.normals[unsafe_offset=v1*3+1], mesh.normals[unsafe_offset=v1*3+2])
+        n2 = Vec3f(mesh.normals[unsafe_offset=v2*3], mesh.normals[unsafe_offset=v2*3+1], mesh.normals[unsafe_offset=v2*3+2])
     if instance_idx >= Int32(0):
-        var m = Mat4(instances[unsafe_offset=Int(instance_idx)].objToWorld)
+        var inst = instances[unsafe_offset=Int(instance_idx)]
+        var m = Mat4(inst.objToWorld)
         var q0 = m.transform_point(Point3f(p0[0], p0[1], p0[2]))
         var q1 = m.transform_point(Point3f(p1[0], p1[1], p1[2]))
         var q2 = m.transform_point(Point3f(p2[0], p2[1], p2[2]))
         p0 = Vec3f(q0.x, q0.y, q0.z); p1 = Vec3f(q1.x, q1.y, q1.z); p2 = Vec3f(q2.x, q2.y, q2.z)
-    return TriWorld(p0, p1, p2)
+        if has_n:
+            var inv = Mat4(inst.worldToObj)
+            n0 = transform_normal(inv, n0); n1 = transform_normal(inv, n1); n2 = transform_normal(inv, n2)
+    return TriWorld(p0, p1, p2, n0, n1, n2, has_n)
 
 
 @always_inline

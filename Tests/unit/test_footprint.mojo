@@ -160,7 +160,8 @@ def _dummy_mesh() -> TriangleMesh:
 
 
 def _dummy_tri() -> TriWorld:
-    return TriWorld(Vec3f(0.0, 0.0, 0.0), Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0))
+    var z = Vec3f(0.0, 0.0, 0.0)
+    return TriWorld(z, Vec3f(1.0, 0.0, 0.0), Vec3f(0.0, 1.0, 0.0), z, z, z, False)
 
 
 def main() raises:
