@@ -11,6 +11,7 @@ from max.algorithm import parallelize
 from std.math import sqrt, cos, sin, floor, log, exp, max, min, ceildiv
 from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
+from std.memory import bitcast
 from .geometry import face_toward, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
 from .materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, MeasuredBRDF
 from .render_state import GpuTexture
@@ -314,6 +315,84 @@ def _shading_normal_at(
 def _hash_cell(ix: Int, iy: Int, iz: Int) -> Int:
     var h = ix * 73856093 ^ iy * 19349663 ^ iz * 83492791
     return (h % _HSIZE + _HSIZE) % _HSIZE
+
+
+# ── Thinned hash grid: SPPM's photons and VCM's light vertices ────────────────
+# The bucket table is 2 * _HSIZE Int32s: heads[h] is bucket h's chain head,
+# heads[_HSIZE + h] how many elements fell into it before thinning. A bucket
+# holding n > cap of them keeps each with probability cap / n, and the gather
+# scales every survivor by n / cap -- Russian roulette on photons, so the
+# estimate's expectation is unchanged and only over-full buckets pay variance.
+#
+# Prior art, photon mapping: Hachisuka & Jensen 2010's "stochastic hashing"
+# (cap 1), made unbiased by Davidovic et al. 2014 ("rectified stochastic hash
+# grid", TOG 33(3) s6.2), and Kern et al. 2023 (JCGT 12(1) s4.1), which
+# reservoir-samples cap photons per cell and weights n/cap. This is the
+# Bernoulli form of the same idea.
+#
+# Why: every path from one tiny bright emitter piles into a handful of cells.
+# barcelona-pavilion-night's candle lanterns and small sphere lights put up to
+# 283K photons in one cell (the median cell holds 3), and walking those chains
+# at every nearby gather point was over 90% of the render for BOTH photon
+# integrators: VCM 745 -> 134 s with the cap; SPPM's gather was ~12 s of every
+# ~9 s-per-pass budget (under ncu) before it got the same cap. VCM's sweep
+# (320x170, 16 spp) took 37 / 18 / 13 / 12 / 11.5 s for none / 1024 / 256 /
+# 64 / 16, and the noise thinning added at 256 was ~7% of the render's own
+# seed-to-seed noise in the lantern zone.
+comptime _PHOTON_BUCKET_CAP = Int32(256)
+
+
+@always_inline
+def grid_reset_cell(heads: Pointer[Int32, MutUntrackedOrigin], h: Int):
+    heads[unsafe_offset=h] = Int32(-1)
+    heads[unsafe_offset=_HSIZE + h] = Int32(0)
+
+
+@always_inline
+def grid_count(heads: Pointer[Int32, MutUntrackedOrigin], h: Int):
+    """First pass of a thinned grid build: tally one element into bucket h."""
+    _ = Atomic.fetch_add(heads.unsafe_offset(_HSIZE + h), Int32(1))
+
+
+@always_inline
+def grid_keep(heads: Pointer[Int32, MutUntrackedOrigin], h: Int, salt: Int, pos: Point3f) -> Bool:
+    """Whether the element at `pos` survives thinning of bucket h (probability
+    cap / n). The coin hashes `salt` and the position, so it is blind to the
+    element's flux. `salt` must be DETERMINISTIC and change every pass: VCM
+    passes its light-vertex slot (fixed per light path), SPPM the pass index
+    -- an SPPM photon's slot comes from an atomic fetch-add, whose order races,
+    and salting with it made every --sppm render differ run to run."""
+    var n = heads[unsafe_offset=_HSIZE + h]
+    if n <= _PHOTON_BUCKET_CAP:
+        return True
+    var bits = bitcast[DType.uint32, 4](SIMD[DType.float32, 4](pos.x, pos.y, pos.z, Float32(0)))
+    var z = UInt64(salt) * UInt64(0x9E3779B97F4A7C15) ^ (UInt64(bits[0]) << 32 | UInt64(bits[1])) ^ UInt64(bits[2])
+    z = (z ^ (z >> 30)) * UInt64(0xBF58476D1CE4E5B9)
+    z = (z ^ (z >> 27)) * UInt64(0x94D049BB133111EB)
+    z ^= z >> 31
+    return UInt64(z >> 32) * UInt64(n) < UInt64(_PHOTON_BUCKET_CAP) << 32
+
+
+@always_inline
+def grid_push[use_gpu: Bool](heads: Pointer[Int32, MutUntrackedOrigin], h: Int, k: Int) -> Int32:
+    """Make element `k` bucket h's chain head; returns the old head, which the
+    caller stores as k's link. Atomic exchange for racing GPU threads (and
+    parallel CPU workers), a plain read-modify-write for a serial loop."""
+    comptime if use_gpu:
+        return Atomic._xchg(heads.unsafe_offset(h), Int32(k))
+    else:
+        var old = heads[unsafe_offset=h]
+        heads[unsafe_offset=h] = Int32(k)
+        return old
+
+
+@always_inline
+def grid_weight(heads: Pointer[Int32, MutUntrackedOrigin], h: Int) -> Float32:
+    """1 / keep-probability of bucket h's surviving elements."""
+    var n = heads[unsafe_offset=_HSIZE + h]
+    if n <= _PHOTON_BUCKET_CAP:
+        return Float32(1)
+    return Float32(n) / Float32(_PHOTON_BUCKET_CAP)
 
 
 @always_inline
@@ -1683,8 +1762,19 @@ def _sppm_photon_pass(
 
 # ── Hash grid ─────────────────────────────────────────────────────────────────
 
-def _sppm_reset_grid_cell(heads: Pointer[Int32, MutUntrackedOrigin], h: Int):
-    heads[unsafe_offset=h] = Int32(-1)
+@always_inline
+def _sppm_photon_bucket(k: Int, photons: Pointer[SPPMPhoton, MutUntrackedOrigin], inv_cell: Float32) -> Int:
+    var p = photons[unsafe_offset=k].pos
+    return _hash_cell(Int(floor(p.x * inv_cell)), Int(floor(p.y * inv_cell)), Int(floor(p.z * inv_cell)))
+
+
+def _sppm_count_photon(
+    k:        Int,
+    photons:  Pointer[SPPMPhoton, MutUntrackedOrigin],
+    heads:    Pointer[Int32, MutUntrackedOrigin],
+    inv_cell: Float32,
+):
+    grid_count(heads, _sppm_photon_bucket(k, photons, inv_cell))
 
 
 def _sppm_insert_photon[use_gpu: Bool](
@@ -1692,20 +1782,14 @@ def _sppm_insert_photon[use_gpu: Bool](
     photons:  Pointer[SPPMPhoton, MutUntrackedOrigin],
     heads:    Pointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
+    pass_idx: Int,
 ):
-    """Insert stored photon `k` into the hash grid. Comptime-branches only on
-    the bucket-head update primitive (atomic exchange for racing GPU threads
-    vs. a plain read-modify-write for the serial CPU loop)."""
-    var ix = Int(floor(photons[unsafe_offset=k].pos.x * inv_cell))
-    var iy = Int(floor(photons[unsafe_offset=k].pos.y * inv_cell))
-    var iz = Int(floor(photons[unsafe_offset=k].pos.z * inv_cell))
-    var h = _hash_cell(ix, iy, iz)
-    comptime if use_gpu:
-        var old = Atomic._xchg(heads.unsafe_offset(h), Int32(k))
-        photons[unsafe_offset=k].nxt = old
-    else:
-        photons[unsafe_offset=k].nxt = heads[unsafe_offset=h]
-        heads[unsafe_offset=h] = Int32(k)
+    """Insert stored photon `k` into the thinned hash grid (see grid_keep),
+    after _sppm_count_photon has tallied every photon of the pass."""
+    var h = _sppm_photon_bucket(k, photons, inv_cell)
+    if not grid_keep(heads, h, pass_idx, photons[unsafe_offset=k].pos):
+        return
+    photons[unsafe_offset=k].nxt = grid_push[use_gpu](heads, h, k)
 
 
 def _build_grid(
@@ -1713,16 +1797,22 @@ def _build_grid(
     n_phot:   Int,
     heads:    Pointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
+    pass_idx: Int,
 ):
     def reset_one(i: Int) {imm}:
-        _sppm_reset_grid_cell(heads, i)
+        grid_reset_cell(heads, i)
 
     parallelize(reset_one, _HSIZE)
+
+    def count_one(k: Int) {imm}:
+        _sppm_count_photon(k, photons, heads, inv_cell)
+
+    parallelize(count_one, n_phot)
 
     # [True]: parallel CPU workers race on the same bucket heads a GPU
     # kernel's threads would, so need the same atomic-exchange insert.
     def insert_one(k: Int) {imm}:
-        _sppm_insert_photon[True](k, photons, heads, inv_cell)
+        _sppm_insert_photon[True](k, photons, heads, inv_cell, pass_idx)
 
     parallelize(insert_one, n_phot)
 
@@ -1863,9 +1953,14 @@ def _sppm_gather_one(
         for ddy in range(-1, 2):
             for ddz in range(-1, 2):
                 var h = _hash_cell(cix + ddx, ciy + ddy, ciz + ddz)
+                # Survivors of a thinned bucket stand for n/cap photons each
+                # (grid_keep): their flux AND their count, so the radius
+                # update sees the same photon count in expectation.
+                var bucket_w = grid_weight(heads, h)
                 var k = Int(heads[unsafe_offset=h])
                 while k != -1:
                     var ph = photons[unsafe_offset=k]
+                    ph.flux *= bucket_w
                     var e = ph.pos - vp.pos
                     var dist2 = e.length_sq()
                     # A BSSRDF visible point gathers only BSSRDF surface
@@ -2032,7 +2127,7 @@ def _sppm_gather_one(
                                 ph.wavelengths)
                             if le.cos_used > Float32(1e-6):
                                 phi += le.f_cos * (Float32(1.0) / le.cos_used) * ph.flux
-                        M += Float32(1.0)
+                        M += bucket_w
                     k = Int(ph.nxt)
 
     # SPPM update (only if new photons found)
@@ -2683,7 +2778,7 @@ def _sppm_render_core(
         max_bounces_per_photon += SSS_WALK_ROUNDS
     var max_photons = n_photons_per_pass * max(max_bounces_per_photon, 1)
     var photons = unsafe_alloc[SPPMPhoton](max_photons)
-    var heads   = unsafe_alloc[Int32](_HSIZE)
+    var heads   = unsafe_alloc[Int32](2 * _HSIZE)   # heads | counts, see grid_keep
     # A BSSRDF visible point gathers out to the material's DIFFUSION reach,
     # which for skin is several times the SPPM radius this scene would
     # otherwise pick. The photon grid's cells are initial_radius-sized and the
@@ -2726,7 +2821,7 @@ def _sppm_render_core(
         var pass_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(pass_idx * 2654435761 + 1)
         var n_stored = _sppm_photon_pass(photons, n_photons_per_pass, max_photons, sd, pass_seed, pass_idx, Int(psc[unsafe_offset=0].max_depth))
         if n_stored > 0:
-            _build_grid(photons, n_stored, heads, inv_cell)
+            _build_grid(photons, n_stored, heads, inv_cell, pass_idx)
             _gather_update(vps, n_vps, photons, heads, inv_cell, sd, pass_wavelengths(pass_idx))
         var nee_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(pass_idx * 0xBF58476D1CE4E5B9 + 3)
         _sppm_nee_update(vps, n_vps, sd, nee_seed, pass_idx)

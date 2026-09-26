@@ -38,9 +38,9 @@ from .rng import PCG32
 from .transform import matrix_invert
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, write_image_cropwindow, denoise
-from .sppm import _geom_normal, _dielectric_bounce, medium_after_crossing, _cosine_hemisphere_sample, sample_area_light_uniform, _HSIZE, _hash_cell, _sppm_render_core
+from .sppm import _geom_normal, _dielectric_bounce, medium_after_crossing, _cosine_hemisphere_sample, sample_area_light_uniform, _HSIZE, _hash_cell, _sppm_render_core, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_push, grid_weight, _sppm_count_photon
 from .sppm import (
-    SPPMPixel, SPPMPhoton, _sppm_reset_grid_cell, _sppm_insert_photon,
+    SPPMPixel, SPPMPhoton, _sppm_insert_photon,
     _sppm_gather_one, _sppm_vp_brdf, _sppm_nee_one,
     _sppm_finalize_albedo_one_pixel, _sppm_finalize_one_pixel,
     _VP_SAMPLES, _sppm_has_sphere_lights, _MAX_B,
@@ -1395,52 +1395,18 @@ def _bdpt_connect_to_cache_deferred(
         shadow_valid[unsafe_offset=base + local] = Int8(1)
 
 # ── VCM vertex merging: spatial hash grid over the LVC ───────────────────────
-# Mirrors sppm.mojo's photon hash grid (_build_grid/_sppm_insert_photon/
-# _sppm_reset_grid_cell) exactly, but keyed on BDPTVertex.pos instead of
-# SPPMPhoton.pos, and using a SEPARATE parallel `merge_next` array for
-# chaining rather than a field inside BDPTVertex itself (avoids touching
-# BDPTVertex's layout/every other construction site in this file). Reuses
-# sppm.mojo's _HSIZE bucket count and _hash_cell function directly -- no
-# reason for the grid math itself to differ between the two use sites.
+# THE thinned hash grid SPPM's photons use (sppm.mojo, grid_reset_cell ..
+# grid_weight), keyed on BDPTVertex.pos instead of SPPMPhoton.pos, and using a
+# SEPARATE parallel `merge_next` array for chaining rather than a field inside
+# BDPTVertex itself (avoids touching BDPTVertex's layout/every other
+# construction site in this file).
 
-# Stochastic merge thinning. The bucket table is 2 * _HSIZE Int32s: heads[h]
-# is bucket h's chain head, heads[_HSIZE + h] how many light vertices fell
-# into it before thinning. A bucket holding n > cap of them keeps each with
-# probability cap / n, and the gather scales every survivor by n / cap --
-# Russian roulette on photons, so the merge estimate's expectation is
-# unchanged. Only over-full buckets pay variance for it, and the MIS tells
-# the other strategies so: merging's density there is keep * eta, not eta
+# Stochastic merge thinning: the shared thinned grid (sppm.mojo, grid_keep and
+# friends). What is VCM's own is the MIS: merging's density in a thinned
+# bucket is keep * eta, not eta, and the other strategies are told so
 # (_vcm_keep, fed the previous pass's counts from the second, alternating
 # table). Scenes/vcm_area_mis_derivation.py checks the weights stay a
 # partition of unity with a per-vertex eta.
-#
-# Prior art, photon mapping only: Hachisuka & Jensen 2010's "stochastic
-# hashing" (cap 1), made unbiased by Davidovic et al. 2014 ("rectified
-# stochastic hash grid", TOG 33(3) s6.2), and Kern et al. 2023 (JCGT 12(1)
-# s4.1), which reservoir-samples cap photons per cell and weights n/cap. This
-# is the Bernoulli form of the same idea, applied to VCM's merge grid.
-#
-# Why: every light path starting at one tiny bright emitter piles its
-# vertices into a handful of cells. barcelona-pavilion-night's candle
-# lanterns did exactly that, and walking those chains at every nearby camera
-# vertex was 92% of the render (745 s at 640x340/64 spp against 38 s for the
-# day scene). With the cap: 134 s. A cap sweep (320x170, 16 spp, same seed)
-# took 37 / 18 / 13 / 12 / 11.5 s for none / 1024 / 256 / 64 / 16; the noise
-# thinning added at 256 was ~7% of the render's own seed-to-seed noise in the
-# lantern zone. Below 256 the gain flattens (merging stops being the cost).
-comptime _VCM_MERGE_BUCKET_CAP = Int32(256)
-
-def _bdpt_reset_merge_cell(heads: Pointer[Int32, MutUntrackedOrigin], h: Int):
-    heads[unsafe_offset=h] = Int32(-1)
-    heads[unsafe_offset=_HSIZE + h] = Int32(0)
-
-@always_inline
-def _bdpt_merge_bucket_weight(heads: Pointer[Int32, MutUntrackedOrigin], h: Int) -> Float32:
-    """1 / keep-probability of bucket h's surviving light vertices."""
-    var n = heads[unsafe_offset=_HSIZE + h]
-    if n <= _VCM_MERGE_BUCKET_CAP:
-        return Float32(1)
-    return Float32(n) / Float32(_VCM_MERGE_BUCKET_CAP)
 
 @always_inline
 def _vcm_depth(ref sd: SceneView) -> Int:
@@ -1493,9 +1459,9 @@ def _vcm_keep(ref sd: SceneView, p: Point3f) -> Float32:
     var h = _hash_cell(Int(floor(p.x * sd.vcmKeepInvCell)), Int(floor(p.y * sd.vcmKeepInvCell)),
                        Int(floor(p.z * sd.vcmKeepInvCell)))
     var n = Float32(sd.vcmKeepCounts[unsafe_offset=h]) * sd.vcmKeepScale
-    if n <= Float32(_VCM_MERGE_BUCKET_CAP):
+    if n <= Float32(_PHOTON_BUCKET_CAP):
         return Float32(1)
-    return Float32(_VCM_MERGE_BUCKET_CAP) / n
+    return Float32(_PHOTON_BUCKET_CAP) / n
 
 # Merge radius per camera vertex, in pixels of image footprint. A global
 # radius sized to the scene (SmallVCM's 0.003 * scene radius) is ~0.24 m on
@@ -1574,7 +1540,7 @@ def _bdpt_count_merge_vertex(
     var h = _bdpt_merge_slot_bucket(k, lvc, lvc_path_len, inv_cell)
     if h < 0:
         return
-    _ = Atomic.fetch_add(heads.unsafe_offset(_HSIZE + h), Int32(1))
+    grid_count(heads, h)
 
 def _bdpt_insert_merge_vertex[use_gpu: Bool](
     k: Int,
@@ -1586,30 +1552,15 @@ def _bdpt_insert_merge_vertex[use_gpu: Bool](
 ):
     """Second pass of the grid build: insert LVC slot `k` into the merge hash
     grid, unless it's an unused tail slot or thinned out of an over-full
-    bucket (see _VCM_MERGE_BUCKET_CAP). Comptime-branches only on the
+    bucket (see _PHOTON_BUCKET_CAP). Comptime-branches only on the
     bucket-head update primitive -- identical pattern to sppm.mojo's
     _sppm_insert_photon[use_gpu]."""
     var h = _bdpt_merge_slot_bucket(k, lvc, lvc_path_len, inv_cell)
     if h < 0:
         return
-    var n = heads[unsafe_offset=_HSIZE + h]
-    if n > _VCM_MERGE_BUCKET_CAP:
-        # Keep with probability cap / n. The coin hashes the slot and its
-        # position, so it is fresh every pass and blind to the photon's flux.
-        var pos = lvc[unsafe_offset=k].pos
-        var bits = bitcast[DType.uint32, 4](SIMD[DType.float32, 4](pos.x, pos.y, pos.z, Float32(0)))
-        var z = UInt64(k) * UInt64(0x9E3779B97F4A7C15) ^ (UInt64(bits[0]) << 32 | UInt64(bits[1])) ^ UInt64(bits[2])
-        z = (z ^ (z >> 30)) * UInt64(0xBF58476D1CE4E5B9)
-        z = (z ^ (z >> 27)) * UInt64(0x94D049BB133111EB)
-        z ^= z >> 31
-        if UInt64(z >> 32) * UInt64(n) >= UInt64(_VCM_MERGE_BUCKET_CAP) << 32:
-            return
-    comptime if use_gpu:
-        var old = Atomic._xchg(heads.unsafe_offset(h), Int32(k))
-        merge_next[unsafe_offset=k] = old
-    else:
-        merge_next[unsafe_offset=k] = heads[unsafe_offset=h]
-        heads[unsafe_offset=h] = Int32(k)
+    if not grid_keep(heads, h, k, lvc[unsafe_offset=k].pos):
+        return
+    merge_next[unsafe_offset=k] = grid_push[use_gpu](heads, h, k)
 
 def _bdpt_build_merge_grid(
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
@@ -1627,7 +1578,7 @@ def _bdpt_build_merge_grid(
     `_bdpt_insert_merge_vertex` itself skips each path's unused tail slots
     via `lvc_path_len`."""
     def reset_one(i: Int) {imm}:
-        _bdpt_reset_merge_cell(heads, i)
+        grid_reset_cell(heads, i)
     parallelize(reset_one, _HSIZE)
 
     def count_one(k: Int) {imm}:
@@ -1755,7 +1706,7 @@ def _bdpt_merge_from_cache(
         for ddy in range(-1, 2):
             for ddz in range(-1, 2):
                 var h = _hash_cell(cix + ddx, ciy + ddy, ciz + ddz)
-                var bucket_w = _bdpt_merge_bucket_weight(heads, h)
+                var bucket_w = grid_weight(heads, h)
                 var k = Int(heads[unsafe_offset=h])
                 while k != -1:
                     # The merged path shares cv and the photon, so its interior
@@ -4488,7 +4439,7 @@ def _bdpt_render_core(
     # each `si` below from `merge_radius_1`, the same initial 3%-of-scene-
     # diameter value Stage 1 used as its (then-fixed) radius.
     var (_scene_center, scene_radius) = _scene_bounding_sphere(sd)
-    var merge_heads = unsafe_alloc[Int32](2 * _HSIZE)   # heads | counts, see _VCM_MERGE_BUCKET_CAP
+    var merge_heads = unsafe_alloc[Int32](2 * _HSIZE)   # heads | counts, see _PHOTON_BUCKET_CAP
     var merge_next = unsafe_alloc[Int32](max(lvc_cap, 1))
     # t=1 splat records: one slot per potential light vertex.
     # Continuous raster position per splat record (x < 0 marks an empty slot)
@@ -5409,7 +5360,7 @@ def bdpt_merge_grid_reset_gpu(heads: Pointer[Int32, MutUntrackedOrigin], hsize_d
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= hsize:
         return
-    _bdpt_reset_merge_cell(heads, tid)
+    grid_reset_cell(heads, tid)
 
 
 def bdpt_merge_grid_count_gpu(
@@ -6565,7 +6516,19 @@ def sppm_grid_reset_gpu(heads: Pointer[Int32, MutUntrackedOrigin], hsize_dp: Int
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= hsize:
         return
-    _sppm_reset_grid_cell(heads, tid)
+    grid_reset_cell(heads, tid)
+
+
+def sppm_grid_count_gpu(
+    photons:  Pointer[SPPMPhoton, MutUntrackedOrigin],
+    n_stored_dp: Int64,
+    heads:    Pointer[Int32, MutUntrackedOrigin],
+    inv_cell: Float32,
+):
+    var k = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if k >= Int(n_stored_dp):
+        return
+    _sppm_count_photon(k, photons, heads, inv_cell)
 
 
 def sppm_grid_insert_gpu(
@@ -6573,12 +6536,13 @@ def sppm_grid_insert_gpu(
     n_stored_dp: Int64,
     heads:    Pointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
+    pass_idx_dp: Int64,
 ):
     var n_stored = Int(n_stored_dp)
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
     if k >= n_stored:
         return
-    _sppm_insert_photon[True](k, photons, heads, inv_cell)
+    _sppm_insert_photon[True](k, photons, heads, inv_cell, Int(pass_idx_dp))
 
 
 def sppm_gather_gpu(
@@ -6777,7 +6741,7 @@ def sppm_render_gpu(
             var max_photons = n_photons_per_pass * max(max_bounces_per_photon, 1)
             var vps_buf     = handle[].ctx.enqueue_create_buffer[DType.uint8](n_vps * size_of[SPPMPixel]())
             var photons_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(max_photons, 1) * size_of[SPPMPhoton]())
-            var heads_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](_HSIZE * size_of[Int32]())
+            var heads_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](2 * _HSIZE * size_of[Int32]())   # heads | counts
             var inter_cam_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_vps * size_of[Intersection]())
             var inter_ph_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_photons_per_pass, 1) * size_of[Intersection]())
             var counter_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](size_of[Int32]())
@@ -6888,8 +6852,11 @@ def sppm_render_gpu(
                     handle[].ctx.enqueue_function[sppm_grid_reset_gpu](
                         heads_ptr, Int64(_HSIZE), grid_dim=grid_hsize, block_dim=block_size)
                     var grid_ins = ceildiv(n_stored, block_size)
-                    handle[].ctx.enqueue_function[sppm_grid_insert_gpu](
+                    handle[].ctx.enqueue_function[sppm_grid_count_gpu](
                         photons_ptr, Int64(n_stored), heads_ptr, inv_cell,
+                        grid_dim=grid_ins, block_dim=block_size)
+                    handle[].ctx.enqueue_function[sppm_grid_insert_gpu](
+                        photons_ptr, Int64(n_stored), heads_ptr, inv_cell, Int64(pass_idx),
                         grid_dim=grid_ins, block_dim=block_size)
                     handle[].ctx.enqueue_function[sppm_gather_gpu](
                         vps_ptr,
