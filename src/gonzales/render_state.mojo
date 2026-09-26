@@ -59,9 +59,10 @@ struct PathState(TrivialRegisterPassable):
     # more intersect, may cross null interfaces, and may pick up emission --
     # but must not do NEE and must not scatter again.
     var at_cap: Int8
-    # 1 if the last NON-specular vertex delegates its specular-chain lighting
-    # to MNEE/SMS. That strategy samples exactly the paths
-    # diffuse -> (specular chain) -> emitter, so when the path then REACHES
+    # Shading normal of the last NON-specular vertex if it delegates its
+    # specular-chain lighting to MNEE/SMS, the zero vector if it does not.
+    # That strategy samples exactly the paths diffuse -> (specular chain) ->
+    # emitter, so when the path then REACHES
     # an emitter through a specular chain, the BSDF-sampling strategy is
     # reproducing a path already counted and its emission must be dropped.
     # Without this the two are simply summed: on the SMS caustic scene that
@@ -69,11 +70,12 @@ struct PathState(TrivialRegisterPassable):
     # strategy contributing ~0.23 on its own). The reference integrator does
     # the same thing (path_sms_ss.cpp: it suppresses the emitter hit when
     # the previous vertex was a caustic receiver).
-    var sms_covered: Int8
-    # World position of that vertex, so the emitter-hit site can re-ask the
-    # SAME question MNEE asked -- "is there glass on the straight segment
-    # between this vertex and that point on the emitter?" -- for the point
-    # the BSDF ray actually landed on.
+    var last_ns_n: Vec3f
+    # World position of that vertex. With last_ns_n, the emitter-hit site
+    # re-asks the SAME questions MNEE asked for the point the BSDF ray
+    # actually landed on: would the vertex's NEE reach it (straight-line
+    # cosines at both ends positive) and is there glass on the straight
+    # segment? Only then did MNEE own that path.
     var last_ns_p: Vec3f
     # lastBsdfPdf: cosine-hemisphere PDF from the previous scatter (cos_theta / pi).
     # Used for MIS weighting when the next bounce hits an emitter.

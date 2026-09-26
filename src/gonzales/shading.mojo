@@ -3647,6 +3647,19 @@ def _nee_area_lights[enqueue_shadow: Bool](
 ):
     if ctx.lights.area_light_count == 0:
         return
+    # Record the vertex, not the outcome: whether MNEE covers a given emitter
+    # point is a property of that POINT (would this NEE reach it, and is
+    # there glass on the way?), not of which point this sample happened to
+    # draw -- so the decision is deferred to the emitter-hit site, which
+    # knows the point actually reached. Marking only when THIS draw passed
+    # the cosine tests below left the vertex unmarked whenever the draw
+    # landed on a face turned away (most of a cube lamp seen from below),
+    # and the BSDF ray through the glass was then counted on top of MNEE:
+    # a mesh-cube lamp over a glass slab read 1.25x pbrt, 1.5x under it.
+    # The ReSTIR SMS branch never marked, and still does not.
+    if not (pixel_idx >= 0 and _is_real_ptr(sms_io.read)):
+        path_ptr[].last_ns_n = normal
+        path_ptr[].last_ns_p = hit_point
     var ls_u_nee = u_light
     var ls_result_nee = light_sampler_sample(ctx.lights.light_sampler, ls_u_nee)
     var light_idx = ls_result_nee[0]
@@ -3684,26 +3697,17 @@ def _nee_area_lights[enqueue_shadow: Bool](
                 # refracted contribution -- in that case the straight shadow ray
                 # below is deliberately skipped (MNEE replaces it, it does not
                 # supplement it).
-                # Record whether MNEE/SMS took over the direct lighting here,
-                # so a later BSDF-sampled arrival at the emitter through a
-                # specular chain -- the SAME path family this strategy just
-                # sampled -- is not counted a second time. See
-                # PathState.sms_covered.
+                # The vertex was marked at the top of this function (see
+                # there and PathState.last_ns_n), so a later BSDF-sampled
+                # arrival at the emitter through a specular chain -- the SAME
+                # path family this strategy samples -- is not counted twice.
+                # Keying that on `used_mnee` instead would make the
+                # suppression depend on the NEE light draw, which is
+                # independent of where the BSDF ray goes.
                 var used_mnee = _mnee_area_light_contribute(
                     path_ptr, ctx, normal, hit_point, alb, shadow_dir, dist,
                     light_point, ldp_du_v, ldp_dv_v, al,
                     al.total_area / light_sel_pdf_nee, lobe_w)
-                # Record the vertex, not the outcome. Whether MNEE covers a
-                # given emitter point is a property of that POINT (is there
-                # glass on the segment?), not of which light this sample
-                # happened to pick -- so the decision is deferred to the
-                # emitter-hit site, which knows the point actually reached.
-                # Keying it on `used_mnee` instead makes the suppression
-                # depend on the NEE light draw, which is independent of where
-                # the BSDF ray goes, and that IS biased whenever a vertex has
-                # glass toward some lights and not others.
-                path_ptr[].sms_covered = Int8(1)
-                path_ptr[].last_ns_p = hit_point
                 if not used_mnee:
                     _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)
 
@@ -4720,37 +4724,42 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         var al_idx = Int(inter.primId.id1)
         var al = ctx.lights.area_lights[unsafe_offset=al_idx]
         var emission = al.emission
-        if path_ptr[].specularBounce == Int8(1) and path_ptr[].sms_covered == Int8(1):
+        var ns_n = path_ptr[].last_ns_n
+        if path_ptr[].specularBounce == Int8(1) and dot(ns_n, ns_n) > Float32(0.0) and al.kind == Int8(0):
             # This arrived through a specular chain from a vertex that
-            # delegates such paths to MNEE/SMS. MNEE covers the segment to a
-            # given emitter point exactly when a dielectric intervenes on it,
-            # so ask that same question here, for the point actually hit: if
-            # glass is in the way, MNEE already sampled this path family and
-            # counting it again double-counts (see PathState.sms_covered).
-            # If not, MNEE never had it and BSDF sampling is the only
-            # strategy that does -- keep it.
+            # delegates such paths to MNEE/SMS. Drop it exactly when MNEE
+            # owns the point reached, by re-asking MNEE's own questions for
+            # it: that vertex's NEE reaches the point (straight-line cosines
+            # positive at both ends -- _nee_area_lights' gate) and the first
+            # thing on the straight segment is glass (the probe's). Anything
+            # else -- a lamp face turned away from the straight line, glass
+            # only off to the side -- MNEE never samples, and BSDF sampling
+            # is the only strategy that does, so it is kept. Curve lights
+            # (kind 1) never take the MNEE branch at all.
             var hp = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z) \
                      + Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z) * inter.tHit
             var seg = hp - path_ptr[].last_ns_p
             var seg_len = sqrt(dot(seg, seg))
-            if seg_len > Float32(1e-6):
+            if seg_len > Float32(0.0001):
                 var seg_dir = seg * (Float32(1.0) / seg_len)
-                var pr_org = path_ptr[].last_ns_p + seg_dir * Float32(0.0001)
-                var pr_ray = Ray(Point3f(pr_org[0], pr_org[1], pr_org[2]),
-                                   Vec3f(seg_dir[0], seg_dir[1], seg_dir[2]))
-                var pr_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-                var pr_store = Array[Intersection, 1](fill=Intersection(
-                    pr_prim, Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
-                traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, pr_ray,
-                                   seg_len * Float32(0.999), pr_store.unsafe_ptr(),
-                                   ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
-                                   ctx.lights.spheres, ctx.lights.sphere_count)
-                var pr = pr_store[0]
-                if pr.hit != Int8(0):
-                    var pr_mat = ctx.materials[unsafe_offset=Int(pr.primId.materialIndex)]
-                    if pr_mat.type == MatKind.dielectric or pr_mat.type == MatKind.thin_dielectric:
-                        path_ptr[].active = 0
-                        return
+                if dot(ns_n, seg_dir) > Float32(0.0) \
+                   and area_light_hit_cos(inter, ctx.meshes, ctx.instances, seg_dir) > Float32(0.0):
+                    var pr_org = path_ptr[].last_ns_p + seg_dir * Float32(0.0002)
+                    var pr_ray = Ray(Point3f(pr_org[0], pr_org[1], pr_org[2]),
+                                       Vec3f(seg_dir[0], seg_dir[1], seg_dir[2]))
+                    var pr_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+                    var pr_store = Array[Intersection, 1](fill=Intersection(
+                        pr_prim, Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
+                    traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, pr_ray,
+                                       seg_len * Float32(0.9995), pr_store.unsafe_ptr(),
+                                       ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
+                                       ctx.lights.spheres, ctx.lights.sphere_count)
+                    var pr = pr_store[0]
+                    if pr.hit != Int8(0) and (pr.primId.type == Int8(0) or pr.primId.type == Int8(4)):
+                        var pr_mat = ctx.materials[unsafe_offset=Int(pr.primId.materialIndex)]
+                        if pr_mat.type == MatKind.dielectric or pr_mat.type == MatKind.thin_dielectric:
+                            path_ptr[].active = 0
+                            return
         # A pbrt area light emits from its FRONT face only
         # (DiffuseAreaLight::L: `if (!twoSided && Dot(n, w) < 0) return 0`).
         # The MIS branch below has always enforced that via its own
@@ -4870,6 +4879,11 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         # previous bounce's -- and means forgetting it cannot reproduce the
         # flat-0.5 escape weight documented on PathState.lastEnvNeePdf.
         path_ptr[].lastEnvNeePdf = INV_FOUR_PI
+        # A specular chain now starts HERE, not at an earlier MNEE vertex:
+        # forget that vertex unless this one re-marks itself (only the
+        # diffuse family's _nee_area_lights does). Glass continues a chain.
+        if mat.type != MatKind.dielectric and mat.type != MatKind.thin_dielectric:
+            path_ptr[].last_ns_n = Vec3f(Float32(0.0))
 
     comptime if use_gpu:
         # GPU: mark material for its dedicated per-material kernel

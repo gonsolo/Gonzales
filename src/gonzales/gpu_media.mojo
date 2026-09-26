@@ -918,6 +918,9 @@ def _sample_medium_core(
         # A volume scatter IS the real scattering event the emitter-hit MIS
         # measures from, and it puts the ray origin exactly there.
         path_ptr[].mis_null_dist = Float32(0.0)
+        # ...and a specular chain from here starts at this medium vertex,
+        # which never delegates to MNEE (PathState.last_ns_n).
+        path_ptr[].last_ns_n = Vec3f(Float32(0.0))
         # Interior random-walk steps of a `Material "subsurface"` object are
         # NOT path bounces and are not charged to maxdepth. Skin1 at
         # sssdragon's scale has a red-channel single-scattering albedo of
