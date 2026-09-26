@@ -15,7 +15,7 @@ from std.memory import bitcast
 from .layered import layered_sample, layered_pdf
 from std.atomic import Atomic
 from .geometry import face_toward, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Frame, dot, cross, refract, PI, INV_FOUR_PI, INV_PI
-from .render_state import PDF_DROP_DIRECT, PDF_VOL_PHASE_HIT
+from .render_state import PDF_DELTA_FULL, PDF_DROP_DIRECT, PDF_VOL_PHASE_HIT
 from .materials import Material, MatKind, LobeKind, PhotonKind, MeasuredBRDF, fr_dielectric, cos_theta_t_dielectric, coat_beer_lambert_tr, DEFAULT_COAT_THICKNESS
 from .render_state import GpuTexture
 from .primitives import Ray, Intersection, TriangleMesh, Sphere, PrimId, Instance, sphere_outward_normal
@@ -2554,8 +2554,17 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # landed on an emitter, which the env miss handler had
                     # already been fixed for.
                     mis_w_al_hit = Float32(0)
-                elif last_bsdf_pdf >= Float32(0):
-                    if cos_l_hit > Float32(0) and al_area > Float32(0) and dvcm_carry > Float32(0):
+                elif last_bsdf_pdf >= Float32(0) or (n_verts > 0 and last_bsdf_pdf == PDF_DELTA_FULL):
+                    # A DELTA last bounce (glass, mirror: last_bsdf_pdf = -1)
+                    # is weighted too once a real vertex is stored -- the
+                    # env escape's n_verts rule, same reason: that vertex
+                    # already reported this transport through t=1 and
+                    # merging, and the delta bounce's zero dVCM with a live
+                    # dVC is exactly what discounts them. Gating on
+                    # `>= 0` alone handed every caustic seen through glass
+                    # weight 1: a mesh lamp over a glass sphere read 2.00x
+                    # pbrt in the caustic.
+                    if cos_l_hit > Float32(0) and al_area > Float32(0) and (dvcm_carry > Float32(0) or dvc_carry > Float32(0)):
                         # SmallVCM's GetLightRadiance, the balance weight over
                         # EVERY strategy -- not the 2-strategy power heuristic
                         # this was, which knew nothing of merging, t=1 or the
@@ -2572,6 +2581,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                         var emission_pdf_w = p_a * cos_l_hit * INV_PI
                         var w_cam_hit = (p_a * dvcm_carry + emission_pdf_w * dvc_carry) / cos_l_hit
                         mis_w_al_hit = Float32(1) / (Float32(1) + w_cam_hit)
+                    elif last_bsdf_pdf < Float32(0):
+                        pass   # delta bounce off a vertex with placeholder carries: unweighted, as before
                     elif cos_l_hit > Float32(0) and al_area > Float32(0):
                         # A vertex outside real per-vertex MIS (its carries are
                         # zero placeholders) keeps the old two-strategy weight.
