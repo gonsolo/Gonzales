@@ -1478,9 +1478,16 @@ def _vcm_keep(ref sd: SceneView, p: Point3f) -> Float32:
         if q <= Float32(0) or v <= Float32(0):
             return k_min
         return max(k_min, min(Float32(1), sd.vcmLambda * sqrt(v / (q * n))))
-    if n <= Float32(_PHOTON_BUCKET_CAP):
+    var cap = Float32(_vcm_cap(sd))
+    if n <= cap:
         return Float32(1)
-    return Float32(_PHOTON_BUCKET_CAP) / n
+    return cap / n
+
+
+@always_inline
+def _vcm_cap(ref sd: SceneView) -> Int32:
+    """VCM's merge-bucket cap: --vcm-cap, else _PHOTON_BUCKET_CAP."""
+    return sd.vcmBucketCap if sd.vcmBucketCap > Int32(0) else _PHOTON_BUCKET_CAP
 
 
 comptime _VCM_BUDGET_MIN_KEEP = Float32(4.0)
@@ -1595,7 +1602,7 @@ def _bdpt_insert_merge_vertex[use_gpu: Bool](
         var kp = _vcm_keep(sd, pos)
         if kp < Float32(1) and Float32(grid_coin_bits(k, pos)) * Float32(2.3283064e-10) >= kp:
             return
-    elif not grid_keep(heads, h, k, pos):
+    elif not grid_keep(heads, h, k, pos, _vcm_cap(sd)):
         return
     merge_next[unsafe_offset=k] = grid_push[use_gpu](heads, h, k)
 
@@ -1745,7 +1752,7 @@ def _bdpt_merge_from_cache(
         for ddy in range(-1, 2):
             for ddz in range(-1, 2):
                 var h = _hash_cell(cix + ddx, ciy + ddy, ciz + ddz)
-                var bucket_w = grid_weight(heads, h)
+                var bucket_w = grid_weight(heads, h, _vcm_cap(sd))
                 var k = Int(heads[unsafe_offset=h])
                 while k != -1:
                     # The merged path shares cv and the photon, so its interior
@@ -5636,6 +5643,7 @@ def vcm_render_gpu(
     no_denoise: Bool,
     verbose:  Bool,
     vcm_budget: Bool = False,
+    vcm_cap: Int32 = Int32(0),
 ) -> Int32:
     """GPU-accelerated Light Vertex Cache BDPT — same algorithm as
     vcm_render (CPU), same shared _bdpt_trace_light_path/
@@ -5813,7 +5821,7 @@ def vcm_render_gpu(
                 var mis_vc_weight_factor = Float32(1.0) / eta_vcm
 
                 var pass_seed = base_seed ^ UInt64(si * 2654435761 + 1)
-                var vsd = gsd.with_vcm(vcm_keep_ptr, vcm_keep_inv_cell, vcm_keep_scale, vcm_max_depth, vcm_cam, vcm_footprint, radius_i)
+                var vsd = gsd.with_vcm(vcm_keep_ptr, vcm_keep_inv_cell, vcm_keep_scale, vcm_max_depth, vcm_cam, vcm_footprint, radius_i).with_vcm_cap(vcm_cap)
                 if vcm_budget:
                     # This pass accumulates into one table and reads the other,
                     # whose lambda the previous pass's reduction set (0 on the

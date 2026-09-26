@@ -996,6 +996,7 @@ struct GpuSceneHandle(Movable):
             vcmStatIn=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
             vcmStatOut=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
             vcmLambda=Float32(0),
+            vcmBucketCap=Int32(0),
         )
 
 def gpu_available() -> Bool:

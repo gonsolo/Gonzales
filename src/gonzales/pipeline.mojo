@@ -804,6 +804,7 @@ def parse_and_render(
     vcm_spp: Int32 = Int32(-1),  # -1 = not passed on CLI; fall back to scene pixelsamples
     vcm_photons: Int32 = Int32(-1),
     vcm_budget: Bool = False,   # VCM per-cell photon budget (vcm_render_gpu)
+    vcm_cap: Int32 = Int32(0),  # VCM merge-bucket cap, 0 = default (vcm_render_gpu)
     # Task #163: route the plain --gpu wavefront path tracer's per-bounce
     # primary intersection test through the Vulkan RT backend instead of
     # the CUDA software-BVH kernel. Only wired into the plain --gpu path
@@ -1034,7 +1035,7 @@ def parse_and_render(
             if use_vk_vcm:
                 vulkaninterop_rt_destroy_scene(interop_scene_vcm)
         else:
-            ret = vcm_render_gpu(handle, psc, sd[unsafe_offset=0], resolved_vcm_spp, n_photons, no_denoise, verbose, vcm_budget)
+            ret = vcm_render_gpu(handle, psc, sd[unsafe_offset=0], resolved_vcm_spp, n_photons, no_denoise, verbose, vcm_budget, vcm_cap)
         gpu_free_scene(handle)
         sd.unsafe_free()
         mojo_parsed_free(psc)

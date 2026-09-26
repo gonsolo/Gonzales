@@ -99,6 +99,12 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
         s.vcmLambda = lam
         return s
 
+    def with_vcm_cap(self, cap: Int32) -> Self:
+        """This scene with VCM's merge-bucket cap overridden (0 = default)."""
+        var s = self
+        s.vcmBucketCap = cap
+        return s
+
     def with_camera_footprint(self, cam: CameraFootprint) -> Self:
         """This scene with the camera data every integrator's texture/bump
         footprint needs (footprint.mojo), for one render's spp."""
@@ -248,6 +254,8 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     var vcmStatIn:    Pointer[Float32, MutUntrackedOrigin]
     var vcmStatOut:   Pointer[Float32, MutUntrackedOrigin]
     var vcmLambda:    Float32
+    # VCM's merge-bucket cap (--vcm-cap); 0 = _PHOTON_BUCKET_CAP.
+    var vcmBucketCap: Int32
 
 # ── Infinite/distant-light emission + NEE sampling (shared by bdpt.mojo and
 #    sppm.mojo — lives here, not shading.mojo, to avoid an import cycle:

@@ -3734,6 +3734,7 @@ def mojo_parsed_scene_descriptor(
     sd[unsafe_offset=0].vcmStatIn       = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
     sd[unsafe_offset=0].vcmStatOut      = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
     sd[unsafe_offset=0].vcmLambda       = Float32(0)
+    sd[unsafe_offset=0].vcmBucketCap    = Int32(0)
     sd[unsafe_offset=0].blasNodesArr    = psc[unsafe_offset=0].blas_nodes_arr
     sd[unsafe_offset=0].blasPrimIdsArr  = psc[unsafe_offset=0].blas_primids_arr
     sd[unsafe_offset=0].blasCount       = Int64(psc[unsafe_offset=0].blas_count)

@@ -356,7 +356,8 @@ def grid_count(heads: Pointer[Int32, MutUntrackedOrigin], h: Int):
 
 
 @always_inline
-def grid_keep(heads: Pointer[Int32, MutUntrackedOrigin], h: Int, salt: Int, pos: Point3f) -> Bool:
+def grid_keep(heads: Pointer[Int32, MutUntrackedOrigin], h: Int, salt: Int, pos: Point3f,
+              cap: Int32 = _PHOTON_BUCKET_CAP) -> Bool:
     """Whether the element at `pos` survives thinning of bucket h (probability
     cap / n). The coin hashes `salt` and the position, so it is blind to the
     element's flux. `salt` must be DETERMINISTIC and change every pass: VCM
@@ -364,9 +365,9 @@ def grid_keep(heads: Pointer[Int32, MutUntrackedOrigin], h: Int, salt: Int, pos:
     -- an SPPM photon's slot comes from an atomic fetch-add, whose order races,
     and salting with it made every --sppm render differ run to run."""
     var n = heads[unsafe_offset=_HSIZE + h]
-    if n <= _PHOTON_BUCKET_CAP:
+    if n <= cap:
         return True
-    return UInt64(grid_coin_bits(salt, pos)) * UInt64(n) < UInt64(_PHOTON_BUCKET_CAP) << 32
+    return UInt64(grid_coin_bits(salt, pos)) * UInt64(n) < UInt64(cap) << 32
 
 
 @always_inline
@@ -395,12 +396,13 @@ def grid_push[use_gpu: Bool](heads: Pointer[Int32, MutUntrackedOrigin], h: Int, 
 
 
 @always_inline
-def grid_weight(heads: Pointer[Int32, MutUntrackedOrigin], h: Int) -> Float32:
+def grid_weight(heads: Pointer[Int32, MutUntrackedOrigin], h: Int,
+                cap: Int32 = _PHOTON_BUCKET_CAP) -> Float32:
     """1 / keep-probability of bucket h's surviving elements."""
     var n = heads[unsafe_offset=_HSIZE + h]
-    if n <= _PHOTON_BUCKET_CAP:
+    if n <= cap:
         return Float32(1)
-    return Float32(n) / Float32(_PHOTON_BUCKET_CAP)
+    return Float32(n) / Float32(cap)
 
 
 @always_inline
