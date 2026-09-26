@@ -125,6 +125,10 @@ struct ParsedScene_Mojo:
     var nvdb_grids:       Pointer[NvdbGrid, MutUntrackedOrigin]
     var nvdb_grid_count:  Int32
     var light_sampler:    LightSampler
+    # VCM's power pick over every light (_light_pick_cdf): n+1 entries (>= 2)
+    # in the order area, emitting sphere, distant, infinite, point.
+    var light_pick_cdf:   Pointer[Float32, MutUntrackedOrigin]
+    var light_pick_n:     Int32
     # Object instancing: one BLAS (private BVH2, over `meshes` above) per
     # ObjectBegin/ObjectEnd template, referenced by Instance.blasIdx.
     var blas_nodes_arr:   Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin]
@@ -3332,6 +3336,79 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         for i in range(1, ls_n + 1):
             ls_cdf[unsafe_offset=i] = Float32(i) / Float32(max(ls_n, 1))
     psc[unsafe_offset=0].light_sampler = LightSampler(ls_cdf, Int32(ls_n), Int32(0))
+    var (lp_cdf, lp_n) = _light_pick_cdf(psc[unsafe_offset=0])   # after the BVH: needs its root
+    psc[unsafe_offset=0].light_pick_cdf = lp_cdf
+    psc[unsafe_offset=0].light_pick_n = Int32(lp_n)
+
+def _light_pick_cdf(ref s: ParsedScene_Mojo) -> Tuple[Pointer[Float32, MutUntrackedOrigin], Int]:
+    """VCM's light-path light pick: a CDF over EVERY light, proportional to
+    its emitted power (pbrt's PowerLightSampler, Light::Phi), in the pick
+    order area, emitting sphere, distant, infinite, point. Returns the host
+    CDF (n+1 entries, at least 2) and n.
+
+    A uniform pick sent as many light paths to a dim light as to one 100x
+    brighter, and every photon of the bright one then carried 100x the
+    flux of the dim one's. Weighing by power gives every light path about
+    the same flux. The bounding radius of distant/infinite lights is the
+    TLAS root's, as _scene_bounding_sphere computes it on the device."""
+    var n_area = Int(s.area_light_count)
+    var n_sph = 0
+    for i in range(Int(s.sphere_count)):
+        if s.spheres[unsafe_offset=i].isAreaLight != Int8(0):
+            n_sph += 1
+    var nd = Int(s.distant_count)
+    var ni = Int(s.infinite_count)
+    var np_ = Int(s.point_count)
+    var n = n_area + n_sph + nd + ni + np_
+    var cdf = unsafe_alloc[Float32](max(n + 1, 2))
+    cdf[unsafe_offset=0] = Float32(0)
+    cdf[unsafe_offset=1] = Float32(0)
+    var r = Float32(1)
+    if s.bvh_node_count > Int32(0):
+        var root = s.bvh_nodes[unsafe_offset=0]
+        r = (root.max - root.min).length() * Float32(0.5)
+        if r < Float32(1e-4):
+            r = Float32(1)
+    var disk = PI * r * r
+    var k = 0
+    var total = Float32(0)
+    for i in range(n_area):
+        var al = s.area_lights[unsafe_offset=i]
+        total += max(al.emission.luma(), Float32(0)) * al.total_area * PI
+        k += 1; cdf[unsafe_offset=k] = total
+    for i in range(Int(s.sphere_count)):
+        var sph = s.spheres[unsafe_offset=i]
+        if sph.isAreaLight != Int8(0):
+            total += max(sph.emission.luma(), Float32(0)) * Float32(4) * PI * sph.radius * sph.radius * PI
+            k += 1; cdf[unsafe_offset=k] = total
+    for i in range(nd):
+        total += max(s.distant_lights[unsafe_offset=i].emission.luma(), Float32(0)) * disk
+        k += 1; cdf[unsafe_offset=k] = total
+    for i in range(ni):
+        # Mean radiance over the sphere: the plain pixel mean, the map being
+        # equal-area (_equal_area_sphere_to_square), times the scale.
+        var il = s.infinite_lights[unsafe_offset=i]
+        var mean = max(il.scale.luma(), Float32(0))
+        if il.cdf_w > Int32(0) and _is_real_ptr(il.pixels_ptr):
+            var npx = Int(il.cdf_w) * Int(il.cdf_h)
+            var acc = Float64(0)
+            for p in range(npx):
+                acc += Float64(RGB(il.pixels_ptr[unsafe_offset=p*3], il.pixels_ptr[unsafe_offset=p*3+1],
+                                   il.pixels_ptr[unsafe_offset=p*3+2]).luma())
+            mean = Float32(acc / Float64(max(npx, 1))) * max(il.scale.luma(), Float32(0))
+        total += Float32(4) * PI * disk * mean
+        k += 1; cdf[unsafe_offset=k] = total
+    for i in range(np_):
+        total += max(s.point_lights[unsafe_offset=i].intensity.luma(), Float32(0)) * Float32(4) * PI
+        k += 1; cdf[unsafe_offset=k] = total
+    if total > Float32(0):
+        for i in range(1, n + 1):
+            cdf[unsafe_offset=i] = cdf[unsafe_offset=i] / total
+    else:
+        for i in range(1, n + 1):
+            cdf[unsafe_offset=i] = Float32(i) / Float32(max(n, 1))
+    return (cdf, n)
+
 
 # ── Exported API ──────────────────────────────────────────────────────────────
 
@@ -3499,6 +3576,8 @@ def mojo_parsed_free(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]):
         psc[unsafe_offset=0].nvdb_grids.unsafe_free()
     if Int(psc[unsafe_offset=0].light_sampler.cdf) > 4:
         psc[unsafe_offset=0].light_sampler.cdf.unsafe_free()
+    if Int(psc[unsafe_offset=0].light_pick_cdf) > 4:
+        psc[unsafe_offset=0].light_pick_cdf.unsafe_free()
     # blas_nodes_arr/blas_primids_arr/instances are always real allocations
     # (min size 1, see finalize_scene) regardless of blas_count/instance_count.
     for bi in range(Int(psc[unsafe_offset=0].blas_count)):
@@ -3633,6 +3712,12 @@ def mojo_parsed_scene_descriptor(
     sd[unsafe_offset=0].nvdbGrids        = psc[unsafe_offset=0].nvdb_grids
     sd[unsafe_offset=0].nvdbGridCount    = Int64(psc[unsafe_offset=0].nvdb_grid_count)
     sd[unsafe_offset=0].lightSampler    = psc[unsafe_offset=0].light_sampler
+    var n_sph_l = 0
+    for i in range(Int(psc[unsafe_offset=0].sphere_count)):
+        if psc[unsafe_offset=0].spheres[unsafe_offset=i].isAreaLight != Int8(0):
+            n_sph_l += 1
+    sd[unsafe_offset=0].sphereLightCount = Int64(n_sph_l)
+    sd[unsafe_offset=0].lightPickCdf    = psc[unsafe_offset=0].light_pick_cdf
     sd[unsafe_offset=0].blasNodesArr    = psc[unsafe_offset=0].blas_nodes_arr
     sd[unsafe_offset=0].blasPrimIdsArr  = psc[unsafe_offset=0].blas_primids_arr
     sd[unsafe_offset=0].blasCount       = Int64(psc[unsafe_offset=0].blas_count)

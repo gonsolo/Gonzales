@@ -223,6 +223,10 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     # sphere lights live among all the spheres, and the VCM light pick needs
     # their count per sample, so it is counted once at upload.
     var sphereLightCount: Int64
+    # VCM's power-proportional light pick over every light (gpu_scene's
+    # _light_pick_cdf, n+1 entries in the order area, sphere, distant,
+    # infinite, point); dangling = the uniform pick.
+    var lightPickCdf: Pointer[Float32, MutUntrackedOrigin]
 
 # ── Infinite/distant-light emission + NEE sampling (shared by bdpt.mojo and
 #    sppm.mojo — lives here, not shading.mojo, to avoid an import cycle:

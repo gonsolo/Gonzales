@@ -127,6 +127,7 @@ def _dummy_sd() -> SceneView:
         Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
         CameraFootprint.none(),
         Int64(0),   # sphereLightCount
+        Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),   # lightPickCdf
     )
 
 # ── _pdf_solid_to_area ────────────────────────────────────────────────────────
@@ -330,6 +331,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
         CameraFootprint.none(),
         Int64(0),   # sphereLightCount
+        Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),   # lightPickCdf
     )
 
     var cv = BDPTVertex(

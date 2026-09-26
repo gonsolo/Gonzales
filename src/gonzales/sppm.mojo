@@ -572,7 +572,19 @@ def sample_area_light_uniform(
     piece + point on a curve's swept tube (kind==1, `curves` must be a real
     pointer whenever any curve lights exist)."""
     var li = Int(pcg.next_uint() % UInt32(n_lights))
-    var al = areaLights[unsafe_offset=li]
+    return sample_area_light_point(areaLights[unsafe_offset=li], meshes, pcg, curves)
+
+
+def sample_area_light_point(
+    al:         AreaLight,
+    meshes:     Pointer[TriangleMesh, MutUntrackedOrigin],
+    mut pcg:    PCG32,
+    curves:     Pointer[Curve, MutUntrackedOrigin] = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(),
+) -> AreaLightSample:
+    """A point + geometric normal on the GIVEN area light, uniform in area
+    (sample_area_light_uniform without its pick). For a caller that chose
+    the light itself -- VCM's power-proportional pick, whose densities
+    assume the light it picked is the light that emits."""
     if al.kind == Int8(1):
         var curve = curves[unsafe_offset=Int(al.meshIdx)]
         var piece = Int(pcg.next_uint() % UInt32(max(Int(curve.n_pieces), 1)))

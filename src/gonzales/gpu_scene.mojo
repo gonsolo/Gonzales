@@ -566,6 +566,8 @@ struct LightBuffers(Movable):
     var n_point_lights: Int
     var light_sampler_buf: DeviceBuffer[DType.uint8]   # (n_area+1) × sizeof(Float32) CDF
     var n_light_sampler: Int                           # n_area lights (CDF has n+1 entries)
+    var light_pick_buf: DeviceBuffer[DType.uint8]      # (n_all+1) × Float32, _light_pick_cdf
+    var n_light_pick: Int
     var infinite_lights_buf: DeviceBuffer[DType.uint8]  # n_infinite × sizeof(InfiniteLight) = 48
     var il_pixels_bufs: List[DeviceBuffer[DType.uint8]] # per-light HDR pixel data on GPU
     var il_cdf_bufs: List[DeviceBuffer[DType.uint8]]    # per-light 2D CDF on GPU
@@ -587,6 +589,9 @@ struct LightBuffers(Movable):
     @always_inline
     def light_sampler_ptr(mut self) -> Pointer[Float32, MutUntrackedOrigin]:
         return typed_ptr[Float32](self.light_sampler_buf)
+
+    def light_pick_ptr(mut self) -> Pointer[Float32, MutUntrackedOrigin]:
+        return typed_ptr[Float32](self.light_pick_buf)
 
     @always_inline
     def infinite_lights_ptr(mut self) -> Pointer[InfiniteLight, MutUntrackedOrigin]:
@@ -626,6 +631,10 @@ struct LightBuffers(Movable):
         var ls_buf = _gpu_upload_array[Float32](ctx, ls_host, max(ls_entries, 2))
         ctx.synchronize()   # ls_host is freed next
         ls_host.unsafe_free()
+        # The parse-time power pick (pbrt_parser's _light_pick_cdf), >= 2 entries.
+        var n_pick = Int(s.light_pick_n)
+        var lp_buf = _gpu_upload_array[Float32](ctx, s.light_pick_cdf, max(n_pick + 1, 2))
+        ctx.synchronize()
 
         # Upload infinite/environment lights with GPU-resident pixel/CDF data
         var il_count = Int(s.infinite_count)
@@ -651,6 +660,7 @@ struct LightBuffers(Movable):
                     distant_lights_buf=dl_buf^, n_distant_lights=Int(s.distant_count),
                     point_lights_buf=pl_buf^, n_point_lights=Int(s.point_count),
                     light_sampler_buf=ls_buf^, n_light_sampler=Int(s.light_sampler.n),
+                    light_pick_buf=lp_buf^, n_light_pick=n_pick,
                     infinite_lights_buf=il_buf^, il_pixels_bufs=il_pixels_bufs^, il_cdf_bufs=il_cdf_bufs^,
                     il_w2l_bufs=il_w2l_bufs^, n_infinite_lights=Int(s.infinite_count))
 
@@ -982,6 +992,7 @@ struct GpuSceneHandle(Movable):
             vcmCamX=Float32(0), vcmCamY=Float32(0), vcmCamZ=Float32(0),
             vcmFootprint=Float32(0), vcmMergeR=Float32(0), camFp=self.cam_fp,
             sphereLightCount=Int64(self.n_sphere_lights),
+            lightPickCdf=self.lights.light_pick_ptr(),
         )
 
 def gpu_available() -> Bool:

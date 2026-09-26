@@ -129,6 +129,7 @@ def _build_scene() -> SceneView:
         Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
         CameraFootprint.none(),
         Int64(0),   # sphereLightCount
+        Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),   # lightPickCdf
     )
 
 def _identity_camera_matrices() -> Tuple[Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]]:
