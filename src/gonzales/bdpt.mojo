@@ -5660,6 +5660,7 @@ def vcm_render_gpu(
     verbose:  Bool,
     vcm_budget: Bool = False,
     vcm_cap: Int32 = Int32(0),
+    vcm_no_keep_mis: Bool = False,
 ) -> Int32:
     """GPU-accelerated Light Vertex Cache BDPT — same algorithm as
     vcm_render (CPU), same shared _bdpt_trace_light_path/
@@ -5823,7 +5824,11 @@ def vcm_render_gpu(
                 var vcm_keep_ptr = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
                 var vcm_keep_inv_cell = Float32(0)
                 var vcm_keep_scale = Float32(1)
-                if si > 0:
+                # --vcm-no-keep-mis: the insert still thins and the gather still
+                # weights 1/k, but merging's MIS is shown no keep table, so it
+                # weighs a thinned cell as if every photon were there -- the
+                # "thinning without the keep-aware MIS" variant, for comparison.
+                if si > 0 and not vcm_no_keep_mis:
                     var radius_prev = vcm_merge_radius(scene_radius, si - 1)
                     var prev_tab = merge_heads_ptr_b if si % 2 == 0 else merge_heads_ptr_a
                     vcm_keep_ptr = Pointer[Int32, MutUntrackedOrigin](unsafe_from_address=Int(prev_tab) + _HSIZE * size_of[Int32]())
