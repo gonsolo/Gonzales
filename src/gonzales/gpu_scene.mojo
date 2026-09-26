@@ -993,6 +993,9 @@ struct GpuSceneHandle(Movable):
             vcmFootprint=Float32(0), vcmMergeR=Float32(0), camFp=self.cam_fp,
             sphereLightCount=Int64(self.n_sphere_lights),
             lightPickCdf=self.lights.light_pick_ptr(),
+            vcmStatIn=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+            vcmStatOut=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+            vcmLambda=Float32(0),
         )
 
 def gpu_available() -> Bool:

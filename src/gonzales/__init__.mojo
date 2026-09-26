@@ -75,6 +75,7 @@ def main() raises:
     var use_vcm = False
     var vcm_spp = Int32(-1)  # -1 = not passed on CLI; fall back to scene pixelsamples
     var vcm_photons = Int32(-1)  # -1 = not passed on CLI; fall back to n_pix (today's default)
+    var vcm_budget = False       # --vcm-budget: per-cell photon budget instead of the fixed cap
     var use_vulkan_rt = False
     var use_vulkan_rt_shade = False
     var use_vcm_wavefront = False
@@ -179,6 +180,8 @@ def main() raises:
         elif arg == "--vcm-photons" and i + 1 < len(args):
             i += 1
             vcm_photons = _parse_int32(String(args[i]), 0)
+        elif arg == "--vcm-budget":
+            vcm_budget = True
         elif arg == "--sppm":
             use_sppm = True
         elif arg == "--sppm-passes" and i + 1 < len(args):
@@ -253,7 +256,7 @@ def main() raises:
     elif interactive:
         render_interactive(path_cstr, sobol, use_gpu, spectral=spectral, fullscreen=fullscreen, override_w=override_w, override_h=override_h, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, use_vol_restir_reuse=use_vol_restir_reuse, headless_frames=headless_frames)
     else:
-        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons, use_vulkan_rt_shade=use_vulkan_rt_shade, use_vcm_wavefront=use_vcm_wavefront, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, use_vol_restir_reuse=use_vol_restir_reuse)
+        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons, vcm_budget=vcm_budget, use_vulkan_rt_shade=use_vulkan_rt_shade, use_vcm_wavefront=use_vcm_wavefront, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, use_vol_restir_reuse=use_vol_restir_reuse)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
         if rc != Int32(0):

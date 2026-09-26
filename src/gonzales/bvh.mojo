@@ -86,6 +86,19 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     def get_type_name() -> String:
         return "SceneView"
 
+    def with_vcm_budget(
+        self,
+        stat_in: Pointer[Float32, MutUntrackedOrigin],
+        stat_out: Pointer[Float32, MutUntrackedOrigin],
+        lam: Float32,
+    ) -> Self:
+        """This scene plus one VCM pass's per-cell budget state."""
+        var s = self
+        s.vcmStatIn = stat_in
+        s.vcmStatOut = stat_out
+        s.vcmLambda = lam
+        return s
+
     def with_camera_footprint(self, cam: CameraFootprint) -> Self:
         """This scene with the camera data every integrator's texture/bump
         footprint needs (footprint.mojo), for one render's spp."""
@@ -227,6 +240,14 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     # _light_pick_cdf, n+1 entries in the order area, sphere, distant,
     # infinite, point); dangling = the uniform pick.
     var lightPickCdf: Pointer[Float32, MutUntrackedOrigin]
+    # VCM's per-cell photon budget (--vcm-budget, bdpt.mojo _vcm_keep): the
+    # previous pass's per-bucket statistics [Q, V] (merge queries, second
+    # moment of their contribution at full keep), this pass's accumulator,
+    # and the Lagrange multiplier that meets the work budget. Dangling / 0 =
+    # the fixed-cap thinning.
+    var vcmStatIn:    Pointer[Float32, MutUntrackedOrigin]
+    var vcmStatOut:   Pointer[Float32, MutUntrackedOrigin]
+    var vcmLambda:    Float32
 
 # ── Infinite/distant-light emission + NEE sampling (shared by bdpt.mojo and
 #    sppm.mojo — lives here, not shading.mojo, to avoid an import cycle:

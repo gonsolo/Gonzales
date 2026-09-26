@@ -366,12 +366,19 @@ def grid_keep(heads: Pointer[Int32, MutUntrackedOrigin], h: Int, salt: Int, pos:
     var n = heads[unsafe_offset=_HSIZE + h]
     if n <= _PHOTON_BUCKET_CAP:
         return True
+    return UInt64(grid_coin_bits(salt, pos)) * UInt64(n) < UInt64(_PHOTON_BUCKET_CAP) << 32
+
+
+@always_inline
+def grid_coin_bits(salt: Int, pos: Point3f) -> UInt32:
+    """The thinning coin as 32 uniform bits: a splitmix hash of `salt` and
+    the position (see grid_keep for the salt rules)."""
     var bits = bitcast[DType.uint32, 4](SIMD[DType.float32, 4](pos.x, pos.y, pos.z, Float32(0)))
     var z = UInt64(salt) * UInt64(0x9E3779B97F4A7C15) ^ (UInt64(bits[0]) << 32 | UInt64(bits[1])) ^ UInt64(bits[2])
     z = (z ^ (z >> 30)) * UInt64(0xBF58476D1CE4E5B9)
     z = (z ^ (z >> 27)) * UInt64(0x94D049BB133111EB)
     z ^= z >> 31
-    return UInt64(z >> 32) * UInt64(n) < UInt64(_PHOTON_BUCKET_CAP) << 32
+    return UInt32(z >> 32)
 
 
 @always_inline

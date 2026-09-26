@@ -39,7 +39,7 @@ from .rng import PCG32
 from .transform import matrix_invert
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, write_image_cropwindow, denoise
-from .sppm import _geom_normal, _dielectric_bounce, medium_after_crossing, _cosine_hemisphere_sample, sample_area_light_uniform, sample_area_light_point, sample_sphere_light_emission, _HSIZE, _hash_cell, _sppm_render_core, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_push, grid_weight, _sppm_count_photon
+from .sppm import _geom_normal, _dielectric_bounce, medium_after_crossing, _cosine_hemisphere_sample, sample_area_light_uniform, sample_area_light_point, sample_sphere_light_emission, _HSIZE, _hash_cell, _sppm_render_core, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push, grid_weight, _sppm_count_photon
 from .sppm import (
     SPPMPixel, SPPMPhoton, _sppm_insert_photon,
     _sppm_gather_one, _sppm_vp_brdf, _sppm_nee_one,
@@ -1460,9 +1460,37 @@ def _vcm_keep(ref sd: SceneView, p: Point3f) -> Float32:
     var h = _hash_cell(Int(floor(p.x * sd.vcmKeepInvCell)), Int(floor(p.y * sd.vcmKeepInvCell)),
                        Int(floor(p.z * sd.vcmKeepInvCell)))
     var n = Float32(sd.vcmKeepCounts[unsafe_offset=h]) * sd.vcmKeepScale
+    if _vcm_budget_active(sd):
+        # Per-cell budget: the keep probability that minimises merge variance
+        # sum V/k for a fixed merge work sum Q n k -- k = lambda sqrt(V/(Q n)),
+        # lambda meeting the budget (vcm_render_gpu). Q: merge queries in the
+        # cell, V: their contribution's second moment at full keep, n: its
+        # light vertices, all from the previous pass. This SAME value thins
+        # the insert and weights the gather (1/k), so a cell at k = 0 simply
+        # has no merging, and the MIS gives the other strategies its share.
+        # Floored at ~_VCM_BUDGET_MIN_KEEP expected vertices, so no cell goes
+        # dark for good: at k = 0 it would never produce statistics again.
+        if n <= Float32(0):
+            return Float32(1)
+        var q = sd.vcmStatIn[unsafe_offset=2 * h] * sd.vcmKeepScale
+        var v = sd.vcmStatIn[unsafe_offset=2 * h + 1] * sd.vcmKeepScale
+        var k_min = min(Float32(1), _VCM_BUDGET_MIN_KEEP / n)
+        if q <= Float32(0) or v <= Float32(0):
+            return k_min
+        return max(k_min, min(Float32(1), sd.vcmLambda * sqrt(v / (q * n))))
     if n <= Float32(_PHOTON_BUCKET_CAP):
         return Float32(1)
     return Float32(_PHOTON_BUCKET_CAP) / n
+
+
+comptime _VCM_BUDGET_MIN_KEEP = Float32(4.0)
+
+
+@always_inline
+def _vcm_budget_active(ref sd: SceneView) -> Bool:
+    """Whether this pass thins by the per-cell budget (--vcm-budget, from the
+    second pass on) rather than the fixed cap."""
+    return _is_real_ptr(sd.vcmStatIn) and _is_real_ptr(sd.vcmKeepCounts) and sd.vcmLambda > Float32(0)
 
 # Merge radius per camera vertex, in pixels of image footprint. A global
 # radius sized to the scene (SmallVCM's 0.003 * scene radius) is ~0.24 m on
@@ -1550,6 +1578,7 @@ def _bdpt_insert_merge_vertex[use_gpu: Bool](
     merge_next: Pointer[Int32, MutUntrackedOrigin],
     heads: Pointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
+    ref sd: SceneView,
 ):
     """Second pass of the grid build: insert LVC slot `k` into the merge hash
     grid, unless it's an unused tail slot or thinned out of an over-full
@@ -1559,7 +1588,14 @@ def _bdpt_insert_merge_vertex[use_gpu: Bool](
     var h = _bdpt_merge_slot_bucket(k, lvc, lvc_path_len, inv_cell)
     if h < 0:
         return
-    if not grid_keep(heads, h, k, lvc[unsafe_offset=k].pos):
+    var pos = lvc[unsafe_offset=k].pos
+    if _vcm_budget_active(sd):
+        # The per-cell budget's keep probability -- the one the gather
+        # weights by and the MIS reads (_vcm_keep).
+        var kp = _vcm_keep(sd, pos)
+        if kp < Float32(1) and Float32(grid_coin_bits(k, pos)) * Float32(2.3283064e-10) >= kp:
+            return
+    elif not grid_keep(heads, h, k, pos):
         return
     merge_next[unsafe_offset=k] = grid_push[use_gpu](heads, h, k)
 
@@ -1570,6 +1606,7 @@ def _bdpt_build_merge_grid(
     merge_next: Pointer[Int32, MutUntrackedOrigin],
     heads: Pointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
+    ref sd: SceneView,
 ):
     """CPU-only grid build (mirrors sppm.mojo's _build_grid): reset all
     buckets, then insert every LVC vertex via the SAME atomic-exchange
@@ -1587,7 +1624,7 @@ def _bdpt_build_merge_grid(
     parallelize(count_one, n_light_paths * _BDPT_MAX_VERTS)
 
     def insert_one(k: Int) {imm}:
-        _bdpt_insert_merge_vertex[True](k, lvc, lvc_path_len, merge_next, heads, inv_cell)
+        _bdpt_insert_merge_vertex[True](k, lvc, lvc_path_len, merge_next, heads, inv_cell, sd)
     parallelize(insert_one, n_light_paths * _BDPT_MAX_VERTS)
 
 # Initial merge radius as a fraction of the scene bounding sphere: SmallVCM's
@@ -1703,6 +1740,7 @@ def _bdpt_merge_from_cache(
     var cix = Int(floor(cv.pos.x * inv_cell))
     var ciy = Int(floor(cv.pos.y * inv_cell))
     var ciz = Int(floor(cv.pos.z * inv_cell))
+    var budget = _vcm_budget_active(sd)
     for ddx in range(-1, 2):
         for ddy in range(-1, 2):
             for ddz in range(-1, 2):
@@ -1821,9 +1859,24 @@ def _bdpt_merge_from_cache(
                                 var w_light = (lv.dVCM + lv.dVC * camera_bsdf_dir_pdf_w) * inv_eta_x
                                 var w_camera = (cv.dVCM + cv.dVC * camera_bsdf_rev_pdf_w) * inv_eta_x
                                 w = Float32(1) / (w_light + Float32(1) + w_camera)
-                            total += f_cv * lv.beta * (w * bucket_w)
+                            # 1 / keep: the bucket's under the fixed cap; under
+                            # the per-cell budget the vertex's own (_vcm_keep,
+                            # the probability its insert survived).
+                            var keep_w = bucket_w
+                            if budget:
+                                keep_w = Float32(1) / _vcm_keep(sd, lv.pos)
+                            total += f_cv * lv.beta * (w * keep_w)
                     k = Int(merge_next[unsafe_offset=k])
-    return total * cv.beta * norm
+    var result = total * cv.beta * norm
+    if _is_real_ptr(sd.vcmStatOut):
+        # The per-cell budget's statistics for the NEXT pass: one merge query
+        # in this cell, and its contribution's second moment, scaled by this
+        # cell's keep to undo the thinning's 1/k (V is wanted at full keep).
+        var h0 = _hash_cell(cix, ciy, ciz)
+        var lum = (result.v0 + result.v1 + result.v2 + result.v3) * Float32(0.25)
+        _ = Atomic[Float32].fetch_add(sd.vcmStatOut.unsafe_offset(2 * h0), Float32(1))
+        _ = Atomic[Float32].fetch_add(sd.vcmStatOut.unsafe_offset(2 * h0 + 1), lum * lum * _vcm_keep(sd, cv.pos))
+    return result
 
 # ── Trace one camera subpath, connecting to the shared cache inline ─────────
 
@@ -4650,7 +4703,7 @@ def _bdpt_render_core(
 
         parallelize(emit_light_path, n_light_paths_merge)
 
-        _bdpt_build_merge_grid(lvc, lvc_path_len, n_light_paths_merge, merge_next, merge_heads, merge_inv_cell)
+        _bdpt_build_merge_grid(lvc, lvc_path_len, n_light_paths_merge, merge_next, merge_heads, merge_inv_cell, sd)
 
         # ── Phase 1.5: t=1 light tracing (splat) ─────────────────────────
         # A light vertex lands on an ARBITRARY pixel, not the one being
@@ -5536,12 +5589,40 @@ def bdpt_merge_grid_insert_gpu(
     merge_next: Pointer[Int32, MutUntrackedOrigin],
     heads: Pointer[Int32, MutUntrackedOrigin],
     inv_cell: Float32,
+    sd: SceneView,
 ):
     var lvc_cap = Int(lvc_cap_dp)
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
     if k >= lvc_cap:
         return
-    _bdpt_insert_merge_vertex[True](k, lvc, lvc_path_len, merge_next, heads, inv_cell)
+    _bdpt_insert_merge_vertex[True](k, lvc, lvc_path_len, merge_next, heads, inv_cell, sd)
+
+
+comptime _VCM_BUDGET_REDUCE_THREADS = 4096
+
+
+def vcm_budget_reduce_gpu(
+    stat: Pointer[Float32, MutUntrackedOrigin],
+    heads: Pointer[Int32, MutUntrackedOrigin],
+    red: Pointer[Float32, MutUntrackedOrigin],
+):
+    """One pass's per-cell budget sums, for the next pass's lambda:
+    red[0] += sqrt(V Q n) and red[1] += Q min(n, cap) over every bucket --
+    lambda = red[1] / red[0] spends the fixed cap's merge work on the
+    variance-optimal keep probabilities (_vcm_keep). Each thread sums a
+    contiguous slice, then one atomic add per thread."""
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    var chunk = _HSIZE // _VCM_BUDGET_REDUCE_THREADS
+    var s = Float32(0)
+    var b = Float32(0)
+    for h in range(tid * chunk, (tid + 1) * chunk):
+        var q = stat[unsafe_offset=2 * h]
+        var n = Float32(heads[unsafe_offset=_HSIZE + h])
+        if q > Float32(0) and n > Float32(0):
+            s += sqrt(stat[unsafe_offset=2 * h + 1] * q * n)
+            b += q * min(n, Float32(_PHOTON_BUCKET_CAP))
+    _ = Atomic[Float32].fetch_add(red.unsafe_offset(0), s)
+    _ = Atomic[Float32].fetch_add(red.unsafe_offset(1), b)
 
 
 # ── Host driver ───────────────────────────────────────────────────────────
@@ -5554,6 +5635,7 @@ def vcm_render_gpu(
     n_photons_req: Int,
     no_denoise: Bool,
     verbose:  Bool,
+    vcm_budget: Bool = False,
 ) -> Int32:
     """GPU-accelerated Light Vertex Cache BDPT — same algorithm as
     vcm_render (CPU), same shared _bdpt_trace_light_path/
@@ -5600,6 +5682,17 @@ def vcm_render_gpu(
             var merge_heads_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](2 * _HSIZE * size_of[Int32]())   # heads | counts
             # The previous pass's table, kept intact for _vcm_keep; the two swap each pass.
             var merge_heads_buf_prev = handle[].ctx.enqueue_create_buffer[DType.uint8](2 * _HSIZE * size_of[Int32]())
+            # --vcm-budget: per-bucket [Q, V] merge statistics, this pass's and
+            # the previous one's (swapped like the heads), and the reduction
+            # [sum sqrt(V Q n), sum Q min(n, cap)] that sets lambda.
+            var stat_n = 2 * _HSIZE if vcm_budget else 2
+            var stat_buf_a = handle[].ctx.enqueue_create_buffer[DType.float32](stat_n)
+            var stat_buf_b = handle[].ctx.enqueue_create_buffer[DType.float32](stat_n)
+            var budget_red_buf = handle[].ctx.enqueue_create_buffer[DType.float32](2)
+            var stat_ptr_a = Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=Int(stat_buf_a.unsafe_ptr()))
+            var stat_ptr_b = Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=Int(stat_buf_b.unsafe_ptr()))
+            var budget_red_ptr = Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=Int(budget_red_buf.unsafe_ptr()))
+            var vcm_lambda = Float32(0)
             var merge_next_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(lvc_cap, 1) * size_of[Int32]())
             var inter_light_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[Intersection]())
             var inter_cam_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection]())
@@ -5721,6 +5814,19 @@ def vcm_render_gpu(
 
                 var pass_seed = base_seed ^ UInt64(si * 2654435761 + 1)
                 var vsd = gsd.with_vcm(vcm_keep_ptr, vcm_keep_inv_cell, vcm_keep_scale, vcm_max_depth, vcm_cam, vcm_footprint, radius_i)
+                if vcm_budget:
+                    # This pass accumulates into one table and reads the other,
+                    # whose lambda the previous pass's reduction set (0 on the
+                    # first pass: the fixed cap).
+                    if si % 2 == 0:
+                        stat_buf_a.enqueue_fill(Float32(0))
+                    else:
+                        stat_buf_b.enqueue_fill(Float32(0))
+                    var stat_out = stat_ptr_a if si % 2 == 0 else stat_ptr_b
+                    var stat_in = stat_ptr_b if si % 2 == 0 else stat_ptr_a
+                    vsd = vsd.with_vcm_budget(
+                        stat_in if si > 0 else Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+                        stat_out, vcm_lambda)
                 handle[].ctx.enqueue_function[_bdpt_emit_light_paths_gpu](
                     lvc_ptr,
                     path_len_ptr,
@@ -5750,7 +5856,7 @@ def vcm_render_gpu(
                     lvc_ptr, path_len_ptr, Int64(lvc_cap), merge_heads_ptr, merge_inv_cell,
                     grid_dim=grid_merge_ins, block_dim=block_size)
                 handle[].ctx.enqueue_function[bdpt_merge_grid_insert_gpu](
-                    lvc_ptr, path_len_ptr, Int64(lvc_cap), merge_next_ptr, merge_heads_ptr, merge_inv_cell,
+                    lvc_ptr, path_len_ptr, Int64(lvc_cap), merge_next_ptr, merge_heads_ptr, merge_inv_cell, vsd,
                     grid_dim=grid_merge_ins, block_dim=block_size)
 
 
@@ -5806,6 +5912,20 @@ def vcm_render_gpu(
                     grid_dim=grid_light,
                     block_dim=block_size,
                 )
+
+                if vcm_budget:
+                    # lambda for the next pass: the budget is the merge work
+                    # the fixed cap would have spent, sum Q min(n, cap).
+                    budget_red_buf.enqueue_fill(Float32(0))
+                    handle[].ctx.enqueue_function[vcm_budget_reduce_gpu](
+                        vsd.vcmStatOut, merge_heads_ptr, budget_red_ptr,
+                        grid_dim=_VCM_BUDGET_REDUCE_THREADS // block_size, block_dim=block_size)
+                    with budget_red_buf.map_to_host() as red:
+                        var s_sum = red.unsafe_ptr()[unsafe_offset=0]
+                        var b_sum = red.unsafe_ptr()[unsafe_offset=1]
+                        vcm_lambda = b_sum / s_sum if s_sum > Float32(0) else Float32(0)
+                    if verbose:
+                        print("VCM (GPU): budget lambda " + String(vcm_lambda))
 
                 if verbose:
                     print("VCM (GPU): sample " + String(si + 1) + "/" + String(n_spp))
@@ -6321,7 +6441,7 @@ def vcm_render_gpu_wavefront(
                     lvc_ptr, path_len_ptr, Int64(lvc_cap), merge_heads_ptr, merge_inv_cell,
                     grid_dim=grid_merge_ins, block_dim=block_size)
                 handle[].ctx.enqueue_function[bdpt_merge_grid_insert_gpu](
-                    lvc_ptr, path_len_ptr, Int64(lvc_cap), merge_next_ptr, merge_heads_ptr, merge_inv_cell,
+                    lvc_ptr, path_len_ptr, Int64(lvc_cap), merge_next_ptr, merge_heads_ptr, merge_inv_cell, vsd,
                     grid_dim=grid_merge_ins, block_dim=block_size)
 
                 if use_vk and si == 0:

@@ -3341,9 +3341,10 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     psc[unsafe_offset=0].light_pick_n = Int32(lp_n)
 
 def _light_pick_cdf(ref s: ParsedScene_Mojo) -> Tuple[Pointer[Float32, MutUntrackedOrigin], Int]:
-    """VCM's light-path light pick: a CDF over EVERY light, proportional to
-    its emitted power (pbrt's PowerLightSampler, Light::Phi), in the pick
-    order area, emitting sphere, distant, infinite, point. Returns the host
+    """VCM's and SPPM's light-path light pick: a CDF over EVERY light,
+    proportional to its emitted power (pbrt's PowerLightSampler, Light::Phi)
+    mixed half-and-half with uniform (see the end), in the pick order area,
+    emitting sphere, distant, infinite, point. Returns the host
     CDF (n+1 entries, at least 2) and n.
 
     A uniform pick sent as many light paths to a dim light as to one 100x
@@ -3401,13 +3402,25 @@ def _light_pick_cdf(ref s: ParsedScene_Mojo) -> Tuple[Pointer[Float32, MutUntrac
     for i in range(np_):
         total += max(s.point_lights[unsafe_offset=i].intensity.luma(), Float32(0)) * Float32(4) * PI
         k += 1; cdf[unsafe_offset=k] = total
-    if total > Float32(0):
-        for i in range(1, n + 1):
-            cdf[unsafe_offset=i] = cdf[unsafe_offset=i] / total
-    else:
-        for i in range(1, n + 1):
-            cdf[unsafe_offset=i] = Float32(i) / Float32(max(n, 1))
+    # A DEFENSIVE mixture, half uniform: p_i = 0.5/n + 0.5 P_i/sum P. Pure
+    # power trusts Phi, and an environment's Phi counts all the flux through
+    # the bounding disk -- on the lantern scene (a 200 m ground plane) the dim
+    # night sky outweighed the lamp 1600:1, left it 0.06% of the light paths
+    # and read 0.87 of pbrt at 16 spp. Mixed, no light gets less than half
+    # its uniform share (at most 2x the uniform pick's variance anywhere),
+    # and a light that dominates by power still gets most of the paths.
+    var inv_n = Float32(1) / Float32(max(n, 1))
+    var prev = Float32(0)
+    for i in range(1, n + 1):
+        var p_pow = (cdf[unsafe_offset=i] - prev) / total if total > Float32(0) else inv_n
+        prev = cdf[unsafe_offset=i]
+        cdf[unsafe_offset=i] = cdf[unsafe_offset=i - 1] + _LIGHT_PICK_UNIFORM_SHARE * inv_n + (Float32(1) - _LIGHT_PICK_UNIFORM_SHARE) * p_pow
+    if n > 0:
+        cdf[unsafe_offset=n] = Float32(1)
     return (cdf, n)
+
+
+comptime _LIGHT_PICK_UNIFORM_SHARE = Float32(0.5)
 
 
 # ── Exported API ──────────────────────────────────────────────────────────────
@@ -3718,6 +3731,9 @@ def mojo_parsed_scene_descriptor(
             n_sph_l += 1
     sd[unsafe_offset=0].sphereLightCount = Int64(n_sph_l)
     sd[unsafe_offset=0].lightPickCdf    = psc[unsafe_offset=0].light_pick_cdf
+    sd[unsafe_offset=0].vcmStatIn       = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
+    sd[unsafe_offset=0].vcmStatOut      = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
+    sd[unsafe_offset=0].vcmLambda       = Float32(0)
     sd[unsafe_offset=0].blasNodesArr    = psc[unsafe_offset=0].blas_nodes_arr
     sd[unsafe_offset=0].blasPrimIdsArr  = psc[unsafe_offset=0].blas_primids_arr
     sd[unsafe_offset=0].blasCount       = Int64(psc[unsafe_offset=0].blas_count)

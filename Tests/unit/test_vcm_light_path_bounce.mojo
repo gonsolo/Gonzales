@@ -137,6 +137,9 @@ def _build_scene() -> SceneView:
         CameraFootprint.none(),
         Int64(0),   # sphereLightCount
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),   # lightPickCdf
+        Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),   # vcmStatIn
+        Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),   # vcmStatOut
+        Float32(0),   # vcmLambda
     )
 
 # Both subpath halves of a VCM pass share one hero-wavelength set (see

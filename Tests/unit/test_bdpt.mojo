@@ -128,6 +128,9 @@ def _dummy_sd() -> SceneView:
         CameraFootprint.none(),
         Int64(0),   # sphereLightCount
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),   # lightPickCdf
+        Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),   # vcmStatIn
+        Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),   # vcmStatOut
+        Float32(0),   # vcmLambda
     )
 
 # ── _pdf_solid_to_area ────────────────────────────────────────────────────────
@@ -332,6 +335,9 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         CameraFootprint.none(),
         Int64(0),   # sphereLightCount
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),   # lightPickCdf
+        Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),   # vcmStatIn
+        Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),   # vcmStatOut
+        Float32(0),   # vcmLambda
     )
 
     var cv = BDPTVertex(
