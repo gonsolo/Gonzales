@@ -1,7 +1,8 @@
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, TestSuite
-from gonzales.transform import matrix_multiply, matrix_invert, transform_points, transform_normals
+from gonzales.transform import matrix_multiply, matrix_invert, transform_points, transform_normals, transform_normal, Mat4
+from gonzales.geometry import Vec3f
 
 comptime EPS: Float32 = 1e-4
 
@@ -178,6 +179,24 @@ def test_transform_points_scale_scales_coordinates_exactly() raises:
     s.unsafe_free(); pts_in.unsafe_free(); pts_out.unsafe_free()
 
 # ── transform_normals ────────────────────────────────────────────────────────
+
+def test_transform_normal_follows_a_rotated_instance() raises:
+    """An instance rotated 90 degrees about z carries the normal +x to +y.
+    worldToObj is the inverse rotation (-90 degrees); the normal needs its
+    TRANSPOSE. The untransposed product gave -y: every rotated instance was
+    shaded with its normals rotated backwards."""
+    var w2o = SIMD[DType.float32, 16](0)
+    w2o[1] = -1.0; w2o[4] = 1.0; w2o[10] = 1.0; w2o[15] = 1.0   # R_z(-90), column-major
+    var n = transform_normal(Mat4(w2o), Vec3f(1.0, 0.0, 0.0))
+    assert_true(_close(n.x, 0.0) and _close(n.y, 1.0) and _close(n.z, 0.0))
+    var buf = unsafe_alloc[Float32](16)
+    for i in range(16): buf[unsafe_offset=i] = w2o[i]
+    var n_in = unsafe_alloc[Float32](3)
+    n_in[unsafe_offset=0] = 1.0; n_in[unsafe_offset=1] = 0.0; n_in[unsafe_offset=2] = 0.0
+    var n_out = unsafe_alloc[Float32](3)
+    transform_normals(buf, n_in, Int32(1), n_out)
+    assert_true(_close(n_out[unsafe_offset=0], 0.0) and _close(n_out[unsafe_offset=1], 1.0))
+    buf.unsafe_free(); n_in.unsafe_free(); n_out.unsafe_free()
 
 def test_transform_normals_identity_leaves_normal_unchanged() raises:
     """Inv_matrix here is the inverse of the forward transform; for the

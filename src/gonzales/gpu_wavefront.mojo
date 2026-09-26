@@ -8,7 +8,7 @@ from .restir_di import DIReservoir, di_reservoir_init
 from .restir_vol import VolReservoir, vol_reservoir_init
 from .sampling import gen_primary_ray_state
 from .spectrum import SpectralSample, spectral_sample_to_rgb
-from .transform import transform_normal_by_instance
+from .transform import transform_normal, Mat4
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
 from max.gpu import block_dim, block_idx, thread_idx
 from max.gpu.host import DeviceBuffer, DeviceContext
@@ -790,7 +790,7 @@ def gen_aux_buffers_gpu(
             normal = Vec3f(e1.y*e2.z - e1.z*e2.y, e1.z*e2.x - e1.x*e2.z, e1.x*e2.y - e1.y*e2.x)
             var inst_idx = isects_tmp[unsafe_offset=tid].primId.instanceIdx
             if inst_idx >= Int32(0):
-                var n_world = transform_normal_by_instance(instances[unsafe_offset=Int(inst_idx)].worldToObj, normal.to_simd())
+                var n_world = transform_normal(Mat4(instances[unsafe_offset=Int(inst_idx)].worldToObj), normal.to_simd())
                 normal = vec3f(n_world)
             var nl = normal.length()
             if nl > Float32(0): normal = normal / nl

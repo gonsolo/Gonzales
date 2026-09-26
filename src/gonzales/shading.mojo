@@ -16,7 +16,7 @@ from .rng import PCG32
 from .footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
 from .bvh import BVH2Node, SceneView, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core, HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_square_to_sphere, _equal_area_sphere_to_square
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, mix_bits_u64
-from .transform import transform_normal_by_instance, Mat4
+from .transform import transform_normal, Mat4
 from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide, guide_is_active
 from .spectrum import spec_refl_unbounded, SpectralHandle, null_spectral_handle, SpectralSample, SampledWavelengths, rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb, rgb_bands_to_spectral_sample
 from .reservoir import ReservoirState, reservoir_update, reservoir_finalize, reservoir_combine, reservoir_cap_confidence
@@ -196,7 +196,7 @@ def _emitter_face_normal(
     var n2 = Vec3f(mesh.normals[unsafe_offset=v2*3], mesh.normals[unsafe_offset=v2*3+1], mesh.normals[unsafe_offset=v2*3+2])
     var sn = n0 * w0 + n1 * bu + n2 * bv
     if instance_idx >= Int32(0):
-        sn = transform_normal_by_instance(instances[unsafe_offset=Int(instance_idx)].worldToObj, sn)
+        sn = transform_normal(Mat4(instances[unsafe_offset=Int(instance_idx)].worldToObj), sn)
     if dot(sn, sn) <= Float32(1e-12):
         return gn
     if dot(gn, sn) < Float32(0.0):
@@ -309,7 +309,7 @@ def _shading_normal(
     var n2 = Vec3f(mesh.normals[unsafe_offset=v2*3], mesh.normals[unsafe_offset=v2*3+1], mesh.normals[unsafe_offset=v2*3+2])
     var sn = n0 * w0 + n1 * bu + n2 * bv
     if instance_idx >= Int32(0):
-        sn = transform_normal_by_instance(instances[unsafe_offset=Int(instance_idx)].worldToObj, sn)
+        sn = transform_normal(Mat4(instances[unsafe_offset=Int(instance_idx)].worldToObj), sn)
     var slen = dot(sn, sn)
     if slen <= Float32(1e-12):
         return geo_normal
@@ -643,7 +643,7 @@ def _geom_normal_and_ray(
     _transform_ray_to_instance_space."""
     var gn = cross(p1 - p0, p2 - p0)
     if instance_idx >= Int32(0):
-        gn = transform_normal_by_instance(instances[unsafe_offset=Int(instance_idx)].worldToObj, gn)
+        gn = transform_normal(Mat4(instances[unsafe_offset=Int(instance_idx)].worldToObj), gn)
     var nlen = dot(gn, gn)
     if nlen > Float32(0.0):
         gn = gn * (Float32(1.0) / sqrt(nlen))

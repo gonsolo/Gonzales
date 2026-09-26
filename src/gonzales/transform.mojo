@@ -207,18 +207,14 @@ def transform_points(
 
 
 @always_inline
-def transform_normal_by_instance(
-    world_to_obj: SIMD[DType.float32, 16],
-    n: Vec3f,
-) -> Vec3f:
-    """Same formula as transform_normals below (there: pointer-based, bulk;
-    here: a single normal via an Instance's worldToObj, which already IS
-    the "inverse" that function expects as its `inv_matrix` argument)."""
-    var nx = n[0]; var ny = n[1]; var nz = n[2]
-    var wx = world_to_obj[0]*nx + world_to_obj[4]*ny + world_to_obj[8]*nz
-    var wy = world_to_obj[1]*nx + world_to_obj[5]*ny + world_to_obj[9]*nz
-    var wz = world_to_obj[2]*nx + world_to_obj[6]*ny + world_to_obj[10]*nz
-    return Vec3f(wx, wy, wz)
+def transform_normal(inv: Mat4, n: Vec3f) -> Vec3f:
+    """A normal transforms by the transpose of the inverse: inv^T . n, with
+    `inv` the inverse of the point transform (an Instance's worldToObj, a
+    shape's ctm_inv). THE one formula: it used to exist twice, and the copy
+    for instances kept the untransposed inv . n after the other was fixed,
+    so every rotated instance got its normals rotated backwards (a 45-degree
+    instanced quad facing a distant light rendered black)."""
+    return inv.transpose_mul(n)
 
 
 def transform_normals(
@@ -227,20 +223,10 @@ def transform_normals(
     count: Int32,
     normals_out: Pointer[Float32, MutUntrackedOrigin],
 ):
-    # Normals transform by the transpose of the inverse 3×3.
-    # result[i] = sum_j inv[i*4+j] * n[j]  for i,j in 0..2 -- i.e. row i of
-    # the (column-major) inv_matrix dotted with n, which is (inv_matrix^T)·n
-    # since inv_matrix's row i is inv_matrix^T's column i. The previous
-    # grouping (i0,i4,i8 / i1,i5,i9 / i2,i6,i10) computed inv_matrix·n
-    # directly with no transpose -- a no-op difference for symmetric inputs
-    # (identity, uniform scale) but wrong for any real rotation, silently
-    # applying the inverse rotation instead of the forward one.
-    var i0 = inv_matrix[unsafe_offset=0]; var i1 = inv_matrix[unsafe_offset=1]; var i2 = inv_matrix[unsafe_offset=2]
-    var i4 = inv_matrix[unsafe_offset=4]; var i5 = inv_matrix[unsafe_offset=5]; var i6 = inv_matrix[unsafe_offset=6]
-    var i8 = inv_matrix[unsafe_offset=8]; var i9 = inv_matrix[unsafe_offset=9]; var i10 = inv_matrix[unsafe_offset=10]
+    var inv = Mat4.load(inv_matrix)
     for i in range(Int(count)):
         var b = i * 3
-        var nx = normals_in[unsafe_offset=b];  var ny = normals_in[unsafe_offset=b+1];  var nz = normals_in[unsafe_offset=b+2]
-        normals_out[unsafe_offset=b]   = i0*nx + i1*ny + i2*nz
-        normals_out[unsafe_offset=b+1] = i4*nx + i5*ny + i6*nz
-        normals_out[unsafe_offset=b+2] = i8*nx + i9*ny + i10*nz
+        var n = transform_normal(inv, Vec3f(normals_in[unsafe_offset=b], normals_in[unsafe_offset=b+1], normals_in[unsafe_offset=b+2]))
+        normals_out[unsafe_offset=b] = n.x
+        normals_out[unsafe_offset=b+1] = n.y
+        normals_out[unsafe_offset=b+2] = n.z

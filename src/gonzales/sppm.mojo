@@ -33,7 +33,7 @@ from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_w
 from .shading import _tex_lookup, _get_tri_verts, _apply_surface_maps, \
     apply_surface_maps_at_hit, uv_footprint_at_hit, area_light_hit_cos
 from .sampling import power_heuristic, camera_ray_from_film_xy, FilmFilter, film_filter_of, film_filter_offset
-from .transform import transform_normal_by_instance
+from .transform import transform_normal, Mat4
 from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, write_image_cropwindow, denoise
@@ -210,7 +210,7 @@ def _geom_normal(
     instance's object space, so the normal is transformed to world space
     before returning (the hit *point*, elsewhere computed as
     ray_org + ray_dir*tHit, needs no such fixup — see transform.mojo's
-    transform_normal_by_instance for why).
+    transform_normal for why).
 
     `spheres`/`hit` give analytic spheres (primId.type == 4) their exact
     outward normal, mirroring `_shading_normal_at` right below (which this
@@ -242,7 +242,7 @@ def _geom_normal(
     var p2 = Vec3f(m.points[unsafe_offset=v2*4], m.points[unsafe_offset=v2*4+1], m.points[unsafe_offset=v2*4+2])
     var n = cross(p1 - p0, p2 - p0)
     if inter.primId.instanceIdx >= Int32(0):
-        n = transform_normal_by_instance(instances[unsafe_offset=Int(inter.primId.instanceIdx)].worldToObj, n)
+        n = transform_normal(Mat4(instances[unsafe_offset=Int(inter.primId.instanceIdx)].worldToObj), n)
     var l = dot(n, n)
     if l > Float32(0.0):
         n = n * (Float32(1.0) / sqrt(l))
@@ -289,7 +289,7 @@ def _shading_normal_at(
     var p2 = Vec3f(m.points[unsafe_offset=v2*4], m.points[unsafe_offset=v2*4+1], m.points[unsafe_offset=v2*4+2])
     var gn = cross(p1 - p0, p2 - p0)
     if inter.primId.instanceIdx >= Int32(0):
-        gn = transform_normal_by_instance(instances[unsafe_offset=Int(inter.primId.instanceIdx)].worldToObj, gn)
+        gn = transform_normal(Mat4(instances[unsafe_offset=Int(inter.primId.instanceIdx)].worldToObj), gn)
     var gl = dot(gn, gn)
     if gl > Float32(0.0): gn = gn * (Float32(1.0) / sqrt(gl))
     # No per-vertex normals → flat normal (sentinel addr <= 4, see GPU-nullable convention).
@@ -301,7 +301,7 @@ def _shading_normal_at(
     var n2 = Vec3f(m.normals[unsafe_offset=v2*3], m.normals[unsafe_offset=v2*3+1], m.normals[unsafe_offset=v2*3+2])
     var sn = n0 * w0 + n1 * inter.u + n2 * inter.v
     if inter.primId.instanceIdx >= Int32(0):
-        sn = transform_normal_by_instance(instances[unsafe_offset=Int(inter.primId.instanceIdx)].worldToObj, sn)
+        sn = transform_normal(Mat4(instances[unsafe_offset=Int(inter.primId.instanceIdx)].worldToObj), sn)
     var sl = dot(sn, sn)
     if sl <= Float32(1e-12):
         return gn
