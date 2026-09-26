@@ -218,6 +218,11 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     # pbrt's texture/bump footprint camera data (footprint.mojo); none() =
     # every map at LOD 0 with pbrt's fixed bump step.
     var camFp:          CameraFootprint
+    # How many of `spheres` are emitters (isAreaLight). Every other light
+    # type has its own lights-only array whose length is its count; analytic
+    # sphere lights live among all the spheres, and the VCM light pick needs
+    # their count per sample, so it is counted once at upload.
+    var sphereLightCount: Int64
 
 # ── Infinite/distant-light emission + NEE sampling (shared by bdpt.mojo and
 #    sppm.mojo — lives here, not shading.mojo, to avoid an import cycle:
@@ -441,6 +446,21 @@ def _sample_point_light_nee(
     return LightSample(wi, Li, Float32(1.0), dist, True, True)
 
 @always_inline
+def sphere_light_cone_pdf(sph: Sphere, p: Vec3f) -> Float32:
+    """The solid-angle density _sample_sphere_light_nee draws with from `p`:
+    1 / (the cone the sphere subtends there), or 0 where it cannot sample at
+    all (p on or inside the sphere). One definition, because VCM's MIS needs
+    this exact density in three places -- the NEE itself, a BSDF ray landing
+    on the sphere, and a sphere light path's first vertex."""
+    var to_c = sph.center.to_simd() - p
+    var dc_sq = dot(to_c, to_c)
+    if dc_sq <= sph.radius * sph.radius:
+        return Float32(0.0)
+    var cos_max = sqrt(Float32(1.0) - sph.radius * sph.radius / dc_sq)
+    var solid_angle = TWO_PI * (Float32(1.0) - cos_max)
+    return Float32(1.0) / solid_angle if solid_angle > Float32(0.0) else Float32(0.0)
+
+@always_inline
 def _sample_sphere_light_nee(
     sph: Sphere,
     n_sphere_lights: Int,
@@ -483,7 +503,6 @@ def _sample_sphere_light_nee(
     var wlen = dot(wi, wi)
     if wlen > Float32(0.0):
         wi = wi * (Float32(1.0) / sqrt(wlen))
-    var solid_angle = TWO_PI * (Float32(1.0) - cos_max)
     # NO 1/n_sphere_lights selection factor. That factor belongs to a sampler
     # that picks ONE light at random, and every caller here instead ENUMERATES
     # every sphere and sums (`for sph_i in range(sphereCount)`, in shading.mojo,
@@ -496,7 +515,9 @@ def _sample_sphere_light_nee(
     # `n_sphere_lights` is deliberately left in the signature: it is what the
     # emitter-hit MIS on the other side keys its own spelling off, and both
     # halves must agree that the factor is absent.
-    var pdf_light = Float32(1.0) / solid_angle
+    var pdf_light = sphere_light_cone_pdf(sph, hit_point)
+    if pdf_light <= Float32(0.0):
+        return _invalid_light_sample()
     # `dist` must be the distance to the sphere's SURFACE along wi, not to its
     # CENTER. Every caller uses it as the shadow ray's tmax (dist*0.9999), so
     # returning the centre distance made the ray overshoot the near surface by

@@ -891,6 +891,7 @@ struct GpuSceneHandle(Movable):
     var lights: LightBuffers
     var spheres_buf: DeviceBuffer[DType.uint8]   # n_spheres × sizeof(Sphere) = 36
     var n_spheres: Int
+    var n_sphere_lights: Int
     var curves: CurveBuffers
     var media: MediaBuffers
     var measured: MeasuredBuffers
@@ -980,6 +981,7 @@ struct GpuSceneHandle(Movable):
             vcmKeepInvCell=Float32(0), vcmKeepScale=Float32(1), vcmMaxDepth=Int32(9),
             vcmCamX=Float32(0), vcmCamY=Float32(0), vcmCamZ=Float32(0),
             vcmFootprint=Float32(0), vcmMergeR=Float32(0), camFp=self.cam_fp,
+            sphereLightCount=Int64(self.n_sphere_lights),
         )
 
 def gpu_available() -> Bool:
@@ -1091,6 +1093,10 @@ def gpu_upload_scene(
             var lights = LightBuffers.upload(ctx, s)
             # analytical sphere primitives + sphere area lights
             var sphere_buf = _gpu_upload_array[Sphere](ctx, s.spheres, Int(s.sphere_count))
+            var n_sphere_lights = 0
+            for si in range(Int(s.sphere_count)):
+                if s.spheres[unsafe_offset=si].isAreaLight != Int8(0):
+                    n_sphere_lights += 1
             var media = MediaBuffers.upload(ctx, s)
             var measured = MeasuredBuffers.upload(ctx, s)
 
@@ -1154,6 +1160,7 @@ def gpu_upload_scene(
                 lights=lights^,
                 spheres_buf=sphere_buf^,
                 n_spheres=Int(s.sphere_count),
+                n_sphere_lights=n_sphere_lights,
                 curves=curves^,
                 media=media^,
                 measured=measured^,

@@ -523,6 +523,39 @@ struct AreaLightSample(TrivialRegisterPassable):
     var point:  Vec3f
     var normal: Vec3f
 
+def sample_sphere_light_emission(
+    ref sd: SceneView, k: Int, mut pcg: PCG32,
+) -> Tuple[Int, Vec3f, Vec3f, Vec3f]:
+    """Start of a light subpath on the k-th EMITTING analytic sphere:
+    (its index in sd.spheres, a uniform point on its surface -- area density
+    1/(4 pi r^2) -- the outward normal there, a cosine-weighted direction
+    about that normal). The same emission model mesh lights use, so the
+    flux is Le * pi * area / pick. sd.spheres holds every analytic sphere,
+    emitters among them, hence the scan for the k-th emitter.
+
+    Shared by SPPM's photons and VCM's light paths. Its NEE counterpart,
+    _sample_sphere_light_nee, samples the visible cone instead -- a
+    different strategy for the same light, which VCM's MIS weighs against
+    this one (see _bdpt_light_path_init's sphere branch)."""
+    var si = 0
+    var seen = 0
+    for i in range(Int(sd.sphereCount)):
+        if sd.spheres[unsafe_offset=i].isAreaLight != Int8(0):
+            if seen == k:
+                si = i
+                break
+            seen += 1
+    var sph = sd.spheres[unsafe_offset=si]
+    var us1 = pcg.next_float(); var us2 = pcg.next_float()
+    var cz = Float32(1) - Float32(2) * us1
+    var sz = sqrt(max(Float32(0), Float32(1) - cz * cz))
+    var sphi = Float32(2) * PI * us2
+    var sn = Vec3f(sz * cos(sphi), sz * sin(sphi), cz)
+    var du1 = pcg.next_float(); var du2 = pcg.next_float()
+    var dir = _cosine_hemisphere_sample(sn, du1, du2)
+    return (si, sph.center.to_simd() + sn * sph.radius, sn, dir)
+
+
 @always_inline
 def sample_area_light_uniform(
     areaLights: Pointer[AreaLight, MutUntrackedOrigin],
@@ -1127,10 +1160,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     # back to visible-point NEE alone and lost every multiply-scattered path.
     # Scenes/vcm-media-sphere-light.pbrt read 0.0073 against pbrt's 0.0244
     # that way -- the fog ball kept its directly-lit rim and lost its glow.
-    var n_sphere = 0
-    for i in range(Int(sd.sphereCount)):
-        if sd.spheres[unsafe_offset=i].isAreaLight != Int8(0):
-            n_sphere += 1
+    var n_sphere = Int(sd.sphereLightCount)
     var n_distant = Int(sd.distantLightCount)
     var n_infinite = Int(sd.infiniteLightCount)
     var n_point = Int(sd.pointLightCount)
@@ -1178,28 +1208,14 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         # area. Its NEE counterpart is _sample_sphere_light_nee (cone
         # sampling), a different strategy for the same light; SPPM does not
         # MIS the two (photons and NEE cover disjoint path lengths here).
-        var want = light_pick - n_area
-        var si_e = 0
-        var seen = 0
-        for i in range(Int(sd.sphereCount)):
-            if sd.spheres[unsafe_offset=i].isAreaLight != Int8(0):
-                if seen == want:
-                    si_e = i
-                    break
-                seen += 1
+        var (si_e, sp_e, sn_e, sd_e) = sample_sphere_light_emission(sd, light_pick - n_area, pcg)
         var sph_e = sd.spheres[unsafe_offset=si_e]
-        var us1 = pcg.next_float(); var us2 = pcg.next_float()
-        var cz = Float32(1) - Float32(2) * us1
-        var sz = sqrt(max(Float32(0), Float32(1) - cz * cz))
-        var sphi = Float32(2) * PI * us2
-        var sn = Vec3f(sz * cos(sphi), sz * sin(sphi), cz)
         var area_e = Float32(4) * PI * sph_e.radius * sph_e.radius
         var scale_e = PI * area_e * Float32(n_lights) / Float32(n_emit)
-        var du1e = pcg.next_float(); var du2e = pcg.next_float()
         flux = spec_illum(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
                           sph_e.emission.r * scale_e, sph_e.emission.g * scale_e, sph_e.emission.b * scale_e, ph_wavelengths)
-        ro = sph_e.center + sn * sph_e.radius * Float32(1.0001)
-        rd = vec3f(_cosine_hemisphere_sample(sn, du1e, du2e))
+        ro = point3f(sp_e + sn_e * (sph_e.radius * Float32(0.0001)))
+        rd = vec3f(sd_e)
     elif light_pick < n_area + n_sphere + n_distant:
         var dl = sd.distantLights[unsafe_offset=light_pick - n_area - n_sphere]
         var (center, radius) = _scene_bounding_sphere(sd)
@@ -1691,22 +1707,6 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
 
 
 @always_inline
-def _sppm_has_sphere_lights(ref sd: SceneView) -> Bool:
-    """Whether any analytic sphere is an area light. Cheap O(sphereCount)
-    scan — sd.spheres holds ALL analytic spheres (light or not), not a
-    pre-filtered lights-only array like every other light type, so this is
-    the only way to know without a dedicated count. Used only at
-    once-per-render/once-per-pass guard sites (never per-pixel/per-photon) —
-    NOT folded into _sppm_photon_pass's own light-selection pool below,
-    since sphere-light photon/light-path EMISSION isn't supported (NEE only,
-    see _sppm_nee_one) — this only prevents those guards from wrongly
-    treating "no emittable lights" as "no lights at all" and skipping NEE
-    for a scene lit purely by sphere lights."""
-    for i in range(Int(sd.sphereCount)):
-        if sd.spheres[unsafe_offset=i].isAreaLight != Int8(0):
-            return True
-    return False
-
 def _sppm_photon_pass(
     photons:      Pointer[SPPMPhoton, MutUntrackedOrigin],
     n_emit:       Int,
@@ -2574,7 +2574,7 @@ def _sppm_nee_update(
     pass_idx: Int,
 ):
     var n_lights = Int(sd.areaLightCount) + Int(sd.distantLightCount) + Int(sd.infiniteLightCount) + Int(sd.pointLightCount)
-    if n_lights == 0 and not _sppm_has_sphere_lights(sd):
+    if n_lights == 0 and not (sd.sphereLightCount > 0):
         return
 
     def nee_one(i: Int) {imm}:
@@ -2718,7 +2718,7 @@ def _sppm_render_core(
     var iso_scale = psc[unsafe_offset=0].film_iso / Float32(100)
     var max_comp = psc[unsafe_offset=0].film_max_comp
 
-    if Int(sd.areaLightCount) + Int(sd.distantLightCount) + Int(sd.infiniteLightCount) + Int(sd.pointLightCount) == 0 and not _sppm_has_sphere_lights(sd):
+    if Int(sd.areaLightCount) + Int(sd.distantLightCount) + Int(sd.infiniteLightCount) + Int(sd.pointLightCount) == 0 and not (sd.sphereLightCount > 0):
         print("SPPM: no lights in scene, cannot emit photons")
         return Tuple[Bool, Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]](
             False, Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Float32, MutUntrackedOrigin].unsafe_dangling())

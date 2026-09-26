@@ -28,7 +28,7 @@ from .bvh import (
     BVH2Node, SceneView, traverse_bvh2_core, any_hit_bvh2_core, test_spheres,
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _is_real_ptr,
     HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps,
-    LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
+    LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, sphere_light_cone_pdf, _sample_infinite_light_nee,
     render_aux_buffers,
 )
 from .sampling import power_heuristic, sample_ggx_vndf, sample_cosine_hemisphere_world, mix_bits_u64, camera_ray_from_film_xy, \
@@ -38,12 +38,12 @@ from .rng import PCG32
 from .transform import matrix_invert
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, write_image_cropwindow, denoise
-from .sppm import _geom_normal, _dielectric_bounce, medium_after_crossing, _cosine_hemisphere_sample, sample_area_light_uniform, _HSIZE, _hash_cell, _sppm_render_core, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_push, grid_weight, _sppm_count_photon
+from .sppm import _geom_normal, _dielectric_bounce, medium_after_crossing, _cosine_hemisphere_sample, sample_area_light_uniform, sample_sphere_light_emission, _HSIZE, _hash_cell, _sppm_render_core, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_push, grid_weight, _sppm_count_photon
 from .sppm import (
     SPPMPixel, SPPMPhoton, _sppm_insert_photon,
     _sppm_gather_one, _sppm_vp_brdf, _sppm_nee_one,
     _sppm_finalize_albedo_one_pixel, _sppm_finalize_one_pixel,
-    _VP_SAMPLES, _sppm_has_sphere_lights, _MAX_B,
+    _VP_SAMPLES, _MAX_B,
     _sppm_trace_visible_point, _sppm_store_photon, _sppm_trace_photon,
     gather_disk_contains,
 )
@@ -2455,46 +2455,44 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # this hit contributes nothing. Was `pass`, which left the
                     # weight at 1 -- see the area-light handler below.
                     mis_w_sph_hit = Float32(0)
-                elif last_bsdf_pdf >= Float32(0):
-                    # The competing NEE strategy was taken at the vertex that
-                    # GENERATED this ray, so its cone pdf must be measured from
-                    # there -- `ro` -- exactly as the area-light case below
-                    # measures its own pdf with `t_hit` from the same origin.
-                    # This used to measure from `hit`, the point ON the sphere,
-                    # where |center - hit| IS the radius by construction, so
-                    # sin2_max was identically 1, the `< 1` guard below always
-                    # failed and mis_w stayed 1: the emitter hit took FULL
-                    # weight against an already-full-weight NEE and every
-                    # sphere light was counted TWICE. Measured on a sphere
-                    # light over a diffuse floor: --vcm read 1.96x pbrt, and
-                    # the emitter hit alone accounted for 0.121 of the correct
-                    # 0.130 where MIS should have given it ~3.6e-5.
-                    var to_c_hit = sph_hit.center - ro
-                    var dc_sq_hit = to_c_hit.length_sq()
-                    var sin2_max_hit = sph_hit.radius * sph_hit.radius / dc_sq_hit
-                    if sin2_max_hit < Float32(1):
-                        var cos_max_hit = sqrt(Float32(1) - sin2_max_hit)
-                        var solid_angle_hit = Float32(2) * PI * (Float32(1) - cos_max_hit)
-                        # No 1/count factor -- see _sample_sphere_light_nee,
-                        # whose pdf this must match exactly for MIS to be right.
-                        var pdf_light_hit = Float32(1) / solid_angle_hit
-                        mis_w_sph_hit = power_heuristic(last_bsdf_pdf, pdf_light_hit)
+                elif last_bsdf_pdf >= Float32(0) or (n_verts > 0 and last_bsdf_pdf == PDF_DELTA_FULL):
+                    # The competing NEE was taken at the vertex that GENERATED
+                    # this ray, so its cone pdf is measured from there -- not
+                    # from `hit`, ON the sphere, where the cone is the whole
+                    # hemisphere (that bug once counted every sphere light
+                    # twice), and not from `ro` either, which is the last null
+                    # interface crossed rather than the vertex.
+                    var x_nee = ro.to_simd() - ray_dir * mis_null_dist
+                    var pdf_cone = sphere_light_cone_pdf(sph_hit, x_nee)
+                    if dvcm_carry > Float32(0) or dvc_carry > Float32(0):
+                        # SmallVCM's GetLightRadiance, the balance weight over
+                        # EVERY strategy now that sphere lights start light
+                        # paths too (t=1 and merging compete here, not just
+                        # NEE). Same form as the area-light hit below:
+                        #     wCamera = (directPdfA * dVCM + emissionPdfW * dVC) / cos_l
+                        # with directPdfA the cone pdf in area measure,
+                        # pdf_cone * cos_l / t^2 -- its t^2 cancels the one
+                        # already in dVCM -- and emissionPdfW the light
+                        # path's cos_l / (pi * 4 pi r^2 * n_lights). After a
+                        # delta bounce dVCM is 0 and only dVC speaks, as for
+                        # the area light (17ccebfc).
+                        var aw_hit = Float32(4) * PI * sph_hit.radius * sph_hit.radius * _bdpt_n_lights(sd)
+                        var w_cam_sph = pdf_cone * dvcm_carry / max(t_hit * t_hit, Float32(1e-12)) + dvc_carry / (PI * aw_hit)
+                        mis_w_sph_hit = Float32(1) / (Float32(1) + w_cam_sph)
+                    elif last_bsdf_pdf < Float32(0):
+                        pass   # delta bounce off a vertex with placeholder carries: unweighted, as before
+                    elif pdf_cone > Float32(0):
+                        # A vertex outside real per-vertex MIS (zero
+                        # placeholder carries) keeps the two-strategy weight.
+                        # No 1/count factor -- see _sample_sphere_light_nee.
+                        mis_w_sph_hit = power_heuristic(last_bsdf_pdf, pdf_cone)
                 elif last_bsdf_pdf == _VOL_PHASE_HIT:
-                    # Same missing-case bug as the area-light branch above
-                    # used to have: an isotropic-phase-sampled ray landing
-                    # directly on a sphere light took FULL weight here with
-                    # no competing-strategy reduction at all (this elif
-                    # simply didn't exist). Same pdf convention as the
-                    # `>= 0` branch, just weighed against the phase pdf
-                    # (INV_FOUR_PI) instead of a surface BSDF's.
-                    var to_c_vhit = sph_hit.center - ro
-                    var dc_sq_vhit = to_c_vhit.length_sq()
-                    var sin2_max_vhit = sph_hit.radius * sph_hit.radius / dc_sq_vhit
-                    if sin2_max_vhit < Float32(1):
-                        var cos_max_vhit = sqrt(Float32(1) - sin2_max_vhit)
-                        var solid_angle_vhit = Float32(2) * PI * (Float32(1) - cos_max_vhit)
-                        var pdf_light_vhit = Float32(1) / solid_angle_vhit
-                        mis_w_sph_hit = power_heuristic(INV_FOUR_PI, pdf_light_vhit)
+                    # An isotropic-phase-sampled ray landing on a sphere light,
+                    # weighed against the volume vertex's own NEE (volume
+                    # vertices stay outside real per-vertex MIS).
+                    var pdf_cone_v = sphere_light_cone_pdf(sph_hit, ro.to_simd() - ray_dir * mis_null_dist)
+                    if pdf_cone_v > Float32(0):
+                        mis_w_sph_hit = power_heuristic(INV_FOUR_PI, pdf_cone_v)
                 total += beta * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (sph_hit.emission).r, (sph_hit.emission).g, (sph_hit.emission).b, wavelengths) * mis_w_sph_hit
                 return False   # direct hit on emissive analytic sphere -- terminates the path
 
@@ -2600,8 +2598,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # right when both halves agree on the pdf. The distance is
                     # from the scattering vertex, not the current ray origin.
                     var d_vol = t_hit + mis_null_dist
-                    var n_lights_hit = Float32(max(Int(sd.areaLightCount) + Int(sd.distantLightCount)
-                                                   + Int(sd.infiniteLightCount) + Int(sd.pointLightCount), 1))
+                    var n_lights_hit = max(_bdpt_n_lights(sd), Float32(1))
                     if cos_l_hit > Float32(0) and al_area > Float32(0):
                         var pdf_light_vol = d_vol * d_vol / (cos_l_hit * n_lights_hit * al_area)
                         mis_w_al_hit = power_heuristic(INV_FOUR_PI, pdf_light_vol)
@@ -2741,17 +2738,10 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # order was already distant,point,sphere, matching the iterator).
                 for li_d in range(_bdpt_simple_light_count(sd)):
                     var ls_i = _bdpt_sample_simple_light(sd, li_d, hit.to_simd(), pcg)
-                    # Distant lights get the VCM policy (emission = the disk's area
-                    # pdf over the pick, direct = 1 for a delta). Point and sphere
-                    # lights keep the default until their emission densities are
-                    # written down the same way -- noted, not silently assumed.
-                    var pol_i = mis_policy_power()
-                    if li_d < Int(sd.distantLightCount):
-                        var (_c_i, r_i) = _scene_bounding_sphere(sd)
-                        var le_i = _lobe_eval[want_pdfs=True](v, ls_i.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
-                        pol_i = MisPolicy(le_i.scoped, eta_x, dvcm_carry, dvc_carry,
-                                          Float32(1.0) / max(_bdpt_n_lights(sd) * PI * r_i * r_i, Float32(1e-12)),
-                                          le_i.pdf_rev, False, abs(dot(ls_i.wi, gn_geo)))
+                    if not ls_i.valid:
+                        continue   # a non-emitting sphere
+                    var pol_i = _vcm_simple_light_policy(sd, li_d, ls_i, v, eta_x, dvcm_carry, dvc_carry,
+                                                         abs(dot(ls_i.wi, gn_geo)), wavelengths)
                     var w_i = nee_weight_lobe(ls_i, _vertex_ctx(v), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, pol_i)
                     total += _bdpt_nee_contribute(beta, w_i, ls_i, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, v.mat_kind == LobeKind.diffuse_transmit or v.mat_kind == LobeKind.hair)
                 for inf_i in range(Int(sd.infiniteLightCount)):
@@ -2894,7 +2884,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # through the shared, already-correct _nee_weight_simple.
                 for li_cc in range(_bdpt_simple_light_count(sd)):
                     var ls_icc = _bdpt_sample_simple_light(sd, li_cc, hit.to_simd(), pcg)
-                    var w_icc = _nee_weight_simple_spectral(ls_icc, LobeKind.ggx, mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs))
+                    if not ls_icc.valid:
+                        continue   # a non-emitting sphere
+                    var pol_icc = _vcm_simple_light_policy(sd, li_cc, ls_icc, v, eta_x, dvcm_carry, dvc_carry,
+                                                           abs(dot(ls_icc.wi, gn_c_geo)), wavelengths)
+                    var w_icc = _nee_weight_simple_spectral(ls_icc, LobeKind.ggx, mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_icc)
                     total += _bdpt_nee_contribute(beta, w_icc, ls_icc, hit, gn_c_geo, cur_med_idx, sd, scratch, wavelengths)
                 for inf_ic in range(Int(sd.infiniteLightCount)):
                     var ls_ec = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_ic], Point2f(pcg.next_float(), pcg.next_float()))
@@ -3010,7 +3004,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # the exit lobe's Fresnel factor toward each light.
                     for li_x in range(_bdpt_simple_light_count(sd)):
                         var ls_x = _bdpt_sample_simple_light(sd, li_x, x_o.to_simd(), pcg)
-                        var w_x = _nee_weight_simple_spectral(ls_x, LobeKind.lambertian, RGB(Float32(1)), Float32(0), n_o, n_o, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs))
+                        if not ls_x.valid:
+                            continue   # a non-emitting sphere
+                        var pol_x = _vcm_simple_light_policy(sd, li_x, ls_x, v, mis_vm_weight_factor * _vcm_eta_scale(sd, x_o),
+                                                             v.dVCM, v.dVC, abs(dot(ls_x.wi, n_o)), wavelengths)
+                        var w_x = _nee_weight_simple_spectral(ls_x, LobeKind.lambertian, RGB(Float32(1)), Float32(0), n_o, n_o, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_x)
                         w_x = w_x * bssrdf_exit_ft(dot(n_o, ls_x.wi), eta_e)
                         total += _bdpt_nee_contribute(beta, w_x, ls_x, x_o, n_o, cur_med_idx, sd, scratch, wavelengths)
                     for inf_x in range(Int(sd.infiniteLightCount)):
@@ -3110,6 +3108,10 @@ struct VCMLightPathState(TrivialRegisterPassable):
     var dvc: Float32
     var dvm: Float32
     var is_finite_origin: Int8
+    # Index into sd.spheres of the sphere light this path left, until its
+    # first hit applies the origin's 1/Omega (see the init's sphere branch);
+    # -2 once applied; -1 for every other light.
+    var origin_sphere: Int32
     var cur_med_idx: Int32
     var n_lbounces: Int32
     var n_verts: Int32
@@ -3131,7 +3133,7 @@ def _null_light_path_state() -> VCMLightPathState:
         Point3f(Float32(0), Float32(0), Float32(0)),
         Vec3f(Float32(0), Float32(0), Float32(0)),
         SpectralSample(Float32(0)),
-        Float32(0), Float32(0), Float32(0), Int8(0),
+        Float32(0), Float32(0), Float32(0), Int8(0), Int32(-1),
         Int32(-1), Int32(0), Int32(0), Int8(0),
         UInt64(0), UInt64(0),
         Float32(0), Float32(0), Float32(0), Float32(0),
@@ -3159,10 +3161,11 @@ def _bdpt_light_path_init[use_gpu: Bool](
     the end of the function packaging the locals into a returned state
     instead of continuing into a bounce loop."""
     var n_area = Int(sd.areaLightCount)
+    var n_sphere = Int(sd.sphereLightCount)
     var n_distant = Int(sd.distantLightCount)
     var n_infinite = Int(sd.infiniteLightCount)
     var n_point = Int(sd.pointLightCount)
-    var n_lights = n_area + n_distant + n_infinite + n_point
+    var n_lights = n_area + n_sphere + n_distant + n_infinite + n_point   # == _bdpt_n_lights
     lvc_path_len[unsafe_offset=lp_idx] = Int32(0)
     if n_lights == 0:
         return _null_light_path_state()   # no lights in the scene
@@ -3188,6 +3191,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
     var dvc_carry = Float32(0)
     var dvm_carry = Float32(0)
     var is_finite_origin = False
+    var origin_sphere = Int32(-1)
     # This pass's shared hero wavelengths (see _bdpt_camera_path_init's
     # comment for why every subpath in a pass must agree on them).
     var wavelengths = pass_wl
@@ -3254,8 +3258,41 @@ def _bdpt_light_path_init[use_gpu: Bool](
         ro = point3f(lp) + vec3f(ln)*Float32(0.0001)
         rd = vec3f(pdir)
         n_verts = 1  # vertex 0 is the light point itself
-    elif light_pick < n_area + n_distant:
-        var dl = sd.distantLights[unsafe_offset=light_pick - n_area]
+    elif light_pick < n_area + n_sphere:
+        # Sphere light: the shared emission sampler (a uniform point on the
+        # emitter, a cosine direction -- the mesh-light model with area
+        # 4 pi r^2), NO origin vertex stored. Its s=1 strategy is the
+        # camera's own NEE, which samples the cone the sphere subtends
+        # (_sample_sphere_light_nee) -- better than connecting to a uniform
+        # surface point, and the reason these lights never started light
+        # paths before: until the densities below existed, a light path
+        # could not be weighed against that NEE.
+        #
+        # SmallVCM's origin carries, with the pick 1/n_lights in both
+        # densities (the camera's NEE enumerates lights, no pick):
+        #     emissionPdfW = cos0 / (pi * area_weight)
+        #     dVC  = cos0 / emissionPdfW          = pi * area_weight
+        #     dVCM = directPdfA / emissionPdfW
+        # where directPdfA is the NEE's density for THIS point seen from the
+        # first vertex x1 -- the cone's 1/Omega(x1) in area measure,
+        # cos0 / (Omega(x1) d^2). x1 is not known yet, so dVCM starts at
+        # pi * area_weight and the first hit multiplies by 1/Omega(x1) in
+        # place of the usual d^2, which that area conversion cancels
+        # (_bdpt_light_path_bounce, `origin_sphere`).
+        var (si_l, sp_l, sn_l, sdir_l) = sample_sphere_light_emission(sd, light_pick - n_area, pcg)
+        var sph_l = sd.spheres[unsafe_offset=si_l]
+        var area_weight_s = Float32(4) * PI * sph_l.radius * sph_l.radius * Float32(n_lights)
+        flux = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, sph_l.emission.r, sph_l.emission.g, sph_l.emission.b, wavelengths) * (area_weight_s * PI)
+        ro = point3f(sp_l + sn_l * (sph_l.radius * Float32(0.0001)))
+        rd = vec3f(sdir_l)
+        n_verts = 0
+        is_finite_origin = True
+        origin_sphere = Int32(si_l)
+        dvcm_carry = PI * area_weight_s
+        dvc_carry = PI * area_weight_s
+        dvm_carry = dvc_carry * mis_vc_weight_factor
+    elif light_pick < n_area + n_sphere + n_distant:
+        var dl = sd.distantLights[unsafe_offset=light_pick - n_area - n_sphere]
         var (center, radius) = _scene_bounding_sphere(sd)
         var dir = Vec3f(dl.direction.x, dl.direction.y, dl.direction.z)
         var disk_pt = _sample_disk_perpendicular(dir, center, radius, Point2f(pcg.next_float(), pcg.next_float()))
@@ -3280,8 +3317,8 @@ def _bdpt_light_path_init[use_gpu: Bool](
         dvcm_carry = PI * radius * radius * Float32(n_lights)
         dvc_carry = Float32(0)
         dvm_carry = Float32(0)
-    elif light_pick < n_area + n_distant + n_infinite:
-        var il = sd.infiniteLights[unsafe_offset=light_pick - n_area - n_distant]
+    elif light_pick < n_area + n_sphere + n_distant + n_infinite:
+        var il = sd.infiniteLights[unsafe_offset=light_pick - n_area - n_sphere - n_distant]
         var (center, radius) = _scene_bounding_sphere(sd)
         # _sample_infinite_light_dir returns env_dir in the NEE convention
         # ("direction FROM a shading point TOWARD the light" — same as
@@ -3334,7 +3371,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         # per-vertex point-light NEE instead). Emits uniformly over the
         # sphere (isotropic point light); pdf_dir = 1/(4π), so
         # flux = intensity × 4π × n_lights (pdf_dir cancels).
-        var pll = sd.pointLights[unsafe_offset=light_pick - n_area - n_distant - n_infinite]
+        var pll = sd.pointLights[unsafe_offset=light_pick - n_area - n_sphere - n_distant - n_infinite]
         var u1p = pcg.next_float(); var u2p = pcg.next_float()
         var cos_p = Float32(1) - Float32(2) * u1p
         var sin_p = sqrt(max(Float32(0), Float32(1) - cos_p * cos_p))
@@ -3344,13 +3381,25 @@ def _bdpt_light_path_init[use_gpu: Bool](
         ro = pll.position
         rd = pdir_p
         n_verts = 0
+        # Real MIS origin for a POINT light -- the fourth instance of the
+        # zero-carries bug (infinite c1f2e10f, distant after it): with zero
+        # carries every t=1/merge weight on a point-light path collapsed to
+        # full credit while the camera's delta NEE took full weight too.
+        # SmallVCM's point light: directPdfA = 1 (delta position),
+        # emissionPdfW = 1/(4 pi n_lights), no cosine, so dVCM = 4 pi
+        # n_lights and dVC = dVM = 0 (a delta light cannot be hit). A real
+        # finite position, so the first segment's d^2 applies.
+        is_finite_origin = True
+        dvcm_carry = Float32(4) * PI * Float32(n_lights)
+        dvc_carry = Float32(0)
+        dvm_carry = Float32(0)
 
     var cur_med_idx = default_emit_med
     var n_lbounces = 1  # counts all surface hits (1 = not-the-primary-ray, matches area-light convention — see _dielectric_bounce's bounce==0 special case)
 
     return VCMLightPathState(
         ro, rd, flux, dvcm_carry, dvc_carry, dvm_carry,
-        Int8(1) if is_finite_origin else Int8(0),
+        Int8(1) if is_finite_origin else Int8(0), origin_sphere,
         cur_med_idx, Int32(n_lbounces), Int32(n_verts), Int8(1),
         pcg.state, pcg.inc,
         wavelengths.lambda0, wavelengths.lambda1, wavelengths.lambda2, wavelengths.lambda3,
@@ -3374,6 +3423,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
     mut dvc_carry: Float32,
     mut dvm_carry: Float32,
     is_finite_origin: Bool,
+    mut origin_sphere: Int32,
     mut cur_med_idx: Int32,
     mut n_lbounces: Int,
     mut current_dielectric_ior: Float32,
@@ -3440,7 +3490,16 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         # travel distance, not the hit material. The |cosThetaFix| portion
         # is applied separately inside each branch once its own local
         # normal is known.
-        if n_verts >= 1 or is_finite_origin:
+        if origin_sphere >= Int32(0):
+            # First hit of a sphere light's path: the origin's direct density
+            # is the camera NEE's cone pdf seen from HERE, and its area
+            # conversion cancels this segment's d^2 (init, sphere branch).
+            # Where the cone does not exist (inside the sphere) NEE cannot
+            # reach the origin, and dVCM's NEE share is 0.
+            dvcm_carry *= sphere_light_cone_pdf(sd.spheres[unsafe_offset=Int(origin_sphere)],
+                                                ro.to_simd() + ray_dir * t_hit)
+            origin_sphere = Int32(-2)   # applied; still a sphere light's path
+        elif n_verts >= 1 or is_finite_origin:
             dvcm_carry *= t_hit * t_hit
 
         # Volume free-flight
@@ -3454,6 +3513,17 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             # featureless sphere with no bunny in it. See sample_free_flight.
             var ff = sample_free_flight(
                 med, sd.grids, sd.nvdbGrids, Vec3f(ro.x, ro.y, ro.z), rd, t_hit, pcg)
+            if ff.collided and origin_sphere != Int32(-1):
+                # A sphere light's path ends at its first medium collision.
+                # Medium vertices are outside per-vertex MIS: the camera's
+                # medium vertex already claims camera -> medium -> sphere
+                # paths completely, through its own NEE to the sphere (power
+                # heuristic against the phase hit), and a connection to a
+                # light-side medium vertex is weighted 1 as well -- the two
+                # summed read 1.6x the path tracer on a fog ball lit by a
+                # sphere. Area lights never had the overlap: the camera has no
+                # area-light NEE of its own at a medium vertex.
+                return False
             if ff.collided:
                 # Chromatic collision weight; see the camera-side comment.
                 flux *= spectral_free_flight_weight(med, ff, t_hit, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
@@ -3861,6 +3931,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
     var dvc_carry = st.dvc
     var dvm_carry = st.dvm
     var is_finite_origin = st.is_finite_origin == Int8(1)
+    var origin_sphere = st.origin_sphere
     var cur_med_idx = st.cur_med_idx
     var n_lbounces = Int(st.n_lbounces)
     var current_dielectric_ior = st.current_dielectric_ior
@@ -3882,7 +3953,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             sd, pcg, has_med, scratch[unsafe_offset=0], lvc, lp_idx,
             mis_vc_weight_factor, mis_vm_weight_factor,
             ro, rd, flux, n_verts, dvcm_carry, dvc_carry, dvm_carry,
-            is_finite_origin, cur_med_idx, n_lbounces,
+            is_finite_origin, origin_sphere, cur_med_idx, n_lbounces,
             current_dielectric_ior, previous_dielectric_ior, wavelengths):
             break
 
@@ -4004,8 +4075,44 @@ def _bdpt_n_lights(ref sd: SceneView) -> Float32:
     """The light-pick denominator the light path used, needed on the camera
     side because its NEE loops every light with no pick: the MIS densities
     must describe the same experiment on both subpaths."""
-    return Float32(Int(sd.areaLightCount) + Int(sd.distantLightCount)
+    return Float32(Int(sd.areaLightCount) + Int(sd.sphereLightCount) + Int(sd.distantLightCount)
                    + Int(sd.infiniteLightCount) + Int(sd.pointLightCount))
+
+def _vcm_simple_light_policy(
+    ref sd: SceneView, i: Int, ls: LightSample, v: BDPTVertex, eta_x: Float32,
+    dvcm: Float32, dvc: Float32, cos_geo: Float32, wavelengths: SampledWavelengths,
+) -> MisPolicy:
+    """VCM's weight for NEE from camera vertex `v` to the i-th distant/point/
+    sphere light (_bdpt_sample_simple_light's order): the balance over every
+    strategy, since each of these lights also starts light paths whose t=1
+    and merges reach the same paths. The power heuristic that used to stand
+    here for point and sphere lights -- and for every one of them at coat and
+    subsurface-exit vertices -- partitions unity with BSDF sampling alone.
+
+    vcm_env_nee_weight wants SmallVCM's emissionPdfW * cosToLight /
+    (directPdfW * cosAtLight) with directPdfW = ls.pdf, so the light-side
+    factors fold into `emission_pdf_w` (pick 1/n_lights, the camera side
+    picks none):
+        distant  1 / (n pi R^2)          the bounding disk, delta direction
+        point    1 / (4 pi n d^2)        SmallVCM's directPdfW is d^2; ours
+                                         reports 1 with Li = I / d^2
+        sphere   1 / (pi 4 pi r^2 n)     cos0 / (pi A n) over cos0; ls.pdf is
+                                         the cone's, as the light path's
+                                         first-hit dVCM assumes"""
+    var le = _lobe_eval[want_pdfs=True](v, ls.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+    var n = _bdpt_n_lights(sd)
+    var nd = Int(sd.distantLightCount)
+    var np_ = Int(sd.pointLightCount)
+    var emission: Float32
+    if i < nd:
+        var (_c, r) = _scene_bounding_sphere(sd)
+        emission = Float32(1.0) / max(n * PI * r * r, Float32(1e-12))
+    elif i < nd + np_:
+        emission = Float32(1.0) / max(Float32(4.0) * PI * n * ls.dist * ls.dist, Float32(1e-12))
+    else:
+        var sph = sd.spheres[unsafe_offset=i - nd - np_]
+        emission = Float32(1.0) / max(PI * Float32(4.0) * PI * sph.radius * sph.radius * n, Float32(1e-12))
+    return MisPolicy(le.scoped, eta_x, dvcm, dvc, emission, le.pdf_rev, False, cos_geo)
 
 @always_inline
 def _vertex_ctx(v: BDPTVertex, adjoint: Bool = False) -> LobeCtx:
@@ -4946,6 +5053,7 @@ def _bdpt_light_path_bounce_gpu(
     var dvc_carry = states[unsafe_offset=k].dvc
     var dvm_carry = states[unsafe_offset=k].dvm
     var is_finite_origin = states[unsafe_offset=k].is_finite_origin == Int8(1)
+    var origin_sphere = states[unsafe_offset=k].origin_sphere
     var cur_med_idx = states[unsafe_offset=k].cur_med_idx
     var n_lbounces = Int(states[unsafe_offset=k].n_lbounces)
     var current_dielectric_ior = states[unsafe_offset=k].current_dielectric_ior
@@ -4955,7 +5063,7 @@ def _bdpt_light_path_bounce_gpu(
     var cont = _bdpt_light_path_bounce[True](
         sd, pcg, has_med, results[unsafe_offset=k], lvc, k, mis_vc_weight_factor, mis_vm_weight_factor,
         ro, rd, flux, n_verts, dvcm_carry, dvc_carry, dvm_carry,
-        is_finite_origin, cur_med_idx, n_lbounces,
+        is_finite_origin, origin_sphere, cur_med_idx, n_lbounces,
         current_dielectric_ior, previous_dielectric_ior, wavelengths,
     )
     lvc_path_len[unsafe_offset=k] = Int32(n_verts)
@@ -4967,6 +5075,7 @@ def _bdpt_light_path_bounce_gpu(
     states[unsafe_offset=k].dvcm = dvcm_carry
     states[unsafe_offset=k].dvc = dvc_carry
     states[unsafe_offset=k].dvm = dvm_carry
+    states[unsafe_offset=k].origin_sphere = origin_sphere
     states[unsafe_offset=k].cur_med_idx = cur_med_idx
     states[unsafe_offset=k].n_lbounces = Int32(n_lbounces)
     states[unsafe_offset=k].current_dielectric_ior = current_dielectric_ior
@@ -6658,7 +6767,7 @@ def sppm_render_gpu(
     photon pass, atomic-exchange hash-grid build (classic parallel linked-list
     insertion). Mirrors vcm_render_gpu's per-pass reset-counter -> emit ->
     sync+readback+clamp -> consume shape."""
-    if Int(sd.areaLightCount) + Int(sd.distantLightCount) + Int(sd.infiniteLightCount) + Int(sd.pointLightCount) == 0 and not _sppm_has_sphere_lights(sd):
+    if Int(sd.areaLightCount) + Int(sd.distantLightCount) + Int(sd.infiniteLightCount) + Int(sd.pointLightCount) == 0 and not (sd.sphereLightCount > 0):
         print("SPPM: no lights in scene, cannot emit photons")
         return Int32(-1)
 
