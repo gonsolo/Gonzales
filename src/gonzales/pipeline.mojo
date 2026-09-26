@@ -7,7 +7,8 @@ from max.gpu.host import DeviceBuffer
 from .footprint import camera_footprint
 from .pbrt_parser import ParsedScene_Mojo, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film, mojo_apply_overrides
 from .scene_loader import mojo_parse_scene_any
-from .rendering import render_all_tiles, normalize_film, apply_film_sensor, fmt_time, progress_str
+from .rendering import render_all_tiles, normalize_film, apply_film_sensor
+from .progress import Progress, fmt_time
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, Bounds3f, dot, _is_real_ptr
 from .render_state import TileResult, PathState
@@ -1258,7 +1259,7 @@ def parse_and_render(
             if use_vol_restir_reuse:
                 gpu_clear_restir_vol(handle, Int64(n_pixels))
         gpu_clear_film(handle, Int64(n_pixels))
-        var t0_gpu = perf_counter_ns()
+        var prog_gpu = Progress(spp, "spp")
         if vol_reuse_needs_sample_dispatch:
             for si in range(spp):
                 gpu_render_sample(
@@ -1273,8 +1274,7 @@ def parse_and_render(
                     use_restir=use_restir, frame_index=si,
                     use_vol_restir_reuse=use_vol_restir_reuse,
                 )
-                var elapsed = Float64(perf_counter_ns() - t0_gpu) / 1.0e9
-                print(progress_str(si + 1, spp, elapsed, "spp"), end="\r")
+                prog_gpu.update(si + 1)
         else:
             var si = 0
             while si < spp:
@@ -1294,11 +1294,8 @@ def parse_and_render(
                     instance_base_mesh_buf_opt,
                 )
                 si += actual_batch
-                var elapsed = Float64(perf_counter_ns() - t0_gpu) / 1.0e9
-                print(progress_str(si, spp, elapsed, "spp"), end="\r")
-        var gpu_total_s = Float64(perf_counter_ns() - t0_gpu) / 1.0e9
-        print("Rendering: " + String(spp) + " / " + String(spp)
-            + " spp (100.0%) | Done: " + fmt_time(gpu_total_s) + "                ")
+                prog_gpu.update(si)
+        _ = prog_gpu.finish()
         if use_vk:
             vulkaninterop_rt_destroy_scene(interop_scene)
         var denoised_gpu = List[Float32](capacity=n_pixels * 3)

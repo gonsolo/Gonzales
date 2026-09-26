@@ -10,7 +10,8 @@ from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import RGB
 from gonzales.render_state import TileResult
-from gonzales.rendering import _fmt_f1, fmt_time, progress_str, normalize_film
+from gonzales.rendering import normalize_film
+from gonzales.progress import _fmt_f1, fmt_time, progress_str
 
 comptime EPS: Float32 = 1e-4
 

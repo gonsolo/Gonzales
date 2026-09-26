@@ -6,6 +6,7 @@ from std.sys.info import num_performance_cores
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, dot, cross, INV_FOUR_PI
 from .render_state import PathState, TileResult
+from .progress import Progress
 from .primitives import sphere_outward_normal, Ray, Intersection, PrimId, Sphere
 from .media import Medium, MediumInterface, Grid, grid_sample_density, SSS_WALK_ROUNDS
 from .lights import AreaLight, LightSampler, light_sampler_sample
@@ -373,33 +374,6 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
 
 
 
-def _fmt_f1(v: Float64) -> String:
-    var i = Int(v)
-    var frac = Int((v - Float64(i)) * 10.0 + 0.5)
-    if frac >= 10:
-        i += 1; frac = 0
-    return String(i) + "." + String(frac)
-
-def fmt_time(s: Float64) -> String:
-    var sec = Int(s)
-    var min = sec // 60
-    var rem = sec % 60
-    if min > 0:
-        var rs = String(rem)
-        if rem < 10: rs = "0" + rs
-        return String(min) + "m " + rs + "s"
-    return _fmt_f1(s) + "s"
-
-def progress_str(done: Int, total: Int, elapsed: Float64, unit: String) -> String:
-    var pct = _fmt_f1(Float64(done) * 100.0 / Float64(total))
-    var est = Float64(0.0)
-    if done > 0:
-        est = elapsed * Float64(total) / Float64(done)
-    return ("Rendering: " + String(done) + " / " + String(total)
-        + " " + unit + " (" + pct + "%) | Elapsed: " + fmt_time(elapsed)
-        + " | Total Est.: " + fmt_time(est) + "                ")
-
-
 def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin[mut=True]](
     raster_to_camera: Pointer[Float32, MutUntrackedOrigin],
     camera_to_world: Pointer[Float32, Oc2w],
@@ -437,7 +411,7 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
     # Progress counter — incremented after each tile (racy, display-only).
     var done_ptr = unsafe_alloc[Int32](1)
     done_ptr[unsafe_offset=0] = Int32(0)
-    var t0 = perf_counter_ns()
+    var prog = Progress(n_tiles, "tiles", quiet=quiet)
     # Print every ~5% of tiles (at least every 1 tile).
     var print_step = max(n_tiles // 20, 1)
 
@@ -471,9 +445,8 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
                 results[unsafe_offset=dst] = tile_buf[unsafe_offset=src]
         done_ptr[unsafe_offset=0] += Int32(1)
         var d = Int(done_ptr[unsafe_offset=0])
-        if not quiet and (d % print_step == 0 or d == n_tiles):
-            var elapsed = Float64(perf_counter_ns() - t0) / 1.0e9
-            print(progress_str(d, n_tiles, elapsed, "tiles"), end="\r")
+        if d % print_step == 0 or d == n_tiles:
+            prog.update(d)
 
     # Tile scheduling. `parallelize` splits its range STATICALLY, so worker k
     # gets one contiguous run of tile indices -- i.e. a horizontal band of the
@@ -516,10 +489,7 @@ def render_all_tiles[Osp: Origin[mut=True], Oc2w: Origin[mut=True], Ores: Origin
     if n_write_guides > 1:
         for i in range(1, n_write_guides):
             guide_merge(write_guides[unsafe_offset=0], write_guides[unsafe_offset=i])
-    if not quiet:
-        var total_s = Float64(perf_counter_ns() - t0) / 1.0e9
-        print("Rendering: " + String(n_tiles) + " / " + String(n_tiles)
-            + " tiles (100.0%) | Done: " + fmt_time(total_s) + "                ")
+    _ = prog.finish()
     done_ptr.unsafe_free()
     tile_bufs.unsafe_free()
 

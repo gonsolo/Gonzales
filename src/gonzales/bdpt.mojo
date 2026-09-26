@@ -56,6 +56,7 @@ from .gpu_scene import GpuSceneHandle
 from .gpu_wavefront import vulkaninterop_unpack_results_kernel
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
 from max.gpu.host._nvidia_cuda import CUDA
+from .progress import Progress
 from .spectrum import (
     SampledWavelengths, SpectralSample, sample_wavelengths, SpectralHandle,
     pass_wavelengths,
@@ -4683,6 +4684,7 @@ def _bdpt_render_core(
     var splat_val = unsafe_alloc[SpectralSample](max(n_light_paths_merge * _BDPT_MAX_VERTS, 1))
     var cam_pos = Vec3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
 
+    var prog = Progress(n_spp, "spp", quiet=verbose)
     for si in range(n_spp):
         # Stage 2c progressive radius: r_i = r_1 / (i+1)^(0.5*(1-alpha))
         # (Hachisuka & Jensen 2008 via Georgiev et al. 2012 Eq. 11), a
@@ -4789,6 +4791,8 @@ def _bdpt_render_core(
 
         if verbose:
             print("VCM: sample " + String(si + 1) + "/" + String(n_spp))
+        prog.update(si + 1)
+    _ = prog.finish()
 
     scratch_light.unsafe_free(); scratch_cam.unsafe_free(); lvc.unsafe_free(); lvc_path_len.unsafe_free()
     merge_heads.unsafe_free(); merge_next.unsafe_free()
@@ -5812,6 +5816,7 @@ def vcm_render_gpu(
 
             var grid_merge_ins = ceildiv(max(lvc_cap, 1), block_size)
 
+            var prog = Progress(n_spp, "spp", quiet=verbose)
             for si in range(n_spp):
                 # Stage 2c progressive radius -- see vcm_render (CPU)'s
                 # matching per-sample loop for the full derivation comment.
@@ -5958,8 +5963,12 @@ def vcm_render_gpu(
 
                 if verbose:
                     print("VCM (GPU): sample " + String(si + 1) + "/" + String(n_spp))
+                # Wait for the pass, so the line reports finished work.
+                handle[].ctx.synchronize()
+                prog.update(si + 1)
 
             handle[].ctx.synchronize()
+            _ = prog.finish()
 
             var pixels = unsafe_alloc[Float32](n_pix * 3)
             with accum_buf.map_to_host() as host_buf:
@@ -6380,6 +6389,7 @@ def vcm_render_gpu_wavefront(
 
             var grid_merge_ins = ceildiv(max(lvc_cap, 1), block_size)
 
+            var prog = Progress(n_spp, "spp", quiet=verbose)
             for si in range(n_spp):
                 # Stage 2c progressive radius -- see vcm_render (CPU)'s
                 # matching per-sample loop for the full derivation comment.
@@ -6631,8 +6641,12 @@ def vcm_render_gpu_wavefront(
 
                 if verbose:
                     print("VCM (GPU wavefront): sample " + String(si + 1) + "/" + String(n_spp))
+                # Wait for the pass, so the line reports finished work.
+                handle[].ctx.synchronize()
+                prog.update(si + 1)
 
             handle[].ctx.synchronize()
+            _ = prog.finish()
 
             var pixels = unsafe_alloc[Float32](n_pix * 3)
             with accum_buf.map_to_host() as host_buf:
@@ -7107,6 +7121,7 @@ def sppm_render_gpu(
                 block_dim=block_size,
             )
 
+            var prog = Progress(n_passes, "passes", quiet=verbose)
             for pass_idx in range(n_passes):
                 handle[].ctx.enqueue_function[sppm_reset_i32_gpu](
                     counter_ptr, grid_dim=1, block_dim=1)
@@ -7183,11 +7198,12 @@ def sppm_render_gpu(
                     block_dim=block_size,
                 )
 
-                if verbose or (pass_idx + 1) % 10 == 0:
+                if verbose:
                     print("SPPM (GPU): pass " + String(pass_idx + 1) + "/" + String(n_passes)
-                          + " stored=" + String(n_stored), end="\r")
+                          + " stored=" + String(n_stored))
+                prog.update(pass_idx + 1)
 
-            print("")
+            _ = prog.finish()
 
             handle[].ctx.enqueue_function[sppm_finalize_gpu](
                 vps_ptr, Int64(n_pix), Int64(_VP_SAMPLES), Int32(n_passes), iso_scale, max_comp, out_ptr, albedo_out_ptr,

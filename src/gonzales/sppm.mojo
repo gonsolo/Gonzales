@@ -40,6 +40,7 @@ from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, write_image_cropwindow, denoise
 from .gpu_scene import GpuSceneHandle
+from .progress import Progress
 from .spectrum import (
     SampledWavelengths, SpectralSample, sample_wavelengths,
     rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb,
@@ -2882,6 +2883,7 @@ def _sppm_render_core(
         print("SPPM: " + String(n_valid) + "/" + String(n_vps) + " visible points found")
 
     # Photon passes
+    var prog = Progress(n_passes, "passes", quiet=verbose)
     for pass_idx in range(n_passes):
         var pass_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(pass_idx * 2654435761 + 1)
         var n_stored = _sppm_photon_pass(photons, n_photons_per_pass, max_photons, sd, pass_seed, pass_idx, Int(psc[unsafe_offset=0].max_depth))
@@ -2890,11 +2892,11 @@ def _sppm_render_core(
             _gather_update(vps, n_vps, photons, heads, inv_cell, sd, pass_wavelengths(pass_idx))
         var nee_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(pass_idx * 0xBF58476D1CE4E5B9 + 3)
         _sppm_nee_update(vps, n_vps, sd, nee_seed, pass_idx)
-        if verbose or (pass_idx + 1) % 10 == 0:
+        if verbose:
             print("SPPM: pass " + String(pass_idx + 1) + "/" + String(n_passes)
-                  + " stored=" + String(n_stored), end="\r")
-
-    print("")  # newline after progress
+                  + " stored=" + String(n_stored))
+        prog.update(pass_idx + 1)
+    _ = prog.finish()
 
     # Assemble output image: average the _VP_SAMPLES independently-converged
     # samples per pixel (each sample's own r2/tau/N_acc converges correctly
