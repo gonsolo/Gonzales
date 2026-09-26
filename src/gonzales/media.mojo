@@ -1053,7 +1053,7 @@ def sample_free_flight(
     # arguments, and then spectral_res is 0 too, so medium_emission_spectral
     # takes its flat-spectrum fallback and never reads these.
     wavelengths: SampledWavelengths = SampledWavelengths(
-        Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
+        Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_res: Int = 0,
     spectral_cie_x: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),

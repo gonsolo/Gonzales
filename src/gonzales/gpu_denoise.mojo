@@ -26,15 +26,10 @@ def normalize_beauty_albedo_gpu(
     if lr != lr or lr < Float32(0): lr = Float32(0)
     if lg != lg or lg < Float32(0): lg = Float32(0)
     if lb != lb or lb < Float32(0): lb = Float32(0)
-    var scale = Float32(1.0)
-    if max_comp > Float32(0.0):
-        var mx = lr if lr > lg else lg
-        if lb > mx: mx = lb
-        if mx > max_comp:
-            scale = max_comp / mx
-    beauty_out[unsafe_offset=tid*3+0] = lr * scale
-    beauty_out[unsafe_offset=tid*3+1] = lg * scale
-    beauty_out[unsafe_offset=tid*3+2] = lb * scale
+    var c = RGB(lr, lg, lb).sensor_clamped(max_comp)
+    beauty_out[unsafe_offset=tid*3+0] = c.r
+    beauty_out[unsafe_offset=tid*3+1] = c.g
+    beauty_out[unsafe_offset=tid*3+2] = c.b
     albedo_out[unsafe_offset=tid*3+0] = albedo_film[unsafe_offset=tid*3+0] * inv_weight
     albedo_out[unsafe_offset=tid*3+1] = albedo_film[unsafe_offset=tid*3+1] * inv_weight
     albedo_out[unsafe_offset=tid*3+2] = albedo_film[unsafe_offset=tid*3+2] * inv_weight

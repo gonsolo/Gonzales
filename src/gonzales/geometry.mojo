@@ -329,6 +329,25 @@ struct RGB(TrivialRegisterPassable):
         self.r *= s; self.g *= s; self.b *= s
 
     @always_inline
+    def sensor_clamped(self, lim: Float32) -> RGB:
+        """This linear-sRGB value under pbrt's `maxcomponentvalue`: scaled by
+        lim / max(X, Y, Z) when that max exceeds `lim` (lim <= 0: unchanged).
+
+        pbrt clamps the SENSOR value (RGBFilm::AddSample), and its default
+        `cie1931` sensor is XYZ -- the conversion to sRGB comes afterwards.
+        The max of X, Y, Z is not the max of R, G, B: pure sRGB red has
+        X = 0.41 R, so clamping in sRGB cut saturated red ~2.4x harder than
+        pbrt (a directly seen L = (200, 10, 5) lamp at limit 50: pbrt 110,
+        gonzales 50). The matrix inverts rgb2spec's xyz_to_srgb."""
+        if lim <= Float32(0):
+            return self
+        var x = Float32(0.412453) * self.r + Float32(0.357580) * self.g + Float32(0.180423) * self.b
+        var y = Float32(0.212671) * self.r + Float32(0.715160) * self.g + Float32(0.072169) * self.b
+        var z = Float32(0.019334) * self.r + Float32(0.119193) * self.g + Float32(0.950227) * self.b
+        var m = max(x, max(y, z))
+        return self * (lim / m) if m > lim else self
+
+    @always_inline
     def __iadd__(mut self, o: RGB):
         self.r += o.r; self.g += o.g; self.b += o.b
 

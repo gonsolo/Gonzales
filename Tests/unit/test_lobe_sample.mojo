@@ -11,7 +11,7 @@ from gonzales.materials import Material, MatKind, LobeKind, MeasuredBRDF
 from gonzales.curves import Curve
 from gonzales.bxdf import LobeCtx, LobeTables, lobe_eval, lobe_sample, lobe_scoped
 from gonzales.rng import PCG32
-from gonzales.spectrum import SampledWavelengths, sample_wavelengths_uniform, SpectralContext, spectral_handle
+from gonzales.spectrum import SampledWavelengths, sample_wavelengths, SpectralContext, spectral_handle
 from gonzales.rgb2spec import build_spectrum_table, build_cie_xyz_tables, SpectrumTable
 
 comptime _curves = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling()
@@ -64,7 +64,7 @@ def _check_consistency(name: String, c: LobeCtx, tab: LobeTables) raises:
     every sample's pdf_fwd == lobe_eval's pdf_fwd at that direction."""
     var ctx = _test_ctx()
     var h = spectral_handle(ctx)
-    var wl = sample_wavelengths_uniform(Float32(0.37))
+    var wl = sample_wavelengths(Float32(0.37))
     var rng = PCG32(UInt64(7), UInt64(11))
     comptime N = 60000
     var sampled = Float64(0)
@@ -126,7 +126,7 @@ def test_ggx_mirror_is_delta() raises:
     var tab = _tables()
     var ctx = _test_ctx()
     var h = spectral_handle(ctx)
-    var wl = sample_wavelengths_uniform(Float32(0.37))
+    var wl = sample_wavelengths(Float32(0.37))
     var c = _ctx(LobeKind.ggx, -1, RGB(Float32(0.9)), Float32(0.6), False)
     c.param = Float32(0)
     var s = lobe_sample(c, Float32(0.5), Float32(0.5), Float32(0.5), Float32(0.5), tab, h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65, wl)
@@ -144,7 +144,7 @@ def test_eval_scoped_is_lobe_scoped() raises:
     var tab = _tables()
     var ctx = _test_ctx()
     var h = spectral_handle(ctx)
-    var wl = sample_wavelengths_uniform(Float32(0.37))
+    var wl = sample_wavelengths(Float32(0.37))
     var wi = Vec3f(0.3, 0.1, 0.9)
     for kind_mat in [(LobeKind.lambertian, -1), (LobeKind.ggx, -1),
                      (LobeKind.diffuse_transmit, MAT_DT), (LobeKind.layered, MAT_COAT_ROUGH)]:

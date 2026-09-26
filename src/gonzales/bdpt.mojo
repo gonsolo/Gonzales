@@ -56,7 +56,7 @@ from .gpu_wavefront import vulkaninterop_unpack_results_kernel
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
 from max.gpu.host._nvidia_cuda import CUDA
 from .spectrum import (
-    SampledWavelengths, SpectralSample, sample_wavelengths_uniform, SpectralHandle,
+    SampledWavelengths, SpectralSample, sample_wavelengths, SpectralHandle,
     pass_wavelengths,
     spec_refl, spec_refl_unbounded, spec_illum,
     rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb,
@@ -248,7 +248,7 @@ def _null_vertex() -> BDPTVertex:
         med_idx=Int32(-1), mat_kind=LobeKind.lambertian,
         wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
-        wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
+        wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
 
 # ── Geometry helpers ──────────────────────────────────────────────────────────
@@ -1904,7 +1904,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     var current_dielectric_ior = st.current_dielectric_ior
     var previous_dielectric_ior = st.previous_dielectric_ior
     var cone_len = st.cone_len
-    var wavelengths = SampledWavelengths(st.wl0, st.wl1, st.wl2, st.wl3, st.wl_pdf)
+    var wavelengths = SampledWavelengths(st.wl0, st.wl1, st.wl2, st.wl3)
     if st.active == Int8(0):
         return (total, first_alb)
 
@@ -1958,7 +1958,6 @@ struct VCMCameraPathState(TrivialRegisterPassable):
     var wl1: Float32
     var wl2: Float32
     var wl3: Float32
-    var wl_pdf: Float32
     # Distance travelled through null interfaces since the last real
     # scattering event -- same role as PathState.mis_null_dist. The
     # interface branch resets `ro` to the boundary it crossed, so a later
@@ -2083,7 +2082,7 @@ def _bdpt_camera_path_init[use_gpu: Bool](
         ro, rd, beta, total, first_alb, dvcm_carry, dvc_carry, dvm_carry,
         Int32(n_verts), Int32(n_bounces), cur_med_idx, last_bsdf_pdf, Int8(1),
         pcg.state, pcg.inc,
-        wavelengths.lambda0, wavelengths.lambda1, wavelengths.lambda2, wavelengths.lambda3, wavelengths.pdf,
+        wavelengths.lambda0, wavelengths.lambda1, wavelengths.lambda2, wavelengths.lambda3,
         Float32(0.0),
         Float32(1.0), Float32(1.0),   # current_dielectric_ior, previous_dielectric_ior (vacuum)
         Float32(0.0),                 # cone_len
@@ -3121,7 +3120,6 @@ struct VCMLightPathState(TrivialRegisterPassable):
     var wl1: Float32
     var wl2: Float32
     var wl3: Float32
-    var wl_pdf: Float32
     # Touching-dielectric IOR depth-2 stack for _dielectric_bounce (see that
     # function's docstring, sppm.mojo) -- same role and convention as
     # VCMCameraPathState's matching fields. Both start at vacuum (1.0).
@@ -3136,7 +3134,7 @@ def _null_light_path_state() -> VCMLightPathState:
         Float32(0), Float32(0), Float32(0), Int8(0),
         Int32(-1), Int32(0), Int32(0), Int8(0),
         UInt64(0), UInt64(0),
-        Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
+        Float32(0), Float32(0), Float32(0), Float32(0),
         Float32(1.0), Float32(1.0),   # current_dielectric_ior, previous_dielectric_ior (vacuum)
     )
 
@@ -3355,7 +3353,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         Int8(1) if is_finite_origin else Int8(0),
         cur_med_idx, Int32(n_lbounces), Int32(n_verts), Int8(1),
         pcg.state, pcg.inc,
-        wavelengths.lambda0, wavelengths.lambda1, wavelengths.lambda2, wavelengths.lambda3, wavelengths.pdf,
+        wavelengths.lambda0, wavelengths.lambda1, wavelengths.lambda2, wavelengths.lambda3,
         Float32(1.0), Float32(1.0),   # current_dielectric_ior, previous_dielectric_ior (vacuum)
     )
 
@@ -3867,7 +3865,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
     var n_lbounces = Int(st.n_lbounces)
     var current_dielectric_ior = st.current_dielectric_ior
     var previous_dielectric_ior = st.previous_dielectric_ior
-    var wavelengths = SampledWavelengths(st.wl0, st.wl1, st.wl2, st.wl3, st.wl_pdf)
+    var wavelengths = SampledWavelengths(st.wl0, st.wl1, st.wl2, st.wl3)
 
     for _ in range(_BDPT_MAX_DEPTH):
         # The same intersect step _bdpt_light_path_intersect_gpu performs --
@@ -4580,11 +4578,7 @@ def _bdpt_render_core(
     var inv_spp = iso_scale / Float32(n_spp)
     var pixels = unsafe_alloc[Float32](n_pix * 3)
     for i in range(n_pix):
-        var c = buf[unsafe_offset=i] * inv_spp
-        if max_comp > Float32(0):
-            c.r = c.r if c.r < max_comp else max_comp
-            c.g = c.g if c.g < max_comp else max_comp
-            c.b = c.b if c.b < max_comp else max_comp
+        var c = (buf[unsafe_offset=i] * inv_spp).sensor_clamped(max_comp)
         pixels[unsafe_offset=i*3]   = c.r
         pixels[unsafe_offset=i*3+1] = c.g
         pixels[unsafe_offset=i*3+2] = c.b
@@ -4956,7 +4950,7 @@ def _bdpt_light_path_bounce_gpu(
     var n_lbounces = Int(states[unsafe_offset=k].n_lbounces)
     var current_dielectric_ior = states[unsafe_offset=k].current_dielectric_ior
     var previous_dielectric_ior = states[unsafe_offset=k].previous_dielectric_ior
-    var wavelengths = SampledWavelengths(states[unsafe_offset=k].wl0, states[unsafe_offset=k].wl1, states[unsafe_offset=k].wl2, states[unsafe_offset=k].wl3, states[unsafe_offset=k].wl_pdf)
+    var wavelengths = SampledWavelengths(states[unsafe_offset=k].wl0, states[unsafe_offset=k].wl1, states[unsafe_offset=k].wl2, states[unsafe_offset=k].wl3)
 
     var cont = _bdpt_light_path_bounce[True](
         sd, pcg, has_med, results[unsafe_offset=k], lvc, k, mis_vc_weight_factor, mis_vm_weight_factor,
@@ -5091,7 +5085,7 @@ def _bdpt_camera_path_bounce_gpu(
     var current_dielectric_ior = states[unsafe_offset=pix].current_dielectric_ior
     var previous_dielectric_ior = states[unsafe_offset=pix].previous_dielectric_ior
     var cone_len = states[unsafe_offset=pix].cone_len
-    var wavelengths = SampledWavelengths(states[unsafe_offset=pix].wl0, states[unsafe_offset=pix].wl1, states[unsafe_offset=pix].wl2, states[unsafe_offset=pix].wl3, states[unsafe_offset=pix].wl_pdf)
+    var wavelengths = SampledWavelengths(states[unsafe_offset=pix].wl0, states[unsafe_offset=pix].wl1, states[unsafe_offset=pix].wl2, states[unsafe_offset=pix].wl3)
 
     var cont = _bdpt_camera_path_bounce[True](
         sd, pcg, has_med, results[unsafe_offset=pix], results.unsafe_offset(pix), lvc, pix, Int(lvc_path_len[unsafe_offset=pix]),
@@ -5146,7 +5140,7 @@ def _bdpt_camera_path_accumulate_gpu(
         return
     # ── Output boundary: spectral transport -> RGB film ──────────────────
     var wl_acc = SampledWavelengths(states[unsafe_offset=pix].wl0, states[unsafe_offset=pix].wl1,
-                                    states[unsafe_offset=pix].wl2, states[unsafe_offset=pix].wl3, states[unsafe_offset=pix].wl_pdf)
+                                    states[unsafe_offset=pix].wl2, states[unsafe_offset=pix].wl3)
     var (tr, tg, tb) = spectral_sample_to_rgb(
         spectral_coeffs, Int(spectral_res_dp), spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, states[unsafe_offset=pix].total, wl_acc)
@@ -5678,10 +5672,8 @@ def vcm_render_gpu(
                     var r = src[unsafe_offset=i*3]   * inv_spp
                     var g = src[unsafe_offset=i*3+1] * inv_spp
                     var b = src[unsafe_offset=i*3+2] * inv_spp
-                    if max_comp > Float32(0):
-                        r = r if r < max_comp else max_comp
-                        g = g if g < max_comp else max_comp
-                        b = b if b < max_comp else max_comp
+                    var c = RGB(r, g, b).sensor_clamped(max_comp)
+                    r = c.r; g = c.g; b = c.b
                     pixels[unsafe_offset=i*3] = r; pixels[unsafe_offset=i*3+1] = g; pixels[unsafe_offset=i*3+2] = b
 
             # Denoise (never wired up before -- no_denoise was a dead
@@ -5852,7 +5844,7 @@ def resolve_shadow_connect_gpu(
         # fixed now while this kernel is being rewritten anyway.
         var dst = org + dir * dist
         var cst = cam_states[unsafe_offset=idx // _BDPT_MAX_VERTS]
-        var wl_sp = SampledWavelengths(cst.wl0, cst.wl1, cst.wl2, cst.wl3, cst.wl_pdf)
+        var wl_sp = SampledWavelengths(cst.wl0, cst.wl1, cst.wl2, cst.wl3)
         var Tr = _visible_transmittance(org, dst, seg_med, sd, scratch.unsafe_offset(tid), wl_sp)
         var p = shadow_pending[unsafe_offset=idx]
         shadow_pending[unsafe_offset=idx] = p * Tr
@@ -6353,10 +6345,8 @@ def vcm_render_gpu_wavefront(
                     var r = src[unsafe_offset=i*3]   * inv_spp
                     var g = src[unsafe_offset=i*3+1] * inv_spp
                     var b = src[unsafe_offset=i*3+2] * inv_spp
-                    if max_comp > Float32(0):
-                        r = r if r < max_comp else max_comp
-                        g = g if g < max_comp else max_comp
-                        b = b if b < max_comp else max_comp
+                    var c = RGB(r, g, b).sensor_clamped(max_comp)
+                    r = c.r; g = c.g; b = c.b
                     pixels[unsafe_offset=i*3] = r; pixels[unsafe_offset=i*3+1] = g; pixels[unsafe_offset=i*3+2] = b
 
             # Denoise (never wired up before -- no_denoise was a dead

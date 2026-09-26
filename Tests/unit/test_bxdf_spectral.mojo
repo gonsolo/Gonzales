@@ -21,7 +21,7 @@ comptime _mats = Pointer[Material, MutUntrackedOrigin].unsafe_dangling()
 comptime _curves = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling()
 comptime _mbrdfs = Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling()
 from gonzales.spectrum import (
-    SampledWavelengths, sample_wavelengths_uniform, spectral_sample_to_rgb,
+    SampledWavelengths, sample_wavelengths, spectral_sample_to_rgb,
     rgb_illuminant_to_spectral_sample, SpectralContext, SpectralHandle, spectral_handle,
     SpectralSample,
 )
@@ -126,7 +126,7 @@ def test_bxdf_eval_any_spectral_diffuse_matches_rgb_after_roundtrip() raises:
     var accR = Float32(0.0); var accG = Float32(0.0); var accB = Float32(0.0)
     for i in range(N_TRIALS):
         var u = (Float32(i) + Float32(0.5)) / Float32(N_TRIALS)
-        var wl = sample_wavelengths_uniform(u)
+        var wl = sample_wavelengths(u)
         var (f_spec, pdf_spec) = _eval_any_spectral(Int32(0), alb, Float32(0.0), n, wo, wi, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl)
         # Pair against a neutral reference white light so the reflectance
         # round-trips (see test_spectrum.mojo's _roundtrip docstring for why
@@ -154,7 +154,7 @@ def test_bxdf_eval_any_spectral_conductor_pdf_matches_rgb() raises:
     var n = Vec3f(0.0, 0.0, 1.0)
     var wo = Vec3f(0.0, 0.0, 1.0)
     var wi = Vec3f(0.0, 0.0, 1.0)
-    var wl = sample_wavelengths_uniform(Float32(0.5))
+    var wl = sample_wavelengths(Float32(0.5))
     var (_, pdf_rgb) = bxdf_eval_any(Int32(1), f0, Float32(0.3), n, wo, wi)
     var (_, pdf_spec) = _eval_any_spectral(Int32(1), f0, Float32(0.3), n, wo, wi, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl)
     assert_true(_close(pdf_spec, pdf_rgb))
@@ -171,7 +171,7 @@ def test_bxdf_eval_any_spectral_values_nonnegative() raises:
     var n = Vec3f(0.0, 0.0, 1.0)
     var wo = Vec3f(0.0, 0.0, 1.0)
     var wi = Vec3f(0.267261, 0.534522, 0.801784)
-    var wl = sample_wavelengths_uniform(Float32(0.3))
+    var wl = sample_wavelengths(Float32(0.3))
     var (f, _) = _eval_any_spectral(Int32(0), alb, Float32(0.0), n, wo, wi, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl)
     assert_true(f.v0 >= Float32(0.0) and f.v1 >= Float32(0.0) and f.v2 >= Float32(0.0) and f.v3 >= Float32(0.0))
 
@@ -185,7 +185,7 @@ def test_bxdf_eval_any_spectral_values_nonnegative() raises:
 def test_nee_weight_simple_spectral_invalid_sample_is_zero() raises:
     var ctx = _test_ctx()
     var handle = spectral_handle(ctx)
-    var wl = sample_wavelengths_uniform(Float32(0.5))
+    var wl = sample_wavelengths(Float32(0.5))
     var ls = LightSample(Vec3f(0.0, 0.0, 1.0), RGB(Float32(5.0)), Float32(1.0), Float32(1.0), False, False)
     var n = Vec3f(0.0, 0.0, 1.0)
     var wo = Vec3f(0.0, 0.0, 1.0)
@@ -200,7 +200,7 @@ def test_nee_weight_simple_spectral_invalid_sample_is_zero() raises:
 def test_nee_weight_simple_spectral_backfacing_is_zero() raises:
     var ctx = _test_ctx()
     var handle = spectral_handle(ctx)
-    var wl = sample_wavelengths_uniform(Float32(0.5))
+    var wl = sample_wavelengths(Float32(0.5))
     # Light direction opposite the normal -- cos_s <= 0.
     var ls = LightSample(Vec3f(0.0, 0.0, -1.0), RGB(Float32(5.0)), Float32(1.0), Float32(1.0), True, True)
     var n = Vec3f(0.0, 0.0, 1.0)
@@ -232,7 +232,7 @@ def test_nee_weight_simple_spectral_delta_light_matches_rgb_after_roundtrip() ra
     var accR = Float32(0.0); var accG = Float32(0.0); var accB = Float32(0.0)
     for i in range(N_TRIALS):
         var u = (Float32(i) + Float32(0.5)) / Float32(N_TRIALS)
-        var wl = sample_wavelengths_uniform(u)
+        var wl = sample_wavelengths(u)
         var result = _nee_weight_simple_spectral(ls_rgb, Int32(0), alb, Float32(0.0), n, wo, handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, wl, LobeTables(_mats, _curves, _mbrdfs))
         var (rr, gg, bb) = spectral_sample_to_rgb(handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, result, wl)
         accR += rr; accG += gg; accB += bb

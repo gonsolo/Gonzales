@@ -118,18 +118,20 @@ def test_normalize_film_clamps_nan_beauty_to_zero() raises:
     results.unsafe_free(); beauty.unsafe_free(); albedo.unsafe_free()
 
 def test_normalize_film_max_component_clamp_preserves_color_ratio() raises:
-    """When the brightest channel exceeds max_component_value, ALL channels
-    are scaled down by the same factor (max_component_value/mx) -- a hue-
-    preserving clamp, not an independent per-channel clamp."""
+    """When the value exceeds max_component_value, ALL channels are scaled
+    down by the same factor -- a hue-preserving clamp, not an independent
+    per-channel clamp. The factor is pbrt's: limit / max(X, Y, Z), the
+    sensor space it clamps in (RGB.sensor_clamped)."""
     var results = unsafe_alloc[TileResult](1)
     results[unsafe_offset=0] = _make_result(Float32(4.0), Float32(8.0), Float32(2.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(1.0))
     var beauty = unsafe_alloc[Float32](3)
     var albedo = unsafe_alloc[Float32](3)
     normalize_film(results, Int32(1), Float32(100.0), Float32(4.0), beauty, albedo)
-    # mx=8 > 4 -> factor = 4/8 = 0.5
-    assert_true(_close(beauty[unsafe_offset=0], Float32(2.0)))
-    assert_true(_close(beauty[unsafe_offset=1], Float32(4.0)))
-    assert_true(_close(beauty[unsafe_offset=2], Float32(1.0)))
+    # Y = 0.212671*4 + 0.715160*8 + 0.072169*2 = 6.7163 is the max of X, Y, Z
+    # (X = 4.8712, Z = 2.9313) -> factor = 4 / 6.7163 = 0.59557
+    assert_true(_close(beauty[unsafe_offset=0], Float32(2.38228)))
+    assert_true(_close(beauty[unsafe_offset=1], Float32(4.76456)))
+    assert_true(_close(beauty[unsafe_offset=2], Float32(1.19114)))
     results.unsafe_free(); beauty.unsafe_free(); albedo.unsafe_free()
 
 def main() raises:

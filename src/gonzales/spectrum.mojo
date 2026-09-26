@@ -13,6 +13,7 @@
 # was three floats only misled. RGB is now named RGB wherever a quantity
 # genuinely has three authored channels.
 
+from std.math import exp, log, min, max
 from gonzales.sampling import mix_bits_u64
 from gonzales.rgb2spec import (
     SpectrumTable, CieXyzTables, RGBSigmoidCoeffs,
@@ -30,13 +31,12 @@ comptime LAMBDA_MAX = Float32(830.0)
 
 @fieldwise_init
 struct SampledWavelengths(TrivialRegisterPassable):
-    """4 hero-sampled wavelengths (nm) + their sampling pdf (1/nm), shared by
-    all 4 since stratified hero sampling uses one pdf for the whole set."""
+    """4 hero-sampled wavelengths (nm). Their sampling density is pbrt's
+    visible-wavelength pdf, a pure function of each wavelength -- see pdf()."""
     var lambda0: Float32
     var lambda1: Float32
     var lambda2: Float32
     var lambda3: Float32
-    var pdf: Float32
 
     @always_inline
     def get(self, i: Int) -> Float32:
@@ -45,21 +45,53 @@ struct SampledWavelengths(TrivialRegisterPassable):
         elif i == 2: return self.lambda2
         else: return self.lambda3
 
+    @always_inline
+    def pdf(self, i: Int) -> Float32:
+        """Sampling density (1/nm) of lane i; 0 outside [LAMBDA_MIN,
+        LAMBDA_MAX], which is what the all-zero placeholder sets read."""
+        return visible_wavelength_pdf(self.get(i))
+
 @always_inline
-def sample_wavelengths_uniform(u: Float32) -> SampledWavelengths:
-    """Stratified hero-wavelength sampling (Wilkie et al. 2014): pick one
-    primary wavelength uniformly, then offset the other 3 by even strides
-    across the visible range, wrapping around. Uniform pdf = 1/(range)."""
-    var span = LAMBDA_MAX - LAMBDA_MIN
-    var lambda0 = LAMBDA_MIN + u * span
-    var lambdas = SIMD[DType.float32, 4](lambda0, lambda0, lambda0, lambda0)
-    for i in range(1, N_SPECTRAL_SAMPLES):
-        var off = lambdas[0] + span * (Float32(i) / Float32(N_SPECTRAL_SAMPLES))
-        if off > LAMBDA_MAX:
-            off -= span
-        lambdas[i] = off
-    var pdf = Float32(1.0) / span
-    return SampledWavelengths(lambdas[0], lambdas[1], lambdas[2], lambdas[3], pdf)
+def visible_wavelength_pdf(lam: Float32) -> Float32:
+    """pbrt-v4's VisibleWavelengthsPDF: a sech^2 lobe centred on 538 nm,
+    normalised over [360, 830]."""
+    if lam < LAMBDA_MIN or lam > LAMBDA_MAX:
+        return Float32(0)
+    var e = exp(Float32(0.0072) * (lam - Float32(538)))
+    var c = Float32(0.5) * (e + Float32(1) / e)
+    return Float32(0.0039398042) / (c * c)
+
+@always_inline
+def _sample_visible_wavelength(u: Float32) -> Float32:
+    """pbrt-v4's SampleVisibleWavelengths, the inverse CDF of the pdf above:
+    538 - 138.888889 * atanh(0.85691062 - 1.82750197 u)."""
+    var t = Float32(0.85691062) - Float32(1.82750197) * u
+    var lam = Float32(538) - Float32(138.888889) * (Float32(0.5) * log((Float32(1) + t) / (Float32(1) - t)))
+    # u = 1 exactly (a lane at u + 3/4 with u = 1/4) lands a hair past 830 in
+    # Float32, where the pdf is 0; keep it inside the range.
+    return min(max(lam, LAMBDA_MIN), LAMBDA_MAX)
+
+@always_inline
+def sample_wavelengths(u: Float32) -> SampledWavelengths:
+    """pbrt-v4's SampledWavelengths::SampleVisible: stratified hero sampling
+    (Wilkie et al. 2014) in the CDF's u, lanes at u + i/4 wrapped, each
+    mapped through the visible-importance inverse CDF.
+
+    Importance matters beyond variance. This used to draw uniformly over
+    [360, 830], an unbiased estimator whose single-sample XYZ swings far
+    above its mean at the spectrum's ends -- and a per-sample clamp
+    (`maxcomponentvalue`) cuts exactly those swings, so the uniform
+    estimator lost energy and saturation that pbrt keeps: a directly seen
+    L = (5, 150, 10) lamp at limit 50 read G = 60 against pbrt's 68.8, and
+    even a white L = 30 lamp, whose mean is well inside the limit, lost 5-13%
+    of blue."""
+    var lv = SIMD[DType.float32, 4](0)
+    for i in range(N_SPECTRAL_SAMPLES):
+        var up = u + Float32(i) / Float32(N_SPECTRAL_SAMPLES)
+        if up > Float32(1):
+            up -= Float32(1)
+        lv[i] = _sample_visible_wavelength(up)
+    return SampledWavelengths(lv[0], lv[1], lv[2], lv[3])
 
 @always_inline
 def pass_wavelengths(pass_idx: Int) -> SampledWavelengths:
@@ -77,8 +109,8 @@ def pass_wavelengths(pass_idx: Int) -> SampledWavelengths:
     (ordinary atomics-ordering noise) once fixed.
 
     TRAP 2: a plain low-discrepancy sequence over u aliases:
-    sample_wavelengths_uniform is itself a lattice (Wilkie et al. hero
-    sampling at fixed span/4 strides), so u and u + 1/4 give the same set,
+    sample_wavelengths is itself a lattice (Wilkie et al. hero sampling at
+    fixed 1/4 strides in u), so u and u + 1/4 give the same set,
     and e.g. a base-2 radical inverse of u repeats each set for 4 passes.
     A hash avoids that but leaves an O(1/sqrt(N)) error that is the SAME
     for every seed and scales the whole image: -3.7% luminance, -8% blue
@@ -88,7 +120,7 @@ def pass_wavelengths(pass_idx: Int) -> SampledWavelengths:
     Consequence: the wavelength schedule is the same for every --seed,
     which is fine -- everything else in the render is still seeded, and a
     fixed schedule is one fewer thing that could differ between backends."""
-    # The 4 lanes are a span/4 lattice, so u and u + 1/4 give the same SET
+    # The 4 lanes are a 1/4 lattice in u, so u and u + 1/4 give the same SET
     # of wavelengths: only frac(4u) matters. It is a base-2 radical inverse
     # of the pass index, so N passes cover the sets at O(1/N); the hashed
     # quarter only rotates which lane is the hero.
@@ -101,7 +133,7 @@ def pass_wavelengths(pass_idx: Int) -> SampledWavelengths:
     var h = mix_bits_u64(UInt64(pass_idx) + UInt64(0x9E3779B97F4A7C15))
     var quarter = Float32(h & UInt32(3))
     var u = (Float32(r >> UInt32(8)) * Float32(1.0 / 16777216.0) + quarter) * Float32(0.25)
-    return sample_wavelengths_uniform(u)
+    return sample_wavelengths(u)
 
 # ── Spectral radiance sample (4-wide, tied to one SampledWavelengths) ──────
 
@@ -486,13 +518,14 @@ def spectral_sample_to_rgb(
     if spectral_res <= 0:
         return (radiance.v0, radiance.v1, radiance.v2)
     var x = Float32(0.0); var y = Float32(0.0); var z = Float32(0.0)
-    if wavelengths.pdf > Float32(0.0):
-        for i in range(N_SPECTRAL_SAMPLES):
+    for i in range(N_SPECTRAL_SAMPLES):
+        var p = wavelengths.pdf(i)
+        if p > Float32(0.0):
             var lam = wavelengths.get(i)
-            var r = radiance.get(i)
+            var r = radiance.get(i) / p
             var (xv, yv, zv) = cie_xyz_at_ptr(spectral_cie_x, spectral_cie_y, spectral_cie_z, lam)
             x += r * xv; y += r * yv; z += r * zv
-        var norm = Float32(1.0) / (Float32(N_SPECTRAL_SAMPLES) * wavelengths.pdf * CIE_Y_INTEGRAL)
-        x *= norm; y *= norm; z *= norm
+    var norm = Float32(1.0) / (Float32(N_SPECTRAL_SAMPLES) * CIE_Y_INTEGRAL)
+    x *= norm; y *= norm; z *= norm
 
     return xyz_to_srgb(x, y, z)

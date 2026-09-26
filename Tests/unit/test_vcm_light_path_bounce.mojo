@@ -29,7 +29,7 @@ from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, I
 from gonzales.curves import Curve
 from gonzales.bvh import SceneView, BVH2Node, build_bvh2, traverse_bvh2_core
 from gonzales.rng import PCG32
-from gonzales.spectrum import null_spectral_handle, SampledWavelengths, SpectralSample, sample_wavelengths_uniform
+from gonzales.spectrum import null_spectral_handle, SampledWavelengths, SpectralSample, sample_wavelengths
 from gonzales.bdpt import (
     BDPTVertex, _bdpt_trace_light_path, _bdpt_light_path_init,
     _bdpt_light_path_bounce, _BDPT_MAX_VERTS, _BDPT_MAX_DEPTH,
@@ -140,7 +140,7 @@ def _build_scene() -> SceneView:
 # Both subpath halves of a VCM pass share one hero-wavelength set (see
 # bdpt.mojo's _bdpt_pass_wavelengths); this test drives the halves directly,
 # so it supplies that set itself.
-comptime _TEST_PASS_WL = sample_wavelengths_uniform(Float32(0.5))
+comptime _TEST_PASS_WL = sample_wavelengths(Float32(0.5))
 
 
 def test_wavefront_split_matches_original_light_path_exactly() raises:
@@ -176,7 +176,7 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
     var n_lbounces = Int(state.n_lbounces)
     var current_dielectric_ior = state.current_dielectric_ior
     var previous_dielectric_ior = state.previous_dielectric_ior
-    var wavelengths = SampledWavelengths(state.wl0, state.wl1, state.wl2, state.wl3, state.wl_pdf)
+    var wavelengths = SampledWavelengths(state.wl0, state.wl1, state.wl2, state.wl3)
 
     var n_iters = 0
     var active = state.active

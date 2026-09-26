@@ -40,7 +40,7 @@ from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, write_image_cropwindow, denoise
 from .gpu_scene import GpuSceneHandle
 from .spectrum import (
-    SampledWavelengths, SpectralSample, sample_wavelengths_uniform,
+    SampledWavelengths, SpectralSample, sample_wavelengths,
     rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb,
     rgb_bands_to_spectral_sample, spec_refl, spec_refl_unbounded, spec_illum, pass_wavelengths,
 )
@@ -644,7 +644,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     # SPPM traces visible points ONCE, before any photon pass exists, so a
     # VP's wavelengths cannot agree with the photons'. That is why `tau` is
     # RGB -- see SPPMPixel.tau.
-    var vp_wavelengths = sample_wavelengths_uniform(pcg.next_float())
+    var vp_wavelengths = sample_wavelengths(pcg.next_float())
 
     var vp = SPPMPixel(
         pos=Point3f(Float32(0)),
@@ -2691,10 +2691,7 @@ def _sppm_finalize_one_pixel(
     if acc.r != acc.r or acc.r < Float32(0): acc.r = Float32(0)
     if acc.g != acc.g or acc.g < Float32(0): acc.g = Float32(0)
     if acc.b != acc.b or acc.b < Float32(0): acc.b = Float32(0)
-    if max_comp > Float32(0):
-        var mx = max(acc.r, max(acc.g, acc.b))
-        if mx > max_comp:
-            acc *= max_comp / mx
+    acc = acc.sensor_clamped(max_comp)
     return acc
 
 

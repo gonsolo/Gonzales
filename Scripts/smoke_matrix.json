@@ -30,18 +30,18 @@
     "tol": 0.03
   },
   "chromatic-medium.pt": {
-    "mean": 0.355579,
-    "median": 0.341537,
+    "mean": 0.355001,
+    "median": 0.352855,
     "tol": 0.03
   },
   "chromatic-medium.sppm": {
-    "mean": 0.406534,
-    "median": 0.401534,
+    "mean": 0.407149,
+    "median": 0.402824,
     "tol": 0.03
   },
   "chromatic-medium.vcm": {
-    "mean": 0.359529,
-    "median": 0.340761,
+    "mean": 0.36274,
+    "median": 0.338744,
     "tol": 0.03
   },
   "closed-cavity.pt": {
@@ -60,33 +60,33 @@
     "tol": 0.03
   },
   "curves-hair.pt": {
-    "mean": 2.97167,
-    "median": 0.071894,
+    "mean": 2.976831,
+    "median": 0.074471,
     "tol": 0.03
   },
   "curves-hair.sppm": {
-    "mean": 2.952614,
-    "median": 0.068051,
+    "mean": 2.952396,
+    "median": 0.068594,
     "tol": 0.03
   },
   "curves-hair.vcm": {
-    "mean": 3.020715,
-    "median": 0.084837,
+    "mean": 2.988311,
+    "median": 0.087843,
     "tol": 0.03
   },
   "many-lights.pt": {
-    "mean": 0.668374,
-    "median": 0.479455,
+    "mean": 0.672234,
+    "median": 0.495367,
     "tol": 0.03
   },
   "many-lights.sppm": {
-    "mean": 0.614343,
-    "median": 0.518042,
+    "mean": 0.61487,
+    "median": 0.536857,
     "tol": 0.03
   },
   "many-lights.vcm": {
-    "mean": 0.691839,
-    "median": 0.536522,
+    "mean": 0.684151,
+    "median": 0.533248,
     "tol": 0.03
   },
   "medium-sphere-light.pt": {

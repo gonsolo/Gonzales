@@ -110,15 +110,11 @@ def _clamp_sample_rgb(r: Float32, g: Float32, b: Float32, lim: Float32
     taken out of BOTH renderers -- i.e. this asymmetry owned most of that gap.
 
     `lim` is already divided by the film's iso scale, because normalize_film
-    multiplies by iso/100 after the fact and pbrt clamps post-sensor.
+    multiplies by iso/100 after the fact and pbrt clamps post-sensor. The
+    test is on max(X, Y, Z), pbrt's sensor space -- see RGB.sensor_clamped.
     lim <= 0 disables it."""
-    if lim <= Float32(0):
-        return (r, g, b)
-    var mx = max(r, max(g, b))
-    if mx <= lim:
-        return (r, g, b)
-    var k = lim / mx
-    return (r * k, g * k, b * k)
+    var c = RGB(r, g, b).sensor_clamped(lim)
+    return (c.r, c.g, c.b)
 
 
 def accumulate_film_gpu(

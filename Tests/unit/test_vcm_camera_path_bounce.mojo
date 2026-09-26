@@ -42,7 +42,7 @@ from gonzales.curves import Curve
 from gonzales.bvh import SceneView, BVH2Node, build_bvh2, traverse_bvh2_core, test_spheres
 from gonzales.rng import PCG32
 from gonzales.sampling import film_filter_of
-from gonzales.spectrum import sample_wavelengths_uniform, null_spectral_handle, SampledWavelengths
+from gonzales.spectrum import sample_wavelengths, null_spectral_handle, SampledWavelengths
 from gonzales.bdpt import (
     BDPTVertex, _bdpt_trace_camera_and_connect, _bdpt_camera_path_init,
     _bdpt_camera_path_bounce, _BDPT_MAX_VERTS, _BDPT_MAX_DEPTH,
@@ -147,7 +147,7 @@ def _identity_camera_matrices() -> Tuple[Pointer[Float32, MutUntrackedOrigin], P
 # Both subpath halves of a VCM pass share one hero-wavelength set (see
 # bdpt.mojo's _bdpt_pass_wavelengths); this test drives the two halves
 # directly, so it supplies that set itself.
-comptime _TEST_PASS_WL = sample_wavelengths_uniform(Float32(0.5))
+comptime _TEST_PASS_WL = sample_wavelengths(Float32(0.5))
 
 # Box, pbrt's default radius 0.5: the test compares two implementations of
 # the same camera path, so any filter works as long as both get it.
@@ -194,7 +194,7 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
     var current_dielectric_ior = state.current_dielectric_ior
     var previous_dielectric_ior = state.previous_dielectric_ior
     var cone_len = state.cone_len
-    var wavelengths = SampledWavelengths(state.wl0, state.wl1, state.wl2, state.wl3, state.wl_pdf)
+    var wavelengths = SampledWavelengths(state.wl0, state.wl1, state.wl2, state.wl3)
 
     var n_iters = 0
     var active = state.active

@@ -42,7 +42,7 @@ def _dummy_path(estimate: SpectralSample, albedo: RGB) -> PathState:
         Float32(1.0),       # eta_scale
         Int32(0),           # sampler_dim
         UInt64(0),          # sobol_idx
-        SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),  # wavelengths
+        SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),  # wavelengths
         Float32(0.0),   # mis_null_dist
         Float32(0.0),   # lastEnvNeePdf
         Float32(0.0),   # cone_len

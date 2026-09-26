@@ -1,7 +1,7 @@
 from std.math import abs, min, max
 from std.testing import assert_true, TestSuite
 from gonzales.spectrum import (
-    load_spectral_context, spectral_handle, sample_wavelengths_uniform,
+    load_spectral_context, spectral_handle, sample_wavelengths,
     spec_refl, spec_refl_unbounded, rgb_bands_to_spectral_sample,
 )
 
@@ -52,7 +52,7 @@ def test_grey_coefficient_upsamples_flat() raises:
     # lucky quadruple of lambdas.
     var us: List[Float32] = [0.0, 0.37, 0.61, 0.93]
     for i in range(len(us)):
-        var wl = sample_wavelengths_uniform(us[i])
+        var wl = sample_wavelengths(us[i])
 
         var one = spec_refl(h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65,
                             Float32(1), Float32(1), Float32(1), wl)
@@ -87,7 +87,7 @@ def test_chromatic_coefficient_is_not_flat() raises:
         return
     var ctx = loaded[1].copy()
     var h = spectral_handle(ctx)
-    var wl = sample_wavelengths_uniform(Float32(0.37))
+    var wl = sample_wavelengths(Float32(0.37))
 
     var c = spec_refl(h.coeffs, h.res, h.cie_x, h.cie_y, h.cie_z, h.d65,
                       Float32(0.25), Float32(0.5), Float32(1.0), wl)

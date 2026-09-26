@@ -590,10 +590,7 @@ def normalize_film[Ores: Origin[mut=True], Obo: Origin[mut=True], Oao: Origin[mu
         if b.r != b.r or b.r < Float32(0): b.r = Float32(0)
         if b.g != b.g or b.g < Float32(0): b.g = Float32(0)
         if b.b != b.b or b.b < Float32(0): b.b = Float32(0)
-        if max_component_value > Float32(0):
-            var mx = max(b.r, max(b.g, b.b))
-            if mx > max_component_value:
-                b *= max_component_value / mx
+        b = b.sensor_clamped(max_component_value)
         beauty_out[unsafe_offset=i * 3 + 0] = b.r
         beauty_out[unsafe_offset=i * 3 + 1] = b.g
         beauty_out[unsafe_offset=i * 3 + 2] = b.b

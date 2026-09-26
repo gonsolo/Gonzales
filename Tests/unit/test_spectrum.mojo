@@ -1,7 +1,7 @@
 from std.math import abs
 from std.testing import assert_true, TestSuite
 from gonzales.spectrum import (
-    SampledWavelengths, sample_wavelengths_uniform,
+    SampledWavelengths, sample_wavelengths, visible_wavelength_pdf,
     rgb_to_spectral_sample, rgb_illuminant_to_spectral_sample, spectral_sample_to_rgb,
     SpectralContext, SpectralHandle, spectral_handle, LAMBDA_MIN, LAMBDA_MAX, N_SPECTRAL_SAMPLES,
 )
@@ -51,7 +51,7 @@ def _roundtrip(
     var accR = Float32(0.0); var accG = Float32(0.0); var accB = Float32(0.0)
     for i in range(N_TRIALS):
         var u = (Float32(i) + Float32(0.5)) / Float32(N_TRIALS)
-        var wl = sample_wavelengths_uniform(u)
+        var wl = sample_wavelengths(u)
         var alb = rgb_to_spectral_sample(coeffs, res, cie_x, cie_y, cie_z, d65, r, g, b, wl)
         var light = rgb_illuminant_to_spectral_sample(coeffs, res, cie_x, cie_y, cie_z, d65, Float32(1.0), Float32(1.0), Float32(1.0), wl)
         var product = alb * light
@@ -61,25 +61,43 @@ def _roundtrip(
 
 # ── hero-wavelength sampling ─────────────────────────────────────────────────
 
-def test_sample_wavelengths_uniform_stays_in_range() raises:
+def test_sample_wavelengths_stays_in_range() raises:
     for i in range(50):
         var u = (Float32(i) + Float32(0.5)) / Float32(50)
-        var wl = sample_wavelengths_uniform(u)
+        var wl = sample_wavelengths(u)
         for k in range(N_SPECTRAL_SAMPLES):
             var lam = wl.get(k)
             assert_true(lam >= LAMBDA_MIN and lam <= LAMBDA_MAX)
 
-def test_sample_wavelengths_uniform_pdf_is_positive_and_constant() raises:
-    var wl_a = sample_wavelengths_uniform(Float32(0.1))
-    var wl_b = sample_wavelengths_uniform(Float32(0.9))
-    assert_true(wl_a.pdf > Float32(0.0))
-    assert_true(_close(wl_a.pdf, wl_b.pdf))
-    assert_true(_close(wl_a.pdf, Float32(1.0) / (LAMBDA_MAX - LAMBDA_MIN)))
+def test_visible_wavelength_pdf_integrates_to_one() raises:
+    var acc = Float64(0)
+    var n = 4700
+    for i in range(n):
+        var lam = LAMBDA_MIN + (Float32(i) + Float32(0.5)) * (LAMBDA_MAX - LAMBDA_MIN) / Float32(n)
+        acc += Float64(visible_wavelength_pdf(lam))
+    acc *= Float64(LAMBDA_MAX - LAMBDA_MIN) / Float64(n)
+    assert_true(abs(acc - Float64(1)) < Float64(2e-3))
+    assert_true(visible_wavelength_pdf(Float32(300)) == Float32(0))
 
-def test_sample_wavelengths_uniform_strata_are_distinct() raises:
+def test_sample_wavelengths_follows_its_pdf() raises:
+    """The sampler IS the inverse CDF of the pdf the estimator divides by:
+    the CDF difference between two neighbouring u's equals the pdf times the
+    wavelength step. Peak at 538 nm, densest there."""
+    var du = Float32(1e-3)
+    for i in range(1, 9):
+        var u = Float32(i) / Float32(10)
+        var l0 = sample_wavelengths(u).get(0)
+        var l1 = sample_wavelengths(u + du).get(0)
+        var p = sample_wavelengths(u).pdf(0)
+        assert_true(_close((l1 - l0) * p, du, Float32(0.02)))
+    var wl = sample_wavelengths(Float32(0.3))
+    assert_true(wl.pdf(0) > Float32(0.0))
+    assert_true(visible_wavelength_pdf(Float32(538)) > visible_wavelength_pdf(Float32(420)))
+
+def test_sample_wavelengths_strata_are_distinct() raises:
     """Hero sampling's whole point is decorrelated samples across the 4
     lanes — they should not all collapse to the same wavelength."""
-    var wl = sample_wavelengths_uniform(Float32(0.37))
+    var wl = sample_wavelengths(Float32(0.37))
     assert_true(not _close(wl.lambda0, wl.lambda1, Float32(1.0)))
     assert_true(not _close(wl.lambda1, wl.lambda2, Float32(1.0)))
     assert_true(not _close(wl.lambda2, wl.lambda3, Float32(1.0)))
@@ -186,7 +204,7 @@ def test_spectral_sample_values_are_nonnegative() raises:
     input RGB."""
     var ctx = _test_ctx()
     var handle = spectral_handle(ctx)
-    var wl = sample_wavelengths_uniform(Float32(0.42))
+    var wl = sample_wavelengths(Float32(0.42))
     var spec = rgb_to_spectral_sample(handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, Float32(1.0), Float32(0.0), Float32(0.0), wl)
     assert_true(spec.v0 >= Float32(0.0))
     assert_true(spec.v1 >= Float32(0.0))
@@ -211,7 +229,7 @@ def test_illuminant_roundtrip_matches_direct_rgb_for_neutral_light() raises:
     var accR = Float32(0.0); var accG = Float32(0.0); var accB = Float32(0.0)
     for i in range(N_TRIALS):
         var u = (Float32(i) + Float32(0.5)) / Float32(N_TRIALS)
-        var wl = sample_wavelengths_uniform(u)
+        var wl = sample_wavelengths(u)
         var spec = rgb_illuminant_to_spectral_sample(handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, Float32(10.0), Float32(10.0), Float32(10.0), wl)
         var (rr, gg, bb) = spectral_sample_to_rgb(handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, spec, wl)
         accR += rr; accG += gg; accB += bb
@@ -230,7 +248,7 @@ def test_illuminant_roundtrip_matches_direct_rgb_for_neutral_light() raises:
 def test_illuminant_spectral_values_are_nonnegative() raises:
     var ctx = _test_ctx()
     var handle = spectral_handle(ctx)
-    var wl = sample_wavelengths_uniform(Float32(0.6))
+    var wl = sample_wavelengths(Float32(0.6))
     var spec = rgb_illuminant_to_spectral_sample(handle.coeffs, handle.res, handle.cie_x, handle.cie_y, handle.cie_z, handle.d65, Float32(17.0), Float32(12.0), Float32(4.0), wl)
     assert_true(spec.v0 >= Float32(0.0))
     assert_true(spec.v1 >= Float32(0.0))

@@ -3,7 +3,7 @@ from std.math import sqrt, log, exp, cos, sin, atan2, acos
 from std.memory.alloc import unsafe_alloc
 from .geometry import Vec3f, Point3f, dot, cross, Frame, PI, TWO_PI, INV_PI
 from .primitives import Ray
-from .spectrum import SampledWavelengths, sample_wavelengths_uniform
+from .spectrum import SampledWavelengths, sample_wavelengths
 
 # ── Multiple-importance sampling ───────────────────────────────────────────────
 # See: docs/04_sampling.md — Multiple Importance Sampling
@@ -557,6 +557,6 @@ def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     # seed_dim2, since this dimension has no film-position-style external
     # jitter parameters to interact with.
     var u_wave = sobol_sample(Int(sobol_idx), 2, mix_bits_u64(pcg_inc ^ UInt64(2)), sobol_matrices)
-    var wavelengths = sample_wavelengths_uniform(u_wave)
+    var wavelengths = sample_wavelengths(u_wave)
 
     return (Ray(Point3f(orgX, orgY, orgZ), Vec3f(dx, dy, dz)), pcg_state, pcg_inc, sobol_idx, wavelengths)

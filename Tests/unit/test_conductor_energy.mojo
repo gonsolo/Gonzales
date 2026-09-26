@@ -41,7 +41,7 @@ from gonzales.spectrum import SampledWavelengths, null_spectral_handle
 # on every lane and the spectral evaluator's furnace integral is directly
 # comparable to the RGB one's.
 comptime NULL_WL = SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0),
-                                      Float32(0.0), Float32(0.0))
+                                      Float32(0.0))
 
 # Plain functions rather than comptime arrays: a comptime Array[Float32, N]
 # is not ImplicitlyCopyable, so indexing it from a runtime loop will not
