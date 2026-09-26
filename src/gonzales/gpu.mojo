@@ -260,7 +260,9 @@ def _gpu_bounce_kernels(
         handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         sd,
+        handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
+        handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
         grid_dim=grid_dim,
         block_dim=block_size,
     )

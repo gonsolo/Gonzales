@@ -1,6 +1,6 @@
 from std.collections import Array
 from std.math import sqrt
-from .layered import layered_f, layered_pdf, layered_sample
+from .layered import diel_f, diel_pdf, diel_sample, layered_f, layered_pdf, layered_sample
 from .geometry import RGB, Vec3f, dot, INV_PI, PI, Frame, refract, INV_FOUR_PI
 from .materials import MatKind, LobeKind, Material, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS, MeasuredBRDF
 from .curves import Curve
@@ -1055,7 +1055,8 @@ def lobe_scoped(c: LobeCtx) -> Bool:
     return (c.kind == LobeKind.lambertian or c.kind == LobeKind.ggx
             or c.kind == LobeKind.hair or c.kind == LobeKind.measured
             or c.kind == LobeKind.coated_reflect
-            or c.kind == LobeKind.diffuse_transmit)
+            or c.kind == LobeKind.diffuse_transmit
+            or c.kind == LobeKind.rough_dielectric)
 
 
 @always_inline
@@ -1091,6 +1092,28 @@ def lobe_eval[want_pdfs: Bool = True](
 
     var vn = c.n
     var vwo = c.wo
+
+    if c.kind == LobeKind.rough_dielectric:
+        # pbrt's DielectricBxDF over a Trowbridge-Reitz microsurface
+        # (layered.mojo's diel_*). `vn` is the OUTWARD normal -- inside vs
+        # outside is which side of it wo lies on, so a caller must not
+        # face-forward it. Reflection and transmission both, untinted; the
+        # IOR lives in the material (albedo.r, like smooth glass). A light
+        # vertex evaluates importance transport: no 1/eta^2.
+        var ior_rd = tab.materials[unsafe_offset=Int(c.mat_idx)].albedo.r
+        var fr_rd = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
+        var tx_rd = Vec3f(fr_rd.x.x, fr_rd.x.y, fr_rd.x.z)
+        var ty_rd = Vec3f(fr_rd.y.x, fr_rd.y.y, fr_rd.y.z)
+        var wo_rd = Vec3f(dot(vwo, tx_rd), dot(vwo, ty_rd), dot(vwo, vn))
+        var wi_rd = Vec3f(dot(dir_to_other, tx_rd), dot(dir_to_other, ty_rd), dot(dir_to_other, vn))
+        var f_rd = diel_f(wo_rd, wi_rd, ior_rd, c.param, not c.adjoint)
+        var cos_rd = abs(wi_rd.z)
+        var fwd_rd = Float32(0)
+        var rev_rd = Float32(0)
+        comptime if want_pdfs:
+            fwd_rd = diel_pdf(wo_rd, wi_rd, ior_rd, c.param, True, True)
+            rev_rd = diel_pdf(wi_rd, wo_rd, ior_rd, c.param, True, True)
+        return LobeEval(SpectralSample(f_rd * cos_rd), cos_rd, fwd_rd, rev_rd, True)
 
     if c.kind == LobeKind.layered:
         # pbrt's LayeredBxDF (layered.mojo). Everything is real: f, and the
@@ -1325,6 +1348,10 @@ def lobe_kind_of(mat_type: Int8) -> Int32:
         return LobeKind.measured
     if mat_type == MatKind.hair:
         return LobeKind.hair
+    if mat_type == MatKind.dielectric:
+        # Only a ROUGH dielectric is routed through the lobe interface (see
+        # dielectric_is_rough); smooth glass stays a delta chain.
+        return LobeKind.rough_dielectric
     return LobeKind.lambertian
 
 
@@ -1340,7 +1367,7 @@ def lobe_is_available_of(mat: Material) -> Bool:
 def lobe_param_of(mat: Material) -> Float32:
     """LobeCtx.param for lobe_kind_of(mat.type): the GGX alpha of a conductor
     (isotropic, as lobe_eval evaluates it), 0 for kinds that take none."""
-    if mat.type == MatKind.conductor:
+    if mat.type == MatKind.conductor or mat.type == MatKind.dielectric:
         return max(mat.roughU, mat.roughV)
     return Float32(0)
 
@@ -1458,6 +1485,26 @@ def lobe_sample(
 
     if c.is_delta:
         return _lobe_sample_invalid()
+
+    if c.kind == LobeKind.rough_dielectric:
+        # diel_sample draws the direction (reflect or transmit by Fresnel,
+        # a VNDF microfacet); weight and densities come back from lobe_eval,
+        # as for every analytic lobe, so sampler and evaluator cannot drift.
+        var ior_rs = tab.materials[unsafe_offset=Int(c.mat_idx)].albedo.r
+        var fr_rs = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
+        var tx_rs = Vec3f(fr_rs.x.x, fr_rs.x.y, fr_rs.x.z)
+        var ty_rs = Vec3f(fr_rs.y.x, fr_rs.y.y, fr_rs.y.z)
+        var wo_rs = Vec3f(dot(vwo, tx_rs), dot(vwo, ty_rs), dot(vwo, vn))
+        var ds = diel_sample(wo_rs, uc, u0, u1, ior_rs, c.param, not c.adjoint, True, True)
+        if not ds.valid:
+            return _lobe_sample_invalid()
+        var wi_rs = tx_rs * ds.wi.x + ty_rs * ds.wi.y + vn * ds.wi.z
+        var le_rs = lobe_eval[want_pdfs=True](c, wi_rs, tab, spectral_coeffs, spectral_res,
+            spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, wavelengths)
+        if le_rs.pdf_fwd <= Float32(0):
+            return _lobe_sample_invalid()
+        return LobeSample(True, wi_rs, le_rs.f_cos * (Float32(1) / le_rs.pdf_fwd), False,
+                          le_rs.pdf_fwd, le_rs.pdf_rev, le_rs.cos_used, lobe_scoped(c))
 
     if c.kind == LobeKind.hair:
         # The 3-lobe Marschner sampler (bvh.mojo). Its density is the fibre

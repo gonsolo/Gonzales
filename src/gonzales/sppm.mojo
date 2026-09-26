@@ -13,7 +13,7 @@ from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
 from std.memory import bitcast
 from .geometry import face_toward, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
-from .materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, MeasuredBRDF
+from .materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, MeasuredBRDF, dielectric_is_rough
 from .render_state import GpuTexture
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, sphere_outward_normal
 from .media import Medium, MediumInterface, Grid, NvdbGrid, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, medium_transmittance_ratio_spectral, spectral_free_flight_weight
@@ -307,10 +307,13 @@ def _shading_normal_at(
     var sl = dot(sn, sn)
     if sl <= Float32(1e-12):
         return gn
-    sn = sn * (Float32(1.0) / sqrt(sl))
-    if dot(sn, gn) < Float32(0.0):
-        sn = -sn
-    return sn
+    # pbrt's convention, NOT the winding's: with per-vertex normals the
+    # interpolated N IS the outward direction, and pbrt flips the GEOMETRIC
+    # normal to agree with it (Triangle::InteractionFromIntersection,
+    # FaceForward(n, ns)). Only glass reads this, and glass decides inside
+    # vs outside from it: flipping N toward an inward winding instead
+    # rendered a rough-glass sphere 1.28x pbrt, lte-orb's shell up to 2.5x.
+    return sn * (Float32(1.0) / sqrt(sl))
 
 @always_inline
 def _hash_cell(ix: Int, iy: Int, iz: Int) -> Int:
@@ -901,9 +904,12 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         if bounce > max_charged:
             break
 
-        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair:
+        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair or (dielectric_is_rough(mat) and mat.sss_boundary == Int8(0)):
             if not lobe_is_available_of(mat):
                 break   # e.g. a measured table that failed to load
+            # A rough dielectric keeps its OUTWARD normal (lobe_eval's
+            # rough_dielectric reads inside vs outside off it).
+            var outward = mat.type == MatKind.dielectric
             # GEOMETRY, not material: a curve hit has its own normal, and no
             # texture or bump map -- matches bdpt.mojo's own on_curve gate.
             var on_curve = inter.primId.type == Int8(5)
@@ -911,9 +917,11 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             if on_curve:
                 var hc_g = _hair_precompute(mat, sd.curves, Int(inter.primId.id1), inter.v, inter.u, (-rd).to_simd())
                 gn = hc_g.geo_normal
+            elif outward:
+                gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
             else:
                 gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-            if dot(gn, ray_dir) > Float32(0.0):
+            if dot(gn, ray_dir) > Float32(0.0) and not outward:
                 gn = gn * Float32(-1.0)
             var gn_geo = gn   # before any bump/normal map -- see SPPMPixel.geo_normal
             var eff_alb = mat.albedo
@@ -925,7 +933,8 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,
                     gn, gn, hit.to_simd(), ray_dir, sd.camFp.cone_spread * cone_len, sd.camFp,
                     sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-                gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
+                if not outward:
+                    gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
             # A smooth conductor is the one kind here that is genuinely
             # delta: it scatters but stores no visible point, exactly like
             # bdpt.mojo's own lobe_is_delta_of gate.
@@ -1399,6 +1408,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var mix_amount = mat.roughU
             var mix_chosen = mix_idx2 if pcg.next_float() < mix_amount else mix_idx1
             mat = sd.materials[unsafe_offset=mix_chosen]
+            mat_idx = mix_chosen   # the resolved sub-material, for lobe_eval's table lookups
             if mat.type == MatKind.mix:
                 mat.type = MatKind.diffuse
 
@@ -1530,6 +1540,35 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             rd = vec3f(new_dir)
             ro = hit + rd * Float32(0.0002)   # along rd: gn may face into the surface (face_toward)
             continue
+
+        elif dielectric_is_rough(mat) and mat.sss_boundary == Int8(0):
+            # Rough dielectric: a real BSDF, so a photon deposits here like
+            # on any glossy surface, then scatters through THE lobe sampler
+            # in importance mode (LobeCtx.adjoint: no 1/eta^2), reflecting or
+            # transmitting. The OUTWARD normal, as lobe_eval requires.
+            if n_events > 1:
+                _sppm_store_photon[use_gpu](
+                    SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
+                    photons, max_photons, counter)
+            var gn_rd = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
+            gn_rd = apply_surface_maps_at_hit[tex_gpu](mat, inter, sd.meshes, sd.instances,
+                gn_rd, gn_rd, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp,
+                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+            var ctx_rd = LobeCtx(LobeKind.rough_dielectric, True, False, gn_rd, (-rd).to_simd(), mat.albedo,
+                                 Int32(mat_idx), lobe_param_of(mat), Float32(1),
+                                 Int32(-1), Float32(0), Float32(0), True, True)
+            var s_rd = lobe_sample(ctx_rd, pcg.next_float(), pcg.next_float(), pcg.next_float(), pcg.next_float(),
+                LobeTables(sd.materials, sd.curves, sd.measuredBrdfs),
+                spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, ph_wavelengths)
+            if not s_rd.valid:
+                break
+            # Russian roulette on the weight (Fresnel-weighted, ~1 for glass).
+            var rr_rd = min(Float32(1.0), s_rd.weight.max_component())
+            if rr_rd <= Float32(0.0) or pcg.next_float() >= rr_rd:
+                break
+            flux *= s_rd.weight * (Float32(1.0) / rr_rd)
+            rd = vec3f(s_rd.wi)
+            ro = hit + rd * Float32(0.0002)
 
         elif mat.type == MatKind.dielectric or mat.type == MatKind.thin_dielectric:
             # ── Subsurface boundary: deposit on the SURFACE and stop ───────
@@ -2462,7 +2501,7 @@ def _sppm_nee_one(
     # diffuse_transmit lobe changed the furnace by EXACTLY nothing at first:
     # the evaluator returned the right value and visibility threw it away.
     # One-sided lobes only ever see cos > 0, so this is a no-op for them.
-    var two_sided_vp = vp.mat_kind == LobeKind.diffuse_transmit
+    var two_sided_vp = vp.mat_kind == LobeKind.diffuse_transmit or vp.mat_kind == LobeKind.rough_dielectric
     var shadow_org_back = vp.pos + vp.geo_normal * (-shadow_eps)
 
     var n_area = Int(sd.areaLightCount)

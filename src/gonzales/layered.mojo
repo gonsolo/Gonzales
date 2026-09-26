@@ -27,7 +27,7 @@ docs/05_reflection_models.md.
 from std.math import sqrt, cos, sin, exp, abs, min, max
 from std.memory import bitcast
 from .geometry import Vec3f, dot, cross, safe_sqrt, PI, INV_PI
-from .materials import fr_dielectric
+from .materials import fr_dielectric, ALPHA_EFFECTIVELY_SMOOTH
 from .spectrum import SpectralSample
 from .rng import PCG32
 
@@ -40,7 +40,7 @@ comptime _ONE_MINUS_EPS = Float32(0.99999994)
 
 @always_inline
 def tr_effectively_smooth(alpha: Float32) -> Bool:
-    return alpha < Float32(1e-3)
+    return alpha < ALPHA_EFFECTIVELY_SMOOTH
 
 @always_inline
 def tr_D(wm: Vec3f, alpha: Float32) -> Float32:

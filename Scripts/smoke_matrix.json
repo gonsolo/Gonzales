@@ -134,6 +134,21 @@
     "median": 0.022558,
     "tol": 0.03
   },
+  "rough-glass.pt": {
+    "mean": 0.186345,
+    "median": 0.171657,
+    "tol": 0.03
+  },
+  "rough-glass.sppm": {
+    "mean": 0.186488,
+    "median": 0.176086,
+    "tol": 0.03
+  },
+  "rough-glass.vcm": {
+    "mean": 0.185068,
+    "median": 0.169674,
+    "tol": 0.03
+  },
   "sss-slab.pt": {
     "mean": 49.493725,
     "median": 57.056259,

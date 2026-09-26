@@ -41,6 +41,7 @@ FEATURES = {
     "closed-cavity":      "Scenes/closed-cavity-equilibrium.pbrt",
     "curves-hair":        "Scenes/glowing_hair.pbrt",
     "many-lights":        "Scenes/restir-manylights.pbrt",
+    "rough-glass":        "Scenes/rough-glass.pbrt",
     "mnee-through-glass": "Scenes/mnee-two-lights.pbrt",
     "sss-slab":           "Scenes/sss-backlit-slab.pbrt",
 }

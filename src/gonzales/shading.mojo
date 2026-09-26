@@ -4,12 +4,12 @@ from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
 from .geometry import RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, safe_sqrt, reflect, refract, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from .render_state import PDF_DROP_DIRECT
-from .materials import Material, MatKind, LobeKind, MeasuredBRDF, schlick_fresnel, fr_dielectric
+from .materials import Material, MatKind, LobeKind, MeasuredBRDF, schlick_fresnel, fr_dielectric, dielectric_is_rough, is_specular_glass
 from .render_state import PathState, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, light_sampler_sample, light_sampler_pdf, area_light_pick_triangle
 from .curves import Curve, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis
-from .layered import layered_f, layered_sample, layered_pdf
+from .layered import layered_f, layered_sample, layered_pdf, diel_f, diel_pdf, diel_sample
 from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
 from .rng import PCG32
@@ -301,8 +301,28 @@ def _shading_normal(
     hit came from an instanced BLAS (instance_idx >= 0), transformed to world
     space — mesh.normals are per-vertex OBJECT-space data in that case, so
     the interpolated result is transformed the same way before comparison."""
-    if Int(mesh.normals) <= 4:
+    var sn = _interp_vertex_normal(mesh, v0, v1, v2, bu, bv, instance_idx, instances)
+    if dot(sn, sn) == Float32(0.0):
         return geo_normal
+    if dot(sn, geo_normal) < Float32(0.0):
+        sn = -sn
+    return sn
+
+
+@always_inline
+def _interp_vertex_normal(
+    mesh: TriangleMesh,
+    v0: Int, v1: Int, v2: Int,
+    bu: Float32, bv: Float32,
+    instance_idx: Int32 = Int32(-1),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+) -> Vec3f:
+    """The mesh's own interpolated per-vertex normal N, unit length, in world
+    space and NOT flipped toward anything; the zero vector when the mesh has
+    no normals. pbrt treats this N as the surface's outward direction and
+    flips the geometric normal to agree with it -- see shade_dielectric."""
+    if Int(mesh.normals) <= 4:
+        return Vec3f(Float32(0.0))
     var w0 = Float32(1.0) - bu - bv
     var n0 = Vec3f(mesh.normals[unsafe_offset=v0*3], mesh.normals[unsafe_offset=v0*3+1], mesh.normals[unsafe_offset=v0*3+2])
     var n1 = Vec3f(mesh.normals[unsafe_offset=v1*3], mesh.normals[unsafe_offset=v1*3+1], mesh.normals[unsafe_offset=v1*3+2])
@@ -312,11 +332,8 @@ def _shading_normal(
         sn = transform_normal(Mat4(instances[unsafe_offset=Int(instance_idx)].worldToObj), sn)
     var slen = dot(sn, sn)
     if slen <= Float32(1e-12):
-        return geo_normal
-    sn = sn * (Float32(1.0) / sqrt(slen))
-    if dot(sn, geo_normal) < Float32(0.0):
-        sn = -sn
-    return sn
+        return Vec3f(Float32(0.0))
+    return sn * (Float32(1.0) / sqrt(slen))
 
 @always_inline
 def _srgb_to_linear(c: Float32) -> Float32:
@@ -1131,19 +1148,13 @@ def _finish_delta_bounce(
 
 # ── Dielectric (glass) branch ─────────────────────────────────────────────────
 @always_inline
-def shade_dielectric[use_gpu: Bool](
+def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
-    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    ctx: ShadeContext,
     mat: Material,
-    spheres: Pointer[Sphere, MutUntrackedOrigin],
-    tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-    textures: Pointer[GpuTexture, MutUntrackedOrigin] = Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(),
-    n_textures: Int = 0,
-    cam: CameraFootprint = CameraFootprint.none(),
-    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
 ):
-    var (ok, is_sphere, geom_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, meshes, spheres)
+    var (ok, is_sphere, geom_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres)
     if not ok:
         path_ptr[].active = 0
         return
@@ -1175,12 +1186,25 @@ def shade_dielectric[use_gpu: Bool](
         var dp1 = Vec3f(mesh.points[unsafe_offset=v1*4], mesh.points[unsafe_offset=v1*4+1], mesh.points[unsafe_offset=v1*4+2])
         var dp2 = Vec3f(mesh.points[unsafe_offset=v2*4], mesh.points[unsafe_offset=v2*4+1], mesh.points[unsafe_offset=v2*4+2])
         var raw_gn = cross(dp1 - dp0, dp2 - dp0)
+        if inter.primId.instanceIdx >= Int32(0):
+            raw_gn = transform_normal(Mat4(ctx.instances[unsafe_offset=Int(inter.primId.instanceIdx)].worldToObj), raw_gn)
         var raw_len = dot(raw_gn, raw_gn)
         if raw_len > Float32(0.0):
             raw_gn = raw_gn * (Float32(1.0) / sqrt(raw_len))
         else:
             raw_gn = geom_normal
-        geom_normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, raw_gn)
+        # pbrt's outward normal: with per-vertex normals, N itself, and the
+        # winding normal flipped to AGREE with N (FaceForward(n, ns) in
+        # Triangle::InteractionFromIntersection) -- not N flipped toward the
+        # winding. A mesh wound inward but with outward N (lte-orb's glass
+        # shell) otherwise reads every entry as an exit.
+        var ns_out = _interp_vertex_normal(mesh, v0, v1, v2, inter.u, inter.v, inter.primId.instanceIdx, ctx.instances)
+        if dot(ns_out, ns_out) > Float32(0.0):
+            if dot(raw_gn, ns_out) < Float32(0.0):
+                raw_gn = -raw_gn
+            geom_normal = ns_out
+        else:
+            geom_normal = raw_gn
         # barcelona-pavilion's water is a `dielectric` carrying
         # "texture displacement" -- before this, that map was silently ignored
         # (measured: high-frequency structure in the water was identical with
@@ -1189,9 +1213,9 @@ def shade_dielectric[use_gpu: Bool](
         # entering/exiting test below is `dot(ray_dir, n) < 0`, so flipping the
         # perturbed normal toward the ray would make it tautologically true and
         # bring back the 1/eta^4 loss this branch exists to prevent.
-        var (tri_de, fp_de) = _pt_hit_footprint(path_ptr, cam, instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
+        var (tri_de, fp_de) = _pt_hit_footprint(path_ptr, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
         geom_normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, geom_normal, raw_gn,
-            tri_de, fp_de, tex_filenames, textures, n_textures)
+            tri_de, fp_de, ctx.tex_filenames, ctx.textures, ctx.n_textures)
     else:
         # `_hit_geom`/`_sphere_geom_normal_and_ray` returns a FACE-FORWARDED
         # normal (always flipped to oppose the incoming ray) -- correct for
@@ -1208,7 +1232,7 @@ def shade_dielectric[use_gpu: Bool](
         # GeomContext-builders comment a few hundred lines down) before any
         # normal-map perturbation, which itself also needs the true outward
         # direction as its base frame.
-        var sph = spheres[unsafe_offset=Int(inter.primId.id1)]
+        var sph = ctx.lights.spheres[unsafe_offset=Int(inter.primId.id1)]
         var center = Vec3f(sph.center.x, sph.center.y, sph.center.z)
         var hit_point_raw = ray_org + ray_dir * inter.tHit
         var true_normal = hit_point_raw - center
@@ -1225,9 +1249,13 @@ def shade_dielectric[use_gpu: Bool](
             # _apply_normal_map_sphere's own docstring for the analytic
             # sphere UV parameterization this needs (Sphere has none
             # built in).
-            geom_normal = _apply_normal_map_sphere[use_gpu](mat, center, hit_point_raw, geom_normal, tex_filenames, textures, n_textures)
+            geom_normal = _apply_normal_map_sphere[use_gpu](mat, center, hit_point_raw, geom_normal, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
     var ior = mat.albedo.r
+    if dielectric_is_rough(mat) and mat.sss_boundary == Int8(0):
+        # A real BSDF, not a delta: pbrt's rough DielectricBxDF, with NEE.
+        _shade_rough_dielectric[enqueue_shadow](path_ptr, ctx, mat, geom_normal, ray_dir, ray_org, inter.tHit, ior)
+        return
     # A camera/primary ray (bounce 0) from an exterior camera always enters the
     # glass from air. Some meshes in this model have inward-facing normals (no
     # ReverseOrientation) which would otherwise be read as "exiting" and total-
@@ -1296,7 +1324,7 @@ def shade_dielectric[use_gpu: Bool](
         var entering = force_entering or dot(ray_dir, geom_normal) < Float32(0.0)
         if entering:
             var a_pt = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh,
-                                            tex_filenames, textures, n_textures)
+                                            ctx.tex_filenames, ctx.textures, ctx.n_textures)
             var mr = mat.sss_mean_refl
             # Guard a degenerate mean, and cap the correction: a texel far
             # above the mean must brighten its patch, never manufacture an
@@ -1316,6 +1344,107 @@ def shade_dielectric[use_gpu: Bool](
                 path_ptr[].wavelengths)
     _finish_delta_bounce(path_ptr, pcg, bs, SpectralSample(bs.f.r), hit_point, RGB(Float32(1)),
                          mat.sss_boundary == Int8(0))
+
+# Rough dielectric: pbrt's DielectricBxDF over a Trowbridge-Reitz
+# microsurface (layered.mojo's diel_*, the same functions LayeredBxDF's coat
+# uses). Unlike smooth glass it is a real BSDF with a density, so it gets NEE
+# and MIS like any glossy surface. It used to render as smooth glass: bistro
+# and kroken ask for roughness 0.25, lte-orb for frosted glass, and all of it
+# came out clear.
+@always_inline
+def _shade_rough_dielectric[enqueue_shadow: Bool](
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
+    ctx: ShadeContext,
+    mat: Material,
+    n: Vec3f,          # the OUTWARD normal (not face-forwarded): inside/outside is wo's side of it
+    ray_dir: Vec3f,
+    ray_org: Vec3f,
+    t_hit: Float32,
+    ior: Float32,
+):
+    var alpha = max(mat.roughU, mat.roughV)
+    var hit_raw = ray_org + ray_dir * t_hit
+    var frame = Frame.from_z(Vec3f(n[0], n[1], n[2]))
+    var tx = Vec3f(frame.x.x, frame.x.y, frame.x.z)
+    var ty = Vec3f(frame.y.x, frame.y.y, frame.y.z)
+    var wo = -ray_dir
+    var wo_l = Vec3f(dot(wo, tx), dot(wo, ty), dot(wo, n))
+    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+    if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
+        path_ptr[].albedo = RGB(Float32(1))
+
+    # NEE to every light type, in reflection AND transmission (a shadow ray
+    # leaving through the surface is offset to that side; like pbrt, the
+    # glass it then has to cross blocks it).
+    var ls_area = _sample_area_light_nee(ctx, hit_raw, pcg)
+    _rough_dielectric_nee[enqueue_shadow](path_ptr, ctx, hit_raw, n, ls_area, ls_area.dist * Float32(0.9999), wo_l, tx, ty, ior, alpha)
+    for li in range(_nee_simple_light_count(ctx)):
+        var res = _nee_sample_simple_light(ctx, li, hit_raw, pcg)
+        var ls = res[0].copy()
+        _rough_dielectric_nee[enqueue_shadow](path_ptr, ctx, hit_raw, n, ls, res[1], wo_l, tx, ty, ior, alpha)
+    for inf_i in range(ctx.lights.infinite_count):
+        var ls_inf = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
+        _rough_dielectric_nee[enqueue_shadow](path_ptr, ctx, hit_raw, n, ls_inf, ls_inf.dist, wo_l, tx, ty, ior, alpha)
+
+    var bs = diel_sample(wo_l, pcg.next_float(), pcg.next_float(), pcg.next_float(), ior, alpha, True, True, True)
+    if not bs.valid or bs.pdf <= Float32(0.0):
+        path_ptr[].active = 0
+        path_ptr[].pcgState = pcg.state
+        return
+    var wi = tx * bs.wi.x + ty * bs.wi.y + n * bs.wi.z
+    var side = Float32(1.0) if dot(wi, n) > Float32(0.0) else Float32(-1.0)
+    var org = hit_raw + n * (side * Float32(0.0001))
+    path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(wi[0], wi[1], wi[2]))
+    path_ptr[].throughput *= bs.f * (abs(bs.wi.z) / bs.pdf)
+    if bs.wi.z * wo_l.z < Float32(0.0):
+        # Transmission: the same bookkeeping as the smooth branch. The
+        # radiance f carried 1/etap^2, which eta_scale undoes for Russian
+        # roulette (pbrt's etaScale); and the touching-dielectric IOR stack
+        # pushes on the way in, pops on the way out.
+        var etap = ior if wo_l.z > Float32(0.0) else Float32(1.0) / ior
+        path_ptr[].eta_scale *= etap * etap
+        if wo_l.z > Float32(0.0):
+            path_ptr[].previous_dielectric_ior = path_ptr[].current_dielectric_ior
+            path_ptr[].current_dielectric_ior = ior
+        else:
+            path_ptr[].current_dielectric_ior = path_ptr[].previous_dielectric_ior
+            path_ptr[].previous_dielectric_ior = Float32(1.0)
+    path_ptr[].specularBounce = Int8(0)
+    path_ptr[].lastBsdfPdf = bs.pdf
+    path_ptr[].bounce += 1
+    var u_rr = pcg.next_float()
+    _apply_russian_roulette(path_ptr, pcg, u_rr)
+
+
+@always_inline
+def _rough_dielectric_nee[enqueue_shadow: Bool](
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
+    ctx: ShadeContext,
+    hit_raw: Vec3f,
+    n: Vec3f,
+    ls: LightSample,
+    tmax: Float32,
+    wo_l: Vec3f, tx: Vec3f, ty: Vec3f,
+    ior: Float32, alpha: Float32,
+):
+    """One NEE sample against the rough dielectric, MIS'd against its own
+    sampling density (pbrt's PathIntegrator: power heuristic)."""
+    if not ls.valid:
+        return
+    var wi_l = Vec3f(dot(ls.wi, tx), dot(ls.wi, ty), dot(ls.wi, n))
+    var f = diel_f(wo_l, wi_l, ior, alpha, True)
+    if f <= Float32(0.0):
+        return
+    var w = abs(wi_l.z)
+    if not ls.is_delta:
+        if ls.pdf <= Float32(0.0):
+            return
+        w *= power_heuristic(ls.pdf, diel_pdf(wo_l, wi_l, ior, alpha, True, True)) / ls.pdf
+    var contrib = path_ptr[].throughput * _to_spec_illum(ctx, ls.Li, path_ptr[].wavelengths) * (f * w)
+    var side = Float32(1.0) if dot(ls.wi, n) > Float32(0.0) else Float32(-1.0)
+    var org = hit_raw + n * (side * Float32(0.0001))
+    _shadow_contribute[enqueue_shadow](path_ptr, ctx, org, ls.wi, tmax, contrib)
+
 
 # Thin dielectric (type 9): one-sided glass — Fresnel selects reflect or transmit,
 # but transmitted ray is NOT refracted (direction unchanged). Models window glass,
@@ -2924,7 +3053,7 @@ def _sms_probe_glass_chain(
         if pk_inter.hit == Int8(0) or (pk_inter.primId.type != Int8(0) and pk_inter.primId.type != Int8(4)):
             break
         var pk_mat = ctx.materials[unsafe_offset=Int(pk_inter.primId.materialIndex)]
-        if pk_mat.type != MatKind.dielectric and pk_mat.type != MatKind.thin_dielectric:
+        if not is_specular_glass(pk_mat):
             break
         hits[count] = pk_inter
         origins[count] = pk_org
@@ -2994,7 +3123,7 @@ def _sms_probe_and_solve(
     if probe_inter.hit == Int8(0) or (probe_inter.primId.type != Int8(0) and probe_inter.primId.type != Int8(4)):
         return (False, False, 0, zero_verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
     var probe_mat = ctx.materials[unsafe_offset=Int(probe_inter.primId.materialIndex)]
-    if probe_mat.type != MatKind.dielectric and probe_mat.type != MatKind.thin_dielectric:
+    if not is_specular_glass(probe_mat):
         return (False, False, 0, zero_verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
 
     # --- Extract x1 geometry (triangle or analytic sphere) ---
@@ -3051,7 +3180,7 @@ def _sms_probe_and_solve(
     var has_second_glass = False
     if probe2_inter.hit != Int8(0) and (probe2_inter.primId.type == Int8(0) or probe2_inter.primId.type == Int8(4)):
         var probe2_mat_c = ctx.materials[unsafe_offset=Int(probe2_inter.primId.materialIndex)]
-        has_second_glass = (probe2_mat_c.type == MatKind.dielectric or probe2_mat_c.type == MatKind.thin_dielectric)
+        has_second_glass = is_specular_glass(probe2_mat_c)
 
     if not has_second_glass:
         var verts1 = Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init())
@@ -4526,7 +4655,7 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
     elif mat.type == MatKind.conductor:
         shade_conductor[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.dielectric:
-        shade_dielectric[False](path_ptr, inter, ctx.meshes, mat, ctx.lights.spheres, ctx.tex_filenames, ctx.textures, ctx.n_textures, ctx.cam_fp, ctx.instances)
+        shade_dielectric[False, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.coated_diffuse:
         shade_coated_diffuse[use_gpu, enqueue_shadow](path_ptr, inter, ctx, mat)
     elif mat.type == MatKind.diffuse_transmit:
@@ -4757,7 +4886,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                     var pr = pr_store[0]
                     if pr.hit != Int8(0) and (pr.primId.type == Int8(0) or pr.primId.type == Int8(4)):
                         var pr_mat = ctx.materials[unsafe_offset=Int(pr.primId.materialIndex)]
-                        if pr_mat.type == MatKind.dielectric or pr_mat.type == MatKind.thin_dielectric:
+                        if is_specular_glass(pr_mat):
                             path_ptr[].active = 0
                             return
         # A pbrt area light emits from its FRONT face only
@@ -4882,7 +5011,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         # A specular chain now starts HERE, not at an earlier MNEE vertex:
         # forget that vertex unless this one re-marks itself (only the
         # diffuse family's _nee_area_lights does). Glass continues a chain.
-        if mat.type != MatKind.dielectric and mat.type != MatKind.thin_dielectric:
+        if not is_specular_glass(mat):
             path_ptr[].last_ns_n = Vec3f(Float32(0.0))
 
     comptime if use_gpu:

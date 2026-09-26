@@ -48,6 +48,7 @@ struct LobeKind:
     # evaluator; see lobe_eval's two branches.
     comptime coated_reflect = Int32(7)
     comptime layered = Int32(8)   # coateddiffuse as pbrt's LayeredBxDF (layered.mojo): f, pdf_fwd, pdf_rev all real
+    comptime rough_dielectric = Int32(9)   # pbrt DielectricBxDF over Trowbridge-Reitz (layered.mojo diel_*); param = alpha, IOR from the material
 
 struct PhotonKind:
     """What an SPPM photon (or visible point) was deposited on. A gather only
@@ -208,6 +209,29 @@ def schlick_fresnel(cos_theta: Float32, f0: Float32) -> Float32:
     var t2 = t * t
     return f0 + (Float32(1.0) - f0) * (t2 * t2 * t)
 # <</listing>>
+
+# pbrt's TrowbridgeReitzDistribution::EffectivelySmooth threshold: below it a
+# microfacet lobe is sampled as the delta it has become.
+comptime ALPHA_EFFECTIVELY_SMOOTH = Float32(1e-3)
+
+
+@always_inline
+def dielectric_is_rough(mat: Material) -> Bool:
+    """A `dielectric` whose roughness makes it a real (non-delta) BSDF --
+    pbrt's DielectricBxDF with a Trowbridge-Reitz microsurface. Everything
+    that treats glass as a SPECULAR chain -- MNEE/SMS probes, the path
+    tracer's MNEE ownership test, the mark reset -- must ask this and leave
+    rough glass to ordinary sampling, NEE and MIS."""
+    return mat.type == MatKind.dielectric and max(mat.roughU, mat.roughV) >= ALPHA_EFFECTIVELY_SMOOTH
+
+
+@always_inline
+def is_specular_glass(mat: Material) -> Bool:
+    """Glass a specular chain passes through: a SMOOTH dielectric, or a thin
+    one. What MNEE/SMS walk and what owns an emitter reached through glass;
+    a rough dielectric is an ordinary glossy vertex instead."""
+    return (mat.type == MatKind.dielectric and not dielectric_is_rough(mat)) or mat.type == MatKind.thin_dielectric
+
 
 @always_inline
 def fr_dielectric(cos_theta_i_in: Float32, eta_in: Float32) -> Float32:

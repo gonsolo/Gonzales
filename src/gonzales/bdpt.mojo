@@ -16,7 +16,7 @@ from .layered import layered_sample, layered_pdf
 from std.atomic import Atomic
 from .geometry import face_toward, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Frame, dot, cross, refract, PI, INV_FOUR_PI, INV_PI
 from .render_state import PDF_DELTA_FULL, PDF_DROP_DIRECT, PDF_VOL_PHASE_HIT
-from .materials import Material, MatKind, LobeKind, PhotonKind, MeasuredBRDF, fr_dielectric, cos_theta_t_dielectric, coat_beer_lambert_tr, DEFAULT_COAT_THICKNESS
+from .materials import Material, MatKind, LobeKind, PhotonKind, MeasuredBRDF, fr_dielectric, cos_theta_t_dielectric, coat_beer_lambert_tr, DEFAULT_COAT_THICKNESS, is_specular_glass, dielectric_is_rough
 from .render_state import GpuTexture
 from .primitives import Ray, Intersection, TriangleMesh, Sphere, PrimId, Instance, sphere_outward_normal
 from .media import Medium, MediumInterface, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, SSS_WALK_ROUNDS, Grid, NvdbGrid, spectral_free_flight_weight
@@ -39,7 +39,7 @@ from .rng import PCG32
 from .transform import matrix_invert
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, write_image_cropwindow, denoise
-from .sppm import _geom_normal, _dielectric_bounce, medium_after_crossing, _cosine_hemisphere_sample, sample_area_light_uniform, sample_area_light_point, sample_sphere_light_emission, _HSIZE, _hash_cell, _sppm_render_core, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push, grid_weight, _sppm_count_photon
+from .sppm import _geom_normal, _shading_normal_at, _dielectric_bounce, medium_after_crossing, _cosine_hemisphere_sample, sample_area_light_uniform, sample_area_light_point, sample_sphere_light_emission, _HSIZE, _hash_cell, _sppm_render_core, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push, grid_weight, _sppm_count_photon
 from .sppm import (
     SPPMPixel, SPPMPhoton, _sppm_insert_photon,
     _sppm_gather_one, _sppm_vp_brdf, _sppm_nee_one,
@@ -592,7 +592,7 @@ def _bdpt_mnee_diffuse_area_light(
     if probe_inter.hit == Int8(0) or probe_inter.primId.type != Int8(0):
         return SpectralSample(Float32(0))
     var probe_mat = sd.materials[unsafe_offset=Int(probe_inter.primId.materialIndex)]
-    if probe_mat.type != MatKind.dielectric and probe_mat.type != MatKind.thin_dielectric:
+    if not is_specular_glass(probe_mat):
         return SpectralSample(Float32(0))
 
     var (pmesh, pv0, pv1, pv2, ptok) = _get_tri_verts(probe_inter, sd.meshes)
@@ -631,7 +631,7 @@ def _bdpt_mnee_diffuse_area_light(
 
     if probe2_inter.hit != Int8(0) and probe2_inter.primId.type == Int8(0):
         var probe2_mat = sd.materials[unsafe_offset=Int(probe2_inter.primId.materialIndex)]
-        if probe2_mat.type == MatKind.dielectric or probe2_mat.type == MatKind.thin_dielectric:
+        if is_specular_glass(probe2_mat):
             # --- 2-vertex MNEE ---
             var (p2mesh, p2v0, p2v1, p2v2, p2ok) = _get_tri_verts(probe2_inter, sd.meshes)
             if not p2ok:
@@ -872,7 +872,7 @@ def _bdpt_mnee_sphere_light(
     if probe_inter.hit == Int8(0) or probe_inter.primId.type != Int8(0):
         return SpectralSample(Float32(0))
     var probe_mat = sd.materials[unsafe_offset=Int(probe_inter.primId.materialIndex)]
-    if probe_mat.type != MatKind.dielectric and probe_mat.type != MatKind.thin_dielectric:
+    if not is_specular_glass(probe_mat):
         return SpectralSample(Float32(0))
 
     var (pmesh, pv0, pv1, pv2, ptok) = _get_tri_verts(probe_inter, sd.meshes)
@@ -911,7 +911,7 @@ def _bdpt_mnee_sphere_light(
 
     if probe2_inter.hit != Int8(0) and probe2_inter.primId.type == Int8(0):
         var probe2_mat = sd.materials[unsafe_offset=Int(probe2_inter.primId.materialIndex)]
-        if probe2_mat.type == MatKind.dielectric or probe2_mat.type == MatKind.thin_dielectric:
+        if is_specular_glass(probe2_mat):
             # --- 2-vertex MNEE ---
             var (p2mesh, p2v0, p2v1, p2v2, p2ok) = _get_tri_verts(probe2_inter, sd.meshes)
             if not p2ok:
@@ -2685,7 +2685,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
         if mat.type != MatKind.interface:
             mis_null_dist = Float32(0)
 
-        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair:
+        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair or (dielectric_is_rough(mat) and mat.sss_boundary == Int8(0)):
             if not lobe_is_available_of(mat):
                 return False   # e.g. a measured table that failed to load
             # GEOMETRY, not material: a curve hit has its own normal and spawn
@@ -2697,9 +2697,14 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var hc_g = _hair_precompute(mat, sd.curves, Int(inter.primId.id1), inter.v, inter.u, (-ray_dir).to_simd())
                 gn = hc_g.geo_normal
                 spawn_eps = curve_offset_eps(hc_g.radius)
+            elif mat.type == MatKind.dielectric:
+                gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
             else:
                 gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-            if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
+            # A rough dielectric needs the OUTWARD normal: inside vs outside
+            # is which side of it wo lies on (lobe_eval's rough_dielectric).
+            var outward = mat.type == MatKind.dielectric
+            if dot(gn, ray_dir) > Float32(0) and not outward: gn = gn * Float32(-1)
             # VCM Stage 2b: finish the per-bounce MIS correction (dist²
             # portion already applied above) -- see
             # _bdpt_trace_light_path's matching comment.
@@ -2733,7 +2738,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,
                     gn, gn, hit.to_simd(), ray_dir, vcm_cone_w, sd.camFp,
                     sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-            gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
+            if not outward:
+                gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
             var v = _null_vertex()
             v.pos = hit
             v.normal = vec3f(gn_geo)
@@ -2807,7 +2813,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var pol_i = _vcm_simple_light_policy(sd, li_d, ls_i, v, eta_x, dvcm_carry, dvc_carry,
                                                          abs(dot(ls_i.wi, gn_geo)), wavelengths)
                     var w_i = nee_weight_lobe(ls_i, _vertex_ctx(v), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, pol_i)
-                    total += _bdpt_nee_contribute(beta, w_i, ls_i, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, v.mat_kind == LobeKind.diffuse_transmit or v.mat_kind == LobeKind.hair)
+                    total += _bdpt_nee_contribute(beta, w_i, ls_i, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, v.mat_kind == LobeKind.diffuse_transmit or v.mat_kind == LobeKind.hair or v.mat_kind == LobeKind.rough_dielectric)
                 for inf_i in range(Int(sd.infiniteLightCount)):
                     var ls_e = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
                     # The SAME shared helper every other material uses -- the
@@ -2822,7 +2828,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                                           ls_e.pdf * light_path_pick_pdf(sd, _vcm_infinite_slot(sd, inf_i)) / max(PI * r_e * r_e, Float32(1e-12)),
                                           le_e.pdf_rev, False, abs(dot(ls_e.wi, gn_geo)))
                     var w_e = nee_weight_lobe(ls_e, _vertex_ctx(v), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, pol_e)
-                    total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, v.mat_kind == LobeKind.diffuse_transmit or v.mat_kind == LobeKind.hair)
+                    total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, v.mat_kind == LobeKind.diffuse_transmit or v.mat_kind == LobeKind.hair or v.mat_kind == LobeKind.rough_dielectric)
                 # MNEE's receiver evaluates albedo/pi itself (see
                 # _bdpt_mnee_diffuse_area_light), so only Lambertian lobes can
                 # host it -- a limitation of MNEE, not a material branch.
@@ -3097,7 +3103,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     did_bssrdf_hop = True
             # Ordinary specular boundary, only when no hop was taken.
             if not did_bssrdf_hop:
-                var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+                # pbrt's outward normal: interpolated N when the mesh has it
+                # (_shading_normal_at), which pbrt also refracts through.
+                var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
                 # Bump/normal maps. barcelona's water is a `dielectric` with a
                 # "texture displacement", so this is THE branch the corpus
                 # cares about most -- and VCM refracted through a perfectly
@@ -3669,7 +3677,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             if mat.type == MatKind.mix:
                 mat.type = MatKind.diffuse
 
-        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair:
+        if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair or (dielectric_is_rough(mat) and mat.sss_boundary == Int8(0)):
             if not lobe_is_available_of(mat):
                 return False   # e.g. a measured table that failed to load
             # GEOMETRY, not material: a curve hit has its own normal and spawn
@@ -3681,9 +3689,14 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 var hc_g = _hair_precompute(mat, sd.curves, Int(inter.primId.id1), inter.v, inter.u, (-ray_dir).to_simd())
                 gn = hc_g.geo_normal
                 spawn_eps = curve_offset_eps(hc_g.radius)
+            elif mat.type == MatKind.dielectric:
+                gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
             else:
                 gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-            if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
+            # A rough dielectric needs the OUTWARD normal: inside vs outside
+            # is which side of it wo lies on (lobe_eval's rough_dielectric).
+            var outward = mat.type == MatKind.dielectric
+            if dot(gn, ray_dir) > Float32(0) and not outward: gn = gn * Float32(-1)
             # VCM Stage 2b: finish the per-bounce MIS correction (the
             # dist² portion was already applied above, shared across
             # branches) -- cos_fix is the incoming ray's cosine against
@@ -3709,7 +3722,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,
                     gn, gn, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp,
                     sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-            gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
+            if not outward:
+                gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
             var v = _null_vertex()
             v.pos = hit
             v.normal = vec3f(gn_geo)
@@ -3879,7 +3893,9 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     n_lbounces += 1
                     did_bssrdf_hop = True
             if not did_bssrdf_hop:
-                var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
+                # pbrt's outward normal: interpolated N when the mesh has it
+                # (_shading_normal_at), which pbrt also refracts through.
+                var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
                 # Bump/normal maps. barcelona's water is a `dielectric` with a
                 # "texture displacement", so this is THE branch the corpus
                 # cares about most -- and VCM refracted through a perfectly

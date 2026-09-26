@@ -286,7 +286,9 @@ def shade_dielectric_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneView,
+    sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
+    shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
 ):
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -302,9 +304,8 @@ def shade_dielectric_gpu(
     # displacement"/"normalmap" gets it applied (barcelona-pavilion's water).
     # tex_filenames is CPU-only (GPU samples the uploaded texture table), so
     # the dangling default is correct on this path.
-    shade_dielectric[True](path_ptr, inter, sd.meshes, mat, sd.spheres,
-        Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
-        sd.gpuTextures, Int(sd.gpuTextureCount), sd.camFp, sd.instances)
+    var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
+    shade_dielectric[True, False](path_ptr, inter, ctx, mat)
 
 
 def shade_thin_dielectric_gpu(
