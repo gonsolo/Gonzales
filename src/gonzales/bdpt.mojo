@@ -29,6 +29,7 @@ from .bvh import (
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf, _is_real_ptr,
     HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps,
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, sphere_light_cone_pdf, _sample_infinite_light_nee,
+    light_path_count, light_path_pick, light_path_pick_pdf,
     render_aux_buffers,
 )
 from .sampling import power_heuristic, sample_ggx_vndf, sample_cosine_hemisphere_world, mix_bits_u64, camera_ray_from_film_xy, \
@@ -2271,7 +2272,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # last real vertex (this handler runs before the per-hit
                     # arrival update), which is exactly what that weight wants.
                     var (_c_esc, r_esc) = _scene_bounding_sphere(sd)
-                    var emis_esc = pdf_light_here * _vcm_pick_pdf(sd, _vcm_infinite_slot(sd, inf_i)) / max(PI * r_esc * r_esc, Float32(1e-12))
+                    var emis_esc = pdf_light_here * light_path_pick_pdf(sd, _vcm_infinite_slot(sd, inf_i)) / max(PI * r_esc * r_esc, Float32(1e-12))
                     mis_w = vcm_env_escape_weight(pdf_light_here, emis_esc,
                                                   dvcm_carry, dvc_carry)
                 total += beta * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (Le).r, (Le).g, (Le).b, wavelengths) * mis_w
@@ -2476,7 +2477,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                         # path's cos_l / (pi * 4 pi r^2 * n_lights). After a
                         # delta bounce dVCM is 0 and only dVC speaks, as for
                         # the area light (17ccebfc).
-                        var aw_hit = Float32(4) * PI * sph_hit.radius * sph_hit.radius / _vcm_pick_pdf(sd, _vcm_sphere_slot(sd, Int(inter.primId.id1)))
+                        var aw_hit = Float32(4) * PI * sph_hit.radius * sph_hit.radius / light_path_pick_pdf(sd, _vcm_sphere_slot(sd, Int(inter.primId.id1)))
                         var w_cam_sph = pdf_cone * dvcm_carry / max(t_hit * t_hit, Float32(1e-12)) + dvc_carry / (PI * aw_hit)
                         mis_w_sph_hit = Float32(1) / (Float32(1) + w_cam_sph)
                     elif last_bsdf_pdf < Float32(0):
@@ -2577,7 +2578,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                         #     wCamera = directPdfA * dVCM + emissionPdfW * dVC
                         # with the light path's own densities: a uniform pick
                         # over every light, then uniform area (area_weight).
-                        var p_a = _vcm_pick_pdf(sd, al_slot) / al_area
+                        var p_a = light_path_pick_pdf(sd, al_slot) / al_area
                         var emission_pdf_w = p_a * cos_l_hit * INV_PI
                         var w_cam_hit = (p_a * dvcm_carry + emission_pdf_w * dvc_carry) / cos_l_hit
                         mis_w_al_hit = Float32(1) / (Float32(1) + w_cam_hit)
@@ -2601,7 +2602,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # right when both halves agree on the pdf. The distance is
                     # from the scattering vertex, not the current ray origin.
                     var d_vol = t_hit + mis_null_dist
-                    var n_lights_hit = Float32(1) / _vcm_pick_pdf(sd, al_slot)
+                    var n_lights_hit = Float32(1) / light_path_pick_pdf(sd, al_slot)
                     if cos_l_hit > Float32(0) and al_area > Float32(0):
                         var pdf_light_vol = d_vol * d_vol / (cos_l_hit * n_lights_hit * al_area)
                         mis_w_al_hit = power_heuristic(INV_FOUR_PI, pdf_light_vol)
@@ -2758,7 +2759,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var (_c_e, r_e) = _scene_bounding_sphere(sd)
                     var le_e = _lobe_eval[want_pdfs=True](v, ls_e.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                     var pol_e = MisPolicy(True, eta_x, dvcm_carry, dvc_carry,
-                                          ls_e.pdf * _vcm_pick_pdf(sd, _vcm_infinite_slot(sd, inf_i)) / max(PI * r_e * r_e, Float32(1e-12)),
+                                          ls_e.pdf * light_path_pick_pdf(sd, _vcm_infinite_slot(sd, inf_i)) / max(PI * r_e * r_e, Float32(1e-12)),
                                           le_e.pdf_rev, False, abs(dot(ls_e.wi, gn_geo)))
                     var w_e = nee_weight_lobe(ls_e, _vertex_ctx(v), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, pol_e)
                     total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, v.mat_kind == LobeKind.diffuse_transmit or v.mat_kind == LobeKind.hair)
@@ -2901,7 +2902,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     var (_c_ec, r_ec) = _scene_bounding_sphere(sd)
                     var le_ec = _lobe_eval[want_pdfs=True](v, ls_ec.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
                     var pol_ec = MisPolicy(le_ec.scoped, eta_x, dvcm_carry, dvc_carry,
-                                          ls_ec.pdf * _vcm_pick_pdf(sd, _vcm_infinite_slot(sd, inf_ic)) / max(PI * r_ec * r_ec, Float32(1e-12)), le_ec.pdf_rev, False, abs(dot(ls_ec.wi, gn_c_geo)))
+                                          ls_ec.pdf * light_path_pick_pdf(sd, _vcm_infinite_slot(sd, inf_ic)) / max(PI * r_ec * r_ec, Float32(1e-12)), le_ec.pdf_rev, False, abs(dot(ls_ec.wi, gn_c_geo)))
                     var w_ec = _nee_weight_simple_spectral(ls_ec, LobeKind.ggx, mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_ec)
                     total += _bdpt_nee_contribute(beta, w_ec, ls_ec, hit, gn_c_geo, cur_med_idx, sd, scratch, wavelengths)
 
@@ -3199,10 +3200,10 @@ def _bdpt_light_path_init[use_gpu: Bool](
     # comment for why every subpath in a pass must agree on them).
     var wavelengths = pass_wl
 
-    # Power-proportional, not uniform (_vcm_pick_light): every factor below
+    # Power-proportional, not uniform (light_path_pick): every factor below
     # that used to read n_lights is 1 / this light's pick probability, and
-    # the camera side reads the same probability back (_vcm_pick_pdf).
-    var (light_pick, p_pick) = _vcm_pick_light(sd, pcg.next_float())
+    # the camera side reads the same probability back (light_path_pick_pdf).
+    var (light_pick, p_pick) = light_path_pick(sd, pcg.next_float())
     if p_pick <= Float32(0):
         return _null_light_path_state()   # a light that emits nothing
     var inv_pick = Float32(1) / p_pick
@@ -4084,37 +4085,6 @@ def _bdpt_sample_bssrdf_exit(
 
 
 @always_inline
-def _vcm_pick_light(ref sd: SceneView, u: Float32) -> Tuple[Int, Float32]:
-    """The light a light path starts from, and its probability: power-
-    proportional through sd.lightPickCdf (gpu_scene's _light_pick_cdf), in
-    the slot order area, emitting sphere, distant, infinite, point; the
-    uniform pick where no table exists."""
-    var n = Int(_bdpt_n_lights(sd))
-    if not _is_real_ptr(sd.lightPickCdf):
-        return (min(Int(u * Float32(n)), n - 1), Float32(1) / Float32(max(n, 1)))
-    var lo = 0
-    var hi = n - 1
-    while lo < hi:
-        var mid = (lo + hi) >> 1
-        if sd.lightPickCdf[unsafe_offset=mid + 1] <= u:
-            lo = mid + 1
-        else:
-            hi = mid
-    return (lo, sd.lightPickCdf[unsafe_offset=lo + 1] - sd.lightPickCdf[unsafe_offset=lo])
-
-
-@always_inline
-def _vcm_pick_pdf(ref sd: SceneView, slot: Int) -> Float32:
-    """The probability _vcm_pick_light starts a light path at light `slot`
-    -- the one value every emission density on BOTH subpaths must use for
-    that light, or the MIS weights stop summing to 1. Floored so a light
-    that emits nothing cannot divide by zero; it contributes nothing."""
-    if not _is_real_ptr(sd.lightPickCdf):
-        return Float32(1) / max(_bdpt_n_lights(sd), Float32(1))
-    return max(sd.lightPickCdf[unsafe_offset=slot + 1] - sd.lightPickCdf[unsafe_offset=slot], Float32(1e-12))
-
-
-@always_inline
 def _vcm_sphere_slot(ref sd: SceneView, si: Int) -> Int:
     """Pick slot of the emitting sphere sd.spheres[si]: after the area
     lights, spheres counted in index order, emitters only."""
@@ -4146,8 +4116,7 @@ def _bdpt_n_lights(ref sd: SceneView) -> Float32:
     """The light-pick denominator the light path used, needed on the camera
     side because its NEE loops every light with no pick: the MIS densities
     must describe the same experiment on both subpaths."""
-    return Float32(Int(sd.areaLightCount) + Int(sd.sphereLightCount) + Int(sd.distantLightCount)
-                   + Int(sd.infiniteLightCount) + Int(sd.pointLightCount))
+    return Float32(light_path_count(sd))
 
 def _vcm_simple_light_policy(
     ref sd: SceneView, i: Int, ls: LightSample, v: BDPTVertex, eta_x: Float32,
@@ -4163,7 +4132,7 @@ def _vcm_simple_light_policy(
     vcm_env_nee_weight wants SmallVCM's emissionPdfW * cosToLight /
     (directPdfW * cosAtLight) with directPdfW = ls.pdf, so the light-side
     factors fold into `emission_pdf_w` (p = the light path's pick
-    probability for this light, _vcm_pick_pdf; the camera side picks none):
+    probability for this light, light_path_pick_pdf; the camera side picks none):
         distant  p / (pi R^2)            the bounding disk, delta direction
         point    p / (4 pi d^2)          SmallVCM's directPdfW is d^2; ours
                                          reports 1 with Li = I / d^2
@@ -4176,12 +4145,12 @@ def _vcm_simple_light_policy(
     var emission: Float32
     if i < nd:
         var (_c, r) = _scene_bounding_sphere(sd)
-        emission = _vcm_pick_pdf(sd, _vcm_distant_slot(sd, i)) / max(PI * r * r, Float32(1e-12))
+        emission = light_path_pick_pdf(sd, _vcm_distant_slot(sd, i)) / max(PI * r * r, Float32(1e-12))
     elif i < nd + np_:
-        emission = _vcm_pick_pdf(sd, _vcm_point_slot(sd, i - nd)) / max(Float32(4.0) * PI * ls.dist * ls.dist, Float32(1e-12))
+        emission = light_path_pick_pdf(sd, _vcm_point_slot(sd, i - nd)) / max(Float32(4.0) * PI * ls.dist * ls.dist, Float32(1e-12))
     else:
         var sph = sd.spheres[unsafe_offset=i - nd - np_]
-        emission = _vcm_pick_pdf(sd, _vcm_sphere_slot(sd, i - nd - np_)) / max(PI * Float32(4.0) * PI * sph.radius * sph.radius, Float32(1e-12))
+        emission = light_path_pick_pdf(sd, _vcm_sphere_slot(sd, i - nd - np_)) / max(PI * Float32(4.0) * PI * sph.radius * sph.radius, Float32(1e-12))
     return MisPolicy(le.scoped, eta_x, dvcm, dvc, emission, le.pdf_rev, False, cos_geo)
 
 @always_inline

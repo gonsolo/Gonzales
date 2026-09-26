@@ -25,6 +25,7 @@ from .bvh import (
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf,
     HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps,
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
+    light_path_pick,
     render_aux_buffers,
 )
 from .vcm_mis import mis_policy_sole
@@ -1193,10 +1194,17 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     # flux stopped being RGB.
     var ph_wavelengths = pass_wl
 
-    var light_pick = Int(pcg.next_uint() % UInt32(n_lights))
+    # The light, picked by power (light_path_pick, the same table VCM uses):
+    # a dim light no longer gets as many photons as one 100x brighter, and
+    # every photon carries about the same flux. Each factor below that read
+    # n_lights is 1 / this light's pick probability.
+    var (light_pick, p_pick) = light_path_pick(sd, pcg.next_float())
+    if p_pick <= Float32(0):
+        return
+    var inv_pick = Float32(1) / p_pick
     if light_pick < n_area:
-        # Pick a random area light + triangle + barycentric point on it.
-        var light_sample = sample_area_light_uniform(sd.areaLights, sd.meshes, n_area, pcg, sd.curves)
+        # A random triangle + barycentric point on the chosen area light.
+        var light_sample = sample_area_light_point(sd.areaLights[unsafe_offset=light_pick], sd.meshes, pcg, sd.curves)
         var al = light_sample.light
         var lp = light_sample.point
         var ln = light_sample.normal
@@ -1208,8 +1216,8 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         var pdir = _cosine_hemisphere_sample(ln, du1, du2)
 
         # Photon flux: total_light_power / n_emit
-        # total_power = emission * pi * total_area * n_lights (uniform light selection)
-        var scale = PI * al.total_area * Float32(n_lights) / Float32(n_emit)
+        # total_power = emission * pi * total_area / p_pick (the light's pick probability)
+        var scale = PI * al.total_area * inv_pick / Float32(n_emit)
         flux = spec_illum(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, al.emission.r, al.emission.g, al.emission.b, ph_wavelengths) * scale
         ro = point3f(lp) + vec3f(ln) * Float32(0.0001)
         rd = vec3f(pdir)
@@ -1223,7 +1231,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         var (si_e, sp_e, sn_e, sd_e) = sample_sphere_light_emission(sd, light_pick - n_area, pcg)
         var sph_e = sd.spheres[unsafe_offset=si_e]
         var area_e = Float32(4) * PI * sph_e.radius * sph_e.radius
-        var scale_e = PI * area_e * Float32(n_lights) / Float32(n_emit)
+        var scale_e = PI * area_e * inv_pick / Float32(n_emit)
         flux = spec_illum(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
                           sph_e.emission.r * scale_e, sph_e.emission.g * scale_e, sph_e.emission.b * scale_e, ph_wavelengths)
         ro = point3f(sp_e + sn_e * (sph_e.radius * Float32(0.0001)))
@@ -1233,7 +1241,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         var (center, radius) = _scene_bounding_sphere(sd)
         var dir = Vec3f(dl.direction.x, dl.direction.y, dl.direction.z)
         var disk_pt = _sample_disk_perpendicular(dir, center, radius, Point2f(pcg.next_float(), pcg.next_float()))
-        flux = spec_illum(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, dl.emission.r, dl.emission.g, dl.emission.b, ph_wavelengths) * (Float32(n_lights) * PI * radius * radius) / Float32(n_emit)
+        flux = spec_illum(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, dl.emission.r, dl.emission.g, dl.emission.b, ph_wavelengths) * (inv_pick * PI * radius * radius) / Float32(n_emit)
         ro = disk_pt
         rd = dir
     elif light_pick < n_area + n_sphere + n_distant + n_infinite:
@@ -1247,7 +1255,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             return
         var emit_dir = -env_dir
         var disk_pt = _sample_disk_perpendicular(emit_dir, center, radius, Point2f(pcg.next_float(), pcg.next_float()))
-        flux = spec_illum(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, env_rgb.r, env_rgb.g, env_rgb.b, ph_wavelengths) * (Float32(n_lights) * PI * radius * radius / pdf_dir) / Float32(n_emit)
+        flux = spec_illum(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, env_rgb.r, env_rgb.g, env_rgb.b, ph_wavelengths) * (inv_pick * PI * radius * radius / pdf_dir) / Float32(n_emit)
         ro = disk_pt
         rd = emit_dir
     else:
@@ -1261,7 +1269,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         var sin_p = sqrt(max(Float32(0), Float32(1) - cos_p * cos_p))
         var phi_p = Float32(2) * PI * u2p
         var pdir_p = Vec3f(sin_p * cos(phi_p), sin_p * sin(phi_p), cos_p)
-        flux = spec_illum(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, pll.intensity.r, pll.intensity.g, pll.intensity.b, ph_wavelengths) * (Float32(4) * PI * Float32(n_lights) / Float32(n_emit))
+        flux = spec_illum(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, pll.intensity.r, pll.intensity.g, pll.intensity.b, ph_wavelengths) * (Float32(4) * PI * inv_pick / Float32(n_emit))
         ro = pll.position
         rd = pdir_p
     var cur_med_idx = default_emit_med  # start in medium if light is above one

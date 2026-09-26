@@ -35,13 +35,13 @@
     "tol": 0.03
   },
   "chromatic-medium.sppm": {
-    "mean": 0.407149,
-    "median": 0.402824,
+    "mean": 0.392237,
+    "median": 0.388097,
     "tol": 0.03
   },
   "chromatic-medium.vcm": {
-    "mean": 0.36274,
-    "median": 0.338744,
+    "mean": 0.358991,
+    "median": 0.338864,
     "tol": 0.03
   },
   "closed-cavity.pt": {

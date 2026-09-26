@@ -450,6 +450,45 @@ def _sample_point_light_nee(
     return LightSample(wi, Li, Float32(1.0), dist, True, True)
 
 @always_inline
+def light_path_count(ref sd: SceneView) -> Int:
+    """How many lights a light path (VCM) or photon (SPPM) can start from:
+    area, emitting sphere, distant, infinite, point -- the pick's slot order."""
+    return (Int(sd.areaLightCount) + Int(sd.sphereLightCount) + Int(sd.distantLightCount)
+            + Int(sd.infiniteLightCount) + Int(sd.pointLightCount))
+
+
+@always_inline
+def light_path_pick(ref sd: SceneView, u: Float32) -> Tuple[Int, Float32]:
+    """The light a light path or photon starts from, and its probability:
+    power-proportional through sd.lightPickCdf (pbrt_parser's
+    _light_pick_cdf), in light_path_count's slot order; the uniform pick
+    where no table exists. Shared by VCM and SPPM so both emit alike."""
+    var n = light_path_count(sd)
+    if not _is_real_ptr(sd.lightPickCdf):
+        return (min(Int(u * Float32(n)), n - 1), Float32(1) / Float32(max(n, 1)))
+    var lo = 0
+    var hi = n - 1
+    while lo < hi:
+        var mid = (lo + hi) >> 1
+        if sd.lightPickCdf[unsafe_offset=mid + 1] <= u:
+            lo = mid + 1
+        else:
+            hi = mid
+    return (lo, sd.lightPickCdf[unsafe_offset=lo + 1] - sd.lightPickCdf[unsafe_offset=lo])
+
+
+@always_inline
+def light_path_pick_pdf(ref sd: SceneView, slot: Int) -> Float32:
+    """The probability light_path_pick starts at light `slot` -- the one
+    value every VCM emission density on BOTH subpaths must use for that
+    light, or the MIS weights stop summing to 1. Floored so a light that
+    emits nothing cannot divide by zero; it contributes nothing."""
+    if not _is_real_ptr(sd.lightPickCdf):
+        return Float32(1) / Float32(max(light_path_count(sd), 1))
+    return max(sd.lightPickCdf[unsafe_offset=slot + 1] - sd.lightPickCdf[unsafe_offset=slot], Float32(1e-12))
+
+
+@always_inline
 def sphere_light_cone_pdf(sph: Sphere, p: Vec3f) -> Float32:
     """The solid-angle density _sample_sphere_light_nee draws with from `p`:
     1 / (the cone the sphere subtends there), or 0 where it cannot sample at
