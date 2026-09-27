@@ -22,6 +22,7 @@ from gonzales.rgb2spec import (
     build_cie_xyz_tables, cie_xyz_at_ptr, xyz_to_srgb,
     load_default_spectrum_table, CIE_Y_INTEGRAL,
 )
+from gonzales.sensors import named_sensor_srgb_matrix
 
 comptime N_SPECTRAL_SAMPLES = 4
 comptime LAMBDA_MIN = Float32(360.0)
@@ -282,7 +283,15 @@ struct SpectralContext(Copyable, Movable):
     var table: SpectrumTable
     var cie: CieXyzTables
 
-def load_spectral_context(data_dir: String) -> Tuple[Bool, SpectralContext]:
+def load_spectral_context(
+    data_dir: String, sensor_name: String = "cie1931", sensor_whitebalance: Float32 = Float32(0.0),
+) -> Tuple[Bool, SpectralContext]:
+    """`sensor_name`/`sensor_whitebalance` come from a cheap pre-scan of the
+    scene file's Film block (see sensors.scan_film_sensor_params), done
+    before this call since the real scene parse happens later, inside
+    parse_and_render, by which point these tables must already be built --
+    see sensors.mojo's header for why a named sensor's response curves are
+    substituted here rather than in the per-sample render path."""
     var loaded = load_default_spectrum_table(data_dir + "/rgb2spectrum_table.bin")
     var ok = loaded[0]
     var table = loaded[1].copy()
@@ -290,6 +299,10 @@ def load_spectral_context(data_dir: String) -> Tuple[Bool, SpectralContext]:
         var empty = SpectralContext(table^, CieXyzTables(List[Float32](), List[Float32](), List[Float32](), List[Float32]()))
         return (False, empty^)
     var cie = build_cie_xyz_tables()
+    if sensor_name != "cie1931":
+        var sensor = named_sensor_srgb_matrix(sensor_name, sensor_whitebalance)
+        if sensor[0]:
+            cie = CieXyzTables(sensor[2].copy(), sensor[3].copy(), sensor[4].copy(), cie.d65_tbl.copy())
     var ctx = SpectralContext(table^, cie^)
     return (True, ctx^)
 

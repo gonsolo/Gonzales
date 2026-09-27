@@ -4,6 +4,7 @@ from std.os import getenv
 from std.memory.alloc import unsafe_alloc
 from gonzales.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel, debug_render_vulkanrt
 from gonzales.spectrum import load_spectral_context, spectral_handle
+from gonzales.sensors import scan_film_sensor_params
 
 def _parse_int32(s: String, start: Int) -> Int32:
     var v = Int32(0)
@@ -244,7 +245,21 @@ def main() raises:
     # Missing table -> null_spectral_handle() default everywhere downstream
     # (same "unwired yet" behavior as before this table existed), not a
     # fatal error, so a stale/missing data dir doesn't block rendering.
-    var spectral_ctx_result = load_spectral_context(data_dir)
+    # A named sensor (e.g. "nikon_d850") needs its measured response curves
+    # baked into the CieXyzTables from the start (see sensors.mojo's header)
+    # -- cheap enough to just re-read the scene file here for a pre-scan,
+    # since the real parse (which also reads "string sensor"/"float
+    # whitebalance", but too late for this) hasn't happened yet.
+    var sensor_name = String("cie1931")
+    var sensor_wb = Float32(0.0)
+    try:
+        var scene_text = open(scene_path, "r").read()
+        var scan = scan_film_sensor_params(scene_text)
+        sensor_name = scan[0]
+        sensor_wb = scan[1]
+    except:
+        pass
+    var spectral_ctx_result = load_spectral_context(data_dir, sensor_name, sensor_wb)
     var spectral_ctx = spectral_ctx_result[1].copy()
     var spectral = spectral_handle(spectral_ctx)
     if not spectral_ctx_result[0]:

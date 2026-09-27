@@ -23,9 +23,12 @@ def normalize_beauty_albedo_gpu(
     var lr = film[unsafe_offset=tid*3+0] * inv_weight * iso_scale
     var lg = film[unsafe_offset=tid*3+1] * inv_weight * iso_scale
     var lb = film[unsafe_offset=tid*3+2] * inv_weight * iso_scale
-    if lr != lr or lr < Float32(0): lr = Float32(0)
-    if lg != lg or lg < Float32(0): lg = Float32(0)
-    if lb != lb or lb < Float32(0): lb = Float32(0)
+    # NaN guard only -- NOT a negative clamp; see apply_film_sensor's
+    # docstring (rendering.mojo) for why a negative component here must
+    # survive to the wb matrix multiply that follows this normalizer.
+    if lr != lr: lr = Float32(0)
+    if lg != lg: lg = Float32(0)
+    if lb != lb: lb = Float32(0)
     var c = RGB(lr, lg, lb).sensor_clamped(max_comp)
     beauty_out[unsafe_offset=tid*3+0] = c.r
     beauty_out[unsafe_offset=tid*3+1] = c.g

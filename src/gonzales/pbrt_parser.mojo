@@ -10,6 +10,7 @@ from max.algorithm import parallelize
 from std.subprocess import run
 from std.os.path import exists
 from .footprint import camera_footprint
+from .sensors import named_sensor_is_supported, named_sensor_srgb_matrix
 from .diagnostics import warn_unsupported, warn_unsupported_in
 from .lexer import (PbrtScanner, scanner_open, scanner_free, scanner_is_at_end,
                     scanner_scan_token, scanner_parse_quoted_string,
@@ -350,13 +351,14 @@ def _psc_handle_film(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
     s[unsafe_offset=0].film_exposuretime = params.get_float("exposuretime", s[unsafe_offset=0].film_exposuretime)
     s[unsafe_offset=0].film_whitebalance = params.get_float("whitebalance", s[unsafe_offset=0].film_whitebalance)
     var sensor_str = params.get_string("sensor", "cie1931")
-    if sensor_str != "cie1931" and sensor_str != "":
+    if sensor_str != "cie1931" and sensor_str != "" and not named_sensor_is_supported(sensor_str):
         # pbrt models a named sensor with its MEASURED per-wavelength r/g/b
-        # response curves, fitted to XYZ through 24 Macbeth swatch spectra.
-        # Those tables are not ported, so fall back to pbrt's own default
-        # sensor ("cie1931", i.e. the XYZ matching functions). Exposure and
-        # white balance below are still applied exactly, so this differs from
-        # pbrt only by the sensor's colour-response shape.
+        # response curves, fitted to XYZ through 24 Macbeth swatch spectra
+        # (see sensors.mojo for the ones that ARE ported). Unsupported names
+        # fall back to pbrt's own default sensor ("cie1931", i.e. the XYZ
+        # matching functions). Exposure and white balance below are still
+        # applied exactly, so this differs from pbrt only by the sensor's
+        # colour-response shape.
         print("Warning: film sensor '" + sensor_str + "' not modelled — using cie1931 response (exposure and whitebalance still applied).")
     s[unsafe_offset=0].film_sensor = sensor_str
     s[unsafe_offset=0].film_max_comp = params.get_float("maxcomponentvalue", s[unsafe_offset=0].film_max_comp)
@@ -1168,7 +1170,7 @@ def _psc_apply_shape_alpha(s: Pointer[SceneParseState, MutUntrackedOrigin],
     var ok = external_call["load_alpha_mask", Int32,
         Pointer[UInt8, MutUntrackedOrigin], Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
         Pointer[Int32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin]](
-        fname, data, wh, wh + 1)
+        fname, data, wh, wh.unsafe_offset(1))
     fname.unsafe_free()
     if ok != Int32(0):
         ma.alpha_mask = Int32(len(s[unsafe_offset=0].alpha_mask_files))
@@ -2888,7 +2890,12 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     psc[unsafe_offset=0].camera_fov       = s[unsafe_offset=0].camera_fov
     psc[unsafe_offset=0].film_iso         = s[unsafe_offset=0].film_iso
     psc[unsafe_offset=0].film_exposuretime = s[unsafe_offset=0].film_exposuretime
-    psc[unsafe_offset=0].film_wb          = _film_white_balance_matrix(s[unsafe_offset=0].film_whitebalance)
+    var film_wb = _film_white_balance_matrix(s[unsafe_offset=0].film_whitebalance)
+    if named_sensor_is_supported(s[unsafe_offset=0].film_sensor):
+        var sensor_fit = named_sensor_srgb_matrix(s[unsafe_offset=0].film_sensor, s[unsafe_offset=0].film_whitebalance)
+        if sensor_fit[0]:
+            film_wb = sensor_fit[1]
+    psc[unsafe_offset=0].film_wb          = film_wb
     psc[unsafe_offset=0].film_max_comp    = s[unsafe_offset=0].film_max_comp
     psc[unsafe_offset=0].film_filename    = fname
     psc[unsafe_offset=0].filter_sigma     = s[unsafe_offset=0].filter_sigma
