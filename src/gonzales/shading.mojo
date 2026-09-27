@@ -4677,6 +4677,42 @@ def _shade_dispatch[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].active = 0
 
 
+@always_inline
+def _wrap_octahedral_texel(x: Int, y: Int, iw: Int, ih: Int) -> Tuple[Int, Int]:
+    """One INTEGER texel coordinate of an equal-area (octahedral) environment
+    map, mirrored back into [0,iw)x[0,ih) when a bilinear filter's neighbour
+    sample falls just outside the image -- pbrt's RemapPixelCoords
+    (util/image.h, WrapMode::OctahedralSphere), not a plain clamp.
+
+    The equal-area square isn't a flat, seamlessly-tiling image: its four
+    edges each connect to ANOTHER part of the same edge, reflected through
+    its midpoint (Clarberg's mapping folds the sphere's octants onto the
+    square along those edges). A bilinear tap that clamps at an edge instead
+    of mirroring re-reads the LAST valid texel as an extra sample, silently
+    blending in that edge's own color a second time instead of the correct
+    across-the-seam neighbour -- invisible on a flat/constant environment
+    (every tap reads the same value either way), but a systematic energy/
+    colour error near every edge and the four corners of a real texture.
+    Confirmed against pbrt-v4's own logic (RemapPixelCoords doesn't fall
+    through to `Clamp`; MIS/NEE's CDF-based sample already lands on a valid
+    in-range texel by construction and needs no equivalent here)."""
+    var xr = x
+    var yr = y
+    if xr < 0:
+        xr = -xr
+        yr = ih - 1 - yr
+    elif xr >= iw:
+        xr = 2 * iw - 1 - xr
+        yr = ih - 1 - yr
+    if yr < 0:
+        xr = iw - 1 - xr
+        yr = -yr
+    elif yr >= ih:
+        xr = iw - 1 - xr
+        yr = 2 * ih - 1 - yr
+    return (max(0, min(iw - 1, xr)), max(0, min(ih - 1, yr)))
+
+
 # Unified NEE core — comptime-specialized for CPU (use_gpu=False) and GPU (use_gpu=True).
 # Texture lookup uses OIIO external_call on CPU and device-resident GpuTexture on GPU.
 @always_inline
@@ -4709,17 +4745,24 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 var u = ea_uv[0]; var v = ea_uv[1]
                 var fx = u * Float32(iw) - Float32(0.5)
                 var fy = v * Float32(ih) - Float32(0.5)
-                var x0 = Int(max(Float32(0), min(Float32(iw - 1), floor(fx))))
-                var y0 = Int(max(Float32(0), min(Float32(ih - 1), floor(fy))))
-                var x1 = min(x0 + 1, iw - 1)
-                var y1 = min(y0 + 1, ih - 1)
-                var wx = fx - Float32(x0); var wy = fy - Float32(y0)
+                # Un-clamped: may be -1 or iw/ih right at an edge, which is
+                # exactly what _wrap_octahedral_texel below needs to tell a
+                # genuine off-image tap from an in-range one. The bilinear
+                # WEIGHT stays tied to this raw floor, not to wherever the
+                # corner's mirrored texel ends up.
+                var x0r = Int(floor(fx))
+                var y0r = Int(floor(fy))
+                var wx = fx - Float32(x0r); var wy = fy - Float32(y0r)
                 @always_inline
                 def texel(x: Int, y: Int) {imm} -> RGB:
                     var o = (y*iw+x)*3
                     return RGB(ilight.pixels_ptr[unsafe_offset=o], ilight.pixels_ptr[unsafe_offset=o+1], ilight.pixels_ptr[unsafe_offset=o+2])
-                var c00 = texel(x0, y0); var c10 = texel(x1, y0)
-                var c01 = texel(x0, y1); var c11 = texel(x1, y1)
+                var (cx00, cy00) = _wrap_octahedral_texel(x0r,     y0r,     iw, ih)
+                var (cx10, cy10) = _wrap_octahedral_texel(x0r + 1, y0r,     iw, ih)
+                var (cx01, cy01) = _wrap_octahedral_texel(x0r,     y0r + 1, iw, ih)
+                var (cx11, cy11) = _wrap_octahedral_texel(x0r + 1, y0r + 1, iw, ih)
+                var c00 = texel(cx00, cy00); var c10 = texel(cx10, cy10)
+                var c01 = texel(cx01, cy01); var c11 = texel(cx11, cy11)
                 env_rgb = (c00*(Float32(1)-wx) + c10*wx)*(Float32(1)-wy) + (c01*(Float32(1)-wx) + c11*wx)*wy
                 env_rgb = env_rgb * ilight.scale
             else:
