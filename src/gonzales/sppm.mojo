@@ -1917,7 +1917,7 @@ comptime GATHER_COVERAGE_PROBES = 8
 
 
 def gather_disk_coverage[probes: Int = GATHER_COVERAGE_PROBES](
-    ref sd: SceneView, p: Point3f, n: Vec3f, r: Float32,
+    ref sd: SceneView, p: Point3f, n: Vec3f, r: Float32, salt: Int = 7,
 ) -> Float32:
     """The fraction of the gather disk -- radius r on the tangent plane of the
     geometric normal n at p -- over which a surface lies that
@@ -1935,10 +1935,31 @@ def gather_disk_coverage[probes: Int = GATHER_COVERAGE_PROBES](
 
     Estimated with `probes` short rays down the normal through
     gather_disk_contains's +-0.1 r slab, at stratified points of a
-    golden-angle spiral that a hash of p rotates. A hit counts when its
-    geometric normal is within the merge's 0.7 cosine of n (either side: a
-    thin panel is surface on both). Curves are not surfaces here, so a hair
-    query should not call this."""
+    golden-angle spiral that a hash of `salt` and p rotates. A hit counts
+    when its geometric normal is within the merge's 0.7 cosine of n (either
+    side: a thin panel is surface on both). Curves are not surfaces here, so
+    a hair query should not call this.
+
+    `salt` should vary from call to call for a QUERY POINT THAT STAYS FIXED
+    across many calls -- same rule grid_keep's own salt already documents,
+    and SPPM's visible points (unlike VCM's re-jittered camera vertices) are
+    generated ONCE and gathered every one of its dozens of passes at the SAME
+    vp.pos with a merely-shrinking radius, so a frozen salt gives every pass
+    the identical probe rays. SPPM passes a per-pass salt (its pass index)
+    for exactly this reason -- but TESTED AND RULED OUT as the explanation
+    for its residual bias vs. a fixed salt (barcelona-pavilion night, whole
+    image 0.998 either way; the 99-99.9% bin 1.054 fixed-salt vs 1.052
+    per-pass, within noise of 2 seeds). Kept anyway as the more defensible
+    default; the actual residual (SPPM whole 0.929->0.998 clean, but its
+    99-99.9% bin overshoots to ~1.05 while its 99.9-100% bin stays ~8% low,
+    where VCM's equivalent correction lands both within 1%) is still open --
+    Leading unexplored
+    hypothesis: SPPM's per-VP progressive radius (Knaus-Zwicker, this
+    file's _ALPHA/ratio update) shrinks SLOWER for a VP whose disk is
+    truncated (fewer accepted photons -> `ratio` closer to 1 -> less
+    shrinkage), a feedback the coverage correction does not touch (it
+    rescales `phi`, not the `M` count `ratio` is computed from) and that
+    VCM's single global per-pass radius has no analogue of."""
     var sgn = Float32(1) if n.z >= Float32(0) else Float32(-1)
     var a = Float32(-1) / (sgn + n.z)
     var b = n.x * n.y * a
@@ -1950,7 +1971,7 @@ def gather_disk_coverage[probes: Int = GATHER_COVERAGE_PROBES](
         PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
         Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
     var mem = _local.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-    var rot = Float32(grid_coin_bits(7, p)) * Float32(2.3283064e-10) * Float32(6.2831853)
+    var rot = Float32(grid_coin_bits(salt, p)) * Float32(2.3283064e-10) * Float32(6.2831853)
     var lift = Float32(0.1) * r
     var hits = 0
     comptime for i in range(probes):
@@ -2036,6 +2057,7 @@ def _sppm_gather_one(
     spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
     spectral_d65: Pointer[Float32, MutUntrackedOrigin],
     pass_wl:  SampledWavelengths,
+    pass_idx: Int = 0,
 ):
     """Gather nearby photons into visible point `i` and apply the SPPM
     radius/flux update. Shared verbatim between the CPU driver
@@ -2274,7 +2296,7 @@ def _sppm_gather_one(
             # unchanged) -- the residual vs. an unbiased BDPT referee (whole
             # 0.998, mid-bin +5%, brightest -8%) is not probe-count noise.
             # Left at 8, matching VCM's merge; an open SPPM-specific gap.
-            var cov = gather_disk_coverage(sd, vp.pos, vp.geo_normal, sqrt(r2))
+            var cov = gather_disk_coverage(sd, vp.pos, vp.geo_normal, sqrt(r2), salt=7 + pass_idx * 1000003)
             if cov > Float32(0):
                 phi = phi * (Float32(1) / cov)
         var N = vp.N_acc
@@ -2308,12 +2330,13 @@ def _gather_update(
     inv_cell: Float32,
     ref sd:       SceneView,
     pass_wl:  SampledWavelengths,
+    pass_idx: Int = 0,
 ):
     def gather_one(i: Int) {imm}:
         _sppm_gather_one(vps, i, photons, heads, inv_cell, sd, sd.mediums, Int(sd.mediumCount),
                          sd.grids, sd.nvdbGrids,
                          sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y,
-                         sd.spectral.cie_z, sd.spectral.d65, pass_wl)
+                         sd.spectral.cie_z, sd.spectral.d65, pass_wl, pass_idx)
 
     parallelize(gather_one, n_pix)
 
@@ -2965,7 +2988,7 @@ def _sppm_render_core(
         var n_stored = _sppm_photon_pass(photons, n_photons_per_pass, max_photons, sd, pass_seed, pass_idx, Int(psc[unsafe_offset=0].max_depth))
         if n_stored > 0:
             _build_grid(photons, n_stored, heads, inv_cell, pass_idx)
-            _gather_update(vps, n_vps, photons, heads, inv_cell, sd, pass_wavelengths(pass_idx))
+            _gather_update(vps, n_vps, photons, heads, inv_cell, sd, pass_wavelengths(pass_idx), pass_idx)
         var nee_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(pass_idx * 0xBF58476D1CE4E5B9 + 3)
         _sppm_nee_update(vps, n_vps, sd, nee_seed, pass_idx)
         if verbose:

@@ -6853,7 +6853,7 @@ def sppm_gather_gpu(
     _sppm_gather_one(vps, i, photons, heads, inv_cell, sd, med_arr_dp, Int(med_count_dp),
                      grids_dp, nvdb_grids_dp,
                      spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
-                     spectral_cie_z, spectral_d65, pass_wavelengths(Int(pass_idx_dp)))
+                     spectral_cie_z, spectral_d65, pass_wavelengths(Int(pass_idx_dp)), Int(pass_idx_dp))
 
 
 def sppm_nee_gpu(
