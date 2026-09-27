@@ -39,7 +39,7 @@ from .rng import PCG32
 from .transform import matrix_invert
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, write_image_cropwindow, denoise
-from .sppm import _geom_normal, _shading_normal_at, _dielectric_bounce, medium_after_crossing, _cosine_hemisphere_sample, sample_area_light_uniform, sample_area_light_point, sample_sphere_light_emission, _HSIZE, _hash_cell, _sppm_render_core, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push, grid_weight, _sppm_count_photon
+from .sppm import _geom_normal, _shading_normal_at, _dielectric_bounce, medium_after_crossing, _cosine_hemisphere_sample, sample_area_light_uniform, sample_area_light_point, sample_sphere_light_emission, _HSIZE, _hash_cell, _sppm_render_core, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push, grid_weight, _sppm_count_photon, gather_disk_coverage
 from .sppm import (
     SPPMPixel, SPPMPhoton, _sppm_insert_photon,
     _sppm_gather_one, _sppm_vp_brdf, _sppm_nee_one,
@@ -1494,6 +1494,10 @@ def _vcm_cap(ref sd: SceneView) -> Int32:
 
 comptime _VCM_BUDGET_MIN_KEEP = Float32(4.0)
 
+# Divide every merge by its gather disk's surface coverage (sppm.mojo's
+# gather_disk_coverage). A comptime switch for A/B builds only.
+comptime _MERGE_COVERAGE = True
+
 
 @always_inline
 def _vcm_budget_active(ref sd: SceneView) -> Bool:
@@ -1877,6 +1881,14 @@ def _bdpt_merge_from_cache(
                             total += f_cv * lv.beta * (w * keep_w)
                     k = Int(merge_next[unsafe_offset=k])
     var result = total * cv.beta * norm
+    # Truncation: the photons came only from the part of the disk that is
+    # surface (gather_disk_coverage). Queries that found nothing have nothing
+    # to correct, and a disk the probes find empty keeps the plain estimate.
+    comptime if _MERGE_COVERAGE:
+        if cv.mat_kind != LobeKind.hair and total.v0 + total.v1 + total.v2 + total.v3 > Float32(0):
+            var cov = gather_disk_coverage(sd, cv.pos, cv.normal, sqrt(r2))
+            if cov > Float32(0):
+                result = result * (Float32(1) / cov)
     if _is_real_ptr(sd.vcmStatOut):
         # The per-cell budget's statistics for the NEXT pass: one merge query
         # in this cell, and its contribution's second moment, scaled by this

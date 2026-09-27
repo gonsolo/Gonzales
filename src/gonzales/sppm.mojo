@@ -4,6 +4,7 @@
 # Reference: Hachisuka et al. 2008 "Progressive Photon Mapping"
 
 from std.sys import has_accelerator
+from std.collections import Array
 from std.sys.info import size_of
 from max.gpu import block_idx, thread_idx, block_dim
 from max.gpu.host import DeviceContext, DeviceBuffer
@@ -1911,6 +1912,65 @@ def gather_disk_contains(e: Vec3f, dist2: Float32, r2: Float32, n: Vec3f) -> Boo
     var off = dot(e, n)
     return off * off <= r2 * Float32(0.01)
 
+
+comptime GATHER_COVERAGE_PROBES = 8
+
+
+def gather_disk_coverage[probes: Int = GATHER_COVERAGE_PROBES](
+    ref sd: SceneView, p: Point3f, n: Vec3f, r: Float32,
+) -> Float32:
+    """The fraction of the gather disk -- radius r on the tangent plane of the
+    geometric normal n at p -- over which a surface lies that
+    gather_disk_contains would take photons from.
+
+    A surface density estimate divides the photons it finds by the disk's
+    area, so it assumes the whole disk is surface. Where the disk hangs off a
+    small object -- a lantern panel, a frame, a leaf -- the photons can only
+    come from the covered part, and dividing by all of pi r^2 reads low by
+    exactly this fraction. That bias is first order in r: on
+    barcelona-pavilion at night VCM lost ~30% of the candle lanterns' light
+    at its default radius, twice that at double the radius, and merging
+    switched off matched the path tracer. Dividing by the coverage removes
+    it at any radius (lanterns 0.70 -> 0.91, 0.85 -> 0.99 of the reference).
+
+    Estimated with `probes` short rays down the normal through
+    gather_disk_contains's +-0.1 r slab, at stratified points of a
+    golden-angle spiral that a hash of p rotates. A hit counts when its
+    geometric normal is within the merge's 0.7 cosine of n (either side: a
+    thin panel is surface on both). Curves are not surfaces here, so a hair
+    query should not call this."""
+    var sgn = Float32(1) if n.z >= Float32(0) else Float32(-1)
+    var a = Float32(-1) / (sgn + n.z)
+    var b = n.x * n.y * a
+    var t1 = Vec3f(Float32(1) + sgn * n.x * n.x * a, sgn * b, -sgn * n.x)
+    var t2 = Vec3f(b, sgn + n.y * n.y * a, -n.y)
+    # A private slot, as _visible_transmittance: the caller's scratch may be
+    # live in an enclosing traversal.
+    var _local = Array[Intersection, 1](fill=Intersection(
+        PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
+        Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
+    var mem = _local.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+    var rot = Float32(grid_coin_bits(7, p)) * Float32(2.3283064e-10) * Float32(6.2831853)
+    var lift = Float32(0.1) * r
+    var hits = 0
+    comptime for i in range(probes):
+        var rad = r * sqrt((Float32(i) + Float32(0.5)) / Float32(probes))
+        var ang = rot + Float32(i) * Float32(2.39996323)
+        var ca = cos(ang) * rad
+        var sa = sin(ang) * rad
+        var org = Point3f(p.x + t1.x * ca + t2.x * sa + n.x * lift,
+                          p.y + t1.y * ca + t2.y * sa + n.y * lift,
+                          p.z + t1.z * ca + t2.z * sa + n.z * lift)
+        var ray = Ray(org, Vec3f(-n.x, -n.y, -n.z))
+        mem[unsafe_offset=0].hit = Int8(0)
+        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(2) * lift, mem,
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+        if mem[unsafe_offset=0].hit != Int8(0) and mem[unsafe_offset=0].primId.type != Int8(4):
+            var ng = _geom_normal(mem[unsafe_offset=0], sd.meshes, sd.instances)
+            if abs(dot(ng, n)) > Float32(0.7):
+                hits += 1
+    return Float32(hits) / Float32(probes)
+
 @always_inline
 def _sppm_photon_on_vp_surface(vp_is_volume: Int32, vp_mat_kind: Int32, vp_normal: Vec3f,
                                e: Vec3f, dist2: Float32, r2: Float32, dir_in: Vec3f,
@@ -2202,6 +2262,21 @@ def _sppm_gather_one(
 
     # SPPM update (only if new photons found)
     if M > Float32(0.0):
+        # Truncation: this pass's photons came only from the part of the
+        # gather disk that is surface (gather_disk_coverage, which VCM's merge
+        # shares). The flux is per pass, at this pass's radius, so each pass's
+        # contribution to tau is divided by its own coverage. Volume and
+        # subsurface points have no disk, and a hair fibre no tangent plane.
+        if (vp.is_volume != PhotonKind.volume and vp.mat_kind != LobeKind.bssrdf
+                and vp.mat_kind != LobeKind.hair):
+            # 16 probes measured no better than 8 here (barcelona-pavilion
+            # night: 99-99.9% bin WORSE, 0.998->1.012 ->1.096; top 0.1%
+            # unchanged) -- the residual vs. an unbiased BDPT referee (whole
+            # 0.998, mid-bin +5%, brightest -8%) is not probe-count noise.
+            # Left at 8, matching VCM's merge; an open SPPM-specific gap.
+            var cov = gather_disk_coverage(sd, vp.pos, vp.geo_normal, sqrt(r2))
+            if cov > Float32(0):
+                phi = phi * (Float32(1) / cov)
         var N = vp.N_acc
         var ratio = (N + _ALPHA * M) / (N + M)
         vps[unsafe_offset=i].r2  = r2 * ratio
