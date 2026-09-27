@@ -386,8 +386,17 @@ def _sample_infinite_light_textured(
     col_idx = max(0, min(col_idx, iw - 1))
     var dp_col = ilight.cdf_ptr[unsafe_offset=cond_base + col_idx + 1] - ilight.cdf_ptr[unsafe_offset=cond_base + col_idx]
 
-    var sample_u = (Float32(col_idx) + Float32(0.5)) / Float32(iw)
-    var sample_v = (Float32(row_idx) + Float32(0.5)) / Float32(ih)
+    # Continuous within-bucket offset, matching pbrt-v4's
+    # PiecewiseConstant1D::Sample (util/sampling.h:657-674) exactly: `du = (u
+    # - cdf[o]) / (cdf[o+1]-cdf[o])`, NOT a fixed bucket centre. Was
+    # `(idx + 0.5)/size` -- every sample landing in a given bucket picked the
+    # EXACT SAME direction, regardless of where its own random number fell
+    # within the bucket's probability mass. See project_house_envmap_-
+    # brightness_gap memory for the empirical trail that led here.
+    var du_row = (u.x - ilight.cdf_ptr[unsafe_offset=row_idx]) / dp_row if dp_row > Float32(0) else Float32(0.5)
+    var du_col = (u.y - ilight.cdf_ptr[unsafe_offset=cond_base + col_idx]) / dp_col if dp_col > Float32(0) else Float32(0.5)
+    var sample_u = (Float32(col_idx) + du_col) / Float32(iw)
+    var sample_v = (Float32(row_idx) + du_row) / Float32(ih)
     var local_d_s = _equal_area_square_to_sphere(sample_u, sample_v)
     var local_d = Vec3f(local_d_s[0], local_d_s[1], local_d_s[2])
 
