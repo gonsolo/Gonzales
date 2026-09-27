@@ -50,7 +50,7 @@ from .spectrum import (
 )
 
 
-comptime _ALPHA  = Float32(0.7)
+comptime _ALPHA  = Float32(2.0) / Float32(3.0)  # pbrt-v4's own value (integrators.cpp's SPPM radius-update `gamma`, Hachisuka/Jensen progressive photon mapping); was 0.7, a real but small (~5% asymptotic shrinkage-rate) mismatch
 comptime _MAX_B  = 10  # hard safety ceiling, matching bdpt.mojo's own
                        # _BDPT_MAX_VERTS -- SPPM's bounce loops are additionally
                        # bounded by min(scene maxdepth, _MAX_B), see
