@@ -105,6 +105,16 @@ struct InfiniteLight(TrivialRegisterPassable):
     var cdf_ptr: Pointer[Float32, MutUntrackedOrigin]   # flat 2D CDF (marginal + conditional)
     var pixels_ptr: Pointer[Float32, MutUntrackedOrigin] # raw HDR pixels, 3 floats/pixel (CPU only)
     var world_to_light: Pointer[Float32, MutUntrackedOrigin]  # 16-float col-major inverse of light CTM
+    # pbrt-v4 portal (`LightSource "infinite" "point3 portal" [...]`): restricts
+    # this light to the solid angle actually visible through a world-space
+    # quadrilateral (p0,p1,p2,p3, wound in order) instead of the whole sphere --
+    # see portal_light.mojo. has_portal==0 (the common case) is the ordinary,
+    # unrestricted environment light this struct always was.
+    var has_portal: Int32
+    var portal_p0: Point3f
+    var portal_p1: Point3f
+    var portal_p2: Point3f
+    var portal_p3: Point3f
 
 
 @fieldwise_init

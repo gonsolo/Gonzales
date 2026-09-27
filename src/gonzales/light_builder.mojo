@@ -92,5 +92,27 @@ def handle_light_source(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         # Store the light's CTM for env-map direction transform
         for ci in range(16):
             s[unsafe_offset=0].inf_ctm.append(s[unsafe_offset=0].ctm[ci])
+        # Portal (see SceneParseState.inf_portal's docstring): 4 points, CTM-
+        # transformed exactly like "point"'s "from"/"distant"'s "from"/"to".
+        var portal_f = params.get_floats("portal")
+        if len(portal_f) == 12:
+            var praw = unsafe_alloc[Float32](16)
+            for pi in range(4):
+                praw[unsafe_offset=pi * 4]     = portal_f[pi * 3]
+                praw[unsafe_offset=pi * 4 + 1] = portal_f[pi * 3 + 1]
+                praw[unsafe_offset=pi * 4 + 2] = portal_f[pi * 3 + 2]
+                praw[unsafe_offset=pi * 4 + 3] = Float32(1)
+            var pfin = unsafe_alloc[Float32](16)
+            transform_points(s[unsafe_offset=0].ctm.unsafe_ptr(), praw, Int32(4), pfin)
+            for pi in range(4):
+                s[unsafe_offset=0].inf_portal.append(pfin[unsafe_offset=pi * 4])
+                s[unsafe_offset=0].inf_portal.append(pfin[unsafe_offset=pi * 4 + 1])
+                s[unsafe_offset=0].inf_portal.append(pfin[unsafe_offset=pi * 4 + 2])
+            praw.unsafe_free(); pfin.unsafe_free()
+            s[unsafe_offset=0].inf_has_portal.append(Int32(1))
+        else:
+            for _ in range(12):
+                s[unsafe_offset=0].inf_portal.append(Float32(0))
+            s[unsafe_offset=0].inf_has_portal.append(Int32(0))
 
     ltype.unsafe_free()

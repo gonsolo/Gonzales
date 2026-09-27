@@ -3108,7 +3108,14 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 for ci in range(16): light_ctm_tmp[unsafe_offset=ci] = s[unsafe_offset=0].inf_ctm[light_ctm_base + ci]
                 _ = matrix_invert(light_ctm_tmp, w2l)
                 light_ctm_tmp.unsafe_free()
-            il_buf[unsafe_offset=i] = InfiniteLight(sc, tidx, cdf_w, cdf_h, cdf_ptr, raw_pixels, w2l)
+            var has_portal = s[unsafe_offset=0].inf_has_portal[i]
+            var portal_base = i * 12
+            var pp0 = Point3f(s[unsafe_offset=0].inf_portal[portal_base],     s[unsafe_offset=0].inf_portal[portal_base + 1],  s[unsafe_offset=0].inf_portal[portal_base + 2])
+            var pp1 = Point3f(s[unsafe_offset=0].inf_portal[portal_base + 3], s[unsafe_offset=0].inf_portal[portal_base + 4],  s[unsafe_offset=0].inf_portal[portal_base + 5])
+            var pp2 = Point3f(s[unsafe_offset=0].inf_portal[portal_base + 6], s[unsafe_offset=0].inf_portal[portal_base + 7],  s[unsafe_offset=0].inf_portal[portal_base + 8])
+            var pp3 = Point3f(s[unsafe_offset=0].inf_portal[portal_base + 9], s[unsafe_offset=0].inf_portal[portal_base + 10], s[unsafe_offset=0].inf_portal[portal_base + 11])
+            il_buf[unsafe_offset=i] = InfiniteLight(sc, tidx, cdf_w, cdf_h, cdf_ptr, raw_pixels, w2l,
+                                                     has_portal, pp0, pp1, pp2, pp3)
         psc[unsafe_offset=0].infinite_lights = il_buf
     else:
         psc[unsafe_offset=0].infinite_lights = Pointer[InfiniteLight, MutUntrackedOrigin].unsafe_dangling()

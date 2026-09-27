@@ -608,7 +608,27 @@ def _sample_sphere_light_nee(
 def _sample_infinite_light_nee(ilight: InfiniteLight, u: Point2f) -> LightSample:
     """Thin LightSample-shaped wrapper over the existing shared
     _sample_infinite_light_dir, so infinite lights present the same
-    interface as the other 3 non-area light types above."""
+    interface as the other 3 non-area light types above.
+
+    Portal-restricted lights (ilight.has_portal != 0) are NOT special-cased
+    here -- they still sample the whole env map via the ordinary CDF, and
+    rely on the ordinary shadow-ray occlusion test to zero out directions
+    that don't actually escape through the portal opening (scene geometry
+    already has a real hole cut for the window; see portal_light.mojo's
+    module docstring). A tried-and-reverted alternative sampled the portal
+    quad's AREA directly, uniform in (u,v), to avoid wasting samples on
+    occluded directions -- it measured self-consistent in isolation (its
+    pdf's implied solid angle matched an independent direction-sampling
+    estimate to 4 significant figures) but under-lit watercolor by ~2x
+    end-to-end (mean 0.205 vs the unrestricted+occlusion path's 0.353,
+    against a pbrt reference of 0.386) at both 64 and 512 spp -- a flat
+    bias, not noise. Root cause not pinned down (leading suspect: the
+    portal quad artists placed is measurably larger than the real
+    geometric window hole, so uniform-area quad sampling wastes roughly
+    half its samples on occluded wall behind the frame while still
+    dividing by the FULL quad's pdf/area) -- only the escape side (this
+    module's caller, shading.mojo's miss handler) needs the portal quad at
+    all, since it has no BVH occlusion test of its own to fall back on."""
     var (dir, Li, pdf) = _sample_infinite_light_dir(ilight, u)
     return LightSample(dir.to_simd(), Li, pdf, Float32(100000.0), False, True)
 

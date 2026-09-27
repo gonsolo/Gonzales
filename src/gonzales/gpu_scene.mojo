@@ -568,7 +568,7 @@ struct LightBuffers(Movable):
     var n_light_sampler: Int                           # n_area lights (CDF has n+1 entries)
     var light_pick_buf: DeviceBuffer[DType.uint8]      # (n_all+1) × Float32, _light_pick_cdf
     var n_light_pick: Int
-    var infinite_lights_buf: DeviceBuffer[DType.uint8]  # n_infinite × sizeof(InfiniteLight) = 48
+    var infinite_lights_buf: DeviceBuffer[DType.uint8]  # n_infinite × sizeof(InfiniteLight) (grew when the portal fields were added, see lights.mojo)
     var il_pixels_bufs: List[DeviceBuffer[DType.uint8]] # per-light HDR pixel data on GPU
     var il_cdf_bufs: List[DeviceBuffer[DType.uint8]]    # per-light 2D CDF on GPU
     var il_w2l_bufs: List[DeviceBuffer[DType.uint8]]    # per-light world_to_light matrix on GPU

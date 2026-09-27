@@ -8,6 +8,7 @@ from .materials import Material, MatKind, LobeKind, MeasuredBRDF, schlick_fresne
 from .render_state import PathState, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, light_sampler_sample, light_sampler_pdf, area_light_pick_triangle
+from .portal_light import portal_frame, portal_ray_crosses
 from .curves import Curve, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis
 from .layered import layered_f, layered_sample, layered_pdf, diel_f, diel_pdf, diel_sample
 from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
@@ -4732,9 +4733,14 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             path_ptr[].volume_scattered = Int8(0)
             return
         var ray_dir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+        var ray_org = Point3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
         var miss_albedo = RGB(Float32(0.0))
         for inf_i in range(ctx.lights.infinite_count):
             var ilight = ctx.lights.infinite_lights[unsafe_offset=inf_i]
+            if ilight.has_portal != Int32(0):
+                var (pe1, pe2, pn, _) = portal_frame(ilight.portal_p0, ilight.portal_p1, ilight.portal_p3)
+                if not portal_ray_crosses(ray_org, ray_dir, ilight.portal_p0, pe1, pe2, pn):
+                    continue
             # Transform world-space ray direction into light's local frame
             var local_dir = Mat4.load(ilight.world_to_light) * ray_dir
             var env_rgb: RGB

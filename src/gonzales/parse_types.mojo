@@ -210,6 +210,13 @@ struct SceneParseState(Movable):
     var inf_tex_idx:  List[Int32]     # 1 per infinite light
     var inf_rgb:      List[Float32]   # 3 floats per light
     var inf_ctm:      List[Float32]   # 16 floats per light
+    # pbrt-v4 portal lights (`LightSource "infinite" "point3 portal" [...]`):
+    # restricts this environment light to the solid angle actually visible
+    # through a quadrilateral opening, instead of the whole sphere -- used to
+    # light an interior through a window without modelling glass geometry.
+    # 0 = no portal (ordinary, unrestricted infinite light, the common case).
+    var inf_has_portal: List[Int32]   # 1 per infinite light
+    var inf_portal:   List[Float32]   # 12 floats per light (4 world-space corners), 0 if inf_has_portal[i]==0
 
     # Analytical sphere primitives
     var spheres_cx:  List[Float32]
@@ -413,6 +420,8 @@ struct SceneParseState(Movable):
         self.inf_tex_idx  = List[Int32]()
         self.inf_rgb      = List[Float32]()
         self.inf_ctm      = List[Float32]()
+        self.inf_has_portal = List[Int32]()
+        self.inf_portal   = List[Float32]()
 
         self.spheres_cx  = List[Float32]()
         self.spheres_cy  = List[Float32]()
