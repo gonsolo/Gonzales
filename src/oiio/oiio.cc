@@ -282,7 +282,21 @@ void createTextureSystem() { textureSystem = OIIO::TextureSystem::create(); }
 
 void destroyTextureSystem() { OIIO::TextureSystem::destroy(textureSystem); }
 
+// PFM stores its rows bottom-to-top (the format's origin is the lower-left
+// corner), and pbrt-v4's ReadPFM flips them accordingly (util/image.cpp).
+// OIIO's PFM reader does NOT (its row 0 is the file's first row, i.e. the
+// bottom of the image) even though its PFM writer does -- so every .pfm
+// texture was read upside-down relative to pbrt. Invisible for any content
+// symmetric under a vertical flip (a constant sky, a radial gradient, the
+// equal-area map's own sky/ground mask), which is why flat-colour A/B tests
+// all matched; the 13 Bitterli scenes lit by a .pfm env map were not.
+static bool is_pfm(const char *filename) {
+        const char *dot = strrchr(filename, '.');
+        return dot && (strcmp(dot, ".pfm") == 0 || strcmp(dot, ".PFM") == 0);
+}
+
 bool texture(const char *filename_c, float s, float t, float result[3]) {
+        if (is_pfm(filename_c)) t = 1.0f - t;
         OIIO::ustring filename(filename_c);
         OIIO::TextureOpt options;
         float dsdx = 0;
@@ -335,6 +349,12 @@ int load_texture_rgb(const char *filename, float **data, int *width, int *height
         } else {
                 std::unique_ptr<float[]> buf(new float[n * nc]);
                 ok = in->read_image(0, 0, 0, nc, OIIO::TypeDesc::FLOAT, buf.get());
+                if (ok && is_pfm(filename)) {
+                        const int64_t row = int64_t(spec.width) * nc;
+                        for (int y = 0; y < spec.height / 2; ++y)
+                                std::swap_ranges(buf.get() + y * row, buf.get() + (y + 1) * row,
+                                                 buf.get() + (spec.height - 1 - y) * row);
+                }
                 if (ok)
                         to_linear_rgb(buf.get(), n, nc, *data, [&](float v) { return decode ? srgb_to_linear(v) : v; });
         }
