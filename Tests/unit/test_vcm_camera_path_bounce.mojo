@@ -167,7 +167,7 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
 
     var pcg_old = PCG32(UInt64(999), UInt64(3))
     var scratch_old = unsafe_alloc[Intersection](1)
-    var (total_old, alb_old) = _bdpt_trace_camera_and_connect[False](
+    var (total_old, total_merge_old, alb_old) = _bdpt_trace_camera_and_connect[False](
         r2c, c2w, 0, 0, sd, pcg_old, False, scratch_old,
         Pointer[BDPTVertex, MutUntrackedOrigin].unsafe_dangling(), 0, 0,
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
@@ -188,6 +188,7 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
     var rd = state.rd
     var beta = state.beta
     var total = state.total
+    var total_merge = state.total_merge
     var first_alb = state.first_alb
     var n_verts = Int(state.n_verts)
     var n_bounces = Int(state.n_bounces)
@@ -219,7 +220,7 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
             Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
-            ro, rd, beta, total, first_alb, n_verts, n_bounces, cur_med_idx,
+            ro, rd, beta, total, total_merge, first_alb, n_verts, n_bounces, cur_med_idx,
             dvcm, dvc, dvm, last_bsdf_pdf, mis_null_dist,
             current_dielectric_ior, previous_dielectric_ior, wavelengths, cone_len,
         )
@@ -231,6 +232,12 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
     assert_true(_close(total.v1, total_old.v1))
     assert_true(_close(total.v2, total_old.v2))
     assert_true(_close(total.v3, total_old.v3))
+    # path_len=0 means no LVC/merge grid, so both sides' merge contribution
+    # is trivially zero -- still asserted for symmetry with `total` above.
+    assert_true(_close(total_merge.v0, total_merge_old.v0))
+    assert_true(_close(total_merge.v1, total_merge_old.v1))
+    assert_true(_close(total_merge.v2, total_merge_old.v2))
+    assert_true(_close(total_merge.v3, total_merge_old.v3))
     assert_true(_close(first_alb.r, alb_old.r))
     assert_true(_close(first_alb.g, alb_old.g))
     assert_true(_close(first_alb.b, alb_old.b))

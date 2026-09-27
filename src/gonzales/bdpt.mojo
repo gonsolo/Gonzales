@@ -1925,14 +1925,16 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     pass_wl: SampledWavelengths,
     film_filter: FilmFilter,
     start_med_idx: Int32 = Int32(-1),
-) -> Tuple[SpectralSample, RGB]:
+) -> Tuple[SpectralSample, SpectralSample, RGB]:
     """Trace one camera subpath from pixel (px,py). At each non-delta vertex,
     connect inline/synchronously to the shared Light Vertex Cache via
     `_bdpt_connect_to_cache` — mirrors how every live GPU shading kernel in
     this codebase already does its shadow ray (any_hit test, straight into
     the thread's own accumulator; gpu.mojo's queued ShadowTask mechanism
-    is dead code, never used by the live render loop). Returns (total, first_alb):
-    this camera path's total contribution for one spp sample, and the material
+    is dead code, never used by the live render loop). Returns (total,
+    total_merge, first_alb): this camera path's connect+splat contribution
+    and its vertex-MERGING contribution for one spp sample, tracked
+    SEPARATELY (see VCMCameraPathState.total_merge's docstring), plus the material
     albedo at its first non-delta (stored) vertex — the same "first hit,
     skipping through mirrors/glass" convention shading.mojo's path.albedo AOV
     already uses, needed for the denoiser's albedo guide buffer (see
@@ -1967,6 +1969,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     var rd = st.rd
     var beta = st.beta
     var total = st.total
+    var total_merge = st.total_merge
     var first_alb = st.first_alb
     var n_verts = Int(st.n_verts)
     var n_bounces = Int(st.n_bounces)
@@ -1981,7 +1984,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     var cone_len = st.cone_len
     var wavelengths = SampledWavelengths(st.wl0, st.wl1, st.wl2, st.wl3)
     if st.active == Int8(0):
-        return (total, first_alb)
+        return (total, total_merge, first_alb)
 
     for _ in range(_BDPT_MAX_DEPTH):
         # The same intersect step _bdpt_camera_path_intersect_gpu performs;
@@ -1997,12 +2000,12 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             sd, pcg, has_med, scratch[unsafe_offset=0], scratch, lvc, lp_idx, path_len,
             merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
             mis_vc_weight_factor, mis_vm_weight_factor,
-            ro, rd, beta, total, first_alb, n_verts, n_bounces, cur_med_idx,
+            ro, rd, beta, total, total_merge, first_alb, n_verts, n_bounces, cur_med_idx,
             dvcm_carry, dvc_carry, dvm_carry, last_bsdf_pdf, mis_null_dist,
             current_dielectric_ior, previous_dielectric_ior, wavelengths, cone_len):
             break
 
-    return (total, first_alb)
+    return (total, total_merge, first_alb)
 
 @fieldwise_init
 struct VCMCameraPathState(TrivialRegisterPassable):
@@ -2018,6 +2021,13 @@ struct VCMCameraPathState(TrivialRegisterPassable):
     var rd: Vec3f
     var beta: SpectralSample
     var total: SpectralSample
+    # Vertex-MERGING contribution only, tracked separately from `total`
+    # (which after this split holds connect + t=1 light-tracing splats) --
+    # see project_water_caustic_sppm_gap memory: merging is a kernel-
+    # density estimate with the same "real caustic threads read as noise
+    # to a spatial-variance denoiser" problem SPPM's photon gather had.
+    # Denoised separately in _vcm_finalize_one_pixel/finish_render.
+    var total_merge: SpectralSample
     var first_alb: RGB
     var dvcm: Float32
     var dvc: Float32
@@ -2129,6 +2139,7 @@ def _bdpt_camera_path_init[use_gpu: Bool](
     var beta = SpectralSample(Float32(1))
     var cur_med_idx = start_med_idx
     var total = SpectralSample(Float32(0))
+    var total_merge = SpectralSample(Float32(0))
     var first_alb = RGB(Float32(0))  # denoiser albedo AOV -- set at the first stored vertex, below
     # ONE hero-wavelength set per spp PASS, shared by every camera AND light
     # subpath in it, rather than one per subpath. This is forced by the flip
@@ -2154,7 +2165,7 @@ def _bdpt_camera_path_init[use_gpu: Bool](
 
 
     return VCMCameraPathState(
-        ro, rd, beta, total, first_alb, dvcm_carry, dvc_carry, dvm_carry,
+        ro, rd, beta, total, total_merge, first_alb, dvcm_carry, dvc_carry, dvm_carry,
         Int32(n_verts), Int32(n_bounces), cur_med_idx, last_bsdf_pdf, Int8(1),
         pcg.state, pcg.inc,
         wavelengths.lambda0, wavelengths.lambda1, wavelengths.lambda2, wavelengths.lambda3,
@@ -2215,6 +2226,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     mut rd: Vec3f,
     mut beta: SpectralSample,
     mut total: SpectralSample,
+    mut total_merge: SpectralSample,
     mut first_alb: RGB,
     mut n_verts: Int,
     mut n_bounces: Int,
@@ -2428,7 +2440,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # already the complete, correct estimate -- Stage 2b's
                     # original, verified behavior for out-of-scope kinds.
                     if _bdpt_vertex_mis_scoped(v):
-                        total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts)
+                        total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts)
                     total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, n_verts)
                 # Volume-scatter NEE: distant/point/sphere/infinite lights.
                 # _bdpt_connect_to_cache above only reaches AREA lights -- the
@@ -2790,7 +2802,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # and in a white furnace only ~32% of light paths hit the quad at
                 # all, so ~68% of pixels skipped merging entirely: the estimator
                 # delivered 0.109 against an analytic 0.5.
-                total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts)
+                total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts)
                 if path_len > 0:
                     # Task #163 stage 5: the diffuse branch's connect shadow
                     # rays are the single highest-volume, cleanest shadow-ray
@@ -2953,7 +2965,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # and in a white furnace only ~32% of light paths hit the quad at
                 # all, so ~68% of pixels skipped merging entirely: the estimator
                 # delivered 0.109 against an analytic 0.5.
-                total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts)
+                total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts)
                 if path_len > 0:
                     total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, n_verts)
 
@@ -3078,7 +3090,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # and in a white furnace only ~32% of light paths hit the quad at
                     # all, so ~68% of pixels skipped merging entirely: the estimator
                     # delivered 0.109 against an analytic 0.5.
-                    total += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts)
+                    total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts)
                     if path_len > 0:
                         if defer_shadow_rays:
                             _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, n_verts)
@@ -4560,20 +4572,51 @@ def _connect_unweighted(
 
 # ── Main BDPT render ──────────────────────────────────────────────────────────
 
+def _vcm_finalize_one_pixel(
+    connect: RGB, merge: RGB, inv_spp: Float32,
+) -> Tuple[RGB, RGB]:
+    """Averages one pixel's accumulated connect+splat and vertex-merging
+    sums over the render's spp samples, returning them SEPARATELY --
+    mirrors sppm.mojo's `_sppm_finalize_one_pixel` (same reasoning: see
+    VCMCameraPathState.total_merge's docstring and
+    project_water_caustic_sppm_gap memory). NaN/negative-guarded per
+    component, order-independent and safe to do before the caller sums the
+    two halves; does NOT apply the max-component sensor clamp -- same as
+    SPPM's finalize, that happens ONCE in finish_render after `connect` is
+    denoised and `merge` is added back unsmoothed (clamping each half
+    independently first would under-clamp their sum on scenes that set
+    `maxcomponentvalue`). Shared by every VCM driver (CPU `_bdpt_render_core`,
+    GPU `_bdpt_camera_connect_gpu`, GPU-wavefront's own tail) so the split
+    lives in one place instead of three."""
+    var c = connect * inv_spp
+    var m = merge * inv_spp
+    if c.r != c.r or c.r < Float32(0): c.r = Float32(0)
+    if c.g != c.g or c.g < Float32(0): c.g = Float32(0)
+    if c.b != c.b or c.b < Float32(0): c.b = Float32(0)
+    if m.r != m.r or m.r < Float32(0): m.r = Float32(0)
+    if m.g != m.g or m.g < Float32(0): m.g = Float32(0)
+    if m.b != m.b or m.b < Float32(0): m.b = Float32(0)
+    return (c, m)
+
+
 def _bdpt_render_core(
     psc:      Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
     ref sd:       SceneView,
     n_spp:    Int,
     n_photons_req: Int,
     verbose:  Bool,
-) -> Tuple[Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]]:
+) -> Tuple[Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]]:
     """Bidirectional Path Tracing main loop with real VCM connect+merge MIS
     (Light Vertex Cache architecture — see the module docstring above),
     factored out of `vcm_render` (its CLI-facing caller, below) so the CPU
     and GPU entry points share the exact same core. Returns (pixels,
-    albedo_pixels), each a caller-owned `n_pix*3` Float32 buffer
-    (iso-scaled, max_comp-clamped, NOT yet denoised) — same contract
-    `_sppm_render_core` follows.
+    caustic_pixels, albedo_pixels), each a caller-owned `n_pix*3` Float32
+    buffer, iso-scaled but NOT max_comp-clamped and NOT yet denoised --
+    same contract `_sppm_render_core` follows, and for the same reason:
+    `pixels` (connect + t=1 splats) and `caustic_pixels` (vertex merging)
+    are kept separate so the caller can denoise only `pixels` and add
+    `caustic_pixels` back unsmoothed (see _vcm_finalize_one_pixel's
+    docstring). The clamp happens once, in finish_render, on their sum.
 
     Each spp sample traces `n_light_paths_merge = max(n_photons_req, n_pix)`
     light subpaths (task #152's fix — decouples the MERGE side's photon
@@ -4601,7 +4644,6 @@ def _bdpt_render_core(
     var fh = Int(psc[unsafe_offset=0].film_h)
     var n_pix = fw * fh
     var iso_scale = psc[unsafe_offset=0].film_iso / Float32(100)
-    var max_comp  = psc[unsafe_offset=0].film_max_comp
     # VCM Stage 2b: world-space size of one pixel at unit distance along the
     # camera forward axis -- same quantity the plain path tracer's mip LOD
     # uses (pipeline.mojo), reused here for the camera-origin cameraPdfW
@@ -4625,10 +4667,16 @@ def _bdpt_render_core(
 
     # Output buffer: one RGB per pixel, plus a parallel first-hit-albedo AOV
     # accumulator for the post-render denoiser (see write_image call below).
+    # `buf` holds connect + t=1 light-tracing splats (ordinary noise
+    # character); `buf_merge` holds vertex-MERGING contributions only,
+    # split out for the SAME reason SPPM's finalize splits its gather term
+    # -- see VCMCameraPathState.total_merge's docstring.
     var buf = unsafe_alloc[RGB](n_pix)
+    var buf_merge = unsafe_alloc[RGB](n_pix)
     var albedo_buf = unsafe_alloc[RGB](n_pix)
     for i in range(n_pix):
         buf[unsafe_offset=i] = RGB(Float32(0))
+        buf_merge[unsafe_offset=i] = RGB(Float32(0))
         albedo_buf[unsafe_offset=i] = RGB(Float32(0))
 
     var r2c = psc[unsafe_offset=0].raster_to_camera
@@ -4789,7 +4837,7 @@ def _bdpt_render_core(
             var px = pix % fw; var py = pix // fw
             var cpcg = PCG32(base_seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
                               UInt64(si * 2654435761 + 1))
-            var (contrib, alb) = _bdpt_trace_camera_and_connect[False](
+            var (contrib, contrib_merge, alb) = _bdpt_trace_camera_and_connect[False](
                 r2c, c2w, px, py, sd, cpcg, has_med, scratch_cam.unsafe_offset(pix), lvc, pix, Int(lvc_path_len[unsafe_offset=pix]),
                 merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
                 px_scale, mis_vc_weight_factor, mis_vm_weight_factor, Float32(n_light_paths_merge), pass_wl,
@@ -4798,6 +4846,8 @@ def _bdpt_render_core(
             # ── Output boundary: spectral transport -> RGB film ──────────
             var (cr, cg, cb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, contrib, pass_wl)
             buf[unsafe_offset=pix] += RGB(cr, cg, cb)
+            var (mr, mg, mb) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, contrib_merge, pass_wl)
+            buf_merge[unsafe_offset=pix] += RGB(mr, mg, mb)
             albedo_buf[unsafe_offset=pix] += alb
 
         parallelize(camera_connect, n_pix)
@@ -4812,16 +4862,23 @@ def _bdpt_render_core(
     # Were never freed (the old splat_pix leaked the same way), once per render.
     splat_fx.unsafe_free(); splat_fy.unsafe_free(); splat_val.unsafe_free()
 
-    # Clamp into caller-owned output buffers (no denoise/write here -- see
-    # vcm_render/vcm_render_gpu, this function's two callers, for the tail).
+    # Split into caller-owned output buffers (no clamp, no denoise/write
+    # here -- see vcm_render/vcm_render_gpu, this function's two callers,
+    # for the tail; the max-component clamp now happens ONCE in
+    # finish_render, on connect+merge summed together, after connect alone
+    # is denoised -- see _vcm_finalize_one_pixel's docstring).
     var inv_spp = iso_scale / Float32(n_spp)
     var pixels = unsafe_alloc[Float32](n_pix * 3)
+    var caustic_pixels = unsafe_alloc[Float32](n_pix * 3)
     for i in range(n_pix):
-        var c = (buf[unsafe_offset=i] * inv_spp).sensor_clamped(max_comp)
+        var (c, m) = _vcm_finalize_one_pixel(buf[unsafe_offset=i], buf_merge[unsafe_offset=i], inv_spp)
         pixels[unsafe_offset=i*3]   = c.r
         pixels[unsafe_offset=i*3+1] = c.g
         pixels[unsafe_offset=i*3+2] = c.b
-    buf.unsafe_free()
+        caustic_pixels[unsafe_offset=i*3]   = m.r
+        caustic_pixels[unsafe_offset=i*3+1] = m.g
+        caustic_pixels[unsafe_offset=i*3+2] = m.b
+    buf.unsafe_free(); buf_merge.unsafe_free()
 
     var albedo_pixels = unsafe_alloc[Float32](n_pix * 3)
     var inv_spp_alb = Float32(1) / Float32(n_spp)
@@ -4832,7 +4889,7 @@ def _bdpt_render_core(
         albedo_pixels[unsafe_offset=i*3+2] = a.b
     albedo_buf.unsafe_free()
 
-    return Tuple[Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]](pixels, albedo_pixels)
+    return Tuple[Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]](pixels, caustic_pixels, albedo_pixels)
 
 def vcm_render(
     psc:      Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
@@ -4853,10 +4910,10 @@ def vcm_render(
     budget per pass, decoupled from n_pix; see _bdpt_render_core's
     docstring."""
     var n_pix = Int(psc[unsafe_offset=0].film_w) * Int(psc[unsafe_offset=0].film_h)
-    var (pixels, albedo_pixels) = _bdpt_render_core(psc, sd, n_spp, n_photons, verbose)
+    var (pixels, caustic_pixels, albedo_pixels) = _bdpt_render_core(psc, sd, n_spp, n_photons, verbose)
 
-    _ = finish_render(psc, sd, pixels, albedo_pixels, no_denoise)
-    pixels.unsafe_free(); albedo_pixels.unsafe_free()
+    _ = finish_render(psc, sd, pixels, albedo_pixels, no_denoise, caustic_pixels)
+    pixels.unsafe_free(); caustic_pixels.unsafe_free(); albedo_pixels.unsafe_free()
     return Int32(0)
 
 # ── GPU port ───────────────────────────────────────────────────────────────
@@ -4986,6 +5043,7 @@ def _bdpt_splat_light_paths_gpu(
 
 def _bdpt_camera_connect_gpu(
     accum: Pointer[Float32, MutUntrackedOrigin],
+    accum_merge: Pointer[Float32, MutUntrackedOrigin],
     albedo_accum: Pointer[Float32, MutUntrackedOrigin],
     n_pix_dp: Int64,
     fw_dp: Int64,
@@ -5041,7 +5099,7 @@ def _bdpt_camera_connect_gpu(
                      UInt64(pass_idx * 2654435761 + 1))
     var scratch = inter_scratch.unsafe_offset(pix)
     var pass_wl = pass_wavelengths(pass_idx)
-    var (contrib, alb) = _bdpt_trace_camera_and_connect[True](
+    var (contrib, contrib_merge, alb) = _bdpt_trace_camera_and_connect[True](
         r2c, c2w, px, py, sd, pcg, has_med, scratch, lvc, pix, Int(lvc_path_len[unsafe_offset=pix]),
         merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
         px_scale, mis_vc_weight_factor, mis_vm_weight_factor, n_light_paths_f, pass_wl, film_filter)
@@ -5052,6 +5110,12 @@ def _bdpt_camera_connect_gpu(
     accum[unsafe_offset=pix*3]   += cr
     accum[unsafe_offset=pix*3+1] += cg
     accum[unsafe_offset=pix*3+2] += cb
+    var (mr, mg, mb) = spectral_sample_to_rgb(
+        spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
+        spectral_cie_z, spectral_d65, contrib_merge, pass_wl)
+    accum_merge[unsafe_offset=pix*3]   += mr
+    accum_merge[unsafe_offset=pix*3+1] += mg
+    accum_merge[unsafe_offset=pix*3+2] += mb
     albedo_accum[unsafe_offset=pix*3]   += alb.r
     albedo_accum[unsafe_offset=pix*3+1] += alb.g
     albedo_accum[unsafe_offset=pix*3+2] += alb.b
@@ -5299,6 +5363,7 @@ def _bdpt_camera_path_bounce_gpu(
     var rd = states[unsafe_offset=pix].rd
     var beta = states[unsafe_offset=pix].beta
     var total = states[unsafe_offset=pix].total
+    var total_merge = states[unsafe_offset=pix].total_merge
     var first_alb = states[unsafe_offset=pix].first_alb
     var n_verts = Int(states[unsafe_offset=pix].n_verts)
     var n_bounces = Int(states[unsafe_offset=pix].n_bounces)
@@ -5317,7 +5382,7 @@ def _bdpt_camera_path_bounce_gpu(
         sd, pcg, has_med, results[unsafe_offset=pix], results.unsafe_offset(pix), lvc, pix, Int(lvc_path_len[unsafe_offset=pix]),
         merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
         mis_vc_weight_factor, mis_vm_weight_factor,
-        ro, rd, beta, total, first_alb, n_verts, n_bounces, cur_med_idx,
+        ro, rd, beta, total, total_merge, first_alb, n_verts, n_bounces, cur_med_idx,
         dvcm_carry, dvc_carry, dvm_carry, last_bsdf_pdf, mis_null_dist,
         current_dielectric_ior, previous_dielectric_ior, wavelengths, cone_len,
         defer_shadow_rays != Int8(0), shadow_rays, shadow_pending, shadow_valid, shadow_seg_med,
@@ -5327,6 +5392,7 @@ def _bdpt_camera_path_bounce_gpu(
     states[unsafe_offset=pix].rd = rd
     states[unsafe_offset=pix].beta = beta
     states[unsafe_offset=pix].total = total
+    states[unsafe_offset=pix].total_merge = total_merge
     states[unsafe_offset=pix].first_alb = first_alb
     states[unsafe_offset=pix].n_verts = Int32(n_verts)
     states[unsafe_offset=pix].n_bounces = Int32(n_bounces)
@@ -5345,6 +5411,7 @@ def _bdpt_camera_path_bounce_gpu(
 def _bdpt_camera_path_accumulate_gpu(
     states: Pointer[VCMCameraPathState, MutUntrackedOrigin],
     accum: Pointer[Float32, MutUntrackedOrigin],
+    accum_merge: Pointer[Float32, MutUntrackedOrigin],
     albedo_accum: Pointer[Float32, MutUntrackedOrigin],
     n_pix_dp: Int64,
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin],
@@ -5356,10 +5423,12 @@ def _bdpt_camera_path_accumulate_gpu(
 ):
     """Runs once per `si` sample, after the camera-path bounce loop has
     fully terminated for every lane -- writes each pixel's now-complete
-    `total`/`first_alb` (accumulated across every bounce inside the state
-    struct) into the persistent per-pixel accum buffers, exactly once,
-    matching what _bdpt_camera_connect_gpu's own single `accum[...] +=
-    contrib...` did at the end of its one-shot whole-subpath trace."""
+    `total`/`total_merge`/`first_alb` (accumulated across every bounce
+    inside the state struct) into the persistent per-pixel accum buffers,
+    exactly once, matching what _bdpt_camera_connect_gpu's own single
+    `accum[...] += contrib...` did at the end of its one-shot whole-subpath
+    trace. `accum`/`accum_merge` split the same way as everywhere else --
+    see VCMCameraPathState.total_merge's docstring."""
     var n_pix = Int(n_pix_dp)
     var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
     if pix >= n_pix:
@@ -5373,6 +5442,12 @@ def _bdpt_camera_path_accumulate_gpu(
     accum[unsafe_offset=pix*3]   += tr
     accum[unsafe_offset=pix*3+1] += tg
     accum[unsafe_offset=pix*3+2] += tb
+    var (mr, mg, mb) = spectral_sample_to_rgb(
+        spectral_coeffs, Int(spectral_res_dp), spectral_cie_x, spectral_cie_y,
+        spectral_cie_z, spectral_d65, states[unsafe_offset=pix].total_merge, wl_acc)
+    accum_merge[unsafe_offset=pix*3]   += mr
+    accum_merge[unsafe_offset=pix*3+1] += mg
+    accum_merge[unsafe_offset=pix*3+2] += mb
     albedo_accum[unsafe_offset=pix*3]   += states[unsafe_offset=pix].first_alb.r
     albedo_accum[unsafe_offset=pix*3+1] += states[unsafe_offset=pix].first_alb.g
     albedo_accum[unsafe_offset=pix*3+2] += states[unsafe_offset=pix].first_alb.b
@@ -5678,7 +5753,6 @@ def vcm_render_gpu(
     var fh = Int(psc[unsafe_offset=0].film_h)
     var n_pix = fw * fh
     var iso_scale = psc[unsafe_offset=0].film_iso / Float32(100)
-    var max_comp  = psc[unsafe_offset=0].film_max_comp
     var n_light_paths_merge = max(n_photons_req, n_pix)
 
     print("VCM (GPU): " + String(fw) + "x" + String(fh) + "  " + String(n_spp) + " spp  "
@@ -5725,6 +5799,13 @@ def vcm_render_gpu(
             var inter_cam_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection]())
             var accum_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
             with accum_buf.map_to_host() as host_buf:
+                var dst = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+                for i in range(n_pix * 3):
+                    dst[unsafe_offset=i] = Float32(0)
+            # Vertex-merging contribution, split from `accum` (connect + t=1
+            # splats) -- see VCMCameraPathState.total_merge's docstring.
+            var accum_merge_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
+            with accum_merge_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 for i in range(n_pix * 3):
                     dst[unsafe_offset=i] = Float32(0)
@@ -5791,6 +5872,7 @@ def vcm_render_gpu(
             var inter_light_ptr = inter_light_buf.unsafe_ptr().unsafe_bitcast[Intersection]()
             var inter_cam_ptr   = inter_cam_buf.unsafe_ptr().unsafe_bitcast[Intersection]()
             var accum_ptr   = accum_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+            var accum_merge_ptr = accum_merge_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             var albedo_accum_ptr = albedo_accum_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             var r2c_ptr = r2c_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             var c2w_ptr = c2w_buf.unsafe_ptr().unsafe_bitcast[Float32]()
@@ -5894,6 +5976,7 @@ def vcm_render_gpu(
 
                 handle[].ctx.enqueue_function[_bdpt_camera_connect_gpu](
                     accum_ptr,
+                    accum_merge_ptr,
                     albedo_accum_ptr,
                     Int64(n_pix),
                     Int64(Int(psc[unsafe_offset=0].film_w)),
@@ -5968,17 +6051,24 @@ def vcm_render_gpu(
             handle[].ctx.synchronize()
             _ = prog.finish()
 
+            # `pixels` (connect + t=1 splats) and `caustic_pixels` (vertex
+            # merging) split, same reason/contract as _bdpt_render_core's
+            # CPU tail -- see _vcm_finalize_one_pixel's docstring. No clamp
+            # here; finish_render applies it once, to their sum, after
+            # `pixels` is denoised.
             var pixels = unsafe_alloc[Float32](n_pix * 3)
+            var caustic_pixels = unsafe_alloc[Float32](n_pix * 3)
             with accum_buf.map_to_host() as host_buf:
-                var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
-                var inv_spp = iso_scale / Float32(n_spp)
-                for i in range(n_pix):
-                    var r = src[unsafe_offset=i*3]   * inv_spp
-                    var g = src[unsafe_offset=i*3+1] * inv_spp
-                    var b = src[unsafe_offset=i*3+2] * inv_spp
-                    var c = RGB(r, g, b).sensor_clamped(max_comp)
-                    r = c.r; g = c.g; b = c.b
-                    pixels[unsafe_offset=i*3] = r; pixels[unsafe_offset=i*3+1] = g; pixels[unsafe_offset=i*3+2] = b
+                with accum_merge_buf.map_to_host() as host_buf_m:
+                    var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+                    var src_m = host_buf_m.unsafe_ptr().unsafe_bitcast[Float32]()
+                    var inv_spp = iso_scale / Float32(n_spp)
+                    for i in range(n_pix):
+                        var conn = RGB(src[unsafe_offset=i*3], src[unsafe_offset=i*3+1], src[unsafe_offset=i*3+2])
+                        var mrg = RGB(src_m[unsafe_offset=i*3], src_m[unsafe_offset=i*3+1], src_m[unsafe_offset=i*3+2])
+                        var (c, m) = _vcm_finalize_one_pixel(conn, mrg, inv_spp)
+                        pixels[unsafe_offset=i*3] = c.r; pixels[unsafe_offset=i*3+1] = c.g; pixels[unsafe_offset=i*3+2] = c.b
+                        caustic_pixels[unsafe_offset=i*3] = m.r; caustic_pixels[unsafe_offset=i*3+1] = m.g; caustic_pixels[unsafe_offset=i*3+2] = m.b
 
             # Denoise (never wired up before -- no_denoise was a dead
             # parameter): read back the albedo AOV accumulated above, run
@@ -5993,8 +6083,8 @@ def vcm_render_gpu(
                 for i in range(n_pix * 3):
                     albedo_pixels[unsafe_offset=i] = src[unsafe_offset=i] * inv_spp_alb
 
-            _ = finish_render(psc, sd, pixels, albedo_pixels, no_denoise)
-            pixels.unsafe_free(); albedo_pixels.unsafe_free()
+            _ = finish_render(psc, sd, pixels, albedo_pixels, no_denoise, caustic_pixels)
+            pixels.unsafe_free(); caustic_pixels.unsafe_free(); albedo_pixels.unsafe_free()
         except e:
             print("VCM GPU render failed: " + String(e))
             ret = Int32(-1)
@@ -6205,7 +6295,6 @@ def vcm_render_gpu_wavefront(
     var fh = Int(psc[unsafe_offset=0].film_h)
     var n_pix = fw * fh
     var iso_scale = psc[unsafe_offset=0].film_iso / Float32(100)
-    var max_comp  = psc[unsafe_offset=0].film_max_comp
     var n_light_paths_merge = max(n_photons_req, n_pix)
 
     print("VCM (GPU wavefront): " + String(fw) + "x" + String(fh) + "  " + String(n_spp) + " spp  "
@@ -6262,6 +6351,13 @@ def vcm_render_gpu_wavefront(
                 var dst = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 for i in range(n_pix * 3):
                     dst[unsafe_offset=i] = Float32(0)
+            # Vertex-merging contribution, split from `accum` (connect + t=1
+            # splats) -- see VCMCameraPathState.total_merge's docstring.
+            var accum_merge_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
+            with accum_merge_buf.map_to_host() as host_buf:
+                var dst = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+                for i in range(n_pix * 3):
+                    dst[unsafe_offset=i] = Float32(0)
             var albedo_accum_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
             with albedo_accum_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
@@ -6314,6 +6410,7 @@ def vcm_render_gpu_wavefront(
             # constant -- revisit if a 3rd scene disagrees.
             var shadow_batch_enabled = use_vk
             var accum_ptr   = accum_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+            var accum_merge_ptr = accum_merge_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             var albedo_accum_ptr = albedo_accum_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             var r2c_ptr = r2c_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             var c2w_ptr = c2w_buf.unsafe_ptr().unsafe_bitcast[Float32]()
@@ -6592,7 +6689,7 @@ def vcm_render_gpu_wavefront(
 
 
                 handle[].ctx.enqueue_function[_bdpt_camera_path_accumulate_gpu](
-                    cam_states_ptr, accum_ptr, albedo_accum_ptr, Int64(n_pix),
+                    cam_states_ptr, accum_ptr, accum_merge_ptr, albedo_accum_ptr, Int64(n_pix),
                     sd.spectral.coeffs, Int64(sd.spectral.res), sd.spectral.cie_x,
                     sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
                     grid_dim=grid_pix, block_dim=block_size)
@@ -6631,17 +6728,24 @@ def vcm_render_gpu_wavefront(
             handle[].ctx.synchronize()
             _ = prog.finish()
 
+            # `pixels` (connect + t=1 splats) and `caustic_pixels` (vertex
+            # merging) split, same reason/contract as _bdpt_render_core's
+            # CPU tail -- see _vcm_finalize_one_pixel's docstring. No clamp
+            # here; finish_render applies it once, to their sum, after
+            # `pixels` is denoised.
             var pixels = unsafe_alloc[Float32](n_pix * 3)
+            var caustic_pixels = unsafe_alloc[Float32](n_pix * 3)
             with accum_buf.map_to_host() as host_buf:
-                var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
-                var inv_spp = iso_scale / Float32(n_spp)
-                for i in range(n_pix):
-                    var r = src[unsafe_offset=i*3]   * inv_spp
-                    var g = src[unsafe_offset=i*3+1] * inv_spp
-                    var b = src[unsafe_offset=i*3+2] * inv_spp
-                    var c = RGB(r, g, b).sensor_clamped(max_comp)
-                    r = c.r; g = c.g; b = c.b
-                    pixels[unsafe_offset=i*3] = r; pixels[unsafe_offset=i*3+1] = g; pixels[unsafe_offset=i*3+2] = b
+                with accum_merge_buf.map_to_host() as host_buf_m:
+                    var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+                    var src_m = host_buf_m.unsafe_ptr().unsafe_bitcast[Float32]()
+                    var inv_spp = iso_scale / Float32(n_spp)
+                    for i in range(n_pix):
+                        var conn = RGB(src[unsafe_offset=i*3], src[unsafe_offset=i*3+1], src[unsafe_offset=i*3+2])
+                        var mrg = RGB(src_m[unsafe_offset=i*3], src_m[unsafe_offset=i*3+1], src_m[unsafe_offset=i*3+2])
+                        var (c, m) = _vcm_finalize_one_pixel(conn, mrg, inv_spp)
+                        pixels[unsafe_offset=i*3] = c.r; pixels[unsafe_offset=i*3+1] = c.g; pixels[unsafe_offset=i*3+2] = c.b
+                        caustic_pixels[unsafe_offset=i*3] = m.r; caustic_pixels[unsafe_offset=i*3+1] = m.g; caustic_pixels[unsafe_offset=i*3+2] = m.b
 
             # Denoise (never wired up before -- no_denoise was a dead
             # parameter): read back the albedo AOV accumulated above, run
@@ -6656,8 +6760,8 @@ def vcm_render_gpu_wavefront(
                 for i in range(n_pix * 3):
                     albedo_pixels[unsafe_offset=i] = src[unsafe_offset=i] * inv_spp_alb
 
-            _ = finish_render(psc, sd, pixels, albedo_pixels, no_denoise)
-            pixels.unsafe_free(); albedo_pixels.unsafe_free()
+            _ = finish_render(psc, sd, pixels, albedo_pixels, no_denoise, caustic_pixels)
+            pixels.unsafe_free(); caustic_pixels.unsafe_free(); albedo_pixels.unsafe_free()
         except e:
             print("VCM GPU wavefront render failed: " + String(e))
             ret = Int32(-1)
