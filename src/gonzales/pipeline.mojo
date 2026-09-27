@@ -1429,7 +1429,7 @@ def parse_and_render(
                         psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
                         Int32(0), Int32(0), fw, fh,
                         Int32(32), Int32(32),
-                        sp_iter_ptr.unsafe_ptr(), sd, results.unsafe_ptr(),
+                        sp_iter_ptr.ptr(), sd, results.unsafe_ptr(),
                         psc[unsafe_offset=0].max_depth, False,
                         guide_read, write_guides, N_GUIDE_THREADS)
                 else:
@@ -1439,7 +1439,7 @@ def parse_and_render(
                         psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
                         Int32(0), Int32(0), fw, fh,
                         Int32(32), Int32(32),
-                        sp_iter_ptr.unsafe_ptr(), sd, iter_buf.unsafe_ptr(),
+                        sp_iter_ptr.ptr(), sd, iter_buf.unsafe_ptr(),
                         psc[unsafe_offset=0].max_depth, False,
                         guide_read, write_guides, N_GUIDE_THREADS)
                     for i in range(n_pixels):
@@ -1493,7 +1493,7 @@ def parse_and_render(
                 psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
                 Int32(0), Int32(0), fw, fh,
                 Int32(32), Int32(32),
-                sp_ptr.unsafe_ptr(), sd, results.unsafe_ptr(), psc[unsafe_offset=0].max_depth,
+                sp_ptr.ptr(), sd, results.unsafe_ptr(), psc[unsafe_offset=0].max_depth,
                 quiet=False, guide_read=null_guide(),
                 write_guides=Pointer[GuideGrid, MutUntrackedOrigin].unsafe_dangling(), n_write_guides=0,
                 use_restir=use_restir, use_gi=use_restir and use_restir_gi)
@@ -1643,7 +1643,7 @@ def render_interactive(
         up=Vec3f(c2w[unsafe_offset=4],  c2w[unsafe_offset=5],  c2w[unsafe_offset=6]),
         cameraChanged=Int32(0),
     ))
-    viewer_set_camera_state(v, cam_buf.unsafe_ptr())
+    viewer_set_camera_state(v, cam_buf.ptr())
 
     var c2w_buf = List[Float32](capacity=16)
     for i in range(16): c2w_buf.append(c2w[unsafe_offset=i])
@@ -1823,10 +1823,10 @@ def render_interactive(
     while (not headless and not viewer_should_close(v)) or (headless and frame_count < Int(headless_frames)):
         if not headless:
             viewer_poll_events(v)
-            viewer_get_camera_state(v, result=cam_buf.unsafe_ptr())
+            viewer_get_camera_state(v, result=cam_buf.ptr())
             if cam_buf[].cameraChanged != Int32(0):
                 frame_count = 0
-                build_camera_to_world(cam_buf.unsafe_ptr(), c2w_buf.unsafe_ptr())
+                build_camera_to_world(cam_buf.ptr(), c2w_buf.unsafe_ptr())
                 if use_gpu:
                     gpu_clear_film(handle, Int64(n_pixels))
                     if use_restir:
@@ -1984,7 +1984,7 @@ def render_interactive(
                 psc[unsafe_offset=0].raster_to_camera, c2w_buf.unsafe_ptr(),
                 Int32(0), Int32(0), fw, fh,
                 Int32(32), Int32(32),
-                sp_int.unsafe_ptr(), sd, results.unsafe_ptr(), psc[unsafe_offset=0].max_depth, True,
+                sp_int.ptr(), sd, results.unsafe_ptr(), psc[unsafe_offset=0].max_depth, True,
                 guide_read=null_guide(), write_guides=Pointer[GuideGrid, MutUntrackedOrigin].unsafe_dangling(),
                 n_write_guides=0, use_restir=use_restir, frame_w=fw, restir_io=restir_io,
                 use_gi=use_restir_gi, gi_io=gi_io,

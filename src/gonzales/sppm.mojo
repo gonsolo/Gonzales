@@ -619,7 +619,6 @@ def sample_area_light_point(
         var point = q0 + axis_dir * (axis_len * ru1) + radial * r
         return AreaLightSample(al, point, radial)
     var lmesh = meshes[unsafe_offset=Int(al.meshIdx)]
-    var n_tris = Int(max(Int(al.n_tris), 1))
     var ti = area_light_pick_triangle(al, pcg.next_float())
     var lb = ti * 3
     var lv0 = Int(lmesh.vertexIndices[unsafe_offset=lb]); var lv1 = Int(lmesh.vertexIndices[unsafe_offset=lb+1]); var lv2 = Int(lmesh.vertexIndices[unsafe_offset=lb+2])
@@ -696,7 +695,6 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     `scratch` is caller-owned (no internal alloc/free) so this is safe to
     call from a GPU kernel thread, same convention as bdpt.mojo's shared
     subpath tracers."""
-    var org = Point3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
     var has_media = Int(sd.mediumCount) > 0
 
     # One hero-wavelength sample for this VP's own camera subpath, carrying
@@ -737,7 +735,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     var (dfx, dfy) = film_filter_offset(u_fx, u_fy, film_filter)
     var fX = Float32(px) + Float32(0.5) + dfx
     var fY = Float32(py) + Float32(0.5) + dfy
-    var (rd, ro, cl) = camera_ray_from_film_xy(fX, fY, r2c, c2w)
+    var (rd, ro, _) = camera_ray_from_film_xy(fX, fY, r2c, c2w)
 
     # Total path length along the SPECULAR chain only -- a cone tracks the
     # camera's footprint, which survives refraction (the pool floor seen
@@ -1747,7 +1745,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
             var uml1 = pcg.next_float(); var uml2 = pcg.next_float()
-            var (wi_l_m, f_m, pdf_m, valid_m) = bxdf_sample_measured(mb_m, wo_l_m, uml1, uml2, ph_wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
+            var (wi_l_m, _, pdf_m, valid_m) = bxdf_sample_measured(mb_m, wo_l_m, uml1, uml2, ph_wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)
             if not valid_m or pdf_m <= Float32(0):
                 break
             var wi_m = tangent_m * wi_l_m[0] + bitangent_m * wi_l_m[1] + gn_m * wi_l_m[2]
@@ -3085,7 +3083,6 @@ def sppm_render(
     if not ok:
         return Int32(-1)
 
-    var n_pix = Int(psc[unsafe_offset=0].film_w) * Int(psc[unsafe_offset=0].film_h)
     _ = finish_render(psc, sd, out_global, albedo_pixels, no_denoise, out_caustic)
 
     out_global.unsafe_free(); out_caustic.unsafe_free(); albedo_pixels.unsafe_free()

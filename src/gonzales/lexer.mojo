@@ -566,7 +566,7 @@ def scanner_scan_token(
 # ── String / type utilities (shared by material_builder and light_builder) ────
 
 def _psc_streq(a: Pointer[UInt8, MutUntrackedOrigin], b: StringLiteral) -> Bool:
-    var bp = b.unsafe_ptr()
+    var bp = b.ptr()
     var i = 0
     while True:
         var ai = a[unsafe_offset=i]

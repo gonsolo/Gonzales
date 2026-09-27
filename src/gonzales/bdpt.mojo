@@ -562,7 +562,6 @@ def _bdpt_mnee_diffuse_area_light(
     if al.kind == Int8(1):
         return SpectralSample(Float32(0))
     var lmesh = sd.meshes[unsafe_offset=Int(al.meshIdx)]
-    var n_tris = Int(max(Int(al.n_tris), 1))
     var ti = area_light_pick_triangle(al, pcg.next_float())
     var lb = ti * 3
     var lv0 = Int(lmesh.vertexIndices[unsafe_offset=lb]); var lv1 = Int(lmesh.vertexIndices[unsafe_offset=lb+1]); var lv2 = Int(lmesh.vertexIndices[unsafe_offset=lb+2])
@@ -2772,7 +2771,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             v.shading_normal = vec3f(gn)
             v.beta = beta
             v.alb = eff_alb
-            v.is_surface = Int32(1); v.is_delta = Int32(0)
+            v.is_surface = Int32(1)
             # One lobe per material, from bxdf.mojo's lobe_kind_of: everything
             # below evaluates and samples the vertex through lobe_eval and
             # lobe_sample, so this branch never asks which material it is.
@@ -2829,7 +2828,6 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # above already handles them — see _bdpt_trace_light_path's
                 # docstring for why distant/infinite/point/sphere need this
                 # separate direct term instead.
-                var wo_d = -ray_dir
                 # distant/point/sphere via the shared sampler (pure loop collapse --
                 # order was already distant,point,sphere, matching the iterator).
                 for li_d in range(_bdpt_simple_light_count(sd)):
@@ -3072,7 +3070,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     v.shading_normal = vec3f(n_o)
                     v.beta = beta
                     v.alb = RGB(Float32(1))
-                    v.is_surface = Int32(1); v.is_delta = Int32(0)
+                    v.is_surface = Int32(1)
                     v.mat_kind = LobeKind.bssrdf
                     v.pdf_fwd = ex.p_area      # reverse density toward x_i (hop is symmetric)
                     v.pdf_bwd = eta_e
@@ -3285,9 +3283,9 @@ def _bdpt_light_path_init[use_gpu: Bool](
     # meaningfully; every other material resets them as if specular
     # (dVCM=0, dVC/dVM *= cosThetaOut) since they don't have a real
     # separate forward/reverse pdf today — see the memory file.
-    var dvcm_carry = Float32(0)
-    var dvc_carry = Float32(0)
-    var dvm_carry = Float32(0)
+    var dvcm_carry: Float32
+    var dvc_carry: Float32
+    var dvm_carry: Float32
     var is_finite_origin = False
     var origin_sphere = Int32(-1)
     # This pass's shared hero wavelengths (see _bdpt_camera_path_init's
@@ -3756,7 +3754,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             v.shading_normal = vec3f(gn)
             v.beta = flux
             v.alb = eff_alb
-            v.is_surface = Int32(1); v.is_delta = Int32(0)
+            v.is_surface = Int32(1)
             v.mat_kind = lobe_kind_of(mat.type)   # see the camera subpath
             v.mat_idx = Int32(mat_idx)
             v.pdf_bwd = lobe_param_of(mat)   # LobeCtx.param: a conductor's GGX alpha
@@ -3895,7 +3893,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     v.shading_normal = vec3f(n_o)
                     v.beta = flux
                     v.alb = RGB(Float32(1))
-                    v.is_surface = Int32(1); v.is_delta = Int32(0)
+                    v.is_surface = Int32(1)
                     v.mat_kind = LobeKind.bssrdf
                     v.pdf_fwd = ex.p_area
                     v.pdf_bwd = eta_e
@@ -4909,7 +4907,6 @@ def vcm_render(
     `--vcm-photons` if given, else n_pix) is the merge side's light-path
     budget per pass, decoupled from n_pix; see _bdpt_render_core's
     docstring."""
-    var n_pix = Int(psc[unsafe_offset=0].film_w) * Int(psc[unsafe_offset=0].film_h)
     var (pixels, caustic_pixels, albedo_pixels) = _bdpt_render_core(psc, sd, n_spp, n_photons, verbose)
 
     _ = finish_render(psc, sd, pixels, albedo_pixels, no_denoise, caustic_pixels)
@@ -4960,8 +4957,6 @@ def _bdpt_emit_light_paths_gpu(
     kernel parameter (`Bool` isn't a `DevicePassable` type `enqueue_function`
     accepts) -- derived here from `mediumCount`, which already is."""
     var mediumCount = sd.mediumCount
-    var spectral_res_dp = Int64(sd.spectral.res)
-    var spectral_res = Int(spectral_res_dp)
     var n_light_paths = Int(n_light_paths_dp)
     var pass_idx = Int(pass_idx_dp)
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -5161,8 +5156,6 @@ def _bdpt_light_path_init_gpu(
     store the resulting VCMLightPathState. Mirrors
     _bdpt_emit_light_paths_gpu's docstring for why `has_med` isn't a kernel
     parameter -- not needed here since init doesn't touch media."""
-    var spectral_res_dp = Int64(sd.spectral.res)
-    var spectral_res = Int(spectral_res_dp)
     var n_light_paths = Int(n_light_paths_dp)
     var pass_idx = Int(pass_idx_dp)
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -5214,8 +5207,6 @@ def _bdpt_light_path_bounce_gpu(
     depth level instead of tracing it inline -- see this section's opening
     comment."""
     var mediumCount = sd.mediumCount
-    var spectral_res_dp = Int64(sd.spectral.res)
-    var spectral_res = Int(spectral_res_dp)
     var n_light_paths = Int(n_light_paths_dp)
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
     if k >= n_light_paths:
@@ -5347,8 +5338,6 @@ def _bdpt_camera_path_bounce_gpu(
     Intersection _bdpt_camera_path_intersect_gpu already computed this
     depth level."""
     var mediumCount = sd.mediumCount
-    var spectral_res_dp = Int64(sd.spectral.res)
-    var spectral_res = Int(spectral_res_dp)
     var n_pix = Int(n_pix_dp)
     var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
     if pix >= n_pix:
@@ -6174,8 +6163,6 @@ def resolve_shadow_connect_gpu(
     count_dp: Int64,
     sd: SceneView,
 ):
-    var spectral_res_dp = Int64(sd.spectral.res)
-    var spectral_res = Int(spectral_res_dp)
     var n_meshes_vk = Int(n_meshes_vk_dp)
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -6975,8 +6962,6 @@ def sppm_nee_gpu(
     only (no table lookup needed to draw a wavelength), and the gather pass
     stays RGB by design (see _sppm_gather_one's docstring) -- only this
     NEE pass's direct-lighting term actually dereferences sd.spectral."""
-    var spectral_res_dp = Int64(sd.spectral.res)
-    var spectral_res = Int(spectral_res_dp)
     var n_vps = Int(n_vps_dp)
     var pass_idx = Int(pass_idx_dp)
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)

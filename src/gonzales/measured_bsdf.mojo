@@ -35,7 +35,7 @@ def _mbsdf_f32(buf: Pointer[UInt8, MutUntrackedOrigin], pos: Int) -> Float32:
     return (buf.unsafe_offset(pos)).unsafe_bitcast[Float32]()[unsafe_offset=0]
 
 def _mbsdf_field_eq(buf: Pointer[UInt8, MutUntrackedOrigin], pos: Int, length: Int, literal: StringLiteral) -> Bool:
-    var lp = literal.unsafe_ptr()
+    var lp = literal.ptr()
     var j = 0
     while lp[unsafe_offset=j] != UInt8(0):
         if j >= length or buf[unsafe_offset=pos + j] != lp[unsafe_offset=j]:

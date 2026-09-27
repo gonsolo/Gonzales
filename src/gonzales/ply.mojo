@@ -49,7 +49,7 @@ def _ply_word_eq(line: Pointer[UInt8, MutUntrackedOrigin], n: Int, literal: Stri
     var si = _ply_word_start(line, n)
     if si < 0:
         return False
-    var lp = literal.unsafe_ptr()
+    var lp = literal.ptr()
     var j = 0
     while lp[unsafe_offset=j] != UInt8(0):
         if line[unsafe_offset=si + j] != lp[unsafe_offset=j]:

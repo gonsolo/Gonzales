@@ -1269,7 +1269,7 @@ def lobe_eval[want_pdfs: Bool = True](
         var bitangent = Vec3f(frm.y.x, frm.y.y, frm.y.z)
         var wo_l = Vec3f(dot(vwo, tangent), dot(vwo, bitangent), dot(vwo, vn))
         var wi_l = Vec3f(dot(dir_to_other, tangent), dot(dir_to_other, bitangent), dot(dir_to_other, vn))
-        var fr_spec = SpectralSample(Float32(0))
+        var fr_spec: SpectralSample
         if c.adjoint:
             fr_spec = bxdf_eval_measured(mb, wi_l, wo_l, wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)[0]
         else:
