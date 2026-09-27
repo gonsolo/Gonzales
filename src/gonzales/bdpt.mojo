@@ -6888,8 +6888,8 @@ def sppm_finalize_gpu(
     vp_samples_dp: Int64,
     n_passes:   Int32,
     iso_scale:  Float32,
-    max_comp:   Float32,
-    out_pixels: Pointer[Float32, MutUntrackedOrigin],
+    out_global: Pointer[Float32, MutUntrackedOrigin],
+    out_caustic: Pointer[Float32, MutUntrackedOrigin],
     albedo_out: Pointer[Float32, MutUntrackedOrigin],
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin],
     spectral_res_dp: Int64,
@@ -6901,18 +6901,26 @@ def sppm_finalize_gpu(
     """One thread per pixel. Calls the SAME _sppm_finalize_one_pixel the CPU
     driver (sppm_render's tail loop) calls, plus the matching albedo AOV
     average for the denoiser (staged along with the rest of Stage 4-adjacent
-    denoiser wiring — see project_spectral_rendering memory)."""
+    denoiser wiring — see project_spectral_rendering memory). Writes the
+    global/caustic split to two separate buffers -- see
+    _sppm_finalize_one_pixel's docstring and project_water_caustic_sppm_gap
+    memory -- neither carries the max-component clamp yet; the CPU-side
+    finish_render caller applies it once, after denoising global and
+    adding caustic back."""
     var n_pix = Int(n_pix_dp)
     var vp_samples = Int(vp_samples_dp)
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= n_pix:
         return
-    var acc = _sppm_finalize_one_pixel(vps, i, vp_samples, n_passes, iso_scale, max_comp,
+    var (acc_g, acc_c) = _sppm_finalize_one_pixel(vps, i, vp_samples, n_passes, iso_scale,
                                        spectral_coeffs, Int(spectral_res_dp), spectral_cie_x,
                                        spectral_cie_y, spectral_cie_z, spectral_d65)
-    out_pixels[unsafe_offset=i * 3 + 0] = acc.r
-    out_pixels[unsafe_offset=i * 3 + 1] = acc.g
-    out_pixels[unsafe_offset=i * 3 + 2] = acc.b
+    out_global[unsafe_offset=i * 3 + 0] = acc_g.r
+    out_global[unsafe_offset=i * 3 + 1] = acc_g.g
+    out_global[unsafe_offset=i * 3 + 2] = acc_g.b
+    out_caustic[unsafe_offset=i * 3 + 0] = acc_c.r
+    out_caustic[unsafe_offset=i * 3 + 1] = acc_c.g
+    out_caustic[unsafe_offset=i * 3 + 2] = acc_c.b
     var alb = _sppm_finalize_albedo_one_pixel(vps, i, vp_samples)
     albedo_out[unsafe_offset=i * 3 + 0] = alb.r
     albedo_out[unsafe_offset=i * 3 + 1] = alb.g
@@ -6945,7 +6953,6 @@ def sppm_render_gpu(
     var fh = Int(psc[unsafe_offset=0].film_h)
     var n_pix = fw * fh
     var iso_scale = psc[unsafe_offset=0].film_iso / Float32(100)
-    var max_comp = psc[unsafe_offset=0].film_max_comp
 
     print("SPPM (GPU): " + String(fw) + "x" + String(fh)
           + " " + String(n_passes) + " passes x "
@@ -7026,6 +7033,7 @@ def sppm_render_gpu(
             var inter_ph_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_photons_per_pass, 1) * size_of[Intersection]())
             var counter_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](size_of[Int32]())
             var out_buf     = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
+            var caustic_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
             var albedo_out_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
 
             var r2c_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
@@ -7048,6 +7056,7 @@ def sppm_render_gpu(
             var inter_ph_ptr  = inter_ph_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_origin_cast[MutUntrackedOrigin]()
             var counter_ptr = counter_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_origin_cast[MutUntrackedOrigin]()
             var out_ptr     = out_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin]()
+            var caustic_ptr = caustic_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin]()
             var albedo_out_ptr = albedo_out_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin]()
             var r2c_ptr = r2c_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin]()
             var c2w_ptr = c2w_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_origin_cast[MutUntrackedOrigin]()
@@ -7174,7 +7183,7 @@ def sppm_render_gpu(
             _ = prog.finish()
 
             handle[].ctx.enqueue_function[sppm_finalize_gpu](
-                vps_ptr, Int64(n_pix), Int64(_VP_SAMPLES), Int32(n_passes), iso_scale, max_comp, out_ptr, albedo_out_ptr,
+                vps_ptr, Int64(n_pix), Int64(_VP_SAMPLES), Int32(n_passes), iso_scale, out_ptr, caustic_ptr, albedo_out_ptr,
                 spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
                 grid_dim=grid_pix, block_dim=block_size)
             handle[].ctx.synchronize()
@@ -7251,6 +7260,19 @@ def sppm_render_gpu(
                 for i in range(n_pix * 3 * size_of[Float32]()):
                     dst[unsafe_offset=i] = src[unsafe_offset=i]
 
+            # Global/caustic split -- see _sppm_finalize_one_pixel's
+            # docstring and project_water_caustic_sppm_gap memory. Only
+            # `out_pixels` (the NEE/direct "global" term) goes through
+            # finish_render's denoiser; `caustic_pixels` (the photon-gather
+            # term) is added back afterward, unsmoothed, and the max-
+            # component clamp is applied once to their sum there.
+            var caustic_pixels = unsafe_alloc[Float32](n_pix * 3)
+            with caustic_buf.map_to_host() as host_buf:
+                var src = host_buf.unsafe_ptr()
+                var dst = caustic_pixels.unsafe_bitcast[UInt8]()
+                for i in range(n_pix * 3 * size_of[Float32]()):
+                    dst[unsafe_offset=i] = src[unsafe_offset=i]
+
             # Denoise (never wired up before -- no_denoise was a dead
             # parameter): read back the albedo AOV finalized above, run a
             # fresh normals/depth pass via the host-side sd (same
@@ -7263,8 +7285,8 @@ def sppm_render_gpu(
                 for i in range(n_pix * 3 * size_of[Float32]()):
                     dst[unsafe_offset=i] = src[unsafe_offset=i]
 
-            _ = finish_render(psc, sd, out_pixels, albedo_pixels, no_denoise)
-            out_pixels.unsafe_free(); albedo_pixels.unsafe_free()
+            _ = finish_render(psc, sd, out_pixels, albedo_pixels, no_denoise, caustic_pixels)
+            out_pixels.unsafe_free(); caustic_pixels.unsafe_free(); albedo_pixels.unsafe_free()
         except e:
             print("SPPM GPU render failed: " + String(e))
             ret = Int32(-1)

@@ -2781,28 +2781,52 @@ def _sppm_finalize_one_pixel(
     vp_samples: Int,
     n_passes:   Int32,
     iso_scale:  Float32,
-    max_comp:   Float32,
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin],
     spectral_res: Int,
     spectral_cie_x: Pointer[Float32, MutUntrackedOrigin],
     spectral_cie_y: Pointer[Float32, MutUntrackedOrigin],
     spectral_cie_z: Pointer[Float32, MutUntrackedOrigin],
     spectral_d65: Pointer[Float32, MutUntrackedOrigin],
-) -> RGB:
-    """Averages the vp_samples independently-converged samples for pixel i —
-    see _sppm_trace_visible_point's docstring for why each sample has its
-    own fixed visible point/accumulator rather than sharing one per pixel.
-    Shared verbatim between the CPU driver (sppm_render's tail loop) and the
-    GPU kernel (sppm_finalize_gpu)."""
-    var acc = RGB(Float32(0))
+) -> Tuple[RGB, RGB]:
+    """Averages the vp_samples independently-converged samples for pixel i,
+    returning (global, caustic) SEPARATELY instead of one summed RGB --
+    see project_water_caustic_sppm_gap memory. The two have very different
+    noise character: `global` (NEE direct lighting + escaped/env rays)
+    behaves like ordinary path-traced noise and denoises fine; `caustic`
+    (the photon-gather term, vp.tau) is a real, legitimately high-frequency
+    spatial signal (a caustic thread's whole point is 1-2px bright lines on
+    a dim background) that a generic spatial-variance edge-stopping filter
+    cannot tell apart from noise -- it measured an ~85x energy loss on
+    water-caustic's brightest pixels. Keeping the two separate lets the
+    caller denoise ONLY `global` and add `caustic` back afterward,
+    unsmoothed, instead of disabling denoising for the whole image (which
+    is what an earlier version of this fix did, and loses real GI
+    denoising on ordinary non-caustic SPPM scenes for no reason). This is
+    the same caustic/global decomposition "Denoising Stochastic Progressive
+    Photon Mapping Renderings Using a Multi-Residual Network" (Zheng et
+    al., JCST 2020) uses for exactly this reason.
+
+    Neither RGB carries the max-component sensor clamp -- that must be
+    applied ONCE, by the caller, to (global + caustic) after global is
+    denoised, not to each half separately (clamping each half against the
+    same absolute limit independently would under-clamp their sum). Each
+    IS NaN/negative-guarded here, since that guard is per-component and
+    order-independent.
+
+    Shared verbatim between the CPU driver (sppm_render's tail loop) and
+    the GPU kernel (sppm_finalize_gpu)."""
+    var acc_g = RGB(Float32(0))
+    var acc_c = RGB(Float32(0))
     for vs in range(vp_samples):
         var vp = vps[unsafe_offset=i * vp_samples + vs]
         if vp.valid == Int32(0):
             # No surface hit — either a dead sample, or the traced ray
             # escaped the scene into an infinite (environment) light, whose
             # already beta-weighted radiance _sppm_trace_visible_point
-            # stored directly in vp.env (0 if neither happened).
-            acc += vp.env
+            # stored directly in vp.env (0 if neither happened). Treated as
+            # "global": a direct light/escape hit, not a photon-density
+            # estimate, so it has none of the caustic term's noise shape.
+            acc_g += vp.env
             continue
         # ── Output boundary. The two terms cross it differently, which is
         # forced by SPPM's structure, not a choice:
@@ -2839,7 +2863,7 @@ def _sppm_finalize_one_pixel(
                 denom = Float32(n_passes)
             elif vp.is_volume == PhotonKind.volume:
                 denom = (Float32(4.0) / Float32(3.0)) * PI * vp.r2 * sqrt(vp.r2) * Float32(n_passes)
-            acc += vp.beta * (vp.tau / denom)
+            acc_c += vp.beta * (vp.tau / denom)
         # Direct (NEE) term — pbrt's "pixel.Ld", resampled once per
         # pass, averaged over n_passes. Applies to volume VPs too: this
         # was gated on `is_volume == 0` until 2026-09-09, so a volume
@@ -2849,18 +2873,24 @@ def _sppm_finalize_one_pixel(
         var (dr, dg, db) = spectral_sample_to_rgb(
             spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
             spectral_cie_z, spectral_d65, vp.ld / Float32(n_passes), vp.wavelengths)
-        acc += vp.beta * RGB(dr, dg, db)
-    acc = acc / Float32(vp_samples)
+        acc_g += vp.beta * RGB(dr, dg, db)
+    acc_g = acc_g / Float32(vp_samples)
+    acc_c = acc_c / Float32(vp_samples)
 
-    # ISO exposure compensation (matches normalize_film)
-    acc *= iso_scale
+    # ISO exposure compensation (matches normalize_film) -- linear, so
+    # applying it to each half separately and later summing them is exact.
+    acc_g *= iso_scale
+    acc_c *= iso_scale
 
-    # NaN guard and optional max-component clamp
-    if acc.r != acc.r or acc.r < Float32(0): acc.r = Float32(0)
-    if acc.g != acc.g or acc.g < Float32(0): acc.g = Float32(0)
-    if acc.b != acc.b or acc.b < Float32(0): acc.b = Float32(0)
-    acc = acc.sensor_clamped(max_comp)
-    return acc
+    # NaN/negative guard, per component -- order-independent, safe to do
+    # before the caller sums the two halves.
+    if acc_g.r != acc_g.r or acc_g.r < Float32(0): acc_g.r = Float32(0)
+    if acc_g.g != acc_g.g or acc_g.g < Float32(0): acc_g.g = Float32(0)
+    if acc_g.b != acc_g.b or acc_g.b < Float32(0): acc_g.b = Float32(0)
+    if acc_c.r != acc_c.r or acc_c.r < Float32(0): acc_c.r = Float32(0)
+    if acc_c.g != acc_c.g or acc_c.g < Float32(0): acc_c.g = Float32(0)
+    if acc_c.b != acc_c.b or acc_c.b < Float32(0): acc_c.b = Float32(0)
+    return (acc_g, acc_c)
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -2872,24 +2902,28 @@ def _sppm_render_core(
     n_photons_per_pass: Int,
     initial_radius: Float32,
     verbose:  Bool,
-) -> Tuple[Bool, Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]]:
+) -> Tuple[Bool, Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]]:
     """Stochastic Progressive Photon Mapping main loop, factored out of
     `sppm_render` so the CPU driver's aux-buffer/denoise/write tail is a
-    separate, reusable step. Returns (ok, pixels, albedo_pixels) --
-    `ok=False` (both pointers null/unusable) when the scene has no lights,
-    mirroring the old function's `Int32(-1)` early return. Same buffer
-    contract as `_bdpt_render_core` (bdpt.mojo): caller-owned `n_pix*3`
-    Float32 arrays, iso-scaled/max_comp-clamped, NOT yet denoised."""
+    separate, reusable step. Returns (ok, global_pixels, caustic_pixels,
+    albedo_pixels) -- `ok=False` (all pointers null/unusable) when the
+    scene has no lights, mirroring the old function's `Int32(-1)` early
+    return. `global_pixels`/`caustic_pixels` are the split
+    _sppm_finalize_one_pixel returns (see its docstring); NEITHER carries
+    the max-component sensor clamp yet -- the caller applies it ONCE, to
+    their sum, after denoising `global_pixels` and adding `caustic_pixels`
+    back unsmoothed. Same buffer contract as `_bdpt_render_core`
+    (bdpt.mojo): caller-owned `n_pix*3` Float32 arrays, iso-scaled, NOT yet
+    denoised."""
     var fw = Int(psc[unsafe_offset=0].film_w)
     var fh = Int(psc[unsafe_offset=0].film_h)
     var n_pix = fw * fh
     var iso_scale = psc[unsafe_offset=0].film_iso / Float32(100)
-    var max_comp = psc[unsafe_offset=0].film_max_comp
 
     if Int(sd.areaLightCount) + Int(sd.distantLightCount) + Int(sd.infiniteLightCount) + Int(sd.pointLightCount) == 0 and not (sd.sphereLightCount > 0):
         print("SPPM: no lights in scene, cannot emit photons")
-        return Tuple[Bool, Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]](
-            False, Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Float32, MutUntrackedOrigin].unsafe_dangling())
+        return Tuple[Bool, Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]](
+            False, Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Float32, MutUntrackedOrigin].unsafe_dangling())
 
     print("SPPM: " + String(fw) + "x" + String(fh)
           + " " + String(n_passes) + " passes x "
@@ -3006,16 +3040,20 @@ def _sppm_render_core(
     # everything — the average over all samples is what correctly reproduces
     # the fresnel-weighted reflect/refract blend a real specular interface
     # would show.
-    var out_pixels = unsafe_alloc[Float32](n_pix * 3)
+    var out_global = unsafe_alloc[Float32](n_pix * 3)
+    var out_caustic = unsafe_alloc[Float32](n_pix * 3)
     var albedo_pixels = unsafe_alloc[Float32](n_pix * 3)
 
     def finalize_one(i: Int) {imm}:
-        var acc = _sppm_finalize_one_pixel(vps, i, _VP_SAMPLES, Int32(n_passes), iso_scale, max_comp,
+        var (acc_g, acc_c) = _sppm_finalize_one_pixel(vps, i, _VP_SAMPLES, Int32(n_passes), iso_scale,
                                          sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
                                          sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-        out_pixels[unsafe_offset=i * 3 + 0] = acc.r
-        out_pixels[unsafe_offset=i * 3 + 1] = acc.g
-        out_pixels[unsafe_offset=i * 3 + 2] = acc.b
+        out_global[unsafe_offset=i * 3 + 0] = acc_g.r
+        out_global[unsafe_offset=i * 3 + 1] = acc_g.g
+        out_global[unsafe_offset=i * 3 + 2] = acc_g.b
+        out_caustic[unsafe_offset=i * 3 + 0] = acc_c.r
+        out_caustic[unsafe_offset=i * 3 + 1] = acc_c.g
+        out_caustic[unsafe_offset=i * 3 + 2] = acc_c.b
         var alb = _sppm_finalize_albedo_one_pixel(vps, i, _VP_SAMPLES)
         albedo_pixels[unsafe_offset=i * 3 + 0] = alb.r
         albedo_pixels[unsafe_offset=i * 3 + 1] = alb.g
@@ -3026,8 +3064,8 @@ def _sppm_render_core(
     heads.unsafe_free()
     photons.unsafe_free()
     vps.unsafe_free()
-    return Tuple[Bool, Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]](
-        True, out_pixels, albedo_pixels)
+    return Tuple[Bool, Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]](
+        True, out_global, out_caustic, albedo_pixels)
 
 def sppm_render(
     psc:      Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
@@ -3042,14 +3080,14 @@ def sppm_render(
     estimator (`_sppm_render_core`), then denoise (SPPMPixel.alb as the
     albedo AOV, normals/depth from the same integrator-agnostic
     render_aux_buffers the plain path tracer and VCM use) and write."""
-    var (ok, out_pixels, albedo_pixels) = _sppm_render_core(
+    var (ok, out_global, out_caustic, albedo_pixels) = _sppm_render_core(
         psc, sd, n_passes, n_photons_per_pass, initial_radius, verbose)
     if not ok:
         return Int32(-1)
 
     var n_pix = Int(psc[unsafe_offset=0].film_w) * Int(psc[unsafe_offset=0].film_h)
-    _ = finish_render(psc, sd, out_pixels, albedo_pixels, no_denoise)
+    _ = finish_render(psc, sd, out_global, albedo_pixels, no_denoise, out_caustic)
 
-    out_pixels.unsafe_free(); albedo_pixels.unsafe_free()
+    out_global.unsafe_free(); out_caustic.unsafe_free(); albedo_pixels.unsafe_free()
     return Int32(0)
 

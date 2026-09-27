@@ -18,6 +18,7 @@ from std.memory.alloc import unsafe_alloc
 from .bvh import SceneView, render_aux_buffers
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import denoise, write_image_cropwindow
+from .geometry import RGB, _is_real_ptr
 
 
 def _cstr(s: String) -> Pointer[UInt8, MutUntrackedOrigin]:
@@ -129,11 +130,29 @@ def finish_render[Op: Origin[mut=True], Oa: Origin[mut=True]](
     pixels: Pointer[Float32, Op],
     albedo: Pointer[Float32, Oa],
     no_denoise: Bool,
+    add_after_denoise: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Int32:
     """The tail every VCM and SPPM driver shared: normals and depth from the
     integrator-agnostic first-hit pass (render_aux_buffers), the denoiser
     unless --no-denoise, then write_render_outputs. The caller still owns
-    `pixels` and `albedo`."""
+    `pixels`, `albedo` and `add_after_denoise`.
+
+    `add_after_denoise` (SPPM's two call sites, a real pointer only there --
+    see project_water_caustic_sppm_gap memory) is added to the buffer AFTER
+    denoise() runs on `pixels` and BEFORE the max-component sensor clamp,
+    which now happens here rather than in the caller's own finalize step:
+    SPPM's photon-gather/caustic term is a legitimately high-frequency
+    spatial signal (a caustic thread IS 1-2px bright lines on a dim
+    background) that denoise()'s spatial-variance edge-stopping cannot
+    tell apart from noise -- routing only the NEE/direct "global" term
+    through the denoiser, and adding the untouched caustic term back after,
+    keeps real GI denoising for ordinary SPPM scenes while no longer
+    smearing a caustic's brightest pixels down ~85x. Clamping the SUM once,
+    here, rather than clamping global and caustic separately beforehand,
+    matters for the ~48 corpus scenes that set `maxcomponentvalue`: clamping
+    each half independently against the same absolute limit would
+    under-clamp their sum. VCM's three call sites never pass a real pointer
+    here, so they are unaffected -- and already clamp before calling in."""
     var fw = psc[unsafe_offset=0].film_w
     var fh = psc[unsafe_offset=0].film_h
     var n_pix = Int(fw) * Int(fh)
@@ -149,6 +168,26 @@ def finish_render[Op: Origin[mut=True], Oa: Origin[mut=True]](
     else:
         denoise(pixels, albedo, normals, depth, fw, fh, out,
                 Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
-    var ret = write_render_outputs(psc, out, pixels, not no_denoise, albedo, normals, depth)
+    var has_extra = _is_real_ptr(add_after_denoise)
+    var noisy_ref = pixels.unsafe_origin_cast[MutUntrackedOrigin]()
+    var noisy_owned = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
+    if has_extra:
+        var max_comp = psc[unsafe_offset=0].film_max_comp
+        noisy_owned = unsafe_alloc[Float32](n_pix * 3)
+        for i in range(n_pix):
+            var og = RGB(out[unsafe_offset=i*3+0] + add_after_denoise[unsafe_offset=i*3+0],
+                          out[unsafe_offset=i*3+1] + add_after_denoise[unsafe_offset=i*3+1],
+                          out[unsafe_offset=i*3+2] + add_after_denoise[unsafe_offset=i*3+2])
+            og = og.sensor_clamped(max_comp)
+            out[unsafe_offset=i*3+0] = og.r; out[unsafe_offset=i*3+1] = og.g; out[unsafe_offset=i*3+2] = og.b
+            var ng = RGB(pixels[unsafe_offset=i*3+0] + add_after_denoise[unsafe_offset=i*3+0],
+                         pixels[unsafe_offset=i*3+1] + add_after_denoise[unsafe_offset=i*3+1],
+                         pixels[unsafe_offset=i*3+2] + add_after_denoise[unsafe_offset=i*3+2])
+            ng = ng.sensor_clamped(max_comp)
+            noisy_owned[unsafe_offset=i*3+0] = ng.r; noisy_owned[unsafe_offset=i*3+1] = ng.g; noisy_owned[unsafe_offset=i*3+2] = ng.b
+        noisy_ref = noisy_owned
+    var ret = write_render_outputs(psc, out, noisy_ref, not no_denoise, albedo, normals, depth)
+    if has_extra:
+        noisy_owned.unsafe_free()
     normals.unsafe_free(); depth.unsafe_free(); out.unsafe_free()
     return ret
