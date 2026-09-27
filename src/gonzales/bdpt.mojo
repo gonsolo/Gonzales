@@ -2297,7 +2297,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
         if inter.hit == Int8(0):
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ilight = sd.infiniteLights[unsafe_offset=inf_i]
-                var (Le, pdf_light_here) = _eval_infinite_light_and_pdf(ilight, rd)
+                var (Le, pdf_light_here) = _eval_infinite_light_and_pdf(ilight, rd, ro.to_simd())
                 var mis_w = Float32(1)
                 if last_bsdf_pdf == PDF_DROP_DIRECT:
                     # A scatter whose direct term NEE already reported (the

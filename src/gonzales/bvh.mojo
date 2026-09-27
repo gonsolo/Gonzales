@@ -12,6 +12,7 @@ from .render_state import PathState, TileResult, GpuTexture, NormalSlopeMap
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, intersect_triangle, alpha_killed, Instance, sphere_outward_normal
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
+from .portal_light import portal_frame, portal_ray_crosses
 from .curves import Curve, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis
 from .rng import PCG32
 from .footprint import CameraFootprint
@@ -670,7 +671,7 @@ def _equal_area_sphere_to_square(dx: Float32, dy: Float32, dz: Float32) -> SIMD[
     return SIMD[DType.float32, 2](u, v)
 
 @always_inline
-def _eval_infinite_light_and_pdf(ilight: InfiniteLight, dir_world: Vec3f) -> Tuple[RGB, Float32]:
+def _eval_infinite_light_and_pdf(ilight: InfiniteLight, dir_world: Vec3f, origin: Vec3f) -> Tuple[RGB, Float32]:
     """Radiance AND solid-angle sampling pdf an infinite (environment) light
     contributes along a ray travelling in `dir_world` — used for the
     camera-ray miss case (bdpt.mojo/sppm.mojo don't otherwise add any
@@ -683,7 +684,20 @@ def _eval_infinite_light_and_pdf(ilight: InfiniteLight, dir_world: Vec3f) -> Tup
     against NEE sampling the same light from the previous vertex — see
     bdpt.mojo's `last_bsdf_pdf` bookkeeping for why (getting this wrong
     double-counts unoccluded env light, the exact bug documented in
-    [[project_infinite_light_shadows]])."""
+    [[project_infinite_light_shadows]]).
+
+    `origin` gates a portal-restricted light (ilight.has_portal != 0) the
+    same way shading.mojo's PT miss handler does: this escape strategy only
+    pays out where a real window opening would actually be visible. Missing
+    here (and in sppm.mojo/bdpt.mojo, the only two callers) until found via
+    a corpus-wide gallery comparison: SPPM/VCM kept the OLD full-sphere
+    watercolor/kroken leak (1.46x/1.50x) after the PT-only portal fix, the
+    exact "PT-only feature gap" bug class this project keeps re-finding --
+    see project_pt_only_feature_gaps memory."""
+    if ilight.has_portal != Int32(0):
+        var (pe1, pe2, pn, _) = portal_frame(ilight.portal_p0, ilight.portal_p1, ilight.portal_p3)
+        if not portal_ray_crosses(point3f(origin), dir_world, ilight.portal_p0, pe1, pe2, pn):
+            return (RGB(Float32(0)), Float32(1) / (Float32(4) * PI))
     if ilight.tex_idx < Int32(0) or not _is_real_ptr(ilight.pixels_ptr) or ilight.cdf_w <= Int32(0):
         return (ilight.scale, Float32(1) / (Float32(4) * PI))
     var local_dir = Mat4.load(ilight.world_to_light) * dir_world

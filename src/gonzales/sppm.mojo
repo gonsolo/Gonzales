@@ -791,7 +791,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         if scratch[unsafe_offset=0].hit == Int8(0):
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ilight = sd.infiniteLights[unsafe_offset=inf_i]
-                var (Le, _pdf_unused) = _eval_infinite_light_and_pdf(ilight, rd)
+                var (Le, _pdf_unused) = _eval_infinite_light_and_pdf(ilight, rd, ro.to_simd())
                 vp.env += vp.beta * Le
             break
 
