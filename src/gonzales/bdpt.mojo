@@ -1577,7 +1577,7 @@ comptime _CAMIS_LVC_PER_SLOT = 1 if _VCM_CAMIS else 0
 # right vertex, right per-path indices) independent of whether the actual
 # correlation correction is right. Never True together with _VCM_CAMIS=False
 # (nothing reads it then).
-comptime _CAMIS_FORCE_C1 = True
+comptime _CAMIS_FORCE_C1 = False
 
 
 @always_inline
