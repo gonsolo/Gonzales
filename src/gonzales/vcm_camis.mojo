@@ -47,7 +47,7 @@ the product (S0's finding 5 becomes moot). The reference's primary (lens)
 edge is clamped too, but its camera pdf is per PIXEL, so pi r^2 p_A ~ 1e2
 there and it clamps to 1 -- S0's P(lens edge) = 1 in all but tiny images.
 """
-from std.math import log, min
+from std.math import log, min, max, exp, expm1, inf
 from std.collections import Array
 from .geometry import PI
 
@@ -269,3 +269,288 @@ def camis_light_scatter(
     c.pend_eta_b = eta * cos_over_pdf
     c.pend_log_pa_rev = log(pdf_rev_w) + c.log_g_rev
     c.cos_out_prev = cos_out
+
+
+# ── evaluation (stage S2): c and the weight sites ───────────────────────────
+#
+# Pure functions, mirroring vcm_mis.mojo's style and Scenes/
+# vcm_camis_hybrid_derivation.py's eval_merge/_connect/_splat/_emission_hit
+# (Horner form only -- S0's recommendation, see camis_light_side). S3 wires
+# these into bdpt.mojo's real weight sites (_bdpt_merge_mis_weight,
+# _bdpt_connect_mis_weight, the t=1 splat, the emission-hit escape); this
+# file only computes the weight given records + junction data, which is why
+# every function below takes explicit scalars for the ordinary VCM state
+# (dVCM, legacy dVC, eta, keep) that a call site already has -- CAMIS only
+# ever ADDS a `dVC0`/records pair alongside them (bdpt.mojo's dVM slot and
+# lvc_camis), never replaces them; the `camis_on=False` / out-of-Class path
+# below is exactly today's existing weight, byte for byte.
+#
+# Pinned against Tests/unit/test_vcm_camis.mojo, which reproduces
+# EXPECT_MERGE_W_CAMIS from vcm_camis_hybrid_derivation.py's section_pinned().
+
+
+@always_inline
+def camis_c(log_py: Float32, log_pz: Float32, log_lb: Float32) -> Float32:
+    """Eq. 13 + 15's logistic form: c = P(y)/P(x) = 1 / (1 + P(z)(1/P(y) - 1)),
+    log(1/P(y) - 1) = -log P(y) + log(-expm1(log P(y))). Never forms P(y) or
+    P(z) directly (either can underflow to 0 well before c does); log_pz =
+    -inf (a zero-density light suffix, e.g. an emission pdf of 0) or log_py
+    = 0 (P(y) = 1, the primary hit, Eq. 17) both return c = 1 without
+    reaching exp. `log_lb` is -log(n_t keep): Eq. 17's per-vertex clamp
+    c >= 1 / (n_t keep)."""
+    if log_pz == -inf[DType.float32]() or log_py >= Float32(0):
+        return Float32(1)
+    var z = log_pz - log_py + log(-expm1(log_py))
+    var c = Float32(1) / (Float32(1) + exp(z))
+    return min(max(c, exp(log_lb)), Float32(1))
+
+
+@always_inline
+def camis_camera_side[N: Int](
+    cam: CamisCamCarry, recs: Array[CamisCamRecord, N], num_scat: Int,
+    dvc0: Float32, log_keep_t: Float32, n_t: Float32,
+    log_pz_t: Float32, log_rev_t: Float32, force_c1: Bool,
+) -> Tuple[Float32, Float32]:
+    """(dVC'_T, c_T). dVC'_T = dVC0_T + sum_tau c_tau eta_tau B_tau
+    A_{tau+1..T-1}, accumulated in Horner form (S = S*A + c*etaB) over
+    tau = 0..num_scat-1. `cam` is the running carry AT T (cut/log_py/rc/
+    log_k/in_class already match S0's CamArrival at T); `log_pz_t` and
+    `log_rev_t` are the pairing-dependent quantities the call site derives
+    from the light side and the junction (see camis_eval_merge etc. below)."""
+    var log_nt = log(n_t)
+    var S = Float32(0)
+    for tau in range(num_scat):
+        var rec = recs[tau]
+        var c: Float32
+        if force_c1 or tau < Int(cam.cut):
+            c = Float32(1)
+        else:
+            c = camis_c(rec.log_py, log_pz_t + log_rev_t + (cam.rc - rec.rc),
+                       -log_nt - rec.log_keep)
+        S = S * rec.a + c * rec.eta_b
+    var c_t = Float32(1) if force_c1 else camis_c(cam.log_py, log_pz_t, -log_nt - log_keep_t)
+    return (dvc0 + S, c_t)
+
+
+@always_inline
+def camis_light_side[N: Int](
+    scat: Array[CamisLightRecord, N], num_scat: Int,
+    log_pa_fwd: Array[Float32, N], log_pa_fwd_arrival: Float32,
+    log_pa0: Float32, arr_cut: Int32,
+    dvc0: Float32, log_keep_lambda: Float32, n_t: Float32,
+    log_k: Float32, log_py_base: Float32, log_rev_l: Float32, force_c1: Bool,
+) -> Tuple[Float32, Float32, Float32]:
+    """(dVC'_Lambda, log P(z) through Lambda, c_Lambda). `scat`/`log_pa_fwd`
+    are the Lambda-1 stored vertices lam = 1..Lambda-1 (index i = lam - 1);
+    `log_pa_fwd[i]` is scat[i]'s own edge-in density (S0 finding 3: not
+    stored in the record itself -- the call site derives it as
+    -log(lvc[slot].dVCM)). `log_pa_fwd_arrival` is Lambda's own.
+    `log_py_base`/`log_rev_l` are pairing-dependent, from the camera side and
+    the junction. Two passes, like the harness: a backward one for log P(y)
+    at every scat vertex (needs the suffix, i.e. later vertices first), then
+    a forward one that grows log P(z) as a running scalar (each index is
+    read exactly once) alongside the Horner accumulation."""
+    var log_nt = log(n_t)
+    var lpy = Array[Float32, N](fill=Float32(0))
+    var acc = log_py_base + log_rev_l
+    for i in range(num_scat - 1, -1, -1):
+        lpy[i] = acc
+        acc = acc + camis_clamp_log_p(log_k, scat[i].log_pa_rev)
+    var lpz_run = camis_clamp_log_p(log_k, log_pa0)
+    var S = Float32(0)
+    for i in range(num_scat):
+        var rec = scat[i]
+        var lam = i + 1
+        var c: Float32
+        if force_c1 or lam < Int(arr_cut):
+            c = Float32(1)
+        else:
+            c = camis_c(lpy[i], lpz_run, -log_nt - rec.log_keep)
+        S = S * rec.a + c * rec.eta_b
+        lpz_run = lpz_run + camis_clamp_log_p(log_k, log_pa_fwd[i])
+    lpz_run = lpz_run + camis_clamp_log_p(log_k, log_pa_fwd_arrival)
+    var c_l = Float32(1) if force_c1 else camis_c(log_py_base, lpz_run, -log_nt - log_keep_lambda)
+    return (dvc0 + S, lpz_run, c_l)
+
+
+@always_inline
+def camis_eval_merge[NC: Int, NL: Int](
+    cam: CamisCamCarry, cam_scat: Array[CamisCamRecord, NC], num_cam_scat: Int,
+    cam_dvcm: Float32, cam_dvc_legacy: Float32, cam_dvc0: Float32,
+    cam_eta: Float32, cam_log_keep: Float32,
+    light_arr: CamisLightRecord, light_scat: Array[CamisLightRecord, NL], num_light_scat: Int,
+    light_log_pa_fwd: Array[Float32, NL], light_log_pa_fwd_arrival: Float32,
+    light_log_pa0: Float32, light_origin_in_class: Bool,
+    light_dvcm: Float32, light_dvc_legacy: Float32, light_dvc0: Float32, light_eta: Float32,
+    cam_dir_w: Float32, cam_rev_w: Float32,
+    n_t: Float32, camis_on: Bool, force_c1: Bool = False,
+) -> Float32:
+    """_bdpt_merge_mis_weight's CAMIS branch: merge a photon (light side) at
+    camera vertex T (`cam`). Mirrors eval_merge in
+    Scenes/vcm_camis_hybrid_derivation.py; pinned by
+    Tests/unit/test_vcm_camis.mojo against EXPECT_MERGE_W_CAMIS."""
+    var use = (camis_on and cam.in_class
+              and (light_arr.flags & CAMIS_IN_CLASS) != 0 and light_origin_in_class)
+    var dvc_l: Float32
+    var dvc_c: Float32
+    var c_t: Float32
+    if use:
+        var log_rev_l = camis_clamp_log_p(cam.log_k, log(cam_dir_w) + light_arr.log_g_rev)
+        var light_result = camis_light_side(
+            light_scat, num_light_scat, light_log_pa_fwd, light_log_pa_fwd_arrival,
+            light_log_pa0, light_arr.cut, light_dvc0, light_arr.log_keep, n_t,
+            cam.log_k, cam.log_py, log_rev_l, force_c1)
+        dvc_l = light_result[0]
+        var lpz = light_result[1]
+        var log_rev_t = camis_clamp_log_p(cam.log_k, log(cam_rev_w) + cam.log_g_prev)
+        var cam_result = camis_camera_side(
+            cam, cam_scat, num_cam_scat, cam_dvc0, cam_log_keep, n_t,
+            lpz, log_rev_t, force_c1)
+        dvc_c = cam_result[0]
+        c_t = cam_result[1]
+    else:
+        dvc_l = light_dvc_legacy
+        dvc_c = cam_dvc_legacy
+        c_t = Float32(1)
+    var eta = c_t * cam_eta                # c into eta_scale, never into inv_eta_x
+    var w_light = (light_dvcm + dvc_l * cam_dir_w) / eta
+    var w_camera = (cam_dvcm + dvc_c * cam_rev_w) / eta
+    return Float32(1) / (w_light + Float32(1) + w_camera)
+
+
+@always_inline
+def camis_eval_connect[NC: Int, NL: Int](
+    cam: CamisCamCarry, cam_scat: Array[CamisCamRecord, NC], num_cam_scat: Int,
+    cam_dvcm: Float32, cam_dvc_legacy: Float32, cam_dvc0: Float32,
+    cam_eta: Float32, cam_log_keep: Float32,
+    light_arr: CamisLightRecord, light_scat: Array[CamisLightRecord, NL], num_light_scat: Int,
+    light_log_pa_fwd: Array[Float32, NL], light_log_pa_fwd_arrival: Float32,
+    light_log_pa0: Float32, light_origin_in_class: Bool,
+    light_dvcm: Float32, light_dvc_legacy: Float32, light_dvc0: Float32, light_eta: Float32,
+    cam_dir_a: Float32, cam_rev_w: Float32, light_dir_a: Float32, light_rev_w: Float32,
+    n_t: Float32, camis_on: Bool, force_c1: Bool = False,
+) -> Float32:
+    """_connect between a stored light vertex (`light_arr`, s >= 2) and
+    camera vertex T (`cam`). For s = 1 (the light vertex IS the emitter, no
+    light-side records at all) use camis_eval_connect_s1 instead."""
+    var use = (camis_on and cam.in_class
+              and (light_arr.flags & CAMIS_IN_CLASS) != 0 and light_origin_in_class)
+    var log_k = cam.log_k
+    var w_light: Float32
+    var lpz: Float32
+    if use:
+        var log_rev_l = camis_clamp_log_p(log_k, log(light_rev_w) + light_arr.log_g_rev)
+        var log_py_base = cam.log_py + camis_clamp_log_p(log_k, log(cam_dir_a))
+        var light_result = camis_light_side(
+            light_scat, num_light_scat, light_log_pa_fwd, light_log_pa_fwd_arrival,
+            light_log_pa0, light_arr.cut, light_dvc0, light_arr.log_keep, n_t,
+            log_k, log_py_base, log_rev_l, force_c1)
+        var dvc_l = light_result[0]
+        lpz = light_result[1]
+        var c_l = light_result[2]
+        w_light = cam_dir_a * (c_l * light_eta + light_dvcm + dvc_l * light_rev_w)
+    else:
+        lpz = Float32(0)   # unused: dvc_c below takes the legacy branch too
+        w_light = cam_dir_a * (light_eta + light_dvcm + light_dvc_legacy * light_rev_w)
+    var dvc_c: Float32
+    var c_t: Float32
+    if use:
+        var log_rev_t = camis_clamp_log_p(log_k, log(cam_rev_w) + cam.log_g_prev)
+        var cam_result = camis_camera_side(
+            cam, cam_scat, num_cam_scat, cam_dvc0, cam_log_keep, n_t,
+            lpz + camis_clamp_log_p(log_k, log(light_dir_a)), log_rev_t, force_c1)
+        dvc_c = cam_result[0]
+        c_t = cam_result[1]
+    else:
+        dvc_c = cam_dvc_legacy
+        c_t = Float32(1)
+    var w_camera = light_dir_a * (c_t * cam_eta + cam_dvcm + dvc_c * cam_rev_w)
+    return Float32(1) / (w_light + Float32(1) + w_camera)
+
+
+@always_inline
+def camis_eval_connect_s1[NC: Int](
+    cam: CamisCamCarry, cam_scat: Array[CamisCamRecord, NC], num_cam_scat: Int,
+    cam_dvcm: Float32, cam_dvc_legacy: Float32, cam_dvc0: Float32,
+    cam_eta: Float32, cam_log_keep: Float32,
+    origin_log_pa0: Float32, origin_direct_pdf_a: Float32, origin_in_class: Bool,
+    cam_dir_a: Float32, cam_rev_w: Float32, light_dir_a: Float32,
+    n_t: Float32, camis_on: Bool, force_c1: Bool = False,
+) -> Float32:
+    """_connect, s = 1: the light vertex IS the emitter (SmallVCM's
+    DirectIllumination form) -- no light-side records exist to walk."""
+    var use = camis_on and cam.in_class and origin_in_class
+    var log_k = cam.log_k
+    var w_light = cam_dir_a / origin_direct_pdf_a
+    var lpz = camis_clamp_log_p(log_k, origin_log_pa0)
+    var dvc_c: Float32
+    var c_t: Float32
+    if use:
+        var log_rev_t = camis_clamp_log_p(log_k, log(cam_rev_w) + cam.log_g_prev)
+        var cam_result = camis_camera_side(
+            cam, cam_scat, num_cam_scat, cam_dvc0, cam_log_keep, n_t,
+            lpz + camis_clamp_log_p(log_k, log(light_dir_a)), log_rev_t, force_c1)
+        dvc_c = cam_result[0]
+        c_t = cam_result[1]
+    else:
+        dvc_c = cam_dvc_legacy
+        c_t = Float32(1)
+    var w_camera = light_dir_a * (c_t * cam_eta + cam_dvcm + dvc_c * cam_rev_w)
+    return Float32(1) / (w_light + Float32(1) + w_camera)
+
+
+@always_inline
+def camis_eval_splat[NL: Int](
+    light_arr: CamisLightRecord, light_scat: Array[CamisLightRecord, NL], num_light_scat: Int,
+    light_log_pa_fwd: Array[Float32, NL], light_log_pa_fwd_arrival: Float32,
+    light_log_pa0: Float32, light_origin_in_class: Bool,
+    light_dvcm: Float32, light_dvc_legacy: Float32, light_dvc0: Float32, light_eta: Float32,
+    log_k: Float32, cam_pdf_a: Float32, rev_w: Float32, n_splat: Float32,
+    n_t: Float32, camis_on: Bool, force_c1: Bool = False,
+) -> Float32:
+    """t = 1: the light vertex `light_arr` is seen directly by the lens. log
+    P(y) of every light vertex starts from the primary edge's P = 1 (0),
+    same as camis_eval_merge/_connect's camera side at y1."""
+    var use = camis_on and (light_arr.flags & CAMIS_IN_CLASS) != 0 and light_origin_in_class
+    var dvc_l: Float32
+    var c_l: Float32
+    if use:
+        var log_rev = camis_clamp_log_p(log_k, log(rev_w) + light_arr.log_g_rev)
+        var light_result = camis_light_side(
+            light_scat, num_light_scat, light_log_pa_fwd, light_log_pa_fwd_arrival,
+            light_log_pa0, light_arr.cut, light_dvc0, light_arr.log_keep, n_t,
+            log_k, Float32(0), log_rev, force_c1)
+        dvc_l = light_result[0]
+        c_l = light_result[2]
+    else:
+        dvc_l = light_dvc_legacy
+        c_l = Float32(1)
+    var w_light = (cam_pdf_a / n_splat) * (c_l * light_eta + light_dvcm + dvc_l * rev_w)
+    return Float32(1) / (w_light + Float32(1))
+
+
+@always_inline
+def camis_eval_emission_hit[NC: Int](
+    cam: CamisCamCarry, cam_scat: Array[CamisCamRecord, NC], num_cam_scat: Int,
+    cam_dvcm: Float32, cam_dvc_legacy: Float32, cam_dvc0: Float32, cam_log_keep: Float32,
+    direct_pdf_a: Float32, emission_pdf_w: Float32, log_p_emit: Float32,
+    n_t: Float32, camis_on: Bool, force_c1: Bool = False,
+) -> Float32:
+    """s = 0: the camera ray hit the emitter directly (SmallVCM's
+    GetLightRadiance). The 'light subpath' merged against is z_0 alone, so
+    there is no light-side call -- only the camera side, walked with the
+    emitter's own position/directional densities as the pairing-dependent
+    P(z) and reverse edge."""
+    var use = camis_on and cam.in_class
+    var dvc_c: Float32
+    if use:
+        var log_k = cam.log_k
+        var log_pz = camis_clamp_log_p(log_k, log(direct_pdf_a))
+        var log_rev = camis_clamp_log_p(log_k, log_p_emit + cam.log_g_prev)
+        var cam_result = camis_camera_side(
+            cam, cam_scat, num_cam_scat, cam_dvc0, cam_log_keep, n_t,
+            log_pz, log_rev, force_c1)
+        dvc_c = cam_result[0]
+    else:
+        dvc_c = cam_dvc_legacy
+    return Float32(1) / (Float32(1) + direct_pdf_a * cam_dvcm + emission_pdf_w * dvc_c)
