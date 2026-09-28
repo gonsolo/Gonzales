@@ -931,10 +931,13 @@ def _hair_precompute(
     var gamma_t = _hair_asin(sin_gamma_t)
     var cos_gamma_t = safe_sqrt(Float32(1.0) - sin_gamma_t * sin_gamma_t)
 
+    var sin_theta_t = sin_theta_o / eta
+    var cos_theta_t = max(safe_sqrt(Float32(1.0) - sin_theta_t * sin_theta_t), Float32(1e-5))
+    var inv_cos_theta_t = Float32(1.0) / cos_theta_t
     var T = RGB(
-        exp(-sigma_a.r * Float32(2.0) * cos_gamma_t),
-        exp(-sigma_a.g * Float32(2.0) * cos_gamma_t),
-        exp(-sigma_a.b * Float32(2.0) * cos_gamma_t),
+        exp(-sigma_a.r * Float32(2.0) * cos_gamma_t * inv_cos_theta_t),
+        exp(-sigma_a.g * Float32(2.0) * cos_gamma_t * inv_cos_theta_t),
+        exp(-sigma_a.b * Float32(2.0) * cos_gamma_t * inv_cos_theta_t),
     )
 
     var cos_gamma_o = safe_sqrt(Float32(1.0) - h_clamped * h_clamped)
