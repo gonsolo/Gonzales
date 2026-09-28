@@ -11,6 +11,7 @@ and docstrings stripped before moving it."""
 from std.math import sqrt, cos, sin, min, max, abs, floor, log, exp
 from gonzales.spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, rgb_illuminant_to_spectral_sample
 from gonzales.nanovdb import nvdb_sample_index, nvdb_majorant_at, nvdb_leaf_base, nvdb_leaf_value
+from gonzales.rgb2spec import CIE_Y_INTEGRAL
 from gonzales.rng import PCG32
 from .geometry import Point3f, Vec3f, RGB, Frame, INV_FOUR_PI, TWO_PI
 
@@ -1221,8 +1222,16 @@ def sample_free_flight(
             var tk = (nvdb_sample_density(tgrid, p_world) - med.temp_offset) * med.temp_scale
             if tk > Float32(100.0):
                 var sigma_a_real = density * med.sigma_a.r
+                # CIE_Y_INTEGRAL: pbrt divides every LIGHT's spectrum by
+                # SpectrumToPhotometric (~CIE_Y_integral) at creation and its
+                # sensor does not; gonzales instead leaves light spectra
+                # un-normalized and divides ALL radiance by CIE_Y_INTEGRAL in
+                # spectral_sample_to_rgb. Equivalent for lights -- but pbrt's
+                # NanoVDBMedium::Le is NOT photometrically normalized, so
+                # without this factor medium emission came out 106.86x too
+                # dim (explosion's hot core: top-1% ratio 0.0101 ~= 1/99).
                 emission += blackbody_spectral_sample(wavelengths, tk) * (
-                    med.le_scale * sigma_a_real / sigma_maj_seg)
+                    med.le_scale * CIE_Y_INTEGRAL * sigma_a_real / sigma_maj_seg)
         var sigma_t_real = density * sigma_t.r
         var u2 = pcg.next_float()
         if u2 < sigma_t_real / sigma_maj_seg:
