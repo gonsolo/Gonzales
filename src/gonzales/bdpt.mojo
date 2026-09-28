@@ -1671,6 +1671,32 @@ def vcm_merge_radius(scene_radius: Float32, si: Int) -> Float32:
 
 
 @always_inline
+def _bdpt_merge_mis_weight(
+    cv: BDPTVertex,
+    lv: BDPTVertex,
+    ref sd: SceneView,
+    mis_vc_weight_factor: Float32,
+) -> Float32:
+    """Balance-heuristic merge weight (Georgiev et al. 2012 / SmallVCM's
+    RangeQuery::Process), factored out of _bdpt_merge_from_cache's hot loop
+    so a correlation-aware correction (see project_camis_design memory) has
+    one call site to extend instead of an inline block. Returns 1 (an
+    unweighted merge, matching the prior inline behavior) if either vertex
+    is not MIS-scoped -- see _bdpt_merge_from_cache's own docstring for why
+    that must fall back to 1, not 0."""
+    if not (_bdpt_vertex_mis_scoped(cv) and _bdpt_vertex_mis_scoped(lv)):
+        return Float32(1)
+    var (camera_bsdf_dir_pdf_w, camera_bsdf_rev_pdf_w) = _bdpt_vertex_pdfs(cv, lv.wo.to_simd(), sd)
+    # dVM is dVC / eta at the merge vertex. With one global eta that held by
+    # construction (the carried dVM); with the variance-aware eta(x) it has
+    # to be formed here, at the camera vertex that defines the merged path.
+    var inv_eta_x = mis_vc_weight_factor / _vcm_eta_scale(sd, cv.pos)
+    var w_light = (lv.dVCM + lv.dVC * camera_bsdf_dir_pdf_w) * inv_eta_x
+    var w_camera = (cv.dVCM + cv.dVC * camera_bsdf_rev_pdf_w) * inv_eta_x
+    return Float32(1) / (w_light + Float32(1) + w_camera)
+
+
+@always_inline
 def _bdpt_merge_from_cache(
     cv: BDPTVertex,
     ref sd: SceneView,
@@ -1860,17 +1886,7 @@ def _bdpt_merge_from_cache(
                                 f_cv = f_cv * (Float32(1.0) / cos_div)
                             else:
                                 f_cv = SpectralSample(Float32(0.0))
-                            var w = Float32(1)
-                            if _bdpt_vertex_mis_scoped(cv) and _bdpt_vertex_mis_scoped(lv):
-                                var (camera_bsdf_dir_pdf_w, camera_bsdf_rev_pdf_w) = _bdpt_vertex_pdfs(cv, lv.wo.to_simd(), sd)
-                                # dVM is dVC / eta at the merge vertex. With one global
-                                # eta that held by construction (the carried dVM); with
-                                # the variance-aware eta(x) it has to be formed here,
-                                # at the camera vertex that defines the merged path.
-                                var inv_eta_x = mis_vc_weight_factor / _vcm_eta_scale(sd, cv.pos)
-                                var w_light = (lv.dVCM + lv.dVC * camera_bsdf_dir_pdf_w) * inv_eta_x
-                                var w_camera = (cv.dVCM + cv.dVC * camera_bsdf_rev_pdf_w) * inv_eta_x
-                                w = Float32(1) / (w_light + Float32(1) + w_camera)
+                            var w = _bdpt_merge_mis_weight(cv, lv, sd, mis_vc_weight_factor)
                             # 1 / keep: the bucket's under the fixed cap; under
                             # the per-cell budget the vertex's own (_vcm_keep,
                             # the probability its insert survived).
