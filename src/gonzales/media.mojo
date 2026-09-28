@@ -921,6 +921,71 @@ def blackbody_rgb(temp: Float32) -> RGB:
 
 
 @always_inline
+def _blackbody_radiance(lambda_nm: Float32, temp_k: Float32) -> Float32:
+    """pbrt's raw (unnormalized) Blackbody(lambda,T) (util/spectrum.h) --
+    Planck's law, no CIE/RGB involved at all. Same overflow-safe
+    1/(e^x-1) -> e^-x rewrite blackbody_rgb already uses for its per-10nm
+    quadrature; see that function's docstring for why."""
+    if temp_k <= Float32(0.0):
+        return Float32(0.0)
+    var l = lambda_nm * Float32(1e-9)                   # nm -> metres
+    if l <= Float32(0.0):
+        return Float32(0.0)
+    var xarg = Float32(0.014387769599838155) / (l * temp_k)  # hc/kb, metres*K
+    var inv: Float32
+    if xarg > Float32(80.0):
+        inv = exp(-xarg)
+    else:
+        inv = Float32(1.0) / (exp(xarg) - Float32(1.0))
+    var l2 = l * l
+    return Float32(1.1910428681415875e-16) * inv / (l2 * l2 * l)  # 2hc^2
+
+@always_inline
+def blackbody_spectral_sample(wavelengths: SampledWavelengths, temp_k: Float32) -> SpectralSample:
+    """Exact per-hero-wavelength blackbody emission -- pbrt's
+    `BlackbodySpectrum(T).Sample(lambda)`, Wien's-law-normalized so the peak
+    (at lambdaMax = 2.8977721e-3/T metres) is exactly 1. Used by the nanovdb
+    temperature-grid emission path in sample_free_flight, which needs the
+    spectral value at each hero wavelength directly.
+
+    NOT blackbody_rgb: that function integrates Planck's law against Wyman
+    et al.'s analytic CIE-curve fit to get an RGB colour, which then has to
+    round-trip through Jakob-Hanika RGB->spectral upsampling to reach the
+    spectral renderer -- correct when the FINAL conversion back to display
+    colour uses the matching CIE curves that approximation was implicitly
+    tuned against (the default cie1931 sensor), but the error becomes
+    visible once that final conversion uses a genuinely different curve set
+    (a named sensor -- see project_named_sensor_colorimetry memory). This
+    function has no such round-trip: it evaluates the same Planck's-law
+    formula blackbody_rgb does, but directly at the 4 actual hero
+    wavelengths this sample needs, with no CIE/RGB step at all -- exact,
+    and cheaper (4 exps instead of ~48 across blackbody_rgb's 10nm
+    quadrature + the sigmoid-table upsample). blackbody_rgb itself is left
+    alone: `"blackbody L"` area lights bake a fixed RGB at PARSE time (see
+    lexer.mojo's _psc_blackbody_to_rgb), a different, much less invasive
+    architecture change to redo the same way and out of scope here."""
+    if temp_k <= Float32(0.0):
+        return SpectralSample(Float32(0.0))
+    var lambda_max_nm = Float32(2.8977721e6) / temp_k    # 2.8977721e-3 m -> nm
+    var peak = _blackbody_radiance(lambda_max_nm, temp_k)
+    if peak <= Float32(0.0):
+        return SpectralSample(Float32(0.0))
+    var norm = Float32(1.0) / peak
+    # Named locals, not inline constructor-argument calls -- see
+    # rgb_to_spectral_sample's comment in spectrum.mojo (a suspected Mojo
+    # miscompilation/compile-time pathology, modular/modular#6759, with
+    # multiple always_inline calls passed directly as constructor
+    # arguments). Confirmed here as a real compile-time blowup (not just
+    # theoretical): the inline-argument form made the GPU VCM-wavefront
+    # kernel's one-time JIT compile balloon from ~1s to ~110s.
+    var v0 = _blackbody_radiance(wavelengths.lambda0, temp_k) * norm
+    var v1 = _blackbody_radiance(wavelengths.lambda1, temp_k) * norm
+    var v2 = _blackbody_radiance(wavelengths.lambda2, temp_k) * norm
+    var v3 = _blackbody_radiance(wavelengths.lambda3, temp_k) * norm
+    return SpectralSample(v0, v1, v2, v3)
+
+
+@always_inline
 def hg_phase(cos_theta: Float32, g: Float32) -> Float32:
     """Henyey-Greenstein phase function, pbrt's exact form and convention:
     with `cos_theta = dot(wo, wi)` and wo pointing BACK along the incoming ray,
@@ -1156,10 +1221,8 @@ def sample_free_flight(
             var tk = (nvdb_sample_density(tgrid, p_world) - med.temp_offset) * med.temp_scale
             if tk > Float32(100.0):
                 var sigma_a_real = density * med.sigma_a.r
-                emission += medium_emission_spectral(
-                    blackbody_rgb(tk), wavelengths, spectral_coeffs, spectral_res,
-                    spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65
-                ) * (med.le_scale * sigma_a_real / sigma_maj_seg)
+                emission += blackbody_spectral_sample(wavelengths, tk) * (
+                    med.le_scale * sigma_a_real / sigma_maj_seg)
         var sigma_t_real = density * sigma_t.r
         var u2 = pcg.next_float()
         if u2 < sigma_t_real / sigma_maj_seg:
