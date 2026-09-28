@@ -30,6 +30,7 @@ from gonzales.curves import Curve
 from gonzales.bvh import SceneView, BVH2Node, build_bvh2, traverse_bvh2_core
 from gonzales.rng import PCG32
 from gonzales.spectrum import null_spectral_handle, SampledWavelengths, SpectralSample, sample_wavelengths
+from gonzales.vcm_camis import camis_light_carry_off, CamisLightRecord
 from gonzales.bdpt import (
     BDPTVertex, _bdpt_trace_light_path, _bdpt_light_path_init,
     _bdpt_light_path_bounce, _BDPT_MAX_VERTS, _BDPT_MAX_DEPTH,
@@ -156,7 +157,10 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
     var scratch_old = unsafe_alloc[Intersection](1)
     var lvc_old = unsafe_alloc[BDPTVertex](_BDPT_MAX_VERTS)
     var lvc_path_len_old = unsafe_alloc[Int32](1)
-    _bdpt_trace_light_path[False](sd, pcg_old, False, Int32(-1), scratch_old, lvc_old, 0, lvc_path_len_old, Float32(0), Float32(0), _TEST_PASS_WL)
+    # CAMIS records (written only when bdpt's _VCM_CAMIS is compiled in).
+    var camis_old = unsafe_alloc[CamisLightRecord](_BDPT_MAX_VERTS)
+    var camis_new = unsafe_alloc[CamisLightRecord](_BDPT_MAX_VERTS)
+    _bdpt_trace_light_path[False](sd, pcg_old, False, Int32(-1), scratch_old, lvc_old, 0, lvc_path_len_old, Float32(0), Float32(0), _TEST_PASS_WL, camis_old)
 
     var pcg_new = PCG32(UInt64(12345), UInt64(7))
     var lvc_new = unsafe_alloc[BDPTVertex](_BDPT_MAX_VERTS)
@@ -185,6 +189,8 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
     var previous_dielectric_ior = state.previous_dielectric_ior
     var wavelengths = SampledWavelengths(state.wl0, state.wl1, state.wl2, state.wl3)
 
+    var camis_l = camis_light_carry_off()   # CAMIS state; inert unless _VCM_CAMIS
+
     var n_iters = 0
     var active = state.active
     while active == Int8(1) and n_iters < Int(_BDPT_MAX_DEPTH):
@@ -201,6 +207,7 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
             ro, rd, flux, n_verts, dvcm, dvc, dvm,
             is_finite_origin, origin_sphere, cur_med_idx, n_lbounces,
             current_dielectric_ior, previous_dielectric_ior, wavelengths,
+            camis_l, camis_new,
         )
         active = Int8(1) if cont else Int8(0)
         lvc_path_len_new[unsafe_offset=0] = Int32(n_verts)
@@ -213,6 +220,7 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
 
     scratch_old.unsafe_free(); lvc_old.unsafe_free(); lvc_path_len_old.unsafe_free()
     lvc_new.unsafe_free(); lvc_path_len_new.unsafe_free()
+    camis_old.unsafe_free(); camis_new.unsafe_free()
     sd.bvh2Nodes.unsafe_free(); sd.primIds.unsafe_free(); sd.meshes.unsafe_free(); sd.materials.unsafe_free(); sd.areaLights.unsafe_free()
 
 def main() raises:

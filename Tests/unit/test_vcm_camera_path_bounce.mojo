@@ -43,9 +43,11 @@ from gonzales.bvh import SceneView, BVH2Node, build_bvh2, traverse_bvh2_core, te
 from gonzales.rng import PCG32
 from gonzales.sampling import film_filter_of
 from gonzales.spectrum import sample_wavelengths, null_spectral_handle, SampledWavelengths
+from std.collections import Array
+from gonzales.vcm_camis import CamisCamRecord, camis_cam_carry_init
 from gonzales.bdpt import (
     BDPTVertex, _bdpt_trace_camera_and_connect, _bdpt_camera_path_init,
-    _bdpt_camera_path_bounce, _BDPT_MAX_VERTS, _BDPT_MAX_DEPTH,
+    _bdpt_camera_path_bounce, _BDPT_MAX_VERTS, _BDPT_MAX_DEPTH, _CAMIS_CAM_RECS,
 )
 
 comptime EPS: Float32 = 1e-3
@@ -203,6 +205,11 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
     var cone_len = state.cone_len
     var wavelengths = SampledWavelengths(state.wl0, state.wl1, state.wl2, state.wl3)
 
+    # CAMIS state (inert unless _VCM_CAMIS), threaded like the carries.
+    var camis = camis_cam_carry_init()
+    var camis_recs = Array[CamisCamRecord, _CAMIS_CAM_RECS](
+        fill=CamisCamRecord(Float32(0), Float32(0), Float32(0), Float32(0), Float32(0)))
+
     var n_iters = 0
     var active = state.active
     while active == Int8(1) and n_iters < Int(_BDPT_MAX_DEPTH):
@@ -223,6 +230,7 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
             ro, rd, beta, total, total_merge, first_alb, n_verts, n_bounces, cur_med_idx,
             dvcm, dvc, dvm, last_bsdf_pdf, mis_null_dist,
             current_dielectric_ior, previous_dielectric_ior, wavelengths, cone_len,
+            camis, camis_recs,
         )
         active = Int8(1) if cont else Int8(0)
 
