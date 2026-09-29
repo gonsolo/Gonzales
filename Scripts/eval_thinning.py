@@ -35,7 +35,7 @@ PAV = os.path.expanduser("~/src/pbrt-v4-scenes/barcelona-pavilion")
 # name -> (scene file, working dir, reference spp); concentrated-cost scenes
 # first, then the neutral controls.
 SCENES = {
-    "lantern":        ("lantern.pbrt",     os.path.join(REPO, "Scenes/thinning"), 1024),
+    "shade":          ("shade.pbrt",       os.path.join(REPO, "Scenes/thinning"), 1024),
     "lampshade":      ("lampshade.pbrt",   os.path.join(REPO, "Scenes/thinning"), 1024),
     "candle-jar":     ("candle-jar.pbrt",  os.path.join(REPO, "Scenes/thinning"), 1024),
     "chandelier":     ("chandelier.pbrt",  os.path.join(REPO, "Scenes/thinning"), 1024),

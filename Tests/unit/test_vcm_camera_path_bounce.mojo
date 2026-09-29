@@ -169,7 +169,7 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
 
     var pcg_old = PCG32(UInt64(999), UInt64(3))
     var scratch_old = unsafe_alloc[Intersection](1)
-    var (total_old, total_merge_old, alb_old) = _bdpt_trace_camera_and_connect[False](
+    var (total_old, total_merge_old, alb_old, _old_vn, _old_vf, _old_vt) = _bdpt_trace_camera_and_connect[False](
         r2c, c2w, 0, 0, sd, pcg_old, False, scratch_old,
         Pointer[BDPTVertex, MutUntrackedOrigin].unsafe_dangling(), 0, 0,
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
@@ -209,6 +209,14 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
     var camis = camis_cam_carry_init()
     var camis_recs = Array[CamisCamRecord, _CAMIS_CAM_RECS](
         fill=CamisCamRecord(Float32(0), Float32(0), Float32(0), Float32(0), Float32(0)))
+    # Benchmark instrumentation only (bdpt.mojo's
+    # _bdpt_merge_from_cache docstring) -- not exercised by this test, just
+    # needs a real lvalue to satisfy the shared function's signature.
+    var visit_naive = Int32(0)
+    var visit_footprint = Int32(0)
+    var visit_thin = Int32(0)
+
+    var prev_was_volume = False
 
     var n_iters = 0
     var active = state.active
@@ -227,8 +235,9 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
             Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
-            ro, rd, beta, total, total_merge, first_alb, n_verts, n_bounces, cur_med_idx,
-            dvcm, dvc, dvm, last_bsdf_pdf, mis_null_dist,
+            ro, rd, beta, total, total_merge, visit_naive, visit_footprint, visit_thin,
+            first_alb, n_verts, n_bounces, cur_med_idx,
+            dvcm, dvc, dvm, prev_was_volume, last_bsdf_pdf, mis_null_dist,
             current_dielectric_ior, previous_dielectric_ior, wavelengths, cone_len,
             camis, camis_recs,
         )

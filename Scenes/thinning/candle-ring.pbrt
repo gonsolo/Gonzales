@@ -1,0 +1,277 @@
+Integrator "volpath" "integer maxdepth" [ 8 ]
+Sampler "halton" "integer pixelsamples" [ 64 ]
+Film "rgb" "string filename" [ "candle-ring.exr" ] "integer xresolution" [ 320 ] "integer yresolution" [ 240 ] "float maxcomponentvalue" 1e30
+LookAt 0 1.95 3.32   0 0.8 0   0 1 0
+Camera "perspective" "float fov" [ 60 ]
+WorldBegin
+AttributeBegin
+  Material "diffuse" "rgb reflectance" [ 0.5 0.48 0.45 ]
+  Shape "trianglemesh" "point3 P" [ -3.5 0 -3.5 3.5 0 -3.5 3.5 0 3.5 -3.5 0 3.5 ] "integer indices" [ 0 1 2 0 2 3 ]
+  Shape "trianglemesh" "point3 P" [ -3.5 2.6 -3.5 -3.5 2.6 3.5 3.5 2.6 3.5 3.5 2.6 -3.5 ] "integer indices" [ 0 1 2 0 2 3 ]
+  Shape "trianglemesh" "point3 P" [ -3.5 0 -3.5 -3.5 2.6 -3.5 3.5 2.6 -3.5 3.5 0 -3.5 ] "integer indices" [ 0 1 2 0 2 3 ]
+  Shape "trianglemesh" "point3 P" [ -3.5 0 -3.5 -3.5 0 3.5 -3.5 2.6 3.5 -3.5 2.6 -3.5 ] "integer indices" [ 0 1 2 0 2 3 ]
+  Shape "trianglemesh" "point3 P" [ 3.5 0 -3.5 3.5 2.6 -3.5 3.5 2.6 3.5 3.5 0 3.5 ] "integer indices" [ 0 1 2 0 2 3 ]
+AttributeEnd
+AttributeBegin
+  Translate 1.600000 0.7 0.000000
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate 1.600000 0.76 0.000000
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate 1.545481 0.7 0.414110
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate 1.545481 0.76 0.414110
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate 1.385641 0.7 0.800000
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate 1.385641 0.76 0.800000
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate 1.131371 0.7 1.131371
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate 1.131371 0.76 1.131371
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate 0.800000 0.7 1.385641
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate 0.800000 0.76 1.385641
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate 0.414110 0.7 1.545481
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate 0.414110 0.76 1.545481
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate 0.000000 0.7 1.600000
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate 0.000000 0.76 1.600000
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate -0.414110 0.7 1.545481
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate -0.414110 0.76 1.545481
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate -0.800000 0.7 1.385641
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate -0.800000 0.76 1.385641
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate -1.131371 0.7 1.131371
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate -1.131371 0.76 1.131371
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate -1.385641 0.7 0.800000
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate -1.385641 0.76 0.800000
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate -1.545481 0.7 0.414110
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate -1.545481 0.76 0.414110
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate -1.600000 0.7 0.000000
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate -1.600000 0.76 0.000000
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate -1.545481 0.7 -0.414110
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate -1.545481 0.76 -0.414110
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate -1.385641 0.7 -0.800000
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate -1.385641 0.76 -0.800000
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate -1.131371 0.7 -1.131371
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate -1.131371 0.76 -1.131371
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate -0.800000 0.7 -1.385641
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate -0.800000 0.76 -1.385641
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate -0.414110 0.7 -1.545481
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate -0.414110 0.76 -1.545481
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate -0.000000 0.7 -1.600000
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate -0.000000 0.76 -1.600000
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate 0.414110 0.7 -1.545481
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate 0.414110 0.76 -1.545481
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate 0.800000 0.7 -1.385641
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate 0.800000 0.76 -1.385641
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate 1.131371 0.7 -1.131371
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate 1.131371 0.76 -1.131371
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate 1.385641 0.7 -0.800000
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate 1.385641 0.76 -0.800000
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd
+
+AttributeBegin
+  Translate 1.545481 0.7 -0.414110
+  Material "dielectric" "float eta" [ 1.5 ]
+  Shape "sphere" "float radius" [ 0.08 ]
+AttributeEnd
+AttributeBegin
+  Translate 1.545481 0.76 -0.414110
+  AreaLightSource "diffuse" "rgb L" [ 6000 4000 1800 ]
+  Shape "sphere" "float radius" [ 0.008 ]
+AttributeEnd

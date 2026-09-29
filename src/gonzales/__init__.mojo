@@ -79,6 +79,12 @@ def main() raises:
     var vcm_budget = False       # --vcm-budget: per-cell photon budget instead of the fixed cap
     var vcm_cap = Int32(0)       # --vcm-cap N: merge-bucket cap (0 = _PHOTON_BUCKET_CAP)
     var vcm_no_keep_mis = False  # --vcm-no-keep-mis: thin, but hide it from merging's MIS
+    var vcm_radius_from_camera = False  # --vcm-radius-from-camera: EXPERIMENTAL merge-radius
+                                 # ceiling from median primary-ray depth instead of the whole
+                                 # scene's bounding sphere (vcm_render_gpu); see bdpt.mojo's
+                                 # _camera_typical_distance docstring
+    var vcm_radius_cam_percentile = Float32(0.5)      # --vcm-radius-cam-percentile P (0..1)
+    var vcm_radius_cam_fraction_mult = Float32(1.0)   # --vcm-radius-cam-fraction-mult M
     var use_vulkan_rt = False
     var use_vulkan_rt_shade = False
     var use_vcm_wavefront = False
@@ -187,6 +193,14 @@ def main() raises:
             vcm_budget = True
         elif arg == "--vcm-no-keep-mis":
             vcm_no_keep_mis = True
+        elif arg == "--vcm-radius-from-camera":
+            vcm_radius_from_camera = True
+        elif arg == "--vcm-radius-cam-percentile" and i + 1 < len(args):
+            i += 1
+            vcm_radius_cam_percentile = _parse_float32(String(args[i]))
+        elif arg == "--vcm-radius-cam-fraction-mult" and i + 1 < len(args):
+            i += 1
+            vcm_radius_cam_fraction_mult = _parse_float32(String(args[i]))
         elif arg == "--vcm-cap" and i + 1 < len(args):
             i += 1
             vcm_cap = _parse_int32(String(args[i]), 0)
@@ -278,7 +292,7 @@ def main() raises:
     elif interactive:
         render_interactive(path_cstr, sobol, use_gpu, spectral=spectral, fullscreen=fullscreen, override_w=override_w, override_h=override_h, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, use_vol_restir_reuse=use_vol_restir_reuse, headless_frames=headless_frames)
     else:
-        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons, vcm_budget=vcm_budget, vcm_cap=vcm_cap, vcm_no_keep_mis=vcm_no_keep_mis, use_vulkan_rt_shade=use_vulkan_rt_shade, use_vcm_wavefront=use_vcm_wavefront, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, use_vol_restir_reuse=use_vol_restir_reuse)
+        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons, vcm_budget=vcm_budget, vcm_cap=vcm_cap, vcm_no_keep_mis=vcm_no_keep_mis, vcm_radius_from_camera=vcm_radius_from_camera, vcm_radius_cam_percentile=vcm_radius_cam_percentile, vcm_radius_cam_fraction_mult=vcm_radius_cam_fraction_mult, use_vulkan_rt_shade=use_vulkan_rt_shade, use_vcm_wavefront=use_vcm_wavefront, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, use_vol_restir_reuse=use_vol_restir_reuse)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
         if rc != Int32(0):

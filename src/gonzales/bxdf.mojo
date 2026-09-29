@@ -1024,7 +1024,15 @@ def lobe_scoped(c: LobeCtx) -> Bool:
     than unscoped, and the numbers are in project_coateddiffuse_eta2_bug.
     Rough: no closed form for the exit density, so it stays a sole-strategy
     NEE vertex (its exit ray drops direct via PDF_DROP_DIRECT, like PT).
-    Dielectrics are genuinely delta and never will be in scope."""
+    Dielectrics are genuinely delta and never will be in scope.
+
+    Volume (isotropic phase): always in scope. Unlike a surface lobe there is
+    no kind dispatch -- every medium here is hardcoded isotropic (1/4pi),
+    never delta -- and the forward/reverse densities are always real and
+    exact. See Scenes/vcm_volume_mis_derivation.py (connections+merges exact
+    to 4.4e-16 including every mixed surface/volume path)."""
+    if not c.is_surface:
+        return True
     if c.kind == LobeKind.layered:
         return c.is_surface
     if c.kind == LobeKind.coated_walk:

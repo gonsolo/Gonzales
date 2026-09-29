@@ -65,7 +65,7 @@ from .gpu_wavefront import vulkaninterop_unpack_results_kernel
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
 from max.gpu.host._nvidia_cuda import CUDA
 from .progress import Progress
-from .outputs import finish_render
+from .outputs import finish_render, _sidecar_name, _write_channels
 from .spectrum import (
     SampledWavelengths, SpectralSample, sample_wavelengths, SpectralHandle,
     pass_wavelengths,
@@ -1620,6 +1620,52 @@ def _vcm_eta_scale(ref sd: SceneView, p: Point3f) -> Float32:
         s *= q * q
     return s
 
+@always_inline
+def _vcm_eta_scale_vol(ref sd: SceneView, p: Point3f) -> Float32:
+    """Same ratio as _vcm_eta_scale but for the BALL kernel measure a volume
+    vertex merges in: keep(x) * (r(x)/r_pass)^3, cubed rather than squared,
+    since (4/3)pi r^3 scales with the radius CUBED
+    (Scenes/vcm_volume_mis_derivation.py, kernel_measure)."""
+    var s = _vcm_keep(sd, p)
+    if sd.vcmFootprint > Float32(0) and sd.vcmMergeR > Float32(0):
+        var q = _vcm_merge_radius_at(sd, p) / sd.vcmMergeR
+        s *= q * q * q
+    return s
+
+@always_inline
+def _vcm_eta_at(ref sd: SceneView, v: BDPTVertex, mis_vm_weight_factor: Float32) -> Float32:
+    """This vertex's own eta(x) = N * (kernel measure at x), fully scaled --
+    a DISK area on a surface, a BALL volume in a medium. `mis_vm_weight_factor`
+    is the pass-level N*pi*r_pass^2 (disk) constant every call site already
+    carries; converting it to the equivalent ball constant at the same
+    r_pass needs one extra factor of (4/3)*r_pass, since
+    N*(4/3)*pi*r_pass^3 = (N*pi*r_pass^2) * (4/3)*r_pass."""
+    if v.is_surface == Int32(0):
+        return mis_vm_weight_factor * (Float32(4.0 / 3.0) * sd.vcmMergeR) * _vcm_eta_scale_vol(sd, v.pos)
+    return mis_vm_weight_factor * _vcm_eta_scale(sd, v.pos)
+
+@always_inline
+def _vcm_inv_eta_at(ref sd: SceneView, v: BDPTVertex, mis_vc_weight_factor: Float32) -> Float32:
+    """1/eta(x) at this vertex, in the mis_vc_weight_factor=1/eta_pass
+    convention _bdpt_merge_mis_weight uses (the merge weight's dVM = dVC/eta
+    rule divides by eta rather than multiplying, see vcm_mis.mojo's
+    vcm_scatter_carries docstring)."""
+    if v.is_surface == Int32(0):
+        return mis_vc_weight_factor / ((Float32(4.0 / 3.0) * sd.vcmMergeR) * _vcm_eta_scale_vol(sd, v.pos))
+    return mis_vc_weight_factor / _vcm_eta_scale(sd, v.pos)
+
+@always_inline
+def _vcm_cos_at(v: BDPTVertex, w: Vec3f) -> Float32:
+    """|cos| between direction `w` and this vertex's own geometric normal --
+    1.0 at a volume vertex, which has none (Scenes/vcm_volume_mis_derivation.py's
+    geom_to_measure: no cosine in the solid-angle -> volume Jacobian, versus
+    cos/d^2 -> area at a surface). v.normal is never set on a stored volume
+    vertex (left at _null_vertex()'s (0,1,0) placeholder), so reading it
+    directly without this guard is a real bug, not just an approximation."""
+    if v.is_surface == Int32(0):
+        return Float32(1.0)
+    return abs(dot(w, v.normal.to_simd()))
+
 
 @always_inline
 def _bdpt_merge_slot_bucket(
@@ -1643,7 +1689,11 @@ def _bdpt_merge_slot_bucket(
     # stacks hundreds of thousands into a few cells) were walked and rejected
     # by every nearby query, and inflated the counts the thinning reads.
     var lv = lvc[unsafe_offset=k]
-    if not (lv.is_delta == Int32(0) and lv.is_surface == Int32(1) and lv.is_light == Int32(0)
+    # is_surface is NOT required here any more: a volume light vertex is a
+    # legitimate merge candidate too (Scenes/vcm_volume_mis_derivation.py) --
+    # kind matching against the camera vertex happens at gather time
+    # (_bdpt_merge_from_cache), since this grid is shared by both kinds.
+    if not (lv.is_delta == Int32(0) and lv.is_light == Int32(0)
             and lv.mat_kind != LobeKind.bssrdf and _bdpt_vertex_mis_scoped(lv)):
         return -1
     var ix = Int(floor(lvc[unsafe_offset=k].pos.x * inv_cell))
@@ -1732,6 +1782,93 @@ def _bdpt_build_merge_grid(
 comptime _VCM_RADIUS_FRACTION = Float32(0.003)
 comptime _VCM_RADIUS_ALPHA = Float32(2.0) / Float32(3.0)  # Georgiev 2012's typical choice
 
+
+def _camera_typical_distance(
+    rasterToCamera: Pointer[Float32, MutUntrackedOrigin],
+    cameraToWorld: Pointer[Float32, MutUntrackedOrigin],
+    film_w: Int, film_h: Int,
+    ref sd: SceneView,
+    percentile: Float32 = Float32(0.5),
+) -> Float32:
+    """--vcm-radius-from-camera (EXPERIMENTAL, opt-in only): median
+    primary-ray hit distance across a coarse 16x16 grid of the film, as an
+    alternative to _scene_bounding_sphere's whole-scene radius for
+    vcm_merge_radius's `scene_radius` argument -- both are just "the basis
+    _VCM_RADIUS_FRACTION scales to get the merge-radius ceiling", so this
+    can feed the SAME unchanged vcm_merge_radius unmodified.
+
+    The bounding sphere is disconnected from where the camera is actually
+    looking: on a scene viewed from far away relative to its own extent,
+    the whole-scene radius can already sit BELOW what the footprint
+    mechanism would ask for at every visible point, so the per-vertex clamp
+    in _vcm_merge_radius_at binds everywhere and footprint scaling never
+    engages at all -- measured on veach-bidir this session: naive and
+    footprint-only candidate counts were bit-identical at all 262144 lit
+    pixels, 0% showing any reduction. Using median viewing depth as the
+    ceiling's basis instead ties it to what the camera sees rather than
+    the scene's whole extent.
+
+    Host-side, run once before the sample loop -- same cost class as
+    camera_footprint's own 512-sample diagonal scan (footprint.mojo), but
+    tracing real rays through the BVH/spheres for DEPTH, not differential
+    directions for footprint spread. Returns 0 when nothing is hit (e.g.
+    the camera looks entirely at background/infinite lights); the caller
+    must fall back to _scene_bounding_sphere's radius in that case."""
+    var org = Point3f(cameraToWorld[unsafe_offset=12], cameraToWorld[unsafe_offset=13], cameraToWorld[unsafe_offset=14])
+    comptime GRID = 16
+    var hits = List[Float32]()
+    var isects = unsafe_alloc[Intersection](1)
+    for gy in range(GRID):
+        for gx in range(GRID):
+            var filmX = (Float32(gx) + Float32(0.5)) / Float32(GRID) * Float32(film_w)
+            var filmY = (Float32(gy) + Float32(0.5)) / Float32(GRID) * Float32(film_h)
+            # rasterToCamera (column-major 4x4), no filter offset -- same
+            # transform as render_aux_buffers' trace_pixel (bvh.mojo).
+            var cx = rasterToCamera[unsafe_offset=0]*filmX + rasterToCamera[unsafe_offset=4]*filmY + rasterToCamera[unsafe_offset=12]
+            var cy = rasterToCamera[unsafe_offset=1]*filmX + rasterToCamera[unsafe_offset=5]*filmY + rasterToCamera[unsafe_offset=13]
+            var cz = rasterToCamera[unsafe_offset=2]*filmX + rasterToCamera[unsafe_offset=6]*filmY + rasterToCamera[unsafe_offset=14]
+            var cw = rasterToCamera[unsafe_offset=3]*filmX + rasterToCamera[unsafe_offset=7]*filmY + rasterToCamera[unsafe_offset=15]
+            if cw != Float32(0.0) and cw != Float32(1.0):
+                cx /= cw; cy /= cw; cz /= cw
+            var cl = sqrt(cx*cx + cy*cy + cz*cz)
+            if cl > Float32(0): cx /= cl; cy /= cl; cz /= cl
+            var dir = Vec3f(
+                cameraToWorld[unsafe_offset=0]*cx + cameraToWorld[unsafe_offset=4]*cy + cameraToWorld[unsafe_offset=8]*cz,
+                cameraToWorld[unsafe_offset=1]*cx + cameraToWorld[unsafe_offset=5]*cy + cameraToWorld[unsafe_offset=9]*cz,
+                cameraToWorld[unsafe_offset=2]*cx + cameraToWorld[unsafe_offset=6]*cy + cameraToWorld[unsafe_offset=10]*cz,
+            )
+            var dl = dir.length()
+            if dl > Float32(0): dir = dir / dl
+            var ray = Ray(org, dir)
+            isects[unsafe_offset=0] = Intersection(PrimId(-1, -1, 0, -1, 0, 0, 0, 0), Float32(1e38), 0.0, 0.0, Int8(0), 0, 0, 0)
+            if Int(sd.meshCount) > 0 or Int(sd.curveCount) > 0 or Int(sd.instanceCount) > 0:
+                traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), isects.unsafe_offset(0),
+                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+            if Int(sd.sphereCount) > 0:
+                test_spheres(sd.spheres, Int(sd.sphereCount), ray, isects.unsafe_offset(0))
+            if isects[unsafe_offset=0].hit != Int8(0):
+                hits.append(isects[unsafe_offset=0].tHit)
+    isects.unsafe_free()
+    if len(hits) == 0:
+        return Float32(0)
+    # <=256 samples: a plain insertion sort avoids pulling in a sort dependency
+    # for what is a one-time, host-side, pre-render cost.
+    for i in range(1, len(hits)):
+        var v = hits[i]
+        var j = i - 1
+        while j >= 0 and hits[j] > v:
+            hits[j + 1] = hits[j]
+            j -= 1
+        hits[j + 1] = v
+    # percentile=0.5 (default) is the median; a higher percentile pushes the
+    # basis outward, toward the farther end of what the camera sees -- see
+    # --vcm-radius-cam-percentile.
+    var pidx = Int(percentile * Float32(len(hits) - 1) + Float32(0.5))
+    if pidx < 0: pidx = 0
+    if pidx >= len(hits): pidx = len(hits) - 1
+    return hits[pidx]
+
+
 @always_inline
 def vcm_merge_radius(scene_radius: Float32, si: Int) -> Float32:
     """The progressive VCM merge radius for sample `si` (0-based).
@@ -1813,7 +1950,9 @@ def _bdpt_merge_mis_weight(
     # dVM is dVC / eta at the merge vertex. With one global eta that held by
     # construction (the carried dVM); with the variance-aware eta(x) it has
     # to be formed here, at the camera vertex that defines the merged path.
-    var inv_eta_x = mis_vc_weight_factor / _vcm_eta_scale(sd, cv.pos)
+    # Kind-aware: a BALL eta at a volume merge vertex, a DISK eta at a
+    # surface one (Scenes/vcm_volume_mis_derivation.py, kernel_measure).
+    var inv_eta_x = _vcm_inv_eta_at(sd, cv, mis_vc_weight_factor)
     comptime if _VCM_CAMIS:
         var light_arr = lvc_camis[unsafe_offset=k]
         if camis.in_class and (light_arr.flags & CAMIS_IN_CLASS) != Int32(0):
@@ -1859,6 +1998,25 @@ def _bdpt_merge_from_cache(
         fill=CamisCamRecord(Float32(0), Float32(0), Float32(0), Float32(0), Float32(0))),
     lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin] = Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(),
     n_light_paths_f: Float32 = Float32(0),
+    # Benchmark instrumentation only (not part of the real
+    # estimator, never read by anything that affects `result`): three
+    # per-query candidate-visit counters, incremented once per candidate this
+    # cell walk considers that passes the SAME normal/disk-membership gate
+    # the real merge uses, at three nested radii -- naive (the pass's plain
+    # global r2_pass, no footprint scaling), footprint (this query's actual
+    # r2, footprint-scaled when sd.vcmFootprint > 0), and thinning (footprint
+    # AND would additionally have survived _bdpt_insert_merge_vertex's own
+    # keep decision, reconstructed via grid_keep -- see that function's
+    # non-budget branch, mirrored exactly here). A single render with
+    # insertion thinning disabled (huge --vcm-cap) makes every candidate
+    # naive/footprint could ever want available to walk; grid_keep's inputs
+    # (the count pass's per-bucket `n`, and grid_coin_bits's pure hash of
+    # (k, pos)) don't depend on whether insertion itself thinned, so this
+    # reconstruction is exact, not an approximation.
+    *,
+    mut visit_naive: Int32,
+    mut visit_footprint: Int32,
+    mut visit_thin: Int32,
 ) -> SpectralSample:
     """Vertex MERGING (photon-mapping-style density estimation) against the
     shared Light Vertex Cache -- the "M" in VCM, run UNCONDITIONALLY
@@ -1890,7 +2048,7 @@ def _bdpt_merge_from_cache(
     are `_bdpt_vertex_mis_scoped` (diffuse/conductor/coated_conductor/
     hair/measured) -- the same scope _connect uses for its own connection
     weight, for the same reason (see that function's docstring)."""
-    if cv.is_delta != Int32(0) or cv.is_surface == Int32(0):
+    if cv.is_delta != Int32(0):
         return SpectralSample(Float32(0))
     # The merge GRID is what this needs, so test the grid -- not, as the call
     # sites used to, whether THIS pixel's own paired light path happened to
@@ -1922,7 +2080,19 @@ def _bdpt_merge_from_cache(
     # pass's global values and the grid cells are sized to that radius.
     var r2 = r2_pass
     var norm = norm_pass
-    if sd.vcmFootprint > Float32(0) and sd.vcmMergeR > Float32(0):
+    if cv.is_surface == Int32(0):
+        # Ball kernel measure at a volume merge vertex: norm_pass is always
+        # the DISK constant 1/(N*pi*r_pass^2) (computed once, unconditionally,
+        # by every caller); convert to the ball constant
+        # 1/(N*(4/3)*pi*r_pass^3) at the same r_pass, footprint-scaled or not
+        # (Scenes/vcm_volume_mis_derivation.py, kernel_measure).
+        var r_pass_len = sqrt(max(r2_pass, Float32(1e-20)))
+        norm = norm_pass / (Float32(4.0 / 3.0) * r_pass_len)
+        if sd.vcmFootprint > Float32(0) and sd.vcmMergeR > Float32(0):
+            var rq = _vcm_merge_radius_at(sd, cv.pos)
+            r2 = rq * rq
+            norm = norm * (r_pass_len * r_pass_len * r_pass_len) / max(rq * rq * rq, Float32(1e-20))
+    elif sd.vcmFootprint > Float32(0) and sd.vcmMergeR > Float32(0):
         var rq = _vcm_merge_radius_at(sd, cv.pos)
         r2 = rq * rq
         norm = norm_pass * (r2_pass / max(r2, Float32(1e-20)))
@@ -1971,31 +2141,54 @@ def _bdpt_merge_from_cache(
                     # unscoped -- and barcelona-pavilion's foliage is 5
                     # diffusetransmission materials, sitting exactly over the
                     # shadowed regions that measured 2-3x too bright.
-                    if lv.is_delta == Int32(0) and lv.is_surface == Int32(1) and lv.is_light == Int32(0) and lv.mat_kind != LobeKind.bssrdf and _bdpt_vertex_mis_scoped(lv):
+                    if lv.is_delta == Int32(0) and lv.is_surface == cv.is_surface and lv.is_light == Int32(0) and lv.mat_kind != LobeKind.bssrdf and _bdpt_vertex_mis_scoped(lv):
                         var e = lv.pos - cv.pos
                         var dist2 = e.length_sq()
-                        # Surface-compatibility guard: a distance-only gather
-                        # counts a photon lying on a DIFFERENT surface (the
-                        # adjacent wall, the far side of a thin panel) as if
-                        # it were on this one. The leak grows with the gather
-                        # radius (_VCM_RADIUS_FRACTION of the scene bounding
-                        # sphere).
-                        var _ncmp = dot(cv.normal.to_simd(), lv.normal.to_simd())
-                        # Gather in the tangent DISK, not the ball. The normal
-                        # test above rejects a photon on a differently-oriented
-                        # surface; it cannot reject one on a PARALLEL surface
-                        # inside the radius -- a desk top over a shelf, a sill
-                        # over a floor. Two lit parallel surfaces in one ball
-                        # sum both their photons and normalise by ONE disk,
-                        # pi r^2: up to 2x, radius-dependent, and impossible on
-                        # a single flat quad, which is why the white furnace
-                        # stayed exact while classroom read 2.5x pbrt with
-                        # merging on and 0.985x with it off. A photon on THIS
-                        # surface sits on its tangent plane to float precision;
-                        # a tenth of the radius is generous.
-                        # Disk-not-ball: the SHARED test, sppm.mojo's
-                        # gather_disk_contains -- SPPM's gather now uses it too.
-                        if _ncmp > Float32(0.7) and gather_disk_contains(e.to_simd(), dist2, r2, cv.normal.to_simd()):
+                        var accept: Bool
+                        if cv.is_surface == Int32(1):
+                            # Surface-compatibility guard: a distance-only gather
+                            # counts a photon lying on a DIFFERENT surface (the
+                            # adjacent wall, the far side of a thin panel) as if
+                            # it were on this one. The leak grows with the gather
+                            # radius (_VCM_RADIUS_FRACTION of the scene bounding
+                            # sphere).
+                            var _ncmp = dot(cv.normal.to_simd(), lv.normal.to_simd())
+                            # Gather in the tangent DISK, not the ball. The normal
+                            # test above rejects a photon on a differently-oriented
+                            # surface; it cannot reject one on a PARALLEL surface
+                            # inside the radius -- a desk top over a shelf, a sill
+                            # over a floor. Two lit parallel surfaces in one ball
+                            # sum both their photons and normalise by ONE disk,
+                            # pi r^2: up to 2x, radius-dependent, and impossible on
+                            # a single flat quad, which is why the white furnace
+                            # stayed exact while classroom read 2.5x pbrt with
+                            # merging on and 0.985x with it off. A photon on THIS
+                            # surface sits on its tangent plane to float precision;
+                            # a tenth of the radius is generous.
+                            # Benchmark instrumentation only -- see
+                            # this function's own visit_naive/footprint/thin
+                            # docstring paragraph. Pure reads, no effect on
+                            # `total`/`result` below.
+                            if _ncmp > Float32(0.7):
+                                if gather_disk_contains(e.to_simd(), dist2, r2_pass, cv.normal.to_simd()):
+                                    visit_naive += Int32(1)
+                                if gather_disk_contains(e.to_simd(), dist2, r2, cv.normal.to_simd()):
+                                    visit_footprint += Int32(1)
+                                    if grid_keep(heads, h, k, lv.pos, _PHOTON_BUCKET_CAP):
+                                        visit_thin += Int32(1)
+                            # Disk-not-ball: the SHARED test, sppm.mojo's
+                            # gather_disk_contains -- SPPM's gather now uses it too.
+                            accept = _ncmp > Float32(0.7) and gather_disk_contains(e.to_simd(), dist2, r2, cv.normal.to_simd())
+                        else:
+                            # Volume-volume merge: a genuine BALL acceptance
+                            # test. Neither endpoint has a surface normal, so
+                            # there is no tangent-plane concept to guard with --
+                            # dist2 <= r2 is exactly what
+                            # Scenes/vcm_volume_mis_derivation.py's kernel_measure
+                            # assumes (no paper-figure visit instrumentation for
+                            # this case; that's a surface-scene-only probe).
+                            accept = dist2 <= r2
+                        if accept:
                             var le_cv = _lobe_eval[want_pdfs=False](cv, lv.wo.to_simd(), sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, cv.wavelengths)
                             var f_cv = le_cv.f_cos
                             # MERGING TAKES THE BARE BSDF, NOT f*cos.
@@ -2052,7 +2245,7 @@ def _bdpt_merge_from_cache(
     # surface (gather_disk_coverage). Queries that found nothing have nothing
     # to correct, and a disk the probes find empty keeps the plain estimate.
     comptime if _MERGE_COVERAGE:
-        if cv.mat_kind != LobeKind.hair and total.v0 + total.v1 + total.v2 + total.v3 > Float32(0):
+        if cv.is_surface == Int32(1) and cv.mat_kind != LobeKind.hair and total.v0 + total.v1 + total.v2 + total.v3 > Float32(0):
             var cov = gather_disk_coverage(sd, cv.pos, cv.normal, sqrt(r2))
             if cov > Float32(0):
                 result = result * (Float32(1) / cov)
@@ -2096,7 +2289,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     # (vcm_camis.CamisLightRecord). Not read yet -- stage S3's weight sites
     # will; plumbed now so S3 changes no signature.
     lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin] = Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(),
-) -> Tuple[SpectralSample, SpectralSample, RGB]:
+) -> Tuple[SpectralSample, SpectralSample, RGB, Int32, Int32, Int32]:
     """Trace one camera subpath from pixel (px,py). At each non-delta vertex,
     connect inline/synchronously to the shared Light Vertex Cache via
     `_bdpt_connect_to_cache` — mirrors how every live GPU shading kernel in
@@ -2109,7 +2302,10 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     albedo at its first non-delta (stored) vertex — the same "first hit,
     skipping through mirrors/glass" convention shading.mojo's path.albedo AOV
     already uses, needed for the denoiser's albedo guide buffer (see
-    vcm_render's docstring). `use_gpu` now genuinely matters: it selects
+    vcm_render's docstring), plus (visit_naive, visit_footprint, visit_thin):
+    Benchmark instrumentation only, see
+    _bdpt_merge_from_cache's docstring paragraph -- summed over every bounce
+    of this one camera subpath. `use_gpu` now genuinely matters: it selects
     _tex_lookup's CPU (tex_filenames/OIIO) vs GPU (GpuTexture array)
     texture-sampling branch for diffuse/coateddiffuse vertex albedo — CPU
     and GPU callers MUST pass the value matching their own reality (the
@@ -2141,6 +2337,11 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     var beta = st.beta
     var total = st.total
     var total_merge = st.total_merge
+    # Benchmark instrumentation only -- see
+    # _bdpt_merge_from_cache's docstring paragraph.
+    var visit_naive = Int32(0)
+    var visit_footprint = Int32(0)
+    var visit_thin = Int32(0)
     var first_alb = st.first_alb
     var n_verts = Int(st.n_verts)
     var n_bounces = Int(st.n_bounces)
@@ -2155,13 +2356,14 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     var cone_len = st.cone_len
     var wavelengths = SampledWavelengths(st.wl0, st.wl1, st.wl2, st.wl3)
     if st.active == Int8(0):
-        return (total, total_merge, first_alb)
+        return (total, total_merge, first_alb, visit_naive, visit_footprint, visit_thin)
     # CAMIS camera state (vcm_camis.mojo): live across the whole bounce loop,
     # the same `mut` threading dvcm_carry uses. One element and never touched
     # when _VCM_CAMIS is off.
     var camis = camis_cam_carry_init()
     var camis_recs = Array[CamisCamRecord, _CAMIS_CAM_RECS](
         fill=CamisCamRecord(Float32(0), Float32(0), Float32(0), Float32(0), Float32(0)))
+    var prev_was_volume = False
 
     for _ in range(_BDPT_MAX_DEPTH):
         # The same intersect step _bdpt_camera_path_intersect_gpu performs;
@@ -2177,13 +2379,14 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             sd, pcg, has_med, scratch[unsafe_offset=0], scratch, lvc, lp_idx, path_len,
             merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
             mis_vc_weight_factor, mis_vm_weight_factor,
-            ro, rd, beta, total, total_merge, first_alb, n_verts, n_bounces, cur_med_idx,
-            dvcm_carry, dvc_carry, dvm_carry, last_bsdf_pdf, mis_null_dist,
+            ro, rd, beta, total, total_merge, visit_naive, visit_footprint, visit_thin,
+            first_alb, n_verts, n_bounces, cur_med_idx,
+            dvcm_carry, dvc_carry, dvm_carry, prev_was_volume, last_bsdf_pdf, mis_null_dist,
             current_dielectric_ior, previous_dielectric_ior, wavelengths, cone_len,
             camis, camis_recs, lvc_camis=lvc_camis, n_light_paths_f=n_light_paths_f):
             break
 
-    return (total, total_merge, first_alb)
+    return (total, total_merge, first_alb, visit_naive, visit_footprint, visit_thin)
 
 @fieldwise_init
 struct VCMCameraPathState(TrivialRegisterPassable):
@@ -2405,6 +2608,15 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     mut beta: SpectralSample,
     mut total: SpectralSample,
     mut total_merge: SpectralSample,
+    # Benchmark instrumentation only -- see
+    # _bdpt_merge_from_cache's matching docstring paragraph. Threaded through
+    # unconditionally (defaults live below on the params that already had
+    # them; adding defaults to `mut` params here would need a mutable
+    # lvalue at every call site anyway, so these are required like the
+    # other running accumulators above).
+    mut visit_naive: Int32,
+    mut visit_footprint: Int32,
+    mut visit_thin: Int32,
     mut first_alb: RGB,
     mut n_verts: Int,
     mut n_bounces: Int,
@@ -2412,6 +2624,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     mut dvcm_carry: Float32,
     mut dvc_carry: Float32,
     mut dvm_carry: Float32,
+    # Kind of the PREVIOUS vertex on this subpath (True = volume) -- see the
+    # light-path bounce function's matching parameter for the derivation.
+    mut prev_was_volume: Bool,
     mut last_bsdf_pdf: Float32,
     mut mis_null_dist: Float32,
     mut current_dielectric_ior: Float32,
@@ -2590,6 +2805,14 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 beta *= spectral_free_flight_weight(med, ff, t_hit, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
                 # Volume scatter vertex
                 var sp = ro + rd*ff.t_free
+                # dVCM's Jacobian above was applied with t_hit (distance to
+                # the SURFACE the ray was cast toward); the real arrival
+                # distance here is ff.t_free -- see the light-side bounce
+                # function's matching comment for the full derivation.
+                dvcm_carry *= (ff.t_free * ff.t_free) / max(t_hit * t_hit, Float32(1e-20))
+                dvcm_carry *= Float32(1.0) / max(ff.pdf, Float32(1e-30))
+                if not prev_was_volume:
+                    dvc_carry *= Float32(1.0) / max(ff.sig_t, Float32(1e-20))
                 var v = _null_vertex()
                 v.pos = sp
                 # `beta`, NOT beta*albedo -- a vertex's beta is the throughput
@@ -2603,6 +2826,10 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 v.pdf_fwd = ff.pdf   # the density actually sampled from; under hero-wavelength MIS this is a lane MIXTURE, not sig_t's lone exponential
                 v.med_idx = cur_med_idx
                 v.wavelengths = wavelengths
+                # ARRIVAL carries -- merge/connect below read these off `v`
+                # (it is never stored in the LVC on the camera side, only
+                # used transiently for this bounce's own merge/connect).
+                v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
                 if n_verts == 0: first_alb = ff.albedo
                 # NOT `n_verts += 1`. _BDPT_MAX_VERTS is the light-vertex
                 # CACHE's per-path slot count, and the camera subpath stores
@@ -2614,8 +2841,15 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # scene). Volume scatters are bounded by _BDPT_MAX_DEPTH loop
                 # iterations instead, which is what this branch's own "no
                 # vertex stored this bounce" return comment already implied.
-                # Volume: out of MIS scope this pass, same as the light side.
-                dvcm_carry = Float32(0)
+                # Volume scatter is isotropic: cos_out=1, pdf_fwd=pdf_rev=
+                # 1/(4pi), cos_over_pdf=4pi -- the same vcm_scatter_carries
+                # every surface branch uses (Scenes/vcm_volume_mis_derivation.py).
+                var eta_v = _vcm_eta_at(sd, v, mis_vm_weight_factor)
+                (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries[dvc0=_VCM_CAMIS](
+                    dvcm_carry, dvc_carry, dvm_carry,
+                    Float32(4.0) * PI, INV_FOUR_PI, INV_FOUR_PI,
+                    mis_vc_weight_factor, eta_v)
+                prev_was_volume = True
                 if path_len > 0:
                     # BUG FIX (found investigating volumetric-caustic's
                     # colored-blob fireflies): merge is only safe to run
@@ -2633,7 +2867,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # already the complete, correct estimate -- Stage 2b's
                     # original, verified behavior for out-of-scope kinds.
                     if _bdpt_vertex_mis_scoped(v):
-                        total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f)
+                        total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
                     total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f)
                 # Volume-scatter NEE: distant/point/sphere/infinite lights.
                 # _bdpt_connect_to_cache above only reaches AREA lights -- the
@@ -2709,6 +2943,13 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var ff_exp = -log(max(ff.pdf, Float32(1e-30)))   # optical depth of the density actually sampled from (see FreeFlight.pdf)
                 if ff_exp > Float32(60.0): ff_exp = Float32(60.0)  # defensive: e^-60 pass-through never occurs
                 dvcm_carry *= exp(ff_exp)
+                # ...unless the PREVIOUS vertex was itself a volume scatter --
+                # then this edge changes kind (volume -> surface) and dVC
+                # picks up a factor of sigma_t, not 1 (see the light-side
+                # bounce function's matching comment).
+                if prev_was_volume:
+                    dvc_carry *= ff.sig_t
+                prev_was_volume = False
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[unsafe_offset=mat_idx]
@@ -3026,7 +3267,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # and in a white furnace only ~32% of light paths hit the quad at
                 # all, so ~68% of pixels skipped merging entirely: the estimator
                 # delivered 0.109 against an analytic 0.5.
-                total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f)
+                total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
                 if path_len > 0:
                     # Task #163 stage 5: the diffuse branch's connect shadow
                     # rays are the single highest-volume, cleanest shadow-ray
@@ -3197,7 +3438,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # and in a white furnace only ~32% of light paths hit the quad at
                 # all, so ~68% of pixels skipped merging entirely: the estimator
                 # delivered 0.109 against an analytic 0.5.
-                total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f)
+                total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
                 if path_len > 0:
                     total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f)
 
@@ -3332,7 +3573,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # and in a white furnace only ~32% of light paths hit the quad at
                     # all, so ~68% of pixels skipped merging entirely: the estimator
                     # delivered 0.109 against an analytic 0.5.
-                    total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f)
+                    total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
                     if path_len > 0:
                         if defer_shadow_rays:
                             _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f)
@@ -3788,6 +4029,11 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
     mut dvcm_carry: Float32,
     mut dvc_carry: Float32,
     mut dvm_carry: Float32,
+    # Kind of the PREVIOUS vertex on this subpath (True = volume), needed at
+    # a medium arrival to pick the right dVC free-flight ratio
+    # (Scenes/vcm_volume_mis_derivation.py: sigma_t^(kind_a - kind_b), 1 for
+    # a same-kind edge, 1/sigma_t or sigma_t for a kind-changing one).
+    mut prev_was_volume: Bool,
     is_finite_origin: Bool,
     mut origin_sphere: Int32,
     mut cur_med_idx: Int32,
@@ -3901,6 +4147,24 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 # Chromatic collision weight; see the camera-side comment.
                 flux *= spectral_free_flight_weight(med, ff, t_hit, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
                 var sp = ro + rd*ff.t_free
+                # dVCM's Jacobian above was applied with t_hit (the distance
+                # to the SURFACE the ray was cast toward), computed before we
+                # knew this segment would collide first -- the real arrival
+                # distance is ff.t_free. Correct it before the free-flight
+                # factor (Scenes/vcm_volume_mis_derivation.py: dVCM *=
+                # d^2/ff_b, d = the vertex's own arrival distance).
+                dvcm_carry *= (ff.t_free * ff.t_free) / max(t_hit * t_hit, Float32(1e-20))
+                # Free-flight at this VOLUME arrival: ff_b = the collision
+                # density actually sampled = ff.pdf. No cos_fix -- a volume
+                # vertex has no surface normal to divide by.
+                dvcm_carry *= Float32(1.0) / max(ff.pdf, Float32(1e-30))
+                # dVC's ff_a/ff_b ratio is 1/sigma_t only when the PREVIOUS
+                # vertex was a surface (kind-changing edge); a volume->volume
+                # multi-scatter step has ratio 1 (same kind, see the
+                # harness's free_flight -- the sigma_t*exp(-sigma_t d) terms
+                # are identical on both ends and cancel).
+                if not prev_was_volume:
+                    dvc_carry *= Float32(1.0) / max(ff.sig_t, Float32(1e-20))
                 var v = _null_vertex()
                 v.pos = sp
                 # `flux`, NOT flux*albedo -- see the matching camera-side
@@ -3913,6 +4177,11 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 v.pdf_fwd = ff.pdf   # the density actually sampled from; under hero-wavelength MIS this is a lane MIXTURE, not sig_t's lone exponential
                 v.med_idx = cur_med_idx
                 v.wavelengths = wavelengths
+                # ARRIVAL carries, before the outgoing scatter step below
+                # overwrites them -- the same v.dVCM/dVC/dVM = ... pattern
+                # every surface branch uses, so connect/merge (which read
+                # these off the stored vertex) see the right state.
+                v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
                 n_verts += 1
                 _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
                 comptime if _VCM_CAMIS:
@@ -3935,10 +4204,17 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 # keyed on the light path's own origin, so storing every
                 # volume vertex here unconditionally is correct for both.
                 # Volume scatter is isotropic (no surface normal, no
-                # cosThetaFix) -- out of MIS scope (like delta dielectric),
-                # reset as if specular so a LATER diffuse/conductor/hair/
-                # measured bounce still gets a well-defined carry.
-                dvcm_carry = Float32(0)
+                # cosThetaFix): cos_out=1, pdf_fwd=pdf_rev=1/(4pi), so
+                # cos_over_pdf = 4pi -- the SAME vcm_scatter_carries every
+                # surface branch uses, just with isotropic constants instead
+                # of a sampled lobe's (Scenes/vcm_volume_mis_derivation.py:
+                # connections+merges exact to 4.4e-16 with this rule).
+                var eta_v = _vcm_eta_at(sd, v, mis_vm_weight_factor)
+                (dvcm_carry, dvc_carry, dvm_carry) = vcm_scatter_carries[dvc0=_VCM_CAMIS](
+                    dvcm_carry, dvc_carry, dvm_carry,
+                    Float32(4.0) * PI, INV_FOUR_PI, INV_FOUR_PI,
+                    mis_vc_weight_factor, eta_v)
+                prev_was_volume = True
                 # Continuation: flux = prev × alb_s (same as stored vertex beta)
                 flux *= spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (ff.albedo).r, (ff.albedo).g, (ff.albedo).b, wavelengths)
                 var u1 = pcg.next_float(); var u2 = pcg.next_float()
@@ -3956,6 +4232,14 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 var ff_exp_l = -log(max(ff.pdf, Float32(1e-30)))   # optical depth of the density actually sampled from (see FreeFlight.pdf)
                 if ff_exp_l > Float32(60.0): ff_exp_l = Float32(60.0)
                 dvcm_carry *= exp(ff_exp_l)
+                # dVC's ff_a/ff_b ratio is sigma_t only when the PREVIOUS
+                # vertex was a volume scatter (kind-changing edge, exiting
+                # the medium to survive to this surface); surface->surface
+                # ratio is 1, already correct with no change (defect 2,
+                # f0a407e4) -- Scenes/vcm_volume_mis_derivation.py.
+                if prev_was_volume:
+                    dvc_carry *= ff.sig_t
+                prev_was_volume = False
 
         var mat_idx = Int(inter.primId.materialIndex)
         var mat = sd.materials[unsafe_offset=mat_idx]
@@ -4352,6 +4636,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
     var current_dielectric_ior = st.current_dielectric_ior
     var previous_dielectric_ior = st.previous_dielectric_ior
     var wavelengths = SampledWavelengths(st.wl0, st.wl1, st.wl2, st.wl3)
+    var prev_was_volume = False
     # CAMIS light state. Only an AREA light stores an origin vertex (n_verts
     # starts at 1), and only an area light starts a path inside the Class;
     # every other light's first stored vertex writes an out-of-Class record.
@@ -4383,6 +4668,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             sd, pcg, has_med, scratch[unsafe_offset=0], lvc, lp_idx,
             mis_vc_weight_factor, mis_vm_weight_factor,
             ro, rd, flux, n_verts, dvcm_carry, dvc_carry, dvm_carry,
+            prev_was_volume,
             is_finite_origin, origin_sphere, cur_med_idx, n_lbounces,
             current_dielectric_ior, previous_dielectric_ior, wavelengths,
             camis_l, camis_recs):
@@ -4887,8 +5173,8 @@ def _bdpt_connect_mis_weight(
     # -> area density conversion (pbrt's Vertex::ConvertDensity, which reads
     # ng()), not a BSDF cosine. A perturbed normal in a density is a bias.
     if _bdpt_vertex_mis_scoped(cv) and (lv.is_light == Int32(1) or _bdpt_vertex_mis_scoped(lv)):
-        var cos_cv = abs(dot(dir, cv.normal.to_simd()))
-        var cos_lv = abs(dot(neg_dir, lv.normal.to_simd()))
+        var cos_cv = _vcm_cos_at(cv, dir)
+        var cos_lv = _vcm_cos_at(lv, neg_dir)
         var (camera_bsdf_dir_pdf_w, camera_bsdf_rev_pdf_w) = _bdpt_vertex_pdfs(cv, dir, sd)
         # Light-source vertex: forward and reverse pdf are the SAME
         # cosine-weighted-emission formula (no real "wo" to distinguish a
@@ -4906,7 +5192,7 @@ def _bdpt_connect_mis_weight(
             light_bsdf_rev_pdf_w = lrp
         var camera_bsdf_dir_pdf_a = camera_bsdf_dir_pdf_w * cos_lv / dist2
         var light_bsdf_dir_pdf_a = light_bsdf_dir_pdf_w * cos_cv / dist2
-        var eta_cv = mis_vm_weight_factor * _vcm_eta_scale(sd, cv.pos)
+        var eta_cv = _vcm_eta_at(sd, cv, mis_vm_weight_factor)
         comptime if _VCM_CAMIS:
             if camis.in_class:
                 if lv.is_light == Int32(1):
@@ -4926,7 +5212,7 @@ def _bdpt_connect_mis_weight(
                         var lam = k % _BDPT_MAX_VERTS
                         var origin_in_class = (lvc_camis[unsafe_offset=base].flags & CAMIS_IN_CLASS) != Int32(0)
                         var lr = _camis_gather_light[_CAMIS_CAM_RECS](lvc, lvc_camis, base, lam)
-                        var eta_lv_c = mis_vm_weight_factor * _vcm_eta_scale(sd, lv.pos)
+                        var eta_lv_c = _vcm_eta_at(sd, lv, mis_vm_weight_factor)
                         return camis_eval_connect[_CAMIS_CAM_RECS, _CAMIS_CAM_RECS](
                             camis, camis_recs, num_cam_scat,
                             cv.dVCM, cv.dVC, cv.dVM, eta_cv, log(_vcm_keep(sd, cv.pos)),
@@ -4950,7 +5236,7 @@ def _bdpt_connect_mis_weight(
             # was already exact.
             w_light = camera_bsdf_dir_pdf_a / max(lv.pdf_fwd, Float32(1e-30))
         else:
-            var eta_lv = mis_vm_weight_factor * _vcm_eta_scale(sd, lv.pos)
+            var eta_lv = _vcm_eta_at(sd, lv, mis_vm_weight_factor)
             w_light = camera_bsdf_dir_pdf_a * (eta_lv + lv.dVCM + lv.dVC * light_bsdf_rev_pdf_w)
         var w_camera = light_bsdf_dir_pdf_a * (eta_cv + cv.dVCM + cv.dVC * camera_bsdf_rev_pdf_w)
         return Float32(1) / (w_light + Float32(1) + w_camera)
@@ -5237,7 +5523,7 @@ def _bdpt_render_core(
             var px = pix % fw; var py = pix // fw
             var cpcg = PCG32(base_seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
                               UInt64(si * 2654435761 + 1))
-            var (contrib, contrib_merge, alb) = _bdpt_trace_camera_and_connect[False](
+            var (contrib, contrib_merge, alb, _cpu_vn, _cpu_vf, _cpu_vt) = _bdpt_trace_camera_and_connect[False](
                 r2c, c2w, px, py, sd, cpcg, has_med, scratch_cam.unsafe_offset(pix), lvc, pix, Int(lvc_path_len[unsafe_offset=pix]),
                 merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
                 px_scale, mis_vc_weight_factor, mis_vm_weight_factor, Float32(n_light_paths_merge), pass_wl,
@@ -5447,6 +5733,14 @@ def _bdpt_camera_connect_gpu(
     accum: Pointer[Float32, MutUntrackedOrigin],
     accum_merge: Pointer[Float32, MutUntrackedOrigin],
     albedo_accum: Pointer[Float32, MutUntrackedOrigin],
+    # Benchmark instrumentation only -- see
+    # _bdpt_merge_from_cache's docstring paragraph. Per-pixel
+    # [naive, footprint, thinning] candidate-visit counts, summed over every
+    # bounce and (by the caller, across the whole spp loop) every pass --
+    # same n_pix*3 layout and += accumulation convention as accum_merge.
+    # This kernel has exactly one call site (vcm_render_gpu), which always
+    # allocates and passes a real buffer.
+    visit_accum: Pointer[Float32, MutUntrackedOrigin],
     n_pix_dp: Int64,
     fw_dp: Int64,
     r2c: Pointer[Float32, MutUntrackedOrigin],
@@ -5502,11 +5796,16 @@ def _bdpt_camera_connect_gpu(
                      UInt64(pass_idx * 2654435761 + 1))
     var scratch = inter_scratch.unsafe_offset(pix)
     var pass_wl = pass_wavelengths(pass_idx)
-    var (contrib, contrib_merge, alb) = _bdpt_trace_camera_and_connect[True](
+    var (contrib, contrib_merge, alb, visit_naive, visit_footprint, visit_thin) = _bdpt_trace_camera_and_connect[True](
         r2c, c2w, px, py, sd, pcg, has_med, scratch, lvc, pix, Int(lvc_path_len[unsafe_offset=pix]),
         merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
         px_scale, mis_vc_weight_factor, mis_vm_weight_factor, n_light_paths_f, pass_wl, film_filter,
         lvc_camis=lvc_camis)
+    # Benchmark instrumentation only -- see
+    # _bdpt_merge_from_cache's docstring paragraph.
+    visit_accum[unsafe_offset=pix*3]   += Float32(visit_naive)
+    visit_accum[unsafe_offset=pix*3+1] += Float32(visit_footprint)
+    visit_accum[unsafe_offset=pix*3+2] += Float32(visit_thin)
     # ── Output boundary: spectral transport -> RGB film ──────────────────
     var (cr, cg, cb) = spectral_sample_to_rgb(
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
@@ -5642,10 +5941,20 @@ def _bdpt_light_path_bounce_gpu(
     var wavelengths = SampledWavelengths(states[unsafe_offset=k].wl0, states[unsafe_offset=k].wl1, states[unsafe_offset=k].wl2, states[unsafe_offset=k].wl3)
     # Placeholder: no _VCM_CAMIS on the wavefront driver (see its camera twin).
     var camis_l = camis_light_carry_off()
+    # Placeholder, like camis_l above: the wavefront driver does not persist
+    # prev_was_volume across its separate kernel launches (would need a new
+    # VCMLightPathState field), so a volume vertex reached via THIS driver
+    # always takes the surface->volume dVC ratio (1/sigma_t), never the
+    # volume->volume or volume->surface ones. Bounded, not silently wrong:
+    # only the one kind-changing edge (exiting a medium after 2+ real
+    # collisions) is approximated, and only on this driver -- the CPU and
+    # non-wavefront GPU drivers (_bdpt_trace_light_path) get the exact rule.
+    var _pwv_l = False
 
     var cont = _bdpt_light_path_bounce[True](
         sd, pcg, has_med, results[unsafe_offset=k], lvc, k, mis_vc_weight_factor, mis_vm_weight_factor,
         ro, rd, flux, n_verts, dvcm_carry, dvc_carry, dvm_carry,
+        _pwv_l,
         is_finite_origin, origin_sphere, cur_med_idx, n_lbounces,
         current_dielectric_ior, previous_dielectric_ior, wavelengths,
         camis_l, Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(),
@@ -5789,13 +6098,27 @@ def _bdpt_camera_path_bounce_gpu(
     var camis = CamisCamCarry(False, Int32(0), Float32(0), Float32(0), Float32(0), Float32(0), Float32(0))
     var camis_recs = Array[CamisCamRecord, _CAMIS_CAM_RECS](
         fill=CamisCamRecord(Float32(0), Float32(0), Float32(0), Float32(0), Float32(0)))
+    # Benchmark instrumentation only -- see
+    # _bdpt_merge_from_cache's docstring paragraph. The wavefront driver
+    # doesn't persist these across launches (out of scope for the figure,
+    # which only uses vcm_render_gpu's non-wavefront path); discarded here.
+    var visit_naive = Int32(0)
+    var visit_footprint = Int32(0)
+    var visit_thin = Int32(0)
+    # Placeholder, same shape as camis above: not persisted across the
+    # wavefront driver's separate launches (would need a new
+    # VCMCameraPathState field), so a volume vertex reached via THIS driver
+    # always takes the surface->volume dVC ratio -- bounded, not silently
+    # wrong; see _bdpt_light_path_bounce_gpu's matching comment.
+    var prev_was_volume = False
 
     var cont = _bdpt_camera_path_bounce[True](
         sd, pcg, has_med, results[unsafe_offset=pix], results.unsafe_offset(pix), lvc, pix, Int(lvc_path_len[unsafe_offset=pix]),
         merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
         mis_vc_weight_factor, mis_vm_weight_factor,
-        ro, rd, beta, total, total_merge, first_alb, n_verts, n_bounces, cur_med_idx,
-        dvcm_carry, dvc_carry, dvm_carry, last_bsdf_pdf, mis_null_dist,
+        ro, rd, beta, total, total_merge, visit_naive, visit_footprint, visit_thin,
+        first_alb, n_verts, n_bounces, cur_med_idx,
+        dvcm_carry, dvc_carry, dvm_carry, prev_was_volume, last_bsdf_pdf, mis_null_dist,
         current_dielectric_ior, previous_dielectric_ior, wavelengths, cone_len,
         camis, camis_recs,
         defer_shadow_rays != Int8(0), shadow_rays, shadow_pending, shadow_valid, shadow_seg_med,
@@ -6151,6 +6474,15 @@ def vcm_render_gpu(
     vcm_budget: Bool = False,
     vcm_cap: Int32 = Int32(0),
     vcm_no_keep_mis: Bool = False,
+    vcm_radius_from_camera: Bool = False,
+    # EXPERIMENTAL, only read when vcm_radius_from_camera: percentile of the
+    # camera-distance sample (0.5 = median) and a multiplier on top of the
+    # unchanged _VCM_RADIUS_FRACTION (scene_radius is pre-scaled by this
+    # multiplier before vcm_merge_radius applies its own fixed 0.003, so the
+    # EFFECTIVE fraction on the camera-distance basis is 0.003 * multiplier
+    # -- see --vcm-radius-cam-percentile / --vcm-radius-cam-fraction-mult).
+    vcm_radius_cam_percentile: Float32 = Float32(0.5),
+    vcm_radius_cam_fraction_mult: Float32 = Float32(1.0),
 ) -> Int32:
     """GPU-accelerated Light Vertex Cache BDPT — same algorithm as
     vcm_render (CPU), same shared _bdpt_trace_light_path/
@@ -6231,6 +6563,16 @@ def vcm_render_gpu(
                 var dst = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
                 for i in range(n_pix * 3):
                     dst[unsafe_offset=i] = Float32(0)
+            # Benchmark instrumentation only -- see
+            # _bdpt_merge_from_cache's docstring paragraph. Per-pixel
+            # [naive, footprint, thinning] candidate-visit counts, summed
+            # across the whole spp loop below, same shape/zero-init as
+            # accum_merge_buf.
+            var visit_accum_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
+            with visit_accum_buf.map_to_host() as host_buf:
+                var dst = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+                for i in range(n_pix * 3):
+                    dst[unsafe_offset=i] = Float32(0)
 
             var r2c_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](16 * size_of[Float32]())
             with r2c_buf.map_to_host() as host_buf:
@@ -6292,6 +6634,7 @@ def vcm_render_gpu(
             var accum_ptr   = accum_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             var accum_merge_ptr = accum_merge_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             var albedo_accum_ptr = albedo_accum_buf.unsafe_ptr().unsafe_bitcast[Float32]()
+            var visit_accum_ptr = visit_accum_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             var r2c_ptr = r2c_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             var c2w_ptr = c2w_buf.unsafe_ptr().unsafe_bitcast[Float32]()
 
@@ -6304,7 +6647,22 @@ def vcm_render_gpu(
             var grid_pix = ceildiv(n_pix, block_size)
             var grid_hsize = ceildiv(_HSIZE, block_size)
 
-            var (_scene_center, scene_radius) = _scene_bounding_sphere(sd)
+            var (_scene_center, scene_radius_bbox) = _scene_bounding_sphere(sd)
+            var scene_radius = scene_radius_bbox
+            if vcm_radius_from_camera:
+                # EXPERIMENTAL: see _camera_typical_distance's docstring. Falls
+                # back to the bounding-sphere radius when nothing is hit
+                # (e.g. camera facing only background/infinite lights).
+                var cam_dist = _camera_typical_distance(psc[unsafe_offset=0].raster_to_camera,
+                    psc[unsafe_offset=0].camera_to_world, Int(psc[unsafe_offset=0].film_w), Int(psc[unsafe_offset=0].film_h), sd,
+                    vcm_radius_cam_percentile)
+                if cam_dist > Float32(0):
+                    scene_radius = cam_dist * vcm_radius_cam_fraction_mult
+                if verbose:
+                    print("vcm-radius-from-camera: bbox scene_radius=" + String(scene_radius_bbox)
+                        + " cam_dist(p=" + String(vcm_radius_cam_percentile) + ")=" + String(cam_dist)
+                        + " fraction_mult=" + String(vcm_radius_cam_fraction_mult)
+                        + " -> effective scene_radius=" + String(scene_radius))
             var px_scale = Float32(2.0) * tan(psc[unsafe_offset=0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(fh)
             var vcm_max_depth = psc[unsafe_offset=0].max_depth   # clamped in _vcm_depth
             var c2w_h = psc[unsafe_offset=0].camera_to_world
@@ -6397,6 +6755,7 @@ def vcm_render_gpu(
                     accum_ptr,
                     accum_merge_ptr,
                     albedo_accum_ptr,
+                    visit_accum_ptr,
                     Int64(n_pix),
                     Int64(Int(psc[unsafe_offset=0].film_w)),
                     r2c_ptr,
@@ -6472,6 +6831,19 @@ def vcm_render_gpu(
             handle[].ctx.synchronize()
             _ = prog.finish()
 
+
+            # Benchmark instrumentation only -- see
+            # _bdpt_merge_from_cache's docstring paragraph. Written
+            # unconditionally (like depth/normal/albedo's own sidecars,
+            # outputs.mojo's header comment) since it's cheap and read by
+            # nothing else -- a sidecar next to the film, not a new channel
+            # on it, so it never touches finish_render/write_render_outputs.
+            var visit_sidecar = _sidecar_name(psc[unsafe_offset=0].film_filename, ".mergevisits.exr")
+            with visit_accum_buf.map_to_host() as vhost:
+                var vsrc = vhost.unsafe_ptr().unsafe_bitcast[Float32]()
+                _ = _write_channels(visit_sidecar, vsrc, Int32(fw), Int32(fh), Int32(3),
+                    "naive.Y,footprint.Y,thinning.Y", Int32(fw), Int32(fh), Int32(0), Int32(0))
+            visit_sidecar.unsafe_free()
             # `pixels` (connect + t=1 splats) and `caustic_pixels` (vertex
             # merging) split, same reason/contract as _bdpt_render_core's
             # CPU tail -- see _vcm_finalize_one_pixel's docstring. No clamp

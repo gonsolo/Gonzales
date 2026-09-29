@@ -1,9 +1,10 @@
 # Best case for thinned merging + keep-aware MIS: a tiny bright lamp in an open
-# diffuse lantern on a large ground plane (the plane inflates the scene radius,
-# so VCM's merge cells are ~0.4 m and the lantern's photons pile into a few).
+# diffuse shade box (NOT lantern-shaped -- a plain box with one open side) on
+# a large ground plane (the plane inflates the scene radius, so VCM's merge
+# cells are ~0.4 m and the lamp's photons pile into a few).
 Integrator "volpath" "integer maxdepth" [ 8 ]
 Sampler "halton" "integer pixelsamples" [ 64 ]
-Film "rgb" "string filename" [ "lantern.exr" ] "integer xresolution" [ 320 ] "integer yresolution" [ 240 ] "float maxcomponentvalue" 1e30
+Film "rgb" "string filename" [ "shade.exr" ] "integer xresolution" [ 320 ] "integer yresolution" [ 240 ] "float maxcomponentvalue" 1e30
 LookAt 1.6 1.1 1.8   0 0.25 0   0 1 0
 Camera "perspective" "float fov" [ 40 ]
 WorldBegin
@@ -13,17 +14,17 @@ AttributeBegin
   Material "diffuse" "rgb reflectance" [ 0.5 0.5 0.5 ]
   Shape "trianglemesh" "point3 P" [ -100 0 -100  100 0 -100  100 0 100  -100 0 100 ] "integer indices" [ 0 2 1 0 3 2 ]
 AttributeEnd
-# lantern: 0.5 m open-top box with one open side facing the camera (+x) -- 4 quads: bottom, back(-x), left(-z), right(+z)
+# shade: 0.5 m open-top box with one open side facing the camera (+x) -- 4 quads: bottom, back(-x), left(-z), right(+z)
 AttributeBegin
   Material "diffuse" "rgb reflectance" [ 0.7 0.6 0.45 ]
   Shape "trianglemesh" "point3 P" [
      -0.25 0.001 -0.25   0.25 0.001 -0.25   0.25 0.001 0.25   -0.25 0.001 0.25
-     -0.25 0 -0.25   -0.25 0.5 -0.25   -0.25 0.5 0.25   -0.25 0 0.25
-     -0.25 0 -0.25    0.25 0 -0.25    0.25 0.5 -0.25   -0.25 0.5 -0.25
-     -0.25 0  0.25    0.25 0  0.25    0.25 0.5  0.25   -0.25 0.5  0.25 ]
+     -0.25 0.001 -0.25   -0.25 0.5 -0.25   -0.25 0.5 0.25   -0.25 0.001 0.25
+     -0.25 0.001 -0.25    0.25 0.001 -0.25    0.25 0.5 -0.25   -0.25 0.5 -0.25
+     -0.25 0.001  0.25    0.25 0.001  0.25    0.25 0.5  0.25   -0.25 0.5  0.25 ]
     "integer indices" [ 0 1 2 0 2 3  4 5 6 4 6 7  8 9 10 8 10 11  12 13 14 12 14 15 ]
 AttributeEnd
-# the lamp: 3 cm sphere inside the lantern
+# the lamp: 3 cm sphere inside the shade
 AttributeBegin
   Translate 0 0.18 0
   AreaLightSource "diffuse" "rgb L" [ 400 330 250 ]

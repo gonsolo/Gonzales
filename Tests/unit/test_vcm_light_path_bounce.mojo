@@ -190,6 +190,7 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
     var wavelengths = SampledWavelengths(state.wl0, state.wl1, state.wl2, state.wl3)
 
     var camis_l = camis_light_carry_off()   # CAMIS state; inert unless _VCM_CAMIS
+    var prev_was_volume = False
 
     var n_iters = 0
     var active = state.active
@@ -205,6 +206,7 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
         var cont = _bdpt_light_path_bounce[False](
             sd, pcg_bounce, False, inter, lvc_new, 0, Float32(0), Float32(0),
             ro, rd, flux, n_verts, dvcm, dvc, dvm,
+            prev_was_volume,
             is_finite_origin, origin_sphere, cur_med_idx, n_lbounces,
             current_dielectric_ior, previous_dielectric_ior, wavelengths,
             camis_l, camis_new,
