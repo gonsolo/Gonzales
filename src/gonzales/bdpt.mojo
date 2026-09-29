@@ -47,7 +47,7 @@ from .rng import PCG32
 from .transform import matrix_invert
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import write_image, write_image_cropwindow, denoise
-from .sppm import _geom_normal, _shading_normal_at, _dielectric_bounce, medium_after_crossing, _cosine_hemisphere_sample, sample_area_light_uniform, sample_area_light_point, sample_sphere_light_emission, _HSIZE, _hash_cell, _sppm_render_core, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push, grid_weight, _sppm_count_photon, gather_disk_coverage
+from .sppm import _geom_normal, _shading_normal_at, _dielectric_bounce, medium_after_crossing, _cosine_hemisphere_sample, sample_area_light_uniform, sample_area_light_point, sample_sphere_light_emission, _HSIZE, _hash_cell, _sppm_render_core, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push, grid_weight, _sppm_count_photon, gather_disk_coverage, gather_ball_coverage
 from .sppm import (
     SPPMPixel, SPPMPhoton, _sppm_insert_photon,
     _sppm_gather_one, _sppm_vp_brdf, _sppm_nee_one,
@@ -1596,18 +1596,29 @@ comptime _VCM_FOOTPRINT_PIXELS = Float32(2.0)
 
 
 @always_inline
-def _vcm_merge_radius_at(ref sd: SceneView, p: Point3f) -> Float32:
+def _vcm_merge_radius_at(ref sd: SceneView, p: Point3f, is_volume: Bool = False) -> Float32:
     """Merge radius at `p`: _VCM_FOOTPRINT_PIXELS of image footprint at that
     point's distance from the camera, never more than this pass's global
     radius (which sets the grid cells) and shrinking with it pass by pass.
 
     A function of POSITION only, like _vcm_keep, so every strategy of a path
-    agrees on merging's density at each vertex: eta(x) = N pi r(x)^2."""
+    agrees on merging's density at each vertex: eta(x) = N pi r(x)^2.
+
+    `is_volume=True` scales BOTH the footprint term and the ceiling by
+    _VCM_RADIUS_VOLUME_SCALE -- a volume merge's true feature scale (light
+    scattering in a medium, found e.g. investigating Bitterli's
+    volumetric-caustic) is set by the medium's own extent, not by the same
+    fraction of the scene bounding sphere that works for surface merges
+    (a lantern panel, a wall). Keeping the two fractions separate protects
+    every already-measured surface number (shade/barcelona/etc.) from this
+    change -- is_volume=False (the default) is byte-identical to before."""
+    var scale = _VCM_RADIUS_VOLUME_SCALE if is_volume else Float32(1.0)
     if sd.vcmFootprint <= Float32(0) or sd.vcmMergeR <= Float32(0):
-        return sd.vcmMergeR
+        return sd.vcmMergeR * scale
+    var ceil = sd.vcmMergeR * scale
     var d = p - Point3f(sd.vcmCamX, sd.vcmCamY, sd.vcmCamZ)
-    var r = sd.vcmFootprint * sqrt(d.x * d.x + d.y * d.y + d.z * d.z)
-    return min(sd.vcmMergeR, max(r, sd.vcmMergeR * Float32(1e-3)))
+    var r = sd.vcmFootprint * scale * sqrt(d.x * d.x + d.y * d.y + d.z * d.z)
+    return min(ceil, max(r, ceil * Float32(1e-3)))
 
 
 @always_inline
@@ -1628,7 +1639,7 @@ def _vcm_eta_scale_vol(ref sd: SceneView, p: Point3f) -> Float32:
     (Scenes/vcm_volume_mis_derivation.py, kernel_measure)."""
     var s = _vcm_keep(sd, p)
     if sd.vcmFootprint > Float32(0) and sd.vcmMergeR > Float32(0):
-        var q = _vcm_merge_radius_at(sd, p) / sd.vcmMergeR
+        var q = _vcm_merge_radius_at(sd, p, is_volume=True) / (sd.vcmMergeR * _VCM_RADIUS_VOLUME_SCALE)
         s *= q * q * q
     return s
 
@@ -1641,7 +1652,8 @@ def _vcm_eta_at(ref sd: SceneView, v: BDPTVertex, mis_vm_weight_factor: Float32)
     r_pass needs one extra factor of (4/3)*r_pass, since
     N*(4/3)*pi*r_pass^3 = (N*pi*r_pass^2) * (4/3)*r_pass."""
     if v.is_surface == Int32(0):
-        return mis_vm_weight_factor * (Float32(4.0 / 3.0) * sd.vcmMergeR) * _vcm_eta_scale_vol(sd, v.pos)
+        var s3 = _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE
+        return mis_vm_weight_factor * (Float32(4.0 / 3.0) * sd.vcmMergeR * s3) * _vcm_eta_scale_vol(sd, v.pos)
     return mis_vm_weight_factor * _vcm_eta_scale(sd, v.pos)
 
 @always_inline
@@ -1651,7 +1663,8 @@ def _vcm_inv_eta_at(ref sd: SceneView, v: BDPTVertex, mis_vc_weight_factor: Floa
     rule divides by eta rather than multiplying, see vcm_mis.mojo's
     vcm_scatter_carries docstring)."""
     if v.is_surface == Int32(0):
-        return mis_vc_weight_factor / ((Float32(4.0 / 3.0) * sd.vcmMergeR) * _vcm_eta_scale_vol(sd, v.pos))
+        var s3 = _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE
+        return mis_vc_weight_factor / ((Float32(4.0 / 3.0) * sd.vcmMergeR * s3) * _vcm_eta_scale_vol(sd, v.pos))
     return mis_vc_weight_factor / _vcm_eta_scale(sd, v.pos)
 
 @always_inline
@@ -1780,6 +1793,14 @@ def _bdpt_build_merge_grid(
 # heuristic hands direct sun to merging and that bias IS the image: the chairs
 # read 0.54 (shadowed) / 0.33 (sunlit) of pbrt at 0.03, 1.02 / 0.97 at 0.003.
 comptime _VCM_RADIUS_FRACTION = Float32(0.003)
+# Volume merges get their own, much larger, fraction: a medium's own extent
+# (Scenes/thinning/*.pbrt's rooms, Bitterli's volumetric-caustic) sets the
+# right feature scale, not the scene's whole bounding sphere the way a
+# surface lantern/panel does. 0.02, ~6.7x, is the value that first made
+# Bitterli's volumetric-caustic beam visible (2026-09-29 investigation);
+# not yet auto-derived from anything scene-specific -- see
+# _vcm_merge_radius_at's docstring.
+comptime _VCM_RADIUS_VOLUME_SCALE = Float32(6.667)
 comptime _VCM_RADIUS_ALPHA = Float32(2.0) / Float32(3.0)  # Georgiev 2012's typical choice
 
 
@@ -2084,14 +2105,19 @@ def _bdpt_merge_from_cache(
         # Ball kernel measure at a volume merge vertex: norm_pass is always
         # the DISK constant 1/(N*pi*r_pass^2) (computed once, unconditionally,
         # by every caller); convert to the ball constant
-        # 1/(N*(4/3)*pi*r_pass^3) at the same r_pass, footprint-scaled or not
+        # 1/(N*(4/3)*pi*R^3) at R = r_pass * _VCM_RADIUS_VOLUME_SCALE (the
+        # volume-specific fraction, not the surface one -- see
+        # _vcm_merge_radius_at's docstring), footprint-scaled or not
         # (Scenes/vcm_volume_mis_derivation.py, kernel_measure).
         var r_pass_len = sqrt(max(r2_pass, Float32(1e-20)))
-        norm = norm_pass / (Float32(4.0 / 3.0) * r_pass_len)
+        var s3 = _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE * _VCM_RADIUS_VOLUME_SCALE
+        var r_pass_vol = r_pass_len * _VCM_RADIUS_VOLUME_SCALE
+        norm = norm_pass / (Float32(4.0 / 3.0) * r_pass_len * s3)
+        r2 = r_pass_vol * r_pass_vol
         if sd.vcmFootprint > Float32(0) and sd.vcmMergeR > Float32(0):
-            var rq = _vcm_merge_radius_at(sd, cv.pos)
+            var rq = _vcm_merge_radius_at(sd, cv.pos, is_volume=True)
             r2 = rq * rq
-            norm = norm * (r_pass_len * r_pass_len * r_pass_len) / max(rq * rq * rq, Float32(1e-20))
+            norm = norm * (r_pass_vol * r_pass_vol * r_pass_vol) / max(rq * rq * rq, Float32(1e-20))
     elif sd.vcmFootprint > Float32(0) and sd.vcmMergeR > Float32(0):
         var rq = _vcm_merge_radius_at(sd, cv.pos)
         r2 = rq * rq

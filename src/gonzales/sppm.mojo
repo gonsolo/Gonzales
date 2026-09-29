@@ -22,7 +22,7 @@ from .lights import area_light_pick_triangle, AreaLight, DistantLight, InfiniteL
 from .curves import Curve, curve_piece_endpoints, _curve_perp_axis
 from .bssrdf import dipole_rd, dipole_max_radius
 from .bvh import (
-    BVH2Node, SceneView, traverse_bvh2_core, any_hit_bvh2_core,
+    BVH2Node, SceneView, traverse_bvh2_core, any_hit_bvh2_core, ray_sphere_hit,
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf,
     HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps,
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
@@ -1988,6 +1988,61 @@ def gather_disk_coverage[probes: Int = GATHER_COVERAGE_PROBES](
             var ng = _geom_normal(mem[unsafe_offset=0], sd.meshes, sd.instances)
             if abs(dot(ng, n)) > Float32(0.7):
                 hits += 1
+    return Float32(hits) / Float32(probes)
+
+@always_inline
+def gather_ball_coverage[probes: Int = GATHER_COVERAGE_PROBES](
+    ref sd: SceneView, p: Point3f, r: Float32, salt: Int = 7,
+) -> Float32:
+    """The volume analogue of gather_disk_coverage: the fraction of the
+    gather BALL -- radius r around a volume vertex at p -- that stays
+    inside the SAME participating medium out to distance r, rather than
+    crossing into solid geometry (e.g. the inside of a glass sphere
+    immersed in fog) or past a wall.
+
+    A volume density estimate divides the photons it finds by the ball's
+    FULL volume (4/3 pi r^3), which assumes every point of the ball is
+    reachable medium. Where the ball hangs off a medium boundary -- exactly
+    the case for a merge query near the inside surface of glass suspended
+    in fog -- photons can only ever be found in the covered fraction, and
+    dividing by the full ball reads low by exactly that fraction: the same
+    first-order-in-r truncation bias gather_disk_coverage corrects for
+    surfaces (see that function's docstring, including the barcelona-
+    pavilion lantern numbers), now for the kernel a volume merge actually
+    uses.
+
+    Estimated with `probes` rays in stratified directions of a spherical
+    Fibonacci lattice (same golden-angle constant as the disk version,
+    applied to the azimuth), each cast out to distance r against both the
+    mesh/curve BVH and the analytic-sphere list (test_spheres is NOT used
+    directly since it has no notion of a caller-supplied max distance
+    independent of an existing hit -- see the manual sphere loop below): a
+    probe counts as covered when NEITHER finds a surface before r."""
+    var _local = Array[Intersection, 1](fill=Intersection(
+        PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0)),
+        Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
+    var mem = _local.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+    var rot = Float32(grid_coin_bits(salt, p)) * Float32(2.3283064e-10) * Float32(6.2831853)
+    var hits = 0
+    comptime for i in range(probes):
+        var yv = Float32(1.0) - (Float32(2 * i) + Float32(1.0)) / Float32(probes)
+        var rxy = sqrt(max(Float32(0), Float32(1) - yv * yv))
+        var ang = rot + Float32(i) * Float32(2.39996323)
+        var dir = Vec3f(cos(ang) * rxy, yv, sin(ang) * rxy)
+        var ray = Ray(p, dir)
+        mem[unsafe_offset=0].hit = Int8(0)
+        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, r, mem,
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+        var blocked = mem[unsafe_offset=0].hit != Int8(0)
+        if not blocked:
+            for si in range(Int(sd.sphereCount)):
+                var t = ray_sphere_hit(sd.spheres[unsafe_offset=si].center, sd.spheres[unsafe_offset=si].radius,
+                                       ray, Float32(1e-4), r)
+                if t > Float32(0.0):
+                    blocked = True
+                    break
+        if not blocked:
+            hits += 1
     return Float32(hits) / Float32(probes)
 
 @always_inline
