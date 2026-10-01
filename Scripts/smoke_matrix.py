@@ -50,7 +50,7 @@ DEFAULT_TOL = 0.03
 
 # A render also writes <name>.albedo/.normal/.depth[/.noisy].exr sidecars
 # (outputs.mojo) and, from older builds, a bare albedo.exr; none is the image.
-_AUX_SUFFIXES = (".albedo.exr", ".normal.exr", ".depth.exr", ".noisy.exr")
+_AUX_SUFFIXES = (".albedo.exr", ".normal.exr", ".depth.exr", ".noisy.exr", ".mergevisits.exr")
 
 
 def _is_aux(f):
