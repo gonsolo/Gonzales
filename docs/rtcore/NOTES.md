@@ -39,6 +39,16 @@ without Vulkan or OptiX at trace time.
   how the shader side works; there are public SASS references for other instructions (e.g. sass-king,
   nvidia-sass-document) but none for the RT hand-off. Nothing to reuse.
 
+## Dead ends (2026-10-02)
+- CUPTI injection (`CUDA_INJECTION64_PATH`) sees only context/stream/memory callbacks from OptiX;
+  no `MODULE_LOADED` and no `cuModule*`/`cuLink*` driver calls. OptiX loads its modules through an internal
+  driver path, so the public API cannot dump them.
+- User-triggered GPU core dump (`CUDA_ENABLE_USER_TRIGGERED_COREDUMP`, `CUDA_COREDUMP_PIPE`) did not create
+  the trigger pipe in this setup.
+- Untried: exception-triggered core dump (`CUDA_ENABLE_COREDUMP_ON_EXCEPTION`) from a deliberately faulting
+  launch, then `target cudacore` in cuda-gdb; set `CUDA_COREDUMP_GENERATION_FLAGS=skip_global_memory,...` to
+  keep the file small (an earlier session filled the root disk with core dumps).
+
 ## Next experiments
 - Dump the stub: needs a tool that reads device code (cuda-gdb cannot); candidates are a CUPTI/SASS-patching
   tool or Nsight Graphics on the Vulkan ray-query shader.
