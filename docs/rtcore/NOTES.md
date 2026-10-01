@@ -45,9 +45,19 @@ without Vulkan or OptiX at trace time.
   driver path, so the public API cannot dump them.
 - User-triggered GPU core dump (`CUDA_ENABLE_USER_TRIGGERED_COREDUMP`, `CUDA_COREDUMP_PIPE`) did not create
   the trigger pipe in this setup.
-- Untried: exception-triggered core dump (`CUDA_ENABLE_COREDUMP_ON_EXCEPTION`) from a deliberately faulting
+- Exception-triggered core dump: tried with a patched sample (bad output pointer, illegal address in
+  the raygen continuation). The driver prints "Starting GPU coredump generation" and then writes no file,
+  with or without `skip_abort`, with default and explicit `CUDA_COREDUMP_FILE`. OptiX contexts apparently
+  cannot be dumped this way. (The original text of this item:) exception-triggered core dump (`CUDA_ENABLE_COREDUMP_ON_EXCEPTION`) from a deliberately faulting
   launch, then `target cudacore` in cuda-gdb; set `CUDA_COREDUMP_GENERATION_FLAGS=skip_global_memory,...` to
   keep the file small (an earlier session filled the root disk with core dumps).
+
+## Prior art (web search, 2026-10-02)
+- NVIDIA forum answers: RT cores are reachable only through OptiX, DXR and Vulkan; no PTX instruction
+  for them is public, and NVIDIA says the interface changes every generation.
+- The only public description of the hardware is patents on the Tree Traversal Unit (TTU), e.g. US11928772B2.
+- Mesa NVK has no ray-tracing support yet and lists missing shader-side information.
+- No public reverse-engineering of the SM-to-RT-core hand-off found.
 
 ## Next experiments
 - Dump the stub: needs a tool that reads device code (cuda-gdb cannot); candidates are a CUPTI/SASS-patching
