@@ -30,8 +30,18 @@ without Vulkan or OptiX at trace time.
 5. Hypothesis: the trace is a hand-off through the special return, with the ray in a fixed register
    window, to an SM-internal dispatcher that drives the RT core. To test next.
 
+## Follow-up (same day)
+- R5:R4 = 0x100_0c268450 at the trace RET, 0x10250 bytes above `ss_0` (0x1000c258200) and not equal to
+  `ss_1` (0x1000c259000). It is not a continuation address. `x/xw` on it and even on the known raygen code
+  returns zeros, i.e. cuda-gdb cannot read device code through plain memory reads, and `disassemble`
+  only works for ELF-symbolized functions. The target is an unsymbolized stub, so it stays invisible here.
+- Prior art (web search): Mesa NVK documents that Vulkan ray tracing on NVIDIA lacks information on
+  how the shader side works; there are public SASS references for other instructions (e.g. sass-king,
+  nvidia-sass-document) but none for the RT hand-off. Nothing to reuse.
+
 ## Next experiments
-- Find what R4 points to: read the dispatcher with `cuda-gdb` `info cuda` / memory regions, or `compute-sanitizer`.
+- Dump the stub: needs a tool that reads device code (cuda-gdb cannot); candidates are a CUPTI/SASS-patching
+  tool or Nsight Graphics on the Vulkan ray-query shader.
 - Check whether a plain CUDA kernel can use `RET.ABS.NODEC` with a ray in the same register layout
   (needs cubin patching; Mojo emits PTX, so this needs a post-ptxas step).
 - Capture the Vulkan ray-query shader's code the same way, if a debugger can attach to a compute queue.
