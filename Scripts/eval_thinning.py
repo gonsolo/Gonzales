@@ -6,6 +6,7 @@ Variants (one build, switched on the command line):
   A  no thinning        --vcm-cap 1073741824
   B  thinning only      --vcm-no-keep-mis   (Kern-style cap, MIS unaware)
   C  thinning + MIS     (default)
+  N  naive VCM          --vcm-no-footprint --vcm-cap 1073741824 (no footprint radius, no thinning)
 "Fewer photons" needs no variant of its own: every sample is a pass of light
 paths, so A at fewer samples IS uniformly fewer photons, and the equal-time
 curves compare it directly.
@@ -48,8 +49,9 @@ SCENES = {
 _ALL_SCENES = dict(SCENES)
 if os.environ.get("EVAL_SCENES"):
     SCENES = {k: v for k, v in SCENES.items() if k in os.environ["EVAL_SCENES"].split(",")}
-VARIANTS = {"A": ["--vcm-cap", "1073741824"], "B": ["--vcm-no-keep-mis"], "C": []}
-SPP = {"A": [4, 16], "B": [4, 16, 64], "C": [4, 16, 64]}
+VARIANTS = {"A": ["--vcm-cap", "1073741824"], "B": ["--vcm-no-keep-mis"], "C": [],
+            "N": ["--vcm-no-footprint", "--vcm-cap", "1073741824"]}
+SPP = {"A": [4, 16], "B": [4, 16, 64], "C": [4, 16, 64], "N": [16]}
 SEEDS = [1, 2]
 REF_SEED = 99
 
@@ -146,7 +148,7 @@ def report():
                     rows.append([sc, v, spp, f"{t:.3f}", f"{e:.5f}", f"{1.0 / (e * t):.2f}"])
             if xs:
                 ax.loglog(xs, ys, "o-", label={"A": "A no thinning", "B": "B thinning only",
-                                                 "C": "C thinning + MIS"}[v])
+                                                 "C": "C thinning + MIS", "N": "N naive"}[v])
         ax.set_title(sc); ax.set_xlabel("render time [s]"); ax.set_ylabel("relMSE"); ax.grid(True, which="both", alpha=0.3)
         ax.legend(fontsize=8)
     fig.tight_layout(); fig.savefig(os.path.join(OUT, "curves.png"), dpi=110)
