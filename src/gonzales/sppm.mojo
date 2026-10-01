@@ -1950,7 +1950,7 @@ def gather_disk_coverage[probes: Int = GATHER_COVERAGE_PROBES](
     per-pass, within noise of 2 seeds). Kept anyway as the more defensible
     default; the actual residual (SPPM whole 0.929->0.998 clean, but its
     99-99.9% bin overshoots to ~1.05 while its 99.9-100% bin stays ~8% low,
-    where VCM's equivalent correction lands both within 1%) is still open --
+    where VCM's equivalent correction lands both within 1%) is still open.
     Leading unexplored
     hypothesis: SPPM's per-VP progressive radius (Knaus-Zwicker, this
     file's _ALPHA/ratio update) shrinks SLOWER for a VP whose disk is
@@ -2348,7 +2348,8 @@ def _sppm_gather_one(
             # night: 99-99.9% bin WORSE, 0.998->1.012 ->1.096; top 0.1%
             # unchanged) -- the residual vs. an unbiased BDPT referee (whole
             # 0.998, mid-bin +5%, brightest -8%) is not probe-count noise.
-            # Left at 8, matching VCM's merge; an open SPPM-specific gap.
+            # Left at 8, matching VCM's merge (the open SPPM-specific residual is
+            # described in gather_disk_coverage's docstring).
             var cov = gather_disk_coverage(sd, vp.pos, vp.geo_normal, sqrt(r2), salt=7 + pass_idx * 1000003)
             if cov > Float32(0):
                 phi = phi * (Float32(1) / cov)
