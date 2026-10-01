@@ -1563,6 +1563,27 @@ comptime _MERGE_COVERAGE = True
 # carry functions take it as a comptime parameter, and the state arrays
 # shrink to one element, so a normal build dead-code-eliminates all of it.
 # Not supported by the wavefront GPU driver yet (it refuses to run).
+# Multi-level merge index. The thinning grid's cells are sized to the pass
+# radius r_pass, but a footprint-scaled query's disk is often 10-1000x smaller
+# in area, so a query walking its 27 coarse cells tests hundreds of photons to
+# accept a handful (measured: 0.02-0.2% accepted) and neighbouring threads walk
+# wildly different chain lengths. The KEPT photons are therefore also linked
+# into `_VCM_FINE_LEVELS` finer hash grids (cell r_pass/2^l, level l); a query
+# walks the finest level whose cell still covers its radius. Thinning, its
+# keep probabilities and the MIS densities stay on the coarse cells, and the
+# acceptance test is unchanged, so the accepted photon set -- and the estimate
+# -- are the same; only the lookup is cheaper.
+#   merge_heads: [coarse heads | coarse counts | level 1 heads | ... | level L]
+#   merge_next:  _VCM_MN_STRIDE links per slot, k * stride + level
+comptime _VCM_FINE_LEVELS = 4
+comptime _VCM_MN_STRIDE = 1 + _VCM_FINE_LEVELS
+comptime _VCM_HEADS_SIZE = (2 + _VCM_FINE_LEVELS) * _HSIZE
+
+# Per-candidate merge-visit counters (visit_naive/footprint/thin) for the
+# candidate-reduction figure. Each costs two extra disk tests and a grid_keep
+# hash lookup per candidate in the hottest loop of the register-saturated
+# merge kernel, so they are off unless a figure needs them.
+comptime _VCM_VISIT_INSTRUMENT = False
 comptime _VCM_CAMIS = False
 # Camera CAMIS records per path: one per stored vertex (_BDPT_MAX_VERTS bounds
 # those), or a 1-element stand-in when the hybrid is compiled out.
@@ -1754,7 +1775,19 @@ def _bdpt_insert_merge_vertex[use_gpu: Bool](
             return
     elif not grid_keep(heads, h, k, pos, _vcm_cap(sd)):
         return
-    merge_next[unsafe_offset=k] = grid_push[use_gpu](heads, h, k)
+    merge_next[unsafe_offset=k * _VCM_MN_STRIDE] = grid_push[use_gpu](heads, h, k)
+    comptime for l in range(1, _VCM_FINE_LEVELS + 1):
+        var ic = inv_cell * Float32(1 << l)
+        var hl = _hash_cell(Int(floor(pos.x * ic)), Int(floor(pos.y * ic)), Int(floor(pos.z * ic)))
+        merge_next[unsafe_offset=k * _VCM_MN_STRIDE + l] = grid_push[use_gpu](heads.unsafe_offset((1 + l) * _HSIZE), hl, k)
+
+@always_inline
+def _vcm_reset_cell(heads: Pointer[Int32, MutUntrackedOrigin], h: Int):
+    """Reset bucket h of the coarse grid and of every fine level."""
+    grid_reset_cell(heads, h)
+    comptime for l in range(1, _VCM_FINE_LEVELS + 1):
+        heads[unsafe_offset=(1 + l) * _HSIZE + h] = Int32(-1)
+
 
 def _bdpt_build_merge_grid(
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
@@ -1773,7 +1806,7 @@ def _bdpt_build_merge_grid(
     `_bdpt_insert_merge_vertex` itself skips each path's unused tail slots
     via `lvc_path_len`."""
     def reset_one(i: Int) {imm}:
-        grid_reset_cell(heads, i)
+        _vcm_reset_cell(heads, i)
     parallelize(reset_one, _HSIZE)
 
     def count_one(k: Int) {imm}:
@@ -2126,17 +2159,29 @@ def _bdpt_merge_from_cache(
     var ciy = Int(floor(cv.pos.y * inv_cell))
     var ciz = Int(floor(cv.pos.z * inv_cell))
     var budget = _vcm_budget_active(sd)
+    # The finest level whose cell still covers this query's radius (level 0 --
+    # the coarse grid -- when it is wider than a coarse cell, as before).
+    var lvl = 0
+    var ic = inv_cell
+    comptime for l in range(1, _VCM_FINE_LEVELS + 1):
+        var icl = inv_cell * Float32(1 << l)
+        if lvl == l - 1 and r2 * icl * icl <= Float32(1):
+            lvl = l
+            ic = icl
+    var lheads = heads.unsafe_offset(0 if lvl == 0 else (1 + lvl) * _HSIZE)
+    var lcix = Int(floor(cv.pos.x * ic))
+    var lciy = Int(floor(cv.pos.y * ic))
+    var lciz = Int(floor(cv.pos.z * ic))
     for ddx in range(-1, 2):
         for ddy in range(-1, 2):
             for ddz in range(-1, 2):
-                var h = _hash_cell(cix + ddx, ciy + ddy, ciz + ddz)
-                var bucket_w = grid_weight(heads, h, _vcm_cap(sd))
-                var k = Int(heads[unsafe_offset=h])
+                var hl = _hash_cell(lcix + ddx, lciy + ddy, lciz + ddz)
+                var k = Int(lheads[unsafe_offset=hl])
                 while k != -1:
                     # The merged path shares cv and the photon, so its interior
                     # length is light count + camera count - 1 (see _vcm_depth).
                     if _vcm_light_count(lvc, k // _BDPT_MAX_VERTS, k % _BDPT_MAX_VERTS) + cam_count - 1 > d_len:
-                        k = Int(merge_next[unsafe_offset=k])
+                        k = Int(merge_next[unsafe_offset=k * _VCM_MN_STRIDE + lvl])
                         continue
                     var lv = lvc[unsafe_offset=k]
                     # is_light==1 vertices are the light SOURCE's own point
@@ -2195,13 +2240,14 @@ def _bdpt_merge_from_cache(
                             # this function's own visit_naive/footprint/thin
                             # docstring paragraph. Pure reads, no effect on
                             # `total`/`result` below.
-                            if _ncmp > Float32(0.7):
-                                if gather_disk_contains(e.to_simd(), dist2, r2_pass, cv.normal.to_simd()):
-                                    visit_naive += Int32(1)
-                                if gather_disk_contains(e.to_simd(), dist2, r2, cv.normal.to_simd()):
-                                    visit_footprint += Int32(1)
-                                    if grid_keep(heads, h, k, lv.pos, _PHOTON_BUCKET_CAP):
-                                        visit_thin += Int32(1)
+                            comptime if _VCM_VISIT_INSTRUMENT:
+                                if _ncmp > Float32(0.7):
+                                    if gather_disk_contains(e.to_simd(), dist2, r2_pass, cv.normal.to_simd()):
+                                        visit_naive += Int32(1)
+                                    if gather_disk_contains(e.to_simd(), dist2, r2, cv.normal.to_simd()):
+                                        visit_footprint += Int32(1)
+                                        if grid_keep(heads, _hash_cell(Int(floor(lv.pos.x * inv_cell)), Int(floor(lv.pos.y * inv_cell)), Int(floor(lv.pos.z * inv_cell))), k, lv.pos, _PHOTON_BUCKET_CAP):
+                                            visit_thin += Int32(1)
                             # Disk-not-ball: the SHARED test, sppm.mojo's
                             # gather_disk_contains -- SPPM's gather now uses it too.
                             accept = _ncmp > Float32(0.7) and gather_disk_contains(e.to_simd(), dist2, r2, cv.normal.to_simd())
@@ -2261,11 +2307,11 @@ def _bdpt_merge_from_cache(
                             # 1 / keep: the bucket's under the fixed cap; under
                             # the per-cell budget the vertex's own (_vcm_keep,
                             # the probability its insert survived).
-                            var keep_w = bucket_w
+                            var keep_w = grid_weight(heads, _hash_cell(Int(floor(lv.pos.x * inv_cell)), Int(floor(lv.pos.y * inv_cell)), Int(floor(lv.pos.z * inv_cell))), _vcm_cap(sd))
                             if budget:
                                 keep_w = Float32(1) / _vcm_keep(sd, lv.pos)
                             total += f_cv * lv.beta * (w * keep_w)
-                    k = Int(merge_next[unsafe_offset=k])
+                    k = Int(merge_next[unsafe_offset=k * _VCM_MN_STRIDE + lvl])
     var result = total * cv.beta * norm
     # Truncation: the photons came only from the part of the disk that is
     # surface (gather_disk_coverage). Queries that found nothing have nothing
@@ -5440,8 +5486,8 @@ def _bdpt_render_core(
     # each `si` below from `merge_radius_1`, the same initial 3%-of-scene-
     # diameter value Stage 1 used as its (then-fixed) radius.
     var (_scene_center, scene_radius) = _scene_bounding_sphere(sd)
-    var merge_heads = unsafe_alloc[Int32](2 * _HSIZE)   # heads | counts, see _PHOTON_BUCKET_CAP
-    var merge_next = unsafe_alloc[Int32](max(lvc_cap, 1))
+    var merge_heads = unsafe_alloc[Int32](_VCM_HEADS_SIZE)   # heads | counts | fine levels, see _VCM_FINE_LEVELS
+    var merge_next = unsafe_alloc[Int32](max(lvc_cap, 1) * _VCM_MN_STRIDE)
     # CAMIS light records (vcm_camis.CamisLightRecord), slot for slot with
     # `lvc`. A single dummy element when the hybrid is compiled out.
     var lvc_camis = unsafe_alloc[CamisLightRecord](max(lvc_cap * _CAMIS_LVC_PER_SLOT, 1))
@@ -6428,7 +6474,7 @@ def bdpt_merge_grid_reset_gpu(heads: Pointer[Int32, MutUntrackedOrigin], hsize_d
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= hsize:
         return
-    grid_reset_cell(heads, tid)
+    _vcm_reset_cell(heads, tid)
 
 
 def bdpt_merge_grid_count_gpu(
@@ -6554,9 +6600,9 @@ def vcm_render_gpu(
             var path_len_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[Int32]())
             # VCM vertex merging (Stage 1) grid buffers — see vcm_render's
             # matching CPU allocation for the merge_r2/merge_norm derivation.
-            var merge_heads_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](2 * _HSIZE * size_of[Int32]())   # heads | counts
+            var merge_heads_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](_VCM_HEADS_SIZE * size_of[Int32]())   # heads | counts | fine levels
             # The previous pass's table, kept intact for _vcm_keep; the two swap each pass.
-            var merge_heads_buf_prev = handle[].ctx.enqueue_create_buffer[DType.uint8](2 * _HSIZE * size_of[Int32]())
+            var merge_heads_buf_prev = handle[].ctx.enqueue_create_buffer[DType.uint8](_VCM_HEADS_SIZE * size_of[Int32]())
             # --vcm-budget: per-bucket [Q, V] merge statistics, this pass's and
             # the previous one's (swapped like the heads), and the reduction
             # [sum sqrt(V Q n), sum Q min(n, cap)] that sets lambda.
@@ -6568,7 +6614,7 @@ def vcm_render_gpu(
             var stat_ptr_b = Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=Int(stat_buf_b.unsafe_ptr()))
             var budget_red_ptr = Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=Int(budget_red_buf.unsafe_ptr()))
             var vcm_lambda = Float32(0)
-            var merge_next_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(lvc_cap, 1) * size_of[Int32]())
+            var merge_next_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(lvc_cap, 1) * _VCM_MN_STRIDE * size_of[Int32]())
             # CAMIS light records, slot for slot with lvc_buf -- a single
             # dummy element when the hybrid is compiled out (see _VCM_CAMIS).
             var lvc_camis_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](
@@ -7153,10 +7199,10 @@ def vcm_render_gpu_wavefront(
             var path_len_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[Int32]())
             # VCM vertex merging (Stage 1) grid buffers — see vcm_render's
             # matching CPU allocation for the merge_r2/merge_norm derivation.
-            var merge_heads_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](2 * _HSIZE * size_of[Int32]())   # heads | counts
+            var merge_heads_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](_VCM_HEADS_SIZE * size_of[Int32]())   # heads | counts | fine levels
             # The previous pass's table, kept intact for _vcm_keep; the two swap each pass.
-            var merge_heads_buf_prev = handle[].ctx.enqueue_create_buffer[DType.uint8](2 * _HSIZE * size_of[Int32]())
-            var merge_next_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(lvc_cap, 1) * size_of[Int32]())
+            var merge_heads_buf_prev = handle[].ctx.enqueue_create_buffer[DType.uint8](_VCM_HEADS_SIZE * size_of[Int32]())
+            var merge_next_buf  = handle[].ctx.enqueue_create_buffer[DType.uint8](max(lvc_cap, 1) * _VCM_MN_STRIDE * size_of[Int32]())
             var inter_light_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[Intersection]())
             var inter_cam_buf   = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection]())
             var light_states_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](max(n_light_paths_merge, 1) * size_of[VCMLightPathState]())
