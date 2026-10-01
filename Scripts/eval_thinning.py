@@ -18,7 +18,8 @@ gonzales's progress line, without scene load.
 
     Scripts/eval_thinning.py              render what is missing, then report
     Scripts/eval_thinning.py --report     report only
-Outputs go to ~/renders/thinning-eval/ (outside the repo: no images in git).
+Outputs go to ~/renders/thinning-eval/ (outside the repo: no images in git);
+EVAL_OUT overrides the directory and EVAL_SCENES (comma-separated) restricts the scenes.
 """
 
 import csv, os, re, subprocess, sys, time
@@ -26,7 +27,7 @@ import numpy as np
 import OpenImageIO as oiio
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT = os.path.expanduser("~/renders/thinning-eval")
+OUT = os.path.expanduser(os.environ.get("EVAL_OUT", "~/renders/thinning-eval"))
 GONZ = os.path.join(REPO, "build", "gonzales")
 ENV = dict(os.environ, LD_LIBRARY_PATH=os.path.join(REPO, "build"),
            GONZALES_DATA_DIR=os.path.join(REPO, "src", "gonzales", "data"))
@@ -44,6 +45,9 @@ SCENES = {
     "twolights":      ("twolights.pbrt",   os.path.join(REPO, "Scenes/thinning"), 1024),
     "cornell-box":    ("cornell-box.pbrt", os.path.join(REPO, "Scenes"), 1024),
 }
+_ALL_SCENES = dict(SCENES)
+if os.environ.get("EVAL_SCENES"):
+    SCENES = {k: v for k, v in SCENES.items() if k in os.environ["EVAL_SCENES"].split(",")}
 VARIANTS = {"A": ["--vcm-cap", "1073741824"], "B": ["--vcm-no-keep-mis"], "C": []}
 SPP = {"A": [4, 16], "B": [4, 16, 64], "C": [4, 16, 64]}
 SEEDS = [1, 2]
@@ -88,7 +92,10 @@ def run_all():
         for r in csv.DictReader(open(times_path)):
             times[r["file"]] = (float(r["render_s"]), float(r["wall_s"]))
     # Warm the GPU kernel cache once so no measured run pays the JIT.
+    SCENES.setdefault("cornell-box", _ALL_SCENES["cornell-box"])
     render("cornell-box", "C", 1, 1, os.path.join(OUT, "_warmup.exr"))
+    if "cornell-box" not in os.environ.get("EVAL_SCENES", "cornell-box").split(","):
+        del SCENES["cornell-box"]
     jobs = []
     for sc, (_, _, ref_spp) in SCENES.items():
         jobs.append((sc, "C", ref_spp, REF_SEED, f"{sc}_ref.exr"))
