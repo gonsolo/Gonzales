@@ -87,6 +87,34 @@ Nsight Graphics shows no SASS, but the driver reports it through two other chann
 - The raw bytes (0x6d0-0x7c0) are in `extract_sass.py`'s output; first words: 3d0 `d0730000 00000000 00010000
   00ec0f00`, 9d4 `d4790000 000e0000 00000000 00e80f02`, 3d1 `d1730000 16000000 14000000 00e20100`.
 
+## Variant diffs (2026-10-02, `variants/run_variants.py`)
+`nvdisasm --binary SM86 code.bin` reads the raw code directly (no dummy cubin needed). Each variant of
+`intersect_batch.comp` was compiled by the driver and the undecoded block compared with the base shader:
+- The block is always the same shape: `0x3d0` (constant bytes `d0730000 00000000 00010000 00ec0f00`),
+  `0x9d4`, eight `0x3d1`, one `0x3d3` (constant), then a run of `0x3d2`.
+- Ray flags (opaque / terminate-on-first-hit / no flags / cull back faces) and the cull mask (0xff, 0x01,
+  dynamic) do NOT change the block's bytes (only its position, because the code before it changes). They are
+  set up in registers before the block (`IMAD.MOV.U32 R20/R22/R24, ... immediate`; e.g. R20 = -0xfcfdf9,
+  R24 = -0xfcfbf9, R22 = 0xff0000 in the base shader), so the flags and mask travel as register values.
+- The ray itself is moved into R8-R15 (origin, tmin, direction, tmax) and R16-R23 just before the block.
+- `tmin` constant 0.0 only flips a scheduling byte of `0x9d4` (`02` -> `00`).
+- The number and registers of the `0x3d2` instructions follow the result queries: base (type, barycentrics,
+  t, custom index, primitive index) has five, a variant that drops t / barycentrics / custom index / primitive
+  index has four. Their byte 2 is a destination register in steps of 4 (R8, R12, R16, ...), byte 8 a source
+  register (R10, R14, R18, RZ, R22), i.e. they read results out of the unit; the eight `0x3d1` take register
+  pairs and look like writing the ray into the unit (byte 4 and byte 8 are register numbers that change with
+  register allocation). These readings are guesses from operand patterns, not confirmed.
+
+## Prior art found by web search (2026-10-02)
+- NVIDIA caches compiled shaders (Vulkan and OpenGL) in `~/.nv/GLCache` or `~/.cache/nvidia/GLCache`;
+  `nvcachetools` (reads `.toc`/`.bin`) and `nvucdump` (extracts sections of `.nvuc` objects) plus `nvdisasm --binary SMxx`
+  or `envydis` are the known extraction route: https://danilw.github.io/blog/decompiling_and_optimizing_nvidia_shaders/
+  That article does not cover ray tracing.
+- SASS references: cicuvc/nvidia-sass-document, florianmattana/sass-king, cloudcores/CuAssembler, NoxNode/AmpItUp
+  (Ampere encoding). None documents the RT instructions.
+- Patents describe the Tree Traversal Unit (TTU) hardware. No public reverse-engineering of the SM to RT-core
+  interface was found.
+
 ## Next experiments
 - Dump the stub: needs a tool that reads device code (cuda-gdb cannot); candidates are a CUPTI/SASS-patching
   tool or Nsight Graphics on the Vulkan ray-query shader.

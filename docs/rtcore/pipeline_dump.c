@@ -1,14 +1,20 @@
 // Dumps the driver's own view of a compute pipeline via VK_KHR_pipeline_executable_properties:
 // statistics (registers etc.) and internal representations (NVIDIA may expose assembly).
-// Build: gcc -O1 pipeline_dump.c -I../../src/vulkanrt/generated -lvulkan -o /tmp/pipeline_dump
+// Usage: pipeline_dump <outdir> <shader.spv>   (descriptor layout: 0 = TLAS, 1/2 = storage buffers, push constant 4 bytes)
+// Build: gcc -O1 pipeline_dump.c -lvulkan -o /tmp/pipeline_dump
 #include <vulkan/vulkan.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "intersect_batch_comp_spv.h"
 #define CK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { fprintf(stderr, "%s failed: %d\n", #x, r_); exit(1);} } while (0)
+static uint32_t* read_spv(const char* path, size_t* size) {
+    FILE* f = fopen(path, "rb"); if (!f) { perror(path); exit(1); }
+    fseek(f, 0, SEEK_END); *size = ftell(f); fseek(f, 0, SEEK_SET);
+    uint32_t* d = malloc(*size); fread(d, 1, *size, f); fclose(f); return d;
+}
 int main(int argc, char** argv) {
     const char* outdir = argc > 1 ? argv[1] : "/tmp/pipe_dump";
+    size_t spv_size; uint32_t* spv = read_spv(argc > 2 ? argv[2] : "intersect_batch.spv", &spv_size);
     char cmd[512]; snprintf(cmd, sizeof cmd, "mkdir -p %s", outdir); system(cmd);
     VkApplicationInfo ai = {VK_STRUCTURE_TYPE_APPLICATION_INFO}; ai.apiVersion = VK_API_VERSION_1_3;
     VkInstanceCreateInfo ici = {VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO}; ici.pApplicationInfo = &ai;
@@ -40,7 +46,7 @@ int main(int argc, char** argv) {
     plci.setLayoutCount = 1; plci.pSetLayouts = &dl; plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pcr;
     VkPipelineLayout pl; CK(vkCreatePipelineLayout(dev, &plci, NULL, &pl));
     VkShaderModuleCreateInfo smci = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-    smci.codeSize = sizeof intersect_batch_comp_spv; smci.pCode = intersect_batch_comp_spv;
+    smci.codeSize = spv_size; smci.pCode = spv;
     VkShaderModule sm; CK(vkCreateShaderModule(dev, &smci, NULL, &sm));
     VkComputePipelineCreateInfo cpci = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
     cpci.flags = VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR | VK_PIPELINE_CREATE_CAPTURE_INTERNAL_REPRESENTATIONS_BIT_KHR;
