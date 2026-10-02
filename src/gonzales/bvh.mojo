@@ -1196,7 +1196,8 @@ def _traverse_blas_triangles(
     var bestU: Float32 = 0.0
     var bestV: Float32 = 0.0
 
-    var stack = Array[Int32, 64](fill=Int32(0))
+    # Only slots below toVisit are ever read, so nothing needs zeroing.
+    var stack = Array[Int32, 64](uninitialized=True)
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
     var current = 0
@@ -1367,7 +1368,8 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
     var instHit = False
     var instHitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
 
-    var stack = Array[Int32, 64](fill=Int32(0))
+    # Only slots below toVisit are ever read, so nothing needs zeroing.
+    var stack = Array[Int32, 64](uninitialized=True)
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
     var current = 0
@@ -1566,7 +1568,8 @@ def traverse_bvh2_core_defer_curves(
     var instHit = False
     var instHitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
 
-    var stack = Array[Int32, 64](fill=Int32(0))
+    # Only slots below toVisit are ever read, so nothing needs zeroing.
+    var stack = Array[Int32, 64](uninitialized=True)
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
     var current = 0
@@ -1793,7 +1796,8 @@ def any_hit_bvh2_core(
     var nearXIsMin = rdir.x >= Float32(0.0)
     var nearYIsMin = rdir.y >= Float32(0.0)
     var nearZIsMin = rdir.z >= Float32(0.0)
-    var stack = Array[Int32, 64](fill=Int32(0))
+    # Only slots below toVisit are ever read, so nothing needs zeroing.
+    var stack = Array[Int32, 64](uninitialized=True)
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
     var current = 0
@@ -1806,10 +1810,6 @@ def any_hit_bvh2_core(
             var count = Int(node.count)
             for j in range(count):
                 var prim = primIds[unsafe_offset=offset + j]
-                # pbrt "interface" (null) material: no BSDF, medium boundary
-                # only -- must not occlude. See _shadow_is_null_material.
-                if _shadow_is_null_material(materials, prim.materialIndex):
-                    continue
                 var mesh_idx: Int
                 var base_vidx: Int
                 if prim.type == 0:
@@ -1821,27 +1821,41 @@ def any_hit_bvh2_core(
                     mesh_idx = Int(prim.id2 >> 32)
                     base_vidx = Int(prim.id2 & 0xFFFFFFFF) * 3
                 elif prim.type == 5:
+                    # pbrt "interface" (null) material: no BSDF, medium boundary
+                    # only -- must not occlude. See _shadow_is_null_material.
+                    if _shadow_is_null_material(materials, prim.materialIndex):
+                        continue
                     var curve = curves[unsafe_offset=Int(prim.id1)]
                     if intersect_curve(ray_org, ray_dir, curve, Int(prim.id2) // 8, Int(prim.id2) % 8, tMax)[0]:
                         return True
                     continue
                 elif prim.type == 6:
+                    if _shadow_is_null_material(materials, prim.materialIndex):
+                        continue
                     if _traverse_instance_leaf(prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, tMax)[0]:
                         return True
                     continue
                 else:
                     continue
-                var mesh = meshes[unsafe_offset=mesh_idx]
-                var v0 = Int(mesh.vertexIndices[unsafe_offset=base_vidx])
-                var v1 = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 1])
-                var v2 = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 2])
-                var p0 = Vec3f(mesh.points[unsafe_offset=v0*4], mesh.points[unsafe_offset=v0*4+1], mesh.points[unsafe_offset=v0*4+2])
-                var p1 = Vec3f(mesh.points[unsafe_offset=v1*4], mesh.points[unsafe_offset=v1*4+1], mesh.points[unsafe_offset=v1*4+2])
-                var p2 = Vec3f(mesh.points[unsafe_offset=v2*4], mesh.points[unsafe_offset=v2*4+1], mesh.points[unsafe_offset=v2*4+2])
+                var vidx = meshes[unsafe_offset=mesh_idx].vertexIndices
+                var pts = meshes[unsafe_offset=mesh_idx].points
+                var v0 = Int(vidx[unsafe_offset=base_vidx])
+                var v1 = Int(vidx[unsafe_offset=base_vidx + 1])
+                var v2 = Int(vidx[unsafe_offset=base_vidx + 2])
+                var p0 = Vec3f(pts[unsafe_offset=v0*4], pts[unsafe_offset=v0*4+1], pts[unsafe_offset=v0*4+2])
+                var p1 = Vec3f(pts[unsafe_offset=v1*4], pts[unsafe_offset=v1*4+1], pts[unsafe_offset=v1*4+2])
+                var p2 = Vec3f(pts[unsafe_offset=v2*4], pts[unsafe_offset=v2*4+1], pts[unsafe_offset=v2*4+2])
                 var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, tMax)
-                if hit_res[0] and not alpha_killed(mesh, v0, v1, v2, hit_res[2], hit_res[3],
-                                                   ray_org, ray_dir, (mesh_idx << 32) | base_vidx):
-                    return True
+                if hit_res[0]:
+                    # Tested after the hit, not before: the null-material and
+                    # alpha lookups only matter for a primitive that is
+                    # actually crossed, and most are not.
+                    if _shadow_is_null_material(materials, prim.materialIndex):
+                        continue
+                    var mesh = meshes[unsafe_offset=mesh_idx]
+                    if not alpha_killed(mesh, v0, v1, v2, hit_res[2], hit_res[3],
+                                        ray_org, ray_dir, (mesh_idx << 32) | base_vidx):
+                        return True
             if toVisit == 0:
                 break
             toVisit -= 1
