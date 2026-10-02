@@ -258,6 +258,29 @@ def sobol_sample(
     var scrambled = fast_owen_scramble(acc, seed)
     return min(Float32(scrambled) * Float32(2.32830643653869628906e-10), Float32(0.9999999))
 
+# N consecutive dimensions of the same sample index in one pass: the bit test and shift are shared and the N matrix loads
+# of a set bit are independent, where N sobol_sample calls repeat the whole serial loop per dimension.
+@always_inline
+def sobol_sample_n[N: Int](
+    index: Int, dim0: Int, seeds: SIMD[DType.uint32, N],
+    matrices: Pointer[UInt32, MutUntrackedOrigin],
+) -> SIMD[DType.float32, N]:
+    var acc = SIMD[DType.uint32, N](0)
+    var cur = index
+    var base = dim0 * 52
+    for bit in range(52):
+        if cur & 1 != 0:
+            comptime for k in range(N):
+                acc[k] ^= matrices[unsafe_offset=base + k * 52 + bit]
+        cur >>= 1
+        if cur == 0:
+            break
+    var out = SIMD[DType.float32, N](0)
+    comptime for k in range(N):
+        var scrambled = fast_owen_scramble(acc[k], seeds[k])
+        out[k] = min(Float32(scrambled) * Float32(2.32830643653869628906e-10), Float32(0.9999999))
+    return out
+
 # Polynomial erfinv — no Newton refinement, sufficient accuracy for filter sampling.
 @always_inline
 def gaussian_erfinv(y: Float32) -> Float32:
@@ -533,8 +556,12 @@ def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     var morton_base = encode_morton2(UInt32(px), UInt32(py)) << UInt64(log2spp)
     var morton_idx  = morton_base | UInt64(si)
     var sobol_idx   = sobol_get_sample_index(morton_idx, 0, log2spp, n_base4)
-    var u0 = sobol_sample(Int(sobol_idx), 0, seed_dim0, sobol_matrices)
-    var u1 = sobol_sample(Int(sobol_idx), 1, seed_dim1, sobol_matrices)
+    var (pcg_state, pcg_inc) = derive_pcg_seeds(px, py, si, rng_seed)
+    # Dimensions 0 and 1 place the sample on the film, dimension 2 picks the hero wavelength (scrambled like the
+    # per-bounce dimensions, mix_bits_u64(pcgInc ^ dim)); dimension 3 is only there to make the width a power of two.
+    var u3 = sobol_sample_n[4](Int(sobol_idx), 0, SIMD[DType.uint32, 4](seed_dim0, seed_dim1, mix_bits_u64(pcg_inc ^ UInt64(2)), UInt32(0)), sobol_matrices)
+    var u0 = u3[0]
+    var u1 = u3[1]
     # filter_norm_x/_y are no longer read: they normalised the old truncated
     # Gaussian, and filter_sample_2d computes pbrt's kernel from sigma and the
     # radii directly. Left in the signature so the GPU kernels that forward
@@ -547,7 +574,6 @@ def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     var (dir, org, _camLen) = camera_ray_from_film_xy(filmX, filmY, r2c, c2w)
     var dx = dir.x; var dy = dir.y; var dz = dir.z
     var orgX = org.x; var orgY = org.y; var orgZ = org.z
-    var (pcg_state, pcg_inc) = derive_pcg_seeds(px, py, si, rng_seed)
 
     # Hero-wavelength sample — its own Sobol dimension (2), reserved once per
     # path at primary-ray generation (never resampled per bounce, so hero-
@@ -556,7 +582,7 @@ def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     # _draw_sobol_8: mix_bits_u64(pcgInc ^ dim)), not an externally threaded
     # seed_dim2, since this dimension has no film-position-style external
     # jitter parameters to interact with.
-    var u_wave = sobol_sample(Int(sobol_idx), 2, mix_bits_u64(pcg_inc ^ UInt64(2)), sobol_matrices)
+    var u_wave = u3[2]
     var wavelengths = sample_wavelengths(u_wave)
 
     return (Ray(Point3f(orgX, orgY, orgZ), Vec3f(dx, dy, dz)), pcg_state, pcg_inc, sobol_idx, wavelengths)
