@@ -333,3 +333,22 @@ Bistro vespa, 640x360, ms per sample: software 74, Vulkan 52 (it ignores alpha),
 1.0009 of the software image. With 3 passes and no fallback the image was 16% too bright (rays leaving the foliage
 as misses); 12 passes still 6%. Synthetic check: the Cornell box with a half-transparent and a fully transparent quad,
 hardware / software = 1.00003. Pavilion at night: 65 ms (software 89). Bathroom: 1.0007.
+
+
+## VCM on the RT cores (2026-10-02)
+
+`gonzales --gpu --vcm --rt-hardware scene.pbrt` runs the staged VCM driver (`--vcm-wavefront`, implied) with the RT-core
+trace for the light paths, the camera paths and the connection shadow rays. The staged driver renders pixel-identical
+images to the megakernel `vcm_render_gpu` (checked on the pavilion: ratio 1.0, rms 0), so the paper's thinning, footprint
+and keep-aware MIS are all there. Instancing (TLAS), spheres (analytic pass from the rays buffer; the shadow resolve sends
+rays that hit a sphere to the full visibility trace) and alpha cutouts (same re-trace passes; deep tail to the software BVH)
+are supported; curves are not. The shadow resolve decodes instance hits through the instance table and treats a ray with
+too many rejected alpha hits as needing the full trace.
+
+Correctness: Cornell box 0.99999 of the software staged VCM; pavilion at night (43 instances, 2 spheres, alpha) 1.0001.
+
+Speed: VCM is not trace bound (merging and connecting dominate), so there is no gain. Pavilion at night, 640x340, ms per
+sample: staged software 854, RT cores 948; without the alpha passes 841 (the passes re-trace the 10-slot shadow batch up to
+four times, mostly dead rays). Setup 10.6 s against 4.5 s. The staged driver keeps per-path state for every pixel and runs
+out of memory at 1920x1080 on a 12 GB card, with or without the RT cores (the megakernel does not), so the hardware teaser is
+rendered at 1280x720: 128 spp in 442 s.

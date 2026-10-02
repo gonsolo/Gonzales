@@ -1193,9 +1193,13 @@ def parse_and_render(
             var interop_results_buf_vcm: Optional[DeviceBuffer[DType.float32]] = None
             var mesh_material_idx_buf_vcm: Optional[DeviceBuffer[DType.uint8]] = None
             var mesh_al_idx_buf_vcm: Optional[DeviceBuffer[DType.uint8]] = None
+            var instance_base_mesh_buf_vcm: Optional[DeviceBuffer[DType.uint8]] = None
+            var rt_scratch_buf_vcm: Optional[DeviceBuffer[DType.uint8]] = None
             var n_meshes_vk_vcm = 0
             if use_vk_vcm:
-                if psc[unsafe_offset=0].curve_count > Int32(0) or psc[unsafe_offset=0].sphere_count > Int32(0) or psc[unsafe_offset=0].instance_count > Int32(0):
+                # --rt-hardware lifts the sphere / instancing limits (analytic sphere passes, TLAS instancing); curves stay out.
+                var hw_vcm = getenv("GONZALES_RTCORE") != ""
+                if psc[unsafe_offset=0].curve_count > Int32(0) or ((psc[unsafe_offset=0].sphere_count > Int32(0) or psc[unsafe_offset=0].instance_count > Int32(0)) and not hw_vcm):
                     print("WARNING: --vulkan-rt-shade requested but scene uses curves/spheres/instancing (unsupported) -- falling back to CUDA intersection")
                     use_vk_vcm = False
                 else:
@@ -1218,31 +1222,65 @@ def parse_and_render(
                         vmeshes_vcm[unsafe_offset=i] = psc[unsafe_offset=0].meshes[unsafe_offset=i]
                         point_counts_vcm[unsafe_offset=i] = Int64(psc[unsafe_offset=0].mesh_n_verts[unsafe_offset=i])
                         vidx_counts_vcm[unsafe_offset=i] = Int64(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i]) * 3
-                    # VCM's Vulkan RT path doesn't support object instancing
-                    # yet (its own primary/bounce interop -- vulkaninterop_
-                    # rt_traverse_light_paths_gpu/_camera_ in bdpt.mojo -- is
-                    # a separate wiring from the plain wavefront path's
-                    # _gpu_bounce_kernels, not extended this session; see
-                    # project_vulkan_rt_backend memory). The guard above
-                    # already keeps instanced/curve/sphere scenes off this
-                    # path entirely, so template_count/instance_count/
-                    # n_curve_leaves are always 0 here.
-                    var no_templates_vcm = Pointer[Int64, MutUntrackedOrigin].unsafe_dangling()
-                    var no_instances_vcm = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
-                    var no_instance_tmpl_vcm = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
+                    # Instancing exists here only with --rt-hardware (the guard above): the same template / instance arrays the
+                    # path tracer's scene gets. Without it all of these are empty, as before.
+                    var n_templates_vcm = 0
+                    var n_instances_vcm = 0
+                    if hw_vcm:
+                        n_templates_vcm = Int(psc[unsafe_offset=0].blas_count)
+                        n_instances_vcm = Int(psc[unsafe_offset=0].instance_count)
+                    var tmpl_start_vcm = unsafe_alloc[Int64](max(n_templates_vcm, 1))
+                    var tmpl_end_vcm = unsafe_alloc[Int64](max(n_templates_vcm, 1))
+                    for t in range(n_templates_vcm):
+                        tmpl_start_vcm[unsafe_offset=t] = Int64(psc[unsafe_offset=0].template_mesh_start[unsafe_offset=t])
+                        tmpl_end_vcm[unsafe_offset=t] = Int64(psc[unsafe_offset=0].template_mesh_end[unsafe_offset=t])
+                    var inst_o2w_vcm = unsafe_alloc[Float32](max(n_instances_vcm, 1) * 16)
+                    var inst_tmpl_vcm = unsafe_alloc[Int32](max(n_instances_vcm, 1))
+                    var inst_base_host_vcm = unsafe_alloc[Int32](max(n_instances_vcm, 1))
+                    for k in range(n_instances_vcm):
+                        var inst = psc[unsafe_offset=0].instances[unsafe_offset=k]
+                        for ci in range(16):
+                            inst_o2w_vcm[unsafe_offset=k * 16 + ci] = inst.objToWorld[ci]
+                        inst_tmpl_vcm[unsafe_offset=k] = Int32(inst.blasIdx)
+                        inst_base_host_vcm[unsafe_offset=k] = psc[unsafe_offset=0].template_mesh_start[unsafe_offset=Int(inst.blasIdx)]
+                    # --rt-hardware without instancing: one merged mesh feeds both the interop scene and the RT cores.
+                    var rt_merged_vcm = _RtMerged()
+                    if hw_vcm:
+                        rt_merged_vcm = _rtcore_merge(psc)
                     var no_curve_aabbs_vcm = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
                     var no_curve_i32_vcm = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
                     var no_curve_data_vcm = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
+                    var scene_meshes_vcm = vmeshes_vcm
+                    var scene_n_meshes_vcm = n_meshes_vk_vcm
+                    var scene_pc_vcm = point_counts_vcm
+                    var scene_ic_vcm = vidx_counts_vcm
+                    if rt_merged_vcm.valid:
+                        scene_meshes_vcm = rt_merged_vcm.meshes
+                        scene_n_meshes_vcm = 1
+                        scene_pc_vcm = rt_merged_vcm.point_counts
+                        scene_ic_vcm = rt_merged_vcm.idx_counts
                     interop_scene_vcm = vulkaninterop_rt_create_scene(
-                        vmeshes_vcm, Int64(n_meshes_vk_vcm), point_counts_vcm, vidx_counts_vcm,
-                        Int64(0), no_templates_vcm, no_templates_vcm,
-                        Int64(0), no_instances_vcm, no_instance_tmpl_vcm,
+                        scene_meshes_vcm, Int64(scene_n_meshes_vcm), scene_pc_vcm, scene_ic_vcm,
+                        Int64(n_templates_vcm), tmpl_start_vcm, tmpl_end_vcm,
+                        Int64(n_instances_vcm), inst_o2w_vcm, inst_tmpl_vcm,
                         Int64(0), no_curve_aabbs_vcm,
                         no_curve_i32_vcm, no_curve_i32_vcm, no_curve_i32_vcm,
                         Int64(0), no_curve_data_vcm, no_curve_i32_vcm,
                         Int64(max_rays_vk_vcm))
                     vmeshes_vcm.unsafe_free(); point_counts_vcm.unsafe_free(); vidx_counts_vcm.unsafe_free()
-                    if Int(interop_scene_vcm) == 0:
+                    tmpl_start_vcm.unsafe_free(); tmpl_end_vcm.unsafe_free(); inst_o2w_vcm.unsafe_free(); inst_tmpl_vcm.unsafe_free()
+                    var hw_failed_vcm = False
+                    if Int(interop_scene_vcm) != 0 and (rt_merged_vcm.valid or (hw_vcm and _rtcore_native_wanted(psc))):
+                        var rt_hw_v = _rtcore_attach(interop_scene_vcm, rt_merged_vcm) if rt_merged_vcm.valid else _rtcore_attach_native(interop_scene_vcm, psc)
+                        if Int(rt_hw_v) != 0:
+                            rtcore_set_active(rt_hw_v)
+                            rtcore_set_shadow(Int32(0))      # VCM resolves its own shadow rays (resolve_shadow_connect_gpu)
+                            rtcore_set_alpha(Int32(1) if _scene_has_alpha(psc) and getenv("GONZALES_RTCORE_NOALPHA") == "" else Int32(0))
+                        elif rt_merged_vcm.valid:
+                            hw_failed_vcm = True           # the interop scene holds one merged mesh: Vulkan cannot report real mesh ids
+                            vulkaninterop_rt_destroy_scene(interop_scene_vcm)
+                    rt_merged_vcm.release()
+                    if Int(interop_scene_vcm) == 0 or hw_failed_vcm:
                         print("WARNING: vulkaninterop_rt_create_scene FAILED -- falling back to CUDA intersection")
                         use_vk_vcm = False
                     else:
@@ -1273,12 +1311,27 @@ def parse_and_render(
                         mesh_material_idx_vcm.unsafe_free()
                         mesh_al_idx_vcm.unsafe_free()
 
+                        if n_instances_vcm > 0:
+                            var ibm_buf_vcm = handle[].ctx.enqueue_create_buffer[DType.uint8](n_instances_vcm * size_of[Int32]())
+                            with ibm_buf_vcm.map_to_host() as h3v:
+                                var dst3v = h3v.unsafe_ptr().unsafe_bitcast[Int32]()
+                                for k in range(n_instances_vcm):
+                                    dst3v[unsafe_offset=k] = inst_base_host_vcm[unsafe_offset=k]
+                            instance_base_mesh_buf_vcm = ibm_buf_vcm^
+                        if Int(rtcore_active()) != 0:
+                            rt_scratch_buf_vcm = handle[].ctx.enqueue_create_buffer[DType.uint8](max_rays_vk_vcm * 32)
+                    inst_base_host_vcm.unsafe_free()
+
             ret = vcm_render_gpu_wavefront(
                 handle, psc, sd[unsafe_offset=0], resolved_vcm_spp, n_photons, no_denoise, verbose,
                 use_vk_vcm, interop_scene_vcm, interop_rays_buf_vcm, interop_results_buf_vcm,
                 mesh_material_idx_buf_vcm, mesh_al_idx_buf_vcm, n_meshes_vk_vcm,
+                rt_scratch_buf_vcm, instance_base_mesh_buf_vcm,
             )
             if use_vk_vcm:
+                var rt_hw_end_v = rtcore_active()
+                if Int(rt_hw_end_v) != 0:
+                    rtcore_destroy(rt_hw_end_v)
                 vulkaninterop_rt_destroy_scene(interop_scene_vcm)
         else:
             ret = vcm_render_gpu(handle, psc, sd[unsafe_offset=0], resolved_vcm_spp, n_photons, no_denoise, verbose, vcm_budget, vcm_cap, vcm_no_keep_mis, vcm_radius_from_camera, vcm_radius_cam_percentile, vcm_radius_cam_fraction_mult, vcm_no_footprint)

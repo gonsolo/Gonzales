@@ -78,8 +78,6 @@ def _gpu_bounce_kernels(
             handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere](),
             handle[].n_spheres,
             handle[].rt_scratch_buf,
-            handle[].curves.cand_prim_ptr(),
-            handle[].curves.cand_count_ptr(),
         )
     else:
         handle[].ctx.enqueue_function[traverse_paths_gpu](

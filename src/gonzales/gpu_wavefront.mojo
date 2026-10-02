@@ -648,13 +648,12 @@ def rtcore_alpha_passes(
     )
 
 
+# Reads the ray from the interop rays buffer (so it serves any state layout: path tracer, VCM light and camera paths).
 def rtcore_alpha_fallback_gpu(
     sd: SceneView,
-    paths: Pointer[PathState, MutUntrackedOrigin],
+    rays: Pointer[Float32, MutUntrackedOrigin],
     interop_results: Pointer[Float32, MutUntrackedOrigin],
     inter: Pointer[Intersection, MutUntrackedOrigin],
-    curve_cand_prim: Pointer[Int32, MutUntrackedOrigin],
-    curve_cand_count: Pointer[Int32, MutUntrackedOrigin],
     count_dp: Int64,
 ):
     var count = Int(count_dp)
@@ -663,14 +662,80 @@ def rtcore_alpha_fallback_gpu(
         return
     if interop_results.unsafe_bitcast[Int32]()[unsafe_offset=tid * 8 + 6] != Int32(3):
         return
-    if paths[unsafe_offset=tid].active == 0:
-        return
-    # Alpha scenes are triangle-only here (curves are not eligible), so the candidate buffers are never written.
+    var idx = tid * 8
+    var ray = Ray(Point3f(rays[unsafe_offset=idx], rays[unsafe_offset=idx + 1], rays[unsafe_offset=idx + 2]),
+                  Vec3f(rays[unsafe_offset=idx + 4], rays[unsafe_offset=idx + 5], rays[unsafe_offset=idx + 6]))
+    # Alpha scenes are triangle-only here (curves are not eligible), so the curve candidate buffers are never touched.
     traverse_bvh2_core_defer_curves(
-        sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, paths[unsafe_offset=tid].ray, Float32(1.0e38), inter.unsafe_offset(tid),
-        curve_cand_prim, curve_cand_count,
+        sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), inter.unsafe_offset(tid),
+        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
     )
+
+# Analytic spheres for rays that live in the interop rays buffer (VCM's path states are not PathState).
+def rtcore_spheres_from_rays_gpu(
+    rays: Pointer[Float32, MutUntrackedOrigin],
+    inter: Pointer[Intersection, MutUntrackedOrigin],
+    spheres: Pointer[Sphere, MutUntrackedOrigin],
+    n_spheres_dp: Int64,
+    count_dp: Int64,
+):
+    var count = Int(count_dp)
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    var idx = tid * 8
+    var ray = Ray(Point3f(rays[unsafe_offset=idx], rays[unsafe_offset=idx + 1], rays[unsafe_offset=idx + 2]),
+                  Vec3f(rays[unsafe_offset=idx + 4], rays[unsafe_offset=idx + 5], rays[unsafe_offset=idx + 6]))
+    test_spheres(spheres, Int(n_spheres_dp), ray, inter.unsafe_offset(tid))
+
+# The RT-core replacement for "trace + unpack": traces the interop rays buffer on the RT cores into the interop result layout,
+# re-traces past rejected alpha hits (scenes with alpha only), decodes into Intersections, and lets the software BVH resolve
+# rays that were rejected too often. Spheres are the caller's business (they need the caller's ray layout).
+def rtcore_trace_unpack_gpu(
+    ctx: DeviceContext,
+    inter_buf: DeviceBuffer[DType.uint8],
+    sd: SceneView,
+    rays_buf: DeviceBuffer[DType.float32],
+    results_buf: DeviceBuffer[DType.float32],
+    scratch_buf: DeviceBuffer[DType.uint8],
+    mesh_material_idx_buf: DeviceBuffer[DType.uint8],
+    mesh_al_idx_buf: DeviceBuffer[DType.uint8],
+    n_meshes: Int,
+    n_total: Int,
+    instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]],
+) raises:
+    comptime block_size = 256
+    var grid = ceildiv(n_total, block_size)
+    var cuda_stream = CUDA(ctx.stream())
+    var rt_hw = rtcore_active()
+    _ = rtcore_trace_interop(rt_hw, UInt64(Int(rays_buf.unsafe_ptr())), UInt64(Int(results_buf.unsafe_ptr())), Int32(n_total), cuda_stream)
+    var instance_base_mesh_ptr = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
+    if instance_base_mesh_buf:
+        instance_base_mesh_ptr = instance_base_mesh_buf.value().unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    var alpha = Int(rtcore_alpha_enabled()) != 0
+    if alpha:
+        rtcore_alpha_passes(ctx, rays_buf, results_buf, scratch_buf, sd.meshes, n_meshes, instance_base_mesh_ptr, n_total)
+    ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
+        results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        mesh_material_idx_buf.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        Int64(n_meshes),
+        Int64(n_total),
+        instance_base_mesh_ptr,
+        grid_dim=grid, block_dim=block_size,
+    )
+    if alpha:
+        ctx.enqueue_function[rtcore_alpha_fallback_gpu](
+            sd,
+            rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            Int64(n_total),
+            grid_dim=grid, block_dim=block_size,
+        )
+
 
 def rtcore_shadow_rays_gpu(
     ctx: DeviceContext,
@@ -731,8 +796,6 @@ def vulkaninterop_rt_traverse_paths_gpu(
     n_spheres: Int = 0,
     # --rt-hardware with alpha cutouts (see rtcore_alpha_passes).
     rt_scratch_buf: Optional[DeviceBuffer[DType.uint8]] = None,
-    curve_cand_prim: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
-    curve_cand_count: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
 ) raises:
     comptime block_size = 256
     var grid = ceildiv(n_total, block_size)
@@ -746,38 +809,24 @@ def vulkaninterop_rt_traverse_paths_gpu(
 
     var cuda_stream = CUDA(ctx.stream())
     # --rt-hardware: trace on the RT cores from a CUDA kernel (docs/rtcore/NOTES.md) instead of dispatching the Vulkan
-    # ray-query shader. Same rays buffer, same Result layout, so everything after this point is unchanged.
+    # ray-query shader. Same rays buffer, same Result layout.
     var rt_hw = rtcore_active()
-    if Int(rt_hw) != 0:
-        _ = rtcore_trace_interop(rt_hw, UInt64(Int(interop_rays_buf.unsafe_ptr())), UInt64(Int(interop_results_buf.unsafe_ptr())), Int32(n_total), cuda_stream)
+    if Int(rt_hw) != 0 and rt_scratch_buf:
+        rtcore_trace_unpack_gpu(ctx, inter_buf, sd, interop_rays_buf, interop_results_buf, rt_scratch_buf.value(),
+                                mesh_material_idx_buf, mesh_al_idx_buf, n_meshes, n_total, instance_base_mesh_buf)
     else:
         _ = vulkaninterop_rt_trace(interop_scene, Int32(n_total), cuda_stream)
-
-    var instance_base_mesh_ptr = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
-    if instance_base_mesh_buf:
-        instance_base_mesh_ptr = instance_base_mesh_buf.value().unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
-    if Int(rt_hw) != 0 and Int(rtcore_alpha_enabled()) != 0 and rt_scratch_buf:
-        rtcore_alpha_passes(ctx, interop_rays_buf, interop_results_buf, rt_scratch_buf.value(), sd.meshes, n_meshes, instance_base_mesh_ptr, n_total)
-
-    ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
-        interop_results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        mesh_material_idx_buf.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        Int64(n_meshes),
-        Int64(n_total),
-        instance_base_mesh_ptr,
-        grid_dim=grid, block_dim=block_size,
-    )
-
-    if Int(rt_hw) != 0 and Int(rtcore_alpha_enabled()) != 0 and rt_scratch_buf:
-        ctx.enqueue_function[rtcore_alpha_fallback_gpu](
-            sd,
-            path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        var instance_base_mesh_ptr = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
+        if instance_base_mesh_buf:
+            instance_base_mesh_ptr = instance_base_mesh_buf.value().unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+        ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
             interop_results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-            curve_cand_prim, curve_cand_count,
+            mesh_material_idx_buf.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            Int64(n_meshes),
             Int64(n_total),
+            instance_base_mesh_ptr,
             grid_dim=grid, block_dim=block_size,
         )
 

@@ -173,6 +173,7 @@ def main() raises:
             # Wavefront GPU path tracing with the RT cores driven from a CUDA kernel (docs/rtcore/NOTES.md); implies
             # --vulkan-rt-shade (same buffers, Vulkan keeps building the acceleration structure).
             use_vulkan_rt_shade = True
+            use_vcm_wavefront = True          # with --vcm: the staged VCM driver is the one with the trace hook
             _ = setenv("GONZALES_RTCORE", "1", True)
         elif arg == "--vcm":
             use_vcm = True
