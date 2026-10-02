@@ -682,7 +682,10 @@ extern "C" int64_t vulkanrt_debug_read_as(void* sceneHandle, int kind, int index
     if (out_address) *out_address = scene->fns.getDeviceAddress(scene->device, &ai);
     if (!out) return (int64_t)src->size;
     Buffer staging;
+    // HOST_CACHED first: the plain coherent type is write-combined/BAR memory and reads at ~80 MB/s.
     if (!createBuffer(scene->device, scene->physicalDevice, src->size, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT, false, &staging) &&
+        !createBuffer(scene->device, scene->physicalDevice, src->size, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, false, &staging)) return 0;
     VkCommandBufferAllocateInfo cbai{};
     cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;

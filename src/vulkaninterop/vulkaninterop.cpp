@@ -200,7 +200,7 @@ bool buildAccelerationStructure(
                        &buildInfo, &primitiveCount, &sizeInfo);
 
     if (!createBuffer(device, physicalDevice, sizeInfo.accelerationStructureSize,
-                       VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
+                       VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, false, outASBuffer)) {
         return false;
     }
@@ -1174,6 +1174,52 @@ extern "C" int vulkaninterop_round_trip(void* handle, void* cuda_stream) {
 // ---------------------------------------------------------------------------
 // Stage 2: real ray-query tracing through the interop mechanism.
 // ---------------------------------------------------------------------------
+
+// --rt-hardware (docs/rtcore): copies the bytes of ordinary mesh `index`'s bottom-level acceleration structure to the
+// host so librtcore can trace the same structure on the RT cores from CUDA. capacity 0 / out null only queries the
+// size. Returns the size in bytes (0 on failure); *out_address receives the structure's device address.
+extern "C" int64_t vulkaninterop_rt_debug_read_as(void* handle, int index, uint8_t* out, int64_t capacity,
+                                                  uint64_t* out_address) {
+    if (!handle) return 0;
+    InteropRtScene* sc = (InteropRtScene*)handle;
+    if (index < 0 || (size_t)index >= sc->blas.size() || !sc->blas[index]) return 0;
+    Buffer* src = &sc->blasBufs[index];
+    VkAccelerationStructureDeviceAddressInfoKHR ai{};
+    ai.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+    ai.accelerationStructure = sc->blas[index];
+    if (out_address) *out_address = sc->rtFns.getDeviceAddress(sc->device, &ai);
+    if (!out) return (int64_t)src->size;
+    Buffer staging;
+    // HOST_CACHED first: the plain coherent type is write-combined memory and reads at ~80 MB/s.
+    if (!createBuffer(sc->device, sc->physicalDevice, src->size, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT, false, &staging) &&
+        !createBuffer(sc->device, sc->physicalDevice, src->size, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, false, &staging)) return 0;
+    VkCommandBufferAllocateInfo cbai{};
+    cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbai.commandPool = sc->cmdPool; cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; cbai.commandBufferCount = 1;
+    VkCommandBuffer cmd;
+    vkAllocateCommandBuffers(sc->device, &cbai, &cmd);
+    VkCommandBufferBeginInfo bi{}; bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &bi);
+    VkBufferCopy region{0, 0, src->size};
+    vkCmdCopyBuffer(cmd, src->buffer, staging.buffer, 1, &region);
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo si{}; si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO; si.commandBufferCount = 1; si.pCommandBuffers = &cmd;
+    vkQueueSubmit(sc->queue, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(sc->queue);
+    vkFreeCommandBuffers(sc->device, sc->cmdPool, 1, &cmd);
+    void* p;
+    int64_t n = 0;
+    if (vkMapMemory(sc->device, staging.memory, 0, src->size, 0, &p) == VK_SUCCESS) {
+        n = (int64_t)src->size;
+        memcpy(out, p, (size_t)(n < capacity ? n : capacity));
+        vkUnmapMemory(sc->device, staging.memory);
+    }
+    destroyBuffer(sc->device, &staging);
+    return n;
+}
 
 extern "C" void vulkaninterop_rt_destroy_scene(void* handle) {
     if (!handle) return;

@@ -38,7 +38,7 @@ from std.os import getenv
 from .vulkaninterop import (
     VulkanInteropRtSceneHandle, vulkaninterop_rt_create_scene,
     vulkaninterop_rt_get_rays_ptr, vulkaninterop_rt_get_results_ptr,
-    vulkaninterop_rt_destroy_scene,
+    vulkaninterop_rt_destroy_scene, vulkaninterop_rt_debug_read_as,
 )
 
 # Fraction of the scene's bounding-sphere radius used as SPPM's initial gather
@@ -290,84 +290,125 @@ def _generate_sobol_matrices(path: String) -> Optional[Pointer[UInt32, MutUntrac
 def _dbg_vlen(x: Float32, y: Float32, z: Float32) -> Float32:
     return sqrt(x*x + y*y + z*z)
 
-# --rt-hardware: build ONE merged triangle geometry from every mesh (global triangle index -> (mesh, triangle) through
-# prefix sums), have Vulkan build its bottom-level acceleration structure, and hand the bytes to librtcore, which
-# traces it on the RT cores from a CUDA kernel (docs/rtcore/NOTES.md). Returns a null handle (rtcore_active() when none
-# is set) when the scene is not eligible (curves, spheres, instancing), the cubin is missing or anything fails; the
-# caller then keeps the Vulkan/CUDA path.
-def _rtcore_try_enable(
-    psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
-) -> RtCoreHandle:
-    var none = rtcore_active()
+# --rt-hardware: the scene's meshes merged into ONE triangle geometry (global triangle index -> (mesh, triangle) through
+# prefix sums). The interop scene is built from this single geometry, and the very same Vulkan-built bottom-level
+# acceleration structure is then handed to librtcore, which traces it on the RT cores from a CUDA kernel
+# (docs/rtcore/NOTES.md). One structure, one build.
+struct _RtMerged(Movable):
+    var valid: Bool
+    var meshes: Pointer[TriangleMesh, MutUntrackedOrigin]
+    var point_counts: Pointer[Int64, MutUntrackedOrigin]
+    var idx_counts: Pointer[Int64, MutUntrackedOrigin]
+    var prefix: Pointer[Int32, MutUntrackedOrigin]
+    var pts: Pointer[Float32, MutUntrackedOrigin]
+    var idx: Pointer[Int64, MutUntrackedOrigin]
+    var n_meshes: Int
+    var n_tris: Int
+
+    def __init__(out self):
+        self.valid = False
+        self.meshes = Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling()
+        self.point_counts = Pointer[Int64, MutUntrackedOrigin].unsafe_dangling()
+        self.idx_counts = Pointer[Int64, MutUntrackedOrigin].unsafe_dangling()
+        self.prefix = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
+        self.pts = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
+        self.idx = Pointer[Int64, MutUntrackedOrigin].unsafe_dangling()
+        self.n_meshes = 0
+        self.n_tris = 0
+
+    def release(mut self):
+        if self.valid:
+            self.meshes.unsafe_free(); self.point_counts.unsafe_free(); self.idx_counts.unsafe_free()
+            self.prefix.unsafe_free(); self.pts.unsafe_free(); self.idx.unsafe_free()
+            self.valid = False
+
+
+# Not eligible (curves, spheres, instancing, no meshes) or not requested: returns an invalid bundle and the caller keeps
+# the Vulkan/CUDA path.
+def _rtcore_merge(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> _RtMerged:
+    var m = _RtMerged()
     if getenv("GONZALES_RTCORE") == "":
-        return none
+        return m^
     if psc[unsafe_offset=0].curve_count > Int32(0) or psc[unsafe_offset=0].sphere_count > Int32(0) or psc[unsafe_offset=0].instance_count > Int32(0):
         print("Note: --rt-hardware needs a triangle-only scene without instancing -- using the Vulkan ray-query path")
-        return none
+        return m^
     var nm = Int(psc[unsafe_offset=0].mesh_count)
     if nm <= 0:
-        return none
+        return m^
     var nv_total = 0
     var nt_total = 0
+    var vstart = unsafe_alloc[Int](nm + 1)
+    var tstart = unsafe_alloc[Int](nm + 1)
     for i in range(nm):
+        vstart[unsafe_offset=i] = nv_total
+        tstart[unsafe_offset=i] = nt_total
         nv_total += Int(psc[unsafe_offset=0].mesh_n_verts[unsafe_offset=i])
         nt_total += Int(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i])
+    vstart[unsafe_offset=nm] = nv_total
+    tstart[unsafe_offset=nm] = nt_total
     var pts = unsafe_alloc[Float32](4 * max(nv_total, 1))
     var idx = unsafe_alloc[Int64](3 * max(nt_total, 1))
     var prefix = unsafe_alloc[Int32](nm + 1)
-    var vo = 0
-    var to = 0
+    for i in range(nm + 1):
+        prefix[unsafe_offset=i] = Int32(tstart[unsafe_offset=i])
     for i in range(nm):
-        var nv = Int(psc[unsafe_offset=0].mesh_n_verts[unsafe_offset=i])
         var nt = Int(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i])
-        prefix[unsafe_offset=i] = Int32(to)
+        var nv = Int(psc[unsafe_offset=0].mesh_n_verts[unsafe_offset=i])
+        var vo = vstart[unsafe_offset=i]
+        var to = tstart[unsafe_offset=i]
         var src = psc[unsafe_offset=0].meshes[unsafe_offset=i].points
         for k in range(4 * nv):
             pts[unsafe_offset=4 * vo + k] = src[unsafe_offset=k]
         var vi = psc[unsafe_offset=0].meshes[unsafe_offset=i].vertexIndices
         for k in range(3 * nt):
             idx[unsafe_offset=3 * to + k] = vi[unsafe_offset=k] + Int64(vo)
-        vo += nv
-        to += nt
-    prefix[unsafe_offset=nm] = Int32(to)
+    vstart.unsafe_free(); tstart.unsafe_free()
 
-    var meshes = unsafe_alloc[TriangleMesh](1)
-    meshes[unsafe_offset=0] = TriangleMesh(
+    m.meshes = unsafe_alloc[TriangleMesh](1)
+    m.meshes[unsafe_offset=0] = TriangleMesh(
         pts, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), idx,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
-    var point_counts = unsafe_alloc[Int64](1)
-    point_counts[unsafe_offset=0] = Int64(nv_total)
-    var idx_counts = unsafe_alloc[Int64](1)
-    idx_counts[unsafe_offset=0] = Int64(3 * nt_total)
-    var scene = vulkanrt_build_scene(meshes, Int64(1), point_counts, idx_counts)
+    m.point_counts = unsafe_alloc[Int64](1)
+    m.point_counts[unsafe_offset=0] = Int64(nv_total)
+    m.idx_counts = unsafe_alloc[Int64](1)
+    m.idx_counts[unsafe_offset=0] = Int64(3 * nt_total)
+    m.prefix = prefix
+    m.pts = pts
+    m.idx = idx
+    m.n_meshes = nm
+    m.n_tris = nt_total
+    m.valid = True
+    return m^
+
+
+# After the interop scene was built from the merged geometry: read its acceleration structure back and give it to
+# librtcore. Returns a null handle (the interop/Vulkan ray-query trace then stays in use) on any failure.
+def _rtcore_attach(interop_scene: VulkanInteropRtSceneHandle, m: _RtMerged) -> RtCoreHandle:
+    var none = rtcore_active()
     var result = none
-    if Int(scene) != 0:
-        var as_address = unsafe_alloc[UInt64](1)
-        var as_size = vulkanrt_debug_read_as(scene, Int32(0), Int32(0), Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Int64(0), as_address)
-        if as_size > 0:
-            var as_bytes = unsafe_alloc[UInt8](Int(as_size))
-            _ = vulkanrt_debug_read_as(scene, Int32(0), Int32(0), as_bytes, as_size, as_address)
-            var cubin = getenv("GONZALES_RTCORE_CUBIN", "build/rt_trace.cubin")
-            var cubin_c = unsafe_alloc[UInt8](cubin.byte_length() + 1)   # the String's buffer is not guaranteed NUL-terminated
-            for k in range(cubin.byte_length()):
-                cubin_c[unsafe_offset=k] = cubin.unsafe_ptr()[unsafe_offset=k]
-            cubin_c[unsafe_offset=cubin.byte_length()] = UInt8(0)
-            var h = rtcore_create(cubin_c, as_bytes, as_size, as_address[unsafe_offset=0])
-            cubin_c.unsafe_free()
-            if Int(h) != 0 and Int(rtcore_set_meshes(h, prefix, Int32(nm))) == 1:
-                result = h
-                print("RT hardware: tracing", nt_total, "triangles of", nm, "meshes on the RT cores (merged acceleration structure,", Int(as_size) // 1024, "KB)")
-            elif Int(h) != 0:
-                rtcore_destroy(h)
-            else:
-                print("Note: --rt-hardware could not load", cubin, "(run make rt-cubin, or set GONZALES_RTCORE_CUBIN) -- using the Vulkan ray-query path")
-            as_bytes.unsafe_free()
-        as_address.unsafe_free()
-        vulkanrt_destroy_scene(scene)
-    meshes.unsafe_free(); point_counts.unsafe_free(); idx_counts.unsafe_free()
-    pts.unsafe_free(); idx.unsafe_free(); prefix.unsafe_free()
+    var as_address = unsafe_alloc[UInt64](1)
+    var as_size = vulkaninterop_rt_debug_read_as(interop_scene, Int32(0), Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Int64(0), as_address)
+    if as_size > 0:
+        var as_bytes = unsafe_alloc[UInt8](Int(as_size))
+        _ = vulkaninterop_rt_debug_read_as(interop_scene, Int32(0), as_bytes, as_size, as_address)
+        var cubin = getenv("GONZALES_RTCORE_CUBIN", "build/rt_trace.cubin")
+        var cubin_c = unsafe_alloc[UInt8](cubin.byte_length() + 1)   # the String's buffer is not guaranteed NUL-terminated
+        for k in range(cubin.byte_length()):
+            cubin_c[unsafe_offset=k] = cubin.unsafe_ptr()[unsafe_offset=k]
+        cubin_c[unsafe_offset=cubin.byte_length()] = UInt8(0)
+        var h = rtcore_create(cubin_c, as_bytes, as_size, as_address[unsafe_offset=0])
+        cubin_c.unsafe_free()
+        if Int(h) != 0 and Int(rtcore_set_meshes(h, m.prefix, Int32(m.n_meshes))) == 1:
+            result = h
+            print("RT hardware: tracing", m.n_tris, "triangles of", m.n_meshes, "meshes on the RT cores (shared acceleration structure,", Int(as_size) // 1024, "KB)")
+        elif Int(h) != 0:
+            rtcore_destroy(h)
+        else:
+            print("Note: --rt-hardware could not load", cubin, "(run make rt-cubin, or set GONZALES_RTCORE_CUBIN) -- using the Vulkan ray-query path")
+        as_bytes.unsafe_free()
+    as_address.unsafe_free()
     return result
 
 
@@ -1259,8 +1300,20 @@ def parse_and_render(
                 curve_data_vk[unsafe_offset=cb+12] = c.width0; curve_data_vk[unsafe_offset=cb+13] = c.width1
                 curve_n_pieces_vk[unsafe_offset=ci] = c.n_pieces
 
+            # --rt-hardware: the interop scene is built from the merged geometry (eligible scenes have no instances, curves
+            # or spheres, so every other argument is already empty); its acceleration structure then serves the RT cores too.
+            var rt_merged = _rtcore_merge(psc)
+            var vk_meshes = vmeshes
+            var vk_mesh_count = n_meshes_vk
+            var vk_point_counts = point_counts
+            var vk_idx_counts = vidx_counts
+            if rt_merged.valid:
+                vk_meshes = rt_merged.meshes
+                vk_mesh_count = 1
+                vk_point_counts = rt_merged.point_counts
+                vk_idx_counts = rt_merged.idx_counts
             interop_scene = vulkaninterop_rt_create_scene(
-                vmeshes, Int64(n_meshes_vk), point_counts, vidx_counts,
+                vk_meshes, Int64(vk_mesh_count), vk_point_counts, vk_idx_counts,
                 Int64(n_templates_vk), template_mesh_start_vk, template_mesh_end_vk,
                 Int64(n_instances_vk), instance_o2w_vk, instance_tmpl_idx_vk,
                 Int64(n_curve_leaves_vk), curve_leaf_aabbs_vk,
@@ -1273,14 +1326,22 @@ def parse_and_render(
             curve_leaf_aabbs_vk.unsafe_free()
             curve_leaf_curve_idx_vk.unsafe_free(); curve_leaf_piece_info_vk.unsafe_free(); curve_leaf_mat_idx_vk.unsafe_free()
             curve_data_vk.unsafe_free(); curve_n_pieces_vk.unsafe_free()
-            if Int(interop_scene) == 0:
+            # The interop scene holds ONE merged mesh when --rt-hardware is on, so its Vulkan trace cannot report real mesh
+            # ids: if the RT cores cannot take over after all (cubin missing), drop to the CUDA software BVH instead.
+            var hw_failed = False
+            if Int(interop_scene) != 0 and rt_merged.valid:
+                var rt_hw = _rtcore_attach(interop_scene, rt_merged)
+                if Int(rt_hw) != 0:
+                    rtcore_set_active(rt_hw)
+                else:
+                    hw_failed = True
+                    vulkaninterop_rt_destroy_scene(interop_scene)
+            rt_merged.release()
+            if Int(interop_scene) == 0 or hw_failed:
                 print("WARNING: vulkaninterop_rt_create_scene FAILED -- falling back to CUDA intersection")
                 use_vk = False
                 instance_base_mesh_host.unsafe_free()
             else:
-                var rt_hw = _rtcore_try_enable(psc)
-                if Int(rt_hw) != 0:
-                    rtcore_set_active(rt_hw)
                 var raysPtr = vulkaninterop_rt_get_rays_ptr(interop_scene)
                 var resultsPtr = vulkaninterop_rt_get_results_ptr(interop_scene)
                 interop_rays_buf_opt = DeviceBuffer[DType.float32](handle[].ctx, raysPtr, Int(max_rays_vk) * 8, owning=False)
