@@ -260,3 +260,33 @@ The resulting cubin is byte-identical to the one the earlier hand-patching produ
 
 Setup cost: the AS readback used an uncached staging buffer (3.5 s for 295 MB); with HOST_CACHED it is 0.07 s, and the
 interop scene is now built from the merged geometry so only one acceleration structure is built (ganesha setup 8.4 s -> 4.8 s).
+
+
+## Shadow rays on the RT cores
+
+The shade kernels used to trace NEE shadow rays inline with the software BVH. With `--rt-hardware` they now defer them
+into `SHADOW_SLOTS` (2) slots per path (`_shadow_contribute`; a candidate that finds no free slot, a scene with guiding,
+or a scene with alpha cutouts stays inline). After the last material kernel, `rtcore_shadow_rays_gpu` runs one pass per
+usable slot: pack the slot's rays, trace them on the RT cores (closest hit; a miss means the light is visible), add the
+contribution of the unobstructed ones. A second slot is only used when the scene has two kinds of light (it costs about
+13 ms/spp otherwise, since most of its rays are dead). Memory: the task buffer is only allocated with the slots when
+`GONZALES_RTCORE` is set. `GONZALES_RTCORE_NOSHADOW=1` turns the shadow rays off again (primary rays only).
+
+Bug found on the way: the hardware returns `u` with a negative sign on some hits (same magnitude; Vulkan reports it
+positive). The convert kernel now takes `fabsf(u)`. Before the fix every hardware render of a textured/smooth-shaded scene
+was ~0.9% too dark (living-room, 512 spp: 0.9907, after: 0.9999). Found by tracing the same rays through the Vulkan
+ray query and the RT-core kernel on the same acceleration structure and comparing u, v, t per ray.
+
+ms per sample, 640x360, GPU path tracer (software BVH / Vulkan ray query / RT cores primary only / RT cores + shadows):
+
+| scene | software | Vulkan | RT primary | RT + shadows |
+|---|---|---|---|---|
+| living-room | 69 | 79 | 80 | 80 |
+| staircase | 61 | 83 | 80 | 82 |
+| dining-room | 83 | 75 | 74 | 27 |
+| kitchen | 75 | 72 | 74 | 62 |
+| ganesha | - | 15.8 | - | 15.8 |
+
+Bistro has alpha cutouts, so its shadow rays stay inline (hardware primary only: 60 vs 74 ms software). The hardware
+shadow rays win where the software BVH is slow (dining-room 3x) and are neutral elsewhere; the small scenes lose to the
+software BVH because of the extra pack / trace / resolve passes. Means agree with the software renderer within 0.1%.

@@ -3,14 +3,14 @@ from .curves import CURVE_DEFER_K, Curve, _curve_perp_axis, curve_piece_endpoint
 from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, store_vec3, vec3f
 from .materials import Material
 from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, sphere_outward_normal
-from .render_state import PathState, ShadowTask
+from .render_state import PathState, ShadowTask, SHADOW_SLOTS
 from .restir_di import DIReservoir, di_reservoir_init
 from .restir_vol import VolReservoir, vol_reservoir_init
 from .sampling import gen_primary_ray_state
 from .spectrum import SpectralSample, spectral_sample_to_rgb
 from .transform import transform_normal, Mat4
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
-from .rtcore import rtcore_active, rtcore_trace_interop
+from .rtcore import rtcore_active, rtcore_trace, rtcore_trace_interop
 from max.gpu import block_dim, block_idx, thread_idx
 from max.gpu.host import DeviceBuffer, DeviceContext
 from max.gpu.host._nvidia_cuda import CUDA
@@ -23,12 +23,16 @@ from .gpu_scene import GpuSceneHandle
 def reset_shadow_tasks_gpu(
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
     count_dp: Int64,
+    slots_dp: Int64 = Int64(1),
+    usable_dp: Int64 = Int64(1),
 ):
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
         return
-    shadow_tasks[unsafe_offset=tid].active = Int32(0)
+    # A slot beyond the usable ones is marked taken (-1), so _shadow_contribute traces that candidate inline.
+    for s in range(Int(slots_dp)):
+        shadow_tasks[unsafe_offset=tid * Int(slots_dp) + s].active = Int32(0) if s < Int(usable_dp) else Int32(-1)
 
 def reset_restir_reservoirs_gpu(
     reservoirs: Pointer[DIReservoir, MutUntrackedOrigin],
@@ -480,6 +484,79 @@ def accumulate_cone_gpu(
     else:
         paths[unsafe_offset=tid].cone_len = Float32(-1.0)
 
+
+
+# ── Shadow rays on the RT cores (--rt-hardware) ───────────────────────────────
+# The shade kernels defer their NEE shadow rays into SHADOW_SLOTS slots per path (see _shadow_contribute). One pass per
+# slot: pack the slot's rays into the interop rays buffer, trace them on the RT cores (raw records t,u,v,hit word into
+# the interop results buffer), and add the contribution of every ray that reached its light unobstructed.
+def pack_shadow_rays_kernel(
+    tasks: Pointer[ShadowTask, MutUntrackedOrigin],
+    rays: Pointer[Float32, MutUntrackedOrigin],
+    count_dp: Int64,
+    slot_dp: Int64,
+):
+    var count = Int(count_dp)
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    var task = tasks[unsafe_offset=tid * SHADOW_SLOTS + Int(slot_dp)]
+    var idx = tid * 8
+    var live = task.active == Int32(1)
+    rays[unsafe_offset=idx + 0] = task.origin.x
+    rays[unsafe_offset=idx + 1] = task.origin.y
+    rays[unsafe_offset=idx + 2] = task.origin.z
+    rays[unsafe_offset=idx + 3] = Float32(1.0e-4)
+    rays[unsafe_offset=idx + 4] = task.direction.x
+    rays[unsafe_offset=idx + 5] = task.direction.y
+    rays[unsafe_offset=idx + 6] = task.direction.z
+    rays[unsafe_offset=idx + 7] = task.tmax if live else Float32(0.0)   # an empty slot traces a zero-length ray
+
+def resolve_shadow_rays_rt_kernel(
+    paths: Pointer[PathState, MutUntrackedOrigin],
+    tasks: Pointer[ShadowTask, MutUntrackedOrigin],
+    raw: Pointer[UInt32, MutUntrackedOrigin],
+    count_dp: Int64,
+    slot_dp: Int64,
+):
+    var count = Int(count_dp)
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    var task = tasks[unsafe_offset=tid * SHADOW_SLOTS + Int(slot_dp)]
+    if task.active != Int32(1):
+        return
+    if raw[unsafe_offset=tid * 8 + 3] == UInt32(0xffffffff):      # miss: nothing between the point and the light
+        paths[unsafe_offset=tid].estimate += task.contrib
+
+def rtcore_shadow_rays_gpu(
+    ctx: DeviceContext,
+    path_buf: DeviceBuffer[DType.uint8],
+    shadow_buf: DeviceBuffer[DType.uint8],
+    interop_rays_buf: DeviceBuffer[DType.float32],
+    interop_results_buf: DeviceBuffer[DType.float32],
+    n_total: Int,
+    usable_slots: Int,
+) raises:
+    comptime block_size = 256
+    var grid = ceildiv(n_total, block_size)
+    var cuda_stream = CUDA(ctx.stream())
+    var rt_hw = rtcore_active()
+    for s in range(usable_slots):
+        ctx.enqueue_function[pack_shadow_rays_kernel](
+            shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            interop_rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            Int64(n_total), Int64(s),
+            grid_dim=grid, block_dim=block_size,
+        )
+        _ = rtcore_trace(rt_hw, UInt64(Int(interop_rays_buf.unsafe_ptr())), UInt64(Int(interop_results_buf.unsafe_ptr())), Int32(n_total), cuda_stream)
+        ctx.enqueue_function[resolve_shadow_rays_rt_kernel](
+            path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            interop_results_buf.unsafe_ptr().unsafe_bitcast[UInt32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            Int64(n_total), Int64(s),
+            grid_dim=grid, block_dim=block_size,
+        )
 
 
 def vulkaninterop_rt_traverse_paths_gpu(

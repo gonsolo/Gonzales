@@ -33,7 +33,7 @@ from .gpu_wavefront import gpu_gen_aux_buffers
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 from .spectrum import SpectralHandle, null_spectral_handle
 from .vulkanrt import VulkanRtSceneHandle, vulkanrt_build_scene, vulkanrt_destroy_scene, vulkanrt_debug_read_as
-from .rtcore import RtCoreHandle, rtcore_create, rtcore_set_meshes, rtcore_set_active, rtcore_active, rtcore_destroy
+from .rtcore import rtcore_set_shadow, RtCoreHandle, rtcore_create, rtcore_set_meshes, rtcore_set_active, rtcore_active, rtcore_destroy
 from std.os import getenv
 from .vulkaninterop import (
     VulkanInteropRtSceneHandle, vulkaninterop_rt_create_scene,
@@ -304,6 +304,7 @@ struct _RtMerged(Movable):
     var idx: Pointer[Int64, MutUntrackedOrigin]
     var n_meshes: Int
     var n_tris: Int
+    var has_alpha: Bool
 
     def __init__(out self):
         self.valid = False
@@ -315,6 +316,7 @@ struct _RtMerged(Movable):
         self.idx = Pointer[Int64, MutUntrackedOrigin].unsafe_dangling()
         self.n_meshes = 0
         self.n_tris = 0
+        self.has_alpha = False
 
     def release(mut self):
         if self.valid:
@@ -362,6 +364,8 @@ def _rtcore_merge(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> _RtMerg
         var vi = psc[unsafe_offset=0].meshes[unsafe_offset=i].vertexIndices
         for k in range(3 * nt):
             idx[unsafe_offset=3 * to + k] = vi[unsafe_offset=k] + Int64(vo)
+        if psc[unsafe_offset=0].meshes[unsafe_offset=i].alpha_const < Float32(1.0) or _is_real_ptr(psc[unsafe_offset=0].meshes[unsafe_offset=i].alpha):
+            m.has_alpha = True
     vstart.unsafe_free(); tstart.unsafe_free()
 
     m.meshes = unsafe_alloc[TriangleMesh](1)
@@ -1333,6 +1337,13 @@ def parse_and_render(
                 var rt_hw = _rtcore_attach(interop_scene, rt_merged)
                 if Int(rt_hw) != 0:
                     rtcore_set_active(rt_hw)
+                    # Usable shadow slots: a second one only pays off when a bounce can add a second NEE candidate, i.e. the
+                    # scene has more than one kind of light (measured: it costs ~13 ms/spp otherwise).
+                    var light_kinds = Int(psc[unsafe_offset=0].area_light_count > Int32(0)) + Int(psc[unsafe_offset=0].infinite_count > Int32(0)) + Int(psc[unsafe_offset=0].distant_count > Int32(0)) + Int(psc[unsafe_offset=0].point_count > Int32(0))
+                    var usable_slots = 2 if light_kinds >= 2 else 1
+                    rtcore_set_shadow(Int32(0) if rt_merged.has_alpha or getenv("GONZALES_RTCORE_NOSHADOW") != "" else Int32(usable_slots))
+                    if rt_merged.has_alpha:
+                        print("Note: alpha cutouts present -- shadow rays stay on the software BVH (the RT cores trace opaque geometry)")
                 else:
                     hw_failed = True
                     vulkaninterop_rt_destroy_scene(interop_scene)

@@ -7,3 +7,5 @@ extern "C" int rtcore_set_meshes(void*, const int32_t*, int32_t) { return 0; }
 extern "C" int rtcore_trace_interop(void*, uint64_t, uint64_t, int32_t, void*) { return 0; }
 extern "C" void rtcore_set_active(void*) {}
 extern "C" void* rtcore_active(void) { return nullptr; }
+extern "C" void rtcore_set_shadow(int) {}
+extern "C" int rtcore_shadow_enabled(void) { return 0; }

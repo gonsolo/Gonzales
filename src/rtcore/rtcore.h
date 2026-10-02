@@ -39,6 +39,8 @@ int rtcore_trace_interop(void* handle, uint64_t rays, uint64_t results, int32_t 
 // threading a handle through every call (NULL = not in use).
 void rtcore_set_active(void* handle);
 void* rtcore_active(void);
+void rtcore_set_shadow(int slots);
+int rtcore_shadow_enabled(void);
 
 void rtcore_destroy(void* handle);
 

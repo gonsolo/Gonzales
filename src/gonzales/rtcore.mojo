@@ -45,6 +45,12 @@ def rtcore_trace_interop(handle: RtCoreHandle, rays: UInt64, results: UInt64, ra
 def rtcore_set_active(handle: RtCoreHandle):
     external_call["rtcore_set_active", NoneType, RtCoreHandle](handle)
 
+def rtcore_set_shadow(enabled: Int32):
+    external_call["rtcore_set_shadow", NoneType, Int32](enabled)
+
+def rtcore_shadow_enabled() -> Int32:
+    return external_call["rtcore_shadow_enabled", Int32]()
+
 def rtcore_active() -> RtCoreHandle:
     return external_call["rtcore_active", RtCoreHandle]()
 

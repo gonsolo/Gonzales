@@ -106,6 +106,8 @@ def shade_diffuse_gpu(
     gbuf_world_pos: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     frame_w: Int32 = Int32(0),
     frame_h: Int32 = Int32(0),
+    # Deferred shadow rays (--rt-hardware); a dangling pointer keeps every shadow ray inline.
+    shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin] = Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
 ):
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -118,7 +120,7 @@ def shade_diffuse_gpu(
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var restir_on = use_restir != Int32(0)
-    var ctx = _shade_context(sd, sobol_matrices, use_restir=restir_on)
+    var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, use_restir=restir_on, shadow_tasks=shadow_tasks)
     # tid IS the pixel index here: this kernel only ever sees use_restir=True
     # from gpu_render_sample, which runs exactly one path per pixel (see the
     # param block above -- gpu_render_wavefront never sets it). restir_on
@@ -132,7 +134,7 @@ def shade_diffuse_gpu(
             gbuf_normal=gbuf_normal, gbuf_depth=gbuf_depth,
             gbuf_material_id=gbuf_material_id, gbuf_world_pos=gbuf_world_pos,
             frame_w=frame_w, frame_h=frame_h)
-    shade_diffuse[True, False](path_ptr, inter, ctx, mat, null_guide(), restir_io, tid if restir_has_state else -1)
+    shade_diffuse[True, True](path_ptr, inter, ctx, mat, null_guide(), restir_io, tid if restir_has_state else -1)
 
 
 def shade_coated_diffuse_gpu(
@@ -154,7 +156,7 @@ def shade_coated_diffuse_gpu(
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
-    shade_coated_diffuse[True, False](path_ptr, inter, ctx, mat)
+    shade_coated_diffuse[True, True](path_ptr, inter, ctx, mat)
 
 
 def shade_diffuse_transmit_gpu(
@@ -175,7 +177,7 @@ def shade_diffuse_transmit_gpu(
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
-    shade_diffuse_transmission[True, False](path_ptr, inter, ctx)
+    shade_diffuse_transmission[True, True](path_ptr, inter, ctx)
 
 
 # GPU-only: mix is a pure material SELECTOR, not a shader -- it has no BSDF,
@@ -257,7 +259,7 @@ def shade_conductor_gpu(
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
-    shade_conductor[True, False](path_ptr, inter, ctx, mat)
+    shade_conductor[True, True](path_ptr, inter, ctx, mat)
 
 
 def shade_measured_gpu(
@@ -279,7 +281,7 @@ def shade_measured_gpu(
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
-    shade_measured[True, False](path_ptr, inter, ctx, mat)
+    shade_measured[True, True](path_ptr, inter, ctx, mat)
 
 
 def shade_dielectric_gpu(
@@ -305,7 +307,7 @@ def shade_dielectric_gpu(
     # tex_filenames is CPU-only (GPU samples the uploaded texture table), so
     # the dangling default is correct on this path.
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
-    shade_dielectric[True, False](path_ptr, inter, ctx, mat)
+    shade_dielectric[True, True](path_ptr, inter, ctx, mat)
 
 
 def shade_thin_dielectric_gpu(
@@ -346,7 +348,7 @@ def shade_coated_conductor_gpu(
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
-    shade_coated_conductor[True, False](path_ptr, inter, ctx, mat)
+    shade_coated_conductor[True, True](path_ptr, inter, ctx, mat)
 
 
 def shade_interface_gpu(
@@ -388,7 +390,7 @@ def shade_hair_gpu(
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
-    shade_hair[True, False](path_ptr, inter, ctx, mat)
+    shade_hair[True, True](path_ptr, inter, ctx, mat)
 
 
 def shade_enqueue_shadow_gpu(

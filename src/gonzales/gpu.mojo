@@ -2,7 +2,8 @@ from .geometry import TERMINAL_SEGMENT_GRACE_ROUNDS
 from .materials import Material, MeasuredBRDF
 from .media import Grid, MediumInterface, Medium, NvdbGrid
 from .primitives import Instance, Intersection, Sphere
-from .render_state import PathState, ShadowTask
+from .render_state import PathState, ShadowTask, SHADOW_SLOTS
+from .rtcore import rtcore_active, rtcore_shadow_enabled
 from .restir_di import DIReservoir
 from .restir_vol import VolReservoir
 from .vulkaninterop import VulkanInteropRtSceneHandle
@@ -13,7 +14,7 @@ from std.sys import has_accelerator
 from .gpu_media import sample_medium_gpu, update_medium_gpu
 from .gpu_scene import GpuSceneHandle
 from .gpu_shade import shade_coated_conductor_gpu, shade_coated_diffuse_gpu, shade_conductor_gpu, shade_dielectric_gpu, shade_diffuse_gpu, shade_diffuse_transmit_gpu, shade_hair_gpu, shade_interface_gpu, shade_measured_gpu, shade_mix_gpu, shade_nee_preamble_gpu, shade_thin_dielectric_gpu
-from .gpu_wavefront import accumulate_cone_gpu, accumulate_film_gpu, accumulate_film_wavefront_gpu, clear_film_gpu, compact_curve_paths_gpu, deactivate_paths_past_maxdepth_gpu, gen_primary_rays_gpu, gen_primary_rays_wavefront_gpu, reset_curve_counter_gpu, reset_restir_reservoirs_gpu, reset_restir_vol_reservoirs_gpu, reset_shadow_tasks_gpu, reset_vol_used_gpu, resolve_curve_candidates_gpu, traverse_paths_gpu, traverse_shadow_rays_gpu, vulkaninterop_rt_traverse_paths_gpu
+from .gpu_wavefront import accumulate_cone_gpu, accumulate_film_gpu, accumulate_film_wavefront_gpu, clear_film_gpu, compact_curve_paths_gpu, deactivate_paths_past_maxdepth_gpu, gen_primary_rays_gpu, gen_primary_rays_wavefront_gpu, reset_curve_counter_gpu, reset_restir_reservoirs_gpu, reset_restir_vol_reservoirs_gpu, reset_shadow_tasks_gpu, reset_vol_used_gpu, resolve_curve_candidates_gpu, traverse_paths_gpu, traverse_shadow_rays_gpu, rtcore_shadow_rays_gpu, vulkaninterop_rt_traverse_paths_gpu
 
 
 def _gpu_bounce_kernels(
@@ -193,9 +194,19 @@ def _gpu_bounce_kernels(
     # without first either (a) giving ShadowTask N slots (N = max
     # simultaneous light types, currently 5) with accumulate semantics, or
     # (b) restricting deferral to a genuinely single-candidate call site.
+    # --rt-hardware: the shade kernels defer their shadow rays (SHADOW_SLOTS per path) and the RT cores trace them after
+    # the last material kernel. Without it shadow_ptr is dangling and every shadow ray is traced inline, as before.
+    var hw_shadow = use_vulkan_rt and Int(rtcore_shadow_enabled()) > 0 and Int(handle[].shadow_slots) == SHADOW_SLOTS
+    var usable_slots = Int(rtcore_shadow_enabled()) if hw_shadow else 0
+    var shadow_slots = SHADOW_SLOTS if hw_shadow else 1
+    var shadow_ptr = Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling()
+    if hw_shadow:
+        shadow_ptr = handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     handle[].ctx.enqueue_function[reset_shadow_tasks_gpu](
         handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
         Int64(n),
+        Int64(shadow_slots),
+        Int64(usable_slots if hw_shadow else 1),
         grid_dim=grid_dim, block_dim=block_size,
     )
     handle[].ctx.enqueue_function[shade_diffuse_gpu](
@@ -213,6 +224,7 @@ def _gpu_bounce_kernels(
         handle[].gbuf_worldpos_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         handle[].film.width,
         handle[].film.height,
+        shadow_ptr,
         grid_dim=grid_dim,
         block_dim=block_size,
     )
@@ -222,7 +234,7 @@ def _gpu_bounce_kernels(
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
-        handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
+        shadow_ptr,
         grid_dim=grid_dim,
         block_dim=block_size,
     )
@@ -232,7 +244,7 @@ def _gpu_bounce_kernels(
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
-        handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
+        shadow_ptr,
         grid_dim=grid_dim,
         block_dim=block_size,
     )
@@ -242,7 +254,7 @@ def _gpu_bounce_kernels(
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
-        handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
+        shadow_ptr,
         grid_dim=grid_dim,
         block_dim=block_size,
     )
@@ -252,7 +264,7 @@ def _gpu_bounce_kernels(
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
-        handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
+        shadow_ptr,
         grid_dim=grid_dim,
         block_dim=block_size,
     )
@@ -262,7 +274,7 @@ def _gpu_bounce_kernels(
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
-        handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
+        shadow_ptr,
         grid_dim=grid_dim,
         block_dim=block_size,
     )
@@ -280,7 +292,7 @@ def _gpu_bounce_kernels(
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
-        handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
+        shadow_ptr,
         grid_dim=grid_dim,
         block_dim=block_size,
     )
@@ -306,7 +318,7 @@ def _gpu_bounce_kernels(
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
         Int64(n),
-        handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
+        shadow_ptr,
         grid_dim=grid_dim,
         block_dim=block_size,
     )
@@ -320,14 +332,18 @@ def _gpu_bounce_kernels(
     # Software BVH only (matches traverse_shadow_rays_gpu's own
     # implementation) even when use_vulkan_rt is set -- this machinery isn't
     # wired to Vulkan RT yet.
-    handle[].ctx.enqueue_function[traverse_shadow_rays_gpu](
-        sd,
-        handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
-        Int64(n),
-        grid_dim=grid_dim,
-        block_dim=block_size,
-    )
+    if hw_shadow:
+        rtcore_shadow_rays_gpu(handle[].ctx, handle[].path_buf, handle[].shadow_buf,
+            interop_rays_buf.value(), interop_results_buf.value(), n, usable_slots)
+    else:
+        handle[].ctx.enqueue_function[traverse_shadow_rays_gpu](
+            sd,
+            handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
+            Int64(n),
+            grid_dim=grid_dim,
+            block_dim=block_size,
+        )
 
 
 # Render one sample pass into the persistent film buffer.

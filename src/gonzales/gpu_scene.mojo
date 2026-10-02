@@ -6,7 +6,8 @@ from .materials import MatKind, Material, MeasuredBRDF
 from .footprint import CameraFootprint
 from .media import Grid, MediumInterface, Medium, NvdbGrid
 from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh
-from .render_state import FilmDims, FilterParams, GpuTexture, NormalSlopeMap, PathState, ShadowTask
+from .render_state import FilmDims, FilterParams, GpuTexture, NormalSlopeMap, PathState, ShadowTask, SHADOW_SLOTS
+from std.os import getenv
 from .spectrum import SpectralHandle
 from .pbrt_parser import ParsedScene_Mojo
 from .restir_di import DIReservoir
@@ -944,6 +945,7 @@ struct GpuSceneHandle(Movable):
     # -- NOT ping-ponged, NOT persisted across frames, unlike the pair
     # above. See _sample_medium_core's vol_used comment for why this exists.
     var restir_vol_used_buf: DeviceBuffer[DType.uint8] # n_pixels × sizeof(Int8)
+    var shadow_slots: Int                           # ShadowTask slots per path in shadow_buf (SHADOW_SLOTS with --rt-hardware, else 1)
     var shadow_buf: DeviceBuffer[DType.uint8]       # n_pixels × WAVEFRONT_BATCH × sizeof(ShadowTask) = 48 -- must match path_buf/inter_buf sizing (gpu_render_sample only uses the first n_pixels slots; gpu_render_wavefront's _gpu_bounce_kernels call indexes up to n_pixels × WAVEFRONT_BATCH)
     var active_count_buf: DeviceBuffer[DType.uint8] # 1 × Int32
     var active_idx_buf: DeviceBuffer[DType.uint8]   # n_pixels × Int32
@@ -1135,7 +1137,9 @@ def gpu_upload_scene(
             var r_restir_vol_a_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[VolReservoir]())
             var r_restir_vol_b_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[VolReservoir]())
             var r_restir_vol_used_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Int8]())
-            var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[ShadowTask]() * WAVEFRONT_BATCH)
+            # --rt-hardware defers up to SHADOW_SLOTS shadow rays per path; everything else needs one slot per path.
+            var r_shadow_slots = SHADOW_SLOTS if getenv("GONZALES_RTCORE") != "" else 1
+            var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[ShadowTask]() * WAVEFRONT_BATCH * r_shadow_slots)
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](4)
             var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
             var curves = CurveBuffers.upload(ctx, s, n_pix)
@@ -1198,6 +1202,7 @@ def gpu_upload_scene(
                 restir_vol_b_buf=r_restir_vol_b_buf^,
                 restir_vol_used_buf=r_restir_vol_used_buf^,
                 shadow_buf=r_shadow_buf^,
+                shadow_slots=r_shadow_slots,
                 active_count_buf=r_active_count_buf^,
                 active_idx_buf=r_active_idx_buf^,
                 n_pixels=n_pix,

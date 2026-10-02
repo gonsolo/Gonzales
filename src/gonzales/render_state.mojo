@@ -257,6 +257,10 @@ struct NormalSlopeMap(TrivialRegisterPassable):
 def normal_slope_map_none() -> NormalSlopeMap:
     return NormalSlopeMap(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0))
 
+# Deferred shadow rays per path (--rt-hardware): a bounce's NEE loops may add several candidates (area, infinite, ...);
+# the first SHADOW_SLOTS are deferred to the RT cores, any further one is traced inline.
+comptime SHADOW_SLOTS: Int = 2
+
 @fieldwise_init
 struct ShadowTask(TrivialRegisterPassable):
     """A deferred shadow ray with its pre-computed radiance contribution."""

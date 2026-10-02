@@ -5,7 +5,7 @@ from std.memory.alloc import unsafe_alloc
 from .geometry import RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, safe_sqrt, reflect, refract, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from .render_state import PDF_DROP_DIRECT
 from .materials import Material, MatKind, LobeKind, MeasuredBRDF, schlick_fresnel, fr_dielectric, dielectric_is_rough, is_specular_glass
-from .render_state import PathState, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask
+from .render_state import PathState, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SHADOW_SLOTS
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, light_sampler_sample, light_sampler_pdf, area_light_pick_triangle
 from .portal_light import portal_frame, portal_ray_crosses
@@ -783,35 +783,41 @@ def _shadow_contribute[enqueue_shadow: Bool](
     contrib: SpectralSample,
     guide_write: GuideGrid = null_guide(),
 ):
+    # Deferral needs a real task buffer (only handed out for --rt-hardware) and no guiding; it takes the first free of the
+    # path's SHADOW_SLOTS slots, and a candidate that finds none is traced inline below.
     comptime if enqueue_shadow:
-        ctx.shadow_tasks[unsafe_offset=ctx.path_idx] = ShadowTask(
-            Point3f(origin[0], origin[1], origin[2]),
-            Vec3f(dir[0], dir[1], dir[2]),
-            tmax, contrib, Int32(1), Int32(0))
-    else:
-        var shadow_ray = Ray(Point3f(origin[0], origin[1], origin[2]), Vec3f(dir[0], dir[1], dir[2]))
-        if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, tmax,
-                                  ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
-                                  ctx.lights.spheres, ctx.lights.sphere_count,
-                                  materials=ctx.materials):
-            path_ptr[].estimate += contrib
-            # Record in the guide at the PARENT surface (one bounce back):
-            # "scatter direction ray.dir from parent_cell leads to illumination W here."
-            # This teaches indirect-illumination guiding — path_ptr[].ray.origin is where
-            # the path came from and ray.direction is the scatter direction that arrived here.
-            if guide_is_active(guide_write) and path_ptr[].bounce > 0:
-                var parent_cell = guide_pos_to_cell(guide_write, path_ptr[].ray.origin)
-                if parent_cell >= 0:
-                    var w = contrib.luma()
-                    # Normalize by current throughput to record incoming radiance at
-                    # the parent surface, independent of path history (Li, not T*Li).
-                    var t = path_ptr[].throughput
-                    var t_lum = t.luma()
-                    if t_lum > Float32(1e-7):
-                        w = w / t_lum
-                    if w > Float32(1e-7):
-                        var sd = path_ptr[].ray.direction
-                        guide_record(guide_write, parent_cell, sd.x, sd.y, sd.z, w)
+        if _is_real_ptr(ctx.shadow_tasks) and not guide_is_active(guide_write):
+            var base = ctx.path_idx * SHADOW_SLOTS
+            comptime for s in range(SHADOW_SLOTS):
+                if ctx.shadow_tasks[unsafe_offset=base + s].active == Int32(0):
+                    ctx.shadow_tasks[unsafe_offset=base + s] = ShadowTask(
+                        Point3f(origin[0], origin[1], origin[2]),
+                        Vec3f(dir[0], dir[1], dir[2]),
+                        tmax, contrib, Int32(1), Int32(0))
+                    return
+    var shadow_ray = Ray(Point3f(origin[0], origin[1], origin[2]), Vec3f(dir[0], dir[1], dir[2]))
+    if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, tmax,
+                              ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
+                              ctx.lights.spheres, ctx.lights.sphere_count,
+                              materials=ctx.materials):
+        path_ptr[].estimate += contrib
+        # Record in the guide at the PARENT surface (one bounce back):
+        # "scatter direction ray.dir from parent_cell leads to illumination W here."
+        # This teaches indirect-illumination guiding — path_ptr[].ray.origin is where
+        # the path came from and ray.direction is the scatter direction that arrived here.
+        if guide_is_active(guide_write) and path_ptr[].bounce > 0:
+            var parent_cell = guide_pos_to_cell(guide_write, path_ptr[].ray.origin)
+            if parent_cell >= 0:
+                var w = contrib.luma()
+                # Normalize by current throughput to record incoming radiance at
+                # the parent surface, independent of path history (Li, not T*Li).
+                var t = path_ptr[].throughput
+                var t_lum = t.luma()
+                if t_lum > Float32(1e-7):
+                    w = w / t_lum
+                if w > Float32(1e-7):
+                    var sd = path_ptr[].ray.direction
+                    guide_record(guide_write, parent_cell, sd.x, sd.y, sd.z, w)
 
 
 # ── DiffuseTransmission branch ────────────────────────────────────────────────

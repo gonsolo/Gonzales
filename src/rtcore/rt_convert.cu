@@ -18,6 +18,8 @@ extern "C" __global__ void convert(const unsigned int* rt, float* out, const int
     int tri = (int)(word & 0x1fffffffu);
     int lo = 0, hi = nMeshes;              // largest m with prefix[m] <= tri
     while (hi - lo > 1) { int mid = (lo + hi) >> 1; if (prefix[mid] <= tri) lo = mid; else hi = mid; }
-    o[0] = __uint_as_float(r[0]); o[1] = __uint_as_float(r[1]); o[2] = __uint_as_float(r[2]); o[3] = 0.0f;
+    // The hardware returns u with a negative sign on some hits (same magnitude Vulkan reports positive; presumably a
+    // back-face indicator). Barycentrics are never negative, so the sign is dropped.
+    o[0] = __uint_as_float(r[0]); o[1] = fabsf(__uint_as_float(r[1])); o[2] = __uint_as_float(r[2]); o[3] = 0.0f;
     oi[4] = lo; oi[5] = tri - prefix[lo]; oi[6] = 1; oi[7] = 0;
 }

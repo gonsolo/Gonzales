@@ -101,6 +101,12 @@ static void* g_active = nullptr;
 extern "C" void rtcore_set_active(void* handle) { g_active = handle; }
 extern "C" void* rtcore_active(void) { return g_active; }
 
+// Shadow rays on the RT cores need opaque geometry (the hardware trace ignores alpha cutouts): the caller decides, and
+// passes the number of deferred-ray slots per path it wants used (0 = shadow rays stay on the software BVH).
+static int g_shadow = 0;
+extern "C" void rtcore_set_shadow(int slots) { g_shadow = slots; }
+extern "C" int rtcore_shadow_enabled(void) { return g_active ? g_shadow : 0; }
+
 extern "C" void rtcore_destroy(void* handle) {
     if (!handle) return;
     RtCore* rc = (RtCore*)handle;
