@@ -130,6 +130,20 @@ operands (Vulkan's c[0][0x20..0x58] and c[1][0], c[1][8]) to kernel parameters a
   two bank-1 values). A debugger breakpoint at the block entry in a real Vulkan dispatch is not possible with the tools
   here, so the next step would be to find where the TLAS-miss PC=0 comes from (the driver's internal shaders).
 
+## Single-stepping the block in cuda-gdb (thread 0, BLAS root, CUDA context)
+`tbreak *($K+0x6d0)` then `stepi` with all of R0-R47 dumped after each step:
+- `0x3d0` (at 0x6d0): no register changes.
+- `0x9d4` (at 0x6e0): R8:R9 (root node address) become 0, R20-R23 become 0xffffffff, and the program counter goes
+  straight to 0x7d0 -- the `0x3d1`/`0x3d3`/`0x3d2` instructions at 0x6f0-0x7c0 are never executed. So `0x9d4` is
+  the gate of the query: it takes the root pointer and the flag words, and on failure it writes -1 to R20-R23 and
+  branches over the setup/readout instructions. In the Vulkan run it must succeed and fall through.
+- After the jump the shader tests R23 (0xfe000000 / 0x3f bit fields) and writes the miss result.
+Therefore nothing in the ray-reading `0x3d1`/`0x3d2` instructions has been observed yet. Why `0x9d4` fails in a CUDA
+kernel is unknown. Compared with a plain compute shader, the pipeline blob of the ray-query shader has extra header
+records (tags 0x10, 0x17 and a 0x22/0x20 pair, record count 3 instead of 1) that probably describe the RT resources
+the driver sets up per launch; the OptiX cache cubins contain none of the RT block, so no extra attribute could be
+compared.
+
 ## Prior art found by web search (2026-10-02)
 - NVIDIA caches compiled shaders (Vulkan and OpenGL) in `~/.nv/GLCache` or `~/.cache/nvidia/GLCache`;
   `nvcachetools` (reads `.toc`/`.bin`) and `nvucdump` (extracts sections of `.nvuc` objects) plus `nvdisasm --binary SMxx`

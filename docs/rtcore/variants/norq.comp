@@ -1,0 +1,13 @@
+#version 460
+layout(local_size_x = 64) in;
+struct Ray { vec4 a; vec4 b; };
+struct Result { float hitT, u, v, p; int m, t; uint f, q; };
+layout(set = 0, binding = 1, std430) readonly buffer RaysBuffer { Ray rays[]; };
+layout(set = 0, binding = 2, std430) writeonly buffer ResultsBuffer { Result results[]; };
+layout(push_constant) uniform PushConstants { uint rayCount; } pc;
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.rayCount) return;
+    Result r; r.hitT = rays[i].a.x + rays[i].b.y; r.u = 0; r.v = 0; r.p = 0; r.m = 1; r.t = 2; r.f = 3u; r.q = 0u;
+    results[i] = r;
+}
