@@ -339,7 +339,7 @@ hardware / software = 1.00003. Pavilion at night: 65 ms (software 89). Bathroom:
 
 `gonzales --gpu --vcm --rt-hardware scene.pbrt` runs the staged VCM driver (`--vcm-wavefront`, implied) with the RT-core
 trace for the light paths, the camera paths and the connection shadow rays. The staged driver renders pixel-identical
-images to the megakernel `vcm_render_gpu` (checked on the pavilion: ratio 1.0, rms 0), so the paper's thinning, footprint
+images to the megakernel `vcm_render_gpu` (checked on the pavilion: ratio 1.0, rms 0), so VCM's photon thinning, footprint radius
 and keep-aware MIS are all there. Instancing (TLAS), spheres (analytic pass from the rays buffer; the shadow resolve sends
 rays that hit a sphere to the full visibility trace) and alpha cutouts (same re-trace passes; deep tail to the software BVH)
 are supported; curves are not. The shadow resolve decodes instance hits through the instance table and treats a ray with
