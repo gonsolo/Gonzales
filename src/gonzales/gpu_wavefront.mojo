@@ -2,7 +2,7 @@ from .bvh import BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, trav
 from .curves import CURVE_DEFER_K, Curve, _curve_perp_axis, curve_piece_endpoints, intersect_curve
 from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, store_vec3, vec3f
 from .materials import Material
-from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, sphere_outward_normal
+from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, alpha_killed, sphere_outward_normal
 from .render_state import PathState, ShadowTask, SHADOW_SLOTS
 from .restir_di import DIReservoir, di_reservoir_init
 from .restir_vol import VolReservoir, vol_reservoir_init
@@ -10,7 +10,7 @@ from .sampling import gen_primary_ray_state
 from .spectrum import SpectralSample, spectral_sample_to_rgb
 from .transform import transform_normal, Mat4
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
-from .rtcore import rtcore_active, rtcore_trace, rtcore_trace_interop
+from .rtcore import rtcore_active, rtcore_alpha_enabled, rtcore_trace, rtcore_trace_interop
 from max.gpu import block_dim, block_idx, thread_idx
 from max.gpu.host import DeviceBuffer, DeviceContext
 from max.gpu.host._nvidia_cuda import CUDA
@@ -516,10 +516,11 @@ def resolve_shadow_rays_rt_kernel(
     paths: Pointer[PathState, MutUntrackedOrigin],
     tasks: Pointer[ShadowTask, MutUntrackedOrigin],
     raw: Pointer[UInt32, MutUntrackedOrigin],
-    spheres: Pointer[Sphere, MutUntrackedOrigin],
+    sd: SceneView,
     n_spheres_dp: Int64,
     count_dp: Int64,
     slot_dp: Int64,
+    converted_dp: Int64,
 ):
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -528,14 +529,148 @@ def resolve_shadow_rays_rt_kernel(
     var task = tasks[unsafe_offset=tid * SHADOW_SLOTS + Int(slot_dp)]
     if task.active != Int32(1):
         return
-    if raw[unsafe_offset=tid * 8 + 3] != UInt32(0xffffffff):      # a triangle is in the way
+    # raw records: word 3 is the hit word (all ones = miss); interop layout (alpha scenes): word 6 is the hit flag
+    var ray = Ray(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
+    var flag = raw[unsafe_offset=tid * 8 + 6]
+    if converted_dp != Int64(0) and flag == UInt32(3):
+        # Too many rejected alpha hits for the RT-core passes: the software BVH decides (it also covers the spheres).
+        if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(n_spheres_dp), materials=sd.materials):
+            return
+        paths[unsafe_offset=tid].estimate += task.contrib
+        return
+    var blocked = flag != UInt32(0) if converted_dp != Int64(0) else raw[unsafe_offset=tid * 8 + 3] != UInt32(0xffffffff)
+    if blocked:                                                    # a triangle is in the way
         return
     # Analytic spheres are not in the acceleration structure: test them here, as the primary rays' sphere pass does.
-    var ray = Ray(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
     for i in range(Int(n_spheres_dp)):
-        if ray_sphere_hit(spheres[unsafe_offset=i].center, spheres[unsafe_offset=i].radius, ray, Float32(1e-4), task.tmax) > Float32(0.0):
+        if ray_sphere_hit(sd.spheres[unsafe_offset=i].center, sd.spheres[unsafe_offset=i].radius, ray, Float32(1e-4), task.tmax) > Float32(0.0):
             return
     paths[unsafe_offset=tid].estimate += task.contrib
+
+# ── Alpha cutouts on the RT cores ──────────────────────────────────────────────
+# The hardware geometry is opaque, so a ray returns the nearest triangle even when its alpha cutout rejects it. The
+# callers trace once, then RT_ALPHA_PASSES - 1 more times: after every trace this kernel applies alpha_killed (the same
+# test the software BVH runs) to each pending ray's hit; a rejected hit moves the ray's t_min just past it and the ray stays
+# pending, anything else is final (tmax := 0 so later traces skip it). `first` reads the result the caller just produced,
+# later passes read the scratch buffer and copy the final ones into `results`.
+comptime RT_ALPHA_PASSES = 4
+
+def rtcore_alpha_kernel(
+    rays: Pointer[Float32, MutUntrackedOrigin],
+    results: Pointer[Float32, MutUntrackedOrigin],
+    scratch: Pointer[Float32, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    n_meshes_dp: Int64,
+    instance_base_mesh: Pointer[Int32, MutUntrackedOrigin],
+    count_dp: Int64,
+    first_dp: Int64,
+):
+    var count = Int(count_dp)
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    var idx = tid * 8
+    if rays[unsafe_offset=idx + 7] <= Float32(0.0):
+        return                                           # finished (or an empty shadow slot)
+    var first = first_dp != Int64(0)
+    var src = results if first else scratch
+    var isrc = src.unsafe_bitcast[Int32]()
+    var killed = False
+    if isrc[unsafe_offset=idx + 6] == Int32(1):
+        var n_meshes = Int(n_meshes_dp)
+        var raw_idx = Int(isrc[unsafe_offset=idx + 4])
+        var tri = Int(isrc[unsafe_offset=idx + 5])
+        var mi = raw_idx
+        if raw_idx >= n_meshes and _is_real_ptr(instance_base_mesh):
+            mi = Int(instance_base_mesh[unsafe_offset=raw_idx - n_meshes]) + Int(isrc[unsafe_offset=idx + 7])
+        if mi >= 0 and mi < n_meshes:
+            var mesh = meshes[unsafe_offset=mi]
+            if mesh.alpha_w != Int32(0) or mesh.alpha_const < Float32(1.0):
+                var v0 = Int(mesh.vertexIndices[unsafe_offset=tri * 3])
+                var v1 = Int(mesh.vertexIndices[unsafe_offset=tri * 3 + 1])
+                var v2 = Int(mesh.vertexIndices[unsafe_offset=tri * 3 + 2])
+                var org = Vec3f(rays[unsafe_offset=idx], rays[unsafe_offset=idx + 1], rays[unsafe_offset=idx + 2])
+                var dir = Vec3f(rays[unsafe_offset=idx + 4], rays[unsafe_offset=idx + 5], rays[unsafe_offset=idx + 6])
+                killed = alpha_killed(mesh, v0, v1, v2, src[unsafe_offset=idx + 1], src[unsafe_offset=idx + 2], org, dir, (mi << 32) | (tri * 3))
+    if killed:
+        var t = src[unsafe_offset=idx]
+        rays[unsafe_offset=idx + 3] = t * Float32(1.00001) + Float32(1.0e-5)
+        return
+    if not first:
+        for k in range(8):
+            results[unsafe_offset=idx + k] = scratch[unsafe_offset=idx + k]
+    rays[unsafe_offset=idx + 7] = Float32(0.0)
+
+# Rays still pending after the last pass have been through RT_ALPHA_PASSES rejected hits (dense foliage): flag them
+# (hit flag 3) so the software BVH, which has no depth limit, resolves them -- see rtcore_alpha_fallback_gpu and the
+# shadow resolve kernel.
+def rtcore_alpha_finish_kernel(
+    rays: Pointer[Float32, MutUntrackedOrigin],
+    results: Pointer[Float32, MutUntrackedOrigin],
+    count_dp: Int64,
+):
+    var count = Int(count_dp)
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    var idx = tid * 8
+    if rays[unsafe_offset=idx + 7] > Float32(0.0):
+        results.unsafe_bitcast[Int32]()[unsafe_offset=idx + 6] = Int32(3)
+
+# Called after the first RT-core trace into `results` (interop layout). Does nothing for scenes without alpha.
+def rtcore_alpha_passes(
+    ctx: DeviceContext,
+    rays_buf: DeviceBuffer[DType.float32],
+    results_buf: DeviceBuffer[DType.float32],
+    scratch_buf: DeviceBuffer[DType.uint8],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    n_meshes: Int,
+    instance_base_mesh: Pointer[Int32, MutUntrackedOrigin],
+    n_total: Int,
+) raises:
+    comptime block_size = 256
+    var grid = ceildiv(n_total, block_size)
+    var cuda_stream = CUDA(ctx.stream())
+    var rt_hw = rtcore_active()
+    var rays = rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    var results = results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    var scratch = scratch_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    comptime for p in range(RT_ALPHA_PASSES):
+        comptime if p > 0:
+            _ = rtcore_trace_interop(rt_hw, UInt64(Int(rays_buf.unsafe_ptr())), UInt64(Int(scratch_buf.unsafe_ptr())), Int32(n_total), cuda_stream)
+        ctx.enqueue_function[rtcore_alpha_kernel](
+            rays, results, scratch, meshes, Int64(n_meshes), instance_base_mesh, Int64(n_total), Int64(1 if p == 0 else 0),
+            grid_dim=grid, block_dim=block_size,
+        )
+    ctx.enqueue_function[rtcore_alpha_finish_kernel](
+        rays, results, Int64(n_total),
+        grid_dim=grid, block_dim=block_size,
+    )
+
+
+def rtcore_alpha_fallback_gpu(
+    sd: SceneView,
+    paths: Pointer[PathState, MutUntrackedOrigin],
+    interop_results: Pointer[Float32, MutUntrackedOrigin],
+    inter: Pointer[Intersection, MutUntrackedOrigin],
+    curve_cand_prim: Pointer[Int32, MutUntrackedOrigin],
+    curve_cand_count: Pointer[Int32, MutUntrackedOrigin],
+    count_dp: Int64,
+):
+    var count = Int(count_dp)
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= count:
+        return
+    if interop_results.unsafe_bitcast[Int32]()[unsafe_offset=tid * 8 + 6] != Int32(3):
+        return
+    if paths[unsafe_offset=tid].active == 0:
+        return
+    # Alpha scenes are triangle-only here (curves are not eligible), so the candidate buffers are never written.
+    traverse_bvh2_core_defer_curves(
+        sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, paths[unsafe_offset=tid].ray, Float32(1.0e38), inter.unsafe_offset(tid),
+        curve_cand_prim, curve_cand_count,
+        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
+    )
 
 def rtcore_shadow_rays_gpu(
     ctx: DeviceContext,
@@ -545,13 +680,17 @@ def rtcore_shadow_rays_gpu(
     interop_results_buf: DeviceBuffer[DType.float32],
     n_total: Int,
     usable_slots: Int,
-    spheres: Pointer[Sphere, MutUntrackedOrigin],
+    sd: SceneView,
     n_spheres: Int,
+    scratch_buf: DeviceBuffer[DType.uint8],
+    n_meshes: Int,
+    instance_base_mesh: Pointer[Int32, MutUntrackedOrigin],
 ) raises:
     comptime block_size = 256
     var grid = ceildiv(n_total, block_size)
     var cuda_stream = CUDA(ctx.stream())
     var rt_hw = rtcore_active()
+    var alpha = Int(rtcore_alpha_enabled()) != 0
     for s in range(usable_slots):
         ctx.enqueue_function[pack_shadow_rays_kernel](
             shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
@@ -559,13 +698,18 @@ def rtcore_shadow_rays_gpu(
             Int64(n_total), Int64(s),
             grid_dim=grid, block_dim=block_size,
         )
-        _ = rtcore_trace(rt_hw, UInt64(Int(interop_rays_buf.unsafe_ptr())), UInt64(Int(interop_results_buf.unsafe_ptr())), Int32(n_total), cuda_stream)
+        if alpha:
+            # Interop layout, so the alpha passes know which triangle each ray hit.
+            _ = rtcore_trace_interop(rt_hw, UInt64(Int(interop_rays_buf.unsafe_ptr())), UInt64(Int(interop_results_buf.unsafe_ptr())), Int32(n_total), cuda_stream)
+            rtcore_alpha_passes(ctx, interop_rays_buf, interop_results_buf, scratch_buf, sd.meshes, n_meshes, instance_base_mesh, n_total)
+        else:
+            _ = rtcore_trace(rt_hw, UInt64(Int(interop_rays_buf.unsafe_ptr())), UInt64(Int(interop_results_buf.unsafe_ptr())), Int32(n_total), cuda_stream)
         ctx.enqueue_function[resolve_shadow_rays_rt_kernel](
             path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             interop_results_buf.unsafe_ptr().unsafe_bitcast[UInt32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-            spheres, Int64(n_spheres),
-            Int64(n_total), Int64(s),
+            sd, Int64(n_spheres),
+            Int64(n_total), Int64(s), Int64(1 if alpha else 0),
             grid_dim=grid, block_dim=block_size,
         )
 
@@ -574,6 +718,7 @@ def vulkaninterop_rt_traverse_paths_gpu(
     ctx: DeviceContext,
     path_buf: DeviceBuffer[DType.uint8],
     inter_buf: DeviceBuffer[DType.uint8],
+    sd: SceneView,
     interop_scene: VulkanInteropRtSceneHandle,
     interop_rays_buf: DeviceBuffer[DType.float32],
     interop_results_buf: DeviceBuffer[DType.float32],
@@ -584,6 +729,10 @@ def vulkaninterop_rt_traverse_paths_gpu(
     instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]] = None,
     spheres: Pointer[Sphere, MutUntrackedOrigin] = Pointer[Sphere, MutUntrackedOrigin].unsafe_dangling(),
     n_spheres: Int = 0,
+    # --rt-hardware with alpha cutouts (see rtcore_alpha_passes).
+    rt_scratch_buf: Optional[DeviceBuffer[DType.uint8]] = None,
+    curve_cand_prim: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+    curve_cand_count: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
 ) raises:
     comptime block_size = 256
     var grid = ceildiv(n_total, block_size)
@@ -607,6 +756,8 @@ def vulkaninterop_rt_traverse_paths_gpu(
     var instance_base_mesh_ptr = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
     if instance_base_mesh_buf:
         instance_base_mesh_ptr = instance_base_mesh_buf.value().unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    if Int(rt_hw) != 0 and Int(rtcore_alpha_enabled()) != 0 and rt_scratch_buf:
+        rtcore_alpha_passes(ctx, interop_rays_buf, interop_results_buf, rt_scratch_buf.value(), sd.meshes, n_meshes, instance_base_mesh_ptr, n_total)
 
     ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
         interop_results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
@@ -618,6 +769,17 @@ def vulkaninterop_rt_traverse_paths_gpu(
         instance_base_mesh_ptr,
         grid_dim=grid, block_dim=block_size,
     )
+
+    if Int(rt_hw) != 0 and Int(rtcore_alpha_enabled()) != 0 and rt_scratch_buf:
+        ctx.enqueue_function[rtcore_alpha_fallback_gpu](
+            sd,
+            path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            interop_results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            curve_cand_prim, curve_cand_count,
+            Int64(n_total),
+            grid_dim=grid, block_dim=block_size,
+        )
 
     # Curves need no further handling here at all -- intersect_batch.comp
     # already resolved them (real narrow-phase test + generate on a valid

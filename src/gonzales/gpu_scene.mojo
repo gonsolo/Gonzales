@@ -945,6 +945,7 @@ struct GpuSceneHandle(Movable):
     # -- NOT ping-ponged, NOT persisted across frames, unlike the pair
     # above. See _sample_medium_core's vol_used comment for why this exists.
     var restir_vol_used_buf: DeviceBuffer[DType.uint8] # n_pixels × sizeof(Int8)
+    var rt_scratch_buf: DeviceBuffer[DType.uint8]   # --rt-hardware alpha passes: one 32-byte result per ray (n_pixels × WAVEFRONT_BATCH), else 32 bytes
     var shadow_slots: Int                           # ShadowTask slots per path in shadow_buf (SHADOW_SLOTS with --rt-hardware, else 1)
     var shadow_buf: DeviceBuffer[DType.uint8]       # n_pixels × WAVEFRONT_BATCH × sizeof(ShadowTask) = 48 -- must match path_buf/inter_buf sizing (gpu_render_sample only uses the first n_pixels slots; gpu_render_wavefront's _gpu_bounce_kernels call indexes up to n_pixels × WAVEFRONT_BATCH)
     var active_count_buf: DeviceBuffer[DType.uint8] # 1 × Int32
@@ -1139,6 +1140,7 @@ def gpu_upload_scene(
             var r_restir_vol_used_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Int8]())
             # --rt-hardware defers up to SHADOW_SLOTS shadow rays per path; everything else needs one slot per path.
             var r_shadow_slots = SHADOW_SLOTS if getenv("GONZALES_RTCORE") != "" else 1
+            var r_rt_scratch_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 32 * WAVEFRONT_BATCH if getenv("GONZALES_RTCORE") != "" else 32)
             var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[ShadowTask]() * WAVEFRONT_BATCH * r_shadow_slots)
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](4)
             var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
@@ -1203,6 +1205,7 @@ def gpu_upload_scene(
                 restir_vol_used_buf=r_restir_vol_used_buf^,
                 shadow_buf=r_shadow_buf^,
                 shadow_slots=r_shadow_slots,
+                rt_scratch_buf=r_rt_scratch_buf^,
                 active_count_buf=r_active_count_buf^,
                 active_idx_buf=r_active_idx_buf^,
                 n_pixels=n_pix,

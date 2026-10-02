@@ -49,6 +49,8 @@ void rtcore_set_active(void* handle);
 void* rtcore_active(void);
 void rtcore_set_shadow(int slots);
 int rtcore_shadow_enabled(void);
+void rtcore_set_alpha(int enabled);
+int rtcore_alpha_enabled(void);
 
 void rtcore_destroy(void* handle);
 

@@ -71,6 +71,12 @@ def rtcore_set_active(handle: RtCoreHandle):
 def rtcore_set_shadow(enabled: Int32):
     external_call["rtcore_set_shadow", NoneType, Int32](enabled)
 
+def rtcore_set_alpha(enabled: Int32):
+    external_call["rtcore_set_alpha", NoneType, Int32](enabled)
+
+def rtcore_alpha_enabled() -> Int32:
+    return external_call["rtcore_alpha_enabled", Int32]()
+
 def rtcore_shadow_enabled() -> Int32:
     return external_call["rtcore_shadow_enabled", Int32]()
 

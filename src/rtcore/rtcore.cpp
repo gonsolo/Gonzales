@@ -175,6 +175,11 @@ static int g_shadow = 0;
 extern "C" void rtcore_set_shadow(int slots) { g_shadow = slots; }
 extern "C" int rtcore_shadow_enabled(void) { return g_active ? g_shadow : 0; }
 
+// The scene has alpha cutouts: the callers re-trace past hits that alpha_killed rejects (the hardware geometry is opaque).
+static int g_alpha = 0;
+extern "C" void rtcore_set_alpha(int enabled) { g_alpha = enabled; }
+extern "C" int rtcore_alpha_enabled(void) { return g_active ? g_alpha : 0; }
+
 extern "C" void rtcore_destroy(void* handle) {
     if (!handle) return;
     RtCore* rc = (RtCore*)handle;

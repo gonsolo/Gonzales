@@ -316,3 +316,20 @@ tests the spheres per deferred ray. Only curves are still excluded.
 
 Pavilion at night (path tracer, 640x340, ms per sample): software 89, Vulkan ray query 81, RT cores 87 (shadow rays stay on
 the software BVH because the scene has alpha cutouts); setup 11 s against 5 s.
+
+
+## Alpha cutouts (2026-10-02)
+
+The acceleration structure stays opaque (the hardware trace has no any-hit programs on this path), so a ray returns the
+nearest triangle even when its alpha cutout rejects it. `rtcore_alpha_passes` fixes that in software around the hardware
+trace: after each trace `rtcore_alpha_kernel` applies `alpha_killed` (the test the software BVH runs) to every pending ray's
+hit; a rejected hit moves the ray's t_min just past it (`t * 1.00001 + 1e-5`) and the ray is traced again, anything else is
+final and gets tmax = 0 so later traces skip it. Up to `RT_ALPHA_PASSES` (4) traces per call; a ray that still has a
+rejected hit after the last one (dense foliage: a Bistro hedge has more layers than any fixed count) is flagged (hit flag 3)
+and resolved by the software BVH, which has no depth limit (`rtcore_alpha_fallback_gpu` for primary rays, the shadow resolve
+kernel for shadow rays). Shadow rays use the same passes. Scenes without alpha are untouched.
+
+Bistro vespa, 640x360, ms per sample: software 74, Vulkan 52 (it ignores alpha), RT cores with alpha 35; mean
+1.0009 of the software image. With 3 passes and no fallback the image was 16% too bright (rays leaving the foliage
+as misses); 12 passes still 6%. Synthetic check: the Cornell box with a half-transparent and a fully transparent quad,
+hardware / software = 1.00003. Pavilion at night: 65 ms (software 89). Bathroom: 1.0007.

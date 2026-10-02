@@ -11,3 +11,5 @@ extern "C" void rtcore_set_shadow(int) {}
 extern "C" int rtcore_set_domains(void*, int32_t, const int32_t*, const int32_t*, const int32_t*, const int32_t*, const int32_t*, int32_t) { return 0; }
 extern "C" void* rtcore_create_scene(const char*, int32_t, const uint8_t* const*, const int64_t*, const uint64_t*) { return nullptr; }
 extern "C" int rtcore_shadow_enabled(void) { return 0; }
+extern "C" void rtcore_set_alpha(int) {}
+extern "C" int rtcore_alpha_enabled(void) { return 0; }

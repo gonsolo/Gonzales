@@ -66,6 +66,7 @@ def _gpu_bounce_kernels(
             handle[].ctx,
             handle[].path_buf,
             handle[].inter_buf,
+            sd,
             interop_scene,
             interop_rays_buf.value(),
             interop_results_buf.value(),
@@ -76,6 +77,9 @@ def _gpu_bounce_kernels(
             instance_base_mesh_buf,
             handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere](),
             handle[].n_spheres,
+            handle[].rt_scratch_buf,
+            handle[].curves.cand_prim_ptr(),
+            handle[].curves.cand_count_ptr(),
         )
     else:
         handle[].ctx.enqueue_function[traverse_paths_gpu](
@@ -333,9 +337,13 @@ def _gpu_bounce_kernels(
     # implementation) even when use_vulkan_rt is set -- this machinery isn't
     # wired to Vulkan RT yet.
     if hw_shadow:
+        var shadow_instance_base = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
+        if instance_base_mesh_buf:
+            shadow_instance_base = instance_base_mesh_buf.value().unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
         rtcore_shadow_rays_gpu(handle[].ctx, handle[].path_buf, handle[].shadow_buf,
             interop_rays_buf.value(), interop_results_buf.value(), n, usable_slots,
-            handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere](), handle[].n_spheres)
+            sd, handle[].n_spheres,
+            handle[].rt_scratch_buf, n_meshes_vk, shadow_instance_base)
     else:
         handle[].ctx.enqueue_function[traverse_shadow_rays_gpu](
             sd,

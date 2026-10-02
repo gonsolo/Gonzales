@@ -33,7 +33,7 @@ from .gpu_wavefront import gpu_gen_aux_buffers
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 from .spectrum import SpectralHandle, null_spectral_handle
 from .vulkanrt import VulkanRtSceneHandle, vulkanrt_build_scene, vulkanrt_destroy_scene, vulkanrt_debug_read_as
-from .rtcore import rtcore_set_shadow, rtcore_create_scene, rtcore_set_domains, RtCoreHandle, rtcore_create, rtcore_set_meshes, rtcore_set_active, rtcore_active, rtcore_destroy
+from .rtcore import rtcore_set_shadow, rtcore_set_alpha, rtcore_create_scene, rtcore_set_domains, RtCoreHandle, rtcore_create, rtcore_set_meshes, rtcore_set_active, rtcore_active, rtcore_destroy
 from std.os import getenv
 from .vulkaninterop import (
     VulkanInteropRtSceneHandle, vulkaninterop_rt_create_scene,
@@ -1452,9 +1452,8 @@ def parse_and_render(
                     var light_kinds = Int(psc[unsafe_offset=0].area_light_count > Int32(0)) + Int(psc[unsafe_offset=0].infinite_count > Int32(0)) + Int(psc[unsafe_offset=0].distant_count > Int32(0)) + Int(psc[unsafe_offset=0].point_count > Int32(0))
                     var usable_slots = 2 if light_kinds >= 2 else 1
                     var has_alpha = _scene_has_alpha(psc)
-                    rtcore_set_shadow(Int32(0) if has_alpha or getenv("GONZALES_RTCORE_NOSHADOW") != "" else Int32(usable_slots))
-                    if has_alpha:
-                        print("Note: alpha cutouts present -- shadow rays stay on the software BVH (the RT cores trace opaque geometry)")
+                    rtcore_set_shadow(Int32(0) if getenv("GONZALES_RTCORE_NOSHADOW") != "" else Int32(usable_slots))
+                    rtcore_set_alpha(Int32(1) if has_alpha else Int32(0))
                 elif rt_merged.valid:
                     hw_failed = True
                     vulkaninterop_rt_destroy_scene(interop_scene)
