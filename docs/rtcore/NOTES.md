@@ -192,6 +192,21 @@ renderer.
   (`vulkanrt_debug_read_as`), traces 4096 rays on its own `DeviceContext` stream, and compares every ray with Vulkan's
   ray query (3431 hits, 0 mismatches). The test skips without the cubin or without CUDA.
 
+## TLAS / instances (2026-10-02)
+- The earlier "Warp MMU Fault at PC 0x0" for a TLAS root was NOT a missing driver handler. The TLAS stores each BLAS
+  address twice: as the full 64-bit address at +0x200 and, in the instance leaf node, as `address >> 16` in a 32-bit
+  field at the unaligned offset 0x60a. Only the first was relocated, so the unit followed a stale address (stepping the
+  trace instruction showed it returning the old Vulkan address `0xdf3dfc0380` in R20:R21). Patching the shifted field
+  too fixes it. BLAS addresses must therefore be 64 KB aligned (Vulkan gives 128 KB). Creating an OptiX context on
+  the CUDA context first made no difference.
+- With that, a TLAS over three BLASes (`as_probe <dir> 4 1024 3`, `exec/run_rt4.c`): all 1024 rays match Vulkan on
+  hit/miss, t, u, v and the per-BLAS triangle index (`R20 & 0x1fffffff`).
+- The instance (mesh) index is NOT in the registers the kernel stores: R8:R9 come back zero, R20's top bits are the same
+  for all instances (0x8 in the high nibble here), and instanceCustomIndex does not appear. The Vulkan shader reads it in
+  its post-processing through tables in constant bank 1 (stride 0x480 from an address that includes the TLAS base), so
+  decoding that path is the open problem. Until then, trace ONE merged triangle geometry (one BLAS, global triangle
+  index) and map the index back to (mesh, triangle) on our side; that needs no instance information.
+
 ## Prior art found by web search (2026-10-02)
 - NVIDIA caches compiled shaders (Vulkan and OpenGL) in `~/.nv/GLCache` or `~/.cache/nvidia/GLCache`;
   `nvcachetools` (reads `.toc`/`.bin`) and `nvucdump` (extracts sections of `.nvuc` objects) plus `nvdisasm --binary SMxx`
