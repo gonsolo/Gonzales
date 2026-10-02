@@ -290,3 +290,29 @@ ms per sample, 640x360, GPU path tracer (software BVH / Vulkan ray query / RT co
 Bistro has alpha cutouts, so its shadow rays stay inline (hardware primary only: 60 vs 74 ms software). The hardware
 shadow rays win where the software BVH is slow (dining-room 3x) and are neutral elsewhere; the small scenes lose to the
 software BVH because of the extra pack / trace / resolve passes. Means agree with the software renderer within 0.1%.
+
+
+## Instancing and spheres (2026-10-02)
+
+**Instances without flattening.** A trace against a TLAS stores the hit instance in register R42 as `instance index + 1`
+(0 on a miss); found by dumping registers 0..47 after the trace for a TLAS over three BLASes (`exec/dump_regs.py`: R42 is
+1/2/3 for rays that hit mesh 0/1/2). The trace kernel now stores it in record word 4 (`trace_kernel.sasm`). The instance
+index is the position in the TLAS instance array: the ordinary (non-template) meshes in index order, then the object
+instances (vulkaninterop_rt_create_scene).
+
+**Hit word of a BLAS with several geometries** (a template with one geometry per mesh): bit 31 clear, `k = word >> 29`,
+`s = 28 - 4k`; the geometry index is in bits 28..s and the triangle number within that geometry in the low s bits
+(9-geometry template: word >> 24 = 0x20 + geometry, low 24 bits = triangle). A single-geometry BLAS has bit 31 set and the
+triangle in the low 29 bits. Verified against Vulkan's decoded mesh/triangle/geometry on every ray of the barcelona
+pavilion at night (43 instances of 2 templates, 107 meshes): 0 mismatches over 6 bounces.
+
+`librtcore` now takes several acceleration structures (`rtcore_create_scene`: TLAS first, each structure at a 64 KB aligned
+offset, 8-byte and shifted 32-bit references relocated) and per-instance decode tables (`rtcore_set_domains`). Instanced
+scenes use the Vulkan scene as built (TLAS over per-mesh BLASes plus one multi-geometry BLAS per template); scenes without
+instancing keep the single merged BLAS, which is faster to trace.
+
+**Spheres** stay analytic: the primary rays run the existing sphere pass after the unpack, and the hardware shadow resolve
+tests the spheres per deferred ray. Only curves are still excluded.
+
+Pavilion at night (path tracer, 640x340, ms per sample): software 89, Vulkan ray query 81, RT cores 87 (shadow rays stay on
+the software BVH because the scene has alpha cutouts); setup 11 s against 5 s.

@@ -1,4 +1,4 @@
-from .bvh import BVH2Node, any_hit_bvh2_core, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
+from .bvh import BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
 from .curves import CURVE_DEFER_K, Curve, _curve_perp_axis, curve_piece_endpoints, intersect_curve
 from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, store_vec3, vec3f
 from .materials import Material
@@ -516,6 +516,8 @@ def resolve_shadow_rays_rt_kernel(
     paths: Pointer[PathState, MutUntrackedOrigin],
     tasks: Pointer[ShadowTask, MutUntrackedOrigin],
     raw: Pointer[UInt32, MutUntrackedOrigin],
+    spheres: Pointer[Sphere, MutUntrackedOrigin],
+    n_spheres_dp: Int64,
     count_dp: Int64,
     slot_dp: Int64,
 ):
@@ -526,8 +528,14 @@ def resolve_shadow_rays_rt_kernel(
     var task = tasks[unsafe_offset=tid * SHADOW_SLOTS + Int(slot_dp)]
     if task.active != Int32(1):
         return
-    if raw[unsafe_offset=tid * 8 + 3] == UInt32(0xffffffff):      # miss: nothing between the point and the light
-        paths[unsafe_offset=tid].estimate += task.contrib
+    if raw[unsafe_offset=tid * 8 + 3] != UInt32(0xffffffff):      # a triangle is in the way
+        return
+    # Analytic spheres are not in the acceleration structure: test them here, as the primary rays' sphere pass does.
+    var ray = Ray(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
+    for i in range(Int(n_spheres_dp)):
+        if ray_sphere_hit(spheres[unsafe_offset=i].center, spheres[unsafe_offset=i].radius, ray, Float32(1e-4), task.tmax) > Float32(0.0):
+            return
+    paths[unsafe_offset=tid].estimate += task.contrib
 
 def rtcore_shadow_rays_gpu(
     ctx: DeviceContext,
@@ -537,6 +545,8 @@ def rtcore_shadow_rays_gpu(
     interop_results_buf: DeviceBuffer[DType.float32],
     n_total: Int,
     usable_slots: Int,
+    spheres: Pointer[Sphere, MutUntrackedOrigin],
+    n_spheres: Int,
 ) raises:
     comptime block_size = 256
     var grid = ceildiv(n_total, block_size)
@@ -554,6 +564,7 @@ def rtcore_shadow_rays_gpu(
             path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             interop_results_buf.unsafe_ptr().unsafe_bitcast[UInt32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            spheres, Int64(n_spheres),
             Int64(n_total), Int64(s),
             grid_dim=grid, block_dim=block_size,
         )

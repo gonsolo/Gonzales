@@ -33,7 +33,7 @@ from .gpu_wavefront import gpu_gen_aux_buffers
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 from .spectrum import SpectralHandle, null_spectral_handle
 from .vulkanrt import VulkanRtSceneHandle, vulkanrt_build_scene, vulkanrt_destroy_scene, vulkanrt_debug_read_as
-from .rtcore import rtcore_set_shadow, RtCoreHandle, rtcore_create, rtcore_set_meshes, rtcore_set_active, rtcore_active, rtcore_destroy
+from .rtcore import rtcore_set_shadow, rtcore_create_scene, rtcore_set_domains, RtCoreHandle, rtcore_create, rtcore_set_meshes, rtcore_set_active, rtcore_active, rtcore_destroy
 from std.os import getenv
 from .vulkaninterop import (
     VulkanInteropRtSceneHandle, vulkaninterop_rt_create_scene,
@@ -304,7 +304,6 @@ struct _RtMerged(Movable):
     var idx: Pointer[Int64, MutUntrackedOrigin]
     var n_meshes: Int
     var n_tris: Int
-    var has_alpha: Bool
 
     def __init__(out self):
         self.valid = False
@@ -316,7 +315,6 @@ struct _RtMerged(Movable):
         self.idx = Pointer[Int64, MutUntrackedOrigin].unsafe_dangling()
         self.n_meshes = 0
         self.n_tris = 0
-        self.has_alpha = False
 
     def release(mut self):
         if self.valid:
@@ -331,9 +329,11 @@ def _rtcore_merge(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> _RtMerg
     var m = _RtMerged()
     if getenv("GONZALES_RTCORE") == "":
         return m^
-    if psc[unsafe_offset=0].curve_count > Int32(0) or psc[unsafe_offset=0].sphere_count > Int32(0) or psc[unsafe_offset=0].instance_count > Int32(0):
-        print("Note: --rt-hardware needs a triangle-only scene without instancing -- using the Vulkan ray-query path")
+    if psc[unsafe_offset=0].curve_count > Int32(0):
+        print("Note: --rt-hardware does not trace curves -- using the Vulkan ray-query path")
         return m^
+    if psc[unsafe_offset=0].instance_count > Int32(0):
+        return m^                       # instanced scenes keep their top-level structure: see _rtcore_native_wanted
     var nm = Int(psc[unsafe_offset=0].mesh_count)
     if nm <= 0:
         return m^
@@ -364,8 +364,6 @@ def _rtcore_merge(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> _RtMerg
         var vi = psc[unsafe_offset=0].meshes[unsafe_offset=i].vertexIndices
         for k in range(3 * nt):
             idx[unsafe_offset=3 * to + k] = vi[unsafe_offset=k] + Int64(vo)
-        if psc[unsafe_offset=0].meshes[unsafe_offset=i].alpha_const < Float32(1.0) or _is_real_ptr(psc[unsafe_offset=0].meshes[unsafe_offset=i].alpha):
-            m.has_alpha = True
     vstart.unsafe_free(); tstart.unsafe_free()
 
     m.meshes = unsafe_alloc[TriangleMesh](1)
@@ -387,16 +385,128 @@ def _rtcore_merge(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> _RtMerg
     return m^
 
 
+# Instanced scenes (no curves) are traced through the Vulkan-built top-level structure as it is: the hardware reports the
+# hit instance, and per-instance decode tables map (instance, triangle) back to (mesh, template geometry).
+def _rtcore_native_wanted(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> Bool:
+    return getenv("GONZALES_RTCORE") != "" and psc[unsafe_offset=0].curve_count == Int32(0) and psc[unsafe_offset=0].instance_count > Int32(0)
+
+# Alpha cutouts need the any-hit test the hardware trace does not run: shadow rays then stay on the software BVH.
+def _scene_has_alpha(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> Bool:
+    for i in range(Int(psc[unsafe_offset=0].mesh_count)):
+        if psc[unsafe_offset=0].meshes[unsafe_offset=i].alpha_const < Float32(1.0) or _is_real_ptr(psc[unsafe_offset=0].meshes[unsafe_offset=i].alpha):
+            return True
+    return False
+
+# Reads TLAS + every BLAS back from the interop scene, hands them to librtcore and builds the decode tables. The TLAS's
+# instances are the ordinary (non-template) meshes in index order, then the object instances (vulkaninterop_rt_create_scene).
+def _rtcore_attach_native(interop_scene: VulkanInteropRtSceneHandle, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> RtCoreHandle:
+    var none = rtcore_active()
+    var nm = Int(psc[unsafe_offset=0].mesh_count)
+    var nt = Int(psc[unsafe_offset=0].blas_count)
+    var ni = Int(psc[unsafe_offset=0].instance_count)
+    var is_template = unsafe_alloc[Bool](max(nm, 1))
+    for i in range(nm):
+        is_template[unsafe_offset=i] = False
+    for t in range(nt):
+        for i in range(Int(psc[unsafe_offset=0].template_mesh_start[unsafe_offset=t]), Int(psc[unsafe_offset=0].template_mesh_end[unsafe_offset=t])):
+            is_template[unsafe_offset=i] = True
+    var n_ord = 0
+    for i in range(nm):
+        if not is_template[unsafe_offset=i]:
+            n_ord += 1
+    # Acceleration structures: 0 = TLAS, then the ordinary meshes' BLASes (index order), then the templates'.
+    var n_as = 1 + n_ord + nt
+    var as_bytes = unsafe_alloc[Pointer[UInt8, MutUntrackedOrigin]](n_as)
+    var as_sizes = unsafe_alloc[Int64](n_as)
+    var as_addr = unsafe_alloc[UInt64](n_as)
+    var ok = True
+    var slot = 0
+    for q in range(n_as):
+        var kind = 1
+        var index = 0
+        if q > 0 and q <= n_ord:
+            kind = 0
+            var seen = 0
+            for i in range(nm):
+                if not is_template[unsafe_offset=i]:
+                    if seen == q - 1:
+                        index = i
+                    seen += 1
+        elif q > n_ord:
+            kind = 2
+            index = q - 1 - n_ord
+        var addr1 = unsafe_alloc[UInt64](1)
+        var sz = vulkaninterop_rt_debug_read_as(interop_scene, Int32(kind), Int32(index), Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Int64(0), addr1)
+        if sz <= 0:
+            ok = False
+            as_sizes[unsafe_offset=q] = 0
+            as_bytes[unsafe_offset=q] = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling()
+        else:
+            var buf = unsafe_alloc[UInt8](Int(sz))
+            _ = vulkaninterop_rt_debug_read_as(interop_scene, Int32(kind), Int32(index), buf, sz, addr1)
+            as_bytes[unsafe_offset=q] = buf
+            as_sizes[unsafe_offset=q] = sz
+            as_addr[unsafe_offset=q] = addr1[unsafe_offset=0]
+        addr1.unsafe_free()
+    var result = none
+    if ok:
+        # Decode tables: one domain per TLAS instance.
+        var n_dom = n_ord + ni
+        var entries = n_ord * 2 + ni
+        var dom_base = unsafe_alloc[Int32](n_dom)
+        var dom_n = unsafe_alloc[Int32](n_dom)
+        var pre = unsafe_alloc[Int32](entries)
+        var rawv = unsafe_alloc[Int32](entries)
+        var geom = unsafe_alloc[Int32](entries)
+        var e = 0
+        var d = 0
+        for i in range(nm):
+            if is_template[unsafe_offset=i]:
+                continue
+            dom_base[unsafe_offset=d] = Int32(e); dom_n[unsafe_offset=d] = Int32(1)
+            pre[unsafe_offset=e] = Int32(0); rawv[unsafe_offset=e] = Int32(i); geom[unsafe_offset=e] = Int32(0)
+            pre[unsafe_offset=e + 1] = psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i]; rawv[unsafe_offset=e + 1] = Int32(0); geom[unsafe_offset=e + 1] = Int32(0)
+            e += 2
+            d += 1
+        for k in range(ni):
+            # Template instance: one direct domain; unpack turns raw mesh nm + k and the hardware's geometry index into the
+            # template's mesh (vulkaninterop_unpack_results_kernel).
+            dom_base[unsafe_offset=d] = Int32(e); dom_n[unsafe_offset=d] = Int32(-1)
+            pre[unsafe_offset=e] = Int32(0); rawv[unsafe_offset=e] = Int32(nm + k); geom[unsafe_offset=e] = Int32(0)
+            e += 1
+            d += 1
+        var cubin = getenv("GONZALES_RTCORE_CUBIN", "build/rt_trace.cubin")
+        var cubin_c = unsafe_alloc[UInt8](cubin.byte_length() + 1)   # the String's buffer is not guaranteed NUL-terminated
+        for k in range(cubin.byte_length()):
+            cubin_c[unsafe_offset=k] = cubin.unsafe_ptr()[unsafe_offset=k]
+        cubin_c[unsafe_offset=cubin.byte_length()] = UInt8(0)
+        var h = rtcore_create_scene(cubin_c, Int32(n_as), as_bytes, as_sizes, as_addr)
+        cubin_c.unsafe_free()
+        if Int(h) != 0 and Int(rtcore_set_domains(h, Int32(n_dom), dom_base, dom_n, pre, rawv, geom, Int32(e))) == 1:
+            result = h
+            print("RT hardware: tracing", ni, "instances of", nt, "templates and", n_ord, "meshes on the RT cores (top-level structure, shared with the Vulkan scene)")
+        elif Int(h) != 0:
+            rtcore_destroy(h)
+        else:
+            print("Note: --rt-hardware could not load", cubin, "(run make rt-cubin, or set GONZALES_RTCORE_CUBIN) -- using the Vulkan ray-query path")
+        dom_base.unsafe_free(); dom_n.unsafe_free(); pre.unsafe_free(); rawv.unsafe_free(); geom.unsafe_free()
+    for q in range(n_as):
+        if as_sizes[unsafe_offset=q] > 0:
+            as_bytes[unsafe_offset=q].unsafe_free()
+    as_bytes.unsafe_free(); as_sizes.unsafe_free(); as_addr.unsafe_free(); is_template.unsafe_free()
+    return result
+
+
 # After the interop scene was built from the merged geometry: read its acceleration structure back and give it to
 # librtcore. Returns a null handle (the interop/Vulkan ray-query trace then stays in use) on any failure.
 def _rtcore_attach(interop_scene: VulkanInteropRtSceneHandle, m: _RtMerged) -> RtCoreHandle:
     var none = rtcore_active()
     var result = none
     var as_address = unsafe_alloc[UInt64](1)
-    var as_size = vulkaninterop_rt_debug_read_as(interop_scene, Int32(0), Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Int64(0), as_address)
+    var as_size = vulkaninterop_rt_debug_read_as(interop_scene, Int32(0), Int32(0), Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Int64(0), as_address)
     if as_size > 0:
         var as_bytes = unsafe_alloc[UInt8](Int(as_size))
-        _ = vulkaninterop_rt_debug_read_as(interop_scene, Int32(0), as_bytes, as_size, as_address)
+        _ = vulkaninterop_rt_debug_read_as(interop_scene, Int32(0), Int32(0), as_bytes, as_size, as_address)
         var cubin = getenv("GONZALES_RTCORE_CUBIN", "build/rt_trace.cubin")
         var cubin_c = unsafe_alloc[UInt8](cubin.byte_length() + 1)   # the String's buffer is not guaranteed NUL-terminated
         for k in range(cubin.byte_length()):
@@ -1333,18 +1443,19 @@ def parse_and_render(
             # The interop scene holds ONE merged mesh when --rt-hardware is on, so its Vulkan trace cannot report real mesh
             # ids: if the RT cores cannot take over after all (cubin missing), drop to the CUDA software BVH instead.
             var hw_failed = False
-            if Int(interop_scene) != 0 and rt_merged.valid:
-                var rt_hw = _rtcore_attach(interop_scene, rt_merged)
+            if Int(interop_scene) != 0 and (rt_merged.valid or _rtcore_native_wanted(psc)):
+                var rt_hw = _rtcore_attach(interop_scene, rt_merged) if rt_merged.valid else _rtcore_attach_native(interop_scene, psc)
                 if Int(rt_hw) != 0:
                     rtcore_set_active(rt_hw)
                     # Usable shadow slots: a second one only pays off when a bounce can add a second NEE candidate, i.e. the
                     # scene has more than one kind of light (measured: it costs ~13 ms/spp otherwise).
                     var light_kinds = Int(psc[unsafe_offset=0].area_light_count > Int32(0)) + Int(psc[unsafe_offset=0].infinite_count > Int32(0)) + Int(psc[unsafe_offset=0].distant_count > Int32(0)) + Int(psc[unsafe_offset=0].point_count > Int32(0))
                     var usable_slots = 2 if light_kinds >= 2 else 1
-                    rtcore_set_shadow(Int32(0) if rt_merged.has_alpha or getenv("GONZALES_RTCORE_NOSHADOW") != "" else Int32(usable_slots))
-                    if rt_merged.has_alpha:
+                    var has_alpha = _scene_has_alpha(psc)
+                    rtcore_set_shadow(Int32(0) if has_alpha or getenv("GONZALES_RTCORE_NOSHADOW") != "" else Int32(usable_slots))
+                    if has_alpha:
                         print("Note: alpha cutouts present -- shadow rays stay on the software BVH (the RT cores trace opaque geometry)")
-                else:
+                elif rt_merged.valid:
                     hw_failed = True
                     vulkaninterop_rt_destroy_scene(interop_scene)
             rt_merged.release()

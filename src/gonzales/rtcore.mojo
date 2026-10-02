@@ -30,6 +30,29 @@ def rtcore_trace(handle: RtCoreHandle, rays: UInt64, results: UInt64, ray_count:
     return external_call["rtcore_trace", Int32, RtCoreHandle, UInt64, UInt64, Int32, CUstream](
         handle, rays, results, ray_count, stream)
 
+# Top-level structure: structure 0 is the TLAS, the rest the BLASes it references (see rtcore.h).
+def rtcore_create_scene(
+    cubin_path: Pointer[UInt8, MutUntrackedOrigin], n_as: Int32,
+    as_bytes: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
+    as_sizes: Pointer[Int64, MutUntrackedOrigin],
+    as_addresses: Pointer[UInt64, MutUntrackedOrigin],
+) -> RtCoreHandle:
+    return external_call["rtcore_create_scene", RtCoreHandle, Pointer[UInt8, MutUntrackedOrigin], Int32,
+        Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin], Pointer[Int64, MutUntrackedOrigin],
+        Pointer[UInt64, MutUntrackedOrigin]](cubin_path, n_as, as_bytes, as_sizes, as_addresses)
+
+# Decode tables for the hit instance / triangle (see rtcore.h): one domain per TLAS instance.
+def rtcore_set_domains(
+    handle: RtCoreHandle, n_domains: Int32,
+    dom_base: Pointer[Int32, MutUntrackedOrigin], dom_n: Pointer[Int32, MutUntrackedOrigin],
+    pre: Pointer[Int32, MutUntrackedOrigin], rawv: Pointer[Int32, MutUntrackedOrigin],
+    geom: Pointer[Int32, MutUntrackedOrigin], n_entries: Int32,
+) -> Int32:
+    return external_call["rtcore_set_domains", Int32, RtCoreHandle, Int32,
+        Pointer[Int32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin],
+        Pointer[Int32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin], Int32](
+        handle, n_domains, dom_base, dom_n, pre, rawv, geom, n_entries)
+
 # Maps the merged geometry's global triangle index back to meshes: `tri_prefix` has n_meshes + 1 entries.
 def rtcore_set_meshes(handle: RtCoreHandle, tri_prefix: Pointer[Int32, MutUntrackedOrigin], n_meshes: Int32) -> Int32:
     return external_call["rtcore_set_meshes", Int32, RtCoreHandle, Pointer[Int32, MutUntrackedOrigin], Int32](

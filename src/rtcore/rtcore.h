@@ -11,7 +11,7 @@ extern "C" {
 // compiled Vulkan ray-query code with its post-processing replaced by raw result stores, wrapped in a cubin by
 // docs/rtcore/exec/build_rt_cubin.py. It traces against ONE bottom-level acceleration structure built by Vulkan
 // (vulkanrt_build_scene + vulkanrt_debug_read_as); top-level structures are not supported (the unit calls a
-// driver-installed handler for instances that a CUDA context does not have). Tied to sm_86 and the driver version
+// driver-installed handler for instances that a CUDA context does not have -- see the update below: they do work once the TLAS's shifted BLAS references are relocated). Tied to sm_86 and the driver version
 // that compiled the shader.
 
 // Loads the cubin into the CUDA context current on the calling thread (the primary context of device 0 if none is
@@ -19,6 +19,12 @@ extern "C" {
 // driver stored inside it (every 8-byte word equal to `as_vk_address` becomes the new device address).
 // Returns NULL on failure (no CUDA, cubin missing, launch config rejected).
 void* rtcore_create(const char* cubin_path, const uint8_t* as_bytes, int64_t as_size, uint64_t as_vk_address);
+
+// Same for a top-level structure: structure 0 is the TLAS, the others the BLASes it references. Each is copied to a
+// 64 KB aligned device address and every address stored inside (full, and the TLAS's `address >> 16` fields) relocated.
+// The traced instance index is reported by the trace (record word 4 = instance + 1) and decoded by rtcore_set_domains.
+void* rtcore_create_scene(const char* cubin_path, int32_t n_as, const uint8_t* const* as_bytes, const int64_t* as_sizes,
+                          const uint64_t* as_vk_addresses);
 
 // Enqueues a trace of `ray_count` rays on `cuda_stream` (a CUstream; 0 = default stream). `rays` is a device
 // pointer to 32 bytes per ray: (ox, oy, oz, t_min, dx, dy, dz, t_max). `results` is a device pointer to 32 bytes per
@@ -29,6 +35,8 @@ int rtcore_trace(void* handle, uint64_t rays, uint64_t results, int32_t ray_coun
 
 // Maps the merged geometry's global triangle index back to meshes: `tri_prefix` has n_meshes + 1 entries (prefix sums of
 // the per-mesh triangle counts). Needed by rtcore_trace_interop only.
+int rtcore_set_domains(void* handle, int32_t nDomains, const int32_t* domBase, const int32_t* domN, const int32_t* pre,
+                       const int32_t* rawv, const int32_t* geom, int32_t nEntries);
 int rtcore_set_meshes(void* handle, const int32_t* tri_prefix, int32_t n_meshes);
 
 // Like rtcore_trace, but writes `results` in the Vulkan interop Result layout (see rt_convert.cu): 32 bytes per ray,

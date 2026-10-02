@@ -152,16 +152,17 @@ def vulkaninterop_rt_trace(scene: VulkanInteropRtSceneHandle, ray_count: Int32, 
     return external_call["vulkaninterop_rt_trace", Int32,
         VulkanInteropRtSceneHandle, Int32, CUstream](scene, ray_count, cuda_stream)
 
-# --rt-hardware: copy ordinary mesh `index`'s BLAS bytes to the host (dst null: size query only); returns the size in
-# bytes and the structure's device address in out_address[0].
+# --rt-hardware: copy an acceleration structure's bytes to the host (kind 0 = BLAS of ordinary mesh `index`, 1 = TLAS,
+# 2 = BLAS of template `index`; dst null: size query only); returns the size in bytes and the structure's device address
+# in out_address[0].
 def vulkaninterop_rt_debug_read_as(
-    scene: VulkanInteropRtSceneHandle, index: Int32,
+    scene: VulkanInteropRtSceneHandle, kind: Int32, index: Int32,
     dst: Pointer[UInt8, MutUntrackedOrigin], capacity: Int64,
     out_address: Pointer[UInt64, MutUntrackedOrigin],
 ) -> Int64:
     return external_call["vulkaninterop_rt_debug_read_as", Int64,
-        VulkanInteropRtSceneHandle, Int32, Pointer[UInt8, MutUntrackedOrigin], Int64,
-        Pointer[UInt64, MutUntrackedOrigin]](scene, index, dst, capacity, out_address)
+        VulkanInteropRtSceneHandle, Int32, Int32, Pointer[UInt8, MutUntrackedOrigin], Int64,
+        Pointer[UInt64, MutUntrackedOrigin]](scene, kind, index, dst, capacity, out_address)
 
 def vulkaninterop_rt_destroy_scene(scene: VulkanInteropRtSceneHandle):
     external_call["vulkaninterop_rt_destroy_scene", NoneType, VulkanInteropRtSceneHandle](scene)

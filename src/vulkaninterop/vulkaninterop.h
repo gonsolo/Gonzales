@@ -208,8 +208,9 @@ void* vulkaninterop_rt_get_results_ptr(void* scene);
 // success, 0 on failure. Does not block on GPU completion.
 int vulkaninterop_rt_trace(void* scene, int32_t ray_count, void* cuda_stream);
 
-// --rt-hardware: copies ordinary mesh `index`'s BLAS bytes to the host (out null: size query). Returns bytes.
-int64_t vulkaninterop_rt_debug_read_as(void* scene, int index, uint8_t* out, int64_t capacity, uint64_t* out_address);
+// --rt-hardware: copies an acceleration structure's bytes to the host (kind 0 = BLAS of ordinary mesh `index`, 1 = TLAS,
+// 2 = BLAS of template `index`; out null: size query). Returns bytes.
+int64_t vulkaninterop_rt_debug_read_as(void* scene, int kind, int index, uint8_t* out, int64_t capacity, uint64_t* out_address);
 
 // Destroys a scene built by vulkaninterop_rt_create_scene.
 void vulkaninterop_rt_destroy_scene(void* scene);

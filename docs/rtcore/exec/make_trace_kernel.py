@@ -6,7 +6,7 @@ result registers. Steps (offsets are into the 5376-byte shader from intersect_ba
      with: ULDC.64 UR4,results ; three IADD3 for the field addresses ; STG R21,R22,R23,R20 ; EXIT.
 The instructions are in trace_kernel.sasm (pseudo SASS); this script assembles and verifies them.
 Output record per ray (24 bytes used of 32): [t, u, v, raw R20, raw R8, raw R9]."""
-import sys, struct
+import os, sys, struct
 src, dst = sys.argv[1], sys.argv[2]
 c = bytearray(open(src, "rb").read())
 # The offsets below are specific to the code NVIDIA's compiler produced for intersect_batch.comp (driver 615.71.09).
@@ -39,7 +39,7 @@ def assemble(line):
     sys.exit(f"cannot assemble: {line!r}")
 
 listing, at = [], None                                                      # [(offset, text)]
-for raw in open(__file__.replace("make_trace_kernel.py", "trace_kernel.sasm")):
+for raw in open(os.environ.get("TRACE_SASM") or __file__.replace("make_trace_kernel.py", "trace_kernel.sasm")):
     line = raw.split("#")[0].strip()
     if not line: continue
     if line.startswith(".at"): at = int(line.split()[1], 16); continue

@@ -334,7 +334,8 @@ def _gpu_bounce_kernels(
     # wired to Vulkan RT yet.
     if hw_shadow:
         rtcore_shadow_rays_gpu(handle[].ctx, handle[].path_buf, handle[].shadow_buf,
-            interop_rays_buf.value(), interop_results_buf.value(), n, usable_slots)
+            interop_rays_buf.value(), interop_results_buf.value(), n, usable_slots,
+            handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere](), handle[].n_spheres)
     else:
         handle[].ctx.enqueue_function[traverse_shadow_rays_gpu](
             sd,

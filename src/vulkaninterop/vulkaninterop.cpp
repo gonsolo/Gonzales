@@ -296,7 +296,7 @@ bool buildAccelerationStructureMulti(
                        &buildInfo, primitiveCounts.data(), &sizeInfo);
 
     if (!createBuffer(device, physicalDevice, sizeInfo.accelerationStructureSize,
-                       VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
+                       VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, false, outASBuffer)) {
         return false;
     }
@@ -1175,18 +1175,22 @@ extern "C" int vulkaninterop_round_trip(void* handle, void* cuda_stream) {
 // Stage 2: real ray-query tracing through the interop mechanism.
 // ---------------------------------------------------------------------------
 
-// --rt-hardware (docs/rtcore): copies the bytes of ordinary mesh `index`'s bottom-level acceleration structure to the
-// host so librtcore can trace the same structure on the RT cores from CUDA. capacity 0 / out null only queries the
-// size. Returns the size in bytes (0 on failure); *out_address receives the structure's device address.
-extern "C" int64_t vulkaninterop_rt_debug_read_as(void* handle, int index, uint8_t* out, int64_t capacity,
+// --rt-hardware (docs/rtcore): copies the bytes of an acceleration structure to the host so librtcore can trace the
+// same structure on the RT cores from CUDA. kind 0 = the BLAS of ordinary mesh `index`, 1 = the TLAS, 2 = the BLAS of
+// template `index`. capacity 0 / out null only queries the size. Returns the size in bytes (0 on failure);
+// *out_address receives the structure's device address.
+extern "C" int64_t vulkaninterop_rt_debug_read_as(void* handle, int kind, int index, uint8_t* out, int64_t capacity,
                                                   uint64_t* out_address) {
     if (!handle) return 0;
     InteropRtScene* sc = (InteropRtScene*)handle;
-    if (index < 0 || (size_t)index >= sc->blas.size() || !sc->blas[index]) return 0;
-    Buffer* src = &sc->blasBufs[index];
+    VkAccelerationStructureKHR as = VK_NULL_HANDLE; Buffer* src = nullptr;
+    if (kind == 1) { as = sc->tlas; src = &sc->tlasBuf; }
+    else if (kind == 2) { if (index >= 0 && (size_t)index < sc->templateBlas.size()) { as = sc->templateBlas[index]; src = &sc->templateBlasBufs[index]; } }
+    else if (index >= 0 && (size_t)index < sc->blas.size()) { as = sc->blas[index]; src = &sc->blasBufs[index]; }
+    if (!as || !src) return 0;
     VkAccelerationStructureDeviceAddressInfoKHR ai{};
     ai.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
-    ai.accelerationStructure = sc->blas[index];
+    ai.accelerationStructure = as;
     if (out_address) *out_address = sc->rtFns.getDeviceAddress(sc->device, &ai);
     if (!out) return (int64_t)src->size;
     Buffer staging;

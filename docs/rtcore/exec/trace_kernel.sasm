@@ -7,6 +7,7 @@
 #   0x06e0  (opcode 0x9d4, nvdisasm prints nothing)   TRACE   in : R8:R9 = BLAS address, R0..R7 = ray, R20..R23 = flags
 #                                                             out: R20 = hit word (0xffffffff = miss, else & 0x1fffffff
 #                                                                  = primitive index), R21/R22/R23 = t / u / v (float)
+#                                                             and R42 = index of the hit instance in the TLAS, plus one
 #
 # Register conventions in the listing: R26 = ray index * 32 (the driver computes it), c[0x0][0x50] = results pointer.
 
@@ -14,7 +15,7 @@
     IMAD.MOV.U32 R21, RZ, RZ, RZ            # flag word 1 must be 0 in a CUDA context (the driver left a descriptor bit here)
 
 # Control reaches 0x7d0 after the trace. The driver's post-processing (instance/mesh tables in constant bank 1, which
-# are null in CUDA) is replaced by raw stores of the result registers: record = [t, u, v, hit word, R8, R9].
+# are null in CUDA) is replaced by raw stores of the result registers: record = [t, u, v, hit word, R42, R9].
 .at 0x07f0
     ULDC.64 UR4, c[0x0][0x50]               # UR4:UR5 = results base
     IADD3 R10, R26, 0x4, RZ                 # byte offsets of the record fields
@@ -26,6 +27,6 @@
     STG.E [R10.U32+UR4], R22                # u
     STG.E [R11.U32+UR4], R23                # v
     STG.E [R12.U32+UR4], R20                # hit word
-    STG.E [R13.U32+UR4], R8                 # BLAS address, low
-    STG.E [R14.U32+UR4], R9                 # BLAS address, high
+    STG.E [R13.U32+UR4], R42                # instance index + 1 (TLAS roots; 0 on a miss)
+    STG.E [R14.U32+UR4], R9                 # always 0
     EXIT
