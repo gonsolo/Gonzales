@@ -70,9 +70,29 @@ without Vulkan or OptiX at trace time.
   GUI; the Shader Source tab offers only the SPIR-V of our shader. Window screenshots work with
   `DISPLAY=:0 import -window <id>` (XWayland); gnome-screenshot is blocked, xdotool clicks do not register.
 
+## The ray-query SASS (found 2026-10-02)
+Nsight Graphics shows no SASS, but the driver reports it through two other channels:
+- `VK_KHR_pipeline_executable_properties` (supported, `pipelineExecutableInfo = true`) gives statistics for
+  our `intersect_batch.comp`: 56 registers, "Binary Size" 5376 bytes (= 336 SASS instructions), no stack,
+  no shared memory. It exposes no internal representation (SASS text).
+- `vkGetPipelineCacheData` returns the compiled binary: zstd frame at byte 0x64; decompressed blob starts
+  `NVDANVVMNVuc`; machine code at 0x178, `Binary Size` bytes long. `pipeline_dump.c` + `extract_sass.py`
+  here dump it and patch it into a dummy sm_86 cubin so `nvdisasm` can print it (`ray_query_shader.sass`).
+- nvdisasm decodes 320 of the 336 instructions and silently OMITS the other 16. They are one contiguous block
+  at 0x6d0-0x7c0, right after the shader moves the ray into R8-R15 (origin, tmin, direction, tmax) and
+  loads constants into R20-R24. The undecoded opcodes (12-bit field in bytes 0-1):
+  `0x3d0` x1, `0x9d4` x1, `0x3d1` x8, `0x3d3` x1, `0x3d2` x5.
+  These are the ray-query / RT-core instructions: everything else in the shader is ordinary SASS (IMAD, LDG,
+  ISETP, ...), and after the block the code tests bit fields of R23 (0xfe000000 / 0x3f) as a status word.
+- The raw bytes (0x6d0-0x7c0) are in `extract_sass.py`'s output; first words: 3d0 `d0730000 00000000 00010000
+  00ec0f00`, 9d4 `d4790000 000e0000 00000000 00e80f02`, 3d1 `d1730000 16000000 14000000 00e20100`.
+
 ## Next experiments
 - Dump the stub: needs a tool that reads device code (cuda-gdb cannot); candidates are a CUPTI/SASS-patching
   tool or Nsight Graphics on the Vulkan ray-query shader.
+- Decode the 16 opcodes: vary the shader (ray flags, tmin/tmax use, any-hit vs closest, committed query types,
+  ray count in flight) and diff the blocks; then try to emit them from a patched CUDA cubin against a
+  Vulkan-built AS (interop memory).
 - Check whether a plain CUDA kernel can use `RET.ABS.NODEC` with a ray in the same register layout
   (needs cubin patching; Mojo emits PTX, so this needs a post-ptxas step).
 - Capture the Vulkan ray-query shader's code the same way, if a debugger can attach to a compute queue.
