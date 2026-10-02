@@ -1,0 +1,36 @@
+#ifndef GONZALES_RTCORE_H
+#define GONZALES_RTCORE_H
+
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Hardware ray tracing from a plain CUDA kernel (see docs/rtcore/NOTES.md). The kernel is the NVIDIA driver's own
+// compiled Vulkan ray-query code with its post-processing replaced by raw result stores, wrapped in a cubin by
+// docs/rtcore/exec/build_rt_cubin.py. It traces against ONE bottom-level acceleration structure built by Vulkan
+// (vulkanrt_build_scene + vulkanrt_debug_read_as); top-level structures are not supported (the unit calls a
+// driver-installed handler for instances that a CUDA context does not have). Tied to sm_86 and the driver version
+// that compiled the shader.
+
+// Loads the cubin into the CUDA context current on the calling thread (the primary context of device 0 if none is
+// current), copies the acceleration structure `as_bytes` to device memory and patches the absolute addresses the
+// driver stored inside it (every 8-byte word equal to `as_vk_address` becomes the new device address).
+// Returns NULL on failure (no CUDA, cubin missing, launch config rejected).
+void* rtcore_create(const char* cubin_path, const uint8_t* as_bytes, int64_t as_size, uint64_t as_vk_address);
+
+// Enqueues a trace of `ray_count` rays on `cuda_stream` (a CUstream; 0 = default stream). `rays` is a device
+// pointer to 32 bytes per ray: (ox, oy, oz, t_min, dx, dy, dz, t_max). `results` is a device pointer to 32 bytes per
+// ray: float t (-NaN or garbage on a miss), float u, float v, uint32 hit word (0xffffffff = miss, otherwise
+// bit 31..29 kind and the low 29 bits the triangle index: use `word & 0x1fffffff`); the last 16 bytes are left
+// untouched. Does not synchronize. Returns 1 on success, 0 on failure.
+int rtcore_trace(void* handle, uint64_t rays, uint64_t results, int32_t ray_count, void* cuda_stream);
+
+void rtcore_destroy(void* handle);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // GONZALES_RTCORE_H

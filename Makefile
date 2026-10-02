@@ -212,17 +212,38 @@ $(VULKANINTEROP_LIB): $(VULKANINTEROP_SRC) $(VULKANINTEROP_INC)/vulkaninterop.h 
 		$(VULKANINTEROP_SRC) -lvulkan -L$(CUDA_HOME)/lib64 -lcudart -o $(VULKANINTEROP_LIB)
 endif
 
+# Hardware ray tracing from a CUDA kernel (docs/rtcore/NOTES.md): driver API only, no Vulkan at trace time.
+RTCORE_SRC = src/rtcore/rtcore.cpp
+RTCORE_INC = src/rtcore
+RTCORE_LIB = $(BUILD_DIR)/librtcore.so
+ifeq ($(HAVE_CUDA),)
+$(RTCORE_LIB): $(RTCORE_INC)/rtcore_stub.cpp $(RTCORE_INC)/rtcore.h
+	@mkdir -p $(BUILD_DIR)
+	@echo "note: no CUDA at $(CUDA_HOME) -- building rtcore stub"
+	g++ $(CXXFLAGS) -fPIC -shared -std=c++20 -I$(RTCORE_INC) $(RTCORE_INC)/rtcore_stub.cpp -o $(RTCORE_LIB)
+else
+$(RTCORE_LIB): $(RTCORE_SRC) $(RTCORE_INC)/rtcore.h
+	@mkdir -p $(BUILD_DIR)
+	g++ $(CXXFLAGS) -fPIC -shared -std=c++20 -I$(RTCORE_INC) -I$(CUDA_HOME)/include $(RTCORE_SRC) \
+		-L$(CUDA_HOME)/lib64 -lcuda -o $(RTCORE_LIB)
+endif
+
+# The kernel librtcore loads: generated from the installed NVIDIA driver (needs a Vulkan ray-query GPU, glslc, zstd,
+# nvcc); tests skip when it is absent.
+rt-cubin:
+	python3 docs/rtcore/exec/build_rt_cubin.py $(BUILD_DIR)/rt_trace.cubin
+
 ifdef GITHUB_ACTIONS
 MOJO_BUILD_FLAGS = --target-accelerator sm_89 --target-cpu x86-64-v3
 else
 MOJO_BUILD_FLAGS = --target-accelerator sm_86
 endif
 MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIR) -Xlinker -loiiobridge -Xlinker -lvulkanviewer \
-                  -Xlinker -lvulkanrt -Xlinker -lvulkaninterop -Xlinker -lnvdbbridge \
+                  -Xlinker -lvulkanrt -Xlinker -lvulkaninterop -Xlinker -lrtcore -Xlinker -lnvdbbridge \
                   -Xlinker -rpath -Xlinker $(BUILD_DIR) -Xlinker -lm
 
 MOJO_SRCS := $(wildcard src/gonzales/*.mojo)
-$(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(NVDB_BRIDGE_LIB)
+$(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(NVDB_BRIDGE_LIB)
 	@mkdir -p $(BUILD_DIR)
 	uv run mojo build src/gonzales/__init__.mojo -I src -o $(GONZALES) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
 

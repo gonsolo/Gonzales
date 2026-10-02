@@ -8,6 +8,17 @@ Output record per ray (16 bytes used of 32): [t, u, v, raw R20]."""
 import sys, struct
 src, dst = sys.argv[1], sys.argv[2]
 c = bytearray(open(src, "rb").read())
+# The offsets below are specific to the code NVIDIA's compiler produced for intersect_batch.comp (driver 615.71.09).
+# Refuse to patch anything that does not look the same.
+import re, subprocess
+_txt = subprocess.run(["nvdisasm", "--binary", "SM86", src], capture_output=True, text=True).stdout
+def _at(off): m = re.search(r"/\*%04x\*/\s+(.*?)\s*;" % off, _txt); return m.group(1) if m else None
+_expect = {0x600: "LOP3.LUT R21, R25, 0x55000, RZ, 0xfc, !PT", 0x2d0: "IMAD.MOV.U32 R28, RZ, RZ, RZ",
+           0x1260: "ULDC.64 UR4, c[0x0][0x50]", 0x1230: "IADD3 R10, R26.reuse, 0xc, RZ", 0x12e0: "@P1 STG.E [R26.U32+UR4], R5",
+           0x40: "@P0 EXIT"}
+for _o, _e in _expect.items():
+    if _at(_o) != _e: sys.exit(f"unexpected code at {_o:#x}: {_at(_o)!r} (wanted {_e!r}): the driver compiled the shader differently")
+if (c[0x6e1] << 8 | c[0x6e0]) & 0xfff != 0x9d4: sys.exit("trace instruction not at 0x6e0")
 def ins(off): return bytearray(c[off:off + 16])
 mov = ins(0x2d0); mov[2] = 0x15; c[0x600:0x610] = mov                     # IMAD.MOV.U32 R21, RZ, RZ, RZ
 uldc = ins(0x1260)                                                         # ULDC.64 UR4, c[0x0][0x50]

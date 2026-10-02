@@ -180,6 +180,18 @@ Vulkan's hits (0 mismatches). Plain closest-hit, opaque triangles, rays start on
 Gonzales' own traversal; it is a lower bound on what software can do on this workload, not a measurement of the
 renderer.
 
+## Library and Mojo binding (2026-10-02)
+- `src/rtcore/` (`librtcore.so`, CUDA driver API, stub without CUDA): `rtcore_create(cubin, as_bytes, size, vk_address)`
+  loads the cubin into the current CUDA context, copies the acceleration structure and relocates its stored addresses;
+  `rtcore_trace(handle, rays_dptr, results_dptr, n, stream)` enqueues the trace. Linked into the Gonzales binary.
+- `make rt-cubin` (or `docs/rtcore/exec/build_rt_cubin.py`) generates `build/rt_trace.cubin` from the installed
+  driver: Vulkan compiles `intersect_batch.comp`, the code is read from the pipeline cache and patched. The patcher
+  checks the six instructions it rewrites and refuses a driver that compiled the shader differently. Nothing from
+  NVIDIA is committed.
+- `src/gonzales/rtcore.mojo` and `Tests/unit/test_rtcore.mojo`: Vulkan builds a BLAS, Mojo reads its bytes
+  (`vulkanrt_debug_read_as`), traces 4096 rays on its own `DeviceContext` stream, and compares every ray with Vulkan's
+  ray query (3431 hits, 0 mismatches). The test skips without the cubin or without CUDA.
+
 ## Prior art found by web search (2026-10-02)
 - NVIDIA caches compiled shaders (Vulkan and OpenGL) in `~/.nv/GLCache` or `~/.cache/nvidia/GLCache`;
   `nvcachetools` (reads `.toc`/`.bin`) and `nvucdump` (extracts sections of `.nvuc` objects) plus `nvdisasm --binary SMxx`

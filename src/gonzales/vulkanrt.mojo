@@ -100,3 +100,15 @@ def vulkanrt_trace_rays(
         Pointer[Float32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin],
         Pointer[Int32, MutUntrackedOrigin], Pointer[UInt8, MutUntrackedOrigin]](
         scene, ray_count, rays, out_t, out_u, out_v, out_mesh, out_triangle, out_hit)
+
+# Research helper (docs/rtcore): copies a built acceleration structure's bytes to host memory. kind 0 = BLAS `index`,
+# 1 = TLAS. Returns the structure's size in bytes (0 on failure) and stores its Vulkan device address in `out_address`.
+# Pass a null `dst` to only query the size/address.
+def vulkanrt_debug_read_as(
+    scene: VulkanRtSceneHandle, kind: Int32, index: Int32,
+    dst: Pointer[UInt8, MutUntrackedOrigin], capacity: Int64,
+    out_address: Pointer[UInt64, MutUntrackedOrigin],
+) -> Int64:
+    return external_call["vulkanrt_debug_read_as", Int64,
+        VulkanRtSceneHandle, Int32, Int32, Pointer[UInt8, MutUntrackedOrigin], Int64,
+        Pointer[UInt64, MutUntrackedOrigin]](scene, kind, index, dst, capacity, out_address)
