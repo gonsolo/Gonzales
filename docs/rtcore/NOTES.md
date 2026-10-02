@@ -250,3 +250,13 @@ shading, texture lookups and the pack/convert/unpack kernels dominate.
   (needs cubin patching; Mojo emits PTX, so this needs a post-ptxas step).
 - Capture the Vulkan ray-query shader's code the same way, if a debugger can attach to a compute queue.
 - Read what Mesa NVK and envytools already document before going further.
+
+## Pseudo-assembler listing (trace_kernel.sasm)
+
+The instructions we add to the driver's compiled shader are now written as pseudo SASS in `docs/rtcore/exec/trace_kernel.sasm`
+(with the trace instruction 0x9d4 documented in its header). `make_trace_kernel.py` assembles that file into 16-byte
+words (templates cloned from instructions the driver emitted) and verifies the result by disassembling it with nvdisasm.
+The resulting cubin is byte-identical to the one the earlier hand-patching produced.
+
+Setup cost: the AS readback used an uncached staging buffer (3.5 s for 295 MB); with HOST_CACHED it is 0.07 s, and the
+interop scene is now built from the merged geometry so only one acceleration structure is built (ganesha setup 8.4 s -> 4.8 s).
