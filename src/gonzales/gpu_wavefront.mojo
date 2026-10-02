@@ -211,6 +211,7 @@ def gen_primary_rays_wavefront_gpu(
     filter_norm_y: Float32, filter_support_y: Float32,
     filter_type: Int32,
     count_dp: Int64, n_pixels_dp: Int64,
+    filter_lut: Pointer[Float32, MutUntrackedOrigin],
 ):
     var fw = Int(fw_dp)
     var count = Int(count_dp)
@@ -229,7 +230,7 @@ def gen_primary_rays_wavefront_gpu(
         seed_dim0, seed_dim1, rng_seed, sobol_matrices, r2c, c2w,
         filter_norm_x, filter_sigma, filter_support_x,
         filter_norm_y, filter_support_y,
-        filter_type,
+        filter_type, filter_lut,
     )
     paths[unsafe_offset=ti] = PathState(
         ray,

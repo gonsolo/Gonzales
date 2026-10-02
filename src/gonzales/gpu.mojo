@@ -214,13 +214,16 @@ def _gpu_bounce_kernels(
     var shadow_ptr = Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling()
     if hw_shadow:
         shadow_ptr = handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
-    handle[].ctx.enqueue_function[reset_shadow_tasks_gpu](
-        handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
-        Int64(n),
-        Int64(shadow_slots),
-        Int64(usable_slots if hw_shadow else 1),
-        grid_dim=grid_dim, block_dim=block_size,
-    )
+    # Software shading traces its shadow rays inline and never queues a task, so both the reset here and the resolve
+    # below would be full-grid launches over an empty buffer.
+    if hw_shadow:
+        handle[].ctx.enqueue_function[reset_shadow_tasks_gpu](
+            handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
+            Int64(n),
+            Int64(shadow_slots),
+            Int64(usable_slots),
+            grid_dim=grid_dim, block_dim=block_size,
+        )
     var path_base = handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var shared_ctx = shared_shade_context(sd, handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](), path_base, use_restir, shadow_ptr)
     comptime assert size_of[ShadeContext]() <= 1024, "grow GpuSceneHandle.shade_ctx_buf"
@@ -367,15 +370,6 @@ def _gpu_bounce_kernels(
             interop_rays_buf.value(), interop_results_buf.value(), n, usable_slots,
             sd, handle[].n_spheres,
             handle[].rt_scratch_buf, n_meshes_vk, shadow_instance_base)
-    else:
-        handle[].ctx.enqueue_function[traverse_shadow_rays_gpu](
-            sd,
-            handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-            handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
-            Int64(n),
-            grid_dim=grid_dim,
-            block_dim=block_size,
-        )
 
 
 # Render one sample pass into the persistent film buffer.
@@ -583,6 +577,7 @@ def gpu_render_wavefront(
                 handle[].filter.norm_y, handle[].filter.support_y,
                 handle[].filter.type,
                 Int64(n_total), Int64(n_pix),
+                handle[].filter_lut_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]() if handle[].filter.type == Int32(0) else Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
                 grid_dim=grid_total,
                 block_dim=block_size,
             )

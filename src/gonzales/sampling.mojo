@@ -2,7 +2,7 @@ from std.collections import Array
 from std.math import sqrt, log, exp, cos, sin, atan2, acos
 from std.bit import count_trailing_zeros
 from std.memory.alloc import unsafe_alloc
-from .geometry import Vec3f, Point3f, dot, cross, Frame, PI, TWO_PI, INV_PI
+from .geometry import Vec3f, Point3f, dot, cross, Frame, PI, TWO_PI, INV_PI, _is_real_ptr
 from .primitives import Ray
 from .spectrum import SampledWavelengths, sample_wavelengths
 
@@ -208,15 +208,51 @@ def encode_morton2(x: UInt32, y: UInt32) -> UInt64:
     y64 = (y64 | (y64 << 1))  & UInt64(0x5555555555555555)
     return x64 | (y64 << 1)
 
-# Compact permutation encoding: each of 24 permutations of {0,1,2,3} stored in one UInt8.
+# The 24 permutations of {0,1,2,3} the Z-Sobol digit scrambling picks from, one byte each: four 2-bit digits, the first in
+# the top bits. The bytes are packed into three 64-bit words at COMPILE time (below), so a lookup is a register shift. It
+# used to build a 24-byte array on the stack per call, thirteen times per primary ray, and index it dynamically: the
+# local-memory round trip was most of the stall time of primary-ray generation.
+def _sobol_perm_byte(i: Int) -> UInt64:
+    if i == 0: return UInt64(27)
+    if i == 1: return UInt64(30)
+    if i == 2: return UInt64(39)
+    if i == 3: return UInt64(45)
+    if i == 4: return UInt64(57)
+    if i == 5: return UInt64(54)
+    if i == 6: return UInt64(75)
+    if i == 7: return UInt64(78)
+    if i == 8: return UInt64(99)
+    if i == 9: return UInt64(108)
+    if i == 10: return UInt64(120)
+    if i == 11: return UInt64(114)
+    if i == 12: return UInt64(147)
+    if i == 13: return UInt64(156)
+    if i == 14: return UInt64(135)
+    if i == 15: return UInt64(141)
+    if i == 16: return UInt64(177)
+    if i == 17: return UInt64(180)
+    if i == 18: return UInt64(216)
+    if i == 19: return UInt64(210)
+    if i == 20: return UInt64(228)
+    if i == 21: return UInt64(225)
+    if i == 22: return UInt64(201)
+    return UInt64(198)
+
+def _sobol_perm_word(w: Int) -> UInt64:
+    var word = UInt64(0)
+    for j in range(8):
+        word |= _sobol_perm_byte(w * 8 + j) << UInt64(8 * j)
+    return word
+
+comptime SOBOL_PERM_W0 = _sobol_perm_word(0)
+comptime SOBOL_PERM_W1 = _sobol_perm_word(1)
+comptime SOBOL_PERM_W2 = _sobol_perm_word(2)
+
 @always_inline
 def sobol_perm_lookup(p_idx: Int, digit: Int) -> Int:
-    var enc = Array[UInt8, 24](fill=UInt8(0))
-    enc[ 0]=27; enc[ 1]=30; enc[ 2]=39; enc[ 3]=45; enc[ 4]=57; enc[ 5]=54
-    enc[ 6]=75; enc[ 7]=78; enc[ 8]=99; enc[ 9]=108; enc[10]=120; enc[11]=114
-    enc[12]=147; enc[13]=156; enc[14]=135; enc[15]=141; enc[16]=177; enc[17]=180
-    enc[18]=216; enc[19]=210; enc[20]=228; enc[21]=225; enc[22]=201; enc[23]=198
-    return Int((Int(enc[p_idx]) >> (2 * (3 - digit))) & 3)
+    var word = SOBOL_PERM_W0 if p_idx < 8 else (SOBOL_PERM_W1 if p_idx < 16 else SOBOL_PERM_W2)
+    var enc = Int((word >> UInt64((p_idx & 7) * 8)) & UInt64(0xFF))
+    return Int((enc >> (2 * (3 - digit))) & 3)
 
 @always_inline
 def sobol_get_sample_index(
@@ -367,9 +403,32 @@ def gaussian_filter_sample_1d(u: Float32, sigma: Float32, radius: Float32) -> Fl
             break
     return x
 
+# The Gaussian filter has no closed-form inverse, so gaussian_filter_sample_1d inverts its CDF by Newton iteration, which
+# diverges across a warp and cost a quarter of primary-ray generation. The inverse is a fixed one-dimensional function of u
+# for a given (sigma, radius), so the GPU path tabulates it once per axis and interpolates linearly.
+comptime FILTER_LUT_N = 4097
+
+def fill_filter_lut(dst: Pointer[Float32, MutUntrackedOrigin], sigma: Float32, radius_x: Float32, radius_y: Float32):
+    """dst holds 2 * FILTER_LUT_N floats: the x axis table, then the y axis table."""
+    for k in range(FILTER_LUT_N):
+        var u = Float32(k) / Float32(FILTER_LUT_N - 1)
+        dst[unsafe_offset=k] = gaussian_filter_sample_1d(u, sigma, radius_x)
+        dst[unsafe_offset=FILTER_LUT_N + k] = gaussian_filter_sample_1d(u, sigma, radius_y)
+
+@always_inline
+def filter_lut_lookup(lut: Pointer[Float32, MutUntrackedOrigin], u: Float32) -> Float32:
+    var f = u * Float32(FILTER_LUT_N - 1)
+    var i = Int(f)
+    if i > FILTER_LUT_N - 2:
+        i = FILTER_LUT_N - 2
+    var t = f - Float32(i)
+    return lut[unsafe_offset=i] * (Float32(1.0) - t) + lut[unsafe_offset=i + 1] * t
+
 @always_inline
 def filter_sample_2d(u0: Float32, u1: Float32, filter_type: Int32, sigma: Float32,
-                     radius_x: Float32, radius_y: Float32) -> Tuple[Float32, Float32]:
+                     radius_x: Float32, radius_y: Float32,
+                     lut: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+                     ) -> Tuple[Float32, Float32]:
     """Film-plane offset from the pixel CENTRE for one camera sample, drawn in
     proportion to the scene's PixelFilter. THE one filter sampler: the path
     tracer's primary rays, SPPM's visible points and VCM's camera subpaths all
@@ -379,6 +438,8 @@ def filter_sample_2d(u0: Float32, u1: Float32, filter_type: Int32, sigma: Float3
     elif filter_type == Int32(2):
         return ((u0 - Float32(0.5)) * Float32(2.0) * radius_x,
                 (u1 - Float32(0.5)) * Float32(2.0) * radius_y)
+    if _is_real_ptr(lut):
+        return (filter_lut_lookup(lut, u0), filter_lut_lookup(lut.unsafe_offset(FILTER_LUT_N), u1))
     return (gaussian_filter_sample_1d(u0, sigma, radius_x),
             gaussian_filter_sample_1d(u1, sigma, radius_y))
 
@@ -549,6 +610,7 @@ def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     filter_norm_x: Float32, filter_sigma: Float32, filter_support_x: Float32,
     filter_norm_y: Float32, filter_support_y: Float32,
     filter_type: Int32 = Int32(0),
+    filter_lut: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Tuple[Ray, UInt64, UInt64, UInt64, SampledWavelengths]:
     """Shared Sobol + filter + camera-transform primary ray generator.
     Returns (ray, pcg_state, pcg_inc, sobol_idx, wavelengths).
@@ -567,7 +629,7 @@ def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     # radii directly. Left in the signature so the GPU kernels that forward
     # them keep their argument layout.
     var (deltaX, deltaY) = filter_sample_2d(u0, u1, filter_type, filter_sigma,
-                                            filter_support_x, filter_support_y)
+                                            filter_support_x, filter_support_y, filter_lut)
     var filmX = Float32(px) + Float32(0.5) + deltaX
     var filmY = Float32(py) + Float32(0.5) + deltaY
 

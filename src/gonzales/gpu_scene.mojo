@@ -6,6 +6,7 @@ from .materials import MatKind, Material, MeasuredBRDF, is_specular_glass
 from .footprint import CameraFootprint
 from .media import Grid, MediumInterface, Medium, NvdbGrid
 from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh
+from .sampling import FILTER_LUT_N, fill_filter_lut
 from .render_state import FilmDims, FilterParams, GpuTexture, NormalSlopeMap, PathState, ShadowTask, SHADOW_SLOTS
 from std.os import getenv
 from .spectrum import SpectralHandle
@@ -951,6 +952,7 @@ struct GpuSceneHandle(Movable):
     # above. See _sample_medium_core's vol_used comment for why this exists.
     var restir_vol_used_buf: DeviceBuffer[DType.uint8] # n_pixels × sizeof(Int8)
     var rt_scratch_buf: DeviceBuffer[DType.uint8]   # --rt-hardware alpha passes: one 32-byte result per ray (n_pixels × WAVEFRONT_BATCH), else 32 bytes
+    var filter_lut_buf: DeviceBuffer[DType.uint8]    # inverse Gaussian filter CDF per axis (sampling.fill_filter_lut); unused for other filters
     var shade_ctx_buf: DeviceBuffer[DType.uint8]    # one ShadeContext shared by all threads of a shade kernel (see gpu_shade.shared_shade_context)
     var shadow_slots: Int                           # ShadowTask slots per path in shadow_buf (SHADOW_SLOTS with --rt-hardware, else 1)
     var shadow_buf: DeviceBuffer[DType.uint8]       # n_pixels × WAVEFRONT_BATCH × sizeof(ShadowTask) = 48 -- must match path_buf/inter_buf sizing (gpu_render_sample only uses the first n_pixels slots; gpu_render_wavefront's _gpu_bounce_kernels call indexes up to n_pixels × WAVEFRONT_BATCH)
@@ -1157,6 +1159,13 @@ def gpu_upload_scene(
             var r_rt_scratch_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 32 * WAVEFRONT_BATCH if getenv("GONZALES_RTCORE") != "" else 32)
             var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[ShadowTask]() * WAVEFRONT_BATCH * r_shadow_slots)
             var r_shade_ctx_buf = ctx.enqueue_create_buffer[DType.uint8](1024)
+            var r_filter_lut_buf = ctx.enqueue_create_buffer[DType.uint8](2 * FILTER_LUT_N * 4)
+            if s.filter_type == Int32(0):
+                var lut_host = unsafe_alloc[Float32](2 * FILTER_LUT_N)
+                fill_filter_lut(lut_host, s.filter_sigma, s.filter_support_x, s.filter_support_y)
+                ctx.enqueue_copy(r_filter_lut_buf, lut_host.bitcast[UInt8]())
+                ctx.synchronize()
+                lut_host.unsafe_free()
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](4)
             var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
             var curves = CurveBuffers.upload(ctx, s, n_pix)
@@ -1222,6 +1231,7 @@ def gpu_upload_scene(
                 restir_vol_used_buf=r_restir_vol_used_buf^,
                 shadow_buf=r_shadow_buf^,
                 shadow_slots=r_shadow_slots,
+                filter_lut_buf=r_filter_lut_buf^,
                 shade_ctx_buf=r_shade_ctx_buf^,
                 rt_scratch_buf=r_rt_scratch_buf^,
                 active_count_buf=r_active_count_buf^,
