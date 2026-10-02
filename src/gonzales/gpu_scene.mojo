@@ -894,6 +894,10 @@ struct GpuSceneHandle(Movable):
     var materials_buf: DeviceBuffer[DType.uint8]
     var material_count: Int
     var has_glass_material: Bool
+    # One bit per MatKind present in the scene's material table. The bounce
+    # loop launches one kernel per kind; a kind the scene does not contain
+    # would still cost a full-grid launch every round.
+    var mat_kind_mask: Int32
     # A null `interface` material can sit in a scene with no medium at all
     # (glass stubbed out as "interface"); its crossings still need rounds.
     var has_interface_material: Bool
@@ -964,6 +968,9 @@ struct GpuSceneHandle(Movable):
     # SpectralHandle; spectral_res=0 means no real table was uploaded (dummy
     # 1-element buffers, BDPT/SPPM GPU dispatch, Stage 3/4 not wired yet).
     var spectral: SpectralBuffers
+
+    def has_material(self, kind: Int8) -> Bool:
+        return (self.mat_kind_mask >> Int32(kind)) & Int32(1) != Int32(0)
 
     def scene_descriptor(mut self) -> SceneView:
         """The whole device-resident scene as ONE kernel argument. Kernels
@@ -1108,7 +1115,9 @@ def gpu_upload_scene(
             var mat_buf = _gpu_upload_array[Material](ctx, s.materials, Int(s.material_count))
             var has_iface_mat = False
             var has_glass_mat = False
+            var kind_mask = Int32(0)
             for mi in range(Int(s.material_count)):
+                kind_mask |= Int32(1) << Int32(s.materials[unsafe_offset=mi].type)
                 if s.materials[unsafe_offset=mi].type == MatKind.interface:
                     has_iface_mat = True
                 if is_specular_glass(s.materials[unsafe_offset=mi]):
@@ -1182,6 +1191,7 @@ def gpu_upload_scene(
                 materials_buf=mat_buf^,
                 material_count=Int(s.material_count),
                 has_glass_material=has_glass_mat,
+                mat_kind_mask=kind_mask,
                 has_interface_material=has_iface_mat,
                 cam_fp=CameraFootprint.none(),
                 textures=textures^,

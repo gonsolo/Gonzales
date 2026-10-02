@@ -1,5 +1,6 @@
 from std.collections import Array
 from std.math import sqrt, log, exp, cos, sin, atan2, acos
+from std.bit import count_trailing_zeros
 from std.memory.alloc import unsafe_alloc
 from .geometry import Vec3f, Point3f, dot, cross, Frame, PI, TWO_PI, INV_PI
 from .primitives import Ray
@@ -268,13 +269,12 @@ def sobol_sample_n[N: Int](
     var acc = SIMD[DType.uint32, N](0)
     var cur = index
     var base = dim0 * 52
-    for bit in range(52):
-        if cur & 1 != 0:
-            comptime for k in range(N):
-                acc[k] ^= matrices[unsafe_offset=base + k * 52 + bit]
-        cur >>= 1
-        if cur == 0:
-            break
+    # Walk the set bits only (index < 2^52): half the trips of testing every bit, and no per-bit shift.
+    while cur != 0:
+        var bit = Int(count_trailing_zeros(cur))
+        comptime for k in range(N):
+            acc[k] ^= matrices[unsafe_offset=base + k * 52 + bit]
+        cur &= cur - 1
     var out = SIMD[DType.float32, N](0)
     comptime for k in range(N):
         var scrambled = fast_owen_scramble(acc[k], seeds[k])

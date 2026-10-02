@@ -850,7 +850,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
         # (foliage cards in sanmiguel, etc). NOTE this path never interpolates a
         # vertex shading normal either -- it perturbs the face-forwarded
         # geometric normal directly, which is a separate pre-existing gap.
-        var (tri_dt, fp_dt) = _pt_hit_footprint(path_ptr, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
+        var (tri_dt, fp_dt) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
         dt_fp_width = fp_dt.width
         normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, normal,
             tri_dt, fp_dt, ctx.tex_filenames, ctx.textures, ctx.n_textures)
@@ -978,7 +978,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
         alb = mat.albedo
         normal = geo_normal
     else:
-        var (tri_cd, fp_cd) = _pt_hit_footprint(path_ptr, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
+        var (tri_cd, fp_cd) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
         alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, fp_cd.width)
         # Use interpolated shading normal (geometric normal still drives hit-point offset)
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances)
@@ -1230,7 +1230,7 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
         # entering/exiting test below is `dot(ray_dir, n) < 0`, so flipping the
         # perturbed normal toward the ray would make it tautologically true and
         # bring back the 1/eta^4 loss this branch exists to prevent.
-        var (tri_de, fp_de) = _pt_hit_footprint(path_ptr, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
+        var (tri_de, fp_de) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
         geom_normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, geom_normal, raw_gn,
             tri_de, fp_de, ctx.tex_filenames, ctx.textures, ctx.n_textures)
     else:
@@ -1676,7 +1676,7 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
 
         # Use interpolated shading normal for smooth specular reflections
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
-        var (tri_co, fp_co) = _pt_hit_footprint(path_ptr, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
+        var (tri_co, fp_co) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
         normal = _apply_surface_maps[use_gpu](mat_eff, v0, v1, v2, mesh, inter, normal, geo_normal,
             tri_co, fp_co, ctx.tex_filenames, ctx.textures, ctx.n_textures)
         normal = face_toward(normal, -ray_dir)   # before the tangent frame below
@@ -1832,7 +1832,7 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
         normal = geo_normal
     else:
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
-        var (tri_me, fp_me) = _pt_hit_footprint(path_ptr, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
+        var (tri_me, fp_me) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
         normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_normal,
             tri_me, fp_me, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
@@ -2340,12 +2340,19 @@ def _apply_surface_maps[use_gpu: Bool](
 @always_inline
 def _pt_hit_footprint(
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
+    mat: Material,
     cam: CameraFootprint,
     instances: Pointer[Instance, MutUntrackedOrigin],
     mesh: TriangleMesh, v0: Int, v1: Int, v2: Int,
     inter: Intersection, ray_org: Vec3f, ray_dir: Vec3f,
 ) -> Tuple[TriWorld, UVFootprint]:
     var tri = tri_world(mesh, v0, v1, v2, inter.primId.instanceIdx, instances)
+    # The footprint only ever feeds a texture or map lookup. A material with
+    # none of them (the common case) skips the whole camera-approximation
+    # computation, a tenth of the diffuse kernel's instructions.
+    if (mat.tex_idx < Int32(0) and mat.normal_tex_idx < Int32(0)
+            and mat.bump_tex_idx < Int32(0) and mat.rough_tex_idx < Int32(0)):
+        return (tri, UVFootprint.none())
     var cl = path_ptr[].cone_len
     var cone_w = cam.cone_spread * cl if cl >= Float32(0.0) else Float32(-1.0)
     var hit = ray_org + ray_dir * inter.tHit
@@ -2437,7 +2444,7 @@ def _build_geom_context_full[use_gpu: Bool](
         return (GeomContext(geo_normal, geo_normal, hit_point, wo, tangent, bitangent, mat.albedo, Float32(0.0)), True)
 
     var ng_ff = geo_normal
-    var (tri, fp) = _pt_hit_footprint(path_ptr, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
+    var (tri, fp) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
 
     var normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances)
     normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, ng_ff,
@@ -4533,6 +4540,9 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     # use PCG only — their scatter decisions are near-deterministic at low roughness,
     # and they don't do NEE, so stratification yields negligible variance reduction.
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+    # Read ahead of the NEE (whose shadow-ray traversal evicts the path's cache line); neither changes before the scatter below.
+    var bounce_now = path_ptr[].bounce
+    var specular_now = path_ptr[].specularBounce
 
     # Pre-draw 8 Z-Sobol samples for this bounce's key decisions.
     # Dims are consecutive starting at path_ptr[].sampler_dim (which begins at 2).
@@ -4604,7 +4614,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
 
     var org_d = spawn_origin(hit_point, gc.geo_normal, dir)
     path_ptr[].ray = Ray(Point3f(org_d[0], org_d[1], org_d[2]), Vec3f(dir[0], dir[1], dir[2]))
-    if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
+    if bounce_now == 0 or specular_now == Int8(1):
         path_ptr[].albedo = alb
     # Store mixture PDF for next-bounce MIS (area light hit, env light miss)
     path_ptr[].lastBsdfPdf = pdf_mix
@@ -4618,10 +4628,27 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     # Weight = f·cosθ / pdf_mix = (alb/π)·cosθ / pdf_mix.
     # MIS balance heuristic is unbiased — no cap needed here.
     var _w = cos_theta / (PI * pdf_mix)
-    path_ptr[].throughput *= _to_spec_refl(ctx, alb, path_ptr[].wavelengths) * _w
-    path_ptr[].bounce += 1
-
-    _apply_russian_roulette(path_ptr, pcg, u_rr)
+    # Throughput and bounce stay in registers through the scatter and the
+    # Russian roulette, and are stored once: the same arithmetic as updating
+    # path_ptr[] in place and then re-reading it, minus the store-to-load
+    # round trip through global memory that the roulette used to wait on.
+    var thr = path_ptr[].throughput
+    thr *= _to_spec_refl(ctx, alb, path_ptr[].wavelengths) * _w
+    var bounce_next = bounce_now + Int32(1)
+    path_ptr[].bounce = bounce_next
+    if bounce_next > 1:
+        # See _apply_russian_roulette for why rr_lum carries eta_scale.
+        var rr_lum = thr.luma() * path_ptr[].eta_scale
+        var q = Float32(1.0) - (rr_lum if rr_lum < Float32(0.95) else Float32(0.95))
+        if u_rr < q:
+            path_ptr[].active = 0
+        else:
+            thr *= Float32(1.0) / (Float32(1.0) - q)
+            var new_lum = thr.luma()
+            if new_lum > RR_THROUGHPUT_CLAMP:
+                thr *= RR_THROUGHPUT_CLAMP / new_lum
+    path_ptr[].throughput = thr
+    path_ptr[].pcgState = pcg.state
 
 
 @always_inline

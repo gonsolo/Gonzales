@@ -736,21 +736,29 @@ def rgb_to_coeffs_table_lookup_ptr(table: Pointer[Float32, MutUntrackedOrigin], 
     if k0i > res - 1: k0i = res - 1
     var tk = kf - Float32(k0i)
 
+    # The eight corners differ from the first only by one stride per axis, so the table address is built once and
+    # offset per corner (k fastest, then j, then i), instead of re-multiplying through the three axes eight times.
+    var base0 = (((maxc * res + k0i) * res + j0) * res + i0) * 3
+    var dk = (k1i - k0i) * res * res * 3
+    var dj = (j1 - j0) * res * 3
+    var di = (i1 - i0) * 3
     var acc0 = Float32(0.0); var acc1 = Float32(0.0); var acc2 = Float32(0.0)
-    for corner in range(8):
-        var ki = k0i if (corner & 1) == 0 else k1i
-        var ji = j0 if (corner & 2) == 0 else j1
-        var ii = i0 if (corner & 4) == 0 else i1
+    comptime for corner in range(8):
         var wk = (Float32(1.0) - tk) if (corner & 1) == 0 else tk
         var wj = (Float32(1.0) - tj) if (corner & 2) == 0 else tj
         var wi = (Float32(1.0) - ti) if (corner & 4) == 0 else ti
         var w = wk * wj * wi
-        if w == Float32(0.0):
-            continue
-        var base = (((maxc * res + ki) * res + ji) * res + ii) * 3
-        acc0 += w * table[unsafe_offset=base + 0]
-        acc1 += w * table[unsafe_offset=base + 1]
-        acc2 += w * table[unsafe_offset=base + 2]
+        if w != Float32(0.0):
+            var base = base0
+            comptime if (corner & 1) != 0:
+                base += dk
+            comptime if (corner & 2) != 0:
+                base += dj
+            comptime if (corner & 4) != 0:
+                base += di
+            acc0 += w * table[unsafe_offset=base + 0]
+            acc1 += w * table[unsafe_offset=base + 1]
+            acc2 += w * table[unsafe_offset=base + 2]
 
     return RGBSigmoidCoeffs(acc0, acc1, acc2)
 

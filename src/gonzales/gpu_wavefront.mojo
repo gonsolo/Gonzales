@@ -259,6 +259,7 @@ def traverse_paths_gpu(
     curve_cand_prim: Pointer[Int32, MutUntrackedOrigin],
     curve_cand_count: Pointer[Int32, MutUntrackedOrigin],
     count_dp: Int64,
+    max_depth: Int32, fuse_cone: Int32,
 ):
     var n_spheres = Int(sd.sphereCount)
     var count = Int(count_dp)
@@ -267,6 +268,10 @@ def traverse_paths_gpu(
         return
     if paths[unsafe_offset=tid].active == 0:
         return
+    # What deactivate_paths_past_maxdepth_gpu does, folded in: this kernel
+    # already reads the path, and the separate pass was a full-grid launch.
+    if paths[unsafe_offset=tid].bounce >= max_depth:
+        paths[unsafe_offset=tid].at_cap = Int8(1)
     curve_cand_count[unsafe_offset=tid] = Int32(0)
     traverse_bvh2_core_defer_curves(
         sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, paths[unsafe_offset=tid].ray, Float32(1.0e38), results.unsafe_offset(tid),
@@ -274,6 +279,10 @@ def traverse_paths_gpu(
         sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
     )
     test_spheres(sd.spheres, n_spheres, paths[unsafe_offset=tid].ray, results.unsafe_offset(tid))
+    # accumulate_cone_gpu, folded in when no curve pass follows (that pass
+    # rewrites tHit, so the cone must wait for it).
+    if fuse_cone != Int32(0):
+        _grow_cone(paths, results, tid)
 
 
 # Task #163 stage 3: GPU-resident replacement for the `traverse_paths_gpu`
@@ -447,6 +456,30 @@ def vulkaninterop_test_spheres_gpu(
 # sphere pass (see vulkaninterop_test_spheres_gpu) -- meshes, instances,
 # spheres, AND curves are all supported now (see vulkaninterop_rt_create_
 # scene's docstring for how curves are represented).
+@always_inline
+def _grow_cone(
+    paths: Pointer[PathState, MutUntrackedOrigin],
+    results: Pointer[Intersection, MutUntrackedOrigin],
+    tid: Int,
+):
+    if results[unsafe_offset=tid].hit == Int8(0):
+        return
+    # ONLY along a specular chain. A ray cone tracks the CAMERA's footprint,
+    # and that survives mirror reflection and refraction -- but at a diffuse
+    # scatter the outgoing direction is random and the cone stops meaning
+    # anything about the camera. Growing it there would blur deeper bounces
+    # without bound and without justification; pbrt carries differentials for
+    # camera rays and specular chains for the same reason. After the first
+    # non-specular scatter pbrt's ray carries no differentials at all and every
+    # later hit takes Camera::Approximate_dp_dxy; cone_len = -1 records that.
+    if paths[unsafe_offset=tid].cone_len < Float32(0.0):
+        return
+    if paths[unsafe_offset=tid].bounce == Int32(0) or paths[unsafe_offset=tid].specularBounce != Int8(0):
+        paths[unsafe_offset=tid].cone_len += results[unsafe_offset=tid].tHit
+    else:
+        paths[unsafe_offset=tid].cone_len = Float32(-1.0)
+
+
 def accumulate_cone_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     results: Pointer[Intersection, MutUntrackedOrigin],
@@ -467,22 +500,7 @@ def accumulate_cone_gpu(
         return
     if paths[unsafe_offset=tid].active == 0:
         return
-    if results[unsafe_offset=tid].hit == Int8(0):
-        return
-    # ONLY along a specular chain. A ray cone tracks the CAMERA's footprint,
-    # and that survives mirror reflection and refraction -- but at a diffuse
-    # scatter the outgoing direction is random and the cone stops meaning
-    # anything about the camera. Growing it there would blur deeper bounces
-    # without bound and without justification; pbrt carries differentials for
-    # camera rays and specular chains for the same reason. After the first
-    # non-specular scatter pbrt's ray carries no differentials at all and every
-    # later hit takes Camera::Approximate_dp_dxy; cone_len = -1 records that.
-    if paths[unsafe_offset=tid].cone_len < Float32(0.0):
-        return
-    if paths[unsafe_offset=tid].bounce == Int32(0) or paths[unsafe_offset=tid].specularBounce != Int8(0):
-        paths[unsafe_offset=tid].cone_len += results[unsafe_offset=tid].tHit
-    else:
-        paths[unsafe_offset=tid].cone_len = Float32(-1.0)
+    _grow_cone(paths, results, tid)
 
 
 
