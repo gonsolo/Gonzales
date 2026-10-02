@@ -23,7 +23,8 @@ int main(int argc, char** argv) {
     // CUDA cannot be asked for Vulkan's addresses, so relocate: place both structures in one CUDA buffer and patch the
     // absolute addresses the driver stored inside them (each structure's own address at +0xd0, and the TLAS's
     // reference to the BLAS at +0x200). Any other absolute pointer would show up as a fault or a miss.
-    CUdeviceptr base; CK(cuMemAlloc(&base, 1 << 20)); CK(cuMemsetD8(base, 0, 1 << 20));
+    unsigned long long boff = getenv("BLAS_OFF") ? strtoull(getenv("BLAS_OFF"), 0, 0) : 8192; size_t total = boff + bn + (1 << 16);
+    CUdeviceptr base; CK(cuMemAlloc(&base, total)); CK(cuMemsetD8(base, 0, total));
     unsigned long long newT = base, newB = base + (getenv("BLAS_OFF") ? strtoull(getenv("BLAS_OFF"), 0, 0) : 8192);
     unsigned long long oldT = tva, oldB = bva;
     unsigned char* tb = (unsigned char*)tlas; unsigned char* bb = (unsigned char*)blas; int patched = 0;

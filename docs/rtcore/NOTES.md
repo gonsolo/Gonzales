@@ -171,6 +171,15 @@ Perturbing the inputs of the gate instruction `0x9d4` at 0x6e0 (cuda-gdb: `set $
 - Limits: TLAS roots fault ("Warp MMU Fault at PC 0x0", the unit seems to call a driver-installed handler for
   instances), so only a single BLAS can be traced this way; any-hit/intersection programs, curves, instancing are untested.
 
+## Software baseline (exec/sw_bvh_baseline.cu, same mesh, same 1M rays, RTX 3060)
+CPU-built binary BVH (median split, <=4 triangles/leaf), GPU stack traversal, Moller-Trumbore; validated against
+Vulkan's hits (0 mismatches). Plain closest-hit, opaque triangles, rays start on a plane above a wavy grid:
+- 8,192 triangles:   software 557 Mrays/s;  RT hardware via the CUDA kernel 4,056 Mrays/s  (7.3x)
+- 131,072 triangles: software 258 Mrays/s;  RT hardware via the CUDA kernel 1,488 Mrays/s  (5.8x)
+(the 131k-triangle RT run also matches Vulkan on all 1,048,576 rays). A simple median-split software BVH is not
+Gonzales' own traversal; it is a lower bound on what software can do on this workload, not a measurement of the
+renderer.
+
 ## Prior art found by web search (2026-10-02)
 - NVIDIA caches compiled shaders (Vulkan and OpenGL) in `~/.nv/GLCache` or `~/.cache/nvidia/GLCache`;
   `nvcachetools` (reads `.toc`/`.bin`) and `nvucdump` (extracts sections of `.nvuc` objects) plus `nvdisasm --binary SMxx`
