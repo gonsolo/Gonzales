@@ -312,8 +312,10 @@ bool buildAccelerationStructure(
     fns.getBuildSizes(device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                        &buildInfo, &primitiveCount, &sizeInfo);
 
+    // TRANSFER_SRC so vulkanrt_debug_read_as can copy the driver's acceleration-structure bytes to the host
+    // (docs/rtcore: used to feed an AS to a CUDA kernel).
     if (!createBuffer(device, physicalDevice, sizeInfo.accelerationStructureSize,
-                       VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
+                       VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, false, outASBuffer)) {
         return false;
     }
@@ -662,6 +664,51 @@ struct Scene {
 };
 
 } // namespace
+
+// Debug/research helper (docs/rtcore): copies the bytes of a built acceleration structure to host memory.
+// kind 0 = BLAS number `index`, kind 1 = the TLAS. Returns the structure's size in bytes (0 on failure) and
+// fills *out_address with its Vulkan device address. Writes min(size, capacity) bytes to `out` when non-null.
+extern "C" int64_t vulkanrt_debug_read_as(void* sceneHandle, int kind, int index, uint8_t* out, int64_t capacity,
+                                          uint64_t* out_address) {
+    if (!sceneHandle) return 0;
+    Scene* scene = (Scene*)sceneHandle;
+    VkAccelerationStructureKHR as = VK_NULL_HANDLE; Buffer* src = nullptr;
+    if (kind == 1) { as = scene->tlas; src = &scene->tlasBuf; }
+    else if (index >= 0 && (size_t)index < scene->blas.size()) { as = scene->blas[index]; src = &scene->blasBufs[index]; }
+    if (!as || !src) return 0;
+    VkAccelerationStructureDeviceAddressInfoKHR ai{};
+    ai.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+    ai.accelerationStructure = as;
+    if (out_address) *out_address = scene->fns.getDeviceAddress(scene->device, &ai);
+    if (!out) return (int64_t)src->size;
+    Buffer staging;
+    if (!createBuffer(scene->device, scene->physicalDevice, src->size, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, false, &staging)) return 0;
+    VkCommandBufferAllocateInfo cbai{};
+    cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbai.commandPool = scene->cmdPool; cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; cbai.commandBufferCount = 1;
+    VkCommandBuffer cmd;
+    vkAllocateCommandBuffers(scene->device, &cbai, &cmd);
+    VkCommandBufferBeginInfo bi{}; bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &bi);
+    VkBufferCopy region{0, 0, src->size};
+    vkCmdCopyBuffer(cmd, src->buffer, staging.buffer, 1, &region);
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo si{}; si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO; si.commandBufferCount = 1; si.pCommandBuffers = &cmd;
+    vkQueueSubmit(scene->queue, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(scene->queue);
+    vkFreeCommandBuffers(scene->device, scene->cmdPool, 1, &cmd);
+    void* p;
+    int64_t n = 0;
+    if (vkMapMemory(scene->device, staging.memory, 0, src->size, 0, &p) == VK_SUCCESS) {
+        n = (int64_t)src->size;
+        memcpy(out, p, (size_t)(n < capacity ? n : capacity));
+        vkUnmapMemory(scene->device, staging.memory);
+    }
+    destroyBuffer(scene->device, &staging);
+    return n;
+}
 
 extern "C" void vulkanrt_destroy_scene(void* sceneHandle) {
     if (!sceneHandle) return;

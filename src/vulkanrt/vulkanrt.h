@@ -104,6 +104,11 @@ int vulkanrt_trace_rays(
     float* out_t, float* out_u, float* out_v,
     int32_t* out_mesh, int32_t* out_triangle, uint8_t* out_hit);
 
+// Research helper (docs/rtcore): copy a built acceleration structure's bytes to the host. kind 0 = BLAS
+// `index`, 1 = TLAS. Returns its size (0 on failure); *out_address gets the Vulkan device address.
+int64_t vulkanrt_debug_read_as(void* scene, int kind, int index, uint8_t* out, int64_t capacity,
+                               uint64_t* out_address);
+
 #ifdef __cplusplus
 }
 #endif

@@ -105,6 +105,31 @@ Nsight Graphics shows no SASS, but the driver reports it through two other chann
   pairs and look like writing the ray into the unit (byte 4 and byte 8 are register numbers that change with
   register allocation). These readings are guesses from operand patterns, not confirmed.
 
+## Running the driver's ray-query code as a CUDA kernel (2026-10-02, `exec/`)
+Pipeline: `as_probe` builds a 32-triangle mesh with the Vulkan backend and saves the BLAS/TLAS bytes (via the new
+`vulkanrt_debug_read_as`), 256 rays and Vulkan's own hit results; `make_cubin.py` wraps the driver's 5376 code bytes
+as kernel `k` of an sm_86 cubin (skeleton from a dummy CUDA kernel with 72 live floats so the register count is
+large enough; with too few registers the launch fails with ILLEGAL_INSTRUCTION) and rewrites the constant-bank
+operands (Vulkan's c[0][0x20..0x58] and c[1][0], c[1][8]) to kernel parameters at c[0][0x160..0x198];
+`run_rt2` relocates the structures into one CUDA allocation and launches.
+- The shader's inputs in constant bank 0: 0x20 rayCount, 0x30/0x34 TLAS address, 0x40 rays pointer, 0x48 rays
+  buffer size, 0x50 results pointer, 0x58 results size; bank 1 offsets 0 and 8: two 64-bit values used as bases in
+  the post-hit decode (stride 0x480).
+- Each acceleration structure stores its own absolute virtual address at +0xd0, and the TLAS stores the BLAS address
+  at +0x200. CUDA cannot be given Vulkan's addresses (fixed-address reservation is refused), so the run patches those
+  three words. Nothing else needed relocation.
+- RESULTS: the 16 RT instructions EXECUTE in a CUDA kernel. No ILLEGAL_INSTRUCTION. With the BLAS as root the launch
+  succeeds and every ray misses (Vulkan: 239 of 256 hit). With the TLAS as root the warp dies with
+  "Warp MMU Fault at PC 0x0": the unit transferred control to address 0, i.e. it expects a handler (the driver's
+  "Ray Tracing Scheduler/Traversal" shaders that Nsight lists) that a CUDA context has not installed.
+- Register state around the block (thread 0, BLAS root): R8:R9 = root node address with bit 60 set
+  (`0x1000b802380 | 1<<60`), R20/R22/R24 = flag words (0xff030207, 0xff0000, 0xff030407); after the block R20-R23 =
+  0xffffffff and R8-R19 = 0 (no hit). Changing the pointer tag nibble (all 16 values) or the BLAS alignment (8 KB to
+  1 MB) or adding 4-64 KB of per-thread local memory made no difference.
+- Open: what else the Vulkan context provides (per-context RT state, a handler address for instance traversal, the
+  two bank-1 values). A debugger breakpoint at the block entry in a real Vulkan dispatch is not possible with the tools
+  here, so the next step would be to find where the TLAS-miss PC=0 comes from (the driver's internal shaders).
+
 ## Prior art found by web search (2026-10-02)
 - NVIDIA caches compiled shaders (Vulkan and OpenGL) in `~/.nv/GLCache` or `~/.cache/nvidia/GLCache`;
   `nvcachetools` (reads `.toc`/`.bin`) and `nvucdump` (extracts sections of `.nvuc` objects) plus `nvdisasm --binary SMxx`
