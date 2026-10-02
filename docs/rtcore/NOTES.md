@@ -59,6 +59,17 @@ without Vulkan or OptiX at trace time.
 - Mesa NVK has no ray-tracing support yet and lists missing shader-side information.
 - No public reverse-engineering of the SM-to-RT-core hand-off found.
 
+## Nsight Graphics (installed from AUR, 2026.3.1)
+- Headless GPU Trace works: `ngfx --activity "GPU Trace Profiler" --exe ./trace_loop --args 40
+  --start-after-submits 5 --limit-to-submits 3 --auto-export --output-dir out` (do NOT pass `--platform`,
+  Qt swallows it). `trace_loop.c` (this directory) drives the Vulkan ray-query backend.
+- The trace's Shader Pipelines table lists our compute shader plus driver-internal "Ray Tracing Internal
+  Lo..., Acceleration..., Scheduler, Traversal, Geometry..." shaders, so the Vulkan ray-query path runs through
+  driver-generated scheduler/traversal code. All of them show N/A source.
+- No SASS: the shader profiler recorded 0 samples ("Missing Metrics Data") from both the command line and the
+  GUI; the Shader Source tab offers only the SPIR-V of our shader. Window screenshots work with
+  `DISPLAY=:0 import -window <id>` (XWayland); gnome-screenshot is blocked, xdotool clicks do not register.
+
 ## Next experiments
 - Dump the stub: needs a tool that reads device code (cuda-gdb cannot); candidates are a CUPTI/SASS-patching
   tool or Nsight Graphics on the Vulkan ray-query shader.
