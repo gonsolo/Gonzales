@@ -89,6 +89,7 @@ def _make_ctx(
         Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
         gi_reservoir_io_null(),
+        Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), True,
     )
 
 # ── Shared fixture: a flat glass plane at z=1 between hit_point (origin,

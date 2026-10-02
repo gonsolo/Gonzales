@@ -173,4 +173,5 @@ struct Scene(Movable):
             mediumCount       = Int64(len(self.mediums)),
             mediumInterfaces  = self.medium_ifaces.unsafe_ptr(),
             mediumIfaceCount  = Int64(len(self.medium_ifaces)),
+            hasGlass          = Int32(1),
         )

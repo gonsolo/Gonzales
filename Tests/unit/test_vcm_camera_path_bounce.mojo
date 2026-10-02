@@ -136,6 +136,7 @@ def _build_scene() -> SceneView:
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),   # vcmStatOut
         Float32(0),   # vcmLambda
         Int32(0),   # vcmBucketCap
+        Int32(1),   # hasGlass
     )
 
 def _identity_camera_matrices() -> Tuple[Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]]:

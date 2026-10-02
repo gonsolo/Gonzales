@@ -2,7 +2,7 @@ from .bvh import BVH2Node, SceneView
 from .curves import CURVE_DEFER_K, Curve
 from .geometry import _is_real_ptr
 from .lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSampler
-from .materials import MatKind, Material, MeasuredBRDF
+from .materials import MatKind, Material, MeasuredBRDF, is_specular_glass
 from .footprint import CameraFootprint
 from .media import Grid, MediumInterface, Medium, NvdbGrid
 from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh
@@ -893,6 +893,7 @@ struct GpuSceneHandle(Movable):
     var meshes: MeshBuffers
     var materials_buf: DeviceBuffer[DType.uint8]
     var material_count: Int
+    var has_glass_material: Bool
     # A null `interface` material can sit in a scene with no medium at all
     # (glass stubbed out as "interface"); its crossings still need rounds.
     var has_interface_material: Bool
@@ -946,6 +947,7 @@ struct GpuSceneHandle(Movable):
     # above. See _sample_medium_core's vol_used comment for why this exists.
     var restir_vol_used_buf: DeviceBuffer[DType.uint8] # n_pixels × sizeof(Int8)
     var rt_scratch_buf: DeviceBuffer[DType.uint8]   # --rt-hardware alpha passes: one 32-byte result per ray (n_pixels × WAVEFRONT_BATCH), else 32 bytes
+    var shade_ctx_buf: DeviceBuffer[DType.uint8]    # one ShadeContext shared by all threads of a shade kernel (see gpu_shade.shared_shade_context)
     var shadow_slots: Int                           # ShadowTask slots per path in shadow_buf (SHADOW_SLOTS with --rt-hardware, else 1)
     var shadow_buf: DeviceBuffer[DType.uint8]       # n_pixels × WAVEFRONT_BATCH × sizeof(ShadowTask) = 48 -- must match path_buf/inter_buf sizing (gpu_render_sample only uses the first n_pixels slots; gpu_render_wavefront's _gpu_bounce_kernels call indexes up to n_pixels × WAVEFRONT_BATCH)
     var active_count_buf: DeviceBuffer[DType.uint8] # 1 × Int32
@@ -1000,6 +1002,7 @@ struct GpuSceneHandle(Movable):
             vcmStatOut=Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
             vcmLambda=Float32(0),
             vcmBucketCap=Int32(0),
+            hasGlass=Int32(1) if self.has_glass_material else Int32(0),
         )
 
 def gpu_available() -> Bool:
@@ -1104,10 +1107,12 @@ def gpu_upload_scene(
             # >= 1 elem to avoid a zero-size buffer
             var mat_buf = _gpu_upload_array[Material](ctx, s.materials, Int(s.material_count))
             var has_iface_mat = False
+            var has_glass_mat = False
             for mi in range(Int(s.material_count)):
                 if s.materials[unsafe_offset=mi].type == MatKind.interface:
                     has_iface_mat = True
-                    break
+                if is_specular_glass(s.materials[unsafe_offset=mi]):
+                    has_glass_mat = True
             var lights = LightBuffers.upload(ctx, s)
             # analytical sphere primitives + sphere area lights
             var sphere_buf = _gpu_upload_array[Sphere](ctx, s.spheres, Int(s.sphere_count))
@@ -1142,6 +1147,7 @@ def gpu_upload_scene(
             var r_shadow_slots = SHADOW_SLOTS if getenv("GONZALES_RTCORE") != "" else 1
             var r_rt_scratch_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 32 * WAVEFRONT_BATCH if getenv("GONZALES_RTCORE") != "" else 32)
             var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[ShadowTask]() * WAVEFRONT_BATCH * r_shadow_slots)
+            var r_shade_ctx_buf = ctx.enqueue_create_buffer[DType.uint8](1024)
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](4)
             var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
             var curves = CurveBuffers.upload(ctx, s, n_pix)
@@ -1175,6 +1181,7 @@ def gpu_upload_scene(
                 meshes=meshes^,
                 materials_buf=mat_buf^,
                 material_count=Int(s.material_count),
+                has_glass_material=has_glass_mat,
                 has_interface_material=has_iface_mat,
                 cam_fp=CameraFootprint.none(),
                 textures=textures^,
@@ -1205,6 +1212,7 @@ def gpu_upload_scene(
                 restir_vol_used_buf=r_restir_vol_used_buf^,
                 shadow_buf=r_shadow_buf^,
                 shadow_slots=r_shadow_slots,
+                shade_ctx_buf=r_shade_ctx_buf^,
                 rt_scratch_buf=r_rt_scratch_buf^,
                 active_count_buf=r_active_count_buf^,
                 active_idx_buf=r_active_idx_buf^,

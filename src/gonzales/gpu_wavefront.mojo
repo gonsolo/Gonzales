@@ -310,7 +310,7 @@ def vulkaninterop_pack_rays_kernel(
     rays[unsafe_offset=idx + 4] = ray.direction.x
     rays[unsafe_offset=idx + 5] = ray.direction.y
     rays[unsafe_offset=idx + 6] = ray.direction.z
-    rays[unsafe_offset=idx + 7] = Float32(1.0e8)
+    rays[unsafe_offset=idx + 7] = Float32(1.0e8) if paths[unsafe_offset=tid].active != 0 else Float32(0.0)   # a finished path traces a zero-length ray
 
 # Unpack the interop-shared results buffer (written by Vulkan's ray-query
 # dispatch) directly into inter_buf's Intersection layout -- no host
@@ -553,7 +553,7 @@ def resolve_shadow_rays_rt_kernel(
 # test the software BVH runs) to each pending ray's hit; a rejected hit moves the ray's t_min just past it and the ray stays
 # pending, anything else is final (tmax := 0 so later traces skip it). `first` reads the result the caller just produced,
 # later passes read the scratch buffer and copy the final ones into `results`.
-comptime RT_ALPHA_PASSES = 4
+comptime RT_ALPHA_PASSES = 10
 
 def rtcore_alpha_kernel(
     rays: Pointer[Float32, MutUntrackedOrigin],

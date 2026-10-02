@@ -132,6 +132,7 @@ def _dummy_sd() -> SceneView:
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),   # vcmStatOut
         Float32(0),   # vcmLambda
         Int32(0),   # vcmBucketCap
+        Int32(1),   # hasGlass
     )
 
 # ── _pdf_solid_to_area ────────────────────────────────────────────────────────
@@ -340,6 +341,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),   # vcmStatOut
         Float32(0),   # vcmLambda
         Int32(0),   # vcmBucketCap
+        Int32(1),   # hasGlass
     )
 
     var cv = BDPTVertex(

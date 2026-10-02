@@ -1,3 +1,4 @@
+from std.sys import size_of
 from std.collections import Array
 from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
@@ -159,6 +160,12 @@ struct ShadeContext:
     # _gi_generate_recon_candidate's docstring for why).
     var gi_pending: Pointer[GIPendingX1, MutUntrackedOrigin]
     var gi_io:      GIReservoirIO
+    # GPU kernels that share ONE device-resident context between all threads (no per-thread copy on the stack) cannot
+    # carry the path index in it; the base of the path array lets _shadow_contribute recover it from path_ptr.
+    # Dangling = the context is per-thread and path_idx is authoritative.
+    var paths_base: Pointer[PathState, MutUntrackedOrigin]
+    # False when the scene has no smooth glass: MNEE's per-sample probe toward the light can then never find anything.
+    var has_glass: Bool
 
 # Orient an emitter triangle's WINDING normal to agree with the mesh's own
 # supplied per-vertex normals, which is what decides whether a one-sided
@@ -787,7 +794,10 @@ def _shadow_contribute[enqueue_shadow: Bool](
     # path's SHADOW_SLOTS slots, and a candidate that finds none is traced inline below.
     comptime if enqueue_shadow:
         if _is_real_ptr(ctx.shadow_tasks) and not guide_is_active(guide_write):
-            var base = ctx.path_idx * SHADOW_SLOTS
+            var path_index = ctx.path_idx
+            if _is_real_ptr(ctx.paths_base):
+                path_index = (Int(path_ptr) - Int(ctx.paths_base)) // size_of[PathState]()
+            var base = path_index * SHADOW_SLOTS
             comptime for s in range(SHADOW_SLOTS):
                 if ctx.shadow_tasks[unsafe_offset=base + s].active == Int32(0):
                     ctx.shadow_tasks[unsafe_offset=base + s] = ShadowTask(
@@ -3463,7 +3473,7 @@ def _mnee_area_light_contribute(
     # tangents (ldp_du_v/ldp_dv_v) — well-defined for a flat mesh triangle,
     # not for a curve's swept tube. Curve lights (kind==1) fall back to
     # plain (non-MNEE) shadow-ray NEE through glass.
-    if al.kind != Int8(0):
+    if al.kind != Int8(0) or not ctx.has_glass:
         return False
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
@@ -5119,6 +5129,7 @@ def shade_core_cpu_nee(
         return
     var inter = intersections[unsafe_offset=tid]
     var ctx = ShadeContext(
+        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=True,
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=tex_filenames,
         textures=Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), n_textures=0,

@@ -103,6 +103,7 @@ def _make_ctx(
         Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
         gi_reservoir_io_null(),
+        Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), True,
     )
 
 def _make_path(org: Vec3f, dir: Vec3f) -> PathState:
@@ -306,6 +307,7 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
         Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
         gi_reservoir_io_null(),
+        Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), True,
     )
 
     var org = Vec3f(0.0, 0.0, 5.0)

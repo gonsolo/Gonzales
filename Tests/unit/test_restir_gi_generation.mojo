@@ -89,6 +89,7 @@ def _make_ctx_with_light(
         Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(),
         gi_pending,
         gi_reservoir_io_null(),
+        Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), True,
     )
 
 # ── Shared fixture: a small light triangle near (0,10,0) facing straight

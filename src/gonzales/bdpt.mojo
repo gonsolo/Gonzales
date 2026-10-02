@@ -6296,7 +6296,7 @@ def vulkaninterop_pack_light_rays_kernel(
     rays[unsafe_offset=idx + 4] = rd.x
     rays[unsafe_offset=idx + 5] = rd.y
     rays[unsafe_offset=idx + 6] = rd.z
-    rays[unsafe_offset=idx + 7] = Float32(1.0e8)
+    rays[unsafe_offset=idx + 7] = Float32(1.0e8) if states[unsafe_offset=tid].active != Int8(0) else Float32(0.0)   # a finished path traces a zero-length ray
 
 def vulkaninterop_pack_camera_rays_kernel(
     states: Pointer[VCMCameraPathState, MutUntrackedOrigin],
@@ -6317,7 +6317,7 @@ def vulkaninterop_pack_camera_rays_kernel(
     rays[unsafe_offset=idx + 4] = rd.x
     rays[unsafe_offset=idx + 5] = rd.y
     rays[unsafe_offset=idx + 6] = rd.z
-    rays[unsafe_offset=idx + 7] = Float32(1.0e8)
+    rays[unsafe_offset=idx + 7] = Float32(1.0e8) if states[unsafe_offset=tid].active != Int8(0) else Float32(0.0)   # a finished path traces a zero-length ray
 
 def vulkaninterop_rt_traverse_light_paths_gpu(
     ctx: DeviceContext,

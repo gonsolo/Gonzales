@@ -10,10 +10,12 @@ from .vulkaninterop import VulkanInteropRtSceneHandle
 from max.gpu import block_dim
 from max.gpu.host import DeviceBuffer
 from std.math import ceildiv
-from std.sys import has_accelerator
+from std.sys import has_accelerator, size_of
+from std.os import getenv
+from .shading import ShadeContext
 from .gpu_media import sample_medium_gpu, update_medium_gpu
 from .gpu_scene import GpuSceneHandle
-from .gpu_shade import shade_coated_conductor_gpu, shade_coated_diffuse_gpu, shade_conductor_gpu, shade_dielectric_gpu, shade_diffuse_gpu, shade_diffuse_transmit_gpu, shade_hair_gpu, shade_interface_gpu, shade_measured_gpu, shade_mix_gpu, shade_nee_preamble_gpu, shade_thin_dielectric_gpu
+from .gpu_shade import shared_shade_context, shade_coated_conductor_gpu, shade_coated_diffuse_gpu, shade_conductor_gpu, shade_dielectric_gpu, shade_diffuse_gpu, shade_diffuse_transmit_gpu, shade_hair_gpu, shade_interface_gpu, shade_measured_gpu, shade_mix_gpu, shade_nee_preamble_gpu, shade_thin_dielectric_gpu
 from .gpu_wavefront import accumulate_cone_gpu, accumulate_film_gpu, accumulate_film_wavefront_gpu, clear_film_gpu, compact_curve_paths_gpu, deactivate_paths_past_maxdepth_gpu, gen_primary_rays_gpu, gen_primary_rays_wavefront_gpu, reset_curve_counter_gpu, reset_restir_reservoirs_gpu, reset_restir_vol_reservoirs_gpu, reset_shadow_tasks_gpu, reset_vol_used_gpu, resolve_curve_candidates_gpu, traverse_paths_gpu, traverse_shadow_rays_gpu, rtcore_shadow_rays_gpu, vulkaninterop_rt_traverse_paths_gpu
 
 
@@ -211,6 +213,10 @@ def _gpu_bounce_kernels(
         Int64(usable_slots if hw_shadow else 1),
         grid_dim=grid_dim, block_dim=block_size,
     )
+    var path_base = handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    var shared_ctx = shared_shade_context(sd, handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](), path_base, use_restir, shadow_ptr)
+    comptime assert size_of[ShadeContext]() <= 1024, "grow GpuSceneHandle.shade_ctx_buf"
+    handle[].ctx.enqueue_copy(handle[].shade_ctx_buf, UnsafePointer(to=shared_ctx).bitcast[UInt8]())
     handle[].ctx.enqueue_function[shade_diffuse_gpu](
         handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
@@ -227,6 +233,7 @@ def _gpu_bounce_kernels(
         handle[].film.width,
         handle[].film.height,
         shadow_ptr,
+        handle[].shade_ctx_buf.unsafe_ptr().unsafe_bitcast[ShadeContext]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         grid_dim=grid_dim,
         block_dim=block_size,
     )

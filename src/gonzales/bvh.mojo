@@ -257,6 +257,8 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     var vcmLambda:    Float32
     # VCM's merge-bucket cap (--vcm-cap); 0 = _PHOTON_BUCKET_CAP.
     var vcmBucketCap: Int32
+    # 0 when no material is smooth glass, so MNEE's per-sample probe toward the light can be skipped; 1 otherwise (always on the CPU).
+    var hasGlass: Int32
 
 # ── Infinite/distant-light emission + NEE sampling (shared by bdpt.mojo and
 #    sppm.mojo — lives here, not shading.mojo, to avoid an import cycle:

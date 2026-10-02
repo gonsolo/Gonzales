@@ -25,6 +25,7 @@ def _shade_context(
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin] = Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
 ) -> ShadeContext:
     return ShadeContext(
+        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=sd.hasGlass != Int32(0),
         path_idx=path_idx, bvh2Nodes=sd.bvh2Nodes, primIds=sd.primIds, meshes=sd.meshes, curves=sd.curves,
         materials=sd.materials,
         tex_filenames=Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
@@ -41,6 +42,19 @@ def _shade_context(
             point_lights=sd.pointLights, point_count=Int(sd.pointLightCount),
             infinite_lights=sd.infiniteLights, infinite_count=Int(sd.infiniteLightCount),
             spheres=sd.spheres, sphere_count=Int(sd.sphereCount), light_sampler=sd.lightSampler))
+
+
+def shared_shade_context(
+    sd: SceneView,
+    sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
+    paths_base: Pointer[PathState, MutUntrackedOrigin],
+    use_restir: Bool,
+    shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
+) -> ShadeContext:
+    """The context of _shade_context with the per-thread path index replaced by the base of the path array."""
+    var ctx = _shade_context(sd, sobol_matrices, use_restir=use_restir, shadow_tasks=shadow_tasks)
+    ctx.paths_base = paths_base
+    return ctx^
 
 
 def shade_gpu(
@@ -108,6 +122,9 @@ def shade_diffuse_gpu(
     frame_h: Int32 = Int32(0),
     # Deferred shadow rays (--rt-hardware); a dangling pointer keeps every shadow ray inline.
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin] = Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
+    # The one ShadeContext all threads share, built on the host (see shared_shade_context). Building it per thread put
+    # its 480 bytes on every thread's stack (~1 GB of local-memory stores per launch).
+    ctx_ptr: Pointer[ShadeContext, MutUntrackedOrigin] = Pointer[ShadeContext, MutUntrackedOrigin].unsafe_dangling(),
 ):
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -120,7 +137,6 @@ def shade_diffuse_gpu(
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var restir_on = use_restir != Int32(0)
-    var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, use_restir=restir_on, shadow_tasks=shadow_tasks)
     # tid IS the pixel index here: this kernel only ever sees use_restir=True
     # from gpu_render_sample, which runs exactly one path per pixel (see the
     # param block above -- gpu_render_wavefront never sets it). restir_on
@@ -134,7 +150,7 @@ def shade_diffuse_gpu(
             gbuf_normal=gbuf_normal, gbuf_depth=gbuf_depth,
             gbuf_material_id=gbuf_material_id, gbuf_world_pos=gbuf_world_pos,
             frame_w=frame_w, frame_h=frame_h)
-    shade_diffuse[True, True](path_ptr, inter, ctx, mat, null_guide(), restir_io, tid if restir_has_state else -1)
+    shade_diffuse[True, True](path_ptr, inter, ctx_ptr[], mat, null_guide(), restir_io, tid if restir_has_state else -1)
 
 
 def shade_coated_diffuse_gpu(
@@ -432,6 +448,7 @@ def shade_enqueue_shadow_gpu(
     # Do NOT early-exit on miss — shade_nee_core adds env-light contribution there.
     var ls_shadow = LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0))
     var ctx_shadow = ShadeContext(
+        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=True,
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin](),
         textures=textures, n_textures=n_textures,
