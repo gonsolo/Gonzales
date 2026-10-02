@@ -30,5 +30,23 @@ def rtcore_trace(handle: RtCoreHandle, rays: UInt64, results: UInt64, ray_count:
     return external_call["rtcore_trace", Int32, RtCoreHandle, UInt64, UInt64, Int32, CUstream](
         handle, rays, results, ray_count, stream)
 
+# Maps the merged geometry's global triangle index back to meshes: `tri_prefix` has n_meshes + 1 entries.
+def rtcore_set_meshes(handle: RtCoreHandle, tri_prefix: Pointer[Int32, MutUntrackedOrigin], n_meshes: Int32) -> Int32:
+    return external_call["rtcore_set_meshes", Int32, RtCoreHandle, Pointer[Int32, MutUntrackedOrigin], Int32](
+        handle, tri_prefix, n_meshes)
+
+# Like rtcore_trace, but `results` comes back in the Vulkan interop Result layout (32 bytes per ray: float t,u,v,pad;
+# int mesh, triangle, hitFlag, geometryIndex), so vulkaninterop_unpack_results_kernel can consume it unchanged.
+def rtcore_trace_interop(handle: RtCoreHandle, rays: UInt64, results: UInt64, ray_count: Int32, stream: CUstream) -> Int32:
+    return external_call["rtcore_trace_interop", Int32, RtCoreHandle, UInt64, UInt64, Int32, CUstream](
+        handle, rays, results, ray_count, stream)
+
+# Process-wide active instance: the wavefront traversal uses the hardware trace when this is non-null.
+def rtcore_set_active(handle: RtCoreHandle):
+    external_call["rtcore_set_active", NoneType, RtCoreHandle](handle)
+
+def rtcore_active() -> RtCoreHandle:
+    return external_call["rtcore_active", RtCoreHandle]()
+
 def rtcore_destroy(handle: RtCoreHandle):
     external_call["rtcore_destroy", NoneType, RtCoreHandle](handle)

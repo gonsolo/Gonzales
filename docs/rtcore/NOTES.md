@@ -207,6 +207,29 @@ renderer.
   decoding that path is the open problem. Until then, trace ONE merged triangle geometry (one BLAS, global triangle
   index) and map the index back to (mesh, triangle) on our side; that needs no instance information.
 
+## Wired into the renderer: `--rt-hardware` (2026-10-02)
+`gonzales --gpu --rt-hardware scene.pbrt` (wavefront GPU path tracing; implies `--vulkan-rt-shade`; set
+`GONZALES_RTCORE_CUBIN` if you do not run from the repository root). Triangle-only scenes without instancing, curves
+or spheres; otherwise it prints a note and uses the Vulkan path. How it works: every mesh is merged into ONE geometry,
+Vulkan builds its BLAS, `librtcore` traces it from a CUDA kernel into the interop rays/results buffers, and
+`rt_convert.cu` turns the raw records into the interop Result layout (mesh and local triangle from prefix sums of the
+per-mesh triangle counts), so `vulkaninterop_unpack_results_kernel` and everything after it are unchanged. Not done: the
+VCM wavefront path (`--vcm --vcm-wavefront`), shadow rays (they still use the software BVH), any-hit/alpha inside the trace.
+
+Measured, 640x360, RTX 3060, seed 1, per-sample cost from the slope between 64 and 256 spp (the totals include setup):
+
+| scene (triangles)        | software BVH | Vulkan ray query | RT hardware (CUDA) |
+|--------------------------|--------------|------------------|--------------------|
+| bistro_vespa (2.83M)     | 80.9 ms/spp  | 66.7 ms/spp      | 62.6 ms/spp        |
+| ganesha (4.32M)          | 21.1 ms/spp  | 21.3 ms/spp      | 20.8 ms/spp        |
+
+Setup (seconds, same runs): bistro 9.3 / 13.4 / 17.2, ganesha 2.6 / 3.8 / 8.4. The hardware path builds a second,
+merged acceleration structure and merges the meshes in a single-threaded Mojo loop. Images: means agree to 3 digits;
+RT hardware vs Vulkan 0.24% (ganesha) and 3% (bistro) relative RMS per pixel at 32 spp, software vs either about 1% and
+23% (floating-point differences in the ray tests change individual path decisions; the means agree, so not bias).
+The ray-casting speed-up measured in isolation (5.8-7.3x) shrinks to 1.0-1.3x for the whole path tracer because
+shading, texture lookups and the pack/convert/unpack kernels dominate.
+
 ## Prior art found by web search (2026-10-02)
 - NVIDIA caches compiled shaders (Vulkan and OpenGL) in `~/.nv/GLCache` or `~/.cache/nvidia/GLCache`;
   `nvcachetools` (reads `.toc`/`.bin`) and `nvucdump` (extracts sections of `.nvuc` objects) plus `nvdisasm --binary SMxx`

@@ -3,3 +3,7 @@
 extern "C" void* rtcore_create(const char*, const uint8_t*, int64_t, uint64_t) { return nullptr; }
 extern "C" int rtcore_trace(void*, uint64_t, uint64_t, int32_t, void*) { return 0; }
 extern "C" void rtcore_destroy(void*) {}
+extern "C" int rtcore_set_meshes(void*, const int32_t*, int32_t) { return 0; }
+extern "C" int rtcore_trace_interop(void*, uint64_t, uint64_t, int32_t, void*) { return 0; }
+extern "C" void rtcore_set_active(void*) {}
+extern "C" void* rtcore_active(void) { return nullptr; }

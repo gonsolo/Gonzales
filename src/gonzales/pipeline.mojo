@@ -32,7 +32,9 @@ from .gpu_denoise import gpu_atrous_denoise
 from .gpu_wavefront import gpu_gen_aux_buffers
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
 from .spectrum import SpectralHandle, null_spectral_handle
-from .vulkanrt import VulkanRtSceneHandle, vulkanrt_build_scene, vulkanrt_destroy_scene
+from .vulkanrt import VulkanRtSceneHandle, vulkanrt_build_scene, vulkanrt_destroy_scene, vulkanrt_debug_read_as
+from .rtcore import RtCoreHandle, rtcore_create, rtcore_set_meshes, rtcore_set_active, rtcore_active, rtcore_destroy
+from std.os import getenv
 from .vulkaninterop import (
     VulkanInteropRtSceneHandle, vulkaninterop_rt_create_scene,
     vulkaninterop_rt_get_rays_ptr, vulkaninterop_rt_get_results_ptr,
@@ -287,6 +289,87 @@ def _generate_sobol_matrices(path: String) -> Optional[Pointer[UInt32, MutUntrac
 
 def _dbg_vlen(x: Float32, y: Float32, z: Float32) -> Float32:
     return sqrt(x*x + y*y + z*z)
+
+# --rt-hardware: build ONE merged triangle geometry from every mesh (global triangle index -> (mesh, triangle) through
+# prefix sums), have Vulkan build its bottom-level acceleration structure, and hand the bytes to librtcore, which
+# traces it on the RT cores from a CUDA kernel (docs/rtcore/NOTES.md). Returns a null handle (rtcore_active() when none
+# is set) when the scene is not eligible (curves, spheres, instancing), the cubin is missing or anything fails; the
+# caller then keeps the Vulkan/CUDA path.
+def _rtcore_try_enable(
+    psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
+) -> RtCoreHandle:
+    var none = rtcore_active()
+    if getenv("GONZALES_RTCORE") == "":
+        return none
+    if psc[unsafe_offset=0].curve_count > Int32(0) or psc[unsafe_offset=0].sphere_count > Int32(0) or psc[unsafe_offset=0].instance_count > Int32(0):
+        print("Note: --rt-hardware needs a triangle-only scene without instancing -- using the Vulkan ray-query path")
+        return none
+    var nm = Int(psc[unsafe_offset=0].mesh_count)
+    if nm <= 0:
+        return none
+    var nv_total = 0
+    var nt_total = 0
+    for i in range(nm):
+        nv_total += Int(psc[unsafe_offset=0].mesh_n_verts[unsafe_offset=i])
+        nt_total += Int(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i])
+    var pts = unsafe_alloc[Float32](4 * max(nv_total, 1))
+    var idx = unsafe_alloc[Int64](3 * max(nt_total, 1))
+    var prefix = unsafe_alloc[Int32](nm + 1)
+    var vo = 0
+    var to = 0
+    for i in range(nm):
+        var nv = Int(psc[unsafe_offset=0].mesh_n_verts[unsafe_offset=i])
+        var nt = Int(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i])
+        prefix[unsafe_offset=i] = Int32(to)
+        var src = psc[unsafe_offset=0].meshes[unsafe_offset=i].points
+        for k in range(4 * nv):
+            pts[unsafe_offset=4 * vo + k] = src[unsafe_offset=k]
+        var vi = psc[unsafe_offset=0].meshes[unsafe_offset=i].vertexIndices
+        for k in range(3 * nt):
+            idx[unsafe_offset=3 * to + k] = vi[unsafe_offset=k] + Int64(vo)
+        vo += nv
+        to += nt
+    prefix[unsafe_offset=nm] = Int32(to)
+
+    var meshes = unsafe_alloc[TriangleMesh](1)
+    meshes[unsafe_offset=0] = TriangleMesh(
+        pts, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), idx,
+        Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    )
+    var point_counts = unsafe_alloc[Int64](1)
+    point_counts[unsafe_offset=0] = Int64(nv_total)
+    var idx_counts = unsafe_alloc[Int64](1)
+    idx_counts[unsafe_offset=0] = Int64(3 * nt_total)
+    var scene = vulkanrt_build_scene(meshes, Int64(1), point_counts, idx_counts)
+    var result = none
+    if Int(scene) != 0:
+        var as_address = unsafe_alloc[UInt64](1)
+        var as_size = vulkanrt_debug_read_as(scene, Int32(0), Int32(0), Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), Int64(0), as_address)
+        if as_size > 0:
+            var as_bytes = unsafe_alloc[UInt8](Int(as_size))
+            _ = vulkanrt_debug_read_as(scene, Int32(0), Int32(0), as_bytes, as_size, as_address)
+            var cubin = getenv("GONZALES_RTCORE_CUBIN", "build/rt_trace.cubin")
+            var cubin_c = unsafe_alloc[UInt8](cubin.byte_length() + 1)   # the String's buffer is not guaranteed NUL-terminated
+            for k in range(cubin.byte_length()):
+                cubin_c[unsafe_offset=k] = cubin.unsafe_ptr()[unsafe_offset=k]
+            cubin_c[unsafe_offset=cubin.byte_length()] = UInt8(0)
+            var h = rtcore_create(cubin_c, as_bytes, as_size, as_address[unsafe_offset=0])
+            cubin_c.unsafe_free()
+            if Int(h) != 0 and Int(rtcore_set_meshes(h, prefix, Int32(nm))) == 1:
+                result = h
+                print("RT hardware: tracing", nt_total, "triangles of", nm, "meshes on the RT cores (merged acceleration structure,", Int(as_size) // 1024, "KB)")
+            elif Int(h) != 0:
+                rtcore_destroy(h)
+            else:
+                print("Note: --rt-hardware could not load", cubin, "(run make rt-cubin, or set GONZALES_RTCORE_CUBIN) -- using the Vulkan ray-query path")
+            as_bytes.unsafe_free()
+        as_address.unsafe_free()
+        vulkanrt_destroy_scene(scene)
+    meshes.unsafe_free(); point_counts.unsafe_free(); idx_counts.unsafe_free()
+    pts.unsafe_free(); idx.unsafe_free(); prefix.unsafe_free()
+    return result
+
 
 # Task #163: gonzales assigns exactly one material per mesh at parse time
 # (see pbrt_parser.mojo's store_mesh/MeshAccum), but that mapping is only
@@ -1195,6 +1278,9 @@ def parse_and_render(
                 use_vk = False
                 instance_base_mesh_host.unsafe_free()
             else:
+                var rt_hw = _rtcore_try_enable(psc)
+                if Int(rt_hw) != 0:
+                    rtcore_set_active(rt_hw)
                 var raysPtr = vulkaninterop_rt_get_rays_ptr(interop_scene)
                 var resultsPtr = vulkaninterop_rt_get_results_ptr(interop_scene)
                 interop_rays_buf_opt = DeviceBuffer[DType.float32](handle[].ctx, raysPtr, Int(max_rays_vk) * 8, owning=False)
@@ -1303,6 +1389,9 @@ def parse_and_render(
                 prog_gpu.update(si)
         _ = prog_gpu.finish()
         if use_vk:
+            var rt_hw_end = rtcore_active()
+            if Int(rt_hw_end) != 0:
+                rtcore_destroy(rt_hw_end)
             vulkaninterop_rt_destroy_scene(interop_scene)
         var denoised_gpu = List[Float32](capacity=n_pixels * 3)
         var albedo_gpu   = List[Float32](capacity=n_pixels * 3)

@@ -1,6 +1,6 @@
 from std.sys import argv, exit
 from std.time import perf_counter_ns
-from std.os import getenv
+from std.os import getenv, setenv
 from std.memory.alloc import unsafe_alloc
 from gonzales.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel, debug_render_vulkanrt
 from gonzales.spectrum import load_spectral_context, spectral_handle
@@ -169,6 +169,11 @@ def main() raises:
             use_vulkan_rt = True
         elif arg == "--vulkan-rt-shade":
             use_vulkan_rt_shade = True
+        elif arg == "--rt-hardware":
+            # Wavefront GPU path tracing with the RT cores driven from a CUDA kernel (docs/rtcore/NOTES.md); implies
+            # --vulkan-rt-shade (same buffers, Vulkan keeps building the acceleration structure).
+            use_vulkan_rt_shade = True
+            _ = setenv("GONZALES_RTCORE", "1", True)
         elif arg == "--vcm":
             use_vcm = True
         elif arg == "--vcm-wavefront":

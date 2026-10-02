@@ -27,6 +27,19 @@ void* rtcore_create(const char* cubin_path, const uint8_t* as_bytes, int64_t as_
 // untouched. Does not synchronize. Returns 1 on success, 0 on failure.
 int rtcore_trace(void* handle, uint64_t rays, uint64_t results, int32_t ray_count, void* cuda_stream);
 
+// Maps the merged geometry's global triangle index back to meshes: `tri_prefix` has n_meshes + 1 entries (prefix sums of
+// the per-mesh triangle counts). Needed by rtcore_trace_interop only.
+int rtcore_set_meshes(void* handle, const int32_t* tri_prefix, int32_t n_meshes);
+
+// Like rtcore_trace, but writes `results` in the Vulkan interop Result layout (see rt_convert.cu): 32 bytes per ray,
+// float t,u,v,pad; int mesh, triangle, hitFlag (1 hit / 0 miss), geometryIndex. A scratch buffer holds the raw records.
+int rtcore_trace_interop(void* handle, uint64_t rays, uint64_t results, int32_t ray_count, void* cuda_stream);
+
+// A process-wide "active" instance, so the wavefront traversal code can switch from Vulkan to the hardware trace without
+// threading a handle through every call (NULL = not in use).
+void rtcore_set_active(void* handle);
+void* rtcore_active(void);
+
 void rtcore_destroy(void* handle);
 
 #ifdef __cplusplus

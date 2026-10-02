@@ -10,6 +10,7 @@ from .sampling import gen_primary_ray_state
 from .spectrum import SpectralSample, spectral_sample_to_rgb
 from .transform import transform_normal, Mat4
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
+from .rtcore import rtcore_active, rtcore_trace_interop
 from max.gpu import block_dim, block_idx, thread_idx
 from max.gpu.host import DeviceBuffer, DeviceContext
 from max.gpu.host._nvidia_cuda import CUDA
@@ -507,7 +508,13 @@ def vulkaninterop_rt_traverse_paths_gpu(
     )
 
     var cuda_stream = CUDA(ctx.stream())
-    _ = vulkaninterop_rt_trace(interop_scene, Int32(n_total), cuda_stream)
+    # --rt-hardware: trace on the RT cores from a CUDA kernel (docs/rtcore/NOTES.md) instead of dispatching the Vulkan
+    # ray-query shader. Same rays buffer, same Result layout, so everything after this point is unchanged.
+    var rt_hw = rtcore_active()
+    if Int(rt_hw) != 0:
+        _ = rtcore_trace_interop(rt_hw, UInt64(Int(interop_rays_buf.unsafe_ptr())), UInt64(Int(interop_results_buf.unsafe_ptr())), Int32(n_total), cuda_stream)
+    else:
+        _ = vulkaninterop_rt_trace(interop_scene, Int32(n_total), cuda_stream)
 
     var instance_base_mesh_ptr = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
     if instance_base_mesh_buf:
