@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <math.h>
+#include <time.h>
 #include <string.h>
 #include "vulkanrt.h"
 int main(int argc, char** argv) {
@@ -20,7 +21,9 @@ int main(int argc, char** argv) {
     VulkanRtMesh ms[8]; int64_t pcs[8], ics[8]; float* pp[8];
     for (int q = 0; q < nm; q++) { pp[q] = malloc(16 * nv); for (int i = 0; i < nv; i++) { pp[q][4 * i] = pts[4 * i] + q * (g + 3); pp[q][4 * i + 1] = pts[4 * i + 1]; pp[q][4 * i + 2] = pts[4 * i + 2] + 0.5f * q; pp[q][4 * i + 3] = 1; }
         memset(&ms[q], 0, sizeof ms[q]); ms[q].points = pp[q]; ms[q].vertexIndices = idx; pcs[q] = nv; ics[q] = 3 * nt; }
+    struct timespec ta, tb; clock_gettime(CLOCK_MONOTONIC, &ta);
     void* scene = vulkanrt_build_scene(ms, nm, pcs, ics);
+    clock_gettime(CLOCK_MONOTONIC, &tb); fprintf(stderr, "vulkanrt_build_scene: %.1f ms for %d triangles x %d mesh(es)\n", (tb.tv_sec - ta.tv_sec) * 1e3 + (tb.tv_nsec - ta.tv_nsec) / 1e6, nt, nm);
     if (!scene) { fprintf(stderr, "build failed\n"); return 1; }
     for (int kind = 0; kind < 2 + (nm - 1); kind++) {
         int bi = kind >= 2 ? kind - 1 : 0; int kk = kind == 1 ? 1 : 0; if (kind >= 2) bi = kind - 1;
