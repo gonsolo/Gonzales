@@ -39,10 +39,15 @@ int main(int argc, char** argv) {
     void* params[] = {&rc, &a, &r, &rb, &o, &sb, &c10, &c18};
     printf("root AS at 0x%llx, %u rays\n", a, nrays);
     CK(cuLaunchKernel(fn, (nrays + 63) / 64, 1, 1, 64, 1, 1, 0, NULL, params, NULL));
+    { CUevent e0, e1; cuEventCreate(&e0, 0); cuEventCreate(&e1, 0); int reps = getenv("REPS") ? atoi(getenv("REPS")) : 0;
+      if (reps) { cuEventRecord(e0, 0); for (int r = 0; r < reps; r++) cuLaunchKernel(fn, (nrays + 63) / 64, 1, 1, 64, 1, 1, 0, NULL, params, NULL);
+        cuEventRecord(e1, 0); cuEventSynchronize(e1); float ms; cuEventElapsedTime(&ms, e0, e1);
+        printf("timing: %d launches of %u rays: %.3f ms/launch = %.1f Mrays/s\n", reps, nrays, ms / reps, nrays / (ms / reps) / 1000.0); } }
     CUresult res = cuCtxSynchronize(); const char* s = "OK"; if (res) cuGetErrorName(res, &s);
     printf("launch result: %s\n", s); if (res) return 2;
     float* hres = malloc(resn); CK(cuMemcpyDtoH(hres, dRes, resn));
     int hits = 0; for (unsigned i = 0; i < nrays; i++) hits += (((unsigned*)hres)[i * 8 + 6] == 1);
+    { FILE* fo = fopen("/tmp/ncu/res.bin", "wb"); fwrite(hres, 1, resn, fo); fclose(fo); }
     printf("hits=%d/%u\n", hits, nrays);
     for (unsigned i = 0; i < 8; i++) { float* q = hres + i * 8; printf("ray %u: t=%g u=%g v=%g mesh=%d tri=%d flag=%u\n", i, q[0], q[1], q[2], ((int*)q)[4], ((int*)q)[5], ((unsigned*)q)[6]); }
     return 0;

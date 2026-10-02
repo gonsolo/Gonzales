@@ -144,6 +144,33 @@ records (tags 0x10, 0x17 and a 0x22/0x20 pair, record count 3 instead of 1) that
 the driver sets up per launch; the OptiX cache cubins contain none of the RT block, so no extra attribute could be
 compared.
 
+## RESULT: hardware ray tracing from a plain CUDA kernel (2026-10-02)
+Perturbing the inputs of the gate instruction `0x9d4` at 0x6e0 (cuda-gdb: `set $R21=0` before `stepi`, `gate.py` in
+`exec/`) showed it is the TRACE instruction, not a gate:
+- Inputs: R8:R9 = root node address (BLAS address + the offset stored at AS+0x20; the shader ORs 1<<60 into the
+  high word), R20-R23 = ray/flag words, and the ray itself, loaded earlier by `0x3d0` from R0-R7 (origin.xyz, tmin,
+  direction.xyz, tmax; the operands of `0x3d0` are constant).
+- Outputs: R20 = hit record (`0x8000001b`: top bits are a hit/leaf kind, the low bits the primitive index; misses give
+  `0xffffffff`), R21 = t, R22 = u, R23 = v (IEEE floats). R8:R9 are consumed (zeroed).
+- With the driver's value R21 = 0x455420 the unit refuses the query in a CUDA context (all outputs -1). R21 = 0 makes it
+  trace. (R21 is computed from the ray direction by the preceding compare/OR chain; what its bits mean is unknown.)
+- After the instruction control jumps to 0x7d0; the instructions 0x6f0-0x7c0 (`0x3d1`, `0x3d3`, `0x3d2`) are not
+  executed on this path. Their role is still unknown (not needed for closest-hit on a BLAS).
+- The driver's own post-processing (instance/primitive decode through two tables in constant bank 1) faults in CUDA
+  because those tables do not exist, so `exec/make_trace_kernel.py` replaces everything after the trace with stores
+  of R21, R22, R23, R20 (record = t, u, v, raw R20).
+- Verified against Vulkan's ray-query shader on the same rays: 32 triangles / 256 rays (239 hits) and 8192
+  triangles / 1,048,576 rays (1,044,490 hits): hit/miss, t, u, v (max abs error 5e-7) and triangle index
+  (`R20 & 0x1fffffff`) all agree for every ray. Timing, 1M rays on the 8192-triangle mesh: 0.259 ms per launch
+  = about 4.1 Grays/s on the RTX 3060 (rays are random start points on a plane, not a representative workload;
+  no software-BVH baseline measured yet).
+- Reproduce: `as_probe <dir> <grid> <rays>` builds the BLAS with Vulkan and writes bytes + reference hits;
+  `pipeline_dump` + `variants/run_variants.py`-style extraction gives `code.bin` (5376 bytes);
+  `make_trace_kernel.py code.bin code_trace.bin`; `make_cubin.py code_trace.bin x.cubin 56`;
+  `BLAS_OFF=0x40000 REPS=50 run_rt2 x.cubin <dir> blas`.
+- Limits: TLAS roots fault ("Warp MMU Fault at PC 0x0", the unit seems to call a driver-installed handler for
+  instances), so only a single BLAS can be traced this way; any-hit/intersection programs, curves, instancing are untested.
+
 ## Prior art found by web search (2026-10-02)
 - NVIDIA caches compiled shaders (Vulkan and OpenGL) in `~/.nv/GLCache` or `~/.cache/nvidia/GLCache`;
   `nvcachetools` (reads `.toc`/`.bin`) and `nvucdump` (extracts sections of `.nvuc` objects) plus `nvdisasm --binary SMxx`

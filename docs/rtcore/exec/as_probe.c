@@ -8,7 +8,7 @@
 #include "vulkanrt.h"
 int main(int argc, char** argv) {
     const char* out = argc > 1 ? argv[1] : "/tmp/ncu/asprobe"; char cmd[300]; snprintf(cmd, sizeof cmd, "mkdir -p %s", out); system(cmd);
-    int g = argc > 2 ? atoi(argv[2]) : 4, nrays = 256;
+    int g = argc > 2 ? atoi(argv[2]) : 4, nrays = argc > 3 ? atoi(argv[3]) : 256;
     int nv = (g + 1) * (g + 1), nt = g * g * 2;
     float* pts = malloc(16 * nv); int64_t* idx = malloc(8 * 3 * nt);
     for (int y = 0; y <= g; y++) for (int x = 0; x <= g; x++) { float* p = pts + 4 * (y * (g + 1) + x);
