@@ -120,6 +120,7 @@ struct ShadeContext:
     var cam_fp:           CameraFootprint   # pbrt texture/bump footprint (footprint.mojo)
     var sobol_matrices:   Pointer[UInt32, MutUntrackedOrigin]
     var guide:            GuideGrid
+    var guide_write:      GuideGrid         # GPU: the tree this iteration records into (CPU passes it as a shade argument)
     # Phase 2 (docs/A2_restir_migration_plan.md): CPU-only today, like
     # `guide` above -- every GPU ShadeContext construction site passes
     # False. When True, the diffuse material's area-light NEE (bounce 0
@@ -4590,11 +4591,12 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
                 cos_theta = cos_g
                 pdf_mix = GUIDE_ALPHA*pdf_g + GUIDE_BETA*(cos_g / PI)
             else:
-                # Guide direction below surface — fall back to BSDF with MIS
+                # The guide drew a direction below the surface: that sample contributes nothing, so the path ends
+                # here (weight 0). Falling back to a BSDF sample instead (as this branch used to) made the real
+                # sampling density larger than pdf_mix and brightened the image by ~4% on the Cornell box.
                 dir = bsdf_dir
-                cos_theta = pdf_b * PI
-                var pg = guide_pdf(ctx.guide, cell, bsdf_dir[0], bsdf_dir[1], bsdf_dir[2])
-                pdf_mix = GUIDE_ALPHA*pg + GUIDE_BETA*pdf_b
+                cos_theta = Float32(0)
+                pdf_mix = Float32(1)
         elif has_guide:
             # BSDF sample with guide MIS correction
             dir = bsdf_dir
@@ -5166,7 +5168,7 @@ def shade_core_cpu_nee(
         textures=Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), n_textures=0,
         nmaps=nmaps,
         shadow_tasks=Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
-        cam_fp=CameraFootprint.none(), sobol_matrices=sobol_matrices, guide=guide, use_restir=use_restir,
+        cam_fp=CameraFootprint.none(), sobol_matrices=sobol_matrices, guide=guide, guide_write=guide_write, use_restir=use_restir,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=spectral, measured_brdfs=measured_brdfs,
         gi_pending=gi_pending, gi_io=gi_io,

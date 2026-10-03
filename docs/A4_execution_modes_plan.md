@@ -169,19 +169,41 @@ Smoke matrix: `chromatic-medium.vcm` (-7.7%) and `subsurface-coated.pt`
 (-3.7%) fail their pins, identically on the commit before this session
 (64287c1b), so they are not caused by this step.
 
-### Step 6 -- Path guiding on the GPU
+### Step 6 -- Path guiding on the GPU (done 2026-10-03; result: no gain)
 
-Behind a comptime flag so unguided kernels keep their register count.
-Needed: device-resident SD-tree, recording through the deferred shadow tasks
-(`ShadowTask` in `render_state.mojo`) with atomic adds, and a host iteration
-loop (render, merge, refine, re-upload). Guiding applies to diffuse materials
-only and learns from direct light seen from the second vertex.
+Ported: the SD-tree lives on the host between iterations and in device memory
+during one (`gpu_guide.mojo`); `guide_record` adds atomically, so one shared shard
+replaces the CPU's 16; the training schedule is one function, `train_guided`
+(`guide.mojo`), driven by a CPU and a GPU renderer. Two bugs found on the way, both
+in code the CPU path shares:
 
-Gate before this step: equal-time CPU comparison, guided against unguided, on
-4 scenes. If there is no clear gain, guiding stays opt-in and the port stops.
+- A guide sample below the surface fell back to a BSDF sample while keeping the
+  mixture pdf, so the real sampling density was larger than the weight assumed:
+  Cornell box 3.9% too bright. Now the sample contributes zero (ratio 1.0003).
+- `guide_refine` gave each new spatial leaf an empty directional tree, so with
+  many samples per leaf (every leaf splits every refine) the guide never had data
+  when it was read, and guided renders were bit-identical to unguided ones.
+  Children now start from a half-energy copy of the parent's tree.
 
-Pass: guided and unguided means agree on several scenes; unguided kernels
-are bit-identical to before.
+Equal-time evaluation, 7 scenes, 2 seeds, relMSE against a 512 spp unguided
+reference (efficiency = 1/(relMSE x render time), guided over plain):
+
+| scene | 16 spp | 64 spp |
+|---|---|---|
+| cornell | 0.32x | 0.10x |
+| kitchen | 0.43x | 0.13x |
+| staircase | 0.50x | 0.72x |
+| classroom | 0.43x | 0.11x |
+| living-room | 0.47x | 0.82x |
+| bathroom | 0.46x | 0.11x |
+| dining-room | 0.38x | 0.13x |
+
+Guided relMSE is the same or worse everywhere and guided renders take 2-10x
+longer (the atomic adds contend at the tree roots, and the inline shadow rays
+that teach the tree replace the cheaper path). Means agree to 0.2% (bathroom
+0.6% low). Verdict: guiding stays opt-in; do not make it the default. The
+guide learns only from direct light seen from the second vertex and only on
+diffuse surfaces, which may be why it finds nothing to exploit in these scenes.
 
 ### Step 7 -- ReSTIR on the GPU
 

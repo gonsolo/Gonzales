@@ -21,7 +21,8 @@ from .sampling import TileSamplerParams, mix_bits_u64, encode_morton2, sobol_get
 from .bvh import BVH2Node, SceneView, render_aux_buffers, _scene_bounding_sphere
 from .sppm import sppm_render
 from .bdpt import vcm_render, vcm_render_gpu, vcm_render_gpu_wavefront, _BDPT_MAX_VERTS, sppm_render_gpu
-from .guide import GuideGrid, guide_create, guide_free, guide_clone_empty, guide_refine, null_guide, guide_merge, guide_cell_has_data
+from .guide import GuideGrid, GuidedRenderer, guide_create, guide_free, guide_clone_empty, guide_refine, null_guide, guide_merge, guide_cell_has_data, train_guided
+from .gpu_guide import gpu_guide_begin, gpu_guide_end
 from .restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io_null
 from .restir_gi import GIReservoir, gi_reservoir_init, GIReservoirIO, gi_reservoir_io_null
 from .restir_sms import SMSReservoir, sms_reservoir_init, SMSReservoirIO, sms_reservoir_io_null
@@ -1054,6 +1055,129 @@ def debug_render_vulkanrt(
     mojo_parsed_free(psc)
 
 
+# The two drivers of guide.mojo's train_guided. Each renders samples [begin, end) reading `read_tree` and records into
+# `shard`; the training schedule itself (iterations, merge, refine) is shared.
+
+struct CpuGuidedRenderer(GuidedRenderer):
+    var psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
+    var sd: Pointer[SceneView, MutUntrackedOrigin]
+    var results: Pointer[TileResult, MutUntrackedOrigin]
+    var sobol_matrices: Pointer[UInt32, MutUntrackedOrigin]
+    var fw: Int32
+    var fh: Int32
+    var n_pixels: Int
+
+    def __init__(
+        out self, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], sd: Pointer[SceneView, MutUntrackedOrigin],
+        results: Pointer[TileResult, MutUntrackedOrigin], sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
+        fw: Int32, fh: Int32, n_pixels: Int,
+    ):
+        self.psc = psc; self.sd = sd; self.results = results; self.sobol_matrices = sobol_matrices
+        self.fw = fw; self.fh = fh; self.n_pixels = n_pixels
+
+    def render_iteration(mut self, read_tree: GuideGrid, shard: GuideGrid, begin: Int, end: Int) raises:
+        # One shard for every tile thread: guide_record adds atomically.
+        var shards = unsafe_alloc[GuideGrid](1)
+        shards[unsafe_offset=0] = shard
+        var sp = TileSamplerParams(
+            sobolMatrices=self.sobol_matrices,
+            rngSeed=self.psc[unsafe_offset=0].rng_seed,
+            sobolSeed=Int32(0),
+            log2SamplesPerPixel=self.psc[unsafe_offset=0].log2_spp,
+            nBase4Digits=self.psc[unsafe_offset=0].n_base4_digits,
+            samplesPerPixel=Int32(end - begin),
+            filterSigma=self.psc[unsafe_offset=0].filter_sigma,
+            filterSupportX=self.psc[unsafe_offset=0].filter_support_x,
+            filterSupportY=self.psc[unsafe_offset=0].filter_support_y,
+            filterNormX=self.psc[unsafe_offset=0].filter_norm_x,
+            filterNormY=self.psc[unsafe_offset=0].filter_norm_y,
+            filterWeight=self.psc[unsafe_offset=0].filter_weight,
+            filterType=self.psc[unsafe_offset=0].filter_type,
+            sampleIndexOffset=Int32(begin),
+        )
+        var sp_ptr = OwnedPointer[TileSamplerParams](sp)
+        var zero = TileResult(
+            estimate=RGB(Float32(0)), albedo=RGB(Float32(0)),
+            filterWeight=Float32(0), pixelX=Int32(0), pixelY=Int32(0))
+        var iter_buf = List[TileResult](capacity=self.n_pixels)
+        for _ in range(self.n_pixels): iter_buf.append(zero)
+        render_all_tiles(
+            self.psc[unsafe_offset=0].raster_to_camera, self.psc[unsafe_offset=0].camera_to_world,
+            Int32(0), Int32(0), self.fw, self.fh,
+            Int32(32), Int32(32),
+            sp_ptr.ptr(), self.sd, iter_buf.unsafe_ptr(),
+            self.psc[unsafe_offset=0].max_depth, False,
+            read_tree, shards, 1)
+        for i in range(self.n_pixels):
+            var p = self.results[unsafe_offset=i]
+            var m = iter_buf.unsafe_ptr()[unsafe_offset=i]
+            self.results[unsafe_offset=i] = TileResult(
+                p.estimate + m.estimate, p.albedo + m.albedo, p.filterWeight + m.filterWeight, m.pixelX, m.pixelY)
+        shards.unsafe_free()
+
+
+struct GpuGuidedRenderer(GuidedRenderer):
+    var handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]
+    var psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
+    var seed_dim0: UInt32
+    var seed_dim1: UInt32
+    var n_pixels: Int
+    var guided: Bool
+    var progress: Progress
+    var use_vk: Bool
+    var interop_scene: VulkanInteropRtSceneHandle
+    var interop_rays_buf: Optional[DeviceBuffer[DType.float32]]
+    var interop_results_buf: Optional[DeviceBuffer[DType.float32]]
+    var mesh_material_idx_buf: Optional[DeviceBuffer[DType.uint8]]
+    var mesh_al_idx_buf: Optional[DeviceBuffer[DType.uint8]]
+    var n_meshes_vk: Int
+    var instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]]
+
+    def __init__(
+        out self, handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
+        seed_dim0: UInt32, seed_dim1: UInt32, n_pixels: Int, spp: Int, guided: Bool, use_vk: Bool,
+        interop_scene: VulkanInteropRtSceneHandle,
+        var interop_rays_buf: Optional[DeviceBuffer[DType.float32]],
+        var interop_results_buf: Optional[DeviceBuffer[DType.float32]],
+        var mesh_material_idx_buf: Optional[DeviceBuffer[DType.uint8]],
+        var mesh_al_idx_buf: Optional[DeviceBuffer[DType.uint8]],
+        n_meshes_vk: Int,
+        var instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]],
+    ):
+        self.handle = handle; self.psc = psc; self.seed_dim0 = seed_dim0; self.seed_dim1 = seed_dim1
+        self.n_pixels = n_pixels; self.guided = guided; self.progress = Progress(spp, "spp"); self.use_vk = use_vk
+        self.interop_scene = interop_scene
+        self.interop_rays_buf = interop_rays_buf^; self.interop_results_buf = interop_results_buf^
+        self.mesh_material_idx_buf = mesh_material_idx_buf^; self.mesh_al_idx_buf = mesh_al_idx_buf^
+        self.n_meshes_vk = n_meshes_vk; self.instance_base_mesh_buf = instance_base_mesh_buf^
+
+    def render_samples(mut self, begin: Int, end: Int) raises:
+        var si = begin
+        while si < end:
+            var actual_batch = min(WAVEFRONT_BATCH, end - si)
+            gpu_render_wavefront(
+                self.handle,
+                self.psc[unsafe_offset=0].camera_to_world,
+                Int32(si), Int32(actual_batch),
+                self.psc[unsafe_offset=0].log2_spp, self.psc[unsafe_offset=0].n_base4_digits,
+                self.seed_dim0, self.seed_dim1,
+                UInt32(self.psc[unsafe_offset=0].rng_seed & UInt64(0xFFFFFFFF)),
+                UInt32(self.psc[unsafe_offset=0].rng_seed >> UInt64(32)),
+                Int64(self.n_pixels), self.psc[unsafe_offset=0].max_depth,
+                _sample_clamp(self.psc),
+                self.use_vk, self.interop_scene, self.interop_rays_buf, self.interop_results_buf,
+                self.mesh_material_idx_buf, self.mesh_al_idx_buf, self.n_meshes_vk,
+                self.instance_base_mesh_buf,
+            )
+            si += actual_batch
+            self.progress.update(si)
+
+    def render_iteration(mut self, read_tree: GuideGrid, shard: GuideGrid, begin: Int, end: Int) raises:
+        gpu_guide_begin(self.handle, read_tree, shard)
+        self.render_samples(begin, end)
+        gpu_guide_end(self.handle, shard)
+
+
 def parse_and_render(
     path: Pointer[UInt8, MutUntrackedOrigin],
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
@@ -1616,8 +1740,8 @@ def parse_and_render(
             if use_vol_restir_reuse:
                 gpu_clear_restir_vol(handle, Int64(n_pixels))
         gpu_clear_film(handle, Int64(n_pixels))
-        var prog_gpu = Progress(spp, "spp")
         if vol_reuse_needs_sample_dispatch:
+            var prog_gpu = Progress(spp, "spp")
             for si in range(spp):
                 gpu_render_sample(
                     handle,
@@ -1632,27 +1756,22 @@ def parse_and_render(
                     use_vol_restir_reuse=use_vol_restir_reuse,
                 )
                 prog_gpu.update(si + 1)
+            _ = prog_gpu.finish()
         else:
-            var si = 0
-            while si < spp:
-                var actual_batch = min(WAVEFRONT_BATCH, spp - si)
-                gpu_render_wavefront(
-                    handle,
-                    psc[unsafe_offset=0].camera_to_world,
-                    Int32(si), Int32(actual_batch),
-                    psc[unsafe_offset=0].log2_spp, psc[unsafe_offset=0].n_base4_digits,
-                    seed_dim0, seed_dim1,
-                    UInt32(psc[unsafe_offset=0].rng_seed & UInt64(0xFFFFFFFF)),
-                    UInt32(psc[unsafe_offset=0].rng_seed >> UInt64(32)),
-                    Int64(n_pixels), psc[unsafe_offset=0].max_depth,
-                    _sample_clamp(psc),
-                    use_vk, interop_scene, interop_rays_buf_opt, interop_results_buf_opt,
-                    mesh_material_idx_buf_opt, mesh_al_idx_buf_opt, n_meshes_vk,
-                    instance_base_mesh_buf_opt,
-                )
-                si += actual_batch
-                prog_gpu.update(si)
-        _ = prog_gpu.finish()
+            # --guide trains an SD-tree over up to 4 iterations (guide.mojo's train_guided, shared with the CPU
+            # driver); only diffuse surfaces are guided and only inline (software) shadow rays teach the tree.
+            var guided = use_guide and psc[unsafe_offset=0].bvh_node_count > Int32(0)
+            var renderer = GpuGuidedRenderer(
+                handle, psc, seed_dim0, seed_dim1, n_pixels, spp, guided, use_vk, interop_scene,
+                interop_rays_buf_opt^, interop_results_buf_opt^, mesh_material_idx_buf_opt^, mesh_al_idx_buf_opt^,
+                n_meshes_vk, instance_base_mesh_buf_opt^)
+            if guided:
+                var root = psc[unsafe_offset=0].bvh_nodes[unsafe_offset=0]
+                print("Path guiding: adaptive SD-tree on the GPU")
+                train_guided(renderer, Bounds3f(root.min, root.max), spp)
+            else:
+                renderer.render_samples(0, spp)
+            _ = renderer.progress.finish()
         if use_vk:
             var rt_hw_end = rtcore_active()
             if Int(rt_hw_end) != 0:
@@ -1732,103 +1851,16 @@ def parse_and_render(
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
 
         if use_guide and psc[unsafe_offset=0].bvh_node_count > Int32(0):
-            # ── N-iteration guided rendering (adaptive SD-tree) ───────────────
-            # Build an empty SD-tree from the BVH root AABB (guide.mojo). Each
-            # iteration: clone the current tree into 16 empty per-tile-group
-            # shards (avoids cross-core cache ping-pong on shared energy, same
-            # reasoning as the old 2-batch design), render reading from the
-            # PREVIOUS iteration's cumulative tree (iteration 0 reads null --
-            # BSDF-only, tree is empty anyway), fold the shards' freshly
-            # recorded energy into the tree, then -- except after the last
-            # iteration -- refine (grow) the tree's structure for the next
-            # iteration to read from. Equal spp per iteration is a
-            # simplification vs. Müller's progressive-doubling schedule; both
-            # are unbiased, doubling mainly reduces the final combined
-            # estimator's variance, an optimization not attempted here.
+            # ── Guided rendering: guide.mojo's train_guided, the schedule the GPU driver also uses ──
             var root = psc[unsafe_offset=0].bvh_nodes[unsafe_offset=0]
-            comptime N_GUIDE_THREADS: Int = 16
-            comptime N_ITERATIONS: Int = 4
-            var spp = psc[unsafe_offset=0].samples_per_pixel
-            var n_iters = min(Int(spp), N_ITERATIONS)
-            var base_spp = spp // Int32(n_iters)
-            var tree = guide_create(Bounds3f(root.min, root.max))
-            var write_guides = unsafe_alloc[GuideGrid](N_GUIDE_THREADS)
-            print("Path guiding: " + String(n_iters) + " iterations x ~" + String(base_spp)
-                + " spp, adaptive SD-tree, 16 private shards")
+            var spp = Int(psc[unsafe_offset=0].samples_per_pixel)
+            print("Path guiding: adaptive SD-tree, up to 4 iterations")
             var t0_g = perf_counter_ns()
-            var offset = Int32(0)
-            for it in range(n_iters):
-                var iter_spp = base_spp
-                if it == n_iters - 1:
-                    iter_spp = spp - offset  # absorb any remainder into the last iteration
-                for gi in range(N_GUIDE_THREADS):
-                    write_guides[unsafe_offset=gi] = guide_clone_empty(tree)
-                var sp_iter = TileSamplerParams(
-                    sobolMatrices=sobol_matrices,
-                    rngSeed=psc[unsafe_offset=0].rng_seed,
-                    sobolSeed=Int32(0),
-                    log2SamplesPerPixel=psc[unsafe_offset=0].log2_spp,
-                    nBase4Digits=psc[unsafe_offset=0].n_base4_digits,
-                    samplesPerPixel=iter_spp,
-                    filterSigma=psc[unsafe_offset=0].filter_sigma,
-                    filterSupportX=psc[unsafe_offset=0].filter_support_x,
-                    filterSupportY=psc[unsafe_offset=0].filter_support_y,
-                    filterNormX=psc[unsafe_offset=0].filter_norm_x,
-                    filterNormY=psc[unsafe_offset=0].filter_norm_y,
-                    filterWeight=psc[unsafe_offset=0].filter_weight,
-                    filterType=psc[unsafe_offset=0].filter_type,
-                    sampleIndexOffset=offset,
-                )
-                var sp_iter_ptr = OwnedPointer[TileSamplerParams](sp_iter)
-                var guide_read = null_guide() if it == 0 else tree
-                if it == 0:
-                    # First iteration writes straight into `results` (like the
-                    # old pilot pass) -- no accumulation add needed.
-                    render_all_tiles(
-                        psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
-                        Int32(0), Int32(0), fw, fh,
-                        Int32(32), Int32(32),
-                        sp_iter_ptr.ptr(), sd, results.unsafe_ptr(),
-                        psc[unsafe_offset=0].max_depth, False,
-                        guide_read, write_guides, N_GUIDE_THREADS)
-                else:
-                    var iter_buf = List[TileResult](capacity=n_pixels)
-                    for _ in range(n_pixels): iter_buf.append(zero)
-                    render_all_tiles(
-                        psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
-                        Int32(0), Int32(0), fw, fh,
-                        Int32(32), Int32(32),
-                        sp_iter_ptr.ptr(), sd, iter_buf.unsafe_ptr(),
-                        psc[unsafe_offset=0].max_depth, False,
-                        guide_read, write_guides, N_GUIDE_THREADS)
-                    for i in range(n_pixels):
-                        var p = results.unsafe_ptr()[unsafe_offset=i]
-                        var m = iter_buf.unsafe_ptr()[unsafe_offset=i]
-                        results.unsafe_ptr()[unsafe_offset=i] = TileResult(
-                            p.estimate + m.estimate,
-                            p.albedo   + m.albedo,
-                            p.filterWeight + m.filterWeight,
-                            m.pixelX, m.pixelY)
-                offset += iter_spp
-                # render_all_tiles already merged shards [1..N-1] into [0].
-                guide_merge(tree, write_guides[unsafe_offset=0])
-                for gi in range(N_GUIDE_THREADS):
-                    guide_free(write_guides[unsafe_offset=gi])
-                if it < n_iters - 1:
-                    var refined = guide_refine(tree)
-                    tree = refined
-                var n_active = 0
-                for ci in range(Int(tree.n_snodes)):
-                    if guide_cell_has_data(tree, ci):
-                        n_active += 1
-                print("Path guiding: iter " + String(it) + " done, " + String(n_active) + "/"
-                    + String(tree.n_snodes) + " active spatial leaves, " + String(tree.n_dnodes)
-                    + " directional nodes")
-
+            var cpu_renderer = CpuGuidedRenderer(
+                psc, sd, results.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](), sobol_matrices, fw, fh, n_pixels)
+            train_guided(cpu_renderer, Bounds3f(root.min, root.max), spp)
             var total_g = Float64(perf_counter_ns() - t0_g) / 1.0e9
             print("Path guiding done in " + fmt_time(total_g) + "                ")
-            guide_free(tree)
-            write_guides.unsafe_free()
         else:
             # ── Standard single-call rendering ───────────────────────────────
             var sp = TileSamplerParams(

@@ -31,6 +31,9 @@
 # changes concurrently with reads/writes. guide_refine (which does change
 # shape) must only ever run single-threaded, strictly between passes.
 
+from std.atomic import Atomic
+from std.memory import Pointer
+from std.sys.info import size_of
 from std.memory.alloc import unsafe_alloc
 from std.math import sqrt, cos, sin, max, min
 from .geometry import Point3f, Bounds3f, _is_real_ptr
@@ -221,16 +224,23 @@ def guide_record(
     spatial leaf's) directional quadtree -- incrementing the found leaf AND
     every ancestor up to that quadtree's root, so an interior node's energy
     always equals its subtree's total (required by guide_sample's descent).
-    Also bumps the spatial leaf's per-iteration sample_count."""
+    Also bumps the spatial leaf's per-iteration sample_count.
+
+    The adds are atomic: on the GPU millions of threads record into one tree
+    (the CPU's 16 private shards made races rare, but a shared device tree
+    would lose most of the counts at the hot nodes). The energy float is the
+    first field of a DNode and sample_count the seventh 4-byte field of an
+    SNode; the comptime asserts pin that layout."""
+    comptime assert size_of[SNode]() == 28 and size_of[DNode]() == 24, "guide node layout changed: fix the atomic offsets in guide_record"
     if cell_idx < 0:
         return
-    g.snodes[unsafe_offset=cell_idx].sample_count += Int32(1)
+    _ = Atomic[Int32].fetch_add(g.snodes.unsafe_offset(cell_idx).unsafe_bitcast[Int32]().unsafe_offset(6), Int32(1))
     var droot = g.snodes[unsafe_offset=cell_idx].dtree_root
     var uv = _equal_area_sphere_to_square(dx, dy, dz)
     var u = uv[0]
     var v = uv[1]
     var idx = droot
-    g.dnodes[unsafe_offset=Int(idx)].energy += weight
+    _ = Atomic[Float32].fetch_add(g.dnodes.unsafe_offset(Int(idx)).unsafe_bitcast[Float32](), weight)
     while g.dnodes[unsafe_offset=Int(idx)].child0 >= Int32(0):
         var n = g.dnodes[unsafe_offset=Int(idx)]
         if u < Float32(0.5):
@@ -243,7 +253,7 @@ def guide_record(
                 idx = n.child1; u = (u - Float32(0.5)) * Float32(2); v = v * Float32(2)
             else:
                 idx = n.child3; u = (u - Float32(0.5)) * Float32(2); v = (v - Float32(0.5)) * Float32(2)
-        g.dnodes[unsafe_offset=Int(idx)].energy += weight
+        _ = Atomic[Float32].fetch_add(g.dnodes.unsafe_offset(Int(idx)).unsafe_bitcast[Float32](), weight)
 
 @always_inline
 def guide_cell_has_data(g: GuideGrid, cell_idx: Int) -> Bool:
@@ -418,6 +428,30 @@ def _collect_spatial_splits(snodes: Pointer[SNode, MutUntrackedOrigin], idx: Int
     if n.depth < SPATIAL_MAX_DEPTH and n.sample_count > SPATIAL_SPLIT_SAMPLES:
         out.append(_SplitCandidate(leaf_idx=idx, lo=lo, hi=hi))
 
+def _subtree_size(dnodes: Pointer[DNode, MutUntrackedOrigin], idx: Int32) -> Int:
+    var n = dnodes[unsafe_offset=Int(idx)]
+    if n.child0 < Int32(0):
+        return 1
+    return 1 + _subtree_size(dnodes, n.child0) + _subtree_size(dnodes, n.child1) + _subtree_size(dnodes, n.child2) + _subtree_size(dnodes, n.child3)
+
+def _copy_dtree_scaled(
+    src: Pointer[DNode, MutUntrackedOrigin], src_idx: Int32,
+    dst: Pointer[DNode, MutUntrackedOrigin], mut next_free: Int32, scale: Float32,
+) -> Int32:
+    """Deep-copy the quadtree under src_idx into dst (children indices remapped), energies times `scale`. Returns
+    the copy's root index."""
+    var mine = next_free
+    next_free += Int32(1)
+    var n = src[unsafe_offset=Int(src_idx)]
+    var c0 = Int32(-1); var c1 = Int32(-1); var c2 = Int32(-1); var c3 = Int32(-1)
+    if n.child0 >= Int32(0):
+        c0 = _copy_dtree_scaled(src, n.child0, dst, next_free, scale)
+        c1 = _copy_dtree_scaled(src, n.child1, dst, next_free, scale)
+        c2 = _copy_dtree_scaled(src, n.child2, dst, next_free, scale)
+        c3 = _copy_dtree_scaled(src, n.child3, dst, next_free, scale)
+    dst[unsafe_offset=Int(mine)] = DNode(energy=n.energy * scale, depth=n.depth, child0=c0, child1=c1, child2=c2, child3=c3)
+    return mine
+
 def guide_refine(g: GuideGrid) -> GuideGrid:
     """Grow the SD-tree between training iterations, then reset each
     spatial leaf's per-iteration sample_count (directional energy is NOT
@@ -453,7 +487,12 @@ def guide_refine(g: GuideGrid) -> GuideGrid:
     _collect_spatial_splits(g.snodes, Int32(0), g.bounds.min, g.bounds.max, to_split)
     var n_new_leaves = 2 * len(to_split)
     var n_snodes2 = Int(g.n_snodes) + n_new_leaves
-    var n_dnodes2 = Int(next_free_d) + n_new_leaves
+    # Each child starts from a copy of its parent's directional quadtree at half the energy (Mueller et al.): a
+    # fresh single-node tree would throw the learned distribution away at every spatial split, and with many samples
+    # per leaf every leaf splits at every refine.
+    var n_dnodes2 = Int(next_free_d)
+    for k in range(len(to_split)):
+        n_dnodes2 += 2 * _subtree_size(dnodes1, g.snodes[unsafe_offset=Int(to_split[k].leaf_idx)].dtree_root)
     var snodes2 = unsafe_alloc[SNode](n_snodes2)
     var dnodes2 = unsafe_alloc[DNode](n_dnodes2)
     for i in range(Int(g.n_snodes)):
@@ -472,10 +511,9 @@ def guide_refine(g: GuideGrid) -> GuideGrid:
         var leaf = snodes2[unsafe_offset=Int(cand.leaf_idx)]
         var c0 = next_s
         var c1 = next_s + Int32(1)
-        var d0 = next_d
-        var d1 = next_d + Int32(1)
-        dnodes2[unsafe_offset=Int(d0)] = DNode(energy=Float32(0), depth=Int32(0), child0=Int32(-1), child1=Int32(-1), child2=Int32(-1), child3=Int32(-1))
-        dnodes2[unsafe_offset=Int(d1)] = DNode(energy=Float32(0), depth=Int32(0), child0=Int32(-1), child1=Int32(-1), child2=Int32(-1), child3=Int32(-1))
+        var proot = leaf.dtree_root
+        var d0 = _copy_dtree_scaled(dnodes2, proot, dnodes2, next_d, Float32(0.5))
+        var d1 = _copy_dtree_scaled(dnodes2, proot, dnodes2, next_d, Float32(0.5))
         snodes2[unsafe_offset=Int(c0)] = SNode(split_axis=Int32(-1), split_pos=Float32(0), depth=leaf.depth + Int32(1),
                                   child0=Int32(-1), child1=Int32(-1), dtree_root=d0, sample_count=Int32(0))
         snodes2[unsafe_offset=Int(c1)] = SNode(split_axis=Int32(-1), split_pos=Float32(0), depth=leaf.depth + Int32(1),
@@ -485,7 +523,6 @@ def guide_refine(g: GuideGrid) -> GuideGrid:
         snodes2[unsafe_offset=Int(cand.leaf_idx)].child0 = c0
         snodes2[unsafe_offset=Int(cand.leaf_idx)].child1 = c1
         next_s += Int32(2)
-        next_d += Int32(2)
 
     # ── Phase 3: reset the per-iteration spatial statistic only ──────────
     for i in range(Int(next_s)):
@@ -493,3 +530,39 @@ def guide_refine(g: GuideGrid) -> GuideGrid:
             snodes2[unsafe_offset=i].sample_count = Int32(0)
 
     return GuideGrid(snodes=snodes2, n_snodes=next_s, dnodes=dnodes2, n_dnodes=next_d, bounds=g.bounds)
+
+
+# ── The training loop, shared by the CPU and GPU drivers ─────────────────────
+
+trait GuidedRenderer:
+    """Renders samples [begin, end) of the image and records what it learns into `shard` (an empty tree of
+    read_tree's shape, owned by the caller). The samples are added to the image whatever read_tree is; the first
+    iteration gets null_guide(). Both drivers (the CPU tiles, the GPU wavefront) implement this one method, so the
+    training schedule below exists once."""
+    def render_iteration(mut self, read_tree: GuideGrid, shard: GuideGrid, begin: Int, end: Int) raises: ...
+
+
+def guide_iteration_end(spp: Int, n_iterations: Int, it: Int) -> Int:
+    """First sample past iteration `it` of n_iterations: equal shares, the last takes the remainder."""
+    if it >= n_iterations - 1:
+        return spp
+    return (spp // n_iterations) * (it + 1)
+
+
+def train_guided[R: GuidedRenderer](mut renderer: R, bounds: Bounds3f, spp: Int, max_iterations: Int = 4) raises:
+    """Render all `spp` samples in up to `max_iterations` iterations. Iteration k reads the tree the earlier ones
+    built (none in the first) and records into a fresh shard, which is folded into the tree before it is refined for
+    the next one. Every iteration's samples count towards the image."""
+    var n_iterations = min(spp, max_iterations)
+    var tree = guide_create(bounds)
+    var begin = 0
+    for it in range(n_iterations):
+        var end = guide_iteration_end(spp, n_iterations, it)
+        var shard = guide_clone_empty(tree)
+        renderer.render_iteration(null_guide() if it == 0 else tree, shard, begin, end)
+        guide_merge(tree, shard)
+        guide_free(shard)
+        if it < n_iterations - 1:
+            tree = guide_refine(tree)
+        begin = end
+    guide_free(tree)

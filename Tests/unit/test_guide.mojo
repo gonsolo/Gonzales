@@ -3,9 +3,10 @@ from std.testing import assert_true, assert_false, TestSuite
 from gonzales.geometry import Point3f, Bounds3f, Vec3f
 from gonzales.bvh import _equal_area_square_to_sphere
 from gonzales.guide import (
+    GuideGrid,
     guide_create, guide_free, guide_clone_empty, guide_merge, guide_refine,
     guide_pos_to_cell, guide_record, guide_pdf, guide_cell_has_data, guide_sample,
-    guide_is_active, null_guide,
+    guide_is_active, null_guide, GuidedRenderer, train_guided, guide_iteration_end,
     FOUR_PI_F, DIR_SPLIT_FRACTION, SPATIAL_SPLIT_SAMPLES,
 )
 
@@ -282,6 +283,54 @@ def test_guide_merge_sums_sample_count_so_split_can_trigger() raises:
     var n_snodes_after = refined.n_snodes
     guide_free(refined)
     assert_true(n_snodes_after == Int32(3))
+
+
+# ── The shared training schedule ─────────────────────────────────────────────
+
+struct _StubRenderer(GuidedRenderer):
+    """Records each iteration's sample range and whether it was given a tree, and teaches the shard one sample."""
+    var begins: List[Int]
+    var ends: List[Int]
+    var read_active: List[Bool]
+
+    def __init__(out self):
+        self.begins = List[Int]()
+        self.ends = List[Int]()
+        self.read_active = List[Bool]()
+
+    def render_iteration(mut self, read_tree: GuideGrid, shard: GuideGrid, begin: Int, end: Int) raises:
+        self.begins.append(begin)
+        self.ends.append(end)
+        self.read_active.append(guide_is_active(read_tree))
+        var q0 = _dir_q0()
+        guide_record(shard, 0, q0[0], q0[1], q0[2], Float32(1.0))
+
+def test_train_guided_covers_every_sample_once() raises:
+    var r = _StubRenderer()
+    train_guided(r, _bounds16(), 64)
+    assert_true(len(r.begins) == 4)
+    assert_true(r.begins[0] == 0 and r.ends[3] == 64)
+    for i in range(3):
+        assert_true(r.ends[i] == r.begins[i + 1])
+    for i in range(4):
+        assert_true(r.ends[i] - r.begins[i] == 16)
+
+def test_train_guided_first_iteration_reads_no_tree() raises:
+    var r = _StubRenderer()
+    train_guided(r, _bounds16(), 64)
+    assert_false(r.read_active[0])
+    assert_true(r.read_active[1] and r.read_active[2] and r.read_active[3])
+
+def test_train_guided_last_iteration_takes_the_remainder() raises:
+    assert_true(guide_iteration_end(66, 4, 0) == 16)
+    assert_true(guide_iteration_end(66, 4, 2) == 48)
+    assert_true(guide_iteration_end(66, 4, 3) == 66)
+
+def test_train_guided_fewer_samples_than_iterations() raises:
+    var r = _StubRenderer()
+    train_guided(r, _bounds16(), 2)
+    assert_true(len(r.begins) == 2)
+    assert_true(r.begins[0] == 0 and r.ends[0] == 1 and r.begins[1] == 1 and r.ends[1] == 2)
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

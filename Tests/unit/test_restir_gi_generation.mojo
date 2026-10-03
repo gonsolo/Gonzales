@@ -74,6 +74,7 @@ def _make_ctx_with_light(
         CameraFootprint.none(),
         Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(),
         null_guide(),
+        null_guide(),
         use_restir,
         LightContext(
             area_lights, area_light_count,

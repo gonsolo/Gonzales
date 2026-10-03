@@ -226,6 +226,8 @@ def _gpu_bounce_kernels(
         )
     var path_base = handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var shared_ctx = shared_shade_context(sd, handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](), path_base, use_restir, shadow_ptr)
+    shared_ctx.guide = handle[].guide_read
+    shared_ctx.guide_write = handle[].guide_write
     comptime assert size_of[ShadeContext]() <= 1024, "grow GpuSceneHandle.shade_ctx_buf"
     handle[].ctx.enqueue_copy(handle[].shade_ctx_buf, UnsafePointer(to=shared_ctx).bitcast[UInt8]())
     handle[].ctx.enqueue_function[shade_diffuse_gpu](

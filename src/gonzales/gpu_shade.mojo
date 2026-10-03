@@ -35,7 +35,7 @@ def _shade_context(
         textures=sd.gpuTextures, n_textures=Int(sd.gpuTextureCount),
         nmaps=Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
         shadow_tasks=shadow_tasks,
-        cam_fp=sd.camFp, sobol_matrices=sobol_matrices, guide=null_guide(), use_restir=use_restir,
+        cam_fp=sd.camFp, sobol_matrices=sobol_matrices, guide=null_guide(), guide_write=null_guide(), use_restir=use_restir,
         blasNodesArr=sd.blasNodesArr, blasPrimIdsArr=sd.blasPrimIdsArr, instances=sd.instances,
         spectral=sd.spectral, measured_brdfs=sd.measuredBrdfs,
         gi_pending=Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(), gi_io=gi_reservoir_io_null(),
@@ -157,7 +157,7 @@ def shade_diffuse_gpu(
             gbuf_normal=gbuf_normal, gbuf_depth=gbuf_depth,
             gbuf_material_id=gbuf_material_id, gbuf_world_pos=gbuf_world_pos,
             frame_w=frame_w, frame_h=frame_h)
-    shade_diffuse[True, True](path_ptr, inter, ctx_ptr[], mat, null_guide(), restir_io, tid if restir_has_state else -1)
+    shade_diffuse[True, True](path_ptr, inter, ctx_ptr[], mat, ctx_ptr[].guide_write, restir_io, tid if restir_has_state else -1)
 
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
@@ -469,7 +469,7 @@ def shade_enqueue_shadow_gpu(
         textures=textures, n_textures=n_textures,
         nmaps=Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
         shadow_tasks=shadow_tasks,
-        cam_fp=CameraFootprint.none(), sobol_matrices=Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(), guide=null_guide(), use_restir=False,
+        cam_fp=CameraFootprint.none(), sobol_matrices=Pointer[UInt32, MutUntrackedOrigin].unsafe_dangling(), guide=null_guide(), guide_write=null_guide(), use_restir=False,
         blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
         spectral=SpectralHandle(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65),
         measured_brdfs=Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(),

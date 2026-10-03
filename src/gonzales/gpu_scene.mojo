@@ -1,6 +1,7 @@
 from .bvh import BVH2Node, SceneView
 from .curves import CURVE_DEFER_K, Curve
 from .geometry import _is_real_ptr
+from .guide import GuideGrid, null_guide
 from .lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSampler
 from .materials import MatKind, Material, MeasuredBRDF, is_specular_glass
 from .footprint import CameraFootprint
@@ -952,6 +953,11 @@ struct GpuSceneHandle(Movable):
     # above. See _sample_medium_core's vol_used comment for why this exists.
     var restir_vol_used_buf: DeviceBuffer[DType.uint8] # n_pixels × sizeof(Int8)
     var rt_scratch_buf: DeviceBuffer[DType.uint8]   # --rt-hardware alpha passes: one 32-byte result per ray (n_pixels × WAVEFRONT_BATCH), else 32 bytes
+    # --guide: the SD-tree the current training iteration reads and the shard it records into, in device memory
+    # (gpu_guide.mojo). The GuideGrids hold device pointers into these buffers; null_guide() when guiding is off.
+    var guide_read: GuideGrid
+    var guide_write: GuideGrid
+    var guide_bufs: List[DeviceBuffer[DType.uint8]]
     var filter_lut_buf: DeviceBuffer[DType.uint8]    # inverse Gaussian filter CDF per axis (sampling.fill_filter_lut); unused for other filters
     var shade_ctx_buf: DeviceBuffer[DType.uint8]    # one ShadeContext shared by all threads of a shade kernel (see gpu_shade.shared_shade_context)
     var shadow_slots: Int                           # ShadowTask slots per path in shadow_buf (SHADOW_SLOTS with --rt-hardware, else 1)
@@ -1234,6 +1240,7 @@ def gpu_upload_scene(
                 filter_lut_buf=r_filter_lut_buf^,
                 shade_ctx_buf=r_shade_ctx_buf^,
                 rt_scratch_buf=r_rt_scratch_buf^,
+                guide_read=null_guide(), guide_write=null_guide(), guide_bufs=List[DeviceBuffer[DType.uint8]](),
                 active_count_buf=r_active_count_buf^,
                 active_idx_buf=r_active_idx_buf^,
                 n_pixels=n_pix,
