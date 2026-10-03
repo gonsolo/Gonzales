@@ -35,6 +35,8 @@ from .spectrum import SpectralHandle, null_spectral_handle
 from .vulkanrt import VulkanRtSceneHandle, vulkanrt_build_scene, vulkanrt_destroy_scene, vulkanrt_debug_read_as
 from .rtcore import rtcore_set_shadow, rtcore_set_alpha, rtcore_create_scene, rtcore_set_domains, RtCoreHandle, rtcore_create, rtcore_set_meshes, rtcore_set_active, rtcore_active, rtcore_destroy
 from std.os import getenv
+from std.ffi import external_call
+from .outputs import _cstr
 from .vulkaninterop import (
     VulkanInteropRtSceneHandle, vulkaninterop_rt_create_scene,
     vulkaninterop_rt_get_rays_ptr, vulkaninterop_rt_get_results_ptr,
@@ -385,6 +387,33 @@ def _rtcore_merge(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> _RtMerg
     return m^
 
 
+# The trace cubin sits next to the executable (make rt-cubin writes build/rt_trace.cubin, and the binary is build/gonzales).
+# A path relative to the working directory silently fell back to the Vulkan ray-query path whenever a scene was rendered
+# from its own directory. GONZALES_RTCORE_CUBIN overrides.
+def _rtcore_cubin_path() -> String:
+    var env = getenv("GONZALES_RTCORE_CUBIN")
+    if env != "":
+        return env
+    var buf = unsafe_alloc[UInt8](4096)
+    var link = _cstr(String("/proc/self/exe"))
+    var n = external_call["readlink", Int, Pointer[UInt8, MutUntrackedOrigin], Pointer[UInt8, MutUntrackedOrigin], Int](
+        link, buf, 4095)
+    link.unsafe_free()
+    var path = String("build/rt_trace.cubin")
+    if n > 0:
+        var slash = -1
+        for i in range(n):
+            if buf[unsafe_offset=i] == UInt8(ord("/")):
+                slash = i
+        if slash >= 0:
+            path = String()
+            for i in range(slash + 1):
+                path += chr(Int(buf[unsafe_offset=i]))
+            path += "rt_trace.cubin"
+    buf.unsafe_free()
+    return path
+
+
 # Instanced scenes (no curves) are traced through the Vulkan-built top-level structure as it is: the hardware reports the
 # hit instance, and per-instance decode tables map (instance, triangle) back to (mesh, template geometry).
 def _rtcore_native_wanted(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> Bool:
@@ -475,7 +504,7 @@ def _rtcore_attach_native(interop_scene: VulkanInteropRtSceneHandle, psc: Pointe
             pre[unsafe_offset=e] = Int32(0); rawv[unsafe_offset=e] = Int32(nm + k); geom[unsafe_offset=e] = Int32(0)
             e += 1
             d += 1
-        var cubin = getenv("GONZALES_RTCORE_CUBIN", "build/rt_trace.cubin")
+        var cubin = _rtcore_cubin_path()
         var cubin_c = unsafe_alloc[UInt8](cubin.byte_length() + 1)   # the String's buffer is not guaranteed NUL-terminated
         for k in range(cubin.byte_length()):
             cubin_c[unsafe_offset=k] = cubin.unsafe_ptr()[unsafe_offset=k]
@@ -507,7 +536,7 @@ def _rtcore_attach(interop_scene: VulkanInteropRtSceneHandle, m: _RtMerged) -> R
     if as_size > 0:
         var as_bytes = unsafe_alloc[UInt8](Int(as_size))
         _ = vulkaninterop_rt_debug_read_as(interop_scene, Int32(0), Int32(0), as_bytes, as_size, as_address)
-        var cubin = getenv("GONZALES_RTCORE_CUBIN", "build/rt_trace.cubin")
+        var cubin = _rtcore_cubin_path()
         var cubin_c = unsafe_alloc[UInt8](cubin.byte_length() + 1)   # the String's buffer is not guaranteed NUL-terminated
         for k in range(cubin.byte_length()):
             cubin_c[unsafe_offset=k] = cubin.unsafe_ptr()[unsafe_offset=k]
