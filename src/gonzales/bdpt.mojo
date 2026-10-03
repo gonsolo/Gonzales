@@ -6613,6 +6613,9 @@ def vcm_render_gpu(
     # Reproduces the "naive VCM" baseline (one fixed global radius, no
     # per-vertex footprint scaling) -- see the site in the sample loop below.
     vcm_no_footprint: Bool = False,
+    # --vcm-radius-scale: multiplies the whole merge radius consistently
+    # (ceiling, hash-grid cell, MIS density and footprint radius).
+    vcm_radius_scale: Float32 = Float32(1.0),
 ) -> Int32:
     """GPU-accelerated Light Vertex Cache BDPT — same algorithm as
     vcm_render (CPU), same shared _bdpt_trace_light_path/
@@ -6793,6 +6796,7 @@ def vcm_render_gpu(
                         + " cam_dist(p=" + String(vcm_radius_cam_percentile) + ")=" + String(cam_dist)
                         + " fraction_mult=" + String(vcm_radius_cam_fraction_mult)
                         + " -> effective scene_radius=" + String(scene_radius))
+            scene_radius *= vcm_radius_scale
             var px_scale = Float32(2.0) * tan(psc[unsafe_offset=0].camera_fov * Float32(3.14159265 / 360.0)) / Float32(fh)
             var vcm_max_depth = psc[unsafe_offset=0].max_depth   # clamped in _vcm_depth
             var c2w_h = psc[unsafe_offset=0].camera_to_world
@@ -6810,7 +6814,7 @@ def vcm_render_gpu(
                 # Footprint radius shrinks on the same schedule as the global one.
                 # --vcm-no-footprint (the "naive VCM" baseline): 0 makes
                 # _vcm_merge_radius_at fall back to the old fixed global radius.
-                var vcm_footprint = Float32(0) if vcm_no_footprint else _VCM_FOOTPRINT_PIXELS * px_scale * (radius_i / max(vcm_radius_0, Float32(1e-20)))
+                var vcm_footprint = Float32(0) if vcm_no_footprint else _VCM_FOOTPRINT_PIXELS * vcm_radius_scale * px_scale * (radius_i / max(vcm_radius_0, Float32(1e-20)))
                 var merge_heads_ptr = merge_heads_ptr_a if si % 2 == 0 else merge_heads_ptr_b
                 # Variance-aware merge MIS reads the OTHER table: last pass's
                 # counts, rescaled from its (larger) cells to this radius.

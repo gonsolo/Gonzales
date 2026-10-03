@@ -1079,6 +1079,7 @@ def parse_and_render(
                                     # median primary-ray depth (vcm_render_gpu)
     vcm_radius_cam_percentile: Float32 = Float32(0.5),
     vcm_radius_cam_fraction_mult: Float32 = Float32(1.0),
+    vcm_radius_scale: Float32 = Float32(1.0),
     vcm_no_footprint: Bool = False,  # VCM: the "naive VCM" baseline, one fixed global radius (vcm_render_gpu)
     # Task #163: route the plain --gpu wavefront path tracer's per-bounce
     # primary intersection test through the Vulkan RT backend instead of
@@ -1363,7 +1364,7 @@ def parse_and_render(
                     rtcore_destroy(rt_hw_end_v)
                 vulkaninterop_rt_destroy_scene(interop_scene_vcm)
         else:
-            ret = vcm_render_gpu(handle, psc, sd[unsafe_offset=0], resolved_vcm_spp, n_photons, no_denoise, verbose, vcm_budget, vcm_cap, vcm_no_keep_mis, vcm_radius_from_camera, vcm_radius_cam_percentile, vcm_radius_cam_fraction_mult, vcm_no_footprint)
+            ret = vcm_render_gpu(handle, psc, sd[unsafe_offset=0], resolved_vcm_spp, n_photons, no_denoise, verbose, vcm_budget, vcm_cap, vcm_no_keep_mis, vcm_radius_from_camera, vcm_radius_cam_percentile, vcm_radius_cam_fraction_mult, vcm_no_footprint, vcm_radius_scale)
         gpu_free_scene(handle)
         sd.unsafe_free()
         mojo_parsed_free(psc)
