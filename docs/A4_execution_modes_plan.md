@@ -160,6 +160,11 @@ merge/connect kernel. Open: the VCM kernels (`bdpt.mojo`, 255 registers) and
 the remaining PT kernels (gen_primary, thin dielectric, coated conductor,
 hair, interface, mix).
 
+VCM kernels (pavilion, 16 spp, 3 runs each): megakernel 12.9 s -> 12.2 s (-5%),
+staged driver 13.5 s -> 11.0 s (-18%) with N = 2 on the emit, splat, connect,
+light-bounce, camera-bounce and shadow-resolve kernels; N = 3 gives no gain.
+Images agree to 3e-5 (atomic splats are not reproducible to the bit).
+
 Smoke matrix: `chromatic-medium.vcm` (-7.7%) and `subsurface-coated.pt`
 (-3.7%) fail their pins, identically on the commit before this session
 (64287c1b), so they are not caused by this step.

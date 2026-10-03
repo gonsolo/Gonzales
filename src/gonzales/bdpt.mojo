@@ -7,6 +7,9 @@ from std.collections import Array
 from std.sys import has_accelerator
 from std.sys.info import size_of
 from max.gpu import block_idx, thread_idx, block_dim
+from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
+from std.utils import StaticTuple
+from .gpu_tuning import MINCTA_VCM_EMIT, MINCTA_VCM_SPLAT, MINCTA_VCM_CONNECT, MINCTA_VCM_LBOUNCE, MINCTA_VCM_CBOUNCE, MINCTA_VCM_RESOLVE
 from max.gpu.host import DeviceContext, DeviceBuffer
 from max.algorithm import parallelize
 from std.math import sqrt, cos, sin, tan, floor, log, exp, max, min, abs, ceildiv, pow
@@ -5692,6 +5695,8 @@ def vcm_render(
 # Every kernel takes the scene as one `sd: SceneView`, built on the
 # host by GpuSceneHandle.scene_descriptor() (+ with_vcm() for a VCM pass).
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_VCM_EMIT))
 def _bdpt_emit_light_paths_gpu(
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
     lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
@@ -5733,6 +5738,8 @@ def _bdpt_emit_light_paths_gpu(
     _bdpt_trace_light_path[True](sd, pcg, has_med, default_emit_med, scratch, lvc, k, lvc_path_len,
                                  mis_vc_weight_factor, mis_vm_weight_factor, pass_wl, lvc_camis)
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_VCM_SPLAT))
 def _bdpt_splat_light_paths_gpu(
     accum: Pointer[Float32, MutUntrackedOrigin],
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
@@ -5803,6 +5810,8 @@ def _bdpt_splat_light_paths_gpu(
             _bdpt_splat_filtered[True](accum, r[1], r[2], cr, cg, cb,
                                        Int(fw_dp), Int(fh_dp), film_filter)
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_VCM_CONNECT))
 def _bdpt_camera_connect_gpu(
     accum: Pointer[Float32, MutUntrackedOrigin],
     accum_merge: Pointer[Float32, MutUntrackedOrigin],
@@ -5970,6 +5979,8 @@ def _bdpt_light_path_intersect_gpu(
                         sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
     test_spheres(sd.spheres, Int(sd.sphereCount), ray, results.unsafe_offset(tid))
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_VCM_LBOUNCE))
 def _bdpt_light_path_bounce_gpu(
     states: Pointer[VCMLightPathState, MutUntrackedOrigin],
     results: Pointer[Intersection, MutUntrackedOrigin],
@@ -6099,6 +6110,8 @@ def _bdpt_camera_path_intersect_gpu(
                         sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
     test_spheres(sd.spheres, Int(sd.sphereCount), ray, results.unsafe_offset(tid))
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_VCM_CBOUNCE))
 def _bdpt_camera_path_bounce_gpu(
     states: Pointer[VCMCameraPathState, MutUntrackedOrigin],
     results: Pointer[Intersection, MutUntrackedOrigin],
@@ -7069,6 +7082,8 @@ def reset_shadow_valid_gpu(
     for local in range(_BDPT_MAX_VERTS):
         shadow_valid[unsafe_offset=base + local] = Int8(0)
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_VCM_RESOLVE))
 def resolve_shadow_connect_gpu(
     # Perf (2026-07-13, task #163 stage 5 follow-up): ONE dispatch over
     # ALL n_pix*_BDPT_MAX_VERTS shadow-ray slots (replaces the earlier
