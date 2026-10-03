@@ -136,15 +136,33 @@ the pixels if that is what it takes to render the teaser at full resolution.
 
 Pass: staged VCM renders 1920x1080 on the 12 GB card.
 
-### Step 5 -- Registers
+### Step 5 -- Registers (path tracer done 2026-10-03)
 
-Profile both GPU modes with `ncu` (recipe in
-`project_gpu_speed_vs_pbrt_cycles` memory). Record registers per thread,
-achieved occupancy and spill sectors per kernel. Decide per kernel whether
-splitting helps. Register caps and occupancy tuning were dead ends before;
-do not assume this changes.
+`ncu` on the pavilion path tracer, before: shade_diffuse and shade_measured 255
+registers, conductor 212, dielectric 168, traversal 124, nee 113 (one block of
+256 threads per SM, 16.7% theoretical occupancy). Mojo exposes ptxas's
+minimum-blocks-per-SM hint as `@__llvm_metadata(`nvvm.minctasm`=N)` together
+with `MAX_THREADS_PER_BLOCK_METADATA`; N = 2 caps a 256-thread kernel at 128
+registers. Applied to the five hottest shade kernels and the traversal kernel
+(`gpu_tuning.mojo`), PT render time at 64 spp:
 
-Pass: a table; a split or cap is kept only if the measured time improves.
+| scene | N=1 (no cap) | N=2 | N=3 |
+|---|---|---|---|
+| pavilion | 0.8 s | 0.6 s | 0.6 s |
+| kitchen | 2.2 s | 1.5 s | 1.6-1.7 s |
+| staircase | 8.5 s | 6.2 s | 6.9-7.0 s |
+
+N = 2 is 25-33% faster, N = 3 less so, and mixing 2 and 3 across shade and
+traversal kernels is no better than 2 everywhere. Images are bit-identical
+(max abs difference 0.0 on all three scenes). The earlier note that register
+caps are a dead end was wrong for the path tracer: it was measured on the VCM
+merge/connect kernel. Open: the VCM kernels (`bdpt.mojo`, 255 registers) and
+the remaining PT kernels (gen_primary, thin dielectric, coated conductor,
+hair, interface, mix).
+
+Smoke matrix: `chromatic-medium.vcm` (-7.7%) and `subsurface-coated.pt`
+(-3.7%) fail their pins, identically on the commit before this session
+(64287c1b), so they are not caused by this step.
 
 ### Step 6 -- Path guiding on the GPU
 

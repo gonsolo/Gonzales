@@ -1,3 +1,6 @@
+from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
+from std.utils import StaticTuple
+from .gpu_tuning import MINCTA_TRAVERSE
 from .bvh import BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
 from .curves import CURVE_DEFER_K, Curve, _curve_perp_axis, curve_piece_endpoints, intersect_curve
 from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, store_vec3, vec3f
@@ -253,6 +256,8 @@ def gen_primary_rays_wavefront_gpu(
 
 
 # Traversal kernel that reads rays directly from PathState (no separate ray buffer).
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_TRAVERSE))
 def traverse_paths_gpu(
     sd: SceneView,
     paths: Pointer[PathState, MutUntrackedOrigin],

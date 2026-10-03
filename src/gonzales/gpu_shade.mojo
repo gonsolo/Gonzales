@@ -1,3 +1,6 @@
+from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
+from std.utils import StaticTuple
+from .gpu_tuning import MINCTA_NEE, MINCTA_DIFFUSE, MINCTA_COATED, MINCTA_CONDUCTOR, MINCTA_MEASURED, MINCTA_DIELECTRIC, MINCTA_TRAVERSE
 from .bvh import BVH2Node, SceneView
 from .curves import Curve
 from .geometry import _is_real_ptr
@@ -73,6 +76,8 @@ def shade_gpu(
 
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_NEE))
 def shade_nee_preamble_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
@@ -97,6 +102,8 @@ def shade_nee_preamble_gpu(
 # shade_nee_preamble_gpu handles miss + emission, then sets pending_mat.
 # Each kernel below checks pending_mat, clears it, and calls the shade function.
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_DIFFUSE))
 def shade_diffuse_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
@@ -153,6 +160,8 @@ def shade_diffuse_gpu(
     shade_diffuse[True, True](path_ptr, inter, ctx_ptr[], mat, null_guide(), restir_io, tid if restir_has_state else -1)
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_COATED))
 def shade_coated_diffuse_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
@@ -256,6 +265,8 @@ def shade_mix_gpu(
     path_ptr[].pending_mat = sub_type
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_CONDUCTOR))
 def shade_conductor_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
@@ -278,6 +289,8 @@ def shade_conductor_gpu(
     shade_conductor[True, True](path_ptr, inter, ctx, mat)
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_MEASURED))
 def shade_measured_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
@@ -300,6 +313,8 @@ def shade_measured_gpu(
     shade_measured[True, True](path_ptr, inter, ctx, mat)
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_DIELECTRIC))
 def shade_dielectric_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
