@@ -583,6 +583,7 @@ def rtcore_alpha_kernel(
     instance_base_mesh: Pointer[Int32, MutUntrackedOrigin],
     count_dp: Int64,
     first_dp: Int64,
+    pending: Pointer[Int32, MutUntrackedOrigin],
 ):
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -614,6 +615,7 @@ def rtcore_alpha_kernel(
     if killed:
         var t = src[unsafe_offset=idx]
         rays[unsafe_offset=idx + 3] = t * Float32(1.00001) + Float32(1.0e-5)
+        _ = Atomic.fetch_add(pending, Int32(1))
         return
     if not first:
         for k in range(8):
@@ -654,13 +656,23 @@ def rtcore_alpha_passes(
     var rays = rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var results = results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var scratch = scratch_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
-    comptime for p in range(RT_ALPHA_PASSES):
-        comptime if p > 0:
+    # Most rounds have few or no rejected hits, so each pass reports how many rays stay pending and the loop stops at
+    # zero instead of re-tracing every (mostly finished) ray slot RT_ALPHA_PASSES times. One 4-byte read-back per pass.
+    var pending_dev = ctx.enqueue_create_buffer[DType.int32](1)
+    var pending_host = ctx.enqueue_create_host_buffer[DType.int32](1)
+    var pending = pending_dev.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    for p in range(RT_ALPHA_PASSES):
+        if p > 0:
             _ = rtcore_trace_interop(rt_hw, UInt64(Int(rays_buf.unsafe_ptr())), UInt64(Int(scratch_buf.unsafe_ptr())), Int32(n_total), cuda_stream)
+        ctx.enqueue_memset(pending_dev, Int32(0))
         ctx.enqueue_function[rtcore_alpha_kernel](
-            rays, results, scratch, meshes, Int64(n_meshes), instance_base_mesh, Int64(n_total), Int64(1 if p == 0 else 0),
+            rays, results, scratch, meshes, Int64(n_meshes), instance_base_mesh, Int64(n_total), Int64(1 if p == 0 else 0), pending,
             grid_dim=grid, block_dim=block_size,
         )
+        ctx.enqueue_copy(pending_host, pending_dev)
+        ctx.synchronize()
+        if pending_host[0] == Int32(0):
+            return                                       # nothing pending: no ray needs the finish flag either
     ctx.enqueue_function[rtcore_alpha_finish_kernel](
         rays, results, Int64(n_total),
         grid_dim=grid, block_dim=block_size,

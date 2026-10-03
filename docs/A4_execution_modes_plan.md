@@ -79,12 +79,42 @@ kernels.
 
 ### Step 2 -- Hardware versus software, measured
 
-Time PT and VCM with the RT cores against software traversal on 3-4 scenes
-(single BLAS, no curves, no instances; one scene with instances).
+Measured 2026-10-03, path tracer, 64 spp, seed 1, `--no-denoise`, render time
+only (the "Done:" line; hardware setup is extra: about 10 s on the pavilion).
+Software BVH against `--rt-hardware` (cubin found next to the executable):
 
-Pass: a table of time and image ratio per scene. Decide the default rule
-from it: hardware only where it is measured faster and renders the same
-image.
+| scene | software [s] | hardware [s] | hardware speed-up | mean hw/sw |
+|---|---|---|---|---|
+| Cornell box | 0.1 | 0.1 | 1.00 | 1.0000 |
+| pavilion (zz_bias) | 0.8 | 4.7 | 0.17 | 1.135 (unclamped, firefly-dominated mean; not yet checked) |
+| bathroom | 2.4 | 28.6 | 0.08 | 1.0000 |
+| kitchen | 2.2 | 7.7 | 0.29 | 1.0000 |
+| staircase | 8.6 | 14.7 | 0.59 | 1.0001 |
+| classroom | 2.6 | 8.0 | 0.33 | 1.0004 |
+| veach-ajar | 1.0 | 3.0 | 0.33 | 1.0000 |
+| bistro vespa | 5.9 | 1.9 | 3.11 | not compared |
+
+The RT cores win clearly only on the heaviest geometry (vespa, 1.4 M triangles).
+On the other scenes hardware tracing is slower, by up to 12x, with images that
+agree. The slowdown is large in absolute terms on small scenes, which points at
+per-launch cost (an ncu run of the pavilion shows 180 launches each of the
+trace and "convert" kernels at 2 spp) and at the alpha re-trace passes, not at
+traversal. Next: profile where hardware time goes on bathroom and pavilion
+before deciding anything. Do not make hardware the default on this evidence.
+
+Follow-up, same day. The alpha passes now stop as soon as no ray is pending
+(one 4-byte read-back per pass instead of always `RT_ALPHA_PASSES = 10` traces);
+bathroom hardware 28.6 s -> 19.1 s, identical image, no change elsewhere
+(the other scenes have no alpha). What remains is not the alpha passes: with
+`ncu` on the kitchen (no alpha) the per-round full-grid passes around the trace
+cost about as much as the trace itself: pack rays 8.0 s, result convert 6.5 s,
+unpack 5.3 s, pack/reset shadow tasks 10.3 s, each over all n_pix x 8 ray
+slots, live or dead, 18 rounds per sample. Software traversal fuses all of it
+into the shade kernels. Crown (3.5 M triangles) is also slower in hardware
+(8.3 s against 5.2 s at 16 spp), so triangle count is not a usable
+switch. Bistro cafe and boulangerie run out of memory in hardware mode on the 12 GB
+card, so they could not be compared. Closing the gap needs path compaction or
+fusing pack/trace/unpack, a larger change than this step.
 
 ### Step 3 -- Shared bounce for VCM (check, probably already done)
 
