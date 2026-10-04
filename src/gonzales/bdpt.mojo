@@ -3375,29 +3375,10 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # separate direct term instead.
                 # distant/point/sphere via the shared sampler (pure loop collapse --
                 # order was already distant,point,sphere, matching the iterator).
-                for li_d in range(_bdpt_simple_light_count(sd)):
-                    var ls_i = _bdpt_sample_simple_light(sd, li_d, hit.to_simd(), pcg)
-                    if not ls_i.valid:
-                        continue   # a non-emitting sphere
-                    var pol_i = _vcm_simple_light_policy(sd, li_d, ls_i, v, eta_x, dvcm_carry, dvc_carry,
-                                                         abs(dot(ls_i.wi, gn_geo)), wavelengths)
-                    var w_i = nee_weight_lobe(ls_i, _vertex_ctx(v), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, pol_i)
-                    total += _bdpt_nee_contribute(beta, w_i, ls_i, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, v.mat_kind == LobeKind.diffuse_transmit or v.mat_kind == LobeKind.hair or v.mat_kind == LobeKind.rough_dielectric)
-                for inf_i in range(Int(sd.infiniteLightCount)):
-                    var ls_e = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-                    # The SAME shared helper every other material uses -- the
-                    # only difference is the MIS policy handed to it. Before
-                    # MisPolicy existed the weight was welded inside the helper,
-                    # so getting VCM's correct weight here meant hand-inlining
-                    # the whole throughput computation at this one site while the
-                    # other seven kept the path tracer's two-strategy heuristic.
-                    var (_c_e, r_e) = _scene_bounding_sphere(sd)
-                    var le_e = _lobe_eval[want_pdfs=True](v, ls_e.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
-                    var pol_e = MisPolicy(True, eta_x, dvcm_carry, dvc_carry,
-                                          ls_e.pdf * light_path_pick_pdf(sd, _vcm_infinite_slot(sd, inf_i)) / max(PI * r_e * r_e, Float32(1e-12)),
-                                          le_e.pdf_rev, False, abs(dot(ls_e.wi, gn_geo)))
-                    var w_e = nee_weight_lobe(ls_e, _vertex_ctx(v), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, pol_e)
-                    total += _bdpt_nee_contribute(beta, w_e, ls_e, hit, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, v.mat_kind == LobeKind.diffuse_transmit or v.mat_kind == LobeKind.hair or v.mat_kind == LobeKind.rough_dielectric)
+                total += _vcm_nee_surface(sd, v, _vertex_ctx(v), hit, gn_geo, beta, eta_x, dvcm_carry, dvc_carry,
+                                          cur_med_idx, scratch, wavelengths, pcg, spawn_eps,
+                                          v.mat_kind == LobeKind.diffuse_transmit or v.mat_kind == LobeKind.hair or v.mat_kind == LobeKind.rough_dielectric,
+                                          Float32(0))
                 # MNEE's receiver evaluates albedo/pi itself (see
                 # _bdpt_mnee_diffuse_area_light), so only Lambertian lobes can
                 # host it -- a limitation of MNEE, not a material branch.
@@ -3530,25 +3511,10 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # dot(gn_c, shadow_dir) before dividing by pdf) — a real
                 # overbrightness bug, fixed as a side effect of routing
                 # through the shared, already-correct _nee_weight_simple.
-                for li_cc in range(_bdpt_simple_light_count(sd)):
-                    var ls_icc = _bdpt_sample_simple_light(sd, li_cc, hit.to_simd(), pcg)
-                    if not ls_icc.valid:
-                        continue   # a non-emitting sphere
-                    var pol_icc = _vcm_simple_light_policy(sd, li_cc, ls_icc, v, eta_x, dvcm_carry, dvc_carry,
-                                                           abs(dot(ls_icc.wi, gn_c_geo)), wavelengths)
-                    var w_icc = _nee_weight_simple_spectral(ls_icc, LobeKind.ggx, mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_icc)
-                    total += _bdpt_nee_contribute(beta, w_icc, ls_icc, hit, gn_c_geo, cur_med_idx, sd, scratch, wavelengths)
-                for inf_ic in range(Int(sd.infiniteLightCount)):
-                    var ls_ec = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_ic], Point2f(pcg.next_float(), pcg.next_float()))
-                    # One policy expression, and `scoped` decides: a kind with real
-                    # densities gets VCM's balance weight over all four strategies, a
-                    # kind without keeps the path tracer's two-strategy heuristic.
-                    var (_c_ec, r_ec) = _scene_bounding_sphere(sd)
-                    var le_ec = _lobe_eval[want_pdfs=True](v, ls_ec.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
-                    var pol_ec = MisPolicy(le_ec.scoped, eta_x, dvcm_carry, dvc_carry,
-                                          ls_ec.pdf * light_path_pick_pdf(sd, _vcm_infinite_slot(sd, inf_ic)) / max(PI * r_ec * r_ec, Float32(1e-12)), le_ec.pdf_rev, False, abs(dot(ls_ec.wi, gn_c_geo)))
-                    var w_ec = _nee_weight_simple_spectral(ls_ec, LobeKind.ggx, mat.albedo, alpha_c, gn_c, wo_c, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_ec)
-                    total += _bdpt_nee_contribute(beta, w_ec, ls_ec, hit, gn_c_geo, cur_med_idx, sd, scratch, wavelengths)
+                var ctx_c = LobeCtx(LobeKind.ggx, True, False, gn_c, wo_c, mat.albedo, Int32(-1), alpha_c,
+                                    Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
+                total += _vcm_nee_surface(sd, v, ctx_c, hit, gn_c_geo, beta, eta_x, dvcm_carry, dvc_carry,
+                                          cur_med_idx, scratch, wavelengths, pcg, Float32(0.0001), False, Float32(0))
 
             beta *= spec_refl_unbounded(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (bs_c.f).r, (bs_c.f).g, (bs_c.f).b, wavelengths)
             rd = vec3f(bs_c.wi)
@@ -3660,20 +3626,11 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                             total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f)
                     # Direct lighting at the exit: the diffuse vertex's NEE with
                     # the exit lobe's Fresnel factor toward each light.
-                    for li_x in range(_bdpt_simple_light_count(sd)):
-                        var ls_x = _bdpt_sample_simple_light(sd, li_x, x_o.to_simd(), pcg)
-                        if not ls_x.valid:
-                            continue   # a non-emitting sphere
-                        var pol_x = _vcm_simple_light_policy(sd, li_x, ls_x, v, mis_vm_weight_factor * _vcm_eta_scale(sd, x_o),
-                                                             v.dVCM, v.dVC, abs(dot(ls_x.wi, n_o)), wavelengths)
-                        var w_x = _nee_weight_simple_spectral(ls_x, LobeKind.lambertian, RGB(Float32(1)), Float32(0), n_o, n_o, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs), pol_x)
-                        w_x = w_x * bssrdf_exit_ft(dot(n_o, ls_x.wi), eta_e)
-                        total += _bdpt_nee_contribute(beta, w_x, ls_x, x_o, n_o, cur_med_idx, sd, scratch, wavelengths)
-                    for inf_x in range(Int(sd.infiniteLightCount)):
-                        var ls_xe = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_x], Point2f(pcg.next_float(), pcg.next_float()))
-                        var w_xe = _nee_weight_simple_spectral(ls_xe, LobeKind.lambertian, RGB(Float32(1)), Float32(0), n_o, n_o, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs))
-                        w_xe = w_xe * bssrdf_exit_ft(dot(n_o, ls_xe.wi), eta_e)
-                        total += _bdpt_nee_contribute(beta, w_xe, ls_xe, x_o, n_o, cur_med_idx, sd, scratch, wavelengths)
+                    var ctx_x = LobeCtx(LobeKind.lambertian, True, False, n_o, n_o, RGB(Float32(1)), Int32(-1), Float32(0),
+                                        Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
+                    total += _vcm_nee_surface(sd, v, ctx_x, x_o, n_o, beta, mis_vm_weight_factor * _vcm_eta_scale(sd, x_o),
+                                              v.dVCM, v.dVC, cur_med_idx, scratch, wavelengths, pcg,
+                                              Float32(0.0001), False, eta_e)
                     # Continue with the exit lobe: cosine-sampled, weight Ft(cos_out).
                     var ux1 = pcg.next_float(); var ux2 = pcg.next_float()
                     rd = vec3f(_cosine_hemisphere_sample(n_o, ux1, ux2))
@@ -4934,6 +4891,45 @@ def _vcm_simple_light_policy(
         var sph = sd.spheres[unsafe_offset=i - nd - np_]
         emission = light_path_pick_pdf(sd, _vcm_sphere_slot(sd, i - nd - np_)) / max(PI * Float32(4.0) * PI * sph.radius * sph.radius, Float32(1e-12))
     return MisPolicy(le.scoped, eta_x, dvcm, dvc, emission, le.pdf_rev, False, cos_geo)
+
+
+@always_inline
+def _vcm_nee_surface(
+    ref sd: SceneView, v: BDPTVertex, ctx: LobeCtx, pos: Point3f, gn_geo: Vec3f,
+    beta: SpectralSample, eta_x: Float32, dvcm: Float32, dvc: Float32,
+    cur_med_idx: Int32, scratch: Pointer[Intersection, MutUntrackedOrigin],
+    wavelengths: SampledWavelengths, mut pcg: PCG32,
+    spawn_eps: Float32, two_sided: Bool, exit_eta: Float32,
+) -> SpectralSample:
+    """NEE from one camera surface vertex to every distant/point/sphere and infinite
+    light, weighted by VCM's balance policy. `ctx` is the lobe, `gn_geo` the geometric
+    normal for the MIS density, and `exit_eta` > 0 multiplies a BSSRDF exit's Fresnel
+    factor. Replaces three near-identical copies, one of which had drifted (the BSSRDF
+    exit's infinite-light loop passed no policy)."""
+    var total = SpectralSample(Float32(0))
+    var tab = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs)
+    for li in range(_bdpt_simple_light_count(sd)):
+        var ls = _bdpt_sample_simple_light(sd, li, pos.to_simd(), pcg)
+        if not ls.valid:
+            continue   # a non-emitting sphere
+        var pol = _vcm_simple_light_policy(sd, li, ls, v, eta_x, dvcm, dvc, abs(dot(ls.wi, gn_geo)), wavelengths)
+        var w = nee_weight_lobe(ls, ctx, tab, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, pol)
+        if exit_eta > Float32(0):
+            w = w * bssrdf_exit_ft(dot(gn_geo, ls.wi), exit_eta)
+        total += _bdpt_nee_contribute(beta, w, ls, pos, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, two_sided)
+    for inf_i in range(Int(sd.infiniteLightCount)):
+        var ls = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
+        var (_c, r) = _scene_bounding_sphere(sd)
+        var le = _lobe_eval[want_pdfs=True](v, ls.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
+        # `scoped` decides: a kind with real densities gets the balance weight over all four strategies.
+        var pol = MisPolicy(le.scoped, eta_x, dvcm, dvc,
+                            ls.pdf * light_path_pick_pdf(sd, _vcm_infinite_slot(sd, inf_i)) / max(PI * r * r, Float32(1e-12)),
+                            le.pdf_rev, False, abs(dot(ls.wi, gn_geo)))
+        var w = nee_weight_lobe(ls, ctx, tab, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths, pol)
+        if exit_eta > Float32(0):
+            w = w * bssrdf_exit_ft(dot(gn_geo, ls.wi), exit_eta)
+        total += _bdpt_nee_contribute(beta, w, ls, pos, gn_geo, cur_med_idx, sd, scratch, wavelengths, spawn_eps, two_sided)
+    return total
 
 @always_inline
 def _vertex_ctx(v: BDPTVertex, adjoint: Bool = False) -> LobeCtx:
