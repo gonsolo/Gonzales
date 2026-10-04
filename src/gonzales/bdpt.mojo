@@ -521,7 +521,9 @@ def _bdpt_nee_contribute(
     if two_sided and dot(gn, Vec3f(ls.wi[0], ls.wi[1], ls.wi[2])) < Float32(0):
         side_eps = -eps
     var shadow_org = hit + vec3f(gn) * side_eps
-    var shadow_end = shadow_org + Vec3f(ls.wi[0], ls.wi[1], ls.wi[2]) * ls.dist
+    # Stop 3 offsets short: shadow_org sits `eps` off the surface, so a light closer than
+    # eps / 0.0005 (0.2 units at eps=1e-4) would otherwise end past its own surface and occlude itself.
+    var shadow_end = shadow_org + Vec3f(ls.wi[0], ls.wi[1], ls.wi[2]) * (ls.dist - Float32(3) * abs(side_eps))
     var Tr = _visible_transmittance(shadow_org, shadow_end, cur_med_idx, sd, scratch, wl)
     if not Tr.is_black():
         return beta * w * Tr

@@ -149,6 +149,21 @@
     "median": 0.169674,
     "tol": 0.03
   },
+  "sphere-light-near-wall.pt": {
+    "mean": 0.17115,
+    "median": 0.06611,
+    "tol": 0.03
+  },
+  "sphere-light-near-wall.sppm": {
+    "mean": 0.170848,
+    "median": 0.065578,
+    "tol": 0.03
+  },
+  "sphere-light-near-wall.vcm": {
+    "mean": 0.170636,
+    "median": 0.065711,
+    "tol": 0.012
+  },
   "sss-slab.pt": {
     "mean": 49.493725,
     "median": 57.056259,
