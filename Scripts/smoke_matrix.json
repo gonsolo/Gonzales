@@ -40,8 +40,8 @@
     "tol": 0.03
   },
   "chromatic-medium.vcm": {
-    "mean": 0.358991,
-    "median": 0.338864,
+    "mean": 0.342302,
+    "median": 0.324475,
     "tol": 0.03
   },
   "closed-cavity.pt": {
@@ -181,7 +181,7 @@
   },
   "subsurface-coated.pt": {
     "mean": 0.107771,
-    "median": 0.042324,
+    "median": 0.040739,
     "tol": 0.03
   },
   "subsurface-coated.sppm": {

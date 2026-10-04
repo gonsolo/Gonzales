@@ -1650,6 +1650,14 @@ def _vcm_merge_radius_at(ref sd: SceneView, p: Point3f, is_volume: Bool = False)
 
 
 @always_inline
+def _vcm_grid_inv_cell(ref sd: SceneView, radius_i: Float32) -> Float32:
+    """Coarse merge-grid cell: r_pass, or the volume radius in a scene with media
+    (the 3x3x3 search must cover it; the fine levels keep surface lookups cheap)."""
+    var scale = _VCM_RADIUS_VOLUME_SCALE if Int(sd.mediumCount) > 0 else Float32(1.0)
+    return Float32(1.0) / max(radius_i * scale, Float32(1e-6))
+
+
+@always_inline
 def _vcm_eta_scale(ref sd: SceneView, p: Point3f) -> Float32:
     """eta(x) / eta: merging's MIS density at `p` relative to the global
     N pi r_pass^2 -- thinning's keep probability times the radius shrink."""
@@ -5514,7 +5522,7 @@ def _bdpt_render_core(
         # per-pixel Knaus-Zwicker scheme (see this file's opening comment).
         var radius_i = vcm_merge_radius(scene_radius, si)
         var merge_r2 = radius_i * radius_i
-        var merge_inv_cell = Float32(1.0) / max(radius_i, Float32(1e-6))
+        var merge_inv_cell = _vcm_grid_inv_cell(sd, radius_i)
         var merge_norm = Float32(1.0) / (Float32(n_light_paths_merge) * PI * max(merge_r2, Float32(1e-12)))
 
         # VCM Stage 2b/2c: global per-iteration MIS weight-combination
@@ -6843,7 +6851,7 @@ def vcm_render_gpu(
                     vcm_keep_inv_cell = Float32(1.0) / max(radius_prev, Float32(1e-6))
                     vcm_keep_scale = (radius_i / radius_prev) * (radius_i / radius_prev)
                 var merge_r2 = radius_i * radius_i
-                var merge_inv_cell = Float32(1.0) / max(radius_i, Float32(1e-6))
+                var merge_inv_cell = _vcm_grid_inv_cell(sd, radius_i)
                 var merge_norm = Float32(1.0) / (Float32(n_light_paths_merge) * PI * max(merge_r2, Float32(1e-12)))
                 var eta_vcm = PI * max(merge_r2, Float32(1e-12)) * Float32(n_light_paths_merge)
                 var mis_vm_weight_factor = eta_vcm
@@ -7454,7 +7462,7 @@ def vcm_render_gpu_wavefront(
                     vcm_keep_inv_cell = Float32(1.0) / max(radius_prev, Float32(1e-6))
                     vcm_keep_scale = (radius_i / radius_prev) * (radius_i / radius_prev)
                 var merge_r2 = radius_i * radius_i
-                var merge_inv_cell = Float32(1.0) / max(radius_i, Float32(1e-6))
+                var merge_inv_cell = _vcm_grid_inv_cell(sd, radius_i)
                 var merge_norm = Float32(1.0) / (Float32(n_light_paths_merge) * PI * max(merge_r2, Float32(1e-12)))
                 var eta_vcm = PI * max(merge_r2, Float32(1e-12)) * Float32(n_light_paths_merge)
                 var mis_vm_weight_factor = eta_vcm
