@@ -3149,7 +3149,9 @@ def _sms_probe_and_solve(
                        ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                        ctx.lights.spheres, ctx.lights.sphere_count)
     var probe_inter = probe_store[0]
-    if probe_inter.hit == Int8(0) or (probe_inter.primId.type != Int8(0) and probe_inter.primId.type != Int8(4)):
+    # A solid sphere is not MNEE's: one refraction misses the exit surface and the exact BSDF path is no
+    # longer suppressed at the emitter hit, so plain sampling covers it (PT read 1.4-1.9% under pbrt otherwise).
+    if probe_inter.hit == Int8(0) or probe_inter.primId.type != Int8(0):
         return (False, False, 0, zero_verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
     var probe_mat = ctx.materials[unsafe_offset=Int(probe_inter.primId.materialIndex)]
     if not is_specular_glass(probe_mat):
@@ -4982,7 +4984,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                                        ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                                        ctx.lights.spheres, ctx.lights.sphere_count)
                     var pr = pr_store[0]
-                    if pr.hit != Int8(0) and (pr.primId.type == Int8(0) or pr.primId.type == Int8(4)):
+                    if pr.hit != Int8(0) and pr.primId.type == Int8(0):
                         var pr_mat = ctx.materials[unsafe_offset=Int(pr.primId.materialIndex)]
                         if is_specular_glass(pr_mat):
                             path_ptr[].active = 0
