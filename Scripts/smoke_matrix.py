@@ -45,6 +45,7 @@ FEATURES = {
     "mnee-through-glass": "Scenes/mnee-two-lights.pbrt",
     "sss-slab":           "Scenes/sss-backlit-slab.pbrt",
     "sphere-light-near-wall": "Scenes/vcm-sphere-light-near-wall.pbrt",
+    "glass-depth":        "Scenes/vcm-glass-depth.pbrt",
 }
 DEFAULT_TOL = 0.03
 

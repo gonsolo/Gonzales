@@ -194,6 +194,7 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
     var total_merge = state.total_merge
     var first_alb = state.first_alb
     var n_verts = Int(state.n_verts)
+    var n_delta = Int(state.n_delta)
     var n_bounces = Int(state.n_bounces)
     var cur_med_idx = state.cur_med_idx
     var dvcm = state.dvcm
@@ -237,7 +238,7 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
             Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             Float32(0), Float32(0), Float32(0), Float32(0), Float32(0),
             ro, rd, beta, total, total_merge, visit_naive, visit_footprint, visit_thin,
-            first_alb, n_verts, n_bounces, cur_med_idx,
+            first_alb, n_verts, n_delta, n_bounces, cur_med_idx,
             dvcm, dvc, dvm, prev_was_volume, last_bsdf_pdf, mis_null_dist,
             current_dielectric_ior, previous_dielectric_ior, wavelengths, cone_len,
             camis, camis_recs,

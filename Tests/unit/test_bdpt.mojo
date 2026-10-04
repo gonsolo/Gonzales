@@ -87,7 +87,7 @@ def _make_vertex(pos: Point3f, normal: Vec3f, is_surface: Int32) -> BDPTVertex:
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=is_surface, is_delta=Int32(0), is_light=Int32(0),
-        med_idx=Int32(-1), mat_kind=LobeKind.lambertian, wo=Vec3f(Float32(0)),
+        med_idx=Int32(-1), mat_kind=LobeKind.lambertian, n_delta=Int32(0), wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
@@ -166,7 +166,7 @@ def test_eval_vertex_delta_vertex_is_always_zero() raises:
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(1), is_delta=Int32(1), is_light=Int32(0),
-        med_idx=Int32(-1), mat_kind=LobeKind.lambertian, wo=Vec3f(Float32(0)),
+        med_idx=Int32(-1), mat_kind=LobeKind.lambertian, n_delta=Int32(0), wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
@@ -182,7 +182,7 @@ def test_eval_vertex_volume_scatter_matches_isotropic_phase_function() raises:
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(0), is_delta=Int32(0), is_light=Int32(0),
-        med_idx=Int32(-1), mat_kind=LobeKind.lambertian, wo=Vec3f(Float32(0)),
+        med_idx=Int32(-1), mat_kind=LobeKind.lambertian, n_delta=Int32(0), wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
@@ -204,7 +204,7 @@ def test_eval_vertex_lambertian_matches_closed_form() raises:
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(1), is_delta=Int32(0), is_light=Int32(0),
-        med_idx=Int32(-1), mat_kind=LobeKind.lambertian, wo=Vec3f(Float32(0)),
+        med_idx=Int32(-1), mat_kind=LobeKind.lambertian, n_delta=Int32(0), wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
@@ -231,7 +231,7 @@ def test_eval_vertex_conductor_dispatches_to_eval_conductor_ggx_with_own_fields(
         pdf_fwd=Float32(0), pdf_bwd=alpha,
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(1), is_delta=Int32(0), is_light=Int32(0),
-        med_idx=Int32(-1), mat_kind=LobeKind.ggx, wo=Vec3f(0.0, 0.0, 1.0),
+        med_idx=Int32(-1), mat_kind=LobeKind.ggx, n_delta=Int32(0), wo=Vec3f(0.0, 0.0, 1.0),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
@@ -350,7 +350,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(1), is_delta=Int32(0), is_light=Int32(0),
-        med_idx=Int32(-1), mat_kind=LobeKind.lambertian, wo=Vec3f(Float32(0)),
+        med_idx=Int32(-1), mat_kind=LobeKind.lambertian, n_delta=Int32(0), wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )
@@ -360,7 +360,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         pdf_fwd=Float32(0.25), pdf_bwd=Float32(0),   # a real light origin: 1 / (area * n_lights)
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(1), is_delta=Int32(0), is_light=Int32(1),
-        med_idx=Int32(-1), mat_kind=LobeKind.lambertian, wo=Vec3f(Float32(0)),
+        med_idx=Int32(-1), mat_kind=LobeKind.lambertian, n_delta=Int32(0), wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
     )

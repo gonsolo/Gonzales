@@ -179,6 +179,7 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
     var rd = state.rd
     var flux = state.flux
     var n_verts = Int(state.n_verts)
+    var n_delta = Int(state.n_delta)
     var dvcm = state.dvcm
     var dvc = state.dvc
     var dvm = state.dvm
@@ -206,7 +207,7 @@ def test_wavefront_split_matches_original_light_path_exactly() raises:
 
         var cont = _bdpt_light_path_bounce[False](
             sd, pcg_bounce, False, inter, lvc_new, 0, Float32(0), Float32(0),
-            ro, rd, flux, n_verts, dvcm, dvc, dvm,
+            ro, rd, flux, n_verts, n_delta, dvcm, dvc, dvm,
             prev_was_volume,
             is_finite_origin, origin_sphere, cur_med_idx, n_lbounces,
             current_dielectric_ior, previous_dielectric_ior, wavelengths,

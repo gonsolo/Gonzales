@@ -227,6 +227,7 @@ struct BDPTVertex(TrivialRegisterPassable):
     var is_light:   Int32  # 1 = this is a light-source vertex (s=0 in BDPT notation)
     var med_idx:    Int32  # medium index AFTER this vertex (-1 = vacuum)
     var mat_kind:   Int32  # a LobeKind
+    var n_delta:    Int32  # delta (specular) bounces on its subpath before it; they count toward maxdepth
     # Direction back toward this vertex's own predecessor on its subpath
     # (-incoming ray direction). Populated for mat_kind=1 (GGX needs both
     # directions around the half-vector) and mat_kind=2 (hair's wo, needed to
@@ -261,7 +262,7 @@ def _null_vertex() -> BDPTVertex:
         pdf_fwd=Float32(0), pdf_bwd=Float32(0),
         dVCM=Float32(0), dVC=Float32(0), dVM=Float32(0),
         is_surface=Int32(0), is_delta=Int32(0), is_light=Int32(0),
-        med_idx=Int32(-1), mat_kind=LobeKind.lambertian,
+        med_idx=Int32(-1), mat_kind=LobeKind.lambertian, n_delta=Int32(0),
         wo=Vec3f(Float32(0)),
         mat_idx=Int32(-1), hair_curve_idx=Int32(-1), hair_h=Float32(0), hair_v=Float32(0),
         wavelengths=SampledWavelengths(Float32(0.0), Float32(0.0), Float32(0.0), Float32(0.0)),
@@ -1495,12 +1496,12 @@ def _vcm_depth(ref sd: SceneView) -> Int:
 
 @always_inline
 def _vcm_light_count(lvc: Pointer[BDPTVertex, MutUntrackedOrigin], lp_idx: Int, local: Int) -> Int:
-    """Interior-vertex count of light-path slot `local`: slot 0 is the light
-    point itself for an area light (count 0), but already the first surface
-    hit for a point / distant / environment light, which stores no origin."""
-    if lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS].is_light == Int32(1):
-        return local
-    return local + 1
+    """Interior-vertex count of light-path slot `local`, delta bounces included:
+    slot 0 is the light point itself for an area light (count 0), but already
+    the first surface hit for a point / distant / environment light, which
+    stores no origin."""
+    var n = local if lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS].is_light == Int32(1) else local + 1
+    return n + Int(lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS + local].n_delta)
 
 
 @always_inline
@@ -2431,6 +2432,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     var visit_thin = Int32(0)
     var first_alb = st.first_alb
     var n_verts = Int(st.n_verts)
+    var n_delta = Int(st.n_delta)
     var n_bounces = Int(st.n_bounces)
     var cur_med_idx = st.cur_med_idx
     var dvcm_carry = st.dvcm
@@ -2467,7 +2469,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
             merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
             mis_vc_weight_factor, mis_vm_weight_factor,
             ro, rd, beta, total, total_merge, visit_naive, visit_footprint, visit_thin,
-            first_alb, n_verts, n_bounces, cur_med_idx,
+            first_alb, n_verts, n_delta, n_bounces, cur_med_idx,
             dvcm_carry, dvc_carry, dvm_carry, prev_was_volume, last_bsdf_pdf, mis_null_dist,
             current_dielectric_ior, previous_dielectric_ior, wavelengths, cone_len,
             camis, camis_recs, lvc_camis=lvc_camis, n_light_paths_f=n_light_paths_f):
@@ -2526,6 +2528,7 @@ struct VCMCameraPathState(TrivialRegisterPassable):
     # Specular-chain path length for the texture/bump footprint, see
     # _bdpt_camera_path_bounce's `cone_len`.
     var cone_len: Float32
+    var n_delta: Int32
 
 def _bdpt_camera_path_init[use_gpu: Bool](
     r2c:     Pointer[Float32, MutUntrackedOrigin],
@@ -2640,6 +2643,7 @@ def _bdpt_camera_path_init[use_gpu: Bool](
         Float32(0.0),
         Float32(1.0), Float32(1.0),   # current_dielectric_ior, previous_dielectric_ior (vacuum)
         Float32(0.0),                 # cone_len
+        Int32(0),                     # n_delta
     )
 
 def _vcm_scatter(
@@ -2706,6 +2710,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     mut visit_thin: Int32,
     mut first_alb: RGB,
     mut n_verts: Int,
+    mut n_delta: Int,   # delta bounces so far; they count toward maxdepth (see _vcm_depth)
     mut n_bounces: Int,
     mut cur_med_idx: Int32,
     mut dvcm_carry: Float32,
@@ -2954,8 +2959,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # already the complete, correct estimate -- Stage 2b's
                     # original, verified behavior for out-of-scope kinds.
                     if _bdpt_vertex_mis_scoped(v):
-                        total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
-                    total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f)
+                        total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts + n_delta, camis, camis_recs, lvc_camis, n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
+                    total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, n_verts + n_delta, camis, camis_recs, lvc_camis, n_light_paths_f)
                 # Volume-scatter NEE: distant/point/sphere/infinite lights.
                 # _bdpt_connect_to_cache above only reaches AREA lights -- the
                 # only kind _bdpt_light_path_init seeds the light-vertex cache
@@ -3338,9 +3343,13 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             v.med_idx = cur_med_idx
             v.wavelengths = wavelengths
             v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
+            if v.is_delta != Int32(0):
+                if n_verts + n_delta >= _vcm_depth(sd):
+                    return False   # a delta vertex past d starts no strategy either
+                n_delta += 1
             if v.is_delta == Int32(0):
                 if n_verts == 0: first_alb = eff_alb
-                if n_verts >= _vcm_depth(sd):
+                if n_verts + n_delta >= _vcm_depth(sd):
                     return False   # a vertex past d starts no strategy (see _vcm_depth)
                 n_verts += 1
                 comptime if _VCM_CAMIS:
@@ -3354,7 +3363,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # and in a white furnace only ~32% of light paths hit the quad at
                 # all, so ~68% of pixels skipped merging entirely: the estimator
                 # delivered 0.109 against an analytic 0.5.
-                total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
+                total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts + n_delta, camis, camis_recs, lvc_camis, n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
                 if path_len > 0:
                     # Task #163 stage 5: the diffuse branch's connect shadow
                     # rays are the single highest-volume, cleanest shadow-ray
@@ -3367,9 +3376,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # shadow rays) stays on the unchanged, inline,
                     # software-BVH _bdpt_connect_to_cache path either way.
                     if defer_shadow_rays:
-                        _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f)
+                        _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, n_verts + n_delta, camis, camis_recs, lvc_camis, n_light_paths_f)
                     else:
-                        total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f)
+                        total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, n_verts + n_delta, camis, camis_recs, lvc_camis, n_light_paths_f)
 
                 # NEE to distant/point/sphere/infinite lights, via the shared
                 # Light interface (bvh.mojo's LightSample samplers) + BxDF
@@ -3494,7 +3503,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 v.wavelengths = wavelengths
                 v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
                 if n_verts == 0: first_alb = mat.albedo
-                if n_verts >= _vcm_depth(sd):
+                if n_verts + n_delta >= _vcm_depth(sd):
                     return False   # a vertex past d starts no strategy (see _vcm_depth)
                 n_verts += 1
                 comptime if _VCM_CAMIS:
@@ -3506,9 +3515,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 # and in a white furnace only ~32% of light paths hit the quad at
                 # all, so ~68% of pixels skipped merging entirely: the estimator
                 # delivered 0.109 against an analytic 0.5.
-                total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
+                total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts + n_delta, camis, camis_recs, lvc_camis, n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
                 if path_len > 0:
-                    total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f)
+                    total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, n_verts + n_delta, camis, camis_recs, lvc_camis, n_light_paths_f)
 
                 # Distant/point/sphere/infinite NEE, via the shared Light
                 # interface + BxDF interface + _bdpt_nee_contribute glue —
@@ -3617,7 +3626,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     v.wavelengths = wavelengths
                     v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
                     if n_verts == 0: first_alb = mat.sss_mean_refl
-                    if n_verts >= _vcm_depth(sd):
+                    if n_verts + n_delta >= _vcm_depth(sd):
                         return False   # a vertex past d starts no strategy (see _vcm_depth)
                     n_verts += 1
                     # Merging queries the GLOBAL photon grid and does not use this
@@ -3626,12 +3635,12 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     # and in a white furnace only ~32% of light paths hit the quad at
                     # all, so ~68% of pixels skipped merging entirely: the estimator
                     # delivered 0.109 against an analytic 0.5.
-                    total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
+                    total_merge += _bdpt_merge_from_cache(v, sd, lvc, merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm, mis_vc_weight_factor, n_verts + n_delta, camis, camis_recs, lvc_camis, n_light_paths_f, visit_naive=visit_naive, visit_footprint=visit_footprint, visit_thin=visit_thin)
                     if path_len > 0:
                         if defer_shadow_rays:
-                            _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f)
+                            _bdpt_connect_to_cache_deferred(v, sd, lvc, lp_idx, path_len, mis_vm_weight_factor, shadow_rays, shadow_pending, shadow_valid, shadow_seg_med, n_verts + n_delta, camis, camis_recs, lvc_camis, n_light_paths_f)
                         else:
-                            total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, n_verts, camis, camis_recs, lvc_camis, n_light_paths_f)
+                            total += _bdpt_connect_to_cache(v, sd, has_med, scratch, lvc, lp_idx, path_len, mis_vm_weight_factor, n_verts + n_delta, camis, camis_recs, lvc_camis, n_light_paths_f)
                     # Direct lighting at the exit: the diffuse vertex's NEE with
                     # the exit lobe's Fresnel factor toward each light.
                     var ctx_x = LobeCtx(LobeKind.lambertian, True, False, n_o, n_o, RGB(Float32(1)), Int32(-1), Float32(0),
@@ -3656,6 +3665,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                     did_bssrdf_hop = True
             # Ordinary specular boundary, only when no hop was taken.
             if not did_bssrdf_hop:
+                if n_verts + n_delta >= _vcm_depth(sd):
+                    return False   # a delta vertex past d starts no strategy either
+                n_delta += 1
                 # pbrt's outward normal: interpolated N when the mesh has it
                 # (_shading_normal_at), which pbrt also refracts through.
                 var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
@@ -3756,6 +3768,7 @@ struct VCMLightPathState(TrivialRegisterPassable):
     # VCMCameraPathState's matching fields. Both start at vacuum (1.0).
     var current_dielectric_ior: Float32
     var previous_dielectric_ior: Float32
+    var n_delta: Int32
 
 def _null_light_path_state() -> VCMLightPathState:
     return VCMLightPathState(
@@ -3767,6 +3780,7 @@ def _null_light_path_state() -> VCMLightPathState:
         UInt64(0), UInt64(0),
         Float32(0), Float32(0), Float32(0), Float32(0),
         Float32(1.0), Float32(1.0),   # current_dielectric_ior, previous_dielectric_ior (vacuum)
+        Int32(0),                     # n_delta
     )
 
 def _bdpt_light_path_init[use_gpu: Bool](
@@ -4055,6 +4069,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         pcg.state, pcg.inc,
         wavelengths.lambda0, wavelengths.lambda1, wavelengths.lambda2, wavelengths.lambda3,
         Float32(1.0), Float32(1.0),   # current_dielectric_ior, previous_dielectric_ior (vacuum)
+        Int32(0),                     # n_delta
     )
 
 def _bdpt_light_path_bounce[use_gpu: Bool](
@@ -4070,6 +4085,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
     mut rd: Vec3f,
     mut flux: SpectralSample,
     mut n_verts: Int,
+    mut n_delta: Int,   # delta bounces so far; they count toward maxdepth (see _vcm_depth)
     mut dvcm_carry: Float32,
     mut dvc_carry: Float32,
     mut dvm_carry: Float32,
@@ -4138,7 +4154,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         var next_count = n_verts
         if n_verts == 0 or lvc[unsafe_offset=lp_idx * _BDPT_MAX_VERTS].is_light != Int32(1):
             next_count = n_verts + 1
-        if next_count > _vcm_depth(sd):
+        if next_count + n_delta > _vcm_depth(sd):
             return False
         if inter.hit == Int8(0):
             return False   # nothing hit -- path escapes the scene
@@ -4227,6 +4243,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 # these off the stored vertex) see the right state.
                 v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
                 n_verts += 1
+                v.n_delta = Int32(n_delta)
                 _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
                 comptime if _VCM_CAMIS:
                     # Every stored slot gets a record, out-of-Class ones too:
@@ -4368,8 +4385,11 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             v.wo = vec3f(-ray_dir)  # VCM Stage 2b: needed for _connect's reverse-pdf eval
             v.wavelengths = wavelengths
             v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
+            if v.is_delta != Int32(0):
+                n_delta += 1
             if v.is_delta == Int32(0):
                 n_verts += 1
+                v.n_delta = Int32(n_delta)
                 _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
                 comptime if _VCM_CAMIS:
                     camis_light_arrive(camis_l, camis_recs, n_verts - 1, cos_fix, t_hit,
@@ -4441,6 +4461,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 v.wavelengths = wavelengths
                 v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
                 n_verts += 1
+                v.n_delta = Int32(n_delta)
                 _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
                 comptime if _VCM_CAMIS:
                     camis_light_arrive(camis_l, camis_recs, n_verts - 1, cos_fix_c, t_hit,
@@ -4522,6 +4543,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     v.wavelengths = wavelengths
                     v.dVCM = dvcm_carry; v.dVC = dvc_carry; v.dVM = dvm_carry
                     n_verts += 1
+                    v.n_delta = Int32(n_delta)
                     _bdpt_store_lvc_vertex(v, lvc, lp_idx, n_verts - 1)
                     comptime if _VCM_CAMIS:
                         camis_light_arrive(camis_l, camis_recs, n_verts - 1, Float32(0), t_hit, Float32(0), False)
@@ -4539,6 +4561,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     n_lbounces += 1
                     did_bssrdf_hop = True
             if not did_bssrdf_hop:
+                n_delta += 1
                 # pbrt's outward normal: interpolated N when the mesh has it
                 # (_shading_normal_at), which pbrt also refracts through.
                 var gn = _shading_normal_at(inter, sd.meshes, sd.instances, sd.spheres, hit)
@@ -4670,6 +4693,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
     var rd = st.rd
     var flux = st.flux
     var n_verts = Int(st.n_verts)
+    var n_delta = Int(st.n_delta)
     var dvcm_carry = st.dvcm
     var dvc_carry = st.dvc
     var dvm_carry = st.dvm
@@ -4711,7 +4735,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
         if not _bdpt_light_path_bounce[use_gpu](
             sd, pcg, has_med, scratch[unsafe_offset=0], lvc, lp_idx,
             mis_vc_weight_factor, mis_vm_weight_factor,
-            ro, rd, flux, n_verts, dvcm_carry, dvc_carry, dvm_carry,
+            ro, rd, flux, n_verts, n_delta, dvcm_carry, dvc_carry, dvm_carry,
             prev_was_volume,
             is_finite_origin, origin_sphere, cur_med_idx, n_lbounces,
             current_dielectric_ior, previous_dielectric_ior, wavelengths,
@@ -6020,6 +6044,7 @@ def _bdpt_light_path_bounce_gpu(
     var rd = states[unsafe_offset=k].rd
     var flux = states[unsafe_offset=k].flux
     var n_verts = Int(states[unsafe_offset=k].n_verts)
+    var n_delta = Int(states[unsafe_offset=k].n_delta)
     var dvcm_carry = states[unsafe_offset=k].dvcm
     var dvc_carry = states[unsafe_offset=k].dvc
     var dvm_carry = states[unsafe_offset=k].dvm
@@ -6044,7 +6069,7 @@ def _bdpt_light_path_bounce_gpu(
 
     var cont = _bdpt_light_path_bounce[True](
         sd, pcg, has_med, results[unsafe_offset=k], lvc, k, mis_vc_weight_factor, mis_vm_weight_factor,
-        ro, rd, flux, n_verts, dvcm_carry, dvc_carry, dvm_carry,
+        ro, rd, flux, n_verts, n_delta, dvcm_carry, dvc_carry, dvm_carry,
         _pwv_l,
         is_finite_origin, origin_sphere, cur_med_idx, n_lbounces,
         current_dielectric_ior, previous_dielectric_ior, wavelengths,
@@ -6056,6 +6081,7 @@ def _bdpt_light_path_bounce_gpu(
     states[unsafe_offset=k].rd = rd
     states[unsafe_offset=k].flux = flux
     states[unsafe_offset=k].n_verts = Int32(n_verts)
+    states[unsafe_offset=k].n_delta = Int32(n_delta)
     states[unsafe_offset=k].dvcm = dvcm_carry
     states[unsafe_offset=k].dvc = dvc_carry
     states[unsafe_offset=k].dvm = dvm_carry
@@ -6169,6 +6195,7 @@ def _bdpt_camera_path_bounce_gpu(
     var total_merge = states[unsafe_offset=pix].total_merge
     var first_alb = states[unsafe_offset=pix].first_alb
     var n_verts = Int(states[unsafe_offset=pix].n_verts)
+    var n_delta = Int(states[unsafe_offset=pix].n_delta)
     var n_bounces = Int(states[unsafe_offset=pix].n_bounces)
     var cur_med_idx = states[unsafe_offset=pix].cur_med_idx
     var dvcm_carry = states[unsafe_offset=pix].dvcm
@@ -6210,7 +6237,7 @@ def _bdpt_camera_path_bounce_gpu(
         merge_next, merge_heads, merge_inv_cell, merge_r2, merge_norm,
         mis_vc_weight_factor, mis_vm_weight_factor,
         ro, rd, beta, total, total_merge, visit_naive, visit_footprint, visit_thin,
-        first_alb, n_verts, n_bounces, cur_med_idx,
+        first_alb, n_verts, n_delta, n_bounces, cur_med_idx,
         dvcm_carry, dvc_carry, dvm_carry, prev_was_volume, last_bsdf_pdf, mis_null_dist,
         current_dielectric_ior, previous_dielectric_ior, wavelengths, cone_len,
         camis, camis_recs,
@@ -6224,6 +6251,7 @@ def _bdpt_camera_path_bounce_gpu(
     states[unsafe_offset=pix].total_merge = total_merge
     states[unsafe_offset=pix].first_alb = first_alb
     states[unsafe_offset=pix].n_verts = Int32(n_verts)
+    states[unsafe_offset=pix].n_delta = Int32(n_delta)
     states[unsafe_offset=pix].n_bounces = Int32(n_bounces)
     states[unsafe_offset=pix].cur_med_idx = cur_med_idx
     states[unsafe_offset=pix].dvcm = dvcm_carry

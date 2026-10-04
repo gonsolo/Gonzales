@@ -74,6 +74,21 @@
     "median": 0.087843,
     "tol": 0.03
   },
+  "glass-depth.pt": {
+    "mean": 0.356389,
+    "median": 0.124383,
+    "tol": 0.03
+  },
+  "glass-depth.sppm": {
+    "mean": 0.361065,
+    "median": 0.125775,
+    "tol": 0.03
+  },
+  "glass-depth.vcm": {
+    "mean": 0.357222,
+    "median": 0.125697,
+    "tol": 0.012
+  },
   "many-lights.pt": {
     "mean": 0.672234,
     "median": 0.495367,

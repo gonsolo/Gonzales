@@ -1,0 +1,42 @@
+LookAt 0.5 0.5 -1.4  0.5 0.5 0  0 1 0
+Camera "perspective" "float fov" [38]
+Film "rgb" "integer xresolution" [24] "integer yresolution" [24] "string filename" "vcm-glass-depth.exr"
+Sampler "independent" "integer pixelsamples" [64]
+PixelFilter "box" "float xradius" [0.5] "float yradius" [0.5]
+Integrator "bdpt" "integer maxdepth" [2] "bool regularize" false
+WorldBegin
+AttributeBegin
+Material "diffuse" "rgb reflectance" [0.7 0.7 0.7]
+
+Shape "trianglemesh" "integer indices" [0 1 3 0 3 2] "point3 P" [0 0 0 1 0 0 0 0 1 1 0 1]
+AttributeEnd
+AttributeBegin
+Material "diffuse" "rgb reflectance" [0.7 0.7 0.7]
+
+Shape "trianglemesh" "integer indices" [0 1 3 0 3 2] "point3 P" [0 1 0 1 1 0 0 1 1 1 1 1]
+AttributeEnd
+AttributeBegin
+Material "diffuse" "rgb reflectance" [0.7 0.7 0.7]
+
+Shape "trianglemesh" "integer indices" [0 1 3 0 3 2] "point3 P" [0 0 1 1 0 1 0 1 1 1 1 1]
+AttributeEnd
+AttributeBegin
+Material "diffuse" "rgb reflectance" [0.65 0.1 0.1]
+
+Shape "trianglemesh" "integer indices" [0 1 3 0 3 2] "point3 P" [0 0 0 0 1 0 0 0 1 0 1 1]
+AttributeEnd
+AttributeBegin
+Material "diffuse" "rgb reflectance" [0.12 0.45 0.15]
+
+Shape "trianglemesh" "integer indices" [0 1 3 0 3 2] "point3 P" [1 0 0 1 1 0 1 0 1 1 1 1]
+AttributeEnd
+AttributeBegin
+Material "diffuse" "rgb reflectance" [0 0 0]
+AreaLightSource "diffuse" "rgb L" [15 15 15] "bool twosided" false
+Shape "trianglemesh" "integer indices" [0 1 3 0 3 2] "point3 P" [0.35 0.999 0.35 0.6499999999999999 0.999 0.35 0.35 0.999 0.6499999999999999 0.6499999999999999 0.999 0.6499999999999999]
+AttributeEnd
+AttributeBegin
+Translate 0.5 0.18 0.55
+Material "dielectric" "float eta" [1.5]
+Shape "sphere" "float radius" [0.16]
+AttributeEnd
