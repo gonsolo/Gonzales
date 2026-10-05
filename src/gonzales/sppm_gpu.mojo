@@ -36,11 +36,7 @@ def sppm_render_gpu(
     verbose:  Bool,
 ) -> Int32:
     """GPU-accelerated Stochastic Progressive Photon Mapping — same algorithm
-    as sppm_render, parallelized: one thread per visible-point sample for the
-    camera pass/gather/NEE/finalize, one thread per emitted photon for the
-    photon pass, atomic-exchange hash-grid build (classic parallel linked-list
-    insertion). Mirrors vcm_render_gpu's per-pass reset-counter -> emit ->
-    sync+readback+clamp -> consume shape."""
+    as sppm_render, parallelized: one thread per visible-point sample for the"""
     if Int(sd.areaLightCount) + Int(sd.distantLightCount) + Int(sd.infiniteLightCount) + Int(sd.pointLightCount) == 0 and not (sd.sphereLightCount > 0):
         print("SPPM: no lights in scene, cannot emit photons")
         return Int32(-1)
@@ -64,11 +60,6 @@ def sppm_render_gpu(
 
     # A BSSRDF visible point gathers out to the material's DIFFUSION reach,
     # which for skin is several times the SPPM radius this scene would
-    # otherwise pick. The photon grid's cells are initial_radius-sized and the
-    # gather looks at 3x3x3 of them, so the radius has to cover that reach or
-    # the neighbour search silently misses the photons carrying the subsurface
-    # signal. Widening it costs nothing on this path: R_d is normalised, so
-    # unlike a density estimate the radius does not scale the answer.
     var eff_radius = initial_radius
     for _mi in range(Int(sd.mediumCount)):
         if sd.mediums[unsafe_offset=_mi].is_sss != Int32(0):
@@ -77,8 +68,6 @@ def sppm_render_gpu(
                 eff_radius = _rq
     # init_r2 stays on the SCENE's radius -- widening it would blur every
     # ordinary surface visible point in the scene. Only the grid CELLS grow,
-    # so the 3x3x3 neighbour search can reach the diffusion distance; a larger
-    # cell never changes a surface gather, it only searches more candidates.
     var init_r2 = initial_radius * initial_radius
     var inv_cell = Float32(1.0) / eff_radius
     if verbose:
@@ -93,20 +82,9 @@ def sppm_render_gpu(
             var n_vps = n_pix * _VP_SAMPLES
             # Sized for the worst case, mirroring sppm.mojo's CPU driver
             # (_sppm_render_core) exactly -- see its comment for why
-            # max_photons must scale with the per-photon bounce budget, not
-            # just n_photons_per_pass (one emitted path can store up to
-            # min(maxdepth, _MAX_B) - 1 deposits, not one).
             var max_bounces_per_photon = min(Int(psc[unsafe_offset=0].max_depth), _MAX_B)
             # A subsurface interior blows this budget wide open: its random-walk
             # steps are deliberately NOT charged to maxdepth (see
-            # _sppm_trace_photon's loop header), so one photon entering skin
-            # deposits at every scatter for as long as the walk survives --
-            # hundreds of events, not `maxdepth` of them. Sized for maxdepth
-            # alone, _sppm_store_photon's shared atomic counter saturates almost
-            # immediately (head.pbrt: stored hit exactly n_photons*maxdepth on
-            # every pass) and the estimator still divides by the full emitted
-            # count, leaving the surviving deposits' local density wildly
-            # inflated. Mirrors the same sizing in sppm.mojo's CPU driver.
             var has_sss_medium = False
             for mi in range(Int(sd.mediumCount)):
                 if sd.mediums[unsafe_offset=mi].is_sss != Int32(0):
@@ -114,11 +92,6 @@ def sppm_render_gpu(
                     break
             # (The "--sppm + subsurface is unsupported" warning that stood here
             # was WRONG and has been removed. It rested on one experiment --
-            # 16x photons changing nothing -- which showed the estimate was
-            # BIASED, not undersampled, i.e. a bug rather than a limit. With
-            # subsurface transport evaluated by a surface-side diffusion BSSRDF
-            # (bssrdf.mojo) instead of by photon-mapping the interior, head
-            # renders at 0.86x the reference with no black pixels.)
             if has_sss_medium:
                 max_bounces_per_photon += SSS_WALK_ROUNDS
             var max_photons = n_photons_per_pass * max(max_bounces_per_photon, 1)
@@ -173,8 +146,6 @@ def sppm_render_gpu(
 
             # Camera/visible-point samples are traced ONCE for the whole
             # render, not per SPPM pass — see _sppm_trace_visible_point's
-            # docstring for why a per-pass re-trace breaks SPPM's
-            # convergence guarantee.
             var cam_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(0x9E3779B97F4A7C15 + 7)
             handle[].ctx.enqueue_function[sppm_gen_vp_gpu](
                 vps_ptr,
@@ -223,10 +194,6 @@ def sppm_render_gpu(
                     n_stored_raw = src[unsafe_offset=0]
                 # A silent clamp is how dropped deposits stay invisible: the
                 # estimator still divides by the FULL emitted count, so the
-                # render just comes out patchy and dark with nothing in the
-                # log. Saturation is a real failure mode here (it is what made
-                # head.pbrt read ~33x before the buffer was sized for the
-                # subsurface walk), so say so rather than absorbing it.
                 if Int(n_stored_raw) > max_photons:
                     print("Warning: SPPM photon buffer saturated ("
                           + String(n_stored_raw) + " deposits into "
@@ -285,9 +252,6 @@ def sppm_render_gpu(
             handle[].ctx.synchronize()
             # --- why-is-this-pixel-black diagnostic -------------------------
             # Four hypotheses about SPPM's remaining black pixels were refuted
-            # in a row by guessing at mechanisms (delta bounces eating the VP
-            # budget, the photon-pass equivalent, buffer saturation, glossy VP
-            # placement). This says which term is actually zero instead.
             if verbose:
                 var n_novp = 0; var n_nophot = 0; var n_dark = 0; var n_tot = 0; var n_envonly = 0; var n_bssrdf = 0; var n_bssrdf_lit = 0; var n_bssrdf_nan = 0
                 with vps_buf.map_to_host() as vh:
@@ -314,8 +278,6 @@ def sppm_render_gpu(
                         if not any_valid:
                             # Split the no-VP case: a camera ray that MISSES all
                             # geometry legitimately has no visible point and
-                            # carries the environment in `env`. Only a pixel with
-                            # neither a VP nor any env is genuinely dead.
                             if not any_light: n_novp += 1
                             else: n_envonly += 1
                         elif not any_phot and not any_light: n_dark += 1
@@ -339,13 +301,6 @@ def sppm_render_gpu(
                       + " || BSSRDF VPs: " + String(n_bssrdf) + " of which tau>0: " + String(n_bssrdf_lit) + " NaN: " + String(n_bssrdf_nan))
             # Keep these device buffers alive (Mojo's ASAP destruction would
             # otherwise free them right after their own last syntactic
-            # reference, which is BEFORE this point -- their derived _ptr
-            # pointers, widened to MutUntrackedOrigin for the enqueue_function
-            # calls above, carry no lifetime tracking back to the owning
-            # buffer, so the buffer's own reference is what has to survive
-            # until every kernel that could touch its memory has completed,
-            # i.e. past this synchronize()) -- a real GPU-memory
-            # use-after-free risk if removed, not a style nicety.
             _ = vps_buf^; _ = photons_buf^; _ = heads_buf^
             _ = inter_cam_buf^; _ = inter_ph_buf^; _ = r2c_buf^; _ = c2w_buf^
 
@@ -358,10 +313,6 @@ def sppm_render_gpu(
 
             # Global/caustic split -- see _sppm_finalize_one_pixel's
             # docstring and project_water_caustic_sppm_gap memory. Only
-            # `out_pixels` (the NEE/direct "global" term) goes through
-            # finish_render's denoiser; `caustic_pixels` (the photon-gather
-            # term) is added back afterward, unsmoothed, and the max-
-            # component clamp is applied once to their sum there.
             var caustic_pixels = unsafe_alloc[Float32](n_pix * 3)
             with caustic_buf.map_to_host() as host_buf:
                 var src = host_buf.unsafe_ptr()
@@ -371,9 +322,6 @@ def sppm_render_gpu(
 
             # Denoise (never wired up before -- no_denoise was a dead
             # parameter): read back the albedo AOV finalized above, run a
-            # fresh normals/depth pass via the host-side sd (same
-            # render_aux_buffers the CPU path/plain tracer use), then the
-            # same CPU denoise() the CPU SPPM path uses.
             var albedo_pixels = unsafe_alloc[Float32](n_pix * 3)
             with albedo_out_buf.map_to_host() as host_buf:
                 var src = host_buf.unsafe_ptr()

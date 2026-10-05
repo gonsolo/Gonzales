@@ -51,21 +51,12 @@ def _bdpt_emit_light_paths_gpu(
     pass_idx_dp: Int64,
     # camera_to_world + pixel angular size: the light subpath needs a
     # bump/normal-map footprint and has no differentials of its own, so it
-    # uses the camera-distance approximation (see _bdpt_light_path_bounce).
-    # The matrix, not a precomputed Vec3f, because the device already holds
-    # this exact buffer for the camera kernels and only its translation
-    # column is read here.
     c2w: Pointer[Float32, MutUntrackedOrigin],
     px_scale: Float32,
     sd: SceneView,
 ):
     """One thread per light path, each writing only its own dedicated
-    per-path slice of `lvc` (VCM Stage 2b, see _bdpt_store_lvc_vertex's
-    docstring) -- no atomics/contention. Thin wrapper: build sd, seed this
-    thread's own PCG32, call the SAME _bdpt_trace_light_path vcm_render's
-    CPU driver calls (with [False] on CPU, [True] here). `has_med` isn't a
-    kernel parameter (`Bool` isn't a `DevicePassable` type `enqueue_function`
-    accepts) -- derived here from `mediumCount`, which already is."""
+    per-path slice of `lvc` (VCM Stage 2b, see _bdpt_store_lvc_vertex's"""
     var mediumCount = sd.mediumCount
     var n_light_paths = Int(n_light_paths_dp)
     var pass_idx = Int(pass_idx_dp)
@@ -102,28 +93,7 @@ def _bdpt_splat_light_paths_gpu(
     lvc_camis: Pointer[CamisLightRecord, MutUntrackedOrigin] = Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(),
 ):
     """GPU t=1 light tracing: one thread per light path, splatting each of
-    its vertices onto the film through the same `_bdpt_connect_to_camera`
-    the CPU path uses, so the two backends share the estimator exactly.
-
-    One deliberate difference from vcm_render's CPU Phase 1.5: the film is
-    accumulated with float atomics here. The CPU version avoids them --
-    connections are recorded into a per-slot array in parallel and summed
-    in a serial pass, which keeps its film bitwise deterministic. That does
-    not carry over: a light vertex lands on an ARBITRARY pixel, so unlike
-    every other kernel here (each of which owns its output slot) collisions
-    between threads are the normal case, and resolving them without atomics
-    would need either a host readback of tens of MB per pass or a second
-    scatter kernel that needs atomics anyway.
-
-    The cost is that --gpu --vcm's film is not bitwise reproducible across
-    runs, since float addition is not associative and the atomic order is
-    arbitrary. Use CPU --vcm when bitwise determinism matters, e.g. when
-    A/B-testing an estimator change.
-
-    Launched on the same stream AFTER _bdpt_camera_connect_gpu so that
-    kernel's non-atomic per-pixel `accum[pix*3] += ...` (race-free only
-    because each of its threads owns one pixel) can never overlap these
-    atomic adds."""
+    its vertices onto the film through the same `_bdpt_connect_to_camera`"""
     var spectral_coeffs = sd.spectral.coeffs
     var spectral_res_dp = Int64(sd.spectral.res)
     var spectral_cie_x = sd.spectral.cie_x
@@ -159,11 +129,6 @@ def _bdpt_camera_connect_gpu(
     albedo_accum: Pointer[Float32, MutUntrackedOrigin],
     # Benchmark instrumentation only -- see
     # _bdpt_merge_from_cache's docstring paragraph. Per-pixel
-    # [naive, footprint, thinning] candidate-visit counts, summed over every
-    # bounce and (by the caller, across the whole spp loop) every pass --
-    # same n_pix*3 layout and += accumulation convention as accum_merge.
-    # This kernel has exactly one call site (vcm_render_gpu), which always
-    # allocates and passes a real buffer.
     visit_accum: Pointer[Float32, MutUntrackedOrigin],
     n_pix_dp: Int64,
     fw_dp: Int64,
@@ -188,17 +153,7 @@ def _bdpt_camera_connect_gpu(
     sd: SceneView,
 ):
     """One thread per pixel. Thin wrapper: build sd, seed this thread's own
-    PCG32 (same seed formula vcm_render's CPU driver uses, keyed by pixel
-    index), call the SAME _bdpt_trace_camera_and_connect with [True], then
-    accumulate straight into this pixel's own slot of `accum` — race-free
-    since every thread owns exactly one pixel, the same reasoning the live
-    (non-queued) shadow-ray path in gpu.mojo's shade_*_gpu kernels already
-    relies on. `has_med` isn't a kernel parameter (see
-    _bdpt_emit_light_paths_gpu's docstring) -- derived from mediumCount.
-    merge_* params carry this pass's progressive-radius merge grid (VCM
-    Stage 2c, see the module's opening VCM comment) -- the grid is built
-    once per pass by vcm_render_gpu before this kernel launches, mirroring
-    the LVC's own build-then-consume shape."""
+    PCG32 (same seed formula vcm_render's CPU driver uses, keyed by pixel"""
     var mediumCount = sd.mediumCount
     var spectral_coeffs = sd.spectral.coeffs
     var spectral_cie_x = sd.spectral.cie_x
@@ -251,26 +206,6 @@ def _bdpt_camera_connect_gpu(
 # ── Task #163 stage 4, part 3: wavefront-staged GPU kernels ─────────────────
 # Thin per-bounce wrappers around _bdpt_light_path_init/_bounce and
 # _bdpt_camera_path_init/_bounce (this file, above), the counterpart to
-# _bdpt_emit_light_paths_gpu/_bdpt_camera_connect_gpu's single-mega-kernel
-# design. Each subpath type gets 3 kernels (init once, then intersect+bounce
-# once per depth level, host-loop driven -- see vcm_render_gpu_wavefront's
-# docstring below) plus a final accumulate kernel for the camera side (whose
-# `total`/`first_alb` only get written into accum/albedo_accum once, after
-# the whole subpath is done, unlike the light side which has no equivalent
-# accumulator). `results`/`inter_*_ptr` intentionally double as BOTH this
-# bounce's primary-ray intersection storage AND the scratch buffer
-# `_bdpt_camera_path_bounce`'s internal shadow-ray probes reuse -- same
-# single-scratch-slot-per-thread convention `_bdpt_camera_connect_gpu`
-# already used. The intersect kernels use plain `traverse_bvh2_core`/
-# `test_spheres` (NOT gpu.mojo's curve-deferred `traverse_bvh2_core_defer_
-# curves`/`traverse_paths_gpu` machinery) -- matching exactly what
-# `_bdpt_light_path_bounce`/`_bdpt_camera_path_bounce` themselves expect
-# (a single resolved Intersection, no deferred-curve candidate list) and
-# what the CPU-side split functions' own equivalence tests already verified
-# against. This is a deliberate, first-pass scope match to
-# `_bdpt_emit_light_paths_gpu`'s existing intersect behavior -- swapping
-# this specific step for Vulkan RT (stages 1-3's interop mechanism) is the
-# next piece of work once this staging is itself verified correct.
 
 def _bdpt_light_path_init_gpu(
     states: Pointer[VCMLightPathState, MutUntrackedOrigin],
@@ -284,10 +219,7 @@ def _bdpt_light_path_init_gpu(
     sd: SceneView,
 ):
     """One thread per light path: seed this thread's own PCG32 (same seed
-    formula _bdpt_emit_light_paths_gpu uses), call _bdpt_light_path_init,
-    store the resulting VCMLightPathState. Mirrors
-    _bdpt_emit_light_paths_gpu's docstring for why `has_med` isn't a kernel
-    parameter -- not needed here since init doesn't touch media."""
+    formula _bdpt_emit_light_paths_gpu uses), call _bdpt_light_path_init,"""
     var n_light_paths = Int(n_light_paths_dp)
     var pass_idx = Int(pass_idx_dp)
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -304,10 +236,7 @@ def _bdpt_light_path_intersect_gpu(
     count_dp: Int64,
 ):
     """Batched-per-thread primary/bounce-ray intersect for one light-path
-    depth level -- separated from the material dispatch in
-    _bdpt_light_path_bounce_gpu so this specific step (and only this step)
-    is the eventual Vulkan RT swap point, matching the plain wavefront path
-    tracer's traverse_paths_gpu/shade_*_gpu split."""
+    depth level -- separated from the material dispatch in"""
     var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= count:
@@ -370,12 +299,6 @@ def _bdpt_light_path_bounce_gpu(
     var camis_l = camis_light_carry_off()
     # Placeholder, like camis_l above: the wavefront driver does not persist
     # prev_was_volume across its separate kernel launches (would need a new
-    # VCMLightPathState field), so a volume vertex reached via THIS driver
-    # always takes the surface->volume dVC ratio (1/sigma_t), never the
-    # volume->volume or volume->surface ones. Bounded, not silently wrong:
-    # only the one kind-changing edge (exiting a medium after 2+ real
-    # collisions) is approximated, and only on this driver -- the CPU and
-    # non-wavefront GPU drivers (_bdpt_trace_light_path) get the exact rule.
     var _pwv_l = False
 
     var cont = _bdpt_light_path_bounce[True](
@@ -475,8 +398,6 @@ def _bdpt_camera_path_bounce_gpu(
     sd: SceneView,
     # Task #163 stage 5: see _bdpt_camera_path_bounce's own matching
     # params -- forwarded through unchanged, except Bool -> Int8 (raw kernel
-    # launch args must be DevicePassable; Bool doesn't conform, unlike a
-    # Bool that's merely a regular-function parameter one level down).
     defer_shadow_rays: Int8 = Int8(0),
     shadow_rays: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     shadow_pending: Pointer[SpectralSample, MutUntrackedOrigin] = Pointer[SpectralSample, MutUntrackedOrigin].unsafe_dangling(),
@@ -484,10 +405,7 @@ def _bdpt_camera_path_bounce_gpu(
     shadow_seg_med: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
 ):
     """One bounce's material dispatch (incl. NEE/connect/merge/MNEE, all
-    still on the existing software-BVH `results + pix` scratch slot -- see
-    this section's opening comment) for one camera path, reading the
-    Intersection _bdpt_camera_path_intersect_gpu already computed this
-    depth level."""
+    still on the existing software-BVH `results + pix` scratch slot -- see"""
     var mediumCount = sd.mediumCount
     var n_pix = Int(n_pix_dp)
     var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -520,27 +438,16 @@ def _bdpt_camera_path_bounce_gpu(
     var wavelengths = SampledWavelengths(states[unsafe_offset=pix].wl0, states[unsafe_offset=pix].wl1, states[unsafe_offset=pix].wl2, states[unsafe_offset=pix].wl3)
     # Placeholders: the wavefront driver does not support _VCM_CAMIS (it would
     # need the camera records persisted in VCMCameraPathState across launches;
-    # vcm_render_gpu_wavefront refuses to run with it), so this state is never
-    # carried between bounces. in_class=False (NOT camis_cam_carry_init(),
-    # whose default is True) so that IF this path were ever reached with
-    # _VCM_CAMIS=True despite the runtime refusal, every weight site here
-    # falls back to the exact legacy formula instead of computing CAMIS math
-    # from a single bounce's worth of state.
     var camis = CamisCamCarry(False, Int32(0), Float32(0), Float32(0), Float32(0), Float32(0), Float32(0))
     var camis_recs = Array[CamisCamRecord, _CAMIS_CAM_RECS](
         fill=CamisCamRecord(Float32(0), Float32(0), Float32(0), Float32(0), Float32(0)))
     # Benchmark instrumentation only -- see
     # _bdpt_merge_from_cache's docstring paragraph. The wavefront driver
-    # doesn't persist these across launches (out of scope for the figure,
-    # which only uses vcm_render_gpu's non-wavefront path); discarded here.
     var visit_naive = Int32(0)
     var visit_footprint = Int32(0)
     var visit_thin = Int32(0)
     # Placeholder, same shape as camis above: not persisted across the
     # wavefront driver's separate launches (would need a new
-    # VCMCameraPathState field), so a volume vertex reached via THIS driver
-    # always takes the surface->volume dVC ratio -- bounded, not silently
-    # wrong; see _bdpt_light_path_bounce_gpu's matching comment.
     var prev_was_volume = False
 
     var cont = _bdpt_camera_path_bounce[True](
@@ -590,13 +497,7 @@ def _bdpt_camera_path_accumulate_gpu(
     spectral_d65: Pointer[Float32, MutUntrackedOrigin],
 ):
     """Runs once per `si` sample, after the camera-path bounce loop has
-    fully terminated for every lane -- writes each pixel's now-complete
-    `total`/`total_merge`/`first_alb` (accumulated across every bounce
-    inside the state struct) into the persistent per-pixel accum buffers,
-    exactly once, matching what _bdpt_camera_connect_gpu's own single
-    `accum[...] += contrib...` did at the end of its one-shot whole-subpath
-    trace. `accum`/`accum_merge` split the same way as everywhere else --
-    see VCMCameraPathState.total_merge's docstring."""
+    fully terminated for every lane -- writes each pixel's now-complete"""
     var n_pix = Int(n_pix_dp)
     var pix = Int(block_idx.x * block_dim.x + thread_idx.x)
     if pix >= n_pix:
@@ -623,17 +524,6 @@ def _bdpt_camera_path_accumulate_gpu(
 # ── Task #163 stage 4 part 4: Vulkan RT interop intersect for VCM ───────────
 # Swaps _bdpt_light_path_intersect_gpu/_bdpt_camera_path_intersect_gpu's
 # software-BVH traverse_bvh2_core/test_spheres for the stage-1/2/3 CUDA/
-# Vulkan interop mechanism (see project_vulkan_rt_backend memory) --
-# real GPU-side ray-query tracing through shared CUDA/Vulkan memory, no
-# CPU round trip. Mirrors gpu.mojo's vulkaninterop_pack_rays_kernel/
-# vulkaninterop_rt_traverse_paths_gpu exactly, just reading ro/rd from
-# VCMLightPathState/VCMCameraPathState instead of PathState.ray --
-# vulkaninterop_unpack_results_kernel itself is reused UNCHANGED from
-# gpu.mojo for both (its output is always a plain Intersection, with no
-# dependency on which subpath produced the ray). Scope: triangle geometry
-# only, matching vulkaninterop_rt_create_scene -- callers must only use
-# this for scenes with no curves/spheres/object instancing (same boundary
-# debug_render_vulkanrt/--vulkan-rt-shade already enforce).
 
 def vulkaninterop_pack_light_rays_kernel(
     states: Pointer[VCMLightPathState, MutUntrackedOrigin],
@@ -720,9 +610,6 @@ def vulkaninterop_rt_traverse_light_paths_gpu(
 
     # GPU kernel dispatch has no default-argument fill-in (unlike ordinary
     # Mojo calls) -- must pass instance_base_mesh explicitly. VCM's Vulkan
-    # RT path doesn't support object instancing (its own pipeline.mojo call
-    # site keeps the pre-existing instance_count>0 CUDA-fallback guard), so
-    # this is always the inert dangling default.
     var instance_base_ptr = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
     if instance_base_mesh_buf:
         instance_base_ptr = instance_base_mesh_buf.value().unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
@@ -780,9 +667,6 @@ def vulkaninterop_rt_traverse_camera_paths_gpu(
 
     # GPU kernel dispatch has no default-argument fill-in (unlike ordinary
     # Mojo calls) -- must pass instance_base_mesh explicitly. VCM's Vulkan
-    # RT path doesn't support object instancing (its own pipeline.mojo call
-    # site keeps the pre-existing instance_count>0 CUDA-fallback guard), so
-    # this is always the inert dangling default.
     var instance_base_ptr = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
     if instance_base_mesh_buf:
         instance_base_ptr = instance_base_mesh_buf.value().unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
@@ -800,14 +684,6 @@ def vulkaninterop_rt_traverse_camera_paths_gpu(
 def vulkaninterop_pack_all_shadow_rays_kernel(
     # Perf (2026-07-13, task #163 stage 5 follow-up): packs ALL
     # n_pix*_BDPT_MAX_VERTS shadow-ray slots in ONE dispatch instead of
-    # _BDPT_MAX_VERTS(10) separate n_pix-sized ones -- the interop scene's
-    # ray capacity was resized (pipeline.mojo) specifically to make this
-    # possible, replacing the earlier per-local-slot loop. `shadow_rays`
-    # and `out_rays` share the EXACT SAME idx=pix*_BDPT_MAX_VERTS+local
-    # indexing scheme (both strided _BDPT_MAX_VERTS per pixel), so this is
-    # a straight elementwise copy, not a re-layout. Invalid slots get a
-    # zero-length degenerate ray (tMax=0) so the trace call never reads
-    # uninitialized memory -- resolve skips them via shadow_valid regardless.
     shadow_rays: Pointer[Float32, MutUntrackedOrigin],
     shadow_valid: Pointer[Int8, MutUntrackedOrigin],
     out_rays: Pointer[Float32, MutUntrackedOrigin],
@@ -840,12 +716,6 @@ def vulkaninterop_pack_all_shadow_rays_kernel(
 def vulkaninterop_rt_traverse_shadow_gpu(
     # Perf (2026-07-13): pack -> trace only, no unpack step -- the caller's
     # resolve_shadow_connect_gpu reads interop_results_buf's raw float
-    # layout directly (it only needs hit/material-index, not a full
-    # reconstructed Intersection). ONE dispatch over ALL
-    # n_pix*_BDPT_MAX_VERTS shadow-ray slots (see
-    # vulkaninterop_pack_all_shadow_rays_kernel above) -- requires the
-    # interop scene's ray capacity to have been sized for that (see
-    # pipeline.mojo's max_rays_vk_vcm), not just n_pix.
     ctx: DeviceContext,
     shadow_rays_buf: DeviceBuffer[DType.uint8],
     shadow_valid_buf: DeviceBuffer[DType.uint8],
@@ -928,10 +798,7 @@ def vcm_budget_reduce_gpu(
     red: Pointer[Float32, MutUntrackedOrigin],
 ):
     """One pass's per-cell budget sums, for the next pass's lambda:
-    red[0] += sqrt(V Q n) and red[1] += Q min(n, cap) over every bucket --
-    lambda = red[1] / red[0] spends the fixed cap's merge work on the
-    variance-optimal keep probabilities (_vcm_keep). Each thread sums a
-    contiguous slice, then one atomic add per thread."""
+    red[0] += sqrt(V Q n) and red[1] += Q min(n, cap) over every bucket --"""
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     var chunk = _HSIZE // _VCM_BUDGET_REDUCE_THREADS
     var s = Float32(0)
@@ -951,22 +818,6 @@ def vcm_budget_reduce_gpu(
 def reset_shadow_valid_gpu(
     # Task #163 stage 5: zeroes EVERY pixel's shadow_valid slots, every
     # bounce, unconditionally -- including inactive-path and non-diffuse-
-    # branch pixels that _bdpt_connect_to_cache_deferred never touches this
-    # bounce. Without this, a slot left valid=1 by an earlier diffuse-branch
-    # bounce keeps getting re-resolved and re-summed into states[pix].total
-    # on every subsequent bounce for the rest of the render (once a path
-    # goes inactive, or takes a non-diffuse branch, nothing else would ever
-    # clear it) -- a real overcounting bug caught via a 128spp cornell-box
-    # A/B mean-radiance comparison against the software-BVH baseline (the
-    # gap grew from +11% at 16spp to +62% at 128spp, the signature of a
-    # per-bounce accumulating bug, not RNG-path noise). Gating this reset on
-    # `states[pix].active` (cheaper, one fewer full-n_pix kernel launch)
-    # does NOT work: a pixel that goes inactive DURING bounce i must still
-    # keep bounce i's freshly-deferred contribution summed once, but an
-    # active-gated reset can't tell "just went inactive this bounce" (keep)
-    # apart from "went inactive last bounce" (must now read as all-invalid)
-    # -- both read `active=0` by the time this would run. An unconditional
-    # per-bounce reset sidesteps that distinction entirely.
     shadow_valid: Pointer[Int8, MutUntrackedOrigin],
     n_pix_dp: Int64,
 ):
@@ -983,25 +834,6 @@ def reset_shadow_valid_gpu(
 def resolve_shadow_connect_gpu(
     # Perf (2026-07-13, task #163 stage 5 follow-up): ONE dispatch over
     # ALL n_pix*_BDPT_MAX_VERTS shadow-ray slots (replaces the earlier
-    # _BDPT_MAX_VERTS-separate-dispatches loop) -- `shadow_results` is the
-    # RAW interop trace output for the WHOLE batch, indexed by the same
-    # flat `tid` as `shadow_pending`/`shadow_valid`/`shadow_seg_med`/
-    # `shadow_rays` (all already strided idx=pix*_BDPT_MAX_VERTS+local, so
-    # no re-indexing is needed -- `tid` IS `idx`). Requires the interop
-    # scene's ray capacity to have been sized for n_pix*_BDPT_MAX_VERTS
-    # (see pipeline.mojo's max_rays_vk_vcm), not just n_pix.
-    #
-    # Reads the RAW interop trace output directly (same idx*8 float layout
-    # vulkaninterop_unpack_results_kernel consumes) instead of going
-    # through a separate unpack-into-Intersection kernel first -- this
-    # kernel only ever needs hit/material-index, not the full reconstructed
-    # Intersection (uv/mesh/tri/area-light-index).
-    #
-    # `scratch` is a SEPARATE Intersection buffer, sized for
-    # n_pix*_BDPT_MAX_VERTS (one slot PER THREAD, offset by `tid` below) for
-    # _visible_transmittance's own internal multi-round tracing in the
-    # fallback path -- must not alias `shadow_pending`/`shadow_valid`/
-    # `shadow_seg_med`/`shadow_rays`.
     shadow_results: Pointer[Float32, MutUntrackedOrigin],
     mesh_material_idx: Pointer[Int64, MutUntrackedOrigin],
     n_meshes_vk_dp: Int64,
@@ -1066,11 +898,6 @@ def resolve_shadow_connect_gpu(
     if needs_fallback:
         # Per-thread scratch slot (offset by `tid`) -- matches the
         # established convention elsewhere in this file (e.g.
-        # _bdpt_camera_connect_gpu's `scratch = inter_scratch + pix`).
-        # Passing the bare pointer here would race across threads; harmless
-        # today only because neither of this task's test scenes ever
-        # actually enters this fallback path (no dielectric/medium), but
-        # fixed now while this kernel is being rewritten anyway.
         var dst = org + dir * dist
         var cst = cam_states[unsafe_offset=idx // _BDPT_MAX_VERTS]
         var wl_sp = SampledWavelengths(cst.wl0, cst.wl1, cst.wl2, cst.wl3)

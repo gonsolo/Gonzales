@@ -15,18 +15,6 @@ from .sppm import _geom_normal
 
 # The RGB siblings of these two (_eval_vertex / _eval_conductor_ggx) are gone:
 # BDPT/VCM transport is spectral, so a connection multiplies two spectral
-# betas and there is no RGB product left for an RGB evaluator to feed.
-#
-# These take SpectralHandle's fields DECOMPOSED into individual pointer/int
-# params, NOT a single by-value SpectralHandle param -- passing that 6-field
-# struct by value across a real Mojo function-call boundary was suspected of
-# a miscompilation (modular/modular#6759, later retracted as unreproducible;
-# see spectrum.mojo's comment above rgb_to_spectral_sample), kept decomposed
-# defensively. Hair (mat_kind=2) is NOT covered here (same
-# deliberate exclusion as bxdf.mojo's spectral siblings) -- callers must
-# check v.mat_kind != 2 before using these; _connect below does exactly
-# that by falling back to the plain RGB _eval_vertex/_eval_conductor_ggx for
-# any connection touching a hair vertex.
 @fieldwise_init
 struct BssrdfExitSample(TrivialRegisterPassable):
     """Result of sampling where a subsurface hop leaves the surface."""
@@ -47,20 +35,7 @@ def _bdpt_sample_bssrdf_exit(
     mut pcg: PCG32,
 ) -> BssrdfExitSample:
     """ONE exit-point sampler for both VCM subpaths. The MIS weights assume the
-    camera and light sides draw the hop from the same density (the hop is
-    symmetric, bssrdf.mojo), so this must never be duplicated per side.
-
-    A channel is chosen uniformly and its exponential radius sampled; the pdf
-    is the mixture over channels. The tangent-disk sample is projected onto
-    the surface by a probe ray along the entry normal, whose |n_in . n_o|
-    Jacobian is part of p_A. A missed probe or an exit beyond the profile's
-    reach is a failed sample: the caller terminates the path (it must not fall
-    back to a different strategy, which would bias the estimate).
-
-    `sd` is taken by reference, like every other descriptor parameter here:
-    by value, one call deeper than the light loop's own traversal, the probe
-    traversal faulted with CUDA_ERROR_ILLEGAL_ADDRESS in
-    _bdpt_emit_light_paths_gpu."""
+    camera and light sides draw the hop from the same density (the hop is"""
     var med = sd.mediums[unsafe_offset=med_idx]
     var fail = BssrdfExitSample(False, hit, n_in, RGB(Float32(0)), Float32(0))
     var ft_in = bssrdf_exit_ft(cos_in, eta)

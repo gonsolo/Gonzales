@@ -61,17 +61,7 @@ def sppm_emit_photons_gpu(
     sd: SceneView,
 ):
     """One thread per emitted photon path. Calls the SAME _sppm_trace_photon
-    the CPU driver (_sppm_photon_pass) calls, with use_gpu=True so
-    _sppm_store_photon reserves its slot via an atomic fetch-add (CPU uses a
-    plain counter increment instead — no other difference), and tex_gpu=True
-    since this kernel genuinely runs on the GPU (task #151 -- see
-    _sppm_trace_photon's docstring for why these are separate params). The
-    spectral/measured params are new (measured BxDF support, see
-    project_measured_bxdf memory): _sppm_trace_photon's measured branch
-    calls bxdf_sample_measured, which needs both a valid spectral table
-    (for the RGB conversion) and the measured-BRDF array -- unlike this
-    kernel's other materials, which only draw a wavelength via PCG and
-    never dereference sd.spectral."""
+    the CPU driver (_sppm_photon_pass) calls, with use_gpu=True so"""
     var areaLightCount = sd.areaLightCount
     var sphereCount = sd.sphereCount
     var distantLightCount = sd.distantLightCount
@@ -90,9 +80,6 @@ def sppm_emit_photons_gpu(
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
     # sphereCount is part of the test because an analytic sphere can BE the
     # scene's only light (Sphere.isAreaLight); leaving it out made this
-    # kernel return before emitting a single photon there, so SPPM fell back
-    # to visible-point NEE alone. _sppm_trace_photon does the exact
-    # "is any sphere emitting" scan and returns on its own if none is.
     if k >= n_emit or (areaLightCount == Int64(0) and distantLightCount == Int64(0)
                        and infiniteLightCount == Int64(0) and pointLightCount == Int64(0)
                        and sphereCount == Int64(0)):
@@ -176,13 +163,7 @@ def sppm_nee_gpu(
     sd: SceneView,
 ):
     """One thread per visible point. Calls the SAME _sppm_nee_one the CPU
-    driver (_sppm_nee_update) calls. The only one of SPPM's 4 GPU kernels
-    that needs the spectral device buffers (staged spectral rendering
-    rollout, Stage 4 -- see project_spectral_rendering memory): VP
-    generation and the photon pass sample their own wavelengths via PCG
-    only (no table lookup needed to draw a wavelength), and the gather pass
-    stays RGB by design (see _sppm_gather_one's docstring) -- only this
-    NEE pass's direct-lighting term actually dereferences sd.spectral."""
+    driver (_sppm_nee_update) calls. The only one of SPPM's 4 GPU kernels"""
     var n_vps = Int(n_vps_dp)
     var pass_idx = Int(pass_idx_dp)
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -209,14 +190,7 @@ def sppm_finalize_gpu(
     spectral_d65: Pointer[Float32, MutUntrackedOrigin],
 ):
     """One thread per pixel. Calls the SAME _sppm_finalize_one_pixel the CPU
-    driver (sppm_render's tail loop) calls, plus the matching albedo AOV
-    average for the denoiser (staged along with the rest of Stage 4-adjacent
-    denoiser wiring — see project_spectral_rendering memory). Writes the
-    global/caustic split to two separate buffers -- see
-    _sppm_finalize_one_pixel's docstring and project_water_caustic_sppm_gap
-    memory -- neither carries the max-component clamp yet; the CPU-side
-    finish_render caller applies it once, after denoising global and
-    adding caustic back."""
+    driver (sppm_render's tail loop) calls, plus the matching albedo AOV"""
     var n_pix = Int(n_pix_dp)
     var vp_samples = Int(vp_samples_dp)
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)

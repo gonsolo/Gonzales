@@ -56,22 +56,7 @@ def _vcm_simple_light_policy(
     dvcm: Float32, dvc: Float32, cos_geo: Float32, wavelengths: SampledWavelengths,
 ) -> MisPolicy:
     """VCM's weight for NEE from camera vertex `v` to the i-th distant/point/
-    sphere light (_bdpt_sample_simple_light's order): the balance over every
-    strategy, since each of these lights also starts light paths whose t=1
-    and merges reach the same paths. The power heuristic that used to stand
-    here for point and sphere lights -- and for every one of them at coat and
-    subsurface-exit vertices -- partitions unity with BSDF sampling alone.
-
-    vcm_env_nee_weight wants SmallVCM's emissionPdfW * cosToLight /
-    (directPdfW * cosAtLight) with directPdfW = ls.pdf, so the light-side
-    factors fold into `emission_pdf_w` (p = the light path's pick
-    probability for this light, light_path_pick_pdf; the camera side picks none):
-        distant  p / (pi R^2)            the bounding disk, delta direction
-        point    p / (4 pi d^2)          SmallVCM's directPdfW is d^2; ours
-                                         reports 1 with Li = I / d^2
-        sphere   p / (pi 4 pi r^2)       cos0 p / (pi A) over cos0; ls.pdf is
-                                         the cone's, as the light path's
-                                         first-hit dVCM assumes"""
+    sphere light (_bdpt_sample_simple_light's order): the balance over every"""
     var le = _lobe_eval[want_pdfs=True](v, ls.wi, sd, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, wavelengths)
     var nd = Int(sd.distantLightCount)
     var np_ = Int(sd.pointLightCount)
@@ -96,10 +81,7 @@ def _vcm_nee_surface(
     spawn_eps: Float32, two_sided: Bool, exit_eta: Float32,
 ) -> SpectralSample:
     """NEE from one camera surface vertex to every distant/point/sphere and infinite
-    light, weighted by VCM's balance policy. `ctx` is the lobe, `gn_geo` the geometric
-    normal for the MIS density, and `exit_eta` > 0 multiplies a BSSRDF exit's Fresnel
-    factor. Replaces three near-identical copies, one of which had drifted (the BSSRDF
-    exit's infinite-light loop passed no policy)."""
+    light, weighted by VCM's balance policy. `ctx` is the lobe, `gn_geo` the geometric"""
     var total = SpectralSample(Float32(0))
     var tab = LobeTables(sd.materials, sd.curves, sd.measuredBrdfs)
     for li in range(_bdpt_simple_light_count(sd)):
@@ -156,12 +138,6 @@ def _lobe_eval[want_pdfs: Bool = True](
     if adjoint and v.is_surface == Int32(1) and v.mat_kind != LobeKind.hair:
         # Veach's adjoint shading-normal correction (pbrt-v3 Vertex::f in
         # Importance mode, CorrectShadingNormal): at a light-subpath vertex
-        # the photon ARRIVED with a density in the GEOMETRIC cosine of wo,
-        # and the edge it leaves on is a density in the GEOMETRIC cosine of
-        # wi, while the BSDF value here carries shading cosines. Without it a
-        # bump map made light tracing disagree with NEE and merging: the
-        # grazing-bump reproducer drifted with --vcm-photons as the weights
-        # shifted between them. Flat surfaces (ns == ng) are unaffected.
         var ns = v.shading_normal.to_simd()
         var ng = v.normal.to_simd()
         var wo = v.wo.to_simd()
@@ -197,13 +173,7 @@ def _eval_vertex_spectral(
 def _bdpt_vertex_pdfs(
     v: BDPTVertex, dir_to_other: Vec3f, ref sd: SceneView,
 ) -> Tuple[Float32, Float32]:
-    """Forward/reverse solid-angle densities at `v` toward `dir_to_other`.
-
-    A thin view onto _lobe_eval, which is now the single dispatch over
-    LobeKind. This was one of three hand-maintained copies of that dispatch
-    -- see LobeEval. Wavelengths come off the vertex because the density half
-    never uses them; only the throughput half does, and that is what this
-    call discards."""
+    """Forward/reverse solid-angle densities at `v` toward `dir_to_other`."""
     var le = _lobe_eval[want_pdfs=True](
         v, dir_to_other, sd, sd.spectral.coeffs, sd.spectral.res,
         sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z,
@@ -223,13 +193,7 @@ def _bdpt_vertex_mis_scoped(v: BDPTVertex) -> Bool:
 
 @always_inline
 def _bdpt_connect_pair_weighted(cv: BDPTVertex, lv: BDPTVertex) -> Bool:
-    """True when _connect applies a real per-pair MIS weight to (cv, lv).
-
-    MUST stay identical to the condition guarding _connect's own dVCM/dVC
-    weight block -- the caller uses this to decide which connections may be
-    summed freely (weighted ones) and which must be limited to one per camera
-    vertex (unweighted ones), so a mismatch here silently reintroduces the
-    over-count this predicate exists to prevent."""
+    """True when _connect applies a real per-pair MIS weight to (cv, lv)."""
     return _bdpt_vertex_mis_scoped(cv) and (lv.is_light == Int32(1) or _bdpt_vertex_mis_scoped(lv))
 
 # ── Connect one camera vertex to one light vertex ─────────────────────────────

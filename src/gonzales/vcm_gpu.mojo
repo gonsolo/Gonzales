@@ -46,10 +46,6 @@ def vcm_render_gpu(
     vcm_radius_from_camera: Bool = False,
     # EXPERIMENTAL, only read when vcm_radius_from_camera: percentile of the
     # camera-distance sample (0.5 = median) and a multiplier on top of the
-    # unchanged _VCM_RADIUS_FRACTION (scene_radius is pre-scaled by this
-    # multiplier before vcm_merge_radius applies its own fixed 0.003, so the
-    # EFFECTIVE fraction on the camera-distance basis is 0.003 * multiplier
-    # -- see --vcm-radius-cam-percentile / --vcm-radius-cam-fraction-mult).
     vcm_radius_cam_percentile: Float32 = Float32(0.5),
     vcm_radius_cam_fraction_mult: Float32 = Float32(1.0),
     # Reproduces the "naive VCM" baseline (one fixed global radius, no
@@ -60,15 +56,7 @@ def vcm_render_gpu(
     vcm_radius_scale: Float32 = Float32(1.0),
 ) -> Int32:
     """GPU-accelerated Light Vertex Cache BDPT — same algorithm as
-    vcm_render (CPU), same shared _bdpt_trace_light_path/
-    _bdpt_trace_camera_and_connect functions, parallelized: one thread per
-    light path for the light pass, one thread per pixel for the camera+
-    connect pass. Mirrors sppm.mojo's sppm_render_gpu per-pass
-    reset-counter -> emit -> sync+readback+clamp -> consume shape.
-    `n_photons_req` (task #152) is the merge side's requested light-path
-    budget, decoupled from n_pix -- see _bdpt_render_core's (CPU)
-    docstring for the full derivation; this function mirrors that same
-    n_light_paths_merge = max(n_photons_req, n_pix) split."""
+    vcm_render (CPU), same shared _bdpt_trace_light_path/"""
     var fw = Int(psc[unsafe_offset=0].film_w)
     var fh = Int(psc[unsafe_offset=0].film_h)
     var n_pix = fw * fh
@@ -140,9 +128,6 @@ def vcm_render_gpu(
                     dst[unsafe_offset=i] = Float32(0)
             # Benchmark instrumentation only -- see
             # _bdpt_merge_from_cache's docstring paragraph. Per-pixel
-            # [naive, footprint, thinning] candidate-visit counts, summed
-            # across the whole spp loop below, same shape/zero-init as
-            # accum_merge_buf.
             var visit_accum_buf = handle[].ctx.enqueue_create_buffer[DType.uint8](n_pix * 3 * size_of[Float32]())
             with visit_accum_buf.map_to_host() as host_buf:
                 var dst = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
@@ -164,8 +149,6 @@ def vcm_render_gpu(
 
             # t=1 light tracing needs the same two camera-projection
             # matrices vcm_render builds on the CPU (see its matching
-            # comment): w2c = inverse(cameraToWorld), and c2r inverting the
-            # 3x3 that turns (filmX, filmY, 1) into a camera-space direction.
             var w2c_host = unsafe_alloc[Float32](16)
             _ = matrix_invert(psc[unsafe_offset=0].camera_to_world, w2c_host)
             var _r2c_h = psc[unsafe_offset=0].raster_to_camera
@@ -265,8 +248,6 @@ def vcm_render_gpu(
                 var vcm_keep_scale = Float32(1)
                 # --vcm-no-keep-mis: the insert still thins and the gather still
                 # weights 1/k, but merging's MIS is shown no keep table, so it
-                # weighs a thinned cell as if every photon were there -- the
-                # "thinning without the keep-aware MIS" variant, for comparison.
                 if si > 0 and not vcm_no_keep_mis:
                     var radius_prev = vcm_merge_radius(scene_radius, si - 1)
                     var prev_tab = merge_heads_ptr_b if si % 2 == 0 else merge_heads_ptr_a
@@ -315,10 +296,6 @@ def vcm_render_gpu(
 
                 # VCM Stage 2b: light paths are deterministically paired with
                 # pixels (the first n_pix of n_light_paths_merge total light
-                # paths, task #152), so no host readback of a total vertex
-                # count is needed anymore -- lvc_cap is already known at
-                # compile/host time. Kernels stay ordered on one stream
-                # without an explicit synchronize() here.
                 handle[].ctx.enqueue_function[bdpt_merge_grid_reset_gpu](
                     merge_heads_ptr, Int64(_HSIZE), grid_dim=grid_hsize, block_dim=block_size)
                 handle[].ctx.enqueue_function[bdpt_merge_grid_count_gpu](
@@ -362,9 +339,6 @@ def vcm_render_gpu(
 
                 # Phase 1.5: t=1 light tracing, the GPU counterpart of
                 # vcm_render's splat pass. Same stream, launched AFTER the
-                # camera connect -- see the kernel's docstring for why the
-                # ordering matters and why this one uses atomics where the
-                # CPU path deliberately does not.
                 handle[].ctx.enqueue_function[_bdpt_splat_light_paths_gpu](
                     accum_ptr,
                     lvc_ptr,
@@ -412,10 +386,6 @@ def vcm_render_gpu(
 
             # Benchmark instrumentation only -- see
             # _bdpt_merge_from_cache's docstring paragraph. Written
-            # unconditionally (like depth/normal/albedo's own sidecars,
-            # outputs.mojo's header comment) since it's cheap and read by
-            # nothing else -- a sidecar next to the film, not a new channel
-            # on it, so it never touches finish_render/write_render_outputs.
             var visit_sidecar = _sidecar_name(psc[unsafe_offset=0].film_filename, ".mergevisits.exr")
             with visit_accum_buf.map_to_host() as vhost:
                 var vsrc = vhost.unsafe_ptr().unsafe_bitcast[Float32]()
@@ -424,9 +394,6 @@ def vcm_render_gpu(
             visit_sidecar.unsafe_free()
             # `pixels` (connect + t=1 splats) and `caustic_pixels` (vertex
             # merging) split, same reason/contract as _bdpt_render_core's
-            # CPU tail -- see _vcm_finalize_one_pixel's docstring. No clamp
-            # here; finish_render applies it once, to their sum, after
-            # `pixels` is denoised.
             var pixels = unsafe_alloc[Float32](n_pix * 3)
             var caustic_pixels = unsafe_alloc[Float32](n_pix * 3)
             with accum_buf.map_to_host() as host_buf:
@@ -443,10 +410,6 @@ def vcm_render_gpu(
 
             # Denoise (never wired up before -- no_denoise was a dead
             # parameter): read back the albedo AOV accumulated above, run
-            # a fresh normals/depth pass via the host-side sd (same
-            # render_aux_buffers the CPU path/plain tracer use -- host-only,
-            # so it runs on the CPU here too, not as a GPU kernel), then the
-            # same CPU denoise() the CPU BDPT path uses.
             var albedo_pixels = unsafe_alloc[Float32](n_pix * 3)
             with albedo_accum_buf.map_to_host() as host_buf:
                 var src = host_buf.unsafe_ptr().unsafe_bitcast[Float32]()
@@ -467,16 +430,3 @@ def vcm_render_gpu(
 # ── Task #163 stage 5: Vulkan-RT-batched shadow ray resolution ──────────────
 # Resolves the diffuse-branch connect shadow rays queued by
 # _bdpt_connect_to_cache_deferred: after a batched Vulkan RT dispatch fills
-# shadow_inter (the SAME vulkaninterop_unpack_results_kernel used for
-# primary/light/camera rays, reused unchanged), this kernel turns each hit/
-# miss into a resolved Tr multiplied into shadow_pending. FAST PATH (no
-# medium, and either a miss or a hit on an opaque material): resolved
-# directly from the single closest-hit query, no further ray casts needed.
-# FALLBACK PATH (a medium is active on this segment, or the hit is on a
-# dielectric/thin_dielectric/interface material -- i.e. exactly the cases
-# _visible_transmittance's own multi-round loop exists for): calls
-# _visible_transmittance UNCHANGED, per-thread, software-BVH -- 100%
-# correct for every scene, just not batched for these rarer rays. Neither
-# of this task's two test scenes (cornell-box, dragon) has any dielectric
-# material or medium, so the fallback path is written for correctness but
-# not exercised by them -- see project_vulkan_rt_backend memory.

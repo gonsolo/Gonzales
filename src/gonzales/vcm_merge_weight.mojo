@@ -16,14 +16,7 @@ def _camis_gather_light[N: Int](
     base: Int, lam: Int,
 ) -> Tuple[Array[CamisLightRecord, N], Array[Float32, N], Int, Float32]:
     """The light-side records a CAMIS evaluation at light-path-local index
-    `lam` needs, walked from the stored LVC slice starting at `base`:
-    scat[i]/log_pa_fwd[i] for i = 0..lam-2 (stored vertices lam' = 1..lam-1),
-    plus the origin's log P(z_0) (S1's ONE CONVENTION note: stored in the
-    ORIGIN's own record, local index 0 -- the same slot as the light-source
-    lvc vertex itself, since the origin is stored as `is_light=1` vertex 0
-    of every area-lit path, see _bdpt_trace_light_path's CAMIS comment).
-    `log_pa_fwd[i]` is not a stored field (S0 finding 3): it is
-    -log(lvc[].dVCM), the arrival density already on the ordinary vertex."""
+    `lam` needs, walked from the stored LVC slice starting at `base`:"""
     var scat = Array[CamisLightRecord, N](fill=CamisLightRecord(
         Float32(0), Float32(0), Float32(0), Float32(0), Float32(0), Int32(0), Int32(0)))
     var log_pa_fwd = Array[Float32, N](fill=Float32(0))
@@ -50,28 +43,12 @@ def _bdpt_merge_mis_weight(
     n_light_paths_f: Float32,
 ) -> Float32:
     """Balance-heuristic merge weight (Georgiev et al. 2012 / SmallVCM's
-    RangeQuery::Process), factored out of _bdpt_merge_from_cache's hot loop
-    so a correlation-aware correction (CAMIS, plan deep-hugging-locket stage
-    S3) has one call site to extend instead of an inline block. Returns 1
-    (an unweighted merge, matching the prior inline behavior) if either
-    vertex is not MIS-scoped -- see _bdpt_merge_from_cache's own docstring
-    for why that must fall back to 1, not 0.
-
-    `_VCM_CAMIS`: when both subpaths are in CAMIS's Class at this vertex
-    (camis.in_class and the stored photon's own flags bit), returns
-    camis_eval_merge's exact correlation-aware weight instead -- gathering
-    the photon's light-side records from `lvc_camis`/`lvc` via
-    `_camis_gather_light`. Every other path (either side out of Class, or
-    the hybrid compiled out) falls through unchanged to the legacy balance
-    heuristic below."""
+    RangeQuery::Process), factored out of _bdpt_merge_from_cache's hot loop"""
     if not (_bdpt_vertex_mis_scoped(cv) and _bdpt_vertex_mis_scoped(lv)):
         return Float32(1)
     var (camera_bsdf_dir_pdf_w, camera_bsdf_rev_pdf_w) = _bdpt_vertex_pdfs(cv, lv.wo.to_simd(), sd)
     # dVM is dVC / eta at the merge vertex. With one global eta that held by
     # construction (the carried dVM); with the variance-aware eta(x) it has
-    # to be formed here, at the camera vertex that defines the merged path.
-    # Kind-aware: a BALL eta at a volume merge vertex, a DISK eta at a
-    # surface one (Scenes/vcm_volume_mis_derivation.py, kernel_measure).
     var inv_eta_x = _vcm_inv_eta_at(sd, cv, mis_vc_weight_factor)
     comptime if _VCM_CAMIS:
         var light_arr = lvc_camis[unsafe_offset=k]

@@ -29,20 +29,7 @@ def _visible_transmittance(
     wl:      SampledWavelengths,
 ) -> SpectralSample:
     """Returns transmittance along segment AB, spectrally, or black if
-    occluded. Glass (dielectric) surfaces are passed through with Fresnel
-    transmittance. `scratch` is one caller-owned Intersection slot (no
-    internal alloc/free) so this is safe to call from a GPU kernel thread —
-    every existing GPU kernel in this codebase takes pre-allocated,
-    thread-indexed scratch instead of allocating per-thread (see
-    sppm_gen_vp_gpu's inter_scratch).
-
-    Each medium segment's sigma_t is upsampled to the 4 hero lanes FIRST
-    (medium_sigma_t_spectral), then exponentiated PER LANE -- the same
-    ordering fix as spectral_free_flight_weight, applied here to a plain
-    deterministic Beer-Lambert evaluation rather than an importance-sampled
-    ratio (no red-channel proposal to correct against; this just IS
-    exp(-sigma_t(lambda)*d) at each segment, multiplied across segments,
-    which is exact: exp(a)*exp(b) = exp(a+b))."""
+    occluded. Glass (dielectric) surfaces are passed through with Fresnel"""
     var d = b - a
     var dist_total = d.length()
     if dist_total < Float32(1e-5):
@@ -70,23 +57,12 @@ def _visible_transmittance(
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         # test_spheres (analytic spheres, e.g. the caustic sphere) aren't part of
         # the BVH — traverse_bvh2_core only tests triangles/curves — so they need
-        # a separate pass. Seed a sentinel tHit=remaining*0.9995 when the BVH found
-        # nothing, so test_spheres's own internal tMax (it only bounds itself by
-        # result[0].tHit when result[0].hit is already set) respects the shadow
-        # ray's segment length instead of defaulting to unbounded (1e38).
         var had_bvh_hit = inter_mem[unsafe_offset=0].hit != Int8(0)
         if not had_bvh_hit:
             inter_mem[unsafe_offset=0].hit = Int8(1)
             inter_mem[unsafe_offset=0].tHit = remaining * Float32(0.9995)
             # Clear the primId along with the sentinel. `scratch` is a
             # caller-owned slot reused across bounces, samples and (on GPU)
-            # threads, so on a BVH miss the primId still holds STALE data
-            # from a previous traversal -- and test_spheres writes none when
-            # sphereCount == 0. The `primId.type != 4` test just below then
-            # reads that stale type, and a leftover 4 makes a pure miss
-            # masquerade as a sphere hit, falling through to
-            # sd.spheres[stale id1] and sd.materials[stale materialIndex]:
-            # an out-of-bounds read on any scene with no spheres.
             inter_mem[unsafe_offset=0].primId.type = Int8(0)
         test_spheres(sd.spheres, Int(sd.sphereCount), ray, inter_mem)
         if not had_bvh_hit and inter_mem[unsafe_offset=0].primId.type != Int8(4):
@@ -115,32 +91,6 @@ def _visible_transmittance(
                 mat.type == MatKind.dielectric and mat.sss_boundary != Int8(0)):
             # ... and a SUBSURFACE boundary, which is a dielectric too but
             # whose transport the BSSRDF models separately -- blocking it
-            # costs sss-slab.vcm 48% of its energy (a pinned smoke cell),
-            # so the straight-line crossing is load-bearing there.
-            # A THIN dielectric only. Straight-line pass-through is valid
-            # here because a thin slab's entry and exit refractions cancel --
-            # the ray leaves parallel to how it arrived, so the shadow ray's
-            # geometry is right and only the Fresnel attenuation is needed.
-            #
-            # A THICK dielectric used to pass through here too, and that was
-            # wrong: light REFRACTS at a thick refractor, so a straight shot
-            # through it is not a physical path at all. NEE was therefore
-            # manufacturing transport that no sampling strategy can generate,
-            # and MIS cannot cancel what it never sees. Measured on
-            # barcelona-pavilion-day, whose pool is a water plane over a
-            # coateddiffuse bottom: the bottom third of the frame read 2.243x
-            # a pbrt BDPT reference with this pass-through and 1.461x without
-            # -- by far the largest single error in that scene, and confined
-            # to exactly the region where a shadow ray must cross the water.
-            # The path tracer never had this bug: its shadow ray is a binary
-            # any_hit test, so the water blocks it outright, which is
-            # accidentally correct for a thick refractor. pbrt blocks it too.
-            #
-            # What legitimately DOES get through a thick refractor is the
-            # bent path, and finding that is MNEE's job
-            # (_bdpt_mnee_diffuse_area_light, which fires precisely for the
-            # glass-obscured case) -- not this straight line.
-            # Pass through glass with Fresnel transmittance
             var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             var facing = dot(dir, gn) < Float32(0)
             var n_for_cos = gn if facing else gn*Float32(-1)
@@ -166,14 +116,6 @@ def _visible_transmittance(
                 var iface = sd.mediumInterfaces[unsafe_offset=Int(mat.medium_interface_idx)]
                 # An ANALYTIC SPHERE boundary has no mesh to read a normal
                 # from -- _geom_normal would index sd.meshes with a sphere's
-                # primId fields and return garbage, making the inside/outside
-                # test below a coin flip. The dielectric branch above already
-                # special-cases this; the interface branch did not, so roughly
-                # half the shadow rays leaving a sphere-bounded medium kept
-                # cur_med set to the medium and were then Beer-Lambert'd across
-                # the vacuum outside it -- annihilating them. That halved every
-                # volume NEE contribution at every scatter order (measured
-                # 0.500x vs the path tracer on a sphere-bounded fog).
                 var igna = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
                 var md = dir[0]*igna[0]+dir[1]*igna[1]+dir[2]*igna[2]
                 cur_med = iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
@@ -189,14 +131,7 @@ def _visible_transmittance(
 @always_inline
 def _bdpt_simple_light_count(ref sd: SceneView) -> Int:
     """Number of lights reachable through _bdpt_sample_simple_light: distant +
-    point + sphere, the three every BDPT material-loop samples the SAME way.
-    Area and infinite are NOT covered -- area gets its own MNEE-capable
-    sampling (_bdpt_mnee_diffuse_area_light/_bdpt_mnee_sphere_light) and
-    infinite draws its own 2 pcg floats via _sample_infinite_light_nee, so
-    both stay written out at their call sites. Mirrors shading.mojo's
-    _nee_simple_light_count, but there is no shared struct between the two
-    files' light contexts (ShadeContext vs SceneView) to unify them
-    on, hence the parallel definition rather than a genuinely shared one."""
+    point + sphere, the three every BDPT material-loop samples the SAME way."""
     return Int(sd.distantLightCount) + Int(sd.pointLightCount) + Int(sd.sphereCount)
 
 
@@ -205,20 +140,7 @@ def _bdpt_sample_simple_light(
     ref sd: SceneView, i: Int, hit_point: Vec3f, mut pcg: PCG32,
 ) -> LightSample:
     """The i-th distant/point/sphere light. Unlike shading.mojo's twin
-    (_nee_sample_simple_light), this returns ONLY the LightSample -- BDPT's
-    own occlusion primitive (_bdpt_nee_contribute, immediately below) tests
-    the segment out to the exact `ls.dist` via _visible_transmittance, which
-    is media-aware and needs no per-light-type tmax shrink the way
-    shading.mojo's boolean any-hit test does. There is therefore no
-    sampler/tmax PAIRING to get wrong here the way bba82627 did -- one fewer
-    thing this duplication could silently break, not zero, since every call
-    site still had to agree on the SAMPLER itself and its argument order.
-
-    ORDER IS LOAD-BEARING: distant, then point, then sphere -- matching every
-    existing call site in this file already. Of the three only SPHERE draws
-    from `pcg`, so this is a pure loop collapse everywhere it's used, not a
-    reordering; see this file's individual conversions for confirmation each
-    call site's ORIGINAL order already matched this one exactly."""
+    (_nee_sample_simple_light), this returns ONLY the LightSample -- BDPT's"""
     var nd = Int(sd.distantLightCount)
     var np_ = Int(sd.pointLightCount)
     if i < nd:
@@ -247,25 +169,11 @@ def _bdpt_nee_contribute(
     two_sided: Bool = False,
 ) -> SpectralSample:
     """BDPT-side NEE glue shared by every per-material light loop below:
-    given a LightSample + material weight (from the shared Light interface
-    — bvh.mojo's LightSample samplers — and BxDF interface —
-    bxdf.mojo's _nee_weight_simple/_nee_weight_hair), test transmittance
-    (BDPT's own occlusion primitive, media-aware — unlike shading.mojo/
-    sppm.mojo's boolean any-hit test, so this stays a BDPT-local helper
-    rather than a fully cross-integrator one) and return the beta-weighted
-    contribution, or black if invalid/occluded. `eps` defaults to the fixed
-    offset used for triangle/sphere hits; hair call sites pass
-    curve_offset_eps(hc.radius) instead (see bvh.mojo)."""
+    given a LightSample + material weight (from the shared Light interface"""
     if w.is_black():
         return SpectralSample(Float32(0))
     # `gn` is the GEOMETRIC normal (pbrt's OffsetRayOrigin), never the shading
     # one: that is turned toward wo (face_toward) and can point into the
-    # surface, which would start the shadow ray underneath it.
-    # For a TWO-SIDED lobe the offset must follow the light direction:
-    # +gn for a direction on the -gn side starts the ray inside the surface
-    # it just left. Opt-in, NOT automatic -- MNEE connects THROUGH GLASS, so
-    # a one-sided lobe CAN arrive here with cos < 0 and a non-black weight,
-    # and flipping the offset there would push its ray to the wrong side.
     var side_eps = eps
     if two_sided and dot(gn, Vec3f(ls.wi[0], ls.wi[1], ls.wi[2])) < Float32(0):
         side_eps = -eps
@@ -284,40 +192,7 @@ def _bdpt_mnee_diffuse_area_light(
     ior: Float32 = Float32(1.0),
 ) -> SpectralSample:
     """Real MNEE (manifold next-event estimation, task #161): for a diffuse
-    (or coateddiffuse base-layer, see `ior` below) camera vertex, probe
-    whether a straight line toward a randomly-picked area light first hits
-    dielectric glass, and if so solve for the true refracted connection via
-    Newton iteration -- reusing shading.mojo's _mnee_walk/_mnee_walk2, the
-    exact technique the plain path tracer's own _nee_area_lights already
-    uses. This is WHY the plain path tracer correctly lights
-    barcelona-pavilion (night) while bdpt_*.mojo's VCM connect/merge cannot:
-    dielectric bounces are never stored as LVC vertices (see
-    project_vcm_stage2_mis_derivation memory), so a light behind glass is
-    structurally invisible to connect/merge, and its tiny solid angle
-    makes unassisted BSDF-sampling hit it by pure luck only.
-
-    Deliberately scoped to ONLY the glass-detected case. An earlier attempt
-    added plain straight-line NEE for ALL area lights (not just
-    glass-obscured ones) and was reverted: it double-counted with the
-    EXISTING connect/merge estimator on ordinary, unobstructed lights
-    (confirmed via git-stash A/B on cornell-box, ~38% over pbrt's
-    reference). MNEE only ever fires for paths connect/merge structurally
-    cannot represent anyway (a delta dielectric bounce in the middle of the
-    connecting path), so there is no matching double-count risk here --
-    when the probe does NOT hit glass first, this returns black and
-    connect/merge (already correct for that ordinary case) are untouched.
-
-    `ior` (2026-07-13 follow-up): the caller's coat IOR, applied as a
-    `(1 - Fresnel(cos_s_x0, ior))` transmittance factor on the returned
-    weight, matching _nee_weight_coated_diffuse_base's own formula shape
-    for ordinary (non-MNEE) coateddiffuse NEE. Defaults to 1.0 for plain
-    diffuse callers -- fr_dielectric(_, 1.0) is exactly 0 (no index
-    mismatch means no reflection), so `1 - 0 = 1` recovers the original
-    unweighted diffuse behavior exactly, not an approximation. Still
-    diffuse-family only -- no material in this codebase does MNEE for
-    conductor/hair/measured today. Curve-shaped area lights are skipped
-    (no well-defined surface tangents for a swept tube), same as
-    shading.mojo."""
+    (or coateddiffuse base-layer, see `ior` below) camera vertex, probe"""
     var n_area = Int(sd.areaLightCount)
     if n_area <= 0:
         return SpectralSample(Float32(0))
@@ -521,84 +396,7 @@ def _bdpt_mnee_sphere_light(
     wl: SampledWavelengths, ior: Float32 = Float32(1.0),
 ) -> SpectralSample:
     """Real MNEE (task #161 follow-up, 2026-07-13) against an ANALYTIC
-    SPHERE area light behind glass -- sibling to
-    _bdpt_mnee_diffuse_area_light (mesh/triangle lights), which live in a
-    completely separate list (sd.spheres, not sd.areaLights). Deliberate
-    FULL, SELF-CONTAINED DUPLICATE of that function's probe+Newton-walk
-    body (not a shared helper) -- see this section's own investigation
-    notes below for why.
-
-    _sample_sphere_light_nee's existing solid-angle/cone sampling (used
-    for ORDINARY sphere NEE elsewhere in this file) can't be reused here
-    -- it only returns a sampled DIRECTION and a solid-angle pdf w.r.t.
-    the shading point, no actual surface point or light-side
-    parameterization to take Newton-walk derivatives against. Instead,
-    samples a UNIFORM point on the sphere's surface via the standard
-    spherical parameterization p(θ,φ) = center + r·(sinθcosφ, sinθsinφ,
-    cosθ), using that SAME parameterization's own analytic partial
-    derivatives ∂p/∂φ, ∂p/∂θ as the light-side tangent vectors (matches
-    pbrt's own dpdu/dpdv convention for spheres).
-
-    `sph_idx` (an index into sd.spheres, read locally via
-    `sd.spheres[sph_idx]`) + `n_spheres` (the TOTAL sphere count, matching
-    `_sample_sphere_light_nee`'s own `1/n_sph` pdf convention) -- caller
-    iterates every sphere (see call-site comment for why NOT via a `for`
-    loop). `ior`: accepted for signature symmetry with
-    _bdpt_mnee_diffuse_area_light but NOT applied in the return value --
-    see the GPU-codegen-bug note below for why.
-
-    RESOLVED GPU BUG (2026-07-13, real Mojo/GPU-codegen bug, not sphere-
-    specific -- root-caused via systematic bisection, not application
-    logic): every earlier implementation of this feature crashed with a
-    reproducible CUDA_ERROR_ILLEGAL_ADDRESS on barcelona-pavilion-night
-    (this task's actual target scene). Made fully deterministic by
-    temporarily hardcoding pbrt_parser.mojo's RNG seed (normally
-    perf_counter_ns()) -- this turned a seemingly-nondeterministic crash
-    (varied run to run because a wall-clock seed explores different pixel/
-    sample paths each time) into 100%-reproducible pass/fail, which is
-    what made real bisection possible. Systematic cutoff-return bisection
-    through this function's body (return RGB(0) at successively later
-    points, rebuild+rerun at each cutoff) narrowed the crash to an exact
-    line: folding a SECOND `fr_dielectric(...)` call's result (`coat_t =
-    1 - fr_dielectric(cos_s_x0, ior)`) into the final returned RGB
-    expression, alongside `sph.emission`/`bxdf_eval_diffuse(...)`/the G
-    and pdf terms. Calling `fr_dielectric` and discarding the result was
-    SAFE; using `sph.emission` and `bxdf_eval_diffuse(...)` together in
-    the final expression was SAFE; splitting the multiply across two
-    statements (`var contrib = ...; return contrib * coat_t`) did NOT
-    help -- still crashed identically, ruling out "too many chained
-    multiplies in one expression" as the mechanism. This is consistent
-    with the general shape of the anomaly logged in
-    `reference_mojo_compiler_bug_6759.md` (heavy, `Array`-using,
-    multiple early returns, BVH traversal, under this scene's specific
-    complexity) -- though that report was later retracted by its own
-    author as unreproducible, so this crash stands on its own bisection
-    below, not on 6759 as corroboration. Not a NaN/degenerate-value bug
-    in this code (cos_s_x0/ior were always finite, well-conditioned
-    values at the crash site).
-    WORKAROUND (applied here): don't compute/apply `coat_t` at all. Every
-    CURRENT call site passes the default `ior=1.0`, for which
-    `fr_dielectric(_, 1.0) == 0` exactly (an identity already relied on
-    by _bdpt_mnee_diffuse_area_light's own `ior=1.0` default case), so
-    `coat_t` would always equal exactly `1.0` anyway -- omitting it is a
-    zero behavior change today, not an approximation. If sphere-light
-    MNEE for coateddiffuse (ior != 1.0) is ever revisited, `coat_t` will
-    need a DIFFERENT strategy that avoids this exact pattern (e.g.
-    precomputing it in the caller and passing it in as a parameter,
-    rather than computing+applying `fr_dielectric` inside this function).
-    See project_barcelona_pavilion_mnee memory for the full investigation,
-    including two earlier, unrelated red herrings (a `for`-loop-wrapping
-    hypothesis and a shared-function-split hypothesis, both ruled out by
-    this same bisection).
-    WORKAROUND (unrelated, applied at every call site): call this
-    function via manually UNROLLED `if`-guarded statements, never a `for`
-    loop, capped at a small constant (comptime _MNEE_MAX_SPHERES) --
-    scenes with more emissive spheres than the cap silently skip the
-    extras for MNEE only (ordinary light-hit/connect/merge/NEE still
-    reaches them normally, this only affects the glass-behind-sphere-
-    light special case). Kept even though the loop-wrapping hypothesis
-    turned out not to be the real bug, since unrolling is harmless and
-    was already in place before the real cause was found."""
+    SPHERE area light behind glass -- sibling to"""
     var sph = sd.spheres[unsafe_offset=sph_idx]
     if sph.isAreaLight == Int8(0):
         return SpectralSample(Float32(0))
@@ -727,14 +525,6 @@ def _bdpt_mnee_sphere_light(
                 return SpectralSample(Float32(0))
             # coat_t (coateddiffuse coat-transmittance, mirrors
             # _bdpt_mnee_diffuse_area_light's `ior` handling) is DELIBERATELY
-            # not applied here -- see this function's own docstring, "GPU
-            # codegen bug" section, for why folding a 2nd fr_dielectric(...)
-            # result into this return crashes with CUDA_ERROR_ILLEGAL_ADDRESS
-            # on this task's target scene. Every current call site passes
-            # the default ior=1.0 (coateddiffuse sphere-light call sites are
-            # disabled, see _MNEE_MAX_SPHERES call-site comments), for which
-            # fr_dielectric(_, 1.0) == 0 exactly, so coat_t == 1.0 exactly --
-            # applying it would be a mathematical no-op anyway.
             var f_r = bxdf_eval_diffuse(eff_alb)
             return (beta
                 * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, f_r.r, f_r.g, f_r.b, wl)
@@ -798,8 +588,6 @@ def _bdpt_mnee_sphere_light(
             return SpectralSample(Float32(0))
         # coat_t deliberately not applied -- see the 2-vertex branch's
         # identical comment above (this function's docstring has the full
-        # GPU-codegen-bug writeup). ior=1.0 at every current call site makes
-        # this an exact no-op, not an approximation.
         var f_r = bxdf_eval_diffuse(eff_alb)
         return (beta
             * spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, f_r.r, f_r.g, f_r.b, wl)
