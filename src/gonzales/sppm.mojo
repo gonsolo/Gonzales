@@ -30,7 +30,7 @@ from .bvh import (
     render_aux_buffers,
 )
 from .vcm_mis import mis_policy_sole
-from .layered import layered_sample
+from .layered import layered_sample, tr_effectively_smooth
 from .bxdf import dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, LobeCtx, lobe_eval, lobe_sample, lobe_scoped, LobeTables, lobe_kind_of, lobe_param_of, lobe_is_delta_of, lobe_is_available_of, nee_weight_lobe
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured
 from .shading import _tex_lookup, _get_tri_verts, _apply_surface_maps, \
@@ -940,6 +940,16 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # delta: it scatters but stores no visible point, exactly like
             # bdpt.mojo's own lobe_is_delta_of gate.
             if not lobe_is_delta_of(mat):
+                if mat.type == MatKind.coated_diffuse and tr_effectively_smooth(max(mat.roughU, mat.roughV)):
+                    # The smooth coat's mirror lobe is a delta the gather cannot see: take it with
+                    # probability F and keep tracing, else the VP carries 1/(1-F).
+                    var wo_s = (-rd).to_simd()
+                    var f_coat = fr_dielectric(dot(gn, wo_s), mat.emission.r)
+                    if pcg.next_float() < f_coat:
+                        rd = vec3f(gn * (Float32(2.0) * dot(gn, wo_s)) - wo_s)
+                        ro = hit + rd * Float32(0.0002)
+                        continue
+                    vp.beta *= Float32(1.0) / (Float32(1.0) - f_coat)
                 vp.pos = hit
                 vp.normal = vec3f(gn)
                 vp.geo_normal = vec3f(gn_geo)
