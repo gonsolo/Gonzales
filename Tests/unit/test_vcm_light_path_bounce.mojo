@@ -31,10 +31,8 @@ from gonzales.bvh import SceneView, BVH2Node, build_bvh2, traverse_bvh2_core
 from gonzales.rng import PCG32
 from gonzales.spectrum import null_spectral_handle, SampledWavelengths, SpectralSample, sample_wavelengths
 from gonzales.vcm_camis import camis_light_carry_off, CamisLightRecord
-from gonzales.bdpt import (
-    BDPTVertex, _bdpt_trace_light_path, _bdpt_light_path_init,
-    _bdpt_light_path_bounce, _BDPT_MAX_VERTS, _BDPT_MAX_DEPTH,
-)
+from gonzales.bdpt_vertex import BDPTVertex, _BDPT_MAX_VERTS, _BDPT_MAX_DEPTH
+from gonzales.bdpt_light import _bdpt_trace_light_path, _bdpt_light_path_init, _bdpt_light_path_bounce
 
 comptime EPS: Float32 = 1e-4
 

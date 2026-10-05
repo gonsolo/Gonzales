@@ -20,7 +20,11 @@ from .transform import Mat4
 from .sampling import TileSamplerParams, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, derive_pcg_seeds, camera_ray_from_film_xy
 from .bvh import BVH2Node, SceneView, render_aux_buffers, _scene_bounding_sphere
 from .sppm import sppm_render
-from .bdpt import vcm_render, vcm_render_gpu, vcm_render_gpu_wavefront, _BDPT_MAX_VERTS, sppm_render_gpu
+from .sppm_gpu import sppm_render_gpu
+from .bdpt_render import vcm_render
+from .vcm_gpu import vcm_render_gpu
+from .vcm_wavefront import vcm_render_gpu_wavefront
+from .bdpt_vertex import _BDPT_MAX_VERTS
 from .guide import GuideGrid, GuidedRenderer, guide_create, guide_free, guide_clone_empty, guide_refine, null_guide, guide_merge, guide_cell_has_data, train_guided
 from .gpu_guide import gpu_guide_begin, gpu_guide_end
 from .restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io_null
@@ -1307,24 +1311,9 @@ def parse_and_render(
     if use_sms_restir:
         print("--sms-restir: no effect without --interactive (batch mode has no cross-frame reservoir persistence to reuse)")
 
-    if use_gpu and use_sppm:
-        var sd = mojo_parsed_scene_descriptor(psc, spectral)
-        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
-        if not _is_real_ptr(handle):
-            sd.unsafe_free()
-            mojo_parsed_free(psc)
-            return Int32(-1)
-        var resolved = _resolve_sppm_params(psc, sd[unsafe_offset=0], sppm_photons, sppm_radius)
-        var ret = sppm_render_gpu(
-            handle, psc, sd[unsafe_offset=0],
-            Int(sppm_passes), Int(resolved[0]), resolved[1],
-            no_denoise, verbose,
-        )
-        gpu_free_scene(handle)
-        sd.unsafe_free()
-        mojo_parsed_free(psc)
-        return ret
-    elif use_gpu and use_vcm:
+    # NOTE: this branch must stay ahead of the --sppm one: with sppm_render_gpu's launch sites first in
+    # this chain the compiler rejects every enqueue_function in sppm_gpu.mojo (cause unknown).
+    if use_gpu and use_vcm and not use_sppm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
         var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
         if not _is_real_ptr(handle):
@@ -1489,6 +1478,23 @@ def parse_and_render(
                 vulkaninterop_rt_destroy_scene(interop_scene_vcm)
         else:
             ret = vcm_render_gpu(handle, psc, sd[unsafe_offset=0], resolved_vcm_spp, n_photons, no_denoise, verbose, vcm_budget, vcm_cap, vcm_no_keep_mis, vcm_radius_from_camera, vcm_radius_cam_percentile, vcm_radius_cam_fraction_mult, vcm_no_footprint, vcm_radius_scale)
+        gpu_free_scene(handle)
+        sd.unsafe_free()
+        mojo_parsed_free(psc)
+        return ret
+    elif use_gpu and use_sppm:
+        var sd = mojo_parsed_scene_descriptor(psc, spectral)
+        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
+        if not _is_real_ptr(handle):
+            sd.unsafe_free()
+            mojo_parsed_free(psc)
+            return Int32(-1)
+        var resolved = _resolve_sppm_params(psc, sd[unsafe_offset=0], sppm_photons, sppm_radius)
+        var ret = sppm_render_gpu(
+            handle, psc, sd[unsafe_offset=0],
+            Int(sppm_passes), Int(resolved[0]), resolved[1],
+            no_denoise, verbose,
+        )
         gpu_free_scene(handle)
         sd.unsafe_free()
         mojo_parsed_free(psc)

@@ -11,7 +11,7 @@ from std.math import sqrt, abs, max
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import Vec3f
-from gonzales.bdpt import _bdpt_world_to_raster
+from gonzales.bdpt_connect import _bdpt_world_to_raster
 from gonzales.transform import matrix_invert
 
 comptime FW: Int32 = 64
