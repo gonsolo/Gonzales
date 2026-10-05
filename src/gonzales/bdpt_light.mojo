@@ -65,6 +65,8 @@ struct VCMLightPathState(TrivialRegisterPassable):
     var current_dielectric_ior: Float32
     var previous_dielectric_ior: Float32
     var n_delta: Int32
+    # Null-interface distance since the last real vertex: the d^2 of a crossing is applied once, over the whole edge.
+    var mis_null_dist: Float32
 
 def _null_light_path_state() -> VCMLightPathState:
     return VCMLightPathState(
@@ -77,6 +79,7 @@ def _null_light_path_state() -> VCMLightPathState:
         Float32(0), Float32(0), Float32(0), Float32(0),
         Float32(1.0), Float32(1.0),   # current_dielectric_ior, previous_dielectric_ior (vacuum)
         Int32(0),                     # n_delta
+        Float32(0),                   # mis_null_dist
     )
 
 def _bdpt_light_path_init[use_gpu: Bool](
@@ -270,6 +273,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         wavelengths.lambda0, wavelengths.lambda1, wavelengths.lambda2, wavelengths.lambda3,
         Float32(1.0), Float32(1.0),   # current_dielectric_ior, previous_dielectric_ior (vacuum)
         Int32(0),                     # n_delta
+        Float32(0),                   # mis_null_dist
     )
 
 def _bdpt_light_path_bounce[use_gpu: Bool](
@@ -298,6 +302,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
     mut n_lbounces: Int,
     mut current_dielectric_ior: Float32,
     mut previous_dielectric_ior: Float32,
+    mut mis_null_dist: Float32,
     wavelengths: SampledWavelengths,
     # _VCM_CAMIS light state (vcm_camis.CamisLightCarry) and THIS path's
     # slice of the record buffer (lvc_camis + lp_idx * _BDPT_MAX_VERTS, the
@@ -321,6 +326,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             return False   # nothing hit -- path escapes the scene
         var t_hit = inter.tHit
         var ray_dir = rd.to_simd()
+        var d_seg = Float32(0)   # the d^2 applied to dVCM at this hit, 0 if none
 
         # VCM Stage 2b: distance-squared portion of the per-bounce MIS
         # correction (project_vcm_stage2_mis_derivation memory) -- shared
@@ -331,7 +337,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                                                 ro.to_simd() + ray_dir * t_hit)
             origin_sphere = Int32(-2)   # applied; still a sphere light's path
         elif n_verts >= 1 or is_finite_origin:
-            dvcm_carry *= t_hit * t_hit
+            d_seg = t_hit + mis_null_dist
+            dvcm_carry *= d_seg * d_seg
 
         # Volume free-flight
         if has_med and Int(cur_med_idx) >= 0:
@@ -352,7 +359,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 var sp = ro + rd*ff.t_free
                 # dVCM's Jacobian above was applied with t_hit (the distance
                 # to the SURFACE the ray was cast toward), computed before we
-                dvcm_carry *= (ff.t_free * ff.t_free) / max(t_hit * t_hit, Float32(1e-20))
+                dvcm_carry *= ((ff.t_free + mis_null_dist) * (ff.t_free + mis_null_dist)) / max(d_seg * d_seg, Float32(1e-20))
                 # Free-flight at this VOLUME arrival: ff_b = the collision
                 # density actually sampled = ff.pdf. No cos_fix -- a volume
                 # vertex has no surface normal to divide by.
@@ -397,6 +404,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 var phi  = Float32(2)*PI*u2
                 rd = Vec3f(sinT*cos(phi), sinT*sin(phi), cosT)
                 ro = sp + rd*Float32(0.0002)
+                mis_null_dist = Float32(0)
                 return True   # volume free-flight scatter: no vertex stored this bounce, path continues
             else:
                 flux *= spectral_free_flight_weight(med, ff, t_hit, wavelengths, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
@@ -418,6 +426,8 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         var eta_x = mis_vm_weight_factor * _vcm_eta_scale(sd, hit)   # merging's MIS density HERE
 
         _resolve_mix(sd, pcg, mat, mat_idx)
+        if mat.type != MatKind.interface:
+            mis_null_dist = Float32(0)
 
         if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair or (dielectric_is_rough(mat) and mat.sss_boundary == Int8(0)):
             if not lobe_is_available_of(mat):
@@ -668,6 +678,9 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                 var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
             ro = hit + rd*Float32(0.0002)
+            if d_seg > Float32(0):
+                dvcm_carry /= max(d_seg * d_seg, Float32(1e-20))
+                mis_null_dist += t_hit + Float32(0.0002)
             # VCM Stage 2b: pure medium-boundary pass-through, no direction
             # change/BSDF event -- carry state passes through as already
             comptime if _VCM_CAMIS:
@@ -720,6 +733,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
     var previous_dielectric_ior = st.previous_dielectric_ior
     var wavelengths = SampledWavelengths(st.wl0, st.wl1, st.wl2, st.wl3)
     var prev_was_volume = False
+    var mis_null_dist = Float32(0)
     # CAMIS light state. Only an AREA light stores an origin vertex (n_verts
     # starts at 1), and only an area light starts a path inside the Class;
     # every other light's first stored vertex writes an out-of-Class record.
@@ -753,7 +767,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
             ro, rd, flux, n_verts, n_delta, dvcm_carry, dvc_carry, dvm_carry,
             prev_was_volume,
             is_finite_origin, origin_sphere, cur_med_idx, n_lbounces,
-            current_dielectric_ior, previous_dielectric_ior, wavelengths,
+            current_dielectric_ior, previous_dielectric_ior, mis_null_dist, wavelengths,
             camis_l, camis_recs):
             break
 

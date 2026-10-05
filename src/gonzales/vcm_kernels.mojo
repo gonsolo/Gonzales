@@ -36,6 +36,12 @@ from .bdpt_camera import (
 )
 from .bdpt_light import VCMLightPathState, _bdpt_light_path_init, _bdpt_light_path_bounce, _bdpt_trace_light_path
 
+@always_inline
+def _finite3(a: Float32, b: Float32, c: Float32) -> Bool:
+    """False for NaN/inf: one such sample would otherwise zero its pixel's whole sum at normalisation."""
+    return (a - a) == Float32(0) and (b - b) == Float32(0) and (c - c) == Float32(0)
+
+
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_VCM_EMIT))
 def _bdpt_emit_light_paths_gpu(
@@ -118,7 +124,8 @@ def _bdpt_splat_light_paths_gpu(
             var (cr, cg, cb) = spectral_sample_to_rgb(
                 spectral_coeffs, Int(spectral_res_dp), spectral_cie_x, spectral_cie_y,
                 spectral_cie_z, spectral_d65, r[3], lvc[unsafe_offset=base + local].wavelengths)
-            _bdpt_splat_filtered[True](accum, r[1], r[2], cr, cg, cb,
+            if _finite3(cr, cg, cb):
+                _bdpt_splat_filtered[True](accum, r[1], r[2], cr, cg, cb,
                                        Int(fw_dp), Int(fh_dp), film_filter)
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
@@ -189,15 +196,17 @@ def _bdpt_camera_connect_gpu(
     var (cr, cg, cb) = spectral_sample_to_rgb(
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, contrib, pass_wl)
-    accum[unsafe_offset=pix*3]   += cr
-    accum[unsafe_offset=pix*3+1] += cg
-    accum[unsafe_offset=pix*3+2] += cb
+    if _finite3(cr, cg, cb):
+        accum[unsafe_offset=pix*3]   += cr
+        accum[unsafe_offset=pix*3+1] += cg
+        accum[unsafe_offset=pix*3+2] += cb
     var (mr, mg, mb) = spectral_sample_to_rgb(
         spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, contrib_merge, pass_wl)
-    accum_merge[unsafe_offset=pix*3]   += mr
-    accum_merge[unsafe_offset=pix*3+1] += mg
-    accum_merge[unsafe_offset=pix*3+2] += mb
+    if _finite3(mr, mg, mb):
+        accum_merge[unsafe_offset=pix*3]   += mr
+        accum_merge[unsafe_offset=pix*3+1] += mg
+        accum_merge[unsafe_offset=pix*3+2] += mb
     albedo_accum[unsafe_offset=pix*3]   += alb.r
     albedo_accum[unsafe_offset=pix*3+1] += alb.g
     albedo_accum[unsafe_offset=pix*3+2] += alb.b
@@ -294,6 +303,7 @@ def _bdpt_light_path_bounce_gpu(
     var n_lbounces = Int(states[unsafe_offset=k].n_lbounces)
     var current_dielectric_ior = states[unsafe_offset=k].current_dielectric_ior
     var previous_dielectric_ior = states[unsafe_offset=k].previous_dielectric_ior
+    var mis_null_dist = states[unsafe_offset=k].mis_null_dist
     var wavelengths = SampledWavelengths(states[unsafe_offset=k].wl0, states[unsafe_offset=k].wl1, states[unsafe_offset=k].wl2, states[unsafe_offset=k].wl3)
     # Placeholder: no _VCM_CAMIS on the wavefront driver (see its camera twin).
     var camis_l = camis_light_carry_off()
@@ -306,7 +316,7 @@ def _bdpt_light_path_bounce_gpu(
         ro, rd, flux, n_verts, n_delta, dvcm_carry, dvc_carry, dvm_carry,
         _pwv_l,
         is_finite_origin, origin_sphere, cur_med_idx, n_lbounces,
-        current_dielectric_ior, previous_dielectric_ior, wavelengths,
+        current_dielectric_ior, previous_dielectric_ior, mis_null_dist, wavelengths,
         camis_l, Pointer[CamisLightRecord, MutUntrackedOrigin].unsafe_dangling(),
     )
     lvc_path_len[unsafe_offset=k] = Int32(n_verts)
@@ -324,6 +334,7 @@ def _bdpt_light_path_bounce_gpu(
     states[unsafe_offset=k].n_lbounces = Int32(n_lbounces)
     states[unsafe_offset=k].current_dielectric_ior = current_dielectric_ior
     states[unsafe_offset=k].previous_dielectric_ior = previous_dielectric_ior
+    states[unsafe_offset=k].mis_null_dist = mis_null_dist
     states[unsafe_offset=k].pcg_state = pcg.state
     states[unsafe_offset=k].pcg_inc = pcg.inc
 
@@ -508,15 +519,17 @@ def _bdpt_camera_path_accumulate_gpu(
     var (tr, tg, tb) = spectral_sample_to_rgb(
         spectral_coeffs, Int(spectral_res_dp), spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, states[unsafe_offset=pix].total, wl_acc)
-    accum[unsafe_offset=pix*3]   += tr
-    accum[unsafe_offset=pix*3+1] += tg
-    accum[unsafe_offset=pix*3+2] += tb
+    if _finite3(tr, tg, tb):
+        accum[unsafe_offset=pix*3]   += tr
+        accum[unsafe_offset=pix*3+1] += tg
+        accum[unsafe_offset=pix*3+2] += tb
     var (mr, mg, mb) = spectral_sample_to_rgb(
         spectral_coeffs, Int(spectral_res_dp), spectral_cie_x, spectral_cie_y,
         spectral_cie_z, spectral_d65, states[unsafe_offset=pix].total_merge, wl_acc)
-    accum_merge[unsafe_offset=pix*3]   += mr
-    accum_merge[unsafe_offset=pix*3+1] += mg
-    accum_merge[unsafe_offset=pix*3+2] += mb
+    if _finite3(mr, mg, mb):
+        accum_merge[unsafe_offset=pix*3]   += mr
+        accum_merge[unsafe_offset=pix*3+1] += mg
+        accum_merge[unsafe_offset=pix*3+2] += mb
     albedo_accum[unsafe_offset=pix*3]   += states[unsafe_offset=pix].first_alb.r
     albedo_accum[unsafe_offset=pix*3+1] += states[unsafe_offset=pix].first_alb.g
     albedo_accum[unsafe_offset=pix*3+2] += states[unsafe_offset=pix].first_alb.b

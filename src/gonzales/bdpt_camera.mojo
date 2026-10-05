@@ -417,7 +417,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
 
         # VCM Stage 2b: distance-squared portion of the per-bounce MIS
         # correction -- see _bdpt_trace_light_path's matching comment
-        dvcm_carry *= t_hit * t_hit
+        # A null crossing is one edge split in two: its d^2 is undone at the interface and the whole distance applied here.
+        var d_seg = t_hit + mis_null_dist
+        dvcm_carry *= d_seg * d_seg
 
         # Volume free-flight
         if has_med and Int(cur_med_idx) >= 0:
@@ -439,7 +441,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var sp = ro + rd*ff.t_free
                 # dVCM's Jacobian above was applied with t_hit (distance to
                 # the SURFACE the ray was cast toward); the real arrival
-                dvcm_carry *= (ff.t_free * ff.t_free) / max(t_hit * t_hit, Float32(1e-20))
+                dvcm_carry *= ((ff.t_free + mis_null_dist) * (ff.t_free + mis_null_dist)) / max(d_seg * d_seg, Float32(1e-20))
                 dvcm_carry *= Float32(1.0) / max(ff.pdf, Float32(1e-30))
                 if not prev_was_volume:
                     dvc_carry *= Float32(1.0) / max(ff.sig_t, Float32(1e-20))
@@ -976,6 +978,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if mat.medium_interface_idx >= Int32(0): cur_med_idx = new_idx
             ro = hit + rd*Float32(0.0002)
+            dvcm_carry /= max(d_seg * d_seg, Float32(1e-20))
             mis_null_dist += t_hit + Float32(0.0002)   # see VCMCameraPathState.mis_null_dist
             # VCM Stage 2b: pure pass-through, carry unchanged (see
             # _bdpt_trace_light_path's matching interface-branch comment).

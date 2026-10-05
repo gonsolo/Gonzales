@@ -13,7 +13,7 @@ from .spectrum import SpectralHandle, SampledWavelengths, SpectralSample
 
 
 @always_inline
-def _segment_transmittance(
+def segment_transmittance(
     med: Medium, org: Vec3f, dir: Vec3f, t: Float32,
     grids: Pointer[Grid, MutUntrackedOrigin], nvdb_grids: Pointer[NvdbGrid, MutUntrackedOrigin],
     spectral: SpectralHandle, wl: SampledWavelengths, mut pcg: PCG32,
@@ -82,7 +82,7 @@ def shadow_transmittance(
         var hit = inter_mem[unsafe_offset=0].hit != Int8(0)
         var t_seg = inter_mem[unsafe_offset=0].tHit if hit else remaining
         if Int(cur) >= 0:
-            T = T * _segment_transmittance(mediums[unsafe_offset=Int(cur)], o, dir, t_seg, grids, nvdb_grids, spectral, wl, pcg)
+            T = T * segment_transmittance(mediums[unsafe_offset=Int(cur)], o, dir, t_seg, grids, nvdb_grids, spectral, wl, pcg)
             if T.is_black():
                 return T
         if not hit:

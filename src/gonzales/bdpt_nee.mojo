@@ -6,7 +6,7 @@ from std.math import sqrt, cos, sin, exp, max, min, abs
 from .geometry import RGB, Point3f, Vec3f, vec3f, dot, cross, PI
 from .materials import MatKind, fr_dielectric, is_specular_glass
 from .primitives import Ray, Intersection, PrimId
-from .media import medium_sigma_t_spectral
+from .shadow_media import segment_transmittance
 from .lights import area_light_pick_triangle
 from .bvh import (
     SceneView, traverse_bvh2_core, any_hit_bvh2_core, test_spheres, LightSample, _sample_distant_light_nee,
@@ -41,6 +41,8 @@ def _visible_transmittance(
     var org = a + Vec3f(dir[0], dir[1], dir[2]) * Float32(0.0002)
     var remaining = dist_total - Float32(0.0002)
     var cur_med = med_idx
+    # Ratio tracking through grid media needs draws; seed from the endpoints so the call keeps its signature.
+    var pcg = PCG32(UInt64(Int(abs(a.x) * Float32(4096.0))) * UInt64(73856093) ^ UInt64(Int(abs(a.y) * Float32(4096.0))) * UInt64(19349663) ^ UInt64(Int(abs(b.z) * Float32(4096.0))) * UInt64(83492791), UInt64(Int(abs(b.x) * Float32(4096.0))) + UInt64(Int(abs(b.y) * Float32(4096.0))))
 
     # Private local slot instead of the caller's `scratch`. The caller's slot
     # is simultaneously live in the enclosing traversal that called us, and
@@ -70,9 +72,7 @@ def _visible_transmittance(
         if inter_mem[unsafe_offset=0].hit == Int8(0):
             # Nothing between here and destination: apply remaining Beer-Lambert
             if Int(cur_med) >= 0:
-                var med = sd.mediums[unsafe_offset=Int(cur_med)]
-                var st_spec = medium_sigma_t_spectral(med, wl, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-                Tr *= SpectralSample(exp(-st_spec.v0*remaining), exp(-st_spec.v1*remaining), exp(-st_spec.v2*remaining), exp(-st_spec.v3*remaining))
+                Tr *= segment_transmittance(sd.mediums[unsafe_offset=Int(cur_med)], org.to_simd(), dir, remaining, sd.grids, sd.nvdbGrids, sd.spectral, wl, pcg)
             break
 
         var inter = inter_mem[unsafe_offset=0]
@@ -83,9 +83,7 @@ def _visible_transmittance(
 
         # Beer-Lambert through medium segment up to hit
         if Int(cur_med) >= 0:
-            var med = sd.mediums[unsafe_offset=Int(cur_med)]
-            var st_spec = medium_sigma_t_spectral(med, wl, sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65)
-            Tr *= SpectralSample(exp(-st_spec.v0*t_hit), exp(-st_spec.v1*t_hit), exp(-st_spec.v2*t_hit), exp(-st_spec.v3*t_hit))
+            Tr *= segment_transmittance(sd.mediums[unsafe_offset=Int(cur_med)], org.to_simd(), dir, t_hit, sd.grids, sd.nvdbGrids, sd.spectral, wl, pcg)
 
         if mat.type == MatKind.thin_dielectric or (
                 mat.type == MatKind.dielectric and mat.sss_boundary != Int8(0)):
