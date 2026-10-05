@@ -41,7 +41,7 @@ MODES = {"pt": [], "vcm": ["--vcm"], "sppm": ["--sppm"]}
 CASES = {
     "closed-cavity": dict(
         scene="Scenes/closed-cavity-equilibrium.pbrt", expect=1.0, res="32x32",
-        crop=None, strict=True,
+        crop=None, strict=True, capped={"vcm": 9, "sppm": 10},
         # VCM reads PT's maxdepth-9 value (0.84), not 1: every VCM strategy is
         # limited to the same full-path length min(maxdepth, 9) (bdpt.mojo's
         # _vcm_depth), and this cavity needs ~30 bounces. At maxdepth <= 9 VCM
@@ -162,7 +162,7 @@ def _is_aux(f):
     return f == "albedo.exr" or f.endswith(_AUX_SUFFIXES)
 
 
-def render(case, mode):
+def render(case, mode, scene=None):
     """Render one case and return its mean radiance over the crop."""
     import numpy as np
     import OpenImageIO as oiio
@@ -172,7 +172,7 @@ def render(case, mode):
             os.remove(os.path.join(REPO, f))
     cmd = [os.path.join(REPO, "build", "gonzales"), "--gpu", "--no-denoise",
            "--spp", "64", "--resolution", c["res"], "--seed", "1",
-           *MODES[mode], os.path.join(REPO, c["scene"])]
+           *MODES[mode], scene or os.path.join(REPO, c["scene"])]
     # A per-render timeout, because without one a single hung render stalls
     # the suite forever and is indistinguishable from "still going" -- which
     # cost 15 minutes of staring at a blank log once. 300s is ~600x the
@@ -216,7 +216,24 @@ def main():
                 print(f"  FAIL {key:24s} {'; '.join(why)}")
                 failures.append(key)
                 continue
-            ratio = got / c["expect"]
+            expect = c["expect"]
+            cap = c.get("capped", {}).get(mode)
+            if cap:
+                # VCM/SPPM cap the path length (storage): the truth for them is
+                # the path tracer at that depth, not the unbounded answer.
+                import re, tempfile
+                with tempfile.NamedTemporaryFile("w", suffix=".pbrt", delete=False) as t:
+                    t.write(re.sub(r'("integer maxdepth"\s*\[)\s*\d+', r'\g<1> %d' % cap,
+                                   open(os.path.join(REPO, c["scene"])).read()))
+                try:
+                    expect, why = render(case, "pt", t.name)
+                finally:
+                    os.remove(t.name)
+                if expect is None:
+                    print(f"  FAIL {key:24s} capped reference: {'; '.join(why)}")
+                    failures.append(key)
+                    continue
+            ratio = got / expect
             if args.update:
                 gaps[key] = round(ratio, 4)
                 print(f"  set  {key:24s} {got:.4f}  ratio {ratio:.4f}")
