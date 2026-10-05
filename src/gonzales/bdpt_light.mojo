@@ -651,7 +651,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
                     gn, gn, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp,
                     sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
                 var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
-                    ray_dir, hit.to_simd(), gn, mat.albedo.r, n_lbounces == 0 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric, radiance_mode=False)
+                    ray_dir, hit.to_simd(), gn, mat.albedo.r, False, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric, radiance_mode=False)
                 current_dielectric_ior = new_cur_ior
                 previous_dielectric_ior = new_prev_ior
                 n_lbounces += 1

@@ -995,7 +995,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 gn, gn, hit.to_simd(), ray_dir, sd.camFp.cone_spread * cone_len, sd.camFp,
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
-                ray_dir, hit.to_simd(), gn, ior, n_events == 1 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric)
+                ray_dir, hit.to_simd(), gn, ior, False, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric)
             current_dielectric_ior = new_cur_ior
             previous_dielectric_ior = new_prev_ior
             vp.beta *= radiance_scale  # camera-path (Radiance mode): apply non-symmetric-scattering correction
@@ -1595,7 +1595,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 gn, gn, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp,
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var (new_dir, new_org, _, new_cur_ior, new_prev_ior) = _dielectric_bounce(
-                ray_dir, hit.to_simd(), gn, ior, n_events == 1 and Int(cur_med_idx) < 0, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric, radiance_mode=False)
+                ray_dir, hit.to_simd(), gn, ior, False, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric, radiance_mode=False)
             current_dielectric_ior = new_cur_ior
             previous_dielectric_ior = new_prev_ior
             # Light path (TransportMode::Importance): do NOT apply the

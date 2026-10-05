@@ -1365,8 +1365,9 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
             transform_normals(ctm_inv, nrm_ptr, nv, nrm_world)
             ref last_mesh = s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1]
             last_mesh.normals.reserve(Int(nv) * 3)
+            var nsgn = Float32(-1.0) if s[unsafe_offset=0].cur_attr.reverse_orient else Float32(1.0)   # pbrt negates mesh normals under ReverseOrientation
             for ni in range(Int(nv)):
-                var nx = nrm_world[unsafe_offset=ni*3+0]; var ny = nrm_world[unsafe_offset=ni*3+1]; var nz = nrm_world[unsafe_offset=ni*3+2]
+                var nx = nsgn * nrm_world[unsafe_offset=ni*3+0]; var ny = nsgn * nrm_world[unsafe_offset=ni*3+1]; var nz = nsgn * nrm_world[unsafe_offset=ni*3+2]
                 var nlen = sqrt(nx*nx + ny*ny + nz*nz)
                 if nlen > Float32(1e-12):
                     var inv = Float32(1.0) / nlen
@@ -1425,8 +1426,9 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         nrm_src.unsafe_free()
         ref nm = s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1]
         nm.normals.reserve(Int(n_verts) * 3)
+        var nsgn = Float32(-1.0) if s[unsafe_offset=0].cur_attr.reverse_orient else Float32(1.0)   # pbrt negates mesh normals under ReverseOrientation
         for ni in range(Int(n_verts)):
-            var nx = nrm_world[unsafe_offset=ni*3+0]; var ny = nrm_world[unsafe_offset=ni*3+1]; var nz = nrm_world[unsafe_offset=ni*3+2]
+            var nx = nsgn * nrm_world[unsafe_offset=ni*3+0]; var ny = nsgn * nrm_world[unsafe_offset=ni*3+1]; var nz = nsgn * nrm_world[unsafe_offset=ni*3+2]
             var nlen = sqrt(nx*nx + ny*ny + nz*nz)
             if nlen > Float32(1e-12):
                 var inv = Float32(1.0) / nlen

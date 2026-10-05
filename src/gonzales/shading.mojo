@@ -1295,26 +1295,14 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
         # A real BSDF, not a delta: pbrt's rough DielectricBxDF, with NEE.
         _shade_rough_dielectric[enqueue_shadow](path_ptr, ctx, mat, geom_normal, ray_dir, ray_org, inter.tHit, ior)
         return
-    # A camera/primary ray (bounce 0) from an exterior camera always enters the
-    # glass from air. Some meshes in this model have inward-facing normals (no
-    # ReverseOrientation) which would otherwise be read as "exiting" and total-
-    # internal-reflect the envmap. Trust the physics for the first bounce.
-    #
-    # The `current_medium_idx < 0` half matters for subsurface boundaries,
-    # whose events are deliberately not charged to `bounce` (see
-    # Material.sss_boundary): without it, `bounce` stays 0 for the whole
-    # interior walk and every boundary hit from INSIDE would be forced to
-    # "entering", applying 1/eta^2 again and refracting as if into the medium
-    # -- light could never leave. Being inside a medium is the physical fact
-    # this test actually wants, and the medium-crossing pass already tracks
-    # it exactly. For an ordinary camera in vacuum this is unchanged.
-    var force_entering = path_ptr[].bounce == 0 and path_ptr[].current_medium_idx < Int32(0)
+    # Entering vs exiting is the mesh's own orientation, as in pbrt (ReverseOrientation negates the
+    # normals at parse time); a pane whose normal faces away from the camera totally reflects.
+    var force_entering = False
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var (bs, normal, new_dielectric_ior, new_previous_dielectric_ior) = bxdf_sample_dielectric(
         geom_normal, ray_dir, ior, force_entering, pcg.next_float(),
         path_ptr[].current_dielectric_ior, path_ptr[].previous_dielectric_ior)
-
     var is_reflect = (Int(bs.flags) & Int(BxDFFlags.reflect)) != 0
     if not is_reflect:
         # bxdf_sample_dielectric's radiance_transmit factor is eta*eta, and
