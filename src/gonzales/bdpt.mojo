@@ -2678,6 +2678,82 @@ def _vcm_scatter(
             mis_vc_weight_factor, eta_x)
     return s
 
+@always_inline
+def _area_light_hit(ref sd: SceneView, inter: Intersection, mat: Material,
+                    ray_dir: Vec3f) -> Tuple[RGB, Float32, Int, Float32]:
+    """What a ray that hit an area-light triangle or curve reached:
+    (emission, total area, its pick slot -- area lights come first, in index
+    order -- and the cosine on the lit side). All of it comes from the SHARED
+    resolvers (shading.mojo's area_light_hit_cos / curve_light_hit), not from
+    _geom_normal and areaLights[id1]: the raw winding normal disagreed with
+    the side the light sampler emits from, and for a curve id1 is not an
+    AreaLight index at all."""
+    if inter.primId.type == Int8(5):
+        var (al_ci, cos_c) = curve_light_hit(inter, sd.curves, sd.areaLights,
+                                             Int(sd.areaLightCount), ray_dir)
+        var area = Float32(0)
+        var slot = 0
+        if al_ci >= 0:
+            area = sd.areaLights[unsafe_offset=al_ci].total_area
+            slot = al_ci
+        return (mat.emission, area, slot, cos_c)   # the curve's own emitter slot
+    var al_hit = sd.areaLights[unsafe_offset=Int(inter.primId.id1)]
+    return (al_hit.emission, al_hit.total_area, Int(inter.primId.id1),
+            area_light_hit_cos(inter, sd.meshes, sd.instances, ray_dir))
+
+
+@always_inline
+def _resolve_mix(ref sd: SceneView, mut pcg: PCG32, mut mat: Material, mut mat_idx: Int):
+    """Mix material: stochastically resolve to one of its two sub-materials
+    (mirrors shading.mojo's shade_mix; a mix of mix collapses to diffuse).
+    Draws from `pcg` only for a mix, and keeps `mat_idx` in sync with the
+    resolved material (hair needs the real index to re-fetch at connect time)."""
+    if mat.type != MatKind.mix:
+        return
+    var mix_idx1 = Int(mat.tex_idx & Int32(0xFFFF))
+    var mix_idx2 = Int((mat.tex_idx >> 16) & Int32(0xFFFF))
+    var mix_chosen = mix_idx2 if pcg.next_float() < mat.roughU else mix_idx1
+    mat = sd.materials[unsafe_offset=mix_chosen]
+    mat_idx = mix_chosen
+    if mat.type == MatKind.mix:
+        mat.type = MatKind.diffuse
+
+
+@always_inline
+def _coated_conductor_scatter[use_gpu: Bool](
+    ref sd: SceneView, mut pcg: PCG32, mat: Material, inter: Intersection,
+    hit: Vec3f, ray_dir: Vec3f, wo: Vec3f, cone_w: Float32,
+) -> Tuple[BxDFSample, Vec3f, Vec3f]:
+    """Geometry and sample shared by both subpaths' coated_conductor branch:
+    (sample, perturbed face-forwarded normal, geometric normal before bump/
+    normal maps -- the stored vertex keeps the latter, _connect's solid-angle
+    -> area conversions are built on it, see BDPTVertex.shading_normal).
+
+    bxdf_sample_coated_conductor's own u_split picks coat-vs-conductor lobe;
+    its delta (coat-reflect) branch is treated like a mirror elsewhere (no
+    stored vertex), its glossy branch like a plain conductor (approximation:
+    connections reuse conductor's GGX eval/f0, ignoring the coat's own
+    (1-f_coat) attenuation -- the same one shading.mojo's sampling makes)."""
+    var gn = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit)
+    if dot(gn, ray_dir) > Float32(0): gn = gn * Float32(-1)
+    var gn_geo = gn
+    gn = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,
+        gn, gn, hit, ray_dir, cone_w, sd.camFp,
+        sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
+    gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
+    var frm = Frame.from_z(Vec3f(gn[0], gn[1], gn[2]))
+    var gc = GeomContext(
+        normal=gn, geo_normal=gn, hit_point=hit, wo=wo,
+        tangent=Vec3f(frm.x.x, frm.x.y, frm.x.z),
+        bitangent=Vec3f(frm.y.x, frm.y.y, frm.y.z),
+        alb=mat.albedo, pixel_uv=Float32(0),
+    )
+    var uc1 = pcg.next_float(); var uc2 = pcg.next_float()
+    var ior = mat.emission.r if mat.emission.r > Float32(1) else Float32(1.5)
+    var usplit = pcg.next_float()
+    return (bxdf_sample_coated_conductor(gc, mat, ior, usplit, uc1, uc2), gn, gn_geo)
+
+
 def _bdpt_camera_path_bounce[use_gpu: Bool](
     ref sd:      SceneView,
     mut pcg: PCG32,
@@ -3109,18 +3185,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 total += beta * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (sph_hit.emission).r, (sph_hit.emission).g, (sph_hit.emission).b, wavelengths) * mis_w_sph_hit
                 return False   # direct hit on emissive analytic sphere -- terminates the path
 
-        # Mix material: stochastically resolve to one of two sub-materials
-        # (mirrors shading.mojo's shade_mix) before any type dispatch below —
-        # packing/guard-against-mix-of-mix convention identical to shade_mix.
-        if mat.type == MatKind.mix:
-            var mix_idx1 = Int(mat.tex_idx & Int32(0xFFFF))
-            var mix_idx2 = Int((mat.tex_idx >> 16) & Int32(0xFFFF))
-            var mix_amount = mat.roughU
-            var mix_chosen = mix_idx2 if pcg.next_float() < mix_amount else mix_idx1
-            mat = sd.materials[unsafe_offset=mix_chosen]
-            mat_idx = mix_chosen  # keep in sync with the resolved sub-material (hair needs the real index to re-fetch at connect time)
-            if mat.type == MatKind.mix:
-                mat.type = MatKind.diffuse
+        _resolve_mix(sd, pcg, mat, mat_idx)
 
         if mat.type == MatKind.area_light:
             # Direct hit on a triangle/curve area light — same MIS-against-
@@ -3133,25 +3198,8 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # their header: the raw winding normal disagreed with the side the
             # light sampler emits from, and for a curve id1 is not an
             # AreaLight index at all.
-            var al_emission: RGB
-            var al_area = Float32(0)
-            var al_slot = 0   # its pick slot: area lights come first, in index order
-            var cos_l_hit: Float32
             var is_curve = inter.primId.type == Int8(5)
-            if is_curve:
-                var (al_ci, cos_c) = curve_light_hit(inter, sd.curves, sd.areaLights,
-                                                     Int(sd.areaLightCount), ray_dir)
-                al_emission = mat.emission     # the curve's own emitter slot
-                cos_l_hit = cos_c
-                if al_ci >= 0:
-                    al_area = sd.areaLights[unsafe_offset=al_ci].total_area
-                    al_slot = al_ci
-            else:
-                al_slot = Int(inter.primId.id1)
-                var al_hit = sd.areaLights[unsafe_offset=Int(inter.primId.id1)]
-                al_emission = al_hit.emission
-                al_area = al_hit.total_area
-                cos_l_hit = area_light_hit_cos(inter, sd.meshes, sd.instances, ray_dir)
+            var (al_emission, al_area, al_slot, cos_l_hit) = _area_light_hit(sd, inter, mat, ray_dir)
             # A curve is a closed tube, so an unweighted (primary/delta) hit is
             # always on its outside -- credited regardless of the reconstructed
             # radial cosine, exactly as the path tracer does. A triangle light
@@ -3442,40 +3490,9 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             last_bsdf_pdf = Float32(-1) if sc.is_delta else sc.pdf_fwd
 
         elif mat.type == MatKind.coated_conductor:
-            var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-            if dot(gn_c, ray_dir) > Float32(0): gn_c = gn_c * Float32(-1)
-            # Bump/normal maps -- see the diffuse branch.
-            # Saved BEFORE the perturbation: the stored vertex keeps this as its
-            # GEOMETRIC normal, because _connect's solid-angle -> area pdf
-            # conversions are built on it. See BDPTVertex.shading_normal.
-            var gn_c_geo = gn_c
-            gn_c = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,
-                gn_c, gn_c, hit.to_simd(), ray_dir, vcm_cone_w, sd.camFp,
-                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-            gn_c = face_toward(gn_c, -ray_dir)   # pbrt two-sided reflection, see face_toward
             var wo_c = (-rd).to_simd()
-            var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
-            var gc_c = GeomContext(
-                normal=gn_c, geo_normal=gn_c, hit_point=hit.to_simd(), wo=wo_c,
-                tangent=Vec3f(frm_c.x.x, frm_c.x.y, frm_c.x.z),
-                bitangent=Vec3f(frm_c.y.x, frm_c.y.y, frm_c.y.z),
-                alb=mat.albedo, pixel_uv=Float32(0),
-            )
-            var uc1 = pcg.next_float(); var uc2 = pcg.next_float()
-            var bs_c: BxDFSample
-            # Coated conductor: dielectric clearcoat over GGX conductor —
-            # bxdf_sample_coated_conductor's own u_split picks coat-vs-
-            # conductor lobe; its delta (coat-reflect) branch is treated
-            # exactly like mirror conductor/dielectric elsewhere in this
-            # function (no stored vertex), its glossy (conductor) branch
-            # exactly like plain conductor (approximation: connections
-            # reuse conductor's own GGX eval/f0, ignoring the coat's own
-            # (1-f_coat) attenuation and its separate luma-Fresnel blend
-            # — same approximation shading.mojo's sampling side already
-            # makes for this material).
-            var ior_c = mat.emission.r if mat.emission.r > Float32(1) else Float32(1.5)
-            var usplit_c = pcg.next_float()
-            bs_c = bxdf_sample_coated_conductor(gc_c, mat, ior_c, usplit_c, uc1, uc2)
+            var (bs_c, gn_c, gn_c_geo) = _coated_conductor_scatter[use_gpu](
+                sd, pcg, mat, inter, hit.to_simd(), ray_dir, wo_c, vcm_cone_w)
             if bs_c.is_valid == Int8(0):
                 return False   # conductor/coated_conductor sample invalid
             var alpha_c = max(mat.roughU, mat.roughV)
@@ -4307,15 +4324,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
         var hit = ro + rd*t_hit
         var eta_x = mis_vm_weight_factor * _vcm_eta_scale(sd, hit)   # merging's MIS density HERE
 
-        if mat.type == MatKind.mix:
-            var mix_idx1 = Int(mat.tex_idx & Int32(0xFFFF))
-            var mix_idx2 = Int((mat.tex_idx >> 16) & Int32(0xFFFF))
-            var mix_amount = mat.roughU
-            var mix_chosen = mix_idx2 if pcg.next_float() < mix_amount else mix_idx1
-            mat = sd.materials[unsafe_offset=mix_chosen]
-            mat_idx = mix_chosen  # keep in sync with the resolved sub-material (hair needs the real index to re-fetch at connect time)
-            if mat.type == MatKind.mix:
-                mat.type = MatKind.diffuse
+        _resolve_mix(sd, pcg, mat, mat_idx)
 
         if mat.type == MatKind.diffuse or mat.type == MatKind.diffuse_transmit or mat.type == MatKind.coated_diffuse or mat.type == MatKind.conductor or mat.type == MatKind.measured or mat.type == MatKind.hair or (dielectric_is_rough(mat) and mat.sss_boundary == Int8(0)):
             if not lobe_is_available_of(mat):
@@ -4411,30 +4420,9 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             flux *= sc.weight
 
         elif mat.type == MatKind.coated_conductor:
-            var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
-            if dot(gn_c, ray_dir) > Float32(0): gn_c = gn_c * Float32(-1)
-            # Bump/normal maps -- see the diffuse branch.
-            # Saved BEFORE the perturbation: the stored vertex keeps this as its
-            # GEOMETRIC normal, because _connect's solid-angle -> area pdf
-            # conversions are built on it. See BDPTVertex.shading_normal.
-            var gn_c_geo = gn_c
-            gn_c = apply_surface_maps_at_hit[use_gpu](mat, inter, sd.meshes, sd.instances,
-                gn_c, gn_c, hit.to_simd(), ray_dir, Float32(-1.0), sd.camFp,
-                sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
-            gn_c = face_toward(gn_c, -ray_dir)   # pbrt two-sided reflection, see face_toward
             var wo_c = (-rd).to_simd()
-            var frm_c = Frame.from_z(Vec3f(gn_c[0], gn_c[1], gn_c[2]))
-            var gc_c = GeomContext(
-                normal=gn_c, geo_normal=gn_c, hit_point=hit.to_simd(), wo=wo_c,
-                tangent=Vec3f(frm_c.x.x, frm_c.x.y, frm_c.x.z),
-                bitangent=Vec3f(frm_c.y.x, frm_c.y.y, frm_c.y.z),
-                alb=mat.albedo, pixel_uv=Float32(0),
-            )
-            var uc1 = pcg.next_float(); var uc2 = pcg.next_float()
-            var bs_c: BxDFSample
-            var ior_c = mat.emission.r if mat.emission.r > Float32(1) else Float32(1.5)
-            var usplit_c = pcg.next_float()
-            bs_c = bxdf_sample_coated_conductor(gc_c, mat, ior_c, usplit_c, uc1, uc2)
+            var (bs_c, gn_c, gn_c_geo) = _coated_conductor_scatter[use_gpu](
+                sd, pcg, mat, inter, hit.to_simd(), ray_dir, wo_c, Float32(-1.0))
             if bs_c.is_valid == Int8(0):
                 return False   # conductor/coated_conductor sample invalid
             # VCM Stage 2d: rough conductor DOES have a real standalone pdf
