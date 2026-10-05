@@ -122,7 +122,7 @@ def _resolve_sppm_params(
 # (task #152's fix): an explicit `--vcm-photons` CLI value (sentinel <=0 =
 # not passed) wins if it's at least n_pix; otherwise falls back to n_pix,
 # today's default (one light path per pixel, deterministically paired with
-# that pixel's own camera subpath for CONNECTION -- see bdpt.mojo's VCM
+# that pixel's own camera subpath for CONNECTION -- see bdpt_*.mojo's VCM
 # module comment). A value below n_pix would starve the per-pixel
 # connect pairing of a light path to pair with, so it's clamped up, not
 # silently accepted -- unlike SPPM's photon count, which has no such
@@ -719,7 +719,7 @@ def debug_trace_pixel(
         # scene containing a Shape "sphere" (test_spheres above makes such
         # hits reachable here). Same primId-type dispatch every other consumer
         # already does -- see gpu.mojo's medium-interface kernel,
-        # rendering.mojo's CPU medium loop, and bdpt.mojo's
+        # rendering.mojo's CPU medium loop, and bdpt_*.mojo's
         # _visible_transmittance, which had this exact bug.
         var mat = psc[unsafe_offset=0].materials[unsafe_offset=Int(inter[unsafe_offset=0].primId.materialIndex)]
         var hx = ox + dx*inter[unsafe_offset=0].tHit; var hy = oy + dy*inter[unsafe_offset=0].tHit; var hz = oz + dz*inter[unsafe_offset=0].tHit
@@ -1351,7 +1351,7 @@ def parse_and_render(
                     # ray/results buffers must also cover ALL _BDPT_MAX_VERTS
                     # diffuse-branch connect shadow-ray slots for every
                     # pixel traced in ONE dispatch per bounce, not n_pix at
-                    # a time -- see bdpt.mojo's shadow-ray batching loop.
+                    # a time -- see bdpt_*.mojo's shadow-ray batching loop.
                     # vulkaninterop_rt_create_scene's max_rays purely drives
                     # buffer sizing (raysBytes/resultsBytes = max_rays*8*4,
                     # confirmed in vulkaninterop.cpp), no other backend

@@ -1,5 +1,5 @@
 # BDPT/VCM per-vertex lobe evaluation, MIS scoping and the light-slot policy.
-# Part of the BDPT/VCM machinery that used to be one file (bdpt.mojo).
+# Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.math import max, abs
 from .geometry import Point3f, Point2f, Vec3f, dot, PI

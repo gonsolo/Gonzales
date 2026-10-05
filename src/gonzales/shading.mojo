@@ -1583,7 +1583,7 @@ def _shade_conductor_nee[enqueue_shadow: Bool](
 ):
     """Distant + point + infinite-light NEE for a ROUGH (non-delta) conductor
     bounce — isotropic GGX approximation (alpha = max(roughU,roughV), same
-    simplification bdpt.mojo/sppm.mojo's own conductor connection/gather use
+    simplification bdpt_*.mojo/sppm.mojo's own conductor connection/gather use
     for anisotropic materials; see bxdf_eval_conductor_ggx's docstring).
     Only called when bxdf_is_delta(bs.flags) is False — a true mirror bounce
     has zero probability of reflecting any finite-solid-angle/delta light
@@ -1950,7 +1950,7 @@ def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var bs = bxdf_sample_coated_conductor(gc, mat, ior, pcg.next_float(), pcg.next_float(), pcg.next_float())
     if bs.is_valid != Int8(0) and not bxdf_is_delta(bs.flags):
-        # Approximation (matches bdpt.mojo/sppm.mojo's own coated_conductor
+        # Approximation (matches bdpt_*.mojo/sppm.mojo's own coated_conductor
         # connection/gather treatment): NEE reuses conductor's own GGX eval/
         # F0, ignoring the coat's own (1-f_coat) attenuation and its separate
         # luma-Fresnel blend. alpha = (roughU+roughV)/2, matching
@@ -2364,7 +2364,7 @@ def _pt_hit_footprint(
 # Exists because every caller of _apply_surface_maps outside this file has to
 # do the same three steps -- _get_tri_verts, test `ok`, call through -- and
 # getting that wrong is silent: a missed site renders a plausible image with
-# the map simply absent, which is how SPPM's photon pass and ALL of bdpt.mojo
+# the map simply absent, which is how SPPM's photon pass and ALL of bdpt_*.mojo
 # went without bump/normal maps while the path tracer had them since 2026-09.
 # One helper, so a new integrator branch is one line and the `ok` test cannot
 # be forgotten. Returns `shading_normal` unchanged for a non-triangle hit (an
@@ -2488,7 +2488,7 @@ def _draw_sobol_8(
     return SobolSamples8(u_light, u_bary1, u_bary2, u_env1, u_env2, u_scat1, u_scat2, u_rr)
 
 # ── Hair BSDF helpers ────────────────────────────────────────────────────────
-# Live in bvh.mojo, not here — sppm.mojo/bdpt.mojo need them too (for
+# Live in bvh.mojo, not here — sppm.mojo/bdpt_*.mojo need them too (for
 # connectible-vertex/gather/NEE evaluation of a stored hair vertex), and
 # shading.mojo already imports FROM sppm.mojo, so sppm.mojo can't import back
 # from shading.mojo. See bvh.mojo's _hair_precompute/_hair_eval_lobes/
@@ -2510,7 +2510,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     # ── Steps 1-10: geometry + optical + per-lobe precompute ─────────────────
     # h and v_global come straight from intersect_curve (geometry.mojo) via
     # Intersection.u/.v — no tessellated mesh, no barycentric interpolation.
-    # Delegated to bvh.mojo's _hair_precompute (shared with bdpt.mojo/
+    # Delegated to bvh.mojo's _hair_precompute (shared with bdpt_*.mojo/
     # sppm.mojo's connectible-vertex/gather/NEE evaluation of a stored hair
     # vertex) — same formulas as before this was extracted, just relocated.
     if inter.primId.type != 5:
@@ -2571,7 +2571,7 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     # ── Step 15: Indirect sampling ────────────────────────────────────────────
     # Delegated to bvh.mojo's _hair_sample_dir (same lobe-pick + vMF/logistic
     # sampling as before this was extracted, identical RNG draw order) —
-    # shared with bdpt.mojo/sppm.mojo's own hair-vertex bounce continuation.
+    # shared with bdpt_*.mojo/sppm.mojo's own hair-vertex bounce continuation.
     var (wi_s, f_s, pdf, cos_ti_s2) = _hair_sample_dir(hc, pcg)
     var frs = f_s.r; var fgs = f_s.g; var fbs = f_s.b
 

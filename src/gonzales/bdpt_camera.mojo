@@ -1,5 +1,5 @@
 # BDPT/VCM camera subpath: state, init and the per-bounce step.
-# Part of the BDPT/VCM machinery that used to be one file (bdpt.mojo).
+# Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.collections import Array
 from std.math import sqrt, cos, sin, log, exp, max, abs
@@ -240,7 +240,7 @@ def _bdpt_camera_path_init[use_gpu: Bool](
     start_med_idx: Int32 = Int32(-1),
 ) -> VCMCameraPathState:
     """Task #163 stage 4: camera-ray generation + MIS-origin setup half of
-    `_bdpt_trace_camera_and_connect` (bdpt.mojo:830-886), split out to seed
+    `_bdpt_trace_camera_and_connect` (bdpt_*.mojo:830-886), split out to seed
     a `VCMCameraPathState` for the wavefront-staged bounce loop instead of
     falling straight into an inline `for` loop. Byte-for-byte copy of that
     function's pre-loop body -- see its own docstring/VCM Stage 2b comments
@@ -527,7 +527,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
     n_light_paths_f: Float32 = Float32(0),
 ) -> Bool:
     """Task #163 stage 4: wavefront-staged variant of ONE bounce iteration of
-    `_bdpt_trace_camera_and_connect`'s main loop (bdpt.mojo:887-1684), the
+    `_bdpt_trace_camera_and_connect`'s main loop (bdpt_*.mojo:887-1684), the
     camera-path counterpart to `_bdpt_light_path_bounce` (see that function's
     docstring for the general rationale -- same design, applied to the
     larger of the two subpath loops). `scratch` is STILL a live parameter
@@ -1036,7 +1036,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             (dvcm_carry, dvc_carry, dvm_carry) = vcm_arrival_carries(
                 dvcm_carry, dvc_carry, dvm_carry, cos_fix)
             # Real image-texture reflectance (e.g. "texture reflectance" on
-            # coateddiffuse) — before this, bdpt.mojo always used the flat
+            # coateddiffuse) — before this, bdpt_*.mojo always used the flat
             # mat.albedo fallback (material_builder.mojo's own 0.5 grey
             # default for any texture-backed material), silently washing
             # out any textured diffuse/coateddiffuse surface. _tex_lookup
@@ -1048,7 +1048,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             if tex_ok and not on_curve:
                 eff_alb = _tex_lookup[use_gpu](mat, inter, tv0, tv1, tv2, tex_mesh, sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount),
                     uv_footprint_at_hit(inter, sd.meshes, sd.instances, hit.to_simd(), ray_dir, vcm_cone_w, sd.camFp).width)
-            # Bump/normal maps. bdpt.mojo applied NONE of them, on either
+            # Bump/normal maps. bdpt_*.mojo applied NONE of them, on either
             # subpath, while the path tracer has since 2026-09 -- a textbook
             # instance of project_pt_only_feature_gaps, and the one that left
             # VCM's two halves standing on different geometry: the camera

@@ -1,5 +1,5 @@
 # VCM vertex merging against the light-path vertex cache.
-# Part of the BDPT/VCM machinery that used to be one file (bdpt.mojo).
+# Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.collections import Array
 from std.math import sqrt, floor, max, abs

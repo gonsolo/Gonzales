@@ -70,7 +70,7 @@ def bxdf_eval_conductor_ggx(
     by any cosine. Used by sppm.mojo's photon-density gather (whose stored
     photon flux already encodes the appropriate cosine-weighted density) and
     NEE (whose caller applies its own cos_surface factor externally) — unlike
-    bdpt.mojo's own connection-formula variant, which folds cos_i in for its
+    bdpt_*.mojo's own connection-formula variant, which folds cos_i in for its
     path-throughput weighting. Schlick Fresnel at the half-vector,
     height-correlated Smith G2."""
     var (valid, k, schlick) = _ggx_conductor_shape_terms(n, wo, wi, alpha)
@@ -739,7 +739,7 @@ def bxdf_sample_diffuse_transmit(
 # ── Generic BxDF interface (the "materials" half of the Light/BxDF interface
 # refactor — see bvh.mojo's LightSample for the "lights" half) ───────────────
 # One dispatch point mirroring sppm.mojo's own (now superseded) private
-# _sppm_vp_brdf, promoted to a shared function so shading.mojo/bdpt.mojo/
+# _sppm_vp_brdf, promoted to a shared function so shading.mojo/bdpt_*.mojo/
 # sppm.mojo can all evaluate "this material's raw f(wo,wi) + its matching
 # sampling pdf" through a single call instead of each re-deriving the
 # per-material formula inline. mat_kind: 0 = diffuse (default/else branch),
@@ -778,7 +778,7 @@ def _nee_weight_simple(
     dispatch above. Delta lights (ls.is_delta) get MIS weight 1; real-pdf
     lights (sphere/infinite) are weighted via the power heuristic against
     this material's own sampling pdf at wi — exactly the formula every
-    per-material NEE function in shading.mojo/bdpt.mojo/sppm.mojo already
+    per-material NEE function in shading.mojo/bdpt_*.mojo/sppm.mojo already
     used, just written once instead of once per (material, light-type)
     pair."""
     if not ls.valid:
@@ -800,7 +800,7 @@ def _nee_weight_simple(
 # stochastically walking the coat (refract in, bounce off the Lambertian base,
 # try to refract back out, repeat). Before this existed, EVERY integrator
 # re-derived that walk inline in its own bounce loop -- shading.mojo's
-# shade_coated_diffuse, bdpt.mojo's camera AND light path branches, and
+# shade_coated_diffuse, bdpt_*.mojo's camera AND light path branches, and
 # (eventually) sppm.mojo. Each copy then drifted independently, which is
 # exactly how 2026-09-15 found: a missing 1/eta^2 in one, absent coat-thickness
 # attenuation in another, no rough-coat G2/G1 anywhere but the path tracer, and
@@ -843,7 +843,7 @@ comptime COAT_MAX_DEPTH = 10
 # docs/05_reflection_models.md. Without it, up to COAT_MAX_DEPTH applications
 # of `beta *= alb` against one cached texel drive the weakest channel toward
 # zero while another stays large. Deliberately part of the SHARED walk: before
-# this, shading.mojo applied it and bdpt.mojo did not -- a silent divergence
+# this, shading.mojo applied it and bdpt_*.mojo did not -- a silent divergence
 # between two copies of "the same" model, which is the whole reason this
 # function exists.
 comptime COAT_BETA_CHROMA_FLOOR: Float32 = 0.1
@@ -867,7 +867,7 @@ struct CoatWalk(TrivialRegisterPassable):
     var f_entry:   Float32    # Fresnel reflectance at the top interface
     # Accumulated walk throughput, NOT including the transport-mode-dependent
     # eta^2 (that is the caller's call: radiance transport needs it, importance
-    # transport does not -- see bdpt.mojo's light-path exit). On the REFLECT
+    # transport does not -- see bdpt_*.mojo's light-path exit). On the REFLECT
     # path this is ACHROMATIC by construction: only scalar G2/G1 weights are
     # applied and the coloured base layer is never reached, so a caller whose
     # throughput is spectral may use `beta.r` as a plain scalar rather than
@@ -1595,7 +1595,7 @@ def lobe_sample(
                       le.pdf_fwd, le.pdf_rev, le.cos_used, lobe_scoped(c))
 
 
-# Moved here from bdpt.mojo so that the ONE lobe evaluator can live below
+# Moved here from bdpt_*.mojo so that the ONE lobe evaluator can live below
 # every integrator rather than inside one of them. It was the only piece
 # of the dispatch that still lived above bxdf.
 @always_inline
@@ -2174,7 +2174,7 @@ def _nee_weight_coated_diffuse_base[nee_is_sole_strategy: Bool = False](
       that no longer exists silently discards a real fraction of the light
       with nothing else picking it up.
     - False -- ordinary two-strategy MIS against a cosine-lobe pdf, the
-      historical behaviour, kept as the default so bdpt.mojo's own call
+      historical behaviour, kept as the default so bdpt_*.mojo's own call
       sites (which have their own separate dVCM/dVC MIS story) are
       unchanged.
 
@@ -2234,12 +2234,12 @@ def _nee_weight_coated_diffuse_base[nee_is_sole_strategy: Bool = False](
 # ── Spectral siblings (staged rollout, see project_spectral_rendering memory
 # / lovely-dazzling-meteor plan) ────────────────────────────────────────────
 # Added ALONGSIDE bxdf_eval_any/_nee_weight_simple above rather than mutating
-# them in place: those two are also called from bdpt.mojo (Stage 3) and
+# them in place: those two are also called from bdpt_*.mojo (Stage 3) and
 # sppm.mojo (Stage 4), which aren't wavelength-aware yet — changing their
 # signature now would force-couple this (Stage 2, plain-path-tracer-only)
 # change into BDPT/SPPM ahead of their own stages, defeating the point of
 # staging. shading.mojo (Stage 2) calls these new spectral versions instead;
-# bdpt.mojo/sppm.mojo keep calling the RGB originals unchanged until their
+# bdpt_*.mojo/sppm.mojo keep calling the RGB originals unchanged until their
 # own stage migrates them. Hair is NOT covered here (Marschner lobe color
 # comes from sigma_a absorption, a genuinely more involved conversion) —
 # _nee_weight_hair stays RGB-only for now, a deliberate scoped exclusion.
@@ -2362,6 +2362,6 @@ def _nee_weight_hair(
     var pdf_bsdf = max(cos_ti * pdf_over_cos, Float32(1e-6))
     # `cos_ti` is the FIBRE cosine, not |n.wi| -- hair's lobe has no surface
     # normal to take one against. Same distinction LobeEval.cos_used exists
-    # for in bdpt.mojo, and the reason a caller must never guess it.
+    # for in bdpt_*.mojo, and the reason a caller must never guess it.
     var mis_w = nee_mis_weight(mis, ls.pdf, pdf_bsdf, cos_ti)
     return f_val * cos_ti * ls.Li * (mis_w / ls.pdf)

@@ -153,7 +153,7 @@ def _identity_camera_matrices() -> Tuple[Pointer[Float32, MutUntrackedOrigin], P
     return (r2c, c2w)
 
 # Both subpath halves of a VCM pass share one hero-wavelength set (see
-# bdpt.mojo's _bdpt_pass_wavelengths); this test drives the two halves
+# bdpt_*.mojo's _bdpt_pass_wavelengths); this test drives the two halves
 # directly, so it supplies that set itself.
 comptime _TEST_PASS_WL = sample_wavelengths(Float32(0.5))
 
@@ -210,7 +210,7 @@ def test_wavefront_split_matches_original_camera_path_closely() raises:
     var camis = camis_cam_carry_init()
     var camis_recs = Array[CamisCamRecord, _CAMIS_CAM_RECS](
         fill=CamisCamRecord(Float32(0), Float32(0), Float32(0), Float32(0), Float32(0)))
-    # Benchmark instrumentation only (bdpt.mojo's
+    # Benchmark instrumentation only (bdpt_*.mojo's
     # _bdpt_merge_from_cache docstring) -- not exercised by this test, just
     # needs a real lvalue to satisfy the shared function's signature.
     var visit_naive = Int32(0)

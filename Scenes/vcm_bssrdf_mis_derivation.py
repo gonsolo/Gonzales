@@ -85,7 +85,7 @@ def brute_force(xs, hop, sigma_tr, pL, pC):
 
 
 # ------------------------------------------------------------- the recursion
-# Exactly the shape bdpt.mojo uses for a ray edge:
+# Exactly the shape bdpt_*.mojo uses for a ray edge:
 #   scatter at a:  dVC = (cos_out/pdf_dir)*(dVC*pdf_rev + dVCM);  dVCM = 1/pdf_dir
 #   arrive  at b:  dVCM *= d^2;  dVCM, dVC /= cos_fix
 # and for a HOP edge, the rule this script establishes:

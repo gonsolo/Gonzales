@@ -1,5 +1,5 @@
 # VCM GPU megakernel driver.
-# Part of the BDPT/VCM machinery that used to be one file (bdpt.mojo).
+# Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.sys import has_accelerator
 from std.sys.info import size_of

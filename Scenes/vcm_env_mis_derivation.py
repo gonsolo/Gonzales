@@ -10,7 +10,7 @@ wherever that ray lands. So the path space is (w_env, x_1, ..., x_n) -- a
 direction and then the surface vertices -- and every strategy must be written
 as a density over THAT space before the weights can be compared.
 
-Why this file exists: bdpt.mojo combines its strategies with the BALANCE
+Why this file exists: bdpt_*.mojo combines its strategies with the BALANCE
 heuristic, but the camera-side env NEE and the escape/miss handler both used
 `power_heuristic` (beta=2). Two heuristics in one estimator cannot partition
 unity, and the measured cost was a flat ~6.5% overcount on every env-lit
@@ -44,14 +44,14 @@ N_LIGHT = 12000.0
 DISK_AREA = math.pi * R_SCENE * R_SCENE
 KERNEL = math.pi * R_MERGE * R_MERGE
 ETA_VCM = N_LIGHT * KERNEL
-MIS_VM = ETA_VCM                  # bdpt.mojo's mis_vm_weight_factor
+MIS_VM = ETA_VCM                  # bdpt_*.mojo's mis_vm_weight_factor
 MIS_VC = 1.0 / ETA_VCM
 P_CAM_AREA = 1.0                  # pinhole lens: one point, density 1
 P_ENV = 1.0 / (4.0 * math.pi)     # uniform environment, solid-angle pdf
 
-# SmallVCM (and bdpt.mojo's _bdpt_camera_path_init) start the camera subpath at
+# SmallVCM (and bdpt_camera.mojo's _bdpt_camera_path_init) start the camera subpath at
 # dVCM = lightSubPathCount / cameraPdfW. Both factors scale with resolution --
-# bdpt.mojo runs "one dedicated light path per pixel" and a real camera's
+# bdpt_*.mojo runs "one dedicated light path per pixel" and a real camera's
 # directional pdf is itself proportional to the pixel count -- so in practice
 # they very nearly cancel. N_SPLAT is that ratio, and the recursion reproduces
 # ground truth for ANY value of it (verified below at 1 and at N_LIGHT), which
@@ -144,7 +144,7 @@ def brute_force_weights(xs, lens, w_env):
 
 def camera_carries(xs, lens, upto):
     """(dVCM, dVC, dVM) the camera subpath carries on ARRIVING at xs[upto],
-    mirroring bdpt.mojo: scatter, then arrival d^2 / cos."""
+    mirroring bdpt_*.mojo: scatter, then arrival d^2 / cos."""
     n = len(xs)
     # The lens is NOT an ordinary scattering vertex. SmallVCM's
     # SetupCameraPath starts the subpath at dVC = dVM = 0 and only dVCM
@@ -275,7 +275,7 @@ if __name__ == "__main__":
     print("""
 WHAT THIS SETTLES, at the realistic N_SPLAT = 1, one surface vertex:
 
-    strategy                 correct    what bdpt.mojo used to give
+    strategy                 correct    what bdpt_*.mojo used to give
     escape (s=0)              0.5400    0.7995  (power heuristic)
     NEE    (s=1)              0.2107    0.2005  (power heuristic)
     t=1 light tracing         0.0442    -- its own balance weight

@@ -12,7 +12,7 @@
 # 24 calibration swatches lit by the whitebalance-temperature CIE daylight
 # illuminant. Rather than threading three more spectral-context pointers and
 # a sensor-mode flag through every CPU/GPU/wavefront call site that touches
-# cie_x/y/z (dozens, across bdpt.mojo/sppm.mojo/shading.mojo/gpu_media.mojo),
+# cie_x/y/z (dozens, across bdpt_*.mojo/sppm.mojo/shading.mojo/gpu_media.mojo),
 # this exploits a fact verified by grepping every one of those call sites:
 # cie_x/y/z are passed around everywhere but only ever DEREFERENCED in one
 # place, spectrum.mojo's spectral_sample_to_rgb (via cie_xyz_at_ptr) — the

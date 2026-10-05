@@ -216,7 +216,7 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     # checking `res` first.
     var normalSlopeMaps: Pointer[NormalSlopeMap, MutUntrackedOrigin]
 
-    # VCM's variance-aware merge MIS (bdpt.mojo's _vcm_keep): the PREVIOUS
+    # VCM's variance-aware merge MIS (vcm_grid.mojo's _vcm_keep): the PREVIOUS
     # pass's per-bucket light-vertex counts, the cell size they were hashed
     # with, and the factor that rescales a count to this pass's radius.
     # Dangling for every non-VCM caller and for a VCM pass with no previous
@@ -225,9 +225,9 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     var vcmKeepInvCell: Float32
     var vcmKeepScale:   Float32
     # VCM's full-path length limit: every strategy produces only paths with at
-    # most this many non-delta interior vertices (bdpt.mojo's _vcm_depth).
+    # most this many non-delta interior vertices (vcm_grid.mojo's _vcm_depth).
     var vcmMaxDepth:    Int32
-    # VCM's per-vertex merge radius (bdpt.mojo's _vcm_merge_radius_at): the
+    # VCM's per-vertex merge radius (vcm_grid.mojo's _vcm_merge_radius_at): the
     # camera position, the world size of `_VCM_FOOTPRINT_PIXELS` pixels at unit
     # distance (0 = off, one global radius), and this pass's global radius.
     var vcmCamX:        Float32
@@ -247,7 +247,7 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     # _light_pick_cdf, n+1 entries in the order area, sphere, distant,
     # infinite, point); dangling = the uniform pick.
     var lightPickCdf: Pointer[Float32, MutUntrackedOrigin]
-    # VCM's per-cell photon budget (--vcm-budget, bdpt.mojo _vcm_keep): the
+    # VCM's per-cell photon budget (--vcm-budget, bdpt_*.mojo _vcm_keep): the
     # previous pass's per-bucket statistics [Q, V] (merge queries, second
     # moment of their contribution at full keep), this pass's accumulator,
     # and the Lagrange multiplier that meets the work budget. Dangling / 0 =
@@ -260,7 +260,7 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     # 0 when no material is smooth glass, so MNEE's per-sample probe toward the light can be skipped; 1 otherwise (always on the CPU).
     var hasGlass: Int32
 
-# ── Infinite/distant-light emission + NEE sampling (shared by bdpt.mojo and
+# ── Infinite/distant-light emission + NEE sampling (shared by bdpt_*.mojo and
 #    sppm.mojo — lives here, not shading.mojo, to avoid an import cycle:
 #    shading.mojo already imports helpers FROM sppm.mojo, so sppm.mojo can't
 #    import back from shading.mojo. guide.mojo hit this exact same
@@ -425,7 +425,7 @@ def _sample_infinite_light_dir(
 ) -> Tuple[Vec3f, RGB, Float32]:
     """Sample an emission direction from an environment (infinite) light,
     returning (world-space direction, radiance there, solid-angle pdf).
-    Used for BOTH light-path/photon emission (bdpt.mojo/sppm.mojo) and NEE
+    Used for BOTH light-path/photon emission (bdpt_*.mojo/sppm.mojo) and NEE
     toward the light (same distribution works for both — the only
     difference is which end of the ray you start from)."""
     if ilight.tex_idx >= Int32(0) and _is_real_ptr(ilight.pixels_ptr) and _is_real_ptr(ilight.cdf_ptr) and ilight.cdf_w > Int32(0):
@@ -590,7 +590,7 @@ def _sample_sphere_light_nee(
     # NO 1/n_sphere_lights selection factor. That factor belongs to a sampler
     # that picks ONE light at random, and every caller here instead ENUMERATES
     # every sphere and sums (`for sph_i in range(sphereCount)`, in shading.mojo,
-    # sppm.mojo and bdpt.mojo alike). Dividing each enumerated light's pdf by
+    # sppm.mojo and bdpt_*.mojo alike). Dividing each enumerated light's pdf by
     # the count multiplies each contribution BY the count, so N sphere lights
     # came out N times too bright -- veach-mis, which is built from exactly
     # three sphere lights, rendered ~3x too bright over most of the frame. A
@@ -685,7 +685,7 @@ def _equal_area_sphere_to_square(dx: Float32, dy: Float32, dz: Float32) -> SIMD[
 def _eval_infinite_light_and_pdf(ilight: InfiniteLight, dir_world: Vec3f, origin: Vec3f) -> Tuple[RGB, Float32]:
     """Radiance AND solid-angle sampling pdf an infinite (environment) light
     contributes along a ray travelling in `dir_world` — used for the
-    camera-ray miss case (bdpt.mojo/sppm.mojo don't otherwise add any
+    camera-ray miss case (bdpt_*.mojo/sppm.mojo don't otherwise add any
     infinite-light contribution when a traced ray leaves the scene, unlike
     the ordinary unidirectional path tracer's own miss handler in
     shading.mojo, which this mirrors with a nearest-texel lookup instead of
@@ -693,14 +693,14 @@ def _eval_infinite_light_and_pdf(ilight: InfiniteLight, dir_world: Vec3f, origin
     own nearest-texel sampling above, and a fine approximation for a single
     miss-ray sample). The pdf is needed to MIS-weight this escape strategy
     against NEE sampling the same light from the previous vertex — see
-    bdpt.mojo's `last_bsdf_pdf` bookkeeping for why (getting this wrong
+    bdpt_*.mojo's `last_bsdf_pdf` bookkeeping for why (getting this wrong
     double-counts unoccluded env light, the exact bug documented in
     [[project_infinite_light_shadows]]).
 
     `origin` gates a portal-restricted light (ilight.has_portal != 0) the
     same way shading.mojo's PT miss handler does: this escape strategy only
     pays out where a real window opening would actually be visible. Missing
-    here (and in sppm.mojo/bdpt.mojo, the only two callers) until found via
+    here (and in sppm.mojo/bdpt_*.mojo, the only two callers) until found via
     a corpus-wide gallery comparison: SPPM/VCM kept the OLD full-sphere
     watercolor/kroken leak (1.46x/1.50x) after the PT-only portal fix, the
     exact "PT-only feature gap" bug class this project keeps re-finding --
@@ -733,7 +733,7 @@ def _eval_infinite_light_and_pdf(ilight: InfiniteLight, dir_world: Vec3f, origin
 # ── Marschner/Chiang 3-lobe hair BSDF — shared math ───────────────────────────
 # Lives here (not shading.mojo) for an import-cycle reason:
 # shading.mojo already imports helpers FROM sppm.mojo, so
-# sppm.mojo (and bdpt.mojo, which imports from sppm.mojo) can't import back
+# sppm.mojo (and bdpt_*.mojo, which imports from sppm.mojo) can't import back
 # from shading.mojo. shading.mojo's own shade_hair imports these from here
 # instead of defining them locally — this is a pure relocation, no behavior
 # change (same functions, same formulas).
@@ -833,7 +833,7 @@ struct HairLobeConstants(TrivialRegisterPassable):
     connect/gather/NEE call site (via _hair_precompute) from a handful of
     persisted scalars (curve index, h, v, wo, material index) rather than
     stored inline in BDPTVertex/SPPMPixel — those structs stay small, and
-    this recompute is the same cost class as bdpt.mojo's own
+    this recompute is the same cost class as bdpt_*.mojo's own
     _eval_conductor_ggx per-call GGX evaluation."""
     var tangent: Vec3f
     var b_perp:  Vec3f
@@ -890,7 +890,7 @@ def _hair_precompute(
     albedo = sigma_a (RGB absorption), emission.r = eta (IOR), roughU = betaM
     (longitudinal), roughV = betaN (azimuthal). Shared verbatim by
     shading.mojo's own shade_hair (the primary path tracer) and
-    bdpt.mojo/sppm.mojo's connectible-vertex/gather/NEE evaluation of a
+    bdpt_*.mojo/sppm.mojo's connectible-vertex/gather/NEE evaluation of a
     stored hair vertex."""
     var h = max(Float32(-0.99), min(Float32(0.99), h_raw))
     var curve = curves[unsafe_offset=curve_idx]
@@ -1041,7 +1041,7 @@ def _hair_sample_dir(
     (lobe picked proportional to luminance, vMF longitudinal + logistic
     azimuthal sampling) — extracted from shading.mojo's shade_hair Step 15
     verbatim, same RNG draw order (r_lobe, u_th, u_phi_v, u3), so it's a
-    drop-in replacement there and reusable by bdpt.mojo/sppm.mojo for
+    drop-in replacement there and reusable by bdpt_*.mojo/sppm.mojo for
     continuing a path through a stored hair vertex (mirrors
     bxdf_sample_conductor's role for conductor). Returns
     (wi, f, pdf_over_cos, cos_ti); pdf_over_cos already has the /cos_ti
@@ -2272,9 +2272,9 @@ def build_bvh2(
     return result
 
 # ── Unjittered normals/depth pass, for the denoiser's guide buffers ─────────
-# Lives here (not rendering.mojo, where it originated) so bdpt.mojo/sppm.mojo
+# Lives here (not rendering.mojo, where it originated) so bdpt_*.mojo/sppm.mojo
 # can use it too without a circular import: rendering.mojo -> shading.mojo ->
-# sppm.mojo already exists, so sppm.mojo (or bdpt.mojo, which imports FROM
+# sppm.mojo already exists, so sppm.mojo (or bdpt_*.mojo, which imports FROM
 # sppm.mojo) importing FROM rendering.mojo would cycle back to itself.
 # render_aux_buffers only ever needed BVH/geometry primitives, never
 # shading.mojo, so it belongs next to traverse_bvh2_core/test_spheres

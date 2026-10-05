@@ -18,7 +18,7 @@ offset arithmetic over the blob precisely so it can run in a shader -- so a
 Mojo transcription of it runs unchanged on both backends, exactly like
 `traverse_bvh2_core` does. Writing two samplers is the mistake this
 codebase already paid for with the VCM backends (see the light/camera step
-sharing in bdpt.mojo); do not repeat it here.
+sharing in bdpt_*.mojo); do not repeat it here.
 
 LAYOUT MAP (from /usr/include/nanovdb/PNanoVDB.h, NanoVDB 32.9.0)
 The blob is a single contiguous allocation, addressed by byte offset:

@@ -1,5 +1,5 @@
 # VCM parameters (depth, keep, radius) and the merge grid.
-# Part of the BDPT/VCM machinery that used to be one file (bdpt.mojo).
+# Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from max.algorithm import parallelize
 from std.math import sqrt, floor, max, min, abs, pow

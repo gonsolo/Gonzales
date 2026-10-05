@@ -80,7 +80,7 @@ comptime SSS_WALK_ROUNDS: Int = 256
 # item 1) as part of collapsing three historically independent
 # implementations of this same physical operation down to a smaller shared
 # core. Full unification turned out to be a partial win, not a total one:
-# BDPT and SPPM were ALREADY calling this exact function (bdpt.mojo imports
+# BDPT and SPPM were ALREADY calling this exact function (bdpt_*.mojo imports
 # it from sppm.mojo) by the time this pass started, so only the free-flight-
 # DISTANCE sampling and the chromatic transmittance-RATIO math needed
 # extracting for gpu.mojo to share too (see medium_transmittance_ratio_spectral
@@ -346,7 +346,7 @@ def medium_sigma_t_spectral(
     spec_refl_unbounded -- the same unbounded-coefficient upsampler used for
     reflectance-shaped weights that may exceed 1 (an extinction coefficient
     is the same kind of quantity). Shared by spectral_free_flight_weight,
-    bdpt.mojo's _visible_transmittance and gpu.mojo's _sample_medium_core
+    bdpt_nee.mojo's _visible_transmittance and gpu.mojo's _sample_medium_core
     (via medium_transmittance_ratio_spectral below) so all consumers agree on
     what "the medium's colour" means."""
     var sig_t = med.sigma_a + med.sigma_s
@@ -464,7 +464,7 @@ def spectral_free_flight_weight(
     # A density-modulated medium has NO chromatic ratio to carry: its free
     # flight accepts/rejects on the red channel alone, so `ff.weight` comes
     # back at 1 and the correct spectral weight is 1 too. Guarding HERE rather
-    # than at all five consumers (bdpt.mojo x4, sppm.mojo x1) keeps the rule in
+    # than at all five consumers (bdpt_*.mojo x4, sppm.mojo x1) keeps the rule in
     # the one place that owns it -- and it matters: sigma_a/sigma_s are
     # PER-UNIT-DENSITY coefficients for such a medium (see Medium), so
     # feeding them to the Beer-Lambert exponential below would weight by an
@@ -1035,7 +1035,7 @@ struct MediumInterface(TrivialRegisterPassable):
 #
 # This used to live inline in gpu.mojo's `_sample_medium_core`, which meant the
 # PLAIN PATH TRACER was the only integrator that ever sampled a density field:
-# SPPM (sppm.mojo) and BDPT/VCM (bdpt.mojo) called
+# SPPM (sppm.mojo) and BDPT/VCM (bdpt_*.mojo) called
 # `sample_homogeneous_free_flight` UNCONDITIONALLY, so for any "uniformgrid",
 # "nanovdb" or procedural-"cloud" medium they used sigma_a/sigma_s -- which are
 # PER-UNIT-DENSITY coefficients for such a medium, see Medium -- as if they
@@ -1252,7 +1252,7 @@ def sample_free_flight(
     # Delta tracking's collision density is not analytic; it accepts on the
     # red channel alone and carries no chromatic ratio (weight 1), so the
     # honest pdf to record is that lane's own exponential -- which is what
-    # bdpt.mojo reconstructed here before, so heterogeneous media are
+    # bdpt_*.mojo reconstructed here before, so heterogeneous media are
     # bit-for-bit unchanged by the MIS work.
     var het_sig = density * sigma_t.r
     return FreeFlight(True, t, het_sig, het_sig * exp(-het_sig * t), alb, RGB(Float32(1)), emission)

@@ -1,5 +1,5 @@
 # BSSRDF exit sampling for BDPT/VCM subpaths.
-# Part of the BDPT/VCM machinery that used to be one file (bdpt.mojo).
+# Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.collections import Array
 from std.math import sqrt

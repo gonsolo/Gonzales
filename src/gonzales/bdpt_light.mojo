@@ -1,5 +1,5 @@
 # BDPT/VCM light subpath: state, init and the per-bounce step.
-# Part of the BDPT/VCM machinery that used to be one file (bdpt.mojo).
+# Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.math import sqrt, cos, sin, log, exp, max, abs
 from .geometry import face_toward, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, PI, INV_FOUR_PI, INV_PI
@@ -96,7 +96,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
     pass_wl: SampledWavelengths,
 ) -> VCMLightPathState:
     """Task #163 stage 4: light-emission setup half of
-    `_bdpt_trace_light_path` (bdpt.mojo:1734-1880), split out to seed a
+    `_bdpt_trace_light_path` (bdpt_*.mojo:1734-1880), split out to seed a
     `VCMLightPathState` for the wavefront-staged bounce loop instead of
     falling straight into an inline `for` loop. Byte-for-byte copy of that
     function's pre-loop body -- see its own docstring/VCM Stage 2b comments
@@ -410,7 +410,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
     camis_recs: Pointer[CamisLightRecord, MutUntrackedOrigin],
 ) -> Bool:
     """Task #163 stage 4: wavefront-staged variant of ONE bounce iteration of
-    `_bdpt_trace_light_path`'s main loop (bdpt.mojo:1882-2383), split out so a
+    `_bdpt_trace_light_path`'s main loop (bdpt_*.mojo:1882-2383), split out so a
     GPU host loop can interleave a separate batched intersect dispatch
     (traverse_paths_gpu today, Vulkan RT via vulkaninterop later) between
     calls instead of tracing the whole subpath inside one kernel invocation.

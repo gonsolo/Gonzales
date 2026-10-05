@@ -31,7 +31,7 @@ weight from those pdfs.  Test: reproduce the same weights from the local
 dVCM/dVC recursion carried along each subpath.  If the recursion is right the
 two agree for every strategy and the weights sum to 1.
 
-Conventions match bdpt.mojo:
+Conventions match bdpt_*.mojo:
   surface vertex:  directional pdf cos/pi (Lambertian), measure = area
   volume  vertex:  directional pdf 1/(4pi) (isotropic),  measure = volume
   edge a->b:       p_measure(b) = p_dir(a, w_ab) * Gb(a,b) * FF(b, d)
@@ -48,7 +48,7 @@ INV_FOUR_PI = 1.0 / (4.0 * math.pi)
 # subpaths. eta = N * (kernel measure) is VCM's "how many merges does one
 # connection's worth of density buy", and the kernel measure is the
 # acceptance region in the vertex's OWN measure: a DISK on a surface, a
-# BALL in a medium. bdpt.mojo uses one global disk-area eta for both, which
+# BALL in a medium. bdpt_*.mojo uses one global disk-area eta for both, which
 # is the thing this section exists to check.
 R_MERGE = 0.045
 N_LIGHT = 12000.0
@@ -190,7 +190,7 @@ def brute_force_weights(xs, sigma_t, p_light_area, p_cam_area):
 def light_carries(xs, sigma_t, p_light_area, upto):
     """dVCM/dVC carried along the light subpath, up to vertex index `upto`.
 
-    Mirrors bdpt.mojo: on arrival  dVCM *= d^2 ; then (surface only) all
+    Mirrors bdpt_*.mojo: on arrival  dVCM *= d^2 ; then (surface only) all
     carries /= cos_fix.  On scatter  dVC = (cosOut/pdfDir)*(dVC*pdfRev + dVCM)
     with cosOut omitted at a volume vertex, and dVCM = 1/pdfDir.
     Free-flight factors enter exactly where the ground truth puts them.
@@ -216,7 +216,7 @@ def light_carries(xs, sigma_t, p_light_area, upto):
         # own measure decides whether the kernel is a disk or a ball.
         # No photon is stored at the emitter itself, so no merge can happen
         # there and its eta term must not enter the recursion -- exactly the
-        # rule bdpt.mojo/sppm.mojo state ("never stores a photon at
+        # rule bdpt_*.mojo/sppm.mojo state ("never stores a photon at
         # bounce==0"). Counting it makes the weights double-count merging.
         eta_a = eta_vcm(a) if i > 0 else 0.0
         inv_eta_a = 1.0 / eta_vcm(a) if i > 0 else 0.0

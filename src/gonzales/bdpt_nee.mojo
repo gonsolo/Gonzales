@@ -1,5 +1,5 @@
 # BDPT/VCM next-event estimation: shadow-ray transmittance, simple lights, MNEE through glass.
-# Part of the BDPT/VCM machinery that used to be one file (bdpt.mojo).
+# Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.collections import Array
 from std.math import sqrt, cos, sin, exp, max, min, abs
@@ -290,7 +290,7 @@ def _bdpt_mnee_diffuse_area_light(
     Newton iteration -- reusing shading.mojo's _mnee_walk/_mnee_walk2, the
     exact technique the plain path tracer's own _nee_area_lights already
     uses. This is WHY the plain path tracer correctly lights
-    barcelona-pavilion (night) while bdpt.mojo's VCM connect/merge cannot:
+    barcelona-pavilion (night) while bdpt_*.mojo's VCM connect/merge cannot:
     dielectric bounces are never stored as LVC vertices (see
     project_vcm_stage2_mis_derivation memory), so a light behind glass is
     structurally invisible to connect/merge, and its tiny solid angle

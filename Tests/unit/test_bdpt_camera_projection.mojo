@@ -1,4 +1,4 @@
-# Unit test for bdpt.mojo's `_bdpt_world_to_raster` -- the world->film
+# Unit test for bdpt_*.mojo's `_bdpt_world_to_raster` -- the world->film
 # projection the t=1 light-tracing strategy needs.
 #
 # Why this deserves its own test: it is the exact inverse of the camera

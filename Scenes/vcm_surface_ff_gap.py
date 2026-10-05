@@ -3,8 +3,8 @@
 
 `Scenes/vcm_volume_mis_derivation.py` verifies the CORRECT recursion (free
 flight in the carries) to ~1e-16. This script isolates what the shipped
-bdpt.mojo actually does, which is the same recursion with every free-flight
-factor dropped: surface arrival is `dVCM *= d*d` (bdpt.mojo:1798) followed by
+bdpt_*.mojo actually does, which is the same recursion with every free-flight
+factor dropped: surface arrival is `dVCM *= d*d` (bdpt_*.mojo:1798) followed by
 `/= cos_fix`, and the scatter update carries no `ff_a/ff_b` term.
 
 For an ALL-SURFACE path the two differ in exactly one place. `ff_a/ff_b` is

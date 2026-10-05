@@ -4,7 +4,7 @@ A VCM subpath carries three running quantities (Georgiev et al. 2012 /
 SmallVCM) that let any later vertex compute the MIS weight over every
 connection and merging strategy without walking back along the path. The
 recursion is short but easy to get subtly wrong, and it was written out by
-hand at sixteen sites in bdpt.mojo -- once per material per subpath -- which
+hand at sixteen sites in bdpt_*.mojo -- once per material per subpath -- which
 is how a material ends up with a rule the others do not have.
 
 Three rules cover every vertex:
@@ -60,7 +60,7 @@ def vcm_scatter_carries[dvc0: Bool = False](
     forward density zeroes the carries: the strategies this vertex could
     participate in have no density to weight them by.
 
-    `dvc0=True` (bdpt.mojo's _VCM_CAMIS build) repurposes the third slot as
+    `dvc0=True` (vcm_grid.mojo's _VCM_CAMIS build) repurposes the third slot as
     dVC0, the dVC recursion run with w_vm = 0:
 
         dVC0 = (cos_out/pdf_fwd) * (dVC0 * pdf_rev + dVCM)
@@ -143,7 +143,7 @@ def bssrdf_exit_scatter_carries[dvc0: Bool = False](
 #
 # Both were a bare `power_heuristic(pdf_a, pdf_b)` -- a TWO-strategy weight,
 # beta=2, that knows only about NEE and BSDF sampling. Every other strategy
-# here is combined with the BALANCE heuristic (bdpt.mojo's opening line: "MIS:
+# here is combined with the BALANCE heuristic (bdpt_*.mojo's opening line: "MIS:
 # balance heuristic over all valid connection strategies"), and the two
 # families cannot partition unity: NEE and the escape divided a full 1.0
 # between themselves, leaving no share for vertex merging or t=1 light

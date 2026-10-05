@@ -1,11 +1,11 @@
-# Unit tests for pure MIS/vertex-evaluation math extracted from bdpt.mojo:
+# Unit tests for pure MIS/vertex-evaluation math extracted from bdpt_*.mojo:
 # solid-angle-to-area PDF conversion, the geometry term G(a,b), per-vertex
 # BSDF/phase evaluation (_eval_vertex_spectral), and the GGX conductor
 # connection BRDF (_eval_conductor_ggx_spectral) used when connecting a camera
 # vertex to a light vertex
 # via a shadow ray. (power_heuristic itself is tested in test_sampling.mojo;
 # ggx_D/ggx_G2 primitives are tested in test_bxdf.mojo -- this file tests the
-# combination logic bdpt.mojo layers on top of them, not those primitives
+# combination logic bdpt_*.mojo layers on top of them, not those primitives
 # themselves.) Also covers _bdpt_connect_to_cache's exhaustive-sum-over-the-
 # paired-light-path structure (VCM Stage 2b's standard-Veach-pairing
 # rewrite), using the shared TriangleSceneFixture for a real (if

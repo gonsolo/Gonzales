@@ -10,12 +10,12 @@
 # Deliberately dependency-free (plain scalars and Lists, no scene, no BVH,
 # no Vertex) -- the same scope restir_vol.mojo keeps, and for the same
 # reason: the math can then be verified in isolation, before any of it is
-# wired into bdpt.mojo's much larger machinery.
+# wired into bdpt_*.mojo's much larger machinery.
 #
 # Float64 throughout: this is a reference/verification module, and the
 # brute-force side multiplies O(path length) pdfs together, which is
 # exactly the cancellation the recursive form exists to avoid. The eventual
-# renderer-side implementation would be Float32, matching bdpt.mojo's
+# renderer-side implementation would be Float32, matching bdpt_*.mojo's
 # existing dVCM/dVC carries.
 
 from std.math import abs
@@ -29,7 +29,7 @@ from std.math import abs
 # so s ranges over 0 ..= k+1 and the connection happens across edge s-1.
 #
 # Per EDGE e (between x_e and x_{e+1}) the caller supplies four numbers,
-# all of which bdpt.mojo already computes at each bounce:
+# all of which bdpt_*.mojo already computes at each bounce:
 #
 #   pf[e]  forward solid-angle pdf, sampling x_e -> x_{e+1}   (light-ward)
 #   pr[e]  reverse solid-angle pdf, sampling x_{e+1} -> x_e   (camera-ward)
@@ -116,16 +116,16 @@ def bdpt_mis_weight_bruteforce(
 # camera subpath. NEITHER references the other side. That is the whole
 # point: it is what lets a shift reuse one side untouched.
 #
-# This is the same shape bdpt.mojo already ships at its connect sites
+# This is the same shape bdpt_*.mojo already ships at its connect sites
 #   w_light  = camera_bsdf_dir_pdf_a * (eta_vm + lv.dVCM + lv.dVC * ...)
 #   w_camera = light_bsdf_dir_pdf_a  * (eta_vm + cv.dVCM + cv.dVC * ...)
 #   mis      = 1 / (w_light + 1 + w_camera)
 # with eta_vm = 0 (merging off, which is ReSTIR BDPT's setting) and the
 # vertex's own reverse pdf folded into B_L/B_C rather than carried beside
-# it -- bdpt.mojo splits the same tail across two channels (dVCM being the
+# it -- bdpt_*.mojo splits the same tail across two channels (dVCM being the
 # "connect right here" term, dVC the deeper tail). The two factorings agree
 # algebraically, but note what is and isn't checked here: the tests verify
-# THIS module against brute force. They do not re-verify bdpt.mojo's
+# THIS module against brute force. They do not re-verify bdpt_*.mojo's
 # two-channel split, which has its own reference validation against
 # SmallVCM (see project_vcm_stage2_mis_derivation).
 

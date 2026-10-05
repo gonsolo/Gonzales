@@ -1,5 +1,5 @@
 # BDPT/VCM connections: to the camera (t=1 splat), to the light-vertex cache, and between vertices.
-# Part of the BDPT/VCM machinery that used to be one file (bdpt.mojo).
+# Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.collections import Array
 from std.math import sqrt, floor, log, max, min, abs

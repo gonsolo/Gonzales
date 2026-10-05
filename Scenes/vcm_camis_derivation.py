@@ -32,7 +32,7 @@ the upper clamp of Eq. 12 only guards rounding.
 In VCM only merging is a correlated (splitting) technique: n_t = the number of
 light paths for merges, and connections have n = 1, whence c = 1 by Eq. 12.
 So CAMIS amounts to replacing merging's MIS density eta(x) = k(x) N pi r(x)^2 by
-c(x) eta(x). In bdpt.mojo that means multiplying c into the RESULT of
+c(x) eta(x). In bdpt_*.mojo that means multiplying c into the RESULT of
 _vcm_eta_scale (merging's density shrinks, its weight falls). It must NOT be
 multiplied into inv_eta_x directly: that divides merging's density by c and
 RAISES its weight -- the opposite of CAMIS and of the validated "scale merging
@@ -65,7 +65,7 @@ THE 3-DAY CUT (plan deep-hugging-locket.md) -- an APPROXIMATION, not CAMIS:
     vertex (e.g. the dead dVM slot) and form m log(pi r^2) + sum at merge
     time -- the "light product w/ one clamp" column, equal to exact here.
 
-What the renderer can use, with no new pdf evaluations: bdpt.mojo stores
+What the renderer can use, with no new pdf evaluations: bdpt_*.mojo stores
 v.dVCM AFTER `dvcm *= t_hit^2` and the arrival cos divide, i.e.
 v.dVCM = d^2 / (pdf_fwd_w |cos|) = 1 / p_A(edge that arrived at v). So
     P(edge into v) = pi r^2 / max(v.dVCM, pi r^2)
@@ -177,7 +177,7 @@ def direct_camis(lens, cam_vs, light_path, n_t, light_area=area.LIGHT_AREA,
 # ── the renderer's form: log-space accumulator on the carries ──────────────
 
 def log_edge_from_carry(r2, dvcm_arrival):
-    """log min(pi r^2 p_A, 1) with p_A = 1/dVCM_arrival, as bdpt.mojo would
+    """log min(pi r^2 p_A, 1) with p_A = 1/dVCM_arrival, as bdpt_*.mojo would
     form it after vcm_arrival_carries. dVCM = 0 (delta) gives log 1 = 0."""
     k = math.pi * r2
     return math.log(k / max(dvcm_arrival, k))

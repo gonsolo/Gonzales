@@ -4,7 +4,7 @@
 Sibling of vcm_env_mis_derivation.py (environment light) and
 vcm_volume_mis_derivation.py. Same method: enumerate every strategy's density
 over the path space (y0, x_0..x_{n-1}) directly, form the balance-heuristic
-weights, and compare them with the weights bdpt.mojo's local dVCM/dVC formulas
+weights, and compare them with the weights bdpt_*.mojo's local dVCM/dVC formulas
 produce. A correct estimator's weights sum to 1 for every path.
 
 Why this file exists (2026-09-24): two symptoms pointed at area-light MIS.
@@ -14,9 +14,9 @@ Why this file exists (2026-09-24): two symptoms pointed at area-light MIS.
     for merge-grid thinning) brightened the candle lanterns 1.3-2.1x. Correct
     weights cannot move the mean, whatever eta(x) is.
 
-bdpt.mojo runs, for an area light:
+bdpt_*.mojo runs, for an area light:
   s=0   camera BSDF-samples the light      weighted by a 2-strategy POWER
-                                           heuristic (bdpt.mojo, "area-light
+                                           heuristic (bdpt_*.mojo, "area-light
                                            emission hit")
   s=1   camera vertex x_0 connects to the paired light path's ORIGIN vertex y0
         (there is no separate area-light NEE -- see the camera bounce's NEE
@@ -116,7 +116,7 @@ def scatter(dvcm, dvc, cos_out, pdf_fwd, pdf_rev, eta):
 
 
 def arrive(dvcm, dvc, a, b):
-    """bdpt.mojo's arrival: dVCM *= d^2, then both / cos at b."""
+    """bdpt_*.mojo's arrival: dVCM *= d^2, then both / cos at b."""
     d = norm(sub(b.pos, a.pos))
     w = unit(sub(b.pos, a.pos))
     cf = abs(dot(b.n, w))
@@ -177,7 +177,7 @@ def renderer_connect(y0, xs, lens, etas, s, eta_at_light_vertex):
         (lvcm, lvc) = light_carries(y0, xs, etas, 0)[1]      # y0's own stored carries
         dir_lc = unit(sub(cv.pos, lv.pos))
         cos_lv = abs(dot(lv.n, dir_lc))
-        light_dir_w = cos_lv / math.pi                       # "REASONED" in bdpt.mojo
+        light_dir_w = cos_lv / math.pi                       # "REASONED" in bdpt_*.mojo
         light_rev_w = cos_lv / math.pi
         eta_l = eta_at_light_vertex
     else:

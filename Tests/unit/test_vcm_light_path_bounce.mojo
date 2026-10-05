@@ -144,7 +144,7 @@ def _build_scene() -> SceneView:
     )
 
 # Both subpath halves of a VCM pass share one hero-wavelength set (see
-# bdpt.mojo's _bdpt_pass_wavelengths); this test drives the halves directly,
+# bdpt_*.mojo's _bdpt_pass_wavelengths); this test drives the halves directly,
 # so it supplies that set itself.
 comptime _TEST_PASS_WL = sample_wavelengths(Float32(0.5))
 

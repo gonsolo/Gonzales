@@ -1,5 +1,5 @@
 # BDPT/VCM CPU render driver.
-# Part of the BDPT/VCM machinery that used to be one file (bdpt.mojo).
+# Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.sys.info import size_of
 from max.algorithm import parallelize

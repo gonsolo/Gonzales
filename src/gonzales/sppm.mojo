@@ -1,5 +1,5 @@
 # Stochastic Progressive Photon Mapping — CPU driver + GPU kernels, sharing
-# one comptime[use_gpu]-parameterized core (same pattern as bdpt.mojo's
+# one comptime[use_gpu]-parameterized core (same pattern as bdpt_*.mojo's
 # LVC-BPT port; see project_unified_renderer_roadmap in memory).
 # Reference: Hachisuka et al. 2008 "Progressive Photon Mapping"
 
@@ -51,7 +51,7 @@ from .spectrum import (
 
 
 comptime _ALPHA  = Float32(2.0) / Float32(3.0)  # pbrt-v4's own value (integrators.cpp's SPPM radius-update `gamma`, Hachisuka/Jensen progressive photon mapping); was 0.7, a real but small (~5% asymptotic shrinkage-rate) mismatch
-comptime _MAX_B  = 10  # hard safety ceiling, matching bdpt.mojo's own
+comptime _MAX_B  = 10  # hard safety ceiling, matching bdpt_*.mojo's own
                        # _BDPT_MAX_VERTS -- SPPM's bounce loops are additionally
                        # bounded by min(scene maxdepth, _MAX_B), see
                        # _sppm_trace_visible_point/_sppm_trace_photon's own
@@ -158,14 +158,14 @@ struct SPPMPixel(TrivialRegisterPassable):
     # when mat_kind=1 or 2, since both GGX and hair evaluation need both
     # directions unlike Lambertian's angle-independent f_r.
     var wo: Vec3f
-    # GGX roughness (max(roughU, roughV), matching bdpt.mojo's BDPTVertex
+    # GGX roughness (max(roughU, roughV), matching bdpt_vertex.mojo's BDPTVertex
     # convention) — only meaningful when mat_kind=1. alb doubles as F0 for
-    # conductor VPs, same repurposing bdpt.mojo's BDPTVertex.alb already uses.
+    # conductor VPs, same repurposing bdpt_vertex.mojo's BDPTVertex.alb already uses.
     var alpha: Float32
     # mat_kind=2 (hair) only: material index (to re-fetch eta/sigma_a/betaM/
     # betaN from sd.materials) + curve hit info (to re-derive the fiber frame
     # via _hair_precompute) — NOT the full ~30-field HairLobeConstants, to
-    # keep this struct small for every other VP kind; mirrors bdpt.mojo's
+    # keep this struct small for every other VP kind; mirrors bdpt_*.mojo's
     # BDPTVertex's own mat_idx/hair_curve_idx/hair_h/hair_v fields exactly.
     var mat_idx: Int32
     var hair_curve_idx: Int32
@@ -223,7 +223,7 @@ def _geom_normal(
     them, every caller either had to special-case type==4 itself before
     calling this -- duplicating the same sphere_outward_normal(hit, center)
     one-liner at each of the (as of 2026-09-15) 21 call sites across
-    bdpt.mojo/sppm.mojo -- or, at 2 call sites that omitted the guard
+    bdpt_*.mojo/sppm.mojo -- or, at 2 call sites that omitted the guard
     entirely, silently got the +Y placeholder below: a live bug (a diffuse
     analytic sphere corrupted both SPPM's visible-point normal and its
     photon-bounce normal identically to how a dielectric sphere corrupted
@@ -654,7 +654,7 @@ def medium_after_crossing(
 ) -> Int32:
     """Return new current_medium_idx after crossing a surface with MediumInterface.
 
-    Shared by SPPM and VCM (bdpt.mojo had a byte-for-byte copy of this until
+    Shared by SPPM and VCM (bdpt_*.mojo had a byte-for-byte copy of this until
     2026-09-17, whose mesh branch also ignored instance transforms).
 
     `hit` is REQUIRED for analytic spheres: their outward normal is
@@ -690,10 +690,10 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     the GPU kernel (sppm_gen_vp_gpu, one slot per thread, [True]) — the
     bounce loop itself has zero CPU/GPU divergence EXCEPT `_tex_lookup`'s
     own CPU-filename vs GPU-texture-array dispatch for diffuse/coateddiffuse
-    albedo (task #150/#151: bdpt.mojo/sppm.mojo previously never evaluated
+    albedo (task #150/#151: bdpt_*.mojo/sppm.mojo previously never evaluated
     image textures at all, always falling back to a flat grey default).
     `scratch` is caller-owned (no internal alloc/free) so this is safe to
-    call from a GPU kernel thread, same convention as bdpt.mojo's shared
+    call from a GPU kernel thread, same convention as bdpt_*.mojo's shared
     subpath tracers."""
     var has_media = Int(sd.mediumCount) > 0
 
@@ -812,7 +812,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             if ff.collided:
                 # Volume scatter — store VP here
                 # NOTE: ff.weight (the chromatic collision ratio) is deliberately
-                # NOT applied here, unlike bdpt.mojo. Applying it to both the VP
+                # NOT applied here, unlike bdpt_*.mojo. Applying it to both the VP
                 # and photon subpaths measurably WORSENED SPPM's agreement with
                 # the path tracer on a chromatic scatterer (blue 1.22x -> 2.03x
                 # of PT; chroma spread 1.38 -> 2.14), while VCM improved sharply
@@ -847,7 +847,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         # placeholder (e.g. pbrt's "Null" material on AreaLightSource
         # spheres), so mat.type never reflects that this primitive emits;
         # Sphere.isAreaLight is the only way to know. No MIS needed (unlike
-        # bdpt.mojo's equivalent fix): this VP sample is either a direct
+        # bdpt_*.mojo's equivalent fix): this VP sample is either a direct
         # light hit (valid stays 0, credited here) XOR a real gatherable
         # surface that separately does its own NEE — mutually exclusive per
         # sample, same reasoning as the infinite-light miss-escape case
@@ -859,7 +859,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 break
 
         # Mix material: stochastically resolve to one of two sub-materials
-        # (mirrors shading.mojo's shade_mix / bdpt.mojo's own resolution).
+        # (mirrors shading.mojo's shade_mix / bdpt_*.mojo's own resolution).
         if mat.type == MatKind.mix:
             var mix_idx1 = Int(mat.tex_idx & Int32(0xFFFF))
             var mix_idx2 = Int((mat.tex_idx >> 16) & Int32(0xFFFF))
@@ -912,7 +912,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # rough_dielectric reads inside vs outside off it).
             var outward = mat.type == MatKind.dielectric
             # GEOMETRY, not material: a curve hit has its own normal, and no
-            # texture or bump map -- matches bdpt.mojo's own on_curve gate.
+            # texture or bump map -- matches bdpt_*.mojo's own on_curve gate.
             var on_curve = inter.primId.type == Int8(5)
             var gn: Vec3f
             if on_curve:
@@ -938,7 +938,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                     gn = face_toward(gn, -ray_dir)   # pbrt two-sided reflection, see face_toward
             # A smooth conductor is the one kind here that is genuinely
             # delta: it scatters but stores no visible point, exactly like
-            # bdpt.mojo's own lobe_is_delta_of gate.
+            # bdpt_*.mojo's own lobe_is_delta_of gate.
             if not lobe_is_delta_of(mat):
                 if mat.type == MatKind.coated_diffuse and tr_effectively_smooth(max(mat.roughU, mat.roughV)):
                     # The smooth coat's mirror lobe is a delta the gather cannot see: take it with
@@ -1114,7 +1114,7 @@ def _sppm_store_photon[use_gpu: Bool](
     """Reserve the next photon slot and store `ph` there, dropping it if the
     buffer is already full. Comptime-branches only on the slot-reservation
     primitive (atomic fetch-add for racing GPU threads vs. a plain
-    increment for the serial CPU loop) — mirrors bdpt.mojo's
+    increment for the serial CPU loop) — mirrors bdpt_*.mojo's
     _bdpt_store_lvc_vertex[use_gpu] exactly."""
     comptime if use_gpu:
         var slot = Int(Atomic.fetch_add(counter, Int32(1)))
@@ -1485,7 +1485,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 _sppm_store_photon[use_gpu](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
-            # Real image-texture reflectance -- see bdpt.mojo's matching
+            # Real image-texture reflectance -- see bdpt_*.mojo's matching
             # light-side comment (task #150/#151). Affects the RR
             # continuation probability AND the flux multiply below, since a
             # wrong (flat-grey) albedo here would corrupt every subsequent
@@ -1501,7 +1501,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             # share one texture slot, see shading.mojo's matching comment),
             # picked stochastically by luminance, same convention as the
             # shared bxdf.mojo:bxdf_sample_diffuse_transmit the path tracer
-            # uses and bdpt.mojo's two camera/light-path copies (see
+            # uses and bdpt_*.mojo's two camera/light-path copies (see
             # project_photon_estimator_energy_gap memory for the 1e-6-clamp
             # bug those two had and its fix, d2a3cd84 -- NOT reproduced
             # here). Before this, the photon pass ignored the transmit lobe
@@ -1519,7 +1519,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 var trans_dt = eff_alb if Int(mat.tex_idx) != -1 else mat.emission
                 var pr_dt = eff_alb.luma()
                 var pt_dt = trans_dt.luma()
-                # Nothing to scatter -- see bdpt.mojo's matching comment
+                # Nothing to scatter -- see bdpt_*.mojo's matching comment
                 # (d2a3cd84) for why this must TERMINATE, not force a lobe.
                 if pr_dt + pt_dt <= Float32(1e-9):
                     break
@@ -1654,7 +1654,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             # Rough conductor/coated_conductor: store a gatherable photon
             # (same n_events > 1 depth-0 double-count guard as diffuse) unless
             # the sampled lobe is a perfect-mirror delta, which just
-            # continues the path — mirrors bdpt.mojo's light-path treatment.
+            # continues the path — mirrors bdpt_*.mojo's light-path treatment.
             var gn_c = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
             if dot(gn_c, ray_dir) > Float32(0.0):
                 gn_c = gn_c * Float32(-1.0)
@@ -1711,7 +1711,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         elif mat.type == MatKind.hair:
             # No delta lobe, so always store (subject to the same depth-0
             # guard) and always importance-sample a continuation direction —
-            # mirrors bdpt.mojo's light-path hair treatment.
+            # mirrors bdpt_*.mojo's light-path hair treatment.
             var curve_idx_h = Int(inter.primId.id1)
             var wo_h = (-rd).to_simd()
             var hc = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wo_h)
@@ -1728,7 +1728,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         elif mat.type == MatKind.measured:
             # No delta lobe, so always store (same depth-0 guard as the
             # other branches) and always importance-sample a continuation
-            # direction -- mirrors bdpt.mojo's light-path measured
+            # direction -- mirrors bdpt_*.mojo's light-path measured
             # treatment, via the same shared bxdf.mojo/measured_bxdf_eval.mojo
             # interface.
             var gn_m = _geom_normal(inter, sd.meshes, sd.instances, sd.spheres, hit.to_simd())
@@ -1765,7 +1765,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var cos_wi_m = dot(wi_m, gn_m)
             if cos_wi_m <= Float32(0):
                 break
-            # The ADJOINT BRDF, as in bdpt.mojo's light path (LobeCtx.adjoint):
+            # The ADJOINT BRDF, as in bdpt_*.mojo's light path (LobeCtx.adjoint):
             # a photon needs f(toward camera, toward light); f_m is the other
             # order, and this table is not reciprocal near grazing.
             var f_adj_m = bxdf_eval_measured(mb_m, wi_l_m, wo_l_m, ph_wavelengths, spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65)[0]
@@ -2443,7 +2443,7 @@ def _sppm_vp_brdf(
     if vp.mat_kind == LobeKind.measured:
         # Measured BxDF is inherently spectral (tabulated `spectra` tensor
         # indexed by wavelength) -- does its own spectral eval + RGB
-        # conversion internally using vp.wavelengths, same as bdpt.mojo's
+        # conversion internally using vp.wavelengths, same as bdpt_*.mojo's
         # _eval_vertex mat_kind=3 branch.
         var mat_m = sd.materials[unsafe_offset=Int(vp.mat_idx)]
         var mb_m = sd.measuredBrdfs[unsafe_offset=Int(mat_m.measured_idx)]
@@ -2561,7 +2561,7 @@ def _sppm_nee_weight(
 def _sppm_vp_shadow_eps(vp: SPPMPixel, ref sd: SceneView, wo: Vec3f) -> Float32:
     """Shadow-ray self-intersection offset for a stored SPPM visible point.
     Hair vertices need the same curve-radius-scaled epsilon as the ray-bounce
-    offsets in shading.mojo/bdpt.mojo/sppm.mojo's own photon pass (see
+    offsets in shading.mojo/bdpt_*.mojo/sppm.mojo's own photon pass (see
     bvh.mojo's curve_offset_eps) -- the fixed 0.0001 that works fine for
     triangle/sphere hits was too coarse relative to a curve's own radius.
     Triangle/sphere-hit VPs are unaffected, unchanged fixed epsilon."""
@@ -2573,11 +2573,11 @@ def _sppm_vp_shadow_eps(vp: SPPMPixel, ref sd: SceneView, wo: Vec3f) -> Float32:
 
 @always_inline
 def _sppm_simple_light_count(ref sd: SceneView) -> Int:
-    """Sibling of shading.mojo's _nee_simple_light_count / bdpt.mojo's
+    """Sibling of shading.mojo's _nee_simple_light_count / bdpt_*.mojo's
     _bdpt_simple_light_count -- a third, independent definition rather than
     a shared one, because sppm.mojo is typed against SceneView (like
-    bdpt.mojo) but needs the (LightSample, tmax) PAIRING (like shading.mojo's
-    ShadeContext version), and bdpt.mojo already imports from sppm.mojo (for
+    bdpt_*.mojo) but needs the (LightSample, tmax) PAIRING (like shading.mojo's
+    ShadeContext version), and bdpt_*.mojo already imports from sppm.mojo (for
     _sppm_trace_visible_point etc.), so importing back the other way would be
     circular. distant + point + sphere; area and infinite stay at their own
     call sites, same rationale as the other two files."""
@@ -2624,7 +2624,7 @@ def _sppm_nee_one(
     CDF-uniform pick), distant lights, and infinite lights (all of the
     latter two — few and typically dominant, matching shading.mojo's own
     NEE asymmetry rationale) — no MIS weighting needed for infinite lights
-    here, unlike bdpt.mojo's camera-path NEE: a VP is only ever `valid` when
+    here, unlike bdpt_*.mojo's camera-path NEE: a VP is only ever `valid` when
     its ONE traced ray hit a real surface, and _sppm_trace_visible_point's
     own miss-escape env contribution (vp.env) only fires when it didn't —
     mutually exclusive per sample, so there's no competing strategy to
@@ -2707,7 +2707,7 @@ def _sppm_nee_one(
                     # per-wavelength material response x light emission,
                     # multiplied as a SpectralSample product (not each factor
                     # separately, for real product-of-spectra accuracy) then
-                    # converted back to RGB, mirroring bdpt.mojo's _connect.
+                    # converted back to RGB, mirroring bdpt_connect.mojo's _connect.
                     # bxdf_eval_any_spectral's conductor branch uses the same
                     # arbitrary-direction (no cosine fused) convention
                     # _sppm_vp_brdf's own bxdf_eval_conductor_ggx call already
@@ -2829,7 +2829,7 @@ def _sppm_finalize_albedo_one_pixel(
     denoiser's albedo guide buffer. SPPMPixel.alb is set once per VP sample
     at its first non-specular hit, in _sppm_trace_visible_point — already
     exactly the quantity the denoiser wants, no separate tracking needed
-    (unlike bdpt.mojo, which had to add a new return value for this).
+    (unlike bdpt_*.mojo, which had to add a new return value for this).
     Shared between the CPU driver (sppm_render) and the GPU finalize kernel
     (sppm_finalize_gpu)."""
     var acc = RGB(Float32(0))
@@ -2977,7 +2977,7 @@ def _sppm_render_core(
     the max-component sensor clamp yet -- the caller applies it ONCE, to
     their sum, after denoising `global_pixels` and adding `caustic_pixels`
     back unsmoothed. Same buffer contract as `_bdpt_render_core`
-    (bdpt.mojo): caller-owned `n_pix*3` Float32 arrays, iso-scaled, NOT yet
+    (bdpt_*.mojo): caller-owned `n_pix*3` Float32 arrays, iso-scaled, NOT yet
     denoised."""
     var fw = Int(psc[unsafe_offset=0].film_w)
     var fh = Int(psc[unsafe_offset=0].film_h)

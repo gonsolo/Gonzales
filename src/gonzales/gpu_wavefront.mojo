@@ -1193,7 +1193,7 @@ def gpu_gen_aux_buffers[Oc: Origin[mut=True]](
 # below -- this used to be duplicated ~380 lines in each. Safe to factor out
 # because it is pure host-side enqueue_function orchestration, not GPU device
 # code, so it doesn't touch the class of PTX-codegen bugs that blocks sharing
-# actual kernel bodies elsewhere in this codebase (see bdpt.mojo's MNEE/
+# actual kernel bodies elsewhere in this codebase (see bdpt_*.mojo's MNEE/
 # _connect duplication comments for that unrelated, still-real constraint).
 def deactivate_paths_past_maxdepth_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],

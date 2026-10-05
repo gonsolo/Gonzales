@@ -351,7 +351,7 @@ def write_image_cropped[Opx: Origin[mut=True]](
 # computation exactly (verified against a real cropwindow scene's reference
 # render), which is precisely why it should not be open-coded per call site:
 # it used to live only in pipeline.mojo, so `--sppm`/`--vcm` -- whose render+
-# write sites are in sppm.mojo/bdpt.mojo -- wrote the FULL frame and silently
+# write sites are in sppm.mojo/bdpt_*.mojo -- wrote the FULL frame and silently
 # ignored the crop (head.pbrt, cropwindow [.3 .8 .15 .7], came out uncropped
 # under both while the path tracer and pbrt agreed).
 def write_image_cropwindow[Opx: Origin[mut=True]](

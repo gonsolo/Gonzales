@@ -81,7 +81,7 @@ def main() raises:
     var vcm_no_keep_mis = False  # --vcm-no-keep-mis: thin, but hide it from merging's MIS
     var vcm_radius_from_camera = False  # --vcm-radius-from-camera: EXPERIMENTAL merge-radius
                                  # ceiling from median primary-ray depth instead of the whole
-                                 # scene's bounding sphere (vcm_render_gpu); see bdpt.mojo's
+                                 # scene's bounding sphere (vcm_render_gpu); see bdpt_*.mojo's
                                  # _camera_typical_distance docstring
     var vcm_radius_cam_percentile = Float32(0.5)      # --vcm-radius-cam-percentile P (0..1)
     var vcm_radius_cam_fraction_mult = Float32(1.0)   # --vcm-radius-cam-fraction-mult M

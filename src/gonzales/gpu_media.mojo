@@ -557,7 +557,7 @@ def _volume_area_light_nee(
                         # the case every medium scene in the corpus has --
                         # and does not model re-entry or nested media. A
                         # general version needs the medium-transition walk
-                        # bdpt.mojo's _visible_transmittance already does.
+                        # bdpt_nee.mojo's _visible_transmittance already does.
                         #
                         # test_spheres is REQUIRED here, not optional:
                         # traverse_bvh2_core walks the mesh/curve BVH only,
@@ -573,7 +573,7 @@ def _volume_area_light_nee(
                         # i.e. PT read 0.0000567 where the same scene with a
                         # mesh-box boundary reads 0.0355 (574x too dark).
                         # Same root cause and same shape as the sphere case
-                        # bdpt.mojo's _visible_transmittance needed, and as
+                        # bdpt_nee.mojo's _visible_transmittance needed, and as
                         # the vacuum-attenuation bug this very branch was
                         # written to fix -- that fix just never covered the
                         # sphere-bounded case.
@@ -762,7 +762,7 @@ def _sample_medium_core(
         # spec_refl_unbounded (the coefficient-safe smooth upsampler; grey
         # media pass through it exactly -- verified in
         # Tests/unit/test_coefficient_upsampling.mojo), THEN exponentiate PER
-        # LANE -- the same shared helper bdpt.mojo/sppm.mojo use, so CPU PT /
+        # LANE -- the same shared helper bdpt_*.mojo/sppm.mojo use, so CPU PT /
         # GPU PT / VCM / SPPM all treat a medium's colour identically.
         # See docs/02_spectra_and_color.md, "Chromatic extinction".
         path_ptr[].throughput *= medium_transmittance_ratio_spectral(

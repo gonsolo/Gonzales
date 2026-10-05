@@ -1,5 +1,5 @@
 # SPPM GPU kernels.
-# Part of the BDPT/VCM machinery that used to be one file (bdpt.mojo).
+# Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from max.gpu import block_idx, thread_idx, block_dim
 from .primitives import Intersection

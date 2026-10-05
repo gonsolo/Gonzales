@@ -1,5 +1,5 @@
 # BDPT/VCM path vertex and the shared depth/storage limits.
-# Part of the BDPT/VCM machinery that used to be one file (bdpt.mojo).
+# Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from .geometry import RGB, Point3f, Vec3f
 from .render_state import PDF_VOL_PHASE_HIT

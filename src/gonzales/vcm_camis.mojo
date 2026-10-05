@@ -276,12 +276,12 @@ def camis_light_scatter(
 # Pure functions, mirroring vcm_mis.mojo's style and Scenes/
 # vcm_camis_hybrid_derivation.py's eval_merge/_connect/_splat/_emission_hit
 # (Horner form only -- S0's recommendation, see camis_light_side). S3 wires
-# these into bdpt.mojo's real weight sites (_bdpt_merge_mis_weight,
+# these into bdpt_*.mojo's real weight sites (_bdpt_merge_mis_weight,
 # _bdpt_connect_mis_weight, the t=1 splat, the emission-hit escape); this
 # file only computes the weight given records + junction data, which is why
 # every function below takes explicit scalars for the ordinary VCM state
 # (dVCM, legacy dVC, eta, keep) that a call site already has -- CAMIS only
-# ever ADDS a `dVC0`/records pair alongside them (bdpt.mojo's dVM slot and
+# ever ADDS a `dVC0`/records pair alongside them (bdpt_*.mojo's dVM slot and
 # lvc_camis), never replaces them; the `camis_on=False` / out-of-Class path
 # below is exactly today's existing weight, byte for byte.
 #

@@ -10,7 +10,7 @@ camis_c and both camis_camera_side/camis_light_side's Horner-form record
 walks -- to that harness's printed table, so a formula regression anywhere
 in that chain is caught in milliseconds instead of as a percent-level
 brightness shift once S3 wires the real weight sites up (this file only
-tests the evaluators; nothing here is wired into bdpt.mojo yet, per
+tests the evaluators; nothing here is wired into bdpt_*.mojo yet, per
 vcm_camis.mojo's stage S1/S2 split).
 
 Tolerance is 1e-4 relative: the harness's own Float32 emulation (section 4)

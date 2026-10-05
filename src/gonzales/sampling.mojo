@@ -565,7 +565,7 @@ def camera_ray_from_film_xy[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     onto callers that deliberately use different ones.
     
     Was this same ~12-line block copy-pasted at four sites (sppm.mojo,
-    bdpt.mojo, and twice in pipeline.mojo -- one of which said so in its own
+    bdpt_*.mojo, and twice in pipeline.mojo -- one of which said so in its own
     comment: "same raster_to_camera/camera_to_world math as debug_trace_pixel
     above") with no shared function, despite one existing one call away."""
     var cx = r2c[unsafe_offset=0]*filmX + r2c[unsafe_offset=4]*filmY + r2c[unsafe_offset=12]

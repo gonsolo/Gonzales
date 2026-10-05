@@ -1,5 +1,5 @@
 # VCM GPU kernels: per-stage, merge grid, shadow resolve, Vulkan-interop ray kernels.
-# Part of the BDPT/VCM machinery that used to be one file (bdpt.mojo).
+# Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.collections import Array
 from max.gpu import block_idx, thread_idx, block_dim, MAX_THREADS_PER_BLOCK_METADATA

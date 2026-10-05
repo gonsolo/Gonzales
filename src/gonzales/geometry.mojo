@@ -242,7 +242,7 @@ struct Point2i(TrivialRegisterPassable):
     """A 2D INTEGER point: a pixel coordinate carried as one value instead of
     two loose Int32s. Narrow in scope today (restir_jitter_pixel below is its
     only producer) -- the flat `px = tid % fw; py = tid // fw` GPU
-    thread-index unpacks scattered through gpu.mojo/bdpt.mojo/sppm.mojo stay
+    thread-index unpacks scattered through gpu.mojo/bdpt_*.mojo/sppm.mojo stay
     scalar deliberately (they feed direct flat-array indexing in a hot
     kernel), so this is not meant to replace those."""
     var x: Int32

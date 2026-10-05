@@ -1,5 +1,5 @@
 # VCM GPU wavefront driver.
-# Part of the BDPT/VCM machinery that used to be one file (bdpt.mojo).
+# Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.sys import has_accelerator
 from std.sys.info import size_of
@@ -394,7 +394,7 @@ def vcm_render_gpu_wavefront(
                 # forces the CPU to idle-wait on GPU completion every
                 # sample, which cost far more than the dispatches it saved.
                 # Also, VCM's bounce loop doesn't respect the scene's own
-                # `maxdepth` (grep confirms bdpt.mojo never reads
+                # `maxdepth` (grep confirms bdpt_*.mojo never reads
                 # psc[0].max_depth) -- cornell-box's light paths routinely
                 # reach the full _BDPT_MAX_VERTS(10) cap via RR-only
                 # termination regardless of its maxdepth=4 setting, so even
@@ -599,9 +599,9 @@ def vcm_render_gpu_wavefront(
 # method in call to 'enqueue_function'", the kernel's own inferred type
 # showing as plain "thin -> None" instead of the expected "capturing
 # thin -> None"). The identical code compiles cleanly once moved to
-# bdpt.mojo (confirmed empirically, twice: once for an existing sppm.mojo
+# bdpt_*.mojo (confirmed empirically, twice: once for an existing sppm.mojo
 # kernel called cross-file, once for a brand-new kernel+host-function pair
-# defined directly in bdpt.mojo) -- this appears to be a real, per-FILE-
+# defined directly in bdpt_*.mojo) -- this appears to be a real, per-FILE-
 # specific compiler defect (a new file created for this code, e.g.
 # `sppm_gpu.mojo`, was ALSO cursed). See reference_mojo_compiler_bug_6759
 # memory / project_modular_26_5_0_migration memory for the full bisection.
@@ -619,6 +619,6 @@ def vcm_render_gpu_wavefront(
 # host-built SceneView `sd` call the EXACT SAME
 # shared function the CPU driver above calls (comptime[use_gpu]-branching
 # only at the two genuine concurrency-primitive divergence points: photon-
-# slot reservation and hash-grid bucket insertion) — mirrors bdpt.mojo's
+# slot reservation and hash-grid bucket insertion) — mirrors bdpt_*.mojo's
 # GPU kernels, deliberately unlike the old gpu_sppm.mojo (a full duplicate
 # reimplementation).
