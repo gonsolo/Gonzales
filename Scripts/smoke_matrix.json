@@ -35,8 +35,8 @@
     "tol": 0.03
   },
   "chromatic-medium.sppm": {
-    "mean": 0.392237,
-    "median": 0.388097,
+    "mean": 0.34744,
+    "median": 0.343424,
     "tol": 0.03
   },
   "chromatic-medium.vcm": {
@@ -185,8 +185,8 @@
     "tol": 0.03
   },
   "sss-slab.sppm": {
-    "mean": 41.614502,
-    "median": 60.0,
+    "mean": 41.460907,
+    "median": 56.623383,
     "tol": 0.03
   },
   "sss-slab.vcm": {

@@ -18,6 +18,7 @@ from std.memory.alloc import unsafe_alloc
 from .bvh import SceneView, render_aux_buffers
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import denoise, write_image_cropwindow
+from .rendering import apply_film_sensor
 from .geometry import RGB, _is_real_ptr
 
 
@@ -186,8 +187,15 @@ def finish_render[Op: Origin[mut=True], Oa: Origin[mut=True]](
             ng = ng.sensor_clamped(max_comp)
             noisy_owned[unsafe_offset=i*3+0] = ng.r; noisy_owned[unsafe_offset=i*3+1] = ng.g; noisy_owned[unsafe_offset=i*3+2] = ng.b
         noisy_ref = noisy_owned
+    else:
+        noisy_owned = unsafe_alloc[Float32](n_pix * 3)
+        for i in range(n_pix * 3):
+            noisy_owned[unsafe_offset=i] = pixels[unsafe_offset=i]
+        noisy_ref = noisy_owned
+    # Exposure time and the sensor white-balance/colour matrix, as the path tracer's driver applies them.
+    apply_film_sensor(out, n_pix, psc[unsafe_offset=0].film_exposuretime, psc[unsafe_offset=0].film_wb)
+    apply_film_sensor(noisy_owned, n_pix, psc[unsafe_offset=0].film_exposuretime, psc[unsafe_offset=0].film_wb)
     var ret = write_render_outputs(psc, out, noisy_ref, not no_denoise, albedo, normals, depth)
-    if has_extra:
-        noisy_owned.unsafe_free()
+    noisy_owned.unsafe_free()
     normals.unsafe_free(); depth.unsafe_free(); out.unsafe_free()
     return ret

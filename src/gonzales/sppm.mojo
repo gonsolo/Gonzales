@@ -36,6 +36,7 @@ from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_w
 from .shading import _tex_lookup, _get_tri_verts, _apply_surface_maps, \
     apply_surface_maps_at_hit, uv_footprint_at_hit, area_light_hit_cos
 from .geom_normal import _geom_normal
+from .shadow_media import shadow_transmittance
 from .sampling import power_heuristic, camera_ray_from_film_xy, FilmFilter, film_filter_of, film_filter_offset
 from .transform import transform_normal, Mat4
 from .rng import PCG32
@@ -622,6 +623,14 @@ def medium_after_crossing(
     var md = ray_dir[0]*n.x + ray_dir[1]*n.y + ray_dir[2]*n.z
     return iface.outside_medium_idx if md > Float32(0) else iface.inside_medium_idx
 
+@always_inline
+def _film_rgb(c: RGB, wl: SampledWavelengths, ref sd: SceneView) -> RGB:
+    """Seen radiance through the film's spectral response (a named sensor's curves), as the path tracer sees it."""
+    var sp = rgb_illuminant_to_spectral_sample(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, c.r, c.g, c.b, wl)
+    var (r, g, b) = spectral_sample_to_rgb(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, sp, wl)
+    return RGB(r, g, b)
+
+
 def _sppm_trace_visible_point[use_gpu: Bool](
     ref sd:       SceneView,
     mut pcg:  PCG32,
@@ -739,7 +748,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             for inf_i in range(Int(sd.infiniteLightCount)):
                 var ilight = sd.infiniteLights[unsafe_offset=inf_i]
                 var (Le, _pdf_unused) = _eval_infinite_light_and_pdf(ilight, rd, ro.to_simd())
-                vp.env += vp.beta * Le
+                vp.env += vp.beta * _film_rgb(Le, vp.wavelengths, sd)
             break
 
         var inter = scratch[unsafe_offset=0]
@@ -804,7 +813,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         if inter.primId.type == Int8(4):
             var sph_hit = sd.spheres[unsafe_offset=Int(inter.primId.id1)]
             if sph_hit.isAreaLight != Int8(0):
-                vp.env += vp.beta * sph_hit.emission
+                vp.env += vp.beta * _film_rgb(sph_hit.emission, vp.wavelengths, sd)
                 break
 
         # Mix material: stochastically resolve to one of two sub-materials
@@ -838,9 +847,9 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # AreaLight index, and the curve's emission lives in its own
             # material slot; a closed tube is always hit on its outside.
             if inter.primId.type == Int8(5):
-                vp.env += vp.beta * mat.emission
+                vp.env += vp.beta * _film_rgb(mat.emission, vp.wavelengths, sd)
             elif area_light_hit_cos(inter, sd.meshes, sd.instances, ray_dir) > Float32(0):
-                vp.env += vp.beta * sd.areaLights[unsafe_offset=Int(inter.primId.id1)].emission
+                vp.env += vp.beta * _film_rgb(sd.areaLights[unsafe_offset=Int(inter.primId.id1)].emission, vp.wavelengths, sd)
             break
 
         # See geometry.mojo's TERMINAL_SEGMENT_GRACE_ROUNDS: the loop bound
@@ -1272,6 +1281,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     var max_charged = min(maxdepth, _MAX_B)
     var bounce = 0
     var n_events = 0   # interactions so far, charged or not
+    var n_null = 0     # of those, null-boundary crossings
     while bounce < max_charged + TERMINAL_SEGMENT_GRACE_ROUNDS and n_events < max_charged + SSS_WALK_ROUNDS + TERMINAL_SEGMENT_GRACE_ROUNDS:
         n_events += 1
         # Charged up front, and the two subsurface-exempt branches below undo
@@ -1387,7 +1397,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             # branch's convention), then scatter with a layered sample. Now
             # after the maxdepth guard above, like every other material; the
             # old coat walk sat before it and could scatter one bounce past.
-            if n_events > 1:
+            if n_events - n_null > 1:
                 _sppm_store_photon[use_gpu](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
@@ -1430,7 +1440,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             # (matches pbrt's own SPPM, which skips gathering at depth 0
             # for the same reason: avoid double-counting direct light
             # once via NEE and again via an unfiltered photon density).
-            if n_events > 1:
+            if n_events - n_null > 1:
                 _sppm_store_photon[use_gpu](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
@@ -1506,7 +1516,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             # on any glossy surface, then scatters through THE lobe sampler
             # in importance mode (LobeCtx.adjoint: no 1/eta^2), reflecting or
             # transmitting. The OUTWARD normal, as lobe_eval requires.
-            if n_events > 1:
+            if n_events - n_null > 1:
                 _sppm_store_photon[use_gpu](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
@@ -1647,7 +1657,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             # photon has ALREADY ARRIVED at the surface, so it must be
             # deposited whether or not its OUTGOING sample is valid. Only
             # the continuation below consumes bs_c.
-            if not bxdf_is_delta(bs_c.flags) and n_events > 1:
+            if not bxdf_is_delta(bs_c.flags) and n_events - n_null > 1:
                 _sppm_store_photon[use_gpu](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
@@ -1664,7 +1674,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var curve_idx_h = Int(inter.primId.id1)
             var wo_h = (-rd).to_simd()
             var hc = _hair_precompute(mat, sd.curves, curve_idx_h, inter.v, inter.u, wo_h)
-            if n_events > 1:
+            if n_events - n_null > 1:
                 _sppm_store_photon[use_gpu](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
@@ -1699,7 +1709,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             # Deposited BEFORE sampling the continuation, like the conductor
             # branch: the photon arrived whether or not its outgoing sample
             # is valid.
-            if n_events > 1:
+            if n_events - n_null > 1:
                 _sppm_store_photon[use_gpu](
                     SPPMPhoton(pos=hit, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.surface, dir_in=rd, wavelengths=ph_wavelengths),
                     photons, max_photons, counter)
@@ -1723,6 +1733,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             ro = hit + rd * Float32(0.0002)
 
         elif mat.type == MatKind.interface:
+            n_null += 1   # a null boundary is not an interaction for the surface "first segment" store gates
             if has_media:
                 var new_idx = medium_after_crossing(ray_dir, inter, sd.meshes, mat, sd, hit)
                 if new_idx != Int32(-1) or mat.medium_interface_idx >= Int32(0):
@@ -2408,50 +2419,6 @@ def _sppm_vp_brdf(
     return vp.alb / PI
 
 @always_inline
-def _sppm_shadow_transmittance(
-    vp: SPPMPixel,
-    ref sd: SceneView,
-    org: Point3f,
-    wi: Vec3f,
-    dist: Float32,
-) -> RGB:
-    """Beer-Lambert transmittance along a shadow ray leaving a VP that sits
-    inside a participating medium. RGB(1) when the VP is in vacuum.
-
-    Mirrors gpu.mojo's `_volume_nee_light` homogeneous branch: the closed
-    form applies only over the span the ray actually spends INSIDE the
-    medium, which ends at the medium's bounding interface. This function does
-    not otherwise know where that is, so it finds it with an ordinary
-    closest-hit query -- interface surfaces are invisible to `any_hit` (they
-    must not occlude) but ARE visible to `traverse_bvh2_core`, so the first
-    hit IS that shell. Without this clamp a light outside the medium would be
-    attenuated across vacuum, the defect fixed for the path tracer in
-    f79999f4 (see project_volume_area_light_nee_bug)."""
-    if Int(vp.med_idx) < 0 or Int(sd.mediumCount) == 0:
-        return RGB(Float32(1))
-    var med = sd.mediums[unsafe_offset=Int(vp.med_idx)]
-    if med.grid_idx >= Int32(0) or med.nvdb_idx >= Int32(0):
-        # Heterogeneous: needs ratio tracking, not a closed form. SPPM only
-        # ever samples homogeneous free flight today (see
-        # sample_homogeneous_free_flight's own call sites), so a VP can only
-        # be inside a homogeneous medium -- but fail open rather than
-        # silently applying a wrong closed form if that ever changes.
-        return RGB(Float32(1))
-    var exit_i = Intersection(
-        PrimId(Int64(0), Int64(0), Int64(-1), Int32(-1), Int8(0), 0, 0, 0),
-        Float32(0), Float32(0), Float32(0), Int8(0), 0, 0, 0)
-    traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves,
-                       Ray(org, vec3f(wi)), dist, Pointer(to=exit_i),
-                       sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
-                       sd.spheres, Int(sd.sphereCount))
-    var span = dist if exit_i.hit == Int8(0) else exit_i.tHit
-    var sigma_t = med.sigma_a + med.sigma_s
-    return RGB(exp(-sigma_t.r * span), exp(-sigma_t.g * span), exp(-sigma_t.b * span))
-
-@always_inline
-@always_inline
-
-
 def _sppm_nee_weight(
     vp: SPPMPixel,
     ref sd: SceneView,
@@ -2560,6 +2527,23 @@ def _sppm_sample_simple_light(
     return (ls_s^, d)
 
 
+@always_inline
+def _sppm_shadow(
+    vp: SPPMPixel, ref sd: SceneView, org: Point3f, wi: Vec3f, tmax: Float32, mut pcg: PCG32,
+) -> SpectralSample:
+    """Visibility times transmittance of a VP shadow ray: black if blocked, 1 in a medium-free scene."""
+    if Int(sd.mediumCount) > 0:
+        return shadow_transmittance(org.to_simd(), wi, tmax, vp.med_idx, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves,
+                                    sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(sd.sphereCount),
+                                    sd.materials, sd.mediums, sd.mediumInterfaces, sd.grids, sd.nvdbGrids,
+                                    sd.spectral, vp.wavelengths, pcg)
+    if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, Ray(org, vec3f(wi)), tmax,
+                         sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(sd.sphereCount),
+                         materials=sd.materials):
+        return SpectralSample(Float32(0.0))
+    return SpectralSample(Float32(1.0))
+
+
 def _sppm_nee_one(
     vps:     Pointer[SPPMPixel, MutUntrackedOrigin],
     i:       Int,
@@ -2637,20 +2621,12 @@ def _sppm_nee_one(
             var cos_light = -dot(ln, wi)
             if cos_surface > Float32(0.0) and cos_light > Float32(0.0):
                 # Shadow ray, offset from both ends to avoid self-intersection.
-                var shadow_ray = Ray(shadow_org, vec3f(wi))
-                var t_max = dist * Float32(0.999)
-                if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, t_max,
-                                      sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
-                                      sd.spheres, Int(sd.sphereCount),
-                                      materials=sd.materials):
+                var tr_a = _sppm_shadow(vp, sd, shadow_org, wi, dist * Float32(0.999), pcg)
+                if not tr_a.is_black():
                     # pdf_area = 1/(n_area * total_area) — uniform-over-all-lights
                     # assumption, same as the emission-sampling flux scale factor.
                     var inv_pdf_area = Float32(n_area) * al.total_area
                     var geom = cos_surface * cos_light / dist2 * inv_pdf_area
-                    # Attenuate across whatever medium the VP sits in. RGB(1)
-                    # in vacuum, so this is inert for every media-free scene.
-                    var tr_a = _sppm_shadow_transmittance(vp, sd, shadow_org, wi, dist)
-                    geom *= tr_a.r
                     # Spectral eval (staged spectral rendering rollout, Stage 4
                     # -- see project_spectral_rendering memory): real
                     # per-wavelength material response x light emission,
@@ -2671,7 +2647,7 @@ def _sppm_nee_one(
                         vps[unsafe_offset=i].ld += (spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
                                                 vp.alb.r * INV_FOUR_PI, vp.alb.g * INV_FOUR_PI, vp.alb.b * INV_FOUR_PI, vp.wavelengths)
                                       * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
-                                      * geom)
+                                      * geom * tr_a)
                     elif sd.spectral.res <= 0:
                         # No spectral tables loaded: the one case
                         # lobe_eval's spectral path can't serve, so this
@@ -2679,7 +2655,7 @@ def _sppm_nee_one(
                         var brdf = _sppm_vp_brdf(vp, sd, vn, wi)
                         vps[unsafe_offset=i].ld += (spec_refl(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, brdf.r, brdf.g, brdf.b, vp.wavelengths)
                                       * spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
-                                      * geom)
+                                      * geom * tr_a)
                     else:
                         # THE shared evaluator (bxdf.mojo), the vertex's own
                         # LobeCtx -- covers ggx/hair/measured/layered/
@@ -2706,7 +2682,7 @@ def _sppm_nee_one(
                                       if le_vp.cos_used > Float32(1e-6)
                                       else SpectralSample(Float32(0.0)))
                         var light_spec = rgb_illuminant_to_spectral_sample(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, vp.wavelengths)
-                        vps[unsafe_offset=i].ld += f_spec * light_spec * geom
+                        vps[unsafe_offset=i].ld += f_spec * light_spec * geom * tr_a
 
     # Distant/point/sphere/infinite NEE — via the shared Light interface
     # (bvh.mojo's LightSample samplers) + BxDF interface (_sppm_nee_weight
@@ -2725,26 +2701,18 @@ def _sppm_nee_one(
         var w = _sppm_nee_weight(vp, sd, vn, wo, ls)
         if not w.is_black():
             var s_org = shadow_org_back if (two_sided_vp and dot(vp.geo_normal.to_simd(), ls.wi) < Float32(0)) else shadow_org
-            var shadow_ray = Ray(s_org, vec3f(ls.wi))
-            if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, tmax,
-                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
-                                  sd.spheres, Int(sd.sphereCount),
-                                  materials=sd.materials):
-                var tr_s = _sppm_shadow_transmittance(vp, sd, s_org, ls.wi, ls.dist)
-                vps[unsafe_offset=i].ld += w * tr_s.r
+            var tr_s = _sppm_shadow(vp, sd, s_org, ls.wi, tmax, pcg)
+            if not tr_s.is_black():
+                vps[unsafe_offset=i].ld += w * tr_s
 
     for inf_i in range(Int(sd.infiniteLightCount)):
         var ls_e = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
         var w_e = _sppm_nee_weight(vp, sd, vn, wo, ls_e)
         if not w_e.is_black():
             var s_org_e = shadow_org_back if (two_sided_vp and dot(vp.geo_normal.to_simd(), ls_e.wi) < Float32(0)) else shadow_org
-            var shadow_ray_e = Ray(s_org_e, vec3f(ls_e.wi))
-            if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray_e, ls_e.dist,
-                                  sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
-                                  sd.spheres, Int(sd.sphereCount),
-                                  materials=sd.materials):
-                var tr_e = _sppm_shadow_transmittance(vp, sd, s_org_e, ls_e.wi, ls_e.dist)
-                vps[unsafe_offset=i].ld += w_e * tr_e.r
+            var tr_e = _sppm_shadow(vp, sd, s_org_e, ls_e.wi, ls_e.dist, pcg)
+            if not tr_e.is_black():
+                vps[unsafe_offset=i].ld += w_e * tr_e
 
 
 def _sppm_nee_update(
@@ -2895,14 +2863,14 @@ def _sppm_finalize_one_pixel(
     acc_g *= iso_scale
     acc_c *= iso_scale
 
-    # NaN/negative guard, per component -- order-independent, safe to do
+    # NaN guard only (a negative is out-of-gamut colour the sensor matrix needs; apply_film_sensor clamps) -- safe to do
     # before the caller sums the two halves.
-    if acc_g.r != acc_g.r or acc_g.r < Float32(0): acc_g.r = Float32(0)
-    if acc_g.g != acc_g.g or acc_g.g < Float32(0): acc_g.g = Float32(0)
-    if acc_g.b != acc_g.b or acc_g.b < Float32(0): acc_g.b = Float32(0)
-    if acc_c.r != acc_c.r or acc_c.r < Float32(0): acc_c.r = Float32(0)
-    if acc_c.g != acc_c.g or acc_c.g < Float32(0): acc_c.g = Float32(0)
-    if acc_c.b != acc_c.b or acc_c.b < Float32(0): acc_c.b = Float32(0)
+    if acc_g.r != acc_g.r: acc_g.r = Float32(0)
+    if acc_g.g != acc_g.g: acc_g.g = Float32(0)
+    if acc_g.b != acc_g.b: acc_g.b = Float32(0)
+    if acc_c.r != acc_c.r: acc_c.r = Float32(0)
+    if acc_c.g != acc_c.g: acc_c.g = Float32(0)
+    if acc_c.b != acc_c.b: acc_c.b = Float32(0)
     return (acc_g, acc_c)
 
 

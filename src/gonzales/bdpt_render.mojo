@@ -32,12 +32,12 @@ def _vcm_finalize_one_pixel(
     sums over the render's spp samples, returning them SEPARATELY --"""
     var c = connect * inv_spp
     var m = merge * inv_spp
-    if c.r != c.r or c.r < Float32(0): c.r = Float32(0)
-    if c.g != c.g or c.g < Float32(0): c.g = Float32(0)
-    if c.b != c.b or c.b < Float32(0): c.b = Float32(0)
-    if m.r != m.r or m.r < Float32(0): m.r = Float32(0)
-    if m.g != m.g or m.g < Float32(0): m.g = Float32(0)
-    if m.b != m.b or m.b < Float32(0): m.b = Float32(0)
+    if c.r != c.r: c.r = Float32(0)
+    if c.g != c.g: c.g = Float32(0)
+    if c.b != c.b: c.b = Float32(0)
+    if m.r != m.r: m.r = Float32(0)
+    if m.g != m.g: m.g = Float32(0)
+    if m.b != m.b: m.b = Float32(0)
     return (c, m)
 
 
