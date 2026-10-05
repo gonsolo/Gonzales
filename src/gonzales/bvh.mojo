@@ -278,8 +278,20 @@ def _scene_bounding_sphere(ref sd: SceneView) -> Tuple[Point3f, Float32]:
     ray a chance to actually enter the scene, same technique pbrt uses
     (DistantLight::SampleLe / ImageInfiniteLight::SampleLe)."""
     var root = sd.bvh2Nodes[unsafe_offset=0]
-    var diag = root.max - root.min
-    var center = root.min + diag * Float32(0.5)
+    var lo = root.min
+    var hi = root.max
+    # Analytic spheres are not BVH prims; a zero-extent root means an empty BVH.
+    if (hi - lo).length() <= Float32(0.0):
+        lo = Point3f(Float32(1e30)); hi = Point3f(Float32(-1e30))
+    for si in range(Int(sd.sphereCount)):
+        var sph = sd.spheres[unsafe_offset=si]
+        for a in range(3):
+            lo[a] = min(lo[a], sph.center[a] - sph.radius)
+            hi[a] = max(hi[a], sph.center[a] + sph.radius)
+    if hi[0] < lo[0]:
+        lo = root.min; hi = root.max
+    var diag = hi - lo
+    var center = lo + diag * Float32(0.5)
     var radius = diag.length() * Float32(0.5)
     if radius < Float32(1e-4):
         radius = Float32(1.0)

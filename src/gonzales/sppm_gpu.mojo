@@ -15,7 +15,7 @@ from .bvh import SceneView
 from .sampling import film_filter_of
 from .footprint import camera_footprint
 from .pbrt_parser import ParsedScene_Mojo
-from .sppm import _HSIZE, SPPMPixel, SPPMPhoton, _VP_SAMPLES, _MAX_B
+from .sppm import _HSIZE, SPPMPixel, SPPMPhoton, _VP_SAMPLES, _MAX_B, _photon_depth_cap
 from .gpu_scene import GpuSceneHandle
 from max.gpu.host._nvidia_cuda import CUDA
 from .progress import Progress
@@ -82,7 +82,7 @@ def sppm_render_gpu(
             var n_vps = n_pix * _VP_SAMPLES
             # Sized for the worst case, mirroring sppm.mojo's CPU driver
             # (_sppm_render_core) exactly -- see its comment for why
-            var max_bounces_per_photon = min(Int(psc[unsafe_offset=0].max_depth), _MAX_B)
+            var max_bounces_per_photon = min(Int(psc[unsafe_offset=0].max_depth), _photon_depth_cap(sd))
             # A subsurface interior blows this budget wide open: its random-walk
             # steps are deliberately NOT charged to maxdepth (see
             var has_sss_medium = False

@@ -63,6 +63,11 @@ comptime _MAX_B  = 10  # hard safety ceiling, matching bdpt_*.mojo's own
                        # ignored and rendered up to 10 anyway -- measured on a
                        # cavity scene at maxdepth=1: SPPM read 2.05x pbrt where
                        # the (maxdepth-respecting) path tracer read 0.93x.
+comptime _MAX_B_MEDIA = 50  # photon depth cap with media: a thick high-albedo cloud needs ~maxdepth scatters
+@always_inline
+def _photon_depth_cap(ref sd: SceneView) -> Int:
+    return _MAX_B_MEDIA if Int(sd.mediumCount) > 0 else _MAX_B
+
 comptime _HSIZE  = 1048576   # 2^20 hash buckets
 # Independent visible-point samples per pixel, traced ONCE for the whole
 # render (not re-traced every SPPM pass — see _sppm_camera_pass's docstring).
@@ -1279,7 +1284,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
     # `rounds` is only a safety bound so an exempt event cannot loop forever;
     # for a scene with no subsurface medium every event charges, so `bounce`
     # reaches the cap in exactly that many rounds and this is a no-op.
-    var max_charged = min(maxdepth, _MAX_B)
+    var max_charged = min(maxdepth, _photon_depth_cap(sd))
     var bounce = 0
     var n_events = 0   # interactions so far, charged or not
     var n_null = 0     # of those, null-boundary crossings
@@ -1336,7 +1341,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 # SPPM, which skips photon-grid gathering at depth 0
                 # specifically to avoid double-counting with its NEE
                 # term).
-                if n_events > 1:
+                if n_events - n_null > 1:
                     _sppm_store_photon[use_gpu](
                         SPPMPhoton(pos=sp, flux=flux, nxt=Int32(-1), is_volume=PhotonKind.volume, dir_in=rd, wavelengths=ph_wavelengths),
                         photons, max_photons, counter)
@@ -2939,7 +2944,7 @@ def _sppm_render_core(
     # reintroducing a cap -- don't just trust the old claim.
     var n_vps    = n_pix * _VP_SAMPLES
     var vps     = unsafe_alloc[SPPMPixel](n_vps)
-    var max_bounces_per_photon = min(Int(psc[unsafe_offset=0].max_depth), _MAX_B)
+    var max_bounces_per_photon = min(Int(psc[unsafe_offset=0].max_depth), _photon_depth_cap(sd))
     # A subsurface interior blows this budget wide open: its random-walk steps
     # are deliberately NOT charged to maxdepth (see _sppm_trace_photon's loop
     # header), so one photon entering skin deposits at every scatter for as

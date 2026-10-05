@@ -35,8 +35,8 @@
     "tol": 0.03
   },
   "chromatic-medium.sppm": {
-    "mean": 0.34744,
-    "median": 0.343424,
+    "mean": 0.286969,
+    "median": 0.285933,
     "tol": 0.03
   },
   "chromatic-medium.vcm": {
@@ -110,8 +110,8 @@
     "tol": 0.03
   },
   "medium-sphere-light.sppm": {
-    "mean": 0.02733,
-    "median": 0.006386,
+    "mean": 0.023252,
+    "median": 0.007667,
     "tol": 0.03
   },
   "medium-sphere-light.vcm": {
