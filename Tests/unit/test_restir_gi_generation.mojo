@@ -19,6 +19,7 @@ from gonzales.curves import Curve
 from gonzales.spectrum import SpectralSample, null_spectral_handle, SampledWavelengths
 from gonzales.bvh import BVH2Node
 from gonzales.guide import null_guide
+from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.shading import ShadeContext, LightContext, GIPendingX1, gi_pending_x1_init, _gi_generate_recon_candidate, _shade_diffuse_nee
 from gonzales.restir_gi import gi_reservoir_io_null
 from gonzales.restir_di import reservoir_io_null
@@ -91,6 +92,8 @@ def _make_ctx_with_light(
         gi_pending,
         gi_reservoir_io_null(),
         Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), True,
+        0, Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
     )
 
 # ── Shared fixture: a small light triangle near (0,10,0) facing straight

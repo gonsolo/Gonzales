@@ -10,6 +10,8 @@ from .render_state import PathState, GpuTexture, NormalSlopeMap, normal_slope_ma
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, light_sampler_sample, light_sampler_pdf, area_light_pick_triangle
 from .portal_light import portal_frame, portal_ray_crosses
+from .media import Medium, MediumInterface, Grid, NvdbGrid
+from .shadow_media import shadow_transmittance
 from .curves import Curve, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis
 from .layered import layered_f, layered_sample, layered_pdf, diel_f, diel_pdf, diel_sample
 from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
@@ -167,6 +169,12 @@ struct ShadeContext:
     var paths_base: Pointer[PathState, MutUntrackedOrigin]
     # False when the scene has no smooth glass: MNEE's per-sample probe toward the light can then never find anything.
     var has_glass: Bool
+    # Participating media for surface-NEE shadow rays; n_mediums == 0 keeps the plain any-hit test.
+    var n_mediums:     Int
+    var mediums:       Pointer[Medium, MutUntrackedOrigin]
+    var medium_ifaces: Pointer[MediumInterface, MutUntrackedOrigin]
+    var grids:         Pointer[Grid, MutUntrackedOrigin]
+    var nvdb_grids:    Pointer[NvdbGrid, MutUntrackedOrigin]
 
 # Orient an emitter triangle's WINDING normal to agree with the mesh's own
 # supplied per-vertex normals, which is what decides whether a one-sided
@@ -794,7 +802,7 @@ def _shadow_contribute[enqueue_shadow: Bool](
     # Deferral needs a real task buffer (only handed out for --rt-hardware) and no guiding; it takes the first free of the
     # path's SHADOW_SLOTS slots, and a candidate that finds none is traced inline below.
     comptime if enqueue_shadow:
-        if _is_real_ptr(ctx.shadow_tasks) and not guide_is_active(guide_write):
+        if _is_real_ptr(ctx.shadow_tasks) and not guide_is_active(guide_write) and ctx.n_mediums == 0:
             var path_index = ctx.path_idx
             if _is_real_ptr(ctx.paths_base):
                 path_index = (Int(path_ptr) - Int(ctx.paths_base)) // size_of[PathState]()
@@ -807,11 +815,24 @@ def _shadow_contribute[enqueue_shadow: Bool](
                         tmax, contrib, Int32(1), Int32(0))
                     return
     var shadow_ray = Ray(Point3f(origin[0], origin[1], origin[2]), Vec3f(dir[0], dir[1], dir[2]))
-    if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, tmax,
-                              ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
-                              ctx.lights.spheres, ctx.lights.sphere_count,
-                              materials=ctx.materials):
-        path_ptr[].estimate += contrib
+    var tr = SpectralSample(Float32(1.0))
+    var blocked: Bool
+    if ctx.n_mediums > 0:
+        # Salt the stream with the direction so the path's candidates in one bounce do not share ratio-tracking draws.
+        var salt = UInt64(Int(abs(dir[0]) * Float32(1e7))) * UInt64(0x9E3779B97F4A7C15) + UInt64(Int(abs(dir[2]) * Float32(1e7)))
+        var pcg = PCG32(path_ptr[].pcgState ^ salt, path_ptr[].pcgInc + UInt64(1))
+        tr = shadow_transmittance(origin, dir, tmax, path_ptr[].current_medium_idx, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves,
+                                  ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances, ctx.lights.spheres, ctx.lights.sphere_count,
+                                  ctx.materials, ctx.mediums, ctx.medium_ifaces, ctx.grids, ctx.nvdb_grids,
+                                  ctx.spectral, path_ptr[].wavelengths, pcg)
+        blocked = tr.is_black()
+    else:
+        blocked = any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, tmax,
+                                    ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
+                                    ctx.lights.spheres, ctx.lights.sphere_count,
+                                    materials=ctx.materials)
+    if not blocked:
+        path_ptr[].estimate += contrib * tr
         # Record in the guide at the PARENT surface (one bounce back):
         # "scatter direction ray.dir from parent_cell leads to illumination W here."
         # This teaches indirect-illumination guiding — path_ptr[].ray.origin is where
@@ -5165,7 +5186,9 @@ def shade_core_cpu_nee(
     var inter = intersections[unsafe_offset=tid]
     var ctx = ShadeContext(
         paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=True,
-        path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
+        n_mediums=0, mediums=Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), medium_ifaces=Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
+        grids=Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), nvdb_grids=Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
+                path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=tex_filenames,
         textures=Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), n_textures=0,
         nmaps=nmaps,

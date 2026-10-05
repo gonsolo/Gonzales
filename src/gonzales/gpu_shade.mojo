@@ -7,7 +7,7 @@ from .geometry import _is_real_ptr
 from .guide import null_guide
 from .lights import AreaLight, DistantLight, InfiniteLight, LightSampler, PointLight
 from .materials import MatKind, Material, MeasuredBRDF
-from .media import MediumInterface
+from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh
 from .render_state import GpuTexture, NormalSlopeMap, PathState, ShadowTask
 from .restir_di import DIReservoir, ReservoirIO, reservoir_io_null
@@ -29,6 +29,7 @@ def _shade_context(
 ) -> ShadeContext:
     return ShadeContext(
         paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=sd.hasGlass != Int32(0),
+        n_mediums=Int(sd.mediumCount), mediums=sd.mediums, medium_ifaces=sd.mediumInterfaces, grids=sd.grids, nvdb_grids=sd.nvdbGrids,
         path_idx=path_idx, bvh2Nodes=sd.bvh2Nodes, primIds=sd.primIds, meshes=sd.meshes, curves=sd.curves,
         materials=sd.materials,
         tex_filenames=Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
@@ -464,6 +465,8 @@ def shade_enqueue_shadow_gpu(
     var ls_shadow = LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0))
     var ctx_shadow = ShadeContext(
         paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=True,
+        n_mediums=0, mediums=Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), medium_ifaces=Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
+        grids=Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), nvdb_grids=Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin](),
         textures=textures, n_textures=n_textures,

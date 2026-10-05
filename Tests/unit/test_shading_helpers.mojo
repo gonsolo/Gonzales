@@ -21,6 +21,7 @@ from gonzales.curves import Curve
 from gonzales.spectrum import SpectralSample, SampledWavelengths, null_spectral_handle
 from gonzales.bvh import BVH2Node
 from gonzales.guide import GuideGrid, null_guide
+from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.shading import (
     ShadeContext, LightContext, _get_tri_verts, _apply_normal_map,
     _build_geom_context_full, _shadow_contribute, GIPendingX1,
@@ -105,6 +106,8 @@ def _make_ctx(
         Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
         gi_reservoir_io_null(),
         Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), True,
+        0, Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
     )
 
 def _make_path(org: Vec3f, dir: Vec3f) -> PathState:
@@ -310,6 +313,8 @@ def test_build_geom_context_full_sphere_prim_returns_exact_analytic_normal() rai
         Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
         gi_reservoir_io_null(),
         Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), True,
+        0, Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
     )
 
     var org = Vec3f(0.0, 0.0, 5.0)

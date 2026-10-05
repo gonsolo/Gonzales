@@ -18,6 +18,7 @@ from gonzales.curves import Curve
 from gonzales.spectrum import SpectralSample, null_spectral_handle, SampledWavelengths
 from gonzales.bvh import BVH2Node
 from gonzales.guide import null_guide
+from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.shading import ShadeContext, LightContext, GIPendingX1, sms_generate_reservoir, sms_resolve, sms_temporal_step, _shade_diffuse_nee
 from gonzales.restir_gi import gi_reservoir_io_null
 from gonzales.restir_di import reservoir_io_null
@@ -91,6 +92,8 @@ def _make_ctx(
         Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
         gi_reservoir_io_null(),
         Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), True,
+        0, Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
     )
 
 # ── Shared fixture: a flat glass plane at z=1 between hit_point (origin,
