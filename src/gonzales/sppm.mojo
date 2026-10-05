@@ -897,8 +897,9 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # A smooth conductor is the one kind here that is genuinely
             # delta: it scatters but stores no visible point, exactly like
             # bdpt_*.mojo's own lobe_is_delta_of gate.
-            if not lobe_is_delta_of(mat):
-                if mat.type == MatKind.coated_diffuse and tr_effectively_smooth(max(mat.roughU, mat.roughV)):
+            var near_mirror = mat.type == MatKind.conductor and max(mat.roughU, mat.roughV) <= Float32(0.02)
+            if not lobe_is_delta_of(mat) and not near_mirror:   # near-mirror chrome: the photon map can't resolve its lobe
+                if mat.type == MatKind.coated_diffuse and max(mat.roughU, mat.roughV) <= Float32(0.02):
                     # The smooth coat's mirror lobe is a delta the gather cannot see: take it with
                     # probability F and keep tracing, else the VP carries 1/(1-F).
                     var wo_s = (-rd).to_simd()
