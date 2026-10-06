@@ -24,7 +24,7 @@ from .bvh import (
 )
 from .sampling import power_heuristic, camera_ray_from_film_xy, FilmFilter, film_filter_offset
 from .rng import PCG32
-from .sppm import _geom_normal, _shading_normal_at, _dielectric_bounce, medium_after_crossing, _cosine_hemisphere_sample
+from .sppm import _geom_normal, _shading_normal_at, _dielectric_bounce, medium_after_crossing, _cosine_hemisphere_sample, area_light_side_pdf
 from .shading import (
     uv_footprint_at_hit, _tex_lookup, _get_tri_verts, apply_surface_maps_at_hit, area_light_hit_cos,
     curve_light_hit,
@@ -584,7 +584,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                         # SmallVCM's GetLightRadiance, the balance weight over
                         # EVERY strategy -- not the 2-strategy power heuristic
                         var p_a = light_path_pick_pdf(sd, al_slot) / al_area
-                        var emission_pdf_w = p_a * cos_l_hit * INV_PI
+                        var emission_pdf_w = p_a * cos_l_hit * INV_PI * area_light_side_pdf(sd.areaLights[unsafe_offset=al_slot])
                         comptime if _VCM_CAMIS:
                             if camis.in_class:
                                 # This hit is not a stored vertex (the path

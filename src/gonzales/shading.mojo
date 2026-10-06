@@ -263,7 +263,8 @@ def area_light_hit_cos(
     var l2 = dot(en, en)
     if l2 <= Float32(0.0):
         return Float32(0)
-    return -dot(en, ray_dir) / sqrt(l2)
+    var c = -dot(en, ray_dir) / sqrt(l2)
+    return abs(c) if m.emit_two_sided != Int32(0) else c
 
 @always_inline
 def curve_light_hit(
@@ -2877,6 +2878,7 @@ def _nee_infinite_light[enqueue_shadow: Bool](
 @always_inline
 def _sample_light_point_and_normal(
     ctx: ShadeContext, al: AreaLight, u1: Float32, u2: Float32, mut pcg: PCG32,
+    ref_point: Vec3f,
 ) -> Tuple[Vec3f, Vec3f, Vec3f, Vec3f]:
     """Point + outward normal on an area light's surface for NEE, plus the
     surface's own (dp_du, dp_dv) tangent basis (used only by
@@ -2928,6 +2930,8 @@ def _sample_light_point_and_normal(
         var lcross_len = dot(lcross, lcross)
         if lcross_len > Float32(0.0):
             normal = lcross * (Float32(1.0) / sqrt(lcross_len))
+        if al._pad0 != Int8(0) and dot(normal, point - ref_point) > Float32(0.0):
+            normal = -normal   # twosided: emit toward the shading point
         return (point, normal, lp1 - lp0, lp2 - lp0)
 
 @always_inline
@@ -2957,7 +2961,7 @@ def _sample_area_light_nee(
     var al = ctx.lights.area_lights[unsafe_offset=light_idx]
     var r1 = pcg.next_float()
     var r2 = pcg.next_float()
-    var (light_point, light_normal, _, _) = _sample_light_point_and_normal(ctx, al, r1, r2, pcg)
+    var (light_point, light_normal, _, _) = _sample_light_point_and_normal(ctx, al, r1, r2, pcg, hit_point)
     var to_light = light_point - hit_point
     var dist_sq = dot(to_light, to_light)
     var dist = sqrt(dist_sq)
@@ -3834,7 +3838,7 @@ def _nee_area_lights[enqueue_shadow: Bool](
     var light_idx = ls_result_nee[0]
     var light_sel_pdf_nee = ls_result_nee[1]
     var al = ctx.lights.area_lights[unsafe_offset=light_idx]
-    var (light_point, light_normal, ldp_du_v, ldp_dv_v) = _sample_light_point_and_normal(ctx, al, u_bary1, u_bary2, pcg)
+    var (light_point, light_normal, ldp_du_v, ldp_dv_v) = _sample_light_point_and_normal(ctx, al, u_bary1, u_bary2, pcg, hit_point)
     var to_light = light_point - hit_point
     var dist_sq = dot(to_light, to_light)
     var dist = sqrt(dist_sq)
@@ -3917,7 +3921,7 @@ def _di_sample_candidate(
     var al = ctx.lights.area_lights[unsafe_offset=light_idx]
     var r1 = pcg.next_float()
     var r2 = pcg.next_float()
-    var (light_point, light_normal, ldp_du_v, ldp_dv_v) = _sample_light_point_and_normal(ctx, al, r1, r2, pcg)
+    var (light_point, light_normal, ldp_du_v, ldp_dv_v) = _sample_light_point_and_normal(ctx, al, r1, r2, pcg, hit_point)
     var to_light = light_point - hit_point
     var dist_sq = dot(to_light, to_light)
     if dist_sq <= Float32(1e-8) or al.total_area <= Float32(0.0):
@@ -5008,11 +5012,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         # far side of the shell is visible through every gap: the lantern in
         # barcelona-pavilion rendered as a solid bright blob at 2.07x pbrt's
         # emitted radiance, where pbrt shows dark structure between its bars.
-        # NOTE: pbrt's `"bool twosided"` is not parsed at all (only the
-        # Mitsuba front-end understands twosided), so one-sided is
-        # unconditionally right here for every pbrt scene in the corpus --
-        # exactly one uses the flag (zero-day) and it would need parser work
-        # to honour regardless.
+        # "bool twosided" is honoured: area_light_hit_cos returns |cos| for a two-sided mesh.
         var e_front = True
         if inter.primId.type == Int8(3):
             var edir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
@@ -5038,6 +5038,8 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                     lnorm = lnorm * (Float32(1.0) / sqrt(lnlen))
                 var ray_dir = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
                 var cos_l = -dot(lnorm, ray_dir)
+                if lmesh.emit_two_sided != Int32(0):
+                    cos_l = abs(cos_l)
                 # Distance from the vertex whose sample generated this
                 # direction, NOT from the current ray origin -- those differ by
                 # every null interface crossed in between (PathState.mis_null_dist).

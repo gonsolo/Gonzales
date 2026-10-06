@@ -439,6 +439,7 @@ struct MeshBuffers(Movable):
                 alpha_dptr = alpha_dev_ptrs[found]
             mesh_structs_host[unsafe_offset=i] = TriangleMesh(pts_dptr, fi_dptr, vi_dptr, uv_dptr, nrm_dptr,
                 alpha_dptr, host_mesh.alpha_w, host_mesh.alpha_h, host_mesh.alpha_const)
+            mesh_structs_host[unsafe_offset=i].emit_two_sided = host_mesh.emit_two_sided
 
         # Upload mesh struct array
         var meshes_buf = _gpu_upload_array[TriangleMesh](ctx, mesh_structs_host, Int(s.mesh_count))

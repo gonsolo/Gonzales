@@ -19,7 +19,7 @@ from .bvh import (
 from .rng import PCG32
 from .sppm import (
     _geom_normal, _shading_normal_at, _dielectric_bounce, medium_after_crossing, _cosine_hemisphere_sample,
-    sample_area_light_point, sample_sphere_light_emission,
+    sample_area_light_point, sample_sphere_light_emission, area_light_emit_normal, area_light_side_pdf,
 )
 from .shading import uv_footprint_at_hit, _tex_lookup, _get_tri_verts, apply_surface_maps_at_hit
 from .bxdf import (
@@ -135,7 +135,8 @@ def _bdpt_light_path_init[use_gpu: Bool](
         var light_sample = sample_area_light_point(sd.areaLights[unsafe_offset=light_pick], sd.meshes, pcg, sd.curves)
         var al = light_sample.light
         var lp = light_sample.point
-        var ln = light_sample.normal
+        var ln = area_light_emit_normal(light_sample, pcg)
+        var side_pdf = area_light_side_pdf(al)
 
         # Cosine-weighted emission direction
         var du1 = pcg.next_float(); var du2 = pcg.next_float()
@@ -148,6 +149,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         lv0_vert.pos = point3f(lp)
         lv0_vert.normal = vec3f(ln)
         lv0_vert.shading_normal = vec3f(ln)
+        lv0_vert.pdf_bwd = side_pdf   # a light vertex's pdf_bwd carries its emission-face probability
         lv0_vert.beta = SpectralSample(area_weight)
         lv0_vert.alb = al.emission
         lv0_vert.is_surface = Int32(1); lv0_vert.is_light = Int32(1)
@@ -160,7 +162,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
         is_finite_origin = True
         var cos_theta_emit = max(dot(pdir, ln), Float32(0.0001))
         var direct_pdf_a = Float32(1) / area_weight
-        var emission_pdf_w = direct_pdf_a * cos_theta_emit / PI
+        var emission_pdf_w = direct_pdf_a * cos_theta_emit * side_pdf / PI
         dvcm_carry = direct_pdf_a / emission_pdf_w
         dvc_carry = cos_theta_emit / emission_pdf_w
         # SmallVCM vertexcm.hxx:856 -- light-origin dVM uses mMisVcWeightFactor,
@@ -179,7 +181,7 @@ def _bdpt_light_path_init[use_gpu: Bool](
 
         # For traced vertices: beta = Le × cos_θ / (p_A × p_ω) where p_ω = cos_θ/π
         # for cosine-weighted emission -- the cos_θ_emitted terms CANCEL exactly
-        flux = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, wavelengths) * (area_weight * PI)
+        flux = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, al.emission.r, al.emission.g, al.emission.b, wavelengths) * (area_weight * PI / side_pdf)
         ro = point3f(lp) + vec3f(ln)*Float32(0.0001)
         rd = vec3f(pdir)
         n_verts = 1  # vertex 0 is the light point itself

@@ -16,6 +16,7 @@ def _psc_handle_area_light_source(handle: Pointer[PbrtScanner, MutUntrackedOrigi
     var rgb = params.get_rgb_or_blackbody("L", RGB(Float32(1)))
     var scale = params.get_float("scale", Float32(1.0))
     s[unsafe_offset=0].cur_attr.al_rgb = rgb * scale
+    s[unsafe_offset=0].cur_attr.al_two_sided = params.get_bool("twosided", False)
 
 def handle_light_source(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                              s: Pointer[SceneParseState, MutUntrackedOrigin]):

@@ -384,6 +384,8 @@ def _connect_unweighted(
         # note below for why it can no longer come from a shared G.
         var ln = lv.normal.to_simd()
         var cos_l = dot(neg_dir, ln)
+        if lv.pdf_bwd > Float32(0) and lv.pdf_bwd < Float32(1):
+            cos_l = abs(cos_l)   # two-sided light: the connection is face-free (pdf_bwd = face probability)
         if cos_l <= Float32(0):
             return (SpectralSample(Float32(0)), False)
         f_lgt_spec = spec_illum(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, lv.alb.r, lv.alb.g, lv.alb.b, wl) * cos_l
@@ -429,8 +431,9 @@ def _bdpt_connect_mis_weight(
         var light_bsdf_dir_pdf_w: Float32
         var light_bsdf_rev_pdf_w: Float32
         if lv.is_light == Int32(1):
-            light_bsdf_dir_pdf_w = cos_lv / PI
-            light_bsdf_rev_pdf_w = cos_lv / PI
+            var side_pdf = lv.pdf_bwd if lv.pdf_bwd > Float32(0) else Float32(1)
+            light_bsdf_dir_pdf_w = side_pdf * cos_lv / PI
+            light_bsdf_rev_pdf_w = side_pdf * cos_lv / PI
         else:
             var (ldp, lrp) = _bdpt_vertex_pdfs(lv, neg_dir, sd)
             light_bsdf_dir_pdf_w = ldp

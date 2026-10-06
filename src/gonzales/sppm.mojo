@@ -494,6 +494,31 @@ struct AreaLightSample(TrivialRegisterPassable):
     var point:  Vec3f
     var normal: Vec3f
 
+@always_inline
+def area_light_side_pdf(al: AreaLight) -> Float32:
+    """Probability of the emission side a TWO-SIDED mesh light (pbrt
+    "twosided") picks: 1/2, since both faces emit; 1 for one-sided."""
+    return Float32(0.5) if (al.kind == Int8(0) and al._pad0 != Int8(0)) else Float32(1.0)
+
+
+@always_inline
+def area_light_emit_normal(s: AreaLightSample, mut pcg: PCG32) -> Vec3f:
+    """The normal of the face a photon / light path leaves from: the sampled
+    one, or for a two-sided light a random face (pdf area_light_side_pdf)."""
+    if area_light_side_pdf(s.light) < Float32(1.0) and pcg.next_float() < Float32(0.5):
+        return -s.normal
+    return s.normal
+
+
+@always_inline
+def area_light_nee_normal(s: AreaLightSample, toward: Vec3f) -> Vec3f:
+    """The normal for a shadow-ray connection: a two-sided light emits toward
+    the shading point from whichever face looks at it."""
+    if area_light_side_pdf(s.light) < Float32(1.0) and dot(s.normal, s.point - toward) > Float32(0.0):
+        return -s.normal
+    return s.normal
+
+
 def sample_sphere_light_emission(
     ref sd: SceneView, k: Int, mut pcg: PCG32,
 ) -> Tuple[Int, Vec3f, Vec3f, Vec3f]:
@@ -1200,7 +1225,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         var light_sample = sample_area_light_point(sd.areaLights[unsafe_offset=light_pick], sd.meshes, pcg, sd.curves)
         var al = light_sample.light
         var lp = light_sample.point
-        var ln = light_sample.normal
+        var ln = area_light_emit_normal(light_sample, pcg)
 
         # Sample cosine-weighted emission direction from the light hemisphere
         # (same Frisvad-frame construction as _cosine_hemisphere_sample).
@@ -1210,7 +1235,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
 
         # Photon flux: total_light_power / n_emit
         # total_power = emission * pi * total_area / p_pick (the light's pick probability)
-        var scale = PI * al.total_area * inv_pick / Float32(n_emit)
+        var scale = PI * al.total_area * inv_pick / (area_light_side_pdf(al) * Float32(n_emit))
         flux = spec_illum(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, al.emission.r, al.emission.g, al.emission.b, ph_wavelengths) * scale
         ro = point3f(lp) + vec3f(ln) * Float32(0.0001)
         rd = vec3f(pdir)
@@ -2614,7 +2639,7 @@ def _sppm_nee_one(
         var light_sample = sample_area_light_uniform(sd.areaLights, sd.meshes, n_area, pcg, sd.curves)
         var al = light_sample.light
         var lp = light_sample.point
-        var ln = light_sample.normal
+        var ln = area_light_nee_normal(light_sample, spos)
 
         var to_light = lp - spos
         var dist2 = dot(to_light, to_light)

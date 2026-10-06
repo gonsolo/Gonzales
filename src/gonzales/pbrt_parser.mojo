@@ -2310,7 +2310,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             meshes[unsafe_offset=i].uvs = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
             out_uv_nv[unsafe_offset=i] = Int32(0)
         meshes[unsafe_offset=i].alpha_const = ma.alpha_const
-        meshes[unsafe_offset=i]._alpha_pad = Int32(0)
+        meshes[unsafe_offset=i].emit_two_sided = Int32(1) if (ma.is_area_light and ma.al_two_sided) else Int32(0)
         if ma.alpha_mask >= Int32(0):
             var am = Int(ma.alpha_mask)
             meshes[unsafe_offset=i].alpha   = s[unsafe_offset=0].alpha_mask_data[am]
@@ -2359,6 +2359,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             al_list[unsafe_offset=al_idx].emission   = em
             al_list[unsafe_offset=al_idx].total_area = t_area
             al_list[unsafe_offset=al_idx].kind       = Int8(0)
+            al_list[unsafe_offset=al_idx]._pad0      = Int8(1) if ma.al_two_sided else Int8(0)
             mats[unsafe_offset=al_mat_base + al_idx].type     = Int8(2)
             mats[unsafe_offset=al_mat_base + al_idx].albedo   = RGB(Float32(0))
             mats[unsafe_offset=al_mat_base + al_idx].emission = em
