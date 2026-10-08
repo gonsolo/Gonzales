@@ -1,4 +1,5 @@
 from .pbrt_parser import ParsedScene_Mojo, mojo_parse_scene
+from .ply_prefetch import PlyPrefetch
 from .mitsuba_parser import mojo_parse_mitsuba_scene
 
 # Dispatches on scene-file extension so pipeline.mojo's four call sites don't
@@ -9,6 +10,7 @@ from .mitsuba_parser import mojo_parse_mitsuba_scene
 # elsewhere.
 def mojo_parse_scene_any(path: Pointer[UInt8, MutUntrackedOrigin],
                          verbose: Bool = False,
+                         plys: Pointer[PlyPrefetch, MutUntrackedOrigin] = Pointer[PlyPrefetch, MutUntrackedOrigin].unsafe_dangling(),
                         ) -> Pointer[ParsedScene_Mojo, MutUntrackedOrigin]:
     var pi = 0
     while path[unsafe_offset=pi] != UInt8(0):
@@ -17,4 +19,4 @@ def mojo_parse_scene_any(path: Pointer[UInt8, MutUntrackedOrigin],
                   and path[unsafe_offset=pi - 2] == UInt8(109) and path[unsafe_offset=pi - 1] == UInt8(108))
     if is_xml:
         return mojo_parse_mitsuba_scene(path, verbose)
-    return mojo_parse_scene(path, verbose)
+    return mojo_parse_scene(path, verbose, plys)

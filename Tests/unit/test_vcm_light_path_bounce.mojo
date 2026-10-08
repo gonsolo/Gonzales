@@ -27,7 +27,7 @@ from gonzales.primitives import Ray, Intersection, PrimId, Sphere, Instance, Tri
 from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
 from gonzales.curves import Curve
-from gonzales.bvh import SceneView, BVH2Node, build_bvh2, traverse_bvh2_core
+from gonzales.bvh import BVH4, SceneView, BVH2Node, build_bvh2, traverse_bvh2_core
 from gonzales.rng import PCG32
 from gonzales.spectrum import null_spectral_handle, SampledWavelengths, SpectralSample, sample_wavelengths
 from gonzales.vcm_camis import camis_light_carry_off, CamisLightRecord
@@ -141,6 +141,8 @@ def _build_scene() -> SceneView:
         Float32(0),   # vcmLambda
         Int32(0),   # vcmBucketCap
         Int32(1),   # hasGlass
+        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),   # mneeStats
+        BVH4.none(),
     )
 
 # Both subpath halves of a VCM pass share one hero-wavelength set (see

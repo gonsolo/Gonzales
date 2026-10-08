@@ -1,3 +1,4 @@
+from std.memory import unsafe_memcpy
 from std.memory.alloc import unsafe_alloc
 
 comptime PLY_X    = 0
@@ -199,6 +200,7 @@ def load_ply(
     out_has_uvs: Pointer[Int32, MutUntrackedOrigin],
     out_normals: Pointer[Pointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin],
     out_has_normals: Pointer[Int32, MutUntrackedOrigin],
+    quiet: Bool = False,
 ) -> Int32:
     var path_str = String(unsafe_from_utf8_ptr=path_cstr.as_imm())
     var file_buf: Pointer[UInt8, MutUntrackedOrigin]
@@ -209,15 +211,15 @@ def load_ply(
         f.close()
         file_size = len(bytes)
         file_buf = unsafe_alloc[UInt8](file_size + 1)
-        for i in range(file_size):
-            file_buf[unsafe_offset=i] = bytes[i]
+        unsafe_memcpy(dest=file_buf, src=bytes.unsafe_ptr(), count=file_size)
         file_buf[unsafe_offset=file_size] = UInt8(0)
     except:
         # Every failure path here names the file AND the reason. A mesh that
         # fails to load doesn't crash the render -- it just isn't there, and
         # a scene missing its subject still looks like a plausible image
         # (ganesha rendered its backdrop, light and floor, minus the statue).
-        print("PLY load FAILED (cannot open/read):", path_str)
+        if not quiet:
+            print("PLY load FAILED (cannot open/read):", path_str)
         return Int32(0)
 
     var line_buf = unsafe_alloc[UInt8](512)
@@ -228,7 +230,9 @@ def load_ply(
         # Most likely a still-compressed file: gzip's magic (0x1f 0x8b) is
         # not "ply". The .ply.gz decompression lives in pbrt_parser.mojo's
         # plymesh handler, which passes the decompressed sibling's path.
-        if file_size >= 2 and file_buf[unsafe_offset=0] == UInt8(0x1f) and file_buf[unsafe_offset=1] == UInt8(0x8b):
+        if quiet:
+            pass
+        elif file_size >= 2 and file_buf[unsafe_offset=0] == UInt8(0x1f) and file_buf[unsafe_offset=1] == UInt8(0x8b):
             print("PLY load FAILED (file is still gzip-compressed):", path_str)
         else:
             print("PLY load FAILED (missing 'ply' magic, not a PLY file):", path_str)
@@ -300,8 +304,9 @@ def load_ply(
                 face_idx_size   = _ply_type_size(line_buf, 3)
 
     if n_verts <= 0 or n_faces <= 0:
-        print("PLY load FAILED (header declares", n_verts, "vertices and",
-              n_faces, "faces):", path_str)
+        if not quiet:
+            print("PLY load FAILED (header declares", n_verts, "vertices and",
+                  n_faces, "faces):", path_str)
         line_buf.unsafe_free(); prop_roles.unsafe_free(); prop_sizes.unsafe_free()
         prop_is_double.unsafe_free(); file_buf.unsafe_free()
         return Int32(0)
@@ -323,46 +328,81 @@ def load_ply(
         elif role == PLY_NX or role == PLY_NY or role == PLY_NZ:
             found_normals = True
 
-    for v in range(n_verts):
-        var vx = Float32(0); var vy = Float32(0); var vz = Float32(0)
-        var vu = Float32(0); var vv = Float32(0)
-        var vnx = Float32(0); var vny = Float32(0); var vnz = Float32(0)
-        if is_ascii:
-            pos = _ply_read_line(file_buf, file_size, pos, line_buf, 512)
+    # Binary little-endian float32 vertices (every PLY the corpus ships): read each role at a fixed byte offset.
+    var any_double = False
+    for pi in range(n_props):
+        if Int(prop_is_double[unsafe_offset=pi]) == 1:
+            any_double = True
+    if not is_ascii and is_le and not any_double:
+        var off_x = -1; var off_y = -1; var off_z = -1; var off_u = -1; var off_v = -1
+        var off_nx = -1; var off_ny = -1; var off_nz = -1
+        var stride = 0
         for pi in range(n_props):
-            var sz   = Int(prop_sizes[unsafe_offset=pi])
             var role = Int(prop_roles[unsafe_offset=pi])
-            var is_d = Int(prop_is_double[unsafe_offset=pi]) == 1
-            if role != PLY_SKIP:
-                var val: Float32
-                if is_ascii:
-                    val = _ply_word_to_float(line_buf, pi)
-                elif is_d:
-                    val = _ply_f64_le(file_buf, pos) if is_le else _ply_f64_be(file_buf, pos)
-                else:
-                    val = _ply_f32_le(file_buf, pos) if is_le else _ply_f32_be(file_buf, pos)
-                if role == PLY_X:
-                    vx = val
-                elif role == PLY_Y:
-                    vy = val
-                elif role == PLY_Z:
-                    vz = val
-                elif role == PLY_U:
-                    vu = val
-                elif role == PLY_V:
-                    vv = val
-                elif role == PLY_NX:
-                    vnx = val
-                elif role == PLY_NY:
-                    vny = val
-                elif role == PLY_NZ:
-                    vnz = val
-            if not is_ascii:
-                pos += sz
-        pts[unsafe_offset=v*3+0] = vx; pts[unsafe_offset=v*3+1] = vy; pts[unsafe_offset=v*3+2] = vz
-        uvs_buf[unsafe_offset=v*2+0] = vu; uvs_buf[unsafe_offset=v*2+1] = vv
-        nrm_buf[unsafe_offset=v*3+0] = vnx; nrm_buf[unsafe_offset=v*3+1] = vny; nrm_buf[unsafe_offset=v*3+2] = vnz
+            if role == PLY_X: off_x = stride
+            elif role == PLY_Y: off_y = stride
+            elif role == PLY_Z: off_z = stride
+            elif role == PLY_U: off_u = stride
+            elif role == PLY_V: off_v = stride
+            elif role == PLY_NX: off_nx = stride
+            elif role == PLY_NY: off_ny = stride
+            elif role == PLY_NZ: off_nz = stride
+            stride += Int(prop_sizes[unsafe_offset=pi])
+        for v in range(n_verts):
+            var base = pos + v * stride
+            pts[unsafe_offset=v*3+0] = _ply_f32_le(file_buf, base + off_x) if off_x >= 0 else Float32(0)
+            pts[unsafe_offset=v*3+1] = _ply_f32_le(file_buf, base + off_y) if off_y >= 0 else Float32(0)
+            pts[unsafe_offset=v*3+2] = _ply_f32_le(file_buf, base + off_z) if off_z >= 0 else Float32(0)
+            uvs_buf[unsafe_offset=v*2+0] = _ply_f32_le(file_buf, base + off_u) if off_u >= 0 else Float32(0)
+            uvs_buf[unsafe_offset=v*2+1] = _ply_f32_le(file_buf, base + off_v) if off_v >= 0 else Float32(0)
+            nrm_buf[unsafe_offset=v*3+0] = _ply_f32_le(file_buf, base + off_nx) if off_nx >= 0 else Float32(0)
+            nrm_buf[unsafe_offset=v*3+1] = _ply_f32_le(file_buf, base + off_ny) if off_ny >= 0 else Float32(0)
+            nrm_buf[unsafe_offset=v*3+2] = _ply_f32_le(file_buf, base + off_nz) if off_nz >= 0 else Float32(0)
+        pos += n_verts * stride
+    else:
+        for v in range(n_verts):
+            var vx = Float32(0); var vy = Float32(0); var vz = Float32(0)
+            var vu = Float32(0); var vv = Float32(0)
+            var vnx = Float32(0); var vny = Float32(0); var vnz = Float32(0)
+            if is_ascii:
+                pos = _ply_read_line(file_buf, file_size, pos, line_buf, 512)
+            for pi in range(n_props):
+                var sz   = Int(prop_sizes[unsafe_offset=pi])
+                var role = Int(prop_roles[unsafe_offset=pi])
+                var is_d = Int(prop_is_double[unsafe_offset=pi]) == 1
+                if role != PLY_SKIP:
+                    var val: Float32
+                    if is_ascii:
+                        val = _ply_word_to_float(line_buf, pi)
+                    elif is_d:
+                        val = _ply_f64_le(file_buf, pos) if is_le else _ply_f64_be(file_buf, pos)
+                    else:
+                        val = _ply_f32_le(file_buf, pos) if is_le else _ply_f32_be(file_buf, pos)
+                    if role == PLY_X:
+                        vx = val
+                    elif role == PLY_Y:
+                        vy = val
+                    elif role == PLY_Z:
+                        vz = val
+                    elif role == PLY_U:
+                        vu = val
+                    elif role == PLY_V:
+                        vv = val
+                    elif role == PLY_NX:
+                        vnx = val
+                    elif role == PLY_NY:
+                        vny = val
+                    elif role == PLY_NZ:
+                        vnz = val
+                if not is_ascii:
+                    pos += sz
+            pts[unsafe_offset=v*3+0] = vx; pts[unsafe_offset=v*3+1] = vy; pts[unsafe_offset=v*3+2] = vz
+            uvs_buf[unsafe_offset=v*2+0] = vu; uvs_buf[unsafe_offset=v*2+1] = vv
+            nrm_buf[unsafe_offset=v*3+0] = vnx; nrm_buf[unsafe_offset=v*3+1] = vny; nrm_buf[unsafe_offset=v*3+2] = vnz
 
+    var face_cap = 16
+    var face_idx = unsafe_alloc[Int32](face_cap)
+    var tri_fast = not is_ascii and is_le and face_count_size == 1 and face_idx_size == 4
     for _ in range(n_faces):
         var cnt: Int
         if is_ascii:
@@ -375,7 +415,18 @@ def load_ply(
             if not is_ascii:
                 pos += cnt * face_idx_size
             continue
-        var face_idx = unsafe_alloc[Int32](cnt)
+        if tri_fast and cnt == 3:
+            if n_tris * 3 + 2 < max_idx:
+                idx_buf[unsafe_offset=n_tris*3+0] = _ply_i32_le(file_buf, pos)
+                idx_buf[unsafe_offset=n_tris*3+1] = _ply_i32_le(file_buf, pos + 4)
+                idx_buf[unsafe_offset=n_tris*3+2] = _ply_i32_le(file_buf, pos + 8)
+                n_tris += 1
+            pos += 12
+            continue
+        if cnt > face_cap:
+            face_idx.unsafe_free()
+            face_cap = cnt
+            face_idx = unsafe_alloc[Int32](face_cap)
         for fi in range(cnt):
             if is_ascii:
                 face_idx[unsafe_offset=fi] = Int32(_ply_word_to_int(line_buf, fi + 1))
@@ -393,7 +444,7 @@ def load_ply(
                 idx_buf[unsafe_offset=n_tris*3+1] = face_idx[unsafe_offset=ti + 1]
                 idx_buf[unsafe_offset=n_tris*3+2] = face_idx[unsafe_offset=ti + 2]
                 n_tris += 1
-        face_idx.unsafe_free()
+    face_idx.unsafe_free()
 
     line_buf.unsafe_free(); prop_roles.unsafe_free(); prop_sizes.unsafe_free()
     prop_is_double.unsafe_free(); file_buf.unsafe_free()

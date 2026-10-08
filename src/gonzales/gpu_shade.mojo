@@ -1,20 +1,21 @@
 from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
 from std.utils import StaticTuple
 from .gpu_tuning import MINCTA_NEE, MINCTA_DIFFUSE, MINCTA_COATED, MINCTA_CONDUCTOR, MINCTA_MEASURED, MINCTA_DIELECTRIC, MINCTA_TRAVERSE
-from .bvh import BVH2Node, SceneView
+from .bvh import BVH2Node, BVH4, SceneView
 from .curves import Curve
-from .geometry import _is_real_ptr
+from .geometry import _is_real_ptr, Vec3f, dot
+from std.math import sqrt
 from .guide import null_guide
 from .lights import AreaLight, DistantLight, InfiniteLight, LightSampler, PointLight
 from .materials import MatKind, Material, MeasuredBRDF
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh
-from .render_state import GpuTexture, NormalSlopeMap, PathState, ShadowTask
+from .render_state import GpuTexture, NormalSlopeMap, PathState, ShadowTask, SuppressTask
 from .restir_di import DIReservoir, ReservoirIO, reservoir_io_null
 from .restir_gi import gi_reservoir_io_null
 from .rng import PCG32
 from .footprint import CameraFootprint
-from .shading import GIPendingX1, LightContext, ShadeContext, shade_coated_conductor, shade_coated_diffuse, shade_conductor, shade_core, shade_dielectric, shade_diffuse, shade_diffuse_transmission, shade_hair, shade_interface, shade_measured, shade_nee_core, shade_thin_dielectric
+from .shading import GIPendingX1, LightContext, ShadeContext, shade_coated_conductor, shade_coated_diffuse, shade_conductor, shade_core, shade_dielectric, shade_diffuse, shade_diffuse_transmission, shade_hair, shade_interface, shade_measured, shade_nee_core, shade_thin_dielectric, _mnee_first_probe, _mnee_owns_path
 from .spectrum import SpectralHandle
 from max.gpu import block_dim, block_idx, thread_idx
 from .gpu_scene import GpuSceneHandle
@@ -26,9 +27,10 @@ def _shade_context(
     path_idx: Int = 0,
     use_restir: Bool = False,
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin] = Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
+    suppress_tasks: Pointer[SuppressTask, MutUntrackedOrigin] = Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
 ) -> ShadeContext:
     return ShadeContext(
-        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=sd.hasGlass != Int32(0),
+        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=sd.hasGlass != Int32(0), mnee_stats=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), bvh4=BVH4.none(), suppress_tasks=suppress_tasks,
         n_mediums=Int(sd.mediumCount), mediums=sd.mediums, medium_ifaces=sd.mediumInterfaces, grids=sd.grids, nvdb_grids=sd.nvdbGrids,
         path_idx=path_idx, bvh2Nodes=sd.bvh2Nodes, primIds=sd.primIds, meshes=sd.meshes, curves=sd.curves,
         materials=sd.materials,
@@ -54,10 +56,12 @@ def shared_shade_context(
     paths_base: Pointer[PathState, MutUntrackedOrigin],
     use_restir: Bool,
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
+    mnee_stats: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
 ) -> ShadeContext:
     """The context of _shade_context with the per-thread path index replaced by the base of the path array."""
     var ctx = _shade_context(sd, sobol_matrices, use_restir=use_restir, shadow_tasks=shadow_tasks)
     ctx.paths_base = paths_base
+    ctx.mnee_stats = mnee_stats
     return ctx^
 
 
@@ -85,18 +89,60 @@ def shade_nee_preamble_gpu(
     sd: SceneView,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
+    live_idx: Pointer[Int32, MutUntrackedOrigin],
+    live_count: Pointer[Int32, MutUntrackedOrigin],
+    suppress_tasks: Pointer[SuppressTask, MutUntrackedOrigin] = Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
 ):
-    var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
+    if tid >= Int(live_count[unsafe_offset=0]):
         return
+    tid = Int(live_idx[unsafe_offset=tid])
     var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].active == 0:
         return
     var inter = intersections[unsafe_offset=tid]
     # Do NOT early-exit on miss — shade_nee_core adds env-light contribution there.
-    var ctx_no_shadow = _shade_context(sd, sobol_matrices)
+    var ctx_no_shadow = _shade_context(sd, sobol_matrices, tid, suppress_tasks=suppress_tasks)
     shade_nee_core[True, False](path_ptr, inter, ctx_no_shadow)
+
+
+# Decides, for the emitter hits shade_nee_core parked in `tasks`, whether MNEE owns the path (then the hit is dropped) or
+# not (then its contribution is added). Kept out of shade_nee_preamble_gpu: the manifold solve is far too large to sit
+# in the kernel every path runs through each bounce.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+def resolve_suppress_gpu(
+    paths: Pointer[PathState, MutUntrackedOrigin],
+    intersections: Pointer[Intersection, MutUntrackedOrigin],
+    sd: SceneView,
+    sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
+    tasks: Pointer[SuppressTask, MutUntrackedOrigin],
+    count_dp: Int64,
+    live_idx: Pointer[Int32, MutUntrackedOrigin],
+    live_count: Pointer[Int32, MutUntrackedOrigin],
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= Int(live_count[unsafe_offset=0]):
+        return
+    tid = Int(live_idx[unsafe_offset=tid])
+    if tasks[unsafe_offset=tid].active == Int32(0):
+        return
+    tasks[unsafe_offset=tid].active = Int32(0)
+    var path_ptr = paths.unsafe_offset(tid)
+    var inter = intersections[unsafe_offset=tid]
+    var ctx = _shade_context(sd, sobol_matrices, tid)
+    var x0 = path_ptr[].last_ns_p
+    var hp = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z) \
+             + Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z) * inter.tHit
+    var seg = hp - x0
+    var seg_len = sqrt(dot(seg, seg))
+    var owned = False
+    if seg_len > Float32(0.0001):
+        var seg_dir = seg * (Float32(1.0) / seg_len)
+        var (glass, pr) = _mnee_first_probe(ctx, x0, seg_dir, seg_len)
+        if glass:
+            owned = _mnee_owns_path(ctx, path_ptr, inter, pr, seg_dir, seg_len, hp)
+    if not owned:
+        path_ptr[].estimate += tasks[unsafe_offset=tid].contrib
 
 
 # ── Per-material GPU kernels (G1) ─────────────────────────────────────────────
@@ -105,12 +151,14 @@ def shade_nee_preamble_gpu(
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_DIFFUSE))
-def shade_diffuse_gpu(
+def shade_diffuse_gpu[mnee: Bool, defer_only: Bool = False](
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneView,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
+    live_idx: Pointer[Int32, MutUntrackedOrigin],
+    live_count: Pointer[Int32, MutUntrackedOrigin],
     # ReSTIR DI (Phase 2, --restir). Only gpu_render_sample ever passes
     # use_restir=True here -- gpu_render_wavefront has no ReSTIR concept at
     # all (see its own docstring: batch --restir renders via
@@ -134,10 +182,10 @@ def shade_diffuse_gpu(
     # its 480 bytes on every thread's stack (~1 GB of local-memory stores per launch).
     ctx_ptr: Pointer[ShadeContext, MutUntrackedOrigin] = Pointer[ShadeContext, MutUntrackedOrigin].unsafe_dangling(),
 ):
-    var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
+    if tid >= Int(live_count[unsafe_offset=0]):
         return
+    tid = Int(live_idx[unsafe_offset=tid])
     var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.diffuse:
         return
@@ -158,31 +206,33 @@ def shade_diffuse_gpu(
             gbuf_normal=gbuf_normal, gbuf_depth=gbuf_depth,
             gbuf_material_id=gbuf_material_id, gbuf_world_pos=gbuf_world_pos,
             frame_w=frame_w, frame_h=frame_h)
-    shade_diffuse[True, True](path_ptr, inter, ctx_ptr[], mat, ctx_ptr[].guide_write, restir_io, tid if restir_has_state else -1)
+    shade_diffuse[True, True, mnee, defer_only](path_ptr, inter, ctx_ptr[], mat, ctx_ptr[].guide_write, restir_io, tid if restir_has_state else -1)
 
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_COATED))
-def shade_coated_diffuse_gpu(
+def shade_coated_diffuse_gpu[defer_only: Bool = False](
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneView,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
+    live_idx: Pointer[Int32, MutUntrackedOrigin],
+    live_count: Pointer[Int32, MutUntrackedOrigin],
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
+    ctx_ptr: Pointer[ShadeContext, MutUntrackedOrigin],
 ):
-    var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
+    if tid >= Int(live_count[unsafe_offset=0]):
         return
+    tid = Int(live_idx[unsafe_offset=tid])
     var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.coated_diffuse:
         return
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
-    var ctx = _shade_context(sd, sobol_matrices, path_idx=tid, shadow_tasks=shadow_tasks)
-    shade_coated_diffuse[True, True](path_ptr, inter, ctx, mat)
+    shade_coated_diffuse[True, True, defer_only](path_ptr, inter, ctx_ptr[], mat)
 
 
 def shade_diffuse_transmit_gpu(
@@ -191,12 +241,14 @@ def shade_diffuse_transmit_gpu(
     sd: SceneView,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
+    live_idx: Pointer[Int32, MutUntrackedOrigin],
+    live_count: Pointer[Int32, MutUntrackedOrigin],
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
 ):
-    var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
+    if tid >= Int(live_count[unsafe_offset=0]):
         return
+    tid = Int(live_idx[unsafe_offset=tid])
     var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.diffuse_transmit:
         return
@@ -242,11 +294,13 @@ def shade_mix_gpu(
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneView,
     count_dp: Int64,
+    live_idx: Pointer[Int32, MutUntrackedOrigin],
+    live_count: Pointer[Int32, MutUntrackedOrigin],
 ):
-    var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
+    if tid >= Int(live_count[unsafe_offset=0]):
         return
+    tid = Int(live_idx[unsafe_offset=tid])
     var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.mix:
         return
@@ -274,12 +328,14 @@ def shade_conductor_gpu(
     sd: SceneView,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
+    live_idx: Pointer[Int32, MutUntrackedOrigin],
+    live_count: Pointer[Int32, MutUntrackedOrigin],
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
 ):
-    var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
+    if tid >= Int(live_count[unsafe_offset=0]):
         return
+    tid = Int(live_idx[unsafe_offset=tid])
     var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.conductor:
         return
@@ -298,12 +354,14 @@ def shade_measured_gpu(
     sd: SceneView,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
+    live_idx: Pointer[Int32, MutUntrackedOrigin],
+    live_count: Pointer[Int32, MutUntrackedOrigin],
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
 ):
-    var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
+    if tid >= Int(live_count[unsafe_offset=0]):
         return
+    tid = Int(live_idx[unsafe_offset=tid])
     var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.measured:
         return
@@ -322,12 +380,14 @@ def shade_dielectric_gpu(
     sd: SceneView,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
+    live_idx: Pointer[Int32, MutUntrackedOrigin],
+    live_count: Pointer[Int32, MutUntrackedOrigin],
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
 ):
-    var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
+    if tid >= Int(live_count[unsafe_offset=0]):
         return
+    tid = Int(live_idx[unsafe_offset=tid])
     var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.dielectric:
         return
@@ -347,11 +407,13 @@ def shade_thin_dielectric_gpu(
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneView,
     count_dp: Int64,
+    live_idx: Pointer[Int32, MutUntrackedOrigin],
+    live_count: Pointer[Int32, MutUntrackedOrigin],
 ):
-    var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
+    if tid >= Int(live_count[unsafe_offset=0]):
         return
+    tid = Int(live_idx[unsafe_offset=tid])
     var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.thin_dielectric:
         return
@@ -367,12 +429,14 @@ def shade_coated_conductor_gpu(
     sd: SceneView,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
+    live_idx: Pointer[Int32, MutUntrackedOrigin],
+    live_count: Pointer[Int32, MutUntrackedOrigin],
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
 ):
-    var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
+    if tid >= Int(live_count[unsafe_offset=0]):
         return
+    tid = Int(live_idx[unsafe_offset=tid])
     var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.coated_conductor:
         return
@@ -388,13 +452,15 @@ def shade_interface_gpu(
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneView,
     count_dp: Int64,
+    live_idx: Pointer[Int32, MutUntrackedOrigin],
+    live_count: Pointer[Int32, MutUntrackedOrigin],
 ):
     """Passthrough (interface) material: advance ray through the surface.
     Medium update is handled by update_medium_gpu which runs after all shaders."""
-    var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
+    if tid >= Int(live_count[unsafe_offset=0]):
         return
+    tid = Int(live_idx[unsafe_offset=tid])
     var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.interface:
         return
@@ -409,12 +475,14 @@ def shade_hair_gpu(
     sd: SceneView,
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     count_dp: Int64,
+    live_idx: Pointer[Int32, MutUntrackedOrigin],
+    live_count: Pointer[Int32, MutUntrackedOrigin],
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
 ):
-    var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
+    if tid >= Int(live_count[unsafe_offset=0]):
         return
+    tid = Int(live_idx[unsafe_offset=tid])
     var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].pending_mat != MatKind.hair:
         return
@@ -464,7 +532,7 @@ def shade_enqueue_shadow_gpu(
     # Do NOT early-exit on miss — shade_nee_core adds env-light contribution there.
     var ls_shadow = LightSampler(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0), Int32(0))
     var ctx_shadow = ShadeContext(
-        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=True,
+        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=True, mnee_stats=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), bvh4=BVH4.none(), suppress_tasks=Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
         n_mediums=0, mediums=Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), medium_ifaces=Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
         grids=Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), nvdb_grids=Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
         path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,

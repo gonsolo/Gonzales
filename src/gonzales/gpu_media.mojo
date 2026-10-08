@@ -22,14 +22,16 @@ def update_medium_gpu(
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneView,
     count_dp: Int64,
+    live_idx: Pointer[Int32, MutUntrackedOrigin],
+    live_count: Pointer[Int32, MutUntrackedOrigin],
 ):
     """Update current_medium_idx for any surface hit with a MediumInterface bound.
     Runs after all material shaders; uses the post-scatter ray direction (same
     convention as CPU rendering.mojo) to determine inside vs outside."""
-    var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
+    if tid >= Int(live_count[unsafe_offset=0]):
         return
+    tid = Int(live_idx[unsafe_offset=tid])
     var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].active == 0:
         return
@@ -945,6 +947,8 @@ def sample_medium_gpu(
     intersections: Pointer[Intersection, MutUntrackedOrigin],
     sd: SceneView,
     count_dp: Int64,
+    live_idx: Pointer[Int32, MutUntrackedOrigin],
+    live_count: Pointer[Int32, MutUntrackedOrigin],
     # Phase 7.3: only gpu_render_wavefront_kernels(...) callers that pass
     # use_vol_restir=1 AND real buffers get reuse -- see _sample_medium_core's
     # own comment for why these stay decomposed rather than one VolReservoirIO.
@@ -959,10 +963,10 @@ def sample_medium_gpu(
 ):
     """GPU kernel wrapper: bounds-check, then call the SAME
     _sample_medium_core the CPU driver (render_all_tiles) calls."""
-    var count = Int(count_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
-    if tid >= count:
+    if tid >= Int(live_count[unsafe_offset=0]):
         return
+    tid = Int(live_idx[unsafe_offset=tid])
     # tid IS the pixel index here only when use_vol_restir=1 -- that only
     # ever comes from gpu_render_sample (one path per pixel per dispatch),
     # mirroring shade_diffuse_gpu's identical restir_has_state contract.

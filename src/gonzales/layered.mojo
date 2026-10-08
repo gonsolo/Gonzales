@@ -26,7 +26,7 @@ docs/05_reflection_models.md.
 """
 from std.math import sqrt, cos, sin, exp, abs, min, max
 from std.memory import bitcast
-from .geometry import Vec3f, dot, cross, safe_sqrt, PI, INV_PI
+from .geometry import Vec3f, dot, cross, safe_sqrt, fast_div, fast_recip, PI, INV_PI
 from .materials import fr_dielectric, ALPHA_EFFECTIVELY_SMOOTH
 from .spectrum import SpectralSample
 from .rng import PCG32
@@ -48,35 +48,35 @@ def tr_D(wm: Vec3f, alpha: Float32) -> Float32:
     var sin2 = max(Float32(0), Float32(1) - cos2)
     if cos2 <= Float32(0):
         return Float32(0)
-    var tan2 = sin2 / cos2
+    var tan2 = fast_div(sin2, cos2)
     var cos4 = cos2 * cos2
     if cos4 < Float32(1e-16):
         return Float32(0)
-    var e = tan2 / (alpha * alpha)
-    return Float32(1) / (PI * alpha * alpha * cos4 * (Float32(1) + e) * (Float32(1) + e))
+    var e = fast_div(tan2, alpha * alpha)
+    return fast_recip(PI * alpha * alpha * cos4 * (Float32(1) + e) * (Float32(1) + e))
 
 @always_inline
 def tr_lambda(w: Vec3f, alpha: Float32) -> Float32:
     var cos2 = w.z * w.z
     if cos2 <= Float32(0):
         return Float32(0)
-    var tan2 = max(Float32(0), Float32(1) - cos2) / cos2
+    var tan2 = fast_div(max(Float32(0), Float32(1) - cos2), cos2)
     return (sqrt(Float32(1) + alpha * alpha * tan2) - Float32(1)) * Float32(0.5)
 
 @always_inline
 def tr_G1(w: Vec3f, alpha: Float32) -> Float32:
-    return Float32(1) / (Float32(1) + tr_lambda(w, alpha))
+    return fast_recip(Float32(1) + tr_lambda(w, alpha))
 
 @always_inline
 def tr_G(wo: Vec3f, wi: Vec3f, alpha: Float32) -> Float32:
-    return Float32(1) / (Float32(1) + tr_lambda(wo, alpha) + tr_lambda(wi, alpha))
+    return fast_recip(Float32(1) + tr_lambda(wo, alpha) + tr_lambda(wi, alpha))
 
 @always_inline
 def tr_pdf(w: Vec3f, wm: Vec3f, alpha: Float32) -> Float32:
     """Visible-normal density D_w(wm)."""
     if w.z == Float32(0):
         return Float32(0)
-    return tr_G1(w, alpha) / abs(w.z) * tr_D(wm, alpha) * abs(dot(w, wm))
+    return fast_div(tr_G1(w, alpha), abs(w.z)) * tr_D(wm, alpha) * abs(dot(w, wm))
 
 @always_inline
 def tr_sample_wm(w: Vec3f, u0: Float32, u1: Float32, alpha: Float32) -> Vec3f:
@@ -108,15 +108,16 @@ def _refract(wi: Vec3f, n_in: Vec3f, eta_in: Float32) -> Tuple[Bool, Vec3f, Floa
     var eta = eta_in
     var cos_i = dot(n, wi)
     if cos_i < Float32(0):
-        eta = Float32(1) / eta
+        eta = fast_recip(eta)
         cos_i = -cos_i
         n = -n
     var sin2_i = max(Float32(0), Float32(1) - cos_i * cos_i)
-    var sin2_t = sin2_i / (eta * eta)
+    var sin2_t = fast_div(sin2_i, eta * eta)
     if sin2_t >= Float32(1):
         return (False, Vec3f(Float32(0)), eta)
     var cos_t = safe_sqrt(Float32(1) - sin2_t)
-    var wt = (-wi) / eta + n * (cos_i / eta - cos_t)
+    var inv_eta = fast_recip(eta)
+    var wt = (-wi) * inv_eta + n * (cos_i * inv_eta - cos_t)
     return (True, wt, eta)
 
 @always_inline
@@ -151,16 +152,17 @@ def diel_sample(wo: Vec3f, uc: Float32, u0: Float32, u1: Float32, eta: Float32, 
         var pt = T if allow_t else Float32(0)
         if pr == Float32(0) and pt == Float32(0):
             return _no_sample()
-        if uc < pr / (pr + pt):
+        var inv_p = fast_recip(pr + pt)
+        if uc < pr * inv_p:
             var wi = Vec3f(-wo.x, -wo.y, wo.z)
-            return ISample(True, SpectralSample(R / abs(wi.z)), wi, pr / (pr + pt), True, True)
+            return ISample(True, SpectralSample(fast_div(R, abs(wi.z))), wi, pr * inv_p, True, True)
         var (ok, wi, etap) = _refract(wo, Vec3f(Float32(0), Float32(0), Float32(1)), eta)
         if not ok:
             return _no_sample()
-        var ft = T / abs(wi.z)
+        var ft = fast_div(T, abs(wi.z))
         if radiance:
-            ft /= etap * etap
-        return ISample(True, SpectralSample(ft), wi, pt / (pr + pt), True, False)
+            ft = fast_div(ft, etap * etap)
+        return ISample(True, SpectralSample(ft), wi, pt * inv_p, True, False)
     var wm = tr_sample_wm(wo, u0, u1, alpha)
     var R = fr_dielectric(dot(wo, wm), eta)
     var T = Float32(1) - R
@@ -168,22 +170,24 @@ def diel_sample(wo: Vec3f, uc: Float32, u0: Float32, u1: Float32, eta: Float32, 
     var pt = T if allow_t else Float32(0)
     if pr == Float32(0) and pt == Float32(0):
         return _no_sample()
-    if uc < pr / (pr + pt):
+    var inv_p = fast_recip(pr + pt)
+    if uc < pr * inv_p:
         var wi = _reflect(wo, wm)
         if wo.z * wi.z <= Float32(0):
             return _no_sample()
-        var pdf = tr_pdf(wo, wm, alpha) / (Float32(4) * abs(dot(wo, wm))) * pr / (pr + pt)
-        var f = tr_D(wm, alpha) * tr_G(wo, wi, alpha) * R / (Float32(4) * wi.z * wo.z)
+        var pdf = fast_div(tr_pdf(wo, wm, alpha), Float32(4) * abs(dot(wo, wm))) * pr * inv_p
+        var f = fast_div(tr_D(wm, alpha) * tr_G(wo, wi, alpha) * R, Float32(4) * wi.z * wo.z)
         return ISample(True, SpectralSample(f), wi, pdf, False, True)
     var (ok, wi, etap) = _refract(wo, wm, eta)
     if not ok or wo.z * wi.z > Float32(0) or wi.z == Float32(0):
         return _no_sample()
-    var denom = (dot(wi, wm) + dot(wo, wm) / etap) * (dot(wi, wm) + dot(wo, wm) / etap)
-    var dwm_dwi = abs(dot(wi, wm)) / denom
-    var pdf = tr_pdf(wo, wm, alpha) * dwm_dwi * pt / (pr + pt)
-    var ft = T * tr_D(wm, alpha) * tr_G(wo, wi, alpha) * abs(dot(wi, wm) * dot(wo, wm) / (wi.z * wo.z * denom))
+    var d = dot(wi, wm) + fast_div(dot(wo, wm), etap)
+    var denom = d * d
+    var dwm_dwi = fast_div(abs(dot(wi, wm)), denom)
+    var pdf = tr_pdf(wo, wm, alpha) * dwm_dwi * pt * inv_p
+    var ft = T * tr_D(wm, alpha) * tr_G(wo, wi, alpha) * abs(fast_div(dot(wi, wm) * dot(wo, wm), wi.z * wo.z * denom))
     if radiance:
-        ft /= etap * etap
+        ft = fast_div(ft, etap * etap)
     return ISample(True, SpectralSample(ft), wi, pdf, False, False)
 
 
@@ -193,7 +197,7 @@ def _diel_half(wo: Vec3f, wi: Vec3f, eta: Float32) -> Tuple[Bool, Vec3f, Float32
     var reflect = wi.z * wo.z > Float32(0)
     var etap = Float32(1)
     if not reflect:
-        etap = eta if wo.z > Float32(0) else Float32(1) / eta
+        etap = eta if wo.z > Float32(0) else fast_recip(eta)
     var wm = wi * etap + wo
     if wi.z == Float32(0) or wo.z == Float32(0) or wm.length_sq() == Float32(0):
         return (False, wm, etap, reflect)
@@ -215,11 +219,12 @@ def diel_f(wo: Vec3f, wi: Vec3f, eta: Float32, alpha: Float32, radiance: Bool) -
         return Float32(0)
     var F = fr_dielectric(dot(wo, wm), eta)
     if reflect:
-        return tr_D(wm, alpha) * tr_G(wo, wi, alpha) * F / abs(Float32(4) * wi.z * wo.z)
-    var denom = (dot(wi, wm) + dot(wo, wm) / etap) * (dot(wi, wm) + dot(wo, wm) / etap) * wi.z * wo.z
-    var ft = tr_D(wm, alpha) * (Float32(1) - F) * tr_G(wo, wi, alpha) * abs(dot(wi, wm) * dot(wo, wm) / denom)
+        return fast_div(tr_D(wm, alpha) * tr_G(wo, wi, alpha) * F, abs(Float32(4) * wi.z * wo.z))
+    var d = dot(wi, wm) + fast_div(dot(wo, wm), etap)
+    var denom = d * d * wi.z * wo.z
+    var ft = tr_D(wm, alpha) * (Float32(1) - F) * tr_G(wo, wi, alpha) * abs(fast_div(dot(wi, wm) * dot(wo, wm), denom))
     if radiance:
-        ft /= etap * etap
+        ft = fast_div(ft, etap * etap)
     return ft
 
 
@@ -237,11 +242,12 @@ def diel_pdf(wo: Vec3f, wi: Vec3f, eta: Float32, alpha: Float32, allow_r: Bool, 
     var pt = T if allow_t else Float32(0)
     if pr == Float32(0) and pt == Float32(0):
         return Float32(0)
+    var inv_p = fast_recip(pr + pt)
     if reflect:
-        return tr_pdf(wo, wm, alpha) / (Float32(4) * abs(dot(wo, wm))) * pr / (pr + pt)
-    var denom = (dot(wi, wm) + dot(wo, wm) / etap) * (dot(wi, wm) + dot(wo, wm) / etap)
-    var dwm_dwi = abs(dot(wi, wm)) / denom
-    return tr_pdf(wo, wm, alpha) * dwm_dwi * pt / (pr + pt)
+        return fast_div(tr_pdf(wo, wm, alpha), Float32(4) * abs(dot(wo, wm))) * pr * inv_p
+    var d = dot(wi, wm) + fast_div(dot(wo, wm), etap)
+    var dwm_dwi = fast_div(abs(dot(wi, wm)), d * d)
+    return tr_pdf(wo, wm, alpha) * dwm_dwi * pt * inv_p
 
 
 @always_inline
@@ -274,12 +280,12 @@ def _power(a: Float32, b: Float32) -> Float32:
     var bb = b * b
     if aa + bb <= Float32(0):
         return Float32(0)
-    return aa / (aa + bb)
+    return fast_div(aa, aa + bb)
 
 @always_inline
 def _tr(w: Vec3f) -> Float32:
     """pbrt's LayeredBxDF::Tr(thickness, w): the coat's own absorption."""
-    return exp(-abs(LAYERED_THICKNESS / w.z))
+    return exp(-abs(fast_div(LAYERED_THICKNESS, w.z)))
 
 
 @always_inline
@@ -327,7 +333,7 @@ def layered_f(wo_in: Vec3f, wi_in: Vec3f, R: SpectralSample, eta: Float32, alpha
     if not wis.valid or wis.f.is_black() or wis.pdf == Float32(0) or wis.wi.z == Float32(0):
         return f
 
-    var beta = wos.f * (abs(wos.wi.z) / wos.pdf)
+    var beta = wos.f * fast_div(abs(wos.wi.z), wos.pdf)
     var z = LAYERED_THICKNESS
     var w = wos.wi
     for depth in range(LAYERED_MAX_DEPTH):
@@ -335,7 +341,7 @@ def layered_f(wo_in: Vec3f, wi_in: Vec3f, R: SpectralSample, eta: Float32, alpha
             var q = max(Float32(0), Float32(1) - beta.max_component())
             if _r(rng) < q:
                 break
-            beta = beta / (Float32(1) - q)
+            beta = beta * fast_recip(Float32(1) - q)
         # No medium: go straight to the other interface.
         z = Float32(0) if z == LAYERED_THICKNESS else LAYERED_THICKNESS
         beta *= _tr(w)
@@ -344,19 +350,19 @@ def layered_f(wo_in: Vec3f, wi_in: Vec3f, R: SpectralSample, eta: Float32, alpha
             var bs = diel_sample(-w, _r(rng), _r(rng), _r(rng), eta, alpha, radiance, True, False)
             if not bs.valid or bs.f.is_black() or bs.pdf == Float32(0) or bs.wi.z == Float32(0):
                 break
-            beta = beta * bs.f * (abs(bs.wi.z) / bs.pdf)
+            beta = beta * bs.f * fast_div(abs(bs.wi.z), bs.pdf)
             w = bs.wi
         else:
             # The diffuse base (non-exit, non-specular): NEE along wis...
             var wt = Float32(1)
             if not top_specular:
                 wt = _power(wis.pdf, diffuse_pdf(-w, -wis.wi))
-            f += beta * diffuse_f(-w, -wis.wi, R) * (abs(wis.wi.z) * wt * _tr(wis.wi) / wis.pdf) * wis.f
+            f += beta * diffuse_f(-w, -wis.wi, R) * fast_div(abs(wis.wi.z) * wt * _tr(wis.wi), wis.pdf) * wis.f
             # ...then sample the base for the next direction...
             var bs = diffuse_sample(-w, _r(rng), _r(rng), R)
             if not bs.valid or bs.f.is_black() or bs.pdf == Float32(0) or bs.wi.z == Float32(0):
                 break
-            beta = beta * bs.f * (abs(bs.wi.z) / bs.pdf)
+            beta = beta * bs.f * fast_div(abs(bs.wi.z), bs.pdf)
             w = bs.wi
             # ...and its own NEE through the exit interface.
             if not top_specular:
@@ -401,7 +407,7 @@ def layered_sample(wo_in: Vec3f, uc: Float32, u0: Float32, u1: Float32, R: Spect
     var pdf = bs.pdf
     var z = LAYERED_THICKNESS
     for depth in range(LAYERED_MAX_DEPTH):
-        var rr_beta = f.max_component() / pdf
+        var rr_beta = fast_div(f.max_component(), pdf)
         if depth > 3 and rr_beta < Float32(0.25):
             var q = max(Float32(0), Float32(1) - rr_beta)
             if _r(rng) < q:

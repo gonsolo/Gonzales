@@ -1,7 +1,8 @@
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
 from std.memory import bitcast
-from std.math import sqrt, acos, atan2, cos, sin, min, max, abs, floor, log, exp
+from std.math import sqrt, rsqrt, recip, acos, atan2, cos, sin, min, max, abs, floor, log, exp
+from std.sys import is_nvidia_gpu
 from std.sys.info import align_of
 from gonzales.spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, rgb_illuminant_to_spectral_sample
 from gonzales.nanovdb import nvdb_sample_index, nvdb_majorant_at, nvdb_leaf_base, nvdb_leaf_value
@@ -169,7 +170,10 @@ struct Vec3f(TrivialRegisterPassable, Writable):
     @always_inline
     def normalize(self) -> Vec3f:
         """Returns a unit vector in the same direction."""
-        return self * (Float32(1.0) / self.length())
+        comptime if is_nvidia_gpu():
+            return self * rsqrt(self.length_sq())
+        else:
+            return self * (Float32(1.0) / self.length())
 
     @always_inline
     def dot(self, b: Vec3f) -> Float32:
@@ -422,6 +426,23 @@ def safe_sqrt(x: Float32) -> Float32:
     return sqrt(x if x > Float32(0.0) else Float32(0.0))
 
 # <</listing>>
+
+@always_inline
+def fast_recip(x: Float32) -> Float32:
+    """1/x; one MUFU.RCP on NVIDIA (IEEE division is ~10 instructions), plain division elsewhere."""
+    comptime if is_nvidia_gpu():
+        return recip(x)
+    else:
+        return Float32(1.0) / x
+
+@always_inline
+def fast_div(a: Float32, b: Float32) -> Float32:
+    """a/b with fast_recip's accuracy (about 2 ulp on NVIDIA)."""
+    comptime if is_nvidia_gpu():
+        return a * recip(b)
+    else:
+        return a / b
+
 @always_inline
 # <<listing: reflect>>
 def reflect(wo: Vec3f, n: Vec3f) -> Vec3f:

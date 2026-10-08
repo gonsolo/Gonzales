@@ -21,8 +21,9 @@ from .media import Medium, MediumInterface, Grid, NvdbGrid, FreeFlight, sample_h
 from .lights import area_light_pick_triangle, AreaLight, DistantLight, InfiniteLight, PointLight
 from .curves import Curve, curve_piece_endpoints, _curve_perp_axis
 from .bssrdf import dipole_rd, dipole_max_radius
+from .bvh import traverse_dispatch, any_hit_dispatch
 from .bvh import (
-    BVH2Node, SceneView, traverse_bvh2_core, any_hit_bvh2_core, ray_sphere_hit,
+    BVH2Node, SceneView, ray_sphere_hit,
     _scene_bounding_sphere, _sample_disk_perpendicular, _sample_infinite_light_dir, _eval_infinite_light_and_pdf,
     HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps,
     LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee,
@@ -771,7 +772,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         # makes every `Shape "sphere"` invisible to SPPM -- which is exactly
         # why volumetric-caustic's glass sphere, and therefore its entire
         # caustic, was missing from the render until 2026-09-09.
-        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), scratch,
+        traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), scratch,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                            sd.spheres, Int(sd.sphereCount))
         if scratch[unsafe_offset=0].hit == Int8(0):
@@ -1328,7 +1329,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
         # makes every `Shape "sphere"` invisible to SPPM -- which is exactly
         # why volumetric-caustic's glass sphere, and therefore its entire
         # caustic, was missing from the render until 2026-09-09.
-        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), scratch,
+        traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), scratch,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                            sd.spheres, Int(sd.sphereCount))
         if scratch[unsafe_offset=0].hit == Int8(0):
@@ -1983,7 +1984,7 @@ def gather_disk_coverage[probes: Int = GATHER_COVERAGE_PROBES](
                           p.z + t1.z * ca + t2.z * sa + n.z * lift)
         var ray = Ray(org, Vec3f(-n.x, -n.y, -n.z))
         mem[unsafe_offset=0].hit = Int8(0)
-        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(2) * lift, mem,
+        traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(2) * lift, mem,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         if mem[unsafe_offset=0].hit != Int8(0) and mem[unsafe_offset=0].primId.type != Int8(4):
             var ng = _geom_normal(mem[unsafe_offset=0], sd.meshes, sd.instances)
@@ -2032,7 +2033,7 @@ def gather_ball_coverage[probes: Int = GATHER_COVERAGE_PROBES](
         var dir = Vec3f(cos(ang) * rxy, yv, sin(ang) * rxy)
         var ray = Ray(p, dir)
         mem[unsafe_offset=0].hit = Int8(0)
-        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, r, mem,
+        traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, r, mem,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         var blocked = mem[unsafe_offset=0].hit != Int8(0)
         if not blocked:
@@ -2568,7 +2569,7 @@ def _sppm_shadow(
                                     sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(sd.sphereCount),
                                     sd.materials, sd.mediums, sd.mediumInterfaces, sd.grids, sd.nvdbGrids,
                                     sd.spectral, vp.wavelengths, pcg)
-    if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, Ray(org, vec3f(wi)), tmax,
+    if any_hit_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, Ray(org, vec3f(wi)), tmax,
                          sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(sd.sphereCount),
                          materials=sd.materials):
         return SpectralSample(Float32(0.0))

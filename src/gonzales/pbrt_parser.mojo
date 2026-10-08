@@ -21,8 +21,9 @@ from .lexer import (PbrtScanner, scanner_open, scanner_free, scanner_is_at_end,
 from .parse_types import (SceneParseState, MeshAccum, NamedMaterial, scene_path,
                            ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX)
 from .geometry import RGB, Point3f, Vec3f, dot, PI, _is_real_ptr
-from .materials import Material, MatKind, MeasuredBRDF
+from .materials import Material, MatKind, MeasuredBRDF, is_specular_glass
 from .render_state import GpuTexture, NormalSlopeMap, normal_slope_map_none
+from .host_textures import HostTextures, TexPrefetch, decode_host_textures, host_texture_table
 from .primitives import Sphere, TriangleMesh, PrimId, Instance
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
@@ -30,10 +31,11 @@ from .curves import Curve, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_poi
 from .nanovdb import nvdb_load, nvdb_load_named, nvdb_data, nvdb_size, nvdb_free, nvdb_index_bbox, nvdb_value_range, nvdb_map_invmatf, nvdb_map_vecf
 from .noise import _perlin_perm_table, cloud_density
 from .transform import matrix_multiply, matrix_invert, transform_points, transform_normals
-from .bvh import BVH2Node, SceneView, build_bvh2
+from .bvh import BVH2Node, BVH4, SceneView, build_bvh2, build_bvh4, free_bvh4
 from .spectrum import SpectralHandle
 from .sampling import gaussian_norm
 from .ply import load_ply
+from .ply_prefetch import PlyPrefetch, scan_plys, load_all_plys
 from .material_builder import _psc_handle_make_named_material, _psc_handle_named_material
 from .measured_bsdf import load_measured_brdf_full
 from .light_builder import _psc_handle_area_light_source, handle_light_source
@@ -70,6 +72,9 @@ struct ParsedScene_Mojo:
     var bvh_nodes_cpu:      Pointer[BVH2Node, MutUntrackedOrigin]
     var prim_ids_cpu:       Pointer[PrimId, MutUntrackedOrigin]
     var bvh_node_count_cpu: Int32
+    # CPU-only BVH4 collapse of bvh_nodes_cpu (bvh.mojo build_bvh4); owned. Built by mojo_parsed_scene_descriptor
+    # for CPU renders (host_textures=True), BVH4.none() otherwise.
+    var bvh4:               BVH4
     var prim_count_cpu:     Int32
     var film_w:           Int32
     var film_h:           Int32
@@ -107,6 +112,11 @@ struct ParsedScene_Mojo:
     # geometry.mojo's NormalSlopeMap). Entries for other textures have
     # res == 0.
     var nmaps:            Pointer[NormalSlopeMap, MutUntrackedOrigin]
+    # CPU renders only: the in-memory texture table shading.mojo samples,
+    # built on demand by mojo_parsed_scene_descriptor (dangling until then).
+    var host_textures:    Pointer[GpuTexture, MutUntrackedOrigin]
+    var tex_prefetch:     Pointer[TexPrefetch, MutUntrackedOrigin]   # textures decoded ahead of the upload, see TexPrefetch
+    var host_tex_pixels:  HostTextures
     var distant_lights:   Pointer[DistantLight, MutUntrackedOrigin]
     var distant_count:    Int32
     var point_lights:     Pointer[PointLight, MutUntrackedOrigin]
@@ -1311,6 +1321,20 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                        full_path[unsafe_offset=fp_len-2] == UInt8(103) and
                        full_path[unsafe_offset=fp_len-1] == UInt8(122))
         var ok = Int32(0)
+        var cache_i = -1 if ends_gz else s[unsafe_offset=0].ply_cache[unsafe_offset=0].lookup(ply_path)
+        if cache_i >= 0:
+            ref pc = s[unsafe_offset=0].ply_cache[unsafe_offset=0]
+            ply_pts[unsafe_offset=0] = pc.pts[unsafe_offset=cache_i]
+            ply_nv[unsafe_offset=0] = pc.nv[unsafe_offset=cache_i]
+            ply_idx[unsafe_offset=0] = pc.idx[unsafe_offset=cache_i]
+            ply_nt[unsafe_offset=0] = pc.nt[unsafe_offset=cache_i]
+            ply_has_uvs[unsafe_offset=0] = pc.has_uvs[unsafe_offset=cache_i]
+            if pc.has_uvs[unsafe_offset=cache_i] != Int32(0):
+                ply_uvs[unsafe_offset=0] = pc.uvs[unsafe_offset=cache_i]
+            ply_has_nrm[unsafe_offset=0] = pc.has_nrm[unsafe_offset=cache_i]
+            if pc.has_nrm[unsafe_offset=cache_i] != Int32(0):
+                ply_nrm[unsafe_offset=0] = pc.nrm[unsafe_offset=cache_i]
+            ok = Int32(1)
         if ends_gz:
             var ap = unsafe_alloc[UInt8](fp_len - 2)
             for ci in range(fp_len - 3): ap[unsafe_offset=ci] = full_path[unsafe_offset=ci]
@@ -1339,11 +1363,14 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         var nv = ply_nv[unsafe_offset=0]
         var nt = ply_nt[unsafe_offset=0]
         if nv <= 0 or nt <= 0:
-            ply_pts[unsafe_offset=0].unsafe_free(); ply_idx[unsafe_offset=0].unsafe_free()
-            if ply_has_uvs[unsafe_offset=0] != 0:
-                ply_uvs[unsafe_offset=0].unsafe_free()
-            if ply_has_nrm[unsafe_offset=0] != 0:
-                ply_nrm[unsafe_offset=0].unsafe_free()
+            if cache_i >= 0:
+                s[unsafe_offset=0].ply_cache[unsafe_offset=0].release(cache_i)
+            else:
+                ply_pts[unsafe_offset=0].unsafe_free(); ply_idx[unsafe_offset=0].unsafe_free()
+                if ply_has_uvs[unsafe_offset=0] != 0:
+                    ply_uvs[unsafe_offset=0].unsafe_free()
+                if ply_has_nrm[unsafe_offset=0] != 0:
+                    ply_nrm[unsafe_offset=0].unsafe_free()
             ply_pts.unsafe_free(); ply_nv.unsafe_free(); ply_idx.unsafe_free(); ply_nt.unsafe_free()
             ply_uvs.unsafe_free(); ply_has_uvs.unsafe_free(); ply_nrm.unsafe_free(); ply_has_nrm.unsafe_free()
             return
@@ -1356,7 +1383,8 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
             var n_uv_floats = Int(nv) * 2
             for uvi in range(n_uv_floats):
                 s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1].uvs.append(uv_ptr[unsafe_offset=uvi])
-            uv_ptr.unsafe_free()
+            if cache_i < 0:
+                uv_ptr.unsafe_free()
         if ply_has_nrm[unsafe_offset=0] != 0:
             var nrm_ptr = ply_nrm[unsafe_offset=0]
             var ctm_inv = unsafe_alloc[Float32](16)
@@ -1375,8 +1403,13 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                 last_mesh.normals.append(nx)
                 last_mesh.normals.append(ny)
                 last_mesh.normals.append(nz)
-            nrm_world.unsafe_free(); ctm_inv.unsafe_free(); nrm_ptr.unsafe_free()
-        tmp_f2.unsafe_free(); tmp_i2.unsafe_free()
+            nrm_world.unsafe_free(); ctm_inv.unsafe_free()
+            if cache_i < 0:
+                nrm_ptr.unsafe_free()
+        if cache_i >= 0:
+            s[unsafe_offset=0].ply_cache[unsafe_offset=0].release(cache_i)
+        else:
+            tmp_f2.unsafe_free(); tmp_i2.unsafe_free()
         ply_pts.unsafe_free(); ply_nv.unsafe_free(); ply_idx.unsafe_free(); ply_nt.unsafe_free()
         ply_uvs.unsafe_free(); ply_has_uvs.unsafe_free(); ply_nrm.unsafe_free(); ply_has_nrm.unsafe_free()
         return
@@ -2874,6 +2907,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     psc[unsafe_offset=0].bvh_nodes_cpu      = bvh_nodes
     psc[unsafe_offset=0].prim_ids_cpu       = prim_ids
     psc[unsafe_offset=0].bvh_node_count_cpu = node_count
+    psc[unsafe_offset=0].bvh4               = BVH4.none()
     psc[unsafe_offset=0].prim_count_cpu     = total_prims
     psc[unsafe_offset=0].blas_nodes_arr   = blas_nodes_arr
     psc[unsafe_offset=0].blas_primids_arr = blas_primids_arr
@@ -2918,6 +2952,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     psc[unsafe_offset=0].sppm_photons_per_iter = s[unsafe_offset=0].sppm_photons_per_iter
     psc[unsafe_offset=0].tex_filenames    = tex_ptrs
     psc[unsafe_offset=0].tex_count        = Int32(n_tex)
+    psc[unsafe_offset=0].host_textures    = Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling()
+    psc[unsafe_offset=0].tex_prefetch     = Pointer[TexPrefetch, MutUntrackedOrigin].unsafe_dangling()
 
     # ---- Normal maps, converted once into LEAN slope space ----
     # Only the SMS/MNEE manifold walk reads these; ordinary shading samples
@@ -3473,6 +3509,7 @@ def resize_film(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
 
 def mojo_parse_scene(path: Pointer[UInt8, MutUntrackedOrigin],
                      verbose: Bool = False,
+                     plys: Pointer[PlyPrefetch, MutUntrackedOrigin] = Pointer[PlyPrefetch, MutUntrackedOrigin].unsafe_dangling(),
                     ) -> Pointer[ParsedScene_Mojo, MutUntrackedOrigin]:
     external_call["createTextureSystem", NoneType]()
     var handle = scanner_open(path)
@@ -3497,11 +3534,45 @@ def mojo_parse_scene(path: Pointer[UInt8, MutUntrackedOrigin],
         dir_tmp[unsafe_offset=last_slash + 1] = UInt8(0)
         s_ptr[unsafe_offset=0].scene_dir = String(unsafe_from_utf8_ptr=dir_tmp.as_imm())
         dir_tmp.unsafe_free()
+    # Meshes preloaded by the caller (PlyPrefetch, who frees them); without one, scan and load them here.
+    var own_plys = not _is_real_ptr(plys)
+    var ply_ptr = plys
+    if own_plys:
+        ply_ptr = unsafe_alloc[PlyPrefetch](1)
+        ply_ptr.unsafe_write(scan_plys(handle[unsafe_offset=0].buffer, Int(handle[unsafe_offset=0].total_bytes), s_ptr[unsafe_offset=0].scene_dir))
+        load_all_plys(ply_ptr[unsafe_offset=0])
+    s_ptr[unsafe_offset=0].ply_cache = ply_ptr
     parse_scene_file(handle, s_ptr)
     scanner_free(handle)
 
+    # Decode the image textures on a few threads of their own while finalize_scene builds the BVH.
+    var tex_names = List[String]()
+    var tex_raws = List[Bool]()
+    var n_state_tex = len(s_ptr[unsafe_offset=0].tex_files)
+    for ti in range(n_state_tex):
+        var is_raw = False
+        for ni in range(len(s_ptr[unsafe_offset=0].named_materials)):
+            if Int(s_ptr[unsafe_offset=0].named_materials[ni].normal_tex_idx) == ti:
+                is_raw = True
+        var dup = False
+        for k in range(len(tex_names)):
+            if tex_names[k] == s_ptr[unsafe_offset=0].tex_files[ti] and tex_raws[k] == is_raw:
+                dup = True
+        if not dup:
+            tex_names.append(s_ptr[unsafe_offset=0].tex_files[ti])
+            tex_raws.append(is_raw)
+    var tex_pf = unsafe_alloc[TexPrefetch](1)
+    tex_pf.unsafe_write(TexPrefetch())
+    tex_pf[unsafe_offset=0].start(tex_names, tex_raws, min(6, num_performance_cores()))
+
     var psc = unsafe_alloc[ParsedScene_Mojo](1)
     finalize_scene(s_ptr, psc, verbose)
+    tex_pf[unsafe_offset=0].join()
+    psc[unsafe_offset=0].tex_prefetch = tex_pf
+    if own_plys:
+        ply_ptr[unsafe_offset=0].free_all()
+        _ = ply_ptr.unsafe_take_pointee()
+        ply_ptr.unsafe_free()
     _ = s_ptr.unsafe_take_pointee()
     s_ptr.unsafe_free()
     return psc
@@ -3540,12 +3611,17 @@ def mojo_parsed_free(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]):
         psc[unsafe_offset=0].bvh_nodes_cpu.unsafe_free()
     if psc[unsafe_offset=0].prim_count_cpu > 0 and Int(psc[unsafe_offset=0].prim_ids_cpu) != Int(psc[unsafe_offset=0].prim_ids):
         psc[unsafe_offset=0].prim_ids_cpu.unsafe_free()
+    free_bvh4(psc[unsafe_offset=0].bvh4)
     if Int(psc[unsafe_offset=0].raster_to_camera) > 4:
         psc[unsafe_offset=0].raster_to_camera.unsafe_free()
     if Int(psc[unsafe_offset=0].camera_to_world) > 4:
         psc[unsafe_offset=0].camera_to_world.unsafe_free()
     if Int(psc[unsafe_offset=0].film_filename) > 1:
         psc[unsafe_offset=0].film_filename.unsafe_free()
+    if _is_real_ptr(psc[unsafe_offset=0].tex_prefetch):
+        psc[unsafe_offset=0].tex_prefetch[unsafe_offset=0].free_rest()
+        _ = psc[unsafe_offset=0].tex_prefetch.unsafe_take_pointee()
+        psc[unsafe_offset=0].tex_prefetch.unsafe_free()
     if psc[unsafe_offset=0].tex_count > 0:
         var nt = Int(psc[unsafe_offset=0].tex_count)
         for ti in range(nt):
@@ -3555,6 +3631,10 @@ def mojo_parsed_free(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]):
                 psc[unsafe_offset=0].nmaps[unsafe_offset=ti].slopes.unsafe_free()
         psc[unsafe_offset=0].nmaps.unsafe_free()
         psc[unsafe_offset=0].tex_filenames.unsafe_free()
+        if _is_real_ptr(psc[unsafe_offset=0].host_textures):
+            psc[unsafe_offset=0].host_textures.unsafe_free()
+            psc[unsafe_offset=0].host_tex_pixels.free_pixels()
+            psc[unsafe_offset=0].host_tex_pixels.free_tables()
     if psc[unsafe_offset=0].distant_count > 0:
         psc[unsafe_offset=0].distant_lights.unsafe_free()
     if psc[unsafe_offset=0].point_count > 0:
@@ -3700,9 +3780,15 @@ def mojo_apply_overrides(
 def mojo_parsed_scene_descriptor(
     psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
     spectral: SpectralHandle,
+    host_textures: Bool = False,
 ) -> Pointer[SceneView, MutUntrackedOrigin]:
     var sd = unsafe_alloc[SceneView](1)
+    if host_textures and not psc[unsafe_offset=0].bvh4.is_real():
+        psc[unsafe_offset=0].bvh4 = build_bvh4(psc[unsafe_offset=0].bvh_nodes_cpu, Int(psc[unsafe_offset=0].bvh_node_count_cpu),
+                                               psc[unsafe_offset=0].prim_ids_cpu, Int(psc[unsafe_offset=0].prim_count_cpu),
+                                               psc[unsafe_offset=0].meshes, psc[unsafe_offset=0].materials)[0]
     sd[unsafe_offset=0].bvh2Nodes        = psc[unsafe_offset=0].bvh_nodes_cpu
+    sd[unsafe_offset=0].bvh4             = psc[unsafe_offset=0].bvh4
     sd[unsafe_offset=0].primIds          = psc[unsafe_offset=0].prim_ids_cpu
     sd[unsafe_offset=0].meshes           = psc[unsafe_offset=0].meshes
     sd[unsafe_offset=0].meshCount        = Int64(psc[unsafe_offset=0].mesh_count)
@@ -3752,7 +3838,15 @@ def mojo_parsed_scene_descriptor(
     sd[unsafe_offset=0].vcmStatOut      = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
     sd[unsafe_offset=0].vcmLambda       = Float32(0)
     sd[unsafe_offset=0].vcmBucketCap    = Int32(0)
-    sd[unsafe_offset=0].hasGlass        = Int32(1)
+    var any_glass = False
+    for mi in range(Int(psc[unsafe_offset=0].material_count)):
+        if is_specular_glass(psc[unsafe_offset=0].materials[unsafe_offset=mi]):
+            any_glass = True
+    sd[unsafe_offset=0].hasGlass        = Int32(1) if any_glass else Int32(0)
+    var mnee_stats = unsafe_alloc[Int32](4)
+    for k in range(4):
+        mnee_stats[unsafe_offset=k] = Int32(0)
+    sd[unsafe_offset=0].mneeStats       = mnee_stats
     sd[unsafe_offset=0].blasNodesArr    = psc[unsafe_offset=0].blas_nodes_arr
     sd[unsafe_offset=0].blasPrimIdsArr  = psc[unsafe_offset=0].blas_primids_arr
     sd[unsafe_offset=0].blasCount       = Int64(psc[unsafe_offset=0].blas_count)
@@ -3761,10 +3855,20 @@ def mojo_parsed_scene_descriptor(
     sd[unsafe_offset=0].measuredBrdfs      = psc[unsafe_offset=0].measured_brdfs
     sd[unsafe_offset=0].measuredBrdfCount  = Int64(psc[unsafe_offset=0].measured_count)
     sd[unsafe_offset=0].spectral        = spectral
-    # CPU path never needs the GPU-resident texture array (shading.mojo's
-    # _tex_lookup[False] branch uses sd.textures/textureCount above
-    # instead) -- dangling/0, same convention every other GPU-only field
-    # here would use if this were a GPU builder.
+    # host_textures=True (CPU renders): decode the image textures once into
+    # the same in-memory table the GPU samples, so shading never calls OIIO
+    # per lookup. Otherwise dangling/0 and _tex_lookup[False] falls back to
+    # OIIO by filename (sd.textures above).
     sd[unsafe_offset=0].gpuTextures      = Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling()
     sd[unsafe_offset=0].gpuTextureCount  = Int64(0)
+    var n_tex = Int(psc[unsafe_offset=0].tex_count)
+    if host_textures and n_tex > 0:
+        if not _is_real_ptr(psc[unsafe_offset=0].host_textures):
+            var decoded = decode_host_textures(psc[unsafe_offset=0].tex_filenames, n_tex,
+                                               psc[unsafe_offset=0].materials, Int(psc[unsafe_offset=0].material_count),
+                                               psc[unsafe_offset=0].tex_prefetch)
+            psc[unsafe_offset=0].host_tex_pixels = decoded
+            psc[unsafe_offset=0].host_textures = host_texture_table(decoded)
+        sd[unsafe_offset=0].gpuTextures      = psc[unsafe_offset=0].host_textures
+        sd[unsafe_offset=0].gpuTextureCount  = Int64(n_tex)
     return sd

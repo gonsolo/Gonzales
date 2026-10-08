@@ -15,6 +15,7 @@
 from std.ffi import external_call
 from std.math import ceil
 from std.memory.alloc import unsafe_alloc
+from max.algorithm import parallelize
 from .bvh import SceneView, render_aux_buffers
 from .pbrt_parser import ParsedScene_Mojo
 from .postprocess import denoise, write_image_cropwindow
@@ -108,18 +109,31 @@ def write_render_outputs[Ob: Origin[mut=True], On: Origin[mut=True], Oa: Origin[
                 main[unsafe_offset=d * NCH + 6 + c] = normals[unsafe_offset=s * 3 + c]
             main[unsafe_offset=d * NCH + 9] = depth[unsafe_offset=s]
             dep[unsafe_offset=d] = depth[unsafe_offset=s]
-    var ret = _write_channels(film, main, Int32(cw), Int32(ch), Int32(NCH),
-        "R,G,B,Albedo.R,Albedo.G,Albedo.B,N.X,N.Y,N.Z,Z", fw, fh, Int32(x0), Int32(y0))
     var n_albedo = _sidecar_name(film, ".albedo.exr")
-    _ = write_image_cropwindow(albedo, fw, fh, cx0, cy0, cx1, cy1, n_albedo, Int32(32), Int32(32))
     var n_normal = _sidecar_name(film, ".normal.exr")
-    _ = write_image_cropwindow(normals, fw, fh, cx0, cy0, cx1, cy1, n_normal, Int32(32), Int32(32))
     var n_depth = _sidecar_name(film, ".depth.exr")
-    _ = _write_channels(n_depth, dep, Int32(cw), Int32(ch), Int32(1), "Y", fw, fh, Int32(x0), Int32(y0))
-    if denoised:
-        var n_noisy = _sidecar_name(film, ".noisy.exr")
-        _ = write_image_cropwindow(noisy, fw, fh, cx0, cy0, cx1, cy1, n_noisy, Int32(32), Int32(32))
-        n_noisy.unsafe_free()
+    var n_noisy = _sidecar_name(film, ".noisy.exr")
+    var ret_slot = unsafe_alloc[Int32](1)
+    ret_slot[unsafe_offset=0] = Int32(0)
+
+    # The files are independent and EXR compression is most of the cost, so write them side by side.
+    def write_task(i: Int) {var}:
+        if i == 0:
+            ret_slot[unsafe_offset=0] = _write_channels(film, main, Int32(cw), Int32(ch), Int32(NCH),
+                "R,G,B,Albedo.R,Albedo.G,Albedo.B,N.X,N.Y,N.Z,Z", fw, fh, Int32(x0), Int32(y0))
+        elif i == 1:
+            _ = write_image_cropwindow(albedo, fw, fh, cx0, cy0, cx1, cy1, n_albedo, Int32(32), Int32(32))
+        elif i == 2:
+            _ = write_image_cropwindow(normals, fw, fh, cx0, cy0, cx1, cy1, n_normal, Int32(32), Int32(32))
+        elif i == 3:
+            _ = _write_channels(n_depth, dep, Int32(cw), Int32(ch), Int32(1), "Y", fw, fh, Int32(x0), Int32(y0))
+        else:
+            _ = write_image_cropwindow(noisy, fw, fh, cx0, cy0, cx1, cy1, n_noisy, Int32(32), Int32(32))
+
+    parallelize(write_task, 5 if denoised else 4)
+    var ret = ret_slot[unsafe_offset=0]
+    ret_slot.unsafe_free()
+    n_noisy.unsafe_free()
     n_albedo.unsafe_free(); n_normal.unsafe_free(); n_depth.unsafe_free()
     main.unsafe_free(); dep.unsafe_free()
     return ret

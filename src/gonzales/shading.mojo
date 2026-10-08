@@ -1,3 +1,4 @@
+from std.atomic import Atomic
 from std.sys import size_of
 from std.collections import Array
 from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
@@ -6,7 +7,7 @@ from std.memory.alloc import unsafe_alloc
 from .geometry import RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, safe_sqrt, reflect, refract, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from .render_state import PDF_DROP_DIRECT
 from .materials import Material, MatKind, LobeKind, MeasuredBRDF, schlick_fresnel, fr_dielectric, dielectric_is_rough, is_specular_glass
-from .render_state import PathState, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SHADOW_SLOTS
+from .render_state import PathState, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SuppressTask, SHADOW_SLOTS
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, light_sampler_sample, light_sampler_pdf, area_light_pick_triangle
 from .portal_light import portal_frame, portal_ray_crosses
@@ -18,7 +19,7 @@ from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base,
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
 from .rng import PCG32
 from .footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
-from .bvh import BVH2Node, SceneView, any_hit_bvh2_core, ray_sphere_hit, traverse_bvh2_core, HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_square_to_sphere, _equal_area_sphere_to_square
+from .bvh import BVH2Node, BVH4, SceneView, any_hit_dispatch, traverse_dispatch, ray_sphere_hit, HairLobeConstants, _hair_precompute, _hair_eval_lobes, _hair_sample_dir, curve_offset_eps, LightSample, _sample_distant_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, _sample_infinite_light_nee, _sample_infinite_light_textured, _equal_area_square_to_sphere, _equal_area_sphere_to_square
 from .sampling import power_heuristic, sample_cosine_hemisphere, sample_cosine_hemisphere_world, sample_ggx_vndf, sobol_sample, sobol_sample_n, mix_bits_u64
 from .transform import transform_normal, Mat4
 from .guide import GuideGrid, guide_pos_to_cell, guide_pdf, guide_sample, guide_cell_has_data, guide_record, null_guide, guide_is_active
@@ -169,6 +170,12 @@ struct ShadeContext:
     var paths_base: Pointer[PathState, MutUntrackedOrigin]
     # False when the scene has no smooth glass: MNEE's per-sample probe toward the light can then never find anything.
     var has_glass: Bool
+    # GPU only: [MNEE probes, probes that found glass] counted on 1 call in 16, so the host can switch MNEE off when glass is rare; dangling = not counting.
+    var mnee_stats: Pointer[Int32, MutUntrackedOrigin]
+    # CPU only: 4-wide BVH for the any-hit / closest-hit calls below; BVH4.none() = BVH2 (always on the GPU).
+    var bvh4: BVH4
+    # GPU only: where the emitter-hit code parks a glass-chain hit for resolve_suppress_gpu; dangling = decide inline
+    var suppress_tasks: Pointer[SuppressTask, MutUntrackedOrigin]
     # Participating media for surface-NEE shadow rays; n_mediums == 0 keeps the plain any-hit test.
     var n_mediums:     Int
     var mediums:       Pointer[Medium, MutUntrackedOrigin]
@@ -387,10 +394,15 @@ def _sample_level(tex: GpuTexture, off: Int, lw: Int, lh: Int, u: Float32, v: Fl
     var fy = t * Float32(lh) - Float32(0.5)
     var x0 = Int(floor(fx)); var y0 = Int(floor(fy))
     var wx = fx - Float32(x0); var wy = fy - Float32(y0)
-    var x0w = ((x0 % lw) + lw) % lw
-    var y0w = ((y0 % lh) + lh) % lh
-    var x1w = (x0w + 1) % lw
-    var y1w = (y0w + 1) % lh
+    # Wrap without integer division: x0 is in [-1, lw-1] here; % only for out-of-range inputs.
+    var x0w = x0
+    if x0w < 0 or x0w >= lw: x0w = ((x0 % lw) + lw) % lw
+    var y0w = y0
+    if y0w < 0 or y0w >= lh: y0w = ((y0 % lh) + lh) % lh
+    var x1w = x0w + 1
+    if x1w == lw: x1w = 0
+    var y1w = y0w + 1
+    if y1w == lh: y1w = 0
     var i00 = off + y0w * lw + x0w
     var i10 = off + y0w * lw + x1w
     var i01 = off + y1w * lw + x0w
@@ -437,9 +449,11 @@ def _footprint_lod(tex: GpuTexture, width: Float32) -> Float32:
     return Float32(0.0)
 
 # Unified 2D-texture fetch — the single use_gpu seam for texture sampling.
-# GPU reads the uploaded GpuTexture table; CPU reads via OIIO by filename.
+# Both backends read the in-memory GpuTexture table (device buffers on GPU, host
+# pyramids on CPU); a CPU caller without a table falls back to OIIO by filename.
 # (u, v) are the interpolated, NOT-yet-V-flipped coords; this applies pbrt's
-# V-flip (1 - v) and (CPU) wrap. raw=True skips the sRGB decode (normal maps).
+# V-flip (1 - v). raw=True skips the sRGB decode in the OIIO fallback only: the
+# table's textures are decoded (or not) once at load.
 # Sets `found` False when there is no texture/data (caller uses its fallback).
 @always_inline
 def sample_texture[use_gpu: Bool](
@@ -457,14 +471,13 @@ def sample_texture[use_gpu: Bool](
         return RGB(Float32(0.0))
     var su = u
     var tv = Float32(1.0) - v  # pbrt V-flip: V=0 at top
-    comptime if use_gpu:
-        if tex_idx < n_textures:
-            var tex = textures[unsafe_offset=tex_idx]
-            if Int(tex.width) > 0:
-                found = True
-                return _sample_tex(tex, su, tv, _footprint_lod(tex, fp_width))
-    else:
-        if Int(tex_filenames) > 1:
+    if tex_idx < n_textures:
+        var tex = textures[unsafe_offset=tex_idx]
+        if Int(tex.width) > 0:
+            found = True
+            return _sample_tex(tex, su, tv, _footprint_lod(tex, fp_width))
+    comptime if not use_gpu:
+        if n_textures == 0 and Int(tex_filenames) > 1:
             var filename = tex_filenames[unsafe_offset=tex_idx]
             if Int(filename) > 1:
                 su = su - Float32(Int(su))
@@ -515,25 +528,27 @@ def _tex_lookup[use_gpu: Bool](
                 return mat.checker_tex1
             return mat.checker_tex2
         return mat.checker_tex1
-    comptime if use_gpu:
-        if ti >= 0 and ti < n_textures:
-            var tex = textures[unsafe_offset=ti]
-            if Int(tex.width) > 0:
-                var w0 = Float32(1.0) - inter.u - inter.v
-                var su = w0*mesh.uvs[unsafe_offset=v0*2]   + inter.u*mesh.uvs[unsafe_offset=v1*2]   + inter.v*mesh.uvs[unsafe_offset=v2*2]
-                var tv = w0*mesh.uvs[unsafe_offset=v0*2+1] + inter.u*mesh.uvs[unsafe_offset=v1*2+1] + inter.v*mesh.uvs[unsafe_offset=v2*2+1]
-                tv = Float32(1.0) - tv  # PBRT V-flip: V=0 at top
-                # bias + scale*texel is pbrt's "scale"/"mix" texture graph
-                # folded into the lookup (scale=1, bias=0 when absent) --
-                # see material_builder.mojo's _resolve_affine_rgb.
-                var t = _sample_tex(tex, su, tv, _footprint_lod(tex, fp_width))
-                return RGB(mat.tex_bias.r + mat.tex_scale.r * t.r,
-                           mat.tex_bias.g + mat.tex_scale.g * t.g,
-                           mat.tex_bias.b + mat.tex_scale.b * t.b)
-    else:
-        if ti >= 0 and Int(tex_filenames) > 8:
+    var has_uvs = True
+    comptime if not use_gpu:
+        has_uvs = Int(mesh.uvs) > 4
+    if ti >= 0 and ti < n_textures and has_uvs:
+        var tex = textures[unsafe_offset=ti]
+        if Int(tex.width) > 0:
+            var w0 = Float32(1.0) - inter.u - inter.v
+            var su = w0*mesh.uvs[unsafe_offset=v0*2]   + inter.u*mesh.uvs[unsafe_offset=v1*2]   + inter.v*mesh.uvs[unsafe_offset=v2*2]
+            var tv = w0*mesh.uvs[unsafe_offset=v0*2+1] + inter.u*mesh.uvs[unsafe_offset=v1*2+1] + inter.v*mesh.uvs[unsafe_offset=v2*2+1]
+            tv = Float32(1.0) - tv  # PBRT V-flip: V=0 at top
+            # bias + scale*texel is pbrt's "scale"/"mix" texture graph
+            # folded into the lookup (scale=1, bias=0 when absent) --
+            # see material_builder.mojo's _resolve_affine_rgb.
+            var t = _sample_tex(tex, su, tv, _footprint_lod(tex, fp_width))
+            return RGB(mat.tex_bias.r + mat.tex_scale.r * t.r,
+                       mat.tex_bias.g + mat.tex_scale.g * t.g,
+                       mat.tex_bias.b + mat.tex_scale.b * t.b)
+    comptime if not use_gpu:
+        if ti >= 0 and n_textures == 0 and Int(tex_filenames) > 8:
             var filename = tex_filenames[unsafe_offset=ti]
-            if Int(filename) > 1 and Int(mesh.uvs) > 4:
+            if Int(filename) > 1 and has_uvs:
                 var w0 = Float32(1.0) - inter.u - inter.v
                 var su = w0*mesh.uvs[unsafe_offset=v0*2]   + inter.u*mesh.uvs[unsafe_offset=v1*2]   + inter.v*mesh.uvs[unsafe_offset=v2*2]
                 var tv = w0*mesh.uvs[unsafe_offset=v0*2+1] + inter.u*mesh.uvs[unsafe_offset=v1*2+1] + inter.v*mesh.uvs[unsafe_offset=v2*2+1]
@@ -791,7 +806,23 @@ def _to_spec_illum(ctx: ShadeContext, c: RGB, wl: SampledWavelengths) -> Spectra
         ctx.spectral.d65, c.r, c.g, c.b, wl)
 
 @always_inline
-def _shadow_contribute[enqueue_shadow: Bool](
+def _shadow_inline(ctx: ShadeContext, guide_write: GuideGrid) -> Bool:
+    """True when _shadow_contribute would trace its ray right here as a plain any-hit test (no deferral, media or guiding)."""
+    return ctx.n_mediums == 0 and not _is_real_ptr(ctx.shadow_tasks) and not guide_is_active(guide_write)
+
+
+@always_inline
+def _shadow_blocked(ctx: ShadeContext, origin: Vec3f, dir: Vec3f, tmax: Float32) -> Bool:
+    """The plain any-hit shadow test of _shadow_contribute."""
+    var shadow_ray = Ray(Point3f(origin[0], origin[1], origin[2]), Vec3f(dir[0], dir[1], dir[2]))
+    return any_hit_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, tmax,
+                             ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
+                             ctx.lights.spheres, ctx.lights.sphere_count,
+                             materials=ctx.materials)
+
+
+@always_inline
+def _shadow_contribute[enqueue_shadow: Bool, defer_only: Bool = False](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     origin: Vec3f,
@@ -802,6 +833,18 @@ def _shadow_contribute[enqueue_shadow: Bool](
 ):
     # Deferral needs a real task buffer (only handed out for --rt-hardware) and no guiding; it takes the first free of the
     # path's SHADOW_SLOTS slots, and a candidate that finds none is traced inline below.
+    comptime if defer_only:
+        # The host guarantees a free slot (slots >= candidates), no media and no guiding; sw_resolve_shadow_gpu traces the ray.
+        var path_index = (Int(path_ptr) - Int(ctx.paths_base)) // size_of[PathState]()
+        var base = path_index * SHADOW_SLOTS
+        comptime for s in range(SHADOW_SLOTS):
+            if ctx.shadow_tasks[unsafe_offset=base + s].active == Int32(0):
+                ctx.shadow_tasks[unsafe_offset=base + s] = ShadowTask(
+                    Point3f(origin[0], origin[1], origin[2]),
+                    Vec3f(dir[0], dir[1], dir[2]),
+                    tmax, contrib, Int32(1), Int32(0))
+                return
+        return
     comptime if enqueue_shadow:
         if _is_real_ptr(ctx.shadow_tasks) and not guide_is_active(guide_write) and ctx.n_mediums == 0:
             var path_index = ctx.path_idx
@@ -828,7 +871,7 @@ def _shadow_contribute[enqueue_shadow: Bool](
                                   ctx.spectral, path_ptr[].wavelengths, pcg)
         blocked = tr.is_black()
     else:
-        blocked = any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, tmax,
+        blocked = any_hit_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, tmax,
                                     ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                                     ctx.lights.spheres, ctx.lights.sphere_count,
                                     materials=ctx.materials)
@@ -981,7 +1024,7 @@ def _albedo_highlight_boost(albedo: RGB, contrib: SpectralSample) -> RGB:
     return albedo + (RGB(Float32(1.0)) - albedo) * boost
 
 @always_inline
-def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
+def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool = False](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     ctx: ShadeContext,
@@ -1033,14 +1076,14 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     # NEE: every light type through the same layered f, MIS'd against the
     # layered pdf (pbrt's PathIntegrator: power heuristic, NEE vs BSDF).
     var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
-    _layered_nee[enqueue_shadow](path_ptr, ctx, hit_point, ls_area, ls_area.dist * Float32(0.9999), wo_l, tx, ty, normal, R, ior, coat_alpha)
+    _layered_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls_area, ls_area.dist * Float32(0.9999), wo_l, tx, ty, normal, R, ior, coat_alpha)
     for li in range(_nee_simple_light_count(ctx)):
         var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
         var ls = res[0].copy()
-        _layered_nee[enqueue_shadow](path_ptr, ctx, hit_point, ls, res[1], wo_l, tx, ty, normal, R, ior, coat_alpha)
+        _layered_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls, res[1], wo_l, tx, ty, normal, R, ior, coat_alpha)
     for inf_i in range(ctx.lights.infinite_count):
         var ls_inf = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-        _layered_nee[enqueue_shadow](path_ptr, ctx, hit_point, ls_inf, ls_inf.dist, wo_l, tx, ty, normal, R, ior, coat_alpha)
+        _layered_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls_inf, ls_inf.dist, wo_l, tx, ty, normal, R, ior, coat_alpha)
 
     # Continue with a layered sample. Its pdf is only proportional (pbrt's
     # pdfIsProportional): the throughput uses it, MIS uses layered_pdf.
@@ -1066,7 +1109,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
 
 
 @always_inline
-def _layered_nee[enqueue_shadow: Bool](
+def _layered_nee[enqueue_shadow: Bool, defer_only: Bool = False](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     hit_point: Vec3f,
@@ -1081,16 +1124,25 @@ def _layered_nee[enqueue_shadow: Bool](
     var wi_l = Vec3f(dot(ls.wi, tx), dot(ls.wi, ty), dot(ls.wi, n))
     if wi_l.z * wo_l.z <= Float32(0.0):
         return
+    if not ls.is_delta and ls.pdf <= Float32(0.0):
+        return
+    # An inline shadow test first: a blocked sample needs neither of the two stochastic layered evaluations.
+    var inline_shadow = False
+    comptime if not defer_only:
+        inline_shadow = _shadow_inline(ctx, null_guide())
+        if inline_shadow and _shadow_blocked(ctx, hit_point, ls.wi, tmax):
+            return
     var f = layered_f(wo_l, wi_l, R, ior, alpha, True)
     if f.is_black():
         return
     var w = abs(wi_l.z)
     if not ls.is_delta:
-        if ls.pdf <= Float32(0.0):
-            return
         w *= power_heuristic(ls.pdf, layered_pdf(wo_l, wi_l, ior, alpha, True)) / ls.pdf
     var contrib = path_ptr[].throughput * f * _to_spec_illum(ctx, ls.Li, path_ptr[].wavelengths) * w
-    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls.wi, tmax, contrib)
+    if inline_shadow:
+        path_ptr[].estimate += contrib
+    else:
+        _shadow_contribute[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls.wi, tmax, contrib)
 
 
 comptime RR_THROUGHPUT_CLAMP: Float32 = 32.0
@@ -1545,7 +1597,7 @@ def _nee_sample_simple_light(
 
 
 @always_inline
-def _nee_loop_simple[enqueue_shadow: Bool](
+def _nee_loop_simple[enqueue_shadow: Bool, defer_only: Bool = False](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     normal: Vec3f,
@@ -1578,7 +1630,7 @@ def _nee_loop_simple[enqueue_shadow: Bool](
         var w = _nee_weight_simple_spectral(ls, mat_kind, alb, alpha, normal, wo, ctx.spectral.coeffs, ctx.spectral.res, ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z, ctx.spectral.d65, path_ptr[].wavelengths, LobeTables(ctx.materials, ctx.curves, ctx.measured_brdfs)) * lobe_w
         if not w.is_black():
             var contrib = path_ptr[].throughput * w
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls.wi, tmax, contrib, guide_write)
+            _shadow_contribute[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls.wi, tmax, contrib, guide_write)
 
 @always_inline
 def _shade_conductor_nee[enqueue_shadow: Bool](
@@ -2827,7 +2879,7 @@ def _mnee_walk(
     return (False, x1_init, Float32(0), eta_in)
 
 @always_inline
-def _nee_infinite_light[enqueue_shadow: Bool](
+def _nee_infinite_light[enqueue_shadow: Bool, defer_only: Bool = False](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     ilight: InfiniteLight,
@@ -2873,7 +2925,7 @@ def _nee_infinite_light[enqueue_shadow: Bool](
         var mis_w = power_heuristic(pdf_light, pdf_bsdf_nee)
         var contrib = path_ptr[].throughput * _to_spec_refl(ctx, bxdf_eval_diffuse(alb), path_ptr[].wavelengths) * _to_spec_illum(ctx, env_rgb, path_ptr[].wavelengths) * (cos_env / pdf_light) * mis_w
         var t_max_env = Float32(100000.0)
-        _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, env_dir, t_max_env, contrib, guide_write)
+        _shadow_contribute[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, env_dir, t_max_env, contrib, guide_write)
 
 @always_inline
 def _sample_light_point_and_normal(
@@ -3088,7 +3140,7 @@ def _sms_probe_glass_chain(
         var pk_org = seg_org + shadow_dir * Float32(0.0005)
         var pk_ray = Ray(Point3f(pk_org[0], pk_org[1], pk_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
         var pk_store = Array[Intersection, 1](fill=dummy_inter)
-        traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, pk_ray, pk_tmax, pk_store.unsafe_ptr(),
+        traverse_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, pk_ray, pk_tmax, pk_store.unsafe_ptr(),
                            ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                            ctx.lights.spheres, ctx.lights.sphere_count)
         var pk_inter = pk_store[0]
@@ -3115,6 +3167,31 @@ def _sms_probe_glass_chain(
     return (count, hits^, origins^)
 
 @always_inline
+def _mnee_first_probe(
+    ctx: ShadeContext, hit_point: Vec3f, shadow_dir: Vec3f, dist: Float32,
+) -> Tuple[Bool, Intersection]:
+    """The MNEE probe toward the light: (the nearest hit is a triangle of a specular glass material, that hit)."""
+    var probe_org = hit_point + shadow_dir * Float32(0.0002)
+    var probe_ray = Ray(
+        Point3f(probe_org[0], probe_org[1], probe_org[2]),
+        Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
+    var probe_tmax = dist * Float32(0.9995)
+    var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var dummy_inter = Intersection(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+    var probe_store = Array[Intersection, 1](fill=dummy_inter)
+    traverse_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr(),
+                       ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
+                       ctx.lights.spheres, ctx.lights.sphere_count)
+    var probe_inter = probe_store[0]
+    # A solid sphere is not MNEE's: one refraction misses the exit surface and the exact BSDF path is no
+    # longer suppressed at the emitter hit, so plain sampling covers it (PT read 1.4-1.9% under pbrt otherwise).
+    if probe_inter.hit == Int8(0) or probe_inter.primId.type != Int8(0):
+        return (False, probe_inter)
+    var probe_mat = ctx.materials[unsafe_offset=Int(probe_inter.primId.materialIndex)]
+    return (is_specular_glass(probe_mat), probe_inter)
+
+
+@always_inline
 def _sms_probe_and_solve(
     ctx: ShadeContext,
     hit_point: Vec3f,
@@ -3124,6 +3201,24 @@ def _sms_probe_and_solve(
     ldp_du_v: Vec3f,
     ldp_dv_v: Vec3f,
     mut pcg: PCG32,
+) -> Tuple[Bool, Bool, Int, Array[SMSVertex, MAX_SMS_VERTICES], Float32, Float32, Float32]:
+    var (probe_glass, probe_inter) = _mnee_first_probe(ctx, hit_point, shadow_dir, dist)
+    if not probe_glass:
+        return (False, False, 0, Array[SMSVertex, MAX_SMS_VERTICES](fill=sms_vertex_init()), Float32(0.0), Float32(0.0), Float32(0.0))
+    return _sms_solve_from_probe(ctx, hit_point, shadow_dir, dist, light_point, ldp_du_v, ldp_dv_v, pcg, probe_inter)
+
+
+@always_inline
+def _sms_solve_from_probe(
+    ctx: ShadeContext,
+    hit_point: Vec3f,
+    shadow_dir: Vec3f,
+    dist: Float32,
+    light_point: Vec3f,
+    ldp_du_v: Vec3f,
+    ldp_dv_v: Vec3f,
+    mut pcg: PCG32,
+    probe_inter: Intersection,
 ) -> Tuple[Bool, Bool, Int, Array[SMSVertex, MAX_SMS_VERTICES], Float32, Float32, Float32]:
     """Probe for up to MAX_SMS_VERTICES glass surfaces between `hit_point`
     and `light_point` and, if found, solve the resulting specular chain --
@@ -3151,24 +3246,8 @@ def _sms_probe_and_solve(
     # MNEE: probe for up to 2 glass surfaces between hit_point and light.
     # For each probe hit we detect entering/exiting from dot(n_raw, probe_dir).
     var probe_org = hit_point + shadow_dir * Float32(0.0002)
-    var probe_ray = Ray(
-        Point3f(probe_org[0], probe_org[1], probe_org[2]),
-        Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
-    var probe_tmax = dist * Float32(0.9995)
     var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    var dummy_inter = Intersection(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
-    var probe_store = Array[Intersection, 1](fill=dummy_inter)
-    traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr(),
-                       ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
-                       ctx.lights.spheres, ctx.lights.sphere_count)
-    var probe_inter = probe_store[0]
-    # A solid sphere is not MNEE's: one refraction misses the exit surface and the exact BSDF path is no
-    # longer suppressed at the emitter hit, so plain sampling covers it (PT read 1.4-1.9% under pbrt otherwise).
-    if probe_inter.hit == Int8(0) or probe_inter.primId.type != Int8(0):
-        return (False, False, 0, zero_verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
-    var probe_mat = ctx.materials[unsafe_offset=Int(probe_inter.primId.materialIndex)]
-    if not is_specular_glass(probe_mat):
-        return (False, False, 0, zero_verts.copy(), Float32(0.0), Float32(0.0), Float32(0.0))
+    var dummy_inter = Intersection(dummy_prim, dist * Float32(0.9995), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
 
     # --- Extract x1 geometry (triangle or analytic sphere) ---
     var (v1, v1_ok) = _sms_vertex_from_hit(ctx, probe_inter, probe_org, shadow_dir)
@@ -3217,7 +3296,7 @@ def _sms_probe_and_solve(
             Point3f(probe2_org[0], probe2_org[1], probe2_org[2]),
             Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
         var probe2_store = Array[Intersection, 1](fill=dummy_inter)
-        traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr(),
+        traverse_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr(),
                    ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                    ctx.lights.spheres, ctx.lights.sphere_count)
         probe2_inter = probe2_store[0]
@@ -3444,6 +3523,49 @@ def _sms_probe_and_solve(
     sms_refresh_solved_frames(verts, n_total)
     return (True, True, n_total, verts.copy(), sms_bsdf, sms_jac, sms_trials)
 
+@no_inline
+def _mnee_owns_path(
+    ctx: ShadeContext, path_ptr: Pointer[PathState, MutUntrackedOrigin], inter: Intersection, probe_inter: Intersection,
+    seg_dir: Vec3f, seg_len: Float32, light_hit: Vec3f,
+) -> Bool:
+    """Whether MNEE samples the very path this BSDF ray took to the emitter (so the BSDF contribution must be dropped).
+
+    The straight-line probe seeds the same manifold solve that last_ns_p's NEE ran for this light point. Dropping every
+    BSDF path whose first surface is glass loses the ones MNEE cannot solve for (another chain topology, no root); so
+    drop only when the solve succeeds AND ends at the vertex this ray left from. Chains of three or more vertices go
+    through SMS's Bernoulli estimator, which covers its whole family: those keep the plain rule."""
+    var (lmesh, lv0, lv1, lv2, _) = _get_tri_verts(inter, ctx.meshes)
+    var lp0 = Vec3f(lmesh.points[unsafe_offset=lv0*4], lmesh.points[unsafe_offset=lv0*4+1], lmesh.points[unsafe_offset=lv0*4+2])
+    var lp1 = Vec3f(lmesh.points[unsafe_offset=lv1*4], lmesh.points[unsafe_offset=lv1*4+1], lmesh.points[unsafe_offset=lv1*4+2])
+    var lp2 = Vec3f(lmesh.points[unsafe_offset=lv2*4], lmesh.points[unsafe_offset=lv2*4+1], lmesh.points[unsafe_offset=lv2*4+2])
+    var (l_du, l_dv) = mnee_orthonormal_basis(lp1 - lp0, lp2 - lp0)
+    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+    var res = _sms_solve_from_probe(ctx, path_ptr[].last_ns_p, seg_dir, seg_len, light_hit, l_du, l_dv, pcg, probe_inter)
+    if not res[0]:
+        return True
+    if not res[1]:
+        return False
+    var n = res[2]
+    if n >= 3:
+        return True
+    var verts = res[3].copy()
+    var o = path_ptr[].ray.origin
+    var d = verts[n-1].pos - Vec3f(o.x, o.y, o.z)
+    var tol = Float32(1e-3) * (Float32(1.0) + seg_len)
+    return dot(d, d) <= tol * tol
+
+
+@always_inline
+def _mnee_live(ctx: ShadeContext) -> Bool:
+    """MNEE (and the emitter-hit suppression that goes with it) runs only while the scene has smooth glass and the
+    glass probes have not shown it to be rare."""
+    if not ctx.has_glass:
+        return False
+    if _is_real_ptr(ctx.mnee_stats) and ctx.mnee_stats[2] != Int32(0):
+        return False
+    return True
+
+
 @always_inline
 def _mnee_area_light_contribute(
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
@@ -3500,7 +3622,18 @@ def _mnee_area_light_contribute(
     # tangents (ldp_du_v/ldp_dv_v) — well-defined for a flat mesh triangle,
     # not for a curve's swept tube. Curve lights (kind==1) fall back to
     # plain (non-MNEE) shadow-ray NEE through glass.
-    if al.kind != Int8(0) or not ctx.has_glass:
+    if al.kind != Int8(0) or not _mnee_live(ctx):
+        return False
+
+    # Most samples see no glass: skip the solver's heavy setup for them (it would return not-found untouched).
+    var (probe_glass, probe_inter) = _mnee_first_probe(ctx, hit_point, shadow_dir, dist)
+    if _is_real_ptr(ctx.mnee_stats) and ((path_ptr[].pcgState >> 20) & UInt64(15)) == UInt64(0):
+        var probes = Int(Atomic.fetch_add(ctx.mnee_stats, Int32(1))) + 1
+        if probe_glass:
+            _ = Atomic.fetch_add(ctx.mnee_stats + 1, Int32(1))
+        if probes == 4096 and Int(ctx.mnee_stats[1]) * 20 < probes:
+            ctx.mnee_stats[2] = Int32(1)   # glass on under 5% of probes: MNEE is not worth its cost in this scene
+    if not probe_glass:
         return False
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
@@ -3513,8 +3646,8 @@ def _mnee_area_light_contribute(
     # the reference makes exactly this call (`vy.make_orthonormal()` on the
     # emitter vertex inside geometric_term) for the same reason.
     var (l_du, l_dv) = mnee_orthonormal_basis(ldp_du_v, ldp_dv_v)
-    var _probe_res = _sms_probe_and_solve(
-        ctx, hit_point, shadow_dir, dist, light_point, l_du, l_dv, pcg)
+    var _probe_res = _sms_solve_from_probe(
+        ctx, hit_point, shadow_dir, dist, light_point, l_du, l_dv, pcg, probe_inter)
     var dielectric_found = _probe_res[0]
     var solve_ok = _probe_res[1]
     var n = _probe_res[2]
@@ -3571,7 +3704,7 @@ def _mnee_area_light_contribute(
     if verts[n-1].is_sphere != Int8(0):
         ign_center = verts[n-1].sphere_center
         ign_radius = verts[n-1].sphere_radius
-    if any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis_ray, wo_len * Float32(0.999),
+    if any_hit_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis_ray, wo_len * Float32(0.999),
                           ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                           ctx.lights.spheres, ctx.lights.sphere_count,
                           ign_center, ign_radius, materials=ctx.materials):
@@ -3724,7 +3857,7 @@ def sms_resolve(
     if res.verts[n-1].is_sphere != Int8(0):
         ign_center = res.verts[n-1].sphere_center
         ign_radius = res.verts[n-1].sphere_radius
-    if any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis_ray, wo_len * Float32(0.999),
+    if any_hit_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, vis_ray, wo_len * Float32(0.999),
                           ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                           ctx.lights.spheres, ctx.lights.sphere_count,
                           ign_center, ign_radius, materials=ctx.materials):
@@ -3792,7 +3925,7 @@ def sms_temporal_step(
         sms_io.write[unsafe_offset=pixel_idx] = res^
     return dielectric_found
 
-def _nee_area_lights[enqueue_shadow: Bool](
+def _nee_area_lights[enqueue_shadow: Bool, mnee: Bool = True, defer_only: Bool = False](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     normal: Vec3f,
@@ -3851,38 +3984,53 @@ def _nee_area_lights[enqueue_shadow: Bool](
             var pdf_bsdf_nee = bxdf_pdf_diffuse(cos_s)
             var w_nee = power_heuristic(pdf_light, pdf_bsdf_nee)
             var weight = bxdf_eval_diffuse(alb) * al.emission * (cos_s * w_nee * lobe_w / pdf_light)
-            var contrib = path_ptr[].throughput * _to_spec_illum(ctx, weight, path_ptr[].wavelengths)
-
-            if pixel_idx >= 0 and _is_real_ptr(sms_io.read):
-                # ReSTIR SMS (Phase 6): temporal-reused glass-caustic probing
-                # in place of plain per-frame MNEE. Same used/skip-shadow-ray
-                # convention as the plain-MNEE branch below.
-                var used_sms = sms_temporal_step(
-                    path_ptr, ctx, hit_point, normal, alb, shadow_dir, dist,
-                    light_point, ldp_du_v, ldp_dv_v, al,
-                    al.total_area / light_sel_pdf_nee, pcg, sms_io, pixel_idx)
-                if not used_sms:
-                    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)
-            else:
-                # MNEE glass-caustic probing, shared verbatim with ReSTIR DI's
-                # di_resolve via _mnee_area_light_contribute above. Returns True
-                # when a dielectric intervened and it has already added the
-                # refracted contribution -- in that case the straight shadow ray
-                # below is deliberately skipped (MNEE replaces it, it does not
-                # supplement it).
-                # The vertex was marked at the top of this function (see
-                # there and PathState.last_ns_n), so a later BSDF-sampled
-                # arrival at the emitter through a specular chain -- the SAME
-                # path family this strategy samples -- is not counted twice.
-                # Keying that on `used_mnee` instead would make the
-                # suppression depend on the NEE light draw, which is
-                # independent of where the BSDF ray goes.
-                var used_mnee = _mnee_area_light_contribute(
-                    path_ptr, ctx, normal, hit_point, alb, shadow_dir, dist,
-                    light_point, ldp_du_v, ldp_dv_v, al,
-                    al.total_area / light_sel_pdf_nee, lobe_w)
-                if not used_mnee:
-                    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)
+            comptime if not defer_only:
+                if pixel_idx >= 0 and _is_real_ptr(sms_io.read):
+                    var contrib = path_ptr[].throughput * _to_spec_illum(ctx, weight, path_ptr[].wavelengths)
+                    # ReSTIR SMS (Phase 6): temporal-reused glass-caustic probing
+                    # in place of plain per-frame MNEE. Same used/skip-shadow-ray
+                    # convention as the plain-MNEE branch below.
+                    var used_sms = sms_temporal_step(
+                        path_ptr, ctx, hit_point, normal, alb, shadow_dir, dist,
+                        light_point, ldp_du_v, ldp_dv_v, al,
+                        al.total_area / light_sel_pdf_nee, pcg, sms_io, pixel_idx)
+                    if not used_sms:
+                        _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)
+                    return
+            # MNEE glass-caustic probing, shared verbatim with ReSTIR DI's
+            # di_resolve via _mnee_area_light_contribute above. Returns True
+            # when a dielectric intervened and it has already added the
+            # refracted contribution -- in that case the straight shadow ray
+            # below is deliberately skipped (MNEE replaces it, it does not
+            # supplement it).
+            # The vertex was marked at the top of this function (see
+            # there and PathState.last_ns_n), so a later BSDF-sampled
+            # arrival at the emitter through a specular chain -- the SAME
+            # path family this strategy samples -- is not counted twice.
+            # Keying that on `used_mnee` instead would make the
+            # suppression depend on the NEE light draw, which is
+            # independent of where the BSDF ray goes.
+            var used_mnee = False
+            comptime if mnee:
+                if _shadow_inline(ctx, guide_write) and _mnee_live(ctx) and al.kind == Int8(0):
+                    # A clear straight ray means no glass is in the way, so the MNEE probe is only needed when
+                    # something blocks it (the probe's segment lies inside the shadow ray's).
+                    if not _shadow_blocked(ctx, hit_point, shadow_dir, dist * Float32(0.9999)):
+                        path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, weight, path_ptr[].wavelengths)
+                    else:
+                        _ = _mnee_area_light_contribute(
+                            path_ptr, ctx, normal, hit_point, alb, shadow_dir, dist,
+                            light_point, ldp_du_v, ldp_dv_v, al,
+                            al.total_area / light_sel_pdf_nee, lobe_w)
+                    used_mnee = True
+                else:
+                    used_mnee = _mnee_area_light_contribute(
+                        path_ptr, ctx, normal, hit_point, alb, shadow_dir, dist,
+                        light_point, ldp_du_v, ldp_dv_v, al,
+                        al.total_area / light_sel_pdf_nee, lobe_w)
+            if not used_mnee:
+                var contrib = path_ptr[].throughput * _to_spec_illum(ctx, weight, path_ptr[].wavelengths)
+                _shadow_contribute[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)
 
 # ── ReSTIR DI (Phase 2, restir_di.mojo's DIReservoir/di_target_pdf) ─────────
 # Plain RIS: M candidates from the existing light sampler, weighted p̂/q,
@@ -4115,7 +4263,7 @@ def _gi_generate_recon_candidate(
         return gi_reservoir_init()
     var lo = RGB(Float32(0.0))
     var shadow_ray = Ray(Point3f(hit_point[0], hit_point[1], hit_point[2]), Vec3f(wi[0], wi[1], wi[2]))
-    if not any_hit_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, dist * Float32(0.9999),
+    if not any_hit_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, shadow_ray, dist * Float32(0.9999),
                               ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                               ctx.lights.spheres, ctx.lights.sphere_count,
                               materials=ctx.materials):
@@ -4423,7 +4571,7 @@ def di_temporal_step(
         reservoir_cap_confidence(res.state, DI_TEMPORAL_M_CAP)
         restir_io.write[unsafe_offset=pixel_idx] = res
 
-def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
+def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool, mnee: Bool = True, defer_only: Bool = False](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     ctx: ShadeContext,
     normal: Vec3f,
@@ -4473,43 +4621,46 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
     # limitation noted above, not a new one. --sms-restir without --restir
     # is unaffected.
     var sms_io_this_bounce = sms_io if path_ptr[].bounce == Int32(0) else sms_reservoir_io_null()
-    if ctx.use_restir and path_ptr[].bounce == Int32(0):
-        di_temporal_step(path_ptr, ctx, hit_point, normal, alb, pcg, restir_io, pixel_idx)
+    comptime if defer_only:
+        _nee_area_lights[enqueue_shadow, mnee, True](path_ptr, ctx, normal, hit_point, alb, u_light, u_bary1, u_bary2, pcg, guide_write)
     else:
-        _nee_area_lights[enqueue_shadow](path_ptr, ctx, normal, hit_point, alb, u_light, u_bary1, u_bary2, pcg, guide_write,
-            sms_io=sms_io_this_bounce, pixel_idx=pixel_idx)
+        if ctx.use_restir and path_ptr[].bounce == Int32(0):
+            di_temporal_step(path_ptr, ctx, hit_point, normal, alb, pcg, restir_io, pixel_idx)
+        else:
+            _nee_area_lights[enqueue_shadow, mnee](path_ptr, ctx, normal, hit_point, alb, u_light, u_bary1, u_bary2, pcg, guide_write,
+                sms_io=sms_io_this_bounce, pixel_idx=pixel_idx)
 
-    # ── ReSTIR GI (Phase 4.1's remaining half) ───────────────────────────────
-    # x1 is diffuse (this function only runs for diffuse hits) and bounce 0:
-    # mark this path as awaiting a possible reconnection vertex at bounce 1,
-    # carrying x1's own shading data forward (gi_target_pdf needs it later,
-    # and it's out of scope by the time bounce 1's shade call runs). Real
-    # only when ctx.gi_pending is a live buffer -- dangling on every call
-    # site except shade_core_cpu_nee's, so this is a no-op everywhere else,
-    # including every GPU kernel and every non-restir CPU render.
-    if ctx.use_restir and path_ptr[].bounce == Int32(0) and _is_real_ptr(ctx.gi_pending):
-        ctx.gi_pending[unsafe_offset=ctx.path_idx] = GIPendingX1(active=Int8(1), hit_point=hit_point, normal=normal, alb=alb, throughput=path_ptr[].throughput)
-    elif (ctx.use_restir and path_ptr[].bounce == Int32(1) and _is_real_ptr(ctx.gi_pending)
-          and ctx.gi_pending[unsafe_offset=ctx.path_idx].active == Int8(1)):
-        # x2 is ALSO diffuse (same reasoning: this function only runs for
-        # diffuse hits) -- exactly the scope this increment supports. Any
-        # other bounce-1 material silently never reaches here at all (that
-        # material's own shade_* function has no gi_pending-consuming logic),
-        # so gi_pending[tid].active is simply left at 1 and never read again
-        # -- harmless, see GIPendingX1's own docstring.
-        var snap = ctx.gi_pending[unsafe_offset=ctx.path_idx]
-        ctx.gi_pending[unsafe_offset=ctx.path_idx].active = Int8(0)
-        var raw = _gi_generate_recon_candidate(ctx, hit_point, normal, alb, pcg)
-        if raw.valid != Int8(0):
-            var w = gi_target_pdf(snap.hit_point, snap.normal, snap.alb, raw.recon_point, raw.recon_normal, raw.lo)
-            _ = reservoir_update(raw.state, w, pcg.next_float())
-        # Combine with history/neighbors (Phase 4.2 -- a no-op fallback to a
-        # plain single-candidate finalize when ctx.gi_io/pixel_idx aren't
-        # real, matching di_temporal_step's own null-safety contract) then
-        # resolve: one shadow ray between x1 (snap's own data) and the
-        # combined winner, injected into path_ptr[].estimate if visible.
-        gi_temporal_spatial_combine(raw, snap.hit_point, snap.normal, snap.alb, pcg, ctx.gi_io, pixel_idx)
-        gi_resolve(path_ptr, ctx, snap.hit_point, snap.normal, snap.alb, snap.throughput, raw)
+        # ── ReSTIR GI (Phase 4.1's remaining half) ───────────────────────────────
+        # x1 is diffuse (this function only runs for diffuse hits) and bounce 0:
+        # mark this path as awaiting a possible reconnection vertex at bounce 1,
+        # carrying x1's own shading data forward (gi_target_pdf needs it later,
+        # and it's out of scope by the time bounce 1's shade call runs). Real
+        # only when ctx.gi_pending is a live buffer -- dangling on every call
+        # site except shade_core_cpu_nee's, so this is a no-op everywhere else,
+        # including every GPU kernel and every non-restir CPU render.
+        if ctx.use_restir and path_ptr[].bounce == Int32(0) and _is_real_ptr(ctx.gi_pending):
+            ctx.gi_pending[unsafe_offset=ctx.path_idx] = GIPendingX1(active=Int8(1), hit_point=hit_point, normal=normal, alb=alb, throughput=path_ptr[].throughput)
+        elif (ctx.use_restir and path_ptr[].bounce == Int32(1) and _is_real_ptr(ctx.gi_pending)
+              and ctx.gi_pending[unsafe_offset=ctx.path_idx].active == Int8(1)):
+            # x2 is ALSO diffuse (same reasoning: this function only runs for
+            # diffuse hits) -- exactly the scope this increment supports. Any
+            # other bounce-1 material silently never reaches here at all (that
+            # material's own shade_* function has no gi_pending-consuming logic),
+            # so gi_pending[tid].active is simply left at 1 and never read again
+            # -- harmless, see GIPendingX1's own docstring.
+            var snap = ctx.gi_pending[unsafe_offset=ctx.path_idx]
+            ctx.gi_pending[unsafe_offset=ctx.path_idx].active = Int8(0)
+            var raw = _gi_generate_recon_candidate(ctx, hit_point, normal, alb, pcg)
+            if raw.valid != Int8(0):
+                var w = gi_target_pdf(snap.hit_point, snap.normal, snap.alb, raw.recon_point, raw.recon_normal, raw.lo)
+                _ = reservoir_update(raw.state, w, pcg.next_float())
+            # Combine with history/neighbors (Phase 4.2 -- a no-op fallback to a
+            # plain single-candidate finalize when ctx.gi_io/pixel_idx aren't
+            # real, matching di_temporal_step's own null-safety contract) then
+            # resolve: one shadow ray between x1 (snap's own data) and the
+            # combined winner, injected into path_ptr[].estimate if visible.
+            gi_temporal_spatial_combine(raw, snap.hit_point, snap.normal, snap.alb, pcg, ctx.gi_io, pixel_idx)
+            gi_resolve(path_ptr, ctx, snap.hit_point, snap.normal, snap.alb, snap.throughput, raw)
 
     # ── Distant/point/sphere light NEE, via the shared Light interface
     # (bvh.mojo's LightSample samplers) + BxDF interface (bxdf.mojo's
@@ -4520,17 +4671,17 @@ def _shade_diffuse_nee[use_gpu: Bool, enqueue_shadow: Bool](
     # sampling, a diffuse-specific optimization that must NOT be replaced
     # by the material-agnostic sampler. Area lights stay on _nee_area_lights
     # above (MNEE glass-refraction probing, also diffuse-specific).
-    _nee_loop_simple[enqueue_shadow](path_ptr, ctx, normal, hit_point, alb, Float32(0.0), Int32(0), wo, pcg, guide_write)
+    _nee_loop_simple[enqueue_shadow, defer_only](path_ptr, ctx, normal, hit_point, alb, Float32(0.0), Int32(0), wo, pcg, guide_write)
 
     # ── Infinite (env-map) light NEE ──────────────────────────────────────────
     for inf_i in range(ctx.lights.infinite_count):
-        _nee_infinite_light[enqueue_shadow](path_ptr, ctx, ctx.lights.infinite_lights[unsafe_offset=inf_i], normal, hit_point, alb, u_env1, u_env2, pcg, guide_write)
+        _nee_infinite_light[enqueue_shadow, defer_only](path_ptr, ctx, ctx.lights.infinite_lights[unsafe_offset=inf_i], normal, hit_point, alb, u_env1, u_env2, pcg, guide_write)
 
 
 # Unified NEE core — comptime-specialized for CPU (use_gpu=False) and GPU (use_gpu=True).
-# Texture lookup uses OIIO external_call on CPU and device-resident GpuTexture on GPU.
+# Texture lookup samples the in-memory GpuTexture table on both backends (OIIO only as the CPU's no-table fallback).
 @always_inline
-def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
+def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool, mnee: Bool = True, defer_only: Bool = False](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     ctx: ShadeContext,
@@ -4573,7 +4724,7 @@ def shade_diffuse[use_gpu: Bool, enqueue_shadow: Bool](
     var u_scat2 = ss.scat2
     var u_rr    = ss.rr
 
-    _shade_diffuse_nee[use_gpu, enqueue_shadow](path_ptr, ctx, normal, hit_point, alb, gc.wo,
+    _shade_diffuse_nee[use_gpu, enqueue_shadow, mnee, defer_only](path_ptr, ctx, normal, hit_point, alb, gc.wo,
         u_light, u_bary1, u_bary2, u_env1, u_env2, pcg, guide_write, restir_io, pixel_idx, sms_io)
 
     # ── Scatter direction: 50/50 mixture of guide and cosine-weighted BSDF ──────
@@ -4779,7 +4930,7 @@ def _wrap_octahedral_texel(x: Int, y: Int, iw: Int, ih: Int) -> Tuple[Int, Int]:
 
 
 # Unified NEE core — comptime-specialized for CPU (use_gpu=False) and GPU (use_gpu=True).
-# Texture lookup uses OIIO external_call on CPU and device-resident GpuTexture on GPU.
+# Texture lookup samples the in-memory GpuTexture table on both backends (OIIO only as the CPU's no-table fallback).
 @always_inline
 def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
@@ -4967,7 +5118,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         var al = ctx.lights.area_lights[unsafe_offset=al_idx]
         var emission = al.emission
         var ns_n = path_ptr[].last_ns_n
-        if path_ptr[].specularBounce == Int8(1) and dot(ns_n, ns_n) > Float32(0.0) and al.kind == Int8(0):
+        if _mnee_live(ctx) and path_ptr[].specularBounce == Int8(1) and dot(ns_n, ns_n) > Float32(0.0) and al.kind == Int8(0):
             # This arrived through a specular chain from a vertex that
             # delegates such paths to MNEE/SMS. Drop it exactly when MNEE
             # owns the point reached, by re-asking MNEE's own questions for
@@ -4992,7 +5143,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                     var pr_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
                     var pr_store = Array[Intersection, 1](fill=Intersection(
                         pr_prim, Float32(0), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0)))
-                    traverse_bvh2_core(ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, pr_ray,
+                    traverse_dispatch(ctx.bvh4, ctx.bvh2Nodes, ctx.primIds, ctx.meshes, ctx.curves, pr_ray,
                                        seg_len * Float32(0.9995), pr_store.unsafe_ptr(),
                                        ctx.blasNodesArr, ctx.blasPrimIdsArr, ctx.instances,
                                        ctx.lights.spheres, ctx.lights.sphere_count)
@@ -5000,8 +5151,22 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                     if pr.hit != Int8(0) and pr.primId.type == Int8(0):
                         var pr_mat = ctx.materials[unsafe_offset=Int(pr.primId.materialIndex)]
                         if is_specular_glass(pr_mat):
-                            path_ptr[].active = 0
-                            return
+                            comptime if use_gpu:
+                                # The solve is far too big for this kernel: park the hit for resolve_suppress_gpu.
+                                if _is_real_ptr(ctx.suppress_tasks):
+                                    var edir_d = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+                                    var park = SpectralSample(Float32(0.0))
+                                    if area_light_hit_cos(inter, ctx.meshes, ctx.instances, edir_d) > Float32(0.0):
+                                        park = path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths)
+                                    ctx.suppress_tasks[unsafe_offset=ctx.path_idx] = SuppressTask(park, Int32(1), Int32(0), Int32(0), Int32(0))
+                                    path_ptr[].active = 0
+                                    return
+                                path_ptr[].active = 0
+                                return
+                            else:
+                                if _mnee_owns_path(ctx, path_ptr, inter, pr, seg_dir, seg_len, hp):
+                                    path_ptr[].active = 0
+                                    return
         # A pbrt area light emits from its FRONT face only
         # (DiffuseAreaLight::L: `if (!twoSided && Dot(n, w) < 0) return 0`).
         # The MIS branch below has always enforced that via its own
@@ -5169,18 +5334,23 @@ def shade_core_cpu_nee(
     gi_io: GIReservoirIO = gi_reservoir_io_null(),
     sms_io: SMSReservoirIO = sms_reservoir_io_null(),
     nmaps: Pointer[NormalSlopeMap, MutUntrackedOrigin] = Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
+    textures: Pointer[GpuTexture, MutUntrackedOrigin] = Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(),
+    n_textures: Int = 0,
+    has_glass: Bool = True,
+    mnee_stats: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+    bvh4: BVH4 = BVH4.none(),
 ):
     var path_ptr = paths.unsafe_offset(tid)
     if path_ptr[].active == 0:
         return
     var inter = intersections[unsafe_offset=tid]
     var ctx = ShadeContext(
-        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=True,
+        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=has_glass, mnee_stats=mnee_stats, bvh4=bvh4, suppress_tasks=Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
         n_mediums=0, mediums=Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), medium_ifaces=Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
         grids=Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), nvdb_grids=Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
                 path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
         tex_filenames=tex_filenames,
-        textures=Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(), n_textures=0,
+        textures=textures, n_textures=n_textures,
         nmaps=nmaps,
         shadow_tasks=Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
         cam_fp=CameraFootprint.none(), sobol_matrices=sobol_matrices, guide=guide, guide_write=guide_write, use_restir=use_restir,

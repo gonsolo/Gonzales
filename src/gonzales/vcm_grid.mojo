@@ -7,7 +7,8 @@ from std.memory.alloc import unsafe_alloc
 from .geometry import Point3f, Vec3f, dot
 from .materials import LobeKind
 from .primitives import Ray, Intersection, PrimId
-from .bvh import SceneView, traverse_bvh2_core, test_spheres, _is_real_ptr
+from .bvh import traverse_dispatch
+from .bvh import SceneView, test_spheres, _is_real_ptr
 from .sppm import (
     _HSIZE, _hash_cell, _PHOTON_BUCKET_CAP, grid_reset_cell, grid_count, grid_keep, grid_coin_bits, grid_push,
 )
@@ -321,7 +322,7 @@ def _camera_typical_distance(
             var ray = Ray(org, dir)
             isects[unsafe_offset=0] = Intersection(PrimId(-1, -1, 0, -1, 0, 0, 0, 0), Float32(1e38), 0.0, 0.0, Int8(0), 0, 0, 0)
             if Int(sd.meshCount) > 0 or Int(sd.curveCount) > 0 or Int(sd.instanceCount) > 0:
-                traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), isects.unsafe_offset(0),
+                traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), isects.unsafe_offset(0),
                                    sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
             if Int(sd.sphereCount) > 0:
                 test_spheres(sd.spheres, Int(sd.sphereCount), ray, isects.unsafe_offset(0))

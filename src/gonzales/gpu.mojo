@@ -1,8 +1,9 @@
+from .bvh import SceneView
 from .geometry import TERMINAL_SEGMENT_GRACE_ROUNDS
 from .materials import Material, MeasuredBRDF, MatKind
 from .media import Grid, MediumInterface, Medium, NvdbGrid
 from .primitives import Instance, Intersection, Sphere
-from .render_state import PathState, ShadowTask, SHADOW_SLOTS
+from .render_state import PathState, ShadowTask, SuppressTask, SHADOW_SLOTS
 from .rtcore import rtcore_active, rtcore_shadow_enabled
 from .restir_di import DIReservoir
 from .restir_vol import VolReservoir
@@ -10,13 +11,35 @@ from .vulkaninterop import VulkanInteropRtSceneHandle
 from max.gpu import block_dim
 from max.gpu.host import DeviceBuffer
 from std.math import ceildiv
+from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator, size_of
 from std.os import getenv
 from .shading import ShadeContext
 from .gpu_media import sample_medium_gpu, update_medium_gpu
 from .gpu_scene import GpuSceneHandle
-from .gpu_shade import shared_shade_context, shade_coated_conductor_gpu, shade_coated_diffuse_gpu, shade_conductor_gpu, shade_dielectric_gpu, shade_diffuse_gpu, shade_diffuse_transmit_gpu, shade_hair_gpu, shade_interface_gpu, shade_measured_gpu, shade_mix_gpu, shade_nee_preamble_gpu, shade_thin_dielectric_gpu
-from .gpu_wavefront import accumulate_cone_gpu, accumulate_film_gpu, accumulate_film_wavefront_gpu, clear_film_gpu, compact_curve_paths_gpu, deactivate_paths_past_maxdepth_gpu, gen_primary_rays_gpu, gen_primary_rays_wavefront_gpu, reset_curve_counter_gpu, reset_restir_reservoirs_gpu, reset_restir_vol_reservoirs_gpu, reset_shadow_tasks_gpu, reset_vol_used_gpu, resolve_curve_candidates_gpu, traverse_paths_gpu, traverse_shadow_rays_gpu, rtcore_shadow_rays_gpu, vulkaninterop_rt_traverse_paths_gpu
+from .gpu_shade import shared_shade_context, resolve_suppress_gpu, shade_coated_conductor_gpu, shade_coated_diffuse_gpu, shade_conductor_gpu, shade_dielectric_gpu, shade_diffuse_gpu, shade_diffuse_transmit_gpu, shade_hair_gpu, shade_interface_gpu, shade_measured_gpu, shade_mix_gpu, shade_nee_preamble_gpu, shade_thin_dielectric_gpu
+from .guide import guide_is_active
+from .gpu_wavefront import sw_pack_shadow_paths_gpu, sw_resolve_shadow_gpu, compact_active_paths_gpu, compact_by_kind_gpu, accumulate_cone_gpu, accumulate_film_gpu, accumulate_film_wavefront_gpu, clear_film_gpu, compact_curve_paths_gpu, deactivate_paths_past_maxdepth_gpu, gen_primary_rays_gpu, gen_primary_rays_wavefront_gpu, reset_curve_counter_gpu, reset_restir_reservoirs_gpu, reset_restir_vol_reservoirs_gpu, reset_shadow_tasks_gpu, reset_vol_used_gpu, resolve_curve_candidates_gpu, traverse_paths_gpu, traverse_shadow_rays_gpu, rtcore_closest_hit_gpu, rtcore_shadow_rays_compact_gpu, vulkaninterop_rt_traverse_paths_gpu
+
+
+def _enqueue_traverse[rare_on: Bool, alpha_on: Bool](
+    handle: Pointer[GpuSceneHandle, MutUntrackedOrigin],
+    sd: SceneView, n: Int, max_depth: Int32, fuse_cone: Bool,
+    live_idx: Pointer[Int32, MutUntrackedOrigin], live_count: Pointer[Int32, MutUntrackedOrigin],
+    grid_dim: Int, block_size: Int,
+) raises:
+    handle[].ctx.enqueue_function[traverse_paths_gpu[rare_on, alpha_on]](
+        sd,
+        handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        handle[].curves.cand_prim_ptr(),
+        handle[].curves.cand_count_ptr(),
+        Int64(n),
+        max_depth, Int32(1) if fuse_cone else Int32(0),
+        live_idx, live_count,
+        grid_dim=grid_dim,
+        block_dim=block_size,
+    )
 
 
 def _gpu_bounce_kernels(
@@ -55,19 +78,47 @@ def _gpu_bounce_kernels(
     # vulkaninterop_unpack_results_kernel) -- None for scenes with no
     # instancing, matching every other Optional buffer above.
     instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]] = None,
-) raises:
+    # --rt-hardware: the deferred shadow tasks are freed by their resolve pass, so only the first round of a batch resets them.
+    round: Int = 0,
+    prev_live: Int = 0,
+) raises -> Int:
     comptime block_size = 256
     var sd = handle[].scene_descriptor()
+    var rt_compact = use_vulkan_rt and Int(rtcore_active()) != 0
+    var live_paths = n
     # The CUDA traversal kernel does the max-depth marking itself, and the
     # cone growth too unless a curve pass still has to rewrite tHit.
     var fuse_cone = (not use_vulkan_rt) and handle[].curves.n_curves == 0
-    if use_vulkan_rt:
+    # Path index lists in active_idx_buf: the paths live this round (the RT pack's list, else compacted here) and the paths of
+    # the material kind being shaded; counts in active_count_buf at [0] and [1 + kind].
+    var ids_base = handle[].active_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    var live_idx = ids_base.unsafe_offset((round % 2) * n if rt_compact else 0)
+    var live_count = handle[].active_count_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    var kind_idx = ids_base.unsafe_offset(3 * n)
+    var path_ptr_c = handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    if not use_vulkan_rt:
+        handle[].ctx.enqueue_memset(handle[].active_count_buf, UInt8(0))
+        handle[].ctx.enqueue_function[compact_active_paths_gpu](
+            path_ptr_c, Int64(n), live_idx, live_count,
+            grid_dim=grid_dim, block_dim=block_size,
+        )
+    if use_vulkan_rt and not rt_compact:
         handle[].ctx.enqueue_function[deactivate_paths_past_maxdepth_gpu](
             handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             Int64(n), max_depth,
             grid_dim=grid_dim, block_dim=block_size,
         )
-    if use_vulkan_rt:
+    if rt_compact:
+        live_paths = rtcore_closest_hit_gpu(
+            handle[].ctx, handle[].path_buf, handle[].inter_buf, sd,
+            interop_rays_buf.value(), interop_results_buf.value(), handle[].rt_scratch_buf,
+            handle[].active_idx_buf, handle[].active_count_buf,
+            mesh_material_idx_buf.value(), mesh_al_idx_buf.value(), n_meshes_vk, n, max_depth, instance_base_mesh_buf,
+            handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere](), handle[].n_spheres, round, prev_live,
+        )
+        if live_paths == 0:
+            return 0                                    # every path is finished: the remaining kernels would be no-ops
+    elif use_vulkan_rt:
         vulkaninterop_rt_traverse_paths_gpu(
             handle[].ctx,
             handle[].path_buf,
@@ -86,20 +137,20 @@ def _gpu_bounce_kernels(
             handle[].rt_scratch_buf,
         )
     else:
-        handle[].ctx.enqueue_function[traverse_paths_gpu](
-            sd,
-            handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-            handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-            handle[].curves.cand_prim_ptr(),
-            handle[].curves.cand_count_ptr(),
-            Int64(n),
-            max_depth, Int32(1) if fuse_cone else Int32(0),
-            grid_dim=grid_dim,
-            block_dim=block_size,
-        )
+        # Curve, instance and alpha code halves the kernel's occupancy; compile it out when the scene has none.
+        var rare = handle[].curves.n_curves > 0 or handle[].n_instances > 0
+        var alpha = handle[].meshes.has_alpha
+        if rare and alpha:
+            _enqueue_traverse[True, True](handle, sd, n, max_depth, fuse_cone, live_idx, live_count, grid_dim, block_size)
+        elif rare:
+            _enqueue_traverse[True, False](handle, sd, n, max_depth, fuse_cone, live_idx, live_count, grid_dim, block_size)
+        elif alpha:
+            _enqueue_traverse[False, True](handle, sd, n, max_depth, fuse_cone, live_idx, live_count, grid_dim, block_size)
+        else:
+            _enqueue_traverse[False, False](handle, sd, n, max_depth, fuse_cone, live_idx, live_count, grid_dim, block_size)
     # Both traversal branches converge here: grow the texture-footprint cone
     # by the segment just traced, before any material shading reads it.
-    if not fuse_cone:
+    if not fuse_cone and not rt_compact:
         handle[].ctx.enqueue_function[accumulate_cone_gpu](
             handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
@@ -140,12 +191,18 @@ def _gpu_bounce_kernels(
             grid_dim=grid_dim,
             block_dim=block_size,
         )
+    if use_vulkan_rt and not rt_compact:
+        handle[].ctx.enqueue_memset(handle[].active_count_buf, UInt8(0))
+        handle[].ctx.enqueue_function[compact_active_paths_gpu](
+            path_ptr_c, Int64(n), live_idx, live_count,
+            grid_dim=grid_dim, block_dim=block_size,
+        )
     if handle[].media.n_mediums > 0 or handle[].has_interface_material:
         handle[].ctx.enqueue_function[sample_medium_gpu](
             handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             sd,
-            Int64(n),
+            Int64(n), live_idx, live_count,
             Int32(1) if use_vol_restir_reuse else Int32(0),
             restir_vol_read,
             restir_vol_write,
@@ -157,25 +214,44 @@ def _gpu_bounce_kernels(
             grid_dim=grid_dim,
             block_dim=block_size,
         )
+    var suppress_tasks = Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling()
+    if handle[].has_glass_material:
+        suppress_tasks = handle[].suppress_buf.unsafe_ptr().unsafe_bitcast[SuppressTask]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     handle[].ctx.enqueue_function[shade_nee_preamble_gpu](
         handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         sd,
         handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
-        Int64(n),
+        Int64(n), live_idx, live_count,
+        suppress_tasks,
         grid_dim=grid_dim,
         block_dim=block_size,
     )
+    if handle[].has_glass_material:
+        handle[].ctx.enqueue_function[resolve_suppress_gpu](
+            handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            sd,
+            handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
+            suppress_tasks,
+            Int64(n), live_idx, live_count,
+            grid_dim=grid_dim,
+            block_dim=block_size,
+        )
     # mix is a pure selector (see shade_mix_gpu's docstring) -- enqueued
     # FIRST among the per-material kernels so its pending_mat/materialIndex
     # redirect is visible to whichever real kernel the sub-material resolves
     # to, later in this SAME launch-ordered sequence.
     if handle[].has_material(MatKind.mix):
+        handle[].ctx.enqueue_function[compact_by_kind_gpu](
+            path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.mix)), Int32(MatKind.mix),
+            grid_dim=grid_dim, block_dim=block_size,
+        )
         handle[].ctx.enqueue_function[shade_mix_gpu](
             handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             sd,
-            Int64(n),
+            Int64(n), kind_idx, live_count.unsafe_offset(1 + Int(MatKind.mix)),
             grid_dim=grid_dim,
             block_dim=block_size,
         )
@@ -211,12 +287,21 @@ def _gpu_bounce_kernels(
     var hw_shadow = use_vulkan_rt and Int(rtcore_shadow_enabled()) > 0 and Int(handle[].shadow_slots) == SHADOW_SLOTS
     var usable_slots = Int(rtcore_shadow_enabled()) if hw_shadow else 0
     var shadow_slots = SHADOW_SLOTS if hw_shadow else 1
+    # Software BVH: the diffuse and coated kernels only queue their shadow rays and sw_resolve_shadow_gpu traces them after
+    # the last material kernel. Needs the task buffer (no media), no guiding/ReSTIR, and no live MNEE (its probe wants the
+    # shadow result inline).
+    var sw_shadow = (not use_vulkan_rt) and Int(handle[].shadow_slots) == SHADOW_SLOTS and handle[].media.n_mediums == 0 \
+        and not use_restir and not handle[].has_glass_material and not guide_is_active(handle[].guide_write) \
+        and getenv("GONZALES_NO_SW_SHADOW") == ""
+    var sw_defer_coated = getenv("GONZALES_NO_SW_COATED") == ""
     var shadow_ptr = Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling()
-    if hw_shadow:
+    if hw_shadow or sw_shadow:
         shadow_ptr = handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
-    # Software shading traces its shadow rays inline and never queues a task, so both the reset here and the resolve
-    # below would be full-grid launches over an empty buffer.
-    if hw_shadow:
+    # Software shading queues tasks only when sw_shadow (cleared once at allocation, freed by sw_resolve_shadow_gpu); the
+    # reset below is --rt-hardware's.
+    if hw_shadow and round == 0 and usable_slots == SHADOW_SLOTS:
+        handle[].ctx.enqueue_memset(handle[].shadow_buf, UInt8(0))      # every slot free (active == 0)
+    elif hw_shadow and round == 0:
         handle[].ctx.enqueue_function[reset_shadow_tasks_gpu](
             handle[].shadow_buf.unsafe_ptr().unsafe_bitcast[ShadowTask](),
             Int64(n),
@@ -225,112 +310,213 @@ def _gpu_bounce_kernels(
             grid_dim=grid_dim, block_dim=block_size,
         )
     var path_base = handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
-    var shared_ctx = shared_shade_context(sd, handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](), path_base, use_restir, shadow_ptr)
+    var mnee_stats = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
+    if handle[].has_glass_material and not handle[].mnee_adapt_done:
+        mnee_stats = handle[].mnee_stats_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    var shared_ctx = shared_shade_context(sd, handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](), path_base, use_restir, shadow_ptr, mnee_stats)
     shared_ctx.guide = handle[].guide_read
     shared_ctx.guide_write = handle[].guide_write
     comptime assert size_of[ShadeContext]() <= 1024, "grow GpuSceneHandle.shade_ctx_buf"
     handle[].ctx.enqueue_copy(handle[].shade_ctx_buf, UnsafePointer(to=shared_ctx).bitcast[UInt8]())
-    handle[].ctx.enqueue_function[shade_diffuse_gpu](
-        handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        sd,
-        handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
-        Int64(n),
-        Int32(1) if use_restir else Int32(0),
-        restir_read,
-        restir_write,
-        handle[].atrous_normals_buf.unsafe_ptr().unsafe_bitcast[Float32](),
-        handle[].atrous_depth_buf.unsafe_ptr().unsafe_bitcast[Float32](),
-        handle[].gbuf_material_id_buf.unsafe_ptr().unsafe_bitcast[Int32](),
-        handle[].gbuf_worldpos_buf.unsafe_ptr().unsafe_bitcast[Float32](),
-        handle[].film.width,
-        handle[].film.height,
-        shadow_ptr,
-        handle[].shade_ctx_buf.unsafe_ptr().unsafe_bitcast[ShadeContext]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        grid_dim=grid_dim,
-        block_dim=block_size,
-    )
-    if handle[].has_material(MatKind.coated_diffuse):
-        handle[].ctx.enqueue_function[shade_coated_diffuse_gpu](
+    if handle[].has_glass_material:
+        handle[].ctx.enqueue_function[compact_by_kind_gpu](
+            path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.diffuse)), Int32(MatKind.diffuse),
+            grid_dim=grid_dim, block_dim=block_size,
+        )
+        handle[].ctx.enqueue_function[shade_diffuse_gpu[True]](
             handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             sd,
             handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
-            Int64(n),
+            Int64(n), kind_idx, live_count.unsafe_offset(1 + Int(MatKind.diffuse)),
+            Int32(1) if use_restir else Int32(0),
+            restir_read,
+            restir_write,
+            handle[].atrous_normals_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+            handle[].atrous_depth_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+            handle[].gbuf_material_id_buf.unsafe_ptr().unsafe_bitcast[Int32](),
+            handle[].gbuf_worldpos_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+            handle[].film.width,
+            handle[].film.height,
             shadow_ptr,
+            handle[].shade_ctx_buf.unsafe_ptr().unsafe_bitcast[ShadeContext]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             grid_dim=grid_dim,
             block_dim=block_size,
         )
+    else:
+        handle[].ctx.enqueue_function[compact_by_kind_gpu](
+            path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.diffuse)), Int32(MatKind.diffuse),
+            grid_dim=grid_dim, block_dim=block_size,
+        )
+        if sw_shadow:
+                handle[].ctx.enqueue_function[shade_diffuse_gpu[False, True]](
+                handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+                handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+                sd,
+                handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
+                Int64(n), kind_idx, live_count.unsafe_offset(1 + Int(MatKind.diffuse)),
+                Int32(1) if use_restir else Int32(0),
+                restir_read,
+                restir_write,
+                handle[].atrous_normals_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].atrous_depth_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].gbuf_material_id_buf.unsafe_ptr().unsafe_bitcast[Int32](),
+                handle[].gbuf_worldpos_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].film.width,
+                handle[].film.height,
+                shadow_ptr,
+                handle[].shade_ctx_buf.unsafe_ptr().unsafe_bitcast[ShadeContext]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+                grid_dim=grid_dim,
+                block_dim=block_size,
+            )
+        else:
+                handle[].ctx.enqueue_function[shade_diffuse_gpu[False]](
+                handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+                handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+                sd,
+                handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
+                Int64(n), kind_idx, live_count.unsafe_offset(1 + Int(MatKind.diffuse)),
+                Int32(1) if use_restir else Int32(0),
+                restir_read,
+                restir_write,
+                handle[].atrous_normals_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].atrous_depth_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].gbuf_material_id_buf.unsafe_ptr().unsafe_bitcast[Int32](),
+                handle[].gbuf_worldpos_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].film.width,
+                handle[].film.height,
+                shadow_ptr,
+                handle[].shade_ctx_buf.unsafe_ptr().unsafe_bitcast[ShadeContext]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+                grid_dim=grid_dim,
+                block_dim=block_size,
+            )
+    if handle[].has_material(MatKind.coated_diffuse):
+        handle[].ctx.enqueue_function[compact_by_kind_gpu](
+            path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.coated_diffuse)), Int32(MatKind.coated_diffuse),
+            grid_dim=grid_dim, block_dim=block_size,
+        )
+        if sw_shadow and sw_defer_coated:
+            handle[].ctx.enqueue_function[shade_coated_diffuse_gpu[True]](
+                handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+                handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+                sd,
+                handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
+                Int64(n), kind_idx, live_count.unsafe_offset(1 + Int(MatKind.coated_diffuse)),
+                shadow_ptr,
+                handle[].shade_ctx_buf.unsafe_ptr().unsafe_bitcast[ShadeContext]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+                grid_dim=grid_dim,
+                block_dim=block_size,
+            )
+        else:
+            handle[].ctx.enqueue_function[shade_coated_diffuse_gpu[False]](
+                handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+                handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+                sd,
+                handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
+                Int64(n), kind_idx, live_count.unsafe_offset(1 + Int(MatKind.coated_diffuse)),
+                shadow_ptr,
+                handle[].shade_ctx_buf.unsafe_ptr().unsafe_bitcast[ShadeContext]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+                grid_dim=grid_dim,
+                block_dim=block_size,
+            )
     if handle[].has_material(MatKind.diffuse_transmit):
+        handle[].ctx.enqueue_function[compact_by_kind_gpu](
+            path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.diffuse_transmit)), Int32(MatKind.diffuse_transmit),
+            grid_dim=grid_dim, block_dim=block_size,
+        )
         handle[].ctx.enqueue_function[shade_diffuse_transmit_gpu](
             handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             sd,
             handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
-            Int64(n),
+            Int64(n), kind_idx, live_count.unsafe_offset(1 + Int(MatKind.diffuse_transmit)),
             shadow_ptr,
             grid_dim=grid_dim,
             block_dim=block_size,
         )
     if handle[].has_material(MatKind.conductor):
+        handle[].ctx.enqueue_function[compact_by_kind_gpu](
+            path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.conductor)), Int32(MatKind.conductor),
+            grid_dim=grid_dim, block_dim=block_size,
+        )
         handle[].ctx.enqueue_function[shade_conductor_gpu](
             handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             sd,
             handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
-            Int64(n),
+            Int64(n), kind_idx, live_count.unsafe_offset(1 + Int(MatKind.conductor)),
             shadow_ptr,
             grid_dim=grid_dim,
             block_dim=block_size,
         )
     if handle[].has_material(MatKind.measured):
+        handle[].ctx.enqueue_function[compact_by_kind_gpu](
+            path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.measured)), Int32(MatKind.measured),
+            grid_dim=grid_dim, block_dim=block_size,
+        )
         handle[].ctx.enqueue_function[shade_measured_gpu](
             handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             sd,
             handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
-            Int64(n),
+            Int64(n), kind_idx, live_count.unsafe_offset(1 + Int(MatKind.measured)),
             shadow_ptr,
             grid_dim=grid_dim,
             block_dim=block_size,
         )
     if handle[].has_material(MatKind.dielectric):
+        handle[].ctx.enqueue_function[compact_by_kind_gpu](
+            path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.dielectric)), Int32(MatKind.dielectric),
+            grid_dim=grid_dim, block_dim=block_size,
+        )
         handle[].ctx.enqueue_function[shade_dielectric_gpu](
             handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             sd,
             handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
-            Int64(n),
+            Int64(n), kind_idx, live_count.unsafe_offset(1 + Int(MatKind.dielectric)),
             shadow_ptr,
             grid_dim=grid_dim,
             block_dim=block_size,
         )
     if handle[].has_material(MatKind.thin_dielectric):
+        handle[].ctx.enqueue_function[compact_by_kind_gpu](
+            path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.thin_dielectric)), Int32(MatKind.thin_dielectric),
+            grid_dim=grid_dim, block_dim=block_size,
+        )
         handle[].ctx.enqueue_function[shade_thin_dielectric_gpu](
             handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             sd,
-            Int64(n),
+            Int64(n), kind_idx, live_count.unsafe_offset(1 + Int(MatKind.thin_dielectric)),
             grid_dim=grid_dim,
             block_dim=block_size,
         )
     if handle[].has_material(MatKind.coated_conductor):
+        handle[].ctx.enqueue_function[compact_by_kind_gpu](
+            path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.coated_conductor)), Int32(MatKind.coated_conductor),
+            grid_dim=grid_dim, block_dim=block_size,
+        )
         handle[].ctx.enqueue_function[shade_coated_conductor_gpu](
             handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             sd,
             handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
-            Int64(n),
+            Int64(n), kind_idx, live_count.unsafe_offset(1 + Int(MatKind.coated_conductor)),
             shadow_ptr,
             grid_dim=grid_dim,
             block_dim=block_size,
         )
     if handle[].has_material(MatKind.interface) or handle[].media.n_mediums > 0:
+        handle[].ctx.enqueue_function[compact_by_kind_gpu](
+            path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.interface)), Int32(MatKind.interface),
+            grid_dim=grid_dim, block_dim=block_size,
+        )
         handle[].ctx.enqueue_function[shade_interface_gpu](
             handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             sd,
-            Int64(n),
+            Int64(n), kind_idx, live_count.unsafe_offset(1 + Int(MatKind.interface)),
             grid_dim=grid_dim,
             block_dim=block_size,
         )
@@ -339,21 +525,42 @@ def _gpu_bounce_kernels(
             handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             sd,
-            Int64(n),
+            Int64(n), live_idx, live_count,
             grid_dim=grid_dim,
             block_dim=block_size,
         )
     if handle[].has_material(MatKind.hair):
+        handle[].ctx.enqueue_function[compact_by_kind_gpu](
+            path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.hair)), Int32(MatKind.hair),
+            grid_dim=grid_dim, block_dim=block_size,
+        )
         handle[].ctx.enqueue_function[shade_hair_gpu](
             handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             sd,
             handle[].sobol_buf.unsafe_ptr().unsafe_bitcast[UInt32](),
-            Int64(n),
+            Int64(n), kind_idx, live_count.unsafe_offset(1 + Int(MatKind.hair)),
             shadow_ptr,
             grid_dim=grid_dim,
             block_dim=block_size,
         )
+    if sw_shadow:
+        var sw_ids = kind_idx            # the per-kind lists are dead once the material kernels have run
+        var sw_count = live_count.unsafe_offset(15)     # zeroed with the other counters at the start of the round
+        handle[].ctx.enqueue_function[sw_pack_shadow_paths_gpu](
+            shadow_ptr, live_idx, live_count, sw_ids, sw_count,
+            grid_dim=grid_dim, block_dim=block_size,
+        )
+        var rare = handle[].curves.n_curves > 0 or handle[].n_instances > 0
+        var alpha = handle[].meshes.has_alpha
+        if rare and alpha:
+            handle[].ctx.enqueue_function[sw_resolve_shadow_gpu[True, True]](sd, path_ptr_c, shadow_ptr, sw_ids, sw_count, grid_dim=grid_dim, block_dim=block_size)
+        elif rare:
+            handle[].ctx.enqueue_function[sw_resolve_shadow_gpu[True, False]](sd, path_ptr_c, shadow_ptr, sw_ids, sw_count, grid_dim=grid_dim, block_dim=block_size)
+        elif alpha:
+            handle[].ctx.enqueue_function[sw_resolve_shadow_gpu[False, True]](sd, path_ptr_c, shadow_ptr, sw_ids, sw_count, grid_dim=grid_dim, block_dim=block_size)
+        else:
+            handle[].ctx.enqueue_function[sw_resolve_shadow_gpu[False, False]](sd, path_ptr_c, shadow_ptr, sw_ids, sw_count, grid_dim=grid_dim, block_dim=block_size)
     # Phase 0.4: resolve whatever shadow rays this bounce's per-material
     # kernels deferred above. Currently a verified no-op in production --
     # every per-material kernel above still enqueues with enqueue_shadow=
@@ -368,10 +575,11 @@ def _gpu_bounce_kernels(
         var shadow_instance_base = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
         if instance_base_mesh_buf:
             shadow_instance_base = instance_base_mesh_buf.value().unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
-        rtcore_shadow_rays_gpu(handle[].ctx, handle[].path_buf, handle[].shadow_buf,
-            interop_rays_buf.value(), interop_results_buf.value(), n, usable_slots,
+        rtcore_shadow_rays_compact_gpu(handle[].ctx, handle[].path_buf, handle[].shadow_buf,
+            interop_rays_buf.value(), interop_results_buf.value(), handle[].active_idx_buf, handle[].active_count_buf, n,
             sd, handle[].n_spheres,
-            handle[].rt_scratch_buf, n_meshes_vk, shadow_instance_base)
+            handle[].rt_scratch_buf, n_meshes_vk, shadow_instance_base, round, live_paths)
+    return live_paths
 
 
 # Render one sample pass into the persistent film buffer.
@@ -488,7 +696,7 @@ def gpu_render_sample[Oc: Origin[mut=True]](
             if handle[].media.has_sss_medium:
                 gpu_max_rounds += _SSS_WALK_ROUNDS
             for _ in range(gpu_max_rounds):
-                _gpu_bounce_kernels(handle, n_int, grid_dim, maxDepth,
+                _ = _gpu_bounce_kernels(handle, n_int, grid_dim, maxDepth,
                                     use_restir=use_restir,
                                     restir_read=restir_rd, restir_write=restir_wr,
                                     use_vol_restir_reuse=use_vol_restir_reuse,
@@ -518,6 +726,25 @@ def gpu_render_sample[Oc: Origin[mut=True]](
 # Wavefront render: generates actual_batch samples worth of primary rays for all pixels,
 # runs the full bounce loop over n_pixels × actual_batch paths together, then accumulates.
 # Caller loops over spp in steps of WAVEFRONT_BATCH; progress reporting is up to the caller.
+# MNEE only pays where glass really sits between surfaces and lights. After the first batch, if fewer than 2% of the
+# sampled MNEE probes found glass, switch it (and the emitter-hit suppression that goes with it) off for the rest of the render.
+def gpu_mnee_adapt(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises:
+    if not handle[].has_glass_material or handle[].mnee_adapt_done:
+        return
+    # A plain host copy: the host-buffer API pins a ~1.3 GiB pool on first use (0.8 s, plus 0.5 s to release at exit).
+    var host = unsafe_alloc[Int32](2)
+    handle[].ctx.enqueue_copy(host, handle[].mnee_stats_buf)
+    handle[].ctx.synchronize()
+    var probes = Int(host[unsafe_offset=0])
+    var found = Int(host[unsafe_offset=1])
+    host.unsafe_free()
+    if probes >= 4096:
+        handle[].mnee_adapt_done = True
+        if found * 20 < probes:
+            handle[].has_glass_material = False
+            print("MNEE off: glass on", 100.0 * Float64(found) / Float64(probes), "% of probes")
+
+
 def gpu_render_wavefront(
     handlePtr: Pointer[GpuSceneHandle, MutUntrackedOrigin],
     c2w: Pointer[Float32, MutUntrackedOrigin],
@@ -611,13 +838,17 @@ def gpu_render_wavefront(
                 gpu_max_rounds += _MEDIUM_INTERFACE_MARGIN
             if handle[].media.has_sss_medium:
                 gpu_max_rounds += _SSS_WALK_ROUNDS
-            for _ in range(gpu_max_rounds):
-                _gpu_bounce_kernels(
+            var live_paths = n_total
+            for round in range(gpu_max_rounds):
+                live_paths = _gpu_bounce_kernels(
                     handle, n_total, grid_total, maxDepth,
                     use_vulkan_rt, interop_scene, interop_rays_buf, interop_results_buf,
                     mesh_material_idx_buf, mesh_al_idx_buf, n_meshes_vk,
                     instance_base_mesh_buf=instance_base_mesh_buf,
+                    round=round, prev_live=live_paths,
                 )
+                if live_paths == 0:
+                    break
             handle[].ctx.enqueue_function[accumulate_film_wavefront_gpu](
                 handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
                 handle[].film_buf.unsafe_ptr().unsafe_bitcast[Float32](),

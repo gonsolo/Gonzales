@@ -8,7 +8,7 @@ comments and docstrings stripped before moving it. This is the last of the
 six clusters -- geometry.mojo itself keeps only the core (constants,
 Point3f/Vec3f/RGB/Frame, and the shared geometry/SIMD helpers)."""
 from std.math import min, max, abs, exp
-from .geometry import RGB, safe_sqrt
+from .geometry import RGB, safe_sqrt, fast_div, fast_recip
 
 struct MatKind:
     comptime diffuse           = Int8(1)
@@ -244,15 +244,15 @@ def fr_dielectric(cos_theta_i_in: Float32, eta_in: Float32) -> Float32:
     var cos_theta_i = max(Float32(-1.0), min(Float32(1.0), cos_theta_i_in))
     var eta = eta_in
     if cos_theta_i < Float32(0.0):
-        eta = Float32(1.0) / eta
+        eta = fast_recip(eta)
         cos_theta_i = -cos_theta_i
     var sin2_theta_i = max(Float32(0.0), Float32(1.0) - cos_theta_i * cos_theta_i)
-    var sin2_theta_t = sin2_theta_i / (eta * eta)
+    var sin2_theta_t = fast_div(sin2_theta_i, eta * eta)
     if sin2_theta_t >= Float32(1.0):
         return Float32(1.0)   # total internal reflection
     var cos_theta_t = safe_sqrt(Float32(1.0) - sin2_theta_t)
-    var r_parl = (eta * cos_theta_i - cos_theta_t) / (eta * cos_theta_i + cos_theta_t)
-    var r_perp = (cos_theta_i - eta * cos_theta_t) / (cos_theta_i + eta * cos_theta_t)
+    var r_parl = fast_div(eta * cos_theta_i - cos_theta_t, eta * cos_theta_i + cos_theta_t)
+    var r_perp = fast_div(cos_theta_i - eta * cos_theta_t, cos_theta_i + eta * cos_theta_t)
     return (r_parl * r_parl + r_perp * r_perp) * Float32(0.5)
 
 # pbrt's coateddiffuse/coatedconductor default when a scene doesn't set

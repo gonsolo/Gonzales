@@ -30,6 +30,7 @@
 
 from std.collections import Array
 from std.math import sqrt, exp, sin, asin
+from std.memory import unsafe_memcpy
 from std.memory.alloc import unsafe_alloc
 
 comptime CIE_LAMBDA_MIN = Float64(360.0)
@@ -588,18 +589,14 @@ def load_spectrum_table(path: String) -> Tuple[Bool, Int, List[Float32]]:
             return (False, 0, empty^)
         if bytes[0] != UInt8(83) or bytes[1] != UInt8(80) or bytes[2] != UInt8(84) or bytes[3] != UInt8(66):
             return (False, 0, empty^)
-        var buf = unsafe_alloc[UInt8](n)
-        for i in range(n):
-            buf[unsafe_offset=i] = bytes[i]
+        var buf = bytes.unsafe_ptr()
         var res = Int((buf.unsafe_offset(4)).unsafe_bitcast[Int32]()[unsafe_offset=0])
         var expected_count = 3 * res * res * res * 3
         if n != 8 + expected_count * 4:
-            buf.unsafe_free()
             return (False, 0, empty^)
         var out = List[Float32](capacity=expected_count)
-        for i in range(expected_count):
-            out.append((buf.unsafe_offset(8).unsafe_offset(i * 4)).unsafe_bitcast[Float32]()[unsafe_offset=0])
-        buf.unsafe_free()
+        out.resize(expected_count, Float32(0))
+        unsafe_memcpy(dest=out.unsafe_ptr().unsafe_bitcast[UInt8](), src=buf.unsafe_offset(8), count=expected_count * 4)
         return (True, res, out^)
     except:
         return (False, 0, empty^)

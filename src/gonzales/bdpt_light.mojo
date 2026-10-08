@@ -12,8 +12,9 @@ from .vcm_camis import (
     CamisLightRecord, CamisLightCarry, camis_light_carry_off, camis_light_origin, camis_light_arrive,
     camis_light_scatter,
 )
+from .bvh import traverse_dispatch
 from .bvh import (
-    SceneView, traverse_bvh2_core, test_spheres, _scene_bounding_sphere, _sample_disk_perpendicular,
+    SceneView, test_spheres, _scene_bounding_sphere, _sample_disk_perpendicular,
     _sample_infinite_light_dir, _hair_precompute, curve_offset_eps, sphere_light_cone_pdf, light_path_pick,
 )
 from .rng import PCG32
@@ -758,7 +759,7 @@ def _bdpt_trace_light_path[use_gpu: Bool](
         # the eventual Vulkan RT swap point on the wavefront side.
         var ray = Ray(ro, rd)
         scratch[unsafe_offset=0].hit = Int8(0)
-        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch,
+        traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         test_spheres(sd.spheres, Int(sd.sphereCount), ray, scratch)
         # A miss is handled inside the step (returns False), so the old

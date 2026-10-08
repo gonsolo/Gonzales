@@ -8,8 +8,9 @@ from .materials import MatKind, fr_dielectric, is_specular_glass
 from .primitives import Ray, Intersection, PrimId
 from .shadow_media import segment_transmittance
 from .lights import area_light_pick_triangle
+from .bvh import traverse_dispatch, any_hit_dispatch
 from .bvh import (
-    SceneView, traverse_bvh2_core, any_hit_bvh2_core, test_spheres, LightSample, _sample_distant_light_nee,
+    SceneView, test_spheres, LightSample, _sample_distant_light_nee,
     _sample_point_light_nee, _sample_sphere_light_nee,
 )
 from .rng import PCG32
@@ -55,7 +56,7 @@ def _visible_transmittance(
         if remaining < Float32(1e-4): break
         var ray = Ray(org, Vec3f(dir[0], dir[1], dir[2]))
         inter_mem[unsafe_offset=0].hit = Int8(0)
-        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, remaining * Float32(0.9995), inter_mem,
+        traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, remaining * Float32(0.9995), inter_mem,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         # test_spheres (analytic spheres, e.g. the caustic sphere) aren't part of
         # the BVH — traverse_bvh2_core only tests triangles/curves — so they need
@@ -224,7 +225,7 @@ def _bdpt_mnee_diffuse_area_light(
     var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var dummy_inter = Intersection(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
     var probe_store = Array[Intersection, 1](fill=dummy_inter)
-    traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr(),
+    traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr(),
                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
     var probe_inter = probe_store[0]
     if probe_inter.hit == Int8(0) or probe_inter.primId.type != Int8(0):
@@ -263,7 +264,7 @@ def _bdpt_mnee_diffuse_area_light(
     if probe2_rem > Float32(0.001):
         var probe2_ray = Ray(Point3f(probe2_org[0], probe2_org[1], probe2_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
         var probe2_store = Array[Intersection, 1](fill=dummy_inter)
-        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr(),
+        traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr(),
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         probe2_inter = probe2_store[0]
 
@@ -314,7 +315,7 @@ def _bdpt_mnee_diffuse_area_light(
             var wo2fn = wo2f * (Float32(1) / wo2fl)
             var vis2_org = x2_f2 + wo2fn * Float32(0.001)
             var vis2_ray = Ray(Point3f(vis2_org[0], vis2_org[1], vis2_org[2]), Vec3f(wo2fn[0], wo2fn[1], wo2fn[2]))
-            if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis2_ray, wo2fl * Float32(0.999),
+            if any_hit_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis2_ray, wo2fl * Float32(0.999),
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                                   sd.spheres, Int(sd.sphereCount)):
                 return SpectralSample(Float32(0))
@@ -376,7 +377,7 @@ def _bdpt_mnee_diffuse_area_light(
         var pdf_area_x2 = pdf_sel / al.total_area
         var vis_org = x1_f + wo_fn * Float32(0.001)
         var vis_ray = Ray(Point3f(vis_org[0], vis_org[1], vis_org[2]), Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
-        if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis_ray, wo_len_f * Float32(0.999),
+        if any_hit_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis_ray, wo_len_f * Float32(0.999),
                               sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                               sd.spheres, Int(sd.sphereCount)):
             return SpectralSample(Float32(0))
@@ -427,7 +428,7 @@ def _bdpt_mnee_sphere_light(
     var dummy_prim = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var dummy_inter = Intersection(dummy_prim, probe_tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
     var probe_store = Array[Intersection, 1](fill=dummy_inter)
-    traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr(),
+    traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe_ray, probe_tmax, probe_store.unsafe_ptr(),
                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
     var probe_inter = probe_store[0]
     if probe_inter.hit == Int8(0) or probe_inter.primId.type != Int8(0):
@@ -466,7 +467,7 @@ def _bdpt_mnee_sphere_light(
     if probe2_rem > Float32(0.001):
         var probe2_ray = Ray(Point3f(probe2_org[0], probe2_org[1], probe2_org[2]), Vec3f(shadow_dir[0], shadow_dir[1], shadow_dir[2]))
         var probe2_store = Array[Intersection, 1](fill=dummy_inter)
-        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr(),
+        traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe2_ray, probe2_rem, probe2_store.unsafe_ptr(),
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         probe2_inter = probe2_store[0]
 
@@ -517,7 +518,7 @@ def _bdpt_mnee_sphere_light(
             var wo2fn = wo2f * (Float32(1) / wo2fl)
             var vis2_org = x2_f2 + wo2fn * Float32(0.001)
             var vis2_ray = Ray(Point3f(vis2_org[0], vis2_org[1], vis2_org[2]), Vec3f(wo2fn[0], wo2fn[1], wo2fn[2]))
-            if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis2_ray, wo2fl * Float32(0.999),
+            if any_hit_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis2_ray, wo2fl * Float32(0.999),
                                   sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                                   sd.spheres, Int(sd.sphereCount)):
                 return SpectralSample(Float32(0))
@@ -580,7 +581,7 @@ def _bdpt_mnee_sphere_light(
         var pdf_area_x2 = pdf_sel / total_area
         var vis_org = x1_f + wo_fn * Float32(0.001)
         var vis_ray = Ray(Point3f(vis_org[0], vis_org[1], vis_org[2]), Vec3f(wo_fn[0], wo_fn[1], wo_fn[2]))
-        if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis_ray, wo_len_f * Float32(0.999),
+        if any_hit_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, vis_ray, wo_len_f * Float32(0.999),
                               sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
                               sd.spheres, Int(sd.sphereCount)):
             return SpectralSample(Float32(0))

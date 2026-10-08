@@ -21,7 +21,7 @@ from gonzales.render_state import GpuTexture, NormalSlopeMap
 from gonzales.primitives import Intersection, Sphere, PrimId, Instance
 from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
-from gonzales.bvh import SceneView, BVH2Node
+from gonzales.bvh import BVH4, SceneView, BVH2Node
 from gonzales.bxdf import ggx_D, ggx_G2, ggx_albedo_avg, ggx_ms_shape, ggx_ms_tint
 from gonzales.bdpt_vertex import BDPTVertex
 from gonzales.bdpt_connect import _pdf_solid_to_area, _bdpt_connect_to_cache
@@ -133,6 +133,8 @@ def _dummy_sd() -> SceneView:
         Float32(0),   # vcmLambda
         Int32(0),   # vcmBucketCap
         Int32(1),   # hasGlass
+        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),   # mneeStats
+        BVH4.none(),
     )
 
 # ── _pdf_solid_to_area ────────────────────────────────────────────────────────
@@ -342,6 +344,8 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         Float32(0),   # vcmLambda
         Int32(0),   # vcmBucketCap
         Int32(1),   # hasGlass
+        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),   # mneeStats
+        BVH4.none(),
     )
 
     var cv = BDPTVertex(

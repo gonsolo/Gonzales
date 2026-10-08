@@ -1,6 +1,7 @@
 from std.collections import Array
 from .geometry import RGB
 from std.os.path import exists
+from .ply_prefetch import PlyPrefetch
 
 
 def scene_path(scene_dir: String, name: String, what: String) -> String:
@@ -364,6 +365,7 @@ struct SceneParseState(Movable):
     var cam2w_raw:        Array[Float32, 16]
     var max_depth:        Int32
     var scene_dir:        String
+    var ply_cache:        Pointer[PlyPrefetch, MutUntrackedOrigin]   # plymesh files loaded ahead of the parse (ply_prefetch.mojo)
     var object_depth:     Int32
 
     # SPPM integrator params (Integrator "sppm" "float radius"/"integer
@@ -514,6 +516,7 @@ struct SceneParseState(Movable):
         self.cam2w_raw[10] = Float32(1); self.cam2w_raw[15] = Float32(1)
         self.max_depth  = Int32(5)
         self.scene_dir  = String("")
+        self.ply_cache  = Pointer[PlyPrefetch, MutUntrackedOrigin].unsafe_dangling()
         self.object_depth = Int32(0)
         self.sppm_radius = Float32(-1)
         self.sppm_photons_per_iter = Int32(-1)

@@ -90,7 +90,7 @@ def tri_world(
 
 
 @always_inline
-def _rotate_from_to_apply(frm: Vec3f, to: Vec3f, v: Vec3f, inverse: Bool) -> Vec3f:
+def _rotate_from_to_apply[inverse: Bool](frm: Vec3f, to: Vec3f, v: Vec3f) -> Vec3f:
     """pbrt's RotateFromTo(frm, to) applied to v (or its inverse = transpose)."""
     var refl: Vec3f
     if abs(frm[0]) < Float32(0.72) and abs(to[0]) < Float32(0.72):
@@ -102,14 +102,16 @@ def _rotate_from_to_apply(frm: Vec3f, to: Vec3f, v: Vec3f, inverse: Bool) -> Vec
     var u = refl - frm
     var w = refl - to
     var uu = dot(u, u); var ww = dot(w, w); var uw = dot(u, w)
+    var c1 = Float32(2) / uu
+    var c2 = Float32(2) / ww
+    var c3 = Float32(4) * uw / (uu * ww)
     var out = SIMD[DType.float32, 4](0)
-    for i in range(3):
+    comptime for i in range(3):
         var acc = Float32(0)
-        for j in range(3):
-            var a = i if not inverse else j
-            var b = j if not inverse else i
-            var r = (Float32(1) if a == b else Float32(0)) - Float32(2) / uu * u[a] * u[b] \
-                - Float32(2) / ww * w[a] * w[b] + Float32(4) * uw / (uu * ww) * w[a] * u[b]
+        comptime for j in range(3):
+            comptime a = i if not inverse else j
+            comptime b = j if not inverse else i
+            var r = (Float32(1) if a == b else Float32(0)) - c1 * u[a] * u[b] - c2 * w[a] * w[b] + c3 * w[a] * u[b]
             acc += r * v[j]
         out[i] = acc
     return Vec3f(out[0], out[1], out[2])
@@ -139,7 +141,7 @@ def dp_dxy_approx_camera(cam: CameraFootprint, p: Vec3f, n: Vec3f) -> Tuple[Vec3
     var zax = Vec3f(Float32(0), Float32(0), Float32(1))
     var nc = _to_cam(cam, n)
     var p_dz = Vec3f(Float32(0), Float32(0), plen)
-    var n_dz = _rotate_from_to_apply(dirc, zax, nc, False)
+    var n_dz = _rotate_from_to_apply[False](dirc, zax, nc)
     var d = n_dz[2] * p_dz[2]
     var xd = zax + cam.min_dx
     var yd = zax + cam.min_dy
@@ -148,8 +150,8 @@ def dp_dxy_approx_camera(cam: CameraFootprint, p: Vec3f, n: Vec3f) -> Tuple[Vec3
         return (z, z)
     var px = xd * (d / dnx)
     var py = yd * (d / dny)
-    var dpdx = _from_cam(cam, _rotate_from_to_apply(dirc, zax, px - p_dz, True)) * cam.spp_scale
-    var dpdy = _from_cam(cam, _rotate_from_to_apply(dirc, zax, py - p_dz, True)) * cam.spp_scale
+    var dpdx = _from_cam(cam, _rotate_from_to_apply[True](dirc, zax, px - p_dz)) * cam.spp_scale
+    var dpdy = _from_cam(cam, _rotate_from_to_apply[True](dirc, zax, py - p_dz)) * cam.spp_scale
     return (dpdx, dpdy)
 
 

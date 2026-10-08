@@ -17,8 +17,9 @@ from .vcm_camis import (
     CamisCamRecord, CamisCamCarry, camis_cam_carry_init, camis_cam_arrive, camis_cam_scatter,
     CamisLightRecord, camis_clamp_log_p, camis_eval_emission_hit,
 )
+from .bvh import traverse_dispatch
 from .bvh import (
-    SceneView, traverse_bvh2_core, test_spheres, _scene_bounding_sphere, _eval_infinite_light_and_pdf,
+    SceneView, test_spheres, _scene_bounding_sphere, _eval_infinite_light_and_pdf,
     _hair_precompute, curve_offset_eps, sphere_light_cone_pdf, _sample_infinite_light_nee,
     light_path_pick_pdf,
 )
@@ -122,7 +123,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
         # kept at the call site because it is the Vulkan RT swap point.
         var ray = Ray(ro, rd)
         scratch[unsafe_offset=0].hit = Int8(0)
-        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch,
+        traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1e38), scratch,
                            sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
         test_spheres(sd.spheres, Int(sd.sphereCount), ray, scratch)
         # A miss (including its infinite-light escape credit) is handled

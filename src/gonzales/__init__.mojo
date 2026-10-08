@@ -3,7 +3,13 @@ from std.time import perf_counter_ns
 from std.os import getenv, setenv
 from std.memory.alloc import unsafe_alloc
 from gonzales.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel, debug_render_vulkanrt
-from gonzales.spectrum import load_spectral_context, spectral_handle
+from gonzales.spectrum import load_spectral_context, spectral_handle, SpectralContext
+from gonzales.pbrt_parser import ParsedScene_Mojo
+from gonzales.ply_prefetch import PlyPrefetch, scan_plys
+from gonzales.os_thread import OsThread, ThreadArg
+from gonzales.scene_loader import mojo_parse_scene_any
+from gonzales.gpu_scene import gpu_available
+from max.gpu.host import DeviceContext
 from gonzales.sensors import scan_film_sensor_params
 
 def _parse_int32(s: String, start: Int) -> Int32:
@@ -51,6 +57,65 @@ def _parse_res(s: String, start: Int) -> Tuple[Int32, Int32]:
         hv = hv * Int32(10) + Int32(s.as_bytes()[j]) - Int32(48)
         j += 1
     return (wv, hv)
+
+# Creates the CUDA context (about 130 ms of driver start-up) off the parse's critical path.
+def _create_context_thread(arg: ThreadArg) -> ThreadArg:
+    var slot = arg.unsafe_bitcast[Optional[DeviceContext]]()
+    try:
+        slot[unsafe_offset=0] = Optional[DeviceContext](DeviceContext())
+    except:
+        pass
+    return arg
+
+# The Sobol matrices and the spectral tables, loaded while the scene is parsed.
+# Load the real Jakob-Hanika spectral upsampling table once (staged
+# spectral rendering rollout, see project_spectral_rendering memory)
+# and keep the owning SpectralContext alive for the whole render — the
+# SpectralHandle threaded everywhere else is just raw pointers into it.
+# Missing table -> null_spectral_handle() default everywhere downstream
+# (same "unwired yet" behavior as before this table existed), not a
+# fatal error, so a stale/missing data dir doesn't block rendering.
+# A named sensor (e.g. "nikon_d850") needs its measured response curves
+# baked into the CieXyzTables from the start (see sensors.mojo's header)
+# -- cheap enough to just re-read the scene file here for a pre-scan,
+# since the real parse (which also reads "string sensor"/"float
+# whitebalance", but too late for this) hasn't happened yet.
+struct _StartupBundle(Movable):
+    var data_dir: String
+    var scene_path: String
+    var sobol: Optional[Pointer[UInt32, MutUntrackedOrigin]]
+    var spectral: Optional[SpectralContext]
+    var spectral_ok: Bool
+
+    def __init__(out self, data_dir: String, scene_path: String):
+        self.data_dir = data_dir
+        self.scene_path = scene_path
+        self.sobol = None
+        self.spectral = None
+        self.spectral_ok = False
+
+    def run(mut self):
+        self.sobol = _generate_sobol_matrices(self.data_dir + "/new-joe-kuo-6.21201")
+        var sensor_name = String("cie1931")
+        var sensor_wb = Float32(0.0)
+        try:
+            var scene_text = open(self.scene_path, "r").read()
+            var scan = scan_film_sensor_params(scene_text)
+            sensor_name = scan[0]
+            sensor_wb = scan[1]
+        except:
+            pass
+        var loaded = load_spectral_context(self.data_dir, sensor_name, sensor_wb)
+        self.spectral_ok = loaded[0]
+        self.spectral = loaded[1].copy()
+
+def _load_tables_thread(arg: ThreadArg) -> ThreadArg:
+    arg.unsafe_bitcast[_StartupBundle]()[unsafe_offset=0].run()
+    return arg
+
+def _ply_loader_thread(arg: ThreadArg) -> ThreadArg:
+    arg.unsafe_bitcast[PlyPrefetch]()[unsafe_offset=0].run_loader()
+    return arg
 
 def main() raises:
     var t0 = perf_counter_ns()
@@ -261,43 +326,79 @@ def main() raises:
         return
 
     var data_dir = getenv("GONZALES_DATA_DIR", "src/gonzales/data")
-    var sobol_opt = _generate_sobol_matrices(data_dir + "/new-joe-kuo-6.21201")
-    if not sobol_opt:
-        return
-    var sobol = sobol_opt.value()
-
-    # Load the real Jakob-Hanika spectral upsampling table once (staged
-    # spectral rendering rollout, see project_spectral_rendering memory)
-    # and keep the owning SpectralContext alive for the whole render — the
-    # SpectralHandle threaded everywhere else is just raw pointers into it.
-    # Missing table -> null_spectral_handle() default everywhere downstream
-    # (same "unwired yet" behavior as before this table existed), not a
-    # fatal error, so a stale/missing data dir doesn't block rendering.
-    # A named sensor (e.g. "nikon_d850") needs its measured response curves
-    # baked into the CieXyzTables from the start (see sensors.mojo's header)
-    # -- cheap enough to just re-read the scene file here for a pre-scan,
-    # since the real parse (which also reads "string sensor"/"float
-    # whitebalance", but too late for this) hasn't happened yet.
-    var sensor_name = String("cie1931")
-    var sensor_wb = Float32(0.0)
-    try:
-        var scene_text = open(scene_path, "r").read()
-        var scan = scan_film_sensor_params(scene_text)
-        sensor_name = scan[0]
-        sensor_wb = scan[1]
-    except:
-        pass
-    var spectral_ctx_result = load_spectral_context(data_dir, sensor_name, sensor_wb)
-    var spectral_ctx = spectral_ctx_result[1].copy()
-    var spectral = spectral_handle(spectral_ctx)
-    if not spectral_ctx_result[0]:
-        print("Warning: could not load spectral table from " + data_dir + " -- spectral rendering disabled")
 
     var path_len = scene_path.byte_length()
     var path_cstr = unsafe_alloc[UInt8](path_len + 1)
     for k in range(path_len):
         path_cstr[unsafe_offset=k] = scene_path.as_bytes()[k]
     path_cstr[unsafe_offset=path_len] = UInt8(0)
+
+    # The Sobol matrices, the spectral tables, the CUDA context, the PLY meshes and the scene parse do not depend on each
+    # other, so they run side by side. The parse (the longest) stays on this thread; the rest run on threads of their own
+    # (OsThread), only for the drivers that parse in parse_and_render.
+    var will_parse = not (pixel_x >= 0 and pixel_y >= 0) and not use_vulkan_rt and not interactive
+    var want_ctx = will_parse and use_gpu and gpu_available()
+
+    var ctx_slot = unsafe_alloc[Optional[DeviceContext]](1)
+    ctx_slot.unsafe_write(Optional[DeviceContext](None))
+    var ctx_thread = OsThread()
+    if want_ctx:
+        ctx_thread.start(_create_context_thread, ctx_slot.unsafe_bitcast[UInt8]().unsafe_origin_cast[MutUntrackedOrigin]())
+
+    var bundle = unsafe_alloc[_StartupBundle](1)
+    bundle.unsafe_write(_StartupBundle(data_dir, scene_path))
+    var bundle_thread = OsThread()
+    bundle_thread.start(_load_tables_thread, bundle.unsafe_bitcast[UInt8]().unsafe_origin_cast[MutUntrackedOrigin]())
+
+    var scene_dir = String("")
+    var last_slash = -1
+    for ki in range(path_len):
+        if path_cstr[unsafe_offset=ki] == UInt8(47):
+            last_slash = ki
+    if last_slash >= 0:
+        var dir_tmp = unsafe_alloc[UInt8](last_slash + 2)
+        for ki in range(last_slash + 1):
+            dir_tmp[unsafe_offset=ki] = path_cstr[unsafe_offset=ki]
+        dir_tmp[unsafe_offset=last_slash + 1] = UInt8(0)
+        scene_dir = String(unsafe_from_utf8_ptr=dir_tmp.as_imm())
+        dir_tmp.unsafe_free()
+    var plys = unsafe_alloc[PlyPrefetch](1)
+    plys.unsafe_write(PlyPrefetch())
+    var ply_threads = List[OsThread]()
+    if will_parse and scene_path.endswith(".pbrt"):
+        var scene_text = String("")
+        try:
+            scene_text = open(scene_path, "r").read()
+        except:
+            pass
+        plys[unsafe_offset=0] = scan_plys(scene_text.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](), scene_text.byte_length(), scene_dir)
+        for _ in range(min(6, plys[unsafe_offset=0].n)):
+            ply_threads.append(OsThread())
+            ply_threads[len(ply_threads) - 1].start(_ply_loader_thread, plys.unsafe_bitcast[UInt8]().unsafe_origin_cast[MutUntrackedOrigin]())
+
+    var preparsed = Pointer[ParsedScene_Mojo, MutUntrackedOrigin].unsafe_dangling()
+    if will_parse:
+        preparsed = mojo_parse_scene_any(path_cstr, verbose, plys)
+
+    for ti in range(len(ply_threads)):
+        ply_threads[ti].join()
+    plys[unsafe_offset=0].free_all()
+    _ = plys.unsafe_take_pointee()
+    plys.unsafe_free()
+    ctx_thread.join()
+    bundle_thread.join()
+    var gpu_ctx = ctx_slot.unsafe_take_pointee()
+    ctx_slot.unsafe_free()
+    var loaded = bundle.unsafe_take_pointee()
+    bundle.unsafe_free()
+
+    if not loaded.sobol:
+        return
+    var sobol = loaded.sobol.value()
+    var spectral_ctx = loaded.spectral.take()
+    var spectral = spectral_handle(spectral_ctx)
+    if not loaded.spectral_ok:
+        print("Warning: could not load spectral table from " + data_dir + " -- spectral rendering disabled")
 
     if pixel_x >= 0 and pixel_y >= 0:
         debug_trace_pixel(path_cstr, pixel_x, pixel_y, override_w=override_w, override_h=override_h)
@@ -306,7 +407,7 @@ def main() raises:
     elif interactive:
         render_interactive(path_cstr, sobol, use_gpu, spectral=spectral, fullscreen=fullscreen, override_w=override_w, override_h=override_h, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, use_vol_restir_reuse=use_vol_restir_reuse, headless_frames=headless_frames)
     else:
-        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons, vcm_budget=vcm_budget, vcm_cap=vcm_cap, vcm_no_keep_mis=vcm_no_keep_mis, vcm_radius_from_camera=vcm_radius_from_camera, vcm_radius_cam_percentile=vcm_radius_cam_percentile, vcm_radius_cam_fraction_mult=vcm_radius_cam_fraction_mult, vcm_no_footprint=vcm_no_footprint, vcm_radius_scale=vcm_radius_scale, use_vulkan_rt_shade=use_vulkan_rt_shade, use_vcm_wavefront=use_vcm_wavefront, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, use_vol_restir_reuse=use_vol_restir_reuse)
+        var rc = parse_and_render(path_cstr, sobol, use_gpu, spectral=spectral, preparsed=preparsed, gpu_ctx=gpu_ctx, override_w=override_w, override_h=override_h, no_denoise=no_denoise, spp_override=spp_override, seed_override=seed_override, verbose=verbose, use_sppm=use_sppm, sppm_passes=sppm_passes, sppm_photons=sppm_photons, sppm_radius=sppm_radius, use_guide=use_guide, use_vcm=use_vcm, vcm_spp=vcm_spp, vcm_photons=vcm_photons, vcm_budget=vcm_budget, vcm_cap=vcm_cap, vcm_no_keep_mis=vcm_no_keep_mis, vcm_radius_from_camera=vcm_radius_from_camera, vcm_radius_cam_percentile=vcm_radius_cam_percentile, vcm_radius_cam_fraction_mult=vcm_radius_cam_fraction_mult, vcm_no_footprint=vcm_no_footprint, vcm_radius_scale=vcm_radius_scale, use_vulkan_rt_shade=use_vulkan_rt_shade, use_vcm_wavefront=use_vcm_wavefront, use_restir=use_restir, use_restir_gi=use_restir_gi, use_sms_restir=use_sms_restir, use_vol_restir_reuse=use_vol_restir_reuse)
         var elapsed_s = Float64(perf_counter_ns() - t0) / 1_000_000_000.0
         print("Gonzales Total Execution Time:", elapsed_s, "s")
         if rc != Int32(0):

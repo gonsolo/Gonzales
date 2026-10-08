@@ -257,9 +257,19 @@ struct NormalSlopeMap(TrivialRegisterPassable):
 def normal_slope_map_none() -> NormalSlopeMap:
     return NormalSlopeMap(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Int32(0))
 
-# Deferred shadow rays per path (--rt-hardware): a bounce's NEE loops may add several candidates (area, infinite, ...);
-# the first SHADOW_SLOTS are deferred to the RT cores, any further one is traced inline.
+# Deferred shadow rays per path (--rt-hardware, and the software BVH's sw_shadow): a bounce's NEE loops may add several
+# candidates (area, infinite, ...); the first SHADOW_SLOTS are deferred, any further one is traced inline (never in defer_only kernels).
 comptime SHADOW_SLOTS: Int = 2
+
+# An emitter hit reached through a glass chain whose suppression is decided in a separate kernel (resolve_suppress_gpu):
+# `contrib` is added to the path's estimate unless MNEE owns the path.
+@fieldwise_init
+struct SuppressTask(TrivialRegisterPassable):
+    var contrib: SpectralSample
+    var active: Int32
+    var _p0: Int32
+    var _p1: Int32
+    var _p2: Int32
 
 @fieldwise_init
 struct ShadowTask(TrivialRegisterPassable):

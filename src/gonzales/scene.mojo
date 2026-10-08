@@ -5,7 +5,7 @@ from .materials import Material
 from .primitives import TriangleMesh, PrimId, Sphere
 from .media import Medium, MediumInterface
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight
-from .bvh import BVH2Node, SceneView
+from .bvh import BVH2Node, BVH4, SceneView
 
 # ── Scene IR ──────────────────────────────────────────────────────────────────
 #
@@ -174,4 +174,6 @@ struct Scene(Movable):
             mediumInterfaces  = self.medium_ifaces.unsafe_ptr(),
             mediumIfaceCount  = Int64(len(self.medium_ifaces)),
             hasGlass          = Int32(1),
+            mneeStats         = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+            bvh4              = BVH4.none(),
         )

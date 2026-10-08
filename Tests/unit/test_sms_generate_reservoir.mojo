@@ -11,12 +11,12 @@ from std.testing import assert_true, TestSuite
 from gonzales.footprint import CameraFootprint
 from gonzales.geometry import RGB, Point3f, Vec3f
 from gonzales.materials import Material, MatKind, MeasuredBRDF
-from gonzales.render_state import GpuTexture, NormalSlopeMap, ShadowTask, PathState
+from gonzales.render_state import GpuTexture, NormalSlopeMap, ShadowTask, SuppressTask, PathState
 from gonzales.primitives import Ray, PrimId, TriangleMesh, Instance, Sphere
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
 from gonzales.curves import Curve
 from gonzales.spectrum import SpectralSample, null_spectral_handle, SampledWavelengths
-from gonzales.bvh import BVH2Node
+from gonzales.bvh import BVH4, BVH2Node
 from gonzales.guide import null_guide
 from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.shading import ShadeContext, LightContext, GIPendingX1, sms_generate_reservoir, sms_resolve, sms_temporal_step, _shade_diffuse_nee
@@ -92,6 +92,9 @@ def _make_ctx(
         Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
         gi_reservoir_io_null(),
         Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), True,
+        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+        BVH4.none(),
+        Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
         0, Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
     )

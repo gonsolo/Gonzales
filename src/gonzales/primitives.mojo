@@ -142,8 +142,19 @@ def intersect_triangle(
     Returns (hit, t, u, v) where (u,v) are barycentric coordinates.
     See: docs/03_shapes_and_acceleration.md — Triangle Intersection.
     """
-    var e1 = p1 - p0
-    var e2 = p2 - p0
+    return intersect_triangle_edges(ray_org, ray_dir, p0, p1 - p0, p2 - p0, tMax)
+
+
+@always_inline
+def intersect_triangle_edges(
+    ray_org: Vec3f,
+    ray_dir: Vec3f,
+    p0: Vec3f,
+    e1: Vec3f,
+    e2: Vec3f,
+    tMax: Float32
+) -> Tuple[Bool, Float32, Float32, Float32]:
+    """intersect_triangle with the edges p1 - p0 and p2 - p0 precomputed."""
     var pvec = cross(ray_dir, e2)
     var det = dot(e1, pvec)
 

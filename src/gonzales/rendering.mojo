@@ -11,7 +11,7 @@ from .primitives import sphere_outward_normal, Ray, Intersection, PrimId, Sphere
 from .media import Medium, MediumInterface, Grid, grid_sample_density, SSS_WALK_ROUNDS
 from .lights import AreaLight, LightSampler, light_sampler_sample
 from .curves import curve_piece_endpoints, _curve_perp_axis
-from .bvh import SceneView, traverse_bvh2_core, test_spheres, any_hit_bvh2_core
+from .bvh import SceneView, traverse_dispatch, test_spheres
 from .shading import shade_core_cpu_nee, GIPendingX1, gi_pending_x1_init
 from .rng import PCG32
 from .sampling import TileSamplerParams, encode_morton2, sobol_get_sample_index, sobol_sample, derive_pcg_seeds, gaussian_norm, mix_bits_u64, gen_primary_ray_state
@@ -137,6 +137,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
     # (cheap, and harmless when vol_io isn't real -- _sample_medium_core's
     # own `_is_real_ptr(vol_read)` check gates the whole path off first).
     var vol_used_buf = unsafe_alloc[Int8](n)
+    var act_idx = unsafe_alloc[Int32](n)   # compacted indices of this round's active paths
     for vu_i in range(n):
         vol_used_buf[unsafe_offset=vu_i] = Int8(0)
 
@@ -205,7 +206,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
         # Measured on a homogeneous slab (PT, one interface crossing to enter
         # the medium): gonzales at maxDepth=N matched pbrt at maxDepth=N-1
         # almost exactly, e.g. gz(3)=0.03257 vs pbrt(2)=0.03256.
-        var anyActive = False
+        var na = 0
         for i in range(n):
             # MARK, do not kill. pbrt terminates at the NEXT real scattering
             # event, not before the segment that leaves the last allowed one --
@@ -220,13 +221,15 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
             if paths[unsafe_offset=i].active != 0 and paths[unsafe_offset=i].bounce >= Int32(trueMaxDepth):
                 paths[unsafe_offset=i].at_cap = Int8(1)
             if paths[unsafe_offset=i].active != 0:
-                anyActive = True
-        if not anyActive:
+                act_idx[unsafe_offset=na] = Int32(i)
+                na += 1
+        if na == 0:
             break
-        for i in range(n):
+        for ak in range(na):
+            var i = Int(act_idx[unsafe_offset=ak])
             if paths[unsafe_offset=i].active == 0:
                 continue
-            traverse_bvh2_core(scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves,
+            traverse_dispatch(scene.bvh4, scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves,
                                paths[unsafe_offset=i].ray, Float32(1.0e38), intersections.unsafe_offset(i),
                                scene.blasNodesArr, scene.blasPrimIdsArr, scene.instances)
             if scene.sphereCount > 0:
@@ -238,7 +241,8 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     paths[unsafe_offset=i].cone_len += intersections[unsafe_offset=i].tHit
                 else:
                     paths[unsafe_offset=i].cone_len = Float32(-1.0)
-        for i in range(n):
+        for ak in range(na):
+            var i = Int(act_idx[unsafe_offset=ak])
             if paths[unsafe_offset=i].active == 0:
                 continue
             # ── Volume transmittance sampling ──────────────────────────
@@ -258,7 +262,8 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                 pixel_idx=pixel_idx_buf[unsafe_offset=i],
                 vol_used=vol_used_buf,
             )
-        for i in range(n):
+        for ak in range(na):
+            var i = Int(act_idx[unsafe_offset=ak])
             if paths[unsafe_offset=i].active == 0:
                 continue
             shade_core_cpu_nee(paths, intersections, scene.bvh2Nodes, scene.primIds,
@@ -275,9 +280,12 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                                measured_brdfs=scene.measuredBrdfs, use_restir=use_restir,
                                restir_io=restir_io, pixel_idx=pixel_idx_buf[unsafe_offset=i],
                                gi_pending=gi_pending_buf, gi_io=gi_io, sms_io=sms_io,
-                               nmaps=scene.normalSlopeMaps)
+                               nmaps=scene.normalSlopeMaps,
+                               textures=scene.gpuTextures, n_textures=Int(scene.gpuTextureCount),
+                               has_glass=scene.hasGlass != Int32(0), mnee_stats=scene.mneeStats, bvh4=scene.bvh4)
         # ── Medium interface transitions ──────────────────────────
-        for i in range(n):
+        for ak in range(na):
+            var i = Int(act_idx[unsafe_offset=ak])
             if paths[unsafe_offset=i].active == 0:
                 continue
             if intersections[unsafe_offset=i].hit == Int8(0):
@@ -369,6 +377,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
     paths.unsafe_free()
     pixel_idx_buf.unsafe_free()
     vol_used_buf.unsafe_free()
+    act_idx.unsafe_free()
     if use_gi:
         gi_pending_buf.unsafe_free()
 

@@ -1,9 +1,10 @@
+from .os_thread import OsThread, ThreadArg
 from std.memory.alloc import unsafe_alloc
-from std.memory import OwnedPointer
+from std.memory import OwnedPointer, unsafe_memcpy
 from std.collections import List, Array
 from std.math import sqrt, tan, ceil
 from std.sys.info import size_of
-from max.gpu.host import DeviceBuffer
+from max.gpu.host import DeviceBuffer, DeviceContext
 from .footprint import camera_footprint
 from .pbrt_parser import ParsedScene_Mojo, mojo_parsed_free, mojo_parsed_scene_descriptor, resize_film, mojo_apply_overrides
 from .scene_loader import mojo_parse_scene_any
@@ -31,7 +32,7 @@ from .restir_di import DIReservoir, di_reservoir_init, ReservoirIO, reservoir_io
 from .restir_gi import GIReservoir, gi_reservoir_init, GIReservoirIO, gi_reservoir_io_null
 from .restir_sms import SMSReservoir, sms_reservoir_init, SMSReservoirIO, sms_reservoir_io_null
 from .restir_vol import VolReservoir, vol_reservoir_init, VolReservoirIO, vol_reservoir_io_null
-from .gpu import gpu_render_sample, gpu_render_wavefront, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol
+from .gpu import gpu_render_sample, gpu_render_wavefront, gpu_mnee_adapt, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol
 from .gpu_scene import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_free_scene
 from .gpu_denoise import gpu_atrous_denoise
 from .gpu_wavefront import gpu_gen_aux_buffers
@@ -157,9 +158,7 @@ def _generate_sobol_matrices(path: String) -> Optional[Pointer[UInt32, MutUntrac
         f.close()
         file_size = len(bytes)
         file_buf = unsafe_alloc[UInt8](file_size + 1)
-        var bytes_ptr = bytes.unsafe_ptr()
-        for i in range(file_size):
-            file_buf[unsafe_offset=i] = bytes_ptr[unsafe_offset=i]
+        unsafe_memcpy(dest=file_buf, src=bytes.unsafe_ptr(), count=file_size)
         file_buf[unsafe_offset=file_size] = UInt8(0)
     except:
         print("Error: cannot open Sobol data file: " + path)
@@ -1120,6 +1119,10 @@ struct CpuGuidedRenderer(GuidedRenderer):
         shards.unsafe_free()
 
 
+# 8x8 tiles keep a tile's wavefront (paths x spp) inside the core's cache; 32x32 streamed ~8 MB per sweep.
+comptime CPU_TILE_SIZE = Int32(8)
+
+
 struct GpuGuidedRenderer(GuidedRenderer):
     var handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]
     var psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
@@ -1174,6 +1177,7 @@ struct GpuGuidedRenderer(GuidedRenderer):
                 self.instance_base_mesh_buf,
             )
             si += actual_batch
+            gpu_mnee_adapt(self.handle)
             self.progress.update(si)
 
     def render_iteration(mut self, read_tree: GuideGrid, shard: GuideGrid, begin: Int, end: Int) raises:
@@ -1182,11 +1186,44 @@ struct GpuGuidedRenderer(GuidedRenderer):
         gpu_guide_end(self.handle, shard)
 
 
+# The normal and depth layers of the output files come from a host first-hit pass over the whole frame. It reads only
+# the scene, so it runs on its own thread while the GPU renders instead of after it.
+struct _AuxJob(Movable):
+    var psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
+    var spectral: SpectralHandle
+    var fw: Int32
+    var fh: Int32
+    var normals: Pointer[Float32, MutUntrackedOrigin]
+    var depth: Pointer[Float32, MutUntrackedOrigin]
+    var thread: OsThread
+
+    def __init__(out self, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], spectral: SpectralHandle, fw: Int32, fh: Int32,
+                 normals: Pointer[Float32, MutUntrackedOrigin], depth: Pointer[Float32, MutUntrackedOrigin]):
+        self.psc = psc
+        self.spectral = spectral
+        self.fw = fw
+        self.fh = fh
+        self.normals = normals
+        self.depth = depth
+        self.thread = OsThread()
+
+    def run(self):
+        var sd_aux = mojo_parsed_scene_descriptor(self.psc, self.spectral)
+        render_aux_buffers(self.psc[unsafe_offset=0].raster_to_camera, self.psc[unsafe_offset=0].camera_to_world,
+                           Int32(0), Int32(0), self.fw, self.fh, sd_aux, self.normals, self.depth)
+        sd_aux.unsafe_free()
+
+def _aux_thread_main(arg: ThreadArg) -> ThreadArg:
+    arg.unsafe_bitcast[_AuxJob]()[unsafe_offset=0].run()
+    return arg
+
 def parse_and_render(
     path: Pointer[UInt8, MutUntrackedOrigin],
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     use_gpu: Bool,
     spectral: SpectralHandle = null_spectral_handle(),
+    preparsed: Pointer[ParsedScene_Mojo, MutUntrackedOrigin] = Pointer[ParsedScene_Mojo, MutUntrackedOrigin].unsafe_dangling(),  # the scene, when main() already parsed it
+    gpu_ctx: Optional[DeviceContext] = None,  # the CUDA context, when main() already created it
     override_w: Int32 = Int32(0), override_h: Int32 = Int32(0),
     no_denoise: Bool = False,
     spp_override: Int32 = Int32(0),
@@ -1268,7 +1305,7 @@ def parse_and_render(
         print("No GPU available — compile with --target-accelerator sm_86 or similar")
         return Int32(-1)
 
-    var psc = mojo_parse_scene_any(path, verbose)
+    var psc = preparsed if _is_real_ptr[ParsedScene_Mojo](preparsed) else mojo_parse_scene_any(path, verbose)
     if not _is_real_ptr[ParsedScene_Mojo](psc):
         return Int32(-1)
     if override_w > 0 or override_h > 0:
@@ -1315,7 +1352,7 @@ def parse_and_render(
     # this chain the compiler rejects every enqueue_function in sppm_gpu.mojo (cause unknown).
     if use_gpu and use_vcm and not use_sppm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
-        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
+        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65, gpu_ctx)
         if not _is_real_ptr(handle):
             sd.unsafe_free()
             mojo_parsed_free(psc)
@@ -1484,7 +1521,7 @@ def parse_and_render(
         return ret
     elif use_gpu and use_sppm:
         var sd = mojo_parsed_scene_descriptor(psc, spectral)
-        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
+        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65, gpu_ctx)
         if not _is_real_ptr(handle):
             sd.unsafe_free()
             mojo_parsed_free(psc)
@@ -1501,7 +1538,7 @@ def parse_and_render(
         return ret
     elif use_gpu:
         var spp = Int(psc[unsafe_offset=0].samples_per_pixel)
-        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
+        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65, gpu_ctx)
         if not _is_real_ptr(handle):
             mojo_parsed_free(psc)
             return Int32(-1)
@@ -1746,6 +1783,15 @@ def parse_and_render(
             if use_vol_restir_reuse:
                 gpu_clear_restir_vol(handle, Int64(n_pixels))
         gpu_clear_film(handle, Int64(n_pixels))
+        var normals_gpu = List[Float32](capacity=n_pixels * 3)
+        var depth_gpu = List[Float32](capacity=n_pixels)
+        normals_gpu.resize(n_pixels * 3, Float32(0))
+        depth_gpu.resize(n_pixels, Float32(0))
+        var aux_job = unsafe_alloc[_AuxJob](1)
+        aux_job.unsafe_write(_AuxJob(psc, spectral, fw, fh,
+            normals_gpu.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            depth_gpu.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()))
+        aux_job[unsafe_offset=0].thread.start(_aux_thread_main, aux_job.unsafe_bitcast[UInt8]().unsafe_origin_cast[MutUntrackedOrigin]())
         if vol_reuse_needs_sample_dispatch:
             var prog_gpu = Progress(spp, "spp")
             for si in range(spp):
@@ -1785,7 +1831,8 @@ def parse_and_render(
             vulkaninterop_rt_destroy_scene(interop_scene)
         var denoised_gpu = List[Float32](capacity=n_pixels * 3)
         var albedo_gpu   = List[Float32](capacity=n_pixels * 3)
-        for _ in range(n_pixels * 3): denoised_gpu.append(Float32(0)); albedo_gpu.append(Float32(0))
+        denoised_gpu.resize(n_pixels * 3, Float32(0))
+        albedo_gpu.resize(n_pixels * 3, Float32(0))
         gpu_gen_aux_buffers(handle, psc[unsafe_offset=0].camera_to_world, Int64(n_pixels))
         gpu_atrous_denoise(handle, denoised_gpu.unsafe_ptr(), Int64(n_pixels),
                                 Int32(spp), psc[unsafe_offset=0].film_iso, psc[unsafe_offset=0].film_max_comp,
@@ -1794,7 +1841,7 @@ def parse_and_render(
         # The image before denoising, for the .noisy.exr sidecar: the same
         # normalize pass without the a-trous blur (it only reads the film).
         var noisy_gpu = List[Float32](capacity=n_pixels * 3)
-        for _ in range(n_pixels * 3): noisy_gpu.append(Float32(0))
+        noisy_gpu.resize(n_pixels * 3, Float32(0))
         if not no_denoise:
             gpu_atrous_denoise(handle, noisy_gpu.unsafe_ptr(), Int64(n_pixels),
                                     Int32(spp), psc[unsafe_offset=0].film_iso, psc[unsafe_offset=0].film_max_comp,
@@ -1805,16 +1852,11 @@ def parse_and_render(
         for i in range(n_pixels * 3):
             albedo_gpu[i] *= inv_spp
         gpu_free_scene(handle)
-        # Normals and depth for the output layers: the same host first-hit
-        # pass every other driver uses (render_aux_buffers).
-        var sd_aux = mojo_parsed_scene_descriptor(psc, spectral)
-        var normals_gpu = List[Float32](capacity=n_pixels * 3)
-        var depth_gpu = List[Float32](capacity=n_pixels)
-        for _ in range(n_pixels * 3): normals_gpu.append(Float32(0))
-        for _ in range(n_pixels): depth_gpu.append(Float32(0))
-        render_aux_buffers(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
-                           Int32(0), Int32(0), fw, fh, sd_aux, normals_gpu.unsafe_ptr(), depth_gpu.unsafe_ptr())
-        sd_aux.unsafe_free()
+        # Normals and depth for the output layers: the same host first-hit pass every other driver uses
+        # (render_aux_buffers), started before the render.
+        aux_job[unsafe_offset=0].thread.join()
+        _ = aux_job.unsafe_take_pointee()
+        aux_job.unsafe_free()
         _ = write_render_outputs(psc, denoised_gpu.unsafe_ptr(), noisy_gpu.unsafe_ptr(), not no_denoise,
                                  albedo_gpu.unsafe_ptr(), normals_gpu.unsafe_ptr(), depth_gpu.unsafe_ptr())
         # the buffers and results are freed automatically
@@ -1829,7 +1871,7 @@ def parse_and_render(
         mojo_parsed_free(psc)
         return Int32(0)
     elif use_vcm:
-        var sd = mojo_parsed_scene_descriptor(psc, spectral)
+        var sd = mojo_parsed_scene_descriptor(psc, spectral, host_textures=True)
         var n_photons = _resolve_vcm_photons(vcm_photons, n_pixels)
         var resolved_vcm_spp = _resolve_vcm_spp(vcm_spp, psc[unsafe_offset=0].samples_per_pixel)
         var ret = vcm_render(psc, sd[unsafe_offset=0], resolved_vcm_spp, n_photons, no_denoise, verbose)
@@ -1837,7 +1879,7 @@ def parse_and_render(
         mojo_parsed_free(psc)
         return ret
     elif use_sppm:
-        var sd = mojo_parsed_scene_descriptor(psc, spectral)
+        var sd = mojo_parsed_scene_descriptor(psc, spectral, host_textures=True)
         var resolved = _resolve_sppm_params(psc, sd[unsafe_offset=0], sppm_photons, sppm_radius)
         var ret = sppm_render(
             psc, sd[unsafe_offset=0],
@@ -1854,7 +1896,7 @@ def parse_and_render(
             filterWeight=Float32(0), pixelX=Int32(0), pixelY=Int32(0))
         for _ in range(n_pixels):
             results.append(zero)
-        var sd = mojo_parsed_scene_descriptor(psc, spectral)
+        var sd = mojo_parsed_scene_descriptor(psc, spectral, host_textures=True)
 
         if use_guide and psc[unsafe_offset=0].bvh_node_count > Int32(0):
             # ── Guided rendering: guide.mojo's train_guided, the schedule the GPU driver also uses ──
@@ -1889,7 +1931,7 @@ def parse_and_render(
             render_all_tiles(
                 psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
                 Int32(0), Int32(0), fw, fh,
-                Int32(32), Int32(32),
+                CPU_TILE_SIZE, CPU_TILE_SIZE,
                 sp_ptr.ptr(), sd, results.unsafe_ptr(), psc[unsafe_offset=0].max_depth,
                 quiet=False, guide_read=null_guide(),
                 write_guides=Pointer[GuideGrid, MutUntrackedOrigin].unsafe_dangling(), n_write_guides=0,
@@ -2155,7 +2197,7 @@ def render_interactive(
             gpu_clear_restir_vol(handle, Int64(n_pixels))
         gpu_gen_aux_buffers(handle, psc[unsafe_offset=0].camera_to_world, Int64(n_pixels))
     else:
-        sd = mojo_parsed_scene_descriptor(psc, spectral)
+        sd = mojo_parsed_scene_descriptor(psc, spectral, host_textures=True)
         for _ in range(n_pixels * 3):
             accum.append(Float32(0))
             albedo_acc.append(Float32(0))

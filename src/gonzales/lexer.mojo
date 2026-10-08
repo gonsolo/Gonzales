@@ -1,3 +1,4 @@
+from std.memory import unsafe_memcpy
 from std.memory.alloc import unsafe_alloc
 from std.math import log as _log_math, pow as _pow_math
 from .geometry import RGB, _is_real_ptr
@@ -455,8 +456,7 @@ def scanner_open(path: Pointer[UInt8, MutUntrackedOrigin]) -> Pointer[PbrtScanne
         f.close()
         var size = len(bytes)
         var buf = unsafe_alloc[UInt8](size + 1)
-        for i in range(size):
-            buf[unsafe_offset=i] = bytes[i]
+        unsafe_memcpy(dest=buf, src=bytes.unsafe_ptr(), count=size)
         buf[unsafe_offset=size] = UInt8(0)
         handle[unsafe_offset=0].buffer = buf
         handle[unsafe_offset=0].total_bytes = Int32(size)

@@ -39,7 +39,7 @@ from gonzales.primitives import Ray, Intersection, PrimId, Sphere, Instance, Tri
 from gonzales.media import Medium, MediumInterface, Grid, NvdbGrid
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
 from gonzales.curves import Curve
-from gonzales.bvh import SceneView, BVH2Node, build_bvh2, traverse_bvh2_core, test_spheres
+from gonzales.bvh import BVH4, SceneView, BVH2Node, build_bvh2, traverse_bvh2_core, test_spheres
 from gonzales.rng import PCG32
 from gonzales.sampling import film_filter_of
 from gonzales.spectrum import sample_wavelengths, null_spectral_handle, SampledWavelengths
@@ -136,6 +136,8 @@ def _build_scene() -> SceneView:
         Float32(0),   # vcmLambda
         Int32(0),   # vcmBucketCap
         Int32(1),   # hasGlass
+        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),   # mneeStats
+        BVH4.none(),
     )
 
 def _identity_camera_matrices() -> Tuple[Pointer[Float32, MutUntrackedOrigin], Pointer[Float32, MutUntrackedOrigin]]:

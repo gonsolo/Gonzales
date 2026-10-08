@@ -1,4 +1,4 @@
-from .bvh import BVH2Node, SceneView
+from .bvh import BVH2Node, BVH4, SceneView
 from .curves import CURVE_DEFER_K, Curve
 from .geometry import _is_real_ptr
 from .guide import GuideGrid, null_guide
@@ -12,32 +12,19 @@ from .render_state import FilmDims, FilterParams, GpuTexture, NormalSlopeMap, Pa
 from std.os import getenv
 from .spectrum import SpectralHandle
 from .pbrt_parser import ParsedScene_Mojo
+from .host_textures import decode_host_textures
 from .restir_di import DIReservoir
 from .restir_vol import VolReservoir
-from max.algorithm import parallelize
 from max.gpu import block_dim, block_idx, thread_idx
 from max.gpu.host import DeviceBuffer, DeviceContext
-from std.atomic import Atomic
-from std.ffi import external_call
 from std.math import ceildiv
 from std.memory import unsafe_memcpy
 from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator
-from std.sys.info import num_performance_cores, size_of
+from std.sys.info import size_of
 
 
 comptime WAVEFRONT_BATCH: Int = 8
-
-def _cstr_eq(a: Pointer[UInt8, MutUntrackedOrigin], b: Pointer[UInt8, MutUntrackedOrigin]) -> Bool:
-    var i = 0
-    while True:
-        var ca = a[unsafe_offset=i]
-        var cb = b[unsafe_offset=i]
-        if ca != cb:
-            return False
-        if ca == UInt8(0):
-            return True
-        i += 1
 
 @always_inline
 def typed_ptr[T: AnyType](mut buf: DeviceBuffer[DType.uint8]) -> Pointer[T, MutUntrackedOrigin]:
@@ -49,193 +36,6 @@ def typed_ptr[T: AnyType](mut buf: DeviceBuffer[DType.uint8]) -> Pointer[T, MutU
     .unsafe_origin_cast[MutUntrackedOrigin]() chain repeated at every
     GpuSceneHandle sub-struct's accessor into one call."""
     return buf.unsafe_ptr().unsafe_bitcast[T]().unsafe_origin_cast[MutUntrackedOrigin]()
-
-# (levels, total texels) of a full mip pyramid down to 1x1.
-def _mip_texel_count(tw: Int, th: Int) -> Tuple[Int, Int]:
-    var nlev = 1; var texels = tw * th
-    var ww = tw; var hh = th
-    while ww > 1 or hh > 1:
-        ww = max(1, ww // 2); hh = max(1, hh // 2)
-        nlev += 1; texels += ww * hh
-    return (nlev, texels)
-
-# The byte whose decoded value in `lut` (256 entries, non-decreasing) is nearest `v`.
-@always_inline
-def _nearest_lut_byte(lut: Pointer[Float32, MutUntrackedOrigin], v: Float32) -> UInt8:
-    var lo = 0; var hi = 255
-    while lo < hi:
-        var mid = (lo + hi) // 2
-        if lut[unsafe_offset=mid] < v:
-            lo = mid + 1
-        else:
-            hi = mid
-    if lo > 0 and v - lut[unsafe_offset=lo - 1] <= lut[unsafe_offset=lo] - v:
-        return UInt8(lo - 1)
-    return UInt8(lo)
-
-comptime _INV_LUT_SIZE: Int = 65536
-
-@always_inline
-def _dist(a: Float32, b: Float32) -> Float32:
-    return a - b if a > b else b - a
-
-# inv[q] = _nearest_lut_byte(lut, q / (_INV_LUT_SIZE - 1)): a candidate byte for
-# each of _INV_LUT_SIZE evenly spaced values in [0, 1].
-def _build_inverse_lut(lut: Pointer[Float32, MutUntrackedOrigin], inv: Pointer[UInt8, MutUntrackedOrigin]):
-    for q in range(_INV_LUT_SIZE):
-        inv[unsafe_offset=q] = _nearest_lut_byte(lut, Float32(q) / Float32(_INV_LUT_SIZE - 1))
-
-# Same byte as _nearest_lut_byte(lut, v), in O(1). The grid is far finer than
-# the LUT spacing, so the candidate is the nearest byte or a neighbour of it;
-# |lut[b] - v| is unimodal in b, so walking up while strictly closer and down
-# while no farther lands on the nearest byte, ties going to the lower one.
-@always_inline
-def _quantize_to_lut_byte(
-    lut: Pointer[Float32, MutUntrackedOrigin], inv: Pointer[UInt8, MutUntrackedOrigin], v: Float32,
-) -> UInt8:
-    var q = Int(v * Float32(_INV_LUT_SIZE - 1) + Float32(0.5))
-    if q < 0: q = 0
-    if q > _INV_LUT_SIZE - 1: q = _INV_LUT_SIZE - 1
-    var b = Int(inv[unsafe_offset=q])
-    while b < 255 and _dist(lut[unsafe_offset=b + 1], v) < _dist(lut[unsafe_offset=b], v):
-        b += 1
-    while b > 0 and _dist(lut[unsafe_offset=b - 1], v) <= _dist(lut[unsafe_offset=b], v):
-        b -= 1
-    return UInt8(b)
-
-# Fill `pyr` with a uint8 mip pyramid of `src` (tw x th, c channels). Each coarser
-# level is the 2x2 box average in LINEAR space (bytes decoded through `lut`) --
-# the same averages the float path computes -- stored as the nearest byte (via
-# `inv`, the matching _build_inverse_lut table). The averages are carried in
-# float between levels so rounding doesn't compound.
-def _fill_u8_mips(
-    pyr: Pointer[UInt8, MutUntrackedOrigin], src: Pointer[UInt8, MutUntrackedOrigin],
-    tw: Int, th: Int, c: Int, lut: Pointer[Float32, MutUntrackedOrigin],
-    inv: Pointer[UInt8, MutUntrackedOrigin],
-):
-    unsafe_memcpy(dest=pyr, src=src, count=tw * th * c)
-    var prev = unsafe_alloc[Float32](tw * th * c)
-    for i in range(tw * th * c):
-        prev[unsafe_offset=i] = lut[unsafe_offset=Int(src[unsafe_offset=i])]
-    var cur = unsafe_alloc[Float32](max(1, tw // 2) * max(1, th // 2) * c)
-    var off_cur = tw * th * c
-    var pw = tw; var ph = th
-    while pw > 1 or ph > 1:
-        var cw = max(1, pw // 2); var ch = max(1, ph // 2)
-        for y in range(ch):
-            for x in range(cw):
-                var x0 = 2 * x; var x1 = min(2 * x + 1, pw - 1)
-                var y0 = 2 * y; var y1 = min(2 * y + 1, ph - 1)
-                for k in range(c):
-                    var avg = (prev[unsafe_offset=(y0 * pw + x0) * c + k] + prev[unsafe_offset=(y0 * pw + x1) * c + k]
-                               + prev[unsafe_offset=(y1 * pw + x0) * c + k] + prev[unsafe_offset=(y1 * pw + x1) * c + k]) * Float32(0.25)
-                    cur[unsafe_offset=(y * cw + x) * c + k] = avg
-                    pyr[unsafe_offset=off_cur + (y * cw + x) * c + k] = _quantize_to_lut_byte(lut, inv, avg)
-        off_cur += cw * ch * c
-        var tmp = prev; prev = cur; cur = tmp
-        pw = cw; ph = ch
-    prev.unsafe_free(); cur.unsafe_free()
-
-# Fill `pyr` with a Float32 RGB mip pyramid of `src` (tw x th, linear RGB): level 0
-# copied, each coarser level the 2x2 box average of the one before -- the float
-# twin of _fill_u8_mips.
-def _fill_f32_mips(
-    pyr: Pointer[Float32, MutUntrackedOrigin], src: Pointer[Float32, MutUntrackedOrigin],
-    tw: Int, th: Int,
-):
-    unsafe_memcpy(dest=pyr, src=src, count=tw * th * 3)
-    var off_prev = 0; var off_cur = tw * th * 3
-    var pw = tw; var ph = th
-    while pw > 1 or ph > 1:
-        var cw = max(1, pw // 2); var ch = max(1, ph // 2)
-        for y in range(ch):
-            for x in range(cw):
-                var x0 = 2 * x; var x1 = min(2 * x + 1, pw - 1)
-                var y0 = 2 * y; var y1 = min(2 * y + 1, ph - 1)
-                for k in range(3):
-                    var a = pyr[unsafe_offset=off_prev + (y0 * pw + x0) * 3 + k]
-                    var b = pyr[unsafe_offset=off_prev + (y0 * pw + x1) * 3 + k]
-                    var cc = pyr[unsafe_offset=off_prev + (y1 * pw + x0) * 3 + k]
-                    var d = pyr[unsafe_offset=off_prev + (y1 * pw + x1) * 3 + k]
-                    pyr[unsafe_offset=off_cur + (y * cw + x) * 3 + k] = (a + b + cc + d) * Float32(0.25)
-        off_prev = off_cur; off_cur += cw * ch * 3
-        pw = cw; ph = ch
-
-@fieldwise_init
-struct _HostTexture(TrivialRegisterPassable):
-    """One texture's mip pyramid, decoded on the host and ready to upload:
-    `n_bytes` bytes at `data` -- UInt8 texels for FORMAT_U8 (decoded through
-    the table at `lut_off`), Float32 linear RGB for FORMAT_F32. n_bytes == 0
-    means the file didn't load."""
-    var data: Pointer[UInt8, MutUntrackedOrigin]
-    var n_bytes: Int
-    var width: Int32
-    var height: Int32
-    var n_levels: Int32
-    var channels: Int32
-    var format: Int32
-    var lut_off: Int32
-
-# Decode `filename` and build its full mip pyramid on the host: 8-bit files stay
-# 8-bit (level 0 through load_texture_u8), everything else becomes Float32 RGB.
-# `lut` holds both 256-entry decode tables (linear at 0, sRGB at 256) and `inv`
-# their _build_inverse_lut tables (at 0 and _INV_LUT_SIZE). Reads the tables and
-# touches only its own allocations, so it is safe to run on worker threads.
-def _load_host_texture(
-    filename: Pointer[UInt8, MutUntrackedOrigin], raw_flag: Int32,
-    lut: Pointer[Float32, MutUntrackedOrigin], inv: Pointer[UInt8, MutUntrackedOrigin],
-) -> _HostTexture:
-    var result = _HostTexture(Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), 0,
-                              Int32(0), Int32(0), Int32(0), Int32(0), Int32(GpuTexture.FORMAT_F32), Int32(0))
-    var w_out = unsafe_alloc[Int32](1); var h_out = unsafe_alloc[Int32](1)
-    var c_out = unsafe_alloc[Int32](1); var srgb_out = unsafe_alloc[Int32](1)
-    w_out[unsafe_offset=0] = Int32(0); h_out[unsafe_offset=0] = Int32(0)
-    var u8_out = unsafe_alloc[Pointer[UInt8, MutUntrackedOrigin]](1)
-    var ok_u8 = external_call["load_texture_u8", Int32,
-        Pointer[UInt8, MutUntrackedOrigin], Int32,
-        Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
-        Pointer[Int32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin],
-        Pointer[Int32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin]](
-        filename, raw_flag, u8_out, w_out, h_out, c_out, srgb_out)
-    if ok_u8 != 0 and Int(w_out[unsafe_offset=0]) > 0:
-        var tw = Int(w_out[unsafe_offset=0]); var th = Int(h_out[unsafe_offset=0]); var c = Int(c_out[unsafe_offset=0])
-        var lut_off = 256 if srgb_out[unsafe_offset=0] != Int32(0) else 0
-        var (nlev, texels) = _mip_texel_count(tw, th)
-        var pyr = unsafe_alloc[UInt8](texels * c)
-        _fill_u8_mips(pyr, u8_out[unsafe_offset=0], tw, th, c, lut.unsafe_offset(lut_off),
-                      inv.unsafe_offset((_INV_LUT_SIZE if lut_off != 0 else 0)))
-        result = _HostTexture(pyr.unsafe_origin_cast[MutUntrackedOrigin](), texels * c, Int32(tw), Int32(th),
-                              Int32(nlev), Int32(c), Int32(GpuTexture.FORMAT_U8), Int32(lut_off))
-        _ = external_call["free_texture_u8", Int32, Pointer[UInt8, MutUntrackedOrigin]](u8_out[unsafe_offset=0])
-    else:
-        if ok_u8 != 0:
-            _ = external_call["free_texture_u8", Int32, Pointer[UInt8, MutUntrackedOrigin]](u8_out[unsafe_offset=0])
-        var data_out = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](1)
-        w_out[unsafe_offset=0] = Int32(0); h_out[unsafe_offset=0] = Int32(0)
-        var ok = external_call["load_texture_rgb", Int32,
-            Pointer[UInt8, MutUntrackedOrigin],
-            Pointer[Pointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin],
-            Pointer[Int32, MutUntrackedOrigin],
-            Pointer[Int32, MutUntrackedOrigin],
-            Int32](filename, data_out, w_out, h_out, raw_flag)
-        if ok != 0 and Int(w_out[unsafe_offset=0]) > 0:
-            var tw = Int(w_out[unsafe_offset=0]); var th = Int(h_out[unsafe_offset=0])
-            var (nlev, texels) = _mip_texel_count(tw, th)
-            var pyr = unsafe_alloc[Float32](texels * 3)
-            _fill_f32_mips(pyr, data_out[unsafe_offset=0], tw, th)
-            result = _HostTexture(pyr.unsafe_bitcast[UInt8]().unsafe_origin_cast[MutUntrackedOrigin](), texels * 3 * 4,
-                                  Int32(tw), Int32(th), Int32(nlev), Int32(3), Int32(GpuTexture.FORMAT_F32), Int32(0))
-            _ = external_call["free_texture_rgb", Int32, Pointer[Float32, MutUntrackedOrigin]](data_out[unsafe_offset=0])
-        data_out.unsafe_free()
-    w_out.unsafe_free(); h_out.unsafe_free(); c_out.unsafe_free(); srgb_out.unsafe_free(); u8_out.unsafe_free()
-    if result.n_bytes == 0:
-        # A missing file is already reported at parse time (parse_types.mojo,
-        # scene_path); this is the one that exists and still will not decode.
-        # It used to be counted in "N unique file(s) loaded" and then render
-        # as the material's or light's flat default without a word.
-        print("Warning: could not decode texture '" + String(unsafe_from_utf8_ptr=filename.as_imm())
-              + "' -- it renders as a flat default instead.")
-    return result
 
 @fieldwise_init
 struct SpectralBuffers(Movable):
@@ -379,6 +179,7 @@ struct MeshBuffers(Movable):
     var uv_bufs: List[DeviceBuffer[DType.uint8]]
     var nrm_bufs: List[DeviceBuffer[DType.uint8]]
     var alpha_bufs: List[DeviceBuffer[DType.uint8]]   # one per distinct alpha mask
+    var has_alpha: Bool   # some mesh is alpha-cut (mask or constant < 1)
 
     @always_inline
     def meshes_ptr(mut self) -> Pointer[TriangleMesh, MutUntrackedOrigin]:
@@ -399,9 +200,12 @@ struct MeshBuffers(Movable):
         var alpha_dev_ptrs = List[Pointer[UInt8, MutUntrackedOrigin]]()
 
         var mesh_structs_host = unsafe_alloc[TriangleMesh](max(Int(s.mesh_count), 1))
+        var has_alpha = False
 
         for i in range(Int(s.mesh_count)):
             var host_mesh = s.meshes[unsafe_offset=i]
+            if host_mesh.alpha_w > Int32(0) or host_mesh.alpha_const < Float32(1.0):
+                has_alpha = True
 
             # Points (Float32), face and vertex indices (Int64), then UVs (2 floats
             # per vertex) and shading normals (3 per vertex), each a zeroed
@@ -447,7 +251,7 @@ struct MeshBuffers(Movable):
         mesh_structs_host.unsafe_free()
         return Self(meshes_buf=meshes_buf^, mesh_count=Int(s.mesh_count), points_bufs=points_bufs^,
                     faceIndices_bufs=face_bufs^, vertexIndices_bufs=vert_bufs^, uv_bufs=uv_bufs^,
-                    nrm_bufs=nrm_bufs^, alpha_bufs=alpha_bufs^)
+                    nrm_bufs=nrm_bufs^, alpha_bufs=alpha_bufs^, has_alpha=has_alpha)
 
 @fieldwise_init
 struct TextureBuffers(Movable):
@@ -462,65 +266,17 @@ struct TextureBuffers(Movable):
 
     @staticmethod
     def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo) raises -> Self:
-        # Load and upload textures
+        # Decode on the host (host_textures.mojo), then upload here in texture
+        # order, so the GPU receives exactly the buffers a serial loop would build.
         var n_textures_int = Int(s.tex_count)
-        # Textures referenced as normal maps hold linear data and must NOT be
-        # sRGB-decoded on load. Mark those indices by scanning the materials.
-        var tex_is_raw = unsafe_alloc[Bool](max(n_textures_int, 1))
-        for ti in range(n_textures_int):
-            tex_is_raw[unsafe_offset=ti] = False
-        for mi in range(Int(s.material_count)):
-            var nidx = Int(s.materials[unsafe_offset=mi].normal_tex_idx)
-            if nidx >= 0 and nidx < n_textures_int:
-                tex_is_raw[unsafe_offset=nidx] = True
-        # Many scenes (e.g. landscape) declare a separate named Texture per
-        # instance even when several instances share the same underlying
-        # image file (batch-exported "-renamed-N" duplicates). Dedup by
-        # (filename, raw-ness) so each unique file is only loaded from disk
-        # and uploaded to the GPU once, instead of once per declaration.
-        var dup_of = unsafe_alloc[Int32](max(n_textures_int, 1))
-        for ti in range(n_textures_int):
-            dup_of[unsafe_offset=ti] = Int32(-1)
-            for tj in range(ti):
-                if dup_of[unsafe_offset=tj] == Int32(-1) and tex_is_raw[unsafe_offset=tj] == tex_is_raw[unsafe_offset=ti] and \
-                   _cstr_eq(s.tex_filenames[unsafe_offset=ti], s.tex_filenames[unsafe_offset=tj]):
-                    dup_of[unsafe_offset=ti] = Int32(tj)
-                    break
+        var decoded = decode_host_textures(s.tex_filenames, n_textures_int, s.materials, Int(s.material_count), s.tex_prefetch)
+        var dup_of = decoded.dup_of
+        var host_tex = decoded.tex
         var tex_data_bufs = List[DeviceBuffer[DType.uint8]]()
         var gpu_textures_host = unsafe_alloc[GpuTexture](max(n_textures_int, 1))
-        # 8-bit textures stay 8-bit on the GPU and decode through one of two
-        # 256-entry tables (linear at 0, sRGB at 256), built by the oiio bridge
-        # exactly as load_texture_rgb decodes, so level 0 matches the float path.
-        var lut_host = unsafe_alloc[Float32](512)
-        _ = external_call["texture_uint8_lut", NoneType, Int32, Pointer[Float32, MutUntrackedOrigin]](Int32(0), lut_host)
-        _ = external_call["texture_uint8_lut", NoneType, Int32, Pointer[Float32, MutUntrackedOrigin]](Int32(1), lut_host.unsafe_offset(256))
         var lut_buf = ctx.enqueue_create_buffer[DType.float32](512)
-        ctx.enqueue_copy(lut_buf, lut_host)
+        ctx.enqueue_copy(lut_buf, decoded.lut)
         var lut_dev = lut_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-        var inv_host = unsafe_alloc[UInt8](2 * _INV_LUT_SIZE)
-        _build_inverse_lut(lut_host, inv_host)
-        _build_inverse_lut(lut_host.unsafe_offset(256), inv_host.unsafe_offset(_INV_LUT_SIZE))
-        # Decoding and mip building are independent per file and dominate
-        # startup on texture-heavy scenes (Bistro), so run them on every core,
-        # workers claiming the next texture from a shared cursor (file sizes
-        # vary a lot). Uploads then happen here, in texture order, so the GPU
-        # receives exactly the buffers a serial loop would build.
-        var host_tex = unsafe_alloc[_HostTexture](max(n_textures_int, 1))
-        var next_tex = unsafe_alloc[Int32](1)
-        next_tex[unsafe_offset=0] = Int32(0)
-
-        def decode_worker(_worker_idx: Int) {imm}:
-            while True:
-                var ti = Int(Atomic.fetch_add(next_tex, Int32(1)))
-                if ti >= n_textures_int:
-                    break
-                if dup_of[unsafe_offset=ti] == Int32(-1):
-                    var raw_flag = Int32(1) if tex_is_raw[unsafe_offset=ti] else Int32(0)
-                    host_tex[unsafe_offset=ti] = _load_host_texture(s.tex_filenames[unsafe_offset=ti], raw_flag, lut_host, inv_host)
-
-        if n_textures_int > 0:
-            parallelize(decode_worker, min(num_performance_cores(), n_textures_int))
-        next_tex.unsafe_free()
 
         var tex_bytes = 0
         for ti in range(n_textures_int):
@@ -542,18 +298,13 @@ struct TextureBuffers(Movable):
         var textures_gpu_buf = _gpu_upload_array[GpuTexture](ctx, gpu_textures_host, n_textures_int)
         # The uploads above are asynchronous; free their host sources once they're done.
         ctx.synchronize()
-        for ti in range(n_textures_int):
-            if dup_of[unsafe_offset=ti] == Int32(-1) and host_tex[unsafe_offset=ti].n_bytes > 0:
-                host_tex[unsafe_offset=ti].data.unsafe_free()
-        host_tex.unsafe_free()
-        lut_host.unsafe_free(); inv_host.unsafe_free()
         var n_unique_tex = 0
         for ti in range(n_textures_int):
             if dup_of[unsafe_offset=ti] == Int32(-1):
                 n_unique_tex += 1
+        decoded.free_pixels()
+        decoded.free_tables()
         gpu_textures_host.unsafe_free()
-        tex_is_raw.unsafe_free()
-        dup_of.unsafe_free()
         print("GPU: " + String(n_textures_int) + " texture(s) uploaded ("
               + String(n_unique_tex) + " unique file(s) loaded, "
               + String(tex_bytes // (1024 * 1024)) + " MB)")
@@ -897,6 +648,11 @@ struct GpuSceneHandle(Movable):
     var materials_buf: DeviceBuffer[DType.uint8]
     var material_count: Int
     var has_glass_material: Bool
+    # MNEE auto-off: [probes, probes that found glass] written by the diffuse kernel; gpu_mnee_adapt reads it after a batch.
+    var mnee_stats_buf: DeviceBuffer[DType.int32]
+    var mnee_adapt_done: Bool
+    # one parked glass-chain emitter hit per path (SuppressTask), resolved by resolve_suppress_gpu; 32 bytes when unused
+    var suppress_buf: DeviceBuffer[DType.uint8]
     # One bit per MatKind present in the scene's material table. The bounce
     # loop launches one kernel per kind; a kind the scene does not contain
     # would still cost a full-grid launch every round.
@@ -963,8 +719,8 @@ struct GpuSceneHandle(Movable):
     var shade_ctx_buf: DeviceBuffer[DType.uint8]    # one ShadeContext shared by all threads of a shade kernel (see gpu_shade.shared_shade_context)
     var shadow_slots: Int                           # ShadowTask slots per path in shadow_buf (SHADOW_SLOTS with --rt-hardware, else 1)
     var shadow_buf: DeviceBuffer[DType.uint8]       # n_pixels × WAVEFRONT_BATCH × sizeof(ShadowTask) = 48 -- must match path_buf/inter_buf sizing (gpu_render_sample only uses the first n_pixels slots; gpu_render_wavefront's _gpu_bounce_kernels call indexes up to n_pixels × WAVEFRONT_BATCH)
-    var active_count_buf: DeviceBuffer[DType.uint8] # 1 × Int32
-    var active_idx_buf: DeviceBuffer[DType.uint8]   # n_pixels × Int32
+    var active_count_buf: DeviceBuffer[DType.uint8] # live count, then one count per MatKind (16 × Int32)
+    var active_idx_buf: DeviceBuffer[DType.uint8]   # 4 lists of n_pixels × WAVEFRONT_BATCH Int32: live (even/odd round), RT shadow rays, paths of one material kind
     var n_pixels: Int
     # Camera and sampling data for GPU-side ray generation
     var sobol_buf: DeviceBuffer[DType.uint8]  # 1024 dims × 52 UInt32 = 212992 bytes
@@ -1019,6 +775,8 @@ struct GpuSceneHandle(Movable):
             vcmLambda=Float32(0),
             vcmBucketCap=Int32(0),
             hasGlass=Int32(1) if self.has_glass_material else Int32(0),
+            mneeStats=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+            bvh4=BVH4.none(),
         )
 
 def gpu_available() -> Bool:
@@ -1110,10 +868,11 @@ def gpu_upload_scene(
     spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    ctx_in: Optional[DeviceContext] = None,   # a context created ahead of the scene parse
 ) -> Pointer[GpuSceneHandle, MutUntrackedOrigin]:
     comptime if has_accelerator():
         try:
-            var ctx = DeviceContext()
+            var ctx = ctx_in.value().copy() if ctx_in else DeviceContext()
             ref s = psc[]
             _report_gpu_memory(ctx, s)
             var bvh = BvhBuffers.upload(ctx, s)
@@ -1143,6 +902,10 @@ def gpu_upload_scene(
 
             # Allocate persistent render buffers (zeroed film)
             var n_pix = max(Int(n_pixels), 1)
+            var r_suppress = ctx.enqueue_create_buffer[DType.uint8](n_pix * 32 * WAVEFRONT_BATCH if has_glass_mat else 32)
+            ctx.enqueue_memset(r_suppress, UInt8(0))
+            var r_mnee_stats = ctx.enqueue_create_buffer[DType.int32](2)
+            ctx.enqueue_memset(r_mnee_stats, Int32(0))
             var r_path_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[PathState]() * WAVEFRONT_BATCH)
             var r_inter_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection]() * WAVEFRONT_BATCH)
             var r_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
@@ -1162,9 +925,13 @@ def gpu_upload_scene(
             var r_restir_vol_b_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[VolReservoir]())
             var r_restir_vol_used_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Int8]())
             # --rt-hardware defers up to SHADOW_SLOTS shadow rays per path; everything else needs one slot per path.
-            var r_shadow_slots = SHADOW_SLOTS if getenv("GONZALES_RTCORE") != "" else 1
+            # The software BVH defers too (gpu.mojo sw_shadow) when every NEE candidate of a bounce has a slot and there is no medium.
+            var nee_candidates = (1 if s.area_light_count > 0 else 0) + Int(s.distant_count) + Int(s.point_count) + Int(s.sphere_count) + Int(s.infinite_count)
+            var sw_defer = Int(s.medium_count) == 0 and nee_candidates <= SHADOW_SLOTS and getenv("GONZALES_NO_SW_SHADOW") == ""
+            var r_shadow_slots = SHADOW_SLOTS if getenv("GONZALES_RTCORE") != "" or sw_defer else 1
             var r_rt_scratch_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 32 * WAVEFRONT_BATCH if getenv("GONZALES_RTCORE") != "" else 32)
             var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[ShadowTask]() * WAVEFRONT_BATCH * r_shadow_slots)
+            ctx.enqueue_memset(r_shadow_buf, UInt8(0))      # every slot free (active == 0)
             var r_shade_ctx_buf = ctx.enqueue_create_buffer[DType.uint8](1024)
             var r_filter_lut_buf = ctx.enqueue_create_buffer[DType.uint8](2 * FILTER_LUT_N * 4)
             if s.filter_type == Int32(0):
@@ -1173,8 +940,8 @@ def gpu_upload_scene(
                 ctx.enqueue_copy(r_filter_lut_buf, lut_host.bitcast[UInt8]())
                 ctx.synchronize()
                 lut_host.unsafe_free()
-            var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](4)
-            var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
+            var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](64)
+            var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4 * WAVEFRONT_BATCH * 4)
             var curves = CurveBuffers.upload(ctx, s, n_pix)
             ctx.enqueue_memset(r_film_buf, UInt8(0))
             ctx.enqueue_memset(r_albedo_film_buf, UInt8(0))
@@ -1207,6 +974,9 @@ def gpu_upload_scene(
                 materials_buf=mat_buf^,
                 material_count=Int(s.material_count),
                 has_glass_material=has_glass_mat,
+                mnee_stats_buf=r_mnee_stats^,
+                mnee_adapt_done=False,
+                suppress_buf=r_suppress^,
                 mat_kind_mask=kind_mask,
                 has_interface_material=has_iface_mat,
                 cam_fp=CameraFootprint.none(),

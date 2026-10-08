@@ -9,7 +9,8 @@ from .bssrdf import (
     dipole_max_radius, dipole_rd, dipole_mis_sigma_tr, dipole_sample_radius, bssrdf_probe_offset,
     bssrdf_exit_pdf_area, bssrdf_exit_ft,
 )
-from .bvh import SceneView, traverse_bvh2_core, test_spheres
+from .bvh import traverse_dispatch
+from .bvh import SceneView, test_spheres
 from .rng import PCG32
 from .sppm import _geom_normal
 
@@ -64,7 +65,7 @@ def _bdpt_sample_bssrdf_exit(
     var probe_scratch = _probe_slot.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
     probe_scratch[unsafe_offset=0].hit = Int8(0)
     var probe_ray = Ray(probe_org, probe_dir)
-    traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe_ray, seg_len, probe_scratch,
+    traverse_dispatch(sd.bvh4, sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, probe_ray, seg_len, probe_scratch,
                        sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
     test_spheres(sd.spheres, Int(sd.sphereCount), probe_ray, probe_scratch)
     if probe_scratch[unsafe_offset=0].hit == Int8(0):
