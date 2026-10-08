@@ -1,0 +1,27 @@
+# Artificial MNEE test: a tiny bright area light above a diffuse floor, with a smooth glass CUBE (triangle mesh) between them.
+# The patch of floor lit THROUGH the cube is reachable by next-event estimation only through the glass (MNEE); a BSDF-sampled
+# ray almost never finds the 0.3 x 0.3 light by chance, so a path tracer without MNEE renders that patch as sparse noise.
+# Reference: pbrt-v4 at high spp (it has no MNEE either; it just waits for the lucky BSDF hits).
+Integrator "path" "integer maxdepth" [ 8 ]
+Sampler "sobol" "integer pixelsamples" [ 64 ]
+PixelFilter "gaussian" "float xradius" [ 2 ] "float yradius" [ 2 ] "float sigma" [ 1 ]
+Film "rgb" "string filename" [ "mnee-glass-cube.exr" ] "integer xresolution" [ 384 ] "integer yresolution" [ 384 ]
+LookAt 3.6 3.0 5.2   0 0.5 0   0 1 0
+Camera "perspective" "float fov" [ 38 ]
+WorldBegin
+
+MakeNamedMaterial "Floor" "string type" [ "diffuse" ] "rgb reflectance" [ 0.7 0.7 0.7 ]
+MakeNamedMaterial "Glass" "string type" [ "dielectric" ] "float eta" [ 1.5 ]
+MakeNamedMaterial "Lamp" "string type" [ "diffuse" ] "rgb reflectance" [ 0 0 0 ]
+
+NamedMaterial "Floor"
+Shape "trianglemesh" "integer indices" [ 0 1 2 0 2 3 ] "point3 P" [ -4 0 -4 -4 0 4 4 0 4 4 0 -4 ] "normal N" [ 0 1 0 0 1 0 0 1 0 0 1 0 ]
+
+AttributeBegin
+  AreaLightSource "diffuse" "rgb L" [ 400 400 400 ]
+  NamedMaterial "Lamp"
+  Shape "trianglemesh" "integer indices" [ 0 1 2 0 2 3 ] "point3 P" [ 0.75 3.2 0.15 1.05 3.2 0.15 1.05 3.2 0.45 0.75 3.2 0.45 ] "normal N" [ 0 -1 0 0 -1 0 0 -1 0 0 -1 0 ]
+AttributeEnd
+
+NamedMaterial "Glass"
+Shape "trianglemesh" "integer indices" [ 0 1 2 0 2 3 4 5 6 4 6 7 8 9 10 8 10 11 12 13 14 12 14 15 16 17 18 16 18 19 20 21 22 20 22 23 ] "point3 P" [ -0.6 1.22 -0.6 -0.6 1.22 0.6 0.6 1.22 0.6 0.6 1.22 -0.6 -0.6 0.02 -0.6 0.6 0.02 -0.6 0.6 0.02 0.6 -0.6 0.02 0.6 0.6 0.02 -0.6 0.6 1.22 -0.6 0.6 1.22 0.6 0.6 0.02 0.6 -0.6 0.02 -0.6 -0.6 0.02 0.6 -0.6 1.22 0.6 -0.6 1.22 -0.6 -0.6 0.02 0.6 0.6 0.02 0.6 0.6 1.22 0.6 -0.6 1.22 0.6 -0.6 0.02 -0.6 -0.6 1.22 -0.6 0.6 1.22 -0.6 0.6 0.02 -0.6 ] "normal N" [ 0 1 0 0 1 0 0 1 0 0 1 0 0 -1 0 0 -1 0 0 -1 0 0 -1 0 1 0 0 1 0 0 1 0 0 1 0 0 -1 0 0 -1 0 0 -1 0 0 -1 0 0 0 0 1 0 0 1 0 0 1 0 0 1 0 0 -1 0 0 -1 0 0 -1 0 0 -1 ]
