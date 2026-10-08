@@ -65,21 +65,21 @@ C FFI — not reimplemented.
 
 ## Performance
 
-Benchmark: [Bitterli bathroom](https://benedikt-bitterli.me/resources/) scene, 1024×1024, 64 spp.
-Hardware: AMD Ryzen 9 7950X (24 cores), NVIDIA RTX 3060 12 GB.
+Benchmark: [Bitterli bathroom](https://benedikt-bitterli.me/resources/) scene, 1024×1024, 64 spp, no denoiser.
+Hardware: AMD Ryzen Threadripper 1920X (12 cores, 24 threads), NVIDIA RTX 3060 12 GB.
 
 | Renderer | Mode | Wall time | Notes |
 |---|---|---|---|
-| **Gonzales** | GPU | **6.9s** | Wavefront path tracing + à-trous denoiser |
-| **pbrt-v4** | GPU (OptiX) | 5.4s | Hardware RT cores |
-| **Embree pathtracer** | CPU | 11.0s | Hardware AVX2 BVH, no textures/materials |
-| **Gonzales** | CPU | 29.9s | Full materials and textures |
-| **pbrt-v4** | CPU | 53.2s | Full materials and textures |
+| **Gonzales** | GPU | **4.5s** | Wavefront path tracing, software BVH traversal |
+| **Gonzales** | GPU (`--rt-hardware`) | 5.3s | RT cores driven from CUDA |
+| **pbrt-v4** | GPU (OptiX) | 4.9s | Hardware RT cores |
+| **Embree pathtracer** | CPU | 10.3s / 15.0s | Bare geometry / approximate materials, no textures |
+| **Gonzales** | CPU | **25.1s** | Full materials and textures |
+| **pbrt-v4** | CPU | 50.1s | Full materials and textures |
 
-Gonzales CPU is **1.8× faster** than pbrt CPU. Gonzales GPU trails pbrt GPU by 1.3× — the
-gap is OptiX RT cores, which are inaccessible outside of OptiX. Embree's CPU number is
-not directly comparable since the benchmark scene contains no texture lookups or material
-evaluation (geometry traversal only).
+Gonzales CPU is **2.0× faster** than pbrt CPU, and Gonzales GPU is on par with pbrt GPU.
+Embree's tutorial path tracer has no textures and only approximate materials, so its
+numbers are not directly comparable.
 
 ### Lines of code
 
