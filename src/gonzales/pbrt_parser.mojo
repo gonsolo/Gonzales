@@ -1609,6 +1609,32 @@ def handle_texture(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         s[unsafe_offset=0].mix_amount_val.append(am_val)
         return
 
+    if _psc_streq(tex_class, "ptex"):
+        tex_type.unsafe_free(); tex_class.unsafe_free()
+        var params = _psc_collect_params(handle)
+        # No per-face lookup yet: the file's mean colour stands in as a constant texture.
+        var pfile = scene_path(s[unsafe_offset=0].scene_dir, params.get_string("filename", ""), "ptex texture")
+        var pscale = params.get_float("scale", Float32(1))
+        var penc = params.get_string("encoding", "gamma 2.2")
+        var pgamma = Float32(1) if penc == "linear" else Float32(2.2)
+        var flen = pfile.byte_length()
+        var fname = unsafe_alloc[UInt8](flen + 1)
+        for ci in range(flen): fname[unsafe_offset=ci] = pfile.unsafe_ptr()[unsafe_offset=ci]
+        fname[unsafe_offset=flen] = UInt8(0)
+        var avg = unsafe_alloc[Float32](3)
+        var pok = external_call["ptex_average_rgb", Int32,
+            Pointer[UInt8, MutUntrackedOrigin], Float32, Pointer[Float32, MutUntrackedOrigin]](fname, pgamma, avg)
+        fname.unsafe_free()
+        if pok != Int32(0):
+            s[unsafe_offset=0].const_tex_names.append(name_str)
+            s[unsafe_offset=0].const_tex_rgb.append(avg[unsafe_offset=0] * pscale)
+            s[unsafe_offset=0].const_tex_rgb.append(avg[unsafe_offset=1] * pscale)
+            s[unsafe_offset=0].const_tex_rgb.append(avg[unsafe_offset=2] * pscale)
+        else:
+            warn_unsupported_in("texture file", pfile, "texture", name_str, "it renders as a flat default", "readable Ptex files")
+        avg.unsafe_free()
+        return
+
     if not _psc_streq(tex_class, "imagemap"):
         # Unsupported texture class. Warn rather than dropping it in silence:
         # a silently-ignored texture renders as a plausible flat surface with

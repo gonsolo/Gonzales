@@ -634,3 +634,38 @@ int write_image_channels(const char *filename, const float *data, int width, int
 #ifdef __cplusplus
 }
 #endif
+
+// Mean colour of a Ptex file: each sampled face's 1x1 reduction, decoded with `gamma`
+// (pbrt's ptex "encoding" default is gamma 2.2) and averaged in linear space.
+#include <Ptexture.h>
+extern "C" int ptex_average_rgb(const char *filename, float gamma, float out[3]) {
+        Ptex::String err;
+        PtexPtr<PtexTexture> tex(PtexTexture::open(filename, err));
+        if (!tex)
+                return 0;
+        int nfaces = tex->numFaces(), nch = tex->numChannels();
+        if (nfaces <= 0 || nch <= 0)
+                return 0;
+        int stride = std::max(1, nfaces / 4096);
+        double sum[3] = {0, 0, 0};
+        int count = 0;
+        for (int f = 0; f < nfaces; f += stride) {
+                PtexPtr<PtexFaceData> fd(tex->getData(f, Ptex::Res(0, 0)));
+                if (!fd)
+                        continue;
+                std::vector<char> raw(Ptex::DataSize(tex->dataType()) * nch);
+                fd->getPixel(0, 0, raw.data());
+                std::vector<float> px(nch);
+                Ptex::ConvertToFloat(px.data(), raw.data(), tex->dataType(), nch);
+                for (int c = 0; c < 3; ++c) {
+                        float v = px[nch >= 3 ? c : 0];
+                        sum[c] += std::pow(std::max(v, 0.0f), gamma);
+                }
+                ++count;
+        }
+        if (count == 0)
+                return 0;
+        for (int c = 0; c < 3; ++c)
+                out[c] = static_cast<float>(sum[c] / count);
+        return 1;
+}
