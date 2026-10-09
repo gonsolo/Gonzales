@@ -6,10 +6,11 @@
 
 # Gonzales — Physically Based Renderer
 
-A production-capable Monte Carlo path tracer written in **Mojo**, designed
+A production-capable spectral Monte Carlo renderer written in **Mojo**, designed
 for high-end light transport simulation. Gonzales renders complex scenes —
-including Disney's Moana Island and all 32 Bitterli benchmark scenes — with
-GPU-accelerated wavefront path tracing and an à-trous wavelet denoiser.
+including Disney's Moana Island, all 32 Bitterli benchmark scenes and a 65-scene
+pbrt/Bitterli corpus — with path tracing, SPPM, BDPT and VCM on the CPU and on
+NVIDIA GPUs, plus an à-trous wavelet denoiser.
 
 📖 Read the [Gonzales Book](https://gonsolo.github.io/gonzales/) for detailed
 documentation with annotated source code.
@@ -18,41 +19,45 @@ documentation with annotated source code.
 
 ## Architecture
 
-The renderer is written entirely in **Mojo** (~10,700 lines) and organized
-into focused modules:
+The renderer is written entirely in **Mojo** (~54,600 lines in `src/gonzales/`, plus
+~12,700 lines of unit tests) and organized into focused groups of modules:
 
-| Module | Lines | Responsibility |
-|--------|------:|---------------|
-| `parsing.mojo` | 3,254 | PBRT-v4 scene parser — geometry, materials, lights, textures |
-| `shading.mojo` | 2,225 | Material shading — diffuse, coated, conductor, dielectric |
-| `gpu.mojo` | 1,553 | GPU kernels: wavefront path tracing, à-trous denoiser, film |
-| `pipeline.mojo` | 697 | Batch and interactive rendering pipelines |
-| `bvh.mojo` | 569 | BVH construction (SAH) and traversal |
-| `geometry.mojo` | 566 | Ray, intersection, path state structs |
-| `rendering.mojo` | 443 | CPU tile renderer, film accumulation, bilateral denoiser |
-| `sampling.mojo` | 362 | Z-Sobol sampler with Owen scrambling |
-| `ply.mojo` | 346 | PLY mesh loader |
-| `scene.mojo` | 177 | Scene helpers |
-| `transform.mojo` | 140 | 4×4 matrix math |
-| `__init__.mojo` | 124 | CLI entry point |
-| `postprocess.mojo` | 114 | Joint bilateral denoiser (CPU) |
-| `viewer.mojo` | 75 | Interactive Vulkan viewer bridge |
-| `rng.mojo` | 22 | PCG32 random number generator |
+| Group | Lines | Responsibility |
+|-------|------:|---------------|
+| Shading and BxDFs | 12,700 | Diffuse, coated (pbrt's LayeredBxDF), conductor, dielectric, hair, measured, BSSRDF; spectral upsampling and sensors |
+| Path tracer | 9,900 | CPU per-tile wavefront and CUDA wavefront kernels, Z-Sobol sampler, film and outputs |
+| Scene parsing | 9,400 | pbrt-v4 and Mitsuba parsers, PLY loader (threaded prefetch), materials, lights |
+| BDPT / VCM | 6,900 | Bidirectional path tracing and vertex connection and merging (CPU and GPU) |
+| Acceleration | 4,600 | SAH BVH2 (GPU) and BVH4 (CPU), instancing, native curve primitives |
+| SPPM | 3,700 | Stochastic progressive photon mapping (CPU and GPU) |
+| ReSTIR and guiding | 1,900 | Reservoir resampling (DI, GI, volumes, SMS) and path guiding |
+| MNEE / SMS | 1,800 | Manifold next-event estimation and specular manifold sampling for glass caustics |
+| Media | 1,800 | Homogeneous, uniform-grid, NanoVDB and cloud media |
+| Denoising | 650 | GPU à-trous and CPU joint bilateral denoisers |
+| Vulkan RT, RT cores, viewer | 460 | Second GPU backend, `--rt-hardware`, interactive viewer |
 
 External C/C++ libraries (OpenImageIO, Ptex, Vulkan) are called via Mojo's
 C FFI — not reimplemented.
 
 ## Key Features
 
-- **Wavefront GPU path tracing** — Batches 8 samples per bounce loop; NVIDIA GPU via Mojo's GPU API
-- **À-trous wavelet denoiser** — Variance-adaptive 5-pass GPU denoiser (Dammertz 2010)
-- **Veach-style MIS** — Power heuristic balancing NEE and BSDF sampling
-- **Pure Mojo BVH** — SAH construction and traversal, no Embree dependency
-- **Z-Sobol sampling** — Low-discrepancy sequences for fast convergence
-- **Russian roulette** — Unbiased path termination for efficiency
-- **PBRT-v4 format** — Full scene file compatibility
-- **Ptex & OpenImageIO** — C FFI interop for professional texture and image handling
-- **Interactive viewer** — GPU-accelerated real-time preview with progressive refinement
+- **Spectral transport** — Four hero wavelengths per path in every integrator, pbrt-style RGB-to-spectrum upsampling and sensor models
+- **Wavefront GPU path tracing** — CUDA kernels in Mojo with live-path compaction, compile-time kernel variants, deferred software shadow rays and an optional RT-core backend (`--rt-hardware`)
+- **Fast CPU renderer** — Per-tile wavefront, 4-wide BVH with triangle records, vectorised shading
+- **Four light-transport algorithms** — Path tracing, SPPM (`--sppm`), BDPT/VCM (`--vcm`) and ReSTIR variants, sharing materials, lights and MIS code
+- **Specular caustics** — MNEE and SMS for glass and mirror caustics, with path-identity MIS so the result matches pbrt on the test cubes
+- **Veach-style MIS** — Power heuristic balancing NEE and BSDF sampling; Russian roulette
+- **Full material set** — Coated diffuse/conductor, rough and smooth dielectrics, hair, subsurface, measured BRDFs, alpha cutouts, bump and normal maps, Ptex
+- **Volumes** — Heterogeneous media, NanoVDB, clouds, chromatic media
+- **Scene formats** — PBRT-v4 (including object instancing and curves) and Mitsuba
+- **Denoising** — Variance-adaptive à-trous GPU denoiser (Dammertz 2010) with albedo and normal guides
+- **Interactive viewer** — Vulkan viewer with progressive refinement
+
+## Testing
+
+`make unittest` runs ~60 unit-test files concurrently; `make smoketest` runs an
+integrator × feature matrix, and `make analytictest` checks renders against closed-form
+furnace and plane solutions.
 
 ## Rendering Moana
 
@@ -85,7 +90,7 @@ numbers are not directly comparable.
 
 | Project | Lines (own code) |
 |---|---|
-| **Gonzales** | **~10,700** |
+| **Gonzales** | **~54,600** |
 | pbrt-v4 | ~84,000 (excluding bundled data tables and third-party libs) |
 | Embree kernel | ~96,000 (BVH/traversal only, no rendering) |
 
