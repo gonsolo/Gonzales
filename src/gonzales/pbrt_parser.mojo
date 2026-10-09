@@ -3,7 +3,7 @@ from std.ffi import external_call
 from std.time import perf_counter_ns
 from std.memory.alloc import unsafe_alloc
 from std.memory import unsafe_memcpy
-from std.math import tan, sqrt, abs
+from std.math import tan, atan, sqrt, abs
 from std.atomic import Atomic
 from std.sys.info import num_performance_cores
 from max.algorithm import parallelize
@@ -386,6 +386,11 @@ def _psc_handle_camera(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
     for i in range(16): s[unsafe_offset=0].cam2w_raw[i] = s[unsafe_offset=0].ctm[i]
     var params = _psc_collect_params(handle)
     s[unsafe_offset=0].camera_fov = params.get_float("fov", s[unsafe_offset=0].camera_fov)
+    # An explicit screenwindow (pbrt: the fov spans [-1,1] of it) is folded into the shorter-axis fov, assuming it matches the film aspect.
+    var sw = params.get_floats("screenwindow")
+    if len(sw) == 4 and sw[1] > sw[0] and sw[3] > sw[2]:
+        var half_min = min(sw[1] - sw[0], sw[3] - sw[2]) * Float32(0.5)
+        s[unsafe_offset=0].camera_fov = Float32(2) * atan(tan(s[unsafe_offset=0].camera_fov * Float32(3.14159265 / 360.0)) * half_min) * Float32(360.0 / 3.14159265 / 2.0)
 
 def _psc_handle_transform(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                          s: Pointer[SceneParseState, MutUntrackedOrigin]):

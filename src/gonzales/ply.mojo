@@ -252,6 +252,7 @@ def load_ply(
 
     var face_count_size = 1   # bytes for face vertex-count field (uchar=1 by default)
     var face_idx_size   = 4   # bytes per face vertex index (int=4 by default)
+    var face_extra      = 0   # bytes of per-face scalar properties following the index list
     var hstate = 0            # 0=other, 1=vertex, 2=face
 
     while pos < file_size:
@@ -302,6 +303,8 @@ def load_ply(
                 # "property list <count_type> <index_type> vertex_indices"
                 face_count_size = _ply_type_size(line_buf, 2)
                 face_idx_size   = _ply_type_size(line_buf, 3)
+            elif hstate == 2 and not _ply_word_eq(line_buf, 1, "list"):
+                face_extra += _ply_type_size(line_buf, 1)   # per-face scalar (e.g. face_indices) after the index list
 
     if n_verts <= 0 or n_faces <= 0:
         if not quiet:
@@ -413,7 +416,7 @@ def load_ply(
             pos += face_count_size
         if cnt < 3 or (not is_ascii and pos + cnt * face_idx_size > file_size):
             if not is_ascii:
-                pos += cnt * face_idx_size
+                pos += cnt * face_idx_size + face_extra
             continue
         if tri_fast and cnt == 3:
             if n_tris * 3 + 2 < max_idx:
@@ -421,7 +424,7 @@ def load_ply(
                 idx_buf[unsafe_offset=n_tris*3+1] = _ply_i32_le(file_buf, pos + 4)
                 idx_buf[unsafe_offset=n_tris*3+2] = _ply_i32_le(file_buf, pos + 8)
                 n_tris += 1
-            pos += 12
+            pos += 12 + face_extra
             continue
         if cnt > face_cap:
             face_idx.unsafe_free()
@@ -444,6 +447,8 @@ def load_ply(
                 idx_buf[unsafe_offset=n_tris*3+1] = face_idx[unsafe_offset=ti + 1]
                 idx_buf[unsafe_offset=n_tris*3+2] = face_idx[unsafe_offset=ti + 2]
                 n_tris += 1
+        if not is_ascii:
+            pos += face_extra
     face_idx.unsafe_free()
 
     line_buf.unsafe_free(); prop_roles.unsafe_free(); prop_sizes.unsafe_free()
