@@ -32,13 +32,13 @@ from .bvh import (
 )
 from .vcm_mis import mis_policy_sole
 from .layered import layered_sample, tr_effectively_smooth
-from .bxdf import dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, LobeCtx, lobe_eval, lobe_sample, lobe_scoped, LobeTables, lobe_kind_of, lobe_param_of, lobe_is_delta_of, lobe_is_available_of, nee_weight_lobe
+from .bxdf import ggx_lambda, dielectric_interface, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, BxDFFlags, CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, GeomContext, BxDFSample, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_is_delta, bxdf_eval_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, LobeCtx, lobe_eval, lobe_sample, lobe_scoped, LobeTables, lobe_kind_of, lobe_param_of, lobe_is_delta_of, lobe_is_available_of, nee_weight_lobe
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, _nee_weight_measured
 from .shading import _tex_lookup, _get_tri_verts, _apply_surface_maps, \
     apply_surface_maps_at_hit, uv_footprint_at_hit, area_light_hit_cos
 from .geom_normal import _geom_normal
 from .shadow_media import shadow_transmittance
-from .sampling import power_heuristic, camera_ray_from_film_xy, FilmFilter, film_filter_of, film_filter_offset
+from .sampling import sample_ggx_vndf, power_heuristic, camera_ray_from_film_xy, FilmFilter, film_filter_of, film_filter_offset
 from .transform import transform_normal, Mat4
 from .rng import PCG32
 from .pbrt_parser import ParsedScene_Mojo
@@ -169,6 +169,9 @@ struct SPPMPixel(TrivialRegisterPassable):
     # Sum over passes of the direct-light and escape terms, already beta-weighted RGB (see
     # _sppm_flush_one); divided by n_passes at finalize. tau has beta folded in too.
     var gsum: RGB
+    # 1 - F of the coat microfacet a split-coat VP sampled (alpha < 0 marks one); undoes the
+    # 1/(1-F) in beta for the delta-light highlight, which NEE estimates whole.
+    var coat_keep: Float32
     # Material dispatch for gather/NEE BRDF evaluation: 0 = Lambertian
     # (diffuse/coated_diffuse/diffuse_transmit — f_r = alb/π, angle-
     # independent), 1 = rough conductor/coated_conductor (GGX — f_r depends
@@ -759,6 +762,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
         ld=SpectralSample(Float32(0)),
         env=RGB(Float32(0)),
         gsum=RGB(Float32(0)),
+        coat_keep=Float32(1),
         mat_kind=LobeKind.lambertian,
         wo=Vec3f(Float32(0)),
         alpha=Float32(0),
@@ -985,16 +989,36 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             var near_mirror = mat.type == MatKind.conductor and max(mat.roughU, mat.roughV) <= Float32(0.02)
             var coat_as_mirror = False
             if not lobe_is_delta_of(mat) and not near_mirror:   # near-mirror chrome: the photon map can't resolve its lobe
-                if mat.type == MatKind.coated_diffuse and max(mat.roughU, mat.roughV) <= Float32(0.05):
-                    # The smooth coat's mirror lobe is a delta the gather cannot see: take it with
-                    # probability F and keep tracing, else the VP carries 1/(1-F).
+                var coat_alpha = max(mat.roughU, mat.roughV)
+                if mat.type == MatKind.coated_diffuse and coat_alpha <= Float32(0.3):
+                    # The coat's glossy lobe is too narrow for the gather: sample a microfacet,
+                    # reflect off it with probability F and keep tracing, else the VP carries 1/(1-F).
                     var wo_s = (-rd).to_simd()
-                    var f_coat = fr_dielectric(dot(gn, wo_s), mat.emission.r)
+                    var m_s = gn
+                    var g_refl = Float32(1)
+                    if coat_alpha > Float32(0.05):
+                        var frm_s = Frame.from_z(Vec3f(gn[0], gn[1], gn[2]))
+                        var tg_s = Vec3f(frm_s.x.x, frm_s.x.y, frm_s.x.z)
+                        var bt_s = Vec3f(frm_s.y.x, frm_s.y.y, frm_s.y.z)
+                        var wo_l = Vec3f(dot(wo_s, tg_s), dot(wo_s, bt_s), dot(wo_s, gn))
+                        var u_m = pcg.next_float()
+                        var wh_l = sample_ggx_vndf(wo_l, coat_alpha, coat_alpha, min(u_m, Float32(0.9999)), pcg.next_float())
+                        m_s = tg_s * wh_l.x + bt_s * wh_l.y + gn * wh_l.z
+                        var wi_s = m_s * (Float32(2.0) * dot(m_s, wo_s)) - wo_s
+                        var cos_i = dot(wi_s, gn)
+                        if cos_i <= Float32(0) or dot(wi_s, gn_geo) <= Float32(0):
+                            m_s = gn   # sampled reflection dips below the surface: mirror instead
+                        else:
+                            var lam_o = ggx_lambda(wo_l.z, coat_alpha)
+                            g_refl = (Float32(1) + lam_o) / (Float32(1) + lam_o + ggx_lambda(cos_i, coat_alpha))
+                    var f_coat = fr_dielectric(dot(m_s, wo_s), mat.emission.r)
                     if pcg.next_float() < f_coat:
-                        rd = vec3f(gn * (Float32(2.0) * dot(gn, wo_s)) - wo_s)
+                        rd = vec3f(m_s * (Float32(2.0) * dot(m_s, wo_s)) - wo_s)
                         ro = hit + rd * Float32(0.0002)
+                        vp.beta *= g_refl
                         continue
                     vp.beta *= Float32(1.0) / (Float32(1.0) - f_coat)
+                    vp.coat_keep = Float32(1.0) - f_coat
                     coat_as_mirror = True
                 vp.pos = hit
                 vp.normal = vec3f(gn)
@@ -1006,7 +1030,8 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 vp.mat_kind = lobe_kind_of(mat.type)
                 vp.mat_idx = Int32(mat_idx)
                 vp.wo = vec3f((-rd).to_simd())
-                vp.alpha = Float32(1e-4) if coat_as_mirror else lobe_param_of(mat)   # smooth top: the gather skips the glossy coat lobe
+                # smooth top: the gather skips the glossy coat lobe; a negative alpha keeps the real one for delta lights
+                vp.alpha = (Float32(1e-4) if coat_alpha <= Float32(0.05) else -coat_alpha) if coat_as_mirror else lobe_param_of(mat)
                 if on_curve:
                     vp.hair_curve_idx = Int32(inter.primId.id1)
                     vp.hair_h = inter.u
@@ -2388,7 +2413,7 @@ def _sppm_gather_one(
                             # decides sidedness itself.
                             var le = lobe_eval[want_pdfs=False](
                                 LobeCtx(vp.mat_kind, True, False, vp.normal.to_simd(), vp.wo.to_simd(), vp.alb,
-                                        vp.mat_idx, vp.alpha, Float32(0), vp.hair_curve_idx,
+                                        vp.mat_idx, _vp_base_alpha(vp.alpha), Float32(0), vp.hair_curve_idx,
                                         vp.hair_h, vp.hair_v, True, False),
                                 (-ph.dir_in).to_simd(), LobeTables(sd.materials, sd.curves, sd.measuredBrdfs),
                                 spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
@@ -2514,12 +2539,20 @@ def _sppm_vp_brdf(
     return vp.alb / PI
 
 @always_inline
+def _vp_base_alpha(alpha: Float32) -> Float32:
+    """The lobe parameter for the gather and area/infinite NEE: a split-coat VP (alpha < 0, see
+    _sppm_trace_visible_point) leaves the coat's glossy lobe to the continued camera path."""
+    return Float32(1e-4) if alpha < Float32(0) else alpha
+
+
+@always_inline
 def _sppm_nee_weight(
     vp: SPPMPixel,
     ref sd: SceneView,
     vn: Vec3f,
     wo: Vec3f,
     ls: LightSample,
+    alpha: Float32,
 ) -> SpectralSample:
     """Dispatches one LightSample (bvh.mojo's shared distant/point/sphere/
     infinite sampler output — see that struct's docstring) to the right
@@ -2562,7 +2595,7 @@ def _sppm_nee_weight(
     # deficit), and this is the same fix applied uniformly rather than at
     # one material's call site.
     return nee_weight_lobe(ls,
-        LobeCtx(vp.mat_kind, True, False, vn, wo, vp.alb, vp.mat_idx, vp.alpha,
+        LobeCtx(vp.mat_kind, True, False, vn, wo, vp.alb, vp.mat_idx, alpha,
                 Float32(0), vp.hair_curve_idx, vp.hair_h, vp.hair_v, True, False),
         LobeTables(sd.materials, sd.curves, sd.measuredBrdfs),
         sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65,
@@ -2767,7 +2800,7 @@ def _sppm_nee_one(
                         # applied.
                         var le_vp = lobe_eval[want_pdfs=False](
                             LobeCtx(vp.mat_kind, True, False, vn, wo, vp.alb,
-                                    vp.mat_idx, vp.alpha, Float32(0), vp.hair_curve_idx,
+                                    vp.mat_idx, _vp_base_alpha(vp.alpha), Float32(0), vp.hair_curve_idx,
                                     vp.hair_h, vp.hair_v, True, False),
                             wi, LobeTables(sd.materials, sd.curves, sd.measuredBrdfs),
                             sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x,
@@ -2789,11 +2822,15 @@ def _sppm_nee_one(
     # analytic spheres (the sampler itself skips non-emissive ones), since
     # sd.spheres/sphereCount is the raw geometric array, not a pre-filtered
     # lights-only one like every other light type.
+    var n_delta = Int(sd.distantLightCount) + Int(sd.pointLightCount)
     for li in range(_sppm_simple_light_count(sd)):
         var res = _sppm_sample_simple_light(sd, li, spos, pcg)
         var ls = res[0].copy()
         var tmax = res[1]
-        var w = _sppm_nee_weight(vp, sd, vn, wo, ls)
+        var w = _sppm_nee_weight(vp, sd, vn, wo, ls, _vp_base_alpha(vp.alpha))
+        if vp.alpha < Float32(0) and li < n_delta:
+            # split coat: the camera path cannot hit a delta light, so NEE takes its glossy highlight
+            w = w + (_sppm_nee_weight(vp, sd, vn, wo, ls, -vp.alpha) - w) * vp.coat_keep
         if not w.is_black():
             var s_org = shadow_org_back if (two_sided_vp and dot(vp.geo_normal.to_simd(), ls.wi) < Float32(0)) else shadow_org
             var tr_s = _sppm_shadow(vp, sd, s_org, ls.wi, tmax, pcg)
@@ -2802,7 +2839,7 @@ def _sppm_nee_one(
 
     for inf_i in range(Int(sd.infiniteLightCount)):
         var ls_e = _sample_infinite_light_nee(sd.infiniteLights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-        var w_e = _sppm_nee_weight(vp, sd, vn, wo, ls_e)
+        var w_e = _sppm_nee_weight(vp, sd, vn, wo, ls_e, _vp_base_alpha(vp.alpha))
         if not w_e.is_black():
             var s_org_e = shadow_org_back if (two_sided_vp and dot(vp.geo_normal.to_simd(), ls_e.wi) < Float32(0)) else shadow_org
             var tr_e = _sppm_shadow(vp, sd, s_org_e, ls_e.wi, ls_e.dist, pcg)
