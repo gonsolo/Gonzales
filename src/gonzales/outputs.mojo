@@ -139,6 +139,46 @@ def write_render_outputs[Ob: Origin[mut=True], On: Origin[mut=True], Oa: Origin[
     return ret
 
 
+def chroma_smooth(
+    src: Pointer[Float32, MutUntrackedOrigin], dst: Pointer[Float32, MutUntrackedOrigin],
+    albedo: Pointer[Float32, MutUntrackedOrigin], normals: Pointer[Float32, MutUntrackedOrigin],
+    depth: Pointer[Float32, MutUntrackedOrigin], fw: Int, fh: Int,
+):
+    """dst = src with its colour (not its brightness) averaged over a 7x7 window that stops at
+    normal, depth and albedo edges. The mean is energy-weighted, so a bright caustic keeps its hue
+    while the chroma noise of sparse photon density on dark surfaces is smoothed."""
+    def row(y: Int) {imm}:
+        for x in range(fw):
+            var i = y * fw + x
+            var yi = Float32(0.2126) * src[unsafe_offset=i*3] + Float32(0.7152) * src[unsafe_offset=i*3+1] + Float32(0.0722) * src[unsafe_offset=i*3+2]
+            var sr = Float32(0); var sg = Float32(0); var sb = Float32(0)
+            for dy in range(-3, 4):
+                var yy = y + dy
+                if yy < 0 or yy >= fh:
+                    continue
+                for dx in range(-3, 4):
+                    var xx = x + dx
+                    if xx < 0 or xx >= fw:
+                        continue
+                    var j = yy * fw + xx
+                    var nd = normals[unsafe_offset=i*3] * normals[unsafe_offset=j*3] + normals[unsafe_offset=i*3+1] * normals[unsafe_offset=j*3+1] + normals[unsafe_offset=i*3+2] * normals[unsafe_offset=j*3+2]
+                    if nd < Float32(0.9):
+                        continue
+                    if abs(depth[unsafe_offset=i] - depth[unsafe_offset=j]) > Float32(0.03) * depth[unsafe_offset=i]:
+                        continue
+                    if abs(albedo[unsafe_offset=i*3] - albedo[unsafe_offset=j*3]) + abs(albedo[unsafe_offset=i*3+1] - albedo[unsafe_offset=j*3+1]) + abs(albedo[unsafe_offset=i*3+2] - albedo[unsafe_offset=j*3+2]) > Float32(0.3):
+                        continue
+                    var w = Float32(1.0) / (Float32(1.0) + Float32(dx * dx + dy * dy))
+                    sr += w * src[unsafe_offset=j*3]; sg += w * src[unsafe_offset=j*3+1]; sb += w * src[unsafe_offset=j*3+2]
+            var ys = Float32(0.2126) * sr + Float32(0.7152) * sg + Float32(0.0722) * sb
+            if ys > Float32(1e-12) and yi > Float32(0):
+                var k = yi / ys
+                dst[unsafe_offset=i*3] = sr * k; dst[unsafe_offset=i*3+1] = sg * k; dst[unsafe_offset=i*3+2] = sb * k
+            else:
+                dst[unsafe_offset=i*3] = src[unsafe_offset=i*3]; dst[unsafe_offset=i*3+1] = src[unsafe_offset=i*3+1]; dst[unsafe_offset=i*3+2] = src[unsafe_offset=i*3+2]
+    parallelize(row, fh)
+
+
 def finish_render[Op: Origin[mut=True], Oa: Origin[mut=True]](
     psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
     ref sd: SceneView,
@@ -184,20 +224,27 @@ def finish_render[Op: Origin[mut=True], Oa: Origin[mut=True]](
         denoise(pixels, albedo, normals, depth, fw, fh, out,
                 Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
     var has_extra = _is_real_ptr(add_after_denoise)
+    var extra_ptr = add_after_denoise
+    var extra_owned = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
+    if has_extra and not no_denoise:
+        extra_owned = unsafe_alloc[Float32](n_pix * 3)
+        chroma_smooth(add_after_denoise.unsafe_origin_cast[MutUntrackedOrigin](), extra_owned,
+                      albedo.unsafe_origin_cast[MutUntrackedOrigin](), normals, depth, Int(fw), Int(fh))
+        extra_ptr = extra_owned
     var noisy_ref = pixels.unsafe_origin_cast[MutUntrackedOrigin]()
     var noisy_owned = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
     if has_extra:
         var max_comp = psc[unsafe_offset=0].film_max_comp
         noisy_owned = unsafe_alloc[Float32](n_pix * 3)
         for i in range(n_pix):
-            var og = RGB(out[unsafe_offset=i*3+0] + add_after_denoise[unsafe_offset=i*3+0],
-                          out[unsafe_offset=i*3+1] + add_after_denoise[unsafe_offset=i*3+1],
-                          out[unsafe_offset=i*3+2] + add_after_denoise[unsafe_offset=i*3+2])
+            var og = RGB(out[unsafe_offset=i*3+0] + extra_ptr[unsafe_offset=i*3+0],
+                          out[unsafe_offset=i*3+1] + extra_ptr[unsafe_offset=i*3+1],
+                          out[unsafe_offset=i*3+2] + extra_ptr[unsafe_offset=i*3+2])
             og = og.sensor_clamped(max_comp)
             out[unsafe_offset=i*3+0] = og.r; out[unsafe_offset=i*3+1] = og.g; out[unsafe_offset=i*3+2] = og.b
-            var ng = RGB(pixels[unsafe_offset=i*3+0] + add_after_denoise[unsafe_offset=i*3+0],
-                         pixels[unsafe_offset=i*3+1] + add_after_denoise[unsafe_offset=i*3+1],
-                         pixels[unsafe_offset=i*3+2] + add_after_denoise[unsafe_offset=i*3+2])
+            var ng = RGB(pixels[unsafe_offset=i*3+0] + extra_ptr[unsafe_offset=i*3+0],
+                         pixels[unsafe_offset=i*3+1] + extra_ptr[unsafe_offset=i*3+1],
+                         pixels[unsafe_offset=i*3+2] + extra_ptr[unsafe_offset=i*3+2])
             ng = ng.sensor_clamped(max_comp)
             noisy_owned[unsafe_offset=i*3+0] = ng.r; noisy_owned[unsafe_offset=i*3+1] = ng.g; noisy_owned[unsafe_offset=i*3+2] = ng.b
         noisy_ref = noisy_owned
@@ -211,5 +258,7 @@ def finish_render[Op: Origin[mut=True], Oa: Origin[mut=True]](
     apply_film_sensor(noisy_owned, n_pix, psc[unsafe_offset=0].film_exposuretime, psc[unsafe_offset=0].film_wb)
     var ret = write_render_outputs(psc, out, noisy_ref, not no_denoise, albedo, normals, depth)
     noisy_owned.unsafe_free()
+    if has_extra and not no_denoise:
+        extra_owned.unsafe_free()
     normals.unsafe_free(); depth.unsafe_free(); out.unsafe_free()
     return ret
