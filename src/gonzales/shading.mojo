@@ -4,7 +4,7 @@ from std.collections import Array
 from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
-from .geometry import RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, safe_sqrt, reflect, refract, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
+from .geometry import RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, fast_sincos, safe_sqrt, reflect, refract, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from .render_state import PDF_DROP_DIRECT
 from .materials import Material, MatKind, LobeKind, MeasuredBRDF, schlick_fresnel, fr_dielectric, dielectric_is_rough, is_specular_glass
 from .render_state import PathState, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SuppressTask, SHADOW_SLOTS
@@ -620,8 +620,9 @@ def shade_core(
 
         var r = sqrt(u1)
         var theta = 2.0 * PI * u2
-        var x = r * cos(theta)
-        var y = r * sin(theta)
+        var (stheta, ctheta) = fast_sincos(theta)
+        var x = r * ctheta
+        var y = r * stheta
         var z2 = 1.0 - u1
         var z = sqrt(z2 if z2 > 0.0 else Float32(0.0))
 
@@ -2955,7 +2956,8 @@ def _sample_light_point_and_normal(
         var u_perp = _curve_perp_axis(axis_dir)
         var v_perp = cross(axis_dir, u_perp)
         var theta = u2 * TWO_PI
-        var radial = u_perp * cos(theta) + v_perp * sin(theta)
+        var (stheta, ctheta) = fast_sincos(theta)
+        var radial = u_perp * ctheta + v_perp * stheta
         var point = q0 + axis_dir * (axis_len * u1) + radial * r
         var zero3 = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
         return (point, radial, zero3, zero3)
@@ -5298,6 +5300,65 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
 
 
 @always_inline
+def cpu_shade_context(
+    bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    primIds: Pointer[PrimId, MutUntrackedOrigin],
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
+    materials: Pointer[Material, MutUntrackedOrigin],
+    areaLights: Pointer[AreaLight, MutUntrackedOrigin],
+    areaLightCount: Int,
+    tex_filenames: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
+    distantLights: Pointer[DistantLight, MutUntrackedOrigin],
+    distantLightCount: Int,
+    pointLights: Pointer[PointLight, MutUntrackedOrigin],
+    pointLightCount: Int,
+    infiniteLights: Pointer[InfiniteLight, MutUntrackedOrigin],
+    infiniteLightCount: Int,
+    spheres: Pointer[Sphere, MutUntrackedOrigin],
+    sphereCount: Int,
+    light_sampler: LightSampler,
+    sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
+    guide: GuideGrid,
+    blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    blasPrimIdsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+    guide_write: GuideGrid = null_guide(),
+    spectral: SpectralHandle = null_spectral_handle(),
+    measured_brdfs: Pointer[MeasuredBRDF, MutUntrackedOrigin] = Pointer[MeasuredBRDF, MutUntrackedOrigin].unsafe_dangling(),
+    use_restir: Bool = False,
+    gi_pending: Pointer[GIPendingX1, MutUntrackedOrigin] = Pointer[GIPendingX1, MutUntrackedOrigin].unsafe_dangling(),
+    gi_io: GIReservoirIO = gi_reservoir_io_null(),
+    nmaps: Pointer[NormalSlopeMap, MutUntrackedOrigin] = Pointer[NormalSlopeMap, MutUntrackedOrigin].unsafe_dangling(),
+    textures: Pointer[GpuTexture, MutUntrackedOrigin] = Pointer[GpuTexture, MutUntrackedOrigin].unsafe_dangling(),
+    n_textures: Int = 0,
+    has_glass: Bool = True,
+    mnee_stats: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+    bvh4: BVH4 = BVH4.none(),
+) -> ShadeContext:
+    """The per-render-invariant ShadeContext of the CPU wavefront; build once, set path_idx per path."""
+    return ShadeContext(
+        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=has_glass, mnee_stats=mnee_stats, bvh4=bvh4, suppress_tasks=Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
+        n_mediums=0, mediums=Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), medium_ifaces=Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
+        grids=Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), nvdb_grids=Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
+                path_idx=0, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
+        tex_filenames=tex_filenames,
+        textures=textures, n_textures=n_textures,
+        nmaps=nmaps,
+        shadow_tasks=Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
+        cam_fp=CameraFootprint.none(), sobol_matrices=sobol_matrices, guide=guide, guide_write=guide_write, use_restir=use_restir,
+        blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
+        spectral=spectral, measured_brdfs=measured_brdfs,
+        gi_pending=gi_pending, gi_io=gi_io,
+        lights=LightContext(
+            area_lights=areaLights, area_light_count=areaLightCount,
+            distant_lights=distantLights, distant_count=distantLightCount,
+            point_lights=pointLights, point_count=pointLightCount,
+            infinite_lights=infiniteLights, infinite_count=infiniteLightCount,
+            spheres=spheres, sphere_count=sphereCount, light_sampler=light_sampler))
+
+
+@always_inline
 def shade_core_cpu_nee(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
@@ -5344,23 +5405,25 @@ def shade_core_cpu_nee(
     if path_ptr[].active == 0:
         return
     var inter = intersections[unsafe_offset=tid]
-    var ctx = ShadeContext(
-        paths_base=Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(), has_glass=has_glass, mnee_stats=mnee_stats, bvh4=bvh4, suppress_tasks=Pointer[SuppressTask, MutUntrackedOrigin].unsafe_dangling(),
-        n_mediums=0, mediums=Pointer[Medium, MutUntrackedOrigin].unsafe_dangling(), medium_ifaces=Pointer[MediumInterface, MutUntrackedOrigin].unsafe_dangling(),
-        grids=Pointer[Grid, MutUntrackedOrigin].unsafe_dangling(), nvdb_grids=Pointer[NvdbGrid, MutUntrackedOrigin].unsafe_dangling(),
-                path_idx=tid, bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials,
-        tex_filenames=tex_filenames,
-        textures=textures, n_textures=n_textures,
-        nmaps=nmaps,
-        shadow_tasks=Pointer[ShadowTask, MutUntrackedOrigin].unsafe_dangling(),
-        cam_fp=CameraFootprint.none(), sobol_matrices=sobol_matrices, guide=guide, guide_write=guide_write, use_restir=use_restir,
-        blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances,
-        spectral=spectral, measured_brdfs=measured_brdfs,
-        gi_pending=gi_pending, gi_io=gi_io,
-        lights=LightContext(
-            area_lights=areaLights, area_light_count=areaLightCount,
-            distant_lights=distantLights, distant_count=distantLightCount,
-            point_lights=pointLights, point_count=pointLightCount,
-            infinite_lights=infiniteLights, infinite_count=infiniteLightCount,
-            spheres=spheres, sphere_count=sphereCount, light_sampler=light_sampler))
+    var ctx = cpu_shade_context(bvh2Nodes=bvh2Nodes, primIds=primIds, meshes=meshes, curves=curves, materials=materials, areaLights=areaLights, areaLightCount=areaLightCount, tex_filenames=tex_filenames, distantLights=distantLights, distantLightCount=distantLightCount, pointLights=pointLights, pointLightCount=pointLightCount, infiniteLights=infiniteLights, infiniteLightCount=infiniteLightCount, spheres=spheres, sphereCount=sphereCount, light_sampler=light_sampler, sobol_matrices=sobol_matrices, guide=guide, blasNodesArr=blasNodesArr, blasPrimIdsArr=blasPrimIdsArr, instances=instances, guide_write=guide_write, spectral=spectral, measured_brdfs=measured_brdfs, use_restir=use_restir, gi_pending=gi_pending, gi_io=gi_io, nmaps=nmaps, textures=textures, n_textures=n_textures, has_glass=has_glass, mnee_stats=mnee_stats, bvh4=bvh4)
+    ctx.path_idx = tid
     shade_nee_core[False, False](path_ptr, inter, ctx, guide_write, restir_io, pixel_idx, sms_io)
+
+
+@always_inline
+def shade_core_cpu_nee_ctx(
+    paths: Pointer[PathState, MutUntrackedOrigin],
+    intersections: Pointer[Intersection, MutUntrackedOrigin],
+    tid: Int,
+    mut ctx: ShadeContext,
+    guide_write: GuideGrid,
+    restir_io: ReservoirIO,
+    pixel_idx: Int,
+    sms_io: SMSReservoirIO,
+):
+    """shade_core_cpu_nee with the ShadeContext built once by the caller (cpu_shade_context)."""
+    var path_ptr = paths.unsafe_offset(tid)
+    if path_ptr[].active == 0:
+        return
+    ctx.path_idx = tid
+    shade_nee_core[False, False](path_ptr, intersections[unsafe_offset=tid], ctx, guide_write, restir_io, pixel_idx, sms_io)

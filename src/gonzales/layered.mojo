@@ -24,7 +24,8 @@ PDF(wi, -w). With pbrt's weight f integrates to 0.698 where its own
 Sample_f gives 0.646 (white base, rough coat); corrected, 0.6453. See
 docs/05_reflection_models.md.
 """
-from std.math import sqrt, cos, sin, exp, abs, min, max
+from std.sys import is_nvidia_gpu
+from std.math import sqrt, cos, sin, exp, abs, min, max, floor
 from std.memory import bitcast
 from .geometry import Vec3f, dot, cross, safe_sqrt, fast_div, fast_recip, PI, INV_PI
 from .materials import fr_dielectric, ALPHA_EFFECTIVELY_SMOOTH
@@ -34,6 +35,24 @@ from .rng import PCG32
 comptime LAYERED_THICKNESS = Float32(0.01)   # pbrt coateddiffuse default
 comptime LAYERED_MAX_DEPTH = 10              # pbrt coateddiffuse default
 comptime _ONE_MINUS_EPS = Float32(0.99999994)
+
+
+@always_inline
+def sincos_2pi(u: Float32) -> Tuple[Float32, Float32]:
+    """(sin(2 pi u), cos(2 pi u)) for u in [0, 1]; ~1e-7 abs error, no libm call."""
+    comptime if is_nvidia_gpu():
+        return (sin(Float32(2) * PI * u), cos(Float32(2) * PI * u))
+    var q = floor(u * Float32(4) + Float32(0.5))
+    var r = (u - q * Float32(0.25)) * Float32(2) * PI    # [-pi/4, pi/4]
+    var r2 = r * r
+    var s = r * (Float32(1) + r2 * (Float32(-1.0 / 6.0) + r2 * (Float32(1.0 / 120.0) + r2 * (Float32(-1.0 / 5040.0) + r2 * Float32(1.0 / 362880.0)))))
+    var c = Float32(1) + r2 * (Float32(-0.5) + r2 * (Float32(1.0 / 24.0) + r2 * (Float32(-1.0 / 720.0) + r2 * Float32(1.0 / 40320.0))))
+    var k = Int(q)
+    var sw = Float32(k & 1)                                   # odd quadrant: sin <-> cos
+    var sn = s + sw * (c - s)
+    var cs = c + sw * (s - c)
+    return (sn * (Float32(1) - Float32(2) * Float32((k >> 1) & 1)),
+            cs * (Float32(1) - Float32(2) * Float32(((k + 1) >> 1) & 1)))
 
 
 # ── Trowbridge-Reitz (isotropic) ─────────────────────────────────────────────
@@ -88,9 +107,9 @@ def tr_sample_wm(w: Vec3f, u0: Float32, u1: Float32, alpha: Float32) -> Vec3f:
         t1 = cross(Vec3f(Float32(0), Float32(0), Float32(1)), wh).normalize()
     var t2 = cross(wh, t1)
     var r = sqrt(u0)
-    var th = Float32(2) * PI * u1
-    var px = r * cos(th)
-    var py = r * sin(th)
+    var (sn, cs) = sincos_2pi(u1)
+    var px = r * cs
+    var py = r * sn
     var h = sqrt(max(Float32(0), Float32(1) - px * px))
     var s = (Float32(1) + wh.z) * Float32(0.5)
     py = h + s * (py - h)      # Lerp(s, h, py)
@@ -254,9 +273,9 @@ def diel_pdf(wo: Vec3f, wi: Vec3f, eta: Float32, alpha: Float32, allow_r: Bool, 
 def diffuse_sample(wo: Vec3f, u0: Float32, u1: Float32, R: SpectralSample) -> ISample:
     """DiffuseBxDF::Sample_f (reflection only)."""
     var r = sqrt(u0)
-    var th = Float32(2) * PI * u1
+    var (sn, cs) = sincos_2pi(u1)
     var z = sqrt(max(Float32(0), Float32(1) - u0))
-    var wi = Vec3f(r * cos(th), r * sin(th), z)
+    var wi = Vec3f(r * cs, r * sn, z)
     if wo.z < Float32(0):
         wi.z = -wi.z
     return ISample(True, R * INV_PI, wi, abs(wi.z) * INV_PI, False, True)

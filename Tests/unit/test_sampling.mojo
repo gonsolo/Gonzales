@@ -1,9 +1,11 @@
-from std.math import abs, sqrt
+from std.math import abs, sqrt, sin, cos
 from std.testing import assert_true, assert_false, TestSuite
 from gonzales.sampling import (
     power_heuristic, sample_cosine_hemisphere,
     reverse_bits32, mix_bits_u64, encode_morton2, fast_owen_scramble,
+    sobol_get_sample_index, sobol_index_pixel_part, sobol_index_sample_part, sobol_perm_lookup,
 )
+from gonzales.geometry import fast_sincos
 
 comptime EPS: Float32 = 1e-5
 
@@ -110,6 +112,52 @@ def test_fast_owen_scramble_seed_changes_output() raises:
     var out_a = fast_owen_scramble(v, UInt32(1))
     var out_b = fast_owen_scramble(v, UInt32(2))
     assert_true(out_a != out_b)
+
+# ── Sobol index split ────────────────────────────────────────────────────────
+# The pixel part (hoisted out of the per-sample loop) OR the sample part must equal the one-piece index.
+
+def _sobol_index_reference(morton_idx: UInt64, dim: Int, log2spp: Int, n_base4: Int) -> UInt64:
+    var sample_index: UInt64 = 0
+    var pow2_samples = (log2spp & 1) == 1
+    var last_digit = 1 if pow2_samples else 0
+    var digit_index = n_base4 - 1
+    while digit_index >= last_digit:
+        var digit_shift = 2 * digit_index - (1 if pow2_samples else 0)
+        var digit = Int((morton_idx >> UInt64(digit_shift)) & UInt64(3))
+        var higher_digits = morton_idx >> UInt64(digit_shift + 2)
+        var hash_val = mix_bits_u64(higher_digits ^ (UInt64(0x55555555) * UInt64(dim)))
+        var p_idx = Int((hash_val >> 24) % UInt32(24))
+        digit = sobol_perm_lookup(p_idx, digit)
+        sample_index |= UInt64(digit) << UInt64(digit_shift)
+        digit_index -= 1
+    if pow2_samples:
+        var digit = Int(morton_idx & UInt64(1))
+        var hash_val = mix_bits_u64((morton_idx >> 1) ^ (UInt64(0x55555555) * UInt64(dim)))
+        digit ^= Int(hash_val & UInt32(1))
+        sample_index |= UInt64(digit)
+    return sample_index
+
+def test_sobol_index_split_matches_one_piece() raises:
+    for log2spp in range(0, 9):
+        var n_base4 = (2 * 10 + log2spp + 1) // 2
+        for px in [0, 1, 37, 511, 1023]:
+            for py in [0, 5, 300, 767]:
+                var base = encode_morton2(UInt32(px), UInt32(py)) << UInt64(log2spp)
+                var hi = sobol_index_pixel_part(base, 0, log2spp, n_base4)
+                for si in range(1 << log2spp):
+                    var m = base | UInt64(si)
+                    var expected = _sobol_index_reference(m, 0, log2spp, n_base4)
+                    assert_true(sobol_get_sample_index(m, 0, log2spp, n_base4) == expected)
+                    assert_true((hi | sobol_index_sample_part(m, 0, log2spp, n_base4)) == expected)
+
+# ── fast_sincos ──────────────────────────────────────────────────────────────
+
+def test_fast_sincos_matches_libm() raises:
+    for i in range(-2000, 4000):
+        var phi = Float32(i) * Float32(0.0031)
+        var sc = fast_sincos(phi)
+        assert_true(abs(sc[0] - sin(phi)) < Float32(3e-6))
+        assert_true(abs(sc[1] - cos(phi)) < Float32(3e-6))
 
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

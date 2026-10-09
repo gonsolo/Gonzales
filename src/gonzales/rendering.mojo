@@ -2,19 +2,20 @@ from std.math import ceildiv, sqrt, log, exp, cos, sin, max
 from std.memory.alloc import unsafe_alloc
 from max.algorithm import parallelize
 from std.atomic import Atomic
+from std.sys import prefetch
 from std.sys.info import num_performance_cores
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, dot, cross, INV_FOUR_PI
 from .render_state import PathState, TileResult
 from .progress import Progress
-from .primitives import sphere_outward_normal, Ray, Intersection, PrimId, Sphere
+from .primitives import sphere_outward_normal, Ray, Intersection, PrimId, Sphere, TriangleMesh
 from .media import Medium, MediumInterface, Grid, grid_sample_density, SSS_WALK_ROUNDS
 from .lights import AreaLight, LightSampler, light_sampler_sample
 from .curves import curve_piece_endpoints, _curve_perp_axis
 from .bvh import SceneView, traverse_dispatch, test_spheres
-from .shading import shade_core_cpu_nee, GIPendingX1, gi_pending_x1_init
+from .shading import cpu_shade_context, shade_core_cpu_nee_ctx, GIPendingX1, gi_pending_x1_init
 from .rng import PCG32
-from .sampling import TileSamplerParams, encode_morton2, sobol_get_sample_index, sobol_sample, derive_pcg_seeds, gaussian_norm, mix_bits_u64, gen_primary_ray_state
+from .sampling import TileSamplerParams, encode_morton2, sobol_get_sample_index, sobol_index_pixel_part, sobol_sample, derive_pcg_seeds, gaussian_norm, mix_bits_u64, gen_primary_ray_state
 from .guide import GuideGrid, guide_merge, null_guide
 from .spectrum import SampledWavelengths, SpectralSample, spectral_sample_to_rgb
 from .gpu_media import _sample_medium_core
@@ -22,6 +23,41 @@ from .restir_di import ReservoirIO, reservoir_io_null
 from .restir_gi import GIReservoirIO, gi_reservoir_io_null
 from .restir_sms import SMSReservoirIO, sms_reservoir_io_null
 from .restir_vol import VolReservoirIO, vol_reservoir_io_null
+
+
+@always_inline
+def _tri_slot(inter: Intersection) -> Tuple[Int, Int]:
+    """(mesh index, base vertex-index offset) of a triangle hit, or (-1, 0)."""
+    if inter.hit == Int8(0):
+        return (-1, 0)
+    if inter.primId.type == 0:
+        return (Int(inter.primId.id1), Int(inter.primId.id2))
+    if inter.primId.type == 1 or inter.primId.type == 2 or inter.primId.type == 3:
+        return (Int(inter.primId.id2 >> 32), Int(inter.primId.id2 & 0xFFFFFFFF) * 3)
+    return (-1, 0)
+
+
+@always_inline
+def _prefetch_hit_indices(inter: Intersection, meshes: Pointer[TriangleMesh, MutUntrackedOrigin]):
+    """Software prefetch, stage 1: the hit triangle's vertex indices (shading reads them first)."""
+    var (mi, bv) = _tri_slot(inter)
+    if mi >= 0:
+        prefetch(meshes[unsafe_offset=mi].vertexIndices + bv)
+
+
+@always_inline
+def _prefetch_hit_vertices(inter: Intersection, meshes: Pointer[TriangleMesh, MutUntrackedOrigin]):
+    """Stage 2 (indices already prefetched): the triangle's positions, uvs and shading normals."""
+    var (mi, bv) = _tri_slot(inter)
+    if mi >= 0:
+        var m = meshes[unsafe_offset=mi]
+        comptime for k in range(3):
+            var v = Int(m.vertexIndices[unsafe_offset=bv + k])
+            prefetch(m.points + v * 4)
+            if Int(m.uvs) > 4:
+                prefetch(m.uvs + v * 2)
+            if Int(m.normals) > 4:
+                prefetch(m.normals + v * 3)
 
 
 def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
@@ -161,6 +197,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
             var px = Int32(tileMinX) + Int32(ix)
             var py = Int32(tileMinY) + Int32(iy)
             var this_pixel_idx = Int(py * frame_w + px) if frame_w > Int32(0) else -1
+            var pixel_sobol = Int64(sobol_index_pixel_part(encode_morton2(UInt32(px), UInt32(py)) << UInt64(log2spp), 0, log2spp, n_base4))
             for si in range(spp):
                 var (ray, pcg_state, pcg_inc, sobol_idx, wavelengths) = gen_primary_ray_state(
                     px, py, Int32(si) + sp.sampleIndexOffset,
@@ -170,6 +207,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     sp.filterNormX, sp.filterSigma, sp.filterSupportX,
                     sp.filterNormY, sp.filterSupportY,
                     sp.filterType,
+                    sobol_pixel_part=pixel_sobol,
                 )
                 paths[unsafe_offset=idx] = PathState(
                     ray,
@@ -191,6 +229,20 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                 )
                 pixel_idx_buf[unsafe_offset=idx] = this_pixel_idx
                 idx += 1
+
+    var shade_ctx = cpu_shade_context(
+        scene.bvh2Nodes, scene.primIds, scene.meshes, scene.curves, scene.materials,
+        scene.areaLights, Int(scene.areaLightCount), scene.textures,
+        scene.distantLights, Int(scene.distantLightCount), scene.pointLights, Int(scene.pointLightCount),
+        scene.infiniteLights, Int(scene.infiniteLightCount), scene.spheres, Int(scene.sphereCount),
+        scene.lightSampler, sp.sobolMatrices, guide_read,
+        blasNodesArr=scene.blasNodesArr, blasPrimIdsArr=scene.blasPrimIdsArr,
+        instances=scene.instances, guide_write=guide_write, spectral=scene.spectral,
+        measured_brdfs=scene.measuredBrdfs, use_restir=use_restir,
+        gi_pending=gi_pending_buf, gi_io=gi_io,
+        nmaps=scene.normalSlopeMaps,
+        textures=scene.gpuTextures, n_textures=Int(scene.gpuTextureCount),
+        has_glass=scene.hasGlass != Int32(0), mnee_stats=scene.mneeStats, bvh4=scene.bvh4)
 
     # Multi-bounce path trace
     for _ in range(maxD):
@@ -266,23 +318,11 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
             var i = Int(act_idx[unsafe_offset=ak])
             if paths[unsafe_offset=i].active == 0:
                 continue
-            shade_core_cpu_nee(paths, intersections, scene.bvh2Nodes, scene.primIds,
-                               scene.meshes, scene.curves, scene.materials,
-                               scene.areaLights, Int(scene.areaLightCount),
-                               scene.textures, i,
-                               scene.distantLights, Int(scene.distantLightCount),
-                               scene.pointLights, Int(scene.pointLightCount),
-                               scene.infiniteLights, Int(scene.infiniteLightCount),
-                               scene.spheres, Int(scene.sphereCount),
-                               scene.lightSampler, sp.sobolMatrices, guide_read,
-                               blasNodesArr=scene.blasNodesArr, blasPrimIdsArr=scene.blasPrimIdsArr,
-                               instances=scene.instances, guide_write=guide_write, spectral=scene.spectral,
-                               measured_brdfs=scene.measuredBrdfs, use_restir=use_restir,
-                               restir_io=restir_io, pixel_idx=pixel_idx_buf[unsafe_offset=i],
-                               gi_pending=gi_pending_buf, gi_io=gi_io, sms_io=sms_io,
-                               nmaps=scene.normalSlopeMaps,
-                               textures=scene.gpuTextures, n_textures=Int(scene.gpuTextureCount),
-                               has_glass=scene.hasGlass != Int32(0), mnee_stats=scene.mneeStats, bvh4=scene.bvh4)
+            if ak + 8 < na:
+                _prefetch_hit_indices(intersections[unsafe_offset=Int(act_idx[unsafe_offset=ak + 8])], scene.meshes)
+            if ak + 4 < na:
+                _prefetch_hit_vertices(intersections[unsafe_offset=Int(act_idx[unsafe_offset=ak + 4])], scene.meshes)
+            shade_core_cpu_nee_ctx(paths, intersections, i, shade_ctx, guide_write, restir_io, pixel_idx_buf[unsafe_offset=i], sms_io)
         # ── Medium interface transitions ──────────────────────────
         for ak in range(na):
             var i = Int(act_idx[unsafe_offset=ak])

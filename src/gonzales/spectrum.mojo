@@ -47,6 +47,16 @@ struct SampledWavelengths(TrivialRegisterPassable):
         else: return self.lambda3
 
     @always_inline
+    def pdf4(self) -> SIMD[DType.float32, 4]:
+        """All four lane pdfs at once; lane i equals pdf(i)."""
+        var lam = SIMD[DType.float32, 4](self.lambda0, self.lambda1, self.lambda2, self.lambda3)
+        var e = exp(Float32(0.0072) * (lam - Float32(538)))
+        var c = Float32(0.5) * (e + Float32(1) / e)
+        var p = Float32(0.0039398042) / (c * c)
+        var inside = lam.ge(LAMBDA_MIN) & lam.le(LAMBDA_MAX)
+        return inside.select(p, SIMD[DType.float32, 4](0))
+
+    @always_inline
     def pdf(self, i: Int) -> Float32:
         """Sampling density (1/nm) of lane i; 0 outside [LAMBDA_MIN,
         LAMBDA_MAX], which is what the all-zero placeholder sets read."""
@@ -86,12 +96,13 @@ def sample_wavelengths(u: Float32) -> SampledWavelengths:
     L = (5, 150, 10) lamp at limit 50 read G = 60 against pbrt's 68.8, and
     even a white L = 30 lamp, whose mean is well inside the limit, lost 5-13%
     of blue."""
-    var lv = SIMD[DType.float32, 4](0)
-    for i in range(N_SPECTRAL_SAMPLES):
-        var up = u + Float32(i) / Float32(N_SPECTRAL_SAMPLES)
-        if up > Float32(1):
-            up -= Float32(1)
-        lv[i] = _sample_visible_wavelength(up)
+    # The four lanes go through the inverse CDF together (one vector log), same arithmetic per lane as
+    # _sample_visible_wavelength.
+    var up = SIMD[DType.float32, 4](u, u + Float32(0.25), u + Float32(0.5), u + Float32(0.75))
+    up = up.gt(Float32(1)).select(up - Float32(1), up)
+    var t = Float32(0.85691062) - Float32(1.82750197) * up
+    var lv = Float32(538) - Float32(138.888889) * (Float32(0.5) * log((Float32(1) + t) / (Float32(1) - t)))
+    lv = lv.clamp(LAMBDA_MIN, LAMBDA_MAX)
     return SampledWavelengths(lv[0], lv[1], lv[2], lv[3])
 
 @always_inline
@@ -531,8 +542,9 @@ def spectral_sample_to_rgb(
     if spectral_res <= 0:
         return (radiance.v0, radiance.v1, radiance.v2)
     var x = Float32(0.0); var y = Float32(0.0); var z = Float32(0.0)
+    var pdfs = wavelengths.pdf4()
     for i in range(N_SPECTRAL_SAMPLES):
-        var p = wavelengths.pdf(i)
+        var p = pdfs[i]
         if p > Float32(0.0):
             var lam = wavelengths.get(i)
             var r = radiance.get(i) / p

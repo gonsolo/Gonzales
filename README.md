@@ -70,14 +70,14 @@ Hardware: AMD Ryzen Threadripper 1920X (12 cores, 24 threads), NVIDIA RTX 3060 1
 
 | Renderer | Mode | Wall time | Notes |
 |---|---|---|---|
-| **Gonzales** | GPU | **4.5s** | Wavefront path tracing, software BVH traversal |
+| **Gonzales** | GPU | **4.4s** | Wavefront path tracing, software BVH traversal |
 | **Gonzales** | GPU (`--rt-hardware`) | 5.3s | RT cores driven from CUDA |
 | **pbrt-v4** | GPU (OptiX) | 4.9s | Hardware RT cores |
 | **Embree pathtracer** | CPU | 10.3s / 15.0s | Bare geometry / approximate materials, no textures |
-| **Gonzales** | CPU | **25.1s** | Full materials and textures |
+| **Gonzales** | CPU | **24.2s** | Full materials and textures |
 | **pbrt-v4** | CPU | 50.1s | Full materials and textures |
 
-Gonzales CPU is **2.0× faster** than pbrt CPU, and Gonzales GPU is on par with pbrt GPU.
+Gonzales CPU is **2.1× faster** than pbrt CPU, and Gonzales GPU is on par with pbrt GPU.
 Embree's tutorial path tracer has no textures and only approximate materials, so its
 numbers are not directly comparable.
 

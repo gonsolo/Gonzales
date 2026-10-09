@@ -30,6 +30,7 @@
 
 from std.collections import Array
 from std.math import sqrt, exp, sin, asin
+from std.sys import is_nvidia_gpu
 from std.memory import unsafe_memcpy
 from std.memory.alloc import unsafe_alloc
 
@@ -684,10 +685,25 @@ def _inverse_smoothstep_f32(x: Float32) -> Float32:
     """Float32 twin of _inverse_smoothstep — see that function's docstring.
     Float64 sin/asin are not supported in approx mode on NVIDIA GPUs, so the
     render-hot-path table lookup below must stay in Float32."""
-    var v = Float32(1.0) - Float32(2.0) * x
-    if v > Float32(1.0): v = Float32(1.0)
-    if v < Float32(-1.0): v = Float32(-1.0)
-    return Float32(0.5) - sin(asin(v) / Float32(3.0))
+    comptime if is_nvidia_gpu():
+        var v = Float32(1.0) - Float32(2.0) * x
+        if v > Float32(1.0): v = Float32(1.0)
+        if v < Float32(-1.0): v = Float32(-1.0)
+        return Float32(0.5) - sin(asin(v) / Float32(3.0))
+    else:
+        # CPU: solve smoothstep(s) = y by Newton from sqrt(y/3) (|err| < 1e-7) instead of sin(asin(.)) libm calls.
+        var y = x
+        if y < Float32(0.0): y = Float32(0.0)
+        if y > Float32(1.0): y = Float32(1.0)
+        var flip = y > Float32(0.5)
+        var yy = (Float32(1.0) - y) if flip else y
+        if yy <= Float32(0.0):
+            return Float32(1.0) if flip else Float32(0.0)
+        var s0 = sqrt(yy * Float32(0.33333334))
+        var s = s0 * (Float32(1.0) + s0 * Float32(0.33333334))
+        comptime for _ in range(2):
+            s -= (s * s * (Float32(3.0) - Float32(2.0) * s) - yy) / (Float32(6.0) * s * (Float32(1.0) - s))
+        return (Float32(1.0) - s) if flip else s
 
 @always_inline
 def rgb_to_coeffs_table_lookup_ptr(table: Pointer[Float32, MutUntrackedOrigin], res: Int, r: Float32, g: Float32, b: Float32) -> RGBSigmoidCoeffs:

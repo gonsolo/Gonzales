@@ -9,7 +9,7 @@ from std.atomic import Atomic
 from std.sys.info import num_performance_cores
 from std.bit import count_trailing_zeros
 from .transform import Mat4
-from .geometry import dot, cross, Point3f, Point2f, Vec3f, Frame, RGB, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, _is_real_ptr, store_vec3, _atan2f, point3f
+from .geometry import dot, cross, Point3f, Point2f, Vec3f, Frame, RGB, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, _is_real_ptr, store_vec3, _atan2f, point3f, fast_sincos
 from .materials import Material, MatKind, fr_dielectric, MeasuredBRDF
 from .render_state import PathState, TileResult, GpuTexture, NormalSlopeMap
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, intersect_triangle, intersect_triangle_edges, alpha_killed, Instance, sphere_outward_normal
@@ -629,7 +629,8 @@ def _sample_sphere_light_nee(
     var cos_th = Float32(1.0) - r1s * (Float32(1.0) - cos_max)
     var sin_th = sqrt(max(Float32(0.0), Float32(1.0) - cos_th * cos_th))
     var phis = TWO_PI * r2s
-    var wi = xc * (sin_th * cos(phis)) + yc * (sin_th * sin(phis)) + zc * cos_th
+    var (sphis, cphis) = fast_sincos(phis)
+    var wi = xc * (sin_th * cphis) + yc * (sin_th * sphis) + zc * cos_th
     var wlen = dot(wi, wi)
     if wlen > Float32(0.0):
         wi = wi * (Float32(1.0) / sqrt(wlen))

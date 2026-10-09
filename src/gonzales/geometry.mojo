@@ -1,7 +1,7 @@
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
 from std.memory import bitcast
-from std.math import sqrt, rsqrt, recip, acos, atan2, cos, sin, min, max, abs, floor, log, exp
+from std.math import sqrt, rsqrt, recip, acos, atan2, cos, sin, min, max, abs, floor, log, exp, copysign
 from std.sys import is_nvidia_gpu
 from std.sys.info import align_of
 from gonzales.spectrum import SampledWavelengths, SpectralSample, spec_refl, spec_refl_unbounded, rgb_illuminant_to_spectral_sample
@@ -470,6 +470,38 @@ def refract(wi: Vec3f, n: Vec3f, eta: Float32) -> Tuple[Bool, Vec3f]:
     var wt = wi * (-eta) + n * (eta * cos_theta_i - cos_theta_t)
 # <</listing>>
     return (True, wt)
+@always_inline
+def fast_sincos(phi: Float32) -> Tuple[Float32, Float32]:
+    """(sin phi, cos phi). On the CPU: turns-based octant reduction + Taylor
+    polynomials accurate to ~1e-7, replacing two libm calls (which showed up as
+    ~3% of a render). On the GPU: the stdlib versions."""
+    comptime if is_nvidia_gpu():
+        return (sin(phi), cos(phi))
+    else:
+        var t = phi * Float32(0.15915494309189535)
+        var a = t - floor(t + Float32(0.5))
+        # Fold to |a| <= 1/4 without branches (random angles make them unpredictable); cos flips outside it.
+        var m = abs(a)
+        var cs = Float32(-1.0) if m > Float32(0.25) else Float32(1.0)
+        var th = copysign(min(m, Float32(0.5) - m), a) * Float32(6.283185307179586)
+        var x2 = th * th
+        var sp = Float32(1.0 / 6227020800.0)
+        sp = sp * x2 - Float32(1.0 / 39916800.0)
+        sp = sp * x2 + Float32(1.0 / 362880.0)
+        sp = sp * x2 - Float32(1.0 / 5040.0)
+        sp = sp * x2 + Float32(1.0 / 120.0)
+        sp = sp * x2 - Float32(1.0 / 6.0)
+        sp = sp * x2 + Float32(1.0)
+        var cp = Float32(1.0 / 479001600.0)
+        cp = cp * x2 - Float32(1.0 / 3628800.0)
+        cp = cp * x2 + Float32(1.0 / 40320.0)
+        cp = cp * x2 - Float32(1.0 / 720.0)
+        cp = cp * x2 + Float32(1.0 / 24.0)
+        cp = cp * x2 - Float32(0.5)
+        cp = cp * x2 + Float32(1.0)
+        return (th * sp, cs * cp)
+
+
 @always_inline
 def spherical_direction(sin_theta: Float32, cos_theta: Float32, phi: Float32) -> Vec3f:
     """Convert spherical coordinates (θ,φ) to a unit Cartesian vector.

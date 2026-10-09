@@ -2,7 +2,7 @@ from std.collections import Array
 from std.math import sqrt, log, exp, cos, sin, atan2, acos
 from std.bit import count_trailing_zeros
 from std.memory.alloc import unsafe_alloc
-from .geometry import Vec3f, Point3f, dot, cross, Frame, PI, TWO_PI, INV_PI, _is_real_ptr
+from .geometry import Vec3f, Point3f, dot, cross, Frame, PI, TWO_PI, INV_PI, _is_real_ptr, fast_sincos
 from .primitives import Ray
 from .spectrum import SampledWavelengths, sample_wavelengths
 
@@ -38,8 +38,9 @@ def sample_cosine_hemisphere(u1: Float32, u2: Float32) -> Vec3f:
     """
     var r     = sqrt(u1)
     var phi   = TWO_PI * u2
-    var x     = r * cos(phi)
-    var y     = r * sin(phi)
+    var (sphi, cphi) = fast_sincos(phi)
+    var x     = r * cphi
+    var y     = r * sphi
     var z_sq  = Float32(1.0) - u1
     var z     = sqrt(z_sq if z_sq > Float32(0.0) else Float32(0.0))
 # <</listing>>
@@ -56,8 +57,9 @@ def sample_cosine_hemisphere_world(
     """
     var r   = sqrt(u1)
     var phi = TWO_PI * u2
-    var x   = r * cos(phi)
-    var y   = r * sin(phi)
+    var (sphi, cphi) = fast_sincos(phi)
+    var x   = r * cphi
+    var y   = r * sphi
     var z2  = Float32(1.0) - u1
     var z   = sqrt(z2 if z2 > Float32(0.0) else Float32(0.0))
     var pdf = z / PI  # cos(θ)/π — coupled, cannot diverge from the sampled direction
@@ -118,8 +120,9 @@ def sample_ggx_vndf(
     # 3. Sample point on visible hemisphere disk
     var r_disk = sqrt(u1)
     var phi    = TWO_PI * u2
-    var tx     = r_disk * cos(phi)
-    var ty_raw = r_disk * sin(phi)
+    var (sphi, cphi) = fast_sincos(phi)
+    var tx     = r_disk * cphi
+    var ty_raw = r_disk * sphi
     # Heitz 2018 eq. (Listing 3): squash the disk's LOWER half onto the
     # visible hemisphere -- lerp(sqrt(1 - tx^2), ty, s), NOT a sqrt-weighted
     # blend of tx and ty. Both forms collapse to ty = ty_raw at vh.z == 1,
@@ -255,14 +258,13 @@ def sobol_perm_lookup(p_idx: Int, digit: Int) -> Int:
     return Int((enc >> (2 * (3 - digit))) & 3)
 
 @always_inline
-def sobol_get_sample_index(
-    morton_idx: UInt64, dim: Int, log2spp: Int, n_base4: Int,
+def _sobol_index_digits(
+    morton_idx: UInt64, dim: Int, pow2_samples: Bool, hi_digit: Int, lo_digit: Int,
 ) -> UInt64:
+    """Z-Sobol index digits hi_digit down to lo_digit (inclusive) of the scrambled morton index."""
     var sample_index: UInt64 = 0
-    var pow2_samples = (log2spp & 1) == 1
-    var last_digit = 1 if pow2_samples else 0
-    var digit_index = n_base4 - 1
-    while digit_index >= last_digit:
+    var digit_index = hi_digit
+    while digit_index >= lo_digit:
         var digit_shift = 2 * digit_index - (1 if pow2_samples else 0)
         var digit = Int((morton_idx >> UInt64(digit_shift)) & UInt64(3))
         var higher_digits = morton_idx >> UInt64(digit_shift + 2)
@@ -271,12 +273,38 @@ def sobol_get_sample_index(
         digit = sobol_perm_lookup(p_idx, digit)
         sample_index |= UInt64(digit) << UInt64(digit_shift)
         digit_index -= 1
+    return sample_index
+
+@always_inline
+def _sobol_split_digit(log2spp: Int) -> Int:
+    """Lowest base-4 digit that lies wholly above the sample-index bits of a morton index (its shift >= log2spp)."""
+    var p = 1 if (log2spp & 1) == 1 else 0
+    return (log2spp + p + 1) // 2
+
+@always_inline
+def sobol_index_pixel_part(pixel_morton: UInt64, dim: Int, log2spp: Int, n_base4: Int) -> UInt64:
+    """The digits of sobol_get_sample_index that do not depend on the sample number: pixel_morton is
+    encode_morton2(x, y) << log2spp. Computed once per pixel; sobol_get_sample_index(m | si) ==
+    pixel part | sobol_index_sample_part(m | si) while si < 2^log2spp."""
+    return _sobol_index_digits(pixel_morton, dim, (log2spp & 1) == 1, n_base4 - 1, _sobol_split_digit(log2spp))
+
+@always_inline
+def sobol_index_sample_part(morton_idx: UInt64, dim: Int, log2spp: Int, n_base4: Int) -> UInt64:
+    var pow2_samples = (log2spp & 1) == 1
+    var last_digit = 1 if pow2_samples else 0
+    var sample_index = _sobol_index_digits(morton_idx, dim, pow2_samples, _sobol_split_digit(log2spp) - 1, last_digit)
     if pow2_samples:
         var digit = Int(morton_idx & UInt64(1))
         var hash_val = mix_bits_u64((morton_idx >> 1) ^ (UInt64(0x55555555) * UInt64(dim)))
         digit ^= Int(hash_val & UInt32(1))
         sample_index |= UInt64(digit)
     return sample_index
+
+@always_inline
+def sobol_get_sample_index(
+    morton_idx: UInt64, dim: Int, log2spp: Int, n_base4: Int,
+) -> UInt64:
+    return sobol_index_pixel_part(morton_idx, dim, log2spp, n_base4) | sobol_index_sample_part(morton_idx, dim, log2spp, n_base4)
 
 @always_inline
 def sobol_sample(
@@ -611,13 +639,18 @@ def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     filter_norm_y: Float32, filter_support_y: Float32,
     filter_type: Int32 = Int32(0),
     filter_lut: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    sobol_pixel_part: Int64 = Int64(-1),   # sobol_index_pixel_part for this pixel, when the caller loops samples; -1 = compute
 ) -> Tuple[Ray, UInt64, UInt64, UInt64, SampledWavelengths]:
     """Shared Sobol + filter + camera-transform primary ray generator.
     Returns (ray, pcg_state, pcg_inc, sobol_idx, wavelengths).
     """
     var morton_base = encode_morton2(UInt32(px), UInt32(py)) << UInt64(log2spp)
     var morton_idx  = morton_base | UInt64(si)
-    var sobol_idx   = sobol_get_sample_index(morton_idx, 0, log2spp, n_base4)
+    var sobol_idx: UInt64
+    if sobol_pixel_part >= 0 and Int(si) < (1 << log2spp):
+        sobol_idx = UInt64(sobol_pixel_part) | sobol_index_sample_part(morton_idx, 0, log2spp, n_base4)
+    else:
+        sobol_idx = sobol_get_sample_index(morton_idx, 0, log2spp, n_base4)
     var (pcg_state, pcg_inc) = derive_pcg_seeds(px, py, si, rng_seed)
     # Dimensions 0 and 1 place the sample on the film, dimension 2 picks the hero wavelength (scrambled like the
     # per-bounce dimensions, mix_bits_u64(pcgInc ^ dim)); dimension 3 is only there to make the width a power of two.
