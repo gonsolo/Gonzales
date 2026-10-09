@@ -13,7 +13,7 @@ from std.math import sqrt, cos, sin, floor, log, exp, max, min, ceildiv
 from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
 from std.memory import bitcast
-from .geometry import face_toward, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
+from .geometry import offset_eps, face_toward, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
 from .materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, MeasuredBRDF, dielectric_is_rough
 from .render_state import GpuTexture
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, sphere_outward_normal
@@ -473,13 +473,13 @@ def _dielectric_bounce(
         # does not matter.
         var (bs_t, n_t) = bxdf_sample_thin_dielectric(geom_normal, ray_dir, ior, u)
         var off_t = n_t if (Int(bs_t.flags) & Int(BxDFFlags.reflect)) != 0 else -n_t
-        return (bs_t.wi, hit_point + off_t * Float32(0.0001), bs_t.f.r,
+        return (bs_t.wi, hit_point + off_t * offset_eps(hit_point.x, hit_point.y, hit_point.z), bs_t.f.r,
                 current_ior, previous_ior)
     var (bs, normal, new_current_ior, new_previous_ior) = bxdf_sample_dielectric(
         geom_normal, ray_dir, ior, force_entering, u, current_ior, previous_ior,
         radiance_mode)
     var off = normal if (Int(bs.flags) & Int(BxDFFlags.reflect)) != 0 else -normal
-    return (bs.wi, hit_point + off * Float32(0.0001), bs.f.r,
+    return (bs.wi, hit_point + off * offset_eps(hit_point.x, hit_point.y, hit_point.z), bs.f.r,
             new_current_ior, new_previous_ior)
 
 
@@ -2517,7 +2517,7 @@ def _sppm_vp_shadow_eps(vp: SPPMPixel, ref sd: SceneView, wo: Vec3f) -> Float32:
         var mat_h = sd.materials[unsafe_offset=Int(vp.mat_idx)]
         var hc = _hair_precompute(mat_h, sd.curves, Int(vp.hair_curve_idx), vp.hair_v, vp.hair_h, wo)
         return curve_offset_eps(hc.radius)
-    return Float32(0.0001)
+    return offset_eps(vp.pos.x, vp.pos.y, vp.pos.z)
 
 @always_inline
 def _sppm_simple_light_count(ref sd: SceneView) -> Int:

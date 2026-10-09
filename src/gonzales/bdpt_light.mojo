@@ -2,7 +2,7 @@
 # Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
 from std.math import sqrt, cos, sin, log, exp, max, abs
-from .geometry import face_toward, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, PI, INV_FOUR_PI, INV_PI
+from .geometry import offset_eps, face_toward, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, PI, INV_FOUR_PI, INV_PI
 from .materials import MatKind, LobeKind, dielectric_is_rough
 from .primitives import Ray, Intersection
 from .media import sample_free_flight, spectral_free_flight_weight
@@ -438,7 +438,7 @@ def _bdpt_light_path_bounce[use_gpu: Bool](
             # GEOMETRY, not material: a curve hit has its own normal and spawn
             # offset (curve_offset_eps), and no texture or bump map.
             var on_curve = inter.primId.type == Int8(5)
-            var spawn_eps = Float32(0.0001)
+            var spawn_eps = offset_eps(hit.x, hit.y, hit.z)
             var gn: Vec3f
             if on_curve:
                 var hc_g = _hair_precompute(mat, sd.curves, Int(inter.primId.id1), inter.v, inter.u, (-ray_dir).to_simd())

@@ -4,7 +4,7 @@ from std.collections import Array
 from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
-from .geometry import RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, fast_sincos, safe_sqrt, reflect, refract, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
+from .geometry import offset_point, RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, fast_sincos, safe_sqrt, reflect, refract, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from .render_state import PDF_DROP_DIRECT
 from .materials import Material, MatKind, LobeKind, MeasuredBRDF, schlick_fresnel, fr_dielectric, dielectric_is_rough, is_specular_glass
 from .render_state import PathState, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SuppressTask, SHADOW_SLOTS
@@ -637,7 +637,7 @@ def shade_core(
             dir = dir * (1.0 / sqrt(dlen))
 
         # Update Ray
-        var org = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z) + ray_dir * inter.tHit + normal * 0.0001
+        var org = offset_point(Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z) + ray_dir * inter.tHit, normal)
         path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(dir[0], dir[1], dir[2]))
 
         # Update Throughput (albedo)
@@ -949,7 +949,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     # Offset along the GEOMETRIC normal, to the chosen lobe's side (pbrt's
     # OffsetRayOrigin): the shading normal can point into the surface.
     var off_n = geo_n if dot(bounce_normal, -ray_dir) > Float32(0.0) else -geo_n
-    var hit_point = ray_org + ray_dir * inter.tHit + off_n * Float32(0.0001)
+    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, off_n)
 
     # ── NEE direct light sampling (MIS weighted, with MNEE glass caustics) ─────
     # Shares _nee_area_lights with plain diffuse — including its MNEE probe for
@@ -1054,7 +1054,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool =
         # pbrt's LayeredBxDF is twoSided: see face_toward.
         normal = face_toward(normal, -ray_dir)
 
-    var hit_point = ray_org + ray_dir * inter.tHit + geo_normal * Float32(0.0001)
+    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, geo_normal)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
@@ -1385,8 +1385,7 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
         path_ptr[].eta_scale *= eta_for_rr * eta_for_rr
     path_ptr[].current_dielectric_ior = new_dielectric_ior
     path_ptr[].previous_dielectric_ior = new_previous_dielectric_ior
-    var offset = (normal if is_reflect else -normal) * Float32(0.0001)
-    var hit_point = ray_org + ray_dir * inter.tHit + offset
+    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, normal if is_reflect else -normal)
     # ── Spatially varying subsurface reflectance ──────────────────────────
     # The interior is ONE homogeneous medium, so a textured `reflectance` has
     # to be collapsed to a mean to build it (Material.sss_mean_refl). But
@@ -1474,7 +1473,7 @@ def _shade_rough_dielectric[enqueue_shadow: Bool](
         return
     var wi = tx * bs.wi.x + ty * bs.wi.y + n * bs.wi.z
     var side = Float32(1.0) if dot(wi, n) > Float32(0.0) else Float32(-1.0)
-    var org = hit_raw + n * (side * Float32(0.0001))
+    var org = offset_point(hit_raw, n * side)
     path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(wi[0], wi[1], wi[2]))
     path_ptr[].throughput *= bs.f * (abs(bs.wi.z) / bs.pdf)
     if bs.wi.z * wo_l.z < Float32(0.0):
@@ -1523,7 +1522,7 @@ def _rough_dielectric_nee[enqueue_shadow: Bool](
         w *= power_heuristic(ls.pdf, diel_pdf(wo_l, wi_l, ior, alpha, True, True)) / ls.pdf
     var contrib = path_ptr[].throughput * _to_spec_illum(ctx, ls.Li, path_ptr[].wavelengths) * (f * w)
     var side = Float32(1.0) if dot(ls.wi, n) > Float32(0.0) else Float32(-1.0)
-    var org = hit_raw + n * (side * Float32(0.0001))
+    var org = offset_point(hit_raw, n * side)
     _shadow_contribute[enqueue_shadow](path_ptr, ctx, org, ls.wi, tmax, contrib)
 
 
@@ -1549,8 +1548,7 @@ def shade_thin_dielectric(
     var (bs, normal) = bxdf_sample_thin_dielectric(geom_normal, ray_dir, ior, pcg.next_float())
 
     var is_reflect = (Int(bs.flags) & Int(BxDFFlags.reflect)) != 0
-    var offset = (normal if is_reflect else -normal) * Float32(0.0001)
-    var hit_point = ray_org + ray_dir * inter.tHit + offset
+    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, normal if is_reflect else -normal)
     _finish_delta_bounce(path_ptr, pcg, bs, SpectralSample(bs.f.r), hit_point, RGB(Float32(1)))
 
 
@@ -1777,7 +1775,7 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
             tangent = Vec3f(frame.x.x, frame.x.y, frame.x.z)
             bitangent = Vec3f(frame.y.x, frame.y.y, frame.y.z)
 
-    var hit_point = ray_org + ray_dir * inter.tHit + geo_normal * Float32(0.0001)
+    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, geo_normal)
     var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])
     var gc = GeomContext(normal, geo_normal, hit_point, wo, tangent, bitangent,
         RGB(Float32(0.0)), Float32(0.0))
@@ -1909,7 +1907,7 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
         # wo is never below the frame.
         normal = face_toward(normal, -ray_dir)
 
-    var hit_point = ray_org + ray_dir * inter.tHit + hit_normal * Float32(0.0001)
+    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, hit_normal)
     var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])
 
     var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
@@ -1999,7 +1997,7 @@ def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
     if not ok:
         path_ptr[].active = 0
         return
-    var hit_point = ray_org + ray_dir * inter.tHit + normal * Float32(0.0001)
+    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, normal)
 
     var ior = mat.emission.r if mat.emission.r > Float32(1.0) else Float32(1.5)
     var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])
@@ -2500,7 +2498,7 @@ def _build_geom_context_full[use_gpu: Bool](
         # Analytic sphere: exact normal, no UVs/texture/normal-map to resolve
         # -- alb falls back to the material's flat albedo (see project_mitsuba_parser
         # memory: no sphere UV parameterization exists in this codebase yet).
-        var hit_point = ray_org + ray_dir * inter.tHit + geo_normal * Float32(0.0001)
+        var hit_point = offset_point(ray_org + ray_dir * inter.tHit, geo_normal)
         var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])
         var frame = Frame.from_z(Vec3f(geo_normal[0], geo_normal[1], geo_normal[2]))
         var tangent = Vec3f(frame.x.x, frame.x.y, frame.x.z)
@@ -2518,7 +2516,7 @@ def _build_geom_context_full[use_gpu: Bool](
 
     # Offset along the GEOMETRIC normal (pbrt's OffsetRayOrigin): the shading
     # normal just turned toward wo can point into the surface.
-    var hit_point = ray_org + ray_dir * inter.tHit + ng_ff * Float32(0.0001)
+    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, ng_ff)
     var alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, fp.width)
     var frame = Frame.from_z(Vec3f(normal[0], normal[1], normal[2]))
     var tangent   = Vec3f(frame.x.x, frame.x.y, frame.x.z)

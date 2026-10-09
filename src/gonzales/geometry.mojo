@@ -436,6 +436,16 @@ def fast_recip(x: Float32) -> Float32:
         return Float32(1.0) / x
 
 @always_inline
+def offset_eps(x: Float32, y: Float32, z: Float32) -> Float32:
+    """Self-intersection offset scaled to the hit's coordinate magnitude (1e-5..1e-4)."""
+    var m = max(abs(x), max(abs(y), abs(z)))
+    return min(Float32(1e-4), max(Float32(1e-5), Float32(4e-6) * m))
+
+@always_inline
+def offset_point(p: Vec3f, n: Vec3f) -> Vec3f:
+    return p + n * offset_eps(p.x, p.y, p.z)
+
+@always_inline
 def fast_div(a: Float32, b: Float32) -> Float32:
     """a/b with fast_recip's accuracy (about 2 ulp on NVIDIA)."""
     comptime if is_nvidia_gpu():

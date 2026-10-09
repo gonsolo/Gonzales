@@ -3,7 +3,7 @@
 
 from std.collections import Array
 from std.math import sqrt, cos, sin, log, exp, max, abs
-from .geometry import face_toward, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Frame, dot, PI, INV_FOUR_PI, INV_PI
+from .geometry import offset_eps, face_toward, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, Frame, dot, PI, INV_FOUR_PI, INV_PI
 from .render_state import PDF_DELTA_FULL, PDF_DROP_DIRECT
 from .materials import Material, MatKind, LobeKind, dielectric_is_rough
 from .primitives import Ray, Intersection
@@ -643,7 +643,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
             # GEOMETRY, not material: a curve hit has its own normal and spawn
             # offset (curve_offset_eps), and no texture or bump map.
             var on_curve = inter.primId.type == Int8(5)
-            var spawn_eps = Float32(0.0001)
+            var spawn_eps = offset_eps(hit.x, hit.y, hit.z)
             var gn: Vec3f
             if on_curve:
                 var hc_g = _hair_precompute(mat, sd.curves, Int(inter.primId.id1), inter.v, inter.u, (-ray_dir).to_simd())
@@ -819,7 +819,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                 var ctx_c = LobeCtx(LobeKind.ggx, True, False, gn_c, wo_c, mat.albedo, Int32(-1), alpha_c,
                                     Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
                 total += _vcm_nee_surface(sd, v, ctx_c, hit, gn_c_geo, beta, eta_x, dvcm_carry, dvc_carry,
-                                          cur_med_idx, scratch, wavelengths, pcg, Float32(0.0001), False, Float32(0))
+                                          cur_med_idx, scratch, wavelengths, pcg, offset_eps(hit.x, hit.y, hit.z), False, Float32(0))
 
             beta *= spec_refl_unbounded(sd.spectral.coeffs, sd.spectral.res, sd.spectral.cie_x, sd.spectral.cie_y, sd.spectral.cie_z, sd.spectral.d65, (bs_c.f).r, (bs_c.f).g, (bs_c.f).b, wavelengths)
             rd = vec3f(bs_c.wi)
@@ -919,7 +919,7 @@ def _bdpt_camera_path_bounce[use_gpu: Bool](
                                         Float32(0), Int32(-1), Float32(0), Float32(0), True, False)
                     total += _vcm_nee_surface(sd, v, ctx_x, x_o, n_o, beta, mis_vm_weight_factor * _vcm_eta_scale(sd, x_o),
                                               v.dVCM, v.dVC, cur_med_idx, scratch, wavelengths, pcg,
-                                              Float32(0.0001), False, eta_e)
+                                              offset_eps(x_o.x, x_o.y, x_o.z), False, eta_e)
                     # Continue with the exit lobe: cosine-sampled, weight Ft(cos_out).
                     var ux1 = pcg.next_float(); var ux2 = pcg.next_float()
                     rd = vec3f(_cosine_hemisphere_sample(n_o, ux1, ux2))
