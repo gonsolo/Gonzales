@@ -359,6 +359,13 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
     var rgb = RGB(Float32(0.5))
     # transmittance for DiffuseTransmission (default 0.25 per PBRT)
     var trans_rgb = params.get_rgb("transmittance", RGB(Float32(0.25)))
+    var trans_tex = params.get_string("transmittance", "")
+    if trans_tex != "":
+        # A texture-valued transmittance: constant textures (a Ptex file's mean colour included) only.
+        for ci in range(len(s[unsafe_offset=0].const_tex_names)):
+            if s[unsafe_offset=0].const_tex_names[ci] == trans_tex:
+                trans_rgb = RGB(s[unsafe_offset=0].const_tex_rgb[ci*3+0], s[unsafe_offset=0].const_tex_rgb[ci*3+1], s[unsafe_offset=0].const_tex_rgb[ci*3+2])
+                break
     # named-spectrum conductor optical constants (R/G/B at 630/530/450 nm)
     var metal_eta = RGB(Float32(0.5))
     var metal_k = RGB(Float32(0.5))
@@ -570,6 +577,9 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
     # That last path covers ~49 scale and ~20 mix spectrum declarations in the
     # corpus. Only a product of two *different* textures is out of reach.
     var tex_idx_for_mat = Int32(-1)
+    var ptex_file_for_mat = String()
+    var ptex_scale_for_mat = Float32(1)
+    var ptex_gamma_for_mat = Float32(2.2)
     var sss_mean_refl_for_mat = RGB(Float32(1))
     var tex_scale_for_mat = RGB(Float32(1))
     var tex_bias_for_mat = RGB(Float32(0))
@@ -585,7 +595,17 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
             var tex_name = params.get_string("reflectance", "")
             if tex_name != "":
                 var matched_tex = False
+                for pti in range(len(s[unsafe_offset=0].ptex_tex_names)):
+                    if s[unsafe_offset=0].ptex_tex_names[pti] == tex_name:
+                        tex_idx_for_mat = Int32(-3)
+                        ptex_file_for_mat = s[unsafe_offset=0].ptex_tex_files[pti]
+                        ptex_scale_for_mat = s[unsafe_offset=0].ptex_tex_scale[pti]
+                        ptex_gamma_for_mat = s[unsafe_offset=0].ptex_tex_gamma[pti]
+                        matched_tex = True
+                        break
                 for ti in range(len(s[unsafe_offset=0].tex_names)):
+                    if matched_tex:
+                        break
                     if s[unsafe_offset=0].tex_names[ti] == tex_name:
                         tex_idx_for_mat = Int32(ti)
                         matched_tex = True
@@ -972,6 +992,9 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
     nm.roughness_u    = mat_roughU
     nm.roughness_v    = mat_roughV
     nm.tex_idx        = tex_idx_for_mat
+    nm.ptex_file      = ptex_file_for_mat
+    nm.ptex_scale     = ptex_scale_for_mat
+    nm.ptex_gamma     = ptex_gamma_for_mat
     nm.tex_scale      = tex_scale_for_mat
     nm.sss_mean_refl  = sss_mean_refl_for_mat
     nm.tex_bias       = tex_bias_for_mat

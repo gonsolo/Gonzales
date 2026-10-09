@@ -669,3 +669,31 @@ extern "C" int ptex_average_rgb(const char *filename, float gamma, float out[3])
                 out[c] = static_cast<float>(sum[c] / count);
         return 1;
 }
+
+// Per-face mean colour of a Ptex file (1x1 reduction of every face, gamma-decoded to linear).
+// malloc'd nfaces*3 floats; release with free_texture_rgb.
+extern "C" int ptex_face_rgb(const char *filename, float gamma, float **data, int *nfaces_out) {
+        Ptex::String err;
+        PtexPtr<PtexTexture> tex(PtexTexture::open(filename, err));
+        if (!tex)
+                return 0;
+        int nfaces = tex->numFaces(), nch = tex->numChannels();
+        if (nfaces <= 0 || nch <= 0)
+                return 0;
+        float *out = static_cast<float *>(std::malloc(sizeof(float) * 3 * nfaces));
+        std::vector<char> raw(Ptex::DataSize(tex->dataType()) * nch);
+        std::vector<float> px(nch);
+        for (int f = 0; f < nfaces; ++f) {
+                out[3 * f] = out[3 * f + 1] = out[3 * f + 2] = 0.0f;
+                PtexPtr<PtexFaceData> fd(tex->getData(f, Ptex::Res(0, 0)));
+                if (!fd)
+                        continue;
+                fd->getPixel(0, 0, raw.data());
+                Ptex::ConvertToFloat(px.data(), raw.data(), tex->dataType(), nch);
+                for (int c = 0; c < 3; ++c)
+                        out[3 * f + c] = std::pow(std::max(px[nch >= 3 ? c : 0], 0.0f), gamma);
+        }
+        *data = out;
+        *nfaces_out = nfaces;
+        return 1;
+}

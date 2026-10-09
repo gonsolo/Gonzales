@@ -528,6 +528,14 @@ def _tex_lookup[use_gpu: Bool](
                 return mat.checker_tex1
             return mat.checker_tex2
         return mat.checker_tex1
+    if ti == -3:
+        # Ptex reflectance: finalize_scene packed each triangle's face colour into mesh.faceIndices.
+        var tri = Int(inter.primId.id2 & 0xFFFFFFFF)
+        if inter.primId.type == 0:
+            tri = Int(inter.primId.id2) // 3
+        var pk = mesh.faceIndices[unsafe_offset=tri]
+        var inv = Float32(16.0 / 1048575.0)
+        return RGB(Float32((pk >> 40) & 0xFFFFF) * inv, Float32((pk >> 20) & 0xFFFFF) * inv, Float32(pk & 0xFFFFF) * inv)
     var has_uvs = True
     comptime if not use_gpu:
         has_uvs = Int(mesh.uvs) > 4

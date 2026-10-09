@@ -1432,6 +1432,7 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
     if len(uv_list) == 0:
         uv_list = params.take_floats("st")
     var n_list = params.take_floats("N")
+    var ptex_ids = params.take_ints("faceIndices")
 
     var n_verts = Int32(len(p_list) / 3)
     var n_tris  = Int32(len(i_list) / 3)
@@ -1440,6 +1441,9 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         return
 
     store_mesh(s, p_list.unsafe_ptr(), i_list.unsafe_ptr(), n_verts, n_tris)
+    if Int32(len(ptex_ids)) == n_tris:
+        ref pm = s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1]
+        for pi in range(Int(n_tris)): pm.ptex_faces.append(Int32(ptex_ids[pi]))
     _psc_apply_shape_alpha(s, params)
     if Int32(len(uv_list)) >= n_verts * Int32(2):
         for ui in range(Int(n_verts) * 2):
@@ -1625,6 +1629,10 @@ def handle_texture(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         var pok = external_call["ptex_average_rgb", Int32,
             Pointer[UInt8, MutUntrackedOrigin], Float32, Pointer[Float32, MutUntrackedOrigin]](fname, pgamma, avg)
         fname.unsafe_free()
+        s[unsafe_offset=0].ptex_tex_names.append(name_str)
+        s[unsafe_offset=0].ptex_tex_files.append(pfile)
+        s[unsafe_offset=0].ptex_tex_scale.append(pscale)
+        s[unsafe_offset=0].ptex_tex_gamma.append(pgamma)
         if pok != Int32(0):
             s[unsafe_offset=0].const_tex_names.append(name_str)
             s[unsafe_offset=0].const_tex_rgb.append(avg[unsafe_offset=0] * pscale)
@@ -2099,6 +2107,51 @@ def _film_white_balance_matrix(temp_k: Float32) -> SIMD[DType.float32, 16]:
 
 # ── Scene finalization ────────────────────────────────────────────────────────
 
+def _pack_ptex_rgb(r: Float32, g: Float32, b: Float32) -> Int64:
+    """Three 20-bit fixed-point channels over [0,16) in one Int64 (read back by shading.mojo's _tex_lookup)."""
+    var k = Float32(1048575.0 / 16.0)
+    var pr = Int64(min(max(r, Float32(0)), Float32(15.99)) * k)
+    var pg = Int64(min(max(g, Float32(0)), Float32(15.99)) * k)
+    var pb = Int64(min(max(b, Float32(0)), Float32(15.99)) * k)
+    return (pr << 40) | (pg << 20) | pb
+
+
+def _bake_ptex_tris(fis: Pointer[Int64, MutUntrackedOrigin], nt: Int, faces: List[Int32],
+                    file: String, scale: Float32, gamma: Float32):
+    """Overwrite a mesh's per-triangle faceIndices with each triangle's packed Ptex face colour; triangles
+    without a face id (or an unreadable file) get the file's mean colour (grey if unreadable)."""
+    var flen = file.byte_length()
+    var fname = unsafe_alloc[UInt8](flen + 1)
+    for ci in range(flen): fname[unsafe_offset=ci] = file.unsafe_ptr()[unsafe_offset=ci]
+    fname[unsafe_offset=flen] = UInt8(0)
+    var data = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](1)
+    var nf = unsafe_alloc[Int32](1)
+    nf[unsafe_offset=0] = Int32(0)
+    var ok = external_call["ptex_face_rgb", Int32,
+        Pointer[UInt8, MutUntrackedOrigin], Float32, Pointer[Pointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin],
+        Pointer[Int32, MutUntrackedOrigin]](fname, gamma, data, nf)
+    fname.unsafe_free()
+    var n_faces = Int(nf[unsafe_offset=0])
+    var mr = Float32(0.5); var mg = Float32(0.5); var mb = Float32(0.5)
+    if ok != Int32(0) and n_faces > 0:
+        var sr = Float64(0); var sg = Float64(0); var sb = Float64(0)
+        for f in range(n_faces):
+            sr += Float64(data[unsafe_offset=0][unsafe_offset=f*3]); sg += Float64(data[unsafe_offset=0][unsafe_offset=f*3+1]); sb += Float64(data[unsafe_offset=0][unsafe_offset=f*3+2])
+        mr = Float32(sr / Float64(n_faces)); mg = Float32(sg / Float64(n_faces)); mb = Float32(sb / Float64(n_faces))
+    var mean_packed = _pack_ptex_rgb(mr * scale, mg * scale, mb * scale)
+    var have_ids = ok != Int32(0) and len(faces) == nt
+    for t in range(nt):
+        var fid = Int(faces[t]) if have_ids else -1
+        if fid >= 0 and fid < n_faces:
+            var base = data[unsafe_offset=0]
+            fis[unsafe_offset=t] = _pack_ptex_rgb(base[unsafe_offset=fid*3] * scale, base[unsafe_offset=fid*3+1] * scale, base[unsafe_offset=fid*3+2] * scale)
+        else:
+            fis[unsafe_offset=t] = mean_packed
+    if ok != Int32(0):
+        _ = external_call["free_texture_rgb", Int32, Pointer[Float32, MutUntrackedOrigin]](data[unsafe_offset=0])
+    data.unsafe_free(); nf.unsafe_free()
+
+
 def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                  psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
                  verbose: Bool = False):
@@ -2357,6 +2410,9 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         for ti2 in range(nt * 3): vis_c[unsafe_offset=ti2] = ma.vert_idxs[ti2]
         var fis_c = unsafe_alloc[Int64](nt)
         for ti2 in range(nt): fis_c[unsafe_offset=ti2] = ma.face_idxs[ti2]
+        if ma.mat_idx >= Int32(0) and Int(ma.mat_idx) < n_regular and s[unsafe_offset=0].named_materials[Int(ma.mat_idx)].tex_idx == Int32(-3):
+            ref pnm = s[unsafe_offset=0].named_materials[Int(ma.mat_idx)]
+            _bake_ptex_tris(fis_c, nt, ma.ptex_faces, pnm.ptex_file, pnm.ptex_scale, pnm.ptex_gamma)
         out_pts[unsafe_offset=i] = pts_c
         out_vis[unsafe_offset=i] = vis_c
         out_fis[unsafe_offset=i] = fis_c

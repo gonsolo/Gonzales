@@ -110,6 +110,10 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     # interior every time it is activated, exactly as an explicit
     # `MediumInterface "x_interior" ""` would.
     var sss_medium_idx: Int32
+    # Ptex reflectance (tex_idx == -3): file, linear scale and decode gamma, baked per triangle in finalize_scene.
+    var ptex_file:      String
+    var ptex_scale:     Float32
+    var ptex_gamma:     Float32
 
     def __init__(out self, name: String):
         self.name           = name
@@ -138,6 +142,9 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
         self.checker_vscale = Float32(1)
         self.measured_bsdf_path = String("")
         self.sss_medium_idx = Int32(-1)
+        self.ptex_file      = String()
+        self.ptex_scale     = Float32(1)
+        self.ptex_gamma     = Float32(2.2)
 
 struct MeshAccum(Copyable, Movable):
     var points:         List[Float32]  # 4 floats per vertex (xyz + pad)
@@ -157,6 +164,7 @@ struct MeshAccum(Copyable, Movable):
     # top-level primitive list — they're only reachable via a per-template
     # BLAS referenced by Instance placements (see pbrt_parser.mojo).
     var is_object_template: Bool
+    var ptex_faces:     List[Int32]    # Ptex face id per triangle (pbrt faceIndices); empty = none
     # pbrt `Shape "texture alpha"` / `"float alpha"`: index into
     # SceneParseState.alpha_mask_* (-1 = none), else the constant alpha.
     var alpha_mask:  Int32
@@ -175,6 +183,7 @@ struct MeshAccum(Copyable, Movable):
         self.inside_medium  = inside_medium
         self.outside_medium = outside_medium
         self.is_object_template = False
+        self.ptex_faces    = List[Int32]()
         self.alpha_mask    = -1
         self.alpha_const   = 1.0
 
@@ -298,6 +307,10 @@ struct SceneParseState(Movable):
     var alpha_mask_h:     List[Int32]
     # Constant textures: name -> RGB value (3 floats per entry, parallel to names)
     var const_tex_names: List[String]
+    var ptex_tex_names:  List[String]
+    var ptex_tex_files:  List[String]
+    var ptex_tex_scale:  List[Float32]
+    var ptex_tex_gamma:  List[Float32]
     var const_tex_rgb: List[Float32]
     # Procedural checkerboard textures: name -> (tex1 RGB, tex2 RGB, uscale, vscale),
     # parallel to names. Evaluated analytically per-shading-point (not baked to an
@@ -474,6 +487,10 @@ struct SceneParseState(Movable):
         self.alpha_mask_w     = List[Int32]()
         self.alpha_mask_h     = List[Int32]()
         self.const_tex_names = List[String]()
+        self.ptex_tex_names  = List[String]()
+        self.ptex_tex_files  = List[String]()
+        self.ptex_tex_scale  = List[Float32]()
+        self.ptex_tex_gamma  = List[Float32]()
         self.const_tex_rgb = List[Float32]()
         self.checker_tex_names = List[String]()
         self.scale_tex_names = List[String]()
