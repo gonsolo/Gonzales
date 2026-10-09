@@ -738,7 +738,10 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     # SPPM traces visible points ONCE, before any photon pass exists, so a
     # VP's wavelengths cannot agree with the photons'. That is why `tau` is
     # RGB -- see SPPMPixel.tau.
-    var vp_wavelengths = sample_wavelengths(pcg.next_float())
+    # Stratified over the pixel's VP samples: a VP keeps these wavelengths for the whole
+    # render, so random ones leave a fixed colour error per visible point.
+    var vp_wavelengths = sample_wavelengths(_vp_strat_u(vdc, pidx, 1000))
+    _ = pcg.next_float()
 
     var vp = SPPMPixel(
         pos=Point3f(Float32(0)),
