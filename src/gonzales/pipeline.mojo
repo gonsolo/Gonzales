@@ -57,7 +57,7 @@ from .vulkaninterop import (
 # too large over-blurs and slows the gather, so this deliberately sits at the
 # low end of the working range and SPPM's own per-pass radius reduction takes
 # it down from there.
-comptime SPPM_DEFAULT_RADIUS_FRACTION = Float32(0.006)
+comptime SPPM_DEFAULT_RADIUS_FRACTION = Float32(0.012)
 
 # Resolve effective SPPM radius/photons-per-pass: an explicit CLI flag
 # (sentinel -1 = not passed) wins; otherwise fall back to what the scene's
@@ -116,7 +116,8 @@ def _resolve_sppm_params(
         if psc[unsafe_offset=0].sppm_photons_per_iter > Int32(0):
             photons = psc[unsafe_offset=0].sppm_photons_per_iter
         else:
-            photons = psc[unsafe_offset=0].film_w * psc[unsafe_offset=0].film_h
+            # pbrt uses one photon per pixel; on small images that leaves chromatic blotches
+            photons = max(psc[unsafe_offset=0].film_w * psc[unsafe_offset=0].film_h, Int32(2_000_000))
     return (photons, radius)
 
 # Resolve the VCM merge side's light-path budget for the current pass

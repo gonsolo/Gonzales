@@ -45,7 +45,7 @@ def sppm_gen_vp_gpu(
     var px = pix % Int(fw)
     var py = pix // Int(fw)
     var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
-    vps[unsafe_offset=combined] = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch.unsafe_offset(combined), Int(max_depth_dp), film_filter)
+    vps[unsafe_offset=combined] = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch.unsafe_offset(combined), Int(max_depth_dp), film_filter, combined % vp_samples)
 
 
 def sppm_emit_photons_gpu(

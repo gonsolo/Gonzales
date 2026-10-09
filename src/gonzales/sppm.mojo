@@ -81,6 +81,18 @@ comptime _HSIZE  = 1048576   # 2^20 hash buckets
 # converges correctly since its surface/position never changes pass to pass.
 comptime _VP_SAMPLES = 16
 
+# GPU renders trace up to 32 visible points per pixel while they fit a VRAM budget: sparse
+# bright features seen through glass stipple with 16 (about 1.7x the time). The CPU keeps 16.
+comptime _VP_BUDGET_BYTES = 5_000_000_000
+
+def _vp_samples_for(n_pix: Int, use_gpu: Bool) -> Int:
+    if not use_gpu:
+        return _VP_SAMPLES
+    var n = 32
+    while n > _VP_SAMPLES and n_pix * n * (size_of[SPPMPixel]() + size_of[Intersection]()) > _VP_BUDGET_BYTES:
+        n //= 2
+    return n
+
 
 # ── Data structures ───────────────────────────────────────────────────────────
 
@@ -420,6 +432,14 @@ def _cosine_hemisphere_sample(n: Vec3f, u1: Float32, u2: Float32) -> Vec3f:
 # behavior-preserving signature change for any caller that doesn't thread
 # real values through.
 @always_inline
+def _vp_strat_u(vdc: Float32, pidx: Int32, bounce: Int) -> Float32:
+    """vdc shifted by a per-(pixel, bounce) random offset (Cranley-Patterson), wrapped to [0,1)."""
+    var shift_rng = PCG32(UInt64(pidx) * UInt64(0x9E3779B97F4A7C15) + UInt64(bounce + 1), UInt64(3))
+    var sh = shift_rng.next_float()
+    var v = vdc + sh
+    return v - floor(v) if v >= Float32(1.0) else v
+
+@always_inline
 def _dielectric_bounce(
     ray_dir: Vec3f,
     hit_point: Vec3f,
@@ -439,6 +459,8 @@ def _dielectric_bounce(
     previous_ior: Float32 = Float32(1.0),   # IOR one level below current_ior (what exiting restores)
     is_thin: Bool = False,                  # `thindielectric`: both interfaces at once
     radiance_mode: Bool = True,             # camera path; False for a photon/light path
+    balance_branches: Bool = False,         # reflect with p=clamp(F,.25,.75), reweighted: a 5% reflection of a bright sky is not a coin flip
+    u_strat: Float32 = Float32(-1.0),       # >=0: stratified lobe-selection sample across a pixel's VP samples
 ) -> Tuple[Vec3f, Vec3f, Float32, Float32, Float32]:
     """SPPM/VCM's dielectric bounce: a RAY-LEVEL adapter over the path
     tracer's BxDFs, holding no scattering physics of its own.
@@ -467,6 +489,8 @@ def _dielectric_bounce(
     origin off the surface it just left (+n on reflect, -n on transmit).
     `radiance_mode` is pbrt's TransportMode, passed through."""
     var u = pcg.next_float()
+    if u_strat >= Float32(0):
+        u = u_strat
     if is_thin:
         # A thin slab's two interfaces coincide: no bend, no medium entry and
         # no radiance compression, so the ior stack is untouched and the mode
@@ -475,11 +499,22 @@ def _dielectric_bounce(
         var off_t = n_t if (Int(bs_t.flags) & Int(BxDFFlags.reflect)) != 0 else -n_t
         return (bs_t.wi, hit_point + off_t * offset_eps(hit_point.x, hit_point.y, hit_point.z), bs_t.f.r,
                 current_ior, previous_ior)
+    var branch_w = Float32(1.0)
+    if balance_branches:
+        var di = dielectric_interface(geom_normal, ray_dir, ior, force_entering, current_ior, previous_ior)
+        if not di.tir:
+            var p = min(max(di.fresnel, Float32(0.25)), Float32(0.75))
+            if u < p:
+                u = di.fresnel * (u / p)
+                branch_w = di.fresnel / p
+            else:
+                u = di.fresnel + (Float32(1.0) - di.fresnel) * ((u - p) / (Float32(1.0) - p))
+                branch_w = (Float32(1.0) - di.fresnel) / (Float32(1.0) - p)
     var (bs, normal, new_current_ior, new_previous_ior) = bxdf_sample_dielectric(
         geom_normal, ray_dir, ior, force_entering, u, current_ior, previous_ior,
         radiance_mode)
     var off = normal if (Int(bs.flags) & Int(BxDFFlags.reflect)) != 0 else -normal
-    return (bs.wi, hit_point + off * offset_eps(hit_point.x, hit_point.y, hit_point.z), bs.f.r,
+    return (bs.wi, hit_point + off * offset_eps(hit_point.x, hit_point.y, hit_point.z), bs.f.r * branch_w,
             new_current_ior, new_previous_ior)
 
 
@@ -673,6 +708,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     scratch:  Pointer[Intersection, MutUntrackedOrigin],
     maxdepth: Int,
     film_filter: FilmFilter,
+    vp_sample: Int,
 ) -> SPPMPixel:
     """Trace one primary ray for pixel (px,py), returning its visible point.
     Shared verbatim between the CPU driver (_sppm_camera_pass, [False]) and
@@ -685,6 +721,16 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     call from a GPU kernel thread, same convention as bdpt_*.mojo's shared
     subpath tracers."""
     var has_media = Int(sd.mediumCount) > 0
+    # Van der Corput value of this VP sample: stratifies the glass reflect/refract
+    # choice across the pixel's samples (shifted per pixel and bounce below).
+    var vdc = Float32(0)
+    var vdc_f = Float32(0.5)
+    var vdc_i = vp_sample
+    while vdc_i > 0:
+        if (vdc_i & 1) != 0:
+            vdc += vdc_f
+        vdc_i >>= 1
+        vdc_f *= Float32(0.5)
 
     # One hero-wavelength sample for this VP's own camera subpath, carrying
     # its throughput (`beta`), its direct-lighting term (`ld`) and its
@@ -1029,7 +1075,8 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 gn, gn, hit.to_simd(), ray_dir, sd.camFp.cone_spread * cone_len, sd.camFp,
                 sd.textures, sd.gpuTextures, Int(sd.gpuTextureCount))
             var (new_dir, new_org, radiance_scale, new_cur_ior, new_prev_ior) = _dielectric_bounce(
-                ray_dir, hit.to_simd(), gn, ior, False, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric)
+                ray_dir, hit.to_simd(), gn, ior, False, pcg, current_dielectric_ior, previous_dielectric_ior, mat.type == MatKind.thin_dielectric, True, True,
+                _vp_strat_u(vdc, pidx, bounce))
             current_dielectric_ior = new_cur_ior
             previous_dielectric_ior = new_prev_ior
             vp.beta *= radiance_scale  # camera-path (Radiance mode): apply non-symmetric-scattering correction
@@ -1088,7 +1135,7 @@ def _sppm_camera_pass(
         var px = pix % Int(fw)
         var py = pix // Int(fw)
         var pcg = PCG32(seed ^ UInt64(combined * 6364136223846793005 + 1), UInt64(1))
-        vps[unsafe_offset=combined] = _sppm_trace_visible_point[False](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, scratch.unsafe_offset(combined), maxdepth, film_filter)
+        vps[unsafe_offset=combined] = _sppm_trace_visible_point[False](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, scratch.unsafe_offset(combined), maxdepth, film_filter, combined % vp_samples)
 
     parallelize(trace_one, n_pix * vp_samples)
 

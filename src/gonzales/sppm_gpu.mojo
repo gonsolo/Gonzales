@@ -15,7 +15,7 @@ from .bvh import SceneView
 from .sampling import film_filter_of
 from .footprint import camera_footprint
 from .pbrt_parser import ParsedScene_Mojo
-from .sppm import _HSIZE, SPPMPixel, SPPMPhoton, _VP_SAMPLES, _MAX_B, _photon_depth_cap
+from .sppm import _HSIZE, SPPMPixel, SPPMPhoton, _vp_samples_for, _MAX_B, _photon_depth_cap
 from .gpu_scene import GpuSceneHandle
 from max.gpu.host._nvidia_cuda import CUDA
 from .progress import Progress
@@ -79,7 +79,9 @@ def sppm_render_gpu(
             var handle = handlePtr
             comptime block_size = 256
 
-            var n_vps = n_pix * _VP_SAMPLES
+            var vp_samples = _vp_samples_for(n_pix, True)
+            var n_vps = n_pix * vp_samples
+            print("SPPM (GPU): " + String(vp_samples) + " visible points per pixel")
             # Sized for the worst case, mirroring sppm.mojo's CPU driver
             # (_sppm_render_core) exactly -- see its comment for why
             var max_bounces_per_photon = min(Int(psc[unsafe_offset=0].max_depth), _photon_depth_cap(sd))
@@ -137,7 +139,7 @@ def sppm_render_gpu(
             var (spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) = handle[].spectral.unsafe_ptrs()
             handle[].cam_fp = camera_footprint(psc[unsafe_offset=0].raster_to_camera,
                 psc[unsafe_offset=0].camera_to_world,
-                Int(psc[unsafe_offset=0].film_w), Int(psc[unsafe_offset=0].film_h), _VP_SAMPLES)
+                Int(psc[unsafe_offset=0].film_w), Int(psc[unsafe_offset=0].film_h), vp_samples)
             var gsd = handle[].scene_descriptor()
 
             var grid_pix = ceildiv(n_pix, block_size)
@@ -151,7 +153,7 @@ def sppm_render_gpu(
                 vps_ptr,
                 inter_cam_ptr,
                 Int64(n_pix),
-                Int64(_VP_SAMPLES),
+                Int64(vp_samples),
                 psc[unsafe_offset=0].film_w,
                 r2c_ptr,
                 c2w_ptr,
@@ -246,7 +248,7 @@ def sppm_render_gpu(
             _ = prog.finish()
 
             handle[].ctx.enqueue_function[sppm_finalize_gpu](
-                vps_ptr, Int64(n_pix), Int64(_VP_SAMPLES), Int32(n_passes), iso_scale, out_ptr, caustic_ptr, albedo_out_ptr,
+                vps_ptr, Int64(n_pix), Int64(vp_samples), Int32(n_passes), iso_scale, out_ptr, caustic_ptr, albedo_out_ptr,
                 spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
                 grid_dim=grid_pix, block_dim=block_size)
             handle[].ctx.synchronize()
@@ -260,16 +262,16 @@ def sppm_render_gpu(
                         var any_valid = False
                         var any_phot = False
                         var any_light = False
-                        for s_i in range(_VP_SAMPLES):
-                            var v = vp_host[unsafe_offset=pi * _VP_SAMPLES + s_i]
+                        for s_i in range(vp_samples):
+                            var v = vp_host[unsafe_offset=pi * vp_samples + s_i]
                             if v.valid != Int32(0):
                                 any_valid = True
                                 if v.N_acc > Float32(0): any_phot = True
                             if (v.ld.v0 + v.ld.v1 + v.ld.v2 + v.ld.v3) > Float32(1e-12): any_light = True
                             if (v.env.r + v.env.g + v.env.b) > Float32(1e-12): any_light = True
                         n_tot += 1
-                        for s_i in range(_VP_SAMPLES):
-                            var v2 = vp_host[unsafe_offset=pi * _VP_SAMPLES + s_i]
+                        for s_i in range(vp_samples):
+                            var v2 = vp_host[unsafe_offset=pi * vp_samples + s_i]
                             if v2.mat_kind == LobeKind.bssrdf and v2.valid != Int32(0):
                                 n_bssrdf += 1
                                 var ts = v2.tau.r + v2.tau.g + v2.tau.b
