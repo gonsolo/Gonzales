@@ -929,8 +929,9 @@ def _sppm_trace_visible_point[use_gpu: Bool](
             # delta: it scatters but stores no visible point, exactly like
             # bdpt_*.mojo's own lobe_is_delta_of gate.
             var near_mirror = mat.type == MatKind.conductor and max(mat.roughU, mat.roughV) <= Float32(0.02)
+            var coat_as_mirror = False
             if not lobe_is_delta_of(mat) and not near_mirror:   # near-mirror chrome: the photon map can't resolve its lobe
-                if mat.type == MatKind.coated_diffuse and max(mat.roughU, mat.roughV) <= Float32(0.02):
+                if mat.type == MatKind.coated_diffuse and max(mat.roughU, mat.roughV) <= Float32(0.05):
                     # The smooth coat's mirror lobe is a delta the gather cannot see: take it with
                     # probability F and keep tracing, else the VP carries 1/(1-F).
                     var wo_s = (-rd).to_simd()
@@ -940,6 +941,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                         ro = hit + rd * Float32(0.0002)
                         continue
                     vp.beta *= Float32(1.0) / (Float32(1.0) - f_coat)
+                    coat_as_mirror = True
                 vp.pos = hit
                 vp.normal = vec3f(gn)
                 vp.geo_normal = vec3f(gn_geo)
@@ -950,7 +952,7 @@ def _sppm_trace_visible_point[use_gpu: Bool](
                 vp.mat_kind = lobe_kind_of(mat.type)
                 vp.mat_idx = Int32(mat_idx)
                 vp.wo = vec3f((-rd).to_simd())
-                vp.alpha = lobe_param_of(mat)
+                vp.alpha = Float32(1e-4) if coat_as_mirror else lobe_param_of(mat)   # smooth top: the gather skips the glossy coat lobe
                 if on_curve:
                     vp.hair_curve_idx = Int32(inter.primId.id1)
                     vp.hair_h = inter.u

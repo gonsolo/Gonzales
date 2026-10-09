@@ -1130,7 +1130,7 @@ def lobe_eval[want_pdfs: Bool = True](
         # Light-side vertices evaluate the adjoint (importance transport).
         var mat_ly = tab.materials[unsafe_offset=Int(c.mat_idx)]
         var ior_ly = mat_ly.emission.r
-        var alpha_ly = max(mat_ly.roughU, mat_ly.roughV)
+        var alpha_ly = c.param if c.param > Float32(0) else max(mat_ly.roughU, mat_ly.roughV)   # param>0: caller forces the top alpha
         var fr_ly = Frame.from_z(Vec3f(vn[0], vn[1], vn[2]))
         var tx_ly = Vec3f(fr_ly.x.x, fr_ly.x.y, fr_ly.x.z)
         var ty_ly = Vec3f(fr_ly.y.x, fr_ly.y.y, fr_ly.y.z)
