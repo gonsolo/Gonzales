@@ -15,14 +15,14 @@ from .bvh import SceneView
 from .sampling import film_filter_of
 from .footprint import camera_footprint
 from .pbrt_parser import ParsedScene_Mojo
-from .sppm import _HSIZE, SPPMPixel, SPPMPhoton, _vp_samples_for, _MAX_B, _photon_depth_cap
+from .sppm import _HSIZE, SPPMPixel, SPPMPhoton, _vp_samples_for, _VP_SAMPLES, _MAX_B, _photon_depth_cap
 from .gpu_scene import GpuSceneHandle
 from max.gpu.host._nvidia_cuda import CUDA
 from .progress import Progress
 from .outputs import finish_render
 from .sppm_kernels import (
     sppm_reset_i32_gpu, sppm_gen_vp_gpu, sppm_emit_photons_gpu, sppm_grid_reset_gpu, sppm_grid_count_gpu,
-    sppm_grid_insert_gpu, sppm_gather_gpu, sppm_nee_gpu, sppm_finalize_gpu,
+    sppm_grid_insert_gpu, sppm_gather_gpu, sppm_nee_gpu, sppm_finalize_gpu, sppm_flush_gpu, sppm_retrace_vp_gpu,
 )
 
 def sppm_render_gpu(
@@ -79,9 +79,12 @@ def sppm_render_gpu(
             var handle = handlePtr
             comptime block_size = 256
 
-            var vp_samples = _vp_samples_for(n_pix, True)
+            # Surface-only scenes retrace one visible point per pixel every pass (pbrt's SPPM):
+            # camera samples = passes, and the gather touches 1 VP per pixel instead of 32.
+            var retrace = Int(sd.mediumCount) == 0 and Int(sd.curveCount) == 0
+            var vp_samples = 1 if retrace else _vp_samples_for(n_pix, True)
             var n_vps = n_pix * vp_samples
-            print("SPPM (GPU): " + String(vp_samples) + " visible points per pixel")
+            print("SPPM (GPU): " + ("one retraced visible point per pixel per pass" if retrace else String(vp_samples) + " visible points per pixel"))
             # Sized for the worst case, mirroring sppm.mojo's CPU driver
             # (_sppm_render_core) exactly -- see its comment for why
             var max_bounces_per_photon = min(Int(psc[unsafe_offset=0].max_depth), _photon_depth_cap(sd))
@@ -139,7 +142,7 @@ def sppm_render_gpu(
             var (spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65) = handle[].spectral.unsafe_ptrs()
             handle[].cam_fp = camera_footprint(psc[unsafe_offset=0].raster_to_camera,
                 psc[unsafe_offset=0].camera_to_world,
-                Int(psc[unsafe_offset=0].film_w), Int(psc[unsafe_offset=0].film_h), vp_samples)
+                Int(psc[unsafe_offset=0].film_w), Int(psc[unsafe_offset=0].film_h), _VP_SAMPLES)
             var gsd = handle[].scene_descriptor()
 
             var grid_pix = ceildiv(n_pix, block_size)
@@ -149,23 +152,24 @@ def sppm_render_gpu(
             # Camera/visible-point samples are traced ONCE for the whole
             # render, not per SPPM pass — see _sppm_trace_visible_point's
             var cam_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(0x9E3779B97F4A7C15 + 7)
-            handle[].ctx.enqueue_function[sppm_gen_vp_gpu](
-                vps_ptr,
-                inter_cam_ptr,
-                Int64(n_pix),
-                Int64(vp_samples),
-                psc[unsafe_offset=0].film_w,
-                r2c_ptr,
-                c2w_ptr,
-                init_r2,
-                cam_seed,
-                Int64(psc[unsafe_offset=0].max_depth),
-                film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
-                               psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y),
-                gsd,
-                grid_dim=grid_vps,
-                block_dim=block_size,
-            )
+            if not retrace:
+                handle[].ctx.enqueue_function[sppm_gen_vp_gpu](
+                    vps_ptr,
+                    inter_cam_ptr,
+                    Int64(n_pix),
+                    Int64(vp_samples),
+                    psc[unsafe_offset=0].film_w,
+                    r2c_ptr,
+                    c2w_ptr,
+                    init_r2,
+                    cam_seed,
+                    Int64(psc[unsafe_offset=0].max_depth),
+                    film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
+                                   psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y),
+                    gsd,
+                    grid_dim=grid_vps,
+                    block_dim=block_size,
+                )
 
             var prog = Progress(n_passes, "passes", quiet=verbose)
             for pass_idx in range(n_passes):
@@ -173,6 +177,15 @@ def sppm_render_gpu(
                     counter_ptr, grid_dim=1, block_dim=1)
 
                 var pass_seed = psc[unsafe_offset=0].rng_seed ^ UInt64(pass_idx * 2654435761 + 1)
+                if retrace:
+                    handle[].ctx.enqueue_function[sppm_retrace_vp_gpu](
+                        vps_ptr, inter_cam_ptr, Int64(n_pix), psc[unsafe_offset=0].film_w,
+                        r2c_ptr, c2w_ptr, init_r2, cam_seed ^ UInt64(pass_idx * 0x94D049BB133111EB + 5),
+                        Int64(psc[unsafe_offset=0].max_depth),
+                        film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
+                                       psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y),
+                        Int64(pass_idx), gsd,
+                        grid_dim=grid_vps, block_dim=block_size)
                 var grid_emit = ceildiv(max(n_photons_per_pass, 1), block_size)
                 handle[].ctx.enqueue_function[sppm_emit_photons_gpu](
                     photons_ptr,
@@ -239,6 +252,10 @@ def sppm_render_gpu(
                     grid_dim=grid_vps,
                     block_dim=block_size,
                 )
+
+                handle[].ctx.enqueue_function[sppm_flush_gpu](
+                    vps_ptr, Int64(n_vps), spectral_coeffs, Int64(spectral_res), spectral_cie_x, spectral_cie_y,
+                    spectral_cie_z, spectral_d65, grid_dim=grid_vps, block_dim=block_size)
 
                 if verbose:
                     print("SPPM (GPU): pass " + String(pass_idx + 1) + "/" + String(n_passes)

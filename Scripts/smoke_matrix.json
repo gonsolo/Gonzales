@@ -66,7 +66,7 @@
   },
   "curves-hair.sppm": {
     "mean": 2.952396,
-    "median": 0.068594,
+    "median": 0.076644,
     "tol": 0.03
   },
   "curves-hair.vcm": {
@@ -95,8 +95,8 @@
     "tol": 0.03
   },
   "many-lights.sppm": {
-    "mean": 0.61487,
-    "median": 0.536857,
+    "mean": 0.699478,
+    "median": 0.488488,
     "tol": 0.03
   },
   "many-lights.vcm": {
@@ -111,7 +111,7 @@
   },
   "medium-sphere-light.sppm": {
     "mean": 0.023252,
-    "median": 0.007667,
+    "median": 0.007960,
     "tol": 0.03
   },
   "medium-sphere-light.vcm": {
@@ -126,7 +126,7 @@
   },
   "mnee-through-glass.sppm": {
     "mean": 0.204694,
-    "median": 0.114347,
+    "median": 0.118943,
     "tol": 0.03
   },
   "mnee-through-glass.vcm": {
@@ -141,7 +141,7 @@
   },
   "normal-map.sppm": {
     "mean": 0.073496,
-    "median": 0.021664,
+    "median": 0.02244,
     "tol": 0.03
   },
   "normal-map.vcm": {
@@ -186,7 +186,7 @@
   },
   "sss-slab.sppm": {
     "mean": 41.460907,
-    "median": 56.623383,
+    "median": 59.887604,
     "tol": 0.03
   },
   "sss-slab.vcm": {

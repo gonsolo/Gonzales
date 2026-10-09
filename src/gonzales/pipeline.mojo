@@ -117,7 +117,9 @@ def _resolve_sppm_params(
             photons = psc[unsafe_offset=0].sppm_photons_per_iter
         else:
             # pbrt uses one photon per pixel; on small images that leaves chromatic blotches
-            photons = max(psc[unsafe_offset=0].film_w * psc[unsafe_offset=0].film_h, Int32(2_000_000))
+            photons = psc[unsafe_offset=0].film_w * psc[unsafe_offset=0].film_h
+            if Int(sd.mediumCount) == 0:   # media (SSS especially) need many photon slots per path
+                photons = max(photons, Int32(2_000_000))
     return (photons, radius)
 
 # Resolve the VCM merge side's light-path budget for the current pass

@@ -13,7 +13,7 @@
 # fixed name in the working directory, which every render overwrote.
 
 from std.ffi import external_call
-from std.math import ceil
+from std.math import ceil, exp
 from std.memory.alloc import unsafe_alloc
 from max.algorithm import parallelize
 from .bvh import SceneView, render_aux_buffers
@@ -144,7 +144,7 @@ def chroma_smooth(
     albedo: Pointer[Float32, MutUntrackedOrigin], normals: Pointer[Float32, MutUntrackedOrigin],
     depth: Pointer[Float32, MutUntrackedOrigin], fw: Int, fh: Int,
 ):
-    """dst = src with its colour (not its brightness) averaged over a 7x7 window that stops at
+    """dst = src with its colour (not its brightness) averaged over a 17x17 window that stops at
     normal, depth and albedo edges. The mean is energy-weighted, so a bright caustic keeps its hue
     while the chroma noise of sparse photon density on dark surfaces is smoothed."""
     def row(y: Int) {imm}:
@@ -152,11 +152,11 @@ def chroma_smooth(
             var i = y * fw + x
             var yi = Float32(0.2126) * src[unsafe_offset=i*3] + Float32(0.7152) * src[unsafe_offset=i*3+1] + Float32(0.0722) * src[unsafe_offset=i*3+2]
             var sr = Float32(0); var sg = Float32(0); var sb = Float32(0)
-            for dy in range(-3, 4):
+            for dy in range(-8, 9):
                 var yy = y + dy
                 if yy < 0 or yy >= fh:
                     continue
-                for dx in range(-3, 4):
+                for dx in range(-8, 9):
                     var xx = x + dx
                     if xx < 0 or xx >= fw:
                         continue
@@ -168,7 +168,7 @@ def chroma_smooth(
                         continue
                     if abs(albedo[unsafe_offset=i*3] - albedo[unsafe_offset=j*3]) + abs(albedo[unsafe_offset=i*3+1] - albedo[unsafe_offset=j*3+1]) + abs(albedo[unsafe_offset=i*3+2] - albedo[unsafe_offset=j*3+2]) > Float32(0.3):
                         continue
-                    var w = Float32(1.0) / (Float32(1.0) + Float32(dx * dx + dy * dy))
+                    var w = exp(Float32(-(dx * dx + dy * dy)) * Float32(1.0 / 32.0))
                     sr += w * src[unsafe_offset=j*3]; sg += w * src[unsafe_offset=j*3+1]; sb += w * src[unsafe_offset=j*3+2]
             var ys = Float32(0.2126) * sr + Float32(0.7152) * sg + Float32(0.0722) * sb
             if ys > Float32(1e-12) and yi > Float32(0):
@@ -226,11 +226,6 @@ def finish_render[Op: Origin[mut=True], Oa: Origin[mut=True]](
     var has_extra = _is_real_ptr(add_after_denoise)
     var extra_ptr = add_after_denoise
     var extra_owned = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
-    if has_extra and not no_denoise:
-        extra_owned = unsafe_alloc[Float32](n_pix * 3)
-        chroma_smooth(add_after_denoise.unsafe_origin_cast[MutUntrackedOrigin](), extra_owned,
-                      albedo.unsafe_origin_cast[MutUntrackedOrigin](), normals, depth, Int(fw), Int(fh))
-        extra_ptr = extra_owned
     var noisy_ref = pixels.unsafe_origin_cast[MutUntrackedOrigin]()
     var noisy_owned = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
     if has_extra:
@@ -248,6 +243,13 @@ def finish_render[Op: Origin[mut=True], Oa: Origin[mut=True]](
             ng = ng.sensor_clamped(max_comp)
             noisy_owned[unsafe_offset=i*3+0] = ng.r; noisy_owned[unsafe_offset=i*3+1] = ng.g; noisy_owned[unsafe_offset=i*3+2] = ng.b
         noisy_ref = noisy_owned
+        if not no_denoise:
+            # SPPM's few-photon regions (dark thin surfaces) leave coloured blobs the denoiser keeps
+            var smoothed = unsafe_alloc[Float32](n_pix * 3)
+            chroma_smooth(out, smoothed, albedo.unsafe_origin_cast[MutUntrackedOrigin](), normals, depth, Int(fw), Int(fh))
+            for i in range(n_pix * 3):
+                out[unsafe_offset=i] = smoothed[unsafe_offset=i]
+            smoothed.unsafe_free()
     else:
         noisy_owned = unsafe_alloc[Float32](n_pix * 3)
         for i in range(n_pix * 3):
@@ -258,7 +260,5 @@ def finish_render[Op: Origin[mut=True], Oa: Origin[mut=True]](
     apply_film_sensor(noisy_owned, n_pix, psc[unsafe_offset=0].film_exposuretime, psc[unsafe_offset=0].film_wb)
     var ret = write_render_outputs(psc, out, noisy_ref, not no_denoise, albedo, normals, depth)
     noisy_owned.unsafe_free()
-    if has_extra and not no_denoise:
-        extra_owned.unsafe_free()
     normals.unsafe_free(); depth.unsafe_free(); out.unsafe_free()
     return ret
