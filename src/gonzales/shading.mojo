@@ -737,6 +737,30 @@ def _sphere_geom_normal_and_ray(
     return (gn, rd, ro)
 
 
+@always_inline
+def _curve_geom_normal_and_ray(
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
+    inter: Intersection,
+    curves: Pointer[Curve, MutUntrackedOrigin],
+) -> Tuple[Vec3f, Vec3f, Vec3f]:
+    var rd = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
+    var ro = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
+    var curve = curves[unsafe_offset=Int(inter.primId.id1)]
+    var h = max(Float32(-0.99), min(Float32(0.99), inter.u))
+    var piece = min(Int(curve.n_pieces) - 1, max(0, Int(inter.v * Float32(curve.n_pieces))))
+    var (q0, q1, _, _) = curve_piece_endpoints(curve, piece)
+    var seg_axis = q1 - q0
+    var seg_len = sqrt(dot(seg_axis, seg_axis))
+    var tangent = Vec3f(Float32(1.0), Float32(0.0), Float32(0.0))
+    if seg_len > Float32(1e-8):
+        tangent = seg_axis * (Float32(1.0) / seg_len)
+    var n_perp = _curve_perp_axis(tangent)
+    var gn = n_perp * h + cross(tangent, n_perp) * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
+    if dot(gn, rd) > Float32(0.0):
+        gn = -gn
+    return (gn, rd, ro)
+
+
 # ── Unified per-hit geometry (triangle OR analytic sphere) ────────────────────
 # Every material shader used to hand-roll its own "if primId.type==4: sphere
 # branch, else: _get_tri_verts + cross product" — the same handful of lines
@@ -757,8 +781,12 @@ def _hit_geom(
     spheres: Pointer[Sphere, MutUntrackedOrigin],
     instance_idx: Int32 = Int32(-1),
     instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
+    curves: Pointer[Curve, MutUntrackedOrigin] = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Tuple[Bool, Bool, Vec3f, Vec3f, Vec3f, TriangleMesh, Int, Int, Int]:
-    """Returns (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2)."""
+    """Returns (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2). A curve hit (non-hair material) counts as is_sphere: no mesh, no UVs."""
+    if inter.primId.type == Int8(5) and _is_real_ptr(curves):
+        var crv = _curve_geom_normal_and_ray(path_ptr, inter, curves)
+        return (True, True, crv[0], crv[1], crv[2], meshes[unsafe_offset=0], 0, 0, 0)
     if inter.primId.type == Int8(4):
         var sph_r = _sphere_geom_normal_and_ray(path_ptr, inter, spheres)
         return (True, True, sph_r[0], sph_r[1], sph_r[2], meshes[unsafe_offset=0], 0, 0, 0)
@@ -914,7 +942,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
 ):
     var mat = ctx.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var (ok, is_sphere, normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(
-        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances)
+        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances, ctx.curves)
     if not ok:
         path_ptr[].active = 0
         return
@@ -1040,7 +1068,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool =
     mat: Material,
 ):
     var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(
-        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances)
+        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances, ctx.curves)
     if not ok:
         path_ptr[].active = 0
         return
@@ -1255,7 +1283,7 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
     ctx: ShadeContext,
     mat: Material,
 ):
-    var (ok, is_sphere, geom_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres)
+    var (ok, is_sphere, geom_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres, curves=ctx.curves)
     if not ok:
         path_ptr[].active = 0
         return
@@ -1700,7 +1728,7 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
     # only (see Material.rough_tex_idx's docstring); falls back to the
     # parsed scalar roughU/V when there's no texture or no UVs.
     var mat_eff = mat
-    var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres)
+    var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres, curves=ctx.curves)
     if not ok:
         path_ptr[].active = 0
         return
@@ -1889,7 +1917,7 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
     ctx: ShadeContext,
     mat: Material,
 ):
-    var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres)
+    var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres, curves=ctx.curves)
     if not ok:
         path_ptr[].active = 0
         return
@@ -2001,7 +2029,7 @@ def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
     # No shading-normal interpolation here (unlike conductor) — matches the
     # pre-existing coated_conductor behavior of using the flat geometric
     # normal (which, for a sphere, IS already the exact shading normal).
-    var (ok, _, normal, ray_dir, ray_org, _, _, _, _) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres)
+    var (ok, _, normal, ray_dir, ray_org, _, _, _, _) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres, curves=ctx.curves)
     if not ok:
         path_ptr[].active = 0
         return
@@ -2497,7 +2525,7 @@ def _build_geom_context_full[use_gpu: Bool](
     ctx: ShadeContext,
 ) -> Tuple[GeomContext, Bool]:
     var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(
-        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances)
+        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances, ctx.curves)
     if not ok:
         var z = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
         return (GeomContext(z, z, z, z, z, z, RGB(Float32(0.0)), Float32(0.0)), False)
