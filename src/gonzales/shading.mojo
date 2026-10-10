@@ -754,11 +754,27 @@ def _curve_geom_normal_and_ray(
     var tangent = Vec3f(Float32(1.0), Float32(0.0), Float32(0.0))
     if seg_len > Float32(1e-8):
         tangent = seg_axis * (Float32(1.0) / seg_len)
-    var n_perp = _curve_perp_axis(tangent)
-    var gn = n_perp * h + cross(tangent, n_perp) * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
+    # Radial normal from the hit position itself: (u, v) alone lose the sign of the second radial component.
+    var hp = ro + rd * inter.tHit - q0
+    var gn = hp - tangent * dot(hp, tangent)
+    var gl = dot(gn, gn)
+    if gl > Float32(1e-20):
+        gn = gn * (Float32(1.0) / sqrt(gl))
+    else:
+        var n_perp = _curve_perp_axis(tangent)
+        gn = n_perp * h + cross(tangent, n_perp) * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
     if dot(gn, rd) > Float32(0.0):
         gn = -gn
     return (gn, rd, ro)
+
+
+@always_inline
+def _curve_extra_offset(inter: Intersection, curves: Pointer[Curve, MutUntrackedOrigin]) -> Float32:
+    """Radius-scaled origin offset for a ray leaving a curve hit (same rule as shade_hair); 0 for other primitives."""
+    if inter.primId.type != Int8(5) or not _is_real_ptr(curves):
+        return Float32(0.0)
+    var curve = curves[unsafe_offset=Int(inter.primId.id1)]
+    return curve_offset_eps(Float32(0.5) * (curve.width0 + (curve.width1 - curve.width0) * inter.v))
 
 
 # ── Unified per-hit geometry (triangle OR analytic sphere) ────────────────────
@@ -985,7 +1001,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     # Offset along the GEOMETRIC normal, to the chosen lobe's side (pbrt's
     # OffsetRayOrigin): the shading normal can point into the surface.
     var off_n = geo_n if dot(bounce_normal, -ray_dir) > Float32(0.0) else -geo_n
-    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, off_n)
+    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, off_n) + off_n * _curve_extra_offset(inter, ctx.curves)
 
     # ── NEE direct light sampling (MIS weighted, with MNEE glass caustics) ─────
     # Shares _nee_area_lights with plain diffuse — including its MNEE probe for
@@ -1090,7 +1106,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool =
         # pbrt's LayeredBxDF is twoSided: see face_toward.
         normal = face_toward(normal, -ray_dir)
 
-    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, geo_normal)
+    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, geo_normal) + geo_normal * _curve_extra_offset(inter, ctx.curves)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):

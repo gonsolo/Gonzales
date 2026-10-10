@@ -612,6 +612,14 @@ def handle_curve_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
     var width1 = params.get_float("width1", width0)
     if n_cp < Int32(4):
         return
+    # widths are object-space: scale them with the CTM (mean axis length)
+    var cm = s[unsafe_offset=0].ctm.unsafe_ptr()
+    var ctm_scale = Float32(0)
+    for ax in range(3):
+        var ax0 = cm[unsafe_offset=ax*4]; var ax1 = cm[unsafe_offset=ax*4+1]; var ax2 = cm[unsafe_offset=ax*4+2]
+        ctm_scale += sqrt(ax0*ax0 + ax1*ax1 + ax2*ax2) / Float32(3)
+    width0 *= ctm_scale
+    width1 *= ctm_scale
 
     var n_raw = Int(n_cp)
     var raw4 = unsafe_alloc[Float32](n_raw * 4)

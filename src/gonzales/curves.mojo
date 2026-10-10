@@ -147,7 +147,10 @@ def intersect_curve(
         # Ray-vs-infinite-cylinder-around-`axis` via cross products — avoids
         # normalizing axis (no sqrt) for the common case where this piece
         # isn't hit at all; sqrt is only paid once a valid closer root exists.
-        var oc = ray_org - q0
+        # Solve from the ray's closest point to q0: with a far origin the quadratic's c term cancels catastrophically.
+        var oc_far = ray_org - q0
+        var t_near = -dot(oc_far, ray_dir) / dot(ray_dir, ray_dir)
+        var oc = oc_far + t_near * ray_dir
         var A = cross(axis, ray_dir)
         var B = cross(axis, oc)
         var a = dot(A, A)
@@ -159,13 +162,14 @@ def intersect_curve(
         if disc < Float32(0.0):
             continue
 
-        var tc = (-b - sqrt(disc)) / (Float32(2.0) * a)
+        var tc_rel = (-b - sqrt(disc)) / (Float32(2.0) * a)
+        var tc = t_near + tc_rel
         if tc <= Float32(1e-4) or tc >= best_t:
             continue
 
         var axis_len = sqrt(axis_len_sq)
         var axis_dir = axis * (Float32(1.0) / axis_len)
-        var hit_pos = (ray_org + tc*ray_dir) - q0
+        var hit_pos = oc + tc_rel*ray_dir
         var s = dot(hit_pos, axis_dir)
         if s < Float32(0.0) or s > axis_len:
             continue
