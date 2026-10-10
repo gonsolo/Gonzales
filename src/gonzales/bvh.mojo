@@ -2702,6 +2702,7 @@ def _bvh_split(
     wmax: Pointer[Float32, MutUntrackedOrigin],
     start: Int, end: Int,
     prims_per_node: Int,
+    min_leaf: Int = 1,   # a range of at most this many primitives is not split, whatever the SAH says
 ) -> _BVHSplit:
     """Binned-SAH split of [start, end), partitioning the work arrays in place.
     Touches only that range, so disjoint ranges can be split concurrently."""
@@ -2817,7 +2818,7 @@ def _bvh_split(
 
         var leafCost = Float32(count)
         var splitCost = Float32(0.5) + minCost / sa
-        if count > prims_per_node or splitCost < leafCost:
+        if count > prims_per_node or (count > min_leaf and splitCost < leafCost):
             # Partition: "below" (bucket <= minBucket) first, "above" after.
             var l = start
             for r in range(start, end):
@@ -2845,19 +2846,20 @@ def build_bvh2_node(
     out_nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     node_count: Pointer[Int32, MutUntrackedOrigin],
     prims_per_node: Int,
+    min_leaf: Int = 1,
 ) -> Int32:
     """Build the subtree over [start, end) depth-first: this node, then the
     left subtree at my+1, then the right one, whose index the node stores."""
     var my = Int(node_count[unsafe_offset=0])
     node_count[unsafe_offset=0] = node_count[unsafe_offset=0] + 1
-    var sp = _bvh_split(widx, wmin, wmax, start, end, prims_per_node)
+    var sp = _bvh_split(widx, wmin, wmax, start, end, prims_per_node, min_leaf)
     if sp.mid < 0:
         out_nodes[unsafe_offset=my] = BVH2Node(sp.bmin, sp.bmax, Int32(start), Int32(end - start))
         return Int32(my)
     _ = build_bvh2_node(widx, wmin, wmax, start, sp.mid,
-                        out_nodes, node_count, prims_per_node)
+                        out_nodes, node_count, prims_per_node, min_leaf)
     var right = build_bvh2_node(widx, wmin, wmax, sp.mid, end,
-                                out_nodes, node_count, prims_per_node)
+                                out_nodes, node_count, prims_per_node, min_leaf)
     out_nodes[unsafe_offset=my] = BVH2Node(sp.bmin, sp.bmax, right, Int32(0))
     return Int32(my)
 
@@ -2919,6 +2921,7 @@ def _build_bvh2_parallel(
     out_nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     node_count: Pointer[Int32, MutUntrackedOrigin],
     subtree_prims: Int,
+    min_leaf: Int = 1,
 ):
     """The tree build_bvh2_node would build over [0, n), node for node, on all
     cores. Every split only reorders its own range of the work arrays, so the
@@ -2979,7 +2982,7 @@ def _build_bvh2_parallel(
             var nodes = unsafe_alloc[BVH2Node](2 * (t.end - t.start))
             var cnt = unsafe_alloc[Int32](1)
             cnt[unsafe_offset=0] = Int32(0)
-            _ = build_bvh2_node(widx, wmin, wmax, t.start, t.end, nodes, cnt, 4)
+            _ = build_bvh2_node(widx, wmin, wmax, t.start, t.end, nodes, cnt, 4, min_leaf)
             t.nodes = nodes.unsafe_origin_cast[MutUntrackedOrigin]()
             t.n_nodes = Int(cnt[unsafe_offset=0])
             tasks[unsafe_offset=i] = t
@@ -3004,6 +3007,7 @@ def build_bvh2(
     outOrder: Pointer[Int32, MutUntrackedOrigin],        # capacity >= n
     parallel: Bool = True,   # False: the plain serial build, e.g. to check against
     subtree_prims: Int = _BVH_SUBTREE_PRIMS,   # parallel subtree size; tests lower it
+    min_leaf: Int = 1,   # leaves hold at least this many primitives (up to 4): fewer nodes, coarser culling
 ) -> Int32:
     var n = Int(primCount)
     if n <= 0:
@@ -3024,9 +3028,9 @@ def build_bvh2(
     var node_count = unsafe_alloc[Int32](1)
     node_count[unsafe_offset=0] = 0
     if parallel and n > 4 * subtree_prims:
-        _build_bvh2_parallel(widx, wmin, wmax, n, outNodes, node_count, subtree_prims)
+        _build_bvh2_parallel(widx, wmin, wmax, n, outNodes, node_count, subtree_prims, min_leaf)
     else:
-        _ = build_bvh2_node(widx, wmin, wmax, 0, n, outNodes, node_count, 4)
+        _ = build_bvh2_node(widx, wmin, wmax, 0, n, outNodes, node_count, 4, min_leaf)
 
     for k in range(n):
         outOrder[unsafe_offset=k] = widx[unsafe_offset=k]

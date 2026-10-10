@@ -2929,7 +2929,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         var inst_slot = Int(total_prims_gpu) * 6
         var inst_nodes = unsafe_alloc[BVH2Node](Int(total_instances) * 2 + 4)
         var inst_order = unsafe_alloc[Int32](Int(total_instances))
-        var inst_node_count = build_bvh2(prim_bounds.unsafe_offset(inst_slot), total_instances, inst_nodes, inst_order)
+        # Four instances a leaf: a node costs more than half an instance, and an instance is cheap to reject.
+        var inst_node_count = build_bvh2(prim_bounds.unsafe_offset(inst_slot), total_instances, inst_nodes, inst_order, min_leaf=4)
         var inst_tmp = unsafe_alloc[Instance](Int(total_instances))
         for k in range(Int(total_instances)): inst_tmp[unsafe_offset=k] = instances_c[unsafe_offset=Int(inst_order[unsafe_offset=k])]
         for k in range(Int(total_instances)): instances_c[unsafe_offset=k] = inst_tmp[unsafe_offset=k]
