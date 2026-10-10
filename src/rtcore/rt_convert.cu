@@ -16,21 +16,31 @@ extern "C" __global__ void convert(const unsigned int* rt, float* out, const int
         oi[4] = -1; oi[5] = -1; oi[6] = 0; oi[7] = 0;
         return;
     }
-    // Hit word: a BLAS with a single geometry has bit 31 set and the triangle number in the low 29 bits. With several
-    // geometries bit 31 is clear, k = word >> 29 selects the split s = 28 - 4k: the geometry index is in bits 28..s and the
-    // triangle number within that geometry in the low s bits (measured on a 9-geometry template BLAS).
-    int tri, geomHw = 0;
-    if (word & 0x80000000u) tri = (int)(word & 0x1fffffffu);
-    else { int s = 28 - 4 * (int)(word >> 29); geomHw = (int)((word >> s) & ((1u << (29 - s)) - 1u)); tri = (int)(word & ((1u << s) - 1u)); }
+    // Hit word: the top three bits select the layout of the low 29 (measured with templates of 1..140000 geometries of
+    // 2..5,000,000 triangles). Kinds 0..4: the triangle number within its geometry is in the low s = 28 - 4 * kind bits
+    // and the geometry index above it. Kinds 5 and up (6 seen): one running triangle number over all geometries, used
+    // when the two fields do not fit. A single-geometry BLAS is the same with geometry 0, so its triangle is the low 29.
+    unsigned int kind = word >> 29, low = word & 0x1fffffffu;
     int d = hasTlas ? (int)r[4] - 1 : 0;                 // r[4] = hit instance index + 1
     if (d < 0 || d >= nDomains) d = 0;
     int base = domBase[d];
     int lo = 0, hi = domN[d];                            // largest j with pre[base + j] <= tri
     if (hi < 0) {                                        // direct domain (a template instance): the hardware gave the geometry
+        int tri, geomHw;
+        if (kind >= 5) {                                 // running number: this template's prefix sums are at pre[pre[base]..]
+            const int* tp = pre + pre[base];
+            int a = 0, b = geom[base];
+            while (b - a > 1) { int mid = (a + b) >> 1; if (tp[mid] <= (int)low) a = mid; else b = mid; }
+            geomHw = a; tri = (int)low - tp[a];
+        } else {
+            int s = 28 - 4 * (int)kind;
+            geomHw = (int)(low >> s); tri = (int)(low & ((1u << s) - 1u));
+        }
         o[0] = __uint_as_float(r[0]); o[1] = fabsf(__uint_as_float(r[1])); o[2] = __uint_as_float(r[2]); o[3] = 0.0f;
         oi[4] = rawv[base]; oi[5] = tri; oi[6] = 1; oi[7] = geomHw;
         return;
     }
+    int tri = (int)low;
     while (hi - lo > 1) { int mid = (lo + hi) >> 1; if (pre[base + mid] <= tri) lo = mid; else hi = mid; }
     // The hardware returns u with a negative sign on some hits (same magnitude Vulkan reports positive; presumably a
     // back-face indicator). Barycentrics are never negative, so the sign is dropped.

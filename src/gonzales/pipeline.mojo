@@ -488,7 +488,13 @@ def _rtcore_attach_native(interop_scene: VulkanInteropRtSceneHandle, psc: Pointe
     if ok:
         # Decode tables: one domain per TLAS instance.
         var n_dom = n_ord + ni
-        var entries = n_ord * 2 + ni
+        # Each template's prefix sums of triangle counts over its meshes, for hit words that carry one running
+        # triangle number (rt_convert.cu); they follow the per-domain entries.
+        var tpre_n = 0
+        for t in range(nt):
+            tpre_n += Int(psc[unsafe_offset=0].template_mesh_end[unsafe_offset=t]) - Int(psc[unsafe_offset=0].template_mesh_start[unsafe_offset=t]) + 1
+        var entries = n_ord * 2 + ni + tpre_n
+        var tpre_off = unsafe_alloc[Int32](max(nt, 1))
         var dom_base = unsafe_alloc[Int32](n_dom)
         var dom_n = unsafe_alloc[Int32](n_dom)
         var pre = unsafe_alloc[Int32](entries)
@@ -504,13 +510,26 @@ def _rtcore_attach_native(interop_scene: VulkanInteropRtSceneHandle, psc: Pointe
             pre[unsafe_offset=e + 1] = psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i]; rawv[unsafe_offset=e + 1] = Int32(0); geom[unsafe_offset=e + 1] = Int32(0)
             e += 2
             d += 1
+        var te = n_ord * 2 + ni
+        for t in range(nt):
+            tpre_off[unsafe_offset=t] = Int32(te)
+            var run = Int32(0)
+            for i in range(Int(psc[unsafe_offset=0].template_mesh_start[unsafe_offset=t]), Int(psc[unsafe_offset=0].template_mesh_end[unsafe_offset=t])):
+                pre[unsafe_offset=te] = run; rawv[unsafe_offset=te] = Int32(0); geom[unsafe_offset=te] = Int32(0)
+                run += psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i]
+                te += 1
+            pre[unsafe_offset=te] = run; rawv[unsafe_offset=te] = Int32(0); geom[unsafe_offset=te] = Int32(0)
+            te += 1
         for k in range(ni):
             # Template instance: one direct domain; unpack turns raw mesh nm + k and the hardware's geometry index into the
             # template's mesh (vulkaninterop_unpack_results_kernel).
             dom_base[unsafe_offset=d] = Int32(e); dom_n[unsafe_offset=d] = Int32(-1)
-            pre[unsafe_offset=e] = Int32(0); rawv[unsafe_offset=e] = Int32(nm + k); geom[unsafe_offset=e] = Int32(0)
+            var tk = Int(psc[unsafe_offset=0].instances[unsafe_offset=k].blasIdx)
+            pre[unsafe_offset=e] = tpre_off[unsafe_offset=tk]; rawv[unsafe_offset=e] = Int32(nm + k)
+            geom[unsafe_offset=e] = Int32(Int(psc[unsafe_offset=0].template_mesh_end[unsafe_offset=tk]) - Int(psc[unsafe_offset=0].template_mesh_start[unsafe_offset=tk]))
             e += 1
             d += 1
+        tpre_off.unsafe_free()
         var cubin = _rtcore_cubin_path()
         var cubin_c = unsafe_alloc[UInt8](cubin.byte_length() + 1)   # the String's buffer is not guaranteed NUL-terminated
         for k in range(cubin.byte_length()):
@@ -518,7 +537,7 @@ def _rtcore_attach_native(interop_scene: VulkanInteropRtSceneHandle, psc: Pointe
         cubin_c[unsafe_offset=cubin.byte_length()] = UInt8(0)
         var h = rtcore_create_scene(cubin_c, Int32(n_as), as_bytes, as_sizes, as_addr)
         cubin_c.unsafe_free()
-        if Int(h) != 0 and Int(rtcore_set_domains(h, Int32(n_dom), dom_base, dom_n, pre, rawv, geom, Int32(e))) == 1:
+        if Int(h) != 0 and Int(rtcore_set_domains(h, Int32(n_dom), dom_base, dom_n, pre, rawv, geom, Int32(entries))) == 1:
             result = h
             print("RT hardware: tracing", ni, "instances of", nt, "templates and", n_ord, "meshes on the RT cores (top-level structure, shared with the Vulkan scene)")
         elif Int(h) != 0:

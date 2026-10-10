@@ -300,11 +300,14 @@ software BVH because of the extra pack / trace / resolve passes. Means agree wit
 index is the position in the TLAS instance array: the ordinary (non-template) meshes in index order, then the object
 instances (vulkaninterop_rt_create_scene).
 
-**Hit word of a BLAS with several geometries** (a template with one geometry per mesh): bit 31 clear, `k = word >> 29`,
-`s = 28 - 4k`; the geometry index is in bits 28..s and the triangle number within that geometry in the low s bits
-(9-geometry template: word >> 24 = 0x20 + geometry, low 24 bits = triangle). A single-geometry BLAS has bit 31 set and the
-triangle in the low 29 bits. Verified against Vulkan's decoded mesh/triangle/geometry on every ray of the barcelona
-pavilion at night (43 instances of 2 templates, 107 meshes): 0 mismatches over 6 bounces.
+**Hit word.** The top three bits select the layout of the low 29. Kinds 0..4: the triangle number within its
+geometry is in the low `s = 28 - 4 * kind` bits and the geometry index above it (kind 4: 12-bit triangle, 17-bit geometry;
+kind 1: 24-bit triangle, 5-bit geometry). Kind 6: one running triangle number over all geometries of the BLAS, used when
+the two fields do not fit (5000 geometries with one of 70,000 triangles; 3 geometries with one of 20 million); the
+decoder maps it back with the template's prefix sums. A single-geometry BLAS follows the same rule with geometry 0, so
+its triangle is simply the low 29 bits. Measured with a probe over templates of 1..140,000 geometries of 2..5,000,000
+triangles, one ray per known (geometry, triangle). An earlier reading -- "bit 31 set means one geometry" -- was wrong
+for kinds 4 and 6: a template of many small meshes was shaded as its first mesh, and indexed past its end.
 
 `librtcore` now takes several acceleration structures (`rtcore_create_scene`: TLAS first, each structure at a 64 KB aligned
 offset, 8-byte and shifted 32-bit references relocated) and per-instance decode tables (`rtcore_set_domains`). Instanced
