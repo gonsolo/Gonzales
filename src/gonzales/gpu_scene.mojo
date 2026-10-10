@@ -209,13 +209,13 @@ struct MeshBuffers(Movable):
             if host_mesh.alpha_w > Int32(0) or host_mesh.alpha_const < Float32(1.0):
                 has_alpha = True
 
-            # Points (Float32), face and vertex indices (Int64), then UVs (2 floats
+            # Points (Float32), face and vertex indices (Int32), then UVs (2 floats
             # per vertex) and shading normals (3 per vertex), each a zeroed
             # 4-byte buffer when the mesh has none.
             # points are padded to 4 floats per vertex
             var pts_dptr = _gpu_upload_owned[Float32](ctx, points_bufs, host_mesh.points, Int(s.mesh_n_verts[unsafe_offset=i]) * 4)
-            var fi_dptr = _gpu_upload_owned[Int64](ctx, face_bufs, host_mesh.faceIndices, Int(s.mesh_n_tris[unsafe_offset=i]))
-            var vi_dptr = _gpu_upload_owned[Int64](ctx, vert_bufs, host_mesh.vertexIndices, Int(s.mesh_n_tris[unsafe_offset=i]) * 3)
+            var fi_dptr = _gpu_upload_owned[Int32](ctx, face_bufs, host_mesh.faceIndices, Int(s.mesh_n_tris[unsafe_offset=i]))
+            var vi_dptr = _gpu_upload_owned[Int32](ctx, vert_bufs, host_mesh.vertexIndices, Int(s.mesh_n_tris[unsafe_offset=i]) * 3)
             var uv_n = Int(s.mesh_uv_n_verts[unsafe_offset=i])
             var uv_dptr: Pointer[Float32, MutUntrackedOrigin]
             if uv_n > 0:

@@ -16,8 +16,8 @@ extern "C" {
 // are likewise unused: this backend does not cut out alpha-textured shapes.
 typedef struct {
     const float* points;
-    const int64_t* faceIndices;
-    const int64_t* vertexIndices;
+    const int32_t* faceIndices;
+    const int32_t* vertexIndices;
     const float* uvs;
     const float* normals;
     const uint8_t* alpha;

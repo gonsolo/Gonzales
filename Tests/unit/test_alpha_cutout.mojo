@@ -12,11 +12,11 @@ def _mesh(mask: Pointer[UInt8, MutUntrackedOrigin], w: Int32, h: Int32,
     """One triangle with no UVs, so pbrt's default (0,0) (1,0) (1,1)
     parameterisation applies: barycentrics (bu, bv) land at
     uv = (bu + bv, bv)."""
-    var vidx = unsafe_alloc[Int64](3)
+    var vidx = unsafe_alloc[Int32](3)
     vidx[unsafe_offset=0] = 0; vidx[unsafe_offset=1] = 1; vidx[unsafe_offset=2] = 2
     return TriangleMesh(
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), vidx,
+        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), vidx,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         mask, w, h, alpha_const,

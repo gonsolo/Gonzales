@@ -32,7 +32,7 @@ def test_vulkaninterop_rt_trace_matches_known_geometry() raises:
     var tri0 = [Float32(0), 0, 0, 1,  1, 0, 0, 1,  0, 1, 0, 1]
     for i in range(12):
         pts0[unsafe_offset=i] = tri0[i]
-    var idx0 = unsafe_alloc[Int64](3)
+    var idx0 = unsafe_alloc[Int32](3)
     idx0[unsafe_offset=0] = 0; idx0[unsafe_offset=1] = 1; idx0[unsafe_offset=2] = 2
 
     # Mesh 1: triangle (5,0,0)-(6,0,0)-(5,1,0) at z=0, far away in x.
@@ -40,17 +40,17 @@ def test_vulkaninterop_rt_trace_matches_known_geometry() raises:
     var tri1 = [Float32(5), 0, 0, 1,  6, 0, 0, 1,  5, 1, 0, 1]
     for i in range(12):
         pts1[unsafe_offset=i] = tri1[i]
-    var idx1 = unsafe_alloc[Int64](3)
+    var idx1 = unsafe_alloc[Int32](3)
     idx1[unsafe_offset=0] = 0; idx1[unsafe_offset=1] = 1; idx1[unsafe_offset=2] = 2
 
     var meshes = unsafe_alloc[TriangleMesh](2)
     meshes[unsafe_offset=0] = TriangleMesh(
-        pts0, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), idx0,
+        pts0, Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), idx0,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
     meshes[unsafe_offset=1] = TriangleMesh(
-        pts1, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), idx1,
+        pts1, Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), idx1,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )
@@ -141,12 +141,12 @@ def test_vulkaninterop_rt_instancing_places_template_correctly() raises:
     var tri0 = [Float32(0), 0, 0, 1,  1, 0, 0, 1,  0, 1, 0, 1]
     for i in range(12):
         pts0[unsafe_offset=i] = tri0[i]
-    var idx0 = unsafe_alloc[Int64](3)
+    var idx0 = unsafe_alloc[Int32](3)
     idx0[unsafe_offset=0] = 0; idx0[unsafe_offset=1] = 1; idx0[unsafe_offset=2] = 2
 
     var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = TriangleMesh(
-        pts0, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), idx0,
+        pts0, Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), idx0,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )

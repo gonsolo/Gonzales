@@ -310,7 +310,7 @@ struct _RtMerged(Movable):
     var idx_counts: Pointer[Int64, MutUntrackedOrigin]
     var prefix: Pointer[Int32, MutUntrackedOrigin]
     var pts: Pointer[Float32, MutUntrackedOrigin]
-    var idx: Pointer[Int64, MutUntrackedOrigin]
+    var idx: Pointer[Int32, MutUntrackedOrigin]
     var n_meshes: Int
     var n_tris: Int
 
@@ -321,7 +321,7 @@ struct _RtMerged(Movable):
         self.idx_counts = Pointer[Int64, MutUntrackedOrigin].unsafe_dangling()
         self.prefix = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
         self.pts = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
-        self.idx = Pointer[Int64, MutUntrackedOrigin].unsafe_dangling()
+        self.idx = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
         self.n_meshes = 0
         self.n_tris = 0
 
@@ -358,7 +358,7 @@ def _rtcore_merge(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> _RtMerg
     vstart[unsafe_offset=nm] = nv_total
     tstart[unsafe_offset=nm] = nt_total
     var pts = unsafe_alloc[Float32](4 * max(nv_total, 1))
-    var idx = unsafe_alloc[Int64](3 * max(nt_total, 1))
+    var idx = unsafe_alloc[Int32](3 * max(nt_total, 1))
     var prefix = unsafe_alloc[Int32](nm + 1)
     for i in range(nm + 1):
         prefix[unsafe_offset=i] = Int32(tstart[unsafe_offset=i])
@@ -372,12 +372,12 @@ def _rtcore_merge(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> _RtMerg
             pts[unsafe_offset=4 * vo + k] = src[unsafe_offset=k]
         var vi = psc[unsafe_offset=0].meshes[unsafe_offset=i].vertexIndices
         for k in range(3 * nt):
-            idx[unsafe_offset=3 * to + k] = vi[unsafe_offset=k] + Int64(vo)
+            idx[unsafe_offset=3 * to + k] = vi[unsafe_offset=k] + Int32(vo)
     vstart.unsafe_free(); tstart.unsafe_free()
 
     m.meshes = unsafe_alloc[TriangleMesh](1)
     m.meshes[unsafe_offset=0] = TriangleMesh(
-        pts, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), idx,
+        pts, Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), idx,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )

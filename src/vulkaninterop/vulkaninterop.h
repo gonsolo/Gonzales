@@ -76,8 +76,8 @@ void vulkaninterop_destroy(void* interop);
 // existing per-bridge independence convention).
 typedef struct {
     const float* points;
-    const int64_t* faceIndices;
-    const int64_t* vertexIndices;
+    const int32_t* faceIndices;
+    const int32_t* vertexIndices;
     const float* uvs;
     const float* normals;
     const uint8_t* alpha;   // alpha cut-out mask: unused here, layout only

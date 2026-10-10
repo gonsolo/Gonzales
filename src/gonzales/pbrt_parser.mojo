@@ -53,8 +53,8 @@ struct ParsedScene_Mojo:
     var area_light_count: Int32
     var meshes:           Pointer[TriangleMesh, MutUntrackedOrigin]
     var mesh_pts:         Pointer[Pointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin]
-    var mesh_vis:         Pointer[Pointer[Int64, MutUntrackedOrigin], MutUntrackedOrigin]
-    var mesh_fis:         Pointer[Pointer[Int64, MutUntrackedOrigin], MutUntrackedOrigin]
+    var mesh_vis:         Pointer[Pointer[Int32, MutUntrackedOrigin], MutUntrackedOrigin]
+    var mesh_fis:         Pointer[Pointer[Int32, MutUntrackedOrigin], MutUntrackedOrigin]
     var mesh_n_verts:     Pointer[Int32, MutUntrackedOrigin]
     var mesh_n_tris:      Pointer[Int32, MutUntrackedOrigin]
     var mesh_uv_n_verts:  Pointer[Int32, MutUntrackedOrigin]  # per-mesh UV vertex count; 0 = no UVs
@@ -2403,8 +2403,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     var n_meshes = len(s[unsafe_offset=0].meshes)
     var meshes   = unsafe_alloc[TriangleMesh](max(n_meshes, 1))
     var out_pts  = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](max(n_meshes, 1))
-    var out_vis  = unsafe_alloc[Pointer[Int64, MutUntrackedOrigin]](max(n_meshes, 1))
-    var out_fis  = unsafe_alloc[Pointer[Int64, MutUntrackedOrigin]](max(n_meshes, 1))
+    var out_vis  = unsafe_alloc[Pointer[Int32, MutUntrackedOrigin]](max(n_meshes, 1))
+    var out_fis  = unsafe_alloc[Pointer[Int32, MutUntrackedOrigin]](max(n_meshes, 1))
     var out_nv    = unsafe_alloc[Int32](max(n_meshes, 1))
     var out_nt    = unsafe_alloc[Int32](max(n_meshes, 1))
     var out_uv_nv = unsafe_alloc[Int32](max(n_meshes, 1))
@@ -2424,14 +2424,14 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         var nt = len(ma.face_idxs)
         var pts_c = unsafe_alloc[Float32](nv * 4)
         for vi in range(nv * 4): pts_c[unsafe_offset=vi] = ma.points[vi]
-        var vis_c = unsafe_alloc[Int64](nt * 3)
-        for ti2 in range(nt * 3): vis_c[unsafe_offset=ti2] = ma.vert_idxs[ti2]
-        var fis_c = unsafe_alloc[Int64](nt)
-        for ti2 in range(nt): fis_c[unsafe_offset=ti2] = ma.face_idxs[ti2]
+        var vis_c = unsafe_alloc[Int32](nt * 3)
+        for ti2 in range(nt * 3): vis_c[unsafe_offset=ti2] = Int32(ma.vert_idxs[ti2])
+        var fis_c = unsafe_alloc[Int32](nt)
+        for ti2 in range(nt): fis_c[unsafe_offset=ti2] = Int32(ma.face_idxs[ti2])
         if ma.mat_idx >= Int32(0) and Int(ma.mat_idx) < n_regular and s[unsafe_offset=0].named_materials[Int(ma.mat_idx)].ptex_file.byte_length() > 0:
             # Ptex material: faceIndices holds each triangle's Ptex face id (0 without ids, as in pbrt).
             var have_fids = len(ma.ptex_faces) == nt
-            for ti2 in range(nt): fis_c[unsafe_offset=ti2] = Int64(ma.ptex_faces[ti2]) if have_fids else Int64(0)
+            for ti2 in range(nt): fis_c[unsafe_offset=ti2] = ma.ptex_faces[ti2] if have_fids else Int32(0)
         out_pts[unsafe_offset=i] = pts_c
         out_vis[unsafe_offset=i] = vis_c
         out_fis[unsafe_offset=i] = fis_c

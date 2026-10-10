@@ -126,8 +126,8 @@ def test_tri_world_applies_the_instance_transform() raises:
     for i in range(12): pts[unsafe_offset=i] = Float32(0)
     pts[unsafe_offset=4] = 1.0          # p1 = (1, 0, 0)
     pts[unsafe_offset=9] = 1.0          # p2 = (0, 1, 0)
-    var mesh = TriangleMesh(pts, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(),
+    var mesh = TriangleMesh(pts, Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling())
     # objToWorld: rotate 90 degrees about z (x -> y), then translate (1, 2, 3); column-major.
@@ -153,8 +153,8 @@ def test_no_camera_means_no_footprint() raises:
 
 def _dummy_mesh() -> TriangleMesh:
     return TriangleMesh(Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(),
-        Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling())
 

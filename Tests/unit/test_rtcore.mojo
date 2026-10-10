@@ -42,20 +42,20 @@ def test_rtcore_matches_vulkan_ray_query() raises:
             pts[unsafe_offset=o + 1] = Float32(y)
             pts[unsafe_offset=o + 2] = Float32(0.3) * sin(Float32(x) * Float32(0.9)) * cos(Float32(y) * Float32(0.7))
             pts[unsafe_offset=o + 3] = Float32(1)
-    var idx = unsafe_alloc[Int64](3 * nt)
+    var idx = unsafe_alloc[Int32](3 * nt)
     var k = 0
     for y in range(GRID):
         for x in range(GRID):
-            var a = Int64(y * (GRID + 1) + x)
+            var a = Int32(y * (GRID + 1) + x)
             var b = a + 1
-            var c = a + Int64(GRID + 1)
+            var c = a + Int32(GRID + 1)
             var d = c + 1
             idx[unsafe_offset=k] = a; idx[unsafe_offset=k + 1] = b; idx[unsafe_offset=k + 2] = c
             idx[unsafe_offset=k + 3] = b; idx[unsafe_offset=k + 4] = d; idx[unsafe_offset=k + 5] = c
             k += 6
     var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = TriangleMesh(
-        pts, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), idx,
+        pts, Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), idx,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )

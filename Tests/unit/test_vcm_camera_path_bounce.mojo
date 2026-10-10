@@ -68,12 +68,12 @@ def _build_scene() -> SceneView:
         points[unsafe_offset=i*4+1] = verts[i].y
         points[unsafe_offset=i*4+2] = verts[i].z
         points[unsafe_offset=i*4+3] = Float32(1.0)
-    var vertex_indices = unsafe_alloc[Int64](n_verts)
+    var vertex_indices = unsafe_alloc[Int32](n_verts)
     for i in range(n_verts):
-        vertex_indices[unsafe_offset=i] = Int64(i)
+        vertex_indices[unsafe_offset=i] = Int32(i)
     var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = TriangleMesh(
-        points, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), vertex_indices,
+        points, Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), vertex_indices,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )

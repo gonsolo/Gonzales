@@ -25,7 +25,7 @@ from gonzales.bvh import BVH2Node, build_bvh2, traverse_bvh2_core
 @fieldwise_init
 struct TriangleSceneFixture(Movable):
     var points:         Pointer[Float32, MutUntrackedOrigin]
-    var vertex_indices: Pointer[Int64, MutUntrackedOrigin]
+    var vertex_indices: Pointer[Int32, MutUntrackedOrigin]
     var meshes:         Pointer[TriangleMesh, MutUntrackedOrigin]
     var bvh_nodes:      Pointer[BVH2Node, MutUntrackedOrigin]
     var prim_ids:       Pointer[PrimId, MutUntrackedOrigin]
@@ -60,14 +60,14 @@ def make_triangle_scene(verts: List[Point3f]) -> TriangleSceneFixture:
         points[unsafe_offset=i*4+2] = verts[i].z
         points[unsafe_offset=i*4+3] = Float32(1.0)
 
-    var vertex_indices = unsafe_alloc[Int64](n_verts)
+    var vertex_indices = unsafe_alloc[Int32](n_verts)
     for i in range(n_verts):
-        vertex_indices[unsafe_offset=i] = Int64(i)
+        vertex_indices[unsafe_offset=i] = Int32(i)
 
     var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = TriangleMesh(
         points,
-        Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(),  # faceIndices, unused
+        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),  # faceIndices, unused
         vertex_indices,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),  # uvs
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),  # normals

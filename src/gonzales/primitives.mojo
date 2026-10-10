@@ -40,8 +40,8 @@ struct Instance(TrivialRegisterPassable):
 
 struct TriangleMesh(TrivialRegisterPassable):
     var points: Pointer[Float32, MutUntrackedOrigin]
-    var faceIndices: Pointer[Int64, MutUntrackedOrigin]
-    var vertexIndices: Pointer[Int64, MutUntrackedOrigin]
+    var faceIndices: Pointer[Int32, MutUntrackedOrigin]
+    var vertexIndices: Pointer[Int32, MutUntrackedOrigin]
     var uvs: Pointer[Float32, MutUntrackedOrigin]   # nullable; stride 2 floats per vertex
     var normals: Pointer[Float32, MutUntrackedOrigin]  # nullable; stride 3 floats per vertex (shading normals)
     # pbrt `Shape "texture alpha"` / `"float alpha"` cut-out. `alpha` is an
@@ -60,8 +60,8 @@ struct TriangleMesh(TrivialRegisterPassable):
     def __init__(
         out self,
         points: Pointer[Float32, MutUntrackedOrigin],
-        faceIndices: Pointer[Int64, MutUntrackedOrigin],
-        vertexIndices: Pointer[Int64, MutUntrackedOrigin],
+        faceIndices: Pointer[Int32, MutUntrackedOrigin],
+        vertexIndices: Pointer[Int32, MutUntrackedOrigin],
         uvs: Pointer[Float32, MutUntrackedOrigin],
         normals: Pointer[Float32, MutUntrackedOrigin],
         alpha: Pointer[UInt8, MutUntrackedOrigin] = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),

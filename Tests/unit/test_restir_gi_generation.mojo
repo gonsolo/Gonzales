@@ -35,10 +35,10 @@ def _make_triangle_mesh(p0: Vec3f, p1: Vec3f, p2: Vec3f) -> TriangleMesh:
     points[unsafe_offset=0*4+0] = p0[0]; points[unsafe_offset=0*4+1] = p0[1]; points[unsafe_offset=0*4+2] = p0[2]; points[unsafe_offset=0*4+3] = Float32(0.0)
     points[unsafe_offset=1*4+0] = p1[0]; points[unsafe_offset=1*4+1] = p1[1]; points[unsafe_offset=1*4+2] = p1[2]; points[unsafe_offset=1*4+3] = Float32(0.0)
     points[unsafe_offset=2*4+0] = p2[0]; points[unsafe_offset=2*4+1] = p2[1]; points[unsafe_offset=2*4+2] = p2[2]; points[unsafe_offset=2*4+3] = Float32(0.0)
-    var vidx = unsafe_alloc[Int64](3)
+    var vidx = unsafe_alloc[Int32](3)
     vidx[unsafe_offset=0] = 0; vidx[unsafe_offset=1] = 1; vidx[unsafe_offset=2] = 2
     return TriangleMesh(
-        points, Pointer[Int64, MutUntrackedOrigin].unsafe_dangling(), vidx,
+        points, Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(), vidx,
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     )

@@ -800,7 +800,7 @@ extern "C" void* vulkanrt_build_scene(
             return nullptr;
         }
 
-        // Index buffer: gonzales stores vertexIndices as int64; Vulkan AS
+        // Index buffer: gonzales stores vertexIndices as int32; Vulkan AS
         // builds only accept 8/16/32-bit index types, so narrow to uint32
         // here (real gonzales meshes never approach 2^32 vertices).
         std::vector<uint32_t> indices32((size_t)nIdx);
