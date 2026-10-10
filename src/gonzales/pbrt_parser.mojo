@@ -1700,7 +1700,8 @@ def handle_texture(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
 
 def _plan_ptex_budget(files: List[String]):
     """Pick the largest per-face Ptex resolution cap whose packed size, summed over the scene's .ptx files, fits
-    GONZALES_PTEX_BUDGET_MB (default 2048). GONZALES_PTEX_LOG2RES, if set, overrides the result."""
+    GONZALES_PTEX_BUDGET_MB (default 2048), and the base cap and pool size for demand paging.
+    GONZALES_PTEX_LOG2RES, if set, forces a uniform cap."""
     var bytes = unsafe_alloc[Int64](13)
     for c in range(13): bytes[unsafe_offset=c] = Int64(0)
     var n_ptx = 0
@@ -1722,12 +1723,20 @@ def _plan_ptex_budget(files: List[String]):
                 budget_mb = Int(env)
             except:
                 pass
+        var budget = budget_mb * 1024 * 1024
         var cap = 0
+        var base = 0
         for c in range(13):
-            if Int(bytes[unsafe_offset=c]) <= budget_mb * 1024 * 1024:
+            if Int(bytes[unsafe_offset=c]) <= budget:
                 cap = c
-        _ = external_call["ptex_set_cap", NoneType, Int32](Int32(cap))
-        print("Ptex:", n_ptx, "file(s), faces capped at", 1 << cap, "texels per side,", Int(bytes[unsafe_offset=cap]) // (1024 * 1024), "MB (budget", budget_mb, "MB)")
+            if Int(bytes[unsafe_offset=c]) <= budget // 4:
+                base = c
+        # Everything fits at full resolution: no paging. Otherwise drivers that page (ptex_set_paging) keep
+        # faces at `base` and load finer ones on demand into the rest of the budget.
+        var pool = 0 if Int(bytes[unsafe_offset=12]) <= budget else budget - Int(bytes[unsafe_offset=base])
+        _ = external_call["ptex_set_plan", NoneType, Int32, Int32, Int64](Int32(cap), Int32(base), Int64(pool))
+        print("Ptex:", n_ptx, "file(s),", Int(bytes[unsafe_offset=12]) // (1024 * 1024), "MB at full resolution; budget", budget_mb,
+              "MB fits faces capped at", 1 << cap, "texels per side (" + String(Int(bytes[unsafe_offset=cap]) // (1024 * 1024)) + " MB)")
     bytes.unsafe_free()
 
 def _psc_finish_object_def(s: Pointer[SceneParseState, MutUntrackedOrigin]):

@@ -13,10 +13,12 @@ from std.os import getenv
 from .spectrum import SpectralHandle
 from .pbrt_parser import ParsedScene_Mojo
 from .host_textures import decode_host_textures
+from .ptex_cache import PtexCache
 from .restir_di import DIReservoir
 from .restir_vol import VolReservoir
 from max.gpu import block_dim, block_idx, thread_idx
 from max.gpu.host import DeviceBuffer, DeviceContext
+from std.ffi import external_call
 from std.math import ceildiv
 from std.memory import unsafe_memcpy
 from std.memory.alloc import unsafe_alloc
@@ -259,6 +261,10 @@ struct TextureBuffers(Movable):
     var textures_buf: DeviceBuffer[DType.uint8]  # array of GpuTexture
     var lut_buf: DeviceBuffer[DType.float32]     # uint8 decode tables: linear at 0, sRGB at 256
     var n_textures: Int
+    # Ptex demand paging: the device copy of the cache's pool, and each paged file's tex_data_bufs index.
+    var ptex_pool_buf: DeviceBuffer[DType.uint8]
+    var ptex_cache: PtexCache
+    var ptex_bufs: List[Int]
 
     @always_inline
     def textures_ptr(mut self) -> Pointer[GpuTexture, MutUntrackedOrigin]:
@@ -278,6 +284,12 @@ struct TextureBuffers(Movable):
         ctx.enqueue_copy(lut_buf, decoded.lut)
         var lut_dev = lut_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
 
+        var pool_bytes = Int(external_call["ptex_pool_size", Int64]())
+        var ptex_pool_buf = ctx.enqueue_create_buffer[DType.uint8](max(pool_bytes, 1))
+        var pool_dev = ptex_pool_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+        var ptex_cache = PtexCache(pool_bytes)
+        var ptex_bufs = List[Int]()
+
         var tex_bytes = 0
         for ti in range(n_textures_int):
             if dup_of[unsafe_offset=ti] != Int32(-1):
@@ -286,14 +298,17 @@ struct TextureBuffers(Movable):
             var ht = host_tex[unsafe_offset=ti]
             if ht.n_bytes == 0:
                 gpu_textures_host[unsafe_offset=ti] = GpuTexture(Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
-                    Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+                    Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), pool_dev,
                     Int32(0), Int32(0), Int32(0), Int32(0), Int32(GpuTexture.FORMAT_F32))
                 continue
             var lut = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
             if Int(ht.format) == GpuTexture.FORMAT_U8 or Int(ht.format) == GpuTexture.FORMAT_PTEX:
                 lut = lut_dev.unsafe_offset(Int(ht.lut_off))
+            if Int(ht.format) == GpuTexture.FORMAT_PTEX and ht.height >= Int32(0):
+                _ = ptex_cache.add_file(s.tex_filenames[unsafe_offset=ti], ht.data, Int(ht.width))
+                ptex_bufs.append(len(tex_data_bufs))
             gpu_textures_host[unsafe_offset=ti] = GpuTexture(_gpu_upload_owned[UInt8](ctx, tex_data_bufs, ht.data, ht.n_bytes),
-                lut, ht.width, ht.height, ht.n_levels, ht.channels, ht.format)
+                lut, pool_dev, ht.width, ht.height, ht.n_levels, ht.channels, ht.format)
             tex_bytes += ht.n_bytes
         var textures_gpu_buf = _gpu_upload_array[GpuTexture](ctx, gpu_textures_host, n_textures_int)
         # The uploads above are asynchronous; free their host sources once they're done.
@@ -308,7 +323,8 @@ struct TextureBuffers(Movable):
         print("GPU: " + String(n_textures_int) + " texture(s) uploaded ("
               + String(n_unique_tex) + " unique file(s) loaded, "
               + String(tex_bytes // (1024 * 1024)) + " MB)")
-        return Self(tex_data_bufs=tex_data_bufs^, textures_buf=textures_gpu_buf^, lut_buf=lut_buf^, n_textures=n_textures_int)
+        return Self(tex_data_bufs=tex_data_bufs^, textures_buf=textures_gpu_buf^, lut_buf=lut_buf^, n_textures=n_textures_int,
+                    ptex_pool_buf=ptex_pool_buf^, ptex_cache=ptex_cache^, ptex_bufs=ptex_bufs^)
 
 @fieldwise_init
 struct LightBuffers(Movable):
@@ -1044,6 +1060,36 @@ def init_curve_cand_offset_gpu(offset_buf: Pointer[Int32, MutUntrackedOrigin], n
     if tid >= n:
         return
     offset_buf[unsafe_offset=tid] = Int32(tid * CURVE_DEFER_K)
+
+# Ptex demand paging: read back what the last samples asked for, load it (ptex_cache.mojo) and upload the
+# changed face tables and pool range. Returns the number of faces loaded.
+def gpu_ptex_stream(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises -> Int:
+    var n_files = len(handle[].textures.ptex_bufs)
+    if n_files == 0:
+        return 0
+    var max_faces = 0
+    for k in range(n_files): max_faces = max(max_faces, handle[].textures.ptex_cache.n_faces[k])
+    var scratch = unsafe_alloc[UInt8](max_faces * 8).unsafe_origin_cast[MutUntrackedOrigin]()
+    handle[].ctx.synchronize()
+    for k in range(n_files):
+        var sub = handle[].textures.tex_data_bufs[handle[].textures.ptex_bufs[k]].create_sub_buffer[DType.uint8](
+            0, handle[].textures.ptex_cache.n_faces[k] * 8)
+        handle[].ctx.enqueue_copy(scratch, sub)
+        handle[].ctx.synchronize()
+        handle[].textures.ptex_cache.feed(k, scratch)
+    var (n, lo, hi) = handle[].textures.ptex_cache.commit()
+    for k in range(n_files):
+        if handle[].textures.ptex_cache.take_table(k, scratch):
+            var sub = handle[].textures.tex_data_bufs[handle[].textures.ptex_bufs[k]].create_sub_buffer[DType.uint8](
+                0, handle[].textures.ptex_cache.n_faces[k] * 8)
+            handle[].ctx.enqueue_copy(sub, scratch)
+            handle[].ctx.synchronize()
+    if hi > lo:
+        var psub = handle[].textures.ptex_pool_buf.create_sub_buffer[DType.uint8](lo, hi - lo)
+        handle[].ctx.enqueue_copy(psub, handle[].textures.ptex_cache.pool + lo)
+        handle[].ctx.synchronize()
+    scratch.unsafe_free()
+    return n
 
 def gpu_free_scene(handlePtr: Pointer[GpuSceneHandle, MutUntrackedOrigin]):
     if Int(handlePtr) == 0:

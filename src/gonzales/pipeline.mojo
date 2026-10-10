@@ -33,7 +33,7 @@ from .restir_gi import GIReservoir, gi_reservoir_init, GIReservoirIO, gi_reservo
 from .restir_sms import SMSReservoir, sms_reservoir_init, SMSReservoirIO, sms_reservoir_io_null
 from .restir_vol import VolReservoir, vol_reservoir_init, VolReservoirIO, vol_reservoir_io_null
 from .gpu import gpu_render_sample, gpu_render_wavefront, gpu_mnee_adapt, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol
-from .gpu_scene import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_free_scene
+from .gpu_scene import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_free_scene, gpu_ptex_stream
 from .gpu_denoise import gpu_atrous_denoise
 from .gpu_wavefront import gpu_gen_aux_buffers
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
@@ -1142,6 +1142,8 @@ struct GpuGuidedRenderer(GuidedRenderer):
     var mesh_al_idx_buf: Optional[DeviceBuffer[DType.uint8]]
     var n_meshes_vk: Int
     var instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]]
+    var ptex_next: Int          # next sample count to stream Ptex pages at; 0 = not paging
+    var ptex_seconds: Float64
 
     def __init__(
         out self, handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
@@ -1160,28 +1162,52 @@ struct GpuGuidedRenderer(GuidedRenderer):
         self.interop_rays_buf = interop_rays_buf^; self.interop_results_buf = interop_results_buf^
         self.mesh_material_idx_buf = mesh_material_idx_buf^; self.mesh_al_idx_buf = mesh_al_idx_buf^
         self.n_meshes_vk = n_meshes_vk; self.instance_base_mesh_buf = instance_base_mesh_buf^
+        self.ptex_next = 0; self.ptex_seconds = 0.0
+
+    def warm_ptex(mut self) raises:
+        """Ptex demand paging: render single samples and load what they ask for until nothing is
+        missing, then discard them. Camera hits alone go first, so they get the pool before indirect ones."""
+        if len(self.handle[].textures.ptex_bufs) == 0:
+            return
+        var t0 = perf_counter_ns()
+        for it in range(5):
+            self._dispatch(it, 1, Int32(1) if it == 0 else Int32(-1))
+            if gpu_ptex_stream(self.handle) == 0 and it > 0:
+                break
+        gpu_clear_film(self.handle, Int64(self.n_pixels))
+        self.ptex_next = 1
+        self.ptex_seconds += Float64(perf_counter_ns() - t0) / 1.0e9
 
     def render_samples(mut self, begin: Int, end: Int) raises:
         var si = begin
         while si < end:
             var actual_batch = min(WAVEFRONT_BATCH, end - si)
-            gpu_render_wavefront(
-                self.handle,
-                self.psc[unsafe_offset=0].camera_to_world,
-                Int32(si), Int32(actual_batch),
-                self.psc[unsafe_offset=0].log2_spp, self.psc[unsafe_offset=0].n_base4_digits,
-                self.seed_dim0, self.seed_dim1,
-                UInt32(self.psc[unsafe_offset=0].rng_seed & UInt64(0xFFFFFFFF)),
-                UInt32(self.psc[unsafe_offset=0].rng_seed >> UInt64(32)),
-                Int64(self.n_pixels), self.psc[unsafe_offset=0].max_depth,
-                _sample_clamp(self.psc),
-                self.use_vk, self.interop_scene, self.interop_rays_buf, self.interop_results_buf,
-                self.mesh_material_idx_buf, self.mesh_al_idx_buf, self.n_meshes_vk,
-                self.instance_base_mesh_buf,
-            )
+            self._dispatch(si, actual_batch)
             si += actual_batch
             gpu_mnee_adapt(self.handle)
+            if self.ptex_next > 0 and si >= self.ptex_next:
+                # Stragglers the warm-up never hit; checked at doubling intervals.
+                var t0 = perf_counter_ns()
+                _ = gpu_ptex_stream(self.handle)
+                self.ptex_next = si * 2
+                self.ptex_seconds += Float64(perf_counter_ns() - t0) / 1.0e9
             self.progress.update(si)
+
+    def _dispatch(mut self, si: Int, actual_batch: Int, max_depth: Int32 = Int32(-1)) raises:
+        gpu_render_wavefront(
+            self.handle,
+            self.psc[unsafe_offset=0].camera_to_world,
+            Int32(si), Int32(actual_batch),
+            self.psc[unsafe_offset=0].log2_spp, self.psc[unsafe_offset=0].n_base4_digits,
+            self.seed_dim0, self.seed_dim1,
+            UInt32(self.psc[unsafe_offset=0].rng_seed & UInt64(0xFFFFFFFF)),
+            UInt32(self.psc[unsafe_offset=0].rng_seed >> UInt64(32)),
+            Int64(self.n_pixels), max_depth if max_depth >= Int32(0) else self.psc[unsafe_offset=0].max_depth,
+            _sample_clamp(self.psc),
+            self.use_vk, self.interop_scene, self.interop_rays_buf, self.interop_results_buf,
+            self.mesh_material_idx_buf, self.mesh_al_idx_buf, self.n_meshes_vk,
+            self.instance_base_mesh_buf,
+        )
 
     def render_iteration(mut self, read_tree: GuideGrid, shard: GuideGrid, begin: Int, end: Int) raises:
         gpu_guide_begin(self.handle, read_tree, shard)
@@ -1820,6 +1846,7 @@ def parse_and_render(
                 handle, psc, seed_dim0, seed_dim1, n_pixels, spp, guided, use_vk, interop_scene,
                 interop_rays_buf_opt^, interop_results_buf_opt^, mesh_material_idx_buf_opt^, mesh_al_idx_buf_opt^,
                 n_meshes_vk, instance_base_mesh_buf_opt^)
+            renderer.warm_ptex()
             if guided:
                 var root = psc[unsafe_offset=0].bvh_nodes[unsafe_offset=0]
                 print("Path guiding: adaptive SD-tree on the GPU")
@@ -1827,6 +1854,12 @@ def parse_and_render(
             else:
                 renderer.render_samples(0, spp)
             _ = renderer.progress.finish()
+            if renderer.ptex_next > 0:
+                print("Ptex paging:", handle[].textures.ptex_cache.loaded, "face(s) loaded,", handle[].textures.ptex_cache.evicted,
+                      "evicted,", handle[].textures.ptex_cache.denied, "denied; pool",
+                      (handle[].textures.ptex_cache.top - handle[].textures.ptex_cache.dead) * 3 // (1024 * 1024), "of",
+                      handle[].textures.ptex_cache.cap * 3 // (1024 * 1024), "MB;",
+                      Float64(Int(renderer.ptex_seconds * 100.0)) / 100.0, "s")
         if use_vk:
             var rt_hw_end = rtcore_active()
             if Int(rt_hw_end) != 0:

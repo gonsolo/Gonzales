@@ -1,3 +1,4 @@
+from std.ffi import external_call
 from std.sys import argv, exit
 from std.time import perf_counter_ns
 from std.os import getenv, setenv
@@ -336,6 +337,9 @@ def main() raises:
     # The Sobol matrices, the spectral tables, the CUDA context, the PLY meshes and the scene parse do not depend on each
     # other, so they run side by side. The parse (the longest) stays on this thread; the rest run on threads of their own
     # (OsThread), only for the drivers that parse in parse_and_render.
+    # Ptex demand paging needs a driver that streams between sample batches: the GPU path tracer.
+    if use_gpu and not (use_sppm or use_vcm or use_restir or use_vol_restir_reuse or interactive or use_vulkan_rt):
+        _ = external_call["ptex_set_paging", NoneType, Int32](Int32(1))
     var will_parse = not (pixel_x >= 0 and pixel_y >= 0) and not use_vulkan_rt and not interactive
     var want_ctx = will_parse and use_gpu and gpu_available()
 

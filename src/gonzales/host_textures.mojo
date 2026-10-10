@@ -163,15 +163,16 @@ def _load_host_texture(
     while filename[unsafe_offset=name_len] != UInt8(0): name_len += 1
     if name_len > 4 and filename[unsafe_offset=name_len-4] == UInt8(46) and filename[unsafe_offset=name_len-3] == UInt8(112) and \
        filename[unsafe_offset=name_len-2] == UInt8(116) and filename[unsafe_offset=name_len-1] == UInt8(120):   # ".ptx"
-        var nb = unsafe_alloc[Int64](1); var nf = unsafe_alloc[Int32](1)
-        nb[unsafe_offset=0] = Int64(0); nf[unsafe_offset=0] = Int32(0)
+        var nb = unsafe_alloc[Int64](1); var nf = unsafe_alloc[Int32](2)
+        nb[unsafe_offset=0] = Int64(0); nf[unsafe_offset=0] = Int32(0); nf[unsafe_offset=1] = Int32(-1)
         var pok = external_call["ptex_packed_size", Int32, Pointer[UInt8, MutUntrackedOrigin],
-            Pointer[Int64, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin]](filename, nb, nf)
+            Pointer[Int64, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin]](
+            filename, nb, nf, nf + 1)
         if pok != Int32(0) and Int(nb[unsafe_offset=0]) > 0:
             var blob = unsafe_alloc[UInt8](Int(nb[unsafe_offset=0]))
             _ = external_call["ptex_packed_take", Int32, Pointer[UInt8, MutUntrackedOrigin],
                 Pointer[UInt8, MutUntrackedOrigin]](filename, blob)
-            result = _HostTexture(blob.unsafe_origin_cast[MutUntrackedOrigin](), Int(nb[unsafe_offset=0]), nf[unsafe_offset=0], Int32(1),
+            result = _HostTexture(blob.unsafe_origin_cast[MutUntrackedOrigin](), Int(nb[unsafe_offset=0]), nf[unsafe_offset=0], nf[unsafe_offset=1],
                                   Int32(1), Int32(3), Int32(GpuTexture.FORMAT_PTEX), Int32(512))
         else:
             print("Warning: could not read Ptex file '" + String(unsafe_from_utf8_ptr=filename.as_imm()) + "' -- it renders as a flat default instead.")
@@ -425,9 +426,9 @@ def host_texture_table(ht: HostTextures) -> Pointer[GpuTexture, MutUntrackedOrig
         var t = ht.tex[unsafe_offset=ti]
         if t.n_bytes == 0:
             table[unsafe_offset=ti] = GpuTexture(Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
-                Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+                Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(), Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
                 Int32(0), Int32(0), Int32(0), Int32(0), Int32(GpuTexture.FORMAT_F32))
             continue
-        table[unsafe_offset=ti] = GpuTexture(t.data, ht.lut.unsafe_offset(Int(t.lut_off)),
+        table[unsafe_offset=ti] = GpuTexture(t.data, ht.lut.unsafe_offset(Int(t.lut_off)), Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
             t.width, t.height, t.n_levels, t.channels, t.format)
     return table.unsafe_origin_cast[MutUntrackedOrigin]()

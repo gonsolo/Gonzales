@@ -717,22 +717,133 @@ extern "C" int ptex_face_rgb(const char *filename, float gamma, float **data, in
 
 // ── Packed Ptex for the renderer's texture table ─────────────────────────────
 // Blob = nfaces * 8 header bytes, then RGB8 texels (gamma-2.2 encoded).
-// Header entry: uint32 texel offset of the face's level 0 (relative to the texel region),
-// uint8 log2 width, uint8 log2 height, 2 pad bytes. Each face stores its full mip chain,
-// levels halving on both axes (clamped at 1) down to 1x1, consecutively.
-// Faces are capped at 2^GONZALES_PTEX_LOG2RES texels per side (default 4 = 16x16).
+// Header entry: uint32 texel offset of the face's level 0, uint8 log2 width, uint8 log2 height,
+// uint8 wanted log2 (written by the renderer; 255 = nothing finer exists), uint8 flags
+// (1 = the offset is into the shared page pool instead of this file's own texels, 2 = used).
+// Each face stores its full mip chain, levels halving on both axes (clamped at 1) down to 1x1.
 static std::mutex ptex_blob_mu;
 static std::map<std::string, std::vector<unsigned char>> ptex_blobs;
 
-static int ptex_planned_log2 = 4;   // set by ptex_set_cap from the scene's memory budget
+static int ptex_planned_log2 = 4;       // uniform cap that fits the memory budget
+static int ptex_base_log2 = 0;          // resident cap when paging
+static long long ptex_pool_budget = 0;  // page pool bytes when paging
+static bool ptex_paging_on = false;
+
+static bool ptex_paging() { return ptex_paging_on && ptex_pool_budget > 0 && !std::getenv("GONZALES_PTEX_LOG2RES"); }
 
 static int ptex_max_log2() {
         const char *e = std::getenv("GONZALES_PTEX_LOG2RES");
-        int v = e ? std::atoi(e) : ptex_planned_log2;
+        int v = e ? std::atoi(e) : (ptex_paging() ? ptex_base_log2 : ptex_planned_log2);
         return std::min(std::max(v, 0), 12);
 }
 
-extern "C" void ptex_set_cap(int log2res) { ptex_planned_log2 = log2res; }
+extern "C" void ptex_set_plan(int cap, int base, long long pool_bytes) {
+        ptex_planned_log2 = cap;
+        ptex_base_log2 = base;
+        ptex_pool_budget = pool_bytes;
+}
+extern "C" void ptex_set_paging(int on) { ptex_paging_on = on != 0; }
+
+// Every level carries a one-texel border copied from the neighbouring faces, so a bilinear
+// lookup blends across face edges: a 2^ul x 2^vl level takes (2^ul + 2) * (2^vl + 2) texels.
+static size_t ptex_chain_texels(int ul, int vl) {
+        size_t n = 0;
+        for (;;) {
+                n += ((size_t(1) << ul) + 2) * ((size_t(1) << vl) + 2);
+                if (ul == 0 && vl == 0)
+                        return n;
+                ul = std::max(ul - 1, 0);
+                vl = std::max(vl - 1, 0);
+        }
+}
+
+struct PtexTexelReader {
+        PtexTexture *tex;
+        int nch;
+        bool is_u8;
+        std::vector<char> raw;
+        std::vector<float> px;
+        explicit PtexTexelReader(PtexTexture *t)
+            : tex(t), nch(t->numChannels()), is_u8(t->dataType() == Ptex::dt_uint8),
+              raw(Ptex::DataSize(t->dataType()) * t->numChannels()), px(t->numChannels()) {}
+        // RGB8, gamma 2.2 for files that are not 8-bit.
+        void get(PtexFaceData *fd, int u, int v, unsigned char *dst) {
+                fd->getPixel(u, v, raw.data());
+                if (is_u8) {
+                        const unsigned char *r = reinterpret_cast<const unsigned char *>(raw.data());
+                        for (int c = 0; c < 3; ++c)
+                                dst[c] = r[nch >= 3 ? c : 0];
+                        return;
+                }
+                Ptex::ConvertToFloat(px.data(), raw.data(), tex->dataType(), nch);
+                for (int c = 0; c < 3; ++c) {
+                        float lin = std::min(std::max(px[nch >= 3 ? c : 0], 0.0f), 1.0f);
+                        dst[c] = static_cast<unsigned char>(std::pow(lin, 1.0f / 2.2f) * 255.0f + 0.5f);
+                }
+        }
+};
+
+// Write face f's mip chain from (ul, vl) down to 1x1, each level with its border, to dst.
+// Edges run counter-clockwise (bottom, right, top, left), so position k along one face's edge
+// meets position n-1-k along its neighbour's.
+static void ptex_read_chain(PtexTexture *tex, int f, int ul, int vl, unsigned char *dst) {
+        PtexTexelReader rd(tex);
+        const Ptex::FaceInfo &info = tex->getFaceInfo(f);
+        for (;;) {
+                const int w = 1 << ul, h = 1 << vl, stride = w + 2;
+                auto at = [&](int x, int y) { return dst + (static_cast<size_t>(y + 1) * stride + (x + 1)) * 3; };
+                PtexPtr<PtexFaceData> fd(tex->getData(f, Ptex::Res(ul, vl)));
+                for (int y = 0; y < h; ++y)
+                        for (int x = 0; x < w; ++x) {
+                                if (fd)
+                                        rd.get(fd, x, y, at(x, y));
+                                else
+                                        at(x, y)[0] = at(x, y)[1] = at(x, y)[2] = 0;
+                        }
+                for (int e = 0; e < 4; ++e) {
+                        const int n = (e & 1) ? h : w, nl = (e & 1) ? vl : ul;
+                        const int af = info.adjface(e), ae = info.adjedge(e);
+                        PtexPtr<PtexFaceData> nd;
+                        int aw = 1, ah = 1, al = 0;
+                        if (af >= 0 && af < tex->numFaces()) {
+                                const Ptex::FaceInfo &ai = tex->getFaceInfo(af);
+                                if (ai.isSubface() == info.isSubface()) {
+                                        const int fa = (ae & 1) ? ai.res.vlog2 : ai.res.ulog2, fp = (ae & 1) ? ai.res.ulog2 : ai.res.vlog2;
+                                        const int delta = std::max(fa - nl, 0);
+                                        al = fa - delta;
+                                        const int pl = std::max(fp - delta, 0);
+                                        const Ptex::Res ares = (ae & 1) ? Ptex::Res(pl, al) : Ptex::Res(al, pl);
+                                        nd.reset(tex->getData(af, ares));
+                                        aw = 1 << ares.ulog2;
+                                        ah = 1 << ares.vlog2;
+                                }
+                        }
+                        for (int k = 0; k < n; ++k) {
+                                const int x = e == 0 ? k : e == 1 ? w : e == 2 ? w - 1 - k : -1;
+                                const int y = e == 0 ? -1 : e == 1 ? k : e == 2 ? h : h - 1 - k;
+                                if (!nd) {   // mesh border: repeat the face's own edge texel
+                                        std::memcpy(at(x, y), at(std::min(std::max(x, 0), w - 1), std::min(std::max(y, 0), h - 1)), 3);
+                                        continue;
+                                }
+                                const int j = ((n - 1 - k) << al) >> nl;
+                                const int au = ae == 0 ? j : ae == 1 ? aw - 1 : ae == 2 ? aw - 1 - j : 0;
+                                const int av = ae == 0 ? 0 : ae == 1 ? j : ae == 2 ? ah - 1 : ah - 1 - j;
+                                rd.get(nd, au, av, at(x, y));
+                        }
+                }
+                const int cx[4] = {-1, w, w, -1}, cy[4] = {-1, -1, h, h};
+                for (int c = 0; c < 4; ++c) {   // corners: mean of the two border texels beside them
+                        const unsigned char *p = at(cx[c] < 0 ? 0 : w - 1, cy[c]), *q = at(cx[c], cy[c] < 0 ? 0 : h - 1);
+                        for (int i = 0; i < 3; ++i)
+                                at(cx[c], cy[c])[i] = static_cast<unsigned char>((p[i] + q[i] + 1) / 2);
+                }
+                dst += static_cast<size_t>(w + 2) * (h + 2) * 3;
+                if (ul == 0 && vl == 0)
+                        break;
+                ul = std::max(ul - 1, 0);
+                vl = std::max(vl - 1, 0);
+        }
+}
 
 // bytes[c] += packed size of this file with faces capped at 2^c per side, c = 0..12.
 extern "C" int ptex_bytes_by_cap(const char *filename, long long *bytes) {
@@ -743,23 +854,30 @@ extern "C" int ptex_bytes_by_cap(const char *filename, long long *bytes) {
         const int nfaces = tex->numFaces();
         for (int f = 0; f < nfaces; ++f) {
                 Ptex::Res full = tex->getFaceInfo(f).res;
-                for (int c = 0; c <= 12; ++c) {
-                        int ul = std::min<int>(full.ulog2, c), vl = std::min<int>(full.vlog2, c);
-                        long long texels = 0;
-                        for (;;) {
-                                texels += (1LL << ul) * (1LL << vl);
-                                if (ul == 0 && vl == 0)
-                                        break;
-                                ul = std::max(ul - 1, 0);
-                                vl = std::max(vl - 1, 0);
-                        }
-                        bytes[c] += texels * 3 + 8;
-                }
+                for (int c = 0; c <= 12; ++c)
+                        bytes[c] += ptex_chain_texels(std::min<int>(full.ulog2, c), std::min<int>(full.vlog2, c)) * 3 + 8;
         }
         return 1;
 }
 
-extern "C" int ptex_packed_size(const char *filename, long long *nbytes, int *nfaces_out) {
+// Demand paging lives in ptex_cache.mojo; these are its file accessors.
+extern "C" long long ptex_pool_size() { return ptex_paging() ? ptex_pool_budget : 0; }
+extern "C" void *ptex_open(const char *filename) {
+        Ptex::String err;
+        return PtexTexture::open(filename, err);
+}
+extern "C" void ptex_close(void *tex) { static_cast<PtexTexture *>(tex)->release(); }
+extern "C" void ptex_face_res(void *tex, int f, int *res) {
+        Ptex::Res full = static_cast<PtexTexture *>(tex)->getFaceInfo(f).res;
+        res[0] = full.ulog2;
+        res[1] = full.vlog2;
+}
+extern "C" void ptex_read_face(void *tex, int f, int ul, int vl, unsigned char *dst) {
+        ptex_read_chain(static_cast<PtexTexture *>(tex), f, ul, vl, dst);
+}
+
+// Pack `filename`; *paged_id is 0 when its faces can be paged in at finer resolutions, else -1.
+extern "C" int ptex_packed_size(const char *filename, long long *nbytes, int *nfaces_out, int *paged_id) {
         Ptex::String err;
         PtexPtr<PtexTexture> tex(PtexTexture::open(filename, err));
         if (!tex)
@@ -768,51 +886,33 @@ extern "C" int ptex_packed_size(const char *filename, long long *nbytes, int *nf
         if (nfaces <= 0 || nch <= 0)
                 return 0;
         const int cap = ptex_max_log2();
-        const bool is_u8 = tex->dataType() == Ptex::dt_uint8;
+        const bool paged = ptex_paging();
         std::vector<unsigned char> blob(static_cast<size_t>(nfaces) * 8);
-        std::vector<char> raw(Ptex::DataSize(tex->dataType()) * nch);
-        std::vector<float> px(nch);
         size_t texels = 0;
         for (int f = 0; f < nfaces; ++f) {
                 Ptex::Res full = tex->getFaceInfo(f).res;
-                int ul = std::min<int>(full.ulog2, cap), vl = std::min<int>(full.vlog2, cap);
+                const int ul = std::min<int>(full.ulog2, cap), vl = std::min<int>(full.vlog2, cap);
                 const uint32_t off = static_cast<uint32_t>(texels);
-                std::memcpy(&blob[static_cast<size_t>(f) * 8], &off, 4);
-                blob[static_cast<size_t>(f) * 8 + 4] = static_cast<unsigned char>(ul);
-                blob[static_cast<size_t>(f) * 8 + 5] = static_cast<unsigned char>(vl);
-                blob[static_cast<size_t>(f) * 8 + 6] = blob[static_cast<size_t>(f) * 8 + 7] = 0;
-                for (;;) {
-                        const int w = 1 << ul, h = 1 << vl;
-                        const size_t base = blob.size();
-                        blob.resize(base + static_cast<size_t>(w) * h * 3, 0);
-                        PtexPtr<PtexFaceData> fd(tex->getData(f, Ptex::Res(ul, vl)));
-                        if (fd) {
-                                for (int v = 0; v < h; ++v)
-                                        for (int u = 0; u < w; ++u) {
-                                                unsigned char *dst = &blob[base + (static_cast<size_t>(v) * w + u) * 3];
-                                                fd->getPixel(u, v, raw.data());
-                                                if (is_u8) {
-                                                        const unsigned char *r = reinterpret_cast<const unsigned char *>(raw.data());
-                                                        for (int c = 0; c < 3; ++c)
-                                                                dst[c] = r[nch >= 3 ? c : 0];
-                                                } else {
-                                                        Ptex::ConvertToFloat(px.data(), raw.data(), tex->dataType(), nch);
-                                                        for (int c = 0; c < 3; ++c) {
-                                                                float lin = std::min(std::max(px[nch >= 3 ? c : 0], 0.0f), 1.0f);
-                                                                dst[c] = static_cast<unsigned char>(std::pow(lin, 1.0f / 2.2f) * 255.0f + 0.5f);
-                                                        }
-                                                }
-                                        }
-                        }
-                        texels += static_cast<size_t>(w) * h;
-                        if (ul == 0 && vl == 0)
-                                break;
-                        ul = std::max(ul - 1, 0);
-                        vl = std::max(vl - 1, 0);
-                }
+                unsigned char *e = &blob[static_cast<size_t>(f) * 8];
+                std::memcpy(e, &off, 4);
+                e[4] = static_cast<unsigned char>(ul);
+                e[5] = static_cast<unsigned char>(vl);
+                e[6] = (paged && (ul < full.ulog2 || vl < full.vlog2)) ? 0 : 255;
+                e[7] = 0;
+                texels += ptex_chain_texels(ul, vl);
+        }
+        blob.resize(static_cast<size_t>(nfaces) * 8 + texels * 3);
+        for (int f = 0; f < nfaces; ++f) {
+                const unsigned char *e = &blob[static_cast<size_t>(f) * 8];
+                uint32_t off;
+                std::memcpy(&off, e, 4);
+                ptex_read_chain(tex, f, e[4], e[5], &blob[static_cast<size_t>(nfaces) * 8 + static_cast<size_t>(off) * 3]);
         }
         *nbytes = static_cast<long long>(blob.size());
         *nfaces_out = nfaces;
+        *paged_id = -1;
+        if (paged)
+                *paged_id = 0;
         std::lock_guard<std::mutex> lock(ptex_blob_mu);
         ptex_blobs[filename] = std::move(blob);
         return 1;

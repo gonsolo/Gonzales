@@ -1,7 +1,7 @@
 from std.atomic import Atomic
 from std.sys import size_of
 from std.collections import Array
-from std.math import sqrt, cos, sin, floor, acos, atan2, log2, exp, log, abs
+from std.math import sqrt, cos, sin, floor, acos, atan2, log2, ceil, exp, log, abs
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
 from .geometry import offset_point, RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, fast_sincos, safe_sqrt, reflect, refract, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
@@ -449,8 +449,9 @@ def _footprint_lod(tex: GpuTexture, width: Float32) -> Float32:
     return Float32(0.0)
 
 # ── Packed Ptex (GpuTexture.FORMAT_PTEX; layout in oiio.cc) ─────────────────
-# Bilinear inside the face (clamped at its border: no cross-face filtering), blended
-# between the two mip levels the footprint straddles. (u, v) are the face's own 0..1.
+# Bilinear inside the face, blended between the two mip levels the footprint straddles. Each level has a
+# one-texel border holding the neighbouring faces' texels, so the lookup filters across face edges.
+# (u, v) are the face's own 0..1.
 @always_inline
 def _ptex_texel(tex: GpuTexture, texels: Pointer[UInt8, MutUntrackedOrigin], i: Int) -> RGB:
     var j = i * 3
@@ -459,16 +460,15 @@ def _ptex_texel(tex: GpuTexture, texels: Pointer[UInt8, MutUntrackedOrigin], i: 
 
 @always_inline
 def _ptex_level(tex: GpuTexture, texels: Pointer[UInt8, MutUntrackedOrigin], off: Int, lw: Int, lh: Int, u: Float32, v: Float32) -> RGB:
-    var fx = min(max(u, Float32(0.0)), Float32(1.0)) * Float32(lw) - Float32(0.5)
-    var fy = min(max(v, Float32(0.0)), Float32(1.0)) * Float32(lh) - Float32(0.5)
-    var x0 = Int(floor(fx)); var y0 = Int(floor(fy))
+    var fx = min(max(u, Float32(0.0)), Float32(1.0)) * Float32(lw) + Float32(0.5)   # in bordered texel coordinates
+    var fy = min(max(v, Float32(0.0)), Float32(1.0)) * Float32(lh) + Float32(0.5)
+    var x0 = min(Int(floor(fx)), lw); var y0 = min(Int(floor(fy)), lh)
     var wx = fx - Float32(x0); var wy = fy - Float32(y0)
-    var x1 = min(x0 + 1, lw - 1); var y1 = min(y0 + 1, lh - 1)
-    x0 = max(x0, 0); y0 = max(y0, 0)
-    var c00 = _ptex_texel(tex, texels, off + y0 * lw + x0)
-    var c10 = _ptex_texel(tex, texels, off + y0 * lw + x1)
-    var c01 = _ptex_texel(tex, texels, off + y1 * lw + x0)
-    var c11 = _ptex_texel(tex, texels, off + y1 * lw + x1)
+    var row = off + y0 * (lw + 2) + x0
+    var c00 = _ptex_texel(tex, texels, row)
+    var c10 = _ptex_texel(tex, texels, row + 1)
+    var c01 = _ptex_texel(tex, texels, row + lw + 2)
+    var c11 = _ptex_texel(tex, texels, row + lw + 3)
     return (c00 * (Float32(1.0) - wx) + c10 * wx) * (Float32(1.0) - wy) + (c01 * (Float32(1.0) - wx) + c11 * wx) * wy
 
 @always_inline
@@ -479,6 +479,19 @@ def _sample_ptex(tex: GpuTexture, face_in: Int, u: Float32, v: Float32, fp_width
     var off = Int(entry.unsafe_bitcast[UInt32]()[unsafe_offset=0])
     var ul = Int(entry[unsafe_offset=4]); var vl = Int(entry[unsafe_offset=5])
     var texels = tex.data.unsafe_offset(n_faces * 8)
+    var flags = Int(entry[unsafe_offset=7])
+    if (flags & 1) != 0:
+        texels = tex.pool
+        if (flags & 2) == 0:
+            entry[unsafe_offset=7] = UInt8(3)
+    var want = Int(entry[unsafe_offset=6])
+    if want != 255:
+        # Ask the host for the resolution this footprint needs (ptex_cache.mojo).
+        var need = 12
+        if fp_width > Float32(0.0):
+            need = min(max(Int(ceil(-log2(fp_width))), 0), 12)
+        if need > max(ul, vl) and need > want:
+            entry[unsafe_offset=6] = UInt8(need)
     var n_lev = max(ul, vl) + 1
     var lod = Float32(0.0)
     var fp_texels = fp_width * Float32(1 << max(ul, vl))
@@ -487,12 +500,12 @@ def _sample_ptex(tex: GpuTexture, face_in: Int, u: Float32, v: Float32, fp_width
     var l0 = Int(floor(lod))
     var f = lod - Float32(l0)
     for _k in range(l0):
-        off += (1 << ul) * (1 << vl)
+        off += ((1 << ul) + 2) * ((1 << vl) + 2)
         ul = max(ul - 1, 0); vl = max(vl - 1, 0)
     var c0 = _ptex_level(tex, texels, off, 1 << ul, 1 << vl, u, v)
     if f <= Float32(0.0) or l0 >= n_lev - 1:
         return c0
-    var off1 = off + (1 << ul) * (1 << vl)
+    var off1 = off + ((1 << ul) + 2) * ((1 << vl) + 2)
     var c1 = _ptex_level(tex, texels, off1, 1 << max(ul - 1, 0), 1 << max(vl - 1, 0), u, v)
     return c0 + (c1 - c0) * f
 
