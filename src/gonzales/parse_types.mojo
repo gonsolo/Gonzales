@@ -404,10 +404,14 @@ struct SceneParseState(Movable):
     var object_names:      List[String]
     var object_mesh_start: List[Int32]
     var object_mesh_end:   List[Int32]
+    # Likewise the template's curves: [object_curve_start[i], object_curve_end[i]) into the curves_* lists.
+    var object_curve_start: List[Int32]
+    var object_curve_end:   List[Int32]
     var object_ctm:        List[Float32]  # 16 floats per template: CTM at that ObjectBegin (Mdef)
     # Pending (currently-open) ObjectBegin block, valid only while object_depth > 0.
     var pending_object_name:  String
     var pending_object_start: Int32
+    var pending_object_curve_start: Int32
     var pending_object_ctm:   Array[Float32, 16]
     # Recorded placements: parallel arrays, one entry per ObjectInstance.
     # template_idx indexes object_names/object_mesh_start/object_mesh_end
@@ -548,6 +552,9 @@ struct SceneParseState(Movable):
 
         self.object_names      = List[String]()
         self.object_mesh_start = List[Int32]()
+        self.object_curve_start = List[Int32]()
+        self.object_curve_end = List[Int32]()
+        self.pending_object_curve_start = Int32(0)
         self.object_mesh_end   = List[Int32]()
         self.object_ctm        = List[Float32]()
         self.pending_object_name  = String("")

@@ -148,6 +148,7 @@ struct ParsedScene_Mojo:
     var blas_node_counts:   Pointer[Int32, MutUntrackedOrigin]  # per-BLAS array length, needed for GPU upload
     var blas_primid_counts: Pointer[Int32, MutUntrackedOrigin]
     var blas_count:       Int32
+    var blas_total:       Int32   # entries in the blas_* arrays: templates, the instances' BVH, the curve BVHs
     var instances:        Pointer[Instance, MutUntrackedOrigin]
     var instance_count:   Int32
     # Mesh-index range [start, end) each template's BLAS spans, into the SAME
@@ -647,7 +648,8 @@ def handle_curve_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         s[unsafe_offset=0].curves_w0.append(width0 + (width1 - width0) * t0)
         s[unsafe_offset=0].curves_w1.append(width0 + (width1 - width0) * t1)
         s[unsafe_offset=0].curves_mat.append(mat_idx)
-        s[unsafe_offset=0].curves_al.append(s[unsafe_offset=0].cur_attr.is_alight)
+        # An emitter inside an object template is not supported (as for meshes), so its curves do not emit.
+        s[unsafe_offset=0].curves_al.append(s[unsafe_offset=0].cur_attr.is_alight and s[unsafe_offset=0].object_depth == Int32(0))
         s[unsafe_offset=0].curves_al_rgb.append(s[unsafe_offset=0].cur_attr.al_rgb)
     xfm4.unsafe_free()
 
@@ -1238,14 +1240,9 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         return
 
     if is_curve:
-        if s[unsafe_offset=0].object_depth == 0:
-            handle_curve_shape(handle, s)
-        else:
-            # Curve instancing inside ObjectBegin/ObjectEnd isn't supported yet
-            # (only trianglemesh/plymesh templates are, see _psc_finish_object_def) —
-            # skip rather than silently adding an un-instanced curve at the
-            # template's definition-space position.
-            _psc_skip_params(handle)
+        # Inside ObjectBegin/ObjectEnd the curves belong to the template (_psc_finish_object_def records
+        # their range) and are reached only through its instances.
+        handle_curve_shape(handle, s)
         return
 
     if is_sphere:
@@ -1808,8 +1805,12 @@ def _psc_finish_object_def(s: Pointer[SceneParseState, MutUntrackedOrigin]):
     finalize_scene and later ObjectInstance directives."""
     var start = Int(s[unsafe_offset=0].pending_object_start)
     var end   = len(s[unsafe_offset=0].meshes)
-    if end <= start:
-        return  # empty object (e.g. only unsupported AreaLightSource/curves) — nothing to instance
+    var cstart = Int(s[unsafe_offset=0].pending_object_curve_start)
+    var cend   = len(s[unsafe_offset=0].curves_mat)
+    if end <= start and cend <= cstart:
+        return  # empty object (e.g. only an unsupported AreaLightSource) — nothing to instance
+    s[unsafe_offset=0].object_curve_start.append(Int32(cstart))
+    s[unsafe_offset=0].object_curve_end.append(Int32(cend))
     for i in range(start, end):
         s[unsafe_offset=0].meshes[i].is_object_template = True
     s[unsafe_offset=0].object_names.append(s[unsafe_offset=0].pending_object_name)
@@ -1904,6 +1905,7 @@ def parse_scene_file(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
             if s[unsafe_offset=0].object_depth == 0:
                 s[unsafe_offset=0].pending_object_name  = String(unsafe_from_utf8_ptr=obj_name.as_imm())
                 s[unsafe_offset=0].pending_object_start = Int32(len(s[unsafe_offset=0].meshes))
+                s[unsafe_offset=0].pending_object_curve_start = Int32(len(s[unsafe_offset=0].curves_mat))
                 s[unsafe_offset=0].pending_object_ctm   = s[unsafe_offset=0].ctm.copy()
             obj_name.unsafe_free()
             s[unsafe_offset=0].object_depth += 1
@@ -2691,6 +2693,12 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # _curve_greedy_groups) so the leaf count stays close to the number of
     # visually-distinct bends, not always CURVE_N_PIECES.
     var n_curves = Int32(len(s[unsafe_offset=0].curves_mat))
+    # The template a curve belongs to, -1 for one placed directly in the scene.
+    var curve_tmpl = unsafe_alloc[Int32](max(Int(n_curves), 1))
+    for i in range(Int(n_curves)): curve_tmpl[unsafe_offset=i] = Int32(-1)
+    for t in range(len(s[unsafe_offset=0].object_curve_start)):
+        for i in range(Int(s[unsafe_offset=0].object_curve_start[t]), Int(s[unsafe_offset=0].object_curve_end[t])):
+            curve_tmpl[unsafe_offset=i] = Int32(t)
     var curve_n_pieces = unsafe_alloc[Int32](max(Int(n_curves), 1))
     var curve_group_base = unsafe_alloc[Int32](max(Int(n_curves), 1))
     var total_curve_groups = Int32(0)
@@ -2726,6 +2734,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             Point3f(s[unsafe_offset=0].curves_cp[cb+9], s[unsafe_offset=0].curves_cp[cb+10], s[unsafe_offset=0].curves_cp[cb+11]),
             s[unsafe_offset=0].curves_w0[i], s[unsafe_offset=0].curves_w1[i], s[unsafe_offset=0].curves_mat[i], curve_n_pieces[unsafe_offset=i])
         var ngroups = _curve_greedy_groups(curve_i, Int(curve_n_pieces[unsafe_offset=i]), count_pass_scratch, count_pass_scratch, False)
+        if curve_tmpl[unsafe_offset=i] >= Int32(0):
+            ngroups = 0   # a template's curves are in its own BVH, not the top level
         curve_group_base[unsafe_offset=i] = total_curve_groups
         total_curve_groups += Int32(ngroups)
 
@@ -2773,6 +2783,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     var group_first_scratch = unsafe_alloc[Int32](CURVE_N_PIECES)
     var group_count_scratch = unsafe_alloc[Int32](CURVE_N_PIECES)
     for ci in range(Int(n_curves)):
+        if curve_tmpl[unsafe_offset=ci] >= Int32(0):
+            continue
         var base = ci * 12
         var curve_i = Curve(
             Point3f(s[unsafe_offset=0].curves_cp[base+0], s[unsafe_offset=0].curves_cp[base+1], s[unsafe_offset=0].curves_cp[base+2]),
@@ -2804,21 +2816,83 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # entries referencing the SAME GLOBAL `meshes` array (no per-BLAS mesh
     # storage, no geometry duplication).
     var n_templates = len(s[unsafe_offset=0].object_names)
-    var blas_nodes_arr   = unsafe_alloc[Pointer[BVH2Node, MutUntrackedOrigin]](n_templates + 1)   # + the instances' BVH
-    var blas_primids_arr = unsafe_alloc[Pointer[PrimId, MutUntrackedOrigin]](n_templates + 1)
+    # Templates first, then the instances' BVH, then one curve BVH for each template that has curves.
+    var blas_nodes_arr   = unsafe_alloc[Pointer[BVH2Node, MutUntrackedOrigin]](n_templates * 2 + 1)
+    var blas_primids_arr = unsafe_alloc[Pointer[PrimId, MutUntrackedOrigin]](n_templates * 2 + 1)
     # Per-BLAS array lengths — the CPU traversal side never needs these (it
     # just walks from node/primid index 0, self-describing via each node's
     # offset/count), but GPU upload does: it copies each BLAS's arrays into
     # their own device buffers and needs to know how many bytes that is.
-    var blas_node_counts   = unsafe_alloc[Int32](n_templates + 1)
-    var blas_primid_counts = unsafe_alloc[Int32](n_templates + 1)
+    var blas_node_counts   = unsafe_alloc[Int32](n_templates * 2 + 1)
+    var blas_primid_counts = unsafe_alloc[Int32](n_templates * 2 + 1)
     var template_mesh_start = unsafe_alloc[Int32](max(n_templates, 1))
     var template_mesh_end   = unsafe_alloc[Int32](max(n_templates, 1))
+    var blas_total = n_templates + 1
+    # Object-space bounds of each template: its triangles' and its curves'.
+    var tmpl_bounds = unsafe_alloc[Float32](max(n_templates, 1) * 6)
+    var cg_first = unsafe_alloc[Int32](CURVE_N_PIECES)
+    var cg_count = unsafe_alloc[Int32](CURVE_N_PIECES)
+    var curves_dropped = 0
     for tmpl in range(n_templates):
         var mstart = Int(s[unsafe_offset=0].object_mesh_start[tmpl])
         var mend   = Int(s[unsafe_offset=0].object_mesh_end[tmpl])
         template_mesh_start[unsafe_offset=tmpl] = Int32(mstart)
         template_mesh_end[unsafe_offset=tmpl]   = Int32(mend)
+        for bk in range(3):
+            tmpl_bounds[unsafe_offset=tmpl * 6 + bk] = Float32(1e38); tmpl_bounds[unsafe_offset=tmpl * 6 + 3 + bk] = Float32(-1e38)
+        # ---- The template's curves: a BVH of their piece groups, with the top level's PrimId form ----
+        var curve_blas = 0   # its index in blas_nodes_arr; 0 = the template has no curves
+        var cstart = Int(s[unsafe_offset=0].object_curve_start[tmpl])
+        var cend = Int(s[unsafe_offset=0].object_curve_end[tmpl])
+        if cend > cstart:
+            var cap = (cend - cstart) * CURVE_N_PIECES
+            var c_bounds = unsafe_alloc[Float32](cap * 6)
+            var c_curve = unsafe_alloc[Int32](cap)
+            var c_id2 = unsafe_alloc[Int32](cap)
+            var n_groups = 0
+            for ci in range(cstart, cend):
+                var cb = ci * 12
+                var curve_t = Curve(
+                    Point3f(s[unsafe_offset=0].curves_cp[cb+0], s[unsafe_offset=0].curves_cp[cb+1], s[unsafe_offset=0].curves_cp[cb+2]),
+                    Point3f(s[unsafe_offset=0].curves_cp[cb+3], s[unsafe_offset=0].curves_cp[cb+4], s[unsafe_offset=0].curves_cp[cb+5]),
+                    Point3f(s[unsafe_offset=0].curves_cp[cb+6], s[unsafe_offset=0].curves_cp[cb+7], s[unsafe_offset=0].curves_cp[cb+8]),
+                    Point3f(s[unsafe_offset=0].curves_cp[cb+9], s[unsafe_offset=0].curves_cp[cb+10], s[unsafe_offset=0].curves_cp[cb+11]),
+                    s[unsafe_offset=0].curves_w0[ci], s[unsafe_offset=0].curves_w1[ci], s[unsafe_offset=0].curves_mat[ci], curve_n_pieces[unsafe_offset=ci])
+                var ng = _curve_greedy_groups(curve_t, Int(curve_n_pieces[unsafe_offset=ci]), cg_first, cg_count, True)
+                for g in range(ng):
+                    var fp = Int(cg_first[unsafe_offset=g]); var pc = Int(cg_count[unsafe_offset=g])
+                    var (xmin, ymin, zmin, xmax, ymax, zmax) = curve_piece_bounds(curve_t, fp)
+                    for pp in range(fp + 1, fp + pc):
+                        var (pxmin, pymin, pzmin, pxmax, pymax, pzmax) = curve_piece_bounds(curve_t, pp)
+                        xmin = min(xmin, pxmin); ymin = min(ymin, pymin); zmin = min(zmin, pzmin)
+                        xmax = max(xmax, pxmax); ymax = max(ymax, pymax); zmax = max(zmax, pzmax)
+                    var gb = n_groups * 6
+                    c_bounds[unsafe_offset=gb+0] = xmin; c_bounds[unsafe_offset=gb+1] = ymin; c_bounds[unsafe_offset=gb+2] = zmin
+                    c_bounds[unsafe_offset=gb+3] = xmax; c_bounds[unsafe_offset=gb+4] = ymax; c_bounds[unsafe_offset=gb+5] = zmax
+                    c_curve[unsafe_offset=n_groups] = Int32(ci); c_id2[unsafe_offset=n_groups] = Int32(fp * 8 + pc)
+                    n_groups += 1
+            var c_nodes = unsafe_alloc[BVH2Node](n_groups * 2 + 4)
+            var c_order = unsafe_alloc[Int32](max(n_groups, 1))
+            var c_node_count = build_bvh2(c_bounds, Int32(n_groups), c_nodes, c_order)
+            var c_prims = unsafe_alloc[PrimId](max(n_groups, 1))
+            for k in range(n_groups):
+                var og = Int(c_order[unsafe_offset=k])
+                var cmat = Int(s[unsafe_offset=0].curves_mat[Int(c_curve[unsafe_offset=og])])
+                c_prims[unsafe_offset=k] = PrimId(Int64(c_curve[unsafe_offset=og]), Int64(c_id2[unsafe_offset=og]),
+                    Int64(cmat) if cmat >= 0 else Int64(default_mat_idx), Int32(-1), Int8(5), Int8(0), Int8(0), Int8(0))
+            c_bounds.unsafe_free(); c_curve.unsafe_free(); c_id2.unsafe_free(); c_order.unsafe_free()
+            if c_node_count > Int32(0):
+                curve_blas = blas_total
+                blas_total += 1
+                blas_nodes_arr[unsafe_offset=curve_blas] = c_nodes
+                blas_primids_arr[unsafe_offset=curve_blas] = c_prims
+                blas_node_counts[unsafe_offset=curve_blas] = c_node_count
+                blas_primid_counts[unsafe_offset=curve_blas] = Int32(n_groups)
+                var cr = c_nodes[unsafe_offset=0]
+                tmpl_bounds[unsafe_offset=tmpl * 6 + 0] = cr.min.x; tmpl_bounds[unsafe_offset=tmpl * 6 + 1] = cr.min.y; tmpl_bounds[unsafe_offset=tmpl * 6 + 2] = cr.min.z
+                tmpl_bounds[unsafe_offset=tmpl * 6 + 3] = cr.max.x; tmpl_bounds[unsafe_offset=tmpl * 6 + 4] = cr.max.y; tmpl_bounds[unsafe_offset=tmpl * 6 + 5] = cr.max.z
+            else:
+                c_nodes.unsafe_free(); c_prims.unsafe_free()
         var t_tris = Int32(0)
         for mi in range(mstart, mend):
             t_tris += Int32(len(s[unsafe_offset=0].meshes[mi].face_idxs))
@@ -2852,7 +2926,26 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         var t_order = unsafe_alloc[Int32](max(Int(t_tris), 1))
         var t_node_count = build_bvh2(t_bounds, t_tris, t_nodes, t_order)
         t_bounds.unsafe_free()
-        if _is_real_ptr(meshes[unsafe_offset=mstart].materials):
+        if t_node_count > Int32(0):
+            var tr = t_nodes[unsafe_offset=0]
+            tmpl_bounds[unsafe_offset=tmpl * 6 + 0] = min(tmpl_bounds[unsafe_offset=tmpl * 6 + 0], tr.min.x)
+            tmpl_bounds[unsafe_offset=tmpl * 6 + 1] = min(tmpl_bounds[unsafe_offset=tmpl * 6 + 1], tr.min.y)
+            tmpl_bounds[unsafe_offset=tmpl * 6 + 2] = min(tmpl_bounds[unsafe_offset=tmpl * 6 + 2], tr.min.z)
+            tmpl_bounds[unsafe_offset=tmpl * 6 + 3] = max(tmpl_bounds[unsafe_offset=tmpl * 6 + 3], tr.max.x)
+            tmpl_bounds[unsafe_offset=tmpl * 6 + 4] = max(tmpl_bounds[unsafe_offset=tmpl * 6 + 4], tr.max.y)
+            tmpl_bounds[unsafe_offset=tmpl * 6 + 5] = max(tmpl_bounds[unsafe_offset=tmpl * 6 + 5], tr.max.z)
+        else:
+            # No triangles (a template of curves only): the record says so with mesh -1.
+            t_nodes[unsafe_offset=0] = BVH2Node(Point3f(Float32(0)), Point3f(Float32(0)), Int32(0), Int32(0))
+            t_mesh.unsafe_free(); t_local.unsafe_free(); t_order.unsafe_free()
+            var none_rec = unsafe_alloc[PrimId](1)
+            none_rec[unsafe_offset=0] = PrimId(Int64(-1), Int64(curve_blas), Int64(0), Int32(-1), Int8(7), Int8(0), Int8(0), Int8(0))
+            blas_nodes_arr[unsafe_offset=tmpl]   = t_nodes
+            blas_primids_arr[unsafe_offset=tmpl] = none_rec
+            blas_node_counts[unsafe_offset=tmpl]   = Int32(1)
+            blas_primid_counts[unsafe_offset=tmpl] = Int32(1)
+            continue
+        if mend > mstart and _is_real_ptr(meshes[unsafe_offset=mstart].materials):
             # A merged template: put its triangles in leaf order, so a leaf is a triangle range.
             var nt_m = Int(t_tris)
             var vis_m = meshes[unsafe_offset=mstart].vertexIndices
@@ -2872,12 +2965,14 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             tmp.unsafe_free()
             t_mesh.unsafe_free(); t_local.unsafe_free(); t_order.unsafe_free()
             var one = unsafe_alloc[PrimId](1)
-            one[unsafe_offset=0] = PrimId(Int64(mstart), Int64(0), Int64(0), Int32(-1), Int8(7), Int8(0), Int8(0), Int8(0))
+            one[unsafe_offset=0] = PrimId(Int64(mstart), Int64(curve_blas), Int64(0), Int32(-1), Int8(7), Int8(0), Int8(0), Int8(0))
             blas_nodes_arr[unsafe_offset=tmpl]   = t_nodes
             blas_primids_arr[unsafe_offset=tmpl] = one
             blas_node_counts[unsafe_offset=tmpl]   = t_node_count
             blas_primid_counts[unsafe_offset=tmpl] = Int32(1)
             continue
+        if curve_blas != 0:
+            curves_dropped += cend - cstart   # only a merged template's record can name a curve BVH
         var t_prim_ids = unsafe_alloc[PrimId](max(Int(t_tris), 1))
         for k in range(Int(t_tris)):
             var orig = Int(t_order[unsafe_offset=k])
@@ -2891,6 +2986,9 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         blas_primids_arr[unsafe_offset=tmpl] = t_prim_ids
         blas_node_counts[unsafe_offset=tmpl]   = t_node_count
         blas_primid_counts[unsafe_offset=tmpl] = t_tris
+    cg_first.unsafe_free(); cg_count.unsafe_free(); curve_tmpl.unsafe_free()
+    if curves_dropped > 0:
+        print("Warning:", curves_dropped, "curve(s) dropped: they are in object templates whose meshes could not be merged.")
 
     var instances_c = unsafe_alloc[Instance](max(Int(total_instances), 1))
     for k in range(Int(total_instances)):
@@ -2903,7 +3001,10 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         instances_c[unsafe_offset=k] = Instance(w2o, Int32(tmpl_idx))
 
         # World-space AABB for the TLAS leaf: transform the BLAS root's 8 corners.
-        var root = blas_nodes_arr[unsafe_offset=tmpl_idx][unsafe_offset=0]
+        var root = BVH2Node(
+            Point3f(tmpl_bounds[unsafe_offset=tmpl_idx * 6], tmpl_bounds[unsafe_offset=tmpl_idx * 6 + 1], tmpl_bounds[unsafe_offset=tmpl_idx * 6 + 2]),
+            Point3f(tmpl_bounds[unsafe_offset=tmpl_idx * 6 + 3], tmpl_bounds[unsafe_offset=tmpl_idx * 6 + 4], tmpl_bounds[unsafe_offset=tmpl_idx * 6 + 5]),
+            Int32(0), Int32(0))
         var wxmin = Float32(1e38); var wymin = Float32(1e38); var wzmin = Float32(1e38)
         var wxmax = Float32(-1e38); var wymax = Float32(-1e38); var wzmax = Float32(-1e38)
         for corner in range(8):
@@ -2923,9 +3024,13 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # Instances are stored in its leaf order, so a leaf is an instance range and no record an instance is
     # needed; its nodes sit after the templates' in blas_nodes_arr, and the top level reaches it through one
     # PrimId of type 8 bounded by its root (bvh._traverse_instances).
+    tmpl_bounds.unsafe_free()
+    blas_nodes_arr[unsafe_offset=n_templates] = unsafe_alloc[BVH2Node](1)
+    blas_primids_arr[unsafe_offset=n_templates] = unsafe_alloc[PrimId](1)
     blas_node_counts[unsafe_offset=n_templates] = Int32(0)
     blas_primid_counts[unsafe_offset=n_templates] = Int32(0)
     if total_instances > Int32(0):
+        blas_nodes_arr[unsafe_offset=n_templates].unsafe_free(); blas_primids_arr[unsafe_offset=n_templates].unsafe_free()
         var inst_slot = Int(total_prims_gpu) * 6
         var inst_nodes = unsafe_alloc[BVH2Node](Int(total_instances) * 2 + 4)
         var inst_order = unsafe_alloc[Int32](Int(total_instances))
@@ -3150,6 +3255,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     psc[unsafe_offset=0].blas_node_counts   = blas_node_counts
     psc[unsafe_offset=0].blas_primid_counts = blas_primid_counts
     psc[unsafe_offset=0].blas_count       = Int32(n_templates)
+    psc[unsafe_offset=0].blas_total       = Int32(blas_total)
     psc[unsafe_offset=0].instances        = instances_c
     psc[unsafe_offset=0].instance_count   = total_instances
     psc[unsafe_offset=0].template_mesh_start = template_mesh_start
@@ -3927,8 +4033,8 @@ def mojo_parsed_free(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]):
         psc[unsafe_offset=0].light_pick_cdf.unsafe_free()
     # blas_nodes_arr/blas_primids_arr/instances are always real allocations
     # (min size 1, see finalize_scene) regardless of blas_count/instance_count.
-    # The instances' BVH follows the templates' in these arrays.
-    for bi in range(Int(psc[unsafe_offset=0].blas_count) + (1 if psc[unsafe_offset=0].instance_count > Int32(0) else 0)):
+    # The instances' BVH and the templates' curve BVHs follow the templates' in these arrays.
+    for bi in range(Int(psc[unsafe_offset=0].blas_total)):
         psc[unsafe_offset=0].blas_nodes_arr[unsafe_offset=bi].unsafe_free()
         psc[unsafe_offset=0].blas_primids_arr[unsafe_offset=bi].unsafe_free()
     psc[unsafe_offset=0].blas_nodes_arr.unsafe_free()

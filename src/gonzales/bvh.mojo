@@ -1260,6 +1260,8 @@ def _traverse_blas_triangles(
     var first = blasPrimIds[unsafe_offset=0]
     var merged = first.type == Int8(7)
     var hitTri = 0
+    if merged and first.id1 < Int64(0):
+        return (False, tMax, Float32(0), Float32(0), hitPrim)   # a template of curves only
 
     while True:
         var node = blasNodes[unsafe_offset=current]
@@ -1347,19 +1349,100 @@ def _traverse_instance(
     ray_org: Vec3f,
     ray_dir: Vec3f,
     tMax: Float32,
+    curves: Pointer[Curve, MutUntrackedOrigin],
 ) -> Tuple[Bool, Float32, Float32, Float32, PrimId]:
-    """One instance: transform the ray into its object space and walk its BLAS. Returns (hit, tHit, u, v,
-    primId) with primId.instanceIdx set to this instance."""
+    """One instance: transform the ray into its object space and walk its BLAS, and its curve BVH if the
+    template has curves (the template record's id2). Returns (hit, tHit, u, v, primId) with
+    primId.instanceIdx set to this instance."""
     var inst = instances[unsafe_offset=inst_idx]
     var (o_org, o_dir) = _transform_ray_to_instance_space(inst.world_to_obj(), ray_org, ray_dir)
     var blas_nodes = blasNodesArr[unsafe_offset=Int(inst.blasIdx)]
     var blas_prim_ids = blasPrimIdsArr[unsafe_offset=Int(inst.blasIdx)]
     var sub = _traverse_blas_triangles(blas_nodes, blas_prim_ids, meshes, o_org, o_dir, tMax)
-    if sub[0]:
-        var hit_prim = sub[4]
+    var hit = sub[0]
+    var t = sub[1]; var u = sub[2]; var v = sub[3]
+    var hit_prim = sub[4]
+    var rec = blas_prim_ids[unsafe_offset=0]
+    if rec.type == Int8(7) and rec.id2 > Int64(0) and Int(curves) > 4:
+        var cs = _traverse_blas_curves(blasNodesArr[unsafe_offset=Int(rec.id2)], blasPrimIdsArr[unsafe_offset=Int(rec.id2)],
+                                       curves, o_org, o_dir, t)
+        if cs[0]:
+            hit = True
+            t = cs[1]; u = cs[2]; v = cs[3]; hit_prim = cs[4]
+    if hit:
         hit_prim.instanceIdx = Int32(inst_idx)
-        return (True, sub[1], sub[2], sub[3], hit_prim)
-    return (False, tMax, Float32(0), Float32(0), sub[4])
+        return (True, t, u, v, hit_prim)
+    return (False, tMax, Float32(0), Float32(0), hit_prim)
+
+
+@always_inline
+def _traverse_blas_curves(
+    nodes: Pointer[BVH2Node, MutUntrackedOrigin],
+    prims: Pointer[PrimId, MutUntrackedOrigin],
+    curves: Pointer[Curve, MutUntrackedOrigin],
+    ray_org: Vec3f,
+    ray_dir: Vec3f,
+    tMax: Float32,
+) -> Tuple[Bool, Float32, Float32, Float32, PrimId]:
+    """A template's curve BVH, for a ray already in its object space: leaves hold PrimId.type 5 records
+    (curve, first piece * 8 + piece count) as the top level does. The object-space direction is not unit
+    length, so the curve test runs on the normalized ray and its distance is scaled back."""
+    var hitPrim = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    var len2 = ray_dir[0] * ray_dir[0] + ray_dir[1] * ray_dir[1] + ray_dir[2] * ray_dir[2]
+    if len2 <= Float32(0):
+        return (False, tMax, Float32(0), Float32(0), hitPrim)
+    var dlen = sqrt(len2)
+    var unit = ray_dir * (Float32(1) / dlen)
+    var rdir = Vec3f(Float32(1.0) / ray_dir[0], Float32(1.0) / ray_dir[1], Float32(1.0) / ray_dir[2])
+    var org = Vec3f(ray_org[0], ray_org[1], ray_org[2])
+    var nearXIsMin = rdir.x >= Float32(0.0)
+    var nearYIsMin = rdir.y >= Float32(0.0)
+    var nearZIsMin = rdir.z >= Float32(0.0)
+    var hasHit = False
+    var localTHit = tMax
+    var bestU: Float32 = 0.0
+    var bestV: Float32 = 0.0
+    var stack = Array[Int32, 64](uninitialized=True)
+    var stack_ptr = stack.unsafe_ptr()
+    var toVisit = 0
+    var current = 0
+    while True:
+        var node = nodes[unsafe_offset=current]
+        if node.count > 0:
+            for j in range(Int(node.count)):
+                var prim = prims[unsafe_offset=Int(node.offset) + j]
+                var ch = intersect_curve(ray_org, unit, curves[unsafe_offset=Int(prim.id1)], Int(prim.id2) // 8, Int(prim.id2) % 8,
+                                         localTHit * dlen)
+                if ch[0]:
+                    hasHit = True
+                    localTHit = ch[1] / dlen; bestU = ch[2]; bestV = ch[3]; hitPrim = prim
+            if toVisit == 0:
+                break
+            toVisit -= 1
+            current = Int(stack_ptr[unsafe_offset=toVisit])
+        else:
+            var leftIdx = current + 1
+            var rightIdx = Int(node.offset)
+            var leftNode = nodes[unsafe_offset=leftIdx]
+            var rightNode = nodes[unsafe_offset=rightIdx]
+            var leftHit = intersect_aabb(leftNode.min, leftNode.max, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, localTHit)
+            var rightHit = intersect_aabb(rightNode.min, rightNode.max, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, localTHit)
+            if leftHit[0] and rightHit[0]:
+                var near = leftIdx if leftHit[1] <= rightHit[1] else rightIdx
+                if toVisit < 64:
+                    stack_ptr[unsafe_offset=toVisit] = Int32(rightIdx if near == leftIdx else leftIdx)
+                    toVisit += 1
+                current = near
+            elif leftHit[0]:
+                current = leftIdx
+            elif rightHit[0]:
+                current = rightIdx
+            else:
+                if toVisit == 0:
+                    break
+                toVisit -= 1
+                current = Int(stack_ptr[unsafe_offset=toVisit])
+    return (hasHit, localTHit, bestU, bestV, hitPrim)
 
 
 @always_inline
@@ -1373,6 +1456,7 @@ def _traverse_instances(
     ray_dir: Vec3f,
     tMax: Float32,
     first_hit: Bool = False,   # a shadow ray: any hit will do
+    curves: Pointer[Curve, MutUntrackedOrigin] = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Tuple[Bool, Float32, Float32, Float32, PrimId]:
     """Handle the PrimId.type==8 leaf that stands for the scene's instances: walk the BVH over them
     (blasNodesArr[prim.id1]; the instances are stored in its leaf order, so a leaf is an instance range) and
@@ -1400,7 +1484,7 @@ def _traverse_instances(
         if node.count > 0:
             for j in range(Int(node.count)):
                 var sub = _traverse_instance(Int(node.offset) + j, meshes, blasNodesArr, blasPrimIdsArr, instances,
-                                             ray_org, ray_dir, localTHit)
+                                             ray_org, ray_dir, localTHit, curves)
                 if sub[0]:
                     hasHit = True
                     localTHit = sub[1]; bestU = sub[2]; bestV = sub[3]; hitPrim = sub[4]
@@ -1538,7 +1622,7 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
                         instHit = False
                     continue
                 elif prim.type == 8:
-                    var sub = _traverse_instances(prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit)
+                    var sub = _traverse_instances(prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves)
                     if sub[0]:
                         localTHit = sub[1]
                         bestU = sub[2]
@@ -1744,7 +1828,7 @@ def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True
                             instHit = False
                     continue
                 elif inst_on and prim.type == 8:
-                    var sub = _traverse_instances(prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit)
+                    var sub = _traverse_instances(prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves)
                     if sub[0]:
                         localTHit = sub[1]
                         bestU = sub[2]
@@ -1965,7 +2049,7 @@ def any_hit_bvh2_core(
                 elif prim.type == 8:
                     if _shadow_is_null_material(materials, prim.materialIndex):
                         continue
-                    if _traverse_instances(prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, tMax, True)[0]:
+                    if _traverse_instances(prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, tMax, True, curves)[0]:
                         return True
                     continue
                 else:
@@ -2431,7 +2515,7 @@ def traverse_bvh4_core[Or: Origin[mut=True]](
                         hitIndex = slot
                         instHit = False
                 elif prim.type == 8:
-                    var sub = _traverse_instances(prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit)
+                    var sub = _traverse_instances(prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves)
                     if sub[0]:
                         localTHit = sub[1]
                         bestU = sub[2]
@@ -2595,7 +2679,7 @@ def any_hit_bvh4_core(
                 elif prim.type == 8:
                     if _shadow_is_null_material(materials, prim.materialIndex):
                         continue
-                    if _traverse_instances(prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, tMax, True)[0]:
+                    if _traverse_instances(prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, tMax, True, curves)[0]:
                         return True
         else:
             var node = bvh4.nodes[unsafe_offset=cur]

@@ -841,14 +841,34 @@ def _sphere_geom_normal_and_ray(
 
 
 @always_inline
+def _hit_curve(inter: Intersection, curves: Pointer[Curve, MutUntrackedOrigin],
+               instances: Pointer[Instance, MutUntrackedOrigin]) -> Curve:
+    """The curve a hit is on, in world space. A curve of an object template is stored in the template's
+    space; its control points go through the hit instance's transform (a cubic's control points transform
+    like the curve) and its widths through that transform's mean scale."""
+    var curve = curves[unsafe_offset=Int(inter.primId.id1)]
+    if inter.primId.instanceIdx >= Int32(0) and _is_real_ptr(instances):
+        var o2w = instances[unsafe_offset=Int(inter.primId.instanceIdx)].obj_to_world()
+        var m = Mat4(o2w)
+        curve.cp0 = m.transform_point(curve.cp0); curve.cp1 = m.transform_point(curve.cp1)
+        curve.cp2 = m.transform_point(curve.cp2); curve.cp3 = m.transform_point(curve.cp3)
+        var scale = (sqrt(o2w[0] * o2w[0] + o2w[1] * o2w[1] + o2w[2] * o2w[2])
+                     + sqrt(o2w[4] * o2w[4] + o2w[5] * o2w[5] + o2w[6] * o2w[6])
+                     + sqrt(o2w[8] * o2w[8] + o2w[9] * o2w[9] + o2w[10] * o2w[10])) / Float32(3)
+        curve.width0 *= scale; curve.width1 *= scale
+    return curve
+
+
+@always_inline
 def _curve_geom_normal_and_ray(
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
     curves: Pointer[Curve, MutUntrackedOrigin],
+    instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Tuple[Vec3f, Vec3f, Vec3f]:
     var rd = Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z)
     var ro = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z)
-    var curve = curves[unsafe_offset=Int(inter.primId.id1)]
+    var curve = _hit_curve(inter, curves, instances)
     var h = max(Float32(-0.99), min(Float32(0.99), inter.u))
     var piece = min(Int(curve.n_pieces) - 1, max(0, Int(inter.v * Float32(curve.n_pieces))))
     var (q0, q1, _, _) = curve_piece_endpoints(curve, piece)
@@ -872,11 +892,12 @@ def _curve_geom_normal_and_ray(
 
 
 @always_inline
-def _curve_extra_offset(inter: Intersection, curves: Pointer[Curve, MutUntrackedOrigin]) -> Float32:
+def _curve_extra_offset(inter: Intersection, curves: Pointer[Curve, MutUntrackedOrigin],
+                        instances: Pointer[Instance, MutUntrackedOrigin] = Pointer[Instance, MutUntrackedOrigin].unsafe_dangling()) -> Float32:
     """Radius-scaled origin offset for a ray leaving a curve hit (same rule as shade_hair); 0 for other primitives."""
     if inter.primId.type != Int8(5) or not _is_real_ptr(curves):
         return Float32(0.0)
-    var curve = curves[unsafe_offset=Int(inter.primId.id1)]
+    var curve = _hit_curve(inter, curves, instances)
     return curve_offset_eps(Float32(0.5) * (curve.width0 + (curve.width1 - curve.width0) * inter.v))
 
 
@@ -904,7 +925,7 @@ def _hit_geom(
 ) -> Tuple[Bool, Bool, Vec3f, Vec3f, Vec3f, TriangleMesh, Int, Int, Int]:
     """Returns (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2). A curve hit (non-hair material) counts as is_sphere: no mesh, no UVs."""
     if inter.primId.type == Int8(5) and _is_real_ptr(curves):
-        var crv = _curve_geom_normal_and_ray(path_ptr, inter, curves)
+        var crv = _curve_geom_normal_and_ray(path_ptr, inter, curves, instances)
         return (True, True, crv[0], crv[1], crv[2], meshes[unsafe_offset=0], 0, 0, 0)
     if inter.primId.type == Int8(4):
         var sph_r = _sphere_geom_normal_and_ray(path_ptr, inter, spheres)
@@ -1104,7 +1125,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     # Offset along the GEOMETRIC normal, to the chosen lobe's side (pbrt's
     # OffsetRayOrigin): the shading normal can point into the surface.
     var off_n = geo_n if dot(bounce_normal, -ray_dir) > Float32(0.0) else -geo_n
-    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, off_n) + off_n * _curve_extra_offset(inter, ctx.curves)
+    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, off_n) + off_n * _curve_extra_offset(inter, ctx.curves, ctx.instances)
 
     # ── NEE direct light sampling (MIS weighted, with MNEE glass caustics) ─────
     # Shares _nee_area_lights with plain diffuse — including its MNEE probe for
@@ -1209,7 +1230,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool =
         # pbrt's LayeredBxDF is twoSided: see face_toward.
         normal = face_toward(normal, -ray_dir)
 
-    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, geo_normal) + geo_normal * _curve_extra_offset(inter, ctx.curves)
+    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, geo_normal) + geo_normal * _curve_extra_offset(inter, ctx.curves, ctx.instances)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
 
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
@@ -1403,7 +1424,7 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
     ctx: ShadeContext,
     mat: Material,
 ):
-    var (ok, is_sphere, geom_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres, curves=ctx.curves)
+    var (ok, is_sphere, geom_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres, instances=ctx.instances, curves=ctx.curves)
     if not ok:
         path_ptr[].active = 0
         return
@@ -1848,7 +1869,7 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
     # only (see Material.rough_tex_idx's docstring); falls back to the
     # parsed scalar roughU/V when there's no texture or no UVs.
     var mat_eff = mat
-    var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres, curves=ctx.curves)
+    var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres, instances=ctx.instances, curves=ctx.curves)
     if not ok:
         path_ptr[].active = 0
         return
@@ -2037,7 +2058,7 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
     ctx: ShadeContext,
     mat: Material,
 ):
-    var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres, curves=ctx.curves)
+    var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres, instances=ctx.instances, curves=ctx.curves)
     if not ok:
         path_ptr[].active = 0
         return
@@ -2149,7 +2170,7 @@ def shade_coated_conductor[use_gpu: Bool, enqueue_shadow: Bool](
     # No shading-normal interpolation here (unlike conductor) — matches the
     # pre-existing coated_conductor behavior of using the flat geometric
     # normal (which, for a sphere, IS already the exact shading normal).
-    var (ok, _, normal, ray_dir, ray_org, _, _, _, _) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres, curves=ctx.curves)
+    var (ok, _, normal, ray_dir, ray_org, _, _, _, _) = _hit_geom(path_ptr, inter, ctx.meshes, ctx.lights.spheres, instances=ctx.instances, curves=ctx.curves)
     if not ok:
         path_ptr[].active = 0
         return

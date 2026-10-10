@@ -1075,7 +1075,7 @@ def any_hit_bvh2_gpu[curves_on: Bool, inst_on: Bool, alpha_on: Bool](
                 elif inst_on and prim.type == 8:
                     if _shadow_is_null_material(sd.materials, prim.materialIndex):
                         continue
-                    if _traverse_instances(prim, sd.meshes, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, ray_org, ray_dir, tMax, True)[0]:
+                    if _traverse_instances(prim, sd.meshes, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, ray_org, ray_dir, tMax, True, sd.curves)[0]:
                         return True
                     continue
                 else:

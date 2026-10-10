@@ -150,8 +150,8 @@ struct BlasBuffers(Movable):
         # buffers so a kernel's blasNodesArr[i]/blasPrimIdsArr[i] resolves
         # to the right BLAS — same two-level indirection as the CPU side
         # (see bvh.mojo's _traverse_instances).
-        # One BLAS a template, then the BVH over the instances (pbrt_parser, "The instances' own BVH").
-        var n_blas_int = Int(s.blas_count) + (1 if s.instance_count > Int32(0) else 0)
+        # One BLAS a template, then the BVH over the instances, then the templates' curve BVHs (pbrt_parser).
+        var n_blas_int = Int(s.blas_total)
         var blas_nodes_bufs = List[DeviceBuffer[DType.uint8]]()
         var blas_primids_bufs = List[DeviceBuffer[DType.uint8]]()
         var blas_nodes_ptrs_host = unsafe_alloc[Pointer[UInt8, MutUntrackedOrigin]](max(n_blas_int, 1))
