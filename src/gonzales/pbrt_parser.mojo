@@ -1695,6 +1695,48 @@ def handle_texture(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
 # placement contributes a small TLAS leaf (transform + BLAS reference) rather
 # than a duplicated copy of the geometry.
 
+def _wrap_world_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
+    """In a scene that uses object instancing, turn each run of ordinary meshes placed directly in the scene
+    into a template with one identity instance. They then get the template form (_merge_template_meshes:
+    one mesh in BVH order, no 32-byte record a triangle) and become units like any other object. A scene
+    without instances is left alone: the extra level would only slow its traversal. Emitters, alpha
+    cutouts and medium boundaries stay as they are. GONZALES_MERGE_TEMPLATES=0 switches this off too."""
+    if getenv("GONZALES_MERGE_TEMPLATES", "1") == "0" or len(s[unsafe_offset=0].instance_template_idx) == 0:
+        return
+    var n = len(s[unsafe_offset=0].meshes)
+    var i = 0
+    while i < n:
+        var has_uv = False; var has_nrm = False
+        var j = i
+        while j < n:
+            ref m = s[unsafe_offset=0].meshes[j]
+            var nv = len(m.points) // 4
+            if (m.is_object_template or m.is_area_light or m.alpha_mask >= Int32(0) or m.alpha_const < Float32(1.0)
+                    or m.inside_medium >= Int32(0) or m.outside_medium >= Int32(0) or nv == 0 or len(m.face_idxs) == 0):
+                break
+            var uv = len(m.uvs) >= nv * 2; var nrm = len(m.normals) >= nv * 3
+            if j == i:
+                has_uv = uv; has_nrm = nrm
+            elif uv != has_uv or nrm != has_nrm:
+                break   # the merge needs uvs and normals on all of a template's meshes or on none
+            j += 1
+        if j == i:
+            i += 1
+            continue
+        for k in range(i, j): s[unsafe_offset=0].meshes[k].is_object_template = True
+        var tmpl = len(s[unsafe_offset=0].object_names)
+        s[unsafe_offset=0].object_names.append(String("__world_") + String(tmpl))
+        s[unsafe_offset=0].object_mesh_start.append(Int32(i)); s[unsafe_offset=0].object_mesh_end.append(Int32(j))
+        s[unsafe_offset=0].object_curve_start.append(Int32(0)); s[unsafe_offset=0].object_curve_end.append(Int32(0))
+        s[unsafe_offset=0].instance_template_idx.append(Int32(tmpl))
+        for ci in range(16):
+            var e = Float32(1) if ci % 5 == 0 else Float32(0)
+            s[unsafe_offset=0].object_ctm.append(e)
+            s[unsafe_offset=0].instance_obj_to_world.append(e)
+            s[unsafe_offset=0].instance_world_to_obj.append(e)
+        i = j
+
+
 def _merge_template_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin], default_mat_idx: Int32):
     """Merge each object template's meshes into its first one, with a material per triangle, leaving the
     others empty. A production object has thousands of small meshes; one mesh a template is what lets
@@ -2320,6 +2362,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         default_mat_idx = Int32(len(s[unsafe_offset=0].named_materials) - 1)
 
     var n_regular = len(s[unsafe_offset=0].named_materials)
+    _wrap_world_meshes(s)
     _merge_template_meshes(s, default_mat_idx)
 
     var n_al_mesh = 0
@@ -2924,7 +2967,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         var t_max_nodes = max(Int(t_tris) * 2 + 4, 1)
         var t_nodes = unsafe_alloc[BVH2Node](t_max_nodes)
         var t_order = unsafe_alloc[Int32](max(Int(t_tris), 1))
-        var t_node_count = build_bvh2(t_bounds, t_tris, t_nodes, t_order)
+        var t_node_count = build_bvh2(t_bounds, t_tris, t_nodes, t_order, min_leaf=4)   # halves the nodes; measured no slower
         t_bounds.unsafe_free()
         if t_node_count > Int32(0):
             var tr = t_nodes[unsafe_offset=0]
@@ -3241,10 +3284,14 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     psc[unsafe_offset=0].mesh_uv_n_verts  = out_uv_nv
     psc[unsafe_offset=0].mesh_nrm_n_verts = out_nrm_nv
     psc[unsafe_offset=0].mesh_count       = Int32(n_meshes)
-    psc[unsafe_offset=0].bvh_nodes        = bvh_nodes_gpu
-    psc[unsafe_offset=0].prim_ids         = prim_ids_gpu
-    psc[unsafe_offset=0].bvh_node_count   = node_count_gpu
-    psc[unsafe_offset=0].prim_count       = total_prims_gpu
+    # One top level for everyone: the host passes that read bvh_nodes/prim_ids (normal and depth layers, guiding
+    # bounds, the empty-scene test) must see the instances too, as the renderers reading the *_cpu names do.
+    if not shared_tlas:
+        bvh_nodes_gpu.unsafe_free(); prim_ids_gpu.unsafe_free()
+    psc[unsafe_offset=0].bvh_nodes        = bvh_nodes
+    psc[unsafe_offset=0].prim_ids         = prim_ids
+    psc[unsafe_offset=0].bvh_node_count   = node_count
+    psc[unsafe_offset=0].prim_count       = total_prims
     psc[unsafe_offset=0].bvh_nodes_cpu      = bvh_nodes
     psc[unsafe_offset=0].prim_ids_cpu       = prim_ids
     psc[unsafe_offset=0].bvh_node_count_cpu = node_count
