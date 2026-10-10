@@ -262,6 +262,11 @@ denoise_buffers: $(MOJO_SRCS) $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $
 	@mkdir -p $(BUILD_DIR)
 	uv run mojo build Tools/denoise_buffers.mojo -I src -o $(BUILD_DIR)/denoise_buffers $(MOJO_LINK_FLAGS)
 
+# What a scene holds and how many bytes each part takes in memory. See Tools/scene_stats.mojo.
+scene_stats: $(MOJO_SRCS) $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(NVDB_BRIDGE_LIB) Tools/scene_stats.mojo
+	@mkdir -p $(BUILD_DIR)
+	uv run mojo build Tools/scene_stats.mojo -I src -o $(BUILD_DIR)/scene_stats $(MOJO_LINK_FLAGS)
+
 sms_mitsuba_ref: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) Tools/sms_mitsuba_ref.mojo
 	@mkdir -p $(BUILD_DIR)
 	uv run mojo build Tools/sms_mitsuba_ref.mojo -I src -o $(BUILD_DIR)/sms_mitsuba_ref $(MOJO_LINK_FLAGS)
