@@ -159,6 +159,24 @@ def _load_host_texture(
 ) -> _HostTexture:
     var result = _HostTexture(Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(), 0,
                               Int32(0), Int32(0), Int32(0), Int32(0), Int32(GpuTexture.FORMAT_F32), Int32(0))
+    var name_len = 0
+    while filename[unsafe_offset=name_len] != UInt8(0): name_len += 1
+    if name_len > 4 and filename[unsafe_offset=name_len-4] == UInt8(46) and filename[unsafe_offset=name_len-3] == UInt8(112) and \
+       filename[unsafe_offset=name_len-2] == UInt8(116) and filename[unsafe_offset=name_len-1] == UInt8(120):   # ".ptx"
+        var nb = unsafe_alloc[Int64](1); var nf = unsafe_alloc[Int32](1)
+        nb[unsafe_offset=0] = Int64(0); nf[unsafe_offset=0] = Int32(0)
+        var pok = external_call["ptex_packed_size", Int32, Pointer[UInt8, MutUntrackedOrigin],
+            Pointer[Int64, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin]](filename, nb, nf)
+        if pok != Int32(0) and Int(nb[unsafe_offset=0]) > 0:
+            var blob = unsafe_alloc[UInt8](Int(nb[unsafe_offset=0]))
+            _ = external_call["ptex_packed_take", Int32, Pointer[UInt8, MutUntrackedOrigin],
+                Pointer[UInt8, MutUntrackedOrigin]](filename, blob)
+            result = _HostTexture(blob.unsafe_origin_cast[MutUntrackedOrigin](), Int(nb[unsafe_offset=0]), nf[unsafe_offset=0], Int32(1),
+                                  Int32(1), Int32(3), Int32(GpuTexture.FORMAT_PTEX), Int32(512))
+        else:
+            print("Warning: could not read Ptex file '" + String(unsafe_from_utf8_ptr=filename.as_imm()) + "' -- it renders as a flat default instead.")
+        nb.unsafe_free(); nf.unsafe_free()
+        return result
     var w_out = unsafe_alloc[Int32](1); var h_out = unsafe_alloc[Int32](1)
     var c_out = unsafe_alloc[Int32](1); var srgb_out = unsafe_alloc[Int32](1)
     w_out[unsafe_offset=0] = Int32(0); h_out[unsafe_offset=0] = Int32(0)
@@ -213,7 +231,7 @@ def _load_host_texture(
 struct HostTextures(TrivialRegisterPassable):
     """Every texture of a scene decoded on the host. `tex[i]` is valid where
     `dup_of[i] == -1`; otherwise texture i shares the pixels of `dup_of[i]`.
-    `lut` holds the two 256-entry uint8 decode tables (linear at 0, sRGB at 256)."""
+    `lut` holds the three 256-entry uint8 decode tables (linear at 0, sRGB at 256, gamma 2.2 at 512)."""
     var tex: Pointer[_HostTexture, MutUntrackedOrigin]
     var dup_of: Pointer[Int32, MutUntrackedOrigin]
     var lut: Pointer[Float32, MutUntrackedOrigin]
@@ -288,9 +306,10 @@ struct TexPrefetch(Movable):
                 Int32(0), Int32(0), Int32(0), Int32(0), Int32(GpuTexture.FORMAT_F32), Int32(0))
         self.cursor = unsafe_alloc[Int32](1)
         self.cursor[unsafe_offset=0] = Int32(0)
-        self.lut = unsafe_alloc[Float32](512)
+        self.lut = unsafe_alloc[Float32](768)
         _ = external_call["texture_uint8_lut", NoneType, Int32, Pointer[Float32, MutUntrackedOrigin]](Int32(0), self.lut)
         _ = external_call["texture_uint8_lut", NoneType, Int32, Pointer[Float32, MutUntrackedOrigin]](Int32(1), self.lut.unsafe_offset(256))
+        _ = external_call["texture_uint8_lut", NoneType, Int32, Pointer[Float32, MutUntrackedOrigin]](Int32(2), self.lut.unsafe_offset(512))
         self.inv = unsafe_alloc[UInt8](2 * _INV_LUT_SIZE)
         _build_inverse_lut(self.lut, self.inv)
         _build_inverse_lut(self.lut.unsafe_offset(256), self.inv.unsafe_offset(_INV_LUT_SIZE))
@@ -352,9 +371,10 @@ def decode_host_textures(
     # 8-bit textures stay 8-bit and decode through one of two 256-entry
     # tables (linear at 0, sRGB at 256), built by the oiio bridge exactly as
     # load_texture_rgb decodes, so level 0 matches the float path.
-    var lut_host = unsafe_alloc[Float32](512)
+    var lut_host = unsafe_alloc[Float32](768)
     _ = external_call["texture_uint8_lut", NoneType, Int32, Pointer[Float32, MutUntrackedOrigin]](Int32(0), lut_host)
     _ = external_call["texture_uint8_lut", NoneType, Int32, Pointer[Float32, MutUntrackedOrigin]](Int32(1), lut_host.unsafe_offset(256))
+    _ = external_call["texture_uint8_lut", NoneType, Int32, Pointer[Float32, MutUntrackedOrigin]](Int32(2), lut_host.unsafe_offset(512))
     var inv_host = unsafe_alloc[UInt8](2 * _INV_LUT_SIZE)
     _build_inverse_lut(lut_host, inv_host)
     _build_inverse_lut(lut_host.unsafe_offset(256), inv_host.unsafe_offset(_INV_LUT_SIZE))

@@ -218,6 +218,7 @@ struct PathState(TrivialRegisterPassable):
 struct GpuTexture(TrivialRegisterPassable):
     comptime FORMAT_F32 = 0   # data holds Float32 linear RGB
     comptime FORMAT_U8 = 1    # data holds UInt8, decoded to linear through lut
+    comptime FORMAT_PTEX = 2  # packed Ptex: width = face count; data = 8-byte face table + RGB8 mip chains (see oiio.cc)
     var data: Pointer[UInt8, MutUntrackedOrigin]    # device pointer: full mip pyramid, contiguous
     var lut: Pointer[Float32, MutUntrackedOrigin]   # device pointer: 256-entry byte -> linear table (FORMAT_U8 only)
     var width: Int32                                     # level-0 width

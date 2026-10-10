@@ -448,6 +448,54 @@ def _footprint_lod(tex: GpuTexture, width: Float32) -> Float32:
         return floor(log2(texels))
     return Float32(0.0)
 
+# ── Packed Ptex (GpuTexture.FORMAT_PTEX; layout in oiio.cc) ─────────────────
+# Bilinear inside the face (clamped at its border: no cross-face filtering), blended
+# between the two mip levels the footprint straddles. (u, v) are the face's own 0..1.
+@always_inline
+def _ptex_texel(tex: GpuTexture, texels: Pointer[UInt8, MutUntrackedOrigin], i: Int) -> RGB:
+    var j = i * 3
+    return RGB(tex.lut[unsafe_offset=Int(texels[unsafe_offset=j])], tex.lut[unsafe_offset=Int(texels[unsafe_offset=j + 1])],
+               tex.lut[unsafe_offset=Int(texels[unsafe_offset=j + 2])])
+
+@always_inline
+def _ptex_level(tex: GpuTexture, texels: Pointer[UInt8, MutUntrackedOrigin], off: Int, lw: Int, lh: Int, u: Float32, v: Float32) -> RGB:
+    var fx = min(max(u, Float32(0.0)), Float32(1.0)) * Float32(lw) - Float32(0.5)
+    var fy = min(max(v, Float32(0.0)), Float32(1.0)) * Float32(lh) - Float32(0.5)
+    var x0 = Int(floor(fx)); var y0 = Int(floor(fy))
+    var wx = fx - Float32(x0); var wy = fy - Float32(y0)
+    var x1 = min(x0 + 1, lw - 1); var y1 = min(y0 + 1, lh - 1)
+    x0 = max(x0, 0); y0 = max(y0, 0)
+    var c00 = _ptex_texel(tex, texels, off + y0 * lw + x0)
+    var c10 = _ptex_texel(tex, texels, off + y0 * lw + x1)
+    var c01 = _ptex_texel(tex, texels, off + y1 * lw + x0)
+    var c11 = _ptex_texel(tex, texels, off + y1 * lw + x1)
+    return (c00 * (Float32(1.0) - wx) + c10 * wx) * (Float32(1.0) - wy) + (c01 * (Float32(1.0) - wx) + c11 * wx) * wy
+
+@always_inline
+def _sample_ptex(tex: GpuTexture, face_in: Int, u: Float32, v: Float32, fp_width: Float32) -> RGB:
+    var n_faces = Int(tex.width)
+    var face = face_in if (face_in >= 0 and face_in < n_faces) else 0
+    var entry = tex.data.unsafe_offset(face * 8)
+    var off = Int(entry.unsafe_bitcast[UInt32]()[unsafe_offset=0])
+    var ul = Int(entry[unsafe_offset=4]); var vl = Int(entry[unsafe_offset=5])
+    var texels = tex.data.unsafe_offset(n_faces * 8)
+    var n_lev = max(ul, vl) + 1
+    var lod = Float32(0.0)
+    var fp_texels = fp_width * Float32(1 << max(ul, vl))
+    if fp_texels > Float32(1.0):
+        lod = min(log2(fp_texels), Float32(n_lev - 1))
+    var l0 = Int(floor(lod))
+    var f = lod - Float32(l0)
+    for _k in range(l0):
+        off += (1 << ul) * (1 << vl)
+        ul = max(ul - 1, 0); vl = max(vl - 1, 0)
+    var c0 = _ptex_level(tex, texels, off, 1 << ul, 1 << vl, u, v)
+    if f <= Float32(0.0) or l0 >= n_lev - 1:
+        return c0
+    var off1 = off + (1 << ul) * (1 << vl)
+    var c1 = _ptex_level(tex, texels, off1, 1 << max(ul - 1, 0), 1 << max(vl - 1, 0), u, v)
+    return c0 + (c1 - c0) * f
+
 # Unified 2D-texture fetch — the single use_gpu seam for texture sampling.
 # Both backends read the in-memory GpuTexture table (device buffers on GPU, host
 # pyramids on CPU); a CPU caller without a table falls back to OIIO by filename.
@@ -528,14 +576,20 @@ def _tex_lookup[use_gpu: Bool](
                 return mat.checker_tex1
             return mat.checker_tex2
         return mat.checker_tex1
-    if ti == -3:
-        # Ptex reflectance: finalize_scene packed each triangle's face colour into mesh.faceIndices.
+    if ti >= 0 and ti < n_textures and Int(textures[unsafe_offset=ti].format) == GpuTexture.FORMAT_PTEX:
+        # Ptex: the triangle's face id is in mesh.faceIndices; the mesh uv is the face's own 0..1 (pbrt passes it through).
+        var ptx = textures[unsafe_offset=ti]
         var tri = Int(inter.primId.id2 & 0xFFFFFFFF)
         if inter.primId.type == 0:
             tri = Int(inter.primId.id2) // 3
-        var pk = mesh.faceIndices[unsafe_offset=tri]
-        var inv = Float32(16.0 / 1048575.0)
-        return RGB(Float32((pk >> 40) & 0xFFFFF) * inv, Float32((pk >> 20) & 0xFFFFF) * inv, Float32(pk & 0xFFFFF) * inv)
+        var pu = inter.u + inter.v   # pbrt's default triangle uv: (0,0), (1,0), (1,1)
+        var pv = inter.v
+        if _is_real_ptr(mesh.uvs):
+            var pw0 = Float32(1.0) - inter.u - inter.v
+            pu = pw0*mesh.uvs[unsafe_offset=v0*2]   + inter.u*mesh.uvs[unsafe_offset=v1*2]   + inter.v*mesh.uvs[unsafe_offset=v2*2]
+            pv = pw0*mesh.uvs[unsafe_offset=v0*2+1] + inter.u*mesh.uvs[unsafe_offset=v1*2+1] + inter.v*mesh.uvs[unsafe_offset=v2*2+1]
+        var pt = _sample_ptex(ptx, Int(mesh.faceIndices[unsafe_offset=tri]), pu, pv, fp_width)
+        return RGB(mat.tex_bias.r + mat.tex_scale.r * pt.r, mat.tex_bias.g + mat.tex_scale.g * pt.g, mat.tex_bias.b + mat.tex_scale.b * pt.b)
     var has_uvs = True
     comptime if not use_gpu:
         has_uvs = Int(mesh.uvs) > 4

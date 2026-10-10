@@ -274,7 +274,7 @@ struct TextureBuffers(Movable):
         var host_tex = decoded.tex
         var tex_data_bufs = List[DeviceBuffer[DType.uint8]]()
         var gpu_textures_host = unsafe_alloc[GpuTexture](max(n_textures_int, 1))
-        var lut_buf = ctx.enqueue_create_buffer[DType.float32](512)
+        var lut_buf = ctx.enqueue_create_buffer[DType.float32](768)
         ctx.enqueue_copy(lut_buf, decoded.lut)
         var lut_dev = lut_buf.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
 
@@ -290,7 +290,7 @@ struct TextureBuffers(Movable):
                     Int32(0), Int32(0), Int32(0), Int32(0), Int32(GpuTexture.FORMAT_F32))
                 continue
             var lut = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
-            if Int(ht.format) == GpuTexture.FORMAT_U8:
+            if Int(ht.format) == GpuTexture.FORMAT_U8 or Int(ht.format) == GpuTexture.FORMAT_PTEX:
                 lut = lut_dev.unsafe_offset(Int(ht.lut_off))
             gpu_textures_host[unsafe_offset=ti] = GpuTexture(_gpu_upload_owned[UInt8](ctx, tex_data_bufs, ht.data, ht.n_bytes),
                 lut, ht.width, ht.height, ht.n_levels, ht.channels, ht.format)

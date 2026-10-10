@@ -597,11 +597,12 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
                 var matched_tex = False
                 for pti in range(len(s[unsafe_offset=0].ptex_tex_names)):
                     if s[unsafe_offset=0].ptex_tex_names[pti] == tex_name:
-                        tex_idx_for_mat = Int32(-3)
+                        # ptex_file marks the material as Ptex (meshes then carry face ids); the lookup itself
+                        # goes through the ordinary texture table below, with the texture's "scale" folded in.
                         ptex_file_for_mat = s[unsafe_offset=0].ptex_tex_files[pti]
                         ptex_scale_for_mat = s[unsafe_offset=0].ptex_tex_scale[pti]
                         ptex_gamma_for_mat = s[unsafe_offset=0].ptex_tex_gamma[pti]
-                        matched_tex = True
+                        tex_scale_for_mat = RGB(ptex_scale_for_mat)
                         break
                 for ti in range(len(s[unsafe_offset=0].tex_names)):
                     if matched_tex:

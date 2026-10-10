@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -382,7 +383,13 @@ int free_texture_rgb(float *data) {
         return 0;
 }
 
+// decode: 0 = linear, 1 = sRGB, 2 = gamma 2.2 (pbrt's default Ptex encoding)
 void texture_uint8_lut(int decode, float *out) {
+        if (decode == 2) {
+                for (int i = 0; i < 256; ++i)
+                        out[i] = std::pow(i / 255.0f, 2.2f);
+                return;
+        }
         const std::array<float, 256> lut = make_uint8_lut(decode != 0);
         std::copy(lut.begin(), lut.end(), out);
 }
@@ -705,5 +712,90 @@ extern "C" int ptex_face_rgb(const char *filename, float gamma, float **data, in
         std::memcpy(out, faces->data(), sizeof(float) * faces->size());
         *data = out;
         *nfaces_out = static_cast<int>(faces->size() / 3);
+        return 1;
+}
+
+// ── Packed Ptex for the renderer's texture table ─────────────────────────────
+// Blob = nfaces * 8 header bytes, then RGB8 texels (gamma-2.2 encoded).
+// Header entry: uint32 texel offset of the face's level 0 (relative to the texel region),
+// uint8 log2 width, uint8 log2 height, 2 pad bytes. Each face stores its full mip chain,
+// levels halving on both axes (clamped at 1) down to 1x1, consecutively.
+// Faces are capped at 2^GONZALES_PTEX_LOG2RES texels per side (default 4 = 16x16).
+static std::mutex ptex_blob_mu;
+static std::map<std::string, std::vector<unsigned char>> ptex_blobs;
+
+static int ptex_max_log2() {
+        const char *e = std::getenv("GONZALES_PTEX_LOG2RES");
+        int v = e ? std::atoi(e) : 4;
+        return std::min(std::max(v, 0), 12);
+}
+
+extern "C" int ptex_packed_size(const char *filename, long long *nbytes, int *nfaces_out) {
+        Ptex::String err;
+        PtexPtr<PtexTexture> tex(PtexTexture::open(filename, err));
+        if (!tex)
+                return 0;
+        const int nfaces = tex->numFaces(), nch = tex->numChannels();
+        if (nfaces <= 0 || nch <= 0)
+                return 0;
+        const int cap = ptex_max_log2();
+        const bool is_u8 = tex->dataType() == Ptex::dt_uint8;
+        std::vector<unsigned char> blob(static_cast<size_t>(nfaces) * 8);
+        std::vector<char> raw(Ptex::DataSize(tex->dataType()) * nch);
+        std::vector<float> px(nch);
+        size_t texels = 0;
+        for (int f = 0; f < nfaces; ++f) {
+                Ptex::Res full = tex->getFaceInfo(f).res;
+                int ul = std::min<int>(full.ulog2, cap), vl = std::min<int>(full.vlog2, cap);
+                const uint32_t off = static_cast<uint32_t>(texels);
+                std::memcpy(&blob[static_cast<size_t>(f) * 8], &off, 4);
+                blob[static_cast<size_t>(f) * 8 + 4] = static_cast<unsigned char>(ul);
+                blob[static_cast<size_t>(f) * 8 + 5] = static_cast<unsigned char>(vl);
+                blob[static_cast<size_t>(f) * 8 + 6] = blob[static_cast<size_t>(f) * 8 + 7] = 0;
+                for (;;) {
+                        const int w = 1 << ul, h = 1 << vl;
+                        const size_t base = blob.size();
+                        blob.resize(base + static_cast<size_t>(w) * h * 3, 0);
+                        PtexPtr<PtexFaceData> fd(tex->getData(f, Ptex::Res(ul, vl)));
+                        if (fd) {
+                                for (int v = 0; v < h; ++v)
+                                        for (int u = 0; u < w; ++u) {
+                                                unsigned char *dst = &blob[base + (static_cast<size_t>(v) * w + u) * 3];
+                                                fd->getPixel(u, v, raw.data());
+                                                if (is_u8) {
+                                                        const unsigned char *r = reinterpret_cast<const unsigned char *>(raw.data());
+                                                        for (int c = 0; c < 3; ++c)
+                                                                dst[c] = r[nch >= 3 ? c : 0];
+                                                } else {
+                                                        Ptex::ConvertToFloat(px.data(), raw.data(), tex->dataType(), nch);
+                                                        for (int c = 0; c < 3; ++c) {
+                                                                float lin = std::min(std::max(px[nch >= 3 ? c : 0], 0.0f), 1.0f);
+                                                                dst[c] = static_cast<unsigned char>(std::pow(lin, 1.0f / 2.2f) * 255.0f + 0.5f);
+                                                        }
+                                                }
+                                        }
+                        }
+                        texels += static_cast<size_t>(w) * h;
+                        if (ul == 0 && vl == 0)
+                                break;
+                        ul = std::max(ul - 1, 0);
+                        vl = std::max(vl - 1, 0);
+                }
+        }
+        *nbytes = static_cast<long long>(blob.size());
+        *nfaces_out = nfaces;
+        std::lock_guard<std::mutex> lock(ptex_blob_mu);
+        ptex_blobs[filename] = std::move(blob);
+        return 1;
+}
+
+// Copy the blob built by ptex_packed_size into `dst` and drop it.
+extern "C" int ptex_packed_take(const char *filename, unsigned char *dst) {
+        std::lock_guard<std::mutex> lock(ptex_blob_mu);
+        auto it = ptex_blobs.find(filename);
+        if (it == ptex_blobs.end())
+                return 0;
+        std::memcpy(dst, it->second.data(), it->second.size());
+        ptex_blobs.erase(it);
         return 1;
 }
