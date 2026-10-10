@@ -119,7 +119,7 @@ struct BvhBuffers(Movable):
         # Upload BVH nodes and prim IDs (copy only the real bytes; the
         # buffer may be a 1-element placeholder when the scene has no
         # geometry).
-        var bvh_buf = _gpu_upload_array[BVH2Node](ctx, s.bvh_nodes_cpu, Int(s.bvh_node_count_cpu))
+        var bvh_buf = _gpu_upload_array[BVH2Node](ctx, s.bvh_nodes_cpu, max(Int(s.bvh_node_count_cpu), 1))   # an empty BVH still has its zero root
         var prim_buf = _gpu_upload_array[PrimId](ctx, s.prim_ids_cpu, Int(s.prim_count_cpu))
         return Self(nodes_buf=bvh_buf^, prim_ids_buf=prim_buf^)
 

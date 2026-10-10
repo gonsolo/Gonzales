@@ -1,7 +1,7 @@
 from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
 from std.utils import StaticTuple
 from .gpu_tuning import MINCTA_TRAVERSE
-from .bvh import _node_box_hit, _node_hi, _node_lo, _node_oc, _shadow_is_null_material, _traverse_instance_leaf, BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
+from .bvh import _node_box_hit, _node_hi, _node_lo, _node_oc, _bvh_has_nodes, _shadow_is_null_material, _traverse_instance_leaf, BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
 from .curves import CURVE_DEFER_K, Curve, _curve_perp_axis, curve_piece_endpoints, intersect_curve
 from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, store_vec3, vec3f
 from .materials import Material
@@ -1048,7 +1048,8 @@ def any_hit_bvh2_gpu[curves_on: Bool, inst_on: Bool, alpha_on: Bool](
     var cur_oc = _node_oc(_node_hi(nodes_f, 0))
     var ray_org = org
     var ray_dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
-    while True:
+    var has_nodes = _bvh_has_nodes(cur_oc)
+    while has_nodes:
         if cur_oc[1] > 0:
             var offset = Int(cur_oc[0])
             var count = Int(cur_oc[1])

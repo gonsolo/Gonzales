@@ -104,6 +104,13 @@ def _node_box_hit(
 def _node_oc(hi: SIMD[DType.float32, 4]) -> SIMD[DType.int32, 2]:
     return bitcast[DType.int32, 4](hi).slice[2, offset=2]()
 
+@always_inline
+def _bvh_has_nodes(root_oc: SIMD[DType.int32, 2]) -> Bool:
+    """False for the all-zero root of a scene with nothing in its BVH (only analytic spheres, say). A real
+    root is a leaf (count > 0) or has a right child (offset >= 2); traversing the empty one would read
+    children that do not exist."""
+    return root_oc[0] != 0 or root_oc[1] != 0
+
 @fieldwise_init
 struct SceneView(TrivialRegisterPassable, DevicePassable):
     comptime device_type: AnyType = Self
@@ -1426,7 +1433,8 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
     var ray_org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
     var ray_dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
 
-    while True:
+    var has_nodes = _bvh_has_nodes(cur_oc)
+    while has_nodes:
         if cur_oc[1] > 0:
             # Leaf node — intersect primitives
             var offset = Int(cur_oc[0])
@@ -1626,7 +1634,8 @@ def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True
     var ray_org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
     var ray_dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
 
-    while True:
+    var has_nodes = _bvh_has_nodes(cur_oc)
+    while has_nodes:
         if cur_oc[1] > 0:
             # Leaf node — intersect primitives
             var offset = Int(cur_oc[0])
@@ -1852,7 +1861,8 @@ def any_hit_bvh2_core(
     var cur_oc = _node_oc(_node_hi(nodes_f, 0))
     var ray_org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
     var ray_dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
-    while True:
+    var has_nodes = _bvh_has_nodes(cur_oc)
+    while has_nodes:
         if cur_oc[1] > 0:
             var offset = Int(cur_oc[0])
             var count = Int(cur_oc[1])

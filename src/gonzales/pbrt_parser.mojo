@@ -2857,6 +2857,13 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         bvh_nodes = unsafe_alloc[BVH2Node](Int(total_prims) * 2 + 4)
         bvh_order = unsafe_alloc[Int32](Int(total_prims))
         node_count = build_bvh2(prim_bounds, total_prims, bvh_nodes, bvh_order)
+    # Nothing to build (the scene's only shapes are analytic spheres, say): the all-zero root is what the
+    # traversals recognise as an empty BVH (bvh._bvh_has_nodes). build_bvh2 writes nothing in that case.
+    var no_node = BVH2Node(Point3f(Float32(0)), Point3f(Float32(0)), Int32(0), Int32(0))
+    if node_count_gpu == Int32(0):
+        bvh_nodes_gpu[unsafe_offset=0] = no_node
+    if node_count == Int32(0):
+        bvh_nodes[unsafe_offset=0] = no_node
 
     prim_bounds.unsafe_free()
 
