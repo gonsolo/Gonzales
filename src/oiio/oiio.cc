@@ -638,77 +638,72 @@ int write_image_channels(const char *filename, const float *data, int width, int
 // Mean colour of a Ptex file: each sampled face's 1x1 reduction, decoded with `gamma`
 // (pbrt's ptex "encoding" default is gamma 2.2) and averaged in linear space.
 #include <Ptexture.h>
-// Mean of a face's texels, gamma-decoded per texel (averaging encoded values first darkens contrasty faces).
-static bool ptex_face_linear_mean(PtexTexture *tex, int f, float gamma, double out[3]) {
-        int nch = tex->numChannels();
-        PtexPtr<PtexFaceData> fd(tex->getData(f));
-        if (!fd)
-                return false;
-        Ptex::Res r = fd->res();
-        int w = r.u(), h = r.v();
-        int su = std::max(1, w / 32), sv = std::max(1, h / 32);
-        std::vector<char> raw(Ptex::DataSize(tex->dataType()) * nch);
-        std::vector<float> px(nch);
-        out[0] = out[1] = out[2] = 0;
-        int n = 0;
-        for (int v = 0; v < h; v += sv)
-                for (int u = 0; u < w; u += su) {
-                        fd->getPixel(u, v, raw.data());
-                        Ptex::ConvertToFloat(px.data(), raw.data(), tex->dataType(), nch);
-                        for (int c = 0; c < 3; ++c)
-                                out[c] += std::pow(std::max(px[nch >= 3 ? c : 0], 0.0f), gamma);
-                        ++n;
-                }
-        for (int c = 0; c < 3; ++c)
-                out[c] /= std::max(n, 1);
-        return true;
-}
-extern "C" int ptex_average_rgb(const char *filename, float gamma, float out[3]) {
+#include <map>
+#include <mutex>
+#include <string>
+// Per-face linear mean colours of a Ptex file, computed once per (file, gamma): each face is read at
+// <= 8x8 and decoded per texel (decoding a 1x1 average darkens contrasty faces; full res is far too slow).
+static const std::vector<float> *ptex_file_faces(const char *filename, float gamma) {
+        static std::mutex mu;
+        static std::map<std::pair<std::string, float>, std::vector<float>> cache;
+        std::lock_guard<std::mutex> lock(mu);
+        auto key = std::make_pair(std::string(filename), gamma);
+        auto it = cache.find(key);
+        if (it != cache.end())
+                return it->second.empty() ? nullptr : &it->second;
+        std::vector<float> &out = cache[key];
         Ptex::String err;
         PtexPtr<PtexTexture> tex(PtexTexture::open(filename, err));
         if (!tex)
-                return 0;
+                return nullptr;
         int nfaces = tex->numFaces(), nch = tex->numChannels();
         if (nfaces <= 0 || nch <= 0)
-                return 0;
-        int stride = std::max(1, nfaces / 4096);
-        double sum[3] = {0, 0, 0};
-        int count = 0;
-        for (int f = 0; f < nfaces; f += stride) {
-                double m[3];
-                if (!ptex_face_linear_mean(tex.get(), f, gamma, m))
+                return nullptr;
+        out.assign(3 * static_cast<size_t>(nfaces), 0.0f);
+        std::vector<char> raw(Ptex::DataSize(tex->dataType()) * nch);
+        std::vector<float> px(nch);
+        for (int f = 0; f < nfaces; ++f) {
+                Ptex::Res full = tex->getFaceInfo(f).res;
+                Ptex::Res r(std::min<int>(full.ulog2, 3), std::min<int>(full.vlog2, 3));
+                PtexPtr<PtexFaceData> fd(tex->getData(f, r));
+                if (!fd)
                         continue;
+                int w = r.u(), h = r.v();
+                double m[3] = {0, 0, 0};
+                for (int v = 0; v < h; ++v)
+                        for (int u = 0; u < w; ++u) {
+                                fd->getPixel(u, v, raw.data());
+                                Ptex::ConvertToFloat(px.data(), raw.data(), tex->dataType(), nch);
+                                for (int c = 0; c < 3; ++c)
+                                        m[c] += std::pow(std::max(px[nch >= 3 ? c : 0], 0.0f), gamma);
+                        }
                 for (int c = 0; c < 3; ++c)
-                        sum[c] += m[c];
-                ++count;
+                        out[3 * f + c] = static_cast<float>(m[c] / (w * h));
         }
-        if (count == 0)
+        return &out;
+}
+extern "C" int ptex_average_rgb(const char *filename, float gamma, float out[3]) {
+        const std::vector<float> *faces = ptex_file_faces(filename, gamma);
+        if (!faces)
                 return 0;
+        double sum[3] = {0, 0, 0};
+        size_t n = faces->size() / 3;
+        for (size_t f = 0; f < n; ++f)
+                for (int c = 0; c < 3; ++c)
+                        sum[c] += (*faces)[3 * f + c];
         for (int c = 0; c < 3; ++c)
-                out[c] = static_cast<float>(sum[c] / count);
+                out[c] = static_cast<float>(sum[c] / n);
         return 1;
 }
 
-// Per-face mean colour of a Ptex file (1x1 reduction of every face, gamma-decoded to linear).
-// malloc'd nfaces*3 floats; release with free_texture_rgb.
+// Per-face mean colour of a Ptex file; malloc'd nfaces*3 floats, release with free_texture_rgb.
 extern "C" int ptex_face_rgb(const char *filename, float gamma, float **data, int *nfaces_out) {
-        Ptex::String err;
-        PtexPtr<PtexTexture> tex(PtexTexture::open(filename, err));
-        if (!tex)
+        const std::vector<float> *faces = ptex_file_faces(filename, gamma);
+        if (!faces)
                 return 0;
-        int nfaces = tex->numFaces(), nch = tex->numChannels();
-        if (nfaces <= 0 || nch <= 0)
-                return 0;
-        float *out = static_cast<float *>(std::malloc(sizeof(float) * 3 * nfaces));
-        for (int f = 0; f < nfaces; ++f) {
-                out[3 * f] = out[3 * f + 1] = out[3 * f + 2] = 0.0f;
-                double m[3];
-                if (!ptex_face_linear_mean(tex.get(), f, gamma, m))
-                        continue;
-                for (int c = 0; c < 3; ++c)
-                        out[3 * f + c] = static_cast<float>(m[c]);
-        }
+        float *out = static_cast<float *>(std::malloc(sizeof(float) * faces->size()));
+        std::memcpy(out, faces->data(), sizeof(float) * faces->size());
         *data = out;
-        *nfaces_out = nfaces;
+        *nfaces_out = static_cast<int>(faces->size() / 3);
         return 1;
 }
