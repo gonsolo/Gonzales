@@ -724,10 +724,39 @@ extern "C" int ptex_face_rgb(const char *filename, float gamma, float **data, in
 static std::mutex ptex_blob_mu;
 static std::map<std::string, std::vector<unsigned char>> ptex_blobs;
 
+static int ptex_planned_log2 = 4;   // set by ptex_set_cap from the scene's memory budget
+
 static int ptex_max_log2() {
         const char *e = std::getenv("GONZALES_PTEX_LOG2RES");
-        int v = e ? std::atoi(e) : 4;
+        int v = e ? std::atoi(e) : ptex_planned_log2;
         return std::min(std::max(v, 0), 12);
+}
+
+extern "C" void ptex_set_cap(int log2res) { ptex_planned_log2 = log2res; }
+
+// bytes[c] += packed size of this file with faces capped at 2^c per side, c = 0..12.
+extern "C" int ptex_bytes_by_cap(const char *filename, long long *bytes) {
+        Ptex::String err;
+        PtexPtr<PtexTexture> tex(PtexTexture::open(filename, err));
+        if (!tex)
+                return 0;
+        const int nfaces = tex->numFaces();
+        for (int f = 0; f < nfaces; ++f) {
+                Ptex::Res full = tex->getFaceInfo(f).res;
+                for (int c = 0; c <= 12; ++c) {
+                        int ul = std::min<int>(full.ulog2, c), vl = std::min<int>(full.vlog2, c);
+                        long long texels = 0;
+                        for (;;) {
+                                texels += (1LL << ul) * (1LL << vl);
+                                if (ul == 0 && vl == 0)
+                                        break;
+                                ul = std::max(ul - 1, 0);
+                                vl = std::max(vl - 1, 0);
+                        }
+                        bytes[c] += texels * 3 + 8;
+                }
+        }
+        return 1;
 }
 
 extern "C" int ptex_packed_size(const char *filename, long long *nbytes, int *nfaces_out) {

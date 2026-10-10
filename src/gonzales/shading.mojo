@@ -513,6 +513,7 @@ def sample_texture[use_gpu: Bool](
     textures: Pointer[GpuTexture, MutUntrackedOrigin],
     n_textures: Int,
     mut found: Bool,
+    ptex_face: Int = 0,   # Ptex textures only: the hit triangle's face id; (u, v) are then the face's own
 ) -> RGB:
     found = False
     if tex_idx < 0:
@@ -523,6 +524,10 @@ def sample_texture[use_gpu: Bool](
         var tex = textures[unsafe_offset=tex_idx]
         if Int(tex.width) > 0:
             found = True
+            if Int(tex.format) == GpuTexture.FORMAT_PTEX:
+                # A float Ptex is the mean of its channels (pbrt's FloatPtexTexture); no V-flip.
+                var pc = _sample_ptex(tex, ptex_face, u, v, fp_width)
+                return RGB((pc.r + pc.g + pc.b) * Float32(1.0 / 3.0))
             return _sample_tex(tex, su, tv, _footprint_lod(tex, fp_width))
     comptime if not use_gpu:
         if n_textures == 0 and Int(tex_filenames) > 1:
@@ -2303,11 +2308,17 @@ def _apply_bump_map[use_gpu: Bool](
     # gpu.mojo's upload only marks normal_tex_idx textures raw, so
     # bump_tex_idx defaults to the sRGB-decoded (non-raw) upload path.
     var found = False
-    var h0 = sample_texture[use_gpu](Int(mat.bump_tex_idx), uv_u, uv_v, False, fp.width, tex_filenames, textures, n_textures, found).r
+    var bump_face = 0
+    if Int(mat.bump_tex_idx) < n_textures and Int(textures[unsafe_offset=Int(mat.bump_tex_idx)].format) == GpuTexture.FORMAT_PTEX:
+        var btri = Int(inter.primId.id2 & 0xFFFFFFFF)
+        if inter.primId.type == 0:
+            btri = Int(inter.primId.id2) // 3
+        bump_face = Int(mesh.faceIndices[unsafe_offset=btri])
+    var h0 = sample_texture[use_gpu](Int(mat.bump_tex_idx), uv_u, uv_v, False, fp.width, tex_filenames, textures, n_textures, found, bump_face).r
     if not found:
         return geom_normal
-    var hu = sample_texture[use_gpu](Int(mat.bump_tex_idx), uv_u + hu_step, uv_v, False, fp.width, tex_filenames, textures, n_textures, found).r
-    var hv = sample_texture[use_gpu](Int(mat.bump_tex_idx), uv_u, uv_v + hv_step, False, fp.width, tex_filenames, textures, n_textures, found).r
+    var hu = sample_texture[use_gpu](Int(mat.bump_tex_idx), uv_u + hu_step, uv_v, False, fp.width, tex_filenames, textures, n_textures, found, bump_face).r
+    var hv = sample_texture[use_gpu](Int(mat.bump_tex_idx), uv_u, uv_v + hv_step, False, fp.width, tex_filenames, textures, n_textures, found, bump_face).r
     var dhdu = (hu - h0) * (Float32(1.0) / hu_step) * mat.bump_scale
     var dhdv = (hv - h0) * (Float32(1.0) / hv_step) * mat.bump_scale
 

@@ -1,5 +1,6 @@
 from std.collections import Array
 from std.ffi import external_call
+from std.os import getenv
 from std.time import perf_counter_ns
 from std.memory.alloc import unsafe_alloc
 from std.memory import unsafe_memcpy
@@ -1631,10 +1632,9 @@ def handle_texture(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         return
 
     if _psc_streq(tex_class, "ptex"):
-        var ptex_is_float = _psc_streq(tex_type, "float")
         tex_type.unsafe_free(); tex_class.unsafe_free()
         var params = _psc_collect_params(handle)
-        # Colour Ptex goes into the texture table (per-face lookup, see _sample_ptex); the file's mean
+        # Ptex goes into the texture table (per-face lookup, see _sample_ptex); the file's mean
         # colour is also kept as a constant for uses that have no per-face path yet (transmittance).
         var pfile = scene_path(s[unsafe_offset=0].scene_dir, params.get_string("filename", ""), "ptex texture")
         var pscale = params.get_float("scale", Float32(1))
@@ -1652,7 +1652,7 @@ def handle_texture(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         s[unsafe_offset=0].ptex_tex_files.append(pfile)
         s[unsafe_offset=0].ptex_tex_scale.append(pscale)
         s[unsafe_offset=0].ptex_tex_gamma.append(pgamma)
-        if pok != Int32(0) and not ptex_is_float:
+        if pok != Int32(0):
             s[unsafe_offset=0].tex_names.append(name_str)
             s[unsafe_offset=0].tex_files.append(pfile)
         if pok != Int32(0):
@@ -1697,6 +1697,38 @@ def handle_texture(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
 # instead a private BLAS is built once per template, and each ObjectInstance
 # placement contributes a small TLAS leaf (transform + BLAS reference) rather
 # than a duplicated copy of the geometry.
+
+def _plan_ptex_budget(files: List[String]):
+    """Pick the largest per-face Ptex resolution cap whose packed size, summed over the scene's .ptx files, fits
+    GONZALES_PTEX_BUDGET_MB (default 2048). GONZALES_PTEX_LOG2RES, if set, overrides the result."""
+    var bytes = unsafe_alloc[Int64](13)
+    for c in range(13): bytes[unsafe_offset=c] = Int64(0)
+    var n_ptx = 0
+    for i in range(len(files)):
+        if not files[i].endswith(".ptx"):
+            continue
+        var flen = files[i].byte_length()
+        var fname = unsafe_alloc[UInt8](flen + 1)
+        for ci in range(flen): fname[unsafe_offset=ci] = files[i].unsafe_ptr()[unsafe_offset=ci]
+        fname[unsafe_offset=flen] = UInt8(0)
+        if external_call["ptex_bytes_by_cap", Int32, Pointer[UInt8, MutUntrackedOrigin], Pointer[Int64, MutUntrackedOrigin]](fname, bytes) != Int32(0):
+            n_ptx += 1
+        fname.unsafe_free()
+    if n_ptx > 0:
+        var budget_mb = 2048
+        var env = getenv("GONZALES_PTEX_BUDGET_MB", "")
+        if env != "":
+            try:
+                budget_mb = Int(env)
+            except:
+                pass
+        var cap = 0
+        for c in range(13):
+            if Int(bytes[unsafe_offset=c]) <= budget_mb * 1024 * 1024:
+                cap = c
+        _ = external_call["ptex_set_cap", NoneType, Int32](Int32(cap))
+        print("Ptex:", n_ptx, "file(s), faces capped at", 1 << cap, "texels per side,", Int(bytes[unsafe_offset=cap]) // (1024 * 1024), "MB (budget", budget_mb, "MB)")
+    bytes.unsafe_free()
 
 def _psc_finish_object_def(s: Pointer[SceneParseState, MutUntrackedOrigin]):
     """Called when the outermost ObjectEnd closes a template: mark the
@@ -3626,6 +3658,7 @@ def mojo_parse_scene(path: Pointer[UInt8, MutUntrackedOrigin],
         if not dup:
             tex_names.append(s_ptr[unsafe_offset=0].tex_files[ti])
             tex_raws.append(is_raw)
+    _plan_ptex_budget(tex_names)
     var tex_pf = unsafe_alloc[TexPrefetch](1)
     tex_pf.unsafe_write(TexPrefetch())
     tex_pf[unsafe_offset=0].start(tex_names, tex_raws, min(6, num_performance_cores()))

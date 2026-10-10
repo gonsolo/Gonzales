@@ -920,6 +920,13 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
     var disp_tex = params.get_string("displacement", "")
     if disp_tex != "":
         var matched_disp = False
+        for pti in range(len(s[unsafe_offset=0].ptex_tex_names)):
+            if s[unsafe_offset=0].ptex_tex_names[pti] == disp_tex:
+                # A Ptex height map: the mesh needs face ids, and the texture's "scale" is the height scale.
+                if ptex_file_for_mat.byte_length() == 0:
+                    ptex_file_for_mat = s[unsafe_offset=0].ptex_tex_files[pti]
+                bump_scale_for_mat = s[unsafe_offset=0].ptex_tex_scale[pti]
+                break
         for ti in range(len(s[unsafe_offset=0].tex_names)):
             if s[unsafe_offset=0].tex_names[ti] == disp_tex:
                 bump_tex_idx_for_mat = Int32(ti)
