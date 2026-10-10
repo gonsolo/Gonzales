@@ -1138,7 +1138,7 @@ def lobe_eval[want_pdfs: Bool = True](
         var wi_ly = Vec3f(dot(dir_to_other, tx_ly), dot(dir_to_other, ty_ly), dot(dir_to_other, vn))
         var rad_ly = not c.adjoint
         var R_ly = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, c.alb.r, c.alb.g, c.alb.b, wavelengths)
-        var f_ly = layered_f(wo_ly, wi_ly, R_ly, ior_ly, alpha_ly, rad_ly)
+        var f_ly = layered_f(wo_ly, wi_ly, R_ly, ior_ly, alpha_ly, rad_ly, mat_ly.emission.g)
         var cos_ly = abs(wi_ly.z)
         var fwd_ly = Float32(0)
         var rev_ly = Float32(0)
@@ -1563,7 +1563,7 @@ def lobe_sample(
         var wo_l = Vec3f(dot(vwo, tx), dot(vwo, ty), dot(vwo, vn))
         var R = rgb_to_spectral_sample(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, c.alb.r, c.alb.g, c.alb.b, wavelengths)
         var bs = layered_sample(wo_l, uc, u0, u1, R, mat_ly.emission.r,
-                                max(mat_ly.roughU, mat_ly.roughV), not c.adjoint)
+                                max(mat_ly.roughU, mat_ly.roughV), not c.adjoint, mat_ly.emission.g)
         if not bs.valid or bs.pdf <= Float32(0):
             return _lobe_sample_invalid()
         var wi = tx * bs.wi.x + ty * bs.wi.y + vn * bs.wi.z

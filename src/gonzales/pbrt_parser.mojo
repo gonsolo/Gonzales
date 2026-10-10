@@ -2363,7 +2363,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             mats[unsafe_offset=i].emission = RGB(Float32(0))
         elif material_kind == MatKind.coated_diffuse:
             mats[unsafe_offset=i].albedo = nm3.albedo
-            mats[unsafe_offset=i].emission = RGB(ior, Float32(0), Float32(0))
+            mats[unsafe_offset=i].emission = RGB(ior, nm3.coat_thickness, Float32(0))   # the coat's eta and thickness
         elif material_kind == MatKind.coated_conductor:
             mats[unsafe_offset=i].albedo = nm3.albedo
             mats[unsafe_offset=i].emission = RGB(ior, Float32(0), Float32(0))

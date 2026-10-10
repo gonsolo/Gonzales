@@ -1535,7 +1535,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var wo_cd = Vec3f(dot(wo_w, tx_cd), dot(wo_w, ty_cd), dot(wo_w, n_cd))
             var R_cd = spec_refl(spectral_coeffs, spectral_res, spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65, eff_alb_cd.r, eff_alb_cd.g, eff_alb_cd.b, ph_wavelengths)
             var bs_cd = layered_sample(wo_cd, pcg.next_float(), pcg.next_float(), pcg.next_float(), R_cd,
-                                       mat.emission.r, max(mat.roughU, mat.roughV), False)
+                                       mat.emission.r, max(mat.roughU, mat.roughV), False, mat.emission.g)
             if not bs_cd.valid or bs_cd.pdf <= Float32(0.0):
                 break
             var w_cd = bs_cd.f * (abs(bs_cd.wi.z) / bs_cd.pdf)

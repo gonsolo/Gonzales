@@ -40,9 +40,9 @@ def _tables() -> LobeTables:
     var mats = unsafe_alloc[Material](3)
     # diffusetransmission: reflectance 0.3, transmittance (in .emission) 0.5
     mats[unsafe_offset=MAT_DT] = _material(MatKind.diffuse_transmit, RGB(Float32(0.3)), RGB(Float32(0.5)), Float32(0))
-    # coateddiffuse: eta in .emission.r, coat alpha in roughU/V
-    mats[unsafe_offset=MAT_COAT_ROUGH] = _material(MatKind.coated_diffuse, RGB(Float32(0.8)), RGB(Float32(1.5)), Float32(0.3))
-    mats[unsafe_offset=MAT_COAT_SMOOTH] = _material(MatKind.coated_diffuse, RGB(Float32(0.8)), RGB(Float32(1.5)), Float32(0))
+    # coateddiffuse: eta in .emission.r, thickness in .emission.g, coat alpha in roughU/V
+    mats[unsafe_offset=MAT_COAT_ROUGH] = _material(MatKind.coated_diffuse, RGB(Float32(0.8)), RGB(Float32(1.5), Float32(0.01), Float32(0)), Float32(0.3))
+    mats[unsafe_offset=MAT_COAT_SMOOTH] = _material(MatKind.coated_diffuse, RGB(Float32(0.8)), RGB(Float32(1.5), Float32(0.01), Float32(0)), Float32(0))
     return LobeTables(mats, _curves, _mbrdfs)
 
 

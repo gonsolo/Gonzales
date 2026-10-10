@@ -44,8 +44,8 @@ def _material(type: Int8, albedo: RGB, emission: RGB, rough: Float32) -> Materia
 def _tables() -> LobeTables:
     var mats = unsafe_alloc[Material](4)
     mats[unsafe_offset=MAT_DT] = _material(MatKind.diffuse_transmit, RGB(Float32(0.3)), RGB(Float32(0.5)), Float32(0))
-    mats[unsafe_offset=MAT_COAT_ROUGH] = _material(MatKind.coated_diffuse, RGB(Float32(0.8)), RGB(Float32(1.5)), Float32(0.3))
-    mats[unsafe_offset=MAT_COAT_SMOOTH] = _material(MatKind.coated_diffuse, RGB(Float32(0.8)), RGB(Float32(1.5)), Float32(0))
+    mats[unsafe_offset=MAT_COAT_ROUGH] = _material(MatKind.coated_diffuse, RGB(Float32(0.8)), RGB(Float32(1.5), Float32(0.01), Float32(0)), Float32(0.3))
+    mats[unsafe_offset=MAT_COAT_SMOOTH] = _material(MatKind.coated_diffuse, RGB(Float32(0.8)), RGB(Float32(1.5), Float32(0.01), Float32(0)), Float32(0))
     mats[unsafe_offset=MAT_GLASS] = _material(MatKind.dielectric, RGB(Float32(1.5)), RGB(Float32(0.0)), Float32(0.3))
     return LobeTables(mats, _curves, _mbrdfs)
 

@@ -986,6 +986,8 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
     nm.transmittance  = trans_rgb
     nm.kind           = mat_type
     nm.ior            = mat_ior
+    # pbrt clamps the thickness away from zero (LayeredBxDF's constructor).
+    nm.coat_thickness = max(params.get_float("thickness", Float32(0.01)), Float32(1e-30))
     # Resolve roughU/V to the actual GGX alpha here, once, so every shading call
     # site can use mat.roughU/roughV directly. Only meaningful for the BSDF
     # kinds that use roughU/V as an alpha (conductor, dielectric, coated_diffuse's

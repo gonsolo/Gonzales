@@ -61,6 +61,7 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     var albedo:         RGB
     var kind:           Int8
     var ior:            Float32
+    var coat_thickness: Float32   # coateddiffuse "thickness"
     var roughness_u:    Float32
     var roughness_v:    Float32
     var tex_idx:        Int32
@@ -121,6 +122,7 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
         self.albedo         = RGB(Float32(0.8), Float32(0.8), Float32(0.8))
         self.kind           = Int8(0)
         self.ior            = Float32(1.5)
+        self.coat_thickness = Float32(0.01)
         self.roughness_u    = Float32(0)
         self.roughness_v    = Float32(0)
         self.tex_idx        = Int32(-1)

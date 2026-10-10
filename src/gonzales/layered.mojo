@@ -32,7 +32,7 @@ from .materials import fr_dielectric, ALPHA_EFFECTIVELY_SMOOTH
 from .spectrum import SpectralSample
 from .rng import PCG32
 
-comptime LAYERED_THICKNESS = Float32(0.01)   # pbrt coateddiffuse default
+comptime LAYERED_THICKNESS = Float32(0.01)   # pbrt coateddiffuse default "thickness"
 comptime LAYERED_MAX_DEPTH = 10              # pbrt coateddiffuse default
 comptime _ONE_MINUS_EPS = Float32(0.99999994)
 
@@ -302,9 +302,15 @@ def _power(a: Float32, b: Float32) -> Float32:
     return fast_div(aa, aa + bb)
 
 @always_inline
-def _tr(w: Vec3f) -> Float32:
+def _tr(w: Vec3f, thickness: Float32) -> Float32:
     """pbrt's LayeredBxDF::Tr(thickness, w): the coat's own absorption."""
-    return exp(-abs(fast_div(LAYERED_THICKNESS, w.z)))
+    return exp(-abs(fast_div(thickness, w.z)))
+
+@always_inline
+def _top_specular(eta: Float32, alpha: Float32) -> Bool:
+    """Whether the coat interface samples a delta direction: the same test diel_sample/diel_f/diel_pdf
+    make. (pbrt's walk tests the roughness alone and so MIS-weights a delta sample when eta == 1.)"""
+    return eta == Float32(1) or tr_effectively_smooth(alpha)
 
 
 @always_inline
@@ -329,7 +335,7 @@ def _r(mut rng: PCG32) -> Float32:
 # ── LayeredBxDF<Dielectric, Diffuse, twoSided=true>, albedo = 0 ─────────────
 
 def layered_f(wo_in: Vec3f, wi_in: Vec3f, R: SpectralSample, eta: Float32, alpha: Float32,
-              radiance: Bool) -> SpectralSample:
+              radiance: Bool, thickness: Float32) -> SpectralSample:
     """LayeredBxDF::f. A coat over an opaque base never transmits, so paths in
     opposite hemispheres are zero outright (pbrt reaches the same zero through
     the bottom's refusal to sample transmission)."""
@@ -343,7 +349,7 @@ def layered_f(wo_in: Vec3f, wi_in: Vec3f, R: SpectralSample, eta: Float32, alpha
     # Entered at the top and leaves through it again: exitZ = thickness.
     var f = SpectralSample(diel_f(wo, wi, eta, alpha, radiance))
     var rng = _hash_dirs(wo, wi, UInt64(1))
-    var top_specular = tr_effectively_smooth(alpha)
+    var top_specular = _top_specular(eta, alpha)
 
     var wos = diel_sample(wo, _r(rng), _r(rng), _r(rng), eta, alpha, radiance, False, True)
     if not wos.valid or wos.f.is_black() or wos.pdf == Float32(0) or wos.wi.z == Float32(0):
@@ -353,7 +359,7 @@ def layered_f(wo_in: Vec3f, wi_in: Vec3f, R: SpectralSample, eta: Float32, alpha
         return f
 
     var beta = wos.f * fast_div(abs(wos.wi.z), wos.pdf)
-    var z = LAYERED_THICKNESS
+    var at_top = True
     var w = wos.wi
     for depth in range(LAYERED_MAX_DEPTH):
         if depth > 3 and beta.max_component() < Float32(0.25):
@@ -362,9 +368,9 @@ def layered_f(wo_in: Vec3f, wi_in: Vec3f, R: SpectralSample, eta: Float32, alpha
                 break
             beta = beta * fast_recip(Float32(1) - q)
         # No medium: go straight to the other interface.
-        z = Float32(0) if z == LAYERED_THICKNESS else LAYERED_THICKNESS
-        beta *= _tr(w)
-        if z == LAYERED_THICKNESS:
+        at_top = not at_top
+        beta *= _tr(w, thickness)
+        if at_top:
             # Reflection back down at the (exit) top interface.
             var bs = diel_sample(-w, _r(rng), _r(rng), _r(rng), eta, alpha, radiance, True, False)
             if not bs.valid or bs.f.is_black() or bs.pdf == Float32(0) or bs.wi.z == Float32(0):
@@ -376,7 +382,7 @@ def layered_f(wo_in: Vec3f, wi_in: Vec3f, R: SpectralSample, eta: Float32, alpha
             var wt = Float32(1)
             if not top_specular:
                 wt = _power(wis.pdf, diffuse_pdf(-w, -wis.wi))
-            f += beta * diffuse_f(-w, -wis.wi, R) * fast_div(abs(wis.wi.z) * wt * _tr(wis.wi), wis.pdf) * wis.f
+            f += beta * diffuse_f(-w, -wis.wi, R) * fast_div(abs(wis.wi.z) * wt * _tr(wis.wi, thickness), wis.pdf) * wis.f
             # ...then sample the base for the next direction...
             var bs = diffuse_sample(-w, _r(rng), _r(rng), R)
             if not bs.valid or bs.f.is_black() or bs.pdf == Float32(0) or bs.wi.z == Float32(0):
@@ -390,7 +396,7 @@ def layered_f(wo_in: Vec3f, wi_in: Vec3f, R: SpectralSample, eta: Float32, alpha
                     # wis's density of this inside direction, not pbrt's
                     # PDF(-w, wi) -- see the module docstring.
                     var wis_pdf_here = diel_pdf(wi, -w, eta, alpha, False, True)
-                    f += beta * (_tr(bs.wi) * fexit * _power(bs.pdf, wis_pdf_here))
+                    f += beta * (_tr(bs.wi, thickness) * fexit * _power(bs.pdf, wis_pdf_here))
     return f
 
 
@@ -405,7 +411,7 @@ struct LayeredSample(TrivialRegisterPassable):
 
 
 def layered_sample(wo_in: Vec3f, uc: Float32, u0: Float32, u1: Float32, R: SpectralSample,
-                   eta: Float32, alpha: Float32, radiance: Bool) -> LayeredSample:
+                   eta: Float32, alpha: Float32, radiance: Bool, thickness: Float32) -> LayeredSample:
     """LayeredBxDF::Sample_f. The returned pdf is only proportional (pbrt sets
     pdfIsProportional): throughput uses f*cos/pdf, MIS must call layered_pdf."""
     var wo = wo_in
@@ -424,7 +430,7 @@ def layered_sample(wo_in: Vec3f, uc: Float32, u0: Float32, u1: Float32, R: Spect
     var rng = _hash_dirs(wo, Vec3f(uc, u0, u1), UInt64(2))
     var f = bs.f * abs(bs.wi.z)
     var pdf = bs.pdf
-    var z = LAYERED_THICKNESS
+    var at_top = True
     for depth in range(LAYERED_MAX_DEPTH):
         var rr_beta = fast_div(f.max_component(), pdf)
         if depth > 3 and rr_beta < Float32(0.25):
@@ -434,10 +440,10 @@ def layered_sample(wo_in: Vec3f, uc: Float32, u0: Float32, u1: Float32, R: Spect
             pdf *= Float32(1) - q
         if w.z == Float32(0):
             break
-        z = Float32(0) if z == LAYERED_THICKNESS else LAYERED_THICKNESS
-        f = f * _tr(w)
+        at_top = not at_top
+        f = f * _tr(w, thickness)
         var s: ISample
-        if z == Float32(0):
+        if not at_top:
             s = diffuse_sample(-w, _r(rng), _r(rng), R)
         else:
             var c0 = _r(rng)
@@ -474,7 +480,7 @@ def layered_pdf(wo_in: Vec3f, wi_in: Vec3f, eta: Float32, alpha: Float32, radian
         var wos = diel_sample(wo, _r(rng), _r(rng), _r(rng), eta, alpha, radiance, False, True)
         var wis = diel_sample(wi, _r(rng), _r(rng), _r(rng), eta, alpha, not radiance, False, True)
         if wos.valid and not wos.f.is_black() and wos.pdf > Float32(0) and wis.valid and not wis.f.is_black() and wis.pdf > Float32(0):
-            if tr_effectively_smooth(alpha):
+            if _top_specular(eta, alpha):
                 pdf_sum += diffuse_pdf(-wos.wi, -wis.wi)
             else:
                 var R1 = SpectralSample(Float32(1))

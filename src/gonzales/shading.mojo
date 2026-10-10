@@ -1185,6 +1185,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool =
         path_ptr[].albedo = alb
 
     var ior = mat.emission.r            # coat IOR (eta_coat/eta_air), set at parse
+    var thickness = mat.emission.g      # coat "thickness", likewise
     var coat_alpha = max(mat.roughU, mat.roughV)
     var wo = Vec3f(-ray_dir[0], -ray_dir[1], -ray_dir[2])  # toward viewer
 
@@ -1201,18 +1202,18 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool =
     # NEE: every light type through the same layered f, MIS'd against the
     # layered pdf (pbrt's PathIntegrator: power heuristic, NEE vs BSDF).
     var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
-    _layered_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls_area, ls_area.dist * Float32(0.9999), wo_l, tx, ty, normal, R, ior, coat_alpha)
+    _layered_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls_area, ls_area.dist * Float32(0.9999), wo_l, tx, ty, normal, R, ior, coat_alpha, thickness)
     for li in range(_nee_simple_light_count(ctx)):
         var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
         var ls = res[0].copy()
-        _layered_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls, res[1], wo_l, tx, ty, normal, R, ior, coat_alpha)
+        _layered_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls, res[1], wo_l, tx, ty, normal, R, ior, coat_alpha, thickness)
     for inf_i in range(ctx.lights.infinite_count):
         var ls_inf = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-        _layered_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls_inf, ls_inf.dist, wo_l, tx, ty, normal, R, ior, coat_alpha)
+        _layered_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls_inf, ls_inf.dist, wo_l, tx, ty, normal, R, ior, coat_alpha, thickness)
 
     # Continue with a layered sample. Its pdf is only proportional (pbrt's
     # pdfIsProportional): the throughput uses it, MIS uses layered_pdf.
-    var bs = layered_sample(wo_l, pcg.next_float(), pcg.next_float(), pcg.next_float(), R, ior, coat_alpha, True)
+    var bs = layered_sample(wo_l, pcg.next_float(), pcg.next_float(), pcg.next_float(), R, ior, coat_alpha, True, thickness)
     if not bs.valid or bs.pdf <= Float32(0.0):
         path_ptr[].active = 0
         path_ptr[].pcgState = pcg.state
@@ -1241,7 +1242,7 @@ def _layered_nee[enqueue_shadow: Bool, defer_only: Bool = False](
     ls: LightSample,
     tmax: Float32,
     wo_l: Vec3f, tx: Vec3f, ty: Vec3f, n: Vec3f,
-    R: SpectralSample, ior: Float32, alpha: Float32,
+    R: SpectralSample, ior: Float32, alpha: Float32, thickness: Float32,
 ):
     """One NEE sample against the layered coateddiffuse BSDF."""
     if not ls.valid:
@@ -1257,7 +1258,7 @@ def _layered_nee[enqueue_shadow: Bool, defer_only: Bool = False](
         inline_shadow = _shadow_inline(ctx, null_guide())
         if inline_shadow and _shadow_blocked(ctx, hit_point, ls.wi, tmax):
             return
-    var f = layered_f(wo_l, wi_l, R, ior, alpha, True)
+    var f = layered_f(wo_l, wi_l, R, ior, alpha, True, thickness)
     if f.is_black():
         return
     var w = abs(wi_l.z)
