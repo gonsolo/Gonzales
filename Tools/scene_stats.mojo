@@ -64,3 +64,8 @@ def main() raises:
     print("bytes_instances", Int(psc[unsafe_offset=0].instance_count) * size_of[Instance]())
     print("bytes_tlas", Int(psc[unsafe_offset=0].bvh_node_count_cpu) * size_of[BVH2Node]() + Int(psc[unsafe_offset=0].prim_count_cpu) * size_of[PrimId]())
     print("bytes_blas", blas_nodes * size_of[BVH2Node]() + blas_prims * size_of[PrimId]())
+    # The BVH over the instances follows the templates' in the BLAS arrays (pbrt_parser.mojo).
+    var inst_nodes = 0
+    if psc[unsafe_offset=0].instance_count > Int32(0):
+        inst_nodes = Int(psc[unsafe_offset=0].blas_node_counts[unsafe_offset=Int(psc[unsafe_offset=0].blas_count)])
+    print("bytes_instance_bvh", inst_nodes * size_of[BVH2Node]())

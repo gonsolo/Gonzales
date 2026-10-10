@@ -2731,9 +2731,11 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
 
     var total_instances = Int32(len(s[unsafe_offset=0].instance_template_idx))
     var total_prims_gpu = total_tris + total_curve_groups
-    var total_prims = total_prims_gpu + total_instances
+    # The top level holds the triangles, the curve groups and ONE leaf for all instances, which have a BVH of
+    # their own (below); prim_bounds still has a slot an instance, used to build that BVH.
+    var total_prims = total_prims_gpu + (Int32(1) if total_instances > Int32(0) else Int32(0))
 
-    var prim_bounds = unsafe_alloc[Float32](Int(total_prims) * 6)
+    var prim_bounds = unsafe_alloc[Float32](Int(total_prims_gpu + total_instances) * 6 + 6)
     var tri_mesh    = unsafe_alloc[Int32](max(Int(total_tris), 1))
     var tri_local   = unsafe_alloc[Int32](max(Int(total_tris), 1))
 
@@ -2802,14 +2804,14 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # entries referencing the SAME GLOBAL `meshes` array (no per-BLAS mesh
     # storage, no geometry duplication).
     var n_templates = len(s[unsafe_offset=0].object_names)
-    var blas_nodes_arr   = unsafe_alloc[Pointer[BVH2Node, MutUntrackedOrigin]](max(n_templates, 1))
-    var blas_primids_arr = unsafe_alloc[Pointer[PrimId, MutUntrackedOrigin]](max(n_templates, 1))
+    var blas_nodes_arr   = unsafe_alloc[Pointer[BVH2Node, MutUntrackedOrigin]](n_templates + 1)   # + the instances' BVH
+    var blas_primids_arr = unsafe_alloc[Pointer[PrimId, MutUntrackedOrigin]](n_templates + 1)
     # Per-BLAS array lengths — the CPU traversal side never needs these (it
     # just walks from node/primid index 0, self-describing via each node's
     # offset/count), but GPU upload does: it copies each BLAS's arrays into
     # their own device buffers and needs to know how many bytes that is.
-    var blas_node_counts   = unsafe_alloc[Int32](max(n_templates, 1))
-    var blas_primid_counts = unsafe_alloc[Int32](max(n_templates, 1))
+    var blas_node_counts   = unsafe_alloc[Int32](n_templates + 1)
+    var blas_primid_counts = unsafe_alloc[Int32](n_templates + 1)
     var template_mesh_start = unsafe_alloc[Int32](max(n_templates, 1))
     var template_mesh_end   = unsafe_alloc[Int32](max(n_templates, 1))
     for tmpl in range(n_templates):
@@ -2916,6 +2918,32 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         var ib = (Int(total_tris) + Int(total_curve_groups) + k) * 6
         prim_bounds[unsafe_offset=ib+0] = wxmin; prim_bounds[unsafe_offset=ib+1] = wymin; prim_bounds[unsafe_offset=ib+2] = wzmin
         prim_bounds[unsafe_offset=ib+3] = wxmax; prim_bounds[unsafe_offset=ib+4] = wymax; prim_bounds[unsafe_offset=ib+5] = wzmax
+
+    # ---- The instances' own BVH ----
+    # Instances are stored in its leaf order, so a leaf is an instance range and no record an instance is
+    # needed; its nodes sit after the templates' in blas_nodes_arr, and the top level reaches it through one
+    # PrimId of type 8 bounded by its root (bvh._traverse_instances).
+    blas_node_counts[unsafe_offset=n_templates] = Int32(0)
+    blas_primid_counts[unsafe_offset=n_templates] = Int32(0)
+    if total_instances > Int32(0):
+        var inst_slot = Int(total_prims_gpu) * 6
+        var inst_nodes = unsafe_alloc[BVH2Node](Int(total_instances) * 2 + 4)
+        var inst_order = unsafe_alloc[Int32](Int(total_instances))
+        var inst_node_count = build_bvh2(prim_bounds.unsafe_offset(inst_slot), total_instances, inst_nodes, inst_order)
+        var inst_tmp = unsafe_alloc[Instance](Int(total_instances))
+        for k in range(Int(total_instances)): inst_tmp[unsafe_offset=k] = instances_c[unsafe_offset=Int(inst_order[unsafe_offset=k])]
+        for k in range(Int(total_instances)): instances_c[unsafe_offset=k] = inst_tmp[unsafe_offset=k]
+        inst_tmp.unsafe_free(); inst_order.unsafe_free()
+        var iroot = inst_nodes[unsafe_offset=0]
+        prim_bounds[unsafe_offset=inst_slot + 0] = iroot.min.x; prim_bounds[unsafe_offset=inst_slot + 1] = iroot.min.y
+        prim_bounds[unsafe_offset=inst_slot + 2] = iroot.min.z; prim_bounds[unsafe_offset=inst_slot + 3] = iroot.max.x
+        prim_bounds[unsafe_offset=inst_slot + 4] = iroot.max.y; prim_bounds[unsafe_offset=inst_slot + 5] = iroot.max.z
+        var inst_prim = unsafe_alloc[PrimId](1)
+        inst_prim[unsafe_offset=0] = PrimId(Int64(n_templates), Int64(0), Int64(0), Int32(-1), Int8(8), Int8(0), Int8(0), Int8(0))
+        blas_nodes_arr[unsafe_offset=n_templates] = inst_nodes
+        blas_primids_arr[unsafe_offset=n_templates] = inst_prim
+        blas_node_counts[unsafe_offset=n_templates] = inst_node_count
+        blas_primid_counts[unsafe_offset=n_templates] = Int32(1)
 
     # ---- GPU-safe TLAS: tris + curves only ----
     # GPU's own device-side scene upload (gpu_upload_scene, via
@@ -3033,9 +3061,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             prim_ids[unsafe_offset=k].id2           = Int64(group_id2[unsafe_offset=gidx])
             prim_ids[unsafe_offset=k].materialIndex = Int64(curve_al_mat_idx[unsafe_offset=ci]) if s[unsafe_offset=0].curves_al[ci] else (Int64(curve_mat_idx) if curve_mat_idx >= 0 else Int64(default_mat_idx))
         else:
-            var inst_idx = orig - Int(total_tris) - Int(total_curve_groups)
-            prim_ids[unsafe_offset=k].type          = Int8(6)
-            prim_ids[unsafe_offset=k].id1           = Int64(inst_idx)
+            prim_ids[unsafe_offset=k].type          = Int8(8)
+            prim_ids[unsafe_offset=k].id1           = Int64(n_templates)
             prim_ids[unsafe_offset=k].id2           = Int64(0)
             prim_ids[unsafe_offset=k].materialIndex = Int64(0)
         # instanceIdx is only meaningful on a *resolved* triangle hit (set by
@@ -3899,7 +3926,8 @@ def mojo_parsed_free(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]):
         psc[unsafe_offset=0].light_pick_cdf.unsafe_free()
     # blas_nodes_arr/blas_primids_arr/instances are always real allocations
     # (min size 1, see finalize_scene) regardless of blas_count/instance_count.
-    for bi in range(Int(psc[unsafe_offset=0].blas_count)):
+    # The instances' BVH follows the templates' in these arrays.
+    for bi in range(Int(psc[unsafe_offset=0].blas_count) + (1 if psc[unsafe_offset=0].instance_count > Int32(0) else 0)):
         psc[unsafe_offset=0].blas_nodes_arr[unsafe_offset=bi].unsafe_free()
         psc[unsafe_offset=0].blas_primids_arr[unsafe_offset=bi].unsafe_free()
     psc[unsafe_offset=0].blas_nodes_arr.unsafe_free()
