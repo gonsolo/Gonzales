@@ -201,6 +201,8 @@ def load_ply(
     out_normals: Pointer[Pointer[Float32, MutUntrackedOrigin], MutUntrackedOrigin],
     out_has_normals: Pointer[Int32, MutUntrackedOrigin],
     quiet: Bool = False,
+    want_face_ids: Bool = False,
+    out_face_ids: Pointer[Pointer[Int32, MutUntrackedOrigin], MutUntrackedOrigin] = Pointer[Pointer[Int32, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
 ) -> Int32:
     var path_str = String(unsafe_from_utf8_ptr=path_cstr.as_imm())
     var file_buf: Pointer[UInt8, MutUntrackedOrigin]
@@ -252,6 +254,7 @@ def load_ply(
 
     var face_count_size = 1   # bytes for face vertex-count field (uchar=1 by default)
     var face_idx_size   = 4   # bytes per face vertex index (int=4 by default)
+    var face_id_off     = -1  # byte offset of an int "face_indices" scalar within face_extra
     var face_extra      = 0   # bytes of per-face scalar properties following the index list
     var hstate = 0            # 0=other, 1=vertex, 2=face
 
@@ -304,6 +307,8 @@ def load_ply(
                 face_count_size = _ply_type_size(line_buf, 2)
                 face_idx_size   = _ply_type_size(line_buf, 3)
             elif hstate == 2 and not _ply_word_eq(line_buf, 1, "list"):
+                if _ply_word_eq(line_buf, 2, "face_indices") and _ply_type_size(line_buf, 1) == 4:
+                    face_id_off = face_extra
                 face_extra += _ply_type_size(line_buf, 1)   # per-face scalar (e.g. face_indices) after the index list
 
     if n_verts <= 0 or n_faces <= 0:
@@ -319,6 +324,8 @@ def load_ply(
     var nrm_buf = unsafe_alloc[Float32](n_verts * 3)
     var max_idx = n_faces * 6   # worst case: quads → 2 triangles each
     var idx_buf = unsafe_alloc[Int32](max_idx)
+    var ids_buf = unsafe_alloc[Int32](max_idx // 3 if want_face_ids and face_id_off >= 0 else 1)
+    var have_ids = want_face_ids and face_id_off >= 0 and not is_ascii
     var n_tris  = 0
     var found_uvs = False
     var found_normals = False
@@ -423,6 +430,8 @@ def load_ply(
                 idx_buf[unsafe_offset=n_tris*3+0] = _ply_i32_le(file_buf, pos)
                 idx_buf[unsafe_offset=n_tris*3+1] = _ply_i32_le(file_buf, pos + 4)
                 idx_buf[unsafe_offset=n_tris*3+2] = _ply_i32_le(file_buf, pos + 8)
+                if have_ids:
+                    ids_buf[unsafe_offset=n_tris] = _ply_i32_le(file_buf, pos + 12 + face_id_off)
                 n_tris += 1
             pos += 12 + face_extra
             continue
@@ -446,6 +455,8 @@ def load_ply(
                 idx_buf[unsafe_offset=n_tris*3+0] = face_idx[unsafe_offset=0]
                 idx_buf[unsafe_offset=n_tris*3+1] = face_idx[unsafe_offset=ti + 1]
                 idx_buf[unsafe_offset=n_tris*3+2] = face_idx[unsafe_offset=ti + 2]
+                if have_ids:
+                    ids_buf[unsafe_offset=n_tris] = _ply_i32_le(file_buf, pos + face_id_off) if is_le else _ply_i32_be(file_buf, pos + face_id_off)
                 n_tris += 1
         if not is_ascii:
             pos += face_extra
@@ -458,6 +469,14 @@ def load_ply(
     out_n_verts[unsafe_offset=0] = Int32(n_verts)
     out_idx[unsafe_offset=0]     = idx_buf
     out_n_tris[unsafe_offset=0]  = Int32(n_tris)
+    if want_face_ids:
+        if have_ids:
+            out_face_ids[unsafe_offset=0] = ids_buf
+        else:
+            ids_buf.unsafe_free()
+            out_face_ids[unsafe_offset=0] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
+    else:
+        ids_buf.unsafe_free()
 
     if found_uvs:
         out_uvs[unsafe_offset=0]     = uvs_buf

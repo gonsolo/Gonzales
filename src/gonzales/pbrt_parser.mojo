@@ -1307,6 +1307,10 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         var ply_has_uvs = unsafe_alloc[Int32](1)
         var ply_nrm     = unsafe_alloc[Pointer[Float32, MutUntrackedOrigin]](1)
         var ply_has_nrm = unsafe_alloc[Int32](1)
+        var ply_fid     = unsafe_alloc[Pointer[Int32, MutUntrackedOrigin]](1)
+        ply_fid[unsafe_offset=0] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
+        var cur_mi = Int(s[unsafe_offset=0].cur_attr.mat_idx)
+        var want_fid = cur_mi >= 0 and cur_mi < len(s[unsafe_offset=0].named_materials) and s[unsafe_offset=0].named_materials[cur_mi].tex_idx == Int32(-3)
         ply_uvs[unsafe_offset=0] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
         ply_has_uvs[unsafe_offset=0] = Int32(0)
         ply_nrm[unsafe_offset=0] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
@@ -1326,7 +1330,7 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                        full_path[unsafe_offset=fp_len-2] == UInt8(103) and
                        full_path[unsafe_offset=fp_len-1] == UInt8(122))
         var ok = Int32(0)
-        var cache_i = -1 if ends_gz else s[unsafe_offset=0].ply_cache[unsafe_offset=0].lookup(ply_path)
+        var cache_i = -1 if (ends_gz or want_fid) else s[unsafe_offset=0].ply_cache[unsafe_offset=0].lookup(ply_path)
         if cache_i >= 0:
             ref pc = s[unsafe_offset=0].ply_cache[unsafe_offset=0]
             ply_pts[unsafe_offset=0] = pc.pts[unsafe_offset=cache_i]
@@ -1354,15 +1358,15 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                     pass
                 if not exists(ap_str):
                     print("PLY gunzip FAILED (is `gzip` installed?):", gz_str)
-            ok = load_ply(ap, ply_pts, ply_nv, ply_idx, ply_nt, ply_uvs, ply_has_uvs, ply_nrm, ply_has_nrm)
+            ok = load_ply(ap, ply_pts, ply_nv, ply_idx, ply_nt, ply_uvs, ply_has_uvs, ply_nrm, ply_has_nrm, False, want_fid, ply_fid)
             ap.unsafe_free()
         if ok == 0:
-            ok = load_ply(full_path, ply_pts, ply_nv, ply_idx, ply_nt, ply_uvs, ply_has_uvs, ply_nrm, ply_has_nrm)
+            ok = load_ply(full_path, ply_pts, ply_nv, ply_idx, ply_nt, ply_uvs, ply_has_uvs, ply_nrm, ply_has_nrm, False, want_fid, ply_fid)
         if ok == 0:
             print("PLY load FAILED:", String(unsafe_from_utf8_ptr=full_path.as_imm()))
             full_path.unsafe_free()
             ply_pts.unsafe_free(); ply_nv.unsafe_free(); ply_idx.unsafe_free(); ply_nt.unsafe_free()
-            ply_uvs.unsafe_free(); ply_has_uvs.unsafe_free(); ply_nrm.unsafe_free(); ply_has_nrm.unsafe_free()
+            ply_uvs.unsafe_free(); ply_has_uvs.unsafe_free(); ply_nrm.unsafe_free(); ply_has_nrm.unsafe_free(); ply_fid.unsafe_free()
             return
         full_path.unsafe_free()
         var nv = ply_nv[unsafe_offset=0]
@@ -1377,11 +1381,16 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
                 if ply_has_nrm[unsafe_offset=0] != 0:
                     ply_nrm[unsafe_offset=0].unsafe_free()
             ply_pts.unsafe_free(); ply_nv.unsafe_free(); ply_idx.unsafe_free(); ply_nt.unsafe_free()
-            ply_uvs.unsafe_free(); ply_has_uvs.unsafe_free(); ply_nrm.unsafe_free(); ply_has_nrm.unsafe_free()
+            ply_uvs.unsafe_free(); ply_has_uvs.unsafe_free(); ply_nrm.unsafe_free(); ply_has_nrm.unsafe_free(); ply_fid.unsafe_free()
             return
         var tmp_f2 = ply_pts[unsafe_offset=0]
         var tmp_i2 = ply_idx[unsafe_offset=0]
         store_mesh(s, tmp_f2, tmp_i2, nv, nt)
+        if want_fid and Int(ply_fid[unsafe_offset=0]) != 0:
+            var fid_ptr = ply_fid[unsafe_offset=0]
+            ref fm = s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1]
+            for fi in range(Int(nt)): fm.ptex_faces.append(fid_ptr[unsafe_offset=fi])
+            fid_ptr.unsafe_free()
         _psc_apply_shape_alpha(s, params)
         if ply_has_uvs[unsafe_offset=0] != 0:
             var uv_ptr = ply_uvs[unsafe_offset=0]
@@ -1416,7 +1425,7 @@ def handle_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         else:
             tmp_f2.unsafe_free(); tmp_i2.unsafe_free()
         ply_pts.unsafe_free(); ply_nv.unsafe_free(); ply_idx.unsafe_free(); ply_nt.unsafe_free()
-        ply_uvs.unsafe_free(); ply_has_uvs.unsafe_free(); ply_nrm.unsafe_free(); ply_has_nrm.unsafe_free()
+        ply_uvs.unsafe_free(); ply_has_uvs.unsafe_free(); ply_nrm.unsafe_free(); ply_has_nrm.unsafe_free(); ply_fid.unsafe_free()
         return
 
     # take_floats/take_ints move each bulk array's buffer straight out of the
