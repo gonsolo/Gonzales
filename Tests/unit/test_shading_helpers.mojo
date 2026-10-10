@@ -123,6 +123,7 @@ def _make_path(org: Vec3f, dir: Vec3f) -> PathState:
         Float32(0.0),   # mis_null_dist
         Float32(0.0),   # lastEnvNeePdf
         Float32(0.0),   # cone_len
+        Int8(0),   # ptex_missed
     )
 
 # ── _get_tri_verts ────────────────────────────────────────────────────────────

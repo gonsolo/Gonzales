@@ -689,6 +689,8 @@ struct GpuSceneHandle(Movable):
     # Persistent render buffers — sized for n_pixels × WAVEFRONT_BATCH (wavefront pass)
     # gpu_render_sample (interactive) only uses the first n_pixels slots.
     var path_buf: DeviceBuffer[DType.uint8]   # n_pixels × WAVEFRONT_BATCH × size_of[PathState]()
+    var ptex_redo_buf: DeviceBuffer[DType.uint8]   # Ptex paging: one byte per path_buf slot, 1 = sample withheld
+    var ptex_redo_si_buf: DeviceBuffer[DType.uint8]   # Ptex paging: one Int32 per path_buf slot, the sample to render again
     var inter_buf: DeviceBuffer[DType.uint8]  # n_pixels × WAVEFRONT_BATCH × 48
     var film_buf: DeviceBuffer[DType.uint8]          # n_pixels × 3 × Float32 = 12 bytes
     var albedo_film_buf: DeviceBuffer[DType.uint8]   # n_pixels × 3 × Float32 = 12 bytes
@@ -962,6 +964,10 @@ def gpu_upload_scene(
             ctx.enqueue_memset(r_film_buf, UInt8(0))
             ctx.enqueue_memset(r_albedo_film_buf, UInt8(0))
             var textures = TextureBuffers.upload(ctx, s)
+            var r_ptex_redo_buf = ctx.enqueue_create_buffer[DType.uint8](
+                n_pix * WAVEFRONT_BATCH if len(textures.ptex_bufs) > 0 else 1)
+            var r_ptex_redo_si_buf = ctx.enqueue_create_buffer[DType.uint8](
+                n_pix * WAVEFRONT_BATCH * 4 if len(textures.ptex_bufs) > 0 else 4)
 
             # Upload Sobol matrices: first 1024 dimensions × 52 UInt32 = 212992 bytes
             comptime N_SOBOL_GPU_DIMS = 1024
@@ -1005,6 +1011,8 @@ def gpu_upload_scene(
                 media=media^,
                 measured=measured^,
                 path_buf=r_path_buf^,
+                ptex_redo_buf=r_ptex_redo_buf^,
+                ptex_redo_si_buf=r_ptex_redo_si_buf^,
                 inter_buf=r_inter_buf^,
                 film_buf=r_film_buf^,
                 albedo_film_buf=r_albedo_film_buf^,
@@ -1061,35 +1069,82 @@ def init_curve_cand_offset_gpu(offset_buf: Pointer[Int32, MutUntrackedOrigin], n
         return
     offset_buf[unsafe_offset=tid] = Int32(tid * CURVE_DEFER_K)
 
-# Ptex demand paging: read back what the last samples asked for, load it (ptex_cache.mojo) and upload the
-# changed face tables and pool range. Returns the number of faces loaded.
-def gpu_ptex_stream(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises -> Int:
-    var n_files = len(handle[].textures.ptex_bufs)
-    if n_files == 0:
-        return 0
-    var max_faces = 0
-    for k in range(n_files): max_faces = max(max_faces, handle[].textures.ptex_cache.n_faces[k])
-    var scratch = unsafe_alloc[UInt8](max_faces * 8).unsafe_origin_cast[MutUntrackedOrigin]()
-    handle[].ctx.synchronize()
-    for k in range(n_files):
-        var sub = handle[].textures.tex_data_bufs[handle[].textures.ptex_bufs[k]].create_sub_buffer[DType.uint8](
-            0, handle[].textures.ptex_cache.n_faces[k] * 8)
-        handle[].ctx.enqueue_copy(scratch, sub)
-        handle[].ctx.synchronize()
-        handle[].textures.ptex_cache.feed(k, scratch)
-    var (n, lo, hi) = handle[].textures.ptex_cache.commit()
-    for k in range(n_files):
+# ── Ptex demand paging (ptex_cache.mojo) ──
+def _ptex_upload_tables(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], scratch: Pointer[UInt8, MutUntrackedOrigin]) raises:
+    for k in range(len(handle[].textures.ptex_bufs)):
         if handle[].textures.ptex_cache.take_table(k, scratch):
             var sub = handle[].textures.tex_data_bufs[handle[].textures.ptex_bufs[k]].create_sub_buffer[DType.uint8](
                 0, handle[].textures.ptex_cache.n_faces[k] * 8)
             handle[].ctx.enqueue_copy(sub, scratch)
             handle[].ctx.synchronize()
+
+def _ptex_scratch(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) -> Pointer[UInt8, MutUntrackedOrigin]:
+    var max_faces = 1
+    for k in range(len(handle[].textures.ptex_bufs)): max_faces = max(max_faces, handle[].textures.ptex_cache.n_faces[k])
+    return unsafe_alloc[UInt8](max_faces * 8).unsafe_origin_cast[MutUntrackedOrigin]()
+
+def gpu_ptex_begin(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises -> Int:
+    """Read back what the last samples asked for and start loading it in the background.
+    Returns the number of faces being loaded."""
+    var scratch = _ptex_scratch(handle)
+    handle[].ctx.synchronize()
+    for k in range(len(handle[].textures.ptex_bufs)):
+        var sub = handle[].textures.tex_data_bufs[handle[].textures.ptex_bufs[k]].create_sub_buffer[DType.uint8](
+            0, handle[].textures.ptex_cache.n_faces[k] * 8)
+        handle[].ctx.enqueue_copy(scratch, sub)
+        handle[].ctx.synchronize()
+        handle[].textures.ptex_cache.feed(k, scratch)
+    var n = handle[].textures.ptex_cache.begin()
+    # The wanted bytes are reset now, so a face is asked for once per load.
+    _ptex_upload_tables(handle, scratch)
+    scratch.unsafe_free()
+    return n
+
+def gpu_ptex_finish(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], may_evict: Bool = False) raises -> Int:
+    """Wait for the load in flight and put it on the device. Returns the number of faces loaded."""
+    var (n, lo, hi) = handle[].textures.ptex_cache.finish(may_evict)
+    handle[].ctx.synchronize()
     if hi > lo:
         var psub = handle[].textures.ptex_pool_buf.create_sub_buffer[DType.uint8](lo, hi - lo)
         handle[].ctx.enqueue_copy(psub, handle[].textures.ptex_cache.pool + lo)
         handle[].ctx.synchronize()
+    var scratch = _ptex_scratch(handle)
+    _ptex_upload_tables(handle, scratch)
     scratch.unsafe_free()
     return n
+
+def gpu_ptex_withhold(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], on: Bool) raises:
+    """Switch the withholding of samples that meet a face not loaded yet (texel 0 of the pool)."""
+    handle[].textures.ptex_cache.pool[unsafe_offset=0] = UInt8(1) if on else UInt8(0)
+    handle[].ctx.synchronize()
+    var psub = handle[].textures.ptex_pool_buf.create_sub_buffer[DType.uint8](0, 3)
+    handle[].ctx.enqueue_copy(psub, handle[].textures.ptex_cache.pool)
+    handle[].ctx.synchronize()
+
+def gpu_ptex_withheld(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], n_pixels: Int, batch: Int,
+                      scratch: Pointer[UInt8, MutUntrackedOrigin], si_start: Int, si_of: Pointer[Int32, MutUntrackedOrigin],
+                      mut px_out: List[Int32], mut si_out: List[Int32]) raises:
+    """Append the (pixel, sample) pairs the last pass withheld. A slot's sample is si_start + its row,
+    or si_of[slot] when si_start < 0 (a pass that rendered withheld samples again)."""
+    var n = n_pixels * batch
+    handle[].ctx.synchronize()
+    var sub = handle[].ptex_redo_buf.create_sub_buffer[DType.uint8](0, n)
+    handle[].ctx.enqueue_copy(scratch, sub)
+    handle[].ctx.synchronize()
+    var words = scratch.unsafe_bitcast[UInt64]()
+    for w in range((n + 7) // 8):
+        if words[unsafe_offset=w] == UInt64(0):
+            continue
+        for i in range(w * 8, min(w * 8 + 8, n)):
+            if scratch[unsafe_offset=i] != UInt8(0):
+                px_out.append(Int32(i % n_pixels))
+                si_out.append(Int32(si_start + i // n_pixels) if si_start >= 0 else si_of[unsafe_offset=i])
+
+def gpu_ptex_redo_upload(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], n: Int, si_of: Pointer[Int32, MutUntrackedOrigin]) raises:
+    """Set the samples the next ptex_mode 2 pass renders: si_of[slot], < 0 for none."""
+    var sub = handle[].ptex_redo_si_buf.create_sub_buffer[DType.uint8](0, n * 4)
+    handle[].ctx.enqueue_copy(sub, si_of.unsafe_bitcast[UInt8]())
+    handle[].ctx.synchronize()
 
 def gpu_free_scene(handlePtr: Pointer[GpuSceneHandle, MutUntrackedOrigin]):
     if Int(handlePtr) == 0:

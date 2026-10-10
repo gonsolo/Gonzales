@@ -33,7 +33,7 @@ from .restir_gi import GIReservoir, gi_reservoir_init, GIReservoirIO, gi_reservo
 from .restir_sms import SMSReservoir, sms_reservoir_init, SMSReservoirIO, sms_reservoir_io_null
 from .restir_vol import VolReservoir, vol_reservoir_init, VolReservoirIO, vol_reservoir_io_null
 from .gpu import gpu_render_sample, gpu_render_wavefront, gpu_mnee_adapt, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol
-from .gpu_scene import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_free_scene, gpu_ptex_stream
+from .gpu_scene import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload
 from .gpu_denoise import gpu_atrous_denoise
 from .gpu_wavefront import gpu_gen_aux_buffers
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
@@ -1142,8 +1142,15 @@ struct GpuGuidedRenderer(GuidedRenderer):
     var mesh_al_idx_buf: Optional[DeviceBuffer[DType.uint8]]
     var n_meshes_vk: Int
     var instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]]
-    var ptex_next: Int          # next sample count to stream Ptex pages at; 0 = not paging
-    var ptex_seconds: Float64
+    # Ptex demand paging: the (pixel, sample) pairs withheld until their faces are loaded.
+    var ptex_on: Bool
+    var ptex_seconds: Float64   # time spent waiting for loads
+    var ptex_redone: Int
+    var ptex_evict_at: Int      # sample count from which the pool may next evict
+    var ptex_scratch: Pointer[UInt8, MutUntrackedOrigin]   # a byte per path_buf slot
+    var ptex_si_of: Pointer[Int32, MutUntrackedOrigin]     # the sample each slot renders again
+    var pend_px: List[Int32]
+    var pend_si: List[Int32]
 
     def __init__(
         out self, handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
@@ -1162,38 +1169,116 @@ struct GpuGuidedRenderer(GuidedRenderer):
         self.interop_rays_buf = interop_rays_buf^; self.interop_results_buf = interop_results_buf^
         self.mesh_material_idx_buf = mesh_material_idx_buf^; self.mesh_al_idx_buf = mesh_al_idx_buf^
         self.n_meshes_vk = n_meshes_vk; self.instance_base_mesh_buf = instance_base_mesh_buf^
-        self.ptex_next = 0; self.ptex_seconds = 0.0
+        self.ptex_on = False; self.ptex_seconds = 0.0; self.ptex_redone = 0; self.ptex_evict_at = 2 * WAVEFRONT_BATCH
+        self.ptex_scratch = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling()
+        self.ptex_si_of = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
+        self.pend_px = List[Int32](); self.pend_si = List[Int32]()
 
-    def warm_ptex(mut self) raises:
-        """Ptex demand paging: render single samples and load what they ask for until nothing is
-        missing, then discard them. Camera hits alone go first, so they get the pool before indirect ones."""
+    def start_ptex(mut self) raises:
+        """Ptex demand paging: one camera-hits-only sample, discarded, so that the faces the camera sees
+        get the pool before indirectly seen ones; their load runs behind the first batches."""
         if len(self.handle[].textures.ptex_bufs) == 0:
             return
-        var t0 = perf_counter_ns()
-        for it in range(5):
-            self._dispatch(it, 1, Int32(1) if it == 0 else Int32(-1))
-            if gpu_ptex_stream(self.handle) == 0 and it > 0:
-                break
+        self.ptex_on = True
+        # One spare word: the withheld-sample scan reads the byte scratch 8 bytes at a time.
+        self.ptex_scratch = unsafe_alloc[UInt8](self.n_pixels * WAVEFRONT_BATCH + 8).unsafe_origin_cast[MutUntrackedOrigin]()
+        self.ptex_si_of = unsafe_alloc[Int32](self.n_pixels * WAVEFRONT_BATCH).unsafe_origin_cast[MutUntrackedOrigin]()
+        gpu_ptex_withhold(self.handle, True)
+        self._dispatch(0, 1, Int32(1), Int32(1))
         gpu_clear_film(self.handle, Int64(self.n_pixels))
-        self.ptex_next = 1
-        self.ptex_seconds += Float64(perf_counter_ns() - t0) / 1.0e9
+        _ = gpu_ptex_begin(self.handle)
 
     def render_samples(mut self, begin: Int, end: Int) raises:
         var si = begin
         while si < end:
             var actual_batch = min(WAVEFRONT_BATCH, end - si)
-            self._dispatch(si, actual_batch)
+            self._dispatch(si, actual_batch, Int32(-1), Int32(1) if self.ptex_on else Int32(0))
+            if self.ptex_on:
+                self._ptex_step(si, actual_batch)
             si += actual_batch
             gpu_mnee_adapt(self.handle)
-            if self.ptex_next > 0 and si >= self.ptex_next:
-                # Stragglers the warm-up never hit; checked at doubling intervals.
-                var t0 = perf_counter_ns()
-                _ = gpu_ptex_stream(self.handle)
-                self.ptex_next = si * 2
-                self.ptex_seconds += Float64(perf_counter_ns() - t0) / 1.0e9
             self.progress.update(si)
+        if self.ptex_on:
+            self._ptex_flush()
 
-    def _dispatch(mut self, si: Int, actual_batch: Int, max_depth: Int32 = Int32(-1)) raises:
+    def _ptex_step(mut self, si: Int, batch: Int) raises:
+        """After a batch: note the samples it withheld; once the load in flight is done put it on the
+        device, start loading what was asked for since and render the withheld samples again."""
+        var before = len(self.pend_px)
+        gpu_ptex_withheld(self.handle, self.n_pixels, batch, self.ptex_scratch, si, self.ptex_si_of, self.pend_px, self.pend_si)
+        var missed = len(self.pend_px) - before
+        var loaded = 0
+        if self.handle[].textures.ptex_cache.loading:
+            # Keep rendering behind the load, unless most of a batch would only be withheld again.
+            if not self.handle[].textures.ptex_cache.ready() and missed * 4 < self.n_pixels * batch:
+                return
+            var t0 = perf_counter_ns()
+            # Room is made at doubling sample counts only: the faces in the pool need time to show they are used.
+            var may_evict = si + batch >= self.ptex_evict_at
+            if may_evict:
+                self.ptex_evict_at = (si + batch) * 2
+            loaded = gpu_ptex_finish(self.handle, may_evict)
+            self.ptex_seconds += Float64(perf_counter_ns() - t0) / 1.0e9
+        if len(self.pend_px) == 0:
+            return
+        var no_room = self.handle[].textures.ptex_cache.denied
+        _ = gpu_ptex_begin(self.handle)
+        # Only a finished load or a face that will never come lets a withheld sample complete.
+        if loaded > 0 or self.handle[].textures.ptex_cache.denied > no_room:
+            self._ptex_redo()
+
+    def _ptex_redo(mut self) raises:
+        """Render the withheld samples again, packed into as few passes as fit (a pixel has WAVEFRONT_BATCH
+        slots per pass); the ones that still miss a face stay withheld."""
+        var px_next = List[Int32](); var si_next = List[Int32]()
+        while len(self.pend_px) > 0:
+            var n = self.n_pixels * WAVEFRONT_BATCH
+            for i in range(n): self.ptex_si_of[unsafe_offset=i] = Int32(-1)
+            # ptex_scratch counts the slots taken per pixel.
+            for i in range(self.n_pixels): self.ptex_scratch[unsafe_offset=i] = UInt8(0)
+            var px_left = List[Int32](); var si_left = List[Int32]()
+            var rows = 0
+            for k in range(len(self.pend_px)):
+                var px = Int(self.pend_px[k])
+                var row = Int(self.ptex_scratch[unsafe_offset=px])
+                if row >= WAVEFRONT_BATCH:
+                    px_left.append(self.pend_px[k]); si_left.append(self.pend_si[k])
+                    continue
+                self.ptex_scratch[unsafe_offset=px] = UInt8(row + 1)
+                self.ptex_si_of[unsafe_offset=row * self.n_pixels + px] = self.pend_si[k]
+                rows = max(rows, row + 1)
+            self.ptex_redone += len(self.pend_px) - len(px_left)
+            gpu_ptex_redo_upload(self.handle, self.n_pixels * rows, self.ptex_si_of)
+            self._dispatch(0, rows, Int32(-1), Int32(2))
+            gpu_ptex_withheld(self.handle, self.n_pixels, rows, self.ptex_scratch, -1, self.ptex_si_of, px_next, si_next)
+            self.pend_px = px_left^; self.pend_si = si_left^
+        self.pend_px = px_next^; self.pend_si = si_next^
+
+    def _ptex_flush(mut self) raises:
+        """Render every withheld sample: wait for the loads they need, and take what is there once
+        nothing more can be loaded."""
+        var t0 = perf_counter_ns()
+        var idle = 0
+        while True:
+            if self.handle[].textures.ptex_cache.loading:
+                _ = gpu_ptex_finish(self.handle)
+            if len(self.pend_px) == 0:
+                break
+            self._ptex_redo()
+            if len(self.pend_px) == 0:
+                break
+            var no_room = self.handle[].textures.ptex_cache.denied
+            var placed = gpu_ptex_begin(self.handle)
+            idle = 0 if placed > 0 or self.handle[].textures.ptex_cache.denied > no_room else idle + 1
+            if idle >= 2:
+                _ = gpu_ptex_finish(self.handle)
+                gpu_ptex_withhold(self.handle, False)
+                self._ptex_redo()
+                gpu_ptex_withhold(self.handle, True)
+                break
+        self.ptex_seconds += Float64(perf_counter_ns() - t0) / 1.0e9
+
+    def _dispatch(mut self, si: Int, actual_batch: Int, max_depth: Int32 = Int32(-1), ptex_mode: Int32 = Int32(0)) raises:
         gpu_render_wavefront(
             self.handle,
             self.psc[unsafe_offset=0].camera_to_world,
@@ -1207,6 +1292,7 @@ struct GpuGuidedRenderer(GuidedRenderer):
             self.use_vk, self.interop_scene, self.interop_rays_buf, self.interop_results_buf,
             self.mesh_material_idx_buf, self.mesh_al_idx_buf, self.n_meshes_vk,
             self.instance_base_mesh_buf,
+            ptex_mode=ptex_mode,
         )
 
     def render_iteration(mut self, read_tree: GuideGrid, shard: GuideGrid, begin: Int, end: Int) raises:
@@ -1846,7 +1932,7 @@ def parse_and_render(
                 handle, psc, seed_dim0, seed_dim1, n_pixels, spp, guided, use_vk, interop_scene,
                 interop_rays_buf_opt^, interop_results_buf_opt^, mesh_material_idx_buf_opt^, mesh_al_idx_buf_opt^,
                 n_meshes_vk, instance_base_mesh_buf_opt^)
-            renderer.warm_ptex()
+            renderer.start_ptex()
             if guided:
                 var root = psc[unsafe_offset=0].bvh_nodes[unsafe_offset=0]
                 print("Path guiding: adaptive SD-tree on the GPU")
@@ -1854,12 +1940,13 @@ def parse_and_render(
             else:
                 renderer.render_samples(0, spp)
             _ = renderer.progress.finish()
-            if renderer.ptex_next > 0:
+            if renderer.ptex_on:
                 print("Ptex paging:", handle[].textures.ptex_cache.loaded, "face(s) loaded,", handle[].textures.ptex_cache.evicted,
-                      "evicted,", handle[].textures.ptex_cache.denied, "denied; pool",
+                      "evicted,", handle[].textures.ptex_cache.denied, "found no room; pool",
                       (handle[].textures.ptex_cache.top - handle[].textures.ptex_cache.dead) * 3 // (1024 * 1024), "of",
-                      handle[].textures.ptex_cache.cap * 3 // (1024 * 1024), "MB;",
-                      Float64(Int(renderer.ptex_seconds * 100.0)) / 100.0, "s")
+                      handle[].textures.ptex_cache.cap * 3 // (1024 * 1024), "MB;", renderer.ptex_redone,
+                      "sample(s) rendered again; waited", Float64(Int(renderer.ptex_seconds * 100.0)) / 100.0, "s")
+                renderer.ptex_scratch.unsafe_free(); renderer.ptex_si_of.unsafe_free()
         if use_vk:
             var rt_hw_end = rtcore_active()
             if Int(rt_hw_end) != 0:

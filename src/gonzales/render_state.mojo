@@ -208,6 +208,9 @@ struct PathState(TrivialRegisterPassable):
     # non-specular scatter has happened: pbrt then drops the differentials and
     # uses Camera::Approximate_dp_dxy at every later hit.
     var cone_len: Float32
+    # Ptex demand paging: 1 = a lookup on this path wanted a face that was not loaded yet, so the sample is
+    # withheld from the film and rendered again later; 2 = not rendered in this pass (gpu_wavefront.mojo).
+    var ptex_missed: Int8
 # <</listing>>
 # PathState layout: 24+12+12+12+4+8+8+1+1+1+1+4+4+4+4+4+4+4+8+20+4+4+4 = 148 bytes (was 144 -- +4 for cone_len);
 # size is computed via size_of[PathState]() everywhere (GPU buffer sizing included), not hardcoded.

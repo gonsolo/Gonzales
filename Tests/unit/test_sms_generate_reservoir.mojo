@@ -243,6 +243,7 @@ def _make_path() -> PathState:
         Float32(0.0),   # mis_null_dist
         Float32(0.0),   # lastEnvNeePdf
         Float32(0.0),   # cone_len
+        Int8(0),   # ptex_missed
     )
 
 def test_sms_resolve_on_empty_reservoir_is_a_noop() raises:

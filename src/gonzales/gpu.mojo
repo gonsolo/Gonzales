@@ -771,6 +771,9 @@ def gpu_render_wavefront(
     mesh_al_idx_buf: Optional[DeviceBuffer[DType.uint8]] = None,
     n_meshes_vk: Int = 0,
     instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]] = None,
+    # Ptex demand paging: 1 = withhold the samples that met a face not loaded yet and mark them in
+    # handle.ptex_redo_buf; 2 = the same, rendering the samples handle.ptex_redo_si_buf lists per slot.
+    ptex_mode: Int32 = Int32(0),
 ):
     # --restir batch rendering does not go through this function at all
     # (docs/A2_restir_migration_plan.md, pipeline.mojo's batch GPU branch):
@@ -807,6 +810,7 @@ def gpu_render_wavefront(
                 handle[].filter.type,
                 Int64(n_total), Int64(n_pix),
                 handle[].filter_lut_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]() if handle[].filter.type == Int32(0) else Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+                handle[].ptex_redo_si_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](), ptex_mode,
                 grid_dim=grid_total,
                 block_dim=block_size,
             )
@@ -860,6 +864,7 @@ def gpu_render_wavefront(
         handle[].spectral.cie_y_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         handle[].spectral.cie_z_buf.unsafe_ptr().unsafe_bitcast[Float32](),
         handle[].spectral.d65_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+        handle[].ptex_redo_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](), ptex_mode,
         grid_dim=grid_pix,
                 block_dim=block_size,
             )

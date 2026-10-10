@@ -472,6 +472,41 @@ def _ptex_level(tex: GpuTexture, texels: Pointer[UInt8, MutUntrackedOrigin], off
     return (c00 * (Float32(1.0) - wx) + c10 * wx) * (Float32(1.0) - wy) + (c01 * (Float32(1.0) - wx) + c11 * wx) * wy
 
 @always_inline
+def _ptex_need(fp_width: Float32) -> Int:
+    """log2 of the face resolution a lookup with this footprint reads."""
+    if fp_width > Float32(0.0):
+        return min(max(Int(ceil(-log2(fp_width))), 0), 12)
+    return 12
+
+@always_inline
+def _ptex_tri(inter: Intersection) -> Int:
+    if inter.primId.type == 0:
+        return Int(inter.primId.id2) // 3
+    return Int(inter.primId.id2 & 0xFFFFFFFF)
+
+@always_inline
+def _ptex_missed(textures: Pointer[GpuTexture, MutUntrackedOrigin], n_textures: Int, ti: Int,
+                 inter: Intersection, mesh: TriangleMesh, fp_width: Float32) -> Bool:
+    """Whether texture `ti` is a paged Ptex whose face at this hit is coarser than the lookup needs and can
+    still be loaded (wanted byte 255 = nothing finer exists, 254 = no room). Texel 0 of the pool switches
+    the test off, for the final passes that take what is there."""
+    if ti < 0 or ti >= n_textures or Int(textures[unsafe_offset=ti].format) != GpuTexture.FORMAT_PTEX:
+        return False
+    var tex = textures[unsafe_offset=ti]
+    var n_faces = Int(tex.width)
+    var face = Int(mesh.faceIndices[unsafe_offset=_ptex_tri(inter)])
+    if face < 0 or face >= n_faces:
+        face = 0
+    var entry = tex.data.unsafe_offset(face * 8)
+    var want = Int(entry[unsafe_offset=6])
+    var need = _ptex_need(fp_width)
+    if want >= 254 or need <= max(Int(entry[unsafe_offset=4]), Int(entry[unsafe_offset=5])):
+        return False
+    if need > want:
+        entry[unsafe_offset=6] = UInt8(need)   # a withheld sample always has its request placed
+    return tex.pool[unsafe_offset=0] != UInt8(0)
+
+@always_inline
 def _sample_ptex(tex: GpuTexture, face_in: Int, u: Float32, v: Float32, fp_width: Float32) -> RGB:
     var n_faces = Int(tex.width)
     var face = face_in if (face_in >= 0 and face_in < n_faces) else 0
@@ -487,9 +522,7 @@ def _sample_ptex(tex: GpuTexture, face_in: Int, u: Float32, v: Float32, fp_width
     var want = Int(entry[unsafe_offset=6])
     if want != 255:
         # Ask the host for the resolution this footprint needs (ptex_cache.mojo).
-        var need = 12
-        if fp_width > Float32(0.0):
-            need = min(max(Int(ceil(-log2(fp_width))), 0), 12)
+        var need = _ptex_need(fp_width)
         if need > max(ul, vl) and need > want:
             entry[unsafe_offset=6] = UInt8(need)
     var n_lev = max(ul, vl) + 1
@@ -597,9 +630,7 @@ def _tex_lookup[use_gpu: Bool](
     if ti >= 0 and ti < n_textures and Int(textures[unsafe_offset=ti].format) == GpuTexture.FORMAT_PTEX:
         # Ptex: the triangle's face id is in mesh.faceIndices; the mesh uv is the face's own 0..1 (pbrt passes it through).
         var ptx = textures[unsafe_offset=ti]
-        var tri = Int(inter.primId.id2 & 0xFFFFFFFF)
-        if inter.primId.type == 0:
-            tri = Int(inter.primId.id2) // 3
+        var tri = _ptex_tri(inter)
         var pu = inter.u + inter.v   # pbrt's default triangle uv: (0,0), (1,0), (1,1)
         var pv = inter.v
         if _is_real_ptr(mesh.uvs):
@@ -1041,7 +1072,7 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
         # (foliage cards in sanmiguel, etc). NOTE this path never interpolates a
         # vertex shading normal either -- it perturbs the face-forwarded
         # geometric normal directly, which is a separate pre-existing gap.
-        var (tri_dt, fp_dt) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
+        var (tri_dt, fp_dt) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures)
         dt_fp_width = fp_dt.width
         normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, normal,
             tri_dt, fp_dt, ctx.tex_filenames, ctx.textures, ctx.n_textures)
@@ -1169,7 +1200,7 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool =
         alb = mat.albedo
         normal = geo_normal
     else:
-        var (tri_cd, fp_cd) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
+        var (tri_cd, fp_cd) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures)
         alb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, fp_cd.width)
         # Use interpolated shading normal (geometric normal still drives hit-point offset)
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances)
@@ -1431,7 +1462,7 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
         # entering/exiting test below is `dot(ray_dir, n) < 0`, so flipping the
         # perturbed normal toward the ray would make it tautologically true and
         # bring back the 1/eta^4 loss this branch exists to prevent.
-        var (tri_de, fp_de) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
+        var (tri_de, fp_de) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures)
         geom_normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, geom_normal, raw_gn,
             tri_de, fp_de, ctx.tex_filenames, ctx.textures, ctx.n_textures)
     else:
@@ -1863,7 +1894,7 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
 
         # Use interpolated shading normal for smooth specular reflections
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
-        var (tri_co, fp_co) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
+        var (tri_co, fp_co) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures)
         normal = _apply_surface_maps[use_gpu](mat_eff, v0, v1, v2, mesh, inter, normal, geo_normal,
             tri_co, fp_co, ctx.tex_filenames, ctx.textures, ctx.n_textures)
         normal = face_toward(normal, -ray_dir)   # before the tangent frame below
@@ -2019,7 +2050,7 @@ def shade_measured[use_gpu: Bool, enqueue_shadow: Bool](
         normal = geo_normal
     else:
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
-        var (tri_me, fp_me) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
+        var (tri_me, fp_me) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures)
         normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_normal,
             tri_me, fp_me, ctx.tex_filenames, ctx.textures, ctx.n_textures)
 
@@ -2538,6 +2569,7 @@ def _pt_hit_footprint(
     instances: Pointer[Instance, MutUntrackedOrigin],
     mesh: TriangleMesh, v0: Int, v1: Int, v2: Int,
     inter: Intersection, ray_org: Vec3f, ray_dir: Vec3f,
+    textures: Pointer[GpuTexture, MutUntrackedOrigin], n_textures: Int,
 ) -> Tuple[TriWorld, UVFootprint]:
     var tri = tri_world(mesh, v0, v1, v2, inter.primId.instanceIdx, instances)
     # The footprint only ever feeds a texture or map lookup. A material with
@@ -2549,7 +2581,12 @@ def _pt_hit_footprint(
     var cl = path_ptr[].cone_len
     var cone_w = cam.cone_spread * cl if cl >= Float32(0.0) else Float32(-1.0)
     var hit = ray_org + ray_dir * inter.tHit
-    return (tri, hit_uv_footprint(cam, tri, mesh, v0, v1, v2, hit, ray_dir, cone_w))
+    var fp = hit_uv_footprint(cam, tri, mesh, v0, v1, v2, hit, ray_dir, cone_w)
+    # Ptex demand paging: a face this hit needs is not loaded yet, so the sample is rendered again later.
+    if _ptex_missed(textures, n_textures, Int(mat.tex_idx), inter, mesh, fp.width) or \
+       _ptex_missed(textures, n_textures, Int(mat.bump_tex_idx), inter, mesh, fp.width):
+        path_ptr[].ptex_missed = Int8(1)
+    return (tri, fp)
 
 # Resolve the hit's triangle and apply its normal/bump maps, in one call.
 #
@@ -2637,7 +2674,7 @@ def _build_geom_context_full[use_gpu: Bool](
         return (GeomContext(geo_normal, geo_normal, hit_point, wo, tangent, bitangent, mat.albedo, Float32(0.0)), True)
 
     var ng_ff = geo_normal
-    var (tri, fp) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir)
+    var (tri, fp) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures)
 
     var normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances)
     normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, ng_ff,

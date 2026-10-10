@@ -226,6 +226,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     Float32(0.0),   # mis_null_dist
                     INV_FOUR_PI,    # lastEnvNeePdf (see PathState)
                     Float32(0.0),   # cone_len: total path length, accumulated per bounce
+                    Int8(0),   # ptex_missed
                 )
                 pixel_idx_buf[unsafe_offset=idx] = this_pixel_idx
                 idx += 1

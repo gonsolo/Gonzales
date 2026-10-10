@@ -183,6 +183,9 @@ def accumulate_film_wavefront_gpu(
     spectral_cie_y: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+    # Ptex demand paging (ptex_mode != 0): redo_mask[sample] = 1 for the samples withheld here, to render again.
+    redo_mask: Pointer[UInt8, MutUntrackedOrigin] = Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
+    ptex_mode: Int32 = Int32(0),
 ):
     var n_pixels = Int(n_pixels_dp)
     var actual_batch = Int(actual_batch_dp)
@@ -193,6 +196,10 @@ def accumulate_film_wavefront_gpu(
     var ar = Float32(0); var ag = Float32(0); var ab = Float32(0)
     for si in range(actual_batch):
         var p = paths[unsafe_offset=si * n_pixels + px]
+        if ptex_mode != Int32(0):
+            redo_mask[unsafe_offset=si * n_pixels + px] = UInt8(1) if p.ptex_missed == Int8(1) else UInt8(0)
+            if p.ptex_missed != Int8(0):
+                continue
         var _pe = spectral_sample_to_rgb(spectral_coeffs, Int(spectral_res_dp),
             spectral_cie_x, spectral_cie_y, spectral_cie_z, spectral_d65,
             p.estimate, p.wavelengths)
@@ -219,6 +226,9 @@ def gen_primary_rays_wavefront_gpu(
     filter_type: Int32,
     count_dp: Int64, n_pixels_dp: Int64,
     filter_lut: Pointer[Float32, MutUntrackedOrigin],
+    # Ptex demand paging, ptex_mode 2: slot ti renders sample redo_si[ti] of its pixel, or nothing if that is < 0.
+    redo_si: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+    ptex_mode: Int32 = Int32(0),
 ):
     var fw = Int(fw_dp)
     var count = Int(count_dp)
@@ -226,11 +236,16 @@ def gen_primary_rays_wavefront_gpu(
     var ti = Int(block_idx.x * block_dim.x + thread_idx.x)
     if ti >= count:
         return
+    var skip = False
     var si_local = ti // n_pixels
     var px_flat  = ti % n_pixels
     var px = Int32(px_flat % fw)
     var py = Int32(px_flat // fw)
     var si = si_start + Int32(si_local)
+    if ptex_mode == Int32(2):
+        si = redo_si[unsafe_offset=ti]
+        skip = si < Int32(0)
+        si = max(si, Int32(0))
     var rng_seed = UInt64(rng_seed_hi) << UInt64(32) | UInt64(rng_seed_lo)
     var (ray, pcg_state, pcg_inc, sobol_idx, wavelengths) = gen_primary_ray_state(
         px, py, si, Int(log2spp), Int(n_base4),
@@ -245,7 +260,7 @@ def gen_primary_rays_wavefront_gpu(
         SpectralSample(Float32(0.0)),
         RGB(Float32(0.0)),
         Int32(0), pcg_state, pcg_inc,
-        Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)), Vec3f(Float32(0.0)),
+        Int8(0) if skip else Int8(1), Int8(0), Int8(0), Int8(0), Int8(0), Vec3f(Float32(0.0)), Vec3f(Float32(0.0)),
         Float32(0.0),
         Int32(-1),
         Float32(1.0),   # current_dielectric_ior (vacuum)
@@ -256,6 +271,7 @@ def gen_primary_rays_wavefront_gpu(
         Float32(0.0),   # mis_null_dist
         INV_FOUR_PI,    # lastEnvNeePdf (gated by lastBsdfPdf > 0; set at each scatter)
         Float32(0.0),   # cone_len: total path length, accumulated per bounce
+        Int8(2) if skip else Int8(0),   # ptex_missed
     )
 
 
@@ -1472,6 +1488,7 @@ def gen_primary_rays_gpu(
         Float32(0.0),   # mis_null_dist
         INV_FOUR_PI,    # lastEnvNeePdf (gated by lastBsdfPdf > 0; set at each scatter)
         Float32(0.0),   # cone_len: total path length, accumulated per bounce
+        Int8(0),   # ptex_missed
     )
 
 
