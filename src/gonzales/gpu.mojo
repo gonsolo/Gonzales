@@ -135,6 +135,7 @@ def _gpu_bounce_kernels(
             handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere](),
             handle[].n_spheres,
             handle[].rt_scratch_buf,
+            handle[].meshes.has_alpha,
         )
     else:
         # Curve, instance and alpha code halves the kernel's occupancy; compile it out when the scene has none.

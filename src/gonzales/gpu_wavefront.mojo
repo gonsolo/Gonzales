@@ -1285,6 +1285,32 @@ def rtcore_shadow_rays_compact_gpu(
             return
 
 
+# The Vulkan ray-query shader treats every triangle as opaque. A ray whose nearest hit is on a mesh with an alpha
+# cutout (or a constant alpha below 1, as on an invisible emitter) is traced again in software, which honours it.
+def vk_alpha_retrace_gpu(
+    sd: SceneView,
+    paths: Pointer[PathState, MutUntrackedOrigin],
+    inter: Pointer[Intersection, MutUntrackedOrigin],
+    count_dp: Int64,
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= Int(count_dp) or paths[unsafe_offset=tid].active == Int8(0) or inter[unsafe_offset=tid].hit == Int8(0):
+        return
+    var prim = inter[unsafe_offset=tid].primId
+    var mi = -1
+    if prim.type == Int8(0):
+        mi = Int(prim.id1)
+    elif prim.type == Int8(3):
+        mi = Int(prim.id2 >> 32)
+    if mi < 0:
+        return
+    var mesh = sd.meshes[unsafe_offset=mi]
+    if mesh.alpha_w <= Int32(0) and mesh.alpha_const >= Float32(1.0):
+        return
+    traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, paths[unsafe_offset=tid].ray, Float32(1.0e38),
+                       inter.unsafe_offset(tid), sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+
+
 def vulkaninterop_rt_traverse_paths_gpu(
     ctx: DeviceContext,
     path_buf: DeviceBuffer[DType.uint8],
@@ -1302,6 +1328,7 @@ def vulkaninterop_rt_traverse_paths_gpu(
     n_spheres: Int = 0,
     # --rt-hardware with alpha cutouts (see rtcore_alpha_passes).
     rt_scratch_buf: Optional[DeviceBuffer[DType.uint8]] = None,
+    alpha: Bool = False,   # the scene has alpha surfaces (vk_alpha_retrace_gpu)
 ) raises:
     comptime block_size = 256
     var grid = ceildiv(n_total, block_size)
@@ -1335,6 +1362,14 @@ def vulkaninterop_rt_traverse_paths_gpu(
             rt_no_ids(), rt_no_paths(),
             grid_dim=grid, block_dim=block_size,
         )
+        if alpha:
+            ctx.enqueue_function[vk_alpha_retrace_gpu](
+                sd,
+                path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+                inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+                Int64(n_total),
+                grid_dim=grid, block_dim=block_size,
+            )
 
     # Curves need no further handling here at all -- intersect_batch.comp
     # already resolved them (real narrow-phase test + generate on a valid
