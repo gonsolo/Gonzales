@@ -111,6 +111,7 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     # `MediumInterface "x_interior" ""` would.
     var sss_medium_idx: Int32
     # Ptex reflectance (tex_idx == -3): file, linear scale and decode gamma, baked per triangle in finalize_scene.
+    var dt_tex_lobes:   Int8      # see Material.dt_tex_lobes
     var ptex_file:      String
     var ptex_scale:     Float32
     var ptex_gamma:     Float32
@@ -123,6 +124,7 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
         self.roughness_u    = Float32(0)
         self.roughness_v    = Float32(0)
         self.tex_idx        = Int32(-1)
+        self.dt_tex_lobes   = Int8(0)
         self.normal_tex_idx = Int32(-1)
         self.rough_tex_idx  = Int32(-1)
         self.bump_tex_idx   = Int32(-1)

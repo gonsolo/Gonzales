@@ -6,7 +6,7 @@ from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
 from .geometry import offset_point, RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, fast_sincos, safe_sqrt, reflect, refract, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from .render_state import PDF_DROP_DIRECT
-from .materials import Material, MatKind, LobeKind, MeasuredBRDF, schlick_fresnel, fr_dielectric, dielectric_is_rough, is_specular_glass
+from .materials import Material, MatKind, LobeKind, MeasuredBRDF, schlick_fresnel, fr_dielectric, dielectric_is_rough, is_specular_glass, dt_reflectance, dt_transmittance
 from .render_state import PathState, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SuppressTask, SHADOW_SLOTS
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, light_sampler_sample, light_sampler_pdf, area_light_pick_triangle
@@ -1046,8 +1046,8 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     var trans = mat.emission
     if not is_sphere and Int(mat.tex_idx) != -1:
         var tex_rgb = _tex_lookup[use_gpu](mat, inter, v0, v1, v2, mesh, ctx.tex_filenames, ctx.textures, ctx.n_textures, dt_fp_width)
-        refl = tex_rgb
-        trans = tex_rgb
+        refl = dt_reflectance(mat, tex_rgb)
+        trans = dt_transmittance(mat, tex_rgb)
 
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var (bs, bounce_normal, lobe_alb, lobe_w, _) = bxdf_sample_diffuse_transmit(

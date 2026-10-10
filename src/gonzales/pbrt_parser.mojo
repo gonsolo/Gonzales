@@ -2312,6 +2312,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         mats[unsafe_offset=i].bump_tex_idx = nm3.bump_tex_idx
         mats[unsafe_offset=i].bump_scale = nm3.bump_scale
         mats[unsafe_offset=i].tex_scale = nm3.tex_scale
+        mats[unsafe_offset=i].dt_tex_lobes = nm3.dt_tex_lobes
         mats[unsafe_offset=i].sss_mean_refl = nm3.sss_mean_refl
         mats[unsafe_offset=i].tex_bias = nm3.tex_bias
         mats[unsafe_offset=i].rough_tex_idx = nm3.rough_tex_idx
@@ -2326,7 +2327,6 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         # project_sppm_nondeterministic_photon_pass memory: barcelona's water
         # flipped between refracting and absorbing every photon on it.
         mats[unsafe_offset=i].sss_boundary = Int8(0)
-        mats[unsafe_offset=i]._pad1 = Int8(0)
         mats[unsafe_offset=i]._pad2 = Int8(0)
         if nm3.measured_bsdf_path == "":
             mats[unsafe_offset=i].measured_idx = Int32(-1)

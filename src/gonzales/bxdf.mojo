@@ -2,7 +2,7 @@ from std.collections import Array
 from std.math import sqrt
 from .layered import diel_f, diel_pdf, diel_sample, layered_f, layered_pdf, layered_sample
 from .geometry import RGB, Vec3f, dot, INV_PI, PI, Frame, refract, INV_FOUR_PI
-from .materials import MatKind, LobeKind, Material, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS, MeasuredBRDF
+from .materials import MatKind, LobeKind, Material, fr_dielectric, coat_beer_lambert_tr, cos_theta_t_dielectric, DEFAULT_COAT_THICKNESS, MeasuredBRDF, dt_reflectance, dt_transmittance
 from .curves import Curve
 from .bssrdf import fdr_moment, bssrdf_exit_ft
 from .sampling import sample_ggx_vndf, sample_cosine_hemisphere_world, power_heuristic
@@ -1309,11 +1309,12 @@ def lobe_eval[want_pdfs: Bool = True](
             return LobeEval(ZERO, Float32(1), Float32(0), Float32(0), lobe_scoped(c))
         var same_side = cos_dt * cos_wo_dt > Float32(0)
         var trans_dt = _dt_transmittance(c, tab)
-        var lobe_alb_dt = c.alb if same_side else trans_dt
+        var refl_dt = _dt_reflectance(c, tab)
+        var lobe_alb_dt = refl_dt if same_side else trans_dt
         # The SAME luminance split bxdf_sample_diffuse_transmit samples with.
         # Deriving the density any other way lets MIS drift against the
         # sampler, which is the drift this interface exists to prevent.
-        var pr_dt = c.alb.luma()
+        var pr_dt = refl_dt.luma()
         var pt_dt = trans_dt.luma()
         var tot_dt = max(pr_dt + pt_dt, Float32(1e-9))
         var p_lobe_dt = (pr_dt if same_side else pt_dt) / tot_dt
@@ -1398,9 +1399,14 @@ def _dt_transmittance(c: LobeCtx, tab: LobeTables) -> RGB:
     already the resolved one. Shared by lobe_eval and lobe_sample so the
     density one reports is the split the other draws from."""
     if Int(c.mat_idx) >= 0:
-        var mat_dt = tab.materials[unsafe_offset=Int(c.mat_idx)]
-        if Int(mat_dt.tex_idx) == -1:
-            return mat_dt.emission
+        return dt_transmittance(tab.materials[unsafe_offset=Int(c.mat_idx)], c.alb)
+    return c.alb
+
+@always_inline
+def _dt_reflectance(c: LobeCtx, tab: LobeTables) -> RGB:
+    """The reflect lobe's colour: c.alb, unless the material's texture drives the transmittance only."""
+    if Int(c.mat_idx) >= 0:
+        return dt_reflectance(tab.materials[unsafe_offset=Int(c.mat_idx)], c.alb)
     return c.alb
 
 
@@ -1576,7 +1582,7 @@ def lobe_sample(
             bounce_n = -vn
     elif c.kind == LobeKind.diffuse_transmit:
         # The SAME luminance split lobe_eval reports as the lobe probability.
-        var pr = c.alb.luma()
+        var pr = _dt_reflectance(c, tab).luma()
         var pt = _dt_transmittance(c, tab).luma()
         if pr + pt <= Float32(1e-9):
             return _lobe_sample_invalid()   # nothing to scatter; do not invent a lobe

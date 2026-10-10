@@ -73,7 +73,9 @@ struct Material(TrivialRegisterPassable):
     # Material's size and every existing constructor call site are
     # unchanged.
     var sss_boundary: Int8
-    var _pad1: Int8
+    # diffusetransmission only: which lobes the tex_idx texture drives -- 0 both, 1 reflectance only,
+    # 2 transmittance only (the other lobe keeps its constant). Occupies a former padding byte.
+    var dt_tex_lobes: Int8
     var _pad2: Int8
     var albedo: RGB
     var emission: RGB
@@ -292,3 +294,16 @@ def cos_theta_t_dielectric(cos_theta_i_in: Float32, eta: Float32) -> Float32:
         return Float32(0.0)
     return safe_sqrt(Float32(1.0) - sin2_theta_t)
 
+# The two lobe colours of a diffusetransmission material. `tex_rgb` is the tex_idx texture's colour at
+# the hit (callers without a lookup, e.g. on a sphere, pass mat.albedo).
+@always_inline
+def dt_reflectance(mat: Material, tex_rgb: RGB) -> RGB:
+    if Int(mat.tex_idx) == -1 or mat.dt_tex_lobes == Int8(2):
+        return mat.albedo
+    return tex_rgb
+
+@always_inline
+def dt_transmittance(mat: Material, tex_rgb: RGB) -> RGB:
+    if Int(mat.tex_idx) == -1 or mat.dt_tex_lobes == Int8(1):
+        return mat.emission
+    return tex_rgb

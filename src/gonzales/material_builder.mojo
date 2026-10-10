@@ -999,6 +999,31 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
         # else: roughU/V already IS alpha (pbrt RoughnessToAlpha semantics) — use as-is.
     nm.roughness_u    = mat_roughU
     nm.roughness_v    = mat_roughV
+    # diffusetransmission: which lobes the one texture slot drives (see Material.dt_tex_lobes).
+    var dt_tex_lobes = Int8(0)
+    if mat_type == MatKind.diffuse_transmit:
+        var refl_tex_name = String("")
+        if len(params.get_floats("reflectance")) < 3:
+            refl_tex_name = params.get_string("reflectance", "")
+        if tex_idx_for_mat >= Int32(0) and trans_tex != refl_tex_name:
+            if trans_tex == "":
+                dt_tex_lobes = Int8(1)
+            else:
+                print("Warning: a diffusetransmission material has different reflectance and transmittance textures ('"
+                      + refl_tex_name + "', '" + trans_tex + "'); the reflectance texture is used for both.")
+        elif tex_idx_for_mat == Int32(-1) and trans_tex != "":
+            for ti in range(len(s[unsafe_offset=0].tex_names)):
+                if s[unsafe_offset=0].tex_names[ti] == trans_tex:
+                    tex_idx_for_mat = Int32(ti)
+                    dt_tex_lobes = Int8(2)
+                    break
+            for pti in range(len(s[unsafe_offset=0].ptex_tex_names)):
+                if dt_tex_lobes == Int8(2) and s[unsafe_offset=0].ptex_tex_names[pti] == trans_tex:
+                    if ptex_file_for_mat.byte_length() == 0:
+                        ptex_file_for_mat = s[unsafe_offset=0].ptex_tex_files[pti]
+                    tex_scale_for_mat = RGB(s[unsafe_offset=0].ptex_tex_scale[pti])
+                    break
+    nm.dt_tex_lobes   = dt_tex_lobes
     nm.tex_idx        = tex_idx_for_mat
     nm.ptex_file      = ptex_file_for_mat
     nm.ptex_scale     = ptex_scale_for_mat

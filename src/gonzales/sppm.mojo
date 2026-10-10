@@ -14,7 +14,7 @@ from std.memory.alloc import unsafe_alloc
 from std.atomic import Atomic
 from std.memory import bitcast
 from .geometry import offset_eps, face_toward, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
-from .materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, MeasuredBRDF, dielectric_is_rough
+from .materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, MeasuredBRDF, dielectric_is_rough, dt_reflectance, dt_transmittance
 from .render_state import GpuTexture
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, sphere_outward_normal
 from .media import Medium, MediumInterface, Grid, NvdbGrid, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, medium_transmittance_ratio_spectral, spectral_free_flight_weight
@@ -1589,8 +1589,9 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
             var bounce_side = Float32(1.0)   # flips to -1 for the transmit lobe
             var lobe_alb = eff_alb
             if mat.type == MatKind.diffuse_transmit:
-                var trans_dt = eff_alb if Int(mat.tex_idx) != -1 else mat.emission
-                var pr_dt = eff_alb.luma()
+                var trans_dt = dt_transmittance(mat, eff_alb)
+                var refl_dt = dt_reflectance(mat, eff_alb)
+                var pr_dt = refl_dt.luma()
                 var pt_dt = trans_dt.luma()
                 # Nothing to scatter -- see bdpt_*.mojo's matching comment
                 # (d2a3cd84) for why this must TERMINATE, not force a lobe.
@@ -1600,7 +1601,7 @@ def _sppm_trace_photon[use_gpu: Bool, tex_gpu: Bool](
                 var take_refl = pcg.next_float() < pr_dt / tot_dt
                 p_sel = max((pr_dt if take_refl else pt_dt) / tot_dt, Float32(1e-6))
                 bounce_side = Float32(1.0) if take_refl else Float32(-1.0)
-                lobe_alb = eff_alb if take_refl else trans_dt
+                lobe_alb = refl_dt if take_refl else trans_dt
             # Russian-roulette continuation for indirect diffuse-diffuse
             # bounces (color bleeding) — without this, photons always
             # terminated at the first diffuse hit, so light could never
