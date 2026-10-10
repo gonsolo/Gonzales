@@ -1599,7 +1599,7 @@ def gen_aux_buffers_gpu(
             normal = Vec3f(e1.y*e2.z - e1.z*e2.y, e1.z*e2.x - e1.x*e2.z, e1.x*e2.y - e1.y*e2.x)
             var inst_idx = isects_tmp[unsafe_offset=tid].primId.instanceIdx
             if inst_idx >= Int32(0):
-                var n_world = transform_normal(Mat4(instances[unsafe_offset=Int(inst_idx)].worldToObj), normal.to_simd())
+                var n_world = transform_normal(Mat4(instances[unsafe_offset=Int(inst_idx)].world_to_obj()), normal.to_simd())
                 normal = vec3f(n_world)
             var nl = normal.length()
             if nl > Float32(0): normal = normal / nl

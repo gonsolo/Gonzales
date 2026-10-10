@@ -135,7 +135,11 @@ def test_tri_world_applies_the_instance_transform() raises:
     o2w[1] = 1.0; o2w[4] = -1.0; o2w[10] = 1.0; o2w[15] = 1.0
     o2w[12] = 1.0; o2w[13] = 2.0; o2w[14] = 3.0
     var inst = unsafe_alloc[Instance](1)
-    inst[unsafe_offset=0] = Instance(o2w, SIMD[DType.float32, 16](0), Int32(0))
+    # Its inverse, which is what an Instance stores: rotate back, then undo the translation.
+    var w2o = SIMD[DType.float32, 16](0)
+    w2o[1] = -1.0; w2o[4] = 1.0; w2o[10] = 1.0; w2o[15] = 1.0
+    w2o[12] = -2.0; w2o[13] = 1.0; w2o[14] = -3.0
+    inst[unsafe_offset=0] = Instance(w2o, Int32(0))
     var tw = tri_world(mesh, 0, 1, 2, Int32(0), inst)
     assert_true(_close(tw.p0[0], 1.0) and _close(tw.p0[1], 2.0) and _close(tw.p0[2], 3.0))
     assert_true(_close(tw.p1[0], 1.0) and _close(tw.p1[1], 3.0))   # (1,0,0) -> (0,1,0) + t

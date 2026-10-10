@@ -78,13 +78,13 @@ def tri_world(
         n2 = Vec3f(mesh.normals[unsafe_offset=v2*3], mesh.normals[unsafe_offset=v2*3+1], mesh.normals[unsafe_offset=v2*3+2])
     if instance_idx >= Int32(0):
         var inst = instances[unsafe_offset=Int(instance_idx)]
-        var m = Mat4(inst.objToWorld)
+        var m = Mat4(inst.obj_to_world())
         var q0 = m.transform_point(Point3f(p0[0], p0[1], p0[2]))
         var q1 = m.transform_point(Point3f(p1[0], p1[1], p1[2]))
         var q2 = m.transform_point(Point3f(p2[0], p2[1], p2[2]))
         p0 = Vec3f(q0.x, q0.y, q0.z); p1 = Vec3f(q1.x, q1.y, q1.z); p2 = Vec3f(q2.x, q2.y, q2.z)
         if has_n:
-            var inv = Mat4(inst.worldToObj)
+            var inv = Mat4(inst.world_to_obj())
             n0 = transform_normal(inv, n0); n1 = transform_normal(inv, n1); n2 = transform_normal(inv, n2)
     return TriWorld(p0, p1, p2, n0, n1, n2, has_n)
 

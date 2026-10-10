@@ -1363,7 +1363,7 @@ def _traverse_instance_leaf(
         return (False, tMax, Float32(0), Float32(0), dummy)
     var inst_idx = Int(prim.id1)
     var inst = instances[unsafe_offset=inst_idx]
-    var (o_org, o_dir) = _transform_ray_to_instance_space(inst.worldToObj, ray_org, ray_dir)
+    var (o_org, o_dir) = _transform_ray_to_instance_space(inst.world_to_obj(), ray_org, ray_dir)
     var blas_nodes = blasNodesArr[unsafe_offset=Int(inst.blasIdx)]
     var blas_prim_ids = blasPrimIdsArr[unsafe_offset=Int(inst.blasIdx)]
     var sub = _traverse_blas_triangles(blas_nodes, blas_prim_ids, meshes, o_org, o_dir, tMax)

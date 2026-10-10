@@ -268,7 +268,7 @@ def _shading_normal_at(
     var p2 = Vec3f(m.points[unsafe_offset=v2*4], m.points[unsafe_offset=v2*4+1], m.points[unsafe_offset=v2*4+2])
     var gn = cross(p1 - p0, p2 - p0)
     if inter.primId.instanceIdx >= Int32(0):
-        gn = transform_normal(Mat4(instances[unsafe_offset=Int(inter.primId.instanceIdx)].worldToObj), gn)
+        gn = transform_normal(Mat4(instances[unsafe_offset=Int(inter.primId.instanceIdx)].world_to_obj()), gn)
     var gl = dot(gn, gn)
     if gl > Float32(0.0): gn = gn * (Float32(1.0) / sqrt(gl))
     # No per-vertex normals → flat normal (sentinel addr <= 4, see GPU-nullable convention).
@@ -280,7 +280,7 @@ def _shading_normal_at(
     var n2 = Vec3f(m.normals[unsafe_offset=v2*3], m.normals[unsafe_offset=v2*3+1], m.normals[unsafe_offset=v2*3+2])
     var sn = n0 * w0 + n1 * inter.u + n2 * inter.v
     if inter.primId.instanceIdx >= Int32(0):
-        sn = transform_normal(Mat4(instances[unsafe_offset=Int(inter.primId.instanceIdx)].worldToObj), sn)
+        sn = transform_normal(Mat4(instances[unsafe_offset=Int(inter.primId.instanceIdx)].world_to_obj()), sn)
     var sl = dot(sn, sn)
     if sl <= Float32(1e-12):
         return gn

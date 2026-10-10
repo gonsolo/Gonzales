@@ -24,18 +24,55 @@ struct PrimId(TrivialRegisterPassable):
 
 # ── Object instancing (two-level BVH: BLAS per template, TLAS instance leaves) ─
 
-@fieldwise_init
 struct Instance(TrivialRegisterPassable):
-    """One placement of a template (BLAS). `objToWorld`/`worldToObj` are 16-float
-    column-major matrices (same convention as transform.mojo). A TLAS leaf of
-    PrimId.type == 6 has id1 = index into SceneView.instances.
-    `blasIdx` indexes SceneView.blasNodesArr/blasPrimIdsArr (one
-    private BVH2 per template, each a separate allocation — no shared-pool
-    offset arithmetic needed). A BLAS's PrimId entries use ordinary type==0
-    triangle encoding against the same global `meshes` array as the TLAS."""
-    var objToWorld: SIMD[DType.float32, 16]
-    var worldToObj: SIMD[DType.float32, 16]
-    var blasIdx:    Int32
+    """One placement of a template (BLAS): 52 bytes. Holds the world-to-object transform as the top three
+    rows of its column-major matrix (it is affine, so the fourth row is 0 0 0 1); the object-to-world one is
+    inverted from it where needed, which is once a shaded hit and never during traversal.
+    A TLAS leaf of PrimId.type == 6 has id1 = index into SceneView.instances.
+    `blasIdx` indexes SceneView.blasNodesArr/blasPrimIdsArr."""
+    var c0x: Float32
+    var c0y: Float32
+    var c0z: Float32
+    var c1x: Float32
+    var c1y: Float32
+    var c1z: Float32
+    var c2x: Float32
+    var c2y: Float32
+    var c2z: Float32
+    var c3x: Float32
+    var c3y: Float32
+    var c3z: Float32
+    var blasIdx: Int32
+
+    def __init__(out self, worldToObj: SIMD[DType.float32, 16], blasIdx: Int32):
+        self.c0x = worldToObj[0]; self.c0y = worldToObj[1]; self.c0z = worldToObj[2]
+        self.c1x = worldToObj[4]; self.c1y = worldToObj[5]; self.c1z = worldToObj[6]
+        self.c2x = worldToObj[8]; self.c2y = worldToObj[9]; self.c2z = worldToObj[10]
+        self.c3x = worldToObj[12]; self.c3y = worldToObj[13]; self.c3z = worldToObj[14]
+        self.blasIdx = blasIdx
+
+    @always_inline
+    def world_to_obj(self) -> SIMD[DType.float32, 16]:
+        return SIMD[DType.float32, 16](
+            self.c0x, self.c0y, self.c0z, Float32(0), self.c1x, self.c1y, self.c1z, Float32(0),
+            self.c2x, self.c2y, self.c2z, Float32(0), self.c3x, self.c3y, self.c3z, Float32(1))
+
+    @always_inline
+    def obj_to_world(self) -> SIMD[DType.float32, 16]:
+        # Inverse of an affine map: invert the 3x3 by cofactors, then carry the translation through it.
+        var a = self.c0x; var b = self.c1x; var c = self.c2x
+        var d = self.c0y; var e = self.c1y; var f = self.c2y
+        var g = self.c0z; var h = self.c1z; var i = self.c2z
+        var co00 = e * i - f * h; var co01 = f * g - d * i; var co02 = d * h - e * g
+        var inv_det = Float32(1) / (a * co00 + b * co01 + c * co02)
+        var r00 = co00 * inv_det; var r01 = (c * h - b * i) * inv_det; var r02 = (b * f - c * e) * inv_det
+        var r10 = co01 * inv_det; var r11 = (a * i - c * g) * inv_det; var r12 = (c * d - a * f) * inv_det
+        var r20 = co02 * inv_det; var r21 = (b * g - a * h) * inv_det; var r22 = (a * e - b * d) * inv_det
+        var tx = -(r00 * self.c3x + r01 * self.c3y + r02 * self.c3z)
+        var ty = -(r10 * self.c3x + r11 * self.c3y + r12 * self.c3z)
+        var tz = -(r20 * self.c3x + r21 * self.c3y + r22 * self.c3z)
+        return SIMD[DType.float32, 16](
+            r00, r10, r20, Float32(0), r01, r11, r21, Float32(0), r02, r12, r22, Float32(0), tx, ty, tz, Float32(1))
 
 
 struct TriangleMesh(TrivialRegisterPassable):

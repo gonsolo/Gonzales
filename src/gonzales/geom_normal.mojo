@@ -51,7 +51,7 @@ def _geom_normal(
     var p2 = Vec3f(m.points[unsafe_offset=v2*4], m.points[unsafe_offset=v2*4+1], m.points[unsafe_offset=v2*4+2])
     var n = cross(p1 - p0, p2 - p0)
     if inter.primId.instanceIdx >= Int32(0):
-        n = transform_normal(Mat4(instances[unsafe_offset=Int(inter.primId.instanceIdx)].worldToObj), n)
+        n = transform_normal(Mat4(instances[unsafe_offset=Int(inter.primId.instanceIdx)].world_to_obj()), n)
     var l = dot(n, n)
     if l > Float32(0.0):
         n = n * (Float32(1.0) / sqrt(l))

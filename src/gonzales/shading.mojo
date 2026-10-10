@@ -220,7 +220,7 @@ def _emitter_face_normal(
     var n2 = Vec3f(mesh.normals[unsafe_offset=v2*3], mesh.normals[unsafe_offset=v2*3+1], mesh.normals[unsafe_offset=v2*3+2])
     var sn = n0 * w0 + n1 * bu + n2 * bv
     if instance_idx >= Int32(0):
-        sn = transform_normal(Mat4(instances[unsafe_offset=Int(instance_idx)].worldToObj), sn)
+        sn = transform_normal(Mat4(instances[unsafe_offset=Int(instance_idx)].world_to_obj()), sn)
     if dot(sn, sn) <= Float32(1e-12):
         return gn
     if dot(gn, sn) < Float32(0.0):
@@ -354,7 +354,7 @@ def _interp_vertex_normal(
     var n2 = Vec3f(mesh.normals[unsafe_offset=v2*3], mesh.normals[unsafe_offset=v2*3+1], mesh.normals[unsafe_offset=v2*3+2])
     var sn = n0 * w0 + n1 * bu + n2 * bv
     if instance_idx >= Int32(0):
-        sn = transform_normal(Mat4(instances[unsafe_offset=Int(instance_idx)].worldToObj), sn)
+        sn = transform_normal(Mat4(instances[unsafe_offset=Int(instance_idx)].world_to_obj()), sn)
     var slen = dot(sn, sn)
     if slen <= Float32(1e-12):
         return Vec3f(Float32(0.0))
@@ -805,7 +805,7 @@ def _geom_normal_and_ray(
     _transform_ray_to_instance_space."""
     var gn = cross(p1 - p0, p2 - p0)
     if instance_idx >= Int32(0):
-        gn = transform_normal(Mat4(instances[unsafe_offset=Int(instance_idx)].worldToObj), gn)
+        gn = transform_normal(Mat4(instances[unsafe_offset=Int(instance_idx)].world_to_obj()), gn)
     var nlen = dot(gn, gn)
     if nlen > Float32(0.0):
         gn = gn * (Float32(1.0) / sqrt(nlen))
@@ -1436,7 +1436,7 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
         var dp2 = Vec3f(mesh.points[unsafe_offset=v2*4], mesh.points[unsafe_offset=v2*4+1], mesh.points[unsafe_offset=v2*4+2])
         var raw_gn = cross(dp1 - dp0, dp2 - dp0)
         if inter.primId.instanceIdx >= Int32(0):
-            raw_gn = transform_normal(Mat4(ctx.instances[unsafe_offset=Int(inter.primId.instanceIdx)].worldToObj), raw_gn)
+            raw_gn = transform_normal(Mat4(ctx.instances[unsafe_offset=Int(inter.primId.instanceIdx)].world_to_obj()), raw_gn)
         var raw_len = dot(raw_gn, raw_gn)
         if raw_len > Float32(0.0):
             raw_gn = raw_gn * (Float32(1.0) / sqrt(raw_len))

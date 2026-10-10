@@ -1537,7 +1537,7 @@ def parse_and_render(
                     for k in range(n_instances_vcm):
                         var inst = psc[unsafe_offset=0].instances[unsafe_offset=k]
                         for ci in range(16):
-                            inst_o2w_vcm[unsafe_offset=k * 16 + ci] = inst.objToWorld[ci]
+                            inst_o2w_vcm[unsafe_offset=k * 16 + ci] = inst.obj_to_world()[ci]
                         inst_tmpl_vcm[unsafe_offset=k] = Int32(inst.blasIdx)
                         inst_base_host_vcm[unsafe_offset=k] = psc[unsafe_offset=0].template_mesh_start[unsafe_offset=Int(inst.blasIdx)]
                     # --rt-hardware without instancing: one merged mesh feeds both the interop scene and the RT cores.
@@ -1720,7 +1720,7 @@ def parse_and_render(
             for k in range(n_instances_vk):
                 var inst = psc[unsafe_offset=0].instances[unsafe_offset=k]
                 for ci in range(16):
-                    instance_o2w_vk[unsafe_offset=k * 16 + ci] = inst.objToWorld[ci]
+                    instance_o2w_vk[unsafe_offset=k * 16 + ci] = inst.obj_to_world()[ci]
                 instance_tmpl_idx_vk[unsafe_offset=k] = Int32(inst.blasIdx)
                 instance_base_mesh_host[unsafe_offset=k] = psc[unsafe_offset=0].template_mesh_start[unsafe_offset=Int(inst.blasIdx)]
 

@@ -2898,7 +2898,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         for ci in range(16):
             o2w[ci] = s[unsafe_offset=0].instance_obj_to_world[k*16+ci]
             w2o[ci] = s[unsafe_offset=0].instance_world_to_obj[k*16+ci]
-        instances_c[unsafe_offset=k] = Instance(o2w, w2o, Int32(tmpl_idx))
+        instances_c[unsafe_offset=k] = Instance(w2o, Int32(tmpl_idx))
 
         # World-space AABB for the TLAS leaf: transform the BLAS root's 8 corners.
         var root = blas_nodes_arr[unsafe_offset=tmpl_idx][unsafe_offset=0]
