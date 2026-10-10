@@ -337,6 +337,10 @@ def main() raises:
     # The Sobol matrices, the spectral tables, the CUDA context, the PLY meshes and the scene parse do not depend on each
     # other, so they run side by side. The parse (the longest) stays on this thread; the rest run on threads of their own
     # (OsThread), only for the drivers that parse in parse_and_render.
+    # The Vulkan backends take one material a mesh, so object templates stay unmerged for them
+    # (pbrt_parser._merge_template_meshes).
+    if use_vulkan_rt or use_vulkan_rt_shade:
+        _ = setenv("GONZALES_MERGE_TEMPLATES", "0", True)
     # Ptex demand paging needs a driver that streams between sample batches: the GPU path tracer.
     if use_gpu and not (use_sppm or use_vcm or use_restir or use_vol_restir_reuse or interactive or use_vulkan_rt):
         _ = external_call["ptex_set_paging", NoneType, Int32](Int32(1))

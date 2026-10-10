@@ -169,6 +169,9 @@ struct MeshAccum(Copyable, Movable):
     # BLAS referenced by Instance placements (see pbrt_parser.mojo).
     var is_object_template: Bool
     var ptex_faces:     List[Int32]    # Ptex face id per triangle (pbrt faceIndices); empty = none
+    # Material per triangle, for the one mesh an object template's meshes are merged into
+    # (pbrt_parser._merge_template_meshes); empty = an ordinary mesh with the single mat_idx.
+    var tri_mats:       List[Int32]
     # pbrt `Shape "texture alpha"` / `"float alpha"`: index into
     # SceneParseState.alpha_mask_* (-1 = none), else the constant alpha.
     var alpha_mask:  Int32
@@ -188,6 +191,7 @@ struct MeshAccum(Copyable, Movable):
         self.outside_medium = outside_medium
         self.is_object_template = False
         self.ptex_faces    = List[Int32]()
+        self.tri_mats      = List[Int32]()
         self.alpha_mask    = -1
         self.alpha_const   = 1.0
 

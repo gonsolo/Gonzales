@@ -25,6 +25,7 @@ typedef struct {
     int32_t alpha_h;
     float alpha_const;
     int32_t alpha_pad;
+    const int32_t* materials;   // per-triangle material of a merged template: unused here, layout only
 } VulkanRtMesh;
 
 // Task #162 step 1 smoke test: stand up a headless Vulkan instance/device

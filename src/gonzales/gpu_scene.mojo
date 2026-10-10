@@ -206,6 +206,10 @@ struct MeshBuffers(Movable):
 
         for i in range(Int(s.mesh_count)):
             var host_mesh = s.meshes[unsafe_offset=i]
+            if Int(s.mesh_n_tris[unsafe_offset=i]) == 0:
+                # Emptied by the template merge (or just empty): nothing refers to it, so it gets no buffers.
+                mesh_structs_host[unsafe_offset=i] = host_mesh
+                continue
             if host_mesh.alpha_w > Int32(0) or host_mesh.alpha_const < Float32(1.0):
                 has_alpha = True
 
@@ -246,6 +250,9 @@ struct MeshBuffers(Movable):
             mesh_structs_host[unsafe_offset=i] = TriangleMesh(pts_dptr, fi_dptr, vi_dptr, uv_dptr, nrm_dptr,
                 alpha_dptr, host_mesh.alpha_w, host_mesh.alpha_h, host_mesh.alpha_const)
             mesh_structs_host[unsafe_offset=i].emit_two_sided = host_mesh.emit_two_sided
+            if _is_real_ptr(host_mesh.materials):
+                mesh_structs_host[unsafe_offset=i].materials = _gpu_upload_owned[Int32](
+                    ctx, face_bufs, host_mesh.materials, Int(s.mesh_n_tris[unsafe_offset=i]))
 
         # Upload mesh struct array
         var meshes_buf = _gpu_upload_array[TriangleMesh](ctx, mesh_structs_host, Int(s.mesh_count))

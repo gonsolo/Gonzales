@@ -620,6 +620,8 @@ def _build_mesh_light_info(
         var tprims = psc[unsafe_offset=0].blas_primids_arr[unsafe_offset=tmpl]
         for i in range(Int(psc[unsafe_offset=0].blas_primid_counts[unsafe_offset=tmpl])):
             var p = tprims[unsafe_offset=i]
+            if p.type == Int8(7):
+                continue   # a merged template has a material per triangle; main() keeps them unmerged for Vulkan
             var mi = Int(p.id1)
             if mi >= 0 and mi < n_meshes and seen[unsafe_offset=mi] == UInt8(0):
                 mat_idx[unsafe_offset=mi] = p.materialIndex

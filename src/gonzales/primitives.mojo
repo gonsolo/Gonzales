@@ -56,6 +56,9 @@ struct TriangleMesh(TrivialRegisterPassable):
     var alpha_h: Int32
     var alpha_const: Float32
     var emit_two_sided: Int32   # area-light mesh emits from both faces (pbrt twosided)
+    # Material per triangle, for a merged object template (PrimId.type 7, see bvh._traverse_blas_triangles);
+    # dangling for every other mesh, whose material is in its PrimIds.
+    var materials: Pointer[Int32, MutUntrackedOrigin]
 
     def __init__(
         out self,
@@ -78,6 +81,7 @@ struct TriangleMesh(TrivialRegisterPassable):
         self.alpha_w = alpha_w
         self.alpha_h = alpha_h
         self.alpha_const = alpha_const
+        self.materials = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
         self.emit_two_sided = 0
 
 # ── Ray ───────────────────────────────────────────────────────────────────────

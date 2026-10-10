@@ -1255,6 +1255,11 @@ def _traverse_blas_triangles(
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
     var current = 0
+    # A merged template (type 7) has one record naming its single mesh, whose triangles are stored in
+    # leaf order: a leaf's (offset, count) is a triangle range and no per-triangle record exists.
+    var first = blasPrimIds[unsafe_offset=0]
+    var merged = first.type == Int8(7)
+    var hitTri = 0
 
     while True:
         var node = blasNodes[unsafe_offset=current]
@@ -1262,11 +1267,15 @@ def _traverse_blas_triangles(
             var offset = Int(node.offset)
             var count = Int(node.count)
             for j in range(count):
-                var prim = blasPrimIds[unsafe_offset=offset + j]
-                if prim.type != Int8(0):
-                    continue
-                var mesh_idx = Int(prim.id1)
-                var base_vidx = Int(prim.id2)
+                var prim = first
+                var mesh_idx = Int(first.id1)
+                var base_vidx = (offset + j) * 3
+                if not merged:
+                    prim = blasPrimIds[unsafe_offset=offset + j]
+                    if prim.type != Int8(0):
+                        continue
+                    mesh_idx = Int(prim.id1)
+                    base_vidx = Int(prim.id2)
                 var mesh = meshes[unsafe_offset=mesh_idx]
                 var v0 = Int(mesh.vertexIndices[unsafe_offset=base_vidx])
                 var v1 = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 1])
@@ -1281,6 +1290,7 @@ def _traverse_blas_triangles(
                     bestU = hit_res[2]
                     bestV = hit_res[3]
                     hitPrim = prim
+                    hitTri = offset + j
                     hasHit = True
             if toVisit == 0:
                 break
@@ -1321,6 +1331,9 @@ def _traverse_blas_triangles(
                 toVisit -= 1
                 current = Int(stack_ptr[unsafe_offset=toVisit])
 
+    if merged and hasHit:
+        hitPrim = PrimId(first.id1, Int64(hitTri * 3), Int64(meshes[unsafe_offset=Int(first.id1)].materials[unsafe_offset=hitTri]),
+                         Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     return (hasHit, localTHit, bestU, bestV, hitPrim)
 
 

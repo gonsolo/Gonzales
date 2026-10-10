@@ -1698,6 +1698,68 @@ def handle_texture(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
 # placement contributes a small TLAS leaf (transform + BLAS reference) rather
 # than a duplicated copy of the geometry.
 
+def _merge_template_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin], default_mat_idx: Int32):
+    """Merge each object template's meshes into its first one, with a material per triangle, leaving the
+    others empty. A production object has thousands of small meshes; one mesh a template is what lets
+    its BLAS index triangles directly (PrimId.type 7) instead of through a 32-byte record each.
+    Templates whose meshes differ in ways the mesh itself carries (alpha, media, uvs or normals on
+    some only) keep the old form. GONZALES_MERGE_TEMPLATES=0 switches this off."""
+    if getenv("GONZALES_MERGE_TEMPLATES", "1") == "0":
+        return
+    var n_mats = len(s[unsafe_offset=0].named_materials)
+    for tmpl in range(len(s[unsafe_offset=0].object_mesh_start)):
+        var mstart = Int(s[unsafe_offset=0].object_mesh_start[tmpl])
+        var mend = Int(s[unsafe_offset=0].object_mesh_end[tmpl])
+        if mend <= mstart:
+            continue
+        var has_uv = len(s[unsafe_offset=0].meshes[mstart].uvs) > 0
+        var has_nrm = len(s[unsafe_offset=0].meshes[mstart].normals) > 0
+        var ok = True
+        var n_verts = 0; var n_tris = 0
+        for mi in range(mstart, mend):
+            ref m = s[unsafe_offset=0].meshes[mi]
+            var nv = len(m.points) // 4
+            if (m.is_area_light or m.alpha_mask >= Int32(0) or m.alpha_const < Float32(1.0)
+                    or m.inside_medium >= Int32(0) or m.outside_medium >= Int32(0)
+                    or (len(m.uvs) >= nv * 2 and nv > 0) != has_uv or (len(m.normals) >= nv * 3 and nv > 0) != has_nrm):
+                ok = False
+                break
+            n_verts += nv; n_tris += len(m.face_idxs)
+        if not ok or n_tris == 0 or n_verts >= 0x7FFFFFFF:
+            continue
+        var merged = MeshAccum(s[unsafe_offset=0].meshes[mstart].mat_idx, Int32(-1), Int32(-1))
+        merged.is_object_template = True
+        merged.points.reserve(n_verts * 4); merged.vert_idxs.reserve(n_tris * 3); merged.face_idxs.reserve(n_tris)
+        merged.tri_mats.reserve(n_tris)
+        if has_uv: merged.uvs.reserve(n_verts * 2)
+        if has_nrm: merged.normals.reserve(n_verts * 3)
+        var vbase = 0
+        for mi in range(mstart, mend):
+            ref m = s[unsafe_offset=0].meshes[mi]
+            var nv = len(m.points) // 4
+            var nt = len(m.face_idxs)
+            var mat = m.mat_idx if m.mat_idx >= Int32(0) else default_mat_idx
+            # A Ptex material reads the triangle's own face id (0 without ids, as in pbrt).
+            var is_ptex = Int(mat) >= 0 and Int(mat) < n_mats and s[unsafe_offset=0].named_materials[Int(mat)].ptex_file.byte_length() > 0
+            var have_fids = len(m.ptex_faces) == nt
+            for k in range(nv * 4): merged.points.append(m.points[k])
+            for k in range(nt * 3): merged.vert_idxs.append(m.vert_idxs[k] + Int64(vbase))
+            for k in range(nt):
+                if is_ptex:
+                    merged.face_idxs.append(Int64(m.ptex_faces[k]) if have_fids else Int64(0))
+                else:
+                    merged.face_idxs.append(m.face_idxs[k])
+                merged.tri_mats.append(mat)
+            if has_uv:
+                for k in range(nv * 2): merged.uvs.append(m.uvs[k])
+            if has_nrm:
+                for k in range(nv * 3): merged.normals.append(m.normals[k])
+            vbase += nv
+            var empty = MeshAccum(m.mat_idx, Int32(-1), Int32(-1))
+            empty.is_object_template = True
+            s[unsafe_offset=0].meshes[mi] = empty^
+        s[unsafe_offset=0].meshes[mstart] = merged^
+
 def _plan_ptex_budget(files: List[String]):
     """Pick the largest per-face Ptex resolution cap whose packed size, summed over the scene's .ptx files, fits
     GONZALES_PTEX_BUDGET_MB (default 2048), and the base cap and pool size for demand paging.
@@ -2256,6 +2318,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         default_mat_idx = Int32(len(s[unsafe_offset=0].named_materials) - 1)
 
     var n_regular = len(s[unsafe_offset=0].named_materials)
+    _merge_template_meshes(s, default_mat_idx)
 
     var n_al_mesh = 0
     for i in range(len(s[unsafe_offset=0].meshes)):
@@ -2422,13 +2485,19 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         ref ma = s[unsafe_offset=0].meshes[i]
         var nv = len(ma.points) // 4
         var nt = len(ma.face_idxs)
-        var pts_c = unsafe_alloc[Float32](nv * 4)
+        var pts_c = unsafe_alloc[Float32](max(nv * 4, 1))
         for vi in range(nv * 4): pts_c[unsafe_offset=vi] = ma.points[vi]
-        var vis_c = unsafe_alloc[Int32](nt * 3)
+        var vis_c = unsafe_alloc[Int32](max(nt * 3, 1))
         for ti2 in range(nt * 3): vis_c[unsafe_offset=ti2] = Int32(ma.vert_idxs[ti2])
-        var fis_c = unsafe_alloc[Int32](nt)
+        var fis_c = unsafe_alloc[Int32](max(nt, 1))
         for ti2 in range(nt): fis_c[unsafe_offset=ti2] = Int32(ma.face_idxs[ti2])
-        if ma.mat_idx >= Int32(0) and Int(ma.mat_idx) < n_regular and s[unsafe_offset=0].named_materials[Int(ma.mat_idx)].ptex_file.byte_length() > 0:
+        meshes[unsafe_offset=i].materials = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
+        if len(ma.tri_mats) == nt and nt > 0:
+            # A merged template: face ids are final already, and each triangle has its own material.
+            var mats_c = unsafe_alloc[Int32](nt)
+            for ti2 in range(nt): mats_c[unsafe_offset=ti2] = ma.tri_mats[ti2]
+            meshes[unsafe_offset=i].materials = mats_c
+        elif ma.mat_idx >= Int32(0) and Int(ma.mat_idx) < n_regular and s[unsafe_offset=0].named_materials[Int(ma.mat_idx)].ptex_file.byte_length() > 0:
             # Ptex material: faceIndices holds each triangle's Ptex face id (0 without ids, as in pbrt).
             var have_fids = len(ma.ptex_faces) == nt
             for ti2 in range(nt): fis_c[unsafe_offset=ti2] = ma.ptex_faces[ti2] if have_fids else Int32(0)
@@ -2781,6 +2850,32 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         var t_order = unsafe_alloc[Int32](max(Int(t_tris), 1))
         var t_node_count = build_bvh2(t_bounds, t_tris, t_nodes, t_order)
         t_bounds.unsafe_free()
+        if _is_real_ptr(meshes[unsafe_offset=mstart].materials):
+            # A merged template: put its triangles in leaf order, so a leaf is a triangle range.
+            var nt_m = Int(t_tris)
+            var vis_m = meshes[unsafe_offset=mstart].vertexIndices
+            var fis_m = meshes[unsafe_offset=mstart].faceIndices
+            var mats_m = meshes[unsafe_offset=mstart].materials
+            var tmp = unsafe_alloc[Int32](max(nt_m * 3, 1))
+            for k in range(nt_m * 3): tmp[unsafe_offset=k] = vis_m[unsafe_offset=k]
+            for k in range(nt_m):
+                var orig = Int(t_local[unsafe_offset=Int(t_order[unsafe_offset=k])])
+                vis_m[unsafe_offset=k * 3] = tmp[unsafe_offset=orig * 3]
+                vis_m[unsafe_offset=k * 3 + 1] = tmp[unsafe_offset=orig * 3 + 1]
+                vis_m[unsafe_offset=k * 3 + 2] = tmp[unsafe_offset=orig * 3 + 2]
+            for k in range(nt_m): tmp[unsafe_offset=k] = fis_m[unsafe_offset=k]
+            for k in range(nt_m): fis_m[unsafe_offset=k] = tmp[unsafe_offset=Int(t_local[unsafe_offset=Int(t_order[unsafe_offset=k])])]
+            for k in range(nt_m): tmp[unsafe_offset=k] = mats_m[unsafe_offset=k]
+            for k in range(nt_m): mats_m[unsafe_offset=k] = tmp[unsafe_offset=Int(t_local[unsafe_offset=Int(t_order[unsafe_offset=k])])]
+            tmp.unsafe_free()
+            t_mesh.unsafe_free(); t_local.unsafe_free(); t_order.unsafe_free()
+            var one = unsafe_alloc[PrimId](1)
+            one[unsafe_offset=0] = PrimId(Int64(mstart), Int64(0), Int64(0), Int32(-1), Int8(7), Int8(0), Int8(0), Int8(0))
+            blas_nodes_arr[unsafe_offset=tmpl]   = t_nodes
+            blas_primids_arr[unsafe_offset=tmpl] = one
+            blas_node_counts[unsafe_offset=tmpl]   = t_node_count
+            blas_primid_counts[unsafe_offset=tmpl] = Int32(1)
+            continue
         var t_prim_ids = unsafe_alloc[PrimId](max(Int(t_tris), 1))
         for k in range(Int(t_tris)):
             var orig = Int(t_order[unsafe_offset=k])

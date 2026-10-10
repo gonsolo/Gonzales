@@ -85,6 +85,7 @@ typedef struct {
     int32_t alpha_h;
     float alpha_const;
     int32_t alpha_pad;
+    const int32_t* materials;   // per-triangle material of a merged template: unused here, layout only
 } VulkanInteropMesh;
 
 // Builds an interop-AND-ray-query-capable Vulkan device, a real BLAS/TLAS
