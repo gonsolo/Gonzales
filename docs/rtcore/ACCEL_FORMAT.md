@@ -68,3 +68,53 @@ Everything here is measured on Vulkan-built BLASes; nothing is documented by NVI
   of large BLASes reaches 23-33 bytes per triangle, so compaction already gets to roughly the functional size. A hand-made
   builder would save build time and driver slack, not much per-triangle memory. The TLAS (157 bytes per instance
   compacted) is where a custom builder could save more, but it has not been mapped.
+
+## Findings, fourth pass (the triangle block is decoded; vendor builder used only as an oracle)
+Tools: `exec/re_oracle.py` reads back what the hardware decodes for ANY bytes (trace a ray grid, solve the hit barycentrics
+for the three vertices; patch bits and watch), `exec/re_codec.py` encodes a one-triangle block.
+- A triangle block is 128 bytes at node+0x80 (0x400 for a one-leaf BLAS): v0 as three raw float32 (0x00..0x0b), a bit
+  stream from 0x0c, index/prim words at 0x68..0x77, the primitive word at 0x78 (0x80000000 + index of the block's first
+  triangle) and the DESCRIPTOR at 0x7c. The descriptor, not the node, says how the stream is parsed.
+- Descriptor (one triangle): bits 0..14 = three 5-bit fields, (width_x - 1), (width_y - 1), (width_z - 1); bits 24..31 =
+  55 - m; bits 20..23 = (triangles in the block) - 1. m is the shared mantissa length: the largest number of significant
+  mantissa bits over ALL vertices including v0 (the lower mantissa bits of a stored value come from v0, so v0 must be
+  counted). width_axis = m + e_axis, e_axis = bit length of the xor of the 9-bit sign+exponent fields (float bits 23..31)
+  of every stored vertex coordinate with v0's, at least 1.
+- Stream (one triangle): v1.x v1.y v1.z v2.x v2.y v2.z, each field LSB first: the top m bits of the mantissa (bits
+  22..23-m), then the low e_axis bits of sign+exponent; the high bits of sign+exponent are v0's. Verified on the hardware
+  for 39 of 40 random triangles (the 40th was probably missed by the probe rays). Negative coordinates just widen
+  the sign+exponent field by one bit.
+- Not yet decoded: the index words (0x68..0x77) for 2..5 triangles per block, the per-slot child codes, interior
+  nodes, constant-axis cases (desc bit 15 set with a zero width seen when one axis is constant, e.g. a planar cluster),
+  and a block stream longer than 92 bytes.
+
+### Fifth pass: several triangles in one block (hand-built blocks decode correctly on the hardware)
+- The first triangle of a block is implicitly vertices (0,1,2) = v0 and the first two stream vertices. The stream lists the
+  other vertices in first-use order (v0 = vertex 0). Vertex indices are 4 bits, so at most 16 vertices per block.
+- Triangle j (j >= 1) has a 14-bit record: 2 low bits, then idx0 | idx1<<4 | idx2<<8 (plain binary, LSB first). The records
+  are packed downward from bit 125 of the 16 bytes at 0x68 (bit 0 = byte 0x68 bit 0): record j occupies bits
+  126-14j .. 125-14(j-1). Descriptor bits 20..23 = triangles - 1. Setting descriptor bit 15 is needed for 3 or more
+  triangles (vendor sets it in most multi-triangle blocks; its exact meaning is open).
+- Primitive ids: the block's first triangle returns id = the word at 0x78 minus 0x80000000 (call it p). Triangle j >= 1
+  returns (p & ~3) + off_j, with off_j a 2-bit field located just below the lowest record: for N triangles let
+  s = 126 - 14(N-1); off_j sits at bits s-2j .. s-2j+1 (b1 highest). Checked for N = 3 and 5. The vendor emits five
+  distinct ids in a five-triangle block (e.g. 1,4,0,2,3) which this rule cannot express (offsets are 2 bits), so ids
+  are coded some other way for N = 5: open. A block of up to 4 triangles with consecutive ids 4k..4k+3 is expressible.
+- Hand-built blocks (re_codec.encode_block) placed in a vendor shell BLAS decode to the right vertices with the right ids.
+
+### Sixth pass: a whole BLAS built from scratch (exec/re_mkblas.py), exact on random soups
+`re_mkblas.Builder(tris, header_template).build()` writes a BLAS with no Vulkan structure except the constant first 0x380
+header bytes of a one-triangle BLAS. The hardware returns the right closest hit (checked against brute force on 2000
+random overlapping triangles and 8000 rays: 0 missed, 0 wrong t, no faults; `exec/re_validate.py`).
+- Node (128 bytes): byte 0 = 0x60 (has leaf groups) or 0x40 (only interior slots); bytes 1..3 exponents; 4..15 origin;
+  +0x10 w10 = byte offset from the node to its block array (leaf groups); +0x14 = (slot index in the parent) << 28
+  (root: 0xf0000000); +0x18 = minus the distance to the PARENT node in 128-byte units (root: 0); +0x1c w1c = distance in
+  128-byte units to the node's first interior child; 12 slots from +0x20.
+- Parent link: without the right +0x14/+0x18 the hardware loses hits (it resumes the parent's remaining slots through
+  the link, a stackless traversal). Zeroed words give garbage, wrong sibling words give faults. The second nibble of
+  the top byte of +0x14 (1 in some vendor nodes) is unknown; 0 works.
+- Slots: [lo_x hi_x lo_y hi_y lo_z hi_z 0xff code]; empty slot = 00 00 00 00 ff 00 00 00. Code 0x00 = interior child
+  (the k-th such slot, counting valid ones, is the node at node + 128*(w1c + k)); leaf groups: one slot per
+  triangle of a block with codes (j+1)<<3, the last slot of the group 0x01; the blocks of the groups are consecutive
+  from node + w10. In a group the 0x01 slot's box may be tight; the builder uses the union with the later groups.
+- Blocks: <= 4 triangles with ids 4k..4k+3 (p = 4k, offsets 1,2,3), descriptor bit 15 set (see fifth pass).

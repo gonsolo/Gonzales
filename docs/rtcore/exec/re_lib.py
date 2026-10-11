@@ -10,11 +10,11 @@ def build(tri, name='tmp'):
     subprocess.run(['./as_dump', name + '.t', name + '.b'], capture_output=True, env=ENV)
     return open(name + '.b', 'rb').read()
 
-def rays_file(path, rays):
+def rays_file(path, rays, tmax=100.0):
     """rays: list of (ox,oy,oz,dx,dy,dz); writes the 32-byte records, padded to a multiple of 64 rays."""
     flat = []
     for r in rays:
-        flat += [r[0], r[1], r[2], 0.0, r[3], r[4], r[5], 100.0]
+        flat += [r[0], r[1], r[2], 0.0, r[3], r[4], r[5], tmax]
     n = len(flat) // 8
     flat += flat[-8:] * (((n + 63) // 64) * 64 - n)
     open(path, 'wb').write(struct.pack('%df' % len(flat), *flat))
