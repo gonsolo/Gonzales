@@ -8,6 +8,7 @@ The snapshot is the ParsedScene_Mojo struct as it stands in memory, followed by 
 Scenes with media, distant or point lights, normal maps, alpha cut-outs or measured materials are not cached.
 """
 from std.ffi import external_call
+from std.os import getenv
 from std.memory.alloc import unsafe_alloc
 from std.sys.info import size_of, num_performance_cores
 from std.time import perf_counter_ns
@@ -48,6 +49,8 @@ def _put[T: AnyType](f: Int, p: Pointer[T, MutUntrackedOrigin], n: Int):
 
 def _get[T: AnyType](f: Int, n: Int) -> Pointer[T, MutUntrackedOrigin]:
     """n elements read into an allocation of at least one, which is zero when n is 0 (an empty BVH's root)."""
+    if n * size_of[T]() >= 100 * 1024 * 1024 and getenv("GONZALES_SCENE_CACHE_LOG") != "":
+        print("scene cache: array of", n * size_of[T]() // (1024 * 1024), "MB,", size_of[T](), "bytes an element")
     var p = unsafe_alloc[T](max(n, 1))
     var raw = p.unsafe_bitcast[UInt8]()
     if n > 0:

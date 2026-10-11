@@ -1,4 +1,5 @@
 from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
+from std.os import getenv
 from std.utils import StaticTuple
 from .gpu_tuning import MINCTA_TRAVERSE
 from .bvh import _node_box_hit, _node_hi, _node_lo, _node_oc, _bvh_has_nodes, _shadow_is_null_material, _traverse_instances, BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
@@ -452,7 +453,7 @@ def vulkaninterop_unpack_results_kernel(
                          Int8(0), Int8(0), Int8(0), Int8(0)),
                 hitT, u, v, Int8(1), Int8(0), Int8(0), Int8(0),
             )
-    elif hitFlag == Int32(2):
+    elif hitFlag == Int32(2) or hitFlag == Int32(4):
         # Curve hit, resolved directly by intersect_batch.comp itself (real
         # ray-vs-curve narrow-phase test + rayQueryGenerateIntersectionEXT
         # on a valid hit) -- no candidate buffer, no separate CUDA resolve
@@ -464,11 +465,12 @@ def vulkaninterop_unpack_results_kernel(
         var curve_idx = Int64(iresults[unsafe_offset=idx + 4])
         var piece_info = Int64(iresults[unsafe_offset=idx + 5])
         var mat_idx = Int64(iresults[unsafe_offset=idx + 7])
+        var curve_instance = iresults[unsafe_offset=idx + 3] if hitFlag == Int32(4) else Int32(-1)   # 4: the RT-core hybrid, curve of an instance
         var hitT = results[unsafe_offset=idx + 0]
         var h = results[unsafe_offset=idx + 1]
         var v = results[unsafe_offset=idx + 2]
         inter[unsafe_offset=ot] = Intersection(
-            PrimId(curve_idx, piece_info, mat_idx, Int32(-1), Int8(5), Int8(0), Int8(0), Int8(0)),
+            PrimId(curve_idx, piece_info, mat_idx, curve_instance, Int8(5), Int8(0), Int8(0), Int8(0)),
             hitT, h, v, Int8(1), Int8(0), Int8(0), Int8(0),
         )
     else:
@@ -580,7 +582,7 @@ def accumulate_cone_gpu(
 # no depth limit, resolves them -- see rtcore_alpha_fallback_gpu and the shadow resolve kernel.
 # Scratch layout (N = scratch bytes / 32 rays): compact results [0, 8N), compact rays [8N, 16N), list A [16N, 20N),
 # list B [20N, 24N), two counters [24N, 24N + 8).
-comptime RT_ALPHA_PASSES = 10
+comptime RT_ALPHA_PASSES = 32
 
 @always_inline
 def _alpha_rejects(
@@ -787,6 +789,8 @@ def rtcore_alpha_passes(
         var tmp = list_in
         list_in = list_out
         list_out = tmp
+    if cnt > 0 and getenv("GONZALES_RT_ALPHA_LOG") != "":
+        print("alpha leftover", cnt, "of", n_total, "after", p + 1, "passes")
     if cnt > 0:
         ctx.enqueue_function[rtcore_alpha_finish_kernel](
             results, list_in, Int64(cnt), grid_dim=ceildiv(cnt, block_size), block_dim=block_size,
@@ -839,6 +843,41 @@ def rtcore_spheres_from_rays_gpu(
                   Vec3f(rays[unsafe_offset=idx + 4], rays[unsafe_offset=idx + 5], rays[unsafe_offset=idx + 6]))
     test_spheres(spheres, Int(n_spheres_dp), ray, inter.unsafe_offset(tid))
 
+# The RT cores trace triangles only: curves are tested in software against the RT hit distance, and a nearer curve hit
+# replaces the raw result (flag 2, or 4 with the instance in word 3) so the unpack kernel treats it like any curve hit.
+def rtcore_curve_clip_gpu(
+    sd: SceneView,
+    rays: Pointer[Float32, MutUntrackedOrigin],
+    results: Pointer[Float32, MutUntrackedOrigin],
+    count_dp: Int64,
+):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= Int(count_dp):
+        return
+    var idx = tid * 8
+    var ir = results.unsafe_bitcast[Int32]()
+    var flag = ir[unsafe_offset=idx + 6]
+    if flag == Int32(3):
+        return
+    var tmax = rays[unsafe_offset=idx + 7]
+    if flag == Int32(1):
+        tmax = results[unsafe_offset=idx + 0]
+    var ray = Ray(Point3f(rays[unsafe_offset=idx], rays[unsafe_offset=idx + 1], rays[unsafe_offset=idx + 2]),
+                  Vec3f(rays[unsafe_offset=idx + 4], rays[unsafe_offset=idx + 5], rays[unsafe_offset=idx + 6]))
+    var tmp = Intersection(PrimId(-1, -1, 0, -1, 0, 0, 0, 0), tmax, Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+    traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, tmax, Pointer(to=tmp),
+                       sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances)
+    if tmp.hit == Int8(0) or tmp.primId.type != Int8(5):
+        return
+    results[unsafe_offset=idx + 0] = tmp.tHit
+    results[unsafe_offset=idx + 1] = tmp.u
+    results[unsafe_offset=idx + 2] = tmp.v
+    ir[unsafe_offset=idx + 3] = tmp.primId.instanceIdx
+    ir[unsafe_offset=idx + 4] = Int32(tmp.primId.id1)
+    ir[unsafe_offset=idx + 5] = Int32(tmp.primId.id2)
+    ir[unsafe_offset=idx + 7] = Int32(tmp.primId.materialIndex)
+    ir[unsafe_offset=idx + 6] = Int32(4) if tmp.primId.instanceIdx >= Int32(0) else Int32(2)
+
 # The RT-core replacement for "trace + unpack": traces the interop rays buffer on the RT cores into the interop result layout,
 # re-traces past rejected alpha hits (scenes with alpha only), decodes into Intersections, and lets the software BVH resolve
 # rays that were rejected too often. Spheres are the caller's business (they need the caller's ray layout).
@@ -866,6 +905,12 @@ def rtcore_trace_unpack_gpu(
     var alpha = Int(rtcore_alpha_enabled()) != 0
     if alpha:
         rtcore_alpha_passes(ctx, rays_buf, results_buf, scratch_buf, sd.meshes, n_meshes, instance_base_mesh_ptr, n_total)
+    if Int(sd.curveCount) > 0:
+        ctx.enqueue_function[rtcore_curve_clip_gpu](
+            sd, rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            Int64(n_total), grid_dim=grid, block_dim=block_size,
+        )
     ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
         results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
@@ -978,6 +1023,8 @@ def rtcore_closest_hit_gpu(
     var alpha = Int(rtcore_alpha_enabled()) != 0
     if alpha:
         rtcore_alpha_passes(ctx, rays_buf, results_buf, scratch_buf, sd.meshes, n_meshes, instance_base_mesh_ptr, m)
+    if Int(sd.curveCount) > 0:
+        ctx.enqueue_function[rtcore_curve_clip_gpu](sd, rays, results, Int64(m), grid_dim=gm, block_dim=block_size)
     var fuse_paths = paths if n_spheres == 0 else Pointer[PathState, MutUntrackedOrigin].unsafe_dangling()
     ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
         results, inter,
@@ -1227,6 +1274,8 @@ def resolve_shadow_compact_kernel(
     for k in range(Int(n_spheres_dp)):
         if ray_sphere_hit(sd.spheres[unsafe_offset=k].center, sd.spheres[unsafe_offset=k].radius, ray, Float32(1e-4), task.tmax) > Float32(0.0):
             return
+    if Int(sd.curveCount) > 0 and any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, 0, materials=sd.materials):
+        return                                                     # curves are not in the acceleration structure either
     paths[unsafe_offset=tid].estimate += task.contrib
 
 def rtcore_shadow_rays_compact_gpu(

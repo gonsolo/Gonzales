@@ -2817,6 +2817,22 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # their own (below); prim_bounds still has a slot an instance, used to build that BVH.
     var total_prims = total_prims_gpu + (Int32(1) if total_instances > Int32(0) else Int32(0))
 
+    # GONZALES_RT_PRUNE (instanced scenes, GPU path tracer on the RT cores): the software structures hold no triangles, only
+    # the curves, and instances of templates that have curves; the RT cores trace the triangles.
+    var prune_mask = 0
+    if total_instances > Int32(0):
+        try:
+            prune_mask = Int(getenv("GONZALES_RT_PRUNE", "0"))
+        except:
+            prune_mask = 0
+    if prune_mask == 1:
+        prune_mask = 7          # all; 8 + bits selects single steps (debugging)
+    elif prune_mask >= 8:
+        prune_mask -= 8
+    var rt_prune = (prune_mask & 1) != 0      # templates keep no triangle BVH
+    var prune_top = (prune_mask & 2) != 0     # the top level holds no triangles
+    var prune_inst = (prune_mask & 4) != 0    # the instance BVH covers only instances of templates with curves
+
     var prim_bounds = unsafe_alloc[Float32](Int(total_prims_gpu + total_instances) * 6 + 6)
     var tri_mesh    = unsafe_alloc[Int32](max(Int(total_tris), 1))
     var tri_local   = unsafe_alloc[Int32](max(Int(total_tris), 1))
@@ -3020,15 +3036,21 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             meshes[unsafe_offset=mstart].materials = n_mats
             meshes[unsafe_offset=mstart].quads = Int32(2)
             out_pts[unsafe_offset=mstart] = n_pts; out_vis[unsafe_offset=mstart] = no_vis; out_fis[unsafe_offset=mstart] = n_fis
-            var qr = q_nodes[unsafe_offset=0]
-            tmpl_bounds[unsafe_offset=tmpl * 6 + 0] = min(tmpl_bounds[unsafe_offset=tmpl * 6 + 0], qr.min.x)
-            tmpl_bounds[unsafe_offset=tmpl * 6 + 1] = min(tmpl_bounds[unsafe_offset=tmpl * 6 + 1], qr.min.y)
-            tmpl_bounds[unsafe_offset=tmpl * 6 + 2] = min(tmpl_bounds[unsafe_offset=tmpl * 6 + 2], qr.min.z)
-            tmpl_bounds[unsafe_offset=tmpl * 6 + 3] = max(tmpl_bounds[unsafe_offset=tmpl * 6 + 3], qr.max.x)
-            tmpl_bounds[unsafe_offset=tmpl * 6 + 4] = max(tmpl_bounds[unsafe_offset=tmpl * 6 + 4], qr.max.y)
-            tmpl_bounds[unsafe_offset=tmpl * 6 + 5] = max(tmpl_bounds[unsafe_offset=tmpl * 6 + 5], qr.max.z)
+            if rt_prune:
+                q_nodes.unsafe_free()
+                q_nodes = unsafe_alloc[BVH2Node](1)
+                q_nodes[unsafe_offset=0] = BVH2Node(Point3f(Float32(0)), Point3f(Float32(0)), Int32(0), Int32(0))
+                q_node_count = Int32(1)
+            else:
+                var qr = q_nodes[unsafe_offset=0]
+                tmpl_bounds[unsafe_offset=tmpl * 6 + 0] = min(tmpl_bounds[unsafe_offset=tmpl * 6 + 0], qr.min.x)
+                tmpl_bounds[unsafe_offset=tmpl * 6 + 1] = min(tmpl_bounds[unsafe_offset=tmpl * 6 + 1], qr.min.y)
+                tmpl_bounds[unsafe_offset=tmpl * 6 + 2] = min(tmpl_bounds[unsafe_offset=tmpl * 6 + 2], qr.min.z)
+                tmpl_bounds[unsafe_offset=tmpl * 6 + 3] = max(tmpl_bounds[unsafe_offset=tmpl * 6 + 3], qr.max.x)
+                tmpl_bounds[unsafe_offset=tmpl * 6 + 4] = max(tmpl_bounds[unsafe_offset=tmpl * 6 + 4], qr.max.y)
+                tmpl_bounds[unsafe_offset=tmpl * 6 + 5] = max(tmpl_bounds[unsafe_offset=tmpl * 6 + 5], qr.max.z)
             var q_rec = unsafe_alloc[PrimId](1)
-            q_rec[unsafe_offset=0] = PrimId(Int64(mstart), Int64(curve_blas), Int64(0), Int32(-1), Int8(7), Int8(0), Int8(0), Int8(0))
+            q_rec[unsafe_offset=0] = PrimId(Int64(-1 if rt_prune else mstart), Int64(curve_blas), Int64(0), Int32(-1), Int8(7), Int8(0), Int8(0), Int8(0))
             blas_nodes_arr[unsafe_offset=tmpl]   = q_nodes
             blas_primids_arr[unsafe_offset=tmpl] = q_rec
             blas_node_counts[unsafe_offset=tmpl]   = q_node_count
@@ -3062,10 +3084,10 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 t_mesh[unsafe_offset=Int(t_flat)]  = Int32(mi)
                 t_local[unsafe_offset=Int(t_flat)] = Int32(ti)
                 t_flat += 1
-        var t_max_nodes = max(Int(t_tris) * 2 + 4, 1)
+        var t_max_nodes = 4 if rt_prune else max(Int(t_tris) * 2 + 4, 1)
         var t_nodes = unsafe_alloc[BVH2Node](t_max_nodes)
         var t_order = unsafe_alloc[Int32](max(Int(t_tris), 1))
-        var t_node_count = build_bvh2(t_bounds, t_tris, t_nodes, t_order, min_leaf=4)   # halves the nodes; measured no slower
+        var t_node_count = Int32(0) if rt_prune else build_bvh2(t_bounds, t_tris, t_nodes, t_order, min_leaf=4)   # halves the nodes; measured no slower
         t_bounds.unsafe_free()
         if t_node_count > Int32(0):
             var tr = t_nodes[unsafe_offset=0]
@@ -3132,14 +3154,36 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         print("Warning:", curves_dropped, "curve(s) dropped: they are in object templates whose meshes could not be merged.")
 
     var instances_c = unsafe_alloc[Instance](max(Int(total_instances), 1))
-    for k in range(Int(total_instances)):
+    # Pruned: the instances of templates with curves first, so the instance BVH covers a prefix of the array.
+    var inst_src = unsafe_alloc[Int32](max(Int(total_instances), 1))
+    var n_ci = Int(total_instances)
+    if prune_inst:
+        n_ci = 0
+        for k in range(Int(total_instances)):
+            var tk = Int(s[unsafe_offset=0].instance_template_idx[k])
+            if blas_primids_arr[unsafe_offset=tk][unsafe_offset=0].id2 > Int64(0):
+                inst_src[unsafe_offset=n_ci] = Int32(k)
+                n_ci += 1
+        var w_other = n_ci
+        for k in range(Int(total_instances)):
+            var tk = Int(s[unsafe_offset=0].instance_template_idx[k])
+            if blas_primids_arr[unsafe_offset=tk][unsafe_offset=0].id2 <= Int64(0):
+                inst_src[unsafe_offset=w_other] = Int32(k)
+                w_other += 1
+    else:
+        for k in range(Int(total_instances)):
+            inst_src[unsafe_offset=k] = Int32(k)
+    for kk in range(Int(total_instances)):
+        var k = Int(inst_src[unsafe_offset=kk])
         var tmpl_idx = Int(s[unsafe_offset=0].instance_template_idx[k])
         var o2w = SIMD[DType.float32, 16](0.0)
         var w2o = SIMD[DType.float32, 16](0.0)
         for ci in range(16):
             o2w[ci] = s[unsafe_offset=0].instance_obj_to_world[k*16+ci]
             w2o[ci] = s[unsafe_offset=0].instance_world_to_obj[k*16+ci]
-        instances_c[unsafe_offset=k] = Instance(w2o, Int32(tmpl_idx))
+        instances_c[unsafe_offset=kk] = Instance(w2o, Int32(tmpl_idx))
+        if kk >= n_ci:
+            continue
 
         # World-space AABB for the TLAS leaf: transform the BLAS root's 8 corners.
         var root = BVH2Node(
@@ -3157,7 +3201,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             var wz = o2w[2]*cx + o2w[6]*cy + o2w[10]*cz + o2w[14]
             wxmin = min(wxmin, wx); wymin = min(wymin, wy); wzmin = min(wzmin, wz)
             wxmax = max(wxmax, wx); wymax = max(wymax, wy); wzmax = max(wzmax, wz)
-        var ib = (Int(total_tris) + Int(total_curve_groups) + k) * 6
+        var ib = (Int(total_tris) + Int(total_curve_groups) + kk) * 6
         prim_bounds[unsafe_offset=ib+0] = wxmin; prim_bounds[unsafe_offset=ib+1] = wymin; prim_bounds[unsafe_offset=ib+2] = wzmin
         prim_bounds[unsafe_offset=ib+3] = wxmax; prim_bounds[unsafe_offset=ib+4] = wymax; prim_bounds[unsafe_offset=ib+5] = wzmax
 
@@ -3170,16 +3214,17 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     blas_primids_arr[unsafe_offset=n_templates] = unsafe_alloc[PrimId](1)
     blas_node_counts[unsafe_offset=n_templates] = Int32(0)
     blas_primid_counts[unsafe_offset=n_templates] = Int32(0)
-    if total_instances > Int32(0):
+    inst_src.unsafe_free()
+    if n_ci > 0:
         blas_nodes_arr[unsafe_offset=n_templates].unsafe_free(); blas_primids_arr[unsafe_offset=n_templates].unsafe_free()
         var inst_slot = Int(total_prims_gpu) * 6
-        var inst_nodes = unsafe_alloc[BVH2Node](Int(total_instances) * 2 + 4)
-        var inst_order = unsafe_alloc[Int32](Int(total_instances))
+        var inst_nodes = unsafe_alloc[BVH2Node](n_ci * 2 + 4)
+        var inst_order = unsafe_alloc[Int32](n_ci)
         # Four instances a leaf: a node costs more than half an instance, and an instance is cheap to reject.
-        var inst_node_count = build_bvh2(prim_bounds.unsafe_offset(inst_slot), total_instances, inst_nodes, inst_order, min_leaf=8, max_leaf=8)
-        var inst_tmp = unsafe_alloc[Instance](Int(total_instances))
-        for k in range(Int(total_instances)): inst_tmp[unsafe_offset=k] = instances_c[unsafe_offset=Int(inst_order[unsafe_offset=k])]
-        for k in range(Int(total_instances)): instances_c[unsafe_offset=k] = inst_tmp[unsafe_offset=k]
+        var inst_node_count = build_bvh2(prim_bounds.unsafe_offset(inst_slot), Int32(n_ci), inst_nodes, inst_order, min_leaf=8, max_leaf=8)
+        var inst_tmp = unsafe_alloc[Instance](n_ci)
+        for k in range(n_ci): inst_tmp[unsafe_offset=k] = instances_c[unsafe_offset=Int(inst_order[unsafe_offset=k])]
+        for k in range(n_ci): instances_c[unsafe_offset=k] = inst_tmp[unsafe_offset=k]
         inst_tmp.unsafe_free(); inst_order.unsafe_free()
         var iroot = inst_nodes[unsafe_offset=0]
         prim_bounds[unsafe_offset=inst_slot + 0] = iroot.min.x; prim_bounds[unsafe_offset=inst_slot + 1] = iroot.min.y
@@ -3209,10 +3254,16 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # comparison was still letting a dangling dereference through — not worth
     # chasing further when structurally preventing GPU from ever seeing one
     # of these leaves is the clean fix anyway).
-    var max_bvh_nodes_gpu = Int(total_prims_gpu) * 2 + 4
+    # Pruned: no separate one; the single top level (below) is over the curve groups and the instance leaf.
+    var n_gpu = Int32(0) if prune_top else total_prims_gpu
+    var tl_first = Int(total_tris) if prune_top else 0
+    var tl_prims = total_prims
+    if prune_top:
+        tl_prims = total_curve_groups + (Int32(1) if n_ci > 0 else Int32(0))
+    var max_bvh_nodes_gpu = Int(n_gpu) * 2 + 4
     var bvh_nodes_gpu = unsafe_alloc[BVH2Node](max_bvh_nodes_gpu)
-    var bvh_order_gpu = unsafe_alloc[Int32](Int(total_prims_gpu))
-    var node_count_gpu = build_bvh2(prim_bounds, total_prims_gpu, bvh_nodes_gpu, bvh_order_gpu)
+    var bvh_order_gpu = unsafe_alloc[Int32](max(Int(n_gpu), 1))
+    var node_count_gpu = build_bvh2(prim_bounds, n_gpu, bvh_nodes_gpu, bvh_order_gpu)
 
     # ---- CPU-inclusive TLAS: tris + curves + instances ----
     # Without instances this covers exactly the primitives above, in the same
@@ -3224,9 +3275,9 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     var bvh_order = bvh_order_gpu
     var node_count = node_count_gpu
     if not shared_tlas:
-        bvh_nodes = unsafe_alloc[BVH2Node](Int(total_prims) * 2 + 4)
-        bvh_order = unsafe_alloc[Int32](Int(total_prims))
-        node_count = build_bvh2(prim_bounds, total_prims, bvh_nodes, bvh_order)
+        bvh_nodes = unsafe_alloc[BVH2Node](Int(tl_prims) * 2 + 4)
+        bvh_order = unsafe_alloc[Int32](max(Int(tl_prims), 1))
+        node_count = build_bvh2(prim_bounds.unsafe_offset(tl_first * 6), tl_prims, bvh_nodes, bvh_order)
     # Nothing to build (the scene's only shapes are analytic spheres, say): the all-zero root is what the
     # traversals recognise as an empty BVH (bvh._bvh_has_nodes). build_bvh2 writes nothing in that case.
     var no_node = BVH2Node(Point3f(Float32(0)), Point3f(Float32(0)), Int32(0), Int32(0))
@@ -3237,10 +3288,13 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
 
     prim_bounds.unsafe_free()
 
-    var prim_ids_gpu = unsafe_alloc[PrimId](Int(total_prims_gpu))
+    # Pruned triangles leave the host passes (_build_mesh_light_info) no record of their mesh's material: one per mesh follows
+    # the primitives, referenced by no BVH leaf.
+    var n_extra = n_meshes if (rt_prune or prune_top) else 0
+    var prim_ids_gpu = unsafe_alloc[PrimId](max(Int(n_gpu), 1))
     var prim_ids = prim_ids_gpu
     if not shared_tlas:
-        prim_ids = unsafe_alloc[PrimId](Int(total_prims))
+        prim_ids = unsafe_alloc[PrimId](max(Int(tl_prims) + n_extra, 1))
 
     var mesh_al_idx = unsafe_alloc[Int32](max(n_meshes, 1))
     var running_al = Int32(0)
@@ -3254,7 +3308,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # GPU-safe PrimId assignment — tris + curves only (no instance branch;
     # `orig` here is always < total_tris + total_curve_groups). Same
     # tri/curve logic as the CPU-inclusive loop below.
-    for k in range(Int(total_prims_gpu)):
+    for k in range(Int(n_gpu)):
         var orig = Int(bvh_order_gpu[unsafe_offset=k])
         if orig < Int(total_tris):
             var mi = Int(tri_mesh[unsafe_offset=orig])
@@ -3282,8 +3336,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         prim_ids_gpu[unsafe_offset=k].instanceIdx = Int32(-1)
         prim_ids_gpu[unsafe_offset=k]._pad0 = Int8(0); prim_ids_gpu[unsafe_offset=k]._pad1 = Int8(0); prim_ids_gpu[unsafe_offset=k]._pad2 = Int8(0)
 
-    for k in range(0 if shared_tlas else Int(total_prims)):   # shared: filled above
-        var orig = Int(bvh_order[unsafe_offset=k])
+    for k in range(0 if shared_tlas else Int(tl_prims)):   # shared: filled above
+        var orig = Int(bvh_order[unsafe_offset=k]) + tl_first
         if orig < Int(total_tris):
             var mi   = Int(tri_mesh[unsafe_offset=orig])
             var ti   = Int(tri_local[unsafe_offset=orig])
@@ -3320,6 +3374,23 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         prim_ids[unsafe_offset=k]._pad0 = Int8(0); prim_ids[unsafe_offset=k]._pad1 = Int8(0)
         prim_ids[unsafe_offset=k]._pad2 = Int8(0)
 
+    for mi in range(n_extra):
+        var k = Int(tl_prims) + mi
+        var merged_mesh = _is_real_ptr(meshes[unsafe_offset=mi].materials)
+        prim_ids[unsafe_offset=k].instanceIdx = Int32(-1)
+        prim_ids[unsafe_offset=k]._pad0 = Int8(0); prim_ids[unsafe_offset=k]._pad1 = Int8(0); prim_ids[unsafe_offset=k]._pad2 = Int8(0)
+        if s[unsafe_offset=0].meshes[mi].is_area_light:
+            var al_idx = Int(mesh_al_idx[unsafe_offset=mi])
+            prim_ids[unsafe_offset=k].type = Int8(3)
+            prim_ids[unsafe_offset=k].id1 = Int64(al_idx)
+            prim_ids[unsafe_offset=k].id2 = Int64(mi) << 32
+            prim_ids[unsafe_offset=k].materialIndex = Int64(al_mat_base + al_idx)
+        else:
+            var mat_idx = Int(s[unsafe_offset=0].meshes[mi].mat_idx)
+            prim_ids[unsafe_offset=k].type = Int8(0)
+            prim_ids[unsafe_offset=k].id1 = Int64(-1 if merged_mesh else mi)
+            prim_ids[unsafe_offset=k].id2 = Int64(0)
+            prim_ids[unsafe_offset=k].materialIndex = Int64(mat_idx) if mat_idx >= 0 else Int64(default_mat_idx)
     if not shared_tlas:
         bvh_order.unsafe_free()
     tri_mesh.unsafe_free(); tri_local.unsafe_free(); bvh_order_gpu.unsafe_free(); mesh_al_idx.unsafe_free()
@@ -3389,12 +3460,12 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     psc[unsafe_offset=0].bvh_nodes        = bvh_nodes
     psc[unsafe_offset=0].prim_ids         = prim_ids
     psc[unsafe_offset=0].bvh_node_count   = node_count
-    psc[unsafe_offset=0].prim_count       = total_prims
+    psc[unsafe_offset=0].prim_count       = tl_prims + Int32(n_extra)
     psc[unsafe_offset=0].bvh_nodes_cpu      = bvh_nodes
     psc[unsafe_offset=0].prim_ids_cpu       = prim_ids
     psc[unsafe_offset=0].bvh_node_count_cpu = node_count
     psc[unsafe_offset=0].bvh4               = BVH4.none()
-    psc[unsafe_offset=0].prim_count_cpu     = total_prims
+    psc[unsafe_offset=0].prim_count_cpu     = tl_prims + Int32(n_extra)
     psc[unsafe_offset=0].blas_nodes_arr   = blas_nodes_arr
     psc[unsafe_offset=0].blas_primids_arr = blas_primids_arr
     psc[unsafe_offset=0].blas_node_counts   = blas_node_counts
