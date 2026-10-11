@@ -89,7 +89,8 @@ struct Viewer {
     bool mousePressed = false;
     bool firstMouse = true;
     float yaw = -90.0f, pitch = 0.0f;
-    float moveSpeed = 0.5f;
+    float moveSpeed = 50.0f;      // units a second
+    double lastMoveTime = 0.0;
     float sensitivity = 0.15f;
 };
 
@@ -210,56 +211,37 @@ static bool transitionImageLayout(VkDevice device, VkCommandPool pool,
 
 static void keyCallback(GLFWwindow* window, int key, int /*scancode*/,
                         int action, int /*mods*/) {
-    auto* v = static_cast<Viewer*>(glfwGetWindowUserPointer(window));
-    if (action == GLFW_PRESS || action == GLFW_REPEAT) {
-        float speed = v->moveSpeed;
-        float dx = v->camera.dirX, dy = v->camera.dirY, dz = v->camera.dirZ;
-        float ux = v->camera.upX, uy = v->camera.upY, uz = v->camera.upZ;
-        float rx = dy * uz - dz * uy;
-        float ry = dz * ux - dx * uz;
-        float rz = dx * uy - dy * ux;
+    if (action == GLFW_PRESS && key == GLFW_KEY_ESCAPE)
+        glfwSetWindowShouldClose(window, GLFW_TRUE);
+}
 
-        bool moved = true;
-        switch (key) {
-            case GLFW_KEY_W:
-                v->camera.posX += dx * speed;
-                v->camera.posY += dy * speed;
-                v->camera.posZ += dz * speed;
-                break;
-            case GLFW_KEY_S:
-                v->camera.posX -= dx * speed;
-                v->camera.posY -= dy * speed;
-                v->camera.posZ -= dz * speed;
-                break;
-            case GLFW_KEY_A:
-                v->camera.posX -= rx * speed;
-                v->camera.posY -= ry * speed;
-                v->camera.posZ -= rz * speed;
-                break;
-            case GLFW_KEY_D:
-                v->camera.posX += rx * speed;
-                v->camera.posY += ry * speed;
-                v->camera.posZ += rz * speed;
-                break;
-            case GLFW_KEY_Q:
-                v->camera.posX += ux * speed;
-                v->camera.posY += uy * speed;
-                v->camera.posZ += uz * speed;
-                break;
-            case GLFW_KEY_E:
-                v->camera.posX -= ux * speed;
-                v->camera.posY -= uy * speed;
-                v->camera.posZ -= uz * speed;
-                break;
-            case GLFW_KEY_ESCAPE:
-                glfwSetWindowShouldClose(window, GLFW_TRUE);
-                moved = false;
-                break;
-            default:
-                moved = false;
-                break;
-        }
-        if (moved) v->camera.cameraChanged = 1;
+// Held keys move the camera by moveSpeed units a second (Shift: ten times that), polled each frame.
+static void moveCamera(Viewer* v) {
+    double now = glfwGetTime();
+    double dt = now - v->lastMoveTime;
+    v->lastMoveTime = now;
+    if (dt > 0.1) dt = 0.1;
+    GLFWwindow* w = v->window;
+    float step = v->moveSpeed * float(dt);
+    if (glfwGetKey(w, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || glfwGetKey(w, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS)
+        step *= 10.0f;
+    float dx = v->camera.dirX, dy = v->camera.dirY, dz = v->camera.dirZ;
+    float ux = v->camera.upX, uy = v->camera.upY, uz = v->camera.upZ;
+    float rx = dy * uz - dz * uy;
+    float ry = dz * ux - dx * uz;
+    float rz = dx * uy - dy * ux;
+    float mx = 0, my = 0, mz = 0;
+    if (glfwGetKey(w, GLFW_KEY_W) == GLFW_PRESS) { mx += dx; my += dy; mz += dz; }
+    if (glfwGetKey(w, GLFW_KEY_S) == GLFW_PRESS) { mx -= dx; my -= dy; mz -= dz; }
+    if (glfwGetKey(w, GLFW_KEY_D) == GLFW_PRESS) { mx += rx; my += ry; mz += rz; }
+    if (glfwGetKey(w, GLFW_KEY_A) == GLFW_PRESS) { mx -= rx; my -= ry; mz -= rz; }
+    if (glfwGetKey(w, GLFW_KEY_Q) == GLFW_PRESS || glfwGetKey(w, GLFW_KEY_SPACE) == GLFW_PRESS) { mx += ux; my += uy; mz += uz; }
+    if (glfwGetKey(w, GLFW_KEY_E) == GLFW_PRESS || glfwGetKey(w, GLFW_KEY_C) == GLFW_PRESS) { mx -= ux; my -= uy; mz -= uz; }
+    if (mx != 0 || my != 0 || mz != 0) {
+        v->camera.posX += mx * step;
+        v->camera.posY += my * step;
+        v->camera.posZ += mz * step;
+        v->camera.cameraChanged = 1;
     }
 }
 
@@ -319,7 +301,7 @@ static void scrollCallback(GLFWwindow* window, double /*xoffset*/,
     auto* v = static_cast<Viewer*>(glfwGetWindowUserPointer(window));
     v->moveSpeed *= (yoffset > 0) ? 1.2f : 0.8f;
     if (v->moveSpeed < 0.001f) v->moveSpeed = 0.001f;
-    if (v->moveSpeed > 100.0f) v->moveSpeed = 100.0f;
+    if (v->moveSpeed > 100000.0f) v->moveSpeed = 100000.0f;
 }
 
 // ---------------------------------------------------------------------------
@@ -1090,8 +1072,9 @@ int viewer_should_close(ViewerHandle viewer) {
 }
 
 void viewer_poll_events(ViewerHandle viewer) {
-    (void)viewer;
     glfwPollEvents();
+    auto* v = static_cast<Viewer*>(viewer);
+    if (v) moveCamera(v);
 }
 
 void viewer_get_camera_state(ViewerHandle viewer, CameraState *out) {
