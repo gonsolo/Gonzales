@@ -164,6 +164,15 @@ def vulkaninterop_rt_debug_read_as(
         VulkanInteropRtSceneHandle, Int32, Int32, Pointer[UInt8, MutUntrackedOrigin], Int64,
         Pointer[UInt64, MutUntrackedOrigin]](scene, kind, index, dst, capacity, out_address)
 
+# --rt-hardware on an instanced scene: ordinary meshes become merged chunks (one BLAS + one TLAS instance each); call before create_scene.
+def vulkaninterop_rt_set_merge_ordinary(on: Int32):
+    external_call["vulkaninterop_rt_set_merge_ordinary", NoneType, Int32](on)
+
+# Chunk of every ordinary mesh (-1 for template meshes); returns the chunk count.
+def vulkaninterop_rt_chunk_info(scene: VulkanInteropRtSceneHandle, chunk_of_mesh: Pointer[Int64, MutUntrackedOrigin], n: Int64) -> Int64:
+    return external_call["vulkaninterop_rt_chunk_info", Int64,
+        VulkanInteropRtSceneHandle, Pointer[Int64, MutUntrackedOrigin], Int64](scene, chunk_of_mesh, n)
+
 def vulkaninterop_rt_destroy_scene(scene: VulkanInteropRtSceneHandle):
     external_call["vulkaninterop_rt_destroy_scene", NoneType, VulkanInteropRtSceneHandle](scene)
 

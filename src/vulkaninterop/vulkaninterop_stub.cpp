@@ -37,6 +37,8 @@ void* vulkaninterop_rt_create_scene(
 void* vulkaninterop_rt_get_rays_ptr(void*) { return nullptr; }
 void* vulkaninterop_rt_get_results_ptr(void*) { return nullptr; }
 int   vulkaninterop_rt_trace(void*, int32_t, void*) { return 0; }
+void vulkaninterop_rt_set_merge_ordinary(int32_t) {}
+int64_t vulkaninterop_rt_chunk_info(void*, int64_t*, int64_t) { return 0; }
 int64_t vulkaninterop_rt_debug_read_as(void*, int, int, uint8_t*, int64_t, uint64_t*) { return 0; }
 void  vulkaninterop_rt_destroy_scene(void*) {}
 

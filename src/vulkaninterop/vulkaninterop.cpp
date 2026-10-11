@@ -751,6 +751,10 @@ struct InteropRtScene {
     std::vector<Buffer> blasIndexBufs;
     std::vector<VkAccelerationStructureKHR> blas;
     std::vector<Buffer> blasBufs;
+    // --rt-hardware: ordinary meshes merged into chunk BLASes (blas[c] = chunk c); chunkOfMesh[i] = -1 for template meshes.
+    std::vector<int64_t> chunkOfMesh;
+    int64_t chunkCount = 0;
+    std::vector<Buffer> templateVertexBufs, templateIndexBufs;   // --rt-hardware: one pair per template, freed after its BLAS is built
 
     // Sized template_count -- one multi-geometry BLAS per ObjectBegin/
     // ObjectEnd template, built from that template's mesh range's buffers
@@ -1270,6 +1274,14 @@ extern "C" int vulkaninterop_round_trip(void* handle, void* cuda_stream) {
 // same structure on the RT cores from CUDA. kind 0 = the BLAS of ordinary mesh `index`, 1 = the TLAS, 2 = the BLAS of
 // template `index`. capacity 0 / out null only queries the size. Returns the size in bytes (0 on failure);
 // *out_address receives the structure's device address.
+// Fills chunk_of_mesh[0..n) (-1 for template meshes) and returns the number of chunk BLASes (0 when ordinary meshes are not merged).
+extern "C" int64_t vulkaninterop_rt_chunk_info(void* handle, int64_t* chunk_of_mesh, int64_t n) {
+    if (!handle) return 0;
+    InteropRtScene* sc = (InteropRtScene*)handle;
+    for (int64_t i = 0; i < n; i++) chunk_of_mesh[i] = (size_t)i < sc->chunkOfMesh.size() ? sc->chunkOfMesh[(size_t)i] : -1;
+    return sc->chunkCount;
+}
+
 extern "C" int64_t vulkaninterop_rt_debug_read_as(void* handle, int kind, int index, uint8_t* out, int64_t capacity,
                                                   uint64_t* out_address) {
     if (!handle) return 0;
@@ -1353,6 +1365,10 @@ extern "C" void vulkaninterop_rt_destroy_scene(void* handle) {
         destroyBuffer(sc->device, &sc->blasVertexBufs[i]);
         destroyBuffer(sc->device, &sc->blasIndexBufs[i]);
     }
+    for (size_t t = 0; t < sc->templateVertexBufs.size(); t++) {
+        destroyBuffer(sc->device, &sc->templateVertexBufs[t]);
+        destroyBuffer(sc->device, &sc->templateIndexBufs[t]);
+    }
     for (size_t t = 0; t < sc->templateBlas.size(); t++) {
         if (sc->templateBlas[t]) sc->rtFns.destroy(sc->device, sc->templateBlas[t], nullptr);
         destroyBuffer(sc->device, &sc->templateBlasBufs[t]);
@@ -1376,6 +1392,11 @@ extern "C" void vulkaninterop_rt_destroy_scene(void* handle) {
 
     delete sc;
 }
+
+static int g_mergeOrdinary = 0;
+
+// --rt-hardware on an instanced scene: build ordinary meshes as merged chunks (one geometry, one BLAS, one TLAS instance each).
+extern "C" void vulkaninterop_rt_set_merge_ordinary(int32_t on) { g_mergeOrdinary = on; }
 
 extern "C" void* vulkaninterop_rt_create_scene(
     const VulkanInteropMesh* meshes,
@@ -1407,6 +1428,10 @@ extern "C" void* vulkaninterop_rt_create_scene(
         return nullptr;
     }
 
+    const char* asLog = getenv("GONZALES_RT_AS_LOG");
+    if (asLog && asLog[0] != '0')
+        fprintf(stderr, "rt-scene %lld meshes, %lld templates, %lld instances\n", (long long)mesh_count, (long long)template_count, (long long)instance_count);
+    const bool merge = g_mergeOrdinary && n_curve_leaves <= 0;
     InteropRtScene* sc = new InteropRtScene();
     sc->maxRays = max_rays;
     sc->blas.resize((size_t)mesh_count, VK_NULL_HANDLE);
@@ -1415,6 +1440,8 @@ extern "C" void* vulkaninterop_rt_create_scene(
     sc->blasIndexBufs.resize((size_t)mesh_count);
     sc->templateBlas.resize((size_t)template_count, VK_NULL_HANDLE);
     sc->templateBlasBufs.resize((size_t)template_count);
+    sc->templateVertexBufs.resize((size_t)template_count);
+    sc->templateIndexBufs.resize((size_t)template_count);
 
     if (!createHeadlessInteropRtDevice(sc)) {
         vulkaninterop_rt_destroy_scene(sc);
@@ -1446,6 +1473,9 @@ extern "C" void* vulkaninterop_rt_create_scene(
             return nullptr;
         }
         meshTriCounts[i] = (uint32_t)(nIdx / 3);
+        if (merge) continue;
+        if (asLog && asLog[0] != '0' && i % 5000 == 0)
+            fprintf(stderr, "rt-scene uploaded %lld meshes\n", (long long)i);
 
         VkDeviceSize vbBytes = (VkDeviceSize)nVerts * 4 * sizeof(float);
         if (!createBuffer(sc->device, sc->physicalDevice, vbBytes,
@@ -1491,10 +1521,68 @@ extern "C" void* vulkaninterop_rt_create_scene(
         meshGeoms[i] = geom;
     }
 
+    // ---- --rt-hardware: ordinary meshes merged into chunks of up to kChunkTris triangles, one geometry and one
+    //      BLAS each; the decode tables on the Mojo side map the running triangle number back to (mesh, triangle) ----
+    std::vector<VkDeviceAddress> blasAddresses((size_t)mesh_count, 0);
+    if (merge) {
+        const int64_t kChunkTris = 8000000;
+        sc->chunkOfMesh.assign((size_t)mesh_count, -1);
+        int64_t first = 0;
+        while (first < mesh_count) {
+            while (first < mesh_count && isTemplateMesh[(size_t)first]) first++;
+            if (first >= mesh_count) break;
+            int64_t c = sc->chunkCount++;
+            std::vector<float> vb;
+            std::vector<uint32_t> ib;
+            int64_t tris = 0, i = first;
+            for (; i < mesh_count; i++) {
+                if (isTemplateMesh[(size_t)i]) continue;
+                if (tris > 0 && tris + (int64_t)meshTriCounts[i] > kChunkTris) break;
+                uint32_t base = (uint32_t)(vb.size() / 4);
+                vb.insert(vb.end(), meshes[i].points, meshes[i].points + point_counts[i] * 4);
+                for (int64_t j = 0; j < vertex_index_counts[i]; j++) ib.push_back(base + (uint32_t)meshes[i].vertexIndices[j]);
+                tris += meshTriCounts[i];
+                sc->chunkOfMesh[(size_t)i] = c;
+            }
+            first = i;
+            VkDeviceSize vbBytes = (VkDeviceSize)vb.size() * sizeof(float), ibBytes = (VkDeviceSize)ib.size() * sizeof(uint32_t);
+            if (!createBuffer(sc->device, sc->physicalDevice, vbBytes,
+                               VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, true, &sc->blasVertexBufs[(size_t)c]) ||
+                !uploadToBuffer(sc->device, sc->blasVertexBufs[(size_t)c], vb.data(), vbBytes) ||
+                !createBuffer(sc->device, sc->physicalDevice, ibBytes,
+                               VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, true, &sc->blasIndexBufs[(size_t)c]) ||
+                !uploadToBuffer(sc->device, sc->blasIndexBufs[(size_t)c], ib.data(), ibBytes)) {
+                vulkaninterop_rt_destroy_scene(sc);
+                return nullptr;
+            }
+            VkAccelerationStructureGeometryKHR geom{};
+            geom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+            geom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+            geom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+            geom.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+            geom.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+            geom.geometry.triangles.vertexData.deviceAddress = sc->blasVertexBufs[(size_t)c].address;
+            geom.geometry.triangles.vertexStride = sizeof(float) * 4;
+            geom.geometry.triangles.maxVertex = (uint32_t)(vb.size() / 4 - 1);
+            geom.geometry.triangles.indexType = VK_INDEX_TYPE_UINT32;
+            geom.geometry.triangles.indexData.deviceAddress = sc->blasIndexBufs[(size_t)c].address;
+            if (!buildAccelerationStructure(sc->device, sc->physicalDevice, sc->cmdPool, sc->queue, sc->rtFns,
+                                             VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, geom, (uint32_t)tris,
+                                             &sc->blas[(size_t)c], &sc->blasBufs[(size_t)c], &blasAddresses[(size_t)c])) {
+                vulkaninterop_rt_destroy_scene(sc);
+                return nullptr;
+            }
+            destroyBuffer(sc->device, &sc->blasVertexBufs[(size_t)c]);
+            destroyBuffer(sc->device, &sc->blasIndexBufs[(size_t)c]);
+            if (asLog && asLog[0] != '0') fprintf(stderr, "rt-scene chunk %lld: %lld triangles\n", (long long)c, (long long)tris);
+        }
+    }
+
     // ---- Ordinary meshes: one single-geometry BLAS each (identical to
     //      pre-instancing behavior) ----
-    std::vector<VkDeviceAddress> blasAddresses((size_t)mesh_count, 0);
-    for (int64_t i = 0; i < mesh_count; i++) {
+    for (int64_t i = 0; i < mesh_count && !merge; i++) {
         if (isTemplateMesh[(size_t)i]) continue;
         if (!buildAccelerationStructure(sc->device, sc->physicalDevice, sc->cmdPool,
                                          sc->queue, sc->rtFns,
@@ -1514,6 +1602,45 @@ extern "C" void* vulkaninterop_rt_create_scene(
     for (int64_t t = 0; t < template_count; t++) {
         int64_t mstart = template_mesh_start[t];
         int64_t mend   = template_mesh_end[t];
+        if (asLog && asLog[0] != '0') fprintf(stderr, "rt-scene template %lld: %lld geometries\n", (long long)t, (long long)(mend - mstart));
+        if (merge) {
+            // One vertex and one index buffer for the whole template; each geometry points into them at its own offset.
+            std::vector<float> vb;
+            std::vector<uint32_t> ib;
+            std::vector<int64_t> vOff((size_t)(mend - mstart)), iOff((size_t)(mend - mstart));
+            for (int64_t i = mstart; i < mend; i++) {
+                vOff[(size_t)(i - mstart)] = (int64_t)vb.size() * 4;
+                iOff[(size_t)(i - mstart)] = (int64_t)ib.size() * 4;
+                vb.insert(vb.end(), meshes[i].points, meshes[i].points + point_counts[i] * 4);
+                for (int64_t j = 0; j < vertex_index_counts[i]; j++) ib.push_back((uint32_t)meshes[i].vertexIndices[j]);
+            }
+            VkDeviceSize vbBytes = (VkDeviceSize)vb.size() * sizeof(float), ibBytes = (VkDeviceSize)ib.size() * sizeof(uint32_t);
+            if (!createBuffer(sc->device, sc->physicalDevice, vbBytes,
+                               VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, true, &sc->templateVertexBufs[(size_t)t]) ||
+                !uploadToBuffer(sc->device, sc->templateVertexBufs[(size_t)t], vb.data(), vbBytes) ||
+                !createBuffer(sc->device, sc->physicalDevice, ibBytes,
+                               VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, true, &sc->templateIndexBufs[(size_t)t]) ||
+                !uploadToBuffer(sc->device, sc->templateIndexBufs[(size_t)t], ib.data(), ibBytes)) {
+                vulkaninterop_rt_destroy_scene(sc);
+                return nullptr;
+            }
+            for (int64_t i = mstart; i < mend; i++) {
+                VkAccelerationStructureGeometryKHR geom{};
+                geom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+                geom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+                geom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+                geom.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+                geom.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+                geom.geometry.triangles.vertexData.deviceAddress = sc->templateVertexBufs[(size_t)t].address + (VkDeviceAddress)vOff[(size_t)(i - mstart)];
+                geom.geometry.triangles.vertexStride = sizeof(float) * 4;
+                geom.geometry.triangles.maxVertex = (uint32_t)(point_counts[i] - 1);
+                geom.geometry.triangles.indexType = VK_INDEX_TYPE_UINT32;
+                geom.geometry.triangles.indexData.deviceAddress = sc->templateIndexBufs[(size_t)t].address + (VkDeviceAddress)iOff[(size_t)(i - mstart)];
+                meshGeoms[(size_t)i] = geom;
+            }
+        }
         std::vector<VkAccelerationStructureGeometryKHR> tGeoms(meshGeoms.begin() + mstart, meshGeoms.begin() + mend);
         std::vector<uint32_t> tCounts(meshTriCounts.begin() + mstart, meshTriCounts.begin() + mend);
         if (!buildAccelerationStructureMulti(sc->device, sc->physicalDevice, sc->cmdPool,
@@ -1523,6 +1650,10 @@ extern "C" void* vulkaninterop_rt_create_scene(
                                               &templateBlasAddresses[t])) {
             vulkaninterop_rt_destroy_scene(sc);
             return nullptr;
+        }
+        if (merge) {
+            destroyBuffer(sc->device, &sc->templateVertexBufs[(size_t)t]);
+            destroyBuffer(sc->device, &sc->templateIndexBufs[(size_t)t]);
         }
     }
 
@@ -1535,12 +1666,22 @@ extern "C" void* vulkaninterop_rt_create_scene(
     instances.reserve((size_t)(mesh_count + instance_count));
     for (int64_t i = 0; i < mesh_count; i++) {
         if (isTemplateMesh[(size_t)i]) continue;
+        if (merge) continue;
         VkAccelerationStructureInstanceKHR inst{};
         inst.transform.matrix[0][0] = 1; inst.transform.matrix[1][1] = 1; inst.transform.matrix[2][2] = 1;
         inst.instanceCustomIndex = (uint32_t)i;
         inst.mask = 0xFF;
         inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
         inst.accelerationStructureReference = blasAddresses[i];
+        instances.push_back(inst);
+    }
+    for (int64_t c = 0; c < sc->chunkCount; c++) {
+        VkAccelerationStructureInstanceKHR inst{};
+        inst.transform.matrix[0][0] = 1; inst.transform.matrix[1][1] = 1; inst.transform.matrix[2][2] = 1;
+        inst.instanceCustomIndex = (uint32_t)c;
+        inst.mask = 0xFF;
+        inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+        inst.accelerationStructureReference = blasAddresses[(size_t)c];
         instances.push_back(inst);
     }
     for (int64_t k = 0; k < instance_count; k++) {

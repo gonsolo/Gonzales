@@ -213,6 +213,8 @@ int vulkaninterop_rt_trace(void* scene, int32_t ray_count, void* cuda_stream);
 
 // --rt-hardware: copies an acceleration structure's bytes to the host (kind 0 = BLAS of ordinary mesh `index`, 1 = TLAS,
 // 2 = BLAS of template `index`; out null: size query). Returns bytes.
+void vulkaninterop_rt_set_merge_ordinary(int32_t on);
+int64_t vulkaninterop_rt_chunk_info(void* handle, int64_t* chunk_of_mesh, int64_t n);
 int64_t vulkaninterop_rt_debug_read_as(void* scene, int kind, int index, uint8_t* out, int64_t capacity, uint64_t* out_address);
 
 // Destroys a scene built by vulkaninterop_rt_create_scene.
