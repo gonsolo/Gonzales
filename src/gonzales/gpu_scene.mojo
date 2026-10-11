@@ -22,11 +22,12 @@ from std.ffi import external_call
 from std.math import ceildiv
 from std.memory import unsafe_memcpy
 from std.memory.alloc import unsafe_alloc
-from std.sys import has_accelerator
+from std.sys import has_accelerator, get_defined_int
 from std.sys.info import size_of
 
 
-comptime WAVEFRONT_BATCH: Int = 8
+# Concurrent samples a pixel; build with -D WAVEFRONT_BATCH=2 where the per-pixel buffers must shrink (the whole island).
+comptime WAVEFRONT_BATCH: Int = get_defined_int["WAVEFRONT_BATCH", 8]()
 
 @always_inline
 def typed_ptr[T: AnyType](mut buf: DeviceBuffer[DType.uint8]) -> Pointer[T, MutUntrackedOrigin]:
@@ -826,7 +827,10 @@ def _gpu_upload_array[T: AnyType](
     src: Pointer[T, MutUntrackedOrigin],
     count: Int,
 ) raises -> DeviceBuffer[DType.uint8]:
-    var buf = ctx.enqueue_create_buffer[DType.uint8](max(count, 1) * size_of[T]())
+    var nbytes = max(count, 1) * size_of[T]()
+    if nbytes >= 128 * 1024 * 1024:
+        print("GPU: uploading " + String(nbytes // (1024 * 1024)) + " MB")
+    var buf = ctx.enqueue_create_buffer[DType.uint8](nbytes)
     if count > 0:
         ctx.enqueue_copy(buf, src.unsafe_bitcast[UInt8]())
     return buf^
@@ -901,6 +905,8 @@ def gpu_upload_scene(
     spectral_cie_z: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     spectral_d65: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     ctx_in: Optional[DeviceContext] = None,   # a context created ahead of the scene parse
+    restir_di: Bool = True,    # False: no per-pixel ReSTIR reservoirs (a pixel's worth is kept so the buffers exist)
+    restir_vol: Bool = True,
 ) -> Pointer[GpuSceneHandle, MutUntrackedOrigin]:
     comptime if has_accelerator():
         try:
@@ -951,11 +957,13 @@ def gpu_upload_scene(
             var r_atrous_curve_mask_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
             var r_gbuf_worldpos_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_gbuf_material_id_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
-            var r_restir_a_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[DIReservoir]())
-            var r_restir_b_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[DIReservoir]())
-            var r_restir_vol_a_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[VolReservoir]())
-            var r_restir_vol_b_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[VolReservoir]())
-            var r_restir_vol_used_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Int8]())
+            var n_di = n_pix if restir_di else 1
+            var n_vol = n_pix if restir_vol else 1
+            var r_restir_a_buf = ctx.enqueue_create_buffer[DType.uint8](n_di * size_of[DIReservoir]())
+            var r_restir_b_buf = ctx.enqueue_create_buffer[DType.uint8](n_di * size_of[DIReservoir]())
+            var r_restir_vol_a_buf = ctx.enqueue_create_buffer[DType.uint8](n_vol * size_of[VolReservoir]())
+            var r_restir_vol_b_buf = ctx.enqueue_create_buffer[DType.uint8](n_vol * size_of[VolReservoir]())
+            var r_restir_vol_used_buf = ctx.enqueue_create_buffer[DType.uint8](n_vol * size_of[Int8]())
             # --rt-hardware defers up to SHADOW_SLOTS shadow rays per path; everything else needs one slot per path.
             # The software BVH defers too (gpu.mojo sw_shadow) when every NEE candidate of a bounce has a slot and there is no medium.
             var nee_candidates = (1 if s.area_light_count > 0 else 0) + Int(s.distant_count) + Int(s.point_count) + Int(s.sphere_count) + Int(s.infinite_count)

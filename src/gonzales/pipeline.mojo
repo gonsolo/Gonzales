@@ -1674,7 +1674,7 @@ def parse_and_render(
         return ret
     elif use_gpu:
         var spp = Int(psc[unsafe_offset=0].samples_per_pixel)
-        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65, gpu_ctx)
+        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65, gpu_ctx, restir_di=use_restir, restir_vol=use_vol_restir_reuse)
         if not _is_real_ptr(handle):
             mojo_parsed_free(psc)
             return Int32(-1)
