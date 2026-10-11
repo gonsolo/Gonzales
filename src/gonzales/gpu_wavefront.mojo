@@ -5,7 +5,8 @@ from .bvh import _node_box_hit, _node_hi, _node_lo, _node_oc, _bvh_has_nodes, _s
 from .curves import CURVE_DEFER_K, Curve, _curve_perp_axis, curve_piece_endpoints, intersect_curve
 from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, store_vec3, vec3f
 from .materials import Material
-from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, alpha_killed, intersect_triangle, sphere_outward_normal
+from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, alpha_killed, intersect_triangle, sphere_outward_normal, mesh_vi
+from .primitives import mesh_pos, mesh_point
 from .render_state import PathState, ShadowTask, SHADOW_SLOTS
 from .restir_di import DIReservoir, di_reservoir_init
 from .restir_vol import VolReservoir, vol_reservoir_init
@@ -604,9 +605,9 @@ def _alpha_rejects(
     var mesh = meshes[unsafe_offset=mi]
     if mesh.alpha_w == Int32(0) and mesh.alpha_const >= Float32(1.0):
         return False
-    var v0 = Int(mesh.vertexIndices[unsafe_offset=tri * 3])
-    var v1 = Int(mesh.vertexIndices[unsafe_offset=tri * 3 + 1])
-    var v2 = Int(mesh.vertexIndices[unsafe_offset=tri * 3 + 2])
+    var v0 = Int(mesh_vi(mesh, tri * 3))
+    var v1 = Int(mesh_vi(mesh, tri * 3 + 1))
+    var v2 = Int(mesh_vi(mesh, tri * 3 + 2))
     var org = Vec3f(rays[unsafe_offset=ridx], rays[unsafe_offset=ridx + 1], rays[unsafe_offset=ridx + 2])
     var dir = Vec3f(rays[unsafe_offset=ridx + 4], rays[unsafe_offset=ridx + 5], rays[unsafe_offset=ridx + 6])
     return alpha_killed(mesh, v0, v1, v2, src[unsafe_offset=sidx + 1], src[unsafe_offset=sidx + 2], org, dir, (mi << 32) | (tri * 3))
@@ -1080,14 +1081,12 @@ def any_hit_bvh2_gpu[curves_on: Bool, inst_on: Bool, alpha_on: Bool](
                     continue
                 else:
                     continue
-                var vidx = sd.meshes[unsafe_offset=mesh_idx].vertexIndices
-                var pts = sd.meshes[unsafe_offset=mesh_idx].points
-                var v0 = Int(vidx[unsafe_offset=base_vidx])
-                var v1 = Int(vidx[unsafe_offset=base_vidx + 1])
-                var v2 = Int(vidx[unsafe_offset=base_vidx + 2])
-                var p0 = Vec3f(pts[unsafe_offset=v0*4], pts[unsafe_offset=v0*4+1], pts[unsafe_offset=v0*4+2])
-                var p1 = Vec3f(pts[unsafe_offset=v1*4], pts[unsafe_offset=v1*4+1], pts[unsafe_offset=v1*4+2])
-                var p2 = Vec3f(pts[unsafe_offset=v2*4], pts[unsafe_offset=v2*4+1], pts[unsafe_offset=v2*4+2])
+                var v0 = mesh_vi(sd.meshes[unsafe_offset=mesh_idx], base_vidx)
+                var v1 = mesh_vi(sd.meshes[unsafe_offset=mesh_idx], base_vidx + 1)
+                var v2 = mesh_vi(sd.meshes[unsafe_offset=mesh_idx], base_vidx + 2)
+                var p0 = mesh_pos(sd.meshes[unsafe_offset=mesh_idx], v0)
+                var p1 = mesh_pos(sd.meshes[unsafe_offset=mesh_idx], v1)
+                var p2 = mesh_pos(sd.meshes[unsafe_offset=mesh_idx], v2)
                 var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, tMax)
                 if hit_res[0]:
                     if _shadow_is_null_material(sd.materials, prim.materialIndex):
@@ -1624,12 +1623,12 @@ def gen_aux_buffers_gpu(
                 mesh_idx  = Int(isects_tmp[unsafe_offset=tid].primId.id2 >> 32)
                 base_vidx = Int(isects_tmp[unsafe_offset=tid].primId.id2 & 0xFFFFFFFF) * 3
             var mesh = meshes[unsafe_offset=mesh_idx]
-            var vi0 = Int(mesh.vertexIndices[unsafe_offset=base_vidx])
-            var vi1 = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 1])
-            var vi2 = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 2])
-            var p0 = Point3f(mesh.points[unsafe_offset=vi0*4], mesh.points[unsafe_offset=vi0*4+1], mesh.points[unsafe_offset=vi0*4+2])
-            var p1 = Point3f(mesh.points[unsafe_offset=vi1*4], mesh.points[unsafe_offset=vi1*4+1], mesh.points[unsafe_offset=vi1*4+2])
-            var p2 = Point3f(mesh.points[unsafe_offset=vi2*4], mesh.points[unsafe_offset=vi2*4+1], mesh.points[unsafe_offset=vi2*4+2])
+            var vi0 = Int(mesh_vi(mesh, base_vidx))
+            var vi1 = Int(mesh_vi(mesh, base_vidx + 1))
+            var vi2 = Int(mesh_vi(mesh, base_vidx + 2))
+            var p0 = mesh_point(mesh, vi0)
+            var p1 = mesh_point(mesh, vi1)
+            var p2 = mesh_point(mesh, vi2)
             var e1 = p1 - p0; var e2 = p2 - p0
             normal = Vec3f(e1.y*e2.z - e1.z*e2.y, e1.z*e2.x - e1.x*e2.z, e1.x*e2.y - e1.y*e2.x)
             var inst_idx = isects_tmp[unsafe_offset=tid].primId.instanceIdx

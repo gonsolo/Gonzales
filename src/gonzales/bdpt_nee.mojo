@@ -5,7 +5,8 @@ from std.collections import Array
 from std.math import sqrt, cos, sin, exp, max, min, abs
 from .geometry import RGB, Point3f, Vec3f, vec3f, dot, cross, PI
 from .materials import MatKind, fr_dielectric, is_specular_glass
-from .primitives import Ray, Intersection, PrimId
+from .primitives import Ray, Intersection, PrimId, mesh_vi
+from .primitives import mesh_pos
 from .shadow_media import segment_transmittance
 from .lights import area_light_pick_triangle
 from .bvh import traverse_dispatch, any_hit_dispatch
@@ -202,10 +203,10 @@ def _bdpt_mnee_diffuse_area_light(
     var lmesh = sd.meshes[unsafe_offset=Int(al.meshIdx)]
     var ti = area_light_pick_triangle(al, pcg.next_float())
     var lb = ti * 3
-    var lv0 = Int(lmesh.vertexIndices[unsafe_offset=lb]); var lv1 = Int(lmesh.vertexIndices[unsafe_offset=lb+1]); var lv2 = Int(lmesh.vertexIndices[unsafe_offset=lb+2])
-    var lp0 = Vec3f(lmesh.points[unsafe_offset=lv0*4], lmesh.points[unsafe_offset=lv0*4+1], lmesh.points[unsafe_offset=lv0*4+2])
-    var lp1 = Vec3f(lmesh.points[unsafe_offset=lv1*4], lmesh.points[unsafe_offset=lv1*4+1], lmesh.points[unsafe_offset=lv1*4+2])
-    var lp2 = Vec3f(lmesh.points[unsafe_offset=lv2*4], lmesh.points[unsafe_offset=lv2*4+1], lmesh.points[unsafe_offset=lv2*4+2])
+    var lv0 = Int(mesh_vi(lmesh, lb)); var lv1 = Int(mesh_vi(lmesh, lb+1)); var lv2 = Int(mesh_vi(lmesh, lb+2))
+    var lp0 = mesh_pos(lmesh, lv0)
+    var lp1 = mesh_pos(lmesh, lv1)
+    var lp2 = mesh_pos(lmesh, lv2)
     var ru1 = pcg.next_float(); var ru2 = pcg.next_float(); var sr1 = sqrt(ru1)
     var light_point = lp0*(Float32(1)-sr1) + lp1*(sr1*(Float32(1)-ru2)) + lp2*(sr1*ru2)
     var ldp_du = lp1 - lp0
@@ -237,9 +238,9 @@ def _bdpt_mnee_diffuse_area_light(
     var (pmesh, pv0, pv1, pv2, ptok) = _get_tri_verts(probe_inter, sd.meshes)
     if not ptok:
         return SpectralSample(Float32(0))
-    var pp0 = Vec3f(pmesh.points[unsafe_offset=pv0*4], pmesh.points[unsafe_offset=pv0*4+1], pmesh.points[unsafe_offset=pv0*4+2])
-    var pp1 = Vec3f(pmesh.points[unsafe_offset=pv1*4], pmesh.points[unsafe_offset=pv1*4+1], pmesh.points[unsafe_offset=pv1*4+2])
-    var pp2 = Vec3f(pmesh.points[unsafe_offset=pv2*4], pmesh.points[unsafe_offset=pv2*4+1], pmesh.points[unsafe_offset=pv2*4+2])
+    var pp0 = mesh_pos(pmesh, pv0)
+    var pp1 = mesh_pos(pmesh, pv1)
+    var pp2 = mesh_pos(pmesh, pv2)
     var pdp_du = pp1 - pp0
     var pdp_dv = pp2 - pp0
     var pgeo_n3 = cross(pdp_du, pdp_dv)
@@ -275,9 +276,9 @@ def _bdpt_mnee_diffuse_area_light(
             var (p2mesh, p2v0, p2v1, p2v2, p2ok) = _get_tri_verts(probe2_inter, sd.meshes)
             if not p2ok:
                 return SpectralSample(Float32(0))
-            var p2p0 = Vec3f(p2mesh.points[unsafe_offset=p2v0*4], p2mesh.points[unsafe_offset=p2v0*4+1], p2mesh.points[unsafe_offset=p2v0*4+2])
-            var p2p1 = Vec3f(p2mesh.points[unsafe_offset=p2v1*4], p2mesh.points[unsafe_offset=p2v1*4+1], p2mesh.points[unsafe_offset=p2v1*4+2])
-            var p2p2 = Vec3f(p2mesh.points[unsafe_offset=p2v2*4], p2mesh.points[unsafe_offset=p2v2*4+1], p2mesh.points[unsafe_offset=p2v2*4+2])
+            var p2p0 = mesh_pos(p2mesh, p2v0)
+            var p2p1 = mesh_pos(p2mesh, p2v1)
+            var p2p2 = mesh_pos(p2mesh, p2v2)
             var pdp_du2 = p2p1 - p2p0; var pdp_dv2 = p2p2 - p2p0
             var pgeo_n3_2 = cross(pdp_du2, pdp_dv2)
             var pgeo_n_len2 = sqrt(dot(pgeo_n3_2, pgeo_n3_2))
@@ -440,9 +441,9 @@ def _bdpt_mnee_sphere_light(
     var (pmesh, pv0, pv1, pv2, ptok) = _get_tri_verts(probe_inter, sd.meshes)
     if not ptok:
         return SpectralSample(Float32(0))
-    var pp0 = Vec3f(pmesh.points[unsafe_offset=pv0*4], pmesh.points[unsafe_offset=pv0*4+1], pmesh.points[unsafe_offset=pv0*4+2])
-    var pp1 = Vec3f(pmesh.points[unsafe_offset=pv1*4], pmesh.points[unsafe_offset=pv1*4+1], pmesh.points[unsafe_offset=pv1*4+2])
-    var pp2 = Vec3f(pmesh.points[unsafe_offset=pv2*4], pmesh.points[unsafe_offset=pv2*4+1], pmesh.points[unsafe_offset=pv2*4+2])
+    var pp0 = mesh_pos(pmesh, pv0)
+    var pp1 = mesh_pos(pmesh, pv1)
+    var pp2 = mesh_pos(pmesh, pv2)
     var pdp_du = pp1 - pp0
     var pdp_dv = pp2 - pp0
     var pgeo_n3 = cross(pdp_du, pdp_dv)
@@ -478,9 +479,9 @@ def _bdpt_mnee_sphere_light(
             var (p2mesh, p2v0, p2v1, p2v2, p2ok) = _get_tri_verts(probe2_inter, sd.meshes)
             if not p2ok:
                 return SpectralSample(Float32(0))
-            var p2p0 = Vec3f(p2mesh.points[unsafe_offset=p2v0*4], p2mesh.points[unsafe_offset=p2v0*4+1], p2mesh.points[unsafe_offset=p2v0*4+2])
-            var p2p1 = Vec3f(p2mesh.points[unsafe_offset=p2v1*4], p2mesh.points[unsafe_offset=p2v1*4+1], p2mesh.points[unsafe_offset=p2v1*4+2])
-            var p2p2 = Vec3f(p2mesh.points[unsafe_offset=p2v2*4], p2mesh.points[unsafe_offset=p2v2*4+1], p2mesh.points[unsafe_offset=p2v2*4+2])
+            var p2p0 = mesh_pos(p2mesh, p2v0)
+            var p2p1 = mesh_pos(p2mesh, p2v1)
+            var p2p2 = mesh_pos(p2mesh, p2v2)
             var pdp_du2 = p2p1 - p2p0; var pdp_dv2 = p2p2 - p2p0
             var pgeo_n3_2 = cross(pdp_du2, pdp_dv2)
             var pgeo_n_len2 = sqrt(dot(pgeo_n3_2, pgeo_n3_2))

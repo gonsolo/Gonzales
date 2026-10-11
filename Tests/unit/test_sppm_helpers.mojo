@@ -9,7 +9,7 @@ from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_false, TestSuite
 from gonzales.geometry import RGB, Point3f, Vec3f, dot, cross, reflect, PI
 from gonzales.materials import fr_dielectric
-from gonzales.primitives import PrimId, Intersection, TriangleMesh
+from gonzales.primitives import PrimId, Intersection, TriangleMesh, encode_normal
 from gonzales.media import Medium
 from gonzales.lights import AreaLight
 from gonzales.sppm import (
@@ -385,10 +385,11 @@ def test_shading_normal_at_interpolates_per_vertex_normals_barycentrically() rai
     var n0 = Vec3f(0.0, 0.0, 1.0)
     var n1 = Vec3f(0.0, 0.0, 1.0)
     var n2 = Vec3f(0.267261, 0.534522, 0.801784)  # normalize(1,2,3), tilted but same hemisphere
-    var normals = unsafe_alloc[Float32](3 * 3)
-    normals[unsafe_offset=0] = n0[0]; normals[unsafe_offset=1] = n0[1]; normals[unsafe_offset=2] = n0[2]
-    normals[unsafe_offset=3] = n1[0]; normals[unsafe_offset=4] = n1[1]; normals[unsafe_offset=5] = n1[2]
-    normals[unsafe_offset=6] = n2[0]; normals[unsafe_offset=7] = n2[1]; normals[unsafe_offset=8] = n2[2]
+    var normals = unsafe_alloc[Float32](3)   # one encoded word a vertex
+    var normal_words = normals.unsafe_bitcast[UInt32]()
+    normal_words[unsafe_offset=0] = encode_normal(n0[0], n0[1], n0[2])
+    normal_words[unsafe_offset=1] = encode_normal(n1[0], n1[1], n1[2])
+    normal_words[unsafe_offset=2] = encode_normal(n2[0], n2[1], n2[2])
     mesh.normals = normals
     var meshes = unsafe_alloc[TriangleMesh](1)
     meshes[unsafe_offset=0] = mesh

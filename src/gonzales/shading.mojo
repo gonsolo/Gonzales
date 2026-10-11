@@ -8,7 +8,8 @@ from .geometry import offset_point, RGB, Point3f, Point2f, Point2i, restir_jitte
 from .render_state import PDF_DROP_DIRECT
 from .materials import Material, MatKind, LobeKind, MeasuredBRDF, schlick_fresnel, fr_dielectric, dielectric_is_rough, is_specular_glass, dt_reflectance, dt_transmittance
 from .render_state import PathState, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SuppressTask, SHADOW_SLOTS
-from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance
+from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, mesh_uv, mesh_has_uvs, mesh_normal, mesh_vi, mesh_face
+from .primitives import mesh_pos
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, light_sampler_sample, light_sampler_pdf, area_light_pick_triangle
 from .portal_light import portal_frame, portal_ray_crosses
 from .media import Medium, MediumInterface, Grid, NvdbGrid
@@ -215,9 +216,9 @@ def _emitter_face_normal(
     if Int(mesh.normals) <= 4:
         return gn
     var w0 = Float32(1.0) - bu - bv
-    var n0 = Vec3f(mesh.normals[unsafe_offset=v0*3], mesh.normals[unsafe_offset=v0*3+1], mesh.normals[unsafe_offset=v0*3+2])
-    var n1 = Vec3f(mesh.normals[unsafe_offset=v1*3], mesh.normals[unsafe_offset=v1*3+1], mesh.normals[unsafe_offset=v1*3+2])
-    var n2 = Vec3f(mesh.normals[unsafe_offset=v2*3], mesh.normals[unsafe_offset=v2*3+1], mesh.normals[unsafe_offset=v2*3+2])
+    var n0 = mesh_normal(mesh, v0)
+    var n1 = mesh_normal(mesh, v1)
+    var n2 = mesh_normal(mesh, v2)
     var sn = n0 * w0 + n1 * bu + n2 * bv
     if instance_idx >= Int32(0):
         sn = transform_normal(Mat4(instances[unsafe_offset=Int(instance_idx)].world_to_obj()), sn)
@@ -262,9 +263,9 @@ def area_light_hit_cos(
     var (m, v0, v1, v2, ok) = _get_tri_verts(inter, meshes)
     if not ok:
         return Float32(0)
-    var p0 = Vec3f(m.points[unsafe_offset=v0*4], m.points[unsafe_offset=v0*4+1], m.points[unsafe_offset=v0*4+2])
-    var p1 = Vec3f(m.points[unsafe_offset=v1*4], m.points[unsafe_offset=v1*4+1], m.points[unsafe_offset=v1*4+2])
-    var p2 = Vec3f(m.points[unsafe_offset=v2*4], m.points[unsafe_offset=v2*4+1], m.points[unsafe_offset=v2*4+2])
+    var p0 = mesh_pos(m, v0)
+    var p1 = mesh_pos(m, v1)
+    var p2 = mesh_pos(m, v2)
     var en = _emitter_face_normal(m, v0, v1, v2, inter.u, inter.v, p0, p1, p2,
                                   inter.primId.instanceIdx, instances)
     var l2 = dot(en, en)
@@ -349,9 +350,9 @@ def _interp_vertex_normal(
     if Int(mesh.normals) <= 4:
         return Vec3f(Float32(0.0))
     var w0 = Float32(1.0) - bu - bv
-    var n0 = Vec3f(mesh.normals[unsafe_offset=v0*3], mesh.normals[unsafe_offset=v0*3+1], mesh.normals[unsafe_offset=v0*3+2])
-    var n1 = Vec3f(mesh.normals[unsafe_offset=v1*3], mesh.normals[unsafe_offset=v1*3+1], mesh.normals[unsafe_offset=v1*3+2])
-    var n2 = Vec3f(mesh.normals[unsafe_offset=v2*3], mesh.normals[unsafe_offset=v2*3+1], mesh.normals[unsafe_offset=v2*3+2])
+    var n0 = mesh_normal(mesh, v0)
+    var n1 = mesh_normal(mesh, v1)
+    var n2 = mesh_normal(mesh, v2)
     var sn = n0 * w0 + n1 * bu + n2 * bv
     if instance_idx >= Int32(0):
         sn = transform_normal(Mat4(instances[unsafe_offset=Int(instance_idx)].world_to_obj()), sn)
@@ -494,7 +495,7 @@ def _ptex_missed(textures: Pointer[GpuTexture, MutUntrackedOrigin], n_textures: 
         return False
     var tex = textures[unsafe_offset=ti]
     var n_faces = Int(tex.width)
-    var face = Int(mesh.faceIndices[unsafe_offset=_ptex_tri(inter)])
+    var face = Int(mesh_face(mesh, _ptex_tri(inter)))
     if face < 0 or face >= n_faces:
         face = 0
     var entry = tex.data.unsafe_offset(face * 8)
@@ -613,10 +614,10 @@ def _tex_lookup[use_gpu: Bool](
         # analytically per-shading-point from Material's embedded checker_*
         # fields, identically on CPU and GPU — no image data or texture-table
         # index involved. See material_builder.mojo's "reflectance" handler.
-        if Int(mesh.uvs) > 1:
+        if mesh_has_uvs(mesh):
             var w0 = Float32(1.0) - inter.u - inter.v
-            var su = w0*mesh.uvs[unsafe_offset=v0*2]   + inter.u*mesh.uvs[unsafe_offset=v1*2]   + inter.v*mesh.uvs[unsafe_offset=v2*2]
-            var tv = w0*mesh.uvs[unsafe_offset=v0*2+1] + inter.u*mesh.uvs[unsafe_offset=v1*2+1] + inter.v*mesh.uvs[unsafe_offset=v2*2+1]
+            var su = w0*mesh_uv(mesh, v0)[0]   + inter.u*mesh_uv(mesh, v1)[0]   + inter.v*mesh_uv(mesh, v2)[0]
+            var tv = w0*mesh_uv(mesh, v0)[1] + inter.u*mesh_uv(mesh, v1)[1] + inter.v*mesh_uv(mesh, v2)[1]
             # No V-flip here (unlike the image-texture path): pbrt evaluates its
             # checkerboard directly on the raw surface (u, v), with no notion of
             # image row order. Flipping v would toggle the sum-parity and swap
@@ -633,21 +634,21 @@ def _tex_lookup[use_gpu: Bool](
         var tri = _ptex_tri(inter)
         var pu = inter.u + inter.v   # pbrt's default triangle uv: (0,0), (1,0), (1,1)
         var pv = inter.v
-        if _is_real_ptr(mesh.uvs):
+        if (mesh.uv_corners != Int32(0) or _is_real_ptr(mesh.uvs)):
             var pw0 = Float32(1.0) - inter.u - inter.v
-            pu = pw0*mesh.uvs[unsafe_offset=v0*2]   + inter.u*mesh.uvs[unsafe_offset=v1*2]   + inter.v*mesh.uvs[unsafe_offset=v2*2]
-            pv = pw0*mesh.uvs[unsafe_offset=v0*2+1] + inter.u*mesh.uvs[unsafe_offset=v1*2+1] + inter.v*mesh.uvs[unsafe_offset=v2*2+1]
-        var pt = _sample_ptex(ptx, Int(mesh.faceIndices[unsafe_offset=tri]), pu, pv, fp_width)
+            pu = pw0*mesh_uv(mesh, v0)[0]   + inter.u*mesh_uv(mesh, v1)[0]   + inter.v*mesh_uv(mesh, v2)[0]
+            pv = pw0*mesh_uv(mesh, v0)[1] + inter.u*mesh_uv(mesh, v1)[1] + inter.v*mesh_uv(mesh, v2)[1]
+        var pt = _sample_ptex(ptx, Int(mesh_face(mesh, tri)), pu, pv, fp_width)
         return RGB(mat.tex_bias.r + mat.tex_scale.r * pt.r, mat.tex_bias.g + mat.tex_scale.g * pt.g, mat.tex_bias.b + mat.tex_scale.b * pt.b)
     var has_uvs = True
     comptime if not use_gpu:
-        has_uvs = Int(mesh.uvs) > 4
+        has_uvs = mesh_has_uvs(mesh)
     if ti >= 0 and ti < n_textures and has_uvs:
         var tex = textures[unsafe_offset=ti]
         if Int(tex.width) > 0:
             var w0 = Float32(1.0) - inter.u - inter.v
-            var su = w0*mesh.uvs[unsafe_offset=v0*2]   + inter.u*mesh.uvs[unsafe_offset=v1*2]   + inter.v*mesh.uvs[unsafe_offset=v2*2]
-            var tv = w0*mesh.uvs[unsafe_offset=v0*2+1] + inter.u*mesh.uvs[unsafe_offset=v1*2+1] + inter.v*mesh.uvs[unsafe_offset=v2*2+1]
+            var su = w0*mesh_uv(mesh, v0)[0]   + inter.u*mesh_uv(mesh, v1)[0]   + inter.v*mesh_uv(mesh, v2)[0]
+            var tv = w0*mesh_uv(mesh, v0)[1] + inter.u*mesh_uv(mesh, v1)[1] + inter.v*mesh_uv(mesh, v2)[1]
             tv = Float32(1.0) - tv  # PBRT V-flip: V=0 at top
             # bias + scale*texel is pbrt's "scale"/"mix" texture graph
             # folded into the lookup (scale=1, bias=0 when absent) --
@@ -661,8 +662,8 @@ def _tex_lookup[use_gpu: Bool](
             var filename = tex_filenames[unsafe_offset=ti]
             if Int(filename) > 1 and has_uvs:
                 var w0 = Float32(1.0) - inter.u - inter.v
-                var su = w0*mesh.uvs[unsafe_offset=v0*2]   + inter.u*mesh.uvs[unsafe_offset=v1*2]   + inter.v*mesh.uvs[unsafe_offset=v2*2]
-                var tv = w0*mesh.uvs[unsafe_offset=v0*2+1] + inter.u*mesh.uvs[unsafe_offset=v1*2+1] + inter.v*mesh.uvs[unsafe_offset=v2*2+1]
+                var su = w0*mesh_uv(mesh, v0)[0]   + inter.u*mesh_uv(mesh, v1)[0]   + inter.v*mesh_uv(mesh, v2)[0]
+                var tv = w0*mesh_uv(mesh, v0)[1] + inter.u*mesh_uv(mesh, v1)[1] + inter.v*mesh_uv(mesh, v2)[1]
                 tv = Float32(1.0) - tv  # PBRT V-flip: V=0 at top
                 su = su - Float32(Int(su))
                 if su < Float32(0.0): su += Float32(1.0)
@@ -717,9 +718,9 @@ def shade_core(
             path_ptr[].active = 0
             return
 
-        var p0 = Vec3f(mesh.points[unsafe_offset=v0 * 4], mesh.points[unsafe_offset=v0 * 4 + 1], mesh.points[unsafe_offset=v0 * 4 + 2])
-        var p1 = Vec3f(mesh.points[unsafe_offset=v1 * 4], mesh.points[unsafe_offset=v1 * 4 + 1], mesh.points[unsafe_offset=v1 * 4 + 2])
-        var p2 = Vec3f(mesh.points[unsafe_offset=v2 * 4], mesh.points[unsafe_offset=v2 * 4 + 1], mesh.points[unsafe_offset=v2 * 4 + 2])
+        var p0 = mesh_pos(mesh, v0)
+        var p1 = mesh_pos(mesh, v1)
+        var p2 = mesh_pos(mesh, v2)
 
         var (normal, ray_dir, _) = _geom_normal_and_ray(path_ptr, p0, p1, p2)
 
@@ -780,7 +781,7 @@ def _get_tri_verts(
     else:
         return (meshes[unsafe_offset=0], 0, 0, 0, False)
     var m = meshes[unsafe_offset=mi]
-    return (m, Int(m.vertexIndices[unsafe_offset=bv]), Int(m.vertexIndices[unsafe_offset=bv+1]), Int(m.vertexIndices[unsafe_offset=bv+2]), True)
+    return (m, Int(mesh_vi(m, bv)), Int(mesh_vi(m, bv+1)), Int(mesh_vi(m, bv+2)), True)
 
 
 # ── Shading frame helper ──────────────────────────────────────────────────────
@@ -934,9 +935,9 @@ def _hit_geom(
     if not ok:
         var z = Vec3f(Float32(0.0), Float32(0.0), Float32(0.0))
         return (False, False, z, z, z, mesh, 0, 0, 0)
-    var p0 = Vec3f(mesh.points[unsafe_offset=v0*4], mesh.points[unsafe_offset=v0*4+1], mesh.points[unsafe_offset=v0*4+2])
-    var p1 = Vec3f(mesh.points[unsafe_offset=v1*4], mesh.points[unsafe_offset=v1*4+1], mesh.points[unsafe_offset=v1*4+2])
-    var p2 = Vec3f(mesh.points[unsafe_offset=v2*4], mesh.points[unsafe_offset=v2*4+1], mesh.points[unsafe_offset=v2*4+2])
+    var p0 = mesh_pos(mesh, v0)
+    var p1 = mesh_pos(mesh, v1)
+    var p2 = mesh_pos(mesh, v2)
     var gnr = _geom_normal_and_ray(path_ptr, p0, p1, p2, instance_idx, instances)
     return (True, False, gnr[0], gnr[1], gnr[2], mesh, v0, v1, v2)
 
@@ -1452,9 +1453,9 @@ def shade_dielectric[use_gpu: Bool, enqueue_shadow: Bool](
         # before its flip) and orient the interpolated shading normal to THAT.
         # ReverseOrientation is already baked into the winding at parse time,
         # so this stays the authoritative outside direction.
-        var dp0 = Vec3f(mesh.points[unsafe_offset=v0*4], mesh.points[unsafe_offset=v0*4+1], mesh.points[unsafe_offset=v0*4+2])
-        var dp1 = Vec3f(mesh.points[unsafe_offset=v1*4], mesh.points[unsafe_offset=v1*4+1], mesh.points[unsafe_offset=v1*4+2])
-        var dp2 = Vec3f(mesh.points[unsafe_offset=v2*4], mesh.points[unsafe_offset=v2*4+1], mesh.points[unsafe_offset=v2*4+2])
+        var dp0 = mesh_pos(mesh, v0)
+        var dp1 = mesh_pos(mesh, v1)
+        var dp2 = mesh_pos(mesh, v2)
         var raw_gn = cross(dp1 - dp0, dp2 - dp0)
         if inter.primId.instanceIdx >= Int32(0):
             raw_gn = transform_normal(Mat4(ctx.instances[unsafe_offset=Int(inter.primId.instanceIdx)].world_to_obj()), raw_gn)
@@ -1892,10 +1893,10 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         tangent = Vec3f(frame0.x.x, frame0.x.y, frame0.x.z)
         bitangent = Vec3f(frame0.y.x, frame0.y.y, frame0.y.z)
     else:
-        if mat_eff.rough_tex_idx >= Int32(0) and Int(mesh.uvs) > 4:
+        if mat_eff.rough_tex_idx >= Int32(0) and mesh_has_uvs(mesh):
             var bw0 = Float32(1.0) - inter.u - inter.v
-            var uv_u = bw0*mesh.uvs[unsafe_offset=v0*2]   + inter.u*mesh.uvs[unsafe_offset=v1*2]   + inter.v*mesh.uvs[unsafe_offset=v2*2]
-            var uv_v = bw0*mesh.uvs[unsafe_offset=v0*2+1] + inter.u*mesh.uvs[unsafe_offset=v1*2+1] + inter.v*mesh.uvs[unsafe_offset=v2*2+1]
+            var uv_u = bw0*mesh_uv(mesh, v0)[0]   + inter.u*mesh_uv(mesh, v1)[0]   + inter.v*mesh_uv(mesh, v2)[0]
+            var uv_v = bw0*mesh_uv(mesh, v0)[1] + inter.u*mesh_uv(mesh, v1)[1] + inter.v*mesh_uv(mesh, v2)[1]
             var found = False
             var rtex = sample_texture[use_gpu](Int(mat_eff.rough_tex_idx), uv_u, uv_v, True, Float32(0.0),
                 ctx.tex_filenames, ctx.textures, ctx.n_textures, found)
@@ -1909,9 +1910,9 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
                 mat_eff.roughU = r
                 mat_eff.roughV = r
 
-        var p0 = Vec3f(mesh.points[unsafe_offset=v0*4], mesh.points[unsafe_offset=v0*4+1], mesh.points[unsafe_offset=v0*4+2])
-        var p1 = Vec3f(mesh.points[unsafe_offset=v1*4], mesh.points[unsafe_offset=v1*4+1], mesh.points[unsafe_offset=v1*4+2])
-        var p2 = Vec3f(mesh.points[unsafe_offset=v2*4], mesh.points[unsafe_offset=v2*4+1], mesh.points[unsafe_offset=v2*4+2])
+        var p0 = mesh_pos(mesh, v0)
+        var p1 = mesh_pos(mesh, v1)
+        var p2 = mesh_pos(mesh, v2)
 
         # Use interpolated shading normal for smooth specular reflections
         normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal)
@@ -1927,11 +1928,11 @@ def shade_conductor[use_gpu: Bool, enqueue_shadow: Bool](
         # Anisotropy tangent frame: UV-gradient (aligned to texture space) when the
         # mesh has UVs and the material is anisotropic; else an arbitrary Frisvad
         # frame (isotropic GGX / perfect mirror don't care about tangent direction).
-        if Int(mesh.uvs) > 4 and alpha_x != alpha_y:
+        if mesh_has_uvs(mesh) and alpha_x != alpha_y:
             var dp1 = p1 - p0; var dp2 = p2 - p0
-            var u0f = mesh.uvs[unsafe_offset=v0*2]; var v0f = mesh.uvs[unsafe_offset=v0*2+1]
-            var u1f = mesh.uvs[unsafe_offset=v1*2]; var v1f = mesh.uvs[unsafe_offset=v1*2+1]
-            var u2f = mesh.uvs[unsafe_offset=v2*2]; var v2f = mesh.uvs[unsafe_offset=v2*2+1]
+            var u0f = mesh_uv(mesh, v0)[0]; var v0f = mesh_uv(mesh, v0)[1]
+            var u1f = mesh_uv(mesh, v1)[0]; var v1f = mesh_uv(mesh, v1)[1]
+            var u2f = mesh_uv(mesh, v2)[0]; var v2f = mesh_uv(mesh, v2)[1]
             var du1 = u1f - u0f; var dv1 = v1f - v0f
             var du2 = u2f - u0f; var dv2 = v2f - v0f
             var det = du1 * dv2 - du2 * dv1
@@ -2266,13 +2267,13 @@ def _apply_normal_map[use_gpu: Bool](
     n_textures: Int,
     pixel_uv: Float32 = Float32(0.0),
 ) -> Vec3f:
-    if mat.normal_tex_idx < Int32(0) or Int(mesh.uvs) <= 4:
+    if mat.normal_tex_idx < Int32(0) or not mesh_has_uvs(mesh):
         return geom_normal
     # Compute barycentric UV coordinates
     var dp1 = p1 - p0; var dp2 = p2 - p0
-    var u0f = mesh.uvs[unsafe_offset=v0*2]; var v0f = mesh.uvs[unsafe_offset=v0*2+1]
-    var u1f = mesh.uvs[unsafe_offset=v1*2]; var v1f = mesh.uvs[unsafe_offset=v1*2+1]
-    var u2f = mesh.uvs[unsafe_offset=v2*2]; var v2f = mesh.uvs[unsafe_offset=v2*2+1]
+    var u0f = mesh_uv(mesh, v0)[0]; var v0f = mesh_uv(mesh, v0)[1]
+    var u1f = mesh_uv(mesh, v1)[0]; var v1f = mesh_uv(mesh, v1)[1]
+    var u2f = mesh_uv(mesh, v2)[0]; var v2f = mesh_uv(mesh, v2)[1]
     var du1 = u1f - u0f; var dv1 = v1f - v0f
     var du2 = u2f - u0f; var dv2 = v2f - v0f
     var det = du1 * dv2 - du2 * dv1
@@ -2336,13 +2337,13 @@ def _apply_bump_map[use_gpu: Bool](
     `du = .5*(|dudx|+|dudy|)`, falling back to a small constant only when no
     footprint is available (first ray, or non-UV-mapped geometry) -- see
     project_barcelona_pavilion_mnee memory for the full history."""
-    if mat.bump_tex_idx < Int32(0) or Int(mesh.uvs) <= 4:
+    if mat.bump_tex_idx < Int32(0) or not mesh_has_uvs(mesh):
         return geom_normal
     var p0 = tri.p0; var p1 = tri.p1; var p2 = tri.p2
     var dp1 = p1 - p0; var dp2 = p2 - p0
-    var u0f = mesh.uvs[unsafe_offset=v0*2]; var v0f = mesh.uvs[unsafe_offset=v0*2+1]
-    var u1f = mesh.uvs[unsafe_offset=v1*2]; var v1f = mesh.uvs[unsafe_offset=v1*2+1]
-    var u2f = mesh.uvs[unsafe_offset=v2*2]; var v2f = mesh.uvs[unsafe_offset=v2*2+1]
+    var u0f = mesh_uv(mesh, v0)[0]; var v0f = mesh_uv(mesh, v0)[1]
+    var u1f = mesh_uv(mesh, v1)[0]; var v1f = mesh_uv(mesh, v1)[1]
+    var u2f = mesh_uv(mesh, v2)[0]; var v2f = mesh_uv(mesh, v2)[1]
     var du1 = u1f - u0f; var dv1 = v1f - v0f
     var du2 = u2f - u0f; var dv2 = v2f - v0f
     var det = du1 * dv2 - du2 * dv1
@@ -2379,7 +2380,7 @@ def _apply_bump_map[use_gpu: Bool](
         var btri = Int(inter.primId.id2 & 0xFFFFFFFF)
         if inter.primId.type == 0:
             btri = Int(inter.primId.id2) // 3
-        bump_face = Int(mesh.faceIndices[unsafe_offset=btri])
+        bump_face = Int(mesh_face(mesh, btri))
     var h0 = sample_texture[use_gpu](Int(mat.bump_tex_idx), uv_u, uv_v, False, fp.width, tex_filenames, textures, n_textures, found, bump_face).r
     if not found:
         return geom_normal
@@ -3152,12 +3153,12 @@ def _sample_light_point_and_normal(
         var lmesh = ctx.meshes[unsafe_offset=Int(al.meshIdx)]
         var lti = area_light_pick_triangle(al, pcg.next_float())
         var lb = lti * 3
-        var lv0 = Int(lmesh.vertexIndices[unsafe_offset=lb])
-        var lv1 = Int(lmesh.vertexIndices[unsafe_offset=lb + 1])
-        var lv2 = Int(lmesh.vertexIndices[unsafe_offset=lb + 2])
-        var lp0 = Vec3f(lmesh.points[unsafe_offset=lv0*4], lmesh.points[unsafe_offset=lv0*4+1], lmesh.points[unsafe_offset=lv0*4+2])
-        var lp1 = Vec3f(lmesh.points[unsafe_offset=lv1*4], lmesh.points[unsafe_offset=lv1*4+1], lmesh.points[unsafe_offset=lv1*4+2])
-        var lp2 = Vec3f(lmesh.points[unsafe_offset=lv2*4], lmesh.points[unsafe_offset=lv2*4+1], lmesh.points[unsafe_offset=lv2*4+2])
+        var lv0 = Int(mesh_vi(lmesh, lb))
+        var lv1 = Int(mesh_vi(lmesh, lb + 1))
+        var lv2 = Int(mesh_vi(lmesh, lb + 2))
+        var lp0 = mesh_pos(lmesh, lv0)
+        var lp1 = mesh_pos(lmesh, lv1)
+        var lp2 = mesh_pos(lmesh, lv2)
         var sqrt_r1 = sqrt(u1)
         var point = lp0 * (Float32(1.0) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1.0) - u2)) + lp2 * (sqrt_r1 * u2)
         # Winding oriented to the mesh's supplied normals (see
@@ -3265,9 +3266,9 @@ def _sms_vertex_from_hit(
         return (sms_vertex_sphere(hit_pt, center, sph.radius, eta, nmap, ior), True)
     elif inter.primId.type == Int8(0):
         var (mesh, v0, v1, v2, _) = _get_tri_verts(inter, ctx.meshes)
-        var p0 = Vec3f(mesh.points[unsafe_offset=v0*4], mesh.points[unsafe_offset=v0*4+1], mesh.points[unsafe_offset=v0*4+2])
-        var p1 = Vec3f(mesh.points[unsafe_offset=v1*4], mesh.points[unsafe_offset=v1*4+1], mesh.points[unsafe_offset=v1*4+2])
-        var p2 = Vec3f(mesh.points[unsafe_offset=v2*4], mesh.points[unsafe_offset=v2*4+1], mesh.points[unsafe_offset=v2*4+2])
+        var p0 = mesh_pos(mesh, v0)
+        var p1 = mesh_pos(mesh, v1)
+        var p2 = mesh_pos(mesh, v2)
         var dp_du = p1 - p0
         var dp_dv = p2 - p0
         var n3 = cross(dp_du, dp_dv)
@@ -3346,9 +3347,9 @@ def _sms_probe_glass_chain(
             gk_point = pk_org + shadow_dir * pk_inter.tHit
         else:
             var (gk_mesh, gk_v0, gk_v1, gk_v2, _) = _get_tri_verts(pk_inter, ctx.meshes)
-            var gk_p0 = Vec3f(gk_mesh.points[unsafe_offset=gk_v0*4], gk_mesh.points[unsafe_offset=gk_v0*4+1], gk_mesh.points[unsafe_offset=gk_v0*4+2])
-            var gk_p1 = Vec3f(gk_mesh.points[unsafe_offset=gk_v1*4], gk_mesh.points[unsafe_offset=gk_v1*4+1], gk_mesh.points[unsafe_offset=gk_v1*4+2])
-            var gk_p2 = Vec3f(gk_mesh.points[unsafe_offset=gk_v2*4], gk_mesh.points[unsafe_offset=gk_v2*4+1], gk_mesh.points[unsafe_offset=gk_v2*4+2])
+            var gk_p0 = mesh_pos(gk_mesh, gk_v0)
+            var gk_p1 = mesh_pos(gk_mesh, gk_v1)
+            var gk_p2 = mesh_pos(gk_mesh, gk_v2)
             var gk_u = pk_inter.u; var gk_v = pk_inter.v
             gk_point = gk_p0*(Float32(1.0)-gk_u-gk_v) + gk_p1*gk_u + gk_p2*gk_v
         seg_remaining = seg_remaining - pk_inter.tHit
@@ -3724,9 +3725,9 @@ def _mnee_owns_path(
     drop only when the solve succeeds AND ends at the vertex this ray left from. Chains of three or more vertices go
     through SMS's Bernoulli estimator, which covers its whole family: those keep the plain rule."""
     var (lmesh, lv0, lv1, lv2, _) = _get_tri_verts(inter, ctx.meshes)
-    var lp0 = Vec3f(lmesh.points[unsafe_offset=lv0*4], lmesh.points[unsafe_offset=lv0*4+1], lmesh.points[unsafe_offset=lv0*4+2])
-    var lp1 = Vec3f(lmesh.points[unsafe_offset=lv1*4], lmesh.points[unsafe_offset=lv1*4+1], lmesh.points[unsafe_offset=lv1*4+2])
-    var lp2 = Vec3f(lmesh.points[unsafe_offset=lv2*4], lmesh.points[unsafe_offset=lv2*4+1], lmesh.points[unsafe_offset=lv2*4+2])
+    var lp0 = mesh_pos(lmesh, lv0)
+    var lp1 = mesh_pos(lmesh, lv1)
+    var lp2 = mesh_pos(lmesh, lv2)
     var (l_du, l_dv) = mnee_orthonormal_basis(lp1 - lp0, lp2 - lp0)
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var res = _sms_solve_from_probe(ctx, path_ptr[].last_ns_p, seg_dir, seg_len, light_hit, l_du, l_dv, pcg, probe_inter)
@@ -5378,9 +5379,9 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
             var pdf_bsdf = path_ptr[].lastBsdfPdf
             if pdf_bsdf > Float32(0.0):
                 var (lmesh, lv0, lv1, lv2, _) = _get_tri_verts(inter, ctx.meshes)
-                var lp0 = Vec3f(lmesh.points[unsafe_offset=lv0*4], lmesh.points[unsafe_offset=lv0*4+1], lmesh.points[unsafe_offset=lv0*4+2])
-                var lp1 = Vec3f(lmesh.points[unsafe_offset=lv1*4], lmesh.points[unsafe_offset=lv1*4+1], lmesh.points[unsafe_offset=lv1*4+2])
-                var lp2 = Vec3f(lmesh.points[unsafe_offset=lv2*4], lmesh.points[unsafe_offset=lv2*4+1], lmesh.points[unsafe_offset=lv2*4+2])
+                var lp0 = mesh_pos(lmesh, lv0)
+                var lp1 = mesh_pos(lmesh, lv1)
+                var lp2 = mesh_pos(lmesh, lv2)
                 # Same supplied-normal orientation as the NEE sampler above --
                 # this branch MIS-weights against that sampler's pdf, so the
                 # two must agree on which way the emitter faces.

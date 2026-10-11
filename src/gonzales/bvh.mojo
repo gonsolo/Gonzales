@@ -12,7 +12,8 @@ from .transform import Mat4
 from .geometry import dot, cross, Point3f, Point2f, Vec3f, Frame, RGB, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, _is_real_ptr, store_vec3, _atan2f, point3f, fast_sincos
 from .materials import Material, MatKind, fr_dielectric, MeasuredBRDF
 from .render_state import PathState, TileResult, GpuTexture, NormalSlopeMap
-from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, intersect_triangle, intersect_triangle_edges, alpha_killed, Instance, sphere_outward_normal
+from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, intersect_triangle, intersect_triangle_edges, alpha_killed, Instance, sphere_outward_normal, mesh_vi, mesh_material
+from .primitives import mesh_pos, mesh_point
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
 from .portal_light import portal_frame, portal_ray_crosses
@@ -1262,16 +1263,20 @@ def _traverse_blas_triangles(
     var hitTri = 0
     if merged and first.id1 < Int64(0):
         return (False, tMax, Float32(0), Float32(0), hitPrim)   # a template of curves only
+    # A quad soup's leaves count quads: two triangles each.
+    var per_leaf = 1
+    if merged and meshes[unsafe_offset=Int(first.id1)].quads != Int32(0):
+        per_leaf = 2
 
     while True:
         var node = blasNodes[unsafe_offset=current]
         if node.count > 0:
             var offset = Int(node.offset)
             var count = Int(node.count)
-            for j in range(count):
+            for j in range(count * per_leaf):
                 var prim = first
                 var mesh_idx = Int(first.id1)
-                var base_vidx = (offset + j) * 3
+                var base_vidx = (offset * per_leaf + j) * 3
                 if not merged:
                     prim = blasPrimIds[unsafe_offset=offset + j]
                     if prim.type != Int8(0):
@@ -1279,12 +1284,12 @@ def _traverse_blas_triangles(
                     mesh_idx = Int(prim.id1)
                     base_vidx = Int(prim.id2)
                 var mesh = meshes[unsafe_offset=mesh_idx]
-                var v0 = Int(mesh.vertexIndices[unsafe_offset=base_vidx])
-                var v1 = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 1])
-                var v2 = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 2])
-                var p0 = Vec3f(mesh.points[unsafe_offset=v0*4], mesh.points[unsafe_offset=v0*4+1], mesh.points[unsafe_offset=v0*4+2])
-                var p1 = Vec3f(mesh.points[unsafe_offset=v1*4], mesh.points[unsafe_offset=v1*4+1], mesh.points[unsafe_offset=v1*4+2])
-                var p2 = Vec3f(mesh.points[unsafe_offset=v2*4], mesh.points[unsafe_offset=v2*4+1], mesh.points[unsafe_offset=v2*4+2])
+                var v0 = Int(mesh_vi(mesh, base_vidx))
+                var v1 = Int(mesh_vi(mesh, base_vidx + 1))
+                var v2 = Int(mesh_vi(mesh, base_vidx + 2))
+                var p0 = mesh_pos(mesh, v0)
+                var p1 = mesh_pos(mesh, v1)
+                var p2 = mesh_pos(mesh, v2)
                 var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
                 if hit_res[0] and not alpha_killed(mesh, v0, v1, v2, hit_res[2], hit_res[3],
                                                    ray_org, ray_dir, (mesh_idx << 32) | base_vidx):
@@ -1292,7 +1297,7 @@ def _traverse_blas_triangles(
                     bestU = hit_res[2]
                     bestV = hit_res[3]
                     hitPrim = prim
-                    hitTri = offset + j
+                    hitTri = offset * per_leaf + j
                     hasHit = True
             if toVisit == 0:
                 break
@@ -1334,7 +1339,7 @@ def _traverse_blas_triangles(
                 current = Int(stack_ptr[unsafe_offset=toVisit])
 
     if merged and hasHit:
-        hitPrim = PrimId(first.id1, Int64(hitTri * 3), Int64(meshes[unsafe_offset=Int(first.id1)].materials[unsafe_offset=hitTri]),
+        hitPrim = PrimId(first.id1, Int64(hitTri * 3), Int64(mesh_material(meshes[unsafe_offset=Int(first.id1)], hitTri)),
                          Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     return (hasHit, localTHit, bestU, bestV, hitPrim)
 
@@ -1634,25 +1639,13 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
                     continue
 
                 var mesh = meshes[unsafe_offset=mesh_idx]
-                var v0_idx = Int(mesh.vertexIndices[unsafe_offset=base_vidx])
-                var v1_idx = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 1])
-                var v2_idx = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 2])
+                var v0_idx = Int(mesh_vi(mesh, base_vidx))
+                var v1_idx = Int(mesh_vi(mesh, base_vidx + 1))
+                var v2_idx = Int(mesh_vi(mesh, base_vidx + 2))
 
-                var p0 = Vec3f(
-                    mesh.points[unsafe_offset=v0_idx * 4],
-                    mesh.points[unsafe_offset=v0_idx * 4 + 1],
-                    mesh.points[unsafe_offset=v0_idx * 4 + 2]
-                )
-                var p1 = Vec3f(
-                    mesh.points[unsafe_offset=v1_idx * 4],
-                    mesh.points[unsafe_offset=v1_idx * 4 + 1],
-                    mesh.points[unsafe_offset=v1_idx * 4 + 2]
-                )
-                var p2 = Vec3f(
-                    mesh.points[unsafe_offset=v2_idx * 4],
-                    mesh.points[unsafe_offset=v2_idx * 4 + 1],
-                    mesh.points[unsafe_offset=v2_idx * 4 + 2]
-                )
+                var p0 = mesh_pos(mesh, v0_idx)
+                var p1 = mesh_pos(mesh, v1_idx)
+                var p2 = mesh_pos(mesh, v2_idx)
 
                 var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
                 if hit_res[0] and not alpha_killed(mesh, v0_idx, v1_idx, v2_idx, hit_res[2], hit_res[3],
@@ -1840,25 +1833,13 @@ def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True
                     continue
 
                 var mesh = meshes[unsafe_offset=mesh_idx]
-                var v0_idx = Int(mesh.vertexIndices[unsafe_offset=base_vidx])
-                var v1_idx = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 1])
-                var v2_idx = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 2])
+                var v0_idx = Int(mesh_vi(mesh, base_vidx))
+                var v1_idx = Int(mesh_vi(mesh, base_vidx + 1))
+                var v2_idx = Int(mesh_vi(mesh, base_vidx + 2))
 
-                var p0 = Vec3f(
-                    mesh.points[unsafe_offset=v0_idx * 4],
-                    mesh.points[unsafe_offset=v0_idx * 4 + 1],
-                    mesh.points[unsafe_offset=v0_idx * 4 + 2]
-                )
-                var p1 = Vec3f(
-                    mesh.points[unsafe_offset=v1_idx * 4],
-                    mesh.points[unsafe_offset=v1_idx * 4 + 1],
-                    mesh.points[unsafe_offset=v1_idx * 4 + 2]
-                )
-                var p2 = Vec3f(
-                    mesh.points[unsafe_offset=v2_idx * 4],
-                    mesh.points[unsafe_offset=v2_idx * 4 + 1],
-                    mesh.points[unsafe_offset=v2_idx * 4 + 2]
-                )
+                var p0 = mesh_pos(mesh, v0_idx)
+                var p1 = mesh_pos(mesh, v1_idx)
+                var p2 = mesh_pos(mesh, v2_idx)
 
                 var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
                 if hit_res[0] and (not alpha_on or not alpha_killed(mesh, v0_idx, v1_idx, v2_idx, hit_res[2], hit_res[3],
@@ -2054,14 +2035,12 @@ def any_hit_bvh2_core(
                     continue
                 else:
                     continue
-                var vidx = meshes[unsafe_offset=mesh_idx].vertexIndices
-                var pts = meshes[unsafe_offset=mesh_idx].points
-                var v0 = Int(vidx[unsafe_offset=base_vidx])
-                var v1 = Int(vidx[unsafe_offset=base_vidx + 1])
-                var v2 = Int(vidx[unsafe_offset=base_vidx + 2])
-                var p0 = Vec3f(pts[unsafe_offset=v0*4], pts[unsafe_offset=v0*4+1], pts[unsafe_offset=v0*4+2])
-                var p1 = Vec3f(pts[unsafe_offset=v1*4], pts[unsafe_offset=v1*4+1], pts[unsafe_offset=v1*4+2])
-                var p2 = Vec3f(pts[unsafe_offset=v2*4], pts[unsafe_offset=v2*4+1], pts[unsafe_offset=v2*4+2])
+                var v0 = mesh_vi(meshes[unsafe_offset=mesh_idx], base_vidx)
+                var v1 = mesh_vi(meshes[unsafe_offset=mesh_idx], base_vidx + 1)
+                var v2 = mesh_vi(meshes[unsafe_offset=mesh_idx], base_vidx + 2)
+                var p0 = mesh_pos(meshes[unsafe_offset=mesh_idx], v0)
+                var p1 = mesh_pos(meshes[unsafe_offset=mesh_idx], v1)
+                var p2 = mesh_pos(meshes[unsafe_offset=mesh_idx], v2)
                 var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, tMax)
                 if hit_res[0]:
                     # Tested after the hit, not before: the null-material and
@@ -2298,9 +2277,9 @@ def _bvh4_tris(
             var mesh = meshes[unsafe_offset=mesh_idx]
             var p = Array[Float32, 9](fill=Float32(0.0))
             for c in range(3):
-                var vi = Int(mesh.vertexIndices[unsafe_offset=base_vidx + c])
-                for a in range(3):
-                    p[c * 3 + a] = mesh.points[unsafe_offset=vi * 4 + a]
+                var vi = Int(mesh_vi(mesh, base_vidx + c))
+                var pv = mesh_pos(mesh, vi)
+                p[c * 3] = pv.x; p[c * 3 + 1] = pv.y; p[c * 3 + 2] = pv.z
             for a in range(3):
                 t[unsafe_offset=a] = p[a]
                 t[unsafe_offset=4 + a] = p[3 + a] - p[a]
@@ -2493,9 +2472,9 @@ def traverse_bvh4_core[Or: Origin[mut=True]](
                                 t_mesh_idx = Int(tprim.id2 >> 32)
                                 t_base_vidx = Int(tprim.id2 & 0xFFFFFFFF) * 3
                             var t_mesh = meshes[unsafe_offset=t_mesh_idx]
-                            var tv0 = Int(t_mesh.vertexIndices[unsafe_offset=t_base_vidx])
-                            var tv1 = Int(t_mesh.vertexIndices[unsafe_offset=t_base_vidx + 1])
-                            var tv2 = Int(t_mesh.vertexIndices[unsafe_offset=t_base_vidx + 2])
+                            var tv0 = Int(mesh_vi(t_mesh, t_base_vidx))
+                            var tv1 = Int(mesh_vi(t_mesh, t_base_vidx + 1))
+                            var tv2 = Int(mesh_vi(t_mesh, t_base_vidx + 2))
                             if not alpha_killed(t_mesh, tv0, tv1, tv2, th[2], th[3],
                                                 ray_org, ray_dir, (t_mesh_idx << 32) | t_base_vidx):
                                 localTHit = th[1]
@@ -2662,9 +2641,9 @@ def any_hit_bvh4_core(
                             t_mesh_idx = Int(tprim.id2 >> 32)
                             t_base_vidx = Int(tprim.id2 & 0xFFFFFFFF) * 3
                         var t_mesh = meshes[unsafe_offset=t_mesh_idx]
-                        var tv0 = Int(t_mesh.vertexIndices[unsafe_offset=t_base_vidx])
-                        var tv1 = Int(t_mesh.vertexIndices[unsafe_offset=t_base_vidx + 1])
-                        var tv2 = Int(t_mesh.vertexIndices[unsafe_offset=t_base_vidx + 2])
+                        var tv0 = Int(mesh_vi(t_mesh, t_base_vidx))
+                        var tv1 = Int(mesh_vi(t_mesh, t_base_vidx + 1))
+                        var tv2 = Int(mesh_vi(t_mesh, t_base_vidx + 2))
                         if not alpha_killed(t_mesh, tv0, tv1, tv2, th[2], th[3],
                                             ray_org, ray_dir, (t_mesh_idx << 32) | t_base_vidx):
                             return True
@@ -3006,6 +2985,7 @@ def _build_bvh2_parallel(
     node_count: Pointer[Int32, MutUntrackedOrigin],
     subtree_prims: Int,
     min_leaf: Int = 1,
+    max_leaf: Int = 4,
 ):
     """The tree build_bvh2_node would build over [0, n), node for node, on all
     cores. Every split only reorders its own range of the work arrays, so the
@@ -3024,7 +3004,7 @@ def _build_bvh2_parallel(
         def split_one(k: Int) {imm}:
             var t = tasks[unsafe_offset=level[unsafe_offset=k]]
             if t.end - t.start > subtree_prims:
-                splits[unsafe_offset=k] = _bvh_split(widx, wmin, wmax, t.start, t.end, 4)
+                splits[unsafe_offset=k] = _bvh_split(widx, wmin, wmax, t.start, t.end, max_leaf)
             else:
                 splits[unsafe_offset=k] = _BVHSplit(t.bmin, t.bmax, -1)   # small enough: a subtree build
 
@@ -3066,7 +3046,7 @@ def _build_bvh2_parallel(
             var nodes = unsafe_alloc[BVH2Node](2 * (t.end - t.start))
             var cnt = unsafe_alloc[Int32](1)
             cnt[unsafe_offset=0] = Int32(0)
-            _ = build_bvh2_node(widx, wmin, wmax, t.start, t.end, nodes, cnt, 4, min_leaf)
+            _ = build_bvh2_node(widx, wmin, wmax, t.start, t.end, nodes, cnt, max_leaf, min_leaf)
             t.nodes = nodes.unsafe_origin_cast[MutUntrackedOrigin]()
             t.n_nodes = Int(cnt[unsafe_offset=0])
             tasks[unsafe_offset=i] = t
@@ -3091,7 +3071,8 @@ def build_bvh2(
     outOrder: Pointer[Int32, MutUntrackedOrigin],        # capacity >= n
     parallel: Bool = True,   # False: the plain serial build, e.g. to check against
     subtree_prims: Int = _BVH_SUBTREE_PRIMS,   # parallel subtree size; tests lower it
-    min_leaf: Int = 1,   # leaves hold at least this many primitives (up to 4): fewer nodes, coarser culling
+    min_leaf: Int = 1,   # leaves hold at least this many primitives (up to max_leaf): fewer nodes, coarser culling
+    max_leaf: Int = 4,
 ) -> Int32:
     var n = Int(primCount)
     if n <= 0:
@@ -3112,9 +3093,9 @@ def build_bvh2(
     var node_count = unsafe_alloc[Int32](1)
     node_count[unsafe_offset=0] = 0
     if parallel and n > 4 * subtree_prims:
-        _build_bvh2_parallel(widx, wmin, wmax, n, outNodes, node_count, subtree_prims, min_leaf)
+        _build_bvh2_parallel(widx, wmin, wmax, n, outNodes, node_count, subtree_prims, min_leaf, max_leaf)
     else:
-        _ = build_bvh2_node(widx, wmin, wmax, 0, n, outNodes, node_count, 4, min_leaf)
+        _ = build_bvh2_node(widx, wmin, wmax, 0, n, outNodes, node_count, max_leaf, min_leaf)
 
     for k in range(n):
         outOrder[unsafe_offset=k] = widx[unsafe_offset=k]
@@ -3244,12 +3225,12 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
                 # index this function never validated before.
                 if mesh_idx >= 0 and mesh_idx < Int(sd.meshCount):
                     var mesh = sd.meshes[unsafe_offset=mesh_idx]
-                    var vi0 = Int(mesh.vertexIndices[unsafe_offset=base_vidx])
-                    var vi1 = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 1])
-                    var vi2 = Int(mesh.vertexIndices[unsafe_offset=base_vidx + 2])
-                    var p0 = Point3f(mesh.points[unsafe_offset=vi0*4], mesh.points[unsafe_offset=vi0*4+1], mesh.points[unsafe_offset=vi0*4+2])
-                    var p1 = Point3f(mesh.points[unsafe_offset=vi1*4], mesh.points[unsafe_offset=vi1*4+1], mesh.points[unsafe_offset=vi1*4+2])
-                    var p2 = Point3f(mesh.points[unsafe_offset=vi2*4], mesh.points[unsafe_offset=vi2*4+1], mesh.points[unsafe_offset=vi2*4+2])
+                    var vi0 = Int(mesh_vi(mesh, base_vidx))
+                    var vi1 = Int(mesh_vi(mesh, base_vidx + 1))
+                    var vi2 = Int(mesh_vi(mesh, base_vidx + 2))
+                    var p0 = mesh_point(mesh, vi0)
+                    var p1 = mesh_point(mesh, vi1)
+                    var p2 = mesh_point(mesh, vi2)
                     var e1 = p1 - p0; var e2 = p2 - p0
                     normal = Vec3f(e1.y*e2.z - e1.z*e2.y, e1.z*e2.x - e1.x*e2.z, e1.x*e2.y - e1.y*e2.x)
                     var nl = normal.length()

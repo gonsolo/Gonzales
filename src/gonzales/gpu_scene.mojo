@@ -6,7 +6,7 @@ from .lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSam
 from .materials import MatKind, Material, MeasuredBRDF, is_specular_glass
 from .footprint import CameraFootprint
 from .media import Grid, MediumInterface, Medium, NvdbGrid
-from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh
+from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh, mesh_points_floats
 from .sampling import FILTER_LUT_N, fill_filter_lut
 from .render_state import FilmDims, FilterParams, GpuTexture, NormalSlopeMap, PathState, ShadowTask, SHADOW_SLOTS
 from std.os import getenv
@@ -218,9 +218,13 @@ struct MeshBuffers(Movable):
             # per vertex) and shading normals (3 per vertex), each a zeroed
             # 4-byte buffer when the mesh has none.
             # points are padded to 4 floats per vertex
-            var pts_dptr = _gpu_upload_owned[Float32](ctx, points_bufs, host_mesh.points, Int(s.mesh_n_verts[unsafe_offset=i]) * 4)
-            var fi_dptr = _gpu_upload_owned[Int32](ctx, face_bufs, host_mesh.faceIndices, Int(s.mesh_n_tris[unsafe_offset=i]))
-            var vi_dptr = _gpu_upload_owned[Int32](ctx, vert_bufs, host_mesh.vertexIndices, Int(s.mesh_n_tris[unsafe_offset=i]) * 3)
+            var pts_dptr = _gpu_upload_owned[Float32](ctx, points_bufs, host_mesh.points, mesh_points_floats(Int(s.mesh_n_verts[unsafe_offset=i]), host_mesh.quads))
+            # A quad soup has no vertex indices and one face id and material a quad (TriangleMesh.quads).
+            var is_quads = host_mesh.quads != Int32(0)
+            var n_per_face = Int(s.mesh_n_tris[unsafe_offset=i]) // 2 if is_quads else Int(s.mesh_n_tris[unsafe_offset=i])
+            var fi_dptr = _gpu_upload_owned[Int32](ctx, face_bufs, host_mesh.faceIndices, n_per_face)
+            var vi_dptr = _gpu_upload_owned[Int32](ctx, vert_bufs, host_mesh.vertexIndices,
+                                                   1 if is_quads else Int(s.mesh_n_tris[unsafe_offset=i]) * 3)
             var uv_n = Int(s.mesh_uv_n_verts[unsafe_offset=i])
             var uv_dptr: Pointer[Float32, MutUntrackedOrigin]
             if uv_n > 0:
@@ -230,7 +234,7 @@ struct MeshBuffers(Movable):
             var nrm_n = Int(s.mesh_nrm_n_verts[unsafe_offset=i])
             var nrm_dptr = Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=1)   # "no normals"
             if nrm_n > 0:
-                nrm_dptr = _gpu_upload_owned[Float32](ctx, nrm_bufs, host_mesh.normals, nrm_n * 3)
+                nrm_dptr = _gpu_upload_owned[Float32](ctx, nrm_bufs, host_mesh.normals, nrm_n)   # one encoded word a vertex
             else:
                 _ = _gpu_zeros_owned[Float32](ctx, nrm_bufs, 1)
 
@@ -251,9 +255,11 @@ struct MeshBuffers(Movable):
             mesh_structs_host[unsafe_offset=i] = TriangleMesh(pts_dptr, fi_dptr, vi_dptr, uv_dptr, nrm_dptr,
                 alpha_dptr, host_mesh.alpha_w, host_mesh.alpha_h, host_mesh.alpha_const)
             mesh_structs_host[unsafe_offset=i].emit_two_sided = host_mesh.emit_two_sided
+            mesh_structs_host[unsafe_offset=i].uv_corners = host_mesh.uv_corners
+            mesh_structs_host[unsafe_offset=i].quads = host_mesh.quads
             if _is_real_ptr(host_mesh.materials):
                 mesh_structs_host[unsafe_offset=i].materials = _gpu_upload_owned[Int32](
-                    ctx, face_bufs, host_mesh.materials, Int(s.mesh_n_tris[unsafe_offset=i]))
+                    ctx, face_bufs, host_mesh.materials, n_per_face)
 
         # Upload mesh struct array
         var meshes_buf = _gpu_upload_array[TriangleMesh](ctx, mesh_structs_host, Int(s.mesh_count))

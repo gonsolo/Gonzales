@@ -4,7 +4,7 @@ from std.os import getenv
 from std.time import perf_counter_ns
 from std.memory.alloc import unsafe_alloc
 from std.memory import unsafe_memcpy
-from std.math import tan, atan, sqrt, abs
+from std.math import tan, atan, sqrt, abs, floor, fma
 from std.atomic import Atomic
 from std.sys.info import num_performance_cores
 from max.algorithm import parallelize
@@ -25,7 +25,8 @@ from .geometry import RGB, Point3f, Vec3f, dot, PI, _is_real_ptr
 from .materials import Material, MatKind, MeasuredBRDF, is_specular_glass
 from .render_state import GpuTexture, NormalSlopeMap, normal_slope_map_none
 from .host_textures import HostTextures, TexPrefetch, decode_host_textures, host_texture_table
-from .primitives import Sphere, TriangleMesh, PrimId, Instance
+from .primitives import Sphere, TriangleMesh, PrimId, Instance, encode_normal, mesh_points_floats
+from .quad_pack import quantise_quads
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
 from .curves import Curve, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area
@@ -1695,6 +1696,18 @@ def handle_texture(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
 # placement contributes a small TLAS leaf (transform + BLAS reference) rather
 # than a duplicated copy of the geometry.
 
+def _is_quad_soup(vis: Pointer[Int32, MutUntrackedOrigin], n_verts: Int, n_tris: Int) -> Bool:
+    """Whether a mesh is quads with four vertices of their own each, split as (0, 1, 2) and (0, 2, 3)."""
+    if n_tris == 0 or n_tris % 2 != 0 or n_verts != n_tris * 2:
+        return False
+    for q in range(n_tris // 2):
+        var b = Int32(q * 4)
+        if (vis[unsafe_offset=q * 6] != b or vis[unsafe_offset=q * 6 + 1] != b + 1 or vis[unsafe_offset=q * 6 + 2] != b + 2
+                or vis[unsafe_offset=q * 6 + 3] != b or vis[unsafe_offset=q * 6 + 4] != b + 2 or vis[unsafe_offset=q * 6 + 5] != b + 3):
+            return False
+    return True
+
+
 def _wrap_world_meshes(s: Pointer[SceneParseState, MutUntrackedOrigin]):
     """In a scene that uses object instancing, turn each run of ordinary meshes placed directly in the scene
     into a template with one identity instance. They then get the template form (_merge_template_meshes:
@@ -2554,7 +2567,22 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         meshes[unsafe_offset=i].points        = pts_c
         meshes[unsafe_offset=i].vertexIndices = vis_c
         meshes[unsafe_offset=i].faceIndices   = fis_c
-        if len(ma.uvs) >= nv * 2:
+        meshes[unsafe_offset=i].uv_corners = Int32(0)
+        meshes[unsafe_offset=i].quads = Int32(0)
+        # A soup of quads each mapped to its own unit square (every Ptex mesh of a production scene): the
+        # coordinates follow from the vertex index and are not stored (primitives.mesh_uv).
+        var corners = len(ma.uvs) >= nv * 2 and nv > 0 and nv % 4 == 0
+        if corners:
+            for vi2 in range(nv):
+                var cn = vi2 & 3
+                if ma.uvs[vi2 * 2] != (Float32(1) if (cn == 1 or cn == 2) else Float32(0)) or ma.uvs[vi2 * 2 + 1] != (Float32(1) if cn >= 2 else Float32(0)):
+                    corners = False
+                    break
+        if corners:
+            meshes[unsafe_offset=i].uvs = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
+            meshes[unsafe_offset=i].uv_corners = Int32(1)
+            out_uv_nv[unsafe_offset=i] = Int32(0)
+        elif len(ma.uvs) >= nv * 2:
             var uv_c = unsafe_alloc[Float32](nv * 2)
             for ui in range(nv * 2): uv_c[unsafe_offset=ui] = ma.uvs[ui]
             meshes[unsafe_offset=i].uvs = uv_c
@@ -2574,8 +2602,9 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             meshes[unsafe_offset=i].alpha_w = Int32(0)
             meshes[unsafe_offset=i].alpha_h = Int32(0)
         if len(ma.normals) >= nv * 3:
-            var nrm_c = unsafe_alloc[Float32](nv * 3)
-            for ni in range(nv * 3): nrm_c[unsafe_offset=ni] = ma.normals[ni]
+            var nrm_c = unsafe_alloc[Float32](nv)   # one encoded word a vertex, see TriangleMesh.normals
+            var nrm_w = nrm_c.unsafe_bitcast[UInt32]()
+            for ni in range(nv): nrm_w[unsafe_offset=ni] = encode_normal(ma.normals[ni * 3], ma.normals[ni * 3 + 1], ma.normals[ni * 3 + 2])
             meshes[unsafe_offset=i].normals = nrm_c
             out_nrm_nv[unsafe_offset=i] = Int32(nv)
         else:
@@ -2936,6 +2965,75 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 tmpl_bounds[unsafe_offset=tmpl * 6 + 3] = cr.max.x; tmpl_bounds[unsafe_offset=tmpl * 6 + 4] = cr.max.y; tmpl_bounds[unsafe_offset=tmpl * 6 + 5] = cr.max.z
             else:
                 c_nodes.unsafe_free(); c_prims.unsafe_free()
+        # ---- A merged template that is a soup of quads (every production mesh is): store it as quads ----
+        # Vertices go in the leaf order of a BVH built over the quads, four a quad, so vertex indices are
+        # implied and the face id and material are kept once a quad (TriangleMesh.quads).
+        if mend > mstart and _is_real_ptr(meshes[unsafe_offset=mstart].materials) and _is_quad_soup(
+                meshes[unsafe_offset=mstart].vertexIndices, Int(out_nv[unsafe_offset=mstart]), Int(out_nt[unsafe_offset=mstart])):
+            var nq = Int(out_nt[unsafe_offset=mstart]) // 2
+            var q_pts = meshes[unsafe_offset=mstart].points
+            var q_bounds = unsafe_alloc[Float32](nq * 6)
+            for q in range(nq):
+                var bx0 = Float32(1e38); var by0 = Float32(1e38); var bz0 = Float32(1e38)
+                var bx1 = Float32(-1e38); var by1 = Float32(-1e38); var bz1 = Float32(-1e38)
+                for c in range(4):
+                    var o = (q * 4 + c) * 4
+                    bx0 = min(bx0, q_pts[unsafe_offset=o]); by0 = min(by0, q_pts[unsafe_offset=o + 1]); bz0 = min(bz0, q_pts[unsafe_offset=o + 2])
+                    bx1 = max(bx1, q_pts[unsafe_offset=o]); by1 = max(by1, q_pts[unsafe_offset=o + 1]); bz1 = max(bz1, q_pts[unsafe_offset=o + 2])
+                q_bounds[unsafe_offset=q * 6] = bx0; q_bounds[unsafe_offset=q * 6 + 1] = by0; q_bounds[unsafe_offset=q * 6 + 2] = bz0
+                q_bounds[unsafe_offset=q * 6 + 3] = bx1; q_bounds[unsafe_offset=q * 6 + 4] = by1; q_bounds[unsafe_offset=q * 6 + 5] = bz1
+            var q_nodes = unsafe_alloc[BVH2Node](nq * 2 + 4)
+            var q_order = unsafe_alloc[Int32](nq)
+            var q_node_count = build_bvh2(q_bounds, Int32(nq), q_nodes, q_order, min_leaf=8, max_leaf=8)
+            q_bounds.unsafe_free()
+            var has_qn = Int(out_nrm_nv[unsafe_offset=mstart]) > 0
+            var n_pts = unsafe_alloc[Float32](mesh_points_floats(nq * 4, Int32(2)))
+            var n_dq = unsafe_alloc[Float32](nq * 16)
+            var n_nrm = unsafe_alloc[Float32](nq * 4 if has_qn else 1)
+            var n_fis = unsafe_alloc[Int32](nq)
+            var n_mats = unsafe_alloc[Int32](nq)
+            var o_nrm = meshes[unsafe_offset=mstart].normals
+            var o_fis = meshes[unsafe_offset=mstart].faceIndices
+            var o_mats = meshes[unsafe_offset=mstart].materials
+            for k in range(nq):
+                var oq = Int(q_order[unsafe_offset=k])
+                for c in range(16): n_dq[unsafe_offset=k * 16 + c] = q_pts[unsafe_offset=oq * 16 + c]
+                if has_qn:
+                    for c in range(4): n_nrm[unsafe_offset=k * 4 + c] = o_nrm[unsafe_offset=oq * 4 + c]
+                n_fis[unsafe_offset=k] = o_fis[unsafe_offset=oq * 2]
+                n_mats[unsafe_offset=k] = o_mats[unsafe_offset=oq * 2]
+            quantise_quads(n_pts, n_dq, nq, q_nodes, Int(q_node_count))
+            q_order.unsafe_free()
+            q_pts.unsafe_free(); o_fis.unsafe_free(); o_mats.unsafe_free()
+            meshes[unsafe_offset=mstart].vertexIndices.unsafe_free()
+            if has_qn:
+                o_nrm.unsafe_free()
+                meshes[unsafe_offset=mstart].normals = n_nrm
+            else:
+                n_nrm.unsafe_free()
+            # The index array stays as a one-element placeholder: the scene frees one a mesh.
+            var no_vis = unsafe_alloc[Int32](1)
+            no_vis[unsafe_offset=0] = Int32(0)
+            meshes[unsafe_offset=mstart].points = n_pts
+            meshes[unsafe_offset=mstart].vertexIndices = no_vis
+            meshes[unsafe_offset=mstart].faceIndices = n_fis
+            meshes[unsafe_offset=mstart].materials = n_mats
+            meshes[unsafe_offset=mstart].quads = Int32(2)
+            out_pts[unsafe_offset=mstart] = n_pts; out_vis[unsafe_offset=mstart] = no_vis; out_fis[unsafe_offset=mstart] = n_fis
+            var qr = q_nodes[unsafe_offset=0]
+            tmpl_bounds[unsafe_offset=tmpl * 6 + 0] = min(tmpl_bounds[unsafe_offset=tmpl * 6 + 0], qr.min.x)
+            tmpl_bounds[unsafe_offset=tmpl * 6 + 1] = min(tmpl_bounds[unsafe_offset=tmpl * 6 + 1], qr.min.y)
+            tmpl_bounds[unsafe_offset=tmpl * 6 + 2] = min(tmpl_bounds[unsafe_offset=tmpl * 6 + 2], qr.min.z)
+            tmpl_bounds[unsafe_offset=tmpl * 6 + 3] = max(tmpl_bounds[unsafe_offset=tmpl * 6 + 3], qr.max.x)
+            tmpl_bounds[unsafe_offset=tmpl * 6 + 4] = max(tmpl_bounds[unsafe_offset=tmpl * 6 + 4], qr.max.y)
+            tmpl_bounds[unsafe_offset=tmpl * 6 + 5] = max(tmpl_bounds[unsafe_offset=tmpl * 6 + 5], qr.max.z)
+            var q_rec = unsafe_alloc[PrimId](1)
+            q_rec[unsafe_offset=0] = PrimId(Int64(mstart), Int64(curve_blas), Int64(0), Int32(-1), Int8(7), Int8(0), Int8(0), Int8(0))
+            blas_nodes_arr[unsafe_offset=tmpl]   = q_nodes
+            blas_primids_arr[unsafe_offset=tmpl] = q_rec
+            blas_node_counts[unsafe_offset=tmpl]   = q_node_count
+            blas_primid_counts[unsafe_offset=tmpl] = Int32(1)
+            continue
         var t_tris = Int32(0)
         for mi in range(mstart, mend):
             t_tris += Int32(len(s[unsafe_offset=0].meshes[mi].face_idxs))
@@ -3078,7 +3176,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         var inst_nodes = unsafe_alloc[BVH2Node](Int(total_instances) * 2 + 4)
         var inst_order = unsafe_alloc[Int32](Int(total_instances))
         # Four instances a leaf: a node costs more than half an instance, and an instance is cheap to reject.
-        var inst_node_count = build_bvh2(prim_bounds.unsafe_offset(inst_slot), total_instances, inst_nodes, inst_order, min_leaf=4)
+        var inst_node_count = build_bvh2(prim_bounds.unsafe_offset(inst_slot), total_instances, inst_nodes, inst_order, min_leaf=8, max_leaf=8)
         var inst_tmp = unsafe_alloc[Instance](Int(total_instances))
         for k in range(Int(total_instances)): inst_tmp[unsafe_offset=k] = instances_c[unsafe_offset=Int(inst_order[unsafe_offset=k])]
         for k in range(Int(total_instances)): instances_c[unsafe_offset=k] = inst_tmp[unsafe_offset=k]

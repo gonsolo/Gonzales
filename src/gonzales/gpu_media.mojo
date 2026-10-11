@@ -4,7 +4,8 @@ from .geometry import Point2f, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, po
 from .lights import AreaLight, DistantLight, InfiniteLight, LightSampler, PointLight, area_light_pick_triangle, light_sampler_sample
 from .materials import MatKind, Material
 from .media import Grid, MEDIUM_TRACK_MAX_ITERS, MediumInterface, Medium, NvdbGrid, grid_ray_range, grid_sample_density, hg_phase, hg_sample, medium_emission_spectral, medium_grid_for, medium_nvdb_for, medium_sigma_s_spectral, medium_sigma_t_spectral, medium_transmittance_ratio_spectral, nvdb_index_ray, nvdb_majorant_at_world, nvdb_node_exit_t, nvdb_ray_range, nvdb_sample_density, sample_free_flight
-from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, sphere_outward_normal
+from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, sphere_outward_normal, mesh_vi
+from .primitives import mesh_pos
 from .render_state import PathState
 from .reservoir import reservoir_finalize, reservoir_update
 from .restir_vol import VolReservoir, VOL_RIS_CANDIDATES, VOL_RIS_DISTANCE, VOL_TR_UNIT, VolShiftMode, vol_reservoir_init, vol_reservoir_io_null, vol_target_pdf, vol_temporal_spatial_combine
@@ -72,12 +73,12 @@ def update_medium_gpu(
         else:
             return
         var m = sd.meshes[unsafe_offset=mi]
-        var v0 = Int(m.vertexIndices[unsafe_offset=bv])
-        var v1 = Int(m.vertexIndices[unsafe_offset=bv + 1])
-        var v2 = Int(m.vertexIndices[unsafe_offset=bv + 2])
-        var p0 = Vec3f(m.points[unsafe_offset=v0*4], m.points[unsafe_offset=v0*4+1], m.points[unsafe_offset=v0*4+2])
-        var p1 = Vec3f(m.points[unsafe_offset=v1*4], m.points[unsafe_offset=v1*4+1], m.points[unsafe_offset=v1*4+2])
-        var p2 = Vec3f(m.points[unsafe_offset=v2*4], m.points[unsafe_offset=v2*4+1], m.points[unsafe_offset=v2*4+2])
+        var v0 = Int(mesh_vi(m, bv))
+        var v1 = Int(mesh_vi(m, bv + 1))
+        var v2 = Int(mesh_vi(m, bv + 2))
+        var p0 = mesh_pos(m, v0)
+        var p1 = mesh_pos(m, v1)
+        var p2 = mesh_pos(m, v2)
         geom_n = cross(p1 - p0, p2 - p0)
     if dot(ray_dir, geom_n) > Float32(0.0):
         path_ptr[].current_medium_idx = iface.outside_medium_idx
@@ -335,12 +336,12 @@ def _volume_area_light_nee(
             var r1 = pcg.next_float()
             var r2 = pcg.next_float()
             var lb = lti * 3
-            var lv0 = Int(lmesh.vertexIndices[unsafe_offset=lb])
-            var lv1 = Int(lmesh.vertexIndices[unsafe_offset=lb + 1])
-            var lv2 = Int(lmesh.vertexIndices[unsafe_offset=lb + 2])
-            var lp0 = Vec3f(lmesh.points[unsafe_offset=lv0*4], lmesh.points[unsafe_offset=lv0*4+1], lmesh.points[unsafe_offset=lv0*4+2])
-            var lp1 = Vec3f(lmesh.points[unsafe_offset=lv1*4], lmesh.points[unsafe_offset=lv1*4+1], lmesh.points[unsafe_offset=lv1*4+2])
-            var lp2 = Vec3f(lmesh.points[unsafe_offset=lv2*4], lmesh.points[unsafe_offset=lv2*4+1], lmesh.points[unsafe_offset=lv2*4+2])
+            var lv0 = Int(mesh_vi(lmesh, lb))
+            var lv1 = Int(mesh_vi(lmesh, lb + 1))
+            var lv2 = Int(mesh_vi(lmesh, lb + 2))
+            var lp0 = mesh_pos(lmesh, lv0)
+            var lp1 = mesh_pos(lmesh, lv1)
+            var lp2 = mesh_pos(lmesh, lv2)
             var sqrt_r1 = sqrt(r1)
             var light_point = lp0 * (Float32(1) - sqrt_r1) + lp1 * (sqrt_r1 * (Float32(1) - r2)) + lp2 * (sqrt_r1 * r2)
             var lcross = cross(lp1 - lp0, lp2 - lp0)

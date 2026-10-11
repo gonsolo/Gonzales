@@ -16,7 +16,8 @@ from std.memory import bitcast
 from .geometry import offset_eps, face_toward, TERMINAL_SEGMENT_GRACE_ROUNDS, RGB, Point3f, Point2f, Vec3f, vec3f, point3f, dot, cross, PI, INV_FOUR_PI, Frame, _is_real_ptr
 from .materials import Material, MatKind, LobeKind, PhotonKind, fr_dielectric, MeasuredBRDF, dielectric_is_rough, dt_reflectance, dt_transmittance
 from .render_state import GpuTexture
-from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, sphere_outward_normal
+from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, sphere_outward_normal, mesh_normal, mesh_vi
+from .primitives import mesh_pos
 from .media import Medium, MediumInterface, Grid, NvdbGrid, FreeFlight, sample_homogeneous_free_flight, sample_free_flight, medium_is_heterogeneous, medium_sigma_t_spectral, medium_grid_for, medium_nvdb_for, grid_sample_density, nvdb_sample_density, SSS_WALK_ROUNDS, medium_transmittance_ratio_spectral, spectral_free_flight_weight
 from .lights import area_light_pick_triangle, AreaLight, DistantLight, InfiniteLight, PointLight
 from .curves import Curve, curve_piece_endpoints, _curve_perp_axis
@@ -260,12 +261,12 @@ def _shading_normal_at(
     else:
         return Vec3f(Float32(0), Float32(1), Float32(0))
     var m = meshes[unsafe_offset=mi]
-    var v0 = Int(m.vertexIndices[unsafe_offset=bv])
-    var v1 = Int(m.vertexIndices[unsafe_offset=bv + 1])
-    var v2 = Int(m.vertexIndices[unsafe_offset=bv + 2])
-    var p0 = Vec3f(m.points[unsafe_offset=v0*4], m.points[unsafe_offset=v0*4+1], m.points[unsafe_offset=v0*4+2])
-    var p1 = Vec3f(m.points[unsafe_offset=v1*4], m.points[unsafe_offset=v1*4+1], m.points[unsafe_offset=v1*4+2])
-    var p2 = Vec3f(m.points[unsafe_offset=v2*4], m.points[unsafe_offset=v2*4+1], m.points[unsafe_offset=v2*4+2])
+    var v0 = Int(mesh_vi(m, bv))
+    var v1 = Int(mesh_vi(m, bv + 1))
+    var v2 = Int(mesh_vi(m, bv + 2))
+    var p0 = mesh_pos(m, v0)
+    var p1 = mesh_pos(m, v1)
+    var p2 = mesh_pos(m, v2)
     var gn = cross(p1 - p0, p2 - p0)
     if inter.primId.instanceIdx >= Int32(0):
         gn = transform_normal(Mat4(instances[unsafe_offset=Int(inter.primId.instanceIdx)].world_to_obj()), gn)
@@ -275,9 +276,9 @@ def _shading_normal_at(
     if Int(m.normals) <= 4:
         return gn
     var w0 = Float32(1.0) - inter.u - inter.v
-    var n0 = Vec3f(m.normals[unsafe_offset=v0*3], m.normals[unsafe_offset=v0*3+1], m.normals[unsafe_offset=v0*3+2])
-    var n1 = Vec3f(m.normals[unsafe_offset=v1*3], m.normals[unsafe_offset=v1*3+1], m.normals[unsafe_offset=v1*3+2])
-    var n2 = Vec3f(m.normals[unsafe_offset=v2*3], m.normals[unsafe_offset=v2*3+1], m.normals[unsafe_offset=v2*3+2])
+    var n0 = mesh_normal(m, v0)
+    var n1 = mesh_normal(m, v1)
+    var n2 = mesh_normal(m, v2)
     var sn = n0 * w0 + n1 * inter.u + n2 * inter.v
     if inter.primId.instanceIdx >= Int32(0):
         sn = transform_normal(Mat4(instances[unsafe_offset=Int(inter.primId.instanceIdx)].world_to_obj()), sn)
@@ -643,10 +644,10 @@ def sample_area_light_point(
     var lmesh = meshes[unsafe_offset=Int(al.meshIdx)]
     var ti = area_light_pick_triangle(al, pcg.next_float())
     var lb = ti * 3
-    var lv0 = Int(lmesh.vertexIndices[unsafe_offset=lb]); var lv1 = Int(lmesh.vertexIndices[unsafe_offset=lb+1]); var lv2 = Int(lmesh.vertexIndices[unsafe_offset=lb+2])
-    var lp0 = Vec3f(lmesh.points[unsafe_offset=lv0*4], lmesh.points[unsafe_offset=lv0*4+1], lmesh.points[unsafe_offset=lv0*4+2])
-    var lp1 = Vec3f(lmesh.points[unsafe_offset=lv1*4], lmesh.points[unsafe_offset=lv1*4+1], lmesh.points[unsafe_offset=lv1*4+2])
-    var lp2 = Vec3f(lmesh.points[unsafe_offset=lv2*4], lmesh.points[unsafe_offset=lv2*4+1], lmesh.points[unsafe_offset=lv2*4+2])
+    var lv0 = Int(mesh_vi(lmesh, lb)); var lv1 = Int(mesh_vi(lmesh, lb+1)); var lv2 = Int(mesh_vi(lmesh, lb+2))
+    var lp0 = mesh_pos(lmesh, lv0)
+    var lp1 = mesh_pos(lmesh, lv1)
+    var lp2 = mesh_pos(lmesh, lv2)
     var ru1 = pcg.next_float(); var ru2 = pcg.next_float(); var sr1 = sqrt(ru1)
     var lp  = lp0*(Float32(1)-sr1) + lp1*(sr1*(Float32(1)-ru2)) + lp2*(sr1*ru2)
     var ln  = cross(lp1-lp0, lp2-lp0)
@@ -654,9 +655,9 @@ def sample_area_light_point(
     if lnl > Float32(0): ln = ln*(Float32(1)/sqrt(lnl))
     # Use shading normals when provided — they give the correct emission hemisphere.
     if Int(lmesh.normals) > 4:
-        var sn0 = Vec3f(lmesh.normals[unsafe_offset=lv0*3], lmesh.normals[unsafe_offset=lv0*3+1], lmesh.normals[unsafe_offset=lv0*3+2])
-        var sn1 = Vec3f(lmesh.normals[unsafe_offset=lv1*3], lmesh.normals[unsafe_offset=lv1*3+1], lmesh.normals[unsafe_offset=lv1*3+2])
-        var sn2 = Vec3f(lmesh.normals[unsafe_offset=lv2*3], lmesh.normals[unsafe_offset=lv2*3+1], lmesh.normals[unsafe_offset=lv2*3+2])
+        var sn0 = mesh_normal(lmesh, lv0)
+        var sn1 = mesh_normal(lmesh, lv1)
+        var sn2 = mesh_normal(lmesh, lv2)
         var sn_avg = (sn0 + sn1 + sn2) / Float32(3)
         var snl = sn_avg.length()
         if snl > Float32(0): ln = (sn_avg / snl).to_simd()

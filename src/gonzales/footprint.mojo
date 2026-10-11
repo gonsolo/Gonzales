@@ -13,7 +13,8 @@
 # the sample spacing, not the whole pixel.
 from std.math import sqrt, abs, max, min
 from .geometry import Vec3f, Point3f, dot, cross
-from .primitives import TriangleMesh, Instance
+from .primitives import TriangleMesh, Instance, mesh_uv, mesh_has_uvs, mesh_normal
+from .primitives import mesh_pos
 from .transform import Mat4, transform_normal
 
 
@@ -66,16 +67,16 @@ def tri_world(
     mesh: TriangleMesh, v0: Int, v1: Int, v2: Int,
     instance_idx: Int32, instances: Pointer[Instance, MutUntrackedOrigin],
 ) -> TriWorld:
-    var p0 = Vec3f(mesh.points[unsafe_offset=v0*4], mesh.points[unsafe_offset=v0*4+1], mesh.points[unsafe_offset=v0*4+2])
-    var p1 = Vec3f(mesh.points[unsafe_offset=v1*4], mesh.points[unsafe_offset=v1*4+1], mesh.points[unsafe_offset=v1*4+2])
-    var p2 = Vec3f(mesh.points[unsafe_offset=v2*4], mesh.points[unsafe_offset=v2*4+1], mesh.points[unsafe_offset=v2*4+2])
+    var p0 = mesh_pos(mesh, v0)
+    var p1 = mesh_pos(mesh, v1)
+    var p2 = mesh_pos(mesh, v2)
     var z = Vec3f(Float32(0), Float32(0), Float32(0))
     var n0 = z; var n1 = z; var n2 = z
     var has_n = Int(mesh.normals) > 4
     if has_n:
-        n0 = Vec3f(mesh.normals[unsafe_offset=v0*3], mesh.normals[unsafe_offset=v0*3+1], mesh.normals[unsafe_offset=v0*3+2])
-        n1 = Vec3f(mesh.normals[unsafe_offset=v1*3], mesh.normals[unsafe_offset=v1*3+1], mesh.normals[unsafe_offset=v1*3+2])
-        n2 = Vec3f(mesh.normals[unsafe_offset=v2*3], mesh.normals[unsafe_offset=v2*3+1], mesh.normals[unsafe_offset=v2*3+2])
+        n0 = mesh_normal(mesh, v0)
+        n1 = mesh_normal(mesh, v1)
+        n2 = mesh_normal(mesh, v2)
     if instance_idx >= Int32(0):
         var inst = instances[unsafe_offset=Int(instance_idx)]
         var m = Mat4(inst.obj_to_world())
@@ -211,12 +212,12 @@ def uv_footprint(dpdu: Vec3f, dpdv: Vec3f, dpdx: Vec3f, dpdy: Vec3f) -> UVFootpr
 def tri_dpduv(tri: TriWorld, mesh: TriangleMesh, v0: Int, v1: Int, v2: Int) -> Tuple[Vec3f, Vec3f, Bool]:
     """The triangle's dp/du, dp/dv (pbrt Triangle::InteractionFromIntersection)."""
     var z = Vec3f(Float32(0), Float32(0), Float32(0))
-    if Int(mesh.uvs) <= 4:
+    if not mesh_has_uvs(mesh):
         return (z, z, False)
-    var du02 = mesh.uvs[unsafe_offset=v0*2] - mesh.uvs[unsafe_offset=v2*2]
-    var dv02 = mesh.uvs[unsafe_offset=v0*2+1] - mesh.uvs[unsafe_offset=v2*2+1]
-    var du12 = mesh.uvs[unsafe_offset=v1*2] - mesh.uvs[unsafe_offset=v2*2]
-    var dv12 = mesh.uvs[unsafe_offset=v1*2+1] - mesh.uvs[unsafe_offset=v2*2+1]
+    var du02 = mesh_uv(mesh, v0)[0] - mesh_uv(mesh, v2)[0]
+    var dv02 = mesh_uv(mesh, v0)[1] - mesh_uv(mesh, v2)[1]
+    var du12 = mesh_uv(mesh, v1)[0] - mesh_uv(mesh, v2)[0]
+    var dv12 = mesh_uv(mesh, v1)[1] - mesh_uv(mesh, v2)[1]
     var dp02 = tri.p0 - tri.p2
     var dp12 = tri.p1 - tri.p2
     var det = du02 * dv12 - dv02 * du12

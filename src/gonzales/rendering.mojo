@@ -8,7 +8,8 @@ from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, dot, cross, INV_FOUR_PI
 from .render_state import PathState, TileResult
 from .progress import Progress
-from .primitives import sphere_outward_normal, Ray, Intersection, PrimId, Sphere, TriangleMesh
+from .primitives import sphere_outward_normal, Ray, Intersection, PrimId, Sphere, TriangleMesh, mesh_vi
+from .primitives import mesh_point
 from .media import Medium, MediumInterface, Grid, grid_sample_density, SSS_WALK_ROUNDS
 from .lights import AreaLight, LightSampler, light_sampler_sample
 from .curves import curve_piece_endpoints, _curve_perp_axis
@@ -42,7 +43,8 @@ def _prefetch_hit_indices(inter: Intersection, meshes: Pointer[TriangleMesh, Mut
     """Software prefetch, stage 1: the hit triangle's vertex indices (shading reads them first)."""
     var (mi, bv) = _tri_slot(inter)
     if mi >= 0:
-        prefetch(meshes[unsafe_offset=mi].vertexIndices + bv)
+        if meshes[unsafe_offset=mi].quads == Int32(0):
+            prefetch(meshes[unsafe_offset=mi].vertexIndices + bv)
 
 
 @always_inline
@@ -52,12 +54,12 @@ def _prefetch_hit_vertices(inter: Intersection, meshes: Pointer[TriangleMesh, Mu
     if mi >= 0:
         var m = meshes[unsafe_offset=mi]
         comptime for k in range(3):
-            var v = Int(m.vertexIndices[unsafe_offset=bv + k])
-            prefetch(m.points + v * 4)
+            var v = Int(mesh_vi(m, bv + k))
+            prefetch(m.points + ((v >> 8) * 390 + 6 + (v & 255) * 3 // 2 if m.quads == Int32(2) else v * 4))
             if Int(m.uvs) > 4:
                 prefetch(m.uvs + v * 2)
             if Int(m.normals) > 4:
-                prefetch(m.normals + v * 3)
+                prefetch(m.normals + v)
 
 
 def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
@@ -372,12 +374,12 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     mi_mesh_idx = Int(intersections[unsafe_offset=i].primId.id2 >> 32)
                     mi_base_vidx = Int(intersections[unsafe_offset=i].primId.id2 & 0xFFFFFFFF) * 3
                 var mi_m = scene.meshes[unsafe_offset=mi_mesh_idx]
-                var mi_vi0 = Int(mi_m.vertexIndices[unsafe_offset=mi_base_vidx])
-                var mi_vi1 = Int(mi_m.vertexIndices[unsafe_offset=mi_base_vidx + 1])
-                var mi_vi2 = Int(mi_m.vertexIndices[unsafe_offset=mi_base_vidx + 2])
-                var mi_p0 = Point3f(mi_m.points[unsafe_offset=mi_vi0*4], mi_m.points[unsafe_offset=mi_vi0*4+1], mi_m.points[unsafe_offset=mi_vi0*4+2])
-                var mi_p1 = Point3f(mi_m.points[unsafe_offset=mi_vi1*4], mi_m.points[unsafe_offset=mi_vi1*4+1], mi_m.points[unsafe_offset=mi_vi1*4+2])
-                var mi_p2 = Point3f(mi_m.points[unsafe_offset=mi_vi2*4], mi_m.points[unsafe_offset=mi_vi2*4+1], mi_m.points[unsafe_offset=mi_vi2*4+2])
+                var mi_vi0 = Int(mesh_vi(mi_m, mi_base_vidx))
+                var mi_vi1 = Int(mesh_vi(mi_m, mi_base_vidx + 1))
+                var mi_vi2 = Int(mesh_vi(mi_m, mi_base_vidx + 2))
+                var mi_p0 = mesh_point(mi_m, mi_vi0)
+                var mi_p1 = mesh_point(mi_m, mi_vi1)
+                var mi_p2 = mesh_point(mi_m, mi_vi2)
                 var mi_e1 = mi_p1 - mi_p0; var mi_e2 = mi_p2 - mi_p0
                 mi_n = Vec3f(mi_e1.y*mi_e2.z - mi_e1.z*mi_e2.y, mi_e1.z*mi_e2.x - mi_e1.x*mi_e2.z, mi_e1.x*mi_e2.y - mi_e1.y*mi_e2.x)
             var mi_dot = paths[unsafe_offset=i].ray.direction.x * mi_n.x + paths[unsafe_offset=i].ray.direction.y * mi_n.y + paths[unsafe_offset=i].ray.direction.z * mi_n.z

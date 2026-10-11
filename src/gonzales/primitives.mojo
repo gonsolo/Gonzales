@@ -5,7 +5,7 @@ intersect_triangle/_alpha_hash/alpha_killed were four separate ranges in
 geometry.mojo; every external dependency is the core
 (Point3f/Vec3f/RGB/_is_real_ptr/cross/dot), confirmed by a symbol-reference
 scan of each block with comments and docstrings stripped before moving it."""
-from std.math import floor
+from std.math import floor, sqrt, abs, fma
 from std.memory import bitcast
 from .geometry import Point3f, Vec3f, RGB, _is_real_ptr, cross, dot
 
@@ -80,7 +80,9 @@ struct TriangleMesh(TrivialRegisterPassable):
     var faceIndices: Pointer[Int32, MutUntrackedOrigin]
     var vertexIndices: Pointer[Int32, MutUntrackedOrigin]
     var uvs: Pointer[Float32, MutUntrackedOrigin]   # nullable; stride 2 floats per vertex
-    var normals: Pointer[Float32, MutUntrackedOrigin]  # nullable; stride 3 floats per vertex (shading normals)
+    # Shading normals, nullable: one 32-bit word a vertex, an octahedral encoding (encode_normal; read with
+    # mesh_normal). The pointer is typed Float32 only so that a mesh without normals constructs as before.
+    var normals: Pointer[Float32, MutUntrackedOrigin]
     # pbrt `Shape "texture alpha"` / `"float alpha"` cut-out. `alpha` is an
     # alpha_w x alpha_h byte mask (linear alpha * 255, level 0 only -- pbrt
     # evaluates alpha at intersection time with zero filter width), shared
@@ -96,6 +98,13 @@ struct TriangleMesh(TrivialRegisterPassable):
     # Material per triangle, for a merged object template (PrimId.type 7, see bvh._traverse_blas_triangles);
     # dangling for every other mesh, whose material is in its PrimIds.
     var materials: Pointer[Int32, MutUntrackedOrigin]
+    # 1 = a soup of quads whose texture coordinates are each face's own unit square: vertex v is corner v mod 4
+    # of (0,0) (1,0) (1,1) (0,1). They are then not stored at all (`uvs` is dangling); read them with mesh_uv.
+    var uv_corners: Int32
+    # 1 = a soup of quads stored as such: quad q has vertices 4q..4q+3 and is the two triangles 2q = (0, 1, 2)
+    # and 2q+1 = (0, 2, 3) of them. There is then no vertexIndices array, and faceIndices and materials hold
+    # one entry a quad. Read through mesh_vi, mesh_face and mesh_material.
+    var quads: Int32
 
     def __init__(
         out self,
@@ -119,6 +128,8 @@ struct TriangleMesh(TrivialRegisterPassable):
         self.alpha_h = alpha_h
         self.alpha_const = alpha_const
         self.materials = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
+        self.uv_corners = Int32(0)
+        self.quads = Int32(0)
         self.emit_two_sided = 0
 
 # ── Ray ───────────────────────────────────────────────────────────────────────
@@ -259,6 +270,115 @@ def _alpha_hash(ray_org: Vec3f, ray_dir: Vec3f, key: Int) -> Float32:
 
 
 @always_inline
+def mesh_vi(mesh: TriangleMesh, flat: Int) -> Int:
+    """Vertex of a triangle corner, `flat` = 3 * triangle + corner: stored, or derived for a quad soup."""
+    if mesh.quads != Int32(0):
+        var t = flat // 3
+        var k = flat - t * 3
+        var base = (t >> 1) * 4
+        if k == 0:
+            return base
+        return base + k + (t & 1)
+    return Int(mesh.vertexIndices[unsafe_offset=flat])
+
+
+@always_inline
+def mesh_points_floats(n_verts: Int, quads: Int32) -> Int:
+    """Floats in a mesh's position buffer: four a vertex, or for quads == 2 blocks of 256 vertices of 390 floats."""
+    if quads == Int32(2):
+        return ((n_verts + 255) >> 8) * 390
+    return 4 * n_verts
+
+
+@no_inline
+def _quantised_pos(points: Pointer[Float32, MutUntrackedOrigin], v: Int) -> Vec3f:
+    """A vertex of a quads == 2 buffer: blocks of 256 vertices, each a corner and a step (six floats) and 256
+    triples of 16-bit steps from that corner; the parser quantises and refits the BVH to it."""
+    var blk = v >> 8
+    var h = points.unsafe_offset(blk * 390)
+    var q = points.unsafe_bitcast[UInt16]()
+    var o = blk * 780 + 12 + (v & 255) * 3
+    return Vec3f(fma(Float32(q[unsafe_offset=o]), h[unsafe_offset=3], h[unsafe_offset=0]),
+                 fma(Float32(q[unsafe_offset=o + 1]), h[unsafe_offset=4], h[unsafe_offset=1]),
+                 fma(Float32(q[unsafe_offset=o + 2]), h[unsafe_offset=5], h[unsafe_offset=2]))
+
+
+@always_inline
+def mesh_pos(mesh: TriangleMesh, v: Int) -> Vec3f:
+    """Position of vertex v (see _quantised_pos for the 16-bit form used by quad soups)."""
+    if mesh.quads == Int32(2):
+        return _quantised_pos(mesh.points, v)
+    return Vec3f(mesh.points[unsafe_offset=v * 4], mesh.points[unsafe_offset=v * 4 + 1], mesh.points[unsafe_offset=v * 4 + 2])
+
+
+@always_inline
+def mesh_point(mesh: TriangleMesh, v: Int) -> Point3f:
+    var p = mesh_pos(mesh, v)
+    return Point3f(p.x, p.y, p.z)
+
+
+@always_inline
+def mesh_face(mesh: TriangleMesh, tri: Int) -> Int:
+    """The triangle's face id (a Ptex face); a quad soup stores one a quad."""
+    return Int(mesh.faceIndices[unsafe_offset=(tri >> 1) if mesh.quads != Int32(0) else tri])
+
+
+@always_inline
+def mesh_material(mesh: TriangleMesh, tri: Int) -> Int:
+    """The triangle's material in a merged template; a quad soup stores one a quad."""
+    return Int(mesh.materials[unsafe_offset=(tri >> 1) if mesh.quads != Int32(0) else tri])
+
+
+def encode_normal(x: Float32, y: Float32, z: Float32) -> UInt32:
+    """A direction as two signed 16-bit octahedral coordinates (about 0.002 degrees of error): the octahedron
+    |x| + |y| + |z| = 1 unfolded to a square, the lower half folded outwards."""
+    var s = abs(x) + abs(y) + abs(z)
+    if s <= Float32(0):
+        return UInt32(0)
+    var px = x / s; var py = y / s
+    if z < Float32(0):
+        var qx = (Float32(1) - abs(py)) * (Float32(1) if px >= Float32(0) else Float32(-1))
+        var qy = (Float32(1) - abs(px)) * (Float32(1) if py >= Float32(0) else Float32(-1))
+        px = qx; py = qy
+    var ix = Int(floor(px * Float32(32767) + Float32(0.5))); var iy = Int(floor(py * Float32(32767) + Float32(0.5)))
+    return UInt32(ix & 0xFFFF) | (UInt32(iy & 0xFFFF) << 16)
+
+
+@always_inline
+def decode_normal(w: UInt32) -> Vec3f:
+    var ix = Int(w & UInt32(0xFFFF)); var iy = Int(w >> 16)
+    if ix >= 32768: ix -= 65536
+    if iy >= 32768: iy -= 65536
+    var x = Float32(ix) / Float32(32767); var y = Float32(iy) / Float32(32767)
+    var z = Float32(1) - abs(x) - abs(y)
+    var t = max(-z, Float32(0))
+    x += -t if x >= Float32(0) else t
+    y += -t if y >= Float32(0) else t
+    var inv = Float32(1) / sqrt(x * x + y * y + z * z)
+    return Vec3f(x * inv, y * inv, z * inv)
+
+
+@always_inline
+def mesh_normal(mesh: TriangleMesh, v: Int) -> Vec3f:
+    """Shading normal of vertex v (the mesh must have normals)."""
+    return decode_normal(mesh.normals.unsafe_bitcast[UInt32]()[unsafe_offset=v])
+
+
+@always_inline
+def mesh_uv(mesh: TriangleMesh, v: Int) -> Tuple[Float32, Float32]:
+    """Texture coordinate of vertex v: stored, or the corner its index names (TriangleMesh.uv_corners)."""
+    if mesh.uv_corners != Int32(0):
+        var c = v & 3
+        return (Float32(1) if (c == 1 or c == 2) else Float32(0), Float32(1) if c >= 2 else Float32(0))
+    return (mesh.uvs[unsafe_offset=v * 2], mesh.uvs[unsafe_offset=v * 2 + 1])
+
+
+@always_inline
+def mesh_has_uvs(mesh: TriangleMesh) -> Bool:
+    return mesh.uv_corners != Int32(0) or Int(mesh.uvs) > 4
+
+
+@always_inline
 def alpha_killed(mesh: TriangleMesh, v0: Int, v1: Int, v2: Int, bu: Float32, bv: Float32,
                  ray_org: Vec3f, ray_dir: Vec3f, key: Int) -> Bool:
     """True when a hit at barycentrics (bu, bv) on this triangle is cut out by
@@ -281,9 +401,9 @@ def alpha_killed(mesh: TriangleMesh, v0: Int, v1: Int, v2: Int, bu: Float32, bv:
     var w0 = Float32(1.0) - bu - bv
     var su: Float32
     var tv: Float32
-    if _is_real_ptr(mesh.uvs):
-        su = w0*mesh.uvs[unsafe_offset=v0*2]   + bu*mesh.uvs[unsafe_offset=v1*2]   + bv*mesh.uvs[unsafe_offset=v2*2]
-        tv = w0*mesh.uvs[unsafe_offset=v0*2+1] + bu*mesh.uvs[unsafe_offset=v1*2+1] + bv*mesh.uvs[unsafe_offset=v2*2+1]
+    if mesh.uv_corners != Int32(0) or _is_real_ptr(mesh.uvs):
+        su = w0*mesh_uv(mesh, v0)[0] + bu*mesh_uv(mesh, v1)[0] + bv*mesh_uv(mesh, v2)[0]
+        tv = w0*mesh_uv(mesh, v0)[1] + bu*mesh_uv(mesh, v1)[1] + bv*mesh_uv(mesh, v2)[1]
     else:
         su = bu + bv
         tv = bv

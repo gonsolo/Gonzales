@@ -1,7 +1,8 @@
 # Geometric normal of a hit (triangle, instanced triangle or analytic sphere).
 # Lives apart from sppm.mojo so shading.mojo's shadow-ray media walk can use it.
 from .geometry import Point3f, Vec3f, cross, dot, _is_real_ptr
-from .primitives import Intersection, TriangleMesh, Instance, Sphere, sphere_outward_normal
+from .primitives import Intersection, TriangleMesh, Instance, Sphere, sphere_outward_normal, mesh_vi
+from .primitives import mesh_pos
 from .transform import transform_normal, Mat4
 from std.math import sqrt
 
@@ -43,12 +44,12 @@ def _geom_normal(
     else:
         return Vec3f(Float32(0), Float32(1), Float32(0))
     var m = meshes[unsafe_offset=mi]
-    var v0 = Int(m.vertexIndices[unsafe_offset=bv])
-    var v1 = Int(m.vertexIndices[unsafe_offset=bv + 1])
-    var v2 = Int(m.vertexIndices[unsafe_offset=bv + 2])
-    var p0 = Vec3f(m.points[unsafe_offset=v0*4], m.points[unsafe_offset=v0*4+1], m.points[unsafe_offset=v0*4+2])
-    var p1 = Vec3f(m.points[unsafe_offset=v1*4], m.points[unsafe_offset=v1*4+1], m.points[unsafe_offset=v1*4+2])
-    var p2 = Vec3f(m.points[unsafe_offset=v2*4], m.points[unsafe_offset=v2*4+1], m.points[unsafe_offset=v2*4+2])
+    var v0 = Int(mesh_vi(m, bv))
+    var v1 = Int(mesh_vi(m, bv + 1))
+    var v2 = Int(mesh_vi(m, bv + 2))
+    var p0 = mesh_pos(m, v0)
+    var p1 = mesh_pos(m, v1)
+    var p2 = mesh_pos(m, v2)
     var n = cross(p1 - p0, p2 - p0)
     if inter.primId.instanceIdx >= Int32(0):
         n = transform_normal(Mat4(instances[unsafe_offset=Int(inter.primId.instanceIdx)].world_to_obj()), n)
