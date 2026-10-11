@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <utility>
 #include <vector>
@@ -154,6 +155,8 @@ struct RtFunctions {
     PFN_vkDestroyAccelerationStructureKHR destroy = nullptr;
     PFN_vkCmdBuildAccelerationStructuresKHR cmdBuild = nullptr;
     PFN_vkGetAccelerationStructureDeviceAddressKHR getDeviceAddress = nullptr;
+    PFN_vkCmdWriteAccelerationStructuresPropertiesKHR cmdWriteProps = nullptr;   // compaction; optional
+    PFN_vkCmdCopyAccelerationStructureKHR cmdCopy = nullptr;
 };
 
 bool loadRtFunctions(VkDevice device, RtFunctions* fns) {
@@ -167,12 +170,98 @@ bool loadRtFunctions(VkDevice device, RtFunctions* fns) {
         vkGetDeviceProcAddr(device, "vkCmdBuildAccelerationStructuresKHR");
     fns->getDeviceAddress = (PFN_vkGetAccelerationStructureDeviceAddressKHR)
         vkGetDeviceProcAddr(device, "vkGetAccelerationStructureDeviceAddressKHR");
+    fns->cmdWriteProps = (PFN_vkCmdWriteAccelerationStructuresPropertiesKHR)
+        vkGetDeviceProcAddr(device, "vkCmdWriteAccelerationStructuresPropertiesKHR");
+    fns->cmdCopy = (PFN_vkCmdCopyAccelerationStructureKHR)
+        vkGetDeviceProcAddr(device, "vkCmdCopyAccelerationStructureKHR");
     if (!fns->getBuildSizes || !fns->create || !fns->destroy ||
         !fns->cmdBuild || !fns->getDeviceAddress) {
         fprintf(stderr, "vulkaninterop: failed to load one or more KHR acceleration structure entry points\n");
         return false;
     }
     return true;
+}
+
+
+// Copies a built acceleration structure into a buffer of its compacted size and frees the original (the build must
+// have set ALLOW_COMPACTION). GONZALES_RT_COMPACT=0 turns it off; GONZALES_RT_AS_LOG=1 prints the sizes.
+void compactAccelerationStructure(
+    VkDevice device, VkPhysicalDevice physicalDevice, VkCommandPool cmdPool, VkQueue queue, const RtFunctions& fns,
+    VkAccelerationStructureTypeKHR type, VkAccelerationStructureKHR* as, Buffer* asBuffer) {
+    const char* off = getenv("GONZALES_RT_COMPACT");
+    if (off && off[0] == '0') return;
+    if (!fns.cmdWriteProps || !fns.cmdCopy) return;
+
+    VkQueryPoolCreateInfo qci{};
+    qci.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    qci.queryType = VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR;
+    qci.queryCount = 1;
+    VkQueryPool pool;
+    if (vkCreateQueryPool(device, &qci, nullptr, &pool) != VK_SUCCESS) return;
+
+    VkCommandBufferAllocateInfo cbai{};
+    cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbai.commandPool = cmdPool;
+    cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbai.commandBufferCount = 1;
+    VkCommandBuffer cmd;
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cmd;
+
+    vkAllocateCommandBuffers(device, &cbai, &cmd);
+    vkBeginCommandBuffer(cmd, &bi);
+    vkCmdResetQueryPool(cmd, pool, 0, 1);
+    fns.cmdWriteProps(cmd, 1, as, VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR, pool, 0);
+    vkEndCommandBuffer(cmd);
+    vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(queue);
+    vkFreeCommandBuffers(device, cmdPool, 1, &cmd);
+    VkDeviceSize compacted = 0;
+    VkResult qr = vkGetQueryPoolResults(device, pool, 0, 1, sizeof(compacted), &compacted, sizeof(compacted),
+                                        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+    vkDestroyQueryPool(device, pool, nullptr);
+    if (qr != VK_SUCCESS || compacted == 0 || compacted >= asBuffer->size) return;
+
+    Buffer smaller;
+    if (!createBuffer(device, physicalDevice, compacted,
+                      VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, false, &smaller)) return;
+    VkAccelerationStructureCreateInfoKHR ci{};
+    ci.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+    ci.buffer = smaller.buffer;
+    ci.size = compacted;
+    ci.type = type;
+    VkAccelerationStructureKHR dst = VK_NULL_HANDLE;
+    if (fns.create(device, &ci, nullptr, &dst) != VK_SUCCESS) {
+        destroyBuffer(device, &smaller);
+        return;
+    }
+    vkAllocateCommandBuffers(device, &cbai, &cmd);
+    vkBeginCommandBuffer(cmd, &bi);
+    VkCopyAccelerationStructureInfoKHR copy{};
+    copy.sType = VK_STRUCTURE_TYPE_COPY_ACCELERATION_STRUCTURE_INFO_KHR;
+    copy.src = *as;
+    copy.dst = dst;
+    copy.mode = VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
+    fns.cmdCopy(cmd, &copy);
+    vkEndCommandBuffer(cmd);
+    vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(queue);
+    vkFreeCommandBuffers(device, cmdPool, 1, &cmd);
+
+    const char* log = getenv("GONZALES_RT_AS_LOG");
+    if (log && log[0] != '0')
+        fprintf(stderr, "rt-as %s %llu -> %llu bytes\n", type == VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR ? "TLAS" : "BLAS",
+                (unsigned long long)asBuffer->size, (unsigned long long)compacted);
+    fns.destroy(device, *as, nullptr);
+    destroyBuffer(device, asBuffer);
+    *as = dst;
+    *asBuffer = smaller;
 }
 
 // Builds either a BLAS (triangle geometry) or a TLAS (instance geometry).
@@ -189,7 +278,7 @@ bool buildAccelerationStructure(
     VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
     buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
     buildInfo.type = type;
-    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR;
     buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
     buildInfo.geometryCount = 1;
     buildInfo.pGeometries = &geometry;
@@ -255,6 +344,7 @@ bool buildAccelerationStructure(
     vkQueueWaitIdle(queue);
     vkFreeCommandBuffers(device, cmdPool, 1, &cmd);
     destroyBuffer(device, &scratch);
+    compactAccelerationStructure(device, physicalDevice, cmdPool, queue, fns, type, outAS, outASBuffer);
 
     VkAccelerationStructureDeviceAddressInfoKHR addrInfo{};
     addrInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
@@ -285,7 +375,7 @@ bool buildAccelerationStructureMulti(
     VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
     buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
     buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR;
     buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
     buildInfo.geometryCount = (uint32_t)geometries.size();
     buildInfo.pGeometries = geometries.data();
@@ -355,6 +445,7 @@ bool buildAccelerationStructureMulti(
     vkQueueWaitIdle(queue);
     vkFreeCommandBuffers(device, cmdPool, 1, &cmd);
     destroyBuffer(device, &scratch);
+    compactAccelerationStructure(device, physicalDevice, cmdPool, queue, fns, VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR, outAS, outASBuffer);
 
     VkAccelerationStructureDeviceAddressInfoKHR addrInfo{};
     addrInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
