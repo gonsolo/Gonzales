@@ -198,6 +198,7 @@ def gpu_atrous_denoise[Oo: Origin[mut=True]](
     film_iso: Float32,
     film_max_comp: Float32,
     apply_denoise: Bool = True,
+    min_passes: Int = 1,    # the interactive viewer wants the full filter at once, also right after a camera move
 ):
     var n_pix = Int(n)
     if n_pix == 0:
@@ -258,7 +259,7 @@ def gpu_atrous_denoise[Oo: Origin[mut=True]](
             # Ramp passes with frame_count: 1 pass at fc=1, 5 passes at fc>=5.
             # Prevents the large effective radius (31px at 5 passes) from averaging
             # lit pixels with unlit ones during fast camera movement.
-            var n_passes = min(5, max(1, Int(frame_count)))
+            var n_passes = min(5, max(min_passes, Int(frame_count)))
             for i in range(n_passes):
                 var step = 1 << i   # 1, 2, 4, 8, 16
                 # Pass 0 reads the CLAMPED buffer (pong), not ping -- see the

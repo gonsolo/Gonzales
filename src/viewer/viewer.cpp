@@ -89,8 +89,12 @@ struct Viewer {
     bool mousePressed = false;
     bool firstMouse = true;
     float yaw = -90.0f, pitch = 0.0f;
-    float moveSpeed = 50.0f;      // units a second
+    float moveSpeed = 150.0f;     // units a second
     double lastMoveTime = 0.0;
+    bool denoise = false;         // N toggles the denoiser
+    bool showFps = false;         // F toggles the frame-rate overlay
+    double lastFrameTime = 0.0;
+    double avgFrameTime = 0.0;    // smoothed seconds a frame
     float sensitivity = 0.15f;
 };
 
@@ -211,8 +215,16 @@ static bool transitionImageLayout(VkDevice device, VkCommandPool pool,
 
 static void keyCallback(GLFWwindow* window, int key, int /*scancode*/,
                         int action, int /*mods*/) {
-    if (action == GLFW_PRESS && key == GLFW_KEY_ESCAPE)
+    if (action != GLFW_PRESS) return;
+    if (key == GLFW_KEY_ESCAPE)
         glfwSetWindowShouldClose(window, GLFW_TRUE);
+    else if (key == GLFW_KEY_N) {
+        auto* v = static_cast<Viewer*>(glfwGetWindowUserPointer(window));
+        if (v) v->denoise = !v->denoise;
+    } else if (key == GLFW_KEY_F) {
+        auto* v = static_cast<Viewer*>(glfwGetWindowUserPointer(window));
+        if (v) v->showFps = !v->showFps;
+    }
 }
 
 // Held keys move the camera by moveSpeed units a second (Shift: ten times that), polled each frame.
@@ -886,6 +898,15 @@ static void drawFrame(Viewer* v) {
 
 extern "C" {
 
+// The primary monitor's size in pixels, 0 x 0 if there is none.
+void viewer_monitor_size(int* width, int* height) {
+    *width = 0; *height = 0;
+    if (!glfwInit()) return;
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
+    if (mode) { *width = mode->width; *height = mode->height; }
+}
+
 ViewerHandle viewer_create(int width, int height, const char* title, int fullscreen) {
     if (!glfwInit()) {
         fprintf(stderr, "Failed to initialize GLFW\n");
@@ -966,6 +987,61 @@ ViewerHandle viewer_create(int width, int height, const char* title, int fullscr
     return v;
 }
 
+
+// 5x7 glyphs for the frame-rate overlay: digits, '.', space, F, P, S, M (one row a byte, five bits).
+static const unsigned char kGlyphs[18][7] = {
+    {0x0e,0x11,0x13,0x15,0x19,0x11,0x0e}, {0x04,0x0c,0x04,0x04,0x04,0x04,0x0e},
+    {0x0e,0x11,0x01,0x02,0x04,0x08,0x1f}, {0x1e,0x01,0x01,0x0e,0x01,0x01,0x1e},
+    {0x02,0x06,0x0a,0x12,0x1f,0x02,0x02}, {0x1f,0x10,0x1e,0x01,0x01,0x11,0x0e},
+    {0x06,0x08,0x10,0x1e,0x11,0x11,0x0e}, {0x1f,0x01,0x02,0x04,0x08,0x08,0x08},
+    {0x0e,0x11,0x11,0x0e,0x11,0x11,0x0e}, {0x0e,0x11,0x11,0x0f,0x01,0x02,0x0c},
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x04}, {0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    {0x1f,0x10,0x10,0x1e,0x10,0x10,0x10}, {0x1e,0x11,0x11,0x1e,0x10,0x10,0x10},
+    {0x0f,0x10,0x10,0x0e,0x01,0x01,0x1e}, {0x11,0x1b,0x15,0x15,0x11,0x11,0x11},
+    {0x1e,0x11,0x11,0x11,0x11,0x11,0x1e}, {0x11,0x19,0x15,0x13,0x11,0x11,0x11},
+};
+
+static int glyphIndex(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    switch (c) {
+        case '.': return 10;
+        case 'F': return 12;
+        case 'P': return 13;
+        case 'S': return 14;
+        case 'M': return 15;
+        case 'D': return 16;
+        case 'N': return 17;
+        default: return 11;
+    }
+}
+
+// Draws text into an RGBA32F image, top left, on a dark box.
+static void drawText(float* img, int width, int height, const char* text, int scale) {
+    int n = (int)strlen(text);
+    int x0 = 8, y0 = 8, pad = 4 * scale;
+    int boxW = n * 6 * scale + 2 * pad, boxH = 7 * scale + 2 * pad;
+    for (int y = y0; y < y0 + boxH && y < height; y++)
+        for (int x = x0; x < x0 + boxW && x < width; x++) {
+            float* px = img + ((size_t)y * width + x) * 4;
+            px[0] *= 0.15f; px[1] *= 0.15f; px[2] *= 0.15f;
+        }
+    for (int i = 0; i < n; i++) {
+        const unsigned char* g = kGlyphs[glyphIndex(text[i])];
+        for (int row = 0; row < 7; row++)
+            for (int col = 0; col < 5; col++) {
+                if (!(g[row] & (0x10 >> col))) continue;
+                for (int dy = 0; dy < scale; dy++)
+                    for (int dx = 0; dx < scale; dx++) {
+                        int x = x0 + pad + (i * 6 + col) * scale + dx;
+                        int y = y0 + pad + row * scale + dy;
+                        if (x >= width || y >= height) continue;
+                        float* px = img + ((size_t)y * width + x) * 4;
+                        px[0] = px[1] = px[2] = 1.0f;
+                    }
+            }
+    }
+}
+
 void viewer_update_framebuffer(ViewerHandle viewer, const float* pixels,
                                 int width, int height) {
     auto* v = static_cast<Viewer*>(viewer);
@@ -1006,6 +1082,16 @@ void viewer_update_framebuffer(ViewerHandle viewer, const float* pixels,
         dst[i * 4 + 1] = pixels[i * 3 + 1];
         dst[i * 4 + 2] = pixels[i * 3 + 2];
         dst[i * 4 + 3] = 1.0f;
+    }
+    double now = glfwGetTime();
+    double dt = now - v->lastFrameTime;
+    v->lastFrameTime = now;
+    if (dt > 0.0 && dt < 5.0)
+        v->avgFrameTime = v->avgFrameTime == 0.0 ? dt : v->avgFrameTime * 0.9 + dt * 0.1;
+    if (v->showFps && v->avgFrameTime > 0.0) {
+        char text[64];
+        snprintf(text, sizeof text, "%.1f FPS  %.1f MS%s", 1.0 / v->avgFrameTime, v->avgFrameTime * 1000.0, v->denoise ? "  DN" : "");
+        drawText(dst, width, height, text, height >= 600 ? 3 : 2);
     }
     vkUnmapMemory(v->device, v->stagingMemory);
 
@@ -1069,6 +1155,11 @@ void viewer_update_framebuffer(ViewerHandle viewer, const float* pixels,
 int viewer_should_close(ViewerHandle viewer) {
     auto* v = static_cast<Viewer*>(viewer);
     return v ? glfwWindowShouldClose(v->window) : 1;
+}
+
+int viewer_denoise_enabled(ViewerHandle viewer) {
+    auto* v = static_cast<Viewer*>(viewer);
+    return v && v->denoise ? 1 : 0;
 }
 
 void viewer_poll_events(ViewerHandle viewer) {

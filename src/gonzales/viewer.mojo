@@ -73,3 +73,17 @@ def build_camera_to_world[Ocs: Origin[mut=True], Oc2w: Origin[mut=True]](cs: Poi
     # Column 3: position
     c2w[unsafe_offset=12] = cs[unsafe_offset=0].position.x; c2w[unsafe_offset=13] = cs[unsafe_offset=0].position.y
     c2w[unsafe_offset=14] = cs[unsafe_offset=0].position.z; c2w[unsafe_offset=15] = Float32(1)
+
+
+def viewer_denoise_enabled(v: ViewerHandle) -> Int32:
+    return external_call["viewer_denoise_enabled", Int32, ViewerHandle](v)
+
+
+def viewer_monitor_size() -> Tuple[Int32, Int32]:
+    var dims = unsafe_alloc[Int32](2)
+    dims[unsafe_offset=0] = Int32(0); dims[unsafe_offset=1] = Int32(0)
+    external_call["viewer_monitor_size", NoneType, Pointer[Int32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin]](dims, dims.unsafe_offset(1))
+    var w = dims[unsafe_offset=0]
+    var h = dims[unsafe_offset=1]
+    dims.unsafe_free()
+    return (w, h)

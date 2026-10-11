@@ -36,7 +36,7 @@ from .gpu import gpu_render_sample, gpu_render_wavefront, gpu_mnee_adapt, gpu_do
 from .gpu_scene import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload
 from .gpu_denoise import gpu_atrous_denoise
 from .gpu_wavefront import gpu_gen_aux_buffers
-from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, build_camera_to_world
+from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, viewer_denoise_enabled, viewer_monitor_size, build_camera_to_world
 from .spectrum import SpectralHandle, null_spectral_handle
 from .vulkanrt import VulkanRtSceneHandle, vulkanrt_build_scene, vulkanrt_destroy_scene, vulkanrt_debug_read_as
 from .rt_build import rt_build_blas, rt_build_tlas, rt_patch_ids, RtBlas, RtTlas, _fbits
@@ -2480,7 +2480,7 @@ def render_interactive(
     use_gpu: Bool,
     spectral: SpectralHandle = null_spectral_handle(),
     fullscreen: Bool = False,
-    override_w: Int32 = Int32(0), override_h: Int32 = Int32(0),
+    var override_w: Int32 = Int32(0), var override_h: Int32 = Int32(0),
     spp_override: Int32 = Int32(0),
     seed_override: Int64 = Int64(-1),
     verbose: Bool = False,
@@ -2522,6 +2522,10 @@ def render_interactive(
     if not _is_real_ptr[ParsedScene_Mojo](psc):
         print("Failed to parse scene")
         return
+    if fullscreen and override_w <= 0 and override_h <= 0:
+        var monitor = viewer_monitor_size()      # fullscreen without --resolution: the monitor's native size
+        override_w = monitor[0]
+        override_h = monitor[1]
     if override_w > 0 or override_h > 0:
         var eff_w = override_w
         var eff_h = override_h
@@ -2847,7 +2851,8 @@ def render_interactive(
             frame_count += 1
             gpu_atrous_denoise(handle, denoised.unsafe_ptr(), Int64(n_pixels),
                                     Int32(frame_count),
-                                    psc[unsafe_offset=0].film_iso, psc[unsafe_offset=0].film_max_comp)
+                                    psc[unsafe_offset=0].film_iso, psc[unsafe_offset=0].film_max_comp,
+                                    apply_denoise=headless or viewer_denoise_enabled(v) != Int32(0), min_passes=5)
             apply_film_sensor(denoised.unsafe_ptr(), n_pixels, psc[unsafe_offset=0].film_exposuretime, psc[unsafe_offset=0].film_wb)
         else:
             sp_int[] = TileSamplerParams(
