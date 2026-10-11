@@ -20,6 +20,14 @@ extern "C" {
 // Returns NULL on failure (no CUDA, cubin missing, launch config rejected).
 void* rtcore_create(const char* cubin_path, const uint8_t* as_bytes, int64_t as_size, uint64_t as_vk_address);
 
+// A structure built by gonzales' own builder (nothing to relocate); gid[primitive id] = triangle number in the merged geometry.
+void* rtcore_create_own(const char* cubin_path, const uint8_t* as_bytes, int64_t as_size, const int32_t* gid, int64_t n_gid);
+
+// An instanced scene built by gonzales' own builders (see rt_build.mojo); the pointer fields of the 64-byte instance records
+// at rec_off of the TLAS hold BLAS indices and are replaced by device addresses.
+void* rtcore_create_own_scene(const char* cubin_path, int32_t n_blas, const uint8_t* const* blas_bytes, const int64_t* blas_sizes,
+                              const uint8_t* tlas_bytes, int64_t tlas_size, int64_t rec_off, int64_t n_rec, const int32_t* gid, int64_t n_gid);
+
 // Same for a top-level structure: structure 0 is the TLAS, the others the BLASes it references. Each is copied to a
 // 64 KB aligned device address and every address stored inside (full, and the TLAS's `address >> 16` fields) relocated.
 // The traced instance index is reported by the trace (record word 4 = instance + 1) and decoded by rtcore_set_domains.

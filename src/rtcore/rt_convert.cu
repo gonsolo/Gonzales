@@ -4,7 +4,7 @@
 // The trace runs on ONE merged triangle geometry, so the global triangle index is mapped back to (mesh, local triangle)
 // with the prefix sums of the per-mesh triangle counts. Built to build/rt_convert.cubin by build_rt_cubin.py.
 extern "C" __global__ void convert(const unsigned int* rt, float* out, const int* domBase, const int* domN, const int* pre,
-                                   const int* rawv, const int* geom, int nDomains, int hasTlas, unsigned int count) {
+                                   const int* rawv, const int* geom, int nDomains, int hasTlas, unsigned int count, const int* gid) {
     unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= count) return;
     const unsigned int* r = rt + 8 * i;
@@ -27,6 +27,7 @@ extern "C" __global__ void convert(const unsigned int* rt, float* out, const int
     int lo = 0, hi = domN[d];                            // largest j with pre[base + j] <= tri
     if (hi < 0) {                                        // direct domain (a template instance): the hardware gave the geometry
         int tri, geomHw;
+        if (gid) { low = (unsigned int)gid[low]; kind = 5; }   // own structure: primitive id -> running triangle number in the template
         if (kind >= 5) {                                 // running number: this template's prefix sums are at pre[pre[base]..]
             const int* tp = pre + pre[base];
             int a = 0, b = geom[base];
@@ -41,6 +42,7 @@ extern "C" __global__ void convert(const unsigned int* rt, float* out, const int
         return;
     }
     int tri = (int)low;
+    if (gid) tri = gid[tri];                             // hand-built structures number primitives by block slot
     while (hi - lo > 1) { int mid = (lo + hi) >> 1; if (pre[base + mid] <= tri) lo = mid; else hi = mid; }
     // The hardware returns u with a negative sign on some hits (same magnitude Vulkan reports positive; presumably a
     // back-face indicator). Barycentrics are never negative, so the sign is dropped.

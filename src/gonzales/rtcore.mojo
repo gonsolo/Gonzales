@@ -25,6 +25,37 @@ def rtcore_create(
         Pointer[UInt8, MutUntrackedOrigin], Pointer[UInt8, MutUntrackedOrigin], Int64, UInt64](
         cubin_path, as_bytes, as_size, as_vk_address)
 
+# A structure from rt_build.mojo; gid maps the hit's primitive id to the merged triangle.
+def rtcore_create_own(
+    cubin_path: Pointer[UInt8, MutUntrackedOrigin],
+    as_bytes: Pointer[UInt8, MutUntrackedOrigin],
+    as_size: Int64,
+    gid: Pointer[Int32, MutUntrackedOrigin],
+    n_gid: Int64,
+) -> RtCoreHandle:
+    return external_call["rtcore_create_own", RtCoreHandle,
+        Pointer[UInt8, MutUntrackedOrigin], Pointer[UInt8, MutUntrackedOrigin], Int64, Pointer[Int32, MutUntrackedOrigin], Int64](
+        cubin_path, as_bytes, as_size, gid, n_gid)
+
+# An instanced scene from rt_build.mojo: blas_bytes / blas_sizes are n_blas host pointers and sizes.
+def rtcore_create_own_scene(
+    cubin_path: Pointer[UInt8, MutUntrackedOrigin],
+    n_blas: Int32,
+    blas_bytes: Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
+    blas_sizes: Pointer[Int64, MutUntrackedOrigin],
+    tlas_bytes: Pointer[UInt8, MutUntrackedOrigin],
+    tlas_size: Int64,
+    rec_off: Int64,
+    n_rec: Int64,
+    gid: Pointer[Int32, MutUntrackedOrigin],
+    n_gid: Int64,
+) -> RtCoreHandle:
+    return external_call["rtcore_create_own_scene", RtCoreHandle,
+        Pointer[UInt8, MutUntrackedOrigin], Int32, Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin],
+        Pointer[Int64, MutUntrackedOrigin], Pointer[UInt8, MutUntrackedOrigin], Int64, Int64, Int64,
+        Pointer[Int32, MutUntrackedOrigin], Int64](
+        cubin_path, n_blas, blas_bytes, blas_sizes, tlas_bytes, tlas_size, rec_off, n_rec, gid, n_gid)
+
 # Enqueues the trace on `stream`; does not synchronize. rays/results are device addresses.
 def rtcore_trace(handle: RtCoreHandle, rays: UInt64, results: UInt64, ray_count: Int32, stream: CUstream) -> Int32:
     return external_call["rtcore_trace", Int32, RtCoreHandle, UInt64, UInt64, Int32, CUstream](

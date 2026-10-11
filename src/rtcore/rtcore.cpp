@@ -15,6 +15,7 @@ struct RtCore {
     // Decode tables for rtcore_trace_interop. A "domain" is one TLAS instance (or the single merged BLAS); its pieces are
     // the mesh ranges inside that instance's triangle numbering.
     CUdeviceptr domBase = 0, domN = 0, pre = 0, rawv = 0, geom = 0;
+    CUdeviceptr gid = 0;     // primitive id -> merged triangle (structures built by gonzales' own builder)
     int nDomains = 0;
     int hasTlas = 0;
     CUdeviceptr scratch = 0;
@@ -103,6 +104,54 @@ extern "C" void* rtcore_create(const char* cubinPath, const uint8_t* asBytes, in
     return rtcore_create_scene(cubinPath, 1, &asBytes, &asSize, &asVkAddress);
 }
 
+// A structure built by gonzales itself (src/gonzales/rt_build.mojo): no driver addresses inside, so it is only copied to a
+// 64 KB aligned address. `gid` maps the primitive id the hardware reports to the triangle number in the merged geometry.
+extern "C" void* rtcore_create_own(const char* cubinPath, const uint8_t* asBytes, int64_t asSize, const int32_t* gid, int64_t nGid) {
+    RtCore* rc = openCore(cubinPath);
+    if (!rc) return nullptr;
+    rc->asSize = (size_t)asSize + 4096;
+    if (!check(cuMemAlloc(&rc->as, rc->asSize + 0x10000), "cuMemAlloc")) { delete rc; return nullptr; }
+    CUdeviceptr base = (rc->as + 0xffffu) & ~(CUdeviceptr)0xffffu;
+    if (!check(cuMemcpyHtoD(base, asBytes, (size_t)asSize), "cuMemcpyHtoD")) { delete rc; return nullptr; }
+    rc->root = base;
+    if (nGid > 0) {
+        if (!check(cuMemAlloc(&rc->gid, (size_t)nGid * 4), "cuMemAlloc gid") || !check(cuMemcpyHtoD(rc->gid, gid, (size_t)nGid * 4), "cuMemcpyHtoD gid")) { delete rc; return nullptr; }
+    }
+    return rc;
+}
+
+// An instanced scene built by gonzales itself: the top-level structure (instance records of 64 bytes from `recOff`, whose
+// pointer field holds the BLAS index until now) and the bottom-level structures, each at a 64 KB aligned address. gid maps
+// primitive ids to triangle numbers (all BLASes share one numbering).
+extern "C" void* rtcore_create_own_scene(const char* cubinPath, int32_t nBlas, const uint8_t* const* blasBytes, const int64_t* blasSizes,
+                                         const uint8_t* tlasBytes, int64_t tlasSize, int64_t recOff, int64_t nRec,
+                                         const int32_t* gid, int64_t nGid) {
+    RtCore* rc = openCore(cubinPath);
+    if (!rc) return nullptr;
+    std::vector<size_t> offset((size_t)nBlas + 1);
+    size_t total = (((size_t)tlasSize) + 0xffffu) & ~(size_t)0xffffu;
+    for (int i = 0; i < nBlas; i++) { offset[(size_t)i] = total; total += ((size_t)blasSizes[i] + 0xffffu) & ~(size_t)0xffffu; }
+    rc->asSize = total + 4096;
+    if (!check(cuMemAlloc(&rc->as, rc->asSize + 0x10000), "cuMemAlloc own scene")) { delete rc; return nullptr; }
+    CUdeviceptr base = (rc->as + 0xffffu) & ~(CUdeviceptr)0xffffu;
+    std::vector<uint8_t> tl(tlasBytes, tlasBytes + tlasSize);
+    for (int64_t r = 0; r < nRec; r++) {
+        uint8_t* f = &tl[(size_t)(recOff + 64 * r + 8)];
+        uint64_t idx = 0; memcpy(&idx, f, 6);
+        if (idx >= (uint64_t)nBlas) { fprintf(stderr, "rtcore: instance record %lld names BLAS %llu\n", (long long)r, (unsigned long long)idx); delete rc; return nullptr; }
+        uint64_t a = base + offset[(size_t)idx] + 0x380;
+        memcpy(f, &a, 6);
+    }
+    if (!check(cuMemcpyHtoD(base, tl.data(), tl.size()), "cuMemcpyHtoD tlas")) { delete rc; return nullptr; }
+    for (int i = 0; i < nBlas; i++)
+        if (!check(cuMemcpyHtoD(base + offset[(size_t)i], blasBytes[i], (size_t)blasSizes[i]), "cuMemcpyHtoD blas")) { delete rc; return nullptr; }
+    rc->root = base; rc->hasTlas = 1;
+    if (nGid > 0) {
+        if (!check(cuMemAlloc(&rc->gid, (size_t)nGid * 4), "cuMemAlloc gid") || !check(cuMemcpyHtoD(rc->gid, gid, (size_t)nGid * 4), "cuMemcpyHtoD gid")) { delete rc; return nullptr; }
+    }
+    return rc;
+}
+
 extern "C" int rtcore_trace(void* handle, uint64_t rays, uint64_t results, int32_t rayCount, void* stream) {
     if (!handle || rayCount <= 0) return 0;
     RtCore* rc = (RtCore*)handle;
@@ -161,7 +210,8 @@ extern "C" int rtcore_trace_interop(void* handle, uint64_t rays, uint64_t result
     unsigned int n = (unsigned int)rayCount;
     unsigned long long raw = rc->scratch, out = results, db = rc->domBase, dn = rc->domN, pre = rc->pre, rv = rc->rawv, gm = rc->geom;
     int nd = rc->nDomains, tl = rc->hasTlas;
-    void* params[] = {&raw, &out, &db, &dn, &pre, &rv, &gm, &nd, &tl, &n};
+    unsigned long long gd = rc->gid;
+    void* params[] = {&raw, &out, &db, &dn, &pre, &rv, &gm, &nd, &tl, &n, &gd};
     return check(cuLaunchKernel(rc->convertFn, (n + 255u) / 256u, 1, 1, 256, 1, 1, 0, (CUstream)stream, params, nullptr), "cuLaunchKernel convert") ? 1 : 0;
 }
 
@@ -184,7 +234,7 @@ extern "C" void rtcore_destroy(void* handle) {
     if (!handle) return;
     RtCore* rc = (RtCore*)handle;
     if (g_active == handle) g_active = nullptr;
-    for (CUdeviceptr p : {rc->domBase, rc->domN, rc->pre, rc->rawv, rc->geom}) if (p) cuMemFree(p);
+    for (CUdeviceptr p : {rc->domBase, rc->domN, rc->pre, rc->rawv, rc->geom, rc->gid}) if (p) cuMemFree(p);
     if (rc->scratch) cuMemFree(rc->scratch);
     if (rc->convertModule) cuModuleUnload(rc->convertModule);
     if (rc->as) cuMemFree(rc->as);
