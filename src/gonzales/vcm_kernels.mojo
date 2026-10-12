@@ -22,7 +22,7 @@ from .rng import PCG32
 from .sppm import _HSIZE, _PHOTON_BUCKET_CAP
 from .gpu_wavefront import (
     vulkaninterop_unpack_results_kernel, rtcore_trace_unpack_gpu, rtcore_spheres_from_rays_gpu,
-    rtcore_alpha_passes, rt_no_ids, rt_no_paths,
+    rtcore_alpha_passes, rt_no_ids, rt_no_paths, rt_no_meshes,
 )
 from .rtcore import rtcore_active, rtcore_alpha_enabled, rtcore_trace_interop
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
@@ -635,7 +635,7 @@ def vulkaninterop_rt_traverse_light_paths_gpu(
         Int64(n_meshes),
         Int64(n_total),
         instance_base_ptr,
-        rt_no_ids(), rt_no_paths(),
+        rt_no_ids(), rt_no_paths(), rt_no_meshes(),
         grid_dim=grid, block_dim=block_size,
     )
 
@@ -693,7 +693,7 @@ def vulkaninterop_rt_traverse_camera_paths_gpu(
         Int64(n_meshes),
         Int64(n_total),
         instance_base_ptr,
-        rt_no_ids(), rt_no_paths(),
+        rt_no_ids(), rt_no_paths(), rt_no_meshes(),
         grid_dim=grid, block_dim=block_size,
     )
 

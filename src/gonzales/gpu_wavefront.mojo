@@ -7,7 +7,7 @@ from .curves import CURVE_DEFER_K, Curve, _curve_perp_axis, curve_piece_endpoint
 from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, store_vec3, vec3f
 from .materials import Material
 from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, alpha_killed, intersect_triangle, sphere_outward_normal, mesh_vi
-from .primitives import mesh_pos, mesh_point
+from .primitives import mesh_pos, mesh_point, mesh_material
 from .render_state import PathState, ShadowTask, SHADOW_SLOTS
 from .restir_di import DIReservoir, di_reservoir_init
 from .restir_vol import VolReservoir, vol_reservoir_init
@@ -413,6 +413,8 @@ def vulkaninterop_unpack_results_kernel(
     # --rt-hardware: `results` holds only the listed (live) rays; ids maps slot -> path, and paths (if real) gets the cone growth fused in.
     ids: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
     paths: Pointer[PathState, MutUntrackedOrigin] = Pointer[PathState, MutUntrackedOrigin].unsafe_dangling(),
+    # A merged template mesh keeps a material a triangle in the mesh itself; real pointer = look it up there.
+    meshes: Pointer[TriangleMesh, MutUntrackedOrigin] = Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling(),
 ):
     var n_meshes = Int(n_meshes_dp)
     var count = Int(count_dp)
@@ -438,6 +440,8 @@ def vulkaninterop_unpack_results_kernel(
             mat_idx = mesh_material_idx[unsafe_offset=mi]
             if instance_idx < Int32(0):
                 al = mesh_al_idx[unsafe_offset=mi]
+            if _is_real_ptr(meshes) and _is_real_ptr(meshes[unsafe_offset=mi].materials):
+                mat_idx = Int64(mesh_material(meshes[unsafe_offset=mi], Int(tri)))
         var hitT = results[unsafe_offset=idx + 0]
         var u = results[unsafe_offset=idx + 1]
         var v = results[unsafe_offset=idx + 2]
@@ -644,6 +648,10 @@ def rt_no_ids() -> Pointer[Int32, MutUntrackedOrigin]:
 @always_inline
 def rt_no_paths() -> Pointer[PathState, MutUntrackedOrigin]:
     return Pointer[PathState, MutUntrackedOrigin].unsafe_dangling()
+
+@always_inline
+def rt_no_meshes() -> Pointer[TriangleMesh, MutUntrackedOrigin]:
+    return Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling()
 
 def rtcore_alpha_first_kernel(
     rays: Pointer[Float32, MutUntrackedOrigin],
@@ -919,7 +927,7 @@ def rtcore_trace_unpack_gpu(
         Int64(n_meshes),
         Int64(n_total),
         instance_base_mesh_ptr,
-        rt_no_ids(), rt_no_paths(),
+        rt_no_ids(), rt_no_paths(), sd.meshes,
         grid_dim=grid, block_dim=block_size,
     )
     if alpha:
@@ -1030,7 +1038,7 @@ def rtcore_closest_hit_gpu(
         results, inter,
         mesh_material_idx_buf.unsafe_ptr().unsafe_bitcast[Int64]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
         mesh_al_idx_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
-        Int64(n_meshes), Int64(m), instance_base_mesh_ptr, ids, fuse_paths,
+        Int64(n_meshes), Int64(m), instance_base_mesh_ptr, ids, fuse_paths, sd.meshes,
         grid_dim=gm, block_dim=block_size,
     )
     if alpha:
@@ -1407,7 +1415,7 @@ def vulkaninterop_rt_traverse_paths_gpu(
             Int64(n_meshes),
             Int64(n_total),
             instance_base_mesh_ptr,
-            rt_no_ids(), rt_no_paths(),
+            rt_no_ids(), rt_no_paths(), rt_no_meshes(),
             grid_dim=grid, block_dim=block_size,
         )
         if alpha:

@@ -3,7 +3,7 @@ from std.sys import argv, exit
 from std.time import perf_counter_ns
 from std.os import getenv, setenv
 from std.memory.alloc import unsafe_alloc
-from gonzales.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel, debug_render_vulkanrt
+from gonzales.pipeline import _generate_sobol_matrices, parse_and_render, render_interactive, debug_trace_pixel, debug_render_vulkanrt, bake_scene
 from gonzales.spectrum import load_spectral_context, spectral_handle, SpectralContext
 from gonzales.pbrt_parser import ParsedScene_Mojo
 from gonzales.ply_prefetch import PlyPrefetch, scan_plys
@@ -156,6 +156,8 @@ def main() raises:
                                  # global radius instead of per-vertex footprint scaling
     var use_vulkan_rt = False
     var use_vulkan_rt_shade = False
+    var rt_hardware = False
+    var bake = False
     var use_vcm_wavefront = False
     var use_restir = False  # docs/A2_restir_migration_plan.md Phase 2/3: ReSTIR DI
                              # (area-light NEE only, primary bounce), CPU + GPU batch
@@ -240,8 +242,11 @@ def main() raises:
             # Wavefront GPU path tracing with the RT cores driven from a CUDA kernel (docs/rtcore/NOTES.md); implies
             # --vulkan-rt-shade (same buffers, Vulkan keeps building the acceleration structure).
             use_vulkan_rt_shade = True
+            rt_hardware = True
             use_vcm_wavefront = True          # with --vcm: the staged VCM driver is the one with the trace hook
             _ = setenv("GONZALES_RTCORE", "1", True)
+        elif arg == "--bake":
+            bake = True
         elif arg == "--vcm":
             use_vcm = True
         elif arg == "--vcm-wavefront":
@@ -339,8 +344,13 @@ def main() raises:
     # (OsThread), only for the drivers that parse in parse_and_render.
     # The Vulkan backends take one material a mesh, so object templates stay unmerged for them
     # (pbrt_parser._merge_template_meshes).
-    if use_vulkan_rt or use_vulkan_rt_shade:
+    # (--rt-hardware on the path tracer builds its own structures and reads a merged template's per-triangle materials.)
+    var own_rt_only = rt_hardware and not use_vcm and getenv("GONZALES_RTCORE_VULKAN") == ""
+    if use_vulkan_rt or (use_vulkan_rt_shade and not own_rt_only):
         _ = setenv("GONZALES_MERGE_TEMPLATES", "0", True)
+    if bake:
+        bake_scene(path_cstr, verbose)
+        return
     # Ptex demand paging needs a driver that streams between sample batches: the GPU path tracer.
     if use_gpu and not (use_sppm or use_vcm or use_restir or use_vol_restir_reuse or interactive or use_vulkan_rt):
         _ = external_call["ptex_set_paging", NoneType, Int32](Int32(1))
