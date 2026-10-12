@@ -102,6 +102,10 @@ def rtcore_set_gid_compact(
         Pointer[UInt8, MutUntrackedOrigin], Int64, Pointer[Int32, MutUntrackedOrigin]](
         handle, n_groups, head, delta, n_wide, wide)
 
+# Free device memory in bytes (0 if unknown).
+def rtcore_device_free() -> UInt64:
+    return external_call["rtcore_device_free", UInt64]()
+
 # Physical device memory in bytes (0 if unknown).
 def rtcore_device_total() -> UInt64:
     return external_call["rtcore_device_total", UInt64]()

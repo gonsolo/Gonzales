@@ -138,7 +138,11 @@ extern "C" void* rtcore_create_own_scene(const char* cubinPath, int32_t nBlas, c
     size_t total = (((size_t)tlasSize) + 0xffffu) & ~(size_t)0xffffu;
     for (int i = 0; i < nBlas; i++) { offset[(size_t)i] = total; total += ((size_t)blasSizes[i] + 0xffffu) & ~(size_t)0xffffu; }
     rc->asSize = total + 4096;
-    if (!check(cuMemAlloc(&rc->as, rc->asSize + 0x10000), "cuMemAlloc own scene")) { delete rc; return nullptr; }
+    if (!check(cuMemAlloc(&rc->as, rc->asSize + 0x10000), "cuMemAlloc own scene")) {
+        size_t fr = 0, tot = 0; cuMemGetInfo(&fr, &tot);
+        fprintf(stderr, "rtcore: needs %zu MB, the card has %zu MB free of %zu MB\n", (size_t)(rc->asSize >> 20), fr >> 20, tot >> 20);
+        delete rc; return nullptr;
+    }
     CUdeviceptr base = (rc->as + 0xffffu) & ~(CUdeviceptr)0xffffu;
     std::vector<uint8_t> tl(tlasBytes, tlasBytes + tlasSize);
     for (int64_t r = 0; r < nRec; r++) {
@@ -277,6 +281,12 @@ extern "C" int rtcore_set_gid_compact(void* handle, int64_t nGroups, const uint3
 extern "C" uint64_t rtcore_device_total(void) {
     size_t free = 0, total = 0;
     return check(cuMemGetInfo(&free, &total), "cuMemGetInfo") ? (uint64_t)total : 0;
+}
+
+// Free device memory in bytes; 0 on failure.
+extern "C" uint64_t rtcore_device_free(void) {
+    size_t free = 0, total = 0;
+    return check(cuMemGetInfo(&free, &total), "cuMemGetInfo") ? (uint64_t)free : 0;
 }
 
 // Page-locks host memory so kernels can read it in place over PCIe (the pointer stays valid on the device). 1 on success.

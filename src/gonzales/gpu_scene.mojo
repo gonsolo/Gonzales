@@ -12,7 +12,7 @@ from .render_state import FilmDims, FilterParams, GpuTexture, NormalSlopeMap, Pa
 from std.os import getenv
 from std.os.path import getsize
 from .spectrum import SpectralHandle
-from .rtcore import rtcore_host_register, rtcore_device_total
+from .rtcore import rtcore_device_free, rtcore_host_register, rtcore_device_total
 from .pbrt_parser import ParsedScene_Mojo
 from .host_textures import decode_host_textures
 from .ptex_cache import PtexCache
@@ -843,6 +843,10 @@ struct GpuSceneHandle(Movable):
 def gpu_available() -> Bool:
     return has_accelerator()
 
+def _gpu_free_log(tag: String):
+    if getenv("GONZALES_GPU_LOG") != "":
+        print("GPU free after " + tag + ": " + String(Int(rtcore_device_free()) // (1024 * 1024)) + " MB")
+
 # Uploads count elements of T from a host array into a fresh device buffer
 # (>= 1 elem so a zero-count scene never creates a 0-byte device buffer,
 # which crashes on use/free). enqueue_copy copies straight from the host
@@ -856,7 +860,7 @@ def _gpu_upload_array[T: AnyType](
     count: Int,
 ) raises -> DeviceBuffer[DType.uint8]:
     var nbytes = max(count, 1) * size_of[T]()
-    if nbytes >= 128 * 1024 * 1024:
+    if nbytes >= (8 if getenv("GONZALES_GPU_LOG") != "" else 128) * 1024 * 1024:
         print("GPU: uploading " + String(nbytes // (1024 * 1024)) + " MB (" + String(count) + " x " + String(size_of[T]()) + " B)")
     var buf = ctx.enqueue_create_buffer[DType.uint8](nbytes)
     if count > 0:
@@ -1016,9 +1020,13 @@ def gpu_upload_scene(
             _report_gpu_memory(ctx, s)
             var bvh = BvhBuffers.upload(ctx, s)
             var blas = BlasBuffers.upload(ctx, s)
+            ctx.synchronize()
+            _gpu_free_log("bvh+blas")
             var instances_gpu_buf = _gpu_upload_array[Instance](ctx, s.instances, 1 if instances_external else Int(s.instance_count))
             var host_plan = _host_plan(ctx, s, n_pixels)
             var meshes = MeshBuffers.upload(ctx, s, host_plan[0])
+            ctx.synchronize()
+            _gpu_free_log("meshes")
             # >= 1 elem to avoid a zero-size buffer
             var mat_buf = _gpu_upload_array[Material](ctx, s.materials, Int(s.material_count))
             var has_iface_mat = False
@@ -1031,6 +1039,8 @@ def gpu_upload_scene(
                 if is_specular_glass(s.materials[unsafe_offset=mi]):
                     has_glass_mat = True
             var lights = LightBuffers.upload(ctx, s, host_plan[1], host_plan[2])
+            ctx.synchronize()
+            _gpu_free_log("lights")
             # analytical sphere primitives + sphere area lights
             var sphere_buf = _gpu_upload_array[Sphere](ctx, s.spheres, Int(s.sphere_count))
             var n_sphere_lights = 0
@@ -1039,6 +1049,8 @@ def gpu_upload_scene(
                     n_sphere_lights += 1
             var media = MediaBuffers.upload(ctx, s)
             var measured = MeasuredBuffers.upload(ctx, s)
+            ctx.synchronize()
+            _gpu_free_log("media")
 
             # Allocate persistent render buffers (zeroed film)
             var n_pix = max(Int(n_pixels), 1)
@@ -1073,6 +1085,8 @@ def gpu_upload_scene(
             var r_shadow_slots = SHADOW_SLOTS if getenv("GONZALES_RTCORE") != "" or sw_defer else 1
             var r_rt_scratch_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 32 * WAVEFRONT_BATCH if getenv("GONZALES_RTCORE") != "" and meshes.has_alpha else 32)
             var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[ShadowTask]() * WAVEFRONT_BATCH * r_shadow_slots)
+            ctx.synchronize()
+            _gpu_free_log("per-pixel buffers")
             ctx.enqueue_memset(r_shadow_buf, UInt8(0))      # every slot free (active == 0)
             var r_shade_ctx_buf = ctx.enqueue_create_buffer[DType.uint8](1024)
             var r_filter_lut_buf = ctx.enqueue_create_buffer[DType.uint8](2 * FILTER_LUT_N * 4)
@@ -1085,9 +1099,13 @@ def gpu_upload_scene(
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](64)
             var r_active_idx_buf   = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4 * WAVEFRONT_BATCH * 4)
             var curves = CurveBuffers.upload(ctx, s, n_pix)
+            ctx.synchronize()
+            _gpu_free_log("curves")
             ctx.enqueue_memset(r_film_buf, UInt8(0))
             ctx.enqueue_memset(r_albedo_film_buf, UInt8(0))
             var textures = TextureBuffers.upload(ctx, s)
+            ctx.synchronize()
+            _gpu_free_log("textures")
             var r_ptex_redo_buf = ctx.enqueue_create_buffer[DType.uint8](
                 n_pix * WAVEFRONT_BATCH if len(textures.ptex_bufs) > 0 else 1)
             var r_ptex_redo_si_buf = ctx.enqueue_create_buffer[DType.uint8](
