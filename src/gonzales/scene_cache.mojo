@@ -142,10 +142,32 @@ def scene_cache_variant() -> Int:
     return v + 2 * prune
 
 
+# True when the file is a cache of this format made for another scene: it is kept (delete it to replace it).
+def _is_cache_of_other_scene(cache_path: _Ptr, scene_path: _Ptr) -> Bool:
+    var f = _fopen(cache_path, False)
+    if f == 0:
+        return False
+    var other = False
+    if _get_int(f) == _MAGIC and _get_int(f) == _FORMAT and _get_int(f) == size_of[ParsedScene_Mojo]():
+        var saved_path = _get_cstr(f)
+        var same = _cstr_len(saved_path) == _cstr_len(scene_path)
+        if same:
+            for k in range(_cstr_len(scene_path)):
+                if saved_path[unsafe_offset=k] != scene_path[unsafe_offset=k]:
+                    same = False
+        saved_path.unsafe_free()
+        other = not same or _get_int(f) != _file_size(scene_path)
+    _fclose(f)
+    return other
+
+
 def scene_cache_save(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], cache_path: _Ptr, scene_path: _Ptr) -> Bool:
     var why = _unsupported(psc[unsafe_offset=0])
     if why.byte_length() > 0:
         print("scene cache: not written, the scene has " + why)
+        return False
+    if _is_cache_of_other_scene(cache_path, scene_path):
+        print("scene cache: the file belongs to another scene, not overwriting it")
         return False
     var t0 = perf_counter_ns()
     var f = _fopen(cache_path, True)

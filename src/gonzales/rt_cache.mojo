@@ -26,6 +26,16 @@ def rt_cache_save(
     tlas_bytes: PB, tlas_size: Int, rec_off: Int, n_records: Int, inst_of_record: Pointer[Int32, MutUntrackedOrigin],
 ) -> Bool:
     var cp = _c_path(path)
+    var old = _fopen(cp, False)
+    if old != 0:
+        var oh = _get[Int](old, 2)
+        var other = oh[unsafe_offset=0] == _RT_MAGIC and oh[unsafe_offset=1] != key
+        oh.unsafe_free()
+        _fclose(old)
+        if other:
+            print("RT cache: the file belongs to another scene, not overwriting it")
+            cp.unsafe_free()
+            return False
     var f = _fopen(cp, True)
     cp.unsafe_free()
     if f == 0:
