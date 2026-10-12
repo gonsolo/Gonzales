@@ -203,9 +203,10 @@ comptime SAH_BINS = 48
 
 
 @no_inline
-def _split_sah(order: PI, tlo: PD, thi: PD, tc: PD, start: Int, count: Int) -> Int:
+def _split_sah(order: PI, tlo: PD, thi: PD, tc: PD, start: Int, count: Int, granule: Int = 1) -> Int:
     """Partition order[start..start + count) by the best binned surface-area split over the three centroid axes;
-    returns the size of the left part (the median split when no bin split separates anything)."""
+    returns the size of the left part (the median split when no bin split separates anything). With a granule the left
+    part is moved to a multiple of it, so that the leaves below it come out full."""
     var bc = unsafe_alloc[Int32](SAH_BINS)
     var bb = unsafe_alloc[Float64](SAH_BINS * 6)
     var cl = unsafe_alloc[Float64](3); var ch = unsafe_alloc[Float64](3)
@@ -263,6 +264,7 @@ def _split_sah(order: PI, tlo: PD, thi: PD, tc: PD, start: Int, count: Int) -> I
                 best_cost = cost; best_ax = ax; best_bin = b
         rarea.unsafe_free()
     var left = 0
+    var used_ax = best_ax
     if best_ax >= 0:
         var ext = ch[unsafe_offset=best_ax] - cl[unsafe_offset=best_ax]
         var scale = Float64(SAH_BINS) / ext
@@ -287,7 +289,14 @@ def _split_sah(order: PI, tlo: PD, thi: PD, tc: PD, start: Int, count: Int) -> I
             ax = 1; bestext = ch[unsafe_offset=1] - cl[unsafe_offset=1]
         if ch[unsafe_offset=2] - cl[unsafe_offset=2] > bestext:
             ax = 2
+        used_ax = ax
         _select(order, tc, start, start + count, start + left, ax)
+    if granule > 1 and count > granule and used_ax >= 0:
+        var q = (left + granule // 2) // granule * granule
+        q = max(granule, min(q, (count - 1) // granule * granule))
+        if q != left:
+            _select(order, tc, start, start + count, start + q, used_ax)
+            left = q
     bc.unsafe_free(); bb.unsafe_free(); cl.unsafe_free(); ch.unsafe_free()
     return left
 
@@ -727,7 +736,7 @@ def _build_binary_items(order: PI, tlo: PD, thi: PD, tc: PD, m: Int, bn_s: PI, b
         elif start + count <= n_fixed:
             half = count // 2
         else:
-            half = _split_sah(order, tlo, thi, tc, start, count)
+            half = _split_sah(order, tlo, thi, tc, start, count, RT_LEAF_TRIS)
         var li = nb; var ri = nb + 1
         nb += 2
         bn_l[unsafe_offset=ni] = Int32(li); bn_r[unsafe_offset=ni] = Int32(ri)
