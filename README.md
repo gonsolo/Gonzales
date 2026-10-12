@@ -29,7 +29,7 @@ The renderer is written entirely in **Mojo** (~54,600 lines in `src/gonzales/`, 
 | Group | Lines | Responsibility |
 |-------|------:|---------------|
 | Shading and BxDFs | 12,700 | Diffuse, coated (pbrt's LayeredBxDF), conductor, dielectric, hair, measured, BSSRDF; spectral upsampling and sensors |
-| Path tracer | 9,900 | CPU per-tile wavefront and CUDA wavefront kernels, Z-Sobol sampler, film and outputs |
+| Path tracer | 9,900 | CPU per-tile wavefront and GPU wavefront kernels, Z-Sobol sampler, film and outputs |
 | Scene parsing | 9,400 | pbrt-v4 and Mitsuba parsers, PLY loader (threaded prefetch), materials, lights |
 | BDPT / VCM | 6,900 | Bidirectional path tracing and vertex connection and merging (CPU and GPU) |
 | Acceleration | 4,600 | SAH BVH2 (GPU) and BVH4 (CPU), instancing, native curve primitives |
@@ -46,7 +46,7 @@ C FFI — not reimplemented.
 ## Key Features
 
 - **Spectral transport** — Four hero wavelengths per path in every integrator, pbrt-style RGB-to-spectrum upsampling and sensor models
-- **Wavefront GPU path tracing** — CUDA kernels in Mojo with live-path compaction, compile-time kernel variants, deferred software shadow rays and an optional RT-core backend (`--rt-hardware`) with its own acceleration-structure builders (no Vulkan or OptiX in that path)
+- **Wavefront GPU path tracing** — GPU kernels in Mojo with live-path compaction, compile-time kernel variants, deferred software shadow rays and an optional RT-core backend (`--rt-hardware`) with its own acceleration-structure builders (no Vulkan or OptiX in that path)
 - **Fast CPU renderer** — Per-tile wavefront, 4-wide BVH with triangle records, vectorised shading
 - **Four light-transport algorithms** — Path tracing, SPPM (`--sppm`), BDPT/VCM (`--vcm`) and ReSTIR variants, sharing materials, lights and MIS code
 - **Specular caustics** — MNEE and SMS for glass and mirror caustics, with path-identity MIS so the result matches pbrt on the test cubes
