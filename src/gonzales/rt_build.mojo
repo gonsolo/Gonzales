@@ -493,9 +493,9 @@ def rt_patch_ids(bytes: PB, n_nodes: Int, n_blocks: Int, id_base: Int):
         _put_u32(bytes, o, v + UInt32(id_base))
 
 
-def rt_build_blas(tv: PF, n: Int, tight: Bool = True, sah: Bool = True, quads: Bool = False, id_base: Int = 0) -> RtBlas:
+def rt_build_blas(tv: PF, n: Int, tight: Bool = True, sah: Bool = True, quads: Bool = False, id_base: Int = 0, pair_ok: PB = PB.unsafe_dangling()) -> RtBlas:
     """Build a BLAS over n triangles (tv: nine floats each). Triangles with a repeated vertex are left out. With quads,
-    triangles 2q and 2q + 1 are a quad that stays in one block when possible."""
+    triangles 2q and 2q + 1 with pair_ok[2q] set are a quad that stays in one block when possible."""
     # valid triangles
     var vid = unsafe_alloc[Int32](max(n, 1))
     var m = 0
@@ -518,7 +518,7 @@ def rt_build_blas(tv: PF, n: Int, tight: Bool = True, sah: Bool = True, quads: B
         var pair = False
         if quads and k0 + 1 < m:
             var t0 = Int(vid[unsafe_offset=k0])
-            pair = (t0 & 1) == 0 and Int(vid[unsafe_offset=k0 + 1]) == t0 + 1
+            pair = Int(vid[unsafe_offset=k0 + 1]) == t0 + 1 and pair_ok[unsafe_offset=t0] != UInt8(0)
         u_first[unsafe_offset=nu] = Int32(k0); u_n[unsafe_offset=nu] = Int32(2 if pair else 1)
         nu += 1
         k0 += 2 if pair else 1

@@ -665,18 +665,22 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
                 first = Int(psc[unsafe_offset=0].template_mesh_start[unsafe_offset=b]); last = Int(psc[unsafe_offset=0].template_mesh_end[unsafe_offset=b])
             var n_tris = blas_ntri[unsafe_offset=b]
             var tv = unsafe_alloc[Float32](9 * max(n_tris, 1))
+            var pair_ok = unsafe_alloc[UInt8](max(n_tris, 1))
             var w = 0
+            var wt = 0
             for i in range(first, last):
                 if ordinary and is_template[unsafe_offset=i]:
                     continue
                 var mesh = psc[unsafe_offset=0].meshes[unsafe_offset=i]
+                var is_quads = psc[unsafe_offset=0].meshes[unsafe_offset=i].quads != Int32(0)
                 for t in range(Int(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i])):
+                    pair_ok[unsafe_offset=wt] = UInt8(1 if is_quads and (t & 1) == 0 else 0); wt += 1
                     for k in range(3):
                         var p = mesh_pos(mesh, mesh_vi(mesh, t * 3 + k))
                         tv[unsafe_offset=w] = p.x; tv[unsafe_offset=w + 1] = p.y; tv[unsafe_offset=w + 2] = p.z
                         w += 3
-            var r = rt_build_blas(tv, n_tris, True, True, True, 0)
-            tv.unsafe_free()
+            var r = rt_build_blas(tv, n_tris, True, True, True, 0, pair_ok)
+            tv.unsafe_free(); pair_ok.unsafe_free()
             blas_bytes[unsafe_offset=b] = r.bytes; blas_sizes[unsafe_offset=b] = Int64(r.size)
             for q6 in range(6): blas_box[unsafe_offset=b * 6 + q6] = r.box[unsafe_offset=q6]
             blas_gid[unsafe_offset=b] = r.gid_to_tri; blas_ngid[unsafe_offset=b] = r.n_gid
