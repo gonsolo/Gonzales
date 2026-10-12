@@ -28,7 +28,7 @@ from .host_textures import HostTextures, TexPrefetch, decode_host_textures, host
 from .primitives import Sphere, TriangleMesh, PrimId, Instance, encode_normal, mesh_points_floats
 from .quad_pack import quantise_quads
 from .media import Medium, MediumInterface, Grid, NvdbGrid
-from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
+from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, env_build_cdf
 from .curves import Curve, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area
 from .nanovdb import nvdb_load, nvdb_load_named, nvdb_data, nvdb_size, nvdb_free, nvdb_index_bbox, nvdb_value_range, nvdb_map_invmatf, nvdb_map_vecf
 from .noise import _perlin_perm_table, cloud_density
@@ -3661,41 +3661,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                     # (bunny-fur) vs env map luminance centroid; see
                     # project_infinite_light_shadows memory.
                     raw_pixels = pixels
-                    var cdf_size = (ih + 1) + ih * (iw + 1)
-                    var cdf_buf = unsafe_alloc[Float32](cdf_size)
-                    var row_sums = unsafe_alloc[Float32](ih)
-                    for ry in range(ih):
-                        var row_sum = Float32(0.0)
-                        for rx in range(iw):
-                            var r2 = pixels[unsafe_offset=(ry * iw + rx) * 3 + 0]
-                            var g2 = pixels[unsafe_offset=(ry * iw + rx) * 3 + 1]
-                            var b2 = pixels[unsafe_offset=(ry * iw + rx) * 3 + 2]
-                            var lum = Float32(0.2126) * r2 + Float32(0.7152) * g2 + Float32(0.0722) * b2
-                            row_sum += lum
-                        row_sums[unsafe_offset=ry] = row_sum
-                    cdf_buf[unsafe_offset=0] = Float32(0.0)
-                    for ry in range(ih):
-                        cdf_buf[unsafe_offset=ry + 1] = cdf_buf[unsafe_offset=ry] + row_sums[unsafe_offset=ry]
-                    var total = cdf_buf[unsafe_offset=ih]
-                    if total > Float32(0.0):
-                        var inv_total = Float32(1.0) / total
-                        for ry in range(ih + 1):
-                            cdf_buf[unsafe_offset=ry] *= inv_total
-                    for ry in range(ih):
-                        var base = (ih + 1) + ry * (iw + 1)
-                        cdf_buf[unsafe_offset=base] = Float32(0.0)
-                        for rx in range(iw):
-                            var r2 = pixels[unsafe_offset=(ry * iw + rx) * 3 + 0]
-                            var g2 = pixels[unsafe_offset=(ry * iw + rx) * 3 + 1]
-                            var b2 = pixels[unsafe_offset=(ry * iw + rx) * 3 + 2]
-                            var lum = Float32(0.2126) * r2 + Float32(0.7152) * g2 + Float32(0.0722) * b2
-                            cdf_buf[unsafe_offset=base + rx + 1] = cdf_buf[unsafe_offset=base + rx] + lum
-                        var row_total = cdf_buf[unsafe_offset=base + iw]
-                        if row_total > Float32(0.0):
-                            var inv_rt = Float32(1.0) / row_total
-                            for rx in range(iw + 1):
-                                cdf_buf[unsafe_offset=base + rx] *= inv_rt
-                    row_sums.unsafe_free()
+                    var cdf_buf = env_build_cdf(pixels, iw, ih)
                     cdf_ptr = cdf_buf
                     cdf_w = Int32(iw); cdf_h = Int32(ih)
                 pixels_ptr.unsafe_free()
