@@ -118,3 +118,14 @@ random overlapping triangles and 8000 rays: 0 missed, 0 wrong t, no faults; `exe
   triangle of a block with codes (j+1)<<3, the last slot of the group 0x01; the blocks of the groups are consecutive
   from node + w10. In a group the 0x01 slot's box may be tight; the builder uses the union with the later groups.
 - Blocks: <= 4 triangles with ids 4k..4k+3 (p = 4k, offsets 1,2,3), descriptor bit 15 set (see fifth pass).
+
+### Seventh pass: blocks of 5..8 triangles (in the builder since 42334718)
+- The id offsets of a block are 2 bits wide when descriptor bit 15 is set (blocks of up to 4) and 3 bits wide when descriptor
+  bits 16..19 = 1 and bit 15 is clear (vendor blocks of 5..9 triangles). Field j (j >= 1) sits at bit s - w*j of the 16 bytes at
+  0x68 with s = 126 - 14(N-1); triangle j's id is (p & ~(2^w - 1)) + field, where p is the block's prim word, so a block's ids
+  stay in one aligned group of 4 or 8 (the builder numbers them p, p+1, ...). Found by flipping bits of a vendor-built 8-triangle
+  block and watching which ray's id changes; a block written with 3-bit fields but a 2-bit descriptor decodes wrong ids.
+- Node slots for a block can cover four triangles each (codes (4k+4)<<3, the last slot 0x01); the vendor uses one slot a triangle.
+- The vendor packs up to 12 triangles into a block of shared vertices (descriptor bits 20..23 hold N - 1), 16 vertices at most;
+  how it codes more than 8 is not decoded. Our builder stops at 8 (98 bits of records + 21 bits of offsets fit the 128).
+- Result: quad grids with shared corners cost 21.6 bytes a triangle (37.6 with four a block); the Moana medium set 26 (was 37).
