@@ -6,7 +6,7 @@ GONZALES_RT_CACHE=<file> (default: the scene cache's name plus .rt). The key has
 from std.memory.alloc import unsafe_alloc
 from .scene_cache import _fopen, _fclose, _put, _get, _Ptr
 
-comptime _RT_MAGIC: Int = 0x435452544E5A48
+comptime _RT_MAGIC: Int = 0x435452544E5A49
 comptime PB = Pointer[UInt8, MutUntrackedOrigin]
 comptime PBP = Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin]
 comptime PIP = Pointer[Pointer[Int32, MutUntrackedOrigin], MutUntrackedOrigin]

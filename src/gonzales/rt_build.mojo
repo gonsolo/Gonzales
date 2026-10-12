@@ -8,7 +8,7 @@ from std.memory.alloc import unsafe_alloc
 comptime RT_NODE = 128
 comptime RT_ROOT = 0x380
 comptime RT_LEAF_TRIS = 12
-comptime RT_BLOCK_TRIS = 4
+comptime RT_BLOCK_TRIS = 8      # a block holds up to 16 distinct vertices; ids of 5..8 triangles use 3-bit offsets in an aligned group of 8
 comptime RT_SLOT_TRIS = 4
 comptime RT_STREAM_BITS = (0x68 - 12) * 8
 
@@ -84,6 +84,8 @@ def _block_try_impl(tv: PF, tri: PI, n: Int, blk: PB, prim_base: Int, write: Boo
                 if vx[unsafe_offset=q] == x and vy[unsafe_offset=q] == y and vz[unsafe_offset=q] == z:
                     found = q
             if found < 0:
+                if nv >= 16:
+                    return False
                 vx[unsafe_offset=nv] = x; vy[unsafe_offset=nv] = y; vz[unsafe_offset=nv] = z
                 found = nv
                 nv += 1
@@ -136,12 +138,14 @@ def _block_try_impl(tv: PF, tri: PI, n: Int, blk: PB, prim_base: Int, write: Boo
             _put_bits(blk, pos, fld, m + e[unsafe_offset=a])
             pos += m + e[unsafe_offset=a]
     var s = 126 - 14 * (n - 1)
+    var ow = 2 if n <= 4 else 3         # id offset width: ids are prim_base + j inside an aligned group of 4 or 8
     for j in range(1, n):
         var rec = UInt64(idx[unsafe_offset=j * 3] | (idx[unsafe_offset=j * 3 + 1] << 4) | (idx[unsafe_offset=j * 3 + 2] << 8)) << UInt64(2)
         _put_bits(blk, 0x68 * 8 + 126 - 14 * j, rec, 14)
-        _put_bits(blk, 0x68 * 8 + s - 2 * j, UInt64(j & 3), 2)
+        _put_bits(blk, 0x68 * 8 + s - ow * j, UInt64(j & ((1 << ow) - 1)), ow)
     _put_u32(blk, 0x78, UInt32(0x80000000) | UInt32(prim_base))
-    var desc = (UInt32(55 - m) << UInt32(24)) | (UInt32(n - 1) << UInt32(20)) | UInt32(0x8000)
+    # descriptor bit 15: 2-bit id offsets; bits 16..19 = 1: 3-bit offsets (blocks of 5..8 triangles)
+    var desc = (UInt32(55 - m) << UInt32(24)) | (UInt32(n - 1) << UInt32(20)) | (UInt32(0x8000) if n <= 4 else UInt32(0x10000))
     desc = desc | (UInt32(m + e[unsafe_offset=2] - 1) << UInt32(10)) | (UInt32(m + e[unsafe_offset=1] - 1) << UInt32(5)) | UInt32(m + e[unsafe_offset=0] - 1)
     _put_u32(blk, 0x7c, desc)
     return True
@@ -149,8 +153,8 @@ def _block_try_impl(tv: PF, tri: PI, n: Int, blk: PB, prim_base: Int, write: Boo
 
 @no_inline
 def _block_try(tv: PF, tri: PI, n: Int, blk: PB, prim_base: Int, write: Bool) -> Bool:
-    var vx = unsafe_alloc[Float32](12); var vy = unsafe_alloc[Float32](12); var vz = unsafe_alloc[Float32](12)
-    var idx = unsafe_alloc[Int](12); var e = unsafe_alloc[Int](3)
+    var vx = unsafe_alloc[Float32](16); var vy = unsafe_alloc[Float32](16); var vz = unsafe_alloc[Float32](16)
+    var idx = unsafe_alloc[Int](3 * RT_BLOCK_TRIS); var e = unsafe_alloc[Int](3)
     var ok = _block_try_impl(tv, tri, n, blk, prim_base, write, vx, vy, vz, idx, e)
     vx.unsafe_free(); vy.unsafe_free(); vz.unsafe_free(); idx.unsafe_free(); e.unsafe_free()
     return ok
@@ -592,16 +596,21 @@ def rt_build_blas(tv: PF, n: Int, tight: Bool = True, sah: Bool = True, quads: B
     var out = unsafe_alloc[UInt8](size)
     for i in range(size): out[unsafe_offset=i] = UInt8(0)
     _put_u32(out, 0, UInt32(0x00100003)); _put_u32(out, 4, UInt32(8)); _put_u32(out, 0x20, UInt32(RT_ROOT))
-    var gid = unsafe_alloc[Int32](4 * max(nblk, 1))
-    for i in range(4 * max(nblk, 1)): gid[unsafe_offset=i] = Int32(-1)
+    var gid = unsafe_alloc[Int32](RT_BLOCK_TRIS * max(nblk, 1))
+    for i in range(RT_BLOCK_TRIS * max(nblk, 1)): gid[unsafe_offset=i] = Int32(-1)
     var blk_base = RT_ROOT + nn * RT_NODE
+    var next_id = 0
     for b in range(nblk):
         var cnt = Int(blk_cnt[unsafe_offset=b])
+        var align = 4 if cnt <= 4 else 8
+        next_id = (next_id + align - 1) // align * align
         for q in range(cnt):
             tri4[unsafe_offset=q] = blk_tri[unsafe_offset=b * RT_BLOCK_TRIS + q]
-            gid[unsafe_offset=4 * b + q] = vid[unsafe_offset=Int(tri4[unsafe_offset=q])]
+            gid[unsafe_offset=next_id + q] = vid[unsafe_offset=Int(tri4[unsafe_offset=q])]
         var blkp = out.unsafe_offset(blk_base + b * RT_NODE)
-        _ = _block_try(tvv, tri4, cnt, blkp.unsafe_origin_cast[MutUntrackedOrigin](), id_base + 4 * b, True)
+        _ = _block_try(tvv, tri4, cnt, blkp.unsafe_origin_cast[MutUntrackedOrigin](), id_base + next_id, True)
+        next_id += cnt
+    next_id = (next_id + 7) // 8 * 8     # the next BLAS's ids start aligned
     var e = unsafe_alloc[Int32](3); var org = unsafe_alloc[Float32](3)
     var sbox = unsafe_alloc[Float64](6 * 12)       # slot boxes of the node being written
     var scode = unsafe_alloc[Int32](12)
@@ -674,7 +683,7 @@ def rt_build_blas(tv: PF, n: Int, tight: Bool = True, sah: Bool = True, quads: B
     hn_blk0.unsafe_free(); hn_nblk.unsafe_free(); kids.unsafe_free(); blk_tri.unsafe_free(); blk_cnt.unsafe_free(); blk_box.unsafe_free()
     dstack.unsafe_free(); tri4.unsafe_free(); scratch.unsafe_free(); e.unsafe_free(); org.unsafe_free(); sbox.unsafe_free(); scode.unsafe_free()
     var box = bn_box_root
-    return RtBlas(out, size, gid, 4 * nblk, nn, nblk, box)
+    return RtBlas(out, size, gid, next_id, nn, nblk, box)
 
 
 struct RtTlas(Movable):
