@@ -2794,6 +2794,8 @@ def render_interactive(
         filterWeight=Float32(0), pixelX=Int32(0), pixelY=Int32(0))
 
     var headless = headless_frames > Int32(0)
+    var frame_log = getenv("GONZALES_FRAME_LOG") != ""
+    var t_render = 0; var t_denoise = 0; var t_sensor = 0; var t_present = 0
     while (not headless and not viewer_should_close(v)) or (headless and frame_count < Int(headless_frames)):
         if not headless:
             viewer_poll_events(v)
@@ -2849,6 +2851,7 @@ def render_interactive(
             comptime log2spp_i = 16
             comptime n_base4_i = 8
             var si = Int32(frame_count % 65536)
+            var t_r = perf_counter_ns()
             if rtb.on:
                 gpu_render_wavefront(
                     handle, c2w_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
@@ -2871,11 +2874,15 @@ def render_interactive(
                     use_vol_restir_reuse=use_vol_restir_reuse,
                 )
             frame_count += 1
+            t_render += Int(perf_counter_ns() - t_r)
+            var t_a = perf_counter_ns()
             gpu_atrous_denoise(handle, denoised.unsafe_ptr(), Int64(n_pixels),
                                     Int32(frame_count),
                                     psc[unsafe_offset=0].film_iso, psc[unsafe_offset=0].film_max_comp,
                                     apply_denoise=headless or viewer_denoise_enabled(v) != Int32(0), min_passes=5)
+            var t_b = perf_counter_ns()
             apply_film_sensor(denoised.unsafe_ptr(), n_pixels, psc[unsafe_offset=0].film_exposuretime, psc[unsafe_offset=0].film_wb)
+            t_denoise += Int(t_b - t_a); t_sensor += Int(perf_counter_ns() - t_b)
         else:
             sp_int[] = TileSamplerParams(
                 sobolMatrices=sobol,
@@ -3026,7 +3033,12 @@ def render_interactive(
                     fw, fh, denoised.unsafe_ptr(),
                     Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
 
+        var t_p = perf_counter_ns()
         viewer_update_framebuffer(v, denoised.unsafe_ptr(), fw, fh)
+        t_present += Int(perf_counter_ns() - t_p)
+        if frame_log and frame_count % 20 == 0:
+            print("frame ms: render", t_render // 20000000, "denoise", t_denoise // 20000000, "sensor", t_sensor // 20000000, "present", t_present // 20000000)
+            t_render = 0; t_denoise = 0; t_sensor = 0; t_present = 0
 
     if headless:
         _ = write_image_cropped(denoised.unsafe_ptr(), fw, fh, Int32(0), Int32(0), fw, fh,

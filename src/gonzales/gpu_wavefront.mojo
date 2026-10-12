@@ -2,6 +2,7 @@ from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
 from std.os import getenv
 from std.utils import StaticTuple
 from .gpu_tuning import MINCTA_TRAVERSE
+from std.sys import get_defined_int
 from .bvh import _node_box_hit, _node_hi, _node_lo, _node_oc, _bvh_has_nodes, _shadow_is_null_material, _traverse_instances, BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
 from .curves import CURVE_DEFER_K, Curve, _curve_perp_axis, curve_piece_endpoints, intersect_curve
 from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, store_vec3, vec3f
@@ -851,6 +852,8 @@ def rtcore_spheres_from_rays_gpu(
                   Vec3f(rays[unsafe_offset=idx + 4], rays[unsafe_offset=idx + 5], rays[unsafe_offset=idx + 6]))
     test_spheres(spheres, Int(n_spheres_dp), ray, inter.unsafe_offset(tid))
 
+comptime CURVE_BLOCK: Int = get_defined_int["CURVE_BLOCK", 32]()
+
 # The RT cores trace triangles only: curves are tested in software against the RT hit distance, and a nearer curve hit
 # replaces the raw result (flag 2, or 4 with the instance in word 3) so the unpack kernel treats it like any curve hit.
 def rtcore_curve_clip_gpu(
@@ -1032,7 +1035,7 @@ def rtcore_closest_hit_gpu(
     if alpha:
         rtcore_alpha_passes(ctx, rays_buf, results_buf, scratch_buf, sd.meshes, n_meshes, instance_base_mesh_ptr, m)
     if Int(sd.curveCount) > 0:
-        ctx.enqueue_function[rtcore_curve_clip_gpu](sd, rays, results, Int64(m), grid_dim=gm, block_dim=block_size)
+        ctx.enqueue_function[rtcore_curve_clip_gpu](sd, rays, results, Int64(m), grid_dim=ceildiv(m, CURVE_BLOCK), block_dim=CURVE_BLOCK)
     var fuse_paths = paths if n_spheres == 0 else Pointer[PathState, MutUntrackedOrigin].unsafe_dangling()
     ctx.enqueue_function[vulkaninterop_unpack_results_kernel](
         results, inter,
@@ -1335,7 +1338,7 @@ def rtcore_shadow_rays_compact_gpu(
                 tasks,
                 interop_results_buf.unsafe_ptr().unsafe_bitcast[UInt32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
                 ids, sd, Int64(n_spheres), Int64(m), Int64(s), Int64(1 if alpha else 0),
-                grid_dim=ceildiv(m, block_size), block_dim=block_size,
+                grid_dim=ceildiv(m, CURVE_BLOCK), block_dim=CURVE_BLOCK,
             )
         if found <= n_total:
             return
