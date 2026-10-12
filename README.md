@@ -17,6 +17,10 @@ documentation with annotated source code.
 
 ![Moana Island rendered by Gonzales](Images/moana.png)
 
+[![The whole Moana island on an RTX 3060](https://img.youtube.com/vi/dMYG1hy7kVY/maxresdefault.jpg)](https://youtu.be/dMYG1hy7kVY)
+
+*The whole Moana island, interactive and fullscreen on an RTX 3060 with 12 GB ([video](https://youtu.be/dMYG1hy7kVY)).*
+
 ## Architecture
 
 The renderer is written entirely in **Mojo** (~54,600 lines in `src/gonzales/`, plus
@@ -76,22 +80,22 @@ Hardware: AMD Ryzen Threadripper 1920X (12 cores, 24 threads), NVIDIA RTX 3060 1
 
 | Renderer | Mode | Wall time | Notes |
 |---|---|---|---|
-| **Gonzales** | GPU | **4.4s** | Wavefront path tracing, software BVH traversal |
-| **Gonzales** | GPU (`--rt-hardware`) | 5.3s | RT cores driven from CUDA |
+| **Gonzales** | GPU | **4.9s** | Wavefront path tracing, software BVH traversal (2.9 s of it rendering) |
+| **Gonzales** | GPU (`--rt-hardware`) | 6.6s | Own RT-core structures; 3.3 s rendering, the rest is building them |
 | **pbrt-v4** | GPU (OptiX) | 4.9s | Hardware RT cores |
-| **Embree pathtracer** | CPU | 10.3s / 15.0s | Bare geometry / approximate materials, no textures |
-| **Gonzales** | CPU | **24.2s** | Full materials and textures |
-| **pbrt-v4** | CPU | 50.1s | Full materials and textures |
+| **Embree pathtracer** | CPU | 10.3s / 15.0s | Bare geometry / approximate materials, no textures (earlier measurement) |
+| **Gonzales** | CPU | 24.2s | Full materials and textures (earlier measurement, not re-run) |
+| **pbrt-v4** | CPU | 76.2s | Full materials and textures |
 
-Gonzales CPU is **2.1× faster** than pbrt CPU, and Gonzales GPU is on par with pbrt GPU.
-Embree's tutorial path tracer has no textures and only approximate materials, so its
-numbers are not directly comparable.
+GPU rows measured on 2026-10-12 (median of three runs). Gonzales GPU is on par with pbrt GPU on this scene.
+The CPU rows were not all measured on the same day, so they are not directly comparable, and Embree's
+tutorial path tracer has no textures and only approximate materials.
 
 ### Lines of code
 
 | Project | Lines (own code) |
 |---|---|
-| **Gonzales** | **~54,600** |
+| **Gonzales** | **~66,800** (Mojo, C/C++ and CUDA under `src/`) |
 | pbrt-v4 | ~84,000 (excluding bundled data tables and third-party libs) |
 | Embree kernel | ~96,000 (BVH/traversal only, no rendering) |
 
