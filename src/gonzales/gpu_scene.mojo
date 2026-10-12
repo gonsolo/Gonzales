@@ -1087,6 +1087,8 @@ def gpu_upload_scene(
             var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[ShadowTask]() * WAVEFRONT_BATCH * r_shadow_slots)
             ctx.synchronize()
             _gpu_free_log("per-pixel buffers")
+            if getenv("GONZALES_GPU_LOG") != "":
+                print("GPU per-pixel: n_pix", n_pix, "glass", has_glass_mat, "alpha", meshes.has_alpha, "shadow slots", r_shadow_slots, "restir_di", restir_di, "restir_vol", restir_vol, "path B", size_of[PathState](), "inter B", size_of[Intersection](), "shadow B", size_of[ShadowTask]())
             ctx.enqueue_memset(r_shadow_buf, UInt8(0))      # every slot free (active == 0)
             var r_shade_ctx_buf = ctx.enqueue_create_buffer[DType.uint8](1024)
             var r_filter_lut_buf = ctx.enqueue_create_buffer[DType.uint8](2 * FILTER_LUT_N * 4)

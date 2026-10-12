@@ -2663,7 +2663,7 @@ def render_interactive(
         return
     var handle = Pointer[GpuSceneHandle, MutUntrackedOrigin].unsafe_dangling()
     if use_gpu:
-        handle = gpu_upload_scene(psc, sobol, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65, instances_external=_instances_in_tlas(psc))
+        handle = gpu_upload_scene(psc, sobol, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65, restir_di=False, restir_vol=False, instances_external=_instances_in_tlas(psc))
         if not _is_real_ptr(handle):
             viewer_destroy(v)
             mojo_parsed_free(psc)
