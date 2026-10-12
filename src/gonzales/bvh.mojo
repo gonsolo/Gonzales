@@ -15,7 +15,7 @@ from .render_state import PathState, TileResult, GpuTexture, NormalSlopeMap
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, intersect_triangle, intersect_triangle_edges, alpha_killed, Instance, sphere_outward_normal, mesh_vi, mesh_material
 from .primitives import mesh_pos, mesh_point
 from .media import Medium, MediumInterface, Grid, NvdbGrid
-from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler
+from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb
 from .portal_light import portal_frame, portal_ray_crosses
 from .curves import Curve, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis
 from .rng import PCG32
@@ -460,10 +460,7 @@ def _sample_infinite_light_textured(
 
     var px = min(iw - 1, max(0, Int(sample_u * Float32(iw))))
     var py = min(ih - 1, max(0, Int(sample_v * Float32(ih))))
-    var pr = ilight.pixels_ptr[unsafe_offset=(py*iw+px)*3+0]
-    var pg = ilight.pixels_ptr[unsafe_offset=(py*iw+px)*3+1]
-    var pb = ilight.pixels_ptr[unsafe_offset=(py*iw+px)*3+2]
-    var env_rgb = RGB(pr, pg, pb) * ilight.scale
+    var env_rgb = il_rgb(ilight, py * iw + px) * ilight.scale
 
     var pdf_light: Float32
     if dp_row > Float32(0) and dp_col > Float32(0):
@@ -771,10 +768,7 @@ def _eval_infinite_light_and_pdf(ilight: InfiniteLight, dir_world: Vec3f, origin
     var iw = Int(ilight.cdf_w); var ih = Int(ilight.cdf_h)
     var px = min(iw - 1, max(0, Int(uv[0] * Float32(iw))))
     var py = min(ih - 1, max(0, Int(uv[1] * Float32(ih))))
-    var pr = ilight.pixels_ptr[unsafe_offset=(py*iw+px)*3+0]
-    var pg = ilight.pixels_ptr[unsafe_offset=(py*iw+px)*3+1]
-    var pb = ilight.pixels_ptr[unsafe_offset=(py*iw+px)*3+2]
-    var radiance = RGB(pr, pg, pb) * ilight.scale
+    var radiance = il_rgb(ilight, py * iw + px) * ilight.scale
     var dp_row = ilight.cdf_ptr[unsafe_offset=py + 1] - ilight.cdf_ptr[unsafe_offset=py]
     var cond_base = (ih + 1) + py * (iw + 1)
     var dp_col = ilight.cdf_ptr[unsafe_offset=cond_base + px + 1] - ilight.cdf_ptr[unsafe_offset=cond_base + px]

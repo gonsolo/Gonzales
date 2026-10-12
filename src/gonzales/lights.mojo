@@ -115,6 +115,16 @@ struct InfiniteLight(TrivialRegisterPassable):
     var portal_p1: Point3f
     var portal_p2: Point3f
     var portal_p3: Point3f
+    # 1: pixels_ptr holds Float16 triples (the GPU copy of a big map); the host keeps Float32.
+    var pixels_half: Int32
+
+
+@always_inline
+def il_rgb(il: InfiniteLight, texel: Int) -> RGB:
+    if il.pixels_half != Int32(0):
+        var h = il.pixels_ptr.unsafe_bitcast[Float16]()
+        return RGB(Float32(h[unsafe_offset=texel * 3]), Float32(h[unsafe_offset=texel * 3 + 1]), Float32(h[unsafe_offset=texel * 3 + 2]))
+    return RGB(il.pixels_ptr[unsafe_offset=texel * 3], il.pixels_ptr[unsafe_offset=texel * 3 + 1], il.pixels_ptr[unsafe_offset=texel * 3 + 2])
 
 
 @fieldwise_init

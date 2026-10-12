@@ -3719,7 +3719,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             var pp2 = Point3f(s[unsafe_offset=0].inf_portal[portal_base + 6], s[unsafe_offset=0].inf_portal[portal_base + 7],  s[unsafe_offset=0].inf_portal[portal_base + 8])
             var pp3 = Point3f(s[unsafe_offset=0].inf_portal[portal_base + 9], s[unsafe_offset=0].inf_portal[portal_base + 10], s[unsafe_offset=0].inf_portal[portal_base + 11])
             il_buf[unsafe_offset=i] = InfiniteLight(sc, tidx, cdf_w, cdf_h, cdf_ptr, raw_pixels, w2l,
-                                                     has_portal, pp0, pp1, pp2, pp3)
+                                                     has_portal, pp0, pp1, pp2, pp3, Int32(0))
         psc[unsafe_offset=0].infinite_lights = il_buf
     else:
         psc[unsafe_offset=0].infinite_lights = Pointer[InfiniteLight, MutUntrackedOrigin].unsafe_dangling()

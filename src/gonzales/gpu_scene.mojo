@@ -435,7 +435,20 @@ struct LightBuffers(Movable):
             if il.cdf_w > Int32(0) and _is_real_ptr(il.pixels_ptr):
                 var iw = Int(il.cdf_w); var ih = Int(il.cdf_h)
                 # Pixels: iw × ih × 3 floats. CDF: (ih+1) marginal rows + ih×(iw+1) conditional entries.
-                il.pixels_ptr = _gpu_upload_owned[Float32](ctx, il_pixels_bufs, il.pixels_ptr, iw * ih * 3)
+                # The pixels go up as Float16 (half the memory), scaled into its range; the light's scale takes the factor back.
+                var npx = iw * ih * 3
+                var top = Float32(0)
+                for k in range(npx):
+                    top = max(top, il.pixels_ptr[unsafe_offset=k])
+                var down = max(top / Float32(60000), Float32(1))
+                var half = unsafe_alloc[Float16](npx)
+                for k in range(npx):
+                    half[unsafe_offset=k] = Float16(il.pixels_ptr[unsafe_offset=k] / down)
+                il.scale = il.scale * down
+                il.pixels_ptr = _gpu_upload_owned[Float16](ctx, il_pixels_bufs, half, npx).unsafe_bitcast[Float32]()
+                il.pixels_half = Int32(1)
+                ctx.synchronize()
+                half.unsafe_free()
                 il.cdf_ptr = _gpu_upload_owned[Float32](ctx, il_cdf_bufs, il.cdf_ptr, (ih + 1) + ih * (iw + 1))
             il_patched[unsafe_offset=ii] = il
         var il_buf = _gpu_upload_array[InfiniteLight](ctx, il_patched, il_count)
@@ -829,7 +842,7 @@ def _gpu_upload_array[T: AnyType](
 ) raises -> DeviceBuffer[DType.uint8]:
     var nbytes = max(count, 1) * size_of[T]()
     if nbytes >= 128 * 1024 * 1024:
-        print("GPU: uploading " + String(nbytes // (1024 * 1024)) + " MB")
+        print("GPU: uploading " + String(nbytes // (1024 * 1024)) + " MB (" + String(count) + " x " + String(size_of[T]()) + " B)")
     var buf = ctx.enqueue_create_buffer[DType.uint8](nbytes)
     if count > 0:
         ctx.enqueue_copy(buf, src.unsafe_bitcast[UInt8]())
@@ -969,7 +982,7 @@ def gpu_upload_scene(
             var nee_candidates = (1 if s.area_light_count > 0 else 0) + Int(s.distant_count) + Int(s.point_count) + Int(s.sphere_count) + Int(s.infinite_count)
             var sw_defer = Int(s.medium_count) == 0 and nee_candidates <= SHADOW_SLOTS and getenv("GONZALES_NO_SW_SHADOW") == ""
             var r_shadow_slots = SHADOW_SLOTS if getenv("GONZALES_RTCORE") != "" or sw_defer else 1
-            var r_rt_scratch_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 32 * WAVEFRONT_BATCH if getenv("GONZALES_RTCORE") != "" else 32)
+            var r_rt_scratch_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 32 * WAVEFRONT_BATCH if getenv("GONZALES_RTCORE") != "" and meshes.has_alpha else 32)
             var r_shadow_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[ShadowTask]() * WAVEFRONT_BATCH * r_shadow_slots)
             ctx.enqueue_memset(r_shadow_buf, UInt8(0))      # every slot free (active == 0)
             var r_shade_ctx_buf = ctx.enqueue_create_buffer[DType.uint8](1024)

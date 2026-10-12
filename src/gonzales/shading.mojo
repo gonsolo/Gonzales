@@ -10,7 +10,7 @@ from .materials import Material, MatKind, LobeKind, MeasuredBRDF, schlick_fresne
 from .render_state import PathState, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SuppressTask, SHADOW_SLOTS
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, mesh_uv, mesh_has_uvs, mesh_normal, mesh_vi, mesh_face
 from .primitives import mesh_pos
-from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, light_sampler_sample, light_sampler_pdf, area_light_pick_triangle
+from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb, light_sampler_sample, light_sampler_pdf, area_light_pick_triangle
 from .portal_light import portal_frame, portal_ray_crosses
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .shadow_media import shadow_transmittance
@@ -5166,8 +5166,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 var wx = fx - Float32(x0r); var wy = fy - Float32(y0r)
                 @always_inline
                 def texel(x: Int, y: Int) {imm} -> RGB:
-                    var o = (y*iw+x)*3
-                    return RGB(ilight.pixels_ptr[unsafe_offset=o], ilight.pixels_ptr[unsafe_offset=o+1], ilight.pixels_ptr[unsafe_offset=o+2])
+                    return il_rgb(ilight, y*iw+x)
                 var (cx00, cy00) = _wrap_octahedral_texel(x0r,     y0r,     iw, ih)
                 var (cx10, cy10) = _wrap_octahedral_texel(x0r + 1, y0r,     iw, ih)
                 var (cx01, cy01) = _wrap_octahedral_texel(x0r,     y0r + 1, iw, ih)
@@ -5254,10 +5253,7 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                         if dp_row > Float32(0.0):
                             pdf_light = dp_row * dp_col * Float32(iw) * Float32(ih) * INV_FOUR_PI
                         if _is_real_ptr(ilight.pixels_ptr):
-                            var nr = ilight.pixels_ptr[unsafe_offset=(py*iw+px)*3+0]
-                            var ng = ilight.pixels_ptr[unsafe_offset=(py*iw+px)*3+1]
-                            var nb = ilight.pixels_ptr[unsafe_offset=(py*iw+px)*3+2]
-                            env_rgb_contrib = RGB(nr, ng, nb) * ilight.scale
+                            env_rgb_contrib = il_rgb(ilight, py * iw + px) * ilight.scale
                 mis_weight = power_heuristic(pdf_bsdf, pdf_light)
             path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, env_rgb_contrib, path_ptr[].wavelengths) * mis_weight
         if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):

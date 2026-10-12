@@ -21,9 +21,10 @@ from .pbrt_parser import ParsedScene_Mojo, _plan_ptex_budget, mojo_parsed_free
 from .primitives import Instance, PrimId, Sphere, TriangleMesh, mesh_points_floats
 from .render_state import GpuTexture, NormalSlopeMap, normal_slope_map_none
 from .host_textures import TexPrefetch
+from .fast_io import read_parallel, PARALLEL_MIN
 
 comptime _MAGIC: Int = 0x474E5A53434143
-comptime _FORMAT: Int = 4
+comptime _FORMAT: Int = 5
 
 comptime _Ptr = Pointer[UInt8, MutUntrackedOrigin]
 
@@ -53,7 +54,12 @@ def _get[T: AnyType](f: Int, n: Int) -> Pointer[T, MutUntrackedOrigin]:
         print("scene cache: array of", n * size_of[T]() // (1024 * 1024), "MB,", size_of[T](), "bytes an element")
     var p = unsafe_alloc[T](max(n, 1))
     var raw = p.unsafe_bitcast[UInt8]()
-    if n > 0:
+    if n * size_of[T]() >= PARALLEL_MIN:
+        # Big arrays come in on every core; the stdio position is moved past them by hand.
+        var pos = external_call["ftell", Int, Int](f)
+        read_parallel(external_call["fileno", Int32, Int](f), raw, n * size_of[T](), pos)
+        _ = external_call["fseek", Int32, Int, Int, Int32](f, pos + n * size_of[T](), Int32(0))
+    elif n > 0:
         _ = external_call["fread", Int, _Ptr, Int, Int, Int](raw, 1, n * size_of[T](), f)
     else:
         for k in range(size_of[T]()):
@@ -373,7 +379,7 @@ def scene_cache_load(cache_path: _Ptr, scene_path: _Ptr) -> Pointer[ParsedScene_
     _plan_ptex_budget(names)
     var tex_pf = unsafe_alloc[TexPrefetch](1)
     tex_pf.unsafe_write(TexPrefetch())
-    tex_pf[unsafe_offset=0].start(names, raws, min(6, num_performance_cores()))
+    tex_pf[unsafe_offset=0].start(names, raws, min(12, num_performance_cores()))
     tex_pf[unsafe_offset=0].join()
     s.tex_prefetch = tex_pf
     print("scene cache: loaded in " + String(Float64(perf_counter_ns() - t0) / 1.0e9) + " s")
