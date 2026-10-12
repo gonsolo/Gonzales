@@ -42,7 +42,7 @@ C FFI — not reimplemented.
 ## Key Features
 
 - **Spectral transport** — Four hero wavelengths per path in every integrator, pbrt-style RGB-to-spectrum upsampling and sensor models
-- **Wavefront GPU path tracing** — CUDA kernels in Mojo with live-path compaction, compile-time kernel variants, deferred software shadow rays and an optional RT-core backend (`--rt-hardware`)
+- **Wavefront GPU path tracing** — CUDA kernels in Mojo with live-path compaction, compile-time kernel variants, deferred software shadow rays and an optional RT-core backend (`--rt-hardware`) with its own acceleration-structure builders (no Vulkan or OptiX in that path)
 - **Fast CPU renderer** — Per-tile wavefront, 4-wide BVH with triangle records, vectorised shading
 - **Four light-transport algorithms** — Path tracing, SPPM (`--sppm`), BDPT/VCM (`--vcm`) and ReSTIR variants, sharing materials, lights and MIS code
 - **Specular caustics** — MNEE and SMS for glass and mirror caustics, with path-identity MIS so the result matches pbrt on the test cubes
@@ -67,6 +67,7 @@ furnace and plane solutions.
 | v0.1 (2023) | 1920×800 | 64 | 78 min | Threadripper 1920X, with Embree |
 | v0.2 (2026) | — | — | — | ARC cleanup, Embree removed |
 | v0.3 (2026) | — | — | — | [Release Notes](Documentation/ReleaseNotes/0.3.md) |
+| v0.4 (2026) | 1280×720 | 1/frame | ~7 fps | Whole island on a 12 GB RTX 3060, RT cores, interactive. [Release Notes](Documentation/ReleaseNotes/0.4.md) |
 
 ## Performance
 
