@@ -48,6 +48,8 @@ int rtcore_set_domains(void* handle, int32_t nDomains, const int32_t* domBase, c
 int rtcore_set_instance_decode(void* handle, int32_t nInst, const int32_t* instBlas, int32_t nTemplates, const int32_t* tpreOff,
                                const int32_t* tCnt, int32_t rawBase);
 uint64_t rtcore_instance_records(void* handle);
+int rtcore_host_register(void* p, uint64_t bytes);
+uint64_t rtcore_device_total(void);
 int rtcore_set_meshes(void* handle, const int32_t* tri_prefix, int32_t n_meshes);
 
 // Like rtcore_trace, but writes `results` in the Vulkan interop Result layout (see rt_convert.cu): 32 bytes per ray,

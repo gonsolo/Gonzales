@@ -12,6 +12,8 @@ extern "C" void* rtcore_active(void) { return nullptr; }
 extern "C" void rtcore_set_shadow(int) {}
 extern "C" int rtcore_set_instance_decode(void*, int32_t, const int32_t*, int32_t, const int32_t*, const int32_t*, int32_t) { return 0; }
 extern "C" uint64_t rtcore_instance_records(void*) { return 0; }
+extern "C" int rtcore_host_register(void*, uint64_t) { return 0; }
+extern "C" uint64_t rtcore_device_total(void) { return 0; }
 extern "C" int rtcore_set_domains(void*, int32_t, const int32_t*, const int32_t*, const int32_t*, const int32_t*, const int32_t*, int32_t) { return 0; }
 extern "C" void* rtcore_create_scene(const char*, int32_t, const uint8_t* const*, const int64_t*, const uint64_t*) { return nullptr; }
 extern "C" int rtcore_shadow_enabled(void) { return 0; }

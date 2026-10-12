@@ -259,6 +259,18 @@ static int g_alpha = 0;
 extern "C" void rtcore_set_alpha(int enabled) { g_alpha = enabled; }
 extern "C" int rtcore_alpha_enabled(void) { return g_active ? g_alpha : 0; }
 
+// Physical device memory in bytes (the allocator pool the caller sees may be capped lower); 0 on failure.
+extern "C" uint64_t rtcore_device_total(void) {
+    size_t free = 0, total = 0;
+    return check(cuMemGetInfo(&free, &total), "cuMemGetInfo") ? (uint64_t)total : 0;
+}
+
+// Page-locks host memory so kernels can read it in place over PCIe (the pointer stays valid on the device). 1 on success.
+extern "C" int rtcore_host_register(void* p, uint64_t bytes) {
+    if (!p || !bytes) return 0;
+    return check(cuMemHostRegister(p, (size_t)bytes, CU_MEMHOSTREGISTER_PORTABLE | CU_MEMHOSTREGISTER_DEVICEMAP), "cuMemHostRegister") ? 1 : 0;
+}
+
 extern "C" void rtcore_destroy(void* handle) {
     if (!handle) return;
     RtCore* rc = (RtCore*)handle;

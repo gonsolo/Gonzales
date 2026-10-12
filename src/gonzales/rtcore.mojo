@@ -93,6 +93,14 @@ def rtcore_set_instance_decode(
         Pointer[Int32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin], Int32](
         handle, n_inst, inst_blas, n_templates, tpre_off, t_cnt, raw_base)
 
+# Physical device memory in bytes (0 if unknown).
+def rtcore_device_total() -> UInt64:
+    return external_call["rtcore_device_total", UInt64]()
+
+# Page-locks host memory so kernels read it in place (the pointer is valid on the device).
+def rtcore_host_register(p: UInt64, nbytes: UInt64) -> Int32:
+    return external_call["rtcore_host_register", Int32, UInt64, UInt64](p, nbytes)
+
 # Device address of the TLAS instance records (layout of primitives.Instance).
 def rtcore_instance_records(handle: RtCoreHandle) -> UInt64:
     return external_call["rtcore_instance_records", UInt64, RtCoreHandle](handle)

@@ -10,7 +10,9 @@ from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh, me
 from .sampling import FILTER_LUT_N, fill_filter_lut
 from .render_state import FilmDims, FilterParams, GpuTexture, NormalSlopeMap, PathState, ShadowTask, SHADOW_SLOTS
 from std.os import getenv
+from std.os.path import getsize
 from .spectrum import SpectralHandle
+from .rtcore import rtcore_host_register, rtcore_device_total
 from .pbrt_parser import ParsedScene_Mojo
 from .host_textures import decode_host_textures
 from .ptex_cache import PtexCache
@@ -190,7 +192,7 @@ struct MeshBuffers(Movable):
         return typed_ptr[TriangleMesh](self.meshes_buf)
 
     @staticmethod
-    def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo) raises -> Self:
+    def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo, host_kb: Int = 0) raises -> Self:
         # Upload per-mesh vertex/index/uv data and build device-side mesh structs
         var points_bufs = List[DeviceBuffer[DType.uint8]]()
         var face_bufs = List[DeviceBuffer[DType.uint8]]()
@@ -219,23 +221,23 @@ struct MeshBuffers(Movable):
             # per vertex) and shading normals (3 per vertex), each a zeroed
             # 4-byte buffer when the mesh has none.
             # points are padded to 4 floats per vertex
-            var pts_dptr = _gpu_upload_owned[Float32](ctx, points_bufs, host_mesh.points, mesh_points_floats(Int(s.mesh_n_verts[unsafe_offset=i]), host_mesh.quads))
+            var pts_dptr = _gpu_place[Float32](ctx, points_bufs, host_mesh.points, mesh_points_floats(Int(s.mesh_n_verts[unsafe_offset=i]), host_mesh.quads), host_kb)
             # A quad soup has no vertex indices and one face id and material a quad (TriangleMesh.quads).
             var is_quads = host_mesh.quads != Int32(0)
             var n_per_face = Int(s.mesh_n_tris[unsafe_offset=i]) // 2 if is_quads else Int(s.mesh_n_tris[unsafe_offset=i])
-            var fi_dptr = _gpu_upload_owned[Int32](ctx, face_bufs, host_mesh.faceIndices, n_per_face)
-            var vi_dptr = _gpu_upload_owned[Int32](ctx, vert_bufs, host_mesh.vertexIndices,
-                                                   1 if is_quads else Int(s.mesh_n_tris[unsafe_offset=i]) * 3)
+            var fi_dptr = _gpu_place[Int32](ctx, face_bufs, host_mesh.faceIndices, n_per_face, host_kb)
+            var vi_dptr = _gpu_place[Int32](ctx, vert_bufs, host_mesh.vertexIndices,
+                                                   1 if is_quads else Int(s.mesh_n_tris[unsafe_offset=i]) * 3, host_kb)
             var uv_n = Int(s.mesh_uv_n_verts[unsafe_offset=i])
             var uv_dptr: Pointer[Float32, MutUntrackedOrigin]
             if uv_n > 0:
-                uv_dptr = _gpu_upload_owned[Float32](ctx, uv_bufs, host_mesh.uvs, uv_n * 2)
+                uv_dptr = _gpu_place[Float32](ctx, uv_bufs, host_mesh.uvs, uv_n * 2, host_kb)
             else:
                 uv_dptr = _gpu_zeros_owned[Float32](ctx, uv_bufs, 1)
             var nrm_n = Int(s.mesh_nrm_n_verts[unsafe_offset=i])
             var nrm_dptr = Pointer[Float32, MutUntrackedOrigin](unsafe_from_address=1)   # "no normals"
             if nrm_n > 0:
-                nrm_dptr = _gpu_upload_owned[Float32](ctx, nrm_bufs, host_mesh.normals, nrm_n)   # one encoded word a vertex
+                nrm_dptr = _gpu_place[Float32](ctx, nrm_bufs, host_mesh.normals, nrm_n, host_kb)   # one encoded word a vertex
             else:
                 _ = _gpu_zeros_owned[Float32](ctx, nrm_bufs, 1)
 
@@ -259,8 +261,8 @@ struct MeshBuffers(Movable):
             mesh_structs_host[unsafe_offset=i].uv_corners = host_mesh.uv_corners
             mesh_structs_host[unsafe_offset=i].quads = host_mesh.quads
             if _is_real_ptr(host_mesh.materials):
-                mesh_structs_host[unsafe_offset=i].materials = _gpu_upload_owned[Int32](
-                    ctx, face_bufs, host_mesh.materials, n_per_face)
+                mesh_structs_host[unsafe_offset=i].materials = _gpu_place[Int32](
+                    ctx, face_bufs, host_mesh.materials, n_per_face, host_kb)
 
         # Upload mesh struct array
         var meshes_buf = _gpu_upload_array[TriangleMesh](ctx, mesh_structs_host, Int(s.mesh_count))
@@ -862,6 +864,56 @@ def _gpu_upload_owned[T: AnyType](
     bufs.append(buf^)
     return dptr
 
+# Mesh arrays of at least host_kb KB stay in page-locked host memory and are read over PCIe (about +10% frame time), which
+# keeps them off a card that is short of memory; smaller ones, and failures, are uploaded as usual.
+def _gpu_place[T: AnyType](
+    ctx: DeviceContext,
+    mut bufs: List[DeviceBuffer[DType.uint8]],
+    src: Pointer[T, MutUntrackedOrigin],
+    count: Int,
+    host_kb: Int,
+) raises -> Pointer[T, MutUntrackedOrigin]:
+    if host_kb > 0 and count * size_of[T]() >= host_kb * 1024:
+        if Int(rtcore_host_register(UInt64(Int(src)), UInt64(count * size_of[T]()))) == 1:
+            return src
+    return _gpu_upload_owned[T](ctx, bufs, src, count)
+
+# GONZALES_MESH_HOST=<KB> forces the threshold (0: never). Unset: a pruned scene whose RT structures, mesh arrays and per-pixel
+# buffers would not fit the card keeps its mesh arrays in host memory.
+def _host_mesh_kb(ctx: DeviceContext, ref s: ParsedScene_Mojo, n_pixels: Int) raises -> Int:
+    var v = getenv("GONZALES_MESH_HOST")
+    if v != "":
+        try:
+            return Int(v)
+        except:
+            return 0
+    if getenv("GONZALES_RT_PRUNE") == "":
+        return 0
+    var path = getenv("GONZALES_RT_CACHE")
+    if path == "" and getenv("GONZALES_SCENE_CACHE") != "":
+        path = getenv("GONZALES_SCENE_CACHE") + ".rt"
+    var rt_bytes = 0
+    try:
+        if path != "":
+            rt_bytes = getsize(path)
+    except:
+        pass
+    var mesh_bytes = 0
+    for i in range(Int(s.mesh_count)):
+        var quads = s.meshes[unsafe_offset=i].quads
+        var per_face = Int(s.mesh_n_tris[unsafe_offset=i]) // 2 if quads != Int32(0) else Int(s.mesh_n_tris[unsafe_offset=i])
+        mesh_bytes += 4 * (mesh_points_floats(Int(s.mesh_n_verts[unsafe_offset=i]), quads) + per_face * 2
+                           + (0 if quads != Int32(0) else Int(s.mesh_n_tris[unsafe_offset=i]) * 3)
+                           + Int(s.mesh_uv_n_verts[unsafe_offset=i]) * 2 + Int(s.mesh_nrm_n_verts[unsafe_offset=i]))
+    var total = Int(rtcore_device_total())
+    if total == 0:
+        return 0
+    var need = rt_bytes + mesh_bytes + n_pixels * 600 + 2900 * 1024 * 1024    # textures, nodes, lights, allocator slack (calibrated on measured peaks)
+    if need > total * 95 // 100:
+        print("GPU: mesh arrays stay in host memory (the scene needs about", need // (1024 * 1024), "MB of", total // (1024 * 1024), "MB)")
+        return 1024
+    return 0
+
 # A zero-filled device buffer of `count` elements of T that `bufs` keeps alive;
 # returns its device pointer typed as T.
 def _gpu_zeros_owned[T: AnyType](
@@ -931,7 +983,7 @@ def gpu_upload_scene(
             var bvh = BvhBuffers.upload(ctx, s)
             var blas = BlasBuffers.upload(ctx, s)
             var instances_gpu_buf = _gpu_upload_array[Instance](ctx, s.instances, 1 if instances_external else Int(s.instance_count))
-            var meshes = MeshBuffers.upload(ctx, s)
+            var meshes = MeshBuffers.upload(ctx, s, _host_mesh_kb(ctx, s, n_pixels))
             # >= 1 elem to avoid a zero-size buffer
             var mat_buf = _gpu_upload_array[Material](ctx, s.materials, Int(s.material_count))
             var has_iface_mat = False
