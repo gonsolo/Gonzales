@@ -93,6 +93,15 @@ def rtcore_set_instance_decode(
         Pointer[Int32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin], Int32](
         handle, n_inst, inst_blas, n_templates, tpre_off, t_cnt, raw_base)
 
+# Swaps the flat id table for the compact one (see rt_convert.cu): head word, 8 byte deltas per group, wide groups of 8 ints.
+def rtcore_set_gid_compact(
+    handle: RtCoreHandle, n_groups: Int64, head: Pointer[UInt32, MutUntrackedOrigin], delta: Pointer[UInt8, MutUntrackedOrigin],
+    n_wide: Int64, wide: Pointer[Int32, MutUntrackedOrigin],
+) -> Int32:
+    return external_call["rtcore_set_gid_compact", Int32, RtCoreHandle, Int64, Pointer[UInt32, MutUntrackedOrigin],
+        Pointer[UInt8, MutUntrackedOrigin], Int64, Pointer[Int32, MutUntrackedOrigin]](
+        handle, n_groups, head, delta, n_wide, wide)
+
 # Physical device memory in bytes (0 if unknown).
 def rtcore_device_total() -> UInt64:
     return external_call["rtcore_device_total", UInt64]()

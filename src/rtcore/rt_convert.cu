@@ -3,9 +3,18 @@
 //   float t, u, v, pad; int mesh, triangle, hitFlag, geometryIndex      (32 bytes per ray)
 // The trace runs on ONE merged triangle geometry, so the global triangle index is mapped back to (mesh, local triangle)
 // with the prefix sums of the per-mesh triangle counts. Built to build/rt_convert.cubin by build_rt_cubin.py.
+// Compact id table: per group of 8 ids a head word; wide groups (bit 31) index 8 raw ints, others a base plus 8 byte deltas.
+__device__ __forceinline__ int gid_lookup(const int* gid, const unsigned int* gHead, const unsigned char* gDel, const int* gWide, unsigned int id) {
+    if (!gHead) return gid[id];
+    unsigned int g = id >> 3, k = id & 7u, h = gHead[g];
+    if (h & 0x80000000u) return gWide[(size_t)(h & 0x7fffffffu) * 8 + k];
+    return (int)h + (int)gDel[(size_t)g * 8 + k];
+}
+
 extern "C" __global__ void convert(const unsigned int* rt, float* out, const int* domBase, const int* domN, const int* pre,
                                    const int* rawv, const int* geom, int nDomains, int hasTlas, unsigned int count, const int* gid,
-                                   const int* instBlas, int instStride, int nInst, const int* tpreOff, const int* tCnt, int nTemplates, int rawBase) {
+                                   const int* instBlas, int instStride, int nInst, const int* tpreOff, const int* tCnt, int nTemplates, int rawBase,
+                                   const unsigned int* gHead, const unsigned char* gDel, const int* gWide) {
     unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= count) return;
     const unsigned int* r = rt + 8 * i;
@@ -31,7 +40,7 @@ extern "C" __global__ void convert(const unsigned int* rt, float* out, const int
     int lo = 0, hi = direct ? -1 : domN[d];              // largest j with pre[base + j] <= tri
     if (hi < 0) {                                        // direct domain (a template instance): the hardware gave the geometry
         int tri, geomHw;
-        if (gid) { low = (unsigned int)gid[low]; kind = 5; }   // own structure: primitive id -> running triangle number in the template
+        if (gid || gHead) { low = (unsigned int)gid_lookup(gid, gHead, gDel, gWide, low); kind = 5; }   // own structure: primitive id -> running triangle number in the template
         if (kind >= 5) {                                 // running number: this template's prefix sums are at pre[pre[base]..]
             const int* tp = direct ? pre + tpreOff[tk] : pre + pre[base];
             int a = 0, b = direct ? tCnt[tk] : geom[base];
@@ -46,7 +55,7 @@ extern "C" __global__ void convert(const unsigned int* rt, float* out, const int
         return;
     }
     int tri = (int)low;
-    if (gid) tri = gid[tri];                             // hand-built structures number primitives by block slot
+    if (gid || gHead) tri = gid_lookup(gid, gHead, gDel, gWide, (unsigned int)tri);                             // hand-built structures number primitives by block slot
     while (hi - lo > 1) { int mid = (lo + hi) >> 1; if (pre[base + mid] <= tri) lo = mid; else hi = mid; }
     // The hardware returns u with a negative sign on some hits (same magnitude Vulkan reports positive; presumably a
     // back-face indicator). Barycentrics are never negative, so the sign is dropped.

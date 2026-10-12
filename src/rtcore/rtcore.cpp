@@ -15,6 +15,7 @@ struct RtCore {
     // Decode tables for rtcore_trace_interop. A "domain" is one TLAS instance (or the single merged BLAS); its pieces are
     // the mesh ranges inside that instance's triangle numbering.
     CUdeviceptr domBase = 0, domN = 0, pre = 0, rawv = 0, geom = 0;
+    CUdeviceptr gHead = 0, gDel = 0, gWide = 0;   // compact id table (replaces gid)
     CUdeviceptr gid = 0;     // primitive id -> merged triangle (structures built by gonzales' own builder)
     int nDomains = 0;
     // Hit decode of template instances from per-template tables: instBlas[d * instStride] is instance d's BLAS (in the TLAS records
@@ -237,10 +238,10 @@ extern "C" int rtcore_trace_interop(void* handle, uint64_t rays, uint64_t result
     unsigned int n = (unsigned int)rayCount;
     unsigned long long raw = rc->scratch, out = results, db = rc->domBase, dn = rc->domN, pre = rc->pre, rv = rc->rawv, gm = rc->geom;
     int nd = rc->nDomains, tl = rc->hasTlas;
-    unsigned long long gd = rc->gid;
+    unsigned long long gd = rc->gid, gh = rc->gHead, gdl = rc->gDel, gw = rc->gWide;
     unsigned long long ib = rc->instBlas, tpo = rc->tpreOff, tc = rc->tCnt;
     int is = rc->instStride, ni = rc->nInst, nt = rc->nTemplates, rb = rc->rawBase;
-    void* params[] = {&raw, &out, &db, &dn, &pre, &rv, &gm, &nd, &tl, &n, &gd, &ib, &is, &ni, &tpo, &tc, &nt, &rb};
+    void* params[] = {&raw, &out, &db, &dn, &pre, &rv, &gm, &nd, &tl, &n, &gd, &ib, &is, &ni, &tpo, &tc, &nt, &rb, &gh, &gdl, &gw};
     return check(cuLaunchKernel(rc->convertFn, (n + 255u) / 256u, 1, 1, 256, 1, 1, 0, (CUstream)stream, params, nullptr), "cuLaunchKernel convert") ? 1 : 0;
 }
 
@@ -259,6 +260,19 @@ static int g_alpha = 0;
 extern "C" void rtcore_set_alpha(int enabled) { g_alpha = enabled; }
 extern "C" int rtcore_alpha_enabled(void) { return g_active ? g_alpha : 0; }
 
+// Replaces the flat id table with the compact one: nGroups head words, 8 byte deltas per group, nWide groups of 8 ints.
+extern "C" int rtcore_set_gid_compact(void* handle, int64_t nGroups, const uint32_t* head, const uint8_t* del, int64_t nWide, const int32_t* wide) {
+    if (!handle || nGroups <= 0) return 0;
+    RtCore* rc = (RtCore*)handle;
+    size_t nw = nWide > 0 ? (size_t)nWide * 32 : 4;
+    if (!check(cuMemAlloc(&rc->gHead, (size_t)nGroups * 4), "cuMemAlloc gHead") || !check(cuMemcpyHtoD(rc->gHead, head, (size_t)nGroups * 4), "cuMemcpyHtoD gHead")) return 0;
+    if (!check(cuMemAlloc(&rc->gDel, (size_t)nGroups * 8), "cuMemAlloc gDel") || !check(cuMemcpyHtoD(rc->gDel, del, (size_t)nGroups * 8), "cuMemcpyHtoD gDel")) return 0;
+    if (!check(cuMemAlloc(&rc->gWide, nw), "cuMemAlloc gWide")) return 0;
+    if (nWide > 0 && !check(cuMemcpyHtoD(rc->gWide, wide, nw), "cuMemcpyHtoD gWide")) return 0;
+    if (rc->gid) { cuMemFree(rc->gid); rc->gid = 0; }
+    return 1;
+}
+
 // Physical device memory in bytes (the allocator pool the caller sees may be capped lower); 0 on failure.
 extern "C" uint64_t rtcore_device_total(void) {
     size_t free = 0, total = 0;
@@ -275,7 +289,7 @@ extern "C" void rtcore_destroy(void* handle) {
     if (!handle) return;
     RtCore* rc = (RtCore*)handle;
     if (g_active == handle) g_active = nullptr;
-    for (CUdeviceptr p : {rc->domBase, rc->domN, rc->pre, rc->rawv, rc->geom, rc->gid, rc->tpreOff, rc->tCnt}) if (p) cuMemFree(p);
+    for (CUdeviceptr p : {rc->domBase, rc->domN, rc->pre, rc->rawv, rc->geom, rc->gid, rc->gHead, rc->gDel, rc->gWide, rc->tpreOff, rc->tCnt}) if (p) cuMemFree(p);
     if (rc->instBlas && rc->instOwned) cuMemFree(rc->instBlas);
     if (rc->scratch) cuMemFree(rc->scratch);
     if (rc->convertModule) cuModuleUnload(rc->convertModule);

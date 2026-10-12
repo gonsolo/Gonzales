@@ -46,7 +46,7 @@ from max.algorithm import parallelize
 from std.sys import exit
 from std.atomic import Atomic
 from std.sys.info import num_performance_cores
-from .rtcore import rtcore_create_own_scene, rtcore_create_own, rtcore_set_shadow, rtcore_set_alpha, rtcore_create_scene, rtcore_set_domains, rtcore_set_instance_decode, rtcore_instance_records, RtCoreHandle, rtcore_create, rtcore_set_meshes, rtcore_set_active, rtcore_active, rtcore_destroy
+from .rtcore import rtcore_set_gid_compact, rtcore_create_own_scene, rtcore_create_own, rtcore_set_shadow, rtcore_set_alpha, rtcore_create_scene, rtcore_set_domains, rtcore_set_instance_decode, rtcore_instance_records, RtCoreHandle, rtcore_create, rtcore_set_meshes, rtcore_set_active, rtcore_active, rtcore_destroy
 from std.os import getenv
 from std.ffi import external_call
 from .outputs import _cstr
@@ -740,6 +740,35 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
             gid[unsafe_offset=go + q] = blas_gid[unsafe_offset=b][unsafe_offset=q]
         go += blas_ngid[unsafe_offset=b]
         blas_gid[unsafe_offset=b].unsafe_free()
+    # compact id table: per group of 8 ids a base plus byte deltas, or (wide) the 8 raw values
+    var n_groups = (id_base + 7) // 8
+    var g_head = unsafe_alloc[UInt32](max(n_groups, 1))
+    var g_del = unsafe_alloc[UInt8](max(n_groups, 1) * 8)
+    var n_wide = 0
+    for q in range(n_groups):
+        var lo = 2147483647
+        var hi = -1
+        for k in range(8):
+            var v = Int(gid[unsafe_offset=q * 8 + k])
+            if v >= 0:
+                lo = min(lo, v)
+                hi = max(hi, v)
+        if hi < 0 or hi - lo < 256:
+            if hi < 0: lo = 0
+            g_head[unsafe_offset=q] = UInt32(lo)
+            for k in range(8):
+                var v = Int(gid[unsafe_offset=q * 8 + k])
+                g_del[unsafe_offset=q * 8 + k] = UInt8(v - lo) if v >= 0 else UInt8(0)
+        else:
+            g_head[unsafe_offset=q] = UInt32(0x80000000 | n_wide)
+            n_wide += 1
+    var g_wide = unsafe_alloc[Int32](max(n_wide, 1) * 8)
+    var wi = 0
+    for q in range(n_groups):
+        if (UInt32(g_head[unsafe_offset=q]) & UInt32(0x80000000)) != 0:
+            for k in range(8):
+                g_wide[unsafe_offset=wi * 8 + k] = gid[unsafe_offset=q * 8 + k]
+            wi += 1
     # decode tables: a template instance is decoded from its template's prefix sums (the BLAS of instance d is in inst_blas, the
     # TLAS reports instance + 1); the ordinary meshes are domain 0, pieces of one BLAS
     var tpre_n = 0
@@ -803,14 +832,21 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
             print("RT structures written to", dump_dir)
         except:
             print("could not write", dump_dir)
+    gid.unsafe_free()
+    gid = unsafe_alloc[Int32](8)
+    for k in range(8): gid[unsafe_offset=k] = Int32(0)
     var cubin = _rtcore_cubin_path()
     var cubin_c = unsafe_alloc[UInt8](cubin.byte_length() + 1)
     for k in range(cubin.byte_length()):
         cubin_c[unsafe_offset=k] = cubin.unsafe_ptr()[unsafe_offset=k]
     cubin_c[unsafe_offset=cubin.byte_length()] = UInt8(0)
-    var h = rtcore_create_own_scene(cubin_c, Int32(n_blas), blas_bytes, blas_sizes, tlas.bytes, Int64(tlas.size), Int64(tlas.rec_off), Int64(tlas.n_records), gid, Int64(id_base))
+    var h = rtcore_create_own_scene(cubin_c, Int32(n_blas), blas_bytes, blas_sizes, tlas.bytes, Int64(tlas.size), Int64(tlas.rec_off), Int64(tlas.n_records), gid, Int64(8))
     cubin_c.unsafe_free()
     var result = none
+    if Int(h) != 0 and Int(rtcore_set_gid_compact(h, Int64(n_groups), g_head, g_del, Int64(n_wide), g_wide)) != 1:
+        rtcore_destroy(h)
+        h = none
+    g_head.unsafe_free(); g_del.unsafe_free(); g_wide.unsafe_free()
     if Int(h) != 0 and Int(rtcore_set_domains(h, Int32(n_dom), dom_base, dom_n, pre, rawv, geom, Int32(entries))) == 1 and Int(rtcore_set_instance_decode(h, Int32(n_inst), UInt64(0) if shared else UInt64(Int(inst_blas)), Int32(nt), tpre_off, t_cnt, Int32(nm))) == 1:
         result = h
         print("RT hardware: tracing", ni, "instances of", nt, "templates and", n_ord, "meshes on the RT cores (own structures,", (total_bytes + tlas.size) // (1024 * 1024), "MB, no Vulkan)")

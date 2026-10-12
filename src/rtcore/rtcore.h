@@ -50,6 +50,7 @@ int rtcore_set_instance_decode(void* handle, int32_t nInst, const int32_t* instB
 uint64_t rtcore_instance_records(void* handle);
 int rtcore_host_register(void* p, uint64_t bytes);
 uint64_t rtcore_device_total(void);
+int rtcore_set_gid_compact(void* handle, int64_t nGroups, const uint32_t* head, const uint8_t* del, int64_t nWide, const int32_t* wide);
 int rtcore_set_meshes(void* handle, const int32_t* tri_prefix, int32_t n_meshes);
 
 // Like rtcore_trace, but writes `results` in the Vulkan interop Result layout (see rt_convert.cu): 32 bytes per ray,
