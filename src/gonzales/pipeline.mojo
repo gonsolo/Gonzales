@@ -41,6 +41,7 @@ from .spectrum import SpectralHandle, null_spectral_handle
 from .vulkanrt import VulkanRtSceneHandle, vulkanrt_build_scene, vulkanrt_destroy_scene, vulkanrt_debug_read_as
 from .rt_build import rt_build_blas, rt_build_tlas, rt_patch_ids, RtBlas, RtTlas, _fbits
 from .rt_cache import rt_cache_load, rt_cache_save, RtCacheTlas
+from .scene_cache import scene_cache_variant
 from max.algorithm import parallelize
 from std.sys import exit
 from std.atomic import Atomic
@@ -570,7 +571,7 @@ def _rtcore_attach_native(interop_scene: VulkanInteropRtSceneHandle, psc: Pointe
 # those of _rtcore_attach_native; the hit's primitive id is mapped to the triangle number in its BLAS by the gid table.
 # Everything the RT structures are built from: triangle counts per structure and every instance's matrix and template.
 def _rt_cache_key(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], blas_ntri: Pointer[Int, MutUntrackedOrigin], n_blas: Int) -> Int:
-    var h = UInt64(0xcbf29ce484222325)
+    var h = UInt64(0xcbf29ce484222325) ^ UInt64(scene_cache_variant())
     for b in range(n_blas):
         h = (h ^ UInt64(blas_ntri[unsafe_offset=b])) * UInt64(0x100000001b3)
     for k in range(Int(psc[unsafe_offset=0].instance_count)):
@@ -580,7 +581,7 @@ def _rt_cache_key(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], blas_ntri:
     return Int(h)
 
 
-def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> RtCoreHandle:
+def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], bake_only: Bool = False) -> RtCoreHandle:
     var none = rtcore_active()
     var nm = Int(psc[unsafe_offset=0].mesh_count)
     var nt = Int(psc[unsafe_offset=0].blas_count)
@@ -673,7 +674,7 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
             r.box.unsafe_free()
 
     if not loaded:
-        parallelize(build_worker, max(min(min(num_performance_cores(), 8), n_blas), 1))
+        parallelize(build_worker, max(min(min(num_performance_cores(), 12), n_blas), 1))
     next_blas.unsafe_free(); by_size.unsafe_free(); blas_ntri.unsafe_free()
     var id_base = 0
     var total_bytes = 0
@@ -707,6 +708,8 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
         if cache_path != "":
             if rt_cache_save(cache_path, key, n_blas, blas_bytes, blas_sizes, blas_box, blas_gid, blas_ngid, tlas.bytes, tlas.size, tlas.rec_off, tlas.n_records):
                 print("RT structures written to", cache_path)
+    if bake_only:                  # --bake: the structures are on disk (or were already), nothing to put on a GPU
+        return none
     blas_box.unsafe_free()
     var gid = unsafe_alloc[Int32](max(id_base, 1))
     var go = 0
@@ -985,6 +988,25 @@ def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc
     b.n_meshes = n_meshes
     b.on = True
     return b^
+
+
+# --bake: parse the scene (writing GONZALES_SCENE_CACHE) and build the RT structures (writing GONZALES_RT_CACHE or the
+# scene cache's .rt) on every core, without a GPU or a window, so that a later start only reads files.
+def bake_scene(path: Pointer[UInt8, MutUntrackedOrigin], verbose: Bool):
+    if getenv("GONZALES_SCENE_CACHE") == "":
+        print("--bake: set GONZALES_SCENE_CACHE=<file> to say where the caches go")
+        return
+    var t0 = perf_counter_ns()
+    var psc = mojo_parse_scene_any(path, verbose)
+    if not _is_real_ptr[ParsedScene_Mojo](psc):
+        print("--bake: the scene did not parse")
+        return
+    print("--bake: scene parsed, cached in", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
+    if getenv("GONZALES_RTCORE") != "" and _rtcore_native_wanted(psc):
+        _ = _rtcore_attach_own_native(psc, True)
+        print("--bake: done in", Float64(perf_counter_ns() - t0) / 1.0e9, "s")
+    else:
+        print("--bake: no RT structures to build (use --rt-hardware on a scene with instances)")
 
 
 def debug_trace_pixel(
@@ -2544,21 +2566,7 @@ def render_interactive(
     var fh = psc[unsafe_offset=0].film_h
     var n_pixels = Int(fw) * Int(fh)
 
-    var handle = Pointer[GpuSceneHandle, MutUntrackedOrigin].unsafe_dangling()
-    if use_gpu:
-        handle = gpu_upload_scene(psc, sobol, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
-        if not _is_real_ptr(handle):
-            mojo_parsed_free(psc)
-            return
-    var rtb = _RtBufs()
-    if use_gpu and getenv("GONZALES_RTCORE") != "" and not use_restir:
-        try:
-            rtb = _rt_wavefront_setup(handle, psc, n_pixels)
-        except:
-            print("RT hardware: setup failed, using the CUDA intersection")
-        if rtb.on:
-            print("RT hardware: interactive frames trace on the RT cores")
-
+    # The window comes first: Vulkan allocates its texture outside the CUDA pool, which the scene and the RT structures may fill.
     var title_len: Int
     var title_str: String
     if use_gpu:
@@ -2576,10 +2584,24 @@ def render_interactive(
     title_buf.unsafe_free()
     if Int(v) == 0:
         print("Failed to create viewer window")
-        if use_gpu:
-            gpu_free_scene(handle)
         mojo_parsed_free(psc)
         return
+    var handle = Pointer[GpuSceneHandle, MutUntrackedOrigin].unsafe_dangling()
+    if use_gpu:
+        handle = gpu_upload_scene(psc, sobol, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
+        if not _is_real_ptr(handle):
+            viewer_destroy(v)
+            mojo_parsed_free(psc)
+            return
+    var rtb = _RtBufs()
+    if use_gpu and getenv("GONZALES_RTCORE") != "" and not use_restir:
+        try:
+            rtb = _rt_wavefront_setup(handle, psc, n_pixels)
+        except:
+            print("RT hardware: setup failed, using the CUDA intersection")
+        if rtb.on:
+            print("RT hardware: interactive frames trace on the RT cores")
+
     if not use_gpu and psc[unsafe_offset=0].prim_count == 0 and psc[unsafe_offset=0].sphere_count == 0:
         # See the batch-path guard above: analytic spheres are not counted in
         # prim_count.

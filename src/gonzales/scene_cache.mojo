@@ -2,7 +2,7 @@
 
 GONZALES_SCENE_CACHE=<file>: if the file exists and was written for the same scene file (path and size) by this
 format, the scene is read from it; otherwise the scene is parsed and the file is written. Delete the file whenever
-the parser or the scene's data changes: only the scene file's path and size are checked.
+the parser or the scene's data changes: only the scene file's path and size, and the merge/prune settings, are checked.
 
 The snapshot is the ParsedScene_Mojo struct as it stands in memory, followed by every array its pointers name.
 Scenes with media, distant or point lights, normal maps, alpha cut-outs or measured materials are not cached.
@@ -23,7 +23,7 @@ from .render_state import GpuTexture, NormalSlopeMap, normal_slope_map_none
 from .host_textures import TexPrefetch
 
 comptime _MAGIC: Int = 0x474E5A53434143
-comptime _FORMAT: Int = 3
+comptime _FORMAT: Int = 4
 
 comptime _Ptr = Pointer[UInt8, MutUntrackedOrigin]
 
@@ -125,6 +125,17 @@ def _unsupported(ref s: ParsedScene_Mojo) -> String:
     return String("")
 
 
+def scene_cache_variant() -> Int:
+    """The settings that change what the parser builds from the same file: template merging and the RT pruning."""
+    var v = 1 if getenv("GONZALES_MERGE_TEMPLATES", "1") == "0" else 0
+    var prune = 0
+    try:
+        prune = Int(getenv("GONZALES_RT_PRUNE", "0"))
+    except:
+        prune = 0
+    return v + 2 * prune
+
+
 def scene_cache_save(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], cache_path: _Ptr, scene_path: _Ptr) -> Bool:
     var why = _unsupported(psc[unsafe_offset=0])
     if why.byte_length() > 0:
@@ -137,7 +148,7 @@ def scene_cache_save(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], cache_p
         return False
     ref s = psc[unsafe_offset=0]
     _put_int(f, _MAGIC); _put_int(f, _FORMAT); _put_int(f, size_of[ParsedScene_Mojo]())
-    _put_cstr(f, scene_path); _put_int(f, _file_size(scene_path))
+    _put_cstr(f, scene_path); _put_int(f, _file_size(scene_path)); _put_int(f, scene_cache_variant())
     _put[ParsedScene_Mojo](f, psc, 1)
 
     _put[Float32](f, s.raster_to_camera, 16); _put[Float32](f, s.camera_to_world, 16)
@@ -240,6 +251,10 @@ def scene_cache_load(cache_path: _Ptr, scene_path: _Ptr) -> Pointer[ParsedScene_
     if not same or _get_int(f) != _file_size(scene_path):
         _fclose(f)
         print("scene cache: made for another scene, parsing it")
+        return none
+    if _get_int(f) != scene_cache_variant():
+        _fclose(f)
+        print("scene cache: made with other merge/prune settings, parsing the scene")
         return none
 
     var psc = _get[ParsedScene_Mojo](f, 1)
