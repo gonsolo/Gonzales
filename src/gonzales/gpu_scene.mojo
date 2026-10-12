@@ -386,7 +386,7 @@ struct LightBuffers(Movable):
         return typed_ptr[InfiniteLight](self.infinite_lights_buf)
 
     @staticmethod
-    def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo) raises -> Self:
+    def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo, host_kb: Int = 0) raises -> Self:
         # Upload area lights. tri_cdf is a HOST pointer in the parsed
         # lights, so each mesh light's CDF goes up on its own and the
         # device copy of the struct points at that.
@@ -447,11 +447,13 @@ struct LightBuffers(Movable):
                 for k in range(npx):
                     half[unsafe_offset=k] = Float16(il.pixels_ptr[unsafe_offset=k] / down)
                 il.scale = il.scale * down
-                il.pixels_ptr = _gpu_upload_owned[Float16](ctx, il_pixels_bufs, half, npx).unsafe_bitcast[Float32]()
+                var half_dev = _gpu_place[Float16](ctx, il_pixels_bufs, half, npx, host_kb)
+                il.pixels_ptr = half_dev.unsafe_bitcast[Float32]()
                 il.pixels_half = Int32(1)
                 ctx.synchronize()
-                half.unsafe_free()
-                il.cdf_ptr = _gpu_upload_owned[Float32](ctx, il_cdf_bufs, il.cdf_ptr, (ih + 1) + ih * (iw + 1))
+                if Int(half_dev) != Int(half):      # uploaded; a host-placed copy stays alive
+                    half.unsafe_free()
+                il.cdf_ptr = _gpu_upload_owned[Float32](ctx, il_cdf_bufs, il.cdf_ptr, (ih + 1) + ih * (iw + 1))   # dependent reads: too slow over PCIe
             il_patched[unsafe_offset=ii] = il
         var il_buf = _gpu_upload_array[InfiniteLight](ctx, il_patched, il_count)
         ctx.synchronize()   # il_patched is freed next
@@ -878,17 +880,26 @@ def _gpu_place[T: AnyType](
             return src
     return _gpu_upload_owned[T](ctx, bufs, src, count)
 
-# GONZALES_MESH_HOST=<KB> forces the threshold (0: never). Unset: a pruned scene whose RT structures, mesh arrays and per-pixel
-# buffers would not fit the card keeps its mesh arrays in host memory.
-def _host_mesh_kb(ctx: DeviceContext, ref s: ParsedScene_Mojo, n_pixels: Int) raises -> Int:
-    var v = getenv("GONZALES_MESH_HOST")
-    if v != "":
-        try:
-            return Int(v)
-        except:
-            return 0
-    if getenv("GONZALES_RT_PRUNE") == "":
-        return 0
+# Which arrays stay in host memory, as KB thresholds (0: none): (mesh arrays, environment-light pixels).
+# GONZALES_MESH_HOST / GONZALES_ENV_HOST force them. Unset: a pruned scene whose RT structures, mesh arrays and per-pixel buffers
+# would not fit the card moves its mesh arrays (about +10% frame time); if it still would not fit, the environment pixels as well
+# (+8% for half a GB). The environment's sampling table stays on the card: its dependent reads are far too slow over PCIe.
+def _host_plan(ctx: DeviceContext, ref s: ParsedScene_Mojo, n_pixels: Int) raises -> Tuple[Int, Int]:
+    var mesh_env = getenv("GONZALES_MESH_HOST")
+    var env_env = getenv("GONZALES_ENV_HOST")
+    var forced_mesh = -1
+    var forced_env = -1
+    try:
+        if mesh_env != "":
+            forced_mesh = Int(mesh_env)
+        if env_env != "":
+            forced_env = Int(env_env)
+    except:
+        pass
+    var mesh_kb = max(forced_mesh, 0)
+    var env_kb = max(forced_env, 0)
+    if (forced_mesh >= 0 and forced_env >= 0) or getenv("GONZALES_RT_PRUNE") == "":
+        return (mesh_kb, env_kb)
     var path = getenv("GONZALES_RT_CACHE")
     if path == "" and getenv("GONZALES_SCENE_CACHE") != "":
         path = getenv("GONZALES_SCENE_CACHE") + ".rt"
@@ -905,14 +916,22 @@ def _host_mesh_kb(ctx: DeviceContext, ref s: ParsedScene_Mojo, n_pixels: Int) ra
         mesh_bytes += 4 * (mesh_points_floats(Int(s.mesh_n_verts[unsafe_offset=i]), quads) + per_face * 2
                            + (0 if quads != Int32(0) else Int(s.mesh_n_tris[unsafe_offset=i]) * 3)
                            + Int(s.mesh_uv_n_verts[unsafe_offset=i]) * 2 + Int(s.mesh_nrm_n_verts[unsafe_offset=i]))
+    var env_bytes = 0
+    for ii in range(Int(s.infinite_count)):
+        env_bytes += Int(s.infinite_lights[unsafe_offset=ii].cdf_w) * Int(s.infinite_lights[unsafe_offset=ii].cdf_h) * 6
     var total = Int(rtcore_device_total())
     if total == 0:
-        return 0
+        return (mesh_kb, env_kb)
+    var budget = total * 95 // 100
     var need = rt_bytes + mesh_bytes + n_pixels * 600 + 2900 * 1024 * 1024    # textures, nodes, lights, allocator slack (calibrated on measured peaks)
-    if need > total * 95 // 100:
-        print("GPU: mesh arrays stay in host memory (the scene needs about", need // (1024 * 1024), "MB of", total // (1024 * 1024), "MB)")
-        return 1024
-    return 0
+    if forced_mesh < 0 and need > budget:
+        mesh_kb = 1024
+        need -= mesh_bytes
+        print("GPU: mesh arrays stay in host memory (the scene needs about", (need + mesh_bytes) // (1024 * 1024), "MB of", total // (1024 * 1024), "MB)")
+    if forced_env < 0 and need > budget and env_bytes > 0:
+        env_kb = 1024
+        print("GPU: environment pixels stay in host memory as well (still about", need // (1024 * 1024), "MB)")
+    return (mesh_kb, env_kb)
 
 # A zero-filled device buffer of `count` elements of T that `bufs` keeps alive;
 # returns its device pointer typed as T.
@@ -983,7 +1002,8 @@ def gpu_upload_scene(
             var bvh = BvhBuffers.upload(ctx, s)
             var blas = BlasBuffers.upload(ctx, s)
             var instances_gpu_buf = _gpu_upload_array[Instance](ctx, s.instances, 1 if instances_external else Int(s.instance_count))
-            var meshes = MeshBuffers.upload(ctx, s, _host_mesh_kb(ctx, s, n_pixels))
+            var host_plan = _host_plan(ctx, s, n_pixels)
+            var meshes = MeshBuffers.upload(ctx, s, host_plan[0])
             # >= 1 elem to avoid a zero-size buffer
             var mat_buf = _gpu_upload_array[Material](ctx, s.materials, Int(s.material_count))
             var has_iface_mat = False
@@ -995,7 +1015,7 @@ def gpu_upload_scene(
                     has_iface_mat = True
                 if is_specular_glass(s.materials[unsafe_offset=mi]):
                     has_glass_mat = True
-            var lights = LightBuffers.upload(ctx, s)
+            var lights = LightBuffers.upload(ctx, s, host_plan[1])
             # analytical sphere primitives + sphere area lights
             var sphere_buf = _gpu_upload_array[Sphere](ctx, s.spheres, Int(s.sphere_count))
             var n_sphere_lights = 0
