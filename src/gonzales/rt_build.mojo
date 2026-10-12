@@ -694,8 +694,9 @@ struct RtTlas(Movable):
 
 
 @no_inline
-def _build_binary_items(order: PI, tlo: PD, thi: PD, tc: PD, m: Int, bn_s: PI, bn_c: PI, bn_l: PI, bn_r: PI, bn_box: PD) -> Int:
-    """Binary tree whose leaves are single items (instances)."""
+def _build_binary_items(order: PI, tlo: PD, thi: PD, tc: PD, m: Int, bn_s: PI, bn_c: PI, bn_l: PI, bn_r: PI, bn_box: PD, n_fixed: Int) -> Int:
+    """Binary tree whose leaves are single items (instances). The first n_fixed items keep their places: the root separates
+    them from the rest and they are split at the middle of their range, so item i stays at position i."""
     var stack = unsafe_alloc[Int32](256)
     var nb = 1
     bn_s[unsafe_offset=0] = Int32(0); bn_c[unsafe_offset=0] = Int32(m)
@@ -711,7 +712,13 @@ def _build_binary_items(order: PI, tlo: PD, thi: PD, tc: PD, m: Int, bn_s: PI, b
         if count <= 1:
             bn_l[unsafe_offset=ni] = Int32(-1); bn_r[unsafe_offset=ni] = Int32(-1)
             continue
-        var half = _split_sah(order, tlo, thi, tc, start, count)
+        var half = 0
+        if n_fixed > 0 and start == 0 and count > n_fixed:
+            half = n_fixed
+        elif start + count <= n_fixed:
+            half = count // 2
+        else:
+            half = _split_sah(order, tlo, thi, tc, start, count)
         var li = nb; var ri = nb + 1
         nb += 2
         bn_l[unsafe_offset=ni] = Int32(li); bn_r[unsafe_offset=ni] = Int32(ri)
@@ -725,9 +732,11 @@ def _build_binary_items(order: PI, tlo: PD, thi: PD, tc: PD, m: Int, bn_s: PI, b
 
 
 @no_inline
-def rt_build_tlas(w2o: PF, binst: PI, n: Int, blas_box: PD, n_blas: Int) -> RtTlas:
+def rt_build_tlas(w2o: PF, binst: PI, n: Int, blas_box: PD, n_blas: Int, n_fixed: Int = 0, renumber: Bool = False) -> RtTlas:
     """Top-level structure over n instances. w2o: the world-to-object matrix of each as twelve floats, the top three rows
-    of a column-major matrix (primitives.Instance); binst: its BLAS; blas_box: six doubles per BLAS (RtBlas.box)."""
+    of a column-major matrix; binst: its BLAS; blas_box: six doubles per BLAS (RtBlas.box). Records are laid out in tree order
+    (RtTlas.inst_of_record); with renumber a record reports its own index as the instance, so the caller reorders its instances
+    to match, the first n_fixed staying where they are."""
     var tlo = unsafe_alloc[Float64](3 * max(n, 1)); var thi = unsafe_alloc[Float64](3 * max(n, 1)); var tc = unsafe_alloc[Float64](3 * max(n, 1))
     var order = unsafe_alloc[Int32](max(n, 1))
     for i in range(n):
@@ -769,7 +778,7 @@ def rt_build_tlas(w2o: PF, binst: PI, n: Int, blas_box: PD, n_blas: Int) -> RtTl
     var bn_box = unsafe_alloc[Float64](6 * nbmax)
     var nb = 0
     if n > 0:
-        nb = _build_binary_items(order, tlo, thi, tc, n, bn_s, bn_c, bn_l, bn_r, bn_box)
+        nb = _build_binary_items(order, tlo, thi, tc, n, bn_s, bn_c, bn_l, bn_r, bn_box, n_fixed)
     for back in range(nb):
         var i = nb - 1 - back
         if Int(bn_l[unsafe_offset=i]) < 0:
@@ -793,24 +802,13 @@ def rt_build_tlas(w2o: PF, binst: PI, n: Int, blas_box: PD, n_blas: Int) -> RtTl
                 hn_bn[unsafe_offset=nn] = kids[unsafe_offset=k]; hn_par[unsafe_offset=nn] = Int32(hi); hn_sib[unsafe_offset=nn] = Int32(k)
                 nn += 1
         hi += 1
-    # records: the instances of every leaf node, left to right, consecutive in node order
+    # records: one per tree position, so the instances of a leaf node are consecutive
     var rec_inst = unsafe_alloc[Int32](max(n, 1))
-    var nrec = 0
-    var dstack = unsafe_alloc[Int32](192)
+    var nrec = n
+    for r in range(n):
+        rec_inst[unsafe_offset=r] = order[unsafe_offset=r]
     for h in range(nn):
-        hn_rec0[unsafe_offset=h] = Int32(nrec)
-        if Int(hn_nk[unsafe_offset=h]) != 0:
-            continue
-        var sp = 1
-        dstack[unsafe_offset=0] = hn_bn[unsafe_offset=h]
-        while sp > 0:
-            sp -= 1
-            var bi = Int(dstack[unsafe_offset=sp])
-            if Int(bn_l[unsafe_offset=bi]) >= 0:
-                dstack[unsafe_offset=sp] = bn_r[unsafe_offset=bi]; dstack[unsafe_offset=sp + 1] = bn_l[unsafe_offset=bi]
-                sp += 2
-                continue
-            rec_inst[unsafe_offset=nrec] = order[unsafe_offset=Int(bn_s[unsafe_offset=bi])]; nrec += 1
+        hn_rec0[unsafe_offset=h] = bn_s[unsafe_offset=Int(hn_bn[unsafe_offset=h])]
     var rec_off = RT_ROOT
     var nodes_base = RT_ROOT + ((nrec * 64 + RT_NODE - 1) // RT_NODE) * RT_NODE      # nodes must be 128-byte aligned
     var size = nodes_base + nn * RT_NODE
@@ -820,8 +818,9 @@ def rt_build_tlas(w2o: PF, binst: PI, n: Int, blas_box: PD, n_blas: Int) -> RtTl
     for r in range(nrec):
         var inst = Int(rec_inst[unsafe_offset=r])
         var ro = rec_off + r * 64
-        _put_u32(out, ro, UInt32(inst + 1))
+        _put_u32(out, ro, UInt32((r if renumber else inst) + 1))
         var bi = UInt64(binst[unsafe_offset=inst])
+        _put_u32(out, ro + 4, UInt32(binst[unsafe_offset=inst]))
         for q in range(6): out[unsafe_offset=ro + 8 + q] = UInt8((bi >> UInt64(8 * q)) & UInt64(0xff))
         out[unsafe_offset=ro + 15] = UInt8(0x14)
         var a = w2o.unsafe_offset(inst * 12)
@@ -879,5 +878,5 @@ def rt_build_tlas(w2o: PF, binst: PI, n: Int, blas_box: PD, n_blas: Int) -> RtTl
     tlo.unsafe_free(); thi.unsafe_free(); tc.unsafe_free(); order.unsafe_free()
     bn_s.unsafe_free(); bn_c.unsafe_free(); bn_l.unsafe_free(); bn_r.unsafe_free(); bn_box.unsafe_free(); bn_nb.unsafe_free()
     hn_bn.unsafe_free(); hn_par.unsafe_free(); hn_sib.unsafe_free(); hn_first.unsafe_free(); hn_nk.unsafe_free(); hn_rec0.unsafe_free()
-    kids.unsafe_free(); dstack.unsafe_free(); e.unsafe_free(); org.unsafe_free(); sbox.unsafe_free(); scode.unsafe_free()
+    kids.unsafe_free(); e.unsafe_free(); org.unsafe_free(); sbox.unsafe_free(); scode.unsafe_free()
     return RtTlas(out, size, rec_off, nrec, rec_inst)

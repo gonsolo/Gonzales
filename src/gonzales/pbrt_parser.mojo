@@ -152,6 +152,7 @@ struct ParsedScene_Mojo:
     var blas_total:       Int32   # entries in the blas_* arrays: templates, the instances' BVH, the curve BVHs
     var instances:        Pointer[Instance, MutUntrackedOrigin]
     var instance_count:   Int32
+    var instance_prefix:  Int32   # pruned: the instances of templates with curves come first; the software structures reach only these
     # Mesh-index range [start, end) each template's BLAS spans, into the SAME
     # `meshes` array above (a template can bundle several Shape calls, e.g.
     # barcelona-pavilion's tree templates each have 5-9 plymesh shapes).
@@ -3474,6 +3475,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     psc[unsafe_offset=0].blas_total       = Int32(blas_total)
     psc[unsafe_offset=0].instances        = instances_c
     psc[unsafe_offset=0].instance_count   = total_instances
+    psc[unsafe_offset=0].instance_prefix  = Int32(n_ci) if prune_inst else Int32(0)
     psc[unsafe_offset=0].template_mesh_start = template_mesh_start
     psc[unsafe_offset=0].template_mesh_end   = template_mesh_end
     psc[unsafe_offset=0].film_w           = s[unsafe_offset=0].film_w

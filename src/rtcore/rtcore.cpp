@@ -17,6 +17,11 @@ struct RtCore {
     CUdeviceptr domBase = 0, domN = 0, pre = 0, rawv = 0, geom = 0;
     CUdeviceptr gid = 0;     // primitive id -> merged triangle (structures built by gonzales' own builder)
     int nDomains = 0;
+    // Hit decode of template instances from per-template tables: instBlas[d * instStride] is instance d's BLAS (in the TLAS records
+    // themselves, offset 4, when the host passed none).
+    CUdeviceptr instBlas = 0, tpreOff = 0, tCnt = 0, recBase = 0;
+    bool instOwned = false;
+    int instStride = 1, nInst = 0, nTemplates = 0, rawBase = 0;
     int hasTlas = 0;
     CUdeviceptr scratch = 0;
     size_t scratchRays = 0;
@@ -145,7 +150,7 @@ extern "C" void* rtcore_create_own_scene(const char* cubinPath, int32_t nBlas, c
     if (!check(cuMemcpyHtoD(base, tl.data(), tl.size()), "cuMemcpyHtoD tlas")) { delete rc; return nullptr; }
     for (int i = 0; i < nBlas; i++)
         if (!check(cuMemcpyHtoD(base + offset[(size_t)i], blasBytes[i], (size_t)blasSizes[i]), "cuMemcpyHtoD blas")) { delete rc; return nullptr; }
-    rc->root = base; rc->hasTlas = 1;
+    rc->root = base; rc->hasTlas = 1; rc->recBase = base + (CUdeviceptr)recOff;
     if (nGid > 0) {
         if (!check(cuMemAlloc(&rc->gid, (size_t)nGid * 4), "cuMemAlloc gid") || !check(cuMemcpyHtoD(rc->gid, gid, (size_t)nGid * 4), "cuMemcpyHtoD gid")) { delete rc; return nullptr; }
     }
@@ -188,6 +193,28 @@ extern "C" int rtcore_set_domains(void* handle, int32_t nDomains, const int32_t*
     return 1;
 }
 
+// Template instances decode from per-template tables instead of per-instance domains: `instBlas` has nInst BLAS indices, or is
+// null to read them from the TLAS records (offset 4 of each 64-byte record, instance d = record d). A hit on instance d of
+// template t < nTemplates is reported as raw mesh rawBase + d; its triangle numbers follow pre[tpreOff[t] ...], tCnt[t] meshes.
+extern "C" int rtcore_set_instance_decode(void* handle, int32_t nInst, const int32_t* instBlas, int32_t nTemplates,
+                                          const int32_t* tpreOff, const int32_t* tCnt, int32_t rawBase) {
+    if (!handle || nInst <= 0 || nTemplates <= 0) return 0;
+    RtCore* rc = (RtCore*)handle;
+    if (instBlas) {
+        if (!upload(&rc->instBlas, instBlas, (size_t)nInst, "instBlas")) return 0;
+        rc->instOwned = true; rc->instStride = 1;
+    } else {
+        if (!rc->recBase) return 0;
+        rc->instBlas = rc->recBase + 4; rc->instOwned = false; rc->instStride = 16;
+    }
+    if (!upload(&rc->tpreOff, tpreOff, (size_t)nTemplates, "tpreOff") || !upload(&rc->tCnt, tCnt, (size_t)nTemplates, "tCnt")) return 0;
+    rc->nInst = nInst; rc->nTemplates = nTemplates; rc->rawBase = rawBase;
+    return 1;
+}
+
+// Device address of the TLAS instance records (64 bytes each, in the layout of primitives.Instance).
+extern "C" uint64_t rtcore_instance_records(void* handle) { return handle ? (uint64_t)((RtCore*)handle)->recBase : 0; }
+
 // One merged BLAS: a single domain whose pieces are the meshes (raw mesh j, geometry 0).
 extern "C" int rtcore_set_meshes(void* handle, const int32_t* prefix, int32_t nMeshes) {
     if (nMeshes <= 0) return 0;
@@ -211,7 +238,9 @@ extern "C" int rtcore_trace_interop(void* handle, uint64_t rays, uint64_t result
     unsigned long long raw = rc->scratch, out = results, db = rc->domBase, dn = rc->domN, pre = rc->pre, rv = rc->rawv, gm = rc->geom;
     int nd = rc->nDomains, tl = rc->hasTlas;
     unsigned long long gd = rc->gid;
-    void* params[] = {&raw, &out, &db, &dn, &pre, &rv, &gm, &nd, &tl, &n, &gd};
+    unsigned long long ib = rc->instBlas, tpo = rc->tpreOff, tc = rc->tCnt;
+    int is = rc->instStride, ni = rc->nInst, nt = rc->nTemplates, rb = rc->rawBase;
+    void* params[] = {&raw, &out, &db, &dn, &pre, &rv, &gm, &nd, &tl, &n, &gd, &ib, &is, &ni, &tpo, &tc, &nt, &rb};
     return check(cuLaunchKernel(rc->convertFn, (n + 255u) / 256u, 1, 1, 256, 1, 1, 0, (CUstream)stream, params, nullptr), "cuLaunchKernel convert") ? 1 : 0;
 }
 
@@ -234,7 +263,8 @@ extern "C" void rtcore_destroy(void* handle) {
     if (!handle) return;
     RtCore* rc = (RtCore*)handle;
     if (g_active == handle) g_active = nullptr;
-    for (CUdeviceptr p : {rc->domBase, rc->domN, rc->pre, rc->rawv, rc->geom, rc->gid}) if (p) cuMemFree(p);
+    for (CUdeviceptr p : {rc->domBase, rc->domN, rc->pre, rc->rawv, rc->geom, rc->gid, rc->tpreOff, rc->tCnt}) if (p) cuMemFree(p);
+    if (rc->instBlas && rc->instOwned) cuMemFree(rc->instBlas);
     if (rc->scratch) cuMemFree(rc->scratch);
     if (rc->convertModule) cuModuleUnload(rc->convertModule);
     if (rc->as) cuMemFree(rc->as);

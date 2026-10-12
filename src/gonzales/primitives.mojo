@@ -25,31 +25,35 @@ struct PrimId(TrivialRegisterPassable):
 # ── Object instancing (two-level BVH: BLAS per template, TLAS instance leaves) ─
 
 struct Instance(TrivialRegisterPassable):
-    """One placement of a template (BLAS): 52 bytes. Holds the world-to-object transform as the top three
-    rows of its column-major matrix (it is affine, so the fourth row is 0 0 0 1); the object-to-world one is
-    inverted from it where needed, which is once a shaded hit and never during traversal.
+    """One placement of a template (BLAS): 64 bytes, the layout of an RT-core TLAS instance record (docs/rtcore), so
+    that a pruned RT scene shades straight from its TLAS. Holds the world-to-object transform as the top three rows of
+    a row-major matrix (it is affine, so the fourth row is 0 0 0 1); the object-to-world one is inverted from it where
+    needed, which is once a shaded hit and never during traversal. cNr is row r of column n.
     A TLAS leaf of PrimId.type == 6 has id1 = index into SceneView.instances.
-    `blasIdx` indexes SceneView.blasNodesArr/blasPrimIdsArr."""
-    var c0x: Float32
-    var c0y: Float32
-    var c0z: Float32
-    var c1x: Float32
-    var c1y: Float32
-    var c1z: Float32
-    var c2x: Float32
-    var c2y: Float32
-    var c2z: Float32
-    var c3x: Float32
-    var c3y: Float32
-    var c3z: Float32
+    `blasIdx` indexes SceneView.blasNodesArr/blasPrimIdsArr. The words `id`, `ptr0` and `ptr1` belong to the RT cores."""
+    var id: Int32
     var blasIdx: Int32
+    var ptr0: Int32
+    var ptr1: Int32
+    var c0x: Float32
+    var c1x: Float32
+    var c2x: Float32
+    var c3x: Float32
+    var c0y: Float32
+    var c1y: Float32
+    var c2y: Float32
+    var c3y: Float32
+    var c0z: Float32
+    var c1z: Float32
+    var c2z: Float32
+    var c3z: Float32
 
     def __init__(out self, worldToObj: SIMD[DType.float32, 16], blasIdx: Int32):
+        self.id = Int32(0); self.blasIdx = blasIdx; self.ptr0 = Int32(0); self.ptr1 = Int32(0)
         self.c0x = worldToObj[0]; self.c0y = worldToObj[1]; self.c0z = worldToObj[2]
         self.c1x = worldToObj[4]; self.c1y = worldToObj[5]; self.c1z = worldToObj[6]
         self.c2x = worldToObj[8]; self.c2y = worldToObj[9]; self.c2z = worldToObj[10]
         self.c3x = worldToObj[12]; self.c3y = worldToObj[13]; self.c3z = worldToObj[14]
-        self.blasIdx = blasIdx
 
     @always_inline
     def world_to_obj(self) -> SIMD[DType.float32, 16]:

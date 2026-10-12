@@ -14,7 +14,7 @@ from .outputs import write_render_outputs
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, Bounds3f, dot, _is_real_ptr
 from .render_state import TileResult, PathState
-from .primitives import Ray, TriangleMesh, mesh_vi, mesh_pos
+from .primitives import Ray, TriangleMesh, Instance, mesh_vi, mesh_pos
 from .curves import Curve, curve_piece_bounds
 from .postprocess import denoise, write_image, write_image_cropped, write_image_cropwindow
 from .transform import Mat4
@@ -46,7 +46,7 @@ from max.algorithm import parallelize
 from std.sys import exit
 from std.atomic import Atomic
 from std.sys.info import num_performance_cores
-from .rtcore import rtcore_create_own_scene, rtcore_create_own, rtcore_set_shadow, rtcore_set_alpha, rtcore_create_scene, rtcore_set_domains, RtCoreHandle, rtcore_create, rtcore_set_meshes, rtcore_set_active, rtcore_active, rtcore_destroy
+from .rtcore import rtcore_create_own_scene, rtcore_create_own, rtcore_set_shadow, rtcore_set_alpha, rtcore_create_scene, rtcore_set_domains, rtcore_set_instance_decode, rtcore_instance_records, RtCoreHandle, rtcore_create, rtcore_set_meshes, rtcore_set_active, rtcore_active, rtcore_destroy
 from std.os import getenv
 from std.ffi import external_call
 from .outputs import _cstr
@@ -569,6 +569,16 @@ def _rtcore_attach_native(interop_scene: VulkanInteropRtSceneHandle, psc: Pointe
 # --rt-hardware on an instanced scene without Vulkan: one BLAS per template, one for all ordinary meshes together, and a TLAS
 # over the placements (plus one identity instance for the ordinary meshes), all built by rt_build.mojo. The decode tables are
 # those of _rtcore_attach_native; the hit's primitive id is mapped to the triangle number in its BLAS by the gid table.
+# A fully pruned scene shades from the RT-core TLAS records instead of its own instance array (the software structures only
+# reach the first instance_prefix instances, whose places do not change): the instances are reordered into record order.
+def _instances_in_tlas(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]) -> Bool:
+    return getenv("GONZALES_RT_PRUNE") == "1" and getenv("GONZALES_RTCORE_VULKAN") == "" and _rtcore_native_wanted(psc)
+
+def _share_instances(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], rt_hw: RtCoreHandle, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]):
+    if _instances_in_tlas(psc) and Int(rt_hw) != 0:
+        handle[].instances_ext = Int(rtcore_instance_records(rt_hw))
+        handle[].n_instances = Int(psc[unsafe_offset=0].instance_count)
+
 # Everything the RT structures are built from: triangle counts per structure and every instance's matrix and template.
 def _rt_cache_key(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], blas_ntri: Pointer[Int, MutUntrackedOrigin], n_blas: Int) -> Int:
     var h = UInt64(0xcbf29ce484222325) ^ UInt64(scene_cache_variant())
@@ -623,7 +633,7 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
         cache_path = getenv("GONZALES_SCENE_CACHE") + ".rt"
     var key = _rt_cache_key(psc, blas_ntri, n_blas)
     var loaded = False
-    var cached = RtCacheTlas(unsafe_alloc[UInt8](1), 0, 0, 0)
+    var cached = RtCacheTlas(unsafe_alloc[UInt8](1), 0, 0, 0, unsafe_alloc[Int32](1))
     if cache_path != "":
         cached = rt_cache_load(cache_path, key, n_blas, blas_bytes, blas_sizes, blas_box, blas_gid, blas_ngid)
         loaded = cached.size > 0
@@ -686,9 +696,10 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
     blas_nn.unsafe_free(); blas_nblk.unsafe_free()
     # the TLAS: the placements, then the identity instance of the ordinary meshes
     var n_inst = ni + (1 if has_ord else 0)
+    var shared = _instances_in_tlas(psc)
     var tlas = RtTlas(unsafe_alloc[UInt8](1), 0, 0, 0, unsafe_alloc[Int32](1))
     if loaded:
-        tlas = RtTlas(cached.bytes, cached.size, cached.rec_off, cached.n_records, unsafe_alloc[Int32](1))
+        tlas = RtTlas(cached.bytes, cached.size, cached.rec_off, cached.n_records, cached.inst_of_record)
     else:
         var w2o = unsafe_alloc[Float32](12 * max(n_inst, 1))
         var binst = unsafe_alloc[Int32](max(n_inst, 1))
@@ -703,14 +714,25 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
             for q in range(12): w2o[unsafe_offset=ni * 12 + q] = Float32(0)
             w2o[unsafe_offset=ni * 12 + 0] = Float32(1); w2o[unsafe_offset=ni * 12 + 4] = Float32(1); w2o[unsafe_offset=ni * 12 + 8] = Float32(1)
             binst[unsafe_offset=ni] = Int32(nt)
-        tlas = rt_build_tlas(w2o, binst, n_inst, blas_box, n_blas)
+        tlas = rt_build_tlas(w2o, binst, n_inst, blas_box, n_blas, Int(psc[unsafe_offset=0].instance_prefix) if shared else 0, shared)
         w2o.unsafe_free(); binst.unsafe_free()
         if cache_path != "":
-            if rt_cache_save(cache_path, key, n_blas, blas_bytes, blas_sizes, blas_box, blas_gid, blas_ngid, tlas.bytes, tlas.size, tlas.rec_off, tlas.n_records):
+            if rt_cache_save(cache_path, key, n_blas, blas_bytes, blas_sizes, blas_box, blas_gid, blas_ngid, tlas.bytes, tlas.size, tlas.rec_off, tlas.n_records, tlas.inst_of_record):
                 print("RT structures written to", cache_path)
     if bake_only:                  # --bake: the structures are on disk (or were already), nothing to put on a GPU
         return none
     blas_box.unsafe_free()
+    if shared:
+        # Instance r is the one the TLAS names r + 1: the identity instance of the ordinary meshes (index ni) becomes one of them.
+        var reordered = unsafe_alloc[Instance](max(n_inst, 1))
+        var ident = SIMD[DType.float32, 16](0.0)
+        ident[0] = Float32(1); ident[5] = Float32(1); ident[10] = Float32(1); ident[15] = Float32(1)
+        for r in range(n_inst):
+            var o = Int(tlas.inst_of_record[unsafe_offset=r])
+            reordered[unsafe_offset=r] = psc[unsafe_offset=0].instances[unsafe_offset=o] if o < ni else Instance(ident, Int32(nt))
+        psc[unsafe_offset=0].instances.unsafe_free()
+        psc[unsafe_offset=0].instances = reordered
+        psc[unsafe_offset=0].instance_count = Int32(n_inst)
     var gid = unsafe_alloc[Int32](max(id_base, 1))
     var go = 0
     for b in range(n_blas):
@@ -718,18 +740,21 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
             gid[unsafe_offset=go + q] = blas_gid[unsafe_offset=b][unsafe_offset=q]
         go += blas_ngid[unsafe_offset=b]
         blas_gid[unsafe_offset=b].unsafe_free()
-    # decode tables: domain d = instance d (the TLAS reports instance + 1); direct for a template, pieces for the ordinary meshes
+    # decode tables: a template instance is decoded from its template's prefix sums (the BLAS of instance d is in inst_blas, the
+    # TLAS reports instance + 1); the ordinary meshes are domain 0, pieces of one BLAS
     var tpre_n = 0
     for t in range(nt):
         tpre_n += Int(psc[unsafe_offset=0].template_mesh_end[unsafe_offset=t]) - Int(psc[unsafe_offset=0].template_mesh_start[unsafe_offset=t]) + 1
-    var n_dom = n_inst
-    var entries = ni + n_ord + tpre_n
-    var tpre_off = unsafe_alloc[Int32](max(nt, 1))
-    var dom_base = unsafe_alloc[Int32](max(n_dom, 1)); var dom_n = unsafe_alloc[Int32](max(n_dom, 1))
+    var n_dom = 1
+    var entries = n_ord + tpre_n
+    var tpre_off = unsafe_alloc[Int32](max(nt, 1)); var t_cnt = unsafe_alloc[Int32](max(nt, 1))
+    var dom_base = unsafe_alloc[Int32](1); var dom_n = unsafe_alloc[Int32](1)
     var pre = unsafe_alloc[Int32](max(entries, 1)); var rawv = unsafe_alloc[Int32](max(entries, 1)); var geom = unsafe_alloc[Int32](max(entries, 1))
-    var te = ni + n_ord
+    dom_base[unsafe_offset=0] = Int32(0); dom_n[unsafe_offset=0] = Int32(n_ord if has_ord else 0)
+    var te = n_ord
     for t in range(nt):
         tpre_off[unsafe_offset=t] = Int32(te)
+        t_cnt[unsafe_offset=t] = Int32(Int(psc[unsafe_offset=0].template_mesh_end[unsafe_offset=t]) - Int(psc[unsafe_offset=0].template_mesh_start[unsafe_offset=t]))
         var run = Int32(0)
         for i in range(Int(psc[unsafe_offset=0].template_mesh_start[unsafe_offset=t]), Int(psc[unsafe_offset=0].template_mesh_end[unsafe_offset=t])):
             pre[unsafe_offset=te] = run; rawv[unsafe_offset=te] = Int32(0); geom[unsafe_offset=te] = Int32(0)
@@ -737,14 +762,14 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
             te += 1
         pre[unsafe_offset=te] = run; rawv[unsafe_offset=te] = Int32(0); geom[unsafe_offset=te] = Int32(0)
         te += 1
-    for k in range(ni):
-        var tk = Int(psc[unsafe_offset=0].instances[unsafe_offset=k].blasIdx)
-        dom_base[unsafe_offset=k] = Int32(k); dom_n[unsafe_offset=k] = Int32(-1)
-        pre[unsafe_offset=k] = tpre_off[unsafe_offset=tk]; rawv[unsafe_offset=k] = Int32(nm + k)
-        geom[unsafe_offset=k] = Int32(Int(psc[unsafe_offset=0].template_mesh_end[unsafe_offset=tk]) - Int(psc[unsafe_offset=0].template_mesh_start[unsafe_offset=tk]))
+    var inst_blas = unsafe_alloc[Int32](max(n_inst, 1))
+    if not shared:
+        for k in range(ni):
+            inst_blas[unsafe_offset=k] = psc[unsafe_offset=0].instances[unsafe_offset=k].blasIdx
+        if has_ord:
+            inst_blas[unsafe_offset=ni] = Int32(nt)
     if has_ord:
-        dom_base[unsafe_offset=ni] = Int32(ni); dom_n[unsafe_offset=ni] = Int32(n_ord)
-        var e = ni
+        var e = 0
         var run = Int32(0)
         for i in range(nm):
             if is_template[unsafe_offset=i]:
@@ -786,7 +811,7 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
     var h = rtcore_create_own_scene(cubin_c, Int32(n_blas), blas_bytes, blas_sizes, tlas.bytes, Int64(tlas.size), Int64(tlas.rec_off), Int64(tlas.n_records), gid, Int64(id_base))
     cubin_c.unsafe_free()
     var result = none
-    if Int(h) != 0 and Int(rtcore_set_domains(h, Int32(n_dom), dom_base, dom_n, pre, rawv, geom, Int32(entries))) == 1:
+    if Int(h) != 0 and Int(rtcore_set_domains(h, Int32(n_dom), dom_base, dom_n, pre, rawv, geom, Int32(entries))) == 1 and Int(rtcore_set_instance_decode(h, Int32(n_inst), UInt64(0) if shared else UInt64(Int(inst_blas)), Int32(nt), tpre_off, t_cnt, Int32(nm))) == 1:
         result = h
         print("RT hardware: tracing", ni, "instances of", nt, "templates and", n_ord, "meshes on the RT cores (own structures,", (total_bytes + tlas.size) // (1024 * 1024), "MB, no Vulkan)")
     elif Int(h) != 0:
@@ -794,7 +819,7 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
     for b in range(n_blas): blas_bytes[unsafe_offset=b].unsafe_free()
     tlas.bytes.unsafe_free(); tlas.inst_of_record.unsafe_free(); gid.unsafe_free()
     blas_bytes.unsafe_free(); blas_sizes.unsafe_free(); blas_gid.unsafe_free(); blas_ngid.unsafe_free(); is_template.unsafe_free()
-    tpre_off.unsafe_free(); dom_base.unsafe_free(); dom_n.unsafe_free(); pre.unsafe_free(); rawv.unsafe_free(); geom.unsafe_free()
+    tpre_off.unsafe_free(); t_cnt.unsafe_free(); inst_blas.unsafe_free(); dom_base.unsafe_free(); dom_n.unsafe_free(); pre.unsafe_free(); rawv.unsafe_free(); geom.unsafe_free()
     return result
 
 
@@ -953,6 +978,7 @@ def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc
     rt_merged.release()
     if Int(rt_hw) == 0:
         return b^
+    _share_instances(handle, rt_hw, psc)
     rtcore_set_active(rt_hw)
     var light_kinds = Int(psc[unsafe_offset=0].area_light_count > Int32(0)) + Int(psc[unsafe_offset=0].infinite_count > Int32(0)) + Int(psc[unsafe_offset=0].distant_count > Int32(0)) + Int(psc[unsafe_offset=0].point_count > Int32(0))
     var rt_pruned = getenv("GONZALES_RT_PRUNE") != "" and psc[unsafe_offset=0].instance_count > Int32(0)
@@ -983,7 +1009,8 @@ def _rt_wavefront_setup(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc
         with ibm_buf.map_to_host() as h3:
             var dst3 = h3.unsafe_ptr().unsafe_bitcast[Int32]()
             for k in range(n_inst):
-                dst3[unsafe_offset=k] = psc[unsafe_offset=0].template_mesh_start[unsafe_offset=Int(psc[unsafe_offset=0].instances[unsafe_offset=k].blasIdx)]
+                var tk = Int(psc[unsafe_offset=0].instances[unsafe_offset=k].blasIdx)
+                dst3[unsafe_offset=k] = psc[unsafe_offset=0].template_mesh_start[unsafe_offset=tk] if tk < Int(psc[unsafe_offset=0].blas_count) else Int32(0)
         b.instance_base_mesh = ibm_buf^
     b.n_meshes = n_meshes
     b.on = True
@@ -2036,7 +2063,7 @@ def parse_and_render(
         return ret
     elif use_gpu:
         var spp = Int(psc[unsafe_offset=0].samples_per_pixel)
-        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65, gpu_ctx, restir_di=use_restir, restir_vol=use_vol_restir_reuse)
+        var handle = gpu_upload_scene(psc, sobol_matrices, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65, gpu_ctx, restir_di=use_restir, restir_vol=use_vol_restir_reuse, instances_external=_instances_in_tlas(psc))
         if not _is_real_ptr(handle):
             mojo_parsed_free(psc)
             return Int32(-1)
@@ -2200,6 +2227,14 @@ def parse_and_render(
                 var rt_hw = (_rtcore_attach_own(rt_merged) if rt_merged.valid else _rtcore_attach_own_native(psc)) if own_rt else (_rtcore_attach(interop_scene, rt_merged) if rt_merged.valid else _rtcore_attach_native(interop_scene, psc))
                 if Int(rt_hw) != 0:
                     rtcore_set_active(rt_hw)
+                    if _instances_in_tlas(psc) and own_rt:
+                        _share_instances(handle, rt_hw, psc)
+                        n_instances_vk = Int(psc[unsafe_offset=0].instance_count)
+                        instance_base_mesh_host.unsafe_free()
+                        instance_base_mesh_host = unsafe_alloc[Int32](max(n_instances_vk, 1))
+                        for k in range(n_instances_vk):
+                            var tk = Int(psc[unsafe_offset=0].instances[unsafe_offset=k].blasIdx)
+                            instance_base_mesh_host[unsafe_offset=k] = psc[unsafe_offset=0].template_mesh_start[unsafe_offset=tk] if tk < Int(psc[unsafe_offset=0].blas_count) else Int32(0)
                     # Usable shadow slots: a second one only pays off when a bounce can add a second NEE candidate, i.e. the
                     # scene has more than one kind of light (measured: it costs ~13 ms/spp otherwise).
                     var light_kinds = Int(psc[unsafe_offset=0].area_light_count > Int32(0)) + Int(psc[unsafe_offset=0].infinite_count > Int32(0)) + Int(psc[unsafe_offset=0].distant_count > Int32(0)) + Int(psc[unsafe_offset=0].point_count > Int32(0))
@@ -2588,7 +2623,7 @@ def render_interactive(
         return
     var handle = Pointer[GpuSceneHandle, MutUntrackedOrigin].unsafe_dangling()
     if use_gpu:
-        handle = gpu_upload_scene(psc, sobol, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65)
+        handle = gpu_upload_scene(psc, sobol, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y, spectral.cie_z, spectral.d65, instances_external=_instances_in_tlas(psc))
         if not _is_real_ptr(handle):
             viewer_destroy(v)
             mojo_parsed_free(psc)

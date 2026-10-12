@@ -45,6 +45,9 @@ int rtcore_trace(void* handle, uint64_t rays, uint64_t results, int32_t ray_coun
 // the per-mesh triangle counts). Needed by rtcore_trace_interop only.
 int rtcore_set_domains(void* handle, int32_t nDomains, const int32_t* domBase, const int32_t* domN, const int32_t* pre,
                        const int32_t* rawv, const int32_t* geom, int32_t nEntries);
+int rtcore_set_instance_decode(void* handle, int32_t nInst, const int32_t* instBlas, int32_t nTemplates, const int32_t* tpreOff,
+                               const int32_t* tCnt, int32_t rawBase);
+uint64_t rtcore_instance_records(void* handle);
 int rtcore_set_meshes(void* handle, const int32_t* tri_prefix, int32_t n_meshes);
 
 // Like rtcore_trace, but writes `results` in the Vulkan interop Result layout (see rt_convert.cu): 32 bytes per ray,

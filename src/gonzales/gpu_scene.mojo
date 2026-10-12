@@ -688,6 +688,7 @@ struct GpuSceneHandle(Movable):
     var blas: BlasBuffers
     var instances_buf: DeviceBuffer[DType.uint8]
     var n_instances: Int
+    var instances_ext: Int          # device address of instance records kept elsewhere (the RT-core TLAS); 0: instances_buf
     var meshes: MeshBuffers
     var materials_buf: DeviceBuffer[DType.uint8]
     var material_count: Int
@@ -805,7 +806,7 @@ struct GpuSceneHandle(Movable):
             nvdbGrids=typed_ptr[NvdbGrid](self.media.nvdb_grids_buf), nvdbGridCount=Int64(self.media.n_nvdb_grids),
             lightSampler=LightSampler(cdf=self.lights.light_sampler_ptr(), n=Int32(self.lights.n_light_sampler), _pad=Int32(0)),
             blasNodesArr=self.blas.nodes_arr(), blasPrimIdsArr=self.blas.primids_arr(), blasCount=Int64(self.blas.n_blas),
-            instances=typed_ptr[Instance](self.instances_buf), instanceCount=Int64(self.n_instances),
+            instances=Pointer[Instance, MutUntrackedOrigin](unsafe_from_address=self.instances_ext) if self.instances_ext != 0 else typed_ptr[Instance](self.instances_buf), instanceCount=Int64(self.n_instances),
             measuredBrdfs=typed_ptr[MeasuredBRDF](self.measured.brdfs_buf), measuredBrdfCount=Int64(self.measured.n_brdfs),
             spectral=SpectralHandle(sc, sres, sx, sy, sz, sd65),
             gpuTextures=self.textures.textures_ptr(), gpuTextureCount=Int64(self.textures.n_textures),
@@ -920,6 +921,7 @@ def gpu_upload_scene(
     ctx_in: Optional[DeviceContext] = None,   # a context created ahead of the scene parse
     restir_di: Bool = True,    # False: no per-pixel ReSTIR reservoirs (a pixel's worth is kept so the buffers exist)
     restir_vol: Bool = True,
+    instances_external: Bool = False,   # the instances will be the RT-core TLAS records (see pipeline._share_instances)
 ) -> Pointer[GpuSceneHandle, MutUntrackedOrigin]:
     comptime if has_accelerator():
         try:
@@ -928,7 +930,7 @@ def gpu_upload_scene(
             _report_gpu_memory(ctx, s)
             var bvh = BvhBuffers.upload(ctx, s)
             var blas = BlasBuffers.upload(ctx, s)
-            var instances_gpu_buf = _gpu_upload_array[Instance](ctx, s.instances, Int(s.instance_count))
+            var instances_gpu_buf = _gpu_upload_array[Instance](ctx, s.instances, 1 if instances_external else Int(s.instance_count))
             var meshes = MeshBuffers.upload(ctx, s)
             # >= 1 elem to avoid a zero-size buffer
             var mat_buf = _gpu_upload_array[Material](ctx, s.materials, Int(s.material_count))
@@ -1027,6 +1029,7 @@ def gpu_upload_scene(
                 blas=blas^,
                 instances_buf=instances_gpu_buf^,
                 n_instances=Int(s.instance_count),
+                instances_ext=0,
                 meshes=meshes^,
                 materials_buf=mat_buf^,
                 material_count=Int(s.material_count),

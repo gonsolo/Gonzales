@@ -84,6 +84,19 @@ def rtcore_set_domains(
         Pointer[Int32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin], Int32](
         handle, n_domains, dom_base, dom_n, pre, rawv, geom, n_entries)
 
+# Template instances decode from per-template tables (see rtcore.h); `inst_blas` null = read the TLAS records.
+def rtcore_set_instance_decode(
+    handle: RtCoreHandle, n_inst: Int32, inst_blas: UInt64, n_templates: Int32,
+    tpre_off: Pointer[Int32, MutUntrackedOrigin], t_cnt: Pointer[Int32, MutUntrackedOrigin], raw_base: Int32,
+) -> Int32:
+    return external_call["rtcore_set_instance_decode", Int32, RtCoreHandle, Int32, UInt64, Int32,
+        Pointer[Int32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin], Int32](
+        handle, n_inst, inst_blas, n_templates, tpre_off, t_cnt, raw_base)
+
+# Device address of the TLAS instance records (layout of primitives.Instance).
+def rtcore_instance_records(handle: RtCoreHandle) -> UInt64:
+    return external_call["rtcore_instance_records", UInt64, RtCoreHandle](handle)
+
 # Maps the merged geometry's global triangle index back to meshes: `tri_prefix` has n_meshes + 1 entries.
 def rtcore_set_meshes(handle: RtCoreHandle, tri_prefix: Pointer[Int32, MutUntrackedOrigin], n_meshes: Int32) -> Int32:
     return external_call["rtcore_set_meshes", Int32, RtCoreHandle, Pointer[Int32, MutUntrackedOrigin], Int32](

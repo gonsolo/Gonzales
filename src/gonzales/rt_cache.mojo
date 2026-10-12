@@ -6,7 +6,7 @@ GONZALES_RT_CACHE=<file> (default: the scene cache's name plus .rt). The key has
 from std.memory.alloc import unsafe_alloc
 from .scene_cache import _fopen, _fclose, _put, _get, _Ptr
 
-comptime _RT_MAGIC: Int = 0x435452544E5A47
+comptime _RT_MAGIC: Int = 0x435452544E5A48
 comptime PB = Pointer[UInt8, MutUntrackedOrigin]
 comptime PBP = Pointer[Pointer[UInt8, MutUntrackedOrigin], MutUntrackedOrigin]
 comptime PIP = Pointer[Pointer[Int32, MutUntrackedOrigin], MutUntrackedOrigin]
@@ -23,7 +23,7 @@ def _c_path(path: String) -> _Ptr:
 def rt_cache_save(
     path: String, key: Int, n_blas: Int, blas_bytes: PBP, blas_sizes: Pointer[Int64, MutUntrackedOrigin],
     blas_box: Pointer[Float64, MutUntrackedOrigin], blas_gid: PIP, blas_ngid: Pointer[Int, MutUntrackedOrigin],
-    tlas_bytes: PB, tlas_size: Int, rec_off: Int, n_records: Int,
+    tlas_bytes: PB, tlas_size: Int, rec_off: Int, n_records: Int, inst_of_record: Pointer[Int32, MutUntrackedOrigin],
 ) -> Bool:
     var cp = _c_path(path)
     var f = _fopen(cp, True)
@@ -40,6 +40,7 @@ def rt_cache_save(
         _put[UInt8](f, blas_bytes[unsafe_offset=b], Int(blas_sizes[unsafe_offset=b]))
         _put[Int32](f, blas_gid[unsafe_offset=b], blas_ngid[unsafe_offset=b])
     _put[UInt8](f, tlas_bytes, tlas_size)
+    _put[Int32](f, inst_of_record, n_records)
     _fclose(f)
     return True
 
@@ -50,19 +51,21 @@ struct RtCacheTlas(Movable):
     var size: Int
     var rec_off: Int
     var n_records: Int
+    var inst_of_record: Pointer[Int32, MutUntrackedOrigin]     # record -> instance index of the build order
 
-    def __init__(out self, bytes: PB, size: Int, rec_off: Int, n_records: Int):
+    def __init__(out self, bytes: PB, size: Int, rec_off: Int, n_records: Int, inst_of_record: Pointer[Int32, MutUntrackedOrigin]):
         self.bytes = bytes
         self.size = size
         self.rec_off = rec_off
         self.n_records = n_records
+        self.inst_of_record = inst_of_record
 
 
 def rt_cache_load(
     path: String, key: Int, n_blas: Int, blas_bytes: PBP, blas_sizes: Pointer[Int64, MutUntrackedOrigin],
     blas_box: Pointer[Float64, MutUntrackedOrigin], blas_gid: PIP, blas_ngid: Pointer[Int, MutUntrackedOrigin],
 ) -> RtCacheTlas:
-    var none = RtCacheTlas(unsafe_alloc[UInt8](1), 0, 0, 0)
+    var none = RtCacheTlas(unsafe_alloc[UInt8](1), 0, 0, 0, unsafe_alloc[Int32](1))
     var cp = _c_path(path)
     var f = _fopen(cp, False)
     cp.unsafe_free()
@@ -85,6 +88,7 @@ def rt_cache_load(
         blas_bytes[unsafe_offset=b] = _get[UInt8](f, Int(blas_sizes[unsafe_offset=b]))
         blas_gid[unsafe_offset=b] = _get[Int32](f, blas_ngid[unsafe_offset=b])
     var tl = _get[UInt8](f, tlas_size)
+    var perm = _get[Int32](f, n_records)
     _fclose(f)
-    none.bytes.unsafe_free()
-    return RtCacheTlas(tl, tlas_size, rec_off, n_records)
+    none.bytes.unsafe_free(); none.inst_of_record.unsafe_free()
+    return RtCacheTlas(tl, tlas_size, rec_off, n_records, perm)
