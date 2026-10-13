@@ -1,5 +1,6 @@
 from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
 from std.os import getenv
+from std.time import perf_counter_ns
 from std.utils import StaticTuple
 from .gpu_tuning import MINCTA_TRAVERSE
 from std.sys import get_defined_int
@@ -1018,6 +1019,7 @@ def rtcore_closest_hit_gpu(
     n_spheres: Int,
     round: Int,
     prev_live: Int,
+    bench: Pointer[Int, MutUntrackedOrigin],
 ) raises -> Int:
     comptime block_size = 256
     var grid = ceildiv(n_total, block_size)
@@ -1041,6 +1043,8 @@ def rtcore_closest_hit_gpu(
     var m = read_counter(ctx, counter_buf)
     if m == 0:
         return 0
+    bench[0] += m
+    var t0 = perf_counter_ns()
     var gm = ceildiv(m, block_size)
     var instance_base_mesh_ptr = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
     if instance_base_mesh_buf:
@@ -1070,6 +1074,9 @@ def rtcore_closest_hit_gpu(
             grid_dim=grid, block_dim=block_size,
         )
         ctx.enqueue_function[accumulate_cone_gpu](paths, inter, Int64(n_total), grid_dim=grid, block_dim=block_size)
+    if bench[3] == 2:
+        ctx.synchronize()
+        bench[2] += Int(perf_counter_ns() - t0)
     return m
 
 
@@ -1320,6 +1327,7 @@ def rtcore_shadow_rays_compact_gpu(
     instance_base_mesh: Pointer[Int32, MutUntrackedOrigin],
     round: Int,
     n_live: Int,
+    bench: Pointer[Int, MutUntrackedOrigin],
 ) raises:
     comptime block_size = 256
     var n_tasks = n_live * SHADOW_SLOTS
@@ -1341,6 +1349,8 @@ def rtcore_shadow_rays_compact_gpu(
         var m = min(found, n_total)
         if m == 0:
             return
+        bench[1] += m
+        var t0 = perf_counter_ns()
         if alpha:
             # Interop layout, so the alpha passes know which triangle each ray hit.
             _ = rtcore_trace_interop(rt_hw, UInt64(Int(interop_rays_buf.unsafe_ptr())), UInt64(Int(interop_results_buf.unsafe_ptr())), Int32(m), cuda_stream)
@@ -1355,6 +1365,9 @@ def rtcore_shadow_rays_compact_gpu(
                 ids, sd, Int64(n_spheres), Int64(m), Int64(s), Int64(1 if alpha else 0),
                 grid_dim=ceildiv(m, CURVE_BLOCK), block_dim=CURVE_BLOCK,
             )
+        if bench[3] == 2:
+            ctx.synchronize()
+            bench[2] += Int(perf_counter_ns() - t0)
         if found <= n_total:
             return
 

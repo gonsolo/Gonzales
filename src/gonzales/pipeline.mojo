@@ -2878,6 +2878,13 @@ def render_interactive(
         except:
             pass
     var t_render = 0; var t_denoise = 0; var t_sensor = 0; var t_present = 0
+    # GONZALES_BENCH=<warm-up frames>: headless ray and time counts over the frames after them.
+    var bench_warm = 0; var bench_render = 0
+    if headless and getenv("GONZALES_BENCH") != "":
+        try:
+            bench_warm = Int(getenv("GONZALES_BENCH"))
+        except:
+            pass
     while (not headless and not viewer_should_close(v)) or (headless and frame_count < Int(headless_frames)):
         if not headless:
             viewer_poll_events(v)
@@ -2963,6 +2970,10 @@ def render_interactive(
                 )
             frame_count += 1
             t_render += Int(perf_counter_ns() - t_r)
+            bench_render += Int(perf_counter_ns() - t_r)
+            if frame_count == bench_warm:
+                bench_render = 0
+                for bi in range(3): handle[].bench[unsafe_offset=bi] = 0
             var t_a = perf_counter_ns()
             gpu_atrous_denoise(handle, denoised.unsafe_ptr(), Int64(n_pixels),
                                     Int32(1 if move_step != Float32(0) else frame_count),
@@ -3128,6 +3139,12 @@ def render_interactive(
             print("frame ms: render", t_render // 20000000, "denoise", t_denoise // 20000000, "sensor", t_sensor // 20000000, "present", t_present // 20000000)
             t_render = 0; t_denoise = 0; t_sensor = 0; t_present = 0
 
+    if headless and bench_warm > 0 and use_gpu and frame_count > bench_warm:
+        var bf = frame_count - bench_warm
+        var br = handle[].bench[0] + handle[].bench[1]
+        print("bench: frames", bf, "render ms/frame", Float64(bench_render) / 1.0e6 / Float64(bf),
+              "rays/pixel", Float64(br) / Float64(bf) / Float64(n_pixels), "closest", handle[].bench[0] // bf, "shadow", handle[].bench[1] // bf,
+              "Mray/s", Float64(br) * 1.0e3 / Float64(bench_render), "trace ms/frame", Float64(handle[].bench[2]) / 1.0e6 / Float64(bf))
     if headless:
         _ = write_image_cropped(denoised.unsafe_ptr(), fw, fh, Int32(0), Int32(0), fw, fh,
                                  psc[unsafe_offset=0].film_filename, Int32(32), Int32(32))

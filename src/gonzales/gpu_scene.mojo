@@ -710,6 +710,7 @@ struct GpuSceneHandle(Movable):
     # MNEE auto-off: [probes, probes that found glass] written by the diffuse kernel; gpu_mnee_adapt reads it after a batch.
     var mnee_stats_buf: DeviceBuffer[DType.int32]
     var mnee_adapt_done: Bool
+    var bench: Pointer[Int, MutUntrackedOrigin]      # closest rays, shadow rays, trace ns, mode (1 frame sync, 2 trace timing)
     # one parked glass-chain emitter hit per path (SuppressTask), resolved by resolve_suppress_gpu; 32 bytes when unused
     var suppress_buf: DeviceBuffer[DType.uint8]
     # One bit per MatKind present in the scene's material table. The bounce
@@ -849,6 +850,14 @@ struct GpuSceneHandle(Movable):
 
 def gpu_available() -> Bool:
     return has_accelerator()
+
+def _bench_counters() -> Pointer[Int, MutUntrackedOrigin]:
+    var b = unsafe_alloc[Int](4)
+    for i in range(4):
+        b[unsafe_offset=i] = 0
+    if getenv("GONZALES_BENCH") != "":
+        b[unsafe_offset=3] = 2 if getenv("GONZALES_BENCH_TRACE") != "" else 1
+    return b
 
 def _gpu_free_log(tag: String):
     if getenv("GONZALES_GPU_LOG") != "":
@@ -1161,6 +1170,7 @@ def gpu_upload_scene(
                 has_glass_material=has_glass_mat,
                 mnee_stats_buf=r_mnee_stats^,
                 mnee_adapt_done=False,
+                bench=_bench_counters(),
                 suppress_buf=r_suppress^,
                 mat_kind_mask=kind_mask,
                 has_interface_material=has_iface_mat,

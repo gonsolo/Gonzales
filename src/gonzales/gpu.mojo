@@ -114,7 +114,7 @@ def _gpu_bounce_kernels(
             interop_rays_buf.value(), interop_results_buf.value(), handle[].rt_scratch_buf,
             handle[].active_idx_buf, handle[].active_count_buf,
             mesh_material_idx_buf.value(), mesh_al_idx_buf.value(), n_meshes_vk, n, max_depth, instance_base_mesh_buf,
-            handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere](), handle[].n_spheres, round, prev_live,
+            handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere](), handle[].n_spheres, round, prev_live, handle[].bench,
         )
         if live_paths == 0:
             return 0                                    # every path is finished: the remaining kernels would be no-ops
@@ -579,7 +579,7 @@ def _gpu_bounce_kernels(
         rtcore_shadow_rays_compact_gpu(handle[].ctx, handle[].path_buf, handle[].shadow_buf,
             interop_rays_buf.value(), interop_results_buf.value(), handle[].active_idx_buf, handle[].active_count_buf, n,
             sd, handle[].n_spheres,
-            handle[].rt_scratch_buf, n_meshes_vk, shadow_instance_base, round, live_paths)
+            handle[].rt_scratch_buf, n_meshes_vk, shadow_instance_base, round, live_paths, handle[].bench)
     return live_paths
 
 
@@ -871,6 +871,8 @@ def gpu_render_wavefront(
         grid_dim=grid_pix,
                 block_dim=block_size,
             )
+            if handle[].bench[3] != 0:
+                handle[].ctx.synchronize()
         except e:
             print("GPU wavefront render failed: " + String(e))
 
