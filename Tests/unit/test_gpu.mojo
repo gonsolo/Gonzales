@@ -92,8 +92,10 @@ def _accumulate_film_gpu_body(ctx: DeviceContext) raises:
 
     var film_buf = ctx.enqueue_create_buffer[DType.float32](n * 3)
     var albedo_buf = ctx.enqueue_create_buffer[DType.float32](n * 3)
+    var sq_buf = ctx.enqueue_create_buffer[DType.float32](n)
     film_buf.enqueue_fill(Float32(10.0))
     albedo_buf.enqueue_fill(Float32(1.0))
+    sq_buf.enqueue_fill(Float32(0.5))
     ctx.synchronize()
 
     # A GPU kernel launch cannot use the signature's default arguments, so the
@@ -104,7 +106,7 @@ def _accumulate_film_gpu_body(ctx: DeviceContext) raises:
     var null_tbl = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
     ctx.enqueue_function[accumulate_film_gpu](
         path_buf.unsafe_ptr().unsafe_bitcast[PathState](),
-        film_buf.unsafe_ptr(), albedo_buf.unsafe_ptr(), Int64(n),
+        film_buf.unsafe_ptr(), albedo_buf.unsafe_ptr(), sq_buf.unsafe_ptr(), Int64(n),
         Float32(0.0),   # sample_clamp disabled: this test checks accumulation,
                         # not pbrt's per-sample maxcomponentvalue clamp
         null_tbl, Int64(0), null_tbl, null_tbl, null_tbl, null_tbl,
@@ -124,6 +126,11 @@ def _accumulate_film_gpu_body(ctx: DeviceContext) raises:
                 assert_true(_close(alb[unsafe_offset=i*3+0], Float32(1.0) + f * Float32(0.01)))
                 assert_true(_close(alb[unsafe_offset=i*3+1], Float32(1.0) + f * Float32(0.02)))
                 assert_true(_close(alb[unsafe_offset=i*3+2], Float32(1.0) + f * Float32(0.03)))
+            with sq_buf.map_to_host() as sh:
+                for i in range(n):
+                    var f = Float32(i)
+                    var l = f * (Float32(0.2126) * Float32(0.1) + Float32(0.7152) * Float32(0.2) + Float32(0.0722) * Float32(0.3))
+                    assert_true(_close(sh.unsafe_ptr()[unsafe_offset=i], Float32(0.5) + l * l))
 
 def test_clear_film_gpu_and_accumulate_film_gpu() raises:
     """Both real kernels in this file, run against ONE shared DeviceContext

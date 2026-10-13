@@ -738,6 +738,12 @@ struct GpuSceneHandle(Movable):
     var film_buf: DeviceBuffer[DType.uint8]          # n_pixels × 3 × Float32 = 12 bytes
     var albedo_film_buf: DeviceBuffer[DType.uint8]   # n_pixels × 3 × Float32 = 12 bytes
     var film_sq_buf: DeviceBuffer[DType.uint8]       # n_pixels × Float32: sum of per-sample luma^2, for the denoiser's variance
+    # Temporal denoiser history (previous frame's output, its depth and camera).
+    var hist_color_buf: DeviceBuffer[DType.uint8]    # n_pixels × 12
+    var hist_len_buf: DeviceBuffer[DType.uint8]      # n_pixels × 4 — frames of history behind each pixel
+    var hist_len_tmp_buf: DeviceBuffer[DType.uint8]  # n_pixels × 4
+    var prev_depth_buf: DeviceBuffer[DType.uint8]    # n_pixels × 4
+    var prev_c2w_buf: DeviceBuffer[DType.uint8]      # 64
     # À-trous wavelet denoiser buffers (interactive GPU path)
     var atrous_ping_buf: DeviceBuffer[DType.uint8]     # n_pixels × 12 — beauty ping, input to pass 0
     var atrous_pong_buf: DeviceBuffer[DType.uint8]     # n_pixels × 12 — ping-pong working buffer
@@ -1064,6 +1070,11 @@ def gpu_upload_scene(
             var r_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_albedo_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_film_sq_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
+            var r_hist_color_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
+            var r_hist_len_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
+            var r_hist_len_tmp_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
+            var r_prev_depth_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
+            var r_prev_c2w_buf = ctx.enqueue_create_buffer[DType.uint8](64)
             var r_atrous_ping_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_atrous_pong_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_atrous_albedo_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
@@ -1108,6 +1119,10 @@ def gpu_upload_scene(
             ctx.enqueue_memset(r_film_buf, UInt8(0))
             ctx.enqueue_memset(r_albedo_film_buf, UInt8(0))
             ctx.enqueue_memset(r_film_sq_buf, UInt8(0))
+            ctx.enqueue_memset(r_hist_color_buf, UInt8(0))
+            ctx.enqueue_memset(r_hist_len_buf, UInt8(0))
+            ctx.enqueue_memset(r_prev_depth_buf, UInt8(0))
+            ctx.enqueue_memset(r_prev_c2w_buf, UInt8(0))
             var textures = TextureBuffers.upload(ctx, s)
             ctx.synchronize()
             _gpu_free_log("textures")
@@ -1165,6 +1180,11 @@ def gpu_upload_scene(
                 film_buf=r_film_buf^,
                 albedo_film_buf=r_albedo_film_buf^,
                 film_sq_buf=r_film_sq_buf^,
+                hist_color_buf=r_hist_color_buf^,
+                hist_len_buf=r_hist_len_buf^,
+                hist_len_tmp_buf=r_hist_len_tmp_buf^,
+                prev_depth_buf=r_prev_depth_buf^,
+                prev_c2w_buf=r_prev_c2w_buf^,
                 atrous_ping_buf=r_atrous_ping_buf^,
                 atrous_pong_buf=r_atrous_pong_buf^,
                 atrous_albedo_buf=r_atrous_albedo_buf^,
