@@ -852,8 +852,8 @@ def gpu_available() -> Bool:
     return has_accelerator()
 
 def _bench_counters() -> Pointer[Int, MutUntrackedOrigin]:
-    var b = unsafe_alloc[Int](4)
-    for i in range(4):
+    var b = unsafe_alloc[Int](8)
+    for i in range(8):
         b[unsafe_offset=i] = 0
     if getenv("GONZALES_BENCH") != "":
         b[unsafe_offset=3] = 2 if getenv("GONZALES_BENCH_TRACE") != "" else 1

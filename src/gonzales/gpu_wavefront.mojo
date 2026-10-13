@@ -24,6 +24,7 @@ from std.memory import stack_allocation
 from max.gpu.primitives.warp import shuffle_idx, vote
 from std.bit import count_trailing_zeros, pop_count
 from std.memory.alloc import unsafe_alloc
+from std.ffi import external_call
 from max.gpu.host import DeviceBuffer, DeviceContext
 from max.gpu.host._nvidia_cuda import CUDA
 from std.atomic import Atomic
@@ -997,6 +998,45 @@ def rt_pack_compact_kernel(
     rays[unsafe_offset=idx + 7] = Float32(1.0e8)
     ids[unsafe_offset=pos] = Int32(tid)
 
+# GONZALES_RAY_DUMP=<prefix>: writes the packed rays of one frame and times the bare RT-core trace of them.
+def _ray_dump(ctx: DeviceContext, rays_buf: DeviceBuffer[DType.float32], results_buf: DeviceBuffer[DType.float32], m: Int, tag: String) raises:
+    var host = unsafe_alloc[Float32](len(rays_buf))
+    ctx.enqueue_copy(host, rays_buf)
+    ctx.synchronize()
+    var path = getenv("GONZALES_RAY_DUMP") + "_" + tag + ".bin"
+    var c = unsafe_alloc[UInt8](path.byte_length() + 3)
+    for k in range(path.byte_length()): c[unsafe_offset=k] = path.unsafe_ptr()[unsafe_offset=k]
+    c[unsafe_offset=path.byte_length()] = UInt8(0)
+    c[unsafe_offset=path.byte_length() + 1] = UInt8(119); c[unsafe_offset=path.byte_length() + 2] = UInt8(0)
+    var f = external_call["fopen", Int, Pointer[UInt8, MutUntrackedOrigin], Pointer[UInt8, MutUntrackedOrigin]](c, c + path.byte_length() + 1)
+    if f != 0:
+        _ = external_call["fwrite", Int, Pointer[Float32, MutUntrackedOrigin], Int, Int, Int](host, 32, m, f)
+        _ = external_call["fclose", Int32, Int](f)
+    c.unsafe_free()
+    var rt = rtcore_active()
+    _ = rtcore_trace_interop(rt, UInt64(Int(rays_buf.unsafe_ptr())), UInt64(Int(results_buf.unsafe_ptr())), Int32(m), CUDA(ctx.stream()))
+    ctx.enqueue_copy(host, results_buf)
+    ctx.synchronize()
+    var nh = 0
+    var tsum = 0.0
+    for k in range(m):
+        if host.unsafe_bitcast[Int32]()[unsafe_offset=k * 8 + 6] == Int32(1):
+            nh += 1
+            tsum += Float64(host[unsafe_offset=k * 8])
+    host.unsafe_free()
+    print("raydump", tag, ":", nh, "hits, mean t", tsum / Float64(max(nh, 1)))
+    var best = 1.0e30
+    var total = 0.0
+    for k in range(23):
+        var t0 = perf_counter_ns()
+        _ = rtcore_trace(rt, UInt64(Int(rays_buf.unsafe_ptr())), UInt64(Int(results_buf.unsafe_ptr())), Int32(m), CUDA(ctx.stream()))
+        ctx.synchronize()
+        var ms = Float64(perf_counter_ns() - t0) / 1.0e6
+        if k >= 3:
+            total += ms
+            best = min(best, ms)
+    print("raydump", tag, ":", m, "rays, bare trace mean", total / 20.0, "ms (", Float64(m) / total * 20.0 / 1000.0, "Mray/s ), best", best, "ms")
+
 # Closest hit of every live path on the RT cores; writes the Intersections of the listed paths only (a dead path's
 # Intersection is never read: every later kernel checks PathState.active first).
 def rtcore_closest_hit_gpu(
@@ -1044,6 +1084,8 @@ def rtcore_closest_hit_gpu(
     if m == 0:
         return 0
     bench[0] += m
+    if bench[7] != 0:
+        _ray_dump(ctx, rays_buf, results_buf, m, "c" + String(round))
     var t0 = perf_counter_ns()
     var gm = ceildiv(m, block_size)
     var instance_base_mesh_ptr = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
@@ -1350,6 +1392,8 @@ def rtcore_shadow_rays_compact_gpu(
         if m == 0:
             return
         bench[1] += m
+        if bench[7] != 0:
+            _ray_dump(ctx, interop_rays_buf, interop_results_buf, m, "s" + String(round))
         var t0 = perf_counter_ns()
         if alpha:
             # Interop layout, so the alpha passes know which triangle each ray hit.

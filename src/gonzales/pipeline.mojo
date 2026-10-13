@@ -3003,6 +3003,7 @@ def render_interactive(
             comptime n_base4_i = 8
             var si = Int32(frame_count % 65536)
             var t_r = perf_counter_ns()
+            handle[].bench[7] = 1 if (bench_warm > 0 and frame_count == bench_warm - 2 and getenv("GONZALES_RAY_DUMP") != "") else 0
             if rtb.on:
                 gpu_render_wavefront(
                     handle, c2w_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
