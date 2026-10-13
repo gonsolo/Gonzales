@@ -1602,6 +1602,44 @@ def gen_primary_rays_gpu(
     )
 
 
+def pack_center_rays_gpu(
+    r2c: Pointer[Float32, MutUntrackedOrigin],
+    c2w: Pointer[Float32, MutUntrackedOrigin],
+    rays: Pointer[Float32, MutUntrackedOrigin],
+    fw_dp: Int64, fh_dp: Int64,
+):
+    var fw = Int(fw_dp)
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= fw * Int(fh_dp):
+        return
+    var filmX = Float32(tid % fw) + Float32(0.5)
+    var filmY = Float32(tid // fw) + Float32(0.5)
+    var cx = r2c[unsafe_offset=0]*filmX + r2c[unsafe_offset=4]*filmY + r2c[unsafe_offset=12]
+    var cy = r2c[unsafe_offset=1]*filmX + r2c[unsafe_offset=5]*filmY + r2c[unsafe_offset=13]
+    var cz = r2c[unsafe_offset=2]*filmX + r2c[unsafe_offset=6]*filmY + r2c[unsafe_offset=14]
+    var cw = r2c[unsafe_offset=3]*filmX + r2c[unsafe_offset=7]*filmY + r2c[unsafe_offset=15]
+    if cw != Float32(0.0) and cw != Float32(1.0):
+        cx /= cw; cy /= cw; cz /= cw
+    var cl = sqrt(cx*cx + cy*cy + cz*cz)
+    if cl > Float32(0): cx /= cl; cy /= cl; cz /= cl
+    var dir = Vec3f(
+        c2w[unsafe_offset=0]*cx + c2w[unsafe_offset=4]*cy + c2w[unsafe_offset=8]*cz,
+        c2w[unsafe_offset=1]*cx + c2w[unsafe_offset=5]*cy + c2w[unsafe_offset=9]*cz,
+        c2w[unsafe_offset=2]*cx + c2w[unsafe_offset=6]*cy + c2w[unsafe_offset=10]*cz,
+    )
+    var dl = dir.length()
+    if dl > Float32(0): dir = dir / dl
+    var idx = tid * 8
+    rays[unsafe_offset=idx + 0] = c2w[unsafe_offset=12]
+    rays[unsafe_offset=idx + 1] = c2w[unsafe_offset=13]
+    rays[unsafe_offset=idx + 2] = c2w[unsafe_offset=14]
+    rays[unsafe_offset=idx + 3] = Float32(1e-4)
+    rays[unsafe_offset=idx + 4] = dir.x
+    rays[unsafe_offset=idx + 5] = dir.y
+    rays[unsafe_offset=idx + 6] = dir.z
+    rays[unsafe_offset=idx + 7] = Float32(1.0e8)
+
+
 # GPU kernel: shoot one unjittered center ray per pixel and write normals + depth.
 # Used to guide the à-trous denoiser with geometric edge information.
 def gen_aux_buffers_gpu(
@@ -1623,6 +1661,7 @@ def gen_aux_buffers_gpu(
     world_pos_out: Pointer[Float32, MutUntrackedOrigin],
     material_id_out: Pointer[Int32, MutUntrackedOrigin],
     fw_dp: Int64, fh_dp: Int64,
+    hits_traced: Int32 = Int32(0),   # isects_tmp already holds this ray's hit (traced on the RT cores)
 ):
     var n_spheres = Int(n_spheres_dp)
     var fw = Int(fw_dp)
@@ -1656,9 +1695,10 @@ def gen_aux_buffers_gpu(
     var org = Point3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
 
     var ray = Ray(org, dir)
-    var dummy_id = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
-    isects_tmp[unsafe_offset=tid] = Intersection(dummy_id, Float32(1e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
-    traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), isects_tmp.unsafe_offset(tid), blasNodesArr, blasPrimIdsArr, instances)
+    if hits_traced == Int32(0):
+        var dummy_id = PrimId(Int64(-1), Int64(-1), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+        isects_tmp[unsafe_offset=tid] = Intersection(dummy_id, Float32(1e38), Float32(0), Float32(0), Int8(0), Int8(0), Int8(0), Int8(0))
+        traverse_bvh2_core(bvh2Nodes, primIds, meshes, curves, ray, Float32(1e38), isects_tmp.unsafe_offset(tid), blasNodesArr, blasPrimIdsArr, instances)
     test_spheres(spheres, n_spheres, ray, isects_tmp.unsafe_offset(tid))
 
     var normal = Vec3f(Float32(0), Float32(0), Float32(1))
@@ -1731,6 +1771,13 @@ def gpu_gen_aux_buffers[Oc: Origin[mut=True]](
     handlePtr: Pointer[GpuSceneHandle, MutUntrackedOrigin],
     c2w: Pointer[Float32, Oc],
     n: Int64,
+    # --rt-hardware: the center rays are traced on the RT cores, the CUDA BVH does not hold the scene.
+    rt_rays: Optional[DeviceBuffer[DType.float32]] = None,
+    rt_results: Optional[DeviceBuffer[DType.float32]] = None,
+    rt_mesh_material_idx: Optional[DeviceBuffer[DType.uint8]] = None,
+    rt_mesh_al_idx: Optional[DeviceBuffer[DType.uint8]] = None,
+    rt_n_meshes: Int = 0,
+    rt_instance_base_mesh: Optional[DeviceBuffer[DType.uint8]] = None,
 ):
     """Generate unjittered normals and depth buffers for the denoiser."""
     var n_pix = Int(n)
@@ -1742,6 +1789,20 @@ def gpu_gen_aux_buffers[Oc: Origin[mut=True]](
             handle[].ctx.enqueue_copy(handle[].c2w_buf, c2w.unsafe_bitcast[UInt8]())
             comptime block_size = 256
             var grid_n = ceildiv(n_pix, block_size)
+            var rt_hits = Int32(0)
+            if rt_rays:
+                handle[].ctx.enqueue_function[pack_center_rays_gpu](
+                    handle[].r2c_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                    handle[].c2w_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                    rt_rays.value().unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+                    Int64(handle[].film.width), Int64(handle[].film.height),
+                    grid_dim=grid_n, block_dim=block_size,
+                )
+                rtcore_trace_unpack_gpu(
+                    handle[].ctx, handle[].inter_buf, handle[].scene_descriptor(), rt_rays.value(), rt_results.value(),
+                    handle[].rt_scratch_buf, rt_mesh_material_idx.value(), rt_mesh_al_idx.value(), rt_n_meshes, n_pix,
+                    rt_instance_base_mesh)
+                rt_hits = Int32(1)
             handle[].ctx.enqueue_function[gen_aux_buffers_gpu](
                 handle[].r2c_buf.unsafe_ptr().unsafe_bitcast[Float32](),
                 handle[].c2w_buf.unsafe_ptr().unsafe_bitcast[Float32](),
@@ -1761,6 +1822,7 @@ def gpu_gen_aux_buffers[Oc: Origin[mut=True]](
                 handle[].gbuf_worldpos_buf.unsafe_ptr().unsafe_bitcast[Float32](),
                 handle[].gbuf_material_id_buf.unsafe_ptr().unsafe_bitcast[Int32](),
                 Int64(handle[].film.width), Int64(handle[].film.height),
+                rt_hits,
                 grid_dim=grid_n, block_dim=block_size,
             )
             handle[].ctx.synchronize()

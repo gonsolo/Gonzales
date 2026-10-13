@@ -2805,7 +2805,7 @@ def render_interactive(
             gpu_clear_restir(handle, Int64(n_pixels))
         if use_vol_restir_reuse:
             gpu_clear_restir_vol(handle, Int64(n_pixels))
-        gpu_gen_aux_buffers(handle, psc[unsafe_offset=0].camera_to_world, Int64(n_pixels))
+        gpu_gen_aux_buffers(handle, psc[unsafe_offset=0].camera_to_world, Int64(n_pixels), rtb.rays, rtb.results, rtb.mesh_material_idx, rtb.mesh_al_idx, rtb.n_meshes, rtb.instance_base_mesh)
     else:
         sd = mojo_parsed_scene_descriptor(psc, spectral, host_textures=True)
         for _ in range(n_pixels * 3):
@@ -2870,6 +2870,13 @@ def render_interactive(
 
     var headless = headless_frames > Int32(0)
     var frame_log = getenv("GONZALES_FRAME_LOG") != ""
+    # Test hook: slide the headless camera sideways by this much each frame (film restarts every frame).
+    var move_step = Float32(0)
+    if headless and getenv("GONZALES_TEST_MOVE") != "":
+        try:
+            move_step = Float32(Float64(getenv("GONZALES_TEST_MOVE")))
+        except:
+            pass
     var t_render = 0; var t_denoise = 0; var t_sensor = 0; var t_present = 0
     while (not headless and not viewer_should_close(v)) or (headless and frame_count < Int(headless_frames)):
         if not headless:
@@ -2887,7 +2894,7 @@ def render_interactive(
                         gpu_clear_restir(handle, Int64(n_pixels))
                     if use_vol_restir_reuse:
                         gpu_clear_restir_vol(handle, Int64(n_pixels))
-                    gpu_gen_aux_buffers(handle, c2w_buf.unsafe_ptr(), Int64(n_pixels))
+                    gpu_gen_aux_buffers(handle, c2w_buf.unsafe_ptr(), Int64(n_pixels), rtb.rays, rtb.results, rtb.mesh_material_idx, rtb.mesh_al_idx, rtb.n_meshes, rtb.instance_base_mesh)
                 else:
                     for i in range(n_pixels * 3):
                         accum[i]      = Float32(0)
@@ -2917,6 +2924,12 @@ def render_interactive(
                         for i in range(n_pixels):
                             vol_buf_a[unsafe_offset=i] = vol_reservoir_init()
                             vol_buf_b[unsafe_offset=i] = vol_reservoir_init()
+        elif move_step != Float32(0) and use_gpu and frame_count > 0:
+            var cp = c2w_buf.unsafe_ptr()
+            for k in range(3):
+                cp[unsafe_offset=12 + k] = cp[unsafe_offset=12 + k] + cp[unsafe_offset=k] * move_step
+            gpu_clear_film(handle, Int64(n_pixels))
+            gpu_gen_aux_buffers(handle, cp, Int64(n_pixels), rtb.rays, rtb.results, rtb.mesh_material_idx, rtb.mesh_al_idx, rtb.n_meshes, rtb.instance_base_mesh)
         # headless: camera is never polled, so it never "changes" -- every
         # frame accumulates onto the same static view, exactly the
         # steady-state case temporal reuse (Phase 2.3) needs to be verified
@@ -2952,7 +2965,7 @@ def render_interactive(
             t_render += Int(perf_counter_ns() - t_r)
             var t_a = perf_counter_ns()
             gpu_atrous_denoise(handle, denoised.unsafe_ptr(), Int64(n_pixels),
-                                    Int32(frame_count),
+                                    Int32(1 if move_step != Float32(0) else frame_count),
                                     psc[unsafe_offset=0].film_iso, psc[unsafe_offset=0].film_max_comp,
                                     apply_denoise=(headless and getenv("GONZALES_NO_DENOISE") == "") or (not headless and viewer_denoise_enabled(v) != Int32(0)), min_passes=5)
             var t_b = perf_counter_ns()
