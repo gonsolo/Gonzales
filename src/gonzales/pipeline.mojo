@@ -735,7 +735,7 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
                         var p = mesh_pos(mesh, mesh_vi(mesh, t * 3 + k))
                         tv[unsafe_offset=w] = p.x; tv[unsafe_offset=w + 1] = p.y; tv[unsafe_offset=w + 2] = p.z
                         w += 3
-            var r = rt_build_blas(tv, n_tris, True, True, True, 0, pair_ok)
+            var r = rt_build_blas(tv, n_tris, True, True, "noquads" not in getenv("GONZALES_RT_ABLATE"), 0, pair_ok)
             tv.unsafe_free(); pair_ok.unsafe_free()
             blas_bytes[unsafe_offset=b] = r.bytes; blas_sizes[unsafe_offset=b] = Int64(r.size)
             for q6 in range(6): blas_box[unsafe_offset=b * 6 + q6] = r.box[unsafe_offset=q6]
@@ -779,8 +779,6 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
         if cache_path != "":
             if rt_cache_save(cache_path, key, n_blas, blas_bytes, blas_sizes, blas_box, blas_gid, blas_ngid, tlas.bytes, tlas.size, tlas.rec_off, tlas.n_records, tlas.inst_of_record):
                 print("RT structures written to", cache_path)
-    if bake_only:                  # --bake: the structures are on disk (or were already), nothing to put on a GPU
-        return none
     blas_box.unsafe_free()
     if shared:
         # Instance r is the one the TLAS names r + 1: the identity instance of the ordinary meshes (index ni) becomes one of them.
@@ -823,6 +821,11 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
             g_head[unsafe_offset=q] = UInt32(0x80000000 | n_wide)
             n_wide += 1
     var g_wide = unsafe_alloc[Int32](max(n_wide, 1) * 8)
+    if not loaded:
+        print("RT structures built (MiB): bottom", total_bytes // 1048576, "top", tlas.size // 1048576, "ids flat", id_base * 4 // 1048576,
+              "ids compact", (n_groups * 12 + n_wide * 32) // 1048576, "instance records", n_inst * 64 // 1048576)
+    if bake_only:                  # --bake: the structures are on disk (or were already), nothing to put on a GPU
+        return none
     var wi = 0
     for q in range(n_groups):
         if (UInt32(g_head[unsafe_offset=q]) & UInt32(0x80000000)) != 0:

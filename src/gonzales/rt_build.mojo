@@ -4,11 +4,13 @@ then the triangle blocks) and the map from the hit's primitive id to the input t
 from std.math import floor, ceil
 from std.memory import bitcast
 from std.memory.alloc import unsafe_alloc
+from std.os import getenv
+from std.sys import get_defined_int
 
 comptime RT_NODE = 128
 comptime RT_ROOT = 0x380
 comptime RT_LEAF_TRIS = 12
-comptime RT_BLOCK_TRIS = 8      # a block holds up to 16 distinct vertices; ids of 5..8 triangles use 3-bit offsets in an aligned group of 8
+comptime RT_BLOCK_TRIS = get_defined_int["RT_BLOCK_TRIS", 8]()      # a block holds up to 16 distinct vertices; ids of 5..8 triangles use 3-bit offsets in an aligned group of 8
 comptime RT_SLOT_TRIS = 4
 comptime RT_STREAM_BITS = (0x68 - 12) * 8
 
@@ -715,6 +717,7 @@ struct RtTlas(Movable):
 def _build_binary_items(order: PI, tlo: PD, thi: PD, tc: PD, m: Int, bn_s: PI, bn_c: PI, bn_l: PI, bn_r: PI, bn_box: PD, n_fixed: Int) -> Int:
     """Binary tree whose leaves are single items (instances). The first n_fixed items keep their places: the root separates
     them from the rest and they are split at the middle of their range, so item i stays at position i."""
+    var leaf_granule = 1 if "loose" in getenv("GONZALES_RT_ABLATE") else RT_LEAF_TRIS      # ablation: leaves not filled
     var stack = unsafe_alloc[Int32](256)
     var nb = 1
     bn_s[unsafe_offset=0] = Int32(0); bn_c[unsafe_offset=0] = Int32(m)
@@ -736,7 +739,7 @@ def _build_binary_items(order: PI, tlo: PD, thi: PD, tc: PD, m: Int, bn_s: PI, b
         elif start + count <= n_fixed:
             half = count // 2
         else:
-            half = _split_sah(order, tlo, thi, tc, start, count, RT_LEAF_TRIS)
+            half = _split_sah(order, tlo, thi, tc, start, count, leaf_granule)
         var li = nb; var ri = nb + 1
         nb += 2
         bn_l[unsafe_offset=ni] = Int32(li); bn_r[unsafe_offset=ni] = Int32(ri)
