@@ -14,6 +14,7 @@ from std.math import ceildiv
 from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator, size_of
 from std.os import getenv
+from std.ffi import external_call
 from .shading import ShadeContext
 from .gpu_media import sample_medium_gpu, update_medium_gpu
 from .gpu_scene import GpuSceneHandle
@@ -41,6 +42,12 @@ def _enqueue_traverse[rare_on: Bool, alpha_on: Bool](
         block_dim=block_size,
     )
 
+
+# A render kernel that cannot be loaded fails every frame: stop instead of showing empty frames.
+def _stop_if_out_of_memory(msg: String):
+    if "OUT_OF_MEMORY" in msg:
+        print("GPU: out of memory, the scene does not fit on this card at this resolution")
+        _ = external_call["exit", NoneType, Int32](Int32(1))
 
 def _gpu_bounce_kernels(
     handle: Pointer[GpuSceneHandle, MutUntrackedOrigin],
@@ -723,6 +730,7 @@ def gpu_render_sample[Oc: Origin[mut=True]](
             )
         except e:
             print("GPU render sample failed: " + String(e))
+            _stop_if_out_of_memory(String(e))
 
 
 # Wavefront render: generates actual_batch samples worth of primary rays for all pixels,
@@ -875,6 +883,7 @@ def gpu_render_wavefront(
                 handle[].ctx.synchronize()
         except e:
             print("GPU wavefront render failed: " + String(e))
+            _stop_if_out_of_memory(String(e))
 
 
 def gpu_download_film(
