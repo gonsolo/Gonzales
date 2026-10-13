@@ -1812,7 +1812,7 @@ def gpu_gen_aux_buffers[Oc: Origin[mut=True]](
                 handle[].curves.curves_ptr(),
                 handle[].blas.nodes_arr(),
                 handle[].blas.primids_arr(),
-                handle[].instances_buf.unsafe_ptr().unsafe_bitcast[Instance](),
+                handle[].scene_descriptor().instances,
                 handle[].spheres_buf.unsafe_ptr().unsafe_bitcast[Sphere](),
                 Int64(handle[].n_spheres),
                 handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
