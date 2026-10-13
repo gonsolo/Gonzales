@@ -591,6 +591,60 @@ def _rt_cache_key(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], blas_ntri:
     return Int(h)
 
 
+def _dump_file(path: String, p: Pointer[UInt8, MutUntrackedOrigin], n: Int):
+    var c = unsafe_alloc[UInt8](path.byte_length() + 3)
+    for k in range(path.byte_length()): c[unsafe_offset=k] = path.unsafe_ptr()[unsafe_offset=k]
+    c[unsafe_offset=path.byte_length()] = UInt8(0)
+    c[unsafe_offset=path.byte_length() + 1] = UInt8(119); c[unsafe_offset=path.byte_length() + 2] = UInt8(0)
+    var f = external_call["fopen", Int, Pointer[UInt8, MutUntrackedOrigin], Pointer[UInt8, MutUntrackedOrigin]](c, c + path.byte_length() + 1)
+    if f != 0:
+        _ = external_call["fwrite", Int, Pointer[UInt8, MutUntrackedOrigin], Int, Int, Int](p, 1, n, f)
+        _ = external_call["fclose", Int32, Int](f)
+    c.unsafe_free()
+
+# GONZALES_GEOM_DUMP=<dir>: the triangles of every bottom-level structure (9 floats each) and the instances (12 floats world-to-
+# object by columns, then the structure index), for building the same scene with another builder.
+def _dump_geometry(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], dir: String, nt: Int, n_blas: Int,
+                   is_template: Pointer[Bool, MutUntrackedOrigin], blas_ntri: Pointer[Int, MutUntrackedOrigin], has_ord: Bool):
+    var nm = Int(psc[unsafe_offset=0].mesh_count)
+    var ni = Int(psc[unsafe_offset=0].instance_count)
+    for b in range(n_blas):
+        var ordinary = b >= nt
+        var first = 0
+        var last = nm
+        if not ordinary:
+            first = Int(psc[unsafe_offset=0].template_mesh_start[unsafe_offset=b]); last = Int(psc[unsafe_offset=0].template_mesh_end[unsafe_offset=b])
+        var n_tris = blas_ntri[unsafe_offset=b]
+        var tv = unsafe_alloc[Float32](9 * max(n_tris, 1))
+        var w = 0
+        for i in range(first, last):
+            if ordinary and is_template[unsafe_offset=i]:
+                continue
+            var mesh = psc[unsafe_offset=0].meshes[unsafe_offset=i]
+            for t in range(Int(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i])):
+                for k in range(3):
+                    var p = mesh_pos(mesh, mesh_vi(mesh, t * 3 + k))
+                    tv[unsafe_offset=w] = p.x; tv[unsafe_offset=w + 1] = p.y; tv[unsafe_offset=w + 2] = p.z
+                    w += 3
+        _dump_file(dir + "/blas" + String(b) + ".f32", tv.unsafe_bitcast[UInt8](), 36 * n_tris)
+        tv.unsafe_free()
+    var n_inst = ni + (1 if has_ord else 0)
+    var rec = unsafe_alloc[Float32](13 * max(n_inst, 1))
+    for k in range(ni):
+        var ins = psc[unsafe_offset=0].instances[unsafe_offset=k]
+        rec[unsafe_offset=k * 13 + 0] = ins.c0x; rec[unsafe_offset=k * 13 + 1] = ins.c0y; rec[unsafe_offset=k * 13 + 2] = ins.c0z
+        rec[unsafe_offset=k * 13 + 3] = ins.c1x; rec[unsafe_offset=k * 13 + 4] = ins.c1y; rec[unsafe_offset=k * 13 + 5] = ins.c1z
+        rec[unsafe_offset=k * 13 + 6] = ins.c2x; rec[unsafe_offset=k * 13 + 7] = ins.c2y; rec[unsafe_offset=k * 13 + 8] = ins.c2z
+        rec[unsafe_offset=k * 13 + 9] = ins.c3x; rec[unsafe_offset=k * 13 + 10] = ins.c3y; rec[unsafe_offset=k * 13 + 11] = ins.c3z
+        rec.unsafe_bitcast[Int32]()[unsafe_offset=k * 13 + 12] = ins.blasIdx
+    if has_ord:
+        for q in range(12): rec[unsafe_offset=ni * 13 + q] = Float32(0)
+        rec[unsafe_offset=ni * 13 + 0] = Float32(1); rec[unsafe_offset=ni * 13 + 4] = Float32(1); rec[unsafe_offset=ni * 13 + 8] = Float32(1)
+        rec.unsafe_bitcast[Int32]()[unsafe_offset=ni * 13 + 12] = Int32(nt)
+    _dump_file(dir + "/instances.bin", rec.unsafe_bitcast[UInt8](), 52 * n_inst)
+    rec.unsafe_free()
+    print("geometry written to", dir, ":", n_blas, "structures,", n_inst, "instances")
+
 def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], bake_only: Bool = False) -> RtCoreHandle:
     var none = rtcore_active()
     var nm = Int(psc[unsafe_offset=0].mesh_count)
@@ -628,6 +682,8 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
                 continue
             n_tris += Int(psc[unsafe_offset=0].mesh_n_tris[unsafe_offset=i])
         blas_ntri[unsafe_offset=b] = n_tris
+    if getenv("GONZALES_GEOM_DUMP") != "":
+        _dump_geometry(psc, getenv("GONZALES_GEOM_DUMP"), nt, n_blas, is_template, blas_ntri, has_ord)
     var cache_path = getenv("GONZALES_RT_CACHE")
     if cache_path == "" and getenv("GONZALES_SCENE_CACHE") != "":
         cache_path = getenv("GONZALES_SCENE_CACHE") + ".rt"
