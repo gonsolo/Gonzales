@@ -737,6 +737,7 @@ struct GpuSceneHandle(Movable):
     var inter_buf: DeviceBuffer[DType.uint8]  # n_pixels × WAVEFRONT_BATCH × 48
     var film_buf: DeviceBuffer[DType.uint8]          # n_pixels × 3 × Float32 = 12 bytes
     var albedo_film_buf: DeviceBuffer[DType.uint8]   # n_pixels × 3 × Float32 = 12 bytes
+    var film_sq_buf: DeviceBuffer[DType.uint8]       # n_pixels × Float32: sum of per-sample luma^2, for the denoiser's variance
     # À-trous wavelet denoiser buffers (interactive GPU path)
     var atrous_ping_buf: DeviceBuffer[DType.uint8]     # n_pixels × 12 — beauty ping, input to pass 0
     var atrous_pong_buf: DeviceBuffer[DType.uint8]     # n_pixels × 12 — ping-pong working buffer
@@ -1062,6 +1063,7 @@ def gpu_upload_scene(
             var r_inter_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * size_of[Intersection]() * WAVEFRONT_BATCH)
             var r_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_albedo_film_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
+            var r_film_sq_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 4)
             var r_atrous_ping_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_atrous_pong_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
             var r_atrous_albedo_buf = ctx.enqueue_create_buffer[DType.uint8](n_pix * 12)
@@ -1105,6 +1107,7 @@ def gpu_upload_scene(
             _gpu_free_log("curves")
             ctx.enqueue_memset(r_film_buf, UInt8(0))
             ctx.enqueue_memset(r_albedo_film_buf, UInt8(0))
+            ctx.enqueue_memset(r_film_sq_buf, UInt8(0))
             var textures = TextureBuffers.upload(ctx, s)
             ctx.synchronize()
             _gpu_free_log("textures")
@@ -1161,6 +1164,7 @@ def gpu_upload_scene(
                 inter_buf=r_inter_buf^,
                 film_buf=r_film_buf^,
                 albedo_film_buf=r_albedo_film_buf^,
+                film_sq_buf=r_film_sq_buf^,
                 atrous_ping_buf=r_atrous_ping_buf^,
                 atrous_pong_buf=r_atrous_pong_buf^,
                 atrous_albedo_buf=r_atrous_albedo_buf^,

@@ -40,8 +40,11 @@ def normalize_beauty_albedo_gpu(
 
 def estimate_variance_gpu(
     beauty: Pointer[Float32, MutUntrackedOrigin],
+    film: Pointer[Float32, MutUntrackedOrigin],
+    film_sq: Pointer[Float32, MutUntrackedOrigin],
     variance_out: Pointer[Float32, MutUntrackedOrigin],
     fw_dp: Int64, fh_dp: Int64,
+    inv_weight: Float32, iso_scale: Float32, n_samples: Float32,
 ):
     var fw = Int(fw_dp)
     var fh = Int(fh_dp)
@@ -52,6 +55,7 @@ def estimate_variance_gpu(
     var py = tid // fw
     var mean = Float32(0)
     var mean_sq = Float32(0)
+    var samp_var = Float32(0)
     var count = 0
     for dy in range(-1, 2):
         for dx in range(-1, 2):
@@ -61,10 +65,17 @@ def estimate_variance_gpu(
             var ni = (ny * fw + nx) * 3
             var l = Float32(0.2126)*beauty[unsafe_offset=ni] + Float32(0.7152)*beauty[unsafe_offset=ni+1] + Float32(0.0722)*beauty[unsafe_offset=ni+2]
             mean += l; mean_sq += l * l; count += 1
+            # Variance of the pixel's mean from its own samples: texture is not noise.
+            var sl = (Float32(0.2126)*film[unsafe_offset=ni] + Float32(0.7152)*film[unsafe_offset=ni+1] + Float32(0.0722)*film[unsafe_offset=ni+2]) * inv_weight
+            var sv = film_sq[unsafe_offset=ny * fw + nx] * inv_weight - sl * sl
+            samp_var += (sv if sv > Float32(0) else Float32(0)) * iso_scale * iso_scale / n_samples
     var fc = Float32(count)
-    mean /= fc; mean_sq /= fc
+    mean /= fc; mean_sq /= fc; samp_var /= fc
     var v = mean_sq - mean * mean
-    variance_out[unsafe_offset=tid] = v if v > Float32(0) else Float32(0)
+    v = v if v > Float32(0) else Float32(0)
+    # The 3x3 spatial estimate mistakes texture for noise; trust the sample estimate as samples accrue.
+    var w = min(Float32(1), (n_samples - Float32(1)) / Float32(8))
+    variance_out[unsafe_offset=tid] = w * samp_var + (Float32(1) - w) * v
 
 
 def firefly_clamp_gpu(
@@ -244,8 +255,11 @@ def gpu_atrous_denoise[Oo: Origin[mut=True]](
             var clamp_dst_ptr = handle[].atrous_pong_buf.unsafe_ptr().unsafe_bitcast[Float32]()
             handle[].ctx.enqueue_function[estimate_variance_gpu](
                 clamp_dst_ptr,
+                handle[].film_buf.unsafe_ptr().unsafe_bitcast[Float32](),
+                handle[].film_sq_buf.unsafe_ptr().unsafe_bitcast[Float32](),
                 handle[].atrous_variance_buf.unsafe_ptr().unsafe_bitcast[Float32](),
                 Int64(fw), Int64(fh),
+                inv_weight, iso_scale, Float32(max(Int(frame_count), 1)),
                 grid_dim=grid_n, block_dim=block_size,
             )
 
@@ -260,6 +274,8 @@ def gpu_atrous_denoise[Oo: Origin[mut=True]](
             # Prevents the large effective radius (31px at 5 passes) from averaging
             # lit pixels with unlit ones during fast camera movement.
             var n_passes = min(5, max(min_passes, Int(frame_count)))
+            # Narrower luminance tolerance, halved per pass: 4.0 flattened foliage texture into paint.
+            var sl = Float32(2.0)
             for i in range(n_passes):
                 var step = 1 << i   # 1, 2, 4, 8, 16
                 # Pass 0 reads the CLAMPED buffer (pong), not ping -- see the
@@ -270,9 +286,10 @@ def gpu_atrous_denoise[Oo: Origin[mut=True]](
                 handle[].ctx.enqueue_function[atrous_filter_gpu](
                     src_ptr, alb_ptr, var_ptr, nrm_ptr, dep_ptr, cmask_ptr, dst_ptr,
                     Int32(fw), Int32(fh), Int32(step),
-                    Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05),
+                    sl, Float32(0.1), Float32(0.3), Float32(0.05),
                     grid_dim=grid_n, block_dim=block_size,
                 )
+                sl *= Float32(0.5)
             # Result is in ping if n_passes is odd, pong if even (start=pong).
             if n_passes % 2 == 1:
                 handle[].ctx.enqueue_copy(output.unsafe_bitcast[UInt8](), handle[].atrous_ping_buf)

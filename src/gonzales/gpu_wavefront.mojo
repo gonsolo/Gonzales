@@ -136,6 +136,7 @@ def accumulate_film_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     film: Pointer[Float32, MutUntrackedOrigin],
     albedo_film: Pointer[Float32, MutUntrackedOrigin],
+    film_sq: Pointer[Float32, MutUntrackedOrigin],
     count_dp: Int64,
     sample_clamp: Float32 = Float32(0.0),
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
@@ -157,6 +158,8 @@ def accumulate_film_gpu(
     film[unsafe_offset=tid*3+0] += _cr
     film[unsafe_offset=tid*3+1] += _cg
     film[unsafe_offset=tid*3+2] += _cb
+    var _ql = RGB(_cr, _cg, _cb).luma()
+    film_sq[unsafe_offset=tid] += _ql * _ql
     albedo_film[unsafe_offset=tid*3+0] += paths[unsafe_offset=tid].albedo.r
     albedo_film[unsafe_offset=tid*3+1] += paths[unsafe_offset=tid].albedo.g
     albedo_film[unsafe_offset=tid*3+2] += paths[unsafe_offset=tid].albedo.b
@@ -172,12 +175,20 @@ def clear_film_gpu(film: Pointer[Float32, MutUntrackedOrigin], n_pixels_dp: Int6
     film[unsafe_offset=tid*3+2] = Float32(0)
 
 
+def clear_scalar_film_gpu(film: Pointer[Float32, MutUntrackedOrigin], n_pixels_dp: Int64):
+    var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if tid >= Int(n_pixels_dp):
+        return
+    film[unsafe_offset=tid] = Float32(0)
+
+
 # Wavefront accumulation: thread px sums actual_batch samples from path_buf layout
 # path_buf[si * n_pixels + px] and adds to film[px].  No atomics needed (one thread per pixel).
 def accumulate_film_wavefront_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     film: Pointer[Float32, MutUntrackedOrigin],
     albedo_film: Pointer[Float32, MutUntrackedOrigin],
+    film_sq: Pointer[Float32, MutUntrackedOrigin],
     n_pixels_dp: Int64, actual_batch_dp: Int64,
     sample_clamp: Float32 = Float32(0.0),
     spectral_coeffs: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
@@ -197,6 +208,7 @@ def accumulate_film_wavefront_gpu(
         return
     var r = Float32(0); var g = Float32(0); var b = Float32(0)
     var ar = Float32(0); var ag = Float32(0); var ab = Float32(0)
+    var sq = Float32(0)
     for si in range(actual_batch):
         var p = paths[unsafe_offset=si * n_pixels + px]
         if ptex_mode != Int32(0):
@@ -208,8 +220,11 @@ def accumulate_film_wavefront_gpu(
             p.estimate, p.wavelengths)
         var (_qr, _qg, _qb) = _clamp_sample_rgb(_pe[0], _pe[1], _pe[2], sample_clamp)
         r += _qr; g += _qg; b += _qb
+        var _ql = RGB(_qr, _qg, _qb).luma()
+        sq += _ql * _ql
         ar += p.albedo.r;  ag += p.albedo.g;  ab += p.albedo.b
     film[unsafe_offset=px*3+0] += r; film[unsafe_offset=px*3+1] += g; film[unsafe_offset=px*3+2] += b
+    film_sq[unsafe_offset=px] += sq
     albedo_film[unsafe_offset=px*3+0] += ar; albedo_film[unsafe_offset=px*3+1] += ag; albedo_film[unsafe_offset=px*3+2] += ab
 
 
