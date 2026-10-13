@@ -2954,7 +2954,7 @@ def render_interactive(
             gpu_atrous_denoise(handle, denoised.unsafe_ptr(), Int64(n_pixels),
                                     Int32(frame_count),
                                     psc[unsafe_offset=0].film_iso, psc[unsafe_offset=0].film_max_comp,
-                                    apply_denoise=headless or viewer_denoise_enabled(v) != Int32(0), min_passes=5)
+                                    apply_denoise=(headless and getenv("GONZALES_NO_DENOISE") == "") or (not headless and viewer_denoise_enabled(v) != Int32(0)), min_passes=5)
             var t_b = perf_counter_ns()
             apply_film_sensor(denoised.unsafe_ptr(), n_pixels, psc[unsafe_offset=0].film_exposuretime, psc[unsafe_offset=0].film_wb)
             t_denoise += Int(t_b - t_a); t_sensor += Int(perf_counter_ns() - t_b)
