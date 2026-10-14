@@ -6,7 +6,7 @@ into the media section, not their own) -- each depends only on the core
 (Point3f/Vec3f/RGB/_is_real_ptr), confirmed by scanning each block with
 comments and docstrings stripped before moving it."""
 from std.memory.alloc import unsafe_alloc
-from std.math import max, min
+from std.math import max, min, sqrt
 from .geometry import Point3f, Vec3f, RGB, _is_real_ptr
 
 # ── Lights ────────────────────────────────────────────────────────────────────
@@ -181,15 +181,103 @@ def il_rgb(il: InfiniteLight, texel: Int) -> RGB:
     return RGB(il.pixels_ptr[unsafe_offset=texel * 3], il.pixels_ptr[unsafe_offset=texel * 3 + 1], il.pixels_ptr[unsafe_offset=texel * 3 + 2])
 
 
+comptime LIGHT_BOUNDS_STRIDE: Int = 12
+comptime LIGHT_IMPORTANCE_MAX: Int = 32
+
+
 @fieldwise_init
 struct LightSampler(TrivialRegisterPassable):
-    """Power-weighted CDF over area lights.
-    cdf[0]=0, cdf[n]=1; pdf[i] = cdf[i+1] - cdf[i] = power_i / total_power.
-    Built at parse time; on GPU the cdf pointer is patched to device memory.
+    """Area-light picker. cdf[0]=0, cdf[n]=1; pdf[i] = cdf[i+1] - cdf[i] (the power pick, mixed with uniform).
+    With has_bounds != 0 (at most LIGHT_IMPORTANCE_MAX lights, all meshes) the buffer continues after the n+1 CDF entries with
+    LIGHT_BOUNDS_STRIDE floats per light (box min, box max, emission axis, power, cos of the normal cone, two-sided), and the
+    pick at a point follows pbrt's light importance instead. Built at parse time; on GPU the pointer is patched to device memory.
     """
-    var cdf: Pointer[Float32, MutUntrackedOrigin]  # n+1 entries
+    var cdf: Pointer[Float32, MutUntrackedOrigin]
     var n: Int32
-    var _pad: Int32
+    var has_bounds: Int32
+
+
+@always_inline
+def _safe_sqrt(x: Float32) -> Float32:
+    return sqrt(max(x, Float32(0.0)))
+
+
+@always_inline
+def _cos_sub_clamped(sin_a: Float32, cos_a: Float32, sin_b: Float32, cos_b: Float32) -> Float32:
+    return Float32(1.0) if cos_a > cos_b else cos_a * cos_b + sin_a * sin_b
+
+
+@always_inline
+def _sin_sub_clamped(sin_a: Float32, cos_a: Float32, sin_b: Float32, cos_b: Float32) -> Float32:
+    return Float32(0.0) if cos_a > cos_b else sin_a * cos_b - cos_a * sin_b
+
+
+@always_inline
+def light_importance(ls: LightSampler, i: Int, p: Vec3f) -> Float32:
+    """pbrt's LightBounds::Importance for a diffuse emitter (cos theta_e = 0), without the receiver-normal factor."""
+    var b = ls.cdf + (Int(ls.n) + 1 + i * LIGHT_BOUNDS_STRIDE)
+    var cx = Float32(0.5) * (b[0] + b[3]); var cy = Float32(0.5) * (b[1] + b[4]); var cz = Float32(0.5) * (b[2] + b[5])
+    var dx = p.x - cx; var dy = p.y - cy; var dz = p.z - cz
+    var dist2 = dx * dx + dy * dy + dz * dz
+    var ex = b[3] - b[0]; var ey = b[4] - b[1]; var ez = b[5] - b[2]
+    var diag = sqrt(ex * ex + ey * ey + ez * ez)
+    var d2 = max(dist2, Float32(0.5) * diag)
+    var inv = Float32(1.0) / sqrt(max(dist2, Float32(1e-20)))
+    var cos_w = (b[6] * dx + b[7] * dy + b[8] * dz) * inv
+    if b[11] != Float32(0.0):
+        cos_w = abs(cos_w)
+    var sin_w = _safe_sqrt(Float32(1.0) - cos_w * cos_w)
+    var r2 = Float32(0.25) * diag * diag
+    var inside = p.x >= b[0] and p.x <= b[3] and p.y >= b[1] and p.y <= b[4] and p.z >= b[2] and p.z <= b[5]
+    var cos_b = Float32(-1.0)
+    if not inside and dist2 >= r2:
+        cos_b = _safe_sqrt(Float32(1.0) - r2 / dist2)
+    var sin_b = _safe_sqrt(Float32(1.0) - cos_b * cos_b)
+    var cos_o = b[10]
+    var sin_o = _safe_sqrt(Float32(1.0) - cos_o * cos_o)
+    var cos_x = _cos_sub_clamped(sin_w, cos_w, sin_o, cos_o)
+    var sin_x = _sin_sub_clamped(sin_w, cos_w, sin_o, cos_o)
+    var cos_p = _cos_sub_clamped(sin_x, cos_x, sin_b, cos_b)
+    if cos_p <= Float32(0.0):
+        return Float32(0.0)
+    return max(b[9] * cos_p / d2, Float32(0.0))
+
+
+@always_inline
+def light_sampler_sample_at(ls: LightSampler, p: Vec3f, u: Float32) -> Tuple[Int, Float32]:
+    """(light_index, selection_pdf) for a shading point p; (-1, 0) when no light can reach it."""
+    if ls.has_bounds == Int32(0):
+        return light_sampler_sample(ls, u)
+    var total = Float32(0.0)
+    for i in range(Int(ls.n)):
+        total += light_importance(ls, i, p)
+    if total <= Float32(0.0):
+        return (-1, Float32(0.0))
+    var target = u * total
+    var acc = Float32(0.0)
+    var last = -1
+    for i in range(Int(ls.n)):
+        var w = light_importance(ls, i, p)
+        if w > Float32(0.0):
+            last = i
+            acc += w
+            if acc > target:
+                return (i, max(w / total, Float32(1e-6)))
+    return (last, max(light_importance(ls, last, p) / total, Float32(1e-6)))
+
+
+@always_inline
+def light_sampler_pdf_at(ls: LightSampler, light_idx: Int32, p: Vec3f) -> Float32:
+    """The selection pdf light_sampler_sample_at gives light_idx at p."""
+    if ls.has_bounds == Int32(0):
+        return light_sampler_pdf(ls, light_idx)
+    var total = Float32(0.0)
+    for i in range(Int(ls.n)):
+        total += light_importance(ls, i, p)
+    if total <= Float32(0.0):
+        return Float32(0.0)
+    return light_importance(ls, Int(light_idx), p) / total
+
 
 @always_inline
 def light_sampler_sample(ls: LightSampler, u: Float32) -> Tuple[Int, Float32]:

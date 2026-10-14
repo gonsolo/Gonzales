@@ -261,7 +261,7 @@ def _volume_area_light_nee(
     # factor the old `geom` term carried. That equivalence is the cheapest
     # correctness check available here and is worth preserving.
     if Int(sd.areaLightCount) > 0 and n_light_sampler > 0:
-        var ls = LightSampler(sd.lightSampler.cdf, Int32(n_light_sampler), Int32(0))
+        var ls = sd.lightSampler
         var scatter_pt_s = scatter_pt.to_simd()
         var scatter_v = Vec3f(scatter_pt_s[0], scatter_pt_s[1], scatter_pt_s[2])
         var res = vol_reservoir_init()

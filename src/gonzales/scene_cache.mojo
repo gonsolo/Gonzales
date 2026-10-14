@@ -15,7 +15,7 @@ from std.time import perf_counter_ns
 from .geometry import _is_real_ptr
 from .bvh import BVH2Node, BVH4
 from .curves import Curve
-from .lights import AreaLight, InfiniteLight, LightSampler
+from .lights import AreaLight, InfiniteLight, LightSampler, LIGHT_BOUNDS_STRIDE
 from .materials import Material
 from .pbrt_parser import ParsedScene_Mojo, _plan_ptex_budget, mojo_parsed_free
 from .primitives import Instance, PrimId, Sphere, TriangleMesh, mesh_points_floats
@@ -24,7 +24,7 @@ from .host_textures import TexPrefetch
 from .fast_io import read_parallel, PARALLEL_MIN
 
 comptime _MAGIC: Int = 0x474E5A53434143
-comptime _FORMAT: Int = 6
+comptime _FORMAT: Int = 7
 
 comptime _Ptr = Pointer[UInt8, MutUntrackedOrigin]
 
@@ -225,7 +225,7 @@ def scene_cache_save(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], cache_p
     _put[Int32](f, s.template_mesh_start, max(Int(s.blas_count), 1)); _put[Int32](f, s.template_mesh_end, max(Int(s.blas_count), 1))
     _put[Curve](f, s.curves, Int(s.curve_count)); _put[Sphere](f, s.spheres, Int(s.sphere_count))
 
-    _put[Float32](f, s.light_sampler.cdf, max(Int(s.light_sampler.n) + 1, 2))
+    _put[Float32](f, s.light_sampler.cdf, max(Int(s.light_sampler.n) + 1, 2) + (Int(s.light_sampler.n) * LIGHT_BOUNDS_STRIDE if s.light_sampler.has_bounds != Int32(0) else 0))
     _put[Float32](f, s.light_pick_cdf, max(Int(s.light_pick_n) + 1, 2))
 
     _put[InfiniteLight](f, s.infinite_lights, Int(s.infinite_count))
@@ -349,8 +349,8 @@ def scene_cache_load(cache_path: _Ptr, scene_path: _Ptr) -> Pointer[ParsedScene_
     s.template_mesh_start = _get[Int32](f, max(Int(s.blas_count), 1)); s.template_mesh_end = _get[Int32](f, max(Int(s.blas_count), 1))
     s.curves = _get[Curve](f, Int(s.curve_count)); s.spheres = _get[Sphere](f, Int(s.sphere_count))
 
-    var ls_cdf = _get[Float32](f, max(Int(s.light_sampler.n) + 1, 2))
-    s.light_sampler = LightSampler(ls_cdf, s.light_sampler.n, Int32(0))
+    var ls_cdf = _get[Float32](f, max(Int(s.light_sampler.n) + 1, 2) + (Int(s.light_sampler.n) * LIGHT_BOUNDS_STRIDE if s.light_sampler.has_bounds != Int32(0) else 0))
+    s.light_sampler = LightSampler(ls_cdf, s.light_sampler.n, s.light_sampler.has_bounds)
     s.light_pick_cdf = _get[Float32](f, max(Int(s.light_pick_n) + 1, 2))
 
     s.infinite_lights = _get[InfiniteLight](f, Int(s.infinite_count))

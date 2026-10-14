@@ -10,7 +10,7 @@ from .materials import Material, MatKind, LobeKind, MeasuredBRDF, schlick_fresne
 from .render_state import PathState, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SuppressTask, SHADOW_SLOTS
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, mesh_uv, mesh_has_uvs, mesh_normal, mesh_vi, mesh_face
 from .primitives import mesh_pos
-from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb, light_sampler_sample, light_sampler_pdf, area_light_pick_triangle
+from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb, light_sampler_sample, light_sampler_sample_at, light_sampler_pdf_at, light_sampler_pdf, area_light_pick_triangle
 from .portal_light import portal_frame, portal_ray_crosses
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .shadow_media import shadow_transmittance
@@ -982,6 +982,12 @@ def _to_spec_illum(ctx: ShadeContext, c: RGB, wl: SampledWavelengths) -> Spectra
     return rgb_illuminant_to_spectral_sample(ctx.spectral.coeffs, ctx.spectral.res,
         ctx.spectral.cie_x, ctx.spectral.cie_y, ctx.spectral.cie_z,
         ctx.spectral.d65, c.r, c.g, c.b, wl)
+
+@always_inline
+def _to_spec_diffuse_lit(ctx: ShadeContext, alb: RGB, le: RGB, wl: SampledWavelengths) -> SpectralSample:
+    """Diffuse albedo spectrum times emission spectrum. The two are upsampled separately: their RGB product is not
+    a valid input to either converter (it matches only for grey albedo)."""
+    return _to_spec_refl(ctx, bxdf_eval_diffuse(alb), wl) * _to_spec_illum(ctx, le, wl)
 
 @always_inline
 def _shadow_inline(ctx: ShadeContext, guide_write: GuideGrid) -> Bool:
@@ -3112,7 +3118,7 @@ def _nee_infinite_light[enqueue_shadow: Bool, defer_only: Bool = False](
     if cos_env > Float32(0.0) and not env_rgb.is_black() and pdf_light > Float32(0.0):
         var pdf_bsdf_nee = bxdf_pdf_diffuse(cos_env)
         var mis_w = power_heuristic(pdf_light, pdf_bsdf_nee)
-        var contrib = path_ptr[].throughput * _to_spec_refl(ctx, bxdf_eval_diffuse(alb), path_ptr[].wavelengths) * _to_spec_illum(ctx, env_rgb, path_ptr[].wavelengths) * (cos_env / pdf_light) * mis_w
+        var contrib = path_ptr[].throughput * _to_spec_diffuse_lit(ctx, alb, env_rgb, path_ptr[].wavelengths) * (cos_env / pdf_light) * mis_w
         var t_max_env = Float32(100000.0)
         _shadow_contribute[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, env_dir, t_max_env, contrib, guide_write)
 
@@ -3904,8 +3910,8 @@ def _mnee_area_light_contribute(
     # competing strategy to balance against. `trials` is exactly 1.0 for
     # the 1-/2-vertex fast path (no Bernoulli-trial estimator there) so
     # this reduces to the original formula unchanged in that case.
-    var mnee_wt = bxdf_eval_diffuse(alb) * al.emission * (cos_s_x0 * g * bsdf_product * lobe_w * inv_pdf_area * trials)
-    path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, mnee_wt, path_ptr[].wavelengths)
+    var mnee_wt = _to_spec_diffuse_lit(ctx, alb, al.emission, path_ptr[].wavelengths) * (cos_s_x0 * g * bsdf_product * lobe_w * inv_pdf_area * trials)
+    path_ptr[].estimate += path_ptr[].throughput * mnee_wt
     return True
 
 # ── ReSTIR SMS (Phase 6's remaining first piece: candidate generation) ──────
@@ -4052,8 +4058,8 @@ def sms_resolve(
                           ctx.lights.spheres, ctx.lights.sphere_count,
                           ign_center, ign_radius, materials=ctx.materials):
         return
-    var contrib = bxdf_eval_diffuse(alb) * res.le * (cos_s_x0 * res.state.w)
-    path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, contrib, path_ptr[].wavelengths)
+    var contrib = _to_spec_diffuse_lit(ctx, alb, res.le, path_ptr[].wavelengths) * (cos_s_x0 * res.state.w)
+    path_ptr[].estimate += path_ptr[].throughput * contrib
 
 def sms_temporal_step(
     path_ptr: Pointer[PathState, MutUntrackedOrigin], ctx: ShadeContext,
@@ -4156,10 +4162,13 @@ def _nee_area_lights[enqueue_shadow: Bool, mnee: Bool = True, defer_only: Bool =
     if not (pixel_idx >= 0 and _is_real_ptr(sms_io.read)):
         path_ptr[].last_ns_n = normal
         path_ptr[].last_ns_p = hit_point
-    var ls_u_nee = u_light
-    var ls_result_nee = light_sampler_sample(ctx.lights.light_sampler, ls_u_nee)
+    # The importance pick at this vertex; the emitter-hit site repeats it from last_ns_p, which this vertex marked.
+    var at_point = not (pixel_idx >= 0 and _is_real_ptr(sms_io.read))
+    var ls_result_nee = light_sampler_sample_at(ctx.lights.light_sampler, hit_point, u_light) if at_point else light_sampler_sample(ctx.lights.light_sampler, u_light)
     var light_idx = ls_result_nee[0]
     var light_sel_pdf_nee = ls_result_nee[1]
+    if light_idx < 0:
+        return
     var al = ctx.lights.area_lights[unsafe_offset=light_idx]
     var (light_point, light_normal, ldp_du_v, ldp_dv_v) = _sample_light_point_and_normal(ctx, al, u_bary1, u_bary2, pcg, hit_point)
     var to_light = light_point - hit_point
@@ -4173,10 +4182,10 @@ def _nee_area_lights[enqueue_shadow: Bool, mnee: Bool = True, defer_only: Bool =
             var pdf_light = dist_sq * light_sel_pdf_nee / (cos_l * al.total_area)
             var pdf_bsdf_nee = bxdf_pdf_diffuse(cos_s)
             var w_nee = power_heuristic(pdf_light, pdf_bsdf_nee)
-            var weight = bxdf_eval_diffuse(alb) * al.emission * (cos_s * w_nee * lobe_w / pdf_light)
+            var spec_w = _to_spec_diffuse_lit(ctx, alb, al.emission, path_ptr[].wavelengths) * (cos_s * w_nee * lobe_w / pdf_light)
             comptime if not defer_only:
                 if pixel_idx >= 0 and _is_real_ptr(sms_io.read):
-                    var contrib = path_ptr[].throughput * _to_spec_illum(ctx, weight, path_ptr[].wavelengths)
+                    var contrib = path_ptr[].throughput * spec_w
                     # ReSTIR SMS (Phase 6): temporal-reused glass-caustic probing
                     # in place of plain per-frame MNEE. Same used/skip-shadow-ray
                     # convention as the plain-MNEE branch below.
@@ -4206,7 +4215,7 @@ def _nee_area_lights[enqueue_shadow: Bool, mnee: Bool = True, defer_only: Bool =
                     # A clear straight ray means no glass is in the way, so the MNEE probe is only needed when
                     # something blocks it (the probe's segment lies inside the shadow ray's).
                     if not _shadow_blocked(ctx, hit_point, shadow_dir, dist * Float32(0.9999)):
-                        path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, weight, path_ptr[].wavelengths)
+                        path_ptr[].estimate += path_ptr[].throughput * spec_w
                     else:
                         _ = _mnee_area_light_contribute(
                             path_ptr, ctx, normal, hit_point, alb, shadow_dir, dist,
@@ -4219,7 +4228,7 @@ def _nee_area_lights[enqueue_shadow: Bool, mnee: Bool = True, defer_only: Bool =
                         light_point, ldp_du_v, ldp_dv_v, al,
                         al.total_area / light_sel_pdf_nee, lobe_w)
             if not used_mnee:
-                var contrib = path_ptr[].throughput * _to_spec_illum(ctx, weight, path_ptr[].wavelengths)
+                var contrib = path_ptr[].throughput * spec_w
                 _shadow_contribute[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, shadow_dir, dist * Float32(0.9999), contrib, guide_write)
 
 # ── ReSTIR DI (Phase 2, restir_di.mojo's DIReservoir/di_target_pdf) ─────────
@@ -4377,7 +4386,7 @@ def di_resolve(
     # factor. Confirmed empirically too: adding g turned a ~3.5% mean
     # brightness bias into a ~28% one on staircase2 (400x400, vs a 128spp
     # plain-NEE reference).
-    var contrib = path_ptr[].throughput * _to_spec_refl(ctx, bxdf_eval_diffuse(alb), path_ptr[].wavelengths) * _to_spec_illum(ctx, res.le, path_ptr[].wavelengths) * (cos_s * res.state.w * mis_w)
+    var contrib = path_ptr[].throughput * _to_spec_diffuse_lit(ctx, alb, res.le, path_ptr[].wavelengths) * (cos_s * res.state.w * mis_w)
 
     # MNEE, shared verbatim with _nee_area_lights. Without this the ReSTIR
     # path lost every bit of light reaching a surface THROUGH glass (the
@@ -4518,8 +4527,7 @@ def gi_resolve(
     if cos_s <= Float32(0.0) or cos_x2 <= Float32(0.0):
         return
     var contrib = (throughput
-        * _to_spec_refl(ctx, bxdf_eval_diffuse(alb), path_ptr[].wavelengths)
-        * _to_spec_illum(ctx, res.lo, path_ptr[].wavelengths)
+        * _to_spec_diffuse_lit(ctx, alb, res.lo, path_ptr[].wavelengths)
         * (cos_s * res.state.w))
     _shadow_contribute[False](path_ptr, ctx, hit_point, wi, dist * Float32(0.9999), contrib)
 
@@ -5399,6 +5407,8 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                 if cos_l > Float32(0.0) and al.total_area > Float32(0.0):
                     var ls = ctx.lights.light_sampler
                     var al_sel_pdf = ls.cdf[unsafe_offset=al_idx + 1] - ls.cdf[unsafe_offset=al_idx]
+                    if dot(path_ptr[].last_ns_n, path_ptr[].last_ns_n) > Float32(0.0):
+                        al_sel_pdf = light_sampler_pdf_at(ls, Int32(al_idx), path_ptr[].last_ns_p)
                     var pdf_light = dist2 * max(al_sel_pdf, Float32(1e-6)) / (cos_l * al.total_area)
                     var w = power_heuristic(pdf_bsdf, pdf_light)
                     path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths) * w
@@ -5428,6 +5438,8 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
                         if cos_l > Float32(0.0):
                             var ls = ctx.lights.light_sampler
                             var al_sel_pdf = ls.cdf[unsafe_offset=al_idx + 1] - ls.cdf[unsafe_offset=al_idx]
+                            if dot(path_ptr[].last_ns_n, path_ptr[].last_ns_n) > Float32(0.0):
+                                al_sel_pdf = light_sampler_pdf_at(ls, Int32(al_idx), path_ptr[].last_ns_p)
                             var pdf_light = dist2 * max(al_sel_pdf, Float32(1e-6)) / (cos_l * al.total_area)
                             var w = power_heuristic(pdf_bsdf, pdf_light)
                             path_ptr[].estimate += path_ptr[].throughput * _to_spec_illum(ctx, emission, path_ptr[].wavelengths) * w

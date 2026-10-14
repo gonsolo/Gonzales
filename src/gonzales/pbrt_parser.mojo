@@ -4,7 +4,7 @@ from std.os import getenv
 from std.time import perf_counter_ns
 from std.memory.alloc import unsafe_alloc
 from std.memory import unsafe_memcpy
-from std.math import tan, atan, sqrt, abs, floor, fma
+from std.math import tan, atan, sqrt, min, max, abs, floor, fma
 from std.atomic import Atomic
 from std.sys.info import num_performance_cores
 from max.algorithm import parallelize
@@ -21,19 +21,19 @@ from .lexer import (PbrtScanner, scanner_open, scanner_free, scanner_is_at_end,
                     _psc_skip_params, _psc_skip_line)
 from .parse_types import (SceneParseState, MeshAccum, NamedMaterial, scene_path,
                            ctm_push, ctm_pop, PSC_NAME_MAX, PSC_FILE_MAX)
-from .geometry import RGB, Point3f, Vec3f, dot, PI, _is_real_ptr
+from .geometry import RGB, Point3f, Vec3f, dot, cross, PI, _is_real_ptr
 from .materials import Material, MatKind, MeasuredBRDF, is_specular_glass
 from .render_state import GpuTexture, NormalSlopeMap, normal_slope_map_none
 from .host_textures import HostTextures, TexPrefetch, decode_host_textures, host_texture_table
 from .primitives import Sphere, TriangleMesh, PrimId, Instance, encode_normal, mesh_points_floats
 from .quad_pack import quantise_quads
 from .media import Medium, MediumInterface, Grid, NvdbGrid
-from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, env_build_cdf
+from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, LIGHT_BOUNDS_STRIDE, LIGHT_IMPORTANCE_MAX, env_build_cdf
 from .curves import Curve, CURVE_N_PIECES, curve_piece_bounds, curve_bspline_point, curve_light_tube_area
 from .nanovdb import nvdb_load, nvdb_load_named, nvdb_data, nvdb_size, nvdb_free, nvdb_index_bbox, nvdb_value_range, nvdb_map_invmatf, nvdb_map_vecf
 from .noise import _perlin_perm_table, cloud_density
 from .transform import matrix_multiply, matrix_invert, transform_points, transform_normals
-from .bvh import BVH2Node, BVH4, SceneView, build_bvh2, build_bvh4, free_bvh4
+from .bvh import BVH2Node, BVH4, SceneView, build_bvh2, build_bvh4, free_bvh4, collapse_bvh_wide
 from .spectrum import SpectralHandle
 from .sampling import gaussian_norm
 from .ply import load_ply
@@ -2290,6 +2290,58 @@ def _film_white_balance_matrix(temp_k: Float32) -> SIMD[DType.float32, 16]:
 
 # ── Scene finalization ────────────────────────────────────────────────────────
 
+# GONZALES_CULL_SIZE=<f>: keep only instances whose projected diameter is at least f of the image height.
+# Seen from GONZALES_CAMERA_SCENE's camera if set. Writes the kept indices, returns their count.
+def _cull_small_instances(s: Pointer[SceneParseState, MutUntrackedOrigin], psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
+                          tmpl_bounds: Pointer[Float32, MutUntrackedOrigin], keep: Pointer[Int32, MutUntrackedOrigin]) -> Int:
+    var n = len(s[unsafe_offset=0].instance_template_idx)
+    var limit = Float32(0)
+    try:
+        limit = Float32(Float64(getenv("GONZALES_CULL_SIZE", "0")))
+    except:
+        pass
+    if limit <= Float32(0) or n == 0:
+        for k in range(n): keep[unsafe_offset=k] = Int32(k)
+        return n
+    var px = psc[unsafe_offset=0].camera_to_world[unsafe_offset=12]
+    var py = psc[unsafe_offset=0].camera_to_world[unsafe_offset=13]
+    var pz = psc[unsafe_offset=0].camera_to_world[unsafe_offset=14]
+    var fov = s[unsafe_offset=0].camera_fov
+    var env = getenv("GONZALES_CAMERA_SCENE")
+    if env.byte_length() > 0:
+        var cpath = unsafe_alloc[UInt8](env.byte_length() + 1)
+        for k in range(env.byte_length()): cpath[unsafe_offset=k] = env.as_bytes()[k]
+        cpath[unsafe_offset=env.byte_length()] = UInt8(0)
+        var cam = mojo_parse_scene(cpath, False, Pointer[PlyPrefetch, MutUntrackedOrigin].unsafe_dangling())
+        cpath.unsafe_free()
+        px = cam[unsafe_offset=0].camera_to_world[unsafe_offset=12]
+        py = cam[unsafe_offset=0].camera_to_world[unsafe_offset=13]
+        pz = cam[unsafe_offset=0].camera_to_world[unsafe_offset=14]
+        fov = cam[unsafe_offset=0].camera_fov
+    var scale = limit * tan(fov * Float32(3.14159265 / 360.0))
+    var n_keep = 0
+    for k in range(n):
+        var t = Int(s[unsafe_offset=0].instance_template_idx[k]) * 6
+        var hx = Float32(0.5) * (tmpl_bounds[unsafe_offset=t + 3] - tmpl_bounds[unsafe_offset=t])
+        var hy = Float32(0.5) * (tmpl_bounds[unsafe_offset=t + 4] - tmpl_bounds[unsafe_offset=t + 1])
+        var hz = Float32(0.5) * (tmpl_bounds[unsafe_offset=t + 5] - tmpl_bounds[unsafe_offset=t + 2])
+        var cx = tmpl_bounds[unsafe_offset=t] + hx; var cy = tmpl_bounds[unsafe_offset=t + 1] + hy; var cz = tmpl_bounds[unsafe_offset=t + 2] + hz
+        var b = k * 16
+        var m = s[unsafe_offset=0].instance_obj_to_world.unsafe_ptr() + b
+        var wx = m[0]*cx + m[4]*cy + m[8]*cz + m[12] - px
+        var wy = m[1]*cx + m[5]*cy + m[9]*cz + m[13] - py
+        var wz = m[2]*cx + m[6]*cy + m[10]*cz + m[14] - pz
+        var ax = m[0]*hx; var ay = m[1]*hx; var az = m[2]*hx
+        var bx = m[4]*hy; var by = m[5]*hy; var bz = m[6]*hy
+        var gx = m[8]*hz; var gy = m[9]*hz; var gz = m[10]*hz
+        var r = sqrt(ax*ax + ay*ay + az*az + bx*bx + by*by + bz*bz + gx*gx + gy*gy + gz*gz)
+        var d = sqrt(wx*wx + wy*wy + wz*wz) - r
+        if d <= Float32(0) or r >= scale * d:
+            keep[unsafe_offset=n_keep] = Int32(k)
+            n_keep += 1
+    print("Instance culling: kept", n_keep, "of", n, "instances (size limit", limit, "of the image height)")
+    return n_keep
+
 def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                  psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
                  verbose: Bool = False):
@@ -2537,6 +2589,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     # is built further down in "Native curves") — sized for both up front
     # since it's one contiguous allocation.
     var al_list  = unsafe_alloc[AreaLight](max(n_al_mesh + n_al_curve, 1))
+    var al_bounds = unsafe_alloc[Float32](max(n_al_mesh, 1) * LIGHT_BOUNDS_STRIDE)   # per mesh light, see LightSampler
     var al_count = Int32(0)
     var al_mat_base = n_regular
 
@@ -2636,6 +2689,53 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 tri_cdf[unsafe_offset=ti] = tri_cdf[unsafe_offset=ti] / t_area if t_area > Float32(0) else Float32(ti + 1) / Float32(nt)
             if nt > 0:
                 tri_cdf[unsafe_offset=nt - 1] = Float32(1)   # exact, whatever the rounding
+            var lb = al_bounds + al_idx * LIGHT_BOUNDS_STRIDE
+            var bmin = Vec3f(Float32(3.0e38)); var bmax = Vec3f(Float32(-3.0e38))
+            var nsum = Vec3f(Float32(0.0))
+            for ti in range(nt):
+                var q0 = Vec3f(Float32(0.0)); var q1 = Vec3f(Float32(0.0)); var q2 = Vec3f(Float32(0.0))
+                var vid0 = Int(vis_c[unsafe_offset=ti*3+0]); var vid1 = Int(vis_c[unsafe_offset=ti*3+1]); var vid2 = Int(vis_c[unsafe_offset=ti*3+2])
+                q0 = Vec3f(pts_c[unsafe_offset=vid0*4], pts_c[unsafe_offset=vid0*4+1], pts_c[unsafe_offset=vid0*4+2])
+                q1 = Vec3f(pts_c[unsafe_offset=vid1*4], pts_c[unsafe_offset=vid1*4+1], pts_c[unsafe_offset=vid1*4+2])
+                q2 = Vec3f(pts_c[unsafe_offset=vid2*4], pts_c[unsafe_offset=vid2*4+1], pts_c[unsafe_offset=vid2*4+2])
+                for qq in range(3):
+                    var q = q0 if qq == 0 else (q1 if qq == 1 else q2)
+                    bmin = Vec3f(min(bmin.x, q.x), min(bmin.y, q.y), min(bmin.z, q.z))
+                    bmax = Vec3f(max(bmax.x, q.x), max(bmax.y, q.y), max(bmax.z, q.z))
+                var gn = cross(q1 - q0, q2 - q0)
+                if len(ma.normals) > 0:
+                    var sn = Vec3f(ma.normals[vid0*3] + ma.normals[vid1*3] + ma.normals[vid2*3],
+                                   ma.normals[vid0*3+1] + ma.normals[vid1*3+1] + ma.normals[vid2*3+1],
+                                   ma.normals[vid0*3+2] + ma.normals[vid1*3+2] + ma.normals[vid2*3+2])
+                    if dot(gn, sn) < Float32(0.0):
+                        gn = -gn
+                nsum = nsum + gn
+            var nlen = sqrt(dot(nsum, nsum))
+            var axis = Vec3f(Float32(0.0), Float32(0.0), Float32(1.0))
+            var cos_o = Float32(-1.0)
+            if nlen > Float32(0.0):
+                axis = nsum * (Float32(1.0) / nlen)
+                cos_o = Float32(1.0)
+                for ti in range(nt):
+                    var vid0 = Int(vis_c[unsafe_offset=ti*3+0]); var vid1 = Int(vis_c[unsafe_offset=ti*3+1]); var vid2 = Int(vis_c[unsafe_offset=ti*3+2])
+                    var q0 = Vec3f(pts_c[unsafe_offset=vid0*4], pts_c[unsafe_offset=vid0*4+1], pts_c[unsafe_offset=vid0*4+2])
+                    var q1 = Vec3f(pts_c[unsafe_offset=vid1*4], pts_c[unsafe_offset=vid1*4+1], pts_c[unsafe_offset=vid1*4+2])
+                    var q2 = Vec3f(pts_c[unsafe_offset=vid2*4], pts_c[unsafe_offset=vid2*4+1], pts_c[unsafe_offset=vid2*4+2])
+                    var gn = cross(q1 - q0, q2 - q0)
+                    if len(ma.normals) > 0:
+                        var sn = Vec3f(ma.normals[vid0*3] + ma.normals[vid1*3] + ma.normals[vid2*3],
+                                       ma.normals[vid0*3+1] + ma.normals[vid1*3+1] + ma.normals[vid2*3+1],
+                                       ma.normals[vid0*3+2] + ma.normals[vid1*3+2] + ma.normals[vid2*3+2])
+                        if dot(gn, sn) < Float32(0.0):
+                            gn = -gn
+                    var gl = sqrt(dot(gn, gn))
+                    if gl > Float32(0.0):
+                        cos_o = min(cos_o, dot(axis, gn) * (Float32(1.0) / gl))
+            lb[0] = bmin.x; lb[1] = bmin.y; lb[2] = bmin.z; lb[3] = bmax.x; lb[4] = bmax.y; lb[5] = bmax.z
+            lb[6] = axis.x; lb[7] = axis.y; lb[8] = axis.z
+            lb[9] = em.luma() * t_area * (Float32(2.0) if ma.al_two_sided else Float32(1.0))
+            lb[10] = cos_o
+            lb[11] = Float32(1.0) if ma.al_two_sided else Float32(0.0)
             al_list[unsafe_offset=al_idx].tri_cdf    = tri_cdf
             al_list[unsafe_offset=al_idx].meshIdx    = Int32(i)
             al_list[unsafe_offset=al_idx].n_tris     = Int32(nt)
@@ -2834,6 +2934,10 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     var prune_top = (prune_mask & 2) != 0     # the top level holds no triangles
     var prune_inst = (prune_mask & 4) != 0    # the instance BVH covers only instances of templates with curves
 
+    # GONZALES_WIDE_BVH=1: quad templates and the instance tree get wide quantised nodes (bvh.collapse_bvh_wide).
+    var wide_bvh = getenv("GONZALES_WIDE_BVH", "0") == "1"
+    var inst_wide = Int8(0)
+
     var prim_bounds = unsafe_alloc[Float32](Int(total_prims_gpu + total_instances) * 6 + 6)
     var tri_mesh    = unsafe_alloc[Int32](max(Int(total_tris), 1))
     var tri_local   = unsafe_alloc[Int32](max(Int(total_tris), 1))
@@ -3001,7 +3105,12 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 q_bounds[unsafe_offset=q * 6 + 3] = bx1; q_bounds[unsafe_offset=q * 6 + 4] = by1; q_bounds[unsafe_offset=q * 6 + 5] = bz1
             var q_nodes = unsafe_alloc[BVH2Node](nq * 2 + 4)
             var q_order = unsafe_alloc[Int32](nq)
-            var q_node_count = build_bvh2(q_bounds, Int32(nq), q_nodes, q_order, min_leaf=8, max_leaf=8)
+            var quad_leaf = 8
+            try:
+                quad_leaf = Int(getenv("GONZALES_QUAD_LEAF", "8"))
+            except:
+                pass
+            var q_node_count = build_bvh2(q_bounds, Int32(nq), q_nodes, q_order, min_leaf=quad_leaf, max_leaf=quad_leaf)
             q_bounds.unsafe_free()
             var has_qn = Int(out_nrm_nv[unsafe_offset=mstart]) > 0
             var n_pts = unsafe_alloc[Float32](mesh_points_floats(nq * 4, Int32(2)))
@@ -3037,21 +3146,27 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             meshes[unsafe_offset=mstart].materials = n_mats
             meshes[unsafe_offset=mstart].quads = Int32(2)
             out_pts[unsafe_offset=mstart] = n_pts; out_vis[unsafe_offset=mstart] = no_vis; out_fis[unsafe_offset=mstart] = n_fis
+            var qr = q_nodes[unsafe_offset=0]
+            tmpl_bounds[unsafe_offset=tmpl * 6 + 0] = min(tmpl_bounds[unsafe_offset=tmpl * 6 + 0], qr.min.x)
+            tmpl_bounds[unsafe_offset=tmpl * 6 + 1] = min(tmpl_bounds[unsafe_offset=tmpl * 6 + 1], qr.min.y)
+            tmpl_bounds[unsafe_offset=tmpl * 6 + 2] = min(tmpl_bounds[unsafe_offset=tmpl * 6 + 2], qr.min.z)
+            tmpl_bounds[unsafe_offset=tmpl * 6 + 3] = max(tmpl_bounds[unsafe_offset=tmpl * 6 + 3], qr.max.x)
+            tmpl_bounds[unsafe_offset=tmpl * 6 + 4] = max(tmpl_bounds[unsafe_offset=tmpl * 6 + 4], qr.max.y)
+            tmpl_bounds[unsafe_offset=tmpl * 6 + 5] = max(tmpl_bounds[unsafe_offset=tmpl * 6 + 5], qr.max.z)
+            var q_wide = Int8(0)
             if rt_prune:
                 q_nodes.unsafe_free()
                 q_nodes = unsafe_alloc[BVH2Node](1)
                 q_nodes[unsafe_offset=0] = BVH2Node(Point3f(Float32(0)), Point3f(Float32(0)), Int32(0), Int32(0))
                 q_node_count = Int32(1)
-            else:
-                var qr = q_nodes[unsafe_offset=0]
-                tmpl_bounds[unsafe_offset=tmpl * 6 + 0] = min(tmpl_bounds[unsafe_offset=tmpl * 6 + 0], qr.min.x)
-                tmpl_bounds[unsafe_offset=tmpl * 6 + 1] = min(tmpl_bounds[unsafe_offset=tmpl * 6 + 1], qr.min.y)
-                tmpl_bounds[unsafe_offset=tmpl * 6 + 2] = min(tmpl_bounds[unsafe_offset=tmpl * 6 + 2], qr.min.z)
-                tmpl_bounds[unsafe_offset=tmpl * 6 + 3] = max(tmpl_bounds[unsafe_offset=tmpl * 6 + 3], qr.max.x)
-                tmpl_bounds[unsafe_offset=tmpl * 6 + 4] = max(tmpl_bounds[unsafe_offset=tmpl * 6 + 4], qr.max.y)
-                tmpl_bounds[unsafe_offset=tmpl * 6 + 5] = max(tmpl_bounds[unsafe_offset=tmpl * 6 + 5], qr.max.z)
+            elif wide_bvh:
+                var qw = collapse_bvh_wide(q_nodes, Int(q_node_count))
+                if qw[1] > Int32(0):
+                    q_nodes.unsafe_free()
+                    q_nodes = qw[0]; q_node_count = qw[1]
+                    q_wide = Int8(1)
             var q_rec = unsafe_alloc[PrimId](1)
-            q_rec[unsafe_offset=0] = PrimId(Int64(-1 if rt_prune else mstart), Int64(curve_blas), Int64(0), Int32(-1), Int8(7), Int8(0), Int8(0), Int8(0))
+            q_rec[unsafe_offset=0] = PrimId(Int64(-1 if rt_prune else mstart), Int64(curve_blas), Int64(0), Int32(-1), Int8(7), q_wide, Int8(0), Int8(0))
             blas_nodes_arr[unsafe_offset=tmpl]   = q_nodes
             blas_primids_arr[unsafe_offset=tmpl] = q_rec
             blas_node_counts[unsafe_offset=tmpl]   = q_node_count
@@ -3082,6 +3197,9 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 t_bounds[unsafe_offset=tb+3] = max(x0, max(x1, x2))
                 t_bounds[unsafe_offset=tb+4] = max(y0, max(y1, y2))
                 t_bounds[unsafe_offset=tb+5] = max(z0, max(z1, z2))
+                for bk in range(3):
+                    tmpl_bounds[unsafe_offset=tmpl * 6 + bk] = min(tmpl_bounds[unsafe_offset=tmpl * 6 + bk], t_bounds[unsafe_offset=tb + bk])
+                    tmpl_bounds[unsafe_offset=tmpl * 6 + 3 + bk] = max(tmpl_bounds[unsafe_offset=tmpl * 6 + 3 + bk], t_bounds[unsafe_offset=tb + 3 + bk])
                 t_mesh[unsafe_offset=Int(t_flat)]  = Int32(mi)
                 t_local[unsafe_offset=Int(t_flat)] = Int32(ti)
                 t_flat += 1
@@ -3154,26 +3272,31 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     if curves_dropped > 0:
         print("Warning:", curves_dropped, "curve(s) dropped: they are in object templates whose meshes could not be merged.")
 
+    var keep = unsafe_alloc[Int32](max(Int(total_instances), 1))
+    total_instances = Int32(_cull_small_instances(s, psc, tmpl_bounds, keep))
     var instances_c = unsafe_alloc[Instance](max(Int(total_instances), 1))
     # Pruned: the instances of templates with curves first, so the instance BVH covers a prefix of the array.
     var inst_src = unsafe_alloc[Int32](max(Int(total_instances), 1))
     var n_ci = Int(total_instances)
     if prune_inst:
         n_ci = 0
-        for k in range(Int(total_instances)):
+        for q in range(Int(total_instances)):
+            var k = Int(keep[unsafe_offset=q])
             var tk = Int(s[unsafe_offset=0].instance_template_idx[k])
             if blas_primids_arr[unsafe_offset=tk][unsafe_offset=0].id2 > Int64(0):
                 inst_src[unsafe_offset=n_ci] = Int32(k)
                 n_ci += 1
         var w_other = n_ci
-        for k in range(Int(total_instances)):
+        for q in range(Int(total_instances)):
+            var k = Int(keep[unsafe_offset=q])
             var tk = Int(s[unsafe_offset=0].instance_template_idx[k])
             if blas_primids_arr[unsafe_offset=tk][unsafe_offset=0].id2 <= Int64(0):
                 inst_src[unsafe_offset=w_other] = Int32(k)
                 w_other += 1
     else:
-        for k in range(Int(total_instances)):
-            inst_src[unsafe_offset=k] = Int32(k)
+        for q in range(Int(total_instances)):
+            inst_src[unsafe_offset=q] = keep[unsafe_offset=q]
+    keep.unsafe_free()
     for kk in range(Int(total_instances)):
         var k = Int(inst_src[unsafe_offset=kk])
         var tmpl_idx = Int(s[unsafe_offset=0].instance_template_idx[k])
@@ -3221,8 +3344,13 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         var inst_slot = Int(total_prims_gpu) * 6
         var inst_nodes = unsafe_alloc[BVH2Node](n_ci * 2 + 4)
         var inst_order = unsafe_alloc[Int32](n_ci)
-        # Four instances a leaf: a node costs more than half an instance, and an instance is cheap to reject.
-        var inst_node_count = build_bvh2(prim_bounds.unsafe_offset(inst_slot), Int32(n_ci), inst_nodes, inst_order, min_leaf=8, max_leaf=8)
+        # Eight instances a leaf by default: a node costs half an instance record, smaller leaves cull better.
+        var inst_leaf = 8
+        try:
+            inst_leaf = Int(getenv("GONZALES_INST_LEAF", "8"))
+        except:
+            pass
+        var inst_node_count = build_bvh2(prim_bounds.unsafe_offset(inst_slot), Int32(n_ci), inst_nodes, inst_order, min_leaf=inst_leaf, max_leaf=inst_leaf)
         var inst_tmp = unsafe_alloc[Instance](n_ci)
         for k in range(n_ci): inst_tmp[unsafe_offset=k] = instances_c[unsafe_offset=Int(inst_order[unsafe_offset=k])]
         for k in range(n_ci): instances_c[unsafe_offset=k] = inst_tmp[unsafe_offset=k]
@@ -3231,8 +3359,14 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         prim_bounds[unsafe_offset=inst_slot + 0] = iroot.min.x; prim_bounds[unsafe_offset=inst_slot + 1] = iroot.min.y
         prim_bounds[unsafe_offset=inst_slot + 2] = iroot.min.z; prim_bounds[unsafe_offset=inst_slot + 3] = iroot.max.x
         prim_bounds[unsafe_offset=inst_slot + 4] = iroot.max.y; prim_bounds[unsafe_offset=inst_slot + 5] = iroot.max.z
+        if wide_bvh:
+            var iw = collapse_bvh_wide(inst_nodes, Int(inst_node_count))
+            if iw[1] > Int32(0):
+                inst_nodes.unsafe_free()
+                inst_nodes = iw[0]; inst_node_count = iw[1]
+                inst_wide = Int8(1)
         var inst_prim = unsafe_alloc[PrimId](1)
-        inst_prim[unsafe_offset=0] = PrimId(Int64(n_templates), Int64(0), Int64(0), Int32(-1), Int8(8), Int8(0), Int8(0), Int8(0))
+        inst_prim[unsafe_offset=0] = PrimId(Int64(n_templates), Int64(0), Int64(0), Int32(-1), Int8(8), inst_wide, Int8(0), Int8(0))
         blas_nodes_arr[unsafe_offset=n_templates] = inst_nodes
         blas_primids_arr[unsafe_offset=n_templates] = inst_prim
         blas_node_counts[unsafe_offset=n_templates] = inst_node_count
@@ -3374,6 +3508,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         prim_ids[unsafe_offset=k].instanceIdx = Int32(-1)
         prim_ids[unsafe_offset=k]._pad0 = Int8(0); prim_ids[unsafe_offset=k]._pad1 = Int8(0)
         prim_ids[unsafe_offset=k]._pad2 = Int8(0)
+        if prim_ids[unsafe_offset=k].type == Int8(8):
+            prim_ids[unsafe_offset=k]._pad0 = inst_wide
 
     for mi in range(n_extra):
         var k = Int(tl_prims) + mi
@@ -3897,24 +4033,26 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         psc[unsafe_offset=0].mediums = Pointer[Medium, MutUntrackedOrigin].unsafe_dangling()
     psc[unsafe_offset=0].medium_count = Int32(nm)
 
-    # ---- Build power-weighted area light CDF ----
+    # ---- Area light picker: power/uniform CDF, plus per-light bounds for the importance pick ----
     var ls_n = Int(psc[unsafe_offset=0].area_light_count)
-    var ls_cdf = unsafe_alloc[Float32](max(ls_n + 1, 2))
+    var ls_bounds = n_al_curve == 0 and ls_n > 0 and ls_n <= LIGHT_IMPORTANCE_MAX
+    var ls_cdf = unsafe_alloc[Float32](max(ls_n + 1, 2) + (ls_n * LIGHT_BOUNDS_STRIDE if ls_bounds else 0))
     ls_cdf[unsafe_offset=0] = Float32(0.0)
     var ls_total_power = Float32(0.0)
     for i in range(ls_n):
         var al = psc[unsafe_offset=0].area_lights[unsafe_offset=i]
-        var power = al.emission.luma() * al.total_area
-        ls_total_power += power
-        ls_cdf[unsafe_offset=i + 1] = ls_cdf[unsafe_offset=i] + power
-    if ls_total_power > Float32(0.0):
-        var inv = Float32(1.0) / ls_total_power
-        for i in range(1, ls_n + 1):
-            ls_cdf[unsafe_offset=i] *= inv
-    else:
-        for i in range(1, ls_n + 1):
-            ls_cdf[unsafe_offset=i] = Float32(i) / Float32(max(ls_n, 1))
-    psc[unsafe_offset=0].light_sampler = LightSampler(ls_cdf, Int32(ls_n), Int32(0))
+        ls_total_power += al.emission.luma() * al.total_area
+    # Half power, half uniform: a pure power pick gave small lights near the ground ~1e-7 probability.
+    for i in range(ls_n):
+        var al = psc[unsafe_offset=0].area_lights[unsafe_offset=i]
+        var share = Float32(1.0) / Float32(max(ls_n, 1))
+        if ls_total_power > Float32(0.0):
+            share = Float32(0.5) * share + Float32(0.5) * al.emission.luma() * al.total_area / ls_total_power
+        ls_cdf[unsafe_offset=i + 1] = ls_cdf[unsafe_offset=i] + share
+    if ls_bounds:
+        for i in range(ls_n * LIGHT_BOUNDS_STRIDE):
+            ls_cdf[unsafe_offset=ls_n + 1 + i] = al_bounds[unsafe_offset=i]
+    psc[unsafe_offset=0].light_sampler = LightSampler(ls_cdf, Int32(ls_n), Int32(1) if ls_bounds else Int32(0))
     var (lp_cdf, lp_n) = _light_pick_cdf(psc[unsafe_offset=0])   # after the BVH: needs its root
     psc[unsafe_offset=0].light_pick_cdf = lp_cdf
     psc[unsafe_offset=0].light_pick_n = Int32(lp_n)

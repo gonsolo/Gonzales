@@ -2,7 +2,7 @@ from .bvh import BVH2Node, BVH4, SceneView
 from .curves import CURVE_DEFER_K, Curve
 from .geometry import _is_real_ptr
 from .guide import GuideGrid, null_guide
-from .lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSampler, env_build_cdf, env_downsample
+from .lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSampler, LIGHT_BOUNDS_STRIDE, env_build_cdf, env_downsample
 from .materials import MatKind, Material, MeasuredBRDF, is_specular_glass
 from .footprint import CameraFootprint
 from .media import Grid, MediumInterface, Medium, NvdbGrid
@@ -354,6 +354,7 @@ struct LightBuffers(Movable):
     var n_point_lights: Int
     var light_sampler_buf: DeviceBuffer[DType.uint8]   # (n_area+1) × sizeof(Float32) CDF
     var n_light_sampler: Int                           # n_area lights (CDF has n+1 entries)
+    var light_sampler_bounds: Int                      # 1: per-light bounds follow the CDF
     var light_pick_buf: DeviceBuffer[DType.uint8]      # (n_all+1) × Float32, _light_pick_cdf
     var n_light_pick: Int
     var infinite_lights_buf: DeviceBuffer[DType.uint8]  # n_infinite × sizeof(InfiniteLight) (grew when the portal fields were added, see lights.mojo)
@@ -412,7 +413,7 @@ struct LightBuffers(Movable):
         # least 2 entries: pad a host copy, since enqueue_copy copies the whole
         # buffer. (No map_to_host anywhere here: its first use pins a ~1.3 GiB
         # host pool, ~1 s of page faults.)
-        var ls_entries = Int(s.light_sampler.n) + 1
+        var ls_entries = Int(s.light_sampler.n) + 1 + (Int(s.light_sampler.n) * LIGHT_BOUNDS_STRIDE if s.light_sampler.has_bounds != Int32(0) else 0)
         var ls_host = unsafe_alloc[Float32](max(ls_entries, 2))
         ls_host[unsafe_offset=1] = Float32(0)
         unsafe_memcpy(dest=ls_host, src=s.light_sampler.cdf, count=ls_entries)
@@ -472,7 +473,7 @@ struct LightBuffers(Movable):
         return Self(area_lights_buf=al_buf^, area_light_cdf_bufs=al_cdf_bufs^, n_area_lights=Int(s.area_light_count),
                     distant_lights_buf=dl_buf^, n_distant_lights=Int(s.distant_count),
                     point_lights_buf=pl_buf^, n_point_lights=Int(s.point_count),
-                    light_sampler_buf=ls_buf^, n_light_sampler=Int(s.light_sampler.n),
+                    light_sampler_buf=ls_buf^, n_light_sampler=Int(s.light_sampler.n), light_sampler_bounds=Int(s.light_sampler.has_bounds),
                     light_pick_buf=lp_buf^, n_light_pick=n_pick,
                     infinite_lights_buf=il_buf^, il_pixels_bufs=il_pixels_bufs^, il_cdf_bufs=il_cdf_bufs^,
                     il_w2l_bufs=il_w2l_bufs^, n_infinite_lights=Int(s.infinite_count))
@@ -826,7 +827,7 @@ struct GpuSceneHandle(Movable):
             mediumInterfaces=typed_ptr[MediumInterface](self.media.medium_ifaces_buf), mediumIfaceCount=Int64(self.media.n_medium_ifaces),
             grids=typed_ptr[Grid](self.media.grids_buf), gridCount=Int64(self.media.n_grids),
             nvdbGrids=typed_ptr[NvdbGrid](self.media.nvdb_grids_buf), nvdbGridCount=Int64(self.media.n_nvdb_grids),
-            lightSampler=LightSampler(cdf=self.lights.light_sampler_ptr(), n=Int32(self.lights.n_light_sampler), _pad=Int32(0)),
+            lightSampler=LightSampler(cdf=self.lights.light_sampler_ptr(), n=Int32(self.lights.n_light_sampler), has_bounds=Int32(self.lights.light_sampler_bounds)),
             blasNodesArr=self.blas.nodes_arr(), blasPrimIdsArr=self.blas.primids_arr(), blasCount=Int64(self.blas.n_blas),
             instances=Pointer[Instance, MutUntrackedOrigin](unsafe_from_address=self.instances_ext) if self.instances_ext != 0 else typed_ptr[Instance](self.instances_buf), instanceCount=Int64(self.n_instances),
             measuredBrdfs=typed_ptr[MeasuredBRDF](self.measured.brdfs_buf), measuredBrdfCount=Int64(self.measured.n_brdfs),
@@ -852,11 +853,13 @@ def gpu_available() -> Bool:
     return has_accelerator()
 
 def _bench_counters() -> Pointer[Int, MutUntrackedOrigin]:
-    var b = unsafe_alloc[Int](8)
-    for i in range(8):
+    var b = unsafe_alloc[Int](12)
+    for i in range(12):
         b[unsafe_offset=i] = 0
     if getenv("GONZALES_BENCH") != "":
         b[unsafe_offset=3] = 2 if getenv("GONZALES_BENCH_TRACE") != "" else 1
+    if getenv("GONZALES_TRAVERSE_COUNT") != "":
+        b[unsafe_offset=10] = 1
     return b
 
 def _gpu_free_log(tag: String):
