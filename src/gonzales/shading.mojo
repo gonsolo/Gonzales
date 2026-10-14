@@ -1098,12 +1098,11 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     var dt_fp_width = Float32(0.0)
     if not is_sphere:
         # 146 corpus diffusetransmission materials carry "texture displacement"
-        # (foliage cards in sanmiguel, etc). NOTE this path never interpolates a
-        # vertex shading normal either -- it perturbs the face-forwarded
-        # geometric normal directly, which is a separate pre-existing gap.
+        # (foliage cards in sanmiguel, etc).
         var (tri_dt, fp_dt) = _pt_hit_footprint(path_ptr, mat, ctx.cam_fp, ctx.instances, mesh, v0, v1, v2, inter, ray_org, ray_dir, ctx.textures, ctx.n_textures)
         dt_fp_width = fp_dt.width
-        normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, normal,
+        normal = _shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_n, inter.primId.instanceIdx, ctx.instances)
+        normal = _apply_surface_maps[use_gpu](mat, v0, v1, v2, mesh, inter, normal, geo_n,
             tri_dt, fp_dt, ctx.tex_filenames, ctx.textures, ctx.n_textures)
         normal = face_toward(normal, -ray_dir)   # reflect lobe on wo's side
 
