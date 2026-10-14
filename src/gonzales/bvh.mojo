@@ -1220,14 +1220,144 @@ def test_spheres(
 # object space (direction NOT renormalized, so tHit stays comparable to the
 # caller's world-space ray parameterization).
 
+# ---- Wide nodes: eight children, boxes quantised to the node's own box ----
+# 96 bytes, three BVH2Node slots, read as six 4-word loads: origin (3 floats) and three scale exponents,
+# eight child refs, eight words (lo x y z, hi x), eight byte pairs (hi y z). A ref is 0 (none), a node
+# index, or negative: a leaf, count << 27 | offset.
+comptime _WIDE_WORDS = 24
+comptime _WIDE_STACK = 96
+comptime _WIDE_CAND = 32     # instances collected before they are walked
+
 @always_inline
-def _traverse_blas_triangles(
+def _pow2(eb: Int32) -> Float32:
+    return bitcast[DType.float32, 1](SIMD[DType.int32, 1](eb << Int32(23)))[0]
+
+# A stack entry: the child ref and its entry distance in one word.
+@always_inline
+def _wide_pack(cref: Int32, t: Float32) -> Int64:
+    return bitcast[DType.int64, 1](SIMD[DType.int32, 2](cref, bitcast[DType.int32, 1](SIMD[DType.float32, 1](t))[0]))[0]
+
+@always_inline
+def _wide_unpack(e: Int64) -> Tuple[Int32, Float32]:
+    var v = bitcast[DType.int32, 2](SIMD[DType.int64, 1](e))
+    return (v[0], bitcast[DType.float32, 1](SIMD[DType.int32, 1](v[1]))[0])
+
+# One child: test its box; a hit nearer than the best so far takes its place, the other goes on the stack.
+@always_inline
+def _wide_child[O: Origin[mut=True]](
+    cref: Int32, qw: Int32, qh: Int32, o: SIMD[DType.float32, 4], sx: Float32, sy: Float32, sz: Float32,
+    rdir: Vec3f, org: Vec3f, nearXIsMin: Bool, nearYIsMin: Bool, nearZIsMin: Bool, tMax: Float32,
+    stk: Pointer[Int64, O], state: Tuple[Int, Int32, Float32],
+) -> Tuple[Int, Int32, Float32]:
+    var lo = Point3f(o[0] + Float32(qw & Int32(0xFF)) * sx, o[1] + Float32((qw >> Int32(8)) & Int32(0xFF)) * sy,
+                     o[2] + Float32((qw >> Int32(16)) & Int32(0xFF)) * sz)
+    var hi = Point3f(o[0] + Float32((qw >> Int32(24)) & Int32(0xFF)) * sx, o[1] + Float32(qh & Int32(0xFF)) * sy,
+                     o[2] + Float32((qh >> Int32(8)) & Int32(0xFF)) * sz)
+    var h = intersect_aabb(lo, hi, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax)
+    if cref == Int32(0) or not h[0]:
+        return state
+    var sp = state[0]
+    if state[1] == Int32(0):
+        return (sp, cref, h[1])
+    var nearer = h[1] < state[2]
+    if sp < _WIDE_STACK - 1:
+        stk[unsafe_offset=sp] = _wide_pack(state[1] if nearer else cref, state[2] if nearer else h[1])
+        sp += 1
+    return (sp, cref if nearer else state[1], h[1] if nearer else state[2])
+
+# Pushes the children of `node` the ray enters, the nearest on top. Returns the new stack height.
+@always_inline
+def _wide_push_hits[O: Origin[mut=True]](
+    nw: Pointer[Int32, MutUntrackedOrigin], node: Int,
+    rdir: Vec3f, org: Vec3f, nearXIsMin: Bool, nearYIsMin: Bool, nearZIsMin: Bool, tMax: Float32,
+    stk: Pointer[Int64, O], sp0: Int,
+) -> Int:
+    var b = node * _WIDE_WORDS
+    var w0 = nw.unsafe_load[width=4, alignment=_VEC_ALIGN, invariant=True](b)
+    var r0 = nw.unsafe_load[width=4, alignment=_VEC_ALIGN, invariant=True](b + 4)
+    var r1 = nw.unsafe_load[width=4, alignment=_VEC_ALIGN, invariant=True](b + 8)
+    var q0 = nw.unsafe_load[width=4, alignment=_VEC_ALIGN, invariant=True](b + 12)
+    var q1 = nw.unsafe_load[width=4, alignment=_VEC_ALIGN, invariant=True](b + 16)
+    var qh = nw.unsafe_load[width=4, alignment=_VEC_ALIGN, invariant=True](b + 20)
+    var o = bitcast[DType.float32, 4](w0)
+    var e = w0[3]
+    var sx = _pow2(e & Int32(0xFF)); var sy = _pow2((e >> Int32(8)) & Int32(0xFF)); var sz = _pow2((e >> Int32(16)) & Int32(0xFF))
+    var st = (sp0, Int32(0), Float32(0))
+    st = _wide_child(r0[0], q0[0], qh[0], o, sx, sy, sz, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax, stk, st)
+    st = _wide_child(r0[1], q0[1], qh[0] >> Int32(16), o, sx, sy, sz, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax, stk, st)
+    st = _wide_child(r0[2], q0[2], qh[1], o, sx, sy, sz, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax, stk, st)
+    st = _wide_child(r0[3], q0[3], qh[1] >> Int32(16), o, sx, sy, sz, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax, stk, st)
+    st = _wide_child(r1[0], q1[0], qh[2], o, sx, sy, sz, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax, stk, st)
+    st = _wide_child(r1[1], q1[1], qh[2] >> Int32(16), o, sx, sy, sz, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax, stk, st)
+    st = _wide_child(r1[2], q1[2], qh[3], o, sx, sy, sz, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax, stk, st)
+    st = _wide_child(r1[3], q1[3], qh[3] >> Int32(16), o, sx, sy, sz, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, tMax, stk, st)
+    var sp = st[0]
+    if st[1] != Int32(0):
+        stk[unsafe_offset=sp] = _wide_pack(st[1], st[2])
+        sp += 1
+    return sp
+
+@always_inline
+def _mesh_tri_hit(
+    mesh: TriangleMesh, mesh_idx: Int, base_vidx: Int, ray_org: Vec3f, ray_dir: Vec3f, tMax: Float32,
+) -> Tuple[Bool, Float32, Float32, Float32]:
+    var v0 = Int(mesh_vi(mesh, base_vidx))
+    var v1 = Int(mesh_vi(mesh, base_vidx + 1))
+    var v2 = Int(mesh_vi(mesh, base_vidx + 2))
+    var hit_res = intersect_triangle(ray_org, ray_dir, mesh_pos(mesh, v0), mesh_pos(mesh, v1), mesh_pos(mesh, v2), tMax)
+    if hit_res[0] and not alpha_killed(mesh, v0, v1, v2, hit_res[2], hit_res[3], ray_org, ray_dir, (mesh_idx << 32) | base_vidx):
+        return (True, hit_res[1], hit_res[2], hit_res[3])
+    return (False, tMax, Float32(0), Float32(0))
+
+# A merged template's triangles through wide nodes. Returns (hit, tHit, u, v, triangle).
+@always_inline
+def _traverse_blas_wide(
+    blasNodes: Pointer[BVH2Node, MutUntrackedOrigin], meshes: Pointer[TriangleMesh, MutUntrackedOrigin], mesh_idx: Int, per_leaf: Int,
+    ray_org: Vec3f, ray_dir: Vec3f, tMax: Float32, cnt: Pointer[Int32, MutUntrackedOrigin], first_hit: Bool = False,
+) -> Tuple[Bool, Float32, Float32, Float32, Int]:
+    var rdir = Vec3f(Float32(1.0) / ray_dir[0], Float32(1.0) / ray_dir[1], Float32(1.0) / ray_dir[2])
+    var nx = rdir.x >= Float32(0.0); var ny = rdir.y >= Float32(0.0); var nz = rdir.z >= Float32(0.0)
+    var hasHit = False
+    var localTHit = tMax
+    var bestU: Float32 = 0.0
+    var bestV: Float32 = 0.0
+    var hitTri = 0
+    var stack = Array[Int64, _WIDE_STACK](uninitialized=True)
+    var stk = stack.unsafe_ptr()
+    var nw = blasNodes.unsafe_bitcast[Int32]()
+    var mesh = meshes[unsafe_offset=mesh_idx]
+    var sp = _wide_push_hits(nw, 0, rdir, ray_org, nx, ny, nz, localTHit, stk, 0)
+    while sp > 0:
+        sp -= 1
+        var (cref, t_in) = _wide_unpack(stk[unsafe_offset=sp])
+        if t_in > localTHit:
+            continue
+        if cref < Int32(0):
+            var first_tri = Int(cref & Int32(0x7FFFFFF)) * per_leaf
+            for j in range(Int((cref >> Int32(27)) & Int32(0xF)) * per_leaf):
+                if Int(cnt) > 4: cnt[unsafe_offset=5] += Int32(1)
+                var h = _mesh_tri_hit(mesh, mesh_idx, (first_tri + j) * 3, ray_org, ray_dir, localTHit)
+                if h[0]:
+                    localTHit = h[1]; bestU = h[2]; bestV = h[3]
+                    hitTri = first_tri + j
+                    hasHit = True
+                    if first_hit:
+                        return (True, localTHit, bestU, bestV, hitTri)
+        else:
+            if Int(cnt) > 4: cnt[unsafe_offset=4] += Int32(1)
+            sp = _wide_push_hits(nw, Int(cref), rdir, ray_org, nx, ny, nz, localTHit, stk, sp)
+    return (hasHit, localTHit, bestU, bestV, hitTri)
+
+@always_inline
+def _traverse_blas_triangles[wide_on: Bool = False](
     blasNodes: Pointer[BVH2Node, MutUntrackedOrigin],
     blasPrimIds: Pointer[PrimId, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     ray_org: Vec3f,
     ray_dir: Vec3f,
     tMax: Float32,
+    cnt: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+    first_hit: Bool = False,
 ) -> Tuple[Bool, Float32, Float32, Float32, PrimId]:
     """Returns (hit, tHit, u, v, primId) — primId is the winning BLAS-local
     type==0 entry as-is (mesh_idx/base_vidx/materialIndex already correct
@@ -1261,6 +1391,12 @@ def _traverse_blas_triangles(
     var per_leaf = 1
     if merged and meshes[unsafe_offset=Int(first.id1)].quads != Int32(0):
         per_leaf = 2
+    if wide_on and merged and first._pad0 != Int8(0):
+        var w = _traverse_blas_wide(blasNodes, meshes, Int(first.id1), per_leaf, ray_org, ray_dir, tMax, cnt, first_hit)
+        if w[0]:
+            hitPrim = PrimId(first.id1, Int64(w[4] * 3), Int64(mesh_material(meshes[unsafe_offset=Int(first.id1)], w[4])),
+                             Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+        return (w[0], w[1], w[2], w[3], hitPrim)
 
     while True:
         var node = blasNodes[unsafe_offset=current]
@@ -1277,29 +1413,25 @@ def _traverse_blas_triangles(
                         continue
                     mesh_idx = Int(prim.id1)
                     base_vidx = Int(prim.id2)
-                var mesh = meshes[unsafe_offset=mesh_idx]
-                var v0 = Int(mesh_vi(mesh, base_vidx))
-                var v1 = Int(mesh_vi(mesh, base_vidx + 1))
-                var v2 = Int(mesh_vi(mesh, base_vidx + 2))
-                var p0 = mesh_pos(mesh, v0)
-                var p1 = mesh_pos(mesh, v1)
-                var p2 = mesh_pos(mesh, v2)
-                var hit_res = intersect_triangle(ray_org, ray_dir, p0, p1, p2, localTHit)
-                if hit_res[0] and not alpha_killed(mesh, v0, v1, v2, hit_res[2], hit_res[3],
-                                                   ray_org, ray_dir, (mesh_idx << 32) | base_vidx):
-                    localTHit = hit_res[1]
-                    bestU = hit_res[2]
-                    bestV = hit_res[3]
+                if Int(cnt) > 4: cnt[unsafe_offset=5] += Int32(1)
+                var h = _mesh_tri_hit(meshes[unsafe_offset=mesh_idx], mesh_idx, base_vidx, ray_org, ray_dir, localTHit)
+                if h[0]:
+                    localTHit = h[1]
+                    bestU = h[2]
+                    bestV = h[3]
                     hitPrim = prim
                     hitTri = offset * per_leaf + j
                     hasHit = True
-            if toVisit == 0:
+                    if first_hit:
+                        break
+            if toVisit == 0 or (first_hit and hasHit):
                 break
             toVisit -= 1
             current = Int(stack_ptr[unsafe_offset=toVisit])
         else:
             var leftIdx = current + 1
             var rightIdx = Int(node.offset)
+            if Int(cnt) > 4: cnt[unsafe_offset=4] += Int32(1)
             var leftNode = blasNodes[unsafe_offset=leftIdx]
             var rightNode = blasNodes[unsafe_offset=rightIdx]
             var leftHit = intersect_aabb(
@@ -1339,7 +1471,7 @@ def _traverse_blas_triangles(
 
 
 @always_inline
-def _traverse_instance(
+def _traverse_instance[wide_on: Bool = False](
     inst_idx: Int,
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
@@ -1349,6 +1481,8 @@ def _traverse_instance(
     ray_dir: Vec3f,
     tMax: Float32,
     curves: Pointer[Curve, MutUntrackedOrigin],
+    cnt: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
+    first_hit: Bool = False,
 ) -> Tuple[Bool, Float32, Float32, Float32, PrimId]:
     """One instance: transform the ray into its object space and walk its BLAS, and its curve BVH if the
     template has curves (the template record's id2). Returns (hit, tHit, u, v, primId) with
@@ -1357,12 +1491,13 @@ def _traverse_instance(
     var (o_org, o_dir) = _transform_ray_to_instance_space(inst.world_to_obj(), ray_org, ray_dir)
     var blas_nodes = blasNodesArr[unsafe_offset=Int(inst.blasIdx)]
     var blas_prim_ids = blasPrimIdsArr[unsafe_offset=Int(inst.blasIdx)]
-    var sub = _traverse_blas_triangles(blas_nodes, blas_prim_ids, meshes, o_org, o_dir, tMax)
+    if Int(cnt) > 4: cnt[unsafe_offset=3] += Int32(1)
+    var sub = _traverse_blas_triangles[wide_on](blas_nodes, blas_prim_ids, meshes, o_org, o_dir, tMax, cnt, first_hit)
     var hit = sub[0]
     var t = sub[1]; var u = sub[2]; var v = sub[3]
     var hit_prim = sub[4]
     var rec = blas_prim_ids[unsafe_offset=0]
-    if rec.type == Int8(7) and rec.id2 > Int64(0) and Int(curves) > 4:
+    if rec.type == Int8(7) and rec.id2 > Int64(0) and Int(curves) > 4 and not (first_hit and hit):
         var cs = _traverse_blas_curves(blasNodesArr[unsafe_offset=Int(rec.id2)], blasPrimIdsArr[unsafe_offset=Int(rec.id2)],
                                        curves, o_org, o_dir, t)
         if cs[0]:
@@ -1445,7 +1580,7 @@ def _traverse_blas_curves(
 
 
 @always_inline
-def _traverse_instances(
+def _traverse_instances[wide_on: Bool = False](
     prim: PrimId,
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
@@ -1456,6 +1591,7 @@ def _traverse_instances(
     tMax: Float32,
     first_hit: Bool = False,   # a shadow ray: any hit will do
     curves: Pointer[Curve, MutUntrackedOrigin] = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling(),
+    cnt: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
 ) -> Tuple[Bool, Float32, Float32, Float32, PrimId]:
     """Handle the PrimId.type==8 leaf that stands for the scene's instances: walk the BVH over them
     (blasNodesArr[prim.id1]; the instances are stored in its leaf order, so a leaf is an instance range) and
@@ -1474,6 +1610,42 @@ def _traverse_instances(
     var localTHit = tMax
     var bestU: Float32 = 0.0
     var bestV: Float32 = 0.0
+    if wide_on and prim._pad0 != Int8(0):
+        # The tree walk only collects the instances the ray enters; they are walked afterwards, so a warp's
+        # threads are in the same loop at the same time.
+        var wstack = Array[Int64, _WIDE_STACK](uninitialized=True)
+        var stk = wstack.unsafe_ptr()
+        var clist = Array[Int64, _WIDE_CAND](uninitialized=True)
+        var cand = clist.unsafe_ptr()
+        var n_cand = 0
+        var nw = nodes.unsafe_bitcast[Int32]()
+        var sp = _wide_push_hits(nw, 0, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, localTHit, stk, 0)
+        while sp > 0 or n_cand > 0:
+            while sp > 0 and n_cand <= _WIDE_CAND - 15:
+                sp -= 1
+                var (cref, t_in) = _wide_unpack(stk[unsafe_offset=sp])
+                if t_in > localTHit:
+                    continue
+                if cref < Int32(0):
+                    for j in range(Int((cref >> Int32(27)) & Int32(0xF))):
+                        cand[unsafe_offset=n_cand] = _wide_pack((cref & Int32(0x7FFFFFF)) + Int32(j), t_in)
+                        n_cand += 1
+                else:
+                    if Int(cnt) > 4: cnt[unsafe_offset=2] += Int32(1)
+                    sp = _wide_push_hits(nw, Int(cref), rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, localTHit, stk, sp)
+            for k in range(n_cand):
+                var (inst_idx, t_c) = _wide_unpack(cand[unsafe_offset=k])
+                if t_c > localTHit:
+                    continue
+                var sub = _traverse_instance[wide_on](Int(inst_idx), meshes, blasNodesArr, blasPrimIdsArr, instances,
+                                             ray_org, ray_dir, localTHit, curves, cnt, first_hit)
+                if sub[0]:
+                    hasHit = True
+                    localTHit = sub[1]; bestU = sub[2]; bestV = sub[3]; hitPrim = sub[4]
+                    if first_hit:
+                        return (True, localTHit, bestU, bestV, hitPrim)
+            n_cand = 0
+        return (hasHit, localTHit, bestU, bestV, hitPrim)
     var stack = Array[Int32, 64](uninitialized=True)
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
@@ -1482,8 +1654,8 @@ def _traverse_instances(
         var node = nodes[unsafe_offset=current]
         if node.count > 0:
             for j in range(Int(node.count)):
-                var sub = _traverse_instance(Int(node.offset) + j, meshes, blasNodesArr, blasPrimIdsArr, instances,
-                                             ray_org, ray_dir, localTHit, curves)
+                var sub = _traverse_instance[wide_on](Int(node.offset) + j, meshes, blasNodesArr, blasPrimIdsArr, instances,
+                                             ray_org, ray_dir, localTHit, curves, cnt, first_hit)
                 if sub[0]:
                     hasHit = True
                     localTHit = sub[1]; bestU = sub[2]; bestV = sub[3]; hitPrim = sub[4]
@@ -1496,6 +1668,7 @@ def _traverse_instances(
         else:
             var leftIdx = current + 1
             var rightIdx = Int(node.offset)
+            if Int(cnt) > 4: cnt[unsafe_offset=2] += Int32(1)
             var leftNode = nodes[unsafe_offset=leftIdx]
             var rightNode = nodes[unsafe_offset=rightIdx]
             var leftHit = intersect_aabb(leftNode.min, leftNode.max, rdir, org, nearXIsMin, nearYIsMin, nearZIsMin, localTHit)
@@ -1741,7 +1914,7 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
 # immediate intersect_curve call, so correctness never depends on K being large
 # enough — it only affects how many rays get the compaction benefit.
 @always_inline
-def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True, alpha_on: Bool = True](
+def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True, alpha_on: Bool = True, count_on: Bool = False](
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     primIds: Pointer[PrimId, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
@@ -1781,6 +1954,12 @@ def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True
     var ray_dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
 
     var has_nodes = _bvh_has_nodes(cur_oc)
+    var inst_leaf = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
+    # Counting: the result slot itself holds the counters (twelve Int32), so nothing lives on the kernel stack.
+    var cnt = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
+    comptime if count_on:
+        cnt = resultPtr.unsafe_bitcast[Int32]()
+        for k in range(12): cnt[unsafe_offset=k] = Int32(0)
     while has_nodes:
         if cur_oc[1] > 0:
             # Leaf node — intersect primitives
@@ -1800,6 +1979,7 @@ def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True
                     mesh_idx = Int(prim.id2 >> 32)
                     base_vidx = Int(prim.id2 & 0xFFFFFFFF) * 3
                 elif curves_on and prim.type == 5:
+                    comptime if count_on: cnt[unsafe_offset=6] += Int32(1)
                     var slot = curve_cand_count[unsafe_offset=0]
                     if slot < Int32(CURVE_DEFER_K):
                         curve_cand_prim[unsafe_offset=Int(slot)] = Int32(offset + j)
@@ -1815,17 +1995,12 @@ def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True
                             instHit = False
                     continue
                 elif inst_on and prim.type == 8:
-                    var sub = _traverse_instances(prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves)
-                    if sub[0]:
-                        localTHit = sub[1]
-                        bestU = sub[2]
-                        bestV = sub[3]
-                        instHitPrim = sub[4]
-                        instHit = True
+                    inst_leaf = prim      # walked after this loop, so a warp's threads walk the instances together
                     continue
                 else:
                     continue
 
+                comptime if count_on: cnt[unsafe_offset=1] += Int32(1)
                 var mesh = meshes[unsafe_offset=mesh_idx]
                 var v0_idx = Int(mesh_vi(mesh, base_vidx))
                 var v1_idx = Int(mesh_vi(mesh, base_vidx + 1))
@@ -1852,6 +2027,7 @@ def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True
             cur_oc = _node_oc(_node_hi(nodes_f, current))
         else:
             # Interior node — test both children, visit nearer first
+            comptime if count_on: cnt[unsafe_offset=0] += Int32(1)
             var leftIdx = current + 1
             var rightIdx = Int(cur_oc[0])
 
@@ -1900,6 +2076,18 @@ def traverse_bvh2_core_defer_curves[curves_on: Bool = True, inst_on: Bool = True
                 current = Int(stack_ptr[unsafe_offset=toVisit])
                 cur_oc = _node_oc(_node_hi(nodes_f, current))
 
+    comptime if inst_on:
+        if inst_leaf.type == Int8(8):
+            var sub = _traverse_instances[True](inst_leaf, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves, cnt)
+            if sub[0]:
+                localTHit = sub[1]
+                bestU = sub[2]
+                bestV = sub[3]
+                instHitPrim = sub[4]
+                instHit = True
+    comptime if count_on:
+        cnt[unsafe_offset=11] = Int32(2)   # top nodes, top triangles, instance nodes, instances, bottom nodes, bottom triangles, curves
+        return
     if instHit:
         resultPtr[unsafe_offset=0] = Intersection(instHitPrim, localTHit, bestU, bestV, Int8(1), 0, 0, 0)
     elif hitIndex != -1:
@@ -1933,7 +2121,7 @@ def _shadow_is_null_material(
         return False
     return materials[unsafe_offset=Int(mat_idx)].type == MatKind.interface
 
-def any_hit_bvh2_core(
+def any_hit_bvh2_core[wide_on: Bool = False](
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     primIds: Pointer[PrimId, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
@@ -1987,6 +2175,7 @@ def any_hit_bvh2_core(
     var nearYIsMin = rdir.y >= Float32(0.0)
     var nearZIsMin = rdir.z >= Float32(0.0)
     # Only slots below toVisit are ever read, so nothing needs zeroing.
+    var inst_leaf = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var stack = Array[Int32, 64](uninitialized=True)
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
@@ -2024,8 +2213,7 @@ def any_hit_bvh2_core(
                 elif prim.type == 8:
                     if _shadow_is_null_material(materials, prim.materialIndex):
                         continue
-                    if _traverse_instances(prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, tMax, True, curves)[0]:
-                        return True
+                    inst_leaf = prim      # walked after this loop, so a warp's threads walk the instances together
                     continue
                 else:
                     continue
@@ -2084,6 +2272,8 @@ def any_hit_bvh2_core(
                 toVisit -= 1
                 current = Int(stack_ptr[unsafe_offset=toVisit])
                 cur_oc = _node_oc(_node_hi(nodes_f, current))
+    if inst_leaf.type == Int8(8):
+        return _traverse_instances[wide_on](inst_leaf, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, tMax, True, curves)[0]
     return False
 
 
@@ -3249,3 +3439,94 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
 
     parallelize(trace_pixel, n_pixels)
     isects.unsafe_free()
+
+
+# Collapses a BVH2 into wide nodes (see _wide_push_hits). Returns them as BVH2Node slots, three a node, and
+# the slot count; (dangling, 0) if a leaf does not fit a child ref.
+def collapse_bvh_wide(n2: Pointer[BVH2Node, MutUntrackedOrigin], n2_count: Int) -> Tuple[Pointer[BVH2Node, MutUntrackedOrigin], Int32]:
+    var cap = n2_count // 2 + 2
+    var out = unsafe_alloc[Int32](cap * _WIDE_WORDS)
+    var outf = out.unsafe_bitcast[Float32]()
+    var outb = out.unsafe_bitcast[UInt8]()
+    var todo_w = unsafe_alloc[Int32](cap)
+    var todo_s = unsafe_alloc[Int32](cap)
+    var kids = unsafe_alloc[Int32](8)
+    todo_w[unsafe_offset=0] = Int32(0); todo_s[unsafe_offset=0] = Int32(0)
+    var top = 1
+    var n_w = 1
+    var ok = True
+    while top > 0 and ok:
+        top -= 1
+        var w = Int(todo_w[unsafe_offset=top])
+        var r = Int(todo_s[unsafe_offset=top])
+        var nk = 1
+        kids[unsafe_offset=0] = Int32(r)
+        if n2[unsafe_offset=r].count == Int32(0):
+            kids[unsafe_offset=0] = Int32(r + 1); kids[unsafe_offset=1] = n2[unsafe_offset=r].offset
+            nk = 2
+            while nk < 8:
+                var best = -1
+                var best_a = Float32(-1.0)
+                for i in range(nk):
+                    var nd = n2[unsafe_offset=Int(kids[unsafe_offset=i])]
+                    if nd.count == Int32(0) and _bvh2_area(nd) > best_a:
+                        best = i; best_a = _bvh2_area(nd)
+                if best < 0:
+                    break
+                var bi = Int(kids[unsafe_offset=best])
+                kids[unsafe_offset=best] = Int32(bi + 1)
+                kids[unsafe_offset=nk] = n2[unsafe_offset=bi].offset
+                nk += 1
+        var lo = SIMD[DType.float32, 4](3.0e38)
+        var hi = SIMD[DType.float32, 4](-3.0e38)
+        for i in range(nk):
+            var nd = n2[unsafe_offset=Int(kids[unsafe_offset=i])]
+            lo = min(lo, SIMD[DType.float32, 4](nd.min.x, nd.min.y, nd.min.z, 0.0))
+            hi = max(hi, SIMD[DType.float32, 4](nd.max.x, nd.max.y, nd.max.z, 0.0))
+        var base = w * _WIDE_WORDS
+        var ebs = Int32(0)
+        var sc = SIMD[DType.float32, 4](0.0)
+        for a in range(3):
+            outf[unsafe_offset=base + a] = lo[a]
+            var eb = Int32(87)
+            while Float32(250.0) * _pow2(eb) < hi[a] - lo[a] and eb < Int32(254):
+                eb += Int32(1)
+            ebs = ebs | (eb << Int32(8 * a))
+            sc[a] = _pow2(eb)
+        out[unsafe_offset=base + 3] = ebs
+        for c in range(8):
+            out[unsafe_offset=base + 4 + c] = Int32(0)
+            for a in range(6): outb[unsafe_offset=base * 4 + 48 + c * 6 + a] = UInt8(0)   # all 48 box bytes over the eight passes
+        for c in range(nk):
+            var k = Int(kids[unsafe_offset=c])
+            var nd = n2[unsafe_offset=k]
+            var cl = SIMD[DType.float32, 4](nd.min.x, nd.min.y, nd.min.z, 0.0)
+            var ch = SIMD[DType.float32, 4](nd.max.x, nd.max.y, nd.max.z, 0.0)
+            for a in range(3):
+                # One step of slack beyond rounding: the kernel may fuse the multiply-add.
+                var ql = Int(floor((cl[a] - lo[a]) / sc[a])) - 1
+                while ql > 0 and lo[a] + Float32(ql) * sc[a] > cl[a]:
+                    ql -= 1
+                var qh = Int(floor((ch[a] - lo[a]) / sc[a])) + 2
+                while qh < 255 and lo[a] + Float32(qh) * sc[a] < ch[a]:
+                    qh += 1
+                outb[unsafe_offset=base * 4 + 48 + c * 4 + a] = UInt8(max(ql, 0))
+                outb[unsafe_offset=base * 4 + (48 + c * 4 + 3 if a == 0 else 80 + c * 2 + a - 1)] = UInt8(min(qh, 255))
+            if nd.count > Int32(0):
+                if nd.count > Int32(15) or nd.offset >= Int32(1 << 27):
+                    ok = False
+                out[unsafe_offset=base + 4 + c] = Int32(-2147483648) | (nd.count << Int32(27)) | nd.offset
+            else:
+                out[unsafe_offset=base + 4 + c] = Int32(n_w)
+                todo_w[unsafe_offset=top] = Int32(n_w); todo_s[unsafe_offset=top] = Int32(k)
+                top += 1
+                n_w += 1
+    todo_w.unsafe_free(); todo_s.unsafe_free(); kids.unsafe_free()
+    if not ok:
+        out.unsafe_free()
+        return (Pointer[BVH2Node, MutUntrackedOrigin].unsafe_dangling(), Int32(0))
+    var res = unsafe_alloc[BVH2Node](n_w * 3)
+    var resw = res.unsafe_bitcast[Int32]()
+    for i in range(n_w * _WIDE_WORDS): resw[unsafe_offset=i] = out[unsafe_offset=i]
+    out.unsafe_free()
+    return (res, Int32(n_w * 3))

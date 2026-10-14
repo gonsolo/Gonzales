@@ -3029,11 +3029,16 @@ def render_interactive(
                     use_vol_restir_reuse=use_vol_restir_reuse,
                 )
             frame_count += 1
+            try:
+                gpu_mnee_adapt(handle)
+            except:
+                pass
             t_render += Int(perf_counter_ns() - t_r)
             bench_render += Int(perf_counter_ns() - t_r)
             if frame_count == bench_warm:
                 bench_render = 0
                 for bi in range(3): handle[].bench[unsafe_offset=bi] = 0
+                for bi in range(4, 7): handle[].bench[unsafe_offset=bi] = 0
             var t_a = perf_counter_ns()
             gpu_atrous_denoise(handle, denoised.unsafe_ptr(), Int64(n_pixels),
                                     Int32(1 if move_step != Float32(0) else frame_count),
@@ -3205,6 +3210,9 @@ def render_interactive(
         print("bench: frames", bf, "render ms/frame", Float64(bench_render) / 1.0e6 / Float64(bf),
               "rays/pixel", Float64(br) / Float64(bf) / Float64(n_pixels), "closest", handle[].bench[0] // bf, "shadow", handle[].bench[1] // bf,
               "Mray/s", Float64(br) * 1.0e3 / Float64(bench_render), "trace ms/frame", Float64(handle[].bench[2]) / 1.0e6 / Float64(bf))
+        if handle[].bench[4] > 0:
+            print("bench software ms/frame: closest", Float64(handle[].bench[4]) / 1.0e6 / Float64(bf),
+                  "shade", Float64(handle[].bench[5]) / 1.0e6 / Float64(bf), "shadow", Float64(handle[].bench[6]) / 1.0e6 / Float64(bf))
     if headless:
         _ = write_image_cropped(denoised.unsafe_ptr(), fw, fh, Int32(0), Int32(0), fw, fh,
                                  psc[unsafe_offset=0].film_filename, Int32(32), Int32(32))

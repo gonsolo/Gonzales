@@ -55,4 +55,5 @@ def mojo_parse_scene_any(path: Pointer[UInt8, MutUntrackedOrigin],
     var psc = mojo_parse_scene(path, verbose, plys)
     _ = scene_cache_save(psc, cpath, path)
     cpath.unsafe_free()
+    _camera_override(psc)
     return psc

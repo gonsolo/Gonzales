@@ -15,12 +15,13 @@ from std.memory.alloc import unsafe_alloc
 from std.sys import has_accelerator, size_of
 from std.os import getenv
 from std.ffi import external_call
+from std.time import perf_counter_ns
 from .shading import ShadeContext
 from .gpu_media import sample_medium_gpu, update_medium_gpu
 from .gpu_scene import GpuSceneHandle
 from .gpu_shade import shared_shade_context, resolve_suppress_gpu, shade_coated_conductor_gpu, shade_coated_diffuse_gpu, shade_conductor_gpu, shade_dielectric_gpu, shade_diffuse_gpu, shade_diffuse_transmit_gpu, shade_hair_gpu, shade_interface_gpu, shade_measured_gpu, shade_mix_gpu, shade_nee_preamble_gpu, shade_thin_dielectric_gpu
 from .guide import guide_is_active
-from .gpu_wavefront import sw_pack_shadow_paths_gpu, sw_resolve_shadow_gpu, compact_active_paths_gpu, compact_by_kind_gpu, accumulate_cone_gpu, accumulate_film_gpu, accumulate_film_wavefront_gpu, clear_film_gpu, clear_scalar_film_gpu, compact_curve_paths_gpu, deactivate_paths_past_maxdepth_gpu, gen_primary_rays_gpu, gen_primary_rays_wavefront_gpu, reset_curve_counter_gpu, reset_restir_reservoirs_gpu, reset_restir_vol_reservoirs_gpu, reset_shadow_tasks_gpu, reset_vol_used_gpu, resolve_curve_candidates_gpu, traverse_paths_gpu, traverse_shadow_rays_gpu, rtcore_closest_hit_gpu, rtcore_shadow_rays_compact_gpu, vulkaninterop_rt_traverse_paths_gpu
+from .gpu_wavefront import sw_pack_shadow_paths_gpu, sw_resolve_shadow_gpu, compact_active_paths_gpu, compact_by_kind_gpu, accumulate_cone_gpu, accumulate_film_gpu, accumulate_film_wavefront_gpu, clear_film_gpu, clear_scalar_film_gpu, compact_curve_paths_gpu, deactivate_paths_past_maxdepth_gpu, gen_primary_rays_gpu, gen_primary_rays_wavefront_gpu, reset_curve_counter_gpu, reset_restir_reservoirs_gpu, reset_restir_vol_reservoirs_gpu, reset_shadow_tasks_gpu, read_counter, reset_vol_used_gpu, resolve_curve_candidates_gpu, traverse_paths_gpu, traverse_shadow_rays_gpu, rtcore_closest_hit_gpu, rtcore_shadow_rays_compact_gpu, vulkaninterop_rt_traverse_paths_gpu
 
 
 def _enqueue_traverse[rare_on: Bool, alpha_on: Bool](
@@ -48,6 +49,72 @@ def _stop_if_out_of_memory(msg: String):
     if "OUT_OF_MEMORY" in msg:
         print("GPU: out of memory, the scene does not fit on this card at this resolution")
         _ = external_call["exit", NoneType, Int32](Int32(1))
+
+# Trace-timing bench mode: wait for the queue, charge the time since the last mark to a stage slot.
+def _bench_stage(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], slot: Int, count_index: Int = -1, count_slot: Int = 0) raises:
+    if handle[].bench[3] != 2:
+        return
+    if count_index >= 0:
+        handle[].bench[unsafe_offset=count_slot] += read_counter(handle[].ctx, handle[].active_count_buf, count_index)
+    handle[].ctx.synchronize()
+    var now = Int(perf_counter_ns())
+    handle[].bench[unsafe_offset=slot] += now - handle[].bench[8]
+    handle[].bench[unsafe_offset=8] = now
+
+# GONZALES_TRAVERSE_COUNT: re-trace the round's rays with step counters, print the means per ray, stop after six rounds.
+def _count_steps(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], sd: SceneView, n: Int, max_depth: Int32, alpha: Bool,
+                 live_idx: Pointer[Int32, MutUntrackedOrigin], live_count: Pointer[Int32, MutUntrackedOrigin],
+                 grid_dim: Int, block_size: Int) raises:
+    var scratch = handle[].ctx.enqueue_create_buffer[DType.uint8](n * size_of[Intersection]())
+    handle[].ctx.enqueue_memset(scratch, UInt8(0))
+    var res = scratch.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    var paths = handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
+    handle[].ctx.synchronize()
+    var t0 = perf_counter_ns()
+    if alpha:
+        handle[].ctx.enqueue_function[traverse_paths_gpu[True, True, False]](sd, paths, res, handle[].curves.cand_prim_ptr(),
+            handle[].curves.cand_count_ptr(), Int64(n), max_depth, Int32(0), live_idx, live_count, grid_dim=grid_dim, block_dim=block_size)
+    else:
+        handle[].ctx.enqueue_function[traverse_paths_gpu[True, False, False]](sd, paths, res, handle[].curves.cand_prim_ptr(),
+            handle[].curves.cand_count_ptr(), Int64(n), max_depth, Int32(0), live_idx, live_count, grid_dim=grid_dim, block_dim=block_size)
+    handle[].ctx.synchronize()
+    var trace_ms = Float64(Int(perf_counter_ns() - t0)) / 1.0e6
+    if alpha:
+        handle[].ctx.enqueue_function[traverse_paths_gpu[True, True, True]](sd, paths, res, handle[].curves.cand_prim_ptr(),
+            handle[].curves.cand_count_ptr(), Int64(n), max_depth, Int32(0), live_idx, live_count, grid_dim=grid_dim, block_dim=block_size)
+    else:
+        handle[].ctx.enqueue_function[traverse_paths_gpu[True, False, True]](sd, paths, res, handle[].curves.cand_prim_ptr(),
+            handle[].curves.cand_count_ptr(), Int64(n), max_depth, Int32(0), live_idx, live_count, grid_dim=grid_dim, block_dim=block_size)
+    var host = unsafe_alloc[UInt8](len(scratch))
+    handle[].ctx.enqueue_copy(host, scratch)
+    handle[].ctx.synchronize()
+    var w = host.bitcast[Int32]()
+    var sums = unsafe_alloc[Int](7)
+    var maxs = unsafe_alloc[Int](7)
+    for k in range(7):
+        sums[unsafe_offset=k] = 0; maxs[unsafe_offset=k] = 0
+    var rays = 0
+    for i in range(n):
+        if w[i * 12 + 11] != Int32(2):
+            continue
+        rays += 1
+        for k in range(7):
+            var v = Int(w[i * 12 + k])
+            sums[unsafe_offset=k] += v
+            maxs[unsafe_offset=k] = max(maxs[unsafe_offset=k], v)
+    host.free()
+    var r = Float64(max(rays, 1))
+    print("steps round", handle[].bench[11], "trace ms", trace_ms, "ns/ray", trace_ms * 1.0e6 / r)
+    print("steps round", handle[].bench[11], "rays", rays,
+          "top nodes", Float64(sums[0]) / r, "top tris", Float64(sums[1]) / r,
+          "inst nodes", Float64(sums[2]) / r, "inst entered", Float64(sums[3]) / r,
+          "blas nodes", Float64(sums[4]) / r, "blas tris", Float64(sums[5]) / r, "curve prims", Float64(sums[6]) / r)
+    print("steps max: top nodes", maxs[0], "top tris", maxs[1], "inst nodes", maxs[2], "inst entered", maxs[3],
+          "blas nodes", maxs[4], "blas tris", maxs[5], "curve prims", maxs[6])
+    sums.free(); maxs.free()
+    handle[].bench[unsafe_offset=11] += 1
+    if handle[].bench[11] >= 6:
+        _ = external_call["exit", NoneType, Int32](Int32(0))
 
 def _gpu_bounce_kernels(
     handle: Pointer[GpuSceneHandle, MutUntrackedOrigin],
@@ -156,6 +223,9 @@ def _gpu_bounce_kernels(
             _enqueue_traverse[False, True](handle, sd, n, max_depth, fuse_cone, live_idx, live_count, grid_dim, block_size)
         else:
             _enqueue_traverse[False, False](handle, sd, n, max_depth, fuse_cone, live_idx, live_count, grid_dim, block_size)
+        _bench_stage(handle, 4, 0, 0)
+        if handle[].bench[10] != 0 and rare:
+            _count_steps(handle, sd, n, max_depth, alpha, live_idx, live_count, grid_dim, block_size)
     # Both traversal branches converge here: grow the texture-footprint cone
     # by the segment just traced, before any material shading reads it.
     if not fuse_cone and not rt_compact:
@@ -552,6 +622,7 @@ def _gpu_bounce_kernels(
             grid_dim=grid_dim,
             block_dim=block_size,
         )
+    _bench_stage(handle, 5)
     if sw_shadow:
         var sw_ids = kind_idx            # the per-kind lists are dead once the material kernels have run
         var sw_count = live_count.unsafe_offset(15)     # zeroed with the other counters at the start of the round
@@ -569,6 +640,7 @@ def _gpu_bounce_kernels(
             handle[].ctx.enqueue_function[sw_resolve_shadow_gpu[False, True]](sd, path_ptr_c, shadow_ptr, sw_ids, sw_count, grid_dim=grid_dim, block_dim=block_size)
         else:
             handle[].ctx.enqueue_function[sw_resolve_shadow_gpu[False, False]](sd, path_ptr_c, shadow_ptr, sw_ids, sw_count, grid_dim=grid_dim, block_dim=block_size)
+        _bench_stage(handle, 6, 15, 1)
     # Phase 0.4: resolve whatever shadow rays this bounce's per-material
     # kernels deferred above. Currently a verified no-op in production --
     # every per-material kernel above still enqueues with enqueue_shadow=
@@ -703,6 +775,7 @@ def gpu_render_sample[Oc: Origin[mut=True]](
                 gpu_max_rounds += _MEDIUM_INTERFACE_MARGIN
             if handle[].media.has_sss_medium:
                 gpu_max_rounds += _SSS_WALK_ROUNDS
+            _bench_stage(handle, 9)
             for _ in range(gpu_max_rounds):
                 _ = _gpu_bounce_kernels(handle, n_int, grid_dim, maxDepth,
                                     use_restir=use_restir,
@@ -728,6 +801,8 @@ def gpu_render_sample[Oc: Origin[mut=True]](
         grid_dim=grid_dim,
                 block_dim=block_size,
             )
+            if handle[].bench[3] != 0:
+                handle[].ctx.synchronize()
         except e:
             print("GPU render sample failed: " + String(e))
             _stop_if_out_of_memory(String(e))

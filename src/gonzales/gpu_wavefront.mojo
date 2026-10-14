@@ -18,7 +18,7 @@ from .spectrum import SpectralSample, spectral_sample_to_rgb
 from .transform import transform_normal, Mat4
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
 from .rtcore import rtcore_active, rtcore_alpha_enabled, rtcore_trace, rtcore_trace_interop
-from max.gpu import barrier, block_dim, block_idx, lane_id, thread_idx
+from max.gpu import WARP_SIZE, barrier, block_dim, block_idx, lane_id, thread_idx
 from max.gpu.memory import AddressSpace
 from std.memory import stack_allocation
 from max.gpu.primitives.warp import shuffle_idx, vote
@@ -107,7 +107,7 @@ def traverse_shadow_rays_gpu(
     if task.active == 0:
         return
     var shadow_ray = Ray(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
-    if not any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, n_spheres, materials=sd.materials):
+    if not any_hit_bvh2_core[True](sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, shadow_ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, n_spheres, materials=sd.materials):
         paths[unsafe_offset=tid].estimate += task.contrib
 
 
@@ -330,7 +330,7 @@ def compact_by_kind_gpu(
 # Traversal kernel that reads rays directly from PathState (no separate ray buffer).
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_TRAVERSE))
-def traverse_paths_gpu[rare_on: Bool, alpha_on: Bool](
+def traverse_paths_gpu[rare_on: Bool, alpha_on: Bool, count_on: Bool = False](
     sd: SceneView,
     paths: Pointer[PathState, MutUntrackedOrigin],
     results: Pointer[Intersection, MutUntrackedOrigin],
@@ -353,11 +353,13 @@ def traverse_paths_gpu[rare_on: Bool, alpha_on: Bool](
     if paths[unsafe_offset=tid].bounce >= max_depth:
         paths[unsafe_offset=tid].at_cap = Int8(1)
     curve_cand_count[unsafe_offset=tid] = Int32(0)
-    traverse_bvh2_core_defer_curves[rare_on, rare_on, alpha_on](
+    traverse_bvh2_core_defer_curves[rare_on, rare_on, alpha_on, count_on](
         sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, paths[unsafe_offset=tid].ray, Float32(1.0e38), results.unsafe_offset(tid),
         curve_cand_prim.unsafe_offset(tid * CURVE_DEFER_K), curve_cand_count.unsafe_offset(tid),
         sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances,
     )
+    comptime if count_on:
+        return
     test_spheres(sd.spheres, n_spheres, paths[unsafe_offset=tid].ray, results.unsafe_offset(tid))
     # accumulate_cone_gpu, folded in when no curve pass follows (that pass
     # rewrites tHit, so the cone must wait for it).
@@ -642,15 +644,16 @@ def _alpha_rejects(
 def warp_append(counter: Pointer[Int32, MutUntrackedOrigin], live: Bool) -> Int:
     var warp_counts = stack_allocation[8, Scalar[DType.int32], address_space=AddressSpace.SHARED]()
     var block_base = stack_allocation[1, Scalar[DType.int32], address_space=AddressSpace.SHARED]()
-    var mask = vote[DType.uint32](live)
+    comptime MaskT = DType.uint32 if WARP_SIZE == 32 else DType.uint64
+    var mask = vote[MaskT](live)
     var lane = lane_id()
-    var warp = Int(thread_idx.x) // 32
+    var warp = Int(thread_idx.x) // WARP_SIZE
     if lane == 0:
         warp_counts[warp] = Int32(pop_count(mask))
     barrier()
     if thread_idx.x == 0:
         var total = Int32(0)
-        for w in range(8):
+        for w in range(256 // WARP_SIZE):
             var c = warp_counts[w]
             warp_counts[w] = total
             total += c
@@ -658,7 +661,7 @@ def warp_append(counter: Pointer[Int32, MutUntrackedOrigin], live: Bool) -> Int:
     barrier()
     if not live:
         return -1
-    return Int(block_base[0]) + Int(warp_counts[warp]) + Int(pop_count(mask & ((UInt32(1) << UInt32(lane)) - UInt32(1))))
+    return Int(block_base[0]) + Int(warp_counts[warp]) + Int(pop_count(mask & ((Scalar[MaskT](1) << Scalar[MaskT](lane)) - Scalar[MaskT](1))))
 
 def rt_no_ids() -> Pointer[Int32, MutUntrackedOrigin]:
     return Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
@@ -1198,7 +1201,7 @@ def any_hit_bvh2_gpu[curves_on: Bool, inst_on: Bool, alpha_on: Bool](
                 elif inst_on and prim.type == 8:
                     if _shadow_is_null_material(sd.materials, prim.materialIndex):
                         continue
-                    if _traverse_instances(prim, sd.meshes, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, ray_org, ray_dir, tMax, True, sd.curves)[0]:
+                    if _traverse_instances[True](prim, sd.meshes, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, ray_org, ray_dir, tMax, True, sd.curves)[0]:
                         return True
                     continue
                 else:
@@ -1338,7 +1341,7 @@ def resolve_shadow_compact_kernel(
     var flag = raw[unsafe_offset=i * 8 + 6]
     if converted_dp != Int64(0) and flag == UInt32(3):
         # Too many rejected alpha hits for the RT-core passes: the software BVH decides (it also covers the spheres).
-        if any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(n_spheres_dp), materials=sd.materials):
+        if any_hit_bvh2_core[True](sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(n_spheres_dp), materials=sd.materials):
             return
         paths[unsafe_offset=tid].estimate += task.contrib
         return
@@ -1349,7 +1352,7 @@ def resolve_shadow_compact_kernel(
     for k in range(Int(n_spheres_dp)):
         if ray_sphere_hit(sd.spheres[unsafe_offset=k].center, sd.spheres[unsafe_offset=k].radius, ray, Float32(1e-4), task.tmax) > Float32(0.0):
             return
-    if Int(sd.curveCount) > 0 and any_hit_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, 0, materials=sd.materials):
+    if Int(sd.curveCount) > 0 and any_hit_bvh2_core[True](sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, task.tmax, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, 0, materials=sd.materials):
         return                                                     # curves are not in the acceleration structure either
     paths[unsafe_offset=tid].estimate += task.contrib
 
