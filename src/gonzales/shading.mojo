@@ -986,8 +986,9 @@ def _to_spec_illum(ctx: ShadeContext, c: RGB, wl: SampledWavelengths) -> Spectra
 @always_inline
 def _to_spec_diffuse_lit(ctx: ShadeContext, alb: RGB, le: RGB, wl: SampledWavelengths) -> SpectralSample:
     """Diffuse albedo spectrum times emission spectrum. The two are upsampled separately: their RGB product is not
-    a valid input to either converter (it matches only for grey albedo)."""
-    return _to_spec_refl(ctx, bxdf_eval_diffuse(alb), wl) * _to_spec_illum(ctx, le, wl)
+    a valid input to either converter (it matches only for grey albedo). The 1/pi stays outside: a table fit
+    of albedo/pi is a different, more saturated curve than the fit of albedo."""
+    return _to_spec_refl(ctx, alb, wl) * _to_spec_illum(ctx, le, wl) * INV_PI
 
 @always_inline
 def _shadow_inline(ctx: ShadeContext, guide_write: GuideGrid) -> Bool:
