@@ -122,7 +122,7 @@ def test_emissive_curve_bounce_hit_mis_weights_against_its_own_light_pdf() raise
     var curve = Curve(
         Point3f(0.0, 0.0, 0.0), Point3f(1.0, 2.0, 0.0),
         Point3f(2.0, -1.0, 0.0), Point3f(3.0, 0.0, 0.0),
-        Float32(0.2), Float32(0.2), Int32(0), Int32(1),
+        Float32(0.2), Float32(0.2), Int32(0), Int32(1), Int32(0),
     )
     var curves = unsafe_alloc[Curve](1)
     curves[unsafe_offset=0] = curve

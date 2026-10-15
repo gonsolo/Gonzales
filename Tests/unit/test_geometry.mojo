@@ -326,7 +326,7 @@ def test_curve_light_tube_area_single_piece_constant_radius() raises:
     var curve = Curve(
         Point3f(0.0, 0.0, 0.0), Point3f(1.0, 2.0, 0.0),
         Point3f(2.0, -1.0, 0.0), Point3f(3.0, 0.0, 0.0),
-        Float32(0.4), Float32(0.4), Int32(0), Int32(1),
+        Float32(0.4), Float32(0.4), Int32(0), Int32(1), Int32(0),
     )
     var q0 = curve_bspline_point(curve, Float32(0.0))
     var q1 = curve_bspline_point(curve, Float32(1.0))
@@ -342,12 +342,12 @@ def test_curve_light_tube_area_scales_with_radius() raises:
     var curve_thin = Curve(
         Point3f(0.0, 0.0, 0.0), Point3f(1.0, 0.0, 0.0),
         Point3f(2.0, 0.0, 0.0), Point3f(3.0, 0.0, 0.0),
-        Float32(0.1), Float32(0.1), Int32(0), Int32(1),
+        Float32(0.1), Float32(0.1), Int32(0), Int32(1), Int32(0),
     )
     var curve_thick = Curve(
         Point3f(0.0, 0.0, 0.0), Point3f(1.0, 0.0, 0.0),
         Point3f(2.0, 0.0, 0.0), Point3f(3.0, 0.0, 0.0),
-        Float32(0.2), Float32(0.2), Int32(0), Int32(1),
+        Float32(0.2), Float32(0.2), Int32(0), Int32(1), Int32(0),
     )
     assert_true(_close(curve_light_tube_area(curve_thick), Float32(2.0) * curve_light_tube_area(curve_thin)))
 
@@ -357,12 +357,12 @@ def test_curve_light_tube_area_sums_across_pieces() raises:
     var curve1 = Curve(
         Point3f(0.0, 0.0, 0.0), Point3f(1.0, 3.0, 0.0),
         Point3f(2.0, -2.0, 1.0), Point3f(3.0, 1.0, -1.0),
-        Float32(0.3), Float32(0.1), Int32(0), Int32(1),
+        Float32(0.3), Float32(0.1), Int32(0), Int32(1), Int32(0),
     )
     var curve4 = Curve(
         Point3f(0.0, 0.0, 0.0), Point3f(1.0, 3.0, 0.0),
         Point3f(2.0, -2.0, 1.0), Point3f(3.0, 1.0, -1.0),
-        Float32(0.3), Float32(0.1), Int32(0), Int32(4),
+        Float32(0.3), Float32(0.1), Int32(0), Int32(4), Int32(0),
     )
     # A single piece's area (n_pieces=1) is one cylinder end-to-end; the
     # n_pieces=4 curve chops the SAME B-spline into 4 pieces, each with its
