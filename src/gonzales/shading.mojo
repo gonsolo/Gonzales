@@ -1146,7 +1146,10 @@ def shade_diffuse_transmission[use_gpu: Bool, enqueue_shadow: Bool](
     # Offset along the GEOMETRIC normal, to the chosen lobe's side (pbrt's
     # OffsetRayOrigin): the shading normal can point into the surface.
     var off_n = geo_n if dot(bounce_normal, -ray_dir) > Float32(0.0) else -geo_n
-    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, off_n) + off_n * _curve_extra_offset(inter, ctx.curves, ctx.instances)
+    var extra_off = _curve_extra_offset(inter, ctx.curves, ctx.instances)
+    if dot(bounce_normal, -ray_dir) <= Float32(0.0):
+        extra_off *= Float32(2.05)   # a transmitted ray must clear the far wall of the tube
+    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, off_n) + off_n * extra_off
 
     # ── NEE direct light sampling (MIS weighted, with MNEE glass caustics) ─────
     # Shares _nee_area_lights with plain diffuse — including its MNEE probe for
