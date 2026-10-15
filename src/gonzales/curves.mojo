@@ -36,6 +36,7 @@ struct Curve(TrivialRegisterPassable):
     var width1: Float32
     var materialIndex: Int32
     var n_pieces: Int32
+    var flat: Int32   # pbrt "flat" ribbon (faces the ray) instead of a round tube
 
 comptime CURVE_N_PIECES: Int = 7   # max locally-linear pieces per segment (8 samples)
 

@@ -217,6 +217,7 @@ struct SceneParseState(Movable):
     var curves_w0:  List[Float32]
     var curves_w1:  List[Float32]
     var curves_mat: List[Int32]
+    var curves_flat: List[Int32]   # 1 for pbrt's "flat" ribbon curves, 0 for round ones
     # Per-curve area-light flag/emission — mirrors MeshAccum.is_area_light/
     # al_rgb (triangles) and spheres_al/spheres_rgb (spheres), set from the
     # enclosing AttributeBegin/AreaLightSource block the same way.
@@ -440,6 +441,7 @@ struct SceneParseState(Movable):
         self.curves_w0  = List[Float32]()
         self.curves_w1  = List[Float32]()
         self.curves_mat = List[Int32]()
+        self.curves_flat = List[Int32]()
         self.curves_al     = List[Bool]()
         self.curves_al_rgb = List[RGB]()
 

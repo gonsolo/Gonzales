@@ -614,6 +614,7 @@ def handle_curve_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
     var n_cp = Int32(len(cp_list) / 3)
     var width0 = params.get_float("width0", params.get_float("width", Float32(0.002)))
     var width1 = params.get_float("width1", width0)
+    var curve_flat = Int32(1) if params.get_string("type", "flat") == "flat" else Int32(0)
     if n_cp < Int32(4):
         return
     # widths are object-space: scale them with the CTM (mean axis length)
@@ -650,6 +651,7 @@ def handle_curve_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
         s[unsafe_offset=0].curves_w0.append(width0 + (width1 - width0) * t0)
         s[unsafe_offset=0].curves_w1.append(width0 + (width1 - width0) * t1)
         s[unsafe_offset=0].curves_mat.append(mat_idx)
+        s[unsafe_offset=0].curves_flat.append(curve_flat)
         # An emitter inside an object template is not supported (as for meshes), so its curves do not emit.
         s[unsafe_offset=0].curves_al.append(s[unsafe_offset=0].cur_attr.is_alight and s[unsafe_offset=0].object_depth == Int32(0))
         s[unsafe_offset=0].curves_al_rgb.append(s[unsafe_offset=0].cur_attr.al_rgb)
@@ -2905,7 +2907,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             Point3f(s[unsafe_offset=0].curves_cp[cb+3], s[unsafe_offset=0].curves_cp[cb+4], s[unsafe_offset=0].curves_cp[cb+5]),
             Point3f(s[unsafe_offset=0].curves_cp[cb+6], s[unsafe_offset=0].curves_cp[cb+7], s[unsafe_offset=0].curves_cp[cb+8]),
             Point3f(s[unsafe_offset=0].curves_cp[cb+9], s[unsafe_offset=0].curves_cp[cb+10], s[unsafe_offset=0].curves_cp[cb+11]),
-            s[unsafe_offset=0].curves_w0[i], s[unsafe_offset=0].curves_w1[i], s[unsafe_offset=0].curves_mat[i], curve_n_pieces[unsafe_offset=i])
+            s[unsafe_offset=0].curves_w0[i], s[unsafe_offset=0].curves_w1[i], s[unsafe_offset=0].curves_mat[i], curve_n_pieces[unsafe_offset=i], s[unsafe_offset=0].curves_flat[i])
         var ngroups = _curve_greedy_groups(curve_i, Int(curve_n_pieces[unsafe_offset=i]), count_pass_scratch, count_pass_scratch, False)
         if curve_tmpl[unsafe_offset=i] >= Int32(0):
             ngroups = 0   # a template's curves are in its own BVH, not the top level
@@ -2984,7 +2986,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             Point3f(s[unsafe_offset=0].curves_cp[base+3], s[unsafe_offset=0].curves_cp[base+4], s[unsafe_offset=0].curves_cp[base+5]),
             Point3f(s[unsafe_offset=0].curves_cp[base+6], s[unsafe_offset=0].curves_cp[base+7], s[unsafe_offset=0].curves_cp[base+8]),
             Point3f(s[unsafe_offset=0].curves_cp[base+9], s[unsafe_offset=0].curves_cp[base+10], s[unsafe_offset=0].curves_cp[base+11]),
-            s[unsafe_offset=0].curves_w0[ci], s[unsafe_offset=0].curves_w1[ci], s[unsafe_offset=0].curves_mat[ci], curve_n_pieces[unsafe_offset=ci])
+            s[unsafe_offset=0].curves_w0[ci], s[unsafe_offset=0].curves_w1[ci], s[unsafe_offset=0].curves_mat[ci], curve_n_pieces[unsafe_offset=ci], s[unsafe_offset=0].curves_flat[ci])
         var ngroups = _curve_greedy_groups(curve_i, Int(curve_n_pieces[unsafe_offset=ci]), group_first_scratch, group_count_scratch, True)
         for g in range(ngroups):
             var global_group = Int(curve_group_base[unsafe_offset=ci]) + g
@@ -3050,7 +3052,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                     Point3f(s[unsafe_offset=0].curves_cp[cb+3], s[unsafe_offset=0].curves_cp[cb+4], s[unsafe_offset=0].curves_cp[cb+5]),
                     Point3f(s[unsafe_offset=0].curves_cp[cb+6], s[unsafe_offset=0].curves_cp[cb+7], s[unsafe_offset=0].curves_cp[cb+8]),
                     Point3f(s[unsafe_offset=0].curves_cp[cb+9], s[unsafe_offset=0].curves_cp[cb+10], s[unsafe_offset=0].curves_cp[cb+11]),
-                    s[unsafe_offset=0].curves_w0[ci], s[unsafe_offset=0].curves_w1[ci], s[unsafe_offset=0].curves_mat[ci], curve_n_pieces[unsafe_offset=ci])
+                    s[unsafe_offset=0].curves_w0[ci], s[unsafe_offset=0].curves_w1[ci], s[unsafe_offset=0].curves_mat[ci], curve_n_pieces[unsafe_offset=ci], s[unsafe_offset=0].curves_flat[ci])
                 var ng = _curve_greedy_groups(curve_t, Int(curve_n_pieces[unsafe_offset=ci]), cg_first, cg_count, True)
                 for g in range(ng):
                     var fp = Int(cg_first[unsafe_offset=g]); var pc = Int(cg_count[unsafe_offset=g])
@@ -3865,7 +3867,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 Point3f(s[unsafe_offset=0].curves_cp[cb+3], s[unsafe_offset=0].curves_cp[cb+4], s[unsafe_offset=0].curves_cp[cb+5]),
                 Point3f(s[unsafe_offset=0].curves_cp[cb+6], s[unsafe_offset=0].curves_cp[cb+7], s[unsafe_offset=0].curves_cp[cb+8]),
                 Point3f(s[unsafe_offset=0].curves_cp[cb+9], s[unsafe_offset=0].curves_cp[cb+10], s[unsafe_offset=0].curves_cp[cb+11]),
-                s[unsafe_offset=0].curves_w0[i], s[unsafe_offset=0].curves_w1[i], s[unsafe_offset=0].curves_mat[i], curve_n_pieces[unsafe_offset=i])
+                s[unsafe_offset=0].curves_w0[i], s[unsafe_offset=0].curves_w1[i], s[unsafe_offset=0].curves_mat[i], curve_n_pieces[unsafe_offset=i], s[unsafe_offset=0].curves_flat[i])
         psc[unsafe_offset=0].curves = curve_buf
     else:
         psc[unsafe_offset=0].curves = Pointer[Curve, MutUntrackedOrigin].unsafe_dangling()

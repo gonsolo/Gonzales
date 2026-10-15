@@ -24,7 +24,7 @@ from .host_textures import TexPrefetch
 from .fast_io import read_parallel, PARALLEL_MIN
 
 comptime _MAGIC: Int = 0x474E5A53434143
-comptime _FORMAT: Int = 7
+comptime _FORMAT: Int = 8
 
 comptime _Ptr = Pointer[UInt8, MutUntrackedOrigin]
 

@@ -878,17 +878,24 @@ def _curve_geom_normal_and_ray(
     var tangent = Vec3f(Float32(1.0), Float32(0.0), Float32(0.0))
     if seg_len > Float32(1e-8):
         tangent = seg_axis * (Float32(1.0) / seg_len)
-    # Radial normal from the hit position itself: (u, v) alone lose the sign of the second radial component.
-    var hp = ro + rd * inter.tHit - q0
-    var gn = hp - tangent * dot(hp, tangent)
-    var gl = dot(gn, gn)
-    if gl > Float32(1e-20):
-        gn = gn * (Float32(1.0) / sqrt(gl))
+    var gn: Vec3f
+    var rperp = rd - tangent * dot(rd, tangent)
+    var rl = dot(rperp, rperp)
+    if curve.flat != Int32(0) and rl > Float32(1e-12):
+        # A flat curve is a ribbon facing the ray: one normal across the width.
+        gn = rperp * (Float32(-1.0) / sqrt(rl))
     else:
-        var n_perp = _curve_perp_axis(tangent)
-        gn = n_perp * h + cross(tangent, n_perp) * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
-    if dot(gn, rd) > Float32(0.0):
-        gn = -gn
+        # Radial normal from the hit position itself: (u, v) alone lose the sign of the second radial component.
+        var hp = ro + rd * inter.tHit - q0
+        gn = hp - tangent * dot(hp, tangent)
+        var gl = dot(gn, gn)
+        if gl > Float32(1e-20):
+            gn = gn * (Float32(1.0) / sqrt(gl))
+        else:
+            var n_perp = _curve_perp_axis(tangent)
+            gn = n_perp * h + cross(tangent, n_perp) * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
+        if dot(gn, rd) > Float32(0.0):
+            gn = -gn
     return (gn, rd, ro)
 
 
