@@ -991,6 +991,13 @@ def _to_spec_diffuse_lit(ctx: ShadeContext, alb: RGB, le: RGB, wl: SampledWavele
     return _to_spec_refl(ctx, alb, wl) * _to_spec_illum(ctx, le, wl) * INV_PI
 
 @always_inline
+def _emitter_invisible(ctx: ShadeContext, al: AreaLight) -> Bool:
+    """An alpha-0 emitter is cut out of every ray, so BSDF sampling never finds it and light sampling takes the whole weight."""
+    if al.kind != Int8(0):
+        return False
+    return ctx.meshes[unsafe_offset=Int(al.meshIdx)].alpha_w == Int32(0) and ctx.meshes[unsafe_offset=Int(al.meshIdx)].alpha_const <= Float32(0.0)
+
+@always_inline
 def _shadow_inline(ctx: ShadeContext, guide_write: GuideGrid) -> Bool:
     """True when _shadow_contribute would trace its ray right here as a plain any-hit test (no deferral, media or guiding)."""
     return ctx.n_mediums == 0 and not _is_real_ptr(ctx.shadow_tasks) and not guide_is_active(guide_write)
@@ -4181,7 +4188,7 @@ def _nee_area_lights[enqueue_shadow: Bool, mnee: Bool = True, defer_only: Bool =
         if cos_s > Float32(0.0) and cos_l > Float32(0.0):
             var pdf_light = dist_sq * light_sel_pdf_nee / (cos_l * al.total_area)
             var pdf_bsdf_nee = bxdf_pdf_diffuse(cos_s)
-            var w_nee = power_heuristic(pdf_light, pdf_bsdf_nee)
+            var w_nee = Float32(1.0) if _emitter_invisible(ctx, al) else power_heuristic(pdf_light, pdf_bsdf_nee)
             var spec_w = _to_spec_diffuse_lit(ctx, alb, al.emission, path_ptr[].wavelengths) * (cos_s * w_nee * lobe_w / pdf_light)
             comptime if not defer_only:
                 if pixel_idx >= 0 and _is_real_ptr(sms_io.read):
@@ -4371,7 +4378,7 @@ def di_resolve(
     if pdf_light <= Float32(0.0):
         return
     var pdf_bsdf = bxdf_pdf_diffuse(cos_s)
-    var mis_w = power_heuristic(pdf_light, pdf_bsdf)
+    var mis_w = Float32(1.0) if _emitter_invisible(ctx, al) else power_heuristic(pdf_light, pdf_bsdf)
     # NOT cos_s*cos_l/dist_sq: pdf_light is a SOLID-ANGLE pdf (the
     # dist_sq/cos_l area-to-solid-angle Jacobian is already baked into its
     # own definition above). res.state.w (from reservoir_finalize) already
