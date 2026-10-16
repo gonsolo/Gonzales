@@ -439,7 +439,7 @@ def fast_recip(x: Float32) -> Float32:
 def offset_eps(x: Float32, y: Float32, z: Float32) -> Float32:
     """Self-intersection offset scaled to the hit's coordinate magnitude (>= 1e-5, uncapped: float error grows with it)."""
     var m = max(abs(x), max(abs(y), abs(z)))
-    return max(Float32(1e-5), Float32(4e-6) * m)
+    return max(Float32(1e-5), Float32(1.2e-5) * m)
 
 @always_inline
 def offset_point(p: Vec3f, n: Vec3f) -> Vec3f:
