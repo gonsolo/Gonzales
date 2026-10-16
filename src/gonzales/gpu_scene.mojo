@@ -1055,7 +1055,7 @@ def gpu_upload_scene(
                 kind_mask |= Int32(1) << Int32(s.materials[unsafe_offset=mi].type)
                 if s.materials[unsafe_offset=mi].type == MatKind.interface:
                     has_iface_mat = True
-                if is_specular_glass(s.materials[unsafe_offset=mi]):
+                if is_specular_glass(s.materials[unsafe_offset=mi]) and getenv("GONZALES_NO_MNEE") == "":
                     has_glass_mat = True
             var lights = LightBuffers.upload(ctx, s, host_plan[1], host_plan[2])
             ctx.synchronize()
