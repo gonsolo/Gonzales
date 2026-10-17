@@ -15,7 +15,7 @@ from .spectrum import SpectralHandle
 from .rtcore import rtcore_device_free, rtcore_host_register, rtcore_device_total
 from .pbrt_parser import ParsedScene_Mojo
 from .host_textures import decode_host_textures
-from .ptex_cache import PtexCache
+from .ptex_cache import PtexCache, PTEX_QUEUE_CAP
 from .restir_di import DIReservoir
 from .restir_vol import VolReservoir
 from max.gpu import block_dim, block_idx, thread_idx
@@ -282,6 +282,7 @@ struct TextureBuffers(Movable):
     var ptex_pool_buf: DeviceBuffer[DType.uint8]
     var ptex_cache: PtexCache
     var ptex_bufs: List[Int]
+    var ptex_tables_buf: DeviceBuffer[DType.uint64]
 
     @always_inline
     def textures_ptr(mut self) -> Pointer[GpuTexture, MutUntrackedOrigin]:
@@ -321,11 +322,12 @@ struct TextureBuffers(Movable):
             var lut = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
             if Int(ht.format) == GpuTexture.FORMAT_U8 or Int(ht.format) == GpuTexture.FORMAT_PTEX:
                 lut = lut_dev.unsafe_offset(Int(ht.lut_off))
+            var height = ht.height   # a paged Ptex: its index in the cache, which the request queue names
             if Int(ht.format) == GpuTexture.FORMAT_PTEX and ht.height >= Int32(0):
-                _ = ptex_cache.add_file(s.tex_filenames[unsafe_offset=ti], ht.data, Int(ht.width))
+                height = Int32(ptex_cache.add_file(s.tex_filenames[unsafe_offset=ti], ht.data, Int(ht.width)))
                 ptex_bufs.append(len(tex_data_bufs))
             gpu_textures_host[unsafe_offset=ti] = GpuTexture(_gpu_upload_owned[UInt8](ctx, tex_data_bufs, ht.data, ht.n_bytes),
-                lut, pool_dev, ht.width, ht.height, ht.n_levels, ht.channels, ht.format)
+                lut, pool_dev, ht.width, height, ht.n_levels, ht.channels, ht.format)
             tex_bytes += ht.n_bytes
         var textures_gpu_buf = _gpu_upload_array[GpuTexture](ctx, gpu_textures_host, n_textures_int)
         # The uploads above are asynchronous; free their host sources once they're done.
@@ -340,8 +342,15 @@ struct TextureBuffers(Movable):
         print("GPU: " + String(n_textures_int) + " texture(s) uploaded ("
               + String(n_unique_tex) + " unique file(s) loaded, "
               + String(tex_bytes // (1024 * 1024)) + " MB)")
+        # Each paged file's face table on the device, for the kernel that writes changed entries.
+        var ptex_tables_buf = ctx.enqueue_create_buffer[DType.uint64](max(len(ptex_bufs), 1))
+        if len(ptex_bufs) > 0:
+            var addrs = List[UInt64](capacity=len(ptex_bufs))
+            for k in range(len(ptex_bufs)): addrs.append(UInt64(Int(tex_data_bufs[ptex_bufs[k]].unsafe_ptr())))
+            ctx.enqueue_copy(ptex_tables_buf, addrs.unsafe_ptr())
+            ctx.synchronize()
         return Self(tex_data_bufs=tex_data_bufs^, textures_buf=textures_gpu_buf^, lut_buf=lut_buf^, n_textures=n_textures_int,
-                    ptex_pool_buf=ptex_pool_buf^, ptex_cache=ptex_cache^, ptex_bufs=ptex_bufs^)
+                    ptex_pool_buf=ptex_pool_buf^, ptex_cache=ptex_cache^, ptex_bufs=ptex_bufs^, ptex_tables_buf=ptex_tables_buf^)
 
 @fieldwise_init
 struct LightBuffers(Movable):
@@ -1253,29 +1262,43 @@ def init_curve_cand_offset_gpu(offset_buf: Pointer[Int32, MutUntrackedOrigin], n
 
 # ── Ptex demand paging (ptex_cache.mojo) ──
 def _ptex_upload_tables(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], scratch: Pointer[UInt8, MutUntrackedOrigin]) raises:
+    """Every changed face table to the device, from its slice of `scratch` (_ptex_scratch), with one wait."""
+    var at = 0
     for k in range(len(handle[].textures.ptex_bufs)):
-        if handle[].textures.ptex_cache.take_table(k, scratch):
-            var sub = handle[].textures.tex_data_bufs[handle[].textures.ptex_bufs[k]].create_sub_buffer[DType.uint8](
-                0, handle[].textures.ptex_cache.n_faces[k] * 8)
-            handle[].ctx.enqueue_copy(sub, scratch)
-            handle[].ctx.synchronize()
+        var nb = handle[].textures.ptex_cache.n_faces[k] * 8
+        if handle[].textures.ptex_cache.take_table(k, scratch.unsafe_offset(at)):
+            var sub = handle[].textures.tex_data_bufs[handle[].textures.ptex_bufs[k]].create_sub_buffer[DType.uint8](0, nb)
+            handle[].ctx.enqueue_copy(sub, scratch.unsafe_offset(at))
+        at += nb
+    handle[].ctx.synchronize()
+    handle[].textures.ptex_cache.patches.clear()   # whole tables went up
 
 def _ptex_scratch(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) -> Pointer[UInt8, MutUntrackedOrigin]:
-    var max_faces = 1
-    for k in range(len(handle[].textures.ptex_bufs)): max_faces = max(max_faces, handle[].textures.ptex_cache.n_faces[k])
-    return unsafe_alloc[UInt8](max_faces * 8).unsafe_origin_cast[MutUntrackedOrigin]()
+    """Room for all face tables side by side."""
+    var total = 8
+    for k in range(len(handle[].textures.ptex_bufs)): total += handle[].textures.ptex_cache.n_faces[k] * 8
+    return unsafe_alloc[UInt8](total).unsafe_origin_cast[MutUntrackedOrigin]()
+
+def _ptex_feed_all(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], scratch: Pointer[UInt8, MutUntrackedOrigin]) raises:
+    """Read every face table back with one wait and hand each to the cache."""
+    handle[].ctx.synchronize()
+    var at = 0
+    for k in range(len(handle[].textures.ptex_bufs)):
+        var nb = handle[].textures.ptex_cache.n_faces[k] * 8
+        var sub = handle[].textures.tex_data_bufs[handle[].textures.ptex_bufs[k]].create_sub_buffer[DType.uint8](0, nb)
+        handle[].ctx.enqueue_copy(scratch.unsafe_offset(at), sub)
+        at += nb
+    handle[].ctx.synchronize()
+    at = 0
+    for k in range(len(handle[].textures.ptex_bufs)):
+        handle[].textures.ptex_cache.feed(k, scratch.unsafe_offset(at))
+        at += handle[].textures.ptex_cache.n_faces[k] * 8
 
 def gpu_ptex_begin(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises -> Int:
     """Read back what the last samples asked for and start loading it in the background.
     Returns the number of faces being loaded."""
     var scratch = _ptex_scratch(handle)
-    handle[].ctx.synchronize()
-    for k in range(len(handle[].textures.ptex_bufs)):
-        var sub = handle[].textures.tex_data_bufs[handle[].textures.ptex_bufs[k]].create_sub_buffer[DType.uint8](
-            0, handle[].textures.ptex_cache.n_faces[k] * 8)
-        handle[].ctx.enqueue_copy(scratch, sub)
-        handle[].ctx.synchronize()
-        handle[].textures.ptex_cache.feed(k, scratch)
+    _ptex_feed_all(handle, scratch)
     var n = handle[].textures.ptex_cache.begin()
     # The wanted bytes are reset now, so a face is asked for once per load.
     _ptex_upload_tables(handle, scratch)
@@ -1321,6 +1344,91 @@ def gpu_ptex_withheld(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], n_pix
             if scratch[unsafe_offset=i] != UInt8(0):
                 px_out.append(Int32(i % n_pixels))
                 si_out.append(Int32(si_start + i // n_pixels) if si_start >= 0 else si_of[unsafe_offset=i])
+
+def ptex_patch_gpu(tables: Pointer[UInt64, MutUntrackedOrigin], patches: Pointer[UInt32, MutUntrackedOrigin], n_dp: Int64):
+    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if i >= Int(n_dp):
+        return
+    var t = Pointer[UInt32, MutUntrackedOrigin](unsafe_from_address=Int(tables[unsafe_offset=Int(patches[unsafe_offset=4 * i])]))
+    var f = Int(patches[unsafe_offset=4 * i + 1])
+    t[unsafe_offset=2 * f] = patches[unsafe_offset=4 * i + 2]
+    t[unsafe_offset=2 * f + 1] = patches[unsafe_offset=4 * i + 3]
+
+def _ptex_upload_patches(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises:
+    var p = handle[].textures.ptex_cache.take_patches()
+    var n = len(p) // 4
+    if n == 0:
+        return
+    var buf = handle[].ctx.enqueue_create_buffer[DType.uint32](n * 4)
+    handle[].ctx.enqueue_copy(buf, p.unsafe_ptr())
+    handle[].ctx.enqueue_function[ptex_patch_gpu](
+        handle[].textures.ptex_tables_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+        buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](), Int64(n),
+        grid_dim=ceildiv(n, 256), block_dim=256)
+    handle[].ctx.synchronize()
+
+def _ptex_put_header(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises:
+    """The host's pool header bytes 0-7 to the device: the switches, and an empty request queue."""
+    var h = handle[].textures.ptex_cache.pool
+    for i in range(4, 8): h[unsafe_offset=i] = UInt8(0)
+    handle[].ctx.synchronize()
+    var psub = handle[].textures.ptex_pool_buf.create_sub_buffer[DType.uint8](0, 8)
+    handle[].ctx.enqueue_copy(psub, h)
+    handle[].ctx.synchronize()
+
+def gpu_ptex_stream_start(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises:
+    """The viewer's mode: no withholding, lookups that need a finer face queue it (shading._ptex_ask)."""
+    handle[].textures.ptex_cache.pool[unsafe_offset=0] = UInt8(0)
+    handle[].textures.ptex_cache.pool[unsafe_offset=1] = UInt8(1)
+    _ptex_put_header(handle)
+
+def gpu_ptex_poll(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises -> Int:
+    """Drain the request queue, start loading it and put the settled entries on the device. Returns the
+    number of requests drained; the caller must not have a load in flight."""
+    handle[].ctx.synchronize()
+    var hdr = unsafe_alloc[UInt32](2).unsafe_origin_cast[MutUntrackedOrigin]()
+    var hsub = handle[].textures.ptex_pool_buf.create_sub_buffer[DType.uint8](0, 8)
+    handle[].ctx.enqueue_copy(hdr.unsafe_bitcast[UInt8](), hsub)
+    handle[].ctx.synchronize()
+    var n = min(Int(hdr[unsafe_offset=1]), PTEX_QUEUE_CAP)
+    hdr.unsafe_free()
+    if n == 0:
+        return 0
+    var q = unsafe_alloc[UInt32](n * 2).unsafe_origin_cast[MutUntrackedOrigin]()
+    var qsub = handle[].textures.ptex_pool_buf.create_sub_buffer[DType.uint8](8, n * 8)
+    handle[].ctx.enqueue_copy(q.unsafe_bitcast[UInt8](), qsub)
+    handle[].ctx.synchronize()
+    _ptex_put_header(handle)
+    handle[].textures.ptex_cache.feed_queue(q, n)
+    q.unsafe_free()
+    _ = handle[].textures.ptex_cache.begin()
+    _ptex_upload_patches(handle)
+    return n
+
+def gpu_ptex_stream_finish(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises -> Int:
+    """Put a finished load on the device: its texels and the changed entries."""
+    var (n, lo, hi) = handle[].textures.ptex_cache.finish(False)
+    handle[].ctx.synchronize()
+    if hi > lo:
+        var psub = handle[].textures.ptex_pool_buf.create_sub_buffer[DType.uint8](lo, hi - lo)
+        handle[].ctx.enqueue_copy(psub, handle[].textures.ptex_cache.pool.unsafe_offset(lo))
+        handle[].ctx.synchronize()
+    _ptex_upload_patches(handle)
+    return n
+
+def gpu_ptex_make_room(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin]) raises:
+    """Full table read-back for the used bits (and what is asked for), evict and compact, upload all of it."""
+    var scratch = _ptex_scratch(handle)
+    _ptex_feed_all(handle, scratch)
+    var (lo, hi) = handle[].textures.ptex_cache.make_room()
+    if hi > lo:
+        var psub = handle[].textures.ptex_pool_buf.create_sub_buffer[DType.uint8](lo, hi - lo)
+        handle[].ctx.enqueue_copy(psub, handle[].textures.ptex_cache.pool.unsafe_offset(lo))
+        handle[].ctx.synchronize()
+    _ = handle[].textures.ptex_cache.begin()
+    _ptex_upload_tables(handle, scratch)
+    _ptex_put_header(handle)
+    scratch.unsafe_free()
 
 def gpu_ptex_redo_upload(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], n: Int, si_of: Pointer[Int32, MutUntrackedOrigin]) raises:
     """Set the samples the next ptex_mode 2 pass renders: si_of[slot], < 0 for none."""

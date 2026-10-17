@@ -33,7 +33,7 @@ from .restir_gi import GIReservoir, gi_reservoir_init, GIReservoirIO, gi_reservo
 from .restir_sms import SMSReservoir, sms_reservoir_init, SMSReservoirIO, sms_reservoir_io_null
 from .restir_vol import VolReservoir, vol_reservoir_init, VolReservoirIO, vol_reservoir_io_null
 from .gpu import gpu_render_sample, gpu_render_wavefront, gpu_mnee_adapt, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol
-from .gpu_scene import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload
+from .gpu_scene import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload, gpu_ptex_stream_start, gpu_ptex_poll, gpu_ptex_stream_finish, gpu_ptex_make_room
 from .gpu_denoise import gpu_atrous_denoise
 from .gpu_wavefront import gpu_gen_aux_buffers
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, viewer_denoise_enabled, viewer_monitor_size, build_camera_to_world
@@ -2755,6 +2755,16 @@ def render_interactive(
 
     var c2w_buf = List[Float32](capacity=16)
     for i in range(16): c2w_buf.append(c2w[unsafe_offset=i])
+    # Texture footprints as pbrt scales them at 16 samples (a quarter pixel): Ptex streaming asks for that resolution.
+    # GONZALES_TEX_SPP=1 asks for the pixel's own (4% frame time on the island instead of 19%, blurrier close up).
+    var FP_SPP = 16
+    try:
+        FP_SPP = Int(getenv("GONZALES_TEX_SPP", "16"))
+    except:
+        pass
+    if use_gpu:
+        handle[].cam_fp = camera_footprint(psc[unsafe_offset=0].raster_to_camera,
+            c2w_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](), Int(fw), Int(psc[unsafe_offset=0].film_h), FP_SPP)
 
     var results  = List[TileResult](capacity=n_pixels)
     var beauty   = List[Float32](capacity=n_pixels * 3)
@@ -2944,6 +2954,15 @@ def render_interactive(
             bench_warm = Int(getenv("GONZALES_BENCH"))
         except:
             pass
+    # Ptex streaming: frames show what is resident; between frames the faces they asked for load in the background.
+    var ptex_live = use_gpu and len(handle[].textures.ptex_bufs) > 0
+    var ptex_next = 0; var ptex_ns = 0; var ptex_rooms = 0; var ptex_reqs = 0
+    var ptex_t = List[Int](length=3, fill=0)   # ns in finish, make-room, poll
+    if ptex_live:
+        try:
+            gpu_ptex_stream_start(handle)
+        except:
+            ptex_live = False
     while (not headless and not viewer_should_close(v)) or (headless and frame_count < Int(headless_frames)):
         if not headless:
             viewer_poll_events(v)
@@ -2952,6 +2971,8 @@ def render_interactive(
                 frame_count = 0
                 build_camera_to_world(cam_buf.ptr(), c2w_buf.unsafe_ptr())
                 if use_gpu:
+                    handle[].cam_fp = camera_footprint(psc[unsafe_offset=0].raster_to_camera,
+                        c2w_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](), Int(fw), Int(psc[unsafe_offset=0].film_h), FP_SPP)
                     gpu_clear_film(handle, Int64(n_pixels))
                     if use_restir:
                         # Same invalidation rule as the CPU path: a stale
@@ -2994,6 +3015,8 @@ def render_interactive(
             var cp = c2w_buf.unsafe_ptr()
             for k in range(3):
                 cp[unsafe_offset=12 + k] = cp[unsafe_offset=12 + k] + cp[unsafe_offset=k] * move_step
+            handle[].cam_fp = camera_footprint(psc[unsafe_offset=0].raster_to_camera,
+                cp.unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](), Int(fw), Int(psc[unsafe_offset=0].film_h), FP_SPP)
             gpu_clear_film(handle, Int64(n_pixels))
             gpu_gen_aux_buffers(handle, cp, Int64(n_pixels), rtb.rays, rtb.results, rtb.mesh_material_idx, rtb.mesh_al_idx, rtb.n_meshes, rtb.instance_base_mesh)
         # headless: camera is never polled, so it never "changes" -- every
@@ -3033,6 +3056,25 @@ def render_interactive(
                 gpu_mnee_adapt(handle)
             except:
                 pass
+            if ptex_live:
+                var t_p = Int(perf_counter_ns())
+                try:
+                    if handle[].textures.ptex_cache.loading:
+                        if handle[].textures.ptex_cache.ready():
+                            _ = gpu_ptex_stream_finish(handle)
+                            ptex_t[0] += Int(perf_counter_ns()) - t_p
+                    elif handle[].textures.ptex_cache.denied_now > 0 and t_p >= ptex_next:
+                        # The pool is full: a full read-back of the used bits, at most once a second.
+                        gpu_ptex_make_room(handle)
+                        ptex_rooms += 1
+                        ptex_next = Int(perf_counter_ns()) + 1_000_000_000
+                        ptex_t[1] += Int(perf_counter_ns()) - t_p
+                    else:
+                        ptex_reqs += gpu_ptex_poll(handle)
+                        ptex_t[2] += Int(perf_counter_ns()) - t_p
+                except:
+                    ptex_live = False
+                ptex_ns += Int(perf_counter_ns()) - t_p
             t_render += Int(perf_counter_ns() - t_r)
             bench_render += Int(perf_counter_ns() - t_r)
             if frame_count == bench_warm:
@@ -3213,6 +3255,12 @@ def render_interactive(
         if handle[].bench[4] > 0:
             print("bench software ms/frame: closest", Float64(handle[].bench[4]) / 1.0e6 / Float64(bf),
                   "shade", Float64(handle[].bench[5]) / 1.0e6 / Float64(bf), "shadow", Float64(handle[].bench[6]) / 1.0e6 / Float64(bf))
+    if ptex_live:
+        print("Ptex streaming:", handle[].textures.ptex_cache.loaded, "face(s) loaded,", handle[].textures.ptex_cache.evicted,
+              "evicted,", handle[].textures.ptex_cache.denied, "found no room; pool",
+              (handle[].textures.ptex_cache.top - handle[].textures.ptex_cache.dead) * 3 // (1024 * 1024), "of",
+              handle[].textures.ptex_cache.cap * 3 // (1024 * 1024), "MB; host", ptex_ns // 1000000, "ms over", frame_count, "frames;", ptex_rooms, "full read-back(s);", ptex_reqs, "request(s); ms finish", ptex_t[0] // 1000000,
+              "make-room", ptex_t[1] // 1000000, "poll", ptex_t[2] // 1000000)
     if headless:
         _ = write_image_cropped(denoised.unsafe_ptr(), fw, fh, Int32(0), Int32(0), fw, fh,
                                  psc[unsafe_offset=0].film_filename, Int32(32), Int32(32))

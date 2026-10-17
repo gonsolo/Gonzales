@@ -356,7 +356,7 @@ def main() raises:
         bake_scene(path_cstr, verbose)
         return
     # Ptex demand paging needs a driver that streams between sample batches: the GPU path tracer.
-    if use_gpu and not (use_sppm or use_vcm or use_restir or use_vol_restir_reuse or interactive or use_vulkan_rt):
+    if use_gpu and not (use_sppm or use_vcm or use_restir or use_vol_restir_reuse or use_vulkan_rt):
         _ = external_call["ptex_set_paging", NoneType, Int32](Int32(1))
     var will_parse = not (pixel_x >= 0 and pixel_y >= 0) and not use_vulkan_rt and not interactive
     var want_ctx = will_parse and use_gpu and gpu_available()

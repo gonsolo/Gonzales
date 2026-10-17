@@ -1,4 +1,5 @@
 from std.atomic import Atomic
+from .ptex_cache import PTEX_QUEUE_CAP
 from std.sys import size_of
 from std.collections import Array
 from std.math import sqrt, cos, sin, floor, acos, atan2, log2, ceil, exp, log, abs
@@ -486,6 +487,32 @@ def _ptex_tri(inter: Intersection) -> Int:
     return Int(inter.primId.id2 & 0xFFFFFFFF)
 
 @always_inline
+def _ptex_ask(tex: GpuTexture, entry: Pointer[UInt8, MutUntrackedOrigin], face: Int, need: Int):
+    """Raise the face's wanted byte to `need`. With the viewer's queue on (pool byte 1), the thread that
+    raised it also queues the face; a full queue takes the raise back so the face asks again next frame."""
+    var w = entry.unsafe_offset(4).unsafe_bitcast[UInt32]()
+    var old = w[unsafe_offset=0]
+    var prev = UInt32(0)
+    while True:
+        prev = (old >> 16) & 0xFF
+        if prev >= UInt32(254) or prev >= UInt32(need):
+            return
+        if Atomic[UInt32].compare_exchange(w, old, (old & 0xFF00FFFF) | (UInt32(need) << 16)):
+            break
+    if tex.pool[unsafe_offset=1] == UInt8(0) or tex.height < Int32(0):
+        return
+    var q = tex.pool.unsafe_offset(4).unsafe_bitcast[UInt32]()
+    var i = Int(Atomic.fetch_add(q, UInt32(1)))
+    if i < PTEX_QUEUE_CAP:
+        q[unsafe_offset=1 + 2 * i] = (UInt32(tex.height) << 4) | UInt32(need)
+        q[unsafe_offset=2 + 2 * i] = UInt32(face)
+        return
+    var cur = w[unsafe_offset=0]
+    while ((cur >> 16) & 0xFF) == UInt32(need):
+        if Atomic[UInt32].compare_exchange(w, cur, (cur & 0xFF00FFFF) | (prev << 16)):
+            break
+
+@always_inline
 def _ptex_missed(textures: Pointer[GpuTexture, MutUntrackedOrigin], n_textures: Int, ti: Int,
                  inter: Intersection, mesh: TriangleMesh, fp_width: Float32) -> Bool:
     """Whether texture `ti` is a paged Ptex whose face at this hit is coarser than the lookup needs and can
@@ -504,7 +531,7 @@ def _ptex_missed(textures: Pointer[GpuTexture, MutUntrackedOrigin], n_textures: 
     if want >= 254 or need <= max(Int(entry[unsafe_offset=4]), Int(entry[unsafe_offset=5])):
         return False
     if need > want:
-        entry[unsafe_offset=6] = UInt8(need)   # a withheld sample always has its request placed
+        _ptex_ask(tex, entry, face, need)   # a withheld sample always has its request placed
     return tex.pool[unsafe_offset=0] != UInt8(0)
 
 @always_inline
@@ -525,7 +552,7 @@ def _sample_ptex(tex: GpuTexture, face_in: Int, u: Float32, v: Float32, fp_width
         # Ask the host for the resolution this footprint needs (ptex_cache.mojo).
         var need = _ptex_need(fp_width)
         if need > max(ul, vl) and need > want:
-            entry[unsafe_offset=6] = UInt8(need)
+            _ptex_ask(tex, entry, face, need)
     var n_lev = max(ul, vl) + 1
     var lod = Float32(0.0)
     var fp_texels = fp_width * Float32(1 << max(ul, vl))
