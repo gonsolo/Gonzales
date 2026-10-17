@@ -348,6 +348,10 @@ def main() raises:
     var own_rt_only = rt_hardware and not use_vcm and getenv("GONZALES_RTCORE_VULKAN") == ""
     if use_vulkan_rt or (use_vulkan_rt_shade and not own_rt_only):
         _ = setenv("GONZALES_MERGE_TEMPLATES", "0", True)
+    if getenv("GONZALES_RT_PRUNE") != "" and not (own_rt_only or bake):
+        # Without the RT cores nothing would trace the pruned triangles.
+        print("GONZALES_RT_PRUNE needs --rt-hardware on the path tracer: ignored")
+        _ = setenv("GONZALES_RT_PRUNE", "", True)
     if bake:
         bake_scene(path_cstr, verbose)
         return
