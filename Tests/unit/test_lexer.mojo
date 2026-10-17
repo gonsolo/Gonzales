@@ -422,5 +422,13 @@ def test_param_scanner_walks_typed_params_then_reports_exhausted() raises:
 
     scanner_free(handle)
 
+def test_param_scanner_trims_whitespace_inside_quotes() raises:
+    var handle = _scanner_from_string(String('" texture reflectance " "leaves"'))
+    var ps = ParamScanner()
+    assert_true(ps.next(handle))
+    assert_true(ps.name_is("reflectance"))
+    assert_true(ps.is_str())
+    scanner_free(handle)
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

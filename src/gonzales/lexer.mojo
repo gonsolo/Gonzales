@@ -383,6 +383,8 @@ def parse_param_header(
     if cur >= len or bytes[unsafe_offset=cur] != UInt8(34):
         return Int32(0)
     cur += 1  # opening '"'
+    while cur < len and is_whitespace(bytes[unsafe_offset=cur]):
+        cur += 1  # pbrt splits on whitespace: " texture reflectance" is valid (Moana isBayCedarA1)
     # type: read until whitespace or '"'
     var t = Int32(0)
     while cur < len and not is_whitespace(bytes[unsafe_offset=cur]) and bytes[unsafe_offset=cur] != UInt8(34):
@@ -402,6 +404,8 @@ def parse_param_header(
             name_buf[unsafe_offset=Int(n)] = bytes[unsafe_offset=cur]
         n += Int32(1)
         cur += 1
+    while n > Int32(0) and n < name_max and is_whitespace(name_buf[unsafe_offset=Int(n) - 1]):
+        n -= Int32(1)
     if name_max > 0:
         var cap = Int(n) if Int(n) < Int(name_max) - 1 else Int(name_max) - 1
         name_buf[unsafe_offset=cap] = UInt8(0)
