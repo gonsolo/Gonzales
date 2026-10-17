@@ -132,13 +132,19 @@ def _unsupported(ref s: ParsedScene_Mojo) -> String:
 
 
 def scene_cache_variant() -> Int:
-    """The settings that change what the parser builds from the same file: template merging and the RT pruning."""
+    """The settings that change what the parser builds from the same file: template merging, RT pruning and instance culling."""
     var v = 1 if getenv("GONZALES_MERGE_TEMPLATES", "1") == "0" else 0
     var prune = 0
     try:
         prune = Int(getenv("GONZALES_RT_PRUNE", "0"))
     except:
         prune = 0
+    var cull = getenv("GONZALES_CULL_SIZE", "0")
+    if cull != "" and cull != "0":
+        var h = 0
+        for c in (cull + "@" + getenv("GONZALES_CAMERA_SCENE")).as_bytes():
+            h = (h * 31 + Int(c)) & 0xFFFFFFF
+        v += 64 * (h + 1)
     return v + 2 * prune
 
 
