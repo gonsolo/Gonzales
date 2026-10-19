@@ -1129,7 +1129,8 @@ def rtcore_closest_hit_gpu(
 # any-hit. The first lists the live paths that queued at least one task (one atomic per block), the second traces a listed
 # path's tasks in slot order (one thread per path, so the estimate is never updated concurrently) and frees them.
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
-def sw_pack_shadow_paths_gpu(
+# One thread per (live path, slot): lists every queued shadow ray, so a path's two rays are traced by two threads.
+def sw_pack_shadow_tasks_gpu(
     tasks: Pointer[ShadowTask, MutUntrackedOrigin],
     live_idx: Pointer[Int32, MutUntrackedOrigin],
     live_count: Pointer[Int32, MutUntrackedOrigin],
@@ -1137,16 +1138,31 @@ def sw_pack_shadow_paths_gpu(
     counter: Pointer[Int32, MutUntrackedOrigin],
 ):
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
-    var p = 0
+    var t = 0
     var has = False
-    if i < Int(live_count[unsafe_offset=0]):
-        p = Int(live_idx[unsafe_offset=i])
-        comptime for s in range(SHADOW_SLOTS):
-            if tasks[unsafe_offset=p * SHADOW_SLOTS + s].active != Int32(0):
-                has = True
+    if i < Int(live_count[unsafe_offset=0]) * SHADOW_SLOTS:
+        t = Int(live_idx[unsafe_offset=i // SHADOW_SLOTS]) * SHADOW_SLOTS + i % SHADOW_SLOTS
+        has = tasks[unsafe_offset=t].active != Int32(0)
     var pos = warp_append(counter, has)
     if has:
-        ids[unsafe_offset=pos] = Int32(p)
+        ids[unsafe_offset=pos] = Int32(t)
+
+# Adds the rays that reached their light (marked 2 by sw_resolve_shadow_gpu) and frees every slot of the live paths.
+def sw_add_shadow_gpu(
+    paths: Pointer[PathState, MutUntrackedOrigin],
+    tasks: Pointer[ShadowTask, MutUntrackedOrigin],
+    live_idx: Pointer[Int32, MutUntrackedOrigin],
+    live_count: Pointer[Int32, MutUntrackedOrigin],
+):
+    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if i >= Int(live_count[unsafe_offset=0]):
+        return
+    var p = Int(live_idx[unsafe_offset=i])
+    comptime for s in range(SHADOW_SLOTS):
+        var t = p * SHADOW_SLOTS + s
+        if tasks[unsafe_offset=t].active == Int32(2):
+            paths[unsafe_offset=p].estimate += tasks[unsafe_offset=t].contrib
+        tasks[unsafe_offset=t].active = Int32(0)
 
 # any_hit_bvh2_core with the curve / instance / alpha code compiled out when the scene has none (as traverse_paths_gpu does
 # for the closest hit): the full version needs 112 registers, this one far fewer, so more warps stay resident.
@@ -1166,6 +1182,7 @@ def any_hit_bvh2_gpu[curves_on: Bool, inst_on: Bool, alpha_on: Bool](
     var nearXIsMin = rdir.x >= Float32(0.0)
     var nearYIsMin = rdir.y >= Float32(0.0)
     var nearZIsMin = rdir.z >= Float32(0.0)
+    var inst_leaf = PrimId(Int64(0), Int64(0), Int64(0), Int32(-1), Int8(0), Int8(0), Int8(0), Int8(0))
     var stack = Array[Int32, 64](uninitialized=True)
     var stack_ptr = stack.unsafe_ptr()
     var toVisit = 0
@@ -1199,10 +1216,8 @@ def any_hit_bvh2_gpu[curves_on: Bool, inst_on: Bool, alpha_on: Bool](
                         return True
                     continue
                 elif inst_on and prim.type == 8:
-                    if _shadow_is_null_material(sd.materials, prim.materialIndex):
-                        continue
-                    if _traverse_instances[True](prim, sd.meshes, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, ray_org, ray_dir, tMax, True, sd.curves)[0]:
-                        return True
+                    if not _shadow_is_null_material(sd.materials, prim.materialIndex):
+                        inst_leaf = prim      # walked after this loop, so a warp's threads walk the instances together
                     continue
                 else:
                     continue
@@ -1259,13 +1274,15 @@ def any_hit_bvh2_gpu[curves_on: Bool, inst_on: Bool, alpha_on: Bool](
                 toVisit -= 1
                 current = Int(stack_ptr[unsafe_offset=toVisit])
                 cur_oc = _node_oc(_node_hi(nodes_f, current))
+    comptime if inst_on:
+        if inst_leaf.type == Int8(8):
+            return _traverse_instances[True](inst_leaf, sd.meshes, sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, ray_org, ray_dir, tMax, True, sd.curves)[0]
     return False
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(MINCTA_TRAVERSE))
 def sw_resolve_shadow_gpu[rare_on: Bool, alpha_on: Bool](
     sd: SceneView,
-    paths: Pointer[PathState, MutUntrackedOrigin],
     tasks: Pointer[ShadowTask, MutUntrackedOrigin],
     ids: Pointer[Int32, MutUntrackedOrigin],
     counter: Pointer[Int32, MutUntrackedOrigin],
@@ -1273,15 +1290,10 @@ def sw_resolve_shadow_gpu[rare_on: Bool, alpha_on: Bool](
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= Int(counter[unsafe_offset=0]):
         return
-    var p = Int(ids[unsafe_offset=i])
-    comptime for s in range(SHADOW_SLOTS):
-        var t = p * SHADOW_SLOTS + s
-        if tasks[unsafe_offset=t].active != Int32(0):
-            var task = tasks[unsafe_offset=t]
-            tasks[unsafe_offset=t].active = Int32(0)
-            var ray = Ray(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
-            if not any_hit_bvh2_gpu[rare_on, rare_on, alpha_on](sd, ray, task.tmax):
-                paths[unsafe_offset=p].estimate += task.contrib
+    var t = Int(ids[unsafe_offset=i])
+    var task = tasks[unsafe_offset=t]
+    var ray = Ray(Point3f(task.origin.x, task.origin.y, task.origin.z), Vec3f(task.direction.x, task.direction.y, task.direction.z))
+    tasks[unsafe_offset=t].active = Int32(0) if any_hit_bvh2_gpu[rare_on, rare_on, alpha_on](sd, ray, task.tmax) else Int32(2)
 
 # Lists the active deferred shadow rays of ALL slots (task index = path * SHADOW_SLOTS + slot) as dense rays.
 def rt_pack_shadow_compact_kernel(
