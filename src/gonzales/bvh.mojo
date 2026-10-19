@@ -1349,7 +1349,7 @@ def _traverse_blas_wide(
     return (hasHit, localTHit, bestU, bestV, hitTri)
 
 @always_inline
-def _traverse_blas_triangles[wide_on: Bool = False](
+def _traverse_blas_triangles[wide_on: Bool = True](
     blasNodes: Pointer[BVH2Node, MutUntrackedOrigin],
     blasPrimIds: Pointer[PrimId, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
@@ -1471,7 +1471,7 @@ def _traverse_blas_triangles[wide_on: Bool = False](
 
 
 @always_inline
-def _traverse_instance[wide_on: Bool = False](
+def _traverse_instance[wide_on: Bool = True](
     inst_idx: Int,
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
@@ -1580,7 +1580,7 @@ def _traverse_blas_curves(
 
 
 @always_inline
-def _traverse_instances[wide_on: Bool = False](
+def _traverse_instances[wide_on: Bool = True](
     prim: PrimId,
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
     blasNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin],
@@ -1794,7 +1794,7 @@ def traverse_bvh2_core[Or: Origin[mut=True]](
                         instHit = False
                     continue
                 elif prim.type == 8:
-                    var sub = _traverse_instances(prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves)
+                    var sub = _traverse_instances[True](prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves)
                     if sub[0]:
                         localTHit = sub[1]
                         bestU = sub[2]
@@ -2121,7 +2121,7 @@ def _shadow_is_null_material(
         return False
     return materials[unsafe_offset=Int(mat_idx)].type == MatKind.interface
 
-def any_hit_bvh2_core[wide_on: Bool = False](
+def any_hit_bvh2_core[wide_on: Bool = True](
     bvh2Nodes: Pointer[BVH2Node, MutUntrackedOrigin],
     primIds: Pointer[PrimId, MutUntrackedOrigin],
     meshes: Pointer[TriangleMesh, MutUntrackedOrigin],
@@ -2678,7 +2678,7 @@ def traverse_bvh4_core[Or: Origin[mut=True]](
                         hitIndex = slot
                         instHit = False
                 elif prim.type == 8:
-                    var sub = _traverse_instances(prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves)
+                    var sub = _traverse_instances[True](prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, localTHit, False, curves)
                     if sub[0]:
                         localTHit = sub[1]
                         bestU = sub[2]
@@ -2842,7 +2842,7 @@ def any_hit_bvh4_core(
                 elif prim.type == 8:
                     if _shadow_is_null_material(materials, prim.materialIndex):
                         continue
-                    if _traverse_instances(prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, tMax, True, curves)[0]:
+                    if _traverse_instances[True](prim, meshes, blasNodesArr, blasPrimIdsArr, instances, ray_org, ray_dir, tMax, True, curves)[0]:
                         return True
         else:
             var node = bvh4.nodes[unsafe_offset=cur]
