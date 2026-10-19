@@ -952,6 +952,11 @@ def _host_plan(ctx: DeviceContext, ref s: ParsedScene_Mojo, n_pixels: Int) raise
             rt_bytes = getsize(path)
     except:
         pass
+    if rt_bytes == 0:    # first run: no cache yet, estimate what the build will need
+        var tris = 0
+        for i in range(Int(s.mesh_count)):
+            tris += Int(s.mesh_n_tris[unsafe_offset=i])
+        rt_bytes = 30 * tris + 90 * Int(s.instance_count)
     var mesh_bytes = 0
     for i in range(Int(s.mesh_count)):
         var quads = s.meshes[unsafe_offset=i].quads
