@@ -116,6 +116,7 @@ struct PtexCache(Movable):
         self.threads = List[OsThread]()
 
     def __del__(deinit self):
+        for t in range(len(self.threads)): self.threads[t].join()   # a load still in flight reads and writes what follows
         for i in range(len(self.names)):
             self.names[i].unsafe_free(); self.base[i].unsafe_free(); self.cur[i].unsafe_free()
             if _is_real_ptr(self.full[i]):
