@@ -85,7 +85,7 @@ OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(
 
 .PHONY: all c ca clean clean_all e edit es editScene em editMakefile lldb p perf tags t test smoke smoketest \
 	test_debug test_release v view wc book book-html book-watch ut unittest \
-	caustics causticstest sms_mitsuba_ref release-amd
+	caustics causticstest sms_mitsuba_ref release-amd unittest-amd
 
 PBRT_OPTIONS = #--quiet # --stats #--gpu #--nthreads 1 #--quiet --v 2
 
@@ -305,7 +305,11 @@ GPU_ONLY_TEST_SRCS := Tests/unit/test_gpu.mojo \
                       Tests/unit/test_vulkaninterop_rt.mojo \
                       Tests/unit/test_rtcore.mojo
 ifeq ($(HAVE_CUDA),)
+ifdef AMD
+UNIT_TEST_SRCS := $(filter-out $(filter-out Tests/unit/test_gpu.mojo,$(GPU_ONLY_TEST_SRCS)),$(UNIT_TEST_SRCS))
+else
 UNIT_TEST_SRCS := $(filter-out $(GPU_ONLY_TEST_SRCS),$(UNIT_TEST_SRCS))
+endif
 endif
 # Integration smoke test: render one tiny image per integrator/backend and
 # assert each is openable, finite and non-black. Unit tests cover pure
@@ -421,6 +425,9 @@ smoketest: release
 	exit $$rc
 
 ut: unittest
+# On the AMD card: test_gpu stays in; the CUDA interop and RT-core tests only have stubs there
+unittest-amd:
+	$(MAKE) unittest AMD=1 BUILD_DIR=build-amd CUDA_HOME=/nonexistent
 # Depends on the OIIO/viewer bridge libs (not the full $(GONZALES) binary)
 # because a few tests (e.g. test_gpu_scene_upload.mojo) compile real code
 # from pbrt_parser.mojo/shading.mojo that references their C symbols
