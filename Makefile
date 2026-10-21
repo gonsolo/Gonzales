@@ -85,7 +85,7 @@ OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(
 
 .PHONY: all c ca clean clean_all e edit es editScene em editMakefile lldb p perf tags t test smoke smoketest \
 	test_debug test_release v view wc book book-html book-watch ut unittest \
-	caustics causticstest sms_mitsuba_ref
+	caustics causticstest sms_mitsuba_ref release-amd
 
 PBRT_OPTIONS = #--quiet # --stats #--gpu #--nthreads 1 #--quiet --v 2
 
@@ -273,6 +273,9 @@ sms_mitsuba_ref: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTERO
 
 r: release
 release: $(GONZALES)
+# AMD RX 6800 (gfx1030): without CUDA the RT-core and interop bridges build as stubs
+release-amd:
+	$(MAKE) release BUILD_DIR=build-amd CUDA_HOME=/nonexistent MOJO_BUILD_FLAGS="--target-accelerator gfx1030"
 d: debug
 debug: $(GONZALES)
 t: test
