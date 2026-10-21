@@ -1,6 +1,8 @@
 # SPPM GPU kernels.
 # Part of the BDPT/VCM machinery that used to be one file (bdpt_*.mojo).
 
+from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
+from std.utils import StaticTuple
 from max.gpu import block_idx, thread_idx, block_dim
 from .primitives import Intersection
 from .media import Medium, Grid, NvdbGrid
@@ -14,11 +16,15 @@ from .sppm import (
 )
 from .spectrum import pass_wavelengths
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def sppm_reset_i32_gpu(counter: Pointer[Int32, MutUntrackedOrigin]):
     if block_idx.x == 0 and thread_idx.x == 0:
         counter[unsafe_offset=0] = Int32(0)
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def sppm_gen_vp_gpu(
     vps: Pointer[SPPMPixel, MutUntrackedOrigin],
     inter_scratch: Pointer[Intersection, MutUntrackedOrigin],
@@ -48,6 +54,8 @@ def sppm_gen_vp_gpu(
     vps[unsafe_offset=combined] = _sppm_trace_visible_point[True](sd, pcg, r2c, c2w, px, py, Int32(pix), init_r2, inter_scratch.unsafe_offset(combined), Int(max_depth_dp), film_filter, combined % vp_samples)
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def sppm_emit_photons_gpu(
     photons: Pointer[SPPMPhoton, MutUntrackedOrigin],
     n_emit_dp: Int64,
@@ -90,6 +98,8 @@ def sppm_emit_photons_gpu(
         spectral_cie_z, spectral_d65, pass_wavelengths(pass_idx * Int(n_emit) + k))
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def sppm_grid_reset_gpu(heads: Pointer[Int32, MutUntrackedOrigin], hsize_dp: Int64):
     var hsize = Int(hsize_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -98,6 +108,8 @@ def sppm_grid_reset_gpu(heads: Pointer[Int32, MutUntrackedOrigin], hsize_dp: Int
     grid_reset_cell(heads, tid)
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def sppm_grid_count_gpu(
     photons:  Pointer[SPPMPhoton, MutUntrackedOrigin],
     n_stored_dp: Int64,
@@ -110,6 +122,8 @@ def sppm_grid_count_gpu(
     _sppm_count_photon(k, photons, heads, inv_cell)
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def sppm_grid_insert_gpu(
     photons:  Pointer[SPPMPhoton, MutUntrackedOrigin],
     n_stored_dp: Int64,
@@ -124,6 +138,8 @@ def sppm_grid_insert_gpu(
     _sppm_insert_photon[True](k, photons, heads, inv_cell, Int(pass_idx_dp))
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def sppm_gather_gpu(
     vps:      Pointer[SPPMPixel, MutUntrackedOrigin],
     n_pix_dp:    Int64,
@@ -155,6 +171,8 @@ def sppm_gather_gpu(
                      spectral_cie_z, spectral_d65, pass_wavelengths(Int(pass_idx_dp)), Int(pass_idx_dp))
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def sppm_nee_gpu(
     vps:    Pointer[SPPMPixel, MutUntrackedOrigin],
     n_vps_dp:  Int64,
@@ -173,6 +191,8 @@ def sppm_nee_gpu(
     _sppm_nee_one(vps, i, sd, pcg)
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def sppm_flush_gpu(
     vps:   Pointer[SPPMPixel, MutUntrackedOrigin],
     n_vps_dp: Int64,
@@ -191,6 +211,8 @@ def sppm_flush_gpu(
                     spectral_cie_z, spectral_d65)
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def sppm_retrace_vp_gpu(
     vps: Pointer[SPPMPixel, MutUntrackedOrigin],
     inter_scratch: Pointer[Intersection, MutUntrackedOrigin],
@@ -225,6 +247,8 @@ def sppm_retrace_vp_gpu(
     vps[unsafe_offset=pix] = nv
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def sppm_finalize_gpu(
     vps:        Pointer[SPPMPixel, MutUntrackedOrigin],
     n_pix_dp:      Int64,

@@ -1,3 +1,5 @@
+from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
+from std.utils import StaticTuple
 from .bvh import BVH2Node, LightSample, _sample_distant_light_nee, _sample_infinite_light_nee, _sample_point_light_nee, _sample_sphere_light_nee, any_hit_bvh2_core, test_spheres, traverse_bvh2_core, SceneView
 from .curves import Curve
 from .geometry import Point2f, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, point3f, vec3f
@@ -18,6 +20,8 @@ from std.math import exp, log, sqrt
 from .gpu_scene import GpuSceneHandle
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def update_medium_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
@@ -943,6 +947,8 @@ def _sample_medium_core(
         path_ptr[].pcgState = pcg.state
         path_ptr[].active = Int8(0)
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def sample_medium_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],

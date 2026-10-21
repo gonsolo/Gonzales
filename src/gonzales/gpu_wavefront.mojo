@@ -32,6 +32,8 @@ from std.math import ceildiv, sqrt
 from std.sys import has_accelerator
 from .gpu_scene import GpuSceneHandle
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def reset_shadow_tasks_gpu(
     shadow_tasks: Pointer[ShadowTask, MutUntrackedOrigin],
     count_dp: Int64,
@@ -46,6 +48,8 @@ def reset_shadow_tasks_gpu(
     for s in range(Int(slots_dp)):
         shadow_tasks[unsafe_offset=tid * Int(slots_dp) + s].active = Int32(0) if s < Int(usable_dp) else Int32(-1)
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def reset_restir_reservoirs_gpu(
     reservoirs: Pointer[DIReservoir, MutUntrackedOrigin],
     count_dp: Int64,
@@ -62,6 +66,8 @@ def reset_restir_reservoirs_gpu(
         return
     reservoirs[unsafe_offset=tid] = di_reservoir_init()
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def reset_restir_vol_reservoirs_gpu(
     reservoirs: Pointer[VolReservoir, MutUntrackedOrigin],
     count_dp: Int64,
@@ -76,6 +82,8 @@ def reset_restir_vol_reservoirs_gpu(
     reservoirs[unsafe_offset=tid] = vol_reservoir_init()
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def reset_vol_used_gpu(
     used: Pointer[Int8, MutUntrackedOrigin],
     count_dp: Int64,
@@ -134,6 +142,8 @@ def _clamp_sample_rgb(r: Float32, g: Float32, b: Float32, lim: Float32
     return (c.r, c.g, c.b)
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def accumulate_film_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     film: Pointer[Float32, MutUntrackedOrigin],
@@ -167,6 +177,8 @@ def accumulate_film_gpu(
     albedo_film[unsafe_offset=tid*3+2] += paths[unsafe_offset=tid].albedo.b
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def clear_film_gpu(film: Pointer[Float32, MutUntrackedOrigin], n_pixels_dp: Int64):
     var n_pixels = Int(n_pixels_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -177,6 +189,8 @@ def clear_film_gpu(film: Pointer[Float32, MutUntrackedOrigin], n_pixels_dp: Int6
     film[unsafe_offset=tid*3+2] = Float32(0)
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def clear_scalar_film_gpu(film: Pointer[Float32, MutUntrackedOrigin], n_pixels_dp: Int64):
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
     if tid >= Int(n_pixels_dp):
@@ -186,6 +200,8 @@ def clear_scalar_film_gpu(film: Pointer[Float32, MutUntrackedOrigin], n_pixels_d
 
 # Wavefront accumulation: thread px sums actual_batch samples from path_buf layout
 # path_buf[si * n_pixels + px] and adds to film[px].  No atomics needed (one thread per pixel).
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def accumulate_film_wavefront_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     film: Pointer[Float32, MutUntrackedOrigin],
@@ -232,6 +248,8 @@ def accumulate_film_wavefront_gpu(
 
 # Wavefront primary-ray generation: thread ti → pixel (ti % n_pixels), sample (si_start + ti // n_pixels).
 # Layout: path_buf[si_local * n_pixels + px_flat] — adjacent threads touch adjacent pixels of same sample.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def gen_primary_rays_wavefront_gpu(
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     r2c: Pointer[Float32, MutUntrackedOrigin],
@@ -296,6 +314,8 @@ def gen_primary_rays_wavefront_gpu(
 
 
 # Stream compaction (one atomic per block): idx[0..counter) lists the active paths, so later kernels run on full warps.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def compact_active_paths_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     count_dp: Int64,
@@ -309,6 +329,8 @@ def compact_active_paths_gpu(
         idx[unsafe_offset=pos] = Int32(tid)
 
 # The same over an existing list, keeping the paths whose pending material is `kind`.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def compact_by_kind_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     src_idx: Pointer[Int32, MutUntrackedOrigin],
@@ -383,6 +405,8 @@ def traverse_paths_gpu[rare_on: Bool, alpha_on: Bool, count_on: Bool = False](
 # Pack ray data from path_buf directly into the interop-shared rays buffer
 # -- no host copy, this kernel writes straight into CUDA-mapped memory
 # that a Vulkan compute shader also reads.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def vulkaninterop_pack_rays_kernel(
     paths: Pointer[PathState, MutUntrackedOrigin],
     rays: Pointer[Float32, MutUntrackedOrigin],
@@ -422,6 +446,8 @@ def vulkaninterop_pack_rays_kernel(
 # not supported inside ObjectBegin/ObjectEnd (pbrt_parser.mojo skips it
 # there), so instance hits are always ordinary (type==0) triangles, never
 # the type==3 area-light encoding.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def vulkaninterop_unpack_results_kernel(
     results: Pointer[Float32, MutUntrackedOrigin],
     inter: Pointer[Intersection, MutUntrackedOrigin],
@@ -520,6 +546,8 @@ def vulkaninterop_unpack_results_kernel(
 # Spheres stay purely analytic (exact intersection/normals) rather than
 # tessellated into the Vulkan BLAS/TLAS -- simpler, and free of any
 # tessellation-precision tradeoff.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def vulkaninterop_test_spheres_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     inter: Pointer[Intersection, MutUntrackedOrigin],
@@ -573,6 +601,8 @@ def _grow_cone(
         paths[unsafe_offset=tid].cone_len = Float32(-1.0)
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def accumulate_cone_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     results: Pointer[Intersection, MutUntrackedOrigin],
@@ -674,6 +704,8 @@ def rt_no_paths() -> Pointer[PathState, MutUntrackedOrigin]:
 def rt_no_meshes() -> Pointer[TriangleMesh, MutUntrackedOrigin]:
     return Pointer[TriangleMesh, MutUntrackedOrigin].unsafe_dangling()
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def rtcore_alpha_first_kernel(
     rays: Pointer[Float32, MutUntrackedOrigin],
     results: Pointer[Float32, MutUntrackedOrigin],
@@ -696,6 +728,8 @@ def rtcore_alpha_first_kernel(
     if killed:
         list_out[unsafe_offset=pos] = Int32(tid)
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def rtcore_alpha_gather_kernel(
     rays: Pointer[Float32, MutUntrackedOrigin],
     rays_c: Pointer[Float32, MutUntrackedOrigin],
@@ -710,6 +744,8 @@ def rtcore_alpha_gather_kernel(
         rays_c[unsafe_offset=i * 8 + k] = rays[unsafe_offset=src + k]
 
 # Re-test the re-traced rays: a rejected hit stays listed (into list_out), anything else is final and copied back.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def rtcore_alpha_retest_kernel(
     rays: Pointer[Float32, MutUntrackedOrigin],
     rays_c: Pointer[Float32, MutUntrackedOrigin],
@@ -738,6 +774,8 @@ def rtcore_alpha_retest_kernel(
     if killed:
         list_out[unsafe_offset=pos] = list_in[unsafe_offset=i]
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def rtcore_alpha_finish_kernel(
     results: Pointer[Float32, MutUntrackedOrigin],
     list_in: Pointer[Int32, MutUntrackedOrigin],
@@ -748,6 +786,8 @@ def rtcore_alpha_finish_kernel(
         return
     results.unsafe_bitcast[Int32]()[unsafe_offset=Int(list_in[unsafe_offset=i]) * 8 + 6] = Int32(3)
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def rtcore_zero_counters_kernel(counters: Pointer[Int32, MutUntrackedOrigin]):
     if thread_idx.x == 0:
         counters[unsafe_offset=0] = Int32(0)
@@ -827,6 +867,8 @@ def rtcore_alpha_passes(
 
 
 # Reads the ray from the interop rays buffer (so it serves any state layout: path tracer, VCM light and camera paths).
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def rtcore_alpha_fallback_gpu(
     sd: SceneView,
     rays: Pointer[Float32, MutUntrackedOrigin],
@@ -856,6 +898,8 @@ def rtcore_alpha_fallback_gpu(
         _grow_cone(paths, inter, ot)
 
 # Analytic spheres for rays that live in the interop rays buffer (VCM's path states are not PathState).
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def rtcore_spheres_from_rays_gpu(
     rays: Pointer[Float32, MutUntrackedOrigin],
     inter: Pointer[Intersection, MutUntrackedOrigin],
@@ -876,6 +920,8 @@ comptime CURVE_BLOCK: Int = get_defined_int["CURVE_BLOCK", 32]()
 
 # The RT cores trace triangles only: curves are tested in software against the RT hit distance, and a nearer curve hit
 # replaces the raw result (flag 2, or 4 with the instance in word 3) so the unpack kernel treats it like any curve hit.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def rtcore_curve_clip_gpu(
     sd: SceneView,
     rays: Pointer[Float32, MutUntrackedOrigin],
@@ -968,6 +1014,8 @@ def rtcore_trace_unpack_gpu(
 # Most paths are dead after a few bounces and most shadow slots are empty, yet every full-grid pack/trace/convert/unpack
 # pass touched all n_pixels * WAVEFRONT_BATCH slots. These kernels list only the live rays (one atomic per warp) so every
 # later pass runs over a short dense array; the host reads the count back once per stage.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def rt_pack_compact_kernel(
     paths: Pointer[PathState, MutUntrackedOrigin],
     rays: Pointer[Float32, MutUntrackedOrigin],
@@ -1130,6 +1178,8 @@ def rtcore_closest_hit_gpu(
 # path's tasks in slot order (one thread per path, so the estimate is never updated concurrently) and frees them.
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 # One thread per (live path, slot): lists every queued shadow ray, so a path's two rays are traced by two threads.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def sw_pack_shadow_tasks_gpu(
     tasks: Pointer[ShadowTask, MutUntrackedOrigin],
     live_idx: Pointer[Int32, MutUntrackedOrigin],
@@ -1148,6 +1198,8 @@ def sw_pack_shadow_tasks_gpu(
         ids[unsafe_offset=pos] = Int32(t)
 
 # Adds the rays that reached their light (marked 2 by sw_resolve_shadow_gpu) and frees every slot of the live paths.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def sw_add_shadow_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     tasks: Pointer[ShadowTask, MutUntrackedOrigin],
@@ -1296,6 +1348,8 @@ def sw_resolve_shadow_gpu[rare_on: Bool, alpha_on: Bool](
     tasks[unsafe_offset=t].active = Int32(0) if any_hit_bvh2_gpu[rare_on, rare_on, alpha_on](sd, ray, task.tmax) else Int32(2)
 
 # Lists the active deferred shadow rays of ALL slots (task index = path * SHADOW_SLOTS + slot) as dense rays.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def rt_pack_shadow_compact_kernel(
     tasks: Pointer[ShadowTask, MutUntrackedOrigin],
     rays: Pointer[Float32, MutUntrackedOrigin],
@@ -1329,6 +1383,8 @@ def rt_pack_shadow_compact_kernel(
 
 # Adds the contribution of every listed shadow ray of one slot that reached its light, and frees its task for the next
 # bounce (so the tasks never need a full-grid reset between bounces).
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def resolve_shadow_compact_kernel(
     paths: Pointer[PathState, MutUntrackedOrigin],
     tasks: Pointer[ShadowTask, MutUntrackedOrigin],
@@ -1433,6 +1489,8 @@ def rtcore_shadow_rays_compact_gpu(
 
 # The Vulkan ray-query shader treats every triangle as opaque. A ray whose nearest hit is on a mesh with an alpha
 # cutout (or a constant alpha below 1, as on an invisible emitter) is traced again in software, which honours it.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def vk_alpha_retrace_gpu(
     sd: SceneView,
     paths: Pointer[PathState, MutUntrackedOrigin],
@@ -1547,6 +1605,8 @@ def vulkaninterop_rt_traverse_paths_gpu(
 #      no race updating `results`, and warps are densely packed with real work
 #      instead of ~92% idle lanes.
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def reset_curve_counter_gpu(counter: Pointer[Int32, MutUntrackedOrigin]):
     if block_idx.x == 0 and thread_idx.x == 0:
         counter[unsafe_offset=0] = Int32(0)
@@ -1560,6 +1620,8 @@ def reset_curve_counter_gpu(counter: Pointer[Int32, MutUntrackedOrigin]):
 # buffer (see vulkaninterop_unpack_results_kernel's hitFlag==2 branch), so
 # compact_curve_paths_gpu/resolve_curve_candidates_gpu never run for a
 # Vulkan-RT render (see _gpu_bounce_kernels).
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def compact_curve_paths_gpu(
     curve_cand_count: Pointer[Int32, MutUntrackedOrigin],
     n_dp: Int64,
@@ -1574,6 +1636,8 @@ def compact_curve_paths_gpu(
         var pos = Atomic.fetch_add(compact_counter, Int32(1))
         compact_pathIds[unsafe_offset=Int(pos)] = Int32(tid)
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def resolve_curve_candidates_gpu(
     compact_pathIds: Pointer[Int32, MutUntrackedOrigin],
     compact_counter: Pointer[Int32, MutUntrackedOrigin],
@@ -1624,6 +1688,8 @@ def resolve_curve_candidates_gpu(
 
 # GPU kernel: generate primary PathState for every pixel in one pass.
 # Each thread handles one pixel.  All sampling is pure math — no host calls.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def gen_primary_rays_gpu(
     sobol_matrices: Pointer[UInt32, MutUntrackedOrigin],
     r2c: Pointer[Float32, MutUntrackedOrigin],
@@ -1674,6 +1740,8 @@ def gen_primary_rays_gpu(
     )
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def pack_center_rays_gpu(
     r2c: Pointer[Float32, MutUntrackedOrigin],
     c2w: Pointer[Float32, MutUntrackedOrigin],
@@ -1714,6 +1782,8 @@ def pack_center_rays_gpu(
 
 # GPU kernel: shoot one unjittered center ray per pixel and write normals + depth.
 # Used to guide the à-trous denoiser with geometric edge information.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def gen_aux_buffers_gpu(
     r2c: Pointer[Float32, MutUntrackedOrigin],
     c2w: Pointer[Float32, MutUntrackedOrigin],
@@ -1909,6 +1979,8 @@ def gpu_gen_aux_buffers[Oc: Origin[mut=True]](
 # code, so it doesn't touch the class of PTX-codegen bugs that blocks sharing
 # actual kernel bodies elsewhere in this codebase (see bdpt_*.mojo's MNEE/
 # _connect duplication comments for that unrelated, still-real constraint).
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def deactivate_paths_past_maxdepth_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     n_dp: Int64, max_depth: Int32,

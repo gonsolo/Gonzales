@@ -1,3 +1,5 @@
+from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
+from std.utils import StaticTuple
 from .geometry import RGB, Vec3f, dot, cross
 from std.math import sqrt, floor
 from .postprocess import _atrous_spatial_weight, _atrous_tap_weight, _firefly_clamp_pixel
@@ -7,6 +9,8 @@ from std.sys import has_accelerator
 from .gpu_scene import GpuSceneHandle
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def normalize_beauty_albedo_gpu(
     film: Pointer[Float32, MutUntrackedOrigin],
     albedo_film: Pointer[Float32, MutUntrackedOrigin],
@@ -39,6 +43,8 @@ def normalize_beauty_albedo_gpu(
     albedo_out[unsafe_offset=tid*3+2] = albedo_film[unsafe_offset=tid*3+2] * inv_weight
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def estimate_variance_gpu(
     beauty: Pointer[Float32, MutUntrackedOrigin],
     film: Pointer[Float32, MutUntrackedOrigin],
@@ -79,6 +85,8 @@ def estimate_variance_gpu(
     variance_out[unsafe_offset=tid] = w * samp_var + (Float32(1) - w) * v
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def firefly_clamp_gpu(
     beauty: Pointer[Float32, MutUntrackedOrigin],
     output: Pointer[Float32, MutUntrackedOrigin],
@@ -129,6 +137,8 @@ def firefly_clamp_gpu(
     output[unsafe_offset=ci + 2] = c.b
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def temporal_accumulate_gpu(
     cur: Pointer[Float32, MutUntrackedOrigin],
     world_pos: Pointer[Float32, MutUntrackedOrigin],
@@ -206,6 +216,8 @@ def temporal_accumulate_gpu(
     len_out[unsafe_offset=tid] = len_new
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def atrous_filter_gpu(
     input: Pointer[Float32, MutUntrackedOrigin],
     albedo: Pointer[Float32, MutUntrackedOrigin],

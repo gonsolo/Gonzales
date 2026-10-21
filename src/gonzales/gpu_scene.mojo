@@ -1,3 +1,5 @@
+from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
+from std.utils import StaticTuple
 from .bvh import BVH2Node, BVH4, SceneView
 from .curves import CURVE_DEFER_K, Curve
 from .geometry import _is_real_ptr
@@ -1258,6 +1260,8 @@ def gpu_upload_scene(
 
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def init_curve_cand_offset_gpu(offset_buf: Pointer[Int32, MutUntrackedOrigin], n_dp: Int64):
     var n = Int(n_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -1350,6 +1354,8 @@ def gpu_ptex_withheld(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], n_pix
                 px_out.append(Int32(i % n_pixels))
                 si_out.append(Int32(si_start + i // n_pixels) if si_start >= 0 else si_of[unsafe_offset=i])
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def ptex_patch_gpu(tables: Pointer[UInt64, MutUntrackedOrigin], patches: Pointer[UInt32, MutUntrackedOrigin], n_dp: Int64):
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     if i >= Int(n_dp):

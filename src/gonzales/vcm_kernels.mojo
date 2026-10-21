@@ -217,6 +217,8 @@ def _bdpt_camera_connect_gpu(
 # Thin per-bounce wrappers around _bdpt_light_path_init/_bounce and
 # _bdpt_camera_path_init/_bounce (this file, above), the counterpart to
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def _bdpt_light_path_init_gpu(
     states: Pointer[VCMLightPathState, MutUntrackedOrigin],
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
@@ -239,6 +241,8 @@ def _bdpt_light_path_init_gpu(
     var pass_wl = pass_wavelengths(pass_idx)
     states[unsafe_offset=k] = _bdpt_light_path_init[True](sd, pcg, default_emit_med, k, lvc, lvc_path_len, mis_vc_weight_factor, pass_wl)
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def _bdpt_light_path_intersect_gpu(
     sd: SceneView,
     states: Pointer[VCMLightPathState, MutUntrackedOrigin],
@@ -339,6 +343,8 @@ def _bdpt_light_path_bounce_gpu(
     states[unsafe_offset=k].pcg_state = pcg.state
     states[unsafe_offset=k].pcg_inc = pcg.inc
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def _bdpt_camera_path_init_gpu(
     states: Pointer[VCMCameraPathState, MutUntrackedOrigin],
     r2c: Pointer[Float32, MutUntrackedOrigin],
@@ -368,6 +374,8 @@ def _bdpt_camera_path_init_gpu(
     var pass_wl = pass_wavelengths(pass_idx)
     states[unsafe_offset=pix] = _bdpt_camera_path_init[True](r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl, film_filter)
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def _bdpt_camera_path_intersect_gpu(
     sd: SceneView,
     states: Pointer[VCMCameraPathState, MutUntrackedOrigin],
@@ -495,6 +503,8 @@ def _bdpt_camera_path_bounce_gpu(
     states[unsafe_offset=pix].pcg_state = pcg.state
     states[unsafe_offset=pix].pcg_inc = pcg.inc
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def _bdpt_camera_path_accumulate_gpu(
     states: Pointer[VCMCameraPathState, MutUntrackedOrigin],
     accum: Pointer[Float32, MutUntrackedOrigin],
@@ -539,6 +549,8 @@ def _bdpt_camera_path_accumulate_gpu(
 # Swaps _bdpt_light_path_intersect_gpu/_bdpt_camera_path_intersect_gpu's
 # software-BVH traverse_bvh2_core/test_spheres for the stage-1/2/3 CUDA/
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def vulkaninterop_pack_light_rays_kernel(
     states: Pointer[VCMLightPathState, MutUntrackedOrigin],
     rays: Pointer[Float32, MutUntrackedOrigin],
@@ -560,6 +572,8 @@ def vulkaninterop_pack_light_rays_kernel(
     rays[unsafe_offset=idx + 6] = rd.z
     rays[unsafe_offset=idx + 7] = Float32(1.0e8) if states[unsafe_offset=tid].active != Int8(0) else Float32(0.0)   # a finished path traces a zero-length ray
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def vulkaninterop_pack_camera_rays_kernel(
     states: Pointer[VCMCameraPathState, MutUntrackedOrigin],
     rays: Pointer[Float32, MutUntrackedOrigin],
@@ -697,6 +711,8 @@ def vulkaninterop_rt_traverse_camera_paths_gpu(
         grid_dim=grid, block_dim=block_size,
     )
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def vulkaninterop_pack_all_shadow_rays_kernel(
     # Perf (2026-07-13, task #163 stage 5 follow-up): packs ALL
     # n_pix*_BDPT_MAX_VERTS shadow-ray slots in ONE dispatch instead of
@@ -768,6 +784,8 @@ def vulkaninterop_rt_traverse_shadow_gpu(
     else:
         _ = vulkaninterop_rt_trace(interop_scene, Int32(count), cuda_stream)
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def bdpt_merge_grid_reset_gpu(heads: Pointer[Int32, MutUntrackedOrigin], hsize_dp: Int64):
     var hsize = Int(hsize_dp)
     var tid = Int(block_idx.x * block_dim.x + thread_idx.x)
@@ -776,6 +794,8 @@ def bdpt_merge_grid_reset_gpu(heads: Pointer[Int32, MutUntrackedOrigin], hsize_d
     _vcm_reset_cell(heads, tid)
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def bdpt_merge_grid_count_gpu(
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
     lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
@@ -789,6 +809,8 @@ def bdpt_merge_grid_count_gpu(
     _bdpt_count_merge_vertex(k, lvc, lvc_path_len, heads, inv_cell)
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def bdpt_merge_grid_insert_gpu(
     lvc: Pointer[BDPTVertex, MutUntrackedOrigin],
     lvc_path_len: Pointer[Int32, MutUntrackedOrigin],
@@ -808,6 +830,8 @@ def bdpt_merge_grid_insert_gpu(
 comptime _VCM_BUDGET_REDUCE_THREADS = 4096
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def vcm_budget_reduce_gpu(
     stat: Pointer[Float32, MutUntrackedOrigin],
     heads: Pointer[Int32, MutUntrackedOrigin],
@@ -831,6 +855,8 @@ def vcm_budget_reduce_gpu(
 
 # ── Host driver ───────────────────────────────────────────────────────────
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def reset_shadow_valid_gpu(
     # Task #163 stage 5: zeroes EVERY pixel's shadow_valid slots, every
     # bounce, unconditionally -- including inactive-path and non-diffuse-
@@ -921,6 +947,8 @@ def resolve_shadow_connect_gpu(
         var p = shadow_pending[unsafe_offset=idx]
         shadow_pending[unsafe_offset=idx] = p * Tr
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def sum_shadow_connect_gpu(
     states: Pointer[VCMCameraPathState, MutUntrackedOrigin],
     shadow_pending: Pointer[SpectralSample, MutUntrackedOrigin],

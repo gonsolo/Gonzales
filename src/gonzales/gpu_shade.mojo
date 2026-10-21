@@ -235,6 +235,8 @@ def shade_coated_diffuse_gpu[defer_only: Bool = False](
     shade_coated_diffuse[True, True, defer_only](path_ptr, inter, ctx_ptr[], mat)
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def shade_diffuse_transmit_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
@@ -289,6 +291,8 @@ def shade_diffuse_transmit_gpu(
 # the ray is never advanced here, so a fresh intersection at the start of
 # the next bounce would just re-hit the same mix material and re-roll the
 # choice forever.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def shade_mix_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
@@ -402,6 +406,8 @@ def shade_dielectric_gpu(
     shade_dielectric[True, True](path_ptr, inter, ctx, mat)
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def shade_thin_dielectric_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
@@ -423,6 +429,8 @@ def shade_thin_dielectric_gpu(
     shade_thin_dielectric(path_ptr, inter, sd.meshes, mat, sd.spheres)
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def shade_coated_conductor_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
@@ -447,6 +455,8 @@ def shade_coated_conductor_gpu(
     shade_coated_conductor[True, True](path_ptr, inter, ctx, mat)
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def shade_interface_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
@@ -469,6 +479,8 @@ def shade_interface_gpu(
     shade_interface(path_ptr, inter)
 
 
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+@__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
 def shade_hair_gpu(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
