@@ -225,9 +225,8 @@ def finish_render[Op: Origin[mut=True], Oa: Origin[mut=True]](
                 Int32(5), Float32(4.0), Float32(0.1), Float32(0.3), Float32(0.05))
     var has_extra = _is_real_ptr(add_after_denoise)
     var extra_ptr = add_after_denoise
-    var extra_owned = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
-    var noisy_ref = pixels.unsafe_origin_cast[MutUntrackedOrigin]()
-    var noisy_owned = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling()
+    var noisy_ref: Pointer[Float32, MutUntrackedOrigin]
+    var noisy_owned: Pointer[Float32, MutUntrackedOrigin]
     if has_extra:
         var max_comp = psc[unsafe_offset=0].film_max_comp
         noisy_owned = unsafe_alloc[Float32](n_pix * 3)

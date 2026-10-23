@@ -761,7 +761,7 @@ def rtcore_alpha_retest_kernel(
 ):
     var i = Int(block_idx.x * block_dim.x + thread_idx.x)
     var killed = False
-    var dst = 0
+    var dst: Int
     if i < Int(m_dp):
         dst = Int(list_in[unsafe_offset=i]) * 8
         killed = _alpha_rejects(rays_c, i * 8, results_c, i * 8, meshes, Int(n_meshes_dp), instance_base_mesh)

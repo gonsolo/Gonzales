@@ -463,7 +463,6 @@ def _rtcore_attach_native(interop_scene: VulkanInteropRtSceneHandle, psc: Pointe
     var as_sizes = unsafe_alloc[Int64](n_as)
     var as_addr = unsafe_alloc[UInt64](n_as)
     var ok = True
-    var slot = 0
     for q in range(n_as):
         var kind = 1
         var index = 0
@@ -757,7 +756,7 @@ def _rtcore_attach_own_native(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
     # the TLAS: the placements, then the identity instance of the ordinary meshes
     var n_inst = ni + (1 if has_ord else 0)
     var shared = _instances_in_tlas(psc)
-    var tlas = RtTlas(unsafe_alloc[UInt8](1), 0, 0, 0, unsafe_alloc[Int32](1))
+    var tlas: RtTlas
     if loaded:
         tlas = RtTlas(cached.bytes, cached.size, cached.rec_off, cached.n_records, cached.inst_of_record)
     else:

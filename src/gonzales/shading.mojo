@@ -492,7 +492,7 @@ def _ptex_ask(tex: GpuTexture, entry: Pointer[UInt8, MutUntrackedOrigin], face: 
     raised it also queues the face; a full queue takes the raise back so the face asks again next frame."""
     var w = entry.unsafe_offset(4).unsafe_bitcast[UInt32]()
     var old = w[unsafe_offset=0]
-    var prev = UInt32(0)
+    var prev: UInt32
     while True:
         prev = (old >> 16) & 0xFF
         if prev >= UInt32(254) or prev >= UInt32(need):

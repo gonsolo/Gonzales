@@ -2372,7 +2372,7 @@ def _bvh4_collapse(
     counter[unsafe_offset=0] = Int32(my + 1)
     var ids = Array[Int32, 4](uninitialized=True)
     var ip = ids.unsafe_ptr()
-    var k = 0
+    var k: Int
     var rn = n2[unsafe_offset=root]
     if rn.count > 0:
         ip[unsafe_offset=0] = Int32(root)

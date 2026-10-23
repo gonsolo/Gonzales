@@ -344,7 +344,7 @@ def _build_binary(order: PI, tlo: PD, thi: PD, tc: PD, tvv: PF, u_first: PI, u_n
     var stack = unsafe_alloc[Int32](128 + 64)
     var nb = 1
     bn_s[unsafe_offset=0] = Int32(0); bn_c[unsafe_offset=0] = Int32(m)
-    var sp = 0
+    var sp: Int
     stack[unsafe_offset=0] = Int32(0); sp = 1
     var cb = unsafe_alloc[Float64](6)
     var tri4 = unsafe_alloc[Int32](RT_BLOCK_TRIS)
@@ -627,7 +627,7 @@ def rt_build_blas(tv: PF, n: Int, tight: Bool = True, sah: Bool = True, quads: B
     var scode = unsafe_alloc[Int32](12)
     for h in range(nn):
         var off = RT_ROOT + h * RT_NODE
-        var ns = 0
+        var ns: Int
         var w10 = 0
         var w1c = 1
         if Int(hn_nk[unsafe_offset=h]) != 0:
@@ -733,7 +733,7 @@ def _build_binary_items(order: PI, tlo: PD, thi: PD, tc: PD, m: Int, bn_s: PI, b
         if count <= 1:
             bn_l[unsafe_offset=ni] = Int32(-1); bn_r[unsafe_offset=ni] = Int32(-1)
             continue
-        var half = 0
+        var half: Int
         if n_fixed > 0 and start == 0 and count > n_fixed:
             half = n_fixed
         elif start + count <= n_fixed:
@@ -854,7 +854,7 @@ def rt_build_tlas(w2o: PF, binst: PI, n: Int, blas_box: PD, n_blas: Int, n_fixed
     var scode = unsafe_alloc[Int32](12)
     for h in range(nn):
         var off = nodes_base + h * RT_NODE
-        var ns = 0
+        var ns: Int
         var w10 = 0
         var w1c = 1
         if Int(hn_nk[unsafe_offset=h]) != 0:

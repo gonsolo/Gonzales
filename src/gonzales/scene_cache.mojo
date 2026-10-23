@@ -134,7 +134,7 @@ def _unsupported(ref s: ParsedScene_Mojo) -> String:
 def scene_cache_variant() -> Int:
     """The settings that change what the parser builds from the same file: template merging, RT pruning and instance culling."""
     var v = 1 if getenv("GONZALES_MERGE_TEMPLATES", "1") == "0" else 0
-    var prune = 0
+    var prune: Int
     try:
         prune = Int(getenv("GONZALES_RT_PRUNE", "0"))
     except:
@@ -379,7 +379,7 @@ def scene_cache_load(cache_path: _Ptr, scene_path: _Ptr) -> Pointer[ParsedScene_
     var npf = _get_int(f)
     var names = List[String]()
     var raws = List[Bool]()
-    for i in range(npf):
+    for _ in range(npf):
         var cs = _get_cstr(f)
         names.append(String(unsafe_from_utf8_ptr=cs.as_imm()))
         cs.unsafe_free()

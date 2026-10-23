@@ -2695,7 +2695,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             var bmin = Vec3f(Float32(3.0e38)); var bmax = Vec3f(Float32(-3.0e38))
             var nsum = Vec3f(Float32(0.0))
             for ti in range(nt):
-                var q0 = Vec3f(Float32(0.0)); var q1 = Vec3f(Float32(0.0)); var q2 = Vec3f(Float32(0.0))
+                var q0: Vec3f; var q1: Vec3f; var q2: Vec3f
                 var vid0 = Int(vis_c[unsafe_offset=ti*3+0]); var vid1 = Int(vis_c[unsafe_offset=ti*3+1]); var vid2 = Int(vis_c[unsafe_offset=ti*3+2])
                 q0 = Vec3f(pts_c[unsafe_offset=vid0*4], pts_c[unsafe_offset=vid0*4+1], pts_c[unsafe_offset=vid0*4+2])
                 q1 = Vec3f(pts_c[unsafe_offset=vid1*4], pts_c[unsafe_offset=vid1*4+1], pts_c[unsafe_offset=vid1*4+2])
