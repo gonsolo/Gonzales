@@ -85,7 +85,7 @@ OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(
 
 .PHONY: all c ca clean clean_all e edit es editScene em editMakefile lldb p perf tags t test smoke smoketest \
 	test_debug test_release v view wc book book-html book-watch ut unittest \
-	caustics causticstest sms_mitsuba_ref release-amd unittest-amd
+	caustics causticstest sms_mitsuba_ref release-amd unittest-amd intel-hello
 
 PBRT_OPTIONS = #--quiet # --stats #--gpu #--nthreads 1 #--quiet --v 2
 
@@ -232,6 +232,19 @@ endif
 # nvcc); tests skip when it is absent.
 rt-cubin:
 	python3 docs/rtcore/exec/build_rt_cubin.py $(BUILD_DIR)/rt_trace.cubin
+
+# Intel GPU hello world: Mojo kernel -> NVPTX LLVM IR -> SPIR-V -> Level Zero (needs llvm-spirv, spirv-tools, level-zero)
+INTEL_DIR = $(BUILD_DIR)/intel
+intel-hello:
+	@mkdir -p $(INTEL_DIR)
+	uv run mojo run Tools/intel/hello_kernel.mojo > $(INTEL_DIR)/hello.ll
+	opt -passes=instnamer -S $(INTEL_DIR)/hello.ll -o $(INTEL_DIR)/hello.named.ll
+	python3 Tools/intel/nvptx2spirv.py $(INTEL_DIR)/hello.named.ll $(INTEL_DIR)/hello.spir.ll
+	llvm-as $(INTEL_DIR)/hello.spir.ll -o $(INTEL_DIR)/hello.bc
+	llvm-spirv --spirv-max-version=1.2 $(INTEL_DIR)/hello.bc -o $(INTEL_DIR)/hello.spv
+	spirv-val --target-env opencl2.2 $(INTEL_DIR)/hello.spv
+	gcc -O2 -Wall Tools/intel/hello_ze.c -lze_loader -o $(INTEL_DIR)/hello_ze
+	$(INTEL_DIR)/hello_ze $(INTEL_DIR)/hello.spv
 
 ifdef GITHUB_ACTIONS
 MOJO_BUILD_FLAGS = --target-accelerator sm_89 --target-cpu x86-64-v3
