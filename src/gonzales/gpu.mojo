@@ -52,13 +52,13 @@ def _stop_if_out_of_memory(msg: String):
 
 # Trace-timing bench mode: wait for the queue, charge the time since the last mark to a stage slot.
 def _bench_stage(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], slot: Int, count_index: Int = -1, count_slot: Int = 0) raises:
-    if handle[].bench[3] != 2:
+    if handle[].bench[unsafe_offset=3] != 2:
         return
     if count_index >= 0:
         handle[].bench[unsafe_offset=count_slot] += read_counter(handle[].ctx, handle[].active_count_buf, count_index)
     handle[].ctx.synchronize()
     var now = Int(perf_counter_ns())
-    handle[].bench[unsafe_offset=slot] += now - handle[].bench[8]
+    handle[].bench[unsafe_offset=slot] += now - handle[].bench[unsafe_offset=8]
     handle[].bench[unsafe_offset=8] = now
 
 # GONZALES_TRAVERSE_COUNT: re-trace the round's rays with step counters, print the means per ray, stop after six rounds.
@@ -88,32 +88,32 @@ def _count_steps(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], sd: SceneV
     var host = unsafe_alloc[UInt8](len(scratch))
     handle[].ctx.enqueue_copy(host, scratch)
     handle[].ctx.synchronize()
-    var w = host.bitcast[Int32]()
+    var w = host.unsafe_bitcast[Int32]()
     var sums = unsafe_alloc[Int](7)
     var maxs = unsafe_alloc[Int](7)
     for k in range(7):
         sums[unsafe_offset=k] = 0; maxs[unsafe_offset=k] = 0
     var rays = 0
     for i in range(n):
-        if w[i * 12 + 11] != Int32(2):
+        if w[unsafe_offset=i * 12 + 11] != Int32(2):
             continue
         rays += 1
         for k in range(7):
-            var v = Int(w[i * 12 + k])
+            var v = Int(w[unsafe_offset=i * 12 + k])
             sums[unsafe_offset=k] += v
             maxs[unsafe_offset=k] = max(maxs[unsafe_offset=k], v)
-    host.free()
+    host.unsafe_free()
     var r = Float64(max(rays, 1))
-    print("steps round", handle[].bench[11], "trace ms", trace_ms, "ns/ray", trace_ms * 1.0e6 / r)
-    print("steps round", handle[].bench[11], "rays", rays,
-          "top nodes", Float64(sums[0]) / r, "top tris", Float64(sums[1]) / r,
-          "inst nodes", Float64(sums[2]) / r, "inst entered", Float64(sums[3]) / r,
-          "blas nodes", Float64(sums[4]) / r, "blas tris", Float64(sums[5]) / r, "curve prims", Float64(sums[6]) / r)
-    print("steps max: top nodes", maxs[0], "top tris", maxs[1], "inst nodes", maxs[2], "inst entered", maxs[3],
-          "blas nodes", maxs[4], "blas tris", maxs[5], "curve prims", maxs[6])
-    sums.free(); maxs.free()
+    print("steps round", handle[].bench[unsafe_offset=11], "trace ms", trace_ms, "ns/ray", trace_ms * 1.0e6 / r)
+    print("steps round", handle[].bench[unsafe_offset=11], "rays", rays,
+          "top nodes", Float64(sums[unsafe_offset=0]) / r, "top tris", Float64(sums[unsafe_offset=1]) / r,
+          "inst nodes", Float64(sums[unsafe_offset=2]) / r, "inst entered", Float64(sums[unsafe_offset=3]) / r,
+          "blas nodes", Float64(sums[unsafe_offset=4]) / r, "blas tris", Float64(sums[unsafe_offset=5]) / r, "curve prims", Float64(sums[unsafe_offset=6]) / r)
+    print("steps max: top nodes", maxs[unsafe_offset=0], "top tris", maxs[unsafe_offset=1], "inst nodes", maxs[unsafe_offset=2], "inst entered", maxs[unsafe_offset=3],
+          "blas nodes", maxs[unsafe_offset=4], "blas tris", maxs[unsafe_offset=5], "curve prims", maxs[unsafe_offset=6])
+    sums.unsafe_free(); maxs.unsafe_free()
     handle[].bench[unsafe_offset=11] += 1
-    if handle[].bench[11] >= 6:
+    if handle[].bench[unsafe_offset=11] >= 6:
         _ = external_call["exit", NoneType, Int32](Int32(0))
 
 def _gpu_bounce_kernels(
@@ -224,7 +224,7 @@ def _gpu_bounce_kernels(
         else:
             _enqueue_traverse[False, False](handle, sd, n, max_depth, fuse_cone, live_idx, live_count, grid_dim, block_size)
         _bench_stage(handle, 4, 0, 0)
-        if handle[].bench[10] != 0 and rare:
+        if handle[].bench[unsafe_offset=10] != 0 and rare:
             _count_steps(handle, sd, n, max_depth, alpha, live_idx, live_count, grid_dim, block_size)
     # Both traversal branches converge here: grow the texture-footprint cone
     # by the segment just traced, before any material shading reads it.
@@ -395,7 +395,7 @@ def _gpu_bounce_kernels(
     shared_ctx.guide = handle[].guide_read
     shared_ctx.guide_write = handle[].guide_write
     comptime assert size_of[ShadeContext]() <= 1024, "grow GpuSceneHandle.shade_ctx_buf"
-    handle[].ctx.enqueue_copy(handle[].shade_ctx_buf, UnsafePointer(to=shared_ctx).bitcast[UInt8]())
+    handle[].ctx.enqueue_copy(handle[].shade_ctx_buf, Pointer(to=shared_ctx).unsafe_bitcast[UInt8]())
     if handle[].has_glass_material:
         handle[].ctx.enqueue_function[compact_by_kind_gpu](
             path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.diffuse)), Int32(MatKind.diffuse),
@@ -803,7 +803,7 @@ def gpu_render_sample[Oc: Origin[mut=True]](
         grid_dim=grid_dim,
                 block_dim=block_size,
             )
-            if handle[].bench[3] != 0:
+            if handle[].bench[unsafe_offset=3] != 0:
                 handle[].ctx.synchronize()
         except e:
             print("GPU render sample failed: " + String(e))
@@ -956,7 +956,7 @@ def gpu_render_wavefront(
         grid_dim=grid_pix,
                 block_dim=block_size,
             )
-            if handle[].bench[3] != 0:
+            if handle[].bench[unsafe_offset=3] != 0:
                 handle[].ctx.synchronize()
         except e:
             print("GPU wavefront render failed: " + String(e))

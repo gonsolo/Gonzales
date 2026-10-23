@@ -115,7 +115,7 @@ struct PtexCache(Movable):
             unsafe_alloc[Int32](1).unsafe_origin_cast[MutUntrackedOrigin](), unsafe_alloc[Int32](1).unsafe_origin_cast[MutUntrackedOrigin]())
         self.threads = List[OsThread]()
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         for t in range(len(self.threads)): self.threads[t].join()   # a load still in flight reads and writes what follows
         for i in range(len(self.names)):
             self.names[i].unsafe_free(); self.base[i].unsafe_free(); self.cur[i].unsafe_free()

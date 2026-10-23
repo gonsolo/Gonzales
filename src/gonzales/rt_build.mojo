@@ -313,7 +313,7 @@ def _range_box(order: PI, tlo: PD, thi: PD, start: Int, count: Int, box: PD):
         var k = Int(order[unsafe_offset=i])
         lx = min(lx, tlo[unsafe_offset=k * 3]); ly = min(ly, tlo[unsafe_offset=k * 3 + 1]); lz = min(lz, tlo[unsafe_offset=k * 3 + 2])
         hx = max(hx, thi[unsafe_offset=k * 3]); hy = max(hy, thi[unsafe_offset=k * 3 + 1]); hz = max(hz, thi[unsafe_offset=k * 3 + 2])
-    box[0] = lx; box[1] = ly; box[2] = lz; box[3] = hx; box[4] = hy; box[5] = hz
+    box[unsafe_offset=0] = lx; box[unsafe_offset=1] = ly; box[unsafe_offset=2] = lz; box[unsafe_offset=3] = hx; box[unsafe_offset=4] = hy; box[unsafe_offset=5] = hz
 
 
 @no_inline

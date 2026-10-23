@@ -44,7 +44,7 @@ def _prefetch_hit_indices(inter: Intersection, meshes: Pointer[TriangleMesh, Mut
     var (mi, bv) = _tri_slot(inter)
     if mi >= 0:
         if meshes[unsafe_offset=mi].quads == Int32(0):
-            prefetch(meshes[unsafe_offset=mi].vertexIndices + bv)
+            prefetch(meshes[unsafe_offset=mi].vertexIndices.unsafe_offset(bv))
 
 
 @always_inline
@@ -55,11 +55,11 @@ def _prefetch_hit_vertices(inter: Intersection, meshes: Pointer[TriangleMesh, Mu
         var m = meshes[unsafe_offset=mi]
         comptime for k in range(3):
             var v = Int(mesh_vi(m, bv + k))
-            prefetch(m.points + ((v >> 8) * 390 + 6 + (v & 255) * 3 // 2 if m.quads == Int32(2) else v * 4))
+            prefetch(m.points.unsafe_offset((v >> 8) * 390 + 6 + (v & 255) * 3 // 2 if m.quads == Int32(2) else v * 4))
             if Int(m.uvs) > 4:
-                prefetch(m.uvs + v * 2)
+                prefetch(m.uvs.unsafe_offset(v * 2))
             if Int(m.normals) > 4:
-                prefetch(m.normals + v)
+                prefetch(m.normals.unsafe_offset(v))
 
 
 def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](

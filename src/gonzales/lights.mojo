@@ -215,32 +215,32 @@ def _sin_sub_clamped(sin_a: Float32, cos_a: Float32, sin_b: Float32, cos_b: Floa
 @always_inline
 def light_importance(ls: LightSampler, i: Int, p: Vec3f) -> Float32:
     """pbrt's LightBounds::Importance for a diffuse emitter (cos theta_e = 0), without the receiver-normal factor."""
-    var b = ls.cdf + (Int(ls.n) + 1 + i * LIGHT_BOUNDS_STRIDE)
-    var cx = Float32(0.5) * (b[0] + b[3]); var cy = Float32(0.5) * (b[1] + b[4]); var cz = Float32(0.5) * (b[2] + b[5])
+    var b = ls.cdf.unsafe_offset(Int(ls.n) + 1 + i * LIGHT_BOUNDS_STRIDE)
+    var cx = Float32(0.5) * (b[unsafe_offset=0] + b[unsafe_offset=3]); var cy = Float32(0.5) * (b[unsafe_offset=1] + b[unsafe_offset=4]); var cz = Float32(0.5) * (b[unsafe_offset=2] + b[unsafe_offset=5])
     var dx = p.x - cx; var dy = p.y - cy; var dz = p.z - cz
     var dist2 = dx * dx + dy * dy + dz * dz
-    var ex = b[3] - b[0]; var ey = b[4] - b[1]; var ez = b[5] - b[2]
+    var ex = b[unsafe_offset=3] - b[unsafe_offset=0]; var ey = b[unsafe_offset=4] - b[unsafe_offset=1]; var ez = b[unsafe_offset=5] - b[unsafe_offset=2]
     var diag = sqrt(ex * ex + ey * ey + ez * ez)
     var d2 = max(dist2, Float32(0.5) * diag)
     var inv = Float32(1.0) / sqrt(max(dist2, Float32(1e-20)))
-    var cos_w = (b[6] * dx + b[7] * dy + b[8] * dz) * inv
-    if b[11] != Float32(0.0):
+    var cos_w = (b[unsafe_offset=6] * dx + b[unsafe_offset=7] * dy + b[unsafe_offset=8] * dz) * inv
+    if b[unsafe_offset=11] != Float32(0.0):
         cos_w = abs(cos_w)
     var sin_w = _safe_sqrt(Float32(1.0) - cos_w * cos_w)
     var r2 = Float32(0.25) * diag * diag
-    var inside = p.x >= b[0] and p.x <= b[3] and p.y >= b[1] and p.y <= b[4] and p.z >= b[2] and p.z <= b[5]
+    var inside = p.x >= b[unsafe_offset=0] and p.x <= b[unsafe_offset=3] and p.y >= b[unsafe_offset=1] and p.y <= b[unsafe_offset=4] and p.z >= b[unsafe_offset=2] and p.z <= b[unsafe_offset=5]
     var cos_b = Float32(-1.0)
     if not inside and dist2 >= r2:
         cos_b = _safe_sqrt(Float32(1.0) - r2 / dist2)
     var sin_b = _safe_sqrt(Float32(1.0) - cos_b * cos_b)
-    var cos_o = b[10]
+    var cos_o = b[unsafe_offset=10]
     var sin_o = _safe_sqrt(Float32(1.0) - cos_o * cos_o)
     var cos_x = _cos_sub_clamped(sin_w, cos_w, sin_o, cos_o)
     var sin_x = _sin_sub_clamped(sin_w, cos_w, sin_o, cos_o)
     var cos_p = _cos_sub_clamped(sin_x, cos_x, sin_b, cos_b)
     if cos_p <= Float32(0.0):
         return Float32(0.0)
-    return max(b[9] * cos_p / d2, Float32(0.0))
+    return max(b[unsafe_offset=9] * cos_p / d2, Float32(0.0))
 
 
 @always_inline

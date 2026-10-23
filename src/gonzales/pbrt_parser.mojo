@@ -2329,13 +2329,13 @@ def _cull_small_instances(s: Pointer[SceneParseState, MutUntrackedOrigin], psc: 
         var hz = Float32(0.5) * (tmpl_bounds[unsafe_offset=t + 5] - tmpl_bounds[unsafe_offset=t + 2])
         var cx = tmpl_bounds[unsafe_offset=t] + hx; var cy = tmpl_bounds[unsafe_offset=t + 1] + hy; var cz = tmpl_bounds[unsafe_offset=t + 2] + hz
         var b = k * 16
-        var m = s[unsafe_offset=0].instance_obj_to_world.unsafe_ptr() + b
-        var wx = m[0]*cx + m[4]*cy + m[8]*cz + m[12] - px
-        var wy = m[1]*cx + m[5]*cy + m[9]*cz + m[13] - py
-        var wz = m[2]*cx + m[6]*cy + m[10]*cz + m[14] - pz
-        var ax = m[0]*hx; var ay = m[1]*hx; var az = m[2]*hx
-        var bx = m[4]*hy; var by = m[5]*hy; var bz = m[6]*hy
-        var gx = m[8]*hz; var gy = m[9]*hz; var gz = m[10]*hz
+        var m = s[unsafe_offset=0].instance_obj_to_world.unsafe_ptr().unsafe_offset(b)
+        var wx = m[unsafe_offset=0]*cx + m[unsafe_offset=4]*cy + m[unsafe_offset=8]*cz + m[unsafe_offset=12] - px
+        var wy = m[unsafe_offset=1]*cx + m[unsafe_offset=5]*cy + m[unsafe_offset=9]*cz + m[unsafe_offset=13] - py
+        var wz = m[unsafe_offset=2]*cx + m[unsafe_offset=6]*cy + m[unsafe_offset=10]*cz + m[unsafe_offset=14] - pz
+        var ax = m[unsafe_offset=0]*hx; var ay = m[unsafe_offset=1]*hx; var az = m[unsafe_offset=2]*hx
+        var bx = m[unsafe_offset=4]*hy; var by = m[unsafe_offset=5]*hy; var bz = m[unsafe_offset=6]*hy
+        var gx = m[unsafe_offset=8]*hz; var gy = m[unsafe_offset=9]*hz; var gz = m[unsafe_offset=10]*hz
         var r = sqrt(ax*ax + ay*ay + az*az + bx*bx + by*by + bz*bz + gx*gx + gy*gy + gz*gz)
         var d = sqrt(wx*wx + wy*wy + wz*wz) - r
         if d <= Float32(0) or r >= scale * d:
@@ -2691,7 +2691,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                 tri_cdf[unsafe_offset=ti] = tri_cdf[unsafe_offset=ti] / t_area if t_area > Float32(0) else Float32(ti + 1) / Float32(nt)
             if nt > 0:
                 tri_cdf[unsafe_offset=nt - 1] = Float32(1)   # exact, whatever the rounding
-            var lb = al_bounds + al_idx * LIGHT_BOUNDS_STRIDE
+            var lb = al_bounds.unsafe_offset(al_idx * LIGHT_BOUNDS_STRIDE)
             var bmin = Vec3f(Float32(3.0e38)); var bmax = Vec3f(Float32(-3.0e38))
             var nsum = Vec3f(Float32(0.0))
             for ti in range(nt):
@@ -2733,11 +2733,11 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
                     var gl = sqrt(dot(gn, gn))
                     if gl > Float32(0.0):
                         cos_o = min(cos_o, dot(axis, gn) * (Float32(1.0) / gl))
-            lb[0] = bmin.x; lb[1] = bmin.y; lb[2] = bmin.z; lb[3] = bmax.x; lb[4] = bmax.y; lb[5] = bmax.z
-            lb[6] = axis.x; lb[7] = axis.y; lb[8] = axis.z
-            lb[9] = em.luma() * t_area * (Float32(2.0) if ma.al_two_sided else Float32(1.0))
-            lb[10] = cos_o
-            lb[11] = Float32(1.0) if ma.al_two_sided else Float32(0.0)
+            lb[unsafe_offset=0] = bmin.x; lb[unsafe_offset=1] = bmin.y; lb[unsafe_offset=2] = bmin.z; lb[unsafe_offset=3] = bmax.x; lb[unsafe_offset=4] = bmax.y; lb[unsafe_offset=5] = bmax.z
+            lb[unsafe_offset=6] = axis.x; lb[unsafe_offset=7] = axis.y; lb[unsafe_offset=8] = axis.z
+            lb[unsafe_offset=9] = em.luma() * t_area * (Float32(2.0) if ma.al_two_sided else Float32(1.0))
+            lb[unsafe_offset=10] = cos_o
+            lb[unsafe_offset=11] = Float32(1.0) if ma.al_two_sided else Float32(0.0)
             al_list[unsafe_offset=al_idx].tri_cdf    = tri_cdf
             al_list[unsafe_offset=al_idx].meshIdx    = Int32(i)
             al_list[unsafe_offset=al_idx].n_tris     = Int32(nt)

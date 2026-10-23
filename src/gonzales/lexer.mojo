@@ -594,7 +594,7 @@ def _psc_strncmp(a: Pointer[UInt8, MutUntrackedOrigin], b: StringLiteral, n: Int
     """Compare first n bytes of a against literal b. Returns 0 if equal."""
     for i in range(n):
         var ca = Int(a[unsafe_offset=i])
-        var cb = Int(b.unsafe_ptr()[unsafe_offset=i])
+        var cb = Int(b.ptr()[unsafe_offset=i])
         if ca != cb:
             return ca - cb
         if ca == 0:

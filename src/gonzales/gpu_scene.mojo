@@ -1136,7 +1136,7 @@ def gpu_upload_scene(
             if s.filter_type == Int32(0):
                 var lut_host = unsafe_alloc[Float32](2 * FILTER_LUT_N)
                 fill_filter_lut(lut_host, s.filter_sigma, s.filter_support_x, s.filter_support_y)
-                ctx.enqueue_copy(r_filter_lut_buf, lut_host.bitcast[UInt8]())
+                ctx.enqueue_copy(r_filter_lut_buf, lut_host.unsafe_bitcast[UInt8]())
                 ctx.synchronize()
                 lut_host.unsafe_free()
             var r_active_count_buf = ctx.enqueue_create_buffer[DType.uint8](64)
@@ -1320,7 +1320,7 @@ def gpu_ptex_finish(handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], may_evi
     handle[].ctx.synchronize()
     if hi > lo:
         var psub = handle[].textures.ptex_pool_buf.create_sub_buffer[DType.uint8](lo, hi - lo)
-        handle[].ctx.enqueue_copy(psub, handle[].textures.ptex_cache.pool + lo)
+        handle[].ctx.enqueue_copy(psub, handle[].textures.ptex_cache.pool.unsafe_offset(lo))
         handle[].ctx.synchronize()
     var scratch = _ptex_scratch(handle)
     _ptex_upload_tables(handle, scratch)

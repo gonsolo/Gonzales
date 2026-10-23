@@ -679,19 +679,19 @@ def warp_append(counter: Pointer[Int32, MutUntrackedOrigin], live: Bool) -> Int:
     var lane = lane_id()
     var warp = Int(thread_idx.x) // WARP_SIZE
     if lane == 0:
-        warp_counts[warp] = Int32(pop_count(mask))
+        warp_counts[unsafe_offset=warp] = Int32(pop_count(mask))
     barrier()
     if thread_idx.x == 0:
         var total = Int32(0)
         for w in range(256 // WARP_SIZE):
-            var c = warp_counts[w]
-            warp_counts[w] = total
+            var c = warp_counts[unsafe_offset=w]
+            warp_counts[unsafe_offset=w] = total
             total += c
-        block_base[0] = Atomic.fetch_add(counter, total) if total > Int32(0) else Int32(0)
+        block_base[unsafe_offset=0] = Atomic.fetch_add(counter, total) if total > Int32(0) else Int32(0)
     barrier()
     if not live:
         return -1
-    return Int(block_base[0]) + Int(warp_counts[warp]) + Int(pop_count(mask & ((Scalar[MaskT](1) << Scalar[MaskT](lane)) - Scalar[MaskT](1))))
+    return Int(block_base[unsafe_offset=0]) + Int(warp_counts[unsafe_offset=warp]) + Int(pop_count(mask & ((Scalar[MaskT](1) << Scalar[MaskT](lane)) - Scalar[MaskT](1))))
 
 def rt_no_ids() -> Pointer[Int32, MutUntrackedOrigin]:
     return Pointer[Int32, MutUntrackedOrigin].unsafe_dangling()
@@ -798,8 +798,8 @@ def read_counter(ctx: DeviceContext, counter_buf: DeviceBuffer[DType.uint8], ind
     var host = unsafe_alloc[UInt8](len(counter_buf))
     ctx.enqueue_copy(host, counter_buf)
     ctx.synchronize()
-    var v = Int(host.bitcast[Int32]()[index])
-    host.free()
+    var v = Int(host.unsafe_bitcast[Int32]()[unsafe_offset=index])
+    host.unsafe_free()
     return v
 
 # Called after the first RT-core trace into `results` (interop layout). Does nothing for scenes without alpha.
@@ -821,10 +821,10 @@ def rtcore_alpha_passes(
     var chunk = max(n_cap // 4, 1)
     var base = scratch_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var results_c = base.unsafe_bitcast[Float32]()
-    var rays_c = (base + 8 * n_cap).unsafe_bitcast[Float32]()
-    var list_a = (base + 16 * n_cap).unsafe_bitcast[Int32]()
-    var list_b = (base + 20 * n_cap).unsafe_bitcast[Int32]()
-    var counters = (base + 24 * n_cap).unsafe_bitcast[Int32]()
+    var rays_c = base.unsafe_offset(8 * n_cap).unsafe_bitcast[Float32]()
+    var list_a = base.unsafe_offset(16 * n_cap).unsafe_bitcast[Int32]()
+    var list_b = base.unsafe_offset(20 * n_cap).unsafe_bitcast[Int32]()
+    var counters = base.unsafe_offset(24 * n_cap).unsafe_bitcast[Int32]()
     var counter_buf = scratch_buf.create_sub_buffer[DType.uint8](24 * n_cap, 8)
     var rays = rays_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
     var results = results_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]()
@@ -845,11 +845,11 @@ def rtcore_alpha_passes(
             var m = min(chunk, cnt - off)
             var g = ceildiv(m, block_size)
             ctx.enqueue_function[rtcore_alpha_gather_kernel](
-                rays, rays_c, list_in + off, Int64(m), grid_dim=g, block_dim=block_size,
+                rays, rays_c, list_in.unsafe_offset(off), Int64(m), grid_dim=g, block_dim=block_size,
             )
             _ = rtcore_trace_interop(rt_hw, UInt64(Int(rays_c)), UInt64(Int(results_c)), Int32(m), cuda_stream)
             ctx.enqueue_function[rtcore_alpha_retest_kernel](
-                rays, rays_c, results, results_c, meshes, Int64(n_meshes), instance_base_mesh, list_in + off, Int64(m),
+                rays, rays_c, results, results_c, meshes, Int64(n_meshes), instance_base_mesh, list_in.unsafe_offset(off), Int64(m),
                 list_out, counters,
                 grid_dim=g, block_dim=block_size,
             )
@@ -1059,7 +1059,7 @@ def _ray_dump(ctx: DeviceContext, rays_buf: DeviceBuffer[DType.float32], results
     for k in range(path.byte_length()): c[unsafe_offset=k] = path.unsafe_ptr()[unsafe_offset=k]
     c[unsafe_offset=path.byte_length()] = UInt8(0)
     c[unsafe_offset=path.byte_length() + 1] = UInt8(119); c[unsafe_offset=path.byte_length() + 2] = UInt8(0)
-    var f = external_call["fopen", Int, Pointer[UInt8, MutUntrackedOrigin], Pointer[UInt8, MutUntrackedOrigin]](c, c + path.byte_length() + 1)
+    var f = external_call["fopen", Int, Pointer[UInt8, MutUntrackedOrigin], Pointer[UInt8, MutUntrackedOrigin]](c, c.unsafe_offset(path.byte_length() + 1))
     if f != 0:
         _ = external_call["fwrite", Int, Pointer[Float32, MutUntrackedOrigin], Int, Int, Int](host, 32, m, f)
         _ = external_call["fclose", Int32, Int](f)
@@ -1134,8 +1134,8 @@ def rtcore_closest_hit_gpu(
     var m = read_counter(ctx, counter_buf)
     if m == 0:
         return 0
-    bench[0] += m
-    if bench[7] != 0:
+    bench[unsafe_offset=0] += m
+    if bench[unsafe_offset=7] != 0:
         _ray_dump(ctx, rays_buf, results_buf, m, "c" + String(round))
     var t0 = perf_counter_ns()
     var gm = ceildiv(m, block_size)
@@ -1167,9 +1167,9 @@ def rtcore_closest_hit_gpu(
             grid_dim=grid, block_dim=block_size,
         )
         ctx.enqueue_function[accumulate_cone_gpu](paths, inter, Int64(n_total), grid_dim=grid, block_dim=block_size)
-    if bench[3] == 2:
+    if bench[unsafe_offset=3] == 2:
         ctx.synchronize()
-        bench[2] += Int(perf_counter_ns() - t0)
+        bench[unsafe_offset=2] += Int(perf_counter_ns() - t0)
     return m
 
 
@@ -1462,8 +1462,8 @@ def rtcore_shadow_rays_compact_gpu(
         var m = min(found, n_total)
         if m == 0:
             return
-        bench[1] += m
-        if bench[7] != 0:
+        bench[unsafe_offset=1] += m
+        if bench[unsafe_offset=7] != 0:
             _ray_dump(ctx, interop_rays_buf, interop_results_buf, m, "s" + String(round))
         var t0 = perf_counter_ns()
         if alpha:
@@ -1480,9 +1480,9 @@ def rtcore_shadow_rays_compact_gpu(
                 ids, sd, Int64(n_spheres), Int64(m), Int64(s), Int64(1 if alpha else 0),
                 grid_dim=ceildiv(m, CURVE_BLOCK), block_dim=CURVE_BLOCK,
             )
-        if bench[3] == 2:
+        if bench[unsafe_offset=3] == 2:
             ctx.synchronize()
-            bench[2] += Int(perf_counter_ns() - t0)
+            bench[unsafe_offset=2] += Int(perf_counter_ns() - t0)
         if found <= n_total:
             return
 

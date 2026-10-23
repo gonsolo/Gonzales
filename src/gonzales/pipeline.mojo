@@ -596,7 +596,7 @@ def _dump_file(path: String, p: Pointer[UInt8, MutUntrackedOrigin], n: Int):
     for k in range(path.byte_length()): c[unsafe_offset=k] = path.unsafe_ptr()[unsafe_offset=k]
     c[unsafe_offset=path.byte_length()] = UInt8(0)
     c[unsafe_offset=path.byte_length() + 1] = UInt8(119); c[unsafe_offset=path.byte_length() + 2] = UInt8(0)
-    var f = external_call["fopen", Int, Pointer[UInt8, MutUntrackedOrigin], Pointer[UInt8, MutUntrackedOrigin]](c, c + path.byte_length() + 1)
+    var f = external_call["fopen", Int, Pointer[UInt8, MutUntrackedOrigin], Pointer[UInt8, MutUntrackedOrigin]](c, c.unsafe_offset(path.byte_length() + 1))
     if f != 0:
         _ = external_call["fwrite", Int, Pointer[UInt8, MutUntrackedOrigin], Int, Int, Int](p, 1, n, f)
         _ = external_call["fclose", Int32, Int](f)
@@ -3029,7 +3029,7 @@ def render_interactive(
             comptime n_base4_i = 8
             var si = Int32(frame_count % 65536)
             var t_r = perf_counter_ns()
-            handle[].bench[7] = 1 if (bench_warm > 0 and frame_count == bench_warm - 2 and getenv("GONZALES_RAY_DUMP") != "") else 0
+            handle[].bench[unsafe_offset=7] = 1 if (bench_warm > 0 and frame_count == bench_warm - 2 and getenv("GONZALES_RAY_DUMP") != "") else 0
             if rtb.on:
                 gpu_render_wavefront(
                     handle, c2w_buf.unsafe_ptr().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
@@ -3248,13 +3248,13 @@ def render_interactive(
 
     if headless and bench_warm > 0 and use_gpu and frame_count > bench_warm:
         var bf = frame_count - bench_warm
-        var br = handle[].bench[0] + handle[].bench[1]
+        var br = handle[].bench[unsafe_offset=0] + handle[].bench[unsafe_offset=1]
         print("bench: frames", bf, "render ms/frame", Float64(bench_render) / 1.0e6 / Float64(bf),
-              "rays/pixel", Float64(br) / Float64(bf) / Float64(n_pixels), "closest", handle[].bench[0] // bf, "shadow", handle[].bench[1] // bf,
-              "Mray/s", Float64(br) * 1.0e3 / Float64(bench_render), "trace ms/frame", Float64(handle[].bench[2]) / 1.0e6 / Float64(bf))
-        if handle[].bench[4] > 0:
-            print("bench software ms/frame: closest", Float64(handle[].bench[4]) / 1.0e6 / Float64(bf),
-                  "shade", Float64(handle[].bench[5]) / 1.0e6 / Float64(bf), "shadow", Float64(handle[].bench[6]) / 1.0e6 / Float64(bf))
+              "rays/pixel", Float64(br) / Float64(bf) / Float64(n_pixels), "closest", handle[].bench[unsafe_offset=0] // bf, "shadow", handle[].bench[unsafe_offset=1] // bf,
+              "Mray/s", Float64(br) * 1.0e3 / Float64(bench_render), "trace ms/frame", Float64(handle[].bench[unsafe_offset=2]) / 1.0e6 / Float64(bf))
+        if handle[].bench[unsafe_offset=4] > 0:
+            print("bench software ms/frame: closest", Float64(handle[].bench[unsafe_offset=4]) / 1.0e6 / Float64(bf),
+                  "shade", Float64(handle[].bench[unsafe_offset=5]) / 1.0e6 / Float64(bf), "shadow", Float64(handle[].bench[unsafe_offset=6]) / 1.0e6 / Float64(bf))
     if ptex_live:
         print("Ptex streaming:", handle[].textures.ptex_cache.loaded, "face(s) loaded,", handle[].textures.ptex_cache.evicted,
               "evicted,", handle[].textures.ptex_cache.denied, "found no room; pool",

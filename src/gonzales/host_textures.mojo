@@ -167,7 +167,7 @@ def _load_host_texture(
         nb[unsafe_offset=0] = Int64(0); nf[unsafe_offset=0] = Int32(0); nf[unsafe_offset=1] = Int32(-1)
         var pok = external_call["ptex_packed_size", Int32, Pointer[UInt8, MutUntrackedOrigin],
             Pointer[Int64, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin], Pointer[Int32, MutUntrackedOrigin]](
-            filename, nb, nf, nf + 1)
+            filename, nb, nf, nf.unsafe_offset(1))
         if pok != Int32(0) and Int(nb[unsafe_offset=0]) > 0:
             var blob = unsafe_alloc[UInt8](Int(nb[unsafe_offset=0]))
             _ = external_call["ptex_packed_take", Int32, Pointer[UInt8, MutUntrackedOrigin],

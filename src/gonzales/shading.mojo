@@ -3801,7 +3801,7 @@ def _mnee_live(ctx: ShadeContext) -> Bool:
     glass probes have not shown it to be rare."""
     if not ctx.has_glass:
         return False
-    if _is_real_ptr(ctx.mnee_stats) and ctx.mnee_stats[2] != Int32(0):
+    if _is_real_ptr(ctx.mnee_stats) and ctx.mnee_stats[unsafe_offset=2] != Int32(0):
         return False
     return True
 
@@ -3870,9 +3870,9 @@ def _mnee_area_light_contribute(
     if _is_real_ptr(ctx.mnee_stats) and ((path_ptr[].pcgState >> 20) & UInt64(15)) == UInt64(0):
         var probes = Int(Atomic.fetch_add(ctx.mnee_stats, Int32(1))) + 1
         if probe_glass:
-            _ = Atomic.fetch_add(ctx.mnee_stats + 1, Int32(1))
-        if probes == 4096 and Int(ctx.mnee_stats[1]) * 20 < probes:
-            ctx.mnee_stats[2] = Int32(1)   # glass on under 5% of probes: MNEE is not worth its cost in this scene
+            _ = Atomic.fetch_add(ctx.mnee_stats.unsafe_offset(1), Int32(1))
+        if probes == 4096 and Int(ctx.mnee_stats[unsafe_offset=1]) * 20 < probes:
+            ctx.mnee_stats[unsafe_offset=2] = Int32(1)   # glass on under 5% of probes: MNEE is not worth its cost in this scene
     if not probe_glass:
         return False
 
