@@ -35,7 +35,7 @@ def test_constant_alpha_keeps_opaque_and_drops_transparent() raises:
 
 
 def test_constant_fractional_alpha_keeps_that_fraction_of_rays() raises:
-    """pbrt's stochastic rule: a hit at alpha a survives with probability a,
+    """The stochastic rule of pbrt: a hit at alpha a survives with probability a,
     decided by a hash of the ray -- so over many distinct rays the kept
     fraction converges to a."""
     var mesh = _mesh(_no_mask(), 0, 0, 0.3)

@@ -42,7 +42,7 @@ def _test_ctx() -> SpectralContext:
 # ── _ggx_conductor_shape_terms extraction: bxdf_eval_conductor_ggx unchanged ─
 
 def test_conductor_ggx_normal_incidence_is_ss_plus_ms() raises:
-    """bxdf_eval_conductor_ggx at normal incidence == f_ss + f_ms, closed form.
+    """`bxdf_eval_conductor_ggx` at normal incidence == f_ss + f_ms, closed form.
 
     This test used to assert that the result's channel RATIOS equal f0's
     ratios, on the reasoning that at wo=wi=wh=n the Schlick term vanishes and

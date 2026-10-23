@@ -63,7 +63,7 @@ def _parse_minimal_scene() -> Pointer[ParsedScene_Mojo, MutUntrackedOrigin]:
 
     var psc = unsafe_alloc[ParsedScene_Mojo](1)
     finalize_scene(s_ptr, psc, False)
-    _ = s_ptr.take_pointee(); s_ptr.unsafe_free()
+    _ = s_ptr.unsafe_take_pointee(); s_ptr.unsafe_free()
     handle[unsafe_offset=0].buffer.unsafe_free(); handle.unsafe_free()
     return psc
 

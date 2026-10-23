@@ -124,7 +124,7 @@ def _put_f32(mut buf: List[UInt8], v: Float32):
     for i in range(4): buf.append(p[unsafe_offset=i])
 
 def _lit_len(s: StringLiteral) -> Int:
-    var p = s.unsafe_ptr()
+    var p = s.ptr()
     var n = 0
     while p[unsafe_offset=n] != UInt8(0):
         n += 1
@@ -132,7 +132,7 @@ def _lit_len(s: StringLiteral) -> Int:
 
 def _put_name(mut buf: List[UInt8], name: StringLiteral):
     var n = _lit_len(name)
-    var np = name.unsafe_ptr()
+    var np = name.ptr()
     _put_u16(buf, UInt16(n))
     for i in range(n):
         buf.append(np[unsafe_offset=i])
@@ -145,7 +145,7 @@ def _write_synthetic_bsdf(path: String) raises:
     # ---- Header ----
     var header = List[UInt8]()
     comptime magic_lit = "tensor_file"
-    var magic_p = magic_lit.unsafe_ptr()
+    var magic_p = magic_lit.ptr()
     for i in range(_lit_len(magic_lit)):
         header.append(magic_p[unsafe_offset=i])
     header.append(UInt8(0))

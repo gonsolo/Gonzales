@@ -138,7 +138,7 @@ def test_ggx_mirror_is_delta() raises:
 
 
 def test_eval_scoped_is_lobe_scoped() raises:
-    """lobe_eval's scoped flag must be lobe_scoped's answer, for every kind:
+    """`lobe_eval`'s scoped flag must be lobe_scoped's answer, for every kind:
     VCM's NEE reads the former and _connect the latter, and when they
     disagreed for diffuse_transmit a leaf-lit floor read 1.8x pbrt."""
     var tab = _tables()

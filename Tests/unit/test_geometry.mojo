@@ -318,7 +318,7 @@ def test_spherical_direction_equatorial_phi0() raises:
 # ever crashing, so it's worth pinning to a closed-form value directly.
 
 def test_curve_light_tube_area_single_piece_constant_radius() raises:
-    """n_pieces=1 means the tube area is exactly one cylinder: 2*pi*r*length,
+    """`n_pieces=1` means the tube area is exactly one cylinder: 2*pi*r*length,
     where length is the chord between the curve's own t=0/t=1 points (not
     assumed independently -- computed via the same curve_bspline_point this
     module already tests elsewhere isn't needed here, since any 4 control
@@ -352,7 +352,7 @@ def test_curve_light_tube_area_scales_with_radius() raises:
     assert_true(_close(curve_light_tube_area(curve_thick), Float32(2.0) * curve_light_tube_area(curve_thin)))
 
 def test_curve_light_tube_area_sums_across_pieces() raises:
-    """n_pieces=4 must equal the sum of each individual piece's own lateral
+    """`n_pieces=4` must equal the sum of each individual piece's own lateral
     area -- catches an off-by-one in the piece-count loop bound."""
     var curve1 = Curve(
         Point3f(0.0, 0.0, 0.0), Point3f(1.0, 3.0, 0.0),

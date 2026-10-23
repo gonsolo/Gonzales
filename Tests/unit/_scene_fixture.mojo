@@ -40,7 +40,7 @@ struct TriangleSceneFixture(Movable):
         result.unsafe_free()
         return r
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         self.points.unsafe_free()
         self.vertex_indices.unsafe_free()
         self.meshes.unsafe_free()

@@ -52,7 +52,7 @@ def test_degenerate_parameterisation_gives_no_footprint() raises:
 
 
 def test_approx_camera_on_a_facing_plane() raises:
-    """p on the optical axis at distance 5, plane facing the camera: the
+    """`p` on the optical axis at distance 5, plane facing the camera: the
     footprint is distance x minimum differential x spp scale."""
     var m = Float32(1e-3)
     var d = dp_dxy_approx_camera(_cam(m, 0.5), Vec3f(0.0, 0.0, 5.0), Vec3f(0.0, 0.0, -1.0))

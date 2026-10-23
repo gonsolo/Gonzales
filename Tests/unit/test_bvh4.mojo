@@ -126,7 +126,7 @@ def test_bvh4_shadow_rays_skip_interface_material() raises:
     var b4 = build_bvh4(fx.bvh_nodes, 404, fx.prim_ids, 200, fx.meshes, fx.materials)
     var bvh4 = b4[0]
     var n_blocked = 0
-    for i in range(20000):
+    for _ in range(20000):
         var org = Point3f(r.next() * 3.0, r.next() * 3.0, r.next() * 3.0)
         var dx = r.next() * 2.0 - 1.0
         var dy = r.next() * 2.0 - 1.0

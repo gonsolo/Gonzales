@@ -93,8 +93,8 @@ def test_vol_target_pdf_has_no_cosine_at_the_scattering_vertex() raises:
     by construction: with g=0 the phase value is constant over direction, so
     rotating the LIGHT around the vertex at fixed distance must leave the
     target completely unchanged. A stray cos at the vertex would make it vary.
-    (This is the volumetric analogue of the geometry-term bug gi_target_pdf's
-    docstring records.)"""
+    This is the volumetric analogue of the geometry-term bug gi_target_pdf's
+    docstring records."""
     var ray_dir = Vec3f(Float32(0), Float32(0), Float32(1))
     var scatter = Vec3f(Float32(0), Float32(0), Float32(0))
     var le = RGB(Float32(3.0))
@@ -272,7 +272,7 @@ def _io_temporal_only(mut prev_buf: List[VolReservoir], mut write_buf: List[VolR
     )
 
 def test_vol_combine_temporal_accumulates_confidence_regardless_of_winner() raises:
-    """reservoir_combine's `m += src.m` is unconditional (reservoir.mojo's
+    """`reservoir_combine`'s `m += src.m` is unconditional (reservoir.mojo's
     documented contract): a compatible previous-frame reservoir adds its full
     m whether or not it wins."""
     var ray_o = Vec3f(Float32(0), Float32(0), Float32(-1))

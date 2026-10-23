@@ -448,7 +448,7 @@ unittest: $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB)
 	for f in $(UNIT_TEST_SRCS); do \
 		i=$$((i+1)); \
 		echo "$$f" >> build/unittest-logs/order.txt; \
-		( uv run mojo run -I src $(MOJO_LINK_FLAGS) "$$f" > build/unittest-logs/$$i.log 2>&1; \
+		( uv run mojo run -I src $(subst -Xlinker -lm,,$(MOJO_LINK_FLAGS)) "$$f" > build/unittest-logs/$$i.log 2>&1; \
 		  echo $$? > build/unittest-logs/$$i.exit ) & \
 		while [ $$(jobs -pr | wc -l) -ge $$(nproc) ]; do sleep 0.2; done; \
 	done; \

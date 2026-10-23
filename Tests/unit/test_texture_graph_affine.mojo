@@ -1,4 +1,4 @@
-"""pbrt "scale"/"mix" texture graphs folded into gonzales's affine form.
+"""The pbrt "scale"/"mix" texture graphs folded into gonzales's affine form.
 
 Every shape here is taken from a real corpus scene -- the comments name which.
 The property under test is always the same: a graph over ONE imagemap must
@@ -63,11 +63,11 @@ def test_plain_imagemap_is_identity_affine() raises:
     assert_true(nm.tex_idx == Int32(0))
     assert_true(_close(nm.tex_scale.r, Float32(1)))
     assert_true(_close(nm.tex_bias.r, Float32(0)))
-    _ = s.take_pointee(); s.unsafe_free()
+    _ = s.unsafe_take_pointee(); s.unsafe_free()
 
 
 def test_scale_of_imagemap_folds_into_scale() raises:
-    """killeroos: `"texture tex" ["grid"] "float scale" [0.5]`."""
+    """Killeroos: `"texture tex" ["grid"] "float scale" [0.5]`."""
     var s = _state()
     _tex(s, '"img" "spectrum" "imagemap" "string filename" [ "t.png" ]')
     _tex(s, '"sc" "spectrum" "scale" "texture tex" [ "img" ] "float scale" [ 0.5 ]')
@@ -76,11 +76,11 @@ def test_scale_of_imagemap_folds_into_scale() raises:
     assert_true(nm.tex_idx == Int32(0))
     assert_true(_close(nm.tex_scale.r, Float32(0.5)))
     assert_true(_close(nm.tex_bias.r, Float32(0)))
-    _ = s.take_pointee(); s.unsafe_free()
+    _ = s.unsafe_take_pointee(); s.unsafe_free()
 
 
 def test_mix_texture_with_constant_matches_pbrt_lerp() raises:
-    """watercolor: `"texture tex1" [img] "rgb tex2" [c] "float amount" [a]`.
+    """Watercolor: `"texture tex1" [img] "rgb tex2" [c] "float amount" [a]`.
 
     pbrt evaluates (1-a)*tex1 + a*tex2, so the texture keeps weight (1-a) and
     the constant becomes a fixed offset a*c."""
@@ -95,7 +95,7 @@ def test_mix_texture_with_constant_matches_pbrt_lerp() raises:
     assert_true(_close(nm.tex_bias.r, Float32(0.25) * Float32(0.8)))
     assert_true(_close(nm.tex_bias.g, Float32(0.25) * Float32(0.4)))
     assert_true(_close(nm.tex_bias.b, Float32(0.25) * Float32(0.2)))
-    _ = s.take_pointee(); s.unsafe_free()
+    _ = s.unsafe_take_pointee(); s.unsafe_free()
 
 
 def test_mix_argument_order_is_not_symmetric() raises:
@@ -111,11 +111,11 @@ def test_mix_argument_order_is_not_symmetric() raises:
     # Texture is now tex2, so it carries weight `amount`, not `1 - amount`.
     assert_true(_close(nm.tex_scale.r, Float32(0.25)))
     assert_true(_close(nm.tex_bias.r, Float32(0.75) * Float32(0.8)))
-    _ = s.take_pointee(); s.unsafe_free()
+    _ = s.unsafe_take_pointee(); s.unsafe_free()
 
 
 def test_mix_of_constants_driven_by_texture() raises:
-    """villa/kroken: `"rgb tex1" [c1] "rgb tex2" [c2] "texture amount" [a]`.
+    """Villa/kroken: `"rgb tex1" [c1] "rgb tex2" [c2] "texture amount" [a]`.
 
     Expands to c1 + A(uv)*(c2 - c1): the amount map becomes the sampled
     texture, scaled by the colour difference and offset by c1."""
@@ -131,11 +131,11 @@ def test_mix_of_constants_driven_by_texture() raises:
     assert_true(_close(nm.tex_scale.b, Float32(0.2)))
     assert_true(_close(nm.tex_bias.r, Float32(0.1)))
     assert_true(_close(nm.tex_bias.b, Float32(0.3)))
-    _ = s.take_pointee(); s.unsafe_free()
+    _ = s.unsafe_take_pointee(); s.unsafe_free()
 
 
 def test_constant_tinted_by_texture_scale() raises:
-    """kroken's book covers: `"rgb tex" [c] "texture scale" [t]` -- the
+    """Kroken's book covers: `"rgb tex" [c] "texture scale" [t]` -- the
     operands are the mirror image of the killeroos shape, and reading only
     the string `tex` / float `scale` misses this entirely."""
     var s = _state()
@@ -148,11 +148,11 @@ def test_constant_tinted_by_texture_scale() raises:
     assert_true(_close(nm.tex_scale.r, Float32(0.4)))
     assert_true(_close(nm.tex_scale.g, Float32(0.3)))
     assert_true(_close(nm.tex_bias.r, Float32(0)))
-    _ = s.take_pointee(); s.unsafe_free()
+    _ = s.unsafe_take_pointee(); s.unsafe_free()
 
 
 def test_nested_scale_of_mix_composes() raises:
-    """watercolor chains these (a mix whose tex1 is itself a scaled imagemap).
+    """Watercolor chains these (a mix whose tex1 is itself a scaled imagemap).
     Affine composes, so the whole chain must still collapse to one lookup."""
     var s = _state()
     _tex(s, '"img" "spectrum" "imagemap" "string filename" [ "t.png" ]')
@@ -165,11 +165,11 @@ def test_nested_scale_of_mix_composes() raises:
     # 0.5 * (2 * texel) + 0.5 * 1
     assert_true(_close(nm.tex_scale.r, Float32(1.0)))
     assert_true(_close(nm.tex_bias.r, Float32(0.5)))
-    _ = s.take_pointee(); s.unsafe_free()
+    _ = s.unsafe_take_pointee(); s.unsafe_free()
 
 
 def test_product_of_two_textures_refuses_to_resolve() raises:
-    """kroken's Brick_Color-muddled multiplies two independent imagemaps.
+    """Kroken's Brick_Color-muddled multiplies two independent imagemaps.
     One lookup cannot express that, so the graph must NOT resolve -- the
     material falls back to flat albedo (and warns) instead of silently
     rendering one of the two maps as if it were the product."""
@@ -180,7 +180,7 @@ def test_product_of_two_textures_refuses_to_resolve() raises:
     _mat(s, '"m" "string type" [ "diffuse" ] "texture reflectance" [ "prod" ]')
     var nm = s[unsafe_offset=0].named_materials[0]
     assert_true(nm.tex_idx == Int32(-1))
-    _ = s.take_pointee(); s.unsafe_free()
+    _ = s.unsafe_take_pointee(); s.unsafe_free()
 
 
 def test_mix_over_two_different_textures_refuses_to_resolve() raises:
@@ -194,7 +194,7 @@ def test_mix_over_two_different_textures_refuses_to_resolve() raises:
     _mat(s, '"m" "string type" [ "diffuse" ] "texture reflectance" [ "mx" ]')
     var nm = s[unsafe_offset=0].named_materials[0]
     assert_true(nm.tex_idx == Int32(-1))
-    _ = s.take_pointee(); s.unsafe_free()
+    _ = s.unsafe_take_pointee(); s.unsafe_free()
 
 
 def test_mix_of_two_constants_collapses_to_flat_albedo() raises:
@@ -209,7 +209,7 @@ def test_mix_of_two_constants_collapses_to_flat_albedo() raises:
     assert_true(_close(nm.albedo.r, Float32(0.5)))
     assert_true(_close(nm.albedo.g, Float32(0.25)))
     assert_true(_close(nm.albedo.b, Float32(0.125)))
-    _ = s.take_pointee(); s.unsafe_free()
+    _ = s.unsafe_take_pointee(); s.unsafe_free()
 
 
 def main() raises:
