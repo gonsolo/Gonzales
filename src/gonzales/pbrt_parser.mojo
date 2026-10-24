@@ -2572,7 +2572,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             mats[unsafe_offset=i].emission = nm3.transmittance
         elif material_kind == MatKind.hair:
             mats[unsafe_offset=i].albedo = nm3.albedo   # sigma_a per channel (absorption coefficient)
-            mats[unsafe_offset=i].emission = RGB(Float32(1.55), Float32(0), Float32(0))  # IOR for hair cuticle
+            mats[unsafe_offset=i].emission = RGB(nm3.ior, Float32(0), Float32(0))  # IOR for hair cuticle
             if nm3.roughness_u == Float32(0):
                 mats[unsafe_offset=i].roughU = Float32(0.3)  # betaM default
             else:

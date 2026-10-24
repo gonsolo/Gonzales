@@ -972,6 +972,8 @@ def _psc_handle_make_named_material(handle: Pointer[PbrtScanner, MutUntrackedOri
                   ((metal_eta.b+Float32(1.0))*(metal_eta.b+Float32(1.0)) + metal_k.b*metal_k.b)
         nm.albedo = RGB(f0r, f0g, f0b)
     elif mat_type == MatKind.hair:
+        if not has_eta:
+            mat_ior = Float32(1.55)  # pbrt's hair eta
         var ce = eumelanin; var cp = pheomelanin
         if has_sigma_a:
             nm.albedo = sigma_a_rgb
