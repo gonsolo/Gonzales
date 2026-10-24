@@ -1015,6 +1015,19 @@ def _to_spec_illum(ctx: ShadeContext, c: RGB, wl: SampledWavelengths) -> Spectra
         ctx.spectral.d65, c.r, c.g, c.b, wl)
 
 @always_inline
+def _nee_weight_hair_unlit(ls: LightSample, hc: HairLobeConstants) -> RGB:
+    """_nee_weight_hair for unit radiance: the hair's part, to be upsampled apart from the light's."""
+    var unit = ls.copy()
+    unit.Li = RGB(Float32(1.0))
+    return _nee_weight_hair(unit, hc)
+
+@always_inline
+def _to_spec_hair_lit(ctx: ShadeContext, w: RGB, li: RGB, wl: SampledWavelengths) -> SpectralSample:
+    """A coloured hair weight times a light's radiance, each upsampled with its own converter (as
+    _to_spec_diffuse_lit): their RGB product is a valid input to neither."""
+    return _to_spec_weight(ctx, w, wl) * _to_spec_illum(ctx, li, wl)
+
+@always_inline
 def _to_spec_diffuse_lit(ctx: ShadeContext, alb: RGB, le: RGB, wl: SampledWavelengths) -> SpectralSample:
     """Diffuse albedo spectrum times emission spectrum. The two are upsampled separately: their RGB product is not
     a valid input to either converter (it matches only for grey albedo). The 1/pi stays outside: a table fit
@@ -2843,15 +2856,15 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     # new (this material previously had none).
     # Mesh/curve area lights: without this sample, a bounce that hits one keeps only its tiny MIS weight.
     var ls_area = _sample_area_light_nee(ctx, hit_base, pcg)
-    var w_area = _nee_weight_hair(ls_area, hc)
+    var w_area = _nee_weight_hair_unlit(ls_area, hc)
     if not w_area.is_black():
-        var contrib_area = path_ptr[].throughput * _to_spec_illum(ctx, w_area, path_ptr[].wavelengths)
+        var contrib_area = path_ptr[].throughput * _to_spec_hair_lit(ctx, w_area, ls_area.Li, path_ptr[].wavelengths)
         _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_base, ls_area.wi, ls_area.dist * Float32(0.9999), contrib_area)
     for inf_i in range(ctx.lights.infinite_count):
         var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
-        var w_e = _nee_weight_hair(ls_e, hc)
+        var w_e = _nee_weight_hair_unlit(ls_e, hc)
         if not w_e.is_black():
-            var contrib_e = path_ptr[].throughput * _to_spec_illum(ctx, w_e, path_ptr[].wavelengths)
+            var contrib_e = path_ptr[].throughput * _to_spec_hair_lit(ctx, w_e, ls_e.Li, path_ptr[].wavelengths)
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_base, ls_e.wi, ls_e.dist, contrib_e)
 
     # distant/point/sphere via the shared sampler. `infinite` stays outside
@@ -2863,9 +2876,9 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
         var res = _nee_sample_simple_light(ctx, li, hit_base, pcg)
         var ls = res[0].copy()
         var tmax = res[1]
-        var w = _nee_weight_hair(ls, hc)
+        var w = _nee_weight_hair_unlit(ls, hc)
         if not w.is_black():
-            var contrib = path_ptr[].throughput * _to_spec_illum(ctx, w, path_ptr[].wavelengths)
+            var contrib = path_ptr[].throughput * _to_spec_hair_lit(ctx, w, ls.Li, path_ptr[].wavelengths)
             _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_base, ls.wi, tmax, contrib)
 
     # ── Step 15: Indirect sampling ────────────────────────────────────────────
@@ -2890,7 +2903,8 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     if path_ptr[].bounce == 0 or path_ptr[].specularBounce == Int8(1):
         # Approximate albedo AOV from TT lobe (closest to diffuse color)
         path_ptr[].albedo = hc.A1
-    path_ptr[].throughput *= _to_spec_refl(ctx, RGB(frs, fgs, fbs), path_ptr[].wavelengths) * (Float32(1.0) / pdf)
+    # A sampling weight, not a reflectance: hair's peaked lobes give f (and f/pdf) well above 1.
+    path_ptr[].throughput *= _to_spec_weight(ctx, RGB(frs, fgs, fbs) * (Float32(1.0) / pdf), path_ptr[].wavelengths)
     path_ptr[].lastBsdfPdf = pdf_solid_angle
     path_ptr[].specularBounce = Int8(0)
     path_ptr[].bounce += 1
