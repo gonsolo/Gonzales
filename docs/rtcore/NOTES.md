@@ -355,3 +355,30 @@ sample: staged software 854, RT cores 948; without the alpha passes 841 (the pas
 four times, mostly dead rays). Setup 10.6 s against 4.5 s. The staged driver keeps per-path state for every pixel and runs
 out of memory at 1920x1080 on a 12 GB card, with or without the RT cores (the megakernel does not), so the hardware teaser is
 rendered at 1280x720: 128 spp in 442 s.
+
+## Custom primitives: the AABB candidate protocol (2026-10-25)
+Tools: `VULKANRT_DEBUG_AABB=1[:first mesh]` makes libvulkanrt build each triangle's bounding box as AABB geometry (2 = opaque);
+`variants_aabb/aabb.comp` is a ray-query shader with a sphere test per AABB candidate; `exec/sasm.py` is a small assembler
+(driver-code templates with the register, immediate, predicate and control fields replaced, every word checked with nvdisasm).
+- The 16 RT instructions are ONE sequence that runs as a whole; cuda-gdb steps over it in one go (that is why `stepi` seemed to
+  jump from the `0x9d4` to the end). `0x3d1` writes two register pairs into a slot of the unit (slot in bytes 6..7, pairs in bytes 9
+  and 5): 0x000 flag words, 0x040 origin + tmin, 0x050 direction + tmax, 0x080 two more flag pairs (the second holds the ray
+  flag word, R25 in the base kernel), 0x100 / 0x180 / 0x190 the 12-word traversal state, 0x200 the root pointer. `0x3d3` starts the
+  query; `0x3d2` reads a slot back into one or two pairs (0x380 / 0x3c0 / 0x3d0 the state, 0x320 the instance word, 0x300 the hit).
+- The `0x3d1` writes are predicated. In the base kernel the three state writes are `@P0` and the root write is `@!P1`; the driver sets
+  P0 = P1 = "resuming". Fresh query: P0 = P1 = false, R8:R9 = root | 1 << 60. Resume: P0 = P1 = true, R8..R19 = the state the last
+  query returned, the flag words as for a fresh query.
+- A query returns on every event, not only at the end. The state R8..R19 is a short stack (two 64-bit entries per return in the
+  experiments; zero = traversal finished):
+  - AABB candidate: R23 = 0xa0000000 | count (low six bits). R20:R21 (47 bits) is the AABB leaf node's +0x10 / +0x14 payload plus the
+    candidate's slot; the vendor builder stores (address of a prim-index table at BLAS + 0x180) >> 3 there, and the shader loads the
+    prim index from (payload << 3) and walks `count` entries itself. A builder of our own can put the primitive id in the payload.
+  - Triangle hit: R20 = hit word, R21..R23 = t, u, v, as for a closest-hit query; with a non-zero state the query is not finished
+    (it returns the hit before the remaining nodes, e.g. an overlapping box). The final return is then a miss (R20..R23 = -1); the
+    shader keeps the best hit itself and lowers tmax (R3) before resuming. Within ONE query the unit culls with its own hit.
+- AABB leaf node (vendor, 2 boxes): byte 0 = 0x00 (0x60 for triangle leaves), +0x10 / +0x14 the payload (low 15 bits of +0x14 are
+  payload bits 32..46; the top nibble keeps the slot-in-parent << 28), +0x1c = 1, child slots [lo_x hi_x lo_y hi_y lo_z hi_z 0x00 0x41].
+  The payload is an address, so a CUDA copy of a vendor AABB BLAS must relocate it (`(payload << 3)` inside the BLAS).
+- Checked in a CUDA kernel (`loop` of TRACE with the resume predicates): a ray through 64 boxes gets the boxes front to back, one per
+  return; a TLAS with triangle and AABB instances returns triangle hits, AABB candidates and a final miss in traversal order, and
+  the driver's own `aabb.comp` code (bank-1 word 0 = 0x20, the offset of the root word) finds the right sphere hits in CUDA.

@@ -17,7 +17,9 @@
 
 #include <vulkan/vulkan.h>
 
+#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -831,6 +833,27 @@ extern "C" void* vulkanrt_build_scene(
         geom.geometry.triangles.maxVertex = (uint32_t)(nVerts - 1);
         geom.geometry.triangles.indexType = VK_INDEX_TYPE_UINT32;
         geom.geometry.triangles.indexData.deviceAddress = scene->blasIndexBufs[i].address;
+        // docs/rtcore research: VULKANRT_DEBUG_AABB=1 (non-opaque) or 2 (opaque)[:first mesh] builds each triangle's bounding box instead.
+        const char* dbgAabb = getenv("VULKANRT_DEBUG_AABB");
+        if (dbgAabb && i >= (strchr(dbgAabb, ':') ? atoll(strchr(dbgAabb, ':') + 1) : 0)) {
+            std::vector<float> boxes((size_t)triCount * 6);
+            for (uint32_t t = 0; t < triCount; t++) for (int a = 0; a < 3; a++) {
+                float lo = 1e30f, hi = -1e30f;
+                for (int c = 0; c < 3; c++) { float v = meshes[i].points[4 * indices32[3 * t + c] + a]; lo = std::min(lo, v); hi = std::max(hi, v); }
+                boxes[6 * t + a] = lo; boxes[6 * t + 3 + a] = hi;
+            }
+            if (!uploadToBuffer(scene->device, scene->blasVertexBufs[i], boxes.data(), std::min<VkDeviceSize>(vbBytes, boxes.size() * 4))) {
+                vulkanrt_destroy_scene(scene);
+                return nullptr;
+            }
+            geom = VkAccelerationStructureGeometryKHR{};
+            geom.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+            geom.geometryType = VK_GEOMETRY_TYPE_AABBS_KHR;
+            geom.flags = dbgAabb[0] == '2' ? VK_GEOMETRY_OPAQUE_BIT_KHR : 0;
+            geom.geometry.aabbs.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR;
+            geom.geometry.aabbs.data.deviceAddress = scene->blasVertexBufs[i].address;
+            geom.geometry.aabbs.stride = 24;
+        }
 
         if (!buildAccelerationStructure(scene->device, scene->physicalDevice, scene->cmdPool,
                                          scene->queue, scene->fns,

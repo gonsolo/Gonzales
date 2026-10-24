@@ -1,0 +1,43 @@
+#version 460
+#extension GL_EXT_ray_query : require
+// Custom primitives: a sphere in each AABB, tested by the shader for every AABB candidate.
+layout(local_size_x = 64) in;
+struct Ray { vec4 originAndTMin; vec4 dirAndTMax; };
+struct Result { float hitT; float u; float v; float _pad0; int hitMesh; int hitTriangle; uint hitFlag; uint _pad1; };
+layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelAS;
+layout(set = 0, binding = 1, std430) readonly buffer RaysBuffer { Ray rays[]; };
+layout(set = 0, binding = 2, std430) writeonly buffer ResultsBuffer { Result results[]; };
+layout(push_constant) uniform PushConstants { uint rayCount; } pc;
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.rayCount) return;
+    vec3 origin = rays[i].originAndTMin.xyz; float tMin = rays[i].originAndTMin.w;
+    vec3 direction = rays[i].dirAndTMax.xyz; float tMax = rays[i].dirAndTMax.w;
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsNoneEXT, 0xFF, origin, tMin, direction, tMax);
+    while (rayQueryProceedEXT(rq)) {
+        uint ty = rayQueryGetIntersectionTypeEXT(rq, false);
+        if (ty == gl_RayQueryCandidateIntersectionAABBEXT) {
+            int prim = rayQueryGetIntersectionPrimitiveIndexEXT(rq, false);
+            vec3 o = rayQueryGetIntersectionObjectRayOriginEXT(rq, false);
+            vec3 d = rayQueryGetIntersectionObjectRayDirectionEXT(rq, false);
+            vec3 c = vec3(float(prim), 0.0, 0.0);      // sphere centre known to the test
+            vec3 oc = o - c; float b = dot(oc, d); float cc = dot(oc, oc) - 0.25;
+            float disc = b * b - cc;
+            if (disc >= 0.0) {
+                float t = -b - sqrt(disc);
+                if (t > rayQueryGetRayTMinEXT(rq)) rayQueryGenerateIntersectionEXT(rq, t);
+            }
+        } else if (ty == gl_RayQueryCandidateIntersectionTriangleEXT) {
+            rayQueryConfirmIntersectionEXT(rq);
+        }
+    }
+    Result r;
+    uint cty = rayQueryGetIntersectionTypeEXT(rq, true);
+    r.hitT = cty != gl_RayQueryCommittedIntersectionNoneEXT ? rayQueryGetIntersectionTEXT(rq, true) : -1.0;
+    r.u = 0.0; r.v = 0.0; r._pad0 = 0.0;
+    r.hitMesh = cty != gl_RayQueryCommittedIntersectionNoneEXT ? rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true) : -1;
+    r.hitTriangle = cty != gl_RayQueryCommittedIntersectionNoneEXT ? rayQueryGetIntersectionPrimitiveIndexEXT(rq, true) : -1;
+    r.hitFlag = cty; r._pad1 = 0u;
+    results[i] = r;
+}
