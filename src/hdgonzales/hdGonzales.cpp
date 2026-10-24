@@ -751,12 +751,13 @@ void *_Renderer() {
 // The camera, image and samples of a render.
 struct View {
     GfMatrix4f worldToCamera{1.0f};
-    float fov = 0;
+    float fov = 0, lensRadius = 0, focusDistance = 0;
     int width = 0, height = 0, spp = 0, maxDepth = 0;
     RenderBuffer *color = nullptr;
 
     bool operator==(View const &o) const {
-        return worldToCamera == o.worldToCamera && fov == o.fov && width == o.width && height == o.height &&
+        return worldToCamera == o.worldToCamera && fov == o.fov && lensRadius == o.lensRadius &&
+               focusDistance == o.focusDistance && width == o.width && height == o.height &&
                spp == o.spp && maxDepth == o.maxDepth && color == o.color;
     }
 };
@@ -912,6 +913,7 @@ public:
             Free();
             void *scene = _BuildScene(*_scene, &_version);
             gz_scene_set_camera(scene, v.worldToCamera.data(), v.fov, v.width, v.height);
+            gz_scene_set_lens(scene, v.lensRadius, v.focusDistance);
             _session = gz_session_new(_Renderer(), scene, v.spp, v.maxDepth);
             if (!_session) {
                 v.color->SetConverged(true);
@@ -919,6 +921,7 @@ public:
             }
         }
         gz_session_set_samples(_session, v.spp, v.maxDepth);
+        gz_session_set_lens(_session, v.lensRadius, v.focusDistance);
         if (gz_session_set_camera(_session, v.worldToCamera.data(), v.fov, v.width, v.height) != 0) {
             v.color->SetConverged(true);
             return;
@@ -983,6 +986,11 @@ protected:
             v.worldToCamera[r][2] = -v.worldToCamera[r][2];
         double scale = v.width >= v.height ? proj[1][1] : proj[0][0];
         v.fov = float(2.0 * std::atan(1.0 / scale) * 180.0 / M_PI);
+        // Focal length and focus distance are in world units; Blender leaves the f-stop 0 without depth of field.
+        if (HdCamera const *camera = state->GetCamera(); camera && camera->GetFStop() > 0 && camera->GetFocusDistance() > 0) {
+            v.lensRadius = camera->GetFocalLength() / (2 * camera->GetFStop());
+            v.focusDistance = camera->GetFocusDistance();
+        }
         HdRenderDelegate *delegate = GetRenderIndex()->GetRenderDelegate();
         v.spp = std::max(1, delegate->GetRenderSetting<int>(HdRenderSettingsTokens->convergedSamplesPerPixel, 64));
         v.maxDepth = delegate->GetRenderSetting<int>(TfToken("maxDepth"), 5);

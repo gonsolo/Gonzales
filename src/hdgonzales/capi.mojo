@@ -8,7 +8,7 @@ from gonzales.geometry import RGB, _is_real_ptr
 from gonzales.materials import MatKind
 from gonzales.parse_types import SceneParseState, NamedMaterial
 from gonzales.pbrt_parser import ParsedScene_Mojo, finalize_scene, mojo_apply_overrides
-from gonzales.pipeline import (_generate_sobol_matrices, RenderSession, SessionPtr, session_new, session_set_camera, session_set_samples,
+from gonzales.pipeline import (_generate_sobol_matrices, RenderSession, SessionPtr, session_new, session_set_camera, session_set_samples, session_set_lens,
                                session_render, session_resolve, session_free)
 from gonzales.scene_builder import store_mesh
 from gonzales.spectrum import load_spectral_context, spectral_handle, SpectralContext
@@ -160,6 +160,12 @@ def gz_scene_set_camera(s: ScenePtr, world_to_camera: F32Ptr, fov_deg: Float32, 
     s[unsafe_offset=0].film_h = height
 
 @export
+def gz_scene_set_lens(s: ScenePtr, radius: Float32, focal_distance: Float32) abi("C"):
+    """A thin lens in scene units; radius 0 is a pinhole."""
+    s[unsafe_offset=0].lens_radius = radius
+    s[unsafe_offset=0].focal_distance = focal_distance
+
+@export
 def gz_session_new(r: RendererPtr, s: ScenePtr, spp: Int32, max_depth: Int32) abi("C") -> OptionalPointer[RenderSession, MutUntrackedOrigin]:
     """Consumes the scene and puts it on the GPU; null if that fails."""
     s[unsafe_offset=0].max_depth = max_depth
@@ -182,6 +188,11 @@ def gz_session_set_camera(s: SessionPtr, world_to_camera: F32Ptr, fov_deg: Float
     except e:
         print("Gonzales: camera failed:", e)
         return Int32(-1)
+
+@export
+def gz_session_set_lens(s: SessionPtr, radius: Float32, focal_distance: Float32) abi("C"):
+    """As gz_scene_set_lens; a change starts the film over."""
+    session_set_lens(s, radius, focal_distance)
 
 @export
 def gz_session_set_samples(s: SessionPtr, spp: Int32, max_depth: Int32) abi("C"):

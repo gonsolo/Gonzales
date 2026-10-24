@@ -22,9 +22,11 @@ int gz_scene_add_dielectric(void *scene, float ior, float alpha);
 void gz_scene_add_curves(void *scene, const float *control_points, const float *widths, int n_segments, int material,
                          const int *materials);
 void gz_scene_set_camera(void *scene, const float *world_to_camera, float fov_deg, int width, int height);
+void gz_scene_set_lens(void *scene, float radius, float focal_distance);
 void *gz_session_new(void *renderer, void *scene, int spp, int max_depth);
 int gz_session_set_camera(void *session, const float *world_to_camera, float fov_deg, int width, int height);
 void gz_session_set_samples(void *session, int spp, int max_depth);
+void gz_session_set_lens(void *session, float radius, float focal_distance);
 int gz_session_render(void *session, int n_spp);
 int gz_session_resolve(void *session, float *out_rgb, int denoise);
 void gz_session_free(void *session);

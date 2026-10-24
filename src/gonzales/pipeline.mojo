@@ -3365,6 +3365,15 @@ def session_set_camera(s: SessionPtr, world_to_camera: Pointer[Float32, MutUntra
         handle[].ctx.synchronize()
     session_clear(s)
 
+def session_set_lens(s: SessionPtr, radius: Float32, focal_distance: Float32):
+    ref psc = s[].psc
+    if radius == psc[unsafe_offset=0].camera_lens_radius and focal_distance == psc[unsafe_offset=0].camera_focal_distance:
+        return
+    psc[unsafe_offset=0].camera_lens_radius = radius
+    psc[unsafe_offset=0].camera_focal_distance = focal_distance
+    s[].renderer.handle[].lens = ThinLens(radius, focal_distance)
+    session_clear(s)
+
 def session_set_samples(s: SessionPtr, spp: Int32, max_depth: Int32):
     """The sample count a render converges at, which lays out the sample sequence, and the path depth."""
     ref psc = s[].psc
