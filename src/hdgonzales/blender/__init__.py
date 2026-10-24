@@ -5,7 +5,7 @@ import bpy
 bl_info = {"name": "Gonzales", "blender": (4, 2, 0), "category": "Render"}
 
 _PLUGIN_DIR = os.environ.get("GONZALES_HYDRA_DIR",
-                             os.path.join(os.path.dirname(__file__), "..", "..", "..", "build", "hydra"))
+                             os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..", "build", "hydra"))
 
 
 class GonzalesRenderEngine(bpy.types.HydraRenderEngine):
@@ -18,7 +18,8 @@ class GonzalesRenderEngine(bpy.types.HydraRenderEngine):
     bl_delegate_id = 'HdGonzalesRendererPlugin'
 
     def get_render_settings(self, engine_type):
-        result = {'convergedSamplesPerPixel': bpy.context.scene.gonzales_spp}
+        scene = bpy.context.scene
+        result = {'convergedSamplesPerPixel': scene.gonzales_spp, 'maxDepth': scene.gonzales_max_depth}
         if engine_type != 'VIEWPORT':
             result |= {'aovToken:Combined': "color"}
         return result
@@ -32,9 +33,11 @@ def register():
     import pxr.Plug
     pxr.Plug.Registry().RegisterPlugins([os.path.abspath(_PLUGIN_DIR)])
     bpy.types.Scene.gonzales_spp = bpy.props.IntProperty(name="Samples", default=64, min=1)
+    bpy.types.Scene.gonzales_max_depth = bpy.props.IntProperty(name="Max Depth", default=12, min=1)
     bpy.utils.register_class(GonzalesRenderEngine)
 
 
 def unregister():
     bpy.utils.unregister_class(GonzalesRenderEngine)
     del bpy.types.Scene.gonzales_spp
+    del bpy.types.Scene.gonzales_max_depth
