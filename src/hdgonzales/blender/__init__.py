@@ -24,6 +24,7 @@ class GonzalesRenderEngine(bpy.types.HydraRenderEngine):
         spp = scene.gonzales_viewport_spp if engine_type == 'VIEWPORT' else scene.gonzales_spp
         result = {'convergedSamplesPerPixel': spp, 'maxDepth': scene.gonzales_max_depth,
                   'gonzales:denoise': scene.gonzales_denoise,
+                  'gonzales:sunScale': 4.0,   # Blender's Hydra export divides a sun's strength by 4; Cycles does not
                   'gonzales:materials': materials.overrides(self._materials()),
                   'gonzales:world': world.texture(self._world())}
         if engine_type != 'VIEWPORT':

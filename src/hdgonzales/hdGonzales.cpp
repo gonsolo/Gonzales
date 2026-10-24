@@ -181,6 +181,7 @@ public:
     std::string overrideText;
     std::map<std::string, Override> overrides;
     std::string worldPath, worldTexture;  // the add-on's baked world and its equal-area version
+    float sunScale = 1;                   // Blender exports a sun's strength divided by 4
     HdRenderThread *thread;
     std::mutex mutex;
     std::map<SdfPath, MeshData> meshes;
@@ -872,7 +873,8 @@ void *_BuildScene(Scene &synced, int *version) {
         else if (l.type == HdPrimTypeTokens->domeLight)
             gz_scene_add_dome(scene, l.rgb[0], l.rgb[1], l.rgb[2]);
         else if (l.type == HdPrimTypeTokens->distantLight)
-            gz_scene_add_distant(scene, l.dir[0], l.dir[1], l.dir[2], l.rgb[0], l.rgb[1], l.rgb[2]);
+            gz_scene_add_distant(scene, l.dir[0], l.dir[1], l.dir[2], l.rgb[0] * synced.sunScale,
+                                 l.rgb[1] * synced.sunScale, l.rgb[2] * synced.sunScale);
         else if (!l.indices.empty())
             gz_scene_add_area_light(scene, l.xform.data(), l.points.data(), int(l.points.size() / 3),
                                     l.indices.data(), int(l.indices.size() / 3), l.rgb[0], l.rgb[1], l.rgb[2]);
@@ -1005,6 +1007,11 @@ protected:
                 _scene->worldPath = world;
                 _scene->worldTexture = texture;
             });
+        }
+        float sunScale = delegate->GetRenderSetting<float>(TfToken("gonzales:sunScale"), 1.0f);
+        if (sunScale != _scene->sunScale) {
+            _thread->StopRender();
+            _scene->Edit([&] { _scene->sunScale = sunScale; });
         }
         if (overrides != _scene->overrideText) {
             _thread->StopRender();
