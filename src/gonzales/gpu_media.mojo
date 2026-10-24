@@ -647,14 +647,25 @@ def _sss_walk_step(
     of steps. Steps trace their own segments here, up to _SSS_STEPS per call; hits on other geometry are passed, and
     the entry mesh is the exit, left in `intersections` for the shading kernels."""
     comptime _SSS_STEPS = 256
+    # Cycles' SUBSURFACE_RANDOM_WALK_SIMILARITY_LEVEL: after these steps the walk continues isotropic with the reduced
+    # scattering sigma_s (1 - g), which it calls the similarity relation. It brightens strong forward scattering and
+    # makes those walks several times shorter.
+    comptime _SSS_SIMILARITY_STEPS = 9
     var path_ptr = paths.unsafe_offset(i)
     var walk = path_ptr[].sss
-    var st = SIMD[DType.float32, 4](walk.sigma_t.v0, walk.sigma_t.v1, walk.sigma_t.v2, walk.sigma_t.v3)
-    var al = SIMD[DType.float32, 4](walk.alpha.v0, walk.alpha.v1, walk.alpha.v2, walk.alpha.v3)
+    var st0 = SIMD[DType.float32, 4](walk.sigma_t.v0, walk.sigma_t.v1, walk.sigma_t.v2, walk.sigma_t.v3)
+    var al0 = SIMD[DType.float32, 4](walk.alpha.v0, walk.alpha.v1, walk.alpha.v2, walk.alpha.v3)
+    var st_iso = st0 * (Float32(1) - al0 * walk.g)
+    var al_iso = al0 * (Float32(1) - walk.g) / max(Float32(1) - al0 * walk.g, Float32(1e-7))
     var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
     var store = Array[Intersection, 1](fill=intersections[unsafe_offset=i])
     var ray = path_ptr[].ray
     for _ in range(_SSS_STEPS):
+        var iso = path_ptr[].sss.steps > Int32(_SSS_SIMILARITY_STEPS)
+        var st = st_iso if iso else st0
+        var al = al_iso if iso else al0
+        var g = Float32(0) if iso else walk.g
+        path_ptr[].sss.steps += 1
         var inter = store[0]
         if inter.hit == 0:
             path_ptr[].active = 0   # left through a hole in the mesh
@@ -697,7 +708,7 @@ def _sss_walk_step(
             var w = al * st * tr / max((p * st * tr).reduce_add(), Float32(1e-30))
             path_ptr[].throughput *= SpectralSample(w[0], w[1], w[2], w[3])
             var pt = org + dir * t
-            var hs = hg_sample(-dir, walk.g, pcg.next_float(), pcg.next_float())
+            var hs = hg_sample(-dir, g, pcg.next_float(), pcg.next_float())
             ray = Ray(Point3f(pt[0], pt[1], pt[2]), Vec3f(hs[0], hs[1], hs[2]))
         # Russian roulette once a walk has lost most of its weight.
         var m = path_ptr[].throughput.max_component()

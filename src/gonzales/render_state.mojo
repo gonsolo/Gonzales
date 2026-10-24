@@ -47,10 +47,11 @@ struct SssWalk(TrivialRegisterPassable):
     var mesh: Int32       # entry mesh (PrimId.id1); -1 = not walking
     var instance: Int32   # entry instance (PrimId.instanceIdx)
     var exiting: Int32    # 1: this round's hit is the exit, shaded as a Lambertian surface facing out
+    var steps: Int32      # steps taken; past _SSS_SIMILARITY_STEPS the walk is isotropic (Cycles' similarity level)
 
     @staticmethod
     def none() -> SssWalk:
-        return SssWalk(SpectralSample(Float32(0)), SpectralSample(Float32(0)), Float32(0), Int32(-1), Int32(-1), Int32(0))
+        return SssWalk(SpectralSample(Float32(0)), SpectralSample(Float32(0)), Float32(0), Int32(-1), Int32(-1), Int32(0), Int32(0))
 
 @fieldwise_init
 struct PathState(TrivialRegisterPassable):
