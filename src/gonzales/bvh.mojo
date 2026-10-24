@@ -17,7 +17,7 @@ from .primitives import mesh_pos, mesh_point
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb
 from .portal_light import portal_frame, portal_ray_crosses
-from .curves import Curve, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis
+from .curves import Curve, intersect_curve, CURVE_DEFER_K, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, curve_view_frame, curve_hit_normal
 from .rng import PCG32
 from .footprint import CameraFootprint
 from .spectrum import SpectralHandle
@@ -953,8 +953,7 @@ def _hair_precompute(
         tangent = seg_axis * (Float32(1.0) / seg_len)
     else:
         tangent = Vec3f(Float32(1), Float32(0), Float32(0))
-    var n_perp = _curve_perp_axis(tangent)
-    var b_perp = cross(tangent, n_perp)
+    var (n_perp, b_perp) = curve_view_frame(tangent, wo)
     var geo_normal = n_perp * h + b_perp * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
 
     var sin_theta_o = dot(wo, tangent)
@@ -3387,9 +3386,7 @@ def render_aux_buffers[Osc: Origin[mut=True], Onm: Origin[mut=True], Oc2w: Origi
                         tangent = seg_axis * (Float32(1.0) / seg_len)
                     else:
                         tangent = Vec3f(Float32(1), Float32(0), Float32(0))
-                    var n_perp = _curve_perp_axis(tangent)
-                    var b_perp0 = cross(tangent, n_perp)
-                    var geo = n_perp * h + b_perp0 * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
+                    var geo = curve_hit_normal(tangent, -dir, h)
                     var gl = sqrt(dot(geo, geo))
                     if gl > Float32(0):
                         normal = Vec3f(geo[0] / gl, geo[1] / gl, geo[2] / gl)

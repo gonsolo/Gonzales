@@ -166,10 +166,14 @@ bool intersectCurve(
         if (s < 0.0 || s > axisLen) continue;
 
         vec3 offsetPerp = hitPos - s * axisDir;
-        vec3 uAxis = curvePerpAxis(axisDir);
+        // h across the fibre as the ray sees it (curves.mojo's curve_view_frame)
+        vec3 wp = -rayDir - axisDir * dot(-rayDir, axisDir);
+        float wl = length(wp);
+        vec3 toward = wl > 1e-6 ? wp / wl : cross(axisDir, curvePerpAxis(axisDir));
+        vec3 side = cross(toward, axisDir);
         bestHit = true;
         bestT = tc;
-        bestH = clamp(dot(offsetPerp, uAxis) / r, -1.0, 1.0);
+        bestH = clamp(dot(offsetPerp, side) / r, -1.0, 1.0);
         bestV = (float(piece) + s/axisLen) / nPiecesF;
     }
 

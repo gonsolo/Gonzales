@@ -5,7 +5,7 @@ from std.utils import StaticTuple
 from .gpu_tuning import MINCTA_TRAVERSE
 from std.sys import get_defined_int
 from .bvh import _node_box_hit, _node_hi, _node_lo, _node_oc, _bvh_has_nodes, _shadow_is_null_material, _traverse_instances, BVH2Node, any_hit_bvh2_core, ray_sphere_hit, test_spheres, traverse_bvh2_core, traverse_bvh2_core_defer_curves, SceneView
-from .curves import CURVE_DEFER_K, Curve, _curve_perp_axis, curve_piece_endpoints, intersect_curve
+from .curves import CURVE_DEFER_K, Curve, _curve_perp_axis, curve_piece_endpoints, intersect_curve, curve_hit_normal
 from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot, store_vec3, vec3f
 from .materials import Material
 from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, alpha_killed, intersect_triangle, sphere_outward_normal, mesh_vi
@@ -1864,11 +1864,7 @@ def gen_aux_buffers_gpu(
             var calen = sqrt(dot(caxis, caxis))
             if calen > Float32(1e-8):
                 var ctangent = caxis * (Float32(1.0) / calen)
-                var cu = _curve_perp_axis(ctangent)
-                var cb = cross(ctangent, cu)
-                var ch = isects_tmp[unsafe_offset=tid].u
-                var cs = sqrt(max(Float32(0.0), Float32(1.0) - ch*ch))
-                var cn = cu*ch + cb*cs
+                var cn = curve_hit_normal(ctangent, -dir, isects_tmp[unsafe_offset=tid].u)
                 normal = vec3f(cn)
         elif typ == 0 or typ == 1 or typ == 2 or typ == 3:
             var mesh_idx: Int

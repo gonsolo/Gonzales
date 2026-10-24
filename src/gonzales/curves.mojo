@@ -69,6 +69,20 @@ def _curve_perp_axis(t: Vec3f) -> Vec3f:
     return Vec3f(Float32(1.0), Float32(0.0), Float32(0.0))
 
 @always_inline
+def curve_view_frame(tangent: Vec3f, wo: Vec3f) -> Tuple[Vec3f, Vec3f]:
+    """(side, toward): unit vectors across the fibre, `toward` facing wo. A hit's h is its offset along
+    `side` as the ray sees the fibre (pbrt's convention), so its outward normal is side*h + toward*sqrt(1-h^2)."""
+    var wp = wo - tangent * dot(wo, tangent)
+    var l = sqrt(dot(wp, wp))
+    var toward = wp * (Float32(1.0) / l) if l > Float32(1e-6) else cross(tangent, _curve_perp_axis(tangent))
+    return (cross(toward, tangent), toward)
+
+@always_inline
+def curve_hit_normal(tangent: Vec3f, wo: Vec3f, h: Float32) -> Vec3f:
+    var (side, toward) = curve_view_frame(tangent, wo)
+    return side * h + toward * sqrt(max(Float32(0.0), Float32(1.0) - h * h))
+
+@always_inline
 def curve_bspline_point(curve: Curve, t: Float32) -> Vec3f:
     """Evaluate the uniform cubic B-spline segment at local parameter t in [0,1]."""
     var t2 = t * t
@@ -176,9 +190,9 @@ def intersect_curve(
             continue
 
         var offset_perp = hit_pos - s * axis_dir
-        var u_axis = _curve_perp_axis(axis_dir)
+        var side = curve_view_frame(axis_dir, -ray_dir)[0]
         best_hit = True; best_t = tc
-        best_h = max(Float32(-1.0), min(Float32(1.0), dot(offset_perp, u_axis) / r))
+        best_h = max(Float32(-1.0), min(Float32(1.0), dot(offset_perp, side) / r))
         best_v = (Float32(piece) + s/axis_len) / n_pieces_f
 
     return (best_hit, best_t, best_h, best_v)

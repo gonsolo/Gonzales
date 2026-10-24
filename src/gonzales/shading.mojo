@@ -15,7 +15,7 @@ from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSam
 from .portal_light import portal_frame, portal_ray_crosses
 from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .shadow_media import shadow_transmittance
-from .curves import Curve, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis
+from .curves import Curve, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, curve_hit_normal
 from .layered import layered_f, layered_sample, layered_pdf, diel_f, diel_pdf, diel_sample
 from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
@@ -307,9 +307,7 @@ def curve_light_hit(
     var tangent = Vec3f(Float32(1.0), Float32(0.0), Float32(0.0))
     if seg_len > Float32(1e-8):
         tangent = seg_axis * (Float32(1.0) / seg_len)
-    var n_perp = _curve_perp_axis(tangent)
-    var b_perp0 = cross(tangent, n_perp)
-    var geo_normal = n_perp * h + b_perp0 * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
+    var geo_normal = curve_hit_normal(tangent, -ray_dir, h)
     return (al_idx, -dot(geo_normal, ray_dir))
 
 @always_inline
@@ -919,8 +917,7 @@ def _curve_geom_normal_and_ray(
         if gl > Float32(1e-20):
             gn = gn * (Float32(1.0) / sqrt(gl))
         else:
-            var n_perp = _curve_perp_axis(tangent)
-            gn = n_perp * h + cross(tangent, n_perp) * sqrt(max(Float32(0.0), Float32(1.0) - h*h))
+            gn = curve_hit_normal(tangent, -rd, h)
         if dot(gn, rd) > Float32(0.0):
             gn = -gn
     return (gn, rd, ro)
