@@ -14,6 +14,7 @@
 from std.math import abs
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
+from gonzales.sampling import ThinLens
 from gonzales.footprint import CameraFootprint
 from gonzales.geometry import RGB, Point3f, Vec3f, INV_FOUR_PI, INV_PI
 from gonzales.materials import LobeKind, MeasuredBRDF
@@ -133,6 +134,7 @@ def _dummy_sd() -> SceneView:
         Float32(0),   # vcmLambda
         Int32(0),   # vcmBucketCap
         Int32(1),   # hasGlass
+        ThinLens.pinhole(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),   # mneeStats
         BVH4.none(),
     )
@@ -344,6 +346,7 @@ def test_bdpt_connect_to_cache_sums_one_paired_light_path() raises:
         Float32(0),   # vcmLambda
         Int32(0),   # vcmBucketCap
         Int32(1),   # hasGlass
+        ThinLens.pinhole(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),   # mneeStats
         BVH4.none(),
     )

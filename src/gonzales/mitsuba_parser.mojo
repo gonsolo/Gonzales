@@ -598,6 +598,16 @@ def _mit_process_sensor(tags: List[MitsubaTag], start: Int, end: Int,
     s_ptr[unsafe_offset=0].film_w = film_w
     s_ptr[unsafe_offset=0].film_h = film_h
     s_ptr[unsafe_offset=0].camera_fov = _mit_shorter_axis_fov(fov_val, fov_axis, film_w, film_h)
+    var ai = _mit_find_child_by_attr(tags, start, end, "float", "name", "aperture_radius")
+    if ai < 0:
+        ai = _mit_find_child_by_attr(tags, start, end, "float", "name", "apertureRadius")
+    var fi = _mit_find_child_by_attr(tags, start, end, "float", "name", "focus_distance")
+    if fi < 0:
+        fi = _mit_find_child_by_attr(tags, start, end, "float", "name", "focusDistance")
+    if ai >= 0:
+        s_ptr[unsafe_offset=0].lens_radius = _mit_parse_float(_mxml_find_attr(tags[ai], "value"))
+    if fi >= 0:
+        s_ptr[unsafe_offset=0].focal_distance = _mit_parse_float(_mxml_find_attr(tags[fi], "value"))
 
     var sampler_idx = _mit_find_child(tags, start, end, "sampler")
     if sampler_idx >= 0:

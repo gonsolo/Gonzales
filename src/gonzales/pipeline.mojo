@@ -18,7 +18,7 @@ from .primitives import Ray, TriangleMesh, Instance, mesh_vi, mesh_pos
 from .curves import Curve, curve_piece_bounds
 from .postprocess import denoise, write_image, write_image_cropped, write_image_cropwindow
 from .transform import Mat4, matrix_invert
-from .sampling import TileSamplerParams, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, derive_pcg_seeds, camera_ray_from_film_xy
+from .sampling import TileSamplerParams, ThinLens, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, derive_pcg_seeds, camera_ray_from_film_xy
 from .bvh import BVH2Node, SceneView, render_aux_buffers, _scene_bounding_sphere
 from .sppm import sppm_render
 from .sppm_gpu import sppm_render_gpu
@@ -1607,6 +1607,7 @@ struct CpuGuidedRenderer(GuidedRenderer):
             filterWeight=self.psc[unsafe_offset=0].filter_weight,
             filterType=self.psc[unsafe_offset=0].filter_type,
             sampleIndexOffset=Int32(begin),
+            lens=ThinLens(self.psc[unsafe_offset=0].camera_lens_radius, self.psc[unsafe_offset=0].camera_focal_distance),
         )
         var sp_ptr = OwnedPointer[TileSamplerParams](sp)
         var zero = TileResult(
@@ -2584,6 +2585,7 @@ def parse_and_render(
                 filterWeight=psc[unsafe_offset=0].filter_weight,
                 filterType=psc[unsafe_offset=0].filter_type,
                 sampleIndexOffset=Int32(0),
+                lens=ThinLens(psc[unsafe_offset=0].camera_lens_radius, psc[unsafe_offset=0].camera_focal_distance),
             )
             var sp_ptr = OwnedPointer[TileSamplerParams](sp)
             render_all_tiles(
@@ -2867,6 +2869,7 @@ def render_interactive(
         filterWeight=psc[unsafe_offset=0].filter_weight,
         filterType=psc[unsafe_offset=0].filter_type,
         sampleIndexOffset=Int32(0),
+        lens=ThinLens(psc[unsafe_offset=0].camera_lens_radius, psc[unsafe_offset=0].camera_focal_distance),
     ))
 
     if use_gpu:
@@ -3106,6 +3109,7 @@ def render_interactive(
                 filterWeight=psc[unsafe_offset=0].filter_weight,
                 filterType=psc[unsafe_offset=0].filter_type,
                 sampleIndexOffset=Int32(0),
+                lens=ThinLens(psc[unsafe_offset=0].camera_lens_radius, psc[unsafe_offset=0].camera_focal_distance),
             )
             for i in range(n_pixels):
                 results[i] = zero

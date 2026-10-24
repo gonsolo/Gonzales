@@ -384,6 +384,8 @@ struct SceneParseState(Movable):
     var filter_type:      Int32      # 0=gaussian 1=triangle 2=box
     var samples_per_pixel: Int32
     var camera_fov:       Float32
+    var lens_radius:      Float32
+    var focal_distance:   Float32
     var cam2w_raw:        Array[Float32, 16]
     var max_depth:        Int32
     var scene_dir:        String
@@ -542,6 +544,8 @@ struct SceneParseState(Movable):
         self.filter_type      = Int32(0)
         self.samples_per_pixel = Int32(1)
         self.camera_fov       = Float32(30)
+        self.lens_radius      = Float32(0)
+        self.focal_distance   = Float32(1e6)
         self.cam2w_raw        = Array[Float32, 16](fill=Float32(0))
         self.cam2w_raw[0] = Float32(1); self.cam2w_raw[5] = Float32(1)
         self.cam2w_raw[10] = Float32(1); self.cam2w_raw[15] = Float32(1)

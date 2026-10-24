@@ -13,7 +13,7 @@ from .primitives import mesh_pos, mesh_point, mesh_material
 from .render_state import PathState, ShadowTask, SHADOW_SLOTS
 from .restir_di import DIReservoir, di_reservoir_init
 from .restir_vol import VolReservoir, vol_reservoir_init
-from .sampling import gen_primary_ray_state
+from .sampling import gen_primary_ray_state, ThinLens
 from .spectrum import SpectralSample, spectral_sample_to_rgb
 from .transform import transform_normal, Mat4
 from .vulkaninterop import VulkanInteropRtSceneHandle, vulkaninterop_rt_trace
@@ -264,6 +264,7 @@ def gen_primary_rays_wavefront_gpu(
     filter_type: Int32,
     count_dp: Int64, n_pixels_dp: Int64,
     filter_lut: Pointer[Float32, MutUntrackedOrigin],
+    lens_radius: Float32, focal_distance: Float32,
     # Ptex demand paging, ptex_mode 2: slot ti renders sample redo_si[ti] of its pixel, or nothing if that is < 0.
     redo_si: Pointer[Int32, MutUntrackedOrigin] = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
     ptex_mode: Int32 = Int32(0),
@@ -291,6 +292,7 @@ def gen_primary_rays_wavefront_gpu(
         filter_norm_x, filter_sigma, filter_support_x,
         filter_norm_y, filter_support_y,
         filter_type, filter_lut,
+        lens=ThinLens(lens_radius, focal_distance),
     )
     paths[unsafe_offset=ti] = PathState(
         ray,
@@ -304,7 +306,7 @@ def gen_primary_rays_wavefront_gpu(
         Float32(1.0),   # current_dielectric_ior (vacuum)
         Float32(1.0),   # previous_dielectric_ior (vacuum)
         Float32(1.0),   # eta_scale
-        Int32(3), sobol_idx,
+        ThinLens(lens_radius, focal_distance).first_dim(), sobol_idx,
         wavelengths,
         Float32(0.0),   # mis_null_dist
         INV_FOUR_PI,    # lastEnvNeePdf (gated by lastBsdfPdf > 0; set at each scatter)
@@ -1703,6 +1705,7 @@ def gen_primary_rays_gpu(
     filter_norm_y: Float32, filter_support_y: Float32,
     filter_type: Int32,
     count_dp: Int64,
+    lens_radius: Float32, focal_distance: Float32,
 ):
     var fw = Int(fw_dp)
     var count = Int(count_dp)
@@ -1718,6 +1721,7 @@ def gen_primary_rays_gpu(
         filter_norm_x, filter_sigma, filter_support_x,
         filter_norm_y, filter_support_y,
         filter_type,
+        lens=ThinLens(lens_radius, focal_distance),
     )
     paths[unsafe_offset=tid] = PathState(
         ray,
@@ -1731,7 +1735,7 @@ def gen_primary_rays_gpu(
         Float32(1.0),   # current_dielectric_ior (vacuum)
         Float32(1.0),   # previous_dielectric_ior (vacuum)
         Float32(1.0),   # eta_scale
-        Int32(3), sobol_idx,
+        ThinLens(lens_radius, focal_distance).first_dim(), sobol_idx,
         wavelengths,
         Float32(0.0),   # mis_null_dist
         INV_FOUR_PI,    # lastEnvNeePdf (gated by lastBsdfPdf > 0; set at each scatter)

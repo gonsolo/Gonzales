@@ -9,7 +9,7 @@ from .materials import MatKind, Material, MeasuredBRDF, is_specular_glass
 from .footprint import CameraFootprint
 from .media import Grid, MediumInterface, Medium, NvdbGrid
 from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh, mesh_points_floats
-from .sampling import FILTER_LUT_N, fill_filter_lut
+from .sampling import FILTER_LUT_N, fill_filter_lut, ThinLens
 from .render_state import FilmDims, FilterParams, GpuTexture, NormalSlopeMap, PathState, ShadowTask, SHADOW_SLOTS
 from std.os import getenv
 from std.os.path import getsize
@@ -811,6 +811,7 @@ struct GpuSceneHandle(Movable):
     var r2c_buf: DeviceBuffer[DType.uint8]    # raster_to_camera: 16 Float32 = 64 bytes
     var c2w_buf: DeviceBuffer[DType.uint8]    # camera_to_world: 16 Float32 = 64 bytes (updated each frame)
     var filter: FilterParams
+    var lens: ThinLens
     var film: FilmDims
     # Staged spectral rendering rollout (Stage 2c-1, see
     # project_spectral_rendering memory) — device-side twin of the host
@@ -859,6 +860,7 @@ struct GpuSceneHandle(Movable):
             vcmLambda=Float32(0),
             vcmBucketCap=Int32(0),
             hasGlass=Int32(1) if self.has_glass_material else Int32(0),
+            lens=self.lens,
             mneeStats=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             bvh4=BVH4.none(),
         )
@@ -1200,6 +1202,7 @@ def gpu_upload_scene(
                 c2w_buf=c2w_gpu_buf^,
                 filter=FilterParams(s.filter_sigma, s.filter_support_x, s.filter_support_y,
                                     s.filter_norm_x, s.filter_norm_y, s.filter_type),
+                lens=ThinLens(s.camera_lens_radius, s.camera_focal_distance),
                 film=FilmDims(s.film_w, s.film_h),
                 spectral=spectral^,
             ))

@@ -35,7 +35,7 @@ from .noise import _perlin_perm_table, cloud_density
 from .transform import matrix_multiply, matrix_invert, transform_points, transform_normals
 from .bvh import BVH2Node, BVH4, SceneView, build_bvh2, build_bvh4, free_bvh4, collapse_bvh_wide
 from .spectrum import SpectralHandle
-from .sampling import gaussian_norm
+from .sampling import gaussian_norm, ThinLens
 from .ply import load_ply
 from .ply_prefetch import PlyPrefetch, scan_plys, load_all_plys
 from .material_builder import _psc_handle_make_named_material, _psc_handle_named_material
@@ -88,6 +88,8 @@ struct ParsedScene_Mojo:
     var crop_y0: Float32
     var crop_y1: Float32
     var camera_fov:       Float32
+    var camera_lens_radius:    Float32
+    var camera_focal_distance: Float32
     var film_iso:         Float32
     var film_exposuretime: Float32
     var film_wb:          SIMD[DType.float32, 16]  # 3x3 row-major in lanes 0..8; sensor white balance
@@ -390,6 +392,8 @@ def _psc_handle_camera(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
     for i in range(16): s[unsafe_offset=0].cam2w_raw[i] = s[unsafe_offset=0].ctm[i]
     var params = _psc_collect_params(handle)
     s[unsafe_offset=0].camera_fov = params.get_float("fov", s[unsafe_offset=0].camera_fov)
+    s[unsafe_offset=0].lens_radius = params.get_float("lensradius", Float32(0))
+    s[unsafe_offset=0].focal_distance = params.get_float("focaldistance", Float32(1e6))
     # An explicit screenwindow (pbrt: the fov spans [-1,1] of it) is folded into the shorter-axis fov, assuming it matches the film aspect.
     var sw = params.get_floats("screenwindow")
     if len(sw) == 4 and sw[1] > sw[0] and sw[3] > sw[2]:
@@ -3634,6 +3638,8 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
     psc[unsafe_offset=0].crop_y0          = s[unsafe_offset=0].crop_y0
     psc[unsafe_offset=0].crop_y1          = s[unsafe_offset=0].crop_y1
     psc[unsafe_offset=0].camera_fov       = s[unsafe_offset=0].camera_fov
+    psc[unsafe_offset=0].camera_lens_radius    = s[unsafe_offset=0].lens_radius
+    psc[unsafe_offset=0].camera_focal_distance = s[unsafe_offset=0].focal_distance
     psc[unsafe_offset=0].film_iso         = s[unsafe_offset=0].film_iso
     psc[unsafe_offset=0].film_exposuretime = s[unsafe_offset=0].film_exposuretime
     var film_wb = _film_white_balance_matrix(s[unsafe_offset=0].film_whitebalance)
@@ -4522,6 +4528,7 @@ def mojo_parsed_scene_descriptor(
         if is_specular_glass(psc[unsafe_offset=0].materials[unsafe_offset=mi]):
             any_glass = True
     sd[unsafe_offset=0].hasGlass        = Int32(1) if any_glass else Int32(0)
+    sd[unsafe_offset=0].lens            = ThinLens(psc[unsafe_offset=0].camera_lens_radius, psc[unsafe_offset=0].camera_focal_distance)
     var mnee_stats = unsafe_alloc[Int32](4)
     for k in range(4):
         mnee_stats[unsafe_offset=k] = Int32(0)

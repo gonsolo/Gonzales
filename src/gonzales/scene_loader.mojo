@@ -26,6 +26,8 @@ def _camera_override(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]):
     for i in range(16):
         psc[unsafe_offset=0].camera_to_world[unsafe_offset=i] = cam[unsafe_offset=0].camera_to_world[unsafe_offset=i]
     psc[unsafe_offset=0].camera_fov = cam[unsafe_offset=0].camera_fov
+    psc[unsafe_offset=0].camera_lens_radius = cam[unsafe_offset=0].camera_lens_radius
+    psc[unsafe_offset=0].camera_focal_distance = cam[unsafe_offset=0].camera_focal_distance
     psc[unsafe_offset=0].max_depth = cam[unsafe_offset=0].max_depth
     resize_film(psc, psc[unsafe_offset=0].film_w, psc[unsafe_offset=0].film_h)
 

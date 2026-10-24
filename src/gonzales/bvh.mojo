@@ -10,6 +10,7 @@ from std.sys.info import num_performance_cores
 from std.bit import count_trailing_zeros
 from .transform import Mat4
 from .geometry import dot, cross, Point3f, Point2f, Vec3f, Frame, RGB, PI, TWO_PI, INV_PI, INV_FOUR_PI, safe_sqrt, _is_real_ptr, store_vec3, _atan2f, point3f, fast_sincos
+from .sampling import ThinLens
 from .materials import Material, MatKind, fr_dielectric, MeasuredBRDF
 from .render_state import PathState, TileResult, GpuTexture, NormalSlopeMap
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, intersect_triangle, intersect_triangle_edges, alpha_killed, Instance, sphere_outward_normal, mesh_vi, mesh_material
@@ -297,6 +298,7 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     var vcmBucketCap: Int32
     # 0 when no material is smooth glass, so MNEE's per-sample probe toward the light can be skipped; 1 otherwise (always on the CPU).
     var hasGlass: Int32
+    var lens: ThinLens
     # [MNEE probes, probes that found glass, switched-off flag]; dangling = MNEE always on
     var mneeStats: Pointer[Int32, MutUntrackedOrigin]
     # CPU-only 4-wide collapse of bvh2Nodes (build_bvh4); BVH4.none() = use the BVH2.

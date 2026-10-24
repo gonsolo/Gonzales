@@ -164,6 +164,7 @@ struct TileSamplerParams(TrivialRegisterPassable):
     var filterWeight: Float32
     var filterType: Int32   # 0=gaussian 1=triangle 2=box
     var sampleIndexOffset: Int32  # shift into the Sobol sequence (for multi-pass)
+    var lens: ThinLens
 
 @always_inline
 def reverse_bits32(v_in: UInt32) -> UInt32:
@@ -569,12 +570,42 @@ def triangle_sample_1d(u: Float32, radius: Float32) -> Float32:
 #
 # Returns the world-space Ray and the PCG seed pair for the path.
 # px/py are integer pixel coords; si is the sample index (Int32).
+@fieldwise_init
+struct ThinLens(TrivialRegisterPassable):
+    """pbrt's PerspectiveCamera lens: radius 0 is a pinhole."""
+    var radius: Float32
+    var focal_distance: Float32
+
+    @staticmethod
+    def pinhole() -> ThinLens:
+        return ThinLens(Float32(0), Float32(1e6))
+
+    def first_dim(self) -> Int32:
+        """The Sobol dimension the first bounce starts at: the lens takes dims 3 and 4."""
+        return Int32(5) if self.radius > Float32(0) else Int32(3)
+
+
 @always_inline
+def sample_disk_concentric(u0: Float32, u1: Float32) -> Tuple[Float32, Float32]:
+    var ox = Float32(2) * u0 - Float32(1)
+    var oy = Float32(2) * u1 - Float32(1)
+    if ox == Float32(0) and oy == Float32(0):
+        return (Float32(0), Float32(0))
+    var r: Float32
+    var theta: Float32
+    if abs(ox) > abs(oy):
+        r = ox; theta = Float32(PI / 4) * (oy / ox)
+    else:
+        r = oy; theta = Float32(PI / 2) - Float32(PI / 4) * (ox / oy)
+    return (r * cos(theta), r * sin(theta))
+
+
 @always_inline
 def camera_ray_from_film_xy[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     filmX: Float32, filmY: Float32,
     r2c: Pointer[Float32, MutUntrackedOrigin],   # rasterToCamera  (16 Float32, col-major)
     c2w: Pointer[Float32, Oc2w],                 # cameraToWorld   (16 Float32, col-major)
+    lens: ThinLens = ThinLens.pinhole(), u_lens0: Float32 = Float32(0.5), u_lens1: Float32 = Float32(0.5),
 ) -> Tuple[Vec3f, Point3f, Float32]:
     """The raster->camera->world transform alone: film-space (filmX, filmY)
     to a normalized world-space ray direction, the camera's world origin, and
@@ -615,6 +646,14 @@ def camera_ray_from_film_xy[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     # consumer) spanned whole texture tiles, and barcelona's displaced deck
     # rendered as smooth blobs instead of gravel.
     var camLenPre = camLen * w_div
+    var lx = Float32(0); var ly = Float32(0)
+    if lens.radius > Float32(0) and cz > Float32(0):
+        var d = sample_disk_concentric(u_lens0, u_lens1)
+        lx = lens.radius * d[0]; ly = lens.radius * d[1]
+        var ft = lens.focal_distance / cz
+        cx = cx * ft - lx; cy = cy * ft - ly; cz = cz * ft
+        var fl = sqrt(cx*cx + cy*cy + cz*cz)
+        cx /= fl; cy /= fl; cz /= fl
 
     var dx = c2w[unsafe_offset=0]*cx + c2w[unsafe_offset=4]*cy + c2w[unsafe_offset=8]*cz
     var dy = c2w[unsafe_offset=1]*cx + c2w[unsafe_offset=5]*cy + c2w[unsafe_offset=9]*cz
@@ -623,7 +662,9 @@ def camera_ray_from_film_xy[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     if dirLen > Float32(0.0):
         dx /= dirLen; dy /= dirLen; dz /= dirLen
 
-    var org = Point3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
+    var org = Point3f(c2w[unsafe_offset=0]*lx + c2w[unsafe_offset=4]*ly + c2w[unsafe_offset=12],
+                      c2w[unsafe_offset=1]*lx + c2w[unsafe_offset=5]*ly + c2w[unsafe_offset=13],
+                      c2w[unsafe_offset=2]*lx + c2w[unsafe_offset=6]*ly + c2w[unsafe_offset=14])
     return (Vec3f(dx, dy, dz), org, camLenPre)
 
 
@@ -640,6 +681,7 @@ def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     filter_type: Int32 = Int32(0),
     filter_lut: Pointer[Float32, MutUntrackedOrigin] = Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
     sobol_pixel_part: Int64 = Int64(-1),   # sobol_index_pixel_part for this pixel, when the caller loops samples; -1 = compute
+    lens: ThinLens = ThinLens.pinhole(),
 ) -> Tuple[Ray, UInt64, UInt64, UInt64, SampledWavelengths]:
     """Shared Sobol + filter + camera-transform primary ray generator.
     Returns (ray, pcg_state, pcg_inc, sobol_idx, wavelengths).
@@ -666,7 +708,10 @@ def gen_primary_ray_state[Oc2w: Origin[mut=True] = MutUntrackedOrigin](
     var filmX = Float32(px) + Float32(0.5) + deltaX
     var filmY = Float32(py) + Float32(0.5) + deltaY
 
-    var (dir, org, _camLen) = camera_ray_from_film_xy(filmX, filmY, r2c, c2w)
+    var ul = SIMD[DType.float32, 2](Float32(0.5))
+    if lens.radius > Float32(0):
+        ul = sobol_sample_n[2](Int(sobol_idx), 3, SIMD[DType.uint32, 2](mix_bits_u64(pcg_inc ^ UInt64(3)), mix_bits_u64(pcg_inc ^ UInt64(4))), sobol_matrices)
+    var (dir, org, _camLen) = camera_ray_from_film_xy(filmX, filmY, r2c, c2w, lens, ul[0], ul[1])
     var dx = dir.x; var dy = dir.y; var dz = dir.z
     var orgX = org.x; var orgY = org.y; var orgZ = org.z
 

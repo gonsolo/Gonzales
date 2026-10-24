@@ -703,6 +703,7 @@ def gpu_render_sample[Oc: Origin[mut=True]](
                 handle[].filter.norm_y, handle[].filter.support_y,
                 handle[].filter.type,
                 Int64(n_int),
+                handle[].lens.radius, handle[].lens.focal_distance,
                 grid_dim=grid_dim,
                 block_dim=block_size,
             )
@@ -897,6 +898,7 @@ def gpu_render_wavefront(
                 handle[].filter.type,
                 Int64(n_total), Int64(n_pix),
                 handle[].filter_lut_buf.unsafe_ptr().unsafe_bitcast[Float32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin]() if handle[].filter.type == Int32(0) else Pointer[Float32, MutUntrackedOrigin].unsafe_dangling(),
+                handle[].lens.radius, handle[].lens.focal_distance,
                 handle[].ptex_redo_si_buf.unsafe_ptr().unsafe_bitcast[Int32]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](), ptex_mode,
                 grid_dim=grid_total,
                 block_dim=block_size,

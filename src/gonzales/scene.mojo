@@ -1,6 +1,7 @@
 from std.collections import List, Array
 from std.ffi import external_call
 from .geometry import RGB, Point3f, Vec3f
+from .sampling import ThinLens
 from .materials import Material
 from .primitives import TriangleMesh, PrimId, Sphere
 from .media import Medium, MediumInterface
@@ -174,6 +175,7 @@ struct Scene(Movable):
             mediumInterfaces  = self.medium_ifaces.unsafe_ptr(),
             mediumIfaceCount  = Int64(len(self.medium_ifaces)),
             hasGlass          = Int32(1),
+            lens              = ThinLens.pinhole(),
             mneeStats         = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             bvh4              = BVH4.none(),
         )

@@ -210,6 +210,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     sp.filterNormY, sp.filterSupportY,
                     sp.filterType,
                     sobol_pixel_part=pixel_sobol,
+                    lens=sp.lens,
                 )
                 paths[unsafe_offset=idx] = PathState(
                     ray,
@@ -223,7 +224,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     Float32(1.0),   # current_dielectric_ior (vacuum)
                     Float32(1.0),   # previous_dielectric_ior (vacuum)
                     Float32(1.0),   # eta_scale
-                    Int32(3), sobol_idx,
+                    sp.lens.first_dim(), sobol_idx,
                     wavelengths,
                     Float32(0.0),   # mis_null_dist
                     INV_FOUR_PI,    # lastEnvNeePdf (see PathState)

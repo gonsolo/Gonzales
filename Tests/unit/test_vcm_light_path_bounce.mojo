@@ -19,6 +19,7 @@
 
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
+from gonzales.sampling import ThinLens
 from gonzales.footprint import CameraFootprint
 from gonzales.geometry import RGB, Point3f, Vec3f
 from gonzales.materials import MeasuredBRDF, Material, MatKind
@@ -141,6 +142,7 @@ def _build_scene() -> SceneView:
         Float32(0),   # vcmLambda
         Int32(0),   # vcmBucketCap
         Int32(1),   # hasGlass
+        ThinLens.pinhole(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),   # mneeStats
         BVH4.none(),
     )
