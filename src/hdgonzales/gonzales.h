@@ -19,6 +19,12 @@ int gz_scene_add_hair(void *scene, float sigma_r, float sigma_g, float sigma_b, 
 void gz_scene_add_curves(void *scene, const float *control_points, const float *widths, int n_segments, int material);
 void gz_scene_set_camera(void *scene, const float *world_to_camera, float fov_deg, int width, int height);
 int gz_render(void *renderer, void *scene, int spp, int max_depth, float *out_rgb);
+void *gz_session_new(void *renderer, void *scene, int spp, int max_depth);
+int gz_session_set_camera(void *session, const float *world_to_camera, float fov_deg, int width, int height);
+void gz_session_set_samples(void *session, int spp, int max_depth);
+int gz_session_render(void *session, int n_spp);
+int gz_session_resolve(void *session, float *out_rgb, int denoise);
+void gz_session_free(void *session);
 #ifdef __cplusplus
 }
 #endif

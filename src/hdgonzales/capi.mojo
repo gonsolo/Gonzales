@@ -3,11 +3,12 @@ from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
 from std.runtime import initialize_runtime
 from max.gpu.host import DeviceContext
-from gonzales.geometry import RGB
+from gonzales.geometry import RGB, _is_real_ptr
 from gonzales.materials import MatKind
 from gonzales.parse_types import SceneParseState, NamedMaterial
-from gonzales.pbrt_parser import ParsedScene_Mojo, finalize_scene
-from gonzales.pipeline import _generate_sobol_matrices, parse_and_render
+from gonzales.pbrt_parser import ParsedScene_Mojo, finalize_scene, mojo_apply_overrides
+from gonzales.pipeline import (_generate_sobol_matrices, parse_and_render, RenderSession, SessionPtr, session_new, session_set_camera, session_set_samples,
+                               session_render, session_resolve, session_free)
 from gonzales.scene_builder import store_mesh
 from gonzales.spectrum import load_spectral_context, spectral_handle, SpectralContext
 
@@ -155,6 +156,58 @@ def gz_render(r: RendererPtr, s: ScenePtr, spp: Int32, max_depth: Int32, out_rgb
     except e:
         print("Gonzales: render failed:", e)
         return Int32(-1)
+
+@export
+def gz_session_new(r: RendererPtr, s: ScenePtr, spp: Int32, max_depth: Int32) abi("C") -> OptionalPointer[RenderSession, MutUntrackedOrigin]:
+    """Consumes the scene and puts it on the GPU; null if that fails."""
+    s[unsafe_offset=0].max_depth = max_depth
+    var psc = unsafe_alloc[ParsedScene_Mojo](1)
+    finalize_scene(s, psc, False)
+    _ = s.unsafe_take_pointee()
+    s.unsafe_free()
+    mojo_apply_overrides(psc, spp, Int32(0), Int32(0))
+    var session = session_new(psc, r[unsafe_offset=0].sobol, spectral_handle(r[unsafe_offset=0].spectral), r[unsafe_offset=0].ctx)
+    if _is_real_ptr(session):
+        return session
+    return None
+
+@export
+def gz_session_set_camera(s: SessionPtr, world_to_camera: F32Ptr, fov_deg: Float32, width: Int32, height: Int32) abi("C") -> Int32:
+    """As gz_scene_set_camera; starts the film over."""
+    try:
+        session_set_camera(s, world_to_camera, fov_deg, width, height)
+        return Int32(0)
+    except e:
+        print("Gonzales: camera failed:", e)
+        return Int32(-1)
+
+@export
+def gz_session_set_samples(s: SessionPtr, spp: Int32, max_depth: Int32) abi("C"):
+    """The converged sample count and the path depth; a change starts the film over."""
+    session_set_samples(s, spp, max_depth)
+
+@export
+def gz_session_render(s: SessionPtr, n_spp: Int32) abi("C") -> Int32:
+    """Adds up to n_spp samples per pixel; returns the samples in the film, -1 on failure."""
+    try:
+        return Int32(session_render(s, Int(n_spp)))
+    except e:
+        print("Gonzales: render failed:", e)
+        return Int32(-1)
+
+@export
+def gz_session_resolve(s: SessionPtr, out_rgb: F32Ptr, denoise: Int32) abi("C") -> Int32:
+    """Writes width*height RGB floats, top row first."""
+    try:
+        session_resolve(s, out_rgb, denoise != Int32(0))
+        return Int32(0)
+    except e:
+        print("Gonzales: resolve failed:", e)
+        return Int32(-1)
+
+@export
+def gz_session_free(s: SessionPtr) abi("C"):
+    session_free(s)
 
 @export
 def gz_scene_add_point(s: ScenePtr, x: Float32, y: Float32, z: Float32, r: Float32, g: Float32, b: Float32) abi("C"):
