@@ -95,6 +95,7 @@ LLDB			= lldb
 
 BUILD_DIR		= build
 GONZALES		= $(BUILD_DIR)/gonzales
+MOJO_SRCS		:= $(wildcard src/gonzales/*.mojo)
 GONZALES_RELEASE	= $(GONZALES)
 GONZALES_DEBUG		= $(GONZALES)
 
@@ -268,7 +269,6 @@ MOJO_LINK_FLAGS = -Xlinker -L$(BUILD_DIR) -Xlinker -loiiobridge -Xlinker -lvulka
                   -Xlinker -lvulkanrt -Xlinker -lvulkaninterop -Xlinker -lrtcore -Xlinker -lnvdbbridge \
                   -Xlinker -rpath -Xlinker $(BUILD_DIR) -Xlinker -lm
 
-MOJO_SRCS := $(wildcard src/gonzales/*.mojo)
 $(GONZALES): $(MOJO_SRCS) pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(NVDB_BRIDGE_LIB)
 	@mkdir -p $(BUILD_DIR)
 	uv run mojo build src/gonzales/__init__.mojo -I src -o $(GONZALES) $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
