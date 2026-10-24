@@ -1,6 +1,6 @@
 from max.gpu import MAX_THREADS_PER_BLOCK_METADATA
 from std.utils import StaticTuple
-from .bvh import BVH2Node, BVH4, SceneView
+from .bvh import BVH2Node, BVH4, SceneView, build_bvh2
 from .curves import CURVE_DEFER_K, Curve
 from .geometry import _is_real_ptr
 from .guide import GuideGrid, null_guide
@@ -8,7 +8,7 @@ from .lights import AreaLight, DistantLight, InfiniteLight, PointLight, LightSam
 from .materials import MatKind, Material, MeasuredBRDF, is_specular_glass
 from .footprint import CameraFootprint
 from .media import Grid, MediumInterface, Medium, NvdbGrid
-from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh, mesh_points_floats
+from .primitives import Instance, Intersection, PrimId, Sphere, TriangleMesh, mesh_points_floats, mesh_pos, mesh_vi
 from .sampling import FILTER_LUT_N, fill_filter_lut, ThinLens
 from .render_state import FilmDims, FilterParams, GpuTexture, NormalSlopeMap, PathState, ShadowTask, SHADOW_SLOTS
 from std.os import getenv
@@ -175,6 +175,67 @@ struct BlasBuffers(Movable):
         blas_nodes_ptrs_host.unsafe_free(); blas_primids_ptrs_host.unsafe_free()
         return Self(nodes_bufs=blas_nodes_bufs^, primids_bufs=blas_primids_bufs^, nodes_ptrs_buf=blas_nodes_ptrs_buf^,
                     primids_ptrs_buf=blas_primids_ptrs_buf^, n_blas=n_blas_int)
+
+@fieldwise_init
+struct WalkBvhBuffers(Movable):
+    """One BVH per mesh whose material has a subsurface walk: the walk meets only its own mesh, as Cycles' walk meets
+    only its object, and the scene BVH around a furred skin is dense with hair (the lion's walk took 75 s in it)."""
+    var nodes_bufs: List[DeviceBuffer[DType.uint8]]
+    var prims_bufs: List[DeviceBuffer[DType.uint8]]
+    var nodes_ptrs_buf: DeviceBuffer[DType.uint8]
+    var prims_ptrs_buf: DeviceBuffer[DType.uint8]
+    var of_mesh_buf: DeviceBuffer[DType.uint8]   # Int32 per mesh: its walk BVH, or -1
+    var n: Int
+
+    @staticmethod
+    def upload(ctx: DeviceContext, ref s: ParsedScene_Mojo) raises -> Self:
+        var n_mesh = max(Int(s.mesh_count), 1)
+        var of_mesh = unsafe_alloc[Int32](n_mesh)
+        for i in range(n_mesh):
+            of_mesh[unsafe_offset=i] = Int32(-1)
+        var groups = List[List[PrimId]]()
+        for k in range(Int(s.prim_count_cpu)):
+            var p = s.prim_ids_cpu[unsafe_offset=k]
+            if p.type != Int8(0) or p.instanceIdx >= Int32(0) or s.materials[unsafe_offset=Int(p.materialIndex)].sss_walk == Int8(0):
+                continue
+            var mi = Int(p.id1)
+            if of_mesh[unsafe_offset=mi] < Int32(0):
+                of_mesh[unsafe_offset=mi] = Int32(len(groups))
+                groups.append(List[PrimId]())
+            groups[Int(of_mesh[unsafe_offset=mi])].append(p)
+        var nodes_bufs = List[DeviceBuffer[DType.uint8]]()
+        var prims_bufs = List[DeviceBuffer[DType.uint8]]()
+        var nodes_ptrs = unsafe_alloc[Pointer[UInt8, MutUntrackedOrigin]](max(len(groups), 1))
+        var prims_ptrs = unsafe_alloc[Pointer[UInt8, MutUntrackedOrigin]](max(len(groups), 1))
+        for gi in range(len(groups)):
+            var n = len(groups[gi])
+            var bounds = unsafe_alloc[Float32](n * 6)
+            for k in range(n):
+                var p = groups[gi][k]
+                var mesh = s.meshes[unsafe_offset=Int(p.id1)]
+                var a = mesh_pos(mesh, mesh_vi(mesh, Int(p.id2)))
+                var b = mesh_pos(mesh, mesh_vi(mesh, Int(p.id2) + 1))
+                var c = mesh_pos(mesh, mesh_vi(mesh, Int(p.id2) + 2))
+                bounds[unsafe_offset=k * 6 + 0] = min(a.x, min(b.x, c.x)); bounds[unsafe_offset=k * 6 + 3] = max(a.x, max(b.x, c.x))
+                bounds[unsafe_offset=k * 6 + 1] = min(a.y, min(b.y, c.y)); bounds[unsafe_offset=k * 6 + 4] = max(a.y, max(b.y, c.y))
+                bounds[unsafe_offset=k * 6 + 2] = min(a.z, min(b.z, c.z)); bounds[unsafe_offset=k * 6 + 5] = max(a.z, max(b.z, c.z))
+            var nodes = unsafe_alloc[BVH2Node](max(2 * n, 1))
+            var order = unsafe_alloc[Int32](max(n, 1))
+            var n_nodes = build_bvh2(bounds, Int32(n), nodes, order, min_leaf=4)
+            var prims = unsafe_alloc[PrimId](max(n, 1))
+            for k in range(n):
+                prims[unsafe_offset=k] = groups[gi][Int(order[unsafe_offset=k])]
+            nodes_ptrs[unsafe_offset=gi] = _gpu_upload_owned[BVH2Node](ctx, nodes_bufs, nodes, max(Int(n_nodes), 1)).unsafe_bitcast[UInt8]()
+            prims_ptrs[unsafe_offset=gi] = _gpu_upload_owned[PrimId](ctx, prims_bufs, prims, n).unsafe_bitcast[UInt8]()
+            ctx.synchronize()
+            bounds.unsafe_free(); nodes.unsafe_free(); order.unsafe_free(); prims.unsafe_free()
+        var nodes_ptrs_buf = _gpu_upload_array[Pointer[UInt8, MutUntrackedOrigin]](ctx, nodes_ptrs, len(groups))
+        var prims_ptrs_buf = _gpu_upload_array[Pointer[UInt8, MutUntrackedOrigin]](ctx, prims_ptrs, len(groups))
+        var of_mesh_buf = _gpu_upload_array[Int32](ctx, of_mesh, n_mesh)
+        ctx.synchronize()
+        nodes_ptrs.unsafe_free(); prims_ptrs.unsafe_free(); of_mesh.unsafe_free()
+        return Self(nodes_bufs=nodes_bufs^, prims_bufs=prims_bufs^, nodes_ptrs_buf=nodes_ptrs_buf^,
+                    prims_ptrs_buf=prims_ptrs_buf^, of_mesh_buf=of_mesh_buf^, n=len(groups))
 
 @fieldwise_init
 struct MeshBuffers(Movable):
@@ -714,6 +775,7 @@ struct GpuSceneHandle(Movable):
     var ctx: DeviceContext
     var bvh: BvhBuffers
     var blas: BlasBuffers
+    var walk_bvh: WalkBvhBuffers
     var instances_buf: DeviceBuffer[DType.uint8]
     var n_instances: Int
     var instances_ext: Int          # device address of instance records kept elsewhere (the RT-core TLAS); 0: instances_buf
@@ -864,6 +926,9 @@ struct GpuSceneHandle(Movable):
             hasGlass=Int32(1) if self.has_glass_material else Int32(0),
             lens=self.lens,
             filterGlossy=self.filter_glossy,
+            walkNodesArr=typed_ptr[Pointer[BVH2Node, MutUntrackedOrigin]](self.walk_bvh.nodes_ptrs_buf),
+            walkPrimsArr=typed_ptr[Pointer[PrimId, MutUntrackedOrigin]](self.walk_bvh.prims_ptrs_buf),
+            walkBvhOfMesh=typed_ptr[Int32](self.walk_bvh.of_mesh_buf) if self.walk_bvh.n > 0 else Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             mneeStats=Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             bvh4=BVH4.none(),
         )
@@ -872,8 +937,8 @@ def gpu_available() -> Bool:
     return has_accelerator()
 
 def _bench_counters() -> Pointer[Int, MutUntrackedOrigin]:
-    var b = unsafe_alloc[Int](13)
-    for i in range(13):
+    var b = unsafe_alloc[Int](16)
+    for i in range(16):
         b[unsafe_offset=i] = 0
     if getenv("GONZALES_BENCH") != "":
         b[unsafe_offset=3] = 2 if getenv("GONZALES_BENCH_TRACE") != "" else 1
@@ -1066,6 +1131,7 @@ def gpu_upload_scene(
                 _report_gpu_memory(ctx, s)
             var bvh = BvhBuffers.upload(ctx, s)
             var blas = BlasBuffers.upload(ctx, s)
+            var walk_bvh = WalkBvhBuffers.upload(ctx, s)
             ctx.synchronize()
             _gpu_free_log("bvh+blas")
             var instances_gpu_buf = _gpu_upload_array[Instance](ctx, s.instances, 1 if instances_external else Int(s.instance_count))
@@ -1146,6 +1212,7 @@ def gpu_upload_scene(
                 ctx=ctx.copy(),
                 bvh=bvh^,
                 blas=blas^,
+                walk_bvh=walk_bvh^,
                 instances_buf=instances_gpu_buf^,
                 n_instances=Int(s.instance_count),
                 instances_ext=0,

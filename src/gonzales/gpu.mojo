@@ -21,7 +21,7 @@ from .gpu_media import sample_medium_gpu, update_medium_gpu
 from .gpu_scene import GpuSceneHandle
 from .gpu_shade import shared_shade_context, resolve_suppress_gpu, shade_coated_conductor_gpu, shade_coated_diffuse_gpu, shade_conductor_gpu, shade_dielectric_gpu, shade_diffuse_gpu, shade_diffuse_transmit_gpu, shade_hair_gpu, shade_interface_gpu, shade_measured_gpu, shade_mix_gpu, shade_nee_preamble_gpu, shade_thin_dielectric_gpu
 from .guide import guide_is_active
-from .gpu_wavefront import sw_pack_shadow_tasks_gpu, sw_add_shadow_gpu, sw_resolve_shadow_gpu, compact_active_paths_gpu, compact_by_kind_gpu, accumulate_cone_gpu, accumulate_film_gpu, accumulate_film_wavefront_gpu, clear_film_gpu, clear_scalar_film_gpu, compact_curve_paths_gpu, deactivate_paths_past_maxdepth_gpu, gen_primary_rays_gpu, gen_primary_rays_wavefront_gpu, reset_curve_counter_gpu, reset_restir_reservoirs_gpu, reset_restir_vol_reservoirs_gpu, reset_shadow_tasks_gpu, read_counter, reset_vol_used_gpu, resolve_curve_candidates_gpu, traverse_paths_gpu, traverse_shadow_rays_gpu, rtcore_closest_hit_gpu, rtcore_shadow_rays_compact_gpu, vulkaninterop_rt_traverse_paths_gpu
+from .gpu_wavefront import sw_pack_shadow_tasks_gpu, sw_add_shadow_gpu, sw_resolve_shadow_gpu, compact_active_paths_gpu, compact_by_kind_gpu, accumulate_cone_gpu, accumulate_film_gpu, accumulate_film_wavefront_gpu, clear_film_gpu, clear_scalar_film_gpu, compact_curve_paths_gpu, compact_walking_gpu, sss_walk_gpu, deactivate_paths_past_maxdepth_gpu, gen_primary_rays_gpu, gen_primary_rays_wavefront_gpu, reset_curve_counter_gpu, reset_restir_reservoirs_gpu, reset_restir_vol_reservoirs_gpu, reset_shadow_tasks_gpu, read_counter, reset_vol_used_gpu, resolve_curve_candidates_gpu, traverse_paths_gpu, traverse_shadow_rays_gpu, rtcore_closest_hit_gpu, rtcore_shadow_rays_compact_gpu, vulkaninterop_rt_traverse_paths_gpu
 
 
 def _enqueue_traverse[rare_on: Bool, alpha_on: Bool](
@@ -276,7 +276,17 @@ def _gpu_bounce_kernels(
             path_ptr_c, Int64(n), live_idx, live_count,
             grid_dim=grid_dim, block_dim=block_size,
         )
-    if handle[].media.n_mediums > 0 or handle[].has_interface_material or handle[].has_sss_walk:
+    if handle[].has_sss_walk:
+        # Count slot 14 is free (15 counts the software shadow tasks); the per-kind list is refilled only by the shading below.
+        handle[].ctx.enqueue_function[compact_walking_gpu](
+            path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(14),
+            grid_dim=grid_dim, block_dim=block_size)
+        handle[].ctx.enqueue_function[sss_walk_gpu](
+            path_ptr_c, handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
+            sd, kind_idx, live_count.unsafe_offset(14),
+            grid_dim=grid_dim, block_dim=block_size)
+        _bench_stage(handle, 12, 14, 13)
+    if handle[].media.n_mediums > 0 or handle[].has_interface_material:
         handle[].ctx.enqueue_function[sample_medium_gpu](
             handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
@@ -942,6 +952,7 @@ def gpu_render_wavefront(
                     instance_base_mesh_buf=instance_base_mesh_buf,
                     round=round, prev_live=live_paths,
                 )
+                handle[].bench[unsafe_offset=14] += 1   # rounds, for the session report
                 if live_paths == 0:
                     break
             handle[].ctx.enqueue_function[accumulate_film_wavefront_gpu](

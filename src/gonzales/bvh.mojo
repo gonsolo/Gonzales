@@ -300,6 +300,10 @@ struct SceneView(TrivialRegisterPassable, DevicePassable):
     var hasGlass: Int32
     var lens: ThinLens
     var filterGlossy: Float32   # Cycles' Filter Glossy; 0 = off
+    # Per-mesh BVHs for subsurface walks (gpu_scene.WalkBvhBuffers); walkBvhOfMesh dangling = walk the scene BVH.
+    var walkNodesArr: Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin]
+    var walkPrimsArr: Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin]
+    var walkBvhOfMesh: Pointer[Int32, MutUntrackedOrigin]
     # [MNEE probes, probes that found glass, switched-off flag]; dangling = MNEE always on
     var mneeStats: Pointer[Int32, MutUntrackedOrigin]
     # CPU-only 4-wide collapse of bvh2Nodes (build_bvh4); BVH4.none() = use the BVH2.

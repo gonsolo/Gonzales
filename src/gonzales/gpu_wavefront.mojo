@@ -31,6 +31,7 @@ from std.atomic import Atomic
 from std.math import ceildiv, sqrt
 from std.sys import has_accelerator
 from .gpu_scene import GpuSceneHandle
+from .gpu_media import _sss_walk_step
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this
@@ -352,6 +353,39 @@ def compact_by_kind_gpu(
     var pos = warp_append(counter, act)
     if act:
         idx[unsafe_offset=pos] = Int32(p)
+
+# The paths on a subsurface walk, gathered so the walk kernel's warps hold only walking paths: spread among hair paths
+# each warp waited for its longest walk.
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+def compact_walking_gpu(
+    paths: Pointer[PathState, MutUntrackedOrigin],
+    src_idx: Pointer[Int32, MutUntrackedOrigin],
+    src_count: Pointer[Int32, MutUntrackedOrigin],
+    idx: Pointer[Int32, MutUntrackedOrigin],
+    counter: Pointer[Int32, MutUntrackedOrigin],
+):
+    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
+    var p = 0
+    var act = False
+    if i < Int(src_count[unsafe_offset=0]):
+        p = Int(src_idx[unsafe_offset=i])
+        act = paths[unsafe_offset=p].active != 0 and paths[unsafe_offset=p].sss.mesh >= Int32(0)
+    var pos = warp_append(counter, act)
+    if act:
+        idx[unsafe_offset=pos] = Int32(p)
+
+@__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
+def sss_walk_gpu(
+    paths: Pointer[PathState, MutUntrackedOrigin],
+    intersections: Pointer[Intersection, MutUntrackedOrigin],
+    sd: SceneView,
+    idx: Pointer[Int32, MutUntrackedOrigin],
+    count: Pointer[Int32, MutUntrackedOrigin],
+):
+    var i = Int(block_idx.x * block_dim.x + thread_idx.x)
+    if i >= Int(count[unsafe_offset=0]):
+        return
+    _sss_walk_step(paths, intersections, Int(idx[unsafe_offset=i]), sd)
 
 # Traversal kernel that reads rays directly from PathState (no separate ray buffer).
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))

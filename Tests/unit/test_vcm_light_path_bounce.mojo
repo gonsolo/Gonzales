@@ -144,6 +144,9 @@ def _build_scene() -> SceneView:
         Int32(1),   # hasGlass
         ThinLens.pinhole(),
         Float32(0),
+        Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+        Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
         Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),   # mneeStats
         BVH4.none(),
     )

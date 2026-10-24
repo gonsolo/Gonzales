@@ -1422,7 +1422,8 @@ def _sss_walk_enter(
     var org = offset_point(raw, -gn)
     path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(d[0], d[1], d[2]))
     path_ptr[].throughput *= lift * transmit
-    path_ptr[].sss = SssWalk(sigma_t, a, g, Int32(inter.primId.id1), inter.primId.instanceIdx, Int32(0), Int32(0))
+    path_ptr[].sss = SssWalk(sigma_t, a, g, Int32(inter.primId.id1), inter.primId.instanceIdx, Int32(0), Int32(0),
+                             raw, normal, Float32(-1), Float32(1), Float32(1), Float32(1), Float32(0), Float32(0), Float32(0))
     path_ptr[].specularBounce = Int8(0)
     path_ptr[].lastBsdfPdf = Float32(0)
     path_ptr[].bounce += 1

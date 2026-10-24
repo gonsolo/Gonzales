@@ -177,6 +177,9 @@ struct Scene(Movable):
             hasGlass          = Int32(1),
             lens              = ThinLens.pinhole(),
             filterGlossy      = Float32(0),
+            walkNodesArr      = Pointer[Pointer[BVH2Node, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+            walkPrimsArr      = Pointer[Pointer[PrimId, MutUntrackedOrigin], MutUntrackedOrigin].unsafe_dangling(),
+            walkBvhOfMesh     = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             mneeStats         = Pointer[Int32, MutUntrackedOrigin].unsafe_dangling(),
             bvh4              = BVH4.none(),
         )

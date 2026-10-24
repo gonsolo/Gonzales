@@ -48,10 +48,22 @@ struct SssWalk(TrivialRegisterPassable):
     var instance: Int32   # entry instance (PrimId.instanceIdx)
     var exiting: Int32    # 1: this round's hit is the exit, shaded as a Lambertian surface facing out
     var steps: Int32      # steps taken; past _SSS_SIMILARITY_STEPS the walk is isotropic (Cycles' similarity level)
+    # Dwivedi guiding toward the entry surface, as Cycles: the entry point and normal, the depth of an opposite surface
+    # found by the first segment (-1: none), and the pending segment's sampling terms.
+    var p0: Vec3f
+    var n0: Vec3f
+    var opposite: Float32
+    var stretch: Float32           # its distance sampling's sigma_t factor
+    var fwd_stretch: Float32
+    var bwd_stretch: Float32
+    var fwd_pdf: Float32           # guided over classic phase pdf, toward and away from the surface
+    var bwd_pdf: Float32
+    var bwd_fraction: Float32
 
     @staticmethod
     def none() -> SssWalk:
-        return SssWalk(SpectralSample(Float32(0)), SpectralSample(Float32(0)), Float32(0), Int32(-1), Int32(-1), Int32(0), Int32(0))
+        return SssWalk(SpectralSample(Float32(0)), SpectralSample(Float32(0)), Float32(0), Int32(-1), Int32(-1), Int32(0), Int32(0),
+                       Vec3f(Float32(0)), Vec3f(Float32(0)), Float32(-1), Float32(1), Float32(1), Float32(1), Float32(0), Float32(0), Float32(0))
 
 @fieldwise_init
 struct PathState(TrivialRegisterPassable):
