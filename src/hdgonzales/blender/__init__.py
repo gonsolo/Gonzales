@@ -23,6 +23,7 @@ class GonzalesRenderEngine(bpy.types.HydraRenderEngine):
         scene = bpy.context.scene
         spp = scene.gonzales_viewport_spp if engine_type == 'VIEWPORT' else scene.gonzales_spp
         result = {'convergedSamplesPerPixel': spp, 'maxDepth': scene.gonzales_max_depth,
+                  'gonzales:denoise': scene.gonzales_denoise,
                   'gonzales:materials': materials.overrides(self._materials()),
                   'gonzales:world': world.texture(self._world())}
         if engine_type != 'VIEWPORT':
@@ -72,6 +73,7 @@ class GONZALES_RENDER_PT_sampling(bpy.types.Panel):
         col.prop(scene, "gonzales_viewport_spp", text="Viewport Samples")
         col.prop(scene, "gonzales_spp", text="Render Samples")
         layout.prop(scene, "gonzales_max_depth")
+        layout.prop(scene, "gonzales_denoise")
 
 
 def register():
@@ -80,6 +82,7 @@ def register():
     bpy.types.Scene.gonzales_spp = bpy.props.IntProperty(name="Samples", default=64, min=1)
     bpy.types.Scene.gonzales_viewport_spp = bpy.props.IntProperty(name="Viewport Samples", default=32, min=1)
     bpy.types.Scene.gonzales_max_depth = bpy.props.IntProperty(name="Max Depth", default=12, min=1)
+    bpy.types.Scene.gonzales_denoise = bpy.props.BoolProperty(name="Denoise", default=True)
     bpy.utils.register_class(GonzalesRenderEngine)
     bpy.utils.register_class(GONZALES_RENDER_PT_sampling)
 
@@ -90,3 +93,4 @@ def unregister():
     del bpy.types.Scene.gonzales_spp
     del bpy.types.Scene.gonzales_viewport_spp
     del bpy.types.Scene.gonzales_max_depth
+    del bpy.types.Scene.gonzales_denoise
