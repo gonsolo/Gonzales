@@ -240,8 +240,10 @@ def gz_scene_add_dielectric(s: ScenePtr, ior: Float32, alpha: Float32) abi("C") 
     return Int32(len(s[unsafe_offset=0].named_materials) - 1)
 
 @export
-def gz_scene_add_curves(s: ScenePtr, control_points: F32Ptr, widths: F32Ptr, n_segments: Int32, material: Int32) abi("C"):
-    """Round cubic B-spline segments in world space: 4 control points and 2 diameters each."""
+def gz_scene_add_curves(s: ScenePtr, control_points: F32Ptr, widths: F32Ptr, n_segments: Int32, material: Int32,
+                        materials: I32Ptr) abi("C"):
+    """Round cubic B-spline segments in world space: 4 control points and 2 diameters each.
+    `materials` (per segment) overrides `material` when not null."""
     ref st = s[unsafe_offset=0]
     st.curves_cp.reserve(len(st.curves_cp) + Int(n_segments) * 12)
     for i in range(Int(n_segments) * 12):
@@ -249,7 +251,7 @@ def gz_scene_add_curves(s: ScenePtr, control_points: F32Ptr, widths: F32Ptr, n_s
     for i in range(Int(n_segments)):
         st.curves_w0.append(widths[unsafe_offset=2 * i])
         st.curves_w1.append(widths[unsafe_offset=2 * i + 1])
-        st.curves_mat.append(material)
+        st.curves_mat.append(materials[unsafe_offset=i] if Int(materials) != 0 else material)
         st.curves_flat.append(Int32(0))
         st.curves_al.append(False)
         st.curves_al_rgb.append(RGB(Float32(0)))

@@ -57,6 +57,7 @@ struct MeshData {
 struct CurvesData {
     std::vector<float> controlPoints;  // 4 points per segment
     std::vector<float> widths;         // 2 diameters per segment
+    std::vector<float> lookup;         // per segment: the strand's root (u, v), intercept and random
     SdfPath material;
     GfVec3f displayColor{0.5f};
 };
@@ -139,12 +140,14 @@ std::string _EqualAreaBlenderWorld(std::string const &path) {
 // Everything the prims synced, rebuilt into a Gonzales scene when it changes.
 // A material the Blender add-on evaluated itself, for what UsdPreviewSurface cannot carry.
 struct Override {
-    TfToken kind;              // hair or glass
+    TfToken kind;              // hair, hairlut, glass or basecolor
     GfVec3f sigma{0.0f};       // hair absorption
     float betaM = 0.3f, betaN = 0.3f, ior = 1.5f, alpha = 0.0f;
+    std::string path;          // hairlut: colour tables; basecolor: the baked texture
+    int intercepts = 0, randoms = 0, res = 0;
 };
 
-// Lines of "<material prim name> hair sr sg sb beta_m beta_n ior" or "<name> glass ior alpha".
+// Lines of "<material prim name> <kind> ..." as written by the add-on's materials.py.
 std::map<std::string, Override> _ParseOverrides(std::string const &text) {
     std::map<std::string, Override> result;
     std::istringstream lines(text);
@@ -157,7 +160,11 @@ std::map<std::string, Override> _ParseOverrides(std::string const &text) {
         o.kind = TfToken(kind);
         if (kind == "hair" && (in >> o.sigma[0] >> o.sigma[1] >> o.sigma[2] >> o.betaM >> o.betaN >> o.ior))
             result[name] = o;
+        else if (kind == "hairlut" && (in >> o.path >> o.intercepts >> o.randoms >> o.res >> o.betaM >> o.betaN >> o.ior))
+            result[name] = o;
         else if (kind == "glass" && (in >> o.ior >> o.alpha))
+            result[name] = o;
+        else if (kind == "basecolor" && (in >> o.path))
             result[name] = o;
     }
     return result;
@@ -296,6 +303,12 @@ protected:
     }
 };
 
+// A per-strand random number in [0, 1), as Blender's Hair Info Random.
+float _Random(uint32_t i) {
+    i ^= i >> 16; i *= 0x7feb352d; i ^= i >> 15; i *= 0x846ca68b; i ^= i >> 16;
+    return float(i >> 8) * (1.0f / 16777216.0f);
+}
+
 // Hydra curves as B-spline segments: Catmull-Rom and Bezier via Bezier control points.
 class Curves final : public HdBasisCurves {
 public:
@@ -326,7 +339,9 @@ public:
             GfMatrix4d xform = delegate->GetTransform(id);
             float scale = float(std::cbrt(std::abs(xform.ExtractRotationMatrix().GetDeterminant())));
             TfToken type = topology.GetCurveType(), basis = topology.GetCurveBasis(), wrap = topology.GetCurveWrap();
-            size_t first = 0, firstVarying = 0;
+            size_t first = 0, firstVarying = 0, curve = 0;
+            VtValue st = GetPrimvar(delegate, TfToken("st"));
+            VtVec2fArray uvs = st.IsHolding<VtVec2fArray>() ? st.UncheckedGet<VtVec2fArray>() : VtVec2fArray();
             std::vector<GfVec3f> cv;
             std::vector<float> w;
             for (int count : counts) {
@@ -348,7 +363,11 @@ public:
                         c.controlPoints.insert(c.controlPoints.end(), {p[0], p[1], p[2]});
                     }
                     c.widths.insert(c.widths.end(), {w[i], w[i + 1]});
+                    // Cycles reads a missing surface UV attribute as zero.
+                    GfVec2f uv = curve < uvs.size() ? uvs[curve] : GfVec2f(0.0f);
+                    c.lookup.insert(c.lookup.end(), {uv[0], uv[1], (i + 0.5f) / nSegments, _Random(curve)});
                 }
+                ++curve;
                 first += count;
                 firstVarying += nSegments + 1;
             }
@@ -421,6 +440,34 @@ private:
         b[0] = p1; b[1] = p1 + (p2 - p0) / 6; b[2] = p2 - (p3 - p1) / 6; b[3] = p2;
     }
 };
+
+// An image as top-down RGB rows, read once per path.
+struct Image {
+    int width = 0, height = 0;
+    std::vector<GfVec3f> pixels;
+};
+
+Image const &_ReadImage(std::string const &path) {
+    static std::mutex mutex;
+    static std::map<std::string, Image> cache;
+    std::lock_guard<std::mutex> lock(mutex);
+    auto [it, inserted] = cache.try_emplace(path);
+    if (inserted) {
+        if (HioImageSharedPtr in = HioImage::OpenForReading(path)) {
+            Image &image = it->second;
+            image.width = in->GetWidth();
+            image.height = in->GetHeight();
+            image.pixels.resize(size_t(image.width) * image.height);
+            HioImage::StorageSpec spec;
+            spec.width = image.width; spec.height = image.height; spec.depth = 1;
+            spec.format = HioFormatFloat32Vec3;
+            spec.data = image.pixels.data();
+            if (!in->Read(spec))
+                image = Image();
+        }
+    }
+    return it->second;
+}
 
 // pbrt-v4's HairBxDF::SigmaAFromReflectance.
 GfVec3f _SigmaAFromReflectance(GfVec3f const &c, float betaN) {
@@ -690,6 +737,42 @@ struct View {
     }
 };
 
+// Per-segment hair materials from the add-on's colour tables: each segment's colour is quantized into a
+// palette entry, created on first use.
+std::vector<int> _HairPalette(void *scene, Override const &lut, std::vector<float> const &lookup,
+                              std::map<int, int> &palette) {
+    Image const &image = _ReadImage(lut.path);
+    int r = lut.res;
+    if (image.width != r * lut.randoms || image.height != r * lut.intercepts)
+        return {};
+    constexpr int levels = 24;
+    std::vector<int> result(lookup.size() / 4);
+    for (size_t s = 0; s < result.size(); ++s) {
+        float const *l = &lookup[4 * s];
+        int i = std::clamp(int(l[2] * lut.intercepts), 0, lut.intercepts - 1);
+        int k = std::clamp(int(l[3] * lut.randoms), 0, lut.randoms - 1);
+        int x = std::clamp(int((l[0] - std::floor(l[0])) * r), 0, r - 1);
+        int y = std::clamp(int((l[1] - std::floor(l[1])) * r), 0, r - 1);
+        // The table's rows go up in v and intercept; the image is read top-down.
+        GfVec3f c = image.pixels[size_t(image.height - 1 - (i * r + y)) * image.width + k * r + x];
+        int key = 0;
+        for (int ch = 0; ch < 3; ++ch)
+            key = key * levels + std::clamp(int(std::sqrt(std::clamp(c[ch], 0.0f, 1.0f)) * levels), 0, levels - 1);
+        auto it = palette.find(key);
+        if (it == palette.end()) {
+            GfVec3f q;
+            for (int ch = 2, k2 = key; ch >= 0; --ch, k2 /= levels) {
+                float v = (k2 % levels + 0.5f) / levels;
+                q[ch] = v * v;
+            }
+            GfVec3f sigma = _SigmaAFromReflectance(q, lut.betaN);
+            it = palette.emplace(key, gz_scene_add_hair(scene, sigma[0], sigma[1], sigma[2], lut.betaM, lut.betaN, lut.ior)).first;
+        }
+        result[s] = it->second;
+    }
+    return result;
+}
+
 void *_BuildScene(Scene &synced, int *version) {
     void *scene = gz_scene_new();
     std::lock_guard<std::mutex> lock(synced.mutex);
@@ -703,6 +786,8 @@ void *_BuildScene(Scene &synced, int *version) {
     for (auto const &[id, mat] : synced.materials)
         if (Override const *glass = override(id, TfToken("glass")))
             materials[id] = gz_scene_add_dielectric(scene, glass->ior, glass->alpha);
+        else if (Override const *base = override(id, TfToken("basecolor")))
+            materials[id] = gz_scene_add_diffuse(scene, 1, 1, 1, base->path.c_str(), path(mat.normalMap));
         else
             materials[id] = gz_scene_add_diffuse(scene, mat.diffuse[0], mat.diffuse[1], mat.diffuse[2],
                                                  path(mat.texture), path(mat.normalMap));
@@ -722,6 +807,7 @@ void *_BuildScene(Scene &synced, int *version) {
                           m.uvs.empty() ? nullptr : m.uvs.data(), material);
     }
     std::map<SdfPath, int> hairs;
+    std::map<SdfPath, std::map<int, int>> palettes;
     for (auto const &[id, c] : synced.curves) {
         if (!hairs.count(c.material)) {
             Override h;
@@ -735,8 +821,11 @@ void *_BuildScene(Scene &synced, int *version) {
             }
             hairs[c.material] = gz_scene_add_hair(scene, h.sigma[0], h.sigma[1], h.sigma[2], h.betaM, h.betaN, h.ior);
         }
+        std::vector<int> perSegment;
+        if (Override const *lut = override(c.material, TfToken("hairlut")))
+            perSegment = _HairPalette(scene, *lut, c.lookup, palettes[c.material]);
         gz_scene_add_curves(scene, c.controlPoints.data(), c.widths.data(), int(c.widths.size() / 2),
-                            hairs[c.material]);
+                            hairs[c.material], perSegment.empty() ? nullptr : perSegment.data());
     }
     bool lit = false;
     if (!synced.worldTexture.empty()) {
