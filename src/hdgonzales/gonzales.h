@@ -8,6 +8,8 @@ void *gz_scene_new(void);
 int gz_scene_add_diffuse(void *scene, float r, float g, float b);
 void gz_scene_add_mesh(void *scene, const float *xform, const float *points, int n_verts,
                        const int *indices, int n_tris, const float *uvs, int material);
+void gz_scene_add_area_light(void *scene, const float *xform, const float *points, int n_verts,
+                             const int *indices, int n_tris, float r, float g, float b);
 void gz_scene_add_dome(void *scene, float r, float g, float b);
 void gz_scene_add_dome_map(void *scene, const char *path, float r, float g, float b);
 void gz_scene_add_distant(void *scene, float dx, float dy, float dz, float r, float g, float b);

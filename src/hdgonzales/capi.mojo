@@ -85,6 +85,18 @@ def _add_infinite(s: ScenePtr, tex_idx: Int32, r: Float32, g: Float32, b: Float3
         s[unsafe_offset=0].inf_portal.append(Float32(0))
 
 @export
+def gz_scene_add_area_light(s: ScenePtr, xform: F32Ptr, points: F32Ptr, n_verts: Int32,
+                            indices: I32Ptr, n_tris: Int32, r: Float32, g: Float32, b: Float32) abi("C"):
+    """A one-sided emitter of radiance (r, g, b)."""
+    for i in range(16):
+        s[unsafe_offset=0].ctm[i] = xform[unsafe_offset=i]
+    s[unsafe_offset=0].cur_attr.mat_idx = Int32(-1)
+    s[unsafe_offset=0].cur_attr.is_alight = True
+    s[unsafe_offset=0].cur_attr.al_rgb = RGB(r, g, b)
+    store_mesh(s, points, indices, n_verts, n_tris)
+    s[unsafe_offset=0].cur_attr.is_alight = False
+
+@export
 def gz_scene_add_dome(s: ScenePtr, r: Float32, g: Float32, b: Float32) abi("C"):
     _add_infinite(s, Int32(-1), r, g, b)
 

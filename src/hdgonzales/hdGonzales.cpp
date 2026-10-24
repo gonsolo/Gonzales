@@ -24,6 +24,7 @@
 #include "pxr/imaging/hd/tokens.h"
 #include "pxr/imaging/hio/image.h"
 #include "pxr/usd/sdf/assetPath.h"
+#include "pxr/usd/usdLux/blackbody.h"
 
 #include <algorithm>
 #include <atomic>
@@ -51,6 +52,9 @@ struct LightData {
     GfVec3f pos;
     float radius;
     std::string texture;
+    GfMatrix4f xform;                 // rect and disk lights: an emitting mesh
+    std::vector<float> points;
+    std::vector<int> indices;
 };
 
 // pbrt-v4's EqualAreaSquareToSphere, the mapping of Gonzales's environment maps.
@@ -189,6 +193,39 @@ public:
     }
 };
 
+// UsdLux rect and disk lights lie in their XY plane and emit along -Z.
+void _AreaLightMesh(HdSceneDelegate *delegate, SdfPath const &id, LightData &light) {
+    auto param = [&](char const *name, float fallback) {
+        return delegate->GetLightParamValue(id, TfToken(name)).GetWithDefault<float>(fallback);
+    };
+    if (light.type == HdPrimTypeTokens->rectLight) {
+        float w = param("width", 1) / 2, h = param("height", 1) / 2;
+        light.points = {-w, -h, 0, w, -h, 0, w, h, 0, -w, h, 0};
+        light.indices = {0, 2, 1, 0, 3, 2};
+        return;
+    }
+    float r = param("radius", 0.5f);
+    int n = 64;
+    light.points = {0, 0, 0};
+    for (int i = 0; i < n; ++i) {
+        double phi = 2 * M_PI * i / n;
+        light.points.insert(light.points.end(), {float(r * std::cos(phi)), float(r * std::sin(phi)), 0});
+        light.indices.insert(light.indices.end(), {0, 1 + (i + 1) % n, 1 + i});
+    }
+}
+
+// World-space area of an emitting mesh.
+float _Area(LightData const &light) {
+    auto p = [&](int i) {
+        int k = light.indices[i];
+        return GfVec3d(light.xform.Transform(GfVec3f(light.points[3 * k], light.points[3 * k + 1], light.points[3 * k + 2])));
+    };
+    double area = 0;
+    for (size_t t = 0; t < light.indices.size(); t += 3)
+        area += 0.5 * GfCross(p(t + 1) - p(t), p(t + 2) - p(t)).GetLength();
+    return float(area);
+}
+
 class Light final : public HdLight {
 public:
     Light(SdfPath const &id, TfToken const &type) : HdLight(id), _type(type) {}
@@ -204,8 +241,12 @@ public:
         GfMatrix4d xform = delegate->GetTransform(id);
         bool normalize = delegate->GetLightParamValue(id, HdLightTokens->normalize).GetWithDefault<bool>(false);
         GfVec3f rgb = color * intensity * std::exp2(exposure);
+        if (delegate->GetLightParamValue(id, TfToken("enableColorTemperature")).GetWithDefault<bool>(false))
+            rgb = GfCompMult(rgb, UsdLuxBlackbodyTemperatureAsRgb(
+                delegate->GetLightParamValue(id, TfToken("colorTemperature")).GetWithDefault<float>(6500)));
         // Lights shine along their -Z axis.
-        LightData light{_type, rgb, -GfVec3f(xform.GetRow3(2)).GetNormalized(), GfVec3f(xform.ExtractTranslation()), 0, {}};
+        LightData light{_type, rgb, -GfVec3f(xform.GetRow3(2)).GetNormalized(), GfVec3f(xform.ExtractTranslation()), 0, {},
+                        GfMatrix4f(xform), {}, {}};
         if (_type == HdPrimTypeTokens->distantLight && !normalize) {
             // UsdLux: intensity is radiance unless normalized to illuminance.
             double theta = std::clamp(delegate->GetLightParamValue(id, HdLightTokens->angle).GetWithDefault<float>(0.53f) * M_PI / 360, 0.0, M_PI);
@@ -220,6 +261,10 @@ public:
                 light.rgb /= 4;  // the radiant intensity of a normalized sphere
             else if (normalize)
                 light.rgb /= float(4 * M_PI * light.radius * light.radius);
+        } else if (_type == HdPrimTypeTokens->rectLight || _type == HdPrimTypeTokens->diskLight) {
+            _AreaLightMesh(delegate, id, light);
+            if (normalize)
+                light.rgb /= _Area(light);
         }
         VtValue texture = delegate->GetLightParamValue(id, HdLightTokens->textureFile);
         if (_type == HdPrimTypeTokens->domeLight && texture.IsHolding<SdfAssetPath>()) {
@@ -367,6 +412,9 @@ protected:
                     gz_scene_add_dome(scene, l.rgb[0], l.rgb[1], l.rgb[2]);
                 else if (l.type == HdPrimTypeTokens->distantLight)
                     gz_scene_add_distant(scene, l.dir[0], l.dir[1], l.dir[2], l.rgb[0], l.rgb[1], l.rgb[2]);
+                else if (!l.indices.empty())
+                    gz_scene_add_area_light(scene, l.xform.data(), l.points.data(), int(l.points.size() / 3),
+                                            l.indices.data(), int(l.indices.size() / 3), l.rgb[0], l.rgb[1], l.rgb[2]);
                 else if (l.type == HdPrimTypeTokens->sphereLight && l.radius == 0)
                     gz_scene_add_point(scene, l.pos[0], l.pos[1], l.pos[2], l.rgb[0], l.rgb[1], l.rgb[2]);
                 else if (l.type == HdPrimTypeTokens->sphereLight)
@@ -427,7 +475,8 @@ public:
     TfTokenVector const &GetSupportedSprimTypes() const override {
         static TfTokenVector const types = {HdPrimTypeTokens->camera, HdPrimTypeTokens->material,
                                             HdPrimTypeTokens->domeLight, HdPrimTypeTokens->distantLight,
-                                            HdPrimTypeTokens->sphereLight};
+                                            HdPrimTypeTokens->sphereLight, HdPrimTypeTokens->rectLight,
+                                            HdPrimTypeTokens->diskLight};
         return types;
     }
     TfTokenVector const &GetSupportedBprimTypes() const override {
@@ -464,7 +513,8 @@ public:
         if (type == HdPrimTypeTokens->material)
             return new Material(id);
         if (type == HdPrimTypeTokens->domeLight || type == HdPrimTypeTokens->distantLight ||
-            type == HdPrimTypeTokens->sphereLight)
+            type == HdPrimTypeTokens->sphereLight || type == HdPrimTypeTokens->rectLight ||
+            type == HdPrimTypeTokens->diskLight)
             return new Light(id, type);
         return nullptr;
     }
