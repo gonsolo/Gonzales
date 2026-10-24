@@ -2,7 +2,7 @@
 import os
 import bpy
 
-from . import materials
+from . import materials, world
 
 bl_info = {"name": "Gonzales", "blender": (4, 2, 0), "category": "Render"}
 
@@ -23,7 +23,8 @@ class GonzalesRenderEngine(bpy.types.HydraRenderEngine):
         scene = bpy.context.scene
         spp = scene.gonzales_viewport_spp if engine_type == 'VIEWPORT' else scene.gonzales_spp
         result = {'convergedSamplesPerPixel': spp, 'maxDepth': scene.gonzales_max_depth,
-                  'gonzales:materials': materials.overrides(self._materials())}
+                  'gonzales:materials': materials.overrides(self._materials()),
+                  'gonzales:world': world.texture(self._world())}
         if engine_type != 'VIEWPORT':
             result |= {'aovToken:Combined': "color"}
         return result
@@ -36,6 +37,10 @@ class GonzalesRenderEngine(bpy.types.HydraRenderEngine):
     def view_update(self, context, depsgraph):
         self._depsgraph = depsgraph
         super().view_update(context, depsgraph)
+
+    def _world(self):
+        depsgraph = getattr(self, '_depsgraph', None)
+        return depsgraph.scene.world if depsgraph is not None else bpy.context.scene.world
 
     def _materials(self):
         depsgraph = getattr(self, '_depsgraph', None)
