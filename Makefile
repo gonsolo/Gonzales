@@ -238,7 +238,7 @@ GONZALES_LIB = $(BUILD_DIR)/libgonzales.so
 HYDRA_DIR = $(BUILD_DIR)/hydra
 hydra: $(HYDRA_DIR)/hdGonzales.so
 $(GONZALES_LIB): $(MOJO_SRCS) src/hdgonzales/capi.mojo pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(NVDB_BRIDGE_LIB)
-	uv run mojo build --emit shared-lib src/hdgonzales/capi.mojo -I src -o $@ $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
+	uv run mojo build --emit shared-lib src/hdgonzales/capi.mojo -I src -o $@ $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS) -Xlinker -rpath -Xlinker $(abspath $(BUILD_DIR))
 $(HYDRA_DIR)/hdGonzales.so: src/hdgonzales/hdGonzales.cpp src/hdgonzales/gonzales.h src/hdgonzales/plugInfo.json $(GONZALES_LIB)
 	@mkdir -p $(HYDRA_DIR)
 	cp src/hdgonzales/plugInfo.json $(HYDRA_DIR)/
