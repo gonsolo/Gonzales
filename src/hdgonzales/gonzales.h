@@ -6,6 +6,8 @@ extern "C" {
 void *gz_renderer_new(const char *data_dir);
 void *gz_scene_new(void);
 int gz_scene_add_diffuse(void *scene, float r, float g, float b, const char *texture, const char *normal_map);
+int gz_scene_add_coated(void *scene, float r, float g, float b, const char *texture, const char *normal_map, float alpha,
+                        float ior);
 void gz_scene_add_mesh(void *scene, const float *xform, const float *points, int n_verts, const int *indices,
                        int n_tris, const float *normals, const float *uvs, int material);
 void gz_scene_add_area_light(void *scene, const float *xform, const float *points, int n_verts,

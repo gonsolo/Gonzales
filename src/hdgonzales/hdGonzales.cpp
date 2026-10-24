@@ -143,7 +143,7 @@ std::string _EqualAreaBlenderWorld(std::string const &path) {
 struct Override {
     TfToken kind;              // hair, hairlut, glass or basecolor
     GfVec3f sigma{0.0f};       // hair absorption
-    float betaM = 0.3f, betaN = 0.3f, ior = 1.5f, alpha = 0.0f;
+    float betaM = 0.3f, betaN = 0.3f, ior = 1.5f, alpha = 0.0f, metallic = 0.0f;
     std::string path;          // hairlut: colour tables; basecolor: the baked texture
     int intercepts = 0, randoms = 0, res = 0;
 };
@@ -167,6 +167,11 @@ std::map<std::string, Override> _ParseOverrides(std::string const &text) {
             result[name] = o;
         else if (kind == "basecolor" && (in >> o.path))
             result[name] = o;
+        else if (kind == "principled" && (in >> o.alpha >> o.ior >> o.metallic >> o.path)) {
+            if (o.path == "-")
+                o.path.clear();
+            result[name] = o;
+        }
     }
     return result;
 }
@@ -807,6 +812,12 @@ void *_BuildScene(Scene &synced, int *version) {
             materials[id] = gz_scene_add_dielectric(scene, glass->ior, glass->alpha);
         else if (Override const *base = override(id, TfToken("basecolor")))
             materials[id] = gz_scene_add_diffuse(scene, 1, 1, 1, base->path.c_str(), path(mat.normalMap));
+        else if (Override const *pr = override(id, TfToken("principled"))) {
+            // A baked base colour replaces Hydra's texture; otherwise Hydra's colour or texture stays.
+            std::string const &texture = pr->path.empty() ? mat.texture : pr->path;
+            GfVec3f c = pr->path.empty() ? mat.diffuse : GfVec3f(1);
+            materials[id] = gz_scene_add_coated(scene, c[0], c[1], c[2], path(texture), path(mat.normalMap), pr->alpha, pr->ior);
+        }
         else
             materials[id] = gz_scene_add_diffuse(scene, mat.diffuse[0], mat.diffuse[1], mat.diffuse[2],
                                                  path(mat.texture), path(mat.normalMap));

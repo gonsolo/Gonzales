@@ -79,6 +79,22 @@ def gz_scene_add_diffuse(s: ScenePtr, r: Float32, g: Float32, b: Float32, textur
     return Int32(len(s[unsafe_offset=0].named_materials) - 1)
 
 @export
+def gz_scene_add_coated(s: ScenePtr, r: Float32, g: Float32, b: Float32, texture: Pointer[UInt8, MutUntrackedOrigin],
+                        normal_map: Pointer[UInt8, MutUntrackedOrigin], alpha: Float32, ior: Float32) abi("C") -> Int32:
+    """A diffuse base under a GGX dielectric coat of roughness `alpha` and index `ior` (pbrt's coateddiffuse)."""
+    var name = String("m") + String(len(s[unsafe_offset=0].named_materials))
+    var nm = NamedMaterial(name)
+    nm.kind = MatKind.coated_diffuse
+    nm.albedo = RGB(r, g, b)
+    nm.tex_idx = _register_texture(s, name, texture)
+    nm.normal_tex_idx = _register_texture(s, String("__normalmap"), normal_map)
+    nm.roughness_u = alpha
+    nm.roughness_v = alpha
+    nm.ior = ior
+    s[unsafe_offset=0].named_materials.append(nm^)
+    return Int32(len(s[unsafe_offset=0].named_materials) - 1)
+
+@export
 def gz_scene_add_mesh(s: ScenePtr, xform: F32Ptr, points: F32Ptr, n_verts: Int32, indices: I32Ptr, n_tris: Int32,
                       normals: F32Ptr, uvs: F32Ptr, material: Int32) abi("C"):
     """`xform` is object-to-world in USD's GfMatrix4d layout, which is Gonzales's CTM layout.
