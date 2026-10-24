@@ -3,7 +3,7 @@
 #   <M> hair sr sg sb beta_m beta_n ior                          hair with one colour
 #   <M> hairlut path n_intercept n_random res beta_m beta_n ior  hair colour per (u, v, intercept, random)
 #   <M> glass ior alpha
-#   <M> basecolor path                                           a Principled base colour baked per texel
+#   <M> principled alpha ior metallic path                       a Principled BSDF; path: baked base colour or -
 # Node graphs are evaluated with numpy over many samples at once. Without UVs, images give their mean.
 import hashlib
 import math
@@ -361,8 +361,14 @@ def _line(material):
         r = _scalar(_socket(node, 'Roughness'))
         return f"{name} glass {_scalar(_socket(node, 'IOR')):.6g} {r * r:.6g}"
     if node.bl_idname == 'ShaderNodeBsdfPrincipled':
-        path = _bake_base_colour(material, _socket(node, 'Base Color'))
-        return f"{name} basecolor {path}" if path else None
+        # A coated diffuse: Blender's dielectric layer over its diffuse base. Specular IOR Level scales F0.
+        r = _scalar(_socket(node, 'Roughness'))
+        ior = max(_scalar(_socket(node, 'IOR')), 1.0)
+        level = _scalar(_socket(node, 'Specular IOR Level')) if _socket(node, 'Specular IOR Level') else 0.5
+        f0 = min(((ior - 1) / (ior + 1)) ** 2 * 2 * level, 0.99)
+        eta = (1 + math.sqrt(f0)) / (1 - math.sqrt(f0)) if f0 > 0 else 1.0
+        path = _bake_base_colour(material, _socket(node, 'Base Color')) or "-"
+        return f"{name} principled {r * r:.6g} {eta:.6g} {_scalar(_socket(node, 'Metallic')):.6g} {path}"
     return None
 
 
