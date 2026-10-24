@@ -28,8 +28,13 @@ struct RtBlas(Movable):
     var n_nodes: Int
     var n_blocks: Int
     var box: PD                 # object-space bounds: min corner, then max corner (six doubles)
+    var gid_to_box: PI          # AABB candidate id (leaf payload + slot) -> input box
+    var n_box: Int
 
-    def __init__(out self, bytes: PB, size: Int, gid_to_tri: PI, n_gid: Int, n_nodes: Int, n_blocks: Int, box: PD):
+    def __init__(out self, bytes: PB, size: Int, gid_to_tri: PI, n_gid: Int, n_nodes: Int, n_blocks: Int, box: PD,
+                 gid_to_box: PI = PI.unsafe_dangling(), n_box: Int = 0):
+        self.gid_to_box = gid_to_box
+        self.n_box = n_box
         self.bytes = bytes
         self.size = size
         self.gid_to_tri = gid_to_tri
@@ -397,6 +402,36 @@ def _build_binary(order: PI, tlo: PD, thi: PD, tc: PD, tvv: PF, u_first: PI, u_n
 
 
 @no_inline
+def _build_box_binary(order: PI, tlo: PD, thi: PD, tc: PD, m: Int, first: Int, bn_s: PI, bn_c: PI, bn_l: PI, bn_r: PI, bn_nb: PI, bn_box: PD) -> Int:
+    """Binary tree over boxes from node `first` on; a leaf holds at most RT_LEAF_TRIS boxes. Returns the next free node."""
+    var stack = unsafe_alloc[Int32](128 + 64)
+    var nb = first + 1
+    bn_s[unsafe_offset=first] = Int32(0); bn_c[unsafe_offset=first] = Int32(m)
+    stack[unsafe_offset=0] = Int32(first)
+    var sp = 1
+    var cb = unsafe_alloc[Float64](6)
+    while sp > 0:
+        sp -= 1
+        var ni = Int(stack[unsafe_offset=sp])
+        var start = Int(bn_s[unsafe_offset=ni]); var count = Int(bn_c[unsafe_offset=ni])
+        _range_box(order, tlo, thi, start, count, cb)
+        for q in range(6): bn_box[unsafe_offset=ni * 6 + q] = cb[unsafe_offset=q]
+        if count <= RT_LEAF_TRIS:
+            bn_l[unsafe_offset=ni] = Int32(-1); bn_r[unsafe_offset=ni] = Int32(-1); bn_nb[unsafe_offset=ni] = Int32(count)
+            continue
+        var half = _split_sah(order, tlo, thi, tc, start, count)
+        var li = nb; var ri = nb + 1
+        nb += 2
+        bn_l[unsafe_offset=ni] = Int32(li); bn_r[unsafe_offset=ni] = Int32(ri)
+        bn_s[unsafe_offset=li] = Int32(start); bn_c[unsafe_offset=li] = Int32(half)
+        bn_s[unsafe_offset=ri] = Int32(start + half); bn_c[unsafe_offset=ri] = Int32(count - half)
+        stack[unsafe_offset=sp] = Int32(ri); stack[unsafe_offset=sp + 1] = Int32(li)
+        sp += 2
+    stack.unsafe_free(); cb.unsafe_free()
+    return nb
+
+
+@no_inline
 def _hw_children(root: Int, bn_nb: PI, bn_l: PI, bn_r: PI, bn_box: PD, kids: PI) -> Int:
     """Expand a binary node into up to 12 hardware children (binary node ids in kids); returns how many."""
     kids[unsafe_offset=0] = Int32(root)
@@ -495,9 +530,11 @@ def rt_patch_ids(bytes: PB, n_nodes: Int, n_blocks: Int, id_base: Int):
         _put_u32(bytes, o, v + UInt32(id_base))
 
 
-def rt_build_blas(tv: PF, n: Int, tight: Bool = True, sah: Bool = True, quads: Bool = False, id_base: Int = 0, pair_ok: PB = PB.unsafe_dangling()) -> RtBlas:
+def rt_build_blas(tv: PF, n: Int, tight: Bool = True, sah: Bool = True, quads: Bool = False, id_base: Int = 0, pair_ok: PB = PB.unsafe_dangling(),
+                  bx: PF = PF.unsafe_dangling(), n_bx: Int = 0) -> RtBlas:
     """Build a BLAS over n triangles (tv: nine floats each). Triangles with a repeated vertex are left out. With quads,
-    triangles 2q and 2q + 1 with pair_ok[2q] set are a quad that stays in one block when possible."""
+    triangles 2q and 2q + 1 with pair_ok[2q] set are a quad that stays in one block when possible. The n_bx boxes (bx: min
+    corner, max corner) become AABB leaves under the same root: the trace stops at them with a candidate id (gid_to_box)."""
     # valid triangles
     var vid = unsafe_alloc[Int32](max(n, 1))
     var m = 0
@@ -537,7 +574,7 @@ def rt_build_blas(tv: PF, n: Int, tight: Bool = True, sah: Bool = True, quads: B
             tlo[unsafe_offset=u * 3 + a] = lo; thi[unsafe_offset=u * 3 + a] = hi
             tc[unsafe_offset=u * 3 + a] = (lo + hi) * 0.5
         order[unsafe_offset=u] = Int32(u)
-    var nbmax = 2 * nu + 1
+    var nbmax = 2 * nu + 2 * n_bx + 2
     var bn_s = unsafe_alloc[Int32](nbmax); var bn_c = unsafe_alloc[Int32](nbmax)
     var bn_l = unsafe_alloc[Int32](nbmax); var bn_r = unsafe_alloc[Int32](nbmax)
     var bn_nb = unsafe_alloc[Int32](nbmax)
@@ -549,14 +586,40 @@ def rt_build_blas(tv: PF, n: Int, tight: Bool = True, sah: Bool = True, quads: B
         var i = nb - 1 - back
         if Int(bn_l[unsafe_offset=i]) >= 0:
             bn_nb[unsafe_offset=i] = bn_nb[unsafe_offset=Int(bn_l[unsafe_offset=i])] + bn_nb[unsafe_offset=Int(bn_r[unsafe_offset=i])]
+    # boxes: their own binary tree after the triangles' nodes (box nodes are those >= box0), joined under a new root
+    var box0 = nb
+    var b_order = unsafe_alloc[Int32](max(n_bx, 1))
+    var b_lo = unsafe_alloc[Float64](3 * max(n_bx, 1)); var b_hi = unsafe_alloc[Float64](3 * max(n_bx, 1)); var b_c = unsafe_alloc[Float64](3 * max(n_bx, 1))
+    var broot = 0
+    if n_bx > 0:
+        for j in range(n_bx):
+            for a in range(3):
+                b_lo[unsafe_offset=j * 3 + a] = Float64(bx[unsafe_offset=j * 6 + a]); b_hi[unsafe_offset=j * 3 + a] = Float64(bx[unsafe_offset=j * 6 + 3 + a])
+                b_c[unsafe_offset=j * 3 + a] = (b_lo[unsafe_offset=j * 3 + a] + b_hi[unsafe_offset=j * 3 + a]) * 0.5
+            b_order[unsafe_offset=j] = Int32(j)
+        var bend = _build_box_binary(b_order, b_lo, b_hi, b_c, n_bx, box0, bn_s, bn_c, bn_l, bn_r, bn_nb, bn_box)
+        for back in range(bend - box0):
+            var i = bend - 1 - back
+            if Int(bn_l[unsafe_offset=i]) >= 0:
+                bn_nb[unsafe_offset=i] = bn_nb[unsafe_offset=Int(bn_l[unsafe_offset=i])] + bn_nb[unsafe_offset=Int(bn_r[unsafe_offset=i])]
+        broot = box0
+        nb = bend
+        if nu > 0:
+            # a mixed node is never a leaf: its slot count is set above a leaf's
+            broot = nb; nb += 1
+            bn_l[unsafe_offset=broot] = Int32(0); bn_r[unsafe_offset=broot] = Int32(box0)
+            bn_nb[unsafe_offset=broot] = Int32(max(Int(bn_nb[unsafe_offset=0]) + Int(bn_nb[unsafe_offset=box0]), RT_LEAF_TRIS + 1))
+            for q in range(3):
+                bn_box[unsafe_offset=broot * 6 + q] = min(bn_box[unsafe_offset=q], bn_box[unsafe_offset=box0 * 6 + q])
+                bn_box[unsafe_offset=broot * 6 + 3 + q] = max(bn_box[unsafe_offset=3 + q], bn_box[unsafe_offset=box0 * 6 + 3 + q])
     # hardware nodes in breadth-first order: a node with at most 12 blocks is a leaf node, else it has up to 12 children
     var hn_bn = unsafe_alloc[Int32](max(nb, 1)); var hn_par = unsafe_alloc[Int32](max(nb, 1)); var hn_sib = unsafe_alloc[Int32](max(nb, 1))
     var hn_first = unsafe_alloc[Int32](max(nb, 1)); var hn_nk = unsafe_alloc[Int32](max(nb, 1))
     var hn_blk0 = unsafe_alloc[Int32](max(nb, 1)); var hn_nblk = unsafe_alloc[Int32](max(nb, 1))
     var kids = unsafe_alloc[Int32](16)
     var nn = 0
-    if nu > 0:
-        hn_bn[unsafe_offset=0] = Int32(0); hn_par[unsafe_offset=0] = Int32(-1); hn_sib[unsafe_offset=0] = Int32(0); nn = 1
+    if nu > 0 or n_bx > 0:
+        hn_bn[unsafe_offset=0] = Int32(broot); hn_par[unsafe_offset=0] = Int32(-1); hn_sib[unsafe_offset=0] = Int32(0); nn = 1
     var hi = 0
     while hi < nn:
         var bi = Int(hn_bn[unsafe_offset=hi])
@@ -576,7 +639,7 @@ def rt_build_blas(tv: PF, n: Int, tight: Bool = True, sah: Bool = True, quads: B
     var scratch = unsafe_alloc[UInt8](128)
     for h in range(nn):
         hn_blk0[unsafe_offset=h] = Int32(nblk); hn_nblk[unsafe_offset=h] = Int32(0)
-        if Int(hn_nk[unsafe_offset=h]) != 0:
+        if Int(hn_nk[unsafe_offset=h]) != 0 or Int(hn_bn[unsafe_offset=h]) >= box0:
             continue
         var sp = 1
         dstack[unsafe_offset=0] = hn_bn[unsafe_offset=h]
@@ -625,6 +688,9 @@ def rt_build_blas(tv: PF, n: Int, tight: Bool = True, sah: Bool = True, quads: B
     var e = unsafe_alloc[Int32](3); var org = unsafe_alloc[Float32](3)
     var sbox = unsafe_alloc[Float64](6 * 12)       # slot boxes of the node being written
     var scode = unsafe_alloc[Int32](12)
+    var gid_box = unsafe_alloc[Int32](max(n_bx, 1))
+    var n_gbox = 0
+    var bstack = unsafe_alloc[Int32](192)
     for h in range(nn):
         var off = RT_ROOT + h * RT_NODE
         var ns: Int
@@ -638,6 +704,26 @@ def rt_build_blas(tv: PF, n: Int, tight: Bool = True, sah: Bool = True, quads: B
                 scode[unsafe_offset=k] = Int32(0)
             w1c = Int(hn_first[unsafe_offset=h]) - h
             out[unsafe_offset=off] = UInt8(0x40)
+        elif Int(hn_bn[unsafe_offset=h]) >= box0:
+            # AABB leaf: one slot a box, ids payload + slot
+            ns = 0
+            w10 = n_gbox
+            var sp = 1
+            bstack[unsafe_offset=0] = hn_bn[unsafe_offset=h]
+            while sp > 0:
+                sp -= 1
+                var bi = Int(bstack[unsafe_offset=sp])
+                if Int(bn_l[unsafe_offset=bi]) >= 0:
+                    bstack[unsafe_offset=sp] = bn_r[unsafe_offset=bi]; bstack[unsafe_offset=sp + 1] = bn_l[unsafe_offset=bi]
+                    sp += 2
+                    continue
+                for i in range(Int(bn_c[unsafe_offset=bi])):
+                    var j = Int(b_order[unsafe_offset=Int(bn_s[unsafe_offset=bi]) + i])
+                    for q in range(3):
+                        sbox[unsafe_offset=ns * 6 + q] = b_lo[unsafe_offset=j * 3 + q]; sbox[unsafe_offset=ns * 6 + 3 + q] = b_hi[unsafe_offset=j * 3 + q]
+                    scode[unsafe_offset=ns] = Int32(0x41)
+                    gid_box[unsafe_offset=n_gbox] = Int32(j); n_gbox += 1; ns += 1
+            out[unsafe_offset=off] = UInt8(0x00)
         else:
             ns = 0
             for g in range(Int(hn_nblk[unsafe_offset=h])):
@@ -682,10 +768,12 @@ def rt_build_blas(tv: PF, n: Int, tight: Bool = True, sah: Bool = True, quads: B
             if k < ns:
                 _put_slot(out, off, k, e, org, sbox[unsafe_offset=k * 6], sbox[unsafe_offset=k * 6 + 1], sbox[unsafe_offset=k * 6 + 2],
                           sbox[unsafe_offset=k * 6 + 3], sbox[unsafe_offset=k * 6 + 4], sbox[unsafe_offset=k * 6 + 5], Int(scode[unsafe_offset=k]))
+                if Int(scode[unsafe_offset=k]) == 0x41:
+                    out[unsafe_offset=off + 0x20 + 8 * k + 6] = UInt8(0)
             else:
                 _put_empty_slot(out, off, k)
     var bn_box_root = unsafe_alloc[Float64](6)
-    for q in range(6): bn_box_root[unsafe_offset=q] = bn_box[unsafe_offset=q] if nb > 0 else Float64(0)
+    for q in range(6): bn_box_root[unsafe_offset=q] = bn_box[unsafe_offset=broot * 6 + q] if nb > 0 else Float64(0)
     # free the temporaries
     vid.unsafe_free(); tvv.unsafe_free(); u_first.unsafe_free(); u_n.unsafe_free()
     tlo.unsafe_free(); thi.unsafe_free(); tc.unsafe_free(); order.unsafe_free()
@@ -693,8 +781,9 @@ def rt_build_blas(tv: PF, n: Int, tight: Bool = True, sah: Bool = True, quads: B
     hn_bn.unsafe_free(); hn_par.unsafe_free(); hn_sib.unsafe_free(); hn_first.unsafe_free(); hn_nk.unsafe_free()
     hn_blk0.unsafe_free(); hn_nblk.unsafe_free(); kids.unsafe_free(); blk_tri.unsafe_free(); blk_cnt.unsafe_free(); blk_box.unsafe_free()
     dstack.unsafe_free(); tri4.unsafe_free(); scratch.unsafe_free(); e.unsafe_free(); org.unsafe_free(); sbox.unsafe_free(); scode.unsafe_free()
+    bstack.unsafe_free(); b_order.unsafe_free(); b_lo.unsafe_free(); b_hi.unsafe_free(); b_c.unsafe_free()
     var box = bn_box_root
-    return RtBlas(out, size, gid, next_id, nn, nblk, box)
+    return RtBlas(out, size, gid, next_id, nn, nblk, box, gid_box, n_gbox)
 
 
 struct RtTlas(Movable):
@@ -894,6 +983,8 @@ def rt_build_tlas(w2o: PF, binst: PI, n: Int, blas_box: PD, n_blas: Int, n_fixed
             if k < ns:
                 _put_slot(out, off, k, e, org, sbox[unsafe_offset=k * 6], sbox[unsafe_offset=k * 6 + 1], sbox[unsafe_offset=k * 6 + 2],
                           sbox[unsafe_offset=k * 6 + 3], sbox[unsafe_offset=k * 6 + 4], sbox[unsafe_offset=k * 6 + 5], Int(scode[unsafe_offset=k]))
+                if Int(scode[unsafe_offset=k]) == 0x41:
+                    out[unsafe_offset=off + 0x20 + 8 * k + 6] = UInt8(0)
             else:
                 _put_empty_slot(out, off, k)
     tlo.unsafe_free(); thi.unsafe_free(); tc.unsafe_free(); order.unsafe_free()
