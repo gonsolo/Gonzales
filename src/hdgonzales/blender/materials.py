@@ -15,15 +15,17 @@ import numpy as np
 _LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
 _images = {}
 _lines = {}
-LUT_INTERCEPTS, LUT_RANDOMS, LUT_RES = 8, 32, 128
+_ramps = {}
+LUT_INTERCEPTS, LUT_RANDOMS, LUT_RES = 8, 16, 128
 BAKE_MAX = 2048
 
 
 class Context:
-    """Per-sample inputs: uv (n, 2) or None, intercept and random (n,) or scalars."""
+    """Per-sample inputs: uv (n, 2) or None, intercept and random (n,) or scalars. With `filter`, images are
+    box-filtered down to that resolution first, so a coarse grid of samples does not alias."""
 
-    def __init__(self, n=1, uv=None, intercept=0.5, random=0.5):
-        self.n, self.uv, self.intercept, self.random = n, uv, intercept, random
+    def __init__(self, n=1, uv=None, intercept=0.5, random=0.5, filter=None):
+        self.n, self.uv, self.intercept, self.random, self.filter = n, uv, intercept, random, filter
 
 
 def _rgb(v, n):
@@ -44,8 +46,21 @@ def _float(v, n):
     return np.broadcast_to(v, (n,))
 
 
-def _image(image):
+def _box(a, res):
+    """`a` (h, w, ...) averaged down to at most res x res."""
+    h, w = a.shape[:2]
+    fy, fx = max(1, h // res), max(1, w // res)
+    a = a[:h // fy * fy, :w // fx * fx]
+    return a.reshape(h // fy, fy, w // fx, fx, *a.shape[2:]).mean(axis=(1, 3))
+
+
+def _image(image, res=None):
     key = (image.name, tuple(image.size))
+    if res is not None:
+        if (key, res) not in _images:
+            rgb, alpha = _image(image)
+            _images[(key, res)] = (_box(rgb, res).astype(np.float32), _box(alpha, res).astype(np.float32))
+        return _images[(key, res)]
     if key not in _images:
         px = np.empty(len(image.pixels), dtype=np.float32)
         image.pixels.foreach_get(px)
@@ -152,7 +167,7 @@ def value(socket, ctx):
     if t == 'ShaderNodeTexImage':
         if node.image is None:
             return np.zeros(3, np.float32)
-        rgb, alpha = _image(node.image)
+        rgb, alpha = _image(node.image, ctx.filter)
         uv = _uv(_socket(node, 'Vector'), ctx)
         if uv is None:
             return np.float32(alpha.mean()) if out == 'Alpha' else rgb.reshape(-1, 3).mean(axis=0)
@@ -163,7 +178,11 @@ def value(socket, ctx):
     if t == 'ShaderNodeValToRGB':
         f = np.clip(_float(value(_socket(node, 'Fac') or node.inputs[0], ctx), n), 0, 1)
         positions = np.linspace(0, 1, 257)
-        table = np.array([list(node.color_ramp.evaluate(p)) for p in positions], np.float32)
+        ramp = node.color_ramp
+        key = (node.as_pointer(), ramp.interpolation, tuple((e.position, tuple(e.color)) for e in ramp.elements))
+        if key not in _ramps:
+            _ramps[key] = np.array([list(ramp.evaluate(p)) for p in positions], np.float32)
+        table = _ramps[key]
         c = np.stack([np.interp(f, positions, table[:, k]) for k in range(4)], axis=1).astype(np.float32)
         return c[:, 3] if out == 'Alpha' else c[:, :3]
     if t == 'ShaderNodeMix':
@@ -289,7 +308,7 @@ def _hair_line(name, material, hair):
                 for i in range(LUT_INTERCEPTS):
                     tiles = []
                     for k in range(LUT_RANDOMS):
-                        ctx = Context(len(uv), uv, (i + 0.5) / LUT_INTERCEPTS, (k + 0.5) / LUT_RANDOMS)
+                        ctx = Context(len(uv), uv, (i + 0.5) / LUT_INTERCEPTS, (k + 0.5) / LUT_RANDOMS, r)
                         tiles.append(np.clip(_hair_colour(hair, ctx), 0, 1).reshape(r, r, 3))
                     rows.append(np.concatenate(tiles, axis=1))
                 _write_pfm(path, np.concatenate(rows, axis=0))
