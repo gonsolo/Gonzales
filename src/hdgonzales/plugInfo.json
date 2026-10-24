@@ -1,0 +1,20 @@
+{
+    "Plugins": [
+        {
+            "Info": {
+                "Types": {
+                    "HdGonzalesRendererPlugin": {
+                        "bases": ["HdRendererPlugin"],
+                        "displayName": "Gonzales",
+                        "priority": 99
+                    }
+                }
+            },
+            "LibraryPath": "hdGonzales.so",
+            "Name": "hdGonzales",
+            "ResourcePath": ".",
+            "Root": ".",
+            "Type": "library"
+        }
+    ]
+}

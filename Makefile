@@ -85,7 +85,7 @@ OPTIONS = $(SINGLERAY) $(SYNC) $(VERBOSE) $(QUICK) $(PARSE) $(WRITE_GONZALES) $(
 
 .PHONY: all c ca clean clean_all e edit es editScene em editMakefile lldb p perf tags t test smoke smoketest \
 	test_debug test_release v view wc book book-html book-watch ut unittest \
-	caustics causticstest sms_mitsuba_ref release-amd unittest-amd intel-hello
+	caustics causticstest sms_mitsuba_ref release-amd unittest-amd intel-hello hydra
 
 PBRT_OPTIONS = #--quiet # --stats #--gpu #--nthreads 1 #--quiet --v 2
 
@@ -232,6 +232,19 @@ endif
 # nvcc); tests skip when it is absent.
 rt-cubin:
 	python3 docs/rtcore/exec/build_rt_cubin.py $(BUILD_DIR)/rt_trace.cubin
+
+# Hydra render delegate (usdview, Blender): libgonzales.so with the C API, the USD plugin next to its plugInfo.json
+GONZALES_LIB = $(BUILD_DIR)/libgonzales.so
+HYDRA_DIR = $(BUILD_DIR)/hydra
+hydra: $(HYDRA_DIR)/hdGonzales.so
+$(GONZALES_LIB): $(MOJO_SRCS) src/hdgonzales/capi.mojo pyproject.toml $(OIIO_BRIDGE_LIB) $(VIEWER_LIB) $(VULKANRT_LIB) $(VULKANINTEROP_LIB) $(RTCORE_LIB) $(NVDB_BRIDGE_LIB)
+	uv run mojo build --emit shared-lib src/hdgonzales/capi.mojo -I src -o $@ $(MOJO_BUILD_FLAGS) $(MOJO_LINK_FLAGS)
+$(HYDRA_DIR)/hdGonzales.so: src/hdgonzales/hdGonzales.cpp src/hdgonzales/gonzales.h src/hdgonzales/plugInfo.json $(GONZALES_LIB)
+	@mkdir -p $(HYDRA_DIR)
+	cp src/hdgonzales/plugInfo.json $(HYDRA_DIR)/
+	g++ -std=c++17 -O2 -fPIC -shared -Wall -Wno-deprecated -Wno-cpp $$(python3-config --includes) \
+		-DGONZALES_DATA_DIR=\"$(CURDIR)/src/gonzales/data\" -DMFB_PACKAGE_NAME=hdGonzales -DMFB_ALT_PACKAGE_NAME=hdGonzales \
+		src/hdgonzales/hdGonzales.cpp -o $@ -lusd_ms -L$(BUILD_DIR) -lgonzales -Wl,-rpath,$(abspath $(BUILD_DIR))
 
 # Intel GPU hello world: Mojo kernel -> NVPTX LLVM IR -> SPIR-V -> Level Zero (needs llvm-spirv, spirv-tools, level-zero)
 INTEL_DIR = $(BUILD_DIR)/intel
