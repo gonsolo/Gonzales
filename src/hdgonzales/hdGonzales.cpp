@@ -18,6 +18,7 @@
 #include "pxr/imaging/hd/renderIndex.h"
 #include "pxr/imaging/hd/renderPass.h"
 #include "pxr/imaging/hd/renderPassState.h"
+#include "pxr/imaging/hd/renderThread.h"
 #include "pxr/imaging/hd/rendererPlugin.h"
 #include "pxr/imaging/hd/rendererPluginRegistry.h"
 #include "pxr/imaging/hd/resourceRegistry.h"
@@ -118,9 +119,10 @@ std::string _EqualAreaDome(std::string const &path, GfMatrix4d const &lightToWor
     return image && image->Write(spec) ? out : std::string();
 }
 
-// Everything the prims synced, rebuilt into a Gonzales scene on each render.
+// Everything the prims synced, rebuilt into a Gonzales scene when it changes.
 class Scene final : public HdRenderParam {
 public:
+    HdRenderThread *thread;
     std::mutex mutex;
     std::map<SdfPath, MeshData> meshes;
     std::map<SdfPath, CurvesData> curves;
@@ -551,6 +553,17 @@ class RenderBuffer final : public HdRenderBuffer {
 public:
     explicit RenderBuffer(SdfPath const &id) : HdRenderBuffer(id) {}
 
+    // The render thread writes into the buffer: stop it before reallocating.
+    void Sync(HdSceneDelegate *delegate, HdRenderParam *param, HdDirtyBits *dirtyBits) override {
+        if (*dirtyBits & DirtyDescription)
+            _Scene(param).thread->StopRender();
+        HdRenderBuffer::Sync(delegate, param, dirtyBits);
+    }
+    void Finalize(HdRenderParam *param) override {
+        _Scene(param).thread->StopRender();
+        HdRenderBuffer::Finalize(param);
+    }
+
     bool Allocate(GfVec3i const &dims, HdFormat format, bool) override {
         _Deallocate();
         _width = dims[0];
@@ -568,12 +581,30 @@ public:
     void Unmap() override { _mappers--; }
     bool IsMapped() const override { return _mappers.load() != 0; }
     void Resolve() override {}
-    bool IsConverged() const override { return true; }
+    bool IsConverged() const override { return _converged.load(); }
+    void SetConverged(bool converged) { _converged.store(converged); }
 
     // Row 0 of a Hydra buffer is the bottom of the image.
     void Store(unsigned x, unsigned y, float const *value, size_t n) {
         size_t size = HdDataSizeOfFormat(_format);
         _Store(_format, &_buffer[(size_t(_height - 1 - y) * _width + x) * size], value, n);
+    }
+    // width * height RGB values, top row first.
+    void StoreRgb(float const *rgb) {
+        for (unsigned y = 0; y < _height; ++y) {
+            float const *src = rgb + size_t(y) * _width * 3;
+            if (_format != HdFormatFloat32Vec4) {
+                for (unsigned x = 0; x < _width; ++x) {
+                    float value[4] = {src[3 * x], src[3 * x + 1], src[3 * x + 2], 1.0f};
+                    Store(x, y, value, 4);
+                }
+                continue;
+            }
+            float *dst = reinterpret_cast<float *>(&_buffer[size_t(_height - 1 - y) * _width * 16]);
+            for (unsigned x = 0; x < _width; ++x, dst += 4, src += 3) {
+                dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; dst[3] = 1.0f;
+            }
+        }
     }
     void Fill(std::vector<float> const &value) {
         size_t size = HdDataSizeOfFormat(_format);
@@ -592,6 +623,7 @@ private:
     HdFormat _format = HdFormatInvalid;
     std::vector<uint8_t> _buffer;
     std::atomic<int> _mappers{0};
+    std::atomic<bool> _converged{true};
 };
 
 void *_Renderer() {
@@ -599,13 +631,144 @@ void *_Renderer() {
     return renderer;
 }
 
-// Renders synchronously whenever the scene, camera or image size changed.
+// The camera, image and samples of a render.
+struct View {
+    GfMatrix4f worldToCamera{1.0f};
+    float fov = 0;
+    int width = 0, height = 0, spp = 0, maxDepth = 0;
+    RenderBuffer *color = nullptr;
+
+    bool operator==(View const &o) const {
+        return worldToCamera == o.worldToCamera && fov == o.fov && width == o.width && height == o.height &&
+               spp == o.spp && maxDepth == o.maxDepth && color == o.color;
+    }
+};
+
+void *_BuildScene(Scene &synced, int *version) {
+    void *scene = gz_scene_new();
+    std::lock_guard<std::mutex> lock(synced.mutex);
+    *version = synced.version.load();
+    std::map<SdfPath, int> materials;
+    auto path = [](std::string const &p) { return p.empty() ? nullptr : p.c_str(); };
+    for (auto const &[id, mat] : synced.materials)
+        materials[id] = gz_scene_add_diffuse(scene, mat.diffuse[0], mat.diffuse[1], mat.diffuse[2],
+                                             path(mat.texture), path(mat.normalMap));
+    for (auto const &[id, m] : synced.meshes) {
+        if (m.indices.empty())
+            continue;
+        auto it = materials.find(m.material);
+        int material = it != materials.end() ? it->second
+            : gz_scene_add_diffuse(scene, m.displayColor[0], m.displayColor[1], m.displayColor[2], nullptr, nullptr);
+        gz_scene_add_mesh(scene, m.xform.data(), m.points.data(), int(m.points.size() / 3),
+                          m.indices.data(), int(m.indices.size() / 3),
+                          m.normals.empty() ? nullptr : m.normals.data(),
+                          m.uvs.empty() ? nullptr : m.uvs.data(), material);
+    }
+    constexpr float betaM = 0.3f, betaN = 0.3f;
+    std::map<SdfPath, int> hairs;
+    auto hair = [&](GfVec3f const &color) {
+        GfVec3f sigma = _SigmaAFromReflectance(color, betaN);
+        return gz_scene_add_hair(scene, sigma[0], sigma[1], sigma[2], betaM, betaN);
+    };
+    for (auto const &[id, c] : synced.curves) {
+        auto it = synced.materials.find(c.material);
+        if (!hairs.count(c.material))
+            hairs[c.material] = hair(it == synced.materials.end() ? c.displayColor
+                                     : it->second.texture.empty() ? it->second.diffuse : GfVec3f(0.5f));
+        gz_scene_add_curves(scene, c.controlPoints.data(), c.widths.data(), int(c.widths.size() / 2),
+                            hairs[c.material]);
+    }
+    bool lit = false;
+    for (auto const &[id, l] : synced.lights) {
+        if (l.type == HdPrimTypeTokens->domeLight && !l.texture.empty())
+            gz_scene_add_dome_map(scene, l.texture.c_str(), l.rgb[0], l.rgb[1], l.rgb[2]);
+        else if (l.type == HdPrimTypeTokens->domeLight)
+            gz_scene_add_dome(scene, l.rgb[0], l.rgb[1], l.rgb[2]);
+        else if (l.type == HdPrimTypeTokens->distantLight)
+            gz_scene_add_distant(scene, l.dir[0], l.dir[1], l.dir[2], l.rgb[0], l.rgb[1], l.rgb[2]);
+        else if (!l.indices.empty())
+            gz_scene_add_area_light(scene, l.xform.data(), l.points.data(), int(l.points.size() / 3),
+                                    l.indices.data(), int(l.indices.size() / 3), l.rgb[0], l.rgb[1], l.rgb[2]);
+        else if (l.type == HdPrimTypeTokens->sphereLight && l.radius == 0)
+            gz_scene_add_point(scene, l.pos[0], l.pos[1], l.pos[2], l.rgb[0], l.rgb[1], l.rgb[2]);
+        else if (l.type == HdPrimTypeTokens->sphereLight)
+            gz_scene_add_sphere_light(scene, l.pos[0], l.pos[1], l.pos[2], l.radius, l.rgb[0], l.rgb[1], l.rgb[2]);
+        else
+            continue;
+        lit = true;
+    }
+    if (!lit)
+        gz_scene_add_dome(scene, 1, 1, 1);
+    return scene;
+}
+
+// Progressive rendering on the render thread. The session keeps the scene on the GPU until the scene changes;
+// the render pass sets the view only while the thread is stopped.
+class Renderer {
+public:
+    explicit Renderer(Scene *scene) : _scene(scene) {}
+    ~Renderer() { Free(); }
+
+    View view;
+    std::atomic<int> spp{0};
+
+    void Free() {
+        if (_session)
+            gz_session_free(_session);
+        _session = nullptr;
+    }
+
+    void Render(HdRenderThread &thread) {
+        View v = view;
+        spp = 0;
+        if (!v.color || v.width <= 0 || v.height <= 0)
+            return;
+        if (!_session || _version != _scene->version.load()) {
+            Free();
+            void *scene = _BuildScene(*_scene, &_version);
+            gz_scene_set_camera(scene, v.worldToCamera.data(), v.fov, v.width, v.height);
+            _session = gz_session_new(_Renderer(), scene, v.spp, v.maxDepth);
+            if (!_session) {
+                v.color->SetConverged(true);
+                return;
+            }
+        }
+        gz_session_set_samples(_session, v.spp, v.maxDepth);
+        if (gz_session_set_camera(_session, v.worldToCamera.data(), v.fov, v.width, v.height) != 0) {
+            v.color->SetConverged(true);
+            return;
+        }
+        std::vector<float> rgb(size_t(v.width) * v.height * 3);
+        bool failed = false;
+        // Small passes first, for a quick first image.
+        for (int pass = 1; !thread.IsStopRequested(); pass = std::min(2 * pass, 8)) {
+            int done = gz_session_render(_session, pass);
+            if ((failed = done < 0 || gz_session_resolve(_session, rgb.data(), 1) != 0))
+                break;
+            v.color->StoreRgb(rgb.data());
+            spp = done;
+            if (done >= v.spp)
+                break;
+        }
+        if (failed || spp >= v.spp)
+            v.color->SetConverged(true);
+    }
+
+private:
+    Scene *_scene;
+    void *_session = nullptr;
+    int _version = 0;
+};
+
+// Restarts the render thread whenever the scene, camera, image or settings changed.
 class RenderPass final : public HdRenderPass {
 public:
-    RenderPass(HdRenderIndex *index, HdRprimCollection const &collection, Scene *scene)
-        : HdRenderPass(index, collection), _scene(scene) {}
+    RenderPass(HdRenderIndex *index, HdRprimCollection const &collection, Scene *scene, Renderer *renderer,
+               HdRenderThread *thread)
+        : HdRenderPass(index, collection), _scene(scene), _renderer(renderer), _thread(thread) {}
+    ~RenderPass() override { _thread->StopRender(); }
 
-    bool IsConverged() const override { return true; }
+    bool IsConverged() const override { return !_color || _color->IsConverged(); }
 
 protected:
     void _Execute(HdRenderPassStateSharedPtr const &state, TfTokenVector const &) override {
@@ -621,108 +784,65 @@ protected:
             else
                 others.emplace_back(static_cast<RenderBuffer *>(buffer), binding.clearValue);
         }
+        _color = color;
         if (!color || !_Renderer())
             return;
-        int width = color->GetWidth(), height = color->GetHeight();
+        View v;
+        v.color = color;
+        v.width = color->GetWidth();
+        v.height = color->GetHeight();
         GfMatrix4d view = state->GetWorldToViewMatrix(), proj = state->GetProjectionMatrix();
-        int version = _scene->version.load();
-        if (version == _version && view == _view && proj == _proj && width == _width && height == _height)
-            return;
-        _version = version; _view = view; _proj = proj; _width = width; _height = height;
-
-        void *scene = gz_scene_new();
-        {
-            std::lock_guard<std::mutex> lock(_scene->mutex);
-            std::map<SdfPath, int> materials;
-            auto path = [](std::string const &p) { return p.empty() ? nullptr : p.c_str(); };
-            for (auto const &[id, mat] : _scene->materials)
-                materials[id] = gz_scene_add_diffuse(scene, mat.diffuse[0], mat.diffuse[1], mat.diffuse[2],
-                                                     path(mat.texture), path(mat.normalMap));
-            for (auto const &[id, m] : _scene->meshes) {
-                if (m.indices.empty())
-                    continue;
-                auto it = materials.find(m.material);
-                int material = it != materials.end() ? it->second
-                    : gz_scene_add_diffuse(scene, m.displayColor[0], m.displayColor[1], m.displayColor[2], nullptr, nullptr);
-                gz_scene_add_mesh(scene, m.xform.data(), m.points.data(), int(m.points.size() / 3),
-                                  m.indices.data(), int(m.indices.size() / 3),
-                                  m.normals.empty() ? nullptr : m.normals.data(),
-                                  m.uvs.empty() ? nullptr : m.uvs.data(), material);
-            }
-            constexpr float betaM = 0.3f, betaN = 0.3f;
-            std::map<SdfPath, int> hairs;
-            auto hair = [&](GfVec3f const &color) {
-                GfVec3f sigma = _SigmaAFromReflectance(color, betaN);
-                return gz_scene_add_hair(scene, sigma[0], sigma[1], sigma[2], betaM, betaN);
-            };
-            for (auto const &[id, c] : _scene->curves) {
-                auto it = _scene->materials.find(c.material);
-                if (!hairs.count(c.material))
-                    hairs[c.material] = hair(it == _scene->materials.end() ? c.displayColor
-                                             : it->second.texture.empty() ? it->second.diffuse : GfVec3f(0.5f));
-                gz_scene_add_curves(scene, c.controlPoints.data(), c.widths.data(), int(c.widths.size() / 2),
-                                    hairs[c.material]);
-            }
-            bool lit = false;
-            for (auto const &[id, l] : _scene->lights) {
-                if (l.type == HdPrimTypeTokens->domeLight && !l.texture.empty())
-                    gz_scene_add_dome_map(scene, l.texture.c_str(), l.rgb[0], l.rgb[1], l.rgb[2]);
-                else if (l.type == HdPrimTypeTokens->domeLight)
-                    gz_scene_add_dome(scene, l.rgb[0], l.rgb[1], l.rgb[2]);
-                else if (l.type == HdPrimTypeTokens->distantLight)
-                    gz_scene_add_distant(scene, l.dir[0], l.dir[1], l.dir[2], l.rgb[0], l.rgb[1], l.rgb[2]);
-                else if (!l.indices.empty())
-                    gz_scene_add_area_light(scene, l.xform.data(), l.points.data(), int(l.points.size() / 3),
-                                            l.indices.data(), int(l.indices.size() / 3), l.rgb[0], l.rgb[1], l.rgb[2]);
-                else if (l.type == HdPrimTypeTokens->sphereLight && l.radius == 0)
-                    gz_scene_add_point(scene, l.pos[0], l.pos[1], l.pos[2], l.rgb[0], l.rgb[1], l.rgb[2]);
-                else if (l.type == HdPrimTypeTokens->sphereLight)
-                    gz_scene_add_sphere_light(scene, l.pos[0], l.pos[1], l.pos[2], l.radius, l.rgb[0], l.rgb[1], l.rgb[2]);
-                else
-                    continue;
-                lit = true;
-            }
-            if (!lit)
-                gz_scene_add_dome(scene, 1, 1, 1);
-        }
         // Gonzales cameras look along +z: negate the view's z column.
-        GfMatrix4f worldToCamera(view);
+        v.worldToCamera = GfMatrix4f(view);
         for (int r = 0; r < 4; ++r)
-            worldToCamera[r][2] = -worldToCamera[r][2];
-        double scale = width >= height ? proj[1][1] : proj[0][0];
-        float fov = float(2.0 * std::atan(1.0 / scale) * 180.0 / M_PI);
-        gz_scene_set_camera(scene, worldToCamera.data(), fov, width, height);
-
+            v.worldToCamera[r][2] = -v.worldToCamera[r][2];
+        double scale = v.width >= v.height ? proj[1][1] : proj[0][0];
+        v.fov = float(2.0 * std::atan(1.0 / scale) * 180.0 / M_PI);
         HdRenderDelegate *delegate = GetRenderIndex()->GetRenderDelegate();
-        int spp = delegate->GetRenderSetting<int>(HdRenderSettingsTokens->convergedSamplesPerPixel, 64);
-        int maxDepth = delegate->GetRenderSetting<int>(TfToken("maxDepth"), 5);
-        std::vector<float> rgb(size_t(width) * height * 3);
-        gz_render(_Renderer(), scene, spp, maxDepth, rgb.data());
-        for (int y = 0; y < height; ++y)
-            for (int x = 0; x < width; ++x) {
-                float const *p = &rgb[(size_t(y) * width + x) * 3];
-                float value[4] = {p[0], p[1], p[2], 1.0f};
-                color->Store(x, y, value, 4);
-            }
+        v.spp = std::max(1, delegate->GetRenderSetting<int>(HdRenderSettingsTokens->convergedSamplesPerPixel, 64));
+        v.maxDepth = delegate->GetRenderSetting<int>(TfToken("maxDepth"), 5);
+        int version = _scene->version.load();
+        if (version == _version && v == _renderer->view)
+            return;
+        _version = version;
+        _thread->StopRender();
+        _renderer->view = v;
+        _renderer->spp = 0;
+        color->SetConverged(false);
         for (auto &[buffer, clear] : others)
             buffer->Fill(_Floats(clear));
+        _thread->StartRender();
     }
 
 private:
     Scene *_scene;
-    int _version = 0, _width = 0, _height = 0;
-    GfMatrix4d _view{0.0}, _proj{0.0};
+    Renderer *_renderer;
+    HdRenderThread *_thread;
+    RenderBuffer *_color = nullptr;
+    int _version = 0;
 };
 
 class RenderDelegate final : public HdRenderDelegate {
 public:
     explicit RenderDelegate(HdRenderSettingsMap const &settings = {})
-        : HdRenderDelegate(settings), _registry(std::make_shared<HdResourceRegistry>()) {
+        : HdRenderDelegate(settings), _registry(std::make_shared<HdResourceRegistry>()), _renderer(&_scene) {
         _settingDescriptors = {
             {"Samples per pixel", HdRenderSettingsTokens->convergedSamplesPerPixel, VtValue(64)},
             {"Max depth", TfToken("maxDepth"), VtValue(5)},
         };
         _PopulateDefaultSettings(_settingDescriptors);
+        _scene.thread = &_thread;
+        _thread.SetRenderCallback([this] { _renderer.Render(_thread); });
+        _thread.StartThread();
+    }
+    ~RenderDelegate() override {
+        _thread.StopThread();
+        _renderer.Free();
+    }
+
+    VtDictionary GetRenderStats() const override {
+        int spp = _renderer.view.spp;
+        return {{"percentDone", VtValue(spp > 0 ? 100.0 * _renderer.spp.load() / spp : 0.0)}};
     }
 
     HdRenderParam *GetRenderParam() const override { return &_scene; }
@@ -756,7 +876,7 @@ public:
     }
 
     HdRenderPassSharedPtr CreateRenderPass(HdRenderIndex *index, HdRprimCollection const &collection) override {
-        return std::make_shared<RenderPass>(index, collection, &_scene);
+        return std::make_shared<RenderPass>(index, collection, &_scene, &_renderer, &_thread);
     }
     HdInstancer *CreateInstancer(HdSceneDelegate *, SdfPath const &) override { return nullptr; }
     void DestroyInstancer(HdInstancer *instancer) override { delete instancer; }
@@ -788,7 +908,10 @@ public:
         return type == HdPrimTypeTokens->renderBuffer ? new RenderBuffer(id) : nullptr;
     }
     HdBprim *CreateFallbackBprim(TfToken const &type) override { return CreateBprim(type, SdfPath::EmptyPath()); }
-    void DestroyBprim(HdBprim *prim) override { delete prim; }
+    void DestroyBprim(HdBprim *prim) override {
+        _thread.StopRender();
+        delete prim;
+    }
 
     void CommitResources(HdChangeTracker *) override {}
 
@@ -796,6 +919,8 @@ private:
     mutable Scene _scene;
     HdResourceRegistrySharedPtr _registry;
     HdRenderSettingDescriptorList _settingDescriptors;
+    HdRenderThread _thread;
+    Renderer _renderer;
 };
 
 } // namespace
