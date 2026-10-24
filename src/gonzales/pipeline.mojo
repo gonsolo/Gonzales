@@ -13,11 +13,11 @@ from .progress import Progress, fmt_time
 from .outputs import write_render_outputs
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, Bounds3f, dot, _is_real_ptr
-from .render_state import TileResult, PathState
+from .render_state import TileResult, PathState, FilmDims
 from .primitives import Ray, TriangleMesh, Instance, mesh_vi, mesh_pos
 from .curves import Curve, curve_piece_bounds
 from .postprocess import denoise, write_image, write_image_cropped, write_image_cropwindow
-from .transform import Mat4
+from .transform import Mat4, matrix_invert
 from .sampling import TileSamplerParams, mix_bits_u64, encode_morton2, sobol_get_sample_index, sobol_sample, derive_pcg_seeds, camera_ray_from_film_xy
 from .bvh import BVH2Node, SceneView, render_aux_buffers, _scene_bounding_sphere
 from .sppm import sppm_render
@@ -33,7 +33,7 @@ from .restir_gi import GIReservoir, gi_reservoir_init, GIReservoirIO, gi_reservo
 from .restir_sms import SMSReservoir, sms_reservoir_init, SMSReservoirIO, sms_reservoir_io_null
 from .restir_vol import VolReservoir, vol_reservoir_init, VolReservoirIO, vol_reservoir_io_null
 from .gpu import gpu_render_sample, gpu_render_wavefront, gpu_mnee_adapt, gpu_download_film, gpu_download_albedo, gpu_clear_film, gpu_clear_restir, gpu_clear_restir_vol
-from .gpu_scene import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload, gpu_ptex_stream_start, gpu_ptex_poll, gpu_ptex_stream_finish, gpu_ptex_make_room
+from .gpu_scene import GpuSceneHandle, WAVEFRONT_BATCH, gpu_available, gpu_upload_scene, gpu_alloc_pixel_buffers, gpu_free_scene, gpu_ptex_begin, gpu_ptex_finish, gpu_ptex_withhold, gpu_ptex_withheld, gpu_ptex_redo_upload, gpu_ptex_stream_start, gpu_ptex_poll, gpu_ptex_stream_finish, gpu_ptex_make_room
 from .gpu_denoise import gpu_atrous_denoise
 from .gpu_wavefront import gpu_gen_aux_buffers
 from .viewer import CameraState, ViewerHandle, viewer_create, viewer_update_framebuffer, viewer_should_close, viewer_poll_events, viewer_get_camera_state, viewer_set_camera_state, viewer_destroy, viewer_denoise_enabled, viewer_monitor_size, build_camera_to_world
@@ -1669,9 +1669,10 @@ struct GpuGuidedRenderer(GuidedRenderer):
         var mesh_al_idx_buf: Optional[DeviceBuffer[DType.uint8]],
         n_meshes_vk: Int,
         var instance_base_mesh_buf: Optional[DeviceBuffer[DType.uint8]],
+        quiet: Bool = False,
     ):
         self.handle = handle; self.psc = psc; self.seed_dim0 = seed_dim0; self.seed_dim1 = seed_dim1
-        self.n_pixels = n_pixels; self.guided = guided; self.progress = Progress(spp, "spp"); self.use_vk = use_vk
+        self.n_pixels = n_pixels; self.guided = guided; self.progress = Progress(spp, "spp", quiet); self.use_vk = use_vk
         self.interop_scene = interop_scene
         self.interop_rays_buf = interop_rays_buf^; self.interop_results_buf = interop_results_buf^
         self.mesh_material_idx_buf = mesh_material_idx_buf^; self.mesh_al_idx_buf = mesh_al_idx_buf^
@@ -3291,3 +3292,108 @@ def render_interactive(
             vol_buf_b.unsafe_free()
     mojo_parsed_free(psc)
     viewer_destroy(v)
+
+
+# A scene kept on the GPU between renders, for progressive rendering: a camera move or a resize clears the film,
+# nothing is uploaded or built again.
+struct RenderSession(Movable):
+    var psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin]
+    var renderer: GpuGuidedRenderer
+    var spp: Int        # samples in the film
+    var resolves: Int   # since the film was cleared
+
+    def __init__(out self, psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], var renderer: GpuGuidedRenderer):
+        self.psc = psc
+        self.renderer = renderer^
+        self.spp = 0
+        self.resolves = 0
+
+comptime SessionPtr = Pointer[RenderSession, MutUntrackedOrigin]
+
+# About a million paths keep the GPU busy; more only cost memory (some 350 bytes a path).
+def _session_batch(n_pixels: Int) -> Int:
+    return max(1, min(WAVEFRONT_BATCH, (1 << 20) // max(n_pixels, 1)))
+
+def session_new(psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin], sobol: Pointer[UInt32, MutUntrackedOrigin],
+                spectral: SpectralHandle, gpu_ctx: Optional[DeviceContext]) -> SessionPtr:
+    """Uploads the parsed scene, which the session then owns; dangling if that fails."""
+    var n_pixels = Int(psc[unsafe_offset=0].film_w) * Int(psc[unsafe_offset=0].film_h)
+    var handle = gpu_upload_scene(psc, sobol, n_pixels, spectral.coeffs, spectral.res, spectral.cie_x, spectral.cie_y,
+                                  spectral.cie_z, spectral.d65, gpu_ctx, restir_di=False, restir_vol=False, verbose=False,
+                                  batch=_session_batch(n_pixels))
+    if not _is_real_ptr(handle):
+        mojo_parsed_free(psc)
+        return SessionPtr.unsafe_dangling()
+    var s = unsafe_alloc[RenderSession](1)
+    s.unsafe_write(RenderSession(psc, GpuGuidedRenderer(
+        handle, psc, UInt32(mix_bits_u64(UInt64(0))), UInt32(mix_bits_u64(UInt64(1))), n_pixels,
+        Int(psc[unsafe_offset=0].samples_per_pixel), False, False, Pointer[UInt8, MutUntrackedOrigin].unsafe_dangling(),
+        None, None, None, None, 0, None, quiet=True)))
+    session_clear(s)
+    return s
+
+def session_clear(s: SessionPtr):
+    """Starts the film over: after a camera, size or sample setting change."""
+    ref psc = s[].psc
+    var handle = s[].renderer.handle
+    var n = s[].renderer.n_pixels
+    s[].spp = 0
+    s[].resolves = 0
+    handle[].cam_fp = camera_footprint(psc[unsafe_offset=0].raster_to_camera, psc[unsafe_offset=0].camera_to_world,
+                                       Int(psc[unsafe_offset=0].film_w), Int(psc[unsafe_offset=0].film_h),
+                                       Int(psc[unsafe_offset=0].samples_per_pixel))
+    gpu_clear_film(handle, Int64(n))
+    gpu_gen_aux_buffers(handle, psc[unsafe_offset=0].camera_to_world, Int64(n))
+
+def session_set_camera(s: SessionPtr, world_to_camera: Pointer[Float32, MutUntrackedOrigin], fov_deg: Float32,
+                       width: Int32, height: Int32) raises:
+    """`world_to_camera` looks along +z; `fov_deg` spans the shorter image axis."""
+    ref psc = s[].psc
+    var handle = s[].renderer.handle
+    var n = Int(width) * Int(height)
+    var framing = fov_deg != psc[unsafe_offset=0].camera_fov or width != psc[unsafe_offset=0].film_w or height != psc[unsafe_offset=0].film_h
+    _ = matrix_invert(world_to_camera, psc[unsafe_offset=0].camera_to_world)
+    if framing:
+        if n > handle[].n_pixels:
+            gpu_alloc_pixel_buffers(handle, n, restir_di=False, restir_vol=False, batch=_session_batch(n))
+        psc[unsafe_offset=0].camera_fov = fov_deg
+        resize_film(psc, width, height)
+        mojo_apply_overrides(psc, psc[unsafe_offset=0].samples_per_pixel, Int32(0), Int32(0))
+        s[].renderer.n_pixels = n
+        handle[].film = FilmDims(width, height)
+        handle[].ctx.enqueue_copy(handle[].r2c_buf, psc[unsafe_offset=0].raster_to_camera.unsafe_bitcast[UInt8]())
+        handle[].ctx.enqueue_memset(handle[].hist_len_buf, UInt8(0))    # the history is of another framing
+        handle[].ctx.synchronize()
+    session_clear(s)
+
+def session_set_samples(s: SessionPtr, spp: Int32, max_depth: Int32):
+    """The sample count a render converges at, which lays out the sample sequence, and the path depth."""
+    ref psc = s[].psc
+    if spp == psc[unsafe_offset=0].samples_per_pixel and max_depth == psc[unsafe_offset=0].max_depth:
+        return
+    mojo_apply_overrides(psc, spp, Int32(0), Int32(0))
+    psc[unsafe_offset=0].max_depth = max_depth
+    session_clear(s)
+
+def session_render(s: SessionPtr, n_spp: Int) raises -> Int:
+    """Adds up to `n_spp` samples, never beyond the converged count; returns the samples in the film."""
+    var end = min(s[].spp + n_spp, Int(s[].psc[unsafe_offset=0].samples_per_pixel))
+    if end > s[].spp:
+        s[].renderer.render_samples(s[].spp, end)
+        s[].spp = end
+    return s[].spp
+
+def session_resolve(s: SessionPtr, rgb: Pointer[Float32, MutUntrackedOrigin], denoise: Bool) raises:
+    """Writes the film as width*height RGB floats. Only the first resolve after a camera move blends in
+    the previous view; later ones see the film alone, as a batch render does."""
+    var handle = s[].renderer.handle
+    if s[].resolves > 0:
+        handle[].ctx.enqueue_memset(handle[].hist_len_buf, UInt8(0))
+    _gpu_resolve(handle, s[].psc, rgb, s[].renderer.n_pixels, max(s[].spp, 1), denoise)
+    s[].resolves += 1
+
+def session_free(s: SessionPtr):
+    gpu_free_scene(s[].renderer.handle)
+    mojo_parsed_free(s[].psc)
+    s.unsafe_deinit_pointee()
+    s.unsafe_free()
