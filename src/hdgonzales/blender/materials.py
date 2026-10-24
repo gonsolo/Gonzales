@@ -4,6 +4,7 @@
 #   <M> hairlut path n_intercept n_random res beta_m beta_n ior alpha  hair colour per (u, v, intercept, random)
 #   <M> glass ior alpha
 #   <M> principled alpha ior metallic path                       a Principled BSDF; path: baked base colour or -
+#   <M> diffuse r g b path                                       a Diffuse BSDF, whose colour Hydra does not export
 # Node graphs are evaluated with numpy over many samples at once. Without UVs, images give their mean.
 import hashlib
 import math
@@ -361,6 +362,10 @@ def _line(material):
             node.bl_idname == 'ShaderNodeBsdfPrincipled' and _scalar(_socket(node, 'Transmission Weight')) >= 0.5):
         r = _scalar(_socket(node, 'Roughness'))
         return f"{name} glass {_scalar(_socket(node, 'IOR')):.6g} {r * r:.6g}"
+    if node.bl_idname == 'ShaderNodeBsdfDiffuse':
+        path = _bake_base_colour(material, _socket(node, 'Color')) or "-"
+        c = _rgb(value(_socket(node, 'Color'), Context()), 1)[0]
+        return f"{name} diffuse {c[0]:.6g} {c[1]:.6g} {c[2]:.6g} {path}"
     if node.bl_idname == 'ShaderNodeBsdfPrincipled':
         # A coated diffuse: Blender's dielectric layer over its diffuse base. Specular IOR Level scales F0.
         r = _scalar(_socket(node, 'Roughness'))

@@ -141,8 +141,8 @@ std::string _EqualAreaBlenderWorld(std::string const &path) {
 // Everything the prims synced, rebuilt into a Gonzales scene when it changes.
 // A material the Blender add-on evaluated itself, for what UsdPreviewSurface cannot carry.
 struct Override {
-    TfToken kind;              // hair, hairlut, glass or basecolor
-    GfVec3f sigma{0.0f};       // hair absorption
+    TfToken kind;              // hair, hairlut, glass, basecolor, principled or diffuse
+    GfVec3f sigma{0.0f};       // hair absorption; diffuse: the colour
     float betaM = 0.3f, betaN = 0.3f, ior = 1.5f, alpha = 0.0f, metallic = 0.0f;
     std::string path;          // hairlut: colour tables; basecolor: the baked texture
     int intercepts = 0, randoms = 0, res = 0;
@@ -165,6 +165,11 @@ std::map<std::string, Override> _ParseOverrides(std::string const &text) {
             result[name] = o;
         else if (kind == "glass" && (in >> o.ior >> o.alpha))
             result[name] = o;
+        else if (kind == "diffuse" && (in >> o.sigma[0] >> o.sigma[1] >> o.sigma[2] >> o.path)) {
+            if (o.path == "-")
+                o.path.clear();
+            result[name] = o;
+        }
         else if (kind == "basecolor" && (in >> o.path))
             result[name] = o;
         else if (kind == "principled" && (in >> o.alpha >> o.ior >> o.metallic >> o.path)) {
@@ -815,6 +820,10 @@ void *_BuildScene(Scene &synced, int *version) {
             materials[id] = gz_scene_add_dielectric(scene, glass->ior, glass->alpha);
         else if (Override const *base = override(id, TfToken("basecolor")))
             materials[id] = gz_scene_add_diffuse(scene, 1, 1, 1, base->path.c_str(), path(mat.normalMap));
+        else if (Override const *d = override(id, TfToken("diffuse"))) {
+            GfVec3f c = d->path.empty() ? d->sigma : GfVec3f(1);
+            materials[id] = gz_scene_add_diffuse(scene, c[0], c[1], c[2], path(d->path), path(mat.normalMap));
+        }
         else if (Override const *pr = override(id, TfToken("principled"))) {
             // A baked base colour replaces Hydra's texture; otherwise Hydra's colour or texture stays.
             std::string const &texture = pr->path.empty() ? mat.texture : pr->path;
