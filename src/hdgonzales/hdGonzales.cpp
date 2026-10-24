@@ -6,6 +6,7 @@
 #include "pxr/base/gf/matrix3d.h"
 #include "pxr/base/gf/matrix4f.h"
 #include "pxr/base/tf/getenv.h"
+#include "pxr/imaging/hd/basisCurves.h"
 #include "pxr/imaging/hd/camera.h"
 #include "pxr/imaging/hd/instancer.h"
 #include "pxr/imaging/hd/light.h"
@@ -45,6 +46,14 @@ struct MeshData {
     std::vector<float> normals;  // world space
     std::vector<float> uvs;
     GfMatrix4f xform;
+    SdfPath material;
+    GfVec3f displayColor{0.5f};
+};
+
+// Round cubic B-spline segments in world space, Gonzales's curve primitive.
+struct CurvesData {
+    std::vector<float> controlPoints;  // 4 points per segment
+    std::vector<float> widths;         // 2 diameters per segment
     SdfPath material;
     GfVec3f displayColor{0.5f};
 };
@@ -114,6 +123,7 @@ class Scene final : public HdRenderParam {
 public:
     std::mutex mutex;
     std::map<SdfPath, MeshData> meshes;
+    std::map<SdfPath, CurvesData> curves;
     std::map<SdfPath, MaterialData> materials;
     std::map<SdfPath, LightData> lights;
     std::atomic<int> version{1};
@@ -237,6 +247,144 @@ protected:
             _reprs.emplace_back(reprToken, HdReprSharedPtr());
     }
 };
+
+// Hydra curves as B-spline segments: Catmull-Rom and Bezier via Bezier control points.
+class Curves final : public HdBasisCurves {
+public:
+    explicit Curves(SdfPath const &id) : HdBasisCurves(id) {}
+
+    HdDirtyBits GetInitialDirtyBitsMask() const override { return HdChangeTracker::AllSceneDirtyBits; }
+
+    void Sync(HdSceneDelegate *delegate, HdRenderParam *param, HdDirtyBits *dirtyBits, TfToken const &) override {
+        SdfPath const &id = GetId();
+        *dirtyBits &= ~HdChangeTracker::AllSceneDirtyBits;
+        CurvesData c;
+        HdBasisCurvesTopology topology = GetBasisCurvesTopology(delegate);
+        VtVec3fArray points = delegate->Get(id, HdTokens->points).GetWithDefault<VtVec3fArray>();
+        VtIntArray counts = topology.GetCurveVertexCounts();
+        VtFloatArray widths;
+        HdInterpolation widthInterpolation = HdInterpolationConstant;
+        for (HdInterpolation interpolation : {HdInterpolationConstant, HdInterpolationVertex, HdInterpolationVarying})
+            for (HdPrimvarDescriptor const &desc : delegate->GetPrimvarDescriptors(id, interpolation))
+                if (desc.name == HdTokens->widths) {
+                    VtValue value = delegate->Get(id, HdTokens->widths);
+                    if (value.IsHolding<VtFloatArray>()) {
+                        widths = value.UncheckedGet<VtFloatArray>();
+                        widthInterpolation = interpolation;
+                    }
+                }
+        bool visible = delegate->GetVisible(id) && topology.GetCurveIndices().empty() && !points.empty();
+        if (visible) {
+            GfMatrix4d xform = delegate->GetTransform(id);
+            float scale = float(std::cbrt(std::abs(xform.ExtractRotationMatrix().GetDeterminant())));
+            TfToken type = topology.GetCurveType(), basis = topology.GetCurveBasis(), wrap = topology.GetCurveWrap();
+            size_t first = 0, firstVarying = 0;
+            std::vector<GfVec3f> cv;
+            std::vector<float> w;
+            for (int count : counts) {
+                cv.assign(points.begin() + first, points.begin() + first + count);
+                int nSegments = _Segments(type, basis, wrap, count);
+                w.clear();
+                for (int i = 0; i <= nSegments; ++i) {
+                    size_t k = widthInterpolation == HdInterpolationVertex ? first + std::min(count - 1, i)
+                             : widthInterpolation == HdInterpolationVarying ? firstVarying + i : 0;
+                    w.push_back((k < widths.size() ? widths[k] : 0.01f) * scale);
+                }
+                for (int i = 0; i < nSegments; ++i) {
+                    GfVec3f b[4];
+                    _Bezier(type, basis, wrap, cv, i, b);
+                    GfVec3f bs[4] = {6 * b[0] - 7 * b[1] + 2 * b[2], 2 * b[1] - b[2], 2 * b[2] - b[1],
+                                     2 * b[1] - 7 * b[2] + 6 * b[3]};
+                    for (GfVec3f const &q : bs) {
+                        GfVec3f p(xform.Transform(GfVec3d(q)));
+                        c.controlPoints.insert(c.controlPoints.end(), {p[0], p[1], p[2]});
+                    }
+                    c.widths.insert(c.widths.end(), {w[i], w[i + 1]});
+                }
+                first += count;
+                firstVarying += nSegments + 1;
+            }
+        }
+        c.material = delegate->GetMaterialId(id);
+        VtValue color = GetPrimvar(delegate, HdTokens->displayColor);
+        if (color.IsHolding<VtVec3fArray>() && !color.UncheckedGet<VtVec3fArray>().empty())
+            c.displayColor = color.UncheckedGet<VtVec3fArray>()[0];
+        _Scene(param).Edit([&] {
+            if (c.widths.empty())
+                _Scene(param).curves.erase(id);
+            else
+                _Scene(param).curves[id] = std::move(c);
+        });
+    }
+
+    void Finalize(HdRenderParam *param) override {
+        _Scene(param).Edit([&] { _Scene(param).curves.erase(GetId()); });
+    }
+
+protected:
+    HdDirtyBits _PropagateDirtyBits(HdDirtyBits bits) const override { return bits; }
+
+    void _InitRepr(TfToken const &reprToken, HdDirtyBits *) override {
+        if (std::find_if(_reprs.begin(), _reprs.end(), _ReprComparator(reprToken)) == _reprs.end())
+            _reprs.emplace_back(reprToken, HdReprSharedPtr());
+    }
+
+private:
+    static int _Segments(TfToken const &type, TfToken const &basis, TfToken const &wrap, int count) {
+        if (type == HdTokens->linear)
+            return std::max(0, count - 1);
+        if (basis == HdTokens->bezier)
+            return std::max(0, (count - 1) / 3);
+        if (wrap == HdTokens->pinned)
+            return std::max(0, count - 1);
+        return std::max(0, count - 3);
+    }
+
+    // Bezier control points of segment i.
+    static void _Bezier(TfToken const &type, TfToken const &basis, TfToken const &wrap,
+                        std::vector<GfVec3f> const &cv, int i, GfVec3f b[4]) {
+        int n = int(cv.size());
+        if (type == HdTokens->linear) {
+            b[0] = cv[i]; b[3] = cv[i + 1];
+            b[1] = b[0] + (b[3] - b[0]) / 3; b[2] = b[0] + 2 * (b[3] - b[0]) / 3;
+            return;
+        }
+        if (basis == HdTokens->bezier) {
+            for (int k = 0; k < 4; ++k)
+                b[k] = cv[3 * i + k];
+            return;
+        }
+        // Pinned curves get phantom end points that make them pass through their ends.
+        auto p = [&](int k) {
+            if (wrap != HdTokens->pinned)
+                return cv[k];
+            if (k == 0)
+                return 2 * cv[0] - cv[std::min(1, n - 1)];
+            if (k == n + 1)
+                return 2 * cv[n - 1] - cv[std::max(0, n - 2)];
+            return cv[k - 1];
+        };
+        GfVec3f p0 = p(i), p1 = p(i + 1), p2 = p(i + 2), p3 = p(i + 3);
+        if (basis == HdTokens->bSpline) {
+            b[0] = (p0 + 4 * p1 + p2) / 6; b[1] = (2 * p1 + p2) / 3;
+            b[2] = (p1 + 2 * p2) / 3;      b[3] = (p1 + 4 * p2 + p3) / 6;
+            return;
+        }
+        b[0] = p1; b[1] = p1 + (p2 - p0) / 6; b[2] = p2 - (p3 - p1) / 6; b[3] = p2;
+    }
+};
+
+// pbrt-v4's HairBxDF::SigmaAFromReflectance.
+GfVec3f _SigmaAFromReflectance(GfVec3f const &c, float betaN) {
+    float d = 5.969f - 0.215f * betaN + 2.532f * betaN * betaN - 10.73f * std::pow(betaN, 3.0f) +
+              5.574f * std::pow(betaN, 4.0f) + 0.245f * std::pow(betaN, 5.0f);
+    GfVec3f sigma;
+    for (int i = 0; i < 3; ++i) {
+        float l = std::log(std::clamp(c[i], 1e-4f, 1.0f)) / d;
+        sigma[i] = l * l;
+    }
+    return sigma;
+}
 
 // UsdPreviewSurface's diffuse colour or texture and its normal map.
 class Material final : public HdMaterial {
@@ -501,6 +649,20 @@ protected:
                                   m.normals.empty() ? nullptr : m.normals.data(),
                                   m.uvs.empty() ? nullptr : m.uvs.data(), material);
             }
+            constexpr float betaM = 0.3f, betaN = 0.3f;
+            std::map<SdfPath, int> hairs;
+            auto hair = [&](GfVec3f const &color) {
+                GfVec3f sigma = _SigmaAFromReflectance(color, betaN);
+                return gz_scene_add_hair(scene, sigma[0], sigma[1], sigma[2], betaM, betaN);
+            };
+            for (auto const &[id, c] : _scene->curves) {
+                auto it = _scene->materials.find(c.material);
+                if (!hairs.count(c.material))
+                    hairs[c.material] = hair(it == _scene->materials.end() ? c.displayColor
+                                             : it->second.texture.empty() ? it->second.diffuse : GfVec3f(0.5f));
+                gz_scene_add_curves(scene, c.controlPoints.data(), c.widths.data(), int(c.widths.size() / 2),
+                                    hairs[c.material]);
+            }
             bool lit = false;
             for (auto const &[id, l] : _scene->lights) {
                 if (l.type == HdPrimTypeTokens->domeLight && !l.texture.empty())
@@ -566,7 +728,7 @@ public:
     HdRenderParam *GetRenderParam() const override { return &_scene; }
 
     TfTokenVector const &GetSupportedRprimTypes() const override {
-        static TfTokenVector const types = {HdPrimTypeTokens->mesh};
+        static TfTokenVector const types = {HdPrimTypeTokens->mesh, HdPrimTypeTokens->basisCurves};
         return types;
     }
     TfTokenVector const &GetSupportedSprimTypes() const override {
@@ -600,7 +762,11 @@ public:
     void DestroyInstancer(HdInstancer *instancer) override { delete instancer; }
 
     HdRprim *CreateRprim(TfToken const &type, SdfPath const &id) override {
-        return type == HdPrimTypeTokens->mesh ? new Mesh(id) : nullptr;
+        if (type == HdPrimTypeTokens->mesh)
+            return new Mesh(id);
+        if (type == HdPrimTypeTokens->basisCurves)
+            return new Curves(id);
+        return nullptr;
     }
     void DestroyRprim(HdRprim *prim) override { delete prim; }
 

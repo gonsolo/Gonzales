@@ -175,3 +175,31 @@ def gz_scene_add_sphere_light(s: ScenePtr, x: Float32, y: Float32, z: Float32, r
     s[unsafe_offset=0].spheres_outside_med.append(Int32(-1))
     s[unsafe_offset=0].spheres_al.append(True)
     s[unsafe_offset=0].spheres_rgb.append(RGB(r, g, b))
+
+@export
+def gz_scene_add_hair(s: ScenePtr, sigma_r: Float32, sigma_g: Float32, sigma_b: Float32,
+                      beta_m: Float32, beta_n: Float32) abi("C") -> Int32:
+    """pbrt's hair BSDF from its absorption coefficient and roughnesses."""
+    var nm = NamedMaterial(String("m") + String(len(s[unsafe_offset=0].named_materials)))
+    nm.kind = MatKind.hair
+    nm.albedo = RGB(sigma_r, sigma_g, sigma_b)
+    nm.ior = Float32(1.55)
+    nm.roughness_u = beta_m
+    nm.roughness_v = beta_n
+    s[unsafe_offset=0].named_materials.append(nm^)
+    return Int32(len(s[unsafe_offset=0].named_materials) - 1)
+
+@export
+def gz_scene_add_curves(s: ScenePtr, control_points: F32Ptr, widths: F32Ptr, n_segments: Int32, material: Int32) abi("C"):
+    """Round cubic B-spline segments in world space: 4 control points and 2 diameters each."""
+    ref st = s[unsafe_offset=0]
+    st.curves_cp.reserve(len(st.curves_cp) + Int(n_segments) * 12)
+    for i in range(Int(n_segments) * 12):
+        st.curves_cp.append(control_points[unsafe_offset=i])
+    for i in range(Int(n_segments)):
+        st.curves_w0.append(widths[unsafe_offset=2 * i])
+        st.curves_w1.append(widths[unsafe_offset=2 * i + 1])
+        st.curves_mat.append(material)
+        st.curves_flat.append(Int32(0))
+        st.curves_al.append(False)
+        st.curves_al_rgb.append(RGB(Float32(0)))
