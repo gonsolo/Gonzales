@@ -946,7 +946,7 @@ def _hair_precompute(
     """Recomputes shading.mojo's shade_hair Steps 1-10 (fiber frame, optical
     quantities, per-lobe attenuation/variance/azimuthal-peak precompute) from
     just the curve hit + wo + material. Material packing (matches shade_hair):
-    albedo = sigma_a (RGB absorption), emission.r = eta (IOR), roughU = betaM
+    albedo = sigma_a (RGB absorption), emission.r = eta (IOR), emission.g = scale tilt (degrees), roughU = betaM
     (longitudinal), roughV = betaN (azimuthal). Shared verbatim by
     shading.mojo's own shade_hair (the primary path tracer) and
     bdpt_*.mojo/sppm.mojo's connectible-vertex/gather/NEE evaluation of a
@@ -1013,8 +1013,9 @@ def _hair_precompute(
         A2.b * fr * T.b / max(Float32(1e-6), Float32(1.0) - fr * T.b),
     )
 
-    var sin2k_0 = Float32(0.034899)
-    var cos2k_0 = Float32(0.999391)
+    var alpha = mat.emission.g * Float32(PI / 180)
+    var sin2k_0 = sin(alpha)
+    var cos2k_0 = cos(alpha)
     var sin2k_1 = Float32(2.0) * cos2k_0 * sin2k_0
     var cos2k_1 = cos2k_0 * cos2k_0 - sin2k_0 * sin2k_0
     var sin2k_2 = Float32(2.0) * cos2k_1 * sin2k_1

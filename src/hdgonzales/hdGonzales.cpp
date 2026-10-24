@@ -159,9 +159,9 @@ std::map<std::string, Override> _ParseOverrides(std::string const &text) {
         if (!(in >> name >> kind))
             continue;
         o.kind = TfToken(kind);
-        if (kind == "hair" && (in >> o.sigma[0] >> o.sigma[1] >> o.sigma[2] >> o.betaM >> o.betaN >> o.ior))
+        if (kind == "hair" && (in >> o.sigma[0] >> o.sigma[1] >> o.sigma[2] >> o.betaM >> o.betaN >> o.ior >> o.alpha))
             result[name] = o;
-        else if (kind == "hairlut" && (in >> o.path >> o.intercepts >> o.randoms >> o.res >> o.betaM >> o.betaN >> o.ior))
+        else if (kind == "hairlut" && (in >> o.path >> o.intercepts >> o.randoms >> o.res >> o.betaM >> o.betaN >> o.ior >> o.alpha))
             result[name] = o;
         else if (kind == "glass" && (in >> o.ior >> o.alpha))
             result[name] = o;
@@ -793,7 +793,7 @@ std::vector<int> _HairPalette(void *scene, Override const &lut, std::vector<floa
                 q[ch] = v * v;
             }
             GfVec3f sigma = _SigmaAFromReflectance(q, lut.betaN);
-            it = palette.emplace(key, gz_scene_add_hair(scene, sigma[0], sigma[1], sigma[2], lut.betaM, lut.betaN, lut.ior)).first;
+            it = palette.emplace(key, gz_scene_add_hair(scene, sigma[0], sigma[1], sigma[2], lut.betaM, lut.betaN, lut.ior, lut.alpha)).first;
         }
         result[s] = it->second;
     }
@@ -851,8 +851,9 @@ void *_BuildScene(Scene &synced, int *version) {
                 h.sigma = _SigmaAFromReflectance(it == synced.materials.end() ? c.displayColor
                                                  : it->second.texture.empty() ? it->second.diffuse : GfVec3f(0.5f), h.betaN);
                 h.ior = 1.55f;
+                h.alpha = 2.0f;   // pbrt's default scale tilt
             }
-            hairs[c.material] = gz_scene_add_hair(scene, h.sigma[0], h.sigma[1], h.sigma[2], h.betaM, h.betaN, h.ior);
+            hairs[c.material] = gz_scene_add_hair(scene, h.sigma[0], h.sigma[1], h.sigma[2], h.betaM, h.betaN, h.ior, h.alpha);
         }
         std::vector<int> perSegment;
         if (Override const *lut = override(c.material, TfToken("hairlut")))

@@ -62,6 +62,7 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     var kind:           Int8
     var ior:            Float32
     var coat_thickness: Float32   # coateddiffuse "thickness"
+    var hair_alpha:     Float32   # hair scale tilt in degrees (pbrt's "alpha")
     var roughness_u:    Float32
     var roughness_v:    Float32
     var tex_idx:        Int32
@@ -123,6 +124,7 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
         self.kind           = Int8(0)
         self.ior            = Float32(1.5)
         self.coat_thickness = Float32(0.01)
+        self.hair_alpha     = Float32(2)
         self.roughness_u    = Float32(0)
         self.roughness_v    = Float32(0)
         self.tex_idx        = Int32(-1)

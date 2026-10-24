@@ -1,7 +1,7 @@
 # Evaluates the Blender materials UsdPreviewSurface cannot describe into lines of the delegate's
 # "gonzales:materials" setting:
-#   <M> hair sr sg sb beta_m beta_n ior                          hair with one colour
-#   <M> hairlut path n_intercept n_random res beta_m beta_n ior  hair colour per (u, v, intercept, random)
+#   <M> hair sr sg sb beta_m beta_n ior alpha                          hair with one colour
+#   <M> hairlut path n_intercept n_random res beta_m beta_n ior alpha  hair colour per (u, v, intercept, random)
 #   <M> glass ior alpha
 #   <M> principled alpha ior metallic path                       a Principled BSDF; path: baked base colour or -
 # Node graphs are evaluated with numpy over many samples at once. Without UVs, images give their mean.
@@ -287,6 +287,7 @@ def _hair_line(name, material, hair):
     beta_m = _scalar(_socket(hair, 'Roughness'))
     beta_n = _scalar(_socket(hair, 'Radial Roughness'))
     ior = _scalar(_socket(hair, 'IOR'))
+    alpha = -math.degrees(_scalar(_socket(hair, 'Offset')))   # Cycles tilts the scales the other way from pbrt
     mode = hair.parametrization
     if mode == 'ABSORPTION':
         sigma = _rgb(value(_socket(hair, 'Absorption Coefficient'), Context()), 1)[0]
@@ -313,9 +314,9 @@ def _hair_line(name, material, hair):
                     rows.append(np.concatenate(tiles, axis=1))
                 _write_pfm(path, np.concatenate(rows, axis=0))
             return (f"{name} hairlut {path} {LUT_INTERCEPTS} {LUT_RANDOMS} {LUT_RES} "
-                    f"{beta_m:.6g} {beta_n:.6g} {ior:.6g}")
+                    f"{beta_m:.6g} {beta_n:.6g} {ior:.6g} {alpha:.6g}")
         sigma = _sigma_from_reflectance(_hair_colour(hair, Context())[0], beta_n)
-    return f"{name} hair {sigma[0]:.6g} {sigma[1]:.6g} {sigma[2]:.6g} {beta_m:.6g} {beta_n:.6g} {ior:.6g}"
+    return f"{name} hair {sigma[0]:.6g} {sigma[1]:.6g} {sigma[2]:.6g} {beta_m:.6g} {beta_n:.6g} {ior:.6g} {alpha:.6g}"
 
 
 def _bake_base_colour(material, socket):
