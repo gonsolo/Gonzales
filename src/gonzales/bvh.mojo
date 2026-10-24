@@ -823,9 +823,16 @@ def _hair_I0_poly(t: Float32) -> Float32:
     return Float32(1.0) + t + t2*Float32(0.25) + t3*Float32(0.027778) + t4*Float32(0.001736) + t5*Float32(6.944e-5) + t6*Float32(1.929e-6) + t7*Float32(3.930e-8) + t8*Float32(6.151e-10)
 
 @always_inline
+def _hair_mp_c(v: Float32) -> Float32:
+    """Mp's normalization 1/(2v sinh(1/v)); for v <= 0.1, where sinh overflows, pbrt's exp(-1/v)/v."""
+    if v <= Float32(0.1):
+        return exp(-Float32(1.0) / v) / v
+    var inv = Float32(1.0) / v
+    return Float32(1.0) / ((exp(inv) - exp(-inv)) * v)
+
+@always_inline
 def _hair_Mp(cos_ti: Float32, cos_to: Float32, sin_ti: Float32, sin_to: Float32, inv_v: Float32, mp_c: Float32) -> Float32:
-    """von Mises-Fisher Mp with precomputed constant mp_c = exp(-inv_v)/(2/inv_v) for v≤0.1,
-    or 1/(sinh(inv_v)*2/inv_v) for v>0.1. inv_v = 1/v."""
+    """von Mises-Fisher Mp with the precomputed constant mp_c = _hair_mp_c(v). inv_v = 1/v."""
     var a = cos_ti * cos_to * inv_v
     var b = sin_ti * sin_to * inv_v
     if a > Float32(8.0):
@@ -1025,10 +1032,9 @@ def _hair_precompute(
     var vm1 = max(vm0 * Float32(0.25), Float32(0.0001))
     var vm2 = max(vm0 * Float32(4.0), Float32(0.0001))
     var inv_vm0 = Float32(1.0) / vm0; var inv_vm1 = Float32(1.0) / vm1; var inv_vm2 = Float32(1.0) / vm2
-    var mp_c0 = exp(-inv_vm0) / (Float32(2.0) * vm0)
-    var mp_c1 = exp(-inv_vm1) / (Float32(2.0) * vm1)
-    var sinh_inv2 = (exp(inv_vm2) - exp(-inv_vm2)) * Float32(0.5)
-    var mp_c2 = Float32(1.0) / (sinh_inv2 * Float32(2.0) * vm2)
+    var mp_c0 = _hair_mp_c(vm0)
+    var mp_c1 = _hair_mp_c(vm1)
+    var mp_c2 = _hair_mp_c(vm2)
     var e2vm0 = exp(-Float32(2.0) * inv_vm0)
     var e2vm1 = exp(-Float32(2.0) * inv_vm1)
     var e2vm2 = exp(-Float32(2.0) * inv_vm2)
@@ -1037,7 +1043,9 @@ def _hair_precompute(
     var dphi1 = -PI + Float32(2.0) * (gamma_t - gamma_o)
     var dphi2 = Float32(4.0) * gamma_t - Float32(2.0) * gamma_o
 
-    var s = betaN
+    # pbrt's azimuthal logistic scale from betaN
+    var bn2 = betaN * betaN; var bn4 = bn2 * bn2; var bn8 = bn4 * bn4; var bn16 = bn8 * bn8
+    var s = Float32(0.626657069) * (Float32(0.265) * betaN + Float32(1.194) * bn2 + Float32(5.372) * bn16 * bn4 * bn2)
 
     var lum0 = A0.luma() + Float32(1e-6)
     var lum1 = A1.luma() + Float32(1e-6)
