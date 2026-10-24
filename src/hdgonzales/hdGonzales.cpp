@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <numeric>
@@ -88,9 +89,10 @@ GfVec3d _EqualAreaSquareToSphere(double px, double py) {
     return GfVec3d(std::copysign(std::cos(phi), u) * s, std::copysign(std::sin(phi), v) * s, z);
 }
 
-// Resamples a Hydra dome texture (lat-long, +Y up in light space) into an
-// equal-area square in world space and returns the path of that image.
-std::string _EqualAreaDome(std::string const &path, GfMatrix4d const &lightToWorld) {
+// Resamples a lat-long image into an equal-area square in world space and returns the path of that image.
+// `st` maps a world direction to the image's (s, t), t = 0 at the top row.
+std::string _EqualArea(std::string const &path, std::string const &key,
+                       std::function<std::pair<double, double>(GfVec3d const &)> const &st) {
     HioImageSharedPtr in = HioImage::OpenForReading(path);
     if (!in)
         return {};
@@ -104,20 +106,34 @@ std::string _EqualAreaDome(std::string const &path, GfMatrix4d const &lightToWor
         return {};
     int n = std::clamp(int(std::sqrt(double(w) * h)), 16, 4096);
     std::vector<GfVec3f> dst(size_t(n) * n);
-    GfMatrix4d worldToLight = lightToWorld.GetInverse();
     for (int y = 0; y < n; ++y)
         for (int x = 0; x < n; ++x) {
-            GfVec3d d = worldToLight.TransformDir(_EqualAreaSquareToSphere((x + 0.5) / n, (y + 0.5) / n)).GetNormalized();
-            double t = std::acos(std::clamp(d[1], -1.0, 1.0)) / M_PI;
-            double s = 1 - std::fmod(std::atan2(d[0], d[2]) / (2 * M_PI) + 0.5, 1.0);
-            dst[size_t(y) * n + x] = src[size_t(std::min(h - 1, int(t * h))) * w + std::min(w - 1, int(s * w))];
+            auto [s, t] = st(_EqualAreaSquareToSphere((x + 0.5) / n, (y + 0.5) / n));
+            dst[size_t(y) * n + x] = src[size_t(std::clamp(int(t * h), 0, h - 1)) * w + std::clamp(int(s * w), 0, w - 1)];
         }
-    std::string out = TfGetenv("TMPDIR", "/tmp") + "/gonzales_dome_" +
-        std::to_string(std::hash<std::string>{}(path + TfStringify(lightToWorld))) + ".exr";
+    std::string out = TfGetenv("TMPDIR", "/tmp") + "/gonzales_dome_" + std::to_string(std::hash<std::string>{}(path + key)) + ".exr";
     HioImageSharedPtr image = HioImage::OpenForWriting(out);
     spec.width = spec.height = n;
     spec.data = dst.data();
     return image && image->Write(spec) ? out : std::string();
+}
+
+// A Hydra dome texture: lat-long with +Y up in light space.
+std::string _EqualAreaDome(std::string const &path, GfMatrix4d const &lightToWorld) {
+    GfMatrix4d worldToLight = lightToWorld.GetInverse();
+    return _EqualArea(path, TfStringify(lightToWorld), [&](GfVec3d const &dir) {
+        GfVec3d d = worldToLight.TransformDir(dir).GetNormalized();
+        return std::make_pair(1 - std::fmod(std::atan2(d[0], d[2]) / (2 * M_PI) + 0.5, 1.0),
+                              std::acos(std::clamp(d[1], -1.0, 1.0)) / M_PI);
+    });
+}
+
+// A world the Blender add-on baked: Blender's equirectangular convention, +Z up.
+std::string _EqualAreaBlenderWorld(std::string const &path) {
+    return _EqualArea(path, "blender", [](GfVec3d const &d) {
+        return std::make_pair(-std::atan2(d[1], d[0]) / (2 * M_PI) + 0.5,
+                              0.5 - std::atan2(d[2], std::hypot(d[0], d[1])) / M_PI);
+    });
 }
 
 // Everything the prims synced, rebuilt into a Gonzales scene when it changes.
@@ -151,6 +167,7 @@ class Scene final : public HdRenderParam {
 public:
     std::string overrideText;
     std::map<std::string, Override> overrides;
+    std::string worldPath, worldTexture;  // the add-on's baked world and its equal-area version
     HdRenderThread *thread;
     std::mutex mutex;
     std::map<SdfPath, MeshData> meshes;
@@ -722,7 +739,13 @@ void *_BuildScene(Scene &synced, int *version) {
                             hairs[c.material]);
     }
     bool lit = false;
+    if (!synced.worldTexture.empty()) {
+        gz_scene_add_dome_map(scene, synced.worldTexture.c_str(), 1, 1, 1);
+        lit = true;
+    }
     for (auto const &[id, l] : synced.lights) {
+        if (l.type == HdPrimTypeTokens->domeLight && !synced.worldTexture.empty())
+            continue;
         if (l.type == HdPrimTypeTokens->domeLight && !l.texture.empty())
             gz_scene_add_dome_map(scene, l.texture.c_str(), l.rgb[0], l.rgb[1], l.rgb[2]);
         else if (l.type == HdPrimTypeTokens->domeLight)
@@ -845,6 +868,15 @@ protected:
         v.spp = std::max(1, delegate->GetRenderSetting<int>(HdRenderSettingsTokens->convergedSamplesPerPixel, 64));
         v.maxDepth = delegate->GetRenderSetting<int>(TfToken("maxDepth"), 5);
         std::string overrides = delegate->GetRenderSetting<std::string>(TfToken("gonzales:materials"), std::string());
+        std::string world = delegate->GetRenderSetting<std::string>(TfToken("gonzales:world"), std::string());
+        if (world != _scene->worldPath) {
+            _thread->StopRender();
+            std::string texture = world.empty() ? std::string() : _EqualAreaBlenderWorld(world);
+            _scene->Edit([&] {
+                _scene->worldPath = world;
+                _scene->worldTexture = texture;
+            });
+        }
         if (overrides != _scene->overrideText) {
             _thread->StopRender();
             _scene->Edit([&] {
