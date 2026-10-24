@@ -272,6 +272,8 @@ def _sss_invert_alpha(target: Float32, eta: Float32, g: Float32) -> Float32:
     return Float32(0.5) * (lo + hi)
 
 
+
+
 def _sss_reflectance(s: Pointer[SceneParseState, MutUntrackedOrigin],
                      params: ParameterDictionary) -> RGB:
     """The subsurface `reflectance`, resolved even when it is a TEXTURE.

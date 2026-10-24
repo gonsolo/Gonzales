@@ -275,7 +275,7 @@ def _gpu_bounce_kernels(
             path_ptr_c, Int64(n), live_idx, live_count,
             grid_dim=grid_dim, block_dim=block_size,
         )
-    if handle[].media.n_mediums > 0 or handle[].has_interface_material:
+    if handle[].media.n_mediums > 0 or handle[].has_interface_material or handle[].has_sss_walk:
         handle[].ctx.enqueue_function[sample_medium_gpu](
             handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
             handle[].inter_buf.unsafe_ptr().unsafe_bitcast[Intersection]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
@@ -776,7 +776,7 @@ def gpu_render_sample[Oc: Origin[mut=True]](
             comptime _SSS_WALK_ROUNDS = 256
             if handle[].media.n_mediums > 0 or handle[].has_interface_material:
                 gpu_max_rounds += _MEDIUM_INTERFACE_MARGIN
-            if handle[].media.has_sss_medium:
+            if handle[].media.has_sss_medium or handle[].has_sss_walk:
                 gpu_max_rounds += _SSS_WALK_ROUNDS
             _bench_stage(handle, 9)
             for _ in range(gpu_max_rounds):
@@ -929,7 +929,7 @@ def gpu_render_wavefront(
             comptime _SSS_WALK_ROUNDS = 256
             if handle[].media.n_mediums > 0 or handle[].has_interface_material:
                 gpu_max_rounds += _MEDIUM_INTERFACE_MARGIN
-            if handle[].media.has_sss_medium:
+            if handle[].media.has_sss_medium or handle[].has_sss_walk:
                 gpu_max_rounds += _SSS_WALK_ROUNDS
             var live_paths = n_total
             for round in range(gpu_max_rounds):

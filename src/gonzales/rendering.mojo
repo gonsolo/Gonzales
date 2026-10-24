@@ -6,7 +6,7 @@ from std.sys import prefetch
 from std.sys.info import num_performance_cores
 from std.time import perf_counter_ns
 from .geometry import RGB, Point3f, Vec3f, point3f, vec3f, dot, cross, INV_FOUR_PI
-from .render_state import PathState, MIN_RAY_PDF_NONE, TileResult
+from .render_state import PathState, MIN_RAY_PDF_NONE, SssWalk, TileResult
 from .progress import Progress
 from .primitives import sphere_outward_normal, Ray, Intersection, PrimId, Sphere, TriangleMesh, mesh_vi
 from .primitives import mesh_point
@@ -231,6 +231,7 @@ def render_tile[Osp: Origin[mut=True], Oc2w: Origin[mut=True]](
                     Float32(0.0),   # cone_len: total path length, accumulated per bounce
                     Int8(0),   # ptex_missed
                     MIN_RAY_PDF_NONE,   # min_ray_pdf
+                    SssWalk.none(),
                 )
                 pixel_idx_buf[unsafe_offset=idx] = this_pixel_idx
                 idx += 1

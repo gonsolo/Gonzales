@@ -80,6 +80,11 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
     # _resolve_affine_rgb; applied in shading.mojo's _tex_lookup.
     var tex_scale:      RGB
     var sss_mean_refl:  RGB
+    var sss_weight:     Float32   # a random-walk subsurface base (Cycles' Principled subsurface); 0 = none
+    var sss_mfp:        RGB       # its radius times scale, per channel
+    var sss_g:          Float32   # its anisotropy
+    var sss_van_de_hulst: Int32   # 1: Cycles' newer albedo mapping (van de Hulst), 0: its Legacy fit
+    var principled:     Bool      # coateddiffuse as Cycles' Principled layering, not pbrt's layered coat
     var tex_bias:       RGB
     # UV scale applied to an imagemap `tex_idx` texture's mesh UVs at parse
     # time (Mitsuba's `<transform name="to_uv"><scale .../></transform>`,
@@ -135,6 +140,11 @@ struct NamedMaterial(Copyable, ImplicitlyCopyable, Movable):
         self.bump_scale     = Float32(1)
         self.tex_scale      = RGB(Float32(1))
         self.sss_mean_refl  = RGB(Float32(1))
+        self.sss_weight     = Float32(0)
+        self.sss_mfp        = RGB(Float32(1))
+        self.sss_g          = Float32(0)
+        self.sss_van_de_hulst = Int32(0)
+        self.principled     = False
         self.tex_bias       = RGB(Float32(0))
         self.tex_uscale     = Float32(1)
         self.tex_vscale     = Float32(1)

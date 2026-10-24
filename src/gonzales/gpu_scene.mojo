@@ -734,6 +734,7 @@ struct GpuSceneHandle(Movable):
     # A null `interface` material can sit in a scene with no medium at all
     # (glass stubbed out as "interface"); its crossings still need rounds.
     var has_interface_material: Bool
+    var has_sss_walk: Bool   # a random-walk subsurface base: walk steps in the medium kernel, exits in the diffuse one
     # Set by each render driver for its own spp (footprint.camera_footprint).
     var cam_fp: CameraFootprint
     var textures: TextureBuffers
@@ -1077,8 +1078,12 @@ def gpu_upload_scene(
             var has_iface_mat = False
             var has_glass_mat = False
             var kind_mask = Int32(0)
+            var has_walk = False
             for mi in range(Int(s.material_count)):
                 kind_mask |= Int32(1) << Int32(s.materials[unsafe_offset=mi].type)
+                if s.materials[unsafe_offset=mi].sss_walk != Int8(0):
+                    has_walk = True
+                    kind_mask |= Int32(1) << Int32(MatKind.diffuse)
                 if s.materials[unsafe_offset=mi].type == MatKind.interface:
                     has_iface_mat = True
                 if is_specular_glass(s.materials[unsafe_offset=mi]) and getenv("GONZALES_NO_MNEE") == "":
@@ -1154,6 +1159,7 @@ def gpu_upload_scene(
                 suppress_buf=_gpu_placeholder(ctx),
                 mat_kind_mask=kind_mask,
                 has_interface_material=has_iface_mat,
+                has_sss_walk=has_walk,
                 cam_fp=CameraFootprint.none(),
                 textures=textures^,
                 lights=lights^,

@@ -76,7 +76,8 @@ struct Material(TrivialRegisterPassable):
     # diffusetransmission only: which lobes the tex_idx texture drives -- 0 both, 1 reflectance only,
     # 2 transmittance only (the other lobe keeps its constant). Occupies a former padding byte.
     var dt_tex_lobes: Int8
-    var _pad2: Int8
+    # coateddiffuse only: 1 = part of the base is a Cycles-style random walk (sss_walk_* below). A former padding byte.
+    var sss_walk: Int8
     var albedo: RGB
     var emission: RGB
     var tex_idx: Int32      # -1 = no texture; -2 = procedural checkerboard (see checker_* below); >= 0 = index into texture table
@@ -323,3 +324,23 @@ def filter_glossy(mat: Material, min_ray_pdf: Float32, filter: Float32) -> Mater
         m.roughU = max(m.roughU, r)
         m.roughV = max(m.roughV, r)
     return m
+
+
+# A coated diffuse with sss_walk == 1 keeps the walk's parameters in the checker fields, which only a procedural
+# checkerboard (tex_idx == -2) uses: checker_tex1 = mean free path per channel, checker_tex2 = (anisotropy, the walk's
+# share of the base, 1 for Cycles' van de Hulst albedo mapping or 0 for its Legacy fit).
+@always_inline
+def sss_walk_mfp(mat: Material) -> RGB:
+    return mat.checker_tex1
+
+@always_inline
+def sss_walk_g(mat: Material) -> Float32:
+    return mat.checker_tex2.r
+
+@always_inline
+def sss_walk_weight(mat: Material) -> Float32:
+    return mat.checker_tex2.g if mat.sss_walk != Int8(0) else Float32(0)
+
+@always_inline
+def sss_walk_van_de_hulst(mat: Material) -> Bool:
+    return mat.checker_tex2.b != Float32(0)

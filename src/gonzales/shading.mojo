@@ -2,13 +2,13 @@ from std.atomic import Atomic
 from .ptex_cache import PTEX_QUEUE_CAP
 from std.sys import size_of
 from std.collections import Array
-from std.math import sqrt, cos, sin, floor, acos, atan2, log2, ceil, exp, log, abs
+from std.math import sqrt, cos, sin, floor, acos, atan, atan2, log2, ceil, exp, log, abs, pow
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
 from .geometry import offset_point, RGB, Point3f, Point2f, Point2i, restir_jitter_pixel, Vec3f, dot, face_toward, cross, Frame, fast_sincos, safe_sqrt, reflect, refract, PI, TWO_PI, INV_PI, INV_FOUR_PI, _is_real_ptr, _atan2f
 from .render_state import PDF_DROP_DIRECT
-from .materials import Material, MatKind, LobeKind, filter_glossy, MeasuredBRDF, schlick_fresnel, fr_dielectric, dielectric_is_rough, is_specular_glass, dt_reflectance, dt_transmittance
-from .render_state import PathState, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SuppressTask, SHADOW_SLOTS
+from .materials import Material, MatKind, LobeKind, filter_glossy, sss_walk_weight, sss_walk_g, sss_walk_mfp, sss_walk_van_de_hulst, MeasuredBRDF, schlick_fresnel, fr_dielectric, dielectric_is_rough, is_specular_glass, dt_reflectance, dt_transmittance
+from .render_state import PathState, SssWalk, GpuTexture, NormalSlopeMap, normal_slope_map_none, ShadowTask, SuppressTask, SHADOW_SLOTS
 from .primitives import Ray, Intersection, PrimId, TriangleMesh, Sphere, Instance, mesh_uv, mesh_has_uvs, mesh_normal, mesh_vi, mesh_face
 from .primitives import mesh_pos
 from .lights import AreaLight, DistantLight, PointLight, InfiniteLight, LightSampler, il_rgb, light_sampler_sample, light_sampler_sample_at, light_sampler_pdf_at, light_sampler_pdf, area_light_pick_triangle
@@ -17,7 +17,7 @@ from .media import Medium, MediumInterface, Grid, NvdbGrid
 from .shadow_media import shadow_transmittance
 from .curves import Curve, CURVE_N_PIECES, curve_piece_endpoints, _curve_perp_axis, curve_hit_normal
 from .layered import layered_f, layered_sample, layered_pdf, diel_f, diel_pdf, diel_sample
-from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
+from .bxdf import CoatWalk, coat_walk_begin, coat_walk_enter, coat_walk_at_base, coat_walk_scatter, COAT_WALKING, COAT_REFLECT, COAT_EXIT, COAT_ABSORB, BxDFSample, GeomContext, SobolSamples8, BxDFFlags, bxdf_is_delta, bxdf_sample_conductor, bxdf_sample_coated_conductor, bxdf_sample_dielectric, bxdf_sample_thin_dielectric, bxdf_eval_diffuse, bxdf_pdf_diffuse, bxdf_sample_diffuse, bxdf_sample_diffuse_transmit, ggx_D, ggx_G1, ggx_G2, ggx_vndf_pdf, bxdf_eval_conductor_ggx, ggx_albedo, bxdf_pdf_conductor_ggx, _nee_weight_simple, _nee_weight_hair, _nee_weight_simple_spectral, _nee_weight_coated_coat_lobe, _nee_weight_coated_diffuse_base, LobeTables
 from .measured_bxdf_eval import bxdf_eval_measured, bxdf_sample_measured, bxdf_pdf_measured, _nee_weight_measured
 from .rng import PCG32
 from .footprint import CameraFootprint, UVFootprint, TriWorld, tri_world, hit_uv_footprint
@@ -1264,6 +1264,243 @@ def _albedo_highlight_boost(albedo: RGB, contrib: SpectralSample) -> RGB:
     return albedo + (RGB(Float32(1.0)) - albedo) * boost
 
 @always_inline
+def _shade_principled[enqueue_shadow: Bool, defer_only: Bool](
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
+    ctx: ShadeContext,
+    mat: Material,
+    inter: Intersection,
+    alb: RGB, normal: Vec3f, geo_normal: Vec3f, hit_point: Vec3f, wo: Vec3f, ior: Float32, alpha: Float32,
+    mut pcg: PCG32,
+):
+    """Cycles' Principled BSDF: a GGX dielectric specular layer over a diffuse or random-walk base, the base scaled
+    by one minus the layer's directional albedo (closure_layering_weight). pbrt's layered coat traps light by total
+    internal reflection and renders a mid grey at about half of Cycles' brightness."""
+    var r0 = (ior - Float32(1)) / (ior + Float32(1))
+    var f0 = r0 * r0
+    var a = max(alpha, Float32(1e-3))
+    var mu_o = max(dot(normal, wo), Float32(1e-4))
+    var schlick = (Float32(1) - mu_o) * (Float32(1) - mu_o)
+    schlick = schlick * schlick * (Float32(1) - mu_o)
+    var transmit = Float32(1) - ggx_albedo(mu_o, a) * (f0 + (Float32(1) - f0) * schlick)
+    var walk_w = sss_walk_weight(mat)
+    var kd = transmit * (Float32(1) - walk_w)
+    var Rd = _to_spec_refl(ctx, alb, path_ptr[].wavelengths) * (kd * INV_PI)
+    var spec_e = Float32(1) - transmit
+    var ps = min(max(spec_e / max(spec_e + kd * alb.luma(), Float32(1e-6)), Float32(0.1)), Float32(0.9))
+
+    var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
+    _principled_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls_area, ls_area.dist * Float32(0.9999), normal, wo, Rd, f0, a, ps)
+    for li in range(_nee_simple_light_count(ctx)):
+        var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
+        _principled_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, res[0].copy(), res[1], normal, wo, Rd, f0, a, ps)
+    for inf_i in range(ctx.lights.infinite_count):
+        var ls_inf = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
+        _principled_nee[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls_inf, ls_inf.dist, normal, wo, Rd, f0, a, ps)
+
+    if walk_w > Float32(0):
+        # The surface lobes keep a share even at full weight: they alone sample the highlight NEE's MIS assumes.
+        var q = walk_w * Float32(0.8)
+        if pcg.next_float() < q:
+            path_ptr[].throughput *= walk_w / q
+            _sss_walk_enter(path_ptr, ctx, mat, inter, alb, normal, geo_normal, hit_point, wo, ior, alpha, transmit, pcg)
+            return
+        path_ptr[].throughput *= Float32(1) / (Float32(1) - q)
+
+    var wi: Vec3f
+    if pcg.next_float() < ps:
+        var frame = Frame.from_z(normal)
+        var tx = Vec3f(frame.x.x, frame.x.y, frame.x.z)
+        var ty = Vec3f(frame.y.x, frame.y.y, frame.y.z)
+        var hl = sample_ggx_vndf(Vec3f(dot(wo, tx), dot(wo, ty), mu_o), a, a, pcg.next_float(), pcg.next_float())
+        var h = tx * hl.x + ty * hl.y + normal * hl.z
+        wi = h * (Float32(2) * dot(wo, h)) - wo
+    else:
+        var cs = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), normal)
+        wi = cs[0]
+    var cos_i = dot(normal, wi)
+    if cos_i <= Float32(0):
+        path_ptr[].active = 0
+        path_ptr[].pcgState = pcg.state
+        return
+    var pdf = ps * bxdf_pdf_conductor_ggx(normal, wo, wi, a) + (Float32(1) - ps) * cos_i * INV_PI
+    var f_spec = bxdf_eval_conductor_ggx(normal, wo, wi, a, RGB(f0)).r
+    var org = spawn_origin(hit_point, geo_normal, wi)
+    path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(wi[0], wi[1], wi[2]))
+    path_ptr[].throughput *= (Rd + SpectralSample(f_spec)) * (cos_i / max(pdf, Float32(1e-12)))
+    path_ptr[].specularBounce = Int8(0)
+    path_ptr[].lastBsdfPdf = pdf
+    path_ptr[].bounce += 1
+    var u_rr = pcg.next_float()
+    _apply_russian_roulette(path_ptr, pcg, u_rr)
+
+
+@always_inline
+def _principled_nee[enqueue_shadow: Bool, defer_only: Bool](
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
+    ctx: ShadeContext,
+    hit_point: Vec3f,
+    ls: LightSample,
+    tmax: Float32,
+    n: Vec3f, wo: Vec3f, Rd: SpectralSample, f0: Float32, alpha: Float32, ps: Float32,
+):
+    if not ls.valid:
+        return
+    var cos_i = dot(n, ls.wi)
+    if cos_i <= Float32(0) or (not ls.is_delta and ls.pdf <= Float32(0)):
+        return
+    var inline_shadow = False
+    comptime if not defer_only:
+        inline_shadow = _shadow_inline(ctx, null_guide())
+        if inline_shadow and _shadow_blocked(ctx, hit_point, ls.wi, tmax):
+            return
+    var w = cos_i
+    if not ls.is_delta:
+        var pdf = ps * bxdf_pdf_conductor_ggx(n, wo, ls.wi, alpha) + (Float32(1) - ps) * cos_i * INV_PI
+        w *= power_heuristic(ls.pdf, pdf) / ls.pdf
+    var f_spec = bxdf_eval_conductor_ggx(n, wo, ls.wi, alpha, RGB(f0)).r
+    var contrib = path_ptr[].throughput * (Rd + SpectralSample(f_spec)) * _to_spec_illum(ctx, ls.Li, path_ptr[].wavelengths) * w
+    if inline_shadow:
+        path_ptr[].estimate += contrib
+    else:
+        _shadow_contribute[enqueue_shadow, defer_only](path_ptr, ctx, hit_point, ls.wi, tmax, contrib)
+
+
+def _sss_walk_enter(
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
+    ctx: ShadeContext,
+    mat: Material,
+    inter: Intersection,
+    alb: RGB, normal: Vec3f, geo_normal: Vec3f, hit_point: Vec3f, wo: Vec3f, ior: Float32, alpha_coat: Float32,
+    transmit: Float32,
+    mut pcg: PCG32,
+):
+    """Start a random walk under the surface as Cycles does (subsurface_bounce, subsurface_random_walk_coefficients):
+    refract through a GGX microfacet of the surface's roughness, with its single-scattering albedo fitted to the
+    textured base colour."""
+    var vdh = sss_walk_van_de_hulst(mat)
+    var g = min(max(sss_walk_g(mat), Float32(-0.99)), Float32(0.99) if vdh else Float32(0.9))
+    var mfp = sss_walk_mfp(mat)
+    var wl = path_ptr[].wavelengths
+    # Each wavelength's albedo comes from the base colour's reflectance spectrum there, so the walk reflects that
+    # spectrum; the radius, a length per RGB channel, is band-picked.
+    var c = _to_spec_refl(ctx, alb, wl)
+    var r = rgb_bands_to_spectral_sample(mfp.r, mfp.g, mfp.b, wl)
+    var k = Float32(1) if vdh else Float32(1) / (Float32(1) - g)
+    var a = SpectralSample(_cycles_sss_alpha(c.v0, g, vdh), _cycles_sss_alpha(c.v1, g, vdh),
+                           _cycles_sss_alpha(c.v2, g, vdh), _cycles_sss_alpha(c.v3, g, vdh))
+    # Cycles raises a low albedo to 0.2 and takes the difference out of the throughput.
+    var lift = SpectralSample(min(a.v0 * Float32(5), Float32(1)), min(a.v1 * Float32(5), Float32(1)),
+                              min(a.v2 * Float32(5), Float32(1)), min(a.v3 * Float32(5), Float32(1)))
+    a = SpectralSample(max(a.v0, Float32(0.2)), max(a.v1, Float32(0.2)), max(a.v2, Float32(0.2)), max(a.v3, Float32(0.2)))
+    var sigma_t = SpectralSample(k / max(r.v0, Float32(1e-7)), k / max(r.v1, Float32(1e-7)),
+                                 k / max(r.v2, Float32(1e-7)), k / max(r.v3, Float32(1e-7)))
+    # Refraction through a sampled microfacet; the specular layer above already took its share.
+    var frame = Frame.from_z(normal)
+    var tx = Vec3f(frame.x.x, frame.x.y, frame.x.z)
+    var ty = Vec3f(frame.y.x, frame.y.y, frame.y.z)
+    var cos_ni = dot(normal, wo)
+    var gn = face_toward(geo_normal, wo)
+    var a_ggx = max(alpha_coat, Float32(1e-4))
+    var hl = sample_ggx_vndf(Vec3f(dot(wo, tx), dot(wo, ty), cos_ni), a_ggx, a_ggx, pcg.next_float(), pcg.next_float())
+    path_ptr[].pcgState = pcg.state
+    var h = tx * hl.x + ty * hl.y + normal * hl.z
+    var neta = Float32(1) / min(max(ior, Float32(1.01)), Float32(3.8))
+    var cos_hi = dot(h, wo)
+    var arg = Float32(1) - neta * neta * (Float32(1) - cos_hi * cos_hi)
+    if cos_ni <= Float32(0) or arg < Float32(0):
+        path_ptr[].active = 0
+        return
+    var d = -(wo * neta) + h * (neta * cos_hi - max(sqrt(arg), Float32(1e-7)))
+    var dl = sqrt(dot(d, d))
+    d = d * (Float32(1) / dl)
+    if dot(d, gn) >= Float32(0):
+        path_ptr[].active = 0
+        return
+    # Just under the surface: spawn_origin's fixed 2e-4 is most of a mean free path for thin skin.
+    var raw = Vec3f(path_ptr[].ray.origin.x, path_ptr[].ray.origin.y, path_ptr[].ray.origin.z) + \
+              Vec3f(path_ptr[].ray.direction.x, path_ptr[].ray.direction.y, path_ptr[].ray.direction.z) * inter.tHit
+    var org = offset_point(raw, -gn)
+    path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(d[0], d[1], d[2]))
+    path_ptr[].throughput *= lift * transmit
+    path_ptr[].sss = SssWalk(sigma_t, a, g, Int32(inter.primId.id1), inter.primId.instanceIdx, Int32(0))
+    path_ptr[].specularBounce = Int8(0)
+    path_ptr[].lastBsdfPdf = Float32(0)
+    path_ptr[].bounce += 1
+
+
+@always_inline
+def _cycles_sss_alpha(color: Float32, g: Float32, van_de_hulst: Bool) -> Float32:
+    """Cycles' single-scattering albedo for a subsurface colour (subsurface_random_walk_remap): d'Eon's van de Hulst
+    mapping, or the Legacy walk's fit in the anisotropy."""
+    var c = min(max(color, Float32(0)), Float32(1))
+    if van_de_hulst:
+        var q = Float32(4.20863) * c - sqrt(Float32(9.59217) + Float32(41.6808) * c + Float32(17.7126) * c * c) + Float32(4.09712)
+        var s2 = q * q
+        return min(max((Float32(1) - s2) / (Float32(1) - g * s2), Float32(0)), Float32(0.999999))
+    var g2 = g * g; var g3 = g2 * g; var g4 = g3 * g; var g5 = g4 * g; var g6 = g5 * g; var g7 = g6 * g
+    var A = Float32(1.8260523782) - Float32(1.28451056436) * g - Float32(1.79904629312) * g2 + Float32(9.19393289202) * g3 - Float32(22.8215585862) * g4 + Float32(32.0234874259) * g5 - Float32(23.6264803333) * g6 + Float32(7.21067002658) * g7
+    var B = Float32(4.98511194385) + Float32(0.127355959438) * exp(Float32(31.1491581433) * g - Float32(201.847017512) * g2 + Float32(841.576016723) * g3 - Float32(2018.09288505) * g4 + Float32(2731.71560286) * g5 - Float32(1935.41424244) * g6 + Float32(559.009054474) * g7)
+    var C = Float32(1.09686102424) - Float32(0.394704063468) * g + Float32(1.05258115941) * g2 - Float32(8.83963712726) * g3 + Float32(28.8643230661) * g4 - Float32(46.8802913581) * g5 + Float32(38.5402837518) * g6 - Float32(12.7181042538) * g7
+    var D = Float32(0.496310210422) + Float32(0.360146581622) * g - Float32(2.15139309747) * g2 + Float32(17.8896899217) * g3 - Float32(55.2984010333) * g4 + Float32(82.065982243) * g5 - Float32(58.5106008578) * g6 + Float32(15.8478295021) * g7
+    var E = Float32(4.23190299701) + Float32(0.00310603949088) * exp(Float32(76.7316253952) * g - Float32(594.356773233) * g2 + Float32(2448.8834203) * g3 - Float32(5576.68528998) * g4 + Float32(7116.60171912) * g5 - Float32(4763.54467887) * g6 + Float32(1303.5318055) * g7)
+    var F = Float32(2.40602999408) - Float32(2.51814844609) * g + Float32(9.18494908356) * g2 - Float32(79.2191708682) * g3 + Float32(259.082868209) * g4 - Float32(403.613804597) * g5 + Float32(302.85712436) * g6 - Float32(87.4370473567) * g7
+    var blend = pow(c, Float32(0.25))
+    var alpha = (Float32(1) - blend) * A * pow(atan(B * c), C) + blend * D * pow(atan(E * c), F)
+    return min(max(alpha, Float32(0)), Float32(0.999999))
+
+
+def _shade_sss_exit[enqueue_shadow: Bool](
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
+    inter: Intersection,
+    ctx: ShadeContext,
+):
+    """Where a random walk leaves the surface: a white Lambertian facing out, as Cycles' legacy walk exits."""
+    path_ptr[].sss.exiting = Int32(0)
+    var (ok, is_sphere, geo_normal, ray_dir, ray_org, mesh, v0, v1, v2) = _hit_geom(
+        path_ptr, inter, ctx.meshes, ctx.lights.spheres, inter.primId.instanceIdx, ctx.instances, ctx.curves)
+    if not ok or is_sphere:
+        path_ptr[].active = 0
+        return
+    var gn = face_toward(geo_normal, ray_dir)
+    var n = face_toward(_shading_normal(mesh, v0, v1, v2, inter.u, inter.v, geo_normal, inter.primId.instanceIdx, ctx.instances), ray_dir)
+    var hit_point = offset_point(ray_org + ray_dir * inter.tHit, gn)
+    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+    var ls_area = _sample_area_light_nee(ctx, hit_point, pcg)
+    _sss_exit_nee[enqueue_shadow](path_ptr, ctx, hit_point, n, ls_area, ls_area.dist * Float32(0.9999))
+    for li in range(_nee_simple_light_count(ctx)):
+        var res = _nee_sample_simple_light(ctx, li, hit_point, pcg)
+        _sss_exit_nee[enqueue_shadow](path_ptr, ctx, hit_point, n, res[0].copy(), res[1])
+    for inf_i in range(ctx.lights.infinite_count):
+        var ls_inf = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
+        _sss_exit_nee[enqueue_shadow](path_ptr, ctx, hit_point, n, ls_inf, ls_inf.dist)
+    var (wi, pdf) = sample_cosine_hemisphere_world(pcg.next_float(), pcg.next_float(), n)
+    path_ptr[].pcgState = pcg.state
+    if pdf <= Float32(0) or dot(wi, gn) <= Float32(0):
+        path_ptr[].active = 0
+        return
+    var org = spawn_origin(hit_point, gn, wi)
+    path_ptr[].ray = Ray(Point3f(org[0], org[1], org[2]), Vec3f(wi[0], wi[1], wi[2]))
+    path_ptr[].specularBounce = Int8(0)
+    path_ptr[].lastBsdfPdf = pdf
+    path_ptr[].bounce += 1
+
+
+@always_inline
+def _sss_exit_nee[enqueue_shadow: Bool](
+    path_ptr: Pointer[PathState, MutUntrackedOrigin],
+    ctx: ShadeContext,
+    hit_point: Vec3f, n: Vec3f,
+    ls: LightSample, tmax: Float32,
+):
+    var unit = ls.copy()
+    unit.Li = RGB(Float32(1))
+    var w = _nee_weight_simple(unit, LobeKind.lambertian, RGB(Float32(1)), Float32(0), n, n)
+    if w.is_black():
+        return
+    var contrib = path_ptr[].throughput * _to_spec_weight(ctx, w, path_ptr[].wavelengths) * _to_spec_illum(ctx, ls.Li, path_ptr[].wavelengths)
+    _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_point, ls.wi, tmax, contrib)
+
+
 def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool = False](
     path_ptr: Pointer[PathState, MutUntrackedOrigin],
     inter: Intersection,
@@ -1312,6 +1549,10 @@ def shade_coated_diffuse[use_gpu: Bool, enqueue_shadow: Bool, defer_only: Bool =
     var tx = Vec3f(frame.x.x, frame.x.y, frame.x.z)
     var ty = Vec3f(frame.y.x, frame.y.y, frame.y.z)
     var wo_l = Vec3f(dot(wo, tx), dot(wo, ty), dot(wo, normal))
+    if mat.emission.b > Float32(0.5):
+        _shade_principled[enqueue_shadow, defer_only](path_ptr, ctx, mat, inter, alb, normal, geo_normal, hit_point, wo,
+                                                      ior, coat_alpha, pcg)
+        return
     var R = _to_spec_refl(ctx, alb, path_ptr[].wavelengths)
 
     # NEE: every light type through the same layered f, MIS'd against the
@@ -5549,6 +5790,12 @@ def shade_nee_core[use_gpu: Bool, enqueue_shadow: Bool](
         if not is_specular_glass(mat):
             path_ptr[].last_ns_n = Vec3f(Float32(0.0))
 
+    if path_ptr[].sss.exiting != Int32(0):
+        comptime if use_gpu:
+            path_ptr[].pending_mat = MatKind.diffuse   # shade_diffuse_gpu shades the exit
+        else:
+            _shade_sss_exit[enqueue_shadow](path_ptr, inter, ctx)
+        return
     comptime if use_gpu:
         # GPU: mark material for its dedicated per-material kernel
         path_ptr[].pending_mat = mat.type

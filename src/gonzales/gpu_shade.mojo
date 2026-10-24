@@ -15,7 +15,7 @@ from .restir_di import DIReservoir, ReservoirIO, reservoir_io_null
 from .restir_gi import gi_reservoir_io_null
 from .rng import PCG32
 from .footprint import CameraFootprint
-from .shading import GIPendingX1, LightContext, ShadeContext, shade_coated_conductor, shade_coated_diffuse, shade_conductor, shade_core, shade_dielectric, shade_diffuse, shade_diffuse_transmission, shade_hair, shade_interface, shade_measured, shade_nee_core, shade_thin_dielectric, _mnee_first_probe, _mnee_owns_path
+from .shading import GIPendingX1, LightContext, ShadeContext, _shade_sss_exit, shade_coated_conductor, shade_coated_diffuse, shade_conductor, shade_core, shade_dielectric, shade_diffuse, shade_diffuse_transmission, shade_hair, shade_interface, shade_measured, shade_nee_core, shade_thin_dielectric, _mnee_first_probe, _mnee_owns_path
 from .spectrum import SpectralHandle
 from max.gpu import block_dim, block_idx, thread_idx
 from .gpu_scene import GpuSceneHandle
@@ -191,6 +191,9 @@ def shade_diffuse_gpu[mnee: Bool, defer_only: Bool = False](
         return
     path_ptr[].pending_mat = Int8(0)
     var inter = intersections[unsafe_offset=tid]
+    if path_ptr[].sss.exiting != Int32(0):
+        _shade_sss_exit[True](path_ptr, inter, ctx_ptr[])
+        return
     var mat = sd.materials[unsafe_offset=Int(inter.primId.materialIndex)]
     var restir_on = use_restir != Int32(0)
     # tid IS the pixel index here: this kernel only ever sees use_restir=True

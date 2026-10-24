@@ -2527,7 +2527,7 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
         # project_sppm_nondeterministic_photon_pass memory: barcelona's water
         # flipped between refracting and absorbing every photon on it.
         mats[unsafe_offset=i].sss_boundary = Int8(0)
-        mats[unsafe_offset=i]._pad2 = Int8(0)
+        mats[unsafe_offset=i].sss_walk = Int8(0)
         if nm3.measured_bsdf_path == "":
             mats[unsafe_offset=i].measured_idx = Int32(-1)
         else:
@@ -2554,7 +2554,12 @@ def finalize_scene(s: Pointer[SceneParseState, MutUntrackedOrigin],
             mats[unsafe_offset=i].emission = RGB(Float32(0))
         elif material_kind == MatKind.coated_diffuse:
             mats[unsafe_offset=i].albedo = nm3.albedo
-            mats[unsafe_offset=i].emission = RGB(ior, nm3.coat_thickness, Float32(0))   # the coat's eta and thickness
+            # The coat's eta and thickness, and 1 for Cycles' Principled layering (shading.mojo _shade_principled).
+            mats[unsafe_offset=i].emission = RGB(ior, nm3.coat_thickness, Float32(1) if nm3.principled else Float32(0))
+            if nm3.sss_weight > Float32(0) and nm3.tex_idx != Int32(-2):
+                mats[unsafe_offset=i].sss_walk = Int8(1)
+                mats[unsafe_offset=i].checker_tex1 = nm3.sss_mfp
+                mats[unsafe_offset=i].checker_tex2 = RGB(nm3.sss_g, nm3.sss_weight, Float32(nm3.sss_van_de_hulst))
         elif material_kind == MatKind.coated_conductor:
             mats[unsafe_offset=i].albedo = nm3.albedo
             mats[unsafe_offset=i].emission = RGB(ior, Float32(0), Float32(0))

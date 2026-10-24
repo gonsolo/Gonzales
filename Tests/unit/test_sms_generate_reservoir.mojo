@@ -11,7 +11,7 @@ from std.testing import assert_true, TestSuite
 from gonzales.footprint import CameraFootprint
 from gonzales.geometry import RGB, Point3f, Vec3f
 from gonzales.materials import Material, MatKind, MeasuredBRDF
-from gonzales.render_state import GpuTexture, NormalSlopeMap, ShadowTask, SuppressTask, PathState, MIN_RAY_PDF_NONE
+from gonzales.render_state import GpuTexture, NormalSlopeMap, ShadowTask, SuppressTask, PathState, MIN_RAY_PDF_NONE, SssWalk
 from gonzales.primitives import Ray, PrimId, TriangleMesh, Instance, Sphere
 from gonzales.lights import LightSampler, AreaLight, DistantLight, PointLight, InfiniteLight
 from gonzales.curves import Curve
@@ -246,6 +246,7 @@ def _make_path() -> PathState:
         Float32(0.0),   # cone_len
         Int8(0),   # ptex_missed
         MIN_RAY_PDF_NONE,   # min_ray_pdf
+        SssWalk.none(),
     )
 
 def test_sms_resolve_on_empty_reservoir_is_a_noop() raises:

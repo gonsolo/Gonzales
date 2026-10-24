@@ -5,7 +5,7 @@ from std.sys import has_accelerator
 from max.gpu.host import DeviceContext
 from gonzales.gpu_wavefront import clear_film_gpu, accumulate_film_gpu
 from gonzales.geometry import RGB, Point3f, Vec3f
-from gonzales.render_state import PathState, MIN_RAY_PDF_NONE
+from gonzales.render_state import PathState, MIN_RAY_PDF_NONE, SssWalk
 from gonzales.primitives import Ray
 from gonzales.spectrum import SpectralSample, SampledWavelengths
 
@@ -48,6 +48,7 @@ def _dummy_path(estimate: SpectralSample, albedo: RGB) -> PathState:
         Float32(0.0),   # cone_len
         Int8(0),   # ptex_missed
         MIN_RAY_PDF_NONE,   # min_ray_pdf
+        SssWalk.none(),
     )
 
 def _clear_film_gpu_body(ctx: DeviceContext) raises:

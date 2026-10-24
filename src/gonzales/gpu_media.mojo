@@ -636,6 +636,88 @@ def _volume_area_light_nee(
 # Inlined so `sd` stays in kernel param space: a non-inlined call needs its
 # address, which copies the whole descriptor to local memory per thread.
 @always_inline
+def _sss_walk_step(
+    paths: Pointer[PathState, MutUntrackedOrigin],
+    intersections: Pointer[Intersection, MutUntrackedOrigin],
+    i: Int,
+    ref sd: SceneView,
+):
+    """A random walk under a surface (PathState.sss), as Cycles' walk: each distance comes from one hero wavelength
+    picked by throughput, all four weighted by the balance heuristic, which keeps a step's weight bounded over hundreds
+    of steps. Steps trace their own segments here, up to _SSS_STEPS per call; hits on other geometry are passed, and
+    the entry mesh is the exit, left in `intersections` for the shading kernels."""
+    comptime _SSS_STEPS = 256
+    var path_ptr = paths.unsafe_offset(i)
+    var walk = path_ptr[].sss
+    var st = SIMD[DType.float32, 4](walk.sigma_t.v0, walk.sigma_t.v1, walk.sigma_t.v2, walk.sigma_t.v3)
+    var al = SIMD[DType.float32, 4](walk.alpha.v0, walk.alpha.v1, walk.alpha.v2, walk.alpha.v3)
+    var pcg = PCG32(path_ptr[].pcgState, path_ptr[].pcgInc)
+    var store = Array[Intersection, 1](fill=intersections[unsafe_offset=i])
+    var ray = path_ptr[].ray
+    for _ in range(_SSS_STEPS):
+        var inter = store[0]
+        if inter.hit == 0:
+            path_ptr[].active = 0   # left through a hole in the mesh
+            path_ptr[].pcgState = pcg.state
+            return
+        var tps = path_ptr[].throughput
+        var tp = max(SIMD[DType.float32, 4](tps.v0, tps.v1, tps.v2, tps.v3), SIMD[DType.float32, 4](0))
+        var tsum = tp.reduce_add()
+        if tsum <= Float32(0):
+            path_ptr[].active = 0
+            path_ptr[].pcgState = pcg.state
+            return
+        var p = tp / tsum
+        var u = pcg.next_float()
+        var j = 3
+        var acc = Float32(0)
+        for k in range(3):
+            acc += p[k]
+            if u < acc:
+                j = k
+                break
+        var t = -log(max(Float32(1) - pcg.next_float(), Float32(1e-7))) / max(st[j], Float32(1e-12))
+        var org = Vec3f(ray.origin.x, ray.origin.y, ray.origin.z)
+        var dir = Vec3f(ray.direction.x, ray.direction.y, ray.direction.z)
+        if t >= inter.tHit:
+            var tr = exp(-st * inter.tHit)
+            var w = tr / max((p * tr).reduce_add(), Float32(1e-30))
+            path_ptr[].throughput *= SpectralSample(w[0], w[1], w[2], w[3])
+            if inter.primId.type == Int8(0) and Int32(inter.primId.id1) == walk.mesh and inter.primId.instanceIdx == walk.instance:
+                path_ptr[].sss.mesh = Int32(-1)
+                path_ptr[].sss.exiting = Int32(1)
+                path_ptr[].ray = ray
+                intersections[unsafe_offset=i] = inter
+                path_ptr[].pcgState = pcg.state
+                return
+            var past = org + dir * (inter.tHit * Float32(1.0001) + Float32(1e-5))
+            ray = Ray(Point3f(past[0], past[1], past[2]), ray.direction)
+        else:
+            var tr = exp(-st * t)
+            var w = al * st * tr / max((p * st * tr).reduce_add(), Float32(1e-30))
+            path_ptr[].throughput *= SpectralSample(w[0], w[1], w[2], w[3])
+            var pt = org + dir * t
+            var hs = hg_sample(-dir, walk.g, pcg.next_float(), pcg.next_float())
+            ray = Ray(Point3f(pt[0], pt[1], pt[2]), Vec3f(hs[0], hs[1], hs[2]))
+        # Russian roulette once a walk has lost most of its weight.
+        var m = path_ptr[].throughput.max_component()
+        if m < Float32(0.1):
+            var q = max(m * Float32(10), Float32(0.05))
+            if pcg.next_float() >= q:
+                path_ptr[].active = 0
+                path_ptr[].pcgState = pcg.state
+                return
+            path_ptr[].throughput *= Float32(1) / q
+        store[0].hit = Int8(0)
+        traverse_bvh2_core(sd.bvh2Nodes, sd.primIds, sd.meshes, sd.curves, ray, Float32(1.0e38), store.unsafe_ptr(),
+                           sd.blasNodesArr, sd.blasPrimIdsArr, sd.instances, sd.spheres, Int(sd.sphereCount))
+    # Out of steps this round: the wavefront traces the pending segment and calls again.
+    path_ptr[].ray = ray
+    path_ptr[].volume_scattered = Int8(1)
+    intersections[unsafe_offset=i].hit = Int8(0)
+    path_ptr[].pcgState = pcg.state
+
+
 def _sample_medium_core(
     paths: Pointer[PathState, MutUntrackedOrigin],
     intersections: Pointer[Intersection, MutUntrackedOrigin],
@@ -695,6 +777,9 @@ def _sample_medium_core(
     var n_spheres = Int(sd.sphereCount)
     var path_ptr = paths.unsafe_offset(i)
     if path_ptr[].active == 0:
+        return
+    if path_ptr[].sss.mesh >= Int32(0):
+        _sss_walk_step(paths, intersections, i, sd)
         return
     var med_idx = Int(path_ptr[].current_medium_idx)
     if med_idx < 0 or med_idx >= Int(sd.mediumCount):

@@ -3,7 +3,8 @@
 #   <M> hair sr sg sb beta_m beta_n ior alpha                          hair with one colour
 #   <M> hairlut path n_intercept n_random res beta_m beta_n ior alpha  hair colour per (u, v, intercept, random)
 #   <M> glass ior alpha
-#   <M> principled alpha ior metallic path                       a Principled BSDF; path: baked base colour or -
+#   <M> principled alpha ior metallic path [w r g b aniso vdh]   a Principled BSDF; path: baked base colour or -;
+#                     then its subsurface weight, mean free path, anisotropy and 1 for Cycles' van de Hulst albedo
 #   <M> diffuse r g b path                                       a Diffuse BSDF, whose colour Hydra does not export
 # Node graphs are evaluated with numpy over many samples at once. Without UVs, images give their mean.
 import hashlib
@@ -374,7 +375,18 @@ def _line(material):
         f0 = min(((ior - 1) / (ior + 1)) ** 2 * 2 * level, 0.99)
         eta = (1 + math.sqrt(f0)) / (1 - math.sqrt(f0)) if f0 > 0 else 1.0
         path = _bake_base_colour(material, _socket(node, 'Base Color')) or "-"
-        return f"{name} principled {r * r:.6g} {eta:.6g} {_scalar(_socket(node, 'Metallic')):.6g} {path}"
+        line = f"{name} principled {r * r:.6g} {eta:.6g} {_scalar(_socket(node, 'Metallic')):.6g} {path}"
+        weight = _scalar(_socket(node, 'Subsurface Weight')) if _socket(node, 'Subsurface Weight') else 0.0
+        if weight > 0:
+            # A textured weight gives its mean: the walk takes one share of the base everywhere.
+            radius = _rgb(value(_socket(node, 'Subsurface Radius'), Context()), 1)[0] * _scalar(_socket(node, 'Subsurface Scale'))
+            aniso = _scalar(_socket(node, 'Subsurface Anisotropy')) if _socket(node, 'Subsurface Anisotropy') else 0.0
+            legacy = node.subsurface_method in ('RANDOM_WALK_LEGACY', 'BURLEY')
+            if legacy:
+                radius = radius * (0.25 / math.pi)   # Cycles' bssrdf_setup_radius
+            vdh = 0 if legacy and aniso >= 0 else 1
+            line += f" {weight:.6g} {radius[0]:.6g} {radius[1]:.6g} {radius[2]:.6g} {aniso:.6g} {vdh}"
+        return line
     return None
 
 

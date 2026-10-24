@@ -3,7 +3,7 @@ from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, TestSuite
 from gonzales.geometry import Point3f, Vec3f, RGB
 from gonzales.materials import Material, MatKind
-from gonzales.render_state import PathState, MIN_RAY_PDF_NONE
+from gonzales.render_state import PathState, MIN_RAY_PDF_NONE, SssWalk
 from gonzales.primitives import Ray, Intersection
 from gonzales.spectrum import SpectralSample, SampledWavelengths, null_spectral_handle
 from gonzales.shading import shade_core
@@ -30,6 +30,7 @@ def _dummy_path(ray: Ray, throughput: SpectralSample) -> PathState:
         Float32(0.0),   # cone_len
         Int8(0),   # ptex_missed
         MIN_RAY_PDF_NONE,   # min_ray_pdf
+        SssWalk.none(),
     )
 
 # ── shade_core, exercised against a REAL BVH hit (via _scene_fixture) ───────

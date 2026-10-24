@@ -81,7 +81,7 @@ def gz_scene_add_diffuse(s: ScenePtr, r: Float32, g: Float32, b: Float32, textur
 @export
 def gz_scene_add_coated(s: ScenePtr, r: Float32, g: Float32, b: Float32, texture: Pointer[UInt8, MutUntrackedOrigin],
                         normal_map: Pointer[UInt8, MutUntrackedOrigin], alpha: Float32, ior: Float32) abi("C") -> Int32:
-    """A diffuse base under a GGX dielectric coat of roughness `alpha` and index `ior` (pbrt's coateddiffuse)."""
+    """Cycles' Principled BSDF: a GGX dielectric specular layer of roughness `alpha` and index `ior` over a diffuse base."""
     var name = String("m") + String(len(s[unsafe_offset=0].named_materials))
     var nm = NamedMaterial(name)
     nm.kind = MatKind.coated_diffuse
@@ -91,6 +91,7 @@ def gz_scene_add_coated(s: ScenePtr, r: Float32, g: Float32, b: Float32, texture
     nm.roughness_u = alpha
     nm.roughness_v = alpha
     nm.ior = ior
+    nm.principled = True
     s[unsafe_offset=0].named_materials.append(nm^)
     return Int32(len(s[unsafe_offset=0].named_materials) - 1)
 
@@ -260,6 +261,16 @@ def gz_scene_add_hair(s: ScenePtr, sigma_r: Float32, sigma_g: Float32, sigma_b: 
     nm.hair_alpha = alpha
     s[unsafe_offset=0].named_materials.append(nm^)
     return Int32(len(s[unsafe_offset=0].named_materials) - 1)
+
+@export
+def gz_scene_set_subsurface(s: ScenePtr, material: Int32, weight: Float32, radius_r: Float32, radius_g: Float32,
+                            radius_b: Float32, anisotropy: Float32, van_de_hulst: Int32) abi("C"):
+    """Gives a coated diffuse a Cycles-style random-walk base: its share, mean free path per channel and anisotropy."""
+    ref nm = s[unsafe_offset=0].named_materials[Int(material)]
+    nm.sss_weight = min(max(weight, Float32(0)), Float32(1))
+    nm.sss_mfp = RGB(radius_r, radius_g, radius_b)
+    nm.sss_g = min(max(anisotropy, Float32(-0.9)), Float32(0.9))
+    nm.sss_van_de_hulst = van_de_hulst
 
 @export
 def gz_scene_add_dielectric(s: ScenePtr, ior: Float32, alpha: Float32) abi("C") -> Int32:

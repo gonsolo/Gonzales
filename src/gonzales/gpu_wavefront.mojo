@@ -10,7 +10,7 @@ from .geometry import INV_FOUR_PI, Point3f, RGB, Vec3f, _is_real_ptr, cross, dot
 from .materials import Material
 from .primitives import Instance, Intersection, PrimId, Ray, Sphere, TriangleMesh, alpha_killed, intersect_triangle, sphere_outward_normal, mesh_vi
 from .primitives import mesh_pos, mesh_point, mesh_material
-from .render_state import PathState, MIN_RAY_PDF_NONE, ShadowTask, SHADOW_SLOTS
+from .render_state import PathState, MIN_RAY_PDF_NONE, SssWalk, ShadowTask, SHADOW_SLOTS
 from .restir_di import DIReservoir, di_reservoir_init
 from .restir_vol import VolReservoir, vol_reservoir_init
 from .sampling import gen_primary_ray_state, ThinLens
@@ -313,6 +313,7 @@ def gen_primary_rays_wavefront_gpu(
         Float32(0.0),   # cone_len: total path length, accumulated per bounce
         Int8(2) if skip else Int8(0),   # ptex_missed
         MIN_RAY_PDF_NONE,   # min_ray_pdf
+        SssWalk.none(),
     )
 
 
@@ -1743,6 +1744,7 @@ def gen_primary_rays_gpu(
         Float32(0.0),   # cone_len: total path length, accumulated per bounce
         Int8(0),   # ptex_missed
         MIN_RAY_PDF_NONE,   # min_ray_pdf
+        SssWalk.none(),
     )
 
 

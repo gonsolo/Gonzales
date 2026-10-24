@@ -144,6 +144,9 @@ struct Override {
     TfToken kind;              // hair, hairlut, glass, basecolor, principled or diffuse
     GfVec3f sigma{0.0f};       // hair absorption; diffuse: the colour
     float betaM = 0.3f, betaN = 0.3f, ior = 1.5f, alpha = 0.0f, metallic = 0.0f;
+    float sssWeight = 0.0f, sssAniso = 0.0f;   // principled: a random-walk subsurface base
+    int sssVanDeHulst = 0;
+    GfVec3f sssRadius{1.0f};
     std::string path;          // hairlut: colour tables; basecolor: the baked texture
     int intercepts = 0, randoms = 0, res = 0;
 };
@@ -175,6 +178,8 @@ std::map<std::string, Override> _ParseOverrides(std::string const &text) {
         else if (kind == "principled" && (in >> o.alpha >> o.ior >> o.metallic >> o.path)) {
             if (o.path == "-")
                 o.path.clear();
+            if (!(in >> o.sssWeight >> o.sssRadius[0] >> o.sssRadius[1] >> o.sssRadius[2] >> o.sssAniso >> o.sssVanDeHulst))
+                o.sssWeight = 0.0f;
             result[name] = o;
         }
     }
@@ -829,6 +834,9 @@ void *_BuildScene(Scene &synced, int *version) {
             std::string const &texture = pr->path.empty() ? mat.texture : pr->path;
             GfVec3f c = pr->path.empty() ? mat.diffuse : GfVec3f(1);
             materials[id] = gz_scene_add_coated(scene, c[0], c[1], c[2], path(texture), path(mat.normalMap), pr->alpha, pr->ior);
+            if (pr->sssWeight > 0)
+                gz_scene_set_subsurface(scene, materials[id], pr->sssWeight, pr->sssRadius[0], pr->sssRadius[1],
+                                        pr->sssRadius[2], pr->sssAniso, pr->sssVanDeHulst);
         }
         else
             materials[id] = gz_scene_add_diffuse(scene, mat.diffuse[0], mat.diffuse[1], mat.diffuse[2],
