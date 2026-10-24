@@ -2,6 +2,8 @@
 import os
 import bpy
 
+from . import materials
+
 bl_info = {"name": "Gonzales", "blender": (4, 2, 0), "category": "Render"}
 
 _PLUGIN_DIR = os.environ.get("GONZALES_HYDRA_DIR",
@@ -20,10 +22,26 @@ class GonzalesRenderEngine(bpy.types.HydraRenderEngine):
     def get_render_settings(self, engine_type):
         scene = bpy.context.scene
         spp = scene.gonzales_viewport_spp if engine_type == 'VIEWPORT' else scene.gonzales_spp
-        result = {'convergedSamplesPerPixel': spp, 'maxDepth': scene.gonzales_max_depth}
+        result = {'convergedSamplesPerPixel': spp, 'maxDepth': scene.gonzales_max_depth,
+                  'gonzales:materials': materials.overrides(self._materials())}
         if engine_type != 'VIEWPORT':
             result |= {'aovToken:Combined': "color"}
         return result
+
+    # Hydra names materials after the depsgraph's evaluated copies, so remember the depsgraph.
+    def update(self, data, depsgraph):
+        self._depsgraph = depsgraph
+        super().update(data, depsgraph)
+
+    def view_update(self, context, depsgraph):
+        self._depsgraph = depsgraph
+        super().view_update(context, depsgraph)
+
+    def _materials(self):
+        depsgraph = getattr(self, '_depsgraph', None)
+        if depsgraph is None:
+            return [m for m in bpy.data.materials if m.users]
+        return [i for i in depsgraph.ids if isinstance(i, bpy.types.Material)]
 
     def update_render_passes(self, scene, render_layer):
         if render_layer.use_pass_combined:
