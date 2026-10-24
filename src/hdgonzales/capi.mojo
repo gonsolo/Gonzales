@@ -1,6 +1,7 @@
 # C API of the Gonzales shared library, called by the Hydra render delegate.
 from std.ffi import external_call
 from std.memory.alloc import unsafe_alloc
+from std.os import setenv
 from std.runtime import initialize_runtime
 from max.gpu.host import DeviceContext
 from gonzales.geometry import RGB, _is_real_ptr
@@ -30,6 +31,8 @@ comptime RendererPtr = Pointer[Renderer, MutUntrackedOrigin]
 
 @export
 def gz_renderer_new(data_dir: Pointer[UInt8, MutUntrackedOrigin]) abi("C") -> RendererPtr:
+    # Without the caching allocator a freed session gives its memory back to the driver; renders allocate nothing.
+    _ = setenv("MODULAR_DEVICE_CONTEXT_MEMORY_MANAGER_SIZE", "0", False)
     initialize_runtime()  # Mojo's CPU worker pool; an executable's main starts it
     var dir = String(unsafe_from_utf8_ptr=data_dir.as_imm())
     var sobol = _generate_sobol_matrices(dir + "/new-joe-kuo-6.21201")
