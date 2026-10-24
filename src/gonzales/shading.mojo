@@ -2841,14 +2841,18 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
     # (toward whichever side of geo_normal wi points), so that glue stays
     # here rather than in the shared weight function. Sphere-light NEE is
     # new (this material previously had none).
+    # Mesh/curve area lights: without this sample, a bounce that hits one keeps only its tiny MIS weight.
+    var ls_area = _sample_area_light_nee(ctx, hit_base, pcg)
+    var w_area = _nee_weight_hair(ls_area, hc)
+    if not w_area.is_black():
+        var contrib_area = path_ptr[].throughput * _to_spec_illum(ctx, w_area, path_ptr[].wavelengths)
+        _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_base, ls_area.wi, ls_area.dist * Float32(0.9999), contrib_area)
     for inf_i in range(ctx.lights.infinite_count):
         var ls_e = _sample_infinite_light_nee(ctx.lights.infinite_lights[unsafe_offset=inf_i], Point2f(pcg.next_float(), pcg.next_float()))
         var w_e = _nee_weight_hair(ls_e, hc)
         if not w_e.is_black():
-            var esign = Float32(1.0) if dot(ls_e.wi, geo_normal) >= Float32(0.0) else Float32(-1.0)
-            var eorg = hit_base + geo_normal * curve_eps * esign
             var contrib_e = path_ptr[].throughput * _to_spec_illum(ctx, w_e, path_ptr[].wavelengths)
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, eorg, ls_e.wi, ls_e.dist, contrib_e)
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_base, ls_e.wi, ls_e.dist, contrib_e)
 
     # distant/point/sphere via the shared sampler. `infinite` stays outside
     # (unchanged, still first) -- of these four types only infinite and
@@ -2861,10 +2865,8 @@ def shade_hair[use_gpu: Bool, enqueue_shadow: Bool](
         var tmax = res[1]
         var w = _nee_weight_hair(ls, hc)
         if not w.is_black():
-            var sign = Float32(1.0) if dot(ls.wi, geo_normal) >= Float32(0.0) else Float32(-1.0)
-            var org = hit_base + geo_normal * curve_eps * sign
             var contrib = path_ptr[].throughput * _to_spec_illum(ctx, w, path_ptr[].wavelengths)
-            _shadow_contribute[enqueue_shadow](path_ptr, ctx, org, ls.wi, tmax, contrib)
+            _shadow_contribute[enqueue_shadow](path_ptr, ctx, hit_base, ls.wi, tmax, contrib)
 
     # ── Step 15: Indirect sampling ────────────────────────────────────────────
     # Delegated to bvh.mojo's _hair_sample_dir (same lobe-pick + vMF/logistic
