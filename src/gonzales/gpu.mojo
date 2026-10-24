@@ -944,6 +944,8 @@ def gpu_render_wavefront(
             if handle[].media.has_sss_medium or handle[].has_sss_walk:
                 gpu_max_rounds += _SSS_WALK_ROUNDS
             var live_paths = n_total
+            var round_log = getenv("GONZALES_ROUND_LOG") != ""
+            var log_line = String("rounds live:")
             for round in range(gpu_max_rounds):
                 live_paths = _gpu_bounce_kernels(
                     handle, n_total, grid_total, maxDepth,
@@ -953,8 +955,14 @@ def gpu_render_wavefront(
                     round=round, prev_live=live_paths,
                 )
                 handle[].bench[unsafe_offset=14] += 1   # rounds, for the session report
+                if live_paths == n_total and not use_vulkan_rt:
+                    live_paths = read_counter(handle[].ctx, handle[].active_count_buf, 0)   # the software path's compacted count
+                if round_log:
+                    log_line += " " + String(live_paths)
                 if live_paths == 0:
                     break
+            if round_log:
+                print(log_line, "of", n_total)
             handle[].ctx.enqueue_function[accumulate_film_wavefront_gpu](
                 handle[].path_buf.unsafe_ptr().unsafe_bitcast[PathState]().unsafe_mut_cast[True]().unsafe_origin_cast[MutUntrackedOrigin](),
                 handle[].film_buf.unsafe_ptr().unsafe_bitcast[Float32](),
