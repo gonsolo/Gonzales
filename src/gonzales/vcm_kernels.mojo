@@ -17,7 +17,7 @@ from .primitives import Ray, Intersection
 from .vcm_camis import CamisCamRecord, CamisCamCarry, CamisLightRecord, camis_light_carry_off
 from .bvh import traverse_dispatch
 from .bvh import SceneView, test_spheres, _is_real_ptr, ray_sphere_hit
-from .sampling import FilmFilter
+from .sampling import FilmFilter, ThinLens
 from .rng import PCG32
 from .sppm import _HSIZE, _PHOTON_BUCKET_CAP
 from .gpu_wavefront import (
@@ -111,13 +111,12 @@ def _bdpt_splat_light_paths_gpu(
     var k = Int(block_idx.x * block_dim.x + thread_idx.x)
     if k >= n_light_paths:
         return
-    var cam_pos = Vec3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
     var scratch = inter_scratch.unsafe_offset(k)
     var base = k * _BDPT_MAX_VERTS
     var n_verts = Int(lvc_path_len[unsafe_offset=k])
     for local in range(min(n_verts, _BDPT_MAX_VERTS)):
         var r = _bdpt_connect_to_camera(
-            lvc[unsafe_offset=base + local], sd, scratch, cam_pos,
+            lvc[unsafe_offset=base + local], sd, scratch, c2w,
             w2c, c2r, Int32(Int(fw_dp)), Int32(Int(fh_dp)), px_scale,
             Float32(n_light_paths), mis_vm_weight_factor,
             lvc, lvc_camis, base + local)
@@ -356,6 +355,7 @@ def _bdpt_camera_path_init_gpu(
     film_filter: FilmFilter,
     seed: UInt64,
     pass_idx_dp: Int64,
+    lens_radius: Float32, focal_distance: Float32,
 ):
     """One thread per pixel: seed this thread's own PCG32 (same seed formula
     _bdpt_camera_connect_gpu uses), call _bdpt_camera_path_init, store the
@@ -372,7 +372,7 @@ def _bdpt_camera_path_init_gpu(
     var pcg = PCG32(seed ^ UInt64(pix * 6364136223846793005 + 1442695040888963407),
                      UInt64(pass_idx * 2654435761 + 1))
     var pass_wl = pass_wavelengths(pass_idx)
-    states[unsafe_offset=pix] = _bdpt_camera_path_init[True](r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl, film_filter)
+    states[unsafe_offset=pix] = _bdpt_camera_path_init[True](r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl, film_filter, lens=ThinLens(lens_radius, focal_distance))
 
 @__llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](Int32(256)))
 @__llvm_metadata(`nvvm.minctasm`=SIMDLength(1))    # NVIDIA keeps its old register budget; AMD ignores this

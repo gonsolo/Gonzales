@@ -23,7 +23,7 @@ from .bvh import (
     _hair_precompute, curve_offset_eps, sphere_light_cone_pdf, _sample_infinite_light_nee,
     light_path_pick_pdf,
 )
-from .sampling import power_heuristic, camera_ray_from_film_xy, FilmFilter, film_filter_offset
+from .sampling import power_heuristic, camera_ray_from_film_xy, FilmFilter, film_filter_offset, ThinLens
 from .rng import PCG32
 from .sppm import _geom_normal, _shading_normal_at, _dielectric_bounce, medium_after_crossing, _cosine_hemisphere_sample, area_light_side_pdf
 from .shading import (
@@ -83,7 +83,7 @@ def _bdpt_trace_camera_and_connect[use_gpu: Bool](
     # SHARED WITH THE WAVEFRONT GPU DRIVER -- see _bdpt_trace_light_path's
     # matching comment. This body was a byte-for-byte copy of
     var st = _bdpt_camera_path_init[use_gpu](
-        r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl, film_filter, start_med_idx)
+        r2c, c2w, px, py, pcg, px_scale, n_light_paths_f, pass_wl, film_filter, start_med_idx, sd.lens)
     var ro = st.ro
     var rd = st.rd
     var beta = st.beta
@@ -189,6 +189,7 @@ def _bdpt_camera_path_init[use_gpu: Bool](
     pass_wl: SampledWavelengths,
     film_filter: FilmFilter,
     start_med_idx: Int32 = Int32(-1),
+    lens: ThinLens = ThinLens.pinhole(),
 ) -> VCMCameraPathState:
     """Task #163 stage 4: camera-ray generation + MIS-origin setup half of
     `_bdpt_trace_camera_and_connect` (bdpt_*.mojo:830-886), split out to seed"""
@@ -199,7 +200,10 @@ def _bdpt_camera_path_init[use_gpu: Bool](
     var (dfx, dfy) = film_filter_offset(u_fx, u_fy, film_filter)
     var fX = Float32(px) + Float32(0.5) + dfx
     var fY = Float32(py) + Float32(0.5) + dfy
-    var (rd, ro, _cl) = camera_ray_from_film_xy(fX, fY, r2c, c2w)
+    var ul0 = Float32(0.5); var ul1 = Float32(0.5)
+    if lens.radius > Float32(0):
+        ul0 = pcg.next_float(); ul1 = pcg.next_float()
+    var (rd, ro, _cl) = camera_ray_from_film_xy(fX, fY, r2c, c2w, lens, ul0, ul1)
 
     # VCM Stage 2b: real per-vertex MIS state for the eye subpath (see
     # project_vcm_stage2_mis_derivation memory). cameraPdfW derived by

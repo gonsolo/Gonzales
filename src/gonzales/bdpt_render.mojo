@@ -132,7 +132,6 @@ def _bdpt_render_core(
     var film_filter_cpu = film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
                                          psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y)
     var splat_val = unsafe_alloc[SpectralSample](max(n_light_paths_merge * _BDPT_MAX_VERTS, 1))
-    var cam_pos = Vec3f(c2w[unsafe_offset=12], c2w[unsafe_offset=13], c2w[unsafe_offset=14])
 
     var prog = Progress(n_spp, "spp", quiet=verbose)
     for si in range(n_spp):
@@ -173,7 +172,7 @@ def _bdpt_render_core(
             var base = lp_idx * _BDPT_MAX_VERTS
             for local in range(Int(lvc_path_len[unsafe_offset=lp_idx])):
                 var r = _bdpt_connect_to_camera(
-                    lvc[unsafe_offset=base + local], sd, scratch_light.unsafe_offset(lp_idx), cam_pos,
+                    lvc[unsafe_offset=base + local], sd, scratch_light.unsafe_offset(lp_idx), c2w,
                     w2c, c2r, Int32(fw), Int32(fh), px_scale,
                     Float32(n_light_paths_merge), mis_vm_weight_factor,
                     lvc, lvc_camis, base + local)

@@ -13,6 +13,7 @@ from std.testing import assert_true, TestSuite
 from gonzales.geometry import Vec3f
 from gonzales.bdpt_connect import _bdpt_world_to_raster
 from gonzales.transform import matrix_invert
+from gonzales.sampling import ThinLens, camera_ray_from_film_xy
 
 comptime FW: Int32 = 64
 comptime FH: Int32 = 48
@@ -74,6 +75,26 @@ def test_world_to_raster_round_trips_the_camera_transform() raises:
             if e > worst: worst = e
     assert_true(worst < Float32(1e-3))
     r2c.unsafe_free(); w2c.unsafe_free(); c2r.unsafe_free()
+
+def test_thin_lens_rays_project_back_to_their_film_position() raises:
+    var (r2c, w2c, c2r) = _make_camera()
+    var c2w = unsafe_alloc[Float32](16)
+    _ = matrix_invert(w2c, c2w)
+    var lens = ThinLens(Float32(0.3), Float32(5))
+    var worst = Float32(0)
+    for ty in range(0, Int(FH), 7):
+        for tx in range(0, Int(FW), 7):
+            var fx0 = Float32(tx) + Float32(0.5)
+            var fy0 = Float32(ty) + Float32(0.5)
+            for k in range(4):
+                var (d, o, _) = camera_ray_from_film_xy(fx0, fy0, r2c, c2w, lens, Float32(0.1 + 0.25 * Float64(k)), Float32(0.9 - 0.2 * Float64(k)))
+                var t = Float32(2 + 3 * k)
+                var p = Vec3f(o.x + d.x * t, o.y + d.y * t, o.z + d.z * t)
+                var pr = _bdpt_world_to_raster(p, w2c, c2r, FW, FH, o.x, o.y, lens.focal_distance)
+                assert_true(pr[0])
+                worst = max(worst, max(abs(pr[1] - fx0), abs(pr[2] - fy0)))
+    assert_true(worst < Float32(1e-3))
+    r2c.unsafe_free(); w2c.unsafe_free(); c2r.unsafe_free(); c2w.unsafe_free()
 
 def test_world_to_raster_rejects_points_behind_the_camera() raises:
     var (r2c, w2c, c2r) = _make_camera()

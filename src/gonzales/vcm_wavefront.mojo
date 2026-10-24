@@ -329,6 +329,7 @@ def vcm_render_gpu_wavefront(
                     film_filter_of(psc[unsafe_offset=0].filter_type, psc[unsafe_offset=0].filter_sigma,
                                    psc[unsafe_offset=0].filter_support_x, psc[unsafe_offset=0].filter_support_y),
                     base_seed, Int64(si),
+                    psc[unsafe_offset=0].camera_lens_radius, psc[unsafe_offset=0].camera_focal_distance,
                     grid_dim=grid_pix, block_dim=block_size)
 
                 for _bounce_i in range(_BDPT_MAX_DEPTH):

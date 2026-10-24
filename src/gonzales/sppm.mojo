@@ -783,7 +783,10 @@ def _sppm_trace_visible_point[use_gpu: Bool](
     var (dfx, dfy) = film_filter_offset(u_fx, u_fy, film_filter)
     var fX = Float32(px) + Float32(0.5) + dfx
     var fY = Float32(py) + Float32(0.5) + dfy
-    var (rd, ro, _) = camera_ray_from_film_xy(fX, fY, r2c, c2w)
+    var ul0 = Float32(0.5); var ul1 = Float32(0.5)
+    if sd.lens.radius > Float32(0):
+        ul0 = pcg.next_float(); ul1 = pcg.next_float()
+    var (rd, ro, _) = camera_ray_from_film_xy(fX, fY, r2c, c2w, sd.lens, ul0, ul1)
 
     # Total path length along the SPECULAR chain only -- a cone tracks the
     # camera's footprint, which survives refraction (the pool floor seen

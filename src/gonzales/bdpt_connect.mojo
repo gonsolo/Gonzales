@@ -4,6 +4,7 @@
 from std.collections import Array
 from std.math import sqrt, floor, log, max, min, abs
 from std.atomic import Atomic
+from std.memory import bitcast
 from .geometry import Point3f, Vec3f, dot, PI, INV_FOUR_PI
 from .primitives import Intersection
 from .vcm_camis import (
@@ -11,7 +12,8 @@ from .vcm_camis import (
     camis_eval_connect_s1, camis_eval_splat,
 )
 from .bvh import SceneView
-from .sampling import power_heuristic, FilmFilter, filter_eval_2d, filter_integral_2d
+from .sampling import power_heuristic, FilmFilter, filter_eval_2d, filter_integral_2d, sample_disk_concentric
+from .rng import PCG32
 from .spectrum import SpectralSample, spec_illum
 from .bdpt_vertex import _BDPT_MAX_VERTS, BDPTVertex
 from .bdpt_nee import _visible_transmittance
@@ -50,6 +52,8 @@ def _bdpt_world_to_raster(
     w2c: Pointer[Float32, MutUntrackedOrigin],     # inverse(cameraToWorld), col-major
     c2r: Pointer[Float32, MutUntrackedOrigin],     # inverse of the 3x3 raster->camera map, row-major
     fw: Int32, fh: Int32,
+    lx: Float32 = Float32(0), ly: Float32 = Float32(0),   # a point on a thin lens (camera space)
+    focal_distance: Float32 = Float32(0),
 ) -> Tuple[Bool, Float32, Float32, Float32]:
     """Project a world point onto the film. Returns (ok, filmX, filmY,
     cos_theta), where cos_theta is the angle between the camera's forward"""
@@ -58,12 +62,17 @@ def _bdpt_world_to_raster(
     var cx = w2c[unsafe_offset=0]*px + w2c[unsafe_offset=4]*py + w2c[unsafe_offset=8]*pz  + w2c[unsafe_offset=12]
     var cy = w2c[unsafe_offset=1]*px + w2c[unsafe_offset=5]*py + w2c[unsafe_offset=9]*pz  + w2c[unsafe_offset=13]
     var cz = w2c[unsafe_offset=2]*px + w2c[unsafe_offset=6]*py + w2c[unsafe_offset=10]*pz + w2c[unsafe_offset=14]
+    cx -= lx; cy -= ly
     if cz <= Float32(1e-6):
         return (False, Float32(0), Float32(0), Float32(0))   # behind the lens
     var clen = sqrt(cx*cx + cy*cy + cz*cz)
     if clen <= Float32(1e-12):
         return (False, Float32(0), Float32(0), Float32(0))
     var cos_theta = cz / clen                                # forward axis is +z
+    if focal_distance > Float32(0):
+        # Through the lens point to the focus plane; the pinhole projects that point to the same film position.
+        var ft = focal_distance / cz
+        cx = lx + cx * ft; cy = ly + cy * ft; cz = focal_distance
     # camera-space direction -> (filmX, filmY): q = C2R . c, then divide
     var q0 = c2r[unsafe_offset=0]*cx + c2r[unsafe_offset=1]*cy + c2r[unsafe_offset=2]*cz
     var q1 = c2r[unsafe_offset=3]*cx + c2r[unsafe_offset=4]*cy + c2r[unsafe_offset=5]*cz
@@ -114,7 +123,7 @@ def _bdpt_connect_to_camera(
     lv: BDPTVertex,
     ref sd: SceneView,
     scratch: Pointer[Intersection, MutUntrackedOrigin],
-    cam_pos: Vec3f,
+    c2w: Pointer[Float32, MutUntrackedOrigin],
     w2c: Pointer[Float32, MutUntrackedOrigin],
     c2r: Pointer[Float32, MutUntrackedOrigin],
     fw: Int32, fh: Int32,
@@ -137,6 +146,16 @@ def _bdpt_connect_to_camera(
         return (False, Float32(-1), Float32(-1), SpectralSample(Float32(0)))
 
     var lp = lv.pos.to_simd()
+    var lx = Float32(0); var ly = Float32(0)
+    if sd.lens.radius > Float32(0):
+        # The vertex position is itself random, so a hash of it serves as the lens sample.
+        var pb = bitcast[DType.uint32, 4](SIMD[DType.float32, 4](lp[0], lp[1], lp[2], Float32(0)))
+        var pcg = PCG32(UInt64(pb[0]) | (UInt64(pb[1]) << 32), UInt64(pb[2]) << 1 | UInt64(k) << 33 | UInt64(1))
+        var d = sample_disk_concentric(pcg.next_float(), pcg.next_float())
+        lx = sd.lens.radius * d[0]; ly = sd.lens.radius * d[1]
+    var cam_pos = Vec3f(c2w[unsafe_offset=0]*lx + c2w[unsafe_offset=4]*ly + c2w[unsafe_offset=12],
+                        c2w[unsafe_offset=1]*lx + c2w[unsafe_offset=5]*ly + c2w[unsafe_offset=13],
+                        c2w[unsafe_offset=2]*lx + c2w[unsafe_offset=6]*ly + c2w[unsafe_offset=14])
     var d3 = cam_pos - lp
     var dist2 = dot(d3, d3)
     if dist2 < Float32(1e-8):
@@ -144,7 +163,7 @@ def _bdpt_connect_to_camera(
     var dist = sqrt(dist2)
     var dir_to_cam = d3 * (Float32(1) / dist)
 
-    var pr = _bdpt_world_to_raster(lp, w2c, c2r, fw, fh)
+    var pr = _bdpt_world_to_raster(lp, w2c, c2r, fw, fh, lx, ly, sd.lens.focal_distance if sd.lens.radius > Float32(0) else Float32(0))
     if not pr[0]:
         return (False, Float32(-1), Float32(-1), SpectralSample(Float32(0)))
     var cos_at_camera = pr[3]
