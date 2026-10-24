@@ -1808,6 +1808,13 @@ struct GpuGuidedRenderer(GuidedRenderer):
         gpu_guide_end(self.handle, shard)
 
 
+# The film as an image: normalized, denoised or not, through the camera sensor.
+def _gpu_resolve[O: Origin[mut=True]](handle: Pointer[GpuSceneHandle, MutUntrackedOrigin], psc: Pointer[ParsedScene_Mojo, MutUntrackedOrigin],
+                 rgb: Pointer[Float32, O], n_pixels: Int, spp: Int, denoise: Bool, min_passes: Int = 1):
+    gpu_atrous_denoise(handle, rgb, Int64(n_pixels), Int32(spp), psc[unsafe_offset=0].film_iso, psc[unsafe_offset=0].film_max_comp,
+                       apply_denoise=denoise, min_passes=min_passes)
+    apply_film_sensor(rgb, n_pixels, psc[unsafe_offset=0].film_exposuretime, psc[unsafe_offset=0].film_wb)
+
 # The normal and depth layers of the output files come from a host first-hit pass over the whole frame. It reads only
 # the scene, so it runs on its own thread while the GPU renders instead of after it.
 struct _AuxJob(Movable):
@@ -2490,19 +2497,13 @@ def parse_and_render(
         denoised_gpu.resize(n_pixels * 3, Float32(0))
         albedo_gpu.resize(n_pixels * 3, Float32(0))
         gpu_gen_aux_buffers(handle, psc[unsafe_offset=0].camera_to_world, Int64(n_pixels))
-        gpu_atrous_denoise(handle, denoised_gpu.unsafe_ptr(), Int64(n_pixels),
-                                Int32(spp), psc[unsafe_offset=0].film_iso, psc[unsafe_offset=0].film_max_comp,
-                                apply_denoise=not no_denoise)
-        apply_film_sensor(denoised_gpu.unsafe_ptr(), n_pixels, psc[unsafe_offset=0].film_exposuretime, psc[unsafe_offset=0].film_wb)
+        _gpu_resolve(handle, psc, denoised_gpu.unsafe_ptr(), n_pixels, spp, not no_denoise)
         # The image before denoising, for the .noisy.exr sidecar: the same
         # normalize pass without the a-trous blur (it only reads the film).
         var noisy_gpu = List[Float32](capacity=n_pixels * 3)
         noisy_gpu.resize(n_pixels * 3, Float32(0))
         if not no_denoise:
-            gpu_atrous_denoise(handle, noisy_gpu.unsafe_ptr(), Int64(n_pixels),
-                                    Int32(spp), psc[unsafe_offset=0].film_iso, psc[unsafe_offset=0].film_max_comp,
-                                    apply_denoise=False)
-            apply_film_sensor(noisy_gpu.unsafe_ptr(), n_pixels, psc[unsafe_offset=0].film_exposuretime, psc[unsafe_offset=0].film_wb)
+            _gpu_resolve(handle, psc, noisy_gpu.unsafe_ptr(), n_pixels, spp, False)
         gpu_download_albedo(handle, albedo_gpu.unsafe_ptr(), Int64(n_pixels))
         var inv_spp = Float32(1.0) / Float32(spp)
         for i in range(n_pixels * 3):
