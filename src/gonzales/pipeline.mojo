@@ -3414,6 +3414,12 @@ def session_free(s: SessionPtr):
               "medium/walk", b[unsafe_offset=12] // 1000000,
               "shade", b[unsafe_offset=5] // 1000000, "shadow", b[unsafe_offset=6] // 1000000,
               "| rays: closest", b[unsafe_offset=0], "shadow", b[unsafe_offset=1], "walking paths", b[unsafe_offset=13], "rounds", b[unsafe_offset=14])
+        var names: List[String] = ["preamble", "-", "diffuse", "-", "conductor", "dielectric", "coated", "diffuse_transmit", "coated_conductor", "mix", "thin", "interface", "hair", "measured"]
+        var line = String("bench shade ms:")
+        for k in range(len(names)):
+            if b[unsafe_offset=16 + k] // 1000000 > 0:
+                line += " " + names[k] + " " + String(b[unsafe_offset=16 + k] // 1000000)
+        print(line)
     gpu_free_scene(s[].renderer.handle)
     mojo_parsed_free(s[].psc)
     s.unsafe_deinit_pointee()

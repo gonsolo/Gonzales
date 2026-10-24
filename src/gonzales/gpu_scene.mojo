@@ -937,8 +937,8 @@ def gpu_available() -> Bool:
     return has_accelerator()
 
 def _bench_counters() -> Pointer[Int, MutUntrackedOrigin]:
-    var b = unsafe_alloc[Int](16)
-    for i in range(16):
+    var b = unsafe_alloc[Int](32)       # 16: shade preamble, 17 + kind: that material's shade kernels
+    for i in range(32):
         b[unsafe_offset=i] = 0
     if getenv("GONZALES_BENCH") != "":
         b[unsafe_offset=3] = 2 if getenv("GONZALES_BENCH_TRACE") != "" else 1

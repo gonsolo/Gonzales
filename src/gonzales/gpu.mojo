@@ -332,6 +332,7 @@ def _gpu_bounce_kernels(
     # FIRST among the per-material kernels so its pending_mat/materialIndex
     # redirect is visible to whichever real kernel the sub-material resolves
     # to, later in this SAME launch-ordered sequence.
+    _bench_stage(handle, 16)
     if handle[].has_material(MatKind.mix):
         handle[].ctx.enqueue_function[compact_by_kind_gpu](
             path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.mix)), Int32(MatKind.mix),
@@ -374,6 +375,7 @@ def _gpu_bounce_kernels(
     # (b) restricting deferral to a genuinely single-candidate call site.
     # --rt-hardware: the shade kernels defer their shadow rays (SHADOW_SLOTS per path) and the RT cores trace them after
     # the last material kernel. Without it shadow_ptr is dangling and every shadow ray is traced inline, as before.
+    _bench_stage(handle, 17 + Int(MatKind.mix))
     var hw_shadow = use_vulkan_rt and Int(rtcore_shadow_enabled()) > 0 and Int(handle[].shadow_slots) == SHADOW_SLOTS
     var usable_slots = Int(rtcore_shadow_enabled()) if hw_shadow else 0
     var shadow_slots = SHADOW_SLOTS if hw_shadow else 1
@@ -480,6 +482,7 @@ def _gpu_bounce_kernels(
                 grid_dim=grid_dim,
                 block_dim=block_size,
             )
+    _bench_stage(handle, 17 + Int(MatKind.diffuse))
     if handle[].has_material(MatKind.coated_diffuse):
         handle[].ctx.enqueue_function[compact_by_kind_gpu](
             path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.coated_diffuse)), Int32(MatKind.coated_diffuse),
@@ -509,6 +512,7 @@ def _gpu_bounce_kernels(
                 grid_dim=grid_dim,
                 block_dim=block_size,
             )
+    _bench_stage(handle, 17 + Int(MatKind.coated_diffuse))
     if handle[].has_material(MatKind.diffuse_transmit):
         handle[].ctx.enqueue_function[compact_by_kind_gpu](
             path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.diffuse_transmit)), Int32(MatKind.diffuse_transmit),
@@ -524,6 +528,7 @@ def _gpu_bounce_kernels(
             grid_dim=grid_dim,
             block_dim=block_size,
         )
+    _bench_stage(handle, 17 + Int(MatKind.diffuse_transmit))
     if handle[].has_material(MatKind.conductor):
         handle[].ctx.enqueue_function[compact_by_kind_gpu](
             path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.conductor)), Int32(MatKind.conductor),
@@ -539,6 +544,7 @@ def _gpu_bounce_kernels(
             grid_dim=grid_dim,
             block_dim=block_size,
         )
+    _bench_stage(handle, 17 + Int(MatKind.conductor))
     if handle[].has_material(MatKind.measured):
         handle[].ctx.enqueue_function[compact_by_kind_gpu](
             path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.measured)), Int32(MatKind.measured),
@@ -554,6 +560,7 @@ def _gpu_bounce_kernels(
             grid_dim=grid_dim,
             block_dim=block_size,
         )
+    _bench_stage(handle, 17 + Int(MatKind.measured))
     if handle[].has_material(MatKind.dielectric):
         handle[].ctx.enqueue_function[compact_by_kind_gpu](
             path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.dielectric)), Int32(MatKind.dielectric),
@@ -569,6 +576,7 @@ def _gpu_bounce_kernels(
             grid_dim=grid_dim,
             block_dim=block_size,
         )
+    _bench_stage(handle, 17 + Int(MatKind.dielectric))
     if handle[].has_material(MatKind.thin_dielectric):
         handle[].ctx.enqueue_function[compact_by_kind_gpu](
             path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.thin_dielectric)), Int32(MatKind.thin_dielectric),
@@ -582,6 +590,7 @@ def _gpu_bounce_kernels(
             grid_dim=grid_dim,
             block_dim=block_size,
         )
+    _bench_stage(handle, 17 + Int(MatKind.thin_dielectric))
     if handle[].has_material(MatKind.coated_conductor):
         handle[].ctx.enqueue_function[compact_by_kind_gpu](
             path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.coated_conductor)), Int32(MatKind.coated_conductor),
@@ -597,6 +606,7 @@ def _gpu_bounce_kernels(
             grid_dim=grid_dim,
             block_dim=block_size,
         )
+    _bench_stage(handle, 17 + Int(MatKind.coated_conductor))
     if handle[].has_material(MatKind.interface) or handle[].media.n_mediums > 0:
         handle[].ctx.enqueue_function[compact_by_kind_gpu](
             path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.interface)), Int32(MatKind.interface),
@@ -619,6 +629,7 @@ def _gpu_bounce_kernels(
             grid_dim=grid_dim,
             block_dim=block_size,
         )
+    _bench_stage(handle, 17 + Int(MatKind.interface))
     if handle[].has_material(MatKind.hair):
         handle[].ctx.enqueue_function[compact_by_kind_gpu](
             path_ptr_c, live_idx, live_count, kind_idx, live_count.unsafe_offset(1 + Int(MatKind.hair)), Int32(MatKind.hair),
@@ -634,6 +645,7 @@ def _gpu_bounce_kernels(
             grid_dim=grid_dim,
             block_dim=block_size,
         )
+    _bench_stage(handle, 17 + Int(MatKind.hair))
     _bench_stage(handle, 5)
     if sw_shadow:
         var sw_ids = ids_base.unsafe_offset(n)      # [n, 3n) is unused without the RT cores and holds a task per slot
