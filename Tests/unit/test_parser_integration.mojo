@@ -41,7 +41,7 @@ def test_curve_shape_grows_past_default_control_point_cap() raises:
     var body = String('"point3 P" [ ')
     for i in range(N_POINTS):
         body += String(Float64(i)) + String(" 0 0  ")
-    body += String('] "float width" [ 0.1 ]')
+    body += String('] "float width" [ 0.1 ] "string basis" "bspline"')
 
     var handle = _scanner_from_string(body)
     var s_ptr = unsafe_alloc[SceneParseState](1)
@@ -53,6 +53,21 @@ def test_curve_shape_grows_past_default_control_point_cap() raises:
     assert_true(len(s_ptr[unsafe_offset=0].curves_w1) == expected_segments)
     # 4 control points per segment, 3 floats each
     assert_true(len(s_ptr[unsafe_offset=0].curves_cp) == expected_segments * 4 * 3)
+    scanner_free(handle)
+    _ = s_ptr.unsafe_take_pointee(); s_ptr.unsafe_free()
+
+# pbrt's default basis is Bezier: 3n+1 control points make n segments.
+def test_curve_shape_bezier_segment_count() raises:
+    var body = String('"point3 P" [ ')
+    for i in range(7):
+        body += String(Float64(i)) + String(" 0 0  ")
+    body += String('] "float width" [ 0.1 ]')
+    var handle = _scanner_from_string(body)
+    var s_ptr = unsafe_alloc[SceneParseState](1)
+    s_ptr.unsafe_write(SceneParseState())
+    handle_curve_shape(handle, s_ptr)
+    assert_true(len(s_ptr[unsafe_offset=0].curves_w0) == 2)
+    assert_true(len(s_ptr[unsafe_offset=0].curves_cp) == 2 * 4 * 3)
     scanner_free(handle)
     _ = s_ptr.unsafe_take_pointee(); s_ptr.unsafe_free()
 

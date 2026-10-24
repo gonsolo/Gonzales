@@ -635,19 +635,30 @@ def handle_curve_shape(handle: Pointer[PbrtScanner, MutUntrackedOrigin],
     transform_points(s[unsafe_offset=0].ctm.unsafe_ptr(), raw4, Int32(n_raw), xfm4)
     raw4.unsafe_free()
 
-    # Split into (n_cp - 3) local B-spline segments: window i uses raw
-    # control points [i, i+1, i+2, i+3] — matches the standard uniform
-    # cubic B-spline curve-chain convention (same windowing PBRT itself uses).
-    var n_seg = n_raw - 3
+    # pbrt's default basis is Bezier (3n+1 points); Curve evaluates uniform B-spline windows.
+    var bezier = params.get_string("basis", "bezier") != "bspline"
+    var n_seg = (n_raw - 1) // 3 if bezier else n_raw - 3
     var mat_idx = s[unsafe_offset=0].cur_attr.mat_idx
     for seg in range(n_seg):
         var t0 = Float32(seg) / Float32(n_seg)
         var t1 = Float32(seg + 1) / Float32(n_seg)
-        for k in range(4):
-            var vi = seg + k
-            s[unsafe_offset=0].curves_cp.append(xfm4[unsafe_offset=vi*4+0])
-            s[unsafe_offset=0].curves_cp.append(xfm4[unsafe_offset=vi*4+1])
-            s[unsafe_offset=0].curves_cp.append(xfm4[unsafe_offset=vi*4+2])
+        if bezier:
+            var o = 3 * seg
+            for k in range(4):
+                for c in range(3):
+                    var b0 = xfm4[unsafe_offset=o*4+c]; var b1 = xfm4[unsafe_offset=(o+1)*4+c]
+                    var b2 = xfm4[unsafe_offset=(o+2)*4+c]; var b3 = xfm4[unsafe_offset=(o+3)*4+c]
+                    var v = Float32(6)*b0 - Float32(7)*b1 + Float32(2)*b2
+                    if k == 1: v = Float32(2)*b1 - b2
+                    elif k == 2: v = Float32(2)*b2 - b1
+                    elif k == 3: v = Float32(2)*b1 - Float32(7)*b2 + Float32(6)*b3
+                    s[unsafe_offset=0].curves_cp.append(v)
+        else:
+            for k in range(4):
+                var vi = seg + k
+                s[unsafe_offset=0].curves_cp.append(xfm4[unsafe_offset=vi*4+0])
+                s[unsafe_offset=0].curves_cp.append(xfm4[unsafe_offset=vi*4+1])
+                s[unsafe_offset=0].curves_cp.append(xfm4[unsafe_offset=vi*4+2])
         s[unsafe_offset=0].curves_w0.append(width0 + (width1 - width0) * t0)
         s[unsafe_offset=0].curves_w1.append(width0 + (width1 - width0) * t1)
         s[unsafe_offset=0].curves_mat.append(mat_idx)
