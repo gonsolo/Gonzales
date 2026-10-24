@@ -54,35 +54,42 @@ def gz_scene_new() abi("C") -> ScenePtr:
     s.unsafe_write(SceneParseState())
     return s
 
+def _register_texture(s: ScenePtr, name: String, path: Pointer[UInt8, MutUntrackedOrigin]) -> Int32:
+    if Int(path) == 0:
+        return Int32(-1)
+    s[unsafe_offset=0].tex_names.append(name)
+    s[unsafe_offset=0].tex_files.append(String(unsafe_from_utf8_ptr=path.as_imm()))
+    return Int32(len(s[unsafe_offset=0].tex_names) - 1)
+
 @export
-def gz_scene_add_diffuse(s: ScenePtr, r: Float32, g: Float32, b: Float32) abi("C") -> Int32:
-    var nm = NamedMaterial(String("m") + String(len(s[unsafe_offset=0].named_materials)))
+def gz_scene_add_diffuse(s: ScenePtr, r: Float32, g: Float32, b: Float32, texture: Pointer[UInt8, MutUntrackedOrigin],
+                         normal_map: Pointer[UInt8, MutUntrackedOrigin]) abi("C") -> Int32:
+    """`texture` (sRGB colour) and `normal_map` (tangent space) are image paths or null."""
+    var name = String("m") + String(len(s[unsafe_offset=0].named_materials))
+    var nm = NamedMaterial(name)
     nm.kind = MatKind.diffuse
     nm.albedo = RGB(r, g, b)
+    nm.tex_idx = _register_texture(s, name, texture)
+    nm.normal_tex_idx = _register_texture(s, String("__normalmap"), normal_map)
     s[unsafe_offset=0].named_materials.append(nm^)
     return Int32(len(s[unsafe_offset=0].named_materials) - 1)
 
 @export
-def gz_scene_add_mesh(s: ScenePtr, xform: F32Ptr, points: F32Ptr, n_verts: Int32,
-                      indices: I32Ptr, n_tris: Int32, uvs: F32Ptr, material: Int32) abi("C"):
-    """`xform` is object-to-world in USD's GfMatrix4d layout, which is Gonzales's CTM layout."""
+def gz_scene_add_mesh(s: ScenePtr, xform: F32Ptr, points: F32Ptr, n_verts: Int32, indices: I32Ptr, n_tris: Int32,
+                      normals: F32Ptr, uvs: F32Ptr, material: Int32) abi("C"):
+    """`xform` is object-to-world in USD's GfMatrix4d layout, which is Gonzales's CTM layout.
+    `normals` (world space, unit length) and `uvs` are per vertex, or null."""
     for i in range(16):
         s[unsafe_offset=0].ctm[i] = xform[unsafe_offset=i]
     s[unsafe_offset=0].cur_attr.mat_idx = material
     store_mesh(s, points, indices, n_verts, n_tris)
+    ref m = s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1]
+    if Int(normals) != 0:
+        for i in range(Int(n_verts) * 3):
+            m.normals.append(normals[unsafe_offset=i])
     if Int(uvs) != 0:
-        ref m = s[unsafe_offset=0].meshes[len(s[unsafe_offset=0].meshes) - 1]
         for i in range(Int(n_verts) * 2):
             m.uvs.append(uvs[unsafe_offset=i])
-
-def _add_infinite(s: ScenePtr, tex_idx: Int32, r: Float32, g: Float32, b: Float32):
-    s[unsafe_offset=0].inf_tex_idx.append(tex_idx)
-    s[unsafe_offset=0].inf_rgb.append(r); s[unsafe_offset=0].inf_rgb.append(g); s[unsafe_offset=0].inf_rgb.append(b)
-    for ci in range(16):
-        s[unsafe_offset=0].inf_ctm.append(Float32(1) if ci % 5 == 0 else Float32(0))
-    s[unsafe_offset=0].inf_has_portal.append(Int32(0))
-    for _ in range(12):
-        s[unsafe_offset=0].inf_portal.append(Float32(0))
 
 @export
 def gz_scene_add_area_light(s: ScenePtr, xform: F32Ptr, points: F32Ptr, n_verts: Int32,
@@ -95,6 +102,15 @@ def gz_scene_add_area_light(s: ScenePtr, xform: F32Ptr, points: F32Ptr, n_verts:
     s[unsafe_offset=0].cur_attr.al_rgb = RGB(r, g, b)
     store_mesh(s, points, indices, n_verts, n_tris)
     s[unsafe_offset=0].cur_attr.is_alight = False
+
+def _add_infinite(s: ScenePtr, tex_idx: Int32, r: Float32, g: Float32, b: Float32):
+    s[unsafe_offset=0].inf_tex_idx.append(tex_idx)
+    s[unsafe_offset=0].inf_rgb.append(r); s[unsafe_offset=0].inf_rgb.append(g); s[unsafe_offset=0].inf_rgb.append(b)
+    for ci in range(16):
+        s[unsafe_offset=0].inf_ctm.append(Float32(1) if ci % 5 == 0 else Float32(0))
+    s[unsafe_offset=0].inf_has_portal.append(Int32(0))
+    for _ in range(12):
+        s[unsafe_offset=0].inf_portal.append(Float32(0))
 
 @export
 def gz_scene_add_dome(s: ScenePtr, r: Float32, g: Float32, b: Float32) abi("C"):

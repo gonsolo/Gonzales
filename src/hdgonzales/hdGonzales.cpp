@@ -31,18 +31,27 @@
 #include <cmath>
 #include <map>
 #include <mutex>
+#include <numeric>
 #include <vector>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
 namespace {
 
+// Flattened: one vertex per triangle corner, so face-varying primvars need no indices.
 struct MeshData {
     std::vector<float> points;
     std::vector<int> indices;
+    std::vector<float> normals;  // world space
+    std::vector<float> uvs;
     GfMatrix4f xform;
     SdfPath material;
     GfVec3f displayColor{0.5f};
+};
+
+struct MaterialData {
+    GfVec3f diffuse{0.18f};
+    std::string texture, normalMap;
 };
 
 struct LightData {
@@ -105,7 +114,7 @@ class Scene final : public HdRenderParam {
 public:
     std::mutex mutex;
     std::map<SdfPath, MeshData> meshes;
-    std::map<SdfPath, GfVec3f> materials;
+    std::map<SdfPath, MaterialData> materials;
     std::map<SdfPath, LightData> lights;
     std::atomic<int> version{1};
 
@@ -117,6 +126,56 @@ public:
 };
 
 Scene &_Scene(HdRenderParam *param) { return *static_cast<Scene *>(param); }
+
+// A primvar's values at each triangle corner, whatever its interpolation.
+template <typename T>
+bool _Corners(HdSceneDelegate *delegate, SdfPath const &id, HdMeshUtil &util, VtVec3iArray const &triangles,
+              TfToken const &name, VtArray<T> *out) {
+    for (HdInterpolation interpolation : {HdInterpolationVertex, HdInterpolationVarying, HdInterpolationFaceVarying})
+        for (HdPrimvarDescriptor const &desc : delegate->GetPrimvarDescriptors(id, interpolation)) {
+            if (desc.name != name)
+                continue;
+            VtValue value = delegate->Get(id, name);
+            if (!value.IsHolding<VtArray<T>>())
+                return false;
+            VtArray<T> const &data = value.UncheckedGet<VtArray<T>>();
+            if (interpolation == HdInterpolationFaceVarying) {
+                VtValue corners;
+                HdMeshComputationResult result = util.ComputeTriangulatedFaceVaryingPrimvar(
+                    data.cdata(), int(data.size()), HdGetValueTupleType(value).type, &corners);
+                if (result == HdMeshComputationResult::Unchanged)
+                    *out = data;
+                else if (result == HdMeshComputationResult::Success && corners.IsHolding<VtArray<T>>())
+                    *out = corners.UncheckedGet<VtArray<T>>();
+                else
+                    return false;
+                return out->size() == 3 * triangles.size();
+            }
+            out->resize(3 * triangles.size());
+            for (size_t t = 0; t < triangles.size(); ++t)
+                for (int k = 0; k < 3; ++k) {
+                    int i = triangles[t][k];
+                    if (i < 0 || size_t(i) >= data.size())
+                        return false;
+                    (*out)[3 * t + k] = data[i];
+                }
+            return true;
+        }
+    return false;
+}
+
+// "st", or else the first texture-coordinate primvar.
+TfToken _UvName(HdSceneDelegate *delegate, SdfPath const &id) {
+    TfToken found;
+    for (HdInterpolation interpolation : {HdInterpolationVertex, HdInterpolationVarying, HdInterpolationFaceVarying})
+        for (HdPrimvarDescriptor const &desc : delegate->GetPrimvarDescriptors(id, interpolation)) {
+            if (desc.name == TfToken("st"))
+                return desc.name;
+            if (found.IsEmpty() && desc.role == HdPrimvarRoleTokens->textureCoordinate)
+                found = desc.name;
+        }
+    return found;
+}
 
 class Mesh final : public HdMesh {
 public:
@@ -136,14 +195,29 @@ public:
         }
         MeshData m;
         HdMeshTopology topology = GetMeshTopology(delegate);
-        VtVec3fArray points = delegate->Get(id, HdTokens->points).GetWithDefault<VtVec3fArray>();
         HdMeshUtil util(&topology, id);
         VtVec3iArray triangles;
         VtIntArray primitiveParams;
         util.ComputeTriangleIndices(&triangles, &primitiveParams);
-        m.points.assign(points.cdata()->data(), points.cdata()->data() + 3 * points.size());
-        m.indices.assign(triangles.cdata()->data(), triangles.cdata()->data() + 3 * triangles.size());
-        m.xform = GfMatrix4f(delegate->GetTransform(id));
+        size_t corners = 3 * triangles.size();
+        VtVec3fArray points, normals;
+        VtVec2fArray uvs;
+        if (!_Corners(delegate, id, util, triangles, HdTokens->points, &points))
+            return;
+        m.points.assign(points.cdata()->data(), points.cdata()->data() + 3 * corners);
+        m.indices.resize(corners);
+        std::iota(m.indices.begin(), m.indices.end(), 0);
+        GfMatrix4d xform = delegate->GetTransform(id);
+        m.xform = GfMatrix4f(xform);
+        if (_Corners(delegate, id, util, triangles, HdTokens->normals, &normals)) {
+            GfMatrix4d normalXform = xform.GetInverse().GetTranspose();
+            for (GfVec3f const &n : normals) {
+                GfVec3f w = GfVec3f(normalXform.TransformDir(GfVec3d(n))).GetNormalized();
+                m.normals.insert(m.normals.end(), {w[0], w[1], w[2]});
+            }
+        }
+        if (_Corners(delegate, id, util, triangles, _UvName(delegate, id), &uvs))
+            m.uvs.assign(uvs.cdata()->data(), uvs.cdata()->data() + 2 * corners);
         m.material = delegate->GetMaterialId(id);
         VtValue color = GetPrimvar(delegate, HdTokens->displayColor);
         if (color.IsHolding<VtVec3fArray>() && !color.UncheckedGet<VtVec3fArray>().empty())
@@ -164,7 +238,7 @@ protected:
     }
 };
 
-// UsdPreviewSurface's diffuseColor for now.
+// UsdPreviewSurface's diffuse colour or texture and its normal map.
 class Material final : public HdMaterial {
 public:
     explicit Material(SdfPath const &id) : HdMaterial(id) {}
@@ -173,19 +247,38 @@ public:
 
     void Sync(HdSceneDelegate *delegate, HdRenderParam *param, HdDirtyBits *dirtyBits) override {
         *dirtyBits = Clean;
-        GfVec3f diffuse(0.18f);
+        MaterialData m;
         VtValue resource = delegate->GetMaterialResource(GetId());
         if (resource.IsHolding<HdMaterialNetworkMap>()) {
-            for (auto const &[terminal, network] : resource.UncheckedGet<HdMaterialNetworkMap>().map)
-                for (HdMaterialNode const &node : network.nodes) {
-                    if (node.identifier != TfToken("UsdPreviewSurface"))
-                        continue;
-                    auto it = node.parameters.find(TfToken("diffuseColor"));
-                    if (it != node.parameters.end() && it->second.IsHolding<GfVec3f>())
-                        diffuse = it->second.UncheckedGet<GfVec3f>();
-                }
+            HdMaterialNetwork2 network = HdConvertToHdMaterialNetwork2(resource.UncheckedGet<HdMaterialNetworkMap>());
+            auto terminal = network.terminals.find(HdMaterialTerminalTokens->surface);
+            auto surface = terminal == network.terminals.end() ? network.nodes.end()
+                                                                : network.nodes.find(terminal->second.upstreamNode);
+            if (surface != network.nodes.end() && surface->second.nodeTypeId == TfToken("UsdPreviewSurface")) {
+                HdMaterialNode2 const &node = surface->second;
+                auto texture = [&](char const *input) -> std::string {
+                    auto c = node.inputConnections.find(TfToken(input));
+                    if (c == node.inputConnections.end() || c->second.empty())
+                        return {};
+                    auto upstream = network.nodes.find(c->second[0].upstreamNode);
+                    if (upstream == network.nodes.end() || upstream->second.nodeTypeId != TfToken("UsdUVTexture"))
+                        return {};
+                    auto file = upstream->second.parameters.find(TfToken("file"));
+                    if (file == upstream->second.parameters.end() || !file->second.IsHolding<SdfAssetPath>())
+                        return {};
+                    SdfAssetPath const &asset = file->second.UncheckedGet<SdfAssetPath>();
+                    return asset.GetResolvedPath().empty() ? asset.GetAssetPath() : asset.GetResolvedPath();
+                };
+                auto diffuse = node.parameters.find(TfToken("diffuseColor"));
+                if (diffuse != node.parameters.end() && diffuse->second.IsHolding<GfVec3f>())
+                    m.diffuse = diffuse->second.UncheckedGet<GfVec3f>();
+                m.texture = texture("diffuseColor");
+                m.normalMap = texture("normal");
+                if (!m.texture.empty())
+                    m.diffuse = GfVec3f(1);
+            }
         }
-        _Scene(param).Edit([&] { _Scene(param).materials[GetId()] = diffuse; });
+        _Scene(param).Edit([&] { _Scene(param).materials[GetId()] = std::move(m); });
     }
 
     void Finalize(HdRenderParam *param) override {
@@ -393,16 +486,20 @@ protected:
         {
             std::lock_guard<std::mutex> lock(_scene->mutex);
             std::map<SdfPath, int> materials;
-            for (auto const &[id, rgb] : _scene->materials)
-                materials[id] = gz_scene_add_diffuse(scene, rgb[0], rgb[1], rgb[2]);
+            auto path = [](std::string const &p) { return p.empty() ? nullptr : p.c_str(); };
+            for (auto const &[id, mat] : _scene->materials)
+                materials[id] = gz_scene_add_diffuse(scene, mat.diffuse[0], mat.diffuse[1], mat.diffuse[2],
+                                                     path(mat.texture), path(mat.normalMap));
             for (auto const &[id, m] : _scene->meshes) {
                 if (m.indices.empty())
                     continue;
                 auto it = materials.find(m.material);
                 int material = it != materials.end() ? it->second
-                    : gz_scene_add_diffuse(scene, m.displayColor[0], m.displayColor[1], m.displayColor[2]);
+                    : gz_scene_add_diffuse(scene, m.displayColor[0], m.displayColor[1], m.displayColor[2], nullptr, nullptr);
                 gz_scene_add_mesh(scene, m.xform.data(), m.points.data(), int(m.points.size() / 3),
-                                  m.indices.data(), int(m.indices.size() / 3), nullptr, material);
+                                  m.indices.data(), int(m.indices.size() / 3),
+                                  m.normals.empty() ? nullptr : m.normals.data(),
+                                  m.uvs.empty() ? nullptr : m.uvs.data(), material);
             }
             bool lit = false;
             for (auto const &[id, l] : _scene->lights) {
